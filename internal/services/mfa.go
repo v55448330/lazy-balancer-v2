@@ -124,47 +124,6 @@ func MFALockoutEnabled() bool {
 	return v == 1
 }
 
-// mfaIsLocked 用户锁定中返回剩余时间。
-func mfaIsLocked(userID int, now time.Time) (bool, time.Duration) {
-	var lockedUntil *time.Time
-	if err := db.DB.QueryRow("SELECT mfa_locked_until FROM users WHERE id=?", userID).Scan(&lockedUntil); err != nil || lockedUntil == nil {
-		return false, 0
-	}
-	if now.Before(*lockedUntil) {
-		return true, lockedUntil.Sub(now)
-	}
-	return false, 0
-}
-
-// mfaRecordFailure 记一次失败；全局开关开且达阈值 → 锁 10 分钟（计数归零）。
-// 返回（是否触发新锁定, 锁定剩余, 是否已处于锁定）。
-func mfaRecordFailure(userID int, now time.Time) (locked bool, remaining time.Duration, alreadyLocked bool) {
-	if al, _ := mfaIsLocked(userID, now); al {
-		return false, 0, true
-	}
-	if !MFALockoutEnabled() {
-		_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=COALESCE(mfa_failed_attempts,0)+1 WHERE id=?", userID)
-		return false, 0, false
-	}
-	var attempts int
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0) FROM users WHERE id=?", userID).Scan(&attempts); err != nil {
-		return false, 0, false
-	}
-	attempts++
-	if attempts >= mfaLockoutThreshold {
-		_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0, mfa_locked_until=? WHERE id=?",
-			now.Add(mfaLockoutDuration).UTC().Format("2006-01-02 15:04:05"), userID)
-		return true, mfaLockoutDuration, false
-	}
-	_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=? WHERE id=?", attempts, userID)
-	return false, 0, false
-}
-
-// mfaResetFailure 成功验证后清零计数。
-func mfaResetFailure(userID int) {
-	_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0 WHERE id=?", userID)
-}
-
 // —— 登录二步挑战 ——
 
 // MFAIssueChallenge 密码验证通过后签发 5 分钟单次挑战令牌。
@@ -231,10 +190,6 @@ func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 	mfaMu.Lock()
 	defer mfaMu.Unlock()
 
-	if al, _ := mfaIsLocked(userID, now); al {
-		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
-	}
-
 	var secret, recoveryJSON string
 	var lastStep int64
 	if err := db.DB.QueryRow(
@@ -252,23 +207,20 @@ func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 		if ok {
 			// 重放防护：同窗或更早的已用片拒绝（±1 容差窗内）
 			if step <= lastStep {
-				mfaRecordFailure(userID, now)
 				return false, nil
 			}
-			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=?, mfa_failed_attempts=0 WHERE id=?", step, userID)
+			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID)
 			return true, nil
 		}
 	} else if len(code) >= 10 && len(code) <= 16 {
 		if mfaConsumeRecoveryCode(userID, code) {
-			mfaResetFailure(userID)
 			return true, nil
 		}
 	}
 
-	_, _, already := mfaRecordFailure(userID, now)
-	if already {
-		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
-	}
+	// 2026-09 用户裁定：登录后的 MFA 验证失败只提示不计数不锁定（全系统唯一
+	// 锁定在登录阶段 5 次/10 分钟、受「登录失败锁定」开关控制；登录两步的
+	// 失败计数由 handler 侧 recordLoginFailure 负责）。
 	return false, nil
 }
 
@@ -280,10 +232,6 @@ func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 func MFAVerifyTOTPCode(userID int, code string, now time.Time) (bool, error) {
 	mfaMu.Lock()
 	defer mfaMu.Unlock()
-
-	if al, _ := mfaIsLocked(userID, now); al {
-		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
-	}
 
 	var secret string
 	var lastStep int64
@@ -301,18 +249,16 @@ func MFAVerifyTOTPCode(userID int, code string, now time.Time) (bool, error) {
 		step, ok := mfaValidateTOTP(secret, code, now)
 		if ok {
 			if step <= lastStep {
-				mfaRecordFailure(userID, now)
 				return false, nil
 			}
-			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=?, mfa_failed_attempts=0 WHERE id=?", step, userID)
+			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID)
 			return true, nil
 		}
 	}
 
-	_, _, already := mfaRecordFailure(userID, now)
-	if already {
-		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
-	}
+	// 2026-09 用户裁定：登录后的 MFA 验证失败只提示不计数不锁定（全系统唯一
+	// 锁定在登录阶段 5 次/10 分钟、受「登录失败锁定」开关控制；登录两步的
+	// 失败计数由 handler 侧 recordLoginFailure 负责）。
 	return false, nil
 }
 

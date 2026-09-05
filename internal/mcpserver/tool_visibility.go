@@ -74,10 +74,15 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 	if err := json.Unmarshal(response, &payload); err != nil {
 		return nil, fmt.Errorf("解析 tools/list 响应: %w", err)
 	}
+	// readOnlyHiddenTools：GET 但对只读 Key 禁用的工具（M8：export_config 走
+	// apiKeyReadOnlyGuard 403，只读 Key 不可见，避免呈现必然 403 的工具）。
+	readOnlyHiddenTools := map[string]struct{}{"export_config": {}}
 	readOnlyNames := make(map[string]struct{}, len(tools))
 	for _, spec := range tools {
 		if spec.method == http.MethodGet {
-			readOnlyNames[spec.name] = struct{}{}
+			if _, hidden := readOnlyHiddenTools[spec.name]; !hidden {
+				readOnlyNames[spec.name] = struct{}{}
+			}
 		}
 	}
 	filtered := make([]json.RawMessage, 0, len(payload.Result.Tools))

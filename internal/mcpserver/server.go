@@ -48,6 +48,7 @@ var tools = []toolSpec{
 	{"get_config", "读取全局配置", http.MethodGet, "/config", nil, nil, emptySchema},
 	{"update_config", "更新全局配置并应用 Caddy", http.MethodPut, "/config", nil, nil, updateConfigSchema},
 	{"reload_caddy", "从数据库重新生成并加载 Caddy 配置", http.MethodPost, "/config/reload", nil, nil, emptySchema},
+	{"export_config", "导出完整配置备份", http.MethodGet, "/config/export", nil, nil, emptySchema},
 	{"get_metrics_dashboard", "获取聚合监控面板指标", http.MethodGet, "/metrics/dashboard", nil, nil, emptySchema},
 	{"get_metrics_overview", "获取指标总览", http.MethodGet, "/metrics/overview", nil, nil, emptySchema},
 	{"get_realtime_traffic", "获取实时流量", http.MethodGet, "/metrics/realtime", nil, nil, emptySchema},

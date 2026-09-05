@@ -317,6 +317,7 @@ type UpdateCurrentUserRequest struct {
 	Password string `json:"password" binding:"omitempty,max=72"`
 	// M5（用户已批准契约）：提交新密码时必须携带当前密码过共享确认门——此前仅凭
 	// 会话即可改密，劫持会话可直接置换密码把原主锁在门外。仅改昵称不要求。
+	// M5（2026-09 裁定保留，登录后唯一密码确认例外）：提交新密码时必须携带当前密码。
 	CurrentPassword string `json:"current_password" binding:"omitempty,max=72"`
 }
 
@@ -349,16 +350,22 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 	if req.Password != "" {
-		// M5（契约）：改密需当前密码——缺失 400；错误/冷却中由共享门写入 401/429。
+		// 2026-09 用户裁定：改密是登录后唯一需要密码确认的例外操作；失败仅
+		// 401 不计数不锁定（全系统唯一锁定在登录阶段，5 次/10 分钟受开关控制）。
 		if req.CurrentPassword == "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "修改密码需提供当前密码"})
 			return
 		}
-		if err := confirmPasswordWithGate(c, userIDInt, req.CurrentPassword); err != nil {
+		var currentHash string
+		if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=?", userIDInt).Scan(&currentHash); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
+			return
+		}
+		if bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(req.CurrentPassword)) != nil {
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "当前密码错误"})
 			return
 		}
 	}
-
 	var passwordHash string
 	if req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)

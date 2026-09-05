@@ -18,7 +18,7 @@
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |
 
-## 3. 工具分组速览（节选，全部 120 个工具以 tools/list 为准）
+## 3. 工具分组速览（节选，全部 121 个工具以 tools/list 为准）
 
 - **规则**：list_rules、get_rule、create_rule、update_rule、delete_rule、enable_rule、disable_rule、duplicate_rule
 - **证书**：list_cert_jobs、retry_cert_job、delete_cert_job、issue_certificate、list_certificates

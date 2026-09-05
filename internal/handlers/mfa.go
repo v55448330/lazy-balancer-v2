@@ -13,7 +13,6 @@ import (
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // —— 公开端点（loginRateLimit 由路由注册挂载，同 /auth/login）——
@@ -109,22 +108,14 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 		return
 	}
 	if mfaEnabled {
+		// 2026-09 用户裁定：登录后不再有密码输入要求——重绑仅验当前有效验证码
+		//（R72 F-1 的验码确认保留；验码失败只提示不计数，全系统唯一锁定为
+		// 登录阶段 5 次/10 分钟、受「登录失败锁定」开关控制）。
 		var req struct {
-			Password string `json:"password"`
-			Code     string `json:"code"`
+			Code string `json:"code" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
-			return
-		}
-		// B5 I-A：重新绑定确认段与 disable/verify-step 同门——连续失败 10 次冷却 10 分钟。
-		if mfaEndpointHardGate(c, userID) {
-			return
-		}
-		// H3：密码预检走共享门计数（密码失败与验码失败同计同冷却），但成功不在
-		// 此清零——后续验码失败仍需跨请求累计；双重确认整体通过由 MFAVerifyCode
-		// 成功路径清零（先清会把「对密码错码」尝试的验码计数抹掉，硬门永不触发）。
-		if mfaGateCheckPassword(c, userID, req.Password) {
 			return
 		}
 		if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
@@ -192,26 +183,18 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已启用", Data: gin.H{"recovery_codes": codes}})
 }
 
-// MFADisable POST /auth/mfa/disable — 双重确认（密码 + 有效验证码）。
+// MFADisable POST /auth/mfa/disable — 确认有效验证码后禁用（2026-09 用户裁定：
+// 登录后无密码输入；验码失败只提示不计数，唯一锁定在登录阶段）。
 func (h *Handlers) MFADisable(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
 	userID := getContextUserIDInt(c)
 	var req struct {
-		Password string `json:"password" binding:"required"`
-		Code     string `json:"code" binding:"required"`
+		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
-		return
-	}
-	// B5 I-A：disable 与 verify-step 同门——连续失败 10 次冷却 10 分钟。
-	if mfaEndpointHardGate(c, userID) {
-		return
-	}
-	// H3：密码预检走共享门计数（同 MFASetup 重绑——成功不清零，验码成功才清）。
-	if mfaGateCheckPassword(c, userID, req.Password) {
 		return
 	}
 	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
@@ -232,26 +215,13 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已禁用"})
 }
 
-// MFARecoveryCodes POST /auth/mfa/recovery-codes — 密码确认后重生成。
+// MFARecoveryCodes POST /auth/mfa/recovery-codes — 重生成恢复码（2026-09 用户
+// 裁定：登录后不再有密码输入要求，JWT 会话即确认；会话安全为信任边界）。
 func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
 	userID := getContextUserIDInt(c)
-	var req struct {
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
-		return
-	}
-	// H3：并入共享密码确认门——此前仅 bcrypt 比对、无任何失败上限，劫持会话可
-	// 在线爆破密码重生成恢复码；密码失败与 MFA 验码失败同计同冷却。不要求 TOTP
-	// 双确认：恢复码是 TOTP 丢失后的唯一取回入口，强制「密码+码」会把本端点变成
-	// 死锁（用户裁决：恢复码端点只验密码）。
-	if err := confirmPasswordWithGate(c, userID, req.Password); err != nil {
-		return
-	}
 	var enabled bool
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&enabled); err != nil || !enabled {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MFA 未启用"})
@@ -266,95 +236,6 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "恢复码已重新生成（旧码全部作废）", Data: gin.H{"recovery_codes": codes}})
 }
 
-// R74 verify-step 硬门阈值/冷却（审计 B3 I-5）。
-const (
-	mfaVerifyStepMaxAttempts = 10
-	mfaVerifyStepCooldown    = 10 * time.Minute
-)
-
-// errMfaGateRejected 共享密码确认门拒绝（401/429/500 响应已由门写入，调用方 return 即可）。
-var errMfaGateRejected = errors.New("mfa password gate rejected")
-
-// mfaGateRecordPasswordFailure 密码确认失败的单条条件 UPDATE 原子递增（审计 H3）
-// ——达阈值同语句置锁并清零（避免锁满后再计延长冷却），阈值/冷却复用 R74 常量。
-func mfaGateRecordPasswordFailure(userID int) {
-	now := time.Now()
-	_, _ = db.DB.Exec(`UPDATE users SET
-		mfa_failed_attempts=CASE WHEN COALESCE(mfa_failed_attempts,0)+1>=? THEN 0 ELSE COALESCE(mfa_failed_attempts,0)+1 END,
-		mfa_locked_until=CASE WHEN COALESCE(mfa_failed_attempts,0)+1>=? THEN ? ELSE mfa_locked_until END
-		WHERE id=?`,
-		mfaVerifyStepMaxAttempts, mfaVerifyStepMaxAttempts,
-		now.Add(mfaVerifyStepCooldown).UTC().Format("2006-01-02 15:04:05"), userID)
-}
-
-// mfaEndpointHardGate R74 端点级硬门（verify-step / disable / setup 重新绑定共用）——
-// 与登录 challenge 10 次/激活 pending 5 次同族的端点级失败上限（独立于
-// mfa_lockout_enabled 全局锁定开关）：连续失败 ≥10 触发 10 分钟冷却（429）；
-// 劫持会话的在线爆破成本从小时级拉到不可用。机制：复用
-// users.mfa_failed_attempts（MFAVerifyCode 每次验码失败已 +1，开关关闭时亦然；
-// 审计 H3 起密码确认失败经 mfaGateCheckPassword 同计）与 mfa_locked_until。
-// 审计 H3：达阈值的置锁+清零改为单条条件 UPDATE 原子完成——原「先读计数、再
-// 另条置锁」的读改写在并发失败下可基于过期快照互相覆盖。冷却过期后正常用户凭
-// 有效码即可恢复；冷却期内一律 429 不再验码。门在端点内、不读 auth_type，对 JWT
-// 与机器身份同效；读库失败时不阻断既有验码路径（MFAVerifyCode 自会报错）。
-// 返回 true = 已拦截（429 响应已写入）。
-func mfaEndpointHardGate(c *gin.Context, userID int) bool {
-	var attempts int
-	var lockedUntil *time.Time
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0), mfa_locked_until FROM users WHERE id=?", userID).
-		Scan(&attempts, &lockedUntil); err == nil {
-		now := time.Now()
-		if lockedUntil != nil && now.Before(*lockedUntil) {
-			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "连续失败过多，请 10 分钟后重试"})
-			return true
-		}
-		if attempts >= mfaVerifyStepMaxAttempts {
-			// 单条条件 UPDATE 原子置锁+清零（已锁时条件不满足零命中，并发下最多一次生效）。
-			_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0, mfa_locked_until=? WHERE id=? AND (mfa_locked_until IS NULL OR mfa_locked_until<=?)",
-				now.Add(mfaVerifyStepCooldown).UTC().Format("2006-01-02 15:04:05"), userID, now.UTC().Format("2006-01-02 15:04:05"))
-			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "连续失败过多，请 10 分钟后重试"})
-			return true
-		}
-	}
-	return false
-}
-
-// mfaGateCheckPassword 共享门密码段核心：锁定检查 + bcrypt 比对，失败单条原子
-// 递增并写 401。成功不在此清零失败计数——密码+验码双重确认端点（disable /
-// setup 重绑）的验码失败仍需跨请求累计，清零统一交双重确认整体成功
-// （MFAVerifyCode 成功路径）。返回 true = 已拦截（响应已写入）。
-func mfaGateCheckPassword(c *gin.Context, userID int, password string) bool {
-	if mfaEndpointHardGate(c, userID) {
-		return true
-	}
-	var hash string
-	if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=?", userID).Scan(&hash); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
-		return true
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		// H3：密码失败同计（此前 recovery-codes 完全无门、disable/setup 密码段不计数）。
-		mfaGateRecordPasswordFailure(userID)
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "密码错误"})
-		return true
-	}
-	return false
-}
-
-// confirmPasswordWithGate 审计 H3 共享密码确认门：「密码即全部确认」的端点共用
-// （recovery-codes 重生成 / PATCH /users/me 改密 / 特权 API Key 创建），成功即清零
-// 失败计数。密码失败与 MFA 验码失败共享 users.mfa_failed_attempts /
-// mfa_locked_until（同一操作者身份确认的失败同源收敛），递增为单条条件 UPDATE
-// 原子完成。失败路径响应已写入（401 密码错误 / 429 冷却 / 500 读库），调用方
-// err != nil 直接 return。
-func confirmPasswordWithGate(c *gin.Context, userID int, password string) error {
-	if mfaGateCheckPassword(c, userID, password) {
-		return errMfaGateRejected
-	}
-	_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0 WHERE id=?", userID)
-	return nil
-}
-
 // MFAVerifyStep POST /auth/mfa/verify-step — step-up：验证码 → 新 JWT（mfa_ts 刷新）。
 func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
@@ -366,10 +247,6 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
-		return
-	}
-	// R74 verify-step 硬门（B5 I-A 起与 disable/setup 重新绑定共用 mfaEndpointHardGate）。
-	if mfaEndpointHardGate(c, userID) {
 		return
 	}
 	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
