@@ -241,8 +241,9 @@
                   <!-- 单行合并列：目标规则 × 作用域 × 条件，一条排除规则一行呈现——
                        左起：目标 cascader（弹性占满剩余，min 280px）+ ghost 内联标签 +
                        冲突警告图标（tooltip 悬浮）→ 作用域 radios（自然宽）→ 条件控件
-                       内联随 radios 之后（all → 灰字短提示 / ip → 标签输入 min 220 max
-                       360 / list → 列表多选紧凑宽），行高 ~32-40px；1080px 弹框全宽下
+                       内联随 radios 之后，条件区为恒定槽位（见下方 CSS——三态同
+                       flex 规格，切换作用域不改变剩余空间分配，cascader 宽度与
+                       radios 位置恒定不抖动），行高 ~32-40px；1080px 弹框全宽下
                        不换行，窄于该宽度时 flex-wrap 优雅折行且首行对齐不乱；ghost /
                        冲突图标出现只挤压 cascader 宽度，不改行结构 -->
                   <el-table-column label="目标规则 × 作用域 × 条件" min-width="560">
@@ -2348,15 +2349,19 @@ onMounted(async () => {
 /* 行级矛盾提示（与规则组选择冲突/冗余）：不占布局流的行内警告图标，tooltip 悬浮
    展示全文；固定 16px 宽度占位稳定，出现/消失不推移其他控件 */
 .exclusion-row-cell :deep(.exclusion-conflict-icon) { flex: 0 0 auto; font-size: 16px; color: #e6a23c; cursor: help; vertical-align: middle; }
-/* 作用域 radios 自然紧凑宽；条件控件内联其后——ip 标签输入 min 200 / max 320，
-   list 选择器紧凑固定宽，all 灰字短提示自然宽不预留布局空间；控件统一 small
-   （24px）与 cascader 同高 */
+/* 作用域 radios 自然紧凑宽；条件控件内联其后，条件区为恒定槽位——三态（ip 标签
+   输入 / list 选择器 / all 灰字短提示）同 flex 规格（1 1 240、min 200；ip max
+   320、list/all max 280），切换作用域不改变剩余空间分配，cascader 宽度与
+   radios 位置恒定不抖动；控件统一 small（24px）与 cascader 同高。ip/list 给确定
+   flex-basis（240px）而非 auto：el-select 根元素默认 width:100%
+   （--el-select-width），basis:auto 会以整行宽参与 flex 折行判定（clamp 到
+   max-width 280），行宽不足时被提前折到第二行 */
 .exclusion-row-cell :deep(.exclusion-scope-radios) { flex: 0 0 auto; }
 .exclusion-row-cell :deep(.exclusion-scope-radios .el-radio) { margin-right: 10px; }
 .exclusion-row-cell :deep(.exclusion-scope-radios .el-radio:last-child) { margin-right: 0; }
 .exclusion-row-cell :deep(.exclusion-scope-control-ip) { flex: 1 1 240px; min-width: 200px; max-width: 320px; }
-.exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 0 1 auto; min-width: 200px; max-width: 280px; }
-.exclusion-row-cell :deep(.exclusion-scope-all) { flex: 0 0 auto; font-size: 12px; color: #9ca3af; white-space: nowrap; }
+.exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 1 1 240px; min-width: 200px; max-width: 280px; }
+.exclusion-row-cell :deep(.exclusion-scope-all) { flex: 1 1 240px; min-width: 200px; max-width: 280px; font-size: 12px; color: #9ca3af; white-space: nowrap; }
 /* ghost 兜底标签容器（crs_rule_groups 下方，普通 div） */
 .crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
