@@ -61,7 +61,7 @@ func TestLogin_unknownUserAndWrongPassword_returnIdentical401(t *testing.T) {
 func TestLogin_locksAccountAfterFiveFailures(t *testing.T) {
 	// Given
 	database := setupAuthTestDB(t)
-	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER); INSERT INTO global_config VALUES (1,1,20)`); err != nil {
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,1)`); err != nil {
 		t.Fatalf("create global config: %v", err)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
@@ -112,7 +112,7 @@ func TestLogin_locksAccountAfterFiveFailures(t *testing.T) {
 func TestLogin_successClearsLockoutCounter(t *testing.T) {
 	// Given 4 次失败（再错一次即锁定）
 	database := setupAuthTestDB(t)
-	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER); INSERT INTO global_config VALUES (1,1,20)`); err != nil {
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,1)`); err != nil {
 		t.Fatalf("create global config: %v", err)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
@@ -151,5 +151,47 @@ func TestLogin_successClearsLockoutCounter(t *testing.T) {
 	}
 	if attempts != 0 {
 		t.Fatalf("login_failed_attempts=%d, want 0（成功登录应清零）", attempts)
+	}
+}
+
+// 2026-09 用户裁定：登录失败锁定受「登录失败锁定」开关控制——开关关闭时
+// 连续失败只计数不锁定，第 6 次仍按密码正误返回（无 429）。
+func TestLogin_lockoutDisabledBySwitch(t *testing.T) {
+	database := setupAuthTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,0)`); err != nil {
+		t.Fatalf("create global config: %v", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('root',?,'admin',1)`, string(hash)); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	router := gin.New()
+	router.POST("/auth/login", h.Login)
+	post := func(body string) int {
+		request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, request)
+		return rec.Code
+	}
+	for i := 1; i <= 6; i++ {
+		if code := post(`{"username":"root","password":"wrong-password"}`); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status=%d, want 401（开关关闭不锁定）", i, code)
+		}
+	}
+	if code := post(`{"username":"root","password":"secret123"}`); code != http.StatusOK {
+		t.Fatalf("correct password after 6 failures: status=%d, want 200（开关关闭无锁定）", code)
+	}
+	var attempts int
+	var lockedUntil sql.NullString
+	if err := database.QueryRow("SELECT login_failed_attempts, login_locked_until FROM users WHERE username='root'").Scan(&attempts, &lockedUntil); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 || lockedUntil.Valid {
+		t.Fatalf("attempts=%d locked=%v, want 0 + 未置锁（成功清零、全程无锁）", attempts, lockedUntil)
 	}
 }

@@ -248,9 +248,6 @@
             <el-switch v-model="createForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
         </el-form-item>
-        <el-form-item v-if="createPrivileged" label="当前密码" :error="createPasswordError">
-          <el-input v-model="createForm.password" type="password" show-password maxlength="72" placeholder="特权密钥（读写或开启 MCP）需确认当前密码" @input="createPasswordError = ''" />
-        </el-form-item>
         <el-alert
           v-if="createForm.read_only"
           class="readonly-alert"
@@ -310,9 +307,6 @@
           <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
             <el-switch v-model="featureForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
-        </el-form-item>
-        <el-form-item v-if="featurePrivileged" label="当前密码" :error="featurePasswordError">
-          <el-input v-model="featureForm.password" type="password" show-password maxlength="72" placeholder="特权密钥（读写或开启 MCP）需确认当前密码" @input="featurePasswordError = ''" />
         </el-form-item>
         <el-alert
           v-if="featureForm.read_only"
@@ -396,10 +390,6 @@ const authStore = useAuthStore()
 // 白名单 60b43841 放行非 admin 自助密钥端点），故写入口仅按从节点收紧。
 const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
 const isAdmin = computed(() => authStore.user?.role === 'admin')
-// M6：特权态判定与提交口径一致——非 admin 的 read_only 恒为 true（页面与后端
-// 双重强制），仅 MCP 开关可能使其落入特权态。
-const createPrivileged = computed(() => createForm.value.mcp_enabled || !(isAdmin.value ? createForm.value.read_only : true))
-const featurePrivileged = computed(() => featureForm.value.mcp_enabled || !(isAdmin.value ? featureForm.value.read_only : true))
 
 const keys = ref<readonly APIKey[]>([])
 const loading = ref(false)
@@ -408,14 +398,12 @@ const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
 // M6：特权态（读写或开启 MCP）创建/变更必须携带当前密码（后端确认门）
-const createPasswordError = ref('')
-const createForm = ref({ name: '', mcp_enabled: false, read_only: true, password: '', whitelistText: '', expiresAt: null as Date | null })
+const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '', expiresAt: null as Date | null })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
 const featureTarget = ref<APIKey | null>(null)
 const featureWhitelistError = ref('')
-const featurePasswordError = ref('')
-const featureForm = ref({ mcp_enabled: false, read_only: false, password: '', whitelistText: '' })
+const featureForm = ref({ mcp_enabled: false, read_only: false, whitelistText: '' })
 const togglePendingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const createdKey = ref('')
@@ -513,10 +501,9 @@ const openCreateDialog = (): void => {
 }
 
 const resetCreateForm = (): void => {
-  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, password: '', whitelistText: '', expiresAt: null }
+  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '', expiresAt: null }
   createNameError.value = ''
   createWhitelistError.value = ''
-  createPasswordError.value = ''
 }
 
 const keyExpired = (key: APIKey): boolean => {
@@ -543,11 +530,6 @@ async function createKey() {
     createWhitelistError.value = whitelist.error
     return
   }
-  // M6：特权态（读写或开启 MCP）必须携带当前密码过后端确认门
-  if (createPrivileged.value && !createForm.value.password) {
-    createPasswordError.value = '特权密钥（读写或开启 MCP）需输入当前密码'
-    return
-  }
   // 日期面板仅按天禁用过去日期，仍可选到当天早于现在的时刻；提交时钳制为当前时间
   if (createForm.value.expiresAt && createForm.value.expiresAt.getTime() < Date.now()) {
     createForm.value.expiresAt = new Date()
@@ -562,7 +544,6 @@ async function createKey() {
       read_only: isAdmin.value ? createForm.value.read_only : true,
       mcp_ip_whitelist: whitelist.value,
       expires_at: createForm.value.expiresAt ? createForm.value.expiresAt.toISOString() : undefined,
-      password: createPrivileged.value ? createForm.value.password : undefined,
     }
     const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', payload)
     mfaAwareSuccess('密钥创建成功')
@@ -586,19 +567,16 @@ const openFeatureDialog = (key: APIKey): void => {
   featureForm.value = {
     mcp_enabled: key.mcp_enabled,
     read_only: isAdmin.value ? key.read_only : true,
-    password: '',
     whitelistText: parseWhitelist(key.mcp_ip_whitelist),
   }
   featureWhitelistError.value = ''
-  featurePasswordError.value = ''
   featureDialogVisible.value = true
 }
 
 const resetFeatureForm = (): void => {
   featureTarget.value = null
-  featureForm.value = { mcp_enabled: false, read_only: false, password: '', whitelistText: '' }
+  featureForm.value = { mcp_enabled: false, read_only: false, whitelistText: '' }
   featureWhitelistError.value = ''
-  featurePasswordError.value = ''
 }
 
 const saveFeatures = async (): Promise<void> => {
@@ -608,19 +586,12 @@ const saveFeatures = async (): Promise<void> => {
     featureWhitelistError.value = whitelist.error
     return
   }
-  // M6：功能配置落在特权态（读写或开启 MCP）必须携带当前密码过后端确认门
-  if (featurePrivileged.value && !featureForm.value.password) {
-    featurePasswordError.value = '特权密钥（读写或开启 MCP）需输入当前密码'
-    return
-  }
-
   featureSaving.value = true
   try {
     const payload: UpdateAPIKeyInput = {
       mcp_enabled: featureForm.value.mcp_enabled,
       read_only: isAdmin.value ? featureForm.value.read_only : true,
       mcp_ip_whitelist: whitelist.value,
-      password: featurePrivileged.value ? featureForm.value.password : undefined,
     }
     await request.patch(`/users/me/api-keys/${featureTarget.value.id}`, payload)
     mfaAwareSuccess('功能配置已更新')

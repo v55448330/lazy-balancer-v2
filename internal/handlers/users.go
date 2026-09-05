@@ -165,8 +165,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	if passwordHash != "" {
 		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")
 		args = append(args, passwordHash)
-		// M6（契约）：管理员改密同样吊销目标用户全部 API Key（DELETE 在下方同事务执行）。
-		changed = append(changed, "密码", "密码变更已吊销该用户全部 API Key")
+		changed = append(changed, "密码")
 	}
 	if len(sets) > 0 {
 		args = append(args, id)
@@ -191,14 +190,6 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		}
 		if rowsAffected == 0 {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能移除最后一个已启用管理员"})
-			return
-		}
-	}
-	if passwordHash != "" {
-		// M6（契约）：改密即吊销目标用户全部 API Key——密码被置换后，凭密码签发
-		// 的特权 Key 不能继续存活；与用户更新同事务，失败同滚。
-		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 			return
 		}
 	}
@@ -397,9 +388,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	// M6（契约）：重置密码与吊销该用户全部 API Key 同事务——密码被置换后，凭密码
-	// 签发的特权 Key 不能继续存活；任一步失败整体回滚，避免出现「密码已换、旧 Key
-	// 仍存活」的部分成功状态。
+	// 单条 UPDATE 事务（保持 G2 事务化改造的回滚完整性，M6 吊销已按用户裁定移除）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
@@ -427,16 +416,12 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		return
 	}
-	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
-		return
-	}
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return
 	}
 	committed = true
 
-	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart("success"), "密码变更已吊销该用户全部 API Key"))
+	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "密码重置成功"})
 }

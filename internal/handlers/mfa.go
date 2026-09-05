@@ -46,11 +46,23 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	}
 	user.ID = userID
 
+	// 登录失败锁定（2026-09 用户裁定）：MFA 验证码失败与密码失败同计一个
+	// 账户级计数（login_*），受「登录失败锁定」开关控制；锁定期间验证步直接
+	// 429，不再消耗挑战次数。
+	var loginLockedUntil sql.NullString
+	if err := db.DB.QueryRow("SELECT login_locked_until FROM users WHERE id=?", userID).Scan(&loginLockedUntil); err == nil && loginLockedNow(loginLockedUntil) {
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userID), "账户已锁定"), c.ClientIP())
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
+		return
+	}
+
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证码错误"), c.ClientIP())
 		// R72 B-I-4：挑战级失败计数——分布式 IP 限流绕过下对单挑战的爆破收敛
 		//（10 次作废，需重新走密码步取新挑战）。
 		_ = services.MFARecordChallengeFailure(req.MFAToken)
+		// 统一登录失败计数（开关语义见 recordLoginFailure）。
+		recordLoginFailure(userID)
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -62,6 +74,8 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战已被使用，请重新登录"})
 		return
 	}
+	// 完整登录成功：清零登录失败计数与锁定（密码步未清零，见 Login 注释）。
+	_, _ = db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", userID)
 	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix(), true)
 }
 

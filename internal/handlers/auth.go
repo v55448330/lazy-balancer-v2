@@ -52,24 +52,40 @@ func init() {
 	loginDummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("lazy-balancer timing-equalizer dummy"), bcrypt.DefaultCost)
 }
 
-// M7 账户级登录锁定阈值/冷却（用户已批准契约：常开，不挂 mfa_lockout_enabled
-// 全局开关——登录爆破兜底与 R74 端点硬门同语义，不应可被配置关闭）。
+// 登录失败锁定阈值/冷却（2026-09 用户裁定：登录阶段密码与 MFA 验证失败同计
+// 一个账户级计数，受基础设置「登录失败锁定」开关 mfa_lockout_enabled 控制——
+// 开关关闭则只计数不锁定；M7 初版的「常开」语义据此调整为开关语义）。
 const (
 	loginLockMaxAttempts = 5
 	loginLockCooldown    = 10 * time.Minute
 )
 
-// recordLoginFailure 登录密码失败的单条条件 UPDATE 原子递增（M7）——≥5 同语句
-// 置锁并清零计数（避免锁满后再计延长冷却）；与 mfa.go 的 mfaGateRecordPasswordFailure
-// 同型，但计数列独立（登录锁定与 MFA 确认冷却互不牵连）。
+// loginLockoutEnabled 读「登录失败锁定」开关（与 services.MFALockoutEnabled
+// 同一配置项；handler 侧就近封装避免跨包零散查询）。
+func loginLockoutEnabled() bool {
+	return services.MFALockoutEnabled()
+}
+
+// recordLoginFailure 登录阶段失败（密码或 MFA 验证码）的单条条件 UPDATE 原子
+// 递增——开关开启且 ≥5 同语句置锁并清零（避免锁满后再计延长冷却）；开关关闭
+// 仅累加计数不置锁（与 mfaRecordFailure 的开关语义同型）。
 func recordLoginFailure(userID int) {
 	now := time.Now()
+	if !loginLockoutEnabled() {
+		_, _ = db.DB.Exec(`UPDATE users SET login_failed_attempts=COALESCE(login_failed_attempts,0)+1 WHERE id=?`, userID)
+		return
+	}
 	_, _ = db.DB.Exec(`UPDATE users SET
 		login_failed_attempts=CASE WHEN COALESCE(login_failed_attempts,0)+1>=? THEN 0 ELSE COALESCE(login_failed_attempts,0)+1 END,
 		login_locked_until=CASE WHEN COALESCE(login_failed_attempts,0)+1>=? THEN ? ELSE login_locked_until END
 		WHERE id=?`,
 		loginLockMaxAttempts, loginLockMaxAttempts,
 		now.Add(loginLockCooldown).UTC().Format("2006-01-02 15:04:05"), userID)
+}
+
+// loginLockedNow 账户当前是否处于登录锁定（开关关闭视为未锁）。
+func loginLockedNow(lockedUntil sql.NullString) bool {
+	return loginLockoutEnabled() && lockedUntil.Valid && lockedUntil.String > time.Now().UTC().Format("2006-01-02 15:04:05")
 }
 
 func (h *Handlers) Login(c *gin.Context) {
@@ -103,9 +119,10 @@ func (h *Handlers) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
-	// M7（契约）：账户级登录锁定。锁定期间仍跑一次真实 bcrypt 再 429——等时占位，
-	// 与「用户名或密码错误」路径同耗时，不泄露锁定账户的密码正误（防枚举）。
-	if loginLockedUntil.Valid && loginLockedUntil.String > time.Now().UTC().Format("2006-01-02 15:04:05") {
+	// 登录失败锁定（用户裁定：受「登录失败锁定」开关控制）。锁定期间仍跑一次
+	// 真实 bcrypt 再 429——等时占位，与「用户名或密码错误」路径同耗时，不泄露
+	// 锁定账户的密码正误（防枚举）。
+	if loginLockedNow(loginLockedUntil) {
 		_ = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), "账户已锁定"), c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
@@ -113,15 +130,14 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
-		// M7：失败单条条件 UPDATE 原子递增（≥5 同语句置锁并清零）。
 		recordLoginFailure(user.ID)
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
 		return
 	}
-	// M7：密码验证成功即清零登录失败计数（后续禁用/MFA 分支同样已证明持有密码）。
-	_, _ = db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", user.ID)
-
+	// 密码正确但账户启用 MFA 时不在密码步清零计数——完整登录以 MFA 验证成功
+	// 为准（否则「输对密码→连错 4 次验证码→重登清零」可无限绕过锁定）；未启用
+	// MFA 则密码即完整登录，清零计数。
 	if !user.IsEnabled {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), "账号已禁用"), c.ClientIP())
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "账号已禁用，请联系管理员"})
@@ -147,6 +163,8 @@ func (h *Handlers) Login(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"mfa_required": true, "mfa_token": mfaToken})
 		return
 	}
+	// 完整登录成功（无 MFA）：清零登录失败计数与锁定。
+	_, _ = db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", user.ID)
 
 	h.respondLogin(c, user, passwordVersion)
 }
@@ -382,19 +400,11 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	if passwordHash != "" {
 		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")
 		args = append(args, passwordHash)
-		changed = append(changed, "密码", "密码变更已吊销该用户全部 API Key")
+		changed = append(changed, "密码")
 	}
 	if len(sets) > 0 {
 		args = append(args, userIDInt)
 		if _, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
-			return
-		}
-	}
-	if passwordHash != "" {
-		// M6（契约）：改密即吊销本人全部 API Key——密码被置换后，凭密码签发的
-		// 特权 Key 不能继续存活；与用户更新同事务，失败同滚。
-		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", userIDInt); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 			return
 		}

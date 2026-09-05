@@ -81,7 +81,7 @@
           </el-form-item>
           <el-form-item label="登录失败锁定">
             <el-switch v-model="settings.mfa_lockout_enabled" />
-            <el-text type="info" size="small" class="tip-inline">失败 5 次锁 10 分钟</el-text>
+            <el-text type="info" size="small" class="tip-inline">密码或验证码失败 5 次锁 10 分钟（关闭则不锁定）</el-text>
           </el-form-item>
           <el-form-item label="强制 HTTPS">
             <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />

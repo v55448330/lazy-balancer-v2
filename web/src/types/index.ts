@@ -43,8 +43,6 @@ export interface CreateAPIKeyInput {
   readonly read_only: boolean
   readonly mcp_ip_whitelist: string[]
   readonly expires_at?: string
-  // M6：特权 Key（read_only=false 或 mcp_enabled=true）创建必须携带当前密码
-  readonly password?: string
 }
 
 export interface UpdateAPIKeyInput {
@@ -52,8 +50,6 @@ export interface UpdateAPIKeyInput {
   readonly mcp_enabled?: boolean
   readonly read_only?: boolean
   readonly mcp_ip_whitelist?: string[]
-  // M6：功能配置落在特权态（read_only=false 或 mcp_enabled=true）时必须携带当前密码
-  readonly password?: string
 }
 
 export interface MCPToolSpec {

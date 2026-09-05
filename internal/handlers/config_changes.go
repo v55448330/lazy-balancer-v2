@@ -114,7 +114,7 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)
-	add("mfa_lockout_enabled", "MFA 验证失败锁定", req.MFALockoutEnabled != nil && *req.MFALockoutEnabled != old.MFALockoutEnabled)
+	add("mfa_lockout_enabled", "登录失败锁定", req.MFALockoutEnabled != nil && *req.MFALockoutEnabled != old.MFALockoutEnabled)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
 	add("audit_log_size_mb", "审计日志大小", req.AuditLogSizeMB != nil && *req.AuditLogSizeMB != old.AuditLogSizeMB)
 	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)

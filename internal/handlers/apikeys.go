@@ -118,16 +118,8 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 	return keys, nil
 }
 
-// createAPIKeyForUserRequest 在 models.CreateAPIKeyRequest 上扩展 M6 契约字段
-// password：特权 Key（可写或 MCP）创建必须过共享密码确认门（模型包不为此
-// 契约加列，扩展收敛在创建端点）。
-type createAPIKeyForUserRequest struct {
-	models.CreateAPIKeyRequest
-	Password string `json:"password" binding:"omitempty,max=72"`
-}
-
 func createAPIKeyForUser(c *gin.Context, userID int) {
-	var req createAPIKeyForUserRequest
+	var req models.CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -139,16 +131,29 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "过期时间不能早于当前时间"})
 		return
 	}
-	// M6（用户已批准契约）：特权 Key（非只读或 MCP）可凭密码读配置/调用工具，
-	// 创建必须现场确认密码——被劫持会话不能静默铸造长期特权凭据；只读非 MCP
-	// Key 保持无门。缺失 400；错误/冷却中由共享门写入 401/429。
+	// M6（2026-09 用户裁定）：特权 Key（非只读或 MCP）创建不验密码——API Key
+	// 面向程序使用，创建/使用均不叠加交互确认；改密亦不吊销 Key（风险由后台
+	// 禁用 Key/账户与只读 Key 承载）。可选防线是「写操作验证」（mfa_write_guard）：
+	// 开启且创建者为启用 MFA 的 JWT 用户时，特权 Key 创建按 mfaStepUpGuard 同
+	// 语义要求 60 秒内 MFA 验证（428 → 全局弹码 → 携新 JWT 重试）；API Key
+	// 机器身份豁免（与路由级守卫一致），未启用 MFA 直通。
 	if !req.ReadOnly || req.MCPEnabled {
-		if req.Password == "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "创建可写或 MCP API 密钥需提供密码"})
-			return
-		}
-		if err := confirmPasswordWithGate(c, userID, req.Password); err != nil {
-			return
+		if c.GetString("auth_type") == "jwt" && services.MFAWriteGuardEnabled() {
+			var mfaEnabled bool
+			if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&mfaEnabled); err != nil {
+				// 与 mfaStepUpGuard 同口径：MFA 状态查询失败 fail-closed（R72 C-I-3）。
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "MFA 状态查询失败"})
+				return
+			}
+			if mfaEnabled {
+				mfaTs := c.GetFloat64("mfa_ts")
+				if elapsed := time.Since(time.Unix(int64(mfaTs), 0)); mfaTs > 0 && elapsed < 60*time.Second {
+					c.Header("X-Mfa-Verified-Seconds-Ago", strconv.FormatInt(int64(elapsed.Seconds()), 10))
+				} else {
+					c.JSON(http.StatusPreconditionRequired, gin.H{"code": 428, "message": "MFA_STEP_UP_REQUIRED", "detail": "此操作需要 MFA 验证"})
+					return
+				}
+			}
 		}
 	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
