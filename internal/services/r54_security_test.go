@@ -210,7 +210,7 @@ func TestCRSUpdateRun_installFailureRestoresStockBaseline(t *testing.T) {
 	if err != nil || string(stock) != "# old stock baseline" {
 		t.Fatalf("crs-setup.stock.conf=%q,%v, want restored pre-update baseline", stock, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "crs-setup.stock.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("crs-setup.stock.conf.bak should be consumed by restore")
 	}
 	_, status, _, _, _, _, _ := crsVersionRow(t)
@@ -244,7 +244,7 @@ func TestCRSUpdateRun_successRemovesStockBackup(t *testing.T) {
 	if err != nil || string(stock) != "# new setup" {
 		t.Fatalf("crs-setup.stock.conf=%q,%v, want new baseline", stock, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "crs-setup.stock.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("crs-setup.stock.conf.bak should be removed after a successful update")
 	}
 }

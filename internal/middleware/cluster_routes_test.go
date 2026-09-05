@@ -96,6 +96,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"POST /api/v1/cluster/nodes/report",
 		"POST /api/v1/auth/ticket-login",
 		"PUT /api/v1/cluster/settings",
+		"POST /api/v1/cluster/forget-pins",
 	}
 	for _, route := range expected {
 		if !routes[route] {
@@ -147,7 +148,7 @@ func TestClusterLoginTicketSignsAndLogsIntoSlave(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(clusterToken))
-	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,status,is_approved,cluster_token_hash) VALUES (9,'slave', '10.0.0.9',8443,'https','online',1,?)`, hex.EncodeToString(hash[:])); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,status,is_approved,cluster_token_hash,last_seen) VALUES (9,'slave', '10.0.0.9',8443,'https','online',1,?,datetime('now'))`, hex.EncodeToString(hash[:])); err != nil {
 		t.Fatal(err)
 	}
 

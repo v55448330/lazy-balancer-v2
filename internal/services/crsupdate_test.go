@@ -157,10 +157,10 @@ func TestCRSUpdateRun_success(t *testing.T) {
 	if got := m.RuleCount(); got != 3 {
 		t.Fatalf("RuleCount()=%d, want 3", got)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, ".staging")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, ".staging")); !os.IsNotExist(err) {
 		t.Fatal(".staging should be cleaned up")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
 		t.Fatal("rules.bak should be cleaned up after success")
 	}
 }
@@ -237,7 +237,7 @@ func TestCRSUpdateRun_installFailureRestoresBackup(t *testing.T) {
 	if reloads != 1 {
 		t.Fatalf("reloads=%d, want 1 (reload after restore)", reloads)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
 		t.Fatal("rules.bak should be cleaned up after restore")
 	}
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/db"
 	"log"
@@ -86,6 +87,20 @@ func readConfLines(path string) []string {
 	return strings.Split(string(data), "\n")
 }
 
+// crsTransientDir 返回 CRS 更新瞬态目录（crsDir 的兄弟目录 crs.transient，M24）：
+// .staging/rules.bak/rules.old 与各 *.bak 此前散落在 crsDir 内，会混入集群
+// waf-files 同步打包（tarGzDir 已加过滤兜底）与目录扫描；迁出后 crsDir 只含
+// 正式内容。同库 .sync-in 的「兄弟目录暂存」模式。
+func crsTransientDir(crsDir string) string {
+	return filepath.Join(filepath.Dir(crsDir), "crs.transient")
+}
+
+// crsTransientPath 计算 crs.transient/ 下瞬态文件路径；目录不存在由首个使用者
+// 的 MkdirAll/copyDir 创建（staging/copyDirTransactional 均覆盖）。
+func crsTransientPath(crsDir, name string) string {
+	return filepath.Join(crsTransientDir(crsDir), name)
+}
+
 // downloadAndInstall downloads, validates and swaps in the new rules. The
 // live tree persists across rebuilds via the /app/waf bind mount, so no
 // snapshot is taken. On failure the live tree is restored from backup by
@@ -94,7 +109,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 每次运行重置：restoreBackup 仅消费本运行创建的 overrides 备份（R39 1.1）。
 	m.overridesBakCreated = false
 	m.setStage(CRSStatusDownloading, fmt.Sprintf("下载 %s", tag))
-	staging := filepath.Join(m.crsDir, ".staging")
+	staging := crsTransientPath(m.crsDir, ".staging")
 	if err := os.RemoveAll(staging); err != nil {
 		return fmt.Errorf("清理 staging 目录: %w", err)
 	}
@@ -122,13 +137,19 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		return fmt.Errorf("校验 CRS 发布包: %w", err)
 	}
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件（如代理
-	// 返回的 200 垃圾）留下基线会让下次同 tag 好下载误报。记录失败不阻断安装。
+	// 返回的 200 垃圾）留下基线会让下次同 tag 好下载误报。M11（契约#4）：内容
+	// 与基线 mismatch 时阻断安装并保留旧基线——错误消息已含人工清基线指引
+	//（确认上游更新合法后删除 data/download_integrity.json 对应条目重试）；
+	// 此时 rules 尚未替换，直接返回即可。I/O 类记录失败维持仅记日志不阻断。
 	if ierr := recordDownloadIntegrity(crsTarballSourceURL(tag), tarball, "CRS规则库"); ierr != nil {
+		if errors.Is(ierr, errDownloadIntegrityMismatch) {
+			return fmt.Errorf("CRS 发布包完整性校验失败: %w", ierr)
+		}
 		log.Printf("crs update: failed to record download integrity: %v", ierr)
 	}
 
 	rulesPath := filepath.Join(m.crsDir, "rules")
-	rulesBak := filepath.Join(m.crsDir, "rules.bak")
+	rulesBak := crsTransientPath(m.crsDir, "rules.bak")
 	os.RemoveAll(rulesBak)
 	// 注意：zz-user-overrides.conf.bak 不再在此无条件清除（R39 1.1）。上一次运行
 	// 可能因还原失败保全了 .bak（三-1：唯一恢复副本）；若本运行在创建新备份前
@@ -146,7 +167,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		}
 	}
 	setupPath := filepath.Join(m.crsDir, "crs-setup.conf")
-	setupBak := setupPath + ".bak"
+	setupBak := crsTransientPath(m.crsDir, "crs-setup.conf.bak")
 	if _, err := os.Stat(setupPath); err == nil {
 		if err := copyFile(setupPath, setupBak); err != nil {
 			m.restoreBackup()
@@ -157,7 +178,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// stock 基线停留在新版本，下次迁移的 diff 基线错位——两版之间上游改动过
 	// 的默认行被误判为用户自定义迁入 overrides，上游默认值变更被静默回退。
 	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
-	stockBak := stockPath + ".bak"
+	stockBak := crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")
 	if _, err := os.Stat(stockPath); err == nil {
 		if err := copyFile(stockPath, stockBak); err != nil {
 			m.restoreBackup()
@@ -182,7 +203,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		header := fmt.Sprintf("# 由 CRS 更新自动迁移的用户自定义配置\n# 生成时间: %s\n",
 			time.Now().In(CurrentLocation()).Format(crsTimeLayout))
 		overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
-		overridesBak := overridesPath + ".bak"
+		overridesBak := crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")
 		// 迁移写入前先留底：已有 overrides 则备份内容，没有则用空 .bak 标记
 		// 「更新前不存在」。restoreBackup 据此把 overrides 还原到更新前状态——
 		// 否则恢复后的旧 setup（含自定义行）与 overrides（同一批行）重复应用，
@@ -282,13 +303,13 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 内 moveTree 序列中断），成功路径顺带清理——否则它只能等下一次失败的更新
 	// 才被回收，长期占用一整棵规则树的磁盘。restoreRulesBackup 开头本就会先清
 	// rules.old，此处删除不影响任何恢复路径。
-	os.RemoveAll(rulesPath + ".old")
+	os.RemoveAll(crsTransientPath(m.crsDir, "rules.old"))
 	os.Remove(setupBak)
 	// 崩溃窗口说明：stock 写入（上方）与本清理之间的进程崩溃会残留陈旧
 	// stock.bak；它与 setup.bak 语义一致——下次运行在备份点用新拷贝覆盖，
 	// 只可能在「备份点之前失败」的极端路径被 restoreBackup 消费（R54-N3）。
 	os.Remove(stockBak)
-	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	os.Remove(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"))
 	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
 	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
 	writeCRSVersionMarker(m.crsDir, tag)
@@ -337,12 +358,12 @@ func persistCRSSnapshotFrom(liveDir, snapshotDir, version string) error {
 // revert upstream default changes as "customizations".
 func (m *CRSUpdateManager) restoreBackup() {
 	rulesPath := filepath.Join(m.crsDir, "rules")
-	rulesBak := filepath.Join(m.crsDir, "rules.bak")
+	rulesBak := crsTransientPath(m.crsDir, "rules.bak")
 	if _, err := os.Stat(rulesBak); err == nil {
 		restoreRulesBackup(rulesPath, rulesBak)
 	}
 	setupPath := filepath.Join(m.crsDir, "crs-setup.conf")
-	setupBak := setupPath + ".bak"
+	setupBak := crsTransientPath(m.crsDir, "crs-setup.conf.bak")
 	if _, err := os.Stat(setupBak); err != nil {
 		return
 	}
@@ -352,7 +373,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 	}
 	os.Remove(setupBak)
 	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
-	stockBak := stockPath + ".bak"
+	stockBak := crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")
 	if _, err := os.Stat(stockBak); err == nil {
 		if err := copyFile(stockBak, stockPath); err != nil {
 			log.Printf("crs update: failed to restore crs-setup.stock.conf backup: %v", err)
@@ -361,7 +382,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 		os.Remove(stockBak)
 	}
 	overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
-	overridesBak := overridesPath + ".bak"
+	overridesBak := crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")
 	if !m.overridesBakCreated {
 		// 非本运行创建的 .bak 不得消费（R39 1.1）：跨运行保全副本在下次成功更新
 		// 前始终可用，且不会把 overrides 还原到两版本之前（R38 三-2）。
@@ -396,7 +417,8 @@ func restoreRulesBackup(rulesPath, rulesBak string) {
 		log.Printf("crs update: rules backup %s is degenerate (no .conf files or missing %s), skipping restore (live rules left untouched)", rulesBak, crsRulesProbeFile)
 		return
 	}
-	rulesOld := rulesPath + ".old"
+	// M24：rules.old 属瞬态残树，落 crs.transient（live 目录不留 .old）。
+	rulesOld := crsTransientPath(filepath.Dir(rulesPath), "rules.old")
 	if err := os.RemoveAll(rulesOld); err != nil {
 		log.Printf("crs update: failed to clear %s, restore aborted (live rules untouched): %v", rulesOld, err)
 		return

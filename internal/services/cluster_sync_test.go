@@ -26,6 +26,13 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// verifySnapshotIntegrity 仅为测试暴露 verifiedSnapshotIntegrity 的 error 形态
+// （原生产包装函数零生产调用，Phase10 清理移入测试侧）。
+func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) error {
+	_, err := verifiedSnapshotIntegrity(snapshot, clusterToken, appliedVersion)
+	return err
+}
+
 func TestVerifySnapshotConsistency_allows_zero_upstream_rule_with_warning(t *testing.T) {
 	// Given：主节点存在启用但零上游的规则（历史/导入残留的数据漂移）
 	snapshot := models.ClusterSnapshot{

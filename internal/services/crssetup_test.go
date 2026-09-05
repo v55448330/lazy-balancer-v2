@@ -187,7 +187,7 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf written during the failed attempt should be removed on rollback")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 }
@@ -199,21 +199,21 @@ func TestRestoreBackup_restoreFailureKeepsOverridesBak(t *testing.T) {
 	// Given backups in place and a restore target occupied by a directory
 	// (copyFile's WriteFile fails with EISDIR)
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	if err := os.Mkdir(filepath.Join(m.crsDir, "zz-user-overrides.conf"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
 
 	// When the backup is restored
 	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：还原失败时保留 .bak
 	m.restoreBackup()
 
 	// Then the failed overrides restore keeps the only recovery copy
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
 		t.Fatal("zz-user-overrides.conf.bak 不得在还原失败时被删除（R38 三-1）")
 	}
 	// And the independent setup/rules restore still completes
@@ -232,21 +232,21 @@ func TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker(t *testing.T) {
 	// Given backups in place and a freshly created overrides path that cannot
 	// be removed (non-empty directory → ENOTEMPTY)
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	if err := os.MkdirAll(filepath.Join(m.crsDir, "zz-user-overrides.conf", "sub"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "")
 
 	// When the backup is restored
 	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：消费空标记时移除失败则保留
 	m.restoreBackup()
 
 	// Then the empty marker survives so a later restore can retry
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
 		t.Fatal("空标记不得在移除失败时被消费（R38 三-1）")
 	}
 }
@@ -267,7 +267,7 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "stock-a\nstock-b\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "stock-a\nstock-b\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 当前 overrides\nSecRuleARCustom 2")
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 两版本前的 overrides\nSecRuleARCustom 1")
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "# 两版本前的 overrides\nSecRuleARCustom 1")
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
@@ -293,7 +293,7 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 	}
 	// 陈旧 .bak 原样保留：R39 1.1 改为永不消费跨运行 bak（保全语义优先），
 	// 替代 R38 的「运行开始即清理」——该清理会毁掉三-1 保全的唯一恢复副本。
-	bakData, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	bakData, err := os.ReadFile(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"))
 	if err != nil || string(bakData) != "# 两版本前的 overrides\nSecRuleARCustom 1" {
 		t.Fatalf("stale zz-user-overrides.conf.bak=%q,%v, want preserved（R39 1.1）", bakData, err)
 	}
@@ -306,10 +306,10 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 func TestRestoreBackup_degenerateRulesBakSkipped(t *testing.T) {
 	// Given 退化的 rules.bak（无 .conf 文件）与完好的 live 规则树
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "partial.tmp"), "incomplete")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "partial.tmp"), "incomplete")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 
 	// When 尝试还原备份
@@ -319,7 +319,7 @@ func TestRestoreBackup_degenerateRulesBakSkipped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf")); err != nil {
 		t.Fatal("live rules must be untouched when rules.bak is degenerate (R49 B-N2)")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); err != nil {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); err != nil {
 		t.Fatal("degenerate rules.bak should be left in place (not consumed)")
 	}
 	// And 独立的 setup 还原照常完成
@@ -338,9 +338,9 @@ func TestRestoreBackup_moveTreeFailureKeepsLiveIntact(t *testing.T) {
 	// copy 回退也必然失败，live 规则树完好
 	forceRenameFailure(t)
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-900.conf"), "SecRule a")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	if err := os.Symlink("missing-target", filepath.Join(m.crsDir, "rules.bak", "REQUEST-901.conf")); err != nil {
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-900.conf"), "SecRule a")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	if err := os.Symlink("missing-target", filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-901.conf")); err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
@@ -359,10 +359,10 @@ func TestRestoreBackup_moveTreeFailureKeepsLiveIntact(t *testing.T) {
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("live rules must contain only the original tree, no partial bak residue: %v,%v", entries, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.old")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.old")); !os.IsNotExist(err) {
 		t.Fatal("rules.old should be consumed by the move-back")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); err != nil {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); err != nil {
 		t.Fatal("rules.bak should remain when the restore move fails")
 	}
 }
@@ -406,9 +406,9 @@ func TestCRSUpdateRun_installsStockSetupWhenNoneExists(t *testing.T) {
 func TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak(t *testing.T) {
 	// Given backups in place, clobbered live files, and migration artifacts
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-NEW.conf"), "SecRule new")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# migrated")
@@ -424,14 +424,14 @@ func TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-NEW.conf")); !os.IsNotExist(err) {
 		t.Fatal("clobbered rules should be gone")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
 		t.Fatal("rules.bak should be consumed")
 	}
 	setup, _ := os.ReadFile(filepath.Join(m.crsDir, "crs-setup.conf"))
 	if string(setup) != "# previous" {
 		t.Fatalf("crs-setup.conf=%q, want restored backup", setup)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "crs-setup.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "crs-setup.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("crs-setup.conf.bak should be consumed")
 	}
 
@@ -452,12 +452,12 @@ func TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak(t *testing.T) {
 func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
 	// Given backups in place, clobbered live files, and a content .bak
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移覆写")
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
 
 	// When the backup is restored
 	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：内容 .bak 可被消费
@@ -468,7 +468,7 @@ func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
 	if err != nil || string(data) != "# 更新前 overrides\nSecRuleARCustom 1" {
 		t.Fatalf("zz-user-overrides.conf=%q,%v, want restored pre-update content", data, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 }
@@ -478,12 +478,12 @@ func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
 func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
 	// Given backups in place, clobbered live files, and an empty .bak marker
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
-	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, crsTransientPath(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移新建")
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "")
 
 	// When the backup is restored
 	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：空标记可被消费
@@ -493,7 +493,7 @@ func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); !os.IsNotExist(err) {
 		t.Fatal("freshly created zz-user-overrides.conf should be removed")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 }

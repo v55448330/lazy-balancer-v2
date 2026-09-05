@@ -19,6 +19,9 @@ import (
 var restartRequiredHandler = struct {
 	sync.RWMutex
 	fn func()
+	// installed 表示 main 已注入优雅重启信号（M22）：RequestRestart 据此区分
+	// 生产环境与独立/测试环境，后者需调用方回退各自的进程退出路径。
+	installed bool
 }{fn: defaultRestartRequiredHandler}
 
 func defaultRestartRequiredHandler() {
@@ -35,9 +38,11 @@ func SetRestartRequiredHandler(handler func()) {
 	defer restartRequiredHandler.Unlock()
 	if handler == nil {
 		restartRequiredHandler.fn = defaultRestartRequiredHandler
+		restartRequiredHandler.installed = false
 		return
 	}
 	restartRequiredHandler.fn = handler
+	restartRequiredHandler.installed = true
 }
 
 func requestRestart() {
@@ -45,6 +50,22 @@ func requestRestart() {
 	handler := restartRequiredHandler.fn
 	restartRequiredHandler.RUnlock()
 	handler()
+}
+
+// RequestRestart 是管理面板触发的统一重启入口（M22）：admin TLS 更新与用户
+// 服务重启与集群同步的 Admin TLS 热切换共用同一触发器（main 注入的优雅停机
+// 信号，HTTP 优雅关停后退出）。返回 false 表示未注入优雅重启处理器（独立/
+// 测试环境），调用方回退自身的进程退出路径。
+func RequestRestart() bool {
+	restartRequiredHandler.RLock()
+	handler := restartRequiredHandler.fn
+	installed := restartRequiredHandler.installed
+	restartRequiredHandler.RUnlock()
+	if !installed {
+		return false
+	}
+	handler()
+	return true
 }
 
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
@@ -115,6 +136,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			fmt.Errorf("提交快照事务: %w", err),
 			s.restoreSnapshotArtifacts(previous, snapshot),
 		)
+	}
+	// M23：log_level 随快照落库后热生效——必须在事务提交后调用（ApplyLogLevel
+	// 从 db.DB 读全局配置，提交前读到的仍是旧值）。global_config 节被开关跳过
+	// 时本地设置未变，不重放。失败仅记日志（ApplyLogLevel 内部已记），不中断同步。
+	if !skip.skip("global_config") {
+		ApplyLogLevel()
 	}
 	logSectionSyncOutcome(skip, snapshot.Version)
 	if len(skip.drifted) > 0 {
@@ -220,7 +247,8 @@ func (s *SyncService) materializeSnapshotDNSOwnership(acme *models.ClusterACMESt
 	}
 	if dataDir == "" {
 		var err error
-		dataDir, err = clusterDatabaseDir(s.db)
+		// *sql.DB 满足 snapshotStore 接口，与 clusterSnapshotDataDir 合一（Phase10）。
+		dataDir, err = clusterSnapshotDataDir(context.Background(), s.db)
 		if err != nil {
 			return err
 		}

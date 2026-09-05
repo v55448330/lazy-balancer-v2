@@ -39,8 +39,8 @@ func TestCopyDirTransactional_renameFailureCleansTmp(t *testing.T) {
 func TestRestoreBackup_partialRulesBakWithoutProbeSkipped(t *testing.T) {
 	// Given 缺探针文件的部分残树 rules.bak 与完好的 live 规则树
 	m := newTestCRSManager(t)
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-900.conf"), "SecRule a")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-941.conf"), "SecRule b")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-900.conf"), "SecRule a")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.bak"), "REQUEST-941.conf"), "SecRule b")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule live")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# live")
 
@@ -55,7 +55,7 @@ func TestRestoreBackup_partialRulesBakWithoutProbeSkipped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-900.conf")); !os.IsNotExist(err) {
 		t.Fatal("partial bak content must not land in live rules")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); err != nil {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); err != nil {
 		t.Fatal("partial rules.bak should be left in place (not consumed)")
 	}
 }
@@ -69,7 +69,7 @@ func TestCRSUpdateRun_successCleansRulesOldResidue(t *testing.T) {
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule old")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
-	writeTestFile(t, filepath.Join(m.crsDir, "rules.old", crsRulesProbeFile), "SecRule stale")
+	writeTestFile(t, filepath.Join(crsTransientPath(m.crsDir, "rules.old"), crsRulesProbeFile), "SecRule stale")
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
@@ -85,7 +85,7 @@ func TestCRSUpdateRun_successCleansRulesOldResidue(t *testing.T) {
 	if status != "success" {
 		t.Fatalf("update_status=%q (%s), want success", status, message)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.old")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.old")); !os.IsNotExist(err) {
 		t.Fatal("rules.old residue should be cleaned on the success path (R50 B-#4)")
 	}
 }

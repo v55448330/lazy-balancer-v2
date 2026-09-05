@@ -645,22 +645,13 @@ func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) 
 	return state, nil
 }
 
+// clusterSnapshotDataDir 经 PRAGMA database_list 定位数据目录；*sql.DB 天然满足
+// snapshotStore 接口（QueryContext/QueryRowContext 签名一致），非事务调用方
+// 直接传 *sql.DB 即可（Phase10 与原 clusterDatabaseDir 合一）。
 func clusterSnapshotDataDir(ctx context.Context, store snapshotStore) (string, error) {
 	var sequence int
 	var name, databasePath string
 	if err := store.QueryRowContext(ctx, "PRAGMA database_list").Scan(&sequence, &name, &databasePath); err != nil {
-		return "", fmt.Errorf("读取集群数据库路径: %w", err)
-	}
-	if databasePath == "" {
-		return "", errors.New("无法确定集群数据目录")
-	}
-	return filepath.Dir(databasePath), nil
-}
-
-func clusterDatabaseDir(database *sql.DB) (string, error) {
-	var sequence int
-	var name, databasePath string
-	if err := database.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath); err != nil {
 		return "", fmt.Errorf("读取集群数据库路径: %w", err)
 	}
 	if databasePath == "" {

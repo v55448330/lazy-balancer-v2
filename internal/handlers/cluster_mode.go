@@ -97,9 +97,9 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 		return
 	}
 	// R67 A-N2：提升成功后清空内存 TOFU pin 缓存——Promote 的 cleanupClusterPin
-	// 只删 pin 文件，内存 verifiedPins 残留旧主节点指纹会在「同 host:port 新主
-	// 节点换证书」拓扑下使后续注册恒失败（do() 以内存指纹回写 pin 文件），
-	// 仅重启可解。与 R64 A-N4 的 Resume() 同点位：角色切换的完整收尾。
+	// 只删 pin 文件，内存 verifiedPins 残留旧主节点指纹会让记录与钉扎状态错位
+	//（M13① 后 do() 不再以内存指纹回写，此处清空保持内存/磁盘 TOFU 生命周期
+	// 对齐）。与 R64 A-N4 的 Resume() 同点位：角色切换的完整收尾。
 	h.syncService.ForgetClusterPins()
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已提升为主节点"})

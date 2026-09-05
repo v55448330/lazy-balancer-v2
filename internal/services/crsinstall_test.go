@@ -176,10 +176,10 @@ func TestCRSUpdateRun_backupCopyFailureLeavesNoPartialRulesBak(t *testing.T) {
 	if !strings.Contains(message, "备份现有 rules") {
 		t.Fatalf("message=%q, want the backup failure cause", message)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
 		t.Fatal("partial rules.bak must not exist after a failed backup copy (R49 B-N2)")
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak.tmp")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "rules.bak.tmp")); !os.IsNotExist(err) {
 		t.Fatal("rules.bak.tmp staging must be cleaned up after a failed backup copy")
 	}
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-900.conf")); err != nil {
@@ -271,7 +271,7 @@ func TestCRSUpdateRun_installFailureRestoresPreexistingOverrides(t *testing.T) {
 	if err != nil || string(overrides) != "# 前次迁移产物\nSecRuleARPrev 1" {
 		t.Fatalf("zz-user-overrides.conf=%q,%v, want restored pre-update content", overrides, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+	if _, err := os.Stat(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 	_, status, _, _, _, _, _ := crsVersionRow(t)
@@ -292,8 +292,8 @@ func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) 
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
-	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 保全内容\nSecRulePreserved 1")
-	if err := os.MkdirAll(filepath.Join(m.crsDir, "crs-setup.conf.bak"), 0755); err != nil {
+	writeTestFile(t, crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"), "# 保全内容\nSecRulePreserved 1")
+	if err := os.MkdirAll(crsTransientPath(m.crsDir, "crs-setup.conf.bak"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,7 +308,7 @@ func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) 
 	m.run("manual")
 
 	// Then 保全副本原样保留，overrides 未被本次迁移触碰
-	data, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	data, err := os.ReadFile(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"))
 	if err != nil || string(data) != "# 保全内容\nSecRulePreserved 1" {
 		t.Fatalf("preserved overrides .bak lost after failed run: %q, %v", data, err)
 	}

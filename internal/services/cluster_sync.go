@@ -144,6 +144,11 @@ func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("集群主节点地址必须使用 HTTP 或 HTTPS")
 	}
 	s.initClusterClient()
+	// M13①：内存已验证指纹仅在 pin 文件「存在」时复核防篡改（存在+不一致 =
+	// 发送令牌前拒绝，errClusterPinMismatch）；文件缺失（forget-pins 端点/手工
+	// 清理）不回写重建——旧逻辑 verifyOrStoreClusterPin 会把删除动作立即用内存
+	// 指纹撤销、TOFU 失去重钉入口，改为交由 transport 握手按当前证书重新钉扎
+	// 并更新内存。verifiedPins 内存缓存由 ForgetPins/提升为主节点时清空。
 	pinPath, err := s.clusterPinPath(req.URL.Host)
 	if err != nil {
 		return nil, err
@@ -152,11 +157,28 @@ func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 	verifiedFingerprint, verified := s.verifiedPins[pinPath]
 	s.pinMu.Unlock()
 	if verified {
-		if err := verifyOrStoreClusterPin(pinPath, verifiedFingerprint); err != nil {
+		if err := verifyClusterPinIfPresent(pinPath, verifiedFingerprint); err != nil {
 			return nil, err
 		}
 	}
 	return s.client.Do(req)
+}
+
+// verifyClusterPinIfPresent 校验 pin 文件与已验证指纹一致；文件缺失返回 nil
+// （不创建、不写入——重钉交给 transport TOFU 路径），存在但不一致返回
+// errClusterPinMismatch，读失败原样返回。
+func verifyClusterPinIfPresent(path, fingerprint string) error {
+	stored, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取主节点 TLS 证书指纹: %w", err)
+	}
+	if strings.TrimSpace(string(stored)) != fingerprint {
+		return errClusterPinMismatch
+	}
+	return nil
 }
 
 func (s *SyncService) initClusterClient() {
@@ -261,7 +283,10 @@ func clusterPinPathForDatabase(database *sql.DB, host string) (string, error) {
 	return clusterPinPath("", database, host)
 }
 
-func clusterPinPath(dataDir string, database *sql.DB, host string) (string, error) {
+// clusterPinDirectory 返回 pin 文件所在目录（<dataDir>/cluster_ca_pins）；
+// dataDir 为空且带数据库时从数据库文件路径推导（与 clusterPinPath 既有口径
+// 一致，抽出供 ForgetPins 整目录清理复用）。
+func clusterPinDirectory(dataDir string, database *sql.DB) (string, error) {
 	if dataDir == "" && database != nil {
 		var sequence int
 		var name, databasePath string
@@ -271,6 +296,14 @@ func clusterPinPath(dataDir string, database *sql.DB, host string) (string, erro
 	}
 	if dataDir == "" {
 		return "", errors.New("无法确定集群证书指纹存储目录")
+	}
+	return filepath.Join(dataDir, "cluster_ca_pins"), nil
+}
+
+func clusterPinPath(dataDir string, database *sql.DB, host string) (string, error) {
+	directory, err := clusterPinDirectory(dataDir, database)
+	if err != nil {
+		return "", err
 	}
 	parsed := &url.URL{Host: host}
 	hostname := strings.ToLower(parsed.Hostname())
@@ -282,7 +315,7 @@ func clusterPinPath(dataDir string, database *sql.DB, host string) (string, erro
 		port = "443"
 	}
 	hostHash := sha256.Sum256([]byte(net.JoinHostPort(hostname, port)))
-	return filepath.Join(dataDir, "cluster_ca_pins", hex.EncodeToString(hostHash[:])), nil
+	return filepath.Join(directory, hex.EncodeToString(hostHash[:])), nil
 }
 
 func verifyOrStoreClusterPin(path, fingerprint string) error {
@@ -693,14 +726,10 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		}
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, strings.TrimSpace(string(body))))
 	}
-	var envelope struct {
-		Data models.ClusterSnapshot `json:"data"`
-	}
-	snapshotData, err := decodeSnapshotEnvelope(resp.Body)
+	snapshot, err := decodeSnapshotEnvelope(resp.Body)
 	if err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析集群快照: %w", err))
 	}
-	envelope.Data = snapshotData
 	var currentMasterURL, currentToken string
 	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("重读同步状态: %w", err))
@@ -708,15 +737,15 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	if isMaster || currentMasterURL != masterURL || currentToken != token {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("同步角色或主节点凭据已变更，拒绝应用快照"))
 	}
-	verifiedSnapshot, err := verifiedSnapshotIntegrity(envelope.Data, token, appliedVersion)
+	verifiedSnapshot, err := verifiedSnapshotIntegrity(snapshot, token, appliedVersion)
 	if err != nil {
-		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
+		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", snapshot.Version), err.Error()), "")
 		// last_sync_error 落库由下方 Pull defer 统一覆盖（err != nil 时执行，
 		// 主节点节点列表经 Report 通道可见真实失败原因）：此处不再显式写，
 		// 避免同一错误单周期重复 UPDATE（R32-2 收敛单写）。
 		return SyncResult{}, err
 	}
-	envelope.Data = verifiedSnapshot
+	snapshot = verifiedSnapshot
 	if s.beforeApplySnapshot != nil {
 		s.beforeApplySnapshot()
 	}
@@ -733,9 +762,9 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		// 存活才能触发 304 补偿重拉）。
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errSyncPullStopped)
 	}
-	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
+	if err := s.applySnapshot(ctx, snapshot); err != nil {
 		s.pullApplyMu.Unlock()
-		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
+		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", snapshot.Version), err.Error()), "")
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeApplyFailed, err)
 	}
 	s.pullApplyMu.Unlock()
@@ -743,7 +772,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	// 兜底重拉频率与 last_sync_error 语义。
 	s.trackWafRepullConvergence()
 	s.trackReloadRepullConvergence(ctx)
-	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
+	return SyncResult{AppliedVersion: snapshot.Version, Changed: true}, nil
 }
 
 // driftedSections 用本地数据重建节哈希，与已应用记录比对；不一致说明
@@ -1096,14 +1125,6 @@ func syncFailureCountIn(message string) int {
 	return count
 }
 
-// verifySnapshotIntegrity re-computes the snapshot fingerprint the same way
-// the master does and checks referential consistency, so a corrupted or
-// truncated payload is rejected before anything is applied.
-func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) error {
-	_, err := verifiedSnapshotIntegrity(snapshot, clusterToken, appliedVersion)
-	return err
-}
-
 func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) (models.ClusterSnapshot, error) {
 	// The signature is mandatory: it is the only authenticity proof over the
 	// (verification-skipped) transport, and an unsigned payload could be forged
@@ -1446,15 +1467,44 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 }
 
 // ForgetClusterPins 清空内存 TOFU pin 缓存（R67 A-N2）。提升为主节点时
-// cleanupClusterPin 已删除 pin 文件，但本 map 不清则残留旧主节点指纹：本节点
-// 重新成为从节点且新主节点恰在同一 host:port 换发证书时，do() 会以内存指纹
-// 重新落盘 pin 文件（cluster_sync.go verifyOrStoreClusterPin 回写路径）并使
-// 每次握手指纹比对恒失败——运维删 pin 文件也被写回，仅进程重启可解。提升后
-// 调用使 TOFU 生命周期与 pin 文件侧对齐（新拓扑重新 TOFU）。
+// cleanupClusterPin 已删除 pin 文件，内存 map 残留旧主节点指纹会使记录与
+// 钉扎状态错位（M13① 删除 do() 回写后内存指纹不再自动落盘，此处清空保持
+// 内存/磁盘两侧 TOFU 生命周期对齐，新拓扑重新 TOFU）。
 func (s *SyncService) ForgetClusterPins() {
 	s.pinMu.Lock()
 	s.verifiedPins = make(map[string]string)
 	s.pinMu.Unlock()
+}
+
+// ForgetPins 清空内存 TOFU pin 缓存并删除磁盘全部 pin 文件（M13② forget-pins
+// 端点）：主节点更换管理面板证书后从节点同步持续 PinMismatch，运维确认新证书
+// 合法后调用本方法放弃全部旧指纹，下一同步 tick 按新证书重新 TOFU 钉扎。
+// 返回删除的 pin 文件数。目录不存在视为已清空（无 pin 可忘）。
+func (s *SyncService) ForgetPins() (int, error) {
+	s.ForgetClusterPins()
+	dataDir := ""
+	if s.cfg != nil {
+		dataDir = s.cfg.DataDir
+	}
+	directory, err := clusterPinDirectory(dataDir, s.db)
+	if err != nil {
+		return 0, err
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("读取集群证书指纹目录: %w", err)
+	}
+	removed := 0
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
+			return removed, fmt.Errorf("删除集群证书指纹文件 %s: %w", entry.Name(), err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // registrationConfirmMaxFailures 定义 confirm 端点连续失败上限。达到后停止注册循环。

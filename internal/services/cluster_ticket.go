@@ -27,17 +27,26 @@ var (
 )
 
 func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.ClusterLoginTicketClaims, now time.Time) (models.ClusterLoginTicketResponse, error) {
-	var ipAddress, protocol, accessURL, keyHash, status string
+	var ipAddress, protocol, accessURL, keyHash string
 	var port int
+	var lastSeen sql.NullTime
 	var approved bool
-	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(cluster_token_hash,''),status,is_approved FROM nodes WHERE id=?`, claims.NodeID).
-		Scan(&ipAddress, &port, &protocol, &accessURL, &keyHash, &status, &approved); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(cluster_token_hash,''),last_seen,is_approved FROM nodes WHERE id=?`, claims.NodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL, &keyHash, &lastSeen, &approved); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
 		}
 		return models.ClusterLoginTicketResponse{}, fmt.Errorf("读取登录目标节点: %w", err)
 	}
-	if !approved || status != "online" || keyHash == "" {
+	// M12：在线判定改动态口径（与 Nodes()/ComputeNodeStatus 一致）——nodes.status
+	// 只在注册/上报时写入、从不回写 'offline'，按陈旧 status 列判定会把已停止
+	// 上报的从节点仍当作在线放行签发登录票据。sync_interval 同款读取（含脏值
+	// clamp，由 ComputeNodeStatus 内部归一）。
+	var syncInterval int
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&syncInterval); err != nil {
+		return models.ClusterLoginTicketResponse{}, fmt.Errorf("读取同步间隔: %w", err)
+	}
+	if !approved || ComputeNodeStatus(approved, lastSeen.Time, syncInterval, now) != "online" || keyHash == "" {
 		return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
 	}
 	key, err := hex.DecodeString(keyHash)

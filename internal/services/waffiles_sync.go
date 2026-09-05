@@ -201,6 +201,18 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	return crsChanged, xdbChanged, nil
 }
 
+// skipWafSyncTransient 判断相对路径是否为不得进入 waf 同步打包的瞬态文件
+// （M24 防御兜底）：任意层级的点前缀路径（.staging/.sync-in/隐藏标记）与
+// *.bak/*.old 后缀（CRS 更新器备份残树，正常已迁往 crs.transient 兄弟目录，
+// 此处兜底旧版本残留/异常路径）。混入会让主从 tar 指纹按瞬态内容计算，
+// 两端永不对齐 → 全量重拉死循环。
+func skipWafSyncTransient(rel string) bool {
+	if strings.HasPrefix(filepath.Base(rel), ".") {
+		return true
+	}
+	return strings.HasSuffix(rel, ".bak") || strings.HasSuffix(rel, ".old")
+}
+
 // tarGzDir deterministically archives dir (all contents, sorted, zeroed
 // metadata) and returns the bytes plus their sha256.
 func tarGzDir(dir string) ([]byte, string, error) {
@@ -208,6 +220,10 @@ func tarGzDir(dir string) ([]byte, string, error) {
 	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
+		}
+		// M24：过滤瞬态文件（点前缀/*.bak/*.old），仅正式内容参与指纹与打包。
+		if rel, relErr := filepath.Rel(dir, p); relErr == nil && skipWafSyncTransient(rel) {
+			return nil
 		}
 		paths = append(paths, p)
 		return nil

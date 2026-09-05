@@ -239,8 +239,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		services.AuditResultPart("success"),
 	))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，服务正在重启以应用 HTTPS 配置"})
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		exitProcess(0)
-	}()
+	// M22：改走统一重启触发器（restartProcess，见 system.go）——与集群同步的
+	// Admin TLS 热切换同一优雅停机信号；测试环境回退 exitProcess。
+	restartProcess()
 }

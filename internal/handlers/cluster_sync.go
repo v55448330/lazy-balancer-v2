@@ -76,6 +76,24 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动同步完成", Data: result})
 }
 
+// ForgetClusterPins 是从节点管理员的 PinMismatch 补救端点（M13②）：主节点更换
+// 管理面板证书后从节点同步持续指纹不匹配，运维确认新证书合法后清空全部 TOFU
+// 指纹钉（内存缓存+磁盘 pin 文件），下一同步 tick 按新证书重新钉扎。仅 admin
+// 路由组可达（readOnlyGuard 的 /cluster/* 白名单保证从节点可用），操作留审计。
+func (h *Handlers) ForgetClusterPins(c *gin.Context) {
+	removed, err := h.syncService.ForgetPins()
+	if err != nil {
+		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(err.Error(), services.AuditResultPart("failure")))
+		clusterError(c, http.StatusInternalServerError, "清除主节点证书指纹失败: "+err.Error(), err)
+		return
+	}
+	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
+		fmt.Sprintf("已清除 %d 个主节点证书指纹，下次同步将重新验证并钉扎", removed),
+		services.AuditResultPart("success"),
+	))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已清除全部主节点证书指纹，下次同步将按当前证书重新钉扎"})
+}
+
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
 // slaves whose snapshot-carried hash reference differs from their local files.
 func (h *Handlers) GetClusterWafFiles(c *gin.Context) {

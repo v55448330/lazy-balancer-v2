@@ -11,7 +11,22 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
+
+// restartProcess 触发进程重启（M22）：优先走 services 统一重启信号——与集群
+// 同步的 Admin TLS 热切换同一触发器（main 注入优雅停机信号，HTTP 优雅关停后
+// 退出，进程级设置随之生效）；未注入（独立/测试环境）时回退旧行为：延迟
+// 500ms 待响应写出后经 exitProcess（测试可替换变量）退出。
+func restartProcess() {
+	if services.RequestRestart() {
+		return
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		exitProcess(0)
+	}()
+}
 
 // RestartService exits the process after responding; the container's
 // restart policy brings the service back up (used to apply process-level
@@ -19,10 +34,7 @@ import (
 func (h *Handlers) RestartService(c *gin.Context) {
 	recordAudit(c, "重启", "系统", "用户触发服务重启")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "服务正在重启"})
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
+	restartProcess()
 }
 
 func (h *Handlers) GetSystemInfo(c *gin.Context) {

@@ -17,7 +17,7 @@ func issueClusterLoginTicket(t *testing.T, now time.Time) (*ClusterService, stri
 	service, database := newClusterTestService(t)
 	clusterToken := "lb_cluster_login-ticket-secret"
 	key := sha256.Sum256([]byte(clusterToken))
-	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash) VALUES (7,'slave','10.0.0.7',8000,'online',1,?)`, hex.EncodeToString(key[:])); err != nil {
+	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash,last_seen) VALUES (7,'slave','10.0.0.7',8000,'online',1,?,?)`, hex.EncodeToString(key[:]), now.Format("2006-01-02 15:04:05")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (3,'alice','hash','admin',1)`); err != nil {
@@ -71,7 +71,7 @@ func TestClusterLoginTicketPrefersAccessURL(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	service, database := newClusterTestService(t)
 	key := sha256.Sum256([]byte("cluster-token"))
-	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,status,is_approved,cluster_token_hash) VALUES (8,'slave','172.18.0.2',8000,'http','https://node.example:8443','online',1,?)`, hex.EncodeToString(key[:])); err != nil {
+	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,status,is_approved,cluster_token_hash,last_seen) VALUES (8,'slave','172.18.0.2',8000,'http','https://node.example:8443','online',1,?,?)`, hex.EncodeToString(key[:]), now.Format("2006-01-02 15:04:05")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,5 +110,28 @@ func TestClusterLoginTicketDatabaseFailureDoesNotConsumeTicket(t *testing.T) {
 	}
 	if _, user, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil || user.Role != "admin" {
 		t.Fatalf("validation after database recovery user=%#v err=%v", user, err)
+	}
+}
+
+func TestGenerateLoginTicketRejectsStaleApprovedNode(t *testing.T) {
+	// M12 票据门：nodes.status 只在注册/上报时写入、从不回写 'offline'，
+	// 陈旧 status='online' 不得再放行签发——已停止上报（last_seen 超过
+	// 2×sync_interval）的从节点按 ComputeNodeStatus 动态判定拒绝；恢复
+	// 上报后放行（判定依据 last_seen 而非陈旧列）。
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	service, database := newClusterTestService(t)
+	key := sha256.Sum256([]byte("cluster-token"))
+	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash,last_seen) VALUES (9,'stale','10.0.0.9',8000,'online',1,?,?)`, hex.EncodeToString(key[:]), now.Add(-10*time.Minute).Format("2006-01-02 15:04:05")); err != nil {
+		t.Fatal(err)
+	}
+	claims := models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", NodeID: 9}
+	if _, err := service.GenerateLoginTicket(context.Background(), claims, now); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("stale node error=%v, want ErrNodeNotFound", err)
+	}
+	if _, err := database.Exec(`UPDATE nodes SET last_seen=? WHERE id=9`, now.Format("2006-01-02 15:04:05")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GenerateLoginTicket(context.Background(), claims, now); err != nil {
+		t.Fatalf("fresh node rejected: %v", err)
 	}
 }

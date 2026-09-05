@@ -59,7 +59,7 @@ func TestClusterService_Snapshot_rebuildsWhenDNSOwnershipChangesWithoutVersionBu
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataDir, err := clusterDatabaseDir(database)
+	dataDir, err := clusterSnapshotDataDir(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestClusterService_Snapshot_accepts_legacy_empty_value_ownership(t *testing
 	// Given: a node whose ownership file still holds a pre-value-tracking
 	// legacy record (empty value), as supported by the ownership store
 	service, database := newClusterTestService(t)
-	dataDir, err := clusterDatabaseDir(database)
+	dataDir, err := clusterSnapshotDataDir(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func captureApplicationLogs(t *testing.T) *bytes.Buffer {
 
 func writeDNSOwnershipFile(t *testing.T, database *sql.DB, content []byte) {
 	t.Helper()
-	dataDir, err := clusterDatabaseDir(database)
+	dataDir, err := clusterSnapshotDataDir(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestSnapshotOwnershipHash_realReadErrorStillFails(t *testing.T) {
 	// Given：路径被目录占据（EISDIR，非 ErrNotExist 的真实 I/O 故障）——
 	// 真实读取错误保持报错语义，不被空态回退掩盖
 	_, database := newClusterTestService(t)
-	dataDir, err := clusterDatabaseDir(database)
+	dataDir, err := clusterSnapshotDataDir(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
