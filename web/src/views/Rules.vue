@@ -483,7 +483,15 @@
                   <el-input-number v-model="row.weight" :min="0" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
-              <el-table-column label="最大连接" width="120">
+              <el-table-column width="130">
+                <template #header>
+                  {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
+                  <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
+                    ? '该上游并发连接数上限（caddy-l4 max_connections），0 为不限制'
+                    : '该上游累计处理的请求数达到上限后判定不可用并移出负载（Caddy max_requests 语义），0 为不限制——HTTP 反代无逐上游并发连接限制'" >
+                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </template>
                 <template #default="{ row }">
                   <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" />
                 </template>

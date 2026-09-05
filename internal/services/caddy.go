@@ -3074,7 +3074,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"passive": map[string]interface{}{
 				"fail_duration":    fmt.Sprintf("%ds", hcInterval*3),
 				"max_fails":        hcThreshold,
-				"unhealthy_status": []int{5},
+				// 2026-09 渲染审计：原 []int{5} 非法（Caddy 按具体 HTTP 状态码判定，不存在
+// 状态码 5）——5xx 服务端错误从不计入被动失败。改为显式 500-504 合法集合。
+"unhealthy_status": []int{500, 501, 502, 503, 504},
 			},
 		}
 		if rule.EnableActiveHealthCheck {
@@ -3276,16 +3278,17 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 	// Default to retrying on other upstreams so a connection routed to a
 	// dead upstream fails over transparently instead of erroring to the
 	// client; rule-level values override when set.
+	// 2026-09 渲染审计：UI 语义「重试窗口 0=不重试」——0 不再兜底 5s，直接
+	// 不发射 try_duration/try_interval（故障切换窗口关闭）；>0 时 interval 缺省 250ms。
 	tryDuration := rule.TCPTryDuration
-	if tryDuration <= 0 {
-		tryDuration = 5000
+	if tryDuration > 0 {
+		tryInterval := rule.TCPTryInterval
+		if tryInterval <= 0 {
+			tryInterval = 250
+		}
+		loadBalancing["try_duration"] = fmt.Sprintf("%dms", tryDuration)
+		loadBalancing["try_interval"] = fmt.Sprintf("%dms", tryInterval)
 	}
-	tryInterval := rule.TCPTryInterval
-	if tryInterval <= 0 {
-		tryInterval = 250
-	}
-	loadBalancing["try_duration"] = fmt.Sprintf("%dms", tryDuration)
-	loadBalancing["try_interval"] = fmt.Sprintf("%dms", tryInterval)
 	if len(upstreamList) > 1 || rule.TCPTryDuration > 0 || rule.TCPTryInterval > 0 {
 		proxyHandler["load_balancing"] = loadBalancing
 	}
