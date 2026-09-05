@@ -8,7 +8,10 @@ package caddygeoip
 import (
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -47,7 +50,7 @@ func (h *GeoIPHandler) Provision(ctx caddy.Context) error {
 	if h.XdbPath == "" {
 		h.XdbPath = "/app/data/ip2region.xdb"
 	}
-	searcher, err := service.NewIp2RegionWithPath(h.XdbPath, "")
+	searcher, err := sharedGeoIPSearcher(h.XdbPath)
 	if err != nil {
 		ctx.Logger().Warn("geoip2region: ip2region database unavailable, geoip disabled",
 			zap.String("xdb_path", h.XdbPath), zap.Error(err))
@@ -55,6 +58,49 @@ func (h *GeoIPHandler) Provision(ctx caddy.Context) error {
 	}
 	h.searcher = searcher
 	return nil
+}
+
+// geoipSharedSearcher（审计 M2）：按 XdbPath 进程级共享的 Ip2Region 单例条目。
+// 每条 GeoIP 规则各建一份 NewIp2RegionWithPath（内部 NewV4Config(VIndexCache,
+// path, 20)——20 个 searcher 各持 1 个 xdb fd + vIndex 缓冲），50 条规则≈1000 fd
+// 逼近 soft limit，重载期新旧实例并存再翻倍；fd 耗尽 → Provision 降级
+// pass-through → 全客户端判「海外」→ 含海外 deny 的策略全量误拦。SearcherPool
+// 内部 channel 借还本就并发安全，同路径跨 handler 共享一份即可。modTime/size
+// 记录建库时的文件形态：xdb 更新流程 rename 换库后 Caddy 随 reloader 重载，
+// 纯路径键缓存会让新配置继续持有旧 inode 的 fd、更新静默失效（ip2regionupdate.go
+// 依赖「Caddy 侧 geoip 随 reloader 收敛」），文件形态变化即重建。
+type geoipSharedSearcher struct {
+	searcher *service.Ip2Region
+	modTime  time.Time
+	size     int64
+}
+
+var (
+	geoipSharedMu        sync.Mutex
+	geoipSharedSearchers = map[string]*geoipSharedSearcher{}
+)
+
+// sharedGeoIPSearcher 返回按路径共享的单例：文件形态未变时命中缓存，变化时重建。
+// 被替换的旧实例不关闭——重载窗口内旧配置的 handler 仍在用它查询，关闭会使
+// BorrowSearcher 落空、查询失败被判「海外」（恰是 M2 要修的误拦）；旧实例的
+// 20 个 fd 保留至进程退出（每次 xdb 更新至多一份，可忽略）。
+func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	geoipSharedMu.Lock()
+	defer geoipSharedMu.Unlock()
+	if cached, ok := geoipSharedSearchers[path]; ok &&
+		cached.modTime.Equal(st.ModTime()) && cached.size == st.Size() {
+		return cached.searcher, nil
+	}
+	searcher, err := service.NewIp2RegionWithPath(path, "")
+	if err != nil {
+		return nil, err
+	}
+	geoipSharedSearchers[path] = &geoipSharedSearcher{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
+	return searcher, nil
 }
 
 // geoipCorazaHeaders lists the request headers this module owns. v2.2.0 地域
@@ -88,12 +134,11 @@ func (h *GeoIPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	return next.ServeHTTP(w, r)
 }
 
-// Cleanup releases the ip2region database handle.
+// Cleanup releases the handler's reference to the shared singleton (审计 M2)：
+// 单例按 XdbPath 进程级共享、生命周期与进程相同——关闭会打断仍在使用同路径的
+// 其他 handler（重载窗口内新旧配置并存），故此处不 Close。
 func (h *GeoIPHandler) Cleanup() error {
-	if h.searcher != nil {
-		h.searcher.Close()
-		h.searcher = nil
-	}
+	h.searcher = nil
 	return nil
 }
 

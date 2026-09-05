@@ -293,8 +293,9 @@ func TestBuildCorazaDirectives_infraGroupsForceIncluded(t *testing.T) {
 		t.Fatalf("959 must not be included without WAFCheckResponse:\n%s", directives)
 	}
 
-	// 响应检查开启 → 959 殿后；已选 01/49/59 组号 → 组 glob 各出现一次、精确文件
-	// 名的强制 Include 不再追加（组 glob 已覆盖，重复注册同规则 ID 会编译失败）
+	// 响应检查开启 → 959 殿后；已选 01/49/59 组号（M3 读取面剥离——写入面
+	// 剥离生效前的存量/带外数据）→ 基础设施组号不再按数组原位发射 glob，
+	// 改由强制 Include 按正确次序（901 最前、949/959 殿后）补齐，各恰一次。
 	policy.WAFCheckResponse = true
 	policy.CRSRuleGroups = json.RawMessage(`["01","42","49","59","80"]`)
 	directives = BuildCorazaDirectives(policy, nil)
@@ -303,18 +304,52 @@ func TestBuildCorazaDirectives_infraGroupsForceIncluded(t *testing.T) {
 		"REQUEST-949-*.conf":  "REQUEST-949-BLOCKING-EVALUATION.conf",
 		"RESPONSE-959-*.conf": "RESPONSE-959-BLOCKING-EVALUATION.conf",
 	} {
-		if got := strings.Count(directives, "Include /app/waf/crs/rules/"+glob); got != 1 {
-			t.Fatalf("%s included %d times, want exactly 1 (group glob):\n%s", glob, got, directives)
+		if strings.Contains(directives, "Include /app/waf/crs/rules/"+glob) {
+			t.Fatalf("%s must be stripped from selection and force-included exactly instead:\n%s", glob, directives)
 		}
-		if strings.Contains(directives, "Include /app/waf/crs/rules/"+exact) {
-			t.Fatalf("%s must not be force-included when its group is already selected:\n%s", exact, directives)
+		if got := strings.Count(directives, "Include /app/waf/crs/rules/"+exact); got != 1 {
+			t.Fatalf("%s force-included %d times, want exactly 1:\n%s", exact, got, directives)
 		}
 	}
-	// 6 位基础设施 ID 命中父文件覆盖判定 → 同样零重复（ID 路径会 Include 父文件）
+	idx901 = strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf")
+	idx942 = strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-942-")
+	idx949 = strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf")
+	idx959 := strings.Index(directives, "Include /app/waf/crs/rules/RESPONSE-959-BLOCKING-EVALUATION.conf")
+	if !(idx901 < idx942 && idx942 < idx949 && idx949 < idx959) {
+		t.Fatalf("include order must stay 901 → selected groups → 949 → 959:\n%s", directives)
+	}
+	// 6 位基础设施 ID（M3 同口径剥离）→ 剥离后由强制 Include 补齐，949 仍恰一次
 	policy.CRSRuleGroups = json.RawMessage(`["42","949110"]`)
 	directives = BuildCorazaDirectives(policy, nil)
 	if got := strings.Count(directives, "Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf"); got != 1 {
-		t.Fatalf("949 included %d times via ID-parent coverage, want exactly 1:\n%s", got, directives)
+		t.Fatalf("949 included %d times after infra-ID strip, want exactly 1:\n%s", got, directives)
+	}
+}
+
+// TestBuildCorazaDirectives_legacyInfraGroupOrderPreserved（M3）：存量/带外
+// crs_rule_groups=["42","01"]（写入面剥离生效前落库）——组号 01 不再按数组原位
+// 发射 REQUEST-901-*.conf glob（会排在 942 之后、破坏 901 最前的强制序），而是
+// 剥离后由强制 Include 补齐：901 仍最前、949/959 仍殿后。
+func TestBuildCorazaDirectives_legacyInfraGroupOrderPreserved(t *testing.T) {
+	scopedExclusionFixture(t)
+	policy := &models.SecurityPolicy{
+		Mode:             "blocking",
+		WAFCheckResponse: true,
+		CRSRuleGroups:    json.RawMessage(`["42","01"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	if strings.Contains(directives, "REQUEST-901-*.conf") {
+		t.Fatalf("legacy infra group entry must be stripped, not emitted as glob:\n%s", directives)
+	}
+	idx901 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf")
+	idx942 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-942-")
+	idx949 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf")
+	idx959 := strings.Index(directives, "Include /app/waf/crs/rules/RESPONSE-959-BLOCKING-EVALUATION.conf")
+	if idx901 < 0 || idx942 < 0 || idx949 < 0 || idx959 < 0 {
+		t.Fatalf("infra includes missing (901=%d 942=%d 949=%d 959=%d):\n%s", idx901, idx942, idx949, idx959, directives)
+	}
+	if !(idx901 < idx942 && idx942 < idx949 && idx949 < idx959) {
+		t.Fatalf("order must be 901 → selected groups → 949 → 959:\n%s", directives)
 	}
 }
 

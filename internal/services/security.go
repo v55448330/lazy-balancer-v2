@@ -282,6 +282,19 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	if p.Mode == "blocking" || p.Mode == "detection" {
 		var groups []string
 		json.Unmarshal(p.CRSRuleGroups, &groups)
+		// M3（读取面兜底）：存量/带外数据（写入面剥离生效前落库、集群同步旧快照）
+		// 可能仍含基础设施组号——按数组原位发射 REQUEST-901/949/959-*.conf glob
+		// 会破坏 901 最前/949、959 殿后的强制序（偏执级守卫空转、阻断静默漏拦）。
+		// 与写入面 validateAndNormalizeCRSField 同口径剥离；剥离后为空落入全量
+		// glob 分支（同写入面「[]」=全量语义）。
+		if kept, stripped := stripInfraCRSGroupCodes(groups); len(stripped) > 0 {
+			Logf("debug", "策略 %q 的 crs_rule_groups 含基础设施组号 %v，发射时已剥离（由强制 Include 按正确次序补齐）", p.Name, stripped)
+			groups = kept
+		}
+		// M4：索引取值链级惰性一次——下方三个消费点（crsCoveredInfraGroupCodes/
+		// emitCRSRuleGroupSelection/emitScopedCRSExclusions）各自直调 GetCRSRuleIndex
+		// 会各付一次缓存键计算（ReadDir+全量 stat），全量生成时数百次纯浪费。
+		chainIndex := lazyCRSRuleIndex()
 		// 审计 V-CRITICAL-1（第五轮）：SecRuleRemoveById（配置期删除）与
 		// ctl:ruleRemoveById（运行时跳过）需要**相反**的发射顺序——
 		//   配置期：必须在 Include 之后（coraza 单遍解析，DeleteByID 只删已注册规则，
@@ -322,7 +335,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		}
 		// 运行时 ctl 规则：Include 之前（先于被禁规则插入 phase:1 序列）
 		if len(scoped) > 0 {
-			emitScopedCRSExclusions(&sb, p, scoped, store)
+			emitScopedCRSExclusions(&sb, p, scoped, store, chainIndex)
 		}
 		sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
 		if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
@@ -358,11 +371,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 					Logf("warn", "CRS 基础设施规则文件缺失，跳过强制 Include（%s，策略 %q）", name, p.Name)
 				}
 			}
-			covered := crsCoveredInfraGroupCodes(groups)
+			covered := crsCoveredInfraGroupCodes(chainIndex, groups)
 			if _, ok := covered["01"]; !ok {
 				emitInfraInclude("REQUEST-901-INITIALIZATION.conf")
 			}
-			emitCRSRuleGroupSelection(&sb, p, groups)
+			emitCRSRuleGroupSelection(&sb, p, groups, chainIndex)
 			if _, ok := covered["49"]; !ok {
 				emitInfraInclude("REQUEST-949-BLOCKING-EVALUATION.conf")
 			}
@@ -420,9 +433,11 @@ func geoipLocOperator(countries []string, allowMode bool) string {
 
 // customRuleTargets / customRuleOperators 是自定义规则条件允许的目标与运算符
 // 映射；emitCustomRules 与校验函数共用同一份，避免两处硬编码漂移。
+// equals → @streq（审计 H1）：@pm 是短语匹配（大小写不敏感+空格分词），
+// 与 UI「等于」承诺不符，收紧为大小写敏感精确匹配，存量规则行为随之收紧。
 var (
 	customRuleTargets   = map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
-	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
+	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@streq", "starts_with": "@beginsWith"}
 	// customRuleValidScores / customRuleValidActions 是内嵌自定义规则允许的分值与
 	// 动作集合，与 handlers 侧 validateSecurityCustomRule 的独立规则口径一致。
 	customRuleValidScores  = map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
@@ -1050,7 +1065,9 @@ const crsScopedExclusionIDBase = 2000000
 // 为逐 ID（ctl:ruleRemoveById 不支持区间），每 ID 一条 phase:1 运行时 ctl 规则。
 // emitScopedCRSExclusions 发射作用域限定 ctl 规则。store 非-nil 时经其解析列表引用
 // （v2 导入事务视图——A-I1 不变式，审计 U1-F3）；nil 回退 db.DB（测试/直调路径）。
-func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore) {
+// chainIndex 为链级惰性索引取值闭包（M4）——单次 BuildCorazaDirectives 内与其他
+// 消费点共享一次缓存键计算。
+func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore, chainIndex func() *CRSRuleIndex) {
 	var refIDs []int64
 	seenRef := make(map[int64]struct{})
 	for _, entry := range entries {
@@ -1189,15 +1206,16 @@ func crsNumericIDRange(s string) (int, int, bool) {
 
 // crsCoveredInfraGroupCodes 计算混合选择已覆盖的组号集合：两位组号直接计入；
 // 6 位 ID 条目经索引定位父文件后其父文件组号同样计入（emitCRSRuleGroupSelection
-// 会 Include 该父文件）。陈旧 ID（索引不存在）与 emit 同口径跳过。
-func crsCoveredInfraGroupCodes(groups []string) map[string]struct{} {
+// 会 Include 该父文件）。陈旧 ID（索引不存在）与 emit 同口径跳过。chainIndex
+// 为链级惰性索引取值闭包（M4），仅在遇到 6 位 ID 时才真正取值。
+func crsCoveredInfraGroupCodes(chainIndex func() *CRSRuleIndex, groups []string) map[string]struct{} {
 	covered := make(map[string]struct{}, len(groups))
 	var index *CRSRuleIndex
 	for _, g := range groups {
 		g = strings.TrimSpace(g)
 		if IsCRSRuleIDTarget(g) {
 			if index == nil {
-				index = GetCRSRuleIndex()
+				index = chainIndex()
 			}
 			if entry := index.Find(g); entry != nil {
 				if m := crsFileGroupPattern.FindStringSubmatch(entry.File); m != nil {
@@ -1211,13 +1229,31 @@ func crsCoveredInfraGroupCodes(groups []string) map[string]struct{} {
 	return covered
 }
 
+// stripInfraCRSGroupCodes（M3 读取面兜底）从 crs_rule_groups 载荷剥离基础设施
+// 组号（01/49/59）及其文件内规则 ID，返回（保留条目, 被剥条目）。判定复用
+// IsCRSInfraGroupCode/IsCRSInfraRuleID——与写入面 validateAndNormalizeCRSField
+// 的剥离同口径；条目 trim 后判定以覆盖 R47 B-#1 历史空白行，保留条目原样交由
+// 发射端既有 trim 逻辑。
+func stripInfraCRSGroupCodes(groups []string) (kept, stripped []string) {
+	kept = make([]string, 0, len(groups))
+	for _, g := range groups {
+		trimmed := strings.TrimSpace(g)
+		if IsCRSInfraGroupCode(trimmed) || IsCRSInfraRuleID(trimmed) {
+			stripped = append(stripped, trimmed)
+			continue
+		}
+		kept = append(kept, g)
+	}
+	return kept, stripped
+}
+
 // emitCRSRuleGroupSelection 发射 crs_rule_groups 混合选择：两位组号条目走现状
 // Include glob 路径（逐条、trim 后拼接，含 WAFCheckResponse 的 RESPONSE 侧）；
 // 6 位 ID 条目经本地索引定位父文件——父文件组未被选中时 Include 该文件，并对
 // 文件内索引已知、未被选中的其余 ID 逐条 SecRuleRemoveById（ctl 不适用于配置期
 // 整组剔除，补删必须逐 ID，不能用区间以免误删同文件被选 ID）。陈旧 ID（索引
 // 不存在）跳过+warn。纯组号载荷的输出与既有实现逐行一致（等价回归锁定）。
-func emitCRSRuleGroupSelection(sb *strings.Builder, p *models.SecurityPolicy, groups []string) {
+func emitCRSRuleGroupSelection(sb *strings.Builder, p *models.SecurityPolicy, groups []string, chainIndex func() *CRSRuleIndex) {
 	groupSet := make(map[string]struct{}, len(groups))
 	var idTargets []string
 	seenID := make(map[string]struct{})
@@ -1241,7 +1277,7 @@ func emitCRSRuleGroupSelection(sb *strings.Builder, p *models.SecurityPolicy, gr
 	if len(idTargets) == 0 {
 		return
 	}
-	index := GetCRSRuleIndex()
+	index := chainIndex()
 	selected := make(map[string]struct{}, len(idTargets))
 	for _, id := range idTargets {
 		selected[id] = struct{}{}

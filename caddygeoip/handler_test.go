@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -283,6 +284,72 @@ func TestServeHTTP_overseasSentinels_forUnresolvableClient(t *testing.T) {
 	}
 	if got := downstream.Header.Get("X-GeoIP-Loc"); got != "海外" {
 		t.Fatalf("X-GeoIP-Loc = %q, want 海外 sentinel（fail-closed）", got)
+	}
+}
+
+// TestProvision_sharedSearcherSingletonPerXdbPath（审计 M2）：同 XdbPath 的
+// 多个 handler 必须共享同一 Ip2Region 实例——每 handler 各建一份会各开 20 个
+// searcher fd（50 条 GeoIP 规则≈1000 fd 逼近 soft limit，重载期翻倍），fd 耗尽
+// → Provision 降级 pass-through → 全客户端判「海外」误拦。指针同一即证明
+// 只开了一份 20-searcher 池。Cleanup 只解除引用不关闭单例（关闭会打断共享方）；
+// xdb 文件形态变化（更新流程 rename 换库后重载）→ 重建新实例而非复用旧 inode。
+func TestProvision_sharedSearcherSingletonPerXdbPath(t *testing.T) {
+	src := findTestXdb()
+	if src == "" {
+		t.Skip("no ip2region xdb available; place one under caddygeoip/testdata/ to run this test")
+	}
+	path := filepath.Join(t.TempDir(), "ip2region.xdb")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read source xdb: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("seed xdb copy: %v", err)
+	}
+
+	// 两个 handler 同路径 → 同一实例（共享一份 20-searcher 池）
+	h1 := &GeoIPHandler{XdbPath: path}
+	h2 := &GeoIPHandler{XdbPath: path}
+	ctx := caddy.Context{Context: context.Background()}
+	if err := h1.Provision(ctx); err != nil {
+		t.Fatalf("provision h1: %v", err)
+	}
+	if err := h2.Provision(ctx); err != nil {
+		t.Fatalf("provision h2: %v", err)
+	}
+	if h1.searcher == nil || h1.searcher != h2.searcher {
+		t.Fatalf("same-path handlers must share one searcher instance, got %p vs %p", h1.searcher, h2.searcher)
+	}
+	shared := h1.searcher
+
+	// h1 清理不关单例：h2 引用仍可用（Search 正常返回）
+	if err := h1.Cleanup(); err != nil {
+		t.Fatalf("cleanup h1: %v", err)
+	}
+	if h1.searcher != nil {
+		t.Fatal("cleanup must drop the handler's own reference")
+	}
+	if region, err := h2.searcher.Search("114.114.114.114"); err != nil || region == "" {
+		t.Fatalf("shared searcher must stay usable after a sibling's cleanup: region=%q err=%v", region, err)
+	}
+
+	// xdb 更新（rename 换库后 mtime/size 变化）→ 新 Provision 重建实例
+	newMtime := time.Now().Add(2 * time.Minute)
+	if err := os.Chtimes(path, newMtime, newMtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	h3 := &GeoIPHandler{XdbPath: path}
+	if err := h3.Provision(ctx); err != nil {
+		t.Fatalf("provision h3 after xdb replacement: %v", err)
+	}
+	if h3.searcher == nil || h3.searcher == shared {
+		t.Fatalf("xdb file change must rebuild the shared instance, got %p (old %p)", h3.searcher, shared)
+	}
+	if err := h3.Cleanup(); err != nil {
+		t.Fatalf("cleanup h3: %v", err)
+	}
+	if err := h2.Cleanup(); err != nil {
+		t.Fatalf("cleanup h2: %v", err)
 	}
 }
 

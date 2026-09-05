@@ -136,6 +136,23 @@ func TestBuildCorazaDirectives_userAgentTargetUsesColonNotation(t *testing.T) {
 	}
 }
 
+// TestBuildCorazaDirectives_equalsOperatorEmitsStreq（审计 H1）：equals 语义
+// 收紧为大小写敏感精确匹配 @streq——此前误用 @pm（短语匹配：大小写不敏感 +
+// 空格分词，「等于 /admin」实际是「包含单词 admin」），与 UI「等于」承诺不符。
+func TestBuildCorazaDirectives_equalsOperatorEmitsStreq(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:        "blocking",
+		CustomRules: json.RawMessage(`[{"id":11,"name":"等于规则","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"equals","pattern":"/admin"}]}]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	if !strings.Contains(directives, `SecRule REQUEST_URI "@streq /admin"`) {
+		t.Fatalf("equals must emit case-sensitive exact match @streq:\n%s", directives)
+	}
+	if strings.Contains(directives, "@pm") {
+		t.Fatalf("@pm must no longer be emitted for equals:\n%s", directives)
+	}
+}
+
 func TestEmitCustomRules_skipsDirtyRuleAmongCleanOnes(t *testing.T) {
 	// Given clean rules interleaved with a trailing-backslash rule and an empty-conditions rule
 	var sb strings.Builder
