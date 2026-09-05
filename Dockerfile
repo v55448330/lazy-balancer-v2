@@ -1,6 +1,6 @@
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS xcaddy-builder
 RUN apk add --no-cache git
-ENV GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,direct
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 WORKDIR /app
 
