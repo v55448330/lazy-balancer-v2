@@ -19,19 +19,25 @@
 ## 快速开始
 
 ```bash
-# Docker Compose（推荐）
+# 1. 发布构建（正式方式）：先构建前端——Dockerfile 只 COPY web/dist 进镜像，前端不参与镜像内构建
 cd web && npm install && npm run build && cd ..
-docker compose up -d --build
 
-# 多架构镜像
-docker buildx build --platform linux/amd64,linux/arm64 -t <image>:<tag> --push .
+# 2. 多架构镜像：buildx 一次构建双架构，双 tag，推送 Docker Hub
+docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 \
+  -t v55448330/lazy-balancer-v2:<tag> -t v55448330/lazy-balancer-v2:latest --push .
+
+# 3. 本地部署：拉取已推送镜像，保证本地与远端 digest 一致
+docker pull v55448330/lazy-balancer-v2:<tag> && docker compose up -d
+
+# 本地开发迭代（仅调试：单平台、仅本地，不用于发布）
+docker compose up -d --build
 
 # docker run
 docker run -d --name lazy-balancer --network host \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.2
+  v55448330/lazy-balancer-v2:v2.2.4
 ```
 
 > 镜像需直接绑定宿主机 80/443 及自定义监听端口，Linux 建议 `--network host`；macOS/Windows 用 `-p 8000:8000 -p 80:80 -p 443:443`。首次访问 `http://<host>:8000` 进入初始化向导创建管理员，无默认账号密码。
