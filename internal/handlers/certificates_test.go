@@ -161,7 +161,8 @@ func TestIssueCertificate_records_each_rule_and_batch_failure(t *testing.T) {
 		})
 	}
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", nil))
+	// C-19（2026-09-06 裁定）：批量路径需显式 {"all":true} 确认
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"all":true}`)))
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("all-task failure status=%d body=%s, want 500", response.Code, response.Body.String())
 	}
@@ -171,7 +172,8 @@ func TestIssueCertificate_records_each_rule_and_batch_failure(t *testing.T) {
 		t.Fatalf("force batch query failure: %v", err)
 	}
 	response = httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", nil))
+	// C-19（2026-09-06 裁定）：批量路径需显式 {"all":true} 确认
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"all":true}`)))
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("batch query status=%d body=%s, want 500", response.Code, response.Body.String())
 	}
@@ -263,7 +265,8 @@ func TestIssueCertificate_batch_preserves_running_jobs(t *testing.T) {
 	router.POST("/certificates/issue", h.IssueCertificate)
 	response := httptest.NewRecorder()
 
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", nil))
+	// C-19（2026-09-06 裁定）：批量路径需显式 {"all":true} 确认
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"all":true}`)))
 
 	// 执行中的任务（creating_order）保持不变；已部署任务（downloaded）按
 	// R29 A-M1 重新排队——再次触发签发对已部署证书必须生效，不得静默空转。
@@ -328,4 +331,223 @@ func TestMaskedDNSCredentialsRoundtrip(t *testing.T) {
 	if masked != `{"id":"***","token":"***"}` {
 		t.Fatalf("mask shape = %q", masked)
 	}
+}
+
+// C-04（2026-09-05 证书域审计裁定）：删除 DNS 提供商配置前必须检查
+// lb_rules.acme_config_id 引用（全部规则，不限 enabled）——被引用时 409 并列出
+// 引用规则，避免删除后下一次续签/首签静默失败（"未选择可用的 DNS 提供商"）。
+func TestDeleteCertificateConfig_blocked_when_referenced_by_rules(t *testing.T) {
+	// Given：配置 7 同时被一条启用规则与一条停用规则引用
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled)
+		VALUES (7,'shared','dnspod','{}',1)`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,acme_config_id) VALUES
+		('lb_active','active','http','a.example.com',443,1,1,'acme_dns',7),
+		('lb_retired','retired','http','b.example.com',443,0,1,'acme_dns',7)`); err != nil {
+		t.Fatalf("seed referencing rules: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/certificate-configs/7", nil))
+
+	// Then
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "a.example.com") || !strings.Contains(body, "b.example.com") {
+		t.Fatalf("409 message must list referencing rules, got %s", body)
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM certificate_configs WHERE id=7").Scan(&count); err != nil {
+		t.Fatalf("count certificate configs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("referenced config must survive deletion attempt, got %d rows", count)
+	}
+}
+
+func TestDeleteCertificateConfig_deletes_unreferenced_config(t *testing.T) {
+	// Given：配置无任何规则引用
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled)
+		VALUES (8,'orphan','dnspod','{}',1)`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/certificate-configs/8", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM certificate_configs WHERE id=8").Scan(&count); err != nil {
+		t.Fatalf("count certificate configs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("unreferenced config must be deleted, got %d rows", count)
+	}
+}
+
+// latestDNSConfigTestAudit 读取最新一条 DNS 配置测试审计（action/detail）。
+func latestDNSConfigTestAudit(t *testing.T) (string, string) {
+	t.Helper()
+	var action, detail string
+	if err := db.AuditDB.QueryRow("SELECT action, detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &detail); err != nil {
+		t.Fatalf("read latest DNS config test audit: %v", err)
+	}
+	return action, detail
+}
+
+// C-16（2026-09-05 证书域审计裁定）：无 id 的保存前凭证测试（前端 saveConfig
+// 先调 /certificate-configs/test）此前审计 detail 落「配置 0」——改为语义化来源
+// 标注「来源：保存前测试」；有 id 路径保留「配置 N」。
+func TestCertificateConfigPreSaveTest_audit_marks_source_instead_of_config_zero(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.POST("/certificate-configs/test", h.TestCertificateConfig)
+	router.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
+
+	t.Run("missing domain failure uses source annotation", func(t *testing.T) {
+		// When：无 id + 空域名（本地校验分支，不触网）
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificate-configs/test", strings.NewReader(`{"dns_provider":"dnspod"}`)))
+
+		// Then
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+		}
+		action, detail := latestDNSConfigTestAudit(t)
+		if action != "测试失败" {
+			t.Fatalf("action=%q, want 测试失败", action)
+		}
+		if strings.Contains(detail, "配置 0") {
+			t.Fatalf("detail=%q, must not contain placeholder 配置 0", detail)
+		}
+		if !strings.Contains(detail, "来源：保存前测试") {
+			t.Fatalf("detail=%q, want source annotation 来源：保存前测试", detail)
+		}
+	})
+
+	t.Run("credentials invalid failure uses source annotation", func(t *testing.T) {
+		// When：无 id + dnspod 凭证缺 app_id/app_token（buildCredentialsJSON 本地报错，不触网）
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificate-configs/test", strings.NewReader(`{"domain":"example.com","dns_provider":"dnspod","dns_credentials":{"auth_mode":"dnspod"}}`)))
+
+		// Then
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+		}
+		_, detail := latestDNSConfigTestAudit(t)
+		if strings.Contains(detail, "配置 0") {
+			t.Fatalf("detail=%q, must not contain placeholder 配置 0", detail)
+		}
+		if !strings.Contains(detail, "来源：保存前测试") {
+			t.Fatalf("detail=%q, want source annotation 来源：保存前测试", detail)
+		}
+	})
+
+	t.Run("id path keeps 配置 N", func(t *testing.T) {
+		// When：带不存在 id 的测试（not_found 分支）
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificate-configs/999/test", strings.NewReader(`{"domain":"example.com"}`)))
+
+		// Then：404，审计保留「配置 999」且不含保存前标注
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("status=%d body=%s, want 404", response.Code, response.Body.String())
+		}
+		_, detail := latestDNSConfigTestAudit(t)
+		if !strings.Contains(detail, "配置 999") {
+			t.Fatalf("detail=%q, want 配置 999 kept on id path", detail)
+		}
+		if strings.Contains(detail, "保存前测试") {
+			t.Fatalf("detail=%q, id path must not use pre-save annotation", detail)
+		}
+	})
+}
+
+// C-19（2026-09-05 证书域审计裁定）：批量签发须显式确认——请求体必填其一：
+// caddy_id（单规则定向）或 {"all":true}（全量重签，含已签发任务，消耗 CA 配额）；
+// 空 body / {} 不再隐式触发全量重签；两者同传以 caddy_id 为准。
+func TestIssueCertificate_bulk_requires_explicit_all_confirmation(t *testing.T) {
+	// Given：一条启用 ACME 规则 + 可用 CA 提供商 + 队列
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`
+		INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled, enable_tls, tls_source)
+		VALUES ('lb_bulk', 'bulk', 'http', 'bulk.example', 8443, 1, 1, 'acme_dns');
+	`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	router := gin.New()
+	router.POST("/certificates/issue", h.IssueCertificate)
+
+	t.Run("empty body and empty object are rejected", func(t *testing.T) {
+		for name, body := range map[string]string{"nil body": "", "empty object": `{}`} {
+			t.Run(name, func(t *testing.T) {
+				// When
+				request := httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+
+				// Then：400 显式确认缺失，不创建任务，审计留痕
+				if response.Code != http.StatusBadRequest {
+					t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+				}
+				if !strings.Contains(response.Body.String(), "批量签发需要显式确认") {
+					t.Fatalf("body=%s, want explicit-confirmation message", response.Body.String())
+				}
+				var jobs int
+				if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs").Scan(&jobs); err != nil {
+					t.Fatalf("count cert jobs: %v", err)
+				}
+				if jobs != 0 {
+					t.Fatalf("cert jobs=%d, want 0（未确认不得入队）", jobs)
+				}
+				assertLatestCertificateAudit(t, "范围：全部 ACME 规则", "请求格式错误")
+			})
+		}
+	})
+
+	t.Run("all true triggers bulk path", func(t *testing.T) {
+		// When
+		request := httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"all":true}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+
+		// Then：批量路径真实入队（queued=1）
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), `"queued":1`) {
+			t.Fatalf("body=%s, want queued=1", response.Body.String())
+		}
+	})
+
+	t.Run("caddy_id takes precedence over all", func(t *testing.T) {
+		// When：caddy_id 与 all 同传——走单规则路径（规则不存在 → 404），不是批量 200
+		request := httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"caddy_id":"lb_missing","all":true}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+
+		// Then
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("status=%d body=%s, want 404（caddy_id 优先，非批量路径）", response.Code, response.Body.String())
+		}
+	})
 }

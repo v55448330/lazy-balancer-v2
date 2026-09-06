@@ -40,7 +40,16 @@ export const usePollingTask = (
       try {
         await task({ signal: controller.signal, sequence: taskSequence, isCurrent })
       } catch (error: unknown) {
-        if (!controller.signal.aborted) options.onError?.(error)
+        // FI-14：onError 是消费方回调——若其自身抛错，异常会经 drain→run() 的
+        // Promise 拒绝逃逸，而定时器/可见性处用 void run() 丢弃 Promise，成为
+        // unhandled rejection。回调异常就地记录并吞掉，不中断 drain、不影响下一轮。
+        if (!controller.signal.aborted) {
+          try {
+            options.onError?.(error)
+          } catch (callbackError: unknown) {
+            console.error('usePollingTask onError callback threw:', callbackError)
+          }
+        }
       }
     }
   }

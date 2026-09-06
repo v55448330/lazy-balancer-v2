@@ -291,6 +291,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/nodes/:id/login-ticket", h.GenerateClusterLoginTicket)
 				admin.PUT("/cluster/nodes/:id/access-url", h.UpdateClusterNodeAccessURL)
 				admin.POST("/cluster/nodes/:id/service", h.ControlClusterNodeService)
+				// C-3：主节点侧单节点 TOFU 指纹钉重置——从节点更换管理面板证书后
+				// 服务控制持续 PinMismatch 的补救通道（与 forget-pins 对称）。
+				admin.POST("/cluster/nodes/:id/forget-pin", h.ForgetClusterNodePin)
 				admin.DELETE("/cluster/nodes/:id", h.DeleteClusterNode)
 				admin.POST("/cluster/mode", h.SetClusterMode)
 				admin.POST("/cluster/promote", h.PromoteClusterNode)

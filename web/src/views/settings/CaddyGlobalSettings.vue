@@ -31,7 +31,7 @@
 
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
-        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="4096" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">MB，限制单个请求体最大体积；0 = 不限制。常规建议 0，需防护大文件上传可设为 100</el-text>
       </el-form-item>
       <el-form-item label="读取超时">

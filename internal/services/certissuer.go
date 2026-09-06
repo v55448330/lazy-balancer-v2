@@ -77,7 +77,6 @@ func parseRetryAfter(header string) time.Duration {
 	return 0
 }
 
-// defaultRetryAfter returns the default cooling duration when a CA does not provide Retry-After.
 // computeBackoff returns the cooling duration based on attempt count and CA Retry-After.
 func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {

@@ -399,7 +399,8 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 }
 
 // downloadXDBLogged 包装下载 seam 写更新日志（R57，口径同 CRS 的
-// downloadTarballLogged）：开始行携带完整来源 URL（含 ghfast 代理前缀），
+// downloadTarballLogged）：开始行携带完整来源 URL（含 GitHub 加速代理前缀，
+// 代理取值经 github_proxy_url 白名单），
 // Content-Length 已知时附预计大小；进度行按 10%/5MB 节流步进；完成行记录落盘
 // 字节与耗时。stage 沿用下载阶段的 downloading。
 func (m *IP2RegionUpdateManager) downloadXDBLogged(ctx context.Context, tag, destPath string) error {

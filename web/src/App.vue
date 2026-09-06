@@ -79,8 +79,9 @@ onMounted(async () => {
     if (hasLoginTicket) {
       const hadValidSession = authStore.isLoggedIn
       try {
-        await authStore.loginWithTicket(loginTicket)
-        authStore.setCurrentPage('dashboard')
+        const result = await authStore.loginWithTicket(loginTicket)
+        // FI-18：重入护栏命中（挂载期为单次调用，防御性判断）——未建立会话时不导航。
+        if (!result.skipped) authStore.setCurrentPage('dashboard')
       } catch (error: unknown) {
         if (hadValidSession) await authStore.init()
         ElMessage.error(error instanceof ApiRequestError && (error.status === 400 || error.status === 401) ? '票据无效或已过期' : '登录服务异常')

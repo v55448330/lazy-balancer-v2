@@ -376,7 +376,6 @@ func createTables() error {
 		access_log_json BOOLEAN DEFAULT TRUE,
 		access_log_format TEXT DEFAULT '',
 		audit_retention_months INTEGER DEFAULT 3,
-		metrics_retention_days INTEGER DEFAULT 7,
 		jwt_expire_minutes INTEGER DEFAULT 20,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		github_proxy_url TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/',
@@ -647,6 +646,22 @@ func runMigrations() error {
 			return fmt.Errorf("failed to drop global_config.access_log_enabled: %w", err)
 		}
 	}
+	// S-6/S-7（2026-09-05/06 审计裁定）：metrics_public/metrics_origins 为零
+	// 消费死列（历史上预留给「指标公开访问/CORS」设想，从未接线）；
+	// metrics_retention_days 的指标保留期已改用 audit_retention_months
+	//（2026-09-06 裁定，S-7）——三列存量库逐列删除（逐列判定使单列残留
+	// 形态也可收敛）；新库由建表语句与 newColumns 不再补建。
+	for _, deadMetricsColumn := range []string{"metrics_public", "metrics_origins", "metrics_retention_days"} {
+		var deadCol int
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", deadMetricsColumn).Scan(&deadCol); err != nil {
+			return fmt.Errorf("failed to check global_config.%s: %w", deadMetricsColumn, err)
+		}
+		if deadCol > 0 {
+			if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + deadMetricsColumn); err != nil {
+				return fmt.Errorf("failed to drop global_config.%s: %w", deadMetricsColumn, err)
+			}
+		}
+	}
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
 	newColumns := map[string]string{
@@ -711,8 +726,6 @@ func runMigrations() error {
 		"global_config.runtime_log_size_mb":           "INTEGER DEFAULT 100",
 		"global_config.acme_email":                    "VARCHAR(255)",
 		"global_config.cert_expiry_days":              "INTEGER DEFAULT 30",
-		"global_config.metrics_public":                "BOOLEAN DEFAULT 0",
-		"global_config.metrics_origins":               "VARCHAR(500)",
 		"global_config.caddy_log_level":               "VARCHAR(10) DEFAULT 'info'",
 		"global_config.caddy_log_size_mb":             "INTEGER DEFAULT 100",
 		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 0",
@@ -728,7 +741,6 @@ func runMigrations() error {
 		"global_config.access_log_json":               "BOOLEAN DEFAULT TRUE",
 		"global_config.access_log_format":             "TEXT DEFAULT ''",
 		"global_config.audit_retention_months":        "INTEGER DEFAULT 3",
-		"global_config.metrics_retention_days":        "INTEGER DEFAULT 7",
 		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
 		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"global_config.github_proxy_url":              "TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/'",

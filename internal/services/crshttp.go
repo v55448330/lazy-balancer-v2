@@ -210,9 +210,9 @@ const crsRepoSlug = "coreruleset/coreruleset"
 var crsLatestReleaseAPIURL = "https://api.github.com/repos/coreruleset/coreruleset/releases/latest"
 
 // defaultFetchCRSLatestTag 查询 CRS 最新版本：先直连 api.github.com（快路径不
-// 变），仅在传输类失败（Do() 错误、5xx、读体中断）时经 GitHub 代理回退查询
-// （api.github.com 不可代理，verified 403）；4xx 与 tag 解析失败不重试。两路
-// 均失败时错误同时点名两个尝试过的 URL（R57）。
+// 变），仅在 403 限流与传输类失败（Do() 错误、5xx、读体中断）时经 GitHub 代理
+// 回退查询 releases/latest 页面（api.github.com 不可代理，verified 403）；其余
+// 4xx 与 tag 解析失败不重试。两路均失败时错误同时点名两个尝试过的 URL（R57）。
 func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
 	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, crsHTTPClient, crsLatestReleaseAPIURL)
 	if err == nil {
@@ -328,9 +328,10 @@ func parseGitHubTagFromLocation(location string) (string, error) {
 }
 
 // fetchGitHubLatestTagFromAPI 直连 GitHub releases/latest API 解析 tag_name。
-// transport 报告失败是否为网络/传输类（Do() 错误、5xx、响应体读取中断）——
-// 只有这类失败值得经 GitHub 代理重试；4xx（含限流 403）与 tag 解析失败不重
-// 试（R57：代理对 api.github.com 同样 403，重试只会放大延迟）。
+// transport 报告失败是否值得经 GitHub 代理重试：Do() 错误、5xx、响应体读取
+// 中断，以及 403 未认证限流——代理查询的是 github.com 的 releases/latest 页面
+// 而非 api.github.com，可绕过 API 限流；其余 4xx 与 tag 解析失败不重试（R57：
+// 对 api.github.com 本身重试只会放大延迟）。
 func fetchGitHubLatestTagFromAPI(ctx context.Context, client *http.Client, apiURL string) (string, error, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {

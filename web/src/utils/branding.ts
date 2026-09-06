@@ -13,7 +13,7 @@ interface BrandingResponse {
 export const appName = ref('Lazy Balancer')
 export const footerText = ref('Lazy Balancer V2 · Copyright © 2026 XiaoBao')
 // R72 二十九次：发版检查单——发版时需同步 bump 此回退版本。
-export const appVersion = ref('v2.1.12')
+export const appVersion = ref('v2.2.4')
 const footerUsesDefault = ref(true)
 
 const escapeHtml = (text: string): string =>
@@ -39,5 +39,7 @@ export async function loadBranding(): Promise<void> {
   } catch {
     // 使用默认文案
   }
+  // V2 为产品线版本徽章（不可随 app_name 品牌定制消失），2026-09-06 用户裁定固化；
+  // app_name 仅定制产品名部分（侧栏/登录页 v2-badge 徽章同此口径）。
   document.title = `${appName.value} V2`
 }

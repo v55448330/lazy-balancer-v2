@@ -40,11 +40,19 @@ var certJobIndexState struct {
 	databases map[*sql.DB]struct{}
 }
 
+// certJobLogPathForRule 解析规则的任务日志路径（测试缝：镜像 cancelCertJob 的
+// var 先例，测试可重定向到临时目录；生产恒为 services.CertJobLogPath）。
+var certJobLogPathForRule = services.CertJobLogPath
+
 var cancelCertJob = func(id int) {
 	if qm := services.GetCAQueueManager(); qm != nil {
 		qm.CancelJob(id)
 	}
 }
+
+// certJobLogMaxRotatedBackups 对齐 services/certjoblog.go 的 maxRotatedFiles=5
+// （.1 最新 → .5 最旧）；写侧未来扩大保留数时读侧须同步调整。
+const certJobLogMaxRotatedBackups = 5
 
 const maxCertJobPage int64 = 1_000_000
 
@@ -106,8 +114,11 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	}
 	var expiryDays int
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&expiryDays); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书过期提醒配置失败"})
-		return
+		// C-15（2026-09-05 证书域审计裁定）：展示阈值的读取失败不得放大为整个
+		// 任务列表 500——降级默认 30 并告警，对齐 Round 35 I-20 的
+		// checkManualCertExpiration 口径。
+		log.Printf("ListCertJobs: read cert_expiry_days failed, using default 30: %v", err)
+		expiryDays = 30
 	}
 	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
 	query += whereClause
@@ -560,12 +571,15 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		return
 	}
 
-	logPath := services.CertJobLogPath(ruleID)
-	logPathBackup := logPath + ".1"
-
+	logPath := certJobLogPathForRule(ruleID)
+	// C-05（2026-09-05 证书域审计裁定）：按旧→新拼接全部轮转备份再加当前文件
+	//（.5 最旧 → .1 最新，对齐写侧 maxRotatedFiles=5），每文件保留 128KB/500 行
+	// 截断；缺失的备份序号按空跳过。升序遍历逐个前置，末序恰为 .5→.1→当前。
 	content := readCertJobLogFile(logPath)
-	if oldData := readCertJobLogFile(logPathBackup); oldData != "" {
-		content = oldData + content
+	for i := 1; i <= certJobLogMaxRotatedBackups; i++ {
+		if backup := readCertJobLogFile(fmt.Sprintf("%s.%d", logPath, i)); backup != "" {
+			content = backup + content
+		}
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})

@@ -13,15 +13,16 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/auth/ticket-login": AuditPolicyExplicit,
 	// v2.1.8 MFA：公开 verify 与登录同语义（挑战令牌即凭据，handler 已细分记录
 	// 认证拒绝/登录成功）；自助端点 handler 显式记录启用/禁用（用户认证对象）；
-	// setup/status/verify-step/recovery-codes 为读或内部动作不产生审计（Generic
-	// 中间件映射为空 → 不记录——R66 D-N3 后的收敛形态）；admin reset handler 记录
-	// 「重置/用户认证」。
+	// recovery-codes 重生成成功由 handler 显式记录「生成/恢复码」（S-8，2026-09-05
+	// 审计裁定——纯会话门下旧码全作废+明文下发登录可用凭证，须留痕）；setup/
+	// status/verify-step 为读或内部动作不产生审计（Generic 中间件映射为空 →
+	// 不记录——R66 D-N3 后的收敛形态）；admin reset handler 记录「重置/用户认证」。
 	"POST /api/v1/auth/mfa/verify":                AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/setup":                 AuditPolicySkip,
 	"GET /api/v1/auth/mfa/status":                 AuditPolicySkip,
 	"POST /api/v1/auth/mfa/activate":              AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/disable":               AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/recovery-codes":        AuditPolicySkip,
+	"POST /api/v1/auth/mfa/recovery-codes":        AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/verify-step":           AuditPolicySkip,
 	"POST /api/v1/users/:id/mfa/reset":            AuditPolicyExplicit,
 	"POST /api/v1/auth/logout":                    AuditPolicyExplicit,
@@ -48,6 +49,8 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/cluster/nodes/:id/reject":       AuditPolicyExplicit,
 	"POST /api/v1/cluster/nodes/:id/login-ticket": AuditPolicyExplicit,
 	"PUT /api/v1/cluster/nodes/:id/access-url":    AuditPolicyExplicit,
+	// C-3：主节点侧单节点 pin 重置（handler 显式记录「清除节点证书指纹」审计）。
+	"POST /api/v1/cluster/nodes/:id/forget-pin": AuditPolicyExplicit,
 	// 服务控制（主节点侧 handler 显式记录节点名/动作/结果；从节点机器接口由
 	// handler 全路径记录含失败的「服务控制」审计，中间件不复记）。
 	"POST /api/v1/cluster/nodes/:id/service": AuditPolicyExplicit,
@@ -158,6 +161,7 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"POST /api/v1/auth/mfa/verify",
 		"POST /api/v1/auth/mfa/activate",
 		"POST /api/v1/auth/mfa/disable",
+		"POST /api/v1/auth/mfa/recovery-codes",
 		"POST /api/v1/users/:id/mfa/reset",
 		"POST /api/v1/auth/logout",
 		"POST /api/v1/auth/setup",
@@ -176,6 +180,7 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"POST /api/v1/cluster/register",
 		"POST /api/v1/cluster/register-tokens",
 		"POST /api/v1/cluster/nodes/:id/approve",
+		"POST /api/v1/cluster/nodes/:id/forget-pin",
 		"POST /api/v1/cluster/nodes/:id/reject",
 		"POST /api/v1/cluster/nodes/:id/login-ticket",
 		"PUT /api/v1/cluster/nodes/:id/access-url",

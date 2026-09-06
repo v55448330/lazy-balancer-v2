@@ -25,7 +25,7 @@ var syncSections = []syncSection{
 	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "users", NewLabel: "系统数据"},
 	{Key: "rules", NewLabel: "负载规则"},
-	{Key: "waf_files", NewLabel: "CRS/IP2Region数据库"},
+	{Key: "waf_files", NewLabel: "规则库数据库"},
 	{Key: "security", NewLabel: "安全策略及自定义规则"},
 }
 
@@ -87,16 +87,17 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 }
 
 // sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零节点本地记账
-// 字段。last_login（登录时间）与 v2.1.8 的三个 MFA 记账字段
-// （mfa_last_timestep——从节点本地登录推进；mfa_failed_attempts /
-// mfa_locked_until——从节点本地失败计数与锁定）都是「从节点登录端点会写、
-// 主节点值无权威意义」的本地态：不清零则从节点每次 MFA 登录/失败都触发
-// 漂移全量重拉，且从节点锁定在一个同步周期（≤60s）内被主节点值抹除
-// （R72 F-3）。只清零副本、不改动 s.Users 原值，快照线上格式保持不变。
-// 残留影响：由 users 节其他字段变化触发的重放仍会覆盖这些记账字段——
-// 属低频、外观性损失，可接受。注意：mfa_enabled/mfa_secret/
-// mfa_recovery_codes 是主节点权威字段，不清零（其漂移检测配合 R72 F-4 的
-// 触发器补列，保证管理员重置等安全操作正常传播）。
+// 字段。last_login（登录时间）与 mfa_last_timestep（从节点本地登录推进）是
+// 「从节点登录端点会写、主节点值无权威意义」的本地态：不清零则从节点每次
+// MFA 登录都触发漂移全量重拉，且从节点锁定在一个同步周期（≤60s）内被主节点
+// 值抹除（R72 F-3）。mfa_failed_attempts / mfa_locked_until 是 M7 残留死列
+// （随快照搬运、无读写语义，见系统域 S-4），此处一并清零只为口径稳定。只清零
+// 副本、不改动 s.Users 原值，快照线上格式保持不变。
+// login_failed_attempts / login_locked_until 是从节点本地登录锁定记账（登录
+// 端点写入，不进快照与节哈希）：users 节重放时由 replaceSnapshotTx 读出并在
+// 回插后回写保留（SC-4），重放不会解锁从节点被锁账户。
+// 注意：mfa_enabled/mfa_secret/mfa_recovery_codes 是主节点权威字段，不清零
+// （其漂移检测配合 R72 F-4 的触发器补列，保证管理员重置等安全操作正常传播）。
 func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
 	if len(users) == 0 {
 		return users

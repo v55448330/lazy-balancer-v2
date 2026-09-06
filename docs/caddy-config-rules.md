@@ -11,7 +11,9 @@
 
 ### 端口范围限制
 - 端口必须在 1-65535 范围内
-- 8000、2019 端口保留给 admin 接口
+- 8000、2019 端口保留给 admin 接口；创建/更新规则还会按部署实际配置拦截
+  管理面板监听口（config 文件 `port`，admin TLS 与面板同口）与 Caddy admin
+  端口（`caddy_admin_url` 解析），自定义部署不再只依赖硬编码默认值
 
 ### 协议冲突检测
 - **HTTP/HTTPS 规则**：可以与其他 HTTP/HTTPS 规则共用端口（同协议）
@@ -20,7 +22,7 @@
 ```
 HTTP规则A(port=80) + HTTP规则B(port=80) → 允许（同协议）
 HTTP规则(port=80) + TCP规则(port=80) → 冲突（不同协议）
-TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一规则重复）
+TCP规则A(port=8080) + TCP规则B(port=8080) → 冲突（TCP 端口独占；同一规则自身更新除外）
 ```
 
 ### 特殊端口处理
@@ -31,11 +33,13 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一规则重复）
 
 | 协议 | 端口 | 服务器名称 |
 |------|------|----------|
-| http | 80 | http_80 |
-| https | 443 | https_443 |
-| http | 其他 | http_{port} |
-| https | 其他 | https_{port} |
+| http（含启用 TLS 的 HTTPS） | 80 | http_80 |
+| http（含启用 TLS 的 HTTPS） | 443 | http_443 |
+| http（含启用 TLS 的 HTTPS） | 其他 | http_{port} |
 | tcp | 任意 | tcp_{port} |
+
+> 实现恒以 `http_{port}` 命名 HTTP 服务器（启用 TLS 不改变命名，caddy.go
+> `servers[fmt.Sprintf("http_%d", port)]`）；不存在 `https_*` 命名。
 
 ## 规则操作流程
 
@@ -99,7 +103,8 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一规则重复）
 
 3. 生成完整 Caddy 配置
    └── GenerateCaddyConfig() 从数据库读取所有启用规则
-   └── 内部调用 GenerateRouteObject() 生成每个路由（保证一致性）
+   └── 内部对每个 HTTP 规则调用 generateHTTPRouteObjects()（经 SingleRuleConfig；
+      GenerateRouteObject 仅用于保存前校验的包装形态）
 
 4. 应用配置到 Caddy
    └── ApplyConfig() 将完整配置POST到 Caddy
@@ -120,8 +125,9 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一规则重复）
    └── tcpServersByPort: TCP 规则按端口分组
 
 3. 为每个服务器生成路由
-   └── 对每个规则调用 GenerateRouteObject()
-   └── GenerateRouteObject 内部处理域名分割、负载策略、健康检查等
+   └── HTTP 规则经 generateHTTPRouteObjects()（与保存前校验同源）；TCP 规则
+      经 buildTCPServer()/buildTCPProxyRoute()
+   └── generateHTTPRouteObjects 处理域名分割、路径规则排序、健康检查、负载策略等
 
 4. 组装完整配置
    └── 包含 admin、apps.http.servers 等完整结构
@@ -157,7 +163,7 @@ for i, d := range domainHosts {
 3. **rate_limit / waf**：按绑定策略 policy_id ASC 依次编入各策略的处理器组（限流先于 WAF）
 4. **request_body**：配置了请求体上限时
 5. **encode**（压缩）：如果启用压缩且有 gzip/zstd
-6. **headers**（Server 头隐藏）：server_tokens_hidden 时 deferred 删除 Server 响应头（须推迟到上游响应写入之后）
+6. **headers**（Server 头隐藏）：server_tokens_hidden 时 deferred 删除 Server 响应头（须推迟到上游响应写入之后）。2026-09-06 裁定（T-3）：规则级 `server_tokens_hidden`（0=随全局 / 1=隐藏 / 2=显示）为 **API/MCP 预留字段，无 UI 入口、不作为产品功能维护**；管理面板仅提供全局开关（基础设置），UI 规则编辑仅透传保留 API 已设值
 7. **reverse_proxy**（反向代理）：主要处理逻辑；HostHeader 折入 reverse_proxy 的 request.headers（set Host），不再单独发射 headers 处理器
 
 ### 上游服务器配置
@@ -180,7 +186,9 @@ for i, d := range domainHosts {
 ```
 
 ### 负载均衡策略
-支持：round_robin、least_conn、random、ip_hash、weighted_random
+支持（与写侧白名单一致，rule_features.go/validateCaddyConfigBeforeSave）：
+- HTTP 规则：weighted_round_robin、least_conn、random、ip_hash、first、cookie
+- TCP 规则：weighted_round_robin、least_conn、random、ip_hash、first（cookie 不支持）
 
 ### 健康检查
 
@@ -254,9 +262,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 ```
 
 验证内容：
-- Protocol: http/https/tcp
+- Protocol: http/tcp（白名单；遗留 https 行由 db 迁移归一为 http+enable_tls=1）
 - ListenPort: 1-65535
-- Strategy: round_robin/ip_hash/least_conn/random/first/least_time
+- Strategy: HTTP 规则 weighted_round_robin/ip_hash/least_conn/random/first/cookie；TCP 规则不含 cookie
 - Domain: 格式验证（调用 isValidDomain）
 - Upstreams: 至少一个、host格式（IP或域名）、端口1-65535、去重、至少一个启用
 - TLSHSTS: >= 0

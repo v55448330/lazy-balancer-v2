@@ -6,10 +6,8 @@ import type { InputOtpInstance } from 'element-plus'
 import 'element-plus/es/components/input-otp/style/css'
 import type {
   APIResponse,
-  CaddyMetrics,
   ConnectionStats,
-  HostMetrics,
-  MetricsOverview,
+  GlobalConfigData,
   RealtimeTraffic,
   Rule,
   SystemInfo,
@@ -24,49 +22,12 @@ declare module 'axios' {
   }
 }
 
-interface GlobalConfigData {
-  log_level: string
-  caddy_log_level: string
-  caddy_log_size_mb: number
-  request_body_max_size_mb: number
-  http_read_timeout: number
-  http_write_timeout: number
-  http_idle_timeout: number
-  upstream_keepalive_timeout: number
-  proxy_dial_timeout: number
-  proxy_response_header_timeout: number
-  proxy_read_timeout: number
-  proxy_write_timeout: number
-  proxy_stream_timeout: number
-  proxy_flush_interval: number
-  proxy_stream_close_delay: number
-  server_tokens_hidden: boolean
-  cert_job_log_size_mb: number
-  audit_log_size_mb: number
-  runtime_log_size_mb: number
-  access_log_json: boolean
-  access_log_format: string
-  audit_retention_months: number
-  jwt_expire_minutes: number
-  timezone: string
-  acme_email: string
-  cert_expiry_days: number
-  cert_renewal_days: number
-  cert_renewal_attempts: number
-  default_ca_provider_id: number
-  dns_provider: string
-  mfa_write_guard: boolean
-  mfa_lockout_enabled: boolean
-}
 
 interface RequestClient {
   get(url: '/system/info', config?: AxiosRequestConfig): Promise<APIResponse<SystemInfo>>
   get(url: '/system/metrics', config?: AxiosRequestConfig): Promise<APIResponse<SystemMetrics>>
   get(url: '/metrics/realtime', config?: AxiosRequestConfig): Promise<APIResponse<RealtimeTraffic>>
-  get(url: '/caddy/metrics', config?: AxiosRequestConfig): Promise<APIResponse<CaddyMetrics>>
-  get(url: '/caddy/host-metrics', config?: AxiosRequestConfig): Promise<APIResponse<HostMetrics[]>>
   get(url: '/rules', config?: AxiosRequestConfig): Promise<APIResponse<Rule[]>>
-  get(url: '/metrics/overview', config?: AxiosRequestConfig): Promise<APIResponse<MetricsOverview>>
   get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<APIResponse<ConnectionStats>>
   get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<APIResponse<{ status: string; pid?: string; apply_error?: string; config_consistent?: string; config_drift?: string }>>
   get(url: '/config', config?: AxiosRequestConfig): Promise<APIResponse<GlobalConfigData>>

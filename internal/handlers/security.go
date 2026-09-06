@@ -1731,17 +1731,27 @@ func enrichIPLocation(ip string) string {
 }
 
 // ruleTriggeredFamilyPrefixes 触发规则筛选的 family 标签 → ID 前缀集合
-// （「WAF 规则（CRS）」为复合 GLOB 条件单独处理，不在此表）。ruleTriggeredFilterSQL
-// 的单段解析与 ruleTriggeredMultiFilterSQL 的逐段结构化判定共用本表，改动需
-// 与前端筛选选项/triggeredLabel 显示标签三侧同步。
+// （「WAF 规则（CRS）」为复合 GLOB 条件单独处理，不在此表；「自定义规则」无
+// LIKE 前缀可表达长度约束，由 customRuleFamilyCondition 整体承载）。本表与
+// ruleTriggeredFilterSQL 的单段解析、ruleTriggeredMultiFilterSQL 的逐段结构化
+// 判定共用，改动需与前端筛选选项/triggeredLabel 显示标签、categorizeAttack
+// 总览口径三侧同步。
 var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"IP 访问控制": {"2", "3", "4", "5", "7"},
 	"地域拦截":    {"8"},
 	"评分拦截":    {"949", "959"},
 	"协议异常":    {"920"},
 	"协议攻击":    {"921"},
-	"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
+	"自定义规则":   {}, // 见 customRuleFamilyCondition（SC-3：与 categorizeAttack 同口径）
 }
+
+// customRuleFamilyCondition 自定义规则族的 ID 形态条件——与 categorizeAttack
+// 的判定（本文件「自定义规则触发 id 的两种形状」注释处）严格同口径：5 位任意
+// 数字 ID（emit=crID+10000，10000-99999，不以 1 开头的 2xxxx-9xxxx 也在内）
+// 或 ≥7 位且以 1 开头（无 id 规则的合成 ID 1000000+）。6 位 1xxxxx（100000-
+// 199999）属 CRS 保留段余数、无发射源，categorizeAttack 判「其他」，本条件
+// 同样不归本族——旧 "10"-"19" LIKE 前缀因无长度约束会误并此类 ID（SC-3）。
+const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*')"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
 // 精确/family 部分前缀/WAF 规则（CRS）或其前缀/纯数字）——只能走消息关键词
@@ -1809,16 +1819,15 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	if input == "WAF 规则（CRS）" {
 		return "(" + wafCRSCondition + ")"
 	}
-	glob5 := "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'"
 	if prefixes, isFamily := ruleTriggeredFamilyPrefixes[input]; isFamily {
 		ors := make([]string, 0, len(prefixes)+1)
 		for _, p := range prefixes {
 			ors = append(ors, "rule_triggered LIKE ?")
 			*args = append(*args, p+"%")
 		}
-		// 自定义规则族补 5 位数字段（emit 20000-99999 不以 1 开头，前缀清单覆盖不到）。
+		// 自定义规则族无 LIKE 前缀（表内为空集），以长度约束条件整体并入。
 		if input == "自定义规则" {
-			ors = append(ors, glob5)
+			ors = append(ors, customRuleFamilyCondition)
 		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
@@ -1840,7 +1849,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	}
 	if matched {
 		if strings.HasPrefix("自定义规则", input) {
-			ors = append(ors, glob5)
+			ors = append(ors, customRuleFamilyCondition)
 		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
@@ -2053,7 +2062,9 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 自定义规则触发 id 的两种形状：旧版内嵌规则 10000+id（5 位，10001-19999）
 	// 与 R30 起无 id 规则的合成 id 1000000+n（7 位，1000000-1999999）。6 位
 	// 1xxxxx 无归属源（CRS 保留段 100000-999999 的余数），保持"其他"。
-	// 5 位数字 ID 仅自定义规则（emit=crID+10000，10000-99999）；首字符不再限定 1
+	// 5 位数字 ID 仅自定义规则（emit=crID+10000，10000-99999）；首字符不再限定 1。
+	// 本口径是「自定义规则」ID 形态的唯一权威（SC-3）：事件筛选 family 的
+	// customRuleFamilyCondition 与前端 triggeredLabel 须与本分支保持一致。
 	case len(ruleTriggered) == 5 || (strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7):
 		return "自定义规则"
 	case ruleTriggered == "8" || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
@@ -2131,7 +2142,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		overview.Trend = append(overview.Trend, point)
 	}
 
-	// Top 10 IPs: counts + last time, then distinct attack families per IP
+	// Top 10 IPs: counts + last time, then distinct attack families per IP.
+	// 窗口为近 7 天（today-6 … today，与上方趋势桶一致），前端卡片标题标注
+	// 「近 7 天」（SC-9）；仅「今日拦截/检测」两卡为当日口径。
 	type topIPRow struct {
 		ip                string
 		blocked, detected int
@@ -2191,7 +2204,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		})
 	}
 
-	// Attack types grouped by family
+	// Attack types grouped by family（近 7 天窗口，前端卡片标题标注「近 7 天」，SC-9）
 	typeRows, err := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY rule_triggered, rule_msg`, todayStartUTC)
 	trackErr(err)
 	familyCounts := map[string]int{}
@@ -2223,11 +2236,17 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	overview.CRSVersion = services.CRSBundledVersion
 	overview.UpdateStatus = "idle"
 	var crsVersion, crsUpdateStatus string
+	// SC-11：查询失败纳入 trackErr（对齐 ActivePolicies 口径与本函数 R35 D2
+	// 自述标准「任一查询失败都必须显式报错」）。无行（ErrNoRows）是全新安装的
+	// 合法状态，保持 200 捆绑版本回落（fallsBackToBundledCRSVersion 钉住），
+	// 不计入故障。
 	if err := db.DB.QueryRow(`SELECT version, COALESCE(update_status,'idle') FROM security_crs_version WHERE id=1`).Scan(&crsVersion, &crsUpdateStatus); err == nil {
 		if crsVersion != "" {
 			overview.CRSVersion = crsVersion
 		}
 		overview.UpdateStatus = crsUpdateStatus
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		trackErr(err)
 	}
 	if firstErr != nil {
 		log.Printf("security overview: query failed: %v", firstErr)
@@ -2835,8 +2854,10 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的文件名"})
 		return
 	}
-	filepath := filepath.Join("/app/waf/crs/rules", filename)
-	f, err := os.Open(filepath)
+	// W8：经 crsRulesDir 测试缝解析（与 ListCRSRules 同源），消除硬编码路径与
+	// 局部变量对 filepath 包名的遮蔽；上方路径穿越门（../ 与 /）原样保留。
+	path := filepath.Join(crsRulesDir, filename)
+	f, err := os.Open(path)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则文件不存在"})
 		return
@@ -2844,6 +2865,8 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 	defer f.Close()
 	// R66 B-N3：对齐 GetCRSSetupConfig 的 413 口径（R62 B-NEW-3）——超限显式
 	// 拒绝而非静默截断，防消费方（UI 预览/MCP 抓取）把残缺内容当完整规则使用。
+	// 只读查看端点：rules/*.conf 带外手改不受支持（W1 裁定，见 GetCRSSetupConfig
+	// 注释），规则变更须经 CRS 更新流程。
 	content, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -2857,9 +2880,14 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 }
 
 func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
-	// R62 B-NEW-3：对齐同域读端点的尺寸口径（GetCRSRuleContent 1MB、更新日志 128KB）。
-	// crs-setup.conf 是运维可手改文件，超限时显式 413 拒绝而非静默截断——
-	// 避免调用方把截断内容当作完整配置使用。
+	// R62 B-NEW-3：对齐同域读端点的尺寸口径（GetCRSRuleContent 1MB、更新日志 128KB），
+	// 超限时显式 413 拒绝而非静默截断——避免调用方把截断内容当作完整配置使用。
+	// W1（2026-09 用户裁定）：带外手改 crs-setup.conf / rules/*.conf 不受支持——
+	// coraza 池指纹（crsPoolFingerprint，internal/services/security.go）只覆盖
+	// 「CRS 版本行 + zz-user-overrides.conf 的 mtime+size」两类变化向量，不含
+	// crs-setup.conf / rules/*.conf；带外手改后池键不变、新配置 Provision 复用
+	// 旧 WAF，手改静默不生效（直到进程重启或下一次 CRS 版本变更）。CRS 配置
+	// 变更必须经 CRS 更新流程；本端点仅为只读查看。
 	f, err := os.Open("/app/waf/crs/crs-setup.conf")
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CRS 配置文件不存在"})

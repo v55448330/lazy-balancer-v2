@@ -563,16 +563,18 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 }
 
 func (m *MetricsService) cleanupHistory() {
-	retentionDays := 7
-	if err := db.DB.QueryRow("SELECT COALESCE(metrics_retention_days,7) FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
-		// N-5：配置读取失败不得静默跳过清理（此前无任何信号，指标历史会
-		// 无界增长）——记录日志并按默认 7 天继续。
-		Logf("warn", "metrics cleanup: failed to read metrics_retention_days (%v); using default %d days", err, retentionDays)
+	// S-7（2026-09-06 裁定）：指标历史保留期复用「日志保留」配置项
+	// audit_retention_months（与操作/运行/安全事件清理同源同义），按
+	// months×30 天清理；独立的 metrics_retention_days 不再读取（死列已随
+	// S-6 先例迁移删除）。N-5 口径保留：读取失败不得静默跳过清理。
+	retentionMonths := 3
+	if err := db.DB.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&retentionMonths); err != nil {
+		Logf("warn", "metrics cleanup: failed to read audit_retention_months (%v); using default %d months", err, retentionMonths)
 	}
-	if retentionDays < 1 {
-		retentionDays = 7
+	if retentionMonths < 1 {
+		retentionMonths = 3
 	}
-	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
+	if err := db.CleanupMetricsHistory(retentionMonths * 30); err != nil {
 		Logf("warn", "Failed to clean up metrics history: %v", err)
 	}
 }

@@ -323,7 +323,8 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 }
 
 // downloadTarballLogged 包装下载 seam 写更新日志（R57）：开始行由下载函数的
-// (0, total) 开始信号触发，携带完整来源 URL（含 ghfast 代理前缀），
+// (0, total) 开始信号触发，携带完整来源 URL（含 GitHub 加速代理前缀，代理
+// 取值经 github_proxy_url 白名单，历史硬编码 ghfast.top 已废弃），
 // Content-Length 已知时附预计大小；进度行经节流闭包按 10%（总量已知）/5MB
 // （未知）步进；完成行记录落盘字节与耗时。stage 沿用下载阶段的 downloading。
 func (m *CRSUpdateManager) downloadTarballLogged(ctx context.Context, tag, destPath string) error {

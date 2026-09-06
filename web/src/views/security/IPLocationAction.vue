@@ -47,7 +47,7 @@
           <span v-if="row.countLabel" class="ipo-count">{{ row.countLabel }}</span>
         </div>
         <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
-        <div v-if="row.inLegacy" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段中，可在策略编辑中清理</div>
+        <div v-if="row.inLegacy" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段中，可经 API 更新策略（ip_blacklist 字段）清理</div>
         <div class="ipo-actions">
           <el-button v-if="row.canAddDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">加入黑名单</el-button>
           <el-button v-if="row.canAddAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">加入白名单</el-button>
@@ -512,7 +512,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
   try {
     try {
       await ElMessageBox.confirm(
-        `将把 ${props.ip} 加入策略「${policy.name}」的信任名单，该 IP 将跳过 WAF 与访问控制检测（限流仍然生效）。是否继续？`,
+        `将把 ${props.ip} 加入策略「${policy.name}」的信任名单，该 IP 将跳过本策略的 WAF 与访问控制检测（限流仍然生效；若其他绑定策略拒绝该 IP，则仍会被拦截）。是否继续？`,
         '加入信任名单',
         { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
       )

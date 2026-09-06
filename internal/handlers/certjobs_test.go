@@ -3,8 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -622,5 +625,86 @@ func TestRetryCertJob_active_job_returns_queue_busy_message(t *testing.T) {
 	}
 	if status != "failed" {
 		t.Fatalf("status=%q, want failed（在途命中不得改变任务状态）", status)
+	}
+}
+
+// C-05（2026-09-05 证书域审计裁定）：任务日志查看必须按序拼接全部轮转备份
+// .5→.1（旧→新）再加当前文件——写侧保留 maxRotatedFiles=5 份历史，读侧此前
+// 只拼 .1，UI 可回看窗口远小于磁盘保留量。每文件保留现有 128KB/500 行截断。
+func TestGetCertJobLogs_concatenates_all_rotated_backups_oldest_first(t *testing.T) {
+	// Given：规则日志目录含当前文件与 .1-.5 全部轮转备份（.5 最旧）
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (9,'lb_logs','logs.example.test','failed')`); err != nil {
+		t.Fatalf("seed cert job: %v", err)
+	}
+	dir := t.TempDir()
+	original := certJobLogPathForRule
+	certJobLogPathForRule = func(ruleID string) string {
+		return filepath.Join(dir, "certjob-"+ruleID+".log")
+	}
+	t.Cleanup(func() { certJobLogPathForRule = original })
+	base := certJobLogPathForRule("lb_logs")
+	for i := 5; i >= 1; i-- {
+		if err := os.WriteFile(fmt.Sprintf("%s.%d", base, i), []byte(fmt.Sprintf("line-rotated-%d\n", i)), 0644); err != nil {
+			t.Fatalf("write rotated backup .%d: %v", i, err)
+		}
+	}
+	if err := os.WriteFile(base, []byte("line-current\n"), 0644); err != nil {
+		t.Fatalf("write current log: %v", err)
+	}
+	router := gin.New()
+	router.GET("/jobs/:id/logs", h.GetCertJobLogs)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/jobs/9/logs", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode log response: %v", err)
+	}
+	want := "line-rotated-5\nline-rotated-4\nline-rotated-3\nline-rotated-2\nline-rotated-1\nline-current\n"
+	if got := body.Data["content"]; got != want {
+		t.Fatalf("content=%q, want %q", got, want)
+	}
+}
+
+// C-15（2026-09-05 证书域审计裁定）：cert_expiry_days 读取失败不得放大为整个
+// 任务列表 500——降级默认 30 并告警，对齐 Round 35 I-20 的 checkManualCertExpiration
+// 口径。种子任务 20 天后过期：默认阈值 30 下应判 expiring，证明降级取值真实生效。
+func TestListCertJobs_degrades_to_default_expiry_days_when_config_missing(t *testing.T) {
+	// Given：一条 issued 任务 20 天后过期；基线（配置在）请求 200
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at)
+		VALUES ('lb_degrade','degrade.example.test','issued', datetime('now','+20 days'))`); err != nil {
+		t.Fatalf("seed cert job: %v", err)
+	}
+	router := gin.New()
+	router.GET("/jobs", h.ListCertJobs)
+	baseline := httptest.NewRecorder()
+	router.ServeHTTP(baseline, httptest.NewRequest(http.MethodGet, "/jobs", nil))
+	if baseline.Code != http.StatusOK {
+		t.Fatalf("baseline status=%d body=%s, want 200", baseline.Code, baseline.Body.String())
+	}
+
+	// When：global_config 行被删（该读取必然失败）
+	if _, err := db.DB.Exec("DELETE FROM global_config WHERE id=1"); err != nil {
+		t.Fatalf("delete global config: %v", err)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/jobs", nil))
+
+	// Then：200，且按默认 30 天阈值把 20 天后到期判为 expiring（降级取值生效）
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（读取失败降级默认 30，不再整页 500）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"certificate_status":"expiring"`) {
+		t.Fatalf("body=%s, want expiring via default 30-day threshold", response.Body.String())
 	}
 }

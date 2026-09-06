@@ -42,10 +42,14 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/rules", nil))
 
 	// Then
+	// 注：health_check_timeout 的 NULL 回退原钉 5（schema 旧默认口径），LB-04
+	//（用户裁定）已将读取/生成/渲染默认统一为 2（与写侧 CreateRule/校验副本
+	// 一致，见 rule_features.go lbRuleListColumns 与 services/caddy.go 渲染兜底）；
+	// 本期望随新契约更新，与 TestListRules_defaults_NULL_health_check_timeout_to_2 同口径。
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":5`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":false`, `"host":"127.0.0.1"`} {
+	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":2`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":false`, `"host":"127.0.0.1"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("list body missing %s: %s", expected, response.Body.String())
 		}

@@ -330,7 +330,10 @@ const triggeredLabel = (row: SecurityEvent): string => {
   if (/^949/.test(t) || /^959/.test(t)) return '评分拦截'
   if (/^920/.test(t)) return '协议异常'
   if (/^921/.test(t)) return '协议攻击'
-  // 5 位数字 ID 仅自定义规则（emit=crID+10000）；与后端过滤器 GLOB/概览口径一致
+  // 5 位数字 ID 仅自定义规则（emit=crID+10000）；≥7 位以 1 开头为无 id 规则的
+  // 合成 ID（后端筛选 family 的 customRuleFamilyCondition 与总览 categorizeAttack
+  // 均归自定义规则，此处显示原始 ID）；6 位 1xxxxx 属 CRS 保留段余数、无发射
+  // 源，三处口径一致：不归自定义规则
   if (/^\d{5}$/.test(t)) return '自定义规则'
   return t
 }

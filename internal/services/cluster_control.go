@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +90,48 @@ func signServiceControlTicket(claims models.ClusterServiceControlClaims, key []b
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(encodedPayload))
 	return encodedPayload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+// ErrNoClusterPin 表示目标节点在本地没有 TOFU 指纹钉（http 地址或从未对其
+// 发起过服务控制），供调用方以幂等语义处理。
+var ErrNoClusterPin = errors.New("该节点没有已钉扎的证书指纹")
+
+// ForgetNodePin 删除主节点侧针对单个从节点的服务控制 TOFU 指纹钉（C-3，与
+// 从节点侧 forget-pins 端点对称）：从节点更换管理面板证书后主节点对其服务控制
+// 持续 PinMismatch，本方法按 IssueServiceControlTicket 同一口径（access_url
+// 优先，回退 protocol://ip:port）推导地址并定位 cluster_ca_pins 下的 pin 文件，
+// 只删除该节点的钉。返回定位到的 host:port 供审计与内存缓存失效使用。
+func (s *ClusterService) ForgetNodePin(ctx context.Context, nodeID int) (string, error) {
+	var ipAddress, protocol, accessURL string
+	var port int
+	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,'') FROM nodes WHERE id=?`, nodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNodeNotFound
+		}
+		return "", fmt.Errorf("读取节点访问地址: %w", err)
+	}
+	if protocol != "https" {
+		protocol = "http"
+	}
+	if accessURL == "" {
+		accessURL = protocol + "://" + net.JoinHostPort(ipAddress, strconv.Itoa(port))
+	}
+	parsed, err := url.Parse(accessURL)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("节点访问地址无效: %q", accessURL)
+	}
+	pinPath, err := clusterPinPathForDatabase(s.db, parsed.Host)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(pinPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrNoClusterPin
+		}
+		return "", fmt.Errorf("删除节点证书指纹: %w", err)
+	}
+	return parsed.Host, nil
 }
 
 // ValidateServiceControlTicket 从节点侧：验签 + 过期 + 节点归属 + 动作绑定 +

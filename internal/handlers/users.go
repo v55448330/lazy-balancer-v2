@@ -60,7 +60,10 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
 		return
 	}
-
+	if passwordTooLong(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码长度超过 72 字节限制"})
+		return
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
@@ -107,6 +110,10 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 	if req.Password != nil && passwordTooShort(*req.Password) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
+		return
+	}
+	if req.Password != nil && passwordTooLong(*req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码长度超过 72 字节限制"})
 		return
 	}
 	var passwordHash string
@@ -379,6 +386,10 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	}
 	if req.NewPassword == "" || passwordTooShort(req.NewPassword) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
+		return
+	}
+	if passwordTooLong(req.NewPassword) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码长度超过 72 字节限制"})
 		return
 	}
 

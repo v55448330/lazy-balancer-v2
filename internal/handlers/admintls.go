@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,13 +110,116 @@ type adminTLSError struct{ msg string }
 
 func (e *adminTLSError) Error() string { return e.msg }
 
+// adminTLSInput 抹平管理面板 HTTPS 入参的两种形态：multipart 表单（面板 UI
+// 文件上传）与 JSON 对象（MCP 转发等程序化通道——forward() 只发
+// application/json）。字段名与表单一致（enabled/mode/cert_file/key_file），
+// JSON 通道的 cert_file/key_file 为 PEM 字符串；两条通道共用完全相同的
+// 校验与落盘链路。
+type adminTLSInput struct {
+	c *gin.Context // multipart 通道：经 FormFile 读取上传文件
+
+	jsonMode     bool
+	enabledValue string // 归一化为与表单 Get 同构的字符串；""=未提交
+	modeValue    string // ""=未提交
+	certValue    string // JSON 通道提交的证书 PEM
+	keyValue     string // JSON 通道提交的私钥 PEM
+}
+
+// decodeAdminTLSInput 解析请求入参：Content-Type 为 multipart 表单时走原
+// multipart 路径（含 2 MiB 上限与原错误文案）；否则嗅探 body 为 JSON 对象
+// （含显式 application/json）时走 JSON 路径；其余请求回落 multipart 解析，
+// 行为与仅支持表单时一致。
+func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
+	if !strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			return nil, fmtErrorf("请求体读取失败: " + err.Error())
+		}
+		if bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("{")) {
+			return parseAdminTLSJSONInput(body)
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if err := c.Request.ParseMultipartForm(2 << 20); err != nil {
+		return nil, fmtErrorf("表单解析失败: " + err.Error())
+	}
+	return &adminTLSInput{
+		c:            c,
+		enabledValue: c.Request.Form.Get("enabled"),
+		modeValue:    c.Request.Form.Get("mode"),
+	}, nil
+}
+
+func parseAdminTLSJSONInput(body []byte) (*adminTLSInput, error) {
+	var req struct {
+		Enabled  json.RawMessage `json:"enabled"`
+		Mode     string          `json:"mode"`
+		CertFile string          `json:"cert_file"`
+		KeyFile  string          `json:"key_file"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmtErrorf("JSON 解析失败: " + err.Error())
+	}
+	input := &adminTLSInput{
+		jsonMode:  true,
+		modeValue: req.Mode,
+		certValue: req.CertFile,
+		keyValue:  req.KeyFile,
+	}
+	// enabled 归一化为字符串（bool → "true"/"false"，字符串原样），使后续
+	// 「"true"或"1"」判定与 multipart 通道完全同语义；null/缺省=未提交。
+	if len(req.Enabled) > 0 && string(req.Enabled) != "null" {
+		var boolValue bool
+		if err := json.Unmarshal(req.Enabled, &boolValue); err == nil {
+			input.enabledValue = strconv.FormatBool(boolValue)
+		} else {
+			var stringValue string
+			if err := json.Unmarshal(req.Enabled, &stringValue); err == nil {
+				input.enabledValue = stringValue
+			} else {
+				return nil, fmtErrorf("enabled 字段须为布尔或字符串")
+			}
+		}
+	}
+	return input, nil
+}
+
+// hasUploadPayload 报告本次请求是否携带新证书材料（仅 upload 模式读取）。
+func (in *adminTLSInput) hasUploadPayload() bool {
+	if in.jsonMode {
+		return in.certValue != "" || in.keyValue != ""
+	}
+	return len(in.c.Request.MultipartForm.File["cert_file"]) > 0 ||
+		len(in.c.Request.MultipartForm.File["key_file"]) > 0
+}
+
+// certificatePair 读取证书/私钥 PEM：multipart 通道读上传文件（单文件 1 MiB
+// 上限与原 readAdminTLSFiles 一致），JSON 通道取 PEM 字符串字段。
+func (in *adminTLSInput) certificatePair() (string, string, error) {
+	if in.jsonMode {
+		if in.certValue == "" {
+			return "", "", fmtErrorf("缺少 cert_file 字段（PEM 字符串）")
+		}
+		if in.keyValue == "" {
+			return "", "", fmtErrorf("缺少 key_file 字段（PEM 字符串）")
+		}
+		return in.certValue, in.keyValue, nil
+	}
+	return readAdminTLSFiles(in.c)
+}
+
 var exitProcess = os.Exit
 
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
 // UI can show what will be installed before the user confirms.
 func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
-	certPEM, keyPEM, err := readAdminTLSFiles(c)
+	input, err := decodeAdminTLSInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	certPEM, keyPEM, err := input.certificatePair()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -174,35 +280,31 @@ func (h *Handlers) GetAdminTLS(c *gin.Context) {
 
 func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
-	if err := c.Request.ParseMultipartForm(2 << 20); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "表单解析失败: " + err.Error()})
+	input, err := decodeAdminTLSInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	form := c.Request.Form
 
 	current := services.LoadAdminTLSConfig()
 	enabled := current.Enabled
-	if v := form.Get("enabled"); v != "" {
+	if v := input.enabledValue; v != "" {
 		enabled = v == "true" || v == "1"
 	}
 	mode := current.Mode
-	if v := form.Get("mode"); v != "" {
+	if v := input.modeValue; v != "" {
 		mode = v
 	}
 	cert, key := current.Cert, current.Key
 	uploadedCertificate := false
-	if mode == "upload" {
-		certFiles := c.Request.MultipartForm.File["cert_file"]
-		keyFiles := c.Request.MultipartForm.File["key_file"]
-		if len(certFiles) > 0 || len(keyFiles) > 0 {
-			certPEM, keyPEM, err := readAdminTLSFiles(c)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-				return
-			}
-			cert, key = certPEM, keyPEM
-			uploadedCertificate = true
+	if mode == "upload" && input.hasUploadPayload() {
+		certPEM, keyPEM, err := input.certificatePair()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
 		}
+		cert, key = certPEM, keyPEM
+		uploadedCertificate = true
 	}
 
 	if enabled {

@@ -73,13 +73,14 @@
 
 - 轻量优先：能 `get_metrics_overview` 就不用 `get_metrics_dashboard`；能 `get_rule` 就不用反复 `list_rules`
 - 审计日志务必分页；单工具响应上限 4 MiB，超限请改用分页参数（page/page_size）缩小返回范围
+- 配置备份导入（import_config/import_v1_config/validate_import）请求体上限 1 MiB（网关体积限制，REST 侧为 16 MiB）：备份超过 1 MiB 时 MCP 通道不可用，请改用管理面板或 REST 导入
 - 保持 HTTP 连接复用（一个 MCP 会话内不要每次新建连接）
 
 ## 7. 错误码速查
 
 | 错误 | 含义与处理 |
 |---|---|
-| 401 | 密钥无效/缺失，或未开启 MCP → 核对 Key 与开关 |
-| 403 | 只读 Key 调写工具 / 从节点非集群写工具 / 来源 IP 不在白名单 → 换非只读 Key；集群运维对目标从节点本身调用、其余写操作对主节点调用，或放行来源 IP |
+| 401 | 密钥无效/缺失，或使用 JWT（MCP 仅支持 API Key）→ 换用开启了 MCP 的 lb_sk_ 密钥 |
+| 403 | 未开启 MCP / 来源 IP 不在白名单 / 只读 Key 越权 / 从节点非集群写工具 → 开启 MCP 开关、放行来源 IP、换非只读 Key；集群运维对目标从节点本身调用、其余写操作对主节点调用 |
 | -32602 | 参数不符合 `input_schema` → 重新读该工具 schema，按契约修正，不要猜字段名 |
 | IsError + 4xx/5xx 文本 | 内部 REST 返回的业务错误，响应体里有具体 message |

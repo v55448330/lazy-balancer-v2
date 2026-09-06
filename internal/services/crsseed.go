@@ -50,13 +50,13 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 			return
 		}
 	}
-	// The bind mount also hides the aux dirs referenced by the generated WAF
+	// The bind mount also hides the aux dir referenced by the generated WAF
 	// config (SecAuditLog lives under waf/audit), so recreate the skeleton.
+	// waf/custom 已移除（审计 W4 裁定）：自定义规则存 DB、内联发射为 coraza
+	// 指令，无任何文件消费方，不再重建该死目录。
 	wafDir := filepath.Dir(liveDir)
-	for _, sub := range []string{"custom", "audit"} {
-		if err := os.MkdirAll(filepath.Join(wafDir, sub), 0755); err != nil {
-			log.Printf("crs seed: failed to create %s: %v", filepath.Join(wafDir, sub), err)
-		}
+	if err := os.MkdirAll(filepath.Join(wafDir, "audit"), 0755); err != nil {
+		log.Printf("crs seed: failed to create %s: %v", filepath.Join(wafDir, "audit"), err)
 	}
 
 	snapshotVersion := ""

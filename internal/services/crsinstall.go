@@ -109,20 +109,24 @@ func crsTransientPath(crsDir, name string) string {
 // （crsDir 内 .staging/、rules.bak/、rules.old/ 与文件形 *.bak/*.old）随 bind
 // mount 跨升级存活并混入集群同步 tar——更新成功路径一次性清理，审计留痕。
 func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
+	// 具名瞬态目标（M24 迁移瞬态目录前的历史形态）；其余按 *.bak/*.old 后缀
+	// 兜底。非具名的点前缀文件不在此删除——waf 同步 tar 的 skipWafSyncTransient
+	// 过滤另行兜底（W6 重构：单次 ReadDir，删除集合与此前逐名重扫完全一致）。
+	legacyNames := map[string]bool{
+		".staging": true, "rules.bak": true, "rules.bak.tmp": true, "rules.old": true,
+	}
+	entries, err := os.ReadDir(m.crsDir)
+	if err != nil {
+		return
+	}
 	removed := 0
-	for _, name := range []string{".staging", "rules.bak", "rules.bak.tmp", "rules.old"} {
-		if entries, err := os.ReadDir(m.crsDir); err == nil {
-			for _, e := range entries {
-				match := e.Name() == name
-				if !match && (strings.HasSuffix(e.Name(), ".bak") || strings.HasSuffix(e.Name(), ".old")) {
-					match = e.IsDir() || true
-				}
-				if match {
-					if err := os.RemoveAll(filepath.Join(m.crsDir, e.Name())); err == nil {
-						removed++
-					}
-				}
-			}
+	for _, e := range entries {
+		name := e.Name()
+		if !legacyNames[name] && !strings.HasSuffix(name, ".bak") && !strings.HasSuffix(name, ".old") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(m.crsDir, name)); err == nil {
+			removed++
 		}
 	}
 	if removed > 0 {

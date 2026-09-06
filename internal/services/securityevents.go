@@ -351,11 +351,12 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		return nil, nil, nil, fmt.Errorf("security events: iterate bindings: %w", err)
 	}
 
-	// 策略的 custom_rules / crs_rule_groups / ip_blacklist / ip_acl_* 用于
-	// 「rule_triggered 属于哪个策略」判定；仅加载启用策略（disabled 策略不应再
+	// 策略的 mode / custom_rules / crs_rule_groups / ip_blacklist / ip_acl_* 用于
+	// 「rule_triggered 属于哪个策略」判定（mode 供 A1-S6 off 门：mode=off 策略
+	// 不发射 CRS，不得认领 CRS 事件）；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,''), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,''), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
@@ -364,7 +365,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
 		var customJSON, crsJSON, blacklistJSON, geoipJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		if err := polRows.Scan(&p.ID, &p.Name, &p.Mode, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)

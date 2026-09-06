@@ -405,7 +405,7 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 			continue
 		}
 
-		if existingID, hasID := routeMap["@id"].(string); hasID && routeIDBelongsToRule(existingID, caddyID) {
+		if existingID, hasID := routeMap["@id"].(string); hasID && RouteIDBelongsToRule(existingID, caddyID) {
 			removed = true
 			continue
 		}
@@ -436,7 +436,11 @@ func isRunningDefaultRoute(route map[string]interface{}) bool {
 	return ok && handler["handler"] == "static_response" && handler["body"] == "Lazy Balancer V2 is running!"
 }
 
-func routeIDBelongsToRule(routeID, ruleID string) bool {
+// RouteIDBelongsToRule 判断运行配置中的路由 @id 是否归属某规则：主路由
+// （@id == ruleID）或其带后缀的兄弟路由（ruleID_ 前缀：path_N / geoip /
+// redirect 等）。DeleteRouteByID 的临时路由清理与 handlers 侧
+// GetRuleCaddyConfig 的兄弟路由收集（LB-13）共用本口径。
+func RouteIDBelongsToRule(routeID, ruleID string) bool {
 	return ruleID != "" && (routeID == ruleID || strings.HasPrefix(routeID, ruleID+"_"))
 }
 
@@ -1083,7 +1087,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       COALESCE(health_check_path,''), COALESCE(health_check_interval,10),
-		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
+		       COALESCE(health_check_timeout,2), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
@@ -2215,6 +2219,9 @@ func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upst
 		upstreamKeepalive = rule.GlobalUpstreamKeepaliveTimeout
 	}
 
+	// 2026-09-06 裁定（T-3）：Server 头隐藏仅暴露全局开关（基础设置），规则级
+	// server_tokens_hidden 0/1/2 覆盖为 API/MCP 预留字段——无 UI 入口、不作为
+	// 产品功能维护，UI 编辑透传保留 API 已设值。
 	hideServer = rule.GlobalServerTokensHidden
 	if rule.ServerTokensHidden == 1 {
 		hideServer = true
@@ -2630,7 +2637,11 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 		}
 	}
 	if geoipPassPolicy != nil {
-		routes = append(routes, buildGeoipPassRoute(domainHosts, geoipPassPolicy))
+		// LB-13：GeoIP pass 路由补挂 @id（caddyID_geoip）——此前无 @id，
+		// GetRuleCaddyConfig 的兄弟路由收集与 DeleteRouteByID 清理均无法识别。
+		geoipRoute := buildGeoipPassRoute(domainHosts, geoipPassPolicy)
+		tagRuleRoute(geoipRoute, rule.CaddyID, "geoip")
+		routes = append(routes, geoipRoute)
 	}
 	if rule.CustomRoutesEnabled {
 		pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
@@ -3093,7 +3104,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 可达 0 值（validateV2BackupRules 不校验该组合），裸值会生成 "0s"。
 			hcTimeout := rule.HealthCheckTimeout
 			if hcTimeout <= 0 {
-				hcTimeout = 5
+				// LB-04：默认与写侧（CreateRule/校验副本）及读取 COALESCE 统一为 2。
+				hcTimeout = 2
 			}
 			active := map[string]interface{}{
 				"uri":      hcPath,

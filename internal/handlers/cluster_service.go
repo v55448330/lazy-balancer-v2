@@ -88,6 +88,12 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 			c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: rejected.message})
 			return
 		}
+		// C-3：指纹不匹配必须与通用不可达区分下发——否则前端无法提示
+		//「清除该节点证书指纹」补救通道（该信息此前只进服务端日志）。
+		if errors.Is(err, services.ErrClusterPinMismatch) {
+			clusterError(c, http.StatusBadGateway, "从节点证书指纹不匹配（该节点管理面板证书可能已更换），可清除该节点证书指纹后重试", err)
+			return
+		}
 		clusterError(c, http.StatusBadGateway, "从节点不可达或响应异常", err)
 		return
 	}

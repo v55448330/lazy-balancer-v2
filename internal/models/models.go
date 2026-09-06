@@ -432,56 +432,63 @@ type CreateRuleRequest struct {
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
 	LogEnabled                    bool       `json:"log_enabled"`
+	// LB-01：缺省（nil）=创建即启用（向后兼容历史调用方）；显式 false=创建为
+	// 禁用（UI 复制向导按预览「禁用」态落库）。
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type UpdateRuleRequest struct {
 	Name string `json:"name"`
 	// 审计 M16：HostHeader/Description/DnsServer/HealthCheckPath 指针化——
 	// 省略（nil）=保留原值，显式空串=清空；旧行为空串与省略无法区分。
-	Description                   *string     `json:"description"`
-	Protocol                      string      `json:"protocol"`
-	Domain                        string      `json:"domain"`
-	ListenPort                    int         `json:"listen_port"`
-	Strategy                      string      `json:"strategy"`
-	DynamicDNS                    *bool       `json:"dynamic_dns"`
-	EnableDnsServer               *bool       `json:"enable_dns_server"`
-	DnsServer                     *string     `json:"dns_server"`
-	DnsFamily                     string      `json:"dns_family"`
-	HealthCheckPath               *string     `json:"health_check_path"`
-	HealthCheckInterval           int         `json:"health_check_interval"`
-	HealthCheckTimeout            int         `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int         `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int         `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       *bool       `json:"enable_active_health_check"`
-	TCPHealthCheckPort            int         `json:"tcp_health_check_port"`
-	TCPProxyProtocol              *bool       `json:"tcp_proxy_protocol"`
-	TCPTryDuration                int         `json:"tcp_try_duration"`
-	TCPTryInterval                int         `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          *int        `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      *int        `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            *int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	CustomRoutesEnabled           *bool       `json:"custom_routes_enabled"`
-	ProxyDialTimeout              *int        `json:"proxy_dial_timeout"`
-	ProxyResponseHeaderTimeout    *int        `json:"proxy_response_header_timeout"`
-	ProxyReadTimeout              *int        `json:"proxy_read_timeout"`
-	ProxyWriteTimeout             *int        `json:"proxy_write_timeout"`
-	ProxyStreamTimeout            *int        `json:"proxy_stream_timeout"`
-	ProxyFlushInterval            *int        `json:"proxy_flush_interval"`
-	ProxyStreamCloseDelay         *int        `json:"proxy_stream_close_delay"`
-	PathRules                     *[]PathRule `json:"path_rules"`
-	HostHeader                    *string     `json:"host_header"`
-	Upstreams                     []Upstream  `json:"upstreams"`
-	EnableTLS                     *bool       `json:"enable_tls"`
-	TLSSource                     string      `json:"tls_source"`
-	ACMEConfigID                  int         `json:"acme_config_id"`
-	CAProviderID                  *int        `json:"ca_provider_id"`
-	TLSCert                       string      `json:"tls_cert"`
-	TLSKey                        string      `json:"tls_key"`
-	TLSHTTPRedirect               *bool       `json:"tls_http_redirect"`
-	EnableCompress                *bool       `json:"enable_compress"`
-	CompressTypes                 string      `json:"compress_types"`
-	Enabled                       *bool       `json:"enabled"`
-	LogEnabled                    *bool       `json:"log_enabled"`
+	Description                   *string `json:"description"`
+	Protocol                      string  `json:"protocol"`
+	Domain                        string  `json:"domain"`
+	ListenPort                    int     `json:"listen_port"`
+	Strategy                      string  `json:"strategy"`
+	DynamicDNS                    *bool   `json:"dynamic_dns"`
+	EnableDnsServer               *bool   `json:"enable_dns_server"`
+	DnsServer                     *string `json:"dns_server"`
+	DnsFamily                     string  `json:"dns_family"`
+	HealthCheckPath               *string `json:"health_check_path"`
+	HealthCheckInterval           int     `json:"health_check_interval"`
+	HealthCheckTimeout            int     `json:"health_check_timeout"`
+	HealthCheckUnhealthyThreshold int     `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   int     `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       *bool   `json:"enable_active_health_check"`
+	// LB-02（M16 口径续）：TCP 三字段指针化——省略（nil）=保留原值，显式 0=真实
+	// 零值落库（tcp_try_duration 0=不重试、tcp_try_interval 0=Caddy 默认间隔、
+	// tcp_health_check_port 0=跟随上游端口）。此前非指针 int 的「0=沿用存量」
+	// 合并使显式清零永不可达。
+	TCPHealthCheckPort         *int        `json:"tcp_health_check_port"`
+	TCPProxyProtocol           *bool       `json:"tcp_proxy_protocol"`
+	TCPTryDuration             *int        `json:"tcp_try_duration"`
+	TCPTryInterval             *int        `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB       *int        `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout   *int        `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden         *int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	CustomRoutesEnabled        *bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout           *int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout *int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           *int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          *int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         *int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         *int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      *int        `json:"proxy_stream_close_delay"`
+	PathRules                  *[]PathRule `json:"path_rules"`
+	HostHeader                 *string     `json:"host_header"`
+	Upstreams                  []Upstream  `json:"upstreams"`
+	EnableTLS                  *bool       `json:"enable_tls"`
+	TLSSource                  string      `json:"tls_source"`
+	ACMEConfigID               int         `json:"acme_config_id"`
+	CAProviderID               *int        `json:"ca_provider_id"`
+	TLSCert                    string      `json:"tls_cert"`
+	TLSKey                     string      `json:"tls_key"`
+	TLSHTTPRedirect            *bool       `json:"tls_http_redirect"`
+	EnableCompress             *bool       `json:"enable_compress"`
+	CompressTypes              string      `json:"compress_types"`
+	Enabled                    *bool       `json:"enabled"`
+	LogEnabled                 *bool       `json:"log_enabled"`
 }
 
 type UpdateConfigRequest struct {

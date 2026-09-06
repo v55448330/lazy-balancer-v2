@@ -36,7 +36,7 @@
         </el-descriptions-item>
         <el-descriptions-item label="最近同步">{{ formatDate(status.last_sync_at) || '-' }}</el-descriptions-item>
         <el-descriptions-item v-if="status.last_sync_error" label="同步错误" :span="3">
-          <span class="error-text">{{ status.last_sync_error }}</span>
+          <span class="error-text">{{ syncErrorDisplay }}</span>
         </el-descriptions-item>
       </template>
     </el-descriptions>
@@ -46,17 +46,40 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { formatDate } from '@/utils/date'
 import { Monitor } from '@element-plus/icons-vue'
 import type { ClusterStatus } from '@/types'
 
-defineProps<{
+const props = defineProps<{
   readonly status: ClusterStatus | null
   readonly loading: boolean
   /** A6-S5：父级轮询错误态——无数据时的空态文案据此切「加载失败」。 */
   readonly error?: boolean
 }>()
 
+// 后端 cluster_sync.go 的 syncReloadFailureMarkerPrefix 字面值：快照已应用但
+// Caddy 重载失败时写入 last_sync_error 的机内标记前缀（仅展示层翻译用）。
+const RELOAD_FAILURE_MARKER_PREFIX = 'apply_ok_reload_failed'
+// 后端 syncFailureCountPrefix/Suffix 构成的「已连续 N 次」计数段。
+const FAILURE_COUNT_PATTERN = /已连续 (\d+) 次/
+
+// C-4：apply_failed + 标记前缀的消息翻译为用户语义（保留首段原因供排障）；
+// 其余消息原样展示。仅展示层，不改动存储内容。
+const syncErrorDisplay = computed<string>(() => {
+  const message = props.status?.last_sync_error ?? ''
+  if (!props.status || props.status.sync_error_code !== 'apply_failed' || !message.includes(RELOAD_FAILURE_MARKER_PREFIX)) {
+    return message
+  }
+  const countMatch = message.match(FAILURE_COUNT_PATTERN)
+  const retryPart = countMatch ? `（第 ${countMatch[1]} 次）` : ''
+  const reasonSegment = message.split(' | ')[0] ?? message
+  const reason = reasonSegment
+    .replace(`${RELOAD_FAILURE_MARKER_PREFIX}: `, '')
+    .replace(RELOAD_FAILURE_MARKER_PREFIX, '')
+    .trim()
+  return `配置已同步但 Caddy 重载失败，系统将自动重试${retryPart}${reason ? `：${reason}` : ''}`
+})
 </script>
 
 <style scoped>

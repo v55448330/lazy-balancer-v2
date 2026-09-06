@@ -108,7 +108,7 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><PieChart /></el-icon>
-                <span>攻击类型分布</span>
+                <span>攻击类型分布（近 7 天）</span>
               </div>
             </div>
           </template>
@@ -184,7 +184,7 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon class="title-icon"><Location /></el-icon>
-            <span>Top 10 源 IP</span>
+            <span>Top 10 源 IP（近 7 天）</span>
           </div>
         </div>
       </template>

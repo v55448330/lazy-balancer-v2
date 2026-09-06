@@ -417,7 +417,7 @@
                   <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
                   <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
                 </div>
-                <div class="form-tip-line">名单内 IP 跳过 WAF 与访问控制检测（限流仍然生效）</div>
+                <div class="form-tip-line">名单内 IP 跳过本策略的 WAF 与访问控制检测（限流仍然生效；其他绑定策略的拒绝不受信任豁免）</div>
               </el-form-item>
               <el-form-item label="引用地址列表">
                 <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
@@ -570,7 +570,7 @@
                 <el-option :value="429" label="429 Too Many Requests" />
                 <el-option :value="503" label="503 Service Unavailable" />
               </el-select>
-              <span class="form-tip-inline">WAF、IP ACL、限流拦截统一使用此状态码</span>
+              <span class="form-tip-inline">WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）</span>
             </el-form-item>
           </el-form>
         </div>

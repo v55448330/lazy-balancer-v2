@@ -74,10 +74,12 @@
       :status="status"
       :syncing="syncing"
       :promoting="promoting"
+      :forgetting-pins="forgettingPins"
       :read-only="isReadOnlyProp"
       @sync="syncNow"
       @promote="promoteToMaster"
       @reregister="requestRegistration"
+      @forget-pins="forgetPins"
     />
 
     <ClusterAccessUrlDialog
@@ -149,6 +151,24 @@
           show-icon
           class="service-control-warning"
         />
+      </transition>
+
+      <!-- C-3：服务控制返回证书指纹不匹配时提供按节点重钉通道（与从节点侧
+           forget-pins 补救对称）；确认后调用 POST /cluster/nodes/:id/forget-pin。 -->
+      <transition name="el-fade-in">
+        <el-alert
+          v-if="serviceControlPinMismatch"
+          title="从节点证书指纹不匹配"
+          type="error"
+          :closable="false"
+          show-icon
+          class="service-control-warning"
+        >
+          <div>该节点管理面板证书可能已更换。清除本节点对其的证书指纹钉后，下次服务控制将按其当前证书重新验证。</div>
+          <el-button type="danger" plain size="small" style="margin-top: 8px" :loading="nodePinForgetting" :disabled="nodePinForgetting" @click="forgetNodePin">
+            清除该节点证书指纹
+          </el-button>
+        </el-alert>
       </transition>
 
       <template #footer>
@@ -233,6 +253,8 @@ const serviceControlDialogVisible = ref(false)
 const serviceControlNode = ref<ClusterNode | null>(null)
 const serviceControlAction = ref('')
 const serviceControlLoading = ref(false)
+const serviceControlPinMismatch = ref(false)
+const nodePinForgetting = ref(false)
 
 // serviceControlNode 是打开弹框时的快照；15s 轮询会整体替换 nodes 数组，
 // 快照里的 status/name 会逐渐失真（典型：节点已恢复在线仍显示「离线」）。
@@ -258,6 +280,7 @@ const serviceControlWarnings: Record<string, string> = {
 const openServiceControlDialog = (node: ClusterNode): void => {
   serviceControlNode.value = node
   serviceControlAction.value = ''
+  serviceControlPinMismatch.value = false
   serviceControlDialogVisible.value = true
 }
 
@@ -267,12 +290,41 @@ const executeServiceControl = async (): Promise<void> => {
   try {
     await request.post(`/cluster/nodes/${serviceControlNode.value.id}/service`, { action: serviceControlAction.value })
     serviceControlDialogVisible.value = false
+    serviceControlPinMismatch.value = false
     mfaAwareSuccess('服务控制指令已下发')
   } catch (error: unknown) {
-    // 全局拦截器已弹 toast；428 MFA 重试也由全局处理
+    // 全局拦截器已弹 toast；428 MFA 重试也由全局处理。
+    // C-3：指纹不匹配（后端 502 专属文案）在弹框内提供按节点重钉通道。
+    if (error instanceof Error && error.message.includes('证书指纹不匹配')) {
+      serviceControlPinMismatch.value = true
+    }
     console.error('service control failed', error)
   } finally {
     serviceControlLoading.value = false
+  }
+}
+
+// C-3：清除该节点的 TOFU 证书指纹钉（POST /cluster/nodes/:id/forget-pin），
+// 成功后留在弹框内便于直接重试服务控制。
+const forgetNodePin = async (): Promise<void> => {
+  const node = serviceControlNodeLive.value
+  if (!node || nodePinForgetting.value) return
+  const confirmed = await confirmAction(
+    `确定清除对节点“${node.name}”的证书指纹钉吗？下次服务控制将按该节点当前证书重新验证并钉扎。`,
+    '清除节点证书指纹',
+  )
+  if (!confirmed) return
+  nodePinForgetting.value = true
+  try {
+    const response = await request.post<ActionResponse>(`/cluster/nodes/${node.id}/forget-pin`)
+    mfaAwareSuccess(response.message || '已清除该节点的证书指纹，下次服务控制将按其当前证书重新钉扎')
+    serviceControlPinMismatch.value = false
+    await fetchNodes().catch((error: unknown) => console.error('Failed to refresh cluster nodes:', error))
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast；这里仅记录避免 unhandled rejection
+    console.error('Failed to forget node pin:', error)
+  } finally {
+    nodePinForgetting.value = false
   }
 }
 const registerToken = ref<ClusterRegisterToken | null>(null)
@@ -387,6 +439,36 @@ const syncNow = async (): Promise<void> => {
     console.error('Failed to sync now:', error)
   } finally {
     syncing.value = false
+  }
+}
+
+// C-2：PinMismatch 补救入口——主节点更换管理面板证书后从节点同步持续指纹不匹配，
+// 「重新注册」复用同一 TOFU transport 无法自救；清空本节点 TOFU 指纹钉
+// （POST /cluster/forget-pins）后，下一同步周期按主节点当前证书重新验证并钉扎。
+const forgettingPins = ref(false)
+const forgetPins = async (): Promise<void> => {
+  if (isReadOnlyProp.value || forgettingPins.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将清除本节点保存的全部主节点 TLS 证书指纹钉（TOFU），下一同步周期将按主节点当前证书重新验证并钉扎。是否继续？',
+      '清除证书指纹',
+      { confirmButtonText: '清除并重新钉扎', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    // 取消弹框：不做任何操作
+    return
+  }
+  forgettingPins.value = true
+  try {
+    await request.post<ActionResponse>('/cluster/forget-pins')
+    mfaAwareSuccess('已清除全部主节点证书指纹，下次同步将按当前证书重新钉扎')
+    // 刷新状态：last_sync_error 的 pin_mismatch 将随下一同步周期成功而自清
+    await clusterPolling.run()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast；这里仅记录避免 unhandled rejection
+    console.error('Failed to forget cluster pins:', error)
+  } finally {
+    forgettingPins.value = false
   }
 }
 

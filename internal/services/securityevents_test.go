@@ -249,7 +249,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','test rule','http','go029.com',443,1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name) VALUES (7,'policy-seven')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode) VALUES (7,'policy-seven','blocking')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',7)`); err != nil {
@@ -1665,6 +1665,7 @@ func securityEventsSeedAttrPolicy(t *testing.T, ruleTriggered string, policies [
 	id         int
 	name       string
 	enabled    int
+	mode       string
 	customJSON string
 	crsJSON    string
 }) (int, string) {
@@ -1684,8 +1685,8 @@ func securityEventsSeedAttrPolicy(t *testing.T, ruleTriggered string, policies [
 		t.Fatal(err)
 	}
 	for _, p := range policies {
-		if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (?,?,?,?,?)`,
-			p.id, p.name, p.enabled, p.customJSON, p.crsJSON); err != nil {
+		if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (?,?,?,?,?,?)`,
+			p.id, p.name, p.enabled, p.mode, p.customJSON, p.crsJSON); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',?)`, p.id); err != nil {
@@ -1719,11 +1720,12 @@ func TestSecurityEventsAttribution_OverlappingCustomRulePicksLowestPolicyID(t *t
 		id         int
 		name       string
 		enabled    int
+		mode       string
 		customJSON string
 		crsJSON    string
 	}{
-		{id: 1, name: "policy-A", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
-		{id: 3, name: "policy-B", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
+		{id: 1, name: "policy-A", enabled: 1, mode: "", customJSON: `[3]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, mode: "", customJSON: `[3]`, crsJSON: `[]`},
 	})
 	if pid != 1 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — 重叠自定义规则必须归因到最低 policy_id", pid, pname)
@@ -1741,11 +1743,12 @@ func TestSecurityEventsAttribution_SingleOwnerCustomRulePicksOwnerPolicy(t *test
 		id         int
 		name       string
 		enabled    int
+		mode       string
 		customJSON string
 		crsJSON    string
 	}{
-		{id: 1, name: "policy-A", enabled: 1, customJSON: `[]`, crsJSON: `[]`},
-		{id: 3, name: "policy-B", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
+		{id: 1, name: "policy-A", enabled: 1, mode: "", customJSON: `[]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, mode: "", customJSON: `[3]`, crsJSON: `[]`},
 	})
 	if pid != 3 || pname != "policy-B" {
 		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 单属自定义规则必须归因到拥有该规则的策略（DB id 3 emit 10003）", pid, pname)
@@ -1763,11 +1766,12 @@ func TestSecurityEventsAttribution_FallbackSkipsDisabledFirstBinding(t *testing.
 		id         int
 		name       string
 		enabled    int
+		mode       string
 		customJSON string
 		crsJSON    string
 	}{
-		{id: 1, name: "policy-off", enabled: 0, customJSON: `[]`, crsJSON: `[]`},
-		{id: 3, name: "policy-B", enabled: 1, customJSON: `[]`, crsJSON: `[]`},
+		{id: 1, name: "policy-off", enabled: 0, mode: "", customJSON: `[]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, mode: "", customJSON: `[]`, crsJSON: `[]`},
 	})
 	if pid != 3 || pname != "policy-B" {
 		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 回退必须跳过禁用首绑定，取第一个启用绑定", pid, pname)
@@ -1780,11 +1784,12 @@ func TestSecurityEventsAttribution_OverlappingCRSGroupPicksLowestPolicyID(t *tes
 		id         int
 		name       string
 		enabled    int
+		mode       string
 		customJSON string
 		crsJSON    string
 	}{
-		{id: 2, name: "policy-A", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
-		{id: 5, name: "policy-B", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
+		{id: 2, name: "policy-A", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `["42"]`},
+		{id: 5, name: "policy-B", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `["42"]`},
 	})
 	if pid != 2 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (2,policy-A) — 重叠 CRS 组必须归因到最低 policy_id", pid, pname)
@@ -1798,14 +1803,38 @@ func TestSecurityEventsAttribution_GroupOwnerNotFirstBound(t *testing.T) {
 		id         int
 		name       string
 		enabled    int
+		mode       string
 		customJSON string
 		crsJSON    string
 	}{
-		{id: 2, name: "policy-xss", enabled: 1, customJSON: `[]`, crsJSON: `["41"]`},
-		{id: 5, name: "policy-sqli", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
+		{id: 2, name: "policy-xss", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `["41"]`},
+		{id: 5, name: "policy-sqli", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `["42"]`},
 	})
 	if pid != 5 || pname != "policy-sqli" {
 		t.Fatalf("attribution=(%d,%q), want (5,policy-sqli) — 942001 属组 42，必须归因到组号 42 的策略而非首绑定的 41 策略", pid, pname)
+	}
+}
+
+// SC-1（2026-09-05 安全核心域审计裁定修复）：mode=off 策略不得认领 CRS 事件。
+// Given：lb_rule1 绑定两条启用策略——低 id 策略 mode='off'（crs_rule_groups 空
+// =发射端「包含全部 CRS」语义），高 id 策略 mode='blocking'（空组合同样全量）。
+// When：摄取 audit rule_triggered="942100"（CRS 事件，只能由 blocking 策略发出）。
+// Then：归因到 blocking 策略——A1-S6 off 门（securityEventsPolicyContainsRule
+// 的 policy.Mode == "off"）必须真正生效；归因落到 off 策略（含经回退路径）即失败。
+func TestSecurityEventsAttribution_ModeOffPolicyDoesNotClaimCRSEvents(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "942100", []struct {
+		id         int
+		name       string
+		enabled    int
+		mode       string
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 2, name: "policy-off", enabled: 1, mode: "off", customJSON: `[]`, crsJSON: `[]`},
+		{id: 5, name: "policy-blocking", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `[]`},
+	})
+	if pid != 5 || pname != "policy-blocking" {
+		t.Fatalf("attribution=(%d,%q), want (5,policy-blocking) — mode=off 策略不得认领 CRS 事件（A1-S6 off 门）", pid, pname)
 	}
 }
 

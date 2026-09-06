@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -106,6 +107,46 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		services.AuditResultPart("success"),
 	))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已清除全部主节点证书指纹，下次同步将按当前证书重新钉扎"})
+}
+
+// ForgetClusterNodePin 是主节点侧「单节点 TOFU 指纹钉」重置端点（C-3，与从节点
+// 侧 ForgetClusterPins 对称）：从节点更换管理面板证书后，主节点对其服务控制持续
+// PinMismatch；本端点按节点（access_url 优先，回退 protocol://ip:port）定位并
+// 删除对应 pin 文件（内存缓存一并失效），下次服务控制按从节点当前证书重新钉扎。
+// 仅主节点管理员可达（requireMaster + admin 路由组），操作留审计。
+func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
+	if !h.requireMaster(c) {
+		return
+	}
+	nodeID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || nodeID <= 0 {
+		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		return
+	}
+	host, err := h.clusterService.ForgetNodePin(c.Request.Context(), nodeID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, services.ErrNodeNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, services.ErrNoClusterPin):
+			// 幂等：无钉可删（http 地址/从未服务控制过）按成功语义回应，
+			// 不阻断运维排障流程。
+			recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
+				fmt.Sprintf("节点 %d", nodeID), "该节点没有已钉扎的证书指纹，无需清除"))
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "该节点没有已钉扎的证书指纹，无需清除"})
+			return
+		}
+		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
+		clusterError(c, status, "清除节点证书指纹失败", err)
+		return
+	}
+	if h.syncService != nil {
+		h.syncService.ForgetNodePinCache(host)
+	}
+	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
+		fmt.Sprintf("节点 %d（%s）", nodeID, host), services.AuditResultPart("success")))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已清除该节点的证书指纹，下次服务控制将按其当前证书重新钉扎"})
 }
 
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to

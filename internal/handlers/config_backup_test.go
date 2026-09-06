@@ -813,18 +813,15 @@ func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	}
 }
 
-// N+12 G4：metrics_retention_days 属导入钳制家族——cleanupHistory 仅兜底 <1，
-// 越界值（如 100000000 天）会让指标历史清理窗口永远够不到任何行，
-// metrics_history 无界增长（与 jwt/audit_retention/证书数值/请求体上限同族）。
-func TestImportConfigBackup_clamps_metrics_retention_days(t *testing.T) {
+// S-7 裁定：指标保留随日志保留，该键已迁移删除，旧备份含该键被忽略。
+func TestImportConfigBackup_ignoresDeadMetricsRetentionDaysKey(t *testing.T) {
 	for _, item := range []struct {
 		name  string
 		value any
-		want  int
 	}{
-		{name: "excessive clamps to 3650", value: 100000000, want: 3650},
-		{name: "below range clamps to 1", value: 0, want: 1},
-		{name: "invalid form resets to 7", value: "bogus", want: 7},
+		{name: "int value ignored", value: 100000000},
+		{name: "zero value ignored", value: 0},
+		{name: "invalid form ignored", value: "bogus"},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			// Given
@@ -854,16 +851,17 @@ func TestImportConfigBackup_clamps_metrics_retention_days(t *testing.T) {
 			request.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(response, request)
 
-			// Then
+			// Then：导入成功（死键静默跳过，任何形态值不致导入失败）
 			if response.Code != http.StatusOK {
 				t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
 			}
-			var retentionDays int
-			if err := db.DB.QueryRow("SELECT metrics_retention_days FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
-				t.Fatalf("read imported metrics retention: %v", err)
+			// 死键未落库（列不存在）
+			var retentionColumn int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_retention_days'").Scan(&retentionColumn); err != nil {
+				t.Fatalf("inspect global_config schema: %v", err)
 			}
-			if retentionDays != item.want {
-				t.Fatalf("metrics_retention_days=%d, want %d", retentionDays, item.want)
+			if retentionColumn != 0 {
+				t.Fatalf("metrics_retention_days column count=%d, want 0（死键不得落库）", retentionColumn)
 			}
 		})
 	}

@@ -71,6 +71,7 @@ var tools = []toolSpec{
 	{"get_crs_update_logs", "获取 CRS 更新日志", http.MethodGet, "/security/crs/update/logs", nil, nil, emptySchema},
 	{"list_crs_rules", "分页浏览 CRS 规则文件", http.MethodGet, "/security/crs/rules", nil, []string{"search", "page", "page_size"}, listCRSRulesSchema},
 	{"get_crs_rule", "查看指定 CRS 规则文件内容", http.MethodGet, "/security/crs/rules/{filename}", []string{"filename"}, nil, idSchema("filename", "规则文件名", "string")},
+	{"get_crs_rule_index", "获取 CRS 结构化规则索引（全部 6 位规则 ID/消息/文件/分类，按 ID 升序）", http.MethodGet, "/security/crs/rule-index", nil, nil, emptySchema},
 	{"get_ip2region_info", "获取 IP2Region 信息（版本/状态/自动更新）", http.MethodGet, "/security/ip2region", nil, nil, emptySchema},
 	{"get_ip2region_regions", "获取可选区域列表", http.MethodGet, "/security/ip2region/regions", nil, nil, emptySchema},
 	{"get_ip2region_update_status", "获取 IP2Region 更新进度状态", http.MethodGet, "/security/ip2region/update/status", nil, nil, emptySchema},
@@ -94,6 +95,9 @@ var tools = []toolSpec{
 	{"create_ip_list", "创建 IP 地址列表", http.MethodPost, "/security/ip-lists", nil, nil, bodySchema},
 	{"update_ip_list", "更新指定 IP 地址列表", http.MethodPut, "/security/ip-lists/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_ip_list", "删除指定 IP 地址列表", http.MethodDelete, "/security/ip-lists/{id}", []string{"id"}, nil, idSchema("id", "列表 ID", "integer")},
+	// F12-a（2026-09 审计）：安全事件处置工作流——单条追加幂等（已存在返回
+	// added=false），免去 Agent 读全表-改-全量替换的竞态路径。
+	{"add_ip_to_list", "向 IP 地址列表追加单条 IP/CIDR（安全事件处置用，幂等）", http.MethodPost, "/security/ip-lists/{id}/ips", []string{"id"}, nil, `{"type":"object","required":["id","value"],"properties":{"id":{"type":"integer","description":"列表 ID"},"value":{"type":"string","description":"IP 或 CIDR，如 203.0.113.7 或 10.0.0.0/8；新条目备注固定为「事件处置」"}},"additionalProperties":false}`},
 	{"toggle_crs_auto_update", "开关 CRS 自动更新", http.MethodPut, "/security/crs/auto-update", nil, nil, bodySchema},
 	{"trigger_crs_update", "手动触发 CRS 规则库更新", http.MethodPost, "/security/crs/update", nil, nil, emptySchema},
 	{"toggle_ip2region_auto_update", "开关 IP2Region 自动更新", http.MethodPut, "/security/ip2region/auto-update", nil, nil, bodySchema},
@@ -105,6 +109,9 @@ var tools = []toolSpec{
 	{"create_login_ticket", "为从节点生成登录票据（操作者账户必须已启用 MFA，否则 403；人类 JWT 路径还需 60 秒内通过 MFA 验证（428 step-up），API Key/MCP 路径仅豁免该验证窗口）", http.MethodPost, "/cluster/nodes/{id}/login-ticket", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"update_node_access_url", "更新从节点访问地址", http.MethodPut, "/cluster/nodes/{id}/access-url", []string{"id"}, nil, bodySchema},
 	{"delete_cluster_node", "删除指定集群节点", http.MethodDelete, "/cluster/nodes/{id}", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
+	{"control_cluster_node_service", "主节点遥控从节点服务（仅主节点管理员 Key 可用；从节点证书指纹不匹配时先 forget_cluster_node_pin）", http.MethodPost, "/cluster/nodes/{id}/service", []string{"id"}, nil, `{"type":"object","required":["id","action"],"properties":{"id":{"type":"integer","description":"节点 ID"},"action":{"type":"string","enum":["start_caddy","stop_caddy","restart_caddy","restart_app"],"description":"服务控制动作（与后端 IsValidClusterServiceAction 支持集一致）"}},"additionalProperties":false}`},
+	{"forget_cluster_node_pin", "清除主节点对指定从节点的证书指纹钉（C-3 单节点重钉；无钉时幂等成功）", http.MethodPost, "/cluster/nodes/{id}/forget-pin", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
+	{"forget_cluster_pins", "清除本节点对主节点的全部证书指纹钉（从节点 PinMismatch 自救；主节点调用返回 400）", http.MethodPost, "/cluster/forget-pins", nil, nil, emptySchema},
 	{"set_cluster_mode", "注册并切换为从节点（standalone/master → slave，需主节点审批）", http.MethodPost, "/cluster/mode", nil, nil, bodySchema},
 	{"promote_cluster", "将从节点提升为主节点", http.MethodPost, "/cluster/promote", nil, nil, emptySchema},
 	{"pull_sync", "手动触发从节点同步", http.MethodPost, "/cluster/sync/pull", nil, nil, emptySchema},
@@ -130,6 +137,7 @@ var tools = []toolSpec{
 	{"toggle_user_status", "启用/禁用指定用户", http.MethodPut, "/users/{id}/status", []string{"id"}, nil, bodySchema},
 	{"reset_user_password", "重置指定用户密码", http.MethodPost, "/users/{id}/reset-password", []string{"id"}, nil, idSchema("id", "用户 ID", "integer")},
 	{"delete_user", "删除指定用户", http.MethodDelete, "/users/{id}", []string{"id"}, nil, idSchema("id", "用户 ID", "integer")},
+	{"reset_user_mfa", "重置用户 MFA（仅管理员；操作者已启用 MFA 时须提交本人 6 位动态验证码，未启用传空串——MCP/API Key 路径不走 428 step-up，直接在本接口验码）", http.MethodPost, "/users/{id}/mfa/reset", []string{"id"}, nil, `{"type":"object","required":["id","code"],"properties":{"id":{"type":"integer","description":"用户 ID"},"code":{"type":"string","description":"操作者自己的 6 位 MFA 动态验证码；操作者未启用 MFA 时传空串"}},"additionalProperties":false}`},
 	{"create_api_key", "创建 API 密钥", http.MethodPost, "/api-keys", nil, nil, bodySchema},
 	{"update_api_key_status", "更新 API 密钥状态（启用/只读/MCP 开关）", http.MethodPatch, "/api-keys/{id}/status", []string{"id"}, nil, bodySchema},
 	{"delete_api_key", "删除指定 API 密钥", http.MethodDelete, "/api-keys/{id}", []string{"id"}, nil, idSchema("id", "密钥 ID", "integer")},
@@ -139,7 +147,7 @@ var tools = []toolSpec{
 	{"validate_import", "验证导入文件（不写入）", http.MethodPost, "/config/import/validate", nil, nil, bodySchema},
 	{"import_v1_config", "导入 v1（nginx）配置", http.MethodPost, "/config/import/v1", nil, nil, bodySchema},
 	{"get_rule_caddy_config", "获取指定规则的 Caddy 配置片段", http.MethodGet, "/rules/{caddy_id}/caddy-config", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
-	{"get_rule_metrics_history", "获取指定规则的历史指标", http.MethodGet, "/rules/{caddy_id}/metrics-history", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
+	{"get_rule_metrics_history", "获取指定规则的历史指标", http.MethodGet, "/rules/{caddy_id}/metrics-history", []string{"caddy_id"}, []string{"range"}, ruleMetricsHistorySchema},
 	{"get_rule_logs", "获取指定规则的访问日志", http.MethodGet, "/rules/{caddy_id}/logs", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"get_rule_cert_info", "获取指定规则的证书信息", http.MethodGet, "/rules/{caddy_id}/cert-info", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"get_caddy_status", "获取 Caddy 运行状态", http.MethodGet, "/caddy/status", nil, nil, emptySchema},
@@ -202,7 +210,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
 
-错误约定：401=密钥无效或未开启 MCP；403=只读 Key 调写工具/从节点非集群写工具/IP 白名单拦截；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
+错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
 
 完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
 
@@ -226,7 +234,10 @@ const createRuleSchema = `{"type":"object","required":["name","protocol","listen
 
 const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string"},"domain":{"type":"string"},"listen_port":{"type":"integer"},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string"},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object"}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"enabled":{"type":"boolean"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
-const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id"]}],"additionalProperties":false}`
+// C-19 确认门（与 REST 侧 POST /certificates/issue 的 {"all":true} 同步）：
+// 空 body（全量重签）不再放行——批量必须显式 all:true（enum 锁死 true，防
+// all:false 静默变空批量）；定向签发仍走 caddy_id（domain 可选）。
+const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"},"all":{"type":"boolean","enum":[true]}},"oneOf":[{"required":["all"]},{"required":["caddy_id"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"username":{"type":"string","description":"操作人模糊筛选"},"action":{"type":"string","description":"操作模糊筛选"},"resource":{"type":"string","description":"对象模糊筛选"},"ip":{"type":"string","description":"IP 模糊筛选"},"keyword":{"type":"string","description":"详情关键词"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 
 // R68 B-F2：schema 必须覆盖 queryArgs 声明的全部参数——mcp-go 在工具处理器前
@@ -243,6 +254,11 @@ const metricsHistorySchema = `{"type":"object","properties":{"rule_id":{"type":"
 // setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems=5 与后端
 // SetRuleSecurityPolicies 的「最多绑定 5 条策略」校验对齐，避免 MCP 放行后端拒绝的载荷。
 const setRuleSecurityPoliciesSchema = `{"type":"object","required":["caddy_id","policy_ids"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"policy_ids":{"type":"array","items":{"type":"integer"},"maxItems":5,"description":"策略 ID 列表（整体替换现有绑定，按 policy_id ASC 顺序评估）"}},"additionalProperties":false}`
+
+// ruleMetricsHistorySchema（2026-09 审计 F5）：range 的 enum 与 REST 侧
+// metricsHistoryRange 支持集逐项一致（1h/6h/24h/7d，缺省走 REST 默认 24h），
+// 避免工具层出现后端会拒绝或静默回退的取值。
+const ruleMetricsHistorySchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"range":{"type":"string","enum":["1h","6h","24h","7d"],"default":"24h","description":"时间范围，默认 24h"}},"additionalProperties":false}`
 const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"},"audit_log_size_mb":{"type":"integer"},"mfa_write_guard":{"type":"boolean"},"mfa_lockout_enabled":{"type":"boolean"},"github_proxy_url":{"type":"string","enum":["https://v4.gh-proxy.org/","https://axisnow.gh-proxy.org/","https://cdn.gh-proxy.org/"]}},"additionalProperties":false}`
 
 func New(baseURL string, client *http.Client) http.Handler {
@@ -283,7 +299,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		if !ok {
 			return nil, fmt.Errorf("缺少参数 %s", name)
 		}
-		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(fmt.Sprint(value)))
+		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(scalarString(value)))
 	}
 	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
@@ -299,7 +315,11 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 
 	bodyArguments := make(map[string]any, len(arguments))
 	maps.Copy(bodyArguments, arguments)
-	if spec.name == "create_rule" {
+	// create_rule/update_rule 共用同一 upstreams 全量替换语义（REST 侧 enabled
+	// 为非指针布尔，缺省即落 false 静默禁用全部上游）——MCP 层对两个入口同样
+	// 注入缺省 enabled=true（显式 false 保留），使 Agent 按工具描述的「部分
+	// 更新」心智调整上游列表不会踩坑（2026-09 审计 F3）。
+	if spec.name == "create_rule" || spec.name == "update_rule" {
 		if upstreams, ok := bodyArguments["upstreams"].([]any); ok {
 			for _, upstream := range upstreams {
 				if fields, ok := upstream.(map[string]any); ok {
@@ -411,7 +431,13 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		return nil, fmt.Errorf("读取内部 API 响应: %w", err)
 	}
 	if len(responseBody) > maxResponseSize {
-		result := mcp.NewToolResultText("内部 API 响应超过 4 MiB 上限，请改用分页或专用导出工具")
+		// export_config 无分页参数也无其他导出工具（2026-09 审计 F15）——通用
+		// 「分页/专用导出工具」指引对它是死路，改指面板/REST 下载备份。
+		message := "内部 API 响应超过 4 MiB 上限，请改用分页或专用导出工具"
+		if spec.name == "export_config" {
+			message = "配置过大：MCP 通道响应上限 4 MiB，请由管理员经管理面板或 REST /config/export 下载备份"
+		}
+		result := mcp.NewToolResultText(message)
 		result.IsError = true
 		return result, nil
 	}

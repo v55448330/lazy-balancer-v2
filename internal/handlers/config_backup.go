@@ -214,7 +214,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 // 不参与校验；sync_switches_migrated 为内部迁移标记但随导出携带、恢复时写入，
 // 同属布尔语义。
 var backupBooleanConfigKeys = []string{
-	"server_tokens_hidden", "access_log_json", "metrics_public", "admin_tls_enabled",
+	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
 	"sync_switches_migrated",
 	"mfa_write_guard", "mfa_lockout_enabled",
@@ -1680,10 +1680,6 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		{"cert_renewal_days", 0, 90, 30},
 		{"cert_renewal_attempts", 1, 10, 5},
 		{"cert_expiry_days", 1, 365, 30},
-		// N+12 G4：metrics_retention_days 导入钳制 1..3650（非法形态回退 schema
-		// 默认 7）——cleanupHistory 只兜底 <1，天文数字会让指标历史清理窗口
-		// 永远够不到任何行，metrics_history 无界增长。
-		{"metrics_retention_days", 1, 3650, 7},
 	} {
 		if value, exists := backup.Config[kc.key]; exists {
 			if n, ok := backupInteger(value); ok {

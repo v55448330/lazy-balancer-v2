@@ -256,10 +256,12 @@ const retryCooldownMinutes = (status: CertJobStatus): number | null => {
     case 'downloading':
     case 'downloaded':
       return 2
-    // Round 35 I-24: 同 statusType，避免运行时 throw。
+    // Round 35 I-24: 同 statusType，避免运行时 throw。C-12（2026-09-05 证书域
+    // 审计）：未知状态默认冷却对齐后端 certJobRetryBlocked 的 2 分钟兜底，
+    // 不再前端放行（0）造成按钮可点但必然 429。
     default:
       console.warn('Unknown cert job status:', status)
-      return 0
+      return 2
   }
 }
 

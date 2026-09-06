@@ -343,6 +343,28 @@ func TestGetSecurityOverview_fallsBackToBundledCRSVersion(t *testing.T) {
 	}
 }
 
+// SC-11（2026-09-05 安全核心域审计 · 批准修复）：CRS 版本行查询失败必须显式报错。
+// Given：库已初始化但 security_crs_version 表缺失（单表异常窗口——主库整体
+// 故障时 ActivePolicies 会同挂触发 500，本测试钉住仅该表异常的静默窗口）。
+// When：请求 /security/overview。
+// Then：500「安全总览查询失败」——此前 err 被静默吞掉（err == nil 才应用），
+// 违反本函数 R35 D2 自述标准，面板静默回落捆绑版本 +「idle」与真实态不可区分。
+// 无行（ErrNoRows）是全新安装的合法状态，200 回落契约由 fallsBackToBundled
+// CRSVersion 钉住，不属故障。
+func TestGetSecurityOverview_crsVersionQueryFailureReturns500(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`DROP TABLE security_crs_version`); err != nil {
+		t.Fatalf("drop crs version table: %v", err)
+	}
+	router := newSecurityEventsRouter(t)
+
+	recorder := getRequest(t, router, "/security/overview")
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("overview status=%d body=%s, want 500（CRS 版本查询失败必须显式报错，不得静默回落）", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestGetSecurityOverview_trendBucketsLocalDateForNegativeOffset(t *testing.T) {
 	// Given a western timezone (America/New_York, UTC-4 in summer) so the offset is negative
 	setupSecurityPolicyTestDB(t)

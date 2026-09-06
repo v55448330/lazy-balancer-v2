@@ -232,16 +232,18 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		tcpFields.tcpTryInterval = v.TCPTryInterval
 	case models.UpdateRuleRequest:
 		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
-		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		// LB-02：TCP 三字段指针化后直接解引用——UpdateRule 在调用本函数前已完成
+		// nil→&existing 合并（rules.go 合并段），指针恒非 nil。
+		tcpFields.tcpHealthCheckPort = *v.TCPHealthCheckPort
 		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = v.TCPTryDuration
-		tcpFields.tcpTryInterval = v.TCPTryInterval
+		tcpFields.tcpTryDuration = *v.TCPTryDuration
+		tcpFields.tcpTryInterval = *v.TCPTryInterval
 	case *models.UpdateRuleRequest:
 		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
-		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		tcpFields.tcpHealthCheckPort = *v.TCPHealthCheckPort
 		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = v.TCPTryDuration
-		tcpFields.tcpTryInterval = v.TCPTryInterval
+		tcpFields.tcpTryDuration = *v.TCPTryDuration
+		tcpFields.tcpTryInterval = *v.TCPTryInterval
 	}
 	var upstreams []requestUpstream
 

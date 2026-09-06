@@ -44,20 +44,23 @@ COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
 COPY --from=backend /app/cmd/server/lazy-balancer /usr/local/bin/lazy-balancer
 COPY web/dist /app/ui
 
-RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/custom /app/waf/audit
+RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/audit
 
-# Download OWASP CRS rules (via ghfast.top proxy — direct GitHub access is
-# unreliable from the build network; proxy does not support git protocol,
-# so use the archive tarball instead of git clone). VERSION marker lets
-# startup reconciliation tell the bundled version from user-updated ones.
+# Download OWASP CRS rules (dual-source, aligned with the xdb seed below:
+# ghfast.top proxy first, fall back to direct GitHub — their reachability
+# from the build network complements each other. Proxy does not support git
+# protocol, so use the archive tarball instead of git clone). VERSION marker
+# lets startup reconciliation tell the bundled version from user-updated ones.
 ARG CRS_VERSION=v4.28.0
 RUN apk add --no-cache curl && \
     mkdir -p /tmp/crs-src && \
-    curl -sL "https://ghfast.top/https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz" | tar xz --strip-components=1 -C /tmp/crs-src && \
+    (curl -sfL -o /tmp/crs.tar.gz "https://ghfast.top/https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz" || \
+     curl -sfL -o /tmp/crs.tar.gz "https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz") && \
+    tar xzf /tmp/crs.tar.gz --strip-components=1 -C /tmp/crs-src && \
     cp -r /tmp/crs-src/rules /app/waf/crs/rules && \
     cp /tmp/crs-src/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
     echo "${CRS_VERSION}" > /app/waf/crs/VERSION && \
-    rm -rf /tmp/crs-src && \
+    rm -rf /tmp/crs-src /tmp/crs.tar.gz && \
     apk del curl
 # Pristine copy used to seed an empty bind-mounted /app/waf on first boot
 RUN cp -r /app/waf /app/waf.dist

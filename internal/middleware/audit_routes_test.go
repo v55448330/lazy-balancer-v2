@@ -23,11 +23,11 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// R69 C-N3-c：/config/validate 已升为 Explicit（handler 记录校验三态）。
 		"POST /api/v1/mcp":             {},
 		"POST /api/v1/rules/cert-info": {},
-		// v2.1.8 MFA：setup/verify-step/recovery-codes 为读形态或内部动作
-		//（不产生审计；handler 对失败已按认证拒绝/错误路径细分记录）。
-		"POST /api/v1/auth/mfa/setup":          {},
-		"POST /api/v1/auth/mfa/verify-step":    {},
-		"POST /api/v1/auth/mfa/recovery-codes": {},
+		// v2.1.8 MFA：setup/verify-step 为读形态或内部动作（不产生审计；handler
+		// 对失败已按认证拒绝/错误路径细分记录）。recovery-codes 已升为 Explicit
+		//（S-8：handler 显式记录「生成/恢复码」），不再属有意跳过。
+		"POST /api/v1/auth/mfa/setup":       {},
+		"POST /api/v1/auth/mfa/verify-step": {},
 	}
 	writeMethods := map[string]struct{}{
 		http.MethodPost: {}, http.MethodPut: {}, http.MethodPatch: {}, http.MethodDelete: {},

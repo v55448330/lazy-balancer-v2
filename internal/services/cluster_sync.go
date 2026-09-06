@@ -66,6 +66,10 @@ const (
 
 var errClusterPinMismatch = errors.New("主节点 TLS 证书指纹不匹配")
 
+// ErrClusterPinMismatch 导出 errClusterPinMismatch，供 handler 侧识别服务控制
+// 调用的指纹不匹配失败并返回可行动文案（C-3：主→从服务控制的 TOFU 钉扎）。
+var ErrClusterPinMismatch = errClusterPinMismatch
+
 // errSyncPullStopped 是 beginPull 在停机竞态（Stop 期间）下的哨兵错误：该路径
 // 不得落库覆盖 apply_ok_reload_failed 标记（见 recordSyncError），错误本身仍
 // 返回给调用方（含手动 Pull 的 API 响应）。
@@ -622,7 +626,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	var masterURL, token, fingerprint string
 	var isMaster bool
 	var appliedVersion int
-	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0), COALESCE(sync_fingerprint,'') FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token, &appliedVersion, &fingerprint); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0), COALESCE(sync_fingerprint,'') FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token, &appliedVersion, &fingerprint); err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("读取同步状态: %w", err))
 	}
 	if isMaster {
@@ -731,7 +735,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析集群快照: %w", err))
 	}
 	var currentMasterURL, currentToken string
-	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("重读同步状态: %w", err))
 	}
 	if isMaster || currentMasterURL != masterURL || currentToken != token {
@@ -1081,16 +1085,22 @@ func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message str
 	s.persistSyncError(ctx, message, code)
 }
 
-// syncErrorPreservesReloadMarker 判定错误是否属于「自愈类」：下周期可能自愈的
-// 错误（传输故障/主节点指纹不匹配/主节点侧暂时性版本或形态问题——主节点旧
-// schema、快照签名无效，均在主节点升级后自动恢复 304）必须保留重载失败标记；
-// 需人工介入或语义已定的错误（schema 过新需本节点升级、令牌撤销、校验/应用
-// 失败）允许覆盖。审计 S-1：旧注释「终止类让 run 循环 halt 等待人工介入」的
-// 依据在 E-F1 后不再成立——SchemaTooOld/SignatureInvalid 降级重试不 halt，
-// 覆盖标记将丢失 304 全量重拉补偿。
+// syncErrorPreservesReloadMarker 判定错误是否属于「自愈类」：标记存活期间期望
+// 自动重试的错误必须保留重载失败标记——传输故障/主节点指纹不匹配/主节点侧暂时
+// 性版本或形态问题（主节点旧 schema、快照签名无效，主节点升级后自动恢复 304），
+// 以及应用失败（ApplyFailed，2026-09-05 集群审计 C-1）：补偿重拉窗口内的应用
+// 瞬时失败（SQLITE_BUSY/磁盘写失败等回滚路径）发生时 applied_version 与指纹
+// 已与主节点对齐，标记是 304 全量重拉补偿的唯一残留触发器，覆盖后下周期 304
+// 无标记即返回 no-change，DB=新版本而 Caddy=旧运行配置的分叉将静默存活到下次
+// 真实变更；应用失败经 combineSyncErrorWithMarker 组合（首个失败原因+计数），
+// 补偿重拉成功后照常清除。需人工介入或语义已定的错误（schema 过新需本节点
+// 升级、令牌撤销、校验失败）仍允许覆盖。审计 S-1：旧注释「终止类让 run 循环
+// halt 等待人工介入」的依据在 E-F1 后不再成立——SchemaTooOld/SignatureInvalid
+// 降级重试不 halt，覆盖标记将丢失 304 全量重拉补偿。
 func syncErrorPreservesReloadMarker(code models.SyncErrorCode) bool {
 	return code == models.SyncErrorCodeTransportError || code == models.SyncErrorCodePinMismatch ||
-		code == models.SyncErrorCodeSchemaTooOld || code == models.SyncErrorCodeSignatureInvalid
+		code == models.SyncErrorCodeSchemaTooOld || code == models.SyncErrorCodeSignatureInvalid ||
+		code == models.SyncErrorCodeApplyFailed
 }
 
 // combineSyncErrorWithMarker 在重载失败标记上追加新的可恢复类错误：标记段只保留
@@ -1473,6 +1483,19 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 func (s *SyncService) ForgetClusterPins() {
 	s.pinMu.Lock()
 	s.verifiedPins = make(map[string]string)
+	s.pinMu.Unlock()
+}
+
+// ForgetNodePinCache 删除内存 TOFU pin 缓存中该地址的条目（若存在，C-3）：
+// 服务控制客户端自身不持有内存缓存（onVerified=nil、每次握手直读 pin 文件），
+// 此处清理仅覆盖本节点曾作为从节点时代残留的内存态，保持内存/磁盘一致。
+func (s *SyncService) ForgetNodePinCache(host string) {
+	pinPath, err := s.clusterPinPath(host)
+	if err != nil {
+		return
+	}
+	s.pinMu.Lock()
+	delete(s.verifiedPins, pinPath)
 	s.pinMu.Unlock()
 }
 

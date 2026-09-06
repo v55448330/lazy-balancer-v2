@@ -435,6 +435,12 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.APIKeys, err = s.snapshotAPIKeys(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.Users, err = s.snapshotUsers(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.LockedUsers, err = s.snapshotLockedUsers(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	if snapshot.Certs, err = s.snapshotCertificates(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
@@ -661,9 +667,16 @@ func clusterSnapshotDataDir(ctx context.Context, store snapshotStore) (string, e
 }
 
 func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore) ([]models.LbRule, error) {
+	// LB-04：health_check_timeout 的 NULL 回退取 2，与渲染/写侧（rule_features/
+	// caddy.go、UpdateRule 存量读取）同口径——快照仍导 5 会造成主节点实际行为（2）
+	// 与下发值（5）分叉，且从节点回放会把 5 物化为非 NULL 值，永久固化错误口径。
+	// rules 节哈希主从两侧同走本函数（主端导出 / 从端 driftGuardSectionHashes
+	// 重建），同版本代码天然一致；滚动升级窗口内存量 NULL 行会引入一次性哈希
+	// 抖动（旧从端按 5 重建 vs 新主端按 2 导出）→ 触发一轮全量重拉，回放把值
+	// 物化为非 NULL 后自然收敛，无需额外迁移。
 	rows, err := store.QueryContext(ctx, `SELECT COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port,
 		COALESCE(strategy,'weighted_round_robin'), COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-		COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
+		COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
 		COALESCE(custom_routes_enabled,0),
@@ -778,6 +791,31 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 		users = append(users, user)
 	}
 	return users, rows.Err()
+}
+
+// snapshotLockedUsers 读取主节点活跃登录锁（SC-4 修订）：只带未来时间的锁
+// ——存储格式即 auth recordLoginFailure 写入的 UTC "2006-01-02 15:04:05"，
+// 与 datetime('now')（同为 UTC 同形字符串）字典序比较等价于时间比较，
+// 口径与 handlers.loginLockedNow 一致。已过期锁自动不进快照，无需清理路径。
+// 该载荷不参与任何节哈希（sectionPayloadFor 不引用）——users 触发器 OF 列表
+// 补 login_locked_until（cluster_version.go）后，置锁/解锁 UPDATE 会 bump
+// cluster_version 使快照缓存重建、当周期即下发；普通失败计数 UPDATE（仅
+// login_failed_attempts）不在 OF 列表，不产生版本抖动。
+func (s *ClusterService) snapshotLockedUsers(ctx context.Context, store snapshotStore) ([]models.ClusterLockedUser, error) {
+	rows, err := store.QueryContext(ctx, `SELECT username, login_locked_until FROM users WHERE login_locked_until IS NOT NULL AND login_locked_until > datetime('now') ORDER BY username`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照活跃登录锁: %w", err)
+	}
+	defer rows.Close()
+	locked := make([]models.ClusterLockedUser, 0)
+	for rows.Next() {
+		var entry models.ClusterLockedUser
+		if err := rows.Scan(&entry.Username, &entry.LockedUntil); err != nil {
+			return nil, fmt.Errorf("扫描快照活跃登录锁: %w", err)
+		}
+		locked = append(locked, entry)
+	}
+	return locked, rows.Err()
 }
 
 func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStore) ([]models.ClusterAPIKey, error) {

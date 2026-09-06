@@ -321,6 +321,17 @@ type UpdateCurrentUserRequest struct {
 	CurrentPassword string `json:"current_password" binding:"omitempty,max=72"`
 }
 
+// maxPasswordBytes 是 bcrypt 的字节上限：v0.55 起对 >72 字节的密码返回
+// ErrPasswordTooLong。binding 的 max=72 按 rune 计数（validator v10），25-72 个
+// 多字节字符（>72 字节）可穿过绑定层——各密码端点须在 bcrypt 之前用
+// passwordTooLong 做字节级预检并 400（S-2，2026-09-05 审计裁定）。
+const maxPasswordBytes = 72
+
+// passwordTooLong 字节级密码上限预检（与 binding 的 rune 级 max=72 互补）。
+func passwordTooLong(password string) bool {
+	return len(password) > maxPasswordBytes
+}
+
 func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	if userID == nil {
@@ -347,6 +358,10 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	}
 	if passwordTooShort(req.Password) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
+		return
+	}
+	if passwordTooLong(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码长度超过 72 字节限制"})
 		return
 	}
 	if req.Password != "" {
@@ -470,6 +485,10 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户名至少 3 位，密码至少 6 位"})
+		return
+	}
+	if passwordTooLong(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码长度超过 72 字节限制"})
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)

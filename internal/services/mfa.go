@@ -21,8 +21,6 @@ import (
 const (
 	mfaChallengeTTL      = 5 * time.Minute
 	mfaRecoveryCodeCount = 10
-	mfaLockoutThreshold  = 5
-	mfaLockoutDuration   = 10 * time.Minute
 	mfaStepUpWindow      = 10 * time.Minute
 )
 
@@ -184,8 +182,10 @@ func MFAConsumeChallenge(token string, userID int) bool {
 // —— 主验证入口 ——
 
 // MFAVerifyCode 对启用 MFA 的用户验证 6 位 TOTP 或恢复码（按长度自动分流）。
-// 成功：清失败计数、推进 mfa_last_timestep（重放防护）；失败：按全局开关计数/锁定。
-// 返回 (ok, err)；锁定期间恒 false。
+// 成功：推进 mfa_last_timestep（重放防护）；失败：只提示不计数不锁定（2026-09
+// 裁定：全系统唯一锁定=登录阶段密码+验证码同计 5 次/10 分钟、受「登录失败
+// 锁定」开关控制，登录两步的失败计数由 handler 侧 recordLoginFailure 负责）。
+// 返回 (ok, err)。
 func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 	mfaMu.Lock()
 	defer mfaMu.Unlock()

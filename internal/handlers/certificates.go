@@ -243,6 +243,54 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); dbQueryNotFound(c, err, "Config not found", "DeleteCertificateConfig query config") {
 		return
 	}
+	// C-04（2026-09-05 证书域审计裁定）：删除前检查规则引用（全部规则，不限
+	// enabled）——被引用的配置删除后，关联规则下一次续签/首签会以
+	//「未选择可用的 DNS 提供商」静默失败，必须 409 显式列出引用方。
+	refs, refErr := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? ORDER BY caddy_id`, id)
+	if refErr != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+		return
+	}
+	type ruleRef struct{ caddyID, domain string }
+	var references []ruleRef
+	for refs.Next() {
+		var ref ruleRef
+		if err := refs.Scan(&ref.caddyID, &ref.domain); err != nil {
+			refs.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+			return
+		}
+		references = append(references, ref)
+	}
+	if err := refs.Err(); err != nil {
+		refs.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+		return
+	}
+	if err := refs.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+		return
+	}
+	if len(references) > 0 {
+		const maxListedReferences = 5
+		listed := make([]string, 0, len(references))
+		for _, ref := range references {
+			if len(listed) == maxListedReferences {
+				break
+			}
+			if ref.domain != "" {
+				listed = append(listed, fmt.Sprintf("%s (%s)", ref.domain, ref.caddyID))
+			} else {
+				listed = append(listed, ref.caddyID)
+			}
+		}
+		message := fmt.Sprintf("该 DNS 配置正被 %d 条负载规则引用，删除后这些规则将无法自动签发/续签证书，请先修改规则的 DNS 配置后再删除：%s", len(references), strings.Join(listed, "、"))
+		if len(references) > maxListedReferences {
+			message += fmt.Sprintf(" 等 %d 条规则", len(references))
+		}
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
+		return
+	}
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete config"})
 		return
@@ -320,25 +368,31 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		provider = req.DNSProvider
 		creds = req.DNSCredentials
 	}
-
+	// C-16（2026-09-05 证书域审计裁定）：无 id 的保存前凭证测试（前端 saveConfig
+	// 先调本端点验证）此前审计 detail 落「配置 0」——改为语义化来源标注；
+	// 有 id 路径保留「配置 N」。
+	auditTarget := fmt.Sprintf("配置 %d", id)
+	if idParam == "" {
+		auditTarget = services.AuditSourcePart("保存前测试")
+	}
 	if req.Domain == "" {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("missing_domain")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, services.AuditResultPart("missing_domain")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请输入用于测试的域名"})
 		return
 	}
 
 	p, ok := dnsproviders.Get(provider)
 	if !ok {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("unknown_provider")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, services.AuditResultPart("unknown_provider")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
 	if err := p.Validate(creds, req.Domain); err != nil {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("success")))
+	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
 }
 
@@ -373,6 +427,8 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	var req struct {
 		CaddyID string `json:"caddy_id"`
 		Domain  string `json:"domain"`
+		// C-19（2026-09-06 裁定）：批量全量重签须显式 {"all":true} 确认（含已签发任务、消耗 CA 配额）；caddy_id 与 all 同传以 caddy_id 为准
+		All bool `json:"all"`
 	}
 	bindErr := c.ShouldBindJSON(&req)
 	scope := "范围：全部 ACME 规则"
@@ -459,6 +515,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			queued++
 		}
 	} else {
+		if !req.All {
+			auditFailure("invalid_request", "请求格式错误")
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "批量签发需要显式确认：请求体须包含 {\"all\": true}（定向签发请提供 caddy_id）"})
+			return
+		}
 		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
 		if err != nil {
 			auditFailure("failed", "查询 ACME 规则失败: "+err.Error())

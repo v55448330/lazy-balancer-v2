@@ -25,7 +25,7 @@ const validPages: ReadonlySet<string> = new Set(pages)
 const isPageId = (page: string): page is PageId => validPages.has(page)
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
-// URL hash 优先（刷新/多标签页/前进后退可靠）；localStorage 作为后备。
+// URL hash 优先（刷新/多标签页可靠；导航用 replaceState 不产生历史条目，浏览器返回键会离开面板）；localStorage 作为后备。
 const hashMatch = window.location.hash.match(/^#\/(.+)$/)
 const hashPage = hashMatch ? hashMatch[1] : null
 const storedCurrentPage = localStorage.getItem('currentPage')
@@ -131,19 +131,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(username: string, password: string): Promise<{ mfaRequired: boolean; mfaToken?: string }> {
-    if (loading.value) return { mfaRequired: false }
+// FI-18：重入护栏显式化——loading 期间的重复调用不再伪装成「登录成功」
+//（原 login 重入返回 { mfaRequired:false } 与成功形态无法区分），
+// skipped:true 表示本次请求未发出，调用方应提示并中止。
+interface LoginResult {
+  skipped: boolean
+  mfaRequired: boolean
+  mfaToken?: string
+}
+
+  async function login(username: string, password: string): Promise<LoginResult> {
+    if (loading.value) return { skipped: true, mfaRequired: false }
     loading.value = true
     try {
       const res = await request.post<AuthResponse>('/auth/login', { username, password }, { silent: true })
       // v2.1.8 MFA 两步登录：后端返回 mfa_required 时无 token——调用方（Login.vue）
       // 切换到验证码步骤；silent 抑制拦截器把 200 的 mfa_required 形态当错误 toast。
       if ((res as unknown as { mfa_required?: boolean }).mfa_required) {
-        return { mfaRequired: true, mfaToken: (res as unknown as { mfa_token: string }).mfa_token }
+        return { skipped: false, mfaRequired: true, mfaToken: (res as unknown as { mfa_token: string }).mfa_token }
       }
       applyAuthResponse(res)
       await fetchConfig()
-      return { mfaRequired: false }
+      return { skipped: false, mfaRequired: false }
     } finally {
       loading.value = false
     }
@@ -155,14 +164,15 @@ export const useAuthStore = defineStore('auth', () => {
     applyAuthResponse(res)
   }
 
-  // v2.1.8 MFA 第二步：验证码换 JWT。
-  async function verifyMfaLogin(mfaToken: string, code: string) {
-    if (loading.value) return
+  // v2.1.8 MFA 第二步：验证码换 JWT。重入护栏与 login 同口径（skipped 显式判别）。
+  async function verifyMfaLogin(mfaToken: string, code: string): Promise<{ skipped: boolean }> {
+    if (loading.value) return { skipped: true }
     loading.value = true
     try {
       const res = await request.post<AuthResponse>('/auth/mfa/verify', { mfa_token: mfaToken, code }, { silent: true })
       applyAuthResponse(res)
       await fetchConfig()
+      return { skipped: false }
     } finally {
       loading.value = false
     }
@@ -186,13 +196,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function loginWithTicket(ticket: string) {
-    if (loading.value) return
+  async function loginWithTicket(ticket: string): Promise<{ skipped: boolean }> {
+    if (loading.value) return { skipped: true }
     loading.value = true
     try {
       const res = await request.post<AuthResponse>('/auth/ticket-login', { ticket })
       applyAuthResponse(res)
       await fetchConfig()
+      return { skipped: false }
     } finally {
       loading.value = false
     }
@@ -211,6 +222,19 @@ export const useAuthStore = defineStore('auth', () => {
       nodeMode.value = 'master'
       localStorage.removeItem('token')
     }
+  }
+
+  // FI-07：token 已在客户端判定过期（或本就不存在）时，服务端吊销毫无意义——
+  // 撤销表只对仍有效的 jti 有价值，过期令牌必吃 401 并在后端认证拒绝审计记
+  // 一条 jwt_expired 噪音。此路径仅做本地清理；手动登出（logout）仍走服务端吊销。
+  // intentionalLogout 语义与 logout() 一致：抑制后续在途请求 401 的全局弹窗。
+  function localLogout(): void {
+    intentionalLogout.value = true
+    clearUserRetryTimer()
+    user.value = null
+    token.value = null
+    nodeMode.value = 'master'
+    localStorage.removeItem('token')
   }
 
   function showToast(type: 'success' | 'error' | 'info' | 'warning', message: string) {
@@ -236,7 +260,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     if (!token.value || isTokenExpired(token.value)) {
-      await logout()
+      localLogout()
       return
     }
     await fetchUser()

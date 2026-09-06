@@ -208,6 +208,8 @@ export interface ClusterStatus {
   readonly applied_version: number
   readonly last_sync_at: string
   readonly last_sync_error: string
+  /** 后端 models.ClusterStatus 随状态下发（apply_failed/pin_mismatch 等），驱动从节点面板补救按钮与错误文案翻译 */
+  readonly sync_error_code?: string
   readonly pending_count: number
   readonly approved_count: number
 }
@@ -230,4 +232,44 @@ export interface ClusterModeResult {
 export interface ClusterSyncResult {
   readonly applied_version: number
   readonly changed: boolean
+}
+
+/**
+ * GET /config 响应（前端消费字段子集，FI-05 单一事实源）：
+ * 与后端 models.GlobalConfig 的 json 契约逐字段对齐；集群专属字段
+ * （is_master/master_url/sync_interval 等）与敏感字段（dns_credentials）不在此面。
+ */
+export interface GlobalConfigData {
+  log_level: string
+  caddy_log_level: string
+  caddy_log_size_mb: number
+  request_body_max_size_mb: number
+  http_read_timeout: number
+  http_write_timeout: number
+  http_idle_timeout: number
+  upstream_keepalive_timeout: number
+  proxy_dial_timeout: number
+  proxy_response_header_timeout: number
+  proxy_read_timeout: number
+  proxy_write_timeout: number
+  proxy_stream_timeout: number
+  proxy_flush_interval: number
+  proxy_stream_close_delay: number
+  server_tokens_hidden: boolean
+  cert_job_log_size_mb: number
+  audit_log_size_mb: number
+  runtime_log_size_mb: number
+  access_log_json: boolean
+  access_log_format: string
+  audit_retention_months: number
+  jwt_expire_minutes: number
+  timezone: string
+  mfa_write_guard: boolean
+  mfa_lockout_enabled: boolean
+  acme_email: string
+  cert_expiry_days: number
+  cert_renewal_days: number
+  cert_renewal_attempts: number
+  default_ca_provider_id: number
+  dns_provider: string
 }

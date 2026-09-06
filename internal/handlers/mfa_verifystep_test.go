@@ -16,13 +16,11 @@ import (
 	"github.com/pquerna/otp/totp"
 )
 
-// R74（审计 B3 I-5）verify-step 端点级硬失败上限：mfa_lockout_enabled 关（默认）
-// 时 verify-step 无任何硬门——每次 401 仅自增 mfa_failed_attempts 而无效果，
-// 路由也不在 loginRateLimit 内，被劫持会话可在线爆破 TOTP（10^6 空间 ±1 窗，
-// 高速率下小时级可行），成功即得带 mfa_ts 的新 JWT（守卫写放行 60 秒）。
-// 硬门与登录 challenge 10 次（B-I-4）/激活 pending 5 次（A-F-2）同族：
-// 连续失败 ≥10 → 10 分钟冷却，一律 429「连续失败过多，请 10 分钟后重试」
-//（冷却窗内登录 MFA 同样冻结，旧文案「请重新登录后再试」有误导）。
+// 现行语义（2026-09 用户二次裁定，66b35ce0 移除 R74 端点硬门后）：登录后的
+// MFA 验证失败（verify-step 及全部登录后验码入口）只提示 401、不计数不锁定
+// ——全系统唯一锁定在登录阶段（密码+验证码同计 5 次/10 分钟，受「登录失败
+// 锁定」开关控制）。仍生效的硬闸仅剩登录阶段两处：单挑战连续失败 10 次作废
+// 挑战（B-I-4）、pending 绑定连续失败 5 次作废待激活密钥（A-F-2）。
 
 // seedMfaVerifyStepUser 种 id=1 且已启用 MFA 的操作者，返回其 TOTP secret。
 func seedMfaVerifyStepUser(t *testing.T) string {

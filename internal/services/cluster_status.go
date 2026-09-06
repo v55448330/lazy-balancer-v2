@@ -11,9 +11,15 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// IsMaster 读取节点角色。COALESCE(is_master,1) 与 readonly 写闸
+// （readonly.go）及 cluster_version 触发器口径一致：历史库 NULL 视为主节点
+// （fail-open）。A5-N2 迁移（db.go）已回填存量 NULL，稳态不可达，此处为
+// 纵深防御一致性（2026-09-06 集群审计 C-7 / W10 复核结论）——此前裸 SELECT
+// 对 NULL Scan 失败会使 requireMaster/Promote 走 500（fail-closed），
+// 同一脏数据在两守卫处语义相反。
 func (s *ClusterService) IsMaster(ctx context.Context) (bool, error) {
 	var isMaster bool
-	if err := s.db.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		return false, fmt.Errorf("读取节点模式: %w", err)
 	}
 	return isMaster, nil

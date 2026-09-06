@@ -51,43 +51,19 @@ const authStore = useAuthStore()
 
 const activeTab = ref('basic')
 
-interface SettingsConfig {
-  log_level: string
-  caddy_log_level: string
-  caddy_log_size_mb: number
-  request_body_max_size_mb: number
-  http_read_timeout: number
-  http_write_timeout: number
-  http_idle_timeout: number
-  upstream_keepalive_timeout: number
-  proxy_dial_timeout: number
-  proxy_response_header_timeout: number
-  proxy_read_timeout: number
-  proxy_write_timeout: number
-  proxy_stream_timeout: number
-  proxy_flush_interval: number
-  proxy_stream_close_delay: number
-  server_tokens_hidden: boolean
-  cert_job_log_size_mb: number
-  audit_log_size_mb: number
-  runtime_log_size_mb: number
-  access_log_json: boolean
-  access_log_format: string
-  audit_retention_months: number
-  jwt_expire_minutes: number
-  timezone: string
-  mfa_write_guard: boolean
-  mfa_lockout_enabled: boolean
-}
+// FI-05：/config 契约单一事实源迁至 types/index.ts（GlobalConfigData）——
+// 两块设置卡各持互斥子集，这里按卡片分组做派生别名，不再复制字段清单。
+import type { GlobalConfigData } from '@/types'
 
-interface CertificateConfig {
-  acme_email: string
-  cert_expiry_days: number
-  cert_renewal_days: number
-  cert_renewal_attempts: number
-  default_ca_provider_id: number
-  dns_provider: string
-}
+type CertificateConfig = Pick<GlobalConfigData,
+  | 'acme_email'
+  | 'cert_expiry_days'
+  | 'cert_renewal_days'
+  | 'cert_renewal_attempts'
+  | 'default_ca_provider_id'
+  | 'dns_provider'
+>
+type SettingsConfig = Omit<GlobalConfigData, keyof CertificateConfig>
 
 const settings = ref<SettingsConfig>({
   log_level: 'info',

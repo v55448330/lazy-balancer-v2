@@ -226,7 +226,9 @@ const handleMfaVerify = async () => {
   try {
     // B6-S1：与 step-up/管理员重置同口径——归一化后仅提交首个 token，
     // 兼容整段粘贴恢复代码块（@input 已在恢复模式归一化，此处兜底）。
-    await authStore.verifyMfaLogin(mfaToken.value, normalizeMfaCodeInput(mfaCode.value))
+    const result = await authStore.verifyMfaLogin(mfaToken.value, normalizeMfaCodeInput(mfaCode.value))
+    // FI-18：store 重入护栏命中（请求未发出）——显式提示而非静默无事发生。
+    if (result.skipped) error.value = '登录请求进行中，请稍候'
   } catch (caught: unknown) {
     error.value = errorMessage(caught, '验证失败，请重试')
   } finally {
@@ -247,6 +249,11 @@ const handleLogin = async () => {
     loading.value = true
     try {
       const result = await authStore.login(form.username, form.password)
+      // FI-18：重入护栏命中时不再伪装成功——分流前先判 skipped。
+      if (result.skipped) {
+        error.value = '登录请求进行中，请稍候'
+        return
+      }
       if (result.mfaRequired && result.mfaToken) {
         mfaToken.value = result.mfaToken
         mfaStage.value = true
@@ -278,7 +285,12 @@ const handleSetup = async () => {
         password: setupForm.password,
         display_name: setupForm.display_name,
       }, { silent: true })
-      await authStore.login(setupForm.username, setupForm.password)
+      const loginResult = await authStore.login(setupForm.username, setupForm.password)
+      // FI-18：管理员已创建但登录被重入护栏跳过（防御路径）——切回登录表单提示手动登录。
+      if (loginResult.skipped) {
+        setupMode.value = false
+        error.value = '管理员已创建，请登录'
+      }
     } catch (caught: unknown) {
       // R68 D-N4：403 = 提交期间系统已被另一路径初始化——复探状态并切换
       // 登录表单（后端文案即指引），而非停在 setup 表单要求手动刷新。

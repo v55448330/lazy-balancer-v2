@@ -324,7 +324,17 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return err
 		}
 	}
+	// SC-4：login_failed_attempts/login_locked_until 是从节点登录端点写入的本地
+	// 记账（不随快照同步）。users 节清表前读出，回插后回写（见
+	// restoreLocalLoginLockouts），避免主节点无关的 users 变更意外解锁从节点
+	// 被锁账户。
+	var localLoginLockouts map[string]loginLockoutState
 	if !skip.skip("users") {
+		preserved, err := readLocalLoginLockouts(ctx, tx)
+		if err != nil {
+			return err
+		}
+		localLoginLockouts = preserved
 		if err := clearSyncTables(ctx, tx, "api_keys", "users"); err != nil {
 			return err
 		}
@@ -359,6 +369,9 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		if err := insertSnapshotUsersAndKeys(ctx, tx, snapshot); err != nil {
 			return err
 		}
+		if err := restoreLocalLoginLockouts(ctx, tx, localLoginLockouts); err != nil {
+			return err
+		}
 	}
 	// R64 A-N5：证书回插与清空同门（见上方 cert_jobs 清空处注释）。
 	if !skip.disabled["rules"] {
@@ -388,6 +401,12 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return err
 		}
 	}
+	// SC-4 修订：主节点活跃登录锁在 users 节处理（重放+本地记账回写）之后应用，
+	// 且不受 users 节哈希跳过门控——锁变更不改变 users 节哈希（login_* 不在节
+	// 载荷内），典型路径恰是「users 节跳过、仅 locked_users 变化」。
+	if err := applyLockedUsers(ctx, tx, snapshot.LockedUsers); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -415,6 +434,61 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTime(key.LastUsed.NullTime), key.CreatedAt); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
+		}
+	}
+	return nil
+}
+
+// loginLockoutState 是 users 表从节点本地登录记账（login_failed_attempts/
+// login_locked_until）的读出快照：登录端点写入、不随集群快照同步（SC-4）。
+type loginLockoutState struct {
+	failedAttempts int
+	lockedUntil    sql.NullString
+}
+
+// readLocalLoginLockouts 在 users 节清表前读出存量 username → 登录记账。
+// username 与主节点快照口径一致（UNIQUE 列），作为重放后回写的连接键。
+func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[string]loginLockoutState, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT username, COALESCE(login_failed_attempts,0), login_locked_until FROM users")
+	if err != nil {
+		return nil, fmt.Errorf("读取本地登录锁定记账: %w", err)
+	}
+	defer rows.Close()
+	lockouts := make(map[string]loginLockoutState)
+	for rows.Next() {
+		var username string
+		var state loginLockoutState
+		if err := rows.Scan(&username, &state.failedAttempts, &state.lockedUntil); err != nil {
+			return nil, fmt.Errorf("扫描本地登录锁定记账: %w", err)
+		}
+		lockouts[username] = state
+	}
+	return lockouts, rows.Err()
+}
+
+// restoreLocalLoginLockouts 在 users 节重插完成后按 username 回写本地登录记账。
+// 主节点已删除（或改名）的用户 UPDATE 命中 0 行——删除语义由快照回放保持，
+// 本地记账不复活用户。
+func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[string]loginLockoutState) error {
+	for username, state := range lockouts {
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET login_failed_attempts=?, login_locked_until=? WHERE username=?", state.failedAttempts, state.lockedUntil, username); err != nil {
+			return fmt.Errorf("回写用户 %s 的本地登录锁定记账: %w", username, err)
+		}
+	}
+	return nil
+}
+
+// applyLockedUsers 把主节点活跃登录锁合并进从节点本地 users 表（SC-4 修订）。
+// 只延长、绝不缩短/清除、绝不动 login_failed_attempts：现有值为空或早于入参才
+// 更新——固定格式 UTC 时间串的字典序即时间序（与 auth recordLoginFailure 写入、
+// loginLockedNow 判定同口径），主从/本地锁取更晚者。陌生用户名（主端新锁用户
+// 尚未随 users 节下发等）UPDATE 命中 0 行，安全落空；载荷 nil（旧主端）no-op，
+// 绝不清除本地锁。主端解锁不传播（从端锁自然过期）——fail-closed 设计。
+func applyLockedUsers(ctx context.Context, tx *sql.Tx, locked []models.ClusterLockedUser) error {
+	for _, entry := range locked {
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET login_locked_until=? WHERE username=? AND (login_locked_until IS NULL OR login_locked_until < ?)`,
+			entry.LockedUntil, entry.Username, entry.LockedUntil); err != nil {
+			return fmt.Errorf("同步用户 %s 的主节点登录锁: %w", entry.Username, err)
 		}
 	}
 	return nil

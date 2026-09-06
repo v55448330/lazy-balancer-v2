@@ -17,12 +17,27 @@ var certJobLogDir = "/app/logs"
 
 const maxRotatedFiles = 5
 
+// certJobLogWarnf 是轮转失败告警的测试接缝（var 而非直接 log.Printf，镜像
+// finalizeTimeout 等先例：测试捕获告警调用，生产代码不得改写）。
+var certJobLogWarnf = log.Printf
+
 // CertJobFileLogger writes certificate issuance logs to
 // /app/logs/certjob-{ruleID}.log with size-based rotation.
 // Keeps up to 5 rotated backups (.1 through .5).
 type CertJobFileLogger struct {
 	ruleID string
-	mu     sync.Mutex
+}
+
+// certJobLogWriteLocks 按 ruleID 串行化写与轮转（C-11，2026-09-05 证书域审计
+// 裁定）：每次写日志都新建实例（Issue 的 jobLogger / WriteCertJobLog*），实例级
+// 锁防不了跨实例并发轮转的 check-then-rename 交错——两个实例同时越过大小阈值
+// 时，后者的 os.Rename(path, path+".1") 会覆盖前者刚轮转出的 .1，丢一整代
+// 历史。键空间以 ruleID 为界（规则量级），无需回收。
+var certJobLogWriteLocks sync.Map // ruleID -> *sync.Mutex
+
+func lockCertJobLog(ruleID string) *sync.Mutex {
+	lock, _ := certJobLogWriteLocks.LoadOrStore(ruleID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // NewCertJobFileLogger creates a logger bound to a specific rule.
@@ -80,19 +95,18 @@ func getCertJobLogSizeBytes() int64 {
 }
 
 func (l *CertJobFileLogger) write(level, stage, message string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	// C-11：跨实例按 ruleID 串行化（见 certJobLogWriteLocks 注释）。
+	unlock := lockCertJobLog(l.ruleID)
+	unlock.Lock()
+	defer unlock.Unlock()
 
 	path := CertJobLogPath(l.ruleID)
 
 	if info, err := os.Stat(path); err == nil && info.Size() >= getCertJobLogSizeBytes() {
-		os.Remove(fmt.Sprintf("%s.%d", path, maxRotatedFiles))
-		for i := maxRotatedFiles - 1; i >= 1; i-- {
-			oldPath := fmt.Sprintf("%s.%d", path, i)
-			newPath := fmt.Sprintf("%s.%d", path, i+1)
-			os.Rename(oldPath, newPath)
+		// 轮转失败不再吞没（C-11）：留痕告警后继续追加，维持原写入可用性。
+		if err := rotateCertJobLogFiles(path); err != nil {
+			certJobLogWarnf("cert job log: rotate %s failed: %v", path, err)
 		}
-		os.Rename(path, path+".1")
 	}
 
 	if err := os.MkdirAll(certJobLogDir, 0755); err != nil {
@@ -109,6 +123,27 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 
 	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
 	fmt.Fprintf(f, "%s [%s] %s - %s\n", timestamp, level, stage, message)
+}
+
+// rotateCertJobLogFiles 把 current 逐代下移到 .1（.1→.2 … .4→.5，删除旧 .5）。
+// 缺失的中间代（备份不足 maxRotatedFiles 份时的常态）按 IsNotExist 静默跳过；
+// 其余错误收集上抛，由调用方留痕——此前全部丢弃，坏轮转零迹可循（C-11）。
+func rotateCertJobLogFiles(path string) error {
+	var errs []error
+	if err := os.Remove(fmt.Sprintf("%s.%d", path, maxRotatedFiles)); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, fmt.Errorf("remove %s.%d: %w", filepath.Base(path), maxRotatedFiles, err))
+	}
+	for i := maxRotatedFiles - 1; i >= 1; i-- {
+		oldPath := fmt.Sprintf("%s.%d", path, i)
+		newPath := fmt.Sprintf("%s.%d", path, i+1)
+		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("shift %s.%d: %w", filepath.Base(path), i, err))
+		}
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		errs = append(errs, fmt.Errorf("rotate current %s: %w", filepath.Base(path), err))
+	}
+	return errors.Join(errs...)
 }
 
 // Log implements the acme.Logger interface (info level).

@@ -233,6 +233,9 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	// S-8（2026-09-05 审计裁定）：恢复码重生成是纯会话门下「旧码全作废+明文
+	// 下发 10 个登录可用凭证」的高敏动作——成功留痕，与禁用/重置 MFA 同密度。
+	recordAudit(c, "生成", "恢复码", services.FormatAuditDetail("MFA", "旧恢复码全部作废", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "恢复码已重新生成（旧码全部作废）", Data: gin.H{"recovery_codes": codes}})
 }
 

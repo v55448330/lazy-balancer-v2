@@ -223,7 +223,7 @@
             <div class="operation-buttons">
               <el-tooltip
               :disabled="!isReadOnly && canEditRule(row)"
-              :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再修改规则'"
+              :content="certJobLockTooltip(row, '证书申请中，请等待完成或失败后再修改规则')"
               >
                 <div>
                 <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || saving || !canEditRule(row)">
@@ -242,11 +242,11 @@
                 </el-button>
               </div>
               <el-tooltip
-                :disabled="!isReadOnly && canEditRule(row)"
-                :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再删除规则'"
+                :disabled="!isReadOnly && canDeleteRule(row) && certJobStatusOf(row) !== 'waiting_ca'"
+                :content="certJobLockTooltip(row, '证书申请中，请等待完成或失败后再删除规则')"
               >
                 <div>
-                <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canEditRule(row)">
+                <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canDeleteRule(row)">
                     删除
                   </el-button>
                 </div>
@@ -480,7 +480,7 @@
               </el-table-column>
               <el-table-column label="权重 %" width="110">
                 <template #default="{ row, $index }">
-                  <el-input-number v-model="row.weight" :min="0" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
+                  <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
               <el-table-column width="130">
@@ -488,7 +488,7 @@
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
                   <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
                     ? '该上游并发连接数上限（caddy-l4 max_connections），0 为不限制'
-                    : '该上游累计处理的请求数达到上限后判定不可用并移出负载（Caddy max_requests 语义），0 为不限制——HTTP 反代无逐上游并发连接限制'" >
+                    : '该上游同时处理的请求数达到上限后判定不可用并移出负载（Caddy max_requests 语义），0 为不限制——HTTP 反代无逐上游并发连接限制'" >
                     <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </template>
@@ -613,7 +613,7 @@
 
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查端口">
-                  <el-input-number v-model="wizardForm.tcp_health_check_port" :min="1" :max="65535" controls-position="right" style="width: 120px;" />
+                  <el-input-number v-model="wizardForm.tcp_health_check_port" :min="0" :max="65535" controls-position="right" style="width: 120px;" />
                   <span class="form-tip-inline">0 表示使用第一个上游端口</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
@@ -1532,12 +1532,42 @@ const fetchCertJobs = async (): Promise<void> => {
   if (refreshed) refreshRuleIds.forEach((ruleId) => pendingCertInfoRefresh.delete(ruleId))
 }
 
+// C-02（用户裁定，对齐后端 HasRunningJobForRule）：waiting_ca（CA 限流冷却）不算
+// 活动态——不阻塞规则启停与删除；downloaded（部署退避窗）仍按活动态保留。
 const isCertJobActive = (status?: CertJobStatus) => {
+  if (!status) return false
+  return !['issued', 'failed', 'disabled', 'waiting_ca'].includes(status)
+}
+
+// 编辑维持原口径：waiting_ca 期间仍锁定（后端 UpdateRule 的任务状态 SQL 守卫
+// 对 waiting_ca 仍 409，UI 先行拦截避免必败提交）。
+const isCertJobEditLocked = (status?: CertJobStatus) => {
   if (!status) return false
   return !['issued', 'failed', 'disabled'].includes(status)
 }
 
+const certJobStatusOf = (row: Rule): CertJobStatus | undefined =>
+  certJobMap.value[row.caddy_id]?.status
+
+// C-02：原「证书申请中…」文案在 waiting_ca（可达数小时）期间误导，
+// 冷却期改提示「不阻塞启停/删除、编辑仍锁定」。
+const certJobLockTooltip = (row: Rule, activeText: string): string => {
+  if (isReadOnly.value) return authStore.readOnlyMessage
+  if (certJobStatusOf(row) === 'waiting_ca') {
+    return 'CA 限流冷却中，不阻塞规则启停与删除（编辑暂锁定）'
+  }
+  return activeText
+}
+
 const canEditRule = (row: Rule) => {
+  if (isReadOnly.value) return false
+  if (row.tls_source === 'acme_dns' && isCertJobEditLocked(certJobMap.value[row.caddy_id]?.status)) {
+    return false
+  }
+  return true
+}
+
+const canDeleteRule = (row: Rule) => {
   if (isReadOnly.value) return false
   if (row.tls_source === 'acme_dns' && isCertJobActive(certJobMap.value[row.caddy_id]?.status)) {
     return false
@@ -1576,7 +1606,7 @@ const tlsTagLabel = (row: Rule) => {
 
 const isCurrentRuleLocked = computed(() => {
   if (!editingRule.value) return false
-  return editingRule.value.tls_source === 'acme_dns' && isCertJobActive(certJobMap.value[editingRule.value.caddy_id]?.status)
+  return editingRule.value.tls_source === 'acme_dns' && isCertJobEditLocked(certJobMap.value[editingRule.value.caddy_id]?.status)
 })
 
 const loading = ref(false)
@@ -1648,10 +1678,15 @@ const getHealthLabel = (status: HealthSummary) => {
   return '正常'
 }
 
+// LB-08：与后端 joinUpstreamAddress（net.JoinHostPort）同口径——IPv6 主机
+//（含 ':'）包方括号，健康详情键两侧一致（后端键为 "[::1]:80" 形态）。
+const hostPortKey = (host: string, port: number): string =>
+  host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`
+
 const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput) => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { healthy: false, unknown: true }
-  const upstreamKey = `${upstream.host}:${upstream.port}`
+  const upstreamKey = hostPortKey(upstream.host, upstream.port)
   const upstreamData = status.upstreams[upstreamKey]
   return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown, degraded: upstreamData.degraded } : { healthy: false, unknown: true, degraded: false }
 }
@@ -1659,7 +1694,7 @@ const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamIn
 const getUpstreamMetrics = (ruleId: string, upstream: Upstream | UpstreamInput) => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { num_requests: 0, fails: 0 }
-  const upstreamKey = `${upstream.host}:${upstream.port}`
+  const upstreamKey = hostPortKey(upstream.host, upstream.port)
   const upstreamData = status.upstreams[upstreamKey]
   return {
     num_requests: upstreamData?.num_requests || 0,
@@ -1688,7 +1723,7 @@ const fetchHealthStatus = async () => {
         let unknown = 0
         const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of enabledUpstreams) {
-          const upstreamKey = `${upstream.host}:${upstream.port}`
+          const upstreamKey = hostPortKey(upstream.host, upstream.port)
           let isHealthy = false
           let isUnknown = true
           let isDegraded = false
@@ -2529,9 +2564,9 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
-  // Round 38 I-4: 前端补全 health_check_timeout >= health_check_interval 关系校验（与后端 Round 37 I-6 对齐）。
-  if (wizardForm.enable_active_health_check
-      && wizardForm.health_check_interval > 0
+  // Round 38 I-4 / LB-18：health_check_timeout >= health_check_interval 校验——
+  // 与后端 validateRuleFeatures（Round 37 I-6）同口径，不区分主动/被动场景。
+  if (wizardForm.health_check_interval > 0
       && wizardForm.health_check_timeout > 0
       && wizardForm.health_check_timeout >= wizardForm.health_check_interval) {
     ElMessage.warning(`健康检查超时时间（${wizardForm.health_check_timeout} 秒）必须小于检查间隔（${wizardForm.health_check_interval} 秒）`)

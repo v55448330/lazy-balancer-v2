@@ -180,9 +180,10 @@ func TestBuildOpenAPIYAML_documents_operation_specific_contracts(t *testing.T) {
 	if _, exists := adminTLS.RequestBody.Content["multipart/form-data"]; !exists {
 		t.Fatal("admin TLS update request is not multipart/form-data")
 	}
+	// C-19（2026-09-06 裁定）：批量全量重签须显式 {"all":true} 确认，请求体不再可省略
 	issue := document.Paths["/certificates/issue"]["post"]
-	if issue.RequestBody.Required {
-		t.Fatal("certificate issue request body is incorrectly required")
+	if !issue.RequestBody.Required {
+		t.Fatal("certificate issue request body must be required")
 	}
 }
 

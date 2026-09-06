@@ -110,7 +110,9 @@
             </el-table-column>
             <el-table-column label="动作" width="80" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.action === 'block' ? 'danger' : 'warning'" size="small" effect="light">{{ row.action === 'block' ? '拦截' : '记录' }}</el-tag>
+                <!-- W2：三态映射与编辑器（拦截/仅记录/放行计分）语义对齐——
+                     pass 会累加异常分参与 949 评分拦截，与 log（仅记录）不可混示 -->
+                <el-tag :type="customActionView(row.action).type" size="small" effect="light">{{ customActionView(row.action).label }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="状态" width="80" align="center">
@@ -505,6 +507,17 @@ const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
 const savingRule = ref(false)
 const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], action: 'block', score: 5, enabled: true })
+
+// 自定义规则动作三态视图（W2）：block=拦截 / log=仅记录 / pass=放行计分，
+// 与编辑器 radio 及后端发射语义（pass 累加异常分、log 不累分）一一对应；
+// 未知动作兜底原样展示（info），不与任何已知语义混淆。
+const CUSTOM_ACTION_VIEWS: Record<string, { label: string; type: 'danger' | 'info' | 'warning' }> = {
+  block: { label: '拦截', type: 'danger' },
+  log: { label: '仅记录', type: 'info' },
+  pass: { label: '放行计分', type: 'warning' },
+}
+const customActionView = (action: string): { label: string; type: 'danger' | 'info' | 'warning' } =>
+  CUSTOM_ACTION_VIEWS[action] ?? { label: action || '—', type: 'info' }
 
 // —— 可复用 IP 地址列表（第三个标签页）——
 // 分类预设：与安全策略「提取为列表」共用同一组选项

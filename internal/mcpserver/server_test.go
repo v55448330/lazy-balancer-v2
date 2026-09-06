@@ -56,12 +56,18 @@ func TestCreateRuleToolForwardsBodyAndAPIKey(t *testing.T) {
 	}
 }
 
-func TestIssueCertificateSchemaAllowsEmptyOrCaddyIDWithOptionalDomain(t *testing.T) {
-	// Given
+func TestIssueCertificateSchemaRequiresExplicitAllOrCaddyID(t *testing.T) {
+	// Given：C-19 确认门——空 body（全量重签）不再放行，批量必须显式
+	// {"all":true}（enum 锁死 true，防 all:false 静默变成空批量）；定向
+	// 签发仍走 caddy_id（domain 可选）。
 	var schema struct {
+		Properties struct {
+			All struct {
+				Enum []bool `json:"enum"`
+			} `json:"all"`
+		} `json:"properties"`
 		OneOf []struct {
-			Required      []string `json:"required"`
-			MaxProperties *int     `json:"maxProperties"`
+			Required []string `json:"required"`
 		} `json:"oneOf"`
 	}
 
@@ -71,8 +77,11 @@ func TestIssueCertificateSchemaAllowsEmptyOrCaddyIDWithOptionalDomain(t *testing
 	}
 
 	// Then
-	if len(schema.OneOf) != 2 || schema.OneOf[0].MaxProperties == nil || *schema.OneOf[0].MaxProperties != 0 || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id" {
+	if len(schema.OneOf) != 2 || strings.Join(schema.OneOf[0].Required, ",") != "all" || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id" {
 		t.Fatalf("oneOf=%+v", schema.OneOf)
+	}
+	if len(schema.Properties.All.Enum) != 1 || !schema.Properties.All.Enum[0] {
+		t.Fatalf("all enum=%v, want [true]", schema.Properties.All.Enum)
 	}
 }
 
@@ -130,9 +139,9 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	// 53 = 对只读 Key 可见的 GET 工具数（export_config 属 GET 但被 readOnlyHiddenTools 隐藏——HTTP 层只读 Key 403），写工具被只读可见性收敛隐藏
-	if len(payload.Result.Tools) != 53 {
-		t.Fatalf("read-only tool count=%d, want 53", len(payload.Result.Tools))
+	// 54 = 对只读 Key 可见的 GET 工具数（export_config 属 GET 但被 readOnlyHiddenTools 隐藏——HTTP 层只读 Key 403），写工具被只读可见性收敛隐藏
+	if len(payload.Result.Tools) != 54 {
+		t.Fatalf("read-only tool count=%d, want 54", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {
@@ -468,4 +477,249 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+func TestUpdateRuleToolInjectsDefaultUpstreamEnabled(t *testing.T) {
+	// Given：update_rule 与 create_rule 同为 upstreams 全量替换入口——载荷缺省
+	// enabled 时 MCP 层须注入默认 true（对齐 create_rule），显式 false 保留。
+	var forwardedUpstreams []any
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/rules/lb_upsert" {
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		forwardedUpstreams = body["upstreams"].([]any)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"Rule updated"}`))
+	}))
+	defer rest.Close()
+
+	handler := New(rest.URL+"/api/v1", rest.Client())
+
+	// When
+	response := callTool(t, handler, "update_rule", `{"caddy_id":"lb_upsert","upstreams":[{"host":"127.0.0.1","port":9000},{"host":"127.0.0.2","port":9001,"enabled":false}]}`)
+
+	// Then
+	if !strings.Contains(response, "Rule updated") {
+		t.Fatalf("response=%s", response)
+	}
+	if len(forwardedUpstreams) != 2 {
+		t.Fatalf("forwarded upstreams=%v", forwardedUpstreams)
+	}
+	defaulted, ok := forwardedUpstreams[0].(map[string]any)
+	if !ok {
+		t.Fatalf("forwarded upstreams[0]=%v", forwardedUpstreams[0])
+	}
+	if enabled, ok := defaulted["enabled"].(bool); !ok || !enabled {
+		t.Fatalf("upstreams[0].enabled=%v, want injected true", defaulted["enabled"])
+	}
+	explicit, ok := forwardedUpstreams[1].(map[string]any)
+	if !ok {
+		t.Fatalf("forwarded upstreams[1]=%v", forwardedUpstreams[1])
+	}
+	if enabled, ok := explicit["enabled"].(bool); !ok || enabled {
+		t.Fatalf("upstreams[1].enabled=%v, want preserved false", explicit["enabled"])
+	}
+}
+
+func TestForwardFormatsLargeIntegerPathArgumentsWithoutExponent(t *testing.T) {
+	// Given：JSON 数值参数反序列化为 float64，路径替换若用 fmt.Sprint 则
+	// 1000000 输出 "1e+06"（科学计数法），REST 端 Atoi 失败 400——路径参数
+	// 必须与 query 参数同样经 scalarString 归一为十进制整数串。
+	var forwardedPath string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer rest.Close()
+
+	// When：以数值 1000000 作路径参数调用 retry_cert_job
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "retry_cert_job", `{"id":1000000}`)
+
+	// Then：转发 URL 含 /1000000/ 而非 /1e+06/
+	if forwardedPath != "/api/v1/certificates/jobs/1000000/retry" {
+		t.Fatalf("forwarded path=%q, want /api/v1/certificates/jobs/1000000/retry", forwardedPath)
+	}
+}
+
+func TestGetRuleMetricsHistoryForwardsRangeQuery(t *testing.T) {
+	// Given：REST 侧 metricsHistoryRange 支持 1h/6h/24h/7d（默认 24h）——工具
+	// 须把 range 透传为 query 参数；未传时不得携带（由 REST 侧默认）。
+	var forwardedQueries []string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedQueries = append(forwardedQueries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer rest.Close()
+	handler := New(rest.URL+"/api/v1", rest.Client())
+
+	// When：带 range=7d 与不带 range 各调用一次
+	callTool(t, handler, "get_rule_metrics_history", `{"caddy_id":"lb_metrics","range":"7d"}`)
+	callTool(t, handler, "get_rule_metrics_history", `{"caddy_id":"lb_metrics"}`)
+
+	// Then
+	if len(forwardedQueries) != 2 {
+		t.Fatalf("forwarded requests=%d, want 2 (schema must accept range)", len(forwardedQueries))
+	}
+	if forwardedQueries[0] != "range=7d" {
+		t.Fatalf("forwarded query=%q, want range=7d", forwardedQueries[0])
+	}
+	if forwardedQueries[1] != "" {
+		t.Fatalf("forwarded query=%q, want empty (no range key when omitted)", forwardedQueries[1])
+	}
+}
+
+func TestOversizedResponseMessageDistinguishesExportConfig(t *testing.T) {
+	// Given：内部 API 返回超过 4 MiB——export_config 无分页参数也无专用导出
+	// 工具，通用文案「改用分页或专用导出工具」对它是死路指引，须给专用文案。
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxResponseSize+1))
+	}))
+	defer rest.Close()
+	handler := New(rest.URL+"/api/v1", rest.Client())
+
+	// When
+	exportResult := callTool(t, handler, "export_config", `{}`)
+	otherResult := callTool(t, handler, "issue_certificate", `{}`)
+
+	// Then：export_config 得面板/REST 指引，其余工具维持通用分页指引
+	if !strings.Contains(exportResult, "配置过大") || !strings.Contains(exportResult, "/config/export") {
+		t.Fatalf("export_config result=%s, want dedicated oversized-backup message", exportResult)
+	}
+	if strings.Contains(exportResult, "请改用分页或专用导出工具") {
+		t.Fatalf("export_config result must not carry generic pagination hint: %s", exportResult)
+	}
+	if !strings.Contains(otherResult, "请改用分页或专用导出工具") {
+		t.Fatalf("other tool result=%s, want generic oversized message retained", otherResult)
+	}
+}
+
+func TestAddIPToListToolForwardsValue(t *testing.T) {
+	// Given：安全事件处置用单条追加（幂等）——id 进路径、value 进 body
+	var receivedMethod, receivedPath, receivedBody string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"added":true}}`))
+	}))
+	defer rest.Close()
+
+	// When
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "add_ip_to_list", `{"id":9,"value":"203.0.113.7"}`)
+
+	// Then
+	if receivedMethod != http.MethodPost || receivedPath != "/api/v1/security/ip-lists/9/ips" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+	if receivedBody != `{"value":"203.0.113.7"}` {
+		t.Fatalf("body=%s, want value only (id belongs to path)", receivedBody)
+	}
+}
+
+func TestForgetClusterPinsToolForwardsEmptyBody(t *testing.T) {
+	// Given/When/Then：从节点 PinMismatch 自救，POST 空体
+	var receivedMethod, receivedPath string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"ok"}`))
+	}))
+	defer rest.Close()
+
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "forget_cluster_pins", `{}`)
+
+	if receivedMethod != http.MethodPost || receivedPath != "/api/v1/cluster/forget-pins" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+}
+
+func TestForgetClusterNodePinToolForwardsPathID(t *testing.T) {
+	// Given/When/Then：主节点侧单节点重钉，id 整型进路径
+	var receivedMethod, receivedPath string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"ok"}`))
+	}))
+	defer rest.Close()
+
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "forget_cluster_node_pin", `{"id":7}`)
+
+	if receivedMethod != http.MethodPost || receivedPath != "/api/v1/cluster/nodes/7/forget-pin" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+}
+
+func TestControlClusterNodeServiceToolForwardsAction(t *testing.T) {
+	// Given：主节点遥控从节点服务，action 进 body（enum 与后端
+	// IsValidClusterServiceAction 支持集一致）
+	var receivedMethod, receivedPath, receivedBody string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"Caddy 已重启"}`))
+	}))
+	defer rest.Close()
+
+	// When
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "control_cluster_node_service", `{"id":7,"action":"restart_caddy"}`)
+
+	// Then
+	if receivedMethod != http.MethodPost || receivedPath != "/api/v1/cluster/nodes/7/service" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+	if receivedBody != `{"action":"restart_caddy"}` {
+		t.Fatalf("body=%s, want action only", receivedBody)
+	}
+}
+
+func TestResetUserMFAToolForwardsCode(t *testing.T) {
+	// Given：管理员重置用户 MFA——后端 ShouldBindJSON 必须收到 body，
+	// code 为操作者自己的动态验证码（操作者未启用 MFA 时传空串）
+	var receivedMethod, receivedPath, receivedBody string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"已重置用户 MFA"}`))
+	}))
+	defer rest.Close()
+
+	// When
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "reset_user_mfa", `{"id":7,"code":"123456"}`)
+
+	// Then
+	if receivedMethod != http.MethodPost || receivedPath != "/api/v1/users/7/mfa/reset" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+	if receivedBody != `{"code":"123456"}` {
+		t.Fatalf("body=%s, want code only", receivedBody)
+	}
+}
+
+func TestGetCRSRuleIndexToolForwardsReadOnly(t *testing.T) {
+	// Given/When/Then：CRS 结构化规则索引，GET 无 query 参数
+	var receivedMethod, receivedPath, receivedQuery string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath, receivedQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"version":"v4.28.0","rules":[]}}`))
+	}))
+	defer rest.Close()
+
+	callTool(t, New(rest.URL+"/api/v1", rest.Client()), "get_crs_rule_index", `{}`)
+
+	if receivedMethod != http.MethodGet || receivedPath != "/api/v1/security/crs/rule-index" || receivedQuery != "" {
+		t.Fatalf("request=%s %s query=%q", receivedMethod, receivedPath, receivedQuery)
+	}
 }

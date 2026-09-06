@@ -147,7 +147,7 @@ func stopCaddy(adminURL string) error {
 func (h *Handlers) GetConfig(c *gin.Context) {
 	var cfg models.GlobalConfig
 	err := db.DB.QueryRow(`
-		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
+		SELECT id, caddy_config, dns_provider,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
 		       COALESCE(cert_renewal_days,30) as cert_renewal_days,
 		       COALESCE(cert_renewal_attempts,5) as cert_renewal_attempts,
@@ -184,7 +184,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
 	`).Scan(
-		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
+		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider,
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel,
 		&cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
@@ -197,11 +197,10 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取全局配置失败: " + err.Error()})
 		return
 	}
-	// R72 二十六次 D4：DNS 凭证最小可见性——非 admin 响应以掩码占位。
-	// UpdateConfig 侧对掩码值按「未提交」处理（保持原值），回传保存不破坏凭证。
-	if role, _ := c.Get("role"); role != "admin" && cfg.DNSCredentials != "" {
-		cfg.DNSCredentials = maskedDNSCredentialsSentinel
-	}
+	// C-03（2026-09-05 证书域审计裁定）：global_config.dns_credentials 为遗留字段
+	// （签发链唯一凭证来源是 certificate_configs.dns_credentials，前端零消费，
+	// v1/v2 导入走 DB 直读不受影响），GET /config 不再返回其值，恒为空串。
+	// UpdateConfig 写路径与集群快照同步保留不动（v1 导入兼容）。
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }

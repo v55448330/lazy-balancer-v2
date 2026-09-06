@@ -86,7 +86,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"POST /api/v1/cluster/nodes/:id/reject",
 		"POST /api/v1/cluster/nodes/:id/login-ticket",
 		"PUT /api/v1/cluster/nodes/:id/access-url",
-		"POST /api/v1/cluster/nodes/:id/service",
+		"POST /api/v1/cluster/nodes/:id/forget-pin",
 		"DELETE /api/v1/cluster/nodes/:id",
 		"POST /api/v1/cluster/mode",
 		"POST /api/v1/cluster/promote",

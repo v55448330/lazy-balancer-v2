@@ -135,7 +135,9 @@ func TestCleanupMetricsHistory_loopsAcrossBatches(t *testing.T) {
 	}
 }
 
-func TestInitialize_adds_metrics_retention_and_composite_indexes(t *testing.T) {
+func TestInitialize_omitsMetricsRetentionColumnAndAddsCompositeIndexes(t *testing.T) {
+	// S-7（2026-09-06 裁定）：指标保留期改用 audit_retention_months，
+	// metrics_retention_days 死列不再建（随迁移删除）；复合索引契约保留。
 	// Given
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
 	if err := Initialize(t.TempDir()); err != nil {
@@ -147,14 +149,14 @@ func TestInitialize_adds_metrics_retention_and_composite_indexes(t *testing.T) {
 	})
 
 	// When
-	var retentionDays int
-	if err := DB.QueryRow("SELECT metrics_retention_days FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
-		t.Fatalf("read metrics retention: %v", err)
+	var retentionColumn int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_retention_days'").Scan(&retentionColumn); err != nil {
+		t.Fatalf("inspect global_config schema: %v", err)
 	}
 
 	// Then
-	if retentionDays != 7 {
-		t.Fatalf("metrics retention days=%d, want 7", retentionDays)
+	if retentionColumn != 0 {
+		t.Fatalf("metrics_retention_days column count=%d, want 0（死列不得再建）", retentionColumn)
 	}
 	for _, index := range []struct {
 		database *sql.DB

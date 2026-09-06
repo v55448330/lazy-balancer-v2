@@ -41,7 +41,11 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		// 重置后在从节点仍可用）。记账三列（last_timestep/failed_attempts/
 		// locked_until）不补——它们经 R72 F-3 的哈希清零已不参与漂移判定，补了
 		// 反而让从节点本地登录 bump 版本引发无谓重放。pending 不跨节点不补。
-		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes"},
+		// SC-4 修订：login_locked_until 入 OF 列表——主端置锁/解锁 UPDATE 即 bump
+		// cluster_version，快照缓存重建、locked_users 当周期下发（否则锁只在下次
+		// 无关变更时才传播）。仅失败计数（login_failed_attempts）不入列：普通失败
+		// 不产生版本抖动；从端本地写由 WHEN is_master=1 守卫排除。
+		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes,login_locked_until"},
 		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
 		{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 		{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},

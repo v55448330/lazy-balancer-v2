@@ -100,7 +100,9 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		dataDir = h.cfg.DataDir
 	}
 
-	retentionNote := "每日自动清理，保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
+	// S-7（2026-09-06 裁定）：指标历史保留期与操作/运行/安全事件同用「日志保留」
+	//（audit_retention_months）——提示文案补齐指标历史，三链对齐。
+	retentionNote := "每日自动清理（操作/运行/安全事件/指标历史），保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
 	caddyLimit := sizeLimitMB("caddy_log_size_mb", 100)
 
 	infos := []LogStorageInfo{

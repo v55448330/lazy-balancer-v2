@@ -81,6 +81,9 @@ func NewCAProviderService(dataDir ...string) *CAProviderService {
 }
 
 // ListCAProviders returns all CA providers with actual credentials.
+// CA 凭证（含 ZeroSSL EAB）对全体登录用户明文可读为 2026-09-05 用户裁定口径
+// （所有登录用户至少全局只读、内部可信）；勿按 DNS 凭证掩码口径「修复」——
+// DNS 掩码（R72 D4）与 CA 明文并存是有意差异。
 func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 	rows, err := db.DB.Query("SELECT " + caProviderColumns + " FROM ca_providers ORDER BY id")
 	if err != nil {
@@ -109,6 +112,8 @@ func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 }
 
 // GetCAProvider returns a CA provider by ID, including credentials.
+// 凭证明文可读口径同 ListCAProviders：2026-09-05 用户裁定，全员可读、仅
+// admin 可写（写侧收敛见路由分组），与 DNS 凭证掩码（R72 D4）为有意差异。
 func (s *CAProviderService) GetCAProvider(id int) (models.CAProvider, error) {
 	var p models.CAProvider
 	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=?", id), &p)
@@ -356,8 +361,10 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 	return nil
 }
 
-// maskEmail 脱敏邮箱地址：保留首字符与域名，中间用 *** 替代。
-// 例如：admin@example.com → a***@example.com
+// maskEmail 脱敏邮箱地址（C-08，2026-09-05 证书域审计：注释此前与实现不符）。
+// 三分支真实行为：@ 前缀长度 >3 时保留前两个字符与域名（ad***@example.com）；
+// @ 前缀过短（at<=3，如 ab@x.cn）时仅保留域名、连首字符也不保留（***@x.cn）；
+// 无 @ 或 @ 恰在首/尾时整体 ***。
 func maskEmail(email string) string {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {

@@ -24,7 +24,7 @@
             <el-text type="info" size="small" class="tip-block">MB，证书签发 / CRS / IP 库更新日志轮转阈值，保留 5 份（建议 10-50）</el-text>
           </el-form-item>
           <el-form-item label="审计日志大小">
-            <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
+          <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="512" controls-position="right" style="width: 120px;" />
             <el-text type="info" size="small" class="tip-inline">MB，WAF 审计日志轮转阈值（建议 10-100）</el-text>
           </el-form-item>
           <el-form-item label="运行日志大小">

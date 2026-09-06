@@ -24,8 +24,9 @@ const ip2RegionRepoSlug = "lionsoul2014/ip2region"
 var ip2RegionLatestReleaseAPIURL = "https://api.github.com/repos/lionsoul2014/ip2region/releases/latest"
 
 // defaultFetchIP2RegionLatestTag 查询 ip2region 最新版本：先直连
-// api.github.com（快路径不变），仅在传输类失败（Do() 错误、5xx、读体中断）
-// 时经 ghfast 代理回退查询；4xx 与 tag 解析失败不重试。两路均失败时错误同时
+// api.github.com（快路径不变），仅在 403 限流与传输类失败（Do() 错误、5xx、
+// 读体中断）时经 GitHub 加速代理（github_proxy_url 白名单）回退查询
+// releases/latest 页面；其余 4xx 与 tag 解析失败不重试。两路均失败时错误同时
 // 点名两个尝试过的 URL（R57，口径同 defaultFetchCRSLatestTag）。
 func defaultFetchIP2RegionLatestTag(ctx context.Context) (string, error) {
 	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, ip2RegionHTTPClient, ip2RegionLatestReleaseAPIURL)

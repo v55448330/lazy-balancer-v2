@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -136,10 +137,22 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	// Get the actual route object from Caddy via @id
-	caddyActualConfig, err := h.caddyService.GetConfigByID(r.CaddyID)
+	// LB-13：一次读取运行配置，按 @id 归属收集本规则的全部路由——主路由
+	// （@id == caddyID，与原 GetConfigByID 同源）与兄弟路由（caddyID_ 前缀：
+	// 自定义路由渲染的 caddyID_path_N、GeoIP pass 的 caddyID_geoip、
+	// HTTP→HTTPS 跳转的 caddyID_redirect）。启用自定义路由的规则此前只返回
+	// 主路由对象，配置查看对话框拿到的 JSON 缺路径路由。
+	runtimeConfig, err := h.caddyService.GetConfig()
 	if err != nil {
 		log.Printf("GetRuleCaddyConfig: failed to get config from Caddy for caddy_id=%s: %v", r.CaddyID, err)
+		responseData["config"] = nil
+		responseData["config_not_exists"] = true
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
+		return
+	}
+	mainRoute, allRuleRoutes := ruleCaddyRoutes(runtimeConfig, r.CaddyID)
+	if mainRoute == nil {
+		log.Printf("GetRuleCaddyConfig: route %s not found in running config", r.CaddyID)
 		responseData["config"] = nil
 		responseData["config_not_exists"] = true
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
@@ -153,7 +166,8 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort, r.Domain)
 
 	responseData["config"] = map[string]interface{}{
-		"route":                   caddyActualConfig,
+		"route":                   mainRoute,
+		"routes":                  allRuleRoutes,
 		"server_context":          ruleContext["server"],
 		"tls_certificates":        ruleContext["tls_certificates"],
 		"tls_connection_policies": ruleContext["tls_connection_policies"],
@@ -333,6 +347,50 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 	return result
 }
 
+// ruleCaddyRoutes 从运行配置收集归属该规则的全部路由（LB-13）：遍历 http 与
+// layer4 两个 app 的全部 server，按 services.RouteIDBelongsToRule（与
+// DeleteRouteByID 临时路由清理同口径）识别主路由（@id == caddyID）与兄弟路由
+// （caddyID_path_N / caddyID_geoip / caddyID_redirect）。同一 server 内保持
+// 运行顺序；跨 server（如 80 端口跳转路由）顺序不保证。
+func ruleCaddyRoutes(full map[string]interface{}, caddyID string) (main map[string]interface{}, all []interface{}) {
+	apps, _ := full["apps"].(map[string]interface{})
+	if apps == nil {
+		return nil, nil
+	}
+	collect := func(routesRaw interface{}) {
+		routes, _ := routesRaw.([]interface{})
+		for _, routeVal := range routes {
+			route, _ := routeVal.(map[string]interface{})
+			if route == nil {
+				continue
+			}
+			routeID, _ := route["@id"].(string)
+			if routeID == "" || !services.RouteIDBelongsToRule(routeID, caddyID) {
+				continue
+			}
+			if routeID == caddyID {
+				main = route
+			}
+			all = append(all, route)
+		}
+	}
+	for _, appName := range []string{"http", "layer4"} {
+		app, _ := apps[appName].(map[string]interface{})
+		if app == nil {
+			continue
+		}
+		servers, _ := app["servers"].(map[string]interface{})
+		for _, serverVal := range servers {
+			server, _ := serverVal.(map[string]interface{})
+			if server == nil {
+				continue
+			}
+			collect(server["routes"])
+		}
+	}
+	return main, all
+}
+
 // scopedTLSConnectionPolicies 只保留属于当前规则的连接策略：
 // certificate_selection.any_tag 携带本规则 caddyID，或 match.sni 与规则规范域名相交。
 func scopedTLSConnectionPolicies(raw interface{}, caddyID string, domain string) []interface{} {
@@ -461,6 +519,41 @@ func validateRuleListenPort(protocol string, port int) error {
 		return fmt.Errorf("端口 %d 为 HTTP/HTTPS 保留端口", port)
 	}
 	return nil
+}
+
+// validateRuleListenPortForSave 在包级 validateRuleListenPort（范围/默认管理口
+// 8000/2019/TCP 80/443 保留）之上，叠加本进程实际管理端口校验（LB-03）：管理
+// 面板 HTTP/HTTPS 监听口（cfg.Port——admin TLS 与面板同一监听口，见
+// cmd/server/main.go）与 Caddy admin API 端口（cfg.CaddyAdminURL 解析）。此前
+// 仅硬编码 8000/2019，部署自定义端口（config 文件 port / caddy_admin_url）时
+// 规则可抢占面板端口导致管理面失联。导入链（config_backup/config_import_v1）
+// 仍走包级默认口径。
+func (h *Handlers) validateRuleListenPortForSave(protocol string, port int) error {
+	if err := validateRuleListenPort(protocol, port); err != nil {
+		return err
+	}
+	if port == h.adminPanelListenPort() || port == h.caddyAdminListenPort() {
+		return fmt.Errorf("端口 %d 为管理端口，不可使用", port)
+	}
+	return nil
+}
+
+func (h *Handlers) adminPanelListenPort() int {
+	if h.cfg != nil && h.cfg.Port >= 1 && h.cfg.Port <= 65535 {
+		return h.cfg.Port
+	}
+	return 8000
+}
+
+func (h *Handlers) caddyAdminListenPort() int {
+	if h.cfg != nil && h.cfg.CaddyAdminURL != "" {
+		if parsed, err := url.Parse(h.cfg.CaddyAdminURL); err == nil {
+			if port, err := strconv.Atoi(parsed.Port()); err == nil && port >= 1 && port <= 65535 {
+				return port
+			}
+		}
+	}
+	return 2019
 }
 
 func enabledRuleDomainConflict(domain string, listenPort int, excludeCaddyID string) (bool, error) {
@@ -633,7 +726,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.DnsFamily = "ipv4"
 	}
 
-	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
+	if err := h.validateRuleListenPortForSave(req.Protocol, req.ListenPort); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -794,6 +887,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 	}()
 
+	// LB-01：enabled 指针化落库——缺省=创建即启用（历史行为），显式 false=禁用
+	//（UI 复制向导按预览「禁用」态创建副本）。
+	enabledVal := 1
+	if req.Enabled != nil && !*req.Enabled {
+		enabledVal = 0
+	}
+
 	_, err = tx.Exec(`
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
@@ -813,7 +913,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
-		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
+		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, enabledVal, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
 
 	if err != nil {
 		tx.Rollback()
@@ -995,7 +1095,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
+			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
@@ -1097,20 +1197,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.HealthCheckTimeout == 0 {
 		req.HealthCheckTimeout = existingRule.HealthCheckTimeout
 	}
-	if req.HealthCheckUnhealthyThreshold == 0 {
-		req.HealthCheckUnhealthyThreshold = existingRule.HealthCheckUnhealthyThreshold
+	// LB-02（M16 口径）：nil=沿用存量，显式 0=真实零值（0=不重试/默认间隔/
+	// 跟随上游端口均有消费语义，此前非指针合并使显式清零永不可达）。
+	if req.TCPHealthCheckPort == nil {
+		req.TCPHealthCheckPort = &existingRule.TCPHealthCheckPort
 	}
-	if req.HealthCheckHealthyThreshold == 0 {
-		req.HealthCheckHealthyThreshold = existingRule.HealthCheckHealthyThreshold
+	if req.TCPTryDuration == nil {
+		req.TCPTryDuration = &existingRule.TCPTryDuration
 	}
-	if req.TCPHealthCheckPort == 0 {
-		req.TCPHealthCheckPort = existingRule.TCPHealthCheckPort
-	}
-	if req.TCPTryDuration == 0 {
-		req.TCPTryDuration = existingRule.TCPTryDuration
-	}
-	if req.TCPTryInterval == 0 {
-		req.TCPTryInterval = existingRule.TCPTryInterval
+	if req.TCPTryInterval == nil {
+		req.TCPTryInterval = &existingRule.TCPTryInterval
 	}
 	if req.RequestBodyMaxSizeMB == nil {
 		req.RequestBodyMaxSizeMB = &existingRule.RequestBodyMaxSizeMB
@@ -1202,10 +1298,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
 		case "http":
-			req.TCPHealthCheckPort = 0
+			// LB-02：TCP 三字段已指针化，切回 http 时以显式零指针清理。
+			req.TCPHealthCheckPort = &zero
 			req.TCPProxyProtocol = &disabled
-			req.TCPTryDuration = 0
-			req.TCPTryInterval = 0
+			req.TCPTryDuration = &zero
+			req.TCPTryInterval = &zero
 		}
 	}
 	// R62 C2-N1: 最终协议为 tcp 时一律归一 TLS 字段（与上方切换到 TCP 的分支同
@@ -1376,7 +1473,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// ——TCP 候选 server 名含端口，validate 经 /load 真实加载会把同端口启用中规则 B
 	// 的 server 替换为候选（跨规则流量顶替），此前端口冲突在 validate 之后才拒绝且
 	// 无运行配置恢复。前移后该场景在副作用发生前拦截。
-	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
+	if err := h.validateRuleListenPortForSave(req.Protocol, req.ListenPort); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -1438,13 +1535,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "enable_active_health_check = ?, "
 	args = append(args, *req.EnableActiveHealthCheck)
 	query += "tcp_health_check_port = ?, "
-	args = append(args, req.TCPHealthCheckPort)
+	args = append(args, *req.TCPHealthCheckPort)
 	query += "tcp_proxy_protocol = ?, "
 	args = append(args, *req.TCPProxyProtocol)
 	query += "tcp_try_duration = ?, "
-	args = append(args, req.TCPTryDuration)
+	args = append(args, *req.TCPTryDuration)
 	query += "tcp_try_interval = ?, "
-	args = append(args, req.TCPTryInterval)
+	args = append(args, *req.TCPTryInterval)
 	query += "request_body_max_size_mb = ?, "
 	args = append(args, *req.RequestBodyMaxSizeMB)
 	query += "upstream_keepalive_timeout = ?, "

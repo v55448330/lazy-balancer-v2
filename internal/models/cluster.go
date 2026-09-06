@@ -234,6 +234,16 @@ type ClusterUser struct {
 	// pending 密钥不跨节点（绑定向导是节点本地交互；半途切换面板属可重做流程）。
 }
 
+// ClusterLockedUser 是主节点活跃登录锁的同步载荷（SC-4 修订）：主节点账号被锁
+// 状态必须传播到从节点（从节点本地锁定独立生效）。走快照独立顶层载荷
+// locked_users 而非 users 节列——login_* 不在 users 触发器快照列/节哈希/漂移
+// 守卫内，避免每次登录失败触发 users/api_keys 全量重放与漂移循环。只携带
+// 未来时间的活跃锁（与 loginLockedNow 同口径），自然过期后条目自动从快照消失。
+type ClusterLockedUser struct {
+	Username    string `json:"username"`
+	LockedUntil string `json:"locked_until"`
+}
+
 type ClusterAPIKey struct {
 	ID             int          `json:"id"`
 	Name           string       `json:"name"`
@@ -297,6 +307,11 @@ type ClusterSnapshot struct {
 	// MasterSyncSwitches 为主节点五类同步开关，随快照下发；从节点跳过判定
 	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。
 	MasterSyncSwitches *ClusterSyncSwitchesPayload `json:"master_sync_switches,omitempty"`
+	// LockedUsers（SC-4 修订）：主节点活跃登录锁，独立顶层载荷——不参与任何
+	// 节哈希/漂移守卫（避免登录失败触发 users 全量重放）；从端只延长不清除。
+	// 加性可选字段、omitempty：旧主端缺省 → 从端 no-op；旧从端忽略未知字段
+	// （先例：MasterSyncSwitches/WafFiles），故不 bump CurrentSnapshotSchema。
+	LockedUsers []ClusterLockedUser `json:"locked_users,omitempty"`
 }
 
 type ClusterSyncSwitchesPayload struct {

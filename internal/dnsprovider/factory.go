@@ -9,7 +9,9 @@ import (
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
 )
 
-// DNSCredentials is the unified credential envelope stored in global_config.dns_credentials.
+// DNSCredentials is the unified credential envelope. 真实存储位置是
+// certificate_configs.dns_credentials（global_config.dns_credentials 为已停用的
+// 遗留字段，2026-09-05 证书域审计 C-03 核实签发链无消费方）。
 type DNSCredentials struct {
 	Mode      string `json:"mode"` // "dnspod" or "tencent"
 	APIToken  string `json:"api_token,omitempty"`
