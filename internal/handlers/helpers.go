@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -49,18 +48,6 @@ var connectionStatsCache struct {
 	sync.Mutex
 	stats     models.ConnectionStats
 	expiresAt time.Time
-}
-
-func generateRandomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	for i := range b {
-		b[i] = letters[int(b[i])%len(letters)]
-	}
-	return string(b)
 }
 
 type CertificateInfo struct {

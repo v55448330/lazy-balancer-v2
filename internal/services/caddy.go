@@ -400,30 +400,6 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	return payload
 }
 
-func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) {
-	req, err := http.NewRequest("GET", s.adminURL+"/id/"+id, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("get config failed: %s", string(readCaddyErrorBody(resp.Body)))
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
-}
-
 func isRunningDefaultRoute(route map[string]interface{}) bool {
 	handlers, ok := route["handle"].([]interface{})
 	if !ok || len(handlers) == 0 {
