@@ -55,6 +55,35 @@ The complete five-layer guide — kernel/container, load balancing, WAF, HTTP/3/
 - **WAF**: run `detection` mode for 3–7 days before switching to `blocking`; trim CRS by attack group; handle false positives via CRS exclusions/custom allow rules rather than lowering thresholds; rate-limit per rule (small buckets on login endpoints)
 - **Observability**: `caddy_log_level=warn`, audit retention per compliance (1–12 months), disable per-rule access logs on high-QPS rules and rely on metrics
 
+### Ready-to-use sysctl config (optional, symptom-driven)
+
+Save as `/etc/sysctl.d/99-lazy-balancer.conf` on the host, then run `sudo sysctl --system`:
+
+```conf
+# HTTP/3 (QUIC/UDP) socket buffers — clears the startup receive-buffer warning;
+# prevents UDP packet loss for high-bandwidth h3
+net.core.rmem_max = 7500000
+net.core.wmem_max = 7500000
+
+# TCP accept backlog — prevents dropped connections under bursty new-connection
+# loads (stock default is 128)
+net.core.somaxconn = 4096
+
+# Ephemeral port range for outbound connections to upstreams — widen when
+# concurrent connections to a single upstream approach ~28k
+net.ipv4.ip_local_port_range = 10000 65535
+
+# Connection tracking table for published-port (bridge/NAT) mode; not in the
+# data path with --network host, so it can be omitted there
+net.netfilter.nf_conntrack_max = 262144
+```
+
+> To repeat: all of the above is optional — stock Ubuntu defaults are production-ready.
+> The only required item is the process fd limit (`--ulimit nofile=1048576:1048576`,
+> already built into the bundled compose file). Verify with `sysctl net.core.rmem_max`
+> (should read 7500000) and confirm the receive-buffer warning no longer appears in
+> container startup logs after a restart.
+
 Every config write passes four validity gates (frontend → backend field validation → caddy CLI validation → in-transaction apply): invalid values are rejected with a 400 and never committed; running rules and policies are never disturbed.
 
 ## Mounted Directories

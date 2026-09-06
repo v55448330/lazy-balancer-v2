@@ -54,7 +54,29 @@ docker run -d --name lazy-balancer --network host \
 - **WAF**：`detection` 观察 3–7 天再切 `blocking`；CRS 按攻击组裁剪；误报优先用 CRS 排除/自定义放行而非降阈值；限流按规则粒度（登录端点小桶）
 - **观测**：`caddy_log_level=warn`、审计保留按合规（1–12 月）、高 QPS 规则关闭访问日志靠指标观测
 
-所有配置写入均受四道合法性关卡保护（前端校验 → 后端字段校验 → caddy CLI 校验 → 事务内应用门控）：非法值 400 拒绝且不落库，运行中的规则与策略零扰动。
+
+### 可直接使用的 sysctl 配置（可选，症状驱动）
+
+保存为宿主机 `/etc/sysctl.d/99-lazy-balancer.conf` 并执行 `sudo sysctl --system`：
+
+```conf
+# HTTP/3（QUIC/UDP）收发缓冲——消除启动期 receive buffer 警告，高带宽 h3 防丢包
+net.core.rmem_max = 7500000
+net.core.wmem_max = 7500000
+
+# TCP accept 积压队列——突发大量新建连接时防丢连（默认 128）
+net.core.somaxconn = 4096
+
+# 负载均衡到上游的出站临时端口范围——单上游并发逼近 ~2.8 万时扩大
+net.ipv4.ip_local_port_range = 10000 65535
+
+# 发布端口（bridge/NAT）模式下的连接跟踪表；host 模式不走 NAT 可省略
+net.netfilter.nf_conntrack_max = 262144
+```
+
+> 再次强调：以上全部可选，默认 Ubuntu 内核可直接跑生产；唯一必选项是进程 fd 上限
+> （`--ulimit nofile=1048576:1048576`，compose 已内置）。验证：
+> `sysctl net.core.rmem_max` 应为 7500000，重启容器后启动日志不再出现 receive buffer 警告。
 
 ## 挂载目录
 
