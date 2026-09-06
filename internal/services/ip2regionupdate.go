@@ -249,6 +249,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	memSwitched := installErr == nil
 	if reloadErr == nil {
 		reloadErr = m.reloader()
+		recordSystemReloadAudit("ip2region_update", reloadErr)
 	}
 	if reloadErr != nil {
 		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径，R39 1.2）：reloader 失败
@@ -268,7 +269,9 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 			m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
 			return
 		case restored:
-			if rErr := m.reloader(); rErr != nil {
+			rErr := m.reloader()
+			recordSystemReloadAudit("ip2region_update", rErr)
+			if rErr != nil {
 				log.Printf("ip2region update: reload after rollback failed: %v", rErr)
 			}
 			if errors.Is(reloadErr, errIP2RegionReload) {
@@ -502,7 +505,9 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 // 重启前无任何可见痕迹。
 func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr, rbErr error, memSwitched bool) {
 	warn := ""
-	if rErr := m.reloader(); rErr != nil {
+	rErr := m.reloader()
+	recordSystemReloadAudit("ip2region_update", rErr)
+	if rErr != nil {
 		log.Printf("ip2region update: fail-open reload retry failed: %v", rErr)
 		warn = fmt.Sprintf("已生效，但重载 Caddy 配置失败: %v（Caddy 侧待下次重载生效）", reloadErr)
 	} else {

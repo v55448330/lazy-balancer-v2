@@ -251,6 +251,9 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 }
 
 func (h *Handlers) CreateIPList(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var req models.CreateIPListRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
@@ -304,6 +307,9 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateIPList(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	var req models.UpdateIPListRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -372,6 +378,9 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteIPList(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	// 引用检查与删除同事务（镜像 DeleteSecurityBlockPage 的 R37 I1 口径）：
 	// 检查通过后、DELETE 之前并发的策略更新不得插入新引用。
@@ -455,6 +464,9 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 }
 
 func (h *Handlers) AddIPToList(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	var req models.AddIPToListRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

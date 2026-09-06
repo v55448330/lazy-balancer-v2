@@ -114,7 +114,21 @@ func AuditSourcePart(source string) string {
 		return "来源：启用规则"
 	case "rule_disable":
 		return "来源：禁用规则"
+	case "ip2region_update":
+		return "来源：IP 库更新"
+	case "crs_update":
+		return "来源：CRS 规则库更新"
 	default:
 		return fmt.Sprintf("来源：%s", source)
 	}
+}
+
+// recordSystemReloadAudit 数据类更新（IP 库/CRS）触发的真实 Caddy 重载统一
+// 留痕（system 归因，裁定 2026-09-07；对齐 certissuer/集群同步口径）。
+func recordSystemReloadAudit(source string, err error) {
+	if err != nil {
+		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), err.Error()), "")
+		return
+	}
+	RecordAuditLog("system", "重载", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), AuditResultPart("success")), "")
 }

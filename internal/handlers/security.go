@@ -87,6 +87,9 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 }
 
 func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var req models.SecurityCustomRule
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
@@ -119,6 +122,9 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	var req models.UpdateCustomRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -209,6 +215,9 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	// 引用检查与删除必须同事务：检查通过后、DELETE 之前并发的策略更新（启用引用
 	// 策略）或新建引用策略会造成悬空引用，发射端仅日志跳过，WAF 规则静默丢失。
@@ -304,6 +313,9 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 }
 
 func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var req models.SecurityBlockPage
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
@@ -342,6 +354,9 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	var req models.SecurityBlockPage
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -392,6 +407,9 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	// 默认页检查 + 引用检查与删除必须同事务：检查通过后、DELETE 之前并发的策略
 	// 更新可把引用该页面的策略置 enabled=1，悬空引用会让拦截响应静默退化回
@@ -638,6 +656,9 @@ func policyWhitelistDefault(v *bool) bool {
 }
 
 func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var req models.CreateSecurityPolicyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
@@ -1033,6 +1054,9 @@ func crsExcludedListRefs(payload string) []int64 {
 }
 
 func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	var req models.UpdateSecurityPolicyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1421,6 +1445,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	id := c.Param("id")
 	// 绑定清理与策略删除必须同事务：绑定删除失败时回滚，避免留下
 	// 指向已删策略的悬挂绑定（旧行为会静默忽略清理错误）。
@@ -1454,6 +1481,9 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 }
 
 func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	policyID := c.Param("id")
 	var req struct {
 		RuleCaddyID string `json:"rule_caddy_id" binding:"required"`
@@ -1546,6 +1576,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 // 服务器强制上限 5 条；规则必须存在且为 HTTP；所有 policy_id 必须存在。
 // 空数组（或缺省 policy_ids 字段）= 解除该规则全部绑定，与 apidocs/MCP 契约一致。
 func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	ruleCaddyID := c.Param("caddy_id")
 	var req struct {
 		PolicyIDs []int `json:"policy_ids"`
@@ -1636,6 +1669,9 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 }
 
 func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	policyID := c.Param("id")
 	ruleCaddyID := c.Param("caddy_id")
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)

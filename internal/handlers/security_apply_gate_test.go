@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -113,5 +114,40 @@ func TestSecurityWrites_transportFailureDegradesToCommit(t *testing.T) {
 	}
 	if reloadFailures != 1 {
 		t.Fatalf("reload failure audit rows=%d, want 1", reloadFailures)
+	}
+}
+
+// 裁定 2026-09-07（残余项处置）：安全域写路径与规则域共享 caddyOpMu——
+// 跨域并发写（规则+安全）不再有渲染/应用交错窗口。
+func TestSecurityWrites_serializeWithRuleWrites(t *testing.T) {
+	// Given
+	setupSecurityPolicyTestDB(t)
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	router := gin.New()
+	router.POST("/security/custom-rules", handler.CreateSecurityCustomRule)
+	body := `{"name":"串行化","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}],"action":"block","score":5,"enabled":true}`
+
+	// When：规则域视角持锁（模拟并发的规则写/手动重载），安全写必须阻塞
+	handler.caddyOpMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/security/custom-rules", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), request)
+		close(done)
+	}()
+	select {
+	case <-done:
+		handler.caddyOpMu.Unlock()
+		t.Fatal("安全写未与规则写共享 caddyOpMu（持锁期间应阻塞）")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Then：释放后安全写完成且成功
+	handler.caddyOpMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("释放锁后安全写未完成（疑似死锁）")
 	}
 }

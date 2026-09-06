@@ -1036,3 +1036,40 @@ func TestWriteIP2RegionUpdateLog_rotatesAtSize(t *testing.T) {
 		t.Fatalf("log size=%d exceeds rotation cap", info.Size())
 	}
 }
+
+// 裁定 2026-09-07（残余项处置）：IP 库更新触发的真实 Caddy 重载统一留痕
+// （system 归因，对齐 certissuer/集群同步的既有口径）。
+func TestIP2RegionUpdate_recordsReloadAudit(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.reloader = func() error { return nil }
+	m.run("manual")
+
+	var n int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='Caddy服务' AND detail LIKE '%IP 库更新%'").Scan(&n); err != nil {
+		t.Fatalf("query reload audit: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("reload audit rows=%d, want 1（真实重载必须留痕）", n)
+	}
+}
+
+func TestIP2RegionUpdate_recordsReloadFailureAudit(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.reloader = func() error { return errors.New("reload boom") }
+	m.run("manual")
+
+	// 主重载失败 + 回滚后的恢复重载失败 = 2 行「重载失败」
+	var n int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载失败' AND resource='Caddy服务' AND detail LIKE '%IP 库更新%'").Scan(&n); err != nil {
+		t.Fatalf("query reload failure audit: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("reload failure audit rows=%d, want 2（主重载+回滚恢复重载）", n)
+	}
+}

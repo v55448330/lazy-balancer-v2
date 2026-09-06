@@ -313,7 +313,9 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 	writeCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
 	if m.reloader != nil {
-		if err := m.reloader(); err != nil {
+		err := m.reloader()
+		recordSystemReloadAudit("crs_update", err)
+		if err != nil {
 			writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
 			m.restoreBackup()
 			// 版本行回滚到旧值，恢复下轮重试能力

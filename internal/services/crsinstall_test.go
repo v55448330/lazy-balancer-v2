@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // forceRenameFailure makes every rename fail, simulating Docker overlayfs
@@ -318,5 +320,49 @@ func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) 
 	_, status, _, _, _, _, _ := crsVersionRow(t)
 	if status != "failed" {
 		t.Fatalf("update_status=%q, want failed", status)
+	}
+}
+
+// 裁定 2026-09-07（残余项处置）：CRS 更新触发的真实 Caddy 重载统一留痕。
+func TestCRSUpdate_recordsReloadAudit(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+	})
+	m.reloader = func() error { return nil }
+	m.run("manual")
+
+	var n int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='Caddy服务' AND detail LIKE '%CRS 规则库更新%'").Scan(&n); err != nil {
+		t.Fatalf("query reload audit: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("reload audit rows=%d, want 1（真实重载必须留痕）", n)
+	}
+}
+
+func TestCRSUpdate_recordsReloadFailureAudit(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+	})
+	m.reloader = func() error { return errors.New("reload boom") }
+	m.run("manual")
+
+	var n int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载失败' AND resource='Caddy服务' AND detail LIKE '%CRS 规则库更新%'").Scan(&n); err != nil {
+		t.Fatalf("query reload failure audit: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("reload failure audit rows=%d, want 1", n)
 	}
 }
