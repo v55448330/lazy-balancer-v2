@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +36,22 @@ const (
 // 语义，未来追加规则上下文包装后特判不会静默失效。
 var ErrNoEnabledUpstreams = errors.New("no enabled upstreams")
 
+// ConfigRejectedError 标记「该配置本身不可被 Caddy 接受」——admin 4xx（provision
+// /校验拒绝）或渲染生成失败，区别于传输/系统失败（Caddy 不可达、5xx、序列化
+// 失败）。家族 3 门控提交（2026-09-06 裁定 ①②：只有可渲染配置可落库）据此
+// 分流：拒绝 → 回滚不落库 + 400；其余 → 退化提交 + caddy_apply_error 标记。
+// 文本原样透传（Error/Unwrap 委托底层），既有错误断言不受影响。
+type ConfigRejectedError struct{ Err error }
+
+func (e *ConfigRejectedError) Error() string { return e.Err.Error() }
+func (e *ConfigRejectedError) Unwrap() error { return e.Err }
+
+// IsConfigRejected 判定 err（含 join 链）是否为配置被拒。
+func IsConfigRejected(err error) bool {
+	var rej *ConfigRejectedError
+	return errors.As(err, &rej)
+}
+
 // ErrDynamicDNSUpstreamCount 动态 DNS 模式配置了多个启用上游时的哨兵错误
 // （动态解析仅支持单一上游）。产出点与 ErrNoEnabledUpstreams 相同两处，消费点
 // （rule_features.go 预校验）以 errors.Is 命中，避免脆弱的字符串匹配。
@@ -44,6 +62,13 @@ type CaddyService struct {
 	adminURL string
 	client   *http.Client
 	mu       sync.Mutex
+	// lastGoodPath 非空时，每次成功 /load 后把已应用 JSON 原子落盘到该路径，
+	// 供启动兜底（裁定 2026-09-06 ③）读取回放。
+	lastGoodPath string
+	// cliValidate 非空时，写路径在事务内应用前先用 caddy CLI（真 validate-only：
+	// provision 不运行、不绑端口——源码 caddy.Validate→run(cfg,false)）校验
+	// 最终渲染（裁定 2026-09-06 ④'）。默认关闭，main 显式启用，测试注入桩。
+	cliValidate func(rendered []byte) error
 }
 
 func NewCaddyService(adminURL string) *CaddyService {
@@ -111,7 +136,8 @@ func (s *CaddyService) ApplyConfigForce(config map[string]interface{}) (err erro
 
 func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force bool) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
-		return errors.New(message)
+		// 生成失败 = 该 DB 视图渲染不出合法配置，按「配置被拒」分类（门控回滚）。
+		return &ConfigRejectedError{Err: errors.New(message)}
 	}
 	snapshot, hasSnapshot := config[caddyCertFilesSnapshotKey].(CertFilesSnapshot)
 	// R72 二十六次 W1-1：本次生成实际写盘了证书文件（MaterializeCertPairs 检出
@@ -152,10 +178,168 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("config apply failed: %s", string(readCaddyErrorBody(resp.Body)))
+		inner := fmt.Errorf("config apply failed: %s", string(readCaddyErrorBody(resp.Body)))
+		if resp.StatusCode < 500 {
+			// admin 4xx = Caddy 拒绝该配置（provision/校验失败），配置本身不可用；
+			// 5xx 归为系统失败（Caddy 存活但内部错误），不阻断落库。
+			return &ConfigRejectedError{Err: inner}
+		}
+		return inner
 	}
 
 	log.Println("Caddy config applied successfully")
+	s.persistLastGoodLocked(data)
+	return nil
+}
+
+// SetLastGoodPath 启用「最后已知正确配置」落盘（裁定 2026-09-06 ③）。每次
+// 成功 /load 后写入；启动时 DB 渲染被拒（升级判定漂移、不变量破坏等残余
+// 场景）可回退应用该文件，保证负载均衡服务可用性。IO 失败仅记日志——
+// 落盘是兜底通道，不得影响主应用路径。
+func (s *CaddyService) SetLastGoodPath(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastGoodPath = path
+}
+
+func (s *CaddyService) persistLastGoodLocked(data []byte) {
+	if s.lastGoodPath == "" {
+		return
+	}
+	tmp := s.lastGoodPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("last-known-good: write temp file failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.lastGoodPath); err != nil {
+		log.Printf("last-known-good: rename into place failed: %v", err)
+	}
+}
+
+// ApplyLastKnownGood 读取并原样应用最后一次成功下发的配置（启动兜底）。
+// 未配置/文件缺失/应用失败均返回错误，由调用方决定后续。
+func (s *CaddyService) ApplyLastKnownGood() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastGoodPath == "" {
+		return errors.New("last-known-good path not configured")
+	}
+	data, err := os.ReadFile(s.lastGoodPath)
+	if err != nil {
+		return fmt.Errorf("read last-known-good config: %w", err)
+	}
+	resp, err := s.client.Post(s.adminURL+"/load", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("apply last-known-good config: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("apply last-known-good config failed: %s", string(readCaddyErrorBody(resp.Body)))
+	}
+	return nil
+}
+
+// ErrCLIValidatorUnavailable 表示 CLI 校验器本身不可用（二进制缺失、超时、
+// 临时文件失败）——区别于「配置被拒」。调用方对其记日志放行：事务内
+// ApplyConfigFromTx 仍是最终门控，校验器故障不得阻断全部写入。
+var ErrCLIValidatorUnavailable = errors.New("caddy CLI validator unavailable")
+
+const caddyCLIValidateTimeout = 60 * time.Second
+
+// EnableCLIValidation 启用 CLI 校验层（仅 main 装配调用；测试用桩注入）。
+func (s *CaddyService) EnableCLIValidation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cliValidate = execCaddyValidate
+}
+
+// SetCLIValidatorForTest 注入 CLI 校验桩（测试专用）。
+func (s *CaddyService) SetCLIValidatorForTest(fn func(rendered []byte) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cliValidate = fn
+}
+
+// execCaddyValidate 把渲染产物写入临时文件并执行 `caddy validate`。非零退出
+// = 配置被拒（输出含 provision/校验详情）；二进制缺失/超时 = 校验器不可用。
+func execCaddyValidate(rendered []byte) error {
+	tmp, err := os.CreateTemp("", "lazy-balancer-cli-validate-*.json")
+	if err != nil {
+		return fmt.Errorf("%w: create temp file: %v", ErrCLIValidatorUnavailable, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(rendered); err != nil {
+		tmp.Close()
+		return fmt.Errorf("%w: write temp file: %v", ErrCLIValidatorUnavailable, err)
+	}
+	tmp.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), caddyCLIValidateTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "caddy", "validate", "--config", tmpPath).CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("%w: %v", ErrCLIValidatorUnavailable, err)
+		}
+		// caddy validate 以非零退出码表达「配置被拒」。
+		detail := truncateValidUTF8Tail(output)
+		if len(detail) > caddyErrorBodyMaxBytes {
+			detail = detail[:caddyErrorBodyMaxBytes]
+		}
+		return fmt.Errorf("caddy validate 拒绝配置: %s", string(detail))
+	}
+	return nil
+}
+
+// ErrUnvalidatedApply 标记「应用失败时配置未经过任何 Caddy 级校验」（CLI
+// 校验器不可用且 admin 应用传输失败同时发生）。此情形无法排除坏配置，写
+// 路径必须回滚而非退化提交（2026-09-06 乱填保障补充裁定：乱填要么被拦、
+// 要么写入失败，绝不全量落库）。
+var ErrUnvalidatedApply = errors.New("config unvalidated by any Caddy-level check")
+
+// ValidateTxRenderViaCLI 用 caddy CLI 校验事务视图渲染出的全量候选配置——
+// 校验输入=最终将应用的渲染本身（裁定 2026-09-06 ④'：任意 Caddy 修改三层
+// 校验的 Caddy 层），零运行时副作用。未启用时返回 nil。分类：拒绝→
+// *ConfigRejectedError（门控回滚 400）；不可用→ErrCLIValidatorUnavailable。
+func (s *CaddyService) ValidateTxRenderViaCLI(tx *sql.Tx) error {
+	s.mu.Lock()
+	validator := s.cliValidate
+	s.mu.Unlock()
+	if validator == nil {
+		return nil
+	}
+	config := generateCaddyConfigFromStore(tx)
+	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
+		return &ConfigRejectedError{Err: errors.New(message)}
+	}
+	rendered, err := json.Marshal(caddyPayload(config))
+	if err != nil {
+		return fmt.Errorf("%w: marshal candidate: %v", ErrCLIValidatorUnavailable, err)
+	}
+	if err := validator(rendered); err != nil {
+		if errors.Is(err, ErrCLIValidatorUnavailable) {
+			return err
+		}
+		return &ConfigRejectedError{Err: err}
+	}
+	return nil
+}
+
+// ValidateJSONViaCLI 用 caddy CLI 校验一份原始 JSON 配置（PutCaddyConfig
+// 逃生口，裁定 2026-09-06 ④' 边界补齐）。分类同 ValidateTxRenderViaCLI。
+func (s *CaddyService) ValidateJSONViaCLI(data []byte) error {
+	s.mu.Lock()
+	validator := s.cliValidate
+	s.mu.Unlock()
+	if validator == nil {
+		return nil
+	}
+	if err := validator(data); err != nil {
+		if errors.Is(err, ErrCLIValidatorUnavailable) {
+			return err
+		}
+		return &ConfigRejectedError{Err: err}
+	}
 	return nil
 }
 
@@ -216,128 +400,6 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	return payload
 }
 
-// ValidateRouteMergedConfig validates the full config after inserting a route before the catch-all.
-func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	fullConfig, err := s.GetConfig()
-	if err != nil {
-		// Round 24 C-N4: GetConfig 失败是传输/解码错误（管理接口不可达），不能静默按
-		// “校验通过”放行；“尚无任何已加载配置”的空配置走下方空结构早退。
-		return fmt.Errorf("无法连接 Caddy 管理接口，未能校验配置: %w", err)
-	}
-
-	apps, ok := fullConfig["apps"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		// Server doesn't exist, so prepend won't cause merge issues
-		return nil
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		routes = []interface{}{}
-	}
-
-	// Find default route (keep it at the end)
-	var defaultRoute interface{}
-	newRoutes := make([]interface{}, 0, len(routes)+1)
-
-	for _, r := range routes {
-		if routeMap, ok := r.(map[string]interface{}); ok {
-			if isRunningDefaultRoute(routeMap) {
-				defaultRoute = r
-				continue
-			}
-		}
-		newRoutes = append(newRoutes, r)
-	}
-
-	newRoutes = append(newRoutes, routeConfig)
-
-	if defaultRoute != nil {
-		newRoutes = append(newRoutes, defaultRoute)
-	}
-
-	server["routes"] = newRoutes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	fullConfig["apps"] = apps
-
-	// Validate the merged full config
-	return s.validateConfigInternal(fullConfig)
-}
-
-// ValidateTCPServerMergedConfig 以「候选 server 并入运行配置副本」的口径校验
-// TCP 规则（R69 C-N3）：Caddy admin /load 无 validate-only 语义（v2.11.4
-// handleLoad 无视 validate 参数、无条件 caddy.Load），此前对
-// GenerateSingleRuleCaddyConfig（仅含单个 layer4 server 的独立配置）直接
-// ValidateConfig 等于把运行中配置整体替换为单规则配置——全部 HTTP 及其他 TCP
-// 规则在 validate 窗口内下线；后续真 apply 失败时补偿快照又摄于该副作用之后，
-// 恢复的是单规则配置，全停持续。与 HTTP 侧 ValidateRouteMergedConfig 同口径：
-// 候选 server 替换/插入运行配置副本的同名条目后校验，运行面零中断。
-func (s *CaddyService) ValidateTCPServerMergedConfig(serverName string, serverConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	fullConfig, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("无法连接 Caddy 管理接口，未能校验配置: %w", err)
-	}
-	apps, ok := fullConfig["apps"].(map[string]interface{})
-	if !ok {
-		apps = map[string]interface{}{}
-		fullConfig["apps"] = apps
-	}
-	layer4, ok := apps["layer4"].(map[string]interface{})
-	if !ok {
-		layer4 = map[string]interface{}{}
-		apps["layer4"] = layer4
-	}
-	servers, ok := layer4["servers"].(map[string]interface{})
-	if !ok {
-		servers = map[string]interface{}{}
-		layer4["servers"] = servers
-	}
-	servers[serverName] = serverConfig
-	return s.validateConfigInternal(fullConfig)
-}
-
-// validateConfigInternal validates config using Caddy /load API with validate=true
-func (s *CaddyService) validateConfigInternal(config map[string]interface{}) error {
-	data, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-
-	validateURL := s.adminURL + "/load?validate=true"
-	resp, err := s.client.Post(validateURL, "application/json", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("validation request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("validation failed: %s", string(readCaddyErrorBody(resp.Body)))
-	}
-
-	return nil
-}
-
 func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) {
 	req, err := http.NewRequest("GET", s.adminURL+"/id/"+id, nil)
 	if err != nil {
@@ -360,71 +422,6 @@ func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) 
 	}
 
 	return result, nil
-}
-
-func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	config, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		return nil
-	}
-
-	filteredRoutes := make([]interface{}, 0, len(routes))
-	removed := false
-	for _, r := range routes {
-		routeMap, ok := r.(map[string]interface{})
-		if !ok {
-			filteredRoutes = append(filteredRoutes, r)
-			continue
-		}
-
-		if existingID, hasID := routeMap["@id"].(string); hasID && RouteIDBelongsToRule(existingID, caddyID) {
-			removed = true
-			continue
-		}
-
-		filteredRoutes = append(filteredRoutes, r)
-	}
-
-	// 未匹配到该规则的路由时配置未变化，跳过全量下发避免无谓的 Caddy 重载。
-	if !removed {
-		return nil
-	}
-
-	server["routes"] = filteredRoutes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	config["apps"] = apps
-
-	return s.applyConfigRaw(config)
 }
 
 func isRunningDefaultRoute(route map[string]interface{}) bool {
@@ -2548,52 +2545,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	}
 
 	return conf
-}
-
-// GenerateRouteObject generates a Caddy route object (not full config) for a single rule.
-func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) {
-	if rule.Strategy == "" {
-		rule.Strategy = "weighted_round_robin"
-	}
-	if rule.Protocol == "tcp" {
-		return buildTCPProxyRoute(rule), nil
-	}
-	// R44 B1: 与全量渲染「非 http 即 TCP」（caddy.go:1276）及写侧白名单
-	// （rule_features.go validateRuleFeatures）对齐——https 不再被当作 HTTP 通过，
-	// 遗留 https 行由 db 迁移归一为 http+enable_tls=1。
-	if rule.Protocol != "http" {
-		return nil, fmt.Errorf("unsupported protocol: %s", rule.Protocol)
-	}
-
-	routes, mainRoute, err := generateHTTPRouteObjects(rule)
-	if err != nil {
-		return nil, err
-	}
-	if len(routes) == 1 {
-		return mainRoute, nil
-	}
-
-	for _, route := range routes {
-		delete(route, "@id")
-	}
-	nestedRoutes := make([]interface{}, len(routes))
-	for i, route := range routes {
-		nestedRoutes[i] = route
-	}
-	domainHosts := splitAndTrim(rule.Domain)
-	wrapper := map[string]interface{}{
-		"match": []interface{}{map[string]interface{}{"host": domainHosts}},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler": "subroute",
-				"routes":  nestedRoutes,
-			},
-		},
-	}
-	if rule.CaddyID != "" {
-		wrapper["@id"] = rule.CaddyID
-	}
-	return wrapper, nil
 }
 
 func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPolicyContext) ([]map[string]interface{}, map[string]interface{}, error) {

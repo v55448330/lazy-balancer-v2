@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -134,9 +136,19 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 // failure; empty string means the config applied cleanly. Callers inside an
 // import session (which already holds caddyOpMu) must use
 // caddyApplyNoteLocked instead — applyCaddyConfigE is not reentrant.
-// caddyApplyNote 重载 Caddy 配置并统一记录重载审计。所有触发重载的
-// handler 必须使用此方法（或 caddyApplyNoteLocked），重载审计自动留痕
-// ——调用方不可能遗漏。
+//
+// 重载审计的三个家族（契约：触发重载必须留痕。69d809b4 曾误以为本方法
+// 全覆盖而删光其余家族的手动审计，导致删除/启用规则等操作重载不留痕）：
+//  1. caddyApplyNote       — 提交后从 DB 重放（security 等）：重载与审计
+//     同处一行，不可能遗漏；
+//  2. caddyApplyNoteLocked — 已持 caddyOpMu 的后台/会话内路径（Start/
+//     Restart Caddy、导入会话内重播种）；
+//  3. applyFromTxNote      — 事务内应用（rule 生命周期 ×5、UpdateConfig）：
+//     重载发生在 Commit 前、审计只能落在 Commit 后，两点必然分离，由返回
+//     的 note 闭包绑定，漏调即编译错误。
+//
+// 家族 3 的变体（不经 tx 渲染）：PutCaddyConfig（ApplyConfig 原始载荷）与
+// 备份导入 ×2（协调器内应用）各自在成功尾部补记，同受契约约束。
 func (h *Handlers) caddyApplyNote(c *gin.Context) string {
 	if err := h.applyCaddyConfigE(); err != nil {
 		recordAudit(c, "重载失败", "Caddy服务", err.Error())
@@ -155,6 +167,117 @@ func (h *Handlers) caddyApplyNoteLocked() string {
 	return ""
 }
 
+// applyFromTxNote 是家族 3 的统一入口：事务内应用（ApplyConfigFromTx，
+// 应用失败即回滚，DB 与运行配置不分叉）。重载发生在 Commit 之前，而提交
+// 失败会回滚并恢复运行配置快照——审计必须等 Commit 成功后才落盘，否则会
+// 留下从未真正生效的「重载」行。因此这里把「应用」与「审计登记」绑定在
+// 同一次调用里，返回提交成功后必须调用的 note：漏调即 unused variable
+// 编译错误，69d809b4 式的静默删行在此形态下不再可能。归因明细由调用点
+// 提供（txReloadDetail 或固定文案）。
+func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail string) (func(), error) {
+	// 裁定 ④'：Caddy CLI 层预检（真 validate-only，零运行时副作用）——校验
+	// 输入即事务视图的最终渲染。校验器不可用时放行（记日志），事务内应用
+	// 仍是最终门控。
+	cliValidated := true
+	if err := h.caddyService.ValidateTxRenderViaCLI(tx); err != nil {
+		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
+			return nil, err
+		}
+		cliValidated = false
+		log.Printf("caddy CLI 校验器不可用，跳过预检（事务内应用仍门控）: %v", err)
+	}
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+		// 乱填保障（2026-09-06 补充裁定）：应用失败且配置未经任何 Caddy 级
+		// 校验（CLI 不可用 + 传输失败同时发生）——无法排除坏配置，标记为
+		// 不可退化提交，调用方必须回滚。
+		if !cliValidated && !services.IsConfigRejected(err) {
+			return nil, fmt.Errorf("%w: %v", services.ErrUnvalidatedApply, err)
+		}
+		return nil, err
+	}
+	return func() { recordAudit(c, "重载", "Caddy服务", reloadDetail) }, nil
+}
+
+// txReloadDetail 生成规则生命周期路径的重载审计明细（来源 + 规则归因 + 结果）。
+func txReloadDetail(source, ruleID string) string {
+	return services.FormatAuditDetail(services.AuditSourcePart(source), services.AuditRulePart(ruleID), services.AuditResultPart("success"))
+}
+
+// txApplyFinish 是 finishTxApply 的收尾选项。Resource/AuditAction/AuditDetail/
+// SuccessMsg 必填；SuccessStatus 默认 200；ReloadDetail 默认「配置变更后自动重载」。
+type txApplyFinish struct {
+	Resource      string
+	AuditAction   string
+	AuditDetail   string
+	SuccessMsg    string
+	SuccessStatus int
+	Data          any
+	ReloadDetail  string
+}
+
+// finishTxApply 家族 3 统一收尾（2026-09-06 裁定 ①②：只有可渲染配置可落库，
+// 杜绝坏配置持久化后重启全停）。调用方完成事务内写库后调用本方法，三分支：
+//
+//	渲染拒绝（Caddy 4xx / 生成失败）→ 不提交（调用方 defer 回滚）+ 失败审计
+//	  + 400「Caddy 配置应用失败，<Resource>未保存: <原因>」；
+//	传输/系统失败（Caddy down 等）→ 退化家族 1 语义：提交 + 业务审计 + 重载失败
+//	  审计 + caddy_apply_error 标记 + 200「<SuccessMsg>；但 Caddy 配置应用失败：…」；
+//	成功 → 提交 + 业务审计 + 重载审计 + 200/201。
+//
+// 本方法自行提交或放行回滚；调用方的 rollback defer 必须容忍 ErrTxDone
+// （既有各 defer 均已容忍）。返回后请求即已终结，调用方立即 return。
+func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, reloadDetailFor(f))
+	status := f.SuccessStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	// CLI 拒绝与应用拒绝共用失败文案口径（重载审计详情由 applyFromTxNote 内的
+	// note 闭包按 reloadDetailFor(f) 落盘）。
+	if applyErr == nil {
+		if err := tx.Commit(); err != nil {
+			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("提交事务失败", err.Error(), services.AuditResultPart("failure")))
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
+			return
+		}
+		h.recordCaddyApplyResult(nil) // 运行配置=已提交 DB，清除既往失败标记（与旧 caddyApplyNote 成功路径等价）
+		recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
+		reloadNote()
+		c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data})
+		return
+	}
+	if services.IsConfigRejected(applyErr) {
+		// CLI 校验拒绝与 admin 4xx 同口径：不落库 + 400 + 失败审计。
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("Caddy 校验未通过", applyErr.Error(), services.AuditResultPart("failure")))
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，" + f.Resource + "未保存: " + applyErr.Error()})
+		return
+	}
+	// 乱填保障（2026-09-06 补充裁定）：CLI 不可用 + 应用传输失败 = 未经任何
+	// Caddy 级校验——不得退化提交（无法排除坏配置），回滚 + 明确提示。
+	if errors.Is(applyErr, services.ErrUnvalidatedApply) {
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("Caddy 应用失败且 CLI 校验不可用", applyErr.Error(), services.AuditResultPart("failure")))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 应用失败且 CLI 校验不可用，" + f.Resource + "未保存（服务与运行配置不受影响，恢复 Caddy/CLI 后重试）: " + applyErr.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("提交事务失败", err.Error(), services.AuditResultPart("failure")))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
+		return
+	}
+	h.recordCaddyApplyResult(applyErr)
+	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
+	recordAudit(c, "重载失败", "Caddy服务", applyErr.Error())
+	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + applyErr.Error(), Data: f.Data})
+}
+
+// reloadDetailFor 返回收尾选项的重载审计明细（默认「配置变更后自动重载」）。
+func reloadDetailFor(f txApplyFinish) string {
+	if f.ReloadDetail != "" {
+		return f.ReloadDetail
+	}
+	return "配置变更后自动重载"
+}
+
 // applyCaddyConfigE serializes against rule/config writes (caddyOpMu) and
 // persists the apply outcome; all manual re-apply entry points must use it.
 // R72 二十六次 W1-2：改用强制变体——手动重载（HTTP /caddy/reload 与 MCP
@@ -168,7 +291,13 @@ func (h *Handlers) applyCaddyConfigE() error {
 	return err
 }
 
-func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleFeatureInput, uniqueID string, serverName string) error {
+// validateRulePayloadBeforeSave 是规则保存的后端字段层校验（三层校验第 2 层，
+// 裁定 2026-09-06 ④'）：协议/端口/策略/域名/上游（主机/端口/权重/协议/查重/
+// 启用数）/动态 DNS/健康检查/ACME 引用。Caddy 层由 applyFromTxNote 内的
+// CLI 预检（真 validate-only）+ 事务内 ApplyConfigFromTx（最终门控）承担，
+// 校验与应用的输入同为事务视图最终渲染——原「候选并入运行配置」的 merged
+// /load 探针（validateCaddyConfigBeforeSave，运行时副作用+平行渲染双轨）已撤。
+func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 	type requestUpstream struct {
 		Host           string
 		Port           int
@@ -481,130 +610,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		return fmt.Errorf("健康检查超时必须 ≥ 1 秒")
 	}
 
-	tempCaddyID := "validate_" + uniqueID
-
-	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
-		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
-		proxyFlushInterval, proxyStreamCloseDelay                                                             int
-		serverTokensHidden                                                                                    bool
-	}
-	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-			COALESCE(server_tokens_hidden,FALSE)
-		FROM global_config WHERE id = 1
-	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
-		&global.serverTokensHidden); err != nil {
-		return fmt.Errorf("加载全局配置失败: %v", err)
-	}
-
-	ruleConfig := services.SingleRuleConfig{
-		Protocol:                      data.Protocol,
-		Domain:                        data.Domain,
-		ListenPort:                    data.ListenPort,
-		Strategy:                      data.Strategy,
-		DynamicDNS:                    data.DynamicDNS,
-		DnsServer:                     data.DnsServer,
-		DnsFamily:                     data.DnsFamily,
-		HealthCheckPath:               data.HealthCheckPath,
-		HealthCheckInterval:           data.HealthCheckInterval,
-		HealthCheckTimeout:            data.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold: data.HealthCheckUnhealthyThreshold,
-		HealthCheckHealthyThreshold:   data.HealthCheckHealthyThreshold,
-		TLSSource:                     data.TLSSource,
-		ACMEConfigID:                  data.ACMEConfigID,
-		// 审计 B2-S1：补齐校验副本缺失的字段（含全部 TCP 字段）——否则 TCP
-		// 规则预检在「校验另一份零值配置」，用户真实值触发的错误被推迟到
-		// apply 阶段才暴露（多付一次 snapshot/restore 周期）。TCP/DNS 字段
-		// 不在 requestData 内，从原始请求提取。
-		EnableDnsServer:                  tcpFields.enableDnsServer,
-		TCPHealthCheckPort:               tcpFields.tcpHealthCheckPort,
-		TCPProxyProtocol:                 tcpFields.tcpProxyProtocol,
-		TCPTryDuration:                   tcpFields.tcpTryDuration,
-		TCPTryInterval:                   tcpFields.tcpTryInterval,
-		EnableTLS:                        data.EnableTLS,
-		TLSCert:                          data.TLSCert,
-		TLSKey:                           data.TLSKey,
-		TLSHTTPRedirect:                  data.TLSHTTPRedirect,
-		EnableCompress:                   data.EnableCompress,
-		CompressTypes:                    data.CompressTypes,
-		EnableActiveHealthCheck:          data.EnableActiveHealthCheck,
-		HostHeader:                       data.HostHeader,
-		RequestBodyMaxSizeMB:             data.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:         data.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:               data.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:         global.serverTokensHidden,
-		CustomRoutesEnabled:              features.CustomRoutesEnabled,
-		PathRules:                        toPathRuleConfigs(features.PathRules),
-		ProxyDialTimeout:                 features.ProxyDialTimeout,
-		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
-		ProxyReadTimeout:                 features.ProxyReadTimeout,
-		ProxyWriteTimeout:                features.ProxyWriteTimeout,
-		ProxyStreamTimeout:               features.ProxyStreamTimeout,
-		ProxyFlushInterval:               features.ProxyFlushInterval,
-		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
-		GlobalProxyDialTimeout:           global.proxyDialTimeout,
-		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
-		GlobalProxyReadTimeout:           global.proxyReadTimeout,
-		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
-		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
-		GlobalProxyFlushInterval:         global.proxyFlushInterval,
-		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
-		CaddyID:                          tempCaddyID,
-	}
-
-	for _, u := range data.Upstreams {
-		protocol := u.Protocol
-		if protocol == "" {
-			if data.Protocol == "tcp" {
-				protocol = "tcp"
-			} else {
-				protocol = "http"
-			}
-		}
-		weight := u.Weight
-		if weight == 0 {
-			weight = 1
-		}
-		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
-			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-			MaxConnections: u.MaxConnections,
-		})
-	}
-
-	if data.Protocol == "tcp" {
-		// R69 C-N3：TCP 校验改合并口径——此前 ValidateConfig(GenerateSingleRuleCaddyConfig)
-		// 因 Caddy /load 无 validate-only 语义而整体替换运行配置（validate 窗口内全部
-		// 其他规则下线；真 apply 失败时补偿快照已污染）。改为把候选 server 并入
-		// 运行配置副本校验（与 HTTP 侧 ValidateRouteMergedConfig 同口径）。
-		single := services.GenerateSingleRuleCaddyConfig(ruleConfig)
-		apps, _ := single["apps"].(map[string]interface{})
-		layer4, _ := apps["layer4"].(map[string]interface{})
-		servers, _ := layer4["servers"].(map[string]interface{})
-		for serverName, serverConfig := range servers {
-			if serverMap, valid := serverConfig.(map[string]interface{}); valid {
-				return h.caddyService.ValidateTCPServerMergedConfig(serverName, serverMap)
-			}
-		}
-		return nil
-	}
-
-	routeConfig, routeErr := services.GenerateRouteObject(ruleConfig)
-	if routeErr != nil {
-		return fmt.Errorf("路由配置生成失败: %v", routeErr)
-	}
-	if mergeErr := h.caddyService.ValidateRouteMergedConfig(serverName, routeConfig); mergeErr != nil {
-		return fmt.Errorf("Caddy 配置验证失败: %v", mergeErr)
-	}
-
-	if delErr := h.caddyService.DeleteRouteByID(serverName, tempCaddyID); delErr != nil {
-		log.Printf("Warning: failed to delete validation temp route %s: %v (continuing anyway)", tempCaddyID, delErr)
-	}
-
 	return nil
 }
 
@@ -684,6 +689,17 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
 	if err := h.applyCaddyConfigE(); err != nil {
+		// 2026-09-06 裁定 ③：DB 渲染被拒时回退最后已知正确配置——负载均衡
+		// 可用性优先。caddy_apply_error 标记已由 applyCaddyConfigE 落下，
+		// DB↔运行配置分叉对看门狗/前端横幅保持可见，等待人工修复。
+		if fbErr := h.caddyService.ApplyLastKnownGood(); fbErr == nil {
+			wrapped := fmt.Sprintf("启动时数据库渲染的配置被 Caddy 拒绝，已回退最后已知正确配置（负载均衡保持可用，运行配置与数据库分叉待修复）：%v", err)
+			services.Logf("error", "CRITICAL: %s", wrapped)
+			services.RecordAuditLog("system", "启动警告", "系统配置", wrapped, "")
+			return nil
+		} else {
+			log.Printf("last-known-good fallback failed: %v", fbErr)
+		}
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}
 	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")

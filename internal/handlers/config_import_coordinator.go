@@ -120,6 +120,13 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	// 刚落盘的新证书文件。导入期 CA 队列已 PauseAndDrain，无并发证书提交。
 	// R72 二十六次 W1-1：导入强制重载——证书已在上方落盘，生成期比对相等，
 	// 非强制会被 errSameConfig 短路（旧证书继续服务）。
+
+	// 2026-09-06 裁定 ④' 边界补齐：导入同样过 Caddy CLI 校验层（校验输入=
+	// 事务视图渲染）。校验器不可用放行——下方 ApplyConfigFromTxCertAwareForce
+	// 仍是门控（全有全无）。
+	if err := session.h.caddyService.ValidateTxRenderViaCLI(session.tx); err != nil && !errors.Is(err, services.ErrCLIValidatorUnavailable) {
+		return &importCoordinatorError{phase: importPhaseCaddy, err: session.abort(err)}
+	}
 	if err := session.h.caddyService.ApplyConfigFromTxCertAwareForce(session.tx); err != nil {
 		return &importCoordinatorError{phase: importPhaseCaddy, err: session.abort(err)}
 	}

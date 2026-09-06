@@ -644,8 +644,10 @@ func queryRuleDomainConflict(domain string, listenPort int, excludeCaddyID, extr
 	return false, nil
 }
 
-// 数据库即唯一事实源契约（CreateRule/UpdateRule 保存路径）：
-//  1. 全部校验（含 validateCaddyConfigBeforeSave 的 Caddy 整配置预校验）先于任何写库完成，
+// 数据库即唯一事实源契约（CreateRule/UpdateRule 保存路径，2026-09-06 裁定 ④'）：
+//  1. 三层校验：后端字段校验（validateRuleFeatures/validateRulePayloadBeforeSave）先于
+//     任何写库；Caddy 层由 applyFromTxNote 内的 CLI 校验（真 validate-only）+ 事务内
+//     ApplyConfigFromTx（最终门控）承担，校验与应用的输入同为事务视图最终渲染——
 //     校验不过不落库；
 //  2. 写库失败以「写入数据库失败（…）: <原因>」明确回报给保存方；
 //  3. Caddy 配置只能从事务内渲染（ApplyConfigFromTx），应用失败即回滚事务并返回 400 +
@@ -817,21 +819,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-
-	// Determine server name based on port, protocol and TLS status
-	var serverName string
-	if req.Protocol == "http" {
-		if req.EnableTLS && req.ListenPort == 443 {
-			serverName = "http_443"
-		} else if req.ListenPort == 80 {
-			serverName = "http_80"
-		} else if req.EnableTLS {
-			serverName = fmt.Sprintf("http_%d", req.ListenPort)
-		} else {
-			serverName = fmt.Sprintf("http_%d", req.ListenPort)
-		}
-	} else {
-		serverName = fmt.Sprintf("tcp_%d", req.ListenPort)
+	// 后端字段层校验（三层校验第 2 层；Caddy 层由 applyFromTxNote 的 CLI 预检
+	// + 事务内应用承担，裁定 2026-09-06 ④'）。
+	if err := h.validateRulePayloadBeforeSave(req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
 
 	userIDInt := contextUserID(c)
@@ -843,18 +835,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	// R69 C-N3-b：运行时快照先于 validateCaddyConfigBeforeSave——validate 经 Caddy
-	// /load 具有真实 apply 副作用（临时路由上线/删除、候选配置加载），此前快照摄于
-	// 副作用之后，真 apply 失败时补偿会把「validate 污染后的状态」恢复回去。
-	preValidateRuntimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
+	// 运行配置快照：仅用于事务内应用失败的恢复（裁定 ④'：保存路径无预校验
+	// 探针，快照摄取时点不再受副作用约束；Caddy 级校验由 applyFromTxNote 内
+	// 的 CLI 层承担）。
+	runtimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
 	if snapErr != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
-	}
-
-	// Validate Caddy config BEFORE writing to database
-	if err := h.validateCaddyConfigBeforeSave(req, features, "new_"+generateRandomString(8), serverName); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	if req.Protocol == "http" && req.EnableTLS && req.TLSSource == "acme_dns" {
@@ -870,11 +856,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("rule save: DB 失败后恢复运行配置失败: %v", restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败: " + err.Error()})
 		return
 	}
@@ -918,14 +899,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("CreateRule database error: %v", err)
-		// R70-C-1：validate 经 /load 已把候选 TCP server 真实加载，DB 写失败时
-		// 用 validate 前快照恢复运行配置（HTTP 侧临时路由已被 DeleteRouteByID
-		// 清理，恢复对两协议统一无副作用）。
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建规则）: " + err.Error()})
 		return
 	}
@@ -952,11 +925,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		if err != nil {
 			tx.Rollback()
 			log.Printf("CreateRule upstream insert error: %v", err)
-			if req.Protocol == "tcp" {
-				if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-					log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
-				}
-			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建上游服务器）: " + err.Error()})
 			return
 		}
@@ -964,20 +932,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
 		tx.Rollback()
 		log.Printf("CreateRule path_rules replace error: %v", err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建自定义路径规则）: " + err.Error()})
 		return
 	}
 
-	// R69 C-N3-b：使用 validate 前摄取的快照（此处再摄会包含 validate 副作用）。
-	runtimeSnapshot := preValidateRuntimeSnapshot
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_create", caddyID))
+	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未创建: " + errors.Join(err, restoreErr).Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未创建: " + errors.Join(applyErr, restoreErr).Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -1044,6 +1006,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	log.Printf("Rule created with caddy_id=%s", caddyID)
 	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain))
+	reloadNote()
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
 }
 
@@ -1183,7 +1146,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.ACMEConfigID == 0 {
 		req.ACMEConfigID = existingRule.ACMEConfigID
 	}
-	// R52 F-1（写侧）：nil=保留现值先合并，validateCaddyConfigBeforeSave
+	// R52 F-1（写侧）：nil=保留现值先合并，validateRulePayloadBeforeSave
 	// 才能对合并后的生效值做存在性校验（与上方 acme_config_id 同口径）。
 	if req.CAProviderID == nil {
 		req.CAProviderID = &existingRule.CAProviderID
@@ -1440,7 +1403,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	validationServerName := fmt.Sprintf("%s_%d", req.Protocol, req.ListenPort)
+	// 后端字段层校验（三层校验第 2 层，同 CreateRule，裁定 2026-09-06 ④'）。
+	if err := h.validateRulePayloadBeforeSave(req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 
 	// Validate TLS certificate if provided (manual source only)
 	if *req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
@@ -1482,19 +1449,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// R69 C-N3-b：运行时快照先于 validate（同 CreateRule——validate 的 /load 副作用
-	// 会污染后摄的快照）。
-	preValidateRuntimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
+	// 运行配置快照：仅用于事务内应用失败的恢复（同 CreateRule，裁定 ④'）。
+	runtimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
 	if snapErr != nil {
 		log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
-	}
-
-	// Validate Caddy config BEFORE writing to database
-	if err := h.validateCaddyConfigBeforeSave(req, features, fmt.Sprintf("update_%s_%s", caddyID, generateRandomString(8)), validationServerName); err != nil {
-		log.Printf("UpdateRule validation failed for caddy_id=%s, server_name=%s: %v", caddyID, validationServerName, err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 
@@ -1595,34 +1554,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "log_enabled = ?, "
 	args = append(args, *req.LogEnabled)
 
-	// 审计 M17：原此处的 SingleRuleConfig 死构造（建成后无任何消费）与仅供其
-	// 填充的 global_config 查询已删——validateCaddyConfigBeforeSave 自带全局
-	// 配置读取。domain 保留：下方 ACME 任务域名迁移/查找以其为键。
+	// 审计 M17：原此处的 SingleRuleConfig 死构造（建成后无任何消费）已删。
+	// domain 保留：下方 ACME 任务域名迁移/查找以其为键。
 	domain := req.Domain
-
-	// R69 C-N3-b：使用 validate 前摄取的快照（同 CreateRule）。
-	runtimeSnapshot := preValidateRuntimeSnapshot
 
 	// Caddy 应用失败时需要用这些快照把已提交的 DB 更新恢复回去
 	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
 	if oldRuleRowErr != nil {
 		log.Printf("UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份规则数据失败"})
 		return
 	}
 	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
 	if oldUpstreamRowsErr != nil {
 		log.Printf("UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
 		return
 	}
@@ -1638,11 +1583,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("rule save: DB 失败后恢复运行配置失败: %v", restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败: " + err.Error()})
 		return
 	}
@@ -1663,11 +1603,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule database error for caddy_id=%s: %v", caddyID, err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新规则）: " + err.Error()})
 		return
 	}
@@ -1675,34 +1610,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule RowsAffected error for caddy_id=%s: %v", caddyID, err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（确认规则更新结果）: " + err.Error()})
 		return
 	}
 	services.Logf("debug", "UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
 	if rowsAffected == 0 {
 		tx.Rollback()
-		// R71 N-1：409 早退同源——validate 已把候选 TCP server 真实加载（HTTP→TCP
-		// 切换场景留下 DB 无对应行的孤儿 server）；协议未变的 409（原规则即 TCP）候选
-		// 替换了自身旧 server，恢复快照即还原。统一恢复。
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule 409 后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
+		// R71 N-1：409 早退（非终态证书任务在途）。裁定 ④' 后保存路径无预校验
+		// 探针，此处早退零运行时扰动，无需恢复。
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
 	if protocolChanged && req.Protocol == "tcp" {
 		if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
 			log.Printf("UpdateRule certificate cleanup error for caddy_id=%s: %v", caddyID, err)
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧证书任务失败"})
 			return
 		}
@@ -1711,11 +1632,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule upstream delete error for caddy_id=%s: %v", caddyID, err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
 		return
 	}
@@ -1739,11 +1655,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			tx.Rollback()
 			log.Printf("UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
-			if req.Protocol == "tcp" {
-				if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-					log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-				}
-			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
 			return
 		}
@@ -1751,11 +1662,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule path_rules replace error for caddy_id=%s: %v", caddyID, err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新自定义路径规则）: " + err.Error()})
 		return
 	}
@@ -1767,9 +1673,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_update", caddyID))
+	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败，数据库未写入: " + errors.Join(err, restoreErr).Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败，数据库未写入: " + errors.Join(applyErr, restoreErr).Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2015,6 +1922,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
+	reloadNote()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
 
@@ -2152,14 +2060,15 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_delete", caddyID))
+	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		if restoreErr != nil {
-			services.Logf("error", "CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+			services.Logf("error", "CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, applyErr, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", applyErr, restoreErr)})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未删除: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未删除: " + applyErr.Error()})
 		return
 	}
 	if err := h.removeRuleCertFiles(caddyID); err != nil {
@@ -2209,6 +2118,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
+	reloadNote()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
 }
 
@@ -2519,14 +2429,15 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 		return
 	}
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_enable", caddyID))
+	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
+		if errors.As(applyErr, &validationErr) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + errors.Join(validationErr, restoreErr).Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("应用 Caddy 配置失败: %v", errors.Join(err, restoreErr))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("应用 Caddy 配置失败: %v", errors.Join(applyErr, restoreErr))})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2687,6 +2598,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
+	reloadNote()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 }
 
@@ -2756,9 +2668,10 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 			return
 		}
 	}
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_disable", caddyID))
+	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", errors.Join(err, restoreErr))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", errors.Join(applyErr, restoreErr))})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2782,6 +2695,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
+	reloadNote()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
 }
 

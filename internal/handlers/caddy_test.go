@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -279,9 +280,9 @@ func TestStopCaddy_returns_500_when_stop_command_fails(t *testing.T) {
 }
 
 func TestValidateConfig_validates_submitted_config(t *testing.T) {
-	// R69 C-N3-c：validate 成功后 handler 回弹 DB 生成的权威配置（/load 无
-	// validate-only 语义，成功即已加载）——契约更新为 valid 用例两次 /load
-	// POST（校验 + 回弹）。
+	// 2026-09-06 裁定 ④' 收口：本端点改走 caddy CLI 真 validate-only——校验
+	// 零运行时扰动（与 apidocs「不触发 Caddy」承诺对齐）；CLI 不可用回退
+	// R69 C-N3-c 的 load+回弹口径。
 	newBackupTestHandlers(t)
 	requests := 0
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -308,6 +309,17 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 	router := gin.New()
 	router.POST("/config/validate", h.ValidateConfig)
 
+	// Given：CLI 校验桩可用（生产由 main 装配启用）
+	h.caddyService.SetCLIValidatorForTest(func(rendered []byte) error {
+		var config map[string]any
+		if err := json.Unmarshal(rendered, &config); err != nil {
+			return err
+		}
+		if invalid, _ := config["invalid"].(bool); invalid {
+			return errors.New("invalid config")
+		}
+		return nil
+	})
 	tests := []struct {
 		name       string
 		body       string
@@ -331,9 +343,23 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 			}
 		})
 	}
-	// valid（校验+回弹）+ invalid（仅校验）= 3；malformed 停在 handler。
-	if requests != 3 {
-		t.Fatalf("Caddy validation requests=%d, want 3 (malformed JSON must stop at the handler)", requests)
+	if requests != 0 {
+		t.Fatalf("CLI 校验路径不应触碰 admin（requests=%d, want 0）", requests)
+	}
+
+	// And：CLI 不可用回退——valid 用例回到 R69 C-N3-c 的 load+回弹（2 次 /load）。
+	h.caddyService.SetCLIValidatorForTest(func(rendered []byte) error {
+		return services.ErrCLIValidatorUnavailable
+	})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{}}}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("fallback status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if requests != 2 {
+		t.Fatalf("fallback /load requests=%d, want 2（校验 + 回弹）", requests)
 	}
 }
 

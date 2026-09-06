@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1195,11 +1196,11 @@ func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 		router.ServeHTTP(secondResponse, request)
 		close(secondDone)
 	}()
-	<-harness.secondValidation
-
-	// When
 	harness.release()
 	<-firstDone
+	// 第二个请求在第一个释放 caddyOpMu 后进入临界区（快照 GET 信号），
+	// 随后完成自己的应用——串行化 + 首个失败恢复快照的契约由下方断言锁定。
+	<-harness.secondValidation
 	<-secondDone
 
 	// Then
@@ -1304,7 +1305,7 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	currentConfig := `{"old":true,"apps":{"http":{"servers":{"http_8080":{"listen":[":8080"],"routes":[{"@id":"` + caddyID + `","handle":[]}]}}}}}`
 	var loadCalls atomic.Int32
 	var routePosts atomic.Int32
-	var validations atomic.Int32
+	var configGets atomic.Int32
 	firstRouteEntered := make(chan struct{})
 	releaseFirstRoute := make(chan struct{})
 	secondValidation := make(chan struct{})
@@ -1316,6 +1317,11 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 		response.Header().Set("Content-Type", "application/json")
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/config/":
+			// 裁定 ④' 后保存路径无探针：GET /config/ 只来自快照摄取（持
+			// caddyOpMu 后），第 2 次即「第二个请求已进入临界区」信号。
+			if configGets.Add(1) == 2 {
+				close(secondValidation)
+			}
 			stateMu.Lock()
 			body := currentConfig
 			stateMu.Unlock()
@@ -1323,12 +1329,6 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 			return
 		case request.Method == http.MethodGet && request.URL.Path == "/id/"+caddyID:
 			_, _ = response.Write([]byte(`{"@id":"` + caddyID + `","handle":[]}`))
-			return
-		case request.Method == http.MethodPost && request.URL.Path == "/load" && request.URL.Query().Get("validate") == "true":
-			if validations.Add(1) == 2 {
-				close(secondValidation)
-			}
-			response.WriteHeader(http.StatusOK)
 			return
 		case request.Method == http.MethodPost && request.URL.Path == "/config/":
 			body, err := io.ReadAll(request.Body)
@@ -1596,5 +1596,199 @@ func TestUpdateRule_empty_host_header_clears_value(t *testing.T) {
 	}
 	if hostHeader != "" {
 		t.Fatalf("host_header=%q, want empty string（空串=清空）", hostHeader)
+	}
+}
+
+// 69d809b4 回归守卫（用户裁定契约：只要触发 Caddy 重载就必须留痕）。规则
+// 生命周期走事务内应用（ApplyConfigFromTx：应用失败即回滚，DB 与运行配置
+// 不分叉），结构上不可能改用 caddyApplyNote（它从已提交 DB 全量重放）——
+// 69d809b4 以「统一内嵌 caddyApplyNote」为由删除全部手动重载审计时，把这五
+// 处事务型路径一并删掉，删除/启用/禁用规则的「重载」审计随之静默消失。
+// 本测试锁定：成功路径必须补记一条 action='重载' 的审计（含来源归因）。
+func TestRuleLifecycle_recordsReloadAuditAfterTransactionalApply(t *testing.T) {
+	tests := []struct {
+		name   string
+		seed   func()
+		mount  func(router *gin.Engine, handler *Handlers)
+		method string
+		path   string
+		body   string
+		source string
+	}{
+		{
+			name:   "create",
+			seed:   func() {},
+			mount:  func(router *gin.Engine, handler *Handlers) { router.POST("/rules", handler.CreateRule) },
+			method: http.MethodPost,
+			path:   "/rules",
+			body:   `{"name":"reload-audit","protocol":"http","domain":"reload-audit.example.test","listen_port":8090,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`,
+			source: "创建规则",
+		},
+		{
+			name: "update",
+			seed: func() {
+				seedAuditRule(t, "lb_reload_audit", "before", "reload-audit.example.test", 8080, true, "manual", false)
+				seedAuditUpstream(t, "lb_reload_audit")
+			},
+			mount:  func(router *gin.Engine, handler *Handlers) { router.PUT("/rules/:caddy_id", handler.UpdateRule) },
+			method: http.MethodPut,
+			path:   "/rules/lb_reload_audit",
+			body:   `{"name":"after"}`,
+			source: "更新规则",
+		},
+		{
+			name: "delete",
+			seed: func() {
+				seedAuditRule(t, "lb_reload_audit", "victim", "reload-audit.example.test", 8080, true, "manual", false)
+			},
+			mount:  func(router *gin.Engine, handler *Handlers) { router.DELETE("/rules/:caddy_id", handler.DeleteRule) },
+			method: http.MethodDelete,
+			path:   "/rules/lb_reload_audit",
+			source: "删除规则",
+		},
+		{
+			name: "enable",
+			seed: func() {
+				seedAuditRule(t, "lb_reload_audit", "disabled", "reload-audit.example.test", 8080, false, "manual", false)
+			},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+			},
+			method: http.MethodPost,
+			path:   "/rules/lb_reload_audit/enable",
+			source: "启用规则",
+		},
+		{
+			name: "disable",
+			seed: func() {
+				seedAuditRule(t, "lb_reload_audit", "enabled", "reload-audit.example.test", 8080, true, "manual", false)
+			},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules/:caddy_id/disable", handler.DisableRule)
+			},
+			method: http.MethodPost,
+			path:   "/rules/lb_reload_audit/disable",
+			source: "禁用规则",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given
+			handler, _, _ := newAuditRuleHandlers(t, 0)
+			tt.seed()
+			router := gin.New()
+			tt.mount(router, handler)
+			var body io.Reader
+			if tt.body != "" {
+				body = strings.NewReader(tt.body)
+			}
+			request := httptest.NewRequest(tt.method, tt.path, body)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code < 200 || response.Code >= 300 {
+				t.Fatalf("%s status=%d body=%s", tt.name, response.Code, response.Body.String())
+			}
+			var reloads int
+			if err := db.AuditDB.QueryRow(
+				"SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='Caddy服务' AND detail LIKE ?",
+				"%来源："+tt.source+"%",
+			).Scan(&reloads); err != nil {
+				t.Fatalf("%s query reload audit: %v", tt.name, err)
+			}
+			if reloads != 1 {
+				t.Fatalf("%s reload audit rows=%d, want 1（触发重载必须留痕）", tt.name, reloads)
+			}
+		})
+	}
+}
+
+// 阶段 3（2026-09-06 裁定 ④）：保存路径撤除 Caddy 级预校验（候选并入运行
+// 配置的真实 /load 探针）后，一次成功保存必须恰好触发一次 /load（事务内
+// ApplyConfigFromTx 的最终渲染）——既锁定 provision 减半的性能契约，也锁定
+// 「预校验窗口内候选路由短暂上线」副作用彻底消失。
+func TestRuleSave_appliesExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name   string
+		seed   func()
+		mount  func(router *gin.Engine, handler *Handlers)
+		method string
+		path   string
+		body   string
+		prep   func(t *testing.T, router *gin.Engine) string
+	}{
+		{
+			name: "create",
+			seed: func() {},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules", handler.CreateRule)
+			},
+			method: http.MethodPost,
+			path:   "/rules",
+			body:   `{"name":"single-apply","protocol":"http","domain":"single-apply.example.test","listen_port":8091,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`,
+		},
+		{
+			// 先创建使 http_8092 server 进入运行配置（旧探针对已存在 server 才
+			// 触发 merged /load，caddy.go servers[serverName] 早退），再更新——
+			// 探针未撤时会看到第二次 /load。
+			name: "update after create",
+			seed: func() {},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules", handler.CreateRule)
+				router.PUT("/rules/:caddy_id", handler.UpdateRule)
+			},
+			method: http.MethodPut,
+			path:   "/rules/lb_single_apply",
+			body:   `{"name":"after"}`,
+			prep: func(t *testing.T, router *gin.Engine) string {
+				request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"prep","protocol":"http","domain":"single-apply.example.test","listen_port":8092,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+				request.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, request)
+				var resp struct {
+					Data struct {
+						CaddyID string `json:"caddy_id"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Data.CaddyID == "" {
+					t.Fatalf("prep create failed: %v body=%s", err, rec.Body.String())
+				}
+				return resp.Data.CaddyID
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given
+			handler, loadCalls, _ := newAuditRuleHandlers(t, 0)
+			tt.seed()
+			router := gin.New()
+			tt.mount(router, handler)
+			baseline := int32(0)
+			if tt.prep != nil {
+				if id := tt.prep(t, router); id != "" {
+					tt.path = "/rules/" + id
+				}
+				baseline = loadCalls.Load()
+			}
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code < 200 || response.Code >= 300 {
+				t.Fatalf("%s status=%d body=%s", tt.name, response.Code, response.Body.String())
+			}
+			if n := loadCalls.Load() - baseline; n != 1 {
+				t.Fatalf("%s /load calls=%d, want 1（预校验探针已撤，仅事务内最终应用）", tt.name, n)
+			}
+		})
 	}
 }

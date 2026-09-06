@@ -32,8 +32,12 @@ import (
 //     ImportV1Config 的动作变量取值仅有 导入失败/部分失败；
 //   - services/certificates.go renewExpiringCertificates 的动作变量取值仅有
 //     续签排队/重试排队；
+//   - handlers/handlers.go finishTxApply 的动作/对象取自 txApplyFinish 的字面量
+//     字段（16 个调用点：动作 创建/更新/删除/写入+失败，对象 自定义规则/
+//     拦截页面/安全策略/IP 地址列表，均 ≤ 上限；2026-09-06 裁定 ①② 家族 3
+//     统一收尾）；
 //   - services/downloadintegrity.go recordDownloadIntegrity 的对象变量由调用方
-//     传入字面量（CRS规则库/IP数据库，已纳入扫描）。
+//     传入字面量（CRS规则库/IP数据库，已纳入扫描）；
 var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	"handlers/audit.go":                {1: {"recordAudit"}, 2: {"recordAudit"}},
 	"middleware/middleware.go":         {1: {"auditMiddleware"}, 2: {"auditMiddleware"}},
@@ -41,6 +45,7 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	"handlers/cluster_registration.go": {1: {"clusterNodeAction"}},
 	"handlers/config_backup.go":        {1: {"ImportConfigBackup"}},
 	"handlers/config_import_v1.go":     {1: {"ImportV1Config"}},
+	"handlers/handlers.go":             {1: {"finishTxApply"}, 2: {"finishTxApply"}},
 	"services/certificates.go":         {1: {"renewExpiringCertificates"}},
 	"services/downloadintegrity.go":    {2: {"recordDownloadIntegrity"}},
 }

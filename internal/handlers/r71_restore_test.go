@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,9 +37,10 @@ func newFakeCaddyServer(t *testing.T, rec *fakeCaddyRecorder) *httptest.Server {
 	return srv
 }
 
-// R71 N-4/N-1：UpdateRule 409（证书在途）早退在 TCP 协议下必须恢复运行配置——
-// validate 经 /load 已把候选 TCP server 真实加载，无恢复则跨规则流量顶替/孤儿
-// server 残留至重启。
+// R71 N-4/N-1（2026-09-06 裁定 ④' 后重述）：UpdateRule 409（证书在途）早退
+// 时运行配置必须零扰动——保存路径已无预校验探针（merged /load 副作用与
+// R70-C-1 恢复机器一并撤除），409 守卫先于任何 Caddy 交互触发，候选上游
+// 不得出现在任何 /load 载荷中。
 func TestUpdateRule_409_restoresRuntimeForTCP(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
@@ -68,15 +68,8 @@ func TestUpdateRule_409_restoresRuntimeForTCP(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
 	}
-	// Then：validate 加载（≥1 次）后必须有恢复 POST——最终一次 /load 的配置
-	// 不含候选上游 10.9.9.9（恢复的是 validate 前快照或不含该上游的权威配置）。
-	if len(rec.loads) < 2 {
-		t.Fatalf("/load calls=%d, want ≥2（validate 加载 + 409 恢复）", len(rec.loads))
+	// Then：409 早退发生在任何 Caddy 交互之前——零 /load、零候选泄漏。
+	if len(rec.loads) != 0 {
+		t.Fatalf("/load calls=%d, want 0（无探针后 409 早退零运行时扰动）", len(rec.loads))
 	}
-	for i, load := range rec.loads {
-		if strings.Contains(load, "10.9.9.9") && i == len(rec.loads)-1 {
-			t.Fatalf("最终 /load 载荷仍含候选上游 10.9.9.9——409 后未恢复运行配置")
-		}
-	}
-	_ = fmt.Sprint()
 }

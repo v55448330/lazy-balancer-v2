@@ -546,7 +546,7 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 		}
 	}
 	// R62 C3-F2：upstreams.protocol 按所属规则协议过白名单——与保存侧
-	// （validateCaddyConfigBeforeSave 内联白名单，handlers.go）同口径。此前 v2 导入链不触碰 upstreams 行，
+	// （validateRulePayloadBeforeSave 内联白名单，handlers.go）同口径。此前 v2 导入链不触碰 upstreams 行，
 	// 手造备份可带入 http 规则 + 上游 protocol="tls"（保存侧明确拒绝的形态）：
 	// 配置对 Caddy 合法（无 per-upstream 协议字段），导入/启用链零报错，但渲染侧
 	// 仅 "https" 触发 TLS transport → 明文 HTTP 打 TLS 端口，该规则全部请求静默 502。
@@ -563,7 +563,7 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 			continue
 		}
 		ruleID, _ := row["rule_id"].(string)
-		// 与保存侧（validateCaddyConfigBeforeSave 内联白名单）完全同口径：仅 "http" 走 http/https 白名单，
+		// 与保存侧（validateRulePayloadBeforeSave 内联白名单）完全同口径：仅 "http" 走 http/https 白名单，
 		// 其余（含空 protocol）按 TCP 侧 tcp/tls 白名单。
 		if ruleProtocols[ruleID] == "http" {
 			if protocol != "http" && protocol != "https" {
@@ -1948,6 +1948,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
+	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 }
 

@@ -97,15 +97,25 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
-	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?)`,
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?)`,
 		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	id, _ := result.LastInsertId()
-	recordAudit(c, "创建", "自定义规则", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功" + h.caddyApplyNote(c), Data: gin.H{"id": id}})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "自定义规则", AuditAction: "创建",
+		AuditDetail: fmt.Sprintf("名称：%s（#%d）", req.Name, id),
+		SuccessMsg:  "规则创建成功",
+		Data:        gin.H{"id": id},
+	})
 }
 
 func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
@@ -191,12 +201,11 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", merged.Name, id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "自定义规则", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s）", merged.Name, id),
+		SuccessMsg:  "规则已更新",
+	})
 }
 
 func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
@@ -259,12 +268,11 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "删除", "自定义规则", fmt.Sprintf("规则 #%s", id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "自定义规则", AuditAction: "删除",
+		AuditDetail: fmt.Sprintf("规则 #%s", id),
+		SuccessMsg:  "规则已删除",
+	})
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
@@ -312,15 +320,25 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "默认拦截页由系统管理，不允许创建"})
 		return
 	}
-	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Content, false, getContextUserIDInt(c), getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	id, _ := result.LastInsertId()
-	recordAudit(c, "创建", "拦截页面", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功" + h.caddyApplyNote(c), Data: gin.H{"id": id}})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "拦截页面", AuditAction: "创建",
+		AuditDetail: fmt.Sprintf("名称：%s（#%d）", req.Name, id),
+		SuccessMsg:  "拦截页面创建成功",
+		Data:        gin.H{"id": id},
+	})
 }
 
 func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
@@ -366,12 +384,11 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "拦截页面", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s）", req.Name, id),
+		SuccessMsg:  "拦截页面已更新",
+	})
 }
 
 func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
@@ -420,12 +437,11 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "删除", "拦截页面", fmt.Sprintf("页面 #%s", id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "拦截页面", AuditAction: "删除",
+		AuditDetail: fmt.Sprintf("页面 #%s", id),
+		SuccessMsg:  "拦截页面已删除",
+	})
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
@@ -765,12 +781,12 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(c), Data: gin.H{"id": id}})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "创建",
+		AuditDetail: fmt.Sprintf("名称：%s（#%d）", req.Name, id),
+		SuccessMsg:  "安全策略创建成功",
+		Data:        gin.H{"id": id},
+	})
 }
 
 // geoipEntriesEqual（R72 二十九次 M1）：比较两个 geoip_countries JSON 数组的
@@ -1319,14 +1335,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
 	// 审计用 username（非数字 ID）+ 字段级变更详情——IP 弹窗一键操作和
 	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯。
 	var policyName string
-	_ = db.DB.QueryRow("SELECT name FROM security_policies WHERE id=?", id).Scan(&policyName)
+	_ = tx.QueryRowContext(c.Request.Context(), "SELECT name FROM security_policies WHERE id=?", id).Scan(&policyName)
 	auditDetail := fmt.Sprintf("策略「%s」(#%s)", policyName, id)
 	var changedFields []string
 	if req.IPACLList != nil {
@@ -1401,8 +1413,11 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if len(changedFields) > 0 {
 		auditDetail += "；" + strings.Join(changedFields, "；")
 	}
-	recordAudit(c, "更新", "安全策略", auditDetail)
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略更新成功" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: auditDetail,
+		SuccessMsg:  "安全策略更新成功",
+	})
 }
 
 func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
@@ -1431,12 +1446,11 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理策略绑定失败: " + err.Error()})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "删除", "安全策略", fmt.Sprintf("策略 #%s", id))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略已删除" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "删除",
+		AuditDetail: fmt.Sprintf("策略 #%s", id),
+		SuccessMsg:  "安全策略已删除",
+	})
 }
 
 func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
@@ -1520,12 +1534,11 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	recordAudit(c, "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID),
+		SuccessMsg:  "规则已关联",
+	})
 }
 
 // SetRuleSecurityPolicies（v2.2.0 T2）：PUT /security/rules/:caddy_id/policies
@@ -1607,10 +1620,6 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 			return
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
 	idStrs := make([]string, len(uniqueIDs))
 	for i, id := range uniqueIDs {
 		idStrs[i] = strconv.Itoa(id)
@@ -1619,20 +1628,31 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	if summary == "" {
 		summary = "全部解除"
 	}
-	recordAudit(c, "更新", "安全策略", fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则安全策略已更新" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary),
+		SuccessMsg:  "规则安全策略已更新",
+	})
 }
 
 func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	policyID := c.Param("id")
 	ruleCaddyID := c.Param("caddy_id")
-	_, err := db.DB.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleCaddyID, policyID)
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleCaddyID, policyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	recordAudit(c, "更新", "安全策略", fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已取消关联" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID),
+		SuccessMsg:  "已取消关联",
+	})
 }
 
 func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -98,6 +99,13 @@ func run() error {
 
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
+	// 2026-09-06 裁定 ③：每次成功下发后落盘最后已知正确配置，启动 DB 渲染
+	// 被拒时回退应用（负载均衡可用性兜底）。
+	// 2026-09-06 裁定 ④'：任意 Caddy 修改三层校验的 Caddy 层——写路径在事务内
+	// 应用前用 caddy CLI（真 validate-only）校验最终渲染；二进制缺失/超时自动
+	// 放行（事务内应用仍门控）。
+	caddyService.EnableCLIValidation()
+	caddyService.SetLastGoodPath(filepath.Join(cfg.DataDir, "last_good_caddy_config.json"))
 	// R72 二十五次：数据类更新（xdb/CRS/CA 证书文件）后的重载必须强制——配置
 	// JSON 不变时 Caddy 会跳过 provision（errSameConfig 短路），插件内存停留
 	// 旧库而更新流程报成功。三个消费方（IP 库/CRS/CA 队列）全是数据更新入口。

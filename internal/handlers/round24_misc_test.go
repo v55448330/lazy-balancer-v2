@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,75 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
-	"lazy-balancer-v2/internal/services"
 )
 
-// Round 24 C-N3：validateCaddyConfigBeforeSave 构造的临时校验配置必须携带上游
-// MaxConnections（渲染为 reverse_proxy upstream 的 max_requests），否则“校验通过的
-// 配置”与实际落库后生成的配置漂移（校验≠将生成）。
-func TestValidateCaddyConfigBeforeSave_forwardsUpstreamMaxConnections(t *testing.T) {
-	tests := []struct {
-		name        string
-		dynamicDNS  bool
-		wantContain string
-	}{
-		{name: "static upstream renders max_requests", wantContain: `"max_requests":100`},
-		// DynamicDNS 为规则级开关，已随 SingleRuleConfig.DynamicDNS 透传；动态上游
-		// 分支渲染为 dynamic_upstreams（A 记录源），不含 max_requests。
-		{name: "dynamic dns upstream renders dynamic_upstreams", dynamicDNS: true, wantContain: `"dynamic_upstreams"`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			// Given
-			initializeRuleFeatureTestDB(t)
-			var validatedBody string
-			fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-				response.Header().Set("Content-Type", "application/json")
-				switch {
-				case request.Method == http.MethodGet && request.URL.Path == "/config/":
-					_, _ = response.Write([]byte(`{"apps":{"http":{"servers":{"http_8080":{"routes":[]}}}}}`))
-				case request.Method == http.MethodPost && request.URL.Path == "/load":
-					body, err := io.ReadAll(request.Body)
-					if err != nil {
-						response.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					validatedBody = string(body)
-					_, _ = response.Write([]byte(`{}`))
-				default:
-					_, _ = response.Write([]byte(`{}`))
-				}
-			}))
-			t.Cleanup(fakeCaddy.Close)
-			handler := &Handlers{
-				cfg:          &config.Config{CaddyAdminURL: fakeCaddy.URL},
-				caddyService: services.NewCaddyService(fakeCaddy.URL),
-			}
-			req := models.CreateRuleRequest{
-				Name: "max-conn", Protocol: "http", Domain: "maxconn.example.test", ListenPort: 8080,
-				Strategy: "weighted_round_robin", DynamicDNS: test.dynamicDNS, DnsFamily: "ipv4",
-				Upstreams: []models.Upstream{{Host: "upstream.example.test", Port: 9000, Weight: 1, Enabled: true, MaxConnections: 100}},
-			}
-
-			// When
-			err := handler.validateCaddyConfigBeforeSave(req, createRuleFeatures(req), "round24", "http_8080")
-
-			// Then
-			if err != nil {
-				t.Fatalf("validateCaddyConfigBeforeSave() error = %v", err)
-			}
-			if !strings.Contains(validatedBody, test.wantContain) {
-				t.Fatalf("validated config missing %s: %s", test.wantContain, validatedBody)
-			}
-		})
-	}
-}
-
-// Round 24 C-N5：路径规则上游的主机格式必须与主上游走同样的 isValidHost 校验，
-// 防止非法主机名进入生成的 Caddy 配置。
 func TestValidateRuleFeatures_rejects_invalid_path_upstream_host(t *testing.T) {
 	tests := []struct {
 		name      string

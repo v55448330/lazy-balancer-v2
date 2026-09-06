@@ -295,12 +295,12 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "创建", "IP 地址列表", fmt.Sprintf("名称：%s（#%d，%d 条）", req.Name, id, len(entries)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "IP 地址列表创建成功" + h.caddyApplyNote(c), Data: gin.H{"id": id}})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "IP 地址列表", AuditAction: "创建",
+		AuditDetail: fmt.Sprintf("名称：%s（#%d，%d 条）", req.Name, id, len(entries)),
+		SuccessMsg:  "IP 地址列表创建成功",
+		Data:        gin.H{"id": id},
+	})
 }
 
 func (h *Handlers) UpdateIPList(c *gin.Context) {
@@ -364,12 +364,11 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "更新", "IP 地址列表", fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "IP 地址列表已更新" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "IP 地址列表", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)),
+		SuccessMsg:  "IP 地址列表已更新",
+	})
 }
 
 func (h *Handlers) DeleteIPList(c *gin.Context) {
@@ -448,12 +447,11 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "删除", "IP 地址列表", fmt.Sprintf("名称：%s（#%s，%d 条）", delName, id, len(delParsed)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "IP 地址列表已删除" + h.caddyApplyNote(c)})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "IP 地址列表", AuditAction: "删除",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", delName, id, len(delParsed)),
+		SuccessMsg:  "IP 地址列表已删除",
+	})
 }
 
 func (h *Handlers) AddIPToList(c *gin.Context) {
@@ -511,10 +509,10 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "写入", "IP 地址列表", fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已追加" + h.caddyApplyNote(c), Data: gin.H{"added": true}})
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "IP 地址列表", AuditAction: "写入",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)),
+		SuccessMsg:  "已追加",
+		Data:        gin.H{"added": true},
+	})
 }

@@ -536,17 +536,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+	reloadNote, applyErr := h.applyFromTxNote(c, tx, "保存配置后自动重载")
+	if applyErr != nil {
 		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
-		err = errors.Join(err, restoreErr)
+		applyErr = errors.Join(applyErr, restoreErr)
 		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
+		if errors.As(applyErr, &validationErr) {
+			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + validationErr.Error()})
 			return
 		}
-		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + applyErr.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -576,14 +577,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
+	reloadNote()
+
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已更新并应用", Data: plan})
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
-	// R72 二十六次 W1-8：本端点执行两次真实 /load（校验载荷 + 权威回弹），
-	// 必须与其他写端点共享 caddyOpMu——与 UpdateConfig 并发时，用户配置可能
-	// 被捕获进其 oldRuntimeConfig 快照，后续失败恢复会把用户配置重新应用
-	// （运行时与 DB 分叉）。rare×rare 且自愈，但违反「写端点持锁」不变量。
+	// R72 二十六次 W1-8：CLI 不可用回退路径仍执行真实 /load，保持与其他写
+	// 端点共享 caddyOpMu。
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	var configData map[string]interface{}
@@ -591,11 +592,25 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的配置 JSON"})
 		return
 	}
-	// R69 C-N3-c：Caddy /load 无 validate-only 语义——校验成功即用户配置已被
-	// 加载为运行配置。此处立即回弹 DB 生成的权威全量配置，把「校验」窗口收敛
-	// 到单个 admin 往返；回弹失败属严重分叉（运行配置停留为用户 JSON），审计
-	// 留痕供人工恢复（下次任意 apply 也会重新收敛）。校验失败时 /load 原子
-	// 拒绝、运行配置不变。
+	rendered, err := json.Marshal(configData)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的配置 JSON"})
+		return
+	}
+	// 2026-09-06 裁定 ④' 收口：真 validate-only（caddy CLI，零运行时扰动），
+	// 与 apidocs「不触发 Caddy」的既有承诺对齐；CLI 不可用回退 R69 C-N3-c
+	// 的 load+回弹口径。
+	if err := h.caddyService.ValidateJSONViaCLI(rendered); err == nil {
+		recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("success")))
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置有效"})
+		return
+	} else if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
+		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", err.Error(), services.AuditResultPart("failure")))
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败", Data: err.Error()})
+		return
+	}
+	// CLI 校验器不可用回退：R69 C-N3-c——/load 无 validate-only 语义，校验
+	// 成功即用户配置已加载为运行配置，立即回弹 DB 权威全量配置收敛窗口。
 	if err := h.caddyService.ValidateConfig(configData); err != nil {
 		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("failure")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败", Data: err.Error()})
@@ -827,6 +842,17 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		return
 	}
 
+	// 2026-09-06 裁定 ④' 边界补齐：逃生口同样过 Caddy CLI 校验层——校验输入
+	// 即将应用的原始 JSON。校验器不可用放行（下方 ApplyConfig 拒绝即回滚）。
+	if err := h.caddyService.ValidateJSONViaCLI([]byte(req.Content)); err != nil {
+		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
+			recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置校验未通过", err.Error(), services.AuditResultPart("failure")))
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过: " + err.Error()})
+			return
+		}
+		log.Printf("caddy CLI 校验器不可用，跳过逃生口预检（应用拒绝仍回滚）: %v", err)
+	}
+
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("备份当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
@@ -884,6 +910,8 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
+	// 事务型路径重载审计（69d809b4 曾误删，2026-09-06 恢复）。
+	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 	// R72 二十六次 D3（裁决：保留逃生口 + 明示后果）：自定义 Caddy 配置是
 	// 一次性逃生口，数据库生成器从不消费 caddy_config 列——任何后续规则/
 	// 配置变更或集群同步都会以权威生成配置覆盖它。保存成功即明示。

@@ -217,7 +217,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		return fmt.Errorf("协议仅支持 http 或 tcp")
 	}
 	// Round 37 I-5: strategy 白名单校验，非法值不再透传到 Caddy。
-	// 协议感知：cookie 仅 HTTP 支持，TCP 规则拒绝，与 handlers.go validateCaddyConfigBeforeSave 对齐。
+	// 协议感知：cookie 仅 HTTP 支持，TCP 规则拒绝，与 handlers.go validateRulePayloadBeforeSave 对齐。
 	if input.Strategy != "" {
 		httpStrategies := map[string]bool{
 			"weighted_round_robin": true, "least_conn": true,

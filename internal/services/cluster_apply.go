@@ -725,7 +725,7 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 			continue
 		}
 		// R51 发现3：acme_config_id=0 / 悬挂配置引用在主节点是「单规则损坏」
-		// 状态（issuer 按单任务失败，写入侧已被 validateCaddyConfigBeforeSave
+		// 状态（issuer 按单任务失败，写入侧已被三层校验+事务内应用
 		// 拦截，仅导入残留/直改库可达）。整包拒绝会让一条坏规则瘫痪全部从
 		// 节点同步——对齐 verifySnapshotConsistency 的 fail-open 哲学，逐条
 		// 跳过+warn，主节点修复后随后续同步自愈。
