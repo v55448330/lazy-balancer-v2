@@ -48,7 +48,7 @@ docker run -d --name lazy-balancer --network host \
 
 内核/容器、负载均衡、WAF、HTTP/3 与观测五层的完整调优（每条建议均映射到面板/API 实际配置项）见 **[docs/production-tuning.zh-CN.md](docs/production-tuning.zh-CN.md)**。速览：
 
-- **内核（Ubuntu 宿主）**：`--network host` 下容器级 sysctl 不可用，需在宿主 `/etc/sysctl.d/` 配置 `net.core.rmem_max/wmem_max=7500000`（HTTP/3 UDP 缓冲，消除启动期 receive buffer 警告）、`somaxconn=4096`、`ip_local_port_range=10000 65535`、`fs.file-max=2097152`；防火墙放行 `443/udp`（host 模式天然绑定）
+- **内核（Ubuntu 宿主，可选——默认内核可直接跑生产，症状驱动才调）**：`--network host` 下容器级 sysctl 不可用，需在宿主 `/etc/sysctl.d/` 配置 `net.core.rmem_max/wmem_max=7500000`（HTTP/3 UDP 缓冲，消除启动期 receive buffer 警告）、`somaxconn=4096`、`ip_local_port_range=10000 65535`、`fs.file-max=2097152`；防火墙放行 `443/udp`（host 模式天然绑定）
 - **fd 上限**：`--ulimit nofile=1048576:1048576`（每连接一个 fd，默认 1024 在 LB 场景必炸；compose 已内置）
 - **负载均衡**：开启上游 KeepAlive 复用（`upstream_keepalive_timeout` 60–120s，单项收益最大）；`proxy_dial_timeout` 3–5s + 主动健康检查 + `least_conn` 快速故障转移；上游按容量设 `max_connections`
 - **WAF**：`detection` 观察 3–7 天再切 `blocking`；CRS 按攻击组裁剪；误报优先用 CRS 排除/自定义放行而非降阈值；限流按规则粒度（登录端点小桶）

@@ -49,7 +49,7 @@ docker run -d --name lazy-balancer --network host \
 
 The complete five-layer guide — kernel/container, load balancing, WAF, HTTP/3/TLS, and observability, with every recommendation mapped to actual panel/API fields — lives in **[docs/production-tuning.zh-CN.md](docs/production-tuning.zh-CN.md)** (Chinese). Quick summary:
 
-- **Kernel (Ubuntu host)**: with `--network host`, per-container sysctls don't apply — set on the host via `/etc/sysctl.d/`: `net.core.rmem_max/wmem_max=7500000` (HTTP/3 UDP buffers; clears the startup receive-buffer warning), `somaxconn=4096`, `ip_local_port_range=10000 65535`, `fs.file-max=2097152`; open `443/udp` in the firewall
+- **Kernel (Ubuntu host, optional — stock defaults are production-ready; tune only on symptoms)**: with `--network host`, per-container sysctls don't apply — set on the host via `/etc/sysctl.d/`: `net.core.rmem_max/wmem_max=7500000` (HTTP/3 UDP buffers; clears the startup receive-buffer warning), `somaxconn=4096`, `ip_local_port_range=10000 65535`, `fs.file-max=2097152`; open `443/udp` in the firewall
 - **File descriptors**: `--ulimit nofile=1048576:1048576` (one fd per connection; the default 1024 is a production incident waiting to happen; already built into the bundled compose file)
 - **Load balancing**: enable upstream keepalive reuse (`upstream_keepalive_timeout` 60–120s — the single highest-payoff tweak); `proxy_dial_timeout` 3–5s + active health checks + `least_conn` for fast failover; cap upstreams with `max_connections`
 - **WAF**: run `detection` mode for 3–7 days before switching to `blocking`; trim CRS by attack group; handle false positives via CRS exclusions/custom allow rules rather than lowering thresholds; rate-limit per rule (small buckets on login endpoints)

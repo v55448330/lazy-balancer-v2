@@ -12,6 +12,10 @@
 主节点采用 `network_mode: host`（Caddy 直接绑定宿主端口），因此命名空间化的
 `--sysctl` 不适用，内核参数必须在**宿主机**配置。
 
+> **必要性分级**：以下 sysctl 全部为「症状驱动的进阶调优」，默认 Ubuntu 内核
+> 可直接跑生产，不调不影响功能与稳定性。真正必须的只有进程 fd 上限
+> （`ulimits`，仓库 compose 已内置）。各项的触发条件见表格备注。
+
 ### 宿主机 sysctl（`/etc/sysctl.d/99-lazy-balancer.conf`，`sysctl --system` 生效）
 
 ```conf
