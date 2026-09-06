@@ -25,6 +25,12 @@ services:
       - NODE_NAME=master
       - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped
+    # 生产 fd 上限：每个连接一个 fd（含 TLS/日志），默认 1024 在 LB 场景必炸。
+    # 详见 docs/production-tuning.zh-CN.md §1
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
 
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 主节点地址注册时填写: http://host.docker.internal:8000
@@ -48,4 +54,8 @@ services:
       - TZ=Asia/Shanghai
       - NODE_NAME=slave-test
       - LOG_FILE=/app/logs/lazy-balancer.log
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     restart: unless-stopped
