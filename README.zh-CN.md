@@ -32,15 +32,29 @@ docker pull v55448330/lazy-balancer-v2:<tag> && docker compose up -d
 # 本地开发迭代（仅调试：单平台、仅本地，不用于发布）
 docker compose up -d --build
 
-# docker run
+# docker run（生产推荐参数——完整调优见 docs/production-tuning.zh-CN.md）
 docker run -d --name lazy-balancer --network host \
+  --restart unless-stopped \
+  --ulimit nofile=1048576:1048576 \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.4
+  v55448330/lazy-balancer-v2:v2.2.5
 ```
 
-> 镜像需直接绑定宿主机 80/443 及自定义监听端口，Linux 建议 `--network host`；macOS/Windows 用 `-p 8000:8000 -p 80:80 -p 443:443`。首次访问 `http://<host>:8000` 进入初始化向导创建管理员，无默认账号密码。
+> 镜像需直接绑定宿主机 80/443 及自定义监听端口，Linux 建议 `--network host`；macOS/Windows 用 `-p 8000:8000 -p 80:80 -p 443:443 -p 443:443/udp`（UDP 映射是 HTTP/3 必需）。首次访问 `http://<host>:8000` 进入初始化向导创建管理员，无默认账号密码。
+
+## 生产优化建议（摘要）
+
+内核/容器、负载均衡、WAF、HTTP/3 与观测五层的完整调优（每条建议均映射到面板/API 实际配置项）见 **[docs/production-tuning.zh-CN.md](docs/production-tuning.zh-CN.md)**。速览：
+
+- **内核（Ubuntu 宿主）**：`--network host` 下容器级 sysctl 不可用，需在宿主 `/etc/sysctl.d/` 配置 `net.core.rmem_max/wmem_max=7500000`（HTTP/3 UDP 缓冲，消除启动期 receive buffer 警告）、`somaxconn=4096`、`ip_local_port_range=10000 65535`、`fs.file-max=2097152`；防火墙放行 `443/udp`（host 模式天然绑定）
+- **fd 上限**：`--ulimit nofile=1048576:1048576`（每连接一个 fd，默认 1024 在 LB 场景必炸；compose 已内置）
+- **负载均衡**：开启上游 KeepAlive 复用（`upstream_keepalive_timeout` 60–120s，单项收益最大）；`proxy_dial_timeout` 3–5s + 主动健康检查 + `least_conn` 快速故障转移；上游按容量设 `max_connections`
+- **WAF**：`detection` 观察 3–7 天再切 `blocking`；CRS 按攻击组裁剪；误报优先用 CRS 排除/自定义放行而非降阈值；限流按规则粒度（登录端点小桶）
+- **观测**：`caddy_log_level=warn`、审计保留按合规（1–12 月）、高 QPS 规则关闭访问日志靠指标观测
+
+所有配置写入均受四道合法性关卡保护（前端校验 → 后端字段校验 → caddy CLI 校验 → 事务内应用门控）：非法值 400 拒绝且不落库，运行中的规则与策略零扰动。
 
 ## 挂载目录
 
@@ -138,7 +152,7 @@ docker run -d --name lazy-balancer --network host \
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
-v55448330/lazy-balancer-v2:v2.2.2
+v55448330/lazy-balancer-v2:v2.2.5
 ```
 
 ## License

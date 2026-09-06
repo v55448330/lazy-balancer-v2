@@ -32,15 +32,30 @@ docker pull v55448330/lazy-balancer-v2:<tag> && docker compose up -d
 # Local dev iteration (debug only: single platform, local only — NOT for release)
 docker compose up -d --build
 
-# docker run
+# docker run (production-recommended flags — full tuning guide: docs/production-tuning.zh-CN.md)
 docker run -d --name lazy-balancer --network host \
+  --restart unless-stopped \
+  --ulimit nofile=1048576:1048576 \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.4
+  v55448330/lazy-balancer-v2:v2.2.5
 ```
 
-> The image must bind host ports 80/443 plus custom listen ports directly; `--network host` is recommended on Linux. On macOS/Windows use `-p 8000:8000 -p 80:80 -p 443:443`. The first visit to `http://<host>:8000` opens an initialization wizard that creates the admin account; there are no default credentials.
+> The image must bind host ports 80/443 plus custom listen ports directly; `--network host` is recommended on Linux. On macOS/Windows use `-p 8000:8000 -p 80:80 -p 443:443 -p 443:443/udp` (the UDP mapping is required for HTTP/3). The first visit to `http://<host>:8000` opens an initialization wizard that creates the admin account; there are no default credentials.
+
+
+## Production Tuning (Summary)
+
+The complete five-layer guide — kernel/container, load balancing, WAF, HTTP/3/TLS, and observability, with every recommendation mapped to actual panel/API fields — lives in **[docs/production-tuning.zh-CN.md](docs/production-tuning.zh-CN.md)** (Chinese). Quick summary:
+
+- **Kernel (Ubuntu host)**: with `--network host`, per-container sysctls don't apply — set on the host via `/etc/sysctl.d/`: `net.core.rmem_max/wmem_max=7500000` (HTTP/3 UDP buffers; clears the startup receive-buffer warning), `somaxconn=4096`, `ip_local_port_range=10000 65535`, `fs.file-max=2097152`; open `443/udp` in the firewall
+- **File descriptors**: `--ulimit nofile=1048576:1048576` (one fd per connection; the default 1024 is a production incident waiting to happen; already built into the bundled compose file)
+- **Load balancing**: enable upstream keepalive reuse (`upstream_keepalive_timeout` 60–120s — the single highest-payoff tweak); `proxy_dial_timeout` 3–5s + active health checks + `least_conn` for fast failover; cap upstreams with `max_connections`
+- **WAF**: run `detection` mode for 3–7 days before switching to `blocking`; trim CRS by attack group; handle false positives via CRS exclusions/custom allow rules rather than lowering thresholds; rate-limit per rule (small buckets on login endpoints)
+- **Observability**: `caddy_log_level=warn`, audit retention per compliance (1–12 months), disable per-rule access logs on high-QPS rules and rely on metrics
+
+Every config write passes four validity gates (frontend → backend field validation → caddy CLI validation → in-transaction apply): invalid values are rejected with a 400 and never committed; running rules and policies are never disturbed.
 
 ## Mounted Directories
 
@@ -142,7 +157,7 @@ Configuration changes on the primary auto-increment the cluster version; replica
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
-v55448330/lazy-balancer-v2:v2.2.2
+v55448330/lazy-balancer-v2:v2.2.5
 ```
 
 ## License
