@@ -673,9 +673,6 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 // 回退归到首启用策略，id:7 不改变归因结果）。
 const ipPrecheckAllowRuleID = 7
 
-// intersectIPLists 返回多个名单的交集（保持首名单出现顺序）；空集返回 nil。
-// 哈希集实现 O(n+m)：多策略 allow 模式合并集可达 10 万条目级，逐对线性
-// 扫描会把配置生成（持 CaddyService 互斥锁）拖至分钟级。
 // intersectIPLists 返回多组 IP/CIDR 名单的网络感知交集（裁定 2026-09-07 S2）：
 // 对每对条目判断 CIDR 包含关系，保留更具体的一方（10.0.0.0/8 ∩ 10.1.0.5
 // = 10.1.0.5）。字符串精确匹配兼容（相同文本=同网络）。空交集返回 nil。
@@ -795,7 +792,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 		// 全部策略的信任名单。单策略下信任 IP 经 ctl:ruleEngine=Off 跳过 ACL，
 		// 多策略预检若不并入信任则同一 IP 会被 allow 交集拒绝（行为随绑定数漂移）。
 		for _, p := range policies {
-			if p == nil {
+			if p == nil || !p.IPWhitelistEnabled {
 				continue
 			}
 			for _, trusted := range mergedWhitelist(p) {

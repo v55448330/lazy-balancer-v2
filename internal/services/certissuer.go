@@ -343,7 +343,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 					if s.caddyReloader != nil {
 						err := s.caddyReloader()
 						// 2026-09-07 裁定 C1：fast-path 重载与主路径（:536/:539）统一留痕。
-						recordSystemReloadAudit("certificate_issued", err)
+						s.auditFastPathReload(jobID, material, err)
 						if err != nil {
 							return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
 						}
@@ -815,4 +815,13 @@ func parseCertNotAfter(certPEM string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse certificate: %w", err)
 	}
 	return cert.NotAfter, nil
+}
+
+// auditFastPathReload D1 修正：fast-path 重载审计带 job/rule 归因（对齐主路径粒度）。
+func (s *CertIssuer) auditFastPathReload(jobID int, material issuedCertificate, err error) {
+	if err != nil {
+		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID)), "")
+		return
+	}
+	RecordAuditLog("system", "重载", "Caddy服务", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
 }

@@ -19,9 +19,7 @@ import (
 
 // —— 常量（v2.1.8 MFA）——
 const (
-	mfaChallengeTTL      = 5 * time.Minute
 	mfaRecoveryCodeCount = 10
-	mfaStepUpWindow      = 10 * time.Minute
 )
 
 var mfaMu sync.Mutex

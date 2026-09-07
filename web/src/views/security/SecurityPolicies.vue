@@ -728,7 +728,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
-import { mfaAwareSuccess, request } from '@/utils/api'
+import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
@@ -2034,7 +2034,7 @@ const confirmExtract = async (): Promise<void> => {
     extractDialogVisible.value = false
     // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
     await fetchIpLists(openSeq)
-    mfaAwareSuccess(`已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
+    showSaveResult(res as unknown as { message?: string }, `已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to extract IP list:', error)

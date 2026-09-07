@@ -1787,6 +1787,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// R41 B3: 默认页重播种移入导入事务，与导入同生共死；失败仅记警告不阻断
 	// 导入（拦截响应短暂退化，由后续 SeedDefaultBlockPage/branding 触发自愈）。
 	reseedBlockPageNeeded := false
+	reseedApplyFailed := false
 	var hasDefaultBlockPage int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage); err != nil {
 		recordAudit(c, "导入警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
@@ -1927,6 +1928,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
+			reseedApplyFailed = true
 			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重新播种后"+note)
 		}
 	}
@@ -1949,8 +1951,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
-	// 2026-09-07 审计 L4：导入成功后清除陈旧 caddy_apply_error（对齐 N3/L2 口径）。
-	h.recordCaddyApplyResult(nil)
+	// 2026-09-07 审计 L4（round5 F2 修正）：导入成功后清除陈旧 caddy_apply_error
+	// ——但 reseed 失败时不清（reseed 的 caddyApplyNoteLocked 可能刚写入
+	// 失败标记，无条件清除会把真实失败横幅抹掉）。
+	if !reseedBlockPageNeeded || reseedApplyFailed == false {
+		h.recordCaddyApplyResult(nil)
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 }
 

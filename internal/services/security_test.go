@@ -63,7 +63,7 @@ func TestIntersectIPLists_cidrAware(t *testing.T) {
 
 func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8]；P2 deny=[9.9.9.9]
-	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
+	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
 	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
 
