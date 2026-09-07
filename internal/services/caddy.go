@@ -309,6 +309,13 @@ func (s *CaddyService) ValidateTxRenderViaCLI(tx *sql.Tx) error {
 		return nil
 	}
 	config := generateCaddyConfigFromStore(tx)
+	// 2026-09-07 审计 N2：渲染过程中 MaterializeCertPairs 可能已将证书文件
+	// 写盘——无论校验结果如何都恢复快照（后续 ApplyConfigFromTx 会重新生成
+	// 并重新物化），使本函数真正「零运行时副作用」（事务回滚时磁盘不留
+	// 未提交证书）。快照为空（无证书差异）时 RestoreCertFiles 为 no-op。
+	if snapshot, ok := config[caddyCertFilesSnapshotKey].(CertFilesSnapshot); ok {
+		defer func() { _ = RestoreCertFiles(snapshot) }()
+	}
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return &ConfigRejectedError{Err: errors.New(message)}
 	}

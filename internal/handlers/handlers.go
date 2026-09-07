@@ -195,7 +195,13 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 		}
 		return nil, err
 	}
-	return func() { recordAudit(c, "重载", "Caddy服务", reloadDetail) }, nil
+	return func() {
+		// 2026-09-07 审计 N3：成功重载后清除既往失败标记（对齐 finishTxApply
+		// 成功分支与 UpdateConfig/PutCaddyConfig 的 L2 口径——规则×5 不清
+		// 陈旧 caddy_apply_error 会导致横幅长亮）。
+		h.recordCaddyApplyResult(nil)
+		recordAudit(c, "重载", "Caddy服务", reloadDetail)
+	}, nil
 }
 
 // txReloadDetail 生成规则生命周期路径的重载审计明细（来源 + 规则归因 + 结果）。

@@ -535,7 +535,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		applyErr = errors.Join(applyErr, restoreErr)
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + applyErr.Error()})
+		// 2026-09-07 审计 N4：与规则域 D2 统一——配置拒绝→400，传输/系统→500。
+		if services.IsConfigRejected(applyErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，配置未保存: " + applyErr.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + applyErr.Error()})
+		}
 		return
 	}
 	if err := tx.Commit(); err != nil {

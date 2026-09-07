@@ -1,3 +1,11 @@
+# Caddy 配置与规则管理（v2.2.5 前文档——部分机制已被 2026-09-06/07 裁定取代）
+
+> **过时提示**：本文中 `validateCaddyConfigBeforeSave`（Caddy 级预校验探针）、
+> `ValidateRouteMergedConfig`/`ValidateTCPServerMergedConfig`（候选并入运行配置
+> 校验）已随 2026-09-06 裁定 ④' 撤除——现行 Caddy 层校验走 `caddy validate`
+> CLI（真 validate-only）+ 事务内 `ApplyConfigFromTx` 终门。相关段落仅作历史
+> 参考。字段级校验（`validateRulePayloadBeforeSave`）仍活跃。
+
 # Caddy 配置管理规范
 
 ## 核心原则

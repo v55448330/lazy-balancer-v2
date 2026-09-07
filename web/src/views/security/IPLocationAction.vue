@@ -70,7 +70,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
 import type { IpListOption } from '@/composables/useIpListAdd'
@@ -458,8 +459,8 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
       successMsg = `已切换为${ACL_LABELS[target]}模式并加入 ${props.ip}`
     }
 
-    await request.put(`/security/policies/${policy.id}`, body)
-    mfaAwareSuccess(successMsg)
+    const res = await request.put(`/security/policies/${policy.id}`, body)
+    showSaveResult(res as unknown as { message?: string }, successMsg)
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
@@ -497,8 +498,8 @@ const removeFromAcl = async (policy: PolicyRow): Promise<void> => {
     } catch {
       return
     }
-    await request.put(`/security/policies/${policy.id}`, { ip_acl_list: JSON.stringify(list.filter((entry) => entry !== props.ip)) })
-    mfaAwareSuccess(`已从策略「${policy.name}」的${listLabel}移除 ${props.ip}`)
+    const res = await request.put(`/security/policies/${policy.id}`, { ip_acl_list: JSON.stringify(list.filter((entry) => entry !== props.ip)) })
+    showSaveResult(res as unknown as { message?: string }, `已从策略「${policy.name}」的${listLabel}移除 ${props.ip}`)
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
@@ -528,11 +529,11 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
     }
     // 审计 W-S2（第六轮）：信任开关关闭时明确告知零生效——成功 toast 不再误导
     const trustEnabled = detail.ip_whitelist_enabled !== false
-    await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
+    const res = await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
     if (trustEnabled) {
-      mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单`)
+      showSaveResult(res as unknown as { message?: string }, `已加入策略「${policy.name}」的信任名单`)
     } else {
-      mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单——注意：该策略的信任名单当前为关闭状态，此 IP 暂不生效（需在策略向导中开启信任名单）`)
+      showSaveResult(res as unknown as { message?: string }, `已加入策略「${policy.name}」的信任名单——注意：该策略的信任名单当前为关闭状态，此 IP 暂不生效（需在策略向导中开启信任名单）`)
     }
     await refreshRow(policy.id)
   } catch {

@@ -306,7 +306,8 @@ import { ref, computed, onMounted } from 'vue'
 import { Refresh, Warning, ArrowRight, View, Hide } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CheckboxValueType } from 'element-plus'
-import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
+import { request, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
@@ -536,8 +537,8 @@ const confirmCrsExclude = async (): Promise<void> => {
   } catch { return }
   crsSubmitting.value = true
   try {
-    const res = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${ev.policy_id}`)
-    const detail = res.data?.policy
+    const detailRes = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${ev.policy_id}`)
+    const detail = detailRes.data?.policy
     if (!detail) throw new Error('策略详情响应缺少数据')
     const rows = parseCrsExcludedRules(detail.crs_excluded_rules)
     const scope = crsExcludeScope.value
@@ -564,8 +565,8 @@ const confirmCrsExclude = async (): Promise<void> => {
       ips: r.scope === 'ip' ? r.ips.join(',') : '',
       listRefs: r.scope === 'list' ? r.listRefs : [],
     }))
-    await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(wireRows) })
-    mfaAwareSuccess(`已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单，已生效并重载`)
+    const res = await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(wireRows) })
+    showSaveResult(res as unknown as { message?: string }, `已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单`)
     crsDialogVisible.value = false
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
