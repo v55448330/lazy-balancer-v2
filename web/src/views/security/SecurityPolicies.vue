@@ -122,7 +122,7 @@
             <el-form-item label="WAF 模式">
               <el-radio-group v-model="form.mode">
                 <el-radio value="off">关闭</el-radio>
-                <el-radio value="detection">检测（仅记录）</el-radio>
+                <el-radio value="detection">检测（WAF 仅记录；IP/地域/自定义仍拦截）</el-radio>
                 <el-radio value="blocking">拦截（阻断请求）</el-radio>
               </el-radio-group>
             </el-form-item>

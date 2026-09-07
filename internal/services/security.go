@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -675,6 +676,9 @@ const ipPrecheckAllowRuleID = 7
 // intersectIPLists 返回多个名单的交集（保持首名单出现顺序）；空集返回 nil。
 // 哈希集实现 O(n+m)：多策略 allow 模式合并集可达 10 万条目级，逐对线性
 // 扫描会把配置生成（持 CaddyService 互斥锁）拖至分钟级。
+// intersectIPLists 返回多组 IP/CIDR 名单的网络感知交集（裁定 2026-09-07 S2）：
+// 对每对条目判断 CIDR 包含关系，保留更具体的一方（10.0.0.0/8 ∩ 10.1.0.5
+// = 10.1.0.5）。字符串精确匹配兼容（相同文本=同网络）。空交集返回 nil。
 func intersectIPLists(lists [][]string) []string {
 	if len(lists) == 0 {
 		return nil
@@ -687,12 +691,14 @@ func intersectIPLists(lists [][]string) []string {
 	}
 	for _, rest := range lists[1:] {
 		next := make(map[string]struct{}, len(candidate))
-		for _, entry := range rest {
-			if entry == "" {
-				continue
-			}
-			if _, ok := candidate[entry]; ok {
-				next[entry] = struct{}{}
+		for outer := range candidate {
+			for _, inner := range rest {
+				if inner == "" {
+					continue
+				}
+				if hit := cidrIntersectEntry(outer, inner); hit != "" {
+					next[hit] = struct{}{}
+				}
 			}
 		}
 		candidate = next
@@ -700,21 +706,47 @@ func intersectIPLists(lists [][]string) []string {
 			return nil
 		}
 	}
-	var intersection []string
-	emitted := make(map[string]struct{}, len(candidate))
-	for _, entry := range lists[0] {
-		if entry == "" {
-			continue
-		}
-		if _, ok := candidate[entry]; ok {
-			if _, dup := emitted[entry]; dup {
-				continue
-			}
-			emitted[entry] = struct{}{}
-			intersection = append(intersection, entry)
-		}
+	// CIDR 感知交集的结果可能来自任意列表（更具体的一方），不能仅从 lists[0]
+	// 过滤——直接收集 candidate 并排序保证确定性。
+	intersection := make([]string, 0, len(candidate))
+	for entry := range candidate {
+		intersection = append(intersection, entry)
 	}
+	sort.Strings(intersection)
 	return intersection
+}
+
+// cidrIntersectEntry 判断两个 IP/CIDR 条目的网络包含关系，返回更具体的一方。
+func cidrIntersectEntry(a, b string) string {
+	if a == b {
+		return a
+	}
+	_, anet, aErr := net.ParseCIDR(a)
+	_, bnet, bErr := net.ParseCIDR(b)
+	aIsCIDR := aErr == nil
+	bIsCIDR := bErr == nil
+	if aIsCIDR && bIsCIDR {
+		if anet.Contains(bnet.IP) {
+			return b
+		}
+		if bnet.Contains(anet.IP) {
+			return a
+		}
+		return ""
+	}
+	if aIsCIDR && !bIsCIDR {
+		if bip := net.ParseIP(b); bip != nil && anet.Contains(bip) {
+			return b
+		}
+		return ""
+	}
+	if !aIsCIDR && bIsCIDR {
+		if aip := net.ParseIP(a); aip != nil && bnet.Contains(aip) {
+			return a
+		}
+		return ""
+	}
+	return ""
 }
 
 // buildIPPrecheckDirectives 合并全部绑定启用策略的 deny 侧 IP 控制（deny 模式
@@ -759,6 +791,19 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
 	if len(allowLists) > 0 {
 		intersection := intersectIPLists(allowLists)
+		// 裁定 2026-09-07 S1：信任名单并入 allow 放行集——预检放行 = ACL 交集 ∪
+		// 全部策略的信任名单。单策略下信任 IP 经 ctl:ruleEngine=Off 跳过 ACL，
+		// 多策略预检若不并入信任则同一 IP 会被 allow 交集拒绝（行为随绑定数漂移）。
+		for _, p := range policies {
+			if p == nil {
+				continue
+			}
+			for _, trusted := range mergedWhitelist(p) {
+				if trusted != "" {
+					intersection = append(intersection, trusted)
+				}
+			}
+		}
 		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
 		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
 		if len(intersection) == 0 {

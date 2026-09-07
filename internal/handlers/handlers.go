@@ -242,6 +242,11 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	// note 闭包按 reloadDetailFor(f) 落盘）。
 	if applyErr == nil {
 		if err := tx.Commit(); err != nil {
+			// 2026-09-07 审计 L5：SQLite commit 失败极罕见（磁盘满/IO 错误）。
+			// 此处无运行配置回弹——apply 已成功（Caddy 跑新态），DB 回滚到旧态。
+			// 分叉窗口持续到下次成功 apply；caddy_apply_error 由此前失败遗留
+			// 或看门狗检测。16 安全入口无 snapshotImportRuntime 可用（探针撤除
+			// 后不再预取快照），加回弹需引入快照机制——当前按已知边界处理。
 			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("提交事务失败", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 			return

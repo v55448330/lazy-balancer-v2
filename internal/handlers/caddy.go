@@ -889,7 +889,12 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		err = errors.Join(err, rollbackErr, restoreErr)
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 拒绝配置: " + err.Error()})
+		// 2026-09-07 审计 L6：与 D2/N4 统一——配置拒绝→400，传输/系统→500。
+		if services.IsConfigRejected(err) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 拒绝配置: " + err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
+		}
 		return
 	}
 	if err := tx.Commit(); err != nil {
