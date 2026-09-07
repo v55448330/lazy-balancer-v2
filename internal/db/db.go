@@ -709,7 +709,7 @@ func runMigrations() error {
 		"users.mfa_failed_attempts":                       "INTEGER DEFAULT 0",
 		"users.mfa_locked_until":                          "DATETIME",
 		"users.mfa_pending_fails":                         "INTEGER DEFAULT 0",
-		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 确认冷却的
+		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 写保护的
 		// mfa_* 计数列独立，登录锁定与 MFA 冷却互不牵连）。计数列 NOT NULL——
 		// 存量行取默认 0，不存在 NULL 语义。
 		"users.login_failed_attempts":                 "INTEGER NOT NULL DEFAULT 0",

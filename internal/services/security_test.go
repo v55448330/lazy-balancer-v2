@@ -73,3 +73,30 @@ func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 		t.Fatalf("directives missing trust IP in allow set:\n%s", directives)
 	}
 }
+
+// 2026-09-08 审计 SF3：D3 门控关闭路径——IPWhitelistEnabled=false 的信任
+// 名单不得并入多策略预检（与 BuildCorazaDirectives 信任三态口径一致）。
+func TestBuildIPPrecheck_trustDisabledNotIncluded(t *testing.T) {
+	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8] 但信任开关关闭；P2 deny=[9.9.9.9]
+	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
+	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+
+	// Then：allow 放行集应仅含 1.2.3.4（信任关闭→不并入）
+	if strings.Contains(directives, "5.6.7.8") {
+		t.Fatalf("directives contains disabled trust IP:\n%s", directives)
+	}
+	if !strings.Contains(directives, "1.2.3.4") {
+		t.Fatalf("directives missing ACL allow IP:\n%s", directives)
+	}
+}
+
+// 2026-09-08 审计 SF1：同基址不同掩码的方向独立性。
+func TestCidrIntersectEntry_directionIndependent(t *testing.T) {
+	// 同基址，/8 比 /16 宽——无论参数顺序，都应返回 /16（更窄）
+	forward := cidrIntersectEntry("10.0.0.0/8", "10.0.0.0/16")
+	backward := cidrIntersectEntry("10.0.0.0/16", "10.0.0.0/8")
+	if forward != "10.0.0.0/16" || backward != "10.0.0.0/16" {
+		t.Fatalf("forward=%q backward=%q, both want 10.0.0.0/16（更窄方）", forward, backward)
+	}
+}

@@ -808,6 +808,10 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			return
 		}
 		if !services.MFAWriteGuardEnabled() {
+			// 2026-09-08 审计 SA1：DB 读失败时 MFAWriteGuardEnabled 返回 false
+			// → 守卫静默关闭（fail-open）。这是有意设计：step-up 是第二因子
+			// 便利层（ jwtAuth 已在前序 fail-closed 把关），DB 故障时锁死全部
+			// 写操作不可取。全局开关默认 off 与此行为一致。
 			c.Next()
 			return
 		}

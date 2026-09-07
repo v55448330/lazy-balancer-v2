@@ -2228,18 +2228,27 @@ const handleSave = async () => {
     // INSERT OR IGNORE 本策略一行，绝不动该规则的兄弟绑定）；取消选择的规则只
     // DELETE 解绑本策略一行。规则的完整绑定列表不经本对话框改写——PUT 全量替换
     // 需要持有兄弟绑定快照，在本入口属于危险且无必要的写法。
+    let bindLastRes: { message?: string } | undefined
     try {
-      await Promise.all([
+      // 2026-09-08 审计 FE1：捕获最后一个响应传 showSaveResult——退化 200+后缀
+      // （Caddy 应用失败但 DB 已提交）时持续警告可见（有全局横幅兜底但即时
+      // 反馈更佳）。bind/unbind 均经 finishTxApply 可产生后缀。
+      const bindResults = await Promise.all([
         ...added.map((caddyId) => request.post(`/security/policies/${editingId.value}/bind`, { rule_caddy_id: caddyId })),
         ...removed.map((caddyId) => request.delete(`/security/policies/${editingId.value}/bind/${caddyId}`)),
       ])
+      bindLastRes = bindResults[bindResults.length - 1] as { message?: string }
     } catch (error: unknown) {
       // 失败的 bind 请求已由全局拦截器逐个 toast，这里仅记录并中止收尾
       console.error('Failed to sync policy bindings:', error)
      ElMessage.warning('策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
       return
     }
-    showSaveResult(saveRes, '保存成功'); dialogVisible.value = false; fetchData()
+    showSaveResult(saveRes, '保存成功')
+    // 2026-09-08 审计 FE1：bind/unbind 的退化 200+后缀也需可见（有后缀才弹，
+    // 无后缀不重复 toast）
+    if (bindLastRes?.message?.includes('Caddy 配置应用失败')) showSaveResult(bindLastRes, '')
+    dialogVisible.value = false; fetchData()
   } catch { /* 具体错误已由全局 axios 拦截器统一展示 */ } finally { saving.value = false }
 }
 

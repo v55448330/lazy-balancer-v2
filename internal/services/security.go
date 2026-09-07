@@ -723,10 +723,15 @@ func cidrIntersectEntry(a, b string) string {
 	aIsCIDR := aErr == nil
 	bIsCIDR := bErr == nil
 	if aIsCIDR && bIsCIDR {
-		if anet.Contains(bnet.IP) {
+		// 2026-09-08 审计 SF1：加掩码长度消除方向依赖——同基址不同掩码时
+		// Contains(基址) 双向均为 true，旧实现返回值取决于参数顺序。补
+		// prefix 长度比较保证恒返回更窄（更具体）的一方。
+		aOnes, _ := anet.Mask.Size()
+		bOnes, _ := bnet.Mask.Size()
+		if anet.Contains(bnet.IP) && aOnes <= bOnes {
 			return b
 		}
-		if bnet.Contains(anet.IP) {
+		if bnet.Contains(anet.IP) && bOnes <= aOnes {
 			return a
 		}
 		return ""
