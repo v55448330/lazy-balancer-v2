@@ -991,6 +991,23 @@ func decodeSyncError(stored string) (string, models.SyncErrorCode) {
 // 清空 last_sync_error 前必须保留该标记到下周期。
 const syncReloadFailureMarkerPrefix = "apply_ok_reload_failed"
 
+// MarkStartupFallbackPending 在启动 last-good 回退成功后写入与 applySnapshot
+// 同语义的 apply_ok_reload_failed 补偿标记（裁定 2026-09-07 K1）：Pull 的 304
+// 分支识别该标记后全量重拉，使从节点在主节点无变更时也能收敛到 DB 最新渲染，
+// 消除「同步正常 + 运行旧配置」的静默窗口。主节点写入无害（从不 Pull，标记
+// 由下次成功 apply 的 recordCaddyApplyResult(nil) 清除语义覆盖，此处仅从节点
+// 调用方使用）。db 为 nil 时静默跳过（启动极早期）。
+func MarkStartupFallbackPending(ctx context.Context, database *sql.DB) error {
+	if database == nil {
+		return nil
+	}
+	markerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, err := database.ExecContext(markerCtx, "UPDATE global_config SET last_sync_error=? WHERE id=1",
+		encodeSyncError("apply_ok_reload_failed: 启动时数据库渲染被拒，已回退 last-known-good（运行配置与数据库分叉，已排队补偿重拉）", models.SyncErrorCodeApplyFailed))
+	return err
+}
+
 // syncFailureCountPrefix/syncFailureCountSuffix 界定组合消息中的「连续失败计数」
 // 片段：组合时只保留标记段首个失败原因 + 递增计数，消息长度因此有界，不会随
 // 连续失败把整条历史追加为前缀（O(n²) 累计写入，且经 Report 上抛膨胀主节点库）。

@@ -291,6 +291,8 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				log.Printf("read cert_renewal_days failed, using default 30: %v", err)
 				renewalDays = 30
 			}
+			// 2026-09-07 C2 核实：UI 输入 min=1（FreeCertificates.vue），0/负值仅 API 直写/导入可达——
+			// 按「无效值→默认 30 天」兜底（非「禁用续签」语义；禁用请移除任务或禁用规则）。
 			if renewalDays <= 0 {
 				renewalDays = 30
 			}
@@ -339,7 +341,10 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 						return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
 					}
 					if s.caddyReloader != nil {
-						if err := s.caddyReloader(); err != nil {
+						err := s.caddyReloader()
+						// 2026-09-07 裁定 C1：fast-path 重载与主路径（:536/:539）统一留痕。
+						recordSystemReloadAudit("certificate_issued", err)
+						if err != nil {
 							return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
 						}
 					}
@@ -638,7 +643,10 @@ func restoreCertificateDeployment(snapshot CertFilesSnapshot, reloader func() er
 		return fmt.Errorf("restore previous certificate files: %w", err)
 	}
 	if reloader != nil {
-		if err := reloader(); err != nil {
+		err := reloader()
+		// 2026-09-07 裁定 C1：回滚重载同口径留痕（成功回滚=DB 态重渲染；失败=旧配置保留）。
+		recordSystemReloadAudit("certificate_issued", err)
+		if err != nil {
 			return fmt.Errorf("reload Caddy after certificate rollback: %w", err)
 		}
 	}

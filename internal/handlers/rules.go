@@ -644,6 +644,20 @@ func queryRuleDomainConflict(domain string, listenPort int, excludeCaddyID, extr
 	return false, nil
 }
 
+// respondRuleApplyError 规则×5 apply 错误统一映射（裁定 2026-09-07 D2）：
+// 配置拒绝（CLI/admin 4xx/生成失败）→ 400「Caddy 配置应用失败，规则未<动词>: …」；
+// ErrUnvalidatedApply/传输失败 → 500 同文案。恢复失败并入消息（不改状态码分类）。
+func respondRuleApplyError(c *gin.Context, applyErr, restoreErr error, verb string) {
+	if restoreErr != nil {
+		applyErr = errors.Join(applyErr, restoreErr)
+	}
+	if services.IsConfigRejected(applyErr) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未" + verb + ": " + applyErr.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，规则未" + verb + ": " + applyErr.Error()})
+}
+
 // 数据库即唯一事实源契约（CreateRule/UpdateRule 保存路径，2026-09-06 裁定 ④'）：
 //  1. 三层校验：后端字段校验（validateRuleFeatures/validateRulePayloadBeforeSave）先于
 //     任何写库；Caddy 层由 applyFromTxNote 内的 CLI 校验（真 validate-only）+ 事务内
@@ -939,7 +953,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_create", caddyID))
 	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未创建: " + errors.Join(applyErr, restoreErr).Error()})
+		respondRuleApplyError(c, applyErr, restoreErr, "创建")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -1676,7 +1690,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_update", caddyID))
 	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败，数据库未写入: " + errors.Join(applyErr, restoreErr).Error()})
+		respondRuleApplyError(c, applyErr, restoreErr, "更新")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2065,10 +2079,8 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		if restoreErr != nil {
 			services.Logf("error", "CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, applyErr, restoreErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", applyErr, restoreErr)})
-			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未删除: " + applyErr.Error()})
+		respondRuleApplyError(c, applyErr, restoreErr, "删除")
 		return
 	}
 	if err := h.removeRuleCertFiles(caddyID); err != nil {
@@ -2361,7 +2373,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
 		return
 	}
-	if err := validateRuleListenPort(ruleProtocol, rulePort); err != nil {
+	// 2026-09-07 裁定 D4：启用路径与保存路径同口径（叠加本进程真实管理口的
+	// LB-03 层——包级校验只覆盖默认口 8000/2019）。
+	if err := h.validateRuleListenPortForSave(ruleProtocol, rulePort); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
 		return
 	}
@@ -2432,12 +2446,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_enable", caddyID))
 	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		var validationErr *configValidationError
-		if errors.As(applyErr, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + errors.Join(validationErr, restoreErr).Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("应用 Caddy 配置失败: %v", errors.Join(applyErr, restoreErr))})
+		respondRuleApplyError(c, applyErr, restoreErr, "启用")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2671,7 +2680,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_disable", caddyID))
 	if applyErr != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", errors.Join(applyErr, restoreErr))})
+		respondRuleApplyError(c, applyErr, restoreErr, "禁用")
 		return
 	}
 	if err := tx.Commit(); err != nil {

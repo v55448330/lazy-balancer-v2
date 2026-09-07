@@ -483,3 +483,33 @@ func TestReloadCaddy_records_failure_audit_with_error_detail(t *testing.T) {
 		t.Fatalf("audit detail=%q, want Caddy error detail", detail)
 	}
 }
+
+// 裁定 2026-09-07 D1：撤 UpdateConfig 的 pre-tx /load 探针（与 ④'「探针已撤除」
+// 对齐；SQL 失败分支不再有已交换的运行配置需回弹=M2 根因消解）。
+func TestUpdateConfig_appliesExactlyOnce(t *testing.T) {
+	newBackupTestHandlers(t)
+	var loads int
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/config/" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/load" {
+			loads++
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeCaddy.Close)
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: fakeCaddy.URL}, caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	router := gin.New()
+	router.PUT("/config", h.UpdateConfig)
+	rec := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"log_level":"warn"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, request)
+	t.Logf("update status=%d body=%s", rec.Code, rec.Body.String())
+	if loads != 1 {
+		t.Fatalf("/load calls=%d, want 1（探针已撤，仅事务内应用）", loads)
+	}
+}

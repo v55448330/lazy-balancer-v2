@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,4 +209,86 @@ func TestSecurityWrite_unvalidatedApplyFailsClosed(t *testing.T) {
 func newUnreachableCaddyService(t *testing.T, url string) *services.CaddyService {
 	t.Helper()
 	return services.NewCaddyService(url)
+}
+
+// 裁定 2026-09-07 D2：规则×5 apply 错误统一映射——配置拒绝→400（中文），
+// ErrUnvalidatedApply/传输失败→500；DisableRule 文案中文化。
+func TestRuleWrites_applyErrorStatusMapping(t *testing.T) {
+	tests := []struct {
+		name     string
+		seed     func()
+		mount    func(*gin.Engine, *Handlers)
+		method   string
+		path     string
+		body     string
+		rejected bool // true=CLI 拒绝(期望400)；false=传输失败(期望500)
+		wantMsg  string
+	}{
+		{name: "create 拒绝400", seed: func() {}, mount: func(r *gin.Engine, h *Handlers) { r.POST("/rules", h.CreateRule) }, method: http.MethodPost, path: "/rules",
+			body: `{"name":"d2","protocol":"http","domain":"d2.example.test","listen_port":8095,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`, rejected: true, wantMsg: "规则未创建"},
+		{name: "create 传输500", seed: func() {}, mount: func(r *gin.Engine, h *Handlers) { r.POST("/rules", h.CreateRule) }, method: http.MethodPost, path: "/rules",
+			body: `{"name":"d2t","protocol":"http","domain":"d2t.example.test","listen_port":8096,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`, rejected: false, wantMsg: "规则未创建"},
+		{name: "update 拒绝400", seed: func() {
+			seedAuditRule(t, "lb_d2", "before", "d2u.example.test", 8097, true, "manual", false)
+			seedAuditUpstream(t, "lb_d2")
+		}, mount: func(r *gin.Engine, h *Handlers) { r.PUT("/rules/:caddy_id", h.UpdateRule) }, method: http.MethodPut, path: "/rules/lb_d2",
+			body: `{"name":"after"}`, rejected: true, wantMsg: "规则未更新"},
+		{name: "enable 拒绝400", seed: func() {
+			seedAuditRule(t, "lb_d2e", "en", "d2e.example.test", 8098, false, "manual", false)
+			seedAuditUpstream(t, "lb_d2e")
+		}, mount: func(r *gin.Engine, h *Handlers) { r.POST("/rules/:caddy_id/enable", h.EnableRule) }, method: http.MethodPost, path: "/rules/lb_d2e/enable",
+			rejected: true, wantMsg: "规则未启用"},
+		{name: "disable 拒绝400中文", seed: func() {
+			seedAuditRule(t, "lb_d2d", "dis", "d2d.example.test", 8099, true, "manual", false)
+			seedAuditUpstream(t, "lb_d2d")
+		}, mount: func(r *gin.Engine, h *Handlers) { r.POST("/rules/:caddy_id/disable", h.DisableRule) }, method: http.MethodPost, path: "/rules/lb_d2d/disable",
+			rejected: true, wantMsg: "规则未禁用"},
+		{name: "delete 传输500", seed: func() {
+			seedAuditRule(t, "lb_d2x", "del", "d2x.example.test", 8100, true, "manual", false)
+		}, mount: func(r *gin.Engine, h *Handlers) { r.DELETE("/rules/:caddy_id", h.DeleteRule) }, method: http.MethodDelete, path: "/rules/lb_d2x",
+			rejected: false, wantMsg: "规则未删除"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, _, _ := newAuditRuleHandlers(t, 0)
+			if tt.rejected {
+				handler.caddyService.SetCLIValidatorForTest(func([]byte) error { return errors.New("cli: rejected") })
+			} else {
+				// 传输/系统失败类：CLI 不可用 + admin 对 /load 返回 5xx（非拒绝类）
+				handler.caddyService.SetCLIValidatorForTest(func([]byte) error { return services.ErrCLIValidatorUnavailable })
+				failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodGet && r.URL.Path == "/config/" {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte("{}"))
+						return
+					}
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				t.Cleanup(failing.Close)
+				handler.caddyService = services.NewCaddyService(failing.URL)
+			}
+			tt.seed()
+			router := gin.New()
+			tt.mount(router, handler)
+			var body io.Reader
+			if tt.body != "" {
+				body = strings.NewReader(tt.body)
+			}
+			request := httptest.NewRequest(tt.method, tt.path, body)
+			request.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, request)
+
+			wantCode := http.StatusBadRequest
+			if !tt.rejected {
+				wantCode = http.StatusInternalServerError
+			}
+			if rec.Code != wantCode {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), wantCode)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantMsg) {
+				t.Fatalf("body=%s, want contains %q（且须为中文）", rec.Body.String(), tt.wantMsg)
+			}
+		})
+	}
 }

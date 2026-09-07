@@ -439,20 +439,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// Generate config with requested overrides — DB is NOT touched yet
-	testConfig := services.GenerateCaddyConfig(&req)
-	// R69 C-N3-c：旧运行配置先于 validate 摄取——ValidateConfig 经 /load 真实
-	// apply 候选配置，后摄的 oldRuntimeConfig 是候选而非变更前状态，保存失败
-	// 时会把未提交配置恢复回去（DB/Caddy 反向分叉）。
+	// 2026-09-07 裁定 D1：撤 pre-tx /load 探针（与 ④'「探针已撤除」对齐）——
+	// 候选合法性由 applyFromTxNote 内 CLI 真 validate-only + 事务内应用承担；
+	// 探针曾使 SQL 失败分支面临「运行配置已换候选但 DB 未提交」的分叉（M2），
+	// 撤除后该窗口不存在。只读快照保留，仅供提交失败回弹使用。
 	oldRuntimeConfig, err := h.caddyService.GetConfig()
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("获取当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取当前 Caddy 配置失败"})
-		return
-	}
-	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
-		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置验证失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
 	}
 
@@ -540,12 +534,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if applyErr != nil {
 		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		applyErr = errors.Join(applyErr, restoreErr)
-		var validationErr *configValidationError
-		if errors.As(applyErr, &validationErr) {
-			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + validationErr.Error()})
-			return
-		}
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + applyErr.Error()})
 		return
@@ -562,6 +550,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 	committed = true
+	// 2026-09-07 裁定 L2：成功提交且应用后清除既往失败标记（对齐 finishTxApply 口径，
+	// 陈旧 caddy_apply_error 不再长亮横幅）。
+	h.recordCaddyApplyResult(nil)
 	services.ApplyLogLevel()
 	if req.Timezone != nil {
 		if _, err := services.ConfigureLocation(*req.Timezone); err != nil {
@@ -908,6 +899,8 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		return
 	}
 	committed = true
+	// 2026-09-07 裁定 L2：同 UpdateConfig——成功后清除既往失败标记。
+	h.recordCaddyApplyResult(nil)
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
 	// 事务型路径重载审计（69d809b4 曾误删，2026-09-06 恢复）。

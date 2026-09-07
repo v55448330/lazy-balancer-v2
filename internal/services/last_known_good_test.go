@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,5 +75,23 @@ func TestCaddyService_ApplyLastKnownGood_sendsFileContentToLoad(t *testing.T) {
 	defer mu.Unlock()
 	if len(bodies) != 1 || !strings.Contains(bodies[0], `"fallback":true`) {
 		t.Fatalf("loads=%v, want file content delivered", bodies)
+	}
+}
+
+// 裁定 2026-09-07 K1：从节点启动 last-good 回退后写 apply_ok_reload_failed
+// 补偿标记——Pull 的 304 分支识别后全量重拉，消除「同步正常+运行旧配置」的
+// 静默窗口（主节点长期静态时从节点不再卡旧配置直到人工干预）。
+func TestMarkStartupFallbackPending_writesCompensationMarker(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if err := MarkStartupFallbackPending(context.Background(), database); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := decodeSyncError(stored)
+	if !strings.HasPrefix(msg, "apply_ok_reload_failed") {
+		t.Fatalf("last_sync_error=%q, want apply_ok_reload_failed marker（304 分支据此触发补偿重拉）", msg)
 	}
 }

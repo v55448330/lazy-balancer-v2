@@ -696,6 +696,15 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 			wrapped := fmt.Sprintf("启动时数据库渲染的配置被 Caddy 拒绝，已回退最后已知正确配置（负载均衡保持可用，运行配置与数据库分叉待修复）：%v", err)
 			services.Logf("error", "CRITICAL: %s", wrapped)
 			services.RecordAuditLog("system", "启动警告", "系统配置", wrapped, "")
+			// 2026-09-07 裁定 K1：从节点追加补偿标记——Pull 的 304 分支识别后
+			// 全量重拉，消除「同步正常+运行旧配置」静默窗口；主节点不经 Pull
+			// 消费该标记，故不写。
+			var isMaster bool
+			if mErr := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); mErr == nil && !isMaster {
+				if mErr := services.MarkStartupFallbackPending(context.Background(), db.DB); mErr != nil {
+					log.Printf("startup fallback: write compensation marker failed: %v", mErr)
+				}
+			}
 			return nil
 		} else {
 			log.Printf("last-known-good fallback failed: %v", fbErr)

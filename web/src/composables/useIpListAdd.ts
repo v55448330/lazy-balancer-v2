@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import type { APIResponse } from '@/types'
 
 /** 地址列表选项行（GET /security/ip-lists）——事件弹框 / IP 悬浮弹层等下拉共用形态 */
@@ -53,8 +54,11 @@ export const useIpListAdd = () => {
     try {
       // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
       const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: ip })
-      if (res.data?.added) mfaAwareSuccess(options.successText ?? `已${verb}地址列表「${list.name}」`)
-      else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
+      if (res.data?.added) {
+        // 2026-09-07 裁定 L1：经 showSaveResult 呈现——退化 200+后缀（Caddy 应用
+        // 失败但 DB 已提交）时弹持续警告而非成功 toast，安全处置操作不可静默。
+        showSaveResult(res.data as unknown as { message?: string }, options.successText ?? `已${verb}地址列表「${list.name}」`)
+      } else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
       return true
     } catch {
       // 失败提示由全局拦截器弹出，这里只需终止流程

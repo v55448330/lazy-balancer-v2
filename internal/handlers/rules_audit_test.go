@@ -745,8 +745,8 @@ func TestRuleToggle_restores_original_state_when_Caddy_apply_fails(t *testing.T)
 			// When
 			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
 
-			// Then
-			if response.Code != http.StatusInternalServerError {
+			// Then：配置被 Caddy 拒绝 → 400（裁定 2026-09-07 D2 统一映射）
+			if response.Code != http.StatusBadRequest {
 				t.Fatalf("toggle status=%d body=%s", response.Code, response.Body.String())
 			}
 			var enabled bool

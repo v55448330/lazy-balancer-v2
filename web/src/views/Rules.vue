@@ -487,7 +487,7 @@
                 <template #header>
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
                   <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
-                    ? '该上游并发连接数上限（caddy-l4 max_connections），0 为不限制'
+                    ? '该上游并发连接数上限（HTTP 规则映射为 reverse_proxy 每上游并发请求数 max_requests；TCP 规则映射为 caddy-l4 max_connections），0 为不限制'
                     : '该上游同时处理的请求数达到上限后判定不可用并移出负载（Caddy max_requests 语义），0 为不限制——HTTP 反代无逐上游并发连接限制'" >
                     <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
                   </el-tooltip>

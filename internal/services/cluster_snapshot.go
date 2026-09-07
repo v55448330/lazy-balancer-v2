@@ -435,9 +435,6 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.APIKeys, err = s.snapshotAPIKeys(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.Users, err = s.snapshotUsers(ctx, store); err != nil {
-		return models.ClusterSnapshot{}, err
-	}
 	if snapshot.LockedUsers, err = s.snapshotLockedUsers(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}

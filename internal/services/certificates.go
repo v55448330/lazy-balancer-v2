@@ -811,6 +811,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 	}
 	renewalDays := 30
 	_ = db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+	// 2026-09-07 C2 核实：UI 输入 min=1，0/负值仅 API 直写/导入可达——按默认 30 天兜底（非「禁用续签」）。
 	if renewalDays <= 0 {
 		renewalDays = 30
 	}
