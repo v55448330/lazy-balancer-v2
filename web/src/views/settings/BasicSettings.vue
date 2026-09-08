@@ -21,7 +21,7 @@
           </el-form-item>
           <el-form-item label="任务日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-block">MB，证书签发 / CRS / IP 库更新日志轮转阈值，保留 5 份（建议 10-50）</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，证书/CRS/IP 库轮转阈值（建议 10-50）</el-text>
           </el-form-item>
           <el-form-item label="审计日志大小">
           <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="512" controls-position="right" style="width: 120px;" />
@@ -64,7 +64,7 @@
             <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；标注夏令时的时区会随夏令时自动偏移；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="GitHub 加速">
-            <el-select v-model="githubProxyUrl" style="width: 200px">
+            <el-select v-model="githubProxyUrl" style="width: 160px">
               <el-option
                 v-for="option in githubProxyOptions"
                 :key="option.value"
@@ -72,7 +72,7 @@
                 :value="option.value"
               />
             </el-select>
-            <el-text type="info" size="small" class="tip-inline">CRS 规则库与 IP2Region IP 库下载使用的 GitHub 代理加速地址</el-text>
+            <el-text type="info" size="small" class="tip-inline">CRS 规则库与 IP2Region 的下载代理</el-text>
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
@@ -87,7 +87,7 @@
             <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />
             <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" @click="openAdminTlsDialog">配置证书</el-button>
             <el-text v-if="adminTlsDirty" type="warning" size="small" class="tip-inline">已暂存，点击下方保存后生效</el-text>
-            <el-text v-else type="info" size="small" class="tip-inline">启用后 :8000 仅经 HTTPS 访问（HTTP 不再生效），需重启服务生效</el-text>
+            <el-text v-else type="info" size="small" class="tip-inline">启用后 :8000 仅经 HTTPS 访问，需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="运行日志">
             <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
@@ -856,7 +856,7 @@ const handleSave = async () => {
 .settings-form { padding: 4px 0; }
 .compact-select { width: 240px; max-width: 100%; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
-.tip-block { display: block; margin-top: 4px; line-height: 1.5; }
+.tip-block { display: block; flex-basis: 100%; margin-top: 4px; line-height: 1.5; }
 .info-list { padding: 4px 0; }
 .info-item {
   display: flex;

@@ -63,7 +63,7 @@
       <el-divider content-position="left">访问日志</el-divider>
       <el-form-item label="自定义格式">
         <el-switch v-model="settings.access_log_json" :disabled="isReadOnly" active-text="自定义 JSON" inactive-text="Caddy JSON" />
-        <el-text type="info" size="small" class="tip-inline">开启后使用 filter 编码器按自定义格式输出；关闭时输出 Caddy 原生完整 JSON</el-text>
+        <el-text type="info" size="small" class="tip-block">开启后使用 filter 编码器按自定义格式输出；关闭时输出 Caddy 原生完整 JSON</el-text>
       </el-form-item>
       <el-form-item v-if="settings.access_log_json" label="日志格式">
         <div class="format-field">
@@ -297,6 +297,7 @@ onUnmounted(stopLogPolling)
 .compact-select { width: 240px; max-width: 100%; }
 .number-input { width: 120px; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
+.tip-block { display: block; flex-basis: 100%; margin-top: 4px; line-height: 1.5; }
 .format-field { width: 100%; min-width: 0; }
 .format-tip { display: block; margin-top: 4px; line-height: 1.5; white-space: normal; }
 .format-tip a { color: var(--primary); text-decoration: none; }
