@@ -36,12 +36,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   [ "$built" -eq 1 ] || { echo ">>> xcaddy build 3 次全部失败" >&2; exit 1; }; \
   [ -f /app/caddy ] || { echo ">>> 构建成功但 /app/caddy 未生成" >&2; exit 1; }
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
-# （版本下限：grpc>=v1.82、otel>=v1.44、x/net>=v0.56；go version -m 各列以 TAB 分隔，
-#  用 awk 的 ge() 做逐段数值化语义比较，不设上限，依赖升到大版本也不会误报。
+# （版本下限：grpc>=v1.83.1、otel>=v1.45、x/net>=v0.58、x/crypto>=v0.56；
+#  cel-go 钉 v0.28.1 不设断言——v0.29 与 Caddy v2.11.4 源码不兼容，见
+#  caddydeps/go.mod 注释；go version -m 各列以 TAB 分隔，用 awk 的 ge()
+#  做逐段数值化语义比较，不设上限，依赖升到大版本也不会误报。
 #  ge() 的局部变量必须以多余形参声明，否则会覆盖主循环的 i 导致漏检；
 #  且 awk 程序必须保持单行——多行函数体会破坏 RUN 指令解析）
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
-    awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } { for (i = 1; i < NF; i++) { if ($i == "google.golang.org/grpc") ok1 = ge($(i+1), "v1.82.0"); else if ($i == "go.opentelemetry.io/otel") ok2 = ge($(i+1), "v1.44.0"); else if ($i == "golang.org/x/net") ok3 = ge($(i+1), "v0.56.0") } } END { exit (ok1 && ok2 && ok3) ? 0 : 1 }' /tmp/caddy-mods.txt
+    awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } { for (i = 1; i < NF; i++) { if ($i == "google.golang.org/grpc") ok1 = ge($(i+1), "v1.83.1"); else if ($i == "go.opentelemetry.io/otel") ok2 = ge($(i+1), "v1.45.0"); else if ($i == "golang.org/x/net") ok3 = ge($(i+1), "v0.58.0"); else if ($i == "golang.org/x/crypto") ok4 = ge($(i+1), "v0.56.0") } } END { exit (ok1 && ok2 && ok3 && ok4) ? 0 : 1 }' /tmp/caddy-mods.txt
 
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend
