@@ -1264,7 +1264,53 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
 	}
 
+	if err := migrateSecurityPolicyCustomOnlyMode(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// migrateSecurityPolicyCustomOnlyMode(2026-09-09 裁定):WAF 模式四态化后
+// off 收敛为「CRS 与自定义规则均不生效」。存量 mode=off 且挂启用中自定义规则
+// 的策略自动迁移 custom_only,保持原有防护行为零突变。两种存储形状都识别:
+// 早期内嵌对象(元素含 $.enabled)与 v2.1.0 起的规则 ID 数组(元素为整数,
+// 需连 security_custom_rules 查 enabled)。一次性门(global_config 旗标列,
+// 同 sync_switches_migrated 先例):迁移后用户主动保存的 off+自定义规则
+// 属新语义合法状态,不得在下次重启被再次改写。json_each/json_extract 为
+// modernc sqlite 内建 JSON1。
+func migrateSecurityPolicyCustomOnlyMode() error {
+	var marker int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='waf_mode4_migrated'").Scan(&marker); err != nil {
+		return err
+	}
+	if marker == 0 {
+		if _, err := DB.Exec("ALTER TABLE global_config ADD COLUMN waf_mode4_migrated BOOLEAN DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var done bool
+	if err := DB.QueryRow("SELECT COALESCE(waf_mode4_migrated,0) FROM global_config WHERE id=1").Scan(&done); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if done {
+		return nil
+	}
+	res, err := DB.Exec(`UPDATE security_policies SET mode='custom_only'
+WHERE mode='off' AND EXISTS (
+  SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
+  WHERE json_extract(je.value,'$.enabled')=1
+     OR (json_type(je.value)='integer' AND EXISTS (
+          SELECT 1 FROM security_custom_rules r
+          WHERE r.id=je.value AND COALESCE(r.enabled,1)=1)))`)
+	if err != nil {
+		return fmt.Errorf("failed to migrate off-mode policies with custom rules: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		log.Printf("WAF 模式四态化迁移：%d 个 mode=off 且挂启用自定义规则的策略已迁移为 custom_only（行为不变）", n)
+	}
+	_, err = DB.Exec("UPDATE global_config SET waf_mode4_migrated=1 WHERE id=1")
+	return err
 }
 
 // normalizeCertJobsCAAvailableAfter 将 cert_jobs.ca_available_after 规范化为

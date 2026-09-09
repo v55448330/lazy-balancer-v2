@@ -31,6 +31,7 @@
           <template #default="{ row }">
             <el-tag v-if="row.mode === 'blocking'" type="danger" size="small" effect="light">拦截</el-tag>
             <el-tag v-else-if="row.mode === 'detection'" type="warning" size="small" effect="light">检测</el-tag>
+            <el-tag v-else-if="row.mode === 'custom_only'" size="small" effect="light">仅自定义</el-tag>
             <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
           </template>
         </el-table-column>
@@ -65,7 +66,10 @@
               <el-tooltip v-if="row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}`" placement="top">
                 <el-tag size="small" type="warning" effect="plain">限流</el-tag>
               </el-tooltip>
-              <span v-if="!row.has_waf && !hasIpControl(row) && !hasGeoControl(row) && !row.has_rate_limit" class="text-secondary">—</span>
+              <el-tooltip v-if="row.has_custom_rules" :content="`${row.custom_rules_count} 条启用中的自定义规则（按规则内动作执行）`" placement="top">
+                <el-tag size="small" effect="plain">自定义</el-tag>
+              </el-tooltip>
+              <span v-if="!row.has_waf && !row.has_custom_rules && !hasIpControl(row) && !hasGeoControl(row) && !row.has_rate_limit" class="text-secondary">—</span>
             </div>
           </template>
         </el-table-column>
@@ -120,22 +124,28 @@
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="WAF 模式">
-              <el-radio-group v-model="form.mode">
-                <el-radio value="off">关闭</el-radio>
-                <el-radio value="detection">检测（WAF 仅记录；IP/地域/自定义仍拦截）</el-radio>
-                <el-radio value="blocking">拦截（阻断请求）</el-radio>
+              <el-radio-group v-model="form.mode" class="mode-radio-group">
+                <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
+                     detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
+                <el-radio value="off">关闭（全不生效）</el-radio>
+                <el-radio value="custom_only">仅自定义规则（CRS 不生效）</el-radio>
+                <el-radio value="detection">检测（CRS 只记录）</el-radio>
+                <el-radio value="blocking">拦截（CRS 阻断）</el-radio>
               </el-radio-group>
+              <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效；自定义规则在检测/拦截/仅自定义模式下按规则内动作执行，计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）</div>
             </el-form-item>
-            <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭，以下配置不生效</div>
+            <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭：CRS 与自定义规则均不生效，以下 CRS 配置不可用</div>
+            <div v-else-if="form.mode === 'custom_only'" class="waf-off-hint">仅自定义模式：CRS 不生效，以下 CRS 配置不可用</div>
             <el-form-item label="异常阈值">
-              <el-select v-model="form.anomaly_threshold" :disabled="form.mode === 'off' || isReadOnly" style="width: 140px">
-                <el-option :value="1" label="极严格（1）" />
-                <el-option :value="3" label="严格（3）" />
-                <el-option :value="5" label="标准（5）" />
-                <el-option :value="10" label="宽松（10）" />
-                <el-option :value="20" label="极宽松（20）" />
+              <el-select v-model="form.anomaly_threshold" :disabled="crsFieldsOff || isReadOnly" style="width: 140px">
+                <el-option v-if="[1, 3].includes(form.anomaly_threshold)" :value="1" label="严格（存量档，严重规则任一命中即拦）" disabled />
+                <el-option v-if="form.anomaly_threshold === 3" :value="3" label="严格（存量档，严重规则任一命中即拦）" disabled />
+                <el-option :value="5" label="标准（任一严重规则命中即拦）" />
+                <el-option :value="10" label="宽松（2 条严重规则命中）" />
+                <el-option :value="15" label="很宽松（3 条严重规则命中）" />
+                <el-option :value="20" label="极宽松（4 条严重规则命中）" />
               </el-select>
-              <span class="form-tip-inline">规则异常分值累计达到此阈值后触发拦截，越低越严格</span>
+              <div class="form-tip-line">阈值以异常分为单位：CRS 严重规则每条 +5（错误 +4、警告 +3），自定义「计分」规则按其分值累加，累计达到阈值后触发拦截</div>
             </el-form-item>
             <el-form-item label="CRS 规则组">
               <!-- 懒加载级联多选：一级规则组节点（剔 01/49/59），展开组时才生成该组
@@ -149,7 +159,7 @@
                 :key="crsIndexLoaded ? 'ready' : 'pending'"
                 v-model="crsGroupCascaderValue"
                 :props="crsGroupCascaderProps"
-                :disabled="form.mode === 'off'"
+                :disabled="crsFieldsOff"
                 filterable
                 collapse-tags
                 collapse-tags-tooltip
@@ -175,7 +185,7 @@
                   size="small"
                   type="info"
                   effect="plain"
-                  :closable="form.mode !== 'off'"
+                  :closable="!crsFieldsOff"
                   :disable-transitions="true"
                   :title="opt.title"
                   @close="removeCrsGroupValue(opt.value)"
@@ -204,11 +214,11 @@
               style="margin-bottom: 12px"
             />
             <el-form-item label="检查响应体">
-              <el-switch v-model="form.waf_check_response" :disabled="form.mode === 'off'" />
+              <el-switch v-model="form.waf_check_response" :disabled="crsFieldsOff || isReadOnly" />
               <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
             </el-form-item>
             <el-form-item label="记录请求体">
-              <el-switch v-model="form.log_request_body" :disabled="form.mode === 'off'" />
+              <el-switch v-model="form.log_request_body" :disabled="isReadOnly" />
               <div class="form-tip-line">开启后命中规则事件的请求头与请求体将记录到事件库，可在事件日志中查看详情</div>
             </el-form-item>
             <el-alert
@@ -234,7 +244,7 @@
                     弹框内容宽 → 1080px 全宽不换行、无横向滚动；条目数徽标随工具行。 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
                 <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
-                <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
+                <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
               </div>
               <template v-else>
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
@@ -265,7 +275,7 @@
                           filterable
                           clearable
                           :show-all-levels="false"
-                          :disabled="form.mode === 'off' || isReadOnly"
+                          :disabled="crsFieldsOff || isReadOnly"
                           popper-class="crs-rule-popper"
                           placeholder="选择规则组 / 单条规则"
                           class="exclusion-target-select"
@@ -286,7 +296,7 @@
                           effect="plain"
                           class="exclusion-target-ghost"
                           :title="row.target"
-                          :closable="form.mode !== 'off' && !isReadOnly"
+                          :closable="!crsFieldsOff && !isReadOnly"
                           :disable-transitions="true"
                           @close="row.target = ''"
                         >{{ exclusionRowGhostLabel(row.target) }}</el-tag>
@@ -301,7 +311,7 @@
                         >
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
-                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="form.mode === 'off' || isReadOnly" @change="onScopeChange(row)">
+                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row)">
                           <el-radio value="all">全部 IP</el-radio>
                           <el-radio value="ip">指定 IP</el-radio>
                           <el-radio value="list">地址列表</el-radio>
@@ -318,7 +328,7 @@
                           filterable
                           allow-create
                           default-first-option
-                          :disabled="form.mode === 'off' || isReadOnly"
+                          :disabled="crsFieldsOff || isReadOnly"
                           placeholder="输入 IP/CIDR 后回车"
                           class="exclusion-scope-control-ip"
                           @change="(value: string[]) => onExclusionIpsChange(row, value)"
@@ -329,7 +339,7 @@
                           size="small"
                           multiple
                           filterable
-                          :disabled="form.mode === 'off' || isReadOnly"
+                          :disabled="crsFieldsOff || isReadOnly"
                           placeholder="选择 IP 地址列表"
                           class="exclusion-scope-control-list"
                         >
@@ -341,12 +351,12 @@
                   </el-table-column>
                   <el-table-column label="" width="60" align="center">
                     <template #default="{ $index }">
-                      <el-button link type="danger" size="small" :disabled="form.mode === 'off' || isReadOnly" @click="removeExcludedRule($index)">删除</el-button>
+                      <el-button link type="danger" size="small" :disabled="crsFieldsOff || isReadOnly" @click="removeExcludedRule($index)">删除</el-button>
                     </template>
                   </el-table-column>
                 </el-table>
                 <div class="exclusion-toolbar">
-                  <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">添加排除规则</el-button>
+                  <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">添加排除规则</el-button>
                   <el-tag size="small" type="info" effect="plain" class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</el-tag>
                 </div>
                 <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
@@ -584,14 +594,15 @@
               <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? '启用' : '禁用' }}</el-tag>
             </el-descriptions-item>
             <el-descriptions-item v-if="form.mode === 'off'" label="WAF">已关闭</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="WAF 模式">
+            <el-descriptions-item v-else label="WAF 模式">
               <el-tag v-if="form.mode === 'blocking'" type="danger" size="small" effect="light">拦截</el-tag>
               <el-tag v-else-if="form.mode === 'detection'" type="warning" size="small" effect="light">检测</el-tag>
+              <el-tag v-else-if="form.mode === 'custom_only'" size="small" effect="light">仅自定义</el-tag>
               <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="异常阈值">{{ thresholdLabel(form.anomaly_threshold) }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="CRS 规则组">{{ crsRuleGroups.length === 0 ? '全部（默认）' : `${crsGroupSelectCount} 组 + ${crsRuleIdSelectCount} 规则` }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="排除规则">
+            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="异常阈值">{{ thresholdLabel(form.anomaly_threshold) }}</el-descriptions-item>
+            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="CRS 规则组">{{ crsRuleGroups.length === 0 ? '全部（默认）' : `${crsGroupSelectCount} 组 + ${crsRuleIdSelectCount} 规则` }}</el-descriptions-item>
+            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="排除规则">
               <el-tooltip v-if="exclusionPreviewLines.length > 0" placement="top" popper-class="crs-preview-popper">
                 <template #content>
                   <div v-for="line in exclusionPreviewLines" :key="line">{{ line }}</div>
@@ -737,7 +748,7 @@ import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
@@ -1042,7 +1053,7 @@ const removeCrsGroupValue = (value: string): void => {
 // 不再出现在可选组中），不在此列。
 const crsResponsePhaseGroupCodes = ['50', '51', '52', '53', '54', '55', '56', '80']
 const hasResponsePhaseGroupWithoutCheck = computed(
-  () => form.value.mode !== 'off' && !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
+  () => (form.value.mode === 'blocking' || form.value.mode === 'detection') && !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
 )
 
 // 拦截评估规则（949 请求阻断评估 / 959 响应评估）排除判定：拦截模式下这两组负责
@@ -1229,7 +1240,7 @@ const onExclusionIpsChange = (row: CrsExcludedRow, value: string[]): void => {
 // 仅做提示不阻断：组合「正选组 + 排除组内单条」是正常用法，不在此列。
 const exclusionRowConflict = (row: CrsExcludedRow): string => {
   const target = row.target.trim()
-  if (target === '' || form.value.mode === 'off') return ''
+  if (target === '' || form.value.mode !== 'blocking' && form.value.mode !== 'detection') return ''
   if (!crsRuleGroups.value.includes(target)) return ''
   return /^\d{2}$/.test(target) ? '冗余：排除优先生效' : '与规则组选择矛盾（排除优先）'
 }
@@ -1322,7 +1333,10 @@ const exclusionPreviewLines = computed<string[]>(() =>
 const crsGroupSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{2}$/.test(v)).length)
 const crsRuleIdSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{6}$/.test(v)).length)
 
-const THRESHOLD_LABELS: Record<number, string> = { 1: '极严格（1）', 3: '严格（3）', 5: '标准（5）', 10: '宽松（10）', 20: '极宽松（20）' }
+// CRS 配置面禁用门(2026-09-09 四态化):off=全关、custom_only=仅自定义,两者 CRS 均不生效
+const crsFieldsOff = computed(() => form.value.mode === 'off' || form.value.mode === 'custom_only')
+
+const THRESHOLD_LABELS: Record<number, string> = { 5: '标准（任一严重规则命中即拦）', 10: '宽松（2 条严重规则命中）', 15: '很宽松（3 条严重规则命中）', 20: '极宽松（4 条严重规则命中）', 1: '严格（存量档，严重规则任一命中即拦）', 3: '严格（存量档，严重规则任一命中即拦）' }
 const thresholdLabel = (value: number): string => THRESHOLD_LABELS[value] ?? String(value)
 
 const ACL_MODE_LABELS: Record<string, string> = { deny: '黑名单', allow: '白名单', bypass: '免检测' }
@@ -1711,8 +1725,8 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
   const active = chain.filter((p) => p.enabled)
   if (active.length < 2) return hints
 
-  // (1) CRS 规则组重叠：空数组 = 加载全部规则 → 与任何选择重叠；mode=off 的策略不加载 CRS
-  const wafActive = active.filter((p) => p.mode !== 'off')
+  // (1) CRS 规则组重叠：空数组 = 加载全部规则 → 与任何选择重叠；仅 CRS 生效模式(blocking/detection)加载 CRS(2026-09-09 四态化)
+  const wafActive = active.filter((p) => p.mode === 'blocking' || p.mode === 'detection')
   for (let i = 0; i < wafActive.length; i++) {
     for (let j = i + 1; j < wafActive.length; j++) {
       const a = wafActive[i]
@@ -1848,12 +1862,12 @@ const comparisonContext = computed<{ peers: PeerPolicyView[]; coBound: boolean }
 // WAF 步骤：CRS 规则组与其他策略重复的实时警告。空数组 = 加载全部规则组
 //（与 computeBindingConflicts 同语义），随当前选择实时重算——修复「有时候不显示」。
 const wafStepCrsAlert = computed<string>(() => {
-  if (form.value.mode === 'off') return ''
+  if (form.value.mode !== 'blocking' && form.value.mode !== 'detection') return ''
   const { peers, coBound } = comparisonContext.value
   const selfGroups = crsRuleGroups.value
   const dups: Array<{ name: string; overlap: string[] }> = []
   for (const peer of peers) {
-    if (peer.mode === 'off') continue
+    if (peer.mode !== 'blocking' && peer.mode !== 'detection') continue
     let overlap: string[]
     if (selfGroups.length === 0 && peer.crsGroups.length === 0) overlap = ['全部规则组']
     else if (selfGroups.length === 0) overlap = peer.crsGroups
@@ -2296,6 +2310,8 @@ onMounted(async () => {
 
 .capability-tags { display: flex; gap: 6px; }
 
+.mode-radio-group :deep(.el-radio__label) { white-space: nowrap; }
+.mode-radio-group { flex-wrap: wrap; row-gap: 4px; }
 .waf-off-hint {
   padding: 0 30px 0 120px;
   margin: -10px 0 18px;

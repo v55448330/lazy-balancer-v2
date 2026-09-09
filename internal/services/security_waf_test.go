@@ -345,6 +345,68 @@ func TestBuildCorazaDirectives_flagsBodyProcessorErrors(t *testing.T) {
 	}
 }
 
+// 2026-09-09 裁定:WAF 模式四态化——off 收敛为「CRS 与自定义规则均不生效」,
+// 新增 custom_only(CRS 不生效、仅自定义规则,计分动作无 949 评估链退化为检测
+// 计分)。发射契约:off 不再因自定义规则而开引擎;custom_only 开引擎、发射
+// 自定义规则与 body processor 激活规则(自定义 body 规则需要解析),零 CRS Include。
+func TestBuildCorazaDirectives_offModeOmitsCustomRules(t *testing.T) {
+	// Given:mode=off 且挂启用中的自定义拦截规则
+	policy := &models.SecurityPolicy{
+		Mode: "off",
+		CustomRules: json.RawMessage(`[{"id":1,"name":"off拦截","enabled":true,"action":"block","score":5,` +
+			`"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`),
+	}
+
+	// When
+	directives := BuildCorazaDirectives(policy, nil)
+
+	// Then:新语义 off=全关——自定义规则不再触发引擎,整份发射为空
+	if directives != "" {
+		t.Fatalf("mode=off must not emit custom rules anymore (2026-09-09 裁定):\n%s", directives)
+	}
+}
+
+func TestBuildCorazaDirectives_customOnlyModeEmitsCustomRulesWithoutCRS(t *testing.T) {
+	// Given:mode=custom_only 且挂自定义拦截规则(含 body 条件)
+	policy := &models.SecurityPolicy{
+		Mode: "custom_only",
+		CustomRules: json.RawMessage(`[{"id":2,"name":"仅自定义body","enabled":true,"action":"block","score":5,` +
+			`"conditions":[{"target":"body","operator":"contains","pattern":"evil"}]}]`),
+	}
+
+	// When
+	directives := BuildCorazaDirectives(policy, nil)
+
+	// Then:引擎开、自定义规则发射、body processor 激活规则在位
+	for _, want := range []string{
+		"SecRuleEngine On",
+		"id:10002,phase:2",
+		`id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON`,
+		`id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML`,
+		`id:11,phase:2,pass,log`,
+		"SecMarker SECURITY_RULES_END",
+	} {
+		if !strings.Contains(directives, want) {
+			t.Fatalf("custom_only directives missing %q:\n%s", want, directives)
+		}
+	}
+	// And:零 CRS Include、无 DetectionOnly 切换(CRS 不加载,自定义 deny 直接拦)
+	if strings.Contains(directives, "Include /app/waf/crs/") ||
+		strings.Contains(directives, "DetectionOnly") {
+		t.Fatalf("custom_only must not include CRS nor DetectionOnly:\n%s", directives)
+	}
+}
+
+func TestBuildCorazaDirectives_customOnlyWithoutAnythingIsEmpty(t *testing.T) {
+	// Given:custom_only 但无自定义规则/IP 控制/GeoIP
+	// When
+	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "custom_only"}, nil)
+	// Then:无可发射内容,整份为空(不产空转 coraza handler)
+	if directives != "" {
+		t.Fatalf("custom_only without any active component must emit nothing:\n%s", directives)
+	}
+}
+
 func TestBuildCorazaDirectives_skipsIllegalSecRuleRemoveTargets(t *testing.T) {
 	// R60 B-新1：SecRuleRemoveById 形态门——非法形态（coraza Atoi 失败→
 	// 全部配置编译失败/LB 停摆）与越界 range（1-999999 静默删光全部规则）

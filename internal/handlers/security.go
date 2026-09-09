@@ -535,7 +535,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		hasGeoIP := services.PolicyHasGeoIP(&p)
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
-			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
+			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
 			HasGeoIP: hasGeoIP, HasCustomRules: services.CountEnabledCustomRules(p.CustomRules) > 0,
 			AnomalyThreshold:   p.AnomalyThreshold,
 			IPACLMode:          p.IPACLMode,
@@ -2746,15 +2746,18 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 		return fmt.Errorf("拦截状态码必须为 400/401/403/404/429/503 之一，当前值 %d", blockStatusCode)
 	}
 	if anomalyThreshold != 0 {
-		validThresholds := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
+		// 2026-09-09:新增 15 档(3 条严重命中);1/3 保留兼容存量(UI 已改按
+		// 命中条数语义呈现 5/10/15/20)。CRS 计分:严重+5/错误+4/警告+3。
+		validThresholds := map[int]bool{1: true, 3: true, 5: true, 10: true, 15: true, 20: true}
 		if !validThresholds[anomalyThreshold] {
-			return fmt.Errorf("异常阈值必须为 1/3/5/10/20 之一，当前值 %d", anomalyThreshold)
+			return fmt.Errorf("异常阈值必须为 1/3/5/10/15/20 之一，当前值 %d", anomalyThreshold)
 		}
 	}
 	switch mode {
-	case "", "off", "detection", "blocking":
+	// custom_only(2026-09-09 裁定):CRS 不生效,仅自定义规则。
+	case "", "off", "detection", "blocking", "custom_only":
 	default:
-		return fmt.Errorf("mode 必须为 off、detection 或 blocking，当前值 %s", mode)
+		return fmt.Errorf("mode 必须为 off、detection、blocking 或 custom_only，当前值 %s", mode)
 	}
 	switch ipACLMode {
 	case "", "allow", "deny", "bypass":

@@ -1070,3 +1070,78 @@ func TestGetSecurityPolicy_toleratesNullNullableColumns(t *testing.T) {
 		t.Fatalf("detail=%+v, want mode=off description='' anomaly_threshold=5 ip_whitelist=[] block_page_id=0 created_at='' enabled=true", p)
 	}
 }
+
+// 2026-09-09 裁定:WAF 模式四态化——mode 新增 custom_only(CRS 不生效、仅自定义
+// 规则);异常阈值新增 15 档(CRS 严重规则 +5/条,15=3 条严重命中);策略汇总的
+// HasWAF 收敛为「CRS 生效」口径(custom_only 无 CRS → false,自定义规则由
+// HasCustomRules 单独呈现)。
+func TestCreateSecurityPolicy_acceptsCustomOnlyModeAndThreshold15(t *testing.T) {
+	// Given
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	payload := map[string]any{
+		"name":              "仅自定义策略",
+		"mode":              "custom_only",
+		"anomaly_threshold": 15,
+		"custom_rules":      `[{"id":1,"name":"r1","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
+	}
+
+	// When
+	recorder := postJSON(t, router, "/security/policies", payload)
+
+	// Then
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("create custom_only policy status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var mode string
+	if err := db.DB.QueryRow(`SELECT mode FROM security_policies WHERE name='仅自定义策略'`).Scan(&mode); err != nil {
+		t.Fatalf("read back policy: %v", err)
+	}
+	if mode != "custom_only" {
+		t.Fatalf("mode=%q, want custom_only", mode)
+	}
+}
+
+func TestSecurityPolicySummary_customOnlyHasWAFFalse(t *testing.T) {
+	// Given:custom_only 与 blocking 各一策略
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	customRules := `[{"id":1,"name":"r1","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`
+	postJSON(t, router, "/security/policies", map[string]any{"name": "仅自定义", "mode": "custom_only", "custom_rules": customRules})
+	postJSON(t, router, "/security/policies", map[string]any{"name": "拦截", "mode": "blocking"})
+
+	// When
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then
+	var resp struct {
+		Data []models.SecurityPolicySummary `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	byName := map[string]models.SecurityPolicySummary{}
+	for _, p := range resp.Data {
+		byName[p.Name] = p
+	}
+	if p := byName["仅自定义"]; p.HasWAF || !p.HasCustomRules {
+		t.Fatalf("custom_only summary: HasWAF=%v HasCustomRules=%v, want false/true (HasWAF=CRS 生效口径)", p.HasWAF, p.HasCustomRules)
+	}
+	if p := byName["拦截"]; !p.HasWAF {
+		t.Fatalf("blocking summary: HasWAF=%v, want true", p.HasWAF)
+	}
+}
+
+func TestCreateSecurityPolicy_rejectsUnknownMode(t *testing.T) {
+	// Given
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	// When
+	recorder := postJSON(t, router, "/security/policies", map[string]any{"name": "坏模式", "mode": "custom"})
+
+	// Then
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unknown mode status=%d, want 400", recorder.Code)
+	}
+}

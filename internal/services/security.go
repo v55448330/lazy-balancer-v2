@@ -186,21 +186,33 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		}
 	}
 
+	// 2026-09-09 裁定:WAF 模式四态化。
+	//   off:CRS 与自定义规则均不生效(引擎仅为 IP 控制/GeoIP 而开);
+	//   custom_only:CRS 不加载,仅自定义规则(计分动作无 949 评估链,退化为检测计分);
+	//   detection:CRS 检测不拦,自定义 deny 仍拦(下方 DetectionOnly 切换只作用于
+	//             CRS——切换在自定义规则之后、CRS Include 之前发出);
+	//   blocking:CRS 拦截,自定义规则按规则内动作执行。
+	crsActive := p.Mode == "blocking" || p.Mode == "detection"
+	customActive := p.Mode == "custom_only" || crsActive
 	switch {
-	case p.Mode == "blocking":
+	case crsActive:
+		if p.Mode == "detection" {
+			// 检测模式仍保持 IP 控制与自定义规则强制生效:引擎以 On 启动,使下方的
+			// IP ACL deny 规则与自定义拦截规则(在 DetectionOnly 切换之前发出)真实
+			// 阻断;随后通过 phase:1 的 SecAction 仅将 CRS 规则集切换为
+			// DetectionOnly(该切换在 CRS Include 之前生效),自定义拦截规则与 IP
+			// ACL 不受影响,仍在检测模式下强制阻断。
+			// 例外(R65 B-S5):body 目标的自定义拦截规则发射为 phase:2(REQUEST_BODY
+			// 仅 phase:2 可读),而 DetectionOnly ctl 是事务级指令持续到 phase:2——
+			// 该类规则在检测模式下仅记录不阻断(见 emitCustomRules 相位说明)。
+		}
 		sb.WriteString("SecRuleEngine On\n")
-	case p.Mode == "detection":
-		// 检测模式仍保持 IP 控制与自定义规则强制生效：引擎以 On 启动，使下方的
-		// IP ACL deny 规则与自定义拦截规则（在 DetectionOnly 切换之前发出）真实
-		// 阻断；随后通过 phase:1 的 SecAction 仅将 CRS 规则集切换为
-		// DetectionOnly（该切换在 CRS Include 之前生效），自定义拦截规则与 IP
-		// ACL 不受影响，仍在检测模式下强制阻断。
-		// 例外（R65 B-S5）：body 目标的自定义拦截规则发射为 phase:2（REQUEST_BODY
-		// 仅 phase:2 可读），而 DetectionOnly ctl 是事务级指令持续到 phase:2——
-		// 该类规则在检测模式下仅记录不阻断（见 emitCustomRules 相位说明）。
+	case p.Mode == "custom_only" && (hasCustomRules || emitIPControl || geoipActive):
+		// 仅自定义:CRS 不加载,引擎为自定义规则/IP 控制/GeoIP 而开;空策略
+		// (无启用规则且无 IP/GeoIP)落入 default 不产空转 handler。
 		sb.WriteString("SecRuleEngine On\n")
-	case emitIPControl || hasCustomRules || geoipActive:
-		// WAF (CRS) off, but IP control / custom rules / GeoIP still need the engine.
+	case emitIPControl || geoipActive:
+		// mode=off(2026-09-09 裁定后):自定义规则不再生效,引擎仅为 IP 控制/GeoIP 开。
 		sb.WriteString("SecRuleEngine On\n")
 	default:
 		return ""
@@ -259,15 +271,15 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	}
 
 	// GeoIP 区域拦截（v2.2.0 改走 coraza：被拦请求产生 audit.log → 安全事件
-	// 管线 → 总览/事件日志可统计。此前走 Caddy 原生路由（CEL+static_response）
+	// 管线 → 总览/事件日志可统计。此前 Caddy 原生路由（CEL+static_response）
 	// 完全绕过 coraza，事件盲区）。caddygeoip pass route 先执行并剥离客户端
 	// 伪造头、设置 X-GeoIP-Loc（海外/省/省-市 规范键），coraza 在 phase:1
 	// 读取该头匹配策略 geoip_countries 列表（geoipLocOperator 编译）。
 	// 链首 REMOTE_ADDR !@ipMatch 内网段保留「内网放行」语义（geoipPrivateRanges
 	// 与既有拦截链同款）。deny 不带 status：coraza 默认 403 + "interruption
 	// triggered" → 策略 errors.routes → 拦截页按配置状态码渲染（与自定义规则
-	// 拦截统一口径）；无拦截页时回落 Caddy 默认 403 页。检测/关闭模式下仍强制
-	// 生效（规则先于 DetectionOnly 切换发出，mode=off 由上方 switch 门保引擎）。
+	// 拦截统一口径）；无拦截页时回落 Caddy 默认 403 页。四种模式下均强制
+	// 生效（规则先于 DetectionOnly 切换发出，引擎由上方 switch 门保证）。
 	// geoip_mode='off' 是区域控制关闭态（名单保留不清单），与 PolicyHasGeoIP
 	// 同门：开关关闭即零发射。
 	if geoCountries := geoipCountries(p); p.GeoIPMode != "off" && len(geoCountries) > 0 {
@@ -275,10 +287,22 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoCountries, p.GeoIPMode == "allow"))))
 	}
 
-	emitCustomRules(&sb, customRules)
+	// 自定义规则仅在 custom_only/detection/blocking 发射(2026-09-09 裁定:
+	// off=全关)。计分动作(pass+setvar)只给分:检测/拦截模式下由 CRS 949 阈值
+	// 评估统一裁决是否拦截,custom_only 无 949 → 退化为检测计分(仅留事件)。
+	if customActive {
+		emitCustomRules(&sb, customRules)
+	}
 
 	if p.Mode == "detection" {
 		sb.WriteString("SecAction \"id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly\"\n")
+	}
+
+	// 仅自定义模式同样需要 body processor 激活:自定义 body 条件规则依赖解析
+	// (SEC-REVIEW-03 随四态化一并解决);id:11 守卫计分在本模式无 949 消费,
+	// 仅留事件——与计分动作的检测计分退化口径一致。
+	if p.Mode == "custom_only" {
+		emitBodyProcessorRules(&sb)
 	}
 
 	if p.Mode == "blocking" || p.Mode == "detection" {
@@ -339,22 +363,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		if len(scoped) > 0 {
 			emitScopedCRSExclusions(&sb, p, scoped, store, chainIndex)
 		}
-		// 2026-09-09（942550 误报排查裁定）：coraza 不按 Content-Type 自动启用
-		// JSON/XML body processor（与 ModSecurity 连接器不同，须 ctl 显式激活），
-		// 否则 CRS 901340 强制 forceRequestBodyVariable 后 coraza 兜底按 URLENCODED
-		// 解析——JSON/XML 整串成为单个参数名：ARGS_NAMES 规则（942550/941100）在
-		// 原始文本上误报，ARGS 值规则对 body 失明。激活规则先于 CRS Include 发射
-		// （文档化意图；运行时 ctl 于 phase:1 全部生效，先后均等价）。正则 (?i)：
-		// Content-Type 值大小写不受控（coraza 仅小写化 header 名，SEC-REVIEW-01）。
-		// id 9/10/11 沿用本项目自有单数码段。
-		sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^application/(?:[\w.+-]+?\+)?json(?:\s*;|$)" "id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"` + "\n")
-		sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application|text)/(?:[\w.+-]+?\+)?xml(?:\s*;|$)" "id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML"` + "\n")
-		// SEC-REVIEW-02：畸形 JSON/XML 解析失败后所有 body 集合为空且 901340 不再
-		// force，CRS 4.29 无任何规则消费 REQBODY_PROCESSOR_ERROR（grep 实证）——
-		// 「声明 JSON + 发非法 JSON」可对全部 body 规则隐身。守卫计满临界异常分
-		// （默认阈值 5：拦截模式 949 即拦，检测模式仅记录），与 coraza ctl.go 文档
-		// 建议的使用者自检口径一致。
-		sb.WriteString(`SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'请求体解析失败'"` + "\n")
+		emitBodyProcessorRules(&sb)
 		sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
 		if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
 			sb.WriteString("Include /app/waf/crs/zz-user-overrides.conf\n")
@@ -418,6 +427,25 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	sb.WriteString("SecMarker SECURITY_RULES_END\n")
 
 	return sb.String()
+}
+
+// emitBodyProcessorRules 发射 JSON/XML body processor 激活与畸形 body 守卫
+// (id:9/10/11)。coraza 不按 Content-Type 自动启用 JSON/XML processor(与
+// ModSecurity 连接器不同,须 ctl 显式激活),否则 body 被兜底按 URLENCODED
+// 解析——JSON/XML 整串成为单个参数名:ARGS_NAMES 规则(942550/941100)在原始
+// 文本上误报,ARGS 值规则对 body 失明(2026-09-09 942550 误报排查裁定)。
+// 在 CRS 模式下先于 Include 发射(文档化意图;运行时 ctl 于 phase:1 全部生效,
+// 先后均等价);custom_only 模式为自定义 body 规则提供解析。正则 (?i):
+// Content-Type 值大小写不受控(coraza 仅小写化 header 名,SEC-REVIEW-01)。
+// id:11(SEC-REVIEW-02):畸形 JSON/XML 解析失败后所有 body 集合为空且 901340
+// 不再 force,CRS 4.29 无任何规则消费 REQBODY_PROCESSOR_ERROR(grep 实证)——
+// 「声明 JSON + 发非法 JSON」可对全部 body 规则隐身;守卫计满临界异常分
+// (阈值 5:拦截模式 949 即拦,检测模式仅记录),与 coraza ctl.go 文档建议的
+// 使用者自检口径一致。
+func emitBodyProcessorRules(sb *strings.Builder) {
+	sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^application/(?:[\w.+-]+?\+)?json(?:\s*;|$)" "id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"` + "\n")
+	sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application|text)/(?:[\w.+-]+?\+)?xml(?:\s*;|$)" "id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML"` + "\n")
+	sb.WriteString(`SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'请求体解析失败'"` + "\n")
 }
 
 // geoipLocOverseas 是 X-GeoIP-Loc 的海外哨兵值：caddygeoip 对国家列非「中国」

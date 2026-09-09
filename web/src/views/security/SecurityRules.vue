@@ -264,7 +264,7 @@
             <el-radio value="log">仅记录</el-radio>
             <el-radio value="pass">放行计分</el-radio>
           </el-radio-group>
-          <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（由 WAF 评分拦截统一裁决）</div>
+          <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（CRS 检测/拦截模式下由异常阈值统一裁决；仅自定义模式下只记录不拦截）</div>
         </el-form-item>
         <el-form-item label="异常分值">
           <el-select v-model="ruleForm.score" style="width: 160px">
@@ -274,7 +274,7 @@
             <el-option :value="10" label="较高（10）" />
             <el-option :value="20" label="严重（20）" />
           </el-select>
-          <span class="form-tip-inline">匹配此规则时累加的异常分值，达到策略异常阈值后触发拦截</span>
+          <span class="form-tip-inline">匹配此规则时累加的异常分值，达到策略异常阈值后触发拦截（仅自定义模式下无 CRS 阈值评估，只记录）</span>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="ruleForm.enabled" />

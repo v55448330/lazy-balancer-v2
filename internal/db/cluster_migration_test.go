@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -75,6 +76,75 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 		}
 		if count != 1 {
 			t.Fatalf("nodes column %s count=%d, want 1", column, count)
+		}
+	}
+}
+
+// 2026-09-09 裁定:WAF 模式四态化存量迁移——mode=off 且挂启用中自定义规则的
+// 策略迁移 custom_only(行为零突变);off 且无启用自定义规则的策略保持 off。
+func TestMigrateSecurityPolicyCustomOnlyMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	seed := func(name, mode, customRules string) {
+		t.Helper()
+		if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES (?,?,?)`, name, mode, customRules); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	enabledRule := `[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`
+	disabledRule := `[{"id":2,"name":"r2","enabled":false,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`
+	seed("off带启用规则", "off", enabledRule)
+	seed("off带禁用规则", "off", disabledRule)
+	seed("off无规则", "off", "[]")
+	seed("blocking带规则", "blocking", enabledRule)
+
+	// v2.1.0 起 custom_rules 存规则 ID 数组(引用 security_custom_rules 表)
+	if _, err := DB.Exec(`INSERT INTO security_custom_rules (name, action, score, enabled) VALUES ('引用规则','block',5,1)`); err != nil {
+		t.Fatalf("seed custom rule: %v", err)
+	}
+	var refID int64
+	if err := DB.QueryRow(`SELECT id FROM security_custom_rules WHERE name='引用规则'`).Scan(&refID); err != nil {
+		t.Fatalf("read ref id: %v", err)
+	}
+	seed("off挂ID数组", "off", fmt.Sprintf(`[%d]`, refID))
+
+	// Initialize 已空跑过一次迁移并置位一次性门——模拟「升级窗口」需重置旗标
+	// (生产升级路径:存量行先在库,runMigrations 首次执行即完成迁移并置位)
+	if _, err := DB.Exec(`UPDATE global_config SET waf_mode4_migrated=0 WHERE id=1`); err != nil {
+		t.Fatalf("reset flag: %v", err)
+	}
+	if err := migrateSecurityPolicyCustomOnlyMode(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	modeOf := func(name string) string {
+		t.Helper()
+		var mode string
+		if err := DB.QueryRow(`SELECT mode FROM security_policies WHERE name=?`, name).Scan(&mode); err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return mode
+	}
+	if got := modeOf("off带启用规则"); got != "custom_only" {
+		t.Fatalf("off+启用规则 = %q, want custom_only", got)
+	}
+	if got := modeOf("off挂ID数组"); got != "custom_only" {
+		t.Fatalf("off+ID数组引用启用规则 = %q, want custom_only", got)
+	}
+	// 一次性门:迁移后用户主动改回 off(规则保留)不应被下次运行再次迁移
+	if _, err := DB.Exec(`UPDATE security_policies SET mode='off' WHERE name='off带启用规则'`); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if err := migrateSecurityPolicyCustomOnlyMode(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	if got := modeOf("off带启用规则"); got != "off" {
+		t.Fatalf("迁移必须一次性:主动改回 off 后被再次迁移为 %q", got)
+	}
+	for name, want := range map[string]string{"off带禁用规则": "off", "off无规则": "off", "blocking带规则": "blocking"} {
+		if got := modeOf(name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
 		}
 	}
 }

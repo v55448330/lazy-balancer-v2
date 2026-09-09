@@ -446,8 +446,10 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		// 第五轮的本分支在组号分支（:371）之前且直接 return false，使后者成为
 		// 死代码——用两位组号（常规配置）的策略其 CRS 事件归因失效。
 		// A1-S6：mode=off 不发射任何 CRS（engine 分支不成立或零 Include），
-		// 不得认领 CRS 事件（与 GeoIP 分支的 off 门同口径）。
-		if policy.Mode == "off" {
+		// 不得认领 CRS 事件（与 GeoIP 分支的 off 门同口径）。2026-09-09 四态化:
+		// custom_only 同样零 CRS Include,口径收紧为「CRS 生效模式」——否则
+		// 同规则多策略绑定时 custom_only 策略会抢走 blocking 策略的 CRS 事件归属。
+		if policy.Mode != "blocking" && policy.Mode != "detection" {
 			return false
 		}
 		// A1-I2：949 评估规则自 v2.2.3 起对全部启用 WAF 的策略强制包含（F0

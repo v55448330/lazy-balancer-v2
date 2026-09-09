@@ -1838,6 +1838,25 @@ func TestSecurityEventsAttribution_ModeOffPolicyDoesNotClaimCRSEvents(t *testing
 	}
 }
 
+// 2026-09-09 四态化:custom_only 策略零 CRS Include,不得认领 CRS 事件
+// （归因门收紧为 CRS 生效模式——与 A1-S6 off 门同口径的延伸）。
+func TestSecurityEventsAttribution_CustomOnlyPolicyDoesNotClaimCRSEvents(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "942100", []struct {
+		id         int
+		name       string
+		enabled    int
+		mode       string
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 2, name: "policy-custom-only", enabled: 1, mode: "custom_only", customJSON: `[]`, crsJSON: `[]`},
+		{id: 5, name: "policy-blocking", enabled: 1, mode: "blocking", customJSON: `[]`, crsJSON: `[]`},
+	})
+	if pid != 5 || pname != "policy-blocking" {
+		t.Fatalf("attribution=(%d,%q), want (5,policy-blocking) — custom_only 策略不得认领 CRS 事件", pid, pname)
+	}
+}
+
 // SC-EVT-01 未绑定（无 security_policy_bindings 行）→ 归因零值。
 func TestSecurityEventsAttribution_UnboundReturnsZeroValue(t *testing.T) {
 	dataDir := t.TempDir()

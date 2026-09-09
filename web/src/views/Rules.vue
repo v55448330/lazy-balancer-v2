@@ -1342,6 +1342,7 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
     const mode = policy ? policy.mode : binding.mode
     if (mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
     else if (mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
+    else if (mode === 'custom_only') rows.push({ label: 'WAF（仅自定义）', detail: 'CRS 不生效，自定义规则按规则内动作执行' })
     if (policy?.has_ip_control) {
       // 摘要口径与安全策略页「IP 控制」hover 明细行一致：合并计数（内联 ∪ 引用
       // 列表）+ 黑名单计数 + 信任名单（含启用态）
