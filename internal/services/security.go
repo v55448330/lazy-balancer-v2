@@ -226,8 +226,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts %s\n", auditParts))
 
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
-	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截. The trust list keeps the
-	// historical id:3 unless a bypass-mode rule already owns it. ctl:ruleEngine=Off
+	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截, 9 = JSON body processor 激活,
+	// 10 = XML body processor 激活, 11 = 请求体解析失败守卫. The trust list keeps
+	// the historical id:3 unless a bypass-mode rule already owns it. ctl:ruleEngine=Off
 	// short-circuits are emitted first so bypassed and trusted clients never reach
 	// the ACL denies（信任/免检测名单因此也跳过 GeoIP 规则——「跳过检查」语义
 	// 随 v2.2.0 GeoIP 并入 coraza 一并覆盖地域拦截）.
@@ -338,6 +339,22 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		if len(scoped) > 0 {
 			emitScopedCRSExclusions(&sb, p, scoped, store, chainIndex)
 		}
+		// 2026-09-09（942550 误报排查裁定）：coraza 不按 Content-Type 自动启用
+		// JSON/XML body processor（与 ModSecurity 连接器不同，须 ctl 显式激活），
+		// 否则 CRS 901340 强制 forceRequestBodyVariable 后 coraza 兜底按 URLENCODED
+		// 解析——JSON/XML 整串成为单个参数名：ARGS_NAMES 规则（942550/941100）在
+		// 原始文本上误报，ARGS 值规则对 body 失明。激活规则先于 CRS Include 发射
+		// （文档化意图；运行时 ctl 于 phase:1 全部生效，先后均等价）。正则 (?i)：
+		// Content-Type 值大小写不受控（coraza 仅小写化 header 名，SEC-REVIEW-01）。
+		// id 9/10/11 沿用本项目自有单数码段。
+		sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^application/(?:[\w.+-]+?\+)?json(?:\s*;|$)" "id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"` + "\n")
+		sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application|text)/(?:[\w.+-]+?\+)?xml(?:\s*;|$)" "id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML"` + "\n")
+		// SEC-REVIEW-02：畸形 JSON/XML 解析失败后所有 body 集合为空且 901340 不再
+		// force，CRS 4.29 无任何规则消费 REQBODY_PROCESSOR_ERROR（grep 实证）——
+		// 「声明 JSON + 发非法 JSON」可对全部 body 规则隐身。守卫计满临界异常分
+		// （默认阈值 5：拦截模式 949 即拦，检测模式仅记录），与 coraza ctl.go 文档
+		// 建议的使用者自检口径一致。
+		sb.WriteString(`SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'请求体解析失败'"` + "\n")
 		sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
 		if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
 			sb.WriteString("Include /app/waf/crs/zz-user-overrides.conf\n")
@@ -437,7 +454,7 @@ func geoipLocOperator(countries []string, allowMode bool) string {
 // equals → @streq（审计 H1）：@pm 是短语匹配（大小写不敏感+空格分词），
 // 与 UI「等于」承诺不符，收紧为大小写敏感精确匹配，存量规则行为随之收紧。
 var (
-	customRuleTargets   = map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
+	customRuleTargets   = map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY|ARGS_POST|ARGS_POST_NAMES|XML:/*|XML://@*", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
 	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@streq", "starts_with": "@beginsWith"}
 	// customRuleValidScores / customRuleValidActions 是内嵌自定义规则允许的分值与
 	// 动作集合，与 handlers 侧 validateSecurityCustomRule 的独立规则口径一致。

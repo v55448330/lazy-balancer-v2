@@ -373,3 +373,28 @@ func TestEmitCustomRules_assignsUniqueSyntheticIDsToLegacyIDLessRules(t *testing
 		t.Fatalf("both legacy rules must be emitted:\n%s", got)
 	}
 }
+
+// 2026-09-09（与 BuildCorazaDirectives 的 JSON/XML processor 激活配套）：
+// coraza 的 JSON/XML body processor 激活后 REQUEST_BODY 变量不再被填充
+// （coraza json.go 只写 TX:json_request_body；URLENCODED 才写 REQUEST_BODY），
+// body 目标的自定义规则若仅打 REQUEST_BODY 会对 JSON 请求静默失明。目标必须
+// 扩展为 body 域集合：原始 body（表单/纯文本）+ 解析后的 POST 字段名与值
+// （ARGS_POST/ARGS_POST_NAMES，JSON 展平为 json.* 键值）+ XML 元素文本与属性。
+func TestEmitCustomRules_bodyTargetScansParsedBodyCollections(t *testing.T) {
+	// Given
+	var sb strings.Builder
+	emitCustomRules(&sb, []models.CustomRule{
+		{ID: 6, Name: "body包含", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
+			{Target: "body", Operator: "contains", Pattern: "evil"},
+		}},
+	})
+
+	// When
+	got := sb.String()
+
+	// Then
+	want := `SecRule REQUEST_BODY|ARGS_POST|ARGS_POST_NAMES|XML:/*|XML://@* "@contains evil"`
+	if !strings.Contains(got, want) {
+		t.Fatalf("body target must scan parsed body collections (JSON processor leaves REQUEST_BODY empty):\n%s", got)
+	}
+}

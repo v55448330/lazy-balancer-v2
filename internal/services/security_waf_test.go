@@ -292,6 +292,59 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 	}
 }
 
+// 2026-09-09 排查 942550 误报（JSON 订单单被当 SQL 注入拦截）确认的集成缺口：
+// coraza 不按 Content-Type 自动启用 JSON/XML body processor（源码注释明确
+// XML and JSON must be forced with ctl），CRS 901340 对无 processor 的 body 强制
+// forceRequestBodyVariable 后 coraza 兜底按 URLENCODED 解析——JSON 整串成为
+// 单个参数名：扫 ARGS_NAMES 的规则（942550/941100）在原始文本上误报，扫
+// ARGS 值的规则对 body 失明。修复：CRS Include 之前显式激活 processor（对齐
+// ModSecurity 连接器的引擎层行为；id 9/10 沿用本项目自有单数码段）。
+// SEC-REVIEW-01：Content-Type 值大小写不受控（coraza 仅小写化 header 名），
+// 激活正则必须 (?i)，否则 Application/JSON 变体按请求退回兜底误报路径。
+func TestBuildCorazaDirectives_activatesJSONXMLBodyProcessors(t *testing.T) {
+	jsonRule := `SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^application/(?:[\w.+-]+?\+)?json(?:\s*;|$)" "id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"`
+	xmlRule := `SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application|text)/(?:[\w.+-]+?\+)?xml(?:\s*;|$)" "id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML"`
+
+	for _, mode := range []string{"blocking", "detection"} {
+		// Given / When：CRS 加载的两种模式
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil)
+
+		// Then：两条激活规则存在，且位于 crs-setup Include 之前（phase:1 按
+		// 发射序执行，晚于 901340 的激活无法阻止 URLENCODED 兜底）
+		setupIdx := strings.Index(directives, "Include /app/waf/crs/crs-setup.conf")
+		if setupIdx < 0 {
+			t.Fatalf("mode %s: crs-setup include missing:\n%s", mode, directives)
+		}
+		for _, rule := range []string{jsonRule, xmlRule} {
+			idx := strings.Index(directives, rule)
+			if idx < 0 {
+				t.Fatalf("mode %s: body processor activation rule missing:\n%s", mode, directives)
+			}
+			if idx > setupIdx {
+				t.Fatalf("mode %s: activation rule must precede the crs-setup include:\n%s", mode, directives)
+			}
+		}
+	}
+}
+
+// SEC-REVIEW-02：畸形 JSON/XML（或嵌套超深）使 coraza 解析失败——所有 body
+// 集合为空且 901340 不再 force，CRS 4.29 无任何规则消费 REQBODY_PROCESSOR_ERROR
+// （grep 实证零命中），恶意 body 可借「声明 JSON + 发非法 JSON」对全部 body
+// 规则隐身。守卫规则 id:11 计满临界异常分（默认阈值 5 → 拦截模式即拦），
+// 与 coraza ctl.go 文档建议的使用者自检口径一致。
+func TestBuildCorazaDirectives_flagsBodyProcessorErrors(t *testing.T) {
+	guard := `SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'请求体解析失败'"`
+	for _, mode := range []string{"blocking", "detection"} {
+		// Given / When
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil)
+
+		// Then
+		if !strings.Contains(directives, guard) {
+			t.Fatalf("mode %s: body processor error guard missing:\n%s", mode, directives)
+		}
+	}
+}
+
 func TestBuildCorazaDirectives_skipsIllegalSecRuleRemoveTargets(t *testing.T) {
 	// R60 B-新1：SecRuleRemoveById 形态门——非法形态（coraza Atoi 失败→
 	// 全部配置编译失败/LB 停摆）与越界 range（1-999999 静默删光全部规则）

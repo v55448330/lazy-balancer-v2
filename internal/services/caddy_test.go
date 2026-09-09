@@ -1821,6 +1821,11 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 	lines := strings.Split(directives, "\n")
 	var chainLines []string
 	for _, line := range lines {
+		// id:9/id:10 body processor 激活规则同为 phase:1 SecRule，但与本测试
+		// 关注的自定义链形状无关（2026-09-09 引入），按 ctl 标记排除。
+		if strings.Contains(line, "ctl:requestBodyProcessor") {
+			continue
+		}
 		if strings.Contains(line, "id:10007") || (strings.Contains(line, "SecRule") && strings.Contains(line, "phase:1")) {
 			chainLines = append(chainLines, line)
 		}

@@ -21,8 +21,12 @@ func TestBuildCorazaDirectives_logActionOmitsScoreSetvar(t *testing.T) {
 	if !strings.Contains(directives, `pass,log,msg:'自定义规则 仅记录规则 命中'`) {
 		t.Fatalf("log action must emit pass,log with msg only:\n%s", directives)
 	}
-	if strings.Contains(directives, "setvar:tx.inbound_anomaly_score_pl1=+5") {
-		t.Fatalf("log action must NOT accumulate anomaly score:\n%s", directives)
+	// 断言范围收紧到自定义规则行本身：id:11 请求体解析失败守卫（2026-09-09）
+	// 合法携带 +5 setvar，不得让本测试误伤。
+	for _, line := range strings.Split(directives, "\n") {
+		if strings.Contains(line, "自定义规则 仅记录规则 命中") && strings.Contains(line, "setvar:") {
+			t.Fatalf("log action must NOT accumulate anomaly score:\n%s", line)
+		}
 	}
 }
 
