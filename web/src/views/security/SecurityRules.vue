@@ -274,7 +274,7 @@
             <el-option :value="10" label="较高（10）" />
             <el-option :value="20" label="严重（20）" />
           </el-select>
-          <span class="form-tip-inline">匹配此规则时累加的异常分值，达到策略异常阈值后触发拦截（仅自定义模式下无 CRS 阈值评估，只记录）</span>
+          <div class="form-tip-line">匹配此规则时累加的异常分值，累计达到策略异常阈值后触发拦截；仅自定义模式无阈值评估，只记录</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="ruleForm.enabled" />
