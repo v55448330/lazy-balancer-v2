@@ -118,18 +118,17 @@ var auditRoutePolicies = map[string]AuditPolicy{
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
-	"POST /api/v1/ca-providers/:id/test":     {},
-	"POST /api/v1/certificates/jobs/current": {},
-	"POST /api/v1/certificates/parse":        {},
-	"POST /api/v1/config/import/validate":    {},
-	"POST /api/v1/config/preview":            {},
-	// 2026-09-10 裁定（全项目审计·权限模型执行缺口）：移除 admin-tls/inspect、
-	// certificate-configs/test、certificate-configs/:id/test 三条——均为挂 business
-	// 组的管理面工具（DNS 凭证测试/管理 TLS 证书解析），白名单使其绕过
-	// readOnlyGuard 的非管理员门（权限模型:非管理员仅自助写）。移除后三守卫
-	// （readOnlyGuard/apiKeyReadOnlyGuard/mfaStepUpGuard）同步恢复完整写面校验;
-	// ca-providers/:id/test 与 config/preview 等保留(挂 admin 组,adminOnly 先拦,
-	// 白名单仅作用于管理员只读 Key 的读探测豁免)。
+	"POST /api/v1/ca-providers/:id/test":        {},
+	"POST /api/v1/certificate-configs/:id/test": {},
+	"POST /api/v1/certificates/jobs/current":    {},
+	"POST /api/v1/certificate-configs/test":     {},
+	"POST /api/v1/certificates/parse":           {},
+	"POST /api/v1/config/import/validate":       {},
+	"POST /api/v1/config/preview":               {},
+	// 2026-09-10 裁定(全项目审计·权限模型执行缺口,同日用户终裁):仅移除
+	// admin-tls/inspect——上传/解析管理面 TLS 证书属管理面编辑流,非管理员禁用。
+	// certificate-configs 两条测试与 ca-providers/:id/test 经用户裁定开放给
+	// 非管理员(读探测语义,不落库);三守卫对 inspect 恢复完整写面校验。
 	// 审计 I-2：POST /config/validate 已移出只读豁免——该端点实际执行真实
 	// Caddy /load（?validate=true 参数被 Caddy v2.11.4 静默忽略，校验成功即
 	// 调用方配置成为运行配置），只读 API key/从节点/MFA 豁免均可触发真实

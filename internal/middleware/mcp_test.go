@@ -44,11 +44,11 @@ func TestAPIKeyReadOnlyGuardBlocksWritesAndAllowsReadOnlyPOST(t *testing.T) {
 	if parseAllowed.Code != http.StatusNoContent {
 		t.Fatalf("parse POST status=%d, want 204", parseAllowed.Code)
 	}
-	// 管理面工具端点对只读 Key 同步收紧(2026-09-10)
-	testBlocked := httptest.NewRecorder()
-	router.ServeHTTP(testBlocked, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
-	if testBlocked.Code != http.StatusForbidden {
-		t.Fatalf("cert-config test POST status=%d, want 403", testBlocked.Code)
+	// DNS 凭证测试端点：2026-09-10 终裁开放(读探测,白名单在列)
+	testAllowed := httptest.NewRecorder()
+	router.ServeHTTP(testAllowed, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
+	if testAllowed.Code != http.StatusNoContent {
+		t.Fatalf("cert-config test POST status=%d, want 204", testAllowed.Code)
 	}
 }
 

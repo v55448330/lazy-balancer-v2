@@ -10,7 +10,8 @@ import (
 // 2026-09-10 审计裁定（权限模型 2026-09-05 的执行缺口）：非管理员在主节点仅
 // 自助写（本人密码/显示名、MFA 自助、本人 API Key）。管理面写端点——负载规则
 // CRUD、DNS 证书配置 CRUD/测试、证书签发/任务重试/删除、管理面 TLS 证书解析
-// ——此前误挂 business 组（任意登录角色可写），全部收紧为 admin。
+// ——admin-tls/inspect 收紧为 admin（2026-09-10 终裁：上传证书解析属管理面编辑流）；
+// DNS 凭证测试端点（certificate-configs/test ×2）经终裁开放非管理员（读探测）。
 // 读形态的批量查询 POST（/rules/cert-info、/certificates/parse、
 // /certificates/jobs/current）保留 business。
 func TestBusinessWriteEndpoints_requireAdmin(t *testing.T) {
@@ -34,8 +35,6 @@ func TestBusinessWriteEndpoints_requireAdmin(t *testing.T) {
 		{http.MethodPost, "/api/v1/certificate-configs", `{}`},
 		{http.MethodPut, "/api/v1/certificate-configs/1", `{}`},
 		{http.MethodDelete, "/api/v1/certificate-configs/1", ""},
-		{http.MethodPost, "/api/v1/certificate-configs/test", `{}`},
-		{http.MethodPost, "/api/v1/certificate-configs/1/test", `{}`},
 		{http.MethodPost, "/api/v1/certificates/issue", `{}`},
 		{http.MethodPost, "/api/v1/certificates/jobs/1/retry", ""},
 		{http.MethodDelete, "/api/v1/certificates/jobs/1", ""},
@@ -100,5 +99,17 @@ func TestBusinessWriteEndpoints_selfServiceAndReadsStayOpen(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("读形态 POST 被误拦：%s", rec.Body.String())
+	}
+
+	// DNS 凭证测试端点：2026-09-10 终裁开放非管理员（读探测，不落库）
+	for _, p := range []string{"/api/v1/certificate-configs/test", "/api/v1/certificate-configs/1/test"} {
+		req = httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", userKey)
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code == http.StatusForbidden {
+			t.Fatalf("DNS 测试端点 %s 被误拦（终裁开放）：%s", p, rec.Body.String())
+		}
 	}
 }
