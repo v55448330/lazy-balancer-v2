@@ -422,6 +422,10 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 		expiresAt, updatedAt = expiresNull.String, updatedNull.String
 		certs = append(certs, gin.H{"id": id, "rule_id": ruleID, "domain": domain, "status": status, "message": message, "expires_at": expiresAt, "updated_at": updatedAt})
 	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历证书任务失败"})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": len(certs)}})
 }
 

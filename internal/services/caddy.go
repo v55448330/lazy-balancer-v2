@@ -2896,6 +2896,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			})
 		}
 	}
+	// 新-1(第 3 轮审计):request_body 限额必须先于全部 waf 处理器——coraza 的
+	// io.Copy 读体无界,限额在 waf 之后意味着用户限额对 coraza 读体阶段不生效
+	// (攻击者可发送超大 JSON body 让 coraza 全量缓冲后再被限额拒,DoS 面)。
+	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
+	if effectiveRequestBodyMaxSizeMB > 0 {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler":  "request_body",
+			"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
+		})
+	}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
 	// 审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次透传给各
@@ -2918,13 +2928,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 				handleChain = append(handleChain, wafHandler)
 			}
 		}
-	}
-	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
-	if effectiveRequestBodyMaxSizeMB > 0 {
-		handleChain = append(handleChain, map[string]interface{}{
-			"handler":  "request_body",
-			"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
-		})
 	}
 
 	upstreamList := make([]interface{}, 0, len(enabledUpstreams))

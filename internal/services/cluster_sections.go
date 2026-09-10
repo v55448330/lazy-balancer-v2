@@ -90,9 +90,8 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 // 字段。last_login（登录时间）与 mfa_last_timestep（从节点本地登录推进）是
 // 「从节点登录端点会写、主节点值无权威意义」的本地态：不清零则从节点每次
 // MFA 登录都触发漂移全量重拉，且从节点锁定在一个同步周期（≤60s）内被主节点
-// 值抹除（R72 F-3）。mfa_failed_attempts / mfa_locked_until 是 M7 残留死列
-// （随快照搬运、无读写语义，见系统域 S-4），此处一并清零只为口径稳定。只清零
-// 副本、不改动 s.Users 原值，快照线上格式保持不变。
+// 值抹除（R72 F-3）。mfa_failed_attempts/mfa_locked_until 死列已于 2026-09-10
+// 物理删除(db.go migrateDropDeadMFALockColumns),快照不再搬运该二值。
 // login_failed_attempts / login_locked_until 是从节点本地登录锁定记账（登录
 // 端点写入，不进快照与节哈希）：users 节重放时由 replaceSnapshotTx 读出并在
 // 回插后回写保留（SC-4），重放不会解锁从节点被锁账户。

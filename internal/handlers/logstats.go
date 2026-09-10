@@ -52,7 +52,14 @@ func dirBytes(path string) (int64, int64) {
 // 轮转副本:运行日志族 base.20260902-150405;timberjack 族 base-<ts>-size.log。
 func timestampedRotations(path string) int64 {
 	dir := filepath.Dir(path)
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	// Sys-N1 根因(第 3 轮审计):运行日志 path=/app/logs/lazy-balancer.log,
+	// TrimSuffix 去 .log 后 base=lazy-balancer,而轮转副本实际是
+	// lazy-balancer.log.YYYYMMDD-HHMMSS → rest=.log.2026... 不匹配 16 字符判定。
+	// 修复:不去扩展名,base 含 .log → rest=.YYYYMMDD-HHMMSS 恰 16 字符。
+	// timberjack 族(caddy/rules)的副本 <base去ext>-<ts>-size.log 需去 ext,
+	// 故两种 base 各算一次:扩展 base 匹配运行日志族,去 ext base 匹配 timberjack。
+	base := filepath.Base(path)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
@@ -63,21 +70,24 @@ func timestampedRotations(path string) int64 {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasPrefix(name, base) {
-			continue
-		}
-		rest := name[len(base):]
-		// 运行日志族:.YYYYMMDD-HHMMSS
-		if len(rest) == 16 && rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
-			if info, err := e.Info(); err == nil {
-				total += info.Size()
+		// 运行日志族(base 含 .log):rest = .YYYYMMDD-HHMMSS(16 字符)
+		if strings.HasPrefix(name, base) {
+			rest := name[len(base):]
+			if len(rest) == 16 && rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
+				if info, err := e.Info(); err == nil {
+					total += info.Size()
+				}
+				continue
 			}
-			continue
 		}
-		// timberjack 族:-<ts>-size.log(ts 含连字符/点)
-		if strings.HasPrefix(rest, "-") && strings.HasSuffix(rest, "-size.log") {
-			if info, err := e.Info(); err == nil {
-				total += info.Size()
+		// timberjack 族(stem 去 .log):caddy-<ts>-size.log 不以 caddy.log 开头,
+		// 须独立按 stem 前缀匹配(不被上面 base 门拦)
+		if strings.HasPrefix(name, stem) {
+			rest2 := name[len(stem):]
+			if strings.HasPrefix(rest2, "-") && strings.HasSuffix(rest2, "-size.log") {
+				if info, err := e.Info(); err == nil {
+					total += info.Size()
+				}
 			}
 		}
 	}

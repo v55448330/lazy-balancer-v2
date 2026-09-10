@@ -49,7 +49,7 @@ var toolUsage = map[string]string{
 	"retry_cert_job":               "手动重试失败的签发任务（自动冷却期外的任务）",
 	"delete_cert_job":              "删除证书任务记录（已签发证书文件不受影响）",
 	"issue_certificate":            `触发 ACME 证书签发：传 caddy_id 定向签发单条规则；批量全量重签（含已签发任务，消耗 CA 配额）须显式 {"all":true}`,
-	"list_certificates":            "查看 Caddy 当前加载的全部证书及到期时间",
+	"list_certificates":            "列出证书任务清单（每域名最新签发任务：状态/到期时间）",
 	"get_config":                   "读取全局配置（时区/日志级别/超时/续签策略等）",
 	"update_config":                "修改全局配置并即时应用（如时区、日志级别、代理超时）",
 	"reload_caddy":                 "从数据库重新生成并加载 Caddy 配置，用于配置异常时强制收敛",

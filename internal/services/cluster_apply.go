@@ -579,6 +579,23 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 					}
 				}
 			}
+			// C-1-R(第 3 轮审计):ID 数组形状(现代存储形态)元素为数字,
+			// 上面 map 断言恒 false——需连 snapshot.SecurityCustomRules 查启用态
+			if !hasEnabled && len(crs) > 0 {
+				for _, cr := range crs {
+					if id, ok := cr.(float64); ok {
+						for _, scr := range snapshot.SecurityCustomRules {
+							if int(scr.ID) == int(id) && scr.Enabled {
+								hasEnabled = true
+								break
+							}
+						}
+						if hasEnabled {
+							break
+						}
+					}
+				}
+			}
 			if hasEnabled {
 				Logf("warn", "快照携带 mode=off 且挂启用自定义规则的策略 %v(旧主节点语义):新版本 off=全关,该策略自定义规则暂不生效,请升级主节点后由其重发快照(或改用 custom_only)", p["name"])
 			}

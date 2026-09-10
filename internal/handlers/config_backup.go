@@ -1770,8 +1770,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 新语义 off=全关),违背迁移「行为零突变」意图。导入事务内做同款归一
 	// (与 migrateSecurityPolicyCustomOnlyMode 的行级语义一致,但不走旗标门:
 	// 每次导入都归一,导入的是「旧世界数据」这一事实由备份内容自证)。
-	if _, err := tx.ExecContext(ctx, `UPDATE security_policies SET mode='custom_only'
-WHERE mode='off' AND EXISTS (
+	// K2-P2-03-E(第 3 轮审计):新语义下合法保存的 off+启用规则导出→导入会被
+	// 归一为 custom_only(规则从全关静默变生效)。行为与启动迁移一致(旧世界
+	// 数据归一),但在此留审计提示,运维可从事件日志追溯。
+	if result, err := tx.ExecContext(ctx, `UPDATE security_policies SET mode='custom_only'
+WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND EXISTS (
   SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
   WHERE json_extract(je.value,'$.enabled')=1
      OR (json_type(je.value)='integer' AND EXISTS (
@@ -1781,6 +1784,8 @@ WHERE mode='off' AND EXISTS (
 		recordAudit(c, "导入失败", "配置备份", "off→custom_only 归一: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
 		return
+	} else if n, _ := result.RowsAffected(); n > 0 {
+		services.Logf("info", "配置导入：%d 个 mode=off 且挂启用自定义规则的策略已归一为 custom_only（旧语义兼容）", n)
 	}
 	// R41 B1: pre-R40 备份可能携带 ≥2 个 is_default=1 的拦截页。restoreTable
 	// 原值插入后这些行全部成为不可编辑/删除的死行，且 branding 重渲染会覆盖

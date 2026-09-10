@@ -1320,7 +1320,7 @@ func migrateSecurityPolicyCustomOnlyMode() error {
 		return nil
 	}
 	res, err := DB.Exec(`UPDATE security_policies SET mode='custom_only'
-WHERE mode='off' AND json_type(COALESCE(custom_rules,'[]')) IN ('array','object') AND EXISTS (
+WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALESCE(custom_rules,'[]')) IN ('array','object') AND EXISTS (
   SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
   WHERE json_extract(je.value,'$.enabled')=1
      OR (json_type(je.value)='integer' AND EXISTS (

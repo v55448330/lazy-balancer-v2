@@ -362,7 +362,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			if err := tx.QueryRowContext(c.Request.Context(),
 				`SELECT COUNT(*) FROM security_policies
 WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
-  AND EXISTS (SELECT 1 FROM json_each(COALESCE(ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
+  AND json_valid(COALESCE(ip_acl_list_refs,'[]')) AND EXISTS (SELECT 1 FROM json_each(COALESCE(ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
 				listID).Scan(&allowRefCount); err == nil && allowRefCount > 0 {
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
 					Message: fmt.Sprintf("该列表正被 %d 个白名单模式策略引用，清空条目会使这些策略放行全部请求，请先解除引用", allowRefCount)})

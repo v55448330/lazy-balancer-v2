@@ -1108,15 +1108,14 @@ func TestGenerateRouteObject_placesWafHandlerFirst_whenBlockingPolicyBound(t *te
 	if names[0] != "headers" {
 		t.Fatalf("chain head=%q, want headers (X-LB-Rule-ID inject) in %v", names[0], names)
 	}
+	// 新-1(第 3 轮审计):request_body 限额前移至 waf 之前(coraza 读体无界)
+	bodyIndex := indexOfHandler(names, "request_body")
 	wafIndex := indexOfHandler(names, "waf")
-	if wafIndex != 1 {
-		t.Fatalf("waf handler index=%d, want position 1 (right after the F3 inject) in chain %v", wafIndex, names)
+	if bodyIndex > wafIndex {
+		t.Fatalf("request_body must precede waf (coraza read-body DoS guard): chain %v", names)
 	}
 	if proxyIndex := indexOfHandler(names, "reverse_proxy"); proxyIndex <= wafIndex {
 		t.Fatalf("waf must execute before reverse_proxy: chain %v", names)
-	}
-	if bodyIndex := indexOfHandler(names, "request_body"); bodyIndex <= wafIndex {
-		t.Fatalf("waf must execute before request_body: chain %v", names)
 	}
 }
 
