@@ -1106,7 +1106,7 @@ onUnmounted(() => {
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
 .regex-extras { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; }
-.regex-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.regex-presets { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 4px; }
 .regex-preset-link { font-size: 12px; }
 .regex-tester { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .regex-test-input { width: 240px; }
