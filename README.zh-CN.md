@@ -50,6 +50,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 | [安全配置](docs/security.zh-CN.md) | WAF 策略、IP 控制、事件采集、规则更新 |
 | [集群管理](docs/cluster.zh-CN.md) | 主从架构、MFA、安全模型、升级须知 |
 | [生产调优](docs/production-tuning.zh-CN.md) | 内核/容器/LB/WAF/HTTP3 五层调优 |
+| [API 文档](docs/api.zh-CN.md) | REST 端点概览、认证、错误码 |
+| [MCP 文档](docs/mcp.zh-CN.md) | AI 代理接入、工具权限、工作流示例 |
 
 ## 交流群
 

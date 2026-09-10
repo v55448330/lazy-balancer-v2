@@ -50,6 +50,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 | [Security](docs/security.zh-CN.md) (中文) | WAF policies, IP control, event collection, rule updates |
 | [Cluster](docs/cluster.zh-CN.md) (中文) | Primary-replica architecture, MFA, security model, upgrades |
 | [Production Tuning](docs/production-tuning.zh-CN.md) (中文) | Five-layer tuning: kernel/container/LB/WAF/HTTP3 |
+| [API Reference](docs/api.zh-CN.md) (中文) | REST endpoints, authentication, error codes |
+| [MCP Service](docs/mcp.zh-CN.md) (中文) | AI agent integration, tool permissions, workflows |
 
 ## Community
 
