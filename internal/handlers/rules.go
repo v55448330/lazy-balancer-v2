@@ -1000,7 +1000,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	restoreCreatedRule := func() error {
 		return errors.Join(h.restoreImportRuntime(runtimeSnapshot), removeCreatedRule())
 	}
-	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && req.Domain != "" {
+	if enabledVal == 1 && req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && req.Domain != "" {
 		qm := services.GetCAQueueManager()
 		if qm == nil {
 			if restoreErr := restoreCreatedRule(); restoreErr != nil {

@@ -38,7 +38,8 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
 	// R57 C-6：本地节点运行态标记，非配置——导入旧备份会复活陈旧的
 	// 「应用失败」横幅（导入提交路径不经过 recordCaddyApplyResult 清空）。
-	"caddy_apply_error": true,
+	"caddy_apply_error": true,	"registration_confirm_failures": true,
+
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs

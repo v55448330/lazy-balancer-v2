@@ -247,7 +247,10 @@ func (m *CRSUpdateManager) run(trigger string) {
 	}
 	writeCRSUpdateLog("INFO", string(CRSStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentCRSVersion()))
 
-	if tag == currentCRSVersion() {
+	// CRS-1(第 5 轮审计 P2):tag < current 时也跳过(防静默降级)——
+	// 此前仅精确相等跳过,捆绑版本 > 远端最新(如上游 release 被删/转 pre)时
+	// 无条件 downloadAndInstall 降级为更旧树,与 UI IsLatest(<=0 即最新)语义相悖。
+	if cmp, cmpErr := CompareCRSVersions(tag, currentCRSVersion()); cmpErr == nil && cmp <= 0 {
 		writeCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",

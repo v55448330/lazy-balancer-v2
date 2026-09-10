@@ -2914,7 +2914,9 @@ func init() {
 func (h *Handlers) ListCRSRules(c *gin.Context) {
 	entries, err := os.ReadDir(crsRulesDir)
 	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rules": []interface{}{}, "total": 0}})
+		// SH-1(第 5 轮审计):降级空列表 200 与「确实无规则」不可区分——
+		// 同域标准(R35 D2 全零面板必须报错)对齐,改 500。
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 规则目录不可读: " + err.Error()})
 		return
 	}
 

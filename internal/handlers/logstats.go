@@ -87,7 +87,7 @@ func timestampedRotations(path string) int64 {
 		// 兄弟文件名如 caddy-tls 的 '-tls' 以字母开头)。
 		if strings.HasPrefix(name, stem) {
 			rest2 := name[len(stem):]
-			if strings.HasPrefix(rest2, "-") && strings.HasSuffix(rest2, "-size.log") {
+			if strings.HasPrefix(rest2, "-") && (strings.HasSuffix(rest2, "-size.log") || strings.HasSuffix(rest2, "-size.log.gz")) {
 				// stem 后 '-' 到下一 '-' 之间(或到 '-size' 之间)必须全数字
 				// B-2:timberjack 时间戳含 T/-/. 非全数字——只需首字符为数字
 				// (区分 own 'caddy-2026...' 与 brother 'caddy-tls-...')
@@ -251,7 +251,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		} else if entries, err := os.ReadDir(fixedLogsDir); err == nil {
 			var active, rotated int64
 			for _, e := range entries {
-				if e.IsDir() || !strings.HasPrefix(e.Name(), "certjob-") || !strings.HasSuffix(e.Name(), ".log") {
+				if e.IsDir() || !strings.HasPrefix(e.Name(), "certjob-") || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
 					continue
 				}
 				a, r := dirBytes(filepath.Join(fixedLogsDir, e.Name()))
@@ -268,7 +268,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		} else if entries, err := os.ReadDir(filepath.Join(fixedLogsDir, "rules")); err == nil {
 			var active, rotated int64
 			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
 					continue
 				}
 				a, r := dirBytes(filepath.Join(fixedLogsDir, "rules", e.Name()))

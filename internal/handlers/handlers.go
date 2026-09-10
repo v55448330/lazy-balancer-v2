@@ -120,7 +120,9 @@ func boolText(value bool) string {
 func (h *Handlers) recordCaddyApplyResult(err error) {
 	if err == nil {
 		if db.DB != nil {
-			db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`)
+			if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); err != nil {
+				log.Printf("[WARN] RH-2: 清除 caddy_apply_error 失败(陈旧失败横幅可能滞留): %v", err)
+			}
 		}
 		return
 	}
@@ -128,7 +130,9 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 	services.Logf("error", "%s", wrapped)
 	services.RecordAuditLog("system", "应用失败", "Caddy配置", wrapped, "")
 	if db.DB != nil {
-		db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped)
+		if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped); err != nil {
+			log.Printf("[WARN] RH-2: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", err)
+		}
 	}
 }
 
@@ -529,7 +533,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			return fmt.Errorf("上游 #%d：最大连接数不能为负数", i+1)
 		}
 
-		key := fmt.Sprintf("%s:%d", u.Host, u.Port)
+		key := fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSpace(u.Host)), u.Port)
 		if hostPortSeen[key] {
 			return fmt.Errorf("上游 %s:%d 重复", u.Host, u.Port)
 		}

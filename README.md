@@ -1,194 +1,63 @@
 # Lazy Balancer V2
 
-English | [简体中文](README.zh-CN.md)
+[English](README.en.md) | 简体中文
 
-A visual load balancing management platform built on **Caddy v2.11 + caddy-l4** (Go + Vue 3, delivered as a single container), with a full WAF security stack built in.
+基于 **Caddy v2.11 + caddy-l4** 的可视化负载均衡管理平台（Go + Vue 3 单容器交付），内置完整 WAF 安全防护。
 
-## Feature Overview
+## 功能特性
 
-- **Load Balancing**: HTTP/HTTPS reverse proxy and TCP layer-4 proxy; weighted round robin (percentage-interlocked), least connections, IP hash, cookie sticky sessions; active/passive health checks with failover; path-level custom routing; proxy timeouts with global defaults plus per-rule overrides (incl. SSE/LLM streaming); TCP PROXY v2 to pass the real client IP through
-- **Security**: Coraza v3 WAF + OWASP CRS v4 (detection/blocking dual modes); IP2Region region control; IP allowlist/blocklist/trusted list; reusable named IP address lists (IP/CIDR + remarks, categories, referenced by policies; one-click save from event handling); rate limiting; custom rules; customizable block page and status codes; security event collection with an overview dashboard (see the dedicated section below)
-- **Free Certificates**: Let's Encrypt / ZeroSSL ACME automatic issuance (DNS-01, DNSPod/Tencent Cloud, accelerated by querying authoritative NS directly), automatic renewal, backoff retries, manual upload
-- **Primary-Replica Cluster**: registration approval, incremental sync (rules/certificates/users/keys/settings/security policies), status reporting, one-click promotion; snapshot HMAC-SHA256 signatures against tampering and replay; replicas fully read-only
-- **Monitoring**: traffic/rate/latency percentiles (P50/95/99), three-state upstream health, per-rule metrics with historical trends, per-rule access logs (JSON, live view) and TOP statistics
-- **Admin Panel HTTPS**: one-click force HTTPS (self-signed or uploaded certificate), automatic HTTP 301 redirect, automatic restart after replica sync
-- **MCP Service**: AI agents operate all features via Streamable HTTP + API Key (read-only keys automatically collapse to a read-only toolset, IP allowlist supported), with the operation manual bundled as an MCP resource
-- **Multi-user & API**: admin/read-only users, API keys (SHA-256), password changes instantly revoke old JWTs, RESTful v1 API + OpenAPI docs
-- **Operations**: operation logs record every action in Chinese; config backup export/import (zero writes on validation failure, compatible with v1 nginx backups); branding (app name/footer/version)
+- 🔄 **负载均衡** — HTTP/HTTPS/TCP/UDP 四层代理，支持轮询/加权/IP 哈希/最少连接/Cookie 会话粘性
+- 🛡️ **WAF 安全防护** — OWASP CRS 规则集 + 自定义规则 + IP 访问控制 + 地域拦截 + 限流
+- 📜 **证书管理** — ACME 自动签发（Let's Encrypt / ZeroSSL），DNS-01 / HTTP-01 挑战，自动续签
+- 📊 **监控仪表盘** — 实时流量 / 连接数 / 上游健康 / 安全事件总览
+- 🔗 **集群管理** — 主从节点配置同步，TOFU 安全基线，故障切换
+- 🤖 **MCP 工具链** — 127 个 AI 可调用运维工具，支持 API Key 认证
 
-## Quick Start
+## 快速开始
 
 ```bash
-# 1. Release build (official): build the frontend first — the Dockerfile only COPYs web/dist into the image; the frontend does not build inside the image
-cd web && npm install && npm run build && cd ..
-
-# 2. Multi-arch image: one buildx build for both architectures, dual tags, push to Docker Hub
-docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 \
-  -t v55448330/lazy-balancer-v2:<tag> -t v55448330/lazy-balancer-v2:latest --push .
-
-# 3. Local deployment: pull the pushed image so local and remote digests match
-docker pull v55448330/lazy-balancer-v2:<tag> && docker compose up -d
-
-# Local dev iteration (debug only: single platform, local only — NOT for release)
-docker compose up -d --build
-
-# docker run (production-recommended flags — full tuning guide: docs/production-tuning.zh-CN.md)
-docker run -d --name lazy-balancer --network host \
-  --restart unless-stopped \
-  --ulimit nofile=1048576:1048576 \
-  -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
-  -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
-  -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.6
+docker run -d \
+  --name lazy-balancer \
+  -p 80:80 -p 443:443 -p 8000:8000 \
+  -v ./data:/app/data \
+  -v ./certs:/app/certs \
+  -v ./logs:/app/logs \
+  v55448330/lazy-balancer-v2:latest
 ```
 
-> The image must bind host ports 80/443 plus custom listen ports directly; `--network host` is recommended on Linux. On macOS/Windows use `-p 8000:8000 -p 80:80 -p 443:443 -p 443:443/udp` (the UDP mapping is required for HTTP/3). The first visit to `http://<host>:8000` opens an initialization wizard that creates the admin account; there are no default credentials.
+打开 `http://localhost:8000` 进入管理面板。
 
+## 交流群
 
-## Production Tuning (Summary)
+<div align="center">
 
-The complete five-layer guide — kernel/container, load balancing, WAF, HTTP/3/TLS, and observability, with every recommendation mapped to actual panel/API fields — lives in **[docs/production-tuning.zh-CN.md](docs/production-tuning.zh-CN.md)** (Chinese). Quick summary:
+**LazyBalancer 交流群**
 
-- **Kernel (Ubuntu host, optional — stock defaults are production-ready; tune only on symptoms)**: with `--network host`, per-container sysctls don't apply — set on the host via `/etc/sysctl.d/`: `net.core.rmem_max/wmem_max=7500000` (HTTP/3 UDP buffers; clears the startup receive-buffer warning), `somaxconn=4096`, `ip_local_port_range=10000 65535`, `fs.file-max=2097152`; open `443/udp` in the firewall
-- **File descriptors**: `--ulimit nofile=1048576:1048576` (one fd per connection; the default 1024 is a production incident waiting to happen; already built into the bundled compose file)
-- **Load balancing**: enable upstream keepalive reuse (`upstream_keepalive_timeout` 60–120s — the single highest-payoff tweak); `proxy_dial_timeout` 3–5s + active health checks + `least_conn` for fast failover; cap upstreams with `max_connections`
-- **WAF**: run `detection` mode for 3–7 days before switching to `blocking`; trim CRS by attack group; handle false positives via CRS exclusions/custom allow rules rather than lowering thresholds; rate-limit per rule (small buckets on login endpoints)
-- **Observability**: `caddy_log_level=warn`, audit retention per compliance (1–12 months), disable per-rule access logs on high-QPS rules and rely on metrics
+群号：**303410331**
 
-### Ready-to-use sysctl config (optional, symptom-driven)
+<img src="docs/qq-group-qr.webp" alt="LazyBalancer QQ 交流群" width="280">
 
-Save as `/etc/sysctl.d/99-lazy-balancer.conf` on the host, then run `sudo sysctl --system`:
+扫一扫二维码，加入群聊
 
-```conf
-# HTTP/3 (QUIC/UDP) socket buffers — clears the startup receive-buffer warning;
-# prevents UDP packet loss for high-bandwidth h3
-net.core.rmem_max = 7500000
-net.core.wmem_max = 7500000
+</div>
 
-# TCP accept backlog — prevents dropped connections under bursty new-connection
-# loads (stock default is 128)
-net.core.somaxconn = 4096
+## 文档
 
-# Ephemeral port range for outbound connections to upstreams — widen when
-# concurrent connections to a single upstream approach ~28k
-net.ipv4.ip_local_port_range = 10000 65535
+- [生产部署指南](docs/production-tuning.zh-CN.md)
+- [Docker Compose 编排](docker-compose.yml)
+- [API 文档](http://localhost:8000/docs)（部署后可用）
+- [OpenAPI 规范](http://localhost:8000/api/v1/openapi.yaml)（部署后可用）
 
-# Connection tracking table for published-port (bridge/NAT) mode; not in the
-# data path with --network host, so it can be omitted there
-net.netfilter.nf_conntrack_max = 262144
-```
+## 技术栈
 
-> To repeat: all of the above is optional — stock Ubuntu defaults are production-ready.
-> The only required item is the process fd limit (`--ulimit nofile=1048576:1048576`,
-> already built into the bundled compose file). Verify with `sysctl net.core.rmem_max`
-> (should read 7500000) and confirm the receive-buffer warning no longer appears in
-> container startup logs after a restart.
-
-Every config write passes four validity gates (frontend → backend field validation → caddy CLI validation → in-transaction apply): invalid values are rejected with a 400 and never committed; running rules and policies are never disturbed.
-
-## Mounted Directories
-
-| Container Path | Contents | Required |
-|---|---|---|
-| `/app/data` | Business/audit/metrics databases, branding.json, ACME account keys, IP2Region province cache | **Yes** |
-| `/app/certs` | Certificates and private keys (manual uploads and ACME-issued) | **Yes** |
-| `/app/logs` | Application logs, Caddy logs, per-rule access logs, rule-set update logs | Recommended |
-| `/app/waf` | CRS rule files, IP2Region xdb, Coraza audit logs; preserved across container rebuilds | Recommended |
-| `/app/config` | Caddyfile (advanced customization only) | Optional |
-
-> Without `/app/waf` mounted, rebuilding the container rolls CRS back to the version bundled in the image; the system persists an updated rule-tree snapshot to the data volume and reconciles and restores it automatically on startup (recorded in the operation log). Mounting the directory avoids the rollback entirely. The database is the single source of truth for configuration; the Caddy config is rendered from it in real time.
-
-## Environment Variables & Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `JWT_SECRET` | Auto-generated, persisted to `data/jwt_secret` | JWT signing key; recommended to set explicitly in production |
-| `LOG_FILE` | Empty | Application log is also written to this file, viewable in the UI |
-| `NODE_NAME` | `node-1` | Default node name for cluster registration |
-| `APP_VERSION` | Injected at build | Displayed version number |
-| `TZ` | Database `timezone` | Process timezone; restart recommended after changing it |
-
-Cluster roles are configured on the "System Settings → Cluster Management" page (not via environment variables). Log level, timezone, log retention, and audit log size are all configured on the "Basic Settings" page.
-
-`data/branding.json` customizes branding (effective immediately after changes; leave `version` empty to show the build version):
-
-```json
-{ "app_name": "Lazy Balancer", "footer_text": "Copyright © 2026 XiaoBao.", "version": "" }
-```
-
-| Port | Purpose |
+| 层 | 技术 |
 |---|---|
-| `8000` | Admin UI and REST API (docs at `/api/v1/docs`) |
-| `80 / 443` | HTTP/HTTPS proxy traffic |
-| `2019` | Caddy Admin API (loopback only) |
-| Custom | TCP rule listen ports |
-
-## Security Subsystem
-
-Request processing chain (a block at any stage returns the configured status code and block page immediately):
-
-```
-Inbound → IP precheck (multi-policy IP ACL merged, highest priority) → GeoIP tagging (Coraza in-chain region blocking) → Rate limiting (per-IP rate + burst) → WAF (Coraza + CRS + custom rules)
-        → Request body size limit → Reverse proxy
-```
-
-| Component | Version |
-|---|---|
-| WAF engine | Coraza v3 (coraza-caddy v2.5.0) |
-| Rule set | OWASP CRS v4.28.0 (bundled, online updates supported) |
-| GeoIP database | IP2Region v3.17.0 (offline xdb, China province-level). 地域规则仅对 IPv4 生效：IPv6/不可解析客户端按「海外」处理（fail-closed）；IP 库未安装时地域规则不可启用 |
-| Rate limiting | caddy-ratelimit v0.1.0 |
-
-**Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule can bind up to 5 policies, evaluated in policy_id order with the first-bound policy's block page taking effect). With multiple policies bound, deny-side IP controls from all policies are merged into a chain-head precheck — denied IPs are interrupted before any CRS/custom rule evaluation, without generating detection events from preceding policies:
-
-| Setting | Options |
-|---|---|
-| WAF mode | Off / Detection (log only) / Blocking (403 once the anomaly score reaches the threshold) |
-| Anomaly threshold | 1/3/5/10/20; lower is stricter |
-| CRS rule groups & exclusions | Load by attack-type group / exclude by file name |
-| Custom rules | Multi-condition chained matching on URI/args/headers/body/User-Agent (contains/regex/exact/prefix), with assignable scores |
-| IP access control | Allowlist (allow only) / blocklist (deny) / trusted list (skip inspection), CIDR; reusable IP address lists can be referenced by allowlist or blocklist |
-| Region control | Block selected regions / allow only selected regions, based on IP2Region (blocked requests generate security events via Coraza) |
-| Rate limiting | Per-IP rate cap plus burst allowance |
-| Block response | Custom HTML block page + status code (400/401/403/404/429/503, unified across WAF/IP ACL/GeoIP/rate limiting) |
-
-**Security events**: WAF blocks (parsed from Coraza audit logs, covering CRS, custom rules, and GeoIP region blocks), IP ACL denials, and GeoIP region blocks are collected automatically, with trend charts and TOP attack types / source IPs (with geolocation display + one-click add to policy lists) / regions; retention is shared with the operation log. Audit logs rotate automatically by size (default 10 MB × 5 files). Client IPs in event logs and the security overview display IP2Region geolocation; clicking opens a popover to add the IP to any associated policy's blocklist/allowlist/trusted list (unified via IP ACL, with mode-switch guard and confirmation dialogs).
-
-**Rule set updates**: CRS and IP2Region support one-click manual updates and daily automatic updates (progress logged live, automatic rollback on failure, results recorded). Every successful update persists the rule tree (including user customization migration files) as a snapshot on the data volume; if a container rebuild rolls the disk state back, startup reconciliation restores it automatically.
-
-## Primary-Replica Cluster
-
-1. Primary node: Cluster Management → generate a registration token (one-time, valid for 30 minutes)
-2. Replica node: choose "Replica", enter the primary address + token to register
-3. Primary node: click "Confirm" in the node list; the replica starts syncing and reports periodically
-4. Replicas are fully read-only (except Cluster Management) and can "Promote to Primary" to leave the cluster
-
-Configuration changes on the primary auto-increment the cluster version; replicas sync incrementally by section hash. Security policies, CRS/IP2Region versions, and settings are all within the sync scope.
-
-**MFA (v2.1.8)**: TOTP two-step login (Google/Microsoft Authenticator). Self-service binding in Settings → 基础设置 → MFA card (QR + 10 one-time recovery codes, stored as SHA-256). Disable/re-bind requires a valid TOTP code only; recovery-code regeneration needs just the logged-in session (no password prompts after login, per 2026-09 policy). Global toggles (default off): write-operation step-up (60s window, 428 + global retry) and verification-failure lockout (5 fails → 10 min). Cluster slave login tickets require admin MFA enabled; users' MFA state syncs via cluster snapshot and full config backup. Admin can reset any user's MFA (audited). Account lockout: during login, wrong passwords AND wrong MFA codes both count toward one per-account counter — five failures lock the account for 10 minutes (429, timing-equalized against enumeration), controlled by the「登录失败锁定」toggle in Basic Settings (off = count only, never lock); the counter resets on full login success. Password-confirmation endpoints (MFA recovery codes, self password change) share the MFA gate's always-on 10-attempt/10-minute cooldown; privileged API-key creation is guarded by the MFA write step-up when「写操作验证」is enabled (no password prompt, keys survive password changes by design).
-
-**Security model**: cluster tokens and CA/DNS credentials are stored in plaintext in `data/lazy-balancer.db` (tokens are needed for HMAC signature verification and cannot be hashed; startup forces database `0600` and data directory `0700`), so do not mount that directory shared. Cluster communication defaults to HTTPS with TOFU fingerprint pinning against MITM; plain-HTTP master addresses are allowed for trusted networks (with an audit warning — TOFU pinning does not apply to plain HTTP, so registration tokens and synced certificate keys travel unencrypted). Tokens have no built-in automatic rotation, but regenerating the registration token invalidates all unused tokens (old tokens expire immediately); if you suspect a leak, delete the node record and re-register.
-
-**Pin mismatch recovery**: each replica pins the primary's admin-panel TLS certificate fingerprint on first contact (TOFU). After the primary replaces that certificate (e.g. switching to an uploaded cert), replicas keep rejecting sync with a fingerprint mismatch (`PinMismatch`) until the new fingerprint is trusted. On the affected replica, an administrator calls `POST /api/v1/cluster/forget-pins` (admin JWT; audited) to clear all remembered pins — the next sync tick re-pins the primary's current certificate automatically. Confirm the primary's address is still yours before doing this: forgetting pins re-enables first-contact trust for it.
-
-## Configuration Backup & Migration
-
-- **Export/Import**: System Information → Configuration Backup (full JSON, validated before import; zero writes if Caddy validation fails); importing a v2 backup requires a file exported by ≥ v2.1.2
-- **Export is a complete backup**: the exported file contains all configuration (including DNS/ACME credentials, certificates and private keys, password hashes) and can fully restore a working deployment; store backup files carefully and guard against leakage
-- **v1 migration**: just pick a v1 (nginx-based) backup and load-balancing rules convert automatically (inline certificates included)
-
-## Upgrade Notes
-
-**滚动升级窗口**：CRS/IP2Region 安全数据同步的打包口径随版本演进——旧主节点+新从节点的组合在窗口期内安全数据哈希可能持续不匹配（每轮被拒并记录 last_sync_error，主节点升级后自愈）。集群升级建议主从同窗口完成。During a rolling upgrade window (mixed primary/replica versions), replicas running the older build do not recognize IP address lists — policy IP access control entries that reference lists are silently inactive on those replicas until they are upgraded. Upgrading primary and replicas together is recommended. Note: during a cross-schema upgrade window (snapshot v2→v3, canonical_payload form) where the primary is upgraded first, older replicas report a snapshot version incompatibility error ("snapshot requires a newer reader / please upgrade this node") — this is the expected safe rejection (not an attack) and resolves automatically once replicas are upgraded.
-
-## Tech Stack & Image
-
-Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
-
-```
-v55448330/lazy-balancer-v2:v2.2.6
-```
+| 代理引擎 | Caddy v2.11.4 + caddy-l4 v0.1.2 |
+| WAF | Coraza v3.7 + OWASP CRS v4.29 |
+| 后端 | Go 1.26 + Gin + SQLite |
+| 前端 | Vue 3 + TypeScript + Element Plus + Vite |
+| 交付 | Docker 多架构（amd64/arm64） |
 
 ## License
 
-[Apache License 2.0](LICENSE). Third-party components: Caddy/caddy-l4/caddy-ratelimit/Coraza/CRS/IP2Region (Apache 2.0), Gin/Vue/Element Plus (MIT), glebarez/sqlite (MIT), golang-jwt (MIT), x/crypto (BSD-3).
+[MIT](LICENSE)
