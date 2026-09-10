@@ -13,7 +13,7 @@
 
 | 范围 | 说明 |
 |---|---|
-| 只读 Key（read_only） | 仅能调用 GET 查询类工具；调写工具返回 403 |
+| 只读 Key（read_only） | 可调用 GET 查询类工具及 5 个读探测 POST 工具（test_ca_provider/test_certificate_config/parse_certificate/validate_import/preview_config）；其余写工具返回 403 |
 | 写工具（POST/PUT/DELETE） | 需非只读 Key；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点 |
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |
