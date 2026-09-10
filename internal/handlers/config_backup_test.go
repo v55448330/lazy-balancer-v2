@@ -2461,3 +2461,23 @@ func queryBackupBindingRows(t *testing.T, ruleCaddyID string) []int {
 	}
 	return ids
 }
+
+// B-1 补充(第 4 轮审计自查):此前测试用内联 SQL 而非 handler 生产路径。
+// 本测试走 ImportConfigBackup 端到端,验证含顶层字符串 custom_rules 的备份
+// 导入不 500。
+func TestImportConfigBackup_toleratesTopLevelStringCustomRules(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	legacyBackup := `{"tables": {"security_policies": [{"id": 1, "name": "top-str", "mode": "off", "custom_rules": "\"str\"", "enabled": 1}]}}`
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyBackup))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code == http.StatusInternalServerError {
+		t.Fatalf("导入含顶层字符串 custom_rules 的备份不得 500: %s", recorder.Body.String())
+	}
+}
