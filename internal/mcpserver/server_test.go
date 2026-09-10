@@ -139,17 +139,24 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	// 54 = 对只读 Key 可见的 GET 工具数（export_config 属 GET 但被 readOnlyHiddenTools 隐藏——HTTP 层只读 Key 403），写工具被只读可见性收敛隐藏
-	if len(payload.Result.Tools) != 54 {
-		t.Fatalf("read-only tool count=%d, want 54", len(payload.Result.Tools))
+	// 59 = GET 工具 55 - export_config 隐藏 + 5 个读探测 POST 工具
+	// (ApiMcp-新1:REST 只读白名单同口径——test_ca_provider/test_certificate_config/
+	// parse_certificate/validate_import/preview_config 转发侧守卫可通过,可见)
+	if len(payload.Result.Tools) != 59 {
+		t.Fatalf("read-only tool count=%d, want 59", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {
 		if tool.Name == "get_metrics_dashboard" {
 			dashboardVisible = true
 		}
+		// ApiMcp-新1:5 个读探测 POST 工具对只读 Key 合法可见(REST 白名单同口径)
+		readOnlyProbeAllow := map[string]bool{
+			"test_ca_provider": true, "test_certificate_config": true, "parse_certificate": true,
+			"validate_import": true, "preview_config": true,
+		}
 		for _, spec := range tools {
-			if spec.name == tool.Name && spec.method != http.MethodGet {
+			if spec.name == tool.Name && spec.method != http.MethodGet && !readOnlyProbeAllow[tool.Name] {
 				t.Errorf("read-only tools/list exposes write tool %s", tool.Name)
 			}
 		}

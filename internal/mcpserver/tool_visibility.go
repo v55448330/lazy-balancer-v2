@@ -77,12 +77,23 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 	// readOnlyHiddenTools：GET 但对只读 Key 禁用的工具（M8：export_config 走
 	// apiKeyReadOnlyGuard 403，只读 Key 不可见，避免呈现必然 403 的工具）。
 	readOnlyHiddenTools := map[string]struct{}{"export_config": {}}
+	// ApiMcp-新1(第 2 轮审计):REST 只读白名单(auditpolicy.go readOnlyWriteRoutes)
+	// 对只读 Key 开放的读探测 POST 对应的 MCP 工具——转发侧守卫可通过,
+	// tools/list 须对只读 Key 可见(消除能力与可见性漂移)。
+	readOnlyProbeTools := map[string]struct{}{
+		"test_ca_provider": {}, "test_certificate_config": {}, "parse_certificate": {},
+		"validate_import": {}, "preview_config": {},
+	}
 	readOnlyNames := make(map[string]struct{}, len(tools))
 	for _, spec := range tools {
 		if spec.method == http.MethodGet {
 			if _, hidden := readOnlyHiddenTools[spec.name]; !hidden {
 				readOnlyNames[spec.name] = struct{}{}
 			}
+		}
+		// 只读 Key 可见的读探测 POST 工具(REST 白名单同口径)
+		if _, probe := readOnlyProbeTools[spec.name]; probe {
+			readOnlyNames[spec.name] = struct{}{}
 		}
 	}
 	filtered := make([]json.RawMessage, 0, len(payload.Result.Tools))

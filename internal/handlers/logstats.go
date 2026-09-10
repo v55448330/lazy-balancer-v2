@@ -68,7 +68,7 @@ func timestampedRotations(path string) int64 {
 		}
 		rest := name[len(base):]
 		// 运行日志族:.YYYYMMDD-HHMMSS
-		if len(rest) == 17 && rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
+		if len(rest) == 16 && rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
 			if info, err := e.Info(); err == nil {
 				total += info.Size()
 			}
