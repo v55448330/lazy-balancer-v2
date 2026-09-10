@@ -351,6 +351,25 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// N1(第 2 轮审计):条目清空 + 本列表被 allow 模式策略引用 → 该策略
+	// 生效名单变空 → 发射端 fail-open(「其余一律拒绝」实际全放行)且 UI
+	// 仍宣称 IP 控制已启用。镜像 DeleteIPList 引用门:条目将被清空且存在
+	// allow 引用时 409 拒绝(同事务内检查,持 caddyOpMu)。
+	if req.Entries != nil && len(entries) == 0 {
+		listID, _ := strconv.ParseInt(id, 10, 64)
+		if listID > 0 {
+			var allowRefCount int
+			if err := tx.QueryRowContext(c.Request.Context(),
+				`SELECT COUNT(*) FROM security_policies
+WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
+  AND EXISTS (SELECT 1 FROM json_each(COALESCE(ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
+				listID).Scan(&allowRefCount); err == nil && allowRefCount > 0 {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
+					Message: fmt.Sprintf("该列表正被 %d 个白名单模式策略引用，清空条目会使这些策略放行全部请求，请先解除引用", allowRefCount)})
+				return
+			}
+		}
+	}
 	var dup int
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND id<>?", name, id).Scan(&dup); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})

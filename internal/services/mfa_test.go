@@ -193,7 +193,7 @@ func TestMFAResetForUser(t *testing.T) {
 	_ = mfaTestEnv(t)
 	mfaSeedUser(t, 6)
 	secret, _, _ := MFAGenerateSecret("tester")
-	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_failed_attempts=3, mfa_locked_until=datetime('now','+5 minutes') WHERE id=6", secret); err != nil {
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret=? WHERE id=6", secret); err != nil {
 		t.Fatal(err)
 	}
 	if err := MFAResetForUser(6); err != nil {

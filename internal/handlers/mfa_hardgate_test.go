@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,13 +108,15 @@ func TestMFAVerifyFailures_NeverCountOrLock(t *testing.T) {
 			t.Fatalf("attempt %d: status=%d, want 401（验码失败只提示，不计数不锁定）", i, code)
 		}
 	}
-	var attempts int
-	var locked interface{}
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0), mfa_locked_until FROM users WHERE id=1").Scan(&attempts, &locked); err != nil {
+	// K2-P1-02(第 2 轮审计):断言迁移到 login_* 列(生产 schema 已删
+	// mfa_failed_attempts/mfa_locked_until 死列)——MFA 验码失败不计数。
+	var loginAttempts int
+	var loginLocked sql.NullString
+	if err := db.DB.QueryRow("SELECT COALESCE(login_failed_attempts,0), login_locked_until FROM users WHERE id=1").Scan(&loginAttempts, &loginLocked); err != nil {
 		t.Fatal(err)
 	}
-	if attempts != 0 || locked != nil {
-		t.Fatalf("attempts=%d locked=%v, want 0/NULL（无计数无锁定）", attempts, locked)
+	if loginAttempts != 0 || loginLocked.Valid {
+		t.Fatalf("login_attempts=%d login_locked=%v, want 0/NULL（MFA 验码失败不计数不锁定）", loginAttempts, loginLocked)
 	}
 }
 

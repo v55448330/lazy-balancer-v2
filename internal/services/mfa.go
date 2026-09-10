@@ -291,7 +291,7 @@ func MFAActivate(userID int) ([]string, error) {
 		return nil, err
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_pending_secret='', mfa_recovery_codes=?, mfa_last_timestep=0, mfa_failed_attempts=0 WHERE id=?",
+		"UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_pending_secret='', mfa_recovery_codes=?, mfa_last_timestep=0 WHERE id=?",
 		pending, hashesJSON, userID); err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func MFAResetForUser(userID int) error {
 	mfaMu.Lock()
 	defer mfaMu.Unlock()
 	_, err := db.DB.Exec(
-		"UPDATE users SET mfa_enabled=0, mfa_secret='', mfa_pending_secret='', mfa_recovery_codes='[]', mfa_last_timestep=0, mfa_failed_attempts=0, mfa_locked_until=NULL WHERE id=?",
+		"UPDATE users SET mfa_enabled=0, mfa_secret='', mfa_pending_secret='', mfa_recovery_codes='[]', mfa_last_timestep=0 WHERE id=?",
 		userID)
 	return err
 }

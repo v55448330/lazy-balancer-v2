@@ -27,10 +27,10 @@ func TestRuleTriggeredMultiFilterSQL_singleValueByteIdentical(t *testing.T) {
 func TestRuleTriggeredMultiFilterSQL_multiFamilyOR(t *testing.T) {
 	var args []any
 	got := ruleTriggeredMultiFilterSQL("地域拦截,自定义规则", &args)
-	// 地域拦截 1 个 LIKE 段（8%）+ 自定义规则族 1 个复合 GLOB 段（SC-3：无
-	// LIKE 前缀，长度约束条件整体并入，与 categorizeAttack 同口径）
-	if n := strings.Count(got, "rule_triggered LIKE ?"); n != 1 {
-		t.Errorf("multi family: LIKE fragments=%d, want 1: %q", n, got)
+	// S4(2026-09-10):单数字族(8)改精确匹配后 LIKE 片段为 0——地域拦截
+	// 现为 rule_triggered = '8'。自定义规则族 1 个复合 GLOB 段保持。
+	if n := strings.Count(got, "rule_triggered = ?"); n != 1 {
+		t.Errorf("multi family: exact fragments=%d, want 1: %q", n, got)
 	}
 	if !strings.Contains(got, " OR ") || !strings.HasPrefix(got, "(") || !strings.HasSuffix(got, ")") {
 		t.Errorf("multi family: must be a parenthesized OR group: %q", got)

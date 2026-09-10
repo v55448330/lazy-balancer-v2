@@ -207,7 +207,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		requestRestart()
 	}
 	basicSync := "已同步"
-	if skip.skip("global_config") {
+	// C-2 回归修正(第 2 轮审计 K2-P3-04):skip() 是 disabled||unchanged 合并
+	// 视图——开关开启但节哈希一致(unchanged)时曾误报「开关关闭」;精确判
+	// disabled(同 :326/:381 先例),unchanged 侧由节级审计正确区分。
+	if skip.disabled["global_config"] {
 		basicSync = "开关关闭"
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置："+basicSync, fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
@@ -557,6 +560,9 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		// 携带 mode=off+启用自定义规则(旧语义仍发射),新语义 off=全关渲染,
 		// 该策略的自定义拦截静默失效直至主节点升级并重发快照。一行 warn 提示
 		// 运维,不改变应用行为。
+		// K2-P4-06(第 2 轮审计):warn 加启用判定——off+全停用规则也告警是
+		// 误报(与迁移判定口径一致,只关心 enabled=1 的规则)。custom_rules
+		// 两种形状(ID 数组/内嵌对象)都检查 enabled 键。
 		if p["mode"] == "off" {
 			var crs []interface{}
 			if raw, ok := p["custom_rules"].(string); ok {
@@ -564,8 +570,17 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			} else if arr, ok := p["custom_rules"].([]interface{}); ok {
 				crs = arr
 			}
-			if len(crs) > 0 {
-				Logf("warn", "快照携带 mode=off 且挂自定义规则的策略 %v(旧主节点语义):新版本 off=全关,该策略自定义规则暂不生效,请升级主节点后由其重发快照(或改用 custom_only)", p["name"])
+			hasEnabled := false
+			for _, cr := range crs {
+				if m, ok := cr.(map[string]interface{}); ok {
+					if v, ok := m["enabled"].(bool); ok && v {
+						hasEnabled = true
+						break
+					}
+				}
+			}
+			if hasEnabled {
+				Logf("warn", "快照携带 mode=off 且挂启用自定义规则的策略 %v(旧主节点语义):新版本 off=全关,该策略自定义规则暂不生效,请升级主节点后由其重发快照(或改用 custom_only)", p["name"])
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,

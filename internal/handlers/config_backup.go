@@ -151,7 +151,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"display_name": "", "is_enabled": int64(1), "password_version": int64(0),
 		"created_at":  "1970-01-01 00:00:00",
 		"mfa_enabled": int64(0), "mfa_secret": "", "mfa_recovery_codes": "[]",
-		"mfa_last_timestep": int64(0), "mfa_failed_attempts": int64(0), "mfa_locked_until": "",
+		"mfa_last_timestep": int64(0),
 	},
 	"api_keys": {
 		"is_enabled": int64(1), "mcp_enabled": int64(0), "read_only": int64(0),
@@ -1763,6 +1763,24 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
 			return
 		}
+	}
+
+	// K2-P2-03(第 2 轮审计):四态化启动迁移只覆盖启动路径——pre-v2.2.7 备份
+	// 导入 off+启用自定义规则的策略后静默失活(旧语义 off=自定义照常发射,
+	// 新语义 off=全关),违背迁移「行为零突变」意图。导入事务内做同款归一
+	// (与 migrateSecurityPolicyCustomOnlyMode 的行级语义一致,但不走旗标门:
+	// 每次导入都归一,导入的是「旧世界数据」这一事实由备份内容自证)。
+	if _, err := tx.ExecContext(ctx, `UPDATE security_policies SET mode='custom_only'
+WHERE mode='off' AND EXISTS (
+  SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
+  WHERE json_extract(je.value,'$.enabled')=1
+     OR (json_type(je.value)='integer' AND EXISTS (
+          SELECT 1 FROM security_custom_rules r
+          WHERE r.id=je.value AND COALESCE(r.enabled,1)=1)))`); err != nil {
+		err = session.abort(err)
+		recordAudit(c, "导入失败", "配置备份", "off→custom_only 归一: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
+		return
 	}
 	// R41 B1: pre-R40 备份可能携带 ≥2 个 is_default=1 的拦截页。restoreTable
 	// 原值插入后这些行全部成为不可编辑/删除的死行，且 branding 重渲染会覆盖

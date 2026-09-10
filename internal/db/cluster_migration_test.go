@@ -157,7 +157,7 @@ func TestMigrateSecurityPolicyCustomOnlyMode_toleratesMalformedJSON(t *testing.T
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('畸形','off','{malformed')`); err != nil {
+	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('畸形','off','"text"')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('正常off启用','off','[{"id":1,"enabled":true,"action":"block","score":5}]')`); err != nil {

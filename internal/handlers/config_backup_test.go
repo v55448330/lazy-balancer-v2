@@ -2002,7 +2002,7 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 	backup := completeBackupJSON(t, map[string][]map[string]any{
 		"users": {{"id": 2, "username": "null-user", "password_hash": "hash", "role": "admin", "is_enabled": nil,
 			"display_name": nil, "created_at": nil, "last_login": nil,
-			"mfa_enabled": nil, "mfa_secret": nil, "mfa_recovery_codes": nil, "mfa_locked_until": nil}},
+			"mfa_enabled": nil, "mfa_secret": nil, "mfa_recovery_codes": nil}},
 		"lb_rules": {{"caddy_id": "lb_nulldump", "name": "null-cols", "protocol": "http", "domain": "nulldump.example.test",
 			"listen_port": 8461, "enabled": nil, "description": nil, "strategy": nil, "dns_server": nil, "dns_family": nil,
 			"health_check_path": nil, "host_header": nil, "tls_source": nil, "compress_types": nil, "enable_compress": nil,
@@ -2066,12 +2066,12 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 	if loginLastLogin.Valid {
 		t.Fatalf("users.last_login must stay NULL (lifecycle), got %v", loginLastLogin.Time)
 	}
-	var mfaSecret, mfaRecovery, mfaLocked sql.NullString
-	if err := db.DB.QueryRow("SELECT mfa_secret, mfa_recovery_codes, mfa_locked_until FROM users WHERE username='null-user'").Scan(&mfaSecret, &mfaRecovery, &mfaLocked); err != nil {
+	var mfaSecret, mfaRecovery sql.NullString
+	if err := db.DB.QueryRow("SELECT mfa_secret, mfa_recovery_codes FROM users WHERE username='null-user'").Scan(&mfaSecret, &mfaRecovery); err != nil {
 		t.Fatalf("read normalized mfa columns: %v", err)
 	}
-	if !mfaSecret.Valid || mfaSecret.String != "" || !mfaRecovery.Valid || mfaRecovery.String != "[]" || !mfaLocked.Valid || mfaLocked.String != "" {
-		t.Fatalf("users mfa normalized: secret=%+v recovery=%+v locked=%+v, want ''/'[]'/''", mfaSecret, mfaRecovery, mfaLocked)
+	if !mfaSecret.Valid || mfaSecret.String != "" || !mfaRecovery.Valid || mfaRecovery.String != "[]" {
+		t.Fatalf("users mfa normalized: secret=%+v recovery=%+v, want ''/'[]'", mfaSecret, mfaRecovery)
 	}
 
 	// 消费点 2（apikeys.go scanAPIKeys 同形查询）：created_at/布尔列 raw 扫描。
@@ -2284,8 +2284,8 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_version,
-		mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until)
-		VALUES (1,'iso-admin','hash','admin','Iso Admin',1,'2026-01-02 03:04:05',NULL,5,0,'','[]',0,0,'')`); err != nil {
+		mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep)
+		VALUES (1,'iso-admin','hash','admin','Iso Admin',1,'2026-01-02 03:04:05',NULL,5,0,'','[]',0)`); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,

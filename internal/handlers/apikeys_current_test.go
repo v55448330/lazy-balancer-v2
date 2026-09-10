@@ -45,7 +45,6 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 		display_name VARCHAR(100),
 		is_enabled BOOLEAN DEFAULT TRUE,
 		last_login DATETIME,
-		mfa_failed_attempts INTEGER DEFAULT 0,
 		mfa_locked_until DATETIME
 	);
 	CREATE TABLE api_keys (
