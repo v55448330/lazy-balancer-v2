@@ -30,7 +30,10 @@ type LogStorageInfo struct {
 	ConfigSource  string `json:"config_source"`
 }
 
-// dirBytes 返回 path 的活跃文件大小与 .1..9 轮转副本合计。
+// dirBytes 返回 path 的活跃文件大小与轮转副本合计。两类轮转家族都统计
+// (SYS-1,2026-09-10 审计):自研 .1..9 shift 后缀;时间戳后缀家族——运行日志
+// <path>.YYYYMMDD-HHMMSS(logrotate.go)与 Caddy/timberjack 的 <name>-<ts>-size.log
+// 形态(前缀=去扩展名的 base)。
 func dirBytes(path string) (int64, int64) {
 	var active, rotated int64
 	if st, err := os.Stat(path); err == nil && !st.IsDir() {
@@ -41,7 +44,53 @@ func dirBytes(path string) (int64, int64) {
 			rotated += st.Size()
 		}
 	}
+	rotated += timestampedRotations(path)
 	return active, rotated
+}
+
+// timestampedRotations 统计同目录下以「去扩展名 base + 分隔符 + 时间戳」命名的
+// 轮转副本:运行日志族 base.20260902-150405;timberjack 族 base-<ts>-size.log。
+func timestampedRotations(path string) int64 {
+	dir := filepath.Dir(path)
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, base) {
+			continue
+		}
+		rest := name[len(base):]
+		// 运行日志族:.YYYYMMDD-HHMMSS
+		if len(rest) == 17 && rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
+			if info, err := e.Info(); err == nil {
+				total += info.Size()
+			}
+			continue
+		}
+		// timberjack 族:-<ts>-size.log(ts 含连字符/点)
+		if strings.HasPrefix(rest, "-") && strings.HasSuffix(rest, "-size.log") {
+			if info, err := e.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+	}
+	return total
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // sanitizeRuleID 与写入侧 sanitizePathComponent / sanitizeRuleLogName 同口径，
@@ -111,7 +160,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
-		{Key: "runtime", Name: "运行日志", LimitBytes: sizeLimitMB("runtime_log_size_mb", 100), KeepCount: 5, RetentionNote: "轮转副本 " + retentionNote, ConfigSource: "基础设置 · 运行日志大小"},
+		{Key: "runtime", Name: "运行日志", LimitBytes: sizeLimitMB("runtime_log_size_mb", 100), KeepCount: 0, RetentionNote: "时间戳轮转，按保留期清理（份数随保留期）", ConfigSource: "基础设置 · 运行日志大小"},
 		{Key: "caddy", Name: "Caddy 运行日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
 		{Key: "rule_access", Name: "规则访问日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
 		{Key: "coraza_audit", Name: "Coraza 审计日志", LimitBytes: sizeLimitMB("audit_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 审计日志大小"},

@@ -536,7 +536,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
-			HasGeoIP: hasGeoIP, HasCustomRules: services.CountEnabledCustomRules(p.CustomRules) > 0,
+			HasGeoIP: hasGeoIP, HasCustomRules: p.Mode != "off" && services.CountEnabledCustomRules(p.CustomRules) > 0, // S7:off=全关不宣称
 			AnomalyThreshold:   p.AnomalyThreshold,
 			IPACLMode:          p.IPACLMode,
 			IPACLEnabled:       p.IPACLEnabled,
@@ -739,6 +739,21 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if err := validateRateLimitShape(req.Name, req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	// S1(2026-09-10 审计):allow 模式+空生效名单——发射端 len>0 门静默跳过
+	// (「其余一律拒绝」实际全放行 fail-open)。写入侧 400(与 UI 守卫同口径,
+	// R50/R57 同型先例;内联∪引用合并判定)。
+	if req.IPACLEnabled && req.IPACLMode == "allow" {
+		var inlineACL []string
+		json.Unmarshal([]byte(req.IPACLList), &inlineACL)
+		var refIDs []int
+		if s := req.IPACLListRefs; s != "" {
+			json.Unmarshal([]byte(s), &refIDs)
+		}
+		if len(inlineACL) == 0 && len(refIDs) == 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下 IP 列表不能为空，否则所有请求将被拒绝"})
+			return
+		}
 	}
 	if err := services.ValidateCustomRulesJSON(req.CustomRules); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -1154,6 +1169,39 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), derefBool(req.RateLimitEnabled), derefInt(req.RateLimitRPS), derefInt(req.RateLimitBurst)); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	// S1(2026-09-10 审计):同 Create——生效配置(请求值缺失回落存量)为
+	// allow+启用+空合并名单时 400,防 fail-open 形态落库。
+	{
+		var storedEnabled bool
+		var storedMode, storedList, storedRefs string
+		_ = db.DB.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
+			Scan(&storedEnabled, &storedMode, &storedList, &storedRefs)
+		effEnabled := storedEnabled
+		if req.IPACLEnabled != nil {
+			effEnabled = *req.IPACLEnabled
+		}
+		effMode := storedMode
+		if ipACLMode != "" {
+			effMode = ipACLMode
+		}
+		if effEnabled && effMode == "allow" {
+			effList, effRefs := storedList, storedRefs
+			if req.IPACLList != nil {
+				effList = *req.IPACLList
+			}
+			if req.IPACLListRefs != nil {
+				effRefs = *req.IPACLListRefs
+			}
+			var inlineACL []string
+			var refIDs []int
+			json.Unmarshal([]byte(effList), &inlineACL)
+			json.Unmarshal([]byte(effRefs), &refIDs)
+			if len(inlineACL) == 0 && len(refIDs) == 0 {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下 IP 列表不能为空，否则所有请求将被拒绝"})
+				return
+			}
+		}
 	}
 	if req.GeoIPCountries != nil {
 		// R72 二十九次 M1：地域条目与存量完全相同的更新跳过 live 校验——N5 裁决
@@ -1794,6 +1842,7 @@ func enrichIPLocation(ip string) string {
 // 总览口径三侧同步。
 var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"IP 访问控制": {"2", "3", "4", "5", "7"},
+	"请求体异常":   {"11"},
 	"地域拦截":    {"8"},
 	"评分拦截":    {"949", "959"},
 	"协议异常":    {"920"},
@@ -1807,6 +1856,19 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 // 或 ≥7 位且以 1 开头（无 id 规则的合成 ID 1000000+）。6 位 1xxxxx（100000-
 // 199999）属 CRS 保留段余数、无发射源，categorizeAttack 判「其他」，本条件
 // 同样不归本族——旧 "10"-"19" LIKE 前缀因无长度约束会误并此类 ID（SC-3）。
+// appendFamilyPrefixCondition(2026-09-10 审计 S4):单数字族(id 2/3/4/5/7/8/11)
+// 为精确匹配——LIKE 前缀会让自定义规则 5 位 ID(24567 等)交叉命中 IP/地域族;
+// 多字符前缀(949/959/920/921)对应 6 位 CRS ID,保持前缀语义。
+func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
+	if len(prefix) == 1 {
+		*ors = append(*ors, "rule_triggered = ?")
+		*args = append(*args, prefix)
+		return
+	}
+	*ors = append(*ors, "rule_triggered LIKE ?")
+	*args = append(*args, prefix+"%")
+}
+
 const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*')"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
@@ -1878,8 +1940,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	if prefixes, isFamily := ruleTriggeredFamilyPrefixes[input]; isFamily {
 		ors := make([]string, 0, len(prefixes)+1)
 		for _, p := range prefixes {
-			ors = append(ors, "rule_triggered LIKE ?")
-			*args = append(*args, p+"%")
+			appendFamilyPrefixCondition(&ors, args, p)
 		}
 		// 自定义规则族无 LIKE 前缀（表内为空集），以长度约束条件整体并入。
 		if input == "自定义规则" {
@@ -1894,8 +1955,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		if strings.HasPrefix(label, input) {
 			matched = true
 			for _, p := range ps {
-				ors = append(ors, "rule_triggered LIKE ?")
-				*args = append(*args, p+"%")
+				appendFamilyPrefixCondition(&ors, args, p)
 			}
 		}
 	}
@@ -2123,6 +2183,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// customRuleFamilyCondition 与前端 triggeredLabel 须与本分支保持一致。
 	case len(ruleTriggered) == 5 || (strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7):
 		return "自定义规则"
+	case ruleTriggered == "11":
+		return "请求体异常"
 	case ruleTriggered == "8" || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
 		return "地域拦截"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||

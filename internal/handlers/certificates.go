@@ -396,31 +396,33 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
 }
 
+// ListCertificates 返回证书任务聚合清单(C-F3,2026-09-10 审计:原实现请求
+// Caddy /pki/ca/local 返回内部 local CA 信息——与业务证书无关(autoHTTPS 已
+// disable_certificates,证书由 cert_jobs 落盘经 load_files 加载),前端零消费、
+// MCP 描述误导。改为从 cert_jobs 聚合每域名最新任务)。
 func (h *Handlers) ListCertificates(c *gin.Context) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, h.cfg.CaddyAdminURL+"/pki/ca/local", nil)
+	rows, err := db.DB.Query(`
+		SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,''), COALESCE(j.expires_at,''), COALESCE(j.updated_at,'')
+		FROM cert_jobs j
+		WHERE j.id = (SELECT MAX(j2.id) FROM cert_jobs j2 WHERE j2.domain = j.domain)
+		ORDER BY j.domain`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "构造证书请求失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
 		return
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取证书列表失败: " + err.Error()})
-		return
+	defer rows.Close()
+	certs := make([]gin.H, 0)
+	for rows.Next() {
+		var id int
+		var ruleID, domain, status, message, expiresAt, updatedAt string
+		var expiresNull, updatedNull sql.NullString
+		if err := rows.Scan(&id, &ruleID, &domain, &status, &message, &expiresNull, &updatedNull); err != nil {
+			continue
+		}
+		expiresAt, updatedAt = expiresNull.String, updatedNull.String
+		certs = append(certs, gin.H{"id": id, "rule_id": ruleID, "domain": domain, "status": status, "message": message, "expires_at": expiresAt, "updated_at": updatedAt})
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 返回异常状态: %d", resp.StatusCode)})
-		return
-	}
-
-	var data map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析证书列表失败: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: data})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": len(certs)}})
 }
 
 func (h *Handlers) IssueCertificate(c *gin.Context) {

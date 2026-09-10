@@ -148,3 +148,38 @@ func TestMigrateSecurityPolicyCustomOnlyMode(t *testing.T) {
 		}
 	}
 }
+
+// S3(2026-09-10 审计):迁移 SQL 对畸形 custom_rules JSON 无容错——json_each 抛
+// malformed JSON 会让 runMigrations 失败→启动失败。修复后畸形行跳过(不迁移不
+// 炸),其余行照常迁移。
+func TestMigrateSecurityPolicyCustomOnlyMode_toleratesMalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('畸形','off','{malformed')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('正常off启用','off','[{"id":1,"enabled":true,"action":"block","score":5}]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DB.Exec(`UPDATE global_config SET waf_mode4_migrated=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSecurityPolicyCustomOnlyMode(); err != nil {
+		t.Fatalf("畸形 JSON 不得使迁移失败: %v", err)
+	}
+	modeOf := func(name string) string {
+		var mode string
+		if err := DB.QueryRow(`SELECT mode FROM security_policies WHERE name=?`, name).Scan(&mode); err != nil {
+			t.Fatal(err)
+		}
+		return mode
+	}
+	if got := modeOf("正常off启用"); got != "custom_only" {
+		t.Fatalf("正常行 = %q, want custom_only(畸形行不拖累他行)", got)
+	}
+	if got := modeOf("畸形"); got != "off" {
+		t.Fatalf("畸形行 = %q, want off(跳过)", got)
+	}
+}

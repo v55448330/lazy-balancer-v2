@@ -203,12 +203,3 @@ func missingACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 		Error:   "ACME 证书尚未签发或不存在",
 	}
 }
-
-// GetRulesCertInfo returns parsed certificate info for multiple rules.
-func GetRulesCertInfo(caddyIDs []string) map[string]*models.RuleCertInfo {
-	result := make(map[string]*models.RuleCertInfo, len(caddyIDs))
-	for _, id := range caddyIDs {
-		result[id] = GetRuleCertInfo(id)
-	}
-	return result
-}

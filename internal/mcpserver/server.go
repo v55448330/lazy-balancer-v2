@@ -44,7 +44,7 @@ var tools = []toolSpec{
 	{"retry_cert_job", "重试指定证书签发任务", http.MethodPost, "/certificates/jobs/{id}/retry", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
 	{"delete_cert_job", "删除指定证书签发任务", http.MethodDelete, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
 	{"issue_certificate", "触发 ACME 证书签发", http.MethodPost, "/certificates/issue", nil, nil, issueCertificateSchema},
-	{"list_certificates", "列出 Caddy 当前证书", http.MethodGet, "/certificates", nil, nil, emptySchema},
+	{"list_certificates", "列出证书任务清单（每域名最新签发任务：状态/到期时间）", http.MethodGet, "/certificates", nil, nil, emptySchema},
 	{"get_config", "读取全局配置", http.MethodGet, "/config", nil, nil, emptySchema},
 	{"update_config", "更新全局配置并应用 Caddy", http.MethodPut, "/config", nil, nil, updateConfigSchema},
 	{"reload_caddy", "从数据库重新生成并加载 Caddy 配置", http.MethodPost, "/config/reload", nil, nil, emptySchema},

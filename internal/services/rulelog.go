@@ -143,4 +143,24 @@ func RemoveRuleLogFiles(ruleID string) {
 	for i := 1; i <= 5; i++ {
 		os.Remove(fmt.Sprintf("%s.%d", base, i))
 	}
+	// SYS-1(2026-09-10 审计):timberjack 时间戳副本(<id>-<ts>-size.log,至多
+	// roll_keep=5 份)此前永久残留——按前缀+后缀清扫。
+	removeTimberjackRotations(base)
+}
+
+// removeTimberjackRotations 删除 base 同目录下 <base去扩展名>-<ts>-size.log 形态
+// 的 timberjack 轮转副本。
+func removeTimberjackRotations(base string) {
+	dir := filepath.Dir(base)
+	stem := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, stem+"-") && strings.HasSuffix(name, "-size.log") {
+			os.Remove(filepath.Join(dir, name))
+		}
+	}
 }

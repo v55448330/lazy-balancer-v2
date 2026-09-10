@@ -36,7 +36,7 @@
             <el-text type="info" size="small" class="tip-inline">个月，操作/运行/安全事件日志超期清理（建议 3-6）</el-text>
           </el-form-item>
           <el-form-item label="登录过期">
-            <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
+            <el-input-number v-model="settings.jwt_expire_minutes" :min="1" :max="1440" controls-position="right" style="width: 120px;" />
             <el-text type="info" size="small" class="tip-inline">分钟，登录令牌有效期（默认 20）</el-text>
           </el-form-item>
           <el-form-item label="时区">

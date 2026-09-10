@@ -69,9 +69,9 @@ func RequestRestart() bool {
 }
 
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
-	if err := validateSnapshotACMEState(snapshot); err != nil {
-		return err
-	}
+	// C-4(2026-09-10 审计):ACME 状态校验由 Pull 侧 verifiedSnapshotIntegrity 统一
+	// 执行(验签后、apply 前单点);此处重复执行已删——applySnapshot 唯一生产
+	// 调用方即 Pull,两次结果必然相同。
 	// 开关以主节点快照下发的 MasterSyncSwitches 为准（B3）；旧主节点快照
 	// 不携带开关时回退本地默认全开，保持 schema 兼容。
 	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
@@ -206,7 +206,11 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		log.Printf("Admin TLS config changed via sync, restarting to apply")
 		requestRestart()
 	}
-	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
+	basicSync := "已同步"
+	if skip.skip("global_config") {
+		basicSync = "开关关闭"
+	}
+	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置："+basicSync, fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	return nil
 }
 
@@ -421,9 +425,9 @@ func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) error {
 
 func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	for _, user := range snapshot.Users {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login,mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login,mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt, nullableTime(user.LastLogin.NullTime),
-			user.MFAEnabled, user.MFASecret, user.MFARecoveryCodes, user.MFALastTimestep, user.MFAFailedAttempts, user.MFALockedUntil); err != nil {
+			user.MFAEnabled, user.MFASecret, user.MFARecoveryCodes, user.MFALastTimestep); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
 		}
 	}
@@ -549,6 +553,21 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	for _, p := range policies {
+		// C-1(2026-09-10 审计):滚动升级窗口告警——旧主节点(v2.2.6-)快照可能
+		// 携带 mode=off+启用自定义规则(旧语义仍发射),新语义 off=全关渲染,
+		// 该策略的自定义拦截静默失效直至主节点升级并重发快照。一行 warn 提示
+		// 运维,不改变应用行为。
+		if p["mode"] == "off" {
+			var crs []interface{}
+			if raw, ok := p["custom_rules"].(string); ok {
+				json.Unmarshal([]byte(raw), &crs)
+			} else if arr, ok := p["custom_rules"].([]interface{}); ok {
+				crs = arr
+			}
+			if len(crs) > 0 {
+				Logf("warn", "快照携带 mode=off 且挂自定义规则的策略 %v(旧主节点语义):新版本 off=全关,该策略自定义规则暂不生效,请升级主节点后由其重发快照(或改用 custom_only)", p["name"])
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], snapshotJSONText(p["ip_acl_list"]), p["ip_acl_enabled"],

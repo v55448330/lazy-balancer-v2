@@ -706,8 +706,6 @@ func runMigrations() error {
 		"users.mfa_pending_secret":                        "TEXT DEFAULT ''",
 		"users.mfa_recovery_codes":                        "TEXT DEFAULT '[]'",
 		"users.mfa_last_timestep":                         "INTEGER DEFAULT 0",
-		"users.mfa_failed_attempts":                       "INTEGER DEFAULT 0",
-		"users.mfa_locked_until":                          "DATETIME",
 		"users.mfa_pending_fails":                         "INTEGER DEFAULT 0",
 		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 写保护的
 		// mfa_* 计数列独立，登录锁定与 MFA 冷却互不牵连）。计数列 NOT NULL——
@@ -1267,7 +1265,32 @@ func runMigrations() error {
 	if err := migrateSecurityPolicyCustomOnlyMode(); err != nil {
 		return err
 	}
+	if err := migrateDropDeadMFALockColumns(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// migrateDropDeadMFAColumns(2026-09-10 审计 SYS-3):users.mfa_failed_attempts/
+// mfa_locked_until 是 M7 残留死列——现行锁定走 login_failed_attempts/
+// login_locked_until(auth.go),该二列零消费(仅残留清零写与快照搬运)。删除
+// 列+全部搬运/清零写点;集群同步不做向下兼容(2026-09-09 裁定),新旧快照
+// 字段集不一致由同版本升级前提保证。幂等:列存在才 DROP。
+func migrateDropDeadMFALockColumns() error {
+	for _, col := range []string{"mfa_failed_attempts", "mfa_locked_until"} {
+		var colCount int
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name=?", col).Scan(&colCount); err != nil {
+			return err
+		}
+		if colCount == 0 {
+			continue
+		}
+		if _, err := DB.Exec("ALTER TABLE users DROP COLUMN " + col); err != nil {
+			return fmt.Errorf("failed to drop users.%s: %w", col, err)
+		}
+		log.Printf("已删除 users.%s(M7 残留死列,现行锁定走 login_* 列)", col)
+	}
 	return nil
 }
 
@@ -1297,7 +1320,7 @@ func migrateSecurityPolicyCustomOnlyMode() error {
 		return nil
 	}
 	res, err := DB.Exec(`UPDATE security_policies SET mode='custom_only'
-WHERE mode='off' AND EXISTS (
+WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND EXISTS (
   SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
   WHERE json_extract(je.value,'$.enabled')=1
      OR (json_type(je.value)='integer' AND EXISTS (
@@ -1783,14 +1806,12 @@ func migrateUsersIsEnabledNotNull() error {
 			mfa_pending_secret TEXT DEFAULT '',
 			mfa_recovery_codes TEXT DEFAULT '[]',
 			mfa_last_timestep INTEGER DEFAULT 0,
-			mfa_failed_attempts INTEGER DEFAULT 0,
-			mfa_locked_until DATETIME,
 			mfa_pending_fails INTEGER DEFAULT 0,
 			login_failed_attempts INTEGER NOT NULL DEFAULT 0,
 			login_locked_until TEXT
 		);
-		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails,login_failed_attempts,login_locked_until)
-		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails,login_failed_attempts,login_locked_until FROM users;
+		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until)
+		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until FROM users;
 		DROP TABLE users;
 		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
 		return fmt.Errorf("rebuild users table: %w", err)

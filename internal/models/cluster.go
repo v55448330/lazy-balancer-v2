@@ -225,12 +225,10 @@ type ClusterUser struct {
 	CreatedAt         time.Time    `json:"created_at"`
 	LastLogin         JSONNullTime `json:"last_login"`
 	// v2.1.8 MFA（决策3）：随快照同步——从节点本地验证 TOTP，无需回主节点。
-	MFAEnabled        bool   `json:"mfa_enabled"`
-	MFASecret         string `json:"mfa_secret"`
-	MFARecoveryCodes  string `json:"mfa_recovery_codes"`
-	MFALastTimestep   int64  `json:"mfa_last_timestep"`
-	MFAFailedAttempts int    `json:"mfa_failed_attempts"`
-	MFALockedUntil    string `json:"mfa_locked_until"`
+	MFAEnabled       bool   `json:"mfa_enabled"`
+	MFASecret        string `json:"mfa_secret"`
+	MFARecoveryCodes string `json:"mfa_recovery_codes"`
+	MFALastTimestep  int64  `json:"mfa_last_timestep"`
 	// pending 密钥不跨节点（绑定向导是节点本地交互；半途切换面板属可重做流程）。
 }
 

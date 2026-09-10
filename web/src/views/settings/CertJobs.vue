@@ -448,7 +448,11 @@ const retryJobsPolling = async (): Promise<void> => {
 onMounted(async () => {
   try {
     const configRes = await request.get('/config', { signal: jobsPolling.signal })
-    if (!disposed) certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
+    if (!disposed) {
+      // 与后端口径对齐：cert_renewal_days ≤ 0（含 0）时按 30 展示
+      const renewalDays = configRes.data?.cert_renewal_days ?? 30
+      certRenewalDays.value = renewalDays > 0 ? renewalDays : 30
+    }
   } catch (error: unknown) {
     if (!disposed) console.error('Failed to fetch certificate config:', error)
   } finally {

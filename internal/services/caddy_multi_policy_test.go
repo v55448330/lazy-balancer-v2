@@ -548,3 +548,35 @@ func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
 		t.Fatalf("precheck must not carry non-intersection entries or a deny-union rule:\n%s", precheck)
 	}
 }
+
+// R1(2026-09-10 审计):规则级压缩(encode)必须位于全部 waf 处理器之外侧
+// (链序在 waf 之前)——coraza 响应拦截器包在 coraza handler 外层,encode 若在
+// waf 内侧,响应体规则扫描的是压缩后字节(≥512B 可压缩响应恒不匹配,静默失明)。
+func TestMultiPolicy_EncodeHandlerPrecedesWafForResponseBodyInspection(t *testing.T) {
+	_, database := newClusterTestService(t)
+	rule := mpGenHTTPRule("mp-encode-r", "encode.test")
+	rule.EnableCompress = true
+	rule.CompressTypes = "gzip"
+	mpGenBindPolicy(t, database, "mp-encode-r", "p-blocking", mpGenPolicySpec{mode: "blocking", enabled: true})
+	// WAFCheckResponse 需要直接播策略行携带(waf_check_response 列)——用 SQL 补
+	if _, err := database.Exec(`UPDATE security_policies SET waf_check_response=1 WHERE name='p-blocking'`); err != nil {
+		t.Fatalf("seed waf_check_response: %v", err)
+	}
+	_, mainRoute := mpGenRoutes(t, database, rule)
+	names := handlerNames(t, mainRoute)
+	encodeIdx, firstWafIdx := -1, -1
+	for i, n := range names {
+		if n == "encode" && encodeIdx < 0 {
+			encodeIdx = i
+		}
+		if n == "waf" && firstWafIdx < 0 {
+			firstWafIdx = i
+		}
+	}
+	if encodeIdx < 0 || firstWafIdx < 0 {
+		t.Fatalf("chain missing encode/waf: %v", names)
+	}
+	if encodeIdx > firstWafIdx {
+		t.Fatalf("encode(%d) 必须先于首个 waf(%d)——响应体规则需扫未压缩字节: %v", encodeIdx, firstWafIdx, names)
+	}
+}

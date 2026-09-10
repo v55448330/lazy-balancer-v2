@@ -274,11 +274,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
 	}
-	// R72 二十六次 D4：非 admin 的 GET /config 已把凭证替换为掩码——前端原样
-	// 回传时按「未提交」处理，避免掩码串覆盖真实凭证。
-	if req.DNSCredentials != nil && *req.DNSCredentials == maskedDNSCredentialsSentinel {
-		req.DNSCredentials = nil
-	}
 
 	// 与规则写路径同一锁序：先 caddyOpMu，DB 写入与 Caddy 应用全程持锁
 	h.caddyOpMu.Lock()
@@ -295,9 +290,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
+	// A-5(2026-09-10 审计):与 LogLevel 同口径归一(ToLower+TrimSpace 后回写)
+	// ——此前仅校验不归一,"DEBUG"/" info " 形态 400 或原样落库,两字段口径漂移。
 	if req.CaddyLogLevel != nil {
-		switch strings.ToLower(*req.CaddyLogLevel) {
+		level := strings.ToLower(strings.TrimSpace(*req.CaddyLogLevel))
+		switch level {
 		case "debug", "info", "warn", "error":
+			*req.CaddyLogLevel = level
 		default:
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 Caddy 日志级别"})
 			return

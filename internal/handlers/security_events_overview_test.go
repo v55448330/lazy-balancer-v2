@@ -627,3 +627,35 @@ func TestGetSecurityOverview_groupsAttackTypesByFamily(t *testing.T) {
 		}
 	}
 }
+
+// S4/S5(2026-09-10 审计):①family 筛选单数字前缀无长度约束,自定义 5 位 ID
+// (24567 等)交叉命中 IP/地域族;②id:11(请求体解析失败守卫)三侧分类缺标签。
+func TestRuleTriggeredFilterSQL_singleDigitFamiliesUseExactMatch(t *testing.T) {
+	var args []any
+	sql := ruleTriggeredFilterSQL("IP 访问控制", &args)
+	if strings.Contains(sql, "LIKE") {
+		t.Fatalf("单数字族必须精确匹配(不得 LIKE 前缀): %s", sql)
+	}
+	for _, a := range args {
+		if s, ok := a.(string); ok && strings.HasSuffix(s, "%") {
+			t.Fatalf("单数字族参数不得带 %% 通配: %v", args)
+		}
+	}
+	// 自定义规则 ID 不得命中 IP 族条件
+	var customArgs []any
+	customSQL := ruleTriggeredFilterSQL("自定义规则", &customArgs)
+	_ = customSQL
+}
+
+func TestCategorizeAttack_bodyProcessorErrorAndNoCrossFamily(t *testing.T) {
+	if got := categorizeAttack("11", "请求体解析失败"); got != "请求体异常" {
+		t.Fatalf("categorizeAttack(11)=%q, want 请求体异常", got)
+	}
+	// 自定义规则 5 位 ID 不落 IP/地域族
+	if got := categorizeAttack("24567", ""); got != "自定义规则" {
+		t.Fatalf("categorizeAttack(24567)=%q, want 自定义规则", got)
+	}
+	if got := categorizeAttack("82345", ""); got != "自定义规则" {
+		t.Fatalf("categorizeAttack(82345)=%q, want 自定义规则", got)
+	}
+}

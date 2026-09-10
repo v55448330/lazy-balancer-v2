@@ -349,7 +349,7 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 
 // ruleCaddyRoutes 从运行配置收集归属该规则的全部路由（LB-13）：遍历 http 与
 // layer4 两个 app 的全部 server，按 services.RouteIDBelongsToRule（与
-// DeleteRouteByID 临时路由清理同口径）识别主路由（@id == caddyID）与兄弟路由
+// DeleteRule 系列的路由清理同口径）识别主路由（@id == caddyID）与兄弟路由
 // （caddyID_path_N / caddyID_geoip / caddyID_redirect）。同一 server 内保持
 // 运行顺序；跨 server（如 80 端口跳转路由）顺序不保证。
 func ruleCaddyRoutes(full map[string]interface{}, caddyID string) (main map[string]interface{}, all []interface{}) {

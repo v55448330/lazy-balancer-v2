@@ -579,3 +579,30 @@ func extractCRSPoolFingerprint(t *testing.T, directives string) string {
 	t.Fatalf("no crs-pool fingerprint line in directives:\n%s", directives)
 	return ""
 }
+
+// S6(2026-09-10 审计):响应体缓冲(WAFCheckResponse)在 off/custom_only 下零消费
+// (响应规则仅 blocking/detection Include,自定义无响应目标)——发射侧按 CRS
+// 生效模式门控,避免无谓内存/CPU 缓冲。
+func TestBuildCorazaDirectives_responseBodyAccessGatedByCRSMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{
+		{"blocking", true},
+		{"detection", true},
+		{"custom_only", false},
+	} {
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: tc.mode, WAFCheckResponse: true,
+			CustomRules: json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}, nil)
+		got := strings.Contains(directives, "SecResponseBodyAccess On")
+		if got != tc.want {
+			t.Fatalf("mode=%s SecResponseBodyAccess On=%v, want %v:\n%s", tc.mode, got, tc.want, directives)
+		}
+	}
+	// off + IP 控制(引擎开):同样不缓冲
+	d := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "off", WAFCheckResponse: true,
+		IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["1.2.3.4"]`}, nil)
+	if strings.Contains(d, "SecResponseBodyAccess On") {
+		t.Fatalf("off+IP控制 SecResponseBodyAccess On 应不发射:\n%s", d)
+	}
+}

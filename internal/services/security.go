@@ -218,7 +218,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		return ""
 	}
 	sb.WriteString("SecRequestBodyAccess On\n")
-	if p.WAFCheckResponse {
+	if p.WAFCheckResponse && crsActive {
 		sb.WriteString("SecResponseBodyAccess On\n")
 		// SecResponseBodyMimeType 必须显式发射：coraza 的 ResponseBodyMimeTypes
 		// 零值是空集（不像 ModSecurity 有 text/plain|html|xml 默认），不发射则

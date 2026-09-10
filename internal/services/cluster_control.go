@@ -152,7 +152,7 @@ func (s *ClusterService) ValidateServiceControlTicket(ctx context.Context, ticke
 	var isMaster bool
 	var clusterToken string
 	var registrationID int
-	if err := tx.QueryRowContext(ctx, `SELECT is_master,COALESCE(cluster_token,''),COALESCE(registration_id,0) FROM global_config WHERE id=1`).Scan(&isMaster, &clusterToken, &registrationID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_master,1),COALESCE(cluster_token,''),COALESCE(registration_id,0) FROM global_config WHERE id=1`).Scan(&isMaster, &clusterToken, &registrationID); err != nil {
 		return fmt.Errorf("读取从节点凭证: %w", err)
 	}
 	if isMaster || clusterToken == "" {

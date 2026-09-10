@@ -53,6 +53,10 @@ var configFieldSections = map[string]string{
 	"jwt_expire_minutes":     "基础设置",
 	"timezone":               "基础设置",
 	"github_proxy_url":       "基础设置",
+	// SYS-2(2026-09-10 审计):R72 增补的两个安全开关漏同步 section 映射,审计
+	// 归因曾落「全局配置」(实际在基础设置卡片)。
+	"mfa_write_guard":     "基础设置",
+	"mfa_lockout_enabled": "基础设置",
 }
 
 func GetConfigSection(field string) string {

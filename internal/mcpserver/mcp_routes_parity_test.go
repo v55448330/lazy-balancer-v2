@@ -81,7 +81,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/cluster/nodes/report":         "集群机器接口：从节点上报健康状态（集群令牌认证；定时上报非人工操作）",
 	"POST /api/v1/cluster/service-control":      "集群机器接口：主节点签发的一次性 HMAC 票据在从节点侧的服务控制入口（control_cluster_node_service 工具是主节点侧遥控入口，二者为同一条控制链的两端）",
 	// —— 流式端点（MCP 无流式语义）——
-	"GET /api/v1/rules/:caddy_id/log-stream": "SSE 流式推送规则访问日志（长连接增量事件）；MCP 工具为一次性请求-响应，无流式语义，Agent 用 get_rule_logs 查最近日志",
+	"GET /api/v1/rules/:caddy_id/log-stream": "offset 增量续读规则访问日志（单次请求-响应、无长连接；MCP 工具 get_rule_logs 以 offset 参数等价覆盖）（长连接增量事件）；MCP 工具为一次性请求-响应，无流式语义，Agent 用 get_rule_logs 查最近日志",
 	// —— 批量便捷端点（面向面板列表轮询的批量形态；Agent 用单条工具）——
 	"POST /api/v1/rules/cert-info":           "批量便捷端点：一次查最多 200 个 caddy_id 的证书信息，供面板规则列表轮询；Agent 用 get_rule_cert_info 按单条查",
 	"POST /api/v1/certificates/jobs/current": "批量便捷端点：一次查最多 200 个 rule_id 的当前任务，供面板规则列表轮询任务状态；Agent 用 list_cert_jobs 按 rule_id 过滤",

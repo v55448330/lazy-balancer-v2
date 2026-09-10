@@ -541,7 +541,10 @@ const saveConfig = async () => {
   }
 
   try {
-    const url = targetId
+    // 编辑保存前测试：表单凭证含全掩码 ***（非 admin GET 回显、用户未改）时仍测
+    // DB 存量（:id/test）；用户实际改过凭证（无 ***）则内联新凭证走无 id 的 /test
+    const hasMaskedCred = Object.values(payload.dns_credentials).some(v => v === '***')
+    const url = targetId && hasMaskedCred
       ? `/certificate-configs/${targetId}/test`
       : '/certificate-configs/test'
     await request.post(url, { ...payload, domain })

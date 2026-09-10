@@ -427,7 +427,7 @@
                   <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
                   <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
                 </div>
-                <div class="form-tip-line">名单内 IP 跳过本策略的 WAF 与访问控制检测（限流仍然生效；其他绑定策略的拒绝不受信任豁免）</div>
+                <div class="form-tip-line">名单内 IP 跳过本策略的 WAF 与访问控制检测（含地域拦截；限流仍然生效；其他绑定策略的拒绝不受信任豁免）</div>
               </el-form-item>
               <el-form-item label="引用地址列表">
                 <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">

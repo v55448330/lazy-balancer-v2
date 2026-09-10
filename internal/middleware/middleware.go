@@ -250,6 +250,13 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.Use(jwtAuth(cfg))
 		v1.Use(apiKeyReadOnlyGuard())
 		v1.Use(mfaStepUpGuard())
+		// A-1(2026-09-10 审计):把 auditClientIP(内部 MCP 转发采信头)结果
+		// 注入 context,handlers 侧 recordAudit 优先读取——此前 handler 审计
+		// 路径的 c.ClientIP() 对回环自调用恒 127.0.0.1,来源 IP 取证断裂。
+		v1.Use(func(c *gin.Context) {
+			c.Set("audit_ip", auditClientIP(c))
+			c.Next()
+		})
 		{
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 			v1.POST("/auth/logout", h.Logout)

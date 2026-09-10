@@ -614,7 +614,7 @@
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查端口">
                   <el-input-number v-model="wizardForm.tcp_health_check_port" :min="0" :max="65535" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">0 表示使用第一个上游端口</span>
+                  <span class="form-tip-inline">留空或 0 表示按各上游自身端口探测</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
@@ -709,7 +709,7 @@
             <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
 
             <el-form-item label="请求体大小">
-              <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="10240" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="4096" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">MB，0 = 全局默认；限制单个请求体的最大大小</span>
             </el-form-item>
 

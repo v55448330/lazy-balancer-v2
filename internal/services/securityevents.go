@@ -356,7 +356,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 不发射 CRS，不得认领 CRS 事件）；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,''), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
@@ -482,6 +482,12 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		}
 		return false
 	case n >= 10000 && n < 900000:
+		// S2(2026-09-10 审计):off=全关(四态化)零发射,不得认领自定义规则事件
+		//(与 CRS 分支 blocking/detection 门同口径;custom_only/blocking/detection
+		// 三态的自定义规则发射由 customActive 保证)。
+		if policy.Mode == "off" {
+			return false
+		}
 		var ids []int
 		if err := json.Unmarshal(policy.CustomRules, &ids); err == nil {
 			for _, id := range ids {

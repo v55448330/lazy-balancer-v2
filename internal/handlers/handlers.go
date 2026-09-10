@@ -349,42 +349,6 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 	}
 
 	var data requestData
-	// 审计 B2-S1：TCP/DNS 字段从原始请求（Create/Update 两形态）提取。
-	var tcpFields struct {
-		enableDnsServer    bool
-		tcpHealthCheckPort int
-		tcpProxyProtocol   bool
-		tcpTryDuration     int
-		tcpTryInterval     int
-	}
-	switch v := req.(type) {
-	case models.CreateRuleRequest:
-		tcpFields.enableDnsServer = v.EnableDnsServer
-		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
-		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = v.TCPTryDuration
-		tcpFields.tcpTryInterval = v.TCPTryInterval
-	case *models.CreateRuleRequest:
-		tcpFields.enableDnsServer = v.EnableDnsServer
-		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
-		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = v.TCPTryDuration
-		tcpFields.tcpTryInterval = v.TCPTryInterval
-	case models.UpdateRuleRequest:
-		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
-		// LB-02：TCP 三字段指针化后直接解引用——UpdateRule 在调用本函数前已完成
-		// nil→&existing 合并（rules.go 合并段），指针恒非 nil。
-		tcpFields.tcpHealthCheckPort = *v.TCPHealthCheckPort
-		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = *v.TCPTryDuration
-		tcpFields.tcpTryInterval = *v.TCPTryInterval
-	case *models.UpdateRuleRequest:
-		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
-		tcpFields.tcpHealthCheckPort = *v.TCPHealthCheckPort
-		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
-		tcpFields.tcpTryDuration = *v.TCPTryDuration
-		tcpFields.tcpTryInterval = *v.TCPTryInterval
-	}
 	var upstreams []requestUpstream
 
 	switch r := req.(type) {

@@ -107,8 +107,6 @@ func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
 		out[i] = u
 		out[i].LastLogin = models.JSONNullTime{}
 		out[i].MFALastTimestep = 0
-		out[i].MFAFailedAttempts = 0
-		out[i].MFALockedUntil = ""
 	}
 	return out
 }

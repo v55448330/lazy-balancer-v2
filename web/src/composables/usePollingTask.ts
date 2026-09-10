@@ -16,7 +16,6 @@ export interface PollingTask {
   readonly run: () => Promise<void>
   readonly start: () => void
   readonly stop: () => void
-  readonly invalidate: () => void
   readonly isDisposed: () => boolean
 }
 
@@ -119,5 +118,5 @@ export const usePollingTask = (
 
   onUnmounted(stop)
 
-  return { signal: controller.signal, run, start, stop, invalidate, isDisposed: () => disposed }
+  return { signal: controller.signal, run, start, stop, isDisposed: () => disposed }
 }

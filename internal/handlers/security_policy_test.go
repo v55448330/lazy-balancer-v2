@@ -1145,3 +1145,48 @@ func TestCreateSecurityPolicy_rejectsUnknownMode(t *testing.T) {
 		t.Fatalf("unknown mode status=%d, want 400", recorder.Code)
 	}
 }
+
+// S1(2026-09-10 审计):IP ACL allow 模式+空生效名单——发射端 len>0 门静默跳过
+// (「其余一律拒绝」实际全放行 fail-open)。UI 有守卫,API/MCP 直写可绕;按
+// R50/R57 同型先例在写入侧 400(与 UI 文案同口径)。
+func TestCreateSecurityPolicy_rejectsAllowModeWithEmptyACLList(t *testing.T) {
+	// Given
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	// When:启用 ACL + allow 模式 + 空 list(无内联无引用)
+	recorder := postJSON(t, router, "/security/policies", map[string]any{
+		"name": "空白名单", "mode": "blocking", "ip_acl_enabled": true, "ip_acl_mode": "allow", "ip_acl_list": `[]`,
+	})
+
+	// Then
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("allow+空名单 status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+}
+
+// S7(2026-09-10 审计):HasCustomRules 需带模式门——off=全关(2026-09-09 四态化)
+// 后,off 策略的自定义规则不发射,能力列不得宣称「按规则内动作执行」。
+func TestSecurityPolicySummary_offModeHasCustomRulesFalse(t *testing.T) {
+	// Given
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	customRules := `[{"id":1,"name":"r1","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`
+	postJSON(t, router, "/security/policies", map[string]any{"name": "off带规则", "mode": "off", "custom_rules": customRules})
+
+	// When
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then
+	var resp struct {
+		Data []models.SecurityPolicySummary `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range resp.Data {
+		if p.Name == "off带规则" && p.HasCustomRules {
+			t.Fatalf("off 策略 HasCustomRules=true, want false(模式门)")
+		}
+	}
+}

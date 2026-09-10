@@ -769,7 +769,7 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 	rows, err := store.QueryContext(ctx, `SELECT id, username, password_hash, role, COALESCE(display_name,''), COALESCE(is_enabled,1),
 		COALESCE(password_version,0), strftime('%Y-%m-%dT%H:%M:%fZ', password_changed_at), created_at, last_login,
 		COALESCE(mfa_enabled,0), COALESCE(mfa_secret,''), COALESCE(mfa_recovery_codes,'[]'),
-		COALESCE(mfa_last_timestep,0), COALESCE(mfa_failed_attempts,0), COALESCE(mfa_locked_until,'') FROM users ORDER BY username`)
+		COALESCE(mfa_last_timestep,0) FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照用户: %w", err)
 	}
@@ -779,7 +779,7 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 		var user models.ClusterUser
 		var passwordChangedAt sql.NullString
 		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.PasswordVersion, &passwordChangedAt, &user.CreatedAt, &user.LastLogin,
-			&user.MFAEnabled, &user.MFASecret, &user.MFARecoveryCodes, &user.MFALastTimestep, &user.MFAFailedAttempts, &user.MFALockedUntil); err != nil {
+			&user.MFAEnabled, &user.MFASecret, &user.MFARecoveryCodes, &user.MFALastTimestep); err != nil {
 			return nil, fmt.Errorf("扫描快照用户: %w", err)
 		}
 		if passwordChangedAt.Valid {

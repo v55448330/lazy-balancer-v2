@@ -1274,7 +1274,7 @@ func (s *SyncService) run(ctx context.Context) {
 			var isMaster bool
 			var token string
 			var interval int
-			err := s.db.QueryRowContext(ctx, "SELECT is_master, COALESCE(cluster_token,''), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&isMaster, &token, &interval)
+			err := s.db.QueryRowContext(ctx, "SELECT COALESCE(is_master,1), COALESCE(cluster_token,''), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&isMaster, &token, &interval)
 			return isMaster, token, interval, err
 		}
 	}

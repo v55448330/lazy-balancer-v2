@@ -418,7 +418,7 @@ func isRunningDefaultRoute(route map[string]interface{}) bool {
 
 // RouteIDBelongsToRule 判断运行配置中的路由 @id 是否归属某规则：主路由
 // （@id == ruleID）或其带后缀的兄弟路由（ruleID_ 前缀：path_N / geoip /
-// redirect 等）。DeleteRouteByID 的临时路由清理与 handlers 侧
+// redirect 等）。规则删除路径的路由清理与 handlers 侧
 // GetRuleCaddyConfig 的兄弟路由收集（LB-13）共用本口径。
 func RouteIDBelongsToRule(routeID, ruleID string) bool {
 	return ruleID != "" && (routeID == ruleID || strings.HasPrefix(routeID, ruleID+"_"))
@@ -944,7 +944,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 
 // policiesForRule 返回规则绑定的全部启用安全策略（policy_id ASC）：批量预载
 // 上下文存在时查映射，否则回退单规则查询（GenerateSingleRuleCaddyConfig/
-// GenerateRouteObject 等非批量路径）。无绑定或全部禁用时返回 nil。
+// generateHTTPRouteObjects 等非批量路径）。无绑定或全部禁用时返回 nil。
 func policiesForRule(ctx *securityPolicyContext, ruleCaddyID string) []*models.SecurityPolicy {
 	if ctx != nil {
 		return ctx.policyByRule[ruleCaddyID]
@@ -1051,7 +1051,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		Host           string
 		Port           int
 		Weight         int
-		DynamicDNS     bool
 		Enabled        bool
 		Protocol       string
 		MaxConnections int
@@ -1104,10 +1103,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			r.Strategy = "weighted_round_robin"
 		}
 
-		if !r.Enabled {
-			continue
-		}
-
 		allRules = append(allRules, ruleWithUpstreams{rule: r})
 	}
 	if err := rows.Err(); err != nil {
@@ -1128,7 +1123,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	}
 
 	upstreamRows, err := store.Query(`
-		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
+		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
 		FROM upstreams u JOIN lb_rules r ON r.caddy_id = u.rule_id
 		WHERE IIF(u.enabled IN ('1',1),1,0) = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
 	`)
@@ -1138,7 +1133,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	for upstreamRows.Next() {
 		var ruleID string
 		var u upstream
-		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			closeErr := upstreamRows.Close()
 			return generationFailure("scan upstream: %v", errors.Join(err, closeErr))
 		}
@@ -1413,11 +1408,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		if len(upstreamDial) == 0 {
 			log.Printf("规则 %s 没有可用的启用上游，已跳过该规则", r.CaddyID)
 			continue
-		}
-
-		upstreamList := make([]interface{}, len(upstreamDial))
-		for i, dial := range upstreamDial {
-			upstreamList[i] = map[string]interface{}{"dial": dial}
 		}
 
 		if r.Protocol == "http" {
@@ -2353,7 +2343,7 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 }
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
-	// R45 F-5: 与 GenerateRouteObject 的硬错误（caddy.go:2312）对齐——https 等
+	// R45 F-5: 与单规则渲染路径的硬错误对齐——https 等
 	// 非法协议不再静默按 TCP 渲染（遗留 https 行由 db 迁移归一为 http）。
 	if rule.Protocol != "http" && rule.Protocol != "tcp" {
 		return map[string]interface{}{
@@ -2399,7 +2389,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 至多一条；无 Caddy 原生 block 路由）。
 		//
 		// 可达性说明（防止误用）：此单规则跳转形态当前并无调用方会触发——
-		// handlers.go 的规则验证中 HTTP 协议走 GenerateRouteObject（合并进既有端口验证），
+		// handlers.go 的规则验证中 HTTP 协议走单规则渲染校验（合并进既有端口验证），
 		// 仅 TCP 协议调用 GenerateSingleRuleCaddyConfig；rule_features.go 的
 		// validateRuleConfigGeneration 也不填 EnableTLS/TLSHTTPRedirect 字段。
 		// 生产环境的 HTTP→HTTPS 跳转由 generateCaddyConfigFromStore 的 redirectRoutes
@@ -2572,7 +2562,7 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 	}
 	if geoipPassPolicy != nil {
 		// LB-13：GeoIP pass 路由补挂 @id（caddyID_geoip）——此前无 @id，
-		// GetRuleCaddyConfig 的兄弟路由收集与 DeleteRouteByID 清理均无法识别。
+		// GetRuleCaddyConfig 的兄弟路由收集与规则删除清理均无法识别。
 		geoipRoute := buildGeoipPassRoute(domainHosts, geoipPassPolicy)
 		tagRuleRoute(geoipRoute, rule.CaddyID, "geoip")
 		routes = append(routes, geoipRoute)
@@ -2885,6 +2875,27 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			handleChain = append(handleChain, precheckHandler)
 		}
 	}
+
+	// R1(2026-09-10 审计):规则级压缩必须位于全部 waf 处理器之外侧(链序在前)
+	// ——coraza 的响应拦截器包在 coraza handler 外层,encode 若在 waf 内侧,
+	// 响应体规则(95x 响应检查)扫描的是压缩后字节,≥512B 可压缩响应恒不匹配
+	// (coraza 全库无 Content-Encoding 检查,grep 实证)。置于 headers/预检之后、
+	// 策略组之前:请求向处理不受影响,响应向 encode 包在所有 coraza 拦截器外。
+	if rule.EnableCompress && rule.CompressTypes != "" {
+		encodings := make(map[string]interface{})
+		for _, contentType := range splitAndTrim(rule.CompressTypes) {
+			if contentType == "gzip" || contentType == "zstd" {
+				encodings[contentType] = map[string]interface{}{}
+			}
+		}
+		if len(encodings) > 0 {
+			handleChain = append(handleChain, map[string]interface{}{
+				"handler":        "encode",
+				"encodings":      encodings,
+				"minimum_length": 512,
+			})
+		}
+	}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
 	// 审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次透传给各
@@ -2957,22 +2968,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		}
 		if upstream.Protocol == "https" {
 			hasHTTPSUpstream = true
-		}
-	}
-
-	if rule.EnableCompress && rule.CompressTypes != "" {
-		encodings := make(map[string]interface{})
-		for _, contentType := range splitAndTrim(rule.CompressTypes) {
-			if contentType == "gzip" || contentType == "zstd" {
-				encodings[contentType] = map[string]interface{}{}
-			}
-		}
-		if len(encodings) > 0 {
-			handleChain = append(handleChain, map[string]interface{}{
-				"handler":        "encode",
-				"encodings":      encodings,
-				"minimum_length": 512,
-			})
 		}
 	}
 

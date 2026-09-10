@@ -2478,3 +2478,22 @@ func TestSecurityEventsParseTransaction_requestContext(t *testing.T) {
 		t.Errorf("missing context must stay empty: attribution=%q body=%q", rec2.AttributionRuleID, rec2.RequestBody)
 	}
 }
+
+// S2(2026-09-10 审计):自定义规则事件归因分支缺模式门——off=全关(四态化)后
+// 零发射,不得认领自定义规则事件(与 CRS 分支 blocking/detection 门同口径)。
+func TestSecurityEventsAttribution_ModeOffPolicyDoesNotClaimCustomRuleEvents(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "10001", []struct {
+		id         int
+		name       string
+		enabled    int
+		mode       string
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 2, name: "policy-off", enabled: 1, mode: "off", customJSON: `[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`, crsJSON: `[]`},
+		{id: 5, name: "policy-blocking", enabled: 1, mode: "blocking", customJSON: `[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`, crsJSON: `[]`},
+	})
+	if pid != 5 || pname != "policy-blocking" {
+		t.Fatalf("attribution=(%d,%q), want (5,policy-blocking) — mode=off 策略不得认领自定义规则事件", pid, pname)
+	}
+}

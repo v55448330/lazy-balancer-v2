@@ -95,11 +95,14 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		return t.UTC(), true
 	}
 	if t, ok := parseBoundary(c.Query("start_time"), "00:00:00"); ok {
-		conds = append(conds, " AND datetime(created_at) >= datetime(?)")
+		// SYS-5(2026-09-10 审计):裸列比较替代 datetime(created_at) 包裹——包裹
+		// 使 idx_audit_log_created 失效全表扫;created_at 为 SQLite 规范 UTC 文本
+		// 与 datetime(?) 输出同格式,直接比较等价且可走索引。
+		conds = append(conds, " AND created_at >= datetime(?)")
 		args = append(args, t.Format("2006-01-02 15:04:05"))
 	}
 	if t, ok := parseBoundary(c.Query("end_time"), "23:59:59"); ok {
-		conds = append(conds, " AND datetime(created_at) <= datetime(?)")
+		conds = append(conds, " AND created_at <= datetime(?)")
 		args = append(args, t.Format("2006-01-02 15:04:05"))
 	}
 	if len(conds) == 0 {
