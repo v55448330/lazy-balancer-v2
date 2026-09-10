@@ -696,13 +696,25 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
 // 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
 // store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string) map[string]interface{} {
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, bodyLimitMB ...int) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
 	directives := BuildCorazaDirectives(policy, store, crsFp)
 	if directives == "" {
 		return nil
+	}
+	// R4-Render-1/2(第 4 轮审计):coraza 默认 RequestBodyLimit=128MiB,
+	// 用户限额>128MiB 时 WAF 活跃规则 body 在 128MiB 处被拦(用户限额不可达);
+	// 413 语义被 coraza-caddy 压平为 500。发射 SecRequestBodyLimit 对齐
+	// 用户有效限额(min(用户值,1GiB),coraza Validate 上限)。
+	if len(bodyLimitMB) > 0 && bodyLimitMB[0] > 0 {
+		limitBytes := int64(bodyLimitMB[0]) * 1024 * 1024
+		const corazaMax = int64(1073741824) // 1GiB
+		if limitBytes > corazaMax {
+			limitBytes = corazaMax
+		}
+		directives += fmt.Sprintf("SecRequestBodyLimit %d\n", limitBytes)
 	}
 	return map[string]interface{}{
 		"handler":    "waf",

@@ -580,3 +580,38 @@ func TestMultiPolicy_EncodeHandlerPrecedesWafForResponseBodyInspection(t *testin
 		t.Fatalf("encode(%d) 必须先于首个 waf(%d)——响应体规则需扫未压缩字节: %v", encodeIdx, firstWafIdx, names)
 	}
 }
+
+// R4-Render-1/2(第 4 轮审计):coraza 默认 RequestBodyLimit=128MiB,
+// 用户限额>128MiB 时 WAF 活跃规则 body 在 128MiB 处被拦;413 语义被压平。
+// 修复:按规则有效限额发射 SecRequestBodyLimit(min(用户值,1GiB))。
+func TestMultiPolicy_RequestBodyLimitInWafDirectives(t *testing.T) {
+	_, database := newClusterTestService(t)
+	rule := mpGenHTTPRule("mp-bodylimit-r", "bodylimit.test")
+	rule.RequestBodyMaxSizeMB = 50
+	mpGenBindPolicy(t, database, "mp-bodylimit-r", "p-bl", mpGenPolicySpec{mode: "blocking", enabled: true})
+	_, mainRoute := mpGenRoutes(t, database, rule)
+	// 从 waf handler 提取 directives
+	handlers := handlerNames(t, mainRoute)
+	wafIdx := -1
+	for i, h := range handlers {
+		if h == "waf" {
+			wafIdx = i
+			break
+		}
+	}
+	if wafIdx < 0 {
+		t.Fatalf("no waf handler in chain: %v", handlers)
+	}
+	// 提取 directives 字段
+	chain := mainRoute["handle"].([]interface{})
+	wafMap := chain[wafIdx].(map[string]interface{})
+	directives, _ := wafMap["directives"].(string)
+	if directives == "" {
+		t.Fatal("waf handler has no directives")
+	}
+	// 验证 SecRequestBodyLimit 50MB=52428800
+	want := "SecRequestBodyLimit 52428800"
+	if !strings.Contains(directives, want) {
+		t.Fatalf("directives missing %q:\n%s", want, directives)
+	}
+}

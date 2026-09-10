@@ -1774,7 +1774,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 归一为 custom_only(规则从全关静默变生效)。行为与启动迁移一致(旧世界
 	// 数据归一),但在此留审计提示,运维可从事件日志追溯。
 	if result, err := tx.ExecContext(ctx, `UPDATE security_policies SET mode='custom_only'
-WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND EXISTS (
+WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALESCE(custom_rules,'[]')) IN ('array','object') AND EXISTS (
   SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
   WHERE json_extract(je.value,'$.enabled')=1
      OR (json_type(je.value)='integer' AND EXISTS (

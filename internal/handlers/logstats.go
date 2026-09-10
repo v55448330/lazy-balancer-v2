@@ -81,12 +81,20 @@ func timestampedRotations(path string) int64 {
 			}
 		}
 		// timberjack 族(stem 去 .log):caddy-<ts>-size.log 不以 caddy.log 开头,
-		// 须独立按 stem 前缀匹配(不被上面 base 门拦)
+		// 须独立按 stem 前缀匹配。B-2(第 4 轮审计):stem='caddy' 的前缀会把
+		// 兄弟文件 caddy-tls-<ts>-size.log 也吞入(聚合双计)——加 stem 边界校验:
+		// stem 后紧跟的 '-<ts>' 段必须以数字开头(timberjack 时间戳以数字开头,
+		// 兄弟文件名如 caddy-tls 的 '-tls' 以字母开头)。
 		if strings.HasPrefix(name, stem) {
 			rest2 := name[len(stem):]
 			if strings.HasPrefix(rest2, "-") && strings.HasSuffix(rest2, "-size.log") {
-				if info, err := e.Info(); err == nil {
-					total += info.Size()
+				// stem 后 '-' 到下一 '-' 之间(或到 '-size' 之间)必须全数字
+				// B-2:timberjack 时间戳含 T/-/. 非全数字——只需首字符为数字
+				// (区分 own 'caddy-2026...' 与 brother 'caddy-tls-...')
+				if len(rest2) > 1 && rest2[1] >= '0' && rest2[1] <= '9' {
+					if info, err := e.Info(); err == nil {
+						total += info.Size()
+					}
 				}
 			}
 		}

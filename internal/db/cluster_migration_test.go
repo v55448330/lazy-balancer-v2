@@ -183,3 +183,45 @@ func TestMigrateSecurityPolicyCustomOnlyMode_toleratesMalformedJSON(t *testing.T
 		t.Fatalf("畸形行 = %q, want off(跳过)", got)
 	}
 }
+
+// B-1(第 4 轮审计 P1):导入归一 SQL 缺 json_type 门——顶层字符串形状使
+// json_each→json_extract 抛 malformed JSON→整包导入 500 回滚。
+// 迁移路径(db.go)已有双门,导入路径必须同口径。
+// 此测试直接跑与 config_backup.go 导入归一同款 SQL 形状,验证顶层字符串不炸。
+func TestImportNormalization_jsonTypeGateBlocksTopLevelString(t *testing.T) {
+	dir := t.TempDir()
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	// 种子:顶层字符串(旧世界畸形,合法 JSON 但非容器)
+	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('顶层串','off','"str"')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules) VALUES ('正常启用','off','[{"id":1,"enabled":true,"action":"block","score":5}]')`); err != nil {
+		t.Fatal(err)
+	}
+	// 与 config_backup.go:1776-1782 同款 SQL + json_type 双门
+	_, err := DB.Exec(`UPDATE security_policies SET mode='custom_only'
+WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALESCE(custom_rules,'[]')) IN ('array','object') AND EXISTS (
+  SELECT 1 FROM json_each(COALESCE(custom_rules,'[]')) je
+  WHERE json_extract(je.value,'$.enabled')=1
+     OR (json_type(je.value)='integer' AND EXISTS (
+          SELECT 1 FROM security_custom_rules r
+          WHERE r.id=je.value AND COALESCE(r.enabled,1)=1)))`)
+	if err != nil {
+		t.Fatalf("导入归一双门 SQL 对顶层字符串不得报错: %v", err)
+	}
+	var mode string
+	if err := DB.QueryRow(`SELECT mode FROM security_policies WHERE name='顶层串'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "off" {
+		t.Fatalf("顶层串 = %q, want off(应被 json_type 门跳过)", mode)
+	}
+	if err := DB.QueryRow(`SELECT mode FROM security_policies WHERE name='正常启用'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "custom_only" {
+		t.Fatalf("正常启用 = %q, want custom_only", mode)
+	}
+}

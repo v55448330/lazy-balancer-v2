@@ -1190,3 +1190,33 @@ func TestSecurityPolicySummary_offModeHasCustomRulesFalse(t *testing.T) {
 		}
 	}
 }
+
+// B-3(第 4 轮审计):UpdateSecurityPolicy 限流门用请求裸值而非有效值回落
+// ——存量 rps=10 的策略发 {rate_limit_enabled:true}(部分重启用)时,
+// derefInt(req.RateLimitRPS)=0 → 400 误报「rps 必须 ≥1」;显式 {rate_limit_rps:0}
+// 时门短路 → 落库 enabled=1+rps=0 → UI 宣称限流启用实际零强制。
+func TestUpdateSecurityPolicy_rateLimitGateUsesEffectiveValues(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	// Given:存量 enabled=1, rps=10, burst=5
+	id := createTestPolicy(t, router, map[string]any{"name": "限流策略", "mode": "blocking", "rate_limit_enabled": true, "rate_limit_rps": 10, "rate_limit_burst": 5})
+
+	// When:只发 enabled=true(重启用,不带 rps——存量 rps=10 应回落)
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"rate_limit_enabled": true})
+	// Then:不应 400(存量 rps=10 是有效值)
+	if recorder.Code == http.StatusBadRequest {
+		t.Fatalf("部分重启用被 400 误报: %s", recorder.Body.String())
+	}
+
+	// When:显式 rps=0(存量 enabled=1)
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"rate_limit_rps": 0})
+	// Then:不应落库 enabled=1+rps=0 形态
+	if recorder.Code == http.StatusOK {
+		var rps int
+		var enabled bool
+		db.DB.QueryRow("SELECT COALESCE(rate_limit_rps,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE id=?", id).Scan(&rps, &enabled)
+		if enabled && rps == 0 {
+			t.Fatalf("落库 enabled=true+rps=0: UI 宣称限流启用实际零强制")
+		}
+	}
+}

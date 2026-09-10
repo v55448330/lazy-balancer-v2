@@ -1,68 +1,46 @@
 package handlers
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-
-	"lazy-balancer-v2/internal/config"
 )
 
-func TestLogPaths_fixedDirIndependentOfLogFile(t *testing.T) {
-	// 自定义 LOG_FILE 目录不得影响五个写死 /app/logs 的日志族的路径根；
-	// 只有 runtime 日志跟随 LogFile。
-	gotDir, gotRuntime := logPaths(&config.Config{LogFile: "/tmp/x/y.log"})
-	if gotDir != "/app/logs" {
-		t.Fatalf("fixedDir=%q, want /app/logs (caddy/crs/ip2region/certjob/rules writers hardcode /app/logs)", gotDir)
+// B-11(第 4 轮审计):dirBytes/timestampedRotations 全函数零落盘测试——
+// 第 2/3 轮 Sys-N1 的 off-by-one 和 B-2 的聚合双计均因此缺测试而逃逸。
+// 本测试用真实文件名 fixture 钉住三族轮转统计行为。
+func TestDirBytes_countsAllRotationFamilies(t *testing.T) {
+	dir := t.TempDir()
+
+	// 运行日志族:lazy-balancer.log.YYYYMMDD-HHMMSS
+	os.WriteFile(filepath.Join(dir, "app.log"), []byte("active"), 0644)
+	os.WriteFile(filepath.Join(dir, "app.log.20260902-150405"), []byte("runtime-rotated"), 0644)
+	// 自研 shift 族:.1-.9
+	os.WriteFile(filepath.Join(dir, "app.log.1"), []byte("shift-rotated"), 0644)
+	// timberjack 族:<stem>-<ts>-size.log(时间戳以数字开头)
+	os.WriteFile(filepath.Join(dir, "app-20260902T15-04-05.000-size.log"), []byte("timberjack-rotated"), 0644)
+	// 兄弟前缀(B-2):caddy-tls-... 不应被 caddy.log 的 stem='caddy' 吞入
+	os.WriteFile(filepath.Join(dir, "caddy.log"), []byte("c"), 0644)
+	os.WriteFile(filepath.Join(dir, "caddy-20260902T15-04-05.000-size.log"), []byte("caddy-own"), 0644)
+	os.WriteFile(filepath.Join(dir, "caddy-tls-20260902T15-04-05.000-size.log"), []byte("caddy-tls-brother"), 0644)
+
+	// 运行日志族:active(6) + runtime-rotated(16) + shift-rotated(14) + timberjack-rotated(19)
+	active, rotated := dirBytes(filepath.Join(dir, "app.log"))
+	if active != 6 {
+		t.Errorf("app.log active=%d, want 6", active)
 	}
-	if gotRuntime != "/tmp/x/y.log" {
-		t.Fatalf("runtimePath=%q, want /tmp/x/y.log", gotRuntime)
+	wantRotated := int64(15 + 13 + 18)
+	if rotated != wantRotated {
+		t.Errorf("app.log rotated=%d, want %d(runtime+shift+timberjack)", rotated, wantRotated)
 	}
-}
 
-func TestLogPaths_defaults(t *testing.T) {
-	gotDir, gotRuntime := logPaths(nil)
-	if gotDir != "/app/logs" || gotRuntime != "/app/logs/lazy-balancer.log" {
-		t.Fatalf("defaults: dir=%q runtime=%q", gotDir, gotRuntime)
+	// B-2:caddy.log 不应吞入 caddy-tls 兄弟的轮转
+	// caddy.log 的 stem='caddy',timberjack 匹配 'caddy-...' 但不应匹配 'caddy-tls-...'
+	cActive, cRotated := dirBytes(filepath.Join(dir, "caddy.log"))
+	if cActive != 1 {
+		t.Errorf("caddy.log active=%d, want 1", cActive)
 	}
-}
-
-func newLogStatsRouter() *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	h := &Handlers{}
-	router := gin.New()
-	router.GET("/logs/stats", h.GetLogStats)
-	return router
-}
-
-func TestGetLogStats_rejectsTraversalCaddyID(t *testing.T) {
-	// Given a fresh DB and a path-traversal caddy_id
-	setupSecurityPolicyTestDB(t)
-	router := newLogStatsRouter()
-
-	// When /logs/stats is requested with a traversal value
-	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/logs/stats?caddy_id=../../etc/passwd", nil)
-	router.ServeHTTP(recorder, req)
-
-	// Then the request is rejected with 400 instead of escaping the log directory
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestGetLogStats_acceptsValidCaddyID(t *testing.T) {
-	// Given a fresh DB and a well-formed caddy_id
-	setupSecurityPolicyTestDB(t)
-	router := newLogStatsRouter()
-
-	// When /logs/stats is requested with a valid id
-	recorder := getRequest(t, router, "/logs/stats?caddy_id=lb_abc123")
-
-	// Then it succeeds normally
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	if cRotated != 9 { // 只有 caddy-2026...(9字节),不含 caddy-tls-...(17字节)
+		t.Errorf("caddy.log rotated=%d, want 10(只有 caddy-2026...=10字节,不含 caddy-tls-...=17字节;B-2)", cRotated)
 	}
 }

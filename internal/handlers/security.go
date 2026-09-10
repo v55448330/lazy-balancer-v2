@@ -1166,9 +1166,26 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), derefBool(req.RateLimitEnabled), derefInt(req.RateLimitRPS), derefInt(req.RateLimitBurst)); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
+	// B-3(第 4 轮审计):限流门改用有效值(请求缺失回落存量),与 S1 门同口径
+	// ——此前 deref 裸值使部分重启用误报 400/rps=0 落库为宣称启用实际零强制。
+	{
+		var storedRLEnabled bool
+		var storedRPS, storedBurst int
+		_ = db.DB.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst)
+		effRLEnabled, effRPS, effBurst := storedRLEnabled, storedRPS, storedBurst
+		if req.RateLimitEnabled != nil {
+			effRLEnabled = *req.RateLimitEnabled
+		}
+		if req.RateLimitRPS != nil {
+			effRPS = *req.RateLimitRPS
+		}
+		if req.RateLimitBurst != nil {
+			effBurst = *req.RateLimitBurst
+		}
+		if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), effRLEnabled, effRPS, effBurst); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 	// S1(2026-09-10 审计):同 Create——生效配置(请求值缺失回落存量)为
 	// allow+启用+空合并名单时 400,防 fail-open 形态落库。
