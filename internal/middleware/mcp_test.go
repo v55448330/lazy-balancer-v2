@@ -25,6 +25,8 @@ func TestAPIKeyReadOnlyGuardBlocksWritesAndAllowsReadOnlyPOST(t *testing.T) {
 	}, apiKeyReadOnlyGuard())
 	router.POST("/api/v1/rules", noContent)
 	router.POST("/api/v1/rules/cert-info", noContent)
+	router.POST("/api/v1/certificates/parse", noContent)
+	// 2026-09-10 裁定后仍为写面(管理面工具,非读形态)
 	router.POST("/api/v1/certificate-configs/test", noContent)
 
 	blocked := httptest.NewRecorder()
@@ -37,10 +39,16 @@ func TestAPIKeyReadOnlyGuardBlocksWritesAndAllowsReadOnlyPOST(t *testing.T) {
 	if allowed.Code != http.StatusNoContent {
 		t.Fatalf("read-only POST status=%d, want 204", allowed.Code)
 	}
-	testAllowed := httptest.NewRecorder()
-	router.ServeHTTP(testAllowed, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
-	if testAllowed.Code != http.StatusNoContent {
-		t.Fatalf("test POST status=%d, want 204", testAllowed.Code)
+	parseAllowed := httptest.NewRecorder()
+	router.ServeHTTP(parseAllowed, httptest.NewRequest(http.MethodPost, "/api/v1/certificates/parse", nil))
+	if parseAllowed.Code != http.StatusNoContent {
+		t.Fatalf("parse POST status=%d, want 204", parseAllowed.Code)
+	}
+	// 管理面工具端点对只读 Key 同步收紧(2026-09-10)
+	testBlocked := httptest.NewRecorder()
+	router.ServeHTTP(testBlocked, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
+	if testBlocked.Code != http.StatusForbidden {
+		t.Fatalf("cert-config test POST status=%d, want 403", testBlocked.Code)
 	}
 }
 
