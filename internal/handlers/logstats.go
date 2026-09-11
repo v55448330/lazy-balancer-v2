@@ -33,7 +33,28 @@ type LogStorageInfo struct {
 // dirBytes 返回 path 的活跃文件大小与轮转副本合计。两类轮转家族都统计
 // (SYS-1,2026-09-10 审计):自研 .1..9 shift 后缀;时间戳后缀家族——运行日志
 // <path>.YYYYMMDD-HHMMSS(logrotate.go)与 Caddy/timberjack 的 <name>-<ts>-size.log
-// 形态(前缀=去扩展名的 base)。
+// isTimberjackRotationCopy 判定文件名是否为 timberjack 轮转副本
+// (<stem>-<ts>-size.log / .gz,ts 首字符为数字)。与 timestampedRotations
+// 的 timberjack 分支同口径(B-2 数字边界校验),聚合枚举时跳过这些副本
+// ——它们已由 base 文件的 timestampedRotations 计入 rotated,
+// 再计入 active 即双计(F-A,第 6 轮审计)。
+func isTimberjackRotationCopy(name string) bool {
+	suffix := ""
+	if strings.HasSuffix(name, "-size.log.gz") {
+		suffix = "-size.log.gz"
+	} else if strings.HasSuffix(name, "-size.log") {
+		suffix = "-size.log"
+	} else {
+		return false
+	}
+	trimmed := name[:len(name)-len(suffix)]
+	idx := strings.LastIndex(trimmed, "-")
+	if idx < 0 || idx+1 >= len(trimmed) {
+		return false
+	}
+	return trimmed[idx+1] >= '0' && trimmed[idx+1] <= '9'
+}
+
 func dirBytes(path string) (int64, int64) {
 	var active, rotated int64
 	if st, err := os.Stat(path); err == nil && !st.IsDir() {
@@ -254,6 +275,9 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 				if e.IsDir() || !strings.HasPrefix(e.Name(), "certjob-") || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
 					continue
 				}
+				if isTimberjackRotationCopy(e.Name()) {
+					continue
+				}
 				a, r := dirBytes(filepath.Join(fixedLogsDir, e.Name()))
 				active += a
 				rotated += r
@@ -269,6 +293,9 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 			var active, rotated int64
 			for _, e := range entries {
 				if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
+					continue
+				}
+				if isTimberjackRotationCopy(e.Name()) {
 					continue
 				}
 				a, r := dirBytes(filepath.Join(fixedLogsDir, "rules", e.Name()))

@@ -1166,12 +1166,23 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// SH6-1(第 6 轮审计):下方三处门控读(限流/S1 allow/GeoIP)原以裸连接
+	// db.DB 读取,位于 BeginTx 之前——与同函数 R63 事务内读的标准漂移;
+	// ImportConfigBackup 不持 caddyOpMu,构成并发写者,S1 窗口可落
+	// allow+启用+空名单(fail-open)。三读移入 BEGIN IMMEDIATE 事务内,
+	// 校验 SELECT 即持写锁,消除 TOCTOU(同 R38 三-3 镜像方向)。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
 	// B-3(第 4 轮审计):限流门改用有效值(请求缺失回落存量),与 S1 门同口径
 	// ——此前 deref 裸值使部分重启用误报 400/rps=0 落库为宣称启用实际零强制。
 	{
 		var storedRLEnabled bool
 		var storedRPS, storedBurst int
-		_ = db.DB.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst)
+		_ = tx.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst)
 		effRLEnabled, effRPS, effBurst := storedRLEnabled, storedRPS, storedBurst
 		if req.RateLimitEnabled != nil {
 			effRLEnabled = *req.RateLimitEnabled
@@ -1192,7 +1203,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	{
 		var storedEnabled bool
 		var storedMode, storedList, storedRefs string
-		_ = db.DB.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
+		_ = tx.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
 			Scan(&storedEnabled, &storedMode, &storedList, &storedRefs)
 		effEnabled := storedEnabled
 		if req.IPACLEnabled != nil {
@@ -1228,7 +1239,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		// off 态保留名单只做形状校验，不被可用性门卡死。
 		skipGeoIPValidation := false
 		var storedGeoIP, storedGeoIPMode string
-		if err := db.DB.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err == nil {
+		if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err == nil {
 			skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
 		}
 		effectiveGeoIPMode := storedGeoIPMode
@@ -1254,17 +1265,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			req.CustomRules = &empty
 		}
 	}
-	// 引用校验与写入必须同事务（R38 三-3，R37 I1 的镜像方向）：校验通过后、
-	// UPDATE 之前并发的规则/拦截页删除提交会让写入的启用策略携带悬空引用，
-	// 发射端仅日志跳过、WAF 规则静默丢失。写锁来自 DSN 的 _txlock=immediate
-	// （非只读 BeginTx 一律 BEGIN IMMEDIATE）：校验 SELECT 即持写锁，并发的删除
-	// 无法在校验与 UPDATE 之间提交（同 CreateSecurityPolicy）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
-		return
-	}
-	defer tx.Rollback()
 	// 引用存在性校验：显式提供的 block_page_id / custom_rules（ID 数组）必须指向
 	// 存在的拦截页/规则；未提供的字段不参与校验（保持存量列不变）。
 	if msg, err := validateSecurityPolicyReferences(tx, derefInt(req.BlockPageID), derefStr(req.CustomRules)); err != nil {

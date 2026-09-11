@@ -38,10 +38,10 @@ curl -s http://localhost:8000/api/v1/mcp \
 | 负载规则 | list_rules、get_rule、create_rule、update_rule、delete_rule、enable_rule、disable_rule |
 | 证书 | list_cert_jobs、retry_cert_job、issue_certificate、list_certificates |
 | 安全策略 | list_security_policies、create_security_policy、update_security_policy |
-| 自定义规则 | list_security_custom_rules、create_security_custom_rule |
+| 自定义规则 | list_custom_rules、create_custom_rule |
 | IP 名单 | list_ip_lists、create_ip_list、update_ip_list |
 | 监控 | get_metrics_overview、get_metrics_dashboard、get_realtime_traffic、get_upstream_health |
-| 集群 | get_cluster_status、generate_cluster_register_token |
+| 集群 | get_cluster_status、create_register_token |
 | 配置 | get_config、update_config、reload_caddy |
 
 完整工具列表通过 `tools/list` 方法获取。
@@ -80,6 +80,7 @@ lazy-balancer://docs/ops-playbook
 
 | 错误 | 含义 |
 |---|---|
-| 400 | 请求体不可读或超过 1 MiB |
+| 400 | 请求体不可读 |
+| 413 | 请求体超过 1 MiB |
 | 401 | API Key 无效 |
 | 403 | MCP 未启用 / IP 不在白名单 / 只读 Key 调写工具 |

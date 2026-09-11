@@ -72,7 +72,15 @@ func installClusterVersionTriggers(database *sql.DB) error {
 			// 历史库 NULL 行两层判定不再分裂（写闸放行写、触发器却不 bump 版本）。
 			whenClause := "(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1"
 			if operation == "UPDATE" {
-				operationClause += " OF " + table.snapshotColumns
+				// CL-新1(第 6 轮审计):last_checked 是读路径指标(页面浏览即写),
+				// 入 OF 列表会使 CRS/IP2Region 页面浏览触发集群级全量重放+
+				// 各从节点强制 Caddy 重载。从触发列排除(consecutive_failures 同
+				// 型先例:纯运行态计数不入版本)。
+				ofColumns := table.snapshotColumns
+				if table.name == "security_crs_version" || table.name == "security_ip2region_version" {
+					ofColumns = strings.Replace(ofColumns, ",last_checked", "", 1)
+				}
+				operationClause += " OF " + ofColumns
 			}
 			if table.name == "cert_jobs" {
 				switch operation {

@@ -679,3 +679,46 @@ func clusterVersion(t *testing.T, database *sql.DB) int {
 	}
 	return version
 }
+
+// CL-新1(第 6 轮审计):security_crs_version/security_ip2region_version 的
+// last_checked 列是读路径指标(页面浏览即写),必须从触发器 OF 列表排除——
+// 否则 CRS 页面浏览触发 cluster_version+1 → 快照 304 门失效 → 全量下发 +
+// 各从节点强制 Caddy 重载。
+func TestClusterVersionTrigger_lastCheckedExcluded(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	// 种子行 + 版本重置
+	if _, err := database.Exec(`INSERT OR IGNORE INTO security_crs_version (id, version) VALUES (1, '4.28.0')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	readV := func() int64 {
+		var v int64
+		if err := database.QueryRow("SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	base := readV()
+
+	// 写 last_checked(模拟页面浏览的 RefreshLatestAsync)
+	if _, err := database.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if v := readV(); v != base {
+		t.Errorf("last_checked-only update bumped cluster_version %d→%d, want unchanged (excluded from OF list)", base, v)
+	}
+
+	// 写业务列(版本变更)仍应 bump
+	if _, err := database.Exec("UPDATE security_crs_version SET version='4.29.0-test' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if v := readV(); v != base+1 {
+		t.Errorf("version update should bump cluster_version to %d, got %d", base+1, v)
+	}
+}

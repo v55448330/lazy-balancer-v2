@@ -4,7 +4,7 @@
 
 部署后可通过以下方式访问：
 
-- **Swagger UI**：`http://<host>:8000/docs`
+- **Swagger UI**：`http://<host>:8000/api/v1/docs`
 - **OpenAPI 规范**：`http://<host>:8000/api/v1/openapi.yaml`
 - **接口调试**：`http://<host>:8000/api/v1/docs`（JSON 格式端点列表）
 
