@@ -14,19 +14,38 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/models"
 )
 
 type brandingConfig struct {
-	AppName    string `json:"app_name"`
-	FooterText string `json:"footer_text"`
-	Version    string `json:"version,omitempty"`
+	AppName     string `json:"app_name"`
+	FooterText  string `json:"footer_text"`
+	LandingText string `json:"landing_text"`
+	Version     string `json:"version,omitempty"`
 }
 
 // defaultFooterText is the product footer rendered when branding.json is
 // absent or its footer_text is empty; the GitHub link is appended only in
 // this default rendering — a configured footer_text is rendered verbatim.
 const defaultFooterText = "Lazy Balancer V2 · Copyright © 2026 XiaoBao"
+
+// SyncDefaultLandingText 把 branding.json 的 landing_text(空/缺失回退
+// services.DefaultLandingText)注入 services 的默认站点渲染。返回值表示
+// 文案是否发生变化(调用方据此触发 Caddy 重渲染)。与 SeedDefaultBlockPage
+// 同生命周期:boot 时 main 调用 + GetBranding 每次请求幂等同步。
+func SyncDefaultLandingText(dataDir string) (bool, error) {
+	cfg := loadBrandingConfig(dataDir)
+	text := cfg.LandingText
+	if text == "" {
+		text = services.DefaultLandingText
+	}
+	if text == services.DefaultLandingBody() {
+		return false, nil
+	}
+	services.SetDefaultLandingBody(text)
+	return true, nil
+}
 
 var defaultBranding = brandingConfig{
 	AppName:    "Lazy Balancer",
@@ -79,18 +98,22 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 }
 
 type brandingResponse struct {
-	AppName           string `json:"app_name"`
-	FooterText        string `json:"footer_text"`
-	Version           string `json:"version"`
-	FooterUsesDefault bool   `json:"footer_uses_default"`
+	AppName            string `json:"app_name"`
+	FooterText         string `json:"footer_text"`
+	LandingText        string `json:"landing_text"`
+	Version            string `json:"version"`
+	FooterUsesDefault  bool   `json:"footer_uses_default"`
+	LandingUsesDefault bool   `json:"landing_uses_default"`
 }
 
 func (h *Handlers) GetBranding(c *gin.Context) {
 	cfg := loadBrandingConfig(h.cfg.DataDir)
 	resp := brandingResponse{
-		AppName:           cfg.AppName,
-		FooterText:        cfg.FooterText,
-		FooterUsesDefault: cfg.FooterText == "",
+		AppName:            cfg.AppName,
+		FooterText:         cfg.FooterText,
+		LandingText:        cfg.LandingText,
+		FooterUsesDefault:  cfg.FooterText == "",
+		LandingUsesDefault: cfg.LandingText == "",
 	}
 	if cfg.Version == "" {
 		cfg.Version = h.cfg.Version
@@ -99,7 +122,19 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	if resp.FooterUsesDefault {
 		resp.FooterText = defaultFooterText
 	}
+	if resp.LandingUsesDefault {
+		resp.LandingText = services.DefaultLandingText
+	}
+	// landing_text 变化时同步注入 services 渲染并触发 Caddy 重应用
+	// (与 SeedDefaultBlockPage 同模式:主节点限定、异步、幂等)。
+	needApply := false
+	if changed, _ := SyncDefaultLandingText(h.cfg.DataDir); changed {
+		needApply = true
+	}
 	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
+		needApply = true
+	}
+	if needApply {
 		go func() {
 			var isMaster bool
 			if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {

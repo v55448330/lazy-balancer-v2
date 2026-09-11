@@ -57,6 +57,33 @@ func IsConfigRejected(err error) bool {
 // （rule_features.go 预校验）以 errors.Is 命中，避免脆弱的字符串匹配。
 var ErrDynamicDNSUpstreamCount = errors.New("dynamic DNS requires exactly one enabled upstream")
 
+// landingBodyMu 保护 defaultLandingBody(branding.json 的 landing_text 注入,
+// 与 footer_text 同语义:空/缺失回退 DefaultLandingText 常量)。Caddy 渲染
+// 可并发(集群快照/事务/handler),读侧走 RLock。
+var (
+	landingBodyMu        sync.RWMutex
+	defaultLandingBodyVal = DefaultLandingText
+)
+
+// DefaultLandingText 是空域名命中 http_80 catch-all 时的产品默认提示文案。
+const DefaultLandingText = "Lazy Balancer V2 is running!"
+
+// SetDefaultLandingBody 注入 branding.json 的 landing_text(已归一:空串
+// 由调用方回退默认后传入)。下一次 Caddy 渲染即生效;渲染侧见
+// DefaultLandingBody()。
+func SetDefaultLandingBody(text string) {
+	landingBodyMu.Lock()
+	defaultLandingBodyVal = text
+	landingBodyMu.Unlock()
+}
+
+// DefaultLandingBody 返回当前默认站点文案(branding 注入或默认)。
+func DefaultLandingBody() string {
+	landingBodyMu.RLock()
+	defer landingBodyMu.RUnlock()
+	return defaultLandingBodyVal
+}
+
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
 	adminURL string
@@ -1741,7 +1768,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				"handle": []interface{}{
 					map[string]interface{}{
 						"handler": "static_response",
-						"body":    "Lazy Balancer V2 is running!",
+						"body":    DefaultLandingBody(),
 					},
 				},
 			},
@@ -1765,7 +1792,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			"handle": []interface{}{
 				map[string]interface{}{
 					"handler": "static_response",
-					"body":    "Lazy Balancer V2 is running!",
+					"body":    DefaultLandingBody(),
 				},
 			},
 		}

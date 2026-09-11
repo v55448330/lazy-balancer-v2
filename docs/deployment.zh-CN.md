@@ -48,8 +48,15 @@
 `data/branding.json`（修改即时生效）：
 
 ```json
-{ "app_name": "Lazy Balancer", "footer_text": "Copyright © 2026 XiaoBao.", "version": "" }
+{ "app_name": "Lazy Balancer", "footer_text": "Copyright © 2026 XiaoBao.", "landing_text": "", "version": "" }
 ```
+
+| 字段 | 说明 | 空值行为 |
+|---|---|---|
+| `app_name` | 产品名（侧栏/登录页/拦截页） | 回退 `Lazy Balancer` |
+| `footer_text` | 页脚文案 | 回退默认页脚（含 GitHub 链接） |
+| `landing_text` | 空域名命中网关时的提示页文案 | 回退 `Lazy Balancer V2 is running!` |
+| `version` | 覆盖构建版本号显示 | 回退构建版本 |
 
 ## 配置备份
 

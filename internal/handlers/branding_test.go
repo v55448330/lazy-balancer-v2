@@ -12,6 +12,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 func initBrandingTestDB(t *testing.T) {
@@ -238,5 +239,77 @@ func TestSeedDefaultBlockPage_leaves_custom_pages_untouched(t *testing.T) {
 	}
 	if content != "SENTINEL-CONTENT" {
 		t.Errorf("custom block page content=%q, want SENTINEL-CONTENT", content)
+	}
+}
+
+// LandingText(2026-09-11):空域名命中的「Lazy Balancer V2 is running!」提示
+// 文案迁入 branding.json(landing_text 字段);未定义时回退当前默认文案。
+// SyncDefaultLandingText 把 branding.json 的 landing_text 注入 services 的
+// 默认站点渲染;Caddy 配置的 http_80 catch-all body 必须随之变化。
+func TestSyncDefaultLandingText_custom(t *testing.T) {
+	// Given:自定义文案
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{"landing_text":"欢迎使用 XX 网关"}`), 0644); err != nil {
+		t.Fatalf("write branding file: %v", err)
+	}
+	defer services.SetDefaultLandingBody("Lazy Balancer V2 is running!") // 还原
+
+	// When
+	changed, err := SyncDefaultLandingText(dataDir)
+	if err != nil {
+		t.Fatalf("SyncDefaultLandingText: %v", err)
+	}
+
+	// Then:报告变更,且 services 渲染注入自定义文案
+	if !changed {
+		t.Fatal("changed=false, want true (custom differs from default)")
+	}
+	cfg := services.DefaultLandingBody()
+	if cfg != "欢迎使用 XX 网关" {
+		t.Errorf("default site body=%q, want custom text", cfg)
+	}
+}
+
+func TestSyncDefaultLandingText_default_fallback(t *testing.T) {
+	// Given:branding.json 无 landing_text(空对象)
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write branding file: %v", err)
+	}
+	services.SetDefaultLandingBody("自定义占位") // 模拟此前被改过
+	defer services.SetDefaultLandingBody("Lazy Balancer V2 is running!")
+
+	// When
+	changed, err := SyncDefaultLandingText(dataDir)
+	if err != nil {
+		t.Fatalf("SyncDefaultLandingText: %v", err)
+	}
+
+	// Then:恢复默认文案
+	if !changed {
+		t.Fatal("changed=false, want true (reverts placeholder to default)")
+	}
+	if got := services.DefaultLandingBody(); got != "Lazy Balancer V2 is running!" {
+		t.Errorf("default site body=%q, want default text", got)
+	}
+}
+
+func TestSyncDefaultLandingText_invalid_json_falls_back(t *testing.T) {
+	// Given:畸形 JSON 文件(loadBrandingConfig 重置为零配置)
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{"landing_text": broken`), 0644); err != nil {
+		t.Fatalf("write branding file: %v", err)
+	}
+	services.SetDefaultLandingBody("被污染的占位")
+	defer services.SetDefaultLandingBody(services.DefaultLandingText)
+
+	// When
+	if _, err := SyncDefaultLandingText(dataDir); err != nil {
+		t.Fatalf("SyncDefaultLandingText: %v", err)
+	}
+
+	// Then:回退默认
+	if got := services.DefaultLandingBody(); got != services.DefaultLandingText {
+		t.Errorf("landing body=%q, want default on invalid json", got)
 	}
 }
