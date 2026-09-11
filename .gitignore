@@ -78,3 +78,7 @@ docs/superpowers/
 .omo/
 .sisyphus/
 openspec/
+
+# AI agent 本地工具目录(会话规则/技能,非项目代码)
+.omp/
+.agent/

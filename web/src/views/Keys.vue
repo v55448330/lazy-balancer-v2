@@ -162,7 +162,7 @@
             <div class="mcp-guide-subtitle">常见错误</div>
             <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
             <div class="mcp-guide-subtitle">权限范围（scope）</div>
-            <div class="mcp-guide-text">只读 Key 仅能调用 GET 查询类工具；写工具（POST/PUT/DELETE）需非只读 Key 且仅在主节点可用（从节点一律 403）。写操作校验后即时生效，失败自动回滚，无需手动 reload。</div>
+            <div class="mcp-guide-text">只读 Key 可调用 GET 查询类工具及 5 个读探测 POST 工具（test_ca_provider / test_certificate_config / parse_certificate / validate_import / preview_config）；其余写工具（POST/PUT/DELETE）需非只读 Key 且仅在主节点可用（从节点一律 403）。写操作校验后即时生效，失败自动回滚，无需手动 reload。</div>
             <div class="mcp-guide-subtitle">常用流程</div>
             <pre class="mcp-guide-pre">新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）
   → 需要免费证书再 issue_certificate 传 caddy_id
