@@ -82,7 +82,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
-	recordAudit(c, "创建", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), req.Username, fmt.Sprintf("角色：%s", req.Role)))
+	recordAudit(c, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), fmt.Sprintf("角色：%s", req.Role)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "用户创建成功", Data: gin.H{"id": id}})
 }
 
@@ -301,7 +301,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "删除", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), targetUsername))
+	recordAudit(c, "删除", "用户", services.AuditUserPart(id, targetUsername))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户删除成功"})
 }
 

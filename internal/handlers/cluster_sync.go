@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -40,14 +39,12 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "快照生成成功", Data: snapshot})
 }
 
+// authenticatedClusterToken 读取集群令牌。CL9-N5(第 9 轮审计):两处调用方
+// 均挂 clusterTokenAuth 之后,该中间件成功时恒 Set("cluster_token")——
+// 头部回退分支不可达且 TrimPrefix 语义与中间件 bearerToken 分叉,收敛为
+// 只读 ctx 值(空串=未认证,唯一生产行为)。
 func authenticatedClusterToken(c *gin.Context) string {
-	if token := c.GetString("cluster_token"); token != "" {
-		return token
-	}
-	if token := c.GetHeader("X-Cluster-Token"); token != "" {
-		return token
-	}
-	return strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+	return c.GetString("cluster_token")
 }
 
 func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
@@ -90,7 +87,15 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		return
 	}
 	if h.clusterService != nil {
-		if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err == nil && isMaster {
+		// CL9-N4(第 9 轮审计):门控 fail-closed——查询失败按主节点语义拒绝
+		// (与 PullClusterSnapshot 的 R42 发现2 口径一致),防瞬时 DB 读错绕过
+		// 守卫误清从节点钉扎。
+		isMaster, err := h.clusterService.IsMaster(c.Request.Context())
+		if err != nil {
+			clusterError(c, http.StatusInternalServerError, "无法确认节点角色，已拒绝清除（fail-closed）", err)
+			return
+		}
+		if isMaster {
 			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "主节点无需清除指纹（本端点仅从节点使用）"})
 			return

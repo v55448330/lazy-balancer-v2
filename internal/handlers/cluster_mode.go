@@ -113,7 +113,8 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	}
 	if err := h.clusterService.UpdateSettings(c.Request.Context(), req); err != nil {
 		status := http.StatusForbidden
-		if errors.Is(err, services.ErrInvalidSyncInterval) {
+		// SR9-1:恒同步拒绝属客户端错误 → 400(与间隔校验同型)。
+		if errors.Is(err, services.ErrInvalidSyncInterval) || errors.Is(err, services.ErrSyncUsersLocked) {
 			status = http.StatusBadRequest
 		}
 		clusterError(c, status, err.Error(), err)

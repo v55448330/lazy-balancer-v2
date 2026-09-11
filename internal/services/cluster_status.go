@@ -83,10 +83,11 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 			return errors.New("从节点不能修改同步间隔，由主节点统一下发")
 		}
 	}
-	// 系统数据恒同步(2026-09-11 裁定):users/api_keys/证书/ACME 等确保系统
-	// 基本运行的数据不可禁用同步。
+	// 系统数据恒同步(2026-09-11 裁定):users/api_keys/ACME 等确保系统基本
+	// 运行的数据不可禁用同步(证书任务行与文件随负载规则开关,R64 A-N5)。
+	// SR9-1:哨兵错误使 handler 映射 400(客户端错误,与间隔校验同型)。
 	if req.SyncUsers != nil && !*req.SyncUsers {
-		return errors.New("系统数据为恒同步项（含用户/密钥/证书/ACME），不允许禁用")
+		return ErrSyncUsersLocked
 	}
 	switchUpdates := []struct {
 		name string

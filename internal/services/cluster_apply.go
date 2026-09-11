@@ -145,7 +145,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		ApplyLogLevel()
 		// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
 		// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
-		applySnapshotBranding(s.cfg.DataDir, snapshot.BasicSettings.BrandingJSON)
+		// CL9-N13:与 materializeSnapshotDNSOwnership 同口径 nil 防御。
+		if s.cfg != nil {
+			applySnapshotBranding(s.cfg.DataDir, snapshot.BasicSettings.BrandingJSON)
+		}
 	}
 	logSectionSyncOutcome(skip, snapshot.Version)
 	if len(skip.drifted) > 0 {
@@ -265,6 +268,11 @@ func (s *SyncService) materializeSnapshotDNSOwnership(acme *models.ClusterACMESt
 		}
 	}
 	path := filepath.Join(dataDir, "acme_dns_ownership.json")
+	// CL9-N14:内容一致零写(幂等,免每次 apply 的 tmp+fsync+rename)。
+	if existing, rerr := os.ReadFile(path); rerr == nil &&
+		string(existing) == string(acme.DNSOwnership) {
+		return nil
+	}
 	temporary, err := os.CreateTemp(dataDir, ".acme-dns-ownership-*")
 	if err != nil {
 		return fmt.Errorf("创建 DNS 所有权临时文件: %w", err)
@@ -693,7 +701,7 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 		}
 	}
 	if invalid {
-		log.Printf("集群同步的自定义规则存在非法项（尾部反斜杠/空条件/非法 target/operator 或名字含控制字符），发射时将跳过 — 主节点应尽快修复")
+		Logf("warn", "集群同步的自定义规则存在非法项（尾部反斜杠/空条件/非法 target/operator 或名字含控制字符），发射时将跳过 — 主节点应尽快修复")
 	}
 	for _, rule := range rules {
 		conditions := rule.Conditions

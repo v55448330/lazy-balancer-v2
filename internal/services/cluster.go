@@ -26,6 +26,8 @@ var (
 	ErrInvalidClusterAuth   = errors.New("集群凭证无效")
 	ErrAlreadyMaster        = errors.New("当前节点已是主节点")
 	ErrInvalidSyncInterval  = errors.New("同步间隔需在 10-86400 秒之间")
+	// ErrSyncUsersLocked 系统数据恒同步不可禁用(SR9-1:handler 映射 400)。
+	ErrSyncUsersLocked = errors.New("系统数据为恒同步项（含用户/密钥/ACME），不允许禁用；证书随负载规则开关")
 )
 
 type ClusterLifecycle interface {

@@ -274,9 +274,63 @@ func tarGzDir(dir string) ([]byte, string, error) {
 }
 
 // tarGzDirSum recomputes the deterministic archive hash of the live tree.
+// CL9-N9(第 9 轮审计):流式哈希——与 tarGzDir 同一归档构造(同一 pipe 写
+// 侧抽为共享闭包),但不经 io.ReadAll 物化整个 gzip 归档,边读边 sha,
+// 消除每次快照重建(=每次 cluster_version 递增)数 MB 级堆分配。
 func tarGzDirSum(dir string) (string, error) {
-	_, sum, err := tarGzDir(dir)
-	return sum, err
+	writeArchive := func(pw *io.PipeWriter) {
+		gz := gzip.NewWriter(pw)
+		tw := tar.NewWriter(gz)
+		writeTarEntries(dir, tw)
+		tw.Close()
+		gz.Close()
+		pw.Close()
+	}
+	pr, pw := io.Pipe()
+	go writeArchive(pw)
+	h := sha256.New()
+	if _, err := io.Copy(h, pr); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// writeTarEntries 把 dir 下正式文件按排序后相对路径写入 tar(与 tarGzDir
+// 同一构造,CL9-N9 抽共享);任一文件读写失败经返回 error 上抛。
+func writeTarEntries(dir string, tw *tar.Writer) error {
+	var paths []string
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if rel, relErr := filepath.Rel(dir, p); relErr == nil && skipWafSyncTransient(rel) {
+			return nil
+		}
+		paths = append(paths, p)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for i := range paths {
+		paths[i], _ = filepath.Rel(dir, paths[i])
+	}
+	sortStrings(paths)
+	for _, rel := range paths {
+		full := filepath.Join(dir, rel)
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return err
+		}
+		hdr := &tar.Header{Name: rel, Mode: 0644, Size: int64(len(data))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // 解包上限：gzip 炸弹（压缩侧最多 64MB，可膨胀数 GB）必须在写放大发生前

@@ -182,7 +182,8 @@
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
-                        <el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && getUpstreamHealthStatus(row.caddy_id, upstream).dynamic" content="Caddy 按解析后 IP 跟踪动态上游健康，域名级不可观测" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                        <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                         <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -801,7 +802,7 @@
                 <el-table-column label="权重" width="70">
                   <template #default="{ row }">{{ row.enabled ? `${weightPercent(wizardForm.upstreams, row)}%` : '禁用' }}</template>
                 </el-table-column>
-                <el-table-column prop="max_connections" label="最大连接" width="90" />
+                <el-table-column prop="max_connections" :label="wizardForm.protocol === 'http' ? '最大请求数' : '最大连接'" width="100" />
                 <el-table-column prop="enabled" label="状态" width="70">
                   <template #default="{ row }">
                     {{ row.enabled ? '启用' : '禁用' }}
@@ -893,7 +894,7 @@
           <el-table-column label="权重" align="center">
             <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
           </el-table-column>
-          <el-table-column prop="max_connections" label="最大连接" align="center" />
+          <el-table-column prop="max_connections" :label="ruleConfig?.protocol === 'http' ? '最大请求数' : '最大连接'" align="center" />
           <el-table-column prop="enabled" label="状态" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
@@ -1067,6 +1068,7 @@ interface CAProvider {
 interface UpstreamHealthDetail {
   healthy: boolean
   unknown: boolean
+  dynamic?: boolean
   degraded: boolean
   num_requests: number
   fails: number
@@ -1630,7 +1632,7 @@ let nextTemporaryPathRuleId = -1
 const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
-const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
+const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
@@ -1684,12 +1686,20 @@ const getHealthLabel = (status: HealthSummary) => {
 const hostPortKey = (host: string, port: number): string =>
   host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`
 
-const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput) => {
+interface UpstreamHealthView {
+  healthy: boolean
+  unknown: boolean
+  dynamic?: boolean
+  degraded: boolean
+}
+const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput): UpstreamHealthView => {
   const status = healthStatus.value[ruleId]
-  if (!status || !status.upstreams) return { healthy: false, unknown: true }
+  if (!status || !status.upstreams) return { healthy: false, unknown: true, degraded: false }
   const upstreamKey = hostPortKey(upstream.host, upstream.port)
   const upstreamData = status.upstreams[upstreamKey]
-  return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown, degraded: upstreamData.degraded } : { healthy: false, unknown: true, degraded: false }
+  return upstreamData
+    ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown, dynamic: upstreamData.dynamic, degraded: upstreamData.degraded ?? false }
+    : { healthy: false, unknown: true, degraded: false }
 }
 
 const getUpstreamMetrics = (ruleId: string, upstream: Upstream | UpstreamInput) => {
@@ -1714,7 +1724,7 @@ const fetchHealthStatus = async () => {
     const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: healthPolling.signal, silent: true })
     if (disposed) return
     const healthData = res.data || {}
-    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
+    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
       const enabledUpstreams = getEnabledUpstreams(rule)
       if (enabledUpstreams.length > 0) {
@@ -1722,7 +1732,7 @@ const fetchHealthStatus = async () => {
         let unhealthy = 0
         let degraded = 0
         let unknown = 0
-        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
+        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of enabledUpstreams) {
           const upstreamKey = hostPortKey(upstream.host, upstream.port)
           let isHealthy = false
@@ -3400,6 +3410,10 @@ onUnmounted(() => {
 .upstream-unknown {
   color: #9ca3af;
   font-size: 12px;
+}
+.upstream-na {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
 }
 
 .upstream-metrics {

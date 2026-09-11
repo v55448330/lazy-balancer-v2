@@ -702,7 +702,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			if s.wafFilesDrifted() {
 				failures := s.wafRepullFailures.Add(1)
 				if failures == wafRepullMaxFailures {
-					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
+					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛；若主节点本就无该组件数据则属预期形态，从节点残留文件不会被同步删除——CL9-N3），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
 				}
 				if s.wafRepullDue() {
 					wafRepullAttempted = true

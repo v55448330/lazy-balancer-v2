@@ -114,6 +114,18 @@ func writeCertPair(certPath, keyPath, certPEM, keyPEM string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("读取原证书: %w", err)
 	}
+	// CL9-N14(第 9 轮审计,含权限修复契约修正):内容一致且权限正确才零写
+	// ——旧内容本已读出,比对几乎免费;跳过可免每次 apply 的 tmp+fsync+
+	// rename 写放大。权限被外部改错时仍重写(既有契约:重复物化修复权限,
+	// TestMaterializeCertPairs_restores_permissions 钉住)。
+	if previousKey, kerr := os.ReadFile(keyPath); kerr == nil &&
+		string(previousCert) == certPEM && string(previousKey) == keyPEM {
+		if certInfo, serr := os.Stat(certPath); serr == nil && certInfo.Mode().Perm() == 0644 {
+			if keyInfo, kerr2 := os.Stat(keyPath); kerr2 == nil && keyInfo.Mode().Perm() == 0600 {
+				return nil
+			}
+		}
+	}
 	previousMode := os.FileMode(0644)
 	if certExisted {
 		info, statErr := os.Stat(certPath)

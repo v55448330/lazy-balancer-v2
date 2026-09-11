@@ -73,8 +73,10 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 	}
 	snapshot.CanonicalPayload = append(json.RawMessage(nil), canonical...)
 	if tokenKey != "" {
-		// The signature additionally binds the version, so a captured older
-		// snapshot cannot be replayed even though its content hash is valid.
+		// CL9-N10(第 9 轮审计,注释如实化):签名绑定 canonical(含版本),
+		// 但接收端对验签通过而版本低于已应用版本的快照(主节点旧备份恢复
+		// 跟随回退,已裁定设计)仅告警后照常应用——防重放在接收侧不存在,
+		// 真实性依赖 TOFU pin TLS+令牌,勿据此注释推断防重放保证。
 		mac := hmac.New(sha256.New, []byte(tokenKey))
 		_, _ = mac.Write(canonical)
 		snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
@@ -260,12 +262,9 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	if snapshot.SecurityIPLists, err = s.snapshotSecurityIPLists(ctx, tx); err != nil {
 		return nil, err
 	}
-	if snapshot.SecurityCRSVersion, err = s.snapshotSecurityCRSVersion(ctx, tx); err != nil {
-		return nil, err
-	}
-	if snapshot.SecurityIP2RegionVersion, err = s.snapshotSecurityIP2RegionVersion(ctx, tx); err != nil {
-		return nil, err
-	}
+	// CL9-N1(第 9 轮审计):CRS/IP2Region 版本行装载已删——版本行移出全部
+	// 守卫节 payload(766f4c81 差分门控裁定)后此处为死装载,每 304 白扫
+	// 2 表且引入无谓失败面。
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("提交漂移守卫事务: %w", err)
 	}
@@ -608,9 +607,6 @@ func (s *ClusterService) dumpTableAsJSON(ctx context.Context, store snapshotStor
 	data, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
-	}
-	if string(data) == "null" {
-		data = []byte("[]")
 	}
 	return data, nil
 }

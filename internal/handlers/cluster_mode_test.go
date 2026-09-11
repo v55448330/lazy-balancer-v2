@@ -154,3 +154,18 @@ func TestUpdateClusterSettings_sync_interval_range_validation(t *testing.T) {
 		})
 	}
 }
+
+// SR9-1(第 9 轮审计):恒同步拒绝属客户端错误 → 400(与间隔校验同型),
+// 此前普通 error 落 403 与 apidocs 声称相悖。
+func TestUpdateClusterSettings_rejectsDisablingSyncUsersAs400(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.PUT("/cluster/settings", h.UpdateClusterSettings)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/cluster/settings", strings.NewReader(`{"sync_users":false}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400 (恒同步拒绝=客户端错误)", response.Code, response.Body.String())
+	}
+}

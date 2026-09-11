@@ -526,8 +526,6 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		var ipACLEntries []string
-		json.Unmarshal([]byte(p.IPACLList), &ipACLEntries)
 		var crsExcluded []json.RawMessage
 		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
 		ruleCount := bindingCounts[p.ID]
@@ -2408,6 +2406,12 @@ func (h *Handlers) GetCRSInfo(c *gin.Context) {
 		FROM security_crs_version WHERE id=1`).
 		Scan(&stored.version, &stored.updatedAt, &stored.updateStatus, &stored.message,
 			&stored.nextUpdate, &stored.lastChecked, &stored.trigger, &stored.autoUpdate)
+	// SLB9-6(SC-11 口径):仅行缺失(新安装)合法回落默认;真实 DB 故障 500
+	// 可见——此前一律吞错,用户看到假默认值。
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 CRS 版本信息失败"})
+		return
+	}
 	if err == nil {
 		if stored.version != "" {
 			info.Version = stored.version
@@ -2534,6 +2538,11 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 	err := db.DB.QueryRow(`SELECT COALESCE(updated_at,''), COALESCE(update_status,'idle'), COALESCE(message,''), COALESCE(trigger,''), COALESCE(last_checked,''), COALESCE(next_update,''), auto_update
 		FROM security_ip2region_version WHERE id=1`).
 		Scan(&info.UpdatedAt, &info.UpdateStatus, &info.Message, &info.Trigger, &info.LastChecked, &info.NextUpdate, &info.AutoUpdate)
+	// SLB9-6(SC-11 口径):同 GetCRSInfo——真实 DB 故障 500,仅缺行回落。
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP2Region 版本信息失败"})
+		return
+	}
 	if err == nil && info.Version == "" {
 		info.Version = "unknown"
 	}

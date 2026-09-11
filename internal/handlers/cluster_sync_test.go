@@ -14,10 +14,12 @@ import (
 )
 
 func TestAuthenticatedClusterToken_uses_bearer_token(t *testing.T) {
-	// Given
+	// CL9-N5(第 9 轮审计):收敛为只读 ctx 值——两处调用方均挂
+	// clusterTokenAuth(成功恒 Set cluster_token),头部回退不可达且语义分叉。
+	// Given:中间件已注入
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest("GET", "/api/v1/cluster/sync/snapshot", nil)
-	context.Request.Header.Set("Authorization", "Bearer bearer-token")
+	context.Set("cluster_token", "bearer-token")
 
 	// When
 	token := authenticatedClusterToken(context)

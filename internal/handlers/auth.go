@@ -512,6 +512,6 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), req.Username, "首个管理员，系统初始化"), c.ClientIP())
+	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), "首个管理员，系统初始化"), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "管理员账号创建成功，请登录"})
 }

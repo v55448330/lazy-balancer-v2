@@ -158,7 +158,7 @@ const { width: viewportWidth } = useWindowSize()
 const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1440 ? 'right' : false)
 
 const syncSwitchItems = [
-  // 系统数据排第一且恒同步(2026-09-11 裁定):用户/密钥/证书/ACME 等确保
+  // 系统数据排第一且恒同步(2026-09-11 裁定):用户/密钥/ACME 等确保
   // 系统基本运行的数据不可禁用同步。
   { key: 'sync_users', label: '系统数据', tip: '用户账号、API 密钥与 ACME 配置（恒同步，不可禁用；证书文件随负载规则开关同步）' },
   { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时、品牌文案等全局设置' },

@@ -141,6 +141,41 @@ func loginRateLimit() gin.HandlerFunc {
 	}
 }
 
+// clusterRegisterRateLimit 注册端点限流(CL9-N6,第 9 轮审计):唯一公开、
+// 未认证、无速率限制的写端点——每次无效令牌尝试 16KB 体读+条件 UPDATE+
+// 审计 INSERT,互联网可达主节点可被线速打审计库。同威胁模型的 login/setup
+// 均有限流,此处补同等待遇(宽桶:注册属低频管理操作,30/min/IP)。
+func clusterRegisterRateLimit() gin.HandlerFunc {
+	const limit = 30
+	return func(c *gin.Context) {
+		now := time.Now()
+		ip := c.ClientIP()
+
+		loginRateBuckets.Lock()
+		bucket, ok := loginRateBuckets.entries[ip+"|register"]
+		if !ok {
+			bucket = &loginRateBucket{until: now.Add(time.Minute)}
+			loginRateBuckets.entries[ip+"|register"] = bucket
+		}
+		loginRateBuckets.Unlock()
+
+		bucket.mu.Lock()
+		if now.After(bucket.until) {
+			bucket.count = 0
+			bucket.until = now.Add(time.Minute)
+		}
+		bucket.count++
+		exceeded := bucket.count > limit
+		bucket.mu.Unlock()
+
+		if exceeded {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "注册请求过于频繁，请稍后再试"})
+			return
+		}
+		c.Next()
+	}
+}
+
 var loginRateLimitCleanupOnce sync.Once
 
 func startLoginRateLimitCleanup() {
@@ -236,7 +271,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/auth/setup", loginRateLimit(), h.GetSetupStatus)
 		v1.POST("/auth/setup", loginRateLimit(), h.SetupAdmin)
 		v1.GET("/branding", h.GetBranding)
-		v1.POST("/cluster/register", h.RegisterClusterNode)
+		v1.POST("/cluster/register", clusterRegisterRateLimit(), h.RegisterClusterNode)
 		v1.GET("/cluster/register/:id/status", registrationAuth(db.DB), h.GetClusterRegistrationStatus)
 		v1.GET("/cluster/sync/snapshot", clusterTokenAuth(db.DB), h.GetClusterSnapshot)
 		v1.GET("/cluster/sync/waf-files", clusterTokenAuth(db.DB), h.GetClusterWafFiles)

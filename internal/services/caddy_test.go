@@ -2035,3 +2035,35 @@ func TestHttpsRedirectLocationPreservesURI(t *testing.T) {
 		}
 	}
 }
+
+// SLB9-1(第 9 轮审计):80/443 同样整体禁用 autoHTTPS——disable_certificates
+// 下引擎仍恒向 http_80 追加被项目落地页遮蔽的 catch-all 308(死路由+
+// superfluous WriteHeader 日志噪音+未来 terminal 化后盲导 443 的地雷);
+// 跳转完全由项目自有 redirectRoutes 管理(TLSHTTPRedirect,任意端口)。
+func TestGenerateCaddyConfig_autoHTTPSFullyDisabled(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,enabled) VALUES ('lb-autohttps','autohttps','http','example.com',443,'weighted_round_robin',1,'manual',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb-autohttps','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	config := GenerateCaddyConfig()
+	if message, failed := config[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate: %s", message)
+	}
+	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
+	for name, sv := range servers {
+		server, ok := sv.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ah, ok := server["automatic_https"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if ah["disable"] != true {
+			t.Errorf("server %s automatic_https=%v, want disable:true (SLB9-1: 死路由消除)", name, ah)
+		}
+	}
+}

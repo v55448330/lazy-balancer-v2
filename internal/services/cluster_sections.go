@@ -22,7 +22,8 @@ type syncSection struct {
 }
 
 var syncSections = []syncSection{
-	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/证书/ACME。
+	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/ACME
+// (证书任务行与文件随 rules 开关,R64 A-N5)。
 	{Key: "users", NewLabel: "系统数据"},
 	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "rules", NewLabel: "负载规则"},
@@ -162,24 +163,20 @@ func readSyncSwitches(dbh interface {
 	if dbh == nil {
 		return sw, nil
 	}
-	var g, u, r, w, sec sql.NullBool
+	// CL9-N12(第 9 轮审计):sync_users 子查询已删——恒同步裁定下 sw.Users
+	// 恒 true(读取/赋值成死代码);无 FROM 的子查询标量 SELECT 恒返回 1 行,
+	// ErrNoRows 分支不可达,一并收敛。
+	var g, r, w, sec sql.NullBool
 	err := dbh.QueryRowContext(context.Background(), `SELECT
 		(SELECT sync_global_config FROM global_config WHERE id=1),
-		(SELECT sync_users FROM global_config WHERE id=1),
 		(SELECT sync_rules FROM global_config WHERE id=1),
 		(SELECT sync_waf_files FROM global_config WHERE id=1),
-		(SELECT sync_security FROM global_config WHERE id=1)`).Scan(&g, &u, &r, &w, &sec)
+		(SELECT sync_security FROM global_config WHERE id=1)`).Scan(&g, &r, &w, &sec)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return sw, nil
-		}
 		return sw, err
 	}
 	if g.Valid {
 		sw.GlobalConfig = g.Bool
-	}
-	if u.Valid {
-		sw.Users = u.Bool
 	}
 	if r.Valid {
 		sw.Rules = r.Bool

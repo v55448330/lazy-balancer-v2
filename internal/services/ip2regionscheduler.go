@@ -54,7 +54,8 @@ func (m *IP2RegionUpdateManager) StopScheduler() {
 
 // SetMasterRole 按集群角色启停 ip2region 自动更新调度器：主节点启动，从节点
 // 停止。停止立即生效（含等待在途更新的 rearm，R55-A-#1）；已启动的更新仍在
-// 后台有界跑完，其在从节点上的写入由下次快照全量重放覆盖（drift 自愈）。
+// 后台有界跑完，其版本行写入由 waf_files 差分门控重放覆盖
+// （2026-09-11 版本行归位；文件态由 wafFilesDrifted 兜底自愈）。
 func (m *IP2RegionUpdateManager) SetMasterRole(isMaster bool) {
 	if isMaster {
 		m.StartScheduler()

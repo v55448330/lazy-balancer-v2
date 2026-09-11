@@ -61,7 +61,7 @@ var ErrDynamicDNSUpstreamCount = errors.New("dynamic DNS requires exactly one en
 // 与 footer_text 同语义:空/缺失回退 DefaultLandingText 常量)。Caddy 渲染
 // 可并发(集群快照/事务/handler),读侧走 RLock。
 var (
-	landingBodyMu        sync.RWMutex
+	landingBodyMu         sync.RWMutex
 	defaultLandingBodyVal = DefaultLandingText
 )
 
@@ -488,8 +488,12 @@ func (s *CaddyService) GetConfig() (map[string]interface{}, error) {
 
 // UpstreamHealthDetail contains detailed health information for an upstream
 type UpstreamHealthDetail struct {
-	Healthy     bool `json:"healthy"`
-	Unknown     bool `json:"unknown"`
+	Healthy bool `json:"healthy"`
+	Unknown bool `json:"unknown"`
+	// Dynamic 标记动态 DNS 上游(SLB9-2):Caddy 动态池按解析后 IP:port 键控
+	// (reverseproxy/hosts.go),域名:port 键在指标/健康两数据源均不可命中——
+	// 域名级健康/请求数不可观测(N/A),负载均衡与被动健康运行时不受影响。
+	Dynamic     bool `json:"dynamic,omitempty"`
 	Degraded    bool `json:"degraded"`
 	NumRequests int  `json:"num_requests"`
 	Fails       int  `json:"fails"`
@@ -597,9 +601,12 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 							name, _ := dynamicUpstreams["name"].(string)
 							port, _ := dynamicUpstreams["port"].(string)
 							if name != "" {
+								// SLB9-2:动态 DNS 上游按域名键展示,标记 Dynamic=true——
+								// 引擎按解析后 IP 跟踪健康,域名级观测恒 N/A(UI 显示 N/A
+								// 而非误导性的「未知」)。查找保持原样(命中即附带数据)。
 								dial := net.JoinHostPort(name, port)
 
-								detail := &UpstreamHealthDetail{}
+								detail := &UpstreamHealthDetail{Dynamic: true}
 
 								if metrics, ok := upstreamMetrics[dial]; ok {
 									detail.NumRequests = metrics.NumRequests
@@ -1566,16 +1573,15 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			server["tls_connection_policies"] = tlsPolicies
 		}
 
-		// 证书签发/续期由 cert_jobs（DNS-01）全权管理：禁止 Caddy 自动 HTTPS 为路由
-		// 域名自建 ACME automation（v2.11.4 autohttps.go：TLS 服务器 host matcher 中的
-		// 域名若无已加载证书即纳入默认自动化策略，acme_dns 签发期会绕开 cert_jobs 自行签发）。
-		// disable_certificates 仅关自动化证书管理，自动跳转与既有 TLS 策略行为不变；
-		// 非 443/80 端口维持整体 disable 以避免自动跳转冲突。
-		autoHTTPS := map[string]interface{}{"disable_certificates": true}
-		if port != 443 && port != 80 {
-			autoHTTPS["disable"] = true
-		}
-		server["automatic_https"] = autoHTTPS
+		// 证书签发/续期由 cert_jobs（DNS-01）全权管理：禁止 Caddy 自动 HTTPS 的
+		// 一切行为（v2.11.4 autohttps.go）。SLB9-1(第 9 轮审计):此前 80/443 仅
+		// disable_certificates,但引擎在 DisableCerts=true 时仍无条件向 http_80
+		// 追加 catch-all 308(autohttps.go appendCatchAll,无 host matcher)——被
+		// 项目落地页遮蔽成死路由,每个未匹配 :80 请求产生 superfluous
+		// WriteHeader 错误日志,且是未来落地页 terminal 化后盲导 443 的地雷。
+		// HTTP→HTTPS 跳转完全由项目自有 redirectRoutes 管理(TLSHTTPRedirect,
+		// 覆盖任意端口,含证书就绪复核与遮蔽检查),引擎侧整体关闭。
+		server["automatic_https"] = map[string]interface{}{"disable": true}
 
 		servers[fmt.Sprintf("http_%d", port)] = server
 	}
@@ -1822,7 +1828,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		for _, d := range strings.Split(r.Domain, ",") {
 			d = strings.TrimSpace(d)
 			if d != "" {
-				perPort[d] = "rule_" + r.CaddyID
+				// SLB9-3:与 host matcher 同口径规范化——Caddy 日志查找大小写
+				// 敏感,混合大小写 Host 请求会落到默认 logger(归属错位)。
+				perPort[normalizeHostForMatcher(d)] = "rule_" + r.CaddyID
 			}
 		}
 	}
