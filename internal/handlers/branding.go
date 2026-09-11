@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -72,12 +74,64 @@ func SeedBrandingTemplate(dataDir string) error {
 	return nil
 }
 
-// loadBrandingConfig reads branding.json onto a zero config: absent file or
-// empty fields mean "use the default for that field"; non-empty fields are
-// rendered verbatim (never merged with defaults).
+// brandingStore 是进程内品牌配置的唯一快照:boot 后所有消费方从内存读取
+// (标题/登录标题/页脚经 GET /branding;拦截页经 SeedDefaultBlockPage;
+// 空主机头文案经 SyncDefaultLandingText;系统信息/备份导入同源)。每次
+// 访问仅 stat 一次文件,mtime+size 变化才重读重解析——保留「修改即时
+// 生效」语义的同时,稳态成本从每 GetBranding 请求 3 次全文读+JSON 解析
+// 降为 3 次 stat。dataDir 入键:跨目录(测试隔离)不共享缓存。
+var brandingStore = struct {
+	mu      sync.RWMutex
+	loaded  bool
+	dataDir string
+	cfg     brandingConfig
+	modTime time.Time
+	size    int64
+}{}
+
+// loadBrandingConfig returns the in-memory branding snapshot, transparently
+// reloading when the file's mtime/size changed (or dataDir switched).
+// Absent file or empty fields mean "use the default for that field";
+// non-empty fields are rendered verbatim (never merged with defaults).
 func loadBrandingConfig(dataDir string) brandingConfig {
-	var cfg brandingConfig
 	path := filepath.Join(dataDir, "branding.json")
+	st, stErr := os.Stat(path)
+	unchanged := func() bool {
+		return brandingStore.loaded && brandingStore.dataDir == dataDir &&
+			stErr == nil && st.Size() == brandingStore.size && st.ModTime().Equal(brandingStore.modTime)
+	}
+	brandingStore.mu.RLock()
+	if unchanged() {
+		cfg := brandingStore.cfg
+		brandingStore.mu.RUnlock()
+		return cfg
+	}
+	brandingStore.mu.RUnlock()
+
+	brandingStore.mu.Lock()
+	defer brandingStore.mu.Unlock()
+	if unchanged() { // double-check:并发竞争下的另一个加载者已完成
+		return brandingStore.cfg
+	}
+	cfg := readBrandingFile(path)
+	brandingStore.cfg = cfg
+	brandingStore.loaded = true
+	brandingStore.dataDir = dataDir
+	if stErr == nil {
+		brandingStore.modTime = st.ModTime()
+		brandingStore.size = st.Size()
+	} else {
+		brandingStore.modTime = time.Time{}
+		brandingStore.size = -1
+	}
+	return cfg
+}
+
+// readBrandingFile reads and parses branding.json with per-field fallback
+// (absent/invalid file → zero config + default app_name; callers treat
+// remaining empty fields as "render the default for that field").
+func readBrandingFile(path string) brandingConfig {
+	var cfg brandingConfig
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {

@@ -313,3 +313,39 @@ func TestSyncDefaultLandingText_invalid_json_falls_back(t *testing.T) {
 		t.Errorf("landing body=%q, want default on invalid json", got)
 	}
 }
+
+// 内存快照契约(2026-09-11 重构):loadBrandingConfig 从进程内快照读取,
+// 文件 mtime/size 变化时透明重载;文件删除后回退默认。钉住「修改即时
+// 生效」语义不被快照化破坏(跨 dataDir 不共享缓存,测试目录互不污染)。
+func TestLoadBrandingConfig_memorySnapshotDetectsFileChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+
+	// 初始:自定义 app_name(首访必加载)
+	os.WriteFile(path, []byte(`{"app_name":"AlphaBranding"}`), 0644)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "AlphaBranding" {
+		t.Fatalf("first load: app_name=%q, want AlphaBranding", cfg.AppName)
+	}
+
+	// 修改(size 变化):下次访问检测到并重载
+	os.WriteFile(path, []byte(`{"app_name":"Beta"}`), 0644)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "Beta" {
+		t.Fatalf("after rewrite: app_name=%q, want Beta (change detection broken)", cfg.AppName)
+	}
+
+	// 删除文件:回退默认
+	os.Remove(path)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != defaultBranding.AppName {
+		t.Fatalf("after remove: app_name=%q, want default %q", cfg.AppName, defaultBranding.AppName)
+	}
+
+	// 跨 dataDir 隔离:另一目录的加载不受前一目录缓存影响
+	dir2 := t.TempDir()
+	os.WriteFile(filepath.Join(dir2, "branding.json"), []byte(`{"app_name":"Other"}`), 0644)
+	if cfg := loadBrandingConfig(dir2); cfg.AppName != "Other" {
+		t.Fatalf("dir2: app_name=%q, want Other (cross-dir cache leak)", cfg.AppName)
+	}
+	if cfg := loadBrandingConfig(dir2); cfg.AppName != "Other" {
+		t.Fatalf("dir2 second: app_name=%q, want Other", cfg.AppName)
+	}
+}
