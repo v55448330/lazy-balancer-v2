@@ -313,3 +313,69 @@ func TestSyncDefaultLandingText_invalid_json_falls_back(t *testing.T) {
 		t.Errorf("landing body=%q, want default on invalid json", got)
 	}
 }
+
+// 内存快照契约(2026-09-11 重实现):loadBrandingConfig 从进程内快照读取,
+// 文件 mtime/size 变化时透明重载;文件删除回退默认;跨 dataDir 不共享缓存。
+func TestLoadBrandingConfig_memorySnapshotDetectsFileChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+
+	os.WriteFile(path, []byte(`{"app_name":"AlphaBranding"}`), 0644)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "AlphaBranding" {
+		t.Fatalf("first load: app_name=%q, want AlphaBranding", cfg.AppName)
+	}
+
+	st, _ := os.Stat(path)
+	os.WriteFile(path, []byte(`{"app_name":"Beta"}`), 0644)
+	waitForDistinctMtime(t, path, st.ModTime())
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "Beta" {
+		t.Fatalf("after rewrite: app_name=%q, want Beta (change detection broken)", cfg.AppName)
+	}
+
+	os.Remove(path)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != defaultBranding.AppName {
+		t.Fatalf("after remove: app_name=%q, want default %q", cfg.AppName, defaultBranding.AppName)
+	}
+
+	dir2 := t.TempDir()
+	os.WriteFile(filepath.Join(dir2, "branding.json"), []byte(`{"app_name":"Other"}`), 0644)
+	if cfg := loadBrandingConfig(dir2); cfg.AppName != "Other" {
+		t.Fatalf("dir2: app_name=%q, want Other (cross-dir cache leak)", cfg.AppName)
+	}
+	if cfg := loadBrandingConfig(dir2); cfg.AppName != "Other" {
+		t.Fatalf("dir2 second: app_name=%q, want Other", cfg.AppName)
+	}
+}
+
+// 字段级类型回退:单字段类型错仅该字段回退,其余字段正常生效。
+func TestLoadBrandingConfig_fieldTypeFallback(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":123,"footer_text":"有效页脚","landing_text":"有效落地页"}`), 0644)
+
+	cfg := loadBrandingConfig(dir)
+
+	if cfg.AppName != defaultBranding.AppName {
+		t.Errorf("app_name = %q, want default (int is invalid for string field)", cfg.AppName)
+	}
+	if cfg.FooterText != "有效页脚" {
+		t.Errorf("footer_text = %q, want preserved (other fields must survive)", cfg.FooterText)
+	}
+	if cfg.LandingText != "有效落地页" {
+		t.Errorf("landing_text = %q, want preserved", cfg.LandingText)
+	}
+}
+
+// null 值按空处理(回退默认)。
+func TestLoadBrandingConfig_nullFieldTreatedAsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":null,"landing_text":"自定义落地"}`), 0644)
+
+	cfg := loadBrandingConfig(dir)
+
+	if cfg.AppName != defaultBranding.AppName {
+		t.Errorf("app_name = %q, want default (null→empty)", cfg.AppName)
+	}
+	if cfg.LandingText != "自定义落地" {
+		t.Errorf("landing_text = %q, want preserved", cfg.LandingText)
+	}
+}

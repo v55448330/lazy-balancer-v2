@@ -70,8 +70,8 @@ func run() error {
 		}
 	}()
 	services.ApplyLogLevel()
-	if err := handlers.SeedBrandingTemplate(cfg.DataDir); err != nil {
-		services.Logf("warn", "failed to seed branding template: %v", err)
+	if err := handlers.EnsureBrandingFile(cfg.DataDir); err != nil {
+		services.Logf("warn", "failed to ensure branding file: %v", err)
 	}
 	if _, err := handlers.SyncDefaultLandingText(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to sync landing text: %v", err)

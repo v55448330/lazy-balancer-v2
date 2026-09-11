@@ -45,7 +45,7 @@
 
 ## 品牌定制
 
-`data/branding.json`（修改即时生效）：
+`data/branding.json`（启动时检查:缺失建模板、缺字段补空值、齐全零写入;载入内存后修改即时生效——mtime 检测自动重载;单字段类型错仅该字段回退默认）:
 
 ```json
 { "app_name": "Lazy Balancer", "footer_text": "Copyright © 2026 XiaoBao.", "landing_text": "", "version": "" }

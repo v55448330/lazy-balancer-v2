@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -52,49 +54,149 @@ var defaultBranding = brandingConfig{
 	FooterText: defaultFooterText,
 }
 
-// SeedBrandingTemplate writes an all-empty branding.json on first boot so the
-// file exists as an editable template; empty values keep default rendering.
-func SeedBrandingTemplate(dataDir string) error {
+// brandingStore 是进程内品牌配置的唯一快照:boot 后所有消费方从内存读取
+// (标题/登录标题/页脚经 GET /branding;拦截页经 SeedDefaultBlockPage;
+// 空主机头文案经 SyncDefaultLandingText;系统信息/备份导入同源)。每次
+// 访问仅 stat 一次文件,mtime+size 变化才重读重解析——保留「修改即时
+// 生效」语义的同时,稳态成本从每 GetBranding 请求 3 次全文读+JSON 解析
+// 降为 3 次 stat。dataDir 入键:跨目录(测试隔离)不共享缓存。
+var brandingStore = struct {
+	mu      sync.RWMutex
+	loaded  bool
+	dataDir string
+	cfg     brandingConfig
+	modTime time.Time
+	size    int64
+}{}
+
+// loadBrandingConfig returns the in-memory branding snapshot, transparently
+// reloading when the file's mtime/size changed (or dataDir switched).
+// Absent file or empty fields mean "use the default for that field";
+// non-empty fields are rendered verbatim (never merged with defaults).
+func loadBrandingConfig(dataDir string) brandingConfig {
 	path := filepath.Join(dataDir, "branding.json")
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("检查品牌配置文件: %w", err)
+	st, stErr := os.Stat(path)
+	unchanged := func() bool {
+		return brandingStore.loaded && brandingStore.dataDir == dataDir &&
+			stErr == nil && st.Size() == brandingStore.size && st.ModTime().Equal(brandingStore.modTime)
 	}
-	template := brandingConfig{}
-	data, err := json.MarshalIndent(template, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化品牌配置模板: %w", err)
+	brandingStore.mu.RLock()
+	if unchanged() {
+		cfg := brandingStore.cfg
+		brandingStore.mu.RUnlock()
+		return cfg
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("写入品牌配置模板: %w", err)
+	brandingStore.mu.RUnlock()
+
+	brandingStore.mu.Lock()
+	defer brandingStore.mu.Unlock()
+	if unchanged() { // double-check:并发竞争下的另一个加载者已完成
+		return brandingStore.cfg
 	}
-	return nil
+	cfg := readBrandingFile(path)
+	brandingStore.cfg = cfg
+	brandingStore.loaded = true
+	brandingStore.dataDir = dataDir
+	if stErr == nil {
+		brandingStore.modTime = st.ModTime()
+		brandingStore.size = st.Size()
+	} else {
+		brandingStore.modTime = time.Time{}
+		brandingStore.size = -1
+	}
+	return cfg
 }
 
-// loadBrandingConfig reads branding.json onto a zero config: absent file or
-// empty fields mean "use the default for that field"; non-empty fields are
-// rendered verbatim (never merged with defaults).
-func loadBrandingConfig(dataDir string) brandingConfig {
-	var cfg brandingConfig
-	path := filepath.Join(dataDir, "branding.json")
+// readBrandingFile reads and parses branding.json with field-level fallback
+// (2026-09-11 裁定):整体 JSON 非法 → 全字段默认;单字段类型错(如数字)
+// → 仅该字段回退默认,其余字段正常生效。字段空值/null 由消费方按
+// 「该字段用默认」语义处理。
+func readBrandingFile(path string) brandingConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
-		cfg.AppName = defaultBranding.AppName
-		return cfg
+		return brandingConfig{AppName: defaultBranding.AppName}
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
-		cfg = brandingConfig{AppName: defaultBranding.AppName}
-		return cfg
+		return brandingConfig{AppName: defaultBranding.AppName}
 	}
+	var cfg brandingConfig
+	stringField := func(field string) string {
+		val, ok := raw[field]
+		if !ok {
+			return ""
+		}
+		var s string
+		if err := json.Unmarshal(val, &s); err != nil {
+			log.Printf("loadBrandingConfig: field %s has invalid type in %s (want string), using default", field, path)
+			return ""
+		}
+		return s
+	}
+	cfg.AppName = stringField("app_name")
+	cfg.FooterText = stringField("footer_text")
+	cfg.LandingText = stringField("landing_text")
+	cfg.Version = stringField("version")
 	if cfg.AppName == "" {
 		cfg.AppName = defaultBranding.AppName
 	}
 	return cfg
+}
+
+// EnsureBrandingFile 启动时(Caddy 载入前)确保 branding.json 字段齐备
+// (2026-09-11 裁定):
+//   - 文件不存在 → 创建全字段模板(值全空,空值=用默认)
+//   - 缺字段 → 补齐缺失字段(值为空),已有值与未知键原样保留
+//   - 齐全 → 零写入(mtime 不动)
+//   - 畸形 JSON → 不动(保守:不破坏用户数据;运行时按字段级回退并日志告警)
+func EnsureBrandingFile(dataDir string) error {
+	path := filepath.Join(dataDir, "branding.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		out, err := json.MarshalIndent(map[string]string{
+			"app_name":     "",
+			"footer_text":  "",
+			"landing_text": "",
+			"version":      "",
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("序列化品牌配置模板: %w", err)
+		}
+		if err := os.WriteFile(path, out, 0644); err != nil {
+			return fmt.Errorf("写入品牌配置模板: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("检查品牌配置文件: %w", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		// 畸形 JSON:不动文件,运行时字段级回退(readBrandingFile 已日志)
+		return nil
+	}
+	changed := false
+	for _, field := range []string{"app_name", "footer_text", "landing_text", "version"} {
+		if _, ok := raw[field]; !ok {
+			raw[field] = json.RawMessage(`""`)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化补齐后的品牌配置: %w", err)
+	}
+	if err := os.WriteFile(path, out, 0644); err != nil {
+		return fmt.Errorf("写入补齐后的品牌配置: %w", err)
+	}
+	return nil
 }
 
 type brandingResponse struct {
