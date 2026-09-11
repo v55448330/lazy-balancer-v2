@@ -1,6 +1,8 @@
 package services
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -330,5 +333,136 @@ func TestComputeSnapshotSectionHashes_ignoresLocalBookkeepingTimes(t *testing.T)
 	changedRole := build("admin", "viewer", true)
 	if h := ComputeSnapshotSectionHashes(&changedRole)["users"]; h == ComputeSnapshotSectionHashes(&withLocalTimes)["users"] {
 		t.Fatal("users hash must change when role changes")
+	}
+}
+
+// 系统数据恒同步(2026-09-11 裁定):sync_users 不可禁用——读取强制 true、
+// 设置拒绝 false、节跳过永不命中、存量 0 值启动回填 1。
+func TestReadSyncSwitches_forcesUsersOn(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`UPDATE global_config SET sync_users=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	sw, err := readSyncSwitches(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sw.Users {
+		t.Error("readSyncSwitches must force Users=true even when DB=0 (恒同步裁定)")
+	}
+}
+
+func TestUpdateSettings_rejectsDisablingSyncUsers(t *testing.T) {
+	svc, database := newClusterTestService(t)
+	no := false
+	err := svc.UpdateSettings(context.Background(), models.ClusterSettingsRequest{SyncUsers: &no})
+	if err == nil {
+		t.Fatal("UpdateSettings must reject sync_users=false")
+	}
+	if !strings.Contains(err.Error(), "系统数据") && !strings.Contains(err.Error(), "恒同步") {
+		t.Errorf("rejection should explain 系统数据恒同步, got: %v", err)
+	}
+	var v int
+	database.QueryRow(`SELECT COALESCE(sync_users,1) FROM global_config WHERE id=1`).Scan(&v)
+	if v != 1 {
+		t.Errorf("sync_users=%d, must stay 1", v)
+	}
+}
+
+func TestComputeSectionSkips_neverDisablesUsers(t *testing.T) {
+	_, database := newClusterTestService(t)
+	sw := SyncSwitches{GlobalConfig: true, Users: false, Rules: true, WafFiles: true, Security: true}
+	sk := computeSectionSkips(database, models.ClusterSnapshot{SectionHashes: map[string]string{}}, sw, nil)
+	if sk.disabled["users"] {
+		t.Error("users section must never be disabled (恒同步裁定)")
+	}
+}
+
+// CRS/IP2Region 版本行不进任何节哈希(2026-09-11 修正:差分门控应用,
+// 哈希保持文件态纯 ref 语义——进哈希会让主从行状态强耦合,漂移不可收敛)。
+func TestSectionPayload_wafFilesExcludesCRSVersions(t *testing.T) {
+	snap := models.ClusterSnapshot{
+		WafFiles:                 nil,
+		SecurityCRSVersion:       []models.ClusterSecurityCRSVersion{{ID: 1, Version: "4.28.0"}},
+		SecurityIP2RegionVersion: []models.ClusterSecurityIP2RegionVersion{{ID: 1, Version: "202607"}},
+	}
+	wafData, err := json.Marshal(sectionPayloadFor("waf_files", &snap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wafData), "crs_version") || strings.Contains(string(wafData), "4.28.0") {
+		t.Errorf("waf_files payload must stay ref-only, got: %s", wafData)
+	}
+	secData, err := json.Marshal(sectionPayloadFor("security", &snap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(secData), "crs_version") || strings.Contains(string(secData), "ip2region_version") {
+		t.Errorf("security payload must exclude version rows, got: %s", secData)
+	}
+}
+
+// 版本行差分门控:快照行与本地行不同→重放;相同→零写。
+func TestApplySnapshot_versionRowsDiffGating(t *testing.T) {
+	_, database := newClusterTestService(t)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// 快照携带与本地不同的 CRS 行 → 差分命中 → 重放
+	snapshot := models.ClusterSnapshot{Version: 3, SecurityCRSVersion: []models.ClusterSecurityCRSVersion{{ID: 1, Version: "9.9.9"}}}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var v string
+	database.QueryRow(`SELECT COALESCE(version,'') FROM security_crs_version WHERE id=1`).Scan(&v)
+	if v != "9.9.9" {
+		t.Errorf("CRS version=%q, want 9.9.9 (diff must apply)", v)
+	}
+
+	// 相同行 → 零写(mtime 无关,断言行值不变即可幂等语义)
+	snapshot2 := snapshot
+	snapshot2.Version = 4
+	if err := syncService.applySnapshot(context.Background(), snapshot2); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	database.QueryRow(`SELECT COALESCE(version,'') FROM security_crs_version WHERE id=1`).Scan(&v)
+	if v != "9.9.9" {
+		t.Errorf("CRS version=%q after idempotent apply, want stable 9.9.9", v)
+	}
+}
+
+// 版本行随 waf_files 开关:waf_files 关闭时快照版本行不落库。
+func TestApplySnapshot_wafFilesSwitchOffSkipsCRSVersionRows(t *testing.T) {
+	_, database := newClusterTestService(t)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	snapshot := models.ClusterSnapshot{
+		Version: 3,
+		MasterSyncSwitches: &models.ClusterSyncSwitchesPayload{
+			GlobalConfig: true, Users: true, Rules: true, WafFiles: false, Security: true,
+		},
+		SecurityCRSVersion:       []models.ClusterSecurityCRSVersion{{ID: 1, Version: "9.9.9"}},
+		SecurityIP2RegionVersion: []models.ClusterSecurityIP2RegionVersion{{ID: 1, Version: "999909"}},
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var v string
+	database.QueryRow(`SELECT COALESCE(version,'') FROM security_crs_version WHERE id=1`).Scan(&v)
+	if v == "9.9.9" {
+		t.Error("CRS version row must NOT apply when waf_files switch off")
+	}
+	var x string
+	database.QueryRow(`SELECT COALESCE(version,'') FROM security_ip2region_version WHERE id=1`).Scan(&x)
+	if x == "999909" {
+		t.Error("IP2Region version row must NOT apply when waf_files switch off")
 	}
 }

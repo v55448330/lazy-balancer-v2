@@ -1374,7 +1374,7 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	harness.handler = &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 	}
 	harness.loadCalls = &loadCalls
 	harness.currentConfig = func() string {
@@ -1439,7 +1439,7 @@ func newAuditRuleHandlers(t *testing.T, failedLoads int32) (*Handlers, *atomic.I
 	return &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 	}, &loadCalls, &lastLoad
 }
 

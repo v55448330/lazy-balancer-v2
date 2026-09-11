@@ -86,7 +86,7 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 		handler: &Handlers{
 			cfg:            cfg,
 			caddyService:   services.NewCaddyService(fakeCaddy.URL),
-			clusterService: services.NewClusterService(db.DB, nil),
+			clusterService: services.NewClusterService(db.DB, nil, ""),
 		},
 		certDir: testServicesCertDir,
 		currentConfig: func() string {

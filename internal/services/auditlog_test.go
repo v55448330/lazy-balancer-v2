@@ -160,3 +160,14 @@ func TestGetAuditLogSizeBytes_cachesThresholdWithinTTL(t *testing.T) {
 		t.Fatalf("refreshed=%d, want %d after TTL expiry", got, 7<<20)
 	}
 }
+
+// AuditUserPart(2026-09-11 裁定):用户相关审计详情显示完整标识
+// 「用户 12（zhang）」;用户名空回退「用户 12」。
+func TestAuditUserPart(t *testing.T) {
+	if got := AuditUserPart(12, "zhang"); got != "用户 12（zhang）" {
+		t.Errorf("AuditUserPart(12,\"zhang\")=%q, want 用户 12（zhang）", got)
+	}
+	if got := AuditUserPart(7, ""); got != "用户 7" {
+		t.Errorf("AuditUserPart(7,\"\")=%q, want 用户 7 (empty username fallback)", got)
+	}
+}

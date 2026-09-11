@@ -49,7 +49,7 @@ func seedControlNode(t *testing.T, clusterToken string, extra map[string]any) in
 // issueControlTicketOnTestDB 在测试库上以主节点身份签发票据，随后切换为从节点身份。
 func issueControlTicketOnTestDB(t *testing.T, nodeID int, clusterToken, action string) string {
 	t.Helper()
-	service := services.NewClusterService(db.DB, nil)
+	service := services.NewClusterService(db.DB, nil, "")
 	issued, err := service.IssueServiceControlTicket(context.Background(), nodeID, action, time.Now())
 	if err != nil {
 		t.Fatalf("issue control ticket: %v", err)
@@ -74,7 +74,7 @@ func postServiceControl(router *gin.Engine, action, ticket string) *httptest.Res
 }
 
 func newSlaveTestHandler(cfg *config.Config) (*Handlers, *gin.Engine) {
-	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, nil), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
+	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, nil, ""), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
 	router := gin.New()
 	router.POST("/service-control", handler.ClusterServiceControl)
 	return handler, router
@@ -281,7 +281,7 @@ func TestClusterServiceControl_rejects_replay(t *testing.T) {
 
 func newMasterTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}, clusterService: services.NewClusterService(db.DB, nil)}
+	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}, clusterService: services.NewClusterService(db.DB, nil, "")}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set("username", "admin")

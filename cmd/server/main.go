@@ -79,6 +79,8 @@ func run() error {
 	if _, err := handlers.SeedDefaultBlockPage(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to seed default block page: %v", err)
 	}
+	// 品牌载入留痕(2026-09-11 裁定):操作日志+系统日志记录各字段自定义/默认。
+	handlers.StartupBrandingLog(cfg.DataDir)
 	if runtimeLogFile != "" {
 		services.StartRuntimeLogCleanup(runtimeLogFile)
 	}
@@ -124,7 +126,7 @@ func run() error {
 	lifecycle := newRuntimeLifecycle(syncService, func() certificateWorker {
 		return services.NewCertificateService()
 	})
-	clusterService := services.NewClusterService(db.DB, lifecycle)
+	clusterService := services.NewClusterService(db.DB, lifecycle, cfg.DataDir)
 	caProviderService := services.NewCAProviderService(cfg.DataDir)
 
 	h := handlers.NewHandlers(handlers.Dependencies{

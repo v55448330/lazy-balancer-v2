@@ -78,10 +78,11 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if snapshot.MasterSyncSwitches != nil {
 		switches = SyncSwitches{
 			GlobalConfig: snapshot.MasterSyncSwitches.GlobalConfig,
-			Users:        snapshot.MasterSyncSwitches.Users,
-			Rules:        snapshot.MasterSyncSwitches.Rules,
-			WafFiles:     snapshot.MasterSyncSwitches.WafFiles,
-			Security:     snapshot.MasterSyncSwitches.Security,
+			// 系统数据恒同步(2026-09-11 裁定):纵使旧主节点快照嵌入 false 也强制应用。
+			Users:    true,
+			Rules:    snapshot.MasterSyncSwitches.Rules,
+			WafFiles: snapshot.MasterSyncSwitches.WafFiles,
+			Security: snapshot.MasterSyncSwitches.Security,
 		}
 	}
 	previous, err := s.cluster.clusterSnapshotBypassingCache(ctx)
@@ -101,9 +102,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
 	if snapshot.MasterSyncSwitches != nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET
-			sync_global_config=?, sync_users=?, sync_rules=?, sync_waf_files=?, sync_security=?
+			sync_global_config=?, sync_users=1, sync_rules=?, sync_waf_files=?, sync_security=?
 			WHERE id=1 AND COALESCE(is_master,0)=0`,
-			snapshot.MasterSyncSwitches.GlobalConfig, snapshot.MasterSyncSwitches.Users,
+			snapshot.MasterSyncSwitches.GlobalConfig,
 			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.WafFiles,
 			snapshot.MasterSyncSwitches.Security); err != nil {
 			return fmt.Errorf("镜像同步开关: %w", err)
@@ -142,6 +143,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 时本地设置未变，不重放。失败仅记日志（ApplyLogLevel 内部已记），不中断同步。
 	if !skip.skip("global_config") {
 		ApplyLogLevel()
+		// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
+		// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
+		applySnapshotBranding(s.cfg.DataDir, snapshot.BasicSettings.BrandingJSON)
 	}
 	logSectionSyncOutcome(skip, snapshot.Version)
 	if len(skip.drifted) > 0 {
@@ -403,6 +407,24 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return fmt.Errorf("写入同步间隔: %w", err)
 		}
 	}
+	// CRS/IP2Region 版本行归 waf_files 开关(2026-09-11 裁定,差分门控修正):
+	// 不进节哈希(文件态哈希保持纯 ref),按「快照行 vs 本地行」内容差分应用
+	// ——版本行变化由 security_crs_version 触发器 bump 版本驱动 Pull 到达,
+	// 此处差分命中即重放;开关关闭跳过(disabled 精确判,不含 unchanged)。
+	// 全量替换语义:先清后插,空载荷=主节点清空。
+	if !skip.disabled["waf_files"] && snapshotSecurityVersionRowsDiffer(ctx, tx, snapshot) {
+		for _, stmt := range []string{"DELETE FROM security_crs_version", "DELETE FROM security_ip2region_version"} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("清理版本行同步表: %w", err)
+			}
+		}
+		if err := applySecurityCRSVersion(ctx, tx, snapshot.SecurityCRSVersion); err != nil {
+			return err
+		}
+		if err := applySecurityIP2RegionVersion(ctx, tx, snapshot.SecurityIP2RegionVersion); err != nil {
+			return err
+		}
+	}
 	if !skip.skip("security") {
 		if err := applySecurityTables(ctx, tx, snapshot); err != nil {
 			return err
@@ -520,14 +542,14 @@ func policyWhitelistEnabled(p map[string]interface{}) bool {
 func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	// 与规则/用户等表一致的全量替换语义：空载荷意味着主节点已清空，从节点必须
 	// 同步删除，不能因载荷为空而提前返回。
+	// security_crs_version/security_ip2region_version 的 DELETE 已随版本行
+	// 应用挪至 waf_files 节(2026-09-11 裁定),此处不再清理。
 	statements := []string{
 		"DELETE FROM security_policy_bindings",
 		"DELETE FROM security_ip_lists",
 		"DELETE FROM security_policies",
 		"DELETE FROM security_custom_rules",
 		"DELETE FROM security_block_pages",
-		"DELETE FROM security_crs_version",
-		"DELETE FROM security_ip2region_version",
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -627,12 +649,6 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		return err
 	}
 	if err := applySecurityBlockPages(ctx, tx, snapshot.SecurityBlockPages); err != nil {
-		return err
-	}
-	if err := applySecurityCRSVersion(ctx, tx, snapshot.SecurityCRSVersion); err != nil {
-		return err
-	}
-	if err := applySecurityIP2RegionVersion(ctx, tx, snapshot.SecurityIP2RegionVersion); err != nil {
 		return err
 	}
 	return nil
@@ -921,4 +937,43 @@ func nullableTime(value sql.NullTime) any {
 		return nil
 	}
 	return value.Time
+}
+
+// snapshotSecurityVersionRowsDiffer 比较快照携带的 CRS/IP2Region 版本行与
+// 本地行(2026-09-11:版本行差分门控——不进节哈希,以内容差分决定重放)。
+// 任一查询/序列化失败按「无差异」处理(保守:下一真实变更仍会重放)。
+func snapshotSecurityVersionRowsDiffer(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) bool {
+	snapJSON := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	wantCRS := snapJSON(snapshot.SecurityCRSVersion)
+	wantIP2R := snapJSON(snapshot.SecurityIP2RegionVersion)
+
+	localCRS := make([]models.ClusterSecurityCRSVersion, 0)
+	rows, err := tx.QueryContext(ctx, `SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_crs_version ORDER BY id`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var v models.ClusterSecurityCRSVersion
+			if err := rows.Scan(&v.ID, &v.Version, &v.UpdatedAt, &v.AutoUpdate, &v.UpdateStatus, &v.Message, &v.LastChecked, &v.NextUpdate, &v.Trigger, &v.StartedAt, &v.FinishedAt); err == nil {
+				localCRS = append(localCRS, v)
+			}
+		}
+	}
+	localIP2R := make([]models.ClusterSecurityIP2RegionVersion, 0)
+	rows2, err2 := tx.QueryContext(ctx, `SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_ip2region_version ORDER BY id`)
+	if err2 == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var v models.ClusterSecurityIP2RegionVersion
+			if err := rows2.Scan(&v.ID, &v.Version, &v.UpdatedAt, &v.AutoUpdate, &v.UpdateStatus, &v.Message, &v.LastChecked, &v.NextUpdate, &v.Trigger, &v.StartedAt, &v.FinishedAt); err == nil {
+				localIP2R = append(localIP2R, v)
+			}
+		}
+	}
+	return snapJSON(localCRS) != wantCRS || snapJSON(localIP2R) != wantIP2R
 }

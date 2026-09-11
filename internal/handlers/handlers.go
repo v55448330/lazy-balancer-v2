@@ -690,6 +690,7 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 		}
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}
+	services.Logf("info", "启动：Caddy 配置已载入（启用规则 %d 条）", count)
 	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")
 
 	return nil

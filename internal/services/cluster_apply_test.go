@@ -150,7 +150,7 @@ func TestClusterSnapshot_roundTrip_preservesACMEState_for_promoted_slave(t *test
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{DataDir: dataDir, CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
 	lifecycle := &clusterLifecycleFake{}
-	promotable := NewClusterService(database, lifecycle)
+	promotable := NewClusterService(database, lifecycle, "")
 
 	// When
 	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {

@@ -22,8 +22,9 @@ type syncSection struct {
 }
 
 var syncSections = []syncSection{
-	{Key: "global_config", NewLabel: "全局配置"},
+	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/证书/ACME。
 	{Key: "users", NewLabel: "系统数据"},
+	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "rules", NewLabel: "负载规则"},
 	{Key: "waf_files", NewLabel: "规则库数据库"},
 	{Key: "security", NewLabel: "安全策略及自定义规则"},
@@ -69,19 +70,22 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 	case "rules":
 		return s.Rules
 	case "waf_files":
+		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——
+		// 进哈希会让主从行状态强耦合,漂移判定不可收敛)。CRS/IP2Region 版本行
+		// 改经内容差分门控应用(cluster_apply.go versionRowsDiffer),随
+		// sync_waf_files 开关;版本行变化的版本 bump 由 security_crs_version
+		// 触发器驱动(已排除 last_checked 读路径写)。
 		return s.WafFiles
 	case "security":
 		// IPLists（v2.3.0）参与 security 节哈希：列表行变化必须触发节重放；
 		// 字段顺序是哈希输入的一部分，主从同构建共享本定义，勿单独调整。
 		return struct {
-			Policies    json.RawMessage                          `json:"policies"`
-			Bindings    json.RawMessage                          `json:"bindings"`
-			CustomRules []models.SecurityCustomRule              `json:"custom_rules"`
-			BlockPages  []models.SecurityBlockPage               `json:"block_pages"`
-			IPLists     json.RawMessage                          `json:"ip_lists"`
-			CRSVersion  []models.ClusterSecurityCRSVersion       `json:"crs_version"`
-			IP2Region   []models.ClusterSecurityIP2RegionVersion `json:"ip2region_version"`
-		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
+			Policies    json.RawMessage             `json:"policies"`
+			Bindings    json.RawMessage             `json:"bindings"`
+			CustomRules []models.SecurityCustomRule `json:"custom_rules"`
+			BlockPages  []models.SecurityBlockPage  `json:"block_pages"`
+			IPLists     json.RawMessage             `json:"ip_lists"`
+		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists}
 	}
 	return nil
 }
@@ -186,6 +190,9 @@ func readSyncSwitches(dbh interface {
 	if sec.Valid {
 		sw.Security = sec.Bool
 	}
+	// 系统数据恒同步(2026-09-11 裁定):sync_users 不可禁用——任何存量 0 值
+	// 一律按 1 读取;禁用请求由 UpdateSettings 拒绝,启动迁移回填。
+	sw.Users = true
 	return sw, nil
 }
 
@@ -255,6 +262,11 @@ func computeSectionSkips(dbh *sql.DB, snapshot models.ClusterSnapshot, switches 
 	}
 	applied := readAppliedSectionHashes(dbh)
 	for _, sec := range syncSections {
+		if sec.Key == "users" {
+			// 系统数据恒同步(2026-09-11 裁定):纵使快照携带旧主节点的
+			// MasterSyncSwitches.Users=false 也强制应用(防旧快照绕过)。
+			switches.Users = true
+		}
 		if !switches.sectionEnabled(sec.Key) {
 			sk.disabled[sec.Key] = true
 			continue

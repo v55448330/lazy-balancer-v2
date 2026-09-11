@@ -36,7 +36,7 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	h := &Handlers{
 		cfg:            cfg,
 		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -92,7 +92,7 @@ func TestSetClusterMode_rejectsCredentialedMasterURLWithoutAuditingCredentials(t
 	h := &Handlers{
 		cfg:            cfg,
 		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 	}
 	router := gin.New()
 	router.POST("/cluster/mode", h.SetClusterMode)

@@ -132,7 +132,7 @@ func TestGetClusterWafFiles_demotedMasterForbidden(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil)}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest("GET", "/api/v1/cluster/waf/files", nil).WithContext(context.Background())
 	ginContext, _ := gin.CreateTestContext(response)

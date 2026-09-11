@@ -512,7 +512,7 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	if err := installClusterVersionTriggers(database); err != nil {
 		t.Fatalf("install triggers: %v", err)
 	}
-	cluster := services.NewClusterService(database, nil)
+	cluster := services.NewClusterService(database, nil, "")
 	downloadedSnapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatalf("build downloaded snapshot: %v", err)
@@ -720,5 +720,33 @@ func TestClusterVersionTrigger_lastCheckedExcluded(t *testing.T) {
 	}
 	if v := readV(); v != base+1 {
 		t.Errorf("version update should bump cluster_version to %d, got %d", base+1, v)
+	}
+}
+
+// branding_json 入 OF 列表(2026-09-11):主节点镜像写入 bump cluster_version,
+// 使快照缓存失效、变更流向从节点。
+func TestClusterVersionTrigger_brandingJSONBumps(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET branding_json='{"app_name":"X"}' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Errorf("branding_json update should bump cluster_version to 1, got %d", got)
+	}
+	// 从节点写不 bump(WHEN 守卫)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET branding_json='{"app_name":"Y"}' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Errorf("slave write must not bump, got %d", got)
 	}
 }

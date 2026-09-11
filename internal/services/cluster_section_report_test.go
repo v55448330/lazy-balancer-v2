@@ -112,7 +112,8 @@ func TestClusterService_Nodes_sectionSyncFilteredByMasterSwitches(t *testing.T) 
 	if err := service.ReportNode(context.Background(), nodeID, report, time.Now()); err != nil {
 		t.Fatalf("report node: %v", err)
 	}
-	if _, err := database.Exec("UPDATE global_config SET sync_users=0, sync_security=0 WHERE id=1"); err != nil {
+	// 系统数据恒同步(2026-09-11 裁定)不可关——过滤语义改用 rules/security 验证。
+	if _, err := database.Exec("UPDATE global_config SET sync_rules=0, sync_security=0 WHERE id=1"); err != nil {
 		t.Fatalf("disable switches: %v", err)
 	}
 
@@ -127,7 +128,7 @@ func TestClusterService_Nodes_sectionSyncFilteredByMasterSwitches(t *testing.T) 
 		t.Fatalf("nodes=%#v", nodes)
 	}
 	for _, status := range nodes[0].SectionSync {
-		if status.Section == "users" || status.Section == "security" {
+		if status.Section == "rules" || status.Section == "security" {
 			t.Fatalf("disabled section leaked into section_sync: %+v", status)
 		}
 	}

@@ -763,6 +763,9 @@ func runMigrations() error {
 		"global_config.cluster_version":               "INTEGER DEFAULT 0",
 		"global_config.sync_global_config":            "BOOLEAN DEFAULT 1",
 		"global_config.sync_users":                    "BOOLEAN DEFAULT 1",
+		// branding.json 原文镜像(2026-09-11):主节点经快照分发到从节点,
+		// 入触发器 OF 列表——文件变化即 bump cluster_version。
+		"global_config.branding_json":                 "TEXT DEFAULT ''",
 		"global_config.sync_rules":                    "BOOLEAN DEFAULT 1",
 		"global_config.sync_waf_files":                "BOOLEAN DEFAULT 1",
 		"global_config.sync_security":                 "BOOLEAN DEFAULT 1",
@@ -2475,6 +2478,11 @@ func migrateSyncSwitches() error {
 	// （旧开关仅覆盖 Caddy 全局配置且默认关，新开关覆盖日志/时区/Caddy 全部
 	// 全局项且默认开），因此不搬运旧值；曾依赖旧开关关闭同步的用户需在新设置
 	// 卡片重新关闭对应类别。旧 sync_caddy_config 列已随迁移删除。
+	// 系统数据恒同步(2026-09-11 裁定):存量 sync_users=0 回填 1——users/
+	// api_keys/证书/ACME 确保系统基本运行,不可禁用。幂等(合法态恒 1,零副作用)。
+	if _, err := DB.Exec("UPDATE global_config SET sync_users=1 WHERE COALESCE(sync_users,0)=0"); err != nil {
+		return err
+	}
 	_, err := DB.Exec("UPDATE global_config SET sync_switches_migrated=1 WHERE id=1")
 	return err
 }

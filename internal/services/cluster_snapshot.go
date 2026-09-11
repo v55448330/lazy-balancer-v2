@@ -50,6 +50,16 @@ type snapshotStore interface {
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
 	s.retryPendingPinCleanup()
+	// 品牌镜像刷新(2026-09-11):每次同步轮询先对账 branding.json→
+	// global_config.branding_json——文件变化即 bump 版本,304 门自然失效,
+	// 变更流向从节点;内容不变零扰动。快照缓存随版本失效自然重建。
+	if s.dataDir != "" {
+		if changed, err := RefreshBrandingMirror(s.dataDir); err != nil {
+			Logf("warn", "刷新品牌配置镜像失败: %v", err)
+		} else if changed {
+			clusterSnapshotCaches.Delete(s.db)
+		}
+	}
 	snapshot, canonical, fingerprint, err := s.cachedSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
@@ -385,14 +395,15 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	var snapshot models.ClusterSnapshot
 	var syncCaddy bool
 	var caddyConfig string
-	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_global_config,1), COALESCE(caddy_config,'{}'),
+	var brandingJSON string
+	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_global_config,1), COALESCE(caddy_config,'{}'), COALESCE(branding_json,''),
 		COALESCE(log_level,'info'),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
 		COALESCE(default_ca_provider_id,0), COALESCE(dns_provider,''), COALESCE(dns_credentials,''), COALESCE(sync_interval,60),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
 		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/')
-		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &syncCaddy, &caddyConfig,
+		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &syncCaddy, &caddyConfig, &brandingJSON,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.CertJobLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
@@ -409,6 +420,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		snapshot.BasicSettings = models.ClusterBasicSettings{SyncInterval: interval}
 	}
 	if syncCaddy {
+		snapshot.BasicSettings.BrandingJSON = brandingJSON
 		snapshot.CaddyConfig = &caddyConfig
 		if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 			COALESCE(access_log_json,1), COALESCE(access_log_format,''),

@@ -124,7 +124,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	// 锁定账户的密码正误（防枚举）。
 	if loginLockedNow(loginLockedUntil) {
 		_ = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password))
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), "账户已锁定"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账户已锁定"), c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
 		return
 	}
@@ -139,7 +139,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	// 为准（否则「输对密码→连错 4 次验证码→重登清零」可无限绕过锁定）；未启用
 	// MFA 则密码即完整登录，清零计数。
 	if !user.IsEnabled {
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), "账号已禁用"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账号已禁用"), c.ClientIP())
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "账号已禁用，请联系管理员"})
 		return
 	}
@@ -230,7 +230,7 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		return
 	}
 	if isLogin {
-		services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
+		services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditResultPart("success")), c.ClientIP())
 	}
 
 	response := models.NewUserResponse(user)
@@ -449,9 +449,9 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	committed = true
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), "无修改"))
+		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "无修改"))
 	} else {
-		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.NewUserResponse(user)})
 }

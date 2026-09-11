@@ -156,7 +156,7 @@ func TestClusterService_IsMaster_nullIsMasterFailsOpenAsMaster(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET is_master=NULL WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	service := NewClusterService(database, nil)
+	service := NewClusterService(database, nil, "")
 
 	// When
 	isMaster, err := service.IsMaster(context.Background())

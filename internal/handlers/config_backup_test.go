@@ -164,7 +164,7 @@ func newBackupTestHandlers(t *testing.T) *Handlers {
 	return &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 	}
 }
 

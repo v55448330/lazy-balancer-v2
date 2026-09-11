@@ -86,7 +86,7 @@ func TestServiceControlTicketRejectsReplayAfterServiceRebuild(t *testing.T) {
 	if err := service.ValidateServiceControlTicket(context.Background(), ticket, models.ClusterServiceActionRestartCaddy, now); err != nil {
 		t.Fatalf("first validation: %v", err)
 	}
-	rebuilt := NewClusterService(service.db, nil)
+	rebuilt := NewClusterService(service.db, nil, "")
 	if err := rebuilt.ValidateServiceControlTicket(context.Background(), ticket, models.ClusterServiceActionRestartCaddy, now); !errors.Is(err, ErrServiceControlReplay) {
 		t.Fatalf("replay after rebuild error=%v", err)
 	}

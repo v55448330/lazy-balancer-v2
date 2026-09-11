@@ -32,6 +32,26 @@ type brandingConfig struct {
 // this default rendering — a configured footer_text is rendered verbatim.
 const defaultFooterText = "Lazy Balancer V2 · Copyright © 2026 XiaoBao"
 
+// StartupBrandingLog 启动时(2026-09-11 裁定)在操作日志与系统日志记录品牌
+// 配置载入状态:逐字段标注自定义值/默认,主从同路径(从节点文件=同步内容)。
+func StartupBrandingLog(dataDir string) {
+	cfg := loadBrandingConfig(dataDir)
+	field := func(label, value, def string) string {
+		if value == "" || value == def {
+			return label + "：默认"
+		}
+		return label + "：自定义「" + value + "」"
+	}
+	detail := services.FormatAuditDetail(
+		field("产品名", cfg.AppName, defaultBranding.AppName),
+		field("页脚", cfg.FooterText, ""),
+		field("空主机头文案", cfg.LandingText, ""),
+		field("版本覆盖", cfg.Version, ""),
+	)
+	services.Logf("info", "启动：品牌配置载入完成（%s）", detail)
+	services.RecordAuditLog("system", "载入", "品牌配置", detail, "")
+}
+
 // SyncDefaultLandingText 把 branding.json 的 landing_text(空/缺失回退
 // services.DefaultLandingText)注入 services 的默认站点渲染。返回值表示
 // 文案是否发生变化(调用方据此触发 Caddy 重渲染)。与 SeedDefaultBlockPage
@@ -235,6 +255,12 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	}
 	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
 		needApply = true
+	}
+	// 品牌镜像(2026-09-11):文件变化时刷新 global_config.branding_json,
+	// 触发器 bump cluster_version → 快照流向从节点。镜像变化本身不需要本地
+	// Caddy 重载(本地渲染变化已由上方 Sync/Seed 的 needApply 覆盖)。
+	if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
+		log.Printf("branding 镜像刷新失败: %v", err)
 	}
 	if needApply {
 		go func() {

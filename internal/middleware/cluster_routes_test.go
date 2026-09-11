@@ -40,7 +40,7 @@ func newMiddlewareTestRouterAtPort(t *testing.T, port int) *gin.Engine {
 	caddy := services.NewCaddyService(cfg.CaddyAdminURL)
 	handler := handlers.NewHandlers(handlers.Dependencies{
 		Config: cfg, CaddyService: caddy, MetricsService: services.NewMetricsService(cfg.CaddyMetricsURL, 60),
-		SyncService: services.NewSyncService(db.DB, cfg, caddy), ClusterService: services.NewClusterService(db.DB, nil),
+		SyncService: services.NewSyncService(db.DB, cfg, caddy), ClusterService: services.NewClusterService(db.DB, nil, ""),
 		CAProviderService: services.NewCAProviderService(),
 	})
 	return SetupRouter(handler, cfg)

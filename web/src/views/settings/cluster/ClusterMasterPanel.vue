@@ -11,7 +11,12 @@
     </template>
     <el-form label-width="120px" class="settings-form" :disabled="readOnly">
       <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
-        <el-switch :model-value="status[item.key]" :loading="settingsLoading" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
+        <el-switch
+          :model-value="item.key === 'sync_users' ? true : status[item.key]"
+          :disabled="item.key === 'sync_users'"
+          :loading="settingsLoading"
+          @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)"
+        />
         <span class="form-tip-inline" :title="item.tip">{{ item.tip }}</span>
         <el-tooltip :content="syncSwitchFreezeHint" placement="top">
           <el-icon class="switch-freeze-hint"><QuestionFilled /></el-icon>
@@ -153,10 +158,12 @@ const { width: viewportWidth } = useWindowSize()
 const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1440 ? 'right' : false)
 
 const syncSwitchItems = [
-  { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时与日志等全局设置' },
-  { key: 'sync_users', label: '系统数据', tip: '用户账号与 API 密钥' },
+  // 系统数据排第一且恒同步(2026-09-11 裁定):用户/密钥/证书/ACME 等确保
+  // 系统基本运行的数据不可禁用同步。
+  { key: 'sync_users', label: '系统数据', tip: '用户账号、API 密钥、证书与 ACME 配置（恒同步，不可禁用）' },
+  { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时、品牌文案等全局设置' },
   { key: 'sync_rules', label: '负载均衡规则', tip: '规则、上游、路径规则与证书任务' },
-  { key: 'sync_waf_files', label: '规则库数据库', tip: 'CRS 规则文件与 IP2Region GeoIP 数据库（哈希一致时跳过传输）' },
+  { key: 'sync_waf_files', label: '规则库数据库', tip: 'CRS 规则文件、版本信息与 IP2Region GeoIP 数据库（哈希一致时跳过传输）' },
   { key: 'sync_security', label: '安全策略规则', tip: '安全策略、绑定关系、自定义规则与拦截页面' },
 ] as const
 

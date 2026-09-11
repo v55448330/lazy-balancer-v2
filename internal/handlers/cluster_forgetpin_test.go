@@ -47,7 +47,7 @@ func TestForgetClusterNodePin_removesTargetPinAndGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &Handlers{
-		clusterService: services.NewClusterService(db.DB, nil),
+		clusterService: services.NewClusterService(db.DB, nil, ""),
 		syncService:    services.NewSyncService(db.DB, &config.Config{DataDir: dataDir}, nil),
 	}
 	router := gin.New()

@@ -720,7 +720,7 @@ func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cluster := NewClusterService(database, nil)
+	cluster := NewClusterService(database, nil, "")
 	if err := cluster.ReportNode(context.Background(), int(nodeID), report, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -960,7 +960,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 		waitSyncBarrier(releaseApply)
 	}
 	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
-	cluster := NewClusterService(database, lifecycle)
+	cluster := NewClusterService(database, lifecycle, "")
 	pullDone := make(chan error, 1)
 	go func() {
 		_, err := syncService.Pull(context.Background())
@@ -1577,7 +1577,7 @@ func TestSyncService_driftedSections_bypassesStaleSnapshotCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预热快照缓存：记录与主节点一致的 rules 已应用哈希。
-	cluster := NewClusterService(database, nil)
+	cluster := NewClusterService(database, nil, "")
 	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -1599,11 +1599,12 @@ func TestSyncService_driftedSections_skipsDisabledSwitch(t *testing.T) {
 	// I-2 回归：曾同步过的节随后开关关闭 + 本地改动，若漂移检测不看开关会
 	// 每轮都报告漂移并全量重拉，而 apply 又跳过该节 → 永久死循环。
 	_, database := newClusterTestService(t)
-	seedAppliedSection(t, database, "users", "stale-applied-hash")
-	if _, err := database.Exec("UPDATE global_config SET sync_users=0 WHERE id=1"); err != nil {
+	// 系统数据恒同步(2026-09-11 裁定)不可关——用 rules 验证开关跳过语义。
+	seedAppliedSection(t, database, "rules", "stale-applied-hash")
+	if _, err := database.Exec("UPDATE global_config SET sync_rules=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'local','h','admin',1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,enabled) VALUES ('drift-r','drift','http','drift.test',80,0,'none',1)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1613,20 +1614,20 @@ func TestSyncService_driftedSections_skipsDisabledSwitch(t *testing.T) {
 	}
 
 	// 开关重新打开且本地数据缺失 → 仍应检测漂移。
-	if _, err := database.Exec("UPDATE global_config SET sync_users=1 WHERE id=1"); err != nil {
+	if _, err := database.Exec("UPDATE global_config SET sync_rules=1 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	cluster := NewClusterService(database, nil)
+	cluster := NewClusterService(database, nil, "")
 	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedAppliedSection(t, database, "users", snap.SectionHashes["users"])
-	if _, err := database.Exec(`DELETE FROM users`); err != nil {
+	seedAppliedSection(t, database, "rules", snap.SectionHashes["rules"])
+	if _, err := database.Exec(`DELETE FROM lb_rules`); err != nil {
 		t.Fatal(err)
 	}
-	if drifted := service.driftedSections(context.Background()); drifted != "users" {
-		t.Fatalf("drifted=%q, want users（开关打开且数据缺失应检测）", drifted)
+	if drifted := service.driftedSections(context.Background()); drifted != "rules" {
+		t.Fatalf("drifted=%q, want rules（开关打开且数据缺失应检测）", drifted)
 	}
 }
 

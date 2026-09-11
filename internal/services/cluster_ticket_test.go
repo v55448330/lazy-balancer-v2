@@ -90,7 +90,7 @@ func TestClusterLoginTicketRejectsReplayAfterServiceRebuild(t *testing.T) {
 	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
 		t.Fatalf("first validation: %v", err)
 	}
-	rebuilt := NewClusterService(service.db, nil)
+	rebuilt := NewClusterService(service.db, nil, "")
 	if _, _, _, err := rebuilt.ValidateLoginTicket(context.Background(), ticket, now); !errors.Is(err, ErrLoginTicketReplay) {
 		t.Fatalf("replayed ticket after rebuild error=%v", err)
 	}

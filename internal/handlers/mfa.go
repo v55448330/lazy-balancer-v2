@@ -50,7 +50,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	// 429，不再消耗挑战次数。
 	var loginLockedUntil sql.NullString
 	if err := db.DB.QueryRow("SELECT login_locked_until FROM users WHERE id=?", userID).Scan(&loginLockedUntil); err == nil && loginLockedNow(loginLockedUntil) {
-		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userID), "账户已锁定"), c.ClientIP())
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(userID, user.Username), "账户已锁定"), c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
 		return
 	}

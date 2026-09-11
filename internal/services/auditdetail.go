@@ -78,6 +78,15 @@ func joinChineseParts(parts []string) string {
 	return result
 }
 
+// AuditUserPart 用户标识段(2026-09-11 裁定):用户相关审计详情显示完整标识
+// 「用户 12（zhang）」;用户名空回退「用户 12」(不可解析场景)。
+func AuditUserPart(id int, username string) string {
+	if username == "" {
+		return fmt.Sprintf("用户 %d", id)
+	}
+	return fmt.Sprintf("用户 %d（%s）", id, username)
+}
+
 func AuditJobPart(jobID int) string {
 	return fmt.Sprintf("任务 %d", jobID)
 }

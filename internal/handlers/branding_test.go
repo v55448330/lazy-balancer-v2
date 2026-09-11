@@ -379,3 +379,36 @@ func TestLoadBrandingConfig_nullFieldTreatedAsEmpty(t *testing.T) {
 		t.Errorf("landing_text = %q, want preserved", cfg.LandingText)
 	}
 }
+
+// 启动品牌载入日志(2026-09-11 裁定):boot 后操作日志记录「载入/品牌配置」,
+// detail 标注各字段自定义/默认;系统日志同步 info。主从同路径。
+func TestStartupBrandingLog_recordsAuditWithFieldStatus(t *testing.T) {
+	oldAudit := db.AuditDB
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatalf("init audit: %v", err)
+	}
+	t.Cleanup(func() { db.AuditDB = oldAudit })
+
+	dataDir := t.TempDir()
+	os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{"app_name":"我的网关","landing_text":"欢迎"}`), 0644)
+
+	StartupBrandingLog(dataDir)
+
+	var action, resource, detail string
+	if err := db.AuditDB.QueryRow(`SELECT action, resource, detail FROM audit_log WHERE resource='品牌配置' ORDER BY id DESC LIMIT 1`).Scan(&action, &resource, &detail); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if action != "载入" {
+		t.Errorf("action=%q, want 载入", action)
+	}
+	if !strings.Contains(detail, "我的网关") {
+		t.Errorf("detail missing custom app_name: %q", detail)
+	}
+	if !strings.Contains(detail, "欢迎") {
+		t.Errorf("detail missing custom landing: %q", detail)
+	}
+	// 未自定义字段标注默认
+	if !strings.Contains(detail, "页脚") {
+		t.Errorf("detail missing footer status: %q", detail)
+	}
+}

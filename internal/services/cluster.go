@@ -37,6 +37,8 @@ type ClusterLifecycle interface {
 
 type ClusterService struct {
 	db                   *sql.DB
+	// dataDir 用于品牌镜像(branding.json)与未来文件态同步的本地路径。
+	dataDir              string
 	lifecycle            ClusterLifecycle
 	roleMu               sync.Mutex
 	pinCleanupMu         sync.Mutex
@@ -51,8 +53,8 @@ type ClusterService struct {
 	sectionReports map[int]map[string]string
 }
 
-func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle, snapshotNow: time.Now, sectionReports: make(map[int]map[string]string)}
+func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle, dataDir string) *ClusterService {
+	return &ClusterService{db: database, lifecycle: lifecycle, dataDir: dataDir, snapshotNow: time.Now, sectionReports: make(map[int]map[string]string)}
 }
 
 func randomHex(byteCount int) (string, error) {

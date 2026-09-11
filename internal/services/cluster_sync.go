@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"lazy-balancer-v2/internal/db"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,7 +139,13 @@ type SyncService struct {
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
 	service := &SyncService{
 		db: database, cfg: cfg, caddy: caddy,
-		cluster: NewClusterService(database, nil),
+		cluster: func() *ClusterService {
+			dataDir := ""
+			if cfg != nil {
+				dataDir = cfg.DataDir
+			}
+			return NewClusterService(database, nil, dataDir)
+		}(),
 	}
 	service.initClusterClient()
 	return service
@@ -879,12 +887,52 @@ var wafFilesNullRefHash = func() string {
 // 已应用 ref 一致时两哈希必然相等，文件分叉时必然不等——比对口径与主节点
 // 记录完全对齐。
 func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
-	data, err := json.Marshal(sectionPayloadFor("waf_files", &models.ClusterSnapshot{WafFiles: ref}))
+	// 2026-09-11 裁定:CRS/IP2Region 版本行并入 waf_files 节哈希——本地计算
+	// 必须与主节点 ComputeSnapshotSectionHashes 同口径(读本地版本行),
+	// 否则漂移判定永不收敛。
+	crs, ip2r, err := localSecurityVersionRows()
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(sectionPayloadFor("waf_files", &models.ClusterSnapshot{WafFiles: ref, SecurityCRSVersion: crs, SecurityIP2RegionVersion: ip2r}))
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// localSecurityVersionRows 读本地 security_crs_version/security_ip2region_version
+// 行(wafFilesSectionHash 的本地侧口径;查询失败返回空切片,漂移判定保守放行)。
+func localSecurityVersionRows() ([]models.ClusterSecurityCRSVersion, []models.ClusterSecurityIP2RegionVersion, error) {
+	if db.DB == nil {
+		// 空 slice(非 nil)与主节点快照构建(make(...,0))同 JSON 形态("[]"
+		// 而非 null)——形态分叉会让节哈希永不相等、每周期全量重拉。
+		return []models.ClusterSecurityCRSVersion{}, []models.ClusterSecurityIP2RegionVersion{}, nil
+	}
+	crs := make([]models.ClusterSecurityCRSVersion, 0)
+	rows, err := db.DB.Query(`SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_crs_version ORDER BY id`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var v models.ClusterSecurityCRSVersion
+			if err := rows.Scan(&v.ID, &v.Version, &v.UpdatedAt, &v.AutoUpdate, &v.UpdateStatus, &v.Message, &v.LastChecked, &v.NextUpdate, &v.Trigger, &v.StartedAt, &v.FinishedAt); err == nil {
+				crs = append(crs, v)
+			}
+		}
+	}
+	ip2r := make([]models.ClusterSecurityIP2RegionVersion, 0)
+	rows2, err2 := db.DB.Query(`SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_ip2region_version ORDER BY id`)
+	if err2 == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var v models.ClusterSecurityIP2RegionVersion
+			if err := rows2.Scan(&v.ID, &v.Version, &v.UpdatedAt, &v.AutoUpdate, &v.UpdateStatus, &v.Message, &v.LastChecked, &v.NextUpdate, &v.Trigger, &v.StartedAt, &v.FinishedAt); err == nil {
+				ip2r = append(ip2r, v)
+			}
+		}
+	}
+	return crs, ip2r, nil
 }
 
 // wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files 节
@@ -905,15 +953,15 @@ func (s *SyncService) wafFilesDrifted() bool {
 		return false
 	}
 	appliedHash := readAppliedSectionHashes(s.db)["waf_files"]
-	if appliedHash == "" || appliedHash == wafFilesNullRefHash {
+	if appliedHash == "" {
 		return false
 	}
-	localRef := BuildWafFileRef()
-	if localRef == nil {
-		// 主节点有文件而本地一个都没有：必然分叉，全量重拉触发重新拉取。
-		return true
-	}
-	localHash, err := wafFilesSectionHash(localRef)
+	// 2026-09-11 版本行并入节哈希后,nil-files 豁免(hash==sha256("null"))失效:
+	// 改为统一全量比对(文件 ref + 本地版本行)。主节点无文件且版本行一致 →
+	// 两 payload 同为 {"files":null,...相等行} → 哈希相等 → 无漂移;主节点
+	// 有文件而本地一个都没有 → payload 必然不等 → 分叉(原语义保留);
+	// 仅版本行分叉 → 不等 → 重放收敛。
+	localHash, err := wafFilesSectionHash(BuildWafFileRef())
 	if err != nil {
 		return false
 	}

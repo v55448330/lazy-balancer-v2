@@ -55,7 +55,7 @@ func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 	})
-	return NewClusterService(database, nil), database
+	return NewClusterService(database, nil, ""), database
 }
 
 func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.ClusterSnapshot) error {
@@ -529,7 +529,7 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(database, lifecycle)
+	service := NewClusterService(database, lifecycle, "")
 	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4, applied_version=3, sync_fingerprint='fp-1', last_sync_error='{"code":"transport_error","message":"同步拉取失败"}', registration_confirm_failures=2 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
-	service := NewClusterService(database, nil)
+	service := NewClusterService(database, nil, "")
 	masterURL := "https://master.example:8443"
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='secret' WHERE id=1", masterURL); err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestClusterService_Promote_succeeds_when_pin_cleanup_fails_then_retries_on_
 func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.T) {
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(database, lifecycle)
+	service := NewClusterService(database, lifecycle, "")
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}

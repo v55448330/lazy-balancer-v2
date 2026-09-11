@@ -213,9 +213,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	committed = true
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), "无修改"))
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), "无修改"))
 	} else {
-		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户更新成功", Data: models.NewUserResponse(user)})
 }
@@ -357,6 +357,8 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		}
 		return
 	}
+	var statusUsername string
+	_ = tx.QueryRowContext(c.Request.Context(), "SELECT username FROM users WHERE id = ?", id).Scan(&statusUsername)
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		return
@@ -366,7 +368,7 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	if req.IsEnabled {
 		status = "enabled"
 	}
-	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart(status)))
+	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(services.AuditUserPart(id, statusUsername), services.AuditResultPart(status)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户状态更新成功"})
 }
 
@@ -427,12 +429,14 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		return
 	}
+	var resetUsername string
+	_ = tx.QueryRowContext(c.Request.Context(), "SELECT username FROM users WHERE id = ?", id).Scan(&resetUsername)
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return
 	}
 	committed = true
 
-	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart("success")))
+	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(services.AuditUserPart(id, resetUsername), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "密码重置成功"})
 }
