@@ -24,6 +24,12 @@ func RefreshBrandingMirror(dataDir string) (changed bool, err error) {
 	content := ""
 	if raw, rerr := os.ReadFile(filepath.Join(dataDir, "branding.json")); rerr == nil {
 		content = string(raw)
+		// 半截写守卫(2026-09-11 裁定):非法 JSON 不镜像——坏内容永不
+		// 经集群通道流向从节点;文件恢复完整后下次轮询自然收敛。
+		if content != "" && !json.Valid([]byte(content)) {
+			Logf("warn", "品牌配置文件暂不可解析(半截写?),跳过镜像: %s", dataDir)
+			return false, nil
+		}
 	} else if !os.IsNotExist(rerr) {
 		return false, fmt.Errorf("读取品牌配置文件: %w", rerr)
 	}

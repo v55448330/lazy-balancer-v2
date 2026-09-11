@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"time"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -332,9 +333,11 @@ func TestLoadBrandingConfig_memorySnapshotDetectsFileChange(t *testing.T) {
 		t.Fatalf("after rewrite: app_name=%q, want Beta (change detection broken)", cfg.AppName)
 	}
 
+	// 删除(运行期瞬态窗口):保旧值(2026-09-11 裁定——重启重建负责重置,
+	// SL7-4;半截写/删除同属「文件暂不可用」,不闪回默认)。
 	os.Remove(path)
-	if cfg := loadBrandingConfig(dir); cfg.AppName != defaultBranding.AppName {
-		t.Fatalf("after remove: app_name=%q, want default %q", cfg.AppName, defaultBranding.AppName)
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "Beta" {
+		t.Fatalf("after remove: app_name=%q, want keep-last-good Beta", cfg.AppName)
 	}
 
 	dir2 := t.TempDir()
@@ -410,5 +413,106 @@ func TestStartupBrandingLog_recordsAuditWithFieldStatus(t *testing.T) {
 	// 未自定义字段标注默认
 	if !strings.Contains(detail, "页脚") {
 		t.Errorf("detail missing footer status: %q", detail)
+	}
+}
+
+// resetBrandingStore 重置进程级品牌内存快照(测试隔离:loadBrandingConfig 的
+// 热重载留痕以「同一 dataDir 的前值」为基线,跨测试的全局残留会污染断言)。
+func resetBrandingStore() {
+	brandingStore.mu.Lock()
+	brandingStore.loaded = false
+	brandingStore.cfg = brandingConfig{}
+	brandingStore.dataDir = ""
+	brandingStore.modTime = time.Time{}
+	brandingStore.size = 0
+	brandingStore.mu.Unlock()
+}
+
+// 热重载留痕(2026-09-11 裁定):内存快照因文件变化实际重载时,操作日志记
+// 「重载/品牌配置」(逐字段旧→新),系统日志同步;boot 首载不记重载;
+// 内容未变(touch)不记;半截写保旧值不记为重载。
+func TestBrandingHotReload_loggingAndKeepLastGood(t *testing.T) {
+	resetBrandingStore()
+	oldAudit := db.AuditDB
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatalf("init audit: %v", err)
+	}
+	t.Cleanup(func() { db.AuditDB = oldAudit })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+	os.WriteFile(path, []byte(`{"app_name":"甲","landing_text":"旧文案"}`), 0644)
+
+	// boot 首载:不产生重载审计
+	cfg := loadBrandingConfig(dir)
+	if cfg.AppName != "甲" {
+		t.Fatalf("first load app_name=%q", cfg.AppName)
+	}
+	var n int
+	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='品牌配置'`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("boot load must not log reload, got %d rows", n)
+	}
+
+	// 文件变化:重载 + 审计含旧→新 diff
+	st, _ := os.Stat(path)
+	os.WriteFile(path, []byte(`{"app_name":"乙","landing_text":"新文案"}`), 0644)
+	waitForDistinctMtime(t, path, st.ModTime())
+	cfg = loadBrandingConfig(dir)
+	if cfg.AppName != "乙" {
+		t.Fatalf("reload app_name=%q, want 乙", cfg.AppName)
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='重载' AND resource='品牌配置' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("reload audit row missing: %v", err)
+	}
+	if !strings.Contains(detail, "甲") || !strings.Contains(detail, "乙") {
+		t.Errorf("reload detail lacks old→new diff: %q", detail)
+	}
+
+	// 半截写(非法 JSON):保旧值,不产生新重载审计
+	st2, _ := os.Stat(path)
+	os.WriteFile(path, []byte(`{"app_name":"丙","lan`), 0644)
+	waitForDistinctMtime(t, path, st2.ModTime())
+	cfg = loadBrandingConfig(dir)
+	if cfg.AppName != "乙" {
+		t.Fatalf("partial write must keep last good, got app_name=%q", cfg.AppName)
+	}
+	var n2 int
+	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n2)
+	if n2 != 1 {
+		t.Errorf("partial write must not log reload, got %d rows", n2)
+	}
+
+	// 恢复完整写入:收敛到新值
+	st3, _ := os.Stat(path)
+	os.WriteFile(path, []byte(`{"app_name":"丁"}`), 0644)
+	waitForDistinctMtime(t, path, st3.ModTime())
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "丁" {
+		t.Fatalf("recovered load app_name=%q, want 丁", cfg.AppName)
+	}
+}
+
+// touch(内容不变 mtime 变):不产生重载审计(无实际变更)。
+func TestBrandingHotReload_touchNoChurn(t *testing.T) {
+	resetBrandingStore()
+	oldAudit := db.AuditDB
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.AuditDB = oldAudit })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+	content := `{"app_name":"稳"}`
+	os.WriteFile(path, []byte(content), 0644)
+	loadBrandingConfig(dir)
+	st, _ := os.Stat(path)
+	os.WriteFile(path, []byte(content), 0644)
+	waitForDistinctMtime(t, path, st.ModTime())
+	loadBrandingConfig(dir)
+	var n int
+	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n)
+	if n != 0 {
+		t.Errorf("unchanged content must not log reload, got %d", n)
 	}
 }

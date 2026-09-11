@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -129,5 +130,35 @@ func TestInjectLandingFromBranding_unicodeEscape(t *testing.T) {
 	injectLandingFromBranding(`{"landing_text":123}`)
 	if got := DefaultLandingBody(); got != DefaultLandingText {
 		t.Errorf("non-string landing=%q, want default", got)
+	}
+}
+
+// 镜像校验(2026-09-11):半截写(非法 JSON)不得镜像——坏内容永不流向从节点。
+func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"好"}`), 0644)
+	if changed, err := RefreshBrandingMirror(dir); err != nil || !changed {
+		t.Fatalf("initial mirror: changed=%v err=%v", changed, err)
+	}
+	// 半截写(内容变化但非法)
+	st, _ := os.Stat(filepath.Join(dir, "branding.json"))
+	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"坏`), 0644)
+	for i := 0; i < 20; i++ {
+		st2, _ := os.Stat(filepath.Join(dir, "branding.json"))
+		if st2.ModTime().After(st.ModTime()) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if changed, err := RefreshBrandingMirror(dir); err != nil {
+		t.Fatalf("mirror on invalid: %v", err)
+	} else if changed {
+		t.Error("invalid JSON must not be mirrored")
+	}
+	var mirrored string
+	database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored)
+	if mirrored != `{"app_name":"好"}` {
+		t.Errorf("mirror polluted by partial write: %q", mirrored)
 	}
 }

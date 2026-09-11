@@ -113,7 +113,24 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	if unchanged() { // double-check:并发竞争下的另一个加载者已完成
 		return brandingStore.cfg
 	}
-	cfg := readBrandingFile(path)
+	prevLoaded := brandingStore.loaded
+	prev := brandingStore.cfg
+	cfg, ok := readBrandingFile(path)
+	if !ok && prevLoaded && brandingStore.dataDir == dataDir {
+		// 半截写/删除窗口(2026-09-11 裁定,限同一 dataDir):保内存上一份
+		// 有效配置,不更新 stat 标记——文件恢复完整后下次访问立即重读收敛;
+		// 跨目录的前值不属于本文件,不保(测试隔离即依赖此语义);boot 无
+		// 前值时 ok=false 的 cfg(默认)照常入库。
+		log.Printf("branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s", path)
+		return prev
+	}
+	if prevLoaded && cfg != prev {
+		// 热重载留痕(2026-09-11 裁定):仅实际变更记,内容未变(touch)与
+		// boot 首载不记。系统日志+操作日志同口径。
+		detail := brandingReloadDetail(prev, cfg)
+		services.Logf("info", "品牌配置已热重载（%s）", detail)
+		services.RecordAuditLog("system", "重载", "品牌配置", detail, "")
+	}
 	brandingStore.cfg = cfg
 	brandingStore.loaded = true
 	brandingStore.dataDir = dataDir
@@ -127,22 +144,56 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	return cfg
 }
 
+// brandingReloadDetail 生成热重载审计的逐字段旧→新摘要(仅列变化字段)。
+func brandingReloadDetail(prev, next brandingConfig) string {
+	field := func(label, o, n string) string {
+		if o == n {
+			return ""
+		}
+		show := func(v string) string {
+			if v == "" {
+				return "默认"
+			}
+			return "「" + v + "」"
+		}
+		return label + "：" + show(o) + "→" + show(n)
+	}
+	parts := []string{
+		field("产品名", prev.AppName, next.AppName),
+		field("页脚", prev.FooterText, next.FooterText),
+		field("空主机头文案", prev.LandingText, next.LandingText),
+		field("版本覆盖", prev.Version, next.Version),
+	}
+	filtered := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 0 {
+		return "内容无实际变化"
+	}
+	return services.FormatAuditDetail(filtered...)
+}
+
 // readBrandingFile reads and parses branding.json with field-level fallback
 // (2026-09-11 裁定):整体 JSON 非法 → 全字段默认;单字段类型错(如数字)
 // → 仅该字段回退默认,其余字段正常生效。字段空值/null 由消费方按
 // 「该字段用默认」语义处理。
-func readBrandingFile(path string) brandingConfig {
+// ok=false 表示文件缺失/不可读/整体 JSON 非法(调用方:boot 用默认 cfg,
+// 热重载保旧值);字段级类型错不改变 ok=true(该字段回退默认,既有裁定)。
+func readBrandingFile(path string) (brandingConfig, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
-		return brandingConfig{AppName: defaultBranding.AppName}
+		return brandingConfig{AppName: defaultBranding.AppName}, false
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
-		return brandingConfig{AppName: defaultBranding.AppName}
+		return brandingConfig{AppName: defaultBranding.AppName}, false
 	}
 	var cfg brandingConfig
 	stringField := func(field string) string {
@@ -164,7 +215,7 @@ func readBrandingFile(path string) brandingConfig {
 	if cfg.AppName == "" {
 		cfg.AppName = defaultBranding.AppName
 	}
-	return cfg
+	return cfg, true
 }
 
 // EnsureBrandingFile 启动时(Caddy 载入前)确保 branding.json 字段齐备
