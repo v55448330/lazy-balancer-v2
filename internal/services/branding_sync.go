@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,82 +72,22 @@ func injectLandingFromBranding(content string) {
 }
 
 // extractBrandingStringField 从 JSON 原文按字段名提取字符串值;任何解析
-// 失败回退空串。独立于 handlers 的 brandingConfig(避免包依赖环)。
+// 失败回退空串。值经 json.Unmarshal 值级解析(与主节点 loadBrandingConfig
+// 同语义——含 \uXXXX/\n 等全部转义形态,SR-1 第 7 轮审计修复)。
 func extractBrandingStringField(content, field string) string {
-	// 轻量提取:找 "field":"value" 形态(branding.json 是平面字符串结构,
-	// 不含嵌套对象/转义复杂度,经 EnsureBrandingFile 归一后形态稳定)。
-	key := `"` + field + `"`
-	idx := indexAll(content, key)
-	if idx < 0 {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		return ""
 	}
-	rest := content[idx+len(key):]
-	// 跳过空白与冒号
-	i := 0
-	for i < len(rest) && (rest[i] == ' ' || rest[i] == ':' || rest[i] == '\n' || rest[i] == '\t' || rest[i] == '\r') {
-		i++
-	}
-	if i >= len(rest) || rest[i] != '"' {
+	val, ok := raw[field]
+	if !ok {
 		return ""
 	}
-	rest = rest[i+1:]
-	end := -1
-	escaped := false
-	for j := 0; j < len(rest); j++ {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if rest[j] == '\\' {
-			escaped = true
-			continue
-		}
-		if rest[j] == '"' {
-			end = j
-			break
-		}
+	var s string
+	if err := json.Unmarshal(val, &s); err != nil {
+		return "" // 非字符串/畸形值按空处理(消费方回退默认)
 	}
-	if end < 0 {
-		return ""
-	}
-	return unescapeJSONString(rest[:end])
-}
-
-func indexAll(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func unescapeJSONString(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) {
-			i++
-			switch s[i] {
-			case 'n':
-				out = append(out, '\n')
-			case 't':
-				out = append(out, '\t')
-			case 'r':
-				out = append(out, '\r')
-			case '"':
-				out = append(out, '"')
-			case '\\':
-				out = append(out, '\\')
-			case '/':
-				out = append(out, '/')
-			default:
-				out = append(out, s[i])
-			}
-			continue
-		}
-		out = append(out, s[i])
-	}
-	return string(out)
+	return s
 }
 
 // SnapshotForTest 暴露缓存旁路快照供测试断言(生产路径经 Snapshot)。

@@ -105,8 +105,8 @@ func (m *CRSUpdateManager) StopScheduler() {
 // SetMasterRole 按集群角色启停 CRS 自动更新调度器：主节点启动，从节点停止。
 // 角色切换（提升为主/降级为从）时调用；重复调用安全。停止立即生效（含等待
 // 在途更新的 rearm，R55-A-#1）；已启动的更新仍在后台有界跑完（fetch 30s +
-// 下载 5min + reload 30s），其在从节点上的写入由下次快照全量重放覆盖
-// （security 节在 driftGuardSections 内，drift 自愈）。
+// 下载 5min + reload 30s），其版本行写入由 waf_files 差分门控重放覆盖
+// （2026-09-11 版本行归位；文件态由 wafFilesDrifted 兜底自愈）。
 func (m *CRSUpdateManager) SetMasterRole(isMaster bool) {
 	if isMaster {
 		m.StartScheduler()

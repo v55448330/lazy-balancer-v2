@@ -115,3 +115,19 @@ func TestApplySnapshot_writesBrandingFileAndLanding(t *testing.T) {
 		t.Error("unchanged branding must not rewrite file (mtime churned)")
 	}
 }
+
+// SR-1(第 7 轮审计):Go json.Marshal 对 <>& 产 \uXXXX 转义——手工提取器
+// 不解 \u 时从节点 landing 注入乱码,与主节点 encoding/json 分叉。
+// 修复:提取值经 json.Unmarshal 值级解析。
+func TestInjectLandingFromBranding_unicodeEscape(t *testing.T) {
+	defer SetDefaultLandingBody(DefaultLandingText)
+	injectLandingFromBranding(`{"app_name":"网关","landing_text":"欢迎\u003c使用\u003e"}`)
+	if got := DefaultLandingBody(); got != "欢迎<使用>" {
+		t.Errorf("landing=%q, want 欢迎<使用> (\\uXXXX must decode)", got)
+	}
+	// 畸形值(非字符串/截断)回退默认
+	injectLandingFromBranding(`{"landing_text":123}`)
+	if got := DefaultLandingBody(); got != DefaultLandingText {
+		t.Errorf("non-string landing=%q, want default", got)
+	}
+}

@@ -1907,3 +1907,25 @@ func TestSyncService_Run_schemaTooNewStillHalts(t *testing.T) {
 		t.Fatalf("extra pull requests=%d, want 0（终止后不得再次拉取）", got)
 	}
 }
+
+// SL7-1(第 7 轮 P1):主节点无 WAF 文件(applied 节哈希=nullRef 基准)+
+// 从节点残留文件 → 漂移检测必须豁免(false),否则 404 重拉死循环。
+func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
+	_, database := newClusterTestService(t)
+	// 模拟主节点无文件的已应用哈希(payload=纯 ref=nil → sha256("null"))
+	seedAppliedSection(t, database, "waf_files", wafFilesNullRefHash)
+	// 从节点残留一个文件(本地 ref 非 nil)
+	rescue := func(dir string, path string, content string) { t.Helper() }
+	_ = rescue
+	oldCrs, oldXdb := crsLiveDir, ip2regionLivePath
+	tmp := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(tmp, "crs"), filepath.Join(tmp, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldCrs, oldXdb }()
+	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
+	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("residual"), 0644)
+
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	if service.wafFilesDrifted() {
+		t.Fatal("null-ref applied hash must be exempt (master has no files; slave residuals must not loop)")
+	}
+}
