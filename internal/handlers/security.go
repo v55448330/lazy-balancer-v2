@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/netip"
 	"os"
@@ -2180,7 +2179,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 
 	var total int
 	if err := db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total); err != nil {
-		log.Printf("security events: count query failed: %v", err)
+		services.Logf("info", "security events: count query failed: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 		return
 	}
@@ -2200,7 +2199,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		var e models.SecurityEvent
 		// Scan 失败必须中止：否则部分零值的事件行会被当作真实事件返回（R35 D3）
 		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName, &e.RequestHeaders, &e.RequestBody); err != nil {
-			log.Printf("security events: scan failed: %v", err)
+			services.Logf("info", "security events: scan failed: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
 		}
@@ -2208,7 +2207,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("security events: rows iteration failed: %v", err)
+		services.Logf("info", "security events: rows iteration failed: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 		return
 	}
@@ -2454,7 +2453,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		trackErr(err)
 	}
 	if firstErr != nil {
-		log.Printf("security overview: query failed: %v", firstErr)
+		services.Logf("info", "security overview: query failed: %v", firstErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全总览查询失败"})
 		return
 	}

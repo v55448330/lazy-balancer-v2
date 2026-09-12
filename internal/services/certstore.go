@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -377,7 +376,7 @@ func restoreCertFile(path string, snapshot CertFileSnapshot) error {
 
 func MaterializeAllCertsFromDB() {
 	if err := os.MkdirAll(certDir, 0755); err != nil {
-		log.Printf("certstore: create cert dir failed: %v", err)
+		Logf("info", "certstore: create cert dir failed: %v", err)
 		return
 	}
 	manualRecovered := 0
@@ -385,48 +384,48 @@ func MaterializeAllCertsFromDB() {
 
 	rows, err := db.DB.Query(`SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')!='' AND COALESCE(tls_key,'')!=''`)
 	if err != nil {
-		log.Printf("certstore: query manual certs failed: %v", err)
+		Logf("info", "certstore: query manual certs failed: %v", err)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("query_failed")), "")
 	} else {
 		for rows.Next() {
 			var ruleID, certPEM, keyPEM string
 			if err := rows.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
-				log.Printf("certstore: scan manual cert failed: %v", err)
+				Logf("info", "certstore: scan manual cert failed: %v", err)
 				continue
 			}
 			if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
-				log.Printf("certstore: write manual cert %s failed: %v", ruleID, err)
+				Logf("info", "certstore: write manual cert %s failed: %v", ruleID, err)
 				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：手动证书", AuditResultPart("io_error")), "")
 			} else {
 				manualRecovered++
 			}
 		}
 		if err := rows.Err(); err != nil {
-			log.Printf("certstore: iterate manual certs failed: %v", err)
+			Logf("info", "certstore: iterate manual certs failed: %v", err)
 		}
 		rows.Close()
 	}
 
 	rows2, err := db.DB.Query(`SELECT rule_id, cert_pem, key_pem FROM cert_jobs WHERE status IN ('downloaded','issued') AND COALESCE(cert_pem,'')!='' AND COALESCE(key_pem,'')!=''`)
 	if err != nil {
-		log.Printf("certstore: query ACME certs failed: %v", err)
+		Logf("info", "certstore: query ACME certs failed: %v", err)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：ACME证书", AuditResultPart("query_failed")), "")
 	} else {
 		for rows2.Next() {
 			var ruleID, certPEM, keyPEM string
 			if err := rows2.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
-				log.Printf("certstore: scan ACME cert failed: %v", err)
+				Logf("info", "certstore: scan ACME cert failed: %v", err)
 				continue
 			}
 			if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
-				log.Printf("certstore: write ACME cert %s failed: %v", ruleID, err)
+				Logf("info", "certstore: write ACME cert %s failed: %v", ruleID, err)
 				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：ACME证书", AuditResultPart("io_error")), "")
 			} else {
 				acmeRecovered++
 			}
 		}
 		if err := rows2.Err(); err != nil {
-			log.Printf("certstore: iterate ACME certs failed: %v", err)
+			Logf("info", "certstore: iterate ACME certs failed: %v", err)
 		}
 		rows2.Close()
 	}

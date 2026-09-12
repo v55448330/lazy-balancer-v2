@@ -8,7 +8,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -111,7 +110,7 @@ func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, d
 	service := certificateService
 	certificateServiceMu.Unlock()
 	if service == nil {
-		log.Printf("certificate deployment retry skipped for job %d: certificate service is not initialized", jobID)
+		Logf("warn", "certificate deployment retry skipped for job %d: certificate service is not initialized", jobID)
 		return
 	}
 	service.scheduleDeploymentRetry(jobID, material.ruleID, delay)
@@ -250,7 +249,7 @@ func (l *jobLogger) Log(stage, message string) {
 	l.file.Log(stage, message)
 	message = truncateJobMessage(message)
 	if err := transitionJob(db.DB, l.jobID, jobStatusesExceptDisabled, stage, map[string]any{"message": message}); err != nil {
-		log.Printf("cert job %d status update failed: %v", l.jobID, err)
+		Logf("info", "cert job %d status update failed: %v", l.jobID, err)
 	}
 }
 
@@ -288,7 +287,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
 			renewalDays := 30
 			if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
-				log.Printf("read cert_renewal_days failed, using default 30: %v", err)
+				Logf("info", "read cert_renewal_days failed, using default 30: %v", err)
 				renewalDays = 30
 			}
 			// 2026-09-07 C2 核实：UI 输入 min=1（FreeCertificates.vue），0/负值仅 API 直写/导入可达——
@@ -576,7 +575,7 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		if errors.Is(err, ErrJobTransitionConflict) {
 			var cleanupErr error
 			if deploymentCommittedByConcurrentWinner(jobID, material) {
-				log.Printf("certificate job %d: finalization lost CAS race to a concurrent deployment of identical material; keeping winner's files, skipping snapshot restore", jobID)
+				Logf("warn", "certificate job %d: finalization lost CAS race to a concurrent deployment of identical material; keeping winner's files, skipping snapshot restore", jobID)
 			} else {
 				cleanupErr = restoreCertificateDeployment(snapshot, s.caddyReloader)
 			}

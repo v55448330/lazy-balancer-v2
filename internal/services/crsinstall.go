@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/db"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,7 +129,7 @@ func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
 		}
 	}
 	if removed > 0 {
-		log.Printf("crs update: cleaned %d legacy transient artifacts from live dir", removed)
+		Logf("info", "crs update: cleaned %d legacy transient artifacts from live dir", removed)
 	}
 }
 
@@ -147,7 +146,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 	defer func() {
 		if err := os.RemoveAll(staging); err != nil {
-			log.Printf("crs update: failed to clean staging dir: %v", err)
+			Logf("info", "crs update: failed to clean staging dir: %v", err)
 		}
 	}()
 
@@ -174,7 +173,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		if errors.Is(ierr, errDownloadIntegrityMismatch) {
 			return fmt.Errorf("CRS 发布包完整性校验失败: %w", ierr)
 		}
-		log.Printf("crs update: failed to record download integrity: %v", ierr)
+		Logf("info", "crs update: failed to record download integrity: %v", ierr)
 	}
 
 	rulesPath := filepath.Join(m.crsDir, "rules")
@@ -345,7 +344,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
 	writeCRSVersionMarker(m.crsDir, tag)
 	if err := persistCRSSnapshotFrom(m.crsDir, crsSnapshotDir, tag); err != nil {
-		log.Printf("crs update: failed to persist snapshot to %s: %v", crsSnapshotDir, err)
+		Logf("info", "crs update: failed to persist snapshot to %s: %v", crsSnapshotDir, err)
 		// R55-B-F2：快照持久化失败不否决本次更新（磁盘规则树已是新版本），但
 		// 未挂载 /app/waf 的部署在容器重建后会回退到镜像/旧快照版本——仅进
 		// 组件日志会让运维在重建前毫无察觉，写一条操作日志使降级状态可见
@@ -399,7 +398,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 		return
 	}
 	if err := copyFile(setupBak, setupPath); err != nil {
-		log.Printf("crs update: failed to restore crs-setup.conf backup: %v", err)
+		Logf("info", "crs update: failed to restore crs-setup.conf backup: %v", err)
 		return
 	}
 	os.Remove(setupBak)
@@ -407,7 +406,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 	stockBak := crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")
 	if _, err := os.Stat(stockBak); err == nil {
 		if err := copyFile(stockBak, stockPath); err != nil {
-			log.Printf("crs update: failed to restore crs-setup.stock.conf backup: %v", err)
+			Logf("info", "crs update: failed to restore crs-setup.stock.conf backup: %v", err)
 			return
 		}
 		os.Remove(stockBak)
@@ -427,11 +426,11 @@ func (m *CRSUpdateManager) restoreBackup() {
 	// （对照上方 setup 段：copyFile 失败即 return，setup.bak 保留）。
 	if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
 		if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
+			Logf("info", "crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
 			return
 		}
 	} else if err := copyFile(overridesBak, overridesPath); err != nil {
-		log.Printf("crs update: failed to restore zz-user-overrides.conf backup: %v", err)
+		Logf("info", "crs update: failed to restore zz-user-overrides.conf backup: %v", err)
 		return
 	}
 	os.Remove(overridesBak)
@@ -445,40 +444,40 @@ func (m *CRSUpdateManager) restoreBackup() {
 // moved aside to rules.old and moved back if the restore move itself fails.
 func restoreRulesBackup(rulesPath, rulesBak string) {
 	if !crsRulesTreeIntact(rulesBak) {
-		log.Printf("crs update: rules backup %s is degenerate (no .conf files or missing %s), skipping restore (live rules left untouched)", rulesBak, crsRulesProbeFile)
+		Logf("warn", "crs update: rules backup %s is degenerate (no .conf files or missing %s), skipping restore (live rules left untouched)", rulesBak, crsRulesProbeFile)
 		return
 	}
 	// M24：rules.old 属瞬态残树，落 crs.transient（live 目录不留 .old）。
 	rulesOld := crsTransientPath(filepath.Dir(rulesPath), "rules.old")
 	if err := os.RemoveAll(rulesOld); err != nil {
-		log.Printf("crs update: failed to clear %s, restore aborted (live rules untouched): %v", rulesOld, err)
+		Logf("info", "crs update: failed to clear %s, restore aborted (live rules untouched): %v", rulesOld, err)
 		return
 	}
 	liveMoved := false
 	if _, err := os.Stat(rulesPath); err == nil {
 		if err := moveTree(rulesPath, rulesOld); err != nil {
-			log.Printf("crs update: failed to move live rules aside, restore aborted (live rules untouched): %v", err)
+			Logf("info", "crs update: failed to move live rules aside, restore aborted (live rules untouched): %v", err)
 			return
 		}
 		liveMoved = true
 	}
 	if err := moveTree(rulesBak, rulesPath); err != nil {
-		log.Printf("crs update: failed to restore rules backup: %v", err)
+		Logf("info", "crs update: failed to restore rules backup: %v", err)
 		if liveMoved {
 			// 搬回前清掉失败搬移在 live 路径留下的残影：rules.old 持有完整
 			// 原树，清空目标后整体搬回，live 不会混入残树文件也不为空。
 			if rmErr := os.RemoveAll(rulesPath); rmErr != nil {
-				log.Printf("crs update: failed to clear partial restore at %s: %v", rulesPath, rmErr)
+				Logf("info", "crs update: failed to clear partial restore at %s: %v", rulesPath, rmErr)
 			}
 			if rbErr := moveTree(rulesOld, rulesPath); rbErr != nil {
-				log.Printf("crs update: failed to move live rules back from %s: %v", rulesOld, rbErr)
+				Logf("info", "crs update: failed to move live rules back from %s: %v", rulesOld, rbErr)
 			}
 		}
 		return
 	}
 	if liveMoved {
 		if err := os.RemoveAll(rulesOld); err != nil {
-			log.Printf("crs update: failed to remove old rules tree %s: %v", rulesOld, err)
+			Logf("info", "crs update: failed to remove old rules tree %s: %v", rulesOld, err)
 		}
 	}
 	writeCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
@@ -530,7 +529,7 @@ func copyDirTransactional(src, dst string) error {
 	}
 	if err := copyDir(src, tmp); err != nil {
 		if rErr := os.RemoveAll(tmp); rErr != nil {
-			log.Printf("crs update: failed to clean partial backup staging %s: %v", tmp, rErr)
+			Logf("info", "crs update: failed to clean partial backup staging %s: %v", tmp, rErr)
 		}
 		return err
 	}
@@ -538,7 +537,7 @@ func copyDirTransactional(src, dst string) error {
 	// 残留在 rules.bak.tmp，任何按 *.tmp 扫描的路径都会误消费。
 	if err := os.Rename(tmp, dst); err != nil {
 		if rErr := os.RemoveAll(tmp); rErr != nil {
-			log.Printf("crs update: failed to clean backup staging %s after rename failure: %v", tmp, rErr)
+			Logf("info", "crs update: failed to clean backup staging %s after rename failure: %v", tmp, rErr)
 		}
 		return err
 	}

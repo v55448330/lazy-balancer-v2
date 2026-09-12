@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -135,7 +134,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("UpdateUser rollback failed for id=%d: %v", id, rollbackErr)
+				services.Logf("info", "UpdateUser rollback failed for id=%d: %v", id, rollbackErr)
 			}
 		}
 	}()
@@ -253,7 +252,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	defer func() {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-			log.Printf("DeleteUser rollback failed for id=%d: %v", id, err)
+			services.Logf("info", "DeleteUser rollback failed for id=%d: %v", id, err)
 		}
 	}()
 
@@ -328,7 +327,7 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	defer func() {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-			log.Printf("ToggleUserStatus rollback failed for id=%d: %v", id, err)
+			services.Logf("info", "ToggleUserStatus rollback failed for id=%d: %v", id, err)
 		}
 	}()
 	query := "UPDATE users SET is_enabled = ? WHERE id = ?"
@@ -412,7 +411,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("ResetUserPassword rollback failed for id=%d: %v", id, rollbackErr)
+				services.Logf("info", "ResetUserPassword rollback failed for id=%d: %v", id, rollbackErr)
 			}
 		}
 	}()

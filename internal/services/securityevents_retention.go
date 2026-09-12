@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -70,7 +69,7 @@ func securityEventsRetentionCleanup(ctx context.Context) {
 		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消（N-4）
 		select {
 		case <-ctx.Done():
-			log.Printf("security events retention: age-based cleanup canceled mid-pass")
+			Logf("info", "security events retention: age-based cleanup canceled mid-pass")
 			return
 		case <-time.After(10 * time.Millisecond):
 		}
@@ -103,7 +102,7 @@ func securityEventsRetentionCleanup(ctx context.Context) {
 			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消（N-4）
 			select {
 			case <-ctx.Done():
-				log.Printf("security events retention: count-based cleanup canceled mid-pass")
+				Logf("info", "security events retention: count-based cleanup canceled mid-pass")
 				return
 			case <-time.After(10 * time.Millisecond):
 			}

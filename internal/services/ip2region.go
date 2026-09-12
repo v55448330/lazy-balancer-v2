@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
@@ -39,17 +38,17 @@ var (
 func InitIP2Region() {
 	if _, err := os.Stat(ip2regionLivePath); err != nil {
 		if _, distErr := os.Stat(ip2regionDistPath); distErr != nil {
-			log.Printf("ip2region: no xdb found at %s or %s; GeoIP lookups return empty", ip2regionLivePath, ip2regionDistPath)
+			Logf("info", "ip2region: no xdb found at %s or %s; GeoIP lookups return empty", ip2regionLivePath, ip2regionDistPath)
 			return
 		}
 		if err := copyFile(ip2regionDistPath, ip2regionLivePath); err != nil {
-			log.Printf("ip2region: failed to copy %s to %s: %v", ip2regionDistPath, ip2regionLivePath, err)
+			Logf("info", "ip2region: failed to copy %s to %s: %v", ip2regionDistPath, ip2regionLivePath, err)
 			return
 		}
 	}
 	searcher, err := openIP2RegionSearcher(ip2regionLivePath)
 	if err != nil {
-		log.Printf("ip2region: failed to load %s: %v", ip2regionLivePath, err)
+		Logf("info", "ip2region: failed to load %s: %v", ip2regionLivePath, err)
 		return
 	}
 	ip2regionMu.Lock()
@@ -69,7 +68,7 @@ func InitIP2Region() {
 				}
 			}
 			SetIP2RegionVersion(tag)
-			log.Printf("ip2region: DB 版本种子值已同步为 %s", tag)
+			Logf("info", "ip2region: DB 版本种子值已同步为 %s", tag)
 		}
 	}
 
@@ -86,7 +85,7 @@ func InitIP2Region() {
 	if staleRegionTreeCache(ip2RegionLivePathForTreeCache()) {
 		writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
 	}
-	log.Printf("ip2region: loaded %s", ip2regionLivePath)
+	Logf("info", "ip2region: loaded %s", ip2regionLivePath)
 }
 
 // Reload hot-swaps the singleton searcher from the live xdb path. The
@@ -97,7 +96,7 @@ func InitIP2Region() {
 func Reload() error {
 	searcher, err := openIP2RegionSearcher(ip2regionLivePath)
 	if err != nil {
-		log.Printf("ip2region: reload failed: %v (keeping current searcher)", err)
+		Logf("info", "ip2region: reload failed: %v (keeping current searcher)", err)
 		return err
 	}
 	ip2regionMu.Lock()
@@ -189,7 +188,7 @@ func SetIP2RegionVersion(version string) {
 	if _, err := db.DB.Exec(`INSERT INTO security_ip2region_version (id, version, updated_at, auto_update)
 		VALUES (1, ?, datetime('now'), 0)
 		ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at`, version); err != nil {
-		log.Printf("ip2region: failed to store version %q: %v", version, err)
+		Logf("info", "ip2region: failed to store version %q: %v", version, err)
 	}
 	provinces := GetIP2RegionProvinces()
 	if data, err := json.Marshal(provinces); err == nil {

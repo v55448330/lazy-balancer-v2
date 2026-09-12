@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -121,7 +120,7 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 		// 有效配置,不更新 stat 标记——文件恢复完整后下次访问立即重读收敛;
 		// 跨目录的前值不属于本文件,不保(测试隔离即依赖此语义);boot 无
 		// 前值时 ok=false 的 cfg(默认)照常入库。
-		log.Printf("branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s", path)
+		services.Logf("info", "branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s", path)
 		return prev
 	}
 	if prevLoaded && cfg != prev {
@@ -186,13 +185,13 @@ func readBrandingFile(path string) (brandingConfig, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
+			services.Logf("info", "loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
 		return brandingConfig{AppName: defaultBranding.AppName}, false
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
+		services.Logf("error", "loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
 		return brandingConfig{AppName: defaultBranding.AppName}, false
 	}
 	var cfg brandingConfig
@@ -203,7 +202,7 @@ func readBrandingFile(path string) (brandingConfig, bool) {
 		}
 		var s string
 		if err := json.Unmarshal(val, &s); err != nil {
-			log.Printf("loadBrandingConfig: field %s has invalid type in %s (want string), using default", field, path)
+			services.Logf("error", "loadBrandingConfig: field %s has invalid type in %s (want string), using default", field, path)
 			return ""
 		}
 		return s
@@ -311,7 +310,7 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	// 触发器 bump cluster_version → 快照流向从节点。镜像变化本身不需要本地
 	// Caddy 重载(本地渲染变化已由上方 Sync/Seed 的 needApply 覆盖)。
 	if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
-		log.Printf("branding 镜像刷新失败: %v", err)
+		services.Logf("error", "branding 镜像刷新失败: %v", err)
 	}
 	if needApply {
 		go func() {
@@ -320,7 +319,7 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 				return
 			}
 			if err := h.applyCaddyConfigE(); err != nil {
-				log.Printf("branding 触发的 Caddy 配置应用失败: %v", err)
+				services.Logf("error", "branding 触发的 Caddy 配置应用失败: %v", err)
 			}
 		}()
 	}

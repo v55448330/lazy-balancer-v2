@@ -128,3 +128,42 @@ func TestImportConfigBackup_normalizesNullWhitelist(t *testing.T) {
 		t.Fatalf("imported whitelist=%q, want '' (literal null normalized)", stored)
 	}
 }
+
+// CL15-新1(第 15 轮审计):CL14-新1 钉住——sync_users 入保护键,导出不含、
+// 导入携带 0 值不落库(恒同步不变量的第五强制点)。
+func TestExportImportConfigBackup_syncUsersProtected(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	completeTables := make(map[string][]map[string]any, len(configBackupTables))
+	for _, table := range configBackupTables {
+		completeTables[table] = []map[string]any{}
+	}
+	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
+	// 导出侧:携带其他配置键,sync_users 若意外存在应被剔除
+	exportCfg := map[string]any{"timezone": "Asia/Shanghai", "sync_users": false}
+	backup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+		Config: exportCfg,
+		Tables: completeTables,
+	}
+	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, exportCfg)
+	body, err := json.Marshal(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	importRec := httptest.NewRecorder()
+	importReq := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+	importReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(importRec, importReq)
+	if importRec.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", importRec.Code, importRec.Body.String())
+	}
+	var v int
+	if err := db.DB.QueryRow("SELECT COALESCE(sync_users,1) FROM global_config WHERE id=1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != 1 {
+		t.Fatalf("sync_users=%d after import carrying 0, want 1 (protected key)", v)
+	}
+}

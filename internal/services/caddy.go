@@ -235,11 +235,11 @@ func (s *CaddyService) persistLastGoodLocked(data []byte) {
 	}
 	tmp := s.lastGoodPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("last-known-good: write temp file failed: %v", err)
+		Logf("info", "last-known-good: write temp file failed: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, s.lastGoodPath); err != nil {
-		log.Printf("last-known-good: rename into place failed: %v", err)
+		Logf("info", "last-known-good: rename into place failed: %v", err)
 	}
 }
 
@@ -707,19 +707,19 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 	resp, err := s.client.Get(s.adminURL + "/reverse_proxy/upstreams")
 	if err != nil {
-		log.Printf("Failed to get reverse_proxy/upstreams: %v", err)
+		Logf("info", "Failed to get reverse_proxy/upstreams: %v", err)
 		return result
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("reverse_proxy/upstreams returned status %d", resp.StatusCode)
+		Logf("info", "reverse_proxy/upstreams returned status %d", resp.StatusCode)
 		return result
 	}
 
 	var upstreams []map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&upstreams); err != nil {
-		log.Printf("Failed to decode reverse_proxy/upstreams: %v", err)
+		Logf("info", "Failed to decode reverse_proxy/upstreams: %v", err)
 		return result
 	}
 
@@ -1017,7 +1017,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
 		err := fmt.Errorf(format, args...)
-		log.Printf("Caddy 配置生成失败；状态：旧配置已保留（启动期则未加载）：%v", err)
+		Logf("error", "Caddy 配置生成失败；状态：旧配置已保留（启动期则未加载）：%v", err)
 		if filesSnapshot != nil {
 			err = errors.Join(err, RestoreCertFiles(filesSnapshot))
 			filesSnapshot = nil
@@ -1431,7 +1431,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		}
 
 		if len(upstreamDial) == 0 {
-			log.Printf("规则 %s 没有可用的启用上游，已跳过该规则", r.CaddyID)
+			Logf("warn", "规则 %s 没有可用的启用上游，已跳过该规则", r.CaddyID)
 			continue
 		}
 
@@ -1697,7 +1697,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		filtered := rules[:0]
 		for _, ru := range rules {
 			if ru.rule.DynamicDNS {
-				log.Printf("警告：TCP 规则 %s 启用了动态 DNS，但 TCP 协议暂不支持动态解析，已跳过该规则（不影响同端口其他规则）",
+				Logf("error", "警告：TCP 规则 %s 启用了动态 DNS，但 TCP 协议暂不支持动态解析，已跳过该规则（不影响同端口其他规则）",
 					ru.rule.CaddyID)
 				continue
 			}
@@ -1715,7 +1715,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			for _, ru := range rules {
 				ids = append(ids, ru.rule.CaddyID)
 			}
-			log.Printf("警告：端口 %d 上存在多条 TCP 规则（%s），TCP 协议要求每端口唯一规则，全部跳过。请删除多余规则或使用不同端口",
+			Logf("error", "警告：端口 %d 上存在多条 TCP 规则（%s），TCP 协议要求每端口唯一规则，全部跳过。请删除多余规则或使用不同端口",
 				port, strings.Join(ids, ", "))
 			continue
 		}
@@ -2034,7 +2034,7 @@ func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string
 		  AND key_pem IS NOT NULL AND key_pem <> ''
 		ORDER BY updated_at DESC, id DESC`, caddyID)
 	if err != nil {
-		log.Printf("loadACMECertificate: query failed for rule %s: %v", caddyID, err)
+		Logf("info", "loadACMECertificate: query failed for rule %s: %v", caddyID, err)
 		return "", "", false
 	}
 	defer rows.Close()
@@ -2294,7 +2294,7 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 		// Round 34 F-3: 查询失败必须留痕，对话框不得静默显示"无证书"。
 		// N+12 G8-S3：仅需存在性判断，投影 COALESCE!='' 布尔，不搬运 PEM 正文。
 		if err := db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,'') != '', COALESCE(tls_key,'') != '', COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &certPresent, &keyPresent, &enableTLS); err != nil {
-			log.Printf("GenerateRuleServerContext: 读取规则 %s TLS 字段失败: %v", caddyID, err)
+			Logf("error", "GenerateRuleServerContext: 读取规则 %s TLS 字段失败: %v", caddyID, err)
 		} else if enableTLS {
 			// Round 34 F-2: 与全量渲染 availableCerts 同口径（caddy.go 全量路径
 			// 要求 EnableTLS），未开 TLS 的规则不加载证书。
@@ -2313,13 +2313,13 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)
 			ORDER BY id`, listenPort)
 		if err != nil {
-			log.Printf("GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
+			Logf("error", "GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
 		} else {
 			for rows.Next() {
 				var ruleID, ruleDomain, tlsSource string
 				var hasManualCert bool
 				if rows.Scan(&ruleID, &ruleDomain, &tlsSource, &hasManualCert) != nil {
-					log.Printf("GenerateRuleServerContext: 扫描端口 %d 规则 TLS 字段失败", listenPort)
+					Logf("error", "GenerateRuleServerContext: 扫描端口 %d 规则 TLS 字段失败", listenPort)
 					continue
 				}
 				available := (tlsSource == "manual" && hasManualCert) || (tlsSource == "acme_dns" && isACMECertIssuedFromStore(db.DB, ruleID, ruleDomain))
@@ -2342,7 +2342,7 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 			// Round 35 F-4: 遍历中途 DB 错误会截断 TLS 策略且此前静默（仅关行），
 			// 与规则主循环（:990-993）同口径显式留痕。
 			if err := rows.Err(); err != nil {
-				log.Printf("GenerateRuleServerContext: 遍历端口 %d TLS 策略失败: %v", listenPort, err)
+				Logf("error", "GenerateRuleServerContext: 遍历端口 %d TLS 策略失败: %v", listenPort, err)
 			}
 			_ = rows.Close()
 		}

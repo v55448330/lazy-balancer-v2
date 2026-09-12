@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"log"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -24,7 +24,7 @@ func (h *Handlers) requireMaster(c *gin.Context) bool {
 
 func clusterError(c *gin.Context, status int, message string, err error) {
 	if err != nil {
-		log.Printf("cluster request failed: %v", err)
+		services.Logf("info", "cluster request failed: %v", err)
 	}
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }

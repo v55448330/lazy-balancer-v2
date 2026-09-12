@@ -2,7 +2,6 @@ package services
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,16 +19,16 @@ func writeIP2RegionUpdateLog(level, stage, message string) {
 	if info, err := os.Stat(path); err == nil && info.Size() >= getCertJobLogSizeBytes() {
 		// SLB12-P3-10 同族:复用 rotateCertJobLogFiles(C-11 错误口径)。
 		if rerr := rotateCertJobLogFiles(path); rerr != nil {
-			log.Printf("ip2region update log: rotation failed (oldest generation may be lost): %v", rerr)
+			Logf("info", "ip2region update log: rotation failed (oldest generation may be lost): %v", rerr)
 		}
 	}
 	if err := os.MkdirAll(ip2RegionUpdateLogDir, 0755); err != nil {
-		log.Printf("ip2region update log: failed to create dir: %v", err)
+		Logf("info", "ip2region update log: failed to create dir: %v", err)
 		return
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Printf("ip2region update log: failed to open %s: %v", path, err)
+		Logf("info", "ip2region update log: failed to open %s: %v", path, err)
 		return
 	}
 	defer f.Close()

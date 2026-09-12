@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -118,7 +117,7 @@ func ensureIP2RegionVersionRow() {
 		// 引发地域策略误拦/漏拦）。
 		"INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', TRUE)",
 	); err != nil {
-		log.Printf("ip2region update: failed to ensure version row: %v", err)
+		Logf("info", "ip2region update: failed to ensure version row: %v", err)
 	}
 }
 
@@ -194,13 +193,13 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		"UPDATE security_ip2region_version SET trigger=?, started_at=datetime('now'), finished_at=NULL WHERE id=1",
 		trigger,
 	); err != nil {
-		log.Printf("ip2region update: failed to mark start: %v", err)
+		Logf("info", "ip2region update: failed to mark start: %v", err)
 	}
 
 	m.setStage(IP2RegionStatusChecking, "查询最新 ip2region 版本")
 	tag, err := m.fetchLatestTag(context.Background())
 	if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
-		log.Printf("ip2region update: failed to record last_checked: %v", dbErr)
+		Logf("info", "ip2region update: failed to record last_checked: %v", dbErr)
 	}
 	if err != nil {
 		m.fail(err)
@@ -213,13 +212,13 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		// 补写 .version sidecar——此前该分支提前 return 不写，崩溃遗留的 stale tag
 		// 将无限期不愈（愈于下次「安装」而非下次「检查」）；幂等，写失败仅记日志。
 		if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
-			log.Printf("ip2region update: failed to refresh .version sidecar at latest: %v", err)
+			Logf("info", "ip2region update: failed to refresh .version sidecar at latest: %v", err)
 		}
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		); err != nil {
-			log.Printf("ip2region update: failed to record latest-version skip: %v", err)
+			Logf("warn", "ip2region update: failed to record latest-version skip: %v", err)
 		}
 		m.mu.Lock()
 		m.state.status = IP2RegionStatusSuccess
@@ -265,14 +264,14 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 			// R45 F1-A：回滚升级链（rename→copy→dist）全部失败——磁盘已是新库，
 			// 若按 failed+旧版本落库会重演三方分叉；改走 fail-open 让 DB
 			// 跟随实际状态，rbErr 记录到组件日志供排查。
-			log.Printf("ip2region update: rollback xdb failed, fail-open with new xdb recorded: %v", rbErr)
+			Logf("info", "ip2region update: rollback xdb failed, fail-open with new xdb recorded: %v", rbErr)
 			m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
 			return
 		case restored:
 			rErr := m.reloader()
 			recordSystemReloadAudit("ip2region_update", rErr)
 			if rErr != nil {
-				log.Printf("ip2region update: reload after rollback failed: %v", rErr)
+				Logf("info", "ip2region update: reload after rollback failed: %v", rErr)
 			}
 			if errors.Is(reloadErr, errIP2RegionReload) {
 				m.fail(reloadErr)
@@ -295,7 +294,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag,
 	); err != nil {
-		log.Printf("ip2region update: failed to record success: %v", err)
+		Logf("info", "ip2region update: failed to record success: %v", err)
 	}
 	SetIP2RegionVersion(tag)
 	// R72 二十六次 W1-7：主节点补写 .version sidecar——waffiles_sync 的
@@ -304,7 +303,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	// 无版本号、提升的 slave 同样空 tag。写失败只记日志（版本行已提交，sidecar
 	// 下次更新自愈）。
 	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
-		log.Printf("ip2region update: failed to write .version sidecar: %v", err)
+		Logf("info", "ip2region update: failed to write .version sidecar: %v", err)
 	}
 	m.mu.Lock()
 	m.state.status = IP2RegionStatusSuccess
@@ -329,7 +328,7 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 		"UPDATE security_ip2region_version SET update_status='failed', message=?, finished_at=datetime('now'), consecutive_failures=consecutive_failures+1 WHERE id=1",
 		cause.Error(),
 	); err != nil {
-		log.Printf("ip2region update: failed to record failure: %v", err)
+		Logf("info", "ip2region update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
 	m.state.status = IP2RegionStatusFailed
@@ -354,7 +353,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	}
 	defer func() {
 		if err := os.RemoveAll(stagingDir); err != nil {
-			log.Printf("ip2region update: failed to clean staging dir: %v", err)
+			Logf("info", "ip2region update: failed to clean staging dir: %v", err)
 		}
 	}()
 
@@ -376,7 +375,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 		if errors.Is(ierr, errDownloadIntegrityMismatch) {
 			return ierr
 		}
-		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
+		Logf("info", "ip2region update: failed to record download integrity: %v", ierr)
 	}
 	// R39 1.2：rename 前备份旧 xdb，reloader 失败时可回滚（镜像 CRS 的
 	// restoreBackup 路径），与 CRS 更新侧保持对称。
@@ -454,26 +453,26 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 					// 执行，镜像捆绑的旧版会覆盖正确基线（磁盘≠DB 分叉+基线
 					// 丢失）。磁盘已是基线；若安装阶段热换曾成功，内存
 					// searcher 滞后至下次更新安装或重启收敛（R49 B-N3）。
-					log.Printf("ip2region update: reload after rename restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
+					Logf("info", "ip2region update: reload after rename restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
 				return true, nil
 			} else {
-				log.Printf("ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", renameErr)
+				Logf("info", "ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", renameErr)
 			}
 			if copyErr := copyFile(bak, ip2regionLivePath); copyErr == nil {
 				// copy 还原不消费 .bak：磁盘还原成功后清理，与 rename 消费语
 				// 义对齐，避免残留陈旧副本干扰后续运行判断。
 				if rErr := os.Remove(bak); rErr != nil {
-					log.Printf("ip2region update: failed to remove bak after copy restore: %v", rErr)
+					Logf("info", "ip2region update: failed to remove bak after copy restore: %v", rErr)
 				}
 				if rErr := reloadIP2RegionSearcher(); rErr != nil {
 					// R48 B-1：同 rename 级——磁盘已是正确基线，热换失败仅
 					// 记 warn，不得升级到 dist 覆盖基线（滞后收敛口径同上）。
-					log.Printf("ip2region update: reload after copy restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
+					Logf("info", "ip2region update: reload after copy restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
 				return true, nil
 			} else {
-				log.Printf("ip2region update: copy restore from bak failed: %v", copyErr)
+				Logf("info", "ip2region update: copy restore from bak failed: %v", copyErr)
 			}
 		}
 	}
@@ -488,7 +487,7 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 		// 是新库」不成立——与 rename/copy 级同口径（R48 B-1）记 warn 并返回
 		// restored=true，由 run() 记 failed+旧版本（磁盘/DB 一致）；仅 dist
 		// copy 本身失败（上方，磁盘未动、仍是新库）才返回 error 走 fail-open。
-		log.Printf("ip2region update: reload after dist restore failed (%v); disk restored to dist baseline; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", err)
+		Logf("info", "ip2region update: reload after dist restore failed (%v); disk restored to dist baseline; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", err)
 	}
 	return true, nil
 }
@@ -508,10 +507,10 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 	rErr := m.reloader()
 	recordSystemReloadAudit("ip2region_update", rErr)
 	if rErr != nil {
-		log.Printf("ip2region update: fail-open reload retry failed: %v", rErr)
+		Logf("info", "ip2region update: fail-open reload retry failed: %v", rErr)
 		warn = fmt.Sprintf("已生效，但重载 Caddy 配置失败: %v（Caddy 侧待下次重载生效）", reloadErr)
 	} else {
-		log.Printf("ip2region update: fail-open reload retry succeeded, caddy caught up to %s", tag)
+		Logf("info", "ip2region update: fail-open reload retry succeeded, caddy caught up to %s", tag)
 	}
 	if rbErr != nil {
 		if warn != "" {
@@ -529,12 +528,12 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag, warn,
 	); err != nil {
-		log.Printf("ip2region update: failed to record fail-open success: %v", err)
+		Logf("info", "ip2region update: failed to record fail-open success: %v", err)
 	}
 	SetIP2RegionVersion(tag)
 	// R72 二十六次 W1-7：fail-open 成功同样补写 sidecar（与 success() 同因）。
 	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
-		log.Printf("ip2region update: failed to write .version sidecar: %v", err)
+		Logf("info", "ip2region update: failed to write .version sidecar: %v", err)
 	}
 	m.mu.Lock()
 	m.state.status = IP2RegionStatusSuccess

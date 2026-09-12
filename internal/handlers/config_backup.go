@@ -215,9 +215,10 @@ var backupTableNullDefaults = map[string]map[string]any{
 	},
 }
 
-// 全局配置区布尔键（global_config）。protected 键（is_master 等）恢复时不写入，
-// 不参与校验；sync_switches_migrated 为内部迁移标记但随导出携带、恢复时写入，
-// 同属布尔语义。
+// 全局配置区布尔键（global_config）。protected 键（is_master/sync_users 等）
+// 恢复时不写入、不参与校验（sync_users 自 CL14-新1 起入 protected——恒同步列
+// 排除出备份，防存量 0 值直写）；sync_switches_migrated 为内部迁移标记但随
+// 导出携带、恢复时写入，同属布尔语义。
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",

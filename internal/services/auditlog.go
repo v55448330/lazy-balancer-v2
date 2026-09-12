@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -113,11 +112,11 @@ func auditVocabWords(s string) int {
 
 func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	if db.AuditDB == nil {
-		log.Printf("audit log write skipped: audit database is not initialized")
+		Logf("warn", "audit log write skipped: audit database is not initialized")
 		return
 	}
 	if aw, rw := auditVocabWords(action), auditVocabWords(resource); aw > auditActionMaxWords || rw > auditResourceMaxWords {
-		log.Printf("audit vocabulary over limit (action<=%d, resource<=%d): action=%q(%d) resource=%q(%d)", auditActionMaxWords, auditResourceMaxWords, action, aw, resource, rw)
+		Logf("info", "audit vocabulary over limit (action<=%d, resource<=%d): action=%q(%d) resource=%q(%d)", auditActionMaxWords, auditResourceMaxWords, action, aw, resource, rw)
 	}
 	if _, err := db.AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES (?, ?, ?, ?, ?)",
 		username, action, resource, detail, ipAddress); err != nil {
@@ -143,7 +142,7 @@ func CleanupAuditLogs() {
 	}
 	cutoff := time.Now().UTC().AddDate(0, -retentionMonths, 0).Format("2006-01-02 15:04:05")
 	if db.AuditDB == nil {
-		log.Printf("audit log cleanup skipped: audit database is not initialized")
+		Logf("warn", "audit log cleanup skipped: audit database is not initialized")
 		return
 	}
 	if _, err := db.AuditDB.Exec("DELETE FROM audit_log WHERE created_at < ?", cutoff); err != nil {

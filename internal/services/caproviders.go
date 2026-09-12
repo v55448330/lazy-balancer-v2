@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -287,10 +286,10 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		}
 	}
 	if creds.EABKID != "" && creds.EABHMACKey != "" {
-		log.Printf("AutoProvisionZeroSSLEAB: provider %d already has EAB credentials, skipping", provider.ID)
+		Logf("warn", "AutoProvisionZeroSSLEAB: provider %d already has EAB credentials, skipping", provider.ID)
 		return nil
 	}
-	log.Printf("AutoProvisionZeroSSLEAB: provider %d missing EAB, auto-fetching", provider.ID)
+	Logf("info", "AutoProvisionZeroSSLEAB: provider %d missing EAB, auto-fetching", provider.ID)
 	var acmeEmail string
 	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
 		return fmt.Errorf("read acme email: %w", err)
@@ -299,7 +298,7 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		return fmt.Errorf("ACME email is required for ZeroSSL EAB auto-provision")
 	}
 
-	log.Printf("AutoProvisionZeroSSLEAB: fetching EAB from ZeroSSL API for email %s", maskEmail(acmeEmail))
+	Logf("info", "AutoProvisionZeroSSLEAB: fetching EAB from ZeroSSL API for email %s", maskEmail(acmeEmail))
 	reqBody := strings.NewReader("email=" + url.QueryEscape(strings.TrimSpace(acmeEmail)))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, zerosslEABURL, reqBody)
 	if err != nil {
@@ -353,11 +352,11 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 			return fmt.Errorf("re-read zerossl EAB credentials: %w", err)
 		}
 		provider.Credentials = persisted
-		log.Printf("AutoProvisionZeroSSLEAB: provider %d credentials already set by concurrent worker, skipping persist", provider.ID)
+		Logf("warn", "AutoProvisionZeroSSLEAB: provider %d credentials already set by concurrent worker, skipping persist", provider.ID)
 		return nil
 	}
 	provider.Credentials = string(credsJSON)
-	log.Printf("AutoProvisionZeroSSLEAB: success, EAB persisted for provider %d (%s)", provider.ID, maskEmail(acmeEmail))
+	Logf("info", "AutoProvisionZeroSSLEAB: success, EAB persisted for provider %d (%s)", provider.ID, maskEmail(acmeEmail))
 	return nil
 }
 
@@ -377,7 +376,7 @@ func maskEmail(email string) string {
 }
 
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {
-	log.Printf("Testing CA provider %d", id)
+	Logf("info", "Testing CA provider %d", id)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -406,7 +405,7 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 	}
 
 	if p.Provider == ProviderZeroSSL {
-		log.Printf("TestCAProvider: ensuring ZeroSSL EAB for provider %d", id)
+		Logf("info", "TestCAProvider: ensuring ZeroSSL EAB for provider %d", id)
 		// N+13 H3-S：EAB 自动获取与 RegisterAccount 同界 10s——原实现先无界
 		// 调用 AutoProvisionZeroSSLEAB、超时只裹其后的注册，ZeroSSL EAB API
 		// 挂起时 CA 测试页无限阻塞。

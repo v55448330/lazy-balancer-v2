@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -465,7 +464,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE ` + whereClause)
 	if err != nil {
-		log.Printf("%s: stranded job scan failed: %v", logPrefix, err)
+		Logf("info", "%s: stranded job scan failed: %v", logPrefix, err)
 		return
 	}
 	type strandedJob struct {
@@ -485,7 +484,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
-		log.Printf("%s: close rows failed: %v", logPrefix, err)
+		Logf("info", "%s: close rows failed: %v", logPrefix, err)
 		return
 	}
 	for _, job := range jobs {
@@ -511,7 +510,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 			return job.id, err == nil, err
 		})
 		if err != nil {
-			log.Printf("%s: requeue stranded job %d failed: %v", logPrefix, job.id, err)
+			Logf("info", "%s: requeue stranded job %d failed: %v", logPrefix, job.id, err)
 		}
 	}
 }
@@ -710,13 +709,13 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
 		return fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 	}
-	log.Printf("CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
+	Logf("info", "CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
 
 	// Persist the resolved provider ID so renewals use the same provider unless
 	// the admin intentionally changes the default and triggers a new job.
 	if providerID != provider.ID {
 		if _, err := db.DB.Exec("UPDATE cert_jobs SET ca_provider_id=? WHERE id=?", provider.ID, jobID); err != nil {
-			log.Printf("CA queue: failed to update resolved provider for job %d: %v", jobID, err)
+			Logf("info", "CA queue: failed to update resolved provider for job %d: %v", jobID, err)
 		}
 	}
 
@@ -749,7 +748,7 @@ func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, 
 	// IsJobActive 守卫即二次入队同 jobID → 双执行。命中时跳过（非错误），
 	// 与 requeueStrandedJobs（:453）/ EnqueueIfActive（:592）同语义。
 	if m.IsJobActive(jobID) {
-		log.Printf("CA queue compensation enqueue skipped: job %d still active", jobID)
+		Logf("warn", "CA queue compensation enqueue skipped: job %d still active", jobID)
 		return nil
 	}
 	m.mu.Lock()
@@ -965,11 +964,11 @@ func (q *caQueue) failPendingProviderUnavailable(items []queueItem, message stri
 		_, superseded := q.active[item.jobID]
 		q.mu.Unlock()
 		if superseded {
-			log.Printf("CA queue: provider-unavailable fail skipped for job %d: re-enqueued by concurrent path", item.jobID)
+			Logf("warn", "CA queue: provider-unavailable fail skipped for job %d: re-enqueued by concurrent path", item.jobID)
 			continue
 		}
 		if !queuedJobStillExists(item.jobID) {
-			log.Printf("CA queue: provider-unavailable fail skipped for job %d: job deleted or no longer queued", item.jobID)
+			Logf("warn", "CA queue: provider-unavailable fail skipped for job %d: job deleted or no longer queued", item.jobID)
 			continue
 		}
 		failJob(item.jobID, message)
@@ -1008,7 +1007,7 @@ func (q *caQueue) execute(execution queueExecution) {
 	defer execution.cancel()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("CA queue panic for job %d: %v", item.jobID, r)
+			Logf("error", "CA queue panic for job %d: %v", item.jobID, r)
 			failJob(item.jobID, fmt.Sprintf("调度器异常: %v", r))
 		}
 		q.mu.Lock()
@@ -1028,12 +1027,12 @@ func (q *caQueue) execute(execution queueExecution) {
 
 	// If the rule/job was deleted while the item was queued, skip it silently.
 	if !jobExists(item.jobID) {
-		log.Printf("CA queue: job %d no longer exists, skipping", item.jobID)
+		Logf("warn", "CA queue: job %d no longer exists, skipping", item.jobID)
 		return
 	}
 
 	if err := q.executeFn(execution.ctx, item, execution.provider); err != nil {
-		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
+		Logf("info", "CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if execution.ctx.Err() != nil {
 			q.handleExecutionCancellation(execution)
 			return
@@ -1089,13 +1088,13 @@ func requeueCanceledJob(jobID int) {
 	if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &keyPEM); err == nil {
 		if status == "downloaded" && certPEM != "" && keyPEM != "" {
 			if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_available_after=datetime('now'), message='节点生命周期切换，等待恢复部署' WHERE id=? AND status='downloaded'", jobID); err != nil {
-				log.Printf("CA queue: failed to defer deployment retry for canceled job %d: %v", jobID, err)
+				Logf("info", "CA queue: failed to defer deployment retry for canceled job %d: %v", jobID, err)
 			}
 			return
 		}
 	}
 	if err := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, "queued", map[string]any{"message": "节点生命周期切换，等待恢复签发"}); err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-		log.Printf("CA queue: failed to requeue canceled job %d: %v", jobID, err)
+		Logf("info", "CA queue: failed to requeue canceled job %d: %v", jobID, err)
 	}
 }
 
@@ -1126,7 +1125,7 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 		var err error
 		id, err = GetDefaultCAProvider()
 		if err != nil {
-			log.Printf("CA queue: failed to load default CA provider: %v", err)
+			Logf("info", "CA queue: failed to load default CA provider: %v", err)
 			id = 0
 		}
 	}
@@ -1163,7 +1162,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 
 	var attempts int
 	if err := db.DB.QueryRow("SELECT COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&attempts); err != nil {
-		log.Printf("CA queue: failed to read attempts for job %d: %v", jobID, err)
+		Logf("info", "CA queue: failed to read attempts for job %d: %v", jobID, err)
 	}
 	attempts++
 
@@ -1183,7 +1182,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 			"last_error_code":    nil,
 		})
 		if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-			log.Printf("CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
+			Logf("info", "CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
 			return
 		}
 		if err == nil {
@@ -1200,7 +1199,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 		"renewal_attempts":   attempts,
 	})
 	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
+		Logf("info", "CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
 		return
 	}
 	if err == nil {
@@ -1256,7 +1255,7 @@ func currentRenewalAttempts(jobID int) int {
 
 func recordFailedJobTransition(jobID int, message string, err error) {
 	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
+		Logf("info", "CA queue: failed to mark job %d as failed: %v", jobID, err)
 		return
 	}
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -119,7 +118,7 @@ func rotateAuditLogIfNeeded() {
 			throttledAuditFailureLogf("audit log rotation: pending delta ingest retry failed (rotation deferred): %v", err)
 			return
 		} else {
-			log.Printf("audit log rotation: pending delta ingest recovered from %s", pending.Path)
+			Logf("info", "audit log rotation: pending delta ingest recovered from %s", pending.Path)
 			_ = os.Remove(securityEventsPendingDeltaPath())
 		}
 	}
@@ -218,7 +217,7 @@ func rotateAuditLogIfNeeded() {
 	if err := securityEventsWriteOffset(securityEventsOffsetPath, 0); err != nil {
 		throttledAuditFailureLogf("audit log rotation: reset offset to 0 after truncate failed: %v", err)
 	}
-	log.Printf("audit log rotation: rotated %s (%d bytes → %s.1)", auditLogPath, info.Size(), base)
+	Logf("info", "audit log rotation: rotated %s (%d bytes → %s.1)", auditLogPath, info.Size(), base)
 	// 补采轮转窗口：归档大小可能因复制期间的新写入大于 stat 时的 size，
 	// 因此以 .1 实际大小作为窗口终点，覆盖复制竞态。
 	if err := securityEventsIngestRotatedDelta(persistedOffset); err != nil {

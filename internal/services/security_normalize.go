@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"log"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -33,7 +32,7 @@ var legacySecurityEnumBackfills = []string{
 func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	var isMaster, syncSecurity bool
 	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(is_master,0), COALESCE(sync_security,1) FROM global_config WHERE id=1").Scan(&isMaster, &syncSecurity); err != nil {
-		log.Printf("security enum normalize: failed to read cluster role, skipping: %v", err)
+		Logf("warn", "security enum normalize: failed to read cluster role, skipping: %v", err)
 		return
 	}
 	if !isMaster && syncSecurity {
@@ -41,14 +40,14 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	}
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("security enum normalize: failed to begin transaction: %v", err)
+		Logf("info", "security enum normalize: failed to begin transaction: %v", err)
 		return
 	}
 	defer tx.Rollback()
 	var versionBefore int64
 	if isMaster {
 		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&versionBefore); err != nil {
-			log.Printf("security enum normalize: failed to read cluster version: %v", err)
+			Logf("info", "security enum normalize: failed to read cluster version: %v", err)
 			return
 		}
 	}
@@ -56,12 +55,12 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	for _, stmt := range legacySecurityEnumBackfills {
 		res, err := tx.ExecContext(ctx, stmt)
 		if err != nil {
-			log.Printf("security enum normalize: backfill failed: %v", err)
+			Logf("info", "security enum normalize: backfill failed: %v", err)
 			return
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			log.Printf("security enum normalize: failed to read affected rows: %v", err)
+			Logf("info", "security enum normalize: failed to read affected rows: %v", err)
 			return
 		}
 		changed += n
@@ -76,17 +75,17 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		// 器）与生产口径一致。版本语义只需单调递增，多次 bump 折叠为一次不
 		// 影响从节点收敛。
 		if _, err := tx.ExecContext(ctx, "UPDATE global_config SET cluster_version=? WHERE id=1", versionBefore+1); err != nil {
-			log.Printf("security enum normalize: failed to bump cluster version: %v", err)
+			Logf("info", "security enum normalize: failed to bump cluster version: %v", err)
 			return
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("security enum normalize: failed to commit: %v", err)
+		Logf("info", "security enum normalize: failed to commit: %v", err)
 		return
 	}
 	if isMaster {
-		log.Printf("security enum normalize: normalized %d legacy empty-enum rows, cluster version bumped", changed)
+		Logf("info", "security enum normalize: normalized %d legacy empty-enum rows, cluster version bumped", changed)
 	} else {
-		log.Printf("security enum normalize: normalized %d legacy empty-enum rows (slave, sync_security off, no version authority)", changed)
+		Logf("info", "security enum normalize: normalized %d legacy empty-enum rows (slave, sync_security off, no version authority)", changed)
 	}
 }

@@ -122,7 +122,8 @@ func TestBuildCorazaDirectives_BodyAccessTruthTable(t *testing.T) {
 	}{
 		// crsActive(blocking/detection):恒 On(CRS phase:2 消费)
 		{"blocking", "none", false, true},
-		{"blocking", "parked-enabled", false, true},
+		// parked 格仅对 off 有实义(非 off 模式 parked/emitted 同输入等价类,
+		// SLB15-N1 去重)。
 		{"blocking", "emitted-enabled", false, true},
 		{"blocking", "none", true, true},
 		{"detection", "none", false, true},

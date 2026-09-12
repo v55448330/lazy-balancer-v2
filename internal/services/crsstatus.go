@@ -1,7 +1,6 @@
 package services
 
 import (
-	"log"
 	"path/filepath"
 
 	"lazy-balancer-v2/internal/db"
@@ -64,7 +63,7 @@ func (m *CRSUpdateManager) RuleCount() int {
 	m.mu.Unlock()
 	count, err := countSecRules(filepath.Join(m.crsDir, "rules"))
 	if err != nil {
-		log.Printf("crs update: failed to count SecRules: %v", err)
+		Logf("info", "crs update: failed to count SecRules: %v", err)
 		return 0
 	}
 	m.mu.Lock()
@@ -77,7 +76,7 @@ func (m *CRSUpdateManager) RuleCount() int {
 func (m *CRSUpdateManager) rescanRuleCount() {
 	count, err := countSecRules(filepath.Join(m.crsDir, "rules"))
 	if err != nil {
-		log.Printf("crs update: failed to rescan SecRules: %v", err)
+		Logf("info", "crs update: failed to rescan SecRules: %v", err)
 		return
 	}
 	m.mu.Lock()

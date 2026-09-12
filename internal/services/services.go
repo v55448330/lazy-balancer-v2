@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -513,7 +512,7 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	m.domainConflictFingerprints = currentConflicts
 	m.domainConflictMu.Unlock()
 	for _, conflict := range newConflicts {
-		log.Printf("Metrics domain conflict: domain %q maps to rules %q; keeping %q", conflict.domain, strings.Join(conflict.ruleIDs, ","), conflict.ruleIDs[0])
+		Logf("info", "Metrics domain conflict: domain %q maps to rules %q; keeping %q", conflict.domain, strings.Join(conflict.ruleIDs, ","), conflict.ruleIDs[0])
 	}
 	// M19（2026-09-05 审计）：多域名规则的每条 host 序列此前各 INSERT 一行，
 	// 同一规则同一时间戳出现多行、按规则聚合时重复计数；先按 ruleID 聚合
@@ -605,11 +604,11 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	// 此前变量零值初始化，日志声称 "keeping previous value" 实际写入 0。
 	activeRules, totalRules := m.overview.ActiveRules, m.overview.TotalRules
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules); err != nil {
-		log.Printf("updateOverview: query active rules failed: %v (keeping previous value=%d)", err, m.overview.ActiveRules)
+		Logf("info", "updateOverview: query active rules failed: %v (keeping previous value=%d)", err, m.overview.ActiveRules)
 		activeRules = m.overview.ActiveRules
 	}
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules); err != nil {
-		log.Printf("updateOverview: query total rules failed: %v (keeping previous value=%d)", err, m.overview.TotalRules)
+		Logf("info", "updateOverview: query total rules failed: %v (keeping previous value=%d)", err, m.overview.TotalRules)
 		totalRules = m.overview.TotalRules
 	}
 
@@ -628,7 +627,7 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 		  AND last_seen IS NOT NULL
 		  AND datetime(last_seen) >= datetime('now', printf('-%d seconds', ? * COALESCE((SELECT CASE WHEN sync_interval < 10 THEN 60 ELSE sync_interval END FROM global_config WHERE id=1), 60)))
 	`, nodeOfflineMultiplier).Scan(&onlineNodes); err != nil {
-		log.Printf("updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, m.overview.OnlineNodes)
+		Logf("info", "updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, m.overview.OnlineNodes)
 		onlineNodes = m.overview.OnlineNodes
 	}
 

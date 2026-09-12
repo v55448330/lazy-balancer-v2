@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 
@@ -450,7 +449,7 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("restoreRuleSnapshot rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("info", "restoreRuleSnapshot rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()

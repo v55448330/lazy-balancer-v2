@@ -1,9 +1,9 @@
 package handlers
 
 import (
+	"lazy-balancer-v2/internal/services"
 	"database/sql"
 	"errors"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -19,7 +19,7 @@ func dbQueryNotFound(c *gin.Context, err error, notFoundMessage, operation strin
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: notFoundMessage})
 		return true
 	}
-	log.Printf("%s: %v", operation, err)
+	services.Logf("error", "%s: %v", operation, err)
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
 	return true
 }

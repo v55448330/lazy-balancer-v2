@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -121,7 +120,7 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 	if err == nil {
 		if db.DB != nil {
 			if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); err != nil {
-				log.Printf("[WARN] RH-2: 清除 caddy_apply_error 失败(陈旧失败横幅可能滞留): %v", err)
+				services.Logf("error", "[WARN] RH-2: 清除 caddy_apply_error 失败(陈旧失败横幅可能滞留): %v", err)
 			}
 		}
 		return
@@ -131,7 +130,7 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 	services.RecordAuditLog("system", "应用失败", "Caddy配置", wrapped, "")
 	if db.DB != nil {
 		if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped); err != nil {
-			log.Printf("[WARN] RH-2: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", err)
+			services.Logf("error", "[WARN] RH-2: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", err)
 		}
 	}
 }
@@ -188,7 +187,7 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 			return nil, err
 		}
 		cliValidated = false
-		log.Printf("caddy CLI 校验器不可用，跳过预检（事务内应用仍门控）: %v", err)
+		services.Logf("warn", "caddy CLI 校验器不可用，跳过预检（事务内应用仍门控）: %v", err)
 	}
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		// 乱填保障（2026-09-06 补充裁定）：应用失败且配置未经任何 Caddy 级
@@ -600,7 +599,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 func clampAuditRetentionMonthsOnStartup() {
 	var months int
 	if err := db.DB.QueryRow(`SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1`).Scan(&months); err != nil {
-		log.Printf("读取日志保留月数失败，跳过启动钳位: %v", err)
+		services.Logf("error", "读取日志保留月数失败，跳过启动钳位: %v", err)
 		return
 	}
 	clamped := months
@@ -614,10 +613,10 @@ func clampAuditRetentionMonthsOnStartup() {
 		return
 	}
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=? WHERE id=1`, clamped); err != nil {
-		log.Printf("钳位日志保留月数失败: %v", err)
+		services.Logf("error", "钳位日志保留月数失败: %v", err)
 		return
 	}
-	log.Printf("日志保留月数 %d 超出 1-12 范围，已钳位为 %d", months, clamped)
+	services.Logf("info", "日志保留月数 %d 超出 1-12 范围，已钳位为 %d", months, clamped)
 }
 
 func (h *Handlers) ApplyConfigOnStartup() error {
@@ -666,7 +665,7 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 		return err
 	}
 
-	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
+	services.Logf("info", "Applying Caddy config on startup (enabled rules: %d)", count)
 	if err := h.applyCaddyConfigE(); err != nil {
 		// 2026-09-06 裁定 ③：DB 渲染被拒时回退最后已知正确配置——负载均衡
 		// 可用性优先。caddy_apply_error 标记已由 applyCaddyConfigE 落下，
@@ -681,12 +680,12 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 			var isMaster bool
 			if mErr := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); mErr == nil && !isMaster {
 				if mErr := services.MarkStartupFallbackPending(context.Background(), db.DB); mErr != nil {
-					log.Printf("startup fallback: write compensation marker failed: %v", mErr)
+					services.Logf("info", "startup fallback: write compensation marker failed: %v", mErr)
 				}
 			}
 			return nil
 		} else {
-			log.Printf("last-known-good fallback failed: %v", fbErr)
+			services.Logf("info", "last-known-good fallback failed: %v", fbErr)
 		}
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}

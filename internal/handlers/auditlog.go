@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -132,11 +132,11 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	loc := time.UTC
 	var tzStr string
 	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tzStr); err != nil {
-		log.Printf("GetAuditLogs: failed to read configured timezone, using UTC: %v", err)
+		services.Logf("info", "GetAuditLogs: failed to read configured timezone, using UTC: %v", err)
 	} else if l, lerr := time.LoadLocation(tzStr); lerr == nil {
 		loc = l
 	} else {
-		log.Printf("GetAuditLogs: failed to load timezone %q, using UTC: %v", tzStr, lerr)
+		services.Logf("info", "GetAuditLogs: failed to load timezone %q, using UTC: %v", tzStr, lerr)
 	}
 	where, args := buildAuditLogFilters(c, loc)
 
@@ -205,22 +205,22 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		}
 		userRows, err := db.DB.Query("SELECT username, COALESCE(NULLIF(TRIM(display_name), ''), username) FROM users WHERE username IN ("+strings.Join(placeholders, ",")+")", args...)
 		if err != nil {
-			log.Printf("GetAuditLogs: failed to enrich usernames, using usernames: %v", err)
+			services.Logf("info", "GetAuditLogs: failed to enrich usernames, using usernames: %v", err)
 		} else {
 			displayNames := map[string]string{}
 			for userRows.Next() {
 				var username, displayName string
 				if err := userRows.Scan(&username, &displayName); err != nil {
-					log.Printf("GetAuditLogs: failed to scan username enrichment, using usernames: %v", err)
+					services.Logf("info", "GetAuditLogs: failed to scan username enrichment, using usernames: %v", err)
 					break
 				}
 				displayNames[username] = displayName
 			}
 			if err := userRows.Err(); err != nil {
-				log.Printf("GetAuditLogs: failed to iterate username enrichment, using available names: %v", err)
+				services.Logf("info", "GetAuditLogs: failed to iterate username enrichment, using available names: %v", err)
 			}
 			if err := userRows.Close(); err != nil {
-				log.Printf("GetAuditLogs: failed to close username enrichment rows: %v", err)
+				services.Logf("info", "GetAuditLogs: failed to close username enrichment rows: %v", err)
 			}
 			for i := range logs {
 				if displayName, ok := displayNames[logs[i].Username]; ok {

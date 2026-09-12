@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -400,7 +399,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("UpdateCurrentUser rollback failed for id=%d: %v", userIDInt, rollbackErr)
+				services.Logf("info", "UpdateCurrentUser rollback failed for id=%d: %v", userIDInt, rollbackErr)
 			}
 		}
 	}()

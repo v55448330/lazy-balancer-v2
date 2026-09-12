@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -48,11 +47,11 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 		var isMaster bool
 		if qerr := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); qerr == nil && isMaster {
 			if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
-				log.Printf("crs update: failed to record last_checked: %v", dbErr)
+				Logf("info", "crs update: failed to record last_checked: %v", dbErr)
 			}
 		}
 		if err != nil {
-			log.Printf("crs update: background version check failed: %v", err)
+			Logf("info", "crs update: background version check failed: %v", err)
 			return
 		}
 	}()
@@ -139,7 +138,7 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 		}
 	}
 	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", next); err != nil {
-		log.Printf("crs update: failed to record next_update: %v", err)
+		Logf("info", "crs update: failed to record next_update: %v", err)
 	}
 	if nextStr == "" {
 		return // first tick only schedules the first run
@@ -197,7 +196,7 @@ func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct
 	// fail() 已把 consecutive_failures +1。
 	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_crs_version"))).Format(crsTimeLayout)
 	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); err != nil {
-		log.Printf("crs update: failed to record retry next_update: %v", err)
+		Logf("info", "crs update: failed to record retry next_update: %v", err)
 	}
 }
 
@@ -241,7 +240,7 @@ func restoreFailedUpdateBackoff(table string, now time.Time) {
 		return
 	}
 	if _, err := db.DB.Exec("UPDATE "+table+" SET next_update=? WHERE id=1", retry.Format(crsTimeLayout)); err != nil {
-		log.Printf("update scheduler: failed to restore backoff next_update: %v", err)
+		Logf("info", "update scheduler: failed to restore backoff next_update: %v", err)
 	}
 }
 

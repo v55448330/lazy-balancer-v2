@@ -402,6 +402,7 @@ import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { useAuthStore } from '@/stores/auth'
+import { usePollingTask } from '@/composables/usePollingTask'
 import type { APIResponse, UserListItem } from '@/types'
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
@@ -766,12 +767,31 @@ const isValidRegex = (pattern: string): boolean => {
 }
 
 function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
-	let flags = ''
+	// SR15-P3①:合法性以后端 RE2(coraza)为准——支持组合内联 flag(?im)、
+	// flag 组(?i:...)、命名组((?P<name>)),不支持 lookaround/反向引用。
+	// 此前仅剥单字母 flag,组合 flag 与命名组被误拒,后端合法正则无法保存。
+	if (/\(\?<?[=!]/.test(pattern) || /\\[1-9]/.test(pattern) || /\\k</.test(pattern)) {
+		return { re: null, valid: false }
+	}
 	let src = pattern
-	const m = pattern.match(/^\(\?([a-z])\)(.*)/)
-	if (m) { flags = m[1]; src = m[2] }
-	if (/\(\?<?[=!]/.test(src) || /\\[1-9]/.test(src) || /\\k</.test(src)) { return { re: null, valid: false } }
-	try { return { re: new RegExp(src, flags), valid: true } } catch { return { re: null, valid: false } }
+	let flags = ''
+	const m = src.match(/^\(\?([a-zA-Z]+)\)(.*)/)
+	if (m) {
+		for (const f of m[1].toLowerCase()) {
+			if (f === 'i' || f === 'm' || f === 's') flags += f
+			// U(非贪婪反转)等 JS 无对应 flag:合法性通过(RE2 支持),预览忽略
+		}
+		src = m[2]
+	}
+	src = src.replace(/\(\?P</g, '(?<')
+	try {
+		return { re: new RegExp(src, flags), valid: true }
+	} catch {
+		// JS 不能编译的残余形态:内联 flag 组(?i:...)为 RE2 合法/JS 不支持
+		// ——合法放行仅禁预览;其余按真语法错误(后端保存校验为终门)。
+		if (/\(\?[a-zA-Z]+:/.test(src)) return { re: null, valid: true }
+		return { re: null, valid: false }
+	}
 }
 
 const removeCondition = (idx: number) => {
@@ -825,7 +845,6 @@ const updateInfo = ref<CRSUpdateInfo | null>(null)
 const updateLog = ref('')
 const updateLogRef = ref<HTMLDivElement | null>(null)
 let updateRequestSeq = 0
-let updatePollTimer: ReturnType<typeof setInterval> | null = null
 
 const startingUpdate = ref(false)
 const crsUpdateRunning = computed(() => {
@@ -873,16 +892,16 @@ const onUpdateDialogClosed = () => {
   updateLog.value = ''
 }
 
+// SR15-P3④:手写 setInterval → usePollingTask(后台标签页暂停/自动清理,
+// 与 Dashboard 同源;两套重复裸轮询一并收敛)。
+const crsUpdatePolling = usePollingTask(async () => { await refreshUpdateStatus() }, { interval: 2000 })
+
 const startUpdatePolling = () => {
-  stopUpdatePolling()
-  updatePollTimer = setInterval(refreshUpdateStatus, 2000)
+  crsUpdatePolling.start()
 }
 
 const stopUpdatePolling = () => {
-  if (updatePollTimer) {
-    clearInterval(updatePollTimer)
-    updatePollTimer = null
-  }
+  crsUpdatePolling.stop()
 }
 
 const refreshUpdateStatus = async () => {
@@ -926,7 +945,6 @@ const ip2regionUpdateInfo = ref<IP2RegionUpdateInfo | null>(null)
 const ip2regionUpdateLog = ref('')
 const ip2regionUpdateLogRef = ref<HTMLDivElement | null>(null)
 let ip2regionRequestSeq = 0
-let ip2regionPollTimer: ReturnType<typeof setInterval> | null = null
 
 const startingIP2RegionUpdate = ref(false)
 const ip2regionUpdateRunning = computed(() => {
@@ -974,16 +992,15 @@ const onIP2RegionUpdateDialogClosed = () => {
   ip2regionUpdateLog.value = ''
 }
 
+// SR15-P3④:同 CRS 侧收敛。
+const ip2regionUpdatePolling = usePollingTask(async () => { await refreshIP2RegionUpdateStatus() }, { interval: 2000 })
+
 const startIP2RegionPolling = () => {
-  stopIP2RegionPolling()
-  ip2regionPollTimer = setInterval(refreshIP2RegionUpdateStatus, 2000)
+  ip2regionUpdatePolling.start()
 }
 
 const stopIP2RegionPolling = () => {
-  if (ip2regionPollTimer) {
-    clearInterval(ip2regionPollTimer)
-    ip2regionPollTimer = null
-  }
+  ip2regionUpdatePolling.stop()
 }
 
 const refreshIP2RegionUpdateStatus = async () => {

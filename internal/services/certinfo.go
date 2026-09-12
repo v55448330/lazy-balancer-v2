@@ -4,7 +4,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -27,7 +26,7 @@ func GetCertExpiryThreshold() int {
 	var days int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days, 30) FROM global_config WHERE id = 1").Scan(&days)
 	if err != nil {
-		log.Printf("GetCertExpiryThreshold: failed to read global_config, using default 30: %v", err)
+		Logf("info", "GetCertExpiryThreshold: failed to read global_config, using default 30: %v", err)
 		return 30
 	}
 	if days <= 0 {
@@ -41,7 +40,7 @@ func GetCertRenewalAttempts() int {
 	var attempts int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_attempts, 5) FROM global_config WHERE id = 1").Scan(&attempts)
 	if err != nil {
-		log.Printf("GetCertRenewalAttempts: failed to read global_config, using default 5: %v", err)
+		Logf("info", "GetCertRenewalAttempts: failed to read global_config, using default 5: %v", err)
 		return 5
 	}
 	if attempts <= 0 {
@@ -136,7 +135,7 @@ func GetRuleCertInfo(caddyID string) *models.RuleCertInfo {
 		SELECT COALESCE(enable_tls, 0), COALESCE(tls_source, 'manual'), COALESCE(domain, ''), COALESCE(tls_cert, '')
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&enableTLS, &tlsSource, &ruleDomain, &tlsCert)
 	if err != nil {
-		log.Printf("GetRuleCertInfo: failed to read rule %s: %v", caddyID, err)
+		Logf("info", "GetRuleCertInfo: failed to read rule %s: %v", caddyID, err)
 		return nil
 	}
 
@@ -169,7 +168,7 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 		WHERE rule_id = ? AND COALESCE(cert_pem, '') != '' AND COALESCE(key_pem, '') != ''
 		ORDER BY updated_at DESC, id DESC`, caddyID)
 	if err != nil {
-		log.Printf("GetRuleCertInfo: failed to read ACME certificates for %s: %v", caddyID, err)
+		Logf("info", "GetRuleCertInfo: failed to read ACME certificates for %s: %v", caddyID, err)
 		return missingACMECertInfo(caddyID, ruleDomain)
 	}
 	defer rows.Close()
@@ -177,13 +176,13 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	for rows.Next() {
 		var candidate CertInfoCandidate
 		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
-			log.Printf("GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
+			Logf("info", "GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
 			return missingACMECertInfo(caddyID, ruleDomain)
 		}
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("GetRuleCertInfo: failed to iterate ACME certificates for %s: %v", caddyID, err)
+		Logf("info", "GetRuleCertInfo: failed to iterate ACME certificates for %s: %v", caddyID, err)
 		return missingACMECertInfo(caddyID, ruleDomain)
 	}
 	if certPEM, selected := SelectRuleCertificate(candidates, ruleDomain, time.Now()); selected {

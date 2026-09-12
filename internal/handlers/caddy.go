@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -208,7 +207,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	healthStatus, err := h.caddyService.GetUpstreamHealthDetailed()
 	if err != nil {
-		log.Printf("collect upstream health: %v", err)
+		services.Logf("info", "collect upstream health: %v", err)
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: "收集上游健康状态失败"})
 		return
 	}
@@ -462,7 +461,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("UpdateConfig rollback failed: %v", rollbackErr)
+				services.Logf("info", "UpdateConfig rollback failed: %v", rollbackErr)
 			}
 		}
 	}()
@@ -845,7 +844,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过: " + err.Error()})
 			return
 		}
-		log.Printf("caddy CLI 校验器不可用，跳过逃生口预检（应用拒绝仍回滚）: %v", err)
+		services.Logf("error", "caddy CLI 校验器不可用，跳过逃生口预检（应用拒绝仍回滚）: %v", err)
 	}
 
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
@@ -864,7 +863,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("PutCaddyConfig rollback failed: %v", rollbackErr)
+				services.Logf("info", "PutCaddyConfig rollback failed: %v", rollbackErr)
 			}
 		}
 	}()

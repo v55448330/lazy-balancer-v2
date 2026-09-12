@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"os"
@@ -117,7 +116,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		// C-15（2026-09-05 证书域审计裁定）：展示阈值的读取失败不得放大为整个
 		// 任务列表 500——降级默认 30 并告警，对齐 Round 35 I-20 的
 		// checkManualCertExpiration 口径。
-		log.Printf("ListCertJobs: read cert_expiry_days failed, using default 30: %v", err)
+		services.Logf("info", "ListCertJobs: read cert_expiry_days failed, using default 30: %v", err)
 		expiryDays = 30
 	}
 	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
@@ -288,7 +287,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 
 	qm := services.GetCAQueueManager()
 	if qm == nil {
-		log.Printf("Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
+		services.Logf("info", "Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 		return
 	}
@@ -315,7 +314,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		return id, rowsAffected != 0, err
 	})
 	if err != nil {
-		log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
+		services.Logf("info", "Manual retry enqueue failed for job %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
 		return
 	}
@@ -333,7 +332,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		if scanErr != nil {
 			// 重读失败属瞬时 DB 错误（SQLITE_BUSY 等），归因为规则禁用会误导用户，
 			// 显式区分 500（R43 A-3）。
-			log.Printf("RetryCertJob reread job %d status failed: %v", id, scanErr)
+			services.Logf("info", "RetryCertJob reread job %d status failed: %v", id, scanErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
 			return
 		}
@@ -483,7 +482,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			return
 		}
 		if scanErr != nil {
-			log.Printf("DeleteCertJob reread job %d status failed: %v", id, scanErr)
+			services.Logf("info", "DeleteCertJob reread job %d status failed: %v", id, scanErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
 			return
 		}
@@ -527,7 +526,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				deleteErr = errors.Join(deleteErr, restoreErr)
 			}
 		}
-		log.Printf("DeleteCertJob failed for job %d: %v", id, deleteErr)
+		services.Logf("info", "DeleteCertJob failed for job %d: %v", id, deleteErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
 		return
 	}

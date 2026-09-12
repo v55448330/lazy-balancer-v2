@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -300,13 +299,13 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {
-			log.Printf("parse old cluster master URL after promotion: %v", err)
+			Logf("info", "parse old cluster master URL after promotion: %v", err)
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
 			return nil
 		}
 		pinPath, err := clusterPinPathForDatabase(s.db, parsedMasterURL.Host)
 		if err != nil {
-			log.Printf("locate old cluster master pin after promotion: %v", err)
+			Logf("info", "locate old cluster master pin after promotion: %v", err)
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
 			return nil
 		}
@@ -334,7 +333,7 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 	if err := os.Remove(pinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.pendingPinPath = pinPath
 		s.pendingPinAuditURL = auditURL
-		log.Printf("cluster pin cleanup deferred: %v", err)
+		Logf("info", "cluster pin cleanup deferred: %v", err)
 		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
 		return
 	}
@@ -407,11 +406,11 @@ func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin strin
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("cluster detach notify failed: %v", err)
+		Logf("info", "cluster detach notify failed: %v", err)
 		return
 	}
 	resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
-		log.Printf("cluster detach notify rejected: %d", resp.StatusCode)
+		Logf("info", "cluster detach notify rejected: %d", resp.StatusCode)
 	}
 }

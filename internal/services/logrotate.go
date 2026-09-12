@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +52,7 @@ func StartLogRotate(ctx context.Context) <-chan struct{} {
 			}
 			var mb int
 			if err := database.QueryRow("SELECT COALESCE(runtime_log_size_mb,100) FROM global_config WHERE id=1").Scan(&mb); err != nil {
-				log.Printf("refresh runtime log size: %v", err)
+				Logf("info", "refresh runtime log size: %v", err)
 			} else if mb > 0 {
 				runtimeLogSizeMB.Store(int64(mb))
 			}
@@ -205,9 +204,9 @@ func StartRuntimeLogCleanupContext(ctx context.Context, logFile string) <-chan s
 			}
 			if info.ModTime().Before(cutoff) {
 				if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
-					log.Printf("清理过期运行日志失败 %s: %v", e.Name(), err)
+					Logf("error", "清理过期运行日志失败 %s: %v", e.Name(), err)
 				} else {
-					log.Printf("已清理过期运行日志 %s", e.Name())
+					Logf("info", "已清理过期运行日志 %s", e.Name())
 				}
 			}
 		}

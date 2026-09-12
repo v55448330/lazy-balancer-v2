@@ -110,13 +110,13 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	}
 
 	if err := os.MkdirAll(certJobLogDir, 0755); err != nil {
-		log.Printf("cert job log: failed to create dir: %v", err)
+		Logf("info", "cert job log: failed to create dir: %v", err)
 		return
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Printf("cert job log: failed to open %s: %v", path, err)
+		Logf("info", "cert job log: failed to open %s: %v", path, err)
 		return
 	}
 	defer f.Close()
@@ -157,7 +157,7 @@ func (l *CertJobFileLogger) Log(stage, message string) {
 func WriteCertJobLog(jobID int, level, stage, message string) {
 	var ruleID string
 	if err := db.DB.QueryRow("SELECT rule_id FROM cert_jobs WHERE id=?", jobID).Scan(&ruleID); err != nil {
-		log.Printf("cert job log: failed to lookup rule_id for job %d: %v", jobID, err)
+		Logf("info", "cert job log: failed to lookup rule_id for job %d: %v", jobID, err)
 		return
 	}
 	NewCertJobFileLogger(ruleID).write(level, stage, message)
