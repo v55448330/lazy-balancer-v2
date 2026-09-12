@@ -141,53 +141,65 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 	if store == nil {
 		return LoadIPListEntriesByID(ids)
 	}
-	// 与 LoadIPListEntriesByID 同构，仅查询经 store。
+	// 与 loadIPListEntries 同构(仅查询经 store);SLB12-P4-12:补 ipListChunkSize
+	// 分块(>32766 去重 id 的 SQLite 绑定变量上限防线,同文件 :12-15)。
 	entries := make(map[int64][]string, len(ids))
 	if len(ids) == 0 {
 		return entries, nil
 	}
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := store.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
-	if err != nil {
-		// 审计 V3-S1（第五轮）：不吞错——调用方 security.go 的 err!=nil warn 分支
-		// 需要可达（对齐同文件 loadIPListEntries :107-110 的留痕口径）。
-		return nil, fmt.Errorf("store 查询 security_ip_lists: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var raw string
-		if err := rows.Scan(&id, &raw); err != nil {
-			continue
+	var firstErr error
+	for start := 0; start < len(ids); start += ipListChunkSize {
+		end := start + ipListChunkSize
+		if end > len(ids) {
+			end = len(ids)
 		}
-		var list []models.IPListEntry
-		if err := json.Unmarshal([]byte(raw), &list); err != nil {
-			continue
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
 		}
-		vals := make([]string, 0, len(list))
-		for _, e := range list {
-			if v := strings.TrimSpace(e.Value); v != "" {
-				vals = append(vals, v)
+		rows, err := store.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("store 查询 security_ip_lists: %w", err)
 			}
+			continue
 		}
-		entries[id] = vals
+		for rows.Next() {
+			var id int64
+			var raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				continue
+			}
+			var list []models.IPListEntry
+			if err := json.Unmarshal([]byte(raw), &list); err != nil {
+				continue
+			}
+			vals := make([]string, 0, len(list))
+			for _, e := range list {
+				if v := strings.TrimSpace(e.Value); v != "" {
+					vals = append(vals, v)
+				}
+			}
+			entries[id] = vals
+		}
+		rows.Close()
+	}
+	if firstErr != nil {
+		return entries, firstErr
 	}
 	return entries, nil
 }
 
 func LoadIPListEntriesByID(ids []int64) (map[int64][]string, error) {
-	if len(ids) == 0 {
+	if len(ids) == 0 || db.DB == nil {
 		return map[int64][]string{}, nil
 	}
-	if db.DB == nil {
-		return map[int64][]string{}, nil
-	}
-	return loadIPListEntries(db.DB, ids), nil
+	// SLB12-P3-6(第 12 轮审计):db 分支错误上抛(对齐 store 分支 V3-S1 契约)
+	// ——委托 loadIPListEntriesVia(分块+错误通道),不再吞错返回恒 nil error。
+	return loadIPListEntriesVia(db.DB, ids)
 }
 
 // resolvePolicyIPListRefs 在策略加载路径上完成引用解析：跨整个已加载批次收集

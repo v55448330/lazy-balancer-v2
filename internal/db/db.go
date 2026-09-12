@@ -164,6 +164,12 @@ func Initialize(dataDir string) (err error) {
 	if err := migrateNodesDropMasterID(); err != nil {
 		return fmt.Errorf("failed to migrate nodes master_id removal: %w", err)
 	}
+	// CL12-P1-1(第 12 轮审计):存量从节点库修复——历史 apply 把空白名单落为
+	// 字面量 "null"(中间件守卫据非空串判为已配置白名单→全来源 403);幂等
+	// 归一为 ''。主端库不受影响(encodeMCPIPWhitelist 本就落 '')。
+	if _, err := DB.Exec("UPDATE api_keys SET mcp_ip_whitelist='' WHERE mcp_ip_whitelist='null'"); err != nil {
+		return fmt.Errorf("failed to normalize null mcp_ip_whitelist: %w", err)
+	}
 	// CL11-N1(第 11 轮审计):回收存量库冗余索引——UNIQUE(token_hash) 的
 	// 隐式唯一索引已覆盖查询,显式索引为纯维护噪音;第 10 轮仅删了 CREATE
 	// 行,存量库索引持久于库文件。幂等 DROP。

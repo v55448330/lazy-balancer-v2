@@ -1706,7 +1706,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	committed = true
 
-	if *req.Enabled && *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
+	// SLB12-P3-2(第 12 轮审计):门控放宽到「ACME+http+domain 变化」——迁移
+	// 逻辑与启用态无关;此前 *req.Enabled 门控使禁用态改域绕过迁移,旧域
+	// disabled 任务行永驻,再启用时按新域查不到任务另建新行,破坏「一规则
+	// 一任务」不变量(块内 needJob 判定仍按启用语义执行)。
+	if *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
 		caProviderID := existingRule.CAProviderID
 		if req.CAProviderID != nil {
 			caProviderID = *req.CAProviderID
@@ -1906,6 +1910,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		needJob := domainChanged || caProviderChanged || !services.IsACMECertIssued(caddyID, domain) ||
 			((wasReEnabled || tlsSourceChangedToACME) && !services.HasCertJob(caddyID, domain))
 		needJob = needJob && !resumedValidJob
+		// SLB12-P3-2:外层门放宽后,块内恢复「禁用不签发」语义(RH-1)——
+		// 禁用态改域仅做任务迁移,不排队新签发。
+		needJob = needJob && *req.Enabled
 		if needJob {
 			queueManager = services.GetCAQueueManager()
 			if queueManager == nil {

@@ -113,8 +113,8 @@ func TestSyncService_RegisterWithMaster_rejectsOversizedResponseBody(t *testing.
 	_, err := service.RegisterWithMaster(context.Background(), master.URL, models.ClusterRegisterRequest{})
 
 	// Then
-	if err == nil || !strings.Contains(err.Error(), "解析主节点注册响应") {
-		t.Fatalf("error=%v, want 解析失败（超限截断）", err)
+	if err == nil || !strings.Contains(err.Error(), "超过") {
+		t.Fatalf("error=%v, want 注册响应体超限显式报错", err)
 	}
 }
 

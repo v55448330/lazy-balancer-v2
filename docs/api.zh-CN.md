@@ -4,9 +4,8 @@
 
 部署后可通过以下方式访问：
 
-- **Swagger UI**：`http://<host>:8000/api/v1/docs`
+- **Swagger UI**（交互调试）：`http://<host>:8000/api/v1/docs`
 - **OpenAPI 规范**：`http://<host>:8000/api/v1/openapi.yaml`
-- **接口调试**：`http://<host>:8000/api/v1/docs`（JSON 格式端点列表）
 
 ## 认证
 
@@ -31,7 +30,7 @@
 
 ## 完整端点列表
 
-完整端点列表（含请求/响应示例、错误码）由后端动态生成，部署后访问 `/api/v1/docs` 获取。
+完整端点文档（含请求/响应示例、错误码）由后端动态生成，部署后访问 `/api/v1/docs`（Swagger UI）获取。
 
 ## 错误格式
 

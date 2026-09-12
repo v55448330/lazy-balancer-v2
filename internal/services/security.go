@@ -217,7 +217,17 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	default:
 		return ""
 	}
-	sb.WriteString("SecRequestBodyAccess On\n")
+	// SLB12-P2-1(第 12 轮审计):仅存在 body 消费者时开启请求体访问——
+	// coraza-caddy v2.6.0 的 body 缓冲唯一门控是 RequestBodyAccess,无
+	// 「存在 phase:2 规则才缓冲」的惰性检查;mode=off 纯 IP/GeoIP(全部
+	// phase:1 REMOTE_ADDR)下 On 使每请求全量 body 缓冲零消费者。三消费者
+	// 枚举:自定义规则(可有 body 目标)/CRS(phase:2)/审计 C 段
+	// (log_request_body)。custom_only/crs 路径恒 On 不变。
+	if customActive || crsActive || p.LogRequestBody {
+		sb.WriteString("SecRequestBodyAccess On\n")
+	} else {
+		sb.WriteString("SecRequestBodyAccess Off\n")
+	}
 	if p.WAFCheckResponse && crsActive {
 		sb.WriteString("SecResponseBodyAccess On\n")
 		// SecResponseBodyMimeType 必须显式发射：coraza 的 ResponseBodyMimeTypes
@@ -963,6 +973,18 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 				var cr models.CustomRule
 				var conditionsJSON string
 				if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
+					continue
+				}
+				// SLB12-P3-5:跨 500 分块重复引用查重——同 ID 双 SecRule 会被
+				// coraza 编译拒绝,毒化策略无法落库。
+				dup := false
+				for _, existing := range rules {
+					if existing.ID == cr.ID {
+						dup = true
+						break
+					}
+				}
+				if dup {
 					continue
 				}
 				json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)

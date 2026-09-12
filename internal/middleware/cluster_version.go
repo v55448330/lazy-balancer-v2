@@ -82,6 +82,22 @@ func installClusterVersionTriggers(database *sql.DB) error {
 				}
 				operationClause += " OF " + ofColumns
 			}
+			// SLB12-P1-1(第 12 轮审计):users 表值变化守卫——登录热路径同值写
+			// (成功登录 NULL→NULL、失败计数 CASE 保值)同样触发 OF 触发器,每次
+			// 登录引发全集群快照重放+从节点强制 Caddy 重载。改为「任一同步列
+			// 值真实变化」(IS NOT NULL 安全比较全链 OR):登录热路径写
+			// login_failed_attempts/last_login(均非同步列)与 login_locked_until
+			// 保值时零变化→不 bump;真实置锁/解锁(SC-4 锁传播)与管理员操作
+			// (改密/改角色等真实值变化)照常 bump。
+			if table.name == "users" && operation == "UPDATE" {
+				cols := strings.Split(table.snapshotColumns, ",")
+				valueChange := make([]string, 0, len(cols))
+				for _, col := range cols {
+					col = strings.TrimSpace(col)
+					valueChange = append(valueChange, fmt.Sprintf("OLD.%s IS NOT NEW.%s", col, col))
+				}
+				whenClause += " AND (" + strings.Join(valueChange, " OR ") + ")"
+			}
 			if table.name == "cert_jobs" {
 				switch operation {
 				case "INSERT":

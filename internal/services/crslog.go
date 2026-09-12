@@ -16,11 +16,11 @@ func CRSUpdateLogPath() string {
 func writeCRSUpdateLog(level, stage, message string) {
 	path := CRSUpdateLogPath()
 	if info, err := os.Stat(path); err == nil && info.Size() >= getCertJobLogSizeBytes() {
-		os.Remove(fmt.Sprintf("%s.%d", path, maxRotatedFiles))
-		for i := maxRotatedFiles - 1; i >= 1; i-- {
-			os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+		// SLB12-P3-10:复用 rotateCertJobLogFiles(错误收集上抛,C-11 口径)——
+		// 此前内联轮转吞掉全部错误,轮转失败时最老一代更新日志静默丢失。
+		if rerr := rotateCertJobLogFiles(path); rerr != nil {
+			log.Printf("crs update log: rotation failed (oldest generation may be lost): %v", rerr)
 		}
-		os.Rename(path, path+".1")
 	}
 	if err := os.MkdirAll(crsUpdateLogDir, 0755); err != nil {
 		log.Printf("crs update log: failed to create dir: %v", err)

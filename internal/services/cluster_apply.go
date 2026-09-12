@@ -464,9 +464,17 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 		}
 	}
 	for _, key := range snapshot.APIKeys {
-		whitelistJSON, err := json.Marshal(key.MCPIPWhitelist)
-		if err != nil {
-			return fmt.Errorf("序列化快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
+		// CL12-P1-1(第 12 轮审计):空白名单落 ''(与主端 encodeMCPIPWhitelist
+		// 同语义)——json.Marshal(nil) 产字面量 "null",中间件白名单守卫把
+		// 非空串当配置(Unmarshal null 成功但 0 CIDR)→ 无白名单 Key 在
+		// 从节点全来源 403。
+		whitelistJSON := []byte("")
+		if len(key.MCPIPWhitelist) > 0 {
+			var err error
+			whitelistJSON, err = json.Marshal(key.MCPIPWhitelist)
+			if err != nil {
+				return fmt.Errorf("序列化快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTime(key.LastUsed.NullTime), key.CreatedAt); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)

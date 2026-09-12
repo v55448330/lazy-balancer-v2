@@ -18,11 +18,10 @@ func IP2RegionUpdateLogPath() string {
 func writeIP2RegionUpdateLog(level, stage, message string) {
 	path := IP2RegionUpdateLogPath()
 	if info, err := os.Stat(path); err == nil && info.Size() >= getCertJobLogSizeBytes() {
-		os.Remove(fmt.Sprintf("%s.%d", path, maxRotatedFiles))
-		for i := maxRotatedFiles - 1; i >= 1; i-- {
-			os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+		// SLB12-P3-10 同族:复用 rotateCertJobLogFiles(C-11 错误口径)。
+		if rerr := rotateCertJobLogFiles(path); rerr != nil {
+			log.Printf("ip2region update log: rotation failed (oldest generation may be lost): %v", rerr)
 		}
-		os.Rename(path, path+".1")
 	}
 	if err := os.MkdirAll(ip2RegionUpdateLogDir, 0755); err != nil {
 		log.Printf("ip2region update log: failed to create dir: %v", err)

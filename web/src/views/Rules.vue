@@ -171,7 +171,7 @@
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
-                    <el-tooltip v-if="status.unknown && status.dynamic" content="Caddy 按解析后 IP 跟踪动态上游健康，域名级不可观测" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                    <el-tooltip v-if="status.unknown && status.dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
                     <el-icon v-else-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
                     <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
@@ -183,7 +183,7 @@
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
-                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && getUpstreamHealthStatus(row.caddy_id, upstream).dynamic" content="Caddy 按解析后 IP 跟踪动态上游健康，域名级不可观测" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && getUpstreamHealthStatus(row.caddy_id, upstream).dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
@@ -1738,6 +1738,9 @@ const fetchHealthStatus = async () => {
         let unknown = 0
         let na = 0
         const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
+        // SLB12-P3-3:TCP 被动健康(未开主动探测)为结构性 N/A——caddy-l4 无
+        // admin 端点,被动熔断不产指标(gauge 仅主动检查写),与动态 DNS 同口径。
+        const tcpPassive = rule.protocol === 'tcp' && !rule.enable_active_health_check
         for (const upstream of enabledUpstreams) {
           const upstreamKey = hostPortKey(upstream.host, upstream.port)
           let isHealthy = false
@@ -1763,7 +1766,7 @@ const fetchHealthStatus = async () => {
             }
           }
           upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, dynamic: isDynamic, degraded: isDegraded, num_requests: numRequests, fails }
-          if (isUnknown && isDynamic) na++
+          if (isUnknown && (isDynamic || tcpPassive)) na++
           else if (isUnknown) unknown++
           else if (!isHealthy) unhealthy++
           else if (isDegraded) degraded++

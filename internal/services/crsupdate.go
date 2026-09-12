@@ -261,6 +261,9 @@ func (m *CRSUpdateManager) run(trigger string) {
 		m.state.status = CRSStatusSuccess
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
+		// SLB12-P3-11:跳过分支补 version——StatusSnapshot 内存态优先后 version
+		// 此前从有值退化为空串,状态端点数据不自洽。
+		m.state.version = currentCRSVersion()
 		m.mu.Unlock()
 		RecordAuditLog("system", "更新", "CRS规则库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return

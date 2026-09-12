@@ -750,3 +750,40 @@ func TestClusterVersionTrigger_brandingJSONBumps(t *testing.T) {
 		t.Errorf("slave write must not bump, got %d", got)
 	}
 }
+
+// SLB12-P1-1(第 12 轮审计):登录热路径同值写 login_locked_until(NULL→NULL、
+// CASE 保值)不得 bump——SQLite OF 触发器按 SET 列出现即触发,此前每次成功
+// 登录/失败尝试都引发全集群快照重放+从节点强制 Caddy 重载;真实置锁/解锁
+// 过渡(SC-4 锁传播)仍须 bump。
+func TestClusterVersionTrigger_loginHotPathNoBump(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,login_failed_attempts,login_locked_until) VALUES (1,'u','h','admin',1,0,NULL)`)
+	database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1")
+
+	// 成功登录路径:同值 NULL→NULL 写
+	database.Exec(`UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=1`)
+	if got := clusterVersion(t, database); got != 0 {
+		t.Fatalf("same-value NULL write bumped version to %d, want 0 (登录热路径)", got)
+	}
+
+	// 失败计数路径:CASE 保值(未达阈值)
+	database.Exec(`UPDATE users SET login_failed_attempts=COALESCE(login_failed_attempts,0)+1, login_locked_until=CASE WHEN COALESCE(login_failed_attempts,0)+1>=5 THEN datetime('now','+10 minutes') ELSE login_locked_until END WHERE id=1`)
+	if got := clusterVersion(t, database); got != 0 {
+		t.Fatalf("CASE same-value write bumped version to %d, want 0", got)
+	}
+
+	// 真实置锁:值变化 → bump(SC-4)
+	database.Exec(`UPDATE users SET login_locked_until=datetime('now','+10 minutes') WHERE id=1`)
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("real lock transition should bump to 1, got %d", got)
+	}
+
+	// 真实解锁 → bump
+	database.Exec(`UPDATE users SET login_locked_until=NULL WHERE id=1`)
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("unlock should bump to 2, got %d", got)
+	}
+}

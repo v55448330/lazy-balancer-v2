@@ -162,3 +162,28 @@ func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
 		t.Errorf("mirror polluted by partial write: %q", mirrored)
 	}
 }
+
+// CL12-P1-1(第 12 轮审计):无白名单 Key 快照同步——主端 '' → 从端必须落 ''
+// 而非 json.Marshal(nil) 的字面量 "null"(中间件把非空当白名单配置,
+// Unmarshal null 成功但 0 CIDR → 全来源 403)。
+func TestApplySnapshot_emptyWhitelistLandsEmptyString(t *testing.T) {
+	_, database := newClusterTestService(t)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	snapshot := models.ClusterSnapshot{
+		Version: 4,
+		APIKeys: []models.ClusterAPIKey{{ID: 1, Name: "k", KeyHash: "h", KeyPrefix: "p", CreatedBy: 1, MCPIPWhitelist: nil}},
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var stored string
+	database.QueryRow(`SELECT COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id=1`).Scan(&stored)
+	if stored != "" {
+		t.Fatalf("empty whitelist stored=%q, want empty string (not \"null\")", stored)
+	}
+}

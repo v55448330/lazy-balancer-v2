@@ -356,8 +356,15 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	// 仍宣称 IP 控制已启用。镜像 DeleteIPList 引用门:条目将被清空且存在
 	// allow 引用时 409 拒绝(同事务内检查,持 caddyOpMu)。
 	if req.Entries != nil && len(entries) == 0 {
-		listID, _ := strconv.ParseInt(id, 10, 64)
-		if listID > 0 {
+		// SLB12-P2-2(第 12 轮审计):非规范数字 id('5.0'/' 5')经 SQLite 数值
+		// 亲和仍命中行,但 ParseInt 失败使守卫静默跳过 → 清空被 allow 引用的
+		// 列表 fail-open。与 DeleteIPList 同口径:解析失败直接 400。
+		listID, perr := strconv.ParseInt(id, 10, 64)
+		if perr != nil || listID <= 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+			return
+		}
+		{
 			var allowRefCount int
 			if err := tx.QueryRowContext(c.Request.Context(),
 				`SELECT COUNT(*) FROM security_policies

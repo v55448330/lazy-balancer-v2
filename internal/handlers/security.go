@@ -639,13 +639,46 @@ func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, custo
 	}
 	var ids []int
 	if customRulesJSON != "" && json.Unmarshal([]byte(customRulesJSON), &ids) == nil {
+		// SLB12-P2-3(第 12 轮审计):去重+单次 IN(镜像 validateIPListRefsExistence)
+		// ——此前逐 ID COUNT 在 BEGIN IMMEDIATE 写锁内串行,重复 ID 数组可持锁
+		// 数秒阻塞全部并发写。
+		seen := make(map[int]struct{}, len(ids))
+		unique := make([]int, 0, len(ids))
 		for _, id := range ids {
-			var exists int
-			if err := q.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=?", id).Scan(&exists); err != nil {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+		if len(unique) > 0 {
+			placeholders := make([]string, len(unique))
+			args := make([]interface{}, len(unique))
+			for i, id := range unique {
+				placeholders[i] = "?"
+				args[i] = id
+			}
+			rows, err := q.Query("SELECT id FROM security_custom_rules WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+			if err != nil {
 				return "", err
 			}
-			if exists == 0 {
-				return fmt.Sprintf("自定义规则不存在（id=%d）", id), nil
+			found := make(map[int]struct{}, len(unique))
+			for rows.Next() {
+				var fid int
+				if err := rows.Scan(&fid); err != nil {
+					rows.Close()
+					return "", err
+				}
+				found[fid] = struct{}{}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return "", err
+			}
+			for _, id := range unique {
+				if _, ok := found[id]; !ok {
+					return fmt.Sprintf("自定义规则不存在（id=%d）", id), nil
+				}
 			}
 		}
 	}
@@ -1102,7 +1135,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内 "" 与 "[]"
 	// 并存（Create 在 :411-419 归一，custom_rules 在下方同口径归一）。
-	for _, val := range []**string{&req.IPACLList, &req.IPWhitelist, &req.IPBlacklist, &req.IPACLListRefs, &req.IPWhitelistRefs} {
+	// SLB12-P3-8:GeoIPCountries 补入归一(与 Create 口径一致,此前唯独缺席
+	// 使显式空串 400 而 Create 归一)。
+	for _, val := range []**string{&req.IPACLList, &req.IPWhitelist, &req.IPBlacklist, &req.IPACLListRefs, &req.IPWhitelistRefs, &req.GeoIPCountries} {
 		if *val != nil && strings.TrimSpace(**val) == "" {
 			empty := "[]"
 			*val = &empty
@@ -1185,7 +1220,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	{
 		var storedRLEnabled bool
 		var storedRPS, storedBurst int
-		_ = tx.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst)
+		// SLB12-P3-7:对齐 R64 B-S1 三分支——不存在 404/其余 500(此前吞错落
+		// 零值,不存在策略被误报 400)。
+		if err := tx.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			} else {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略限流配置失败"})
+			}
+			return
+		}
 		effRLEnabled, effRPS, effBurst := storedRLEnabled, storedRPS, storedBurst
 		if req.RateLimitEnabled != nil {
 			effRLEnabled = *req.RateLimitEnabled
@@ -1206,8 +1250,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	{
 		var storedEnabled bool
 		var storedMode, storedList, storedRefs string
-		_ = tx.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
-			Scan(&storedEnabled, &storedMode, &storedList, &storedRefs)
+		// SLB12-P3-7:同上限流门三分支。
+		if err := tx.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
+			Scan(&storedEnabled, &storedMode, &storedList, &storedRefs); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			} else {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 IP 控制配置失败"})
+			}
+			return
+		}
 		effEnabled := storedEnabled
 		if req.IPACLEnabled != nil {
 			effEnabled = *req.IPACLEnabled
@@ -1453,6 +1505,13 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	if req.IPWhitelistRefs != nil {
 		changedFields = append(changedFields, fmt.Sprintf("信任名单列表引用→%s", *req.IPWhitelistRefs))
+	}
+	// SLB12-P3-1:两安全开关的字段级审计补记(此前仅提交该字段时变更列表全空)。
+	if req.IPWhitelistEnabled != nil {
+		changedFields = append(changedFields, fmt.Sprintf("信任名单启用→%v", *req.IPWhitelistEnabled))
+	}
+	if req.LogRequestBody != nil {
+		changedFields = append(changedFields, fmt.Sprintf("请求体落日志→%v", *req.LogRequestBody))
 	}
 	if req.Name != nil {
 		changedFields = append(changedFields, fmt.Sprintf("名称→%s", *req.Name))
