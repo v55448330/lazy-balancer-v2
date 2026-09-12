@@ -221,12 +221,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// 请求体访问——coraza-caddy v2.6.0 的 body 缓冲唯一门控是
 	// RequestBodyAccess(无惰性检查)。消费者精确枚举:
 	//   ① CRS(phase:2 规则集,blocking/detection);
-	//   ② 已启用的自定义规则(可有 body 目标;custom_only+零启用规则无消费者,
-	//      规则启停经 finishTxApply 重渲染,收紧零滞后)。
+	//   ② 自定义规则可发射的模式(custom_only)且存在已启用规则(可有 body 目标;
+	//      规则启停经 finishTxApply 重渲染,收紧零滞后)。off 态停放启用规则
+	//      不发射,不计入(SLB14-N1:R13 形态在 off+停放规则形状反向回归)。
 	// 第 12 轮的第三条件 log_request_body 经引擎源码验证在 mode=off 不可消费
 	// (phase:1 中断先于 body 读、C 段恒空)——移除;对照同型 IP 预检正确用
 	// Off+无 C 段。
-	if crsActive || hasCustomRules {
+	if crsActive || (customActive && hasCustomRules) {
 		sb.WriteString("SecRequestBodyAccess On\n")
 	} else {
 		sb.WriteString("SecRequestBodyAccess Off\n")

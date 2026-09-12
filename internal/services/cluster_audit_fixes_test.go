@@ -409,3 +409,44 @@ func TestSyncService_applySnapshot_nilLockedUsersPayloadIsNoOp(t *testing.T) {
 		t.Fatalf("after nil payload: attempts=%d lock=%v, want 2/%s（no-op 不得清本地锁）", attempts, lockedUntil, localLock)
 	}
 }
+
+// CL14-新2(第 14 轮审计):CL13-新1 核心语义钉住——快照旧 mfa_last_timestep
+// 不得重开从节点重放防护窗(本地>快照取本地);主节点更新(快照>本地)覆盖。
+func TestSyncService_applySnapshot_preservesLocalTOTPTimestep(t *testing.T) {
+	_, database := newClusterTestService(t)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// 本地 timestep 900(从节点已消费码)
+	database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,mfa_last_timestep) VALUES (1,'u','h','admin',1,900)`)
+	snapshot := models.ClusterSnapshot{
+		Version: 2,
+		Users:   []models.ClusterUser{{ID: 1, Username: "u", PasswordHash: "h", Role: "admin", IsEnabled: true, MFALastTimestep: 500}},
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	database.QueryRow(`SELECT COALESCE(mfa_last_timestep,0) FROM users WHERE id=1`).Scan(&got)
+	if got != 900 {
+		t.Fatalf("local timestep=%d after replay, want 900 preserved (replay window must not reopen)", got)
+	}
+
+	// 主节点更新(快照 1200 > 本地 900)→ 覆盖
+	snapshot2 := models.ClusterSnapshot{
+		Version: 3,
+		Users:   []models.ClusterUser{{ID: 1, Username: "u", PasswordHash: "h", Role: "admin", IsEnabled: true, MFALastTimestep: 1200}},
+	}
+	snapshot2.SectionHashes = ComputeSnapshotSectionHashes(&snapshot2)
+	if err := syncService.applySnapshot(context.Background(), snapshot2); err != nil {
+		t.Fatal(err)
+	}
+	database.QueryRow(`SELECT COALESCE(mfa_last_timestep,0) FROM users WHERE id=1`).Scan(&got)
+	if got != 1200 {
+		t.Fatalf("timestep=%d after master update, want 1200", got)
+	}
+}

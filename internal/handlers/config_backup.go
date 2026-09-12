@@ -39,6 +39,11 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	// R57 C-6：本地节点运行态标记，非配置——导入旧备份会复活陈旧的
 	// 「应用失败」横幅（导入提交路径不经过 recordCaddyApplyResult 清空）。
 	"caddy_apply_error": true, "registration_confirm_failures": true,
+	// CL14-新1(第 14 轮审计):恒同步列排除出备份——现行导出恒 1(UpdateSettings
+	// 拒绝禁用+启动迁移回填),排除无信息损失;防 v2.2.7 前存量备份携带 0 值
+	// 直写,致节点页「系统数据同步=关闭」假状态至重启(同步行为四个在线强制点
+	// 不受影响,纯展示层)。
+	"sync_users": true,
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs

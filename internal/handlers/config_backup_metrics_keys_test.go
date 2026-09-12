@@ -88,3 +88,43 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 		t.Fatalf("exported timezone=%v, want Asia/Shanghai", exported.Config["timezone"])
 	}
 }
+
+// CL14-新2(第 14 轮审计):CL13-新3 钉住——备份携带字面量 "null" 白名单导入后
+// 归一为 ''(中间件把非空串当白名单配置,null 解析成功但 0 CIDR→全来源 403)。
+func TestImportConfigBackup_normalizesNullWhitelist(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	completeTables := make(map[string][]map[string]any, len(configBackupTables))
+	for _, table := range configBackupTables {
+		completeTables[table] = []map[string]any{}
+	}
+	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
+	// 旧从节点库(pre-fix)导出形态:mcp_ip_whitelist 为字符串 "null"
+	completeTables["api_keys"] = []map[string]any{{"id": 1, "name": "k", "key_hash": "h", "key_prefix": "p", "created_by": 1, "is_enabled": 1, "mcp_ip_whitelist": "null"}}
+	importCfg := map[string]any{"timezone": "Asia/Shanghai"}
+	importBackup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+		Config: importCfg,
+		Tables: completeTables,
+	}
+	importBackup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
+	body, err := json.Marshal(importBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	importRec := httptest.NewRecorder()
+	importReq := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+	importReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(importRec, importReq)
+	if importRec.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", importRec.Code, importRec.Body.String())
+	}
+	var stored string
+	if err := db.DB.QueryRow("SELECT COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "" {
+		t.Fatalf("imported whitelist=%q, want '' (literal null normalized)", stored)
+	}
+}

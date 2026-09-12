@@ -100,3 +100,75 @@ func TestCidrIntersectEntry_directionIndependent(t *testing.T) {
 		t.Fatalf("forward=%q backward=%q, both want 10.0.0.0/16（更窄方）", forward, backward)
 	}
 }
+
+// TestBuildCorazaDirectives_BodyAccessTruthTable(R-6 首例,SLB14-N1):
+// 机械枚举 body 门控读取的全部变量交叉积——mode(4)×自定义规则态(3:
+// 无规则/停放启用/发射启用)×IP 控制(2)。期望:On ⟺ crsActive ‖
+// (customActive && hasCustomRules)。历史:R12 引擎不可消费条件→R13 停放
+// 规则反向回归——每轮只测目标格,bug 在未测格;本表为构造性全形状。
+func TestBuildCorazaDirectives_BodyAccessTruthTable(t *testing.T) {
+	rulesJSON := func(enabled bool) json.RawMessage {
+		state := "false"
+		if enabled {
+			state = "true"
+		}
+		return json.RawMessage(`[{"id":1,"name":"r","conditions":[{"target":"uri","operator":"starts_with","pattern":"/a"}],"action":"block","score":5,"enabled":` + state + `}]`)
+	}
+	cases := []struct {
+		mode       string
+		rulesState string // none | parked-enabled | emitted-enabled
+		ipControl  bool
+		wantBodyOn bool
+	}{
+		// crsActive(blocking/detection):恒 On(CRS phase:2 消费)
+		{"blocking", "none", false, true},
+		{"blocking", "parked-enabled", false, true},
+		{"blocking", "emitted-enabled", false, true},
+		{"blocking", "none", true, true},
+		{"detection", "none", false, true},
+		{"detection", "emitted-enabled", false, true},
+		// custom_only:仅启用规则存在时 On
+		{"custom_only", "emitted-enabled", false, true},
+		{"custom_only", "emitted-enabled", true, true},
+		{"custom_only", "none", false, false}, // 空策略→default return ""
+		{"custom_only", "none", true, false},  // 仅 IP 控制:phase:1,无 body 消费者
+		// off:IP/GeoIP 仅 phase:1,停放规则不发射→Off(SLB14-N1 回归格)
+		{"off", "none", true, false},
+		{"off", "parked-enabled", true, false}, // ← R13 反向回归格:此前误 On
+		{"off", "parked-enabled", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode+"/"+tc.rulesState+"/ip="+boolStr(tc.ipControl), func(t *testing.T) {
+			p := &models.SecurityPolicy{Mode: tc.mode, Enabled: true}
+			switch tc.rulesState {
+			case "parked-enabled":
+				p.CustomRules = rulesJSON(true)
+			case "emitted-enabled":
+				p.CustomRules = rulesJSON(true)
+			}
+			if tc.ipControl {
+				p.IPACLEnabled = true
+				p.IPACLMode = "deny"
+				p.IPACLList = `["10.0.0.0/8"]`
+			}
+			directives := BuildCorazaDirectives(p, nil)
+			if tc.mode == "custom_only" && tc.rulesState == "none" && !tc.ipControl {
+				if directives != "" {
+					t.Fatalf("空策略应产空串, got %q", directives)
+				}
+				return
+			}
+			gotOn := strings.Contains(directives, "SecRequestBodyAccess On")
+			if gotOn != tc.wantBodyOn {
+				t.Errorf("body access On=%v, want %v\ndirectives=%q", gotOn, tc.wantBodyOn, directives)
+			}
+		})
+	}
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}

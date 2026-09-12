@@ -242,6 +242,9 @@ for i, d := range domainHosts {
 {
   "handler": "static_response",
   "body": "Lazy Balancer V2 is running!"
+  # ↑ 默认文案;可经 data/branding.json 的 landing_text 覆盖(见
+  # docs/deployment.zh-CN.md 品牌定制段——主节点修改经集群「全局配置」通道
+  # 自动分发到从节点)。
 }
 ```
 
