@@ -46,8 +46,9 @@ type snapshotStore interface {
 }
 
 // Snapshot builds the full cluster snapshot. tokenKey signs the payload with
-// the requesting node's cluster token (HMAC-SHA256) so slaves can verify
-// authenticity, not just integrity; leave empty to skip signing (legacy path).
+// the requesting node's cluster token (HMAC-SHA256) so slaves can verify;
+// tokenKey 为空跳过签名——仅测试接缝(生产 GetClusterSnapshot 恒经
+// clusterTokenAuth 携带非空令牌,CL10-N3/CL9-N11)。
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
 	s.retryPendingPinCleanup()
 	// 品牌镜像刷新(2026-09-11):每次同步轮询先对账 branding.json→
@@ -716,6 +717,20 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 			&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
 			&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.LogEnabled, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照规则: %w", err)
+		}
+		// CL10-P2-3(第 10 轮审计):导出侧与从端 insertSnapshotRules 同口径
+		// 归一(R59 C-F1 body 钳 [0,4096]/R63 A-N1 tcp+TLS 死形态)——主端
+		// 存储值不变、仅导出值归一。此前主端原样导出 vs 从端归一落库,存量
+		// 越界/死形态行导致 rules 节哈希两侧永不相等,每版本 bump 永久重放
+		// 振荡(LB-04 收敛论证对 COALESCE 缺省成立、对钳制列不成立)。
+		if rule.RequestBodyMaxSizeMB < 0 {
+			rule.RequestBodyMaxSizeMB = 0
+		} else if rule.RequestBodyMaxSizeMB > 4096 {
+			rule.RequestBodyMaxSizeMB = 4096
+		}
+		if rule.Protocol == "tcp" && rule.EnableTLS {
+			rule.EnableTLS = false
+			rule.TLSCert, rule.TLSKey = "", ""
 		}
 		rule.Upstreams = upstreamsByRule[rule.CaddyID]
 		if rule.Upstreams == nil {

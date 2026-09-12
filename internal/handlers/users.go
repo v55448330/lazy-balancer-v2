@@ -157,17 +157,18 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	if req.Username != nil && *req.Username != "" && *req.Username != oldUsername {
 		sets = append(sets, "username = ?")
 		args = append(args, *req.Username)
-		changed = append(changed, "用户名")
+		// SLB10-N8:审计记旧→新(角色降权等高敏变更可取证重建;密码只记名)。
+		changed = append(changed, "用户名："+oldUsername+"→"+*req.Username)
 	}
 	if req.Role != nil && *req.Role != "" && *req.Role != oldRole {
 		sets = append(sets, "role = ?")
 		args = append(args, *req.Role)
-		changed = append(changed, "角色")
+		changed = append(changed, "角色："+oldRole+"→"+*req.Role)
 	}
 	if req.DisplayName != nil && *req.DisplayName != oldDisplayName {
 		sets = append(sets, "display_name = ?")
 		args = append(args, *req.DisplayName)
-		changed = append(changed, "昵称")
+		changed = append(changed, "昵称："+oldDisplayName+"→"+*req.DisplayName)
 	}
 	if passwordHash != "" {
 		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")

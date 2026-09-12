@@ -1095,7 +1095,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.LogEnabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		// SLB10-N2:分判 ErrNoRows 与真实 DB 故障(同 EnableRule 口径)——
+		// 此前任意 DB 错误误报 404「规则不存在」误导排障。
+		if dbQueryNotFound(c, err, "规则不存在", "读取规则") {
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
 	existingRule.PathRules, err = loadPathRules(c.Request.Context(), db.DB, caddyID)

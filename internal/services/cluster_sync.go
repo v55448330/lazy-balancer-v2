@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -1220,7 +1219,7 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	// 始终跟随主节点。主节点从旧备份恢复时其 cluster_version 会低于从节点
 	// 已应用版本，此时照常应用快照，仅对严格回退打印告警。
 	if appliedVersion > 0 && snapshot.Version < appliedVersion {
-		log.Printf("⚠️ 警告：检测到主节点配置版本回退（恢复场景）：收到快照版本 %d，本节点已应用版本 %d，从节点继续跟随主节点", snapshot.Version, appliedVersion)
+	Logf("error", "⚠️ 警告：检测到主节点配置版本回退（恢复场景）：收到快照版本 %d，本节点已应用版本 %d，从节点继续跟随主节点", snapshot.Version, appliedVersion)
 	}
 	if err := verifySnapshotConsistency(snapshot); err != nil {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
@@ -1269,7 +1268,7 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
 	for _, rule := range snapshot.Rules {
 		if rule.Enabled && len(rule.Upstreams) == 0 {
-			log.Printf("⚠️ 警告：快照中启用规则 %s 没有上游（数据漂移，需人工清理），生成配置时将跳过该规则", rule.CaddyID)
+	Logf("error", "⚠️ 警告：快照中启用规则 %s 没有上游（数据漂移，需人工清理），生成配置时将跳过该规则", rule.CaddyID)
 		}
 	}
 	return nil
@@ -1402,7 +1401,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	// 会在持续性本地 DB 故障期间零留痕（状态面与日志均无信号）；行为不变
 	//（下周期照常重试），仅补日志。
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(master_url,''), COALESCE(registration_id,0), COALESCE(registration_secret,'') FROM global_config WHERE id=1").Scan(&masterURL, &registrationID, &secret); err != nil {
-		log.Printf("注册状态轮询：读取 global_config 失败，本周期跳过: %v", err)
+	Logf("error", "注册状态轮询：读取 global_config 失败，本周期跳过: %v", err)
 		return
 	}
 	if masterURL == "" || registrationID == 0 || secret == "" {
@@ -1448,7 +1447,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	// 页等）此前静默 return，节点零留痕轮询、表面状态不变；仅记日志不改状态机
 	// 行为（下周期照常重试，≥400 与 rejected 分支已有各自可观测动作）。
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope); err != nil {
-		log.Printf("注册状态轮询响应解析失败（HTTP %d，主节点可能被前置代理替换响应）: %v", resp.StatusCode, err)
+	Logf("error", "注册状态轮询响应解析失败（HTTP %d，主节点可能被前置代理替换响应）: %v", resp.StatusCode, err)
 		return
 	}
 	if envelope.Data.Status == "rejected" {
@@ -1470,7 +1469,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		// 审批时刻即有效（Pull 鉴权只查 cluster_token_hash），confirm 仅是冗余
 		// 交付确认（首个签名快照亦会清 secret），前置无安全影响。
 		if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken); err != nil {
-			log.Printf("保存集群令牌失败（下周期重试状态轮询）: %v", err)
+	Logf("error", "保存集群令牌失败（下周期重试状态轮询）: %v", err)
 			return
 		}
 		confirm, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/registration/confirm", nil)
@@ -1564,7 +1563,7 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE global_config SET registration_confirm_failures = COALESCE(registration_confirm_failures, 0) + 1 WHERE id=1")
 	if err != nil {
-		log.Printf("bumpRegistrationConfirmFailure: update failed: %v", err)
+	Logf("info", "bumpRegistrationConfirmFailure: update failed: %v", err)
 	}
 	var failures int
 	if qerr := s.db.QueryRowContext(ctx, "SELECT COALESCE(registration_confirm_failures, 0) FROM global_config WHERE id=1").Scan(&failures); qerr != nil {
@@ -1579,13 +1578,13 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 		RecordAuditLog("system", "注册失败", "集群节点", message, "")
 		// 清除 registration_secret 触发从节点退出注册循环；clusterToken 已存入 global_config 但因 confirm 未成功，主节点未真正确认
 		if _, derr := s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='', registration_id=NULL, registration_confirm_failures=0 WHERE id=1"); derr != nil {
-			log.Printf("bumpRegistrationConfirmFailure: clear registration state failed: %v", derr)
+	Logf("info", "bumpRegistrationConfirmFailure: clear registration state failed: %v", derr)
 		}
 		if clusterToken != "" {
 			_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token='' WHERE id=1")
 		}
 	} else {
-		log.Printf("集群注册确认失败 %d/%d：%s", failures, registrationConfirmMaxFailures, reason)
+	Logf("error", "集群注册确认失败 %d/%d：%s", failures, registrationConfirmMaxFailures, reason)
 	}
 }
 

@@ -46,6 +46,7 @@ func (e *clusterServiceControlRejection) Error() string {
 // 签发一次性 HMAC 服务控制票据 → 转发从节点 /cluster/service-control →
 // 中继结果并记录主节点审计。
 func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if !h.requireMaster(c) {
 		return
 	}
@@ -81,7 +82,8 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		result = "失败"
 	}
 	recordAudit(c, "服务控制", "节点服务", services.FormatAuditDetail(
-		fmt.Sprintf("节点 %s", issued.NodeName), "操作："+req.Action, "结果："+result))
+		// CL10-N14:补节点 ID(nodes.name 无 UNIQUE,仅名无法定位行)。
+		fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "操作："+req.Action, "结果："+result))
 	if err != nil {
 		var rejected *clusterServiceControlRejection
 		if errors.As(err, &rejected) {

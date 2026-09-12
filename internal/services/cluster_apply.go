@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,7 +209,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	}
 	if RuntimeAdminTLSChanged(LoadAdminTLSConfig()) {
 		RecordAuditLog("system", "重启", "系统", "同步到新的 HTTPS 访问配置，自动重启生效", "")
-		log.Printf("Admin TLS config changed via sync, restarting to apply")
+		Logf("info", "Admin TLS config changed via sync, restarting to apply")
 		requestRestart()
 	}
 	basicSync := "已同步"
@@ -949,7 +948,9 @@ func nullableTime(value sql.NullTime) any {
 
 // snapshotSecurityVersionRowsDiffer 比较快照携带的 CRS/IP2Region 版本行与
 // 本地行(2026-09-11:版本行差分门控——不进节哈希,以内容差分决定重放)。
-// 任一查询/序列化失败按「无差异」处理(保守:下一真实变更仍会重放)。
+// 查询失败时本地行保持空切片:快照非空即判「有差异」触发重放(向主端收敛,
+// CL10-N13:原「按无差异处理」描述对非空快照分支不成立);序列化失败(不可
+// 达,类型固定)按无差异。
 func snapshotSecurityVersionRowsDiffer(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) bool {
 	snapJSON := func(v any) string {
 		b, err := json.Marshal(v)

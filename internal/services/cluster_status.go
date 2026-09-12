@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"strconv"
 	"time"
-
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -312,6 +315,13 @@ func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report mode
 }
 
 func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
+	// CL10-N10(第 10 轮审计):删行前取访问地址——删行后 pin 成孤儿且无 API
+	// 清除通道,同 host:port 复用时服务控制 fail-closed PinMismatch 只能手工
+	// 删盘。地址解析与 ForgetNodePin 同口径(access_url 优先)。
+	var ipAddress, protocol, accessURL string
+	var port int
+	addrErr := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,'') FROM nodes WHERE id=?`, nodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL)
 	result, err := s.db.ExecContext(ctx, "DELETE FROM nodes WHERE id=?", nodeID)
 	if err != nil {
 		return fmt.Errorf("删除节点: %w", err)
@@ -321,5 +331,23 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 		return ErrNodeNotFound
 	}
 	s.clearSectionReport(nodeID)
+	// 行已删:清 pin(读址失败/无 pin/地址无效均不影响删除结果,仅留痕)。
+	if addrErr == nil {
+		if protocol != "https" {
+			protocol = "http"
+		}
+		if accessURL == "" {
+			accessURL = protocol + "://" + net.JoinHostPort(ipAddress, strconv.Itoa(port))
+		}
+		if parsed, perr := url.Parse(accessURL); perr == nil && parsed.Host != "" {
+			if pinPath, pperr := clusterPinPathForDatabase(s.db, parsed.Host); pperr == nil {
+				if rerr := os.Remove(pinPath); rerr == nil {
+					RecordAuditLog("system", "清除", "证书指纹", FormatAuditDetail(fmt.Sprintf("节点删除伴随清除 pin：%s", parsed.Host), AuditResultPart("success")), "")
+				} else if !errors.Is(rerr, os.ErrNotExist) {
+					Logf("warn", "节点删除后清除 pin 失败(%s): %v", parsed.Host, rerr)
+				}
+			}
+		}
+	}
 	return nil
 }

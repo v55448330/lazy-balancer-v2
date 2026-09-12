@@ -16,6 +16,7 @@ import (
 )
 
 func (h *Handlers) SetClusterMode(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	var req models.ClusterModeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		clusterError(c, http.StatusBadRequest, "集群模式参数无效", err)
@@ -100,24 +101,41 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 只删 pin 文件，内存 verifiedPins 残留旧主节点指纹会让记录与钉扎状态错位
 	//（M13① 后 do() 不再以内存指纹回写，此处清空保持内存/磁盘 TOFU 生命周期
 	// 对齐）。与 R64 A-N4 的 Resume() 同点位：角色切换的完整收尾。
+	if h.syncService == nil {
+		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		return
+	}
 	h.syncService.ForgetClusterPins()
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已提升为主节点"})
 }
 
 func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	var req models.ClusterSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		clusterError(c, http.StatusBadRequest, "集群设置参数无效", err)
 		return
 	}
 	if err := h.clusterService.UpdateSettings(c.Request.Context(), req); err != nil {
-		status := http.StatusForbidden
-		// SR9-1:恒同步拒绝属客户端错误 → 400(与间隔校验同型)。
-		if errors.Is(err, services.ErrInvalidSyncInterval) || errors.Is(err, services.ErrSyncUsersLocked) {
+		// CL10-N8:分判——角色/权限语义(403)/客户端参数(400)/其余 DB 与
+		// 内部故障(500,此前误 403 误导排障)。
+		status := http.StatusInternalServerError
+		msg := "更新集群设置失败"
+		switch {
+		case errors.Is(err, services.ErrInvalidSyncInterval) || errors.Is(err, services.ErrSyncUsersLocked):
 			status = http.StatusBadRequest
+			msg = err.Error()
+		case errors.Is(err, services.ErrAlreadyMaster):
+			status = http.StatusForbidden
+			msg = err.Error()
+		default:
+			if strings.Contains(err.Error(), "从节点不能修改") {
+				status = http.StatusForbidden
+				msg = err.Error()
+			}
 		}
-		clusterError(c, status, err.Error(), err)
+		clusterError(c, status, msg, err)
 		return
 	}
 	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(clusterSettingsChangeDetail(req), services.AuditResultPart("success")))

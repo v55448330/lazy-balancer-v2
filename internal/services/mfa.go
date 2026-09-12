@@ -207,7 +207,11 @@ func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 			if step <= lastStep {
 				return false, nil
 			}
-			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID)
+			// SLB10-N6:重放防护状态写失败必须传播——吞错时同片码在 ±1
+			// 容差窗内可重放换取新 step-up 窗。
+			if _, err := db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	} else if len(code) >= 10 && len(code) <= 16 {
@@ -249,7 +253,11 @@ func MFAVerifyTOTPCode(userID int, code string, now time.Time) (bool, error) {
 			if step <= lastStep {
 				return false, nil
 			}
-			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID)
+			// SLB10-N6:重放防护状态写失败必须传播——吞错时同片码在 ±1
+			// 容差窗内可重放换取新 step-up 窗。
+			if _, err := db.DB.Exec("UPDATE users SET mfa_last_timestep=? WHERE id=?", step, userID); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	}
@@ -290,10 +298,18 @@ func MFAActivate(userID int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.DB.Exec(
-		"UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_pending_secret='', mfa_recovery_codes=?, mfa_last_timestep=0 WHERE id=?",
-		pending, hashesJSON, userID); err != nil {
+	// SLB10-N7:CAS 绑定已验 pending——验证(MFAVerifyPending)与激活两请求间
+	// 并发 MFASetup 会覆盖 pending,无条件提升会把未经验码的新 secret 转正
+	// (用户 authenticator 持旧值 → MFA 永久不可用,自伤 DoS)。
+	result, err := db.DB.Exec(
+		"UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_pending_secret='', mfa_recovery_codes=?, mfa_last_timestep=0 WHERE id=? AND mfa_pending_secret=?",
+		pending, hashesJSON, userID, pending)
+	if err != nil {
 		return nil, err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return nil, fmt.Errorf("激活期间密钥已变更，请重新绑定")
 	}
 	return codes, nil
 }
@@ -319,18 +335,18 @@ func MFARegenerateRecoveryCodes(userID int) ([]string, error) {
 const mfaPendingFailThreshold = 5
 
 // MFARecordPendingFailure 记一次 pending 验证失败；达阈值作废 pending 并返回 true。
+// SLB10-N5:单条原子条件 UPDATE(读-改-写双语句在并发爆破下丢更新,硬闸
+// 退化约 2 倍预算)——达阈值同语句清空 pending 并回写 0,以影响行数判定。
 func MFARecordPendingFailure(userID int) bool {
-	var fails int
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_pending_fails,0) FROM users WHERE id=?", userID).Scan(&fails); err != nil {
+	var reset int64
+	if err := db.DB.QueryRow(`UPDATE users
+		SET mfa_pending_fails=CASE WHEN COALESCE(mfa_pending_fails,0)+1>=? THEN 0 ELSE COALESCE(mfa_pending_fails,0)+1 END,
+		    mfa_pending_secret=CASE WHEN COALESCE(mfa_pending_fails,0)+1>=? THEN '' ELSE mfa_pending_secret END
+		WHERE id=?
+		RETURNING CASE WHEN COALESCE(mfa_pending_fails,0)=0 THEN 1 ELSE 0 END`, mfaPendingFailThreshold, mfaPendingFailThreshold, userID).Scan(&reset); err != nil {
 		return false
 	}
-	fails++
-	if fails >= mfaPendingFailThreshold {
-		_, _ = db.DB.Exec("UPDATE users SET mfa_pending_secret='', mfa_pending_fails=0 WHERE id=?", userID)
-		return true
-	}
-	_, _ = db.DB.Exec("UPDATE users SET mfa_pending_fails=? WHERE id=?", fails, userID)
-	return false
+	return reset == 1
 }
 
 // MFAClearPendingFailures 成功验证后清零。

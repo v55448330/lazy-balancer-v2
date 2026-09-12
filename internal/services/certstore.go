@@ -446,8 +446,14 @@ func materializeCertPair(ruleID, certPEM, keyPEM string) error {
 	diskCert, certErr := os.ReadFile(certPath)
 	diskKey, keyErr := os.ReadFile(keyPath)
 	if certErr == nil && keyErr == nil && bytes.Equal(diskCert, []byte(certPEM)) && bytes.Equal(diskKey, []byte(keyPEM)) {
-		if _, err := tls.X509KeyPair(diskCert, diskKey); err == nil {
-			return nil
+		// CL10-N5:跳过前检查权限(与 writeCertPair/MaterializeCertPairs 同
+		// 契约)——私钥被 chmod 0644 后启动路径此前不修复,直到下次 apply。
+		if certInfo, serr := os.Stat(certPath); serr == nil && certInfo.Mode().Perm() == 0644 {
+			if keyInfo, kerr := os.Stat(keyPath); kerr == nil && keyInfo.Mode().Perm() == 0600 {
+				if _, err := tls.X509KeyPair(diskCert, diskKey); err == nil {
+					return nil
+				}
+			}
 		}
 	}
 	return WriteCertFiles(ruleID, certPEM, keyPEM)

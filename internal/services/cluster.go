@@ -186,7 +186,9 @@ func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int) error {
 	return nil
 }
 
-func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, secret string) (models.ClusterRegistrationStatus, error) {
+// RegistrationStatus 的 now 参数注入同域惯例(CL10-N17:原为唯一用真实时钟
+// 的集群方法,24h 到期边界无法确定性测试)。
+func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, secret string, now time.Time) (models.ClusterRegistrationStatus, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("开始状态事务: %w", err)
@@ -201,7 +203,7 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 		}
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("读取注册状态: %w", err)
 	}
-	if storedSecretHash == "" || storedSecretHash != tokenHash(secret) || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(time.Now().UTC())) {
+	if storedSecretHash == "" || storedSecretHash != tokenHash(secret) || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(now)) {
 		return models.ClusterRegistrationStatus{}, ErrInvalidClusterAuth
 	}
 	response := models.ClusterRegistrationStatus{Status: "pending"}
@@ -284,7 +286,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	ResetConfigDrift()
 
 	if registrationID > 0 {
-		RecordAuditLog("system", "提升", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
+		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
 	}
 	if s.lifecycle != nil {
 		s.lifecycle.StartACME()

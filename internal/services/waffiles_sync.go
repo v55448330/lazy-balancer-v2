@@ -36,7 +36,9 @@ func BuildWafFileRef() *models.ClusterWafFilesRef {
 	ref := &models.ClusterWafFilesRef{}
 	seen := false
 	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules")); err == nil {
-		if _, sum, err := tarGzDir(crsLiveDir); err == nil && sum != "" {
+		// CL10-N2:流式哈希(与 tarGzDir 字节级一致,CL10-N1 错误传播已补)——
+		// 本函数是快照重建+304 漂移检测热路径,免整档物化。
+		if sum, err := tarGzDirSum(crsLiveDir); err == nil && sum != "" {
 			ref.CRSSha256 = sum
 			seen = true
 		}
@@ -114,7 +116,8 @@ func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
 		return false
 	}
 	if r.CRSSha256 != "" {
-		if _, sum, err := tarGzDir(crsLiveDir); err != nil || sum != r.CRSSha256 {
+		// CL10-N2:流式哈希(同 BuildWafFileRef)。
+		if sum, err := tarGzDirSum(crsLiveDir); err != nil || sum != r.CRSSha256 {
 			return true
 		}
 	}
@@ -281,7 +284,14 @@ func tarGzDirSum(dir string) (string, error) {
 	writeArchive := func(pw *io.PipeWriter) {
 		gz := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gz)
-		writeTarEntries(dir, tw)
+		// CL10-N1(第 10 轮审计):写侧错误必须经 CloseWithError 传播——此前
+		// 截断归档照常算哈希返回 err=nil(读侧只认 CloseWithError)。
+		if err := writeTarEntries(dir, tw); err != nil {
+			tw.Close()
+			gz.Close()
+			pw.CloseWithError(err)
+			return
+		}
 		tw.Close()
 		gz.Close()
 		pw.Close()

@@ -37,6 +37,11 @@ func (h *Handlers) ListClusterNodes(c *gin.Context) {
 }
 
 func (h *Handlers) ReportClusterNode(c *gin.Context) {
+	// CL10-N9:与快照端点对称加 requireMaster——降级主节点残留 nodes 行时,
+	// 旧从节点上报照常写入(无审批),再提升后旧令牌静默重组集群。
+	if !h.requireMaster(c) {
+		return
+	}
 	var req models.ClusterReport
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportMaxBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {

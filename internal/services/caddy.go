@@ -434,15 +434,6 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	return payload
 }
 
-func isRunningDefaultRoute(route map[string]interface{}) bool {
-	handlers, ok := route["handle"].([]interface{})
-	if !ok || len(handlers) == 0 {
-		return false
-	}
-	handler, ok := handlers[0].(map[string]interface{})
-	return ok && handler["handler"] == "static_response" && handler["body"] == "Lazy Balancer V2 is running!"
-}
-
 // RouteIDBelongsToRule 判断运行配置中的路由 @id 是否归属某规则：主路由
 // （@id == ruleID）或其带后缀的兄弟路由（ruleID_ 前缀：path_N / geoip /
 // redirect 等）。规则删除路径的路由清理与 handlers 侧
@@ -2431,12 +2422,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 统一生成（端口 443 时 Location 不带自引用端口，见 httpsRedirectLocation）。
 		// 若未来需要在单规则配置里启用此分支，请先确认与全量生成逻辑保持一致。
 		//
-		// 已知口径差异（R47 C-发现4 记录，当前因分支不可达而无影响）：全量分支的
-		// automatic_https 对 80/443 端口写 {disable_certificates: true}（保留自动
-		// 跳转、仅禁 Caddy 自建证书自动化，防绕开 cert_jobs 的 DNS-01 签发），非
-		// 80/443 端口写 {disable: true}；本分支仅对非 80/443 端口写 {disable: true}，
-		// 80/443 端口不写 automatic_https。若未来启用此分支，必须补齐 80/443 的
-		// disable_certificates 例外，否则 Caddy 会为路由域名自建 ACME automation。
+		// 口径说明(SLB10-N3 同步:SLB9-1 后全量分支对全部端口统一
+		// {disable: true}——引擎 autoHTTPS 整体关闭,HTTP→HTTPS 跳转由项目
+		// 自有 redirectRoutes 管理;此前的 disable_certificates 例外与「保留
+		// 自动跳转」描述已废止)。本分支(仅预览/校验用,输出不达 Caddy)仅对
+		// 非 80/443 端口写 {disable: true},80/443 不写 automatic_https;
+		// 若未来启用此分支,应与全量分支同口径统一 {disable: true}。
 		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
 			// 与 generateHTTPRouteObjects 同口径：任一启用策略带 geoip 时仅一条
 			// pass 路由（地域拦截已改走 coraza，无逐策略 block 路由）。

@@ -83,9 +83,15 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 		clusterError(c, http.StatusBadRequest, "注册编号无效", err)
 		return
 	}
-	status, err := h.clusterService.RegistrationStatus(c.Request.Context(), id, c.GetString("registration_secret"))
+	status, err := h.clusterService.RegistrationStatus(c.Request.Context(), id, c.GetString("registration_secret"), time.Now())
 	if err != nil {
-		clusterError(c, http.StatusUnauthorized, "注册凭证无效", err)
+		// CL10-N8:仅凭证类哨兵 401——DB 故障误映射 401 会驱使从节点走
+		// 五连败轨道耗尽注册配额。
+		if errors.Is(err, services.ErrNodeNotFound) || errors.Is(err, services.ErrInvalidClusterAuth) {
+			clusterError(c, http.StatusUnauthorized, "注册凭证无效", err)
+			return
+		}
+		clusterError(c, http.StatusInternalServerError, "查询注册状态失败", err)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册状态查询成功", Data: status})
@@ -96,7 +102,12 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		return
 	}
 	if err := h.clusterService.ConfirmRegistration(c.Request.Context(), authenticatedClusterToken(c)); err != nil {
-		clusterError(c, http.StatusUnauthorized, "确认集群注册失败", err)
+		// CL10-N8:同 RegistrationStatus 分判。
+		if errors.Is(err, services.ErrInvalidClusterAuth) || errors.Is(err, services.ErrNodeNotFound) || errors.Is(err, services.ErrInvalidRegisterToken) {
+			clusterError(c, http.StatusUnauthorized, "确认集群注册失败", err)
+			return
+		}
+		clusterError(c, http.StatusInternalServerError, "确认集群注册失败", err)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群注册已确认"})
@@ -115,6 +126,7 @@ func (h *Handlers) DeleteClusterNode(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	var req models.ClusterNodeAccessURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		clusterError(c, http.StatusBadRequest, "访问地址格式错误", err)

@@ -527,7 +527,12 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			return
 		}
 		var crsExcluded []json.RawMessage
-		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
+		// SLB10-N15:解析失败 500(与 ListIPLists 同款口径)——吞错时带外脏
+		// 行显示 0 排除、实际 N 排除,观测缺口。
+		if err := json.Unmarshal(p.CRSExcludedRules, &crsExcluded); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析策略 CRS 排除列表失败"})
+			return
+		}
 		ruleCount := bindingCounts[p.ID]
 		// R72 三十次追加 a：GeoIP/自定义规则的 has 计算（供 ruleProtections 显示行）。
 		hasGeoIP := services.PolicyHasGeoIP(&p)
@@ -2914,10 +2919,6 @@ func getContextUserID(c *gin.Context) string {
 		}
 	}
 	return "0"
-}
-
-func init() {
-	log.Println("Security handlers registered")
 }
 
 func (h *Handlers) ListCRSRules(c *gin.Context) {

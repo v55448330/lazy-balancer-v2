@@ -302,6 +302,15 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	// 本写操作完成验码（60 秒窗内静默放行或 428→verify-step 刷新 mfa_ts），再验
 	// 一次会在 TOTP 重放保护下同片互斥：verify-step 消费时间片后第一层无码可用，
 	// 必 401（验证码错误→踢出登录→连续失败触发 10 分钟锁定）。
+	// mfaStepUpVerifiedInContext:守卫(开启态)验码放行路径的标记优先;开关
+	// 关闭或机器身份时守卫未运行,无标记,本层验码保持(SLB10-N4:消除
+	// handler 重读开关的毫秒窗 TOCTOU——开关在中间件后翻转不再产生
+	// 「守卫未验码+本层跳过」的免验窗口)。
+	mfaStepUpVerifiedInContext := func(c *gin.Context) bool {
+		v, ok := c.Get("mfa_stepup_verified")
+		return ok && v == true
+	}
+
 	// R73 补正（审计 IMPORTANT-3）：守卫真正验过码的只有 JWT 路径——mfaStepUpGuard
 	// 按设计豁免 auth_type != "jwt"，API Key/MCP 机器身份不被守卫验码，豁免理由
 	// 不成立，故不免第一层（R72 二次防劫持语义对机器身份同样保持）。守卫关闭
@@ -310,7 +319,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	if operatorMfa, err := services.MFAUserEnabled(operatorID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取操作者 MFA 状态失败"})
 		return
-	} else if operatorMfa && !(c.GetString("auth_type") == "jwt" && services.MFAWriteGuardEnabled()) {
+	} else if operatorMfa && !mfaStepUpVerifiedInContext(c) {
 		if ok, verr := services.MFAVerifyCode(operatorID, req.Code, time.Now()); !ok {
 			// R72 七次：重置前置验码失败留痕——高敏动作的失败尝试与成功同等
 			// 可审计（含 brute 尝试面）。

@@ -176,11 +176,13 @@ func TestClusterService_IsMaster_nullIsMasterFailsOpenAsMaster(t *testing.T) {
 func TestClusterService_ForgetNodePin_removesOnlyTargetNodePin(t *testing.T) {
 	// Given：两个从节点各有一个 pin 文件，另有本节点作为从节点时代的旧主节点钉
 	cluster, database := newClusterTestService(t)
-	seed := `INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,is_approved) VALUES (?,?,'172.18.0.2',8000,'http',?,1)`
-	if _, err := database.Exec(seed, 21, "slave-a", "https://node-a.example:8443"); err != nil {
+	// CL10-N16 UNIQUE(ip,port) 后两节点须不同 ip:port(原夹具同址仅 access_url
+	// 不同——物理矛盾形态,一个端口一种协议)。
+	seed := `INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,is_approved) VALUES (?,?,?,?,?,?,1)`
+	if _, err := database.Exec(seed, 21, "slave-a", "172.18.0.2", 8000, "http", "https://node-a.example:8443"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(seed, 22, "slave-b", "https://node-b.example:8443"); err != nil {
+	if _, err := database.Exec(seed, 22, "slave-b", "172.18.0.2", 8001, "http", "https://node-b.example:8443"); err != nil {
 		t.Fatal(err)
 	}
 	writePin := func(host string) string {

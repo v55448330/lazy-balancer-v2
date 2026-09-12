@@ -56,11 +56,20 @@ func seedMfaResetUsers(t *testing.T, operatorMfa bool) (operatorSecret string) {
 // authType 模拟中间件设置的认证类型（R73 补正：第一层豁免只对被 mfaStepUpGuard
 // 真正验过码的 jwt 路径生效；api_key/MCP 机器身份由场景 5 覆盖）。
 func mfaResetRouter(h *Handlers, authType string) *gin.Engine {
+	return mfaResetRouterWithGuard(h, authType, false)
+}
+
+// mfaResetRouterWithGuard 模拟守卫态:guardMarker=true 时前置注入
+// mfa_stepup_verified(SLB10-N4:生产由 mfaStepUpGuard 开启态放行路径置)。
+func mfaResetRouterWithGuard(h *Handlers, authType string, guardMarker bool) *gin.Engine {
 	router := gin.New()
 	router.POST("/users/:id/mfa/reset", func(c *gin.Context) {
 		c.Set("user_id", 1)
 		c.Set("username", "operator")
 		c.Set("auth_type", authType)
+		if guardMarker {
+			c.Set("mfa_stepup_verified", true)
+		}
 		h.MFAResetByAdmin(c)
 	})
 	return router
@@ -93,7 +102,7 @@ func TestMFAResetByAdmin_guardOn_skipsOperatorCodeCheck(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	seedMfaResetUsers(t, true)
 	setMfaWriteGuard(t, true)
-	router := mfaResetRouter(h, "jwt")
+	router := mfaResetRouterWithGuard(h, "jwt", true)
 
 	// When
 	rec := postMfaReset(router, `{}`)
@@ -161,7 +170,7 @@ func TestMFAResetByAdmin_operatorWithoutMfa_noCodeRequired(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	seedMfaResetUsers(t, false)
 	setMfaWriteGuard(t, true)
-	router := mfaResetRouter(h, "jwt")
+	router := mfaResetRouterWithGuard(h, "jwt", true)
 
 	// When
 	rec := postMfaReset(router, `{}`)

@@ -412,7 +412,9 @@ const promoteToMaster = async (): Promise<void> => {
   try {
     const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
     if (!confirmed) return
-    await request.post<ActionResponse>('/cluster/promote')
+    // CL10-N18:Promote 在途同步排空(含 apply+Caddy 重载)可超默认 30s——
+    // 放大至 120s,防前端超时误报失败诱导重复点击(后端随后实际成功)。
+    await request.post<ActionResponse>('/cluster/promote', undefined, { timeout: 120000 })
     mfaAwareSuccess('已提升为主节点')
     await clusterPolling.run()
   } catch (error: unknown) {

@@ -1738,6 +1738,7 @@ const fetchHealthStatus = async () => {
           let isHealthy = false
           let isUnknown = true
           let isDegraded = false
+          let isDynamic = false
           let numRequests = 0
           let fails = 0
           for (const serverHealth of Object.values(healthData)) {
@@ -1745,6 +1746,7 @@ const fetchHealthStatus = async () => {
               if (upstreamKey in serverHealth) {
                 const detail = serverHealth[upstreamKey]
                 isUnknown = detail.unknown === true
+                isDynamic = detail.dynamic === true
                 if (!isUnknown) {
                   isHealthy = detail.healthy !== false
                   isDegraded = detail.degraded === true
@@ -1755,7 +1757,7 @@ const fetchHealthStatus = async () => {
               }
             }
           }
-          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
+          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, dynamic: isDynamic, degraded: isDegraded, num_requests: numRequests, fails }
           if (isUnknown) unknown++
           else if (!isHealthy) unhealthy++
           else if (isDegraded) degraded++

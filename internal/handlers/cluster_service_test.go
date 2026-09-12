@@ -353,7 +353,7 @@ func TestControlClusterNodeService_relays_slave_response_and_audits(t *testing.T
 		if err := rows.Scan(&username, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if username == "admin" && strings.Contains(detail, "节点 slave-x") && strings.Contains(detail, "操作：stop_caddy") && strings.Contains(detail, "结果：成功") {
+		if username == "admin" && strings.Contains(detail, "节点 21（slave-x）") && strings.Contains(detail, "操作：stop_caddy") && strings.Contains(detail, "结果：成功") {
 			found = true
 		}
 	}

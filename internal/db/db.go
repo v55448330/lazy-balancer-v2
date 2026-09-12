@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +26,6 @@ var (
 	currentDB      atomic.Value
 	MetricsDB      *sql.DB
 	AuditDB        *sql.DB
-	BackgroundDBMu sync.Mutex
 	openDatabase   = sql.Open
 	domainProfile  = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.VerifyDNSLength(true))
 )
@@ -162,6 +160,9 @@ func Initialize(dataDir string) (err error) {
 	}
 	if err := migrateSyncSwitches(); err != nil {
 		return fmt.Errorf("failed to migrate sync switches: %w", err)
+	}
+	if err := migrateNodesDropMasterID(); err != nil {
+		return fmt.Errorf("failed to migrate nodes master_id removal: %w", err)
 	}
 	if err := ensureClusterAppliedSections(); err != nil {
 		return fmt.Errorf("failed to ensure cluster_applied_sections: %w", err)
@@ -398,7 +399,6 @@ func createTables() error {
 		ip_address VARCHAR(45) NOT NULL,
 		port INTEGER DEFAULT 8000,
 		protocol VARCHAR(10) DEFAULT 'http',
-		master_id INTEGER,
 		is_approved BOOLEAN DEFAULT FALSE,
 		sync_interval INTEGER DEFAULT 60,
 		status VARCHAR(20) DEFAULT 'offline',
@@ -412,12 +412,11 @@ func createTables() error {
 		last_sync_error TEXT,
 		last_seen DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (master_id) REFERENCES nodes(id)
+		UNIQUE(ip_address, port)
 	);
 
 	-- Create indexes
 	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
-	CREATE INDEX IF NOT EXISTS idx_nodes_master ON nodes(master_id);
 
 	CREATE TABLE IF NOT EXISTS cluster_register_tokens (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -427,7 +426,6 @@ func createTables() error {
 		created_by INTEGER,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-	CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash);
 
 	CREATE TABLE IF NOT EXISTS used_login_tickets (
 		jti_hash TEXT PRIMARY KEY,
@@ -1956,20 +1954,23 @@ func migrateNodesDeadColumns() error {
 		return fmt.Errorf("begin nodes migration: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`CREATE TABLE nodes_without_legacy_sync (
+	// CL10-N15:重建目标对齐新 schema(无 master_id/自引用 FK,idx_nodes_master;
+	// 补 UNIQUE(ip,port))——master_id 死列经本路径与 migrateNodesDropMasterID
+	// 双路径收敛为同一形态。
+	if _, err := tx.Exec(`DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port);
+		CREATE TABLE nodes_without_legacy_sync (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, mode VARCHAR(10) NOT NULL DEFAULT 'slave',
 		ip_address VARCHAR(45) NOT NULL, port INTEGER DEFAULT 8000, protocol VARCHAR(10) DEFAULT 'http', access_url VARCHAR(255) DEFAULT '',
-		master_id INTEGER, is_approved BOOLEAN DEFAULT FALSE, sync_interval INTEGER DEFAULT 60, status VARCHAR(20) DEFAULT 'offline',
+		is_approved BOOLEAN DEFAULT FALSE, sync_interval INTEGER DEFAULT 60, status VARCHAR(20) DEFAULT 'offline',
 		cluster_token_hash VARCHAR(64), registration_secret VARCHAR(64), registration_secret_expires_at DATETIME,
 		cluster_token_delivered BOOLEAN DEFAULT 0, reported_version INTEGER DEFAULT 0, health_json TEXT,
 		last_sync_at DATETIME, last_sync_error TEXT, last_seen DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (master_id) REFERENCES nodes_without_legacy_sync(id));
-		INSERT INTO nodes_without_legacy_sync (id,name,mode,ip_address,port,protocol,access_url,master_id,is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at)
-		SELECT id,name,COALESCE(mode,'slave'),ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),master_id,is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at FROM nodes;
+		UNIQUE(ip_address, port));
+		INSERT INTO nodes_without_legacy_sync (id,name,mode,ip_address,port,protocol,access_url,is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at)
+		SELECT id,name,COALESCE(mode,'slave'),ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at FROM nodes;
 		DROP TABLE nodes;
 		ALTER TABLE nodes_without_legacy_sync RENAME TO nodes;
-		CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
-		CREATE INDEX IF NOT EXISTS idx_nodes_master ON nodes(master_id);`); err != nil {
+		CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);`); err != nil {
 		return fmt.Errorf("rebuild nodes table: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -2486,6 +2487,60 @@ func migrateSyncSwitches() error {
 	// 卡片重新关闭对应类别。旧 sync_caddy_config 列已随迁移删除。
 	_, err := DB.Exec("UPDATE global_config SET sync_switches_migrated=1 WHERE id=1")
 	return err
+}
+
+// migrateNodesDropMasterID 存量库 nodes 表重建(CL10-N15/N-16,2026-09-12):
+// master_id 为死列(无业务读写),连同自引用 FK 与 idx_nodes_master 一并移除;
+// 补 UNIQUE(ip_address, port) 防深度(应用层单未用令牌不变式已防竞态,此处
+// 为改库/代码回归兜底)。重建前按 (ip,port) 去重保 MIN(id)。幂等:新形态
+// (无 master_id 列)直接跳过。
+func migrateNodesDropMasterID() error {
+	var hasMasterID int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name='master_id'").Scan(&hasMasterID); err != nil {
+		return err
+	}
+	if hasMasterID == 0 {
+		return nil
+	}
+	if _, err := DB.Exec("DROP INDEX IF EXISTS idx_nodes_master"); err != nil {
+		return fmt.Errorf("drop idx_nodes_master: %w", err)
+	}
+	// 去重:同 (ip,port) 保留最小 id(注册竞态形态理论不可达,防御性收敛)。
+	if _, err := DB.Exec(`DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port)`); err != nil {
+		return fmt.Errorf("dedupe nodes: %w", err)
+	}
+	const rebuild = `CREATE TABLE nodes_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name VARCHAR(100) NOT NULL,
+		mode VARCHAR(10) NOT NULL DEFAULT 'slave',
+		ip_address VARCHAR(45) NOT NULL,
+		port INTEGER DEFAULT 8000,
+		protocol VARCHAR(10) DEFAULT 'http',
+		is_approved BOOLEAN DEFAULT FALSE,
+		sync_interval INTEGER DEFAULT 60,
+		status VARCHAR(20) DEFAULT 'offline',
+		cluster_token_hash VARCHAR(64),
+		access_url VARCHAR(255) DEFAULT '',
+		registration_secret VARCHAR(64),
+		registration_secret_expires_at DATETIME,
+		cluster_token_delivered BOOLEAN DEFAULT FALSE,
+		reported_version INTEGER DEFAULT 0,
+		health_json TEXT,
+		last_sync_at DATETIME,
+		last_sync_error TEXT,
+		last_seen DATETIME,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(ip_address, port)
+	);
+	INSERT INTO nodes_new (id,name,mode,ip_address,port,protocol,is_approved,sync_interval,status,cluster_token_hash,access_url,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at)
+		SELECT id,name,mode,ip_address,port,protocol,is_approved,sync_interval,status,cluster_token_hash,COALESCE(access_url,''),registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at FROM nodes;
+	DROP TABLE nodes;
+	ALTER TABLE nodes_new RENAME TO nodes;
+	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);`
+	if _, err := DB.Exec(rebuild); err != nil {
+		return fmt.Errorf("rebuild nodes: %w", err)
+	}
+	return nil
 }
 
 func ensureClusterAppliedSections() error {

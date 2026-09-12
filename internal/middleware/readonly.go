@@ -60,8 +60,14 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 }
 
 func isReadOnlyGuardWhitelisted(path string) bool {
+	// CL10-P2-1(第 10 轮审计):verify-step 入白名单——MFA 写守卫开启的
+	// 从节点 JWT 用户此前 428(需验码)↔403(verify-step 被只读拒)互封,
+	// promote/forget-pins 补救通道不可达;verify-step 仅写非同步簿记列
+	// (users 触发器 OF 列表不含 mfa_last_timestep),从节点本地执行无
+	// 同步副作用,与 /auth/logout 同理放行。
 	return path == "/api/v1/auth/login" ||
 		path == "/api/v1/auth/logout" ||
+		path == "/api/v1/auth/mfa/verify-step" ||
 		path == "/api/v1/cluster" ||
 		strings.HasPrefix(path, "/api/v1/cluster/")
 }

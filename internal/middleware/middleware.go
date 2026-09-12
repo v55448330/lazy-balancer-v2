@@ -145,17 +145,20 @@ func loginRateLimit() gin.HandlerFunc {
 // 未认证、无速率限制的写端点——每次无效令牌尝试 16KB 体读+条件 UPDATE+
 // 审计 INSERT,互联网可达主节点可被线速打审计库。同威胁模型的 login/setup
 // 均有限流,此处补同等待遇(宽桶:注册属低频管理操作,30/min/IP)。
-func clusterRegisterRateLimit() gin.HandlerFunc {
-	const limit = 30
+// clusterRateLimit 集群公开写端点限流(CL9-N6/CL10-P2-2):register(无效令牌
+// 尝试=16KB 体读+条件 UPDATE+审计 INSERT)与 service-control(匿名可达,
+// 每尝试 BEGIN IMMEDIATE 写锁+恒审计 INSERT,写放大更强)——同威胁模型的
+// login/setup 均有限流,补同等待遇。按端点独立分桶,宽桶(低频管理操作)。
+func clusterRateLimit(scope string, limit int, message string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		now := time.Now()
 		ip := c.ClientIP()
 
 		loginRateBuckets.Lock()
-		bucket, ok := loginRateBuckets.entries[ip+"|register"]
+		bucket, ok := loginRateBuckets.entries[ip+"|"+scope]
 		if !ok {
 			bucket = &loginRateBucket{until: now.Add(time.Minute)}
-			loginRateBuckets.entries[ip+"|register"] = bucket
+			loginRateBuckets.entries[ip+"|"+scope] = bucket
 		}
 		loginRateBuckets.Unlock()
 
@@ -169,11 +172,15 @@ func clusterRegisterRateLimit() gin.HandlerFunc {
 		bucket.mu.Unlock()
 
 		if exceeded {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "注册请求过于频繁，请稍后再试"})
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": message})
 			return
 		}
 		c.Next()
 	}
+}
+
+func clusterRegisterRateLimit() gin.HandlerFunc {
+	return clusterRateLimit("register", 30, "注册请求过于频繁，请稍后再试")
 }
 
 var loginRateLimitCleanupOnce sync.Once
@@ -279,7 +286,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
 		// 从节点服务控制：票据即凭证（主节点签发的一次性 HMAC，与登录票据同
 		// 机制），不走 clusterTokenAuth——主节点无法取回令牌明文（仅存哈希）。
-		v1.POST("/cluster/service-control", h.ClusterServiceControl)
+		v1.POST("/cluster/service-control", clusterRateLimit("service-control", 20, "服务控制请求过于频繁，请稍后再试"), h.ClusterServiceControl)
 
 		v1.Use(apiKeyAuth(cfg))
 		v1.Use(jwtAuth(cfg))
@@ -915,6 +922,9 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		// 语义：距上次 MFA 验证超过 1 分钟的写操作都要求验码（「立即生效」的
 		// 观感），紧邻的连续操作（428→弹码→重试→顺手再存一步）不重复骚扰。
 		mfaTs := c.GetFloat64("mfa_ts")
+		// SLB10-N4:守卫验码放行路径置标记——handler(MFAResetByAdmin)采信
+		// 标记而非重读开关,消除开关在中间件后翻转的毫秒窗 TOCTOU。
+		c.Set("mfa_stepup_verified", true)
 		if elapsed := time.Since(time.Unix(int64(mfaTs), 0)); mfaTs > 0 && elapsed < 60*time.Second {
 			// R72 八次（用户裁决）：宽限窗内静默放行时告知用户——响应头携带距上次
 			// 验证的秒数（TOTP 同片不可重用，窗口内的操作没有可用码也照常执行），

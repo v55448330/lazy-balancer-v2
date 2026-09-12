@@ -363,7 +363,13 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 				`SELECT COUNT(*) FROM security_policies
 WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
   AND json_valid(COALESCE(ip_acl_list_refs,'[]')) AND EXISTS (SELECT 1 FROM json_each(COALESCE(ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
-				listID).Scan(&allowRefCount); err == nil && allowRefCount > 0 {
+				listID).Scan(&allowRefCount); err != nil {
+				// SLB10-N1(第 10 轮审计):守卫查询失败 fail-closed——此前
+				// err==nil&& 使查询错误静默放行「清空被 allow 引用的列表」,
+				// 正是 N1 要防的发射端 fail-open 形态;与 12 行后重名门同口径。
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败"})
+				return
+			} else if allowRefCount > 0 {
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
 					Message: fmt.Sprintf("该列表正被 %d 个白名单模式策略引用，清空条目会使这些策略放行全部请求，请先解除引用", allowRefCount)})
 				return

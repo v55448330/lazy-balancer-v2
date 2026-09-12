@@ -229,11 +229,11 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed(t *
 	}
 
 	// When
-	first, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret)
+	first, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now())
 	if err != nil {
 		t.Fatalf("first status: %v", err)
 	}
-	second, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret)
+	second, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now())
 	if err != nil {
 		t.Fatalf("second status: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed(t *
 	if _, _, err := service.Snapshot(context.Background(), 0, "", first.ClusterToken); err != nil {
 		t.Fatalf("authenticate snapshot: %v", err)
 	}
-	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); !errors.Is(err, ErrInvalidClusterAuth) {
+	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now()); !errors.Is(err, ErrInvalidClusterAuth) {
 		t.Fatalf("registration secret remained valid after authenticated snapshot delivery: %v", err)
 	}
 }
@@ -284,7 +284,7 @@ func TestClusterService_RegistrationStatus_rejects_expired_secret(t *testing.T) 
 		t.Fatalf("expire registration secret: %v", err)
 	}
 
-	_, err = service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret)
+	_, err = service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now())
 
 	if !errors.Is(err, ErrInvalidClusterAuth) {
 		t.Fatalf("expired registration status error=%v, want invalid auth", err)

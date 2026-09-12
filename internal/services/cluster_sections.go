@@ -128,7 +128,7 @@ func sanitizeAPIKeysForHash(keys []models.ClusterAPIKey) []models.ClusterAPIKey 
 	return out
 }
 
-// LoadSyncSwitches reads the master-side sync switches; defaults all-on.
+// SyncSwitches 是节点本地同步开关集(读取见 readSyncSwitches,CL10-N4:此前注释引用不存在的 LoadSyncSwitches 且口径写错)。
 type SyncSwitches struct {
 	GlobalConfig bool
 	Users        bool
@@ -356,4 +356,12 @@ func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, swit
 		return
 	}
 	RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region 文件已更新（同步开关关闭），本地文件保持不变", "")
+	// CL10-N7:告警后 upsert applied_version(哈希不动——disabled 节的哈希
+	// 仅在开关开启时被消费)——recordAppliedSectionHashes 对 disabled 节
+	// 跳过写入使 applied_version 冻结在开关关闭前,dedup 条件恒假,每版本
+	// bump 刷一条告警审计。
+	if db.DB != nil {
+		_, _ = db.DB.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES ('waf_files','',?,datetime('now'))
+			ON CONFLICT(section) DO UPDATE SET applied_version=excluded.applied_version`, snapshot.Version)
+	}
 }
