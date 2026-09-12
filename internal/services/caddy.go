@@ -393,7 +393,7 @@ const caddyErrorBodyMaxBytes = 1024
 func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error) {
 	// R69：validate=true 实为真实加载（Caddy 以校验模式执行完整的 provision/
 	// 加载路径，coraza 等插件照常编译并持有资源），与 apply 同为写操作——必须
-	// 持写锁串行化，避免与并发 apply/证书快照恢复竞态（对照 ValidateRouteMergedConfig）。
+	// 持写锁串行化，避免与并发 apply/证书快照恢复竞态。
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {

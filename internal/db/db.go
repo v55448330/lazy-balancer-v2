@@ -164,6 +164,12 @@ func Initialize(dataDir string) (err error) {
 	if err := migrateNodesDropMasterID(); err != nil {
 		return fmt.Errorf("failed to migrate nodes master_id removal: %w", err)
 	}
+	// CL11-N1(第 11 轮审计):回收存量库冗余索引——UNIQUE(token_hash) 的
+	// 隐式唯一索引已覆盖查询,显式索引为纯维护噪音;第 10 轮仅删了 CREATE
+	// 行,存量库索引持久于库文件。幂等 DROP。
+	if _, err := DB.Exec("DROP INDEX IF EXISTS idx_cluster_register_tokens_hash"); err != nil {
+		return fmt.Errorf("failed to drop legacy register-token hash index: %w", err)
+	}
 	if err := ensureClusterAppliedSections(); err != nil {
 		return fmt.Errorf("failed to ensure cluster_applied_sections: %w", err)
 	}
@@ -2502,14 +2508,37 @@ func migrateNodesDropMasterID() error {
 	if hasMasterID == 0 {
 		return nil
 	}
-	if _, err := DB.Exec("DROP INDEX IF EXISTS idx_nodes_master"); err != nil {
-		return fmt.Errorf("drop idx_nodes_master: %w", err)
+	// CL11-P2-1(第 11 轮审计):conn+foreign_keys 存/关/还原+事务——与同文件
+	// 全部兄弟表重建迁移(migrateNodesDeadColumns 等)同模式。此前裸 DB.Exec
+	// 逐语句自动提交:半失败→nodes_new 残留→重跑 CREATE 报 already exists→
+	// 启动死循环;DROP 与 RENAME 之间崩溃→nodes 表丢失→下次启动静默重建
+	// 空表,节点注册表全量丢失。事务化后失败整体回滚、重跑幂等。
+	ctx := context.Background()
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire nodes migration connection: %w", err)
 	}
-	// 去重:同 (ip,port) 保留最小 id(注册竞态形态理论不可达,防御性收敛)。
-	if _, err := DB.Exec(`DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port)`); err != nil {
-		return fmt.Errorf("dedupe nodes: %w", err)
+	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("read foreign_keys setting: %w", err)
 	}
-	const rebuild = `CREATE TABLE nodes_new (
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() {
+		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
+			log.Printf("failed to restore foreign_keys=%d after nodes master_id migration: %v", fkPrev, err)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin nodes master_id migration: %w", err)
+	}
+	defer tx.Rollback()
+	const rebuild = `DROP INDEX IF EXISTS idx_nodes_master;
+	DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port);
+	CREATE TABLE nodes_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name VARCHAR(100) NOT NULL,
 		mode VARCHAR(10) NOT NULL DEFAULT 'slave',
@@ -2537,8 +2566,11 @@ func migrateNodesDropMasterID() error {
 	DROP TABLE nodes;
 	ALTER TABLE nodes_new RENAME TO nodes;
 	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);`
-	if _, err := DB.Exec(rebuild); err != nil {
+	if _, err := tx.Exec(rebuild); err != nil {
 		return fmt.Errorf("rebuild nodes: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit nodes master_id migration: %w", err)
 	}
 	return nil
 }

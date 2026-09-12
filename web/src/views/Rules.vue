@@ -171,7 +171,8 @@
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
-                    <el-icon v-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                    <el-tooltip v-if="status.unknown && status.dynamic" content="Caddy 按解析后 IP 跟踪动态上游健康，域名级不可观测" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                    <el-icon v-else-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
                     <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                     <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -1632,7 +1633,7 @@ let nextTemporaryPathRuleId = -1
 const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
-const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
+const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
@@ -1660,7 +1661,7 @@ const upstreamRowNeedsHost = (u: UpstreamInput, i: number): boolean =>
 const upstreamHostWarning = computed(() =>
   wizardForm.upstreams.some((u, i) => upstreamRowNeedsHost(u, i)) ? '主机地址为必填项，请填写完整' : '')
 
-interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number }
+interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
 
 const getEnabledUpstreams = (rule: Rule): Upstream[] =>
   rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
@@ -1670,6 +1671,8 @@ const getHealthTagType = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded > 0) return 'warning'
   if (status.unknown === status.total) return 'info'
   if (status.unknown > 0) return 'warning'
+  // SR11-F1:动态 DNS 上游结构性 N/A(引擎按解析 IP 跟踪,域名级不可观测)
+  if (status.na === status.total) return 'info'
   return 'success'
 }
 
@@ -1678,6 +1681,7 @@ const getHealthLabel = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded > 0) return '降级'
   if (status.unknown === status.total) return '未知'
   if (status.unknown > 0) return '降级'
+  if (status.na === status.total) return 'N/A'
   return '正常'
 }
 
@@ -1724,7 +1728,7 @@ const fetchHealthStatus = async () => {
     const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: healthPolling.signal, silent: true })
     if (disposed) return
     const healthData = res.data || {}
-    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
+    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
       const enabledUpstreams = getEnabledUpstreams(rule)
       if (enabledUpstreams.length > 0) {
@@ -1732,6 +1736,7 @@ const fetchHealthStatus = async () => {
         let unhealthy = 0
         let degraded = 0
         let unknown = 0
+        let na = 0
         const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; dynamic?: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of enabledUpstreams) {
           const upstreamKey = hostPortKey(upstream.host, upstream.port)
@@ -1758,13 +1763,14 @@ const fetchHealthStatus = async () => {
             }
           }
           upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, dynamic: isDynamic, degraded: isDegraded, num_requests: numRequests, fails }
-          if (isUnknown) unknown++
+          if (isUnknown && isDynamic) na++
+          else if (isUnknown) unknown++
           else if (!isHealthy) unhealthy++
           else if (isDegraded) degraded++
           else healthy++
         }
         if (rule.caddy_id) {
-          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: enabledUpstreams.length, upstreams: upstreamStatus }
+          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, na, total: enabledUpstreams.length, upstreams: upstreamStatus }
         }
       }
     }

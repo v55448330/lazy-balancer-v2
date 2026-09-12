@@ -32,7 +32,7 @@
 
 1. `create_rule`：`protocol=http` + `domain` + `listen_port`(80/443) + `upstreams[{host,port}]`；需 ACME 时加 `enable_tls=true`、`tls_source="acme"`
 2. `issue_certificate` 传 `caddy_id` 触发签发（前提：系统已配 DNS 提供商与 CA）
-3. `list_cert_jobs`（可按 `rule_id` 过滤）轮询直到 `success`；`failed` 看失败原因后 `retry_cert_job`
+3. `list_cert_jobs`（可按 `rule_id` 过滤）轮询直到 `issued`；`failed` 看失败原因后 `retry_cert_job`
 4. `get_upstream_health` 确认上游三态为正常，收尾
 
 ### 4.2 新建 TCP 四层代理

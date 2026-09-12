@@ -1,10 +1,9 @@
-# Caddy 配置与规则管理（v2.2.5 前文档——部分机制已被 2026-09-06/07 裁定取代）
+# Caddy 配置与规则管理
 
-> **过时提示**：本文中 `validateCaddyConfigBeforeSave`（Caddy 级预校验探针）、
-> `ValidateRouteMergedConfig`/`ValidateTCPServerMergedConfig`（候选并入运行配置
-> 校验）已随 2026-09-06 裁定 ④' 撤除——现行 Caddy 层校验走 `caddy validate`
-> CLI（真 validate-only）+ 事务内 `ApplyConfigFromTx` 终门。相关段落仅作历史
-> 参考。字段级校验（`validateRulePayloadBeforeSave`）仍活跃。
+> 机制现状(2026-09-12 同步,SR11-F4):Caddy 层校验走 `caddy validate` CLI
+> (真 validate-only)+ 事务内 `ApplyConfigFromTx` 终门;字段级校验
+> (`validateRulePayloadBeforeSave`/`validateRuleFeatures`)仍活跃。v2.2.5 时代的
+> 探针/合并校验函数已撤除(见「关键函数说明」)。
 
 # Caddy 配置管理规范
 
@@ -168,9 +167,9 @@ for i, d := range domainHosts {
 ### Handle Chain 顺序
 1. **headers**（X-LB-Rule-ID 注入）：HTTP 规则绑定安全策略时链首注入归因头（供预检与 coraza 事务消费，reverse_proxy 前无条件剥离，不直达上游）
 2. **IP 预检**：多策略绑定时合并全部绑定策略 deny 侧 IP 控制的极简 coraza 预检查器（先于全部 rate_limit/waf）
-3. **rate_limit / waf**：按绑定策略 policy_id ASC 依次编入各策略的处理器组（限流先于 WAF）
-4. **request_body**：配置了请求体上限时
-5. **encode**（压缩）：如果启用压缩且有 gzip/zstd
+3. **encode**（压缩）：如果启用压缩且有 gzip/zstd——位于全部 waf 处理器之外侧（SR11-F3 同步：R1 裁定，coraza 响应拦截器需包在 encode 内侧）
+4. **request_body**：配置了请求体上限时——先于全部 waf 处理器（新-1 裁定，body 解析需在 WAF 前）
+5. **rate_limit / waf**：按绑定策略 policy_id ASC 依次编入各策略的处理器组（限流先于 WAF）
 6. **headers**（Server 头隐藏）：server_tokens_hidden 时 deferred 删除 Server 响应头（须推迟到上游响应写入之后）。2026-09-06 裁定（T-3）：规则级 `server_tokens_hidden`（0=随全局 / 1=隐藏 / 2=显示）为 **API/MCP 预留字段，无 UI 入口、不作为产品功能维护**；管理面板仅提供全局开关（基础设置），UI 规则编辑仅透传保留 API 已设值
 7. **reverse_proxy**（反向代理）：主要处理逻辑；HostHeader 折入 reverse_proxy 的 request.headers（set Host），不再单独发射 headers 处理器
 
@@ -194,7 +193,7 @@ for i, d := range domainHosts {
 ```
 
 ### 负载均衡策略
-支持（与写侧白名单一致，rule_features.go/validateCaddyConfigBeforeSave）：
+支持（与写侧白名单一致，rule_features.go/validateRulePayloadBeforeSave）：
 - HTTP 规则：weighted_round_robin、least_conn、random、ip_hash、first、cookie
 - TCP 规则：weighted_round_robin、least_conn、random、ip_hash、first（cookie 不支持）
 
@@ -248,72 +247,28 @@ for i, d := range domainHosts {
 
 ## 配置验证
 
-Caddy admin `/load?validate=true` 并非只读校验——Caddy v2.11.4 的 handleLoad 无视 validate 参数、无条件执行 caddy.Load，请求成功即真实加载：
+`POST /config/validate`(handlers/caddy.go):真 validate-only——2026-09-06 裁定 ④' 后主径为 **`caddy validate` CLI**(provision 不运行、不绑端口、零运行时扰动),CLI 不可用回退 R69 C-N3-c 的 load+回弹口径(校验后恢复原配置)。此前经 Caddy admin `/load?validate=true` 的探针已撤除——v2.11.4 的 handleLoad 无视 validate 参数,成功即真实加载。
 
-```bash
-POST http://localhost:2019/load?validate=true
-Content-Type: application/json
-
-<full_config_json>
-```
-
-成功返回 200，失败返回 4xx 并包含错误信息，但请求体在成功后已成为运行配置。代码侧以清理/快照补偿该副作用：`ValidateConfig` 携带证书文件快照时验证后恢复快照；`ValidateRouteMergedConfig`/`ValidateTCPServerMergedConfig` 将候选路由/server 并入运行配置的副本后校验，避免运行面被单规则/单 server 配置整体替换。
+写路径(创建/更新/启用规则等)的四道关卡:前端表单校验 → 后端字段校验(`validateRuleFeatures`/`validateRulePayloadBeforeSave`)→ 事务内 CLI 校验(`ValidateTxRenderViaCLI`,输入=事务视图最终渲染)→ 事务内 `ApplyConfigFromTx` 终门(拒绝即回滚,DB 零变更)。
 
 ## 关键函数说明
 
-### validateCaddyConfigBeforeSave
+### validateRulePayloadBeforeSave / validateRuleFeatures(handlers)
 
-统一验证函数，在 Create/Update 规则时调用：
+写侧字段校验(仍活跃):Protocol 白名单(http/tcp)、ListenPort 1-65535、Strategy 白名单(HTTP 含 cookie/TCP 不含)、Domain 格式、上游(host/端口/去重/至少一个启用)、body 上限等。历史 `validateCaddyConfigBeforeSave`(Caddy 级预校验探针)与 `ValidateRouteMergedConfig`/`ValidateTCPServerMergedConfig`(候选并入运行配置校验)已随 2026-09-06 裁定撤除,由「事务视图渲染 + CLI validate-only」取代。
 
-```go
-func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleFeatureInput, uniqueID string, serverName string) error
-```
+> **注意**:历史字段 `TLSEmail` 已废弃。ACME 邮箱全局配置于 `global_config.acme_email`,规则级 CA 选择通过 `ca_provider_id` 指定。
 
-验证内容：
-- Protocol: http/tcp（白名单；遗留 https 行由 db 迁移归一为 http+enable_tls=1）
-- ListenPort: 1-65535
-- Strategy: HTTP 规则 weighted_round_robin/ip_hash/least_conn/random/first/cookie；TCP 规则不含 cookie
-- Domain: 格式验证（调用 isValidDomain）
-- Upstreams: 至少一个、host格式（IP或域名）、端口1-65535、去重、至少一个启用
-- TLSHSTS: >= 0
-- HealthCheckInterval/Timeout: >= 1
+### ApplyConfigFromTx(services/caddy.go)
 
-> **注意**：历史字段 `TLSEmail`（规则级 ACME 邮箱验证）已废弃。ACME 邮箱现全局配置在 `global_config.acme_email`，规则级 CA 选择通过 `ca_provider_id` 指定，CA Provider 在「系统设置 / 免费证书」的 CA Providers 卡片中管理。
-
-### ValidateRouteMergedConfig
-
-模拟预置操作，验证合并后的完整服务器配置：
-
-```go
-func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig map[string]interface{}) error
-```
-
-流程：
-1. 获取当前服务器配置
-2. 复制配置并将新路由追加到非兜底路由末尾（识别并保留兜底路由在最后）
-3. 调用 `/load?validate=true` 验证（validate 参数被 Caddy 忽略，实为真实加载；对副本操作以隔离运行面）
-4. 验证失败返回具体错误信息
-
-### ApplyConfigFromTx
-
-规则写端点在提交事务前，从事务内可见状态生成并加载完整配置：
-
-```go
-func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error
-```
-
-流程：
-1. 在 Caddy 配置写锁内读取事务中的启用规则及关联数据
-2. 生成完整 Caddy 配置
-3. 调用 Caddy `/load` 校验并加载完整配置
-4. 失败时返回错误，由调用方回滚事务并恢复运行时快照
+家族 3 写路径的统一收尾(`applyFromTxNote` 咽喉点):事务内以最终渲染调用 Caddy /load,失败即回滚整个事务——「只有可渲染配置可落库」不变量。
 
 ## 错误处理
 
 | 操作 | 失败处理 |
 |------|---------|
-| validateCaddyConfigBeforeSave | 返回 400，不写入数据库 |
-| ValidateRouteMergedConfig | 返回 400，不写入数据库 |
+| validateRulePayloadBeforeSave / validateRuleFeatures | 返回 400，不写入数据库 |
+| ValidateTxRenderViaCLI(事务内 CLI 校验) | 拒绝即回滚，不写入数据库 |
 | 事务内数据库写入 | 返回 500，回滚事务，不应用新配置 |
 | ApplyConfigFromTx | 返回 400/500，回滚事务并恢复运行时快照 |
 | 事务提交 | 返回 500，恢复运行时快照 |

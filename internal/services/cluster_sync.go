@@ -1563,7 +1563,7 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE global_config SET registration_confirm_failures = COALESCE(registration_confirm_failures, 0) + 1 WHERE id=1")
 	if err != nil {
-	Logf("info", "bumpRegistrationConfirmFailure: update failed: %v", err)
+	Logf("warn", "bumpRegistrationConfirmFailure: update failed: %v", err)
 	}
 	var failures int
 	if qerr := s.db.QueryRowContext(ctx, "SELECT COALESCE(registration_confirm_failures, 0) FROM global_config WHERE id=1").Scan(&failures); qerr != nil {
@@ -1578,7 +1578,7 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 		RecordAuditLog("system", "注册失败", "集群节点", message, "")
 		// 清除 registration_secret 触发从节点退出注册循环；clusterToken 已存入 global_config 但因 confirm 未成功，主节点未真正确认
 		if _, derr := s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='', registration_id=NULL, registration_confirm_failures=0 WHERE id=1"); derr != nil {
-	Logf("info", "bumpRegistrationConfirmFailure: clear registration state failed: %v", derr)
+	Logf("warn", "bumpRegistrationConfirmFailure: clear registration state failed: %v", derr)
 		}
 		if clusterToken != "" {
 			_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token='' WHERE id=1")

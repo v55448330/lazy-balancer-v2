@@ -223,46 +223,18 @@ func skipWafSyncTransient(rel string) bool {
 // tarGzDir deterministically archives dir (all contents, sorted, zeroed
 // metadata) and returns the bytes plus their sha256.
 func tarGzDir(dir string) ([]byte, string, error) {
-	var paths []string
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		// M24：过滤瞬态文件（点前缀/*.bak/*.old），仅正式内容参与指纹与打包。
-		if rel, relErr := filepath.Rel(dir, p); relErr == nil && skipWafSyncTransient(rel) {
-			return nil
-		}
-		paths = append(paths, p)
-		return nil
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	for i := range paths {
-		paths[i], _ = filepath.Rel(dir, paths[i])
-	}
-	sortStrings(paths)
-
 	pr, pw := io.Pipe()
 	go func() {
 		gz := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gz)
-		for _, rel := range paths {
-			full := filepath.Join(dir, rel)
-			data, err := os.ReadFile(full)
-			if err != nil {
-				pw.CloseWithError(err)
-				return
-			}
-			hdr := &tar.Header{Name: rel, Mode: 0644, Size: int64(len(data))}
-			if err := tw.WriteHeader(hdr); err != nil {
-				pw.CloseWithError(err)
-				return
-			}
-			if _, err := tw.Write(data); err != nil {
-				pw.CloseWithError(err)
-				return
-			}
+		// CL11-N4(第 11 轮审计):写侧改调共享 writeTarEntries(与 tarGzDirSum
+		// 构造性一致)——此前内联拷贝靠双份代码维持字节级奇偶,单侧改动会
+		// 静默破坏 bundle/ref 哈希校验且无自愈。
+		if err := writeTarEntries(dir, tw); err != nil {
+			tw.Close()
+			gz.Close()
+			pw.CloseWithError(err)
+			return
 		}
 		tw.Close()
 		gz.Close()
