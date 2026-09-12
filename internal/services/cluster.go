@@ -38,7 +38,7 @@ type ClusterLifecycle interface {
 }
 
 type ClusterService struct {
-	db                   *sql.DB
+	db *sql.DB
 	// dataDir 用于品牌镜像(branding.json)与未来文件态同步的本地路径。
 	dataDir              string
 	lifecycle            ClusterLifecycle

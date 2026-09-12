@@ -171,11 +171,11 @@ type ClusterSectionSyncStatus struct {
 }
 
 type ClusterBasicSettings struct {
-	LogLevel                   string `json:"log_level"`
+	LogLevel string `json:"log_level"`
 	// BrandingJSON 是主节点 branding.json 原文镜像(2026-09-11 裁定):随
 	// sync_global_config 开关下发,从节点落盘本地文件后生效。开关关闭时
 	// 构建端整体裁剪(空=不同步)。
-	BrandingJSON string `json:"branding_json,omitempty"`
+	BrandingJSON               string `json:"branding_json,omitempty"`
 	AccessLogJSON              bool   `json:"access_log_json,omitempty"`
 	AccessLogFormat            string `json:"access_log_format,omitempty"`
 	CertJobLogSizeMB           int    `json:"cert_job_log_size_mb"`

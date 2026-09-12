@@ -77,28 +77,37 @@ func validateIPListRefsExistence(q policyQueryRower, aclIDs, wlIDs []int64) (str
 		seen[id] = struct{}{}
 		unique = append(unique, id)
 	}
-	placeholders := make([]string, len(unique))
-	args := make([]interface{}, len(unique))
-	for i, id := range unique {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	rows, err := q.Query("SELECT id FROM security_ip_lists WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
-	if err != nil {
-		return "", err
-	}
+	// SLB13-P4-O1:32766 绑定变量上限分块(fail-closed,整体 500)。
+	const chunkLimit = 500
 	found := make(map[int64]struct{}, len(unique))
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+	for start := 0; start < len(unique); start += chunkLimit {
+		end := start + chunkLimit
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		rows, err := q.Query("SELECT id FROM security_ip_lists WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+		if err != nil {
 			return "", err
 		}
-		found[id] = struct{}{}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return "", err
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return "", err
+			}
+			found[id] = struct{}{}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
 	}
 	for _, id := range aclIDs {
 		if _, ok := found[id]; !ok {
@@ -364,23 +373,21 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
 			return
 		}
-		{
-			var allowRefCount int
-			if err := tx.QueryRowContext(c.Request.Context(),
-				`SELECT COUNT(*) FROM security_policies
+		var allowRefCount int
+		if err := tx.QueryRowContext(c.Request.Context(),
+			`SELECT COUNT(*) FROM security_policies
 WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
   AND json_valid(COALESCE(ip_acl_list_refs,'[]')) AND EXISTS (SELECT 1 FROM json_each(COALESCE(ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
-				listID).Scan(&allowRefCount); err != nil {
-				// SLB10-N1(第 10 轮审计):守卫查询失败 fail-closed——此前
-				// err==nil&& 使查询错误静默放行「清空被 allow 引用的列表」,
-				// 正是 N1 要防的发射端 fail-open 形态;与 12 行后重名门同口径。
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败"})
-				return
-			} else if allowRefCount > 0 {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
-					Message: fmt.Sprintf("该列表正被 %d 个白名单模式策略引用，清空条目会使这些策略放行全部请求，请先解除引用", allowRefCount)})
-				return
-			}
+			listID).Scan(&allowRefCount); err != nil {
+			// SLB10-N1(第 10 轮审计):守卫查询失败 fail-closed——此前
+			// err==nil&& 使查询错误静默放行「清空被 allow 引用的列表」,
+			// 正是 N1 要防的发射端 fail-open 形态;与 12 行后重名门同口径。
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败"})
+			return
+		} else if allowRefCount > 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
+				Message: fmt.Sprintf("该列表正被 %d 个白名单模式策略引用，清空条目会使这些策略放行全部请求，请先解除引用", allowRefCount)})
+			return
 		}
 	}
 	var dup int

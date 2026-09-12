@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"time"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/models"
@@ -163,7 +163,7 @@ func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
 	}
 }
 
-// CL12-P1-1(第 12 轮审计):无白名单 Key 快照同步——主端 '' → 从端必须落 ''
+// CL12-P1-1(第 12 轮审计):无白名单 Key 快照同步——主端 ” → 从端必须落 ”
 // 而非 json.Marshal(nil) 的字面量 "null"(中间件把非空当白名单配置,
 // Unmarshal null 成功但 0 CIDR → 全来源 403)。
 func TestApplySnapshot_emptyWhitelistLandsEmptyString(t *testing.T) {

@@ -100,4 +100,3 @@ func extractBrandingStringField(content, field string) string {
 func (s *ClusterService) SnapshotForTest(ctx context.Context) (models.ClusterSnapshot, error) {
 	return s.clusterSnapshotBypassingCache(ctx)
 }
-

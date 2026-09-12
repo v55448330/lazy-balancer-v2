@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lazy-balancer-v2/internal/models"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"time"
-	"lazy-balancer-v2/internal/models"
 )
 
 // IsMaster 读取节点角色。COALESCE(is_master,1) 与 readonly 写闸

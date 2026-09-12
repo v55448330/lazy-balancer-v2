@@ -488,12 +488,17 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 type loginLockoutState struct {
 	failedAttempts int
 	lockedUntil    sql.NullString
+	// CL13-新1:mfa_last_timestep 本地态(TOTP 重放防护依据),重放后取 MAX 保留。
+	mfaLastTimestep int64
 }
 
 // readLocalLoginLockouts 在 users 节清表前读出存量 username → 登录记账。
 // username 与主节点快照口径一致（UNIQUE 列），作为重放后回写的连接键。
 func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[string]loginLockoutState, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT username, COALESCE(login_failed_attempts,0), login_locked_until FROM users")
+	// CL13-新1(第 13 轮审计):同时读出 mfa_last_timestep——users 节重放若用
+	// 主节点旧值覆盖,从节点已消费的 TOTP 码在 ±1 容差窗内重新可用,击穿
+	// 重放防护;回写侧取 MAX 保留(见 restoreLocalLoginLockouts)。
+	rows, err := tx.QueryContext(ctx, "SELECT username, COALESCE(login_failed_attempts,0), login_locked_until, COALESCE(mfa_last_timestep,0) FROM users")
 	if err != nil {
 		return nil, fmt.Errorf("读取本地登录锁定记账: %w", err)
 	}
@@ -502,7 +507,7 @@ func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[string]loginLo
 	for rows.Next() {
 		var username string
 		var state loginLockoutState
-		if err := rows.Scan(&username, &state.failedAttempts, &state.lockedUntil); err != nil {
+		if err := rows.Scan(&username, &state.failedAttempts, &state.lockedUntil, &state.mfaLastTimestep); err != nil {
 			return nil, fmt.Errorf("扫描本地登录锁定记账: %w", err)
 		}
 		lockouts[username] = state
@@ -515,7 +520,10 @@ func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[string]loginLo
 // 本地记账不复活用户。
 func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[string]loginLockoutState) error {
 	for username, state := range lockouts {
-		if _, err := tx.ExecContext(ctx, "UPDATE users SET login_failed_attempts=?, login_locked_until=? WHERE username=?", state.failedAttempts, state.lockedUntil, username); err != nil {
+		// CL13-新1:mfa_last_timestep 取 MAX(本地, 快照值)——timestep 随墙钟
+		// 单调,取 max 不产生锁死(禁用/重置置 0 时旧值 < 未来码 step,安全);
+		// 重放防护窗不再被主节点旧值重开。
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET login_failed_attempts=?, login_locked_until=?, mfa_last_timestep=MAX(COALESCE(mfa_last_timestep,0),?) WHERE username=?", state.failedAttempts, state.lockedUntil, state.mfaLastTimestep, username); err != nil {
 			return fmt.Errorf("回写用户 %s 的本地登录锁定记账: %w", username, err)
 		}
 	}

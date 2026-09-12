@@ -23,7 +23,7 @@ type syncSection struct {
 
 var syncSections = []syncSection{
 	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/ACME
-// (证书任务行与文件随 rules 开关,R64 A-N5)。
+	// (证书任务行与文件随 rules 开关,R64 A-N5)。
 	{Key: "users", NewLabel: "系统数据"},
 	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "rules", NewLabel: "负载规则"},

@@ -651,10 +651,19 @@ func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, custo
 			seen[id] = struct{}{}
 			unique = append(unique, id)
 		}
-		if len(unique) > 0 {
-			placeholders := make([]string, len(unique))
-			args := make([]interface{}, len(unique))
-			for i, id := range unique {
+		// SLB13-P4-O1:32766 绑定变量上限分块(与 validateIPListRefsExistence 同型;
+		// fail-closed——分块查询失败整体 500)。
+		const chunkLimit = 500
+		found := make(map[int]struct{}, len(unique))
+		for start := 0; start < len(unique); start += chunkLimit {
+			end := start + chunkLimit
+			if end > len(unique) {
+				end = len(unique)
+			}
+			chunk := unique[start:end]
+			placeholders := make([]string, len(chunk))
+			args := make([]interface{}, len(chunk))
+			for i, id := range chunk {
 				placeholders[i] = "?"
 				args[i] = id
 			}
@@ -662,7 +671,6 @@ func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, custo
 			if err != nil {
 				return "", err
 			}
-			found := make(map[int]struct{}, len(unique))
 			for rows.Next() {
 				var fid int
 				if err := rows.Scan(&fid); err != nil {
@@ -675,10 +683,10 @@ func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, custo
 			if err := rows.Err(); err != nil {
 				return "", err
 			}
-			for _, id := range unique {
-				if _, ok := found[id]; !ok {
-					return fmt.Sprintf("自定义规则不存在（id=%d）", id), nil
-				}
+		}
+		for _, id := range unique {
+			if _, ok := found[id]; !ok {
+				return fmt.Sprintf("自定义规则不存在（id=%d）", id), nil
 			}
 		}
 	}

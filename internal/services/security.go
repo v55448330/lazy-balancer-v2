@@ -217,13 +217,16 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	default:
 		return ""
 	}
-	// SLB12-P2-1(第 12 轮审计):仅存在 body 消费者时开启请求体访问——
-	// coraza-caddy v2.6.0 的 body 缓冲唯一门控是 RequestBodyAccess,无
-	// 「存在 phase:2 规则才缓冲」的惰性检查;mode=off 纯 IP/GeoIP(全部
-	// phase:1 REMOTE_ADDR)下 On 使每请求全量 body 缓冲零消费者。三消费者
-	// 枚举:自定义规则(可有 body 目标)/CRS(phase:2)/审计 C 段
-	// (log_request_body)。custom_only/crs 路径恒 On 不变。
-	if customActive || crsActive || p.LogRequestBody {
+	// SLB12-P2-1 + SLB13-N1/新-3(第 13 轮收紧):仅存在 body 消费者时开启
+	// 请求体访问——coraza-caddy v2.6.0 的 body 缓冲唯一门控是
+	// RequestBodyAccess(无惰性检查)。消费者精确枚举:
+	//   ① CRS(phase:2 规则集,blocking/detection);
+	//   ② 已启用的自定义规则(可有 body 目标;custom_only+零启用规则无消费者,
+	//      规则启停经 finishTxApply 重渲染,收紧零滞后)。
+	// 第 12 轮的第三条件 log_request_body 经引擎源码验证在 mode=off 不可消费
+	// (phase:1 中断先于 body 读、C 段恒空)——移除;对照同型 IP 预检正确用
+	// Off+无 C 段。
+	if crsActive || hasCustomRules {
 		sb.WriteString("SecRequestBodyAccess On\n")
 	} else {
 		sb.WriteString("SecRequestBodyAccess Off\n")

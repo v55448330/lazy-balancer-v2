@@ -183,7 +183,7 @@
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
-                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && getUpstreamHealthStatus(row.caddy_id, upstream).dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>

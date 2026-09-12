@@ -38,8 +38,7 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
 	// R57 C-6：本地节点运行态标记，非配置——导入旧备份会复活陈旧的
 	// 「应用失败」横幅（导入提交路径不经过 recordCaddyApplyResult 清空）。
-	"caddy_apply_error": true,	"registration_confirm_failures": true,
-
+	"caddy_apply_error": true, "registration_confirm_failures": true,
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
@@ -419,6 +418,14 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 			if value == nil {
 				if columnDefault, ok := backupTableNullDefaults[table][column]; ok {
 					value = columnDefault
+				}
+			}
+			// CL13-新3(第 13 轮审计):旧从节点库(pre-fix)导出的备份可携带字面量
+			// "null" 白名单——middleware 把非空串当白名单配置(Unmarshal null 成功
+			// 但 0 CIDR)→ 主端全来源 403 直至重启迁移;导入侧归一为 ''。
+			if table == "api_keys" && column == "mcp_ip_whitelist" {
+				if sv, ok := value.(string); ok && sv == "null" {
+					value = ""
 				}
 			}
 			columns = append(columns, `"`+column+`"`)

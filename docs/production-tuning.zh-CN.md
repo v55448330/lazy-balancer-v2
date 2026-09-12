@@ -108,8 +108,10 @@ TCP 握手 + 慢启动。高 QPS 场景延迟与上游负载双降。
   同时是 WAF 请求体检测的内存上界（见 3.5）。
 - **上游并发保护**：上游的「最大连接数」（`max_connections`，渲染为
   reverse_proxy `max_requests`）防止单一上游被打穿。
-- **版本隐藏**：`server_tokens_hidden = 2`（完全隐藏 Server 头，渲染为
-  deferred headers 处理器）。
+- **版本隐藏**：全局开关（基础设置，`server_tokens_hidden`，渲染为 deferred
+  headers 处理器隐藏 Server 头）。注：规则级 `server_tokens_hidden` 为
+  API/MCP 预留字段（T-3 裁定，无 UI 入口），取值 0=随全局 / **1=隐藏** /
+  **2=显示**——与 v2.2.5 前文档所述「2=完全隐藏」相反，以实现为准。
 
 ---
 
@@ -200,7 +202,7 @@ detection 模式仅记录不拦截；切换 blocking 前用安全事件页确认
 | 请求体上界 | 全局/规则 `request_body_max_size_mb` |
 | 上游保护 | 上游 `max_connections` |
 | 响应压缩 | 规则 `enable_compress` + `compress_types=zstd` |
-| 隐藏版本 | `server_tokens_hidden=2` |
+| 隐藏版本 | 全局 `server_tokens_hidden`（规则级为 API 预留：1=隐藏/2=显示） |
 | H3 | 宿主 `rmem/wmem_max` + 放行 443/udp（host 模式天然可用） |
 | 出站端口充足 | 宿主 `ip_local_port_range` |
 | fd 上限 | compose `ulimits.nofile`（已配置）/ 宿主 `fs.file-max` |

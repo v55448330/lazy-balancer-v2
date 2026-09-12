@@ -87,10 +87,10 @@ func TestIsTimberjackRotationCopy(t *testing.T) {
 // isTimberjackRotationCopy 过滤 + dirBytes 统计组合。
 func TestDirBytes_aggregationWithRotationFilter(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "certjob-abc.log"), []byte("A"), 0644)                                 // active: 1B
-	os.WriteFile(filepath.Join(dir, "certjob-abc-20260902T150405-size.log"), []byte("BB"), 0644)            // timberjack: 2B
-	os.WriteFile(filepath.Join(dir, "certjob-abc-20260902T160405-size.log.gz"), []byte("CCC"), 0644)        // timberjack gz: 3B
-	os.WriteFile(filepath.Join(dir, "certjob-abc.log.1"), []byte("DDDD"), 0644)                             // shift: 4B
+	os.WriteFile(filepath.Join(dir, "certjob-abc.log"), []byte("A"), 0644)                           // active: 1B
+	os.WriteFile(filepath.Join(dir, "certjob-abc-20260902T150405-size.log"), []byte("BB"), 0644)     // timberjack: 2B
+	os.WriteFile(filepath.Join(dir, "certjob-abc-20260902T160405-size.log.gz"), []byte("CCC"), 0644) // timberjack gz: 3B
+	os.WriteFile(filepath.Join(dir, "certjob-abc.log.1"), []byte("DDDD"), 0644)                      // shift: 4B
 
 	// 模拟聚合循环:枚举 + 过滤轮转副本 + dirBytes
 	entries, err := os.ReadDir(dir)

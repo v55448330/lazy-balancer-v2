@@ -800,7 +800,6 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 		c.Set("api_key_name", keyName)
 		c.Set("api_key_mcp_enabled", mcpEnabled)
 		c.Set("api_key_read_only", readOnly)
-		c.Set("api_key_mcp_ip_whitelist", mcpIPWhitelist)
 
 		c.Next()
 	}

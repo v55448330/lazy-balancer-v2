@@ -22,12 +22,12 @@ import (
 )
 
 var (
-	DB             *sql.DB
-	currentDB      atomic.Value
-	MetricsDB      *sql.DB
-	AuditDB        *sql.DB
-	openDatabase   = sql.Open
-	domainProfile  = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.VerifyDNSLength(true))
+	DB            *sql.DB
+	currentDB     atomic.Value
+	MetricsDB     *sql.DB
+	AuditDB       *sql.DB
+	openDatabase  = sql.Open
+	domainProfile = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.VerifyDNSLength(true))
 )
 
 func CanonicalDomains(value string) (string, error) {

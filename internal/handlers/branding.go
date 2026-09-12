@@ -16,8 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 type brandingConfig struct {

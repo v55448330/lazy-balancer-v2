@@ -12,7 +12,6 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-
 // RH-1(第 5 轮审计 P2):CreateRule 对禁用规则(enabled=false)不应创建
 // ACME 签发任务——复制向导硬编码 enabled:false,每次复制白烧 1 次 LE 配额。
 // UpdateRule 已有此门(rules.go:1704),CreateRule 缺失(系统不变量:禁用⇒不签发)。
