@@ -88,6 +88,12 @@ func throttledAuditFailureLogf(format string, args ...any) {
 // auditLogCheckInterval 死常量）。
 var auditLogPath = "/app/logs/waf-audit/audit.log"
 
+// AuditLogPath 返回审计日志文件路径(导出 getter——渲染/摄取/统计/目录创建
+// 四处单一源,SYSRENDER24-2:字面量重复收敛)。
+func AuditLogPath() string {
+	return auditLogPath
+}
+
 // auditLogSizeBytes 返回触发轮转的大小阈值；默认读取 global_config 配置，
 // 测试可通过替换该变量注入小阈值以触发轮转。
 var auditLogSizeBytes = getAuditLogSizeBytes

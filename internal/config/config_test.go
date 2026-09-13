@@ -42,15 +42,12 @@ func TestLoad_parses_metrics_interval_with_safe_minimum(t *testing.T) {
 func TestLoad_resolves_log_file_with_default(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	tests := []struct {
-		name        string
-		envValue    string
-		wantPath    string
-		wantEnabled bool
+		name     string
+		envValue string
+		wantPath string
 	}{
-		{name: "env override", envValue: "/tmp/custom.log", wantPath: "/tmp/custom.log", wantEnabled: true},
-		// 2026-09-14 用户裁定:运行日志轮转恒启用(不再依赖 LOG_FILE 显式设置),
-		// LOG_FILE 仅覆盖路径——空 env 回落默认路径且恒启用。
-		{name: "empty env falls back to default", envValue: "", wantPath: "/app/logs/lazy-balancer.log", wantEnabled: true},
+		{name: "env override", envValue: "/tmp/custom.log", wantPath: "/tmp/custom.log"},
+		{name: "empty env falls back to default", envValue: "", wantPath: "/app/logs/lazy-balancer.log"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -63,9 +60,6 @@ func TestLoad_resolves_log_file_with_default(t *testing.T) {
 			// Then
 			if loaded.LogFile != test.wantPath {
 				t.Fatalf("log file=%q, want %q", loaded.LogFile, test.wantPath)
-			}
-			if loaded.LogFileEnabled != test.wantEnabled {
-				t.Fatalf("log file enabled=%v, want %v", loaded.LogFileEnabled, test.wantEnabled)
 			}
 		})
 	}

@@ -56,7 +56,7 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	if err := os.MkdirAll(filepath.Join(filepath.Dir(liveDir), "audit"), 0755); err != nil {
 		Logf("error", "crs seed: failed to create legacy waf audit dir: %v", err)
 	}
-	if err := os.MkdirAll("/app/logs/waf-audit", 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(auditLogPath), 0755); err != nil {
 		Logf("error", "crs seed: failed to create /app/logs/waf-audit: %v", err)
 	}
 

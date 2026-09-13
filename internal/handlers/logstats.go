@@ -169,9 +169,9 @@ func sizeLimitMB(column string, def int64) *int64 {
 //     LOG_FILE 时这些日志会全部显示 0B。
 //   - runtimePath is the runtime log path, which follows LogFile
 //     （空 → /app/logs/lazy-balancer.log）。
-// wafAuditLogFile 是 Coraza 审计日志文件路径(包级 var 支持测试注入,
-// 与 services.auditLogPath 同模式;生产=/app/logs/waf-audit/audit.log)。
-var wafAuditLogFile = "/app/logs/waf-audit/audit.log"
+// wafAuditLogFile 是 Coraza 审计日志文件路径(包级 var 支持测试注入;
+// 生产值经 services.AuditLogPath() 单一源——SYSRENDER24-2)。
+var wafAuditLogFile = services.AuditLogPath()
 
 func logPaths(cfg *config.Config) (fixedDir, runtimePath string) {
 	fixedDir = "/app/logs"

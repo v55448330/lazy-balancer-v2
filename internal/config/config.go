@@ -30,7 +30,6 @@ type Config struct {
 
 	// Log
 	LogFile        string `json:"log_file"` // effective runtime log path (LOG_FILE env or default)
-	LogFileEnabled bool   `json:"-"`        // always true: runtime log rotation is built-in, LOG_FILE only overrides the path
 
 	// JWT
 	JWTSecret string `json:"jwt_secret"`
@@ -51,7 +50,6 @@ func Load(path string) *Config {
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		Version:         getEnv("APP_VERSION", "v2.2.10"),
 		LogFile:         getEnv("LOG_FILE", defaultLogFile),
-		LogFileEnabled:  true, // 恒启用(2026-09-14 用户裁定):运行日志轮转不依赖 LOG_FILE/docker,路径仍可被 LOG_FILE 覆盖
 	}
 
 	// Load from config file if provided

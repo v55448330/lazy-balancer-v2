@@ -249,7 +249,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	if p.LogRequestBody {
 		auditParts = "ABCIJDEFHKZ"
 	}
-	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog /app/logs/waf-audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts %s\n", auditParts))
+	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog %s\nSecAuditLogFormat JSON\nSecAuditLogParts %s\n", auditLogPath, auditParts))
 
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
 	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截, 9 = JSON body processor 激活,
@@ -861,7 +861,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	sb.WriteString("SecResponseBodyAccess Off\n")
 	// 与 BuildCorazaDirectives 同款审计配置：IP 拒绝事件经 audit log 进入
 	// 安全事件管线（ RelevantOnly + deny 中断 = relevant）。
-	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/logs/waf-audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
+	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog %s\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n", auditLogPath))
 	if len(allowLists) > 0 {
 		intersection := intersectIPLists(allowLists)
 		// 裁定 2026-09-07 S1：信任名单并入 allow 放行集——预检放行 = ACL 交集 ∪

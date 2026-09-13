@@ -750,7 +750,7 @@ func reconcileMissingCertFiles(dbh *sql.DB) {
 		WHERE j.status IN ('issued','downloaded')
 		  AND COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> ''
 		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
-		ORDER BY j.rule_id, j.updated_at DESC`)
+		ORDER BY j.rule_id, j.updated_at DESC, j.id DESC`)
 	if err != nil {
 		Logf("error", "cert reconcile: query issued certificates failed: %v", err)
 		return

@@ -712,6 +712,15 @@ func (t *securityEventsTailer) securityEventsTick() error {
 		}
 		_ = created.Close()
 		t.lastInfo = nil
+		// SYSRENDER24-1(第 24 轮审计):文件缺失=路径迁移/首启动——残留 offset
+		// 来自旧路径,必须归零;否则新文件快速增长超过旧 offset 后,前缀事件
+		// 被永久跳过(inode 分支 lastInfo=nil 首启动永不生效)。
+		if stale, rerr := securityEventsReadOffset(t.offsetPath); rerr == nil && stale > 0 {
+			Logf("info", "security events ingestion: audit log missing (path migration or first start), resetting stale offset %d to 0", stale)
+			if werr := securityEventsWriteOffset(t.offsetPath, 0); werr != nil {
+				return fmt.Errorf("security events: reset stale offset: %w", werr)
+			}
+		}
 		return nil // wait for Coraza to write the first transaction
 	}
 	if err != nil {

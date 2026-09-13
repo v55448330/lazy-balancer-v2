@@ -1382,3 +1382,44 @@ func TestClusterService_Nodes_matchesOverviewOnlineCount_withDirtySyncInterval(t
 		t.Fatalf("overview online=%d, want %d（与节点列表判定一致）", got, wantOnline)
 	}
 }
+
+// CL23-1(第 23 轮审计):重新注册不携带 AccessURL(cluster_mode.go 恒空)时
+// 必须保留管理员维护的存量,不静默清空。
+func TestClusterService_ReRegisterPreservesAccessURL(t *testing.T) {
+	service, database := newClusterTestService(t)
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	token, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := service.RegisterNode(context.Background(), models.ClusterRegisterRequest{
+		Token: token, Name: "slave-a", IPAddress: "172.18.0.2", Port: 8000, AccessURL: "http://127.0.0.1:8001",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 管理员维护 access_url
+	if err := service.UpdateNodeAccessURL(context.Background(), registration.RegistrationID, "https://node.example:8443"); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: 重新注册(同 IP+port,不携带 AccessURL——生产形态)
+	token2, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RegisterNode(context.Background(), models.ClusterRegisterRequest{
+		Token: token2, Name: "slave-a", IPAddress: "172.18.0.2", Port: 8000,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then: access_url 保留
+	var accessURL string
+	if err := database.QueryRow("SELECT access_url FROM nodes WHERE id=?", registration.RegistrationID).Scan(&accessURL); err != nil {
+		t.Fatal(err)
+	}
+	if accessURL != "https://node.example:8443" {
+		t.Fatalf("access_url=%q after re-register, want preserved %q", accessURL, "https://node.example:8443")
+	}
+}

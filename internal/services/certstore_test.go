@@ -371,3 +371,41 @@ func matchingCertificatePair(t *testing.T, domains ...string) (string, string) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	return string(certPEM), string(keyPEM)
 }
+
+// CL23-2+CL24-1(第 23/24 轮审计):物化查询多行规则——同 updated_at 秒级并列时
+// 按 id DESC 取最新行,且域名适用性过滤(任务域≠规则当前域的行不物化)。
+func TestMaterializeAllCertsFromDB_selectsLatestApplicableRow(t *testing.T) {
+	_, database := newClusterTestService(t)
+	useTemporaryCertDir(t)
+	seedGenerationRule(t, database, "lb_multi_row", false)
+	if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id='lb_multi_row'"); err != nil {
+		t.Fatal(err)
+	}
+	newCert, newKey := matchingCertificatePair(t, "new.example.test")
+	oldCert, oldKey := matchingCertificatePair(t, "old.example.test")
+	sameTime := "2026-09-14 01:00:00"
+	// id 小=旧域(不适用),id 大=新域(适用)——同 updated_at 秒级并列
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,updated_at) VALUES
+		('lb_multi_row','old.example.test','issued',?,?,?),
+		('lb_multi_row','new.example.test','issued',?,?,?)`,
+		oldCert, oldKey, sameTime, newCert, newKey, sameTime); err != nil {
+		t.Fatal(err)
+	}
+	// 规则当前域名=新域
+	if _, err := database.Exec("UPDATE lb_rules SET domain='new.example.test' WHERE caddy_id='lb_multi_row'"); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	MaterializeAllCertsFromDB()
+
+	// Then: 物化的是新域证书(id DESC 最新+域名适用)
+	certPath, _ := CertFilePaths("lb_multi_row")
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("cert not materialized: %v", err)
+	}
+	if string(data) != newCert {
+		t.Fatalf("materialized cert is not the latest applicable row (want new.example.test cert)")
+	}
+}

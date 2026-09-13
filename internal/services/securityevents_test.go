@@ -2497,3 +2497,32 @@ func TestSecurityEventsAttribution_ModeOffPolicyDoesNotClaimCustomRuleEvents(t *
 		t.Fatalf("attribution=(%d,%q), want (5,policy-blocking) — mode=off 策略不得认领自定义规则事件", pid, pname)
 	}
 }
+
+// SYSRENDER24-1(第 24 轮审计):迁移/首启动形态——文件缺失分支创建空文件时
+// 残留 offset>0 必须归零。否则新文件快速增长超过旧 offset 后,前缀事件被
+// 永久跳过(inode 分支 lastInfo=nil 首启动永不生效)。
+func TestSecurityEventsTick_missingFileResetsStaleOffset(t *testing.T) {
+	// Given: 无 audit 文件 + 残留 offset(升级前旧路径的尾部位置)
+	_, _ = newClusterTestService(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := securityEventsWriteOffset(offsetPath, 52428800); err != nil { // 50MB
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+
+	// When: 首个 tick(文件缺失→创建空文件)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// Then: offset 已归零
+	offset, err := securityEventsReadOffset(offsetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset != 0 {
+		t.Fatalf("offset=%d after missing-file creation, want 0 (stale offset must reset)", offset)
+	}
+}

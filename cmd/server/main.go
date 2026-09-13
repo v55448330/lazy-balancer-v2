@@ -47,16 +47,15 @@ func run() error {
 	log.SetFlags(0)
 	var logWriter io.Writer = os.Stdout
 	var runtimeLogFile string
-	if cfg.LogFileEnabled {
-		if w, err := services.NewRotatingFileWriter(cfg.LogFile); err == nil {
-			logWriter = io.MultiWriter(os.Stdout, w)
-			defer w.Close()
-			runtimeLogFile = cfg.LogFile
-		} else {
-			// S-3：显式配置了 LOG_FILE 但打开失败必须可见——静默回落仅 stdout 会让
-			// 「配置了日志文件却是空的」无从排查。
-			log.Printf("log file %s could not be opened, falling back to stdout only: %v", cfg.LogFile, err)
-		}
+	// SYSRENDER24-3:LogFileEnabled 已恒 true(2026-09-14 裁定)——恒真条件移除。
+	if w, err := services.NewRotatingFileWriter(cfg.LogFile); err == nil {
+		logWriter = io.MultiWriter(os.Stdout, w)
+		defer w.Close()
+		runtimeLogFile = cfg.LogFile
+	} else {
+		// S-3：显式配置了 LOG_FILE 但打开失败必须可见——静默回落仅 stdout 会让
+		// 「配置了日志文件却是空的」无从排查。
+		log.Printf("log file %s could not be opened, falling back to stdout only: %v", cfg.LogFile, err)
 	}
 	log.SetOutput(services.NewApplicationLogWriter(&tzLogWriter{w: logWriter}))
 
