@@ -293,10 +293,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 	// cert_jobs.domain 按排序后的规范形式存储，而 lb_rules.domain 保留用户输入顺序，
 	// 规则侧用 joined+reversed 双形式匹配（ACME 域名至多根域+www 两个）。
-	reversedDomain := domain
-	if parts := strings.Split(domain, ","); len(parts) == 2 {
-		reversedDomain = parts[1] + "," + parts[0]
-	}
+	reversedDomain := reversedCertJobDomain(domain) // CL18-新4:复用同文件 helper
 	if retryCertJobPreEnqueueHook != nil {
 		retryCertJobPreEnqueueHook(id)
 	}

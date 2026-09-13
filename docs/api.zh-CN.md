@@ -26,7 +26,7 @@
 | 配置 | `/config*` | 全局配置、备份导入导出、校验 |
 | 用户 | `/users/*`、`/api-keys/*` | 用户管理、API 密钥 |
 | MCP | `/mcp` | Model Context Protocol 端点 |
-| 监控 | `/metrics/*` | 仪表盘、实时流量、上游健康 |
+| 监控 | `/metrics/*` | 仪表盘、实时流量（上游健康在 `/config/health`，配置域） |
 
 ## 完整端点列表
 

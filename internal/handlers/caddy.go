@@ -207,7 +207,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	healthStatus, err := h.caddyService.GetUpstreamHealthDetailed()
 	if err != nil {
-		services.Logf("info", "collect upstream health: %v", err)
+		services.Logf("error", "collect upstream health: %v", err)
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: "收集上游健康状态失败"})
 		return
 	}

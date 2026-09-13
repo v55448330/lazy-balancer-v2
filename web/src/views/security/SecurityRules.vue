@@ -776,21 +776,25 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	// SR17-2(第 17 轮):lead 捕获含取反 '-'——白名单 {i,m,s,U,-} 真正
 	// 生效(此前捕获组不含 '-',取反形态连 lead 都匹配不上)。
 	const lead = pattern.match(/^\(\?([-a-zA-Z]+)\)/)
-	if (lead && !/^[imsU-]+$/.test(lead[1])) {
+	if (lead && !/^(?:[imsU]+(?:-[imsU]+)?|-[imsU]+)$/.test(lead[1])) {
 		return { re: null, valid: false }
 	}
 	let src = pattern
 	let flags = ''
 	if (lead) {
+		// SR18-2(第 18 轮):RE2 取反语义——'-' 后的 flag 关闭、前缀 flag 开启;
+		// JS 无原生取反,预览近似:'-' 重置累积(取反段从头计),纯取反
+		// ((?-i))则不加任何 flag(全默认)。合法性不受影响,仅预览精度。
+		let negated = false
 		for (const f of lead[1].toLowerCase()) {
-			// F-2:去重——重复 flag((?ii))在 JS 是 SyntaxError,RE2 合法。
-			if ((f === 'i' || f === 'm' || f === 's') && !flags.includes(f)) flags += f
+			if (f === '-') { negated = true; flags = ''; continue }
+			if (!negated && (f === 'i' || f === 'm' || f === 's') && !flags.includes(f)) flags += f
 		}
 		src = src.slice(lead[0].length)
 	}
 	src = src.replace(/\(\?P</g, '(?<')
 	// F-2:中置内联 flag((?i)a(?m)b)——JS 不识别,剥离后重试(RE2 合法)。
-	const midFlagStripped = src.replace(/\(\?[imsU-]+\)(?=[^)]|$)/g, '')
+	const midFlagStripped = src.replace(/\(\?(?:[imsU]+(?:-[imsU]+)?|-[imsU]+)\)(?=[^)]|$)/g, '')
 	// F-3:flag 组((?i:...))——JS 不识别,替换为普通分组后再试;真语法错误
 	// (未闭合括号等)在三段试编译全失败后判 invalid,不再被兜底掩盖。
 	const flagGroupsOpened = src.replace(/\(\?[-imsU]+:/g, '(')

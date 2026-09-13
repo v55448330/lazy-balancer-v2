@@ -121,7 +121,7 @@ export const usePollingTask = (
   // F-1(第 16 轮审计):非终态暂停/恢复——stop() 永久置位 disposed,弹框级
   // stop/start 循环的消费方(SecurityRules 更新进度)首轮 stop 后轮询永久
   // 失效。pause 仅停定时器与在途任务(invalidate 使过期结果丢弃),resume
-  // 可反复调用;语义与 stop 不同:不 abort controller、不解除 visibility 监听。
+  // 可反复调用;语义与 stop 不同:不 abort controller、非终态(SR17-1 起同步摘除 visibility 监听)。
   const pause = (): void => {
     invalidate()
     pauseInterval()

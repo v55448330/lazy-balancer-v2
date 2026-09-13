@@ -739,7 +739,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
-import { request } from '@/utils/api'
+import { request, ApiRequestError } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
@@ -2263,12 +2263,31 @@ const handleSave = async () => {
     // 无后缀不重复 toast）
     if (bindLastRes?.message?.includes('Caddy 配置应用失败')) showSaveResult(bindLastRes, '')
     dialogVisible.value = false; fetchData()
-  } catch { /* 具体错误已由全局 axios 拦截器统一展示 */ } finally { saving.value = false }
+    // FE18-1(第 18 轮):本地契约 throw(如「响应缺少 id」)不经 axios 拦截器,
+    // 空 catch 会静默吞掉——点保存无反应且已落库可致重试重复创建;按错误
+    // 来源分流:ApiRequestError=HTTP 层(拦截器已 toast,不二次弹),其余
+    // (本地 throw)在此提示。
+  } catch (error) {
+    if (!(error instanceof ApiRequestError)) {
+      ElMessage.error(error instanceof Error ? error.message : '保存失败')
+    }
+  } finally { saving.value = false }
 }
 
+const deletingPolicyId = ref<number | null>(null)
 function handleDelete(row: PolicySummary) {
+  // FE18-2(第 18 轮):重入守卫(快速双击叠加双确认框→双 DELETE 误报)+
+  // 取消与失败分离(原空 catch 同时吞掉网络失败,行滞留至下轮)。
+  if (deletingPolicyId.value !== null) return
+  deletingPolicyId.value = row.id
   ElMessageBox.confirm(`确定删除策略"${row.name}"？`, '确认', { type: 'warning' })
-    .then(async () => { const del = await request.delete(`/security/policies/${row.id}`); showSaveResult(del, '已删除'); fetchData() }).catch(() => {})
+    .then(async () => {
+      const del = await request.delete(`/security/policies/${row.id}`)
+      showSaveResult(del, '已删除')
+      fetchData()
+    })
+    .catch(() => { /* 用户取消:不动列表;HTTP 失败已由全局拦截器 toast */ })
+    .finally(() => { deletingPolicyId.value = null })
 }
 
 const goToCustomRulesPage = () => { window.open('/?page=security-rules&tab=custom', '_blank') }

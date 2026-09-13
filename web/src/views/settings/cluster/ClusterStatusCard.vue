@@ -48,6 +48,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { formatDate } from '@/utils/date'
+import { formatSyncErrorDisplay } from '@/utils/syncErrorDisplay'
 import { Monitor } from '@element-plus/icons-vue'
 import type { ClusterStatus } from '@/types'
 
@@ -59,27 +60,7 @@ const props = defineProps<{
 }>()
 
 // 后端 cluster_sync.go 的 syncReloadFailureMarkerPrefix 字面值：快照已应用但
-// Caddy 重载失败时写入 last_sync_error 的机内标记前缀（仅展示层翻译用）。
-const RELOAD_FAILURE_MARKER_PREFIX = 'apply_ok_reload_failed'
-// 后端 syncFailureCountPrefix/Suffix 构成的「已连续 N 次」计数段。
-const FAILURE_COUNT_PATTERN = /已连续 (\d+) 次/
-
-// C-4：apply_failed + 标记前缀的消息翻译为用户语义（保留首段原因供排障）；
-// 其余消息原样展示。仅展示层，不改动存储内容。
-const syncErrorDisplay = computed<string>(() => {
-  const message = props.status?.last_sync_error ?? ''
-  if (!props.status || props.status.sync_error_code !== 'apply_failed' || !message.includes(RELOAD_FAILURE_MARKER_PREFIX)) {
-    return message
-  }
-  const countMatch = message.match(FAILURE_COUNT_PATTERN)
-  const retryPart = countMatch ? `（第 ${countMatch[1]} 次）` : ''
-  const reasonSegment = message.split(' | ')[0] ?? message
-  const reason = reasonSegment
-    .replace(`${RELOAD_FAILURE_MARKER_PREFIX}: `, '')
-    .replace(RELOAD_FAILURE_MARKER_PREFIX, '')
-    .trim()
-  return `配置已同步但 Caddy 重载失败，系统将自动重试${retryPart}${reason ? `：${reason}` : ''}`
-})
+const syncErrorDisplay = computed<string>(() => formatSyncErrorDisplay(props.status))
 </script>
 
 <style scoped>

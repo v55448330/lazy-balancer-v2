@@ -829,6 +829,13 @@ const fetchAllData = (): Promise<void> => {
       }
       rules.value = res.data || []
       rulesUnavailable.value = false
+      // FE18-5(第 18 轮):首载 /metrics 先到时 rules 为空,ruleMetricsUnavailable
+      // 映射为 {}——真正无 metrics 的启用规则在 rules 到达后显示 '-' 而非
+      // 「采集失败」一个周期;/rules 落地后按同一谓词重建映射(仅当 metrics
+      // 已有数据时;metrics 失败分支已有自己的全真映射)。
+      if (!ruleMetricsUnavailable.value || Object.keys(ruleMetricsUnavailable.value).length > 0) {
+        ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled && ruleMetrics.value?.[rule.caddy_id] === undefined && caddyMetrics.value !== null]))
+      }
       const version = ++rulesVersion
       const currentRules = rules.value
        await fetchRuleHealth(currentRules, version)

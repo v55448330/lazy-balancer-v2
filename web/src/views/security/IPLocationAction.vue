@@ -229,11 +229,15 @@ const normalizeRow = (p: PolicyRow): PolicyRow => ({
   ip_whitelist_enabled: p.ip_whitelist_enabled,
 })
 
+let loadPoliciesSeq = 0
 const loadPolicies = async (): Promise<void> => {
   // 每次 @show 都强制重新拉取——同一策略绑定多条规则时，从规则 A 弹窗
   // 加入黑名单后，打开规则 B 弹窗需要看到最新 ACL 状态（无陈旧缓存）。
   // 地址列表选项同节奏刷新（含引用条目缓存）；等两者就绪后再渲染行，
   // 避免「内联 ∪ 引用」口径在条目到达前短暂退化为仅内联
+  // FE18-3(第 18 轮):seq 守卫——弹层快速关开产生并发 GET 时,
+  // 先发晚到不再覆盖新状态(与 wizardOpenSeq 同仓模式)。
+  const seq = ++loadPoliciesSeq
   const listsPromise = loadIpLists()
   policiesLoading.value = true
   try {
@@ -241,12 +245,14 @@ const loadPolicies = async (): Promise<void> => {
       ? `/security/policies?enabled=true&rule_caddy_id=${encodeURIComponent(props.ruleCaddyId)}`
       : '/security/policies?enabled=true'
     const [res] = await Promise.all([request.get<APIResponse<PolicyRow[]>>(url), listsPromise])
+    if (seq !== loadPoliciesSeq) return
     policies.value = (res.data || []).map(normalizeRow)
     policiesError.value = false
   } catch {
+    if (seq !== loadPoliciesSeq) return
     policiesError.value = true
   } finally {
-    policiesLoading.value = false
+    if (seq === loadPoliciesSeq) policiesLoading.value = false
   }
 }
 

@@ -479,7 +479,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 	var isMaster bool
 	// Round 35 I-3: 区分 DB 错误与角色变化，避免误报"节点切换为从节点"。
-	if err := db.DB.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		return fmt.Errorf("读取主从角色失败: %w", err)
 	}
 	if !isMaster {

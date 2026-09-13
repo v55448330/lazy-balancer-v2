@@ -1102,8 +1102,14 @@ func HasCertJob(ruleID, domains string) bool {
 func (s *CertificateService) renewExpiringCertificates() {
 	qm := GetCAQueueManager()
 
+	// CL18-新2(第 18 轮):COALESCE 口径对齐全域(NULL 视为主节点,A5-N2)+
+	// 失败留痕(对照 R69 A-N1,此前静默跳过整个过期检查)。
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		Logf("error", "cert expiration loop: failed to read cluster role, skipping this cycle: %v", err)
+		return
+	}
+	if !isMaster {
 		return
 	}
 
@@ -1129,7 +1135,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		}
 
 		if qm == nil {
-			Logf("info", "Renewal: CA queue manager not initialized")
+			Logf("error", "Renewal: CA queue manager not initialized")
 			return
 		}
 		message := "等待排队续期"
@@ -1208,7 +1214,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.certPEM))
 		if block == nil {
-			Logf("info", "Warning: Invalid certificate PEM for rule %s (%s)", c.caddyID, c.name)
+			Logf("warn", "cert expiration check: invalid certificate PEM for rule %s (%s)", c.caddyID, c.name)
 			continue
 		}
 
@@ -1225,7 +1231,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 				c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
 			expiredCount++
 		} else if daysUntilExpiry <= warnDays {
-			Logf("info", "⚠️ WARNING: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
+			Logf("warn", "cert expiration check: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
 				c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
 			expiringSoonCount++
 		}

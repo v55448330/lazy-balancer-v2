@@ -2288,7 +2288,9 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 5 位数字 ID 仅自定义规则（emit=crID+10000，10000-99999）；首字符不再限定 1。
 	// 本口径是「自定义规则」ID 形态的唯一权威（SC-3）：事件筛选 family 的
 	// customRuleFamilyCondition 与前端 triggeredLabel 须与本分支保持一致。
-	case len(ruleTriggered) == 5 || (strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7):
+	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
+		// SR18-4:N5 前移后 len==5 析取成死条件(2241 已截获),删除;
+		// 7+ 位 1 开头为历史合成 ID 形态保留。
 		return "自定义规则"
 	case ruleTriggered == "11":
 		return "请求体异常"

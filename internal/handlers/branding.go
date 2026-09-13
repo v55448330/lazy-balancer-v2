@@ -169,9 +169,9 @@ func brandingReloadDetail(prev, next brandingConfig) string {
 			filtered = append(filtered, p)
 		}
 	}
-	if len(filtered) == 0 {
-		return "内容无实际变化"
-	}
+	// R18-P5③:filtered 恒非空(调用点 cfg!=prev 蕴含 4 字段至少一个不等,
+	// parts 全覆盖)——原「内容无实际变化」防御分支不可达已删;若未来加第
+	// 5 字段须同步 parts,否则此处返回空 detail(编译期无守卫)。
 	return services.FormatAuditDetail(filtered...)
 }
 

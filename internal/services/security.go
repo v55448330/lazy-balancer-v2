@@ -994,6 +994,11 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 				json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
 				rules = append(rules, cr)
 			}
+			// SR18-1(第 18 轮):迭代错误检查——与同函数 Round 34 G 口径一致,
+			// 迭代中途失败静默截断自定义规则会致 WAF 削弱无留痕。
+			if rerr := rows.Err(); rerr != nil {
+				Logf("warn", "解析策略自定义规则迭代失败（本块可能被截断）: %v", rerr)
+			}
 			rows.Close()
 		}
 		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查；

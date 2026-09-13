@@ -2717,7 +2717,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	if qm := services.GetCAQueueManager(); qm != nil {
 		cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
 		if err := cancelRuleJobs(cancelCtx, qm, caddyID); err != nil {
-			services.Logf("info", "DisableRule certificate cancellation timed out for caddy_id=%s: %v", caddyID, err)
+			services.Logf("error", "DisableRule certificate cancellation timed out for caddy_id=%s: %v", caddyID, err)
 		}
 		cancel()
 	}
