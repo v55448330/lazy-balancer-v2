@@ -115,11 +115,10 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
+	// N4/SLB12-P4-17(第 16 轮处置):该 COUNT 仅供 debug 日志——失败降级为
+	// 零值继续,不再 500 阻断规则配置查看(文案亦误导:无上游获取发生)。
 	var upstreamCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id = ? AND IIF(enabled IN ('1',1),1,0) = 1`, caddyID).Scan(&upstreamCount); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取上游服务器失败"})
-		return
-	}
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id = ? AND IIF(enabled IN ('1',1),1,0) = 1`, caddyID).Scan(&upstreamCount)
 
 	services.Logf("debug", "GetRuleCaddyConfig: caddyID=%s, port=%d, upstreams=%d, enabled=%v",
 		r.CaddyID, r.ListenPort, upstreamCount, r.Enabled)
@@ -578,7 +577,10 @@ func queryRedirectShadowConflict(domain string, listenPort int, enableTLS, tlsHT
 	case listenPort == 80:
 		// Round 29 G-4: 排除对方 80 端口自环跳转规则（listen_port=80 + TLS + 跳转本身
 		// 生成自环 Location、属非法存量，不应作为占用方拦截新建 80 规则）。
-		rows, err = db.DB.Query("SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND enable_tls=1 AND tls_http_redirect=1 AND listen_port != 80 AND caddy_id != ?", excludeCaddyID)
+		// SLB16-N1(第 16 轮审计):镜像 2026-09 复审裁定 2(跳转分支同款 EXISTS)
+		// ——全部上游被禁用的规则不产生 host 路由与跳转(caddy.go R43 F-A),
+		// 不作为占用方;此前裁定只落了单侧,该形态下 80 规则被纯误拦 400。
+		rows, err = db.DB.Query(`SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND enable_tls=1 AND tls_http_redirect=1 AND listen_port != 80 AND caddy_id != ? AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id=lb_rules.caddy_id AND u.enabled=1)`, excludeCaddyID)
 	case enableTLS && tlsHTTPRedirect:
 		// 2026-09 复审裁定 2：与渲染面同口径——全部上游被禁用的 80 规则不产生
 		// host 路由、不会遮蔽跳转，不再作为占用方（报错与真实渲染行为一致）。
@@ -2215,14 +2217,20 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	// Round 38 B3: DuplicateRule 必须经过与 CreateRule 一致的校验。
 	enabledUpstreamCount := 0
+	upstreamHosts := make([]string, 0, len(rule.Upstreams))
 	for _, u := range rule.Upstreams {
 		if u.Enabled {
 			enabledUpstreamCount++
+			upstreamHosts = append(upstreamHosts, u.Host)
 		}
 	}
 	if err := validateRuleFeatures(ruleFeatureInput{
 		Protocol: rule.Protocol, Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS,
 		EnabledUpstreamCount: enabledUpstreamCount,
+		// N3(第 16 轮):补 5 字段——C-F2 80 自环门与 R67 C-N3 地址族门在复制
+		// 路径此前因零值恒不触发(注释自述「与 CreateRule 一致」未兑现)。
+		ListenPort: rule.ListenPort, EnableTLS: rule.EnableTLS, TLSHTTPRedirect: rule.TLSHTTPRedirect,
+		EnabledUpstreamHosts: upstreamHosts, DnsFamily: rule.DnsFamily,
 		HealthCheckInterval:  rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,

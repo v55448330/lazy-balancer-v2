@@ -604,11 +604,11 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	// 此前变量零值初始化，日志声称 "keeping previous value" 实际写入 0。
 	activeRules, totalRules := m.overview.ActiveRules, m.overview.TotalRules
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules); err != nil {
-		Logf("info", "updateOverview: query active rules failed: %v (keeping previous value=%d)", err, m.overview.ActiveRules)
+		Logf("error", "updateOverview: query active rules failed: %v (keeping previous value=%d)", err, m.overview.ActiveRules)
 		activeRules = m.overview.ActiveRules
 	}
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules); err != nil {
-		Logf("info", "updateOverview: query total rules failed: %v (keeping previous value=%d)", err, m.overview.TotalRules)
+		Logf("error", "updateOverview: query total rules failed: %v (keeping previous value=%d)", err, m.overview.TotalRules)
 		totalRules = m.overview.TotalRules
 	}
 
@@ -627,7 +627,7 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 		  AND last_seen IS NOT NULL
 		  AND datetime(last_seen) >= datetime('now', printf('-%d seconds', ? * COALESCE((SELECT CASE WHEN sync_interval < 10 THEN 60 ELSE sync_interval END FROM global_config WHERE id=1), 60)))
 	`, nodeOfflineMultiplier).Scan(&onlineNodes); err != nil {
-		Logf("info", "updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, m.overview.OnlineNodes)
+		Logf("error", "updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, m.overview.OnlineNodes)
 		onlineNodes = m.overview.OnlineNodes
 	}
 

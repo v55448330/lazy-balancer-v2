@@ -767,32 +767,45 @@ const isValidRegex = (pattern: string): boolean => {
 }
 
 function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
-	// SR15-P3①:合法性以后端 RE2(coraza)为准——支持组合内联 flag(?im)、
-	// flag 组(?i:...)、命名组((?P<name>)),不支持 lookaround/反向引用。
-	// 此前仅剥单字母 flag,组合 flag 与命名组被误拒,后端合法正则无法保存。
+	// SR15-P3① + F-2/F-3(第 16 轮):合法性以后端 RE2(coraza)为准。
+	// RE2 支持:组合内联 flag(?im)/中置 flag(a(?i)b)/flag 组((?i:...))/
+	// 命名组((?P<name>))/flag 取反((?-i));不支持 lookaround/反向引用。
 	if (/\(\?<?[=!]/.test(pattern) || /\\[1-9]/.test(pattern) || /\\k</.test(pattern)) {
+		return { re: null, valid: false }
+	}
+	// F-3:非法 flag 字母独立门——RE2 flag 集 {i,m,s,U};(?foo)/(?
+	// x:)/(?u) 等 RE2 拒绝的形态在此拒绝,不再靠后端兜底。
+	const lead = pattern.match(/^\(\?([a-zA-Z]+)\)/)
+	if (lead && !/^[imsU-]+$/.test(lead[1])) {
 		return { re: null, valid: false }
 	}
 	let src = pattern
 	let flags = ''
-	const m = src.match(/^\(\?([a-zA-Z]+)\)(.*)/)
-	if (m) {
-		for (const f of m[1].toLowerCase()) {
-			if (f === 'i' || f === 'm' || f === 's') flags += f
-			// U(非贪婪反转)等 JS 无对应 flag:合法性通过(RE2 支持),预览忽略
+	if (lead) {
+		for (const f of lead[1].toLowerCase()) {
+			// F-2:去重——重复 flag((?ii))在 JS 是 SyntaxError,RE2 合法。
+			if ((f === 'i' || f === 'm' || f === 's') && !flags.includes(f)) flags += f
 		}
-		src = m[2]
+		src = src.slice(lead[0].length)
 	}
 	src = src.replace(/\(\?P</g, '(?<')
-	try {
-		return { re: new RegExp(src, flags), valid: true }
-	} catch {
-		// JS 不能编译的残余形态:内联 flag 组(?i:...)为 RE2 合法/JS 不支持
-		// ——合法放行仅禁预览;其余按真语法错误(后端保存校验为终门)。
-		if (/\(\?[a-zA-Z]+:/.test(src)) return { re: null, valid: true }
-		return { re: null, valid: false }
+	// F-2:中置内联 flag((?i)a(?m)b)——JS 不识别,剥离后重试(RE2 合法)。
+	const midFlagStripped = src.replace(/\(\?[a-zA-Z]+\)(?=[^)]|$)/g, '')
+	// F-3:flag 组((?i:...))——JS 不识别,替换为普通分组后再试;真语法错误
+	// (未闭合括号等)在三段试编译全失败后判 invalid,不再被兜底掩盖。
+	const flagGroupsOpened = src.replace(/\(?[-a-zA-Z]+:/g, '(')
+	const candidates = [src, midFlagStripped, flagGroupsOpened]
+	for (const candidate of candidates) {
+		try {
+			return { re: new RegExp(candidate, flags), valid: true }
+		} catch {
+			continue
+		}
 	}
+	return { re: null, valid: false }
 }
+
+const fetchCRS = async () => { try { const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs'); if (res.data) crsInfo.value = res.data } catch {} }
 
 const removeCondition = (idx: number) => {
   ruleForm.value.conditions.splice(idx, 1)
@@ -806,9 +819,8 @@ const removeCondition = (idx: number) => {
   }
   regexTestStrings.value = next
 }
-
-const fetchCRS = async () => { try { const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs'); if (res.data) crsInfo.value = res.data } catch {} }
-// 搜索提交先回到第 1 页：高页码叠加收窄后的结果集会落在空页上
+			// F-3:catch 兜底收紧——先剔除合法 flag 组((?letters: 形态)后再
+			// 试编译,仍失败才 invalid(未闭合括号等真语法错误不再被兜底掩盖)。
 const searchRules = () => { page.value = 1; fetchRules() }
 const fetchRules = async () => {
   loadingRules.value = true
@@ -897,11 +909,13 @@ const onUpdateDialogClosed = () => {
 const crsUpdatePolling = usePollingTask(async () => { await refreshUpdateStatus() }, { interval: 2000 })
 
 const startUpdatePolling = () => {
-  crsUpdatePolling.start()
+  crsUpdatePolling.resume()
 }
 
 const stopUpdatePolling = () => {
-  crsUpdatePolling.stop()
+  // F-1:弹框会话级暂停(非终态)——stop 会永久 disposed,重开弹框即失效;
+  // 组件卸载的终态清理由 usePollingTask 内置 onUnmounted 兜底。
+  crsUpdatePolling.pause()
 }
 
 const refreshUpdateStatus = async () => {
@@ -996,11 +1010,12 @@ const onIP2RegionUpdateDialogClosed = () => {
 const ip2regionUpdatePolling = usePollingTask(async () => { await refreshIP2RegionUpdateStatus() }, { interval: 2000 })
 
 const startIP2RegionPolling = () => {
-  ip2regionUpdatePolling.start()
+  ip2regionUpdatePolling.resume()
 }
 
 const stopIP2RegionPolling = () => {
-  ip2regionUpdatePolling.stop()
+  // F-1:同 CRS 侧,弹框会话级暂停。
+  ip2regionUpdatePolling.pause()
 }
 
 const refreshIP2RegionUpdateStatus = async () => {

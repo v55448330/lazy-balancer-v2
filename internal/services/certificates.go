@@ -395,7 +395,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 				return
 			}
 			if err := s.retryDeployment(entry.ctx, jobID); err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, context.Canceled) {
-				Logf("info", "certificate deployment retry failed for job %d: %v", jobID, err)
+				Logf("error", "certificate deployment retry failed for job %d: %v", jobID, err)
 			}
 		})
 		s.deploymentTimers[jobID] = entry
@@ -552,7 +552,7 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 		  AND j.deployment_available_after IS NOT NULL
 	`)
 	if err != nil {
-		Logf("info", "resume deployment retries: scan failed: %v", err)
+		Logf("error", "resume deployment retries: scan failed: %v", err)
 		return
 	}
 	type droppedRetry struct {
@@ -571,7 +571,7 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
-		Logf("info", "resume deployment retries: close rows failed: %v", err)
+		Logf("error", "resume deployment retries: close rows failed: %v", err)
 		return
 	}
 	for _, job := range jobs {
@@ -658,7 +658,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		  AND datetime(j.ca_available_after) <= datetime('now')
 	`)
 	if err != nil {
-		Logf("info", "waiting_ca scan: query failed: %v", err)
+		Logf("error", "waiting_ca scan: query failed: %v", err)
 		return
 	}
 	type waitingJob struct {
@@ -679,7 +679,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时 UPDATE 会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
-		Logf("info", "waiting_ca scan: close rows failed: %v", err)
+		Logf("error", "waiting_ca scan: close rows failed: %v", err)
 		return
 	}
 
@@ -687,7 +687,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
 				if !errors.Is(err, ErrJobTransitionConflict) {
-					Logf("info", "waiting_ca scan: disable orphaned job %d failed: %v", job.id, err)
+					Logf("error", "waiting_ca scan: disable orphaned job %d failed: %v", job.id, err)
 				}
 				continue
 			}
@@ -702,7 +702,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 			return job.id, err == nil, err
 		})
 		if err != nil {
-			Logf("info", "waiting_ca scan: failed to requeue job %d: %v", job.id, err)
+			Logf("error", "waiting_ca scan: failed to requeue job %d: %v", job.id, err)
 			continue
 		}
 		if !changed {
@@ -717,7 +717,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 // marked as failed.
 func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 	if err := requeueNonTerminalCertJobs(ctx, s.deploymentRetry); err != nil {
-		Logf("info", "Failed to recover non-terminal cert jobs: %v", err)
+		Logf("error", "Failed to recover non-terminal cert jobs: %v", err)
 	}
 }
 
@@ -731,7 +731,7 @@ func reconcileMissingCertFiles(dbh *sql.DB) {
 		WHERE j.status IN ('issued','downloaded')
 		  AND COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> ''`)
 	if err != nil {
-		Logf("info", "cert reconcile: query issued certificates failed: %v", err)
+		Logf("error", "cert reconcile: query issued certificates failed: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -739,7 +739,7 @@ func reconcileMissingCertFiles(dbh *sql.DB) {
 	for rows.Next() {
 		var ruleID, domain, certPEM, keyPEM string
 		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM); err != nil {
-			Logf("info", "cert reconcile: scan certificate row failed: %v", err)
+			Logf("error", "cert reconcile: scan certificate row failed: %v", err)
 			continue
 		}
 		certPath, keyPath := CertFilePaths(ruleID)
@@ -750,14 +750,14 @@ func reconcileMissingCertFiles(dbh *sql.DB) {
 			continue
 		}
 		if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
-			Logf("info", "cert reconcile: rebuild certificate files for %s failed: %v", ruleID, err)
+			Logf("error", "cert reconcile: rebuild certificate files for %s failed: %v", ruleID, err)
 			continue
 		}
 		rebuilt++
 		Logf("info", "证书文件缺失，已从数据库重建: %s", domain)
 	}
 	if err := rows.Err(); err != nil {
-		Logf("info", "cert reconcile: iterate issued certificates failed: %v", err)
+		Logf("error", "cert reconcile: iterate issued certificates failed: %v", err)
 	}
 	if rebuilt > 0 {
 		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
@@ -940,7 +940,7 @@ func sweepOrphanedCertJobs(ctx context.Context) {
 		WHERE j.status != 'disabled'
 	`)
 	if err != nil {
-		Logf("info", "cert sweep: query certificate jobs failed: %v", err)
+		Logf("error", "cert sweep: query certificate jobs failed: %v", err)
 		return
 	}
 	type orphanCandidate struct {
@@ -956,7 +956,7 @@ func sweepOrphanedCertJobs(ctx context.Context) {
 		var job orphanCandidate
 		if err := rows.Scan(&job.id, &job.ruleID, &job.status, &job.jobDomain, &job.ruleDomain, &job.ruleBound); err != nil {
 			rows.Close()
-			Logf("info", "cert sweep: scan certificate job failed: %v", err)
+			Logf("error", "cert sweep: scan certificate job failed: %v", err)
 			return
 		}
 		if JobIsTerminal(job.status) {
@@ -968,7 +968,7 @@ func sweepOrphanedCertJobs(ctx context.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		Logf("info", "cert sweep: iterate certificate jobs failed: %v", err)
+		Logf("error", "cert sweep: iterate certificate jobs failed: %v", err)
 		return
 	}
 	rows.Close()
@@ -980,7 +980,7 @@ func sweepOrphanedCertJobs(ctx context.Context) {
 			if errors.Is(err, ErrJobTransitionConflict) {
 				continue
 			}
-			Logf("info", "cert sweep: disable orphaned certificate job %d failed: %v", job.id, err)
+			Logf("error", "cert sweep: disable orphaned certificate job %d failed: %v", job.id, err)
 			continue
 		}
 		RecordAuditLog("system", "禁用", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("runtime_sweep")), "")
@@ -1093,7 +1093,7 @@ func HasCertJob(ruleID, domains string) bool {
 		)
 	`, ruleID, joined).Scan(&exists)
 	if err != nil {
-		Logf("info", "HasCertJob query failed for rule %s: %v", ruleID, err)
+		Logf("error", "HasCertJob query failed for rule %s: %v", ruleID, err)
 		return false
 	}
 	return exists
@@ -1120,7 +1120,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if j.RenewalAttempts >= maxAttempts {
 			if j.Status == "waiting_ca" {
 				if err := transitionJob(db.DB, j.ID, []string{"waiting_ca"}, "failed", map[string]any{"message": "已达到最大重试次数，请检查 CA 配置后手动重签"}); err != nil {
-					Logf("info", "Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
+					Logf("error", "Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
 				} else {
 					RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
 				}
@@ -1148,7 +1148,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 			return j.ID, err == nil, err
 		})
 		if err != nil {
-			Logf("info", "Renewal: failed to update job %d status: %v", j.ID, err)
+			Logf("error", "Renewal: failed to update job %d status: %v", j.ID, err)
 			continue
 		}
 		if !changed {
@@ -1169,7 +1169,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 		WHERE enable_tls = 1 AND COALESCE(tls_source,'manual') = 'manual' AND tls_cert != ''
 	`)
 	if err != nil {
-		Logf("info", "Failed to query TLS certificates for expiration check: %v", err)
+		Logf("error", "Failed to query TLS certificates for expiration check: %v", err)
 		return
 	}
 	type certInfo struct {
@@ -1193,7 +1193,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 		Logf("error", "Warning: iteration error during expiration check: %v", err)
 	}
 	if err := rows.Close(); err != nil {
-		Logf("info", "Warning: close rows failed during expiration check: %v", err)
+		Logf("error", "Warning: close rows failed during expiration check: %v", err)
 	}
 
 	now := time.Now()
@@ -1202,7 +1202,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 	// Round 35 I-20: 不再忽略 warnDays 错误，避免查询失败时所有证书都被误报即将过期。
 	warnDays := 30
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&warnDays); err != nil {
-		Logf("info", "Warning: read cert_expiry_days failed, using default 30: %v", err)
+		Logf("error", "Warning: read cert_expiry_days failed, using default 30: %v", err)
 		warnDays = 30
 	}
 	for _, c := range certs {
@@ -1214,7 +1214,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			Logf("info", "Warning: Failed to parse certificate for rule %s (%s): %v", c.caddyID, c.name, err)
+			Logf("error", "Warning: Failed to parse certificate for rule %s (%s): %v", c.caddyID, c.name, err)
 			continue
 		}
 
@@ -1261,7 +1261,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 		ORDER BY j.expires_at ASC
 	`, days)
 	if err != nil {
-		Logf("info", "Failed to query expiring certificates: %v", err)
+		Logf("error", "Failed to query expiring certificates: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -1288,7 +1288,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
 			selectionLoaded[j.RuleID] = true
 			if err != nil {
-				Logf("info", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
+				Logf("error", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
 				continue
 			}
 			if selected {
@@ -1333,7 +1333,7 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.
 		ORDER BY j.updated_at ASC
 	`, maxAttempts, firstIssuanceRetryCooldownMinutes)
 	if err != nil {
-		Logf("info", "Failed to query failed first-issuance certificates: %v", err)
+		Logf("error", "Failed to query failed first-issuance certificates: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -1360,7 +1360,7 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.
 			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
 			selectionLoaded[j.RuleID] = true
 			if err != nil {
-				Logf("info", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
+				Logf("error", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
 				continue
 			}
 			if selected {

@@ -235,11 +235,11 @@ func (s *CaddyService) persistLastGoodLocked(data []byte) {
 	}
 	tmp := s.lastGoodPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		Logf("info", "last-known-good: write temp file failed: %v", err)
+		Logf("error", "last-known-good: write temp file failed: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, s.lastGoodPath); err != nil {
-		Logf("info", "last-known-good: rename into place failed: %v", err)
+		Logf("error", "last-known-good: rename into place failed: %v", err)
 	}
 }
 
@@ -707,7 +707,7 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 	resp, err := s.client.Get(s.adminURL + "/reverse_proxy/upstreams")
 	if err != nil {
-		Logf("info", "Failed to get reverse_proxy/upstreams: %v", err)
+		Logf("error", "Failed to get reverse_proxy/upstreams: %v", err)
 		return result
 	}
 	defer resp.Body.Close()
@@ -719,7 +719,7 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 	var upstreams []map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&upstreams); err != nil {
-		Logf("info", "Failed to decode reverse_proxy/upstreams: %v", err)
+		Logf("error", "Failed to decode reverse_proxy/upstreams: %v", err)
 		return result
 	}
 
@@ -1697,7 +1697,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		filtered := rules[:0]
 		for _, ru := range rules {
 			if ru.rule.DynamicDNS {
-				Logf("error", "警告：TCP 规则 %s 启用了动态 DNS，但 TCP 协议暂不支持动态解析，已跳过该规则（不影响同端口其他规则）",
+				Logf("warn", "警告：TCP 规则 %s 启用了动态 DNS，但 TCP 协议暂不支持动态解析，已跳过该规则（不影响同端口其他规则）",
 					ru.rule.CaddyID)
 				continue
 			}
@@ -1715,7 +1715,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			for _, ru := range rules {
 				ids = append(ids, ru.rule.CaddyID)
 			}
-			Logf("error", "警告：端口 %d 上存在多条 TCP 规则（%s），TCP 协议要求每端口唯一规则，全部跳过。请删除多余规则或使用不同端口",
+			Logf("warn", "警告：端口 %d 上存在多条 TCP 规则（%s），TCP 协议要求每端口唯一规则，全部跳过。请删除多余规则或使用不同端口",
 				port, strings.Join(ids, ", "))
 			continue
 		}
@@ -2034,7 +2034,7 @@ func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string
 		  AND key_pem IS NOT NULL AND key_pem <> ''
 		ORDER BY updated_at DESC, id DESC`, caddyID)
 	if err != nil {
-		Logf("info", "loadACMECertificate: query failed for rule %s: %v", caddyID, err)
+		Logf("error", "loadACMECertificate: query failed for rule %s: %v", caddyID, err)
 		return "", "", false
 	}
 	defer rows.Close()

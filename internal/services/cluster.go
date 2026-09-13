@@ -406,7 +406,7 @@ func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin strin
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
-		Logf("info", "cluster detach notify failed: %v", err)
+		Logf("error", "cluster detach notify failed: %v", err)
 		return
 	}
 	resp.Body.Close()

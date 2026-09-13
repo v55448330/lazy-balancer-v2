@@ -40,14 +40,14 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	}
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
-		Logf("info", "security enum normalize: failed to begin transaction: %v", err)
+		Logf("error", "security enum normalize: failed to begin transaction: %v", err)
 		return
 	}
 	defer tx.Rollback()
 	var versionBefore int64
 	if isMaster {
 		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&versionBefore); err != nil {
-			Logf("info", "security enum normalize: failed to read cluster version: %v", err)
+			Logf("error", "security enum normalize: failed to read cluster version: %v", err)
 			return
 		}
 	}
@@ -55,12 +55,12 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	for _, stmt := range legacySecurityEnumBackfills {
 		res, err := tx.ExecContext(ctx, stmt)
 		if err != nil {
-			Logf("info", "security enum normalize: backfill failed: %v", err)
+			Logf("error", "security enum normalize: backfill failed: %v", err)
 			return
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			Logf("info", "security enum normalize: failed to read affected rows: %v", err)
+			Logf("error", "security enum normalize: failed to read affected rows: %v", err)
 			return
 		}
 		changed += n
@@ -75,12 +75,12 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		// 器）与生产口径一致。版本语义只需单调递增，多次 bump 折叠为一次不
 		// 影响从节点收敛。
 		if _, err := tx.ExecContext(ctx, "UPDATE global_config SET cluster_version=? WHERE id=1", versionBefore+1); err != nil {
-			Logf("info", "security enum normalize: failed to bump cluster version: %v", err)
+			Logf("error", "security enum normalize: failed to bump cluster version: %v", err)
 			return
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		Logf("info", "security enum normalize: failed to commit: %v", err)
+		Logf("error", "security enum normalize: failed to commit: %v", err)
 		return
 	}
 	if isMaster {

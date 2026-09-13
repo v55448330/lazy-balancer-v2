@@ -249,7 +249,7 @@ func (l *jobLogger) Log(stage, message string) {
 	l.file.Log(stage, message)
 	message = truncateJobMessage(message)
 	if err := transitionJob(db.DB, l.jobID, jobStatusesExceptDisabled, stage, map[string]any{"message": message}); err != nil {
-		Logf("info", "cert job %d status update failed: %v", l.jobID, err)
+		Logf("error", "cert job %d status update failed: %v", l.jobID, err)
 	}
 }
 
@@ -287,7 +287,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
 			renewalDays := 30
 			if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
-				Logf("info", "read cert_renewal_days failed, using default 30: %v", err)
+				Logf("error", "read cert_renewal_days failed, using default 30: %v", err)
 				renewalDays = 30
 			}
 			// 2026-09-07 C2 核实：UI 输入 min=1（FreeCertificates.vue），0/负值仅 API 直写/导入可达——

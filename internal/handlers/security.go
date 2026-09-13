@@ -320,6 +320,10 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	if strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能为空"})
+		return
+	}
 	if strings.TrimSpace(req.Content) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
 		return
@@ -360,6 +364,10 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	var req models.SecurityBlockPage
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能为空"})
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -500,7 +508,14 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 
 	var policies []models.SecurityPolicySummary
 	bindingCounts := map[int]int{}
-	bindingRows, err := db.DB.Query("SELECT policy_id, COUNT(*) FROM security_policy_bindings GROUP BY policy_id")
+	// N10(第 16 轮):绑定计数限定于过滤结果集策略(与主查询同 conditions)
+	// ——此前无条件全表 GROUP BY,过滤结果为空也执行。
+	bindingQuery := "SELECT b.policy_id, COUNT(*) FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id"
+	if len(conditions) > 0 {
+		bindingQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	bindingQuery += " GROUP BY b.policy_id"
+	bindingRows, err := db.DB.Query(bindingQuery, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -2095,8 +2110,9 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		where += " AND action=?"
 		args = append(args, action)
 	}
-	if ip := c.Query("ip"); ip != "" {
+	if ip := strings.TrimSpace(c.Query("ip")); ip != "" {
 		// 前端输入为完整 IP：精确匹配，避免 LIKE 子串把 1.2.3.4 匹配到 11.2.3.40
+		// N9(第 16 轮):TrimSpace 与同级过滤器同口径(复制粘贴首尾空格不再静默空页)。
 		where += " AND client_ip = ?"
 		args = append(args, ip)
 	}
@@ -2187,7 +2203,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	queryArgs := append(args, pageSize, offset)
 	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, e.anomaly_score,
 		e.rule_name, e.policy_name, e.request_headers, e.request_body
-		FROM security_events e`+where+" ORDER BY e.event_time DESC LIMIT ? OFFSET ?", queryArgs...)
+		FROM security_events e`+where+" ORDER BY e.event_time DESC, e.id DESC LIMIT ? OFFSET ?", queryArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -2219,6 +2235,11 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 
 func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	switch {
+	// N5(第 16 轮):5 位 ID 恒为自定义规则(发射 id=crID+10000 落 10000-99999;
+	// CRS 恒 6 位)——先于 3 位前缀判定,crID≥82000 发射 92000-99999 时不再被
+	// 遮蔽误标;与 customRuleFamilyCondition(SC-3)长度判据同口径。
+	case len(ruleTriggered) == 5:
+		return "自定义规则"
 	case strings.HasPrefix(ruleTriggered, "942"):
 		return "SQL注入"
 	case strings.HasPrefix(ruleTriggered, "941"):
@@ -2465,8 +2486,9 @@ func (h *Handlers) GetCRSInfo(c *gin.Context) {
 		Version:       services.CRSBundledVersion,
 		ServerVersion: getCaddyVersion(),
 		AutoUpdate:    true,
-		IsLatest:      true,
-		UpdateStatus:  "idle",
+		// N2(第 16 轮):默认 nil=未知(latest 缓存未知/版本解析失败时三态化,
+		// 不再 fail-open 宣称「已是最新」)。
+		UpdateStatus: "idle",
 	}
 	var stored struct {
 		version, updatedAt, updateStatus, message, nextUpdate, lastChecked, trigger string
@@ -2507,7 +2529,8 @@ func (h *Handlers) GetCRSInfo(c *gin.Context) {
 		mgr.RefreshLatestAsync()
 		if latest, known := mgr.LatestVersionCached(); known {
 			if cmp, cmpErr := services.CompareCRSVersions(latest, info.Version); cmpErr == nil {
-				info.IsLatest = cmp <= 0
+				latestFlag := cmp <= 0
+				info.IsLatest = &latestFlag
 			}
 		}
 	} else {
@@ -2765,9 +2788,11 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
 }
 
-func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
+// scanSecurityPolicyInto 是 Row/Rows 两形态的唯一扫描实现(N6,第 16 轮:
+// 此前双份拷贝,加列疏漏成为静默错位扫描而非编译错误)。
+func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
+	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
 		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
@@ -2780,19 +2805,12 @@ func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 	return nil
 }
 
+func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
+	return scanSecurityPolicyInto(row.Scan, p)
+}
+
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
-	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
-		return err
-	}
-	p.IPWhitelist = json.RawMessage(ipWhitelist)
-	p.IPBlacklist = json.RawMessage(ipBlacklist)
-	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
-	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
-	p.CustomRules = json.RawMessage(customRules)
-	p.GeoIPCountries = json.RawMessage(geoipCountries)
-	return nil
+	return scanSecurityPolicyInto(rows.Scan, p)
 }
 
 func max1(a, b int) int {

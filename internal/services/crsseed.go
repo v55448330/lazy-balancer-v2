@@ -45,7 +45,7 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		// 只按版本标记对账，发现不了这种退化。
 		Logf("info", "crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
 		if err := os.RemoveAll(rulesPath); err != nil {
-			Logf("info", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
+			Logf("error", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
 			return
 		}
 	}
@@ -55,7 +55,7 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	// 指令，无任何文件消费方，不再重建该死目录。
 	wafDir := filepath.Dir(liveDir)
 	if err := os.MkdirAll(filepath.Join(wafDir, "audit"), 0755); err != nil {
-		Logf("info", "crs seed: failed to create %s: %v", filepath.Join(wafDir, "audit"), err)
+		Logf("error", "crs seed: failed to create %s: %v", filepath.Join(wafDir, "audit"), err)
 	}
 
 	snapshotVersion := ""
@@ -88,13 +88,13 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		srcVersion = snapshotVersion
 	}
 	if err := copyDir(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
-		Logf("info", "crs seed: failed to seed rules from %s: %v", src, err)
+		Logf("error", "crs seed: failed to seed rules from %s: %v", src, err)
 		return
 	}
 	setupPath := filepath.Join(liveDir, "crs-setup.conf")
 	if _, err := os.Stat(setupPath); os.IsNotExist(err) {
 		if err := copyFile(filepath.Join(src, "crs-setup.conf"), setupPath); err != nil {
-			Logf("info", "crs seed: failed to seed crs-setup.conf from %s: %v", src, err)
+			Logf("error", "crs seed: failed to seed crs-setup.conf from %s: %v", src, err)
 		}
 	}
 	for _, aux := range []string{"crs-setup.stock.conf", "zz-user-overrides.conf"} {
@@ -120,7 +120,7 @@ func healDegenerateCRSSnapshot(liveDir, snapshotDir, version string) {
 		return
 	}
 	if err := persistCRSSnapshotFrom(liveDir, snapshotDir, version); err != nil {
-		Logf("info", "crs: failed to rebuild snapshot %s from live tree: %v", snapshotDir, err)
+		Logf("error", "crs: failed to rebuild snapshot %s from live tree: %v", snapshotDir, err)
 		return
 	}
 	Logf("info", "crs: rebuilt degenerate snapshot %s from live tree (%s)", snapshotDir, version)
@@ -133,7 +133,7 @@ func writeCRSVersionMarker(liveDir, version string) {
 		return
 	}
 	if err := os.WriteFile(filepath.Join(liveDir, crsVersionFile), []byte(version+"\n"), 0644); err != nil {
-		Logf("info", "crs seed: failed to write version marker: %v", err)
+		Logf("error", "crs seed: failed to write version marker: %v", err)
 	}
 }
 

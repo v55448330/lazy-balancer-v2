@@ -16,6 +16,8 @@ export interface PollingTask {
   readonly run: () => Promise<void>
   readonly start: () => void
   readonly stop: () => void
+  readonly pause: () => void
+  readonly resume: () => void
   readonly isDisposed: () => boolean
 }
 
@@ -116,7 +118,20 @@ export const usePollingTask = (
     }
   }
 
+  // F-1(第 16 轮审计):非终态暂停/恢复——stop() 永久置位 disposed,弹框级
+  // stop/start 循环的消费方(SecurityRules 更新进度)首轮 stop 后轮询永久
+  // 失效。pause 仅停定时器与在途任务(invalidate 使过期结果丢弃),resume
+  // 可反复调用;语义与 stop 不同:不 abort controller、不解除 visibility 监听。
+  const pause = (): void => {
+    invalidate()
+    pauseInterval()
+  }
+
+  const resume = (): void => {
+    start()
+  }
+
   onUnmounted(stop)
 
-  return { signal: controller.signal, run, start, stop, isDisposed: () => disposed }
+  return { signal: controller.signal, run, start, stop, pause, resume, isDisposed: () => disposed }
 }

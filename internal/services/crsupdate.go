@@ -156,7 +156,7 @@ func ensureCRSVersionRow() {
 		"INSERT OR IGNORE INTO security_crs_version (id, version, auto_update) VALUES (1, ?, TRUE)",
 		CRSBundledVersion,
 	); err != nil {
-		Logf("info", "crs update: failed to ensure version row: %v", err)
+		Logf("error", "crs update: failed to ensure version row: %v", err)
 	}
 }
 
@@ -232,13 +232,13 @@ func (m *CRSUpdateManager) run(trigger string) {
 		"UPDATE security_crs_version SET trigger=?, started_at=datetime('now'), finished_at=NULL WHERE id=1",
 		trigger,
 	); err != nil {
-		Logf("info", "crs update: failed to mark start: %v", err)
+		Logf("error", "crs update: failed to mark start: %v", err)
 	}
 
 	m.setStage(CRSStatusChecking, "查询最新 CRS 版本")
 	tag, err := m.fetchLatestTag(context.Background())
 	if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
-		Logf("info", "crs update: failed to record last_checked: %v", dbErr)
+		Logf("error", "crs update: failed to record last_checked: %v", dbErr)
 	}
 	if err != nil {
 		m.fail(err, false)
@@ -281,7 +281,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag,
 	); err != nil {
-		Logf("info", "crs update: failed to record success: %v", err)
+		Logf("error", "crs update: failed to record success: %v", err)
 	}
 	m.rescanRuleCount()
 	m.mu.Lock()
@@ -299,7 +299,7 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 	if restore {
 		m.restoreBackup()
 		if err := m.reloader(); err != nil {
-			Logf("info", "crs update: reload after restore failed: %v", err)
+			Logf("error", "crs update: reload after restore failed: %v", err)
 		}
 	}
 	// 连续失败计数 +1：仅首次失败写操作审计，后续重试只写组件日志（R35 I1），
@@ -314,7 +314,7 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 		"UPDATE security_crs_version SET update_status='failed', message=?, finished_at=datetime('now'), consecutive_failures=consecutive_failures+1 WHERE id=1",
 		cause.Error(),
 	); err != nil {
-		Logf("info", "crs update: failed to record failure: %v", err)
+		Logf("error", "crs update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
 	m.state.status = CRSStatusFailed

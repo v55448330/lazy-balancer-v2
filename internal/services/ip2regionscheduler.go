@@ -87,7 +87,7 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 		}
 	}
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", next); err != nil {
-		Logf("info", "ip2region update: failed to record next_update: %v", err)
+		Logf("error", "ip2region update: failed to record next_update: %v", err)
 	}
 	if nextStr == "" {
 		return // first tick only schedules the first run
@@ -137,6 +137,6 @@ func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <
 	// fail() 已把 consecutive_failures +1。
 	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_ip2region_version"))).Format(crsTimeLayout)
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", retry); err != nil {
-		Logf("info", "ip2region update: failed to record retry next_update: %v", err)
+		Logf("error", "ip2region update: failed to record retry next_update: %v", err)
 	}
 }

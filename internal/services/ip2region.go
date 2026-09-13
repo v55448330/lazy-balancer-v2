@@ -42,13 +42,13 @@ func InitIP2Region() {
 			return
 		}
 		if err := copyFile(ip2regionDistPath, ip2regionLivePath); err != nil {
-			Logf("info", "ip2region: failed to copy %s to %s: %v", ip2regionDistPath, ip2regionLivePath, err)
+			Logf("error", "ip2region: failed to copy %s to %s: %v", ip2regionDistPath, ip2regionLivePath, err)
 			return
 		}
 	}
 	searcher, err := openIP2RegionSearcher(ip2regionLivePath)
 	if err != nil {
-		Logf("info", "ip2region: failed to load %s: %v", ip2regionLivePath, err)
+		Logf("error", "ip2region: failed to load %s: %v", ip2regionLivePath, err)
 		return
 	}
 	ip2regionMu.Lock()
@@ -96,7 +96,7 @@ func InitIP2Region() {
 func Reload() error {
 	searcher, err := openIP2RegionSearcher(ip2regionLivePath)
 	if err != nil {
-		Logf("info", "ip2region: reload failed: %v (keeping current searcher)", err)
+		Logf("error", "ip2region: reload failed: %v (keeping current searcher)", err)
 		return err
 	}
 	ip2regionMu.Lock()
@@ -188,7 +188,7 @@ func SetIP2RegionVersion(version string) {
 	if _, err := db.DB.Exec(`INSERT INTO security_ip2region_version (id, version, updated_at, auto_update)
 		VALUES (1, ?, datetime('now'), 0)
 		ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at`, version); err != nil {
-		Logf("info", "ip2region: failed to store version %q: %v", version, err)
+		Logf("error", "ip2region: failed to store version %q: %v", version, err)
 	}
 	provinces := GetIP2RegionProvinces()
 	if data, err := json.Marshal(provinces); err == nil {
