@@ -23,6 +23,7 @@ func TestFormatIP2RegionLocation(t *testing.T) {
 		{"unknown province city", "中国|0|0|0|CN", "中国"},
 		{"overseas", "美国|0|0|0|US", "海外"},
 		{"overseas with isp still hidden", "United States|California|0|Google LLC|US", "海外"},
+		{"reserved v4 from xdb", "Reserved|Reserved|Reserved|0|0", "保留地址"},
 		{"unknown region", "0|0|0|0|0", ""},
 		{"empty", "", ""},
 		{"too few fields", "中国|广东省", ""},
@@ -33,6 +34,18 @@ func TestFormatIP2RegionLocation(t *testing.T) {
 				t.Fatalf("formatIP2RegionLocation(%q)=%q, want %q", tc.region, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestEnrichIPLocation_reservedIPs(t *testing.T) {
+	// Given: 保留/私网/回环地址(含 IPv6——xdb 仅 IPv4,靠 net.ParseIP 前置拦截)
+	for _, ip := range []string{"::1", "127.0.0.1", "192.168.1.1", "10.0.0.1", "169.254.1.1", "fe80::1", "0.0.0.0"} {
+		// When: 归属地富化
+		got := enrichIPLocation(ip)
+		// Then: 识别为保留地址
+		if got != "保留地址" {
+			t.Fatalf("enrichIPLocation(%q)=%q, want 保留地址", ip, got)
+		}
 	}
 }
 

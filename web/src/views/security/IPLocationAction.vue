@@ -15,7 +15,7 @@
     <div v-if="countryLabel || eventCount !== null" class="ipo-context">
       <el-tag v-if="countryLabel" size="small" effect="plain" type="info">{{ countryLabel }}</el-tag>
       <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
-        {{ eventCount > 0 ? `近 30 天触发 ${eventCount} 次` : '近 30 天无触发' }}
+        近 30 天事件数量 {{ eventCount }}
       </el-tag>
     </div>
 
