@@ -227,18 +227,8 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("user_id")
-	var userIDInt int
-	switch v := userID.(type) {
-	case float64:
-		userIDInt = int(v)
-	case int:
-		userIDInt = v
-	case int64:
-		userIDInt = int(v)
-	default:
-		userIDInt = 0
-	}
+	// SEC19-P5-2(第 19 轮):复用 getContextUserIDInt(消除三连手写)。
+	userIDInt := getContextUserIDInt(c)
 
 	if userIDInt == id {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不能删除当前登录用户"})

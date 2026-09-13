@@ -1423,14 +1423,16 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		r := ru.rule
 		ups := ru.upstreams
 
-		var upstreamDial []string
+		// SEC19-P5-1(第 19 轮):dial 值零消费(仅判空)——改计数器,免每启用
+		// 上游一次 JoinHostPort+append 的渲染热路径分配。
+		enabledUpstreamCount := 0
 		for _, u := range ups {
 			if u.Enabled {
-				upstreamDial = append(upstreamDial, joinUpstreamAddress(u.Host, u.Port))
+				enabledUpstreamCount++
 			}
 		}
 
-		if len(upstreamDial) == 0 {
+		if enabledUpstreamCount == 0 {
 			Logf("warn", "规则 %s 没有可用的启用上游，已跳过该规则", r.CaddyID)
 			continue
 		}

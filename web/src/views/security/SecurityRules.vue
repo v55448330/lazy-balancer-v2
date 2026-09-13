@@ -782,12 +782,13 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	let src = pattern
 	let flags = ''
 	if (lead) {
-		// SR18-2(第 18 轮):RE2 取反语义——'-' 后的 flag 关闭、前缀 flag 开启;
-		// JS 无原生取反,预览近似:'-' 重置累积(取反段从头计),纯取反
-		// ((?-i))则不加任何 flag(全默认)。合法性不受影响,仅预览精度。
+		// SR18-2+SR19-5(第 19 轮):RE2 取反语义——'-' 后的 flag 关闭、前缀
+		// 开启;JS 无原生取反,预览近似:'-' 前的正向 flag 照收(!negated
+		// 守卫),'-' 后的跳过(不重置累积——(?i-s) 保留 i、丢弃 s,比全清
+		// 更接近 RE2);纯取反((?-i))不加任何 flag(全默认)。
 		let negated = false
 		for (const f of lead[1].toLowerCase()) {
-			if (f === '-') { negated = true; flags = ''; continue }
+			if (f === '-') { negated = true; continue }
 			if (!negated && (f === 'i' || f === 'm' || f === 's') && !flags.includes(f)) flags += f
 		}
 		src = src.slice(lead[0].length)

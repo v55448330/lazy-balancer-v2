@@ -281,17 +281,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	var userIDInt int
-	switch v := userID.(type) {
-	case float64:
-		userIDInt = int(v)
-	case int:
-		userIDInt = v
-	case int64:
-		userIDInt = int(v)
-	default:
-		userIDInt = 0
-	}
+	// SEC19-P5-2:复用 getContextUserIDInt。
+	userIDInt := getContextUserIDInt(c)
 
 	var user models.User
 	var mfaEnabled int
@@ -338,17 +329,8 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 
-	var userIDInt int
-	switch v := userID.(type) {
-	case float64:
-		userIDInt = int(v)
-	case int:
-		userIDInt = v
-	case int64:
-		userIDInt = int(v)
-	default:
-		userIDInt = 0
-	}
+	// SEC19-P5-2:复用 getContextUserIDInt。
+	userIDInt := getContextUserIDInt(c)
 
 	var req UpdateCurrentUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

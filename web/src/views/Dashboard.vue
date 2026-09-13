@@ -829,12 +829,14 @@ const fetchAllData = (): Promise<void> => {
       }
       rules.value = res.data || []
       rulesUnavailable.value = false
-      // FE18-5(第 18 轮):首载 /metrics 先到时 rules 为空,ruleMetricsUnavailable
-      // 映射为 {}——真正无 metrics 的启用规则在 rules 到达后显示 '-' 而非
-      // 「采集失败」一个周期;/rules 落地后按同一谓词重建映射(仅当 metrics
-      // 已有数据时;metrics 失败分支已有自己的全真映射)。
-      if (!ruleMetricsUnavailable.value || Object.keys(ruleMetricsUnavailable.value).length > 0) {
-        ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled && ruleMetrics.value?.[rule.caddy_id] === undefined && caddyMetrics.value !== null]))
+      // FE18-5+SR19-1/2(第 19 轮修正):/rules 落地后按同一谓词重建映射——
+      // 仅当 metrics 成功态(caddyMetricsUnavailable=false 保证 ruleMetrics
+      // 是新鲜数据)时重建;失败序(metrics 先败→rules 后到)不触碰,
+      // 保留 metrics 分支已写入的全真「采集失败」映射(此前用陈旧
+      // ruleMetrics 判第三段会抹掉它)。原两析取(初始 {} 恒真/keys>0)在
+      // 主场景恒死,修复无效,已删。
+      if (!caddyMetricsUnavailable.value) {
+        ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled && ruleMetrics.value?.[rule.caddy_id] === undefined]))
       }
       const version = ++rulesVersion
       const currentRules = rules.value

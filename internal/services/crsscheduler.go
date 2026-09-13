@@ -45,7 +45,7 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 		// 「上次检查时间」随之推进，避免「已是最新 + checked long ago」的静默
 		// 假象。写库仅主节点进行，从节点（只读）打开 CRS 页面不写本地库。
 		var isMaster bool
-		if qerr := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); qerr == nil && isMaster {
+		if qerr := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); qerr == nil && isMaster {
 			if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
 				Logf("error", "crs update: failed to record last_checked: %v", dbErr)
 			}
@@ -116,7 +116,7 @@ func (m *CRSUpdateManager) SetMasterRole(isMaster bool) {
 
 func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
 	}
 	var autoUpdate bool
@@ -221,7 +221,7 @@ func updateRetryBackoff(failures int) time.Duration {
 // 早于退避点的 next_update 均不动。仅主节点写库（从节点版本行由快照管辖）。
 func restoreFailedUpdateBackoff(table string, now time.Time) {
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
 	}
 	var status, nextStr string

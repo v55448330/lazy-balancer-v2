@@ -237,6 +237,8 @@ const loadPolicies = async (): Promise<void> => {
   // 避免「内联 ∪ 引用」口径在条目到达前短暂退化为仅内联
   // FE18-3(第 18 轮):seq 守卫——弹层快速关开产生并发 GET 时,
   // 先发晚到不再覆盖新状态(与 wizardOpenSeq 同仓模式)。
+  // 注:loadIpLists 内部写 ipLists ref 未纳入本 seq(独立加载面,
+  // 亚秒级关开竞态的展示瞬态;若需彻底,可在该函数加同款守卫)。
   const seq = ++loadPoliciesSeq
   const listsPromise = loadIpLists()
   policiesLoading.value = true

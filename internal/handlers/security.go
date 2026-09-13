@@ -1316,9 +1316,17 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		// off 态保留名单只做形状校验，不被可用性门卡死。
 		skipGeoIPValidation := false
 		var storedGeoIP, storedGeoIPMode string
-		if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err == nil {
-			skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
+		// SEC19-P5-3(第 19 轮):读错误三分支(对齐同函数 R64 B-S1 口径)——
+		// 此前吞错使 storedGeoIPMode 落空串,GeoIP off 的可用性门判定漂移。
+		if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 GeoIP 配置失败"})
+			return
 		}
+		skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
 		effectiveGeoIPMode := storedGeoIPMode
 		if req.GeoIPMode != nil && *req.GeoIPMode != "" {
 			effectiveGeoIPMode = *req.GeoIPMode
