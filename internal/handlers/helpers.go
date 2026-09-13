@@ -767,7 +767,7 @@ func (metrics *ruleMetricsAggregate) observeHTTP(name string, value float64) {
 		metrics.requestsTotal += int64(value)
 	case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
 		v := int64(value)
-		switch bucket, _ := classifyStatusCode(extractLabel(name, "code")); bucket {
+		switch bucket := classifyStatusCode(extractLabel(name, "code")); bucket {
 		case "status_2xx":
 			metrics.status2xx += v
 		case "status_3xx":
@@ -962,22 +962,22 @@ func parseRuleMetricsFromSamples(samples []prometheusSample, target ruleMetricTa
 	return buildPrometheusMetricsIndex(samples).ruleMetrics(target)
 }
 
-func classifyStatusCode(code string) (string, bool) {
+func classifyStatusCode(code string) string {
 	if code == "" {
-		return "", false
+		return ""
 	}
 	prefix := code[:1]
 	switch prefix {
 	case "2":
-		return "status_2xx", true
+		return "status_2xx"
 	case "3":
-		return "status_3xx", true
+		return "status_3xx"
 	case "4":
-		return "status_4xx", true
+		return "status_4xx"
 	case "5":
-		return "status_5xx", true
+		return "status_5xx"
 	default:
-		return "", false
+		return ""
 	}
 }
 
@@ -1066,7 +1066,8 @@ func isValidDomain(domain string) bool {
 			return false
 		}
 		for _, c := range part {
-			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			// SYS20-P5-6：删 c=='.'——part 来自 Split(domain, ".") 的产物，恒不含 '.'。
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
 				return false
 			}
 		}

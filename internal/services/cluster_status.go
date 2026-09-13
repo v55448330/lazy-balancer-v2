@@ -74,7 +74,7 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 	}
 	defer func() { _ = tx.Rollback() }()
 	if req.SyncInterval != nil {
-		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1 AND is_master=1", *req.SyncInterval)
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,1)=1", *req.SyncInterval)
 		if err != nil {
 			return fmt.Errorf("更新同步间隔: %w", err)
 		}
@@ -106,7 +106,7 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 		if sw.val == nil {
 			continue
 		}
-		result, err := tx.ExecContext(ctx, "UPDATE global_config SET "+sw.name+"=? WHERE id=1 AND is_master=1", *sw.val)
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET "+sw.name+"=? WHERE id=1 AND COALESCE(is_master,1)=1", *sw.val)
 		if err != nil {
 			return fmt.Errorf("更新 %s: %w", sw.name, err)
 		}

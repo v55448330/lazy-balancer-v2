@@ -13,7 +13,7 @@ export function formatSyncErrorDisplay(
   }
   const countMatch = message.match(FAILURE_COUNT_PATTERN)
   const retryPart = countMatch ? `（第 ${countMatch[1]} 次）` : ''
-  const reasonSegment = message.split(' | ')[0] ?? message
+  const reasonSegment = message.split(' | ')[0]
   const reason = reasonSegment
     .replace(`${RELOAD_FAILURE_MARKER_PREFIX}: `, '')
     .replace(RELOAD_FAILURE_MARKER_PREFIX, '')

@@ -1307,7 +1307,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	}
 
 	var dnsProvider, acmeEmail string
-	var isMaster bool
 	var caddyLogLevel string
 	var caddyLogSizeMB int
 	var accessLogJSON bool
@@ -1319,14 +1318,14 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		serverTokensHidden                                                                                    bool
 	}
 	if err := store.QueryRow(`
-		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
+		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''),
 		       COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
 		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
 		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''), COALESCE(proxy_dial_timeout,0),
 		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM global_config WHERE id = 1
-	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogLevel, &caddyLogSizeMB,
+	`).Scan(&dnsProvider, &acmeEmail, &caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
 		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat,
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
@@ -1581,20 +1580,21 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 
 	// Collect HTTP->HTTPS redirect routes from all TLS-enabled rules and place them on the HTTP (port 80) server.
 	var redirectRoutes []interface{}
+	// M1：判定提为闭包，供 r 自身与下方 other 遮蔽复核共用同款口径。
+	// SYS20-P5-4：提出循环外——闭包捕获空、无状态，每迭代重建纯属浪费。
+	hasEnabledUpstream := func(ups []upstream) bool {
+		for _, u := range ups {
+			if u.Enabled {
+				return true
+			}
+		}
+		return false
+	}
 	for _, ru := range allRules {
 		r := ru.rule
 		// R43 F-A: 与规则渲染跳过同口径（上方按启用上游数 continue）——全部上游
 		// 被禁用的启用规则不生成任何端口路由，同样不得生成 301 跳转，否则域名
 		// 被跳到无服务的 TLS 端口（此前按上游裸计数，禁用上游也被计入）。
-		// M1：判定提为闭包，供 r 自身与下方 other 遮蔽复核共用同款口径。
-		hasEnabledUpstream := func(ups []upstream) bool {
-			for _, u := range ups {
-				if u.Enabled {
-					return true
-				}
-			}
-			return false
-		}
 		if !hasEnabledUpstream(ru.upstreams) {
 			continue
 		}
@@ -1738,20 +1738,20 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			TCPTryDuration:                r.TCPTryDuration,
 			TCPTryInterval:                r.TCPTryInterval,
 		}
-		for _, ru := range rules {
-			for _, u := range ru.upstreams {
-				if !u.Enabled {
-					continue
-				}
-				weight := u.Weight
-				if weight <= 0 {
-					weight = 1
-				}
-				ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
-					Host: u.Host, Port: u.Port, Weight: weight, Protocol: u.Protocol, Enabled: u.Enabled,
-					MaxConnections: u.MaxConnections,
-				})
+		// SYS20-P5-5：外层循环恒单轮（上方 len(rules)>1 已 continue 跳过全部）——
+		// 直接取 rules[0] 避免无意义的循环语法暗示多规则可能。
+		for _, u := range rules[0].upstreams {
+			if !u.Enabled {
+				continue
 			}
+			weight := u.Weight
+			if weight <= 0 {
+				weight = 1
+			}
+			ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
+				Host: u.Host, Port: u.Port, Weight: weight, Protocol: u.Protocol, Enabled: u.Enabled,
+				MaxConnections: u.MaxConnections,
+			})
 		}
 		layer4Servers[fmt.Sprintf("tcp_%d", port)] = buildTCPServer(ruleConfig)
 	}

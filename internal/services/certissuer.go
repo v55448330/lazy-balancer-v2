@@ -611,7 +611,7 @@ func confirmCertificateDeployment(ctx context.Context, jobID int, material issue
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		JOIN global_config g ON g.id=1
 		WHERE j.id=? AND j.rule_id=?
-		  AND r.enabled=1 AND g.is_master=1
+		  AND r.enabled=1 AND COALESCE(g.is_master,1)=1
 	`, jobID, material.ruleID).Scan(&status, &jobDomains, &ruleDomains)
 	if err != nil {
 		return fmt.Errorf("confirm certificate deployment: %w", err)
