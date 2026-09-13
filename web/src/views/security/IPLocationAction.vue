@@ -11,9 +11,9 @@
       <span class="ipo-ip">{{ ip }}</span>
       <span v-if="location" class="ipo-loc">{{ location }}</span>
     </div>
-    <!-- 第 20 轮批准:海外 IP 国家徽标 + 30 天事件数(索引 COUNT,弹框打开才查) -->
+    <!-- 30 天事件数(索引 COUNT,弹框打开才查) -->
     <div v-if="eventCount !== null" class="ipo-context">
-      <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
+      <el-tag size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
         30天事件 {{ eventCount }}
       </el-tag>
     </div>
@@ -127,7 +127,9 @@ const compactLocation = computed(() => {
   // ISP，完整精度仅弹框）；保留地址原样；国内取省+市（跳过国家前缀）
   if (parts[0] === '保留地址') return '保留地址'
   if (parts[0] !== '中国') return '海外'
-  if (parts.length <= 2) return parts.join('·')
+  // 国内统一跳国家前缀:单段「中国」保持(防空标签),两段「中国·山东」取「山东」,
+  // 三段+取省+市——与完整精度弹框口径一致(SYSRENDER21-2)
+  if (parts.length === 1) return '中国'
   return parts.slice(1, 3).join('·')
 })
 

@@ -119,7 +119,14 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		services.Logf("error", "ListCertJobs: read cert_expiry_days failed, using default 30: %v", err)
 		expiryDays = 30
 	}
-	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
+	// CL21-2(第 21 轮审计):cert_pem 只取首证书块——certificateIssuer 仅
+	// 解析首块,全链(LE ~6KB)全量传输纯属浪费;INSTR 定位首个 END 边界,
+	// 空串/单块形态 SUBSTR 原样返回(与全量读取行为一致)。
+	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message,
+		CASE WHEN INSTR(j.cert_pem,'-----END CERTIFICATE-----') > 0
+		     THEN SUBSTR(j.cert_pem, 1, INSTR(j.cert_pem,'-----END CERTIFICATE-----') + 25)
+		     ELSE COALESCE(j.cert_pem,'') END AS cert_pem,
+		j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
 	query += whereClause
 	args := append([]interface{}{}, filterArgs...)
 	query += " ORDER BY j.created_at DESC LIMIT ? OFFSET ?"

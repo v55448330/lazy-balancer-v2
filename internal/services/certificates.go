@@ -578,6 +578,17 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 		if !job.hasCertMaterial || !certJobRuleApplicable(job.applicable, job.ruleDomain, job.jobDomain) {
 			continue
 		}
+		// CL21-1(第 21 轮审计):周期化(30s ticker)后必须跳过已持活跃
+		// timer/在途回调的任务——否则每 30s 取消重建会把退避窗口无限推后
+		// (timer 永不到期,重试链名存实亡)。原调用面(resume/unblock)暂停
+		// 期 timer 已清空,此守卫对其零影响。
+		s.timerMu.Lock()
+		_, hasTimer := s.deploymentTimers[job.id]
+		hasCallback := len(s.deploymentCallbacks[job.id]) > 0
+		s.timerMu.Unlock()
+		if hasTimer || hasCallback {
+			continue
+		}
 		delay := time.Duration(0)
 		if t, err := time.Parse("2006-01-02 15:04:05", job.availableAfter); err == nil {
 			if remaining := time.Until(t); remaining > 0 {
@@ -625,6 +636,11 @@ func (s *CertificateService) Start() {
 			if qm := GetCAQueueManager(); qm != nil {
 				qm.requeueStrandedQueuedJobs()
 			}
+			// CL21-1(第 21 轮审计):部署重试链瞬时断裂(raw-error 断链点×3:
+			// 证书加载/确认/落库失败只记日志不重排)后任务停 'downloaded' 无
+			// timer,原自愈仅靠重启/Resume/Unblock。借 30s 节拍补扫,断链窗口
+			// 收敛到 30s;已持活跃 timer 的任务由 rescan 内守卫跳过。
+			s.rescanDroppedDeploymentRetries()
 		case <-reconcileTicker.C:
 			reconcileMissingCertFiles(db.DB)
 			sweepOrphanedCertJobs(s.ctx)

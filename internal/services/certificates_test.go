@@ -1735,3 +1735,94 @@ func TestRestoreCertJobs_roundtripsCanonicalDatetimeFormat(t *testing.T) {
 		}
 	}
 }
+
+// CL21-1(第 21 轮审计):rescanDroppedDeploymentRetries 周期化(30s ticker)——
+// 已持活跃 timer 的任务必须跳过,否则每 30s 取消重建会把退避窗口无限推后
+// (timer 永不到期,重试链名存实亡)。
+func TestCertificateService_rescanSkipsJobsWithActiveTimer(t *testing.T) {
+	// Given:DB 中一条 downloaded+available_after 任务
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_rescan_skip", false)
+	if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id='lb_rescan_skip'"); err != nil {
+		t.Fatal(err)
+	}
+	availableAfter := time.Now().UTC().Add(2 * time.Minute).Format("2006-01-02 15:04:05")
+	res, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,deployment_available_after) VALUES ('lb_rescan_skip','example.test','downloaded','x','y',?)`, availableAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID64, _ := res.LastInsertId()
+	jobID := int(jobID64)
+
+	service := NewCertificateService()
+	rescheduled := make(chan int, 4)
+	service.deploymentRetry = func(id int, _ issuedCertificate, _ time.Duration) {
+		rescheduled <- id
+	}
+
+	// 已有活跃 timer(模拟正常重试链在跑)
+	service.scheduleDeploymentRetry(jobID, "lb_rescan_skip", time.Hour)
+	service.timerMu.Lock()
+	original := service.deploymentTimers[jobID]
+	service.timerMu.Unlock()
+	if original == nil {
+		t.Fatal("precondition: timer not registered")
+	}
+
+	// When:周期补扫
+	service.rescanDroppedDeploymentRetries()
+
+	// Then:timer 未被替换/取消,且未触发重排
+	service.timerMu.Lock()
+	current := service.deploymentTimers[jobID]
+	service.timerMu.Unlock()
+	if current != original {
+		t.Fatal("active timer was replaced by periodic rescan — backoff window would never expire")
+	}
+	if original.canceled {
+		t.Fatal("active timer was canceled by periodic rescan")
+	}
+	select {
+	case id := <-rescheduled:
+		t.Fatalf("rescan rescheduled job %d despite active timer", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	service.pauseDeploymentRetries()
+}
+
+// CL21-1 对偶:断链任务(无活跃 timer)必须被周期补扫重排。
+func TestCertificateService_rescanPicksUpDroppedRetry(t *testing.T) {
+	// Given:DB 中一条 downloaded+available_after 任务,无任何 timer(断链态)
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_rescan_pick", false)
+	if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id='lb_rescan_pick'"); err != nil {
+		t.Fatal(err)
+	}
+	availableAfter := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05")
+	res, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,deployment_available_after) VALUES ('lb_rescan_pick','example.test','downloaded','x','y',?)`, availableAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID64, _ := res.LastInsertId()
+	jobID := int(jobID64)
+
+	service := NewCertificateService()
+	rescheduled := make(chan int, 4)
+	service.deploymentRetry = func(id int, _ issuedCertificate, _ time.Duration) {
+		rescheduled <- id
+	}
+
+	// When:周期补扫
+	service.rescanDroppedDeploymentRetries()
+
+	// Then:断链任务被重排
+	select {
+	case id := <-rescheduled:
+		if id != jobID {
+			t.Fatalf("rescheduled job=%d, want %d", id, jobID)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("dropped retry was not rescheduled")
+	}
+	service.pauseDeploymentRetries()
+}

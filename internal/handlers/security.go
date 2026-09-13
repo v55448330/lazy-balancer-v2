@@ -2143,10 +2143,6 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询事件计数失败"})
 		return
 	}
-	// F2(第 20.5 轮):国家取 LookupRegion 原始串首段(xdb 管道分隔
-	// country|region|city|isp)——formatIP2RegionLocation 对海外归一为常量
-	// 「海外」丢弃国名,此处不经该格式化直取原始首段;中国 IP 返回「中国」
-	// 由前端跳过显示。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]int{"count": count}})
 }
 

@@ -330,7 +330,15 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 	s.pinCleanupMu.Lock()
 	defer s.pinCleanupMu.Unlock()
-	if err := os.Remove(pinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(pinPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// CL21-3(第 21 轮审计):pin 文件本就不存在(HTTP 注册从节点提升
+			// 恒现——从未写过 pin)记「清理成功」审计是假阳性,跳过;
+			// pending 状态仍清空(无遗留需重试)。
+			s.pendingPinPath = ""
+			s.pendingPinAuditURL = ""
+			return
+		}
 		s.pendingPinPath = pinPath
 		s.pendingPinAuditURL = auditURL
 		Logf("info", "cluster pin cleanup deferred: %v", err)
