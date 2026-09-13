@@ -128,7 +128,9 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	err = tx.QueryRowContext(ctx, "SELECT id FROM nodes WHERE ip_address=? AND port=?", req.IPAddress, req.Port).Scan(&nodeID)
 	switch {
 	case err == nil:
-		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, access_url=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, req.AccessURL, tokenHash(secret), nodeID)
+		// CL23-1(第 23 轮审计):access_url 是管理员配置态——重新注册不携带
+		// (cluster_mode.go:49-51 恒空)时保留存量,不静默清空。
+		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, access_url=COALESCE(NULLIF(?,''),access_url), status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, req.AccessURL, tokenHash(secret), nodeID)
 	case errors.Is(err, sql.ErrNoRows):
 		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, protocol, access_url, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, req.Protocol, req.AccessURL, tokenHash(secret))
 		if insertErr != nil {

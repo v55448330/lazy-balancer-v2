@@ -742,20 +742,36 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 // 因缺证书文件而拒绝加载。仅覆盖 ACME 任务：手动证书内联在 lb_rules.tls_cert，由启动时
 // MaterializeAllCertsFromDB 物化；本函数随证书服务（仅主节点）每 6 小时对账一次。
 func reconcileMissingCertFiles(dbh *sql.DB) {
-	rows, err := dbh.Query(`SELECT j.rule_id, j.domain, COALESCE(j.cert_pem,''), COALESCE(j.key_pem,'')
+	// CL23-2(第 23 轮审计):多行规则必须按 certJobRuleApplicable 同语义过滤——
+	// 否则灾备重建内容取决于扫描顺序,可能重建旧域证书且无自愈。
+	rows, err := dbh.Query(`SELECT j.rule_id, j.domain, COALESCE(j.cert_pem,''), COALESCE(j.key_pem,''), COALESCE(r.domain,'') AS rule_domain
 		FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status IN ('issued','downloaded')
-		  AND COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> ''`)
+		  AND COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> ''
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+		ORDER BY j.rule_id, j.updated_at DESC`)
 	if err != nil {
 		Logf("error", "cert reconcile: query issued certificates failed: %v", err)
 		return
 	}
 	defer rows.Close()
 	rebuilt := 0
+	seenRules := make(map[string]bool)
 	for rows.Next() {
-		var ruleID, domain, certPEM, keyPEM string
-		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM); err != nil {
+		var ruleID, domain, certPEM, keyPEM, ruleDomain string
+		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM, &ruleDomain); err != nil {
 			Logf("error", "cert reconcile: scan certificate row failed: %v", err)
+			continue
+		}
+		// 同 rule_id 多行只取首行(ORDER BY updated_at DESC=最新)——CL23-2。
+		if seenRules[ruleID] {
+			continue
+		}
+		seenRules[ruleID] = true
+		// CL23-2:域名适用性校验——任务签发域名与规则当前域名不一致时重建
+		// 会写入不匹配证书。
+		if !certJobRuleApplicable(true, ruleDomain, domain) {
 			continue
 		}
 		certPath, keyPath := CertFilePaths(ruleID)

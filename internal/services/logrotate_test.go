@@ -51,3 +51,25 @@ func TestRotatingFileWriter_Write_returns_rotation_reopen_error(t *testing.T) {
 		t.Fatalf("original log file disappeared: %v", statErr)
 	}
 }
+
+// SECLB23-P3-1(第 23 轮审计):LogFileEnabled 恒 true 的用户裁定意图在裸二进制
+// 部署落空——open() 不建父目录,/app/logs 不存在时恒回退 stdout。必须 MkdirAll。
+func TestNewRotatingFileWriter_createsParentDirs(t *testing.T) {
+	// Given: 不存在的嵌套父目录(模拟裸二进制无 /app/logs)
+	path := filepath.Join(t.TempDir(), "app", "logs", "lazy-balancer.log")
+
+	// When
+	w, err := NewRotatingFileWriter(path)
+	if err != nil {
+		t.Fatalf("NewRotatingFileWriter with missing parent dirs: %v", err)
+	}
+	defer w.Close()
+
+	// Then: 文件可写(父目录已建)
+	if _, err := w.Write([]byte("test\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("log file not created: %v", err)
+	}
+}

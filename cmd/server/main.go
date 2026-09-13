@@ -137,6 +137,11 @@ func run() error {
 	// Seed the CRS rules tree into a fresh /app/waf bind mount (a persisted
 	// snapshot with user-updated rules wins over the pristine image copy),
 	// then materialize cert files from DB, then apply Caddy config on startup
+	// SECLB23-P1-1(第 23 轮审计):审计日志目录必须在首次 ApplyConfigOnStartup
+	// 前保证存在——coraza NewWAF 时 OpenFile 不建父目录,缺失=/load 拒收。
+	if err := services.EnsureWafAuditDir(); err != nil {
+		log.Printf("warning: create waf audit dir failed: %v", err)
+	}
 	services.SeedCRSRules()
 	services.ReconcileCRSState()
 	// 归一 R50 前落库的安全策略枚举空串行（发射端零产出 + Update 拒修的

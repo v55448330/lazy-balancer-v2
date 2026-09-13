@@ -1011,6 +1011,13 @@ func ensureAuditLogDir() error {
 	return os.MkdirAll(filepath.Dir(auditLogPath), 0o755)
 }
 
+// EnsureWafAuditDir 是 ensureAuditLogDir 的导出版——SECLB23-P1-1（第 23 轮审计）：
+// coraza v3.7.0 NewWAF→serialWriter.Init OpenFile 不建父目录，审计日志目录缺失
+// =Provision 致命=/load 拒收。main.go 必须在首次 ApplyConfigOnStartup 前调用。
+func EnsureWafAuditDir() error {
+	return ensureAuditLogDir()
+}
+
 func StartSecurityEventsIngestion(ctx context.Context) (waitExited func()) {
 	// 审计 B5-F3：返回 waitExited（循环退出时关闭的独立 done 通道）——优雅关停
 	// 在 db.Close 前先 cancel 再完整 join，避免在途 tick 与已关闭 DB 竞态刷噪。

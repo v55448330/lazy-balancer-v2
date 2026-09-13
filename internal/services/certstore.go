@@ -406,15 +406,34 @@ func MaterializeAllCertsFromDB() {
 		rows.Close()
 	}
 
-	rows2, err := db.DB.Query(`SELECT rule_id, cert_pem, key_pem FROM cert_jobs WHERE status IN ('downloaded','issued') AND COALESCE(cert_pem,'')!='' AND COALESCE(key_pem,'')!=''`)
+	// CL23-2(第 23 轮审计):多行规则(同 rule_id 多 cert_jobs 行)必须按
+	// certJobRuleApplicable 同语义过滤——否则灾备物化内容取决于扫描顺序,
+	// 可能重建旧域证书。取每 rule_id 最新行且校验域名适用。
+	rows2, err := db.DB.Query(`SELECT j.rule_id, j.cert_pem, j.key_pem, COALESCE(j.domain,''), COALESCE(r.domain,'') FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status IN ('downloaded','issued') AND COALESCE(j.cert_pem,'')!='' AND COALESCE(j.key_pem,'')!=''
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+		ORDER BY j.rule_id, j.updated_at DESC`)
 	if err != nil {
 		Logf("error", "certstore: query ACME certs failed: %v", err)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：ACME证书", AuditResultPart("query_failed")), "")
 	} else {
+		seenRules := make(map[string]bool)
 		for rows2.Next() {
-			var ruleID, certPEM, keyPEM string
-			if err := rows2.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
+			var ruleID, certPEM, keyPEM, jobDomain, ruleDomain string
+			if err := rows2.Scan(&ruleID, &certPEM, &keyPEM, &jobDomain, &ruleDomain); err != nil {
 				Logf("error", "certstore: scan ACME cert failed: %v", err)
+				continue
+			}
+			// 同 rule_id 多行只取首行(ORDER BY updated_at DESC=最新),旧行跳过——
+			// 防旧域/旧材料覆盖新物化(CL23-2)。
+			if seenRules[ruleID] {
+				continue
+			}
+			seenRules[ruleID] = true
+			// CL23-2:域名适用性校验(与 certJobRuleApplicable 同语义)——任务签发
+			// 域名与规则当前域名不一致时物化会写入不匹配证书。
+			if !certJobRuleApplicable(true, ruleDomain, jobDomain) {
 				continue
 			}
 			if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {

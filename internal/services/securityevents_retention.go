@@ -23,11 +23,11 @@ var (
 	securityEventsRetentionDone   chan struct{}
 )
 
-// SecurityEventsRetentionMax returns the configured security events row cap
-// (exported for the log-stats endpoint's limit_rows progress semantics).
+// SecurityEventsRetentionMax returns the security events row cap (SYSRENDER23-2:
+// max 恒为常量 securityEventsRetentionDefaultMax,无 DB 列可调——直返,
+// 不再经 securityEventsRetentionSettings 白付一次主库查询)。
 func SecurityEventsRetentionMax() int {
-	_, max := securityEventsRetentionSettings()
-	return max
+	return securityEventsRetentionDefaultMax
 }
 
 // securityEventsRetentionSettings reads the retention policy from global_config,

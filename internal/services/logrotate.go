@@ -103,6 +103,11 @@ func NewRotatingFileWriter(path string) (*RotatingFileWriter, error) {
 }
 
 func (w *RotatingFileWriter) open() error {
+	// SECLB23-P3-1(第 23 轮审计):LogFileEnabled 恒 true 后裸二进制部署
+	// /app/logs 不存在——open 必须建父目录,否则恒回退 stdout 轮转失效。
+	if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
+		return fmt.Errorf("create log dir: %w", err)
+	}
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
