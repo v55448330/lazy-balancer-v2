@@ -2138,16 +2138,7 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 	// country|region|city|isp)——formatIP2RegionLocation 对海外归一为常量
 	// 「海外」丢弃国名,此处不经该格式化直取原始首段;中国 IP 返回「中国」
 	// 由前端跳过显示。
-	// 保留地址不产国家徽标(xdb Reserved 段 / net.ParseIP 保留判定双口径)。
-	country := ""
-	if !isReservedIP(ip) {
-		if region := services.LookupRegion(ip); region != "" {
-			if fields := strings.Split(region, "|"); len(fields) > 0 && fields[0] != "" && fields[0] != "0" && fields[0] != "Reserved" {
-				country = fields[0]
-			}
-		}
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]any{"count": count, "country": country}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]int{"count": count}})
 }
 
 func (h *Handlers) ListSecurityEvents(c *gin.Context) {

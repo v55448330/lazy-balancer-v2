@@ -12,8 +12,7 @@
       <span v-if="location" class="ipo-loc">{{ location }}</span>
     </div>
     <!-- 第 20 轮批准:海外 IP 国家徽标 + 近 30 天触发次数(索引 COUNT,弹框打开才查) -->
-    <div v-if="countryLabel || eventCount !== null" class="ipo-context">
-      <el-tag v-if="countryLabel" size="small" effect="plain" type="info">{{ countryLabel }}</el-tag>
+    <div v-if="eventCount !== null" class="ipo-context">
       <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
         近 30 天事件数量 {{ eventCount }}
       </el-tag>
@@ -137,20 +136,15 @@ const canManage = computed(() => authStore.readOnlyReason === null)
 // F2(第 20.5 轮):国家从 count 端点响应取(后端直读 xdb 原始首段)——
 // formatIP2RegionLocation 对海外归一为「海外」常量,拆 location 串只能得
 // 常量;中国返回「中国」由前端跳过。
-const countryLabel = ref<string | null>(null)
 const eventCount = ref<number | null>(null)
 let eventCountSeq = 0
 const loadEventCount = async (): Promise<void> => {
   const seq = ++eventCountSeq
   try {
-    const res = await request.get<APIResponse<{ count: number; country?: string }>>('/security/events/count', { params: { ip: props.ip, days: 30 }, silent: true })
-    if (seq === eventCountSeq) {
-      eventCount.value = res.data?.count ?? 0
-      const country = res.data?.country || ''
-      countryLabel.value = country && country !== '中国' ? country : null
-    }
+    const res = await request.get<APIResponse<{ count: number }>>('/security/events/count', { params: { ip: props.ip, days: 30 }, silent: true })
+    if (seq === eventCountSeq) eventCount.value = res.data?.count ?? 0
   } catch {
-    if (seq === eventCountSeq) { eventCount.value = null; countryLabel.value = null }
+    if (seq === eventCountSeq) eventCount.value = null
   }
 }
 
