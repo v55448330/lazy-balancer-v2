@@ -123,10 +123,12 @@ const props = defineProps<{ ip: string; location: string; ruleCaddyId?: string }
 const compactLocation = computed(() => {
   if (!props.location) return ''
   const parts = props.location.split('·').map(s => s.trim()).filter(Boolean)
+  // 分类先行（用户裁定 2026-09-13）：海外列表恒显「海外」（不显示国家/城市/
+  // ISP，完整精度仅弹框）；保留地址原样；国内取省+市（跳过国家前缀）
+  if (parts[0] === '保留地址') return '保留地址'
+  if (parts[0] !== '中国') return '海外'
   if (parts.length <= 2) return parts.join('·')
-  // 国内取省+市（跳过国家前缀），海外取国家+首城市
-  const start = parts[0] === '中国' || parts[0] === '海外' ? 1 : 0
-  return parts.slice(start, start + 2).join('·')
+  return parts.slice(1, 3).join('·')
 })
 
 const authStore = useAuthStore()
