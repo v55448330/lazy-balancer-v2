@@ -10,7 +10,7 @@ import (
 
 const (
 	securityEventsRetentionDefaultDays = 30
-	securityEventsRetentionDefaultMax  = 100000
+	securityEventsRetentionDefaultMax  = 1000000 // 2026-09-14 用户裁定:10 万→100 万(索引全覆盖,无查询性能影响)
 	// securityEventsRetentionDeleteBatch 是年龄裁剪与 count 超限裁剪共用的单批
 	// 删除行数（R34 E 起年龄裁剪亦按此批次执行，同口径）：大批量单语句 DELETE
 	// 会长时间持指标库写锁，阻塞摄取 tick（R33 F9）。
@@ -22,6 +22,13 @@ var (
 	securityEventsRetentionCancel context.CancelFunc
 	securityEventsRetentionDone   chan struct{}
 )
+
+// SecurityEventsRetentionMax returns the configured security events row cap
+// (exported for the log-stats endpoint's limit_rows progress semantics).
+func SecurityEventsRetentionMax() int {
+	_, max := securityEventsRetentionSettings()
+	return max
+}
 
 // securityEventsRetentionSettings reads the retention policy from global_config,
 // falling back to the defaults when the stored values are unset or non-positive.

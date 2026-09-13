@@ -22,7 +22,7 @@
       </el-form-item>
       <el-form-item label="日志大小">
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="isReadOnly" :min="100" :max="10240" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100</el-text>
+        <el-text type="info" size="small" class="tip-inline">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100；同时控制各规则的访问日志滚动</el-text>
       </el-form-item>
       <el-form-item label="运行日志">
         <el-button size="small" :icon="View" @click="openLogDialog">查看日志</el-button>
@@ -36,7 +36,7 @@
       </el-form-item>
       <el-form-item label="读取超时">
         <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline">秒，等待客户端发送请求体的最长时间；0 = Caddy 默认（无超时）。常规建议 60</el-text>
+        <el-text type="info" size="small" class="tip-inline">秒，读取完整请求（含请求行、请求头与请求体）的最长时间；0 = Caddy 默认（无超时）。常规建议 60</el-text>
       </el-form-item>
       <el-form-item label="写入超时">
         <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />

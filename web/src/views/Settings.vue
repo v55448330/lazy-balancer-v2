@@ -73,7 +73,7 @@ const settings = ref<SettingsConfig>({
   http_read_timeout: 60,
   http_write_timeout: 60,
   http_idle_timeout: 120,
-  upstream_keepalive_timeout: 60,
+  upstream_keepalive_timeout: 0,
   proxy_dial_timeout: 0,
   proxy_response_header_timeout: 0,
   proxy_read_timeout: 0,
@@ -145,7 +145,7 @@ const applyCaddyKeys = (data: ConfigPayload) => {
   settings.value.http_read_timeout = data.http_read_timeout ?? 60
   settings.value.http_write_timeout = data.http_write_timeout ?? 60
   settings.value.http_idle_timeout = data.http_idle_timeout ?? 120
-  settings.value.upstream_keepalive_timeout = data.upstream_keepalive_timeout ?? 60
+  settings.value.upstream_keepalive_timeout = data.upstream_keepalive_timeout ?? 0
   settings.value.proxy_dial_timeout = data.proxy_dial_timeout ?? 0
   settings.value.proxy_response_header_timeout = data.proxy_response_header_timeout ?? 0
   settings.value.proxy_read_timeout = data.proxy_read_timeout ?? 0

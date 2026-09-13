@@ -61,7 +61,7 @@ func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *
 
 func TestSecurityEventsRetentionCleanup_trimsOldestRowsWhenCountExceedsMax(t *testing.T) {
 	// Given: a wide age window (120 months) and 5 recent events
-	// The hardcoded safety max (100000) means count-based trim won't fire for 5 rows.
+	// The hardcoded safety max (1000000) means count-based trim won't fire for 5 rows.
 	// This test now verifies that with a wide age window, all events survive.
 	setupSecurityEventsRetentionTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=120 WHERE id=1`); err != nil {
@@ -98,8 +98,8 @@ func TestSecurityEventsRetentionSettings_appliesDefaultsWhenZero(t *testing.T) {
 	days, max := securityEventsRetentionSettings()
 
 	// Then: the documented defaults apply
-	if days != 30 || max != 100000 {
-		t.Fatalf("settings = (%d, %d), want (30, 100000)", days, max)
+	if days != 30 || max != 1000000 {
+		t.Fatalf("settings = (%d, %d), want (30, 1000000)", days, max)
 	}
 }
 

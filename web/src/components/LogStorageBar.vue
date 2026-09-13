@@ -7,7 +7,7 @@
         <template v-else>
           <span class="sizes">{{ sizeText }}</span>
           <el-progress
-            v-if="info.limit_bytes"
+            v-if="info.limit_bytes || info.limit_rows"
             :percentage="percentage"
             :stroke-width="6"
             :show-text="false"
@@ -31,6 +31,8 @@ interface LogStorageInfo {
   size_bytes: number
   rotated_bytes: number
   limit_bytes?: number | null
+  limit_rows?: number | null
+  db_bytes?: number | null
   keep_count: number
   rows?: number | null
   retention_note?: string
@@ -60,8 +62,12 @@ const isEmpty = computed(() => {
 })
 
 const percentage = computed(() => {
-  if (!info.value?.limit_bytes) return 0
-  return Math.min(100, Math.round((info.value.size_bytes / info.value.limit_bytes) * 100))
+  const i = info.value
+  if (!i) return 0
+  // 条数上限(安全事件:进度=条数/上限,2026-09-14 用户裁定)
+  if (i.limit_rows && i.rows != null) return Math.min(100, Math.round((i.rows / i.limit_rows) * 100))
+  if (i.limit_bytes) return Math.min(100, Math.round((i.size_bytes / i.limit_bytes) * 100))
+  return 0
 })
 
 const progressColor = computed(() => (percentage.value >= 90 ? '#f56c6c' : percentage.value >= 70 ? '#e6a23c' : '#409eff'))
@@ -69,6 +75,13 @@ const progressColor = computed(() => (percentage.value >= 90 ? '#f56c6c' : perce
 const sizeText = computed(() => {
   const i = info.value
   if (!i) return ''
+  if (i.limit_rows && i.rows != null) {
+    const base = `${i.rows.toLocaleString()} / ${i.limit_rows.toLocaleString()} 条`
+    const parts = [base]
+    if (i.size_bytes > 0) parts.push(`日志 ${humanSize(i.size_bytes)}`)
+    if (i.db_bytes) parts.push(`库 ${humanSize(i.db_bytes)}`)
+    return parts.join(' · ')
+  }
   if (i.limit_bytes) return `${humanSize(i.size_bytes)} / ${humanSize(i.limit_bytes)}`
   if (i.rows !== null && i.rows !== undefined) return `${i.rows.toLocaleString()} 条 · ${humanSize(i.size_bytes)}`
   return humanSize(i.size_bytes)
@@ -79,6 +92,7 @@ const noteText = computed(() => {
   if (!i) return ''
   if (i.limit_bytes && i.keep_count > 0) return `满 ${humanSize(i.limit_bytes)} 轮转，保留 ${i.keep_count} 份${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
   if (i.limit_bytes) return `满 ${humanSize(i.limit_bytes)} 轮转${i.retention_note ? `，${i.retention_note}` : ''}${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
+  if (i.limit_rows) return i.retention_note || ''
   return i.retention_note || ''
 })
 

@@ -11,6 +11,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -24,6 +25,8 @@ type LogStorageInfo struct {
 	SizeBytes     int64  `json:"size_bytes"`
 	RotatedBytes  int64  `json:"rotated_bytes"`
 	LimitBytes    *int64 `json:"limit_bytes,omitempty"`
+	LimitRows     *int64 `json:"limit_rows,omitempty"`
+	DBBytes       *int64 `json:"db_bytes,omitempty"`
 	KeepCount     int    `json:"keep_count"`
 	Rows          *int64 `json:"rows,omitempty"`
 	RetentionNote string `json:"retention_note,omitempty"`
@@ -166,6 +169,10 @@ func sizeLimitMB(column string, def int64) *int64 {
 //     LOG_FILE 时这些日志会全部显示 0B。
 //   - runtimePath is the runtime log path, which follows LogFile
 //     （空 → /app/logs/lazy-balancer.log）。
+// wafAuditLogFile 是 Coraza 审计日志文件路径(包级 var 支持测试注入,
+// 与 services.auditLogPath 同模式;生产=/app/logs/waf-audit/audit.log)。
+var wafAuditLogFile = "/app/logs/waf-audit/audit.log"
+
 func logPaths(cfg *config.Config) (fixedDir, runtimePath string) {
 	fixedDir = "/app/logs"
 	runtimePath = "/app/logs/lazy-balancer.log"
@@ -181,6 +188,13 @@ func logPaths(cfg *config.Config) (fixedDir, runtimePath string) {
 // GetLogStats 返回全部日志存储的体量与治理信息，供各日志页显示
 // 「当前大小 / 阈值（保留 N 份）」与清理策略说明。caddy_id 参数可将
 // 证书任务/规则访问两项收窄到单规则。
+// securityEventsMaxRows 读事件上限(services 常量导出封装,供 LimitRows 与
+// 进度条语义使用;2026-09-14 用户裁定 100 万)。
+func securityEventsMaxRows() *int64 {
+	v := int64(services.SecurityEventsRetentionMax())
+	return &v
+}
+
 func (h *Handlers) GetLogStats(c *gin.Context) {
 	fixedLogsDir, runtimePath := logPaths(h.cfg)
 	dataDir := "/app/data"
@@ -195,7 +209,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 
 	infos := []LogStorageInfo{
 		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留"},
-		{Key: "security_events", Name: "安全事件", KeepCount: 0, RetentionNote: retentionNote + "（上限 100000 条）", ConfigSource: "基础设置 · 日志保留"},
+		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
@@ -230,7 +244,13 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		byKey("audit").SizeBytes = st.Size()
 	}
 	if st, err := os.Stat(filepath.Join(dataDir, "lazy-balancer-metrics.db")); err == nil {
-		byKey("security_events").SizeBytes = st.Size()
+		sz := st.Size()
+		byKey("security_events").DBBytes = &sz
+	}
+	// SizeBytes=真实审计日志文件(2026-09-14 用户裁定:不再用 metrics.db 库文件
+	// 虚标——日志文件与 coraza_audit 同目录同口径,DBBytes 单独展示库容量)
+	if info := byKey("security_events"); info != nil {
+		info.SizeBytes, info.RotatedBytes = dirBytes(wafAuditLogFile)
 	}
 
 	if info := byKey("runtime"); info != nil {
@@ -246,7 +266,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		info.SizeBytes, info.RotatedBytes = active, rotated
 	}
 	if info := byKey("coraza_audit"); info != nil {
-		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join("/app/waf", "audit", "audit.log"))
+		info.SizeBytes, info.RotatedBytes = dirBytes(wafAuditLogFile)
 	}
 	if info := byKey("crs_update"); info != nil {
 		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "crs-update.log"))

@@ -83,10 +83,10 @@ func throttledAuditFailureLogf(format string, args ...any) {
 }
 
 // auditLogPath 是 Coraza 审计日志的路径；定义为变量以便测试注入临时目录
-// （生产环境为 /app/waf/audit/audit.log）。轮转检查由事件摄取的 2s tick 驱动
+// （生产环境为 /app/logs/waf-audit/audit.log,2026-09-14 从 /app/waf/audit 迁入）。轮转检查由事件摄取的 2s tick 驱动
 // （securityevents.go StartSecurityEventsIngestion，R65 B-S3 移除从未被引用的
 // auditLogCheckInterval 死常量）。
-var auditLogPath = "/app/waf/audit/audit.log"
+var auditLogPath = "/app/logs/waf-audit/audit.log"
 
 // auditLogSizeBytes 返回触发轮转的大小阈值；默认读取 global_config 配置，
 // 测试可通过替换该变量注入小阈值以触发轮转。
