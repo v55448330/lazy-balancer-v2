@@ -75,7 +75,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
 			return
 		}
-		services.Logf("info", "Failed to query CA provider %d: %v", id, err)
+		services.Logf("error", "Failed to query CA provider %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query CA provider"})
 		return
 	}
@@ -129,7 +129,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		case errors.Is(err, services.ErrCAProviderMinIntervalTooHigh):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最小间隔不能超过 60000 毫秒"})
 		default:
-			services.Logf("info", "Failed to update CA provider %d: %v", id, err)
+			services.Logf("error", "Failed to update CA provider %d: %v", id, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update CA provider"})
 		}
 		return
@@ -154,7 +154,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
 			return
 		}
-		services.Logf("info", "Failed to query CA provider %d before test: %v", id, err)
+		services.Logf("error", "Failed to query CA provider %d before test: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query CA provider"})
 		return
 	}
@@ -184,13 +184,13 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME 账户注册失败，请检查 CA 配置或网络: " + terr.Error()})
 			default:
 				recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
-				services.Logf("info", "CA provider test failed for provider %d: %v", id, err)
+				services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 			}
 			return
 		}
 		recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
-		services.Logf("info", "CA provider test failed for provider %d: %v", id, err)
+		services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 		return
 	}

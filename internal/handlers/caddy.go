@@ -461,7 +461,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "UpdateConfig rollback failed: %v", rollbackErr)
+				services.Logf("error", "UpdateConfig rollback failed: %v", rollbackErr)
 			}
 		}
 	}()
@@ -863,7 +863,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "PutCaddyConfig rollback failed: %v", rollbackErr)
+				services.Logf("error", "PutCaddyConfig rollback failed: %v", rollbackErr)
 			}
 		}
 	}()

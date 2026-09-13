@@ -680,12 +680,12 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 			var isMaster bool
 			if mErr := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); mErr == nil && !isMaster {
 				if mErr := services.MarkStartupFallbackPending(context.Background(), db.DB); mErr != nil {
-					services.Logf("info", "startup fallback: write compensation marker failed: %v", mErr)
+					services.Logf("error", "startup fallback: write compensation marker failed: %v", mErr)
 				}
 			}
 			return nil
 		} else {
-			services.Logf("info", "last-known-good fallback failed: %v", fbErr)
+			services.Logf("error", "last-known-good fallback failed: %v", fbErr)
 		}
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}

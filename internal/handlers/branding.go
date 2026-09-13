@@ -185,7 +185,7 @@ func readBrandingFile(path string) (brandingConfig, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			services.Logf("info", "loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
+			services.Logf("error", "loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
 		return brandingConfig{AppName: defaultBranding.AppName}, false
 	}

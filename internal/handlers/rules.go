@@ -142,7 +142,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	// 主路由对象，配置查看对话框拿到的 JSON 缺路径路由。
 	runtimeConfig, err := h.caddyService.GetConfig()
 	if err != nil {
-		services.Logf("info", "GetRuleCaddyConfig: failed to get config from Caddy for caddy_id=%s: %v", r.CaddyID, err)
+		services.Logf("error", "GetRuleCaddyConfig: failed to get config from Caddy for caddy_id=%s: %v", r.CaddyID, err)
 		responseData["config"] = nil
 		responseData["config_not_exists"] = true
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
@@ -756,7 +756,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if req.Protocol == "http" && req.Domain != "" {
 		existing, err := ruleDomainConflict(req.Domain, req.ListenPort, "")
 		if err != nil {
-			services.Logf("info", "CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
+			services.Logf("error", "CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 			return
 		}
@@ -766,7 +766,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 		shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, req.EnableTLS, req.TLSHTTPRedirect, "")
 		if err != nil {
-			services.Logf("info", "CreateRule redirect shadow query failed for domain=%s: %v", req.Domain, err)
+			services.Logf("error", "CreateRule redirect shadow query failed for domain=%s: %v", req.Domain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 			return
 		}
@@ -878,7 +878,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "CreateRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "CreateRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()
@@ -976,7 +976,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		defer func() {
 			if !cleanupCommitted {
 				if rollbackErr := cleanupTx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
-					services.Logf("info", "CreateRule compensation rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+					services.Logf("error", "CreateRule compensation rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 				}
 			}
 		}()
@@ -1106,7 +1106,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	existingRule.PathRules, err = loadPathRules(c.Request.Context(), db.DB, caddyID)
 	if err != nil {
-		services.Logf("info", "UpdateRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "UpdateRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
 		return
 	}
@@ -1117,7 +1117,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	var oldUpstreams []models.Upstream
 	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
 	if err != nil {
-		services.Logf("info", "UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
 		return
 	}
@@ -1125,9 +1125,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		var u models.Upstream
 		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			if closeErr := oldUpstreamRows.Close(); closeErr != nil {
-				services.Logf("info", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+				services.Logf("error", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 			}
-			services.Logf("info", "UpdateRule failed to scan existing upstream for caddy_id=%s: %v", caddyID, err)
+			services.Logf("error", "UpdateRule failed to scan existing upstream for caddy_id=%s: %v", caddyID, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
 			return
 		}
@@ -1135,14 +1135,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if err := oldUpstreamRows.Err(); err != nil {
 		if closeErr := oldUpstreamRows.Close(); closeErr != nil {
-			services.Logf("info", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+			services.Logf("error", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 		}
-		services.Logf("info", "UpdateRule existing upstream cursor failed for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "UpdateRule existing upstream cursor failed for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
 		return
 	}
 	if err := oldUpstreamRows.Close(); err != nil {
-		services.Logf("info", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
 		return
 	}
@@ -1334,7 +1334,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if req.Domain != existingDomain || req.ListenPort != existingRule.ListenPort || (*req.Enabled && !existingRule.Enabled) {
 			existing, err := ruleDomainConflict(req.Domain, req.ListenPort, caddyID)
 			if err != nil {
-				services.Logf("info", "UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
+				services.Logf("error", "UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 				return
 			}
@@ -1365,7 +1365,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if shadowRelevantChanged && (*req.Enabled || existingRule.Enabled) {
 			shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, *req.EnableTLS, *req.TLSHTTPRedirect, caddyID)
 			if err != nil {
-				services.Logf("info", "UpdateRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
+				services.Logf("error", "UpdateRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 				return
 			}
@@ -1472,7 +1472,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 运行配置快照：仅用于事务内应用失败的恢复（同 CreateRule，裁定 ④'）。
 	runtimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
 	if snapErr != nil {
-		services.Logf("info", "UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
+		services.Logf("error", "UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
@@ -1581,13 +1581,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Caddy 应用失败时需要用这些快照把已提交的 DB 更新恢复回去
 	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
 	if oldRuleRowErr != nil {
-		services.Logf("info", "UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
+		services.Logf("error", "UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份规则数据失败"})
 		return
 	}
 	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
 	if oldUpstreamRowsErr != nil {
-		services.Logf("info", "UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
+		services.Logf("error", "UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
 		return
 	}
@@ -1610,7 +1610,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "UpdateRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "UpdateRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()
@@ -1701,7 +1701,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if err := tx.Commit(); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		services.Logf("info", "UpdateRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "UpdateRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交规则更新失败: " + errors.Join(err, restoreErr).Error()})
 		return
 	}
@@ -2046,7 +2046,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
-				services.Logf("info", "DeleteRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "DeleteRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()
@@ -2083,7 +2083,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
 	if err != nil {
-		services.Logf("info", "DeleteRule runtime snapshot failed for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "DeleteRule runtime snapshot failed for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
@@ -2117,7 +2117,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 	if err := tx.Commit(); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		services.Logf("info", "DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
 		if restoreErr != nil {
 			services.Logf("error", "CRITICAL: DeleteRule commit and runtime restore failed for caddy_id=%s: commit=%v restore=%v", caddyID, err, restoreErr)
 		}
@@ -2138,7 +2138,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	services.RemoveRuleLogFiles(caddyID)
 	if err := services.RemoveCertJobLogFiles(caddyID); err != nil {
-		services.Logf("info", "DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
+		services.Logf("error", "DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
 		recordAudit(c, "清理失败", "证书日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.CertJobLogPath(caddyID)), err.Error()))
 	}
 
@@ -2210,7 +2210,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		if !committed {
 			// Round 35 B5: 与 CreateRule/UpdateRule/DeleteRule 模式一致，回滚错误需记录。
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "DuplicateRule transaction rollback failed: %v", rollbackErr)
+				services.Logf("error", "DuplicateRule transaction rollback failed: %v", rollbackErr)
 			}
 		}
 	}()
@@ -2281,7 +2281,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.CustomRoutesEnabled,
 		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay,
 	); err != nil {
-		services.Logf("info", "Failed to duplicate rule %s: %v", caddyID, err)
+		services.Logf("error", "Failed to duplicate rule %s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败，已回滚: " + err.Error()})
 		return
 	}
@@ -2322,7 +2322,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 	if err := upstreamRows.Err(); err != nil {
 		if closeErr := upstreamRows.Close(); closeErr != nil {
-			services.Logf("info", "DuplicateRule failed to close upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+			services.Logf("error", "DuplicateRule failed to close upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历上游失败，已回滚: " + err.Error()})
 		return
@@ -2405,7 +2405,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if ruleProtocol == "http" && ruleDomain != "" {
 		conflict, err := enabledRuleDomainConflict(ruleDomain, rulePort, caddyID)
 		if err != nil {
-			services.Logf("info", "EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
+			services.Logf("error", "EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 			return
 		}
@@ -2415,7 +2415,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		}
 		shadowRule, shadowDomain, err := queryRedirectShadowConflict(ruleDomain, rulePort, enableTLS, tlsHTTPRedirect, caddyID)
 		if err != nil {
-			services.Logf("info", "EnableRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
+			services.Logf("error", "EnableRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 			return
 		}
@@ -2453,7 +2453,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "EnableRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "EnableRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()
@@ -2674,7 +2674,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "DisableRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "DisableRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()

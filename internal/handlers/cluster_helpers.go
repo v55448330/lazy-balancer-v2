@@ -24,7 +24,7 @@ func (h *Handlers) requireMaster(c *gin.Context) bool {
 
 func clusterError(c *gin.Context, status int, message string, err error) {
 	if err != nil {
-		services.Logf("info", "cluster request failed: %v", err)
+		services.Logf("error", "cluster request failed: %v", err)
 	}
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }

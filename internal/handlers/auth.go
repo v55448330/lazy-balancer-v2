@@ -399,7 +399,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "UpdateCurrentUser rollback failed for id=%d: %v", userIDInt, rollbackErr)
+				services.Logf("error", "UpdateCurrentUser rollback failed for id=%d: %v", userIDInt, rollbackErr)
 			}
 		}
 	}()

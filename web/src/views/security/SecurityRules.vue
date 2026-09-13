@@ -773,9 +773,9 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	if (/\(\?<?[=!]/.test(pattern) || /\\[1-9]/.test(pattern) || /\\k</.test(pattern)) {
 		return { re: null, valid: false }
 	}
-	// F-3:非法 flag 字母独立门——RE2 flag 集 {i,m,s,U};(?foo)/(?
-	// x:)/(?u) 等 RE2 拒绝的形态在此拒绝,不再靠后端兜底。
-	const lead = pattern.match(/^\(\?([a-zA-Z]+)\)/)
+	// SR17-2(第 17 轮):lead 捕获含取反 '-'——白名单 {i,m,s,U,-} 真正
+	// 生效(此前捕获组不含 '-',取反形态连 lead 都匹配不上)。
+	const lead = pattern.match(/^\(\?([-a-zA-Z]+)\)/)
 	if (lead && !/^[imsU-]+$/.test(lead[1])) {
 		return { re: null, valid: false }
 	}
@@ -790,10 +790,10 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	}
 	src = src.replace(/\(\?P</g, '(?<')
 	// F-2:中置内联 flag((?i)a(?m)b)——JS 不识别,剥离后重试(RE2 合法)。
-	const midFlagStripped = src.replace(/\(\?[a-zA-Z]+\)(?=[^)]|$)/g, '')
+	const midFlagStripped = src.replace(/\(\?[imsU-]+\)(?=[^)]|$)/g, '')
 	// F-3:flag 组((?i:...))——JS 不识别,替换为普通分组后再试;真语法错误
 	// (未闭合括号等)在三段试编译全失败后判 invalid,不再被兜底掩盖。
-	const flagGroupsOpened = src.replace(/\(?[-a-zA-Z]+:/g, '(')
+	const flagGroupsOpened = src.replace(/\(\?[-imsU]+:/g, '(')
 	const candidates = [src, midFlagStripped, flagGroupsOpened]
 	for (const candidate of candidates) {
 		try {
@@ -819,8 +819,7 @@ const removeCondition = (idx: number) => {
   }
   regexTestStrings.value = next
 }
-			// F-3:catch 兜底收紧——先剔除合法 flag 组((?letters: 形态)后再
-			// 试编译,仍失败才 invalid(未闭合括号等真语法错误不再被兜底掩盖)。
+// 搜索提交先回到第 1 页:高页码叠加收窄后的结果集会落在空页上
 const searchRules = () => { page.value = 1; fetchRules() }
 const fetchRules = async () => {
   loadingRules.value = true

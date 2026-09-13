@@ -17,7 +17,7 @@ import (
 func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 	blocks, err := services.ScrapeRateLimitBlocks(h.cfg.CaddyMetricsURL)
 	if err != nil {
-		services.Logf("info", "Scrape rate-limit blocks failed: %v", err)
+		services.Logf("error", "Scrape rate-limit blocks failed: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "限流拦截数据不可用"})
 		return
 	}

@@ -449,7 +449,7 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "restoreRuleSnapshot rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				services.Logf("error", "restoreRuleSnapshot rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
 	}()

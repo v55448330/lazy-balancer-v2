@@ -125,6 +125,14 @@ export const usePollingTask = (
   const pause = (): void => {
     invalidate()
     pauseInterval()
+    // SR17-1(第 17 轮):同步摘除 visibility 监听——否则暂停期间标签页
+    // 可见性翻转会在 handler 里 beginInterval() 复活定时器(违反 pause
+    // 契约);resume→start→ensureVisibilityPause 会重挂,前 5 个不 pause
+    // 的消费方不受影响。
+    if (visibilityHandler !== null && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', visibilityHandler)
+      visibilityHandler = null
+    }
   }
 
   const resume = (): void => {

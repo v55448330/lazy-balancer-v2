@@ -134,7 +134,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "UpdateUser rollback failed for id=%d: %v", id, rollbackErr)
+				services.Logf("error", "UpdateUser rollback failed for id=%d: %v", id, rollbackErr)
 			}
 		}
 	}()
@@ -252,7 +252,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	defer func() {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-			services.Logf("info", "DeleteUser rollback failed for id=%d: %v", id, err)
+			services.Logf("error", "DeleteUser rollback failed for id=%d: %v", id, err)
 		}
 	}()
 
@@ -327,7 +327,7 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	defer func() {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-			services.Logf("info", "ToggleUserStatus rollback failed for id=%d: %v", id, err)
+			services.Logf("error", "ToggleUserStatus rollback failed for id=%d: %v", id, err)
 		}
 	}()
 	query := "UPDATE users SET is_enabled = ? WHERE id = ?"
@@ -411,7 +411,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	defer func() {
 		if !committed {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				services.Logf("info", "ResetUserPassword rollback failed for id=%d: %v", id, rollbackErr)
+				services.Logf("error", "ResetUserPassword rollback failed for id=%d: %v", id, rollbackErr)
 			}
 		}
 	}()

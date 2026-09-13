@@ -217,7 +217,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 
 // 全局配置区布尔键（global_config）。protected 键（is_master/sync_users 等）
 // 恢复时不写入；sync_users 虽入 protected（导出剔除）但仍在本布尔键列表中
-// 参与类型校验（CL16-新1：导入携带非布尔形态时按布尔门归一，防御性无害）；
+// 参与类型校验（v2 导入对非布尔形态整包 400 点名拒绝——防御纵深,与归一无关）；
 // sync_switches_migrated 为内部迁移标记随导出携带、恢复时写入，同属布尔语义。
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",

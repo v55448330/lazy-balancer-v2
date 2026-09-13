@@ -55,7 +55,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		return
 	}
 	if err := h.clusterService.BecomeSlave(c.Request.Context(), strings.TrimRight(req.MasterURL, "/"), registration); err != nil {
-		services.Logf("info", "cluster registration %d requires manual cleanup after local mode transition failed: %v", registration.RegistrationID, err)
+		services.Logf("error", "cluster registration %d requires manual cleanup after local mode transition failed: %v", registration.RegistrationID, err)
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", fmt.Sprintf("registration_id：%d", registration.RegistrationID), err.Error()))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,

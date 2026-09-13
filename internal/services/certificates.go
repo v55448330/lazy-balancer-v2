@@ -1190,10 +1190,10 @@ func (s *CertificateService) checkManualCertExpiration() {
 	}
 	// Round 35 B4: 显式检查 rows.Err 和 rows.Close 错误，避免迭代期间错误被吞没。
 	if err := rows.Err(); err != nil {
-		Logf("error", "Warning: iteration error during expiration check: %v", err)
+		Logf("warn", "cert expiration check: iteration error: %v", err)
 	}
 	if err := rows.Close(); err != nil {
-		Logf("error", "Warning: close rows failed during expiration check: %v", err)
+		Logf("warn", "cert expiration check: close rows failed: %v", err)
 	}
 
 	now := time.Now()
@@ -1202,7 +1202,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 	// Round 35 I-20: 不再忽略 warnDays 错误，避免查询失败时所有证书都被误报即将过期。
 	warnDays := 30
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&warnDays); err != nil {
-		Logf("error", "Warning: read cert_expiry_days failed, using default 30: %v", err)
+		Logf("warn", "cert expiration check: read cert_expiry_days failed, using default 30: %v", err)
 		warnDays = 30
 	}
 	for _, c := range certs {
@@ -1214,7 +1214,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			Logf("error", "Warning: Failed to parse certificate for rule %s (%s): %v", c.caddyID, c.name, err)
+			Logf("warn", "cert expiration check: failed to parse certificate for rule %s (%s): %v", c.caddyID, c.name, err)
 			continue
 		}
 
