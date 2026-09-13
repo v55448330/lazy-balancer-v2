@@ -1922,7 +1922,16 @@ func formatIP2RegionLocation(region string) string {
 		return "保留地址"
 	}
 	if fields[0] != "中国" {
-		return "海外"
+		// 海外精确化(2026-09-13 用户裁定):与国内同构拼接非 0 段
+		// 国家·省州·城市·ISP(IDC)——弹框展示完整精度;列表仍由前端
+		// compactLocation 精简(海外取首段即国家)。
+		parts := []string{fields[0]}
+		for _, f := range fields[1:4] {
+			if f != "" && f != "0" {
+				parts = append(parts, f)
+			}
+		}
+		return strings.Join(parts, "·")
 	}
 	parts := []string{"中国"}
 	for _, f := range fields[1:3] {

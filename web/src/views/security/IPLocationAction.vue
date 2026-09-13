@@ -11,10 +11,10 @@
       <span class="ipo-ip">{{ ip }}</span>
       <span v-if="location" class="ipo-loc">{{ location }}</span>
     </div>
-    <!-- 第 20 轮批准:海外 IP 国家徽标 + 近 30 天触发次数(索引 COUNT,弹框打开才查) -->
+    <!-- 第 20 轮批准:海外 IP 国家徽标 + 30 天事件数(索引 COUNT,弹框打开才查) -->
     <div v-if="eventCount !== null" class="ipo-context">
       <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
-        近 30 天事件数量 {{ eventCount }}
+        30天事件 {{ eventCount }}
       </el-tag>
     </div>
 
