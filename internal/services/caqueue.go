@@ -1082,8 +1082,8 @@ func requeueCanceledJob(jobID int) {
 	// R57 A-#5：'downloaded' 且证书材料已落库的任务停在部署窗口——转 'queued'
 	// 会丢弃已签发证书并触发整轮重签（Issue 快速路径只认 issued/downloaded）。
 	// 保持 'downloaded' 并把重试窗口推到 now，Resume 的
-	// rescanDroppedDeploymentRetries 会统一重新调度部署（含窗口为 NULL 的
-	// 首次部署中断形态——rescan 要求窗口非空且到期）。
+	// rescanDroppedDeploymentRetries 会统一重新调度部署（CL22-1 起 30s 周期
+	// 补扫同口径覆盖——R59 起窗口未过也按剩余 delay 重排,不再要求到期）。
 	var status, certPEM, keyPEM string
 	if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &keyPEM); err == nil {
 		if status == "downloaded" && certPEM != "" && keyPEM != "" {

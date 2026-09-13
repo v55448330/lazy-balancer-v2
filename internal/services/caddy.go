@@ -2938,8 +2938,10 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
 	// 审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次透传给各
 	// 策略，替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略 ≈600 查询→
-	// 200）；取值惰性化——零安全策略/非 http 链不发射任何 waf handler 时不再
-	// 空付指纹计算（SELECT+2×stat），仅首个 waf handler 发射前计算。
+	// 200）；闭包缓存每链至多计算一次——零安全策略/非 http 链零开销；
+	// http 链首个策略求值时计算（SECLB22-P5-1：全 off 策略的 http 链仍付
+	// 一次 SELECT+2×stat——实参求值在 buildWafHandlerWithPolicy 调用前，
+	// 真惰性需改 BuildCorazaDirectives 签名,安全关键函数 P5 不值,裁定接受）。
 	var chainFingerprint string
 	needFingerprint := func() string {
 		if chainFingerprint == "" {

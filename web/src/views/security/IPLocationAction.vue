@@ -118,12 +118,12 @@ const ACL_LABELS: Record<AclTarget, string> = { deny: '黑名单', allow: '白�
 
 const props = defineProps<{ ip: string; location: string; ruleCaddyId?: string }>()
 
-// 紧凑归属地：截取前两段（如「广东·深圳」），弹窗/悬浮显示完整
+// 紧凑归属地：国内只显市/海外恒「海外」/保留地址原样，弹窗/悬浮显示完整
 const compactLocation = computed(() => {
   if (!props.location) return ''
   const parts = props.location.split('·').map(s => s.trim()).filter(Boolean)
   // 分类先行（用户裁定 2026-09-13）：海外列表恒显「海外」（不显示国家/城市/
-  // ISP，完整精度仅弹框）；保留地址原样；国内取省+市（跳过国家前缀）
+  // ISP，完整精度仅弹框）；保留地址原样；国内只显市（下方细分）
   if (parts[0] === '保留地址') return '保留地址'
   if (parts[0] !== '中国') return '海外'
   // 国内只显市(用户裁定 2026-09-13):三段+取第三段市(如「中国·广东·深圳」→
@@ -138,9 +138,6 @@ const authStore = useAuthStore()
 // 仅主节点管理员可操作（从节点/非管理员只展示 IP 与归属地）——与全局只读口径一致
 const canManage = computed(() => authStore.readOnlyReason === null)
 
-// F2(第 20.5 轮):国家从 count 端点响应取(后端直读 xdb 原始首段)——
-// formatIP2RegionLocation 对海外归一为「海外」常量,拆 location 串只能得
-// 常量;中国返回「中国」由前端跳过。
 const eventCount = ref<number | null>(null)
 let eventCountSeq = 0
 const loadEventCount = async (): Promise<void> => {

@@ -206,11 +206,22 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 	if status == "downloaded" {
 		availableAfter = time.Now().UTC().Add(delay).Format("2006-01-02 15:04:05")
 	}
-	updateErr := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, status, map[string]any{
+	// CL22-1(第 22 轮审计):材料随失败落库——首签发 confirm/persist 瞬时
+	// 失败改走本重试链时,材料仅在内存;不落库则任务回 downloaded 但
+	// 补扫 hasCertMaterial=0 跳过,永久不可达只能重签烧 CA 配额。
+	// 已持久化场景(材料来自库读)同值重写,幂等无害。
+	fields := map[string]any{
 		"message":                    storedMessage,
 		"deployment_attempts":        attempt,
 		"deployment_available_after": availableAfter,
-	})
+	}
+	if material.certPEM != "" {
+		fields["cert_pem"] = material.certPEM
+		fields["key_pem"] = material.keyPEM
+		fields["expires_at"] = material.notAfter
+		fields["ca_provider_id"] = material.providerID
+	}
+	updateErr := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, status, fields)
 	if updateErr == nil && status == "downloaded" && s.deploymentRetry != nil {
 		material.deploymentAttempt = attempt
 		// R57 A-#1：异步再调度。此处常在部署回调 goroutine 内被同步调用——
@@ -501,7 +512,13 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 	unlock := DeployLock(material.ruleID)
 	defer unlock()
 	if err := confirmCertificateDeployment(ctx, jobID, material, false); err != nil {
-		return err
+		// CL22-1(第 22 轮审计):ErrNoRows(规则删除/禁用/角色翻转)保持 raw
+		// ——材料已无意义,重试无益;其余(瞬时 DB)走 deploymentFailed 重试链,
+		// 材料随失败落库(首签发材料仅内存,raw→failJob 终态会永久丢失)。
+		if errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		return s.deploymentFailed(jobID, material, "证书部署确认失败: "+err.Error(), fmt.Errorf("confirm certificate deployment: %w", err))
 	}
 
 	err := transitionJob(db.DB, jobID, []string{"downloaded", "cleanup_dns", "cleanup_warning"}, "downloaded", map[string]any{
@@ -513,7 +530,12 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		"deployment_available_after": nil,
 	})
 	if err != nil {
-		return fmt.Errorf("persist downloaded certificate: %w", err)
+		// CL22-1:并发胜者(ErrJobTransitionConflict)保持 raw——对方已推进,
+		// 本回调材料陈旧;其余(瞬时 DB)走 deploymentFailed,材料随失败落库。
+		if errors.Is(err, ErrJobTransitionConflict) {
+			return fmt.Errorf("persist downloaded certificate: %w", err)
+		}
+		return s.deploymentFailed(jobID, material, "证书部署落库失败: "+err.Error(), fmt.Errorf("persist downloaded certificate: %w", err))
 	}
 	if err := ctx.Err(); err != nil {
 		return err

@@ -551,10 +551,13 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		ruleCount := bindingCounts[p.ID]
 		// R72 三十次追加 a：GeoIP/自定义规则的 has 计算（供 ruleProtections 显示行）。
 		hasGeoIP := services.PolicyHasGeoIP(&p)
+		// SECLB22-P5-2:CountEnabledCustomRules 每行原调 2 次(HasCustomRules 与
+		// CustomRulesCount)——提局部变量复用,半减 DB/JSON 解析开销。
+		customRulesCount := services.CountEnabledCustomRules(p.CustomRules)
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
-			HasGeoIP: hasGeoIP, HasCustomRules: p.Mode != "off" && services.CountEnabledCustomRules(p.CustomRules) > 0, // S7:off=全关不宣称
+			HasGeoIP: hasGeoIP, HasCustomRules: p.Mode != "off" && customRulesCount > 0, // S7:off=全关不宣称
 			AnomalyThreshold:   p.AnomalyThreshold,
 			IPACLMode:          p.IPACLMode,
 			IPACLEnabled:       p.IPACLEnabled,
@@ -566,7 +569,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			RateLimitBurst:     p.RateLimitBurst,
 			CRSExcludedCount:   len(crsExcluded),
 			CRSRuleGroups:      p.CRSRuleGroups,
-			CustomRulesCount:   services.CountEnabledCustomRules(p.CustomRules),
+			CustomRulesCount:   customRulesCount,
 			UpdatedBy:          p.UpdatedBy,
 			UpdatedAt:          p.UpdatedAt,
 			GeoIPCountries:     rawJSONString(p.GeoIPCountries),

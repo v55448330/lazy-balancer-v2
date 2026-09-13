@@ -1826,3 +1826,53 @@ func TestCertificateService_rescanPicksUpDroppedRetry(t *testing.T) {
 	}
 	service.pauseDeploymentRetries()
 }
+
+// CL22-1(第 22 轮审计):首签发 confirm/persist 瞬时失败走 deploymentFailed 时,
+// 证书材料(仅内存)必须随 transitionJob 落库——否则任务回 downloaded 但材料
+// 丢失,30s 补扫 hasCertMaterial=0 跳过,永久不可达只能重签烧 CA 配额。
+func TestCertIssuer_deploymentFailed_persistsMaterial(t *testing.T) {
+	// Given: downloaded 任务(材料未落库——首签发 persist 失败形态)
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_dep_fail", false)
+	res, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_dep_fail','example.test','downloaded')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID64, _ := res.LastInsertId()
+	jobID := int(jobID64)
+
+	notAfter := time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second)
+	issuer := &CertIssuer{deploymentRetry: func(int, issuedCertificate, time.Duration) {}}
+
+	// When: deploymentFailed 携带内存材料
+	_ = issuer.deploymentFailed(jobID, issuedCertificate{
+		ruleID: "lb_dep_fail", certPEM: "CERT_PEM", keyPEM: "KEY_PEM",
+		notAfter: notAfter, providerID: 7,
+	}, "persist failed", fmt.Errorf("simulated persist failure"))
+
+	// Then: 材料已落库(补扫 hasCertMaterial=1 可达)+ downloaded + 退避窗口
+	var certPEM, keyPEM, status, availableAfter string
+	var providerID int
+	var expiresAt string
+	err = database.QueryRow(`SELECT COALESCE(cert_pem,''), COALESCE(key_pem,''), status,
+		COALESCE(deployment_available_after,''), COALESCE(ca_provider_id,0), COALESCE(expires_at,'')
+		FROM cert_jobs WHERE id=?`, jobID).Scan(&certPEM, &keyPEM, &status, &availableAfter, &providerID, &expiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certPEM != "CERT_PEM" || keyPEM != "KEY_PEM" {
+		t.Fatalf("material not persisted: cert_pem=%q key_pem=%q", certPEM, keyPEM)
+	}
+	if status != "downloaded" {
+		t.Fatalf("status=%s, want downloaded", status)
+	}
+	if availableAfter == "" {
+		t.Fatal("deployment_available_after not set")
+	}
+	if providerID != 7 {
+		t.Fatalf("ca_provider_id=%d, want 7", providerID)
+	}
+	if expiresAt == "" {
+		t.Fatal("expires_at not persisted")
+	}
+}

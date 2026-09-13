@@ -68,7 +68,7 @@
                      两者同现时不再双标签叠行,单标签+数字紧凑呈现。 -->
                 <el-tag v-if="laggingSectionCount(row) > 0" type="warning" size="small" effect="plain">分区滞后 {{ laggingSectionCount(row) }}</el-tag>
                 <el-tag v-else-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
-                <el-tag v-else-if="row.reported_version >= row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+                <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
                 <!-- F8:reported>current 罕见形态(主版本回退)——不误显已同步 -->
                 <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
               </div>
@@ -88,7 +88,7 @@
           <div v-else class="version-cell version-cell-wrap">
             <span class="version-nums">{{ row.reported_version }}<template v-if="row.reported_version < row.current_version"> → {{ row.current_version }}</template></span>
             <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
-            <el-tag v-else-if="row.reported_version >= row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+            <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
             <!-- F8:reported>current 罕见形态(主版本回退)——不误显已同步 -->
             <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
             <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报</span>
