@@ -29,7 +29,7 @@
           </el-form-item>
           <el-form-item label="运行日志大小">
             <el-input-number v-model="settings.runtime_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，轮转阈值（建议 50-200）；仅当 LOG_FILE 环境变量已设置时生效（标准 Docker 部署已内置）</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，轮转阈值（建议 50-200）</el-text>
           </el-form-item>
           <el-form-item label="日志保留">
             <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
