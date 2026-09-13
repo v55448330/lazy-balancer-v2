@@ -102,13 +102,13 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="客户端 IP" min-width="140">
+        <el-table-column label="客户端 IP" min-width="180">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
           </template>
         </el-table-column>
         <el-table-column prop="method" label="方法" width="70" align="center" />
-        <el-table-column prop="uri" label="URI" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="uri" label="URI" min-width="140" show-overflow-tooltip />
         <!-- R72 二十二次（用户需求）：异常评分列——CRS 评分制下每事件携带的累计
              anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。 -->
         <el-table-column label="评分" width="80" align="center">

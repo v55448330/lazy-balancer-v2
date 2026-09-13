@@ -9,14 +9,13 @@
 
     <div class="ipo-header">
       <span class="ipo-ip">{{ ip }}</span>
-      <span v-if="location" class="ipo-loc">{{ location }}</span>
-    </div>
-    <!-- 30 天事件数(索引 COUNT,弹框打开才查) -->
-    <div v-if="eventCount !== null" class="ipo-context">
-      <el-tag size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
+      <!-- 事件数标签位于原归属地位置(用户裁定 2026-09-13);30 天窗口,索引 COUNT,弹框打开才查 -->
+      <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
         30天事件 {{ eventCount }}
       </el-tag>
     </div>
+    <!-- 详细归属地换行到 IP 下方(不与 IP 同行) -->
+    <div v-if="location" class="ipo-loc-line">{{ location }}</div>
 
     <div class="ipo-list-row">
       <span class="ipo-list-label">存入地址列表</span>
@@ -127,10 +126,12 @@ const compactLocation = computed(() => {
   // ISP，完整精度仅弹框）；保留地址原样；国内取省+市（跳过国家前缀）
   if (parts[0] === '保留地址') return '保留地址'
   if (parts[0] !== '中国') return '海外'
-  // 国内统一跳国家前缀:单段「中国」保持(防空标签),两段「中国·山东」取「山东」,
-  // 三段+取省+市——与完整精度弹框口径一致(SYSRENDER21-2)
+  // 国内只显市(用户裁定 2026-09-13):三段+取第三段市(如「中国·广东·深圳」→
+  // 「深圳」;自治区「中国·新疆·乌鲁木齐」→「乌鲁木齐」);两段取第二段省
+  // (「中国·山东」→「山东」;「中国·新疆」→「新疆」);单段「中国」保持(防空标签)
   if (parts.length === 1) return '中国'
-  return parts.slice(1, 3).join('·')
+  if (parts.length === 2) return parts[1]
+  return parts[2]
 })
 
 const authStore = useAuthStore()
@@ -594,6 +595,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-location-popper .ipo-context { display: flex; gap: 6px; margin: -2px 0 4px 0; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
 .ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
+.ip-location-popper .ipo-loc-line { font-size: 12px; color: var(--text-secondary, #909399); margin: -4px 0 8px; }
 .ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-list-label { font-size: 12px; color: var(--text-secondary, #909399); white-space: nowrap; }
 .ip-location-popper .ipo-list-select { width: 168px; }
