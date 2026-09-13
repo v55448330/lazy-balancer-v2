@@ -2095,6 +2095,40 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	return "(rule_triggered LIKE ? OR rule_msg LIKE ?)"
 }
 
+// GetIPEventCount 返回指定 IP 近 N 天(默认 30)的安全事件计数——IP 弹框
+// 快捷拉黑时的上下文展示(第 20 轮用户批准)。走 idx_security_events_ip_time
+// 索引范围 COUNT,单 IP 时间窗毫秒级;权限与事件列表一致(business 组)。
+func (h *Handlers) GetIPEventCount(c *gin.Context) {
+	ip := strings.TrimSpace(c.Query("ip"))
+	if ip == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "缺少 ip 参数"})
+		return
+	}
+	days := 30
+	if d := c.Query("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 {
+			if v > 365 { v = 365 }
+			days = v
+		}
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events WHERE client_ip=? AND event_time >= datetime('now', '-' || ? || ' days')`, ip, days).Scan(&count); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询事件计数失败"})
+		return
+	}
+	// F2(第 20.5 轮):国家取 LookupRegion 原始串首段(xdb 管道分隔
+	// country|region|city|isp)——formatIP2RegionLocation 对海外归一为常量
+	// 「海外」丢弃国名,此处不经该格式化直取原始首段;中国 IP 返回「中国」
+	// 由前端跳过显示。
+	country := ""
+	if region := services.LookupRegion(ip); region != "" {
+		if fields := strings.Split(region, "|"); len(fields) > 0 && fields[0] != "" && fields[0] != "0" {
+			country = fields[0]
+		}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]any{"count": count, "country": country}})
+}
+
 func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	page := 1
 	pageSize := 20

@@ -447,6 +447,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/overview", h.GetSecurityOverview)
 				business.GET("/security/rate-limit-blocks", h.GetSecurityRateLimitBlocks)
 				business.GET("/security/events", h.ListSecurityEvents)
+				business.GET("/security/events/count", h.GetIPEventCount)
 				business.GET("/security/crs", h.GetCRSInfo)
 				business.GET("/security/crs/update/status", h.GetCRSUpdateStatus)
 				business.GET("/security/crs/update/logs", h.GetCRSUpdateLogs)

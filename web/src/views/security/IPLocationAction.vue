@@ -1,5 +1,5 @@
 <template>
-  <el-popover v-if="canManage" :width="400" trigger="click" popper-class="ip-location-popper" @show="loadPolicies">
+  <el-popover v-if="canManage" :width="400" trigger="click" popper-class="ip-location-popper" @show="onPopoverShow">
     <template #reference>
       <span class="ip-cell ip-clickable" :title="location ? `${ip} · ${location}` : ip">
         <span class="ip-text">{{ ip }}</span>
@@ -10,6 +10,13 @@
     <div class="ipo-header">
       <span class="ipo-ip">{{ ip }}</span>
       <span v-if="location" class="ipo-loc">{{ location }}</span>
+    </div>
+    <!-- 第 20 轮批准:海外 IP 国家徽标 + 近 30 天触发次数(索引 COUNT,弹框打开才查) -->
+    <div v-if="countryLabel || eventCount !== null" class="ipo-context">
+      <el-tag v-if="countryLabel" size="small" effect="plain" type="info">{{ countryLabel }}</el-tag>
+      <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
+        {{ eventCount > 0 ? `近 30 天触发 ${eventCount} 次` : '近 30 天无触发' }}
+      </el-tag>
     </div>
 
     <div class="ipo-list-row">
@@ -126,6 +133,28 @@ const compactLocation = computed(() => {
 const authStore = useAuthStore()
 // 仅主节点管理员可操作（从节点/非管理员只展示 IP 与归属地）——与全局只读口径一致
 const canManage = computed(() => authStore.readOnlyReason === null)
+
+// F2(第 20.5 轮):国家从 count 端点响应取(后端直读 xdb 原始首段)——
+// formatIP2RegionLocation 对海外归一为「海外」常量,拆 location 串只能得
+// 常量;中国返回「中国」由前端跳过。
+const countryLabel = ref<string | null>(null)
+const eventCount = ref<number | null>(null)
+let eventCountSeq = 0
+const loadEventCount = async (): Promise<void> => {
+  const seq = ++eventCountSeq
+  try {
+    const res = await request.get<APIResponse<{ count: number; country?: string }>>('/security/events/count', { params: { ip: props.ip, days: 30 }, silent: true })
+    if (seq === eventCountSeq) {
+      eventCount.value = res.data?.count ?? 0
+      const country = res.data?.country || ''
+      countryLabel.value = country && country !== '中国' ? country : null
+    }
+  } catch {
+    if (seq === eventCountSeq) { eventCount.value = null; countryLabel.value = null }
+  }
+}
+
+const onPopoverShow = (): void => { void loadPolicies(); void loadEventCount() }
 
 const policies = ref<PolicyRow[]>([])
 const policiesLoading = ref(false)
@@ -564,6 +593,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 
 <style>
 .ip-location-popper .ipo-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ip-location-popper .ipo-context { display: flex; gap: 6px; margin: -2px 0 4px 0; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
 .ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }

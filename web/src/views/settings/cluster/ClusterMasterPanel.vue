@@ -57,14 +57,20 @@
           <div v-if="row.status === 'offline'" class="offline-duration">离线 {{ offlineDuration(row.last_seen) }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="配置版本" min-width="200">
+      <el-table-column label="配置版本" min-width="170">
         <template #default="{ row }">
           <el-popover v-if="row.section_sync?.length" placement="top" trigger="hover" :width="380" :show-after="150">
             <template #reference>
               <div class="version-cell">
-                <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
-                <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
-                <el-tag v-if="laggingSectionCount(row) > 0" type="warning" size="small">分区滞后 {{ laggingSectionCount(row) }}</el-tag>
+                <span class="version-nums">{{ row.reported_version }}<template v-if="row.reported_version < row.current_version"> → {{ row.current_version }}</template></span>
+                <!-- UI(第 20 轮用户裁定):合并状态标签消除换行——分区滞后优先
+                     (节级哈希不一致蕴含版本待同步,hover 明细见 popover 分区列表);
+                     两者同现时不再双标签叠行,单标签+数字紧凑呈现。 -->
+                <el-tag v-if="laggingSectionCount(row) > 0" type="warning" size="small" effect="plain">分区滞后 {{ laggingSectionCount(row) }}</el-tag>
+                <el-tag v-else-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
+                <el-tag v-else-if="row.reported_version >= row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+                <!-- F8:reported>current 罕见形态(主版本回退)——不误显已同步 -->
+                <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
               </div>
             </template>
             <div class="section-sync-panel">
@@ -79,10 +85,13 @@
               </div>
             </div>
           </el-popover>
-          <div v-else class="version-cell">
-            <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
-            <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
-            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报（等待上报或旧版本从节点）</span>
+          <div v-else class="version-cell version-cell-wrap">
+            <span class="version-nums">{{ row.reported_version }}<template v-if="row.reported_version < row.current_version"> → {{ row.current_version }}</template></span>
+            <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
+            <el-tag v-else-if="row.reported_version >= row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+                <!-- F8:reported>current 罕见形态(主版本回退)——不误显已同步 -->
+                <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
+            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报</span>
           </div>
         </template>
       </el-table-column>
@@ -245,7 +254,11 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.version-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.version-cell-wrap { flex-wrap: wrap; }
+/* F3(第 20.5 轮):stale 分支三元素可超 170px——该分支恢复 wrap,主分支
+   (两元素版本号+标签)保持 nowrap 消除换行。 */
+.version-nums { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .offline-duration { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 .section-sync-stale { font-size: 12px; color: #9ca3af; }
 .section-sync-panel { display: flex; flex-direction: column; gap: 6px; }
