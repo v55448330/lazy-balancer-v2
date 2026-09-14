@@ -7,14 +7,14 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // securityBlockedTotal 是安全拦截(WAF/GeoIP/IP ACL coraza 中断)的 Prometheus
-// 计数器——包级单次注册(init),进程生命周期累计,与 Caddy 其余 metrics 同
-// 源同生命周期;/metrics 端点随 Caddy 内置注册表自动暴露(与 caddy-l4 的
-// l4proxy metrics 同机制)。
-var securityBlockedTotal = promauto.NewCounterVec(
+// 计数器——包级单次构造,Provision 时注册到 Caddy 的 metrics registry
+// (ctx.GetMetricsRegistry——非默认 registry,默认 registry 不会暴露在
+// Caddy /metrics 端点);registerOrExisting 复用已注册实例(reload 幂等,
+// 与 caddy-l4 l4proxy metrics 同模式)。
+var securityBlockedTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: "lazybalancer",
 		Name:      "security_blocked_total",
@@ -22,6 +22,22 @@ var securityBlockedTotal = promauto.NewCounterVec(
 	},
 	[]string{"rule"},
 )
+
+// registerOrExisting 注册到 reg,已注册时复用既有实例——Caddy reload 会重
+// Provision,重复注册 MustRegister 会 panic(崩溃风险,用户裁定零容忍);
+// 与 caddy-l4 的 registerOrExisting(l4proxy/metrics.go:34)同模式。
+func registerOrExisting[C prometheus.Collector](reg *prometheus.Registry, c C) C {
+	if err := reg.Register(c); err != nil {
+		var are prometheus.AlreadyRegisteredError
+		if errors.As(err, &are) {
+			if existing, ok := are.ExistingCollector.(C); ok {
+				return existing
+			}
+		}
+		// 其他注册错误=指标不可用——回落未注册实例(计数 no-op 而非崩溃)。
+	}
+	return c
+}
 
 func init() {
 	caddy.RegisterModule(SecurityBlockedCounter{})
@@ -48,8 +64,15 @@ func (SecurityBlockedCounter) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// Provision 无操作——无任何可失败路径(幂等,reload 安全)。
-func (h *SecurityBlockedCounter) Provision(caddy.Context) error { return nil }
+// Provision 注册计数器到 Caddy 的 metrics registry(非默认 registry——
+// 默认 registry 的指标不暴露在 Caddy /metrics 端点);registerOrExisting
+// 保证 reload 幂等(重复注册复用实例,不 panic)。
+func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
+	if reg := ctx.GetMetricsRegistry(); reg != nil {
+		registerOrExisting(reg, securityBlockedTotal)
+	}
+	return nil
+}
 
 // ServeHTTP 调用链下游处理器,只读检查返回错误:coraza 中断(HandlerError 携
 // 非空 ID=transaction id,且 4xx status=拦截而非引擎内部错误)时按规则计数;
