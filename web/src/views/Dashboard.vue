@@ -281,7 +281,7 @@
             <!-- R72 二十八次宽度二调（用户实测 458/230 失调）：min-width 弹性列按
                  值比例分配剩余空间（260:130 把 2/3 剩余给了状态码列）——改固定 width
                  才能精确控制比例；名称列取 280（内容列），右端空白由表格自然留白。 -->
-            <el-table-column prop="name" label="规则名称" min-width="280">
+            <el-table-column prop="name" label="规则名称" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">
                 <!-- R72 二十八次：长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。 -->
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
@@ -297,43 +297,43 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="listen_port" label="端口" width="70" align="center" />
+            <el-table-column prop="listen_port" label="端口" width="70" />
             <el-table-column label="负载策略" width="100">
               <template #default="{ row }">
                 <span class="text-secondary">{{ getStrategyLabel(row.strategy) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="70" align="center">
+            <el-table-column label="状态" width="70">
               <template #default="{ row }">
                 <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
                   {{ row.enabled ? '启用' : '禁用' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="请求数" width="90" align="right">
+            <el-table-column label="请求数" width="110">
               <template #default="{ row }">
-                <span class="text-primary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
+                <span class="text-primary" :title="isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-'">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
             <!-- R72 二十八次初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
                  四 badge 单行 ~230px 舒适；极端大数字（百万级）由 flex-wrap 换行
                  兜底（badge 自身 nowrap，不出现数字内折）。 -->
-            <el-table-column label="状态码" width="270" align="center">
+            <el-table-column label="状态码" width="400">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <div v-else-if="hasRuleRequests(row.caddy_id)" class="status-codes">
-                  <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
-                  <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
-                  <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
-                  <span class="status-code status-5xx" title="服务器错误">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
-                  <span class="status-code status-blocked" title="安全拦截(WAF/GeoIP/IP ACL/限流)">Block {{ ruleMetrics[row.caddy_id].blocked ?? 0 }}</span>
+                  <span class="status-code status-2xx" :title="`成功 ${ruleMetrics[row.caddy_id].status_2xx}`">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
+                  <span class="status-code status-3xx" :title="`重定向 ${ruleMetrics[row.caddy_id].status_3xx}`">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
+                  <span class="status-code status-4xx" :title="`客户端错误 ${ruleMetrics[row.caddy_id].status_4xx}`">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
+                  <span class="status-code status-5xx" :title="`服务器错误 ${ruleMetrics[row.caddy_id].status_5xx}`">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
+                  <span class="status-code status-blocked" :title="`安全拦截(WAF/GeoIP/IP ACL/限流) ${ruleMetrics[row.caddy_id].blocked ?? 0}`">Block {{ ruleMetrics[row.caddy_id].blocked ?? 0 }}</span>
                 </div>
                 <span v-else class="text-secondary">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="入站流量" width="100" align="right">
+            <el-table-column label="入站流量" width="100">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
@@ -341,7 +341,7 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="出站流量" width="100" align="right">
+            <el-table-column label="出站流量" width="100">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
@@ -349,12 +349,12 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="处理中" width="70" align="center">
+            <el-table-column label="处理中" width="70">
               <template #default="{ row }">
                 <span class="text-secondary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="健康状态" width="80" align="center">
+            <el-table-column label="健康状态" width="80">
               <template #default="{ row }">
                 <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
                 <el-tag v-else-if="ruleHealthUnavailable || !ruleHealth[row.caddy_id] || ruleHealth[row.caddy_id] === 'unknown'" type="info" size="small" effect="plain">-</el-tag>
@@ -1110,9 +1110,10 @@ onUnmounted(() => {
 
 .status-codes {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   gap: 4px;
+  overflow: hidden;
 }
 .status-code {
   font-size: 10px;
@@ -1120,6 +1121,7 @@ onUnmounted(() => {
   border-radius: 4px;
   font-weight: 500;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .status-2xx { background: #ecfdf5; color: #059669; }
 .status-3xx { background: #eff6ff; color: #2563eb; }
