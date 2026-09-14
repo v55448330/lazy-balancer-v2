@@ -290,7 +290,7 @@
                 <el-link type="primary" underline="never" role="button" tabindex="0" :title="row.name" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></el-link>
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="70">
+            <el-table-column label="协议" width="90">
               <template #default="{ row }">
                 <el-tag :type="getRuleProtocolTagType(row)" size="small" effect="plain">
                   {{ getRuleProtocolLabel(row) }}
@@ -628,7 +628,7 @@ const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFor
 })
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
-  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', color, data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx', 'Block'], [
     mk('总请求', 'requests', '#3b82f6'),
     mk('2xx', 'status2xx', '#10b981'),
@@ -640,7 +640,7 @@ const ruleRequestsChartOption = computed<EChartsOption>(() => {
 })
 
 const ruleBytesChartOption = computed<EChartsOption>(() => {
-  const mk = (name: string, key: 'bytesIn' | 'bytesOut', color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: 'bytesIn' | 'bytesOut', color: string): LineSeriesOption => ({ name, type: 'line', color, data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['入站', '出站'], [mk('入站', 'bytesIn', '#3b82f6'), mk('出站', 'bytesOut', '#10b981')], formatBytes)
 })
 
