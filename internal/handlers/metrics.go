@@ -14,7 +14,6 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
-	"lazy-balancer-v2/internal/services"
 )
 
 var caddyMetricsHTTPClient = &http.Client{Timeout: 10 * time.Second}
@@ -116,9 +115,10 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		return
 	}
 
-	// Block 标签(2026-09-14 用户裁定):4xx 列分解「安全拦截 N」——内存计数器
-	// (摄取实际插入时递增,与 Caddy metrics 同进程同生命周期,口径严格对齐;
-	// 替代 GROUP BY 的保留期历史口径,进程重启与 4xx 计数器同步归零)。
+	// Block 标签+4xx 扣除(2026-09-15 用户裁定,方案 B):blocked 来自
+	// lb_security_blocked_counter 插件(lazybalancer_security_blocked_total,
+	// 与 status_4xx 同源同抓取零延迟);4xx 显示扣除安全拦截——不再双计。
+	blockedByRule := metricsIndex.blockedByRule
 
 	ruleMetrics := make(map[string]gin.H, len(rules))
 	for _, rule := range rules {
@@ -129,7 +129,17 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 			metrics = metricsIndex.ruleMetrics(ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
 		}
 		metrics["enabled"] = rule.enabled
-		metrics["blocked"] = services.SecurityEventsBlockedCount(rule.id)
+		blocked := blockedByRule[rule.id]
+		metrics["blocked"] = blocked
+		// 4xx 扣除安全拦截(钳制 ≥0:时序偏斜——metrics 抓取与插件计数
+		// 同进程同抓取,理论严格对齐,钳制防御性兜底)
+		if s4, ok := metrics["status_4xx"].(int64); ok && blocked > 0 {
+			if s4-blocked >= 0 {
+				metrics["status_4xx"] = s4 - blocked
+			} else {
+				metrics["status_4xx"] = int64(0)
+			}
+		}
 		ruleMetrics[rule.id] = metrics
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{

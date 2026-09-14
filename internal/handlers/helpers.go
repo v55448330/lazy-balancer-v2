@@ -655,6 +655,7 @@ type ruleMetricsAggregate struct {
 	status5xx        int64
 	bytesIn          int64
 	bytesOut         int64
+	blocked          int64
 }
 
 type prometheusMetricsIndex struct {
@@ -664,6 +665,9 @@ type prometheusMetricsIndex struct {
 	httpHosts     map[string]*ruleMetricsAggregate
 	httpBareHosts map[string]*ruleMetricsAggregate
 	tcpUpstreams  map[string]*ruleMetricsAggregate
+	// blockedByRule 是各规则安全拦截计数(lb_security_blocked_counter 插件,
+	// lazybalancer_security_blocked_total{rule}——与 status_4xx 同源同抓取)。
+	blockedByRule map[string]int64
 }
 
 func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIndex {
@@ -672,6 +676,7 @@ func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIn
 		httpHosts:     make(map[string]*ruleMetricsAggregate),
 		httpBareHosts: make(map[string]*ruleMetricsAggregate),
 		tcpUpstreams:  make(map[string]*ruleMetricsAggregate),
+		blockedByRule: make(map[string]int64),
 	}
 	for _, sample := range samples {
 		index.addSample(sample)
@@ -777,6 +782,8 @@ func (metrics *ruleMetricsAggregate) observeHTTP(name string, value float64) {
 		case "status_5xx":
 			metrics.status5xx += v
 		}
+	case strings.HasPrefix(name, "lazybalancer_security_blocked_total{"):
+		metrics.blocked += int64(value)
 	case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
 		metrics.requestsInFlight += int64(value)
 	case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
@@ -854,6 +861,10 @@ func (index *prometheusMetricsIndex) addSample(sample prometheusSample) {
 		if bareHost, _, err := net.SplitHostPort(host); err == nil {
 			index.aggregateFor(index.httpBareHosts, bareHost).add(&metric)
 		}
+	}
+
+	if rule := extractLabel(name, "rule"); rule != "" && strings.HasPrefix(name, "lazybalancer_security_blocked_total{") {
+		index.blockedByRule[rule] += int64(value)
 	}
 
 	if upstream := extractLabel(name, "upstream"); upstream != "" {

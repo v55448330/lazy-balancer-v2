@@ -179,8 +179,10 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// 主路由处理器链：headers(X-LB-Rule-ID 注入，F3) → p1(off+geoip) waf →
 	// p2 rate_limit + waf(blocking)；p3 → waf(detection，含 GeoIP)；随后 reverse_proxy。
 	names := handlerNames(t, mainRoute)
-	if len(names) < 6 || names[0] != "headers" || names[1] != "waf" || names[2] != "rate_limit" || names[3] != "waf" || names[4] != "waf" {
-		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
+	// 方案 B(2026-09-15):lb_security_blocked_counter 插在第一个 waf 前(包装
+	// 其后全部 waf handler)——链形态 headers → counter → waf×3 → reverse_proxy。
+	if len(names) < 7 || names[0] != "headers" || names[1] != "lb_security_blocked_counter" || names[2] != "waf" || names[3] != "rate_limit" || names[4] != "waf" || names[5] != "waf" {
+		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_security_blocked_counter, waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
@@ -450,8 +452,10 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 		t.Fatalf("main chain too short: %#v", handlers)
 	}
 	names := handlerNames(t, mainRoute)
-	if names[0] != "headers" || names[1] != "waf" || names[2] != "waf" || names[3] != "waf" {
-		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), waf(precheck), waf, waf, ...]", names)
+	// 方案 B(2026-09-15):counter 在 headers 之后、precheck 之前——包 precheck
+	// +全部策略 waf(IP 预检的 IP ACL/GeoIP 中断也计入)。
+	if names[0] != "headers" || names[1] != "lb_security_blocked_counter" || names[2] != "waf" || names[3] != "waf" || names[4] != "waf" {
+		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_security_blocked_counter, waf(precheck), waf, waf, ...]", names)
 	}
 	// 注入头值=规则 caddy id 且覆盖客户端伪造（F3 归因信号本身的断言）
 	inject := mustMap(t, handlers[0], "X-LB-Rule-ID inject handler")

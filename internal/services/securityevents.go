@@ -18,8 +18,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -901,15 +899,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				rule = securityEventsMapHost(rec.Host, rules)
 			}
 			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, policyByID, bindings)
-			execResult, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
+			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-				rule.name, policyName, rec.TransactionID, rec.RequestHeaders, rec.RequestBody)
-			if ierr == nil && rec.Action == "blocked" {
-				if affected, _ := execResult.RowsAffected(); affected > 0 {
-					securityEventsBumpBlockedCount(rule.caddyID)
-				}
-			}
-			if ierr != nil {
+				rule.name, policyName, rec.TransactionID, rec.RequestHeaders, rec.RequestBody); ierr != nil {
 				_ = stmt.Close()
 				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
@@ -937,29 +929,6 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 		}
 		offset = docEnd
 	}
-}
-
-// securityEventsBlockedCounts 是各规则安全拦截(action=blocked)的内存计数器——
-// 进程启动起累计,与 Caddy metrics(caddy_http_request_duration_seconds_count)
-// 同进程同生命周期(进程重启双归零,口径严格对齐);摄取实际插入时递增
-// (INSERT OR IGNORE 的 RowsAffected>0,去重跳过不计)。
-var securityEventsBlockedCounts sync.Map // rule_caddy_id -> *int64
-
-// SecurityEventsBlockedCount 返回指定规则进程启动起的安全拦截计数。
-func SecurityEventsBlockedCount(ruleCaddyID string) int64 {
-	if v, ok := securityEventsBlockedCounts.Load(ruleCaddyID); ok {
-		return *(v.(*int64))
-	}
-	return 0
-}
-
-// securityEventsBumpBlockedCount 摄取实际插入一条 blocked 事件时递增计数器。
-func securityEventsBumpBlockedCount(ruleCaddyID string) {
-	if ruleCaddyID == "" {
-		return
-	}
-	v, _ := securityEventsBlockedCounts.LoadOrStore(ruleCaddyID, new(int64))
-	atomic.AddInt64(v.(*int64), 1)
 }
 
 // securityEventsTransactionID extracts the id for skip logging on a best-effort

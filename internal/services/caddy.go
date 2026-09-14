@@ -2895,6 +2895,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	}
 	// 多策略 IP ACL 优先（IP 预检）：多策略绑定时把全部绑定策略的 deny 侧 IP
+	// 安全拦截计数(2026-09-15 用户裁定,方案 B):lb_security_blocked_counter
+	// 置于链首(headers 之后,IP 预检/压缩/限流/全部策略 waf 之前)——包装
+	// 全部 coraza handler(IP 预检的 IP ACL/GeoIP 中断也在内),检测 coraza
+	// 中断(HandlerError 携 ID+4xx)按规则计数;限流 429 在 counter 内侧
+	// (非 coraza HandlerError,不误计)。
+	if rule.Protocol == "http" && len(policies) > 0 {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "lb_security_blocked_counter",
+			"rule":    rule.CaddyID,
+		})
+	}
 	// 控制合并为极简 coraza 预检查器置于链首（先于全部 rate_limit/waf）——被拒
 	// IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件。
 	// 单策略绑定不发射：自身 coraza 内 IP 控制本就先于其 CRS，发射形状不变。
