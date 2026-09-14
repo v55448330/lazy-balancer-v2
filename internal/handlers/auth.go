@@ -303,7 +303,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 
 type UpdateCurrentUserRequest struct {
 	DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
-	// bcrypt 只取前 72 字节（超出即静默截断），超长密码直接 400 而不是落库后被截断
+	// bcrypt 的字节上限 72——x/crypto v0.55+ 超出即返回 ErrPasswordTooLong
+	// (非静默截断);max=72 按 rune 计数,多字节超长由 passwordTooLong 字节级预检 400
 	Password string `json:"password" binding:"omitempty,max=72"`
 	// M5（用户已批准契约）：提交新密码时必须携带当前密码过共享确认门——此前仅凭
 	// 会话即可改密，劫持会话可直接置换密码把原主锁在门外。仅改昵称不要求。

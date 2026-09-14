@@ -902,7 +902,7 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 // 导入/预览双路径同序调用（ImportConfigBackup / ValidateConfigImport）。
 // R54 新发现1：启用 TLS 的行先做 tls_source 白名单——保存侧（rules.go）
 // 与启用侧（rule_features.go validateStoredRuleConfig）均对非 manual/acme_dns
-// 400，导入此前是唯一能放行该形态的门：''/垃圾值行两个分支都不命中、整包
+// 400，导入此前是唯一能放行该形态的门：”/垃圾值行两个分支都不命中、整包
 // 放行，渲染侧 availableCerts 仅认 manual/acme_dns → 无证书、无
 // tls_connection_policies → TLS 端口明文服务（与 R53 发现2 同类缺口）。
 // R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
@@ -1049,7 +1049,14 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 						// 不得 continue 放行——zone 形态可藏其中,同保存侧口径拒绝。
 						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：需为 JSON 对象（含 value 字段），实际类型 %T", index+1, ei+1, entry)
 					}
-					if value, ok := entryMap["value"].(string); ok && value != "" && !validIPOrCIDR(value) {
+					// SECLB28-P4-3(第 28 轮审计):缺/空/非 string value 同样拒绝——
+					// 非 string value(数字等)落库后渲染侧 Unmarshal 整表静默丢弃
+					// (securityiplists.go:120/177),fail-open。
+					value, ok := entryMap["value"].(string)
+					if !ok || value == "" {
+						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：缺 value 字段或为空/非字符串", index+1, ei+1)
+					}
+					if !validIPOrCIDR(value) {
 						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：无效 IP/CIDR 值 %q（zone 形态如 fe80::1%%eth0 不被 WAF 引擎支持）", index+1, ei+1, value)
 					}
 				}
@@ -1104,8 +1111,16 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 		// validateIPCIDRList 口径校验——备份导入落库后 coraza @ipMatch
 		// 对无效条目静默丢弃,必须拒绝。
 		for _, field := range []string{"ip_acl_list", "ip_whitelist", "ip_blacklist"} {
-			if raw := backupString(policy[field]); raw != "" {
-				if err := validateIPCIDRList(field, raw); err != nil {
+			raw := policy[field]
+			// SECLB28-P4-2(第 28 轮审计):非字符串类型门(R48-3 同型)——
+			// backupString 对非 string 静默归一为 "" 放行,数字/数组形态可绕过。
+			if raw != nil {
+				if _, ok := raw.(string); !ok {
+					return fmt.Errorf("安全策略 #%d（%s）：%s 需为字符串（JSON 数组文本），实际类型 %T", index+1, name, field, raw)
+				}
+			}
+			if str := backupString(raw); str != "" {
+				if err := validateIPCIDRList(field, str); err != nil {
 					return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 				}
 			}

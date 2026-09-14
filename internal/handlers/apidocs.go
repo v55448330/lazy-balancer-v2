@@ -41,7 +41,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/users", "用户", "用户列表", "", `{"code":0,"data":[{"id":1,"username":"admin","role":"admin","display_name":null,"is_enabled":true}]}`, []string{"401 unauthenticated"}, "所有已登录用户可读。"},
 	{"POST", "/users", "用户", "创建用户", `{"username":"viewer","password":"...","role":"user","display_name":"只读用户"}`, `{"code":0,"message":"用户创建成功","data":{"id":2}}`, []string{"400 invalid_request", "403 admin_required", "409 username_exists", "500 create_failed"}, "仅 admin。"},
 	{"PUT", "/users/:id", "用户", "更新用户", `{"username":"viewer","role":"user","display_name":"观察员","password":"新密码(可选)"}`, `{"code":0,"message":"用户更新成功"}`, []string{"400 invalid_request", "403 admin_required", "404 not_found", "409 username_exists_or_last_admin", "500 update_failed"}, "仅 admin；省略字段时保留原值。"},
-	{"PUT", "/users/:id/status", "用户", "启用或禁用用户", `{"is_enabled":false}`, `{"code":0,"message":"用户状态更新成功"}`, []string{"400 invalid_request", "403 admin_required", "404 not_found", "409 last_admin", "500 update_failed"}, "仅 admin。"},
+	{"PUT", "/users/:id/status", "用户", "启用或禁用用户", `{"is_enabled":false}`, `{"code":0,"message":"用户状态更新成功"}`, []string{"400 invalid_request", "400 cannot_disable_self", "403 admin_required", "404 not_found", "409 last_admin", "500 update_failed"}, "仅 admin。"},
 	{"POST", "/users/:id/reset-password", "用户", "重置用户密码", `{"new_password":"..."}`, `{"code":0,"message":"密码重置成功"}`, []string{"400 invalid_request", "403 admin_required", "404 not_found", "500 reset_failed"}, "仅 admin。"},
 	{"DELETE", "/users/:id", "用户", "删除用户", "", `{"code":0,"message":"用户删除成功"}`, []string{"400 cannot_delete_self", "403 admin_required", "404 not_found", "409 last_admin", "500 delete_failed"}, "仅 admin。"},
 	{"GET", "/users/me", "用户", "当前用户信息", "", `{"id":1,"username":"admin","role":"admin","display_name":null}`, []string{"401 unauthenticated"}, ""},
@@ -122,7 +122,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/admin-tls", "系统", "启用/禁用管理面板 HTTPS", `{"enabled":true,"mode":"selfsigned"}`, `{"code":0,"message":"已保存，服务正在重启以应用 HTTPS 配置"}`, []string{"400 invalid_request", "403 admin_required"}, "multipart 表单；亦接受 application/json（cert_file/key_file 为 PEM 字符串）。mode=selfsigned 或 upload（upload 需 cert_file/key_file 文件字段）。保存后服务自动重启，从节点同步后亦自动重启。"},
 	{"POST", "/admin-tls/inspect", "系统", "解析上传证书信息（不保存）", `"multipart form: cert_file, key_file"`, `{"domain":"example.com","issuer":"Let's Encrypt","not_after":"2027-01-01 00:00:00","days_left":365}`, []string{"400 invalid_certificate"}, "亦接受 application/json（cert_file/key_file 为 PEM 字符串）；仅解析并返回证书信息，供保存前展示。"},
 	{"POST", "/system/restart", "系统", "重启服务", "", `{"code":0,"message":"服务正在重启"}`, []string{"403 admin_required"}, "进程退出后由容器重启策略拉起，用于应用进程级配置（如 Caddy 日志时区）。"},
-	{"GET", "/system/logs", "系统", "读取应用运行日志", "", `{"content":"..."}`, []string{"401 unauthenticated"}, "需配置 LOG_FILE 环境变量。"},
+	{"GET", "/system/logs", "系统", "读取应用运行日志", "", `{"content":"..."}`, []string{"401 unauthenticated"}, "运行日志恒写文件(内建轮转),LOG_FILE 仅覆盖路径。"},
 	{"GET", "/rules/:caddy_id/logs", "规则", "规则访问日志（最近 1000 行）", "", `{"content":"...","offset":12345}`, []string{"404 not_found"}, "需规则开启访问日志；offset 为尾部结束位置，供 log-stream 续读。"},
 	{"GET", "/rules/:caddy_id/log-stream", "规则", "规则日志增量流", "", `{"offset":12456,"lines":["{...}"]}`, []string{"404 not_found"}, "query: offset（字节偏移，上次返回值）。返回 offset 之后的新日志行与新 offset，供前端增量统计，无服务端状态。"},
 	{"GET", "/rules/:caddy_id/caddy-config", "规则", "单规则 Caddy 配置预览", "", `{...}`, []string{"404 not_found"}, ""},
@@ -239,8 +239,15 @@ func writeOpenAPIOperation(b *strings.Builder, route apiDocRoute) {
 	for _, status := range contract.emptySuccessStatuses {
 		fmt.Fprintf(b, "        '%d':\n          description: 未修改\n", status)
 	}
+	seenStatuses := make(map[string]bool, len(route.Errors))
 	for _, routeError := range route.Errors {
 		parts := strings.SplitN(routeError, " ", 2)
+		// SYSRENDER28-P2 关联(第 28 轮):同码多形态(如 400 invalid_request+
+		// 400 cannot_disable_self)去重取首——OpenAPI YAML 不允许重复键。
+		if seenStatuses[parts[0]] {
+			continue
+		}
+		seenStatuses[parts[0]] = true
 		description := "错误"
 		if len(parts) == 2 {
 			description = parts[1]

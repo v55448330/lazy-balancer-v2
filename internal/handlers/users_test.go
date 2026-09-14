@@ -192,3 +192,15 @@ func serveUserMutation(h *Handlers, method, path, body string, actorID int, hand
 	handler(context)
 	return response
 }
+
+// SYSRENDER28-P5-3(第 28 轮审计):自禁用守卫目标形状——操作者禁用自己被 400 拒绝。
+func TestToggleUserStatus_rejectsDisablingSelf(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin-1", "admin", true)
+	seedUserAuditTest(t, 2, "admin-2", "admin", true)
+	// actorID=1 目标=1——自禁用(即使另一管理员存在也应 400)
+	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"is_enabled":false}`, 1, h.ToggleUserStatus)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400 cannot_disable_self", response.Code, response.Body.String())
+	}
+}

@@ -13,7 +13,7 @@ import (
 
 // R51 B-F1：validateV2BackupSecurityPolicies 此前只归一/校验 crs_rule_groups 与
 // crs_excluded_rules，ip_acl_mode/mode/geoip_mode 经 restoreTable 原样落库。
-// R50 前的旧备份合法携带空串（旧 Create 不归一、列默认 TEXT DEFAULT ''），导入后
+// R50 前的旧备份合法携带空串（旧 Create 不归一、列默认 TEXT DEFAULT ”），导入后
 // 重现零强制状态：发射端仅 bypass/allow/deny 分支产出 ACL 规则，"" 零产出，而
 // UI 仍宣称 IP 访问控制已启用（mode/geoip_mode 空串同型漂移：汇总计数与发射行为
 // 分裂、地域控制静默失效）。导入侧必须与 Create 侧同口径归一/校验：

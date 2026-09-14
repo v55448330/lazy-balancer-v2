@@ -44,7 +44,7 @@ func TestNormalizeLegacySecurityPolicyEnums_slaveNormalizesLocally_whenSyncSecur
 
 // TestNormalizeLegacySecurityPolicyEnums_normalizesWhitespaceAndNullRows 验证
 // R54-N6(a)：COALESCE+TRIM 加固口径——纯空格值行与 NULL 行同样被归一（R53 前
-// 仅 '' 等值匹配覆盖不到这两类残留）。
+// 仅 ” 等值匹配覆盖不到这两类残留）。
 func TestNormalizeLegacySecurityPolicyEnums_normalizesWhitespaceAndNullRows(t *testing.T) {
 	// Given 主节点 + 一条纯空格值行 + 一条 NULL 值行
 	setupSecurityEnumTestDB(t)

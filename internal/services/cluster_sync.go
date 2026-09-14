@@ -1592,7 +1592,7 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 		failures = registrationConfirmMaxFailures
 	}
 	if failures >= registrationConfirmMaxFailures {
-		message := fmt.Sprintf("集群注册确认连续失败 %d 次（最后一次：%s）。已停止自动重试，请在“集群管理''页面重新注册，或使用“提升为主节点''脱离集群",
+		message := fmt.Sprintf("集群注册确认连续失败 %d 次（最后一次：%s）。已停止自动重试，请在“集群管理”页面重新注册，或使用“提升为主节点”脱离集群",
 			failures, reason)
 		// 经 combineOrReplaceSyncError 落库（R33 F-1）：ValidationFailed 属终止类，
 		// helper 直接覆盖，与直写语义等价；闭合「所有写点经 helper」不变式。
