@@ -115,6 +115,23 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		return
 	}
 
+	// Block 标签(2026-09-14 用户裁定):4xx 列分解「安全拦截 N」——security_events
+	// 按规则聚合 blocked 计数(单条 GROUP BY,idx_security_events_rule 覆盖),
+	// 使仪表盘 4xx(含 WAF/GeoIP/IP ACL 拦截 403)可一眼区分拦截 vs 正常错误。
+	blockedByRule := make(map[string]int64)
+	if db.MetricsDB != nil {
+		if blockedRows, err := db.MetricsDB.Query(`SELECT rule_caddy_id, COUNT(*) FROM security_events WHERE action='blocked' GROUP BY rule_caddy_id`); err == nil {
+			for blockedRows.Next() {
+				var ruleID string
+				var count int64
+				if err := blockedRows.Scan(&ruleID, &count); err == nil {
+					blockedByRule[ruleID] = count
+				}
+			}
+			_ = blockedRows.Close()
+		}
+	}
+
 	ruleMetrics := make(map[string]gin.H, len(rules))
 	for _, rule := range rules {
 		metrics := emptyRuleMetrics()
@@ -124,6 +141,7 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 			metrics = metricsIndex.ruleMetrics(ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
 		}
 		metrics["enabled"] = rule.enabled
+		metrics["blocked"] = blockedByRule[rule.id]
 		ruleMetrics[rule.id] = metrics
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{

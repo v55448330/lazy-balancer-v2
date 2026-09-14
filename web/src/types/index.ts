@@ -129,6 +129,7 @@ export interface RuleMetrics {
   status_5xx: number
   bytes_in: number
   bytes_out: number
+  blocked?: number
 }
 
 export interface HostMetrics {

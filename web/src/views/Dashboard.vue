@@ -328,6 +328,7 @@
                   <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
                   <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
                   <span class="status-code status-5xx" title="服务器错误">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
+                  <span v-if="(ruleMetrics[row.caddy_id].blocked ?? 0) > 0" class="status-code status-blocked" title="安全拦截(WAF/GeoIP/IP ACL)">Block {{ ruleMetrics[row.caddy_id].blocked }}</span>
                 </div>
                 <span v-else class="text-secondary">-</span>
               </template>
@@ -1124,6 +1125,7 @@ onUnmounted(() => {
 .status-3xx { background: #eff6ff; color: #2563eb; }
 .status-4xx { background: #fffbeb; color: #d97706; }
 .status-5xx { background: #fef2f2; color: #dc2626; }
+.status-blocked { background: #f3e8ff; color: #7c3aed; }
 .dialog-title { display: inline-flex; align-items: center; white-space: nowrap; overflow: hidden; }
 .dialog-title > * { line-height: 1; }
 .dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; margin-right: 12px; }
