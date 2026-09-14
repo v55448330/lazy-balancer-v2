@@ -64,7 +64,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":               {"enabled"},
 	"certificate_configs":        {"enabled"},
-	"security_policies":          {"ip_acl_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body"},
+	"security_policies":          {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body"}, // SYSRENDER27-P5-4: ip_whitelist_enabled 补入(R56 枚举漏列)
 	"security_custom_rules":      {"enabled"},
 	"security_block_pages":       {"is_default"},
 	"security_crs_version":       {"auto_update"},
@@ -222,7 +222,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
-	"sync_switches_migrated",
+	"sync_switches_migrated", "waf_mode4_migrated", // SYSRENDER27-P5-4: waf_mode4_migrated 补入(R56 枚举漏列)
 	"mfa_write_guard", "mfa_lockout_enabled",
 }
 
@@ -902,7 +902,7 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 // 导入/预览双路径同序调用（ImportConfigBackup / ValidateConfigImport）。
 // R54 新发现1：启用 TLS 的行先做 tls_source 白名单——保存侧（rules.go）
 // 与启用侧（rule_features.go validateStoredRuleConfig）均对非 manual/acme_dns
-// 400，导入此前是唯一能放行该形态的门：”/垃圾值行两个分支都不命中、整包
+// 400，导入此前是唯一能放行该形态的门：''/垃圾值行两个分支都不命中、整包
 // 放行，渲染侧 availableCerts 仅认 manual/acme_dns → 无证书、无
 // tls_connection_policies → TLS 端口明文服务（与 R53 发现2 同类缺口）。
 // R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
@@ -1045,7 +1045,9 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 				for ei, entry := range parsed {
 					entryMap, ok := entry.(map[string]any)
 					if !ok {
-						continue
+						// SECLB27-P2-1(第 27 轮审计):非对象成员(裸字符串等)
+						// 不得 continue 放行——zone 形态可藏其中,同保存侧口径拒绝。
+						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：需为 JSON 对象（含 value 字段），实际类型 %T", index+1, ei+1, entry)
 					}
 					if value, ok := entryMap["value"].(string); ok && value != "" && !validIPOrCIDR(value) {
 						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：无效 IP/CIDR 值 %q（zone 形态如 fe80::1%%eth0 不被 WAF 引擎支持）", index+1, ei+1, value)
@@ -1097,6 +1099,16 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 		}
 		if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, 0, 0); err != nil {
 			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+		}
+		// SECLB27-P2-1(第 27 轮审计):策略内联 IP 三字段按保存侧
+		// validateIPCIDRList 口径校验——备份导入落库后 coraza @ipMatch
+		// 对无效条目静默丢弃,必须拒绝。
+		for _, field := range []string{"ip_acl_list", "ip_whitelist", "ip_blacklist"} {
+			if raw := backupString(policy[field]); raw != "" {
+				if err := validateIPCIDRList(field, raw); err != nil {
+					return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+				}
+			}
 		}
 		policy["mode"] = mode
 		policy["ip_acl_mode"] = ipACLMode

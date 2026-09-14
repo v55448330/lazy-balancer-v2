@@ -310,6 +310,15 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 
+	// SYSRENDER27-P5-3(第 27 轮审计):自禁用防护——禁用自己=当前会话立即
+	// 失效,与 DeleteUser 自保护(SEC19-P5-2)不对称。UI 已挡/API 未挡。
+	if !req.IsEnabled {
+		if userIDInt := getContextUserIDInt(c); userIDInt == id {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不能禁用当前登录用户"})
+			return
+		}
+	}
+
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})

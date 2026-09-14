@@ -127,7 +127,7 @@ func securityEventsExtractAnomalyScore(messages []securityEventsAuditMessage) in
 }
 
 // errSecurityEventsEmptyID 标记无 transaction_id 的事务：去重唯一索引是部分索引
-// （WHERE transaction_id != ”），空 id 没有幂等键，重试路径（tick 失败重放、
+// （WHERE transaction_id != ''），空 id 没有幂等键，重试路径（tick 失败重放、
 // 轮转补采与 tick 重叠）会重复插入，因此视为解析失败跳过。
 var errSecurityEventsEmptyID = errors.New("transaction has no id")
 

@@ -41,10 +41,10 @@ func TestClusterVersionTriggers_bumpWhenCertificateStatusTransitionsToIssued(t *
 	}
 }
 
-// CL25-1(第 25 轮审计):cert_jobs UPDATE 触发器簿记抖动守卫——
+// CL25-1+CL26-1(第 25/26 轮审计):cert_jobs UPDATE 触发器簿记抖动守卫——
 // 签发/续期阶段写(message/attempts/updated_at 等簿记列)不 bump 集群版本;
-// 语义列(rule_id/domain/status/cert_pem/key_pem/expires_at/ca_provider_id)
-// 值真实变化才 bump。
+// 语义列(rule_id/domain/cert_pem/key_pem/expires_at/ca_provider_id——CL26-1
+// 起 status 移出,仅 disabled 例外)值真实变化才 bump。
 func TestClusterVersionTriggers_certJobsBookkeepingDoesNotBump(t *testing.T) {
 	// Given: 有效证书任务(成员条件满足)
 	database := newClusterVersionTestDB(t)
@@ -112,5 +112,31 @@ func TestClusterVersionTriggers_certJobsStatusTransitionDoesNotBump(t *testing.T
 	// Then: bump(材料变化)
 	if got := clusterVersion(t, database); got != 1 {
 		t.Fatalf("version after material change=%d, want 1", got)
+	}
+}
+
+// CL27-P2-1(第 27 轮审计):disabled 例外单向——恢复方向(disabled→成员态)
+// 不 bump 会导致从端定格「规则启用+证书缺席」。必须双向。
+func TestClusterVersionTriggers_certJobsReenableFromDisabledBumps(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	certPEM, keyPEM := clusterVersionCertificatePair(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed master: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('reenable_rule','example.com','disabled',?,?,datetime('now','+30 days'))`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed disabled certificate: %v", err)
+	}
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatalf("install triggers: %v", err)
+	}
+
+	// When: disabled→issued(恢复——材料不变,纯 status 迁移)
+	if _, err := database.Exec("UPDATE cert_jobs SET status='issued' WHERE rule_id='reenable_rule'"); err != nil {
+		t.Fatalf("reenable: %v", err)
+	}
+
+	// Then: 必须 bump(从端需要感知恢复)
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after reenable from disabled=%d, want 1 (bidirectional disabled exception, CL27-P2-1)", got)
 	}
 }

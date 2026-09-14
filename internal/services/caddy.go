@@ -2837,7 +2837,7 @@ func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) ma
 }
 
 // geoipPrivateRanges 内网/回环/链路本地 CIDR 集合。这些地址无法经 ip2region 解析到国家，
-// fail-closed 会将其误判为“海外”而拦截，故在 GeoIP 拦截中一律放行（无论 deny/allow 模式）。
+// fail-closed 会将其误判为“海外''而拦截，故在 GeoIP 拦截中一律放行（无论 deny/allow 模式）。
 // v2.2.0 地域拦截改走 coraza 后由 BuildCorazaDirectives 的 GeoIP SecRule 链首
 // REMOTE_ADDR !@ipMatch 引用（语义不变）。
 // ::ffff: 前缀条目仅为 IPv4 映射的私网/回环/链路本地地址（双栈 RemoteAddr 的 16 字节形态），

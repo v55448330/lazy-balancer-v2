@@ -427,7 +427,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 	}
 	// 仅还原成功才消费 .bak（R38 三-1）：内容还原或空标记移除失败时保留备份，
 	// 否则「旧 setup + 新 overrides」双重应用状态失去唯一恢复副本、不可自愈
-	// （对照上方 setup 段：copyFile 失败即 return，setup.bak 保留）。
+	// （对照上方 setup 段：copyFile 失败记日志保留 bak,SECLB26-P2-1 后不再 return）。
 	if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
 		if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
 			Logf("error", "crs update: failed to remove migrated zz-user-overrides.conf: %v", err)

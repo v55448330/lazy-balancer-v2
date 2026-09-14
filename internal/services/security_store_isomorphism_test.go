@@ -319,9 +319,9 @@ func TestSnapshotSecurityPolicies_coalescesNullJSONColumns(t *testing.T) {
 
 // TestLoadSecurityPolicyContext_toleratesNullBlockPageContent 锁定 C5 IMP-1：
 // security_block_pages.content 列 schema 无 NOT NULL，带外编辑或 restoreTable
-// 透传 JSON null 可产生 NULL 行。批量预载 SELECT 若不做 COALESCE(content,”)，
+// 透传 JSON null 可产生 NULL 行。批量预载 SELECT 若不做 COALESCE(content,'')，
 // 一行 NULL content 即 scan 失败 → 整配置生成报错（旧配置保留，形成自锁）。
-// 修复后 COALESCE 归一化为 ”，与 schema DEFAULT ” 语义一致。
+// 修复后 COALESCE 归一化为 ''，与 schema DEFAULT '' 语义一致。
 func TestLoadSecurityPolicyContext_toleratesNullBlockPageContent(t *testing.T) {
 	// Given：一条 content=NULL 的拦截页 + 引用它的策略 + 绑定规则
 	_, database := newClusterTestService(t)

@@ -2511,3 +2511,33 @@ func TestValidateV2Backup_acceptsNormalIPEntries(t *testing.T) {
 		t.Fatalf("normal entries must be accepted: %v", err)
 	}
 }
+
+// SECLB27-P2-1(第 27 轮审计):导入路径策略内联 IP 三字段
+// (ip_acl_list/ip_whitelist/ip_blacklist)未按保存侧 validateIPCIDRList 口径
+// 校验——zone 形态经备份导入落库后 coraza 静默丢弃。列表条目非对象成员
+// 被 continue 放行(应拒,同保存侧口径)。
+func TestValidateV2Backup_rejectsZoneFormInPolicyInlineFields(t *testing.T) {
+	for _, field := range []string{"ip_acl_list", "ip_whitelist", "ip_blacklist"} {
+		tables := map[string][]map[string]any{
+			"security_policies": {
+				{"name": "zone-policy", field: `["fe80::1%eth0"]`},
+			},
+		}
+		err := validateV2BackupSecurityPolicies(tables)
+		if err == nil {
+			t.Fatalf("zone-form entry in policy.%s must be rejected", field)
+		}
+	}
+}
+
+func TestValidateV2Backup_rejectsNonObjectIPListEntries(t *testing.T) {
+	tables := map[string][]map[string]any{
+		"security_ip_lists": {
+			{"name": "bare-string-list", "entries": `["192.168.1.1","fe80::1%eth0"]`},
+		},
+	}
+	err := validateV2BackupSecurityPolicies(tables)
+	if err == nil {
+		t.Fatal("non-object entry (bare string) in IP list must be rejected (zone form hidden inside)")
+	}
+}

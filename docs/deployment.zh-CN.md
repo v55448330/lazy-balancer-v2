@@ -17,7 +17,7 @@
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `JWT_SECRET` | 自动生成 | JWT 签名密钥；生产建议显式设置 |
-| `LOG_FILE` | 空 | 应用日志同时写入此文件 |
+| `LOG_FILE` | `/app/logs/lazy-balancer.log` | 运行日志文件路径（恒启用，LOG_FILE 仅覆盖路径） |
 | `NODE_NAME` | `node-1` | 集群注册的默认节点名 |
 | `APP_VERSION` | 构建时注入 | 显示版本号 |
 | `TZ` | 数据库 `timezone` | 进程时区 |
