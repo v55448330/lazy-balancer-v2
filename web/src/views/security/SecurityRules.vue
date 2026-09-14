@@ -242,7 +242,7 @@
                   </div>
                   <div v-show="!regexCollapsed[idx]" class="regex-extras">
                     <div class="regex-presets">
-                      <el-link v-for="p in REGEX_PRESETS" :key="p.label" type="primary" :underline="false" class="regex-preset-link" @click="cond.pattern = p.value">{{ p.label }}</el-link>
+                      <el-link v-for="p in REGEX_PRESETS" :key="p.label" type="primary" underline="never" class="regex-preset-link" @click="cond.pattern = p.value">{{ p.label }}</el-link>
                     </div>
                     <div class="regex-tester">
                       <el-input v-model="regexTestStrings[idx]" placeholder="输入测试字符串" size="small" class="regex-test-input" />

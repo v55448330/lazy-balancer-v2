@@ -65,10 +65,10 @@
             </el-button>
           </el-form-item>
           <div class="mfa-switch">
-            <el-link type="primary" :underline="false" @click="mfaUseRecovery = !mfaUseRecovery; mfaCode = ''">
+            <el-link type="primary" underline="never" @click="mfaUseRecovery = !mfaUseRecovery; mfaCode = ''">
               {{ mfaUseRecovery ? '使用验证码' : '使用恢复代码' }}
             </el-link>
-            <el-link type="info" :underline="false" @click="resetToPasswordStep">返回重新登录</el-link>
+            <el-link type="info" underline="never" @click="resetToPasswordStep">返回重新登录</el-link>
           </div>
         </el-form>
 

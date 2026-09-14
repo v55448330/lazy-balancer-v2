@@ -287,7 +287,7 @@
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
                      inline-flex，text 直接内容在 .el-link__inner flex item 里，根上的
                      text-overflow 不会渲染 …（flex 容器无自有行盒），只硬裁切。 -->
-                <el-link type="primary" :underline="false" role="button" tabindex="0" :title="row.name" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></el-link>
+                <el-link type="primary" underline="never" role="button" tabindex="0" :title="row.name" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></el-link>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="90">

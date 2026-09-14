@@ -77,7 +77,7 @@
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
             <el-text type="info" size="small" class="tip-inline">写操作需 1 分钟内的 MFA 验证</el-text>
-            <el-link type="info" :underline="false" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</el-link>
+            <el-link type="info" underline="never" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</el-link>
           </el-form-item>
           <el-form-item label="登录失败锁定">
             <el-switch v-model="settings.mfa_lockout_enabled" />
