@@ -245,6 +245,7 @@ func initMetricsSchema(db *sql.DB) error {
 		requests_3xx INTEGER DEFAULT 0,
 		requests_4xx INTEGER DEFAULT 0,
 		requests_5xx INTEGER DEFAULT 0,
+		requests_blocked INTEGER DEFAULT 0,
 		bytes_in BIGINT DEFAULT 0,
 		bytes_out BIGINT DEFAULT 0,
 		latency_p50 INTEGER DEFAULT 0,
@@ -334,17 +335,42 @@ func migrateSecurityEventsTransactionID(db *sql.DB) error {
 	return nil
 }
 
-// migrateMetricsHistoryBlocked 为 metrics_history 补 requests_blocked 列
-// (2026-09-15 用户裁定:Block 落库,与 2xx-5xx 同管道同保留期)。
+// migrateMetricsHistoryBlocked 处理 metrics_history 的 requests_blocked 列——
+// 2026-09-15 用户裁定:部署不做老库兼容,缺列直接 DROP 重建该表(7 天缓存
+// 数据,重建零成本;**security_events 不动**——事件历史是用户数据)。
+// 老库行无 blocked 累计值且与 lazybalancer 新计数器(从 0 起)不连续,
+// 保留反而产生误导性历史。
 func migrateMetricsHistoryBlocked(db *sql.DB) error {
 	var colCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('metrics_history') WHERE name='requests_blocked'").Scan(&colCount); err != nil {
 		return fmt.Errorf("failed to check metrics_history.requests_blocked: %w", err)
 	}
-	if colCount == 0 {
-		if _, err := db.Exec("ALTER TABLE metrics_history ADD COLUMN requests_blocked INTEGER DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add metrics_history.requests_blocked: %w", err)
-		}
+	if colCount > 0 {
+		return nil
+	}
+	if _, err := db.Exec("DROP TABLE IF EXISTS metrics_history"); err != nil {
+		return fmt.Errorf("failed to drop legacy metrics_history: %w", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE metrics_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20),
+		timestamp DATETIME NOT NULL,
+		requests_total INTEGER DEFAULT 0,
+		requests_2xx INTEGER DEFAULT 0,
+		requests_3xx INTEGER DEFAULT 0,
+		requests_4xx INTEGER DEFAULT 0,
+		requests_5xx INTEGER DEFAULT 0,
+		requests_blocked INTEGER DEFAULT 0,
+		bytes_in BIGINT DEFAULT 0,
+		bytes_out BIGINT DEFAULT 0,
+		latency_p50 INTEGER DEFAULT 0,
+		latency_p95 INTEGER DEFAULT 0,
+		latency_p99 INTEGER DEFAULT 0
+	)`); err != nil {
+		return fmt.Errorf("failed to recreate metrics_history: %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp)"); err != nil {
+		return fmt.Errorf("failed to recreate metrics_history index: %w", err)
 	}
 	return nil
 }

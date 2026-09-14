@@ -266,7 +266,7 @@
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
                 </el-radio-group>
-                <el-badge :value="rankableRules.length" type="primary" />
+                <span class="rules-count" title="规则数量">{{ rankableRules.length }}</span>
               </div>
             </div>
           </template>
@@ -349,12 +349,12 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="处理中" width="60">
+            <el-table-column label="处理中" width="70">
               <template #default="{ row }">
                 <span class="text-secondary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="健康状态" width="70">
+            <el-table-column label="健康状态" width="80">
               <template #default="{ row }">
                 <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
                 <el-tag v-else-if="ruleHealthUnavailable || !ruleHealth[row.caddy_id] || ruleHealth[row.caddy_id] === 'unknown'" type="info" size="small" effect="plain">-</el-tag>
@@ -1025,6 +1025,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.rules-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+  line-height: 1;
 }
 
 .card-title {
