@@ -23,6 +23,7 @@ func TestSecurityBlockedCounter_ServeHTTP(t *testing.T) {
 		{"nil error passes through", nil, 0},
 		{"coraza 403 interruption counts", caddyhttp.HandlerError{StatusCode: 403, ID: "tx123"}, 1},
 		{"coraza 429 custom block counts", caddyhttp.HandlerError{StatusCode: 429, ID: "tx456"}, 1},
+		{"rate limit 429 (caddyhttp.Error generated ID) counts", caddyhttp.HandlerError{StatusCode: 429, ID: "rA9kX2mPq"}, 1},
 		{"WAF internal 500 not counted", caddyhttp.HandlerError{StatusCode: 500, ID: "tx789"}, 0},
 		{"caddy 404 no ID not counted", caddyhttp.HandlerError{StatusCode: 404, ID: ""}, 0},
 		{"plain error not counted", errors.New("boom"), 0},
@@ -41,7 +42,7 @@ func TestSecurityBlockedCounter_ServeHTTP(t *testing.T) {
 		})
 	}
 	after := testutil.ToFloat64(securityBlockedTotal.WithLabelValues(rule))
-	wantTotal := before + 2 // 403 + 429 两笔
+	wantTotal := before + 3 // coraza 403 + coraza 429 + ratelimit 429 三笔
 	if after != wantTotal {
 		t.Fatalf("counter=%v, want %v (before=%v)", after, wantTotal, before)
 	}

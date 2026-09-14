@@ -9,7 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// securityBlockedTotal 是安全拦截(WAF/GeoIP/IP ACL coraza 中断)的 Prometheus
+// securityBlockedTotal 是安全拦截(WAF/GeoIP/IP ACL coraza 中断 + 限流 429)的 Prometheus
 // 计数器——包级单次构造,Provision 时注册到 Caddy 的 metrics registry
 // (ctx.GetMetricsRegistry——非默认 registry,默认 registry 不会暴露在
 // Caddy /metrics 端点);registerOrExisting 复用已注册实例(reload 幂等,
@@ -43,8 +43,10 @@ func init() {
 	caddy.RegisterModule(SecurityBlockedCounter{})
 }
 
-// SecurityBlockedCounter 是安全拦截计数中间件:包装 WAF handler,检测 coraza
+// SecurityBlockedCounter 是安全拦截计数中间件:包装 WAF handler,检测安全层
 // 中断(caddyhttp.HandlerError 携非空 ID 且 4xx status)并按规则计数。
+// 覆盖:coraza 中断(WAF/GeoIP/IP ACL,ID=tx.ID())+限流 429(ID=caddyhttp.Error
+// 生成的 randString);上游 4xx 不产 HandlerError 不误计。
 // 稳定优先设计(2026-09-15 用户裁定,负载均衡/WAF 稳定最重要):
 //   - Provision 无操作——无 I/O/无外部依赖/无失败模式,配置加载零风险;
 //   - ServeHTTP 只读检测——不修改请求/响应/错误,链语义与无插件时逐字节一致;
@@ -74,8 +76,9 @@ func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// ServeHTTP 调用链下游处理器,只读检查返回错误:coraza 中断(HandlerError 携
-// 非空 ID=transaction id,且 4xx status=拦截而非引擎内部错误)时按规则计数;
+// ServeHTTP 调用链下游处理器,只读检查返回错误:安全层中断(HandlerError 携
+// 非空 ID——coraza tx.ID() 或限流 caddyhttp.Error 生成的 randString,且 4xx
+// status=拦截而非引擎内部错误)时按规则计数;
 // 上游 4xx 不产 HandlerError(反向代理直写响应)不误计;返回值原样透传。
 func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	err := next.ServeHTTP(w, r)
