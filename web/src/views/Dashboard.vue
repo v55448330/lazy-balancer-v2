@@ -281,7 +281,7 @@
             <!-- R72 二十八次宽度二调（用户实测 458/230 失调）：min-width 弹性列按
                  值比例分配剩余空间（260:130 把 2/3 剩余给了状态码列）——改固定 width
                  才能精确控制比例；名称列取 280（内容列），右端空白由表格自然留白。 -->
-            <el-table-column prop="name" label="规则名称" min-width="220" show-overflow-tooltip>
+            <el-table-column prop="name" label="规则名称" min-width="300" show-overflow-tooltip>
               <template #default="{ row }">
                 <!-- R72 二十八次：长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。 -->
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
@@ -290,7 +290,7 @@
                 <el-link type="primary" underline="never" role="button" tabindex="0" :title="row.name" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></el-link>
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="90">
+            <el-table-column label="协议" width="70">
               <template #default="{ row }">
                 <el-tag :type="getRuleProtocolTagType(row)" size="small" effect="plain">
                   {{ getRuleProtocolLabel(row) }}
@@ -298,7 +298,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="listen_port" label="端口" width="70" />
-            <el-table-column label="负载策略" width="100">
+            <el-table-column label="负载策略" width="80">
               <template #default="{ row }">
                 <span class="text-secondary">{{ getStrategyLabel(row.strategy) }}</span>
               </template>
@@ -333,7 +333,7 @@
                 <span v-else class="text-secondary">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="入站流量" width="100">
+            <el-table-column label="入站流量" width="90">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
@@ -341,7 +341,7 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="出站流量" width="100">
+            <el-table-column label="出站流量" width="90">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
@@ -349,12 +349,12 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="处理中" width="70">
+            <el-table-column label="处理中" width="60">
               <template #default="{ row }">
                 <span class="text-secondary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="健康状态" width="80">
+            <el-table-column label="健康状态" width="70">
               <template #default="{ row }">
                 <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
                 <el-tag v-else-if="ruleHealthUnavailable || !ruleHealth[row.caddy_id] || ruleHealth[row.caddy_id] === 'unknown'" type="info" size="small" effect="plain">-</el-tag>
@@ -495,6 +495,7 @@ interface RuleHistoryRow {
   requests_3xx: number
   requests_4xx: number
   requests_5xx: number
+  requests_blocked: number
   bytes_in: number
   bytes_out: number
 }
@@ -505,6 +506,7 @@ interface RuleHistoryDelta {
   status3xx: number
   status4xx: number
   status5xx: number
+  blocked: number
   bytesIn: number
   bytesOut: number
 }
@@ -585,6 +587,7 @@ const diffCounters = (previous: RuleHistoryRow, current: RuleHistoryRow): RuleHi
     || current.requests_3xx < previous.requests_3xx
     || current.requests_4xx < previous.requests_4xx
     || current.requests_5xx < previous.requests_5xx
+    || current.requests_blocked < previous.requests_blocked
     || current.bytes_in < previous.bytes_in
     || current.bytes_out < previous.bytes_out
   if (reset) return null
@@ -594,6 +597,7 @@ const diffCounters = (previous: RuleHistoryRow, current: RuleHistoryRow): RuleHi
     status3xx: current.requests_3xx - previous.requests_3xx,
     status4xx: current.requests_4xx - previous.requests_4xx,
     status5xx: current.requests_5xx - previous.requests_5xx,
+    blocked: current.requests_blocked - previous.requests_blocked,
     bytesIn: current.bytes_in - previous.bytes_in,
     bytesOut: current.bytes_out - previous.bytes_out,
   }
@@ -625,12 +629,13 @@ const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFor
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
   const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
-  return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
+  return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx', 'Block'], [
     mk('总请求', 'requests', '#3b82f6'),
     mk('2xx', 'status2xx', '#10b981'),
     mk('3xx', 'status3xx', '#f59e0b'),
     mk('4xx', 'status4xx', '#f97316'),
     mk('5xx', 'status5xx', '#ef4444'),
+    mk('Block', 'blocked', '#7c3aed'),
   ])
 })
 

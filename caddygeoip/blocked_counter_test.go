@@ -27,8 +27,10 @@ func TestSecurityBlockedCounter_ServeHTTP(t *testing.T) {
 		{"coraza 403 interruption counts", caddyhttp.HandlerError{StatusCode: 403, ID: "abcdefghijklmnop"}, 1},
 		{"coraza 429 custom block counts", caddyhttp.HandlerError{StatusCode: 429, ID: "qrstuvwxyzabcdef"}, 1},
 		{"rate limit 429 (caddyhttp.Error generated ID) counts", caddyhttp.HandlerError{StatusCode: 429, ID: "rA9kX2mPq"}, 1},
-		{"WAF internal 500 not counted", caddyhttp.HandlerError{StatusCode: 500, ID: "tx789"}, 0},
+		{"WAF internal 500 (16-char ID, F1 regression guard) not counted", caddyhttp.HandlerError{StatusCode: 500, ID: "abcdefghijklmnop"}, 0},
 		{"caddy 404 no ID not counted", caddyhttp.HandlerError{StatusCode: 404, ID: ""}, 0},
+		{"proxy 499 client-cancel (9-char ID) not counted", caddyhttp.HandlerError{StatusCode: 499, ID: "rA9kX2mPq"}, 0},
+		{"request_body 413 (9-char ID) not counted", caddyhttp.HandlerError{StatusCode: 413, ID: "xY8kL2mNp"}, 0},
 		{"plain error not counted", errors.New("boom"), 0},
 	}
 	for _, tc := range cases {

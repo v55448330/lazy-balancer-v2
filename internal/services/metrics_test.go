@@ -508,9 +508,9 @@ func TestMetricsService_updateOverview_counts_online_nodes_dynamically(t *testin
 }
 
 func TestMetricsServiceCleanupHistory_fallsBackToDefaultMonthsWhenRetentionReadFails(t *testing.T) {
-	// N-5/S-7：retention 配置读取失败时清理不得静默跳过——记录日志并按默认
-	// audit_retention_months=3（=90 天）继续（此前静默 return，指标历史无界
-	// 增长且零日志信号）。
+	// N-5：retention 配置读取失败时清理不得静默跳过——2026-09-15 用户裁定
+	// 后配置读取路径已移除(固定 7 天窗口),读失败场景退化为「清理仍执行」
+	// 兼容形态(断言窗口同步改 7 天)。
 	// Given：过期（100 天）与近期（当前）各 1 条历史；DROP global_config
 	// 令配置读取失败
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
@@ -537,11 +537,12 @@ func TestMetricsServiceCleanupHistory_fallsBackToDefaultMonthsWhenRetentionReadF
 	// When
 	NewMetricsService("", 30).cleanupHistory()
 
-	// Then：清理仍以默认 3 个月（90 天）执行——过期行被删、近期行保留
+	// Then：清理仍执行（固定 7 天窗口,配置读取路径已移除,读失败不影响）——
+	// 过期行被删、近期行保留
 	var oldRows, freshRows int
 	if err := db.MetricsDB.QueryRow(`SELECT
-		COALESCE(SUM(CASE WHEN timestamp < datetime('now','-90 days') THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN timestamp >= datetime('now','-90 days') THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN timestamp < datetime('now','-7 days') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN timestamp >= datetime('now','-7 days') THEN 1 ELSE 0 END), 0)
 		FROM metrics_history`).Scan(&oldRows, &freshRows); err != nil {
 		t.Fatalf("count metrics history: %v", err)
 	}

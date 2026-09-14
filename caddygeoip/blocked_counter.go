@@ -49,9 +49,10 @@ func init() {
 }
 
 // SecurityBlockedCounter 是安全拦截计数中间件:包装 WAF handler,检测安全层
-// 中断(caddyhttp.HandlerError 携非空 ID 且 4xx status)并按规则计数。
-// 覆盖:coraza 中断(WAF/GeoIP/IP ACL,ID=tx.ID())+限流 429(ID=caddyhttp.Error
-// 生成的 randString);上游 4xx 不产 HandlerError 不误计。
+// 中断(caddyhttp.HandlerError 且 4xx status,且 len(ID)==16 或 status==429)并
+// 按规则计数。覆盖:coraza 中断(WAF/GeoIP/IP ACL,ID=tx.ID() 16 字符)+限流 429;
+// 排除:proxy 499/request_body 413/其他 caddyhttp.Error 4xx(ID 9 字符)/coraza
+// 引擎 500(4xx 约束);上游 4xx 不产 HandlerError 不误计。
 // 稳定优先设计(2026-09-15 用户裁定,负载均衡/WAF 稳定最重要):
 //   - Provision 无操作——无 I/O/无外部依赖/无失败模式,配置加载零风险;
 //   - ServeHTTP 只读检测——不修改请求/响应/错误,链语义与无插件时逐字节一致;
@@ -84,9 +85,8 @@ func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// ServeHTTP 调用链下游处理器,只读检查返回错误:安全层中断(HandlerError 携
-// 非空 ID——coraza tx.ID() 或限流 caddyhttp.Error 生成的 randString,且 4xx
-// status=拦截而非引擎内部错误)时按规则计数;
+// ServeHTTP 调用链下游处理器,只读检查返回错误:安全层中断(HandlerError 且
+// 4xx status,且 len(ID)==16[coraza tx.ID] 或 status==429[限流])时按规则计数;
 // 上游 4xx 不产 HandlerError(反向代理直写响应)不误计;返回值原样透传。
 func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	err := next.ServeHTTP(w, r)
@@ -98,8 +98,14 @@ func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	// proxy 499/request_body 413/其他 caddyhttp.Error 4xx(全 9 字符)。
 	// 脆弱点:coraza 若改 tx.ID 长度→断;但 v2.x 一直 16 且 coraza 由
 	// Dockerfile pin+构建断言控制——可控。
-	if err != nil && errors.As(err, &herr) && (len(herr.ID) == 16 || herr.StatusCode == http.StatusTooManyRequests) {
-		h.metrics.WithLabelValues(h.Rule).Inc()
+	if err != nil && errors.As(err, &herr) &&
+		herr.StatusCode >= 400 && herr.StatusCode < 500 &&
+		(len(herr.ID) == 16 || herr.StatusCode == http.StatusTooManyRequests) {
+		// F1(第 28.6 轮审计):P3-2 判定丢失 4xx 约束——coraza 引擎 500
+		// (16 字符 tx.ID)被误计为安全拦截且吃掉一个合法 4xx。恢复 4xx 约束。
+		if h.metrics != nil {
+			h.metrics.WithLabelValues(h.Rule).Inc()
+		}
 	}
 	return err
 }

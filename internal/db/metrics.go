@@ -297,6 +297,9 @@ func initMetricsSchema(db *sql.DB) error {
 	// 幂等迁移：事件请求上下文两列（v2.2.3 安全事件增强）——request_headers 恒由
 	// 摄入落库（8KB 截断），request_body 仅策略开 log_request_body 后有值（64KB
 	// 截断）；新库由上方建表语句直接带出。
+	if err := migrateMetricsHistoryBlocked(db); err != nil {
+		return err
+	}
 	if err := migrateSecurityEventsRequestContext(db); err != nil {
 		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
 	}
@@ -326,6 +329,21 @@ func migrateSecurityEventsTransactionID(db *sql.DB) error {
 	if colCount == 0 {
 		if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN transaction_id TEXT DEFAULT ''"); err != nil {
 			return fmt.Errorf("failed to add security_events.transaction_id: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateMetricsHistoryBlocked 为 metrics_history 补 requests_blocked 列
+// (2026-09-15 用户裁定:Block 落库,与 2xx-5xx 同管道同保留期)。
+func migrateMetricsHistoryBlocked(db *sql.DB) error {
+	var colCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('metrics_history') WHERE name='requests_blocked'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check metrics_history.requests_blocked: %w", err)
+	}
+	if colCount == 0 {
+		if _, err := db.Exec("ALTER TABLE metrics_history ADD COLUMN requests_blocked INTEGER DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add metrics_history.requests_blocked: %w", err)
 		}
 	}
 	return nil

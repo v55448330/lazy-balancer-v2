@@ -131,15 +131,8 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		metrics["enabled"] = rule.enabled
 		blocked := blockedByRule[rule.id]
 		metrics["blocked"] = blocked
-		// 4xx 扣除安全拦截(钳制 ≥0:时序偏斜——metrics 抓取与插件计数
-		// 同进程同抓取,理论严格对齐,钳制防御性兜底)
-		if s4, ok := metrics["status_4xx"].(int64); ok && blocked > 0 {
-			if s4-blocked >= 0 {
-				metrics["status_4xx"] = s4 - blocked
-			} else {
-				metrics["status_4xx"] = int64(0)
-			}
-		}
+		// 4xx 扣除安全拦截(共享 deductBlockedFrom4xx,F6)
+		deductBlockedFrom4xx(metrics, blocked)
 		ruleMetrics[rule.id] = metrics
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
@@ -180,6 +173,11 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 			return
 		}
 		metrics, parseErr = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
+		if parseErr == nil {
+			// F6(第 28.6 轮审计):TCP 规则无 lazybalancer 计数(L4 无插件)——
+			// blocked 恒 0,与 Dashboard 对该形态恒写 blocked 键对齐。
+			metrics["blocked"] = int64(0)
+		}
 	} else {
 		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS, ruleID)
 	}
@@ -256,7 +254,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	rows, err := db.MetricsDB.Query(`
 		WITH ranked AS (
 			SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
-			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out,
+			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
 			       ROW_NUMBER() OVER (
 				   PARTITION BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
 				   ORDER BY timestamp DESC, id DESC
@@ -264,11 +262,11 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 			FROM metrics_history
 			WHERE rule_id = ? AND timestamp > datetime('now', ?)
 		), recent AS (
-			SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out
+			SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out
 			FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?
 		)
 		SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
-		       requests_4xx, requests_5xx, bytes_in, bytes_out
+		       requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out
 		FROM recent ORDER BY bucket
 	`, bucketSeconds, bucketSeconds, caddyID, modifier, bucketCount, bucketSeconds)
 	if err != nil {
@@ -283,6 +281,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		Status3xx int64  `json:"requests_3xx"`
 		Status4xx int64  `json:"requests_4xx"`
 		Status5xx int64  `json:"requests_5xx"`
+		Blocked   int64  `json:"requests_blocked"`
 		BytesIn   int64  `json:"bytes_in"`
 		BytesOut  int64  `json:"bytes_out"`
 	}
@@ -290,7 +289,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	for rows.Next() {
 		var r row
 		var timestamp string
-		if err := rows.Scan(&timestamp, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.BytesIn, &r.BytesOut); err != nil {
+		if err := rows.Scan(&timestamp, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.Blocked, &r.BytesIn, &r.BytesOut); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
 			return
 		}

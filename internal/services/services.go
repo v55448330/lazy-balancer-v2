@@ -26,6 +26,7 @@ var (
 	prometheusHostStatusPattern      = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusHostResponsePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusHostRequestSizePattern = regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusBlockedPattern         = regexp.MustCompile(`lazybalancer_security_blocked_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
 )
 
 // MetricsService collects and stores metrics from Caddy
@@ -522,8 +523,20 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 		codes    map[int]int64
 		bytesIn  int64
 		bytesOut int64
+		blocked  int64
 	}
 	byRule := map[string]*ruleAggregate{}
+	// Block 落库(2026-09-15 用户裁定):lazybalancer_security_blocked_total
+	// 按 rule 解析(与 requests 同累计形态——进程累计,前端 reset 差分处理),
+	// 写入同一 metrics_history 行(与 2xx-5xx 同保留期,7 天)。
+	blockedByRule := map[string]int64{}
+	for _, m := range prometheusBlockedPattern.FindAllStringSubmatch(text, -1) {
+		v, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return fmt.Errorf("parse blocked count %q: %w", m[2], err)
+		}
+		blockedByRule[m[1]] += v
+	}
 	for host, h := range hosts {
 		ruleID, ok := domainToRule[host]
 		if !ok {
@@ -551,10 +564,10 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 		if _, err := db.MetricsDB.Exec(`
 			INSERT INTO metrics_history
 			(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
-			 requests_4xx, requests_5xx, bytes_in, bytes_out,
+			 requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
 			 latency_p50, latency_p95, latency_p99)
-			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-		`, ruleID, agg.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, agg.bytesIn, agg.bytesOut); err != nil {
+			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+		`, ruleID, agg.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, blockedByRule[ruleID], agg.bytesIn, agg.bytesOut); err != nil {
 			return fmt.Errorf("store per-rule metrics for %s: %w", ruleID, err)
 		}
 	}
@@ -562,18 +575,11 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 }
 
 func (m *MetricsService) cleanupHistory() {
-	// S-7（2026-09-06 裁定）：指标历史保留期复用「日志保留」配置项
-	// audit_retention_months（与操作/运行/安全事件清理同源同义），按
-	// months×30 天清理；独立的 metrics_retention_days 不再读取（死列已随
-	// S-6 先例迁移删除）。N-5 口径保留：读取失败不得静默跳过清理。
-	retentionMonths := 3
-	if err := db.DB.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&retentionMonths); err != nil {
-		Logf("warn", "metrics cleanup: failed to read audit_retention_months (%v); using default %d months", err, retentionMonths)
-	}
-	if retentionMonths < 1 {
-		retentionMonths = 3
-	}
-	if err := db.CleanupMetricsHistory(retentionMonths * 30); err != nil {
+	// 2026-09-15 用户裁定:指标历史固定保留最近 7 天(覆盖 S-7 复用「日志
+	// 保留」的裁定——用户明确指标类数据独立于日志保留配置);实时接口
+	// (/metrics/*)不受影响,仅历史图窗口收敛到 7 天。
+	const retentionDays = 7
+	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
 		Logf("warn", "Failed to clean up metrics history: %v", err)
 	}
 }

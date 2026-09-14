@@ -958,6 +958,18 @@ func parseTCPRuleMetricsFromSamples(samples []prometheusSample, upstreams []mode
 	return buildPrometheusMetricsIndex(samples).tcpRuleMetrics(upstreams)
 }
 
+// deductBlockedFrom4xx 从 4xx 计数扣除安全拦截并钳制 ≥0(第 28.6 轮 F6:
+// Dashboard 与 GetRuleMetrics 两处逐字复制提为共享函数)。
+func deductBlockedFrom4xx(metrics gin.H, blocked int64) {
+	if s4, ok := metrics["status_4xx"].(int64); ok && blocked > 0 {
+		if s4-blocked >= 0 {
+			metrics["status_4xx"] = s4 - blocked
+		} else {
+			metrics["status_4xx"] = int64(0)
+		}
+	}
+}
+
 func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool, ruleCaddyID ...string) (gin.H, error) {
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
@@ -970,13 +982,7 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 	if len(ruleCaddyID) > 0 && ruleCaddyID[0] != "" {
 		blocked := index.blockedByRule[ruleCaddyID[0]]
 		result["blocked"] = blocked
-		if s4, ok := result["status_4xx"].(int64); ok && blocked > 0 {
-			if s4-blocked >= 0 {
-				result["status_4xx"] = s4 - blocked
-			} else {
-				result["status_4xx"] = int64(0)
-			}
-		}
+		deductBlockedFrom4xx(result, blocked)
 	}
 	return result, nil
 }
