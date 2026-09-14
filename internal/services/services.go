@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -27,6 +26,9 @@ var (
 	prometheusHostResponsePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusHostRequestSizePattern = regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusBlockedPattern         = regexp.MustCompile(`lazybalancer_security_blocked_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRuleRequestsPattern    = regexp.MustCompile(`lazybalancer_requests_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRuleStatusPattern      = regexp.MustCompile(`lazybalancer_request_status_total\{[^}]*rule="([^"]+)"[^}]*class="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRuleBytesPattern       = regexp.MustCompile(`lazybalancer_bytes_total\{[^}]*rule="([^"]+)"[^}]*direction="([^"]+)"[^}]*\}\s+(\S+)`)
 )
 
 // MetricsService collects and stores metrics from Caddy
@@ -410,7 +412,73 @@ type perHostMetrics struct {
 	bytesOut int64
 }
 
-// parsePerHostMetrics extracts cumulative request/byte counters grouped by
+// ruleLabelAggregate 是 lazybalancer_* 指标按 rule label 聚合的结构。
+type ruleLabelAggregate struct {
+	requests                                   int64
+	status2xx, status3xx, status4xx, status5xx int64
+	blocked                                    int64
+	bytesIn, bytesOut                          int64
+}
+
+// parseRuleLabelMetrics 解析 lazybalancer_* 指标按 rule label 聚合(2026-09-15
+// 用户裁定:caddy_id 直接匹配替代域名/host 匹配)。
+func parseRuleLabelMetrics(text string) (map[string]*ruleLabelAggregate, error) {
+	byRule := map[string]*ruleLabelAggregate{}
+	get := func(rule string) *ruleLabelAggregate {
+		agg, ok := byRule[rule]
+		if !ok {
+			agg = &ruleLabelAggregate{}
+			byRule[rule] = agg
+		}
+		return agg
+	}
+	for _, m := range prometheusRuleRequestsPattern.FindAllStringSubmatch(text, -1) {
+		v, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return nil, fmt.Errorf("parse rule requests %q: %w", m[2], err)
+		}
+		get(m[1]).requests += v
+	}
+	for _, m := range prometheusRuleStatusPattern.FindAllStringSubmatch(text, -1) {
+		v, err := parsePrometheusInteger(m[3])
+		if err != nil {
+			return nil, fmt.Errorf("parse rule status %q: %w", m[3], err)
+		}
+		agg := get(m[1])
+		switch m[2] {
+		case "2xx":
+			agg.status2xx += v
+		case "3xx":
+			agg.status3xx += v
+		case "4xx":
+			agg.status4xx += v
+		case "5xx":
+			agg.status5xx += v
+		}
+	}
+	for _, m := range prometheusRuleBytesPattern.FindAllStringSubmatch(text, -1) {
+		v, err := parsePrometheusInteger(m[3])
+		if err != nil {
+			return nil, fmt.Errorf("parse rule bytes %q: %w", m[3], err)
+		}
+		agg := get(m[1])
+		if m[2] == "in" {
+			agg.bytesIn += v
+		} else {
+			agg.bytesOut += v
+		}
+	}
+	for _, m := range prometheusBlockedPattern.FindAllStringSubmatch(text, -1) {
+		v, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return nil, fmt.Errorf("parse blocked count %q: %w", m[2], err)
+		}
+		get(m[1]).blocked += v
+	}
+	return byRule, nil
+}
+
+// parsePerHostMetrics extracts cumulative request/byte counters grouped by// parsePerHostMetrics extracts cumulative request/byte counters grouped by
 // host label so per-rule history rows can be stored alongside the global row.
 func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
 	hosts := map[string]*perHostMetrics{}
@@ -458,116 +526,26 @@ func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
 // storePerHostMetrics maps host labels to HTTP rules by domain and writes a
 // cumulative history row per rule; TCP rules produce no rows because caddy-l4
 // exports no per-rule traffic counters.
+// storePerHostMetrics 按 rule label(lazybalancer_*)写规则级历史行——
+// 2026-09-15 用户裁定:caddy_id 直接匹配替代域名/host 匹配(通配符/大小写/
+// IDNA/多域名/空域名全部天然正确,且不再有静默 continue 失配)。
+// TCP 规则无行(caddy-l4 无规则级流量计数器)。
 func (m *MetricsService) storePerHostMetrics(text string) error {
-	hosts, err := parsePerHostMetrics(text)
+	byRule, err := parseRuleLabelMetrics(text)
 	if err != nil {
 		return err
 	}
-	if len(hosts) == 0 {
+	if len(byRule) == 0 {
 		return nil
 	}
-	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 ORDER BY caddy_id`)
-	if err != nil {
-		return fmt.Errorf("query enabled HTTP rules for per-host metrics: %w", err)
-	}
-	defer rows.Close()
-	domainToRule := map[string]string{}
-	domainConflicts := map[string][]string{}
-	for rows.Next() {
-		var id, domains string
-		if err := rows.Scan(&id, &domains); err != nil {
-			return fmt.Errorf("scan enabled HTTP rule for per-host metrics: %w", err)
-		}
-		for _, d := range strings.Split(domains, ",") {
-			if d = strings.TrimSpace(d); d != "" {
-				if existingID, exists := domainToRule[d]; exists {
-					if existingID != id {
-						if _, recorded := domainConflicts[d]; !recorded {
-							domainConflicts[d] = []string{existingID}
-						}
-						domainConflicts[d] = append(domainConflicts[d], id)
-					}
-					continue
-				}
-				domainToRule[d] = id
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate enabled HTTP rules for per-host metrics: %w", err)
-	}
-	currentConflicts := make(map[string]string, len(domainConflicts))
-	type conflictLog struct {
-		domain  string
-		ruleIDs []string
-	}
-	newConflicts := make([]conflictLog, 0, len(domainConflicts))
-	m.domainConflictMu.Lock()
-	for domain, ruleIDs := range domainConflicts {
-		fingerprint := strings.Join(ruleIDs, "\x00")
-		currentConflicts[domain] = fingerprint
-		if m.domainConflictFingerprints[domain] != fingerprint {
-			newConflicts = append(newConflicts, conflictLog{domain: domain, ruleIDs: ruleIDs})
-		}
-	}
-	m.domainConflictFingerprints = currentConflicts
-	m.domainConflictMu.Unlock()
-	for _, conflict := range newConflicts {
-		Logf("info", "Metrics domain conflict: domain %q maps to rules %q; keeping %q", conflict.domain, strings.Join(conflict.ruleIDs, ","), conflict.ruleIDs[0])
-	}
-	// M19（2026-09-05 审计）：多域名规则的每条 host 序列此前各 INSERT 一行，
-	// 同一规则同一时间戳出现多行、按规则聚合时重复计数；先按 ruleID 聚合
-	//（requests/bytes 求和、codes 逐键合并）再每规则单行写入。
-	type ruleAggregate struct {
-		requests int64
-		codes    map[int]int64
-		bytesIn  int64
-		bytesOut int64
-		blocked  int64
-	}
-	byRule := map[string]*ruleAggregate{}
-	// Block 落库(2026-09-15 用户裁定):lazybalancer_security_blocked_total
-	// 按 rule 解析(与 requests 同累计形态——进程累计,前端 reset 差分处理),
-	// 写入同一 metrics_history 行(与 2xx-5xx 同保留期,7 天)。
-	blockedByRule := map[string]int64{}
-	for _, m := range prometheusBlockedPattern.FindAllStringSubmatch(text, -1) {
-		v, err := parsePrometheusInteger(m[2])
-		if err != nil {
-			return fmt.Errorf("parse blocked count %q: %w", m[2], err)
-		}
-		blockedByRule[m[1]] += v
-	}
-	for host, h := range hosts {
-		ruleID, ok := domainToRule[host]
-		if !ok {
-			if bare, _, err := net.SplitHostPort(host); err == nil {
-				ruleID, ok = domainToRule[bare]
-			}
-		}
-		if !ok {
-			continue
-		}
-		agg := byRule[ruleID]
-		if agg == nil {
-			agg = &ruleAggregate{codes: map[int]int64{}}
-			byRule[ruleID] = agg
-		}
-		agg.requests += h.requests
-		agg.bytesIn += h.bytesIn
-		agg.bytesOut += h.bytesOut
-		for code, v := range h.codes {
-			agg.codes[code] += v
-		}
-	}
 	for ruleID, agg := range byRule {
-		classified := classifyStatusCodes(agg.codes)
 		if _, err := db.MetricsDB.Exec(`
 			INSERT INTO metrics_history
 			(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
 			 requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
 			 latency_p50, latency_p95, latency_p99)
 			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-		`, ruleID, agg.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, blockedByRule[ruleID], agg.bytesIn, agg.bytesOut); err != nil {
+		`, ruleID, agg.requests, agg.status2xx, agg.status3xx, agg.status4xx, agg.status5xx, agg.blocked, agg.bytesIn, agg.bytesOut); err != nil {
 			return fmt.Errorf("store per-rule metrics for %s: %w", ruleID, err)
 		}
 	}

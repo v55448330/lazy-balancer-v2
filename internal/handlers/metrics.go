@@ -126,7 +126,7 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		if rule.enabled && rule.protocol == "tcp" {
 			metrics = metricsIndex.tcpRuleMetrics(upstreamsByRule[rule.id])
 		} else if rule.enabled {
-			metrics = metricsIndex.ruleMetrics(ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
+			metrics = metricsIndex.ruleMetrics(ruleMetricTarget{ruleID: rule.id, domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
 		}
 		metrics["enabled"] = rule.enabled
 		blocked := blockedByRule[rule.id]

@@ -6,6 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.4
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260810050043-e05f0cb75ffd
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	go.uber.org/zap v1.28.0
 )
 
@@ -76,7 +77,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect

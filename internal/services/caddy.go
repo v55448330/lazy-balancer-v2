@@ -2895,6 +2895,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	}
 	// 多策略 IP ACL 优先（IP 预检）：多策略绑定时把全部绑定策略的 deny 侧 IP
+	// 规则级全量流量指标(2026-09-15 用户裁定):lb_rule_metrics 置于链首
+	// (headers 之后,blocked counter/预检/压缩/限流/全部策略 waf 之前)——
+	// 包装链全流量,caddy_id 直接作 label(替代域名/host 匹配,通配符/
+	// 大小写/IDNA/多域名/空域名全部天然正确);全 HTTP 规则覆盖(不限策略)。
+	if rule.Protocol == "http" {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "lb_rule_metrics",
+			"rule":    rule.CaddyID,
+		})
+	}
 	// 安全拦截计数(2026-09-15 用户裁定,方案 B):lb_security_blocked_counter
 	// 置于链首(headers 之后,IP 预检/压缩/限流/全部策略 waf 之前)——包装
 	// 全部 coraza handler(IP 预检的 IP ACL/GeoIP 中断也在内),检测 coraza

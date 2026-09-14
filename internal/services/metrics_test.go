@@ -332,116 +332,86 @@ func TestMetricsService_parsePrometheusMetrics_aggregates_histograms_across_host
 	}
 }
 
-func TestMetricsService_storePerHostMetrics_normalizes_bracketed_IPv6_host(t *testing.T) {
+func TestMetricsService_storePerHostMetrics_ruleLabelAggregation(t *testing.T) {
+	// 2026-09-15:rule label(lazybalancer_*)聚合——请求/状态码/字节/blocked
+	// 按 rule 正确归集,写同一 metrics_history 行。
 	// Given
 	_, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_ipv6','ipv6','::1','http',8080,1)`); err != nil {
-		t.Fatalf("seed IPv6 rule: %v", err)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_rl1','rl1','a.example.com','http',8080,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
 	}
 	service := &MetricsService{}
-	text := `caddy_http_request_duration_seconds_count{code="200",host="[::1]:8080"} 7`
+	text := `lazybalancer_requests_total{rule="lb_rl1"} 100
+lazybalancer_request_status_total{rule="lb_rl1",class="2xx"} 80
+lazybalancer_request_status_total{rule="lb_rl1",class="4xx"} 20
+lazybalancer_bytes_total{rule="lb_rl1",direction="in"} 1024
+lazybalancer_bytes_total{rule="lb_rl1",direction="out"} 2048
+lazybalancer_security_blocked_total{rule="lb_rl1"} 5`
 
 	// When
 	err := service.storePerHostMetrics(text)
 
 	// Then
 	if err != nil {
-		t.Fatalf("store per-host metrics: %v", err)
+		t.Fatalf("store rule-label metrics: %v", err)
 	}
-	var ruleID string
-	if err := db.MetricsDB.QueryRow(`SELECT rule_id FROM metrics_history`).Scan(&ruleID); err != nil {
+	var requests, s2xx, s4xx, blocked, bytesIn, bytesOut int64
+	if err := db.MetricsDB.QueryRow(`SELECT requests_total, requests_2xx, requests_4xx, requests_blocked, bytes_in, bytes_out FROM metrics_history WHERE rule_id='lb_rl1'`).Scan(&requests, &s2xx, &s4xx, &blocked, &bytesIn, &bytesOut); err != nil {
 		t.Fatalf("query stored metric: %v", err)
 	}
-	if ruleID != "lb_ipv6" {
-		t.Fatalf("ruleID=%q, want lb_ipv6", ruleID)
+	if requests != 100 || s2xx != 80 || s4xx != 20 || blocked != 5 || bytesIn != 1024 || bytesOut != 2048 {
+		t.Fatalf("stored=(%d,%d,%d,%d,%d,%d), want (100,80,20,5,1024,2048)", requests, s2xx, s4xx, blocked, bytesIn, bytesOut)
 	}
 }
 
-func TestMetricsService_storePerHostMetrics_aggregates_multi_domain_rule_into_single_row(t *testing.T) {
-	// M19：同一规则配多域名时，两条 host 序列必须合并为单行历史记录，
-	// 否则同一时间戳出现多行、按规则聚合时重复计数。
+func TestMetricsService_storePerHostMetrics_multipleRulesIndependent(t *testing.T) {
+	// 多规则独立归集(不串)
 	// Given
 	_, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_multi','multi','a.example.com,b.example.com','http',8080,1)`); err != nil {
-		t.Fatalf("seed multi-domain rule: %v", err)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES
+		('lb_rl2','rl2','a.example.com','http',8080,1),
+		('lb_rl3','rl3','b.example.com','http',8080,1)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
 	}
 	service := &MetricsService{}
-	text := strings.Join([]string{
-		`caddy_http_request_duration_seconds_count{code="200",host="a.example.com"} 3`,
-		`caddy_http_request_duration_seconds_count{code="404",host="a.example.com"} 1`,
-		`caddy_http_request_duration_seconds_count{code="200",host="b.example.com"} 5`,
-	}, "\n")
-
-	// When
-	if err := service.storePerHostMetrics(text); err != nil {
-		t.Fatalf("store per-host metrics: %v", err)
-	}
-
-	// Then：单行且计数为两域之和（requests 4+5=9，2xx 3+5=8，4xx 1）。
-	var rows, requests, status2xx, status4xx int
-	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(requests_total),0), COALESCE(SUM(requests_2xx),0), COALESCE(SUM(requests_4xx),0) FROM metrics_history WHERE rule_id='lb_multi'`).Scan(&rows, &requests, &status2xx, &status4xx); err != nil {
-		t.Fatalf("query stored metrics: %v", err)
-	}
-	if rows != 1 || requests != 9 || status2xx != 8 || status4xx != 1 {
-		t.Fatalf("rows=%d requests=%d 2xx=%d 4xx=%d, want 1/9/8/1", rows, requests, status2xx, status4xx)
-	}
-}
-
-func TestMetricsService_storePerHostMetrics_logs_unchanged_domain_conflict_once(t *testing.T) {
-	// Given
-	_, database := newClusterTestService(t)
-	for _, ruleID := range []string{"lb_z", "lb_a"} {
-		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES (?,?, 'shared.example.com','http',8080,1)`, ruleID, ruleID); err != nil {
-			t.Fatalf("seed rule %s: %v", ruleID, err)
-		}
-	}
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
-	service := &MetricsService{}
-	text := `caddy_http_request_duration_seconds_count{code="200",host="shared.example.com"} 3`
+	text := `lazybalancer_requests_total{rule="lb_rl2"} 50
+lazybalancer_requests_total{rule="lb_rl3"} 200`
 
 	// When
 	err := service.storePerHostMetrics(text)
-	if err == nil {
-		err = service.storePerHostMetrics(text)
-	}
 
 	// Then
 	if err != nil {
-		t.Fatalf("store per-host metrics: %v", err)
+		t.Fatalf("store: %v", err)
 	}
-	var ruleID string
-	if err := db.MetricsDB.QueryRow(`SELECT rule_id FROM metrics_history`).Scan(&ruleID); err != nil {
-		t.Fatalf("query stored metric: %v", err)
+	var c2, c3 int64
+	if err := db.MetricsDB.QueryRow(`SELECT requests_total FROM metrics_history WHERE rule_id='lb_rl2'`).Scan(&c2); err != nil {
+		t.Fatal(err)
 	}
-	if ruleID != "lb_a" {
-		t.Fatalf("ruleID=%q, want lexicographically smallest lb_a", ruleID)
+	if err := db.MetricsDB.QueryRow(`SELECT requests_total FROM metrics_history WHERE rule_id='lb_rl3'`).Scan(&c3); err != nil {
+		t.Fatal(err)
 	}
-	if count := strings.Count(logs.String(), "Metrics domain conflict:"); count != 1 {
-		t.Fatalf("conflict log count=%d logs=%q, want 1", count, logs.String())
-	}
-	if !strings.Contains(logs.String(), "shared.example.com") {
-		t.Fatalf("conflict log %q does not identify shared.example.com", logs.String())
+	if c2 != 50 || c3 != 200 {
+		t.Fatalf("rl2=%d rl3=%d, want 50/200", c2, c3)
 	}
 }
 
-func TestMetricsService_storePerHostMetrics_returns_rule_query_error(t *testing.T) {
-	// Given
+func TestMetricsService_storePerHostMetrics_emptyTextNoRows(t *testing.T) {
+	// 空 text 无行
 	_, database := newClusterTestService(t)
-	if err := database.Close(); err != nil {
-		t.Fatalf("close rule database: %v", err)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_rl4','rl4','a.example.com','http',8080,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
 	}
 	service := &MetricsService{}
-	text := `caddy_http_request_duration_seconds_count{code="200",host="example.com"} 1`
-
-	// When
-	err := service.storePerHostMetrics(text)
-
-	// Then
-	if err == nil {
-		t.Fatal("closed rule database query error was swallowed")
+	if err := service.storePerHostMetrics(""); err != nil {
+		t.Fatalf("empty text must not error: %v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_history`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rows=%d, want 0", count)
 	}
 }
 

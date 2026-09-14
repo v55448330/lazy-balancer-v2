@@ -641,6 +641,7 @@ type prometheusSample struct {
 }
 
 type ruleMetricTarget struct {
+	ruleID     string // 2026-09-15:caddy_id 直接匹配(lb_rule_metrics 优先)
 	domain     string
 	listenPort int
 	enableTLS  bool
@@ -976,7 +977,11 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		return nil, err
 	}
 	index := buildPrometheusMetricsIndex(samples)
-	result := index.ruleMetrics(ruleMetricTarget{domain: domain, listenPort: listenPort, enableTLS: enableTLS})
+	target := ruleMetricTarget{domain: domain, listenPort: listenPort, enableTLS: enableTLS}
+	if len(ruleCaddyID) > 0 && ruleCaddyID[0] != "" {
+		target.ruleID = ruleCaddyID[0]
+	}
+	result := index.ruleMetrics(target)
 	// P4-2(第 28.5 轮审计):GET /metrics/rule/:caddy_id 与仪表盘同口径——
 	// 加 blocked 并扣 4xx(钳制 ≥0);ruleCaddyID 为空时(TCP)跳过。
 	if len(ruleCaddyID) > 0 && ruleCaddyID[0] != "" {
