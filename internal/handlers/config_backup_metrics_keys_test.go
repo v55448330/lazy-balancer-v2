@@ -90,7 +90,7 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 }
 
 // CL14-新2(第 14 轮审计):CL13-新3 钉住——备份携带字面量 "null" 白名单导入后
-// 归一为 ''(中间件把非空串当白名单配置,null 解析成功但 0 CIDR→全来源 403)。
+// 归一为 ”(中间件把非空串当白名单配置,null 解析成功但 0 CIDR→全来源 403)。
 func TestImportConfigBackup_normalizesNullWhitelist(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	completeTables := make(map[string][]map[string]any, len(configBackupTables))

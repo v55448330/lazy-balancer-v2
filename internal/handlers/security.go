@@ -2137,7 +2137,9 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 	days := 30
 	if d := c.Query("days"); d != "" {
 		if v, err := strconv.Atoi(d); err == nil && v > 0 {
-			if v > 365 { v = 365 }
+			if v > 365 {
+				v = 365
+			}
 			days = v
 		}
 	}

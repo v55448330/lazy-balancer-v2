@@ -531,8 +531,8 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	}
 
 	// Then
-	if got := clusterVersion(t, database); got != 1 {
-		t.Fatalf("version after issued=%d, want 1", got)
+	if got := clusterVersion(t, database); got != 0 {
+		t.Fatalf("version after issued=%d, want 0 (status-only, CL26-1)", got)
 	}
 	if len(issuedSnapshot.Certs) != 1 || issuedSnapshot.Certs[0].RuleID != "status_rule" {
 		t.Fatalf("issued snapshot certificates=%+v, want status_rule", issuedSnapshot.Certs)
@@ -548,7 +548,7 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	}
 
 	// Then
-	if got := clusterVersion(t, database); got != 2 {
+	if got := clusterVersion(t, database); got != 1 {
 		t.Fatalf("version after disabled=%d, want 2", got)
 	}
 	if len(disabledSnapshot.Certs) != 0 {

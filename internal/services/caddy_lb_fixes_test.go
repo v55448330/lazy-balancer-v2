@@ -47,11 +47,11 @@ func TestGenerateCaddyConfig_activeHealthTimeout_defaults_to_2_for_null_and_zero
 func TestBuildTCPServer_activeHealthTimeout_defaults_to_2(t *testing.T) {
 	// Given: TCP 规则启用主动健检,timeout=0(导入路径可达 0 值)
 	cfg := SingleRuleConfig{
-		ListenPort:            16379,
-		Protocol:              "tcp",
+		ListenPort:              16379,
+		Protocol:                "tcp",
 		EnableActiveHealthCheck: true,
-		HealthCheckTimeout:    0, // 渲染兜底靶点
-		Upstreams:             []UpstreamConfig{{Host: "127.0.0.1", Port: 6379, Weight: 1, Enabled: true}},
+		HealthCheckTimeout:      0, // 渲染兜底靶点
+		Upstreams:               []UpstreamConfig{{Host: "127.0.0.1", Port: 6379, Weight: 1, Enabled: true}},
 	}
 
 	// When

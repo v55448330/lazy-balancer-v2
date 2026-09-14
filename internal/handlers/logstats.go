@@ -11,8 +11,8 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 // LogStorageInfo 描述一类日志的体量与治理状态。
@@ -169,6 +169,7 @@ func sizeLimitMB(column string, def int64) *int64 {
 //     LOG_FILE 时这些日志会全部显示 0B。
 //   - runtimePath is the runtime log path, which follows LogFile
 //     （空 → /app/logs/lazy-balancer.log）。
+//
 // wafAuditLogFile 是 Coraza 审计日志文件路径(包级 var 支持测试注入;
 // 生产值经 services.AuditLogPath() 单一源——SYSRENDER24-2)。
 var wafAuditLogFile = services.AuditLogPath()

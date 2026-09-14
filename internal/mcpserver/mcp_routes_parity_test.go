@@ -88,13 +88,13 @@ var mcpUncoveredRoutes = map[string]string{
 	// —— 面板表单流程专属 ——
 	"POST /api/v1/certificate-configs/test": "面板「先测后存」表单流程：测试尚未保存的 DNS 配置（凭证随请求体内联提交）；Agent 流程中配置已落库，用 test_certificate_config（/certificate-configs/:id/test）",
 	// —— 面板展示 / 监控抓取（REST 专用只读数据）——
-	"GET /api/v1/branding":           "面板前端品牌文案渲染（app_name/页脚/版本），公开只读；运维对象是 Caddy 而非面板 UI，Agent 无消费场景",
-	"GET /api/v1/caddy/metrics":      "Caddy 原始指标（请求总量/在途计数），供 Prometheus 抓取与面板展示；Agent 监控走 get_metrics_dashboard/get_metrics_overview 聚合工具",
-	"GET /api/v1/caddy/host-metrics": "Caddy 按域名粒度的指标统计，面板主机视图数据源；Agent 监控走 get_metrics_dashboard 聚合工具",
-	"GET /api/v1/audit-logs/options": "审计日志页筛选下拉选项（操作人/操作/对象去重值+频次），面板 UI 辅助数据；Agent 直接用 get_audit_logs 的筛选参数查询",
-	"GET /api/v1/logs/stats":         "9 类日志的存储大小/轮转/保留策略状态，面板日志页展示用；不涉及 Agent 的排障操作路径",
-	"GET /api/v1/security/crs/setup": "CRS setup.conf 配置文件原文查看，面板 CRS 配置展示用；Agent 排查规则走 get_crs_rule/get_crs_rule_index",
-	"GET /api/v1/security/events/count":           "IP 弹框上下文查询(近 N 天单 IP 事件计数),轻量专用端点;MCP 场景用 list_security_events 的 ip 过滤+total 覆盖同等信息",
+	"GET /api/v1/branding":              "面板前端品牌文案渲染（app_name/页脚/版本），公开只读；运维对象是 Caddy 而非面板 UI，Agent 无消费场景",
+	"GET /api/v1/caddy/metrics":         "Caddy 原始指标（请求总量/在途计数），供 Prometheus 抓取与面板展示；Agent 监控走 get_metrics_dashboard/get_metrics_overview 聚合工具",
+	"GET /api/v1/caddy/host-metrics":    "Caddy 按域名粒度的指标统计，面板主机视图数据源；Agent 监控走 get_metrics_dashboard 聚合工具",
+	"GET /api/v1/audit-logs/options":    "审计日志页筛选下拉选项（操作人/操作/对象去重值+频次），面板 UI 辅助数据；Agent 直接用 get_audit_logs 的筛选参数查询",
+	"GET /api/v1/logs/stats":            "9 类日志的存储大小/轮转/保留策略状态，面板日志页展示用；不涉及 Agent 的排障操作路径",
+	"GET /api/v1/security/crs/setup":    "CRS setup.conf 配置文件原文查看，面板 CRS 配置展示用；Agent 排查规则走 get_crs_rule/get_crs_rule_index",
+	"GET /api/v1/security/events/count": "IP 弹框上下文查询(近 N 天单 IP 事件计数),轻量专用端点;MCP 场景用 list_security_events 的 ip 过滤+total 覆盖同等信息",
 	// —— MCP 自身镜像端点 ——
 	"POST /api/v1/mcp":             "MCP Streamable HTTP JSON-RPC 端点本身：工具调用的入口即 MCP 协议，不是可经 MCP 转发的 REST 操作",
 	"GET /api/v1/mcp/tools":        "MCP 自身镜像端点：OpenAPI 形态的工具清单，供外部集成方发现工具",

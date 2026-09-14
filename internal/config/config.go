@@ -29,7 +29,7 @@ type Config struct {
 	NodeName string `json:"node_name"`
 
 	// Log
-	LogFile        string `json:"log_file"` // effective runtime log path (LOG_FILE env or default)
+	LogFile string `json:"log_file"` // effective runtime log path (LOG_FILE env or default)
 
 	// JWT
 	JWTSecret string `json:"jwt_secret"`

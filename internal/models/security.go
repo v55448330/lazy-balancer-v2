@@ -202,10 +202,10 @@ type CRSInfo struct {
 	RuleCount     int    `json:"rule_count"`
 	// IsLatest 三态(N2,第 16 轮):nil=未知(冷启动未取到 latest/解析失败),
 	// false=有更新, true=已是最新——此前未知态默认 true 属新鲜度信任 fail-open。
-	IsLatest      *bool  `json:"is_latest,omitempty"`
-	UpdateStatus  string `json:"update_status"`
-	Message       string `json:"message"`
-	Trigger       string `json:"trigger"`
+	IsLatest     *bool  `json:"is_latest,omitempty"`
+	UpdateStatus string `json:"update_status"`
+	Message      string `json:"message"`
+	Trigger      string `json:"trigger"`
 }
 
 type IP2RegionInfo struct {

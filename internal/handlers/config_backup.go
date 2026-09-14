@@ -1039,6 +1039,18 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 				if err := json.Unmarshal([]byte(entries), &parsed); err != nil {
 					return fmt.Errorf("安全 IP 列表 #%d：entries 需为 JSON 数组文本", index+1)
 				}
+				// SECLB26-P2-2(第 26 轮审计):导入路径按 validIPOrCIDR 口径校验
+				// 条目值——zone 形态(fe80::1%eth0)等无效条目落库后 coraza
+				// @ipMatch 静默丢弃(零留痕),必须拒绝。
+				for ei, entry := range parsed {
+					entryMap, ok := entry.(map[string]any)
+					if !ok {
+						continue
+					}
+					if value, ok := entryMap["value"].(string); ok && value != "" && !validIPOrCIDR(value) {
+						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：无效 IP/CIDR 值 %q（zone 形态如 fe80::1%%eth0 不被 WAF 引擎支持）", index+1, ei+1, value)
+					}
+				}
 			}
 		}
 	}

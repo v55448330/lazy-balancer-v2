@@ -34,9 +34,10 @@ func TestClusterVersionTriggers_bumpWhenCertificateStatusTransitionsToIssued(t *
 		t.Fatalf("transition pending status to issued: %v", err)
 	}
 
-	// Then
-	if got := clusterVersion(t, database); got != 1 {
-		t.Fatalf("version after pending to issued=%d, want 1", got)
+	// Then: CL26-1(第 26 轮审计)——status 移出语义列,纯状态迁移不再 bump;
+	// 材料 bump 由 INSERT 触发器(种子 INSERT 已含 cert_pem/key_pem)负责
+	if got := clusterVersion(t, database); got != 0 {
+		t.Fatalf("version after pending to issued=%d, want 0 (status-only, CL26-1)", got)
 	}
 }
 
@@ -68,13 +69,48 @@ func TestClusterVersionTriggers_certJobsBookkeepingDoesNotBump(t *testing.T) {
 		t.Fatalf("version after bookkeeping write=%d, want 0 (bookkeeping must not bump)", got)
 	}
 
-	// When: 语义列写(status 变化)
-	if _, err := database.Exec("UPDATE cert_jobs SET status='downloaded' WHERE rule_id='book_rule'"); err != nil {
+	// When: 语义列写(expires_at 推进=续期材料变化,CL26-1 后 status 不再是语义列)
+	if _, err := database.Exec("UPDATE cert_jobs SET expires_at=datetime('now','+90 days') WHERE rule_id='book_rule'"); err != nil {
 		t.Fatalf("semantic write: %v", err)
 	}
 
 	// Then: 版本 bump
 	if got := clusterVersion(t, database); got != 1 {
 		t.Fatalf("version after semantic write=%d, want 1", got)
+	}
+}
+
+// CL26-1(第 26 轮审计):status 移出语义列——续期/签发中间态迁移不 bump
+// (成员条件恒真时阶段写是纯簿记);材料变化(cert_pem/expires_at)才 bump。
+func TestClusterVersionTriggers_certJobsStatusTransitionDoesNotBump(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	certPEM, keyPEM := clusterVersionCertificatePair(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed master: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('renew_rule','example.com','issued',?,?,datetime('now','+30 days'))`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed issued certificate: %v", err)
+	}
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatalf("install triggers: %v", err)
+	}
+
+	// When: 中间态迁移(续期排队——成员条件恒真,纯簿记)
+	if _, err := database.Exec("UPDATE cert_jobs SET status='queued' WHERE rule_id='renew_rule'"); err != nil {
+		t.Fatalf("intermediate status: %v", err)
+	}
+	// Then: 不 bump
+	if got := clusterVersion(t, database); got != 0 {
+		t.Fatalf("version after intermediate status=%d, want 0 (CL26-1)", got)
+	}
+
+	// When: 材料变化(续期完成——expires_at 推进;cert_pem 用固定测试证书
+	// 两次生成相同,改用 expires_at 语义列模拟材料变化)
+	if _, err := database.Exec(`UPDATE cert_jobs SET expires_at=datetime('now','+90 days'), status='issued' WHERE rule_id='renew_rule'`); err != nil {
+		t.Fatalf("material change: %v", err)
+	}
+	// Then: bump(材料变化)
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after material change=%d, want 1", got)
 	}
 }

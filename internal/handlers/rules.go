@@ -2231,7 +2231,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// 路径此前因零值恒不触发(注释自述「与 CreateRule 一致」未兑现)。
 		ListenPort: rule.ListenPort, EnableTLS: rule.EnableTLS, TLSHTTPRedirect: rule.TLSHTTPRedirect,
 		EnabledUpstreamHosts: upstreamHosts, DnsFamily: rule.DnsFamily,
-		HealthCheckInterval:  rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
+		HealthCheckInterval: rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,
 		ProxyDialTimeout: rule.ProxyDialTimeout, ProxyResponseHeaderTimeout: rule.ProxyResponseHeaderTimeout,

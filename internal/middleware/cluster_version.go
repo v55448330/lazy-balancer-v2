@@ -109,11 +109,22 @@ func installClusterVersionTriggers(database *sql.DB) error {
 					// 触发 OF 触发器,导致全集群快照 304 门失效+从端强制重载。
 					// 与 users 表 SLB12-P1-1 同口径:仅语义列(影响渲染/从端行为)
 					// 值真实变化才 bump;簿记列同值/变化均不 bump。
-					semanticCols := []string{"rule_id", "domain", "status", "cert_pem", "key_pem", "expires_at", "ca_provider_id"}
+					// CL26-1(第 26 轮审计):status 移出语义列——续期形态老证保留使成员
+					// 条件恒真,11 次阶段迁移逐 bump(每次全集群强制重载);材料变化
+					// (cert_pem/key_pem/expires_at)已覆盖「新证书可用」的唯一同步
+					// 时点,中间态对从端不可见(从端不跑签发),waiting_ca 可见性
+					// 延迟可接受(自愈于材料变化/下次语义 bump)。
+					// CL26-2:簿记三列(renewal_attempts/ca_available_after/last_error_code)
+					// 序列化进指纹并物化到从端,但守卫排除→从端展示陈旧至下次语义
+					// bump——有意权衡(从端无功能消费,自愈),注释如实化。
+					semanticCols := []string{"rule_id", "domain", "cert_pem", "key_pem", "expires_at", "ca_provider_id"}
 					valueChange := make([]string, 0, len(semanticCols))
 					for _, col := range semanticCols {
 						valueChange = append(valueChange, fmt.Sprintf("OLD.%s IS NOT NEW.%s", col, col))
 					}
+					// CL26-1 补充:disabled 例外——证书下线(OLD 成员→NEW disabled)
+					// 必须从端感知(从端停止加载该证书),虽仅 status 变化也 bump。
+					valueChange = append(valueChange, "(OLD.status<>'disabled' AND NEW.status='disabled')")
 					whenClause += " AND (" + strings.Join(valueChange, " OR ") + ")"
 				case "DELETE":
 					whenClause += " AND " + oldCertificateMember

@@ -405,12 +405,15 @@ func (m *CRSUpdateManager) restoreBackup() {
 	}
 	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
 	stockBak := crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")
+	// SECLB26-P2-1(第 26 轮审计,CRS25-4 残留):stock 段失败不得 return——
+	// overrides 还原独立于 stock,失败只记日志继续(否则旧 setup+新 overrides
+	// 双重应用,restore 后 reload 再失败)。
 	if _, err := os.Stat(stockBak); err == nil {
 		if err := copyFile(stockBak, stockPath); err != nil {
 			Logf("error", "crs update: failed to restore crs-setup.stock.conf backup: %v", err)
-			return
+		} else {
+			os.Remove(stockBak)
 		}
-		os.Remove(stockBak)
 	}
 	overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
 	overridesBak := crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak")

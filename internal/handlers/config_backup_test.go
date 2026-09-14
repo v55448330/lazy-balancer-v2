@@ -2481,3 +2481,33 @@ func TestImportConfigBackup_toleratesTopLevelStringCustomRules(t *testing.T) {
 		t.Fatalf("导入含顶层字符串 custom_rules 的备份不得 500: %s", recorder.Body.String())
 	}
 }
+
+// SECLB26-P2-2(第 26 轮审计):导入路径不校验 IP 条目值——zone 形态
+// (fe80::1%eth0)经备份导入落库后 coraza @ipMatch 静默丢弃(零留痕)。
+// validateV2BackupSecurityPolicies 必须按 validIPOrCIDR 口径拒绝。
+func TestValidateV2Backup_rejectsZoneFormIPEntries(t *testing.T) {
+	tables := map[string][]map[string]any{
+		"security_ip_lists": {
+			{"name": "zone-list", "entries": `[{"value":"fe80::1%eth0","remark":"zone"}]`},
+		},
+	}
+	err := validateV2BackupSecurityPolicies(tables)
+	if err == nil {
+		t.Fatal("zone-form IP entry in backup must be rejected (coraza @ipMatch silently drops)")
+	}
+	if !strings.Contains(err.Error(), "zone") && !strings.Contains(err.Error(), "fe80") {
+		t.Fatalf("error=%q, want mention of zone/invalid entry", err)
+	}
+}
+
+// 对偶:正常条目不受影响
+func TestValidateV2Backup_acceptsNormalIPEntries(t *testing.T) {
+	tables := map[string][]map[string]any{
+		"security_ip_lists": {
+			{"name": "normal", "entries": `[{"value":"192.168.1.1"},{"value":"10.0.0.0/8"},{"value":"fe80::1"}]`},
+		},
+	}
+	if err := validateV2BackupSecurityPolicies(tables); err != nil {
+		t.Fatalf("normal entries must be accepted: %v", err)
+	}
+}
