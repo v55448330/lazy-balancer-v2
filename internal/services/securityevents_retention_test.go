@@ -98,27 +98,28 @@ func TestSecurityEventsRetentionSettings_appliesDefaultsWhenZero(t *testing.T) {
 	days, max := securityEventsRetentionSettings()
 
 	// Then: the documented defaults apply
-	if days != 30 || max != 1000000 {
-		t.Fatalf("settings = (%d, %d), want (30, 1000000)", days, max)
+	if days != 90 || max != 1000000 {
+		t.Fatalf("settings = (%d, %d), want (90, 1000000)", days, max)
 	}
 }
 
 func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing.T) {
-	// Given: zeroed retention config and events straddling the default 30-day window
+	// Given: zeroed retention config and events straddling the default 90-day window
+	// (GEO25-2: 默认从 30 天提升到与操作日志同口径的 90 天/3 个月)
 	setupSecurityEventsRetentionTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
-		(datetime('now', '-31 days'), '198.51.100.1', 'expired'),
-		(datetime('now', '-29 days'), '198.51.100.2', 'recent')`); err != nil {
+		(datetime('now', '-91 days'), '198.51.100.1', 'expired'),
+		(datetime('now', '-89 days'), '198.51.100.2', 'recent')`); err != nil {
 		t.Fatal(err)
 	}
 
 	// When
 	securityEventsRetentionCleanup(context.Background())
 
-	// Then: the default 30-day window deleted the 31-day-old event only
+	// Then: the default 90-day window deleted the 91-day-old event only
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {
 		t.Fatalf("expired events after cleanup = %d, want 0", got)
 	}

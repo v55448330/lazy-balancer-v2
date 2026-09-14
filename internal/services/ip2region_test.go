@@ -336,3 +336,34 @@ func resetRegionTreeMemoForTest(t *testing.T) {
 		regionTreeMemoMu.Unlock()
 	})
 }
+
+// GEO25-1(第 25 轮审计):条目数应从 header StartIndexPtr/EndIndexPtr 直读
+// (xdb v2 官方边界,2 次 ReadAt),不再扫 65536 格 vector 推导(每次调用
+// 65536 次 8B ReadAt,BufferCache 已全内存纯浪费;且 vector 端点语义含
+// 末条结尾,推导 off-by-one)。
+func TestGetIP2RegionEntryCount_readsHeaderBounds(t *testing.T) {
+	// Given: 构造最小 xdb——header(start=1000,end=1000+14*(N-1))+vector 全零
+	const n = 100
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip2region.xdb")
+	header := make([]byte, 256)
+	binary.LittleEndian.PutUint32(header[8:], 1000)
+	binary.LittleEndian.PutUint32(header[12:], 1000+14*(n-1))
+	vector := make([]byte, 256*256*8)
+	// 干扰格:旧实现在 vector 区(文件偏移 264=8+32*8)植入超界端点——
+	// 旧推导被拉偏(306),header 直读不受影响(100)。
+	binary.LittleEndian.PutUint32(vector[32*8:], 5000)
+	binary.LittleEndian.PutUint32(vector[32*8+4:], 5000+14*20)
+	data := append(header, vector...)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := ip2regionLivePath
+	ip2regionLivePath = path
+	t.Cleanup(func() { ip2regionLivePath = old })
+
+	// When/Then: 真值 N(header 边界直读)
+	if got := GetIP2RegionEntryCount(); got != n {
+		t.Fatalf("GetIP2RegionEntryCount()=%d, want %d (header bounds)", got, n)
+	}
+}

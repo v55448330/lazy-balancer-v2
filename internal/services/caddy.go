@@ -1320,8 +1320,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	if err := store.QueryRow(`
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''),
 		       COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
-		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
+		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60),
+		       COALESCE(http_idle_timeout,120), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
 		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''), COALESCE(proxy_dial_timeout,0),
 		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM global_config WHERE id = 1
@@ -3285,7 +3285,9 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 	if rule.EnableActiveHealthCheck {
 		healthCheckTimeout := rule.HealthCheckTimeout
 		if healthCheckTimeout <= 0 {
-			healthCheckTimeout = 5
+			// LB25-P2-1(第 25 轮审计):与 LB-04 统一 2s(写侧默认/COALESCE 读取/
+			// HTTP 渲染兜底三链均 2,独 TCP 链曾=5 分裂)。
+			healthCheckTimeout = 2
 		}
 		healthyThreshold := rule.HealthCheckHealthyThreshold
 		if healthyThreshold <= 0 {

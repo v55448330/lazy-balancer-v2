@@ -424,7 +424,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		snapshot.CaddyConfig = &caddyConfig
 		if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 			COALESCE(access_log_json,1), COALESCE(access_log_format,''),
-			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0), COALESCE(http_idle_timeout,0),
+			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
 			COALESCE(upstream_keepalive_timeout,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			COALESCE(server_tokens_hidden,0)

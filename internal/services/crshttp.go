@@ -199,7 +199,14 @@ func ghProxied(rawURL string) string {
 // crsTarballSourceURL 是 CRS 发布包的真实来源 URL（含版本 tag，作为完整性基线
 // 的键）：下载函数与安装校验后的记录调用共用，避免 URL 构造分叉。
 func crsTarballSourceURL(tag string) string {
-	return ghProxied("https://github.com/coreruleset/coreruleset/archive/refs/tags/" + tag + ".tar.gz")
+	return ghProxied(crsTarballBaselineKey(tag))
+}
+
+// crsTarballBaselineKey 是完整性基线的键(GEO25-3,第 25 轮审计):裸 GitHub
+// URL 不含代理前缀——代理是传输层(白名单可切换),内容校验应钉源站;切换
+// 代理不应另立基线(同一上游内容经不同代理下载,SHA256 不变)。
+func crsTarballBaselineKey(tag string) string {
+	return "https://github.com/coreruleset/coreruleset/archive/refs/tags/" + tag + ".tar.gz"
 }
 
 // crsRepoSlug 是 CRS 的 GitHub 仓库标识：直连 API 与代理 releases/latest 共用。

@@ -50,6 +50,23 @@ func TestEnrichIPLocation_reservedIPs(t *testing.T) {
 	}
 }
 
+// SEC25-1(第 25 轮审计):zone 形态 IPv6(fe80::1%eth0)netip 接受但 coraza
+// @ipMatch 静默丢弃——validIPOrCIDR 必须拒绝,防零留痕落库。
+func TestValidIPOrCIDR_rejectsZoneForm(t *testing.T) {
+	if validIPOrCIDR("fe80::1%eth0") {
+		t.Fatal("zone-form IPv6 must be rejected (coraza @ipMatch silently drops)")
+	}
+	if !validIPOrCIDR("fe80::1") {
+		t.Fatal("plain IPv6 fe80::1 must be accepted")
+	}
+	if !validIPOrCIDR("192.168.1.1") {
+		t.Fatal("IPv4 must be accepted")
+	}
+	if !validIPOrCIDR("10.0.0.0/8") {
+		t.Fatal("CIDR must be accepted")
+	}
+}
+
 func TestEnrichIPLocation_emptyWithoutDatabaseNeverErrors(t *testing.T) {
 	// Given: no xdb loaded (test process never installs one)
 	// When / Then: lookups degrade to "" instead of failing

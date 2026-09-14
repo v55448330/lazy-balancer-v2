@@ -244,7 +244,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	}
 	// F2（v2.2.3）：策略级「记录请求体」开关——开启时审计 parts 加 C，coraza
 	// 在事件事务（RelevantOnly 门控）输出 transaction.request.body，摄入落库
-	// request_body（64KB 截断）。body access 恒 On 不变，仅审计输出面扩展。
+	// request_body（64KB 截断）。请求体 access 恒 On 不变（上方响应体另由 SecResponseBodyAccess 条件开关），仅审计输出面扩展。
 	auditParts := "ABIJDEFHKZ"
 	if p.LogRequestBody {
 		auditParts = "ABCIJDEFHKZ"
@@ -952,6 +952,7 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 		}
 		var rules []models.CustomRule
 		queriedIDs := make(map[int]struct{}, len(ids))
+		seenIDs := make(map[int]struct{}, len(ids))
 		for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
 			end := start + policyCustomRuleChunkSize
 			if end > len(ids) {
@@ -981,16 +982,12 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 				}
 				// SLB12-P3-5:跨 500 分块重复引用查重——同 ID 双 SecRule 会被
 				// coraza 编译拒绝,毒化策略无法落库。
-				dup := false
-				for _, existing := range rules {
-					if existing.ID == cr.ID {
-						dup = true
-						break
-					}
-				}
-				if dup {
+				// SEC25-5(第 25 轮审计):O(m²) 线性扫→map 判重(queriedIDs
+				// 是「已查」集,入列判重需独立 seen 集)。
+				if _, dup := seenIDs[cr.ID]; dup {
 					continue
 				}
+				seenIDs[cr.ID] = struct{}{}
 				json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
 				rules = append(rules, cr)
 			}

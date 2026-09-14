@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"sort"
 	"archive/tar"
 	"compress/gzip"
 	"context"
@@ -327,7 +329,7 @@ var maxWafSyncExtractBytes int64 = 256 << 20
 // non-empty, the re-archived staging tree must hash to it, or the sync is
 // rejected before anything touches the live tree.
 func untarGzTo(data []byte, destDir string, expectSum string) error {
-	gz, err := gzip.NewReader(strings.NewReader(string(data)))
+	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -467,12 +469,9 @@ func fileSha256(path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SEC25-4(第 25 轮审计):手写插入排序→sort.Strings(标准库,等价语义)
 func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
+	sort.Strings(s)
 }
 
 // fetchWafFiles pulls the full file bundle from the master's on-demand

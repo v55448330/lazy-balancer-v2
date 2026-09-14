@@ -298,8 +298,12 @@ func (m *CRSUpdateManager) run(trigger string) {
 func (m *CRSUpdateManager) fail(cause error, restore bool) {
 	if restore {
 		m.restoreBackup()
-		if err := m.reloader(); err != nil {
-			Logf("error", "crs update: reload after restore failed: %v", err)
+		// CRS25-8(第 25 轮审计):reloader nil 守卫(与 crsinstall.go:314 同口径)——
+		// 测试注入 nil reloader 时 panic。
+		if m.reloader != nil {
+			if err := m.reloader(); err != nil {
+				Logf("error", "crs update: reload after restore failed: %v", err)
+			}
 		}
 	}
 	// 连续失败计数 +1：仅首次失败写操作审计，后续重试只写组件日志（R35 I1），

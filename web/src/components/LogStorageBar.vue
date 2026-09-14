@@ -92,7 +92,7 @@ const noteText = computed(() => {
   if (!i) return ''
   if (i.limit_bytes && i.keep_count > 0) return `满 ${humanSize(i.limit_bytes)} 轮转，保留 ${i.keep_count} 份${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
   if (i.limit_bytes) return `满 ${humanSize(i.limit_bytes)} 轮转${i.retention_note ? `，${i.retention_note}` : ''}${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
-  if (i.limit_rows) return i.retention_note || ''
+  if (i.limit_rows) return `满 ${i.limit_rows.toLocaleString()} 条自动裁最旧${i.retention_note ? '，' + i.retention_note : ''}`
   return i.retention_note || ''
 })
 

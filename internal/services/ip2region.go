@@ -235,33 +235,26 @@ func openIP2RegionSearcher(path string) (*ip2regionService.Ip2Region, error) {
 func GetIP2RegionEntryCount() int {
 	ip2regionMu.RLock()
 	defer ip2regionMu.RUnlock()
+	// GEO25-1(第 25 轮审计):条目数从 header StartIndexPtr/EndIndexPtr 直读
+	// (xdb v2 官方边界,[8:16],2 次 ReadAt)——原实现扫 65536 格 vector 推导
+	// (BufferCache 已全内存,每调用 65536 次 8B ReadAt 纯浪费;且 vector 端点
+	// 语义含末条结尾,推导 off-by-one;header 真值=(end-start)/14+1)。
 	f, err := os.Open(ip2regionLivePath)
 	if err != nil {
 		return 0
 	}
 	defer f.Close()
-	var minPtr, maxPtr uint32
-	cell := make([]byte, 8)
-	for i := 0; i < 65536; i++ {
-		if _, err := f.ReadAt(cell, int64(8+i*8)); err != nil {
-			break
-		}
-		s := binary.LittleEndian.Uint32(cell[0:4])
-		e := binary.LittleEndian.Uint32(cell[4:8])
-		if s == 0 && e == 0 {
-			continue
-		}
-		if minPtr == 0 || s < minPtr {
-			minPtr = s
-		}
-		if e > maxPtr {
-			maxPtr = e
-		}
-	}
-	if maxPtr <= minPtr {
+	header := make([]byte, 16)
+	if _, err := f.ReadAt(header, 0); err != nil {
 		return 0
 	}
-	return int((maxPtr-minPtr)/14) + 1
+	startPtr := binary.LittleEndian.Uint32(header[8:12])
+	endPtr := binary.LittleEndian.Uint32(header[12:16])
+	if endPtr <= startPtr {
+		return 0
+	}
+	const segmentIndexSize = 14 // xdb v2 段索引每条 14 字节
+	return int((endPtr-startPtr)/segmentIndexSize) + 1
 }
 
 // GetIP2RegionProvinces returns the province list from the live searcher, or
@@ -616,13 +609,15 @@ func staleRegionTreeCache(path string) bool {
 		return true
 	}
 	for _, prov := range tree.Provinces {
-		if prov != "海外" && prov[0] < 0x80 {
+		// CRS25-6(第 25 轮审计):空串条目索引越界——缓存被带外手改(非本
+		// 进程写入)时空串可入,prov[0] panic。启动路径,崩溃即启动失败。
+		if prov == "" || (prov != "海外" && prov[0] < 0x80) {
 			return true
 		}
 	}
 	for _, cities := range tree.Cities {
 		for _, city := range cities {
-			if city[0] < 0x80 {
+			if city == "" || city[0] < 0x80 {
 				return true
 			}
 		}

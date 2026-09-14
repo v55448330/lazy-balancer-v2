@@ -104,6 +104,17 @@ func installClusterVersionTriggers(database *sql.DB) error {
 					whenClause += " AND " + newCertificateMember
 				case "UPDATE":
 					whenClause += " AND ((" + oldCertificateMember + ") OR (" + newCertificateMember + "))"
+					// CL25-1(第 25 轮审计):簿记抖动守卫——签发/续期的阶段写
+					// (message/attempts/updated_at 等簿记列,每次签发 ~15 次)同样
+					// 触发 OF 触发器,导致全集群快照 304 门失效+从端强制重载。
+					// 与 users 表 SLB12-P1-1 同口径:仅语义列(影响渲染/从端行为)
+					// 值真实变化才 bump;簿记列同值/变化均不 bump。
+					semanticCols := []string{"rule_id", "domain", "status", "cert_pem", "key_pem", "expires_at", "ca_provider_id"}
+					valueChange := make([]string, 0, len(semanticCols))
+					for _, col := range semanticCols {
+						valueChange = append(valueChange, fmt.Sprintf("OLD.%s IS NOT NEW.%s", col, col))
+					}
+					whenClause += " AND (" + strings.Join(valueChange, " OR ") + ")"
 				case "DELETE":
 					whenClause += " AND " + oldCertificateMember
 				}

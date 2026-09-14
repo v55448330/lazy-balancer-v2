@@ -169,7 +169,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 与基线 mismatch 时阻断安装并保留旧基线——错误消息已含人工清基线指引
 	//（确认上游更新合法后删除 data/download_integrity.json 对应条目重试）；
 	// 此时 rules 尚未替换，直接返回即可。I/O 类记录失败维持仅记日志不阻断。
-	if ierr := recordDownloadIntegrity(crsTarballSourceURL(tag), tarball, "CRS规则库"); ierr != nil {
+	if ierr := recordDownloadIntegrity(crsTarballBaselineKey(tag), tarball, "CRS规则库"); ierr != nil {
 		if errors.Is(ierr, errDownloadIntegrityMismatch) {
 			return fmt.Errorf("CRS 发布包完整性校验失败: %w", ierr)
 		}
@@ -394,14 +394,15 @@ func (m *CRSUpdateManager) restoreBackup() {
 	}
 	setupPath := filepath.Join(m.crsDir, "crs-setup.conf")
 	setupBak := crsTransientPath(m.crsDir, "crs-setup.conf.bak")
-	if _, err := os.Stat(setupBak); err != nil {
-		return
+	// CRS25-4(第 25 轮审计):setup.bak 缺失不得早退——stock.bak/overrides.bak
+	// 的还原独立于 setup,缺失只跳过本段(此前 return 跳过了后续全部还原)。
+	if _, err := os.Stat(setupBak); err == nil {
+		if err := copyFile(setupBak, setupPath); err != nil {
+			Logf("error", "crs update: failed to restore crs-setup.conf backup: %v", err)
+		} else {
+			os.Remove(setupBak)
+		}
 	}
-	if err := copyFile(setupBak, setupPath); err != nil {
-		Logf("error", "crs update: failed to restore crs-setup.conf backup: %v", err)
-		return
-	}
-	os.Remove(setupBak)
 	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
 	stockBak := crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")
 	if _, err := os.Stat(stockBak); err == nil {

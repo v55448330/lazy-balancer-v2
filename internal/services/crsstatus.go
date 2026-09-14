@@ -66,10 +66,15 @@ func (m *CRSUpdateManager) RuleCount() int {
 		Logf("error", "crs update: failed to count SecRules: %v", err)
 		return 0
 	}
+	// CRS25-5(第 25 轮审计):放锁扫描期间 rescan 可能已写入新值——
+	// 重锁写回前双重检查,不覆盖更新值(展示层一致性)。
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasRuleCount {
+		return m.ruleCount
+	}
 	m.ruleCount = count
 	m.hasRuleCount = true
-	m.mu.Unlock()
 	return count
 }
 

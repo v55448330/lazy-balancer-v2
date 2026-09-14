@@ -41,3 +41,28 @@ func TestGenerateCaddyConfig_activeHealthTimeout_defaults_to_2_for_null_and_zero
 		t.Fatalf("active health timeout still renders 5s, want unified default 2s: %s", body)
 	}
 }
+
+// LB25-P2-1(第 25 轮审计):TCP 主动健检 timeout 渲染兜底 5s 与 LB-04 统一 2s
+// 分裂——写侧默认 2(rules.go:789)+COALESCE 读取 2+HTTP 渲染兜底 2,独 TCP 链=5。
+func TestBuildTCPServer_activeHealthTimeout_defaults_to_2(t *testing.T) {
+	// Given: TCP 规则启用主动健检,timeout=0(导入路径可达 0 值)
+	cfg := SingleRuleConfig{
+		ListenPort:            16379,
+		Protocol:              "tcp",
+		EnableActiveHealthCheck: true,
+		HealthCheckTimeout:    0, // 渲染兜底靶点
+		Upstreams:             []UpstreamConfig{{Host: "127.0.0.1", Port: 6379, Weight: 1, Enabled: true}},
+	}
+
+	// When
+	server := buildTCPServer(cfg)
+	body, _ := json.Marshal(server)
+
+	// Then: timeout 统一为 2s(与 HTTP 链/LB-04 钉口径一致)
+	if strings.Contains(string(body), `"timeout":"5s"`) {
+		t.Fatalf("TCP active health timeout still renders 5s, want unified default 2s: %s", body)
+	}
+	if !strings.Contains(string(body), `"timeout":"2s"`) {
+		t.Fatalf("TCP active health timeout missing 2s: %s", body)
+	}
+}

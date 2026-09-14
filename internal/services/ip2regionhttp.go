@@ -50,6 +50,12 @@ func ip2RegionXDBSourceURL(tag string) string {
 	return ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb")
 }
 
+// ip2RegionXDBBaselineKey 是完整性基线的键(GEO25-3):裸 GitHub URL 不含
+// 代理前缀——代理是传输层(白名单可切换),内容校验应钉源站。
+func ip2RegionXDBBaselineKey(tag string) string {
+	return "https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb"
+}
+
 // ip2RegionXDBDownloadSizeCap 是 xdb 下载的单设上限（100MB，>9× 合法 v4.xdb
 // 约 11MB）：此前与 CRS tarball 共用 2GB 上限，而安装校验经 NewV4Config 的
 // BufferCache 在构造期全量读入内存（binding 库 config.go LoadContent）——

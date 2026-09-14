@@ -3037,8 +3037,11 @@ func validIPOrCIDR(entry string) bool {
 	if _, err := netip.ParsePrefix(entry); err == nil {
 		return true
 	}
-	_, err := netip.ParseAddr(entry)
-	return err == nil
+	// SEC25-1(第 25 轮审计):netip.ParseAddr 接受 zone 形态(fe80::1%eth0),
+	// 但 coraza @ipMatch 静默丢弃(引擎 ip_match.go 不识别 zone)——零留痕
+	// 落库即失效。此处拒绝:带 zone 的地址不视为有效条目。
+	addr, err := netip.ParseAddr(entry)
+	return err == nil && addr.Zone() == ""
 }
 
 func getContextUserIDInt(c *gin.Context) int {

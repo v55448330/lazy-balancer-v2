@@ -595,8 +595,10 @@ func TestClusterVersionTriggers_bumpForTimestampOnlyUpdates(t *testing.T) {
 		if _, err := database.Exec(`UPDATE cert_jobs SET updated_at=datetime('now') WHERE rule_id='stamp_cert'`); err != nil {
 			t.Fatalf("update job timestamp: %v", err)
 		}
-		if got := clusterVersion(t, database); got != 1 {
-			t.Fatalf("version after member cert updated_at=%d, want 1", got)
+		// CL25-1(第 25 轮审计):updated_at 是簿记列——单列更新不再 bump
+		// (R24 旧语义已改:簿记抖动不再触发全集群重放)
+		if got := clusterVersion(t, database); got != 0 {
+			t.Fatalf("version after member cert updated_at=%d, want 0 (bookkeeping column, CL25-1)", got)
 		}
 	})
 

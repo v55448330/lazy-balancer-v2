@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	securityEventsRetentionDefaultDays = 30
+	// GEO25-2(第 25 轮审计):默认保留与操作日志同口径 90 天(3 个月)——
+	// 原 30 天静默分裂(读 DB 失败/0 值时静默降级 30 天,兄弟组件 90 天)。
+	securityEventsRetentionDefaultDays = 90
 	securityEventsRetentionDefaultMax  = 1000000 // 2026-09-14 用户裁定:10 万→100 万(索引全覆盖,无查询性能影响)
 	// securityEventsRetentionDeleteBatch 是年龄裁剪与 count 超限裁剪共用的单批
 	// 删除行数（R34 E 起年龄裁剪亦按此批次执行，同口径）：大批量单语句 DELETE
@@ -40,6 +42,7 @@ func securityEventsRetentionSettings() (days, max int) {
 	}
 	var retentionMonths int
 	if err := database.QueryRow(`SELECT COALESCE(audit_retention_months,0) FROM global_config WHERE id=1`).Scan(&retentionMonths); err != nil {
+		Logf("warn", "security events retention: read audit_retention_months failed, falling back to %d days: %v", days, err)
 		return days, max
 	}
 	if retentionMonths > 0 {
