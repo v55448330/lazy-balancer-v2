@@ -32,6 +32,10 @@ type RuleMetricsHandler struct {
 	requestsInFlight *prometheus.GaugeVec
 }
 
+func init() {
+	caddy.RegisterModule(RuleMetricsHandler{})
+}
+
 // CaddyModule returns the Caddy module information.
 func (RuleMetricsHandler) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
