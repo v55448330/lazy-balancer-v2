@@ -69,6 +69,14 @@ func (h *RuleMetricsHandler) Provision(ctx caddy.Context) error {
 	return nil
 }
 
+// isHandlerError 判定错误是否为 caddyhttp.HandlerError(携 statusCode 的
+// 处理器错误——coraza 中断/限流等;非 HandlerError 的连接级错误无状态码,
+// 不计状态类,与 Caddy 自身 instrumentation 同口径)。
+func isHandlerError(err error) bool {
+	var herr caddyhttp.HandlerError
+	return errors.As(err, &herr)
+}
+
 // statusClass 归类状态码到 2xx/3xx/4xx/5xx(其他归 "other")。
 func statusClass(status int) string {
 	switch {
@@ -111,7 +119,10 @@ func (h *RuleMetricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, n
 	if h.requestsTotal != nil {
 		h.requestsTotal.WithLabelValues(h.Rule).Inc()
 	}
-	if h.statusTotal != nil {
+	// SECLB29-F5(第 29 轮审计):非 HandlerError 错误不计状态类(与 Caddy 自身
+	// instrumentation 同口径 metrics.go:368-373——错误只计 requestErrors,不计
+	// 2xx 状态类);HandlerError 携 statusCode 照常归类。
+	if h.statusTotal != nil && (err == nil || isHandlerError(err)) {
 		h.statusTotal.WithLabelValues(h.Rule, statusClass(statusCode)).Inc()
 	}
 	if h.bytesTotal != nil {

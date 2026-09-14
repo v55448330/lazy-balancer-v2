@@ -205,18 +205,18 @@ func metricsIntervalModifier(interval string) string {
 	}
 	switch unit {
 	case "h":
-		if value > 720 {
-			value = 720
+		if value > 168 {
+			value = 168 // F9(第 29 轮审计):保留期固定 7 天——小时上限 7×24
 		}
 		return "-" + strconv.Itoa(value) + " hours"
 	case "d":
-		if value > 30 {
-			value = 30
+		if value > 7 {
+			value = 7 // F9:保留期固定 7 天——天上限 7(原 30d 超窗静默空)
 		}
 		return "-" + strconv.Itoa(value) + " days"
 	case "m":
-		if value > 43200 {
-			value = 43200
+		if value > 10080 {
+			value = 10080 // F9:分钟上限 7×24×60
 		}
 		return "-" + strconv.Itoa(value) + " minutes"
 	default:

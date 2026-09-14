@@ -668,6 +668,9 @@ type prometheusMetricsIndex struct {
 	// blockedByRule 是各规则安全拦截计数(lb_security_blocked_counter 插件,
 	// lazybalancer_security_blocked_total{rule}——与 status_4xx 同源同抓取)。
 	blockedByRule map[string]int64
+	// ruleMetricsByRule 是各规则全量流量指标(lb_rule_metrics 插件,
+	// 2026-09-15 用户裁定:caddy_id 直接匹配替代域名/host 匹配)。
+	ruleMetricsByRule map[string]*ruleMetricsAggregate
 }
 
 func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIndex {
@@ -676,7 +679,8 @@ func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIn
 		httpHosts:     make(map[string]*ruleMetricsAggregate),
 		httpBareHosts: make(map[string]*ruleMetricsAggregate),
 		tcpUpstreams:  make(map[string]*ruleMetricsAggregate),
-		blockedByRule: make(map[string]int64),
+		blockedByRule:      make(map[string]int64),
+		ruleMetricsByRule: make(map[string]*ruleMetricsAggregate),
 	}
 	for _, sample := range samples {
 		index.addSample(sample)
@@ -717,6 +721,13 @@ func (index prometheusMetricsIndex) hostMetrics() []models.HostMetrics {
 }
 
 func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
+	// 2026-09-15 用户裁定:caddy_id 直接匹配(lb_rule_metrics)——优先;
+	// 域名匹配兜底(未升级插件的形态/过渡期)。
+	if target.ruleID != "" {
+		if agg := index.ruleMetricsByRule[target.ruleID]; agg != nil {
+			return agg.ruleMetrics(true)
+		}
+	}
 	if target.domain == "" {
 		return emptyRuleMetrics()
 	}
@@ -861,8 +872,36 @@ func (index *prometheusMetricsIndex) addSample(sample prometheusSample) {
 		}
 	}
 
-	if rule := extractLabel(name, "rule"); rule != "" && strings.HasPrefix(name, "lazybalancer_security_blocked_total{") {
-		index.blockedByRule[rule] += int64(value)
+	if rule := extractLabel(name, "rule"); rule != "" {
+		if strings.HasPrefix(name, "lazybalancer_security_blocked_total{") {
+			index.blockedByRule[rule] += int64(value)
+		}
+		// lb_rule_metrics 全量流量指标归集(2026-09-15)
+		agg := index.aggregateFor(index.ruleMetricsByRule, rule)
+		switch {
+		case strings.HasPrefix(name, "lazybalancer_requests_total{"):
+			agg.requestsTotal += int64(value)
+		case strings.HasPrefix(name, "lazybalancer_requests_in_flight{"):
+			agg.requestsInFlight = int64(value)
+		case strings.HasPrefix(name, "lazybalancer_request_status_total{"):
+			switch extractLabel(name, "class") {
+			case "2xx":
+				agg.status2xx += int64(value)
+			case "3xx":
+				agg.status3xx += int64(value)
+			case "4xx":
+				agg.status4xx += int64(value)
+			case "5xx":
+				agg.status5xx += int64(value)
+			}
+		case strings.HasPrefix(name, "lazybalancer_bytes_total{"):
+			switch extractLabel(name, "direction") {
+			case "in":
+				agg.bytesIn += int64(value)
+			case "out":
+				agg.bytesOut += int64(value)
+			}
+		}
 	}
 
 	if upstream := extractLabel(name, "upstream"); upstream != "" {

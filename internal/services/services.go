@@ -22,9 +22,6 @@ var (
 	prometheusResponseSizePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
 	prometheusRequestSizePattern     = regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
 	prometheusLatencyBucketPattern   = regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusHostStatusPattern      = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusHostResponsePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusHostRequestSizePattern = regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusBlockedPattern         = regexp.MustCompile(`lazybalancer_security_blocked_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusRuleRequestsPattern    = regexp.MustCompile(`lazybalancer_requests_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
 	prometheusRuleStatusPattern      = regexp.MustCompile(`lazybalancer_request_status_total\{[^}]*rule="([^"]+)"[^}]*class="([^"]+)"[^}]*\}\s+(\S+)`)
@@ -43,8 +40,6 @@ type MetricsService struct {
 	lastTotal                  int64
 	lastSampleAt               time.Time
 	hasLastSample              bool
-	domainConflictMu           sync.Mutex
-	domainConflictFingerprints map[string]string
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -405,13 +400,6 @@ func estimateLatencyPercentiles(text string) (int, int, int, error) {
 	return percentile(0.5), percentile(0.95), percentile(0.99), nil
 }
 
-type perHostMetrics struct {
-	requests int64
-	codes    map[int]int64
-	bytesIn  int64
-	bytesOut int64
-}
-
 // ruleLabelAggregate 是 lazybalancer_* 指标按 rule label 聚合的结构。
 type ruleLabelAggregate struct {
 	requests                                   int64
@@ -478,50 +466,6 @@ func parseRuleLabelMetrics(text string) (map[string]*ruleLabelAggregate, error) 
 	return byRule, nil
 }
 
-// parsePerHostMetrics extracts cumulative request/byte counters grouped by// parsePerHostMetrics extracts cumulative request/byte counters grouped by
-// host label so per-rule history rows can be stored alongside the global row.
-func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
-	hosts := map[string]*perHostMetrics{}
-	get := func(host string) *perHostMetrics {
-		h, ok := hosts[host]
-		if !ok {
-			h = &perHostMetrics{codes: map[int]int64{}}
-			hosts[host] = h
-		}
-		return h
-	}
-	for _, m := range prometheusHostStatusPattern.FindAllStringSubmatch(text, -1) {
-		if len(m) < 4 {
-			continue
-		}
-		code, err := strconv.Atoi(m[1])
-		if err != nil {
-			return nil, fmt.Errorf("parse per-host HTTP status code %q: %w", m[1], err)
-		}
-		v, err := parsePrometheusInteger(m[3])
-		if err != nil {
-			return nil, fmt.Errorf("parse per-host request count %q: %w", m[3], err)
-		}
-		h := get(m[2])
-		h.requests += v
-		h.codes[code] += v
-	}
-	for _, m := range prometheusHostResponsePattern.FindAllStringSubmatch(text, -1) {
-		v, err := parsePrometheusInteger(m[2])
-		if err != nil {
-			return nil, fmt.Errorf("parse per-host response size %q: %w", m[2], err)
-		}
-		get(m[1]).bytesOut += v
-	}
-	for _, m := range prometheusHostRequestSizePattern.FindAllStringSubmatch(text, -1) {
-		v, err := parsePrometheusInteger(m[2])
-		if err != nil {
-			return nil, fmt.Errorf("parse per-host request size %q: %w", m[2], err)
-		}
-		get(m[1]).bytesIn += v
-	}
-	return hosts, nil
-}
 
 // storePerHostMetrics maps host labels to HTTP rules by domain and writes a
 // cumulative history row per rule; TCP rules produce no rows because caddy-l4

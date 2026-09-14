@@ -2908,8 +2908,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 安全拦截计数(2026-09-15 用户裁定,方案 B):lb_security_blocked_counter
 	// 置于链首(headers 之后,IP 预检/压缩/限流/全部策略 waf 之前)——包装
 	// 全部 coraza handler(IP 预检的 IP ACL/GeoIP 中断也在内),检测 coraza
-	// 中断(HandlerError 携 ID+4xx)按规则计数;限流 429 在 counter 内侧
-	// (非 coraza HandlerError,不误计)。
+	// 中断(HandlerError 携 ID+4xx)按规则计数;限流 429 经 status==429
+	// 分支计入(424a400e 后;非 coraza tx.ID 但 caddyhttp.Error 生成 ID)。
 	if rule.Protocol == "http" && len(policies) > 0 {
 		handleChain = append(handleChain, map[string]interface{}{
 			"handler": "lb_security_blocked_counter",

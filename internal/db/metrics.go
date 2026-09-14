@@ -372,6 +372,12 @@ func migrateMetricsHistoryBlocked(db *sql.DB) error {
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp)"); err != nil {
 		return fmt.Errorf("failed to recreate metrics_history index: %w", err)
 	}
+	// SECLB29-F4/SysRender29-F2(第 29 轮审计):DROP 重建丢失
+	// idx_metrics_rule_timestamp(原 schema 块在旧表建,重建后消失)——
+	// 重建后至重启前历史查询全表扫描。同步重建。
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp)"); err != nil {
+		return fmt.Errorf("failed to recreate metrics_history rule index: %w", err)
+	}
 	return nil
 }
 

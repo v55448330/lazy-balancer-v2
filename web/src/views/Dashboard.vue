@@ -266,7 +266,7 @@
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
                 </el-radio-group>
-                <span class="rules-count" title="规则数量">{{ rankableRules.length }}</span>
+                <span class="rules-count" title="规则数量">{{ rules.length }}</span>
               </div>
             </div>
           </template>
@@ -290,7 +290,7 @@
                 <el-link type="primary" underline="never" role="button" tabindex="0" :title="row.name" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></el-link>
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="90">
+            <el-table-column label="协议" width="85">
               <template #default="{ row }">
                 <el-tag :type="getRuleProtocolTagType(row)" size="small" effect="plain">
                   {{ getRuleProtocolLabel(row) }}
@@ -595,7 +595,9 @@ const diffCounters = (previous: RuleHistoryRow, current: RuleHistoryRow): RuleHi
     requests: current.requests_total - previous.requests_total,
     status2xx: current.requests_2xx - previous.requests_2xx,
     status3xx: current.requests_3xx - previous.requests_3xx,
-    status4xx: current.requests_4xx - previous.requests_4xx,
+    // F4(第 29 轮审计):历史图 4xx 与实时表同口径扣除 Block(钳制 ≥0)——
+    // 存储双列(当次裁定),展示面不再双计。
+    status4xx: Math.max(0, (current.requests_4xx - previous.requests_4xx) - (current.requests_blocked - previous.requests_blocked)),
     status5xx: current.requests_5xx - previous.requests_5xx,
     blocked: current.requests_blocked - previous.requests_blocked,
     bytesIn: current.bytes_in - previous.bytes_in,
@@ -1014,6 +1016,9 @@ onUnmounted(() => {
 <style scoped>
 .dashboard { max-width: 1500px; margin: 0 auto; }
 
+
+/* 表格单元格标签垂直居中(协议/状态/健康状态列 el-tag) */
+:deep(.el-table .cell .el-tag) { vertical-align: middle; }
 
 .card-header {
   display: flex;
