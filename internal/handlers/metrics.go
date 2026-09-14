@@ -181,7 +181,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 		}
 		metrics, parseErr = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
 	} else {
-		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS, ruleID)
 	}
 	if parseErr != nil {
 		caddyMetricsError(c, parseErr)

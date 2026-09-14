@@ -9,19 +9,24 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// securityBlockedTotal 是安全拦截(WAF/GeoIP/IP ACL coraza 中断 + 限流 429)的 Prometheus
-// 计数器——包级单次构造,Provision 时注册到 Caddy 的 metrics registry
-// (ctx.GetMetricsRegistry——非默认 registry,默认 registry 不会暴露在
-// Caddy /metrics 端点);registerOrExisting 复用已注册实例(reload 幂等,
-// 与 caddy-l4 l4proxy metrics 同模式)。
-var securityBlockedTotal = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Namespace: "lazybalancer",
-		Name:      "security_blocked_total",
-		Help:      "Requests interrupted by the security engine (WAF/GeoIP/IP ACL) with a 4xx status.",
-	},
-	[]string{"rule"},
-)
+// securityBlockedMetricName 是安全拦截计数器指标名。
+const securityBlockedMetricName = "security_blocked_total"
+
+// newSecurityBlockedCounterVec 每次 Provision 新建 CounterVec 并注册——
+// caddy-l4 newProxyMetrics 同模式(l4proxy/metrics.go:54):同 registry 时
+// registerOrExisting 复用已注册实例(不丢数据),跨 reload 新 registry 时
+// 全新注册(归零,与 caddy_http_* 同纪元)——P3-1(第 28.5 轮审计):包级
+// singleton 跨 reload 不归零,与 caddy_http_* 纪元错位,扣除常态钳 4xx 到 0。
+func newSecurityBlockedCounterVec(reg *prometheus.Registry) *prometheus.CounterVec {
+	return registerOrExisting(reg, prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "lazybalancer",
+			Name:      securityBlockedMetricName,
+			Help:      "Requests interrupted by the security engine (WAF/GeoIP/IP ACL) with a 4xx status.",
+		},
+		[]string{"rule"},
+	))
+}
 
 // registerOrExisting 注册到 reg,已注册时复用既有实例——Caddy reload 会重
 // Provision,重复注册 MustRegister 会 panic(崩溃风险,用户裁定零容忍);
@@ -51,11 +56,14 @@ func init() {
 //   - Provision 无操作——无 I/O/无外部依赖/无失败模式,配置加载零风险;
 //   - ServeHTTP 只读检测——不修改请求/响应/错误,链语义与无插件时逐字节一致;
 //   - 无锁/无共享态——prometheus counter 线程安全,reload 幂等;
-//   - 仅用 Caddy 稳定公开 API(caddy.Module/caddyhttp.HandlerError)——
-//     后续 Caddy 升级兼容面最小(该类型自 v2.0 起稳定)。
+//   - API 兼容面:caddy.Module/caddyhttp.HandlerError 稳定(v2.0 起);
+//     ctx.GetMetricsRegistry() 是 EXPERIMENTAL(Caddy 标注 subject to change)
+//     ——已 nil 守卫(移除则降级为不计数而非崩溃),P5-3(第 28.5 轮审计)。
 type SecurityBlockedCounter struct {
 	// Rule 是所属负载均衡规则的 caddy_id(渲染期静态注入)。
 	Rule string `json:"rule,omitempty"`
+
+	metrics *prometheus.CounterVec
 }
 
 // CaddyModule returns the Caddy module information.
@@ -71,7 +79,7 @@ func (SecurityBlockedCounter) CaddyModule() caddy.ModuleInfo {
 // 保证 reload 幂等(重复注册复用实例,不 panic)。
 func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 	if reg := ctx.GetMetricsRegistry(); reg != nil {
-		registerOrExisting(reg, securityBlockedTotal)
+		h.metrics = newSecurityBlockedCounterVec(reg)
 	}
 	return nil
 }
@@ -83,8 +91,15 @@ func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	err := next.ServeHTTP(w, r)
 	var herr caddyhttp.HandlerError
-	if err != nil && errors.As(err, &herr) && herr.ID != "" && herr.StatusCode >= 400 && herr.StatusCode < 500 {
-		securityBlockedTotal.WithLabelValues(h.Rule).Inc()
+	// P3-2(第 28.5 轮审计):「ID 非空+4xx」误纳非安全 4xx——caddyhttp.Error
+	// 恒生成 ID(randString 9 字符),proxy 499/request_body 413 也被计入。
+	// 精确判定:len(ID)==16(coraza tx.ID,randomString(16))或 status==429
+	// (限流,caddyhttp.Error 生成 9 字符 ID)——覆盖安全拦截全部,排除
+	// proxy 499/request_body 413/其他 caddyhttp.Error 4xx(全 9 字符)。
+	// 脆弱点:coraza 若改 tx.ID 长度→断;但 v2.x 一直 16 且 coraza 由
+	// Dockerfile pin+构建断言控制——可控。
+	if err != nil && errors.As(err, &herr) && (len(herr.ID) == 16 || herr.StatusCode == http.StatusTooManyRequests) {
+		h.metrics.WithLabelValues(h.Rule).Inc()
 	}
 	return err
 }

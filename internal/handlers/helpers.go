@@ -655,7 +655,6 @@ type ruleMetricsAggregate struct {
 	status5xx        int64
 	bytesIn          int64
 	bytesOut         int64
-	blocked          int64
 }
 
 type prometheusMetricsIndex struct {
@@ -782,8 +781,6 @@ func (metrics *ruleMetricsAggregate) observeHTTP(name string, value float64) {
 		case "status_5xx":
 			metrics.status5xx += v
 		}
-	case strings.HasPrefix(name, "lazybalancer_security_blocked_total{"):
-		metrics.blocked += int64(value)
 	case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
 		metrics.requestsInFlight += int64(value)
 	case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
@@ -961,12 +958,27 @@ func parseTCPRuleMetricsFromSamples(samples []prometheusSample, upstreams []mode
 	return buildPrometheusMetricsIndex(samples).tcpRuleMetrics(upstreams)
 }
 
-func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) (gin.H, error) {
+func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool, ruleCaddyID ...string) (gin.H, error) {
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
 		return nil, err
 	}
-	return parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: domain, listenPort: listenPort, enableTLS: enableTLS}), nil
+	index := buildPrometheusMetricsIndex(samples)
+	result := index.ruleMetrics(ruleMetricTarget{domain: domain, listenPort: listenPort, enableTLS: enableTLS})
+	// P4-2(第 28.5 轮审计):GET /metrics/rule/:caddy_id 与仪表盘同口径——
+	// 加 blocked 并扣 4xx(钳制 ≥0);ruleCaddyID 为空时(TCP)跳过。
+	if len(ruleCaddyID) > 0 && ruleCaddyID[0] != "" {
+		blocked := index.blockedByRule[ruleCaddyID[0]]
+		result["blocked"] = blocked
+		if s4, ok := result["status_4xx"].(int64); ok && blocked > 0 {
+			if s4-blocked >= 0 {
+				result["status_4xx"] = s4 - blocked
+			} else {
+				result["status_4xx"] = int64(0)
+			}
+		}
+	}
+	return result, nil
 }
 
 func parseRuleMetricsFromSamples(samples []prometheusSample, target ruleMetricTarget) gin.H {
