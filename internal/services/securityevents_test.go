@@ -2569,3 +2569,23 @@ func TestSecurityEventsAttribution_sameDomainTwoRules(t *testing.T) {
 		t.Fatalf("MapHost(:80)=%q, want lb_http", got.caddyID)
 	}
 }
+
+// 单规则形态(2026-09-15 用户问):仅一条规则时,双写键+端口优先无回归。
+func TestSecurityEventsAttribution_singleRuleForms(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_single','single','single.example.com','http',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	rules, _, _, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// host 带端口:精确键命中
+	if got := securityEventsMapHost("single.example.com:443", rules); got.caddyID != "lb_single" {
+		t.Fatalf("MapHost(:443)=%q, want lb_single", got.caddyID)
+	}
+	// host 不带端口(HTTP/2 常见):纯域名键命中(双写兼容)
+	if got := securityEventsMapHost("single.example.com", rules); got.caddyID != "lb_single" {
+		t.Fatalf("MapHost(no port)=%q, want lb_single", got.caddyID)
+	}
+}
