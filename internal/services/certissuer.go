@@ -77,9 +77,13 @@ func parseRetryAfter(header string) time.Duration {
 }
 
 // computeBackoff returns the cooling duration based on attempt count and CA Retry-After.
+// CLCC31-1(第 31 轮审计):CA 提示分支与自有阶梯同封顶 3h——超大 Retry-After
+// 提示值不再令冷却期越过证书过期点(attempts 停 1,maxAttempts 升级兜底
+// 永不触发的形态闭合)。
 func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
+	const maxBackoff = 3 * time.Hour
 	if retryAfter > 0 {
-		return retryAfter
+		return min(retryAfter, maxBackoff)
 	}
 	switch attempts {
 	case 1:

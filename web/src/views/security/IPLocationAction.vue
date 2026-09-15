@@ -546,7 +546,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
   try {
     try {
       await ElMessageBox.confirm(
-        `将把 ${props.ip} 加入策略「${policy.name}」的信任名单，该 IP 将跳过本策略的 WAF 与访问控制检测（限流仍然生效；若其他绑定策略拒绝该 IP，则仍会被拦截）。是否继续？`,
+        `将把 ${props.ip} 加入策略「${policy.name}」的信任名单，该 IP 将全评估不拦截，检测事件全记录（限流仍然生效；信任仅豁免所属策略——其他策略引用同一信任地址列表即可）。是否继续？`,
         '加入信任名单',
         { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
       )

@@ -554,9 +554,10 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID
 // securityEventsAttributePolicy, which needs the triggered rule id from the
 // parsed record.
 func securityEventsMapHost(host string, rules map[string]securityEventsRuleRef) securityEventsRuleRef {
-	// 端口优先(2026-09-15 用户实证):host:port 原文先试精确键(双规则同域名
-	// 按端口精确)——loader 双写 host 与 host:port;无命中走 canonical 纯域名
-	// (单规则兼容)。
+	// 端口优先(2026-09-15):host:port 原文先试精确键(防御性——coraza-caddy
+	// parseServerName 剥离端口,rec.Host 生产恒无端口,该分支不可达但零成本;
+	// 真正修复是 loader 双写保住 rulesByID 两 ref,注入头路径覆盖全部现行事件)。
+	// 无命中走 canonical 纯域名(单规则兼容)。
 	if rule, ok := rules[host]; ok {
 		return rule
 	}

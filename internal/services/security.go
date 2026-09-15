@@ -150,14 +150,20 @@ func crsPoolFingerprint() string {
 
 // prefetchedCRSFingerprint 可选参数：批量生成方按链计算一次并透传，避免
 // 逐 (规则×策略) 对重复执行 DB 查询+stat（审计 B5-F2）；空串回退自算。
-func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, prefetchedCRSFingerprint ...string) string {
+func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, prefetchedCRSFingerprint ...interface{}) string {
 	var sb strings.Builder
 	// R72 三十次 F1：嵌 coraza 池键指纹（见 crsPoolFingerprint）——CRS 文件
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
 	//（旧规则静默继续生效）。
 	crsFp := ""
-	if len(prefetchedCRSFingerprint) > 0 {
-		crsFp = prefetchedCRSFingerprint[0]
+	suppressIPACL := false
+	for _, arg := range prefetchedCRSFingerprint {
+		switch v := arg.(type) {
+		case string:
+			crsFp = v
+		case bool:
+			suppressIPACL = v // SECLB31-2:多策略时抑制策略层 IP ACL(预检集中)
+		}
 	}
 	if crsFp == "" {
 		crsFp = crsPoolFingerprint()
@@ -254,10 +260,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
 	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截, 9 = JSON body processor 激活,
 	// 10 = XML body processor 激活, 11 = 请求体解析失败守卫. The trust list keeps
-	// the historical id:3 unless a bypass-mode rule already owns it. ctl:ruleEngine=Off
-	// short-circuits are emitted first so bypassed and trusted clients never reach
-	// the ACL denies（信任/免检测名单因此也跳过 GeoIP 规则——「跳过检查」语义
-	// 随 v2.2.0 GeoIP 并入 coraza 一并覆盖地域拦截）.
+	// the historical id:3 unless a bypass-mode rule already owns it.
+	// 2026-09-15 用户裁定:bypass(IP ACL bypass 模式)保持 ctl:ruleEngine=Off 短路;
+	// 信任名单改 ctl:ruleEngine=DetectionOnly——信任流量全评估不拦但全记录
+	// (动作=检测),不再是「never reach ACL denies」的静默跳过。
 	bypassEmitted := false
 	if p.IPACLEnabled && p.IPACLMode == "bypass" && len(ipACLList) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipACLList, ",")))
@@ -274,15 +280,21 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		// 信任流量必须进事件日志可见)。
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", strings.Join(ipWL, ","), trustID))
 	}
-	if p.IPACLEnabled && len(ipACLList) > 0 {
-		if p.IPACLMode == "allow" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
-		} else if p.IPACLMode == "deny" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
+	// SECLB31-2(第 31 轮审计,A 方案):多策略(预检存在)时预检已集中评估
+	// IP ACL(deny 并集/黑名单并集/allow 交集),策略层再发射同规则=信任 IP
+	// 每层 DetectionOnly 各记一次=事件重复。多策略时策略层抑制 IP ACL 发射
+	// (预检统一记录);单策略无预检保持原样。
+	if !suppressIPACL {
+		if p.IPACLEnabled && len(ipACLList) > 0 {
+			if p.IPACLMode == "allow" {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
+			} else if p.IPACLMode == "deny" {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
+			}
 		}
-	}
-	if len(ipBL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipBL, ",")))
+		if len(ipBL) > 0 {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipBL, ",")))
+		}
 	}
 
 	// GeoIP 区域拦截（v2.2.0 改走 coraza：被拦请求产生 audit.log → 安全事件
@@ -711,11 +723,11 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
 // 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
 // store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, bodyLimitMB ...int) map[string]interface{} {
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, suppressIPACL bool, bodyLimitMB ...int) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
-	directives := BuildCorazaDirectives(policy, store, crsFp)
+	directives := BuildCorazaDirectives(policy, store, crsFp, suppressIPACL)
 	if directives == "" {
 		return nil
 	}
@@ -830,8 +842,11 @@ func cidrIntersectEntry(a, b string) string {
 // `[coraza_P1, coraza_P2]` 链中 P1 的 CRS 先评估产生检测事件、P2 的 IP ACL 才
 // 拦截的双重检测问题（IP ACL 最高优先级）。预检仍是 coraza 拒绝：audit log
 // 留痕供安全事件管线归因（id:2/id:4 归因口径不变），deny 403 → errors 路由 →
-// 拦截页。信任名单/免检测不并入预检（deny 优先于信任，且信任仅豁免所属策略
-// 的检查、限流仍生效的语义保持不变）。无 deny 侧控制时返回空串（不发射）。
+// 拦截页。2026-09-15 用户裁定:信任最高优先——预检信任 ctl:ruleEngine=
+// DetectionOnly 先行(id:3,取代「deny 优先于信任」与「并入 allow 放行集」),
+// 信任 IP 经 DetectionOnly 后 deny/黑名单/GeoIP 全评估不拦但全记录;跨策略
+// 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);限流仍生效。
+// 无 deny 侧控制时返回空串（不发射）。
 func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	var denyUnion, blacklistUnion []string
 	var allowLists [][]string

@@ -1300,7 +1300,7 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 			if err := database.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, tc.caddyID).Scan(&protocol); err != nil || protocol != "http" {
 				protocol = "tcp"
 			}
-			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "")
+			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "", false)
 			if protocol != "http" {
 				handler = nil
 			}

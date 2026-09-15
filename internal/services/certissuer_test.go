@@ -955,3 +955,19 @@ func TestDetectRateLimit_string_fallback_ignores_bare_429_substring(t *testing.T
 		})
 	}
 }
+
+// CLCC31-1(第 31 轮审计):CA 429 Retry-After 提示分支封顶 3h。
+func TestComputeBackoff_retryAfterClampedTo3h(t *testing.T) {
+	if got := computeBackoff(1, 24*time.Hour); got != 3*time.Hour {
+		t.Fatalf("computeBackoff(1, 24h)=%v, want 3h (clamped)", got)
+	}
+	if got := computeBackoff(1, time.Hour); got != time.Hour {
+		t.Fatalf("computeBackoff(1, 1h)=%v, want 1h (under cap)", got)
+	}
+	if got := computeBackoff(1, 0); got != time.Hour {
+		t.Fatalf("computeBackoff(1, 0)=%v, want 1h (ladder)", got)
+	}
+	if got := computeBackoff(2, 0); got != 2*time.Hour {
+		t.Fatalf("computeBackoff(2, 0)=%v, want 2h (ladder)", got)
+	}
+}
