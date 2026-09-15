@@ -28,7 +28,8 @@ type RateLimitHostBlocks struct {
 const overviewMetricsReadLimit = int64(16 << 20)
 
 // ScrapeRateLimitBlocks 抓取 Caddy admin /metrics 并按站点聚合 429 限流拦截计数。
-// 计数自 Caddy 进程启动以来累计（重启归零），非按天口径。任何抓取/解析失败
+// 计数自最近一次 Caddy 配置重载以来累计（/load 重建 registry 即归零；进程重启
+// 同），非按天口径。任何抓取/解析失败
 // 都返回 error，由调用方决定降级策略，绝不静默返回空列表。
 func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 	resp, err := overviewMetricsHTTPClient.Get(metricsURL)

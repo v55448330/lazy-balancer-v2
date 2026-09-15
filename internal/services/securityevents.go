@@ -519,15 +519,59 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 	return false
 }
 
+// securityEventsFallbackCanProduce(A34-CORE-F1/F2,第 34 轮审计 P2):fallback
+// 归因的模式/动作可行性门——与 contains() 各分支的模式门同口径(:459 CRS
+// 仅 blocking/detection、:495 自定义规则 off 零发射),但只核「该策略的当前
+// 模式在物理上能否产出此 (动作,规则 id) 事件」,不核名单成员(fallback 的
+// 存在理由正是配置可能已在发射后变更)。原 fallback 裸返首绑定策略:
+// custom_only 首绑认领 blocked id:11 事件(其引擎 id:11 只能 logged,F1)、
+// 摄取窗口内改绑后 custom_only 认领 CRS blocked 事件(F2)。
+func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, ruleTriggered string) bool {
+	if policy == nil {
+		return false
+	}
+	n, err := strconv.Atoi(ruleTriggered)
+	if err != nil {
+		return false
+	}
+	// off=全关零发射(BuildCorazaDirectives 早退),不得认领任何事件。
+	if policy.Mode == "off" {
+		return false
+	}
+	// detection=DetectionOnly 事务级零中断,不得认领 blocked。
+	if policy.Mode == "detection" && action == "blocked" {
+		return false
+	}
+	if policy.Mode == "custom_only" {
+		// custom_only 零 CRS Include(:459 同口径),不得认领 CRS 事件。
+		if n >= 900000 && n < 1000000 {
+			return false
+		}
+		if action == "blocked" {
+			// custom_only 能阻断的只有自定义 block 规则(10000-899999)与
+			// ACL/GeoIP(id:2/4/8,与模式无关的发射);CRS 评分链(949 及
+			// id:11 守卫→949)不存在——其余 id 的 blocked 物理不可产。
+			switch {
+			case n >= 10000 && n < 900000:
+			case n == 2 || n == 4 || n == 8:
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
 // ID 属于哪个策略（custom_rules / CRS 组 / IP ACL 拒绝带匹配），重叠时取绑定顺序
 // 第一条（policy_id ASC 的第一个）。策略均未显式包含时回退到绑定顺序中第一个
-// ENABLED 策略（policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该
-// lb_rule 的可用主策略）。无任何启用绑定策略、或 lb_rule 完全未绑定（无
+// ENABLED 且模式/动作可行的策略（A34-CORE-F1/F2 门,securityEventsFallbackCanProduce;
+// policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该
+// lb_rule 的可用主策略）。无任何启用且可行绑定策略、或 lb_rule 完全未绑定（无
 // security_policy_bindings 行）返回零值 (0, "")。ACL 拒绝带（id 4/2）无属主时
 // 同样走该回退而非归零：事件既已被摄取，必是某绑定策略在发射时的配置发出了它
 // （当前配置可能已变更），归到首启用绑定是最接近发射现实的归属。
-func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
+func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
 	policyIDs := bindings[ruleCaddyID]
 	if len(policyIDs) == 0 {
 		return 0, ""
@@ -543,6 +587,9 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID
 	}
 	for _, pid := range policyIDs {
 		if p := policyByID[pid]; p != nil {
+			if !securityEventsFallbackCanProduce(p, action, ruleTriggered) {
+				continue
+			}
 			return pid, p.Name
 		}
 	}
@@ -912,7 +959,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			if rule.caddyID == "" {
 				rule = securityEventsMapHost(rec.Host, rules)
 			}
-			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, policyByID, bindings)
+			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, rec.Action, policyByID, bindings)
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
 				rule.name, policyName, rec.TransactionID, rec.RequestHeaders, rec.RequestBody); ierr != nil {

@@ -265,7 +265,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 		t.Errorf("mapHost(GO029.COM)=(%q,%q), want (lb_rule1,test rule)", rule.caddyID, rule.name)
 	}
 	// And: attribution resolves policy 7 (crs_rule_groups 空数组 = 包含全部 CRS 规则)
-	pid, pname := securityEventsAttributePolicy(rule.caddyID, "942100", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy(rule.caddyID, "942100", "blocked", policyByID, bindings)
 	if pid != 7 || pname != "policy-seven" {
 		t.Errorf("attributePolicy=(%d,%q), want (7,policy-seven)", pid, pname)
 	}
@@ -273,7 +273,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 	if rule := securityEventsMapHost("unknown.example.com", rules); rule.caddyID != "" {
 		t.Errorf("mapHost(unknown)=%q, want \"\"", rule.caddyID)
 	}
-	if pid, pname := securityEventsAttributePolicy("", "942100", policyByID, bindings); pid != 0 || pname != "" {
+	if pid, pname := securityEventsAttributePolicy("", "942100", "blocked", policyByID, bindings); pid != 0 || pname != "" {
 		t.Errorf("attributePolicy(empty)=(%d,%q), want (0,\"\")", pid, pname)
 	}
 	// When/Then: bare IPs never match a domain rule
@@ -347,7 +347,7 @@ func TestSecurityEventsTickStoresResolvedNames(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_named1','命名规则','http','go029.com',443,1)`); err != nil {
 		t.Fatal(err)
 	}
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name) VALUES ('命名策略')`)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode) VALUES ('命名策略','blocking')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	}
 	// 启用策略 7（crs_rule_groups 空数组 = 包含全部 CRS 规则）：绑定必须指向
 	// 真实存在的启用策略，归因才会在 contains 路径命中而非悬空回退零值。
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (7,'policy-seven',1,'[]','[]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (7,'policy-seven',1,'blocking','[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',7)`); err != nil {
@@ -1916,7 +1916,7 @@ func TestSecurityEventsAttribution_LegacyBlacklistDenyPicksOwnerPolicy(t *testin
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", policyByID, bindings)
 	if pid != 3 || pname != "policy-B" {
 		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 遗留黑名单拒绝必须归因到拥有 ip_blacklist 的策略", pid, pname)
 	}
@@ -1948,7 +1948,7 @@ func TestSecurityEventsAttribution_IPACLDenyPicksOwnerPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", policyByID, bindings)
 	if pid != 4 || pname != "policy-C" {
 		t.Fatalf("attribution=(%d,%q), want (4,policy-C) — IP ACL 黑名单模式拒绝必须归因到拥有该 ACL 的策略", pid, pname)
 	}
@@ -1965,7 +1965,7 @@ func TestSecurityEventsAttribution_BlacklistDenyFallsBackToFirstEnabledWhenNoOwn
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]'),(3,'policy-B',1,'[]','[]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'blocking','[]','[]'),(3,'policy-B',1,'blocking','[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',3)`); err != nil {
@@ -1975,7 +1975,7 @@ func TestSecurityEventsAttribution_BlacklistDenyFallsBackToFirstEnabledWhenNoOwn
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", policyByID, bindings)
 	if pid != 1 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — 无属主时必须回退到第一个启用绑定策略", pid, pname)
 	}
@@ -1991,10 +1991,10 @@ func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'blocking','[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'[]','[]',1,'allow','["1.2.3.4"]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'blocking','[]','[]',1,'allow','["1.2.3.4"]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',4)`); err != nil {
@@ -2004,7 +2004,7 @@ func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", policyByID, bindings)
 	if pid != 1 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — allow 模式 ACL 不拥有 id:2 归属，必须回退首绑定", pid, pname)
 	}
@@ -2587,5 +2587,68 @@ func TestSecurityEventsAttribution_singleRuleForms(t *testing.T) {
 	// host 不带端口(HTTP/2 常见):纯域名键命中(双写兼容)
 	if got := securityEventsMapHost("single.example.com", rules); got.caddyID != "lb_single" {
 		t.Fatalf("MapHost(no port)=%q, want lb_single", got.caddyID)
+	}
+}
+
+// A34-CORE-F1/F2(第 34 轮审计,P2):fallback 归因循环(securityevents.go)原先
+// 无模式/动作可行性门——contains() 的 off/custom_only 门只守 contains 路径,
+// fallback 裸返首绑定策略,导致「custom_only 策略认领 blocked id:11 事件」
+// (其引擎 id:11 只能 logged)与「custom_only 认领 CRS blocked 事件」(摄取
+// 窗口内绑定变更)两类不可能归因。修复:fallback 加同款可行性门。
+func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	// Given:五策略——custom_only 首绑/blocking 次绑/detection/off/custom_only 单绑
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES
+		(1,'p-customonly',1,'custom_only','[5]','[]'),
+		(2,'p-blocking',1,'blocking','[]','[]'),
+		(3,'p-detection',1,'detection','[]','["94"]'),
+		(4,'p-off',1,'off','[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_r1',1),('lb_r1',2),
+		('lb_r2',1),
+		('lb_r3',3),
+		('lb_r4',4),('lb_r4',2)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	cases := []struct {
+		name      string
+		rule      string
+		triggered string
+		action    string
+		wantPID   int
+	}{
+		// F1:custom_only 首绑不得认领 blocked id:11(其引擎 id:11 只能 logged)
+		// ——跳过归 blocking 次绑(949 实际拦截方)
+		{"F1 custom_only-first id:11 blocked", "lb_r1", "11", "blocked", 2},
+		// F2:custom_only 单绑不得认领 CRS blocked(零 CRS Include)
+		{"F2 custom_only-only CRS blocked", "lb_r2", "913100", "blocked", 0},
+		// detection 不得认领 blocked(DetectionOnly 零中断;913 不在组→contains 不命中→fallback)
+		{"detection blocked rejected", "lb_r3", "913100", "blocked", 0},
+		// 回归:custom_only 可产自定义 block 规则事件(id 10005=规则5)
+		{"custom_only custom-rule blocked ok", "lb_r2", "10005", "blocked", 1},
+		// 回归:off 零发射不得认领→跳过归 blocking
+		{"off-first skipped", "lb_r4", "913100", "blocked", 2},
+		// 回归:blocking 正常认领 logged
+		{"blocking logged ok", "lb_r4", "913100", "logged", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, policyByID, bindings)
+			if pid != tc.wantPID {
+				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, tc.triggered, tc.action, pid, tc.wantPID)
+			}
+		})
 	}
 }
