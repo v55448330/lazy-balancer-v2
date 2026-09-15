@@ -2526,3 +2526,46 @@ func TestSecurityEventsTick_missingFileResetsStaleOffset(t *testing.T) {
 		t.Fatalf("offset=%d after missing-file creation, want 0 (stale offset must reset)", offset)
 	}
 }
+
+// 同域名双规则归因(2026-09-15 用户实证):rules[host] 覆盖致 https 规则 ref
+// 蒸发,rulesByID 缺 https id → header=https-id 回退 MapHost 命中 http 规则。
+// host:port 双写后两 ref 共存,归因精确。
+func TestSecurityEventsAttribution_sameDomainTwoRules(t *testing.T) {
+	_, database := newClusterTestService(t)
+	// https 规则先创建(443),http 规则后创建(80)——用户生产形态
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES
+		('lb_https','https-rule','example.com','http',443,1),
+		('lb_http','http-rule','example.com','http',80,1)`); err != nil {
+		t.Fatal(err)
+	}
+	rules, _, _, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// rulesByID 必须同时含两个 id(https ref 未被蒸发)
+	rulesByID := make(map[string]securityEventsRuleRef, len(rules))
+	for _, ref := range rules {
+		rulesByID[ref.caddyID] = ref
+	}
+	if rulesByID["lb_https"].caddyID == "" {
+		t.Fatal("https rule ref evicted from rulesByID (root cause of misattribution)")
+	}
+	if rulesByID["lb_http"].caddyID == "" {
+		t.Fatal("http rule ref missing from rulesByID")
+	}
+	// header=https-id 归因命中 https 规则
+	if got := rulesByID["lb_https"]; got.name != "https-rule" {
+		t.Fatalf("attribution for https-id=%q, want https-rule", got.name)
+	}
+	// header=http-id 归因命中 http 规则
+	if got := rulesByID["lb_http"]; got.name != "http-rule" {
+		t.Fatalf("attribution for http-id=%q, want http-rule", got.name)
+	}
+	// 兜底:example.com:443 → https;example.com:80 → http
+	if got := securityEventsMapHost("example.com:443", rules); got.caddyID != "lb_https" {
+		t.Fatalf("MapHost(:443)=%q, want lb_https", got.caddyID)
+	}
+	if got := securityEventsMapHost("example.com:80", rules); got.caddyID != "lb_http" {
+		t.Fatalf("MapHost(:80)=%q, want lb_http", got.caddyID)
+	}
+}

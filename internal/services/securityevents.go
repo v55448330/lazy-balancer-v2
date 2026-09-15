@@ -309,14 +309,15 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		return nil, nil, nil, errors.New("security events: database not initialized")
 	}
 	rules := make(map[string]securityEventsRuleRef)
-	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,''), COALESCE(name,'') FROM lb_rules WHERE protocol='http' AND COALESCE(domain,'') != ''`)
+	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,''), COALESCE(name,''), listen_port FROM lb_rules WHERE protocol='http' AND COALESCE(domain,'') != ''`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load rules: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var caddyID, domain, name string
-		if err := rows.Scan(&caddyID, &domain, &name); err != nil {
+		var listenPort int
+		if err := rows.Scan(&caddyID, &domain, &name, &listenPort); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan rule: %w", err)
 		}
 		canonical, err := db.CanonicalDomains(domain)
@@ -324,7 +325,13 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 			continue // a domain that cannot be canonicalized can never match
 		}
 		for _, host := range strings.Split(canonical, ",") {
+			// 端口维度(2026-09-15 用户裁定):同域名 http:80+https:443 双规则
+			// 时,纯域名键被后创建规则覆盖(创建序),兜底错配。双写纯域名
+			// (向后兼容单规则)+host:port(精确),MapHost 按端口优先。
 			rules[host] = securityEventsRuleRef{caddyID: caddyID, name: name}
+			if listenPort > 0 {
+				rules[host+":"+fmt.Sprint(listenPort)] = securityEventsRuleRef{caddyID: caddyID, name: name}
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -547,6 +554,12 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID
 // securityEventsAttributePolicy, which needs the triggered rule id from the
 // parsed record.
 func securityEventsMapHost(host string, rules map[string]securityEventsRuleRef) securityEventsRuleRef {
+	// 端口优先(2026-09-15 用户实证):host:port 原文先试精确键(双规则同域名
+	// 按端口精确)——loader 双写 host 与 host:port;无命中走 canonical 纯域名
+	// (单规则兼容)。
+	if rule, ok := rules[host]; ok {
+		return rule
+	}
 	canonical, err := db.CanonicalDomains(host)
 	if err != nil {
 		return securityEventsRuleRef{} // IPs and invalid domains never match a domain rule

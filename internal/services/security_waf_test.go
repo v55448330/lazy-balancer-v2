@@ -47,10 +47,11 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 	// When
 	directives := BuildCorazaDirectives(policy, nil)
 
-	// Then the bypass rule keeps id:3 with the ACL list and the trust list moves to
-	// id:5, so both ctl:ruleEngine=Off rules coexist without a duplicate SecRule id
+	// Then the bypass rule keeps id:3 (Off+auditOff,超授权外保持);
+	// 信任名单 id:5 改 DetectionOnly(2026-09-15 用户裁定:信任流量全评估+
+	// 事件记录动作=检测,不再静默)——两语义共存无重复 SecRule id。
 	bypassRule := `SecRule REMOTE_ADDR "@ipMatch 203.0.113.0/24,192.0.2.7" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:5,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:5,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
 	if !strings.Contains(directives, bypassRule) {
 		t.Fatalf("directives missing bypass rule %q:\n%s", bypassRule, directives)
 	}
@@ -82,14 +83,15 @@ func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
 	// When
 	directives := BuildCorazaDirectives(policy, nil)
 
-	// Then the trust-list rule takes id:3 (no bypass rule present) and the
-	// ctl:ruleEngine=Off short-circuit is emitted before the ACL deny rule
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
+	// Then the trust-list rule takes id:3 (no bypass rule present)——
+	// DetectionOnly short-circuit(2026-09-15 用户裁定:信任可见放行)emitted
+	// before the ACL deny rule
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
 	aclRule := `SecRule REMOTE_ADDR "!@ipMatch 203.0.113.0/24" "id:2,phase:1,deny,status:403`
 	if !strings.Contains(directives, trustRule) {
 		t.Fatalf("directives missing trust-list rule %q:\n%s", trustRule, directives)
 	}
-	trustIdx := strings.Index(directives, "ctl:ruleEngine=Off,ctl:auditEngine=Off")
+	trustIdx := strings.Index(directives, "ctl:ruleEngine=DetectionOnly")
 	aclIdx := strings.Index(directives, aclRule)
 	if trustIdx < 0 || aclIdx < 0 {
 		t.Fatalf("directives must contain both the ctl short-circuit and the ACL rule:\n%s", directives)

@@ -196,8 +196,8 @@ func TestBuildCorazaDirectives_whitelistRefsMergedIntoTrustRule(t *testing.T) {
 		t.Fatal("expected bound policy to load")
 	}
 	directives := BuildCorazaDirectives(policy, nil)
-	if !strings.Contains(directives, "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off") {
-		t.Fatalf("trust rule must be emitted:\n%s", directives)
+	if !strings.Contains(directives, "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly") {
+		t.Fatalf("trust rule must be emitted (DetectionOnly, 2026-09-15 裁定):\n%s", directives)
 	}
 	if !strings.Contains(directives, "@ipMatch 198.51.100.9,198.51.100.7") {
 		t.Fatalf("trust rule must contain inline + list entries (inline first):\n%s", directives)

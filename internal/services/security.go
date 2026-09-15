@@ -268,10 +268,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		if bypassEmitted {
 			trustID = 5
 		}
-		// ctl:auditEngine=Off 同步关闭审计引擎——规则引擎关闭后 SecAuditEngine
-		// 仍会记录该事务到 audit.log（审计引擎独立于规则引擎），摄入管线拾取
-		// 后误产信任 IP 的检测事件。两 ctl 并用才能让信任 IP 完全静默。
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipWL, ","), trustID))
+		// 2026-09-15 用户裁定:信任名单从「完全静默」改「可见放行」——
+		// ctl:ruleEngine=DetectionOnly(全评估不拦,事件动作=检测);
+		// 删 ctl:auditEngine=Off(原为实现信任完全静默同步关审计,现反向需求:
+		// 信任流量必须进事件日志可见)。
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", strings.Join(ipWL, ","), trustID))
 	}
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		if p.IPACLMode == "allow" {
