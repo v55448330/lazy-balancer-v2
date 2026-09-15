@@ -341,11 +341,13 @@ func TestMetricsService_storePerHostMetrics_ruleLabelAggregation(t *testing.T) {
 		t.Fatalf("seed rule: %v", err)
 	}
 	service := &MetricsService{}
+	// SECLB30-1:fixture 必须是真实 exposition 形态(class/direction 在前,
+	// rule 在后——client_golang 字典序);原 fixture rule 在前=假绿(R-8 形态)。
 	text := `lazybalancer_requests_total{rule="lb_rl1"} 100
-lazybalancer_request_status_total{rule="lb_rl1",class="2xx"} 80
-lazybalancer_request_status_total{rule="lb_rl1",class="4xx"} 20
-lazybalancer_bytes_total{rule="lb_rl1",direction="in"} 1024
-lazybalancer_bytes_total{rule="lb_rl1",direction="out"} 2048
+lazybalancer_request_status_total{class="2xx",rule="lb_rl1"} 80
+lazybalancer_request_status_total{class="4xx",rule="lb_rl1"} 20
+lazybalancer_bytes_total{direction="in",rule="lb_rl1"} 1024
+lazybalancer_bytes_total{direction="out",rule="lb_rl1"} 2048
 lazybalancer_security_blocked_total{rule="lb_rl1"} 5`
 
 	// When
@@ -521,5 +523,33 @@ func TestMetricsServiceCleanupHistory_fallsBackToDefaultMonthsWhenRetentionReadF
 	}
 	if freshRows != 1 {
 		t.Fatalf("fresh rows after cleanup = %d, want 1", freshRows)
+	}
+}
+
+// SECLB30-1(P1,第 30 轮审计):正则标签顺序与真实 exposition 一致——
+// client_golang 字典序(class/direction 在前,rule 在后)。fixture 必须
+// 真实形态(R-8:副本与源分叉给假绿)。
+func TestMetricsService_storePerHostMetrics_realExpositionOrder(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_rl5','rl5','a.example.com','http',8080,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	service := &MetricsService{}
+	// 真实 exposition 形态(容器实证):class/direction 在前,rule 在后
+	text := `lazybalancer_requests_total{rule="lb_rl5"} 100
+lazybalancer_request_status_total{class="2xx",rule="lb_rl5"} 80
+lazybalancer_request_status_total{class="4xx",rule="lb_rl5"} 20
+lazybalancer_bytes_total{direction="in",rule="lb_rl5"} 1024
+lazybalancer_bytes_total{direction="out",rule="lb_rl5"} 2048`
+
+	if err := service.storePerHostMetrics(text); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	var requests, s2xx, s4xx, bytesIn, bytesOut int64
+	if err := db.MetricsDB.QueryRow(`SELECT requests_total, requests_2xx, requests_4xx, bytes_in, bytes_out FROM metrics_history WHERE rule_id='lb_rl5'`).Scan(&requests, &s2xx, &s4xx, &bytesIn, &bytesOut); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if requests != 100 || s2xx != 80 || s4xx != 20 || bytesIn != 1024 || bytesOut != 2048 {
+		t.Fatalf("stored=(%d,%d,%d,%d,%d), want (100,80,20,1024,2048)", requests, s2xx, s4xx, bytesIn, bytesOut)
 	}
 }

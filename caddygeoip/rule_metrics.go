@@ -125,28 +125,34 @@ func (h *RuleMetricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, n
 	if h.statusTotal != nil && (err == nil || isHandlerError(err)) {
 		h.statusTotal.WithLabelValues(h.Rule, statusClass(statusCode)).Inc()
 	}
-	if h.bytesTotal != nil {
+	// SECLB30-3(第 30 轮审计):非 HandlerError 错误不计字节(与 Caddy 自身
+	// instrumentation 同口径——错误路径不观测 size);HandlerError 携 statusCode
+	// 照常计(F5 只对齐了状态类,字节漏对齐)。
+	if h.bytesTotal != nil && (err == nil || isHandlerError(err)) {
 		h.bytesTotal.WithLabelValues(h.Rule, "in").Add(float64(computeApproximateRequestSize(r)))
 		h.bytesTotal.WithLabelValues(h.Rule, "out").Add(float64(wrec.Size()))
 	}
 	return err
 }
 
-// computeApproximateRequestSize 与 Caddy 自身 metrics 同款的请求大小估算
-// (头+体,http_version+method+uri+host+headers+content_length)。
-// 移植自 caddyhttp/metrics.go(稳定语义,避免依赖 internal 不可导入路径)。
+// computeApproximateRequestSize 与 Caddy 自身 metrics 完全一致的请求大小估算
+// (头+体:url+method+proto+headers+host+content_length,无分隔符)——
+// SR30-4(第 30 轮审计):原版无 +4/header,此前实现是 promhttp 变体致
+// bytes_in 与全局口径恒定 +4/header 偏差。逐行对齐 caddyhttp/metrics.go:388。
 func computeApproximateRequestSize(r *http.Request) int64 {
 	size := 0
 	if r.URL != nil {
 		size += len(r.URL.String())
 	}
-	size += len(r.Method) + len(r.Proto) + len(r.Host)
+	size += len(r.Method) + len(r.Proto)
 	for name, values := range r.Header {
+		size += len(name)
 		for _, value := range values {
-			size += len(name) + len(value) + 4
+			size += len(value)
 		}
 	}
-	if r.ContentLength > 0 {
+	size += len(r.Host)
+	if r.ContentLength != -1 {
 		size += int(r.ContentLength)
 	}
 	return int64(size)

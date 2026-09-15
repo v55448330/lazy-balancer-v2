@@ -675,11 +675,11 @@ type prometheusMetricsIndex struct {
 
 func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIndex {
 	index := prometheusMetricsIndex{
-		hosts:         make(map[string]*ruleMetricsAggregate),
-		httpHosts:     make(map[string]*ruleMetricsAggregate),
-		httpBareHosts: make(map[string]*ruleMetricsAggregate),
-		tcpUpstreams:  make(map[string]*ruleMetricsAggregate),
-		blockedByRule:      make(map[string]int64),
+		hosts:             make(map[string]*ruleMetricsAggregate),
+		httpHosts:         make(map[string]*ruleMetricsAggregate),
+		httpBareHosts:     make(map[string]*ruleMetricsAggregate),
+		tcpUpstreams:      make(map[string]*ruleMetricsAggregate),
+		blockedByRule:     make(map[string]int64),
 		ruleMetricsByRule: make(map[string]*ruleMetricsAggregate),
 	}
 	for _, sample := range samples {
@@ -724,6 +724,15 @@ func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
 	// 2026-09-15 用户裁定:caddy_id 直接匹配(lb_rule_metrics)——优先;
 	// 域名匹配兜底(未升级插件的形态/过渡期)。
 	if target.ruleID != "" {
+		// SR30-1(P4,第 30 轮审计):插件已升级(ruleMetricsByRule 全局非空)
+		// 时本规则缺序列=零流量,返回空而非域名兜底(兜底在同裸域名多端口
+		// 拓扑下跨规则串流量;兜底仅在插件未升级(全局空)时启用)。
+		if len(index.ruleMetricsByRule) > 0 {
+			if agg := index.ruleMetricsByRule[target.ruleID]; agg != nil {
+				return agg.ruleMetrics(true)
+			}
+			return emptyRuleMetrics() // 本规则零流量(插件已升级,无序列)
+		}
 		if agg := index.ruleMetricsByRule[target.ruleID]; agg != nil {
 			return agg.ruleMetrics(true)
 		}
@@ -874,7 +883,11 @@ func (index *prometheusMetricsIndex) addSample(sample prometheusSample) {
 
 	if rule := extractLabel(name, "rule"); rule != "" {
 		if strings.HasPrefix(name, "lazybalancer_security_blocked_total{") {
+			// SECLB30-2(P5,第 30 轮审计):blocked-only 样本不建 ruleMetricsByRule
+			// 空聚合——否则过渡形态(插件未升级)下 ruleMetrics early return 空,
+			// 架空域名兜底。blocked 仅记 blockedByRule。
 			index.blockedByRule[rule] += int64(value)
+			return
 		}
 		// lb_rule_metrics 全量流量指标归集(2026-09-15)
 		agg := index.aggregateFor(index.ruleMetricsByRule, rule)
@@ -1010,7 +1023,7 @@ func deductBlockedFrom4xx(metrics gin.H, blocked int64) {
 	}
 }
 
-func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool, ruleCaddyID ...string) (gin.H, error) {
+func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, enableTLS bool, ruleCaddyID ...string) (gin.H, error) { // SR30-3:protocol 死参移除
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
 		return nil, err

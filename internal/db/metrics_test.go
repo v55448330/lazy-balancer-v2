@@ -136,8 +136,8 @@ func TestCleanupMetricsHistory_loopsAcrossBatches(t *testing.T) {
 }
 
 func TestInitialize_omitsMetricsRetentionColumnAndAddsCompositeIndexes(t *testing.T) {
-	// S-7（2026-09-06 裁定）：指标保留期改用 audit_retention_months，
-	// metrics_retention_days 死列不再建（随迁移删除）；复合索引契约保留。
+	// metrics_retention_days 死列不再建(2026-09-15 用户裁定:固定 7 天窗口,
+	// 不读任何保留配置项);复合索引契约保留。
 	// Given
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
 	if err := Initialize(t.TempDir()); err != nil {

@@ -17,29 +17,32 @@ import (
 )
 
 var (
-	prometheusRequestTotalPattern    = regexp.MustCompile(`caddy_http_requests_total\{[^}]*\}\s+(\S+)`)
-	prometheusStatusCountPattern     = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*\}\s+(\S+)`)
-	prometheusResponseSizePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
-	prometheusRequestSizePattern     = regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
-	prometheusLatencyBucketPattern   = regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusBlockedPattern         = regexp.MustCompile(`lazybalancer_security_blocked_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusRuleRequestsPattern    = regexp.MustCompile(`lazybalancer_requests_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusRuleStatusPattern      = regexp.MustCompile(`lazybalancer_request_status_total\{[^}]*rule="([^"]+)"[^}]*class="([^"]+)"[^}]*\}\s+(\S+)`)
-	prometheusRuleBytesPattern       = regexp.MustCompile(`lazybalancer_bytes_total\{[^}]*rule="([^"]+)"[^}]*direction="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRequestTotalPattern  = regexp.MustCompile(`caddy_http_requests_total\{[^}]*\}\s+(\S+)`)
+	prometheusStatusCountPattern   = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*\}\s+(\S+)`)
+	prometheusResponseSizePattern  = regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
+	prometheusRequestSizePattern   = regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
+	prometheusLatencyBucketPattern = regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusBlockedPattern       = regexp.MustCompile(`lazybalancer_security_blocked_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRuleRequestsPattern  = regexp.MustCompile(`lazybalancer_requests_total\{[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
+	// SECLB30-1(P1,第 30 轮审计):client_golang MakeLabelPairs 字典序排序
+	// (value.go:235)——真实 exposition 是 class/direction 在前、rule 在后,
+	// 原正则要求 rule 在前恒不匹配(状态码/字节系列恒 0,已随 v2.2.10 发布)。
+	prometheusRuleStatusPattern = regexp.MustCompile(`lazybalancer_request_status_total\{[^}]*class="([^"]+)"[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusRuleBytesPattern  = regexp.MustCompile(`lazybalancer_bytes_total\{[^}]*direction="([^"]+)"[^}]*rule="([^"]+)"[^}]*\}\s+(\S+)`)
 )
 
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
-	metricsURL                 string
-	interval                   int
-	client                     *http.Client
-	stopCh                     chan struct{}
-	stopOnce                   sync.Once
-	overview                   models.MetricsOverview
-	mu                         sync.RWMutex
-	lastTotal                  int64
-	lastSampleAt               time.Time
-	hasLastSample              bool
+	metricsURL    string
+	interval      int
+	client        *http.Client
+	stopCh        chan struct{}
+	stopOnce      sync.Once
+	overview      models.MetricsOverview
+	mu            sync.RWMutex
+	lastTotal     int64
+	lastSampleAt  time.Time
+	hasLastSample bool
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -432,8 +435,8 @@ func parseRuleLabelMetrics(text string) (map[string]*ruleLabelAggregate, error) 
 		if err != nil {
 			return nil, fmt.Errorf("parse rule status %q: %w", m[3], err)
 		}
-		agg := get(m[1])
-		switch m[2] {
+		agg := get(m[2]) // SECLB30-1:组序对调后 m[2]=rule, m[1]=class
+		switch m[1] {
 		case "2xx":
 			agg.status2xx += v
 		case "3xx":
@@ -449,8 +452,8 @@ func parseRuleLabelMetrics(text string) (map[string]*ruleLabelAggregate, error) 
 		if err != nil {
 			return nil, fmt.Errorf("parse rule bytes %q: %w", m[3], err)
 		}
-		agg := get(m[1])
-		if m[2] == "in" {
+		agg := get(m[2]) // SECLB30-1:组序对调后 m[2]=rule, m[1]=direction
+		if m[1] == "in" {
 			agg.bytesIn += v
 		} else {
 			agg.bytesOut += v
@@ -466,10 +469,6 @@ func parseRuleLabelMetrics(text string) (map[string]*ruleLabelAggregate, error) 
 	return byRule, nil
 }
 
-
-// storePerHostMetrics maps host labels to HTTP rules by domain and writes a
-// cumulative history row per rule; TCP rules produce no rows because caddy-l4
-// exports no per-rule traffic counters.
 // storePerHostMetrics 按 rule label(lazybalancer_*)写规则级历史行——
 // 2026-09-15 用户裁定:caddy_id 直接匹配替代域名/host 匹配(通配符/大小写/
 // IDNA/多域名/空域名全部天然正确,且不再有静默 continue 失配)。

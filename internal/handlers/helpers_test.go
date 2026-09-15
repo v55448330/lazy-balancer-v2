@@ -738,7 +738,7 @@ func TestParseRuleMetricsFromPrometheus_normalizes_configured_hosts(t *testing.T
 			body := `caddy_http_requests_total{handler="reverse_proxy",host="` + test.metricHost + `"} 5`
 
 			// When
-			metrics, err := parseRuleMetricsFromPrometheus(body, test.domain, test.listenPort, "http", false)
+			metrics, err := parseRuleMetricsFromPrometheus(body, test.domain, test.listenPort, false)
 
 			// Then
 			if err != nil {

@@ -179,7 +179,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 			metrics["blocked"] = int64(0)
 		}
 	} else {
-		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS, ruleID)
+		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.EnableTLS, ruleID)
 	}
 	if parseErr != nil {
 		caddyMetricsError(c, parseErr)

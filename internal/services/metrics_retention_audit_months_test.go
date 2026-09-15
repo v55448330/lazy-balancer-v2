@@ -6,9 +6,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// S-7（2026-09-06 裁定）：指标历史保留期复用「日志保留」配置项
-// audit_retention_months（与操作/运行/安全事件同源同义），按 months×30 天清理；
-// 独立的 metrics_retention_days 不再读取（死配置随 S-6 先例清退）。
+// 2026-09-15 用户裁定:指标历史固定保留最近 7 天,不读任何配置项
+// (覆盖 S-7 复用「日志保留」的裁定);metrics_retention_days 死列已清退。
 func setupMetricsRetentionTest(t *testing.T) {
 	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
@@ -49,10 +48,7 @@ func countMetricsRow(t *testing.T, ruleID string) int {
 	return n
 }
 
-// 默认 audit_retention_months=3（=90 天窗口）：45 天前的行仍在保留期内、不得
-// 清理（旧实现按 metrics_retention_days 默认 7 天会将其删除——本用例即 RED 判据）。
-// 2026-09-15 用户裁定:指标历史固定保留最近 7 天(覆盖 S-7 复用「日志保留」
-// 的裁定)——audit_retention_months 不再影响指标清理窗口。
+// 固定 7 天窗口(2026-09-15 用户裁定):8 天前清理、5 天前/当前保留。
 func TestMetricsServiceCleanupHistory_usesFixedSevenDayWindow(t *testing.T) {
 	// Given：默认配置 + 8 天前/5 天前/当前各 1 行
 	setupMetricsRetentionTest(t)
