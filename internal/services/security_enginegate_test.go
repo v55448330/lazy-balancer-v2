@@ -21,6 +21,7 @@ import (
 //     开发/CI 不存在)——路径可写性不是被测对象;
 //   - Include <crs 路径>:CRS 文件仅存在于镜像内——引擎接受「文件缺失」
 //     与否不是被测对象(镜像内由 caddy validate 覆盖全量)。
+//
 // 其余全部逐字送编译——我们自己发射的 SecRule/SecAction/SecMarker 形状
 // 是本门禁的被测对象,零裁剪(R-8 验证源直取:指令文本来自真实渲染调用)。
 func compileForEngineGate(t *testing.T, directives string) {

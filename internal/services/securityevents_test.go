@@ -1965,7 +1965,7 @@ func TestSecurityEventsAttribution_BlacklistDenyFallsBackToFirstEnabledWhenNoOwn
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'blocking','[]','[]'),(3,'policy-B',1,'blocking','[]','[]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]'),(3,'policy-B',1,'[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',3)`); err != nil {
@@ -1991,10 +1991,10 @@ func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'blocking','[]','[]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'blocking','[]','[]',1,'allow','["1.2.3.4"]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'[]','[]',1,'allow','["1.2.3.4"]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',4)`); err != nil {
@@ -2590,11 +2590,19 @@ func TestSecurityEventsAttribution_singleRuleForms(t *testing.T) {
 	}
 }
 
-// A34-CORE-F1/F2(第 34 轮审计,P2):fallback 归因循环(securityevents.go)原先
-// 无模式/动作可行性门——contains() 的 off/custom_only 门只守 contains 路径,
-// fallback 裸返首绑定策略,导致「custom_only 策略认领 blocked id:11 事件」
-// (其引擎 id:11 只能 logged)与「custom_only 认领 CRS blocked 事件」(摄取
-// 窗口内绑定变更)两类不可能归因。修复:fallback 加同款可行性门。
+// A34-CORE-F1/F2(第 34 轮审计,P2)+ A35-SECLB-1/2/3(第 35 轮审计,P2 误拒修正):
+// fallback 归因模式/动作可行性门。门禁语义按「模式 × 动作 × 规则 id 族」交叉积,
+// 逐格对照发射侧(security.go:179-184 IP 控制/GeoIP 与模式无关独立发射、
+// :220-222 off 引擎 On、:347→:351 自定义先于 id:6 DetectionOnly 切换、:668
+// phase:1 拦截保障明文、:459/:495 contains 模式门):
+//
+//	off:         仅 {2,4,7,8} 可产(IP 控制/GeoIP 独立发射)
+//	detection:   logged 全可产;blocked 仅 {2,4,7,8}+自定义(phase:1 先于 id:6)
+//	custom_only: CRS(9xxxxx)全拒(零 Include);blocked 另拒 id:11(无 949 评分链)
+//	blocking:    全域
+//
+// 误拒三族(A35):off+{2,4} blocked / detection+{2,4} blocked / custom_only+7 blocked。
+// 全用例排空 contains() 命中(组号错配/空名单),确保走的是 fallback 门。
 func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := db.Initialize(dataDir); err != nil {
@@ -2603,19 +2611,21 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	// Given:五策略——custom_only 首绑/blocking 次绑/detection/off/custom_only 单绑
+	// Given:四模式策略——custom_only/blocking(组 94 排空 contains)/detection(组 94)/off
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES
-		(1,'p-customonly',1,'custom_only','[5]','[]'),
-		(2,'p-blocking',1,'blocking','[]','[]'),
+		(1,'p-customonly',1,'custom_only','[]','[]'),
+		(2,'p-blocking',1,'blocking','[]','["94"]'),
 		(3,'p-detection',1,'detection','[]','["94"]'),
 		(4,'p-off',1,'off','[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
+	// 绑定加载按 policy_id ASC(securityEventsLoadMappings ORDER BY)——
+	// 「首候选」= 最小 id;off 策略要作首候选须单独成绑。
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_r1',1),('lb_r1',2),
 		('lb_r2',1),
 		('lb_r3',3),
-		('lb_r4',4),('lb_r4',2)`); err != nil {
+		('lb_r4',4)`); err != nil {
 		t.Fatal(err)
 	}
 	_, bindings, policyByID, err := securityEventsLoadMappings()
@@ -2629,19 +2639,30 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 		action    string
 		wantPID   int
 	}{
-		// F1:custom_only 首绑不得认领 blocked id:11(其引擎 id:11 只能 logged)
-		// ——跳过归 blocking 次绑(949 实际拦截方)
-		{"F1 custom_only-first id:11 blocked", "lb_r1", "11", "blocked", 2},
-		// F2:custom_only 单绑不得认领 CRS blocked(零 CRS Include)
-		{"F2 custom_only-only CRS blocked", "lb_r2", "913100", "blocked", 0},
-		// detection 不得认领 blocked(DetectionOnly 零中断;913 不在组→contains 不命中→fallback)
-		{"detection blocked rejected", "lb_r3", "913100", "blocked", 0},
-		// 回归:custom_only 可产自定义 block 规则事件(id 10005=规则5)
-		{"custom_only custom-rule blocked ok", "lb_r2", "10005", "blocked", 1},
-		// 回归:off 零发射不得认领→跳过归 blocking
-		{"off-first skipped", "lb_r4", "913100", "blocked", 2},
-		// 回归:blocking 正常认领 logged
-		{"blocking logged ok", "lb_r4", "913100", "logged", 2},
+		// ── F1/F2 原始标靶(正确拒绝,保持) ──
+		// F1:custom_only 首绑不得认领 blocked id:11(无 949 评分链,id:11 恒 pass)
+		{"F1 custom_only id:11 blocked rejected", "lb_r1", "11", "blocked", 2},
+		// F2:custom_only 不得认领 CRS(零 Include)
+		{"F2 custom_only CRS blocked rejected", "lb_r2", "913100", "blocked", 0},
+		// detection 不得认领 CRS blocked(id:6 切换先于 CRS 评估,DetectionOnly 零中断)
+		{"detection CRS blocked rejected", "lb_r3", "913100", "blocked", 0},
+		// ── A35 误拒三族(修正目标,当前被门错误拒绝) ──
+		// off+IP 控制 blocked 可产(IP 控制与模式无关独立发射,security.go:179-181)
+		{"off id:2 blocked allowed", "lb_r4", "2", "blocked", 4},
+		{"off id:4 blocked allowed", "lb_r4", "4", "blocked", 4},
+		// detection+IP 控制 blocked 可产(phase:1 先于 id:6 切换,:668 明文保障)
+		{"detection id:2 blocked allowed", "lb_r3", "2", "blocked", 3},
+		// custom_only+预检 id:7 blocked 可产(allow 交集与模式无关,:927-935)
+		{"custom_only id:7 blocked allowed", "lb_r2", "7", "blocked", 1},
+		// ── 回归形状 ──
+		// custom_only 自定义 block 规则可产(排空 contains 走 fallback)
+		{"custom_only custom blocked ok", "lb_r2", "10005", "blocked", 1},
+		// blocking fallback 全域(组 94 排空 contains)
+		{"blocking blocked fallback ok", "lb_r1", "913100", "blocked", 2},
+		// off 不得认领 CRS logged(off 零 CRS 发射)
+		{"off CRS logged rejected", "lb_r4", "913100", "logged", 0},
+		// detection logged 全域
+		{"detection logged ok", "lb_r3", "913100", "logged", 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

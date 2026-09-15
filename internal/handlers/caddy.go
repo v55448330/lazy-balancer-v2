@@ -466,7 +466,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}()
 	// 可空列（dns_credentials/acme_email/access_log_format/default_ca_provider_id）需支持
-	// 清空：传空值即置 NULL（COALESCE 无法区分“未传”与“清空”''）。其余列保留 COALESCE 语义
+	// 清空：传空值即置 NULL（COALESCE 无法区分“未传”与“清空”）。其余列保留 COALESCE 语义
 	// —— 未传(nil) 保持原值。CASE WHEN ? IS NULL 用于区分 nil 与空字符串。
 	res, err := tx.Exec(`
 			UPDATE global_config SET

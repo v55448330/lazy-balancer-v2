@@ -519,13 +519,27 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 	return false
 }
 
-// securityEventsFallbackCanProduce(A34-CORE-F1/F2,第 34 轮审计 P2):fallback
-// 归因的模式/动作可行性门——与 contains() 各分支的模式门同口径(:459 CRS
-// 仅 blocking/detection、:495 自定义规则 off 零发射),但只核「该策略的当前
-// 模式在物理上能否产出此 (动作,规则 id) 事件」,不核名单成员(fallback 的
-// 存在理由正是配置可能已在发射后变更)。原 fallback 裸返首绑定策略:
-// custom_only 首绑认领 blocked id:11 事件(其引擎 id:11 只能 logged,F1)、
-// 摄取窗口内改绑后 custom_only 认领 CRS blocked 事件(F2)。
+// securityEventsFallbackCanProduce(A34-CORE-F1/F2 第 34 轮 + A35-SECLB-1/2/3
+// 第 35 轮误拒修正):fallback 归因的模式/动作可行性门。只核「该策略的当前模式
+// 在物理上能否产出此 (动作,规则 id) 事件」,不核名单成员(fallback 的存在理由
+// 正是配置可能已在发射后变更)。门禁表逐格对照发射侧单一事实:
+//
+//	· IP 控制/GeoIP(id:2/4/8)+预检 allow 交集(id:7):与 WAF 模式无关独立
+//	  发射(security.go:179-181 明文「runs independently of the WAF mode」,
+//	  :220-222 emitIPControl||geoipActive → SecRuleEngine On)——off 模式亦可产
+//	  blocked(A35-SECLB-1:初版门「off 零发射」与发射侧设计明文矛盾,误拒);
+//	· detection 的 id:6 DetectionOnly 切换(security.go:351)发射于 IP 控制/
+//	  自定义规则之后、CRS 之前——phase:1 拦截规则真实阻断(:668 明文保障),
+//	  blocked 可产={2,4,7,8}+自定义;CRS 在切换后评估,DetectionOnly 零中断
+//	  (A35-SECLB-2:初版门 detection+blocked 全量误拒);
+//	· custom_only 零 CRS Include(contains :459 同口径)——CRS 事件全拒;
+//	  无 949 评分链,id:11 守卫(phase:2 pass)恒不产 blocked(F1 标靶保持);
+//	  自定义规则无 id:6 切换任意相位可拦;预检 id:7 与模式无关(:927-935)
+//	  (A35-SECLB-3:初版门允许集漏 7,误拒);
+//	· blocking:全域。
+//
+// 合成 id(1000000+)按自定义族同等对待(物理同形;豁免①钉的是 contains
+// 覆盖区间,fallback 门不扩不缩)。
 func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, ruleTriggered string) bool {
 	if policy == nil {
 		return false
@@ -534,32 +548,29 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	if err != nil {
 		return false
 	}
-	// off=全关零发射(BuildCorazaDirectives 早退),不得认领任何事件。
-	if policy.Mode == "off" {
-		return false
-	}
-	// detection=DetectionOnly 事务级零中断,不得认领 blocked。
-	if policy.Mode == "detection" && action == "blocked" {
-		return false
-	}
-	if policy.Mode == "custom_only" {
-		// custom_only 零 CRS Include(:459 同口径),不得认领 CRS 事件。
-		if n >= 900000 && n < 1000000 {
+	ipControl := n == 2 || n == 4 || n == 7 || n == 8
+	crs := n >= 900000 && n < 1000000
+	custom := (n >= 10000 && n < 900000) || n >= 1000000
+	switch policy.Mode {
+	case "off":
+		// off=CRS/自定义/body 守卫全关,但 IP 控制/GeoIP 独立发射照常阻断。
+		return ipControl
+	case "detection":
+		if action != "blocked" {
+			return true
+		}
+		return ipControl || custom
+	case "custom_only":
+		if crs {
 			return false
 		}
-		if action == "blocked" {
-			// custom_only 能阻断的只有自定义 block 规则(10000-899999)与
-			// ACL/GeoIP(id:2/4/8,与模式无关的发射);CRS 评分链(949 及
-			// id:11 守卫→949)不存在——其余 id 的 blocked 物理不可产。
-			switch {
-			case n >= 10000 && n < 900000:
-			case n == 2 || n == 4 || n == 8:
-			default:
-				return false
-			}
+		if action == "blocked" && n == 11 {
+			return false
 		}
+		return true
+	default: // blocking 全域
+		return true
 	}
-	return true
 }
 
 // securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
