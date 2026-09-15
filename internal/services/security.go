@@ -863,21 +863,28 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	// 与 BuildCorazaDirectives 同款审计配置：IP 拒绝事件经 audit log 进入
 	// 安全事件管线（ RelevantOnly + deny 中断 = relevant）。
 	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog %s\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n", auditLogPath))
-	if len(allowLists) > 0 {
-		intersection := intersectIPLists(allowLists)
-		// 裁定 2026-09-07 S1：信任名单并入 allow 放行集——预检放行 = ACL 交集 ∪
-		// 全部策略的信任名单。单策略下信任 IP 经 ctl:ruleEngine=Off 跳过 ACL，
-		// 多策略预检若不并入信任则同一 IP 会被 allow 交集拒绝（行为随绑定数漂移）。
-		for _, p := range policies {
-			if p == nil || !p.IPWhitelistEnabled {
-				continue
-			}
-			for _, trusted := range mergedWhitelist(p) {
-				if trusted != "" {
-					intersection = append(intersection, trusted)
-				}
+	// 2026-09-15 用户裁定:信任最高优先(任何规则不拦)+检测事件全记录——
+	// 预检层信任改 ctl:ruleEngine=DetectionOnly 先行(取代 S1 的「并入 allow
+	// 放行集」):信任 IP 经 DetectionOnly 后,deny/黑名单/GeoIP/CRS 全评估
+	// 不拦但全记录(动作=检测);并入 allow 会使信任 IP 根本不触发规则=
+	// 无检测事件,与新语义(可见放行)冲突。
+	var trustUnion []string
+	for _, p := range policies {
+		if p == nil || !p.IPWhitelistEnabled {
+			continue
+		}
+		for _, trusted := range mergedWhitelist(p) {
+			if trusted != "" {
+				trustUnion = append(trustUnion, trusted)
 			}
 		}
+	}
+	if len(trustUnion) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", strings.Join(trustUnion, ",")))
+	}
+
+	if len(allowLists) > 0 {
+		intersection := intersectIPLists(allowLists)
 		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
 		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
 		if len(intersection) == 0 {

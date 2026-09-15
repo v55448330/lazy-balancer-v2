@@ -621,3 +621,56 @@ func TestMultiPolicy_RequestBodyLimitInWafDirectives(t *testing.T) {
 		t.Fatalf("directives missing %q:\n%s", want, directives)
 	}
 }
+
+// 预检信任 DetectionOnly(2026-09-15 用户裁定):信任最高优先——预检层
+// 信任规则 ctl:ruleEngine=DetectionOnly 先行,deny/黑名单/GeoIP/CRS 全评估
+// 不拦但全记录(取代 S1 的「并入 allow 放行集」——并入会使信任 IP 不触发
+// 规则=无检测事件,与「可见放行」冲突)。
+func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
+	// Given:两策略,P1 allow 模式+信任 198.51.100.9,P2 deny 模式(198.51.100.9 在 deny 名单)
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_policies (name, mode, enabled, ip_acl_enabled, ip_acl_mode, ip_acl_list, ip_whitelist_enabled, ip_whitelist) VALUES
+		('p1-allow','blocking',1,1,'allow','["10.0.0.1"]',1,'["198.51.100.9"]'),
+		('p2-deny','blocking',1,1,'deny','["198.51.100.9"]',0,'[]')`); err != nil {
+		t.Fatal(err)
+	}
+	var p1ID, p2ID int
+	if err := database.QueryRow(`SELECT id FROM security_policies WHERE name='p1-allow'`).Scan(&p1ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT id FROM security_policies WHERE name='p2-deny'`).Scan(&p2ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES ('lb_gen_trust',?), ('lb_gen_trust',?)`, p1ID, p2ID); err != nil {
+		t.Fatal(err)
+	}
+	seedHTTPRuleForGeneration(t, database, "lb_gen_trust", "trust.example.test", 8080)
+
+	// When
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen_trust", "trust.example.test"))
+
+	// Then:预检含信任 DetectionOnly 先行(在 allow/deny 规则之前)
+	wafs := wafHandlers(t, mainRoute)
+	if len(wafs) == 0 {
+		t.Fatalf("no waf handler: %v", handlerNames(t, mainRoute))
+	}
+	precheck := wafs[0]["directives"].(string)
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	if !strings.Contains(precheck, trustRule) {
+		t.Fatalf("precheck missing trust DetectionOnly rule:\n%s", precheck)
+	}
+	trustIdx := strings.Index(precheck, trustRule)
+	// deny 规则(id:2)在信任之后,且信任 IP 也在 deny 名单——DetectionOnly 使其
+	// 评估不拦但记录(信任最高优先,不再被 403)
+	denyIdx := strings.Index(precheck, `"@ipMatch 198.51.100.9" "id:2,phase:1,deny`)
+	if denyIdx < 0 {
+		t.Fatalf("precheck missing deny rule for trusted IP (must log as detection):\n%s", precheck)
+	}
+	if trustIdx > denyIdx {
+		t.Fatalf("trust DetectionOnly (offset %d) must precede deny rules (offset %d):\n%s", trustIdx, denyIdx, precheck)
+	}
+	// 信任不再并入 allow intersection(并入会使信任 IP 不触发规则=无检测事件)
+	if strings.Contains(precheck, `"!@ipMatch 10.0.0.1,198.51.100.9"`) {
+		t.Fatalf("trust must NOT be merged into allow intersection (merge = no detection event):\n%s", precheck)
+	}
+}

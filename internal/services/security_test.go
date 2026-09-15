@@ -67,10 +67,18 @@ func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
 	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
 
-	// Then：allow 放行集应包含 1.2.3.4（ACL 交集）和 5.6.7.8（P1 信任名单）
-	// ——预检的 !@ipMatch 应仅拒绝不在 [1.2.3.4,5.6.7.8] 的 IP
-	if !strings.Contains(directives, "!@ipMatch 1.2.3.4,5.6.7.8") {
-		t.Fatalf("directives missing trust IP in allow set:\n%s", directives)
+	// Then(2026-09-15 用户裁定,信任 DetectionOnly 取代并入放行集):
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 5.6.7.8" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	if !strings.Contains(directives, trustRule) {
+		t.Fatalf("directives missing trust DetectionOnly rule:\n%s", directives)
+	}
+	if strings.Contains(directives, "1.2.3.4,5.6.7.8") {
+		t.Fatalf("trust must NOT be merged into allow set (merge = no detection event):\n%s", directives)
+	}
+	trustIdx := strings.Index(directives, trustRule)
+	denyIdx := strings.Index(directives, `"@ipMatch 9.9.9.9" "id:2,phase:1,deny`)
+	if trustIdx > denyIdx {
+		t.Fatalf("trust DetectionOnly must precede deny rules:\n%s", directives)
 	}
 }
 
