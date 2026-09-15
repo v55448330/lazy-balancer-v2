@@ -243,6 +243,11 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 </script>
 
 <style scoped>
+/* SYSRENDER33-2(第 33 轮审计,P2):状态列标签+离线时长(<div>块级兄弟,
+   margin-top:2px)为叠行设计——全局居中规则(inline-flex)会压成同行窄栏。
+   本列恢复块级布局(scoped 特异性胜出)。 */
+:deep(.el-table .cell:has(.el-tag)) { display: block; }
+
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 :deep(.el-card__body), .el-card { height: 100%; }
 .card-tip { font-size: 12px; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }

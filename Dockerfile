@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       --with github.com/mholt/caddy-l4@v0.1.2 \
       --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
       --with github.com/mholt/caddy-ratelimit@v0.1.0 \
-      --with github.com/corazawaf/coraza-caddy/v2@v2.6.0 \
+      --with github.com/corazawaf/coraza-caddy/v2@v2.6.1 \
       --with lazy-balancer-v2/caddygeoip=./caddygeoip \
       --with lazy-balancer-v2/caddydeps=./caddydeps; then \
       built=1; break; \

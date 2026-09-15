@@ -258,7 +258,7 @@ func (m *CAQueueManager) UnblockJobsForRule(ruleID string, tokens ...RuleBlockTo
 		// 规则解锁后补扫一次部署重试（R31 M5）：阻塞期间被
 		// scheduleCertificateDeploymentRetry 丢弃的 'downloaded' 任务（窗口已过）
 		// 需重新调度，否则滞停到下次 Resume/Start。走全局函数通道，且必须先释放
-		// 队列锁——补扫回调会再次查询 isRuleBlocked（重入本锁）。
+		// 队列锁——补扫回调会再次查询 IsRuleBlocked（重入本锁）。
 		rescanDroppedCertificateDeploymentRetries()
 	}
 }
@@ -785,7 +785,7 @@ func (m *CAQueueManager) Stop() {
 }
 
 // releaseAllRuleBlocks 回收全部规则删除屏障租约。锁序与 UnblockJobsForRule 一致：
-// m.mu 临界区内重置 map，解锁后再补扫部署重试（回调经 isRuleBlocked 重入本锁）。
+// m.mu 临界区内重置 map，解锁后再补扫部署重试（回调经 IsRuleBlocked 重入本锁）。
 func (m *CAQueueManager) releaseAllRuleBlocks() {
 	m.mu.Lock()
 	hadBlocks := len(m.blockedRules) > 0

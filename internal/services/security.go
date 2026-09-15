@@ -283,25 +283,31 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// SECLB32-1(第 32 轮审计,P1,取代 SECLB31-2 抑制方案):多策略(预检存在)
 	// 时策略层 id:2/4 改链式自排除本策略信任集——
 	//   · 本策略信任 IP:预检信任并集 DetectionOnly 统一记录(去重保持,
-	//     SECLB31-2 目标),策略层链第二段 !@ipMatch 信任集 不命中→不重复;
-	//   · 他策略信任 IP(∉本策略信任集):链两段全命中→照常 403——恢复
-	//     「信任仅豁免所属策略」裁定边界(抑制方案下 P2 层无拦截点击穿);
+	//     SECLB31-2 目标),策略层链第二段 !@ipMatch 信任集 不命中→链整体
+	//     不触发→不重复;
+	//   · 他策略信任 IP(∉本策略信任集):链两段全命中→首段 deny 执行
+	//     403——恢复「信任仅豁免所属策略」裁定边界(抑制方案下 P2 层无拦截
+	//     点击穿);
 	//   · 无信任名单的策略:无排除项→平原 id:2/4(与单策略形状一致);
 	//   · 单策略(无预检):同实例信任 DetectionOnly 已正确处理,平原形态。
+	// SECLB33-1(第 33 轮审计,P0,引擎约束):coraza「disruptive 动作仅允许
+	// 链首段」(rule_parser.go:421)——deny/status/log/msg/skipAfter 必须在
+	// 首段并以 ,chain 收尾,续段仅 t:none(GeoIP id:8 同款生产形状);
+	// deny 在续段的形状被解析器整体拒绝(v2.2.11 出厂事故)。
 	multiPolicyTrustExclusion := multiPolicy && p.IPWhitelistEnabled && len(ipWL) > 0
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		aclJoined := strings.Join(ipACLList, ",")
 		if p.IPACLMode == "allow" {
 			if multiPolicyTrustExclusion {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,pass,nolog,chain\"\n", aclJoined))
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 			} else {
 				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
 			}
 		} else if p.IPACLMode == "deny" {
 			if multiPolicyTrustExclusion {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,pass,nolog,chain\"\n", aclJoined))
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 			} else {
 				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
 			}
@@ -310,8 +316,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	if len(ipBL) > 0 {
 		blJoined := strings.Join(ipBL, ",")
 		if multiPolicyTrustExclusion {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,pass,nolog,chain\"\n", blJoined))
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END,chain\"\n", blJoined))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 		} else {
 			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", blJoined))
 		}
