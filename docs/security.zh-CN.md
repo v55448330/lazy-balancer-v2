@@ -12,7 +12,7 @@
 
 | 组件 | 版本 |
 |---|---|
-| WAF 引擎 | Coraza v3 (coraza-caddy v2.6.0) |
+| WAF 引擎 | Coraza v3 (coraza-caddy v2.6.1) |
 | 规则集 | OWASP CRS v4.28.0 |
 | GeoIP | IP2Region v3.17.0（中国省级，IPv4） |
 | 限流 | caddy-ratelimit v0.1.0 |

@@ -1756,10 +1756,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		layer4Servers[fmt.Sprintf("tcp_%d", port)] = buildTCPServer(ruleConfig)
 	}
 
-	if len(servers) == 0 {
-		servers = make(map[string]interface{})
-	}
-
 	defaultSite := map[string]interface{}{
 		"listen": []string{":80"},
 		"routes": []interface{}{

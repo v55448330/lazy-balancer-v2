@@ -1582,6 +1582,38 @@ func clampBackupAuditRetentionMonths(value any) (any, bool) {
 	return value, false
 }
 
+// clampBackupCaddyLogSizeMB 导入侧 caddy_log_size_mb 钳制(SYS37-2,第 37 轮
+// 审计 P3,R56#3 同族):与写侧(caddy.go:305-308,≥100)同边界——低于 100
+// 钳到 100;非整数形态按 schema 缺省 100 归一(db.go:369)。越界原样落库会
+// 锁死基础设置保存(写侧 400),与 jwt_expire/audit_retention 钳制对称。
+func clampBackupCaddyLogSizeMB(value any) (any, bool) {
+	mb, ok := backupInteger(value)
+	if !ok {
+		return 100, true
+	}
+	if mb < 100 {
+		return 100, true
+	}
+	return value, false
+}
+
+// clampBackupAuditLogSizeMB 导入侧 audit_log_size_mb 钳制(SYS37-2):与写侧
+// (caddy.go:380-387,1-512)同边界——越界钳到 [1,512] 最近边界;非整数形态
+// 按 schema 缺省 10 归一(db.go:386)。
+func clampBackupAuditLogSizeMB(value any) (any, bool) {
+	mb, ok := backupInteger(value)
+	if !ok {
+		return 10, true
+	}
+	if mb < 1 {
+		return 1, true
+	}
+	if mb > 512 {
+		return 512, true
+	}
+	return value, false
+}
+
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
@@ -1716,6 +1748,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	auditRetentionClamped := false
 	if value, exists := backup.Config["audit_retention_months"]; exists {
 		backup.Config["audit_retention_months"], auditRetentionClamped = clampBackupAuditRetentionMonths(value)
+	}
+	// SYS37-2(第 37 轮审计 P3,R56-58 同族):两个日志大小键导入钳制——
+	// 越界原样落库会锁死基础设置保存(写侧 400),钳到写侧同边界。
+	caddyLogSizeClamped := false
+	if value, exists := backup.Config["caddy_log_size_mb"]; exists {
+		backup.Config["caddy_log_size_mb"], caddyLogSizeClamped = clampBackupCaddyLogSizeMB(value)
+	}
+	auditLogSizeClamped := false
+	if value, exists := backup.Config["audit_log_size_mb"]; exists {
+		backup.Config["audit_log_size_mb"], auditLogSizeClamped = clampBackupAuditLogSizeMB(value)
 	}
 	// R57 C-2：续签/有效期数值导入钳制（与写侧 caddy.go 校验同边界）——
 	// cert_renewal_days 超大值会让续签扫描窗口覆盖一切证书（续签成功后仍在
@@ -2015,6 +2057,12 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	if auditRetentionClamped {
 		auditParts = append(auditParts, fmt.Sprintf("audit_retention_months 越界，已钳位为 %v", backup.Config["audit_retention_months"]))
+	}
+	if caddyLogSizeClamped {
+		auditParts = append(auditParts, fmt.Sprintf("caddy_log_size_mb 越界，已钳位为 %v", backup.Config["caddy_log_size_mb"]))
+	}
+	if auditLogSizeClamped {
+		auditParts = append(auditParts, fmt.Sprintf("audit_log_size_mb 越界，已钳位为 %v", backup.Config["audit_log_size_mb"]))
 	}
 	auditParts = append(auditParts, certNumericClamped...)
 	if len(skipWarnings) > 0 {

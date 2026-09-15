@@ -48,7 +48,7 @@ func Load(path string) *Config {
 		MetricsInterval: 30,
 		NodeName:        getEnv("NODE_NAME", "node-1"),
 		JWTSecret:       getEnv("JWT_SECRET", ""),
-		Version:         getEnv("APP_VERSION", "v2.2.10"),
+		Version:         getEnv("APP_VERSION", "v2.2.12"),
 		LogFile:         getEnv("LOG_FILE", defaultLogFile),
 	}
 

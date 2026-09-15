@@ -1,17 +1,12 @@
 package handlers
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -88,35 +83,6 @@ func TestRenderDefaultBlockPage_omits_footer_text_line_when_empty(t *testing.T) 
 	}
 	if strings.Count(html, "<br>") != 1 || !strings.Contains(html, `href="https://github.com/v55448330/lazy-balancer-v2"`) {
 		t.Errorf("rendered page should contain exactly one line break (repo link only) when footer text is empty:\n%s", html)
-	}
-}
-
-func TestGetDefaultBlockPage_serves_branded_html(t *testing.T) {
-	// Given
-	dataDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{"app_name":"测试品牌","footer_text":"测试页脚"}`), 0644); err != nil {
-		t.Fatalf("write branding file: %v", err)
-	}
-	h := &Handlers{cfg: &config.Config{DataDir: dataDir}}
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/security/default-block-page", h.GetDefaultBlockPage)
-
-	// When
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/security/default-block-page", nil)
-	router.ServeHTTP(response, request)
-
-	// Then
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if ct := response.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
-		t.Errorf("Content-Type=%q, want text/html", ct)
-	}
-	body := response.Body.String()
-	if !strings.Contains(body, "测试品牌") || !strings.Contains(body, "测试页脚") {
-		t.Errorf("response body missing branding:\n%s", body)
 	}
 }
 

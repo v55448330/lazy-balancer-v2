@@ -7,7 +7,7 @@
 | `/app/data` | 业务/审计/指标数据库、ACME 账户密钥 | **是** |
 | `/app/certs` | 证书与私钥 | **是** |
 | `/app/logs` | 应用日志、Caddy 日志、按规则访问日志 | 推荐 |
-| `/app/waf` | CRS 规则、IP2Region xdb、Coraza 审计日志 | 推荐 |
+| `/app/waf` | CRS 规则、IP2Region xdb（Coraza 审计日志在 `/app/logs/waf-audit`） | 推荐 |
 | `/app/config` | Caddyfile（仅高级定制） | 可选 |
 
 > 不挂载 `/app/waf` 时，容器重建会将 CRS 回退到镜像捆绑版本；系统自动将更新后的规则树快照持久化到数据卷并在启动时对账恢复。数据库是配置的唯一真实来源。

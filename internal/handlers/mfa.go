@@ -112,19 +112,22 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 		//（R72 F-1 的验码确认保留；验码失败只提示不计数，全系统唯一锁定为
 		// 登录阶段 5 次/10 分钟、受「登录失败锁定」开关控制）。
 		var req struct {
-			Code string `json:"code" binding:"required"`
+			Code string `json:"code"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 			return
 		}
-		if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
-			msg := "验证码错误"
-			if verr != nil {
-				msg = verr.Error()
+		// SYS37-1(R73 同形对齐):守卫验码放行路径跳过本层验码(同 MFADisable)。
+		if !mfaStepUpVerifiedInContext(c) {
+			if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
+				msg := "验证码错误"
+				if verr != nil {
+					msg = verr.Error()
+				}
+				c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
+				return
 			}
-			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
-			return
 		}
 	}
 	// D5-S1：otpauth 账号位用用户名（services/mfa.go 约定 accountName 即用户名；
@@ -191,21 +194,26 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	}
 	userID := getContextUserIDInt(c)
 	var req struct {
-		Code string `json:"code" binding:"required"`
+		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
-	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
-		// B5 I-A：高敏动作的失败尝试与成功同等可审计（对齐 MFAResetByAdmin 前置验码失败留痕）。
-		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")))
-		msg := "验证码错误"
-		if verr != nil {
-			msg = verr.Error()
+	// SYS37-1(第 37 轮审计,P2,R73 同形对齐):守卫验码放行路径(标记在)跳过
+	// 本层验码——守卫/verify-step 已消费 TOTP 时间片,前端 428 重试带同码时
+	// 同片重放拒绝使禁用流程结构性必 401;机器身份/守卫关(无标记)本层验码保持。
+	if !mfaStepUpVerifiedInContext(c) {
+		if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
+			// B5 I-A：高敏动作的失败尝试与成功同等可审计（对齐 MFAResetByAdmin 前置验码失败留痕）。
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")))
+			msg := "验证码错误"
+			if verr != nil {
+				msg = verr.Error()
+			}
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
+			return
 		}
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
-		return
 	}
 	if err := services.MFAResetForUser(userID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -274,6 +282,16 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 
 // —— Admin 端点 ——
 
+// mfaStepUpVerifiedInContext:守卫(开启态)验码放行路径的标记优先;开关
+// 关闭或机器身份时守卫未运行,无标记,本层验码保持(SLB10-N4:消除
+// handler 重读开关的毫秒窗 TOCTOU——开关在中间件后翻转不再产生
+// 「守卫未验码+本层跳过」的免验窗口)。R73(MFAResetByAdmin)起用,
+// SYS37-1(第 37 轮)提升为包级供 MFA 自助写端点(禁用/重绑确认)复用。
+func mfaStepUpVerifiedInContext(c *gin.Context) bool {
+	v, ok := c.Get("mfa_stepup_verified")
+	return ok && v == true
+}
+
 // MFAResetByAdmin POST /users/:id/mfa/reset — 重置指定用户（含自己）。
 // R72 二次（用户裁决）：重置需确认 + 校验——操作者自己启用了 MFA 时须提供有效
 // 验证码（防会话劫持后一键拆第二因子）；操作者是管理员（admin 组路由门）或
@@ -306,11 +324,6 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	// 关闭或机器身份时守卫未运行,无标记,本层验码保持(SLB10-N4:消除
 	// handler 重读开关的毫秒窗 TOCTOU——开关在中间件后翻转不再产生
 	// 「守卫未验码+本层跳过」的免验窗口)。
-	mfaStepUpVerifiedInContext := func(c *gin.Context) bool {
-		v, ok := c.Get("mfa_stepup_verified")
-		return ok && v == true
-	}
-
 	// R73 补正（审计 IMPORTANT-3）：守卫真正验过码的只有 JWT 路径——mfaStepUpGuard
 	// 按设计豁免 auth_type != "jwt"，API Key/MCP 机器身份不被守卫验码，豁免理由
 	// 不成立，故不免第一层（R72 二次防劫持语义对机器身份同样保持）。守卫关闭

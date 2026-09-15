@@ -398,8 +398,3 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	n, _ := result.RowsAffected()
 	return n > 0, nil
 }
-
-func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
-	cfg := loadBrandingConfig(h.cfg.DataDir)
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(renderDefaultBlockPage(cfg)))
-}

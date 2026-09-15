@@ -192,6 +192,11 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
+	// CL37-P5-1(第 37 轮审计):展示口径与运行时 clamp 对齐(<10 → 60)。
+	if cfg.SyncInterval < 10 {
+		cfg.SyncInterval = 60
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取全局配置失败: " + err.Error()})
 		return
