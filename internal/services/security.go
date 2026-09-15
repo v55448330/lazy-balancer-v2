@@ -156,13 +156,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
 	//（旧规则静默继续生效）。
 	crsFp := ""
-	suppressIPACL := false
+	multiPolicy := false
 	for _, arg := range prefetchedCRSFingerprint {
 		switch v := arg.(type) {
 		case string:
 			crsFp = v
 		case bool:
-			suppressIPACL = v // SECLB31-2:多策略时抑制策略层 IP ACL(预检集中)
+			multiPolicy = v // SECLB32-1:多策略模式(预检存在)→策略层 IP ACL 链式自排除本策略信任集
 		}
 	}
 	if crsFp == "" {
@@ -280,20 +280,40 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		// 信任流量必须进事件日志可见)。
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", strings.Join(ipWL, ","), trustID))
 	}
-	// SECLB31-2(第 31 轮审计,A 方案):多策略(预检存在)时预检已集中评估
-	// IP ACL(deny 并集/黑名单并集/allow 交集),策略层再发射同规则=信任 IP
-	// 每层 DetectionOnly 各记一次=事件重复。多策略时策略层抑制 IP ACL 发射
-	// (预检统一记录);单策略无预检保持原样。
-	if !suppressIPACL {
-		if p.IPACLEnabled && len(ipACLList) > 0 {
-			if p.IPACLMode == "allow" {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
-			} else if p.IPACLMode == "deny" {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
+	// SECLB32-1(第 32 轮审计,P1,取代 SECLB31-2 抑制方案):多策略(预检存在)
+	// 时策略层 id:2/4 改链式自排除本策略信任集——
+	//   · 本策略信任 IP:预检信任并集 DetectionOnly 统一记录(去重保持,
+	//     SECLB31-2 目标),策略层链第二段 !@ipMatch 信任集 不命中→不重复;
+	//   · 他策略信任 IP(∉本策略信任集):链两段全命中→照常 403——恢复
+	//     「信任仅豁免所属策略」裁定边界(抑制方案下 P2 层无拦截点击穿);
+	//   · 无信任名单的策略:无排除项→平原 id:2/4(与单策略形状一致);
+	//   · 单策略(无预检):同实例信任 DetectionOnly 已正确处理,平原形态。
+	multiPolicyTrustExclusion := multiPolicy && p.IPWhitelistEnabled && len(ipWL) > 0
+	if p.IPACLEnabled && len(ipACLList) > 0 {
+		aclJoined := strings.Join(ipACLList, ",")
+		if p.IPACLMode == "allow" {
+			if multiPolicyTrustExclusion {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,pass,nolog,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+			} else {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
+			}
+		} else if p.IPACLMode == "deny" {
+			if multiPolicyTrustExclusion {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,pass,nolog,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+			} else {
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
 			}
 		}
-		if len(ipBL) > 0 {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipBL, ",")))
+	}
+	if len(ipBL) > 0 {
+		blJoined := strings.Join(ipBL, ",")
+		if multiPolicyTrustExclusion {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,pass,nolog,chain\"\n", blJoined))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipWL, ",")))
+		} else {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", blJoined))
 		}
 	}
 
@@ -723,11 +743,11 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
 // 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
 // store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, suppressIPACL bool, bodyLimitMB ...int) map[string]interface{} {
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, multiPolicy bool, bodyLimitMB ...int) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
-	directives := BuildCorazaDirectives(policy, store, crsFp, suppressIPACL)
+	directives := BuildCorazaDirectives(policy, store, crsFp, multiPolicy)
 	if directives == "" {
 		return nil
 	}

@@ -107,7 +107,7 @@ func NewCertIssuer(reloader func() error, dataDir ...string) *CertIssuer {
 
 func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, delay time.Duration) {
 	manager := GetCAQueueManager()
-	if manager != nil && manager.isRuleBlocked(material.ruleID) {
+	if manager != nil && manager.IsRuleBlocked(material.ruleID) {
 		return
 	}
 	certificateServiceMu.Lock()
@@ -183,7 +183,7 @@ func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() 
 		return fmt.Errorf("load downloaded certificate for deployment: %w", err)
 	}
 	manager := GetCAQueueManager()
-	if manager != nil && manager.isRuleBlocked(material.ruleID) {
+	if manager != nil && manager.IsRuleBlocked(material.ruleID) {
 		return context.Canceled
 	}
 	return NewCertIssuer(reloader).deployIssuedCertificate(ctx, jobID, material)

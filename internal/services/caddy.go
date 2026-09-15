@@ -2975,10 +2975,10 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			handleChain = append(handleChain, rateLimitHandler)
 		}
 		if rule.Protocol == "http" {
-			// SECLB31-2(第 31 轮审计,A 方案):多策略时预检已集中评估 IP ACL
-			// (deny 并集/黑名单并集/allow 交集),策略层再发射同规则=信任 IP
-			// 每层 DetectionOnly 各记一次=事件重复。多策略时策略层抑制 IP ACL
-			// 发射(预检统一记录,单层单层单层);单策略无预检保持原样。
+			// SECLB32-1(第 32 轮审计,取代 SECLB31-2 抑制):多策略(预检存在)
+			// 时传 multiPolicy=true——策略层 IP ACL 改链式自排除本策略信任集:
+			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
+			// (「信任仅豁免所属策略」边界);单策略无预检保持平原形态。
 			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, effectiveRequestBodyMaxSizeMB); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}

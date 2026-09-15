@@ -179,3 +179,10 @@ body {
    图标悬在空中部——改为顶部对齐并与首行文本光学对齐（图标 24px ≈ 首行 22px 行高） */
 .mfa-stepup-message-box .el-message-box__container { align-items: flex-start; }
 .mfa-stepup-message-box .el-message-box__status { margin-top: 1px; }
+
+/* 表格单元格标签垂直居中(全部视图:Dashboard/Rules/SecurityPolicies/Keys 等):
+   el-tag 是 inline-block,vertical-align: middle 按 x-height 对齐(视觉偏高);
+   含标签的 cell 改 inline-flex+align-items:center(行盒级居中)。
+   SYSRENDER32-4(第 32 轮审计):原 d5ca6f91 仅 Dashboard scoped,同根因散落
+   ≥10 视图——全局化;.cell 内纯文本/ellipsis 不受影响(规则只命中含 .el-tag 的 cell)。 */
+.el-table .cell:has(.el-tag) { display: inline-flex; align-items: center; }

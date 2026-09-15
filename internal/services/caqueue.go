@@ -269,12 +269,6 @@ func (m *CAQueueManager) IsRuleBlocked(ruleID string) bool {
 	return len(m.blockedRules[ruleID]) != 0
 }
 
-func (m *CAQueueManager) isRuleBlocked(ruleID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.blockedRules[ruleID]) != 0
-}
-
 func (m *CAQueueManager) StartRuleDeletionCompensation(compensation RuleDeletionCompensation) error {
 	m.mu.Lock()
 	if m.compensationCtx == nil || m.compensationCtx.Err() != nil {
@@ -653,6 +647,8 @@ func (m *CAQueueManager) releaseZombieJob(jobID int, done <-chan struct{}) {
 }
 
 // Enqueue adds or re-enqueues a cert job.
+// CLCC32-2(第 32 轮审计备查):零生产调用方——生产入队走 EnqueueIfActive
+// (在途守卫+状态迁移),本方法仅测试使用;保留导出形态避免平行测试脚手架。
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
