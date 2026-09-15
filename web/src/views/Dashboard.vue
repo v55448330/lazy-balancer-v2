@@ -1018,7 +1018,10 @@ onUnmounted(() => {
 
 
 /* 表格单元格标签垂直居中(协议/状态/健康状态列 el-tag) */
-:deep(.el-table .cell .el-tag) { vertical-align: middle; }
+/* 表格单元格标签垂直居中:el-tag 是 inline-block,vertical-align: middle
+   按 x-height 对齐(视觉偏高);含标签的 cell 改 inline-flex+align-items:
+   center(行盒级居中,协议/状态/健康状态列) */
+:deep(.el-table .cell:has(.el-tag)) { display: inline-flex; align-items: center; }
 
 .card-header {
   display: flex;
