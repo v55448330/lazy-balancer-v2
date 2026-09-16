@@ -583,7 +583,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-clickable:hover { background: var(--el-color-primary-light-9, #ecf5ff); }
 .ip-clickable:hover .ip-text { color: var(--el-color-primary, #409eff); }
 .ip-clickable:active { background: var(--el-color-primary-light-8, #d9ecff); }
-.ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-loc { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 </style>
 

@@ -102,12 +102,14 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="客户端 IP" min-width="180">
+        <!-- 用户裁定(第 37 轮):内容上限 ~190-200px(IPv4 126+gap+归属地 72),定宽 200 不再挤占方法/URI -->
+        <el-table-column label="客户端 IP" width="200">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
           </template>
         </el-table-column>
-        <el-table-column prop="method" label="方法" width="70" align="center" />
+        <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
+        <el-table-column prop="method" label="方法" width="90" align="center" />
         <el-table-column prop="uri" label="URI" min-width="140" show-overflow-tooltip />
         <!-- R72 二十二次（用户需求）：异常评分列——CRS 评分制下每事件携带的累计
              anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。 -->
