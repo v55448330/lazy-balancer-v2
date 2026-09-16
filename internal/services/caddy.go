@@ -1972,7 +1972,11 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 				"level":   level,
 				"writer":  fileWriter("/app/logs/caddy-server.log"),
 				"encoder": consoleEncoder,
-				"exclude": []string{"admin", "tls", "events", "http.log.access", "http.handlers.reverse_proxy"},
+				// 2026-09-17 用户裁定:http.handlers.waf 命名空间排除——WAF 按请求
+				// 量的拦截日志(coraza 引擎 debug WARN 行 + coraza-caddy 插件
+				// 硬编码 ERROR 行,同属该空间)不写入服务器运行日志;事件采集走
+				// SecAuditLog → 安全事件页(独立链路,不受影响)。
+				"exclude": []string{"admin", "tls", "events", "http.log.access", "http.handlers.reverse_proxy", "http.handlers.waf"},
 			},
 			"caddy_proxy": map[string]interface{}{
 				"level":   level,

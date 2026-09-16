@@ -48,7 +48,7 @@
           </el-link>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="110" align="center">
+      <el-table-column label="状态" width="110" align="center" class-name="node-status-col">
         <template #default="{ row }">
           <el-tooltip v-if="versionIncompatibilityError(row)" :content="versionIncompatibilityError(row)" placement="top">
             <el-tag type="danger" size="small">版本不兼容</el-tag>
@@ -243,10 +243,11 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 </script>
 
 <style scoped>
-/* SYSRENDER33-2(第 33 轮审计,P2):状态列标签+离线时长(<div>块级兄弟,
-   margin-top:2px)为叠行设计——全局居中规则(inline-flex)会压成同行窄栏。
-   本列恢复块级布局(scoped 特异性胜出)。 */
-:deep(.el-table .cell:has(.el-tag)) { display: block; }
+/* SYSRENDER33-2(第 33 轮审计,P2)+ 2026-09-17 用户实证修正:原豁免覆盖
+   全表所有含标签列(配置版本/健康同被压成块级,单行标签失去垂直居中)。
+   精确化为「仅状态列且离线时长存在时」才块级叠行——在线(单标签)与
+   配置版本/健康列回全局 inline-flex 居中规则。 */
+:deep(.el-table td.node-status-col .cell:has(.offline-duration)) { display: block; }
 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 :deep(.el-card__body), .el-card { height: 100%; }

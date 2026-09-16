@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -2065,5 +2066,41 @@ func TestGenerateCaddyConfig_autoHTTPSFullyDisabled(t *testing.T) {
 		if ah["disable"] != true {
 			t.Errorf("server %s automatic_https=%v, want disable:true (SLB9-1: 死路由消除)", name, ah)
 		}
+	}
+}
+
+// 2026-09-17 用户裁定:WAF 按请求量的拦截日志(WARN 引擎 debug + ERROR 插件
+// 硬编码,同属 http.handlers.waf 命名空间)不得写入 caddy-server.log——事件
+// 采集走 SecAuditLog→安全事件页(独立链路),服务器运行日志只留服务器事件。
+func TestGenerateCaddyConfig_wafNamespaceExcludedFromServerLog(t *testing.T) {
+	// Given 任意有效配置(需 DB 视图)
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := GenerateCaddyConfig()
+	// When 读取 caddy_server 日志条目
+	logging, ok := cfg["logging"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("logging missing in config")
+	}
+	logs, ok := logging["logs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("logging.logs missing")
+	}
+	server, ok := logs["caddy_server"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("logs.caddy_server missing")
+	}
+	excludes, _ := server["exclude"].([]string)
+	// Then exclude 必须包含 http.handlers.waf(WARN/ERROR 两行同源该命名空间)
+	found := false
+	for _, e := range excludes {
+		if e == "http.handlers.waf" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("caddy_server exclude missing http.handlers.waf: %v", excludes)
 	}
 }
