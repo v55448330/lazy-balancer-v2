@@ -205,12 +205,14 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 
 	// S-7（2026-09-06 裁定）：指标历史保留期与操作/运行/安全事件同用「日志保留」
 	//（audit_retention_months）——提示文案补齐指标历史，三链对齐。
-	retentionNote := "每日自动清理（操作/运行/安全事件/指标历史），保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
+	// 第 37 轮(用户裁定文案精简):可见文案短化——类目清单移 ConfigSource
+	// (tooltip 展示),行内只留「每日清理 · 保留 N 个月」。
+	retentionNote := "每日清理 · 保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
 	caddyLimit := sizeLimitMB("caddy_log_size_mb", 100)
 
 	infos := []LogStorageInfo{
-		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留"},
-		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留"},
+		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件/指标历史）"},
+		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件/指标历史）"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},

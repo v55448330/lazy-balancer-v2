@@ -126,7 +126,7 @@
         </el-table-column>
       </el-table>
 
-      <div style="margin-top: 16px; display: flex; align-items: center;">
+      <div style="margin-top: 16px; display: flex; align-items: center; flex-wrap: wrap; row-gap: 8px;">
         <LogStorageBar log-key="security_events" style="margin-right: auto" />
         <el-pagination
           v-model:current-page="page"

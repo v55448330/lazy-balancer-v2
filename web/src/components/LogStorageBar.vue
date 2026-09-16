@@ -92,7 +92,8 @@ const noteText = computed(() => {
   if (!i) return ''
   if (i.limit_bytes && i.keep_count > 0) return `满 ${humanSize(i.limit_bytes)} 轮转，保留 ${i.keep_count} 份${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
   if (i.limit_bytes) return `满 ${humanSize(i.limit_bytes)} 轮转${i.retention_note ? `，${i.retention_note}` : ''}${i.rotated_bytes > 0 ? `（副本 ${humanSize(i.rotated_bytes)}）` : ''}`
-  if (i.limit_rows) return `满 ${i.limit_rows.toLocaleString()} 条自动裁最旧${i.retention_note ? '，' + i.retention_note : ''}`
+  // 上限数字已在 sizes（rows/limit_rows）中展示,行内不重复——精简文案
+  if (i.limit_rows) return `满额自动裁最旧${i.retention_note ? '，' + i.retention_note : ''}`
   return i.retention_note || ''
 })
 
@@ -110,7 +111,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.log-storage-bar { font-size: 12px; color: #6b7280; }
+/* min-width:0——作为 flex 项必须可缩到内容宽度以下,内层 .note 的
+   省略号(text-overflow)才会生效;否则长保留文案把右侧分页/按钮挤出容器
+   (第 37 轮用户实证:事件日志页点第 5 页后分页器溢出卡片右缘 ~30-195px)。
+   全部五处父级(事件日志/操作日志/规则日志弹窗/规则集更新弹窗/证书任务弹窗)
+   共用同一 flex+margin-right:auto 模式,组件级一处修复全覆盖。 */
+.log-storage-bar { font-size: 12px; color: #6b7280; min-width: 0; }
 .bar-body { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .name { white-space: nowrap; }
 .sizes { white-space: nowrap; color: #374151; }
