@@ -14,8 +14,6 @@
       </el-button>
     </div>
 
-    <OIDCSettings />
-
     <el-card v-if="showForm" class="form-card">
       <template #header>
         <div class="card-header">
@@ -70,6 +68,20 @@
     </el-card>
 
     <el-card>
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon><User /></el-icon>
+            <span>用户列表</span>
+          </div>
+          <div class="oidc-entry-inline">
+            <span class="oidc-entry-label">登录认证</span>
+            <el-tag v-if="oidcEnabled" type="success" size="small" effect="light">OIDC 已启用</el-tag>
+            <el-tag v-else-if="oidcConfigured" type="info" size="small" effect="plain">OIDC 已配置</el-tag>
+            <el-button size="small" text type="primary" @click="oidcOpen = true">{{ oidcConfigured ? 'OIDC 设置' : '配置 OIDC' }}</el-button>
+          </div>
+        </div>
+      </template>
       <el-table :data="paginatedUsers" stripe :header-cell-style="{ background: '#f9fafb' }">
         <el-table-column label="用户" min-width="160">
           <template #default="{ row }">
@@ -157,6 +169,8 @@
     </el-card>
 
 
+    <OIDCSettings v-model="oidcOpen" @status="onOIDCStatus" />
+
     <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
          点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
     <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
@@ -205,6 +219,13 @@
 
 <script setup lang="ts">
 import OIDCSettings from '@/views/settings/OIDCSettings.vue'
+const oidcOpen = ref(false)
+const oidcEnabled = ref(false)
+const oidcConfigured = ref(false)
+const onOIDCStatus = (st: { enabled: boolean; configured: boolean }) => {
+  oidcEnabled.value = st.enabled
+  oidcConfigured.value = st.configured
+}
 import { computed, h, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
@@ -661,6 +682,9 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.oidc-entry-inline { display: flex; align-items: center; gap: 8px; }
+.oidc-entry-label { font-size: 12.5px; color: var(--el-text-color-secondary); }
+
 .page { max-width: 1500px; margin: 0 auto; }
 
 .page-header {
