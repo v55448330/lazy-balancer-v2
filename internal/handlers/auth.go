@@ -221,6 +221,11 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		claims := token.Claims.(jwt.MapClaims)
 		claims["mfa_ts"] = mfaTs
 	}
+	// v2.3.0:OIDC 会话经票据登录(集群快捷登录)到对端节点时保持身份语义
+	// ——auth_method 声明随签发透传(缺省=local),写保护/MFA 门/前端 UI 同口径。
+	if user.AuthProvider == "oidc" {
+		token.Claims.(jwt.MapClaims)["auth_method"] = "oidc"
+	}
 
 	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
 	if err != nil {

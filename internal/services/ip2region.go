@@ -672,3 +672,10 @@ var ip2AutonomousPrefectures = map[string]string{
 	// 地区（1：xdb 缺「地区」后缀）
 	"大兴安岭": "大兴安岭地区",
 }
+
+// RebuildRegionTreeCacheForSync 供集群同步/lbbak 导入路径在 xdb 变更后调用
+// ——与更新器 SetIP2RegionVersion 同款后置:树缓存重建+留痕(2026-09-18
+// 用户裁定:同步只是换源,更新流程照走)。
+func RebuildRegionTreeCacheForSync() {
+	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+}

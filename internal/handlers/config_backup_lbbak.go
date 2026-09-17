@@ -194,7 +194,8 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 			}
-			services.AppendIP2RegionUpdateLog("INFO", "import", "IP2Region数据库已随备份导入更新并热换缓存")
+			services.RebuildRegionTreeCacheForSync()
+			services.AppendIP2RegionUpdateLog("INFO", "import", "IP2Region数据库已随备份导入更新并热换缓存、重建城市树缓存")
 		}
 		if crsChanged {
 			services.AppendCRSUpdateLog("INFO", "import", "CRS 规则已随备份导入更新(导入重载生效)")

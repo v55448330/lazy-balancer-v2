@@ -1954,12 +1954,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 规则库数据库分类要求文件本体(lbbak):分类选择流(显式携带 sections)
 	// 中无文件却勾选该分类 → 剔除其表并警告,防记录与文件分叉(2026-09-18
 	// 用户裁定)。旧式全量 JSON 导入(无 sections 字段)保持原语义不动。
-	explicitSections := len(backup.Sections) > 0
-	if explicitSections && sectionTables["security_crs_version"] && (lbbakFiles == nil || (lbbakFiles.CRSTarGz == nil && lbbakFiles.Xdb == nil)) {
+	// 规则库版本记录与文件必须同批落库:纯 JSON 备份(非 lbbak)不可能携带
+	// 数据文件,版本表恒跳过——否则记录与本地文件分叉(2026-09-18 用户裁定:
+	// 只有元数据=该类配置不应导入)。lbbak 无 waf 条目同理。
+	wafMetadataSkipped := false
+	if sectionTables["security_crs_version"] && (lbbakFiles == nil || (lbbakFiles.CRSTarGz == nil && lbbakFiles.Xdb == nil)) {
 		for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
 			delete(backup.Tables, t)
 		}
-		recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——「规则库数据库」分类已跳过")
+		wafMetadataSkipped = true
+		recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——规则库版本记录已跳过(仅 lbbak 完整备份可导入该类)")
 	}
 	for table := range backup.Tables {
 		if !sectionTables[table] {
@@ -2251,6 +2255,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		h.recordCaddyApplyResult(nil)
 	}
 	responseWarnings := skipWarnings
+	if wafMetadataSkipped {
+		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含规则库数据文件——规则库版本记录已跳过（仅 lbbak 完整备份可导入该类）")
+	}
 	if operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
 	}

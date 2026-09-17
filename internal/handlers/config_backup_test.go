@@ -719,15 +719,18 @@ func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	router.GET("/config/export", h.ExportConfigBackup)
 	router.POST("/config/import", h.ImportConfigBackup)
 
-	// When: export
+	// When: export（默认全量 JSON，不含规则库数据文件）
 	exportResponse := httptest.NewRecorder()
 	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
 	if exportResponse.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
 	}
 	backup := exportResponse.Body.String()
+	if !strings.Contains(backup, "v4.14.0") || !strings.Contains(backup, "v3.17.0") {
+		t.Fatalf("exported backup must still carry version rows (for lbbak consumers)")
+	}
 
-	// Given: 清空两张版本表（含 auto_update 偏好丢失）
+	// Given: 清空两张版本表(证明导入不回填)
 	if _, err := db.DB.Exec("DELETE FROM security_crs_version; DELETE FROM security_ip2region_version"); err != nil {
 		t.Fatalf("wipe version tables: %v", err)
 	}
@@ -738,30 +741,24 @@ func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	importRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(importResponse, importRequest)
 
-	// Then：两张表连同 auto_update 偏好一起恢复
+	// Then（2026-09-18 用户裁定改契约）：纯 JSON 备份不含规则库数据文件——
+	// 版本表不落库（防记录与本地文件分叉），导入成功且响应带跳过警告。
 	if importResponse.Code != http.StatusOK {
 		t.Fatalf("import status=%d body=%s", importResponse.Code, importResponse.Body.String())
 	}
-	var crsVersion string
-	var crsAutoUpdate int
-	var crsUpdateStatus, crsNextUpdate string
-	if err := db.DB.QueryRow("SELECT version, auto_update, COALESCE(update_status,''), COALESCE(next_update,'') FROM security_crs_version WHERE id=1").Scan(&crsVersion, &crsAutoUpdate, &crsUpdateStatus, &crsNextUpdate); err != nil {
-		t.Fatalf("read restored crs version: %v", err)
+	var crsRows, ip2Rows int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_crs_version").Scan(&crsRows); err != nil {
+		t.Fatal(err)
 	}
-	if crsVersion != "v4.14.0" || crsAutoUpdate != 1 || crsUpdateStatus != "checking" {
-		t.Fatalf("restored crs version=%q auto_update=%d update_status=%q, want v4.14.0/1/checking", crsVersion, crsAutoUpdate, crsUpdateStatus)
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_ip2region_version").Scan(&ip2Rows); err != nil {
+		t.Fatal(err)
 	}
-	assertNextUpdateRoundTrip(t, crsNextUpdate, 2099, time.January, 1, 0, 0, 0)
-	var ip2regionVersion string
-	var ip2regionAutoUpdate int
-	var ip2regionUpdateStatus, ip2regionNextUpdate string
-	if err := db.DB.QueryRow("SELECT version, auto_update, COALESCE(update_status,''), COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1").Scan(&ip2regionVersion, &ip2regionAutoUpdate, &ip2regionUpdateStatus, &ip2regionNextUpdate); err != nil {
-		t.Fatalf("read restored ip2region version: %v", err)
+	if crsRows != 0 || ip2Rows != 0 {
+		t.Fatalf("json import must skip waf version tables (crs=%d ip2=%d, want 0/0)", crsRows, ip2Rows)
 	}
-	if ip2regionVersion != "v3.17.0" || ip2regionAutoUpdate != 0 || ip2regionUpdateStatus != "downloading" {
-		t.Fatalf("restored ip2region version=%q auto_update=%d update_status=%q, want v3.17.0/0/downloading", ip2regionVersion, ip2regionAutoUpdate, ip2regionUpdateStatus)
+	if !strings.Contains(importResponse.Body.String(), "规则库数据文件") {
+		t.Fatalf("body=%s, want skip warning", importResponse.Body.String())
 	}
-	assertNextUpdateRoundTrip(t, ip2regionNextUpdate, 2099, time.June, 6, 6, 6, 6)
 }
 
 func assertNextUpdateRoundTrip(t *testing.T, got string, year int, month time.Month, day, hour, minute, second int) {
@@ -2210,19 +2207,22 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 	if !dnsProvider.Valid || dnsProvider.String != "dnspod" || !dnsCred.Valid || dnsCred.String != "" || !dnsEnabled.Valid || dnsEnabled.Int64 != 1 {
 		t.Fatalf("certificate_configs defaults: provider=%+v cred=%+v enabled=%+v, want 'dnspod'/''/1", dnsProvider, dnsCred, dnsEnabled)
 	}
-	for _, versionTable := range []string{"security_crs_version", "security_ip2region_version"} {
-		var autoUpdate, consecutiveFailures sql.NullInt64
-		var updateStatus, versionMessage, nextUpdate sql.NullString
-		if err := db.DB.QueryRow("SELECT auto_update, update_status, message, next_update, consecutive_failures FROM "+versionTable+" WHERE id=1").Scan(&autoUpdate, &updateStatus, &versionMessage, &nextUpdate, &consecutiveFailures); err != nil {
-			t.Fatalf("read normalized %s: %v", versionTable, err)
-		}
-		if !autoUpdate.Valid || autoUpdate.Int64 != 1 || !updateStatus.Valid || updateStatus.String != "idle" ||
-			!versionMessage.Valid || versionMessage.String != "" || !nextUpdate.Valid || nextUpdate.String != "" {
-			t.Fatalf("%s defaults: auto_update=%+v update_status=%+v message=%+v next_update=%+v, want 1/'idle'/''/''", versionTable, autoUpdate, updateStatus, versionMessage, nextUpdate)
-		}
-		if !consecutiveFailures.Valid || consecutiveFailures.Int64 != 0 {
-			t.Fatalf("%s consecutive_failures=%+v, want 0 (null normalized)", versionTable, consecutiveFailures)
-		}
+	// 2026-09-18 用户裁定改契约:纯 JSON 备份规则库版本表不落库(防记录与
+	// 文件分叉)。security_crs_version 空;security_ip2region_version 保留
+	// schema 种子行(id=1 'unknown',db.go:569)——导入不得写入备份行。
+	var crsRows int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_crs_version").Scan(&crsRows); err != nil {
+		t.Fatal(err)
+	}
+	if crsRows != 0 {
+		t.Fatalf("security_crs_version rows=%d, want 0 (json import must skip)", crsRows)
+	}
+	var ip2Version string
+	if err := db.DB.QueryRow("SELECT version FROM security_ip2region_version WHERE id=1").Scan(&ip2Version); err != nil {
+		t.Fatalf("read ip2region seed: %v", err)
+	}
+	if ip2Version != "unknown" {
+		t.Fatalf("security_ip2region_version version=%q, want 'unknown' (seed preserved, backup row skipped)", ip2Version)
 	}
 
 	// 消费点 6（cluster_snapshot.go snapshotRules 尾列同形）：created_at 为

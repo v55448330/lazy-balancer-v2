@@ -182,10 +182,11 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 				if err := Reload(); err != nil {
 					Logf("error", "同步后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 				}
-				AppendIP2RegionUpdateLog("INFO", "sync", "IP2Region数据库已随主节点同步更新并热换缓存")
+				RebuildRegionTreeCacheForSync()
+				AppendIP2RegionUpdateLog("INFO", "sync", "IP2Region数据库已随主节点同步更新并热换缓存、重建城市树缓存")
 			}
 			if crsChanged {
-				AppendCRSUpdateLog("INFO", "sync", "CRS 规则已随主节点同步更新(下次 Caddy 重载生效)")
+				AppendCRSUpdateLog("INFO", "sync", "CRS 规则已随主节点同步更新(随本周期配置重载生效)")
 			}
 		} else {
 			// 2026-09-18 用户裁定:同步校验无变动也要留痕(更新弹框日志)——

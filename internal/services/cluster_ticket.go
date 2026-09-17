@@ -120,8 +120,10 @@ func (s *ClusterService) ValidateLoginTicket(ctx context.Context, ticket string,
 	}
 	var user models.User
 	var passwordVersion int64
-	err = tx.QueryRowContext(ctx, `SELECT id,username,role,display_name,is_enabled,created_at,last_login,password_version FROM users WHERE id=?`, claims.UserID).
-		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion)
+	var authProvider string
+	err = tx.QueryRowContext(ctx, `SELECT id,username,role,display_name,is_enabled,created_at,last_login,password_version,COALESCE(auth_provider,'local') FROM users WHERE id=?`, claims.UserID).
+		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion, &authProvider)
+	user.AuthProvider = authProvider
 	if errors.Is(err, sql.ErrNoRows) || err == nil && (!user.IsEnabled || user.Username != claims.Username) {
 		return models.ClusterLoginTicketClaims{}, models.User{}, 0, errors.Join(ErrInvalidLoginTicket, ErrLoginTicketUserUnavailable)
 	}

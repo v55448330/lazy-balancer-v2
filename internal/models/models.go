@@ -16,6 +16,8 @@ type User struct {
 	IsEnabled    bool           `json:"is_enabled"`
 	CreatedAt    time.Time      `json:"created_at"`
 	LastLogin    sql.NullTime   `json:"last_login"`
+	// v2.3.0:认证来源(local/oidc)——票据登录跨节点透传、响应透出供前端区分
+	AuthProvider string `json:"auth_provider"`
 }
 
 type UserResponse struct {

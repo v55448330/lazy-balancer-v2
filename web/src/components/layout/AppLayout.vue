@@ -97,7 +97,11 @@
           <div class="user-info">
             <transition name="fade">
               <div v-if="!effectiveCollapsed" class="user-detail">
-                <div class="user-name">{{ menuDisplayName }}</div>
+                <div class="user-name">
+                  {{ menuDisplayName }}
+                  <!-- v2.3.0:来源标签——与用户列表列同款(warning/OIDC、info/本地) -->
+                  <el-tag :type="isOIDCUser ? 'warning' : 'info'" size="small" effect="plain" class="user-source-tag">{{ isOIDCUser ? 'OIDC' : '本地' }}</el-tag>
+                </div>
                 <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
               </div>
             </transition>
@@ -659,6 +663,7 @@ onUnmounted(() => {
 
 .profile-form { padding: 0 20px; }
 .profile-readonly-alert { margin-bottom: 20px; }
+.user-source-tag { margin-left: 6px; transform: scale(0.9); }
 .oidc-hint-block {
   width: 100%;
   padding: 8px 12px;
