@@ -24,22 +24,13 @@
     <div class="step">
       <div class="step-title">② 在认证服务后台创建应用，填入以下信息</div>
       <div class="reg-info">
-        <div class="reg-row">
-          <span class="reg-label">回调地址（本节点）</span>
-          <code class="reg-value">{{ callbackUrl }}</code>
-          <el-button size="small" text type="primary" @click="copy(callbackUrl)">复制</el-button>
-        </div>
-        <div class="reg-row">
-          <span class="reg-label">回调地址（另一节点）</span>
-          <code class="reg-value">{{ peerUrl }}</code>
-          <el-button size="small" text type="primary" @click="copy(peerUrl)">复制</el-button>
-        </div>
-        <div class="reg-row">
-          <span class="reg-label">授权范围</span>
-          <code class="reg-value">openid · profile · email</code>
+          <div v-for="node in callbackNodes" :key="node.url" class="reg-row">
+            <span class="reg-label">{{ node.label }}</span>
+            <code class="reg-value">{{ node.url }}</code>
+            <el-button size="small" text type="primary" @click="copy(node.url)">复制</el-button>
+          </div>
         </div>
       </div>
-    </div>
 
     <!-- ③ 应用凭证 -->
     <div class="step">
@@ -90,12 +81,28 @@ const lastTest = ref<{ ok: boolean; providerName?: string; error?: string } | nu
 const testing = ref(false)
 const saving = ref(false)
 
-const callbackUrl = computed(() => `${window.location.origin}/api/v1/auth/oidc/callback`)
-const peerUrl = computed(() => {
-  const { protocol, hostname, port } = window.location
-  const peerPort = port === '8001' ? '8000' : '8001'
-  return `${protocol}//${hostname}:${peerPort}/api/v1/auth/oidc/callback`
-})
+const CALLBACK_PATH = '/api/v1/auth/oidc/callback'
+const callbackUrl = computed(() => `${window.location.origin}${CALLBACK_PATH}`)
+// 从节点清单(GET /cluster/nodes,主节点才返回;单机/失败=空,静默降级只显示本节点)
+const slaveOrigins = ref<{ label: string; url: string }[]>([])
+const callbackNodes = computed(() => [
+  { label: '回调地址（本节点）', url: callbackUrl.value },
+  ...slaveOrigins.value,
+])
+
+const loadSlaves = async () => {
+  try {
+    const res = await request.get<{ data?: { name?: string; ip_address?: string; port?: number; protocol?: string; access_url?: string; is_approved?: boolean }[] }>('/cluster/nodes')
+    slaveOrigins.value = (res.data || [])
+      .filter(n => n.is_approved)
+      .map(n => {
+        const base = n.access_url?.trim() || `${n.protocol || 'http'}://${n.ip_address}:${n.port}`
+        const trimmed = base.replace(/\/+$/, '')
+        return { label: `回调地址（${n.name || n.ip_address}）`, url: `${trimmed}${CALLBACK_PATH}` }
+      })
+  } catch { /* 单机部署或非主节点——只显示本节点 */ }
+}
+onMounted(loadSlaves)
 
 const notify = () => emit('status', { enabled: enabled.value, configured: configured.value })
 
