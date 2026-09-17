@@ -201,21 +201,14 @@
           <div class="import-result">
   <div class="import-sections">
               <div class="import-sections-label">导入分类（未选分类保持现状）</div>
-              <div class="section-grid">
-                <div
+              <div class="section-chips">
+                <button
                   v-for="sec in BACKUP_SECTIONS" :key="sec.key"
-                  class="section-card"
+                  type="button" class="section-chip"
                   :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': (importValidation.type === 'v1' && sec.key !== 'rules') || (sec.key === 'waf_files' && !importValidation.has_waf_files) }"
+                  :title="sec.key === 'waf_files' && !importValidation.has_waf_files ? '备份不含 CRS/IP2Region 数据文件' : ''"
                   @click="toggleImportSection(sec.key)"
-                >
-                  <el-checkbox
-                    :model-value="importSections.includes(sec.key)"
-                    :disabled="(importValidation.type === 'v1' && sec.key !== 'rules') || (sec.key === 'waf_files' && !importValidation.has_waf_files)"
-                    @click.stop
-                  />
-                  <span class="section-name">{{ sec.label }}</span>
-                  <span v-if="sec.key === 'waf_files' && !importValidation.has_waf_files" class="section-hint">不含数据文件</span>
-                </div>
+                >{{ sec.label }}</button>
               </div>
               <el-text v-if="importValidation.type === 'v1'" type="info" size="small" class="import-v1-hint">V1 备份仅支持负载均衡规则导入</el-text>
             </div>
@@ -223,8 +216,8 @@
               {{ importValidation.type === 'v1' ? 'V1 兼容导入' : 'V2 完整备份' }}
             </el-tag>
             <div class="import-summary">
-              <span v-for="(count, key) in importValidation.summary" :key="key" class="import-summary-item">
-                {{ summaryLabels[key] || key }} {{ count }}
+              <span v-for="(count, key) in importValidation.summary" :key="key" class="import-summary-chip" :class="{ 'is-zero': !count }">
+                {{ summaryLabels[key] || key }}·{{ count }}
               </span>
             </div>
             <ul v-if="importValidation.warnings?.length" class="import-warnings">
@@ -271,11 +264,12 @@
           </div>
         </div>
       </template>
-      <div class="section-grid">
-        <div v-for="sec in BACKUP_SECTIONS" :key="sec.key" class="section-card" :class="{ 'is-active': exportSections.includes(sec.key) }" @click="toggleExportSection(sec.key)">
-          <el-checkbox :model-value="exportSections.includes(sec.key)" @click.stop />
-          <span class="section-name">{{ sec.label }}</span>
-        </div>
+      <div class="section-chips">
+        <button
+          v-for="sec in BACKUP_SECTIONS" :key="sec.key"
+          type="button" class="section-chip" :class="{ 'is-active': exportSections.includes(sec.key) }"
+          @click="toggleExportSection(sec.key)"
+        >{{ sec.label }}</button>
       </div>
       <div class="backup-dialog-actions">
         <el-button text size="small" @click="exportSections = []">全不选</el-button>
@@ -964,18 +958,34 @@ const handleSave = async () => {
 }
 .backup-dialog-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
 .backup-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.section-card {
-  display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--el-border-color-lighter); border-radius: 8px;
-  padding: 10px 12px; cursor: pointer; transition: all .15s ease;
+.section-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.section-chip {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 999px;
   background: var(--el-fill-color-blank);
+  color: var(--el-text-color-regular);
+  font-size: 12.5px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: all .15s ease;
 }
-.section-card:hover { border-color: var(--el-color-primary-light-5); }
-.section-card.is-disabled { cursor: not-allowed; opacity: .55; background: var(--el-fill-color-lighter); }
+.section-chip:hover { border-color: var(--el-color-primary-light-5); }
+.section-chip.is-active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+.section-chip.is-disabled { cursor: not-allowed; opacity: .5; }
+.import-summary-chip {
+  display: inline-flex; align-items: center;
+  border-radius: 5px; padding: 2px 8px; margin: 0 6px 6px 0;
+  background: var(--el-fill-color); color: var(--el-text-color-regular);
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.import-summary-chip.is-zero { opacity: .45; }
 .import-v1-hint { margin-top: 6px; display: inline-block; }
 .section-card.is-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.section-name { font-size: 13.5px; color: var(--el-text-color-primary); }
 .section-hint { font-size: 11.5px; color: var(--el-text-color-placeholder); }
 .backup-dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; }
 .import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }

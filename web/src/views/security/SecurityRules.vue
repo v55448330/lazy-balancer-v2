@@ -61,6 +61,7 @@
           </div>
         </el-descriptions-item>
         <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(ip2regionInfo.next_update) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="isSlaveNode" label="数据来源"><el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag></el-descriptions-item>
       </el-descriptions>
     </el-card>
 

@@ -164,7 +164,9 @@
           </el-form-item>
           <el-form-item label="认证方式">
             <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
-            <span class="oidc-hint">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span>
+          </el-form-item>
+          <el-form-item label-width="0">
+            <div class="oidc-hint-block">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</div>
           </el-form-item>
         </template>
         <template v-else>
@@ -657,5 +659,13 @@ onUnmounted(() => {
 
 .profile-form { padding: 0 20px; }
 .profile-readonly-alert { margin-bottom: 20px; }
-.oidc-hint { margin-left: 10px; font-size: 12px; color: var(--el-text-color-secondary); }
+.oidc-hint-block {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
 </style>

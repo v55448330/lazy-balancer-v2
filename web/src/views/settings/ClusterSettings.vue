@@ -618,7 +618,9 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
 const loginNode = async (node: ClusterNode): Promise<void> => {
   if (isReadOnlyProp.value || node.status !== 'online' || loginNodeId.value !== null) return
   // R72 六次：403（未启用 MFA）预检——文案指向正确入口（用户管理）。
-  if (!authStore.user?.mfa_enabled) {
+  // v2.3.0:OIDC 会话豁免(与后端 cluster_ticket 两道门同口径)——二因子
+  // 由 IdP 承担,本地 MFA 概念不适用。
+  if (!authStore.user?.mfa_enabled && authStore.user?.auth_provider !== 'oidc') {
     ElMessage.warning('登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）')
     return
   }

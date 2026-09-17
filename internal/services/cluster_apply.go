@@ -187,6 +187,15 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			if crsChanged {
 				AppendCRSUpdateLog("INFO", "sync", "CRS 规则已随主节点同步更新(下次 Caddy 重载生效)")
 			}
+		} else {
+			// 2026-09-18 用户裁定:同步校验无变动也要留痕(更新弹框日志)——
+			// 仅在实际执行同步校验(bundle 拉取)的周期记录,非每周期刷屏。
+			if bundle.CRSVersion != "" || bundle.CRSTarGzB64 != nil {
+				AppendCRSUpdateLog("INFO", "sync", "主节点 CRS 数据无更新(校验一致)")
+			}
+			if bundle.IP2RegionTag != "" || bundle.XdbB64 != nil {
+				AppendIP2RegionUpdateLog("INFO", "sync", "主节点 IP2Region 数据无更新(校验一致)")
+			}
 		}
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
