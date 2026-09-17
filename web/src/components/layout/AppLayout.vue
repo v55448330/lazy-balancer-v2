@@ -83,7 +83,7 @@
           </el-menu-item>
           <el-menu-item index="users" @click="goPage('users')">
             <el-icon><User /></el-icon>
-            <template #title>用户与认证</template>
+            <template #title>用户认证</template>
           </el-menu-item>
         </el-sub-menu>
         <el-menu-item index="audit-log" @click="goPage('audit-log')">

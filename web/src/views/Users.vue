@@ -4,7 +4,7 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><UserFilled /></el-icon>
-          用户与认证
+          用户认证
         </h2>
         <p class="page-desc">管理系统用户、权限与登录认证（OIDC）</p>
       </div>
