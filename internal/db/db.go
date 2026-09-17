@@ -720,8 +720,15 @@ func runMigrations() error {
 		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 写保护的
 		// mfa_* 计数列独立，登录锁定与 MFA 冷却互不牵连）。计数列 NOT NULL——
 		// 存量行取默认 0，不存在 NULL 语义。
-		"users.login_failed_attempts":                 "INTEGER NOT NULL DEFAULT 0",
-		"users.login_locked_until":                    "TEXT",
+		"users.login_failed_attempts": "INTEGER NOT NULL DEFAULT 0",
+		"users.login_locked_until":    "TEXT",
+		// OIDC 集成(2026-09-17 v2.3.0):用户来源标记与身份三元组——
+		// auth_provider 'local'/'oidc';oidc 用户不绑定本地账号(独立行),
+		// (issuer, subject) 唯一定位,重复登录按此命中。
+		"users.auth_provider":                         "TEXT NOT NULL DEFAULT 'local'",
+		"users.oidc_subject":                          "TEXT DEFAULT ''",
+		"users.oidc_issuer":                           "TEXT DEFAULT ''",
+		"global_config.oidc_config":                   "TEXT",
 		"mfa_challenges.attempts":                     "INTEGER DEFAULT 0",
 		"global_config.mfa_write_guard":               "BOOLEAN DEFAULT 0",
 		"global_config.mfa_lockout_enabled":           "BOOLEAN DEFAULT 0",

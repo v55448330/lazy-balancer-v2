@@ -19,6 +19,7 @@ const pages = [
   'settings-cluster',
   'settings-certificates',
   'settings-apikeys',
+  'settings-oidc',
 ] as const
 export type PageId = (typeof pages)[number]
 const validPages: ReadonlySet<string> = new Set(pages)
@@ -196,6 +197,14 @@ interface LoginResult {
     }
   }
 
+  // v2.3.0 OIDC:后端回调跳转携带的令牌直接建会话(用户信息由 init 拉取)。
+  function applyOIDCToken(rawToken: string) {
+    intentionalLogout.value = false
+    clearUserRetryTimer()
+    token.value = rawToken
+    localStorage.setItem('token', rawToken)
+  }
+
   async function loginWithTicket(ticket: string): Promise<{ skipped: boolean }> {
     if (loading.value) return { skipped: true }
     loading.value = true
@@ -282,6 +291,7 @@ interface LoginResult {
     verifyMfaLogin,
     refreshMfaStep,
     loginWithTicket,
+    applyOIDCToken,
     logout,
     fetchUser,
     fetchConfig,

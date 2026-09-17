@@ -72,7 +72,16 @@
           </div>
         </el-form>
 
-        <el-form v-else ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
+        <template v-else>
+          <!-- v2.3.0 OIDC:启用时主按钮一键跳转;本地账号折叠保底(break-glass) -->
+          <div v-if="oidcEnabled && !showLocalForm" class="oidc-login">
+            <el-button type="primary" size="large" class="oidc-btn" :loading="oidcRedirecting" @click="goOIDCLogin">
+              使用 {{ oidcDisplayName }} 登录
+            </el-button>
+            <el-divider style="margin: 14px 0 10px">或</el-divider>
+            <el-button text size="default" class="local-toggle" @click="showLocalForm = true">使用本地账号登录 ▸</el-button>
+          </div>
+          <el-form v-show="!oidcEnabled || showLocalForm" ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
           <el-form-item prop="username">
             <el-input
               v-model="form.username"
@@ -109,6 +118,7 @@
             </el-button>
           </el-form-item>
         </el-form>
+        </template>
       </template>
 
       <div class="login-footer">
@@ -237,6 +247,28 @@ const handleMfaVerify = async () => {
 }
 
 const errorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
+
+// v2.3.0 OIDC 登录态
+const oidcEnabled = ref(false)
+const oidcDisplayName = ref('OIDC')
+const showLocalForm = ref(false)
+const oidcRedirecting = ref(false)
+onMounted(async () => {
+  try {
+    const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true } as never)
+    if (res.data?.enabled) {
+      oidcEnabled.value = true
+      oidcDisplayName.value = res.data.display_name || 'OIDC'
+    }
+  } catch {
+    // 状态端点不可达=未启用,静默回退本地登录
+  }
+})
+const goOIDCLogin = () => {
+  oidcRedirecting.value = true
+  const returnTo = encodeURIComponent('/')
+  window.location.href = `/api/v1/auth/oidc/login?return_to=${returnTo}`
+}
 
 const handleLogin = async () => {
   if (loading.value) return

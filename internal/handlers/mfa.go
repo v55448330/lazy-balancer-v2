@@ -97,7 +97,26 @@ func (h *Handlers) MFAStatus(c *gin.Context) {
 // + URI，攻击者配好自己的 authenticator 后 activate 即夺取 MFA；受害者未启用
 // 场景则被强开攻击者控制的 MFA = 永久登录 DoS）。未启用用户保持无门（首次
 // 绑定的可用性优先，会话本身已过密码认证）。
+// rejectOIDCUserMFAOperation v2.3.0 用户裁定:OIDC 用户与本地 MFA 体系完全
+// 解耦——对其禁止本地 MFA 的启用/激活/禁用/重置(身份保证在 IdP 侧)。
+// targetUserID=0 表示操作自己(从 JWT 取)。
+func rejectOIDCUserMFAOperation(c *gin.Context, targetUserID int) bool {
+	uid := targetUserID
+	if uid == 0 {
+		uid = getContextUserIDInt(c)
+	}
+	var provider string
+	if err := db.DB.QueryRow("SELECT COALESCE(auth_provider,'local') FROM users WHERE id=?", uid).Scan(&provider); err == nil && provider == "oidc" {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "OIDC 用户不支持本地 MFA（身份验证由认证服务承担）"})
+		return true
+	}
+	return false
+}
+
 func (h *Handlers) MFASetup(c *gin.Context) {
+	if rejectOIDCUserMFAOperation(c, 0) {
+		return
+	}
 	if !guardAuthJSONBody(c) {
 		return
 	}
@@ -154,6 +173,9 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 
 // MFAActivate POST /auth/mfa/activate — 验证当前码 → 启用 + 恢复码（仅此一次明文）。
 func (h *Handlers) MFAActivate(c *gin.Context) {
+	if rejectOIDCUserMFAOperation(c, 0) {
+		return
+	}
 	if !guardAuthJSONBody(c) {
 		return
 	}
@@ -189,6 +211,9 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 // MFADisable POST /auth/mfa/disable — 确认有效验证码后禁用（2026-09 用户裁定：
 // 登录后无密码输入；验码失败只提示不计数，唯一锁定在登录阶段）。
 func (h *Handlers) MFADisable(c *gin.Context) {
+	if rejectOIDCUserMFAOperation(c, 0) {
+		return
+	}
 	if !guardAuthJSONBody(c) {
 		return
 	}
@@ -297,12 +322,15 @@ func mfaStepUpVerifiedInContext(c *gin.Context) bool {
 // 验证码（防会话劫持后一键拆第二因子）；操作者是管理员（admin 组路由门）或
 // 目标即本人（self-service）。请求体可选 {code}。
 func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
-	if !guardAuthJSONBody(c) {
-		return
-	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的用户 ID"})
+		return
+	}
+	if rejectOIDCUserMFAOperation(c, id) {
+		return
+	}
+	if !guardAuthJSONBody(c) {
 		return
 	}
 	operatorID := getContextUserIDInt(c)

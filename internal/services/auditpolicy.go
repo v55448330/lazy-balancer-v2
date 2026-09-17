@@ -62,13 +62,17 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/cluster/sync/pull":         AuditPolicyExplicit,
 	"POST /api/v1/cluster/forget-pins":       AuditPolicyExplicit,
 	"PUT /api/v1/cluster/settings":           AuditPolicyExplicit,
-	"POST /api/v1/config/preview":            AuditPolicySkip,
-	"POST /api/v1/config/import/validate":    AuditPolicySkip,
-	"PUT /api/v1/config":                     AuditPolicyExplicit,
-	"PUT /api/v1/admin-tls":                  AuditPolicyExplicit,
-	"POST /api/v1/admin-tls/inspect":         AuditPolicySkip,
-	"POST /api/v1/system/restart":            AuditPolicyGeneric,
-	"POST /api/v1/config/reload":             AuditPolicyGeneric,
+	// OIDC 认证集成(v2.3.0):配置写操作显式审计(handler 内已留痕,分类为显式)
+	"PUT /api/v1/settings/oidc":           AuditPolicyExplicit,
+	"DELETE /api/v1/settings/oidc":        AuditPolicyExplicit,
+	"POST /api/v1/settings/oidc/test":     AuditPolicyExplicit,
+	"POST /api/v1/config/preview":         AuditPolicySkip,
+	"POST /api/v1/config/import/validate": AuditPolicySkip,
+	"PUT /api/v1/config":                  AuditPolicyExplicit,
+	"PUT /api/v1/admin-tls":               AuditPolicyExplicit,
+	"POST /api/v1/admin-tls/inspect":      AuditPolicySkip,
+	"POST /api/v1/system/restart":         AuditPolicyGeneric,
+	"POST /api/v1/config/reload":          AuditPolicyGeneric,
 	// R69 C-N3-c：validate 经 /load 真实加载候选配置（handler 成功后回弹权威
 	// 配置）——不再豁免审计，handler 显式记录校验三态。
 	"POST /api/v1/config/validate":                        AuditPolicyExplicit,
@@ -118,7 +122,8 @@ var auditRoutePolicies = map[string]AuditPolicy{
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
-	"POST /api/v1/ca-providers/:id/test":        {},
+	"POST /api/v1/ca-providers/:id/test": {},
+
 	"POST /api/v1/certificate-configs/:id/test": {},
 	"POST /api/v1/certificates/jobs/current":    {},
 	"POST /api/v1/certificate-configs/test":     {},
@@ -167,6 +172,9 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"POST /api/v1/auth/mfa/recovery-codes",
 		"POST /api/v1/users/:id/mfa/reset",
 		"POST /api/v1/auth/logout",
+		"PUT /api/v1/settings/oidc",
+		"DELETE /api/v1/settings/oidc",
+		"POST /api/v1/settings/oidc/test",
 		"POST /api/v1/auth/setup",
 		"POST /api/v1/users",
 		"PUT /api/v1/users/:id",

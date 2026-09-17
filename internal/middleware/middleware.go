@@ -277,6 +277,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/auth/mfa/verify", loginRateLimit(), h.MFAVerifyLogin)
 		v1.GET("/auth/setup", loginRateLimit(), h.GetSetupStatus)
 		v1.POST("/auth/setup", loginRateLimit(), h.SetupAdmin)
+		// OIDC 公开链路(v2.3.0):status=登录页按钮显隐;login=跳转(含
+		// prompt=login 写保护重认证);callback=授权码回调。均登录前可达,
+		// 不限流——回调校验失败拒绝即止,不计入登录锁定(防伪造回调 DoS 锁号)。
+		v1.GET("/auth/oidc/status", h.OIDCStatus)
+		v1.GET("/auth/oidc/login", h.OIDCLogin)
+		v1.GET("/auth/oidc/callback", h.OIDCCallback)
 		v1.GET("/branding", h.GetBranding)
 		v1.POST("/cluster/register", clusterRegisterRateLimit(), h.RegisterClusterNode)
 		v1.GET("/cluster/register/:id/status", registrationAuth(db.DB), h.GetClusterRegistrationStatus)
@@ -361,6 +367,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/config/import", h.ImportConfigBackup)
 				admin.POST("/config/import/validate", h.ValidateConfigImport)
 				admin.POST("/config/import/v1", h.ImportV1Config)
+
+				// OIDC 认证集成(v2.3.0):显示/测试/修改/删除。
+				admin.GET("/settings/oidc", h.OIDCSettings)
+				admin.PUT("/settings/oidc", h.OIDCSettingsUpdate)
+				admin.POST("/settings/oidc/test", h.OIDCSettingsTest)
+				admin.DELETE("/settings/oidc", h.OIDCSettingsDelete)
 
 				// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)
@@ -695,6 +707,11 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		// R72 B-1：JWT 成功路径补 auth_type——全仓此前只有 apiKeyAuth 设置该值，
 		// mfaStepUpGuard 的 != "jwt" 对 JWT 用户恒真（守卫整体死代码）。
 		c.Set("auth_type", "jwt")
+		// v2.3.0 OIDC：auth_method 声明透传（local/oidc,缺省=local）——
+		// 写保护矩阵分支依据（绑本地 MFA→TOTP;未绑 OIDC 会话→IdP 重认证）。
+		if am, ok := claims["auth_method"].(string); ok && am != "" {
+			c.Set("auth_method", am)
+		}
 		// v2.1.8 MFA step-up：mfa_ts 声明透传（无声明=0，guard 视为过期）
 		if ts, ok := claims["mfa_ts"].(float64); ok {
 			c.Set("mfa_ts", ts)
@@ -912,6 +929,9 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			return
 		}
 		if !mfaEnabled {
+			// v2.3.0 用户裁定:OIDC 用户与本地 MFA 体系完全解耦——身份保证由
+			// IdP 承担(其 MFA 已在登录时验证),本地写保护仅对本地用户生效;
+			// OIDC 会话(auth_method=oidc)直通。本地未绑 MFA 保持现状直通。
 			c.Next()
 			return
 		}

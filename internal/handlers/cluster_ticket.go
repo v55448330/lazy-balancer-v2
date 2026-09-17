@@ -22,14 +22,18 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// 全局 step-up 弹窗验码后自动重试），票据本身即含 MFA 事实。
 	// R72 C-I-4：DB 读错误必须 fail-closed（无法证明已启用=拒绝），此前
 	// err != nil 时条件不成立直接放行发票。
-	mfaEnabled, err := services.MFAUserEnabled(currentUserID(c))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取 MFA 状态失败"})
-		return
-	}
-	if !mfaEnabled {
-		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）"})
-		return
+	// v2.3.0 用户裁定:OIDC 用户与本地 MFA 体系完全解耦(IdP 侧已验证二因子),
+	// 两道 MFA 门仅对本地用户生效——OIDC 会话直接放行发票。
+	if c.GetString("auth_method") != "oidc" {
+		mfaEnabled, err := services.MFAUserEnabled(currentUserID(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取 MFA 状态失败"})
+			return
+		}
+		if !mfaEnabled {
+			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）"})
+			return
+		}
 	}
 	// R72 三次（用户裁决）：登录从节点每次点击都要求 MFA 验证——不再复用登录后
 	// 的 10 分钟写操作宽限窗（用户实测窗口内直接跳转登录成功，与「点击登录时
@@ -37,7 +41,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// verify-step → 自动重试这一次链路闭环（重试发生在验证后的数秒内）。
 	// API Key（机器身份/MCP 工具）无 mfa_ts 概念，豁免该窗口检查——MFA 是
 	// 人类交互式登录的第二因子，API Key 已有自身的密钥管理边界。
-	if c.GetString("auth_type") == "jwt" {
+	if c.GetString("auth_type") == "jwt" && c.GetString("auth_method") != "oidc" {
 		mfaTs, _ := c.Get("mfa_ts")
 		if ts, ok := mfaTs.(float64); !ok || time.Since(time.Unix(int64(ts), 0)) >= 60*time.Second {
 			c.AbortWithStatusJSON(http.StatusPreconditionRequired, gin.H{"code": 428, "message": "MFA_STEP_UP_REQUIRED", "detail": "登录从节点需要 MFA 验证"})

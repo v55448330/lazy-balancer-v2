@@ -109,9 +109,15 @@
             <span class="text-secondary">{{ formatDate(row.last_login) || '-' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="来源" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.auth_provider === 'oidc' ? 'warning' : 'info'" size="small" effect="plain">{{ row.auth_provider === 'oidc' ? 'OIDC' : '本地' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="MFA" width="80" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.mfa_enabled ? 'success' : 'info'" size="small" effect="plain">
+            <el-tag v-if="row.auth_provider === 'oidc'" type="info" size="small" effect="plain">—</el-tag>
+            <el-tag v-else :type="row.mfa_enabled ? 'success' : 'info'" size="small" effect="plain">
               {{ row.mfa_enabled ? '已启用' : '未启用' }}
             </el-tag>
           </template>
@@ -124,10 +130,10 @@
             <el-button type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
+            <el-button v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
               启用 MFA
             </el-button>
-            <el-button v-if="row.mfa_enabled && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
+            <el-button v-if="row.mfa_enabled && row.auth_provider !== 'oidc' && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
               重置 MFA
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">

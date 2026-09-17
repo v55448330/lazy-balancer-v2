@@ -85,6 +85,15 @@ var mcpUncoveredRoutes = map[string]string{
 	// —— 批量便捷端点（面向面板列表轮询的批量形态；Agent 用单条工具）——
 	"POST /api/v1/rules/cert-info":           "批量便捷端点：一次查最多 200 个 caddy_id 的证书信息，供面板规则列表轮询；Agent 用 get_rule_cert_info 按单条查",
 	"POST /api/v1/certificates/jobs/current": "批量便捷端点：一次查最多 200 个 rule_id 的当前任务，供面板规则列表轮询任务状态；Agent 用 list_cert_jobs 按 rule_id 过滤",
+	// —— OIDC 认证集成(v2.3.0):浏览器跳转/回调链路,Agent 无消费场景;
+	// 配置管理属低频管理面板操作(测试连接为发现探测,面板专用) ——
+	"GET /api/v1/auth/oidc/status":    "登录页按钮显隐(浏览器会话探测),无 Agent 场景",
+	"GET /api/v1/auth/oidc/login":     "浏览器 302 跳转 IdP 授权页(交互式登录链路)",
+	"GET /api/v1/auth/oidc/callback":  "IdP 授权码回调(浏览器重定向链路)",
+	"GET /api/v1/settings/oidc":       "OIDC 配置管理(低频管理面板操作)",
+	"PUT /api/v1/settings/oidc":       "OIDC 配置管理(低频管理面板操作)",
+	"POST /api/v1/settings/oidc/test": "OIDC 发现探测(配置向导专用,面板交互)",
+	"DELETE /api/v1/settings/oidc":    "OIDC 配置管理(低频管理面板操作)",
 	// —— 面板表单流程专属 ——
 	"POST /api/v1/certificate-configs/test": "面板「先测后存」表单流程：测试尚未保存的 DNS 配置（凭证随请求体内联提交）；Agent 流程中配置已落库，用 test_certificate_config（/certificate-configs/:id/test）",
 	// —— 面板展示 / 监控抓取（REST 专用只读数据）——

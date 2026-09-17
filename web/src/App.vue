@@ -16,7 +16,7 @@
       <SecurityBlockPages v-else-if="currentPage === 'security-block-pages'" />
       <SecurityOverview v-else-if="currentPage === 'security-overview'" />
       <SecurityEvents v-else-if="currentPage === 'security-events'" />
-      <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
+      <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys' || currentPage === 'settings-oidc'" />
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
       <AuditLog v-else-if="currentPage === 'audit-log'" />
@@ -69,14 +69,30 @@ onMounted(async () => {
   const fragment = new URLSearchParams(url.hash.slice(1))
   const hasLoginTicket = fragment.has('login_ticket')
   const loginTicket = fragment.get('login_ticket') ?? ''
-  if (hasLoginTicket) {
+  // v2.3.0 OIDC 回跳:#/oidc/callback?token=...&return_to=...——后端回调以
+  // fragment 携带令牌(不发服务器),此处接收建会话(与票据登录同型)。
+  const oidcToken = url.hash.includes('/oidc/callback') ? (fragment.get('token') ?? '') : ''
+  const oidcReturnTo = url.hash.includes('/oidc/callback') ? (fragment.get('return_to') ?? '') : ''
+  if (hasLoginTicket || url.hash.includes('/oidc/callback')) {
     fragment.delete('login_ticket')
+    fragment.delete('token')
+    fragment.delete('return_to')
+    fragment.delete('expires_at')
+    fragment.delete('oidc')
     const remainingHash = fragment.toString()
     window.history.replaceState({}, '', `${url.pathname}${url.search}${remainingHash ? `#${remainingHash}` : ''}`)
   }
 
   try {
-    if (hasLoginTicket) {
+    if (oidcToken) {
+      // OIDC 登录:令牌直接建会话,return_to 回跳(缺省 dashboard)
+      authStore.applyOIDCToken(oidcToken)
+      // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)
+      const knownPages = ['dashboard', 'rules', 'security-overview', 'security-policies', 'security-rules', 'security-block-pages', 'security-events', 'settings-basic', 'settings-cluster', 'settings-certificates', 'settings-apikeys', 'settings-oidc', 'users', 'audit-log', 'caddy']
+      const target = oidcReturnTo.replace(/^\//, '')
+      authStore.setCurrentPage(knownPages.includes(target) ? (target as 'dashboard') : 'dashboard')
+      await authStore.init()
+    } else if (hasLoginTicket) {
       const hadValidSession = authStore.isLoggedIn
       try {
         const result = await authStore.loginWithTicket(loginTicket)

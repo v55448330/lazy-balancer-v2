@@ -19,14 +19,15 @@ type User struct {
 }
 
 type UserResponse struct {
-	ID          int        `json:"id"`
-	Username    string     `json:"username"`
-	Role        string     `json:"role"`
-	DisplayName *string    `json:"display_name"`
-	IsEnabled   bool       `json:"is_enabled"`
-	MFAEnabled  bool       `json:"mfa_enabled"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastLogin   *time.Time `json:"last_login"`
+	ID           int        `json:"id"`
+	Username     string     `json:"username"`
+	Role         string     `json:"role"`
+	DisplayName  *string    `json:"display_name"`
+	IsEnabled    bool       `json:"is_enabled"`
+	MFAEnabled   bool       `json:"mfa_enabled"`
+	AuthProvider string     `json:"auth_provider"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLogin    *time.Time `json:"last_login"`
 }
 
 func NewUserResponse(user User) UserResponse {

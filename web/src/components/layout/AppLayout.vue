@@ -81,6 +81,10 @@
             <el-icon><Key /></el-icon>
             <template #title>API 密钥</template>
           </el-menu-item>
+          <el-menu-item index="settings-oidc" @click="goPage('settings-oidc')">
+            <el-icon><Lock /></el-icon>
+            <template #title>认证集成</template>
+          </el-menu-item>
           <el-menu-item index="users" @click="goPage('users')">
             <el-icon><User /></el-icon>
             <template #title>用户管理</template>
@@ -219,6 +223,7 @@ const pageTitle: Record<string, string> = {
   'settings-cluster': '系统设置 / 集群管理',
   'settings-certificates': '系统设置 / 免费证书',
   'settings-apikeys': '系统设置 / API 密钥',
+  'settings-oidc': '系统设置 / 认证集成',
   'security-overview': '安全防护 / 安全总览',
   'security-events': '安全防护 / 事件日志',
   'security-policies': '安全防护 / 安全策略',

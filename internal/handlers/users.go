@@ -17,7 +17,7 @@ import (
 )
 
 func (h *Handlers) ListUsers(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(mfa_enabled,0) FROM users ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(mfa_enabled,0), COALESCE(auth_provider,'local') FROM users ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
@@ -28,12 +28,14 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 	for rows.Next() {
 		var u models.User
 		var mfaEnabled int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin, &mfaEnabled); err != nil {
+		var authProvider string
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin, &mfaEnabled, &authProvider); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 			return
 		}
 		response := models.NewUserResponse(u)
 		response.MFAEnabled = mfaEnabled == 1
+		response.AuthProvider = authProvider
 		users = append(users, response)
 	}
 	if err := rows.Err(); err != nil {
