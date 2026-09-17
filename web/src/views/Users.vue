@@ -14,6 +14,8 @@
       </el-button>
     </div>
 
+    <OIDCSettings />
+
     <el-card v-if="showForm" class="form-card">
       <template #header>
         <div class="card-header">
@@ -154,7 +156,7 @@
       </div>
     </el-card>
 
-    <OIDCSettings class="mt16" />
+
     <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
          点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
     <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
