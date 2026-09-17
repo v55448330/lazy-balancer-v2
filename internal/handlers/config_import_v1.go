@@ -580,11 +580,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
-		// 审计 A3-S2/B3-S2：与 ImportConfigBackup 同序（AdminTLS 之后）——操作者
-		// 自锁门也须进预览，否则预览显示「可导入」而实际导入 400。
+		// 2026-09-18 用户裁定:操作者缺席不再阻断——降级为预览 warning(分类
+		// 未选系统数据时操作者不受影响;选了也尊重用户选择)。
+		validateWarnings := skipWarnings[:0:0]
+		validateWarnings = append(validateWarnings, skipWarnings...)
 		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "导入的备份不包含当前操作账户，导入后您将无法登录"}})
-			return
+			validateWarnings = append(validateWarnings, "备份不包含当前操作账户——若导入时勾选“系统数据”，导入后请使用备份内的管理员账户登录")
 		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {

@@ -95,9 +95,6 @@
       <div class="aside-footer">
         <el-dropdown trigger="click" @command="handleCommand">
           <div class="user-info">
-            <el-avatar :size="36" class="user-avatar">
-              <el-icon><User /></el-icon>
-            </el-avatar>
             <transition name="fade">
               <div v-if="!effectiveCollapsed" class="user-detail">
                 <div class="user-name">{{ menuDisplayName }}</div>
@@ -546,11 +543,6 @@ onUnmounted(() => {
   background: #f9fafb;
 }
 
-.user-avatar {
-  background: #eff6ff;
-  color: #3b82f6;
-  flex-shrink: 0;
-}
 
 .user-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 

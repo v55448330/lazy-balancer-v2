@@ -901,11 +901,10 @@ func TestImportConfigBackup_remaps_rule_updated_by_to_restored_user(t *testing.T
 	}
 }
 
-func TestImportConfigBackup_rejects_backup_missing_operator_account(t *testing.T) {
-	// 审计 B3：备份不含操作者自身账户=永久自锁——导入全量替换 users/api_keys，
-	// 操作者账户被清且 password_version 递增使其 JWT 同时失效，导入后无法登录；
-	// 既有「至少一个启用管理员」门（备份内 otheradmin）拦不住操作者本人缺席。
-	// 校验期前置 400 拒绝，零写入（users/lb_rules 均不被替换）。
+func TestImportConfigBackup_missingOperatorAccount_respectsChoice(t *testing.T) {
+	// 2026-09-18 用户裁定:分类导入落地后,「备份不含操作者账户」不再是硬阻断
+	// ——①用户可能只导入负载规则(users 表不动,操作者仍在);②即使勾了系统数据
+	// 导致操作者被替换,也尊重用户选择——降级为响应 warning + 审计警告,导入照常。
 	// Given
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'operator-admin','hash','admin',1);
@@ -928,12 +927,12 @@ func TestImportConfigBackup_rejects_backup_missing_operator_account(t *testing.T
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then：400 自锁消息，且表未被替换（操作者仍在、备份数据未入库、原规则归属保留）
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+	// Then：导入成功 + warning 提示操作者将被替换；备份数据照常入库
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "导入的备份不包含当前操作账户") {
-		t.Fatalf("body=%s, want self-lockout message", response.Body.String())
+	if !strings.Contains(response.Body.String(), "当前操作账户") {
+		t.Fatalf("body=%s, want operator-account warning", response.Body.String())
 	}
 	var operatorCount, otherAdminCount int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='operator-admin'").Scan(&operatorCount); err != nil {
@@ -942,19 +941,15 @@ func TestImportConfigBackup_rejects_backup_missing_operator_account(t *testing.T
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='otheradmin'").Scan(&otherAdminCount); err != nil {
 		t.Fatalf("read backup admin: %v", err)
 	}
-	if operatorCount != 1 || otherAdminCount != 0 {
-		t.Fatalf("users after rejected import: operator=%d otheradmin=%d, want 1/0（表未替换）", operatorCount, otherAdminCount)
+	if operatorCount != 0 || otherAdminCount != 1 {
+		t.Fatalf("users after import: operator=%d otheradmin=%d, want 0/1（已按备份替换）", operatorCount, otherAdminCount)
 	}
-	var preUpdatedBy sql.NullInt64
 	var selflockCount int
-	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_pre'").Scan(&preUpdatedBy); err != nil {
-		t.Fatalf("read pre-import rule: %v", err)
-	}
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_selflock'").Scan(&selflockCount); err != nil {
 		t.Fatalf("read imported rule: %v", err)
 	}
-	if selflockCount != 0 || !preUpdatedBy.Valid || preUpdatedBy.Int64 != 1 {
-		t.Fatalf("lb_rules after rejected import: selflock=%d pre updated_by=%+v, want 0/1（归属保留）", selflockCount, preUpdatedBy)
+	if selflockCount != 1 {
+		t.Fatalf("lb_rules after import: selflock=%d, want 1（导入已应用）", selflockCount)
 	}
 }
 

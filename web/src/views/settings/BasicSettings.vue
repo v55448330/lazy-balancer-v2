@@ -129,12 +129,7 @@
             <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
           </div>
         </div>
-        <div class="info-item backup-sections-item">
-          <span class="info-label">导出分类</span>
-          <el-checkbox-group v-model="exportSections" size="small" class="backup-sections">
-            <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key">{{ sec.label }}</el-checkbox>
-          </el-checkbox-group>
-        </div>
+
         <div class="info-item">
           <span class="info-label">重启服务</span>
           <el-button size="small" type="danger" plain :disabled="isReadOnly" :loading="restarting" @click="handleRestart">重启</el-button>
@@ -252,6 +247,18 @@
         <el-button type="primary" :disabled="!importValidation?.valid" :loading="importing" @click="confirmImport">确认导入</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="exportDialogVisible" title="导出配置备份" width="min(480px, 92vw)" :close-on-click-modal="false">
+      <el-checkbox-group v-model="exportSections" class="backup-sections">
+        <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key">{{ sec.label }}</el-checkbox>
+      </el-checkbox-group>
+      <el-alert type="warning" :closable="false" show-icon class="mt8"
+        title="导出包含凭证与证书材料，请加密保管" />
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">确认导出</el-button>
+      </template>
+    </el-dialog>
   </div>
 
   <!-- R72 十四次（用户裁决）：写操作验证「支持的操作」清单——与后端 mfaStepUpGuard
@@ -366,11 +373,10 @@ const BACKUP_SECTIONS = [
   { key: 'security', label: '安全策略及自定义规则' },
 ] as const
 const exportSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
-const openExportDialog = async (): Promise<void> => {
+const exportDialogVisible = ref(false)
+const openExportDialog = (): void => {
   if (backupDisabled.value || exporting.value) return
-  if (exportSections.value.length === 0) { ElMessage.warning('请至少选择一个导出分类'); return }
-  await ElMessageBox.confirm('导出包含凭证与证书材料，请加密保管。确认导出？', '导出配置备份', { type: 'warning' })
-  await exportBackup()
+  exportDialogVisible.value = true
 }
 const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
@@ -388,6 +394,7 @@ const exportBackup = async (): Promise<void> => {
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
     setTimeout(() => URL.revokeObjectURL(url), 1000)
+    exportDialogVisible.value = false
     mfaAwareSuccess('配置备份已导出')
   } catch {
     // 错误提示已由全局拦截器（含 Blob 错误体解析）展示

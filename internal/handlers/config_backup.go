@@ -1881,14 +1881,6 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	importUsername := c.GetString("username")
-	// 审计 B3：导入不含自身账户的备份=永久自锁——全量替换 users/api_keys 后操作者
-	// 账户消失，且上方 password_version 递增会吊销其 JWT，现有「至少一个启用管理员」
-	// 门拦不住操作者本人缺席。校验期前置拒绝（零写入语义，也不启动 CA 队列
-	// PauseAndDrain）；API Key 调用方以属主账户用户名作为操作者，同门适用。
-	if importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入的备份不包含当前操作账户，导入后您将无法登录"})
-		return
-	}
 	// v2.3.0 分类导入:校验和已验整包(上方 validateV2Backup),此处按所选
 	// 分类过滤实际覆盖面——未选分类的表与全局配置保持现状。
 	sectionTables, includeGlobal, sectionsOK := configBackupSectionTables(backup.Sections)
@@ -1903,6 +1895,15 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	if !includeGlobal {
 		backup.Config = nil
+	}
+	// 2026-09-18 用户裁定:「备份不含操作者账户」不再硬阻断——①分类导入可
+	// 能未选系统数据(操作者仍在);②即使勾了系统数据导致操作者被替换,也尊
+	// 重用户选择。降级为响应 warning+审计警告,导入照常(操作者 JWT 由下方
+	// password_version 递增吊销,需用备份内账户重新登录)。
+	operatorReplaced := false
+	if importUsername != "" && sectionTables["users"] && !backupContainsUsername(backup.Tables["users"], importUsername) {
+		operatorReplaced = true
+		recordAudit(c, "导入警告", "配置备份", "备份不含当前操作账户——系统数据将被替换,导入后请使用备份内的管理员账户登录")
 	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
@@ -2158,6 +2159,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
+	if operatorReplaced {
+		auditParts = append(auditParts, "操作者账户已被备份替换,请使用备份内管理员登录")
+	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
@@ -2167,7 +2171,11 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if !reseedBlockPageNeeded || reseedApplyFailed == false {
 		h.recordCaddyApplyResult(nil)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
+	responseWarnings := skipWarnings
+	if operatorReplaced {
+		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 
 func importCountsDetail(tables map[string][]map[string]any) string {

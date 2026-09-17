@@ -44,7 +44,7 @@
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
         <el-table-column prop="created_at" label="时间" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
-        <el-table-column label="操作人" width="170">
+        <el-table-column label="操作人" width="200">
           <template #default="{ row }">
             <el-tooltip v-if="row.display_name && row.display_name !== row.username" :content="`${row.display_name}（${row.username}）`" placement="top">
               <span class="operator-cell">{{ row.display_name }}<span class="operator-email">（{{ row.username }}）</span></span>
