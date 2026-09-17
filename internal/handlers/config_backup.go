@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -737,9 +739,9 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	if backup.Meta.Version != 1 && backup.Meta.Version != 2 {
 		return false, fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
 	}
-	if backup.Config == nil {
-		return false, errors.New("备份缺少全局配置")
-	}
+	// v2.3.0 分类导出可不带全局配置区(未勾选「全局配置」):Config=nil 合法,
+	// 校验和按导出时的实际内容(含 null 形态)计算仍完整覆盖;从完整导出中
+	// 恶意剥离 Config 会触发校验和不一致而被拒。
 	// R45 F-3: v2 备份必带导出时间戳与校验和（v2.1.1 起导出即两者齐备）。剥掉
 	// exported_at 或 checksum 的 v2 文件一律按不兼容拒绝——旧格式校验和回退仅限
 	// Version==1 的史前导出，防止 Config 区（dns_credentials/acme_email/管理面板
@@ -794,9 +796,24 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	if backup.Meta.Version == 1 {
 		requiredTables = configBackupV1Tables
 	}
-	for _, required := range requiredTables {
-		if _, exists := backup.Tables[required]; !exists {
-			return false, errors.New("备份缺少必需的数据表: " + required)
+	// v2.3.0 分类导出只含所选分类的表:必需表清单仅对「全量形态」生效——
+	// 以是否含 users 表区分全量/分类(全量导出恒含;V1 恒全量)。分类备份
+	// 只要求至少一张已知表,完整性由校验和兜底。
+	if _, hasUsers := backup.Tables["users"]; hasUsers || backup.Meta.Version == 1 {
+		for _, required := range requiredTables {
+			if _, exists := backup.Tables[required]; !exists {
+				return false, errors.New("备份缺少必需的数据表: " + required)
+			}
+		}
+	} else {
+		known := 0
+		for _, table := range configBackupTables {
+			if _, exists := backup.Tables[table]; exists {
+				known++
+			}
+		}
+		if known == 0 {
+			return false, errors.New("备份不包含任何已知数据表")
 		}
 	}
 	for _, table := range configBackupTables {
@@ -829,6 +846,11 @@ func validateV2Backup(backup configBackup) (bool, error) {
 		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
 			return false, errors.New(invalidCredentialsMsg)
 		}
+	}
+	// v2.3.0 分类导出可不带 users 表:不含/空=本地用户不动,管理员门跳过
+	// (全量导出恒有≥1 管理员;上方 normalize 已把缺失表补成空切片,故按长度判)
+	if len(backup.Tables["users"]) == 0 {
+		return false, nil
 	}
 	for _, user := range backup.Tables["users"] {
 		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
@@ -1736,6 +1758,21 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
+	// v2.3.0:勾选「规则库数据库」→ lbbak tar.gz 包(含 CRS/IP2Region 文件本体)
+	if strings.Contains(c.Query("sections"), "waf_files") {
+		backupJSON, err := json.Marshal(backup)
+		if err == nil {
+			payload, perr := buildLbbakPayload(backupJSON, services.BuildWafFileBundle())
+			if perr == nil {
+				recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管", services.AuditResultPart("success")))
+				writeLbbakResponse(c, payload)
+				return
+			}
+			err = perr
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
+		return
+	}
 	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出为完整备份（含凭证与证书材料），请妥善保管", services.AuditResultPart("success")))
 	c.Header("Cache-Control", "no-store, private")
 	c.Header("Pragma", "no-cache")
@@ -1752,6 +1789,22 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if !limitConfigImportBody(c) {
 		return
 	}
+	// v2.3.0 lbbak:tar.gz 备份先解包校验,内部 config.json 走既有 V2 流程
+	var lbbakFiles *lbbakPayload
+	if raw, rerr := io.ReadAll(c.Request.Body); rerr == nil {
+		if isLbbakBytes(raw) {
+			payload, perr := parseLbbak(raw)
+			if perr != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: perr.Error()})
+				return
+			}
+			lbbakFiles = payload
+			c.Request.Body = io.NopCloser(bytes.NewReader(payload.ConfigJSON))
+		} else {
+			c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+	}
+	exportedTables := map[string]bool{}
 	var backup configBackup
 	if err := c.ShouldBindJSON(&backup); err != nil {
 		if isRequestBodyTooLarge(err) {
@@ -1761,10 +1814,20 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件格式不正确"})
 		return
 	}
+	for table := range backup.Tables {
+		exportedTables[table] = true
+	}
 	usedLegacyChecksum, err := validateV2Backup(backup)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	// validateV2Backup 会把缺失表回填为空切片(校验均匀性),此处还原「缺席」
+	// 语义——分类导出不含的表不得被当作「清空本地表」应用
+	for table := range backup.Tables {
+		if !exportedTables[table] {
+			delete(backup.Tables, table)
+		}
 	}
 	if usedLegacyChecksum {
 		// R43 F-D: 旧格式校验和仅覆盖数据表、不含全局配置区，完整性保障较弱，
@@ -2170,6 +2233,10 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// 失败标记，无条件清除会把真实失败横幅抹掉）。
 	if !reseedBlockPageNeeded || reseedApplyFailed == false {
 		h.recordCaddyApplyResult(nil)
+	}
+	// lbbak:文件落盘(sha 幂等)——与版本记录行原子同批(行在上方事务内)
+	if lbbakFiles != nil {
+		applyLbbakWafFiles(c, lbbakFiles)
 	}
 	responseWarnings := skipWarnings
 	if operatorReplaced {

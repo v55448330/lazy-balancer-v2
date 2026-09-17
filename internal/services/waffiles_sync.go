@@ -555,3 +555,12 @@ func sanitizeBundleVersion(v string) string {
 	}
 	return v
 }
+
+// OverrideWafLivePathsForTest 重定向 CRS/IP2Region 活动文件路径,仅测试使用
+// (生产路径为容器内 /app/waf/crs 与 ip2regionLivePath;handlers 层打包/回放
+// 测试无法访问包内 var,经此注入临时目录)。
+func OverrideWafLivePathsForTest(crsDir, xdbPath string) (restore func()) {
+	oldCrs, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = crsDir, xdbPath
+	return func() { crsLiveDir, ip2regionLivePath = oldCrs, oldXdb }
+}

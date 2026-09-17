@@ -191,7 +191,7 @@
         <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>
         <span v-else class="import-hint">支持 V2 完整备份与 V1（nginx 版）备份</span>
       </div>
-      <input ref="importInput" type="file" accept="application/json,.json,.bak" class="import-input" @change="handleImportFile" />
+      <input ref="importInput" type="file" accept="application/json,.json,.bak,.lbbak,application/gzip" class="import-input" @change="handleImportFile" />
 
       <div v-if="importValidating" v-loading="true" class="import-validating">正在校验备份文件...</div>
 
@@ -390,7 +390,7 @@ const exportBackup = async (): Promise<void> => {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.${exportSections.value.includes('waf_files') ? 'lbbak' : 'json'}`
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
     setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -440,7 +440,8 @@ interface ImportResponse {
 const importDialogVisible = ref(false)
 const importFileName = ref('')
 const importSections = ref<string[]>([])
-const importFileContent = ref('')
+const importFileIsLbbak = ref(false)
+const importFileContent = ref<string | ArrayBuffer>('')
 const importValidation = ref<ImportValidation | null>(null)
 const importValidating = ref(false)
 const importInput = ref<HTMLInputElement | null>(null)
@@ -498,9 +499,13 @@ const handleImportFile = async (event: Event): Promise<void> => {
   importValidation.value = null
   importValidating.value = true
   try {
-    const fileContent = await file.text()
+    // v2.3.0 lbbak 为二进制 tar.gz——按魔数选择读取与提交方式
+    const head = new Uint8Array(await file.slice(0, 2).arrayBuffer())
+    const isLbbak = head[0] === 0x1f && head[1] === 0x8b
+    importFileIsLbbak.value = isLbbak
+    const fileContent = isLbbak ? await file.arrayBuffer() : await file.text()
     const res = await request.post<{ data: ImportValidation }>('/config/import/validate', fileContent, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': isLbbak ? 'application/octet-stream' : 'application/json' },
     })
     if (validationSeq !== importValidationSeq) return
     importFileContent.value = fileContent
@@ -535,18 +540,19 @@ const confirmImport = async (): Promise<void> => {
   importing.value = true
   try {
     const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
-    let importBody = importFileContent.value
-    if (validation.type !== 'v1') {
+    let importBody: string | ArrayBuffer = importFileContent.value
+    if (!importFileIsLbbak.value && validation.type !== 'v1') {
       // 顶层注入 sections(不重排原 JSON)
       try {
-        const parsed = JSON.parse(importFileContent.value) as Record<string, unknown>
+        const raw = typeof importFileContent.value === 'string' ? importFileContent.value : ''
+        const parsed = JSON.parse(raw) as Record<string, unknown>
         parsed.sections = importSections.value
         importBody = JSON.stringify(parsed)
       } catch { /* 原样提交(后端会 400 校验失败) */ }
     }
     if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
     const res = await request.post<ImportResponse>(endpoint, importBody, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': importFileIsLbbak.value ? 'application/octet-stream' : 'application/json' },
     })
     importDialogVisible.value = false
     const disabledConflicts = res.data?.disabled_conflicts ?? []

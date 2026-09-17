@@ -240,7 +240,9 @@ func wafBundleSyncDetail(bundle *WafFileBundle, crsChanged, xdbChanged bool) str
 			xdbPart = "IP2Region数据库已更新至 " + bundle.IP2RegionTag
 		}
 	}
-	return crsPart + "；" + xdbPart
+	// 2026-09-18 用户裁定:明确数据来源语义——从节点不自动升级,规则库变更唯
+	// 一来源是主节点同步
+	return "从主节点同步：" + crsPart + "；" + xdbPart
 }
 
 func (s *SyncService) restoreSnapshotArtifacts(previous, current models.ClusterSnapshot) error {

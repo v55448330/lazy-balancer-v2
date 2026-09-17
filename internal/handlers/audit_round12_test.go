@@ -157,7 +157,7 @@ func TestListCurrentUserAPIKeys_returns_error_when_row_scan_fails(t *testing.T) 
 	}
 }
 
-func TestConfigImportEndpoints_reject_bodies_larger_than_16MiB(t *testing.T) {
+func TestConfigImportEndpoints_reject_bodies_larger_than_48MiB(t *testing.T) {
 	tests := []struct {
 		name  string
 		path  string
@@ -173,7 +173,7 @@ func TestConfigImportEndpoints_reject_bodies_larger_than_16MiB(t *testing.T) {
 			h := newBackupTestHandlers(t)
 			router := gin.New()
 			test.mount(router, h)
-			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(strings.Repeat("x", (16<<20)+1)))
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(strings.Repeat("x", (48<<20)+1)))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 

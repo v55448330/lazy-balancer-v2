@@ -491,11 +491,20 @@ type importValidateResponse struct {
 	DisabledConflicts []disabledRuleConflict `json:"disabled_conflicts"`
 }
 
-const maxConfigImportBytes int64 = 16 << 20
+// v2.3.0:lbbak(tar.gz 含规则库文件)可达 ~15MB(xdb 10.6MB 原始字节+CRS 包),
+// 上限提至 48MB;纯 JSON 备份远小于此。
+const maxConfigImportBytes int64 = 48 << 20
+
+// lbbakPayloadFromCtx 取 validate 流程中解包的 lbbak 载荷(可能为 nil)。
+func lbbakPayloadFromCtx(c *gin.Context) *lbbakPayload {
+	v, _ := c.Get("lbbak_payload")
+	p, _ := v.(*lbbakPayload)
+	return p
+}
 
 func limitConfigImportBody(c *gin.Context) bool {
 	if c.Request.ContentLength > maxConfigImportBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxConfigImportBytes)
@@ -517,7 +526,23 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 	}
 	body, err := c.GetRawData()
 	if isRequestBodyTooLarge(err) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
+		return
+	}
+	// v2.3.0 lbbak:tar.gz 先解包校验(含逐条目 sha256),内部 config.json
+	// 以其原始字节走下方 V2 解析——validate 端点对两种格式统一返回。
+	if isLbbakBytes(body) {
+		payload, perr := parseLbbak(body)
+		if perr != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "lbbak", Error: perr.Error()}})
+			return
+		}
+		body = payload.ConfigJSON
+		c.Set("lbbak_payload", payload)
+		// 标记:后续 JSON 校验复用 body 变量
+	}
+	if isRequestBodyTooLarge(err) {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
 		return
 	}
 	if err != nil || len(body) == 0 {
@@ -587,11 +612,14 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
 			validateWarnings = append(validateWarnings, "备份不包含当前操作账户——若导入时勾选“系统数据”，导入后请使用备份内的管理员账户登录")
 		}
+		if lbbakPayloadFromCtx(c) != nil {
+			validateWarnings = append(validateWarnings, "lbbak 完整备份（含规则库数据文件，完整性已校验）——规则库数据库分类将随导入落盘")
+		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
 			summary[table] = len(rows)
 		}
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, Warnings: skipWarnings, DisabledConflicts: disabledConflicts}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, Warnings: validateWarnings, DisabledConflicts: disabledConflicts}})
 		return
 	}
 	var v1 v1Backup
@@ -650,7 +678,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	body, err := c.GetRawData()
 	if isRequestBodyTooLarge(err) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
 		return
 	}
 	if err != nil || len(body) == 0 {
