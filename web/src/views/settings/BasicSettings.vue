@@ -185,7 +185,16 @@
       <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="min(720px, 92vw)" :close-on-click-modal="false" @close="onImportDialogClosed">
+    <el-dialog v-model="importDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog" @close="onImportDialogClosed">
+      <template #header>
+        <div class="backup-dialog-header">
+          <el-icon class="backup-dialog-icon"><Upload /></el-icon>
+          <div>
+            <div class="backup-dialog-title">导入配置备份</div>
+            <div class="backup-dialog-sub">选择备份文件与要导入的分类</div>
+          </div>
+        </div>
+      </template>
       <div class="import-picker">
         <el-button :icon="Upload" @click="chooseImportFile">选择备份文件</el-button>
         <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>

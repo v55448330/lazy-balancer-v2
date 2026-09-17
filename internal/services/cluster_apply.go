@@ -166,6 +166,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// rewriteVersionIfMissingOrStale 永不执行——304 分支兜底重拉 → 应用
 	// 跳过 → 每周期全量重拉死循环（主节点「同步下发」审计随之刷屏）。
 	if switches.WafFiles && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted()) {
+		// 2026-09-18 用户裁定:同步日志与自动更新日志同款分阶段流水——唯一
+		// 区别是来源(主节点 vs GitHub),弹框日志可对照阅读。
+		AppendCRSUpdateLog("INFO", "checking", "从主节点校验 CRS 规则版本")
+		AppendIP2RegionUpdateLog("INFO", "checking", "从主节点校验 IP2Region数据库版本")
 		bundle, ferr := s.fetchWafFiles(ctx, snapshot.WafFiles)
 		if ferr != nil {
 			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
@@ -176,26 +180,35 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		} else if crsChanged || xdbChanged {
 			detail := wafBundleSyncDetail(bundle, crsChanged, xdbChanged)
 			RecordAuditLog("system", "同步", "安全数据", detail, "")
-			// 2026-09-18 用户裁定:同步有变动=完整更新流程——①xdb 内存缓存热换
-			// (此前集群路径漏刷,从节点到重启前一直用旧库);②更新弹框日志留痕
+			// 同步有变动=完整更新流程(与自动更新器同款阶段流水)
 			if xdbChanged {
+				AppendIP2RegionUpdateLog("INFO", "installing", "校验并落盘主节点 IP2Region数据库")
 				if err := Reload(); err != nil {
 					Logf("error", "同步后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 				}
 				RebuildRegionTreeCacheForSync()
-				AppendIP2RegionUpdateLog("INFO", "sync", "IP2Region数据库已随主节点同步更新并热换缓存、重建城市树缓存")
+				tag := bundle.IP2RegionTag
+				if tag == "" {
+					tag = "未知版本"
+				}
+				AppendIP2RegionUpdateLog("INFO", "success", fmt.Sprintf("ip2region 已随主节点同步更新到 %s", tag))
 			}
 			if crsChanged {
-				AppendCRSUpdateLog("INFO", "sync", "CRS 规则已随主节点同步更新(随本周期配置重载生效)")
+				AppendCRSUpdateLog("INFO", "installing", "校验并落盘主节点 CRS 规则")
+				AppendCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
+				version := bundle.CRSVersion
+				if version == "" {
+					version = "未知版本"
+				}
+				AppendCRSUpdateLog("INFO", "success", fmt.Sprintf("CRS 已随主节点同步更新到 %s", version))
 			}
 		} else {
-			// 2026-09-18 用户裁定:同步校验无变动也要留痕(更新弹框日志)——
-			// 仅在实际执行同步校验(bundle 拉取)的周期记录,非每周期刷屏。
+			// 校验无变动也留痕(仅在实际执行同步校验的周期记录,非每周期刷屏)
 			if bundle.CRSVersion != "" || bundle.CRSTarGzB64 != nil {
-				AppendCRSUpdateLog("INFO", "sync", "主节点 CRS 数据无更新(校验一致)")
+				AppendCRSUpdateLog("INFO", "success", "主节点 CRS 数据无更新，无需同步")
 			}
 			if bundle.IP2RegionTag != "" || bundle.XdbB64 != nil {
-				AppendIP2RegionUpdateLog("INFO", "sync", "主节点 IP2Region 数据无更新(校验一致)")
+				AppendIP2RegionUpdateLog("INFO", "success", "主节点 IP2Region 数据无更新，无需同步")
 			}
 		}
 	}

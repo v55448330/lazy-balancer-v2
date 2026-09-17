@@ -98,8 +98,9 @@
             <transition name="fade">
               <div v-if="!effectiveCollapsed" class="user-detail">
                 <div class="user-name">
-                  {{ menuDisplayName }}
-                  <!-- v2.3.0:来源标签——与用户列表列同款(warning/OIDC、info/本地) -->
+                  <span class="user-name-text">{{ menuDisplayName }}</span>
+                  <!-- v2.3.0:来源标签——与用户列表列同款(warning/OIDC、info/本地);
+                       flex 同行居中,缩放用字号而非 transform(避免基线漂移) -->
                   <el-tag :type="isOIDCUser ? 'warning' : 'info'" size="small" effect="plain" class="user-source-tag">{{ isOIDCUser ? 'OIDC' : '本地' }}</el-tag>
                 </div>
                 <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
@@ -566,12 +567,13 @@ onUnmounted(() => {
 .user-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 
 .user-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 500;
   color: #111827;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.3;
 }
 
@@ -663,7 +665,8 @@ onUnmounted(() => {
 
 .profile-form { padding: 0 20px; }
 .profile-readonly-alert { margin-bottom: 20px; }
-.user-source-tag { margin-left: 6px; transform: scale(0.9); }
+.user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-source-tag { flex-shrink: 0; height: 18px; padding: 0 6px; font-size: 11px; line-height: 16px; }
 .oidc-hint-block {
   width: 100%;
   padding: 8px 12px;

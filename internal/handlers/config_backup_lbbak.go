@@ -189,16 +189,19 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
 		recordAudit(c, "导入警告", "配置备份", "规则库文件落盘失败: "+err.Error())
 	} else if crsChanged || xdbChanged {
 		recordAudit(c, "导入", "安全数据", services.FormatAuditDetail("规则库数据库(随备份导入)", services.AuditResultPart("success")))
-		// 完整更新流程(用户裁定 2026-09-18):xdb 热换内存缓存;更新弹框日志留痕
+		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
 		if xdbChanged {
+			services.AppendIP2RegionUpdateLog("INFO", "installing", "校验并落盘备份内 IP2Region数据库")
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 			}
 			services.RebuildRegionTreeCacheForSync()
-			services.AppendIP2RegionUpdateLog("INFO", "import", "IP2Region数据库已随备份导入更新并热换缓存、重建城市树缓存")
+			services.AppendIP2RegionUpdateLog("INFO", "success", "ip2region 已随备份导入更新")
 		}
 		if crsChanged {
-			services.AppendCRSUpdateLog("INFO", "import", "CRS 规则已随备份导入更新(导入重载生效)")
+			services.AppendCRSUpdateLog("INFO", "installing", "校验并落盘备份内 CRS 规则")
+			services.AppendCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
+			services.AppendCRSUpdateLog("INFO", "success", "CRS 已随备份导入更新")
 		}
 	}
 }
