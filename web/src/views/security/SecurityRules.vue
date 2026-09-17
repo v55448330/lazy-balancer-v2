@@ -25,7 +25,7 @@
       <el-descriptions :column="3" border>
         <el-descriptions-item label="CRS 版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
         <el-descriptions-item label="规则文件数">{{ total }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ formatDate(crsInfo.updated_at) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!isSlaveNode" label="更新时间">{{ formatDate(crsInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
           <div class="crs-cell-flex">
             <el-switch v-model="crsInfo.auto_update" :disabled="isReadOnly" @change="toggleAutoUpdate" />
@@ -38,12 +38,13 @@
             </el-tooltip>
           </div>
         </el-descriptions-item>
-        <el-descriptions-item label="下次更新">{{ formatDate(crsInfo.next_update) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(crsInfo.next_update) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="isSlaveNode" label="数据来源"><el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag></el-descriptions-item>
       </el-descriptions>
       <el-descriptions :column="3" border class="ip2region-desc">
         <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionVersionLabel }}</span></el-descriptions-item>
         <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size && ip2regionInfo.version && ip2regionInfo.version !== 'unknown' && ip2regionInfo.version !== 'bundled' ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!isSlaveNode" label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
           <div class="crs-cell-flex">
             <el-switch v-model="ip2regionInfo.auto_update" :disabled="isReadOnly" @change="toggleIP2RegionAutoUpdate" />
@@ -59,7 +60,7 @@
             </el-tooltip>
           </div>
         </el-descriptions-item>
-        <el-descriptions-item label="下次更新">{{ formatDate(ip2regionInfo.next_update) || '—' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(ip2regionInfo.next_update) || '—' }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
 
@@ -414,6 +415,7 @@ interface CRSUpdateInfo { readonly status: string; readonly trigger: string; rea
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 
 const authStore = useAuthStore()
+const isSlaveNode = computed(() => authStore.nodeMode === 'slave')
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const users = ref<UserListItem[]>([])

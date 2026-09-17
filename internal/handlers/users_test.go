@@ -232,3 +232,47 @@ func TestSetupAdmin_cannotBeDisabledOrDeleted(t *testing.T) {
 		t.Fatalf("disable ordinary admin should pass: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// OIDC 用户数据显示名/密码来自 IdP(随登录/同步刷新)——自助与管理员路径
+// 均不得修改(2026-09-18 用户裁定:要改去 OIDC 服务改)。
+func TestOIDCUser_cannotModifyDisplayNameOrPassword(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	// Given: OIDC 用户 id=7,管理员 id=1
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,display_name) VALUES (7,'sso@example.com','','user',1,'oidc','IdP Name')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: OIDC 用户自助改显示名 → 400
+	rec := serveUserMutation(h, http.MethodPatch, "/users/7", `{"display_name":"Hacked"}`, 7, h.UpdateCurrentUser)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "OIDC") {
+		t.Fatalf("self display_name: status=%d body=%s, want 400 OIDC 提示", rec.Code, rec.Body.String())
+	}
+	// When: OIDC 用户自助改密码(带当前密码,空哈希恒败故先绕过密码门——直接断言 OIDC 门先拦)→ 400
+	rec = serveUserMutation(h, http.MethodPatch, "/users/7", `{"password":"newpass123","current_password":"x"}`, 7, h.UpdateCurrentUser)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "OIDC") {
+		t.Fatalf("self password: status=%d body=%s, want 400 OIDC 提示", rec.Code, rec.Body.String())
+	}
+	// When: 管理员改 OIDC 用户显示名 → 400
+	rec = serveUserMutation(h, http.MethodPut, "/users/7", `{"display_name":"AdminSet"}`, 1, h.UpdateUser)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "OIDC") {
+		t.Fatalf("admin display_name: status=%d body=%s, want 400 OIDC 提示", rec.Code, rec.Body.String())
+	}
+	// When: 管理员重置 OIDC 用户密码 → 400
+	pwRec := httptest.NewRecorder()
+	pwCtx, _ := gin.CreateTestContext(pwRec)
+	pwCtx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"new_password":"reset123"}`))
+	pwCtx.Request.Header.Set("Content-Type", "application/json")
+	pwCtx.Params = gin.Params{{Key: "id", Value: "7"}}
+	pwCtx.Set("user_id", 1)
+	h.ResetUserPassword(pwCtx)
+	rec = pwRec
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "OIDC") {
+		t.Fatalf("admin reset password: status=%d body=%s, want 400 OIDC 提示", rec.Code, rec.Body.String())
+	}
+	// 回归:本地用户自助改显示名不受影响
+	rec = serveUserMutation(h, http.MethodPatch, "/users/1", `{"display_name":"NewName"}`, 1, h.UpdateCurrentUser)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local user display_name should pass: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

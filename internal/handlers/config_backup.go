@@ -1951,6 +1951,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
 		return
 	}
+	// 规则库数据库分类要求文件本体(lbbak):分类选择流(显式携带 sections)
+	// 中无文件却勾选该分类 → 剔除其表并警告,防记录与文件分叉(2026-09-18
+	// 用户裁定)。旧式全量 JSON 导入(无 sections 字段)保持原语义不动。
+	explicitSections := len(backup.Sections) > 0
+	if explicitSections && sectionTables["security_crs_version"] && (lbbakFiles == nil || (lbbakFiles.CRSTarGz == nil && lbbakFiles.Xdb == nil)) {
+		for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
+			delete(backup.Tables, t)
+		}
+		recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——「规则库数据库」分类已跳过")
+	}
 	for table := range backup.Tables {
 		if !sectionTables[table] {
 			delete(backup.Tables, table)
@@ -2158,6 +2168,12 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		}
 	}
 	counts := importCountsDetail(backup.Tables)
+	// lbbak:文件落盘必须在 session.commit 之前——commit 内的 Caddy 应用
+	// (ApplyConfigFromTxCertAwareForce)要读到新 CRS 文件;xdb 落盘后立即
+	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
+	if lbbakFiles != nil {
+		applyLbbakWafFiles(c, lbbakFiles)
+	}
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
 		message := "配置导入失败: " + err.Error()
@@ -2233,10 +2249,6 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// 失败标记，无条件清除会把真实失败横幅抹掉）。
 	if !reseedBlockPageNeeded || reseedApplyFailed == false {
 		h.recordCaddyApplyResult(nil)
-	}
-	// lbbak:文件落盘(sha 幂等)——与版本记录行原子同批(行在上方事务内)
-	if lbbakFiles != nil {
-		applyLbbakWafFiles(c, lbbakFiles)
 	}
 	responseWarnings := skipWarnings
 	if operatorReplaced {

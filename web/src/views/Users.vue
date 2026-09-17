@@ -31,15 +31,22 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item :label="selfEdit ? '新密码' : '密码'">
+            <!-- v2.3.0:OIDC 用户密码/显示名源自 IdP,不可本地改(用户裁定) -->
+            <el-form-item v-if="!editingIsOIDC" :label="selfEdit ? '新密码' : '密码'">
               <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
+            </el-form-item>
+            <el-form-item v-else label="数据来源">
+              <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
             </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="显示名称">
+            <el-form-item v-if="!editingIsOIDC" label="显示名称">
               <el-input v-model="form.display_name" placeholder="选填" maxlength="50" />
+            </el-form-item>
+            <el-form-item v-else label="显示名称">
+              <el-input :model-value="form.display_name" disabled />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -257,6 +264,7 @@ const openCreateForm = () => {
   form.value = { username: '', password: '', current_password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
+const editingIsOIDC = computed(() => editingUser.value?.auth_provider === 'oidc')
 const editingUser = ref<UserListItem | null>(null)
 const switchingIds = ref(new Set<number>())
 let usersRequestSeq = 0

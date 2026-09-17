@@ -157,15 +157,27 @@
         <el-form-item label="用户名">
           <el-input v-model="profileForm.username" disabled />
         </el-form-item>
-        <el-form-item label="显示名">
-          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" placeholder="选填" maxlength="50" />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="如不修改请留空（至少6位）" show-password />
-        </el-form-item>
-        <el-form-item label="当前密码">
-          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
-        </el-form-item>
+        <!-- v2.3.0:OIDC 用户显示名/密码源自 IdP,本地不可改(用户裁定) -->
+        <template v-if="isOIDCUser">
+          <el-form-item label="显示名">
+            <el-input :model-value="profileForm.display_name" disabled />
+          </el-form-item>
+          <el-form-item label="认证方式">
+            <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+            <span class="oidc-hint">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span>
+          </el-form-item>
+        </template>
+        <template v-else>
+          <el-form-item label="显示名">
+            <el-input v-model="profileForm.display_name" :disabled="isReadOnly" placeholder="选填" maxlength="50" />
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="如不修改请留空（至少6位）" show-password />
+          </el-form-item>
+          <el-form-item label="当前密码">
+            <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="closeProfile">取消</el-button>
@@ -199,6 +211,7 @@ const currentPage = computed(() => authStore.currentPage)
 // A6-S3：unknown（用户信息尚未拉取成功）窗口期 fail-closed，与 slave 同口径锁定
 // 自助资料编辑；非管理员的自我显示名/改密是自助能力而非管理员操作，不随此收紧
 //（后端恢复后仍按自身身份正确鉴权）。
+const isOIDCUser = computed(() => authStore.user?.auth_provider === 'oidc')
 const isReadOnly = computed(() => authStore.readOnlyReason === 'slave' || authStore.readOnlyReason === 'unknown')
 const menuDisplayName = computed(() => authStore.user?.display_name || authStore.user?.username || '用户')
 const hasCustomDisplayName = computed(() => {
@@ -644,4 +657,5 @@ onUnmounted(() => {
 
 .profile-form { padding: 0 20px; }
 .profile-readonly-alert { margin-bottom: 20px; }
+.oidc-hint { margin-left: 10px; font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

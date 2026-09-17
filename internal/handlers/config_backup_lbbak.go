@@ -189,6 +189,16 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
 		recordAudit(c, "导入警告", "配置备份", "规则库文件落盘失败: "+err.Error())
 	} else if crsChanged || xdbChanged {
 		recordAudit(c, "导入", "安全数据", services.FormatAuditDetail("规则库数据库(随备份导入)", services.AuditResultPart("success")))
+		// 完整更新流程(用户裁定 2026-09-18):xdb 热换内存缓存;更新弹框日志留痕
+		if xdbChanged {
+			if err := services.Reload(); err != nil {
+				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
+			}
+			services.AppendIP2RegionUpdateLog("INFO", "import", "IP2Region数据库已随备份导入更新并热换缓存")
+		}
+		if crsChanged {
+			services.AppendCRSUpdateLog("INFO", "import", "CRS 规则已随备份导入更新(导入重载生效)")
+		}
 	}
 }
 

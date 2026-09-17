@@ -53,6 +53,14 @@
           <el-tooltip v-if="versionIncompatibilityError(row)" :content="versionIncompatibilityError(row)" placement="top">
             <el-tag type="danger" size="small">版本不兼容</el-tag>
           </el-tooltip>
+          <!-- v2.3.0:状态 hover 展示从节点规则库版本(跟随主节点同步,用户裁定) -->
+          <el-tooltip v-else-if="row.health?.crs_version || row.health?.ip2region_version" placement="top">
+            <template #content>
+              <div>CRS：{{ row.health?.crs_version || '—' }}</div>
+              <div>IP2Region：{{ row.health?.ip2region_version || '—' }}</div>
+            </template>
+            <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+          </el-tooltip>
           <el-tag v-else :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           <div v-if="row.status === 'offline'" class="offline-duration">离线 {{ offlineDuration(row.last_seen) }}</div>
         </template>

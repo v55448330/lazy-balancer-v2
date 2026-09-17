@@ -80,10 +80,7 @@
               <span class="oidc-sso-sub">企业认证服务 · 单点登录</span>
             </button>
             <div class="login-alt-divider"><span>或</span></div>
-            <el-button text size="default" class="local-toggle" @click="showLocalForm = true">
-              <el-icon><User /></el-icon>
-              使用本地账号登录
-            </el-button>
+            <el-button text size="default" class="local-toggle" :icon="User" @click="showLocalForm = true">使用本地账号登录</el-button>
           </div>
           <template v-else>
           <el-form v-show="!oidcEnabled || showLocalForm" ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
@@ -485,13 +482,7 @@ onMounted(async () => {
 .login-alt-divider::before, .login-alt-divider::after {
   content: ''; flex: 1; height: 1px; background: #e5e7eb;
 }
-.local-toggle {
-  margin-top: 6px;
-  color: #4b5563;
-  font-weight: 500;
-  gap: 6px;
-}
-.local-toggle :deep(.el-icon) { margin-right: 0; align-self: center; }
+.local-toggle { margin-top: 6px; color: #4b5563; font-weight: 500; }
 .back-to-oidc { margin-top: 14px; text-align: center; }
 
 .login-footer {

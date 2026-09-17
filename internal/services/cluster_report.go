@@ -71,6 +71,13 @@ func (s *SyncService) Report(ctx context.Context) error {
 			SyncErrorCode:    syncErrorCode,
 		},
 	}
+	// v2.3.0(2026-09-18 用户裁定):规则库版本随上报上送——主节点集群管理
+	// 节点列表状态列 hover 可见从节点 CRS/IP2Region 版本(从节点跟随主节点
+	// 同步,无需登录从节点查看)。
+	if ref := BuildWafFileRef(); ref != nil {
+		report.Health.CRSVersion = ref.CRSVersion
+		report.Health.IP2RegionTag = ref.IP2RegionTag
+	}
 	payload, err := json.Marshal(report)
 	if err != nil {
 		return fmt.Errorf("编码节点上报: %w", err)

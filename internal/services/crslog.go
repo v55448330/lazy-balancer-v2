@@ -34,3 +34,10 @@ func writeCRSUpdateLog(level, stage, message string) {
 	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
 	fmt.Fprintf(f, "%s [%s] %s - %s\n", timestamp, level, stage, message)
 }
+
+// AppendCRSUpdateLog 供非更新器路径(lbbak 导入/集群同步)记录规则库变更日志
+// ——更新弹框的「更新日志」直接读该文件,文件变更必须在此留痕(用户裁定
+// 2026-09-18:同步/导入有变动也要走完整流程并记录日志)。
+func AppendCRSUpdateLog(level, stage, message string) {
+	writeCRSUpdateLog(level, stage, message)
+}

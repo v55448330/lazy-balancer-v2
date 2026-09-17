@@ -489,6 +489,10 @@ type importValidateResponse struct {
 	Summary           map[string]int         `json:"summary,omitempty"`
 	Warnings          []string               `json:"warnings,omitempty"`
 	DisabledConflicts []disabledRuleConflict `json:"disabled_conflicts"`
+	// v2.3.0:备份是否携带规则库数据文件(仅 lbbak 且含 waf 条目)——前端据此
+	// 控制「规则库数据库」分类可选性(纯 JSON 备份无文件,选了会造成记录与
+	// 文件分叉,用户裁定不可选)。
+	HasWafFiles bool `json:"has_waf_files"`
 }
 
 // v2.3.0:lbbak(tar.gz 含规则库文件)可达 ~15MB(xdb 10.6MB 原始字节+CRS 包),
@@ -612,14 +616,18 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
 			validateWarnings = append(validateWarnings, "备份不包含当前操作账户——若导入时勾选“系统数据”，导入后请使用备份内的管理员账户登录")
 		}
-		if lbbakPayloadFromCtx(c) != nil {
-			validateWarnings = append(validateWarnings, "lbbak 完整备份（含规则库数据文件，完整性已校验）——规则库数据库分类将随导入落盘")
+		hasWaf := false
+		if payload := lbbakPayloadFromCtx(c); payload != nil {
+			hasWaf = payload.CRSTarGz != nil || payload.Xdb != nil
+			if hasWaf {
+				validateWarnings = append(validateWarnings, "lbbak 完整备份（含规则库数据文件，完整性已校验）——规则库数据库分类将随导入落盘")
+			}
 		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
 			summary[table] = len(rows)
 		}
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, Warnings: validateWarnings, DisabledConflicts: disabledConflicts}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, Warnings: validateWarnings, DisabledConflicts: disabledConflicts, HasWafFiles: hasWaf}})
 		return
 	}
 	var v1 v1Backup

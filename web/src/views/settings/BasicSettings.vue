@@ -199,12 +199,25 @@
         <el-alert v-if="!importValidation.valid" :title="importValidation.error || '备份文件校验失败'" type="error" :closable="false" show-icon class="import-alert" />
         <template v-else>
           <div class="import-result">
-            <div class="import-sections">
+  <div class="import-sections">
               <div class="import-sections-label">导入分类（未选分类保持现状）</div>
-              <el-checkbox-group v-model="importSections" size="small" :disabled="importValidation.type === 'v1'">
-                <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key" :disabled="importValidation.type === 'v1' && sec.key !== 'rules'">{{ sec.label }}</el-checkbox>
-              </el-checkbox-group>
-              <el-text v-if="importValidation.type === 'v1'" type="info" size="small">V1 备份仅支持负载均衡规则导入</el-text>
+              <div class="section-grid">
+                <div
+                  v-for="sec in BACKUP_SECTIONS" :key="sec.key"
+                  class="section-card"
+                  :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': (importValidation.type === 'v1' && sec.key !== 'rules') || (sec.key === 'waf_files' && !importValidation.has_waf_files) }"
+                  @click="toggleImportSection(sec.key)"
+                >
+                  <el-checkbox
+                    :model-value="importSections.includes(sec.key)"
+                    :disabled="(importValidation.type === 'v1' && sec.key !== 'rules') || (sec.key === 'waf_files' && !importValidation.has_waf_files)"
+                    @click.stop
+                  />
+                  <span class="section-name">{{ sec.label }}</span>
+                  <span v-if="sec.key === 'waf_files' && !importValidation.has_waf_files" class="section-hint">不含数据文件</span>
+                </div>
+              </div>
+              <el-text v-if="importValidation.type === 'v1'" type="info" size="small" class="import-v1-hint">V1 备份仅支持负载均衡规则导入</el-text>
             </div>
             <el-tag :type="importValidation.type === 'v1' ? 'warning' : 'success'" size="small">
               {{ importValidation.type === 'v1' ? 'V1 兼容导入' : 'V2 完整备份' }}
@@ -248,15 +261,33 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="exportDialogVisible" title="导出配置备份" width="min(480px, 92vw)" :close-on-click-modal="false">
-      <el-checkbox-group v-model="exportSections" class="backup-sections">
-        <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key">{{ sec.label }}</el-checkbox>
-      </el-checkbox-group>
+    <el-dialog v-model="exportDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" class="backup-dialog">
+      <template #header>
+        <div class="backup-dialog-header">
+          <el-icon class="backup-dialog-icon"><Download /></el-icon>
+          <div>
+            <div class="backup-dialog-title">导出配置备份</div>
+            <div class="backup-dialog-sub">选择要导出的配置分类</div>
+          </div>
+        </div>
+      </template>
+      <div class="section-grid">
+        <div v-for="sec in BACKUP_SECTIONS" :key="sec.key" class="section-card" :class="{ 'is-active': exportSections.includes(sec.key) }" @click="toggleExportSection(sec.key)">
+          <el-checkbox :model-value="exportSections.includes(sec.key)" @click.stop />
+          <span class="section-name">{{ sec.label }}</span>
+        </div>
+      </div>
+      <div class="backup-dialog-actions">
+        <el-button text size="small" @click="exportSections = []">全不选</el-button>
+        <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
+      </div>
       <el-alert type="warning" :closable="false" show-icon class="mt8"
-        title="导出包含凭证与证书材料，请加密保管" />
+        title="导出包含凭证与证书材料（勾选规则库数据库时为 .lbbak 包，含 CRS/IP2Region 文件），请加密保管" />
       <template #footer>
         <el-button @click="exportDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">确认导出</el-button>
+        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">
+          确认导出{{ exportSections.length ? `（${exportSections.length}/${BACKUP_SECTIONS.length}）` : '' }}
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -283,7 +314,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
-import { Setting, InfoFilled, Check, View, Upload } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check, View, Upload, Download } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
@@ -374,6 +405,21 @@ const BACKUP_SECTIONS = [
 ] as const
 const exportSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
 const exportDialogVisible = ref(false)
+const toggleImportSection = (key: string): void => {
+  const validation = importValidation.value
+  if (!validation?.valid) return
+  if (validation.type === 'v1' && key !== 'rules') return
+  if (key === 'waf_files' && !validation.has_waf_files) return
+  importSections.value = importSections.value.includes(key)
+    ? importSections.value.filter((k) => k !== key)
+    : [...importSections.value, key]
+}
+
+const toggleExportSection = (key: string): void => {
+  exportSections.value = exportSections.value.includes(key)
+    ? exportSections.value.filter((k) => k !== key)
+    : [...exportSections.value, key]
+}
 const openExportDialog = (): void => {
   if (backupDisabled.value || exporting.value) return
   exportDialogVisible.value = true
@@ -406,6 +452,7 @@ const exportBackup = async (): Promise<void> => {
 interface ImportValidation {
   valid: boolean
   type?: string
+  has_waf_files?: boolean
   error?: string
   summary?: Record<string, number>
   warnings?: string[]
@@ -510,8 +557,14 @@ const handleImportFile = async (event: Event): Promise<void> => {
     if (validationSeq !== importValidationSeq) return
     importFileContent.value = fileContent
     importValidation.value = res.data
-    // V1 仅负载规则(锁定);V2 默认全选
-    importSections.value = res.data?.type === 'v1' ? ['rules'] : BACKUP_SECTIONS.map((sec) => sec.key)
+    // V1 仅负载规则(锁定);V2 默认全选;无规则库文件的 V2 备份剔除该分类
+    if (res.data?.type === 'v1') {
+      importSections.value = ['rules']
+    } else {
+      importSections.value = BACKUP_SECTIONS
+        .filter((sec) => sec.key !== 'waf_files' || res.data?.has_waf_files)
+        .map((sec) => sec.key)
+    }
   } catch {
     if (validationSeq === importValidationSeq) {
       importValidation.value = { valid: false, error: '校验请求失败，请重试', disabled_conflicts: [] }
@@ -901,7 +954,30 @@ const handleSave = async () => {
 
 <style scoped>
 .backup-sections-item { flex-direction: column; align-items: flex-start; gap: 4px; }
-.backup-sections { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+/* 备份弹框 */
+.backup-dialog-header { display: flex; align-items: center; gap: 12px; }
+.backup-dialog-icon {
+  width: 38px; height: 38px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-color-primary-light-9); color: var(--el-color-primary);
+  font-size: 18px; flex-shrink: 0;
+}
+.backup-dialog-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
+.backup-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.section-card {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--el-border-color-lighter); border-radius: 8px;
+  padding: 10px 12px; cursor: pointer; transition: all .15s ease;
+  background: var(--el-fill-color-blank);
+}
+.section-card:hover { border-color: var(--el-color-primary-light-5); }
+.section-card.is-disabled { cursor: not-allowed; opacity: .55; background: var(--el-fill-color-lighter); }
+.import-v1-hint { margin-top: 6px; display: inline-block; }
+.section-card.is-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.section-name { font-size: 13.5px; color: var(--el-text-color-primary); }
+.section-hint { font-size: 11.5px; color: var(--el-text-color-placeholder); }
+.backup-dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; }
 .import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
 .import-sections-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 

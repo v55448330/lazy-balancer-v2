@@ -174,7 +174,19 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Logf("error", "落盘同步安全数据失败: %v", aerr)
 			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("落盘安全数据失败: %v", aerr), "")
 		} else if crsChanged || xdbChanged {
-			RecordAuditLog("system", "同步", "安全数据", wafBundleSyncDetail(bundle, crsChanged, xdbChanged), "")
+			detail := wafBundleSyncDetail(bundle, crsChanged, xdbChanged)
+			RecordAuditLog("system", "同步", "安全数据", detail, "")
+			// 2026-09-18 用户裁定:同步有变动=完整更新流程——①xdb 内存缓存热换
+			// (此前集群路径漏刷,从节点到重启前一直用旧库);②更新弹框日志留痕
+			if xdbChanged {
+				if err := Reload(); err != nil {
+					Logf("error", "同步后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
+				}
+				AppendIP2RegionUpdateLog("INFO", "sync", "IP2Region数据库已随主节点同步更新并热换缓存")
+			}
+			if crsChanged {
+				AppendCRSUpdateLog("INFO", "sync", "CRS 规则已随主节点同步更新(下次 Caddy 重载生效)")
+			}
 		}
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，

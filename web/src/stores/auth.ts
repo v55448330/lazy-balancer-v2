@@ -103,6 +103,7 @@ export const useAuthStore = defineStore('auth', () => {
           is_enabled: res.data.is_enabled,
           display_name: res.data.display_name,
           mfa_enabled: res.data.mfa_enabled ?? false,
+          auth_provider: res.data.auth_provider ?? 'local',
         }
       } else {
         // A6-S2：200 但 data 为空——user 仍为 null（unknown 只读窗口）且原先此处

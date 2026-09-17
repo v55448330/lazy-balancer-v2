@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -107,6 +108,12 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	if req.Role != nil && *req.Role != "" && *req.Role != "admin" && *req.Role != "user" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "角色无效"})
+		return
+	}
+	// 2026-09-18 用户裁定:OIDC 用户显示名/密码源自 IdP,管理员亦不可改
+	// (角色/启停是本地管理语义,不受限)。
+	if (req.DisplayName != nil || req.Password != nil) && isOIDCUser(c.Request.Context(), id) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
 		return
 	}
 	if req.Password != nil && passwordTooShort(*req.Password) {
@@ -220,6 +227,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户更新成功", Data: models.NewUserResponse(user)})
+}
+
+// isOIDCUser 判定用户是否 OIDC 来源(读失败按非 OIDC,后续写路径有自身门)。
+func isOIDCUser(ctx context.Context, userID int) bool {
+	var provider string
+	err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(auth_provider,'') FROM users WHERE id=?", userID).Scan(&provider)
+	return err == nil && provider == "oidc"
 }
 
 // setupAdminUserID:系统 setup 创建的首个用户(auth.go SetupAdmin 仅在
@@ -402,6 +416,12 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
+	// OIDC 用户无本地密码(bcrypt 恒空),重置/设置本地密码会破坏「OIDC 用户
+	// 密码登录天然不可用」设计——拒绝(2026-09-18 用户裁定)。
+	if isOIDCUser(c.Request.Context(), id) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的密码由认证服务管理，无法本地重置"})
 		return
 	}
 	if req.NewPassword == "" || passwordTooShort(req.NewPassword) {

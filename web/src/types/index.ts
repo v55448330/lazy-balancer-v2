@@ -5,6 +5,7 @@ export interface CurrentUser {
   is_enabled: boolean
   display_name: string | null
   mfa_enabled?: boolean
+  auth_provider?: string
 }
 
 export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {
@@ -168,6 +169,8 @@ export interface ClusterHealth {
   readonly last_sync_error: string
   readonly sync_error_code?: string
   readonly uptime_sec: number
+  readonly crs_version?: string
+  readonly ip2region_version?: string
 }
 
 export interface ClusterSectionSync {

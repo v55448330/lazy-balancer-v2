@@ -286,10 +286,11 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 
 	var user models.User
 	var mfaEnabled int
+	var authProvider string
 	err := db.DB.QueryRow(`
-		SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(mfa_enabled,0)
+		SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(mfa_enabled,0), COALESCE(auth_provider,'local')
 		FROM users WHERE id = ?
-	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &mfaEnabled)
+	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &mfaEnabled, &authProvider)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "用户不存在或已被删除"})
@@ -298,6 +299,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 
 	response := models.NewUserResponse(user)
 	response.MFAEnabled = mfaEnabled == 1
+	// v2.3.0:OIDC 来源标记——前端据此隐藏本地显示名/密码编辑(数据源自 IdP)
+	response.AuthProvider = authProvider
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: response})
 }
 
@@ -337,6 +340,14 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
+	}
+	// 2026-09-18 用户裁定:OIDC 用户的显示名/密码源自 IdP——本地不可改,
+	// 要改请去认证服务修改(自助路径)。
+	if req.DisplayName != nil || req.Password != "" {
+		if isOIDCUser(c.Request.Context(), userIDInt) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
+			return
+		}
 	}
 	if passwordTooShort(req.Password) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})

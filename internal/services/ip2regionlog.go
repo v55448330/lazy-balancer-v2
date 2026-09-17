@@ -35,3 +35,8 @@ func writeIP2RegionUpdateLog(level, stage, message string) {
 	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
 	fmt.Fprintf(f, "%s [%s] %s - %s\n", timestamp, level, stage, message)
 }
+
+// AppendIP2RegionUpdateLog 同 AppendCRSUpdateLog(lbbak 导入/集群同步留痕)。
+func AppendIP2RegionUpdateLog(level, stage, message string) {
+	writeIP2RegionUpdateLog(level, stage, message)
+}

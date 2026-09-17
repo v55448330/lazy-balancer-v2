@@ -142,6 +142,10 @@ type ClusterHealth struct {
 	LastSyncError    string        `json:"last_sync_error"`
 	SyncErrorCode    SyncErrorCode `json:"sync_error_code,omitempty"`
 	UptimeSec        int64         `json:"uptime_sec"`
+	// v2.3.0(2026-09-18 用户裁定):从节点规则库版本随上报上送——主节点集群
+	// 管理节点列表状态列 hover 可见,替代登录从节点查看。
+	CRSVersion   string `json:"crs_version,omitempty"`
+	IP2RegionTag string `json:"ip2region_version,omitempty"`
 }
 
 type ClusterReport struct {
