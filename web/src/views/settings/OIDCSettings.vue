@@ -16,7 +16,11 @@
           <el-icon v-else-if="probe.checked && !probe.ok" color="#f56c6c"><CircleCloseFilled /></el-icon>
         </template>
       </el-input>
-      <div v-if="probe.ok" class="probe-ok">发现成功：{{ probe.providerName }} · 授权/令牌/JWKS 端点已自动获取</div>
+      <div v-if="probe.ok" class="probe-ok">
+        发现成功：{{ probe.providerName }} · 授权/令牌/JWKS 端点已自动获取
+        <template v-if="probe.credentialsChecked === true">｜凭证校验通过</template>
+        <template v-else-if="probe.credentialsChecked === false && (form.clientId || hasSecret)">｜该服务不支持离线凭证校验</template>
+      </div>
       <div v-else-if="probe.checked && !probe.ok && probe.error" class="probe-err">{{ probe.error }}</div>
     </div>
 
@@ -48,7 +52,9 @@
     </div>
 
     <el-alert v-if="lastTest" :type="lastTest.ok ? 'success' : 'error'" :closable="false" class="mt8"
-      :title="lastTest.ok ? `连接正常：${lastTest.providerName ?? ''}` : `连接失败：${lastTest.error ?? '未知错误'}`" />
+      :title="lastTest.ok
+          ? `连接正常：${lastTest.providerName ?? ''}${lastTest.credentialsChecked ? '（凭证校验通过）' : ''}`
+          : `连接失败：${lastTest.error ?? '未知错误'}`" />
 
     <template #footer>
       <div class="dialog-footer">
@@ -76,8 +82,8 @@ const displayName = ref('')
 const hasFetchedConfig = ref(false)
 const configured = computed(() => form.issuer !== '' || hasFetchedConfig.value)
 const hasSecret = ref(false)
-const probe = reactive<{ ok: boolean; checked: boolean; error?: string; providerName?: string }>({ ok: false, checked: false })
-const lastTest = ref<{ ok: boolean; providerName?: string; error?: string } | null>(null)
+const probe = reactive<{ ok: boolean; checked: boolean; error?: string; providerName?: string; credentialsChecked?: boolean }>({ ok: false, checked: false })
+const lastTest = ref<{ ok: boolean; providerName?: string; error?: string; credentialsChecked?: boolean } | null>(null)
 const testing = ref(false)
 const saving = ref(false)
 
@@ -130,11 +136,15 @@ const runProbe = async (): Promise<boolean> => {
   if (!/^https?:\/\//.test(issuer)) { probe.checked = true; probe.ok = false; probe.error = '服务地址须为 http(s) URL'; return false }
   testing.value = true
   try {
-    const res = await request.post<{ data?: { ok: boolean; error?: string; provider_name?: string } }>('/settings/oidc/test', { issuer }, { silent: true } as never)
+    const body: Record<string, string> = { issuer }
+    if (form.clientId.trim()) body.client_id = form.clientId.trim()
+    if (form.clientSecret) body.client_secret = form.clientSecret
+    const res = await request.post<{ data?: { ok: boolean; error?: string; provider_name?: string; credentials_checked?: boolean } }>('/settings/oidc/test', body, { silent: true } as never)
     probe.checked = true
     probe.ok = !!res.data?.ok
     probe.error = res.data?.error
     probe.providerName = res.data?.provider_name
+    probe.credentialsChecked = res.data?.credentials_checked
     return probe.ok
   } catch (err) {
     probe.checked = true; probe.ok = false
@@ -149,7 +159,9 @@ const probeOnBlur = () => { if (form.issuer.trim() || probe.checked) void runPro
 
 const test = async () => {
   const ok = await runProbe()
-  lastTest.value = ok ? { ok: true, providerName: probe.providerName } : { ok: false, error: probe.error || '未知错误' }
+  lastTest.value = ok
+    ? { ok: true, providerName: probe.providerName, credentialsChecked: probe.credentialsChecked }
+    : { ok: false, error: probe.error || '未知错误' }
 }
 
 const save = async () => {

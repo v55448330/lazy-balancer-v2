@@ -33,6 +33,10 @@ type mockIdP struct {
 	issuer    string
 	lastNonce atomic.Value
 	lastState atomic.Value
+	// client_credentials 探测行为:ccUnsupported=400 unsupported_grant_type;
+	// ccRejectClient=401 invalid_client;默认=200(凭证正确)
+	ccUnsupported  bool
+	ccRejectClient bool
 }
 
 func newMockIdP(t *testing.T) *mockIdP {
@@ -82,7 +86,26 @@ func newMockIdP(t *testing.T) *mockIdP {
 		http.Redirect(w, r, redirect.String(), http.StatusFound)
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json") // oauth2 库按 content-type 判定 JSON 解析
+		w.Header().Set("Content-Type", "application/json") // oauth2 库按 content-type 判定 JSON 解密
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") == "client_credentials" {
+			// 镜像 Entra 真实行为:scope 不带 /.default 先拒 invalid_scope(AADSTS1002012),
+			// 带 /.default 才进入客户端认证(invalid_client)
+			switch {
+			case m.ccUnsupported:
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "unsupported_grant_type"})
+			case !strings.Contains(r.FormValue("scope"), "/.default"):
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid_scope", "error_description": "AADSTS1002012: Client credential flows must have a scope value with /.default suffixed."})
+			case m.ccRejectClient || r.FormValue("client_secret") != "super-secret-123":
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client", "error_description": "AADSTS7000215: Invalid client secret provided."})
+			default:
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "at", "token_type": "Bearer"})
+			}
+			return
+		}
 		nonce, _ := m.lastNonce.Load().(string)
 		now := time.Now()
 		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
@@ -475,4 +498,55 @@ func TestOIDCUser_slave_login_gate_exempt(t *testing.T) {
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "MFA") {
 		t.Fatalf("local user without mfa must hit gate, got %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// 测试连接须做 client_credentials 凭证校验(不止 Discovery)——
+// AADSTS7000215(secret ID/值混淆)必须在「测试」阶段暴露,不能等登录才炸。
+func TestOIDCSettingsTest_verifiesClientCredentials(t *testing.T) {
+	post := func(router *gin.Engine, body string) (bool, bool, string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/oidc/test", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		var resp struct {
+			Data struct {
+				OK                 bool   `json:"ok"`
+				CredentialsChecked bool   `json:"credentials_checked"`
+				Error              string `json:"error"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v (%s)", err, rec.Body.String())
+		}
+		return resp.Data.OK, resp.Data.CredentialsChecked, resp.Data.Error
+	}
+
+	t.Run("凭证正确-校验通过", func(t *testing.T) {
+		idp := newMockIdP(t)
+		router, _ := setupOIDCTest(t, idp)
+		ok, checked, errMsg := post(router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"super-secret-123"}`)
+		if !ok || !checked {
+			t.Fatalf("expect ok+credentials_checked, got ok=%v checked=%v err=%q", ok, checked, errMsg)
+		}
+	})
+	t.Run("secret错误-测试失败且含提供商错误", func(t *testing.T) {
+		idp := newMockIdP(t)
+		router, _ := setupOIDCTest(t, idp)
+		ok, _, errMsg := post(router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"wrong-secret"}`)
+		if ok {
+			t.Fatal("invalid client secret must fail the test")
+		}
+		if !strings.Contains(errMsg, "invalid_client") && !strings.Contains(errMsg, "AADSTS7000215") {
+			t.Fatalf("error must surface provider message, got %q", errMsg)
+		}
+	})
+	t.Run("IdP不支持cc-降级为可达性通过", func(t *testing.T) {
+		idp := newMockIdP(t)
+		idp.ccUnsupported = true
+		router, _ := setupOIDCTest(t, idp)
+		ok, checked, _ := post(router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"super-secret-123"}`)
+		if !ok || checked {
+			t.Fatalf("unsupported cc: expect ok+unchecked, got ok=%v checked=%v", ok, checked)
+		}
+	})
 }

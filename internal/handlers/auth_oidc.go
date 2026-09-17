@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -498,8 +499,9 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 // OIDCSettingsTest POST /settings/oidc/test(admin)——完整发现+JWKS 探测。
 func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	var req struct {
-		Issuer      string `json:"issuer"`
-		DiscoveryOK bool   `json:"-"`
+		Issuer       string `json:"issuer"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	issuer := normalizeOIDCIssuer(req.Issuer)
@@ -531,13 +533,84 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 			name = u.Host
 		}
 	}
-	recordAudit(c, "测试成功", "OIDC 配置", services.FormatAuditDetail(fmt.Sprintf("%s(%s)", name, issuer), services.AuditResultPart("success")))
+	// 凭证离线校验:client_credentials 探测——invalid_client 即凭证错(secret
+	// 值/ID 混淆等),在「测试」阶段暴露而非登录才炸;其余错误(unsupported_grant_type
+	// /invalid_scope 等)=客户端认证已过或该服务不支持离线探测,降级为可达性通过。
+	clientID, clientSecret := strings.TrimSpace(req.ClientID), strings.TrimSpace(req.ClientSecret)
+	if clientID == "" || clientSecret == "" {
+		if cfg, _ := loadOIDCConfig(); cfg.Issuer == issuer {
+			if clientID == "" {
+				clientID = cfg.ClientID
+			}
+			if clientSecret == "" {
+				clientSecret = cfg.ClientSecret
+			}
+		}
+	}
+	credentialsChecked, credErr := probeClientCredentials(p.Endpoint().TokenURL, clientID, clientSecret)
+	if credErr != nil {
+		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(fmt.Sprintf("%s(%s)", name, issuer), services.AuditResultPart("failure")))
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"ok": false, "error": credErr.Error()}})
+		return
+	}
+	detail := name + "(" + issuer + ")"
+	if credentialsChecked {
+		detail += " 凭证校验通过"
+	}
+	recordAudit(c, "测试成功", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"ok": true, "issuer": providerClaims.Issuer, "provider_name": name,
 		"authorization_endpoint": p.Endpoint().AuthURL,
 		"token_endpoint":         p.Endpoint().TokenURL,
 		"scopes":                 providerClaims.Scopes,
+		"credentials_checked":    credentialsChecked,
 	}})
+}
+
+// probeClientCredentials 用 client_credentials 向令牌端点探测凭证:
+//   - 200:凭证正确(checked=true)
+//   - 401/400 且 error=invalid_client:凭证错误(返回 err,含提供商描述)
+//   - 其余错误(unsupported_grant_type/invalid_scope…):客户端认证未拒绝,
+//     该服务不支持离线凭证探测(checked=false,可达性仍算通过)
+//   - 网络/解析失败:返回 err(测试失败)
+func probeClientCredentials(tokenURL, clientID, clientSecret string) (bool, error) {
+	if clientID == "" || clientSecret == "" {
+		return false, nil // 无凭证可验(仅探测发现可达性)
+	}
+	// scope 候选:①api://<client_id>/.default(Entra 等先验 scope 后验 secret 的
+	// 提供商——实测 openid 会被 AADSTS1002012 拒而漏检 invalid_client);②openid(常规)。
+	// 任一候选 invalid_client 即凭证错;全部非 invalid_client 错误=不支持离线探测。
+	scopes := []string{"api://" + clientID + "/.default", "openid"}
+	for _, scope := range scopes {
+		form := url.Values{
+			"grant_type":    {"client_credentials"},
+			"client_id":     {clientID},
+			"client_secret": {clientSecret},
+			"scope":         {scope},
+		}
+		resp, err := http.PostForm(tokenURL, form)
+		if err != nil {
+			return false, fmt.Errorf("凭证探测请求失败: %w", err)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return true, nil
+		}
+		var e struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		_ = json.Unmarshal(body, &e)
+		if e.Error == "invalid_client" {
+			msg := e.ErrorDescription
+			if msg == "" {
+				msg = e.Error
+			}
+			return false, fmt.Errorf("Client ID/Secret 被提供商拒绝(%s): %s", e.Error, msg)
+		}
+	}
+	return false, nil // 无候选触达客户端认证:不支持离线探测,可达性通过
 }
 
 // OIDCSettingsDelete DELETE /settings/oidc(admin)——清空配置(等效禁用+抹除)。
