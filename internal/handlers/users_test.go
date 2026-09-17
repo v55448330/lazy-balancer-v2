@@ -45,8 +45,8 @@ func TestDeleteUser_rejectsSelfDeletion(t *testing.T) {
 
 func TestDeleteUser_rejectsLastEnabledAdministrator(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	seedUserAuditTest(t, 1, "admin", "admin", true)
-	response := serveUserMutation(h, http.MethodDelete, "/users/1", "", 99, h.DeleteUser)
+	seedUserAuditTest(t, 5, "admin-5", "admin", true)
+	response := serveUserMutation(h, http.MethodDelete, "/users/5", "", 99, h.DeleteUser)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -54,10 +54,11 @@ func TestDeleteUser_rejectsLastEnabledAdministrator(t *testing.T) {
 
 func TestToggleUserStatus_rejectsDisablingLastEnabledAdministrator(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	seedUserAuditTest(t, 1, "admin", "admin", true)
+	seedUserAuditTest(t, 5, "admin-5", "admin", true)
 	// SYSRENDER27-P5-3(第 27 轮):自禁用守卫(400)先于最后管理员守卫(409)——
 	// 本测试意图是最后管理员守卫,actorID 改 99(非自身)避开自禁用前置拦截。
-	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"is_enabled":false}`, 99, h.ToggleUserStatus)
+	// 目标用 id=5:id=1 已被初始管理员保护(2026-09-18)先行 400 拦截。
+	response := serveUserMutation(h, http.MethodPut, "/users/5", `{"is_enabled":false}`, 99, h.ToggleUserStatus)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -111,11 +112,12 @@ func TestUpdateUser_concurrentDemotionsPreserveEnabledAdministrator(t *testing.T
 
 func TestLastAdministratorGuard_allowsChangeWhenAnotherEnabledAdministratorExists(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	seedUserAuditTest(t, 1, "admin-1", "admin", true)
+	seedUserAuditTest(t, 4, "admin-4", "admin", true)
 	seedUserAuditTest(t, 2, "admin-2", "admin", true)
-	// SYSRENDER27-P5-3(第 27 轮):actorID 改 2(admin-2 操作 admin-1)——
-	// 自禁用守卫(400)前置,本测试意图是「另一管理员存在时允许」。
-	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
+	// SYSRENDER27-P5-3(第 27 轮):actorID 改 2(admin-2 操作 admin-4)——
+	// 自禁用守卫(400)前置,本测试意图是「另一管理员存在时允许」;目标非
+	// id=1(初始管理员保护会先行 400)。
+	response := serveUserMutation(h, http.MethodPut, "/users/4", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -202,5 +204,31 @@ func TestToggleUserStatus_rejectsDisablingSelf(t *testing.T) {
 	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"is_enabled":false}`, 1, h.ToggleUserStatus)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400 cannot_disable_self", response.Code, response.Body.String())
+	}
+}
+
+// 初始管理员(setup 创建的首个用户 id=1)禁止禁用与删除——即使操作者是
+// 另一管理员(如被提权的 OIDC 用户)也不可。否则全部凭证丢失时失去
+// break-glass 入口(用户 2026-09-18 裁定)。
+func TestSetupAdmin_cannotBeDisabledOrDeleted(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true) // setup 初始管理员
+	seedUserAuditTest(t, 2, "oidc-admin", "admin", true)
+
+	// When: 管理员 2 删除初始管理员 → 400
+	rec := serveUserMutation(h, http.MethodDelete, "/users/1", "", 2, h.DeleteUser)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "初始管理员") {
+		t.Fatalf("delete setup admin: status=%d body=%s, want 400 初始管理员", rec.Code, rec.Body.String())
+	}
+	// When: 管理员 2 禁用初始管理员 → 400
+	rec = serveUserMutation(h, http.MethodPatch, "/users/1", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "初始管理员") {
+		t.Fatalf("disable setup admin: status=%d body=%s, want 400 初始管理员", rec.Code, rec.Body.String())
+	}
+	// 回归形状:普通管理员之间仍可正常禁用(2 禁用 3 不受影响)
+	seedUserAuditTest(t, 3, "admin-3", "admin", true)
+	rec = serveUserMutation(h, http.MethodPatch, "/users/3", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable ordinary admin should pass: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

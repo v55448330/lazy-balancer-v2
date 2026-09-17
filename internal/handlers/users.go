@@ -222,6 +222,10 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户更新成功", Data: models.NewUserResponse(user)})
 }
 
+// setupAdminUserID:系统 setup 创建的首个用户(auth.go SetupAdmin 仅在
+// users 空表时插入一行)——恒为 id=1,作为本地 break-glass 入口受保护。
+const setupAdminUserID = 1
+
 func (h *Handlers) DeleteUser(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -234,6 +238,13 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 
 	if userIDInt == id {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不能删除当前登录用户"})
+		return
+	}
+
+	// 初始管理员(setup 创建的首个用户)不可删除——break-glass 入口保护
+	// (2026-09-18 用户裁定:提权后的 OIDC 管理员也不可动)。
+	if id == setupAdminUserID {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "初始管理员不可删除"})
 		return
 	}
 
@@ -319,6 +330,12 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不能禁用当前登录用户"})
 			return
 		}
+	}
+
+	// 初始管理员不可禁用(同 DeleteUser 保护)
+	if !req.IsEnabled && id == setupAdminUserID {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "初始管理员不可禁用"})
+		return
 	}
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)

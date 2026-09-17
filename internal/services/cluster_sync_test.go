@@ -1929,3 +1929,52 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 		t.Fatal("null-ref applied hash must be exempt (master has no files; slave residuals must not loop)")
 	}
 }
+
+// 同主机 http→https 301(主节点启用管理 HTTPS 后明文端口 301)必须自动跟随
+// 并保留方法与集群凭证——否则从节点 ErrUseLastResponse 拿到空 body 走
+// JSON 解析,报「解析集群快照: unexpected end of JSON input」且永不自愈
+// (用户 2026-09-18 实测:启用 admin TLS 后从节点同步持续失败)。
+// 跨主机重定向仍不得跟随(凭证外泄防护,见 doesNotFollowHTTPRedirect)。
+func TestSyncService_do_followsSameHostTLSUpgradeRedirect(t *testing.T) {
+	received := make(chan string, 2)
+	var targetURL string
+	tlsMaster := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method=%q, want POST preserved across redirect", r.Method)
+		}
+		received <- r.Header.Get("X-Cluster-Token")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer tlsMaster.Close()
+	targetURL = tlsMaster.URL
+
+	plaintext := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetURL, http.StatusMovedPermanently)
+	}))
+	defer plaintext.Close()
+
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+	body := strings.NewReader(`{"since_version":0}`)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, plaintext.URL+"/api/v1/cluster/nodes/report", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Cluster-Token", "cluster-secret")
+	resp, err := service.do(req)
+	if err != nil {
+		t.Fatalf("same-host TLS upgrade redirect: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200", resp.StatusCode)
+	}
+	select {
+	case token := <-received:
+		if token != "cluster-secret" {
+			t.Fatalf("token=%q, want cluster-secret", token)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("redirect target never received the request")
+	}
+}

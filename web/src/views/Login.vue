@@ -79,10 +79,10 @@
               <span class="oidc-sso-title">使用 {{ oidcDisplayName }} 登录</span>
               <span class="oidc-sso-sub">企业认证服务 · 单点登录</span>
             </button>
-            <div class="login-alt-divider"><span>或使用本地账号</span></div>
+            <div class="login-alt-divider"><span>或</span></div>
             <el-button text size="default" class="local-toggle" @click="showLocalForm = true">
               <el-icon><User /></el-icon>
-              管理员账号登录
+              使用本地账号登录
             </el-button>
           </div>
           <template v-else>

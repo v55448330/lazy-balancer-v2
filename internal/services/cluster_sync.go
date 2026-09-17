@@ -171,7 +171,46 @@ func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 	}
-	return s.client.Do(req)
+	return s.doWithTLSUpgradeRedirect(req)
+}
+
+// doWithTLSUpgradeRedirect 处理同主机 http→https 301/308:主节点启用管理
+// HTTPS 后明文端口整体 301(TCP 嗅探层,早于路由),而本客户端
+// CheckRedirect=ErrUseLastResponse 会让从节点拿到空 body 走 JSON 解析,
+// 报「解析集群快照: unexpected end of JSON input」且无自愈路径(2026-09-18
+// 实测)。仅当 Location 与原请求**同主机名**且升级为 https 时按原方法重放
+// (凭证不出原主机;TOFU transport 对自签证书自动钉扎);跨主机重定向一律
+// 不跟随(凭证外泄防护,见 doesNotFollowHTTPRedirect 契约测试)。
+func (s *SyncService) doWithTLSUpgradeRedirect(req *http.Request) (*http.Response, error) {
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusPermanentRedirect {
+		return resp, nil
+	}
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return resp, nil
+	}
+	target, err := url.Parse(location)
+	if err != nil || target.Scheme != "https" || target.Hostname() != req.URL.Hostname() {
+		return resp, nil
+	}
+	resp.Body.Close()
+	retry := req.Clone(req.Context())
+	retry.URL = target
+	if target.RawQuery == "" && req.URL.RawQuery != "" {
+		retry.URL.RawQuery = req.URL.RawQuery
+	}
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("重放 https 升级请求: %w", err)
+		}
+		retry.Body = body
+	}
+	return s.client.Do(retry)
 }
 
 // verifyClusterPinIfPresent 校验 pin 文件与已验证指纹一致；文件缺失返回 nil
@@ -729,6 +768,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
 		return SyncResult{AppliedVersion: appliedVersion}, nil
+	}
+	// 未跟随的重定向(跨主机):给可行动错误,而非让空 body 落进 JSON 解析报
+	//「unexpected end of JSON input」(2026-09-18 用户实测踩坑)
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed,
+			fmt.Errorf("主节点返回 %d 重定向(%s)——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location")))
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		// body 截断至 200B 并回退到合法 UTF-8 边界：错误消息经 last_sync_error

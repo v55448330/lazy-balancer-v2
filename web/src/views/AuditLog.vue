@@ -44,10 +44,12 @@
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
         <el-table-column prop="created_at" label="时间" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
-        <el-table-column label="操作人" width="150">
+        <el-table-column label="操作人" width="170">
           <template #default="{ row }">
-            <span v-if="row.display_name && row.display_name !== row.username">{{ row.display_name }}（{{ row.username }}）</span>
-            <span v-else>{{ row.username || '-' }}</span>
+            <el-tooltip v-if="row.display_name && row.display_name !== row.username" :content="`${row.display_name}（${row.username}）`" placement="top">
+              <span class="operator-cell">{{ row.display_name }}<span class="operator-email">（{{ row.username }}）</span></span>
+            </el-tooltip>
+            <span v-else class="operator-cell">{{ row.username || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="action" label="操作" width="90">
@@ -180,6 +182,16 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.operator-cell {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.operator-email { font-size: 11.5px; color: var(--el-text-color-secondary); }
+
 .page { max-width: 1500px; margin: 0 auto; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-left { flex: 1; }

@@ -301,7 +301,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	switch {
 	case errors.Is(err, nil):
 		if isEnabled != 1 {
-			services.RecordAuditLog(username, "登录失败", "用户认证", services.FormatAuditDetail("OIDC 登录(账号已禁用)", services.AuditResultPart("failure")), c.ClientIP())
+			services.RecordAuditLog(username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s(账号已禁用)", services.AuditUserPart(userID, username)), services.AuditResultPart("failure")), c.ClientIP())
 			fail(http.StatusForbidden, "账号已被禁用", "")
 			return
 		}
@@ -364,7 +364,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		fail(http.StatusInternalServerError, "签发登录令牌失败", "")
 		return
 	}
-	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail("OIDC 登录", services.AuditResultPart("success")), c.ClientIP())
+	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s", services.AuditUserPart(userID, username)), services.AuditResultPart("success")), c.ClientIP())
 	_, _ = db.DB.Exec("UPDATE users SET last_login=datetime('now') WHERE id=?", userID)
 
 	// 回跳前端:令牌走 URL fragment(不发给服务器),前端路由接收后入会话。
