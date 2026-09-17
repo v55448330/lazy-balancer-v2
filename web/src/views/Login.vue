@@ -73,14 +73,19 @@
         </el-form>
 
         <template v-else>
-          <!-- v2.3.0 OIDC:启用时主按钮一键跳转;本地账号折叠保底(break-glass) -->
+          <!-- v2.3.0 OIDC:品牌主按钮;本地账号次级入口,可双向切换 -->
           <div v-if="oidcEnabled && !showLocalForm" class="oidc-login">
-            <el-button type="primary" size="large" class="oidc-btn" :loading="oidcRedirecting" @click="goOIDCLogin">
-              使用 {{ oidcDisplayName }} 登录
+            <button class="oidc-sso-btn" :disabled="oidcRedirecting" @click="goOIDCLogin">
+              <span class="oidc-sso-title">使用 {{ oidcDisplayName }} 登录</span>
+              <span class="oidc-sso-sub">企业认证服务 · 单点登录</span>
+            </button>
+            <div class="login-alt-divider"><span>或使用本地账号</span></div>
+            <el-button text size="default" class="local-toggle" @click="showLocalForm = true">
+              <el-icon><User /></el-icon>
+              管理员账号登录
             </el-button>
-            <el-divider style="margin: 14px 0 10px">或</el-divider>
-            <el-button text size="default" class="local-toggle" @click="showLocalForm = true">使用本地账号登录 ▸</el-button>
           </div>
+          <template v-else>
           <el-form v-show="!oidcEnabled || showLocalForm" ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
           <el-form-item prop="username">
             <el-input
@@ -117,9 +122,17 @@
               {{ loading ? '登录中...' : '登 录' }}
             </el-button>
           </el-form-item>
-        </el-form>
+          </el-form>
+            <div v-if="oidcEnabled" class="back-to-oidc">
+              <el-button text size="small" @click="showLocalForm = false">
+                <el-icon><ArrowLeft /></el-icon>
+                返回 {{ oidcDisplayName }} 登录
+              </el-button>
+            </div>
+          </template>
         </template>
       </template>
+
 
       <div class="login-footer">
         <span class="version">版本 {{ appVersion }}</span>
@@ -133,7 +146,7 @@ import { nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, normalizeMfaCodeInput, request } from '@/utils/api'
-import { User, Lock, Postcard, Key } from '@element-plus/icons-vue'
+import { User, Lock, Postcard, Key, ArrowLeft } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, appVersion } from '@/utils/branding'
 import type { FormInstance, FormRules, InputOtpInstance } from 'element-plus'
@@ -436,6 +449,44 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 500;
 }
+
+
+/* v2.3.0 OIDC 品牌主按钮 */
+.oidc-login { text-align: center; }
+.oidc-sso-btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 18px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+  color: #fff;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.oidc-sso-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(37, 99, 235, 0.36); }
+.oidc-sso-btn:active:not(:disabled) { transform: translateY(0); }
+.oidc-sso-btn:disabled { opacity: .75; cursor: default; }
+
+
+.oidc-sso-title { font-size: 15px; font-weight: 600; letter-spacing: .3px; }
+.oidc-sso-sub { font-size: 11.5px; opacity: .82; }
+
+.login-alt-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 20px 0 6px;
+  color: #9ca3af; font-size: 12.5px;
+}
+.login-alt-divider::before, .login-alt-divider::after {
+  content: ''; flex: 1; height: 1px; background: #e5e7eb;
+}
+.local-toggle { margin-top: 6px; color: #4b5563; font-weight: 500; }
+.back-to-oidc { margin-top: 14px; text-align: center; }
 
 .login-footer {
   text-align: center;

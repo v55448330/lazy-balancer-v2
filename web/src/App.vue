@@ -66,7 +66,11 @@ const currentPage = computed(() => authStore.currentPage)
 
 onMounted(async () => {
   const url = new URL(window.location.href)
-  const fragment = new URLSearchParams(url.hash.slice(1))
+  // hash 形态二种:「#login_ticket=x」(无路径)与「#/oidc/callback?token=x」
+  // (带路径)——先剥路径段再解析查询串,否则 key 变成 "/oidc/callback?token"
+  const hashBody = url.hash.startsWith('#') ? url.hash.slice(1) : ''
+  const qIdx = hashBody.indexOf('?')
+  const fragment = new URLSearchParams(qIdx >= 0 ? hashBody.slice(qIdx + 1) : hashBody)
   const hasLoginTicket = fragment.has('login_ticket')
   const loginTicket = fragment.get('login_ticket') ?? ''
   // v2.3.0 OIDC 回跳:#/oidc/callback?token=...&return_to=...——后端回调以

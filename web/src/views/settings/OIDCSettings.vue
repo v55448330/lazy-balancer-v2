@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import { request, ApiRequestError } from '@/utils/api'
@@ -123,7 +123,10 @@ const load = async () => {
       form.clientId = res.data.client_id || ''
       form.displayName = res.data.display_name || ''
       hasFetchedConfig.value = !!res.data.issuer
-      if (form.issuer) { probe.checked = true; probe.ok = true }
+      form.clientSecret = ''
+      // 保存门基线:已保存的配置视为「曾经可用」但不免检——改动任一字段后
+      // probe 复位为未测试,保存前强制重测(watch 联动)
+      probe.checked = false; probe.ok = false; lastTest.value = null
     }
   } catch { /* 未配置 */ }
   notify()
@@ -157,6 +160,14 @@ const runProbe = async (): Promise<boolean> => {
 
 const probeOnBlur = () => { if (form.issuer.trim() || probe.checked) void runProbe() }
 
+// 任一凭证/地址字段变动→探测结果与上次测试立即失效(表单值≠已测值)
+watch(() => [form.issuer, form.clientId, form.clientSecret], () => {
+  probe.ok = false
+  probe.checked = false
+  probe.credentialsChecked = undefined
+  lastTest.value = null
+})
+
 const test = async () => {
   const ok = await runProbe()
   lastTest.value = ok
@@ -168,13 +179,27 @@ const save = async () => {
   if (!form.issuer.trim()) { ElMessage.warning('请填写服务地址'); return }
   if (!form.clientId.trim()) { ElMessage.warning('请填写 Client ID'); return }
   if (!hasSecret.value && !form.clientSecret) { ElMessage.warning('请填写 Client Secret'); return }
+  // 保存门:以「当前表单值」测试通过才允许保存——防止改了凭证未测就落库
+  if (!probe.ok) {
+    const ok = await runProbe()
+    if (!ok) { ElMessage.warning('测试连接未通过，请先修正配置再保存'); return }
+  }
+  if (configured.value) {
+    await ElMessageBox.confirm(
+      enabled.value ? '确认更新 OIDC 配置？' : '确认保存并启用 OIDC 登录？',
+      enabled.value ? '更新配置' : '保存并启用',
+      { type: 'warning' },
+    )
+  }
   saving.value = true
   try {
     const payload: Record<string, unknown> = { issuer: form.issuer, client_id: form.clientId, enabled: true, display_name: form.displayName }
     if (form.clientSecret) payload.client_secret = form.clientSecret
     await request.put('/settings/oidc', payload)
-    ElMessage.success(enabled.value ? '配置已更新' : 'OIDC 已启用——登录页将出现认证服务入口')
     await load()
+    form.clientSecret = '' // 已保存,清空避免下次测试误带旧输入
+    ElMessage.success(enabled.value ? '配置已更新' : 'OIDC 已启用——登录页将出现认证服务入口')
+    emit('update:modelValue', false) // 成功即关闭;失败留在弹框由拦截器报错
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
   }
