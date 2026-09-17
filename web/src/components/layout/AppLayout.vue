@@ -239,7 +239,7 @@ const pageTitle: Record<string, string> = {
   dashboard: '仪表盘',
   rules: '负载均衡',
   caddy: '配置预览',
-  users: '系统设置 / 用户管理',
+  users: '系统设置 / 用户认证',
   'audit-log': '操作日志',
   'settings-basic': '系统设置 / 基础设置',
   'settings-cluster': '系统设置 / 集群管理',

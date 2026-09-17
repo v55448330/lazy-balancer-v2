@@ -543,11 +543,6 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		}
 		body = payload.ConfigJSON
 		c.Set("lbbak_payload", payload)
-		// 标记:后续 JSON 校验复用 body 变量
-	}
-	if isRequestBodyTooLarge(err) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
-		return
 	}
 	if err != nil || len(body) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件内容为空"})
@@ -687,6 +682,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	body, err := c.GetRawData()
 	if isRequestBodyTooLarge(err) {
 		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
+		return
+	}
+	// lbbak(tar.gz)是 V2 形态:提前给出正确端点指引,避免落入 JSON 解析
+	// 「不是有效的 JSON」困惑(安全面本就必拒,仅提示质量)。
+	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "V1 导入仅支持旧版 JSON 备份；lbbak 备份请使用 /api/v1/config/import"})
 		return
 	}
 	if err != nil || len(body) == 0 {

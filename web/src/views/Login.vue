@@ -139,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, normalizeMfaCodeInput, request } from '@/utils/api'
@@ -264,6 +264,14 @@ const oidcDisplayName = ref('OIDC')
 const showLocalForm = ref(false)
 const oidcRedirecting = ref(false)
 onMounted(async () => {
+  // C2-7:回调失败 302 回前端,错误经 sessionStorage 一次性带到这里展示
+  try {
+    const oidcErr = sessionStorage.getItem('oidc_login_error')
+    if (oidcErr) {
+      sessionStorage.removeItem('oidc_login_error')
+      ElMessage.error(`OIDC 登录失败：${oidcErr}`)
+    }
+  } catch { /* 隐私模式 */ }
   try {
     const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true } as never)
     if (res.data?.enabled) {
@@ -279,6 +287,14 @@ const goOIDCLogin = () => {
   const returnTo = encodeURIComponent('/')
   window.location.href = `/api/v1/auth/oidc/login?return_to=${returnTo}`
 }
+// C2-6:IdP 侧「返回」经 bfcache 恢复时 JS 状态保留——复位跳转锁,防 SSO
+// 按钮永久禁用(整页跳转本无重复提交面,disabled 仅作点击反馈)。
+// 监听器随组件卸载移除(防登出-登录循环渐进累积)。
+const onPageShow = (e: PageTransitionEvent) => {
+  if (e.persisted) oidcRedirecting.value = false
+}
+window.addEventListener('pageshow', onPageShow)
+onUnmounted(() => window.removeEventListener('pageshow', onPageShow))
 
 const handleLogin = async () => {
   if (loading.value) return

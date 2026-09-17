@@ -193,6 +193,8 @@ interface LoginResult {
         is_enabled: res.user.is_enabled,
         display_name: res.user.display_name,
         mfa_enabled: res.user.mfa_enabled ?? false,
+        // OIDC-4:票据登录响应携带的来源标记——缺失按本地,避免从节点 UI 误判
+        auth_provider: res.user.auth_provider ?? 'local',
       }
     }
   }

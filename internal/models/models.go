@@ -34,11 +34,12 @@ type UserResponse struct {
 
 func NewUserResponse(user User) UserResponse {
 	response := UserResponse{
-		ID:        user.ID,
-		Username:  user.Username,
-		Role:      user.Role,
-		IsEnabled: user.IsEnabled,
-		CreatedAt: user.CreatedAt,
+		ID:           user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		IsEnabled:    user.IsEnabled,
+		CreatedAt:    user.CreatedAt,
+		AuthProvider: user.AuthProvider,
 	}
 	if user.DisplayName.Valid {
 		response.DisplayName = &user.DisplayName.String

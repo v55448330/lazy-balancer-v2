@@ -42,6 +42,7 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		last_login DATETIME,
 		password_changed_at DATETIME,
 		password_version INTEGER NOT NULL DEFAULT 0,
+		auth_provider TEXT NOT NULL DEFAULT 'local',
 		mfa_enabled BOOLEAN DEFAULT 0,
 		-- M7 登录锁定列 + M5/M6 密码确认门计数列（与生产迁移后形状一致；api_keys
 		-- 供改密路径的 Key 吊销 DELETE）。

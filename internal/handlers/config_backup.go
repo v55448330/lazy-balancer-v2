@@ -193,7 +193,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"lb_rules": {
 		"description": "", "domain": "", "strategy": "weighted_round_robin",
 		"dynamic_dns": int64(0), "enable_dns_server": int64(0), "dns_server": "", "dns_family": "ipv4",
-		"health_check_path": "", "health_check_interval": int64(10), "health_check_timeout": int64(5),
+		"health_check_path": "", "health_check_interval": int64(10), "health_check_timeout": int64(2),
 		"health_check_unhealthy_threshold": int64(3), "health_check_healthy_threshold": int64(2),
 		"enable_active_health_check": int64(0), "tcp_health_check_port": int64(0), "tcp_proxy_protocol": int64(0),
 		"tcp_try_duration": int64(0), "tcp_try_interval": int64(250),
@@ -1420,7 +1420,38 @@ func backupString(value any) string {
 
 // backupContainsUsername 报告备份 users 表是否包含指定账户。审计 B3 自锁门使用：
 // 导入全量替换 users/api_keys 且递增 password_version 吊销现有 JWT，备份缺少
-// 操作者自身账户时导入后其永久无法登录——该场景须在事务前 400 拒绝。
+// 操作者自身账户时导入后需用备份内账户重新登录——2026-09-18 裁定降级为
+// warning+照常导入(见下方 operatorReplaced)。
+// acmeRefResolvablePostImport:导入后某 ACME 引用(id)是否仍可解析——备份携带
+// 该表时以备份行为准(整表替换),否则 live 表原样保留(R39-14 预检口径)。
+func acmeRefResolvablePostImport(tables map[string][]map[string]any, table string, id int) bool {
+	if rows, carried := tables[table]; carried {
+		for _, row := range rows {
+			if rid, ok := backupInteger(row["id"]); ok && rid == id {
+				enabledRaw, hasEnabled := row["enabled"]
+				return !hasEnabled || backupBooleanEnabled(enabledRaw)
+			}
+		}
+		return false
+	}
+	var exists bool
+	if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id = ? AND enabled = 1)", id).Scan(&exists); err != nil {
+		return false
+	}
+	return exists
+}
+
+// ip2regionTagFromBackup:从备份表区读 IP2Region 版本 tag(R39-12:随文件
+// 传入 ApplyWafFileBundle,保持 .version 伴生文件与记录一致)。
+func ip2regionTagFromBackup(tables map[string][]map[string]any) string {
+	rows := tables["security_ip2region_version"]
+	if len(rows) == 0 {
+		return ""
+	}
+	tag, _ := rows[0]["version"].(string)
+	return tag
+}
+
 func backupContainsUsername(users []map[string]any, username string) bool {
 	for _, row := range users {
 		if backupString(row["username"]) == username {
@@ -1709,6 +1740,12 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
 		return
 	}
+	// BE-C1-6:仅「全局配置」的导出产物不含任何数据表,自家导入器必拒
+	// (「不包含任何已知数据表」)——导出侧前置拒绝,不产死备份。
+	if len(sectionTables) == 0 && includeGlobal {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导出至少需选择一个数据分类（仅全局配置的备份无法被导入）"})
+		return
+	}
 	ctx := c.Request.Context()
 	backup := configBackup{
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
@@ -1809,7 +1846,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	var backup configBackup
 	if err := c.ShouldBindJSON(&backup); err != nil {
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件格式不正确"})
@@ -1817,6 +1854,21 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	for table := range backup.Tables {
 		exportedTables[table] = true
+	}
+	// R39-1:lbbak 二进制备份无法在请求体内携带 sections——分类选择经
+	// ?sections= query 传输(与导出对称);JSON 备份以体内 sections 字段为准。
+	if lbbakFiles != nil {
+		if qs := c.Query("sections"); qs != "" {
+			sel := []string{}
+			for _, p := range strings.Split(qs, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					sel = append(sel, p)
+				}
+			}
+			if len(sel) > 0 {
+				backup.Sections = sel
+			}
+		}
 	}
 	usedLegacyChecksum, err := validateV2Backup(backup)
 	if err != nil {
@@ -1959,12 +2011,28 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 数据文件,版本表恒跳过——否则记录与本地文件分叉(2026-09-18 用户裁定:
 	// 只有元数据=该类配置不应导入)。lbbak 无 waf 条目同理。
 	wafMetadataSkipped := false
-	if sectionTables["security_crs_version"] && (lbbakFiles == nil || (lbbakFiles.CRSTarGz == nil && lbbakFiles.Xdb == nil)) {
-		for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
-			delete(backup.Tables, t)
+	wafCRSMetadataSkipped := false
+	wafXdbMetadataSkipped := false
+	if sectionTables["security_crs_version"] {
+		crsMissing := lbbakFiles == nil || lbbakFiles.CRSTarGz == nil
+		xdbMissing := lbbakFiles == nil || lbbakFiles.Xdb == nil
+		switch {
+		case crsMissing && xdbMissing:
+			for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
+				delete(backup.Tables, t)
+			}
+			wafMetadataSkipped = true
+			recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——规则库版本记录已跳过(仅 lbbak 完整备份可导入该类)")
+		case crsMissing:
+			// BE-C1-10:单侧文件缺失→仅跳过对应版本表(记录与文件同批落地)。
+			delete(backup.Tables, "security_crs_version")
+			wafCRSMetadataSkipped = true
+			recordAudit(c, "导入警告", "配置备份", "备份不含 CRS 数据文件——CRS 版本记录已跳过(仅含该文件的 lbbak 备份可导入)")
+		case xdbMissing:
+			delete(backup.Tables, "security_ip2region_version")
+			wafXdbMetadataSkipped = true
+			recordAudit(c, "导入警告", "配置备份", "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过(仅含该文件的 lbbak 备份可导入)")
 		}
-		wafMetadataSkipped = true
-		recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——规则库版本记录已跳过(仅 lbbak 完整备份可导入该类)")
 	}
 	for table := range backup.Tables {
 		if !sectionTables[table] {
@@ -1982,6 +2050,28 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if importUsername != "" && sectionTables["users"] && !backupContainsUsername(backup.Tables["users"], importUsername) {
 		operatorReplaced = true
 		recordAudit(c, "导入警告", "配置备份", "备份不含当前操作账户——系统数据将被替换,导入后请使用备份内的管理员账户登录")
+	}
+	// R39-14:「系统数据」替换 ACME 配置表时,live 启用规则的引用可能悬挂
+	// (与 C-04 删除 409 守卫同果)——预检并降级警告(不阻断,尊重用户选择)。
+	acmeDanglingRules := 0
+	if sectionTables["certificate_configs"] || sectionTables["ca_providers"] {
+		if rows, qerr := db.DB.Query(`SELECT COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0) FROM lb_rules WHERE enabled=1 AND tls_source='acme_dns'`); qerr == nil {
+			for rows.Next() {
+				var acmeID, caID int
+				if rows.Scan(&acmeID, &caID) != nil {
+					continue
+				}
+				if acmeID != 0 && !acmeRefResolvablePostImport(backup.Tables, "certificate_configs", acmeID) {
+					acmeDanglingRules++
+				} else if caID != 0 && !acmeRefResolvablePostImport(backup.Tables, "ca_providers", caID) {
+					acmeDanglingRules++
+				}
+			}
+			rows.Close()
+		}
+	}
+	if acmeDanglingRules > 0 {
+		recordAudit(c, "导入警告", "配置备份", fmt.Sprintf("导入后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
 	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
@@ -2087,10 +2177,16 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 			reseedBlockPageNeeded = true
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
-		err = session.abort(err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
-		return
+	revokedSessions := false
+	if sectionTables["users"] {
+		// R39-11:仅「系统数据」被替换时吊销全员会话(用户/密钥已换,旧 JWT
+		// 必须失效);其余分类导入不触碰用户数据,不吊销、不打扰。
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
+			err = session.abort(err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
+			return
+		}
+		revokedSessions = true
 	}
 	var enabledAdmins int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role='admin' AND is_enabled=1").Scan(&enabledAdmins); err != nil {
@@ -2114,7 +2210,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		}
 	}
 	// 审计 B3：归属重映射仅在操作者存在时执行——操作者行缺失时写 NULL 会抹掉
-	// 全部规则归属（操作者非空但缺席备份的场景已被上方自锁前置门 400 拦截；
+	// 全部规则归属（操作者非空但缺席备份的场景已降级为 warning 警告（2026-09-18 裁定）；
 	// 此分支兜底无操作者上下文的路径）。
 	if importUserID.Valid {
 		if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
@@ -2176,8 +2272,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// lbbak:文件落盘必须在 session.commit 之前——commit 内的 Caddy 应用
 	// (ApplyConfigFromTxCertAwareForce)要读到新 CRS 文件;xdb 落盘后立即
 	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
-	if lbbakFiles != nil {
-		applyLbbakWafFiles(c, lbbakFiles)
+	wafApplyWarning := ""
+	if lbbakFiles != nil && sectionTables["security_crs_version"] {
+		wafApplyWarning = applyLbbakWafFiles(c, lbbakFiles, ip2regionTagFromBackup(backup.Tables))
 	}
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
@@ -2259,8 +2356,23 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if wafMetadataSkipped {
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含规则库数据文件——规则库版本记录已跳过（仅 lbbak 完整备份可导入该类）")
 	}
+	if wafCRSMetadataSkipped {
+		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含 CRS 数据文件——CRS 版本记录已跳过（仅含该文件的 lbbak 备份可导入该类）")
+	}
+	if wafXdbMetadataSkipped {
+		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过（仅含该文件的 lbbak 备份可导入该类）")
+	}
+	if wafApplyWarning != "" {
+		responseWarnings = append(append([]string{}, responseWarnings...), wafApplyWarning)
+	}
 	if operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
+	}
+	if revokedSessions && !operatorReplaced {
+		responseWarnings = append(append([]string{}, responseWarnings...), "系统数据已导入：全部登录会话已吊销，请重新登录")
+	}
+	if acmeDanglingRules > 0 {
+		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("导入后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }

@@ -50,7 +50,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item v-if="selfEdit" label="当前密码">
+            <el-form-item v-if="selfEdit && !editingIsOIDC" label="当前密码">
               <el-input v-model="form.current_password" type="password" show-password maxlength="72" :placeholder="form.password ? '修改密码时必填' : '填写新密码后需确认'" />
             </el-form-item>
           </el-col>
@@ -68,8 +68,8 @@
           </el-col>
         </el-row>
         <el-form-item>
-          <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
-          <el-button :disabled="submitting" @click="closeForm">取消</el-button>
+          <el-button v-if="!editingIsOIDC || !selfEdit" type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
+          <el-button :disabled="submitting" @click="closeForm">{{ editingIsOIDC && selfEdit ? '关闭' : '取消' }}</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -81,10 +81,10 @@
             <el-icon><User /></el-icon>
             <span>用户列表</span>
           </div>
-          <div class="oidc-entry-inline">
+          <div v-if="authStore.user?.role === 'admin'" class="oidc-entry-inline">
             <el-tag v-if="oidcEnabled" type="success" size="small" effect="light">OIDC 已启用</el-tag>
             <el-tag v-else-if="oidcConfigured" type="info" size="small" effect="plain">OIDC 已配置</el-tag>
-            <el-button size="small" text type="primary" @click="oidcOpen = true">{{ oidcConfigured ? 'OIDC 设置' : '配置 OIDC' }}</el-button>
+            <el-button size="small" text type="primary" :disabled="isReadOnly" @click="oidcOpen = true">{{ oidcConfigured ? 'OIDC 设置' : '配置 OIDC' }}</el-button>
           </div>
         </div>
       </template>
@@ -147,7 +147,7 @@
             <el-button type="primary" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
+            <el-button v-if="row.auth_provider !== 'oidc'" type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
               重置密码
             </el-button>
             <el-button v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
@@ -335,11 +335,14 @@ const handleSubmit = async () => {
         return
       }
       const editingSelf = editingUser.value.id === authStore.user?.id
+      // OIDC 用户的 username/display_name/password 源自 IdP(后端守卫必 400)——
+      // 管理员编辑仅提交本地管理语义字段(角色),undefined 不会被序列化。
+      const oidcTarget = editingUser.value.auth_provider === 'oidc'
       await request.put(`/users/${editingUser.value.id}`, {
-        username: form.value.username,
+        username: oidcTarget ? undefined : form.value.username,
         role: form.value.role,
-        display_name: form.value.display_name,
-        password: form.value.password || undefined,
+        display_name: oidcTarget ? undefined : form.value.display_name,
+        password: oidcTarget ? undefined : (form.value.password || undefined),
       })
       // admin 编辑本人行且提交了密码：同 B4-I2，干净登出替代死 token 误报。
       if (editingSelf && form.value.password) {

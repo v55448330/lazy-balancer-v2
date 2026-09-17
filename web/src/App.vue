@@ -77,12 +77,18 @@ onMounted(async () => {
   // fragment 携带令牌(不发服务器),此处接收建会话(与票据登录同型)。
   const oidcToken = url.hash.includes('/oidc/callback') ? (fragment.get('token') ?? '') : ''
   const oidcReturnTo = url.hash.includes('/oidc/callback') ? (fragment.get('return_to') ?? '') : ''
+  // C2-7:后端回调失败以 error 片段 302 回前端——登录页读取展示(一次性)
+  const oidcError = url.hash.includes('/oidc/callback') ? (fragment.get('error') ?? '') : ''
+  if (oidcError) {
+    try { sessionStorage.setItem('oidc_login_error', oidcError) } catch { /* 隐私模式 */ }
+  }
   if (hasLoginTicket || url.hash.includes('/oidc/callback')) {
     fragment.delete('login_ticket')
     fragment.delete('token')
     fragment.delete('return_to')
     fragment.delete('expires_at')
     fragment.delete('oidc')
+    fragment.delete('error')
     const remainingHash = fragment.toString()
     window.history.replaceState({}, '', `${url.pathname}${url.search}${remainingHash ? `#${remainingHash}` : ''}`)
   }

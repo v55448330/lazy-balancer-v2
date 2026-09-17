@@ -81,6 +81,11 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	if role, ok := c.Get("role"); ok && role == "admin" {
 		isAdmin = true
 	}
+	// R72 二十六次 D4：凭证最小可见性——非 admin 只见掩码形态。
+	// R39-9：admin 属主的只读 API Key 同样只见掩码——apiKeyAuth 注入的
+	// api_key_read_only 标志(机器身份,密钥泄露面大于会话)独立于属主角色
+	// 生效;admin JWT 会话路径不受影响。
+	maskCredentials := !isAdmin || c.GetBool("api_key_read_only")
 	var configs []models.CertificateConfig
 	for rows.Next() {
 		var cfg models.CertificateConfig
@@ -88,8 +93,7 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书配置失败: " + err.Error()})
 			return
 		}
-		// R72 二十六次 D4：凭证最小可见性——非 admin 只见掩码形态。
-		if !isAdmin {
+		if maskCredentials {
 			cfg.DNSCredentials = maskDNSCredentialsJSON(cfg.DNSCredentials)
 		}
 		configs = append(configs, cfg)

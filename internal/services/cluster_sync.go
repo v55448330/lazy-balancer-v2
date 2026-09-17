@@ -587,6 +587,13 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 		return models.ClusterRegistration{}, fmt.Errorf("连接主节点失败: %w", err)
 	}
 	defer resp.Body.Close()
+	// CL39-B1-1(D1):未跟随的 3xx(跨主机重定向/302/307)在读 body 前拦截——
+	// 同主机 https 升级已由 doWithTLSUpgradeRedirect 重放,残留 3xx 的空 body
+	// 落进 JSON 解析只会报「unexpected end of JSON input」;给与 Pull 3xx
+	// 分支同款的可行动指引。
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return models.ClusterRegistration{}, fmt.Errorf("主节点返回 %d 重定向(%s)——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	var envelope struct {
 		Message string                     `json:"message"`
 		Data    models.ClusterRegistration `json:"data"`

@@ -5,11 +5,9 @@ package handlers
 //     OIDC Discovery 自动获取,用户零高级配置
 //   · OIDC 用户不绑定本地账号:每次首登独立 JIT 开户(auth_provider='oidc',
 //     默认普通角色),重复登录按 (issuer, subject) 命中
-//   · 双通道保底:OIDC 启用时本地账号永远可登(登录框默认 OIDC+折叠本地)
-//   · 写保护矩阵:绑本地 MFA→TOTP 弹码;未绑 OIDC 会话→IdP 重新认证
-//     (prompt=login,回调刷新 mfa_ts);锁定仅密码路径(OIDC 失败不计入,
-//     防「伪造回调锁死账号」DoS)
-//   · 登录从节点:保持本地 MFA 硬门槛(选项 A)
+//   · 写保护矩阵:绑本地 MFA→TOTP 弹码;OIDC 会话(auth_method=oidc)与本地
+//     MFA 体系完全解耦,经 mfaStepUpGuard 显式直通(v2.3.0 用户裁定);
+//     锁定仅密码路径(OIDC 失败不计入,防「伪造回调锁死账号」DoS)
 //   · 配置随 global_config 集群快照自动同步;从节点回调独立闭环→只读 JWT
 
 import (
@@ -25,6 +23,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -47,7 +46,7 @@ type OIDCConfig struct {
 }
 
 // oidcStateEntry 登录跳转与回调之间的一次性状态(state 防 CSRF,nonce 防
-// 重放,PKCE verifier 防授权码拦截;reauth=prompt=login 的 IdP 重认证请求)。
+// 重放,PKCE verifier 防授权码拦截)。
 type oidcStateEntry struct {
 	nonce    string
 	verifier string
@@ -58,10 +57,28 @@ type oidcStateEntry struct {
 var (
 	oidcStates   sync.Map // state -> oidcStateEntry
 	oidcProvMu   sync.Mutex
-	oidcProvCach = map[string]*oidc.Provider{} // issuer -> provider(discovery 产物)
+	oidcProvCach = map[string]oidcProvEntry{} // issuer -> discovery 产物(含短 TTL 负缓存)
+	// oidcStateCount 在册 state 条目计数(R39-3:未认证泛洪封顶,计数与
+	// Store/Delete/TTL 清理同点维护)
+	oidcStateCount atomic.Int32
 )
 
-const oidcStateTTL = 10 * time.Minute
+// oidcProvEntry:成功缓存 provider;失败缓存 err+failedAt(负缓存,短 TTL——
+// R39-4:IdP 故障时不逐请求回源放大,恢复后 5s 内自动重试)。
+type oidcProvEntry struct {
+	provider *oidc.Provider
+	err      error
+	failedAt time.Time
+}
+
+const (
+	oidcStateTTL    = 10 * time.Minute
+	oidcNegCacheTTL = 5 * time.Second // discovery 失败负缓存 TTL
+)
+
+// oidcStateMaxEntries 在册 state 条目上限(R39-3:未认证泛洪内存封顶;
+// var 供测试收窄)。
+var oidcStateMaxEntries = 4096
 
 // ── 配置读写 ──
 
@@ -98,19 +115,32 @@ func normalizeOIDCIssuer(raw string) string {
 	return issuer
 }
 
+// oidcProvider 按 issuer 获取(带缓存的 discovery;R39-4:网络发现移出全局锁,
+// 失败负缓存 oidcNegCacheTTL——IdP 故障时不再持锁串行 8s 逐请求回源)。
 func oidcProvider(issuer string) (*oidc.Provider, error) {
 	oidcProvMu.Lock()
-	defer oidcProvMu.Unlock()
-	if p, ok := oidcProvCach[issuer]; ok {
-		return p, nil
+	e, ok := oidcProvCach[issuer]
+	oidcProvMu.Unlock()
+	if ok {
+		if e.provider != nil {
+			return e.provider, nil
+		}
+		if time.Since(e.failedAt) < oidcNegCacheTTL {
+			return nil, e.err
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	p, err := oidc.NewProvider(ctx, issuer)
+	oidcProvMu.Lock()
 	if err != nil {
-		return nil, fmt.Errorf("OIDC 发现失败(检查服务地址可达性与 .well-known 配置): %w", err)
+		werr := fmt.Errorf("OIDC 发现失败(检查服务地址可达性与 .well-known 配置): %w", err)
+		oidcProvCach[issuer] = oidcProvEntry{err: werr, failedAt: time.Now()}
+		oidcProvMu.Unlock()
+		return nil, werr
 	}
-	oidcProvCach[issuer] = p
+	oidcProvCach[issuer] = oidcProvEntry{provider: p}
+	oidcProvMu.Unlock()
 	return p, nil
 }
 
@@ -170,13 +200,31 @@ func oidcCallbackURL(c *gin.Context) string {
 	return requestOrigin(c) + "/api/v1/auth/oidc/callback"
 }
 
-// OIDCLogin GET /auth/oidc/login?prompt=login&return_to=...
-// 生成 state/nonce/PKCE 后跳转提供商授权页。prompt=login 用于写保护的
-// IdP 重新认证(强制重登,回调侧刷新 mfa_ts)。
+// OIDCLogin GET /auth/oidc/login?return_to=...
+// 生成 state/nonce/PKCE 后跳转提供商授权页。
 func (h *Handlers) OIDCLogin(c *gin.Context) {
 	cfg, ok := loadOIDCConfig()
 	if !ok || !cfg.Enabled || cfg.Issuer == "" {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "OIDC 未启用"})
+		return
+	}
+	// 过期清理先行(R39-3 P1 复审修正):封顶判定必须在自愈清理之后——
+	// 否则死条目(未被回调消费的过期 state)永无清理机会,4096 次未完成
+	// 登录即可把 OIDC 登录永久 429 直至重启(防护自身被武器化)。
+	oidcStates.Range(func(k, v any) bool {
+		if e, ok := v.(oidcStateEntry); ok && time.Since(e.created) > oidcStateTTL {
+			// SEC-1:LoadAndDelete 原子扣减——与回调消费方竞争同键时恰好一个
+			// 赢家,计数不向负漂移(封顶判定因此不被侵蚀)。
+			if _, loaded := oidcStates.LoadAndDelete(k); loaded {
+				oidcStateCount.Add(-1)
+			}
+		}
+		return true
+	})
+	// R39-3:在册 state 条目封顶——未认证泛洪不得无限放大内存(上限远高于
+	// 正常未完成登录量级;到达即拒绝,不影响「回调失败不计锁定」裁定)。
+	if oidcStateCount.Load() >= int32(oidcStateMaxEntries) {
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "登录请求过于频繁，请稍后再试"})
 		return
 	}
 	p, err := oidcProvider(cfg.Issuer)
@@ -207,13 +255,7 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 		returnTo = "" // 仅允许站内相对路径,防开放重定向
 	}
 	oidcStates.Store(state, oidcStateEntry{nonce: nonce, verifier: verifier, returnTo: returnTo, created: time.Now()})
-	// 顺手清理过期状态(单机内存态,量级=未完成登录数,遍历可忽略)
-	oidcStates.Range(func(k, v any) bool {
-		if e, ok := v.(oidcStateEntry); ok && time.Since(e.created) > oidcStateTTL {
-			oidcStates.Delete(k)
-		}
-		return true
-	})
+	oidcStateCount.Add(1)
 
 	oauthCfg := oidcOAuthConfig(cfg, p, oidcCallbackURL(c))
 	authURL := oauthCfg.AuthCodeURL(state,
@@ -231,29 +273,37 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "OIDC 未启用"})
 		return
 	}
-	fail := func(status int, msg, auditDetail string) {
+	// C2-7:回调是浏览器整页导航——失败一律 302 回前端错误页(error 经 URL
+	// fragment 携带,不渲染裸 JSON)。审计归因用占位用户名:失败路径身份尚未
+	// 验证,不落请求方可控的用户名。
+	fail := func(msg, auditDetail string) {
 		if auditDetail != "" {
-			services.RecordAuditLog(c.Query("state")[:0]+"oidc-user", "认证拒绝", "用户认证", services.FormatAuditDetail(auditDetail, services.AuditResultPart("failure")), c.ClientIP())
+			services.RecordAuditLog("oidc-user", "认证拒绝", "用户认证", services.FormatAuditDetail(auditDetail, services.AuditResultPart("failure")), c.ClientIP())
 		}
-		c.JSON(status, models.APIResponse{Code: status, Message: msg})
+		c.Redirect(http.StatusFound, requestOrigin(c)+"/#/oidc/callback?error="+url.QueryEscape(msg))
 	}
 	stateEntryRaw, ok := oidcStates.LoadAndDelete(c.Query("state"))
+	if ok {
+		oidcStateCount.Add(-1)
+	}
 	if !ok {
-		fail(http.StatusBadRequest, "登录状态无效或已过期,请重新登录", "")
+		fail("登录状态无效或已过期,请重新登录", "")
 		return
 	}
 	entry := stateEntryRaw.(oidcStateEntry)
 	if time.Since(entry.created) > oidcStateTTL {
-		fail(http.StatusBadRequest, "登录状态已过期,请重新登录", "")
+		fail("登录状态已过期,请重新登录", "")
 		return
 	}
 	if errParam := c.Query("error"); errParam != "" {
-		fail(http.StatusUnauthorized, "提供商拒绝授权: "+errParam+" "+c.Query("error_description"), "OIDC 提供商拒绝授权")
+		// SEC-3:仅回显 error 短码——description 为外部可控长文本,回显会被
+		// 登录页当系统提示渲染(社工文案注入面)。
+		fail("提供商拒绝授权: "+errParam, "OIDC 提供商拒绝授权")
 		return
 	}
 	p, err := oidcProvider(cfg.Issuer)
 	if err != nil {
-		fail(http.StatusBadGateway, err.Error(), "")
+		fail(err.Error(), "")
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -262,18 +312,18 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	oauth2Token, err := oauthCfg.Exchange(ctx, c.Query("code"),
 		oauth2.SetAuthURLParam("code_verifier", entry.verifier))
 	if err != nil {
-		fail(http.StatusBadGateway, "令牌交换失败: "+err.Error(), "OIDC 令牌交换失败")
+		fail("令牌交换失败: "+err.Error(), "OIDC 令牌交换失败")
 		return
 	}
 	rawIDToken, _ := oauth2Token.Extra("id_token").(string)
 	if rawIDToken == "" {
-		fail(http.StatusBadGateway, "提供商未返回 id_token", "OIDC 缺少 id_token")
+		fail("提供商未返回 id_token", "OIDC 缺少 id_token")
 		return
 	}
 	verifier := p.Verifier(&oidc.Config{ClientID: cfg.ClientID})
 	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		fail(http.StatusUnauthorized, "ID Token 校验失败: "+err.Error(), "OIDC id_token 校验失败")
+		fail("ID Token 校验失败: "+err.Error(), "OIDC id_token 校验失败")
 		return
 	}
 	var claims struct {
@@ -284,38 +334,41 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		Name              string `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		fail(http.StatusBadGateway, "解析用户信息失败", "OIDC claims 解析失败")
+		fail("解析用户信息失败", "OIDC claims 解析失败")
 		return
 	}
 	if claims.Nonce != entry.nonce {
-		fail(http.StatusUnauthorized, "nonce 不匹配(疑似重放)", "OIDC nonce 不匹配")
+		fail("nonce 不匹配(疑似重放)", "OIDC nonce 不匹配")
 		return
 	}
 
 	// 用户命中:OIDC 用户独立行(不绑定本地账号),按 (issuer, subject) 定位。
+	// R39-2:同查 password_version——OIDC JWT 携带 pwd_ver,与本地会话同构,
+	// 配置导入的版本递增不再把 OIDC 会话打入永久 401 死循环。
 	var userID int
 	var username, role string
 	var isEnabled int
-	err = db.DB.QueryRow("SELECT id, username, role, COALESCE(is_enabled,1) FROM users WHERE auth_provider='oidc' AND oidc_issuer=? AND oidc_subject=?", cfg.Issuer, claims.Sub).
-		Scan(&userID, &username, &role, &isEnabled)
+	var passwordVersion int64
+	err = db.DB.QueryRow("SELECT id, username, role, COALESCE(is_enabled,1), COALESCE(password_version,0) FROM users WHERE auth_provider='oidc' AND oidc_issuer=? AND oidc_subject=?", cfg.Issuer, claims.Sub).
+		Scan(&userID, &username, &role, &isEnabled, &passwordVersion)
 	switch {
 	case errors.Is(err, nil):
 		if isEnabled != 1 {
 			services.RecordAuditLog(username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s(账号已禁用)", services.AuditUserPart(userID, username)), services.AuditResultPart("failure")), c.ClientIP())
-			fail(http.StatusForbidden, "账号已被禁用", "")
+			fail("账号已被禁用", "")
 			return
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		// JIT 开户:默认普通角色;用户名取 preferred_username→email 本地部分→sub,
-		// 冲突时后缀去重(不绑定本地账号,同名共存)。
-		base := claims.PreferredUsername
+		// 冲突时后缀去重(不绑定本地账号,同名共存)。TrimSpace 先于空值兜底
+		// (OIDC-5:纯空白 preferred_username 不得穿过兜底产出空用户名)。
+		base := strings.TrimSpace(claims.PreferredUsername)
 		if base == "" && claims.Email != "" {
-			base = strings.SplitN(claims.Email, "@", 2)[0]
+			base = strings.TrimSpace(strings.SplitN(claims.Email, "@", 2)[0])
 		}
 		if base == "" {
 			base = "oidc-" + claims.Sub
 		}
-		base = strings.TrimSpace(base)
 		if len(base) > 50 {
 			base = base[:50]
 		}
@@ -327,7 +380,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		for i := 2; ; i++ {
 			var exists int
 			if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username=?", candidate).Scan(&exists); err != nil {
-				fail(http.StatusInternalServerError, "查询用户失败", "")
+				fail("查询用户失败", "")
 				return
 			}
 			if exists == 0 {
@@ -344,7 +397,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		res, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled, auth_provider, oidc_subject, oidc_issuer) VALUES (?, '', 'user', ?, 1, 'oidc', ?, ?)",
 			candidate, displayName, claims.Sub, cfg.Issuer)
 		if err != nil {
-			fail(http.StatusInternalServerError, "创建 OIDC 用户失败", "OIDC JIT 开户失败")
+			fail("创建 OIDC 用户失败", "OIDC JIT 开户失败")
 			return
 		}
 		newID, _ := res.LastInsertId()
@@ -353,15 +406,15 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		role = "user"
 		services.RecordAuditLog(username, "创建", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 首次登录自动开户(%s)", cfg.Issuer), services.AuditResultPart("success")), c.ClientIP())
 	default:
-		fail(http.StatusInternalServerError, "查询用户失败", "")
+		fail("查询用户失败", "")
 		return
 	}
 
 	// 签发本站 JWT(与密码登录同构;auth_method=oidc 标记会话来源——本地
 	// MFA 族功能对 OIDC 用户整体豁免,v2.3.0 用户裁定)。
-	token, expiresAt, err := h.issueOIDCJWT(userID, username, role, 0)
+	token, expiresAt, err := h.issueOIDCJWT(userID, username, role, passwordVersion, 0)
 	if err != nil {
-		fail(http.StatusInternalServerError, "签发登录令牌失败", "")
+		fail("签发登录令牌失败", "")
 		return
 	}
 	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s", services.AuditUserPart(userID, username)), services.AuditResultPart("success")), c.ClientIP())
@@ -376,9 +429,11 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	c.Redirect(http.StatusFound, front+"/#/oidc/callback?token="+url.QueryEscape(token)+"&expires_at="+fmt.Sprintf("%d", expiresAt.Unix())+"&return_to="+url.QueryEscape(returnTo))
 }
 
-// issueOIDCJWT 与密码登录的令牌同构(auth.go:198 口径),附加 auth_method=oidc。
-func (h *Handlers) issueOIDCJWT(userID int, username, role string, mfaTs float64) (string, time.Time, error) {
-	expireMinutes := 720
+// issueOIDCJWT 与密码登录的令牌同构(auth.go respondLoginWithMFA 口径),
+// 附加 auth_method=oidc 与 pwd_ver(R39-2:jwtAuth 对缺 pwd_ver 且 DB 版本
+// ≠0 的令牌恒拒——无该声明的 OIDC 会话在导入 bump 后永久 401)。
+func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersion int64, mfaTs float64) (string, time.Time, error) {
+	expireMinutes := 20
 	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
 		expireMinutes = 20
 	}
@@ -406,6 +461,7 @@ func (h *Handlers) issueOIDCJWT(userID int, username, role string, mfaTs float64
 		"role":        role,
 		"node_mode":   nodeMode,
 		"auth_method": "oidc",
+		"pwd_ver":     passwordVersion,
 		"jti":         hex.EncodeToString(jtiBytes),
 		"iat":         now.Unix(),
 		"exp":         now.Add(time.Duration(expireMinutes) * time.Minute).Unix(),
@@ -513,6 +569,14 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请提供服务地址"})
 		return
 	}
+	// SEC-2:机器身份(API Key/MCP)不开放「任指 URL」探测——issuer 须与已
+	// 保存配置一致(先例端点探测的都是已存实体);管理员 JWT 面板编辑流不受限。
+	if c.GetString("auth_type") == "api_key" {
+		if stored, _ := loadOIDCConfig(); normalizeOIDCIssuer(req.Issuer) != "" && issuer != stored.Issuer {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "API Key 仅支持测试已保存的 OIDC 配置"})
+			return
+		}
+	}
 	oidcProviderInvalidate(issuer) // 测试总是新鲜发现,不喂缓存
 	p, err := oidcProvider(issuer)
 	if err != nil {
@@ -567,6 +631,10 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	}})
 }
 
+// oidcProbeClient 凭证探测专用客户端:出站请求必须有界(挂起的 token 端点
+// 不得挂起 handler goroutine),与 discovery 8s 口径同族。
+var oidcProbeClient = &http.Client{Timeout: 10 * time.Second}
+
 // probeClientCredentials 用 client_credentials 向令牌端点探测凭证:
 //   - 200:凭证正确(checked=true)
 //   - 401/400 且 error=invalid_client:凭证错误(返回 err,含提供商描述)
@@ -588,7 +656,7 @@ func probeClientCredentials(tokenURL, clientID, clientSecret string) (bool, erro
 			"client_secret": {clientSecret},
 			"scope":         {scope},
 		}
-		resp, err := http.PostForm(tokenURL, form)
+		resp, err := oidcProbeClient.PostForm(tokenURL, form)
 		if err != nil {
 			return false, fmt.Errorf("凭证探测请求失败: %w", err)
 		}

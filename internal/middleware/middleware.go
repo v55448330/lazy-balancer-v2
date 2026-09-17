@@ -277,9 +277,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/auth/mfa/verify", loginRateLimit(), h.MFAVerifyLogin)
 		v1.GET("/auth/setup", loginRateLimit(), h.GetSetupStatus)
 		v1.POST("/auth/setup", loginRateLimit(), h.SetupAdmin)
-		// OIDC 公开链路(v2.3.0):status=登录页按钮显隐;login=跳转(含
-		// prompt=login 写保护重认证);callback=授权码回调。均登录前可达,
-		// 不限流——回调校验失败拒绝即止,不计入登录锁定(防伪造回调 DoS 锁号)。
+		// OIDC 公开链路(v2.3.0):status=登录页按钮显隐;login=跳转;
+		// callback=授权码回调(失败 302 回前端错误页)。均登录前可达,
+		// 回调校验失败拒绝即止,不计入登录锁定(防伪造回调 DoS 锁号);
+		// login 的 state 表在册封顶(R39-3:未认证泛洪内存上限)。
 		v1.GET("/auth/oidc/status", h.OIDCStatus)
 		v1.GET("/auth/oidc/login", h.OIDCLogin)
 		v1.GET("/auth/oidc/callback", h.OIDCCallback)
@@ -918,6 +919,15 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// v2.3.0 用户裁定:OIDC 会话与本地 MFA 体系完全解耦——身份保证由 IdP 承担
+		// (其 MFA 已在登录时验证),本地写保护仅对本地用户生效。R39-5:auth_method
+		// 为 HMAC 签名 claim,在 DB 状态查询前显式短路——不再依赖「OIDC 行
+		// mfa_enabled 恒 0」的跨文件不变量(该不变量被导入/未来写路径破坏时,
+		// OIDC 用户会落入 verify-step 必败的 428 死锁)。
+		if c.GetString("auth_method") == "oidc" {
+			c.Next()
+			return
+		}
 		// 第 15 轮审计 I-J（R72 C-I-3）：DB 错误与「MFA 未启用」必须分判——未启用
 		// 是合理直通（该用户未启用 MFA，守卫不适用）；DB 错误必须 fail-closed
 		// （与本文件同类守卫的基建错误 500 中止同口径，如 apiKeyAuth 的白名单
@@ -929,9 +939,7 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			return
 		}
 		if !mfaEnabled {
-			// v2.3.0 用户裁定:OIDC 用户与本地 MFA 体系完全解耦——身份保证由
-			// IdP 承担(其 MFA 已在登录时验证),本地写保护仅对本地用户生效;
-			// OIDC 会话(auth_method=oidc)直通。本地未绑 MFA 保持现状直通。
+			// 本地未绑 MFA 保持现状直通。
 			c.Next()
 			return
 		}

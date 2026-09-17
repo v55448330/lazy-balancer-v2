@@ -66,12 +66,12 @@ func TestUpdateUser_rejects_invalid_id_and_body(t *testing.T) {
 func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'setup-admin', 'x', 'admin', ''), (2, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	router := gin.New()
 	router.PUT("/users/:id", h.UpdateUser)
-	request := httptest.NewRequest(http.MethodPut, "/users/1", strings.NewReader(`{"role":"user"}`))
+	request := httptest.NewRequest(http.MethodPut, "/users/2", strings.NewReader(`{"role":"user"}`))
 	request.Header.Set("Content-Type", "application/json")
 
 	// When
@@ -82,7 +82,7 @@ func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	assertUserState(t, "original", "user", "Original Name", "original-hash")
+	assertUserStateByID(t, 2, "original", "user", "Original Name", "original-hash")
 }
 
 func TestUpdateUser_preserves_all_fields_when_password_rejected(t *testing.T) {
@@ -115,12 +115,15 @@ func TestUpdateUser_preserves_all_fields_when_update_fails(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (2, 'original2', 'original-hash', 'admin', 'Original Name') ON CONFLICT(id) DO NOTHING"); err != nil {
+		t.Fatalf("seed target user: %v", err)
+	}
 	if _, err := db.DB.Exec("CREATE TRIGGER fail_user_role_update BEFORE UPDATE ON users WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'role update failed'); END"); err != nil {
 		t.Fatalf("create update failure trigger: %v", err)
 	}
 	router := gin.New()
 	router.PUT("/users/:id", h.UpdateUser)
-	request := httptest.NewRequest(http.MethodPut, "/users/1", strings.NewReader(`{"username":"changed","role":"user","display_name":"Changed Name"}`))
+	request := httptest.NewRequest(http.MethodPut, "/users/2", strings.NewReader(`{"username":"changed","role":"user","display_name":"Changed Name"}`))
 	request.Header.Set("Content-Type", "application/json")
 
 	// When
@@ -131,13 +134,18 @@ func TestUpdateUser_preserves_all_fields_when_update_fails(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
 	}
-	assertUserState(t, "original", "admin", "Original Name", "original-hash")
+	assertUserStateByID(t, 2, "original2", "admin", "Original Name", "original-hash")
 }
 
 func assertUserState(t *testing.T, username, role, displayName, passwordHash string) {
 	t.Helper()
+	assertUserStateByID(t, 1, username, role, displayName, passwordHash)
+}
+
+func assertUserStateByID(t *testing.T, id int, username, role, displayName, passwordHash string) {
+	t.Helper()
 	var gotUsername, gotRole, gotDisplayName, gotPasswordHash string
-	if err := db.DB.QueryRow("SELECT username, role, COALESCE(display_name,''), password_hash FROM users WHERE id=1").Scan(&gotUsername, &gotRole, &gotDisplayName, &gotPasswordHash); err != nil {
+	if err := db.DB.QueryRow("SELECT username, role, COALESCE(display_name,''), password_hash FROM users WHERE id=?", id).Scan(&gotUsername, &gotRole, &gotDisplayName, &gotPasswordHash); err != nil {
 		t.Fatalf("query user state: %v", err)
 	}
 	if gotUsername != username || gotRole != role || gotDisplayName != displayName || gotPasswordHash != passwordHash {

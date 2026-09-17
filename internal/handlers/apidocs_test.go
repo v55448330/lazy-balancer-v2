@@ -270,7 +270,10 @@ func TestBuildOpenAPIYAML_wraps_business_examples_and_documents_exceptions(t *te
 			Description string `yaml:"description"`
 			Responses   map[string]struct {
 				Content map[string]struct {
-					Example map[string]any `yaml:"example"`
+					// R39-6(C1):/auth/oidc/login|callback 等跳转端点经
+					// rawResponse 暴露裸字符串示例(302 形态),示例不再恒为
+					// 对象——本测试只对 /config 的对象形状断言。
+					Example any `yaml:"example"`
 				} `yaml:"content"`
 			} `yaml:"responses"`
 		} `yaml:"paths"`
@@ -283,10 +286,11 @@ func TestBuildOpenAPIYAML_wraps_business_examples_and_documents_exceptions(t *te
 	if err != nil {
 		t.Fatalf("parse generated OpenAPI YAML: %v", err)
 	}
-	example := document.Paths["/config"]["get"].Responses["200"].Content["application/json"].Example
-	if example["code"] != 0 || example["data"] == nil {
-		t.Fatalf("business response example=%v", example)
+	configExample, isObject := document.Paths["/config"]["get"].Responses["200"].Content["application/json"].Example.(map[string]any)
+	if !isObject || configExample["code"] != 0 || configExample["data"] == nil {
+		t.Fatalf("business response example=%v, want wrapped {code,message,data} object", configExample)
 	}
+
 	for _, exception := range []string{"登录", "下载", "MCP", "304", "HTML", "YAML"} {
 		if !strings.Contains(document.Info.Description, exception) {
 			t.Errorf("general description missing response exception %q", exception)
@@ -320,7 +324,7 @@ func TestAPIDocRoutes_document_validation_and_error_statuses(t *testing.T) {
 	validate := routes["POST /config/import/validate"]
 
 	// Then
-	for _, text := range []string{"200", "valid=false", "400", "413", "16 MiB"} {
+	for _, text := range []string{"200", "valid=false", "400", "413", "48MB"} {
 		if !strings.Contains(validate.Description, text) && !containsRouteError(validate.Errors, text) {
 			t.Errorf("validation contract missing %q: description=%q errors=%v", text, validate.Description, validate.Errors)
 		}
@@ -434,4 +438,117 @@ func containsRouteError(errors []string, status string) bool {
 		}
 	}
 	return false
+}
+
+// R39-6(C1)+R39-8(C2)+APIMCP-6(C7):OIDC 公开契约登记、lbbak 导出形态、
+// validate 48MB 上限与 settings/oidc 重试契约的文档漂移绊线。
+func TestBuildOpenAPIYAML_documents_oidc_public_lbbak_and_retry_contracts(t *testing.T) {
+	// Given
+	var document struct {
+		Paths map[string]map[string]struct {
+			Security   []map[string][]string `yaml:"security"`
+			Parameters []struct {
+				Name string `yaml:"name"`
+				In   string `yaml:"in"`
+			} `yaml:"parameters"`
+			RequestBody struct {
+				Content map[string]map[string]any `yaml:"content"`
+			} `yaml:"requestBody"`
+			Responses map[string]struct {
+				Content map[string]map[string]any `yaml:"content"`
+			} `yaml:"responses"`
+			Description string `yaml:"description"`
+		} `yaml:"paths"`
+	}
+	err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document)
+	if err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+
+	// C1:三条公开 OIDC 路由(登录页探测/授权跳转/回调)不得误标 bearerAuth。
+	for _, operation := range []struct {
+		path   string
+		method string
+	}{{"/auth/oidc/status", "get"}, {"/auth/oidc/login", "get"}, {"/auth/oidc/callback", "get"}} {
+		security := document.Paths[operation.path][operation.method].Security
+		if security == nil || len(security) != 0 {
+			t.Errorf("C1: %s %s security=%v, want explicit empty security (public)", operation.method, operation.path, security)
+		}
+	}
+
+	// C2①③:导出恒为 lbbak tar.gz(application/gzip),sections query 可选分类;
+	// 描述不得再宣称「下载 JSON 备份文件」。
+	export := document.Paths["/config/export"]["get"]
+	if _, exists := export.Responses["200"].Content["application/gzip"]; !exists {
+		t.Errorf("C2: /config/export 200 content=%v, want application/gzip (lbbak tar.gz)", export.Responses["200"].Content)
+	}
+	foundSections := false
+	for _, parameter := range export.Parameters {
+		if parameter.In == "query" && parameter.Name == "sections" {
+			foundSections = true
+		}
+	}
+	if !foundSections {
+		t.Errorf("C2: /config/export parameters=%+v, want sections query parameter", export.Parameters)
+	}
+	if strings.Contains(export.Description, "JSON 备份文件") || !strings.Contains(export.Description, "lbbak") {
+		t.Errorf("C2: /config/export description=%q, want lbbak tar.gz form", export.Description)
+	}
+
+	// C2②:validate 上限与错误码按 48MB 实现口径(maxConfigImportBytes=48<<20)。
+	validate := routesEntry(t, "POST /config/import/validate")
+	if !strings.Contains(validate.Description, "48MB") || !containsRouteError(validate.Errors, "413") {
+		t.Errorf("C2: validate description=%q errors=%v, want 48MB limit text and 413 error", validate.Description, validate.Errors)
+	}
+	for _, routeError := range validate.Errors {
+		if strings.Contains(routeError, "16") {
+			t.Errorf("C2: validate error %q retains stale 16 MiB limit", routeError)
+		}
+	}
+	// C2③:import 端点描述须覆盖二进制 lbbak 形态(tar.gz 而非仅 JSON)。
+	imp := routesEntry(t, "POST /config/import")
+	if !strings.Contains(imp.Description, "lbbak") {
+		t.Errorf("C2: /config/import description=%q, want binary lbbak form documented", imp.Description)
+	}
+
+	// C7:settings/oidc 三键重试契约(PUT/DELETE 幂等可重试,POST test 读探测可重试)。
+	for _, operation := range []struct {
+		path   string
+		method string
+	}{
+		{"/settings/oidc", "put"},
+		{"/settings/oidc", "delete"},
+		{"/settings/oidc/test", "post"},
+	} {
+		description := document.Paths[operation.path][operation.method].Description
+		// 幂等 PUT/DELETE 与读探测 POST 不得落入「不可安全重试」族
+		//(通用兜底文案「不可安全重试：重复调用可能创建新资源…」含子串
+		//「安全重试」,故以排除不可重试族为契约)。
+		if strings.Contains(description, "不可安全重试") || strings.Contains(description, "不可盲目安全重试") {
+			t.Errorf("C7: %s %s description=%q, want retryable contract", operation.method, operation.path, description)
+		}
+		if !strings.Contains(description, "重试") {
+			t.Errorf("C7: %s %s description=%q lacks retry contract", operation.method, operation.path, description)
+		}
+	}
+	// C7:回调错误表补 404 oidc_disabled/502 discovery;PUT 示例补 display_name。
+	callback := routesEntry(t, "GET /auth/oidc/callback")
+	if !containsRouteError(callback.Errors, "404") || !containsRouteError(callback.Errors, "502") {
+		t.Errorf("C7: callback errors=%v, want 404 oidc_disabled and 502 discovery", callback.Errors)
+	}
+	oidcUpdate := routesEntry(t, "PUT /settings/oidc")
+	if !strings.Contains(oidcUpdate.Request, "display_name") {
+		t.Errorf("C7: PUT /settings/oidc request=%q, want display_name example field", oidcUpdate.Request)
+	}
+}
+
+func routesEntry(t *testing.T, key string) apiDocRoute {
+	t.Helper()
+	for _, route := range apiDocRoutes {
+		if route.Method+" "+route.Path == key {
+			return route
+		}
+	}
+	t.Fatalf("route %s missing from apiDocRoutes", key)
+	return apiDocRoute{}
 }

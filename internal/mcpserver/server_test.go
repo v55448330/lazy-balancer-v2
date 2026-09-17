@@ -730,3 +730,34 @@ func TestGetCRSRuleIndexToolForwardsReadOnly(t *testing.T) {
 		t.Fatalf("request=%s %s query=%q", receivedMethod, receivedPath, receivedQuery)
 	}
 }
+
+// R39-10(C5):v2.3.0 起 /config/export 恒返回 lbbak 二进制(tar.gz,
+// application/gzip)——forward 把响应体喂 NewToolResultText 会把 gzip 字节
+// 静默损坏成不可读文本。非 JSON Content-Type 必须以 IsError 文本指引改走
+// 面板/REST,不得让二进制字节进文本结果。
+func TestExportConfigToolRejectsNonJSONContentType(t *testing.T) {
+	// Given:内部 API 对 export_config 返回非 JSON(如 lbbak application/gzip)
+	// 小载荷(≤4MiB,排除体积分支干扰)。
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte{0x1f, 0x8b, 0x08, 0x00, 'b', 'i', 'n', 0x03})
+	}))
+	defer rest.Close()
+	handler := New(rest.URL+"/api/v1", rest.Client())
+
+	// When
+	result := callTool(t, handler, "export_config", `{}`)
+
+	// Then:IsError 文本含面板/REST 下载指引,且不含原始二进制字节。
+	if !strings.Contains(result, `"isError":true`) {
+		t.Fatalf("export_config result=%s, want IsError", result)
+	}
+	for _, fragment := range []string{"lbbak", "MCP 通道", "/config/export"} {
+		if !strings.Contains(result, fragment) {
+			t.Fatalf("export_config result=%s, want guidance containing %q", result, fragment)
+		}
+	}
+	if strings.Contains(result, "\\u001f") || strings.Contains(result, "x1f") {
+		t.Fatalf("export_config result leaked binary payload: %s", result)
+	}
+}

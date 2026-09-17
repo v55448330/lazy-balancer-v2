@@ -288,7 +288,7 @@
         title="导出为 .lbbak 备份包（勾选「规则库数据库」时含 CRS/IP2Region 数据文件）；包含凭证与证书材料，请加密保管" />
       <template #footer>
         <el-button @click="exportDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">
+        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0 || (exportSections.length === 1 && exportSections[0] === 'global_config')" @click="exportBackup">
           确认导出{{ exportSections.length ? `（${exportSections.length}/${BACKUP_SECTIONS.length}）` : '' }}
         </el-button>
       </template>
@@ -533,6 +533,12 @@ const triggerImport = (): void => {
 const onImportDialogClosed = (): void => {
   importValidationSeq++
   importValidating.value = false
+  // C2-4:关闭即释放备份内容(最大 48MB ArrayBuffer/字符串),不驻留至下次选择
+  importFileContent.value = ''
+  importFileName.value = ''
+  importFileIsLbbak.value = false
+  importValidation.value = null
+  importSections.value = []
 }
 
 const chooseImportFile = (): void => {
@@ -547,6 +553,11 @@ const handleImportFile = async (event: Event): Promise<void> => {
   const validationSeq = ++importValidationSeq
   importFileName.value = file.name
   importValidation.value = null
+  if (file.size > 48 * 1024 * 1024) {
+    // C2-5:先于全量读入内存拒绝(后端 413 同口径),防超大文件撑爆标签页
+    importValidation.value = { valid: false, error: '备份文件不能超过 48MB', disabled_conflicts: [] }
+    return
+  }
   importValidating.value = true
   try {
     // v2.3.0 lbbak 为二进制 tar.gz——按魔数选择读取与提交方式
@@ -585,8 +596,11 @@ const confirmImport = async (): Promise<void> => {
   // R62 D-3：全量导入是全仓破坏性最强的操作（覆盖规则、用户、密钥、证书任务与全部凭证），
   // 此前是唯一缺二次确认弹框的破坏性操作——「确认导入」按钮与警示文案不足以兜底误点。
   try {
+    const isFullImport = validation.type === 'v1' || importSections.value.length === BACKUP_SECTIONS.length
     await ElMessageBox.confirm(
-      '导入将覆盖当前全部配置（规则、用户、API 密钥、证书任务及全部凭证），此操作不可撤销。确认导入？',
+      isFullImport
+        ? '导入将覆盖当前全部配置（规则、用户、API 密钥、证书任务及全部凭证），此操作不可撤销。确认导入？'
+        : `将仅覆盖所选分类：${importSections.value.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、')}，未选分类保持现状。此操作不可撤销。确认导入？`,
       '最终确认',
       { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
     )
@@ -595,7 +609,7 @@ const confirmImport = async (): Promise<void> => {
   }
   importing.value = true
   try {
-    const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
+    let endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
     let importBody: string | ArrayBuffer = importFileContent.value
     if (!importFileIsLbbak.value && validation.type !== 'v1') {
       // 顶层注入 sections(不重排原 JSON)
@@ -605,6 +619,10 @@ const confirmImport = async (): Promise<void> => {
         parsed.sections = importSections.value
         importBody = JSON.stringify(parsed)
       } catch { /* 原样提交(后端会 400 校验失败) */ }
+    }
+    if (importFileIsLbbak.value && validation.type !== 'v1') {
+      // R39-1:lbbak 二进制无法体内携带 sections——分类选择经 query 传输
+      endpoint = `/config/import?sections=${encodeURIComponent(importSections.value.join(','))}`
     }
     if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
     const res = await request.post<ImportResponse>(endpoint, importBody, {

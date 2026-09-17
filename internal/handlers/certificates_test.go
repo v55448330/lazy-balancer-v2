@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -548,6 +549,68 @@ func TestIssueCertificate_bulk_requires_explicit_all_confirmation(t *testing.T) 
 		// Then
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("status=%d body=%s, want 404（caddy_id 优先，非批量路径）", response.Code, response.Body.String())
+		}
+	})
+}
+
+// R39-9(C4):DNS 凭证最小可见性从「属主非 admin」扩为「属主非 admin 或
+// Key 只读」——admin 的只读 API Key(机器身份)不得经列表端点读明文凭证;
+// admin JWT 路径不受影响(2026-09-05 用户裁定的 CA 凭证明文口径不在本端点)。
+func TestListCertificateConfigs_masksCredentials_forReadOnlyAPIKey(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled)
+		VALUES ('ro-key', 'dnspod', '{"app_id":"secret-id","app_token":"secret-token"}', 1)`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+
+	listWithIdentity := func(t *testing.T, setters ...func(*gin.Context)) string {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/certificate-configs", nil)
+		for _, setter := range setters {
+			setter(ctx)
+		}
+		h.ListCertificateConfigs(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return recorder.Body.String()
+	}
+
+	t.Run("admin read-only API key sees masked credentials", func(t *testing.T) {
+		// Given/When：apiKeyAuth 对只读 Key 注入 api_key_read_only=true
+		// (middleware.go:821),属主角色为 admin 也不得旁路掩码。
+		body := listWithIdentity(t,
+			func(c *gin.Context) { c.Set("role", "admin") },
+			func(c *gin.Context) { c.Set("auth_type", "api_key") },
+			func(c *gin.Context) { c.Set("api_key_read_only", true) },
+		)
+
+		// Then：凭证字段为掩码 JSON(键形态保留、值全 ***)
+		if strings.Contains(body, "secret-id") || strings.Contains(body, "secret-token") {
+			t.Fatalf("read-only API key must not see plaintext credentials: %s", body)
+		}
+		var payload struct {
+			Data []struct {
+				DNSCredentials string `json:"dns_credentials"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil || len(payload.Data) != 1 {
+			t.Fatalf("decode response err=%v data=%d body=%s", err, len(payload.Data), body)
+		}
+		if want := `{"app_id":"***","app_token":"***"}`; payload.Data[0].DNSCredentials != want {
+			t.Fatalf("masked credential shape=%q, want %q", payload.Data[0].DNSCredentials, want)
+		}
+	})
+
+	t.Run("admin JWT path keeps plaintext", func(t *testing.T) {
+		// Given/When：admin JWT(无 api_key_read_only 标志)
+		body := listWithIdentity(t, func(c *gin.Context) { c.Set("role", "admin") })
+
+		// Then：属主为 admin 的 JWT 会话维持明文可读
+		if !strings.Contains(body, "secret-id") || strings.Contains(body, `"***"`) {
+			t.Fatalf("admin JWT should keep plaintext credentials: %s", body)
 		}
 	})
 }

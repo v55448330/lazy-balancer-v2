@@ -56,9 +56,9 @@ var apiDocRoutes = []apiDocRoute{
 	{"DELETE", "/api-keys/:id", "API密钥", "管理端删除 API 密钥", "", `{"code":0,"message":"API 密钥已删除"}`, []string{"403 admin_required", "404 not_found"}, ""},
 	{"GET", "/config", "配置", "读取全局配置", "", `{"log_level":"info","timezone":"Asia/Shanghai","github_proxy_url":"https://v4.gh-proxy.org/","audit_retention_months":3,"proxy_dial_timeout":0,"proxy_response_header_timeout":0,"proxy_read_timeout":0,"proxy_write_timeout":0,"proxy_stream_timeout":0,"proxy_flush_interval":0,"proxy_stream_close_delay":0}`, []string{"401 unauthenticated"}, ""},
 	{"PUT", "/config", "配置", "更新全局配置", `{"source":"caddy","proxy_dial_timeout":10,"proxy_response_header_timeout":30,"proxy_read_timeout":60,"proxy_write_timeout":60,"proxy_stream_timeout":0,"proxy_flush_interval":-1,"proxy_stream_close_delay":0}`, `{"code":0,"message":"配置已更新并应用","data":{"changed":true,"section":"Caddy配置","changes":["代理连接超时"]}}`, []string{"400 validation_failed", "403 slave_or_admin_required", "500 save_or_apply_failed"}, "只提交需要修改的字段；代理超时单位为秒，0 表示使用 Caddy 默认值；proxy_flush_interval：0=自动（仅 text/event-stream 触发立即刷新），-1=立即刷新所有响应（无缓冲），>0=每 N 秒刷新一次；proxy_stream_close_delay：0=reload 时立即关闭旧流，>0=延迟 N 秒关闭；无修改时返回「配置无变化」且不触发 Caddy 重载。"},
-	{"GET", "/config/export", "配置", "导出全部配置备份", "", `{"meta":{},"config":{},"tables":{}}`, []string{"403 slave_or_admin_or_api_key_read_only", "428 mfa_step_up_required"}, "仅主节点；只读 API Key 不能导出配置备份（403）；开启 mfa_write_guard 时 JWT 身份需新鲜 MFA 验证（428，经 verify-step 后重试）。下载 JSON 备份文件（含用户与密钥哈希、证书任务）。"},
-	{"POST", "/config/import", "配置", "导入配置备份", `{"meta":{"app":"lazy-balancer-v2"},"config":{},"tables":{}}`, `{"message":"配置导入成功"}`, []string{"400 invalid_backup", "403 slave_or_admin_required", "500 rollback"}, "仅主节点；单事务全覆盖恢复，失败回滚并保留原配置。"},
-	{"POST", "/config/import/validate", "配置", "校验配置备份", `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[],"users":[]}}`, `{"code":0,"data":{"valid":true,"type":"v2","summary":{}}}`, []string{"400 empty_or_unreadable_transport", "413 body_exceeds_16_MiB", "403 slave_or_admin_required"}, "只校验备份格式和兼容性，不写数据库。传输层请求为空或不可读返回 400，超过 16 MiB 返回 413；可读取但格式或语义无效的备份返回 200，data.valid=false 并在 data.error 给出原因。"},
+	{"GET", "/config/export", "配置", "导出配置备份（lbbak）", "", `{"meta":{},"config":{},"tables":{}}`, []string{"403 slave_or_admin_or_api_key_read_only", "428 mfa_step_up_required"}, "仅主节点；只读 API Key 不能导出配置备份（403）；开启 mfa_write_guard 时 JWT 身份需新鲜 MFA 验证（428，经 verify-step 后重试）。下载 lbbak 备份包（tar.gz 二进制，含用户与密钥哈希、证书任务；勾选规则库数据库分类时附 CRS/IP2Region 文件本体，示例为包内 config.json 形态）。"},
+	{"POST", "/config/import", "配置", "导入配置备份", `{"meta":{"app":"lazy-balancer-v2"},"config":{},"tables":{}}`, `{"message":"配置导入成功"}`, []string{"400 invalid_backup", "403 slave_or_admin_required", "500 rollback"}, "仅主节点；单事务全覆盖恢复，失败回滚并保留原配置。请求体支持二进制 lbbak 备份（tar.gz，含规则库文件本体）与旧式纯 JSON 备份（示例形态）；lbbak 的分类选择经 ?sections= query 传输（与导出对称），JSON 备份以体内 sections 字段为准。"},
+	{"POST", "/config/import/validate", "配置", "校验配置备份", `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[],"users":[]}}`, `{"code":0,"data":{"valid":true,"type":"v2","summary":{}}}`, []string{"400 empty_or_unreadable_transport", "413 body_exceeds_48MB", "403 slave_or_admin_required"}, "只校验备份格式和兼容性，不写数据库。传输层请求为空或不可读返回 400，超过 48MB 返回 413（与导入端点同上限）；可读取但格式或语义无效的备份返回 200，data.valid=false 并在 data.error 给出原因。"},
 	{"POST", "/config/preview", "配置", "预览配置变更", `{"source":"basic","log_level":"debug"}`, `{"changed":true,"section":"基础设置","changes":["系统日志级别"]}`, []string{"400 invalid_request", "403 admin_required"}, "不写数据库，不触发 Caddy。"},
 	{"POST", "/config/reload", "配置", "手动重载 Caddy", "", `{"code":0,"message":"Caddy 配置已重载"}`, []string{"403 admin_required", "500 caddy_reload_failed"}, ""},
 	{"POST", "/config/validate", "配置", "验证 Caddy 配置", `{}`, `{"code":0,"message":"配置有效"}`, []string{"400 config_invalid", "403 admin_required", "428 mfa_step_up_required", "500 config_restore_failed"}, ""},
@@ -145,10 +145,10 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/audit-logs", "审计", "操作日志", "", `{"list":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, username, action, resource, ip, keyword, start_time, end_time；created_at 为 UTC（2006-01-02 15:04:05），前端按配置时区展示。"},
 	{"GET", "/audit-logs/options", "审计", "操作日志筛选选项", "", `{"usernames":[{"value":"admin","count":12}],"actions":[{"value":"更新","count":5}],"resources":[{"value":"全局配置","count":3}]}`, []string{"401 unauthenticated"}, "操作人/操作/对象的去重可选值（按频次排序，对象取高频前 50）。"},
 	{"GET", "/auth/oidc/status", "认证", "OIDC 状态(公开)", "", `{"enabled":true,"display_name":"sso.example.com"}`, []string{}, "登录页按钮显隐;未启用返回 enabled=false。"},
-	{"GET", "/auth/oidc/login", "认证", "OIDC 登录跳转(302)", "", "\"302 Location: IdP 授权页\"", []string{"404 oidc_disabled"}, "浏览器跳转 IdP;非 API 消费形态。"},
-	{"GET", "/auth/oidc/callback", "认证", "OIDC 授权码回调", "", "\"302 → /#/oidc/callback?token=…\"", []string{"400 invalid_state", "401 token_verify_failed", "403 account_disabled"}, "首登自动开户(默认普通角色);禁用账号拒绝。"},
+	{"GET", "/auth/oidc/login", "认证", "OIDC 登录跳转(302)", "", "\"302 Location: IdP 授权页\"", []string{"404 oidc_disabled", "429 state_cap_reached", "502 discovery_failed"}, "浏览器跳转 IdP;非 API 消费形态。"},
+	{"GET", "/auth/oidc/callback", "认证", "OIDC 授权码回调", "", `"302 → /#/oidc/callback?token=…"`, []string{"400 invalid_state", "401 token_verify_failed", "403 account_disabled", "404 oidc_disabled", "502 discovery_or_token_exchange"}, "首登自动开户(默认普通角色);禁用账号拒绝。"},
 	{"GET", "/settings/oidc", "系统", "OIDC 配置读取", "", `{"enabled":true,"issuer":"https://sso.example.com","client_id":"...","client_secret_masked":"ab****cd"}`, []string{"403 admin_required"}, "secret 掩码返回;has_secret 标识。"},
-	{"PUT", "/settings/oidc", "系统", "OIDC 配置更新", `{"issuer":"https://sso.example.com","client_id":"...","client_secret":"...","enabled":true}`, `{"code":0}`, []string{"400 invalid_request", "403 admin_required"}, "空 client_secret=保持现值;启用前 issuer+client_id+secret 须齐备。"},
+	{"PUT", "/settings/oidc", "系统", "OIDC 配置更新", `{"issuer":"https://sso.example.com","client_id":"...","client_secret":"...","display_name":"公司统一登录","enabled":true}`, `{"code":0}`, []string{"400 invalid_request", "403 admin_required"}, "空 client_secret=保持现值;启用前 issuer+client_id+secret 须齐备。"},
 	{"POST", "/settings/oidc/test", "系统", "OIDC 发现探测", `{"issuer":"https://sso.example.com"}`, `{"ok":true,"provider_name":"...","token_endpoint":"..."}`, []string{"403 admin_required"}, "完整 discovery+JWKS 可达性探测。"},
 	{"DELETE", "/settings/oidc", "系统", "OIDC 配置删除", "", `{"code":0}`, []string{"403 admin_required"}, "清空配置(等效禁用);已建 OIDC 用户保留。"},
 	{"GET", "/logs/stats", "日志", "日志存储状态", "", `{"logs":[{"key":"audit","name":"操作日志","size_bytes":1048576,"rotated_bytes":0,"keep_count":0,"rows":6895,"retention_note":"每日清理 · 保留 3 个月","config_source":"基础设置 · 日志保留"}]}`, []string{"401 unauthenticated"}, "9 类日志的当前大小/阈值/保留策略；caddy_id 参数收窄证书任务与规则访问到单规则。"},
@@ -283,26 +283,34 @@ type apiDocContract struct {
 }
 
 var apiDocContracts = map[string]apiDocContract{
-	"POST /auth/login":                     {rawResponse: true, security: "public"},
-	"POST /auth/ticket-login":              {rawResponse: true, security: "public"},
-	"POST /auth/mfa/verify":                {rawResponse: true, security: "public"},
-	"GET /auth/setup":                      {security: "public"},
-	"POST /auth/setup":                     {security: "public"},
-	"GET /branding":                        {security: "public"},
-	"POST /cluster/register":               {security: "public"},
-	"GET /cluster/register/:id/status":     {security: "registration"},
-	"POST /cluster/registration/confirm":   {security: "cluster"},
-	"GET /cluster/sync/snapshot":           {security: "cluster", emptySuccessStatuses: []int{http.StatusNotModified}, queryParameters: []apiDocParameter{{"since_version", "integer", "客户端已应用的快照版本"}, {"fingerprint", "string", "客户端已应用的快照指纹"}}},
-	"POST /cluster/nodes/report":           {security: "cluster"},
-	"POST /cluster/service-control":        {security: "public"},
-	"POST /mcp":                            {rawResponse: true, security: "mcp"},
-	"POST /users":                          {successStatus: http.StatusCreated},
-	"POST /users/me/api-keys":              {successStatus: http.StatusCreated},
-	"POST /api-keys":                       {successStatus: http.StatusCreated},
-	"POST /rules":                          {successStatus: http.StatusCreated},
-	"POST /rules/:caddy_id/duplicate":      {successStatus: http.StatusCreated},
-	"POST /certificate-configs":            {successStatus: http.StatusCreated},
-	"GET /config/export":                   {rawResponse: true},
+	"POST /auth/login":        {rawResponse: true, security: "public"},
+	"POST /auth/ticket-login": {rawResponse: true, security: "public"},
+	"POST /auth/mfa/verify":   {rawResponse: true, security: "public"},
+	"GET /auth/setup":         {security: "public"},
+	"POST /auth/setup":        {security: "public"},
+	// R39-6(C1):OIDC 公开路由契约——status 为登录页按钮显隐探测、login 为
+	// 浏览器 302 跳转、callback 为 IdP 回调重定向,三者均不携带 JWT/API Key;
+	// 漏登记会让 OpenAPI 把它们误标 bearerAuth。
+	"GET /auth/oidc/status":              {security: "public"},
+	"GET /auth/oidc/login":               {security: "public", rawResponse: true},
+	"GET /auth/oidc/callback":            {security: "public", rawResponse: true},
+	"GET /branding":                      {security: "public"},
+	"POST /cluster/register":             {security: "public"},
+	"GET /cluster/register/:id/status":   {security: "registration"},
+	"POST /cluster/registration/confirm": {security: "cluster"},
+	"GET /cluster/sync/snapshot":         {security: "cluster", emptySuccessStatuses: []int{http.StatusNotModified}, queryParameters: []apiDocParameter{{"since_version", "integer", "客户端已应用的快照版本"}, {"fingerprint", "string", "客户端已应用的快照指纹"}}},
+	"POST /cluster/nodes/report":         {security: "cluster"},
+	"POST /cluster/service-control":      {security: "public"},
+	"POST /mcp":                          {rawResponse: true, security: "mcp"},
+	"POST /users":                        {successStatus: http.StatusCreated},
+	"POST /users/me/api-keys":            {successStatus: http.StatusCreated},
+	"POST /api-keys":                     {successStatus: http.StatusCreated},
+	"POST /rules":                        {successStatus: http.StatusCreated},
+	"POST /rules/:caddy_id/duplicate":    {successStatus: http.StatusCreated},
+	"POST /certificate-configs":          {successStatus: http.StatusCreated},
+	// R39-8(C2):v2.3.0 起导出恒为 lbbak tar.gz(writeLbbakResponse 以
+	// application/gzip 下发);sections query 与导入侧对称(五分类,默认全选)。
+	"GET /config/export":                   {rawResponse: true, responseContentType: "application/gzip", queryParameters: []apiDocParameter{{"sections", "string", "可选配置分类（逗号分隔）：users、global_config、rules、waf_files、security，默认全选；未知分类返回 400"}}},
 	"GET /mcp/ops-playbook":                {rawResponse: true, responseContentType: "text/markdown"},
 	"PUT /admin-tls":                       {requestContentType: "multipart/form-data"},
 	"POST /admin-tls/inspect":              {requestContentType: "multipart/form-data"},
@@ -404,9 +412,13 @@ func operationDescription(route apiDocRoute) string {
 		retry = "不可盲目安全重试：重复调用可能返回 409 或 429。"
 	case "DELETE /users/:id", "DELETE /users/me/api-keys/:id", "DELETE /api-keys/:id", "DELETE /rules/:caddy_id", "DELETE /certificate-configs/:id", "DELETE /certificates/jobs/:id", "DELETE /cluster/nodes/:id":
 		retry = "不可安全重试：首次删除成功，重复调用返回 404。"
-	case "PUT /users/:id", "PUT /users/:id/status", "PUT /config", "PUT /rules/:caddy_id", "PUT /cluster/settings", "PUT /cluster/nodes/:id/access-url", "PUT /certificate-configs/:id", "PUT /ca-providers/:id", "PUT /caddy/config", "PUT /admin-tls":
+	case "PUT /users/:id", "PUT /users/:id/status", "PUT /config", "PUT /rules/:caddy_id", "PUT /cluster/settings", "PUT /cluster/nodes/:id/access-url", "PUT /certificate-configs/:id", "PUT /ca-providers/:id", "PUT /caddy/config", "PUT /admin-tls", "PUT /settings/oidc":
 		retry = "可安全重试：相同请求重复调用保持相同目标状态。"
-	case "POST /config/preview", "POST /config/validate", "POST /config/import/validate", "POST /rules/cert-info", "POST /certificate-configs/test", "POST /certificate-configs/:id/test", "POST /ca-providers/:id/test", "POST /certificates/parse", "POST /admin-tls/inspect":
+	case "DELETE /settings/oidc":
+		// APIMCP-6(C7):OIDC 删除为幂等清空——重复调用保持配置为已删除状态
+		// 并返回成功(与资源型 DELETE 的 404 语义不同)。
+		retry = "可安全重试：重复调用保持 OIDC 配置为已删除状态并返回成功。"
+	case "POST /config/preview", "POST /config/validate", "POST /config/import/validate", "POST /rules/cert-info", "POST /certificate-configs/test", "POST /certificate-configs/:id/test", "POST /ca-providers/:id/test", "POST /certificates/parse", "POST /admin-tls/inspect", "POST /settings/oidc/test":
 		retry = "可安全重试：相同请求重复调用返回等价校验或查询结果。"
 	case "POST /mcp":
 		retry = "是否可安全重试取决于 JSON-RPC 方法；写工具遵循其对应 REST 操作契约。"

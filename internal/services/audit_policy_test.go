@@ -130,6 +130,15 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 	}
 }
 
+// R39-7(C3):POST /settings/oidc/test 是读探测语义(发现+JWKS 可达性,不落库
+// 配置)——与 certificate-configs 两条 test、ca-providers/:id/test 同口径
+// (2026-09-10 裁定先例),只读 API Key 应可调用,须经 readOnlyWriteRoutes 放行。
+func TestIsReadOnlyWriteRoute_allowsOIDCDiscoveryProbe(t *testing.T) {
+	if !IsReadOnlyWriteRoute("POST", "/api/v1/settings/oidc/test") {
+		t.Fatal("IsReadOnlyWriteRoute(POST /api/v1/settings/oidc/test)=false, want true (读探测语义)")
+	}
+}
+
 func TestAuditResultText_translates_partial_result(t *testing.T) {
 	if got := AuditResultText("partial"); got != "部分成功" {
 		t.Fatalf("AuditResultText(partial)=%q, want 部分成功", got)

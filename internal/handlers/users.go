@@ -110,10 +110,17 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "角色无效"})
 		return
 	}
+	// R39-15:初始管理员(setup 首个用户)不可降级——与不可删除/禁用同语义,
+	// break-glass 能力不可被移除(存在另一管理员时也不放行)。
+	if id == setupAdminUserID && req.Role != nil && *req.Role == "user" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "初始管理员不可降级"})
+		return
+	}
 	// 2026-09-18 用户裁定:OIDC 用户显示名/密码源自 IdP,管理员亦不可改
-	// (角色/启停是本地管理语义,不受限)。
-	if (req.DisplayName != nil || req.Password != nil) && isOIDCUser(c.Request.Context(), id) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
+	// (角色/启停是本地管理语义,不受限)。SYS39-2:username 同为 IdP 源属性
+	// (JIT 取 preferred_username),与显示名/密码同一裁定口径一并拦截。
+	if (req.DisplayName != nil || req.Password != nil || req.Username != nil) && isOIDCUser(c.Request.Context(), id) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的用户名、显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
 		return
 	}
 	if req.Password != nil && passwordTooShort(*req.Password) {
@@ -210,11 +217,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		}
 	}
 	var user models.User
-	if err := tx.QueryRowContext(c.Request.Context(), `SELECT id,username,role,display_name,is_enabled,created_at,last_login FROM users WHERE id=?`, id).
-		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin); err != nil {
+	var authProvider string
+	if err := tx.QueryRowContext(c.Request.Context(), `SELECT id,username,role,display_name,is_enabled,created_at,last_login,COALESCE(auth_provider,'local') FROM users WHERE id=?`, id).
+		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &authProvider); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		return
 	}
+	user.AuthProvider = authProvider
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 		return

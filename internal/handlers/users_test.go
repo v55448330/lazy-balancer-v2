@@ -66,8 +66,9 @@ func TestToggleUserStatus_rejectsDisablingLastEnabledAdministrator(t *testing.T)
 
 func TestUpdateUser_rejectsDemotingLastEnabledAdministrator(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	seedUserAuditTest(t, 1, "admin", "admin", true)
-	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"role":"user"}`, 1, h.UpdateUser)
+	// 目标用 id=5:id=1 受初始管理员不可降级保护(R39-15)先行 400 拦截。
+	seedUserAuditTest(t, 5, "admin", "admin", true)
+	response := serveUserMutation(h, http.MethodPut, "/users/5", `{"role":"user"}`, 5, h.UpdateUser)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -75,13 +76,14 @@ func TestUpdateUser_rejectsDemotingLastEnabledAdministrator(t *testing.T) {
 
 func TestUpdateUser_concurrentDemotionsPreserveEnabledAdministrator(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	seedUserAuditTest(t, 1, "admin-1", "admin", true)
-	seedUserAuditTest(t, 2, "admin-2", "admin", true)
+	seedUserAuditTest(t, 1, "bystander", "user", true) // id=1 占位(非 admin,不参与末管理员计数)
+	seedUserAuditTest(t, 3, "admin-3", "admin", true)
+	seedUserAuditTest(t, 4, "admin-4", "admin", true)
 
 	start := make(chan struct{})
 	statuses := make(chan int, 2)
 	var workers sync.WaitGroup
-	for id := 1; id <= 2; id++ {
+	for id := 3; id <= 4; id++ {
 		workers.Add(1)
 		go func(id int) {
 			defer workers.Done()

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -74,10 +76,10 @@ func (s *SyncService) Report(ctx context.Context) error {
 	// v2.3.0(2026-09-18 用户裁定):规则库版本随上报上送——主节点集群管理
 	// 节点列表状态列 hover 可见从节点 CRS/IP2Region 版本(从节点跟随主节点
 	// 同步,无需登录从节点查看)。
-	if ref := BuildWafFileRef(); ref != nil {
-		report.Health.CRSVersion = ref.CRSVersion
-		report.Health.IP2RegionTag = ref.IP2RegionTag
-	}
+	// CL39-B1-2(D2):上报为每同步周期的热路径,只消费两个版本串——改走轻量
+	// 版本读取(两个小文件),不再经 BuildWafFileRef 的 tarGzDirSum 全树哈希
+	// 与 xdb sha256(那是快照/漂移检测的口径,上报无需)。
+	report.Health.CRSVersion, report.Health.IP2RegionTag = reportWafFileVersions()
 	payload, err := json.Marshal(report)
 	if err != nil {
 		return fmt.Errorf("编码节点上报: %w", err)
@@ -102,6 +104,22 @@ func (s *SyncService) Report(ctx context.Context) error {
 		return fmt.Errorf("上报主节点失败: %w", err)
 	}
 	defer resp.Body.Close()
+	// CL39-B1-1(D1):同主机 http→https 升级已被 doWithTLSUpgradeRedirect 按
+	// 原方法重放,残留 3xx(跨主机重定向/302/307 等)说明主节点地址形态需
+	// 人工修正——此前落进「非 4xx 即成功」被静默吞掉;给与 Pull 3xx 分支同款
+	// 可行动指引,经 reportErr→recordSyncError 通道落库(last_sync_error
+	// 显「状态上报失败: …」),审计节流与拒绝分支同口径。
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		message := fmt.Sprintf("主节点返回 %d 重定向(%s)——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location"))
+		s.reportAuditMu.Lock()
+		auditChanged := s.lastReportFailureMsg != message
+		s.lastReportFailureMsg = message
+		s.reportAuditMu.Unlock()
+		if auditChanged {
+			RecordAuditLog("system", "上报失败", "集群节点", message, "")
+		}
+		return errors.New(message)
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		// 与传输失败相同的审计节流：主节点持续拒绝上报时同一错误只记录
 		// 一次；错误内容变化或上报恢复后再次失败时重记。
@@ -135,4 +153,29 @@ func truncateValidUTF8Tail(data []byte) []byte {
 		data = data[:len(data)-1]
 	}
 	return data
+}
+
+// reportWafFileVersions 是 BuildWafFileRef 的轻量版本读取:只读
+// crsLiveDir/VERSION 与 ip2regionLivePath+".version" 两个小文件取版本串,
+// 不做 tarGzDirSum 全树哈希与 xdb sha256(Report 每同步周期调用,重哈希是
+// 无谓的 IO/CPU 放大)。语义边界与 BuildWafFileRef 对齐:
+//   - 文件缺失 = 空串(版本串 TrimSpace 口径、tag 经 sanitizeBundleVersion
+//     形状校验,与 BuildWafFileRef 完全一致);
+//   - seen 语义(rules 目录与 xdb 均缺失 = 视为「无安全数据」,两版本串保持
+//     空串)以 os.Stat 等价复刻——BuildWafFileRef 的 seen 由哈希成功置位,
+//     哈希 IO 异常失败时其整体返回 nil(不上报版本);本 helper 在该边缘仍
+//     上报已读到的版本串,展示面(hover 空态一致性)在可读文件形态下不变。
+func reportWafFileVersions() (crsVersion, ip2regionTag string) {
+	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules")); err != nil {
+		if _, xdbErr := os.Stat(ip2regionLivePath); xdbErr != nil {
+			return "", ""
+		}
+	}
+	if v, err := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); err == nil {
+		crsVersion = strings.TrimSpace(string(v))
+	}
+	if v, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
+		ip2regionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
+	}
+	return crsVersion, ip2regionTag
 }

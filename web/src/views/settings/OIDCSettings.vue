@@ -86,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled, Connection } from '@element-plus/icons-vue'
 import { request, ApiRequestError } from '@/utils/api'
@@ -132,13 +132,19 @@ const loadSlaves = async () => {
       })
   } catch { /* 单机部署或非主节点——只显示本节点 */ }
 }
-onMounted(loadSlaves)
+// C3-P2/C2-9:弹框打开时才拉取(懒加载),且每次重开刷新——挂载即拉会令
+// Users 页每次访问多发 2 请求(从节点 /cluster/nodes 必 403 白跑),重开
+// 不刷新会让陈旧 probe.ok 绕过重测直接保存(多人管理脏写)。
+watch(() => props.modelValue, (open) => {
+  if (open) { void loadSlaves(); void load() }
+})
 
 const notify = () => emit('status', { enabled: enabled.value, configured: configured.value })
 
 const load = async () => {
   try {
-    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean } }>('/settings/oidc')
+    // C2-3:silent——非管理员打开入口时 403 不弹全局 toast(入口按角色收口)
+    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true } as never)
     if (res.data) {
       enabled.value = !!res.data.enabled
       displayName.value = res.data.display_name || ''
@@ -152,12 +158,20 @@ const load = async () => {
       // probe 复位为未测试,保存前强制重测(watch 联动)
       probe.checked = false; probe.ok = false; lastTest.value = null
     }
-  } catch { /* 未配置 */ }
+  } catch { /* 未配置/无权限 */ }
   notify()
 }
-onMounted(load)
+
+let probeInFlight: Promise<boolean> | null = null
 
 const runProbe = async (): Promise<boolean> => {
+  // C2-8:在途去重——blur+click 双触发不重复探测(对 IdP 双倍 discovery 流量)
+  if (probeInFlight) return probeInFlight
+  probeInFlight = doRunProbe()
+  try { return await probeInFlight } finally { probeInFlight = null }
+}
+
+const doRunProbe = async (): Promise<boolean> => {
   const issuer = form.issuer.trim()
   if (!issuer) { probe.checked = true; probe.ok = false; probe.error = '请先填写服务地址'; return false }
   if (!/^https?:\/\//.test(issuer)) { probe.checked = true; probe.ok = false; probe.error = '服务地址须为 http(s) URL'; return false }
@@ -209,11 +223,13 @@ const save = async () => {
     if (!ok) { ElMessage.warning('测试连接未通过，请先修正配置再保存'); return }
   }
   if (configured.value) {
-    await ElMessageBox.confirm(
-      enabled.value ? '确认更新 OIDC 配置？' : '确认保存并启用 OIDC 登录？',
-      enabled.value ? '更新配置' : '保存并启用',
-      { type: 'warning' },
-    )
+    try {
+      await ElMessageBox.confirm(
+        enabled.value ? '确认更新 OIDC 配置？' : '确认保存并启用 OIDC 登录？',
+        enabled.value ? '更新配置' : '保存并启用',
+        { type: 'warning' },
+      )
+    } catch { return }
   }
   saving.value = true
   try {
@@ -222,7 +238,8 @@ const save = async () => {
     await request.put('/settings/oidc', payload)
     await load()
     form.clientSecret = '' // 已保存,清空避免下次测试误带旧输入
-    ElMessage.success(enabled.value ? '配置已更新' : 'OIDC 已启用——登录页将出现认证服务入口')
+    // load() 已回填最新启用态,按回填值提示(修复保存后恒走启用分支的死文案)
+    ElMessage.success(enabled.value ? 'OIDC 已启用——登录页将出现认证服务入口' : '配置已更新')
     emit('update:modelValue', false) // 成功即关闭;失败留在弹框由拦截器报错
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
@@ -241,7 +258,9 @@ const toggleEnabled = async (on: boolean) => {
 }
 
 const remove = async () => {
-  await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
+  } catch { return }
   await request.delete('/settings/oidc')
   ElMessage.success('已删除')
   form.issuer = ''; form.clientId = ''; form.clientSecret = ''; form.displayName = ''
@@ -251,8 +270,10 @@ const remove = async () => {
 }
 
 const copy = async (text: string) => {
-  await navigator.clipboard.writeText(text)
-  ElMessage.success('已复制')
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch { /* 剪贴板被拒(非安全上下文等)——静默 */ }
 }
 </script>
 

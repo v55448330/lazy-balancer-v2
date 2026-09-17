@@ -105,6 +105,14 @@ type lbbakPayload struct {
 	XdbSha256  string
 }
 
+// 解压放大防护(BE-C1-1):请求体上限只约束压缩字节(48MB,gzip 最高 ~1032:1
+// 膨胀),条目数与总解压字节必须在读入内存前拦截——对齐仓内 untarGzTo 的
+// maxWafSyncExtract* 同款标准。var 供测试收窄构造边界。
+var (
+	maxLbbakTotalBytes int64 = 256 << 20
+	maxLbbakEntryCount       = 64
+)
+
 func parseLbbak(raw []byte) (*lbbakPayload, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
@@ -113,6 +121,8 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 	defer gz.Close()
 	tr := tar.NewReader(gz)
 	entries := map[string][]byte{}
+	entryCount := 0
+	var totalBytes int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -120,6 +130,14 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("读取 lbbak tar 条目: %w", err)
+		}
+		entryCount++
+		if entryCount > maxLbbakEntryCount {
+			return nil, fmt.Errorf("lbbak 条目数超过上限 %d(合法备份恒为 4 条)", maxLbbakEntryCount)
+		}
+		totalBytes += hdr.Size
+		if totalBytes > maxLbbakTotalBytes {
+			return nil, fmt.Errorf("lbbak 解压总字节超过上限 %dMB", maxLbbakTotalBytes>>20)
 		}
 		if hdr.Size > 64<<20 {
 			return nil, fmt.Errorf("lbbak 条目 %s 超过 64MB", hdr.Name)
@@ -170,15 +188,17 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 }
 
 // applyLbbakWafFiles 落盘 waf 文件(sha 比对幂等);与集群同步落盘同构。
-func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
+// R39-12:ip2regionTag 从备份表区传入——空 tag 会让 ApplyWafFileBundle 删除
+// .version 伴生文件,破坏「文件与版本记录同批」不变量。
+// R39-13:落盘失败返回警告文本(调用方注入响应 warnings),不再仅审计静默。
+func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload, ip2regionTag string) string {
 	if payload.CRSTarGz == nil && payload.Xdb == nil {
-		return
+		return ""
 	}
-	bundle := &services.WafFileBundle{}
+	bundle := &services.WafFileBundle{IP2RegionTag: ip2regionTag}
 	if payload.CRSTarGz != nil {
 		bundle.CRSSha256 = payload.CRSSha256
 		bundle.CRSTarGzB64 = payload.CRSTarGz
-		// 版本号从 config.json 表区由主流程落库;此处仅文件
 	}
 	if payload.Xdb != nil {
 		bundle.IP2RegionSha = payload.XdbSha256
@@ -187,6 +207,7 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
 	if crsChanged, xdbChanged, err := services.ApplyWafFileBundle(bundle); err != nil {
 		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", err)
 		recordAudit(c, "导入警告", "配置备份", "规则库文件落盘失败: "+err.Error())
+		return "规则库文件落盘失败: " + err.Error()
 	} else if crsChanged || xdbChanged {
 		recordAudit(c, "导入", "安全数据", services.FormatAuditDetail("规则库数据库(随备份导入)", services.AuditResultPart("success")))
 		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
@@ -204,6 +225,7 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload) {
 			services.AppendCRSUpdateLog("INFO", "success", "CRS 已随备份导入更新")
 		}
 	}
+	return ""
 }
 
 // isLbbakRequest 按魔数识别 tar.gz 备份(gzip 0x1f 0x8b)。

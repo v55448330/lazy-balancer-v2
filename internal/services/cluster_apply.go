@@ -174,9 +174,16 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		if ferr != nil {
 			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
 			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("拉取安全数据失败: %v", ferr), "")
+			// CL39-B1-3(D3):checking 已写入弹框日志,失败必须补终态——
+			// 否则规则库更新弹框的日志流停在 checking(对照 config_backup_lbbak.go
+			// 完整链形态,与自动更新器 failed 同款 stage)。
+			AppendCRSUpdateLog("ERROR", "failed", fmt.Sprintf("从主节点拉取安全数据失败: %v", ferr))
+			AppendIP2RegionUpdateLog("ERROR", "failed", fmt.Sprintf("从主节点拉取安全数据失败: %v", ferr))
 		} else if crsChanged, xdbChanged, aerr := ApplyWafFileBundle(bundle); aerr != nil {
 			Logf("error", "落盘同步安全数据失败: %v", aerr)
 			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("落盘安全数据失败: %v", aerr), "")
+			AppendCRSUpdateLog("ERROR", "failed", fmt.Sprintf("落盘主节点安全数据失败: %v", aerr))
+			AppendIP2RegionUpdateLog("ERROR", "failed", fmt.Sprintf("落盘主节点安全数据失败: %v", aerr))
 		} else if crsChanged || xdbChanged {
 			detail := wafBundleSyncDetail(bundle, crsChanged, xdbChanged)
 			RecordAuditLog("system", "同步", "安全数据", detail, "")

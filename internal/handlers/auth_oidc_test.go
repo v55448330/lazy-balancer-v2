@@ -2,7 +2,7 @@ package handlers
 
 // OIDC 集成行为测试(v2.3.0):httptest 模拟 IdP(发现/授权/令牌/JWKS 全链),
 // 验证:配置 CRUD 掩码/测试探测/JIT 开户(独立用户不绑定本地)/重复登录命中/
-// 禁用拒绝/同邮箱不绑定/JWT auth_method/写保护 OIDC_REAUTH 矩阵。
+// 禁用拒绝/同邮箱不绑定/JWT auth_method+pwd_ver/MFA 解耦守卫矩阵。
 
 import (
 	"crypto/rand"
@@ -37,6 +37,9 @@ type mockIdP struct {
 	// ccRejectClient=401 invalid_client;默认=200(凭证正确)
 	ccUnsupported  bool
 	ccRejectClient bool
+	// usePref/prefUsername:覆盖 id_token 的 preferred_username(测空白用户名形状)
+	usePref      bool
+	prefUsername string
 }
 
 func newMockIdP(t *testing.T) *mockIdP {
@@ -107,10 +110,14 @@ func newMockIdP(t *testing.T) *mockIdP {
 			return
 		}
 		nonce, _ := m.lastNonce.Load().(string)
+		pref := "oidcalice"
+		if m.usePref {
+			pref = m.prefUsername
+		}
 		now := time.Now()
 		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 			"iss": m.issuer, "aud": "test-client", "sub": "user-sub-1",
-			"email": "oidc@example.com", "preferred_username": "oidcalice",
+			"email": "oidc@example.com", "preferred_username": pref,
 			"nonce": nonce, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
 		})
 		signed, _ := tok.SignedString(key)
@@ -344,10 +351,10 @@ func TestOIDCCallback_repeat_and_disabled(t *testing.T) {
 	if role != "admin" {
 		t.Fatalf("role must persist across logins, got %q", role)
 	}
-	// 禁用后拒绝
+	// 禁用后拒绝(C2-7:浏览器导航形态,失败 302 回前端错误页)
 	db.DB.Exec("UPDATE users SET is_enabled=0 WHERE auth_provider='oidc'")
-	if c := doLogin(); c != http.StatusForbidden {
-		t.Fatalf("disabled user must be rejected, got %d", c)
+	if c := doLogin(); c != http.StatusFound {
+		t.Fatalf("disabled user must be rejected via error redirect, got %d", c)
 	}
 }
 
@@ -374,8 +381,8 @@ func TestOIDCCallback_bad_state_rejected(t *testing.T) {
 	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=x&state=forged", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("forged state must be rejected, got %d", rec.Code)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "#/oidc/callback?error=") {
+		t.Fatalf("forged state must redirect to frontend error page, got %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	var attempts int
 	db.DB.QueryRow("SELECT COALESCE(login_failed_attempts,0) FROM users WHERE auth_provider='oidc'").Scan(&attempts)

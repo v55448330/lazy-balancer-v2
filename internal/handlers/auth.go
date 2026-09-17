@@ -431,10 +431,12 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	}
 
 	var user models.User
+	var authProvider string
 	err = tx.QueryRowContext(c.Request.Context(), `
-		SELECT id, username, role, display_name, is_enabled, created_at, last_login 
+		SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(auth_provider,'local')
 		FROM users WHERE id = ?
-	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
+	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &authProvider)
+	user.AuthProvider = authProvider
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
