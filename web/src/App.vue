@@ -16,7 +16,7 @@
       <SecurityBlockPages v-else-if="currentPage === 'security-block-pages'" />
       <SecurityOverview v-else-if="currentPage === 'security-overview'" />
       <SecurityEvents v-else-if="currentPage === 'security-events'" />
-      <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys' || currentPage === 'settings-oidc'" />
+      <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
       <AuditLog v-else-if="currentPage === 'audit-log'" />
@@ -88,7 +88,7 @@ onMounted(async () => {
       // OIDC 登录:令牌直接建会话,return_to 回跳(缺省 dashboard)
       authStore.applyOIDCToken(oidcToken)
       // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)
-      const knownPages = ['dashboard', 'rules', 'security-overview', 'security-policies', 'security-rules', 'security-block-pages', 'security-events', 'settings-basic', 'settings-cluster', 'settings-certificates', 'settings-apikeys', 'settings-oidc', 'users', 'audit-log', 'caddy']
+      const knownPages = ['dashboard', 'rules', 'security-overview', 'security-policies', 'security-rules', 'security-block-pages', 'security-events', 'settings-basic', 'settings-cluster', 'settings-certificates', 'settings-apikeys', 'users', 'audit-log', 'caddy']
       const target = oidcReturnTo.replace(/^\//, '')
       authStore.setCurrentPage(knownPages.includes(target) ? (target as 'dashboard') : 'dashboard')
       await authStore.init()

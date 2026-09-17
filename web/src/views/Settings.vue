@@ -32,7 +32,6 @@
       v-model:global="global"
       @save="handleSaveCertificates"
     />
-    <OIDCSettings v-else-if="activeTab === 'oidc'" />
   </div>
 </template>
 
@@ -211,7 +210,6 @@ const handleSaveCertificates = async () => {
 const syncActiveTabFromPage = () => {
   const map: Record<string, string> = {
     'settings-basic': 'basic',
-  'settings-oidc': 'oidc',
     'settings-cluster': 'cluster',
     'settings-certificates': 'certificates',
     'settings-apikeys': 'apikeys',

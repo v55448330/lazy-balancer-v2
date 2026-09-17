@@ -4,9 +4,9 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><UserFilled /></el-icon>
-          用户管理
+          用户与认证
         </h2>
-        <p class="page-desc">管理系统用户和权限</p>
+        <p class="page-desc">管理系统用户、权限与登录认证（OIDC）</p>
       </div>
       <el-button type="primary" :disabled="isReadOnly || submitting" @click="openCreateForm">
         <el-icon><Plus /></el-icon>
@@ -153,6 +153,8 @@
         />
       </div>
     </el-card>
+
+    <OIDCSettings class="mt16" />
     <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
          点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
     <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
@@ -200,6 +202,7 @@
 </template>
 
 <script setup lang="ts">
+import OIDCSettings from '@/views/settings/OIDCSettings.vue'
 import { computed, h, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'

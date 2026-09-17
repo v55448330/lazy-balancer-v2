@@ -175,7 +175,7 @@ const copy = async (text: string) => {
 </script>
 
 <style scoped>
-.oidc-settings { max-width: 760px; }
+.oidc-settings { width: 100%; }
 .card-header { display: flex; align-items: center; gap: 10px; }
 .top-alert { margin-bottom: 16px; }
 .step { margin-bottom: 20px; }
