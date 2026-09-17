@@ -75,7 +75,6 @@
             <span>用户列表</span>
           </div>
           <div class="oidc-entry-inline">
-            <span class="oidc-entry-label">登录认证</span>
             <el-tag v-if="oidcEnabled" type="success" size="small" effect="light">OIDC 已启用</el-tag>
             <el-tag v-else-if="oidcConfigured" type="info" size="small" effect="plain">OIDC 已配置</el-tag>
             <el-button size="small" text type="primary" @click="oidcOpen = true">{{ oidcConfigured ? 'OIDC 设置' : '配置 OIDC' }}</el-button>
@@ -682,8 +681,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.oidc-entry-inline { display: flex; align-items: center; gap: 8px; }
-.oidc-entry-label { font-size: 12.5px; color: var(--el-text-color-secondary); }
+.oidc-entry-inline { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
 .page { max-width: 1500px; margin: 0 auto; }
 
