@@ -189,7 +189,7 @@ func TestExportConfigBackup_includesSecurityIPLists(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var backup configBackup
-	if err := json.Unmarshal(response.Body.Bytes(), &backup); err != nil {
+	if err := json.Unmarshal(unpackExportBody(t, response.Body.Bytes()), &backup); err != nil {
 		t.Fatalf("decode export: %v", err)
 	}
 	listRows, ok := backup.Tables["security_ip_lists"]

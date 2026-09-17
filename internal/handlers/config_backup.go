@@ -1758,27 +1758,28 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
-	// v2.3.0:勾选「规则库数据库」→ lbbak tar.gz 包(含 CRS/IP2Region 文件本体)
-	if strings.Contains(c.Query("sections"), "waf_files") {
-		backupJSON, err := json.Marshal(backup)
-		if err == nil {
-			payload, perr := buildLbbakPayload(backupJSON, services.BuildWafFileBundle())
-			if perr == nil {
-				recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管", services.AuditResultPart("success")))
-				writeLbbakResponse(c, payload)
-				return
-			}
-			err = perr
+	// v2.3.0(用户裁定 2026-09-18):导出恒为 lbbak tar.gz 包——勾选「规则库
+	// 数据库」时附 CRS/IP2Region 文件本体,未勾选时仅 config.json;纯 JSON 仅作
+	// 旧备份导入兼容,不再产出。
+	backupJSON, err := json.Marshal(backup)
+	if err == nil {
+		var bundle *services.WafFileBundle
+		if sectionTables["security_crs_version"] {
+			bundle = services.BuildWafFileBundle()
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-		return
+		payload, perr := buildLbbakPayload(backupJSON, bundle)
+		if perr == nil {
+			detail := "导出为完整备份（含凭证与证书材料），请妥善保管"
+			if bundle != nil {
+				detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管"
+			}
+			recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), detail, services.AuditResultPart("success")))
+			writeLbbakResponse(c, payload)
+			return
+		}
+		err = perr
 	}
-	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出为完整备份（含凭证与证书材料），请妥善保管", services.AuditResultPart("success")))
-	c.Header("Cache-Control", "no-store, private")
-	c.Header("Pragma", "no-cache")
-	c.Header("X-Content-Type-Options", "nosniff")
-	c.Header("Content-Disposition", "attachment; filename=lazy-balancer-backup-"+time.Now().Format("20060102-150405")+".json")
-	c.JSON(http.StatusOK, backup)
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 }
 
 func (h *Handlers) ImportConfigBackup(c *gin.Context) {

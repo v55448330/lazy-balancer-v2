@@ -12,6 +12,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// unpackExportBody 解包导出响应(lbbak tar.gz → config.json 原文)。
+func unpackExportBody(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	payload, err := parseLbbak(raw)
+	if err != nil {
+		t.Fatalf("export body is not lbbak: %v", err)
+	}
+	return payload.ConfigJSON
+}
+
 func newBackupSectionRouter(h *Handlers) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	g := gin.New()
@@ -36,7 +46,7 @@ func TestConfigBackup_sectionFiltering(t *testing.T) {
 		Tables map[string][]map[string]any `json:"tables"`
 		Config map[string]any              `json:"config"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &exported); err != nil {
+	if err := json.Unmarshal(unpackExportBody(t, rec.Body.Bytes()), &exported); err != nil {
 		t.Fatal(err)
 	}
 	for table := range exported.Tables {

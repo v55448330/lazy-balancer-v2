@@ -72,7 +72,7 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 		t.Fatalf("export status=%d body=%s, want 200", exportRec.Code, exportRec.Body.String())
 	}
 	var exported configBackup
-	if err := json.Unmarshal(exportRec.Body.Bytes(), &exported); err != nil {
+	if err := json.Unmarshal(unpackExportBody(t, exportRec.Body.Bytes()), &exported); err != nil {
 		t.Fatalf("parse export: %v", err)
 	}
 	if _, exists := exported.Config["metrics_public"]; exists {

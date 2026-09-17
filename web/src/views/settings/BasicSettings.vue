@@ -263,7 +263,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="exportDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" class="backup-dialog">
+    <el-dialog v-model="exportDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog">
       <template #header>
         <div class="backup-dialog-header">
           <el-icon class="backup-dialog-icon"><Download /></el-icon>
@@ -285,7 +285,7 @@
         <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
       </div>
       <el-alert type="warning" :closable="false" show-icon class="mt8"
-        title="导出包含凭证与证书材料（勾选规则库数据库时为 .lbbak 包，含 CRS/IP2Region 文件），请加密保管" />
+        title="导出为 .lbbak 备份包（勾选「规则库数据库」时含 CRS/IP2Region 数据文件）；包含凭证与证书材料，请加密保管" />
       <template #footer>
         <el-button @click="exportDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">
@@ -439,7 +439,7 @@ const exportBackup = async (): Promise<void> => {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.${exportSections.value.includes('waf_files') ? 'lbbak' : 'json'}`
+    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.lbbak`
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
     setTimeout(() => URL.revokeObjectURL(url), 1000)

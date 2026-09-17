@@ -156,7 +156,16 @@
       </el-footer>
     </el-container>
 
-    <el-dialog v-model="showProfile" title="个人资料" width="min(480px, 92vw)" :close-on-click-modal="false" :before-close="beforeProfileClose">
+    <el-dialog v-model="showProfile" width="min(520px, 92vw)" :close-on-click-modal="false" :before-close="beforeProfileClose" class="profile-dialog">
+      <template #header>
+        <div class="backup-dialog-header">
+          <el-icon class="backup-dialog-icon"><User /></el-icon>
+          <div>
+            <div class="backup-dialog-title">个人资料</div>
+            <div class="backup-dialog-sub">{{ isOIDCUser ? 'OIDC 企业认证账户' : '本地账户' }}</div>
+          </div>
+        </div>
+      </template>
       <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="profile-readonly-alert" />
       <el-form :model="profileForm" label-width="80px" class="profile-form" :disabled="saving">
         <el-form-item label="用户名">
@@ -667,6 +676,15 @@ onUnmounted(() => {
 .profile-readonly-alert { margin-bottom: 20px; }
 .user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-source-tag { flex-shrink: 0; height: 18px; padding: 0 6px; font-size: 11px; line-height: 16px; }
+.profile-dialog .backup-dialog-header { display: flex; align-items: center; gap: 12px; }
+.profile-dialog .backup-dialog-icon {
+  width: 38px; height: 38px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-color-primary-light-9); color: var(--el-color-primary);
+  font-size: 18px; flex-shrink: 0;
+}
+.profile-dialog .backup-dialog-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
+.profile-dialog .backup-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
 .oidc-hint-block {
   width: 100%;
   padding: 8px 12px;

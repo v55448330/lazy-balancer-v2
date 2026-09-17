@@ -558,20 +558,27 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	exportResponse := httptest.NewRecorder()
 	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
 
-	// Then
-	if exportResponse.Code != http.StatusOK || !strings.Contains(exportResponse.Body.String(), "lazy-balancer-v2") {
-		t.Fatalf("export status=%d body=%.200s", exportResponse.Code, exportResponse.Body.String())
+	// Then(v2.3.0:导出恒 lbbak tar.gz)
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export status=%d", exportResponse.Code)
 	}
 	for header, expected := range map[string]string{
 		"Cache-Control":          "no-store, private",
-		"Pragma":                 "no-cache",
 		"X-Content-Type-Options": "nosniff",
 	} {
 		if got := exportResponse.Header().Get(header); got != expected {
 			t.Fatalf("%s=%q, want %q", header, got, expected)
 		}
 	}
-	backup := exportResponse.Body.String()
+	if got := exportResponse.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("Content-Type=%q, want application/gzip", got)
+	}
+	backupBytes := exportResponse.Body.Bytes()
+	unpacked, err := parseLbbak(backupBytes)
+	if err != nil || !strings.Contains(string(unpacked.ConfigJSON), "lazy-balancer-v2") {
+		t.Fatalf("export lbbak unpack: %v", err)
+	}
+	backup := string(unpacked.ConfigJSON)
 
 	// Given: destructive change
 	if _, err := db.DB.Exec("DELETE FROM lb_rules; DELETE FROM users; UPDATE global_config SET log_level='error', sync_interval=10, cluster_version=99 WHERE id=1"); err != nil {
@@ -651,7 +658,7 @@ func TestConfigBackup_export_preserves_sensitive_columns(t *testing.T) {
 		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
 	}
 	var backup configBackup
-	if err := json.Unmarshal(exportResponse.Body.Bytes(), &backup); err != nil {
+	if err := json.Unmarshal(unpackExportBody(t, exportResponse.Body.Bytes()), &backup); err != nil {
 		t.Fatalf("decode export: %v", err)
 	}
 	// ca_providers 含 Initialize 播种的默认行，按 name 定位种入行
@@ -725,7 +732,7 @@ func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	if exportResponse.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
 	}
-	backup := exportResponse.Body.String()
+	backup := string(unpackExportBody(t, exportResponse.Body.Bytes()))
 	if !strings.Contains(backup, "v4.14.0") || !strings.Contains(backup, "v3.17.0") {
 		t.Fatalf("exported backup must still carry version rows (for lbbak consumers)")
 	}
@@ -1898,7 +1905,7 @@ func TestConfigBackup_multiRowBindingsRoundTrip(t *testing.T) {
 	if exportResponse.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%.200s", exportResponse.Code, exportResponse.Body.String())
 	}
-	backup := exportResponse.Body.String()
+	backup := exportResponse.Body.String() // lbbak 原字节——导入端按魔数识别
 
 	// Given: destructive change — wipe all security tables
 	if _, err := db.DB.Exec("DELETE FROM security_policy_bindings; DELETE FROM security_policies"); err != nil {
@@ -2350,7 +2357,7 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 			t.Fatalf("export status=%d body=%.300s", response.Code, response.Body.String())
 		}
 		var payload map[string]any
-		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		if err := json.Unmarshal(unpackExportBody(t, response.Body.Bytes()), &payload); err != nil {
 			t.Fatalf("decode export: %v", err)
 		}
 		return payload
@@ -2372,7 +2379,7 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("export status=%d body=%.300s", response.Code, response.Body.String())
 		}
-		return response.Body.String()
+		return string(unpackExportBody(t, response.Body.Bytes()))
 	}
 
 	// 愈合并：初始库可含 Initialize 播种行的 NULL（如版本表 last_checked），

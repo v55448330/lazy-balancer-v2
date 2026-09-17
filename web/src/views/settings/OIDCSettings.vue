@@ -1,15 +1,26 @@
 <template>
   <!-- v2.3.0 OIDC 认证集成:受控弹框(入口在用户列表卡头) -->
-  <el-dialog :model-value="modelValue" title="登录认证（OIDC）" width="680px" :close-on-click-modal="false"
-    destroy-on-close append-to-body @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" width="min(720px, 92vw)" :close-on-click-modal="false"
+    destroy-on-close append-to-body class="oidc-dialog" @update:model-value="emit('update:modelValue', $event)">
+    <template #header>
+      <div class="oidc-dialog-header">
+        <el-icon class="oidc-dialog-icon"><Connection /></el-icon>
+        <div>
+          <div class="oidc-dialog-title">登录认证（OIDC）</div>
+          <div class="oidc-dialog-sub">{{ configured ? (enabled ? '已启用——登录页展示认证服务入口' : '已配置未启用') : '配置企业认证服务,本地账号登录始终保留' }}</div>
+        </div>
+      </div>
+    </template>
     <el-alert v-if="!configured" type="info" :closable="false" class="mb12"
       title="通过企业认证服务（OIDC）登录——配置仅 3 项，端点自动发现；本地账号登录始终保留。" />
     <el-alert v-else-if="enabled" type="success" :closable="false" class="mb12"
       :title="`OIDC 已启用（${displayName || 'OIDC'}）——登录页默认展示认证服务入口，本地账号可折叠进入。`" />
 
     <!-- ① 服务地址 -->
-    <div class="step">
-      <div class="step-title">① 服务地址</div>
+    <div class="oidc-step">
+      <div class="oidc-step-badge">1</div>
+      <div class="oidc-step-body">
+      <div class="step-title">服务地址</div>
       <el-input v-model="form.issuer" placeholder="https://auth.example.com（企业认证服务地址）" clearable @blur="probeOnBlur">
         <template #suffix>
           <el-icon v-if="probe.ok" color="#67c23a"><CircleCheckFilled /></el-icon>
@@ -22,11 +33,14 @@
         <template v-else-if="probe.credentialsChecked === false && (form.clientId || hasSecret)">｜该服务不支持离线凭证校验</template>
       </div>
       <div v-else-if="probe.checked && !probe.ok && probe.error" class="probe-err">{{ probe.error }}</div>
+      </div>
     </div>
 
     <!-- ② 提供商后台登记信息（前置引导） -->
-    <div class="step">
-      <div class="step-title">② 在认证服务后台创建应用，填入以下信息</div>
+    <div class="oidc-step">
+      <div class="oidc-step-badge">2</div>
+      <div class="oidc-step-body">
+      <div class="step-title">在认证服务后台创建应用，填入以下信息</div>
       <div class="reg-info">
           <div v-for="node in callbackNodes" :key="node.url" class="reg-row">
             <span class="reg-label">{{ node.label }}</span>
@@ -35,10 +49,14 @@
           </div>
         </div>
       </div>
+      </div>
+    </div>
 
     <!-- ③ 应用凭证 -->
-    <div class="step">
-      <div class="step-title">③ 应用凭证</div>
+    <div class="oidc-step">
+      <div class="oidc-step-badge">3</div>
+      <div class="oidc-step-body">
+      <div class="step-title">应用凭证</div>
       <el-row :gutter="12">
         <el-col :span="12">
           <el-input v-model="form.clientId" placeholder="Client ID" clearable />
@@ -49,6 +67,7 @@
         </el-col>
       </el-row>
       <el-input v-model="form.displayName" placeholder="登录按钮显示名（选填，默认取服务域名）" class="mt8" maxlength="30" />
+      </div>
     </div>
 
     <el-alert v-if="lastTest" :type="lastTest.ok ? 'success' : 'error'" :closable="false" class="mt8"
@@ -58,10 +77,10 @@
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button :loading="testing" @click="test">测试连接</el-button>
-        <el-button v-if="enabled" plain type="warning" :loading="saving" @click="toggleEnabled(false)">暂停使用</el-button>
-        <el-button v-if="configured" plain type="danger" :disabled="saving" @click="remove">删除配置</el-button>
-        <el-button type="primary" :loading="saving" @click="save">{{ enabled ? '更新配置' : '保存并启用' }}</el-button>
+        <el-button :loading="testing" :disabled="isReadOnly" @click="test">测试连接</el-button>
+        <el-button v-if="enabled" plain type="warning" :loading="saving" :disabled="isReadOnly" @click="toggleEnabled(false)">暂停使用</el-button>
+        <el-button v-if="configured" plain type="danger" :disabled="saving || isReadOnly" @click="remove">删除配置</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="save">{{ enabled ? '更新配置' : '保存并启用' }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -70,8 +89,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
+import { CircleCheckFilled, CircleCloseFilled, Connection } from '@element-plus/icons-vue'
 import { request, ApiRequestError } from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'status', st: { enabled: boolean; configured: boolean }): void }>()
@@ -98,7 +121,9 @@ const callbackNodes = computed(() => [
 
 const loadSlaves = async () => {
   try {
-    const res = await request.get<{ data?: { name?: string; ip_address?: string; port?: number; protocol?: string; access_url?: string; is_approved?: boolean }[] }>('/cluster/nodes')
+    // silent:从节点 403(仅主节点)不弹全局 toast——回调清单静默降级为本节点
+    // (2026-09-18 用户裁定:从节点只保留只读标记,不出现「仅允许在主节点执行」提示)
+    const res = await request.get<{ data?: { name?: string; ip_address?: string; port?: number; protocol?: string; access_url?: string; is_approved?: boolean }[] }>('/cluster/nodes', { silent: true } as never)
     slaveOrigins.value = (res.data || [])
       .filter(n => n.is_approved)
       .map(n => {
@@ -234,6 +259,28 @@ const copy = async (text: string) => {
 
 <style scoped>
 .mb12 { margin-bottom: 12px; }
+.oidc-dialog-header { display: flex; align-items: center; gap: 12px; }
+.oidc-dialog-icon {
+  width: 38px; height: 38px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-color-primary-light-9); color: var(--el-color-primary);
+  font-size: 18px; flex-shrink: 0;
+}
+.oidc-dialog-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
+.oidc-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.oidc-step {
+  display: flex; gap: 12px;
+  border: 1px solid var(--el-border-color-lighter); border-radius: 10px;
+  padding: 14px; margin-bottom: 14px;
+  background: var(--el-fill-color-blank);
+}
+.oidc-step-badge {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-color-primary); color: #fff;
+  font-size: 13px; font-weight: 600;
+}
+.oidc-step-body { flex: 1; min-width: 0; }
 .step { margin-bottom: 18px; }
 .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
