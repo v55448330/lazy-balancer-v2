@@ -22,6 +22,64 @@ import (
 )
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}
+
+// v2.3.0 分类导入导出(用户裁定):分类=集群同步五类;导出/导入可按分类
+// 选择,默认全选。表→分类映射与 cluster_sections.go 的节语义一致。
+var configBackupSections = []struct {
+	Key    string
+	Label  string
+	Tables []string
+	Global bool
+}{
+	{Key: "users", Label: "系统数据", Tables: []string{"users", "api_keys", "ca_providers", "certificate_configs"}},
+	{Key: "global_config", Label: "全局配置", Global: true},
+	{Key: "rules", Label: "负载规则", Tables: []string{"lb_rules", "upstreams", "path_rules", "cert_jobs"}},
+	{Key: "waf_files", Label: "规则库数据库", Tables: []string{"security_crs_version", "security_ip2region_version"}},
+	{Key: "security", Label: "安全策略及自定义规则", Tables: []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists"}},
+}
+
+// configBackupSectionTables 返回选中分类覆盖的表集合与是否含全局配置;
+// sections 为空=全选(默认)。未知分类名 → nil(调用方 400)。
+func configBackupSectionTables(sections []string) (map[string]bool, bool, bool) {
+	if len(sections) == 0 {
+		tables := map[string]bool{}
+		for _, sec := range configBackupSections {
+			for _, t := range sec.Tables {
+				tables[t] = true
+			}
+		}
+		return tables, true, true
+	}
+	selected := map[string]bool{}
+	for _, key := range sections {
+		found := false
+		for _, sec := range configBackupSections {
+			if sec.Key == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false, false
+		}
+		selected[key] = true
+	}
+	tables := map[string]bool{}
+	includeGlobal := false
+	for _, sec := range configBackupSections {
+		if !selected[sec.Key] {
+			continue
+		}
+		if sec.Global {
+			includeGlobal = true
+		}
+		for _, t := range sec.Tables {
+			tables[t] = true
+		}
+	}
+	return tables, includeGlobal, true
+}
+
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupCertJobStatuses = map[string]struct{}{
@@ -356,9 +414,11 @@ func finishImportFailure(tx *sql.Tx, recovery *importQueueRecovery, importErr er
 }
 
 type configBackup struct {
-	Meta   configBackupMeta            `json:"meta"`
-	Config map[string]any              `json:"config"`
-	Tables map[string][]map[string]any `json:"tables"`
+	// v2.3.0 分类导入:调用方选择只覆盖哪些分类(空=全部);校验和始终验整包
+	Sections []string                    `json:"sections,omitempty"`
+	Meta     configBackupMeta            `json:"meta"`
+	Config   map[string]any              `json:"config"`
+	Tables   map[string][]map[string]any `json:"tables"`
 }
 
 type configBackupMeta struct {
@@ -1619,6 +1679,14 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
 		return
 	}
+	sectionTables, includeGlobal, ok := configBackupSectionTables(strings.Split(c.Query("sections"), ","))
+	if c.Query("sections") == "" {
+		sectionTables, includeGlobal, ok = configBackupSectionTables(nil)
+	}
+	if !ok {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
+		return
+	}
 	ctx := c.Request.Context()
 	backup := configBackup{
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
@@ -1635,13 +1703,16 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
-	if len(configRows) > 0 {
+	if len(configRows) > 0 && includeGlobal {
 		backup.Config = configRows[0]
 		for key := range configBackupProtectedConfigKeys {
 			delete(backup.Config, key)
 		}
 	}
 	for _, table := range configBackupTables {
+		if !sectionTables[table] {
+			continue
+		}
 		rows, err := dumpTable(ctx, tx, table)
 		if err != nil {
 			err = errors.Join(err, tx.Rollback())
@@ -1817,6 +1888,21 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入的备份不包含当前操作账户，导入后您将无法登录"})
 		return
+	}
+	// v2.3.0 分类导入:校验和已验整包(上方 validateV2Backup),此处按所选
+	// 分类过滤实际覆盖面——未选分类的表与全局配置保持现状。
+	sectionTables, includeGlobal, sectionsOK := configBackupSectionTables(backup.Sections)
+	if !sectionsOK {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
+		return
+	}
+	for table := range backup.Tables {
+		if !sectionTables[table] {
+			delete(backup.Tables, table)
+		}
+	}
+	if !includeGlobal {
+		backup.Config = nil
 	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {

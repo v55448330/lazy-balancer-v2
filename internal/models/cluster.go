@@ -213,8 +213,11 @@ type ClusterBasicSettings struct {
 	AdminTLSCert               string `json:"admin_tls_cert,omitempty"`
 	AdminTLSKey                string `json:"admin_tls_key,omitempty"`
 	// v2.1.8 MFA 全局开关（决策3：从节点行为与主节点一致）。
-	MFAWriteGuard     bool `json:"mfa_write_guard"`
-	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
+	MFAWriteGuard bool `json:"mfa_write_guard"`
+	// v2.3.0:OIDC 配置(原样 JSON 字符串)随 global 节同步——从节点回调独立
+	// 闭环需要本地可读 issuer/client 凭证(JWKS 验签在从节点本地完成)。
+	OIDCConfig        string `json:"oidc_config,omitempty"`
+	MFALockoutEnabled bool   `json:"mfa_lockout_enabled"`
 }
 
 type ClusterUser struct {
@@ -233,6 +236,12 @@ type ClusterUser struct {
 	MFASecret        string `json:"mfa_secret"`
 	MFARecoveryCodes string `json:"mfa_recovery_codes"`
 	MFALastTimestep  int64  `json:"mfa_last_timestep"`
+	// v2.3.0 OIDC:身份三列随快照同步——缺列会让从节点把 OIDC 用户当本地账号
+	// (空 password_hash 在本地语义=不可登录,OIDC 登录也因 auth_provider 丢失而失效)。
+	AuthProvider string `json:"auth_provider,omitempty"`
+	OIDCSubject  string `json:"oidc_subject,omitempty"`
+	OIDCIssuer   string `json:"oidc_issuer,omitempty"`
+
 	// pending 密钥不跨节点（绑定向导是节点本地交互；半途切换面板属可重做流程）。
 }
 

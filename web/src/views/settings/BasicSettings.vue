@@ -125,9 +125,15 @@
         <div class="info-item">
           <span class="info-label">配置备份</span>
           <div class="backup-actions">
-            <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="exportBackup">导出</el-button>
+            <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">导出</el-button>
             <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
           </div>
+        </div>
+        <div class="info-item backup-sections-item">
+          <span class="info-label">导出分类</span>
+          <el-checkbox-group v-model="exportSections" size="small" class="backup-sections">
+            <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key">{{ sec.label }}</el-checkbox>
+          </el-checkbox-group>
         </div>
         <div class="info-item">
           <span class="info-label">重启服务</span>
@@ -198,6 +204,13 @@
         <el-alert v-if="!importValidation.valid" :title="importValidation.error || '备份文件校验失败'" type="error" :closable="false" show-icon class="import-alert" />
         <template v-else>
           <div class="import-result">
+            <div class="import-sections">
+              <div class="import-sections-label">导入分类（未选分类保持现状）</div>
+              <el-checkbox-group v-model="importSections" size="small" :disabled="importValidation.type === 'v1'">
+                <el-checkbox v-for="sec in BACKUP_SECTIONS" :key="sec.key" :value="sec.key" :disabled="importValidation.type === 'v1' && sec.key !== 'rules'">{{ sec.label }}</el-checkbox>
+              </el-checkbox-group>
+              <el-text v-if="importValidation.type === 'v1'" type="info" size="small">V1 备份仅支持负载均衡规则导入</el-text>
+            </div>
             <el-tag :type="importValidation.type === 'v1' ? 'warning' : 'success'" size="small">
               {{ importValidation.type === 'v1' ? 'V1 兼容导入' : 'V2 完整备份' }}
             </el-tag>
@@ -216,7 +229,7 @@
             </ul>
             <el-alert
               v-if="importValidation.type !== 'v1'"
-              title="导入将覆盖当前全部配置（规则、用户、密钥、证书任务）"
+              :title="importSections.length === BACKUP_SECTIONS.length ? '导入将覆盖当前全部配置（规则、用户、密钥、证书任务）' : `将仅覆盖所选分类：${importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、')}，未选分类保持现状`"
               type="warning"
               :closable="false"
               show-icon
@@ -344,12 +357,30 @@ onUnmounted(() => {
   tlsProtocolFallbackTimer = null
 })
 
+// v2.3.0 分类导出(用户裁定):分类=集群同步五类,默认全选
+const BACKUP_SECTIONS = [
+  { key: 'users', label: '系统数据' },
+  { key: 'global_config', label: '全局配置' },
+  { key: 'rules', label: '负载规则' },
+  { key: 'waf_files', label: '规则库数据库' },
+  { key: 'security', label: '安全策略及自定义规则' },
+] as const
+const exportSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
+const openExportDialog = async (): Promise<void> => {
+  if (backupDisabled.value || exporting.value) return
+  if (exportSections.value.length === 0) { ElMessage.warning('请至少选择一个导出分类'); return }
+  await ElMessageBox.confirm('导出包含凭证与证书材料，请加密保管。确认导出？', '导出配置备份', { type: 'warning' })
+  await exportBackup()
+}
 const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
   exporting.value = true
   try {
     // 备份含全部证书与私钥，体积可能很大，禁用 30s 默认超时
-    const blob = await request.get<Blob>('/config/export', { responseType: 'blob', timeout: 0 })
+    const blob = await request.get<Blob>('/config/export', {
+      responseType: 'blob', timeout: 0,
+      params: { sections: exportSections.value.join(',') },
+    })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -401,6 +432,7 @@ interface ImportResponse {
 
 const importDialogVisible = ref(false)
 const importFileName = ref('')
+const importSections = ref<string[]>([])
 const importFileContent = ref('')
 const importValidation = ref<ImportValidation | null>(null)
 const importValidating = ref(false)
@@ -466,6 +498,8 @@ const handleImportFile = async (event: Event): Promise<void> => {
     if (validationSeq !== importValidationSeq) return
     importFileContent.value = fileContent
     importValidation.value = res.data
+    // V1 仅负载规则(锁定);V2 默认全选
+    importSections.value = res.data?.type === 'v1' ? ['rules'] : BACKUP_SECTIONS.map((sec) => sec.key)
   } catch {
     if (validationSeq === importValidationSeq) {
       importValidation.value = { valid: false, error: '校验请求失败，请重试', disabled_conflicts: [] }
@@ -494,7 +528,17 @@ const confirmImport = async (): Promise<void> => {
   importing.value = true
   try {
     const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
-    const res = await request.post<ImportResponse>(endpoint, importFileContent.value, {
+    let importBody = importFileContent.value
+    if (validation.type !== 'v1') {
+      // 顶层注入 sections(不重排原 JSON)
+      try {
+        const parsed = JSON.parse(importFileContent.value) as Record<string, unknown>
+        parsed.sections = importSections.value
+        importBody = JSON.stringify(parsed)
+      } catch { /* 原样提交(后端会 400 校验失败) */ }
+    }
+    if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
+    const res = await request.post<ImportResponse>(endpoint, importBody, {
       headers: { 'Content-Type': 'application/json' },
     })
     importDialogVisible.value = false
@@ -843,6 +887,11 @@ const handleSave = async () => {
 </script>
 
 <style scoped>
+.backup-sections-item { flex-direction: column; align-items: flex-start; gap: 4px; }
+.backup-sections { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.import-sections-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+
 .basic-stack { display: flex; flex-direction: column; gap: 20px; }
 .card-header { display: flex; align-items: center; }
 .card-title {

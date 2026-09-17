@@ -390,3 +390,54 @@ func TestPolicyWhitelistEnabled_acceptsNumericJSON(t *testing.T) {
 		}
 	}
 }
+
+// OIDC 集成数据必须随集群同步(2026-09-18 用户实测:从节点 OIDC 用户变本地
+// 账号、OIDC 未启用)。钉两个不变量:①users 节携带 auth_provider/oidc_
+// subject/oidc_issuer 且 apply 落库;②global 节携带 oidc_config 且 apply 落库。
+func TestSyncService_applySnapshot_preservesOIDCIdentityAndConfig(t *testing.T) {
+	cluster, database := newClusterTestService(t)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	// Given: 主节点有 1 个 OIDC 用户 + oidc_config 已启用
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer) VALUES (7,'sso-user','','user',1,'oidc','sub-1','https://idp.example.com')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET oidc_config='{"enabled":true,"issuer":"https://idp.example.com","client_id":"c","client_secret":"s"}' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotUser models.ClusterUser
+	for _, u := range snapshot.Users {
+		if u.Username == "sso-user" {
+			gotUser = u
+		}
+	}
+	if gotUser.AuthProvider != "oidc" || gotUser.OIDCSubject != "sub-1" || gotUser.OIDCIssuer != "https://idp.example.com" {
+		t.Fatalf("snapshot user OIDC identity lost: %+v", gotUser)
+	}
+	if snapshot.BasicSettings.OIDCConfig == "" || !strings.Contains(snapshot.BasicSettings.OIDCConfig, "idp.example.com") {
+		t.Fatalf("snapshot global oidc_config lost: %q", snapshot.BasicSettings.OIDCConfig)
+	}
+	// When: 应用到干净从库
+	err = syncService.applySnapshot(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Then: OIDC 身份与配置在从库保留
+	var provider, subject, cfg string
+	if err := database.QueryRow(`SELECT COALESCE(auth_provider,''), COALESCE(oidc_subject,''), COALESCE((SELECT oidc_config FROM global_config WHERE id=1),'') FROM users WHERE username='sso-user'`).Scan(&provider, &subject, &cfg); err != nil {
+		t.Fatalf("query applied user: %v", err)
+	}
+	if provider != "oidc" || subject != "sub-1" {
+		t.Fatalf("applied user lost OIDC identity: provider=%q subject=%q", provider, subject)
+	}
+	if !strings.Contains(cfg, "idp.example.com") {
+		t.Fatalf("applied global oidc_config lost: %q", cfg)
+	}
+}
