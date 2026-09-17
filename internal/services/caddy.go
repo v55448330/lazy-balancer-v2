@@ -92,8 +92,9 @@ type CaddyService struct {
 	// lastGoodPath 非空时，每次成功 /load 后把已应用 JSON 原子落盘到该路径，
 	// 供启动兜底（裁定 2026-09-06 ③）读取回放。
 	lastGoodPath string
-	// cliValidate 非空时，写路径在事务内应用前先用 caddy CLI（真 validate-only：
-	// provision 不运行、不绑端口——源码 caddy.Validate→run(cfg,false)）校验
+	// cliValidate 非空时，写路径在事务内应用前先用 caddy CLI（validate-only：
+	// run(cfg,false) 执行完整 provisionContext(含 coraza 编译)仅跳过 Start、
+	// 不绑端口——比「不 provision」更强,引擎级错误在此被捕获)校验
 	// 最终渲染（裁定 2026-09-06 ④'）。默认关闭，main 显式启用，测试注入桩。
 	cliValidate func(rendered []byte) error
 }

@@ -326,8 +326,8 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
-// renderDefaultBlockPage is the single renderer shared by GetDefaultBlockPage
-// and SeedDefaultBlockPage so both produce the identical branded page.
+// renderDefaultBlockPage renders the branded default block page; consumed by
+// SeedDefaultBlockPage(种子默认拦截页)与预览路径。
 func renderDefaultBlockPage(cfg brandingConfig) string {
 	appName := html.EscapeString(cfg.AppName)
 	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
