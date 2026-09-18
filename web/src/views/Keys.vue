@@ -780,6 +780,11 @@ onMounted(() => {
 .readonly-alert { margin: -2px 0 18px; }
 
 .mcp-auth-alert { margin-bottom: 20px; }
+/* 2026-09-19 用户反馈:认证方式说明的标题/描述/图标默认大号(el-alert 无 size
+   约束),与弹框正文不协调——收敛到 small 形态字号 */
+.mcp-auth-alert :deep(.el-alert__title) { font-size: 13px; }
+.mcp-auth-alert :deep(.el-alert__description) { font-size: 12px; line-height: 1.6; margin-top: 2px; }
+.mcp-auth-alert :deep(.el-alert__icon) { font-size: 15px; width: 15px; }
 .mcp-tools-title { margin-bottom: 12px; font-weight: 600; }
 
 .mcp-agent-guide { margin-bottom: 20px; }

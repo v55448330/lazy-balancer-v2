@@ -251,9 +251,11 @@
                     之后（all 灰字短提示 / ip 标签输入 min 220 max 360 / list 紧凑选择），
                     行高 ~32-40px（原双行 60px+）；合并列 min-width 560 + 删除列 60 低于
                     弹框内容宽 → 1080px 全宽不换行、无横向滚动；条目数徽标随工具行。 -->
+              <!-- 2026-09-19 用户裁定:空态按钮在首行(与「排除规则」标题同一
+                   水平线、内容列左对齐),描述文字居其下 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
-                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
                 <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
+                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
               </div>
               <template v-else>
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
@@ -2389,7 +2391,7 @@ onMounted(async () => {
 .extract-alert { margin-bottom: 12px; }
 .extract-source { font-size: 13px; color: #6b7280; }
 
-.wizard-content { min-height: min(370px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
+.wizard-content { min-height: min(370px, calc(100dvh - 300px)); max-height: calc(100dvh - 300px); overflow-y: auto; padding-right: 8px; }
 /* 弹框内 cascader 弹性兜底：本体不超出控件列宽（CRS 规则组 / 排除行 / 区域选择共用） */
 .wizard-content :deep(.el-cascader) { max-width: 100%; }
 
@@ -2408,7 +2410,7 @@ onMounted(async () => {
 /* —— 排除规则行编辑器（WAF 步骤）——
    空态不渲染表格：单行紧凑引导（12px 灰调说明 + 添加按钮贴右），
    高度约一行，避免 el-empty 撑高挤占弹框；有条目才渲染表格。 */
-.exclusion-empty { display: flex; align-items: center; gap: 12px; width: 100%; }
+.exclusion-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; }
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
 /* 条目多时限高内部滚动（:max-height 由 el-table 实现表头 sticky 固定），不撑高弹框 */
 .exclusion-table { flex: 1 1 auto; min-width: 0; }
@@ -2445,7 +2447,8 @@ onMounted(async () => {
 /* ghost 兜底标签容器（crs_rule_groups 下方，普通 div） */
 .crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.exclusion-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.exclusion-toolbar { display: flex; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 8px; }
+.exclusion-empty .el-button + .el-button { margin-left: 0; }
 /* 条目数徽标（N/50）随工具行右侧 */
 .exclusion-count { margin-left: auto; }
 
