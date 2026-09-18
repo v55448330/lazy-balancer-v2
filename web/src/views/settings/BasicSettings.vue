@@ -348,7 +348,6 @@
         </el-form-item>
       </el-form>
       <div class="auto-backup-list-head">
-        <div class="auto-backup-list-title">备份文件</div>
         <el-text type="info" size="small">
           上次执行：{{ autoBackupLastRunLabel }}<template v-if="autoBackupNextRunLabel"> · 下次备份：{{ autoBackupNextRunLabel }}</template>
         </el-text>
@@ -1450,10 +1449,9 @@ const handleSave = async () => {
 .auto-backup-chips { flex-wrap: wrap; }
 /* 全选/全不选与提示同行垂直居中 */
 /* 与 el-table 单元格 .cell 的 12px 内边距对齐——标题/说明文字与表格内容同缘 */
-.auto-backup-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-top: 12px; margin-bottom: 8px; padding: 0 8px; }
+.auto-backup-list-head { display: flex; align-items: baseline; justify-content: flex-end; margin-top: 12px; margin-bottom: 8px; padding: 0 8px; }
 .auto-backup-chips-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
 .auto-backup-scope-hint { margin-left: auto; }
 .auto-backup-list { border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
-.auto-backup-list-title { font-size: 13px; font-weight: 600; }
 </style>

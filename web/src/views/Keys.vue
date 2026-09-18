@@ -146,7 +146,6 @@
 
       <el-alert
         class="mcp-auth-alert"
-        title="认证方式"
         description="请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。"
         type="info"
         :closable="false"

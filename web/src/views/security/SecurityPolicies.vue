@@ -2411,6 +2411,8 @@ onMounted(async () => {
    空态不渲染表格：单行紧凑引导（12px 灰调说明 + 添加按钮贴右），
    高度约一行，避免 el-empty 撑高挤占弹框；有条目才渲染表格。 */
 .exclusion-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; }
+/* 标签行高 32px、small 按钮 24px——按钮下移 4px 使两者中线重合(垂直居中) */
+.exclusion-empty > .el-button { margin-top: 4px; }
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
 /* 条目多时限高内部滚动（:max-height 由 el-table 实现表头 sticky 固定），不撑高弹框 */
 .exclusion-table { flex: 1 1 auto; min-width: 0; }
@@ -2423,7 +2425,7 @@ onMounted(async () => {
 .exclusion-row-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; }
 /* 子组件根尺寸一律经 :deep 下发——el-cascader/el-select/el-radio-group/el-tag/el-icon
    的根元素不继承父组件 data-v，scoped 块内按裸类名命中不到 */
-.exclusion-row-cell :deep(.exclusion-target-select) { flex: 2 1 300px; min-width: 280px; max-width: 100%; }
+.exclusion-row-cell :deep(.exclusion-target-select) { flex: 2 1 240px; min-width: 200px; max-width: 100%; }
 /* ghost 兜底标签：级联无法映射路径的已存值（遗留文件名/陈旧规则 ID/被剔口径值）
    以可读标签内联呈现于 cascader 右侧，可删除；限宽省略 + title 悬浮全文 */
 .exclusion-row-cell :deep(.exclusion-target-ghost) { flex: 0 1 auto; min-width: 0; margin-top: 0; }
@@ -2439,11 +2441,11 @@ onMounted(async () => {
    （--el-select-width），basis:auto 会以整行宽参与 flex 折行判定（clamp 到
    max-width 280），行宽不足时被提前折到第二行 */
 .exclusion-row-cell :deep(.exclusion-scope-radios) { flex: 0 0 auto; }
-.exclusion-row-cell :deep(.exclusion-scope-radios .el-radio) { margin-right: 10px; }
+.exclusion-row-cell :deep(.exclusion-scope-radios .el-radio) { margin-right: 8px; }
 .exclusion-row-cell :deep(.exclusion-scope-radios .el-radio:last-child) { margin-right: 0; }
-.exclusion-row-cell :deep(.exclusion-scope-control-ip) { flex: 1 1 240px; min-width: 200px; max-width: 320px; }
-.exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 1 1 240px; min-width: 200px; max-width: 280px; }
-.exclusion-row-cell :deep(.exclusion-scope-all) { flex: 1 1 240px; min-width: 200px; max-width: 280px; font-size: 12px; color: #9ca3af; white-space: nowrap; }
+.exclusion-row-cell :deep(.exclusion-scope-control-ip) { flex: 1 1 200px; min-width: 160px; max-width: 300px; }
+.exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 1 1 200px; min-width: 160px; max-width: 240px; }
+.exclusion-row-cell :deep(.exclusion-scope-all) { flex: 1 1 200px; min-width: 160px; max-width: 240px; font-size: 12px; color: #9ca3af; white-space: nowrap; }
 /* ghost 兜底标签容器（crs_rule_groups 下方，普通 div） */
 .crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
