@@ -15,6 +15,7 @@
       <div class="table-toolbar">
         <el-date-picker
           v-model="filters.timeRange"
+          name="event-time-range"
           type="datetimerange"
           range-separator="至"
           start-placeholder="开始时间"

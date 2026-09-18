@@ -14,6 +14,7 @@
       <div class="filter-bar">
         <el-date-picker
           v-model="filters.timeRange"
+          name="audit-time-range"
           type="datetimerange"
           range-separator="至"
           start-placeholder="开始时间"

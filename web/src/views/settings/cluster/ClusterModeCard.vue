@@ -10,13 +10,21 @@
     </template>
 
     <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
-      <el-form-item label="节点模式">
-        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" @change="handleModeChange">
-          <el-radio value="master">主节点</el-radio>
-          <el-radio value="slave">从节点</el-radio>
-        </el-radio-group>
-        <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
-      </el-form-item>
+      <!-- 不用 el-form-item label(2026-09-19 用户报障修复):el-radio-group
+           会把组容器 DIV 的 id 注册为表单项输入 id,label for 随之指向
+           DIV——label 仅可指向表单控件,Firefox 报「Incorrect use of
+           <label for=FORM_ELEMENT>」。改为自管标签行,语义等价零告警;
+           120px 对齐与下方 el-form-item 一致。 -->
+      <div class="mode-row" role="group" aria-label="节点模式">
+        <span class="mode-row-label">节点模式</span>
+        <div class="mode-row-content">
+          <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" @change="handleModeChange">
+            <el-radio value="master">主节点</el-radio>
+            <el-radio value="slave">从节点</el-radio>
+          </el-radio-group>
+          <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
+        </div>
+      </div>
 
       <el-form-item label="同步间隔">
         <div class="interval-row">
@@ -205,7 +213,9 @@ const submitRegistration = async (): Promise<void> => {
 .card-header { display: flex; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .settings-form { max-width: 760px; padding: 4px 0; }
-.registration-alert { margin-bottom: 16px; }
+.mode-row { display: flex; margin-bottom: 18px; }
+.mode-row-label { width: 120px; flex-shrink: 0; font-size: 14px; color: var(--text-primary); }
+.mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .interval-row { display: flex; align-items: center; gap: 8px; }
 .interval-unit { color: var(--text-secondary); font-size: 13px; }
 
