@@ -63,16 +63,22 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/cluster/forget-pins":       AuditPolicyExplicit,
 	"PUT /api/v1/cluster/settings":           AuditPolicyExplicit,
 	// OIDC 认证集成(v2.3.0):配置写操作显式审计(handler 内已留痕,分类为显式)
-	"PUT /api/v1/settings/oidc":           AuditPolicyExplicit,
-	"DELETE /api/v1/settings/oidc":        AuditPolicyExplicit,
-	"POST /api/v1/settings/oidc/test":     AuditPolicyExplicit,
-	"POST /api/v1/config/preview":         AuditPolicySkip,
-	"POST /api/v1/config/import/validate": AuditPolicySkip,
-	"PUT /api/v1/config":                  AuditPolicyExplicit,
-	"PUT /api/v1/admin-tls":               AuditPolicyExplicit,
-	"POST /api/v1/admin-tls/inspect":      AuditPolicySkip,
-	"POST /api/v1/system/restart":         AuditPolicyGeneric,
-	"POST /api/v1/config/reload":          AuditPolicyGeneric,
+	"PUT /api/v1/settings/oidc":       AuditPolicyExplicit,
+	"DELETE /api/v1/settings/oidc":    AuditPolicyExplicit,
+	"POST /api/v1/settings/oidc/test": AuditPolicyExplicit,
+	// 自动备份（v2.3.x）：设置/手动备份/删除/还原 handler 均显式留痕
+	//（还原由 importConfigBackupCore 以「还原」动作记审计）。
+	"PUT /api/v1/settings/auto-backup":     AuditPolicyExplicit,
+	"POST /api/v1/auto-backup/run":         AuditPolicyExplicit,
+	"DELETE /api/v1/auto-backup/:id":       AuditPolicyExplicit,
+	"POST /api/v1/auto-backup/:id/restore": AuditPolicyExplicit,
+	"POST /api/v1/config/preview":          AuditPolicySkip,
+	"POST /api/v1/config/import/validate":  AuditPolicySkip,
+	"PUT /api/v1/config":                   AuditPolicyExplicit,
+	"PUT /api/v1/admin-tls":                AuditPolicyExplicit,
+	"POST /api/v1/admin-tls/inspect":       AuditPolicySkip,
+	"POST /api/v1/system/restart":          AuditPolicyGeneric,
+	"POST /api/v1/config/reload":           AuditPolicyGeneric,
 	// R69 C-N3-c：validate 经 /load 真实加载候选配置（handler 成功后回弹权威
 	// 配置）——不再豁免审计，handler 显式记录校验三态。
 	"POST /api/v1/config/validate":                        AuditPolicyExplicit,
@@ -247,7 +253,11 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"POST /api/v1/security/ip-lists",
 		"PUT /api/v1/security/ip-lists/:id",
 		"DELETE /api/v1/security/ip-lists/:id",
-		"POST /api/v1/security/ip-lists/:id/ips":
+		"POST /api/v1/security/ip-lists/:id/ips",
+		"PUT /api/v1/settings/auto-backup",
+		"POST /api/v1/auto-backup/run",
+		"DELETE /api/v1/auto-backup/:id",
+		"POST /api/v1/auto-backup/:id/restore":
 		return true
 	default:
 		return false

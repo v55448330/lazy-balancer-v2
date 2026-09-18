@@ -183,6 +183,10 @@ func run() error {
 	eventsIngestWait := services.StartSecurityEventsIngestion(eventsIngestCtx)
 	if isMaster {
 		lifecycle.StartACME()
+		// 自动备份调度器（v2.3.x）：仅主节点运行；执行体注入避免 services→handlers
+		// 反向依赖。主从切换（提升）后需重启进程才会开始自动备份。
+		services.SetAutoBackupExecutor(h.RunAutoBackupOnce)
+		services.StartAutoBackupScheduler(context.Background())
 	} else {
 		lifecycle.StopACME()
 		lifecycle.StartSync()
@@ -198,8 +202,8 @@ func run() error {
 		if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
 			ip2RegionManager.StopScheduler()
 		}
-		services.StopConfigWatchdog()
 		services.StopSecurityEventsRetention()
+		services.StopAutoBackupScheduler()
 		services.StopAuditCleanup()
 		services.StopTimezoneRefresh()
 		services.StopLogRotate()

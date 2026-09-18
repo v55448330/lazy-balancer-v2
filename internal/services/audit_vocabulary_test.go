@@ -28,8 +28,10 @@ import (
 //     全局配置/集群管理，均 ≤5 词）；
 //   - handlers/cluster_registration.go clusterNodeAction 的动作形参实参仅有
 //     审批/拒绝/删除/更新地址；
-//   - handlers/config_backup.go ImportConfigBackup 与 config_import_v1.go
-//     ImportV1Config 的动作变量取值仅有 导入失败/部分失败；
+//   - handlers/config_backup.go importConfigBackupCore（HTTP 导入端点与自动
+//     备份还原共用）与 config_import_v1.go ImportV1Config 的动作变量取值仅有
+//     导入/还原/导入失败/还原失败/部分失败；handlers/autobackup.go
+//     RunAutoBackupOnce 的动作变量取值仅有 自动备份/手动备份；
 //   - services/certificates.go renewExpiringCertificates 的动作变量取值仅有
 //     续签排队/重试排队；
 //   - handlers/handlers.go finishTxApply 的动作/对象取自 txApplyFinish 的字面量
@@ -43,7 +45,8 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	"middleware/middleware.go":         {1: {"auditMiddleware"}, 2: {"auditMiddleware"}},
 	"handlers/caddy.go":                {2: {"UpdateConfig"}},
 	"handlers/cluster_registration.go": {1: {"clusterNodeAction"}},
-	"handlers/config_backup.go":        {1: {"ImportConfigBackup"}},
+	"handlers/config_backup.go":        {1: {"importConfigBackupCore"}},
+	"handlers/autobackup.go":           {1: {"RunAutoBackupOnce"}},
 	"handlers/config_import_v1.go":     {1: {"ImportV1Config"}},
 	"handlers/handlers.go":             {1: {"finishTxApply"}, 2: {"finishTxApply"}},
 	"services/certificates.go":         {1: {"renewExpiringCertificates"}},

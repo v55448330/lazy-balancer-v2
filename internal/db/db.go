@@ -402,6 +402,15 @@ func createTables() error {
 		registration_id INTEGER DEFAULT 0,
 		registration_secret TEXT DEFAULT '',
 		sync_fingerprint TEXT DEFAULT '',
+		-- 自动备份设置(v2.3.x):调度器仅主节点运行,列随 global_config 同步
+		-- 到从节点(从节点不消费);last_run 为节点本地运行态。
+		auto_backup_enabled INTEGER DEFAULT 0,
+		auto_backup_frequency TEXT DEFAULT 'daily',
+		auto_backup_time TEXT DEFAULT '03:00',
+		auto_backup_day INTEGER DEFAULT 1,
+		auto_backup_keep INTEGER DEFAULT 7,
+		auto_backup_sections TEXT DEFAULT '["users","global_config","rules","waf_files","security"]',
+		auto_backup_last_run DATETIME,
 		updated_at DATETIME
 	);
 
@@ -568,6 +577,17 @@ func createTables() error {
 		started_at DATETIME,
 		finished_at DATETIME
 	);
+	CREATE TABLE IF NOT EXISTS auto_backups (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		filename TEXT NOT NULL UNIQUE,
+		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+		status TEXT NOT NULL DEFAULT 'success' CHECK (status IN ('success','failed')),
+		size_bytes INTEGER DEFAULT 0,
+		sections TEXT DEFAULT '[]',
+		trigger_type TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger_type IN ('schedule','manual')),
+		message TEXT DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_auto_backups_created_at ON auto_backups(created_at);
 	INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', 1);
 	`
 
@@ -825,9 +845,17 @@ func runMigrations() error {
 		// COALESCE(...,0) 归一。
 		"security_policies.log_request_body": "INTEGER DEFAULT 0",
 		// 可复用 IP 列表引用列（v2.3.0）：JSON 数组文本，存 security_ip_lists 的
-		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上四列口径）。
+		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上口径）。
 		"security_policies.ip_acl_list_refs":  "TEXT DEFAULT '[]'",
 		"security_policies.ip_whitelist_refs": "TEXT DEFAULT '[]'",
+		// 自动备份(v2.3.x):设置五列 + 节点本地运行态 last_run
+		"global_config.auto_backup_enabled":   "INTEGER DEFAULT 0",
+		"global_config.auto_backup_frequency": "TEXT DEFAULT 'daily'",
+		"global_config.auto_backup_time":      "TEXT DEFAULT '03:00'",
+		"global_config.auto_backup_day":       "INTEGER DEFAULT 1",
+		"global_config.auto_backup_keep":      "INTEGER DEFAULT 7",
+		"global_config.auto_backup_sections":  "TEXT DEFAULT '[\"users\",\"global_config\",\"rules\",\"waf_files\",\"security\"]'",
+		"global_config.auto_backup_last_run":  "DATETIME",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
 	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作

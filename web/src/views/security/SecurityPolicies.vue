@@ -147,12 +147,12 @@
             <div v-else-if="form.mode === 'custom_only'" class="waf-off-hint">仅自定义模式：CRS 不生效，以下 CRS 配置不可用</div>
             <el-form-item label="异常阈值">
               <el-select v-model="form.anomaly_threshold" :disabled="crsFieldsOff || isReadOnly" style="width: 140px">
-                <el-option v-if="[1, 3].includes(form.anomaly_threshold)" :value="1" label="严格（存量档，严重规则任一命中即拦）" disabled />
-                <el-option v-if="form.anomaly_threshold === 3" :value="3" label="严格（存量档，严重规则任一命中即拦）" disabled />
-                <el-option :value="5" label="标准（任一严重规则命中即拦）" />
-                <el-option :value="10" label="宽松（2 条严重规则命中）" />
-                <el-option :value="15" label="很宽松（3 条严重规则命中）" />
-                <el-option :value="20" label="极宽松（4 条严重规则命中）" />
+                <el-option v-if="[1, 3].includes(form.anomaly_threshold)" :value="1" label="严格（阈值 1 · 存量档）" disabled />
+                <el-option v-if="form.anomaly_threshold === 3" :value="3" label="严格（阈值 3 · 存量档）" disabled />
+                <el-option :value="5" label="标准（阈值 5）" />
+                <el-option :value="10" label="宽松（阈值 10）" />
+                <el-option :value="15" label="很宽松（阈值 15）" />
+                <el-option :value="20" label="极宽松（阈值 20）" />
               </el-select>
               <div class="form-tip-line">阈值以异常分为单位：CRS 严重规则每条 +5（错误 +4、警告 +3），自定义「计分」规则按其分值累加；累计达到阈值拦截，低于阈值的命中不拦截但记录为检测事件（计入安全总览「今日检测」）</div>
             </el-form-item>
@@ -201,7 +201,7 @@
                 >{{ opt.label }}</el-tag>
               </div>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
-              <div class="form-tip-line">初始化（901）与拦截评估（949/959）为系统基础规则，随策略自动加载</div>
+              <div class="form-tip-line">初始化（901）与拦截评估（949/959）为系统基础规则，随策略自动加载；通用误报豁免（999）在选择全部规则时自动包含</div>
               <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：置于表单项内控件列，
                    顺序 select → 说明 → 警告，与说明文字保持 6px 间距（见样式
                    .form-tip-line + .wizard-alert） -->
@@ -988,6 +988,12 @@ const parseCustomRuleIds = (raw: string | undefined): number[] => {
 // 避免渲染 ghost 标签与参与跨策略重复告警比较。
 const CRS_INFRA_GROUP_CODES = ['01', '49', '59']
 
+// 下拉隐藏组码（v2.3.x 用户裁定）：组码 99（REQUEST-999 通用排除）内容为 55 条
+// SecRuleUpdateTargetById 官方误报豁免而非检测规则——默认「全部规则」时经 glob
+// 字母序自动包含且序正确，自选组时无需（也不应）显式选择；不提供下拉选项，存量
+// 存储值读回时以 ghost 标签给出专属说明，写回保留（存储契约不变）。
+const CRS_HIDDEN_GROUP_CODES = ['99']
+
 // 基础设施 ID 前缀（901 初始化/949 请求评估/959 响应评估）：规则组选择全部剔除
 //（后端写入面同语义剥离，提供选项=选了保存后消失）；排除选择仅剔 901（后端
 // 硬拒，提供选项=必现 400）——949/959 保留可选（检测模式排除评估是合法调优）。
@@ -1026,9 +1032,9 @@ const crsOptionPhase = (filename: string): string => (/^RESPONSE-/i.test(filenam
 const crsKnownTargetValues = computed<Set<string>>(() =>
   new Set([...crsGroupOptions.value.map((o) => o.value), ...crsIndexOptions.value.map((o) => o.id)]))
 
-// ghost 兜底：已选/已存值不在已知值集（CRS 更新后消失的规则 ID、旧字符串数组遗留的
-// 文件名/区间形态）时派生可读标签，避免控件回退显示裸值。级联无法映射路径的值
-//（多选侧 ghost 标签 / 排除行 ghost 文本）共用此语义。
+// ghost 兜底：已选/已存值不在已知值集（CRS 更新后消失的规则 ID/组码、旧字符串数组
+// 遗留的文件名/区间形态）时派生可读标签，避免控件回退显示裸值。级联无法映射路径
+// 的值（多选侧 ghost 标签 / 排除行 ghost 文本）共用此语义。
 interface CrsGhostOption { value: string; label: string; title: string }
 const crsGhostOptionFor = (value: string): CrsGhostOption | null => {
   const v = value.trim()
@@ -1044,6 +1050,17 @@ const crsGhostOptionFor = (value: string): CrsGhostOption | null => {
     // 陈旧判定仅在索引成功加载后生效——加载失败/在途时不得把规则 ID 误标为已移除
     if (!crsIndexLoaded.value) return null
     return { value: v, label: `${v} —（当前 CRS 已无此规则）`, title: v }
+  }
+  if (/^\d{2}$/.test(v)) {
+    // 两数字组码组：旧版 CRS 遗留的失效组码（如 10/12，当前 CRS 4.x 已无对应文件）。
+    // 守卫：规则文件列表未加载/失败（该列表恒 27 组，空=未就绪）时不标记，防误报。
+    if (crsRuleOptions.value.length === 0) return null
+    if (CRS_HIDDEN_GROUP_CODES.includes(v)) {
+      const label = `${v} · 通用误报豁免（选择全部规则时自动包含）`
+      return { value: v, label, title: label }
+    }
+    const label = `${v} —（当前 CRS 已无此规则组，可删除）`
+    return { value: v, label, title: label }
   }
   return { value: v, label: v, title: v }
 }
@@ -1088,31 +1105,33 @@ const isEvalGroupExclusionTarget = (target: string): boolean => {
 const blockingEvalExclusionAlert = computed(
   () => form.value.mode === 'blocking' && crsExcludedRows.value.some((row) => row.scope === 'all' && isEvalGroupExclusionTarget(row.target)),
 )
-
 const crsGroupOptions = computed(() => {
   const seen = new Map<string, string>()
   for (const rule of crsRuleOptions.value) {
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(rule.filename)
     const code = match?.[1]
-    // 系统基础组（01/49/59）不提供选择——后端强制加载
-    if (!code || seen.has(code) || CRS_INFRA_GROUP_CODES.includes(code)) continue
+    // 系统基础组（01/49/59）不提供选择——后端强制加载；99 通用误报豁免非检测
+    // 组（全部规则时自动包含），同样不提供选项（v2.3.x 用户裁定）
+    if (!code || seen.has(code) || CRS_INFRA_GROUP_CODES.includes(code) || CRS_HIDDEN_GROUP_CODES.includes(code)) continue
     seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
 
-// 排除选择器的组选项：仅剔 "01"（后端硬拒，提供即必现 400）；49/59 保留可选
-//（检测模式排除评估规则是合法调优，拦截模式下另有 blockingEvalExclusionAlert 警告）
+// 排除选择器的组选项：仅剔 "01"（后端硬拒，提供即必现 400）与 "99"（非检测组，
+// 误报豁免不应被排除）；49/59 保留可选（检测模式排除评估规则是合法调优，拦截模式
+// 下另有 blockingEvalExclusionAlert 警告）
 const crsExclusionGroupOptions = computed(() => {
   const seen = new Map<string, string>()
   for (const rule of crsRuleOptions.value) {
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(rule.filename)
     const code = match?.[1]
-    if (!code || seen.has(code) || code === '01') continue
+    if (!code || seen.has(code) || code === '01' || CRS_HIDDEN_GROUP_CODES.includes(code)) continue
     seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
+
 // 两个 CRS 选择器（规则组多选 / 排除目标每行单选）共用同一懒加载级联实现：一级
 // 返回组节点（label 沿用「请求 · 942 · SQL 注入」），展开组时才从已缓存索引按
 // 文件名两位组号切出该组规则叶（相位与组号一一对应：REQUEST/RESPONSE 前缀决定）。
@@ -1345,9 +1364,8 @@ const crsRuleIdSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^
 // CRS 配置面禁用门(2026-09-09 四态化):off=全关、custom_only=仅自定义,两者 CRS 均不生效
 const crsFieldsOff = computed(() => form.value.mode === 'off' || form.value.mode === 'custom_only')
 
-const THRESHOLD_LABELS: Record<number, string> = { 5: '标准（任一严重规则命中即拦）', 10: '宽松（2 条严重规则命中）', 15: '很宽松（3 条严重规则命中）', 20: '极宽松（4 条严重规则命中）', 1: '严格（存量档，严重规则任一命中即拦）', 3: '严格（存量档，严重规则任一命中即拦）' }
+const THRESHOLD_LABELS: Record<number, string> = { 5: '标准（阈值 5）', 10: '宽松（阈值 10）', 15: '很宽松（阈值 15）', 20: '极宽松（阈值 20）', 1: '严格（阈值 1 · 存量档）', 3: '严格（阈值 3 · 存量档）' }
 const thresholdLabel = (value: number): string => THRESHOLD_LABELS[value] ?? String(value)
-
 const ACL_MODE_LABELS: Record<string, string> = { deny: '黑名单', allow: '白名单', bypass: '免检测' }
 const aclModeLabel = computed(() => ACL_MODE_LABELS[form.value.ip_acl_mode] ?? form.value.ip_acl_mode)
 

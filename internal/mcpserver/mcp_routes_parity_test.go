@@ -94,6 +94,15 @@ var mcpUncoveredRoutes = map[string]string{
 	"PUT /api/v1/settings/oidc":       "OIDC 配置管理(低频管理面板操作)",
 	"POST /api/v1/settings/oidc/test": "OIDC 发现探测(配置向导专用,面板交互)",
 	"DELETE /api/v1/settings/oidc":    "OIDC 配置管理(低频管理面板操作)",
+	// —— 自动备份(v2.3.x):备份/还原链路为低频管理面板操作,且备份文件含
+	//    私钥与凭证明文(下载为二进制流,MCP 通道不支持);还原覆盖全量配置,
+	//    面板有二次确认交互 ——
+	"GET /api/v1/settings/auto-backup":     "自动备份设置与备份列表(低频管理面板操作)",
+	"PUT /api/v1/settings/auto-backup":     "自动备份设置保存(低频管理面板操作)",
+	"POST /api/v1/auto-backup/run":         "手动触发一次完整备份(低频管理面板操作;备份含凭证材料)",
+	"DELETE /api/v1/auto-backup/:id":       "备份删除(低频管理面板操作;面板有二次确认)",
+	"POST /api/v1/auto-backup/:id/restore": "备份还原——覆盖全量配置(低频管理面板操作;面板有二次确认)",
+	"GET /api/v1/auto-backup/:id/download": "备份文件下载(lbbak 二进制流含私钥与凭证明文,MCP 通道不支持二进制下载)",
 	// —— 面板表单流程专属 ——
 	"POST /api/v1/certificate-configs/test": "面板「先测后存」表单流程：测试尚未保存的 DNS 配置（凭证随请求体内联提交）；Agent 流程中配置已落库，用 test_certificate_config（/certificate-configs/:id/test）",
 	// —— 面板展示 / 监控抓取（REST 专用只读数据）——

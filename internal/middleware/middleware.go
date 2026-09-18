@@ -373,6 +373,15 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/config/import/validate", h.ValidateConfigImport)
 				admin.POST("/config/import/v1", h.ImportV1Config)
 
+				// 自动备份（v2.3.x）：设置/手动备份/删除/还原/下载（handler 内均含
+				// IsMaster 门，与 ExportConfigBackup 同口径——仅主节点）
+				admin.GET("/settings/auto-backup", h.AutoBackupSettings)
+				admin.PUT("/settings/auto-backup", h.UpdateAutoBackupSettings)
+				admin.POST("/auto-backup/run", h.RunAutoBackupNow)
+				admin.DELETE("/auto-backup/:id", h.DeleteAutoBackup)
+				admin.POST("/auto-backup/:id/restore", h.RestoreAutoBackup)
+				admin.GET("/auto-backup/:id/download", h.DownloadAutoBackup)
+
 				// OIDC 认证集成(v2.3.0):显示/测试/修改/删除。
 				admin.GET("/settings/oidc", h.OIDCSettings)
 				admin.PUT("/settings/oidc", h.OIDCSettingsUpdate)

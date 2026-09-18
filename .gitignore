@@ -16,6 +16,8 @@ logs/
 logs-slave/
 waf/
 waf-slave/
+# Auto backup artifacts (含私钥与凭证明文，绝不入库)
+backup*/
 
 # Test UI (staging)
 test-ui/
@@ -82,3 +84,4 @@ openspec/
 # AI agent 本地工具目录(会话规则/技能,非项目代码)
 .omp/
 .agent/
+story.md

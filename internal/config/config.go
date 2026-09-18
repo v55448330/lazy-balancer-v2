@@ -34,7 +34,8 @@ type Config struct {
 	// JWT
 	JWTSecret string `json:"jwt_secret"`
 
-	// Admin
+	// Backup: 自动备份落盘目录（调度器仅主节点运行）
+	BackupDir string `json:"backup_dir"`
 }
 
 func Load(path string) *Config {
@@ -88,6 +89,11 @@ func Load(path string) *Config {
 			}
 		}
 	}
+
+	// 自动备份目录(v2.3.x):默认挂 DataDir 同级 backup(容器 /app/data → /app/backup，
+	// 本地 ./data → ./backup)；BACKUP_DIR env 可覆盖。计算在配置文件解析之后——
+	// data_dir 可被文件覆盖，目录锚点必须取最终值。
+	cfg.BackupDir = getEnv("BACKUP_DIR", filepath.Join(filepath.Dir(cfg.DataDir), "backup"))
 
 	// JWT secret: env wins; otherwise persist a random one so tokens survive
 	// restarts and the secret is never predictable.

@@ -20,6 +20,8 @@ services:
       - ./logs:/app/logs
       - ./certs:/app/certs
       - ./waf:/app/waf
+      # 自动备份落盘目录（v2.3.x，仅主节点调度写入；测试环境两容器共享目录无竞争）
+      - ./backup:/app/backup
     environment:
       - TZ=Asia/Shanghai
       - NODE_NAME=master
@@ -42,14 +44,14 @@ services:
         max-size: "50m"
         max-file: "5"
     container_name: lazy-balancer-slave
-    ports:
-      - "8001:8000"
     volumes:
       - ./data-slave:/app/data
       - ./logs-slave:/app/logs
       - ./certs-slave:/app/certs
       # 独立 WAF 目录：两节点的 CRS/IP2Region 每日更新会并发写共享目录，存在竞争
       - ./waf-slave:/app/waf
+      # 与主节点共享备份目录：从节点不调度写入，仅目录存在以保配置路径一致
+      - ./backup:/app/backup
     environment:
       - TZ=Asia/Shanghai
       - NODE_NAME=slave-test

@@ -127,6 +127,7 @@
           <div class="backup-actions">
             <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">导出</el-button>
             <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
+            <el-button size="small" :disabled="backupDisabled" @click="openAutoBackupDialog">自动备份</el-button>
           </div>
         </div>
 
@@ -293,6 +294,96 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="autoBackupVisible" width="min(760px, 94vw)" :close-on-click-modal="false" class="backup-dialog" destroy-on-close @opened="onAutoBackupOpened">
+      <template #header>
+        <div class="backup-dialog-header">
+          <el-icon class="backup-dialog-icon"><Timer /></el-icon>
+          <div>
+            <div class="backup-dialog-title">自动备份</div>
+            <div class="backup-dialog-sub">定时将配置备份到服务器 backup 目录（仅主节点）</div>
+          </div>
+        </div>
+      </template>
+      <el-form label-width="110px" class="auto-backup-form">
+        <el-form-item label="启用">
+          <el-switch v-model="autoBackupForm.enabled" />
+          <el-text type="info" size="small" class="tip-inline">调度器仅主节点运行；主从切换后需重启进程才开始备份</el-text>
+        </el-form-item>
+        <el-form-item label="频率">
+          <el-radio-group v-model="autoBackupForm.frequency">
+            <el-radio value="daily">日</el-radio>
+            <el-radio value="weekly">周</el-radio>
+            <el-radio value="monthly">月</el-radio>
+          </el-radio-group>
+          <el-select v-if="autoBackupForm.frequency === 'weekly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
+            <el-option v-for="(label, idx) in AUTO_BACKUP_WEEKDAYS" :key="label" :value="idx + 1" :label="label" />
+          </el-select>
+          <el-select v-else-if="autoBackupForm.frequency === 'monthly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
+            <el-option v-for="d in 28" :key="d" :value="d" :label="`${d} 日`" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备份时间">
+          <el-time-select v-model="autoBackupForm.time" start="00:00" end="23:30" step="00:30" style="width: 120px" />
+          <el-text type="info" size="small" class="tip-inline">按系统配置时区执行；停机跨槽会在下次启动补跑一次</el-text>
+        </el-form-item>
+        <el-form-item label="保留份数">
+          <el-input-number v-model="autoBackupForm.keep" :min="1" :max="100" controls-position="right" style="width: 120px" />
+          <el-text type="info" size="small" class="tip-inline">超出自动清理；失败记录另保留最近 20 条</el-text>
+        </el-form-item>
+        <el-form-item label="备份范围">
+          <div class="section-chips auto-backup-chips">
+            <button
+              v-for="sec in BACKUP_SECTIONS" :key="sec.key"
+              type="button" class="section-chip"
+              :class="{ 'is-active': autoBackupSections.includes(sec.key) }"
+              @click="toggleAutoBackupSection(sec.key)"
+            >{{ sec.label }}</button>
+          </div>
+          <div class="backup-dialog-actions">
+            <el-button text size="small" @click="autoBackupSections = []">全不选</el-button>
+            <el-button text size="small" @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
+            <el-button text size="small" type="primary" :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">立即备份</el-button>
+          </div>
+          <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个数据分类（仅「全局配置」的备份无法还原）</el-text>
+        </el-form-item>
+      </el-form>
+      <div class="auto-backup-list">
+        <div class="auto-backup-list-title">备份文件</div>
+        <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small">
+          <el-table-column label="备份时间" width="150">
+            <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="70">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small" effect="light">
+                {{ row.status === 'success' ? '成功' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="内容" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">{{ autoBackupScopeSummary(row) }}</template>
+          </el-table-column>
+          <el-table-column label="大小" width="90">
+            <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="140" align="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="downloadAutoBackup(row)">下载</el-button>
+              <el-button v-if="row.status === 'success'" link type="warning" size="small" @click="restoreAutoBackup(row)">还原</el-button>
+              <el-button link type="danger" size="small" @click="deleteAutoBackup(row)">删除</el-button>
+            </template>
+          </el-table-column>
+          <template #empty><el-empty description="暂无备份" :image-size="70" /></template>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="autoBackupVisible = false">取消</el-button>
+        <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid" @click="saveAutoBackupSettings">
+          保存设置
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 
   <!-- R72 十四次（用户裁决）：写操作验证「支持的操作」清单——与后端 mfaStepUpGuard
@@ -317,7 +408,8 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
-import { Setting, InfoFilled, Check, View, Upload, Download } from '@element-plus/icons-vue'
+import { formatDate } from '@/utils/date'
+import { Setting, InfoFilled, Check, View, Upload, Download, Timer } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
@@ -449,6 +541,191 @@ const exportBackup = async (): Promise<void> => {
     // 错误提示已由全局拦截器（含 Blob 错误体解析）展示
   } finally {
     exporting.value = false
+  }
+}
+
+// —— 自动备份（v2.3.x）：设置/手动备份/列表/下载/还原/删除 ——
+const AUTO_BACKUP_WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+interface AutoBackupRow {
+  id: number
+  filename: string
+  created_at: string
+  status: string
+  size_bytes: number
+  sections: string[]
+  trigger_type: string
+  message: string
+}
+
+interface AutoBackupSettingsResponse {
+  enabled: boolean
+  frequency: string
+  time: string
+  day: number
+  keep: number
+  sections: string[]
+  last_run: string | null
+  backups: AutoBackupRow[]
+}
+
+const autoBackupVisible = ref(false)
+const autoBackupLoading = ref(false)
+const autoBackupSaving = ref(false)
+const autoBackupRunning = ref(false)
+const autoBackupForm = ref({ enabled: false, frequency: 'daily', time: '03:00', day: 1, keep: 7 })
+const autoBackupSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
+const autoBackupRows = ref<AutoBackupRow[]>([])
+
+// 与导出按钮同口径：范围非空且非仅「全局配置」
+const autoBackupSectionsValid = computed(() => {
+  const secs = autoBackupSections.value
+  return secs.length > 0 && !(secs.length === 1 && secs[0] === 'global_config')
+})
+
+const openAutoBackupDialog = (): void => {
+  if (backupDisabled.value) return
+  autoBackupVisible.value = true
+}
+
+const fetchAutoBackup = async (): Promise<void> => {
+  autoBackupLoading.value = true
+  try {
+    const res = await request.get<{ data: AutoBackupSettingsResponse }>('/settings/auto-backup', { silent: true })
+    const d = res.data
+    autoBackupForm.value = {
+      enabled: d.enabled,
+      frequency: d.frequency || 'daily',
+      time: d.time || '03:00',
+      day: d.day || 1,
+      keep: d.keep || 7,
+    }
+    autoBackupSections.value = d.sections?.length ? d.sections : BACKUP_SECTIONS.map((s) => s.key)
+    autoBackupRows.value = d.backups || []
+  } catch {
+    // silent：打开弹框时拉取失败保持空态，全局拦截器已提示
+  } finally {
+    autoBackupLoading.value = false
+  }
+}
+
+const onAutoBackupOpened = (): void => {
+  void fetchAutoBackup()
+}
+
+const toggleAutoBackupSection = (key: string): void => {
+  autoBackupSections.value = autoBackupSections.value.includes(key)
+    ? autoBackupSections.value.filter((k) => k !== key)
+    : [...autoBackupSections.value, key]
+}
+
+const saveAutoBackupSettings = async (): Promise<boolean> => {
+  if (!autoBackupSectionsValid.value || autoBackupSaving.value) return false
+  autoBackupSaving.value = true
+  try {
+    await request.put('/settings/auto-backup', { ...autoBackupForm.value, sections: autoBackupSections.value })
+    mfaAwareSuccess('自动备份设置已保存')
+    return true
+  } catch {
+    // 全局拦截器已提示（含 428 MFA 弹码重试）
+    return false
+  } finally {
+    autoBackupSaving.value = false
+  }
+}
+
+// 「立即备份」先保存当前表单再触发——避免改了范围未保存的困惑
+const runAutoBackupNow = async (): Promise<void> => {
+  if (autoBackupRunning.value) return
+  if (!autoBackupSectionsValid.value) {
+    ElMessage.warning('备份范围至少需选择一个数据分类（仅「全局配置」不可）')
+    return
+  }
+  if (!(await saveAutoBackupSettings())) return
+  autoBackupRunning.value = true
+  try {
+    await request.post('/auto-backup/run')
+    mfaAwareSuccess('手动备份完成')
+    await fetchAutoBackup()
+  } catch {
+    // 全局拦截器已提示
+  } finally {
+    autoBackupRunning.value = false
+  }
+}
+
+const formatBackupSize = (bytes: number): string => {
+  if (!bytes || bytes <= 0) return '-'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+}
+
+const autoBackupScopeSummary = (row: AutoBackupRow): string => {
+  const labels = (row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
+  const scope = labels.length > 0 ? labels.join('、') : '-'
+  const trigger = row.trigger_type === 'manual' ? '手动' : '定时'
+  return row.message ? `${scope}（${trigger}）· ${row.message}` : `${scope}（${trigger}）`
+}
+
+const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
+  try {
+    // 备份含证书与私钥，体积可能较大，禁用 30s 默认超时
+    const blob = await request.get<Blob>(`/auto-backup/${row.id}/download`, { responseType: 'blob', timeout: 0 })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = row.filename
+    link.click()
+    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    // 全局拦截器已提示（含 Blob 错误体解析）
+  }
+}
+
+const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
+  try {
+    await ElMessageBox.confirm(
+      `将使用备份「${row.filename}」覆盖当前全部配置（规则、用户、API 密钥、证书任务及全部凭证），此操作不可撤销。确认还原？`,
+      '还原配置',
+      { type: 'warning', confirmButtonText: '确认还原', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await request.post<{ message?: string }>(`/auto-backup/${row.id}/restore`)
+    autoBackupVisible.value = false
+    await ElMessageBox.alert(res.message || '配置还原成功', '还原完成', {
+      confirmButtonText: '刷新页面',
+      type: 'success',
+      showClose: false,
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+    })
+    window.location.reload()
+  } catch {
+    // 全局拦截器已提示（还原失败已回滚，配置未受影响）
+  }
+}
+
+const deleteAutoBackup = async (row: AutoBackupRow): Promise<void> => {
+  try {
+    await ElMessageBox.confirm(`确认删除备份「${row.filename}」？删除后不可恢复。`, '删除备份', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await request.delete(`/auto-backup/${row.id}`)
+    mfaAwareSuccess('备份已删除')
+    await fetchAutoBackup()
+  } catch {
+    // 全局拦截器已提示
   }
 }
 
@@ -1097,4 +1374,11 @@ const handleSave = async () => {
 :deep(.tip-link.el-link:hover) {
   color: var(--el-color-info);
 }
+
+/* 自动备份弹框 */
+.auto-backup-form { padding: 4px 0; }
+.auto-backup-chips { flex-wrap: wrap; }
+.auto-backup-scope-hint { display: block; margin-top: 4px; line-height: 1.5; }
+.auto-backup-list { margin-top: 16px; }
+.auto-backup-list-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 </style>

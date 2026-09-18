@@ -1747,42 +1747,38 @@ func clampBackupAuditLogSizeMB(value any) (any, bool) {
 	return value, false
 }
 
-func (h *Handlers) ExportConfigBackup(c *gin.Context) {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
-		return
-	}
-	qs := c.Query("sections")
-	sel := parseSectionsParam(qs)
-	if qs == "" {
-		sel = nil
-	}
+// errUnknownBackupSection / errGlobalOnlyBackup:buildLbbakExport 的 4xx 语义
+// 哨兵——薄壳端点据此保持原 400 文案,其余错误一律 500「导出失败: …」。
+var (
+	errUnknownBackupSection = errors.New("未知的配置分类")
+	errGlobalOnlyBackup     = errors.New("导出至少需选择一个数据分类（仅全局配置的备份无法被导入）")
+)
+
+// buildLbbakExport 生产 lbbak 备份净荷(纯逻辑:无 HTTP、无审计)。sel 为空
+// 表示全部分类;返回净荷字节、实际导出分类(空选择归一为全部 5 类)、各表
+// 行数摘要(与导入审计同文案)与是否包含规则库文件本体。HTTP 导出端点与
+// 自动/手动备份执行器(autobackup_runner.go)共用。
+func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload []byte, exportedSections []string, countsSummary string, includesWafFiles bool, err error) {
 	sectionTables, includeGlobal, ok := configBackupSectionTables(sel)
 	if !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
-		return
+		return nil, nil, "", false, errUnknownBackupSection
 	}
 	// BE-C1-6:仅「全局配置」的导出产物不含任何数据表,自家导入器必拒
 	// (「不包含任何已知数据表」)——导出侧前置拒绝,不产死备份。
 	if len(sectionTables) == 0 && includeGlobal {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导出至少需选择一个数据分类（仅全局配置的备份无法被导入）"})
-		return
+		return nil, nil, "", false, errGlobalOnlyBackup
 	}
-	ctx := c.Request.Context()
 	backup := configBackup{
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
 		Tables: map[string][]map[string]any{},
 	}
 	tx, err := db.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-		return
+		return nil, nil, "", false, err
 	}
 	configRows, err := dumpTable(ctx, tx, "global_config")
 	if err != nil {
-		err = errors.Join(err, tx.Rollback())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-		return
+		return nil, nil, "", false, errors.Join(err, tx.Rollback())
 	}
 	if len(configRows) > 0 && includeGlobal {
 		backup.Config = configRows[0]
@@ -1796,9 +1792,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		}
 		rows, err := dumpTable(ctx, tx, table)
 		if err != nil {
-			err = errors.Join(err, tx.Rollback())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-			return
+			return nil, nil, "", false, errors.Join(err, tx.Rollback())
 		}
 		backup.Tables[table] = rows
 	}
@@ -1807,38 +1801,64 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		Config map[string]any              `json:"config"`
 	}{backup.Tables, backup.Config})
 	if err != nil {
-		err = errors.Join(err, tx.Rollback())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-		return
+		return nil, nil, "", false, errors.Join(err, tx.Rollback())
 	}
 	sum := sha256.Sum256(checksumPayload)
 	backup.Meta.Checksum = hex.EncodeToString(sum[:])
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
-		return
+		return nil, nil, "", false, err
 	}
 	// v2.3.0(用户裁定 2026-09-18):导出恒为 lbbak tar.gz 包——勾选「规则库
 	// 数据库」时附 CRS/IP2Region 文件本体,未勾选时仅 config.json;纯 JSON 仅作
 	// 旧备份导入兼容,不再产出。
 	backupJSON, err := json.Marshal(backup)
-	if err == nil {
-		var bundle *services.WafFileBundle
-		if sectionTables["security_crs_version"] {
-			bundle = services.BuildWafFileBundle()
-		}
-		payload, perr := buildLbbakPayload(backupJSON, bundle)
-		if perr == nil {
-			detail := "导出为完整备份（含凭证与证书材料），请妥善保管"
-			if bundle != nil {
-				detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管"
-			}
-			recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), detail, services.AuditResultPart("success")))
-			writeLbbakResponse(c, payload)
-			return
-		}
-		err = perr
+	if err != nil {
+		return nil, nil, "", false, err
 	}
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
+	var bundle *services.WafFileBundle
+	if sectionTables["security_crs_version"] {
+		bundle = services.BuildWafFileBundle()
+	}
+	payload, err = buildLbbakPayload(backupJSON, bundle)
+	if err != nil {
+		return nil, nil, "", false, err
+	}
+	exportedSections = append([]string(nil), sel...)
+	if len(exportedSections) == 0 {
+		for _, sec := range configBackupSections {
+			exportedSections = append(exportedSections, sec.Key)
+		}
+	}
+	return payload, exportedSections, importCountsDetail(backup.Tables), bundle != nil, nil
+}
+
+func (h *Handlers) ExportConfigBackup(c *gin.Context) {
+	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
+		return
+	}
+	qs := c.Query("sections")
+	sel := parseSectionsParam(qs)
+	if qs == "" {
+		sel = nil
+	}
+	payload, _, countsSummary, includesWafFiles, err := h.buildLbbakExport(c.Request.Context(), sel)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "导出失败: " + err.Error()
+		if errors.Is(err, errUnknownBackupSection) || errors.Is(err, errGlobalOnlyBackup) {
+			status = http.StatusBadRequest
+			message = err.Error()
+		}
+		c.JSON(status, models.APIResponse{Code: status, Message: message})
+		return
+	}
+	detail := "导出为完整备份（含凭证与证书材料），请妥善保管"
+	if includesWafFiles {
+		detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管"
+	}
+	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(countsSummary, detail, services.AuditResultPart("success")))
+	writeLbbakResponse(c, payload)
 }
 
 func (h *Handlers) ImportConfigBackup(c *gin.Context) {
@@ -1849,11 +1869,26 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if !limitConfigImportBody(c) {
 		return
 	}
+	if raw, rerr := io.ReadAll(c.Request.Body); rerr == nil {
+		h.importConfigBackupCore(c, raw, true, "", "导入")
+		return
+	}
+	// 读体失败(如 MaxBytesReader 中途掐断):不替换 body,交由 core 内
+	// ShouldBindJSON 走原 413/400 判定路径(与抽取前行为一致)。
+	h.importConfigBackupCore(c, nil, false, "", "导入")
+}
+
+// importConfigBackupCore 携带导入全量逻辑,HTTP 导入端点与自动备份还原端点
+// (autobackup.go)共用。48MB 上限由 HTTP 调用方 limitConfigImportBody 把守。
+// dataOK=false 表示请求体读取失败,body 保持原样(错误透传给 ShouldBindJSON,
+// 保持原 413/400 判定);filename 非空时进入审计来源(还原路径);action 为
+// 审计动作与结果文案前缀(「导入」/「还原」)。
+func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bool, filename, action string) {
 	// v2.3.0 lbbak:tar.gz 备份先解包校验,内部 config.json 走既有 V2 流程
 	var lbbakFiles *lbbakPayload
-	if raw, rerr := io.ReadAll(c.Request.Body); rerr == nil {
-		if isLbbakBytes(raw) {
-			payload, perr := parseLbbak(raw)
+	if dataOK {
+		if isLbbakBytes(data) {
+			payload, perr := parseLbbak(data)
 			if perr != nil {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: perr.Error()})
 				return
@@ -1861,7 +1896,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			lbbakFiles = payload
 			c.Request.Body = io.NopCloser(bytes.NewReader(payload.ConfigJSON))
 		} else {
-			c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+			c.Request.Body = io.NopCloser(bytes.NewReader(data))
 		}
 	}
 	exportedTables := map[string]bool{}
@@ -1899,7 +1934,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if usedLegacyChecksum {
 		// R43 F-D: 旧格式校验和仅覆盖数据表、不含全局配置区，完整性保障较弱，
 		// 显式记审计警告以便追溯（预览端点只读不落审计，避免 UI 选择文件即刷屏）。
-		recordAudit(c, "导入警告", "配置备份", "使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份")
+		recordAudit(c, action+"警告", "配置备份", "使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份")
 	}
 	// R38 C-3: 空域名行软跳过须先于逐行校验（validateV2BackupRules）——否则
 	// 空域名+非法端口行会先行整包 400，与「空域名规则一律软跳过」语义不符；
@@ -2036,16 +2071,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 				delete(backup.Tables, t)
 			}
 			wafMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", warningWafMetadataSkipped)
+			recordAudit(c, action+"警告", "配置备份", warningWafMetadataSkipped)
 		case crsMissing:
 			// BE-C1-10:单侧文件缺失→仅跳过对应版本表(记录与文件同批落地)。
 			delete(backup.Tables, "security_crs_version")
 			wafCRSMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", warningWafCRSMetadataSkipped)
+			recordAudit(c, action+"警告", "配置备份", warningWafCRSMetadataSkipped)
 		case xdbMissing:
 			delete(backup.Tables, "security_ip2region_version")
 			wafXdbMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", warningWafXdbMetadataSkipped)
+			recordAudit(c, action+"警告", "配置备份", warningWafXdbMetadataSkipped)
 		}
 	}
 	for table := range backup.Tables {
@@ -2064,7 +2099,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// A40-2-F3:备份 users 表缺席时,本地用户根本未被触碰——不告警不吊销。
 	if importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
 		operatorReplaced = true
-		recordAudit(c, "导入警告", "配置备份", "备份不含当前操作账户——系统数据将被替换,导入后请使用备份内的管理员账户登录")
+		recordAudit(c, action+"警告", "配置备份", "备份不含当前操作账户——系统数据将被替换，"+action+"后请使用备份内的管理员账户登录")
 	}
 	// R39-14:「系统数据」替换 ACME 配置表时,live 启用规则的引用可能悬挂
 	// (与 C-04 删除 409 守卫同果)——预检并降级警告(不阻断,尊重用户选择)。
@@ -2088,7 +2123,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 	}
 	if acmeDanglingRules > 0 {
-		recordAudit(c, "导入警告", "配置备份", fmt.Sprintf("导入后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
+		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
 	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
@@ -2107,7 +2142,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			err = session.abort(err)
-			recordAudit(c, "导入失败", "配置备份", err.Error())
+			recordAudit(c, action+"失败", "配置备份", err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清空表 " + table + " 失败，已回滚: " + err.Error()})
 			return
 		}
@@ -2126,8 +2161,8 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
 			err = session.abort(err)
-			recordAudit(c, "导入失败", "配置备份", err.Error())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
+			recordAudit(c, action+"失败", "配置备份", err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
 			return
 		}
 	}
@@ -2148,8 +2183,8 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
           SELECT 1 FROM security_custom_rules r
           WHERE r.id=je.value AND COALESCE(r.enabled,1)=1)))`); err != nil {
 		err = session.abort(err)
-		recordAudit(c, "导入失败", "配置备份", "off→custom_only 归一: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
+		recordAudit(c, action+"失败", "配置备份", "off→custom_only 归一: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
 		return
 	} else if n, _ := result.RowsAffected(); n > 0 {
 		services.Logf("info", "配置导入：%d 个 mode=off 且挂启用自定义规则的策略已归一为 custom_only（旧语义兼容）", n)
@@ -2166,11 +2201,11 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// （未发生降级即跳过提升），单默认页+自定义页的备份不再静默改写默认页内容。
 	stockBlockPage := renderDefaultBlockPage(loadBrandingConfig(h.cfg.DataDir))
 	if _, err := tx.ExecContext(ctx, `WITH demoted AS (SELECT id, content FROM security_block_pages WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)) UPDATE security_block_pages SET content=(SELECT content FROM demoted WHERE content NOT IN ('', ?) ORDER BY id DESC LIMIT 1) WHERE id=(SELECT MIN(id) FROM security_block_pages WHERE is_default=1) AND content IN ('', ?) AND EXISTS (SELECT 1 FROM demoted WHERE content NOT IN ('', ?))`, stockBlockPage, stockBlockPage, stockBlockPage); err != nil {
-		recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
+		recordAudit(c, action+"警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
 		err = session.abort(err)
-		recordAudit(c, "导入失败", "配置备份", "降级多余的默认拦截页失败: "+err.Error())
+		recordAudit(c, action+"失败", "配置备份", "降级多余的默认拦截页失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "降级多余的默认拦截页失败，已回滚: " + err.Error()})
 		return
 	}
@@ -2180,16 +2215,16 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	reseedApplyFailed := false
 	var hasDefaultBlockPage int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage); err != nil {
-		recordAudit(c, "导入警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
+		recordAudit(c, action+"警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
 	} else if hasDefaultBlockPage == 0 {
 		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
 		if err != nil {
-			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种失败: "+err.Error())
+			recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种失败: "+err.Error())
 		} else if affected, _ := result.RowsAffected(); affected == 0 {
 			// R42 B42-1: 备份携带 id=1 的非默认行时 OR IGNORE 因 PK 冲突静默
 			// no-op，导入后仍旧零默认页且无任何 error——B3 的告警机制不会
 			// 触发，此处显式补记警告以便追溯。
-			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种未生效（id=1 已存在）")
+			recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种未生效（id=1 已存在）")
 		} else {
 			reseedBlockPageNeeded = true
 		}
@@ -2222,7 +2257,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE username=?", importUsername).Scan(&importUserID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			err = session.abort(err)
-			recordAudit(c, "导入失败", "配置备份", "重映射规则操作者失败: "+err.Error())
+			recordAudit(c, action+"失败", "配置备份", "重映射规则操作者失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重映射规则操作者失败，已回滚: " + err.Error()})
 			return
 		}
@@ -2233,14 +2268,14 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if importUserID.Valid {
 		if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
 			err = session.abort(err)
-			recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
+			recordAudit(c, action+"失败", "配置备份", "更新规则操作者失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
 			return
 		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
 		err = session.abort(err)
-		recordAudit(c, "导入失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
+		recordAudit(c, action+"失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
 		return
 	}
@@ -2268,7 +2303,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		if len(sets) > 0 {
 			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+joinStrings(sets, ",")+" WHERE id=1", values...); err != nil {
 				err = session.abort(err)
-				recordAudit(c, "导入失败", "配置备份", err.Error())
+				recordAudit(c, action+"失败", "配置备份", err.Error())
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入全局配置失败，已回滚: " + err.Error()})
 				return
 			}
@@ -2296,15 +2331,15 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
-		message := "配置导入失败: " + err.Error()
+		message := "配置" + action + "失败: " + err.Error()
 		if importFailurePhase(err) == importPhaseCaddy {
 			status = http.StatusBadRequest
-			message = "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()
+			message = "备份生成的配置未通过 Caddy 验证，未执行" + action + ": " + err.Error()
 		}
 		if importFailurePhase(err) == importPhaseQueue {
-			message = "配置已导入但证书任务恢复失败: " + err.Error()
+			message = "配置已" + action + "但证书任务恢复失败: " + err.Error()
 		}
-		auditAction := "导入失败"
+		auditAction := action + "失败"
 		if importFailurePhase(err) == importPhaseQueue {
 			auditAction = "部分失败"
 		}
@@ -2329,21 +2364,25 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		// R42 B42-1: 返回值不再丢弃——渲染出错，或未生效且表内仍无默认页时记警告。
 		seeded, seedErr := SeedDefaultBlockPage(h.cfg.DataDir)
 		if seedErr != nil {
-			recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容渲染失败: "+seedErr.Error())
+			recordAudit(c, action+"警告", "配置备份", "默认拦截页面内容渲染失败: "+seedErr.Error())
 		} else if !seeded {
 			var defaultCount int
 			if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&defaultCount); err == nil && defaultCount == 0 {
-				recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种后仍无默认页")
+				recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种后仍无默认页")
 			}
 		}
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
 			reseedApplyFailed = true
-			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重新播种后"+note)
+			recordAudit(c, action+"警告", "配置备份", "默认拦截页面重新播种后"+note)
 		}
 	}
 
-	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}
+	auditSource := "v2 备份（覆盖" + action + "）"
+	if filename != "" {
+		auditSource = "服务器备份 " + filename + "（覆盖" + action + "）"
+	}
+	auditParts := []string{"来源：" + auditSource, counts}
 	if jwtExpireClamped {
 		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
 	}
@@ -2368,8 +2407,8 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		auditParts = append(auditParts, "操作者账户已被备份替换,请使用备份内管理员登录")
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
-	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
-	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
+	recordAudit(c, action, "配置备份", services.FormatAuditDetail(auditParts...))
+	recordAudit(c, "重载", "Caddy服务", action+"配置后自动重载")
 	// 2026-09-07 审计 L4（round5 F2 修正）：导入成功后清除陈旧 caddy_apply_error
 	// ——但 reseed 失败时不清（reseed 的 caddyApplyNoteLocked 可能刚写入
 	// 失败标记，无条件清除会把真实失败横幅抹掉）。
@@ -2393,12 +2432,12 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
 	}
 	if revokedSessions && !operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), "系统数据已导入：全部登录会话已吊销，请重新登录")
+		responseWarnings = append(append([]string{}, responseWarnings...), "系统数据已"+action+"：全部登录会话已吊销，请重新登录")
 	}
 	if acmeDanglingRules > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("导入后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
+		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置"+action+"成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 
 func importCountsDetail(tables map[string][]map[string]any) string {

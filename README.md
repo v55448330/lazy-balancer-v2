@@ -14,6 +14,7 @@
 | 主从集群 | 增量同步，防篡改签名，从节点只读，一键提升 |
 | 监控告警 | 流量/延迟 P50-99，上游健康，安全事件总览 |
 | MCP 服务 | AI 代理可通过 127 个工具操作全部功能 |
+| 自动备份 | 按日/周/月定时备份配置到服务器 backup 目录，支持一键还原 |
 
 ## 快速开始
 
@@ -22,6 +23,7 @@ docker run -d --name lazy-balancer --network host \
   --ulimit nofile=1048576:1048576 \
   -v $(pwd)/data:/app/data -v $(pwd)/certs:/app/certs \
   -v $(pwd)/logs:/app/logs -v $(pwd)/waf:/app/waf \
+  -v $(pwd)/backup:/app/backup \
   v55448330/lazy-balancer-v2:latest
 ```
 
