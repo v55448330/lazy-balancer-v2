@@ -137,14 +137,15 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" label-width="120px">
+      <el-form :model="form" label-width="110px" class="lb-form">
         <el-form-item label="配置名称" required>
-          <el-input v-model="form.name" placeholder="例如：我的证书配置" />
+          <el-input v-model="form.name" placeholder="例如：我的证书配置" maxlength="100" />
         </el-form-item>
         <el-form-item label="DNS 提供商" required>
           <el-select v-model="form.dns_provider" style="width: 100%" @change="onProviderChange">
             <el-option v-for="p in providers" :key="p.code" :label="p.name" :value="p.code" />
           </el-select>
+          <div class="form-tip-line">DNS-01 验证时向该提供商写入/清理 TXT 记录</div>
         </el-form-item>
         <template v-if="selectedProvider">
           <el-divider content-position="left" class="cred-divider">认证凭证</el-divider>
@@ -173,8 +174,10 @@
             </el-form-item>
           </template>
         </template>
+        <el-divider content-position="left" class="section-divider">状态</el-divider>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
+          <span class="switch-hint">停用后签发/续签不再使用该配置</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -193,7 +196,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="caForm" label-width="140px" :disabled="savingCA">
+      <el-form :model="caForm" label-width="110px" :disabled="savingCA" class="lb-form">
         <el-form-item label="名称">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -202,15 +205,19 @@
         </el-form-item>
         <el-form-item label="Directory URL">
           <el-input v-model="caForm.directory_url" disabled />
-          <el-text type="info" size="small" class="tip-block">Directory URL 为官方固定地址，不可修改</el-text>
+          <div class="form-tip-line">官方固定地址，不可修改</div>
         </el-form-item>
+        <el-divider content-position="left" class="section-divider">签发速率</el-divider>
         <el-form-item label="最大并发">
           <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
+          <span class="switch-hint">同时进行的签发任务数</span>
         </el-form-item>
-        <el-form-item label="最小间隔(ms)">
+        <el-form-item label="最小间隔">
           <el-input-number v-model="caForm.min_interval_ms" :min="1000" :max="60000" :step="1000" />
+          <span class="switch-hint">两次新签发之间的最小间隔（毫秒）</span>
         </el-form-item>
         <template v-if="caForm.provider === 'zerossl'">
+          <el-divider content-position="left" class="section-divider">EAB 凭证（ZeroSSL）</el-divider>
           <el-form-item label="EAB KID">
             <el-input v-model="caCreds.eab_kid" placeholder="留空则自动获取" />
             <el-text type="info" size="small" class="tip-block">
@@ -223,8 +230,10 @@
             <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="留空则自动获取" show-password />
           </el-form-item>
         </template>
+        <el-divider content-position="left" class="section-divider">状态</el-divider>
         <el-form-item label="启用">
           <el-switch v-model="caForm.enabled" />
+          <span class="switch-hint">停用后新签发任务不再使用该 CA</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -725,6 +734,11 @@ onMounted(() => {
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .cred-divider { margin: 20px 0 16px; }
+.section-divider { margin: 20px 0 16px; }
+.section-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.lb-form :deep(.el-form-item) { margin-bottom: 18px; }
+.lb-form .form-tip-line { margin-top: 4px; }
 .cred-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .tip-block a.link { color: #3b82f6; text-decoration: none; }
 .tip-block a.link:hover { text-decoration: underline; }

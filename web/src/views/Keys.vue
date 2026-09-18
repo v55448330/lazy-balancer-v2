@@ -100,10 +100,18 @@
     <el-dialog
       v-model="mcpDocsVisible"
       class="mcp-docs-dialog"
-      title="MCP 接入文档"
       width="min(1000px, 96vw)"
       @opened="fetchMCPTools"
     >
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><SetUp /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">MCP 接入文档</div>
+            <div class="dialog-header__subtitle">服务地址与接入配置，供 AI 客户端（Claude / Cursor 等）连接</div>
+          </div>
+        </div>
+      </template>
       <el-form label-position="top">
         <el-form-item label="MCP 服务地址（Streamable HTTP）">
           <el-input :model-value="mcpServiceURL" readonly>
@@ -229,24 +237,36 @@
 
     <el-dialog
       v-model="createDialogVisible"
-      title="创建 API 密钥"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!creating"
       :show-close="!creating"
+      top="6vh"
       @closed="resetCreateForm"
     >
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--warning"><el-icon :size="18"><Key /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">创建 API 密钥</div>
+            <div class="dialog-header__subtitle">lb_sk_ 前缀凭证，创建后仅显示一次</div>
+          </div>
+        </div>
+      </template>
       <el-form label-width="100px" :disabled="creating">
         <el-form-item label="密钥名称" :error="createNameError">
           <el-input v-model="createForm.name" maxlength="100" show-word-limit placeholder="请输入密钥名称" @input="createNameError = ''" />
         </el-form-item>
+        <el-divider content-position="left" class="section-divider">权限</el-divider>
         <el-form-item label="MCP 功能">
           <el-switch v-model="createForm.mcp_enabled" />
+          <span class="switch-hint">允许该密钥调用 MCP 工具接口</span>
         </el-form-item>
         <el-form-item label="只读模式">
           <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
             <el-switch v-model="createForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
+          <span class="switch-hint">开启后所有写操作被拒绝</span>
         </el-form-item>
         <el-alert
           v-if="createForm.read_only"
@@ -256,6 +276,7 @@
           :closable="false"
           show-icon
         />
+        <el-divider content-position="left" class="section-divider">有效期与来源限制</el-divider>
         <el-form-item label="过期时间">
           <el-date-picker
             v-model="createForm.expiresAt"
@@ -292,21 +313,33 @@
 
     <el-dialog
       v-model="featureDialogVisible"
-      :title="`功能配置 — ${featureTarget?.name || ''}`"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!featureSaving"
       :show-close="!featureSaving"
+      top="6vh"
       @closed="resetFeatureForm"
     >
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><Setting /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">功能配置</div>
+            <div class="dialog-header__subtitle">目标密钥：{{ featureTarget?.name || '' }}</div>
+          </div>
+        </div>
+      </template>
       <el-form label-width="100px" :disabled="featureSaving">
+        <el-divider content-position="left" class="section-divider">权限</el-divider>
         <el-form-item label="MCP 功能">
           <el-switch v-model="featureForm.mcp_enabled" />
+          <span class="switch-hint">允许该密钥调用 MCP 工具接口</span>
         </el-form-item>
         <el-form-item label="只读模式">
           <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
             <el-switch v-model="featureForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
+          <span class="switch-hint">开启后所有写操作被拒绝</span>
         </el-form-item>
         <el-alert
           v-if="featureForm.read_only"
@@ -316,6 +349,7 @@
           :closable="false"
           show-icon
         />
+        <el-divider content-position="left" class="section-divider">来源限制</el-divider>
         <el-form-item label="IP 白名单" :error="featureWhitelistError">
           <el-input
             v-model="featureForm.whitelistText"
@@ -341,11 +375,19 @@
 
     <el-dialog
       v-model="createdKeyVisible"
-      title="API 密钥已创建"
       width="min(560px, 92vw)"
       :close-on-click-modal="false"
       @closed="createdKey = ''"
     >
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--success"><el-icon :size="18"><CircleCheckFilled /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">API 密钥已创建</div>
+            <div class="dialog-header__subtitle">仅显示一次，请立即复制并妥善保存</div>
+          </div>
+        </div>
+      </template>
       <el-alert
         title="此密钥仅显示一次，请立即复制并妥善保存。"
         type="warning"
@@ -374,7 +416,7 @@ import { formatDate, formatDateShort } from '@/utils/date'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { copyText } from '@/utils/copy'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 
 interface CreateAPIKeyResponse {
@@ -694,6 +736,20 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* ── 通用弹框头部 ── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__icon--warning { background: #fdf6ec; color: #e6a23c; }
+.dialog-header__icon--success { background: #f0f9eb; color: #67c23a; }
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
+.section-divider { margin: 20px 0 16px; }
+.section-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .page { max-width: 1500px; margin: 0 auto; }
 
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }

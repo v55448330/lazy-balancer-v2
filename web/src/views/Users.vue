@@ -179,7 +179,16 @@
 
     <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
          点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
-    <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
+    <el-dialog v-model="mfaBinding.visible" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--primary"><el-icon :size="18"><Lock /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">启用 MFA（两步验证）</div>
+            <div class="dialog-header__subtitle">扫码绑定验证器 → 输码验证 → 保存恢复码</div>
+          </div>
+        </div>
+      </template>
       <el-steps :active="mfaBinding.step" simple style="margin-bottom: 18px">
         <el-step title="扫码" />
         <el-step title="验证" />
@@ -211,6 +220,49 @@
           <div v-for="code in mfaBinding.recoveryCodes" :key="code" style="font-family: monospace; font-size: 14px; background: var(--el-fill-color-light); padding: 6px 10px; border-radius: 3px; text-align: center; user-select: all">{{ code }}</div>
         </div>
       </div>
+    <!-- 统一确认/输入弹框:重置密码 / 修改密码 / 重置 MFA(替代 ElMessageBox,
+         与全站 icon+标题+副标题弹框语言一致)。 -->
+    <el-dialog v-model="lbDialog.visible" width="min(500px, 92vw)" :close-on-click-modal="false" :show-close="!lbDialog.busy" @update:model-value="!lbDialog.busy && lbCancel()">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon" :class="`dialog-header__icon--${lbDialog.spec?.tone || 'primary'}`">
+            <el-icon :size="18"><component :is="lbDialog.spec?.icon === 'key' ? Key : lbDialog.spec?.icon === 'warning' ? Warning : Lock" /></el-icon>
+          </div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ lbDialog.spec?.title }}</div>
+            <div v-if="lbDialog.spec?.subtitle" class="dialog-header__subtitle">{{ lbDialog.spec.subtitle }}</div>
+          </div>
+        </div>
+      </template>
+      <div v-if="lbDialog.spec?.message" class="lb-message">{{ lbDialog.spec.message }}</div>
+      <div v-if="lbDialog.spec?.mode === 'self-pwd'" class="lb-fields">
+        <div class="lb-field">
+          <div class="lb-field__label">当前密码</div>
+          <el-input v-model="lbDialog.curPwd" type="password" show-password placeholder="请输入当前密码以确认身份" />
+        </div>
+        <div class="lb-field">
+          <div class="lb-field__label">新密码</div>
+          <el-input v-model="lbDialog.newPwd" type="password" show-password maxlength="72" placeholder="至少 6 位，最长 72 位" />
+        </div>
+      </div>
+      <div v-else-if="lbDialog.spec?.mode === 'reset-pwd'" class="lb-fields">
+        <div class="lb-field">
+          <div class="lb-field__label">新密码</div>
+          <el-input v-model="lbDialog.newPwd" type="password" show-password maxlength="72" placeholder="至少 6 位，最长 72 位" />
+        </div>
+      </div>
+      <div v-else-if="lbDialog.spec?.mode === 'mfa-code'" class="lb-fields">
+        <div class="lb-field">
+          <div class="lb-field__label">验证码</div>
+          <el-input v-model="lbDialog.code" placeholder="当前 MFA 的 6 位验证码或恢复代码" />
+        </div>
+      </div>
+      <template #footer>
+        <el-button :disabled="lbDialog.busy" @click="lbCancel">取消</el-button>
+        <el-button type="primary" @click="lbConfirm">{{ lbDialog.spec?.confirmText || '确定' }}</el-button>
+      </template>
+    </el-dialog>
+
       <template #footer>
         <el-button v-if="mfaBinding.step === 0" @click="mfaBinding.visible = false">取消</el-button>
         <el-button v-if="mfaBinding.step === 0" type="primary" @click="mfaBinding.step = 1">下一步</el-button>
@@ -232,12 +284,12 @@ const onOIDCStatus = (st: { enabled: boolean; configured: boolean }) => {
   oidcEnabled.value = st.enabled
   oidcConfigured.value = st.configured
 }
-import { computed, h, nextTick, ref, onMounted } from 'vue'
+import { computed, nextTick, reactive, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { ElMessageBox, ElMessage, ElInput } from 'element-plus'
-import { UserFilled, User, Plus } from '@element-plus/icons-vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
 import type { APIResponse, UpdateCurrentUserInput, UserListItem } from '@/types'
 
@@ -451,6 +503,61 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
   }
 }
 
+// ── 统一确认/输入弹框(重置密码 / 修改密码 / 重置 MFA)──
+type LbDialogSpec = {
+  title: string
+  subtitle?: string
+  message?: string
+  icon: 'lock' | 'key' | 'warning'
+  tone?: 'primary' | 'warning'
+  mode: 'self-pwd' | 'reset-pwd' | 'mfa-code' | 'confirm'
+  confirmText?: string
+}
+const lbDialog = reactive({
+  visible: false,
+  busy: false,
+  spec: null as LbDialogSpec | null,
+  newPwd: '',
+  curPwd: '',
+  code: '',
+  resolve: null as ((r: { ok: boolean; newPwd?: string; curPwd?: string; code?: string }) => void) | null,
+})
+function lbOpen(spec: LbDialogSpec): Promise<{ ok: boolean; newPwd?: string; curPwd?: string; code?: string }> {
+  lbDialog.spec = spec
+  lbDialog.newPwd = ''
+  lbDialog.curPwd = ''
+  lbDialog.code = ''
+  lbDialog.visible = true
+  return new Promise((resolve) => { lbDialog.resolve = resolve })
+}
+function lbCancel() {
+  if (lbDialog.busy) return
+  lbDialog.visible = false
+  lbDialog.resolve?.({ ok: false })
+  lbDialog.resolve = null
+}
+function lbConfirm() {
+  const mode = lbDialog.spec?.mode
+  if (mode === 'self-pwd') {
+    if (!lbDialog.newPwd || lbDialog.newPwd.length < 6) { ElMessage.error('密码长度至少6位'); return }
+    if (lbDialog.newPwd.length > 72) { ElMessage.error('密码长度不能超过72位'); return }
+    if (!lbDialog.curPwd) { ElMessage.error('请输入当前密码'); return }
+  } else if (mode === 'reset-pwd') {
+    if (!lbDialog.newPwd || lbDialog.newPwd.length < 6) { ElMessage.error('密码长度至少6位'); return }
+    if (lbDialog.newPwd.length > 72) { ElMessage.error('密码长度不能超过72位'); return }
+  } else if (mode === 'mfa-code') {
+    if (!validateMfaCodeInput(lbDialog.code)) { ElMessage.error('请输入验证码或恢复代码'); return }
+  }
+  lbDialog.visible = false
+  lbDialog.resolve?.({
+    ok: true,
+    newPwd: lbDialog.newPwd || undefined,
+    curPwd: lbDialog.curPwd || undefined,
+    code: lbDialog.code ? normalizeMfaCodeInput(lbDialog.code) : undefined,
+  })
+  lbDialog.resolve = null
+}
+
 const resetPassword = async (id: number) => {
   // M29：本人重置密码是自助操作（非 admin 也可用），从节点除外（本地 users 被
   // 同步覆盖，改了也会被冲掉）——与上方编辑按钮同口径放行。
@@ -461,73 +568,26 @@ const resetPassword = async (id: number) => {
     let newPassword = ''
     let currentPassword = ''
     if (isSelf) {
-      // M5：本人改密需当前密码过后端密码确认门（仅提交新密码时必填）。双输入
-      // 对话框用 h 渲染自定义 MessageBox（同 api.ts 弹码款式）；说明：Element
-      // Plus 2.x 的 prompt 不支持多输入与 maxlength，72 位上限在此兜底。
-      const newPasswordRef = ref('')
-      const currentPasswordRef = ref('')
-      await ElMessageBox({
+      // M5：本人改密需当前密码过后端密码确认门（仅提交新密码时必填）。
+      // 统一弹框样式(icon+标题+副标题,弃 ElMessageBox h 渲染)。
+      const r = await lbOpen({
         title: '修改密码',
-        showCancelButton: true,
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        message: () => h('div', { style: 'display: flex; flex-direction: column; gap: 14px; padding-top: 2px;' }, [
-          h('div', null, '请输入当前密码以确认身份'),
-          h(ElInput, {
-            modelValue: currentPasswordRef.value,
-            'onUpdate:modelValue': (v: string) => { currentPasswordRef.value = v },
-            type: 'password',
-            showPassword: true,
-            placeholder: '当前密码',
-          }),
-          h('div', null, '请输入新密码（至少6位）'),
-          h(ElInput, {
-            modelValue: newPasswordRef.value,
-            'onUpdate:modelValue': (v: string) => { newPasswordRef.value = v },
-            type: 'password',
-            showPassword: true,
-            maxlength: 72,
-            placeholder: '新密码（至少6位）',
-          }),
-        ]),
-        beforeClose: (action, _instance, done) => {
-          if (action === 'confirm') {
-            if (!newPasswordRef.value || newPasswordRef.value.length < 6) {
-              ElMessage.error('密码长度至少6位')
-              return
-            }
-            if (newPasswordRef.value.length > 72) {
-              ElMessage.error('密码长度不能超过72位')
-              return
-            }
-            if (!currentPasswordRef.value) {
-              ElMessage.error('请输入当前密码')
-              return
-            }
-          }
-          done()
-        },
+        subtitle: '本人改密需当前密码确认（登录后唯一密码确认例外）',
+        icon: 'lock', tone: 'primary', mode: 'self-pwd', confirmText: '确定',
       })
-      newPassword = newPasswordRef.value
-      currentPassword = currentPasswordRef.value
+      if (!r.ok) return
+      newPassword = r.newPwd ?? ''
+      currentPassword = r.curPwd ?? ''
     } else {
-      // 说明：Element Plus 2.x 的 ElMessageBox.prompt 不支持 inputAttributes/maxlength，
-      // 因此与后端 max=72 对齐的上限校验只能通过 inputValidator 提示文案兜底。
-      const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        inputType: 'password',
-        inputValidator: (value) => {
-          if (!value || value.length < 6) {
-            return '密码长度至少6位'
-          }
-          if (value.length > 72) {
-            return '密码长度不能超过72位'
-          }
-          return true
-        }
+      const username = users.value.find((u) => u.id === id)?.username ?? ''
+      const r = await lbOpen({
+        title: '重置密码',
+        subtitle: `为「${username}」设置新密码`,
+        message: '重置后该用户的全部登录会话将被吊销，账户锁定状态一并清除。',
+        icon: 'key', tone: 'warning', mode: 'reset-pwd', confirmText: '确认重置',
       })
-      newPassword = value
+      if (!r.ok) return
+      newPassword = r.newPwd ?? ''
     }
     if (newPassword) {
       if (isSelf) {
@@ -574,27 +634,33 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
         // R73：守卫开启时后端第一层已豁免（守卫完成验码），对话框退化为纯确认——
         // 保留后果说明与确认/取消，不再索取当前时间片验证码（索取也无码可用：
         // 同片刚被守卫/登录消费，重放保护必拒）。
-        await ElMessageBox.confirm(
-          `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。`,
-          '重置 MFA',
-          { type: 'warning', confirmButtonText: '确认重置' },
-        )
+        const r = await lbOpen({
+          title: '重置 MFA',
+          subtitle: `重置「${row.username}」的两步验证`,
+          message: '重置后该用户登录不再需要验证码，需重新绑定。',
+          icon: 'warning', tone: 'warning', mode: 'confirm', confirmText: '确认重置',
+        })
+        if (!r.ok) return
       } else {
-        const { value } = await ElMessageBox.prompt(
-          `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
-          '重置 MFA',
-          // 用户裁决（N+10）：重置 MFA 与登录是仅有的两个允许恢复码的入口
-          //（后端 MFAVerifyCode 消费口径）；step-up 写守卫链已收口为仅 TOTP。
-          { type: 'warning', confirmButtonText: '确认重置', inputValidator: validateMfaCodeInput, inputErrorMessage: '请输入验证码或恢复代码' },
-        )
-        code = normalizeMfaCodeInput(value)
+        // 用户裁决（N+10）：重置 MFA 与登录是仅有的两个允许恢复码的入口
+        //（后端 MFAVerifyCode 消费口径）；step-up 写守卫链已收口为仅 TOTP。
+        const r = await lbOpen({
+          title: '重置 MFA',
+          subtitle: `重置「${row.username}」的两步验证`,
+          message: '重置后该用户登录不再需要验证码，需重新绑定。',
+          icon: 'warning', tone: 'warning', mode: 'mfa-code', confirmText: '确认重置',
+        })
+        if (!r.ok) return
+        code = r.code ?? ''
       }
     } else {
-      await ElMessageBox.confirm(
-        `确定重置用户「${row.username}」的 MFA 吗？重置后该用户登录不再需要验证码，需自行重新绑定。`,
-        '重置 MFA',
-        { type: 'warning', confirmButtonText: '确认重置' },
-      )
+      const r = await lbOpen({
+        title: '重置 MFA',
+        subtitle: `重置用户「${row.username}」的两步验证`,
+        message: '重置后该用户登录不再需要验证码，需自行重新绑定。',
+        icon: 'warning', tone: 'warning', mode: 'confirm', confirmText: '确认重置',
+      })
+      if (!r.ok) return
     }
     await request.post(`/users/${row.id}/mfa/reset`, { code }, { silent: true })
     mfaAwareSuccess('已重置 MFA')
@@ -692,6 +758,20 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* ── 通用弹框头部 ── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__icon--primary { background: #ecf5ff; color: #409eff; }
+.dialog-header__icon--warning { background: #fdf6ec; color: #e6a23c; }
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
+.lb-message { font-size: 13.5px; color: var(--text-regular, #374151); line-height: 1.7; margin-bottom: 4px; }
+.lb-fields { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.lb-field__label { font-size: 13px; color: var(--text-regular, #374151); margin-bottom: 6px; }
 .oidc-entry-inline { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
 .page { max-width: 1500px; margin: 0 auto; }

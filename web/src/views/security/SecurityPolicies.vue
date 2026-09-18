@@ -93,7 +93,16 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="dialogVisible" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--primary"><el-icon :size="18"><Lock /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略' }}</div>
+            <div class="dialog-header__subtitle">五步向导：基础信息 → WAF 规则 → IP 访问控制 → 限流 → 关联规则</div>
+          </div>
+        </div>
+      </template>
       <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
         <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
         <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
@@ -2324,6 +2333,15 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ── 通用弹框头部 ── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .table-toolbar { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 

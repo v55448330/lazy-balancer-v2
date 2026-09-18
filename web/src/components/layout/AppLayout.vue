@@ -694,10 +694,9 @@ onUnmounted(() => {
 .profile-dialog .backup-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
 .oidc-hint-block {
   width: 100%;
-  padding: 10px 14px;
-  border-radius: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
   background: var(--el-fill-color-light);
-  border-left: 3px solid var(--el-color-primary-light-5);
   color: var(--el-text-color-secondary);
   font-size: 12.5px;
   line-height: 1.6;

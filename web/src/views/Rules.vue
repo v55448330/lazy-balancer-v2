@@ -270,7 +270,16 @@
       />
     </el-card>
 
-    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="wizardVisible" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><Connection /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则') }}</div>
+            <div class="dialog-header__subtitle">四步向导：基本配置 → TLS → 上游服务器 → 高级选项</div>
+          </div>
+        </div>
+      </template>
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
         <el-step title="基本配置" :icon="InfoFilled" />
         <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
@@ -833,7 +842,16 @@
     </el-dialog>
 
     <!-- View Config Dialog -->
-    <el-dialog v-model="configDialogVisible" title="Caddy 配置" width="min(900px, 94vw)" :close-on-click-modal="true" @close="onConfigDialogClosed">
+    <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" :close-on-click-modal="true" @close="onConfigDialogClosed">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><Document /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">Caddy 配置</div>
+            <div class="dialog-header__subtitle">单规则渲染产物的只读预览（规则信息 / JSON / Caddyfile）</div>
+          </div>
+        </div>
+      </template>
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
       <div v-else-if="ruleConfig" class="config-view">
         <el-descriptions :column="2" border size="small" class="config-info">
@@ -3261,6 +3279,15 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ── 通用弹框头部 ── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }

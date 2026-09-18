@@ -202,9 +202,9 @@
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则' }}</div>
             <div class="dialog-header__subtitle">按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件为 AND 关系</div>
-+          </div>
-+        </div>
-+      </template>
+          </div>
+        </div>
+      </template>
       <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ruleForm.name" placeholder="规则名称" />
@@ -304,9 +304,9 @@
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表' }}</div>
             <div class="dialog-header__subtitle">可复用 IP/CIDR 集合，供安全策略引用（黑白名单 / 信任名单）</div>
-+          </div>
-+        </div>
-+      </template>
+          </div>
+        </div>
+      </template>
       <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
