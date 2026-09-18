@@ -190,6 +190,9 @@
           <el-form-item label="新密码">
             <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="如不修改请留空（至少6位）" show-password />
           </el-form-item>
+          <el-form-item label="确认新密码">
+            <el-input v-model="profileForm.passwordConfirm" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="再次输入新密码" show-password />
+          </el-form-item>
           <el-form-item label="当前密码">
             <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
           </el-form-item>
@@ -256,6 +259,8 @@ const profileForm = ref({
   username: '',
   display_name: '',
   password: '',
+  // 2026-09-19 用户裁定：密码修改需二次确认
+  passwordConfirm: '',
   // M5：提交新密码时的当前密码确认（后端密码确认门，不改密码时不需要）
   currentPassword: '',
 })
@@ -265,6 +270,7 @@ const syncProfileForm = () => {
     username: authStore.user?.username || '',
     display_name: authStore.user?.display_name || '',
     password: '',
+    passwordConfirm: '',
     currentPassword: '',
   }
 }
@@ -310,6 +316,10 @@ const saveProfile = async () => {
   // M5：提交新密码必须携带当前密码（后端密码确认门），不改密码时不需要。
   if (profileForm.value.password && !profileForm.value.currentPassword) {
     authStore.showToast('warning', '请输入当前密码')
+    return
+  }
+  if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) {
+    authStore.showToast('warning', '两次输入的新密码不一致')
     return
   }
   saving.value = true

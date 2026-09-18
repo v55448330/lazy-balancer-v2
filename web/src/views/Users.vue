@@ -26,17 +26,22 @@
       <el-form :model="form" label-width="90px" :disabled="isReadOnly || submitting">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item v-if="!selfEdit" label="用户名">
+            <el-form-item label="用户名">
               <el-input v-model="form.username" :placeholder="editingUser ? '用户名不可修改' : '请输入用户名'" :disabled="!!editingUser" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <!-- v2.3.0:OIDC 用户密码/显示名源自 IdP,不可本地改(用户裁定) -->
-            <el-form-item v-if="!editingIsOIDC" :label="selfEdit ? '新密码' : '密码'">
+            <el-form-item v-if="!editingIsOIDC" label="密码">
               <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
             </el-form-item>
             <el-form-item v-else label="数据来源">
               <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item v-if="!editingIsOIDC" label="确认新密码">
+              <el-input v-model="form.password_confirm" type="password" show-password minlength="6" maxlength="72" placeholder="再次输入新密码" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -50,12 +55,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item v-if="selfEdit && !editingIsOIDC" label="当前密码">
-              <el-input v-model="form.current_password" type="password" show-password maxlength="72" :placeholder="form.password ? '修改密码时必填' : '填写新密码后需确认'" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item v-if="!selfEdit" label="角色">
+            <el-form-item label="角色">
               <el-select v-model="form.role" style="width: 100%">
                 <el-option label="管理员" value="admin">
                   <el-tag type="danger" size="small">管理员</el-tag>
@@ -68,8 +68,8 @@
           </el-col>
         </el-row>
         <el-form-item>
-          <el-button v-if="!editingIsOIDC || !selfEdit" type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
-          <el-button :disabled="submitting" @click="closeForm">{{ editingIsOIDC && selfEdit ? '关闭' : '取消' }}</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
+          <el-button :disabled="submitting" @click="closeForm">取消</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -144,10 +144,10 @@
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="editUser(row)">
+            <el-button type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.auth_provider !== 'oidc'" type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
+            <el-button v-if="row.auth_provider !== 'oidc'" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
             <el-button v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
@@ -244,20 +244,14 @@
         </div>
       </template>
       <div v-if="lbDialog.spec?.message" class="lb-message">{{ lbDialog.spec.message }}</div>
-      <div v-if="lbDialog.spec?.mode === 'self-pwd'" class="lb-fields">
-        <div class="lb-field">
-          <div class="lb-field__label">当前密码</div>
-          <el-input v-model="lbDialog.curPwd" type="password" show-password placeholder="请输入当前密码以确认身份" />
-        </div>
+      <div v-if="lbDialog.spec?.mode === 'reset-pwd'" class="lb-fields">
         <div class="lb-field">
           <div class="lb-field__label">新密码</div>
           <el-input v-model="lbDialog.newPwd" type="password" show-password maxlength="72" placeholder="至少 6 位，最长 72 位" />
         </div>
-      </div>
-      <div v-else-if="lbDialog.spec?.mode === 'reset-pwd'" class="lb-fields">
         <div class="lb-field">
-          <div class="lb-field__label">新密码</div>
-          <el-input v-model="lbDialog.newPwd" type="password" show-password maxlength="72" placeholder="至少 6 位，最长 72 位" />
+          <div class="lb-field__label">确认新密码</div>
+          <el-input v-model="lbDialog.newPwd2" type="password" show-password maxlength="72" placeholder="再次输入新密码" />
         </div>
       </div>
       <div v-else-if="lbDialog.spec?.mode === 'mfa-code'" class="lb-fields">
@@ -302,14 +296,13 @@ import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
-import type { APIResponse, UpdateCurrentUserInput, UserListItem } from '@/types'
+import type { APIResponse, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<UserListItem[]>([])
 const mfaWriteGuard = ref(false)
 const showForm = ref(false)
-const selfEdit = ref(false)
 const submitting = ref(false)
 const submittingUserId = ref<number | null>(null)
 const operatingUserIds = ref(new Set<number>())
@@ -323,8 +316,7 @@ const paginatedUsers = computed(() => {
 const openCreateForm = () => {
   if (submitting.value) return
   editingUser.value = null
-  selfEdit.value = false
-  form.value = { username: '', password: '', current_password: '', display_name: '', role: 'user' }
+  form.value = { username: '', password: '', password_confirm: '', display_name: '', role: 'user' }
   showForm.value = true
 }
 const editingIsOIDC = computed(() => editingUser.value?.auth_provider === 'oidc')
@@ -334,8 +326,8 @@ let usersRequestSeq = 0
 const form = ref({
   username: '',
   password: '',
-  // M5：自助编辑提交新密码时的当前密码确认（仅 selfEdit 分支使用）
-  current_password: '',
+  // 2026-09-19 用户裁定:密码修改需二次确认——填写新密码时须一致
+  password_confirm: '',
   display_name: '',
   role: 'user',
 })
@@ -361,42 +353,19 @@ const fetchUsers = async () => {
 }
 
 const handleSubmit = async () => {
-  if ((selfEdit.value ? nodeModeSlave.value : isReadOnly.value) || submitting.value) return
+  if (isReadOnly.value || submitting.value) return
   if ((!editingUser.value && !form.value.password) || (form.value.password && form.value.password.length < 6)) {
     ElMessage.warning('密码长度至少6位')
     return
   }
-  // M5：自助编辑提交新密码时必须携带当前密码（后端密码确认门）
-  if (selfEdit.value && form.value.password && !form.value.current_password) {
-    ElMessage.warning('请输入当前密码')
+  if (form.value.password && form.value.password !== form.value.password_confirm) {
+    ElMessage.warning('两次输入的新密码不一致')
     return
   }
   submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
     if (editingUser.value) {
-      if (selfEdit.value) {
-        // 自助编辑：仅显示名 + 可选新密码（username/role 由 admin 管理）
-        // 不带 silent：失败走全局拦截器标准 toast（与 AppLayout 个人资料保存一致）
-        await request.patch('/users/me', {
-          display_name: form.value.display_name,
-          password: form.value.password || undefined,
-          current_password: form.value.password ? form.value.current_password : undefined,
-        })
-        // 审计 B4-I2：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净登出
-        // （对齐 AppLayout.saveProfile），否则后续 fetchUsers 以死 token 出站
-        // 401，成功操作被误报为「会话失效」并强制整页刷新。
-        if (form.value.password) {
-          authStore.showToast('success', '密码已修改，请重新登录')
-          await authStore.logout()
-          return
-        }
-        mfaAwareSuccess('已保存')
-        showForm.value = false
-        editingUser.value = null
-        await fetchUsers()
-        return
-      }
       const editingSelf = editingUser.value.id === authStore.user?.id
       // OIDC 用户的 username/display_name/password 源自 IdP(后端守卫必 400)——
       // 管理员编辑仅提交本地管理语义字段(角色),undefined 不会被序列化。
@@ -433,44 +402,28 @@ const handleSubmit = async () => {
 const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
 
 const editUser = (user: UserListItem) => {
-  // 复审 P1 回归修复：admin 编辑他人也必须置 editingUser，否则 handleSubmit 走 POST 误建用户
-  editingUser.value = user
-  // R72 六次（用户裁决）：本人行的编辑/改密是自助操作——非 admin 也可用（从
-  // 节点除外：本地 users 被同步覆盖，改了也会被冲掉）。本人行走 PATCH
-  // /users/me 自助端点（后端在 self-service 白名单）；admin 编辑任意行（含
-  //  自己的完整资料/角色）仍走 admin PUT 端点。
-  if (user.id === authStore.user?.id) {
-    if (nodeModeSlave.value || submitting.value) return
-    editingUser.value = user
-    form.value = {
-      username: user.username,
-      password: '',
-      current_password: '',
-      display_name: getDisplayName(user),
-      role: user.role,
-    }
-    selfEdit.value = authStore.user?.role !== 'admin'
-    showForm.value = true
-    return
-  }
+  // 2026-09-19 用户裁定（覆盖 R72 六次）：非管理员只读范围含用户认证页——
+  // 不允许编辑任何行（含本人），修改密码/个人资料只走右上角个人资料弹框；
+  // 编辑表单（含其密码字段=重置语义，不验当前密码）为管理员专属，统一走
+  // admin PUT 端点。
   if (isReadOnly.value || submitting.value) return
+  // 复审 P1 回归修复：编辑必须置 editingUser，否则 handleSubmit 走 POST 误建用户
+  editingUser.value = user
   form.value = {
     username: user.username,
     password: '',
-    current_password: '',
+    password_confirm: '',
     display_name: getDisplayName(user),
     role: user.role,
   }
-  selfEdit.value = false
   showForm.value = true
 }
 
 const closeForm = () => {
   if (submitting.value) return
   showForm.value = false
-  selfEdit.value = false
   editingUser.value = null
-  form.value = { username: '', password: '', current_password: '', display_name: '', role: 'user' }
+  form.value = { username: '', password: '', password_confirm: '', display_name: '', role: 'user' }
 }
 
 const deleteUser = async (id: number) => {
@@ -521,7 +474,7 @@ type LbDialogSpec = {
   message?: string
   icon: 'lock' | 'key' | 'warning'
   tone?: 'primary' | 'warning'
-  mode: 'self-pwd' | 'reset-pwd' | 'mfa-code' | 'confirm'
+  mode: 'reset-pwd' | 'mfa-code' | 'confirm'
   confirmText?: string
 }
 const lbDialog = reactive({
@@ -529,14 +482,14 @@ const lbDialog = reactive({
   busy: false,
   spec: null as LbDialogSpec | null,
   newPwd: '',
-  curPwd: '',
+  newPwd2: '',
   code: '',
-  resolve: null as ((r: { ok: boolean; newPwd?: string; curPwd?: string; code?: string }) => void) | null,
+  resolve: null as ((r: { ok: boolean; newPwd?: string; code?: string }) => void) | null,
 })
-function lbOpen(spec: LbDialogSpec): Promise<{ ok: boolean; newPwd?: string; curPwd?: string; code?: string }> {
+function lbOpen(spec: LbDialogSpec): Promise<{ ok: boolean; newPwd?: string; code?: string }> {
   lbDialog.spec = spec
   lbDialog.newPwd = ''
-  lbDialog.curPwd = ''
+  lbDialog.newPwd2 = ''
   lbDialog.code = ''
   lbDialog.visible = true
   return new Promise((resolve) => { lbDialog.resolve = resolve })
@@ -549,13 +502,10 @@ function lbCancel() {
 }
 function lbConfirm() {
   const mode = lbDialog.spec?.mode
-  if (mode === 'self-pwd') {
+  if (mode === 'reset-pwd') {
     if (!lbDialog.newPwd || lbDialog.newPwd.length < 6) { ElMessage.error('密码长度至少6位'); return }
     if (lbDialog.newPwd.length > 72) { ElMessage.error('密码长度不能超过72位'); return }
-    if (!lbDialog.curPwd) { ElMessage.error('请输入当前密码'); return }
-  } else if (mode === 'reset-pwd') {
-    if (!lbDialog.newPwd || lbDialog.newPwd.length < 6) { ElMessage.error('密码长度至少6位'); return }
-    if (lbDialog.newPwd.length > 72) { ElMessage.error('密码长度不能超过72位'); return }
+    if (lbDialog.newPwd !== lbDialog.newPwd2) { ElMessage.error('两次输入的新密码不一致'); return }
   } else if (mode === 'mfa-code') {
     if (!validateMfaCodeInput(lbDialog.code)) { ElMessage.error('请输入验证码或恢复代码'); return }
   }
@@ -563,57 +513,37 @@ function lbConfirm() {
   lbDialog.resolve?.({
     ok: true,
     newPwd: lbDialog.newPwd || undefined,
-    curPwd: lbDialog.curPwd || undefined,
     code: lbDialog.code ? normalizeMfaCodeInput(lbDialog.code) : undefined,
   })
   lbDialog.resolve = null
 }
 
 const resetPassword = async (id: number) => {
-  // M29：本人重置密码是自助操作（非 admin 也可用），从节点除外（本地 users 被
-  // 同步覆盖，改了也会被冲掉）——与上方编辑按钮同口径放行。
-  if ((id === authStore.user?.id ? nodeModeSlave.value : isReadOnly.value) || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
+  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   const isSelf = id === authStore.user?.id
+  // 2026-09-19 用户裁定:重置密码为管理员专属(经用户管理端点重置任意用户含
+  // 本人,不验当前密码——重置语义);非管理员的密码修改只走右上角个人资料
+  // 弹框(AppLayout,当前密码确认),本页对其只读。
   try {
     let newPassword = ''
-    let currentPassword = ''
-    if (isSelf) {
-      // M5：本人改密需当前密码过后端密码确认门（仅提交新密码时必填）。
-      // 统一弹框样式(icon+标题+副标题,弃 ElMessageBox h 渲染)。
-      const r = await lbOpen({
-        title: '修改密码',
-        subtitle: '本人改密需当前密码确认（登录后唯一密码确认例外）',
-        icon: 'lock', tone: 'primary', mode: 'self-pwd', confirmText: '确定',
-      })
-      if (!r.ok) return
-      newPassword = r.newPwd ?? ''
-      currentPassword = r.curPwd ?? ''
-    } else {
-      const username = users.value.find((u) => u.id === id)?.username ?? ''
-      const r = await lbOpen({
-        title: '重置密码',
-        subtitle: `为「${username}」设置新密码`,
-        message: '重置后该用户的全部登录会话将被吊销，账户锁定状态一并清除。',
-        icon: 'key', tone: 'warning', mode: 'reset-pwd', confirmText: '确认重置',
-      })
-      if (!r.ok) return
-      newPassword = r.newPwd ?? ''
-    }
+    const username = users.value.find((u) => u.id === id)?.username ?? ''
+    const r = await lbOpen({
+      title: '重置密码',
+      subtitle: `为「${username}」设置新密码`,
+      message: '重置后该用户的全部登录会话将被吊销，账户锁定状态一并清除。',
+      icon: 'key', tone: 'warning', mode: 'reset-pwd', confirmText: '确认重置',
+    })
+    if (!r.ok) return
+    newPassword = r.newPwd ?? ''
     if (newPassword) {
+      await request.post(`/users/${id}/reset-password`, { new_password: newPassword })
       if (isSelf) {
-        // R72 六次：本人改密走自助端点（不带 silent，失败由全局拦截器提示）；
-        // M5：body 携带 current_password 过后端密码确认门。
-        const body: UpdateCurrentUserInput = { password: newPassword, current_password: currentPassword }
-        await request.patch('/users/me', body)
-        // 审计 W-I2（第六轮）：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净
-        // 登出（对齐 AppLayout.saveProfile / B4-I2），否则后续请求以死 token 出站
-        // 401，成功操作被误报为「会话失效」并强制整页刷新。
-        authStore.showToast('success', '密码已修改，请重新登录')
+        // 管理员重置本人密码:重置端点递增 pwd_ver 吊销自身会话——干净登出
+        // (对齐 AppLayout.saveProfile / B4-I2),避免死 token 误报会话失效
+        authStore.showToast('success', '密码已重置，请重新登录')
         await authStore.logout()
         return
-      } else {
-        await request.post(`/users/${id}/reset-password`, { new_password: newPassword })
       }
       mfaAwareSuccess('密码重置成功')
     }

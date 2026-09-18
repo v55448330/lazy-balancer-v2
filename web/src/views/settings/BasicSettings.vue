@@ -341,8 +341,8 @@
             >{{ sec.label }}</button>
           </div>
           <div class="auto-backup-chips-actions">
-            <el-button text size="small" @click="autoBackupSections = []">全不选</el-button>
-            <el-button text size="small" @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
+            <el-button size="small" plain @click="autoBackupSections = []">全不选</el-button>
+            <el-button size="small" plain @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
             <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个数据分类（仅「全局配置」的备份无法还原）</el-text>
           </div>
         </el-form-item>
@@ -383,7 +383,7 @@
       </div>
       <template #footer>
         <el-button @click="autoBackupVisible = false">取消</el-button>
-        <el-button text type="primary" :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">
+        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">
           立即备份
         </el-button>
         <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid" @click="saveAutoBackupSettings">
@@ -1449,9 +1449,11 @@ const handleSave = async () => {
 .auto-backup-form :deep(.el-form-item) { margin-bottom: 14px; }
 .auto-backup-chips { flex-wrap: wrap; }
 /* 全选/全不选与提示同行垂直居中 */
-.auto-backup-chips-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+/* 与 el-table 单元格 .cell 的 12px 内边距对齐——标题/说明文字与表格内容同缘 */
+.auto-backup-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; padding: 0 12px; }
+.auto-backup-chips-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
 .auto-backup-scope-hint { margin-left: auto; }
 .auto-backup-list { margin-top: 10px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
-.auto-backup-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
 .auto-backup-list-title { font-size: 13px; font-weight: 600; }
 </style>

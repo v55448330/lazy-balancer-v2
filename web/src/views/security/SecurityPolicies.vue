@@ -657,7 +657,7 @@
             下一步<el-icon><ArrowRight /></el-icon>
           </el-button>
           <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :disabled="isReadOnly" :loading="saving" @click="handleSave">
-            <span>保存</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
+            <span>保存策略</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
       </template>
