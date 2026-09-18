@@ -882,7 +882,9 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			path = c.Request.URL.Path
 		}
 		covered := writeMethods[c.Request.Method] ||
-			(c.Request.Method == http.MethodGet && path == "/api/v1/config/export")
+			// 敏感 GET(与写操作同门):配置导出与自动备份下载均含私钥/凭证明文
+			(c.Request.Method == http.MethodGet &&
+				(path == "/api/v1/config/export" || path == "/api/v1/auto-backup/:id/download"))
 		if !covered || c.GetString("auth_type") != "jwt" {
 			c.Next()
 			return

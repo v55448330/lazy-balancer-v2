@@ -24,37 +24,17 @@
         </div>
       </template>
       <el-form :model="form" label-width="90px" :disabled="isReadOnly || submitting">
+        <!-- 2026-09-19 用户裁定布局:左列 用户名/显示名称/角色;右列 密码组
+             (编辑=新密码+确认新密码,创建=密码+确认密码);OIDC 用户右列示数据来源 -->
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="用户名">
               <el-input v-model="form.username" :placeholder="editingUser ? '用户名不可修改' : '请输入用户名'" :disabled="!!editingUser" maxlength="50" />
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <!-- v2.3.0:OIDC 用户密码/显示名源自 IdP,不可本地改(用户裁定) -->
-            <el-form-item v-if="!editingIsOIDC" label="密码">
-              <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
+            <el-form-item label="显示名称">
+              <el-input v-if="!editingIsOIDC" v-model="form.display_name" placeholder="选填" maxlength="50" />
+              <el-input v-else :model-value="form.display_name" disabled />
             </el-form-item>
-            <el-form-item v-else label="数据来源">
-              <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item v-if="!editingIsOIDC" label="确认新密码">
-              <el-input v-model="form.password_confirm" type="password" show-password minlength="6" maxlength="72" placeholder="再次输入新密码" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item v-if="!editingIsOIDC" label="显示名称">
-              <el-input v-model="form.display_name" placeholder="选填" maxlength="50" />
-            </el-form-item>
-            <el-form-item v-else label="显示名称">
-              <el-input :model-value="form.display_name" disabled />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
             <el-form-item label="角色">
               <el-select v-model="form.role" style="width: 100%">
                 <el-option label="管理员" value="admin">
@@ -64,6 +44,20 @@
                   <el-tag type="info" size="small">普通用户</el-tag>
                 </el-option>
               </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <!-- v2.3.0:OIDC 用户密码/显示名源自 IdP,不可本地改(用户裁定) -->
+            <template v-if="!editingIsOIDC">
+              <el-form-item :label="editingUser ? '新密码' : '密码'">
+                <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
+              </el-form-item>
+              <el-form-item label="确认新密码">
+                <el-input v-model="form.password_confirm" type="password" show-password minlength="6" maxlength="72" placeholder="再次输入新密码" />
+              </el-form-item>
+            </template>
+            <el-form-item v-else label="数据来源">
+              <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
             </el-form-item>
           </el-col>
         </el-row>

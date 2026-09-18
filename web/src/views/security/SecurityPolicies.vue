@@ -238,7 +238,7 @@
               title="开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启"
               style="margin-bottom: 12px"
             />
-            <el-form-item label="排除规则" label-position="top">
+            <el-form-item label="排除规则">
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
@@ -2389,7 +2389,7 @@ onMounted(async () => {
 .extract-alert { margin-bottom: 12px; }
 .extract-source { font-size: 13px; color: #6b7280; }
 
-.wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
+.wizard-content { min-height: min(370px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
 /* 弹框内 cascader 弹性兜底：本体不超出控件列宽（CRS 规则组 / 排除行 / 区域选择共用） */
 .wizard-content :deep(.el-cascader) { max-width: 100%; }
 
