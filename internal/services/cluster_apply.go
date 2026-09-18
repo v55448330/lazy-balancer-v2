@@ -956,8 +956,13 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	if settings.JWTExpireMinutes <= 0 || settings.JWTExpireMinutes > 1440 {
 		settings.JWTExpireMinutes = 20
 	}
-	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?,mfa_write_guard=?,mfa_lockout_enabled=?,github_proxy_url=?,oidc_config=?`
-	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey, settings.MFAWriteGuard, settings.MFALockoutEnabled, settings.GitHubProxyURL, settings.OIDCConfig}
+	// branding_json 镜像列随 apply 落库(2026-09-19 生产实证修复):
+	// RefreshBrandingMirror 带 is_master=1 守卫(仅主端),从端原本只写
+	// 文件不写列——users 节哈希并入 basic_settings 后该列参与从端本地
+	// 重建,镜像缺失使从端与主端哈希永久分歧。列与文件同源同值,触发器
+	// WHEN is_master=1 守卫保证从端写入不 bump cluster_version。
+	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?,mfa_write_guard=?,mfa_lockout_enabled=?,github_proxy_url=?,oidc_config=?,branding_json=?`
+	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey, settings.MFAWriteGuard, settings.MFALockoutEnabled, settings.GitHubProxyURL, settings.OIDCConfig, settings.BrandingJSON}
 	if snapshot.CaddyConfig != nil {
 		// R60 A-N1：全局 body 上限钳制 [0,4096]（与 insertSnapshotRules 的行级
 		// 归一、写侧校验、导入钳制同边界）——这是全局轴最后一个未闭合的持久化

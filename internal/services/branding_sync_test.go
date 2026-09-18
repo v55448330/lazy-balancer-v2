@@ -108,6 +108,44 @@ func TestApplySnapshot_writesBrandingFileAndLanding(t *testing.T) {
 	}
 }
 
+// 三分类合并勘误(2026-09-19 生产实证):users 节哈希并入 basic_settings
+// 后,branding_json 镜像列必须随 apply 落库——RefreshBrandingMirror 带
+// is_master=1 守卫(仅主端快照构建路径),从端只写文件不写列,导致从端
+// 本地重建 users 哈希与主端永久分歧(hover 恒 LAG+每次变更多一轮重放)。
+// 修复:updateSnapshotSettings SET 清单补 branding_json(事务内,原子)。
+func TestUpdateSnapshotSettings_mirrorsBrandingColumn(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ctx := context.Background()
+	apply := func(snapshot models.ClusterSnapshot) {
+		t.Helper()
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
+			t.Fatalf("apply settings: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(models.ClusterSnapshot{BasicSettings: models.ClusterBasicSettings{
+		BrandingJSON: `{"app_name":"我的网关"}`, JWTExpireMinutes: 20,
+	}})
+	var mirrored string
+	if err := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored); err != nil || mirrored != `{"app_name":"我的网关"}` {
+		t.Fatalf("branding mirror=%q err=%v, want snapshot content", mirrored, err)
+	}
+	// 主端镜像清空(文件缺失形态)同样传播——空串是合法收敛值。
+	apply(models.ClusterSnapshot{BasicSettings: models.ClusterBasicSettings{
+		BrandingJSON: "", JWTExpireMinutes: 20,
+	}})
+	if err := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored); err != nil || mirrored != "" {
+		t.Fatalf("cleared mirror=%q err=%v, want empty", mirrored, err)
+	}
+}
+
 // SR-1(第 7 轮审计):Go json.Marshal 对 <>& 产 \uXXXX 转义——手工提取器
 // 不解 \u 时从节点 landing 注入乱码,与主节点 encoding/json 分叉。
 // 修复:提取值经 json.Unmarshal 值级解析。
