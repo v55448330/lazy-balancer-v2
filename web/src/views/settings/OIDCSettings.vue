@@ -42,10 +42,14 @@
       <div class="oidc-step-body">
       <div class="step-title">在认证服务后台创建应用，填入以下信息</div>
       <div class="reg-info">
+          <!-- 两行样式(2026-09-19 用户裁定):第一行=回调地址(节点名)标题,
+               第二行=地址+复制按钮——防节点名过长时行内挤压换行错位 -->
           <div v-for="node in callbackNodes" :key="node.url" class="reg-row">
-            <span class="reg-label">{{ node.label }}</span>
-            <code class="reg-value">{{ node.url }}</code>
-            <el-button size="small" text type="primary" @click="copy(node.url)">复制</el-button>
+            <div class="reg-label">{{ node.label }}</div>
+            <div class="reg-value-row">
+              <code class="reg-value">{{ node.url }}</code>
+              <el-button size="small" text type="primary" @click="copy(node.url)">复制</el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -317,9 +321,11 @@ const copy = async (text: string) => {
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
 .probe-err { margin-top: 6px; font-size: 12.5px; color: var(--el-color-danger); }
 .reg-info { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px 12px; background: var(--el-fill-color-light); }
-.reg-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
-.reg-label { width: 130px; font-size: 12.5px; color: var(--el-text-color-secondary); flex-shrink: 0; }
-.reg-value { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--el-color-primary); word-break: break-all; }
+.reg-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
+.reg-row + .reg-row { border-top: 1px dashed var(--el-border-color-lighter); }
+.reg-label { font-size: 12.5px; color: var(--el-text-color-secondary); word-break: break-all; }
+.reg-value-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.reg-value { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--el-color-primary); word-break: break-all; min-width: 0; }
 .mt8 { margin-top: 8px; }
 .dialog-footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 </style>
