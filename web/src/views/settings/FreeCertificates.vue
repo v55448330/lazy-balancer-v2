@@ -137,7 +137,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" label-width="110px" class="lb-form">
+      <el-form :model="form" label-width="120px" class="lb-form">
         <el-form-item label="配置名称" required>
           <el-input v-model="form.name" placeholder="例如：我的证书配置" maxlength="100" />
         </el-form-item>
@@ -196,7 +196,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="caForm" label-width="110px" :disabled="savingCA" class="lb-form">
+      <el-form :model="caForm" label-width="120px" :disabled="savingCA" class="lb-form">
         <el-form-item label="名称">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -733,13 +733,13 @@ onMounted(() => {
 .dialog-header__icon--warning { background: #fdf6ec; color: #e6a23c; }
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
-.cred-divider { margin: 20px 0 16px; }
-.section-divider { margin: 20px 0 16px; }
-.section-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.cred-divider { margin: 24px 0 20px; }
+.section-divider { margin: 24px 0 20px; }
+.section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .lb-form :deep(.el-form-item) { margin-bottom: 18px; }
 .lb-form .form-tip-line { margin-top: 4px; }
-.cred-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.cred-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .tip-block a.link { color: #3b82f6; text-decoration: none; }
 .tip-block a.link:hover { text-decoration: underline; }
 .card-header {

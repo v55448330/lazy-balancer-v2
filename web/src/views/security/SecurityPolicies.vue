@@ -99,7 +99,7 @@
           <div class="dialog-header__icon dialog-header__icon--primary"><el-icon :size="18"><Lock /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略' }}</div>
-            <div class="dialog-header__subtitle">五步向导：基础信息 → WAF 规则 → IP 访问控制 → 限流 → 关联规则</div>
+            <div class="dialog-header__subtitle">配置 WAF 检测规则、IP 访问控制、限流与规则关联</div>
           </div>
         </div>
       </template>

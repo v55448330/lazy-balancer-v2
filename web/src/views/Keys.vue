@@ -253,7 +253,7 @@
           </div>
         </div>
       </template>
-      <el-form label-width="100px" :disabled="creating">
+      <el-form label-width="110px" :disabled="creating">
         <el-form-item label="密钥名称" :error="createNameError">
           <el-input v-model="createForm.name" maxlength="100" show-word-limit placeholder="请输入密钥名称" @input="createNameError = ''" />
         </el-form-item>
@@ -329,7 +329,7 @@
           </div>
         </div>
       </template>
-      <el-form label-width="100px" :disabled="featureSaving">
+      <el-form label-width="110px" :disabled="featureSaving">
         <el-divider content-position="left" class="section-divider">权限</el-divider>
         <el-form-item label="MCP 功能">
           <el-switch v-model="featureForm.mcp_enabled" />
@@ -747,8 +747,8 @@ onMounted(() => {
 .dialog-header__icon--success { background: #f0f9eb; color: #67c23a; }
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
-.section-divider { margin: 20px 0 16px; }
-.section-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.section-divider { margin: 24px 0 20px; }
+.section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .page { max-width: 1500px; margin: 0 auto; }
 

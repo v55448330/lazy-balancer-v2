@@ -168,8 +168,8 @@
           <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" />
           <template v-else>
             <div class="rate-limit-total">
-              <div class="stat-label">累计拦截次数</div>
-              <div class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</div>
+              <span class="stat-label">累计拦截</span>
+              <span class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</span>
             </div>
             <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
               <el-table-column prop="host" label="域名" min-width="120" show-overflow-tooltip />
@@ -425,7 +425,7 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 
 .chart-container { height: 260px; }
 .events-row .el-card { height: 100%; }
-.rate-limit-total { text-align: center; padding: 4px 0 12px; }
-.rate-limit-total .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
-.rate-limit-total .stat-value { font-size: 28px; font-weight: 600; }
+.rate-limit-total { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 10px; }
+.rate-limit-total .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+.rate-limit-total .stat-value { font-size: 20px; font-weight: 600; }
 </style>

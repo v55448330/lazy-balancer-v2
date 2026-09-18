@@ -276,7 +276,7 @@
           <div class="dialog-header__icon"><el-icon :size="18"><Connection /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则') }}</div>
-            <div class="dialog-header__subtitle">四步向导：基本配置 → TLS → 上游服务器 → 高级选项</div>
+            <div class="dialog-header__subtitle">配置负载均衡规则的监听、TLS、上游与路由行为</div>
           </div>
         </div>
       </template>
