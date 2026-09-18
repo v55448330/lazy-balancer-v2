@@ -307,12 +307,12 @@ const copy = async (text: string) => {
   background: var(--el-color-primary); color: #fff;
   font-size: 13px; font-weight: 600;
 }
-.oidc-step-body { flex: 1; min-width: 0; }
+.oidc-step-body { flex: 1; min-width: 0; padding-right: 34px; }
 .step { margin-bottom: 18px; }
 .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .cred-form { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .cred-row { display: flex; align-items: flex-start; gap: 12px; }
-.cred-row__label { width: 90px; flex-shrink: 0; font-size: 13px; color: var(--el-text-color-regular); line-height: 32px; text-align: right; }
+.cred-row__label { width: 100px; flex-shrink: 0; white-space: nowrap; font-size: 13px; color: var(--el-text-color-regular); line-height: 32px; text-align: right; }
 .cred-row__field { flex: 1; min-width: 0; }
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
 .probe-err { margin-top: 6px; font-size: 12.5px; color: var(--el-color-danger); }

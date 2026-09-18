@@ -131,6 +131,12 @@ func securityEventsExtractAnomalyScore(messages []securityEventsAuditMessage) in
 // 轮转补采与 tick 重叠）会重复插入，因此视为解析失败跳过。
 var errSecurityEventsEmptyID = errors.New("transaction has no id")
 
+// errSecurityEventsStalled 标记「残缺文档等待补写」的停等状态（SECLB35-1）：
+// 非故障，但必须以非 nil 错误返回——tick 的 lastPassClean 会因此置假，空闲
+// tick 提前返回被禁用，停等计数才能在文件不再增长时（真·崩溃残片）继续
+// 递增直至触发跳过；告警侧由 60s 同消息限流兜底。
+var errSecurityEventsStalled = errors.New("security events: audit data incomplete, waiting for writer")
+
 // securityEventsParseTransaction maps one Coraza audit transaction into a
 // record. Rule fields come from the first message; the anomaly score sums all
 // message scores. host = server_id, falling back to the request host header
@@ -671,6 +677,11 @@ func securityEventsShouldReset(offset, size int64, prev, curr os.FileInfo) bool 
 // 扫描窗口内没有下一个 "\n{" 且窗口外仍有数据，即判定为无法自愈的畸形区。
 const securityEventsScanWindowLimit = 4 << 20
 
+// securityEventsDecodeStallLimit 是解码失败后原地等待重试的最大连续 tick 数：
+// 并发事务的审计追加对 2s tick 呈现「暂时性中段残缺」（写入进行中的字节，随后
+// 补全），连续本数值个 tick 仍在同一偏移失败，才按崩溃残片走跳过路径。
+const securityEventsDecodeStallLimit = 5
+
 // securityEventsFindNextDocument scans forward from `from` for the next `{`
 // at column 0, which in the pretty-printed multi-line format marks the start
 // of the next top-level transaction. found=false when none exists yet.
@@ -703,6 +714,30 @@ func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error)
 		return 0, false, err
 	}
 	return 0, false, nil
+}
+
+// securityEventsGapAllWhitespace reports whether the byte range [from, to) of
+// f consists solely of JSON whitespace — the harmless document-boundary advance
+// （上一完整文档的行尾换行等）。SECLB35-1：跳过窗口含非空白字节时才可能丢
+// 数据（进入停等/跳过路径）；纯空白窗口直接推进，与旧语义等价。窗口大于
+// 4KB 按非空白保守处理（真实残缺数据不可能被 4KB 纯空白分隔）。
+func securityEventsGapAllWhitespace(f *os.File, from, to int64) bool {
+	gap := to - from
+	if gap <= 0 || gap > 4096 {
+		return false
+	}
+	buf := make([]byte, gap)
+	if _, err := f.ReadAt(buf, from); err != nil {
+		return false
+	}
+	for _, b := range buf {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // securityEventsScanNextDocumentBounded 有界前向扫描 [from, limit) 内下一个
@@ -757,13 +792,15 @@ type securityEventsTailer struct {
 	// 用）：失败 pass（F1 停摆、DB 错误）的下一 tick 必须重跑——停摆限流告警与
 	// DB 重试都依赖 2s 周期持续转动，不得被空闲跳过吞掉。
 	lastPassClean bool
-	// archivePass 标记归档补采（.1 补采 / pending 重试）：归档大小有界且不再增长，
-	// 遇到 ≥4MB 畸形区时改为有界 scan-to-EOF 恢复，而不是 F1 报错（见
-	// securityEventsProcessPass）。
-	archivePass bool
+	// stallOffset/stallCount 是 SECLB35-1 停等状态：最近一次「残缺文档等待
+	// 补写」的偏移与连续失败次数。键为残缺文档起始偏移（每次 pass 从该处
+	// 重启，稳定）；偏移推进即数据已补全/已跳过，下次失败自然重置。
+	stallOffset int64
+	stallCount  int
 	// failOffset 是本 pass 中 F1 停摆（畸形区）的偏移，仅 F1 错误路径设置；
 	// -1 表示本次 tick 未触发 F1。
-	failOffset int64
+	failOffset  int64
+	archivePass bool
 	// S1: F1 停摆告警限流——上次 warn 的畸形区偏移与时间，偏移不变时每分钟
 	// 最多一条 warn，偏移前进即重置立即告警。
 	lastWarnOffset int64
@@ -941,7 +978,48 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				}
 				return offset, nil
 			}
-			Logf("error", "security events ingestion: skipping unreadable audit data before offset %d: %v", next, err)
+			// 文档边界推进（跳过窗口 [offset, next) 仅含空白，典型=上一完整文档
+			// 的行尾换行）：与旧语义等价的无害推进——推进到残缺文档本体起点，
+			// 不计入停等、不返回停等错误（文件尾半条事务的「!found 等待」路径
+			// 保持 nil 返回的旧契约）。
+			if securityEventsGapAllWhitespace(f, offset, next) {
+				offset = next
+				decoderStart = next
+				if _, err := f.Seek(offset, io.SeekStart); err != nil {
+					_ = stmt.Close()
+					_ = tx.Rollback()
+					return committedOffset, fmt.Errorf("security events: seek after resync: %w", err)
+				}
+				decoder = json.NewDecoder(f)
+				continue
+			}
+			// SECLB35-1（2026-09-18 实证）：解码失败最常见的形态不是崩溃残片，
+			// 而是并发事务审计追加的「写入进行中」字节——对 2s tick 短暂可见、
+			// 随后补全（生产实测审计文件最终全部行合法，但立即跳过仍把窗口内
+			// 8 条事件永久丢弃）。原地等待：提交已解析文档、偏移停在残缺文档
+			// 起点，下个 tick 重读；连续 securityEventsDecodeStallLimit 个 tick
+			// 仍在同一偏移失败才按崩溃残片走下方跳过路径。归档补采（有界、
+			// 不再增长的文件）不适用等待，保持立即跳过。
+			if !t.archivePass {
+				if t.stallOffset != offset {
+					t.stallOffset, t.stallCount = offset, 1
+				} else {
+					t.stallCount++
+				}
+				if t.stallCount <= securityEventsDecodeStallLimit {
+					stmt.Close()
+					if cerr := tx.Commit(); cerr != nil {
+						return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
+					}
+					return offset, errSecurityEventsStalled
+				}
+				// 跳过执行后把 epoch 饱和在新位置：同一 pass 内紧随的连续残缺点
+				//（跳过后紧接的同段残缺）立即跳过，不重新等待——否则多段残缺要
+				// 逐段各付一个完整等待周期。新位置的独立残缺文档在下一次 pass
+				// 以偏移变化自然重置计数，恢复完整宽限。
+				t.stallOffset, t.stallCount = next, securityEventsDecodeStallLimit+1
+			}
+			Logf("error", "security events ingestion: skipping unreadable audit data before offset %d (stalled %d ticks): %v", next, t.stallCount, err)
 			offset = next
 			decoderStart = next
 			if _, err := f.Seek(offset, io.SeekStart); err != nil {

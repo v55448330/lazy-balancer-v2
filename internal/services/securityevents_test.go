@@ -824,10 +824,16 @@ func TestSecurityEventsTickSkipsMalformedAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	tailer := securityEventsNewTailer(logPath, offsetPath)
-
-	// When: running one ingest tick
+	// When: running ingest ticks until the stall limit trips the skip path
+	//（SECLB35-1：残缺数据先原地等待重试，连续 securityEventsDecodeStallLimit
+	// 个 tick 仍失败才跳过——旧的「单 tick 立即跳过」正是并发窗口丢事件的根因）
+	for i := 0; i < securityEventsDecodeStallLimit; i++ {
+		if err := tailer.securityEventsTick(); err == nil {
+			t.Fatalf("tick %d within stall limit: expected stall wait, got nil", i+1)
+		}
+	}
 	if err := tailer.securityEventsTick(); err != nil {
-		t.Fatalf("tick: %v", err)
+		t.Fatalf("tick after stall limit: %v", err)
 	}
 
 	// Then: both valid transactions are ingested and the malformed entries were skipped
