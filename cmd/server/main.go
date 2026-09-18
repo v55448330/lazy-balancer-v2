@@ -24,9 +24,8 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-var (
-	version = "dev"
-)
+// 版本经 config(APP_VERSION env / Dockerfile ARG 兜底)进入 cfg.Version——
+// 启动日志与 branding API 同源(此前独立 ldflags 变量无注入链,恒 "dev")。
 
 func main() {
 	if err := run(); err != nil {
@@ -213,7 +212,10 @@ func run() error {
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Starting lazy-balancer-v2 %s on %s", version, addr)
+	// 版本单一事实源=config(APP_VERSION env/Dockerfile ARG 兜底)——此前打印
+	// ldflags 变量 version(无注入链恒 "dev"),与 branding API 版本分叉
+	// (v2.3.0 首发漏注入,记忆在案)。ldflags 变量保留给 go 直编场景。
+	log.Printf("Starting lazy-balancer-v2 %s on %s", cfg.Version, addr)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,

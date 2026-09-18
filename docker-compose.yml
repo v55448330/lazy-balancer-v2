@@ -44,6 +44,8 @@ services:
         max-size: "50m"
         max-file: "5"
     container_name: lazy-balancer-slave
+    ports:
+      - "8001:8000"
     volumes:
       - ./data-slave:/app/data
       - ./logs-slave:/app/logs
