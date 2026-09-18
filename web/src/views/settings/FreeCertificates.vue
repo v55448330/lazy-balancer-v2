@@ -122,11 +122,21 @@
 
     <el-dialog
       v-model="dialogVisible"
-      :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'"
-      width="min(520px, 92vw)"
+      width="min(560px, 92vw)"
       :close-on-click-modal="false"
       :before-close="beforeConfigDialogClose"
+      class="dns-config-dialog"
+      top="6vh"
     >
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--success"><el-icon :size="18"><Connection /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置' }}</div>
+            <div class="dialog-header__subtitle">ACME DNS-01 验证使用的解析商凭证，保存后可测试连通性</div>
+          </div>
+        </div>
+      </template>
       <el-form :model="form" label-width="120px">
         <el-form-item label="配置名称" required>
           <el-input v-model="form.name" placeholder="例如：我的证书配置" />
@@ -137,6 +147,7 @@
           </el-select>
         </el-form-item>
         <template v-if="selectedProvider">
+          <el-divider content-position="left" class="cred-divider">认证凭证</el-divider>
           <template v-for="field in selectedProvider.credential_fields" :key="field.name">
             <el-form-item :label="field.label" v-if="shouldShowField(field)">
               <el-select
@@ -172,7 +183,16 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="min(520px, 92vw)" :before-close="beforeCADialogClose">
+    <el-dialog v-model="caDialogVisible" width="min(560px, 92vw)" :before-close="beforeCADialogClose" class="ca-config-dialog" top="6vh">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--warning"><el-icon :size="18"><Postcard /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">编辑 CA 提供商</div>
+            <div class="dialog-header__subtitle">证书签发机构对接参数：并发 / 间隔与 EAB 凭证（ZeroSSL）</div>
+          </div>
+        </div>
+      </template>
       <el-form :model="caForm" label-width="140px" :disabled="savingCA">
         <el-form-item label="名称">
           <el-input v-model="caForm.name" disabled />
@@ -220,7 +240,7 @@ import { ref, onMounted, computed, reactive } from 'vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Document, OfficeBuilding, Plus, Setting } from '@element-plus/icons-vue'
+import { Check, Connection, Document, OfficeBuilding, Plus, Postcard, Setting } from '@element-plus/icons-vue'
 import CertJobs from './CertJobs.vue'
 import type { APIResponse } from '@/types'
 
@@ -693,6 +713,19 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* ── 通用弹框头部 ── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__icon--success { background: #f0f9eb; color: #67c23a; }
+.dialog-header__icon--warning { background: #fdf6ec; color: #e6a23c; }
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
+.cred-divider { margin: 20px 0 16px; }
+.cred-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .tip-block a.link { color: #3b82f6; text-decoration: none; }
 .tip-block a.link:hover { text-decoration: underline; }
 .card-header {

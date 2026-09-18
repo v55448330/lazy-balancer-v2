@@ -30,8 +30,10 @@
               </div>
             </div>
           </template>
-          <el-row :gutter="16">
-            <el-col :span="5">
+          <!-- 等宽布局:弃用 el-col span(5+5+5+5+4 末卡窄 20%),flex 五卡严格等宽,
+               同时满足前三卡一组/后两卡一组统一宽度的要求。 -->
+          <div class="stat-row">
+            <div class="stat-col">
               <div class="stat-box stat-box--danger">
                 <div class="stat-box__icon"><el-icon><CircleClose /></el-icon></div>
                 <div class="stat-box__body">
@@ -39,8 +41,8 @@
                   <div class="stat-box__label">今日拦截</div>
                 </div>
               </div>
-            </el-col>
-            <el-col :span="5">
+            </div>
+            <div class="stat-col">
               <div class="stat-box stat-box--warning">
                 <div class="stat-box__icon"><el-icon><Warning /></el-icon></div>
                 <div class="stat-box__body">
@@ -48,8 +50,8 @@
                   <div class="stat-box__label">今日检测</div>
                 </div>
               </div>
-            </el-col>
-            <el-col :span="5">
+            </div>
+            <div class="stat-col">
               <div class="stat-box stat-box--primary">
                 <div class="stat-box__icon"><el-icon><Lock /></el-icon></div>
                 <div class="stat-box__body">
@@ -57,8 +59,8 @@
                   <div class="stat-box__label">活跃策略</div>
                 </div>
               </div>
-            </el-col>
-            <el-col :span="5">
+            </div>
+            <div class="stat-col">
               <div class="stat-box stat-box--success">
                 <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
                 <div class="stat-box__body">
@@ -67,8 +69,8 @@
                   <el-tag v-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
                 </div>
               </div>
-            </el-col>
-            <el-col :span="4">
+            </div>
+            <div class="stat-col">
               <div class="stat-box stat-box--success">
                 <div class="stat-box__icon"><el-icon><Location /></el-icon></div>
                 <div class="stat-box__body">
@@ -79,8 +81,8 @@
                   <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
                 </div>
               </div>
-            </el-col>
-          </el-row>
+            </div>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -158,7 +160,9 @@
                 <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>限流拦截</span>
               </div>
-              <el-tag type="info" size="small" effect="plain">按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计</el-tag>
+            <el-tooltip placement="top" content="按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计">
+              <el-tag type="info" size="small" effect="plain" class="rate-limit-hint">429 计数 · 重载后累计</el-tag>
+            </el-tooltip>
             </div>
           </template>
           <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" />
@@ -368,6 +372,18 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 </script>
 
 <style scoped>
+/* 等宽统计卡行:flex 五列严格等宽(原 el-col 5/5/5/5/4 末卡窄 20%) */
+.stat-row { display: flex; gap: 16px; }
+.stat-col { flex: 1 1 0; min-width: 0; }
+@media (max-width: 1200px) {
+  .stat-row { flex-wrap: wrap; }
+  .stat-col { flex: 1 1 30%; }
+}
+@media (max-width: 768px) {
+  .stat-col { flex: 1 1 100%; }
+}
+.rate-limit-hint { flex-shrink: 0; }
+.card-header { flex-wrap: nowrap; gap: 8px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }

@@ -80,5 +80,9 @@ func isSelfServicePath(path string) bool {
 		// R72 B-I-1：MFA 自助端点（setup/activate/disable/recovery-codes/
 		// verify-step）——仅操作调用者本人第二因子，与 /users/me 同属自助维护，
 		// 此前漏白名单致非 admin 用户 403（UI 却对全体展示卡片）。
-		strings.HasPrefix(path, "/api/v1/auth/mfa/")
+		strings.HasPrefix(path, "/api/v1/auth/mfa/") ||
+		// C403-1(第 40 轮分歧裁定):logout 属自助语义。当前路由注册于 v1 组
+		// 不经本守卫(行为已正确),此处收录为防御性对齐——未来若挪入
+		// business 组,非管理员登出不因守卫误拒(与从节点白名单 :69 同理)。
+		path == "/api/v1/auth/logout"
 }

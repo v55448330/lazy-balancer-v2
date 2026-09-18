@@ -677,8 +677,10 @@ onUnmounted(() => {
   opacity: 0;
 }
 
-.profile-form { padding: 0 20px; }
-.profile-readonly-alert { margin-bottom: 20px; }
+.profile-form { padding: 4px 28px 0; }
+.profile-form :deep(.el-form-item) { margin-bottom: 20px; }
+.profile-form :deep(.el-form-item__label) { color: var(--el-text-color-regular); }
+.profile-readonly-alert { margin: 0 20px 20px; }
 .user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-source-tag { flex-shrink: 0; height: 18px; padding: 0 6px; font-size: 11px; line-height: 16px; }
 .profile-dialog .backup-dialog-header { display: flex; align-items: center; gap: 12px; }
@@ -692,9 +694,10 @@ onUnmounted(() => {
 .profile-dialog .backup-dialog-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
 .oidc-hint-block {
   width: 100%;
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 10px 14px;
+  border-radius: 8px;
   background: var(--el-fill-color-light);
+  border-left: 3px solid var(--el-color-primary-light-5);
   color: var(--el-text-color-secondary);
   font-size: 12.5px;
   line-height: 1.6;

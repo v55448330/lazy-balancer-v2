@@ -195,7 +195,16 @@
       <div v-loading="loadingContent"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'" width="min(760px, 94vw)">
+    <el-dialog v-model="ruleDialogVisible" width="min(760px, 94vw)" class="custom-rule-dialog" top="6vh">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon dialog-header__icon--danger"><el-icon :size="18"><Filter /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则' }}</div>
+            <div class="dialog-header__subtitle">按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件为 AND 关系</div>
++          </div>
++        </div>
++      </template>
       <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ruleForm.name" placeholder="规则名称" />
@@ -288,7 +297,16 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="ipListDialogVisible" :title="editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'" width="min(760px, 94vw)">
+    <el-dialog v-model="ipListDialogVisible" width="min(760px, 94vw)" class="ip-list-dialog" top="6vh">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><List /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表' }}</div>
+            <div class="dialog-header__subtitle">可复用 IP/CIDR 集合，供安全策略引用（黑白名单 / 信任名单）</div>
++          </div>
++        </div>
++      </template>
       <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
@@ -396,7 +414,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import { Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
+import { Filter, List, Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -1136,7 +1154,25 @@ onUnmounted(() => {
 .crs-card :deep(.el-descriptions__cell) { height: 48px; vertical-align: middle; }
 .crs-card .ip2region-desc { margin-top: 20px; }
 .crs-cell-flex { display: flex; align-items: center; height: 24px; }
-.rule-condition-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start; flex-wrap: wrap; padding: 8px; background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 4px; }
+.rule-condition-row {
+  display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; flex-wrap: wrap;
+  padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+  position: relative; transition: border-color 0.2s;
+}
+.rule-condition-row:hover { border-color: #d1d5db; }
+.rule-condition-row .el-button--danger { margin-left: auto; }
+
+/* ── 通用弹框头部(icon + 标题 + 副标题)── */
+.dialog-header { display: flex; align-items: flex-start; gap: 12px; }
+.dialog-header__icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+  background: #ecf5ff; color: #409eff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-header__icon--danger { background: #fef0f0; color: #f56c6c; }
+.dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
+.dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
+.add-condition-btn { margin-top: 4px; }
 .pattern-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
 .pattern-input-row { display: flex; align-items: center; gap: 6px; }
 .preset-section { margin-top: 4px; }

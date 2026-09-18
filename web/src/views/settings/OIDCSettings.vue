@@ -58,14 +58,17 @@
       <div class="step-title">应用凭证</div>
       <el-row :gutter="12">
         <el-col :span="12">
-          <el-input v-model="form.clientId" placeholder="Client ID" clearable />
+          <div class="field-label">Client ID</div>
+          <el-input v-model="form.clientId" placeholder="认证服务后台的 Client ID" clearable />
         </el-col>
         <el-col :span="12">
+          <div class="field-label">Client Secret</div>
           <el-input v-model="form.clientSecret" type="password" show-password
-            :placeholder="hasSecret ? '已保存（留空保持不变）' : 'Client Secret'" />
+            :placeholder="hasSecret ? '已保存（留空保持不变）' : '认证服务后台的 Client Secret'" />
         </el-col>
       </el-row>
-      <el-input v-model="form.displayName" placeholder="登录按钮显示名（选填，默认取服务域名）" class="mt8" maxlength="30" />
+      <div class="field-label mt8">登录按钮显示名</div>
+      <el-input v-model="form.displayName" placeholder="选填，默认取服务域名" maxlength="30" />
       </div>
     </div>
 
@@ -303,6 +306,7 @@ const copy = async (text: string) => {
 .oidc-step-body { flex: 1; min-width: 0; }
 .step { margin-bottom: 18px; }
 .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.field-label { font-size: 12.5px; color: var(--el-text-color-regular); margin-bottom: 4px; }
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
 .probe-err { margin-top: 6px; font-size: 12.5px; color: var(--el-color-danger); }
 .reg-info { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px 12px; background: var(--el-fill-color-light); }
