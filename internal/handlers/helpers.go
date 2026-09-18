@@ -986,12 +986,22 @@ func parseHostMetricsFromSamples(samples []prometheusSample) []models.HostMetric
 	return buildPrometheusMetricsIndex(samples).hostMetrics()
 }
 
+// extractLabel(LB40-6 精确键匹配):label 键必须以标签边界(逗号后/花括号后/
+// 字符串起始)出现——子串匹配会把 x_host 误归集到 host,指标归因错乱。
 func extractLabel(metricName string, label string) string {
-	idx := strings.Index(metricName, label+`="`)
-	if idx == -1 {
+	start := -1
+	for _, boundary := range []string{"," + label + `="`, "{" + label + `="`} {
+		if idx := strings.Index(metricName, boundary); idx >= 0 {
+			start = idx + len(boundary)
+			break
+		}
+	}
+	if start < 0 && strings.HasPrefix(metricName, label+`="`) {
+		start = len(label) + 2
+	}
+	if start < 0 {
 		return ""
 	}
-	start := idx + len(label) + 2
 	end := strings.Index(metricName[start:], `"`)
 	if end == -1 {
 		return ""

@@ -192,6 +192,7 @@ import { CopyDocument, Monitor, RefreshRight, Select, VideoPause, VideoPlay } fr
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { copyText } from '@/utils/copy'
 import { formatDate } from '@/utils/date'
 import type {
   APIResponse,
@@ -340,7 +341,8 @@ const fetchStatus = async (): Promise<ClusterStatus> => {
   const requestSeq = ++requestSequence
   const response = await request.get<APIResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal, silent: true })
   const data = response.data
-  if (!data) throw new Error('集群状态响应缺少数据')
+  // FE40-D1-4：协议违例用 TypeError（Error 保留给业务失败）。
+  if (!data) throw new TypeError('集群状态响应缺少数据')
   if (!disposed && requestSeq === requestSequence) {
     status.value = data
     authStore.setNodeMode(data.node_mode)
@@ -494,12 +496,11 @@ const generateRegisterToken = async (): Promise<void> => {
 const copyRegisterToken = async (): Promise<void> => {
   const token = registerToken.value?.token
   if (!token) return
-  try {
-    await navigator.clipboard.writeText(token)
+  // FE40-D1-3：复用 utils/copy 的 copyText（降级路径/类型收口与全站一致）。
+  const ok = await copyText(token)
+  if (ok) {
     mfaAwareSuccess('注册令牌已复制')
-  } catch (error: unknown) {
-    // clipboard 仅 reject Error 子类；其余值同样按复制失败提示，不再向上抛。
-    console.error('Failed to copy register token:', error)
+  } else {
     ElMessage.error('复制失败，请手动复制注册令牌')
   }
 }

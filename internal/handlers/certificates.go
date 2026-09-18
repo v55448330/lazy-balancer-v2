@@ -69,6 +69,25 @@ func isMaskedDNSCredentials(m map[string]string) bool {
 	return false
 }
 
+// mergeMaskedDNSCredentials(CERT40-2):部分掩码回传逐字段合并——值为掩码
+// 占位的字段取库中原值,非占位取提交值;库中亦无该字段时占位无处可取,
+// 返回错误(防掩码串覆盖真实凭证)。
+func mergeMaskedDNSCredentials(submitted, stored map[string]string) (map[string]string, error) {
+	merged := make(map[string]string, len(submitted))
+	for k, v := range submitted {
+		if v == maskedDNSCredentialsSentinel {
+			storedVal, ok := stored[k]
+			if !ok || storedVal == "" {
+				return nil, fmt.Errorf("凭证字段不能为掩码占位符")
+			}
+			merged[k] = storedVal
+		} else {
+			merged[k] = v
+		}
+	}
+	return merged, nil
+}
+
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, dns_provider, COALESCE(dns_credentials,''), enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
@@ -123,6 +142,14 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 		return
 	}
 
+	// CERT40-2:Create 无库值可取,含掩码占位直接拒绝。
+	for _, v := range req.DNSCredentials {
+		if v == maskedDNSCredentialsSentinel {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证字段不能为掩码占位符"})
+			return
+		}
+	}
+
 	if _, err := provider.BuildCredentialsJSON(req.DNSCredentials); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -174,6 +201,20 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid stored DNS credentials"})
 			return
 		}
+	} else if !isMaskedDNSCredentials(effectiveCredentials) {
+		// CERT40-2:部分掩码回传先逐字段合并——下方早期校验与最终落库都以
+		// 合并结果为准(掩码字段取库值),掩码串不得进入校验/落库。
+		stored := map[string]string{}
+		if oldCredentials != "" {
+			_ = json.Unmarshal([]byte(oldCredentials), &stored)
+		}
+		merged, merr := mergeMaskedDNSCredentials(effectiveCredentials, stored)
+		if merr != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: merr.Error()})
+			return
+		}
+		req.DNSCredentials = merged
+		effectiveCredentials = merged
 	}
 	provider, ok := dnsproviders.Get(effectiveProvider)
 	if !ok {
@@ -199,9 +240,11 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		args = append(args, req.DNSProvider)
 		changed = append(changed, "DNS提供商")
 	}
+
 	if req.DNSCredentials != nil {
 		// R72 二十六次 D4：全掩码回传（非 admin GET 后未改动即保存）按未提交
-		// 处理——否则掩码串会覆盖真实凭证。
+		// 处理——否则掩码串会覆盖真实凭证。部分掩码已在上方合并进
+		// req.DNSCredentials(CERT40-2)。
 		if isMaskedDNSCredentials(req.DNSCredentials) {
 			req.DNSCredentials = nil
 		} else {

@@ -152,6 +152,15 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	if bundle == nil {
 		return false, false, nil
 	}
+	// CL40-C1-1:反向防御——声明哈希非空但未携带内容(主端瞬态 IO 读失败
+	// 时 BuildWafFileBundle 会产出该形状):从端应用「无操作」后漂移判定
+	// 永不收敛,必须拒绝(主端恢复后下轮同步自愈)。
+	if bundle.CRSSha256 != "" && len(bundle.CRSTarGzB64) == 0 {
+		return crsChanged, xdbChanged, errors.New("同步包声明 CRS 哈希非空但未携带内容，拒绝应用该同步包")
+	}
+	if bundle.IP2RegionSha != "" && len(bundle.XdbB64) == 0 {
+		return crsChanged, xdbChanged, errors.New("同步包声明 IP2Region 哈希非空但未携带内容，拒绝应用该同步包")
+	}
 	if len(bundle.CRSTarGzB64) > 0 {
 		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
 		// 仅恶意/损坏主节点可构造——与 xdb 侧同纵深防御；untarGzTo 在
@@ -554,6 +563,13 @@ func sanitizeBundleVersion(v string) string {
 		return ""
 	}
 	return v
+}
+
+// SanitizeBundleVersion 是 sanitizeBundleVersion 的导出包装(A40-2-F6):
+// 备份导入(lbbak)路径与集群同步路径共用同一版本串形状校验——备份文件
+// 同样是外部输入,超长/控制字符版本串不得直写 .version 伴生文件与审计详情。
+func SanitizeBundleVersion(v string) string {
+	return sanitizeBundleVersion(v)
 }
 
 // OverrideWafLivePathsForTest 重定向 CRS/IP2Region 活动文件路径,仅测试使用

@@ -190,6 +190,20 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 		info.CaddyID = caddyID
 		return info
 	}
+	// CERT40-1:选中失败区分「已过期」与「尚未签发」——候选集 PEM 非空但
+	// 无一可选中时,逐个解析:首个已过期候选按 expired 呈现,不再误报
+	// 「尚未签发或不存在」;解析失败/未过期维持原口径。
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.CertPEM) == "" || candidate.Status == "disabled" {
+			continue
+		}
+		info := ParseCertInfo(candidate.CertPEM, "acme_dns", ruleDomain)
+		info.CaddyID = caddyID
+		if info.Status == "expired" {
+			info.Error = "ACME 证书已过期"
+			return info
+		}
+	}
 	return missingACMECertInfo(caddyID, ruleDomain)
 }
 

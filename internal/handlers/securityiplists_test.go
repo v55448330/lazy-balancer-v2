@@ -87,6 +87,38 @@ func TestCreateIPList_validationMatrix(t *testing.T) {
 	}
 }
 
+// SEC40-B1-3:策略引用的 IP 列表数量封顶 64(去重后)——无上限的 refs 会让
+// 渲染端逐条展开 ACL 条目,单策略即可撑爆配置体积。
+func TestSecurityPolicy_ipListRefsCappedAt64(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	refsJSON := func(n int) string {
+		ids := make([]int, n)
+		for i := range n {
+			ids[i] = i + 1
+		}
+		raw, _ := json.Marshal(ids)
+		return string(raw)
+	}
+	for i := 1; i <= 65; i++ {
+		seedIPListRow(t, fmt.Sprintf("list-%d", i), `[{"value":"10.0.0.1","remark":""}]`)
+	}
+
+	rec := postJSON(t, router, "/security/policies", map[string]any{
+		"name": "cap-65", "ip_acl_list_refs": refsJSON(65),
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "不能超过 64") {
+		t.Fatalf("65 refs must 400 with cap message, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = postJSON(t, router, "/security/policies", map[string]any{
+		"name": "cap-64", "ip_acl_list_refs": refsJSON(64),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("64 refs must pass, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateIPList_globalCountLimit(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newIPListRouter(t)

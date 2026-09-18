@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -72,6 +73,10 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 		if r < 0x20 || r == 0x7f || r == '"' {
 			return fmt.Errorf("规则名称不能包含控制字符或双引号")
 		}
+	}
+	// SEC40-B1-4:规则名随 SecRule msg 发射,长度封顶 100 rune。
+	if utf8.RuneCountInString(rule.Name) > 100 {
+		return fmt.Errorf("规则名称不能超过 100 字符")
 	}
 	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
 		return fmt.Errorf("动作必须为 block、log 或 pass，当前值 %s", rule.Action)
@@ -329,6 +334,11 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
 		return
 	}
+	// SEC40-B1-4:content 随 errors.routes 内联发射,封顶 64KB。
+	if len(req.Content) > 64<<10 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能超过 64KB"})
+		return
+	}
 	// API 不允许创建默认拦截页（R40 F3）：默认页仅 db 种子行，第二个
 	// is_default=1 页面不可编辑（:243）不可删除（:283），且 branding 重渲染
 	// 会覆盖全部默认页内容——产生不可管理的死行。
@@ -373,6 +383,11 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.Content) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
+		return
+	}
+	// SEC40-B1-4:content 随 errors.routes 内联发射,封顶 64KB(与创建同口径)。
+	if len(req.Content) > 64<<10 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能超过 64KB"})
 		return
 	}
 	var isDefault bool
@@ -471,7 +486,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 27 表达式投影：与生成路径的 26 表达式 COALESCE 投影逐列同默认值、同相对顺序
+// 29 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
@@ -728,6 +743,15 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
+		return
+	}
+	// SEC40-B1-4:DB 列无长度约束,超长名/描述随审计与列表响应放大。
+	if utf8.RuneCountInString(req.Name) > 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能超过 100 字符"})
+		return
+	}
+	if utf8.RuneCountInString(req.Description) > 500 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略描述不能超过 500 字符"})
 		return
 	}
 	if req.Mode == "" {
@@ -1144,6 +1168,15 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
 		return
 	}
+	// SEC40-B1-4:更新侧同封顶(指针字段仅在提供时校验)。
+	if req.Name != nil && utf8.RuneCountInString(*req.Name) > 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能超过 100 字符"})
+		return
+	}
+	if req.Description != nil && utf8.RuneCountInString(*req.Description) > 500 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略描述不能超过 500 字符"})
+		return
+	}
 	for _, f := range []struct {
 		name string
 		val  *string
@@ -1312,34 +1345,42 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	if req.GeoIPCountries != nil {
-		// R72 二十九次 M1：地域条目与存量完全相同的更新跳过 live 校验——N5 裁决
-		// 语义是「缺库时不得启用」而非「缺库时不得编辑未变更字段」；条目真正变化
-		// 时才落 fail-closed 门（缺库时改描述/开关不再 400）。
-		// 校验口径取生效 mode：请求携带 geoip_mode 用请求值，否则用存量值——
-		// off 态保留名单只做形状校验，不被可用性门卡死。
-		skipGeoIPValidation := false
-		var storedGeoIP, storedGeoIPMode string
-		// SEC19-P5-3(第 19 轮):读错误三分支(对齐同函数 R64 B-S1 口径)——
-		// 此前吞错使 storedGeoIPMode 落空串,GeoIP off 的可用性门判定漂移。
-		if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 GeoIP 配置失败"})
+	// SEC40-B1-1:存量读取移出「请求携带条目」判定——翻转门需要存量 mode,
+	// 且「只改 mode 不带条目」的更新同样要过 GeoIP 可用性门。
+	var storedGeoIP, storedGeoIPMode string
+	// SEC19-P5-3(第 19 轮):读错误三分支(对齐同函数 R64 B-S1 口径)——
+	// 此前吞错使 storedGeoIPMode 落空串,GeoIP off 的可用性门判定漂移。
+	if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 			return
 		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 GeoIP 配置失败"})
+		return
+	}
+	effectiveGeoIPMode := storedGeoIPMode
+	if req.GeoIPMode != nil && *req.GeoIPMode != "" {
+		effectiveGeoIPMode = *req.GeoIPMode
+	}
+	// SEC40-B1-1 翻转门:off→非 off 时无论条目是否随请求、是否变化,一律过
+	// live 校验(缺库不得启用)——「缺库时不得启用」优先于「未变更字段可
+	// 编辑」豁免;条目取请求值??存量值。
+	modeFlippedOn := storedGeoIPMode == "off" && effectiveGeoIPMode != "off"
+	skipGeoIPValidation := false
+	if !modeFlippedOn && req.GeoIPCountries != nil {
+		// R72 二十九次 M1:地域条目与存量完全相同的更新跳过 live 校验——N5 裁决
+		// 语义是「缺库时不得启用」而非「缺库时不得编辑未变更字段」;条目真正变化
+		// 时才落 fail-closed 门(缺库时改描述/开关不再 400)。
 		skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
-		effectiveGeoIPMode := storedGeoIPMode
-		if req.GeoIPMode != nil && *req.GeoIPMode != "" {
-			effectiveGeoIPMode = *req.GeoIPMode
+	}
+	if !skipGeoIPValidation && (req.GeoIPCountries != nil || modeFlippedOn) {
+		effCountries := storedGeoIP
+		if req.GeoIPCountries != nil {
+			effCountries = *req.GeoIPCountries
 		}
-		if !skipGeoIPValidation {
-			if err := services.ValidateGeoIPCountries(*req.GeoIPCountries, effectiveGeoIPMode); err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-				return
-			}
+		if err := services.ValidateGeoIPCountries(effCountries, effectiveGeoIPMode); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
 		}
 	}
 	if req.CustomRules != nil {
@@ -1880,7 +1921,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		var p models.SecurityPolicy
-		// C5 SUG-1：与 securityPolicySelectColumns 同 25 列同序投影（COALESCE 默认值），
+		// C5 SUG-1：与 securityPolicySelectColumns 同 29 列同序投影（COALESCE 默认值），
 		// 任一可空列 NULL 不再使整接口 500；WHERE enabled=1 语义不变（NULL-enabled
 		// 仍被 SQL 过滤）。
 		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+`

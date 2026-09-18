@@ -707,7 +707,7 @@ const resetFilters = () => {
 
 const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
-const goToRule = (row: SecurityEvent) => { localStorage.setItem('rules-search', row.rule_caddy_id); window.open('/?page=rules', '_blank') }
+const goToRule = (row: SecurityEvent) => { window.open(`/?page=rules&rs=${encodeURIComponent(row.rule_caddy_id)}`, '_blank') }
 const goToPolicy = (row: SecurityEvent) => {
   if (row.policy_id > 0) {
     localStorage.setItem('security-policies-focus-id', String(row.policy_id))

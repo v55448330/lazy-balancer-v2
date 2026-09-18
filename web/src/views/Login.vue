@@ -264,6 +264,22 @@ const oidcDisplayName = ref('OIDC')
 const showLocalForm = ref(false)
 const oidcRedirecting = ref(false)
 onMounted(async () => {
+  // A40-1-2:OIDC 跳转失败(302)经 hash query 携带 oidc_error——展示后从
+  // hash 清除(参照 C2-7 回调错误链的一次性语义)。
+  try {
+    const hash = window.location.hash
+    const qIndex = hash.indexOf('?')
+    if (qIndex >= 0) {
+      const params = new URLSearchParams(hash.slice(qIndex + 1))
+      const oidcError = params.get('oidc_error')
+      if (oidcError) {
+        ElMessage.error(`OIDC 登录失败：${oidcError}`)
+        params.delete('oidc_error')
+        const rest = params.toString()
+        window.history.replaceState(null, '', window.location.pathname + hash.slice(0, qIndex + 1) + rest)
+      }
+    }
+  } catch { /* 隐私模式 */ }
   // C2-7:回调失败 302 回前端,错误经 sessionStorage 一次性带到这里展示
   try {
     const oidcErr = sessionStorage.getItem('oidc_login_error')

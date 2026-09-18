@@ -369,8 +369,9 @@ func TestOIDC_disabled_state(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("login when disabled should 404, got %d", rec.Code)
+	// A40-1-2:未启用也是浏览器导航形态——302 回登录页错误位,不渲染 404 JSON
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "#/login?oidc_error=") {
+		t.Fatalf("login when disabled must 302 to login error page, got %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

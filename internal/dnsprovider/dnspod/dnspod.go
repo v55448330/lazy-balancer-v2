@@ -228,7 +228,21 @@ func (n flexNumber) Int64() int64 {
 	return value
 }
 
+// domainIDCache(CERT40-4):zone→domain_id 进程内缓存——签发/续签的每次
+// Present/CleanUp 都要解析 zone 的 domain_id,分页遍历 Domain.List 在多
+// 域名/多任务并发下重复全额扫描;zone→id 映射在账户内稳定,命中即省。
+var (
+	domainIDCacheMu sync.Mutex
+	domainIDCache   = map[string]string{}
+)
+
 func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error) {
+	domainIDCacheMu.Lock()
+	cached, ok := domainIDCache[zone]
+	domainIDCacheMu.Unlock()
+	if ok {
+		return cached, nil
+	}
 	offset := 0
 	for page := 0; page < domainListMaxPages; page++ {
 		params := url.Values{}
@@ -252,7 +266,11 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		}
 		for _, d := range result.Domains {
 			if d.Name == zone {
-				return d.ID.String(), nil
+				id := d.ID.String()
+				domainIDCacheMu.Lock()
+				domainIDCache[zone] = id
+				domainIDCacheMu.Unlock()
+				return id, nil
 			}
 		}
 		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，

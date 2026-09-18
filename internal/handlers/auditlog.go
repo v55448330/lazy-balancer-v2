@@ -14,11 +14,28 @@ import (
 )
 
 // GetAuditLogOptions 返回筛选下拉的可选值：操作人/操作取自审计库去重
-// （按出现次数排序），对象仅保留高频值（长尾由模糊输入覆盖）。
+// auditOptionsCache(SYS40-4):options 三条 GROUP BY 的进程内缓存(60s)——
+// 下拉选项对实时性不敏感,深审计库每次筛选面板打开都做三趟全表 GROUP BY
+// 是无谓放大;写侧不失效(60s 窗口内新动作延迟出现,可接受口径)。
+var auditOptionsCache struct {
+	expiresAt time.Time
+	payload   map[string]interface{}
+}
+
+// resetAuditOptionsCacheForTest 仅供测试隔离。
+func resetAuditOptionsCacheForTest() {
+	auditOptionsCache.expiresAt = time.Time{}
+	auditOptionsCache.payload = nil
+}
+
 func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 	type optionRow struct {
 		Value string `json:"value"`
 		Count int64  `json:"count"`
+	}
+	if time.Now().Before(auditOptionsCache.expiresAt) && auditOptionsCache.payload != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: auditOptionsCache.payload})
+		return
 	}
 	fetchDistinct := func(column string, limit int) []optionRow {
 		rows, err := db.AuditDB.Query(`
@@ -40,18 +57,26 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 		}
 		return out
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{
+	payload := map[string]interface{}{
 		"usernames": fetchDistinct("COALESCE(username,'')", 100),
 		"actions":   fetchDistinct("action", 100),
 		"resources": fetchDistinct("COALESCE(resource,'')", 50),
-	}})
+	}
+	auditOptionsCache.payload = payload
+	auditOptionsCache.expiresAt = time.Now().Add(60 * time.Second)
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: payload})
 }
 
 // buildAuditLogFilters 组装列筛选 WHERE 子句。时间参数按配置时区解析后
 // 换算为 UTC 与 created_at 比较；日期-only 输入自动补全天/日边界。
 func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interface{}) {
+	// SYS40-3:LIKE 值侧转义——用户输入中的 %/_/\ 是字面字符,不转义会被
+	// 当通配符(搜「100%」命中 100abc);SQL 追加 ESCAPE '\' 声明转义符。
 	like := func(column, value string) (string, interface{}) {
-		return " AND " + column + " LIKE ?", "%" + value + "%"
+		escaped := strings.ReplaceAll(value, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+		escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+		return " AND " + column + " LIKE ? ESCAPE '\\'", "%" + escaped + "%"
 	}
 	var conds []string
 	var args []interface{}
@@ -118,8 +143,10 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	}
 	// clamp 上限防 (page-1)*pageSize 整数溢出为负 → SQLite OFFSET 报错 500
 	// （与 ListSecurityEvents security.go:815 同口径，R34 C）。
-	if page > 100000 {
-		page = 100000
+	// SYS40-4:上限收紧 100000→10000——审计库全量在百万行量级内,10 万页
+	// (200 万行偏移)无命中语义只浪费深翻页扫描。
+	if page > 10000 {
+		page = 10000
 	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	if pageSize < 1 || pageSize > 100 {

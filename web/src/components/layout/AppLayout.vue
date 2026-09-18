@@ -377,7 +377,12 @@ const handleRestartForDrift = async () => {
 onMounted(() => {
   syncProfileForm()
   fetchDriftStatus()
-  driftTimer = window.setInterval(fetchDriftStatus, 60000)
+  // FE40-D1-5：后台标签页跳过漂移轮询——不可见页的持续请求无意义,
+  // visibilitychange 恢复可见时下一周期自然补查。
+  driftTimer = window.setInterval(() => {
+    if (document.hidden) return
+    void fetchDriftStatus()
+  }, 60000)
 })
 
 onUnmounted(() => {

@@ -631,6 +631,13 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 			Logf("warn", "自定义规则 %d(%s) %s，已跳过发射，请修正或禁用", cr.ID, cr.Name, issue)
 			continue
 		}
+		// SEC40-B1-2:DB id ≥890000 经发射偏移 +10000 后落入 CRS 保留段
+		//(900000+)——与 CRS 规则同 id 冲突会使整份 coraza 配置编译失败。
+		// 发射侧跳过并告警(镜像上方坏规则兜底同款)。
+		if cr.ID >= 890000 {
+			Logf("warn", "自定义规则 %d(%s) 发射 id 将撞入 CRS 保留空间，已跳过发射", cr.ID, cr.Name)
+			continue
+		}
 		emitID := cr.ID + 10000
 		if cr.ID == 0 {
 			synthetic++
@@ -759,9 +766,10 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 	}
 	// R4-Render-1/2(第 4 轮审计):coraza 默认 RequestBodyLimit=128MiB,
 	// 用户限额>128MiB 时 WAF 活跃规则 body 在 128MiB 处被拦(用户限额不可达);
-	// 413 语义被 coraza-caddy 压平为 500。发射 SecRequestBodyLimit 对齐
-	// 用户有效限额(min(用户值,1GiB),coraza Validate 上限)。
-	if len(bodyLimitMB) > 0 && bodyLimitMB[0] > 0 {
+	// 413 语义被 coraza-caddy 压平为 500。D40-2-1:WAF 活跃恒发射
+	// SecRequestBodyLimit(有效值经 resolveRuleOverrides 归一恒>0,
+	// min(用户值,1GiB) 与 coraza Validate 上限对齐)。
+	if len(bodyLimitMB) > 0 {
 		limitBytes := int64(bodyLimitMB[0]) * 1024 * 1024
 		const corazaMax = int64(1073741824) // 1GiB
 		if limitBytes > corazaMax {

@@ -76,3 +76,27 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 		compileForEngineGate(t, buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}))
 	})
 }
+
+// SEC40-B1-2:自定义规则 DB id ≥890000——发射偏移 +10000 后落入 CRS 保留段
+// (900000+),与 CRS 规则同 id 冲突会使整份 coraza 配置编译失败(多策略/ CRS
+// 更新后必然撞车)。发射侧跳过并告警,不产出冲突 id。
+func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
+	p := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
+		`[{"id":890000,"name":"collider","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
+	directives := BuildCorazaDirectives(p, nil, "", false)
+	if strings.Contains(directives, "id:900000") {
+		t.Fatalf("rule with db id 890000 must be skipped (emit id 900000 collides CRS reserved space), got:\n%s", directives)
+	}
+	if !strings.Contains(directives, "SECURITY_RULES_END") {
+		t.Fatalf("marker must survive skipped rule, got:\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
+	// 回归形状:合法 id(890000 以下)照常发射
+	pOK := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
+		`[{"id":889999,"name":"safe","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`)}
+	dOK := BuildCorazaDirectives(pOK, nil, "", false)
+	if !strings.Contains(dOK, "id:899999") {
+		t.Fatalf("rule with db id 889999 must still emit id:899999, got:\n%s", dOK)
+	}
+	compileForEngineGate(t, dOK)
+}

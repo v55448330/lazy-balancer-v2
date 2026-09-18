@@ -198,7 +198,7 @@ func flushSystemAuditLogs() {
 	}
 	if AuditDB == nil {
 		systemAuditBuffer.mu.Lock()
-		systemAuditBuffer.entries = append(entries, systemAuditBuffer.entries...)
+		systemAuditBuffer.entries = entries
 		trimSystemAuditBufferLocked()
 		systemAuditBuffer.mu.Unlock()
 		return

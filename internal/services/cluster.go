@@ -23,8 +23,11 @@ var (
 	ErrInvalidRegisterToken = errors.New("注册令牌无效或已过期")
 	ErrNodeNotFound         = errors.New("节点不存在")
 	ErrInvalidClusterAuth   = errors.New("集群凭证无效")
-	ErrAlreadyMaster        = errors.New("当前节点已是主节点")
-	ErrInvalidSyncInterval  = errors.New("同步间隔需在 10-86400 秒之间")
+	// ErrNodeNotPending(CL40-C1-3):审批/拒绝动作命中非 pending 状态的节点
+	// (重复审批/已处理)——handler 侧映射 409。
+	ErrNodeNotPending      = errors.New("节点不在待审批状态")
+	ErrAlreadyMaster       = errors.New("当前节点已是主节点")
+	ErrInvalidSyncInterval = errors.New("同步间隔需在 10-86400 秒之间")
 	// ErrSyncUsersLocked 系统数据恒同步不可禁用(SR9-1:handler 映射 400)。
 	ErrSyncUsersLocked = errors.New("系统数据为恒同步项（含用户/密钥/ACME），不允许禁用；证书随负载规则开关")
 )
@@ -182,7 +185,17 @@ func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int) error {
 		return fmt.Errorf("读取审批结果: %w", err)
 	}
 	if updated != 1 {
-		return ErrNodeNotFound
+		// CL40-C1-3:0 行命中分判——节点存在但非 pending(重复审批/已拒绝)
+		// 返回 409 语义错误;不存在维持 404。
+		var status string
+		var secret sql.NullString
+		if err := s.db.QueryRowContext(ctx, "SELECT status, registration_secret FROM nodes WHERE id=?", nodeID).Scan(&status, &secret); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNodeNotFound
+			}
+			return fmt.Errorf("回查节点状态: %w", err)
+		}
+		return fmt.Errorf("%w: 当前状态 %s", ErrNodeNotPending, status)
 	}
 	return nil
 }

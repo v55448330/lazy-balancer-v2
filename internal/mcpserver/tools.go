@@ -155,7 +155,7 @@ var toolUsage = map[string]string{
 	"start_caddy":                  "启动 Caddy 进程",
 	"stop_caddy":                   "停止 Caddy 进程",
 	"restart_caddy":                "重启 Caddy 进程",
-	"get_admin_tls":                "查看管理面板 HTTPS 配置（证书/端口/模式）",
+	"get_admin_tls":                "查看管理面板 HTTPS 配置（启用状态/模式/证书信息）",
 	"update_admin_tls":             "更新管理面板 HTTPS 配置",
 	"inspect_admin_tls":            "检查管理面板 HTTPS 证书有效性",
 	"get_system_metrics":           "查看系统资源使用（CPU/内存/磁盘/网络）",
@@ -163,5 +163,5 @@ var toolUsage = map[string]string{
 	"restart_system":               "重启应用服务（更新配置后生效）",
 	"get_rule_metrics":             "查看指定规则的实时指标（请求数/状态码/连接数）",
 	"get_metrics_history":          "查看历史指标趋势（按小时/天聚合，interval 参数选窗，可按 rule_id 过滤单规则；单规则固定窗口趋势用 get_rule_metrics_history 的 range）",
-	"get_connections":              "查看当前连接统计（按规则/上游分布）",
+	"get_connections":              "查看全局 TCP 连接状态分布（established/time_wait 等计数）",
 }

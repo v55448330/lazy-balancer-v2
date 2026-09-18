@@ -151,6 +151,10 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 		if errors.Is(err, services.ErrNodeNotFound) {
 			status = http.StatusNotFound
 		}
+		if errors.Is(err, services.ErrNodeNotPending) {
+			// CL40-C1-3:重复审批/已处理节点 409,与「不存在」404 分判。
+			status = http.StatusConflict
+		}
 		clusterError(c, status, action+"节点失败", err)
 		return
 	}

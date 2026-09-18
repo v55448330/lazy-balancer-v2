@@ -200,12 +200,55 @@ func oidcCallbackURL(c *gin.Context) string {
 	return requestOrigin(c) + "/api/v1/auth/oidc/callback"
 }
 
+// oidcStandardErrorCodes OAuth2/OIDC 规范错误码全集(RFC 6749 §5.2 + OIDC
+// Core §3.1.2.6)——回调 error 参数白名单。
+var oidcStandardErrorCodes = map[string]struct{}{
+	"invalid_request":            {},
+	"unauthorized_client":        {},
+	"access_denied":              {},
+	"unsupported_response_type":  {},
+	"invalid_scope":              {},
+	"server_error":               {},
+	"temporarily_unavailable":    {},
+	"interaction_required":       {},
+	"login_required":             {},
+	"account_selection_required": {},
+	"consent_required":           {},
+	"invalid_request_uri":        {},
+	"invalid_request_object":     {},
+	"invalid_client":             {},
+	"invalid_grant":              {},
+	"unsupported_grant_type":     {},
+	"unsupported_token_type":     {},
+	"expired_token":              {},
+}
+
+// sanitizeOIDCErrorParam(A40-1-4):回调 error 参数仅放行标准错误码(大小写
+// 不敏感,保留原形回显);超长或非白名单值返回空串——外部可控文本不得经
+// 前端错误页当系统提示渲染。
+func sanitizeOIDCErrorParam(raw string) string {
+	code := strings.TrimSpace(raw)
+	if len(code) > 64 {
+		return ""
+	}
+	if _, ok := oidcStandardErrorCodes[strings.ToLower(code)]; !ok {
+		return ""
+	}
+	return code
+}
+
 // OIDCLogin GET /auth/oidc/login?return_to=...
 // 生成 state/nonce/PKCE 后跳转提供商授权页。
 func (h *Handlers) OIDCLogin(c *gin.Context) {
+	// A40-1-2:login 是浏览器整页导航(登录页按钮/链接触发)——失败一律 302
+	// 回前端登录页错误位(oidc_error 经 URL fragment 携带,不发给服务器),
+	// 与回调 C2-7 同型,不渲染裸 JSON。
+	fail := func(msg string) {
+		c.Redirect(http.StatusFound, requestOrigin(c)+"/#/login?oidc_error="+url.QueryEscape(msg))
+	}
 	cfg, ok := loadOIDCConfig()
 	if !ok || !cfg.Enabled || cfg.Issuer == "" {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "OIDC 未启用"})
+		fail("OIDC 未启用")
 		return
 	}
 	// 过期清理先行(R39-3 P1 复审修正):封顶判定必须在自愈清理之后——
@@ -224,27 +267,27 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	// R39-3:在册 state 条目封顶——未认证泛洪不得无限放大内存(上限远高于
 	// 正常未完成登录量级;到达即拒绝,不影响「回调失败不计锁定」裁定)。
 	if oidcStateCount.Load() >= int32(oidcStateMaxEntries) {
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "登录请求过于频繁，请稍后再试"})
+		fail("登录请求过于频繁，请稍后再试")
 		return
 	}
 	p, err := oidcProvider(cfg.Issuer)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
+		fail(err.Error())
 		return
 	}
 	stateRaw := make([]byte, 16)
 	nonceRaw := make([]byte, 16)
 	verifierRaw := make([]byte, 32)
 	if _, err := rand.Read(stateRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成状态失败"})
+		fail("生成状态失败")
 		return
 	}
 	if _, err := rand.Read(nonceRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 nonce 失败"})
+		fail("生成 nonce 失败")
 		return
 	}
 	if _, err := rand.Read(verifierRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 PKCE 失败"})
+		fail("生成 PKCE 失败")
 		return
 	}
 	state := hex.EncodeToString(stateRaw)
@@ -296,9 +339,14 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		return
 	}
 	if errParam := c.Query("error"); errParam != "" {
-		// SEC-3:仅回显 error 短码——description 为外部可控长文本,回显会被
-		// 登录页当系统提示渲染(社工文案注入面)。
-		fail("提供商拒绝授权: "+errParam, "OIDC 提供商拒绝授权")
+		// SEC-3+A40-1-4:仅回显 OAuth2/OIDC 标准错误码——description 与自造
+		// error 值均为外部可控文本,回显会被登录页当系统提示渲染(社工文案
+		// 注入面);非白名单短码一律吞掉,只保留「提供商拒绝授权」事实。
+		msg := "提供商拒绝授权"
+		if code := sanitizeOIDCErrorParam(errParam); code != "" {
+			msg += ": " + code
+		}
+		fail(msg, "OIDC 提供商拒绝授权")
 		return
 	}
 	p, err := oidcProvider(cfg.Issuer)
@@ -369,8 +417,10 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		if base == "" {
 			base = "oidc-" + claims.Sub
 		}
-		if len(base) > 50 {
-			base = base[:50]
+		// A40-1-3:截断按 rune 计数——byte 截断会把中文/emoji 切成无效 UTF-8
+		// 落库(前端展示乱码);列宽 VARCHAR(50) 的语义单位是字符不是字节。
+		if runes := []rune(base); len(runes) > 50 {
+			base = string(runes[:50])
 		}
 		displayName := claims.Name
 		if displayName == "" {
@@ -387,8 +437,14 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 				break
 			}
 			suffix := fmt.Sprintf("-%d", i)
-			if len(base)+len(suffix) > 50 {
-				candidate = base[:50-len(suffix)] + suffix
+			// 后缀去重同按 rune 预算(后缀为 ASCII,字节数=rune 数)
+			baseRunes := []rune(base)
+			if len(baseRunes)+len(suffix) > 50 {
+				budget := 50 - len(suffix)
+				if budget < 0 {
+					budget = 0
+				}
+				candidate = string(baseRunes[:budget]) + suffix
 			} else {
 				candidate = base + suffix
 			}

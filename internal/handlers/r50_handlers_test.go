@@ -48,7 +48,7 @@ func TestRetireCertJobsForDomain(t *testing.T) {
 		jobID := seedJob(t, "lb_retire_canon", canonical, "issued")
 
 		// When
-		err := retireCertJobsForDomain(db.DB, "lb_retire_canon", canonical, reversedACMEDomainForm(canonical))
+		err := retireCertJobsForDomain(db.DB, "lb_retire_canon", canonical, reversedACMEDomainForm(canonical), "域名迁移事务开启失败")
 
 		// Then：退役为 disabled 终态且保留 PEM（域名未实际迁移，旧证留作历史无副作用）
 		if err != nil {
@@ -70,7 +70,7 @@ func TestRetireCertJobsForDomain(t *testing.T) {
 		otherID := seedJob(t, "lb_retire_variant", "other.example.test", "issued")
 
 		// When
-		err := retireCertJobsForDomain(db.DB, "lb_retire_variant", canonical, reversedACMEDomainForm(canonical))
+		err := retireCertJobsForDomain(db.DB, "lb_retire_variant", canonical, reversedACMEDomainForm(canonical), "域名迁移事务开启失败")
 
 		// Then：两条变体行均被退役，其他域行原样保留
 		if err != nil {
@@ -92,7 +92,7 @@ func TestRetireCertJobsForDomain(t *testing.T) {
 		canonical := "absent.example.test"
 
 		// When
-		err := retireCertJobsForDomain(db.DB, "lb_retire_none", canonical, reversedACMEDomainForm(canonical))
+		err := retireCertJobsForDomain(db.DB, "lb_retire_none", canonical, reversedACMEDomainForm(canonical), "域名迁移事务开启失败")
 
 		// Then：SQLite UPDATE 零行命中 → err=nil，无害无操作
 		if err != nil {

@@ -303,7 +303,8 @@ func TestGetAuditLogs_hugePageDoesNot500(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/audit-logs?page=9223372036854775807", nil))
 
-	// Then：200 空页而非 500（clamp 到 100000 后 OFFSET 合法，R34 C）
+	// Then：200 空页而非 500（clamp 后 OFFSET 合法，R34 C；SYS40-4 上限收紧
+	// 100000→10000——深翻页无命中语义只浪费扫描）。
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
@@ -323,7 +324,7 @@ func TestGetAuditLogs_hugePageDoesNot500(t *testing.T) {
 	if len(resp.Data.List) != 0 {
 		t.Fatalf("list len=%d, want empty (offset beyond one row)", len(resp.Data.List))
 	}
-	if resp.Data.Page != 100000 {
-		t.Fatalf("page=%d, want clamped 100000", resp.Data.Page)
+	if resp.Data.Page != 10000 {
+		t.Fatalf("page=%d, want clamped 10000", resp.Data.Page)
 	}
 }

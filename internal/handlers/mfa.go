@@ -33,10 +33,10 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	var userID int
 	var passwordVersion int64
 	var user models.User
-	err := db.DB.QueryRow(`SELECT u.id, u.password_version, u.username, u.role, u.display_name, u.is_enabled, u.created_at, u.last_login
+	err := db.DB.QueryRow(`SELECT u.id, u.password_version, u.username, u.role, u.display_name, u.is_enabled, u.created_at, u.last_login, COALESCE(u.auth_provider,'local')
 		FROM mfa_challenges ch JOIN users u ON u.id = ch.user_id
 		WHERE ch.token=? AND ch.consumed=0 AND ch.expires_at > datetime('now')`, req.MFAToken).
-		Scan(&userID, &passwordVersion, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
+		Scan(&userID, &passwordVersion, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &user.AuthProvider)
 	if err != nil || !user.IsEnabled {
 		// 挑战无效不泄露具体原因
 		services.RecordAuditLog("", "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战令牌无效或已过期"), c.ClientIP())
@@ -106,7 +106,12 @@ func rejectOIDCUserMFAOperation(c *gin.Context, targetUserID int) bool {
 		uid = getContextUserIDInt(c)
 	}
 	var provider string
-	if err := db.DB.QueryRow("SELECT COALESCE(auth_provider,'local') FROM users WHERE id=?", uid).Scan(&provider); err == nil && provider == "oidc" {
+	if err := db.DB.QueryRow("SELECT COALESCE(auth_provider,'local') FROM users WHERE id=?", uid).Scan(&provider); err != nil {
+		// SYS40-1:身份来源不可判定 → 拒绝操作(500),不按非 OIDC 放行
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
+		return true
+	}
+	if provider == "oidc" {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "OIDC 用户不支持本地 MFA（身份验证由认证服务承担）"})
 		return true
 	}

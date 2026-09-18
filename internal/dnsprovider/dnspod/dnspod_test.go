@@ -158,6 +158,10 @@ func (transport *paginatedTransport) RoundTrip(request *http.Request) (*http.Res
 }
 
 func TestProvider_getDomainID_paginates_beyond_first_page(t *testing.T) {
+	// CERT40-4:清进程内 zone 缓存——前序用例可能已缓存同名 zone。
+	domainIDCacheMu.Lock()
+	domainIDCache = map[string]string{}
+	domainIDCacheMu.Unlock()
 	// Given: more domains than one DNSPod response page, with the target
 	// zone on the last page
 	domains := make([]string, 25)
@@ -192,6 +196,10 @@ func TestProvider_getDomainID_paginates_beyond_first_page(t *testing.T) {
 }
 
 func TestProvider_getDomainID_paginates_large_accounts(t *testing.T) {
+	// CERT40-4:清进程内 zone 缓存——前序用例可能已缓存同名 zone。
+	domainIDCacheMu.Lock()
+	domainIDCache = map[string]string{}
+	domainIDCacheMu.Unlock()
 	// Given: an account with more domains than the DNSPod hard page cap
 	// (3000); the target sits past the first page
 	domains := make([]string, 3001)

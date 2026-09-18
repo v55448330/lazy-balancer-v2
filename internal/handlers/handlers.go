@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -470,6 +472,19 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		return fmt.Errorf("无效的协议：仅支持 http 或 tcp")
 	}
 
+	// LB40-5:host_header 直写 reverse_proxy 头部——CRLF/控制字符可注入额外
+	// 头(请求拆分面);拒绝不可见字符,可见 ASCII 与常规 Unicode 放行。
+	for _, r := range data.HostHeader {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("后端域名含非法字符")
+		}
+	}
+	// LB40-5:dns_server 形状校验(host[:port])——垃圾串直写 caddy dns 模块
+	// 配置,渲染层报错位置深且难归因。
+	if err := validateDnsServerShape(data.DnsServer); err != nil {
+		return err
+	}
+
 	if data.ListenPort < 1 || data.ListenPort > 65535 {
 		return fmt.Errorf("无效的监听端口：必须在 1-65535 之间")
 	}
@@ -724,5 +739,66 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 		return fmt.Errorf("端口 %d 已被其他规则占用", port)
 	}
 
+	return nil
+}
+
+// checkPortTLSMix(LB40-1,第 40 轮):同端口 TLS/明文混布拦截——Caddy 监听器
+// 按端口二选一,混布会把整个端口监听器切为 TLS,明文规则流量全部握手失败。
+// 判定键=enable_tls 意图(不看证书存在性:ACME 签发中/延迟翻转的同端口规则
+// 同样会被监听器形态波及);仅统计启用中的规则。
+func checkPortTLSMix(excludeCaddyID string, port int, enableTLS bool) error {
+	opposite := 1
+	if enableTLS {
+		opposite = 0
+	}
+	query := "SELECT COUNT(*) FROM lb_rules WHERE listen_port=? AND protocol='http' AND enabled=1 AND enable_tls=?"
+	args := []any{port, opposite}
+	if excludeCaddyID != "" {
+		query += " AND caddy_id!=?"
+		args = append(args, excludeCaddyID)
+	}
+	var count int
+	if err := db.DB.QueryRow(query, args...).Scan(&count); err != nil {
+		return fmt.Errorf("验证端口 TLS 形态时数据库错误: %v", err)
+	}
+	if count > 0 {
+		other := "TLS"
+		if enableTLS {
+			other = "明文"
+		}
+		return fmt.Errorf("端口 %d 已被%s规则使用，TLS 与明文规则不能混布同一端口（该端口监听器将整体切换为 TLS）", port, other)
+	}
+	return nil
+}
+
+// validateDnsServerShape(LB40-5):DNS 服务器地址形状校验——host[:port];
+// 裸 host 容错(SplitHostPort 报 missing port 时按裸 host 处理),拒绝空
+// host、非数字/越界端口与控制字符。
+func validateDnsServerShape(raw string) error {
+	server := strings.TrimSpace(raw)
+	if server == "" {
+		return nil
+	}
+	host := server
+	if h, p, err := net.SplitHostPort(server); err == nil {
+		host = h
+		if p != "" {
+			port, perr := strconv.Atoi(p)
+			if perr != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("DNS 服务器端口必须在 1-65535 之间")
+			}
+		}
+	} else {
+		// 裸 host(无端口)或带括号 IPv6 裸地址:按 host 整体处理。
+		host = strings.Trim(server, "[]")
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("DNS 服务器地址无效")
+	}
+	for _, r := range host {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("DNS 服务器地址含非法字符")
+		}
+	}
 	return nil
 }

@@ -155,7 +155,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 
 		       COALESCE(caddy_log_level,'info') as caddy_log_level,
 		       COALESCE(caddy_log_size_mb,100) as caddy_log_size_mb,
-		       COALESCE(request_body_max_size_mb,0) as request_body_max_size_mb,
+		       CASE WHEN COALESCE(request_body_max_size_mb,0)>0 THEN request_body_max_size_mb ELSE 128 END as request_body_max_size_mb,
 		       COALESCE(http_read_timeout,60) as http_read_timeout,
 		       COALESCE(http_write_timeout,60) as http_write_timeout,
 		       COALESCE(http_idle_timeout,120) as http_idle_timeout,

@@ -119,9 +119,16 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	// 2026-09-18 用户裁定:OIDC 用户显示名/密码源自 IdP,管理员亦不可改
 	// (角色/启停是本地管理语义,不受限)。SYS39-2:username 同为 IdP 源属性
 	// (JIT 取 preferred_username),与显示名/密码同一裁定口径一并拦截。
-	if (req.DisplayName != nil || req.Password != nil || req.Username != nil) && isOIDCUser(c.Request.Context(), id) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的用户名、显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
-		return
+	if req.DisplayName != nil || req.Password != nil || req.Username != nil {
+		oidcUser, err := isOIDCUser(c.Request.Context(), id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
+			return
+		}
+		if oidcUser {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的用户名、显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
+			return
+		}
 	}
 	if req.Password != nil && passwordTooShort(*req.Password) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
@@ -238,11 +245,21 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户更新成功", Data: models.NewUserResponse(user)})
 }
 
-// isOIDCUser 判定用户是否 OIDC 来源(读失败按非 OIDC,后续写路径有自身门)。
-func isOIDCUser(ctx context.Context, userID int) bool {
+// isOIDCUser 判定用户是否 OIDC 来源(SYS40-1:读失败与「非 OIDC」分判——
+// 身份来源不可判定时调用方必须拒绝写操作,不得静默放行;ErrNoRows 除外:
+// 用户不存在是调用方可判定的已知条件,交由后续 0 行 UPDATE → 404)。
+func isOIDCUser(ctx context.Context, userID int) (bool, error) {
 	var provider string
 	err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(auth_provider,'') FROM users WHERE id=?", userID).Scan(&provider)
-	return err == nil && provider == "oidc"
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 用户不存在是调用方可判定的已知条件(后续 UPDATE 0 行 → 404),
+			// 不属于「身份来源不可判定」的基础设施故障。
+			return false, nil
+		}
+		return false, err
+	}
+	return provider == "oidc", nil
 }
 
 // setupAdminUserID:系统 setup 创建的首个用户(auth.go SetupAdmin 仅在
@@ -429,7 +446,12 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	}
 	// OIDC 用户无本地密码(bcrypt 恒空),重置/设置本地密码会破坏「OIDC 用户
 	// 密码登录天然不可用」设计——拒绝(2026-09-18 用户裁定)。
-	if isOIDCUser(c.Request.Context(), id) {
+	oidcUser, err := isOIDCUser(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
+		return
+	}
+	if oidcUser {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的密码由认证服务管理，无法本地重置"})
 		return
 	}
@@ -462,7 +484,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 			}
 		}
 	}()
-	result, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET password_hash = ?, password_changed_at = datetime('now'), password_version = password_version + 1 WHERE id = ?", string(hash), id)
+	result, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET password_hash = ?, password_changed_at = datetime('now'), password_version = password_version + 1, login_failed_attempts = 0, login_locked_until = NULL WHERE id = ?", string(hash), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return

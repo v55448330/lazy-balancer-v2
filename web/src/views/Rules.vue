@@ -495,7 +495,9 @@
                   </el-tooltip>
                 </template>
                 <template #default="{ row }">
-                  <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" />
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式下最大连接数不生效">
+                    <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" :disabled="wizardForm.dynamic_dns" />
+                  </el-tooltip>
                 </template>
               </el-table-column>
               <el-table-column label="启用" width="60" align="center">
@@ -1028,6 +1030,8 @@ import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
+import { getStrategyLabel } from '@/utils/strategyLabels'
+import { hostPortKey } from '@/utils/upstreamKeys'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
@@ -1685,10 +1689,7 @@ const getHealthLabel = (status: HealthSummary) => {
   return '正常'
 }
 
-// LB-08：与后端 joinUpstreamAddress（net.JoinHostPort）同口径——IPv6 主机
-//（含 ':'）包方括号，健康详情键两侧一致（后端键为 "[::1]:80" 形态）。
-const hostPortKey = (host: string, port: number): string =>
-  host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`
+// FE40-D1-1：hostPortKey 提取至 utils/upstreamKeys（Dashboard 共用）。
 
 interface UpstreamHealthView {
   healthy: boolean
@@ -2043,18 +2044,8 @@ const portWarning = computed(() => {
   return ''
 })
 
-const getStrategyLabel = (strategy: string) => {
-  const labels: Record<string, string> = {
-    weighted_round_robin: '轮询',
-    least_conn: '最少连接',
-    ip_hash: 'IP 哈希',
-    cookie: 'Cookie 粘滞',
-    first: '首个可用',
-    random: '随机',
-    header: 'Header',
-  }
-  return labels[strategy] || strategy
-}
+// FE40-D1-2：策略文案映射提取至 utils/strategyLabels（Dashboard 共用，
+// 死键 header 已删）。
 
 const fetchUsers = async () => {
   try {
@@ -3243,8 +3234,13 @@ watch(
 )
 
 onMounted(() => {
-  const ruleSearch = localStorage.getItem('rules-search')
-  if (ruleSearch) { searchQuery.value = ruleSearch; localStorage.removeItem('rules-search') }
+  // FE40-D1-6：安全事件/策略页的「查看规则」交接改走 URL query（rs 参数），
+  // 消费后 replaceState 清除——localStorage 通道在多标签/隐私模式下错乱。
+  const rs = new URLSearchParams(window.location.search).get('rs')
+  if (rs) {
+    searchQuery.value = rs
+    window.history.replaceState(null, '', window.location.pathname)
+  }
   void fetchRules()
   void fetchUsers()
   void fetchCertConfigs()

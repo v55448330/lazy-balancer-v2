@@ -218,8 +218,8 @@
               <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
             </el-form-item>
             <el-form-item label="记录请求体">
-              <el-switch v-model="form.log_request_body" :disabled="isReadOnly" />
-              <div class="form-tip-line">开启后命中规则事件的请求头与请求体将记录到事件库，可在事件日志中查看详情</div>
+              <el-switch v-model="form.log_request_body" :disabled="isReadOnly || form.mode === 'off'" />
+              <div class="form-tip-line">仅 CRS/自定义规则命中事件记录请求体；当前模式关闭时不记录</div>
             </el-form-item>
             <el-alert
               v-if="form.log_request_body"
@@ -2293,8 +2293,8 @@ function handleDelete(row: PolicySummary) {
 const goToCustomRulesPage = () => { window.open('/?page=security-rules&tab=custom', '_blank') }
 const goToBlockPagesPage = () => { window.open('/?page=security-block-pages', '_blank') }
 const openRuleInNewTab = (caddyId: string): void => {
-  localStorage.setItem('rules-search', caddyId)
-  window.open('/?page=rules', '_blank')
+  // FE40-D1-6：交接改走 URL query（rs 参数），Rules.vue onMounted 消费后清除。
+  window.open(`/?page=rules&rs=${encodeURIComponent(caddyId)}`, '_blank')
 }
 
 const fetchRegions = async () => {

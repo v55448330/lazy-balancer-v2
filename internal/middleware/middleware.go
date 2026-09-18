@@ -229,7 +229,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// Serve static files
 	r.Use(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/assets/") {
+		// C403-11:/ui 挂载同源同产物——两侧 assets 前缀都按内容哈希长缓存
+		// (保守保留 /ui 挂载不删)。
+		if strings.HasPrefix(c.Request.URL.Path, "/assets/") || strings.HasPrefix(c.Request.URL.Path, "/ui/assets/") {
 			// Vite 产物文件名带内容哈希，可长期缓存
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
 		}
@@ -280,9 +282,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// OIDC 公开链路(v2.3.0):status=登录页按钮显隐;login=跳转;
 		// callback=授权码回调(失败 302 回前端错误页)。均登录前可达,
 		// 回调校验失败拒绝即止,不计入登录锁定(防伪造回调 DoS 锁号);
-		// login 的 state 表在册封顶(R39-3:未认证泛洪内存上限)。
+		// login 的 state 表在册封顶(R39-3:未认证泛洪内存上限);A40-1-1:
+		// login 与 /auth/login 共用 IP 限流桶(callback 不挂——回调由 state
+		// 表门控,伪造回调不应消耗真实登录额度)。
 		v1.GET("/auth/oidc/status", h.OIDCStatus)
-		v1.GET("/auth/oidc/login", h.OIDCLogin)
+		v1.GET("/auth/oidc/login", loginRateLimit(), h.OIDCLogin)
 		v1.GET("/auth/oidc/callback", h.OIDCCallback)
 		v1.GET("/branding", h.GetBranding)
 		v1.POST("/cluster/register", clusterRegisterRateLimit(), h.RegisterClusterNode)

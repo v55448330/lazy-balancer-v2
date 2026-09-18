@@ -29,8 +29,10 @@ func TestDNSPodCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error for tencent cloud: %v", err)
 	}
-	if tencent["api_token"] != "sid,skey" {
-		t.Fatalf("expected tencent api_token sid,skey, got %v", tencent["api_token"])
+	// CERT40-3:tencent canonical 不再携带死字段 api_token(消费端只读
+	// secret_id/secret_key)。
+	if _, exists := tencent["api_token"]; exists {
+		t.Fatalf("tencent canonical must not carry dead api_token, got %v", tencent)
 	}
 }
 

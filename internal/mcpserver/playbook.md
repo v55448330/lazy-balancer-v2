@@ -14,7 +14,7 @@
 | 范围 | 说明 |
 |---|---|
 | 只读 Key（read_only） | 可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，隐藏）及 5 个读探测 POST 工具（test_ca_provider/test_certificate_config/parse_certificate/validate_import/preview_config）；其余写工具返回 403 |
-| 写工具（POST/PUT/DELETE） | 需非只读 Key，且 Key 属主须为 admin 角色（非管理员 Key 调用写工具返回 403）；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点 |
+| 写工具（POST/PUT/DELETE） | 需非只读 Key，且 Key 属主须为 admin 角色（非管理员 Key 调用写工具返回 403）；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode/forget_cluster_pins）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点 |
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |
 
@@ -60,7 +60,7 @@
 
 ### 4.6 集群环境操作前
 
-`get_cluster_status` 确认本节点角色：从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维（提升/拉取同步/切换模式）在目标从节点本身调用，不要发往主节点；其余写操作对主节点发起。
+`get_cluster_status` 确认本节点角色：从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode/forget_cluster_pins）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维（提升/拉取同步/切换模式/清除指纹钉）在目标从节点本身调用，不要发往主节点；其余写操作对主节点发起。
 
 ## 5. 操作纪律
 
@@ -73,7 +73,7 @@
 
 - 轻量优先：能 `get_metrics_overview` 就不用 `get_metrics_dashboard`；能 `get_rule` 就不用反复 `list_rules`
 - 审计日志务必分页；单工具响应上限 4 MiB，超限请改用分页参数（page/page_size）缩小返回范围
-- 配置备份导入（import_config/import_v1_config/validate_import）请求体上限 1 MiB（网关体积限制，REST 侧为 16 MiB）：备份超过 1 MiB 时 MCP 通道不可用，请改用管理面板或 REST 导入
+- 配置备份导入（import_config/import_v1_config/validate_import）请求体上限 1 MiB（网关体积限制，REST 侧为 48 MiB）：备份超过 1 MiB 时 MCP 通道不可用，请改用管理面板或 REST 导入
 - 保持 HTTP 连接复用（一个 MCP 会话内不要每次新建连接）
 
 ## 7. 错误码速查

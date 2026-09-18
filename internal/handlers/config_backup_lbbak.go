@@ -245,8 +245,5 @@ func currentTimeFilename() string {
 	return time.Now().Format("20060102-150405")
 }
 
-// validateLbbakForImport 为 validate 端点复用:解包+校验后跑 V2 结构校验,
-// 返回内部 config.json(供后续 V2 校验)与 waf 文件摘要。
-func validateLbbakForImport(body []byte) (*lbbakPayload, error) {
-	return parseLbbak(body)
-}
+// A40-2-F2:原 validateLbbakForImport 死包装(全仓零调用点)已删除——validate
+// 端点直接使用 parseLbbak。

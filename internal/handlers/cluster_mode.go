@@ -46,8 +46,9 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.MasterURL)), "http://") {
 		recordAudit(c, "警告", "集群模式", services.FormatAuditDetail("目标：从节点", "使用明文 HTTP 注册，证书私钥将明文传输，建议改用 HTTPS"))
 	}
+	outboundIP, outboundIPOK := localOutboundIP()
 	registration, err := h.syncService.RegisterWithMaster(c.Request.Context(), req.MasterURL, models.ClusterRegisterRequest{
-		Token: req.RegisterToken, Name: name, IPAddress: localOutboundIP(), Port: h.cfg.Port, Protocol: requestProtocol(c),
+		Token: req.RegisterToken, Name: name, IPAddress: outboundIP, Port: h.cfg.Port, Protocol: requestProtocol(c),
 	})
 	if err != nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", err.Error()))
@@ -71,7 +72,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	// 之前就失败早退）。Resume 对非 Halted 态是 no-op，幂等安全；此时 run 循环已
 	// 终止（done 已关），Resume 立即拉起新循环进入注册轮询。
 	h.syncService.Resume()
-	recordAudit(c, "切换", "集群模式", services.FormatAuditDetail("主节点 → 从节点", masterAuditURL, "等待审批"))
+	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
 	message := "已切换为从节点，等待主节点审批"
 	if strings.HasPrefix(strings.ToLower(req.MasterURL), "http://") {
 		message += "；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
@@ -141,17 +142,29 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群设置已更新"})
 }
 
-func localOutboundIP() string {
+// localOutboundIP(CL40-C1-5):探测失败时回退 127.0.0.1 并返回 ok=false——
+// 注册的访问地址是坏值,调用方必须在审计中点名。
+func localOutboundIP() (string, bool) {
 	connection, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		return "127.0.0.1"
+		return "127.0.0.1", false
 	}
 	defer connection.Close()
 	address, ok := connection.LocalAddr().(*net.UDPAddr)
 	if !ok {
-		return "127.0.0.1"
+		return "127.0.0.1", false
 	}
-	return address.IP.String()
+	return address.IP.String(), true
+}
+
+// switchToSlaveAuditDetail 构建切换从节点的审计详情;出口 IP 探测失败
+// (CL40-C1-5)时追加点名,坏地址对运维可见。
+func switchToSlaveAuditDetail(masterURL string, outboundIPOK bool) string {
+	parts := []string{"主节点 → 从节点", masterURL, "等待审批"}
+	if !outboundIPOK {
+		parts = append(parts, "出口 IP 探测失败，已登记 127.0.0.1，请稍后在节点设置中修正访问地址")
+	}
+	return services.FormatAuditDetail(parts...)
 }
 
 func clusterSettingsChangeDetail(req models.ClusterSettingsRequest) string {

@@ -506,9 +506,12 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 		mfa_failed_attempts INTEGER DEFAULT 0,
 		mfa_locked_until DATETIME,
 		mfa_pending_fails INTEGER DEFAULT 0,
-		login_failed_attempts INTEGER NOT NULL DEFAULT 0,
-		login_locked_until TEXT
-	);
+			login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+			login_locked_until TEXT,
+			auth_provider TEXT NOT NULL DEFAULT 'local',
+			oidc_subject TEXT DEFAULT '',
+			oidc_issuer TEXT DEFAULT ''
+		);
 	INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('legacy','hash','admin',NULL);`); err != nil {
 		t.Fatalf("seed legacy users: %v", err)
 	}
@@ -1280,6 +1283,74 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 	}
 	if aclRefs != "[]" {
 		t.Fatalf("ip_acl_list_refs=%q, want []", aclRefs)
+	}
+}
+
+// D403-P2-1: users.is_enabled 重建迁移的 DDL 停留在 OIDC 集成之前——
+// runMigrations 早前 newColumns 循环补的 auth_provider/oidc_subject/oidc_issuer
+// 三列随 DROP TABLE 一并丢失；存量 OIDC 用户升级重启后无法再按
+// (issuer,subject) 命中，下次登录退化为重复建行。重建必须携带三列并保数据。
+func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	// 构造窗口期形态：is_enabled 可空（触发重建）+ 已携带 OIDC 三列与存量 OIDC 用户
+	if _, err := DB.Exec(`DROP TABLE users;
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username VARCHAR(50) UNIQUE NOT NULL,
+			password_hash VARCHAR(255) NOT NULL,
+			role VARCHAR(20) NOT NULL DEFAULT 'user',
+			display_name VARCHAR(100),
+			is_enabled BOOLEAN DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_login DATETIME,
+			password_changed_at DATETIME,
+			password_version INTEGER NOT NULL DEFAULT 0,
+			mfa_enabled BOOLEAN DEFAULT 0,
+			mfa_secret TEXT DEFAULT '',
+			mfa_pending_secret TEXT DEFAULT '',
+			mfa_recovery_codes TEXT DEFAULT '[]',
+			mfa_last_timestep INTEGER DEFAULT 0,
+			mfa_pending_fails INTEGER DEFAULT 0,
+			login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+			login_locked_until TEXT,
+			auth_provider TEXT NOT NULL DEFAULT 'local',
+			oidc_subject TEXT DEFAULT '',
+			oidc_issuer TEXT DEFAULT ''
+		);
+		INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES (42,'oidc-user','x','user',1,'oidc','sub-123','https://issuer.example.com');`); err != nil {
+		t.Fatalf("seed window-era users: %v", err)
+	}
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+
+	// Then: 三列保留，OIDC 身份数据不丢
+	for _, name := range []string{"auth_provider", "oidc_subject", "oidc_issuer"} {
+		var cnt int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('users') WHERE name=?`, name).Scan(&cnt); err != nil {
+			t.Fatalf("read users.%s schema: %v", name, err)
+		}
+		if cnt != 1 {
+			t.Fatalf("users.%s missing after is_enabled rebuild", name)
+		}
+	}
+	var provider, subject, issuer string
+	if err := DB.QueryRow(`SELECT auth_provider, oidc_subject, oidc_issuer FROM users WHERE id=42`).Scan(&provider, &subject, &issuer); err != nil {
+		t.Fatalf("read migrated oidc user: %v", err)
+	}
+	if provider != "oidc" || subject != "sub-123" || issuer != "https://issuer.example.com" {
+		t.Fatalf("oidc identity=(%q,%q,%q), want (oidc,sub-123,https://issuer.example.com)", provider, subject, issuer)
 	}
 }
 

@@ -163,6 +163,15 @@ func installClusterVersionTriggers(database *sql.DB) error {
 }
 
 func isSynchronizedWrite(method, path string) bool {
+	// C403-9:auth/setup(初始化管理员)与 OIDC 回调(JIT 开户)写 users 表,
+	// 但回调是 GET 形态——精确匹配置于方法门之外,触发器不可用时同样
+	// fail-closed(否则首次开户静默绕过版本 bump,从节点用户集漂移)。
+	if method == http.MethodPost && path == "/api/v1/auth/setup" {
+		return true
+	}
+	if method == http.MethodGet && path == "/api/v1/auth/oidc/callback" {
+		return true
+	}
 	if method != http.MethodPost && method != http.MethodPut && method != http.MethodPatch && method != http.MethodDelete {
 		return false
 	}

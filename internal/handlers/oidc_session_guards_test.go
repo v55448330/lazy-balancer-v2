@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -100,11 +101,12 @@ func TestOIDCLogin_state_entries_capped(t *testing.T) {
 			t.Fatalf("login %d should pass under cap, got %d", i+1, rec.Code)
 		}
 	}
-	// When:第三次 login(在册已达上限)→ 429
+	// When:第三次 login(在册已达上限)→ 302 登录页错误位(A40-1-2:
+	// 浏览器导航形态,失败不渲染 429 JSON)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("login beyond state cap must 429, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "#/login?oidc_error=") {
+		t.Fatalf("login beyond state cap must 302 to login error page, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// P1 复审形状:在册条目全部过期后,新 login 不得被 429 短路——过期清理
@@ -247,5 +249,157 @@ func TestOIDCProvider_invalidate_clears_failure(t *testing.T) {
 	oidcProviderInvalidate(srvURL)
 	if _, err := oidcProvider(srvURL); err != nil {
 		t.Fatalf("after invalidate + upstream recovery, discovery must succeed: %v", err)
+	}
+}
+
+// A40-1-2:login 是浏览器整页导航(登录页按钮/链接触发)——失败形态(未启用/
+// state 封顶/discovery 失败/随机源失败)一律 302 回前端登录页错误位
+// (oidc_error 经 URL fragment 携带),与回调 C2-7 同型,不渲染裸 JSON。
+func TestOIDCLogin_failure_redirects_to_login_page(t *testing.T) {
+	assertLoginErrorRedirect := func(rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusFound {
+			t.Fatalf("login failure must 302 to login page, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		loc := rec.Header().Get("Location")
+		if !strings.Contains(loc, "#/login?oidc_error=") {
+			t.Fatalf("failure redirect must target login page oidc_error param: %s", loc)
+		}
+		msg := loc[strings.Index(loc, "oidc_error=")+len("oidc_error="):]
+		decoded, err := url.QueryUnescape(msg)
+		if err != nil || decoded == "" {
+			t.Fatalf("oidc_error must carry non-empty message: %s", loc)
+		}
+	}
+
+	// 形状一:未启用(无配置)
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+	assertLoginErrorRedirect(rec)
+
+	// 形状二:discovery 失败(issuer 指向无发现文档的服务)
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(dead.Close)
+	putOIDCConfig(t, router, `{"issuer":"`+dead.URL+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+	assertLoginErrorRedirect(rec)
+
+	// 形状三:state 在册封顶
+	oidcStates.Range(func(k, _ any) bool { oidcStates.Delete(k); return true })
+	oidcStateCount.Store(0)
+	old := oidcStateMaxEntries
+	oidcStateMaxEntries = 0
+	t.Cleanup(func() {
+		oidcStateMaxEntries = old
+		oidcStates.Range(func(k, _ any) bool { oidcStates.Delete(k); return true })
+		oidcStateCount.Store(0)
+	})
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	oidcProviderInvalidate(idp.issuer)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+	assertLoginErrorRedirect(rec)
+}
+
+// A40-1-4:回调 error 参数仅回显 OAuth2 标准错误码——非白名单/超长值一律
+// 吞掉(防外部可控文本经登录页当系统提示渲染的社工注入面)。
+func TestOIDCCallback_error_param_sanitized(t *testing.T) {
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+
+	loginState := func() string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+		u, _ := url.Parse(rec.Header().Get("Location"))
+		return u.Query().Get("state")
+	}
+	callbackError := func(errParam string) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?state="+loginState()+"&error="+url.QueryEscape(errParam), nil))
+		if rec.Code != http.StatusFound {
+			t.Fatalf("callback error shape must still 302, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		loc := rec.Header().Get("Location")
+		frag := loc[strings.Index(loc, "#")+1:]
+		q := frag[strings.Index(frag, "?")+1:]
+		vals, _ := url.ParseQuery(q)
+		return vals.Get("error")
+	}
+
+	if got := callbackError("access_denied"); got != "提供商拒绝授权: access_denied" {
+		t.Fatalf("standard code must be echoed: %q", got)
+	}
+	if got := callbackError("custom-injected-text"); got != "提供商拒绝授权" {
+		t.Fatalf("non-whitelist value must be swallowed: %q", got)
+	}
+	if got := callbackError(strings.Repeat("a", 65)); got != "提供商拒绝授权" {
+		t.Fatalf("oversized value must be swallowed: %q", got)
+	}
+	if got := callbackError("ACCESS_DENIED"); got != "提供商拒绝授权: ACCESS_DENIED" {
+		t.Fatalf("case-insensitive whitelist match must keep original form: %q", got)
+	}
+}
+
+// A40-1-3:JIT 用户名截断必须 rune 安全——byte 截断会把中文/emoji 切成无效
+// UTF-8 落库(前端展示乱码),且冲突去重后缀的长度预算须按 rune 计数。
+func TestOIDCCallback_jit_username_rune_safe_truncation(t *testing.T) {
+	shape := func(pref string, seedCollision string) string {
+		idp := newMockIdP(t)
+		idp.usePref = true
+		idp.prefUsername = pref
+		router, _ := setupOIDCTest(t, idp)
+		putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+		if seedCollision != "" {
+			if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, is_enabled, auth_provider) VALUES (?, '', 'user', 1, 'local')", seedCollision); err != nil {
+				t.Fatalf("seed collision user: %v", err)
+			}
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+		u, _ := url.Parse(rec.Header().Get("Location"))
+		code := simulateIdPIssuesCode(t, u.String())
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code="+code+"&state="+u.Query().Get("state"), nil))
+		if rec.Code != http.StatusFound || strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Fatalf("callback should succeed, got %d %s", rec.Code, rec.Header().Get("Location"))
+		}
+		var name string
+		if err := db.DB.QueryRow("SELECT username FROM users WHERE auth_provider='oidc'").Scan(&name); err != nil {
+			t.Fatalf("read jit user: %v", err)
+		}
+		return name
+	}
+
+	// 形状一:超长中文(60 rune=180 byte)→ 截到整 50 rune 且合法 UTF-8
+	name := shape(strings.Repeat("超", 60), "")
+	if !utf8.ValidString(name) {
+		t.Fatalf("truncated username must be valid UTF-8, got %q", name)
+	}
+	if got := len([]rune(name)); got != 50 {
+		t.Fatalf("truncated username rune count=%d, want 50 (got %q)", got, name)
+	}
+
+	// 形状二:40 rune emoji(160 byte 超 50 但 rune 未超)→ 不截断
+	emoji := strings.Repeat("😀", 40)
+	name = shape(emoji, "")
+	if name != emoji {
+		t.Fatalf("40-rune emoji username must pass through uncut, got %q (valid=%v)", name, utf8.ValidString(name))
+	}
+
+	// 形状三:49 rune 基名撞本地用户 → 后缀去重按 rune 预算(48 rune+"-2"=50)
+	base := strings.Repeat("汉", 49)
+	name = shape(base, base)
+	if !utf8.ValidString(name) || !strings.HasSuffix(name, "-2") {
+		t.Fatalf("collision-suffixed username must be valid UTF-8 ending -2, got %q", name)
+	}
+	if got := len([]rune(name)); got != 50 {
+		t.Fatalf("collision-suffixed username rune count=%d, want 50 (got %q)", got, name)
 	}
 }

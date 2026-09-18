@@ -367,7 +367,9 @@ func createTables() error {
 		sync_interval INTEGER DEFAULT 60,
 		caddy_log_level VARCHAR(10) DEFAULT 'info',
 		caddy_log_size_mb INTEGER DEFAULT 100,
-		request_body_max_size_mb INTEGER DEFAULT 0,
+		-- D40-2-1:默认 128(与 coraza 默认 RequestBodyLimit 统一);存量库
+		-- 保持 0,由渲染侧 resolveRuleOverrides 读侧归一。
+		request_body_max_size_mb INTEGER DEFAULT 128,
 		http_read_timeout INTEGER DEFAULT 60,
 		http_write_timeout INTEGER DEFAULT 60,
 		http_idle_timeout INTEGER DEFAULT 120,
@@ -743,7 +745,7 @@ func runMigrations() error {
 		"global_config.cert_expiry_days":              "INTEGER DEFAULT 30",
 		"global_config.caddy_log_level":               "VARCHAR(10) DEFAULT 'info'",
 		"global_config.caddy_log_size_mb":             "INTEGER DEFAULT 100",
-		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 0",
+		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 128",
 		"global_config.http_read_timeout":             "INTEGER DEFAULT 0",
 		"global_config.http_write_timeout":            "INTEGER DEFAULT 0",
 		"global_config.http_idle_timeout":             "INTEGER DEFAULT 0",
@@ -841,25 +843,8 @@ func runMigrations() error {
 		// 用户显式设置的 60 是写侧合法值，任何启动期迁移不得改写。
 		"global_config.upstream_keepalive_timeout": "UPDATE global_config SET upstream_keepalive_timeout=0 WHERE upstream_keepalive_timeout=60",
 	}
-	for col, dtype := range newColumns {
-		parts := strings.Split(col, ".")
-		if len(parts) != 2 {
-			continue
-		}
-		table, name := parts[0], parts[1]
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, name).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check column %s.%s: %w", table, name, err)
-		}
-		if colCount == 0 {
-			if _, err := DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + dtype); err != nil {
-				return fmt.Errorf("failed to add column %s.%s: %w", table, name, err)
-			}
-			if backfill, ok := newColumnBackfills[col]; ok {
-				if _, err := DB.Exec(backfill); err != nil {
-					return fmt.Errorf("failed to backfill column %s.%s: %w", table, name, err)
-				}
-			}
-		}
+	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
+		return err
 	}
 	if err := migrateUsersIsEnabledNotNull(); err != nil {
 		return fmt.Errorf("failed to migrate users.is_enabled: %w", err)
@@ -869,6 +854,11 @@ func runMigrations() error {
 	}
 	if err := migrateNodesDeadColumns(); err != nil {
 		return fmt.Errorf("failed to migrate nodes legacy columns: %w", err)
+	}
+	// D403-P2-1 结构性兜底：上方整表重建迁移若以陈旧 DDL 重建而丢列，这里幂等
+	// 补齐收敛——重建迁移自身漏列不再造成列永久丢失（数据按列默认值回填）。
+	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
+		return err
 	}
 	if _, err := DB.Exec("DROP TABLE IF EXISTS tls_certificates"); err != nil {
 		return fmt.Errorf("failed to drop tls_certificates: %w", err)
@@ -1773,6 +1763,34 @@ func migrateCanonicalDomains() error {
 	return nil
 }
 
+// ensureNewColumns 按清单逐列补齐（幂等：列已存在零命中）。D403-P2-1 提取自
+// runMigrations 内联循环：三个整表重建迁移之后需再次调用，收敛重建以陈旧 DDL
+// 重建时丢失的列（数据按列默认值回填，不再永久丢失）。
+func ensureNewColumns(columns, backfills map[string]string) error {
+	var colCount int
+	for col, dtype := range columns {
+		parts := strings.Split(col, ".")
+		if len(parts) != 2 {
+			continue
+		}
+		table, name := parts[0], parts[1]
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, name).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check column %s.%s: %w", table, name, err)
+		}
+		if colCount == 0 {
+			if _, err := DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + dtype); err != nil {
+				return fmt.Errorf("failed to add column %s.%s: %w", table, name, err)
+			}
+			if backfill, ok := backfills[col]; ok {
+				if _, err := DB.Exec(backfill); err != nil {
+					return fmt.Errorf("failed to backfill column %s.%s: %w", table, name, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func migrateUsersIsEnabledNotNull() error {
 	var notNull int
 	if err := DB.QueryRow("SELECT \"notnull\" FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&notNull); err != nil {
@@ -1828,10 +1846,13 @@ func migrateUsersIsEnabledNotNull() error {
 			mfa_last_timestep INTEGER DEFAULT 0,
 			mfa_pending_fails INTEGER DEFAULT 0,
 			login_failed_attempts INTEGER NOT NULL DEFAULT 0,
-			login_locked_until TEXT
+			login_locked_until TEXT,
+			auth_provider TEXT NOT NULL DEFAULT 'local',
+			oidc_subject TEXT DEFAULT '',
+			oidc_issuer TEXT DEFAULT ''
 		);
-		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until)
-		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until FROM users;
+		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until,auth_provider,oidc_subject,oidc_issuer)
+		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until,auth_provider,oidc_subject,oidc_issuer FROM users;
 		DROP TABLE users;
 		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
 		return fmt.Errorf("rebuild users table: %w", err)

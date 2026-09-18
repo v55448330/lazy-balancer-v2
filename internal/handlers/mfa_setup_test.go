@@ -129,6 +129,10 @@ func (mfaPendingWriteFailingConn) QueryContext(_ context.Context, query string, 
 	if strings.Contains(query, "mfa_enabled") {
 		return &fakeQueryRows{values: [][]driver.Value{{int64(0)}}}, nil
 	}
+	if strings.Contains(query, "auth_provider") {
+		// SYS40-1:MFA 入口的 OIDC 身份判定读——本地用户形状
+		return &fakeQueryRows{values: [][]driver.Value{{"local"}}}, nil
+	}
 	return &fakeQueryRows{}, nil
 }
 

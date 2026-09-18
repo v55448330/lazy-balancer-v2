@@ -102,8 +102,8 @@ func (h *Handlers) Login(c *gin.Context) {
 	var passwordHash string
 	var passwordVersion int64
 	var loginLockedUntil sql.NullString
-	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_version, login_locked_until FROM users WHERE username = ?",
-		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion, &loginLockedUntil)
+	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_version, login_locked_until, COALESCE(auth_provider,'local') FROM users WHERE username = ?",
+		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion, &loginLockedUntil, &user.AuthProvider)
 
 	if err == sql.ErrNoRows {
 		// D5-S5：对不存在的用户名也执行一次注定失败的 bcrypt 比较（结果刻意
@@ -349,7 +349,12 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	// 2026-09-18 用户裁定:OIDC 用户的显示名/密码源自 IdP——本地不可改,
 	// 要改请去认证服务修改(自助路径)。
 	if req.DisplayName != nil || req.Password != "" {
-		if isOIDCUser(c.Request.Context(), userIDInt) {
+		oidcUser, err := isOIDCUser(c.Request.Context(), userIDInt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
+			return
+		}
+		if oidcUser {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
 			return
 		}

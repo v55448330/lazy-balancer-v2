@@ -302,6 +302,11 @@ func (s *ClusterService) clearSectionReport(nodeID int) {
 
 func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report models.ClusterReport, now time.Time) error {
 	health := report.Health
+	// CL40-C1-2:last_sync_error 落库前与从端写侧同口径截断(512B + UTF-8
+	// 边界回退)——64KB 错误串不再撑大 nodes 行与 health_json。
+	if len(report.LastSyncError) > 512 {
+		report.LastSyncError = string(truncateValidUTF8Tail([]byte(report.LastSyncError[:512])))
+	}
 	health.LastSyncAt = report.LastSyncAt
 	health.LastSyncError = report.LastSyncError
 	health.SyncErrorCode = report.SyncErrorCode

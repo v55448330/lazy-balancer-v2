@@ -1506,10 +1506,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			}
 			for _, u := range ups {
 				if u.Enabled {
+					// LB40-8:分组层 weight==0→1 归一删除——链构建层
+					// (buildHTTPHandleChain)恒有同款兜底,此处零行为变化。
 					weight := u.Weight
-					if weight == 0 {
-						weight = 1
-					}
 					protocol := u.Protocol
 					if protocol == "" {
 						protocol = "http"
@@ -2211,6 +2210,12 @@ func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upst
 	requestBodyMaxSizeMB = rule.RequestBodyMaxSizeMB
 	if requestBodyMaxSizeMB <= 0 {
 		requestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
+	}
+	if requestBodyMaxSizeMB <= 0 {
+		// D40-2-1(用户裁定:统一为 128M):存量 global=0 读侧归一 128——
+		// 「0=不限」语义废除,与 coraza 默认 RequestBodyLimit 对齐;存量库
+		// 不迁移数据,新库由 schema DEFAULT 128 承担。
+		requestBodyMaxSizeMB = 128
 	}
 
 	upstreamKeepalive = rule.UpstreamKeepaliveTimeout

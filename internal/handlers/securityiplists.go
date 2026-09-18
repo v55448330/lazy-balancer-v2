@@ -57,6 +57,11 @@ func parseIPListRefsPayload(field string, val *string) ([]int64, error) {
 		seen[id] = struct{}{}
 		unique = append(unique, id)
 	}
+	if len(unique) > 64 {
+		// SEC40-B1-3:refs 无上限会让渲染端逐条展开 ACL 条目,单策略即可
+		// 撑爆配置体积——封顶 64(去重后计数)。
+		return nil, fmt.Errorf("%s 引用的 IP 列表数量不能超过 64", field)
+	}
 	return unique, nil
 }
 

@@ -352,6 +352,10 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		if pathRule.Upstreams != nil && len(pathRule.Upstreams) == 0 {
 			return fmt.Errorf("第 %d 条路径规则至少需要配置一个上游", index+1)
 		}
+		// LB40-3:路径规则上游 host:port 去重(主上游 handlers.go hostPortSeen
+		// 同口径;JoinHostPort 兼容 IPv6 裸地址形态)——同 host:port 双条目
+		// 权重翻倍,均衡语义静默漂移。
+		pathHostPortSeen := make(map[string]bool)
 		for upstreamIndex, upstream := range pathRule.Upstreams {
 			if strings.TrimSpace(upstream.Address) == "" {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游地址不能为空", index+1, upstreamIndex+1)
@@ -368,6 +372,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			if upstream.Protocol != "" && upstream.Protocol != "http" && upstream.Protocol != "https" {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游协议只能是 http 或 https", index+1, upstreamIndex+1)
 			}
+			key := strings.ToLower(net.JoinHostPort(strings.TrimSpace(upstream.Address), fmt.Sprintf("%d", upstream.Port)))
+			if pathHostPortSeen[key] {
+				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游 %s:%d 重复", index+1, upstreamIndex+1, upstream.Address, upstream.Port)
+			}
+			pathHostPortSeen[key] = true
 		}
 	}
 	if input.ProxyDialTimeout < 0 || input.ProxyResponseHeaderTimeout < 0 || input.ProxyReadTimeout < 0 || input.ProxyWriteTimeout < 0 || input.ProxyStreamTimeout < 0 {
@@ -794,6 +803,26 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
 			problems = append(problems, fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err))
+		}
+	}
+	// LB40-1:存量同端口 TLS/明文混布点名告警(不阻断启动——存量形态可能是
+	// 混布前已落库的历史数据,阻断会让节点起不来;点名提示管理员修正)。
+	portTLSMix := make(map[int][2][]string)
+	for _, rule := range rules {
+		if rule.Protocol != "http" || !rule.Enabled {
+			continue
+		}
+		idx := 0
+		if rule.EnableTLS {
+			idx = 1
+		}
+		mix := portTLSMix[rule.ListenPort]
+		mix[idx] = append(mix[idx], rule.CaddyID)
+		portTLSMix[rule.ListenPort] = mix
+	}
+	for port, mix := range portTLSMix {
+		if len(mix[0]) > 0 && len(mix[1]) > 0 {
+			services.Logf("warn", "端口 %d 存在 TLS 与明文规则混布（明文：%v；TLS：%v）——该端口监听器将整体切换为 TLS，明文规则流量将握手失败，请调整规则端口", port, mix[0], mix[1])
 		}
 	}
 	return errors.Join(problems...)

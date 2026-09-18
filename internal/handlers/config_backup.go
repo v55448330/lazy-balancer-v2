@@ -82,6 +82,19 @@ func configBackupSectionTables(sections []string) (map[string]bool, bool, bool) 
 	return tables, includeGlobal, true
 }
 
+// parseSectionsParam(A40-2-F5):解析 ?sections= query——逐段 TrimSpace、跳空段,
+// 导出与 lbbak 导入两侧共用(尾逗号/空白段宽容;JSON 备份体内 sections 由
+// ShouldBindJSON 解析,不受此影响)。
+func parseSectionsParam(qs string) []string {
+	sel := []string{}
+	for _, p := range strings.Split(qs, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			sel = append(sel, p)
+		}
+	}
+	return sel
+}
+
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupCertJobStatuses = map[string]struct{}{
@@ -105,6 +118,13 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	// 不受影响,纯展示层)。
 	"sync_users": true,
 }
+
+// A40-2-F6:规则库跳过警告统一文案(审计侧与响应侧共用,全角括号口径)。
+const (
+	warningWafMetadataSkipped    = "备份不含规则库数据文件——规则库版本记录已跳过（仅 lbbak 完整备份可导入该类）"
+	warningWafCRSMetadataSkipped = "备份不含 CRS 数据文件——CRS 版本记录已跳过（仅含该文件的 lbbak 备份可导入）"
+	warningWafXdbMetadataSkipped = "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过（仅含该文件的 lbbak 备份可导入）"
+)
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 
@@ -1732,10 +1752,12 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
 		return
 	}
-	sectionTables, includeGlobal, ok := configBackupSectionTables(strings.Split(c.Query("sections"), ","))
-	if c.Query("sections") == "" {
-		sectionTables, includeGlobal, ok = configBackupSectionTables(nil)
+	qs := c.Query("sections")
+	sel := parseSectionsParam(qs)
+	if qs == "" {
+		sel = nil
 	}
+	sectionTables, includeGlobal, ok := configBackupSectionTables(sel)
 	if !ok {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
 		return
@@ -1858,16 +1880,8 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// R39-1:lbbak 二进制备份无法在请求体内携带 sections——分类选择经
 	// ?sections= query 传输(与导出对称);JSON 备份以体内 sections 字段为准。
 	if lbbakFiles != nil {
-		if qs := c.Query("sections"); qs != "" {
-			sel := []string{}
-			for _, p := range strings.Split(qs, ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					sel = append(sel, p)
-				}
-			}
-			if len(sel) > 0 {
-				backup.Sections = sel
-			}
+		if sel := parseSectionsParam(c.Query("sections")); len(sel) > 0 {
+			backup.Sections = sel
 		}
 	}
 	usedLegacyChecksum, err := validateV2Backup(backup)
@@ -2022,16 +2036,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 				delete(backup.Tables, t)
 			}
 			wafMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", "备份不含规则库数据文件——规则库版本记录已跳过(仅 lbbak 完整备份可导入该类)")
+			recordAudit(c, "导入警告", "配置备份", warningWafMetadataSkipped)
 		case crsMissing:
 			// BE-C1-10:单侧文件缺失→仅跳过对应版本表(记录与文件同批落地)。
 			delete(backup.Tables, "security_crs_version")
 			wafCRSMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", "备份不含 CRS 数据文件——CRS 版本记录已跳过(仅含该文件的 lbbak 备份可导入)")
+			recordAudit(c, "导入警告", "配置备份", warningWafCRSMetadataSkipped)
 		case xdbMissing:
 			delete(backup.Tables, "security_ip2region_version")
 			wafXdbMetadataSkipped = true
-			recordAudit(c, "导入警告", "配置备份", "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过(仅含该文件的 lbbak 备份可导入)")
+			recordAudit(c, "导入警告", "配置备份", warningWafXdbMetadataSkipped)
 		}
 	}
 	for table := range backup.Tables {
@@ -2047,14 +2061,17 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 重用户选择。降级为响应 warning+审计警告,导入照常(操作者 JWT 由下方
 	// password_version 递增吊销,需用备份内账户重新登录)。
 	operatorReplaced := false
-	if importUsername != "" && sectionTables["users"] && !backupContainsUsername(backup.Tables["users"], importUsername) {
+	// A40-2-F3:备份 users 表缺席时,本地用户根本未被触碰——不告警不吊销。
+	if importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
 		operatorReplaced = true
 		recordAudit(c, "导入警告", "配置备份", "备份不含当前操作账户——系统数据将被替换,导入后请使用备份内的管理员账户登录")
 	}
 	// R39-14:「系统数据」替换 ACME 配置表时,live 启用规则的引用可能悬挂
 	// (与 C-04 删除 409 守卫同果)——预检并降级警告(不阻断,尊重用户选择)。
+	// A40-2-F1:lb_rules 同批替换时跳过预检——预检读的是「导入前」live 规则,
+	// 这些规则马上被备份规则整体替换,恒误报。
 	acmeDanglingRules := 0
-	if sectionTables["certificate_configs"] || sectionTables["ca_providers"] {
+	if (sectionTables["certificate_configs"] || sectionTables["ca_providers"]) && !sectionTables["lb_rules"] {
 		if rows, qerr := db.DB.Query(`SELECT COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0) FROM lb_rules WHERE enabled=1 AND tls_source='acme_dns'`); qerr == nil {
 			for rows.Next() {
 				var acmeID, caID int
@@ -2178,9 +2195,10 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		}
 	}
 	revokedSessions := false
-	if sectionTables["users"] {
-		// R39-11:仅「系统数据」被替换时吊销全员会话(用户/密钥已换,旧 JWT
-		// 必须失效);其余分类导入不触碰用户数据,不吊销、不打扰。
+	// R39-11:仅「系统数据」被替换时吊销全员会话(用户/密钥已换,旧 JWT
+	// 必须失效);其余分类导入不触碰用户数据,不吊销、不打扰。
+	// A40-2-F3:备份 users 表缺席=用户数据未替换,同样不吊销。
+	if sectionTables["users"] && len(backup.Tables["users"]) > 0 {
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
 			err = session.abort(err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
@@ -2274,7 +2292,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
 	wafApplyWarning := ""
 	if lbbakFiles != nil && sectionTables["security_crs_version"] {
-		wafApplyWarning = applyLbbakWafFiles(c, lbbakFiles, ip2regionTagFromBackup(backup.Tables))
+		wafApplyWarning = applyLbbakWafFiles(c, lbbakFiles, services.SanitizeBundleVersion(ip2regionTagFromBackup(backup.Tables)))
 	}
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
@@ -2295,7 +2313,13 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 			auditDetail = services.FormatAuditDetail(auditDetail, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 		}
 		recordAudit(c, auditAction, "配置备份", auditDetail)
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
+		failureWarnings := skipWarnings
+		if wafApplyWarning != "" {
+			// A40-2-F4:规则库文件已落盘 live 树而 DB 已回滚——状态分裂必须
+			// 随失败响应可见,不得只在审计侧留痕。
+			failureWarnings = append(append([]string{}, failureWarnings...), wafApplyWarning)
+		}
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": failureWarnings}})
 		return
 	}
 
@@ -2354,13 +2378,13 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	responseWarnings := skipWarnings
 	if wafMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含规则库数据文件——规则库版本记录已跳过（仅 lbbak 完整备份可导入该类）")
+		responseWarnings = append(append([]string{}, responseWarnings...), warningWafMetadataSkipped)
 	}
 	if wafCRSMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含 CRS 数据文件——CRS 版本记录已跳过（仅含该文件的 lbbak 备份可导入该类）")
+		responseWarnings = append(append([]string{}, responseWarnings...), warningWafCRSMetadataSkipped)
 	}
 	if wafXdbMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过（仅含该文件的 lbbak 备份可导入该类）")
+		responseWarnings = append(append([]string{}, responseWarnings...), warningWafXdbMetadataSkipped)
 	}
 	if wafApplyWarning != "" {
 		responseWarnings = append(append([]string{}, responseWarnings...), wafApplyWarning)

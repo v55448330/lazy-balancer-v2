@@ -54,11 +54,12 @@ func (d *DNSPod) buildCredentialsJSON(creds map[string]string) (string, error) {
 		if creds["secret_id"] == "" || creds["secret_key"] == "" {
 			return "", fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
 		}
+		// CERT40-3:canonical 不再携带 api_token 拼接值——tencent 模式消费端
+		// (factory.go)只读 secret_id/secret_key,拼接串是零消费死字段。
 		data, _ := json.Marshal(map[string]string{
 			"mode":       "tencent",
 			"secret_id":  creds["secret_id"],
 			"secret_key": creds["secret_key"],
-			"api_token":  creds["secret_id"] + "," + creds["secret_key"],
 		})
 		return string(data), nil
 	case "dnspod":

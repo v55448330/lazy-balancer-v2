@@ -499,10 +499,12 @@ func reversedACMEDomainForm(domain string) string {
 // 历史）。导入备份可携带非规范 domain 行（大小写/空白/顺序变体），按去空白小写
 // 归一（lower+replace）与 canonical/reversed 双形式匹配，避免变体行逃逸退役
 // （R50 S-2）；零行命中为无害无操作。
-func retireCertJobsForDomain(database *sql.DB, ruleID, canonicalDomain, reversedDomain string) error {
+// LB40-7:stage 参数化失败阶段(事务开启/迁移 UPDATE/commit),退役 message
+// 随实际失败阶段落库,运维可从任务行直接看出哪一步失败。
+func retireCertJobsForDomain(database *sql.DB, ruleID, canonicalDomain, reversedDomain, stage string) error {
 	_, err := database.Exec(
-		`UPDATE cert_jobs SET status='disabled', message='域名迁移事务开启失败，旧域任务退役', updated_at=datetime('now') WHERE rule_id=? AND lower(replace(domain,' ','')) IN (?,?)`,
-		ruleID, canonicalDomain, reversedDomain)
+		`UPDATE cert_jobs SET status='disabled', message=?, updated_at=datetime('now') WHERE rule_id=? AND lower(replace(domain,' ','')) IN (?,?)`,
+		stage+"，旧域任务退役", ruleID, canonicalDomain, reversedDomain)
 	return err
 }
 
@@ -839,6 +841,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err := h.validateRulePayloadBeforeSave(req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	// LB40-1:同端口 TLS/明文混布拦截(创建方向)。
+	if req.Protocol == "http" {
+		if err := checkPortTLSMix("", req.ListenPort, req.EnableTLS); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 
 	userIDInt := contextUserID(c)
@@ -1277,6 +1286,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.ProxyStreamTimeout = &zero
 			req.ProxyFlushInterval = &zero
 			req.ProxyStreamCloseDelay = &zero
+			// LB40-2:DNS 动态上游是 HTTP 语义,切换即清零(dynamic_dns 残留
+			// 会让 validateRuleFeatures 恒拒协议切换,且永不消费的脏配置随
+			// 快照/导出放大)。
+			req.DynamicDNS = &disabled
+			req.EnableDnsServer = &disabled
+			req.DnsServer = &empty
+			req.DnsFamily = ""
 			req.HostHeader = &empty
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
@@ -1427,6 +1443,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err := h.validateRulePayloadBeforeSave(req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	// LB40-1:同端口 TLS/明文混布拦截(更新方向)——nil=保留现值,合并后判定。
+	if req.Protocol == "http" {
+		effTLS := existingRule.EnableTLS
+		if req.EnableTLS != nil {
+			effTLS = *req.EnableTLS
+		}
+		if err := checkPortTLSMix(caddyID, req.ListenPort, effTLS); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 
 	// Validate TLS certificate if provided (manual source only)
@@ -1767,7 +1794,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 旧域行上无副作用（部署/续期均按新域匹配，不读此行）。
 				services.Logf("error", "UpdateRule: cert job domain migration begin failed for caddy_id=%s: %v", caddyID, txErr)
 				oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-				if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical)); retireErr != nil {
+				if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移事务开启失败"); retireErr != nil {
 					services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration begin failure for caddy_id=%s: %v", caddyID, retireErr)
 					// R50-N3：退役失败即旧域任务保持原状（'issued'+PEM 行永驻，与
 					// pre-R49 行为等效，fail-safe 但静默），补审计让运维可见。
@@ -1795,7 +1822,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						}
 						services.Logf("error", "UpdateRule: failed to update cert job %d domain for caddy_id=%s: %v", existingJobID, caddyID, err)
 						oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical)); retireErr != nil {
+						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移 UPDATE 失败"); retireErr != nil {
 							services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration update failure for caddy_id=%s: %v", caddyID, retireErr)
 							recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
 								services.AuditRulePart(caddyID),
@@ -1821,7 +1848,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						// 另建任务破坏「一规则一任务」。与 R48-2/R49 分支同语义退役。
 						services.Logf("error", "UpdateRule: cert job domain migration commit failed for caddy_id=%s: %v", caddyID, err)
 						oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical)); retireErr != nil {
+						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移 commit 失败"); retireErr != nil {
 							services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration commit failure for caddy_id=%s: %v", caddyID, retireErr)
 							recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
 								services.AuditRulePart(caddyID),
@@ -2397,6 +2424,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if err := h.validateRuleListenPortForSave(ruleProtocol, rulePort); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
 		return
+	}
+	// LB40-1:同端口 TLS/明文混布拦截(启用方向)。
+	if ruleProtocol == "http" {
+		if err := checkPortTLSMix(caddyID, rulePort, enableTLS); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+			return
+		}
 	}
 	if err := h.validatePortFromDB(ruleProtocol, rulePort, caddyID); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})

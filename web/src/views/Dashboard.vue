@@ -418,6 +418,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
+import { getStrategyLabel } from '@/utils/strategyLabels'
+import { hostPortKey } from '@/utils/upstreamKeys'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -679,16 +681,7 @@ const ipList = computed(() => {
   return Object.entries(ips).map(([iface, ip]) => ({ iface, ip }))
 })
 
-const getStrategyLabel = (strategy: string) => {
-  const labels: Record<string, string> = {
-    round_robin: '轮询',
-    weighted_round_robin: '轮询',
-    least_conn: '最少连接',
-    ip_hash: 'IP 哈希',
-    cookie: 'Cookie 粘滞',
-  }
-  return labels[strategy] || strategy
-}
+// FE40-D1-2：策略文案映射提取至 utils/strategyLabels（死键 round_robin 已删）。
 
 const getRuleProtocolLabel = (rule: Rule): 'HTTP' | 'HTTPS' | 'TCP' => {
   if (rule.protocol === 'tcp') return 'TCP'
@@ -898,7 +891,7 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
         let hasDegraded = false
 
         enabledUpstreams.forEach((u) => {
-          const key = `${u.host}:${u.port}`
+          const key = hostPortKey(u.host, u.port)
           let found = false
           for (const serverHealth of Object.values(healthData)) {
             const upHealth = serverHealth?.[key]

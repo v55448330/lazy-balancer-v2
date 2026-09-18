@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -276,5 +277,75 @@ func TestOIDCUser_cannotModifyDisplayNameOrPassword(t *testing.T) {
 	rec = serveUserMutation(h, http.MethodPatch, "/users/1", `{"display_name":"NewName"}`, 1, h.UpdateCurrentUser)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("local user display_name should pass: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// SYS40-1:身份来源(auth_provider)读失败不得按「非 OIDC」静默放行——
+// DB 故障下 OIDC 管理门形同虚设。不可判定时拒绝写操作(500)。
+func TestUserMutations_rejectWhenIdentityUnreadable(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	seedUserAuditTest(t, 7, "victim", "user", true)
+	// 注入读失败形状:auth_provider 列不可读(仅命中 OIDC 身份判定查询)
+	if _, err := db.DB.Exec("ALTER TABLE users RENAME COLUMN auth_provider TO auth_provider_unreadable"); err != nil {
+		t.Fatalf("break auth_provider column: %v", err)
+	}
+
+	rec := serveUserMutation(h, http.MethodPut, "/users/7", `{"display_name":"x"}`, 1, h.UpdateUser)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "读取用户身份失败") {
+		t.Fatalf("update with unreadable identity must 500, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	pwRec := httptest.NewRecorder()
+	pwCtx, _ := gin.CreateTestContext(pwRec)
+	pwCtx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"new_password":"reset123"}`))
+	pwCtx.Request.Header.Set("Content-Type", "application/json")
+	pwCtx.Params = gin.Params{{Key: "id", Value: "7"}}
+	pwCtx.Set("user_id", 1)
+	h.ResetUserPassword(pwCtx)
+	rec = pwRec
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "读取用户身份失败") {
+		t.Fatalf("reset-password with unreadable identity must 500, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = serveUserMutation(h, http.MethodPatch, "/users/7", `{"display_name":"x"}`, 7, h.UpdateCurrentUser)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "读取用户身份失败") {
+		t.Fatalf("self update with unreadable identity must 500, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = serveUserMutation(h, http.MethodPost, "/auth/mfa/setup", `{}`, 7, h.MFASetup)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "读取用户身份失败") {
+		t.Fatalf("mfa setup with unreadable identity must 500, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// SYS40-2:管理员重置密码必须同时清零登录失败计数与锁定——重置语义即
+// 「凭据已换新」,旧凭据的锁定残留会把新密码也锁在门外。
+func TestResetUserPassword_clearsLoginLockout(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	seedUserAuditTest(t, 7, "locked-user", "user", true)
+	if _, err := db.DB.Exec(`UPDATE users SET login_failed_attempts=5, login_locked_until='2099-01-01 00:00:00' WHERE id=7`); err != nil {
+		t.Fatal(err)
+	}
+
+	pwRec := httptest.NewRecorder()
+	pwCtx, _ := gin.CreateTestContext(pwRec)
+	pwCtx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"new_password":"fresh123"}`))
+	pwCtx.Request.Header.Set("Content-Type", "application/json")
+	pwCtx.Params = gin.Params{{Key: "id", Value: "7"}}
+	pwCtx.Set("user_id", 1)
+	h.ResetUserPassword(pwCtx)
+	if pwRec.Code != http.StatusOK {
+		t.Fatalf("reset password should succeed, got %d %s", pwRec.Code, pwRec.Body.String())
+	}
+
+	var attempts int
+	var lockedUntil sql.NullString
+	if err := db.DB.QueryRow("SELECT login_failed_attempts, login_locked_until FROM users WHERE id=7").Scan(&attempts, &lockedUntil); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 || lockedUntil.Valid {
+		t.Fatalf("lockout must be cleared on admin reset, got attempts=%d locked_until=%v", attempts, lockedUntil)
 	}
 }
