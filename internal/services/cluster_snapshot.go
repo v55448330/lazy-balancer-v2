@@ -131,7 +131,7 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("读取同步开关: %w", err)
 	}
-	switchesKey := fmt.Sprintf("%t%t%t%t%t", switches.GlobalConfig, switches.Users, switches.Rules, switches.WafFiles, switches.Security)
+	switchesKey := fmt.Sprintf("%t%t%t", switches.Users, switches.Rules, switches.Security)
 	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && cache.switches == switchesKey && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
 		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
@@ -182,8 +182,7 @@ func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotSt
 		return models.ClusterSnapshot{}, fmt.Errorf("读取主节点同步开关: %w", err)
 	}
 	snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
-		GlobalConfig: switches.GlobalConfig, Users: switches.Users,
-		Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
+		Users: switches.Users, Rules: switches.Rules, Security: switches.Security,
 	}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
@@ -239,6 +238,14 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	defer tx.Rollback()
 
 	var snapshot models.ClusterSnapshot
+	// 三分类合并:users 节 payload 含 basic_settings/caddy_config——漂移守卫
+	// 必须装载全局配置区,且与 BuildSnapshot 复用同一装载函数(哈希奇偶
+	// 不变式)。装载失败语义与现有守卫节一致(报错上抛)。
+	if err := s.loadSnapshotGlobalSettings(ctx, tx, &snapshot); err != nil {
+		return nil, err
+	}
+	// (security 节 payload 为纯表域——文件态由 wafFilesDrifted 专用通道比对,
+	// 与漂移守卫的轻量约束一致:不调用 BuildWafFileRef 的全树哈希。)
 	if snapshot.Rules, err = s.snapshotRules(ctx, tx); err != nil {
 		return nil, err
 	}
@@ -391,12 +398,17 @@ func parseSnapshotExpiry(value string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("无法解析证书过期时间 %q", value)
 }
 
-func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
-	var snapshot models.ClusterSnapshot
-	var syncCaddy bool
+// loadSnapshotGlobalSettings 装载快照的全局配置区(BasicSettings+
+// CaddyConfig,含 branding 镜像与 Caddy 全局列)——buildSnapshot(全量快照)
+// 与 driftGuardSectionHashes(漂移守卫三节重建)共用同一装载函数:三分类
+// 合并后 users 节 payload 含 basic_settings/caddy_config,两侧列清单分叉
+// 即哈希口径分叉(奇偶不变式被破坏),不得另写第二套列清单。
+// 三分类合并(2026-09-19):全局配置并入系统数据节(恒同步)——装载不再受
+// sync_global_config 开关裁剪(列已删除,快照恒携带)。
+func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store snapshotStore, snapshot *models.ClusterSnapshot) error {
 	var caddyConfig string
 	var brandingJSON string
-	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_global_config,1), COALESCE(caddy_config,'{}'), COALESCE(branding_json,''),
+	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(caddy_config,'{}'), COALESCE(branding_json,''),
 		COALESCE(log_level,'info'),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
@@ -404,7 +416,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
 		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
 		COALESCE(oidc_config,'')
-		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &syncCaddy, &caddyConfig, &brandingJSON,
+		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &caddyConfig, &brandingJSON,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.CertJobLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
@@ -412,32 +424,33 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey,
 		&snapshot.BasicSettings.MFAWriteGuard, &snapshot.BasicSettings.MFALockoutEnabled, &snapshot.BasicSettings.GitHubProxyURL, &snapshot.BasicSettings.OIDCConfig)
 	if err != nil {
-		return models.ClusterSnapshot{}, fmt.Errorf("读取集群基础设置: %w", err)
+		return fmt.Errorf("读取集群基础设置: %w", err)
 	}
-	if !syncCaddy {
-		// 全局配置同步关闭：快照不携带 BasicSettings/CaddyConfig（除同步间隔
-		// 属集群编排自身，始终下发），从节点保留本地全局设置。
-		interval := snapshot.BasicSettings.SyncInterval
-		snapshot.BasicSettings = models.ClusterBasicSettings{SyncInterval: interval}
+	snapshot.BasicSettings.BrandingJSON = brandingJSON
+	snapshot.CaddyConfig = &caddyConfig
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+		COALESCE(access_log_json,1), COALESCE(access_log_format,''),
+		COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
+		COALESCE(upstream_keepalive_timeout,0),
+		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
+		COALESCE(server_tokens_hidden,0)
+		FROM global_config WHERE id=1`).Scan(
+		&snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
+		&snapshot.BasicSettings.AccessLogJSON, &snapshot.BasicSettings.AccessLogFormat,
+		&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,
+		&snapshot.BasicSettings.UpstreamKeepaliveTimeout,
+		&snapshot.BasicSettings.ProxyDialTimeout, &snapshot.BasicSettings.ProxyResponseHeaderTimeout, &snapshot.BasicSettings.ProxyReadTimeout, &snapshot.BasicSettings.ProxyWriteTimeout, &snapshot.BasicSettings.ProxyStreamTimeout, &snapshot.BasicSettings.ProxyFlushInterval, &snapshot.BasicSettings.ProxyStreamCloseDelay,
+		&snapshot.BasicSettings.ServerTokensHidden); err != nil {
+		return fmt.Errorf("读取 Caddy 全局设置: %w", err)
 	}
-	if syncCaddy {
-		snapshot.BasicSettings.BrandingJSON = brandingJSON
-		snapshot.CaddyConfig = &caddyConfig
-		if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
-			COALESCE(access_log_json,1), COALESCE(access_log_format,''),
-			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
-			COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-			COALESCE(server_tokens_hidden,0)
-			FROM global_config WHERE id=1`).Scan(
-			&snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
-			&snapshot.BasicSettings.AccessLogJSON, &snapshot.BasicSettings.AccessLogFormat,
-			&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,
-			&snapshot.BasicSettings.UpstreamKeepaliveTimeout,
-			&snapshot.BasicSettings.ProxyDialTimeout, &snapshot.BasicSettings.ProxyResponseHeaderTimeout, &snapshot.BasicSettings.ProxyReadTimeout, &snapshot.BasicSettings.ProxyWriteTimeout, &snapshot.BasicSettings.ProxyStreamTimeout, &snapshot.BasicSettings.ProxyFlushInterval, &snapshot.BasicSettings.ProxyStreamCloseDelay,
-			&snapshot.BasicSettings.ServerTokensHidden); err != nil {
-			return models.ClusterSnapshot{}, fmt.Errorf("读取 Caddy 全局设置: %w", err)
-		}
+	return nil
+}
+
+func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
+	var snapshot models.ClusterSnapshot
+	var err error
+	if err = s.loadSnapshotGlobalSettings(ctx, store, &snapshot); err != nil {
+		return models.ClusterSnapshot{}, err
 	}
 	if snapshot.Rules, err = s.snapshotRules(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err

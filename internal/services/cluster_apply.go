@@ -72,15 +72,14 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 执行(验签后、apply 前单点);此处重复执行已删——applySnapshot 唯一生产
 	// 调用方即 Pull,两次结果必然相同。
 	// 开关以主节点快照下发的 MasterSyncSwitches 为准（B3）；旧主节点快照
-	// 不携带开关时回退本地默认全开，保持 schema 兼容。
-	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	// 不携带开关时回退本地默认全开，保持 schema 兼容。三分类合并后仅
+	// users(恒 true)/rules/security 三开关(集群双端同版本升级)。
+	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 	if snapshot.MasterSyncSwitches != nil {
 		switches = SyncSwitches{
-			GlobalConfig: snapshot.MasterSyncSwitches.GlobalConfig,
 			// 系统数据恒同步(2026-09-11 裁定):纵使旧主节点快照嵌入 false 也强制应用。
 			Users:    true,
 			Rules:    snapshot.MasterSyncSwitches.Rules,
-			WafFiles: snapshot.MasterSyncSwitches.WafFiles,
 			Security: snapshot.MasterSyncSwitches.Security,
 		}
 	}
@@ -101,11 +100,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
 	if snapshot.MasterSyncSwitches != nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET
-			sync_global_config=?, sync_users=1, sync_rules=?, sync_waf_files=?, sync_security=?
+			sync_users=1, sync_rules=?, sync_security=?
 			WHERE id=1 AND COALESCE(is_master,0)=0`,
-			snapshot.MasterSyncSwitches.GlobalConfig,
-			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.WafFiles,
-			snapshot.MasterSyncSwitches.Security); err != nil {
+			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.Security); err != nil {
 			return fmt.Errorf("镜像同步开关: %w", err)
 		}
 	}
@@ -138,9 +135,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		)
 	}
 	// M23：log_level 随快照落库后热生效——必须在事务提交后调用（ApplyLogLevel
-	// 从 db.DB 读全局配置，提交前读到的仍是旧值）。global_config 节被开关跳过
-	// 时本地设置未变，不重放。失败仅记日志（ApplyLogLevel 内部已记），不中断同步。
-	if !skip.skip("global_config") {
+	// 从 db.DB 读全局配置，提交前读到的仍是旧值）。三分类合并后全局配置随
+	// users 节(恒同步)——users 节被哈希跳过(unchanged)时本地设置未变,
+	// 不重放。失败仅记日志（ApplyLogLevel 内部已记），不中断同步。
+	if !skip.skip("users") {
 		ApplyLogLevel()
 		// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
 		// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
@@ -165,7 +163,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// .version 陈旧），仅 sha 比较会把本分支短路，R57 A-#4 的
 	// rewriteVersionIfMissingOrStale 永不执行——304 分支兜底重拉 → 应用
 	// 跳过 → 每周期全量重拉死循环（主节点「同步下发」审计随之刷屏）。
-	if switches.WafFiles && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted()) {
+	if switches.Security && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted()) {
 		// 2026-09-18 用户裁定:同步日志与自动更新日志同款分阶段流水——唯一
 		// 区别是来源(主节点 vs GitHub),弹框日志可对照阅读。
 		AppendCRSUpdateLog("INFO", "checking", "从主节点校验 CRS 规则版本")
@@ -254,14 +252,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		Logf("info", "Admin TLS config changed via sync, restarting to apply")
 		requestRestart()
 	}
-	basicSync := "已同步"
-	// C-2 回归修正(第 2 轮审计 K2-P3-04):skip() 是 disabled||unchanged 合并
-	// 视图——开关开启但节哈希一致(unchanged)时曾误报「开关关闭」;精确判
-	// disabled(同 :326/:381 先例),unchanged 侧由节级审计正确区分。
-	if skip.disabled["global_config"] {
-		basicSync = "开关关闭"
-	}
-	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置："+basicSync, fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
+	// 三分类合并:全局配置随 users 节恒同步,不存在「基本设置:开关关闭」
+	// 形态;unchanged 侧由节级审计(哈希一致)正确区分。
+	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	return nil
 }
 
@@ -447,23 +440,26 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			}
 		}
 	}
-	if !skip.skip("global_config") {
+	// 三分类合并:全局配置应用(基本设置落库)从 global_config 节门改挂
+	// users 节——users 恒同步,仅哈希一致(unchanged)时跳过;此时本地设置
+	// 未变,但同步间隔属集群编排自身(快照侧始终下发),即使 unchanged 也
+	// 必须应用,否则从节点轮询周期与 UI 显示双陈旧。
+	if !skip.skip("users") {
 		if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
 			return err
 		}
 	} else {
-		// 同步间隔属集群编排自身（快照侧始终下发），即使全局配置同步
-		// 关闭也必须应用，否则从节点轮询周期与 UI 显示双陈旧。
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,0)=0`, snapshot.BasicSettings.SyncInterval); err != nil {
 			return fmt.Errorf("写入同步间隔: %w", err)
 		}
 	}
-	// CRS/IP2Region 版本行归 waf_files 开关(2026-09-11 裁定,差分门控修正):
-	// 不进节哈希(文件态哈希保持纯 ref),按「快照行 vs 本地行」内容差分应用
-	// ——版本行变化由 security_crs_version 触发器 bump 版本驱动 Pull 到达,
-	// 此处差分命中即重放;开关关闭跳过(disabled 精确判,不含 unchanged)。
-	// 全量替换语义:先清后插,空载荷=主节点清空。
-	if !skip.disabled["waf_files"] && snapshotSecurityVersionRowsDiffer(ctx, tx, snapshot) {
+	// CRS/IP2Region 版本行随安全防护开关(三分类合并,2026-09-11 差分门控
+	// 修正的延续):不进节哈希(security payload 只带 waf ref,版本行走内容
+	// 差分),按「快照行 vs 本地行」差分应用——版本行变化由
+	// security_crs_version 触发器 bump 版本驱动 Pull 到达,此处差分命中即
+	// 重放;开关关闭跳过(disabled 精确判,不含 unchanged)。全量替换语义:
+	// 先清后插,空载荷=主节点清空。
+	if !skip.disabled["security"] && snapshotSecurityVersionRowsDiffer(ctx, tx, snapshot) {
 		for _, stmt := range []string{"DELETE FROM security_crs_version", "DELETE FROM security_ip2region_version"} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("清理版本行同步表: %w", err)

@@ -46,8 +46,9 @@ func TestRefreshBrandingMirror_bumpsVersionOnFileChange(t *testing.T) {
 	}
 }
 
-// 快照携带:sync_global_config 开→BasicSettings.BrandingJSON 有值;关→裁剪为空。
-func TestBuildSnapshot_carriesBrandingUnderGlobalSwitch(t *testing.T) {
+// 三分类合并:全局配置并入系统数据(恒同步)——BrandingJSON 恒随快照携带,
+// 不再受开关裁剪。
+func TestBuildSnapshot_alwaysCarriesBranding(t *testing.T) {
 	svc, database := newClusterTestService(t)
 	database.Exec(`UPDATE global_config SET branding_json='{"app_name":"Y"}' WHERE id=1`)
 
@@ -56,17 +57,7 @@ func TestBuildSnapshot_carriesBrandingUnderGlobalSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snap.BasicSettings.BrandingJSON != `{"app_name":"Y"}` {
-		t.Errorf("switch on: BrandingJSON=%q, want mirror content", snap.BasicSettings.BrandingJSON)
-	}
-
-	database.Exec(`UPDATE global_config SET sync_global_config=0 WHERE id=1`)
-	clusterSnapshotCaches.Delete(database)
-	snap2, err := svc.SnapshotForTest(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap2.BasicSettings.BrandingJSON != "" {
-		t.Errorf("switch off: BrandingJSON=%q, must be stripped (branding 不同步)", snap2.BasicSettings.BrandingJSON)
+		t.Errorf("BrandingJSON=%q, want mirror content always carried", snap.BasicSettings.BrandingJSON)
 	}
 }
 

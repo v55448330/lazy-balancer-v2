@@ -16,6 +16,10 @@ import (
 
 // 集群同步节定义：开关列名 ↔ 快照节。哪个变动同步哪个——从节点逐节比对
 // SectionHashes 与 cluster_applied_sections，一致的节跳过重放并留痕。
+// 三分类合并(2026-09-19 用户裁定):节收敛为 3 类,与备份分类同构——全局
+// 配置并入「系统数据」(users 恒同步不可禁用,basic_settings/caddy_config
+// 随 users 节 payload 携带),规则库文件差量通道并入「安全防护」(单开关
+// 统策略行与文件,见 wafFilesDrifted/replaceSnapshotTx)。
 type syncSection struct {
 	Key      string
 	NewLabel string
@@ -23,12 +27,10 @@ type syncSection struct {
 
 var syncSections = []syncSection{
 	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/ACME
-	// (证书任务行与文件随 rules 开关,R64 A-N5)。
+	// 与全局配置(证书任务行与文件随 rules 开关,R64 A-N5)。
 	{Key: "users", NewLabel: "系统数据"},
-	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "rules", NewLabel: "负载规则"},
-	{Key: "waf_files", NewLabel: "规则库数据库"},
-	{Key: "security", NewLabel: "安全策略及自定义规则"},
+	{Key: "security", NewLabel: "安全防护"},
 }
 
 // ComputeSnapshotSectionHashes derives a stable SHA-256 per section from the
@@ -55,31 +57,30 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 // definition — the hash parity invariant between the two depends on it.
 func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 	switch key {
-	case "global_config":
-		if s.CaddyConfig != nil {
-			return struct {
-				Basic models.ClusterBasicSettings `json:"basic_settings"`
-				Caddy string                      `json:"caddy_config"`
-			}{s.BasicSettings, *s.CaddyConfig}
-		}
-		return s.BasicSettings
 	case "users":
+		// 三分类合并:users 节 payload 并入全局配置(basic_settings+
+		// caddy_config,字段顺序固定,主从同构建共享本定义)。CaddyConfig
+		// 为 nil 时 caddy_config 序列化为空串(手造快照/测试形态)。
+		caddy := ""
+		if s.CaddyConfig != nil {
+			caddy = *s.CaddyConfig
+		}
 		return struct {
-			Users   []models.ClusterUser   `json:"users"`
-			APIKeys []models.ClusterAPIKey `json:"api_keys"`
-		}{sanitizeUsersForHash(s.Users), sanitizeAPIKeysForHash(s.APIKeys)}
+			Users         []models.ClusterUser        `json:"users"`
+			APIKeys       []models.ClusterAPIKey      `json:"api_keys"`
+			BasicSettings models.ClusterBasicSettings `json:"basic_settings"`
+			CaddyConfig   string                      `json:"caddy_config"`
+		}{sanitizeUsersForHash(s.Users), sanitizeAPIKeysForHash(s.APIKeys), s.BasicSettings, caddy}
 	case "rules":
 		return s.Rules
-	case "waf_files":
-		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——
-		// 进哈希会让主从行状态强耦合,漂移判定不可收敛)。CRS/IP2Region 版本行
-		// 改经内容差分门控应用(cluster_apply.go versionRowsDiffer),随
-		// sync_waf_files 开关;版本行变化的版本 bump 由 security_crs_version
-		// 触发器驱动(已排除 last_checked 读路径写)。
-		return s.WafFiles
 	case "security":
 		// IPLists（v2.3.0）参与 security 节哈希：列表行变化必须触发节重放；
 		// 字段顺序是哈希输入的一部分，主从同构建共享本定义，勿单独调整。
+		// 三分类合并勘误(2026-09-19):WafFiles ref 不进本节哈希——ref 入哈希后,
+		// 文件拉取持续失败的从节点 security 节哈希在「主端 ref 域/本地 ref 域」
+		// 间永久乒乓(每两轮一次无退避全量重拉),击穿 R40 兜底重拉降频;文件态
+		// 漂移由 wafFilesDrifted 专用通道(含退避与标签自愈)独占,版本行与文件
+		// 差量通道随安全防护开关(cluster_apply.go/cluster_sync.go)。
 		return struct {
 			Policies    json.RawMessage             `json:"policies"`
 			Bindings    json.RawMessage             `json:"bindings"`
@@ -87,6 +88,25 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 			BlockPages  []models.SecurityBlockPage  `json:"block_pages"`
 			IPLists     json.RawMessage             `json:"ip_lists"`
 		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists}
+	case "global_config":
+		// legacy case:三分类合并前 global_config 节的 payload 形态。保留仅供
+		// 参照,syncSections 不再含该节(ComputeSnapshotSectionHashes 产 3 键)。
+		if s.CaddyConfig != nil {
+			return struct {
+				Basic models.ClusterBasicSettings `json:"basic_settings"`
+				Caddy string                      `json:"caddy_config"`
+			}{s.BasicSettings, *s.CaddyConfig}
+		}
+		return s.BasicSettings
+	case "waf_files":
+		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——
+		// 进哈希会让主从行状态强耦合,漂移判定不可收敛)。CRS/IP2Region 版本行
+		// 改经内容差分门控应用(cluster_apply.go versionRowsDiffer),随
+		// 安全防护开关;版本行变化的版本 bump 由 security_crs_version
+		// 触发器驱动(已排除 last_checked 读路径写)。本 case 三分类合并后
+		// 仅供 wafFilesSectionHash/wafFilesNullRefHash(文件漂移比对,哈希域
+		// =纯 ref 含版本标签)与 cluster_applied_sections 的 waf_files 记账行。
+		return s.WafFiles
 	}
 	return nil
 }
@@ -129,25 +149,20 @@ func sanitizeAPIKeysForHash(keys []models.ClusterAPIKey) []models.ClusterAPIKey 
 }
 
 // SyncSwitches 是节点本地同步开关集(读取见 readSyncSwitches,CL10-N4:此前注释引用不存在的 LoadSyncSwitches 且口径写错)。
+// 三分类合并后仅剩 users(恒 true)/rules/security 三开关。
 type SyncSwitches struct {
-	GlobalConfig bool
-	Users        bool
-	Rules        bool
-	WafFiles     bool
-	Security     bool
+	Users    bool
+	Rules    bool
+	Security bool
 }
 
 // sectionEnabled maps a section key to its switch state.
 func (sw SyncSwitches) sectionEnabled(key string) bool {
 	switch key {
-	case "global_config":
-		return sw.GlobalConfig
 	case "users":
 		return sw.Users
 	case "rules":
 		return sw.Rules
-	case "waf_files":
-		return sw.WafFiles
 	case "security":
 		return sw.Security
 	}
@@ -159,30 +174,23 @@ func (sw SyncSwitches) sectionEnabled(key string) bool {
 func readSyncSwitches(dbh interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }) (SyncSwitches, error) {
-	sw := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	sw := SyncSwitches{Users: true, Rules: true, Security: true}
 	if dbh == nil {
 		return sw, nil
 	}
 	// CL9-N12(第 9 轮审计):sync_users 子查询已删——恒同步裁定下 sw.Users
 	// 恒 true(读取/赋值成死代码);无 FROM 的子查询标量 SELECT 恒返回 1 行,
-	// ErrNoRows 分支不可达,一并收敛。
-	var g, r, w, sec sql.NullBool
+	// ErrNoRows 分支不可达,一并收敛。三分类合并(2026-09-19)后
+	// sync_global_config/sync_waf_files 列已物理删除,读取只剩 rules/security。
+	var r, sec sql.NullBool
 	err := dbh.QueryRowContext(context.Background(), `SELECT
-		(SELECT sync_global_config FROM global_config WHERE id=1),
 		(SELECT sync_rules FROM global_config WHERE id=1),
-		(SELECT sync_waf_files FROM global_config WHERE id=1),
-		(SELECT sync_security FROM global_config WHERE id=1)`).Scan(&g, &r, &w, &sec)
+		(SELECT sync_security FROM global_config WHERE id=1)`).Scan(&r, &sec)
 	if err != nil {
 		return sw, err
 	}
-	if g.Valid {
-		sw.GlobalConfig = g.Bool
-	}
 	if r.Valid {
 		sw.Rules = r.Bool
-	}
-	if w.Valid {
-		sw.WafFiles = w.Bool
 	}
 	if sec.Valid {
 		sw.Security = sec.Bool
@@ -248,8 +256,10 @@ func readAppliedSectionHashes(dbh *sql.DB) map[string]string {
 }
 
 // driftGuardSections 限定漂移检测范围：这些节是纯全量替换表，本地重建哈希
-// 在稳态下与主节点哈希一致，比对才有意义（global_config 含节点本地记账
-// 字段、waf_files 含文件态，本地重建哈希天然可能与主节点不同，不纳入）。
+// 在稳态下与主节点哈希一致，比对才有意义。三分类合并后 users 节含全局
+// 配置(basic+caddy)——节点本地记账列不在 BasicSettings 结构内,重建口径
+// 与主端一致(同一装载函数);waf_files 为文件态记账节(哈希域=纯 ref),
+// 由 wafFilesDrifted 专用通道比对,不纳入表级守卫。
 var driftGuardSections = []string{"rules", "users", "security"}
 
 func computeSectionSkips(dbh *sql.DB, snapshot models.ClusterSnapshot, switches SyncSwitches, localHashes map[string]string) *sectionSkips {
@@ -330,17 +340,39 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 			Logf("warn", "记录已应用节哈希失败（section=%s）: %v", sec.Key, err)
 		}
 	}
+
+	// 三分类合并:cluster_applied_sections 的 waf_files 行保留为文件态记账
+	// (哈希域=纯 ref 含版本标签)——wafFilesDrifted 的 304 兜底重拉与
+	// R57 A-#4 标签自愈依赖该记录;随安全防护开关写入/冻结(节哈希、上报
+	// 与 hover 均不再包含该节,syncSections 3 键)。
+	if switches.Security {
+		refHash := wafFilesNullRefHash
+		if snapshot.WafFiles != nil {
+			if hh, rerr := wafFilesSectionHash(snapshot.WafFiles); rerr == nil {
+				refHash = hh
+			}
+		}
+		if sk.unchanged["security"] {
+			if _, err := dbh.Exec(`UPDATE cluster_applied_sections SET applied_version=?, applied_at=datetime('now') WHERE section='waf_files'`, snapshot.Version); err != nil {
+				Logf("warn", "更新文件态记账版本失败（section=waf_files）: %v", err)
+			}
+		} else if _, err := dbh.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES ('waf_files',?,?,datetime('now'))
+			ON CONFLICT(section) DO UPDATE SET hash=excluded.hash, applied_version=excluded.applied_version, applied_at=excluded.applied_at`, refHash, snapshot.Version); err != nil {
+			Logf("warn", "记录文件态记账哈希失败（section=waf_files）: %v", err)
+		}
+	}
 }
 
-// logSyncSwitchGuards surfaces cross-section drift: security policies that
-// reference CRS files the node didn't sync, and waf-files updates skipped by
-// an off switch.
+// logSyncSwitchGuards surfaces cross-section drift: security-switch-off nodes
+// whose master references newer CRS/IP2Region files (file state follows the
+// security switch after the 3-category merge).
 func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
 	// R57 A-#3：告警对象是「开关关闭导致 WAF 文件滞后」的从节点——开关开启时
-	// applySnapshot 随即拉取文件，无滞后可告。原条件 !switches.WafFiles 恰好
-	// 把唯一应告警的形态挡在门外；且 recordAppliedSectionHashes 对 disabled 节
-	// 跳过 applied_version 写入，本版本去重仍正确。
-	if !sk.disabled["waf_files"] || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
+	// applySnapshot 随即拉取文件，无滞后可告。三分类合并后判定挂 security
+	// 开关(waf_files 不再是同步节,sk.disabled 只含 3 节键);dedup 记账沿用
+	// waf_files 行(recordAppliedSectionHashes 对 disabled 节跳过写入使
+	// applied_version 冻结在开关关闭前,每版本 bump 至多刷一条告警)。
+	if !sk.disabled["security"] || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
 		return
 	}
 	var lastWarnVersion int

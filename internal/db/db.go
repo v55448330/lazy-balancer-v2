@@ -800,13 +800,11 @@ func runMigrations() error {
 		"users.password_changed_at":                   "DATETIME",
 		"users.password_version":                      "INTEGER NOT NULL DEFAULT 0",
 		"global_config.cluster_version":               "INTEGER DEFAULT 0",
-		"global_config.sync_global_config":            "BOOLEAN DEFAULT 1",
 		"global_config.sync_users":                    "BOOLEAN DEFAULT 1",
 		// branding.json 原文镜像(2026-09-11):主节点经快照分发到从节点,
 		// 入触发器 OF 列表——文件变化即 bump cluster_version。
 		"global_config.branding_json":                 "TEXT DEFAULT ''",
 		"global_config.sync_rules":                    "BOOLEAN DEFAULT 1",
-		"global_config.sync_waf_files":                "BOOLEAN DEFAULT 1",
 		"global_config.sync_security":                 "BOOLEAN DEFAULT 1",
 		"global_config.cluster_token":                 "TEXT DEFAULT ''",
 		"global_config.registration_id":               "INTEGER DEFAULT 0",
@@ -1212,7 +1210,7 @@ func runMigrations() error {
 	}
 
 	// Drop legacy global_config.sync_caddy_config if it still exists. 旧开关仅覆盖
-	// Caddy 全局配置，已被 sync_global_config 取代，且不再被快照构建或同步开关读取，
+	// Caddy 全局配置，已被系统数据节(三分类合并,恒同步)取代，且不再被快照构建或同步开关读取，
 	// 切换它只会触发无意义的全量重拉。
 	legacyGlobalConfigDeadColumns := []string{"sync_caddy_config"}
 	for _, col := range legacyGlobalConfigDeadColumns {
@@ -1306,6 +1304,9 @@ func runMigrations() error {
 	if err := migrateDropDeadMFALockColumns(); err != nil {
 		return err
 	}
+	if err := migrateDropMergedSyncSwitchColumns(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1328,6 +1329,41 @@ func migrateDropDeadMFALockColumns() error {
 			return fmt.Errorf("failed to drop users.%s: %w", col, err)
 		}
 		log.Printf("已删除 users.%s(M7 残留死列,现行锁定走 login_* 列)", col)
+	}
+	return nil
+}
+
+// migrateDropMergedSyncSwitchColumns(2026-09-19 三分类合并,用户裁定):
+// sync_global_config(全局配置并入系统数据节,恒同步)与 sync_waf_files
+// (规则库并入安全防护开关)两列随开关删除——readSyncSwitches/UpdateSettings/
+// 快照触发器 OF 列表均已不再引用。同步删除 cluster_applied_sections 的
+// global_config 陈旧行(节已不存在,防漂移误判);waf_files 行保留为文件态
+// 记账(wafFilesDrifted 的 304 兜底与标签自愈依赖,哈希域未变)。
+// 幂等:列存在才 DROP;行删除恒幂等。
+func migrateDropMergedSyncSwitchColumns() error {
+	for _, col := range []string{"sync_global_config", "sync_waf_files"} {
+		var colCount int
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", col).Scan(&colCount); err != nil {
+			return err
+		}
+		if colCount == 0 {
+			continue
+		}
+		if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + col); err != nil {
+			return fmt.Errorf("failed to drop global_config.%s: %w", col, err)
+		}
+		log.Printf("已删除 global_config.%s(三分类合并:开关随分类并入收敛)", col)
+	}
+	// 表由集群 schema 建表步骤创建,迁移可能先于其执行(全新库)——表不
+	// 存在时跳过清理。
+	var tableCount int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cluster_applied_sections'").Scan(&tableCount); err != nil {
+		return err
+	}
+	if tableCount > 0 {
+		if _, err := DB.Exec(`DELETE FROM cluster_applied_sections WHERE section='global_config'`); err != nil {
+			return fmt.Errorf("failed to clear legacy global_config applied section: %w", err)
+		}
 	}
 	return nil
 }
@@ -2549,10 +2585,11 @@ func migrateSyncSwitches() error {
 	if done {
 		return nil
 	}
-	// 新分类（sync_global_config 等五类）语义覆盖旧 sync_caddy_config 开关
-	// （旧开关仅覆盖 Caddy 全局配置且默认关，新开关覆盖日志/时区/Caddy 全部
-	// 全局项且默认开），因此不搬运旧值；曾依赖旧开关关闭同步的用户需在新设置
-	// 卡片重新关闭对应类别。旧 sync_caddy_config 列已随迁移删除。
+	// 分类开关语义历经两轮收敛(sync_caddy_config → 五类开关 → 三分类合并):
+	// 旧 sync_caddy_config 仅覆盖 Caddy 全局配置且默认关,五类开关覆盖
+	// 日志/时区/Caddy 全部全局项且默认开,语义不同因此不搬运旧值;曾依赖
+	// 旧开关关闭同步的用户需在设置卡片重新关闭对应类别。sync_caddy_config
+	// 列与其后收敛删除的 sync_global_config/sync_waf_files 列均已随迁移删除。
 	_, err := DB.Exec("UPDATE global_config SET sync_switches_migrated=1 WHERE id=1")
 	return err
 }

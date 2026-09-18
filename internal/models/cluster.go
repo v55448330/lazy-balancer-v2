@@ -104,12 +104,12 @@ type ClusterModeRequest struct {
 type ClusterSettingsRequest struct {
 	// SyncInterval 范围校验（10-86400）在 ClusterService.UpdateSettings 完成，
 	// 以便返回「同步间隔需在 10-86400 秒之间」的具体文案；binding 层不再拦截（R42 发现1）。
-	SyncInterval     *int  `json:"sync_interval"`
-	SyncGlobalConfig *bool `json:"sync_global_config"`
-	SyncUsers        *bool `json:"sync_users"`
-	SyncRules        *bool `json:"sync_rules"`
-	SyncWafFiles     *bool `json:"sync_waf_files"`
-	SyncSecurity     *bool `json:"sync_security"`
+	// 三分类合并(2026-09-19):sync_global_config/sync_waf_files 字段随开关
+	// 列删除(全局配置并入系统数据、规则库并入安全防护)。
+	SyncInterval *int  `json:"sync_interval"`
+	SyncUsers    *bool `json:"sync_users"`
+	SyncRules    *bool `json:"sync_rules"`
+	SyncSecurity *bool `json:"sync_security"`
 }
 
 type ClusterRegistration struct {
@@ -177,8 +177,8 @@ type ClusterSectionSyncStatus struct {
 type ClusterBasicSettings struct {
 	LogLevel string `json:"log_level"`
 	// BrandingJSON 是主节点 branding.json 原文镜像(2026-09-11 裁定):随
-	// sync_global_config 开关下发,从节点落盘本地文件后生效。开关关闭时
-	// 构建端整体裁剪(空=不同步)。
+	// 快照下发,从节点落盘本地文件后生效。三分类合并后随系统数据节
+	// (恒同步)恒携带。
 	BrandingJSON               string `json:"branding_json,omitempty"`
 	AccessLogJSON              bool   `json:"access_log_json,omitempty"`
 	AccessLogFormat            string `json:"access_log_format,omitempty"`
@@ -329,12 +329,12 @@ type ClusterSnapshot struct {
 	LockedUsers []ClusterLockedUser `json:"locked_users,omitempty"`
 }
 
+// ClusterSyncSwitchesPayload 是主节点同步开关随快照下发的形态(三分类合并
+// 后仅 users/rules/security 三键;集群双端同版本升级,不做旧版从节点兼容)。
 type ClusterSyncSwitchesPayload struct {
-	GlobalConfig bool `json:"global_config"`
-	Users        bool `json:"users"`
-	Rules        bool `json:"rules"`
-	WafFiles     bool `json:"waf_files"`
-	Security     bool `json:"security"`
+	Users    bool `json:"users"`
+	Rules    bool `json:"rules"`
+	Security bool `json:"security"`
 }
 
 // ClusterWafFilesRef 是快照携带的 WAF 规则文件哈希引用（不含内容）：
@@ -417,20 +417,18 @@ type ClusterNodeView struct {
 }
 
 type ClusterStatus struct {
-	NodeMode         string        `json:"node_mode"`
-	ClusterVersion   int           `json:"cluster_version"`
-	MasterURL        string        `json:"master_url"`
-	SyncInterval     int           `json:"sync_interval"`
-	SyncGlobalConfig bool          `json:"sync_global_config"`
-	SyncUsers        bool          `json:"sync_users"`
-	SyncRules        bool          `json:"sync_rules"`
-	SyncWafFiles     bool          `json:"sync_waf_files"`
-	SyncSecurity     bool          `json:"sync_security"`
-	ClusterActive    bool          `json:"cluster_active"`
-	AppliedVersion   int           `json:"applied_version"`
-	LastSyncAt       string        `json:"last_sync_at"`
-	LastSyncError    string        `json:"last_sync_error"`
-	SyncErrorCode    SyncErrorCode `json:"sync_error_code,omitempty"`
-	PendingCount     int           `json:"pending_count"`
-	ApprovedCount    int           `json:"approved_count"`
+	NodeMode       string        `json:"node_mode"`
+	ClusterVersion int           `json:"cluster_version"`
+	MasterURL      string        `json:"master_url"`
+	SyncInterval   int           `json:"sync_interval"`
+	SyncUsers      bool          `json:"sync_users"`
+	SyncRules      bool          `json:"sync_rules"`
+	SyncSecurity   bool          `json:"sync_security"`
+	ClusterActive  bool          `json:"cluster_active"`
+	AppliedVersion int           `json:"applied_version"`
+	LastSyncAt     string        `json:"last_sync_at"`
+	LastSyncError  string        `json:"last_sync_error"`
+	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty"`
+	PendingCount   int           `json:"pending_count"`
+	ApprovedCount  int           `json:"approved_count"`
 }

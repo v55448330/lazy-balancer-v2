@@ -1155,51 +1155,31 @@ func installGlobalConfigVersionTrigger(t *testing.T, database *sql.DB) {
 	}
 }
 
-func TestClusterSnapshot_accessLogSettingsFollowGlobalConfigGate(t *testing.T) {
+// 三分类合并(2026-09-19 用户裁定):全局配置并入系统数据节(恒同步不可
+// 禁用)——BasicSettings/CaddyConfig 不再受任何开关裁剪,快照恒携带。
+func TestClusterSnapshot_alwaysCarriesGlobalSettings(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
 	ctx := context.Background()
-	if _, err := database.ExecContext(ctx, "UPDATE global_config SET access_log_json=1, access_log_format='{request}' WHERE id=1"); err != nil {
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET access_log_json=1, access_log_format='{request}', caddy_log_level='warn' WHERE id=1"); err != nil {
 		t.Fatalf("seed access log settings: %v", err)
 	}
-	build := func(t *testing.T) models.ClusterSnapshot {
-		t.Helper()
-		tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			t.Fatalf("begin snapshot tx: %v", err)
-		}
-		defer tx.Rollback()
-		snapshot, err := service.buildSnapshot(ctx, tx)
-		if err != nil {
-			t.Fatalf("build snapshot: %v", err)
-		}
-		return snapshot
+	tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("begin snapshot tx: %v", err)
+	}
+	defer tx.Rollback()
+	snapshot, err := service.buildSnapshot(ctx, tx)
+	if err != nil {
+		t.Fatalf("build snapshot: %v", err)
 	}
 
-	// When sync off
-	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_global_config=0 WHERE id=1"); err != nil {
-		t.Fatalf("disable caddy sync: %v", err)
+	// Then：全局设置与 Caddy 配置恒携带(无开关裁剪路径)
+	if snapshot.CaddyConfig == nil {
+		t.Fatal("caddy config must always be carried (users section is always synced)")
 	}
-	off := build(t)
-
-	// Then caddy-gated fields stay at zero values
-	if off.CaddyConfig != nil {
-		t.Fatal("caddy config present with sync off")
-	}
-	if off.BasicSettings.AccessLogJSON || off.BasicSettings.AccessLogFormat != "" || off.BasicSettings.CaddyLogLevel != "" {
-		t.Fatalf("access log settings leaked with sync off: %#v", off.BasicSettings)
-	}
-
-	// When sync on
-	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_global_config=1 WHERE id=1"); err != nil {
-		t.Fatalf("enable caddy sync: %v", err)
-	}
-	on := build(t)
-	if on.CaddyConfig == nil {
-		t.Fatal("caddy config missing with sync on")
-	}
-	if !on.BasicSettings.AccessLogJSON || on.BasicSettings.AccessLogFormat != "{request}" {
-		t.Fatalf("access log settings missing with sync on: %#v", on.BasicSettings)
+	if !snapshot.BasicSettings.AccessLogJSON || snapshot.BasicSettings.AccessLogFormat != "{request}" || snapshot.BasicSettings.CaddyLogLevel != "warn" {
+		t.Fatalf("access log settings must always be carried: %#v", snapshot.BasicSettings)
 	}
 }
 

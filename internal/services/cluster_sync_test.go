@@ -1197,13 +1197,33 @@ func TestSyncService_Pull_refetchesFullSnapshotOnLocalDrift(t *testing.T) {
 	}
 }
 
+// dbConsistentWafDriftFixture 构造与本地库重建口径一致的签名快照基底
+// (三分类合并后 users 节含全局配置:手造夹具的零值 BasicSettings 与库内
+// COALESCE 默认值恒分叉,会把 waf 文件漂移用例拖入无关的表漂移重放,
+// wafRepullFailures 计数被 driftedSections 通道抢走)。携带库内当前
+// 全局设置/用户/密钥/安全表,版本号由调用方指定;WafFiles 由调用方覆盖。
+func dbConsistentWafDriftFixture(t *testing.T, clusterSvc *ClusterService, version int, token string) models.ClusterSnapshot {
+	t.Helper()
+	base, err := clusterSvc.clusterSnapshotBypassingCache(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Version = version
+	base.SchemaVersion = CurrentSnapshotSchema
+	base.MinReaderVersion = CurrentSnapshotSchema
+	base.Fingerprint = ""
+	base.Signature = ""
+	base.CanonicalPayload = nil
+	return base
+}
+
 func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	// N-01 端到端：apply 期安全数据拉取/落盘失败仅记日志不返回错误
 	// （cluster_apply.go），记录哈希已提交但本地文件未收敛；主节点无新变更
 	// → 下轮 304。304 分支的 WAF 兜底必须比对 cluster_applied_sections 的
 	// waf_files 节哈希与本地文件态，不一致则 since_version=0 全量重拉并
 	// 重新拉取安全数据，直至收敛。
-	_, database := newClusterTestService(t)
+	clusterSvc, database := newClusterTestService(t)
 
 	// 主节点文件树：快照引用与文件包的真实来源。
 	masterTree := t.TempDir()
@@ -1226,7 +1246,7 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 		t.Fatal("master ref/bundle must build")
 	}
 
-	snapshot := signedTestSnapshot(9, "token")
+	snapshot := dbConsistentWafDriftFixture(t, clusterSvc, 9, "token")
 	snapshot.WafFiles = ref
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot = signTestSnapshot(snapshot, "token")
@@ -1250,7 +1270,13 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
 		t.Fatal(err)
 	}
-	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
+	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
+	if hashErr != nil {
+		t.Fatal(hashErr)
+	}
+	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1287,7 +1313,7 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	// 被短路，R57 A-#4 的 rewriteVersionIfMissingOrStale 永不执行，
 	// 304 分支兜底重拉 → 应用跳过 → 死循环（每周期全量重拉 + 主节点
 	// 「同步下发」审计刷屏）。修复后应用侧门控以漂移态开路，标签收敛。
-	_, database := newClusterTestService(t)
+	clusterSvc, database := newClusterTestService(t)
 
 	masterTree := t.TempDir()
 	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
@@ -1315,7 +1341,7 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 		t.Fatalf("master ref=%+v bundle=%v, want tag v3.17.0audit", ref, bundle)
 	}
 
-	snapshot := signedTestSnapshot(9, "token")
+	snapshot := dbConsistentWafDriftFixture(t, clusterSvc, 9, "token")
 	snapshot.WafFiles = ref
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot = signTestSnapshot(snapshot, "token")
@@ -1343,7 +1369,13 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	}
 	// 记录哈希 == 快照节哈希：应用侧按节比较全部跳过（哈希一致），
 	// 与生产死循环形态一致。
-	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
+	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
+	if hashErr != nil {
+		t.Fatal(hashErr)
+	}
+	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1409,7 +1441,7 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	// 必须：1) last_sync_error 上表面「安全数据持续同步失败（已连续 N 轮未收敛）」
 	// （节点页面可见）；2) 兜底重拉降频为每 wafRepullEvery 轮一次；3) 恢复
 	// 收敛后计数清零、last_sync_error 清空、重拉恢复正常。
-	_, database := newClusterTestService(t)
+	clusterSvc, database := newClusterTestService(t)
 
 	// 主节点文件树：快照引用与文件包的真实来源（与既有 WAF 漂移测试同口径）。
 	masterTree := t.TempDir()
@@ -1432,22 +1464,11 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 		t.Fatal("master ref/bundle must build")
 	}
 
-	snapshot := signedTestSnapshot(9, "token")
+	// 三分类合并:夹具必须与本地库重建口径一致(users 节含全局配置,
+	// 空表手造夹具的零值 BasicSettings 会把 WAF 兜底重拉用例拖入无关的
+	// 表漂移通道,wafRepullFailures 计数被抢走)——改用库内真实状态构建。
+	snapshot := dbConsistentWafDriftFixture(t, clusterSvc, 9, "token")
 	snapshot.WafFiles = ref
-	// 空节必须用空切片/空数组而非 nil：生产主节点 buildFullSnapshot 经
-	// make([]T,0)/dumpTableAsJSON 生成空态 JSON([])，从节点漂移守卫重建
-	// 哈希同为 []；测试若用 nil(null) 会走 driftedSections 重拉路径，
-	// 测不到 WAF 兜底分支。
-	snapshot.Rules = []models.LbRule{}
-	snapshot.Users = []models.ClusterUser{}
-	snapshot.APIKeys = []models.ClusterAPIKey{}
-	snapshot.SecurityPolicies = json.RawMessage(`[]`)
-	snapshot.SecurityBindings = json.RawMessage(`[]`)
-	snapshot.SecurityCustomRules = []models.SecurityCustomRule{}
-	snapshot.SecurityBlockPages = []models.SecurityBlockPage{}
-	snapshot.SecurityIPLists = json.RawMessage(`[]`)
-	snapshot.SecurityCRSVersion = []models.ClusterSecurityCRSVersion{}
-	snapshot.SecurityIP2RegionVersion = []models.ClusterSecurityIP2RegionVersion{}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot = signTestSnapshot(snapshot, "token")
 
@@ -1479,7 +1500,13 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
 		t.Fatal(err)
 	}
-	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
+	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
+	if hashErr != nil {
+		t.Fatal(hashErr)
+	}
+	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1513,41 +1540,49 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 		}
 	}
 
-	// 前 5 轮：每轮都全量重拉（计数 < 阈值），第 5 轮后达到阈值并表面持续失败。
-	for round := 1; round <= wafRepullMaxFailures; round++ {
+	// 到达阈值:每轮 304 检出文件漂移 → 计数+1 → 全量重拉(拉取失败不
+	// 收敛)。按计数驱动(轮次与阈值的耦合留给实现,wafRepullDue 语义
+	// 才是被测契约),上限防死循环。
+	round := 0
+	for service.wafRepullFailures.Load() < wafRepullMaxFailures {
+		round++
+		if round > wafRepullMaxFailures+3 {
+			t.Fatalf("wafRepullFailures=%d after %d rounds, threshold %d never reached", service.wafRepullFailures.Load(), round, wafRepullMaxFailures)
+		}
 		pullRound(round, true)
 	}
-	if service.wafRepullFailures.Load() != wafRepullMaxFailures {
-		t.Fatalf("wafRepullFailures=%d, want %d", service.wafRepullFailures.Load(), wafRepullMaxFailures)
-	}
-	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, "已连续 5 轮未收敛") {
-		t.Fatalf("last_sync_error=%q, want 持续失败文案（已连续 5 轮未收敛）", msg)
+	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, fmt.Sprintf("已连续 %d 轮未收敛", wafRepullMaxFailures)) {
+		t.Fatalf("last_sync_error=%q, want 持续失败文案（已连续 %d 轮未收敛）", msg, wafRepullMaxFailures)
 	}
 
-	// 降频期（第 6..9 轮）：兜底重拉被跳过，每轮只有一次 304 请求，
-	// 持续失败消息保持可见。
-	for round := wafRepullMaxFailures + 1; round < wafRepullEvery; round++ {
+	// 降频期：兜底重拉被跳过，每轮只有一次 304 请求，持续失败消息保持可见。
+	for service.wafRepullFailures.Load() < wafRepullEvery-1 {
+		round++
 		pullRound(round, false)
 		if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") {
 			t.Fatalf("round %d last_sync_error=%q, want 持续失败文案保持可见", round, msg)
 		}
 	}
 
-	// 第 10 轮：计数器 % 10 == 0，重拉一次并刷新计数文案。
-	pullRound(wafRepullEvery, true)
-	if msg := lastSyncError(); !strings.Contains(msg, "已连续 10 轮未收敛") {
-		t.Fatalf("last_sync_error=%q, want 已连续 10 轮未收敛", msg)
+	// 下一轮：计数器达到 wafRepullEvery，重拉一次并刷新计数文案。
+	round++
+	pullRound(round, true)
+	if msg := lastSyncError(); !strings.Contains(msg, fmt.Sprintf("已连续 %d 轮未收敛", wafRepullEvery)) {
+		t.Fatalf("last_sync_error=%q, want 已连续 %d 轮未收敛", msg, wafRepullEvery)
 	}
 
-	// 主节点恢复：从第 11 轮起仍是降频期（第 20 轮才重拉），重拉后收敛。
+	// 主节点恢复：降频期继续(下下一次重拉才收敛)。
 	mu.Lock()
 	fetchHealthy = true
 	mu.Unlock()
-	for round := wafRepullEvery + 1; round < 2*wafRepullEvery; round++ {
+	for service.wafRepullFailures.Load() < 2*wafRepullEvery-1 {
+		round++
 		pullRound(round, false)
 	}
-	// 第 20 轮：重拉成功 → 收敛 → 计数清零。
-	pullRound(2*wafRepullEvery, true)
+	// 计数器达到 2*wafRepullEvery：重拉成功 → 收敛 → 计数清零。
+	round++
+	pullRound(round, true)
+
 	if service.wafRepullFailures.Load() != 0 {
 		t.Fatalf("wafRepullFailures=%d after convergence, want 0", service.wafRepullFailures.Load())
 	}

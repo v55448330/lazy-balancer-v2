@@ -96,10 +96,8 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 		name string
 		val  *bool
 	}{
-		{"sync_global_config", req.SyncGlobalConfig},
 		{"sync_users", req.SyncUsers},
 		{"sync_rules", req.SyncRules},
-		{"sync_waf_files", req.SyncWafFiles},
 		{"sync_security", req.SyncSecurity},
 	}
 	for _, sw := range switchUpdates {
@@ -130,8 +128,8 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 	var clusterToken string
 	var lastSync sql.NullTime
 	var storedSyncError string
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(sync_global_config,1), COALESCE(sync_users,1), COALESCE(sync_rules,1), COALESCE(sync_waf_files,1), COALESCE(sync_security,1), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
-		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncGlobalConfig, &status.SyncUsers, &status.SyncRules, &status.SyncWafFiles, &status.SyncSecurity, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(sync_users,1), COALESCE(sync_rules,1), COALESCE(sync_security,1), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
+		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncUsers, &status.SyncRules, &status.SyncSecurity, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
 	if err != nil {
 		return models.ClusterStatus{}, fmt.Errorf("读取集群状态: %w", err)
 	}

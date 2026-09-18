@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,19 @@ func seedAppliedSection(t *testing.T, dbh *sql.DB, section, hash string) {
 		ON CONFLICT(section) DO UPDATE SET hash=excluded.hash`, section, hash)
 }
 
+// overrideWafPathsForServicesTest 重定向 CRS/xdb 活动路径到临时目录并预建
+// rules 子目录(services 层测试自用,handlers 层同款见其测试包)。
+func overrideWafPathsForServicesTest(t *testing.T) (crsDir, xdbPath string) {
+	t.Helper()
+	crsDir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(crsDir, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	xdbPath = filepath.Join(t.TempDir(), "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(crsDir, xdbPath))
+	return crsDir, xdbPath
+}
+
 func TestComputeSectionSkips_switchOffAndHashMatch(t *testing.T) {
 	_, database := newClusterTestService(t)
 	ctx := context.Background()
@@ -31,10 +46,10 @@ func TestComputeSectionSkips_switchOffAndHashMatch(t *testing.T) {
 	}
 	snapshot := models.ClusterSnapshot{Version: 5}
 	snapshot.SectionHashes = map[string]string{
-		"global_config": "g1", "users": "u1", "rules": "r1", "waf_files": "w1", "security": "s1",
+		"users": "u1", "rules": "r1", "security": "s1",
 	}
-	seedAppliedSection(t, database, "global_config", "g1")
-	seedAppliedSection(t, database, "users", "old")
+	seedAppliedSection(t, database, "users", "u1")
+	seedAppliedSection(t, database, "rules", "r1")
 
 	switches, err := readSyncSwitches(database)
 	if err != nil {
@@ -45,17 +60,18 @@ func TestComputeSectionSkips_switchOffAndHashMatch(t *testing.T) {
 	if !sk.disabled["rules"] {
 		t.Fatal("rules switch off must mark section disabled")
 	}
-	if !sk.unchanged["global_config"] {
+	if !sk.unchanged["users"] {
 		t.Fatal("matching hash must mark section unchanged")
 	}
-	if sk.unchanged["users"] || sk.disabled["users"] {
-		t.Fatal("users hash differs and switch on → must apply")
+	if !sk.skip("rules") || !sk.skip("users") {
+		t.Fatal("rules(disabled)/users(unchanged) must be skipped")
 	}
-	if sk.skip("users") {
-		t.Fatal("users should not be skipped")
-	}
-	if !sk.skip("rules") || !sk.skip("global_config") {
-		t.Fatal("rules/global_config must be skipped")
+	// 三分类合并(2026-09-19 用户裁定):global_config/waf_files 不再是同步节,
+	// skip 判定不得再为它们产生任何记录。
+	for _, legacy := range []string{"global_config", "waf_files"} {
+		if sk.disabled[legacy] || sk.unchanged[legacy] {
+			t.Fatalf("legacy section %s must not be iterated by computeSectionSkips", legacy)
+		}
 	}
 }
 
@@ -68,11 +84,164 @@ func TestComputeSectionSkips_allOnFirstSyncAppliesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	sk := computeSectionSkips(database, snapshot, switches, nil)
-	for _, key := range []string{"global_config", "users", "rules", "waf_files", "security"} {
+	for _, key := range []string{"users", "rules", "security"} {
 		if sk.skip(key) {
 			t.Fatalf("first sync with all switches on must apply %s", key)
 		}
 	}
+}
+
+// 三分类合并(2026-09-19 用户裁定):同步节收敛为 users/rules/security 三节
+// (全局配置并入系统数据、规则库并入安全防护),标签与备份分类一致;
+// ComputeSnapshotSectionHashes 只产出 3 键。
+func TestSyncSections_threeCategoryMerge(t *testing.T) {
+	if len(syncSections) != 3 {
+		t.Fatalf("syncSections=%#v, want exactly 3 sections", syncSections)
+	}
+	want := map[string]string{"users": "系统数据", "rules": "负载规则", "security": "安全防护"}
+	for _, sec := range syncSections {
+		if want[sec.Key] == "" || sec.NewLabel != want[sec.Key] {
+			t.Fatalf("section %q label=%q, want %q", sec.Key, sec.NewLabel, want[sec.Key])
+		}
+	}
+	hashes := ComputeSnapshotSectionHashes(&models.ClusterSnapshot{})
+	if len(hashes) != 3 {
+		t.Fatalf("section hashes=%#v, want exactly users/rules/security keys", hashes)
+	}
+	for _, key := range []string{"users", "rules", "security"} {
+		if _, ok := hashes[key]; !ok {
+			t.Fatalf("section hashes missing %s: %#v", key, hashes)
+		}
+	}
+}
+
+// 三分类合并:users 节 payload 并入全局配置(basic_settings+caddy_config,
+// 字段顺序固定);security 节保持纯表域——WafFiles ref 不入节哈希(入哈希
+// 会让文件拉取持续失败时 security 哈希主从域永久乒乓,文件态由
+// wafFilesDrifted 专用通道独占)。
+func TestSectionPayload_usersCarriesGlobalConfig(t *testing.T) {
+	caddy := `{"apps":{}}`
+	s := &models.ClusterSnapshot{
+		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug"},
+		CaddyConfig:   &caddy,
+		WafFiles:      &models.ClusterWafFilesRef{CRSVersion: "v4.28.0", CRSSha256: "abc"},
+	}
+	usersJSON, err := json.Marshal(sectionPayloadFor("users", s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"users"`, `"api_keys"`, `"basic_settings"`, `"caddy_config"`, `"debug"`} {
+		if !strings.Contains(string(usersJSON), want) {
+			t.Fatalf("users payload=%s, must contain %s", usersJSON, want)
+		}
+	}
+	securityJSON, err := json.Marshal(sectionPayloadFor("security", s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(securityJSON), "waf_files") || strings.Contains(string(securityJSON), "v4.28.0") {
+		t.Fatalf("security payload=%s, must stay tables-only (file state owns the dedicated waf channel)", securityJSON)
+	}
+}
+
+// users 节哈希必须随全局设置变化(并入),且漂移守卫本地重建与全量快照
+// 构建保持同一口径(哈希奇偶不变式——driftGuardSectionHashes 必须装载
+// BasicSettings/CaddyConfig,复用 BuildSnapshot 同一装载函数)。
+func TestDriftGuardSectionHashes_usersIncludesGlobalSettings(t *testing.T) {
+	service, database := newClusterTestService(t)
+	ctx := context.Background()
+
+	before, err := service.clusterSnapshotBypassingCache(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseHash := ComputeSnapshotSectionHashes(&before)["users"]
+
+	if _, err := database.Exec(`UPDATE global_config SET log_level='debug' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	after, err := service.clusterSnapshotBypassingCache(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedHash := ComputeSnapshotSectionHashes(&after)["users"]
+	if baseHash == changedHash {
+		t.Fatal("global config change must change the users section hash (basic settings merged into users payload)")
+	}
+
+	guard, err := service.driftGuardSectionHashes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guard["users"] != changedHash {
+		t.Fatalf("drift guard users hash=%s, want parity with full snapshot hash=%s (must rebuild with global settings)", guard["users"], changedHash)
+	}
+	if guard["security"] != ComputeSnapshotSectionHashes(&after)["security"] {
+		t.Fatalf("drift guard security hash=%s, want parity (waf ref must not enter the guard rebuild)", guard["security"])
+	}
+}
+
+// 三分类合并:waf_files 行保留为文件态记账(哈希域=纯 ref 含版本标签),
+// 随安全防护开关写入——wafFilesDrifted 的 304 兜底与 R57 A-#4 标签自愈
+// 依赖该记录;开关关闭时冻结。
+func TestRecordAppliedSectionHashes_wafFilesBookkeepingFollowsSecuritySwitch(t *testing.T) {
+	_, database := newClusterTestService(t)
+	snapshot := models.ClusterSnapshot{Version: 9, WafFiles: &models.ClusterWafFilesRef{CRSSha256: "abc", CRSVersion: "v9"}}
+	switches := SyncSwitches{Users: true, Rules: true, Security: true}
+	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
+	recordAppliedSectionHashes(database, snapshot, sk, switches, nil)
+
+	wantHash, err := wafFilesSectionHash(snapshot.WafFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	var version int
+	if err := database.QueryRow(`SELECT hash, applied_version FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&hash, &version); err != nil || hash != wantHash || version != 9 {
+		t.Fatalf("waf_files bookkeeping row hash=%q version=%d err=%v, want %q/9", hash, version, err, wantHash)
+	}
+
+	// 安全防护开关关闭:行冻结(不得更新)。
+	if _, err := database.Exec(`UPDATE cluster_applied_sections SET hash='stale' WHERE section='waf_files'`); err != nil {
+		t.Fatal(err)
+	}
+	recordAppliedSectionHashes(database, snapshot, sk, SyncSwitches{Users: true, Rules: true, Security: false}, nil)
+	if err := database.QueryRow(`SELECT hash FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&hash); err != nil || hash != "stale" {
+		t.Fatalf("security off must freeze waf_files row, got hash=%q err=%v", hash, err)
+	}
+}
+
+// 三分类合并:安全防护开关关闭时文件态不受同步管辖——wafFilesDrifted
+// 必须返回 false(镜像 driftedSections 的开关豁免语义)。
+func TestWafFilesDrifted_securitySwitchOffReturnsFalse(t *testing.T) {
+	_, database := newClusterTestService(t)
+	crsDir, xdbPath := overrideWafPathsForServicesTest(t)
+	if err := os.WriteFile(filepath.Join(crsDir, "rules", "a.conf"), []byte("SecRule x 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xdbPath, []byte("XDB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	localHash, err := wafFilesSectionHash(BuildWafFileRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAppliedSection(t, database, "waf_files", "definitely-different-hash")
+	if _, err := database.Exec(`UPDATE global_config SET sync_security=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{}, nil)
+	if service.wafFilesDrifted() {
+		t.Fatal("wafFilesDrifted must return false when security switch is off (file state exempt from sync)")
+	}
+	// 开关开启 + 本地文件与已应用记录分叉 → 必须检出漂移。
+	if _, err := database.Exec(`UPDATE global_config SET sync_security=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if !service.wafFilesDrifted() {
+		t.Fatal("wafFilesDrifted must detect local/applied divergence with security switch on")
+	}
+	_ = localHash
 }
 
 func TestRecordAppliedSectionHashes_persistsAndUpdates(t *testing.T) {
@@ -163,7 +332,7 @@ func TestRecordAppliedSectionHashes_driftedSectionStoresLocalRebuiltHash(t *test
 	snapshot := models.ClusterSnapshot{Version: 9}
 	snapshot.SectionHashes = map[string]string{"security": oldView}
 	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}, drifted: []string{"security"}}
-	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 
 	// When：漂移强制重放后记录已应用节哈希
 	recordAppliedSectionHashes(database, snapshot, sk, switches, local)
@@ -250,7 +419,7 @@ func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *
 	if localHash == "" || localHash == snapshotHash {
 		t.Fatalf("夹具必须复现归一化分歧：local=%q snapshot=%q", localHash, snapshotHash)
 	}
-	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 
 	// When：模拟同步周期序列（首轮 changed 应用 → 304 漂移补偿 → 漂移重放 → 稳态）
 	sk1 := computeSectionSkips(database, master, switches, local)
@@ -371,7 +540,7 @@ func TestUpdateSettings_rejectsDisablingSyncUsers(t *testing.T) {
 
 func TestComputeSectionSkips_neverDisablesUsers(t *testing.T) {
 	_, database := newClusterTestService(t)
-	sw := SyncSwitches{GlobalConfig: true, Users: false, Rules: true, WafFiles: true, Security: true}
+	sw := SyncSwitches{Users: false, Rules: true, Security: true}
 	sk := computeSectionSkips(database, models.ClusterSnapshot{SectionHashes: map[string]string{}}, sw, nil)
 	if sk.disabled["users"] {
 		t.Error("users section must never be disabled (恒同步裁定)")
@@ -435,8 +604,9 @@ func TestApplySnapshot_versionRowsDiffGating(t *testing.T) {
 	}
 }
 
-// 版本行随 waf_files 开关:waf_files 关闭时快照版本行不落库。
-func TestApplySnapshot_wafFilesSwitchOffSkipsCRSVersionRows(t *testing.T) {
+// 三分类合并:版本行随安全防护开关——security 关闭时快照版本行不落库
+// (规则库已并入安全防护域,单开关统策略行与文件差量通道)。
+func TestApplySnapshot_securitySwitchOffSkipsCRSVersionRows(t *testing.T) {
 	_, database := newClusterTestService(t)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusOK)
@@ -446,7 +616,7 @@ func TestApplySnapshot_wafFilesSwitchOffSkipsCRSVersionRows(t *testing.T) {
 	snapshot := models.ClusterSnapshot{
 		Version: 3,
 		MasterSyncSwitches: &models.ClusterSyncSwitchesPayload{
-			GlobalConfig: true, Users: true, Rules: true, WafFiles: false, Security: true,
+			Users: true, Rules: true, Security: false,
 		},
 		SecurityCRSVersion:       []models.ClusterSecurityCRSVersion{{ID: 1, Version: "9.9.9"}},
 		SecurityIP2RegionVersion: []models.ClusterSecurityIP2RegionVersion{{ID: 1, Version: "999909"}},
@@ -458,11 +628,11 @@ func TestApplySnapshot_wafFilesSwitchOffSkipsCRSVersionRows(t *testing.T) {
 	var v string
 	database.QueryRow(`SELECT COALESCE(version,'') FROM security_crs_version WHERE id=1`).Scan(&v)
 	if v == "9.9.9" {
-		t.Error("CRS version row must NOT apply when waf_files switch off")
+		t.Error("CRS version row must NOT apply when security switch off")
 	}
 	var x string
 	database.QueryRow(`SELECT COALESCE(version,'') FROM security_ip2region_version WHERE id=1`).Scan(&x)
 	if x == "999909" {
-		t.Error("IP2Region version row must NOT apply when waf_files switch off")
+		t.Error("IP2Region version row must NOT apply when security switch off")
 	}
 }

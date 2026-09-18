@@ -83,7 +83,7 @@ func TestClusterService_ReportNode_storesSectionHashesAndNodesAggregates(t *test
 		t.Fatalf("report drifted node: %v", err)
 	}
 
-	// Then：rules/users 滞后，其余同步
+	// Then：rules/users 滞后，其余同步(三分类合并后仅 3 节)
 	nodes, err = service.Nodes(context.Background(), now)
 	if err != nil {
 		t.Fatalf("list drifted nodes: %v", err)
@@ -98,8 +98,14 @@ func TestClusterService_ReportNode_storesSectionHashesAndNodesAggregates(t *test
 	if bySection["users"].Synced || bySection["users"].Hash != "" {
 		t.Fatalf("missing users record must lag: %+v", bySection["users"])
 	}
-	if !bySection["security"].Synced || !bySection["global_config"].Synced || !bySection["waf_files"].Synced {
-		t.Fatalf("unchanged sections must stay synced: %#v", bySection)
+	if !bySection["security"].Synced {
+		t.Fatalf("unchanged security must stay synced: %#v", bySection)
+	}
+	if _, ok := bySection["global_config"]; ok {
+		t.Fatal("global_config must not appear in section_sync after 3-category merge")
+	}
+	if _, ok := bySection["waf_files"]; ok {
+		t.Fatal("waf_files must not appear in section_sync after 3-category merge")
 	}
 }
 

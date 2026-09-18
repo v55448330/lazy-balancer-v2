@@ -415,7 +415,7 @@ func TestClusterService_Snapshot_304PathSkipsSigningPrework(t *testing.T) {
 func TestClusterService_Snapshot_syncSwitchesReadFailureErrors(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
-	if _, err := database.Exec(`UPDATE global_config SET sync_waf_files='banana' WHERE id=1`); err != nil {
+	if _, err := database.Exec(`UPDATE global_config SET sync_security='banana' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 

@@ -867,7 +867,7 @@ func (s *SyncService) driftedSections(ctx context.Context) string {
 	applied := readAppliedSectionHashes(s.db)
 	switches, err := readSyncSwitches(s.db)
 	if err != nil {
-		switches = SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+		switches = SyncSwitches{Users: true, Rules: true, Security: true}
 	}
 	var drifted []string
 	for _, key := range driftGuardSections {
@@ -954,19 +954,18 @@ func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files 节
-// 哈希分叉。开关关闭的节跳过比对（镜像 driftedSections 语义，防「曾同步→
-// 开关关闭→本地改动」死循环）。
-// 注(2026-09-11 版本行归位后):CRS/IP2Region 版本行随 sync_waf_files 开关
-// 差分门控应用(cluster_apply.go),与本文件态豁免同开关——开关闭合时文件
-// 与版本行均不受同步管辖,UI 版本显示与磁盘文件一致性由开关打开后的
-// 差分重放收敛。
+// wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files
+// 记账哈希分叉(三分类合并:cluster_applied_sections 的 waf_files 行保留为
+// 文件态记账,哈希域=纯 ref 含版本标签)。开关关闭的节跳过比对(镜像
+// driftedSections 语义,防「曾同步→开关关闭→本地改动」死循环)——三分类
+// 合并后文件态随安全防护开关:security 关闭时文件与版本行均不受同步管辖,
+// UI 版本显示与磁盘文件一致性由开关打开后的差分重放收敛。
 func (s *SyncService) wafFilesDrifted() bool {
 	if s.db == nil {
 		return false
 	}
 	switches, err := readSyncSwitches(s.db)
-	if err != nil || !switches.WafFiles {
+	if err != nil || !switches.Security {
 		return false
 	}
 	appliedHash := readAppliedSectionHashes(s.db)["waf_files"]
