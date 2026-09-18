@@ -47,6 +47,8 @@ func autoBackupSafeFilename(name string) bool {
 }
 
 // loadAutoBackupSectionsSetting 读取备份范围设置；空/非法/空数组 → nil（全部）。
+// 存量行可能携带三分类合并前的 legacy 键(global_config/waf_files)——读出即
+// 归一(2026-09-19 用户裁定),调度器/导出器消费当前三分类口径,无需迁移存量行。
 func loadAutoBackupSectionsSetting() []string {
 	var raw sql.NullString
 	if err := db.DB.QueryRow(`SELECT auto_backup_sections FROM global_config WHERE id=1`).Scan(&raw); err != nil {
@@ -59,13 +61,14 @@ func loadAutoBackupSectionsSetting() []string {
 	if err := json.Unmarshal([]byte(raw.String), &sections); err != nil || len(sections) == 0 {
 		return nil
 	}
-	return sections
+	return normalizeBackupSectionKeys(sections)
 }
 
-// loadAutoBackupKeepSetting 读取保留份数；越界/读失败回退 7（写侧已限 1-100）。
+// loadAutoBackupKeepSetting 读取保留份数；越界/读失败回退 7（写侧已限 1-30；
+// 2026-09-19 追加裁定:上限 100→30,升级前保存的 31-100 存量值读侧回退）。
 func loadAutoBackupKeepSetting() int {
 	var keep int
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_keep,7) FROM global_config WHERE id=1`).Scan(&keep); err != nil || keep < 1 || keep > 100 {
+	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_keep,7) FROM global_config WHERE id=1`).Scan(&keep); err != nil || keep < 1 || keep > 30 {
 		return 7
 	}
 	return keep
@@ -275,9 +278,18 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自动备份设置失败: " + err.Error()})
 		return
 	}
+	// 读侧守卫(2026-09-19 追加裁定):升级前保存的 31-100 存量值回退 7,
+	// 与调度/裁剪消费端(loadAutoBackupKeepSetting)同口径——UI 显示的即
+	// 生效值,重存后落库收敛。
+	if keep < 1 || keep > 30 {
+		keep = 7
+	}
 	sections := []string{}
-	if sectionsRaw.Valid && json.Unmarshal([]byte(sectionsRaw.String), &sections) != nil {
-		sections = []string{}
+	if sectionsRaw.Valid {
+		var stored []string
+		if json.Unmarshal([]byte(sectionsRaw.String), &stored) == nil && len(stored) > 0 {
+			sections = normalizeBackupSectionKeys(stored)
+		}
 	}
 	backups := []autoBackupRowView{}
 	rows, err := db.DB.Query(`SELECT ` + autoBackupRowColumns + ` FROM auto_backups ORDER BY created_at DESC, id DESC`)
@@ -305,9 +317,10 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 }
 
 // UpdateAutoBackupSettings PUT /api/v1/settings/auto-backup：全量保存设置。
-// 校验：freq∈{daily,weekly,monthly}；time 为 HH:MM；keep 1-100；day weekly
-// 1-7 / monthly 1-28；sections 为已知分类子集且含 ≥1 数据分类（仅全局配置
-// 的备份无法被还原）。off→on 时清空 last_run，下一个到期槽立即执行。
+// 校验：freq∈{daily,weekly,monthly}；time 为 HH:MM；keep 1-30(2026-09-19
+// 追加裁定:上限 100→30)；day weekly 1-7 / monthly 1-28；sections 为已知
+// 分类子集且非空(legacy 键保存时归一为当前三分类落库)。off→on 时清空
+// last_run，下一个到期槽立即执行。
 func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
@@ -339,8 +352,8 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份时间必须为 HH:MM（00:00-23:59）"})
 		return
 	}
-	if *req.Keep < 1 || *req.Keep > 100 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "保留份数必须在 1-100 之间"})
+	if *req.Keep < 1 || *req.Keep > 30 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "保留份数必须在 1-30 之间"})
 		return
 	}
 	dayHigh := 28
@@ -355,13 +368,9 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份范围不能为空"})
 		return
 	}
-	sectionTables, includeGlobal, ok := configBackupSectionTables(req.Sections)
-	if !ok {
+	req.Sections = normalizeBackupSectionKeys(req.Sections)
+	if _, _, ok := configBackupSectionTables(req.Sections); !ok {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
-		return
-	}
-	if len(sectionTables) == 0 && includeGlobal {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份范围至少需选择一个数据分类（仅全局配置的备份无法被还原）"})
 		return
 	}
 	sectionsJSON, err := json.Marshal(req.Sections)

@@ -79,7 +79,7 @@ func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("backup file stat err=%v size=%d, want non-empty", err, info.Size())
 	}
-	// 行:success + 真实大小 + 全 5 分类 + 摘要非空
+	// 行:success + 真实大小 + 全 3 分类(三分类合并后的默认全选)+ 摘要非空
 	rows := autoBackupRows(t, "WHERE trigger_type='manual'")
 	if len(rows) != 1 {
 		t.Fatalf("manual rows=%d, want 1", len(rows))
@@ -92,8 +92,8 @@ func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 		t.Fatalf("size_bytes=%v, want %d", row["size_bytes"], info.Size())
 	}
 	var sections []string
-	if err := json.Unmarshal([]byte(row["sections"].(string)), &sections); err != nil || len(sections) != 5 {
-		t.Fatalf("sections=%q err=%v, want 5 keys", row["sections"], err)
+	if err := json.Unmarshal([]byte(row["sections"].(string)), &sections); err != nil || len(sections) != 3 || sections[0] != "users" || sections[1] != "rules" || sections[2] != "security" {
+		t.Fatalf("sections=%q err=%v, want [users rules security]", row["sections"], err)
 	}
 	if row["message"] == "" {
 		t.Fatal("message 为空, want 各表行数摘要")
@@ -199,14 +199,13 @@ func TestUpdateAutoBackupSettings_validationMatrix(t *testing.T) {
 		{name: "time minute overflow", body: `{"enabled":true,"frequency":"daily","time":"03:60","day":1,"keep":5,"sections":["users","rules"]}`},
 		{name: "time malformed", body: `{"enabled":true,"frequency":"daily","time":"0300","day":1,"keep":5,"sections":["users","rules"]}`},
 		{name: "keep zero", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":0,"sections":["users","rules"]}`},
-		{name: "keep beyond 100", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":101,"sections":["users","rules"]}`},
+		{name: "keep beyond 30", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":31,"sections":["users","rules"]}`},
 		{name: "weekly day zero", body: `{"enabled":true,"frequency":"weekly","time":"03:00","day":0,"keep":5,"sections":["users","rules"]}`},
 		{name: "weekly day beyond 7", body: `{"enabled":true,"frequency":"weekly","time":"03:00","day":8,"keep":5,"sections":["users","rules"]}`},
 		{name: "monthly day zero", body: `{"enabled":true,"frequency":"monthly","time":"03:00","day":0,"keep":5,"sections":["users","rules"]}`},
 		{name: "monthly day beyond 28", body: `{"enabled":true,"frequency":"monthly","time":"03:00","day":29,"keep":5,"sections":["users","rules"]}`},
 		{name: "unknown section", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":5,"sections":["users","nope"]}`},
 		{name: "empty sections", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":5,"sections":[]}`},
-		{name: "global config only", body: `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":5,"sections":["global_config"]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,10 +216,75 @@ func TestUpdateAutoBackupSettings_validationMatrix(t *testing.T) {
 			}
 		})
 	}
-	// 自检:合法载荷必须通过(矩阵有效性前提)
+	// 自检:合法载荷必须通过(矩阵有效性前提);保留份数上边界 30 必须通过
+	// (2026-09-19 追加裁定:上限 100→30)。
 	h := newAutoBackupTestHandlers(t)
 	if response := serveAutoBackupJSON(t, h, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", valid, h.UpdateAutoBackupSettings); response.Code != http.StatusOK {
 		t.Fatalf("valid payload status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	h2 := newAutoBackupTestHandlers(t)
+	boundary := `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":30,"sections":["users","rules"]}`
+	if response := serveAutoBackupJSON(t, h2, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", boundary, h2.UpdateAutoBackupSettings); response.Code != http.StatusOK {
+		t.Fatalf("keep=30 boundary status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+// 保留份数上限收紧为 30 后,升级前保存的越界存量值(31-100)读侧必须回退
+// 安全默认 7——prune 消费回退值,不得沿用越界保留。
+func TestLoadAutoBackupKeepSetting_outOfRangeFallsBack(t *testing.T) {
+	newAutoBackupTestHandlers(t)
+	for _, stored := range []int{0, 31, 50, 100} {
+		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_keep=? WHERE id=1`, stored); err != nil {
+			t.Fatal(err)
+		}
+		if got := loadAutoBackupKeepSetting(); got != 7 {
+			t.Fatalf("stored keep=%d loaded=%d, want fallback 7", stored, got)
+		}
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_keep=30 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadAutoBackupKeepSetting(); got != 30 {
+		t.Fatalf("stored keep=30 loaded=%d, want 30", got)
+	}
+}
+
+// 三分类合并(2026-09-19 用户裁定):legacy sections 键(global_config→users、
+// waf_files→security)在保存与读取双侧归一——旧值不再因「仅全局配置」被拒,
+// 重存后落库值即收敛为当前三分类。
+func TestUpdateAutoBackupSettings_normalizesLegacySectionKeys(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	body := `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":5,"sections":["global_config","waf_files","rules","users"]}`
+
+	response := serveAutoBackupJSON(t, h, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", body, h.UpdateAutoBackupSettings)
+	if response.Code != http.StatusOK {
+		t.Fatalf("legacy sections payload must save, got %d %s", response.Code, response.Body.String())
+	}
+	var sections string
+	if err := db.DB.QueryRow(`SELECT auto_backup_sections FROM global_config WHERE id=1`).Scan(&sections); err != nil {
+		t.Fatal(err)
+	}
+	if sections != `["users","security","rules"]` {
+		t.Fatalf("stored sections=%s, want [\"users\",\"security\",\"rules\"] (deduped, order preserved)", sections)
+	}
+}
+
+// 存量行旧 JSON(升级前保存的 5 键)读出即归一——调度器/导出器消费的是当前
+// 三分类口径,无需迁移存量行。
+func TestLoadAutoBackupSectionsSetting_normalizesLegacyKeys(t *testing.T) {
+	newAutoBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_sections='["users","global_config","rules","waf_files","security"]' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	got := loadAutoBackupSectionsSetting()
+	want := []string{"users", "rules", "security"}
+	if len(got) != len(want) {
+		t.Fatalf("loaded sections=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("loaded sections=%v, want %v", got, want)
+		}
 	}
 }
 
@@ -306,7 +370,7 @@ func TestAutoBackupSettings_returnsSettingsAndRowsDesc(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	d := payload.Data
-	if !d.Enabled || d.Frequency != "weekly" || d.Time != "04:30" || d.Day != 6 || d.Keep != 9 || len(d.Sections) != 5 {
+	if !d.Enabled || d.Frequency != "weekly" || d.Time != "04:30" || d.Day != 6 || d.Keep != 9 || len(d.Sections) != 3 {
 		t.Fatalf("settings=(%v,%s,%s,%d,%d,%v)", d.Enabled, d.Frequency, d.Time, d.Day, d.Keep, d.Sections)
 	}
 	if len(d.Backups) != 2 || d.Backups[0].Filename != "lbbak-auto-list2.lbbak" {

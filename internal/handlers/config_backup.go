@@ -25,24 +25,49 @@ import (
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}
 
-// v2.3.0 分类导入导出(用户裁定):分类=集群同步五类;导出/导入可按分类
-// 选择,默认全选。表→分类映射与 cluster_sections.go 的节语义一致。
+// 三分类合并(2026-09-19 用户裁定):备份分类=集群同步节,收敛为 3 类——
+// 全局配置并入「系统数据」(单行键值表单独成类必产无法导入的死备份,BE-C1-6),
+// 规则库数据库并入「安全防护」(CRS/IP2Region 文件与引用它的安全策略同属
+// 一个防护域)。导出/导入可按分类选择,默认全选;表→分类映射与
+// cluster_sections.go 的节语义一致。
 var configBackupSections = []struct {
 	Key    string
 	Label  string
 	Tables []string
 	Global bool
 }{
-	{Key: "users", Label: "系统数据", Tables: []string{"users", "api_keys", "ca_providers", "certificate_configs"}},
-	{Key: "global_config", Label: "全局配置", Global: true},
+	{Key: "users", Label: "系统数据", Tables: []string{"users", "api_keys", "ca_providers", "certificate_configs"}, Global: true},
 	{Key: "rules", Label: "负载规则", Tables: []string{"lb_rules", "upstreams", "path_rules", "cert_jobs"}},
-	{Key: "waf_files", Label: "规则库数据库", Tables: []string{"security_crs_version", "security_ip2region_version"}},
-	{Key: "security", Label: "安全策略及自定义规则", Tables: []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists"}},
+	{Key: "security", Label: "安全防护", Tables: []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}},
 }
 
-// configBackupSectionTables 返回选中分类覆盖的表集合与是否含全局配置;
-// sections 为空=全选(默认)。未知分类名 → nil(调用方 400)。
+// normalizeBackupSectionKeys 归一 legacy 分类键:三分类合并前的
+// global_config(并入系统数据)与 waf_files(并入安全防护)在导出 query、
+// 旧备份体内 sections、auto_backup_sections 存量存储值三处长期存在
+// (旧备份必须永久可导入,不设淘汰期)——读侧一律先归一到当前三分类再消费,
+// 去重保序;未知键原样透传(由 configBackupSectionTables 400)。
+func normalizeBackupSectionKeys(sections []string) []string {
+	aliases := map[string]string{"global_config": "users", "waf_files": "security"}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(sections))
+	for _, key := range sections {
+		if mapped, ok := aliases[key]; ok {
+			key = mapped
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return out
+}
+
+// configBackupSectionTables 返回选中分类覆盖的表集合与是否含全局配置
+// (全局配置区随「系统数据」分类);sections 为空=全选(默认),legacy 键
+// 先归一。未知分类名 → nil(调用方 400)。
 func configBackupSectionTables(sections []string) (map[string]bool, bool, bool) {
+	sections = normalizeBackupSectionKeys(sections)
 	if len(sections) == 0 {
 		tables := map[string]bool{}
 		for _, sec := range configBackupSections {
@@ -817,9 +842,15 @@ func validateV2Backup(backup configBackup) (bool, error) {
 		requiredTables = configBackupV1Tables
 	}
 	// v2.3.0 分类导出只含所选分类的表:必需表清单仅对「全量形态」生效——
-	// 以是否含 users 表区分全量/分类(全量导出恒含;V1 恒全量)。分类备份
-	// 只要求至少一张已知表,完整性由校验和兜底。
-	if _, hasUsers := backup.Tables["users"]; hasUsers || backup.Meta.Version == 1 {
+	// 三分类合并(2026-09-19)后以三类表族齐备判全量(全量导出恒含
+	// users/lb_rules/security;V1 恒全量)。旧判定「含 users 即全量」会把
+	// users 分类备份(系统数据+全局配置)误判为全量并以缺表拒绝——正是
+	// BE-C1-6 要消灭的死备份形态。分类备份只要求至少一张已知表,完整性
+	// 由校验和兜底。
+	_, hasUsers := backup.Tables["users"]
+	_, hasRules := backup.Tables["lb_rules"]
+	_, hasSecurity := backup.Tables["security_policies"]
+	if (hasUsers && hasRules && hasSecurity) || backup.Meta.Version == 1 {
 		for _, required := range requiredTables {
 			if _, exists := backup.Tables[required]; !exists {
 				return false, errors.New("备份缺少必需的数据表: " + required)
@@ -1747,26 +1778,21 @@ func clampBackupAuditLogSizeMB(value any) (any, bool) {
 	return value, false
 }
 
-// errUnknownBackupSection / errGlobalOnlyBackup:buildLbbakExport 的 4xx 语义
-// 哨兵——薄壳端点据此保持原 400 文案,其余错误一律 500「导出失败: …」。
-var (
-	errUnknownBackupSection = errors.New("未知的配置分类")
-	errGlobalOnlyBackup     = errors.New("导出至少需选择一个数据分类（仅全局配置的备份无法被导入）")
-)
+// errUnknownBackupSection:buildLbbakExport 的 4xx 语义哨兵——薄壳端点据此
+// 保持原 400 文案,其余错误一律 500「导出失败: …」。三分类合并后
+// 「仅全局配置」形态不可达(global_config 是 users 别名,恒有表),
+// errGlobalOnlyBackup 哨兵随 BE-C1-6 一并撤销。
+var errUnknownBackupSection = errors.New("未知的配置分类")
 
 // buildLbbakExport 生产 lbbak 备份净荷(纯逻辑:无 HTTP、无审计)。sel 为空
-// 表示全部分类;返回净荷字节、实际导出分类(空选择归一为全部 5 类)、各表
+// 表示全部分类;返回净荷字节、实际导出分类(空选择归一为全部 3 类)、各表
 // 行数摘要(与导入审计同文案)与是否包含规则库文件本体。HTTP 导出端点与
 // 自动/手动备份执行器(autobackup_runner.go)共用。
 func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload []byte, exportedSections []string, countsSummary string, includesWafFiles bool, err error) {
+	sel = normalizeBackupSectionKeys(sel)
 	sectionTables, includeGlobal, ok := configBackupSectionTables(sel)
 	if !ok {
 		return nil, nil, "", false, errUnknownBackupSection
-	}
-	// BE-C1-6:仅「全局配置」的导出产物不含任何数据表,自家导入器必拒
-	// (「不包含任何已知数据表」)——导出侧前置拒绝,不产死备份。
-	if len(sectionTables) == 0 && includeGlobal {
-		return nil, nil, "", false, errGlobalOnlyBackup
 	}
 	backup := configBackup{
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
@@ -1846,7 +1872,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "导出失败: " + err.Error()
-		if errors.Is(err, errUnknownBackupSection) || errors.Is(err, errGlobalOnlyBackup) {
+		if errors.Is(err, errUnknownBackupSection) {
 			status = http.StatusBadRequest
 			message = err.Error()
 		}

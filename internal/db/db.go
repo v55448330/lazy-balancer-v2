@@ -409,7 +409,7 @@ func createTables() error {
 		auto_backup_time TEXT DEFAULT '03:00',
 		auto_backup_day INTEGER DEFAULT 1,
 		auto_backup_keep INTEGER DEFAULT 7,
-		auto_backup_sections TEXT DEFAULT '["users","global_config","rules","waf_files","security"]',
+		auto_backup_sections TEXT DEFAULT '["users","rules","security"]',
 		auto_backup_last_run DATETIME,
 		updated_at DATETIME
 	);
@@ -854,7 +854,7 @@ func runMigrations() error {
 		"global_config.auto_backup_time":      "TEXT DEFAULT '03:00'",
 		"global_config.auto_backup_day":       "INTEGER DEFAULT 1",
 		"global_config.auto_backup_keep":      "INTEGER DEFAULT 7",
-		"global_config.auto_backup_sections":  "TEXT DEFAULT '[\"users\",\"global_config\",\"rules\",\"waf_files\",\"security\"]'",
+		"global_config.auto_backup_sections":  "TEXT DEFAULT '[\"users\",\"rules\",\"security\"]'",
 		"global_config.auto_backup_last_run":  "DATETIME",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——

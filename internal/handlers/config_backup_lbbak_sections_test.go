@@ -253,14 +253,104 @@ func TestLbbakImport_wafFileFailureWarns(t *testing.T) {
 	}
 }
 
-// BE-C1-6:仅「全局配置」的导出是导入器必拒的死产物——导出侧 400。
-func TestExportConfigBackup_rejectsGlobalOnlySections(t *testing.T) {
+// 三分类合并(2026-09-19 用户裁定):legacy 分类键 global_config 是「系统数据」
+// (users)的别名、waf_files 是「安全防护」(security)的别名——旧书签/脚本的
+// ?sections= 导出必须成功且携带对应表族,不再 400(BE-C1-6 死备份哨兵随
+// 分类合并撤销:users 恒有表,「仅全局配置」形态不可达)。
+func TestExportConfigBackup_legacySectionAliases(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)
-	rec := httptest.NewRecorder()
-	g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/config/export?sections=global_config", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("global-only export must 400, got %d %s", rec.Code, rec.Body.String())
+	overrideTestWafPaths(t)
+
+	tests := []struct {
+		name       string
+		query      string
+		wantTables []string
+		skipTables []string
+		wantGlobal bool
+	}{
+		{
+			name:       "global_config alias exports user data with config block",
+			query:      "/config/export?sections=global_config",
+			wantTables: []string{"users", "api_keys", "ca_providers", "certificate_configs"},
+			skipTables: []string{"lb_rules", "security_policies", "security_crs_version"},
+			wantGlobal: true,
+		},
+		{
+			name:       "waf_files alias exports security tables",
+			query:      "/config/export?sections=waf_files",
+			wantTables: []string{"security_policies", "security_crs_version", "security_ip2region_version"},
+			skipTables: []string{"users", "lb_rules"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.query, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("legacy alias export must succeed, got %d %s", rec.Code, rec.Body.String())
+			}
+			parsed, err := parseLbbak(rec.Body.Bytes())
+			if err != nil {
+				t.Fatalf("parse lbbak: %v", err)
+			}
+			var backup configBackup
+			if err := json.Unmarshal(parsed.ConfigJSON, &backup); err != nil {
+				t.Fatalf("unmarshal config.json: %v", err)
+			}
+			for _, table := range tt.wantTables {
+				if _, ok := backup.Tables[table]; !ok {
+					t.Fatalf("alias export must include table %s", table)
+				}
+			}
+			for _, table := range tt.skipTables {
+				if _, ok := backup.Tables[table]; ok {
+					t.Fatalf("alias export must not include table %s", table)
+				}
+			}
+			if tt.wantGlobal && len(backup.Config) == 0 {
+				t.Fatal("global_config alias export must carry the global config block")
+			}
+			if !tt.wantGlobal && backup.Config != nil {
+				t.Fatal("waf_files alias export must not carry the global config block")
+			}
+		})
+	}
+}
+
+// 三分类合并勘误(2026-09-19):users 分类备份(系统数据表族+全局配置区)
+// 必须可导入。旧「全量形态」探测器以「含 users 表」判定全量,把分类备份
+// 误判为全量并以「缺少 lb_rules」拒绝——恰好制造 BE-C1-6 要消灭的死备份
+// 形态(旧五分类模型下 users-only 导出同样中招,新增 users=系统数据含全局
+// 配置后触发面扩大到 global_config 别名导出)。
+func TestImportConfigBackup_usersCategoryBackupImports(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	g := newBackupSectionRouter(h)
+	tables := map[string][]map[string]any{
+		"users":               {{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
+		"api_keys":            {},
+		"ca_providers":        {},
+		"certificate_configs": {},
+	}
+	cfg := map[string]any{"log_level": "warn"}
+	backup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-09-19T00:00:00Z"},
+		Config: cfg,
+		Tables: tables,
+	}
+	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
+	data, err := json.Marshal(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := postLbbakImport(g, t, buildTestLbbak(t, string(data), nil), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("users-category backup must import, got %d %s", rec.Code, rec.Body.String())
+	}
+	// 全局配置区随系统数据分类导入生效
+	var level string
+	if err := db.DB.QueryRow(`SELECT log_level FROM global_config WHERE id=1`).Scan(&level); err != nil || level != "warn" {
+		t.Fatalf("log_level=%q err=%v, want warn (config block applied with users category)", level, err)
 	}
 }
 
