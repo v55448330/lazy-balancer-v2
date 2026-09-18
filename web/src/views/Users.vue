@@ -284,6 +284,18 @@ const onOIDCStatus = (st: { enabled: boolean; configured: boolean }) => {
   oidcEnabled.value = st.enabled
   oidcConfigured.value = st.configured
 }
+// 挂载即拉取 OIDC 状态——此前仅靠弹框 emit 回填,标签/按钮文案在打开
+// 「配置 OIDC」前恒为初始 false(已启用标签不显示、按钮误显「配置 OIDC」)。
+// 与弹框 load 同源(/settings/oidc),configured 口径 = issuer 或 secret 非空。
+const fetchOIDCStatus = async () => {
+  try {
+    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true } as never)
+    oidcEnabled.value = !!res.data?.enabled
+    oidcConfigured.value = !!(res.data?.issuer || res.data?.has_secret)
+  } catch {
+    // 静默降级:非管理员/从节点 403 不弹 toast,标签维持隐藏(入口本身按角色收口)
+  }
+}
 import { computed, nextTick, reactive, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
@@ -746,6 +758,7 @@ const copyMfaRecovery = async (): Promise<void> => {
 
 onMounted(() => {
   fetchUsers()
+  void fetchOIDCStatus()
   void (async () => {
     try {
       const res = await request.get('/config')
