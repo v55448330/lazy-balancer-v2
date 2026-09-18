@@ -225,3 +225,48 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		t.Fatalf("正常启用 = %q, want custom_only", mode)
 	}
 }
+
+// 三分类合并·方案A:waf_files 记账行数据迁移到 global_config 专用列后删除,
+// cluster_applied_sections 收敛为严格同步节行;重启幂等不回灌。
+func TestMigrateDropMergedSyncSwitchColumns_movesWafBookkeepingToColumns(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	// 模拟升级前形态:waf_files 记账行已存在,目标列尚未写入。
+	if _, err := DB.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES ('waf_files', 'legacy-ref-hash', 7, datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DB.Exec(`UPDATE global_config SET applied_waf_ref_hash='', applied_waf_ref_version=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := migrateDropMergedSyncSwitchColumns(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then:数据搬入列,行删除
+	var hash string
+	var version int
+	if err := DB.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,''), COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1`).Scan(&hash, &version); err != nil || hash != "legacy-ref-hash" || version != 7 {
+		t.Fatalf("bookkeeping columns=(%q,%d) err=%v, want (legacy-ref-hash,7)", hash, version, err)
+	}
+	var legacyRows int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM cluster_applied_sections WHERE section IN ('global_config','waf_files')`).Scan(&legacyRows); err != nil || legacyRows != 0 {
+		t.Fatalf("legacy rows=%d err=%v, want 0", legacyRows, err)
+	}
+
+	// 幂等:重跑不回灌(列已有值时不被空子查询覆盖)。
+	if err := migrateDropMergedSyncSwitchColumns(); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+	if err := DB.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,'') FROM global_config WHERE id=1`).Scan(&hash); err != nil || hash != "legacy-ref-hash" {
+		t.Fatalf("idempotent re-run hash=%q err=%v, want legacy-ref-hash preserved", hash, err)
+	}
+}

@@ -1270,13 +1270,13 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
 		t.Fatal(err)
 	}
-	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
-	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	// 三分类合并·方案A:文件态记账落 global_config 专用列(哈希域=纯 ref
+	// 含标签),不再由 ComputeSnapshotSectionHashes 产出/节行承载。
 	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
 	if hashErr != nil {
 		t.Fatal(hashErr)
 	}
-	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
+	seedAppliedWafRefHash(t, database, wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1369,13 +1369,13 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	}
 	// 记录哈希 == 快照节哈希：应用侧按节比较全部跳过（哈希一致），
 	// 与生产死循环形态一致。
-	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
-	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	// 三分类合并·方案A:文件态记账落 global_config 专用列(哈希域=纯 ref
+	// 含标签),不再由 ComputeSnapshotSectionHashes 产出/节行承载。
 	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
 	if hashErr != nil {
 		t.Fatal(hashErr)
 	}
-	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
+	seedAppliedWafRefHash(t, database, wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1500,13 +1500,13 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
 		t.Fatal(err)
 	}
-	// 三分类合并:waf_files 行是文件态记账(哈希域=纯 ref 含标签),不再由
-	// ComputeSnapshotSectionHashes 产出——按 wafFilesSectionHash 同域种入。
+	// 三分类合并·方案A:文件态记账落 global_config 专用列(哈希域=纯 ref
+	// 含标签),不再由 ComputeSnapshotSectionHashes 产出/节行承载。
 	wafAppliedHash, hashErr := wafFilesSectionHash(ref)
 	if hashErr != nil {
 		t.Fatal(hashErr)
 	}
-	seedAppliedSection(t, database, "waf_files", wafAppliedHash)
+	seedAppliedWafRefHash(t, database, wafAppliedHash)
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
@@ -1948,7 +1948,7 @@ func TestSyncService_Run_schemaTooNewStillHalts(t *testing.T) {
 func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 	_, database := newClusterTestService(t)
 	// 模拟主节点无文件的已应用哈希(payload=纯 ref=nil → sha256("null"))
-	seedAppliedSection(t, database, "waf_files", wafFilesNullRefHash)
+	seedAppliedWafRefHash(t, database, wafFilesNullRefHash)
 	// 从节点残留一个文件(本地 ref 非 nil)
 	rescue := func(dir string, path string, content string) { t.Helper() }
 	_ = rescue

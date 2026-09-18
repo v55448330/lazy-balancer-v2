@@ -854,6 +854,10 @@ func runMigrations() error {
 		"global_config.auto_backup_keep":      "INTEGER DEFAULT 7",
 		"global_config.auto_backup_sections":  "TEXT DEFAULT '[\"users\",\"rules\",\"security\"]'",
 		"global_config.auto_backup_last_run":  "DATETIME",
+		// 三分类合并·方案A(2026-09-19):文件态记账专用列(wafFilesDrifted
+		// 的 304 兜底与 R57 A-#4 标签自愈依赖;哈希域=纯 ref 含版本标签)。
+		"global_config.applied_waf_ref_hash":    "TEXT DEFAULT ''",
+		"global_config.applied_waf_ref_version": "INTEGER DEFAULT 0",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
 	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作
@@ -1337,9 +1341,10 @@ func migrateDropDeadMFALockColumns() error {
 // sync_global_config(全局配置并入系统数据节,恒同步)与 sync_waf_files
 // (规则库并入安全防护开关)两列随开关删除——readSyncSwitches/UpdateSettings/
 // 快照触发器 OF 列表均已不再引用。同步删除 cluster_applied_sections 的
-// global_config 陈旧行(节已不存在,防漂移误判);waf_files 行保留为文件态
-// 记账(wafFilesDrifted 的 304 兜底与标签自愈依赖,哈希域未变)。
-// 幂等:列存在才 DROP;行删除恒幂等。
+// global_config 陈旧行清除;waf_files 记账行数据(哈希域=纯 ref 含版本
+// 标签)搬入 global_config 专用列后一并删除——表严格 3 行与 syncSections
+// 同构(方案A,2026-09-19 裁定)。幂等:列存在才 DROP;搬运仅目标列空时
+// 执行,重启不回灌;行删除恒幂等。
 func migrateDropMergedSyncSwitchColumns() error {
 	for _, col := range []string{"sync_global_config", "sync_waf_files"} {
 		var colCount int
@@ -1355,14 +1360,20 @@ func migrateDropMergedSyncSwitchColumns() error {
 		log.Printf("已删除 global_config.%s(三分类合并:开关随分类并入收敛)", col)
 	}
 	// 表由集群 schema 建表步骤创建,迁移可能先于其执行(全新库)——表不
-	// 存在时跳过清理。
+	// 存在时跳过清理与搬运。
 	var tableCount int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cluster_applied_sections'").Scan(&tableCount); err != nil {
 		return err
 	}
 	if tableCount > 0 {
-		if _, err := DB.Exec(`DELETE FROM cluster_applied_sections WHERE section='global_config'`); err != nil {
-			return fmt.Errorf("failed to clear legacy global_config applied section: %w", err)
+		if _, err := DB.Exec(`UPDATE global_config SET
+			applied_waf_ref_hash=COALESCE((SELECT hash FROM cluster_applied_sections WHERE section='waf_files'),''),
+			applied_waf_ref_version=COALESCE((SELECT applied_version FROM cluster_applied_sections WHERE section='waf_files'),0)
+			WHERE id=1 AND COALESCE(applied_waf_ref_hash,'')=''`); err != nil {
+			return fmt.Errorf("failed to move waf bookkeeping into global_config columns: %w", err)
+		}
+		if _, err := DB.Exec(`DELETE FROM cluster_applied_sections WHERE section IN ('global_config','waf_files')`); err != nil {
+			return fmt.Errorf("failed to clear legacy applied sections: %w", err)
 		}
 	}
 	return nil

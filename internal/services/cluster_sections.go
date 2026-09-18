@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/db"
 
@@ -341,10 +340,11 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 		}
 	}
 
-	// 三分类合并:cluster_applied_sections 的 waf_files 行保留为文件态记账
-	// (哈希域=纯 ref 含版本标签)——wafFilesDrifted 的 304 兜底重拉与
-	// R57 A-#4 标签自愈依赖该记录;随安全防护开关写入/冻结(节哈希、上报
-	// 与 hover 均不再包含该节,syncSections 3 键)。
+	// 三分类合并·方案A(2026-09-19 裁定):文件态记账落 global_config 专用列
+	// (applied_waf_ref_hash=纯 ref 哈希含版本标签,applied_waf_ref_version=
+	// 告警去重版本)——cluster_applied_sections 严格 3 行与 syncSections
+	// 同构;wafFilesDrifted 的 304 兜底重拉与 R57 A-#4 标签自愈依赖该记录。
+	// 随安全防护开关写入/冻结(节哈希、上报与 hover 均不包含文件态)。
 	if switches.Security {
 		refHash := wafFilesNullRefHash
 		if snapshot.WafFiles != nil {
@@ -352,13 +352,8 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 				refHash = hh
 			}
 		}
-		if sk.unchanged["security"] {
-			if _, err := dbh.Exec(`UPDATE cluster_applied_sections SET applied_version=?, applied_at=datetime('now') WHERE section='waf_files'`, snapshot.Version); err != nil {
-				Logf("warn", "更新文件态记账版本失败（section=waf_files）: %v", err)
-			}
-		} else if _, err := dbh.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES ('waf_files',?,?,datetime('now'))
-			ON CONFLICT(section) DO UPDATE SET hash=excluded.hash, applied_version=excluded.applied_version, applied_at=excluded.applied_at`, refHash, snapshot.Version); err != nil {
-			Logf("warn", "记录文件态记账哈希失败（section=waf_files）: %v", err)
+		if _, err := dbh.Exec(`UPDATE global_config SET applied_waf_ref_hash=?, applied_waf_ref_version=? WHERE id=1`, refHash, snapshot.Version); err != nil {
+			Logf("warn", "记录文件态记账失败（applied_waf_ref_*）: %v", err)
 		}
 	}
 }
@@ -369,31 +364,28 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
 	// R57 A-#3：告警对象是「开关关闭导致 WAF 文件滞后」的从节点——开关开启时
 	// applySnapshot 随即拉取文件，无滞后可告。三分类合并后判定挂 security
-	// 开关(waf_files 不再是同步节,sk.disabled 只含 3 节键);dedup 记账沿用
-	// waf_files 行(recordAppliedSectionHashes 对 disabled 节跳过写入使
-	// applied_version 冻结在开关关闭前,每版本 bump 至多刷一条告警)。
+	// 开关(waf_files 不再是同步节,sk.disabled 只含 3 节键);dedup 记账走
+	// global_config.applied_waf_ref_version(方案A 列;security 关闭时
+	// recordAppliedSectionHashes 不写该列,版本冻结在开关关闭前,每版本
+	// bump 至多刷一条告警审计)。
 	if !sk.disabled["security"] || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
 		return
 	}
 	var lastWarnVersion int
 	if db.DB != nil {
-		// ErrNoRows 是合法空态（首次告警前无记录，按版本 0 处理）；其余读取
-		// 失败属稀有基础设施故障——不限频 warn 一行，否则去重依据静默归零、
+		// 读失败属稀有基础设施故障——不限频 warn 一行，否则去重依据静默归零、
 		// 每个 apply 周期都刷审计告警且无信号解释。
-		if err := db.DB.QueryRow("SELECT applied_version FROM cluster_applied_sections WHERE section='waf_files'").Scan(&lastWarnVersion); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			Logf("warn", "读取 waf_files 已应用版本失败（同步开关告警去重不可用）: %v", err)
+		if err := db.DB.QueryRow("SELECT COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1").Scan(&lastWarnVersion); err != nil {
+			Logf("warn", "读取文件态记账版本失败（同步开关告警去重不可用）: %v", err)
 		}
 	}
 	if lastWarnVersion >= snapshot.Version {
 		return
 	}
 	RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region 文件已更新（同步开关关闭），本地文件保持不变", "")
-	// CL10-N7:告警后 upsert applied_version(哈希不动——disabled 节的哈希
-	// 仅在开关开启时被消费)——recordAppliedSectionHashes 对 disabled 节
-	// 跳过写入使 applied_version 冻结在开关关闭前,dedup 条件恒假,每版本
-	// bump 刷一条告警审计。
+	// CL10-N7:告警后只推进去重版本(哈希不动——security 关闭时哈希列不被
+	// 消费),保证每版本 bump 至多一条告警。
 	if db.DB != nil {
-		_, _ = db.DB.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES ('waf_files','',?,datetime('now'))
-			ON CONFLICT(section) DO UPDATE SET applied_version=excluded.applied_version`, snapshot.Version)
+		_, _ = db.DB.Exec(`UPDATE global_config SET applied_waf_ref_version=? WHERE id=1`, snapshot.Version)
 	}
 }

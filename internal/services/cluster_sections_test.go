@@ -181,9 +181,10 @@ func TestDriftGuardSectionHashes_usersIncludesGlobalSettings(t *testing.T) {
 	}
 }
 
-// 三分类合并:waf_files 行保留为文件态记账(哈希域=纯 ref 含版本标签),
-// 随安全防护开关写入——wafFilesDrifted 的 304 兜底与 R57 A-#4 标签自愈
-// 依赖该记录;开关关闭时冻结。
+// 三分类合并·方案A(2026-09-19 裁定):文件态记账落 global_config 专用列
+// (applied_waf_ref_hash/applied_waf_ref_version,哈希域=纯 ref 含版本标签),
+// cluster_applied_sections 严格 3 行与 syncSections 同构——wafFilesDrifted
+// 的 304 兜底重拉与 R57 A-#4 标签自愈依赖该记录;随安全防护开关写入/冻结。
 func TestRecordAppliedSectionHashes_wafFilesBookkeepingFollowsSecuritySwitch(t *testing.T) {
 	_, database := newClusterTestService(t)
 	snapshot := models.ClusterSnapshot{Version: 9, WafFiles: &models.ClusterWafFilesRef{CRSSha256: "abc", CRSVersion: "v9"}}
@@ -197,21 +198,24 @@ func TestRecordAppliedSectionHashes_wafFilesBookkeepingFollowsSecuritySwitch(t *
 	}
 	var hash string
 	var version int
-	if err := database.QueryRow(`SELECT hash, applied_version FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&hash, &version); err != nil || hash != wantHash || version != 9 {
-		t.Fatalf("waf_files bookkeeping row hash=%q version=%d err=%v, want %q/9", hash, version, err, wantHash)
+	if err := database.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,''), COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1`).Scan(&hash, &version); err != nil || hash != wantHash || version != 9 {
+		t.Fatalf("waf bookkeeping columns=(%q,%d) err=%v, want (%q,9)", hash, version, err, wantHash)
+	}
+	var rowCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&rowCount); err != nil || rowCount != 0 {
+		t.Fatalf("waf_files bookkeeping row count=%d err=%v, want 0 (columns carry the bookkeeping)", rowCount, err)
 	}
 
-	// 安全防护开关关闭:行冻结(不得更新)。
-	if _, err := database.Exec(`UPDATE cluster_applied_sections SET hash='stale' WHERE section='waf_files'`); err != nil {
+	// 安全防护开关关闭:列冻结(不得更新)。
+	if _, err := database.Exec(`UPDATE global_config SET applied_waf_ref_hash='stale' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	recordAppliedSectionHashes(database, snapshot, sk, SyncSwitches{Users: true, Rules: true, Security: false}, nil)
-	if err := database.QueryRow(`SELECT hash FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&hash); err != nil || hash != "stale" {
-		t.Fatalf("security off must freeze waf_files row, got hash=%q err=%v", hash, err)
+	if err := database.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,'') FROM global_config WHERE id=1`).Scan(&hash); err != nil || hash != "stale" {
+		t.Fatalf("security off must freeze the bookkeeping columns, got hash=%q err=%v", hash, err)
 	}
 }
 
-// 三分类合并:安全防护开关关闭时文件态不受同步管辖——wafFilesDrifted
 // 必须返回 false(镜像 driftedSections 的开关豁免语义)。
 func TestWafFilesDrifted_securitySwitchOffReturnsFalse(t *testing.T) {
 	_, database := newClusterTestService(t)
@@ -226,7 +230,7 @@ func TestWafFilesDrifted_securitySwitchOffReturnsFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedAppliedSection(t, database, "waf_files", "definitely-different-hash")
+	seedAppliedWafRefHash(t, database, "definitely-different-hash")
 	if _, err := database.Exec(`UPDATE global_config SET sync_security=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +246,15 @@ func TestWafFilesDrifted_securitySwitchOffReturnsFalse(t *testing.T) {
 		t.Fatal("wafFilesDrifted must detect local/applied divergence with security switch on")
 	}
 	_ = localHash
+}
+
+// seedAppliedWafRefHash 直写文件态记账列(方案A:global_config 专用列,
+// 替代旧 waf_files 记账行的测试播种)。
+func seedAppliedWafRefHash(t *testing.T, dbh *sql.DB, hash string) {
+	t.Helper()
+	if _, err := dbh.Exec(`UPDATE global_config SET applied_waf_ref_hash=? WHERE id=1`, hash); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRecordAppliedSectionHashes_persistsAndUpdates(t *testing.T) {

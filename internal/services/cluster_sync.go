@@ -954,12 +954,12 @@ func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files
-// 记账哈希分叉(三分类合并:cluster_applied_sections 的 waf_files 行保留为
-// 文件态记账,哈希域=纯 ref 含版本标签)。开关关闭的节跳过比对(镜像
-// driftedSections 语义,防「曾同步→开关关闭→本地改动」死循环)——三分类
-// 合并后文件态随安全防护开关:security 关闭时文件与版本行均不受同步管辖,
-// UI 版本显示与磁盘文件一致性由开关打开后的差分重放收敛。
+// wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的文件态记账
+// 分叉(三分类合并·方案A:global_config.applied_waf_ref_hash,哈希域=纯
+// ref 含版本标签)。开关关闭的节跳过比对(镜像 driftedSections 语义,防
+// 「曾同步→开关关闭→本地改动」死循环)——文件态随安全防护开关:security
+// 关闭时文件与版本行均不受同步管辖,UI 版本显示与磁盘文件一致性由开关
+// 打开后的差分重放收敛。
 func (s *SyncService) wafFilesDrifted() bool {
 	if s.db == nil {
 		return false
@@ -968,9 +968,9 @@ func (s *SyncService) wafFilesDrifted() bool {
 	if err != nil || !switches.Security {
 		return false
 	}
-	appliedHash := readAppliedSectionHashes(s.db)["waf_files"]
+	appliedHash := readAppliedWafRefHash(s.db)
 	if appliedHash == "" || appliedHash == wafFilesNullRefHash {
-		// 主节点无任何 WAF 文件(节哈希=nullRef 基准):无文件态可比对,
+		// 主节点无任何 WAF 文件(记账=nullRef 基准):无文件态可比对,
 		// 全量重拉也无法收敛本地残留,必须豁免(否则 404 重拉死循环——
 		// 第 7 轮 SL7-1)。
 		return false
@@ -985,6 +985,19 @@ func (s *SyncService) wafFilesDrifted() bool {
 		return false
 	}
 	return localHash != appliedHash
+}
+
+// readAppliedWafRefHash 读取文件态记账哈希(方案A 列,替代旧 waf_files
+// 记账行);空串=从未记录。
+func readAppliedWafRefHash(dbh *sql.DB) string {
+	if dbh == nil {
+		return ""
+	}
+	var hash sql.NullString
+	if err := dbh.QueryRow(`SELECT applied_waf_ref_hash FROM global_config WHERE id=1`).Scan(&hash); err != nil || !hash.Valid {
+		return ""
+	}
+	return strings.TrimSpace(hash.String)
 }
 
 func (s *SyncService) beginPull() error {
