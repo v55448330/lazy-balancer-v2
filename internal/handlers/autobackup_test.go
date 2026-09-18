@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -223,12 +224,15 @@ func TestUpdateAutoBackupSettings_validationMatrix(t *testing.T) {
 	}
 }
 
-func TestUpdateAutoBackupSettings_savesAndResetsLastRunOnEnable(t *testing.T) {
+func TestUpdateAutoBackupSettings_enableSetsWatermarkNotImmediateRun(t *testing.T) {
+	// 2026-09-19 用户裁定:启用不得立即触发补跑——off→on 置水位线(=now),
+	// 下一次执行=启用后的下一个到期槽;仅手动触发/停机跨槽补跑属预期。
 	h := newAutoBackupTestHandlers(t)
-	// Given: 既有 last_run + 关闭态
+	// Given: 既有陈旧 last_run + 关闭态
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=0, auto_backup_last_run='2026-08-01T03:00:00Z' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
+	before := time.Now().Add(-time.Minute)
 	body := `{"enabled":true,"frequency":"monthly","time":"01:15","day":9,"keep":12,"sections":["users","global_config","rules","waf_files","security"]}`
 
 	// When
@@ -253,11 +257,15 @@ func TestUpdateAutoBackupSettings_savesAndResetsLastRunOnEnable(t *testing.T) {
 	if !strings.Contains(sections, `"rules"`) || strings.Contains(sections, `"nope"`) {
 		t.Fatalf("sections=%q", sections)
 	}
-	if lastRun != nil {
-		t.Fatalf("off→on 必须清空 last_run(下个槽即跑), got %q", *lastRun)
+	if lastRun == nil {
+		t.Fatal("off→on 必须置水位线(last_run=now), got NULL")
 	}
-	if got := countAutoBackupAudit(t, "备份设置"); got != 1 {
-		t.Fatalf("自动备份设置 audit rows=%d, want 1", got)
+	watermark, err := time.Parse(time.RFC3339, *lastRun)
+	if err != nil {
+		t.Fatalf("last_run 非 RFC3339 形态 %q: %v", *lastRun, err)
+	}
+	if watermark.Before(before) {
+		t.Fatalf("水位线 %v 早于测试开始 %v(不得回补启用前的旧槽)", watermark, before)
 	}
 }
 

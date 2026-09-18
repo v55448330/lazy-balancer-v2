@@ -220,6 +220,15 @@
           <div v-for="code in mfaBinding.recoveryCodes" :key="code" style="font-family: monospace; font-size: 14px; background: var(--el-fill-color-light); padding: 6px 10px; border-radius: 3px; text-align: center; user-select: all">{{ code }}</div>
         </div>
       </div>
+      <template #footer>
+        <el-button v-if="mfaBinding.step === 0" @click="mfaBinding.visible = false">取消</el-button>
+        <el-button v-if="mfaBinding.step === 0" type="primary" @click="mfaBinding.step = 1">下一步</el-button>
+        <el-button v-if="mfaBinding.step === 1" @click="mfaBinding.step = 0">上一步</el-button>
+        <el-button v-if="mfaBinding.step === 1" type="primary" :loading="mfaBinding.loading" @click="activateMfa">验证并启用</el-button>
+        <el-button v-if="mfaBinding.step === 2" @click="copyMfaRecovery">复制全部</el-button>
+        <el-button v-if="mfaBinding.step === 2" type="primary" @click="mfaBinding.visible = false">我已保存</el-button>
+      </template>
+    </el-dialog>
     <!-- 统一确认/输入弹框:重置密码 / 修改密码 / 重置 MFA(替代 ElMessageBox,
          与全站 icon+标题+副标题弹框语言一致)。 -->
     <el-dialog v-model="lbDialog.visible" width="min(500px, 92vw)" :close-on-click-modal="false" :show-close="!lbDialog.busy" @update:model-value="!lbDialog.busy && lbCancel()">
@@ -260,16 +269,6 @@
       <template #footer>
         <el-button :disabled="lbDialog.busy" @click="lbCancel">取消</el-button>
         <el-button type="primary" @click="lbConfirm">{{ lbDialog.spec?.confirmText || '确定' }}</el-button>
-      </template>
-    </el-dialog>
-
-      <template #footer>
-        <el-button v-if="mfaBinding.step === 0" @click="mfaBinding.visible = false">取消</el-button>
-        <el-button v-if="mfaBinding.step === 0" type="primary" @click="mfaBinding.step = 1">下一步</el-button>
-        <el-button v-if="mfaBinding.step === 1" @click="mfaBinding.step = 0">上一步</el-button>
-        <el-button v-if="mfaBinding.step === 1" type="primary" :loading="mfaBinding.loading" @click="activateMfa">验证并启用</el-button>
-        <el-button v-if="mfaBinding.step === 2" @click="copyMfaRecovery">复制全部</el-button>
-        <el-button v-if="mfaBinding.step === 2" type="primary" @click="mfaBinding.visible = false">我已保存</el-button>
       </template>
     </el-dialog>
   </div>

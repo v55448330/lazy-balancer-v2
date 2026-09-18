@@ -181,6 +181,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger string) error {
 		if _, ierr := insertAutoBackupRow(filename, "failed", 0, "[]", trigger, stage+": "+err.Error()); ierr != nil {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)
 		}
+		services.Logf("warn", "%s失败：%s（%s）", action, stage, err)
 		services.RecordAuditLog("system", "备份失败", "配置备份", services.FormatAuditDetail(
 			"触发："+triggerLabel, "文件："+filename, stage+"："+err.Error(), services.AuditResultPart("failed")), "")
 		return wrapped
@@ -212,7 +213,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger string) error {
 		_ = os.Remove(finalPath)
 		return fail("备份记录写入失败", err)
 	}
-	pruneAutoBackups(dir, loadAutoBackupKeepSetting(), autoBackupFailedRowsKeep)
+	services.Logf("info", "%s完成：文件 %s（%s，%.1f KB）", action, filename, countsSummary, float64(len(payload))/1024)
 	services.RecordAuditLog("system", action, "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", id), "文件："+filename, countsSummary,
 		fmt.Sprintf("大小：%d 字节", len(payload)), services.AuditResultPart("success")), "")
@@ -379,9 +380,11 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		return
 	}
 	if !prevEnabled && *req.Enabled {
-		// 启用即视为新周期：清空 last_run，下一个到期槽（含当日已过槽）立即补跑
-		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=NULL WHERE id=1`); err != nil {
-			services.Logf("warn", "自动备份：启用时清空 last_run 失败: %v", err)
+		// 2026-09-19 用户裁定:启用不得立即触发备份——off→on 置水位线(=now),
+		// 覆盖停用期前的陈旧 last_run(否则跨停用回补),下一次执行=启用后的
+		// 下一个到期槽;仅手动触发与停机跨槽补跑属预期。
+		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
+			services.Logf("warn", "自动备份：启用时写入水位线失败: %v", err)
 		}
 	}
 	freqLabel := map[string]string{"daily": "每日", "weekly": "每周", "monthly": "每月"}[*req.Frequency]

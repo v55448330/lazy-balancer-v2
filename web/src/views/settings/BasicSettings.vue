@@ -125,9 +125,9 @@
         <div class="info-item">
           <span class="info-label">配置备份</span>
           <div class="backup-actions">
-            <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">导出</el-button>
-            <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
-            <el-button size="small" :disabled="backupDisabled" @click="openAutoBackupDialog">自动备份</el-button>
+            <el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">导出</el-button>
+            <el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">导入</el-button>
+            <el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">自动备份</el-button>
           </div>
         </div>
 
@@ -340,17 +340,21 @@
               @click="toggleAutoBackupSection(sec.key)"
             >{{ sec.label }}</button>
           </div>
-          <div class="backup-dialog-actions">
+          <div class="auto-backup-chips-actions">
             <el-button text size="small" @click="autoBackupSections = []">全不选</el-button>
             <el-button text size="small" @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
-            <el-button text size="small" type="primary" :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">立即备份</el-button>
+            <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个数据分类（仅「全局配置」的备份无法还原）</el-text>
           </div>
-          <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个数据分类（仅「全局配置」的备份无法还原）</el-text>
         </el-form-item>
       </el-form>
       <div class="auto-backup-list">
-        <div class="auto-backup-list-title">备份文件</div>
-        <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small">
+        <div class="auto-backup-list-head">
+          <div class="auto-backup-list-title">备份文件</div>
+          <el-text type="info" size="small">
+            上次执行：{{ autoBackupLastRunLabel }}<template v-if="autoBackupNextRunLabel"> · 下次备份：{{ autoBackupNextRunLabel }}</template>
+          </el-text>
+        </div>
+        <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small" :max-height="320">
           <el-table-column label="备份时间" width="150">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
@@ -379,6 +383,9 @@
       </div>
       <template #footer>
         <el-button @click="autoBackupVisible = false">取消</el-button>
+        <el-button text type="primary" :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">
+          立即备份
+        </el-button>
         <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid" @click="saveAutoBackupSettings">
           保存设置
         </el-button>
@@ -576,7 +583,68 @@ const autoBackupRunning = ref(false)
 const autoBackupForm = ref({ enabled: false, frequency: 'daily', time: '03:00', day: 1, keep: 7 })
 const autoBackupSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
 const autoBackupRows = ref<AutoBackupRow[]>([])
+const autoBackupLastRun = ref<string | null>(null)
 
+const autoBackupLastRunLabel = computed(() => (autoBackupLastRun.value ? formatDate(autoBackupLastRun.value) : '—'))
+
+// 下一次备份时刻(启用态才有):镜像后端 autoBackupDueSlot 的「下一槽」语义——
+// 日=当日/次日 HH:MM;周=下一个目标周几;月=当月/次月 day 日(短月收敛到月末)。
+// 时区取基础设置 timezone(与调度器 CurrentLocation 同源;未保存的时区编辑即时预览)。
+const autoBackupNextRunLabel = computed<string | null>(() => {
+  const form = autoBackupForm.value
+  if (!autoBackupVisible.value || !form.enabled) return null
+  const [hh, mm] = form.time.split(':').map(Number)
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
+  const tz = settings.value.timezone || 'Asia/Shanghai'
+  try {
+    // 配置时区的当前墙钟(Intl 受保护构造——非法 tz 走 catch 返回 null)
+    const partsFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
+    })
+    const parts: Record<string, string> = {}
+    for (const part of partsFmt.formatToParts(new Date())) parts[part.type] = part.value
+    const WD: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+    const nowCarrier = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour) % 24, Number(parts.minute))
+    const wallNow = new Date(nowCarrier)
+    const slotCarrier = (y: number, mo: number, d: number): number => Date.UTC(y, mo - 1, d, hh, mm)
+    const daysInMonth = (y: number, mo: number): number => new Date(Date.UTC(y, mo, 0)).getUTCDate()
+    let candidate: number
+    if (form.frequency === 'weekly') {
+      const target = (form.day || 1) % 7 // 本包 1=周一…7=周日 → JS 0=周日
+      const delta = (target - WD[parts.weekday ?? 'Sun'] + 7) % 7
+      const targetDate = new Date(wallNow.getTime() + delta * 86400000)
+      candidate = slotCarrier(targetDate.getUTCFullYear(), targetDate.getUTCMonth() + 1, targetDate.getUTCDate())
+      if (candidate <= wallNow.getTime()) candidate += 7 * 86400000
+    } else if (form.frequency === 'monthly') {
+      const day = Math.min(Math.max(form.day || 1, 1), 28)
+      const y = wallNow.getUTCFullYear()
+      const mo = wallNow.getUTCMonth() + 1
+      candidate = slotCarrier(y, mo, Math.min(day, daysInMonth(y, mo)))
+      if (candidate <= nowCarrier) {
+        const ny = mo === 12 ? y + 1 : y
+        const nmo = mo === 12 ? 1 : mo + 1
+        candidate = slotCarrier(ny, nmo, Math.min(day, daysInMonth(ny, nmo)))
+      }
+    } else {
+      candidate = slotCarrier(wallNow.getUTCFullYear(), wallNow.getUTCMonth() + 1, wallNow.getUTCDate())
+      if (candidate <= wallNow.getTime()) candidate += 86400000
+    }
+    // 墙钟 → 瞬时:用该时区在候选时刻的偏移换算(DST 边界二次收敛)
+    const offsetAt = (instant: number): number => {
+      const p: Record<string, string> = {}
+      for (const part of partsFmt.formatToParts(new Date(instant))) p[part.type] = part.value
+      return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute)) - Math.floor(instant / 60000) * 60000
+    }
+    const guess = candidate - offsetAt(candidate)
+    const epoch = candidate - offsetAt(guess)
+    // 展示走 formatDate(配置时区)——与列表时间同口径;formatDate 契约只收
+    // 字符串(Date 对象被 parseDateValue 判为非法返回空串),传 ISO 形态
+    return formatDate(new Date(epoch).toISOString())
+  } catch {
+    return null
+  }
+})
 // 与导出按钮同口径：范围非空且非仅「全局配置」
 const autoBackupSectionsValid = computed(() => {
   const secs = autoBackupSections.value
@@ -602,6 +670,7 @@ const fetchAutoBackup = async (): Promise<void> => {
     }
     autoBackupSections.value = d.sections?.length ? d.sections : BACKUP_SECTIONS.map((s) => s.key)
     autoBackupRows.value = d.backups || []
+    autoBackupLastRun.value = d.last_run ?? null
   } catch {
     // silent：打开弹框时拉取失败保持空态，全局拦截器已提示
   } finally {
@@ -1377,8 +1446,12 @@ const handleSave = async () => {
 
 /* 自动备份弹框 */
 .auto-backup-form { padding: 4px 0; }
+.auto-backup-form :deep(.el-form-item) { margin-bottom: 14px; }
 .auto-backup-chips { flex-wrap: wrap; }
-.auto-backup-scope-hint { display: block; margin-top: 4px; line-height: 1.5; }
-.auto-backup-list { margin-top: 16px; }
-.auto-backup-list-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+/* 全选/全不选与提示同行垂直居中 */
+.auto-backup-chips-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.auto-backup-scope-hint { margin-left: auto; }
+.auto-backup-list { margin-top: 10px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
+.auto-backup-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.auto-backup-list-title { font-size: 13px; font-weight: 600; }
 </style>
