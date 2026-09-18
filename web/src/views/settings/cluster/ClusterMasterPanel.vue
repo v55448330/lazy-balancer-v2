@@ -175,13 +175,12 @@ const { width: viewportWidth } = useWindowSize()
 const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1440 ? 'right' : false)
 
 const syncSwitchItems = [
-  // 系统数据排第一且恒同步(2026-09-11 裁定):用户/密钥/ACME 等确保
-  // 系统基本运行的数据不可禁用同步。
-  { key: 'sync_users', label: '系统数据', tip: '用户账号、API 密钥与 ACME 配置（恒同步，不可禁用；证书文件随负载规则开关同步）' },
-  { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时、品牌文案等全局设置' },
+  // 系统数据排第一且恒同步(2026-09-11 裁定):用户/密钥/ACME 与全局配置
+  // (三分类合并:全局配置并入系统数据节)确保系统基本运行的数据不可禁用同步。
+  { key: 'sync_users', label: '系统数据', tip: '用户账号、API 密钥、ACME 配置与全局设置（恒同步，不可禁用；证书文件随负载规则开关同步）' },
   { key: 'sync_rules', label: '负载均衡规则', tip: '规则、上游、路径规则与证书任务' },
-  { key: 'sync_waf_files', label: '规则库数据库', tip: 'CRS 规则文件、版本信息与 IP2Region GeoIP 数据库（哈希一致时跳过传输）' },
-  { key: 'sync_security', label: '安全策略规则', tip: '安全策略、绑定关系、自定义规则与拦截页面' },
+  // 三分类合并:规则库文件差量通道并入安全防护开关(单开关统策略行与文件)。
+  { key: 'sync_security', label: '安全防护', tip: '安全策略、自定义规则与 CRS/IP2Region 规则库（文件哈希一致时跳过传输）' },
 ] as const
 
 const syncSwitchFreezeHint = '关闭后从节点保留最近一次同步内容，不自动删除'

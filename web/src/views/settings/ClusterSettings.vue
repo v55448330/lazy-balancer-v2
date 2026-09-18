@@ -514,11 +514,9 @@ const copyRegisterToken = async (): Promise<void> => {
 }
 
 const syncSwitchLabels: Record<string, string> = {
-  sync_global_config: '全局配置',
   sync_users: '系统数据',
   sync_rules: '负载均衡规则',
-  sync_waf_files: '规则库数据库',
-  sync_security: '安全策略规则',
+  sync_security: '安全防护',
 }
 
 const updateSyncField = async (field: string, value: boolean): Promise<void> => {
@@ -741,6 +739,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.equal-height-row :deep(.el-card) { height: 100%; }
+.equal-height-row :deep(.el-card__body) { height: 100%; box-sizing: border-box; }
 .cluster-settings { display: flex; flex-direction: column; gap: 20px; }
 .polling-error-alert { align-self: stretch; }
 .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }

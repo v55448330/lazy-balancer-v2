@@ -215,8 +215,7 @@
                 <button
                   v-for="sec in BACKUP_SECTIONS" :key="sec.key"
                   type="button" class="section-chip"
-                  :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': (importValidation.type === 'v1' && sec.key !== 'rules') || (sec.key === 'waf_files' && !importValidation.has_waf_files) }"
-                  :title="sec.key === 'waf_files' && !importValidation.has_waf_files ? '备份不含 CRS/IP2Region 数据文件' : ''"
+                  :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': importValidation.type === 'v1' && sec.key !== 'rules' }"
                   @click="toggleImportSection(sec.key)"
                 >{{ sec.label }}</button>
               </div>
@@ -286,10 +285,10 @@
         <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
       </div>
       <el-alert type="warning" :closable="false" show-icon class="mt8"
-        title="导出为 .lbbak 备份包（勾选「规则库数据库」时含 CRS/IP2Region 数据文件）；包含凭证与证书材料，请加密保管" />
+        title="导出为 .lbbak 备份包（勾选「安全防护」时含 CRS/IP2Region 规则库文件）；包含凭证与证书材料，请加密保管" />
       <template #footer>
         <el-button @click="exportDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0 || (exportSections.length === 1 && exportSections[0] === 'global_config')" @click="exportBackup">
+        <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">
           确认导出{{ exportSections.length ? `（${exportSections.length}/${BACKUP_SECTIONS.length}）` : '' }}
         </el-button>
       </template>
@@ -328,8 +327,8 @@
           <el-text type="info" size="small" class="tip-inline">按系统配置时区执行；停机跨槽会在下次启动补跑一次</el-text>
         </el-form-item>
         <el-form-item label="保留份数">
-          <el-input-number v-model="autoBackupForm.keep" :min="1" :max="100" controls-position="right" style="width: 120px" />
-          <el-text type="info" size="small" class="tip-inline">超出自动清理；失败记录另保留最近 20 条</el-text>
+          <el-input-number v-model="autoBackupForm.keep" :min="1" :max="30" controls-position="right" style="width: 120px" />
+          <el-text type="info" size="small" class="tip-inline">1-30 份，超出自动清理；失败记录另保留最近 20 条</el-text>
         </el-form-item>
         <el-form-item label="备份范围">
           <div class="section-chips auto-backup-chips">
@@ -343,7 +342,7 @@
           <div class="auto-backup-chips-actions">
             <el-button size="small" plain @click="autoBackupSections = []">全不选</el-button>
             <el-button size="small" plain @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
-            <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个数据分类（仅「全局配置」的备份无法还原）</el-text>
+            <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个分类（未选分类不进入备份）</el-text>
           </div>
         </el-form-item>
       </el-form>
@@ -496,21 +495,34 @@ onUnmounted(() => {
   tlsProtocolFallbackTimer = null
 })
 
-// v2.3.0 分类导出(用户裁定):分类=集群同步五类,默认全选
+// 三分类合并(2026-09-19 用户裁定):备份分类收敛为 3 类,与集群同步节同构
+// ——全局配置并入「系统数据」、规则库并入「安全防护」。默认全选。
 const BACKUP_SECTIONS = [
   { key: 'users', label: '系统数据' },
-  { key: 'global_config', label: '全局配置' },
   { key: 'rules', label: '负载规则' },
-  { key: 'waf_files', label: '规则库数据库' },
-  { key: 'security', label: '安全策略及自定义规则' },
+  { key: 'security', label: '安全防护' },
 ] as const
+
+// legacy 分类键归一(与后端 normalizeBackupSectionKeys 同映射):升级前保存的
+// 自动备份范围/历史备份行可能携带 global_config/waf_files,读出即归一。
+const LEGACY_SECTION_ALIASES: Record<string, string> = { global_config: 'users', waf_files: 'security' }
+const normalizeBackupSectionKeys = (keys: string[]): string[] => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const key of keys) {
+    const normalized = LEGACY_SECTION_ALIASES[key] ?? key
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    out.push(normalized)
+  }
+  return out
+}
 const exportSections = ref<string[]>(BACKUP_SECTIONS.map((s) => s.key))
 const exportDialogVisible = ref(false)
 const toggleImportSection = (key: string): void => {
   const validation = importValidation.value
   if (!validation?.valid) return
   if (validation.type === 'v1' && key !== 'rules') return
-  if (key === 'waf_files' && !validation.has_waf_files) return
   importSections.value = importSections.value.includes(key)
     ? importSections.value.filter((k) => k !== key)
     : [...importSections.value, key]
@@ -644,11 +656,8 @@ const autoBackupNextRunLabel = computed<string | null>(() => {
     return null
   }
 })
-// 与导出按钮同口径：范围非空且非仅「全局配置」
-const autoBackupSectionsValid = computed(() => {
-  const secs = autoBackupSections.value
-  return secs.length > 0 && !(secs.length === 1 && secs[0] === 'global_config')
-})
+// 与导出按钮同口径：范围非空(users 恒有表,不存在不可还原形态)
+const autoBackupSectionsValid = computed(() => autoBackupSections.value.length > 0)
 
 const openAutoBackupDialog = (): void => {
   if (backupDisabled.value) return
@@ -667,7 +676,7 @@ const fetchAutoBackup = async (): Promise<void> => {
       day: d.day || 1,
       keep: d.keep || 7,
     }
-    autoBackupSections.value = d.sections?.length ? d.sections : BACKUP_SECTIONS.map((s) => s.key)
+    autoBackupSections.value = d.sections?.length ? normalizeBackupSectionKeys(d.sections) : BACKUP_SECTIONS.map((s) => s.key)
     autoBackupRows.value = d.backups || []
     autoBackupLastRun.value = d.last_run ?? null
   } catch {
@@ -706,7 +715,7 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
 const runAutoBackupNow = async (): Promise<void> => {
   if (autoBackupRunning.value) return
   if (!autoBackupSectionsValid.value) {
-    ElMessage.warning('备份范围至少需选择一个数据分类（仅「全局配置」不可）')
+    ElMessage.warning('备份范围至少需选择一个分类')
     return
   }
   if (!(await saveAutoBackupSettings())) return
@@ -730,7 +739,7 @@ const formatBackupSize = (bytes: number): string => {
 }
 
 const autoBackupScopeSummary = (row: AutoBackupRow): string => {
-  const labels = (row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
+  const labels = normalizeBackupSectionKeys(row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
   const scope = labels.length > 0 ? labels.join('、') : '-'
   const trigger = row.trigger_type === 'manual' ? '手动' : '定时'
   return row.message ? `${scope}（${trigger}）· ${row.message}` : `${scope}（${trigger}）`
@@ -920,9 +929,7 @@ const handleImportFile = async (event: Event): Promise<void> => {
     if (res.data?.type === 'v1') {
       importSections.value = ['rules']
     } else {
-      importSections.value = BACKUP_SECTIONS
-        .filter((sec) => sec.key !== 'waf_files' || res.data?.has_waf_files)
-        .map((sec) => sec.key)
+      importSections.value = BACKUP_SECTIONS.map((sec) => sec.key)
     }
   } catch {
     if (validationSeq === importValidationSeq) {
@@ -1447,11 +1454,12 @@ const handleSave = async () => {
 .auto-backup-form { padding: 4px 0; }
 .auto-backup-form :deep(.el-form-item) { margin-bottom: 14px; }
 .auto-backup-chips { flex-wrap: wrap; }
-/* 全选/全不选与提示同行垂直居中 */
+/* 全选/全不选与提示换行置于分类选项下方,左对齐(el-form-item__content 为
+ * flex 行,flex-basis:100% 强制换行;2026-09-19 用户样式裁定) */
 /* 与 el-table 单元格 .cell 的 12px 内边距对齐——标题/说明文字与表格内容同缘 */
 .auto-backup-list-head { display: flex; align-items: baseline; justify-content: flex-end; margin-top: 12px; margin-bottom: 8px; padding: 0 8px; }
-.auto-backup-chips-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.auto-backup-chips-actions { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
-.auto-backup-scope-hint { margin-left: auto; }
+.auto-backup-scope-hint { margin-left: 0; }
 .auto-backup-list { border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
 </style>
