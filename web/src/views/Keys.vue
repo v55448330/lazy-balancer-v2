@@ -184,55 +184,55 @@
             <el-button size="small" :loading="mcpPlaybookDownloading" @click="downloadMCPPlaybook">下载手册正文（markdown）</el-button>
           </div>
         </el-collapse-item>
-      </el-collapse>
-
-      <div class="mcp-tools-title">工具清单</div>
-      <div class="mcp-table-scroll-hint">左右滑动表格可查看方法、REST 路径和类型</div>
-      <div v-loading="mcpToolsLoading" class="mcp-tools-table">
-        <el-alert
-          v-if="mcpToolsError"
-          :title="mcpToolsError"
-          type="error"
-          :closable="false"
-          show-icon
-        >
-          <template #default>
-            <el-button size="small" @click="fetchMCPTools">重新加载</el-button>
-          </template>
-        </el-alert>
-        <el-table v-else :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
-          <el-table-column type="expand">
-            <template #default="scope">
-              <div class="mcp-tool-expand">
-                <div v-if="scope.row.usage" class="mcp-tool-usage"><span class="mcp-expand-label">使用场景：</span>{{ scope.row.usage }}</div>
-                <template v-if="scope.row.input_schema">
-                  <div class="mcp-expand-label">参数契约（input_schema）：</div>
-                  <pre class="mcp-schema-pre">{{ formatSchema(scope.row.input_schema) }}</pre>
+        <el-collapse-item title="工具清单" name="tools-list">
+          <div class="mcp-table-scroll-hint">左右滑动表格可查看方法、REST 路径和类型</div>
+          <div v-loading="mcpToolsLoading" class="mcp-tools-table">
+            <el-alert
+              v-if="mcpToolsError"
+              :title="mcpToolsError"
+              type="error"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <el-button size="small" @click="fetchMCPTools">重新加载</el-button>
+              </template>
+            </el-alert>
+            <el-table v-else :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
+              <el-table-column type="expand">
+                <template #default="scope">
+                  <div class="mcp-tool-expand">
+                    <div v-if="scope.row.usage" class="mcp-tool-usage"><span class="mcp-expand-label">使用场景：</span>{{ scope.row.usage }}</div>
+                    <template v-if="scope.row.input_schema">
+                      <div class="mcp-expand-label">参数契约（input_schema）：</div>
+                      <pre class="mcp-schema-pre">{{ formatSchema(scope.row.input_schema) }}</pre>
+                    </template>
+                    <div v-else class="mcp-tool-usage"><span class="mcp-expand-label">参数：</span>无（空对象调用）</div>
+                  </div>
                 </template>
-                <div v-else class="mcp-tool-usage"><span class="mcp-expand-label">参数：</span>无（空对象调用）</div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="name" label="名称" min-width="180" />
-          <el-table-column label="详细描述" min-width="260">
-            <template #default="scope">
-              <span class="mcp-tool-description">{{ scope.row.description }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="方法与 REST 路径" min-width="260">
-            <template #default="scope">
-              <code>{{ scope.row.method }} {{ scope.row.path }}</code>
-            </template>
-          </el-table-column>
-          <el-table-column label="类型" width="90" align="center">
-            <template #default="scope">
-              <el-tag :type="scope.row.read_only ? 'success' : 'warning'" size="small">
-                {{ scope.row.read_only ? '只读' : '写' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+              </el-table-column>
+              <el-table-column prop="name" label="名称" min-width="180" />
+              <el-table-column label="详细描述" min-width="260">
+                <template #default="scope">
+                  <span class="mcp-tool-description">{{ scope.row.description }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="方法与 REST 路径" min-width="260">
+                <template #default="scope">
+                  <code>{{ scope.row.method }} {{ scope.row.path }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="90" align="center">
+                <template #default="scope">
+                  <el-tag :type="scope.row.read_only ? 'success' : 'warning'" size="small">
+                    {{ scope.row.read_only ? '只读' : '写' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-dialog>
 
     <el-dialog
@@ -780,7 +780,6 @@ onMounted(() => {
 .mcp-auth-alert :deep(.el-alert__title) { font-size: 13px; }
 .mcp-auth-alert :deep(.el-alert__description) { font-size: 12px; line-height: 1.6; margin-top: 2px; }
 .mcp-auth-alert :deep(.el-alert__icon) { font-size: 15px; width: 15px; }
-.mcp-tools-title { margin-bottom: 12px; font-weight: 600; }
 
 .mcp-agent-guide { margin-bottom: 20px; }
 .mcp-guide-subtitle { font-weight: 600; margin: 10px 0 6px; }
