@@ -27,12 +27,13 @@ var (
 )
 
 func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.ClusterLoginTicketClaims, now time.Time) (models.ClusterLoginTicketResponse, error) {
-	var ipAddress, protocol, accessURL, keyHash string
+	var ipAddress, protocol, accessURL, keyHash, nodeName string
 	var port int
 	var lastSeen sql.NullTime
 	var approved bool
-	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(cluster_token_hash,''),last_seen,is_approved FROM nodes WHERE id=?`, claims.NodeID).
-		Scan(&ipAddress, &port, &protocol, &accessURL, &keyHash, &lastSeen, &approved); err != nil {
+	// name 一并取出:审计事件需带节点名(与服务控制事件「节点 %d（%s）」同格式)。
+	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(cluster_token_hash,''),COALESCE(name,''),last_seen,is_approved FROM nodes WHERE id=?`, claims.NodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL, &keyHash, &nodeName, &lastSeen, &approved); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
 		}
@@ -75,7 +76,7 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	if accessURL == "" {
 		accessURL = protocol + "://" + net.JoinHostPort(ipAddress, strconv.Itoa(port))
 	}
-	return models.ClusterLoginTicketResponse{Ticket: ticket, URL: accessURL}, nil
+	return models.ClusterLoginTicketResponse{Ticket: ticket, URL: accessURL, NodeName: nodeName}, nil
 }
 
 // CL42-5（第 42 轮审计裁定·设计声明）：票据登录刻意不检查从节点本地

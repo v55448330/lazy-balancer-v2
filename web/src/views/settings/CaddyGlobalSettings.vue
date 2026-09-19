@@ -22,7 +22,7 @@
       </el-form-item>
       <el-form-item label="日志大小">
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="isReadOnly" :min="100" :max="10240" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-block">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100；同时控制各规则的访问日志滚动</el-text>
+        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，单文件超限后滚动归档并保留 5 个；建议 100；同时控制规则访问日志</el-text>
       </el-form-item>
       <el-form-item label="运行日志">
         <el-button size="small" :icon="View" @click="openLogDialog">查看日志</el-button>

@@ -92,6 +92,8 @@ type ClusterServiceControlIssue struct {
 type ClusterLoginTicketResponse struct {
 	Ticket string `json:"ticket"`
 	URL    string `json:"url"`
+	// NodeName 仅供主端本地使用(审计事件带节点名),不随响应下发。
+	NodeName string `json:"-"`
 }
 
 type ClusterModeRequest struct {

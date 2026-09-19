@@ -67,7 +67,9 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		clusterError(c, status, "生成登录票据失败", err)
 		return
 	}
-	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")))
+	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,CL10-N14:ID 必留,
+	// nodes.name 无 UNIQUE,仅名无法定位行)。
+	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d（%s）", nodeID, response.NodeName), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, response)
 }
 

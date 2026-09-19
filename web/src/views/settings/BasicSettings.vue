@@ -397,7 +397,7 @@
       </div>
       <template #footer>
         <el-button @click="autoBackupVisible = false">取消</el-button>
-        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" @click="runAutoBackupNow">
+        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupSectionsValid" title="按已保存的自动备份设置执行一次备份；上方表单改动需先保存设置" @click="runAutoBackupNow">
           立即备份
         </el-button>
         <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid" @click="saveAutoBackupSettings">
@@ -727,14 +727,15 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
   }
 }
 
-// 「立即备份」先保存当前表单再触发——避免改了范围未保存的困惑
+// 「立即备份」只触发执行,不保存/修改设置(2026-09-20 用户裁定)——备份按
+// 已保存的设置(频率/范围等)执行;弹框中未保存的表单改动对本次手动备份
+// 不生效,避免每次手动备份都重写设置并产生多余的「备份设置」审计事件。
 const runAutoBackupNow = async (): Promise<void> => {
   if (autoBackupRunning.value) return
   if (!autoBackupSectionsValid.value) {
     ElMessage.warning('备份范围至少需选择一个分类')
     return
   }
-  if (!(await saveAutoBackupSettings())) return
   autoBackupRunning.value = true
   try {
     await request.post('/auto-backup/run')

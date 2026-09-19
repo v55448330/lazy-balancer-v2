@@ -255,8 +255,8 @@ func setupAutoBackupTestDB(t *testing.T) {
 
 func setAutoBackupTestExecutor(t *testing.T, calls *[]string, err error) {
 	t.Helper()
-	SetAutoBackupExecutor(func(trigger string) error {
-		*calls = append(*calls, trigger)
+	SetAutoBackupExecutor(func(trigger, operator string) error {
+		*calls = append(*calls, trigger+":"+operator)
 		return err
 	})
 	t.Cleanup(func() { SetAutoBackupExecutor(nil) })
@@ -278,8 +278,9 @@ func TestAutoBackupTick_runsWhenDueAndAdvancesLastRun(t *testing.T) {
 	autoBackupTick(now.Add(time.Minute))
 
 	// Then: 仅执行一次,trigger=schedule,last_run=当日槽
-	if len(calls) != 1 || calls[0] != "schedule" {
-		t.Fatalf("calls=%v, want single schedule", calls)
+	// 调度路径操作者恒为 system(手动路径记登录用户,handlers 层钉住)
+	if len(calls) != 1 || calls[0] != "schedule:system" {
+		t.Fatalf("calls=%v, want single schedule:system", calls)
 	}
 	var lastRun string
 	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); err != nil {

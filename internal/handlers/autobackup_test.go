@@ -66,7 +66,7 @@ func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 	}
 
 	// When
-	if err := h.RunAutoBackupOnce("manual"); err != nil {
+	if err := h.RunAutoBackupOnce("manual", "system"); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 	h.cfg.BackupDir = blocked
 
 	// When
-	err := h.RunAutoBackupOnce("schedule")
+	err := h.RunAutoBackupOnce("schedule", "system")
 
 	// Then: 返回错误 + failed 行 + 自动备份审计(失败留痕)
 	if err == nil {
@@ -509,7 +509,7 @@ func TestRestoreAutoBackup_restoresBackedUpState(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_restore','127.0.0.1',9000,1,1)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RunAutoBackupOnce("manual"); err != nil {
+	if err := h.RunAutoBackupOnce("manual", "system"); err != nil {
 		t.Fatalf("run backup: %v", err)
 	}
 	var id int64
@@ -594,7 +594,7 @@ func TestRunAutoBackupOnce_concurrentRunRejected(t *testing.T) {
 	if !autoBackupRunMu.TryLock() {
 		t.Fatal("前置锁定失败")
 	}
-	err := h.RunAutoBackupOnce("manual")
+	err := h.RunAutoBackupOnce("manual", "system")
 	autoBackupRunMu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "正在执行") {
 		t.Fatalf("err=%v, want 已有任务执行中报错", err)
@@ -618,10 +618,10 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	}
 
 	// When: keep=1 下连跑两次(同秒冲突由文件名 -2 后缀消化)
-	if err := h.RunAutoBackupOnce("schedule"); err != nil {
+	if err := h.RunAutoBackupOnce("schedule", "system"); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if err := h.RunAutoBackupOnce("schedule"); err != nil {
+	if err := h.RunAutoBackupOnce("schedule", "system"); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 
@@ -688,5 +688,35 @@ func TestPruneAutoBackups_fileRemovalOutcomes(t *testing.T) {
 	}
 	if rows := autoBackupRows(t, "WHERE filename=?", normal); len(rows) != 0 {
 		t.Fatalf("normal rows=%d, want 0(文件删除成功照常删行)", len(rows))
+	}
+}
+
+// 用户反馈(2026-09-20):手动触发自动备份的审计操作人恒为 system——手动触发
+// 应记当前登录用户,仅调度触发记 system(RunAutoBackupOnce 增操作者参数)。
+func TestRunAutoBackupNow_auditOperatorIsCurrentUser(t *testing.T) {
+	// Given: 主节点 + 已登录用户 operator-zhang
+	h := newAutoBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auto-backup/run", func(c *gin.Context) {
+		c.Set("username", "operator-zhang")
+		h.RunAutoBackupNow(c)
+	})
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/auto-backup/run", nil)
+	router.ServeHTTP(response, request)
+
+	// Then: 200 且「手动备份」审计行操作人为 operator-zhang(修复前恒 system)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var username string
+	if err := db.AuditDB.QueryRow(`SELECT username FROM audit_log WHERE action='手动备份' ORDER BY id DESC LIMIT 1`).Scan(&username); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if username != "operator-zhang" {
+		t.Fatalf("手动备份 audit username=%q, want operator-zhang(调度路径才记 system)", username)
 	}
 }

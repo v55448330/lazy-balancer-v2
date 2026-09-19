@@ -295,6 +295,15 @@ const openServiceControlDialog = (node: ClusterNode): void => {
 
 const executeServiceControl = async (): Promise<void> => {
   if (!serviceControlNode.value || !serviceControlAction.value) return
+  // 2026-09-20 用户裁定:执行服务控制前必须二次确认(停止 Caddy/重启应用
+  // 会中断从节点服务),复用本文件 confirmAction(与清除指纹钉同格)。
+  const option = serviceControlOptions.find((o) => o.value === serviceControlAction.value)
+  const nodeName = serviceControlNodeLive.value?.name ?? `#${serviceControlNode.value.id}`
+  const confirmed = await confirmAction(
+    `确定对节点“${nodeName}”执行「${option?.label ?? serviceControlAction.value}」吗？${option?.description ?? ''}`,
+    '服务控制确认',
+  )
+  if (!confirmed) return
   serviceControlLoading.value = true
   try {
     await request.post(`/cluster/nodes/${serviceControlNode.value.id}/service`, { action: serviceControlAction.value })

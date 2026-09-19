@@ -24,18 +24,18 @@ var (
 	autoBackupDone   chan struct{}
 
 	autoBackupExecMu     sync.Mutex
-	autoBackupExecutor   func(trigger string) error
+	autoBackupExecutor   func(trigger, operator string) error
 	autoBackupTickWindow = time.Minute
 )
 
 // SetAutoBackupExecutor 注入备份执行器（main.go 装配 handlers 实现；nil 解除）。
-func SetAutoBackupExecutor(fn func(trigger string) error) {
+func SetAutoBackupExecutor(fn func(trigger, operator string) error) {
 	autoBackupExecMu.Lock()
 	autoBackupExecutor = fn
 	autoBackupExecMu.Unlock()
 }
 
-func currentAutoBackupExecutor() func(trigger string) error {
+func currentAutoBackupExecutor() func(trigger, operator string) error {
 	autoBackupExecMu.Lock()
 	defer autoBackupExecMu.Unlock()
 	return autoBackupExecutor
@@ -169,7 +169,7 @@ func autoBackupTick(now time.Time) {
 	if exec == nil {
 		return
 	}
-	if err := exec("schedule"); err != nil {
+	if err := exec("schedule", "system"); err != nil {
 		Logf("error", "自动备份执行失败: %v", err)
 	}
 	// 成败均推进 last_run——失败已由执行器落 failed 行+审计，此处防重试风暴

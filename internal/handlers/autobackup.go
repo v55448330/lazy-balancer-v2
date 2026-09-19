@@ -165,7 +165,9 @@ func pruneAutoBackups(dir string, keepSuccess, keepFailed int) {
 // buildLbbakExport → .tmp+rename 原子写盘 → 落行 → 裁剪 → 审计。
 // 失败路径同样落 failed 行与审计（错误返回给调用方）。TryLock 并发守卫：
 // 调度与手动同时触发时后到者立即报错，不排队。
-func (h *Handlers) RunAutoBackupOnce(trigger string) error {
+// operator 为审计操作者:调度路径传 system,手动触发传当前登录用户
+// (2026-09-20 用户反馈:手动备份审计恒 system,看不出是谁点的)。
+func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	if !autoBackupRunMu.TryLock() {
 		return errors.New("已有备份任务正在执行，请稍后重试")
 	}
@@ -188,7 +190,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger string) error {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)
 		}
 		services.Logf("warn", "%s失败：%s（%s）", action, stage, err)
-		services.RecordAuditLog("system", "备份失败", "配置备份", services.FormatAuditDetail(
+		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
 			"触发："+triggerLabel, "文件："+filename, stage+"："+err.Error(), services.AuditResultPart("failed")), "")
 		return wrapped
 	}
@@ -224,7 +226,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger string) error {
 	// 文件+行同删;裁剪失败仅告警不翻转本次成功结果。
 	pruneAutoBackups(dir, loadAutoBackupKeepSetting(), autoBackupFailedRowsKeep)
 	services.Logf("info", "%s完成：文件 %s（%s，%.1f KB）", action, filename, countsSummary, float64(len(payload))/1024)
-	services.RecordAuditLog("system", action, "配置备份", services.FormatAuditDetail(
+	services.RecordAuditLog(operator, action, "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", id), "文件："+filename, countsSummary,
 		fmt.Sprintf("大小：%d 字节", len(payload)), services.AuditResultPart("success")), "")
 	return nil
@@ -444,7 +446,11 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
 	}
-	if err := h.RunAutoBackupOnce("manual"); err != nil {
+	operator := c.GetString("username")
+	if operator == "" {
+		operator = "system"
+	}
+	if err := h.RunAutoBackupOnce("manual", operator); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份执行失败: " + err.Error()})
 		return
 	}
