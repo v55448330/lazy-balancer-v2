@@ -327,9 +327,9 @@ func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing
 	}
 }
 
-// SC-GEN-04：错误路由使用首绑定（最低 policy_id）启用策略的拦截页；匹配表达式
-// 只含统一 403 interruption 子句（全部 coraza 命中——CRS/自定义/IP ACL/GeoIP——
-// 同一中断形态）。
+// SC-GEN-04：错误路由 = 每规则 403 兜底（host 限定，首绑定策略页，承接预检
+// 合并中断与无页策略中断）+ 每有页策略 1 条合成码归因路由（无 host，渲染
+// 各自拦截页与状态码）+ 限流 429（首绑定策略页，恒 429）。
 func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T) {
 	// Given p1(geoip 451+page7) < p2(geoip 503+page8+限流)
 	useTemporaryCertDir(t)
@@ -355,30 +355,46 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (block page + rate limit), got %#v", errorRoutes)
+	if len(errorRoutes) != 4 {
+		t.Fatalf("want 4 error routes (fallback + 2 attribution + rate limit), got %#v", errorRoutes)
 	}
 	var blockPageRoute, rateLimitRoute map[string]interface{}
+	bySynthetic := make(map[string]map[string]interface{}, 2)
 	for _, routeValue := range errorRoutes {
 		route := mustMap(t, routeValue, "error route")
 		expr, _ := routeMatcher(t, route)["expression"].(string)
-		if expr == "{http.error.status_code} == 429" {
+		switch {
+		case expr == "{http.error.status_code} == 429":
 			rateLimitRoute = route
-		} else {
+		case strings.Contains(expr, "== 403"):
 			blockPageRoute = route
+		case strings.Contains(expr, "== 481 &&"):
+			bySynthetic["481"] = route
+		case strings.Contains(expr, "== 482 &&"):
+			bySynthetic["482"] = route
 		}
 	}
-	if blockPageRoute == nil || rateLimitRoute == nil {
-		t.Fatalf("missing error route kind: block=%v rateLimit=%v", blockPageRoute != nil, rateLimitRoute != nil)
+	if blockPageRoute == nil || rateLimitRoute == nil || bySynthetic["481"] == nil || bySynthetic["482"] == nil {
+		t.Fatalf("missing error route kind: fallback=%v rateLimit=%v attr481=%v attr482=%v",
+			blockPageRoute != nil, rateLimitRoute != nil, bySynthetic["481"] != nil, bySynthetic["482"] != nil)
 	}
-	// 拦截页错误路由：首绑定策略（p1）的页面与状态码
+	// 兜底路由：host 限定，首绑定策略（p1）的页面与状态码，统一 403 interruption
+	// 子句（"GeoIP blocked" 子句已消亡——预检合并中断与无页策略中断走此）
 	handler := firstHandler(t, blockPageRoute)
 	assertEqual(t, handler["body"], "<html>first-block</html>")
 	assertEqual(t, handler["status_code"], 451)
-	// 匹配表达式只剩统一 403 interruption 子句——v2.2.0 GeoIP 改走 coraza 后
-	// 地域拦截与 CRS/自定义/IP ACL 同一中断形态（"GeoIP blocked" 子句已消亡）
 	wantExpr := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
 	assertEqual(t, routeMatcher(t, blockPageRoute)["expression"], wantExpr)
+	// 归因路由：逐策略渲染各自拦截页与状态码（481=p1/451，482=p2/503），无 host
+	for code, wantBodyStatus := range map[string][2]interface{}{"481": {"<html>first-block</html>", 451}, "482": {"<html>second-block</html>", 503}} {
+		route := bySynthetic[code]
+		if _, hasHost := routeMatcher(t, route)["host"]; hasHost {
+			t.Fatalf("attribution route %s must not carry host matcher: %#v", code, routeMatcher(t, route))
+		}
+		h := firstHandler(t, route)
+		assertEqual(t, h["body"], wantBodyStatus[0])
+		assertEqual(t, h["status_code"], wantBodyStatus[1])
+	}
 	// 限流错误路由同样使用首绑定策略的拦截页，但状态码恒 429（语义正确+
 	// 使 code=429 指标可计量），不再取策略 BlockStatusCode
 	rlHandler := firstHandler(t, rateLimitRoute)

@@ -569,6 +569,15 @@
                       :title="hint"
                       class="bound-rule-alert"
                     />
+                    <el-alert
+                      v-for="hint in row.infoHints"
+                      :key="hint"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      :title="hint"
+                      class="bound-rule-alert"
+                    />
                   </div>
                 </div>
                 <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量；同一规则绑定多条策略时按策略 ID 升序依次评估</div>
@@ -582,14 +591,14 @@
               <div v-if="form.block_page_id === 0" class="form-tip-line">不生成拦截页面错误路由，拦截返回 Caddy 默认 403</div>
               <div v-else-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
-              <!-- v2.2.0：按规则逐条展示拦截页面是否生效（仅首个启用且配置了拦截页的策略生效），
-                   保持与已关联列表中每条规则的顺序落点一致。 -->
+              <!-- 拦截页归因：拦截时显示实际触发策略的拦截页与状态码——每条启用且
+                   配置了拦截页的策略各自生效，不再以首绑定策略为准。 -->
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
                 <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
                   <span class="block-page-rule-annotation-name">{{ row.name }}</span>
-                  <span v-if="row.selfBlockPageActive" class="block-page-rule-annotation-status is-active">✓ 拦截页面当前生效</span>
+                  <span v-if="row.selfBlockPageActive" class="block-page-rule-annotation-status is-active">✓ 拦截页面生效中（触发本策略拦截时显示）</span>
                   <span v-else-if="!form.enabled" class="block-page-rule-annotation-status is-disabled">策略禁用中，拦截页面不生效</span>
-                  <span v-else class="block-page-rule-annotation-status is-warning">拦截页面以首位启用且配置了拦截页面的策略为准（本策略当前第 {{ row.selfPosition }} 位）</span>
+                  <span v-else class="block-page-rule-annotation-status is-warning">拦截时显示实际触发策略的拦截页与状态码；多策略 IP 访问控制的合并拦截显示首位策略的拦截页</span>
                 </div>
               </div>
             </el-form-item>
@@ -773,15 +782,15 @@ interface PolicySummary { id: number; name: string; mode: string; enabled: boole
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
-interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number }
+interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number; block_status_code?: number }
 // GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
 // 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
 interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
 interface CustomRuleRef { id: number; action: string }
-interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number }
-interface BoundRuleRow { caddyId: string; name: string; domain: string; listenPort: number; chain: ChainEntry[]; selfPosition: number; selfBlockPageActive: boolean; mergedCount: number; showPerfTip: boolean; hints: string[] }
+interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
+interface BoundRuleRow { caddyId: string; name: string; domain: string; listenPort: number; chain: ChainEntry[]; selfBlockPageActive: boolean; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
 interface CRSRuleOption { filename: string; category: string }
-interface BlockPage { id: number; name: string }
+interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
 
@@ -1668,12 +1677,13 @@ const parseCustomRuleRefs = (raw: unknown): CustomRuleRef[] => {
 
 // 展示链：完整绑定列表（含禁用策略，标灰）+ 本策略，按 policy_id ASC。
 // 本策略条目以表单实时值为准（编辑中的 name/enabled/block_page_id 可能与服务端快照不同）；
-// blockPageId 用于「首个启用且配置了拦截页的策略」判定（与后端 caddy.go 生成口径一致）。
+// blockPageId/blockStatusCode 用于拦截页归因提示（配置不一致/空页预告，与后端
+// caddy.go 按触发策略归因口径一致——哪条策略触发的拦截就显示哪条策略的拦截页）。
 const buildDisplayChain = (caddyId: string): ChainEntry[] => {
   const existing = (securityBindings.value[caddyId] || [])
     .filter((b) => b.policy_id !== editingId.value)
-    .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false, blockPageId: b.block_page_id }))
-  const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id }
+    .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false, blockPageId: b.block_page_id, blockStatusCode: b.block_status_code }))
+  const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id, blockStatusCode: form.value.block_status_code }
   const all = [...existing, self]
   all.sort((a, b) => (a.policyId ?? Number.MAX_SAFE_INTEGER) - (b.policyId ?? Number.MAX_SAFE_INTEGER))
   return all
@@ -1992,27 +2002,45 @@ const whitelistSectionAlert = computed<string>(() => {
   return items.slice(0, 2).join('；') + (items.length > 2 ? `；共 ${items.length} 条类似冲突` : '')
 })
 
-// Step 4 已关联规则的逐条视图：绑定链 + 本策略落点 + 拦截页面生效标注 + 冲突提示
+// 拦截页归因（哪条策略触发的拦截就显示哪条策略的拦截页）的两类可静态检测提示：
+// ② 空页预告（warn）——策略配置了拦截页但页已删除/内容为空（后端等同无页，
+// 该策略 deny 不抬码，中断落首绑定有页策略的 403 兜底路由）。
+const blockPageBroken = (e: ChainEntry): boolean => {
+  const id = e.blockPageId ?? 0
+  if (id <= 0) return false
+  const page = blockPages.value.find((p) => p.id === id)
+  return !page || (page.content ?? '') === ''
+}
+
+// Step 4 已关联规则的逐条视图：绑定链 + 拦截页面生效标注 + 冲突提示
 const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   const chain = buildDisplayChain(caddyId)
-  const selfIndex = chain.findIndex((e) => e.isSelf)
-  // 拦截页生效口径与后端一致：绑定链中首个「启用且配置了拦截页（block_page_id>0）」
-  // 的策略；无符合条目时无任何策略的拦截页生效。
-  const firstEnabledWithPage = chain.find((e) => e.enabled && (e.blockPageId ?? 0) > 0)
+  const enabledEntries = chain.filter((e) => e.enabled)
+  // ② 空页预告（warn 级，与冲突提示同管线）
+  const emptyPageHints = enabledEntries
+    .filter((e) => blockPageBroken(e))
+    .map((e) => `策略「${e.name}」配置的拦截页面已删除或内容为空，该策略拦截时将显示首位策略的拦截页`)
+  // ① 配置不一致提示（info 级）：启用策略间 (拦截页, 状态码) 组合不一致——
+  // 非错误，声明归因语义：按实际触发的策略显示各自的拦截页
+  const combos = new Set(enabledEntries.map((e) => `${e.blockPageId ?? 0}:${e.blockStatusCode || 403}`))
+  const infoHints: string[] = []
+  if (enabledEntries.length > 1 && combos.size > 1) {
+    infoHints.push('这些策略的拦截页/状态码不同——拦截时按实际触发的策略显示各自的拦截页')
+  }
   return {
     caddyId,
     name: rule?.name || caddyId,
     domain: rule?.domain || '',
     listenPort: rule?.listen_port ?? 0,
     chain,
-    selfPosition: selfIndex + 1,
-    selfBlockPageActive: form.value.enabled && firstEnabledWithPage?.isSelf === true,
+    selfBlockPageActive: form.value.enabled && form.value.block_page_id > 0,
     // 审计 W-S5（第六轮）：性能提示应按实际生效的处理链计——禁用策略不产生处理链，
     // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
-    mergedCount: chain.filter((e) => e.enabled).length,
-    showPerfTip: chain.filter((e) => e.enabled).length > PERF_POLICY_THRESHOLD,
-    hints: computeBindingConflicts(buildConflictChain(caddyId)),
+    mergedCount: enabledEntries.length,
+    showPerfTip: enabledEntries.length > PERF_POLICY_THRESHOLD,
+    hints: [...computeBindingConflicts(buildConflictChain(caddyId)), ...emptyPageHints],
+    infoHints,
   }
 }))
 

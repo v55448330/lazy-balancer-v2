@@ -2892,7 +2892,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	// 修复前触发 Scan 报错静默丢绑定，而生成路径照常应用该策略。enabled 归一为 0
 	// 而非 schema 默认 1——生成路径以 WHERE enabled=1 把 NULL 当禁用，UI 标签须
 	// 与后端行为一致（区别于 List 详情的 COALESCE(enabled,1)：那里无 WHERE 过滤）。
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.rate_limit_enabled,0), COALESCE(p.block_page_id, 0)
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.rate_limit_enabled,0), COALESCE(p.block_page_id, 0), CASE WHEN p.block_status_code > 0 THEN p.block_status_code ELSE 403 END
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
 	if err != nil {
@@ -2901,20 +2901,24 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	}
 	defer rows.Close()
 	// block_page_id（D-I1）：前端据此计算「首个启用且配置了拦截页面的策略」，
-	// 与后端生成口径（首个 enabled 且 block_page_id>0）一致。
+	// 与后端生成口径（首个 enabled 且 block_page_id>0）一致。block_status_code
+	//（拦截页归因）：前端冲突提示与 Rules 页锁形弹框展示「页名(状态码)」，
+	// NULL/0 归一 403（CASE WHEN，非 COALESCE——库存未设置为 0 非 NULL）与
+	// 生成路径（buildBlockPageAttributionRoute 的 0→403）同口径。
 	type BindingInfo struct {
-		PolicyID    int    `json:"policy_id"`
-		Name        string `json:"name"`
-		Mode        string `json:"mode"`
-		Enabled     bool   `json:"enabled"`
-		RateLimit   bool   `json:"rate_limit_enabled"`
-		BlockPageID int    `json:"block_page_id"`
+		PolicyID        int    `json:"policy_id"`
+		Name            string `json:"name"`
+		Mode            string `json:"mode"`
+		Enabled         bool   `json:"enabled"`
+		RateLimit       bool   `json:"rate_limit_enabled"`
+		BlockPageID     int    `json:"block_page_id"`
+		BlockStatusCode int    `json:"block_status_code"`
 	}
 	result := map[string][]BindingInfo{}
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
-		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID); err != nil {
+		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID, &b.BlockStatusCode); err != nil {
 			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
 			services.Logf("warn", "security bindings: 跳过扫描失败行（规则绑定可能缺失）: %v", err)

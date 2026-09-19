@@ -110,7 +110,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	}
 
 	// When directives are built
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 
 	// Then the deny action carries no status override; the block page's status governs
 	if !strings.Contains(directives, `deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 拒绝规则 命中'`) {
@@ -127,7 +127,7 @@ func TestBuildCorazaDirectives_userAgentTargetUsesColonNotation(t *testing.T) {
 		CRSRuleGroups: json.RawMessage(`["9"]`),
 		CustomRules:   json.RawMessage(`[{"id":9,"name":"ua","enabled":true,"action":"pass","score":1,"conditions":[{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, "REQUEST_HEADERS:User-Agent") {
 		t.Fatalf("user_agent target must use colon notation:\n%s", directives)
 	}
@@ -144,7 +144,7 @@ func TestBuildCorazaDirectives_equalsOperatorEmitsStreq(t *testing.T) {
 		Mode:        "blocking",
 		CustomRules: json.RawMessage(`[{"id":11,"name":"等于规则","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"equals","pattern":"/admin"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, `SecRule REQUEST_URI "@streq /admin"`) {
 		t.Fatalf("equals must emit case-sensitive exact match @streq:\n%s", directives)
 	}
@@ -164,7 +164,7 @@ func TestEmitCustomRules_skipsDirtyRuleAmongCleanOnes(t *testing.T) {
 	}
 
 	// When emitted
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	got := sb.String()
 
 	// Then clean rules are emitted while dirty/empty rules are skipped without failing the whole config
@@ -200,7 +200,7 @@ func TestEmitCustomRules_invalidTargetOrOperatorSkipsWholeRule(t *testing.T) {
 	}
 
 	// When emitted
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	got := sb.String()
 
 	// Then：非法 target/operator 的规则整条跳过（绝不产生缺 ID 起始条或悬空 chain 的部分发射）
@@ -248,7 +248,7 @@ func TestEmitCustomRules_invalidRuleLogsSkipAndSparesCleanRules(t *testing.T) {
 	}
 
 	// When emitted
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	logged := logs.String()
 
 	// Then the two dirty rules are logged with their ID/name and the skip marker
@@ -287,7 +287,7 @@ func TestEmitCustomRules_multiConditionSetvarOnLastChainElement(t *testing.T) {
 	}
 
 	// When
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	got := sb.String()
 
 	// Then：起始条动作串不得携带 setvar（起始条命中而末条未命中时不得泄漏计分）
@@ -338,7 +338,7 @@ func TestEmitCustomRules_singleConditionSetvarStaysOnRule(t *testing.T) {
 		}},
 	}
 
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	got := sb.String()
 
 	want := `"id:10030,phase:1,pass,log,setvar:tx.inbound_anomaly_score_pl1=+1,msg:'自定义规则 单条件计分 命中'"`
@@ -356,7 +356,7 @@ func TestEmitCustomRules_assignsUniqueSyntheticIDsToLegacyIDLessRules(t *testing
 	}
 
 	// When：发射
-	emitCustomRules(&sb, rules)
+	emitCustomRules(&sb, rules, 0)
 	got := sb.String()
 
 	// Then：按序获得不同合成 id（1000000+n），不再共用 id:10000 造成重复 SecRule id
@@ -387,7 +387,7 @@ func TestEmitCustomRules_bodyTargetScansParsedBodyCollections(t *testing.T) {
 		{ID: 6, Name: "body包含", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
 			{Target: "body", Operator: "contains", Pattern: "evil"},
 		}},
-	})
+	}, 0)
 
 	// When
 	got := sb.String()

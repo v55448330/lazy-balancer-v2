@@ -32,39 +32,41 @@
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
-              <el-tooltip
+              <el-popover
                 v-if="ruleProtections(row.caddy_id).length > 0"
                 placement="top"
-                effect="light"
+                trigger="hover"
+                :width="320"
               >
-                <template #content>
-                  <div class="cert-tooltip security-tooltip">
-                    <div class="tooltip-title">安全防护已启用</div>
-                    <div
-                      v-for="group in ruleProtections(row.caddy_id)"
-                      :key="group.key"
-                      class="policy-group"
-                      :class="{ 'is-disabled': !group.enabled }"
-                    >
-                      <div class="policy-group-header">
-                        <span class="policy-order">#{{ group.order }}</span>
-                        <span class="policy-name" :title="group.name">{{ group.name }}</span>
-                        <el-tag v-if="group.blockPageActive" type="warning" size="small" effect="plain">拦截页生效中</el-tag>
-                        <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
-                      </div>
-                      <div v-for="protection in group.rows" :key="protection.label" class="cert-row">
-                        <span class="cert-label">{{ protection.label }}</span>
-                        <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
-                      </div>
+                <template #reference>
+                  <el-icon
+                    :size="14"
+                    class="acl-lock-icon is-allow"
+                    tabindex="0"
+                  ><Lock /></el-icon>
+                </template>
+                <div class="cert-tooltip security-tooltip">
+                  <div class="tooltip-title">安全防护已启用</div>
+                  <div v-if="ruleProtections(row.caddy_id).length > 1" class="security-attribution-note">按触发策略显示各自拦截页</div>
+                  <div
+                    v-for="group in ruleProtections(row.caddy_id)"
+                    :key="group.key"
+                    class="policy-group"
+                    :class="{ 'is-disabled': !group.enabled }"
+                  >
+                    <div class="policy-group-header">
+                      <span class="policy-order">#{{ group.order }}</span>
+                      <span class="policy-name" :title="group.name">{{ group.name }}</span>
+                      <el-tag v-if="group.blockPageActive" type="warning" size="small" effect="plain">拦截页生效中</el-tag>
+                      <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
+                    </div>
+                    <div v-for="protection in group.rows" :key="protection.label" class="cert-row">
+                      <span class="cert-label">{{ protection.label }}</span>
+                      <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
                     </div>
                   </div>
-                </template>
-                <el-icon
-                  :size="14"
-                  class="acl-lock-icon is-allow"
-                  tabindex="0"
-                ><Lock /></el-icon>
-              </el-tooltip>
+                </div>
+              </el-popover>
               <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
@@ -1250,6 +1252,7 @@ class CertInfoRefreshError extends Error {
 
 const rules = ref<Rule[]>([])
 // v2.2.0：一规则可绑多策略——/security/bindings 返回 rule_caddy_id → 绑定数组（policy_id ASC）。
+
 interface SecurityBindingInfo {
   policy_id: number
   name: string
@@ -1257,6 +1260,7 @@ interface SecurityBindingInfo {
   enabled: boolean
   rate_limit_enabled: boolean
   block_page_id?: number
+  block_status_code?: number
 }
 
 const securityBindings = ref<Record<string, SecurityBindingInfo[]>>({})
@@ -1292,17 +1296,22 @@ const securityPolicies = ref<SecurityPolicySummary[]>([])
 //（内联 ∪ 引用列表条目），缺失的引用列表跳过（防御性回退为仅内联）
 interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
 const ipLists = ref<IPListRefOption[]>([])
+// 拦截页 id → {name, content} 映射（锁形弹框「拦截页」行：页名展示与已删/空失效判定）
+interface BlockPageOption { id: number; name: string; content?: string }
+const blockPages = ref<BlockPageOption[]>([])
 
 const fetchSecurityBindings = async () => {
   try {
-    const [bindingsRes, policiesRes, ipListRes] = await Promise.all([
+    const [bindingsRes, policiesRes, ipListRes, blockPagesRes] = await Promise.all([
       request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
       request.get<APIResponse<SecurityPolicySummary[]>>('/security/policies'),
       request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'),
+      request.get<APIResponse<BlockPageOption[]>>('/security/block-pages'),
     ])
     if (bindingsRes.data) securityBindings.value = bindingsRes.data
     if (policiesRes.data) securityPolicies.value = policiesRes.data
     if (ipListRes.data) ipLists.value = ipListRes.data
+    if (blockPagesRes.data) blockPages.value = blockPagesRes.data
   } catch { /* silent */ }
 }
 
@@ -1370,11 +1379,10 @@ const parseGeoipCountryCount = (raw: string): number => {
 const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
   const bindings = securityBindings.value[caddyID]
   if (!bindings || bindings.length === 0) return []
-  // v2.2.0：逐绑定策略分组（后端已按 policy_id ASC 排序）。序号 = 绑定顺序（1-based）；
-  // 拦截优先级 = 绑定顺序，首个启用且配置了拦截页（block_page_id>0）策略的拦截页生效
-  //（与后端 caddy.go 生成口径一致；Caddy 只为启用策略生成配置，绑定列表可能含禁用策略）；
-  // 禁用策略标灰但保留显示（绑定关系可见，不再消失）。全部禁用/均未配置拦截页时无策略生效，不标注拦截页。
-  const firstEnabledIndex = bindings.findIndex((b) => b.enabled && (b.block_page_id ?? 0) > 0)
+  // 拦截页归因（哪条策略触发的拦截就显示哪条策略的拦截页）：每条绑定策略组内
+  // 展示各自「拦截页」行——配置了页 → <页名>(状态码 XXX)；block_page_id=0 →
+  // 默认 403；页已删/内容空 → 已失效(回落首策略)。「拦截页生效中」badge 按
+  // 每条启用且页有效的策略各自显示；禁用策略标灰但保留显示（绑定关系可见）。
   return bindings.map((binding, index) => {
     const policy = securityPolicies.value.find((p) => p.id === binding.policy_id)
     const rows: ProtectionRow[] = []
@@ -1399,12 +1407,19 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
       rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
     }
     if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
+    // 「拦截页」行（归因口径，与 SecurityPolicies.vue 空页判定同源）
+    const pageId = binding.block_page_id ?? 0
+    const page = pageId > 0 ? blockPages.value.find((p) => p.id === pageId) : undefined
+    const pageBroken = pageId > 0 && (!page || (page.content ?? '') === '')
+    if (pageId <= 0) rows.push({ label: '拦截页', detail: '默认 403' })
+    else if (pageBroken) rows.push({ label: '拦截页', detail: '已失效（回落首策略）' })
+    else rows.push({ label: '拦截页', detail: `${page?.name}（状态码 ${binding.block_status_code || 403}）` })
     return {
       key: binding.policy_id,
       order: index + 1,
       name: binding.name,
       enabled: binding.enabled,
-      blockPageActive: index === firstEnabledIndex,
+      blockPageActive: binding.enabled && pageId > 0 && !pageBroken,
       rows,
     }
   })
@@ -3322,6 +3337,7 @@ onUnmounted(() => {
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
 .security-tooltip { min-width: 200px; font-size: 13px; }
+.security-tooltip .security-attribution-note { margin: 2px 0 8px; font-size: 12px; color: #6b7280; }
 /* 防护摘要含合并计数 + 信任启用态（如「黑名单模式 · 列表 12 条 · 黑名单 3 条」），
    240px 会折入省略号；放宽到 320px，完整文本仍有 :title 兜底 */
 .security-tooltip .cert-value { max-width: 320px; }

@@ -821,6 +821,13 @@ type caddyConfigStore interface {
 type securityPolicyContext struct {
 	policyByRule  map[string][]*models.SecurityPolicy
 	blockPageByID map[int]string
+	// policySynthetic 是拦截页按触发策略归因的合成中断码分配（policy_id →
+	// 481+序号）：取全部被任一规则绑定的启用策略中 BlockPageID>0 且页内容
+	// 非空者，按 policy_id ASC 分配。按策略身份（非绑定序）使同一策略在所有
+	// 规则上同码，错误路由可按策略去重。无有效页的策略不进表（取值 0=不抬
+	// 码），避免合成码无路由承接泄漏到客户端。区间上限 599（合法状态码），
+	// 超出策略不进表（回落 403 兜底路由）。
+	policySynthetic map[int]int
 	// store 是预载所用 caddyConfigStore（事务内生成即 tx）：A-I1——
 	// BuildCorazaDirectives → resolvePolicyCustomRules 必须沿同一 store 读取
 	// security_custom_rules，否则 v2 导入事务内重插的规则在渲染期静默丢失。
@@ -836,9 +843,10 @@ type securityPolicyContext struct {
 // 顺序收集启用策略（禁用绑定仅占位，不产生元素）。
 func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
 	ctx := &securityPolicyContext{
-		policyByRule:  make(map[string][]*models.SecurityPolicy),
-		blockPageByID: make(map[int]string),
-		store:         store,
+		policyByRule:    make(map[string][]*models.SecurityPolicy),
+		blockPageByID:   make(map[int]string),
+		policySynthetic: make(map[int]int),
+		store:           store,
 	}
 	bindingRows, err := store.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rule_caddy_id, policy_id ASC`)
 	if err != nil {
@@ -970,8 +978,33 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	if err := pageRows.Close(); err != nil {
 		return nil, err
 	}
+	// 合成中断码按策略身份分配（policySynthetic 字段注释）：遍历去重后的
+	// 启用策略（policiesByID 仅含被绑定且 enabled 者），页内容非空才获码；
+	// policy_id ASC 保证多次生成同码（路由去重与钉测试确定性前提）。
+	syntheticIDs := make([]int, 0, len(policiesByID))
+	for policyID, policy := range policiesByID {
+		if policy.BlockPageID > 0 && ctx.blockPageByID[policy.BlockPageID] != "" {
+			syntheticIDs = append(syntheticIDs, policyID)
+		}
+	}
+	sort.Ints(syntheticIDs)
+	for i, policyID := range syntheticIDs {
+		if blockPageSyntheticBase+i > blockPageSyntheticMax {
+			break
+		}
+		ctx.policySynthetic[policyID] = blockPageSyntheticBase + i
+	}
 	return ctx, nil
 }
+
+// 拦截页归因合成中断码区间：481 起按策略身份递增，上限 599（HTTP 状态码
+// 合法区间）。481-599 在标准/常见扩展码中无占用（全仓 grep status:48 零
+// 冲突），且只出现于 {http.error.status_code} matcher 与 coraza status 动作
+// （coraza 对 status 无范围校验，actions/status.go 仅 Atoi）。
+const (
+	blockPageSyntheticBase = 481
+	blockPageSyntheticMax  = 599
+)
 
 // policiesForRule 返回规则绑定的全部启用安全策略（policy_id ASC）：批量预载
 // 上下文存在时查映射，否则回退单规则查询（GenerateSingleRuleCaddyConfig/
@@ -1539,6 +1572,13 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		server["routes"] = routes
 
 		var errorRoutes []interface{}
+		// 拦截页按触发策略归因：除每规则 403 兜底路由（buildBlockPageErrorRoute，
+		// host 限定本规则域名——承接多策略 IP 预检合并中断与无页策略中断）外，
+		// 本 server 覆盖规则用到的每个合成中断码各发射一条归因路由（无 host
+		// 键——合成码只可能由绑定该策略的规则段产生，同 server 其他规则不会
+		// 发出该码）。按策略去重：同 server 多规则绑定同一策略仅一条，路由规模
+		// = 每规则 1 条兜底（现状）+ 每有页策略 1 条（数十条级，不膨胀）。
+		emittedSynthetic := make(map[int]struct{})
 		for _, ru := range rules {
 			r := ru.rule
 			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
@@ -1546,6 +1586,20 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			}
 			if errorRoute := buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
 				errorRoutes = append(errorRoutes, errorRoute)
+			}
+			if securityCtx == nil {
+				continue
+			}
+			for _, policy := range policiesForRule(securityCtx, r.CaddyID) {
+				code := securityCtx.policySynthetic[policy.ID]
+				if code == 0 {
+					continue
+				}
+				if _, done := emittedSynthetic[code]; done {
+					continue
+				}
+				emittedSynthetic[code] = struct{}{}
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode))
 			}
 		}
 		if len(errorRoutes) > 0 {
@@ -2671,6 +2725,44 @@ func joinUpstreamAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
+// blockStatusForPolicy 返回策略在生成上下文中的合成中断码（拦截页归因）：
+// 无批量上下文（非批量生成路径）或策略未分配（无有效拦截页/超区间上限）
+// 时返回 0——BuildCorazaDirectives 逐字节保持现状（403/缺省）。
+func blockStatusForPolicy(securityCtx *securityPolicyContext, policy *models.SecurityPolicy) int {
+	if securityCtx == nil || policy == nil {
+		return 0
+	}
+	return securityCtx.policySynthetic[policy.ID]
+}
+
+// buildBlockPageAttributionRoute 返回一条按策略归因的错误路由：matcher 仅
+// 合成中断码 + interruption 消息（不带 host——合成码只可能由绑定该策略的
+// 规则段产生），static_response 渲染该策略的拦截页内容与其配置状态码
+// （0 归一 403）。与兜底路由（403,host 限定）状态码域不相交，顺序无关。
+func buildBlockPageAttributionRoute(synthetic int, content string, statusCode int) map[string]interface{} {
+	if statusCode == 0 {
+		statusCode = 403
+	}
+	return map[string]interface{}{
+		"match": []interface{}{
+			map[string]interface{}{
+				"expression": fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'interruption triggered')", synthetic),
+			},
+		},
+		"handle": []interface{}{
+			map[string]interface{}{
+				"handler":     "static_response",
+				"body":        content,
+				"status_code": statusCode,
+				"headers": map[string]interface{}{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
+			},
+		},
+		"terminal": true,
+	}
+}
+
 func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 	var stored []struct {
 		Address  string `json:"address"`
@@ -2694,12 +2786,14 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 	return upstreams, nil
 }
 
-// buildBlockPageErrorRoute returns a server-level error route rendering the
-// branded block page of the rule's first-bound (lowest policy_id) enabled
-// policy that configures one, or nil when no bound enabled policy has a block
-// page or the stored page has no content. The policies and block-page content
-// come from the batch-preloaded securityCtx, so transactional generation
-// observes uncommitted policy changes.
+// buildBlockPageErrorRoute 是拦截页归因后的**兜底**错误路由（403 通用，
+// host 限定本规则域名）：渲染首绑定（最低 policy_id）配置了拦截页的启用
+// 策略的页面。承接两类无法归因到单策略的中断——多策略 IP 预检的合并拦截
+// （buildIPPrecheckDirectives 保持 status:403，见该函数注释）与未分配合成
+// 码策略（无有效页/超区间上限）的 deny 中断；已分配合成码策略的中断由
+// buildBlockPageAttributionRoute 的逐策略路由承接。无绑定启用策略配置
+// 拦截页或页内容为空时返回 nil。策略与页内容来自批量预载 securityCtx，
+// 事务内生成可见未提交的策略变更。
 func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
 	policies := policiesForRule(securityCtx, ruleCaddyID)
 	var pagePolicy *models.SecurityPolicy
@@ -3000,7 +3094,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 时传 multiPolicy=true——策略层 IP ACL 改链式自排除本策略信任集:
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
 			// (「信任仅豁免所属策略」边界);单策略无预检保持平原形态。
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, effectiveRequestBodyMaxSizeMB); wafHandler != nil {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, policy), effectiveRequestBodyMaxSizeMB); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}
 		}

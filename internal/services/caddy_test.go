@@ -1301,7 +1301,7 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 			if err := database.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, tc.caddyID).Scan(&protocol); err != nil || protocol != "http" {
 				protocol = "tcp"
 			}
-			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "", false)
+			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "", false, 0)
 			if protocol != "http" {
 				handler = nil
 			}
@@ -1540,17 +1540,27 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 1 {
-		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	// 拦截页归因后：403 兜底（host 限定）+ 481 归因（该策略合成码，无 host）
+	if len(errorRoutes) != 2 {
+		t.Fatalf("want 2 error routes (403 fallback + 481 attribution), got %#v", errorRoutes)
 	}
-	route := mustMap(t, errorRoutes[0], "error route")
+	var route, attrRoute map[string]interface{}
+	for _, routeValue := range errorRoutes {
+		r := mustMap(t, routeValue, "error route")
+		expr, _ := routeMatcher(t, r)["expression"].(string)
+		if strings.Contains(expr, "== 403") {
+			route = r
+		} else if strings.Contains(expr, "== 481") {
+			attrRoute = r
+		}
+	}
+	if route == nil || attrRoute == nil {
+		t.Fatalf("missing route kind: fallback=%v attribution=%v", route != nil, attrRoute != nil)
+	}
 	matcher := routeMatcher(t, route)
 	assertEqual(t, matcher["host"], []string{"blocked.example.test"})
-	// The matcher targets coraza's deny status (403, message "interruption
-	// triggered"); GeoIP status clauses are appended only for bound enabled
-	// policies that actually configure geoip — this policy has none, so the
-	// expression is exactly the 403 interruption clause. The response renders
-	// the policy's block_status_code (default 403 when unset).
+	// 兜底路由匹配 coraza 缺省 deny（403, message "interruption triggered"）——
+	// 承接预检/无页策略中断；本策略自身 deny 已抬码 481 走归因路由。
 	assertEqual(t, matcher["expression"], "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')")
 	handler := firstHandler(t, route)
 	assertEqual(t, handler["handler"], "static_response")
@@ -1558,6 +1568,17 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	assertEqual(t, handler["status_code"], 451)
 	if route["terminal"] != true {
 		t.Fatalf("error route must be terminal: %#v", route)
+	}
+	// 归因路由：481 子句、无 host、同页同码、terminal
+	if _, hasHost := routeMatcher(t, attrRoute)["host"]; hasHost {
+		t.Fatalf("attribution route must not carry host matcher: %#v", routeMatcher(t, attrRoute))
+	}
+	assertEqual(t, routeMatcher(t, attrRoute)["expression"], "({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
+	attrHandler := firstHandler(t, attrRoute)
+	assertEqual(t, attrHandler["body"], "<html>branded-block</html>")
+	assertEqual(t, attrHandler["status_code"], 451)
+	if attrRoute["terminal"] != true {
+		t.Fatalf("attribution route must be terminal: %#v", attrRoute)
 	}
 }
 
@@ -1580,25 +1601,31 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 2 {
-		t.Fatalf("want two host-matched error routes, got %#v", errorRoutes)
+	// 每规则 1 条 403 兜底（host 限定）+ 每策略 1 条归因（481/482，无 host）
+	if len(errorRoutes) != 4 {
+		t.Fatalf("want 4 error routes (2 fallback + 2 attribution), got %#v", errorRoutes)
 	}
 	byHost := make(map[string]map[string]interface{}, len(errorRoutes))
+	bySynthetic := make(map[string]map[string]interface{}, 2)
 	for _, routeValue := range errorRoutes {
 		route := mustMap(t, routeValue, "error route")
 		matcher := routeMatcher(t, route)
-		hosts, ok := matcher["host"].([]string)
-		if !ok || len(hosts) != 1 {
-			t.Fatalf("error route matcher host=%#v, want single host", matcher["host"])
+		expr, _ := matcher["expression"].(string)
+		if hosts, ok := matcher["host"].([]string); ok && len(hosts) == 1 {
+			byHost[hosts[0]] = route
+			continue
 		}
-		byHost[hosts[0]] = route
+		for _, code := range []string{"481", "482"} {
+			if strings.Contains(expr, "== "+code+" &&") {
+				bySynthetic[code] = route
+			}
+		}
 	}
 	alpha := byHost["alpha.example.test"]
 	if alpha == nil {
 		t.Fatalf("no error route matched for alpha.example.test: %#v", errorRoutes)
 	}
-	// alpha 的策略未配置 geoip：匹配表达式仅含 403 WAF 中断子句（geoip 状态
-	// 子句只对实际配置 geoip 的绑定启用策略追加）。
+	// alpha 兜底：统一 403 WAF 中断子句（首绑定策略页）
 	assertEqual(t, routeMatcher(t, alpha)["expression"], "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')")
 	alphaHandler := firstHandler(t, alpha)
 	assertEqual(t, alphaHandler["body"], "<html>alpha-block</html>")
@@ -1610,6 +1637,21 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	betaHandler := firstHandler(t, beta)
 	assertEqual(t, betaHandler["body"], "<html>beta-block</html>")
 	assertEqual(t, betaHandler["status_code"], 403)
+	// 归因路由：481=alpha 策略（451），482=beta 策略（block_status_code 0 归一 403）
+	attr481 := bySynthetic["481"]
+	if attr481 == nil {
+		t.Fatalf("no 481 attribution route: %#v", errorRoutes)
+	}
+	attr481Handler := firstHandler(t, attr481)
+	assertEqual(t, attr481Handler["body"], "<html>alpha-block</html>")
+	assertEqual(t, attr481Handler["status_code"], 451)
+	attr482 := bySynthetic["482"]
+	if attr482 == nil {
+		t.Fatalf("no 482 attribution route: %#v", errorRoutes)
+	}
+	attr482Handler := firstHandler(t, attr482)
+	assertEqual(t, attr482Handler["body"], "<html>beta-block</html>")
+	assertEqual(t, attr482Handler["status_code"], 403)
 }
 
 func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *testing.T) {
@@ -1632,9 +1674,11 @@ func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *test
 }
 
 // TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy verifies the
-// block-page error route renders the first-bound (lowest policy_id) enabled
-// policy's page under v2.2.0 multi-policy binding — blocking priority follows
-// binding order, so the older bound policy wins over the newer one.
+// 403 fallback error route renders the first-bound (lowest policy_id) enabled
+// policy's page under v2.2.0 multi-policy binding — the fallback serves
+// unattributable interruptions (merged IP precheck / page-less policies), while
+// each page-bearing policy additionally gets its own synthetic-code attribution
+// route (481/482) rendering its own page.
 func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing.T) {
 	// Given
 	useTemporaryCertDir(t)
@@ -1654,12 +1698,38 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 1 {
-		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	// 1 条 403 兜底（首绑定=older）+ 2 条归因（481=older, 482=newer）
+	if len(errorRoutes) != 3 {
+		t.Fatalf("want 3 error routes (fallback + 2 attribution), got %#v", errorRoutes)
 	}
-	handler := firstHandler(t, errorRoutes[0])
+	var fallback map[string]interface{}
+	bySynthetic := make(map[string]map[string]interface{}, 2)
+	for _, routeValue := range errorRoutes {
+		route := mustMap(t, routeValue, "error route")
+		expr, _ := routeMatcher(t, route)["expression"].(string)
+		if strings.Contains(expr, "== 403") {
+			fallback = route
+			continue
+		}
+		for _, code := range []string{"481", "482"} {
+			if strings.Contains(expr, "== "+code+" &&") {
+				bySynthetic[code] = route
+			}
+		}
+	}
+	if fallback == nil {
+		t.Fatalf("missing 403 fallback route: %#v", errorRoutes)
+	}
+	handler := firstHandler(t, fallback)
 	assertEqual(t, handler["body"], "<html>older-block</html>")
 	assertEqual(t, handler["status_code"], 451)
+	// 归因路由逐策略渲染各自拦截页（older=481/451，newer=482/503）
+	h481 := firstHandler(t, bySynthetic["481"])
+	assertEqual(t, h481["body"], "<html>older-block</html>")
+	assertEqual(t, h481["status_code"], 451)
+	h482 := firstHandler(t, bySynthetic["482"])
+	assertEqual(t, h482["body"], "<html>newer-block</html>")
+	assertEqual(t, h482["status_code"], 503)
 }
 
 // TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy verifies the
@@ -1769,7 +1839,7 @@ func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *test
 		t.Fatalf("exclusions/block page not loaded: excluded=%s block_page_id=%d", policy.CRSExcludedRules, policy.BlockPageID)
 	}
 
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	for _, want := range []string{
 		"@ipMatch 203.0.113.0/24",
 		"SecRuleRemoveById 942100",
@@ -1798,7 +1868,7 @@ func TestBuildCorazaDirectives_allowModeDeniesNonListedIPs(t *testing.T) {
 		t.Fatalf("bind allow policy: %v", err)
 	}
 
-	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"), nil)
+	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"), nil, "", false, 0)
 	if !strings.Contains(directives, `!@ipMatch 198.51.100.7`) {
 		t.Fatalf("allow mode must deny non-listed IPs via negated match:\n%s", directives)
 	}
@@ -1817,7 +1887,7 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 			`{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]` +
 			`}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	lines := strings.Split(directives, "\n")
 	var chainLines []string
 	for _, line := range lines {

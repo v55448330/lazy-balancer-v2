@@ -129,23 +129,18 @@ func crsPoolFingerprint() string {
 	return fmt.Sprintf("%s-%d-%d", version, mtime, size)
 }
 
-// prefetchedCRSFingerprint 可选参数：批量生成方按链计算一次并透传，避免
-// 逐 (规则×策略) 对重复执行 DB 查询+stat（审计 B5-F2）；空串回退自算。
-func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, prefetchedCRSFingerprint ...interface{}) string {
+// crsFingerprint：批量生成方按链计算一次并透传，避免逐 (规则×策略) 对重复
+// 执行 DB 查询+stat（审计 B5-F2）；空串回退自算。multiPolicy（SECLB32-1）：
+// 预检存在时策略层 IP ACL 链式自排除本策略信任集。blockStatus：拦截页按触发
+// 策略归因的合成中断码（481+，securityPolicyContext.policySynthetic 按策略
+// 身份分配）；>0 时段内全部 deny 显式抬码（IP ACL/GeoIP/自定义规则/CRS
+// 949110），0 时逐字节保持现状（403 或缺省，单策略/无页路径回归形状）。
+func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, crsFingerprint string, multiPolicy bool, blockStatus int) string {
 	var sb strings.Builder
 	// R72 三十次 F1：嵌 coraza 池键指纹（见 crsPoolFingerprint）——CRS 文件
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
 	//（旧规则静默继续生效）。
-	crsFp := ""
-	multiPolicy := false
-	for _, arg := range prefetchedCRSFingerprint {
-		switch v := arg.(type) {
-		case string:
-			crsFp = v
-		case bool:
-			multiPolicy = v // SECLB32-1:多策略模式(预检存在)→策略层 IP ACL 链式自排除本策略信任集
-		}
-	}
+	crsFp := crsFingerprint
 	if crsFp == "" {
 		crsFp = crsPoolFingerprint()
 	}
@@ -278,31 +273,41 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// 首段并以 ,chain 收尾,续段仅 t:none(GeoIP id:8 同款生产形状);
 	// deny 在续段的形状被解析器整体拒绝(v2.2.11 出厂事故)。
 	multiPolicyTrustExclusion := multiPolicy && p.IPWhitelistEnabled && len(ipWL) > 0
+	// 拦截页按触发策略归因：blockStatus>0（本策略分配了合成中断码）时段内
+	// 全部 deny 显式抬码；==0 时逐字节保持现状（403 或缺省）——单策略/无页
+	// 路径回归形状由既有钉测试锁定。denyStatusFragment 用于现状不带 status
+	// 的发射点（GeoIP id:8、自定义规则 block 动作），条件拼接禁止无条件改写。
+	aclDenyStatus := 403
+	denyStatusFragment := ""
+	if blockStatus > 0 {
+		aclDenyStatus = blockStatus
+		denyStatusFragment = fmt.Sprintf(",status:%d", blockStatus)
+	}
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		aclJoined := strings.Join(ipACLList, ",")
 		if p.IPACLMode == "allow" {
 			if multiPolicyTrustExclusion {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined, aclDenyStatus))
 				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 			} else {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined, aclDenyStatus))
 			}
 		} else if p.IPACLMode == "deny" {
 			if multiPolicyTrustExclusion {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain\"\n", aclJoined, aclDenyStatus))
 				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 			} else {
-				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined))
+				sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", aclJoined, aclDenyStatus))
 			}
 		}
 	}
 	if len(ipBL) > 0 {
 		blJoined := strings.Join(ipBL, ",")
 		if multiPolicyTrustExclusion {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END,chain\"\n", blJoined))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END,chain\"\n", blJoined, aclDenyStatus))
 			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"t:none\"\n", strings.Join(ipWL, ",")))
 		} else {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", blJoined))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", blJoined, aclDenyStatus))
 		}
 	}
 
@@ -319,7 +324,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// geoip_mode='off' 是区域控制关闭态（名单保留不清单），与 PolicyHasGeoIP
 	// 同门：开关关闭即零发射。
 	if geoCountries := geoipCountries(p); p.GeoIPMode != "off" && len(geoCountries) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:8,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:8,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), denyStatusFragment))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoCountries, p.GeoIPMode == "allow"))))
 	}
 
@@ -327,7 +332,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// off=全关)。计分动作(pass+setvar)只给分:检测/拦截模式下由 CRS 949 阈值
 	// 评估统一裁决是否拦截,custom_only 无 949 → 退化为检测计分(仅留事件)。
 	if customActive {
-		emitCustomRules(&sb, customRules)
+		emitCustomRules(&sb, customRules, blockStatus)
 	}
 
 	if p.Mode == "detection" {
@@ -446,6 +451,19 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				if _, ok := covered["59"]; !ok {
 					emitInfraInclude("RESPONSE-959-BLOCKING-EVALUATION.conf")
 				}
+			}
+		}
+		// 拦截页按触发策略归因：blockStatus>0 时把 CRS 入站拦截评估规则
+		// 949110 的 deny 抬为合成码（SecRuleUpdateActionById 真实抬码已经
+		// 引擎行为实证——interruption.Status==合成码）。发射门=949 评估文件
+		// 存在：指令在规则不存在时编译报错（directives.go:1262-1266），无论
+		// 全量 glob 还是选组+基础设施强制包含路径，文件存在即必然被 Include
+		// 覆盖；缺失时禁发（不拖垮整份配置加载，与 emitInfraInclude 存在性门
+		// 同格）。位置=Include 之后、配置期 RemoveById 之前——排除条目若
+		// 针对 949110，先抬码后删除不致「规则不存在」编译错误。
+		if blockStatus > 0 {
+			if _, err := os.Stat(filepath.Join(crsDirectivesDir, "rules", "REQUEST-949-BLOCKING-EVALUATION.conf")); err == nil {
+				sb.WriteString(fmt.Sprintf("SecRuleUpdateActionById 949110 \"deny,status:%d\"\n", blockStatus))
 			}
 		}
 		// 配置期 SecRuleRemoveById：Include 之后（此时 CRS 规则已注册，
@@ -596,7 +614,7 @@ func customRulePhase(cr models.CustomRule) int {
 	return 1
 }
 
-func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
+func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, blockStatus int) {
 	// 旧版内嵌规则可能没有 id（0）：全部发射 id:10000 会在同一份 coraza 配置中
 	// 产生重复 SecRule id，按序分配唯一合成 id（1000000+序号，避开 CRS 的
 	// 100000-999999 保留段）。synthetic 只在无 id 规则上递增，保证彼此唯一。
@@ -633,8 +651,13 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		scoreVar := fmt.Sprintf("setvar:tx.inbound_anomaly_score_pl1=+%d", cr.Score)
 		action := fmt.Sprintf("pass,log,%s,msg:'自定义规则 %s 命中'", scoreVar, safeName)
 		if cr.Action == "block" {
-			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
-			action = fmt.Sprintf("deny,log,%s,msg:'自定义规则 %s 命中',skipAfter:SECURITY_RULES_END", scoreVar, safeName)
+			// 拦截统一经 errors.routes 渲染拦截页：blockStatus>0（策略分得合成
+			// 中断码）时显式抬码归因到本策略，==0 保持缺省 403（回归形状）。
+			denyStatus := ""
+			if blockStatus > 0 {
+				denyStatus = fmt.Sprintf(",status:%d", blockStatus)
+			}
+			action = fmt.Sprintf("deny%s,log,%s,msg:'自定义规则 %s 命中',skipAfter:SECURITY_RULES_END", denyStatus, scoreVar, safeName)
 		} else if cr.Action == "log" {
 			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
 			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
@@ -739,11 +762,11 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
 // 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
 // store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, multiPolicy bool, bodyLimitMB ...int) map[string]interface{} {
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, multiPolicy bool, blockStatus int, bodyLimitMB ...int) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
-	directives := BuildCorazaDirectives(policy, store, crsFp, multiPolicy)
+	directives := BuildCorazaDirectives(policy, store, crsFp, multiPolicy, blockStatus)
 	if directives == "" {
 		return nil
 	}
@@ -863,6 +886,9 @@ func cidrIntersectEntry(a, b string) string {
 // DetectionOnly 先行(id:3,取代「deny 优先于信任」与「并入 allow 放行集」),
 // 信任 IP 经 DetectionOnly 后 deny/黑名单/GeoIP 全评估不拦但全记录;跨策略
 // 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);限流仍生效。
+// 归因边界（拦截页按触发策略归因）：预检是多策略**合并**段，deny 无法归因
+// 到单策略，故保持 status:403 不抬码——其中断落首绑定有页策略的 403 兜底
+// 错误路由（buildBlockPageErrorRoute），UI 文案按此口径声明。
 // 无 deny 侧控制时返回空串（不发射）。
 func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	var denyUnion, blacklistUnion []string

@@ -9,6 +9,8 @@ package services
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,11 +18,15 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// compileForEngineGate 把渲染指令送入 coraza 编译。过滤两类环境依赖行:
+// compileForEngineGate 把渲染指令送入 coraza 编译。过滤三类环境依赖行:
 //   - SecAuditLog <path>:引擎在 NewWAF 时打开审计日志文件(/app/logs 在
 //     开发/CI 不存在)——路径可写性不是被测对象;
 //   - Include <crs 路径>:CRS 文件仅存在于镜像内——引擎接受「文件缺失」
-//     与否不是被测对象(镜像内由 caddy validate 覆盖全量)。
+//     与否不是被测对象(镜像内由 caddy validate 覆盖全量);
+//   - SecRuleUpdateActionById 949110:拦截页归因的 CRS 抬码指令——Include
+//     被过滤后 949110 不存在,该指令编译必然报错(规则缺失是环境产物,
+//     非被测形状);指令对 949110 的真实抬码由
+//     security_block_status_test.go 的引擎行为实证覆盖(桩规则+真实事务)。
 //
 // 其余全部逐字送编译——我们自己发射的 SecRule/SecAction/SecMarker 形状
 // 是本门禁的被测对象,零裁剪(R-8 验证源直取:指令文本来自真实渲染调用)。
@@ -29,7 +35,8 @@ func compileForEngineGate(t *testing.T, directives string) {
 	var kept []string
 	for _, line := range strings.Split(directives, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "SecAuditLog ") || strings.HasPrefix(trimmed, "Include ") {
+		if strings.HasPrefix(trimmed, "SecAuditLog ") || strings.HasPrefix(trimmed, "Include ") ||
+			strings.HasPrefix(trimmed, "SecRuleUpdateActionById ") {
 			continue
 		}
 		kept = append(kept, line)
@@ -50,7 +57,7 @@ func TestEngineGate_multiPolicyChainedShapes(t *testing.T) {
 	}
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
-			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", true))
+			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", true, 0))
 		})
 	}
 }
@@ -67,7 +74,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
 			multi := strings.HasPrefix(name, "multi-")
-			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", multi))
+			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", multi, 0))
 		})
 	}
 	t.Run("precheck-trust-union", func(t *testing.T) {
@@ -83,7 +90,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 	p := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
 		`[{"id":890000,"name":"collider","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
-	directives := BuildCorazaDirectives(p, nil, "", false)
+	directives := BuildCorazaDirectives(p, nil, "", false, 0)
 	if strings.Contains(directives, "id:900000") {
 		t.Fatalf("rule with db id 890000 must be skipped (emit id 900000 collides CRS reserved space), got:\n%s", directives)
 	}
@@ -94,7 +101,7 @@ func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 	// 回归形状:合法 id(890000 以下)照常发射
 	pOK := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
 		`[{"id":889999,"name":"safe","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`)}
-	dOK := BuildCorazaDirectives(pOK, nil, "", false)
+	dOK := BuildCorazaDirectives(pOK, nil, "", false, 0)
 	if !strings.Contains(dOK, "id:899999") {
 		t.Fatalf("rule with db id 889999 must still emit id:899999, got:\n%s", dOK)
 	}
@@ -107,7 +114,7 @@ func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// ① detection 的 id:6 DetectionOnly 切换行
 	t.Run("detection-id6-switch", func(t *testing.T) {
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection"}, nil, "", false)
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection"}, nil, "", false, 0)
 		if !strings.Contains(directives, `SecAction "id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly"`) {
 			t.Fatalf("detection mode must emit id:6 switch:\n%s", directives)
 		}
@@ -118,7 +125,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	t.Run("bypass-id3-engine-off", func(t *testing.T) {
 		p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "bypass", IPACLList: `["198.51.100.9"]`,
 			IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
-		directives := BuildCorazaDirectives(p, nil, "", false)
+		directives := BuildCorazaDirectives(p, nil, "", false, 0)
 		if !strings.Contains(directives, `id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off`) {
 			t.Fatalf("bypass mode must emit id:3 engine-off rule:\n%s", directives)
 		}
@@ -129,7 +136,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	})
 	// ③ id:900 异常阈值 SecAction（AnomalyThreshold>0）
 	t.Run("anomaly-threshold-id900", func(t *testing.T) {
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking", AnomalyThreshold: 12}, nil, "", false)
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking", AnomalyThreshold: 12}, nil, "", false, 0)
 		if !strings.Contains(directives, `id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=12`) {
 			t.Fatalf("AnomalyThreshold>0 must emit id:900 SecAction:\n%s", directives)
 		}
@@ -141,7 +148,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 		seedCRSRuleIndexFixture(t)
 		p := &models.SecurityPolicy{Mode: "blocking",
 			CRSExcludedRules: json.RawMessage(`[{"target":"42","scope":"ip","ips":"1.1.1.1"}]`)}
-		directives := BuildCorazaDirectives(p, nil, "", false)
+		directives := BuildCorazaDirectives(p, nil, "", false, 0)
 		if !strings.Contains(directives, `id:2000001,phase:1,pass,nolog,ctl:ruleRemoveById=942100`) {
 			t.Fatalf("scoped exclusion must emit 2000000+ ctl rules:\n%s", directives)
 		}
@@ -161,13 +168,60 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// BuildCorazaDirectives 产物尾部拼接，门禁直调 BuildCorazaDirectives 不经
 	// 此——本用例走上层取 handler.directives 送编译）
 	t.Run("request-body-limit-appended", func(t *testing.T) {
-		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 8)
+		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0, 8)
 		if handler == nil {
 			t.Fatal("blocking policy must yield a waf handler")
 		}
 		directives, ok := handler["directives"].(string)
 		if !ok || !strings.Contains(directives, "SecRequestBodyLimit 8388608\n") {
 			t.Fatalf("8MB body limit must append SecRequestBodyLimit 8388608, got:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+}
+
+// 拦截页按触发策略归因（合成中断码 481+）：blockStatus>0 的新发射形状必须
+// 被引擎接受（R-10——status 动作在链首段的合法性、SecRuleUpdateActionById
+// 语法均不能仅靠字符串断言）。CRS 抬码指令的真实生效由
+// security_block_status_test.go 的引擎行为实证覆盖；此处验证渲染产物编译。
+func TestEngineGate_blockStatusSyntheticShapes(t *testing.T) {
+	// ① 链式自排除 + 合成码（多策略+信任+deny，链首 status:481）
+	t.Run("chained-trust-exclusion-lifted", func(t *testing.T) {
+		p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`,
+			IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
+		directives := BuildCorazaDirectives(p, nil, "", true, 481)
+		if !strings.Contains(directives, `id:2,phase:1,deny,status:481,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain`) {
+			t.Fatalf("chained head must carry status:481:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ② GeoIP 链首抬码 + 自定义规则 deny 抬码
+	t.Run("geoip-and-custom-lifted", func(t *testing.T) {
+		p := &models.SecurityPolicy{Mode: "blocking", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`),
+			CustomRules: json.RawMessage(`[{"id":11,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/admin"}]}]`)}
+		directives := BuildCorazaDirectives(p, nil, "", false, 482)
+		if !strings.Contains(directives, `id:8,phase:1,deny,status:482,log,msg:'GeoIP 区域拦截'`) {
+			t.Fatalf("geoip chain head must carry status:482:\n%s", directives)
+		}
+		if !strings.Contains(directives, `deny,status:482,log,setvar:`) {
+			t.Fatalf("custom block rule must carry status:482:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ③ CRS 抬码指令形状（949 夹具文件存在 → 发射；门禁过滤该指令行——
+	// Include 被过滤后 949110 不存在，编译必然报错是环境产物非被测形状）
+	t.Run("crs-949-lift-emitted-and-compilable", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "rules", "REQUEST-949-BLOCKING-EVALUATION.conf"), []byte("# stub"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		useCRSDirectivesDir(t, dir)
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 481)
+		if !strings.Contains(directives, `SecRuleUpdateActionById 949110 "deny,status:481"`) {
+			t.Fatalf("949 file present must emit CRS status lift:\n%s", directives)
 		}
 		compileForEngineGate(t, directives)
 	})

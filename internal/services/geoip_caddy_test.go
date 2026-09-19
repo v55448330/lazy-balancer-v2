@@ -112,7 +112,7 @@ func TestBuildCorazaDirectives_geoip_emitsSecRuleChain(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if directives == "" {
 		t.Fatal("geoip-enabled policy must emit directives even with WAF mode off")
 	}
@@ -141,7 +141,7 @@ func TestBuildCorazaDirectives_geoipProvinces_joinedAlternation(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["广东省","北京市"]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	want := `@rx ^(?:广东省(?:/.*)?|北京市(?:/.*)?)$`
 	if !strings.Contains(directives, want) {
 		t.Fatalf("directives missing province alternation %q:\n%s", want, directives)
@@ -157,7 +157,7 @@ func TestBuildCorazaDirectives_geoipDetectionMode_rulePrecedesDetectionOnly(t *t
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	geoIdx := strings.Index(directives, "msg:'GeoIP 区域拦截'")
 	switchIdx := strings.Index(directives, "DetectionOnly")
 	if geoIdx < 0 || switchIdx < 0 || geoIdx > switchIdx {
@@ -269,9 +269,10 @@ func TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesPassRoute(t *testing
 	}
 }
 
-// TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus：coraza deny
-// 默认 403 → errors 路由 403 interruption 子句 → 拦截页按 block_status_code 渲染
-// （原 Caddy 原生 block 路由的 honorsBlockStatusCode 保证迁移到统一路径）。
+// TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus：拦截页归因后，
+// geoip 策略分得合成中断码 481——GeoIP deny 中断经 481 归因路由按
+// block_status_code 渲染本策略拦截页；403 兜底路由（host 限定）继续承接无法
+// 归因的中断（预检/无页策略），同页同码。
 func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T) {
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -284,16 +285,37 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 1 {
-		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	if len(errorRoutes) != 2 {
+		t.Fatalf("want 2 error routes (403 fallback + 481 attribution), got %#v", errorRoutes)
 	}
-	route := mustMap(t, errorRoutes[0], "error route")
-	// 匹配表达式只剩统一 403 interruption 子句（"GeoIP blocked" 形态已消亡）
-	assertEqual(t, routeMatcher(t, route)["expression"],
+	var fallback, attribution map[string]interface{}
+	for _, routeValue := range errorRoutes {
+		route := mustMap(t, routeValue, "error route")
+		expr, _ := routeMatcher(t, route)["expression"].(string)
+		if strings.Contains(expr, "== 403") {
+			fallback = route
+		} else if strings.Contains(expr, "== 481") {
+			attribution = route
+		}
+	}
+	if fallback == nil || attribution == nil {
+		t.Fatalf("missing route kind: fallback=%v attribution=%v", fallback != nil, attribution != nil)
+	}
+	// 兜底：host 限定 + 统一 403 interruption 子句
+	assertEqual(t, routeMatcher(t, fallback)["expression"],
 		"({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')")
-	handler := firstHandler(t, route)
-	assertEqual(t, handler["status_code"], 451)
-	assertEqual(t, handler["body"], "<html>geoip-block</html>")
+	fallbackHandler := firstHandler(t, fallback)
+	assertEqual(t, fallbackHandler["status_code"], 451)
+	assertEqual(t, fallbackHandler["body"], "<html>geoip-block</html>")
+	// 归因：481 子句、无 host 键，GeoIP deny（已抬码 481）实际命中此路由
+	if _, hasHost := routeMatcher(t, attribution)["host"]; hasHost {
+		t.Fatalf("attribution route must not carry host matcher: %#v", routeMatcher(t, attribution))
+	}
+	assertEqual(t, routeMatcher(t, attribution)["expression"],
+		"({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
+	attrHandler := firstHandler(t, attribution)
+	assertEqual(t, attrHandler["status_code"], 451)
+	assertEqual(t, attrHandler["body"], "<html>geoip-block</html>")
 }
 
 // seedGeoipPolicyBound 在 cluster 测试库上播种带 geoip + 拦截页的策略并绑定。
@@ -423,7 +445,7 @@ func TestBuildCorazaDirectives_geoipModeOff_noEmission(t *testing.T) {
 		GeoIPMode:      "off",
 		GeoIPCountries: json.RawMessage(`["海外","广东省"]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if strings.Contains(directives, "GeoIP 区域拦截") || strings.Contains(directives, "id:8") {
 		t.Fatalf("geoip_mode=off must not emit geoip rules, got:\n%s", directives)
 	}

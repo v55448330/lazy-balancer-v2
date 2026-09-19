@@ -726,6 +726,57 @@ func TestGetAllSecurityBindings_includesBlockPageID(t *testing.T) {
 	}
 }
 
+// SC-GET-02 扩展（拦截页归因）：GET /security/bindings 每绑定携带
+// block_status_code（NULL/0 归一为 403）——前端冲突提示与 Rules 页锁形弹框
+// 据此展示「<页名>(状态码 XXX)」，与后端生成口径（BlockStatusCode 0→403）一致。
+func TestGetAllSecurityBindings_includesBlockStatusCode(t *testing.T) {
+	// Given 一条规则按序绑定两条策略：首策略状态码 451，次策略未设置（归一 403）
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_bsc")
+	p1 := createMultiPolicy(t, router, "451策略")
+	p2 := createMultiPolicy(t, router, "默认状态策略")
+	if _, err := db.DB.Exec("UPDATE security_policies SET block_page_id=7, block_status_code=451 WHERE id=?", p1); err != nil {
+		t.Fatalf("set block_status_code: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE security_policies SET block_page_id=7 WHERE id=?", p2); err != nil {
+		t.Fatalf("set block_page_id: %v", err)
+	}
+	if r := putMultiJSON(t, router, "/security/rules/lb_mp_bsc/policies", map[string]any{"policy_ids": []int{p1, p2}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	// When GET /security/bindings
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/security/bindings", nil)
+	router.ServeHTTP(recorder, req)
+
+	// Then 每条绑定携带 block_status_code：首条 451，次条归一 403
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data map[string][]struct {
+			PolicyID        int `json:"policy_id"`
+			BlockStatusCode int `json:"block_status_code"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bindings response %s: %v", recorder.Body.String(), err)
+	}
+	entries := resp.Data["lb_mp_bsc"]
+	if len(entries) != 2 {
+		t.Fatalf("bindings=%+v, want 2 entries", entries)
+	}
+	if entries[0].PolicyID != p1 || entries[0].BlockStatusCode != 451 {
+		t.Fatalf("entries[0]=%+v, want policy_id=%d block_status_code=451", entries[0], p1)
+	}
+	if entries[1].PolicyID != p2 || entries[1].BlockStatusCode != 403 {
+		t.Fatalf("entries[1]=%+v, want policy_id=%d block_status_code=403 (COALESCE)", entries[1], p2)
+	}
+}
+
 // A-I2 硬化（GetAllSecurityBindings）：绑定 JOIN 的 p.block_page_id 可空——
 // 带外编辑/备份恢复/集群继承产生 NULL 时，修复前行 Scan 报错被 continue 静默
 // 跳过，绑定从 UI 地图中消失；修复后 COALESCE 归一化为 0，绑定照常返回。

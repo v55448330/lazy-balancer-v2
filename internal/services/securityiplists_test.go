@@ -131,7 +131,7 @@ func TestBuildCorazaDirectives_mergedEmission_inlinePlusListEntries(t *testing.T
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, "@ipMatch 1.2.3.4,10.0.0.0/8,192.0.2.0/24") {
 		t.Fatalf("directives must emit inline + list entries in one deny rule:\n%s", directives)
 	}
@@ -153,7 +153,7 @@ func TestBuildCorazaDirectives_refsOnlyPolicyStillEmits(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, "@ipMatch 203.0.113.0/24") {
 		t.Fatalf("refs-only policy must emit list entries:\n%s", directives)
 	}
@@ -170,7 +170,7 @@ func TestBuildCorazaDirectives_unresolvedPolicyFallsBackToInline(t *testing.T) {
 		IPACLEnabled:  true,
 		IPACLListRefs: "[42]",
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, "@ipMatch 1.2.3.4") {
 		t.Fatalf("inline entries must survive:\n%s", directives)
 	}
@@ -195,7 +195,7 @@ func TestBuildCorazaDirectives_whitelistRefsMergedIntoTrustRule(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil)
+	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
 	if !strings.Contains(directives, "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly") {
 		t.Fatalf("trust rule must be emitted (DetectionOnly, 2026-09-15 裁定):\n%s", directives)
 	}

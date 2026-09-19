@@ -15,7 +15,7 @@ func TestEmitCustomRules_bodyConditionEmitsPhase2(t *testing.T) {
 		{ID: 1, Name: "纯body", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
 			{Target: "body", Operator: "contains", Pattern: "evil"},
 		}},
-	})
+	}, 0)
 	got := sb.String()
 	if !strings.Contains(got, `"id:10001,phase:2,`) {
 		t.Fatalf("body condition must emit phase:2 on the starter:\n%s", got)
@@ -34,7 +34,7 @@ func TestEmitCustomRules_uriOnlyConditionEmitsPhase1(t *testing.T) {
 		{ID: 2, Name: "纯uri", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
 			{Target: "uri", Operator: "contains", Pattern: "/admin"},
 		}},
-	})
+	}, 0)
 	got := sb.String()
 	if !strings.Contains(got, `"id:10002,phase:1,`) {
 		t.Fatalf("uri-only condition must stay on phase:1:\n%s", got)
@@ -50,7 +50,7 @@ func TestEmitCustomRules_mixedChainSharesPhase2(t *testing.T) {
 			{Target: "uri", Operator: "contains", Pattern: "/api"},
 			{Target: "body", Operator: "contains", Pattern: "inject"},
 		}},
-	})
+	}, 0)
 	got := sb.String()
 	lines := strings.Split(strings.TrimSpace(got), "\n")
 	if len(lines) != 2 {
@@ -70,7 +70,7 @@ func TestEmitCustomRules_legacySingleTargetCarriesPhase(t *testing.T) {
 	emitCustomRules(&sb, []models.CustomRule{
 		{ID: 4, Name: "旧uri", Enabled: true, Action: "block", Score: 5, Target: "uri", Operator: "contains", Pattern: "/old"},
 		{ID: 5, Name: "旧body", Enabled: true, Action: "block", Score: 5, Target: "body", Operator: "contains", Pattern: "legacy"},
-	})
+	}, 0)
 	got := sb.String()
 	if !strings.Contains(got, `"id:10004,phase:1,`) {
 		t.Fatalf("legacy uri rule must emit phase:1:\n%s", got)
