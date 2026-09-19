@@ -2679,3 +2679,58 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 		})
 	}
 }
+
+// 阶段化模型归因精确化：GeoIP 事件 id 从共享 id:8（归「首个 geoip 启用策略」，
+// 非精确）改为预检精确段 800000+policyID——securityEventsPolicyContainsRule
+// 直接解码 id 命中属主策略；属主不在绑定集（配置已在发射后变更）时经
+// fallback 可行性门归属（off 模式 GeoIP blocked 可产：ipControl 类含 800xxx 段，
+// 否则 off 模式 GeoIP 事件被误拒为 (0,"")）。
+func TestSecurityEventsAttribution_geoipPrecheckExactSegment(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	// Given：p1/p2 各带 geoip（deny 模式），p3 blocking 无 geoip，p5 off 无 geoip
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,geoip_countries,geoip_mode) VALUES
+		(1,'p-geo-overseas',1,'off','[]','[]','["海外"]','deny'),
+		(2,'p-geo-jiangsu',1,'off','[]','[]','["江苏"]','deny'),
+		(3,'p-blocking',1,'blocking','[]','[]','[]','off'),
+		(5,'p-off-plain',1,'off','[]','[]','[]','off')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_rg',1),('lb_rg',2),('lb_rg',3),
+		('lb_r5',5)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	cases := []struct {
+		name      string
+		rule      string
+		triggered string
+		action    string
+		wantPID   int
+	}{
+		// 精确段：800000+policyID 直接命中属主（不再「首个 geoip 策略」通吃）
+		{"800001 → p1 exact", "lb_rg", "800001", "blocked", 1},
+		{"800002 → p2 exact (not first geoip policy)", "lb_rg", "800002", "blocked", 2},
+		// 属主不在绑定集：off 模式 GeoIP blocked 经 fallback 可归属（ipControl 含 800xxx）
+		{"off-mode 800xxx blocked fallback allowed", "lb_r5", "800099", "blocked", 5},
+		// 回归：旧共享 id:8 仍归「首个 geoip 启用策略」（历史事件可继续解释）
+		{"legacy id:8 → first geoip policy", "lb_rg", "8", "blocked", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, policyByID, bindings)
+			if pid != tc.wantPID {
+				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, tc.triggered, tc.action, pid, tc.wantPID)
+			}
+		})
+	}
+}

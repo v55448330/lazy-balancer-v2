@@ -12,6 +12,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,8 @@ func TestEngineBehavior_SecRuleUpdateActionByIdLiftsInterruptionStatus(t *testin
 // ---------- 步骤 1.2：BuildCorazaDirectives 的 blockStatus 抬码（RED）----------
 
 // blockStatus>0 时策略段内全部 deny 规则显式携带合成状态码（IP ACL id:2、
-// 遗留黑名单 id:4、GeoIP id:8 链首、自定义规则 block 动作）。
+// 遗留黑名单 id:4、自定义规则 block 动作）。GeoIP 已迁预检（800000+ 段，
+// 阶段 1 不抬码保持 403 兜底），策略引擎零 GeoIP 段。
 func TestBuildCorazaDirectives_blockStatusLiftsDenyStatuses(t *testing.T) {
 	// Given：blocking 策略，deny ACL + 遗留黑名单 + GeoIP + 自定义拦截规则
 	policy := &models.SecurityPolicy{
@@ -69,16 +71,18 @@ func TestBuildCorazaDirectives_blockStatusLiftsDenyStatuses(t *testing.T) {
 	// When：以合成码 481 渲染
 	directives := BuildCorazaDirectives(policy, nil, "", false, 481)
 
-	// Then：四处 deny 全部抬码 481
+	// Then：三处 deny 全部抬码 481；GeoIP 不在策略引擎（预检承接）
 	for _, want := range []string{
 		`id:2,phase:1,deny,status:481,log,msg:'IP 黑名单拒绝'`,
 		`id:4,phase:1,deny,status:481,log,msg:'IP 黑名单'`,
-		`id:8,phase:1,deny,status:481,log,msg:'GeoIP 区域拦截'`,
 		`deny,status:481,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 拒绝规则 命中'`,
 	} {
 		if !strings.Contains(directives, want) {
 			t.Fatalf("blockStatus=481 must lift deny status %q:\n%s", want, directives)
 		}
+	}
+	if strings.Contains(directives, "msg:'GeoIP 区域拦截'") || strings.Contains(directives, "id:8,") {
+		t.Fatalf("policy engine must not emit geoip rules (moved to precheck):\n%s", directives)
 	}
 	if strings.Contains(directives, "status:403") {
 		t.Fatalf("lifted segment must not retain status:403:\n%s", directives)
@@ -276,8 +280,9 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 		mode: "blocking", enabled: true, blockPageID: 7, blockStatusCode: 451,
 		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
 	})
-	mpGenBindPolicy(t, database, "lb_attr1", "attr-p2", mpGenPolicySpec{
+	p2 := mpGenBindPolicy(t, database, "lb_attr1", "attr-p2", mpGenPolicySpec{
 		mode: "blocking", enabled: true, blockPageID: 8, blockStatusCode: 503, geoCountries: `["海外"]`,
+		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["198.51.100.0/24"]`,
 	})
 	// 同一策略 p1 绑定第二条规则（归因路由按策略去重的被测形状）
 	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES ('lb_attr2', ?)`, p1); err != nil {
@@ -352,6 +357,20 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 	}
 	if !strings.Contains(joined, "deny,status:482") {
 		t.Fatalf("p2 segment must lift deny to 482:\n%s", joined)
+	}
+	// GeoIP 已迁预检（id=800000+policyID 段）——预检 deny 不抬码（阶段 1 保持
+	// 403 兜底归因边界，合成码抬码仅限策略引擎段）。
+	geoipFound := false
+	for _, line := range strings.Split(joined, "\n") {
+		if strings.Contains(line, "msg:'GeoIP 区域拦截'") {
+			geoipFound = true
+			if strings.Contains(line, "status:") || !strings.Contains(line, fmt.Sprintf("id:%d,", 800000+p2)) {
+				t.Fatalf("precheck geoip chain must stay un-lifted at id %d:\n%s", 800000+p2, line)
+			}
+		}
+	}
+	if !geoipFound {
+		t.Fatalf("precheck must carry p2 geoip chain (id %d):\n%s", 800000+p2, joined)
 	}
 }
 

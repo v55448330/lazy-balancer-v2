@@ -84,28 +84,47 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 	})
 }
 
-// SEC40-B1-2:自定义规则 DB id ≥890000——发射偏移 +10000 后落入 CRS 保留段
-// (900000+),与 CRS 规则同 id 冲突会使整份 coraza 配置编译失败(多策略/ CRS
-// 更新后必然撞车)。发射侧跳过并告警,不产出冲突 id。
+// SEC40-B1-2（阶段化模型收紧 890000→790000）：自定义规则 DB id ≥790000 经
+// 发射偏移 +10000 后撞入 GeoIP 预检段（800000-899999，buildIPPrecheckDirectives
+// 逐策略链 id=800000+policyID）——同 id 冲突会使整份 coraza 配置编译失败；
+// ≥890000 仍撞 CRS 保留段（900000+）。发射侧跳过并告警，不产出冲突 id。
 func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 	p := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
-		`[{"id":890000,"name":"collider","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
+		`[{"id":790000,"name":"collider","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
 	directives := BuildCorazaDirectives(p, nil, "", false, 0)
-	if strings.Contains(directives, "id:900000") {
-		t.Fatalf("rule with db id 890000 must be skipped (emit id 900000 collides CRS reserved space), got:\n%s", directives)
+	if strings.Contains(directives, "id:800000") {
+		t.Fatalf("rule with db id 790000 must be skipped (emit id 800000 collides geoip precheck space), got:\n%s", directives)
 	}
 	if !strings.Contains(directives, "SECURITY_RULES_END") {
 		t.Fatalf("marker must survive skipped rule, got:\n%s", directives)
 	}
 	compileForEngineGate(t, directives)
-	// 回归形状:合法 id(890000 以下)照常发射
+	// 回归形状:合法 id(790000 以下)照常发射
 	pOK := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
-		`[{"id":889999,"name":"safe","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`)}
+		`[{"id":789999,"name":"safe","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`)}
 	dOK := BuildCorazaDirectives(pOK, nil, "", false, 0)
-	if !strings.Contains(dOK, "id:899999") {
-		t.Fatalf("rule with db id 889999 must still emit id:899999, got:\n%s", dOK)
+	if !strings.Contains(dOK, "id:799999") {
+		t.Fatalf("rule with db id 789999 must still emit id:799999, got:\n%s", dOK)
 	}
 	compileForEngineGate(t, dOK)
+}
+
+// 阶段化模型（GeoIP 迁入预检）：预检含逐策略 GeoIP 链（链首 deny+skipAfter+
+// chain、X-GeoIP-Loc 续段、信任续段）的新形状必须被 coraza v3.7.0 接受——
+// 「disruptive 动作仅允许链首段」约束只经编译可见（R-10）。
+func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
+	p1 := &models.SecurityPolicy{
+		ID: 42, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`),
+		IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["1.2.3.4","10.0.0.0/8"]`),
+	}
+	p2 := &models.SecurityPolicy{
+		ID: 43, Mode: "detection", GeoIPMode: "allow", GeoIPCountries: json.RawMessage(`["江苏"]`),
+	}
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	if !strings.Contains(directives, "id:800042,") || !strings.Contains(directives, "id:800043,") {
+		t.Fatalf("precheck must carry per-policy geoip chains, got:\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
 }
 
 // SEC41-3（第 41 轮审计）：引擎门禁覆盖此前未送编译的六个发射形状。每个
@@ -195,13 +214,14 @@ func TestEngineGate_blockStatusSyntheticShapes(t *testing.T) {
 		}
 		compileForEngineGate(t, directives)
 	})
-	// ② GeoIP 链首抬码 + 自定义规则 deny 抬码
-	t.Run("geoip-and-custom-lifted", func(t *testing.T) {
+	// ② 自定义规则 deny 抬码（GeoIP 已迁预检——策略引擎零 GeoIP 段；预检
+	// GeoIP 链形状由 TestEngineGate_precheckGeoipChainShapes 覆盖）
+	t.Run("custom-lifted-and-geoip-absent", func(t *testing.T) {
 		p := &models.SecurityPolicy{Mode: "blocking", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`),
 			CustomRules: json.RawMessage(`[{"id":11,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/admin"}]}]`)}
 		directives := BuildCorazaDirectives(p, nil, "", false, 482)
-		if !strings.Contains(directives, `id:8,phase:1,deny,status:482,log,msg:'GeoIP 区域拦截'`) {
-			t.Fatalf("geoip chain head must carry status:482:\n%s", directives)
+		if strings.Contains(directives, "msg:'GeoIP 区域拦截'") {
+			t.Fatalf("policy engine must not emit geoip rules (moved to precheck):\n%s", directives)
 		}
 		if !strings.Contains(directives, `deny,status:482,log,setvar:`) {
 			t.Fatalf("custom block rule must carry status:482:\n%s", directives)

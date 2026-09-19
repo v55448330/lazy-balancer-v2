@@ -401,7 +401,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 }
 
 // securityEventsPolicyContainsRule reports whether the given rule id belongs to
-// the policy's active rule set. 自定义规则（10000+，且 <900000）：查 custom_rules
+// the policy's active rule set. 自定义规则（10000+，且 <800000）：查 custom_rules
 // JSON（兼容 ID 数组与内嵌对象数组两种形状）。注意 ID 空间：custom_rules JSON
 // 存的是 security_custom_rules 的 DB 主键 id，而 audit 的 rule_triggered 是
 // emit id（DB id + 10000，见 emitCustomRules），因此归属判定在 emit 空间比较
@@ -422,10 +422,17 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		return false
 	}
 	switch {
+	case n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000:
+		// GeoIP 预检精确段（阶段化模型：id=800000+policyID，buildIPPrecheckDirectives
+		// 逐策略链）——直接解码属主策略，取代共享 id:8 的「首个 geoip 启用策略」
+		// 非精确归因。发射侧只对 PolicyHasGeoIP 策略发射，属主不在绑定集（配置
+		// 已在发射后变更）时自然落空走 fallback。
+		return policy.ID == n-geoipPrecheckRuleBase
 	case n == 8:
-		// GeoIP 拦截（id:8）：所有权与发射门（PolicyHasGeoIP）同口径——mode!='off'
-		// 且名单非空。off 态名单仅为保留数据（不发射 id:8），不得抢走真实发射策略
-		// 的归因（审计 B1-IA：off+保留名单的首绑定策略曾错夺 id:8 归因）。
+		// GeoIP 拦截（遗留共享 id:8，策略引擎时代的历史事件）：所有权与发射门
+		// （PolicyHasGeoIP）同口径——mode!='off' 且名单非空。off 态名单仅为
+		// 保留数据（不发射 id:8），不得抢走真实发射策略的归因（审计 B1-IA：
+		// off+保留名单的首绑定策略曾错夺 id:8 归因）。
 		if policy.GeoIPMode == "off" {
 			return false
 		}
@@ -496,7 +503,7 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 			}
 		}
 		return false
-	case n >= 10000 && n < 900000:
+	case n >= 10000 && n < geoipPrecheckRuleBase:
 		// S2(2026-09-10 审计):off=全关(四态化)零发射,不得认领自定义规则事件
 		//(与 CRS 分支 blocking/detection 门同口径;custom_only/blocking/detection
 		// 三态的自定义规则发射由 customActive 保证)。
@@ -556,9 +563,9 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	if err != nil {
 		return false
 	}
-	ipControl := n == 2 || n == 4 || n == 7 || n == 8
+	ipControl := n == 2 || n == 4 || n == 7 || n == 8 || (n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000)
 	crs := n >= 900000 && n < 1000000
-	custom := (n >= 10000 && n < 900000) || n >= 1000000
+	custom := (n >= 10000 && n < geoipPrecheckRuleBase) || n >= 1000000
 	switch policy.Mode {
 	case "off":
 		// off=CRS/自定义/body 守卫全关,但 IP 控制/GeoIP 独立发射照常阻断。

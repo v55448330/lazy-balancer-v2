@@ -3031,10 +3031,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"rule":    rule.CaddyID,
 		})
 	}
-	// 控制合并为极简 coraza 预检查器置于链首（先于全部 rate_limit/waf）——被拒
-	// IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件。
-	// 单策略绑定不发射：自身 coraza 内 IP 控制本就先于其 CRS，发射形状不变。
-	if rule.Protocol == "http" && len(policies) > 1 {
+	// 阶段 1（IP 访问控制+地域拦截）：合并预检 coraza 置于链首（先于全部
+	// rate_limit/waf）——被拒 IP/区域在任何策略的 CRS/自定义规则评估前即中断，
+	// 不再产生前置策略的检测事件。阶段化模型（2026-09-20）：单策略同构走预检
+	// （GeoIP 已迁入预检 800000+ 段；ACL 并集与策略引擎 id:2/4 幂等重复无害——
+	// 预检先拦，引擎内不再命中；信任 IP 在预检 DetectionOnly 后到策略引擎按
+	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因，
+	// deny 403 → errors 路由 → 拦截页。
+	if rule.Protocol == "http" && len(policies) >= 1 {
 		if precheckHandler := buildIPPrecheckHandler(policies); precheckHandler != nil {
 			handleChain = append(handleChain, precheckHandler)
 		}
@@ -3070,13 +3074,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 		})
 	}
-	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
-	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
-	// 审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次透传给各
-	// 策略，替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略 ≈600 查询→
-	// 200）；闭包缓存每链至多计算一次——零安全策略/非 http 链零开销；
-	// http 链首个策略求值时计算（SECLB22-P5-1：全 off 策略的 http 链仍付
-	// 一次 SELECT+2×stat——实参求值在 buildWafHandlerWithPolicy 调用前，
+	// 阶段 2（限流）→ 阶段 3（WAF）：全部绑定启用策略（policy_id ASC）的
+	// rate_limit 集中在所有 WAF 引擎之前（限流恒 429；被前位 WAF 拦的请求也
+	// 消耗后位策略配额为已裁定口径），随后每策略独立 coraza 引擎（自定义规则
+	// +CRS）。审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次
+	// 透传给各策略，替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略
+	// ≈600 查询→200）；闭包缓存每链至多计算一次——零安全策略/非 http 链零
+	// 开销；http 链首个策略求值时计算（SECLB22-P5-1：全 off 策略的 http 链
+	// 仍付一次 SELECT+2×stat——实参求值在 buildWafHandlerWithPolicy 调用前，
 	// 真惰性需改 BuildCorazaDirectives 签名,安全关键函数 P5 不值,裁定接受）。
 	var chainFingerprint string
 	needFingerprint := func() string {
@@ -3089,11 +3094,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
 			handleChain = append(handleChain, rateLimitHandler)
 		}
+	}
+	for _, policy := range policies {
 		if rule.Protocol == "http" {
-			// SECLB32-1(第 32 轮审计,取代 SECLB31-2 抑制):多策略(预检存在)
-			// 时传 multiPolicy=true——策略层 IP ACL 改链式自排除本策略信任集:
+			// SECLB32-1(第 32 轮审计,取代 SECLB31-2 抑制):多策略时传
+			// multiPolicy=true——策略层 IP ACL 改链式自排除本策略信任集:
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
-			// (「信任仅豁免所属策略」边界);单策略无预检保持平原形态。
+			// (「信任仅豁免所属策略」边界);单策略保持平原形态(预检虽同构存在,
+			// 但策略层自身信任 DetectionOnly 已正确处理,无跨策略信任边界)。
 			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, policy), effectiveRequestBodyMaxSizeMB); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}

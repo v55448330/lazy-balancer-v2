@@ -128,8 +128,9 @@ func mpCountGeoipPassRoutes(t *testing.T, routes []map[string]interface{}) int {
 }
 
 // SC-GEN-01：路由顺序 = geoipPass(≤1) → pathRoutes → main；主路由处理器链按
-// 绑定启用策略 ASC 依次编入各策略的 [rate_limit?, waf?]（v2.2.0 地域拦截改走
-// coraza：mode=off + geoip 的策略也贡献 waf 处理器，GeoIP SecRule 在其内评估）。
+// 阶段化执行模型编排——阶段 1 合并预检（IP ACL+GeoIP，单/多策略同构）→ 阶段 2
+// 限流（全部策略 rate_limit 集中）→ 阶段 3 每策略独立 WAF 引擎（policy_id ASC）。
+// 纯 GeoIP 策略（p1 off+geoip）不再贡献策略 waf，GeoIP 链由预检 800000+ 段承接。
 func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// Given 一条规则绑定三条启用策略（绑定顺序故意打乱，验证按 policy_id ASC）：
 	// p1(off+geoip) < p2(blocking+限流) < p3(detection+geoip)
@@ -176,44 +177,46 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 		t.Fatalf("routes[2] must be the main route (no path matcher): %#v", routes[2])
 	}
 
-	// 主路由处理器链：headers(X-LB-Rule-ID 注入，F3) → p1(off+geoip) waf →
-	// p2 rate_limit + waf(blocking)；p3 → waf(detection，含 GeoIP)；随后 reverse_proxy。
+	// 主路由处理器链（阶段化模型）：headers(X-LB-Rule-ID 注入，F3) →
+	// lb_rule_metrics → lb_security_blocked_counter → 阶段 1 预检 waf（p1/p3
+	// GeoIP 链）→ request_body → 阶段 2 rate_limit(p2) → 阶段 3 waf(p2
+	// blocking) → waf(p3 detection，不含 GeoIP) → reverse_proxy。
 	names := handlerNames(t, mainRoute)
-	// 方案 B(2026-09-15):lb_security_blocked_counter 插在第一个 waf 前(包装
-	// 其后全部 waf handler)——链形态 headers → counter → waf×3 → reverse_proxy。
-	// 2026-09-15:lb_rule_metrics 全流量指标插在链首(headers 之后,blocked
-	// counter 之前)——链形态 headers → rule_metrics → blocked_counter → waf×N。
-	// D40-2-1:request_body 恒发射(128M 归一后 0=不限语义废除),位于
-	// blocked_counter 之后、首个策略 waf 之前。
-	if len(names) < 9 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "request_body" || names[4] != "waf" || names[5] != "rate_limit" || names[6] != "waf" || names[7] != "waf" {
-		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_rule_metrics, lb_security_blocked_counter, request_body, waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
+	if len(names) != 9 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "waf" || names[4] != "request_body" || names[5] != "rate_limit" || names[6] != "waf" || names[7] != "waf" {
+		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_rule_metrics, lb_security_blocked_counter, waf(precheck), request_body, rate_limit(p2), waf(p2), waf(p3), reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
 	}
 	wafs := wafHandlers(t, mainRoute)
 	if len(wafs) != 3 {
-		t.Fatalf("waf handlers=%d, want 3 (p1/p2/p3): %v", len(wafs), names)
+		t.Fatalf("waf handlers=%d, want 3 (precheck/p2/p3): %v", len(wafs), names)
 	}
-	p1Waf := wafs[0]["directives"].(string)
+	precheck := wafs[0]["directives"].(string)
 	p2Waf := wafs[1]["directives"].(string)
 	p3Waf := wafs[2]["directives"].(string)
-	// p1：WAF 关闭但地域拦截强制生效——引擎 On + 海外 GeoIP 规则，无 CRS Include
-	if !strings.Contains(p1Waf, "SecRuleEngine On") || strings.Contains(p1Waf, "Include ") {
-		t.Fatalf("p1 waf must be geoip-only directives, got: %.200s", p1Waf)
+	// 预检：p1(海外) 与 p3(江苏) 的 GeoIP 链按策略序在 800000+ 段，无 CRS Include
+	if !strings.Contains(precheck, "SecRuleEngine On") || strings.Contains(precheck, "Include ") {
+		t.Fatalf("precheck must be geoip-only directives, got: %.200s", precheck)
 	}
-	if !strings.Contains(p1Waf, `msg:'GeoIP 区域拦截'`) || !strings.Contains(p1Waf, `@rx ^(?:海外)$`) {
-		t.Fatalf("p1 waf must carry the overseas geoip rule:\n%s", p1Waf)
+	if !strings.Contains(precheck, fmt.Sprintf("id:%d,", 800000+p1)) || !strings.Contains(precheck, `@rx ^(?:海外)$`) {
+		t.Fatalf("precheck must carry p1 overseas geoip chain (id %d):\n%s", 800000+p1, precheck)
+	}
+	if !strings.Contains(precheck, fmt.Sprintf("id:%d,", 800000+p3)) || !strings.Contains(precheck, `江苏(?:/.*)?`) {
+		t.Fatalf("precheck must carry p3 Jiangsu geoip chain (id %d):\n%s", 800000+p3, precheck)
+	}
+	if strings.Index(precheck, fmt.Sprintf("id:%d,", 800000+p1)) > strings.Index(precheck, fmt.Sprintf("id:%d,", 800000+p3)) {
+		t.Fatalf("precheck geoip chains must follow policy order p1 < p3:\n%s", precheck)
 	}
 	if !strings.Contains(p2Waf, "SecRuleEngine On") || strings.Contains(p2Waf, "DetectionOnly") {
 		t.Fatalf("p2 waf must be blocking directives, got: %.200s", p2Waf)
 	}
-	// p3：检测模式 + 江苏 GeoIP 规则（先于 DetectionOnly 切换 → 仍阻断）
+	// p3：检测模式；GeoIP 已迁预检，策略引擎零 GeoIP 段
 	if !strings.Contains(p3Waf, "DetectionOnly") {
 		t.Fatalf("p3 waf must be detection directives, got: %.200s", p3Waf)
 	}
-	if !strings.Contains(p3Waf, `msg:'GeoIP 区域拦截'`) || !strings.Contains(p3Waf, `江苏(?:/.*)?`) {
-		t.Fatalf("p3 waf must carry the Jiangsu geoip rule:\n%s", p3Waf)
+	if strings.Contains(p3Waf, `msg:'GeoIP 区域拦截'`) {
+		t.Fatalf("p3 waf must not carry geoip rules (moved to precheck):\n%s", p3Waf)
 	}
 	// geoip 处理器只能出现在 pass 路由，主链不得重复
 	for _, name := range names {
@@ -273,6 +276,47 @@ func TestMultiPolicy_RateLimitZoneKeys_EmbedPolicyID(t *testing.T) {
 	assertEqual(t, secZone["max_events"], 150)
 	zoneB := mustMap(t, zonesB[wantB], "policy B zone")
 	assertEqual(t, zoneB["max_events"], 20)
+}
+
+// SC-GEN-06：阶段化执行模型——阶段 2（限流）集中在全部 WAF 引擎（阶段 3）
+// 之前：双策略各开限流时主路由 handle 链中两个 rate_limit 的索引均小于全部
+// 策略 waf 的索引（单/多策略链形状同构：阶段 1 预检 → 阶段 2 限流 → 阶段 3
+// WAF；限流恒 429，被前位 WAF 拦的请求也消耗后位策略配额为已裁定口径）。
+func TestMultiPolicy_RateLimitStagePrecedesAllWafEngines(t *testing.T) {
+	// Given 一条规则绑定两条 blocking+限流策略（无 IP 控制/GeoIP → 无预检段）：
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_stage", "stage.example.test", 8080)
+	mpGenBindPolicy(t, database, "lb_stage", "stage-p1", mpGenPolicySpec{
+		mode: "blocking", enabled: true, rateLimit: true, rps: 100, burst: 50,
+	})
+	mpGenBindPolicy(t, database, "lb_stage", "stage-p2", mpGenPolicySpec{
+		mode: "blocking", enabled: true, rateLimit: true, rps: 20, burst: 0,
+	})
+
+	// When
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_stage", "stage.example.test"))
+
+	// Then 两个 rate_limit 索引均小于全部策略 waf 索引（阶段 2 先于阶段 3）
+	names := handlerNames(t, mainRoute)
+	var rateLimitIdx, wafIdx []int
+	for i, name := range names {
+		switch name {
+		case "rate_limit":
+			rateLimitIdx = append(rateLimitIdx, i)
+		case "waf":
+			wafIdx = append(wafIdx, i)
+		}
+	}
+	if len(rateLimitIdx) != 2 || len(wafIdx) != 2 {
+		t.Fatalf("chain=%v, want 2 rate_limit + 2 policy waf handlers", names)
+	}
+	for _, rl := range rateLimitIdx {
+		for _, wf := range wafIdx {
+			if rl > wf {
+				t.Fatalf("stage order violated: rate_limit idx %d after waf idx %d, chain=%v", rl, wf, names)
+			}
+		}
+	}
 }
 
 func mapKeys(m map[string]interface{}) []string {
@@ -505,10 +549,12 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 	}
 }
 
-// SC-GEN-07：IP 预检发射门——仅多策略绑定且存在 deny 侧 IP 控制时发射；
-// 单策略或无 deny 侧 IP 控制时主链形状不变（不新增预检 waf）。
+// SC-GEN-07：IP 预检发射门——阶段化模型单/多策略同构：单策略绑定且存在 deny
+// 侧 IP 控制时同样发射预检（阶段 1 统一承接；ACL 并集与策略引擎 id:2/4 幂等
+// 重复无害——预检先拦，引擎内不再命中）；无 deny 侧 IP 控制且无 GeoIP 时
+// 主链形状不变（不新增预检 waf）。
 func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
-	// Given A：单策略 + deny ACL → 无预检（自身 coraza 内 IP 控制已先于 CRS）
+	// Given A：单策略 + deny ACL → 预检同构发射（阶段 1）+ 策略引擎各一
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen7a", "gen7a.example.test", 8080)
 	mpGenBindPolicy(t, database, "lb_gen7a", "gen7a-solo", mpGenPolicySpec{
@@ -522,8 +568,14 @@ func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
 			wafCountA++
 		}
 	}
-	if wafCountA != 1 {
-		t.Fatalf("single policy: waf handlers=%d, want 1 (no precheck): %v", wafCountA, namesA)
+	if wafCountA != 2 {
+		t.Fatalf("single policy with deny ACL: waf handlers=%d, want 2 (precheck + policy engine): %v", wafCountA, namesA)
+	}
+	// 预检在前、策略引擎在后；预检携带 deny 并集（id:2）
+	wafsA := wafHandlers(t, mainA)
+	precheckA := wafsA[0]["directives"].(string)
+	if !strings.Contains(precheckA, `@ipMatch 203.0.113.5" "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
+		t.Fatalf("single-policy precheck must carry the deny union:\n%s", precheckA)
 	}
 
 	// Given B：多策略但无任何 deny 侧 IP 控制（信任名单不算 deny 侧）→ 无预检

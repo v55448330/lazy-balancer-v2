@@ -136,3 +136,66 @@ func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *
 		}
 	}
 }
+
+// 阶段化模型：GeoIP 预检精确段 800000-899999（6 位 8xxxxx）必须被「地域拦截」
+// family 命中（旧仅精确 id 8），且不得落入「WAF 规则（CRS）」family（6 位纯
+// 数字 GLOB 会把 800xxx 误标为 CRS——CRS 规则 ID 恒 9xxxxx）。
+func TestRuleTriggeredFilterSQL_geoipPrecheckSegmentFamily(t *testing.T) {
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_geoip_probe (rule_triggered TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	probes := []string{
+		"8",      // 旧共享 GeoIP id（策略引擎时代，历史事件）
+		"800123", // 预检精确段 800000+policyID
+		"899999", // 段上界
+		"900000", // CRS 保留段起（非 GeoIP）
+		"942100", // CRS
+		"80012",  // 5 位自定义规则（非 GeoIP 段）
+		"2",      // IP ACL
+	}
+	for _, id := range probes {
+		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_geoip_probe (rule_triggered) VALUES (?)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matchSet := func(t *testing.T, family string) map[string]bool {
+		t.Helper()
+		var args []any
+		cond := ruleTriggeredFilterSQL(family, &args)
+		matched := map[string]bool{}
+		rows, err := db.DB.Query(`SELECT rule_triggered FROM rule_triggered_geoip_probe WHERE `+cond, args...)
+		if err != nil {
+			t.Fatalf("query %q family filter: %v", family, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			matched[id] = true
+		}
+		rows.Close()
+		return matched
+	}
+	geoip := matchSet(t, "地域拦截")
+	for _, id := range []string{"8", "800123", "899999"} {
+		if !geoip[id] {
+			t.Errorf("地域拦截 family 必须命中 %q", id)
+		}
+	}
+	for _, id := range []string{"900000", "942100", "80012", "2"} {
+		if geoip[id] {
+			t.Errorf("地域拦截 family 不得命中 %q", id)
+		}
+	}
+	crs := matchSet(t, "WAF 规则（CRS）")
+	if crs["800123"] || crs["899999"] {
+		t.Errorf("WAF 规则（CRS）family 不得吞 GeoIP 预检段 800xxx: %v", crs)
+	}
+	if !crs["942100"] || !crs["900000"] {
+		t.Errorf("WAF 规则（CRS）family 必须命中 9xxxxx CRS id: %v", crs)
+	}
+}

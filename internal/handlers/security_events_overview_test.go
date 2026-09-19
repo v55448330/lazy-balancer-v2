@@ -268,6 +268,10 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"ip acl via id 3", "3", "", "IP 访问控制"},
 		{"ip acl via id 4", "4", "", "IP 访问控制"},
 		{"ip trust list via id 5", "5", "", "IP 访问控制"},
+		{"geoip legacy id 8", "8", "", "地域拦截"},
+		{"geoip precheck segment id", "800123", "", "地域拦截"},
+		{"geoip precheck segment via msg", "800123", "GeoIP 区域拦截", "地域拦截"},
+		{"geoip segment upper bound", "899999", "", "地域拦截"},
 		{"empty input", "", "", "其他"},
 		{"unmatched id", "123456", "something else", "其他"},
 	}

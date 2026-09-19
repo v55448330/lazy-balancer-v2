@@ -2047,7 +2047,7 @@ func isReservedIP(ip string) bool {
 var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"IP 访问控制": {"2", "3", "4", "5", "7"},
 	"请求体异常":   {"11"},
-	"地域拦截":    {"8"},
+	"地域拦截":    {"8"}, // + geoipFamilyCondition（预检精确段 800000-899999）
 	"评分拦截":    {"949", "959"},
 	"协议异常":    {"920"},
 	"协议攻击":    {"921"},
@@ -2074,6 +2074,11 @@ func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
 }
 
 const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*')"
+
+// geoipFamilyCondition 地域拦截族的预检精确段形态条件（阶段化模型：
+// buildIPPrecheckDirectives 逐策略链 id=800000+policyID）——6 位 8xxxxx。
+// 旧共享 id:8 由 ruleTriggeredFamilyPrefixes「地域拦截」表单值精确匹配覆盖。
+const geoipFamilyCondition = "rule_triggered GLOB '8[0-9][0-9][0-9][0-9][0-9]'"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
 // 精确/family 部分前缀/WAF 规则（CRS）或其前缀/纯数字）——只能走消息关键词
@@ -2134,10 +2139,11 @@ func ruleTriggeredMultiFilterSQL(input string, args *[]any) string {
 // 括号，正向用 AND 拼接、反向由调用方套 NOT（rule_triggered_exclude 复用同映射）。
 // family 口径与前端筛选选项/triggeredLabel 显示标签一一对应，改动需三侧同步。
 func ruleTriggeredFilterSQL(input string, args *[]any) string {
-	// WAF 规则（CRS）：全部 6 位 CRS 规则 ID（含 920/921 协议族与 949/959 评估族——
-	// 用户心智模型「CRS 即 WAF 规则」；细分仍可输入细标签（评分拦截/协议异常）或
-	// 规则 ID 前缀过滤，family 映射全部保留）。
-	const wafCRSCondition = "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'"
+	// WAF 规则（CRS）：全部 6 位 CRS 规则 ID（恒 9xxxxx——含 920/921 协议族与
+	// 949/959 评估族——用户心智模型「CRS 即 WAF 规则」；细分仍可输入细标签
+	// （评分拦截/协议异常）或规则 ID 前缀过滤，family 映射全部保留）。GLOB
+	// 限 9 开头：GeoIP 预检段 800xxx 同为 6 位数字，不限会被本族误吞。
+	const wafCRSCondition = "rule_triggered GLOB '9[0-9][0-9][0-9][0-9][0-9]'"
 	if input == "WAF 规则（CRS）" {
 		return "(" + wafCRSCondition + ")"
 	}
@@ -2146,9 +2152,13 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		for _, p := range prefixes {
 			appendFamilyPrefixCondition(&ors, args, p)
 		}
-		// 自定义规则族无 LIKE 前缀（表内为空集），以长度约束条件整体并入。
+		// 自定义规则族无 LIKE 前缀（表内为空集），以长度约束条件整体并入；
+		// 地域拦截族并入预检精确段形态条件（800xxx，旧 id:8 由前缀表精确覆盖）。
 		if input == "自定义规则" {
 			ors = append(ors, customRuleFamilyCondition)
+		}
+		if input == "地域拦截" {
+			ors = append(ors, geoipFamilyCondition)
 		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
@@ -2170,6 +2180,9 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	if matched {
 		if strings.HasPrefix("自定义规则", input) {
 			ors = append(ors, customRuleFamilyCondition)
+		}
+		if strings.HasPrefix("地域拦截", input) {
+			ors = append(ors, geoipFamilyCondition)
 		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
@@ -2427,7 +2440,9 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "自定义规则"
 	case ruleTriggered == "11":
 		return "请求体异常"
-	case ruleTriggered == "8" || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+		// 8 = 旧共享 GeoIP id（策略引擎时代历史事件）；6 位 8xxxxx = 预检精确段
+		// 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。
 		return "地域拦截"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
 		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
