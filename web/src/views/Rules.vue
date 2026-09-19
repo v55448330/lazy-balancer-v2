@@ -3691,6 +3691,12 @@ onUnmounted(() => {
   width: 100%;
 }
 
+/* 2026-09-19 用户反馈:JSON 代码框沿用组件默认 max-height:70vh,弹框整体
+   超出屏幕;此处收窄 ~30%(70vh→50vh),仅作用于本弹框,组件默认不变。 */
+.config-view :deep(.prism-code) {
+  max-height: 50vh;
+}
+
 .config-info {
   margin-bottom: 16px;
   width: 100% !important;
