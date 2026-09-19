@@ -292,6 +292,13 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	// 与 BecomeSlave 的反向清理对称：提升时同步清空从节点的同步残留
 	//（applied_version/sync_fingerprint/last_sync_error/注册确认失败计数），
 	// 避免新主节点带着旧集群的同步指纹与错误状态运行。
+	// CL42-4（第 42 轮审计裁定·设计声明）：nodes 表（含各从节点
+	// cluster_token_hash）跨角色切换刻意保留——Promote/BecomeSlave 均只重置
+	// global_config，从不清空 nodes。拓扑连续性语义：脱离通知
+	// （notifyMasterDetach）只是 best-effort，旧主节点令牌撤销依赖其成功；
+	// 本节点降级后再提升时，旧 nodes 行即刻恢复权威，旧从节点持有的令牌
+	// 仍然有效，经手工 Resume/重新注册即可复活上报与同步——这是有意设计
+	// （主库清零后可凭从库副本恢复集群拓扑），不是令牌泄漏缺口。
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET is_master=1, master_url='', cluster_token='', registration_id=0, registration_secret='', applied_version=0, sync_fingerprint='', last_sync_error='', registration_confirm_failures=0 WHERE id=1`); err != nil {
 		return fmt.Errorf("重置主节点状态: %w", err)
 	}
@@ -434,7 +441,9 @@ func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin strin
 	req.Header.Set("X-Cluster-Token", token)
 	client := &http.Client{Timeout: 3 * time.Second, Transport: newClusterDetachTransport(expectedPin)}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
+	// CL42-2（第 42 轮审计）：旧主节点启用管理 HTTPS 后明文端口 301——按集群
+	// 同步同一契约对同主机 https Location 重放一次，否则脱离通知永远到不了。
+	resp, err := DoWithSameHostTLSUpgradeRedirect(client, req)
 	if err != nil {
 		Logf("error", "cluster detach notify failed: %v", err)
 		return

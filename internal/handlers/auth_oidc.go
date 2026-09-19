@@ -603,9 +603,14 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	}
 	if req.Issuer != nil {
 		issuer := normalizeOIDCIssuer(*req.Issuer)
-		if *req.Issuer != "" && (issuer == "" || !strings.HasPrefix(issuer, "http")) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "服务地址须为 http(s) URL"})
-			return
+		// SYS42-4:url.Parse + scheme 白名单——HasPrefix("http") 放行
+		// 「httpxy://…」类伪 scheme。空 issuer 保留清除语义。
+		if *req.Issuer != "" {
+			u, perr := url.Parse(issuer)
+			if issuer == "" || perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "服务地址须为 http(s) URL"})
+				return
+			}
 		}
 		if issuer != cfg.Issuer {
 			oidcProviderInvalidate(cfg.Issuer)

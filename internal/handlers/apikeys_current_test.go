@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -66,14 +65,10 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// M6（契约）：特权 Key 创建走共享密码确认门——user 1 配真实 bcrypt 哈希。
-	hash, err := bcrypt.GenerateFromPassword([]byte("alice-secret"), bcrypt.MinCost)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.Exec("UPDATE users SET password_hash=? WHERE id=1", string(hash)); err != nil {
-		t.Fatal(err)
-	}
+	// APIMCP42-3(第 42 轮测试卫生):M6 密码确认门已于 2026-09 裁定删除——
+	// 特权 Key(非只读或 MCP)创建不验密码,可选防线为 mfa_write_guard 的
+	// MFA step-up(428,见 apikeys.go createAPIKeyForUser);本文件用例未开
+	// guard,不再种子真实密码哈希、不再携带 password 载荷。
 	return database
 }
 
@@ -446,17 +441,11 @@ func TestUpdateCurrentUserAPIKeyForcesLegacyKeyReadOnly(t *testing.T) {
 
 func TestAdminAPIKeyReadOnlySettingIsUnchanged(t *testing.T) {
 	database := setupAPIKeyTestDB(t)
-	// M6（契约）：可写 Key 属特权 Key，须真实密码种子并携带 password 过共享确认门
-	hash, err := bcrypt.GenerateFromPassword([]byte("admin-secret"), bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	if _, err := database.Exec("UPDATE users SET password_hash=? WHERE id=1", string(hash)); err != nil {
-		t.Fatalf("seed admin hash: %v", err)
-	}
+	// APIMCP42-3:特权 Key(可写)创建现行语义=mfa_write_guard 的 MFA step-up
+	//(428),无密码确认门;本用例未开 guard,直接创建。
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", strings.NewReader(`{"name":"admin-write","read_only":false,"password":"admin-secret"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", strings.NewReader(`{"name":"admin-write","read_only":false}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
 	ctx.Set("role", "admin")
@@ -506,8 +495,9 @@ func TestCreateCurrentUserAPIKeyNormalizesMCPWhitelist(t *testing.T) {
 	database := setupAPIKeyTestDB(t)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	// M6（契约）：mcp_enabled Key 属特权 Key，须携带密码过共享确认门。
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"mcp","mcp_enabled":true,"read_only":true,"mcp_ip_whitelist":["192.168.1.5","2001:db8::1"],"password":"alice-secret"}`))
+	// APIMCP42-3:mcp_enabled Key 属特权 Key——现行确认门为 mfa_write_guard
+	// 的 MFA step-up(428),密码载荷已随 M6 裁定删除。
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"mcp","mcp_enabled":true,"read_only":true,"mcp_ip_whitelist":["192.168.1.5","2001:db8::1"]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
 

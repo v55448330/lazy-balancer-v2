@@ -201,13 +201,24 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		effectiveProvider = req.DNSProvider
 	}
 	effectiveCredentials := req.DNSCredentials
-	if effectiveCredentials == nil {
+	switch {
+	case effectiveCredentials == nil:
 		effectiveCredentials = map[string]string{}
 		if err := json.Unmarshal([]byte(oldCredentials), &effectiveCredentials); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid stored DNS credentials"})
 			return
 		}
-	} else if !isMaskedDNSCredentials(effectiveCredentials) {
+	case isMaskedDNSCredentials(effectiveCredentials):
+		// CERT42-2:全掩码回传(GET 掩码→未改动即保存)按未提交处理——校验
+		// 路径以库中旧值为准(掩码串进 BuildCredentialsJSON 会 400「请选择
+		// 认证方式」);落库侧下方 isMasked 分支保留作防御(req.DNSCredentials
+		// 置 nil 不更新凭证列)。
+		effectiveCredentials = map[string]string{}
+		if err := json.Unmarshal([]byte(oldCredentials), &effectiveCredentials); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid stored DNS credentials"})
+			return
+		}
+	default:
 		// CERT40-2:部分掩码回传先逐字段合并——下方早期校验与最终落库都以
 		// 合并结果为准(掩码字段取库值),掩码串不得进入校验/落库。
 		stored := map[string]string{}

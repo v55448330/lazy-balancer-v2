@@ -179,8 +179,10 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 
 	// 起点角色复查（R54-N5）：与 CRS 更新同一 demote 竞态窗口——tick 越过
 	// is_master 守卫后节点被降级时，从节点上的 in-flight 更新必须立即终止。
+	// SEC42-2（第 42 轮审计）：NULL 兜底归一为 1，与 IsMaster/readonly 写闸/
+	// 调度器 tick 的 COALESCE(is_master,1) 同口径（历史 NULL 视为主节点）。
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		m.setStage(IP2RegionStatusFailed, "当前节点为从节点，终止 IP2Region 更新")
 		return
 	}
@@ -207,7 +209,10 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	}
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
 
-	if tag == currentIP2RegionVersion() {
+	// SEC42-1（第 42 轮审计）：与 CRS 同口径（crsupdate.go，CRS-1）——tag 不新于
+	// current（cmp<=0）即按「已是最新」跳过，防上游 release 回退/删除时静默降级
+	// 安装更旧 xdb；格式不可比（cmpErr!=nil）保持现行「不等即更新」行为。
+	if cmp, cmpErr := CompareCRSVersions(tag, currentIP2RegionVersion()); cmpErr == nil && cmp <= 0 {
 		// R72 二十七次 N6（补正重写——首版实施脚本缺失落盘调用丢失）：已是最新也
 		// 补写 .version sidecar——此前该分支提前 return 不写，崩溃遗留的 stale tag
 		// 将无限期不愈（愈于下次「安装」而非下次「检查」）；幂等，写失败仅记日志。

@@ -59,7 +59,7 @@ const props = defineProps<{
   readonly error?: boolean
 }>()
 
-// 后端 cluster_sync.go 的 syncReloadFailureMarkerPrefix 字面值：快照已应用但
+// apply_ok_reload_failed 机内标记的展示翻译已收敛至 utils/syncErrorDisplay.ts（FE18-4 单一实现）。
 const syncErrorDisplay = computed<string>(() => formatSyncErrorDisplay(props.status))
 </script>
 

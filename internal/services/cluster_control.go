@@ -212,3 +212,45 @@ func NewClusterControlHTTPClient(dataDir string, database *sql.DB) *http.Client 
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return client
 }
+
+// DoWithSameHostTLSUpgradeRedirect 处理同主机 http→https 301/308，与集群同步
+// （cluster_sync.go doWithTLSUpgradeRedirect）同一契约：节点启用管理 HTTPS 后
+// 明文端口整体 301（TCP 嗅探层，早于路由），而集群各客户端
+// CheckRedirect=ErrUseLastResponse 会让调用方拿到空 body 走 JSON 解析且无自愈
+// 路径（2026-09-18 实测）。仅当 Location 与原请求**同主机名**且升级为 https
+// 时按原方法重放一次（凭证不出原主机）；跨主机重定向一律不跟随（凭证外泄
+// 防护）。CL42-2（第 42 轮审计）消费方：脱离通知（cluster.go
+// notifyMasterDetach）与服务控制调用（handlers callClusterServiceControl）。
+// 客户端必须设置 CheckRedirect=ErrUseLastResponse，否则 301 被标准库先行
+// 跟随（POST 会被改写为 GET）而本函数永远看不到升级信号。
+func DoWithSameHostTLSUpgradeRedirect(client *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusPermanentRedirect {
+		return resp, nil
+	}
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return resp, nil
+	}
+	target, err := url.Parse(location)
+	if err != nil || target.Scheme != "https" || target.Hostname() != req.URL.Hostname() {
+		return resp, nil
+	}
+	resp.Body.Close()
+	retry := req.Clone(req.Context())
+	retry.URL = target
+	if target.RawQuery == "" && req.URL.RawQuery != "" {
+		retry.URL.RawQuery = req.URL.RawQuery
+	}
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("重放 https 升级请求: %w", err)
+		}
+		retry.Body = body
+	}
+	return client.Do(retry)
+}

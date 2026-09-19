@@ -673,7 +673,7 @@ const TRIGGERED_CATEGORIES = ['IP 访问控制', '地域拦截', '请求体异�
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 const isTriggeredCategory = (v: string): v is TriggeredCategory => (TRIGGERED_CATEGORIES as readonly string[]).includes(v)
 
-const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
 
 // 头部全选复选框三态：5 类别全中=全选（自定义 tag 不影响判定）；部分中=半选
 const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
@@ -701,7 +701,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES], policy_name: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES], policy_name: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -710,14 +710,13 @@ const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
 const goToRule = (row: SecurityEvent) => { window.open(`/?page=rules&rs=${encodeURIComponent(row.rule_caddy_id)}`, '_blank') }
 const goToPolicy = (row: SecurityEvent) => {
+  // FE42-1：交接改走 URL query（sp / sp-search 参数，同 goToRule 的 rs 形态），
+  // SecurityPolicies.vue onMounted 消费后 replaceState 清除。
   if (row.policy_id > 0) {
-    localStorage.setItem('security-policies-focus-id', String(row.policy_id))
+    window.open(`/?page=security-policies&sp=${row.policy_id}`, '_blank')
   } else if (row.policy_name) {
-    localStorage.setItem('security-policies-search', row.policy_name)
-  } else {
-    return
+    window.open(`/?page=security-policies&sp-search=${encodeURIComponent(row.policy_name)}`, '_blank')
   }
-  window.open('/?page=security-policies', '_blank')
 }
 
 let fetchEventsSeq = 0
@@ -729,7 +728,6 @@ const fetchEvents = async () => {
     const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) })
     if (filters.value.action) p.set('action', filters.value.action)
     if (filters.value.ip) p.set('ip', filters.value.ip)
-    if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
     // 触发规则：全选（5 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；
     // 子集（1~4 个类别）或含自定义 tag 时，全部选中值英文逗号连接发送 rule_triggered

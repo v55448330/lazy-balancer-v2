@@ -101,6 +101,7 @@
       v-model="mcpDocsVisible"
       class="mcp-docs-dialog"
       width="min(1000px, 96vw)"
+      top="5vh"
       @opened="fetchMCPTools"
     >
       <template #header>
@@ -276,7 +277,7 @@
           show-icon
         />
         <el-divider content-position="left" class="section-divider">有效期与来源限制</el-divider>
-        <el-form-item label="过期时间">
+        <el-form-item label="过期时间" :error="createExpiresError">
           <el-date-picker
             v-model="createForm.expiresAt"
             type="datetime"
@@ -285,6 +286,7 @@
             :disabled-date="disablePastDate"
             placeholder="留空表示永不过期"
             style="width: 100%"
+            @change="createExpiresError = ''"
           />
         </el-form-item>
         <el-form-item label="IP 白名单" :error="createWhitelistError">
@@ -438,6 +440,7 @@ const creating = ref(false)
 const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
+const createExpiresError = ref('')
 const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '', expiresAt: null as Date | null })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
@@ -544,6 +547,7 @@ const resetCreateForm = (): void => {
   createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '', expiresAt: null }
   createNameError.value = ''
   createWhitelistError.value = ''
+  createExpiresError.value = ''
 }
 
 const keyExpired = (key: APIKey): boolean => {
@@ -570,10 +574,11 @@ async function createKey() {
     createWhitelistError.value = whitelist.error
     return
   }
-  // 日期面板仅按天禁用过去日期，仍可选到当天早于现在的时刻；提交时钳制为当前时间
+  // 日期面板仅按天禁用过去日期，仍可选到当天早于现在的时刻；
+  // 该值必被后端 400（apikeys.go「过期时间不能早于当前时间」）——提交前同文案拦截。
   if (createForm.value.expiresAt && createForm.value.expiresAt.getTime() < Date.now()) {
-    createForm.value.expiresAt = new Date()
-    ElMessage.warning('过期时间早于当前时间，已自动调整为当前时间')
+    createExpiresError.value = '过期时间不能早于当前时间'
+    return
   }
 
   creating.value = true

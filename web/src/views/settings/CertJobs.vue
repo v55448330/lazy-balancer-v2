@@ -349,6 +349,11 @@ const retryJob = async (row: CertJob) => {
     await request.post(`/certificates/jobs/${row.id}/retry`, undefined, { signal: jobsPolling.signal })
     if (disposed) return
     mfaAwareSuccess('重新签发已触发')
+    // FE42-9：run() 恰逢在途轮询时只把 pending 合并进当前 drain——若撞上 drain 已退出
+    // 而 inFlight 未清的微任务窗口，pending 会搁浅到下一个 5s 定时 tick，「已触发」toast
+    // 后列表迟迟不更新。第一次 await 等在途排空（drainPromise 的 finally 先于本 continuation
+    // 清掉 inFlight），第二次 run 必然新起 drain，强制一次 POST 之后的新鲜抓取。
+    await jobsPolling.run()
     await jobsPolling.run()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.

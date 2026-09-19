@@ -2228,8 +2228,12 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	if page > 100000 {
 		page = 100000
 	}
-	if pageSize < 1 || pageSize > 100 {
+	// SEC42-4:超上限钳到上限(此前回落默认 20——显式要 150 条拿到 20 条);
+	// 低于 1 回默认。
+	if pageSize < 1 {
 		pageSize = 20
+	} else if pageSize > 100 {
+		pageSize = 100
 	}
 	offset := (page - 1) * pageSize
 
@@ -3166,7 +3170,11 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 	if page > 100000 {
 		page = 100000
 	}
-	if pageSize < 1 || pageSize > 100 {
+	// SEC42-4:超上限钳到上限且上限收紧 100→50(与默认页大小/前端单页渲染
+	// 边界一致);低于 1 回默认。
+	if pageSize < 1 {
+		pageSize = 50
+	} else if pageSize > 50 {
 		pageSize = 50
 	}
 

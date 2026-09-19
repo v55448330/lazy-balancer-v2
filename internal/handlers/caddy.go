@@ -380,12 +380,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书日志大小必须大于 0"})
+	// LB42-4:与 caddy_log_size_mb(SYS41-7,100-10240)同族补上限——此前仅 >0
+	// 下限,天文值落库使轮转实效、日志无限增长;UI :max=10240 同口径。
+	if req.CertJobLogSizeMB != nil && (*req.CertJobLogSizeMB <= 0 || *req.CertJobLogSizeMB > 10240) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书日志大小需在 1-10240MB 之间"})
 		return
 	}
-	if req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小必须大于 0"})
+	if req.RuntimeLogSizeMB != nil && (*req.RuntimeLogSizeMB <= 0 || *req.RuntimeLogSizeMB > 10240) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小需在 1-10240MB 之间"})
 		return
 	}
 	// Round 33 N-5: 审计日志轮转大小上限 512MB（主节点侧校验；从节点经集群

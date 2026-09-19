@@ -179,11 +179,22 @@ func isSynchronizedWrite(method, path string) bool {
 		return false
 	}
 	// Writes to synced global_config columns.
-	if method == http.MethodPut && (path == "/api/v1/config" || path == "/api/v1/caddy/config" || path == "/api/v1/cluster/settings" || path == "/api/v1/admin-tls") {
+	// CL42-1:auto-backup 六设置列与 oidc_config 均在 global_config 触发器 OF
+	// 列表(见上),主端保存必须 bump 供从端收敛。
+	if method == http.MethodPut && (path == "/api/v1/config" || path == "/api/v1/caddy/config" || path == "/api/v1/cluster/settings" || path == "/api/v1/admin-tls" || path == "/api/v1/settings/auto-backup" || path == "/api/v1/settings/oidc") {
+		return true
+	}
+	if method == http.MethodDelete && path == "/api/v1/settings/oidc" {
 		return true
 	}
 	// Config backup import rewrites rules/upstreams; the validate endpoint only previews.
 	if method == http.MethodPost && (path == "/api/v1/config/import" || path == "/api/v1/config/import/v1") {
+		return true
+	}
+	// SECREV42-N1(第 42 轮评审):自动备份还原经 importConfigBackupCore 重写
+	// lb_rules/upstreams 等全部同步表,与 /config/import 同口径 fail-closed;
+	// run(手动备份)与 delete 仅写 auto_backups 本地簿记表,不在此列。
+	if method == http.MethodPost && strings.HasPrefix(path, "/api/v1/auto-backup/") && strings.HasSuffix(path, "/restore") {
 		return true
 	}
 	// Certificate issuance and job retry/delete write cert_jobs; parse and current-jobs queries are read-only.

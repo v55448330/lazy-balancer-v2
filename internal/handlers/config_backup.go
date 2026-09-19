@@ -1967,6 +1967,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	// v2.3.0 lbbak:tar.gz 备份先解包校验,内部 config.json 走既有 V2 流程
 	var lbbakFiles *lbbakPayload
 	if dataOK {
+		// SYS42-1:v2 JSON 备份带 UTF-8 BOM 时预览端点已剥(见
+		// config_import_v1.go),导入核心同口径——否则同一份备份预览通过、
+		// 导入 400。BOM(\xef\xbb\xbf)与 gzip 魔数(0x1f 0x8b)不冲突,
+		// 剥 BOM 必须在 isLbbakBytes 魔数检测之前。
+		data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 		if isLbbakBytes(data) {
 			payload, perr := parseLbbak(data)
 			if perr != nil {

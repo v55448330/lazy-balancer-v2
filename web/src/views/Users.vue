@@ -276,7 +276,7 @@ const onOIDCStatus = (st: { enabled: boolean; configured: boolean }) => {
 // 与弹框 load 同源(/settings/oidc),configured 口径 = issuer 或 secret 非空。
 const fetchOIDCStatus = async () => {
   try {
-    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true } as never)
+    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true })
     oidcEnabled.value = !!res.data?.enabled
     oidcConfigured.value = !!(res.data?.issuer || res.data?.has_secret)
   } catch {

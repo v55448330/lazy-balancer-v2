@@ -101,6 +101,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled, Connection } from '@element-plus/icons-vue'
 import { request, ApiRequestError } from '@/utils/api'
+import { copyText } from '@/utils/copy'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -133,7 +134,7 @@ const loadSlaves = async () => {
   try {
     // silent:从节点 403(仅主节点)不弹全局 toast——回调清单静默降级为本节点
     // (2026-09-18 用户裁定:从节点只保留只读标记,不出现「仅允许在主节点执行」提示)
-    const res = await request.get<{ data?: { name?: string; ip_address?: string; port?: number; protocol?: string; access_url?: string; is_approved?: boolean }[] }>('/cluster/nodes', { silent: true } as never)
+    const res = await request.get<{ data?: { name?: string; ip_address?: string; port?: number; protocol?: string; access_url?: string; is_approved?: boolean }[] }>('/cluster/nodes', { silent: true })
     slaveOrigins.value = (res.data || [])
       .filter(n => n.is_approved)
       .map(n => {
@@ -155,7 +156,7 @@ const notify = () => emit('status', { enabled: enabled.value, configured: config
 const load = async () => {
   try {
     // C2-3:silent——非管理员打开入口时 403 不弹全局 toast(入口按角色收口)
-    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true } as never)
+    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean } }>('/settings/oidc', { silent: true })
     if (res.data) {
       enabled.value = !!res.data.enabled
       displayName.value = res.data.display_name || ''
@@ -191,7 +192,7 @@ const doRunProbe = async (): Promise<boolean> => {
     const body: Record<string, string> = { issuer }
     if (form.clientId.trim()) body.client_id = form.clientId.trim()
     if (form.clientSecret) body.client_secret = form.clientSecret
-    const res = await request.post<{ data?: { ok: boolean; error?: string; provider_name?: string; credentials_checked?: boolean } }>('/settings/oidc/test', body, { silent: true } as never)
+    const res = await request.post<{ data?: { ok: boolean; error?: string; provider_name?: string; credentials_checked?: boolean } }>('/settings/oidc/test', body, { silent: true })
     probe.checked = true
     probe.ok = !!res.data?.ok
     probe.error = res.data?.error
@@ -283,10 +284,12 @@ const remove = async () => {
 }
 
 const copy = async (text: string) => {
-  try {
-    await navigator.clipboard.writeText(text)
+  // FE42-7：复用 utils/copy 的 copyText（clipboard API + textarea 降级双通道，与全站一致）。
+  if (await copyText(text)) {
     ElMessage.success('已复制')
-  } catch { /* 剪贴板被拒(非安全上下文等)——静默 */ }
+    return
+  }
+  ElMessage.error('复制失败，请手动复制')
 }
 </script>
 
@@ -314,7 +317,6 @@ const copy = async (text: string) => {
   font-size: 13px; font-weight: 600;
 }
 .oidc-step-body { flex: 1; min-width: 0; padding-right: 34px; }
-.step { margin-bottom: 18px; }
 .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .cred-form { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .cred-row { display: flex; align-items: flex-start; gap: 12px; }

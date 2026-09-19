@@ -206,6 +206,36 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 	return configs
 }
 
+// validateStrategyForProtocol(Round 37 I-5 抽享,LB42-2 复用):strategy 白名单
+// 协议感知校验——cookie 仅 HTTP 支持,TCP 规则拒绝;保存门(validateRuleFeatures)
+// 与存量启用门(validateStoredRuleConfig)同口径。空 strategy 走默认不校验。
+func validateStrategyForProtocol(protocol, strategy string) error {
+	if strategy == "" {
+		return nil
+	}
+	httpStrategies := map[string]bool{
+		"weighted_round_robin": true, "least_conn": true,
+		"ip_hash": true, "cookie": true,
+		"random": true, "first": true,
+	}
+	tcpStrategies := map[string]bool{
+		"weighted_round_robin": true, "least_conn": true,
+		"ip_hash": true,
+		"random":  true, "first": true,
+	}
+	switch protocol {
+	case "http":
+		if !httpStrategies[strategy] {
+			return fmt.Errorf("无效的负载策略：HTTP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first / cookie")
+		}
+	case "tcp":
+		if !tcpStrategies[strategy] {
+			return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
+		}
+	}
+	return nil
+}
+
 func validateRuleFeatures(input ruleFeatureInput) error {
 	// R43 F-B: 协议白名单。此前 Create/Update 仅拒绝空协议（rules.go:564），
 	// "https" 等未知值可经 API/MCP 落库，全量渲染按「非 http 即 TCP」处理
@@ -216,28 +246,8 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		return fmt.Errorf("协议仅支持 http 或 tcp")
 	}
 	// Round 37 I-5: strategy 白名单校验，非法值不再透传到 Caddy。
-	// 协议感知：cookie 仅 HTTP 支持，TCP 规则拒绝，与 handlers.go validateRulePayloadBeforeSave 对齐。
-	if input.Strategy != "" {
-		httpStrategies := map[string]bool{
-			"weighted_round_robin": true, "least_conn": true,
-			"ip_hash": true, "cookie": true,
-			"random": true, "first": true,
-		}
-		tcpStrategies := map[string]bool{
-			"weighted_round_robin": true, "least_conn": true,
-			"ip_hash": true,
-			"random":  true, "first": true,
-		}
-		switch input.Protocol {
-		case "http":
-			if !httpStrategies[input.Strategy] {
-				return fmt.Errorf("无效的负载策略：HTTP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first / cookie")
-			}
-		case "tcp":
-			if !tcpStrategies[input.Strategy] {
-				return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
-			}
-		}
+	if err := validateStrategyForProtocol(input.Protocol, input.Strategy); err != nil {
+		return err
 	}
 	// Round 37 I-6: 健康检查超时必须小于检查间隔（两者都 > 0 时）。
 	if input.HealthCheckInterval > 0 && input.HealthCheckTimeout > 0 && input.HealthCheckTimeout >= input.HealthCheckInterval {
@@ -753,6 +763,16 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 		(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 		return &configValidationError{message: "手动证书模式下必须提供 TLS 证书和私钥"}
 	}
+	// LB42-2:与保存门同口径的策略白名单——存量(校验上线前落库)/直改 DB 的
+	// TCP+cookie 等 HTTP 专属策略启用行透传到 L4 渲染被静默忽略,启用即拒。
+	if err := validateStrategyForProtocol(rule.Protocol, rule.Strategy); err != nil {
+		return &configValidationError{message: err.Error()}
+	}
+	// LB42-3①:与保存门(validateRuleFeatures)同口径——TCP+dynamic_dns 规则
+	// 渲染侧整体跳过(无 Host 头驱动解析),启用即拒,不留静默死规则。
+	if rule.Protocol == "tcp" && rule.DynamicDNS {
+		return &configValidationError{message: "TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议"}
+	}
 	return validateRuleConfigGeneration(rule)
 }
 
@@ -801,8 +821,30 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）手动证书模式缺少证书或私钥，请补齐材料或切换证书来源", rule.Name, rule.CaddyID)})
 		}
+		// LB42-3①:与单规则门同口径——TCP+dynamic_dns 启用存量在启动/
+		// UpdateConfig 聚合校验点名(渲染整跳过形态,静默死规则)。
+		if rule.Protocol == "tcp" && rule.DynamicDNS {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议", rule.Name, rule.CaddyID)})
+			continue
+		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
 			problems = append(problems, fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err))
+		}
+	}
+	// LB42-3②:同端口多启用 TCP 规则点名(兜存量双启用——启用方向第二条由
+	// validatePortFromDB 拦截,此门兜直改 DB/历史存量;L4 监听同端口只能由
+	// 一条规则占用,后注册者顶替先注册者)。与 LB40-1 不同:该形态渲染即
+	// 相互顶替,必须报错而非仅告警。
+	tcpByPort := make(map[int][]string)
+	for _, rule := range rules {
+		if rule.Protocol != "tcp" {
+			continue
+		}
+		tcpByPort[rule.ListenPort] = append(tcpByPort[rule.ListenPort], fmt.Sprintf("%s（%s）", rule.Name, rule.CaddyID))
+	}
+	for port, names := range tcpByPort {
+		if len(names) > 1 {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("端口 %d 存在多条启用的 TCP 规则（%s）——L4 监听同端口只能由一条规则占用，请保留一条或调整端口", port, strings.Join(names, "、"))})
 		}
 	}
 	// LB40-1:存量同端口 TLS/明文混布点名告警(不阻断启动——存量形态可能是

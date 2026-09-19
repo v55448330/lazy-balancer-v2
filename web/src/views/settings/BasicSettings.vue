@@ -319,7 +319,7 @@
       <el-form label-width="110px" class="auto-backup-form">
         <el-form-item label="启用">
           <el-switch v-model="autoBackupForm.enabled" />
-          <el-text type="info" size="small" class="tip-inline">调度器仅主节点运行；主从切换后需重启进程才开始备份</el-text>
+          <el-text type="info" size="small" class="tip-inline">调度器仅主节点运行；主从切换后自动开始，无需重启进程</el-text>
         </el-form-item>
         <!-- 自管标签行(同上 a11y 范式):radio+select 兄弟同行,role=group 收口 -->
         <div class="form-radio-row" role="group" aria-label="频率">

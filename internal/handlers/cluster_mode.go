@@ -122,12 +122,11 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		// 内部故障(500,此前误 403 误导排障)。
 		status := http.StatusInternalServerError
 		msg := "更新集群设置失败"
+		// CL42-3:UpdateSettings 不产出 ErrAlreadyMaster(仅 Promote 产出,
+		// Promote 路径 :93 映射保留),原 case 为死分支已删除。
 		switch {
 		case errors.Is(err, services.ErrInvalidSyncInterval) || errors.Is(err, services.ErrSyncUsersLocked):
 			status = http.StatusBadRequest
-			msg = err.Error()
-		case errors.Is(err, services.ErrAlreadyMaster):
-			status = http.StatusForbidden
 			msg = err.Error()
 		default:
 			if strings.Contains(err.Error(), "从节点不能修改") {

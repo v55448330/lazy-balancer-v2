@@ -119,7 +119,16 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		}
 		certPEM := rule.certPEM
 		if rule.source == "acme_dns" {
-			certPEM, _ = services.SelectRuleCertificate(candidates[id], rule.domains, now)
+			var selected bool
+			certPEM, selected = services.SelectRuleCertificate(candidates[id], rule.domains, now)
+			// CERT42-1:CERT40-1 同型回退——候选全过期时按 expired 呈现,
+			// 与单规则端点同口径(此前批量恒报「尚未签发或不存在」)。
+			if !selected {
+				if info := services.ExpiredACMECertInfoFallback(candidates[id], id, rule.domains); info != nil {
+					result[id] = info
+					continue
+				}
+			}
 		}
 		result[id] = parseBatchRuleCertInfo(batchRuleCertInput{
 			id: id, certPEM: certPEM, source: rule.source, ruleDomains: rule.domains,

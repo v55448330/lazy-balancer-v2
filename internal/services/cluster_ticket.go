@@ -78,6 +78,13 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	return models.ClusterLoginTicketResponse{Ticket: ticket, URL: accessURL}, nil
 }
 
+// CL42-5（第 42 轮审计裁定·设计声明）：票据登录刻意不检查从节点本地
+// login_locked_until——该列是从节点自身密码登录端点的暴破防护记账（SC-4，
+// 本地写入、不随快照同步），而本路径不含任何口令猜测面：票据由主节点在
+// 完整认证（本地用户强制 MFA 步进验证/OIDC 会话经 IdP 二因子）后签发，
+// 票据本身即主端 MFA 事实；一次性消费（jti 入 used_login_tickets）+90s
+// TTL+HMAC 绑定节点，重查本地锁对暴破防护无增量，反而会让主端合法跳转
+// 被从节点残留的本地锁误拦。
 func (s *ClusterService) ValidateLoginTicket(ctx context.Context, ticket string, now time.Time) (models.ClusterLoginTicketClaims, models.User, int64, error) {
 	parts := strings.Split(ticket, ".")
 	if len(parts) != 2 {

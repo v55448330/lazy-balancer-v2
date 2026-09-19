@@ -293,7 +293,7 @@ onMounted(async () => {
     }
   } catch { /* 隐私模式 */ }
   try {
-    const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true } as never)
+    const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true })
     if (res.data?.enabled) {
       oidcEnabled.value = true
       oidcDisplayName.value = res.data.display_name || 'OIDC'

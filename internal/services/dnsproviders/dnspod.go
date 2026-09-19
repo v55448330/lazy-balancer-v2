@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -111,7 +112,10 @@ func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
 		return fmt.Errorf("DNS 写入测试失败: %w", err)
 	}
 	if err := provider.CleanUp(ctx, domain, challengeName); err != nil {
-		return fmt.Errorf("DNS 清理测试失败: %w", err)
+		// CERT42-6（第 42 轮审计）：清理失败时测试 TXT 记录可能已残留——记告警
+		// 并在错误文案点名手动清理路径；返回错误语义不变（验证仍判失败）。
+		log.Printf("warn: dnspod 验证清理失败，测试记录 %s 可能残留，请手动清理: %v", challengeName, err)
+		return fmt.Errorf("DNS 清理测试失败: %w（测试记录可能已残留，请登录 DNS 控制台手动清理 %s TXT 记录）", err, strings.TrimSuffix(challengeName, "."))
 	}
 	return nil
 }

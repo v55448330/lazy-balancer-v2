@@ -43,6 +43,13 @@ func TestIsSynchronizedWrite_classifies_only_snapshot_content_mutations(t *testi
 		{"POST", "/api/v1/config/import", true},
 		{"POST", "/api/v1/config/import/v1", true},
 		{"POST", "/api/v1/config/import/validate", false},
+		// SECREV42-N1(第 42 轮评审):还原经 importConfigBackupCore 重写 lb_rules/
+		// upstreams 等全部同步表,必须与 /config/import 同口径 fail-closed;
+		// run/delete 仅写 auto_backups 本地簿记表(非同步表),不放行。
+		{"POST", "/api/v1/auto-backup/:id/restore", true},
+		{"POST", "/api/v1/auto-backup/7/restore", true},
+		{"POST", "/api/v1/auto-backup/run", false},
+		{"DELETE", "/api/v1/auto-backup/:id", false},
 		{"POST", "/api/v1/certificates/issue", true},
 		{"POST", "/api/v1/certificates/jobs/:id/retry", true},
 		{"DELETE", "/api/v1/certificates/jobs/:id", true},
@@ -59,6 +66,9 @@ func TestIsSynchronizedWrite_classifies_only_snapshot_content_mutations(t *testi
 		{"POST", "/api/v1/security/policies", true},
 		{"PUT", "/api/v1/security/policies/:id", true},
 		{"DELETE", "/api/v1/security/policies/:id", true},
+		{"PUT", "/api/v1/settings/auto-backup", true},
+		{"PUT", "/api/v1/settings/oidc", true},
+		{"DELETE", "/api/v1/settings/oidc", true},
 		{"POST", "/api/v1/security/policies/:id/bind", true},
 		{"DELETE", "/api/v1/security/policies/:id/bind/:caddy_id", true},
 		{"POST", "/api/v1/security/custom-rules", true},

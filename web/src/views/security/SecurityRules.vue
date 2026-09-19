@@ -1131,9 +1131,6 @@ onMounted(() => {
   const urlTab = new URLSearchParams(location.search).get('tab')
   if (urlTab && ['rules', 'custom', 'ip-lists'].includes(urlTab)) {
     activeTab.value = urlTab
-  } else {
-    const tab = localStorage.getItem('security-rules-tab')
-    if (tab) { activeTab.value = tab; localStorage.removeItem('security-rules-tab') }
   }
   fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists()
 })

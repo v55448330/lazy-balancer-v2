@@ -885,8 +885,13 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close non-terminal certificate jobs: %w", err)
 	}
+	// CERT42-5（第 42 轮审计）：读取失败降级默认值必须告警（与 certissuer.go
+	// 同口径）——静默落 30 天默认会让配置读取退化无任何可观测痕迹。
 	renewalDays := 30
-	_ = db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
+		Logf("error", "read cert_renewal_days failed, using default 30: %v", err)
+		renewalDays = 30
+	}
 	// 2026-09-07 C2 核实：UI 输入 min=1，0/负值仅 API 直写/导入可达——按默认 30 天兜底（非「禁用续签」）。
 	if renewalDays <= 0 {
 		renewalDays = 30
@@ -1329,9 +1334,10 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var days int
-	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days)
-	if err != nil {
+	// CERT42-5（第 42 轮审计）：读取失败降级默认值告警，与 certissuer.go 同口径。
+	days := 30
+	if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days); err != nil {
+		Logf("error", "read cert_renewal_days failed, using default 30: %v", err)
 		days = 30
 	}
 	if days <= 0 {
@@ -1404,9 +1410,13 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var days int
-	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days)
-	if err != nil || days <= 0 {
+	// CERT42-5（第 42 轮审计）：读取失败降级默认值告警，与 certissuer.go 同口径。
+	days := 30
+	if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days); err != nil {
+		Logf("error", "read cert_renewal_days failed, using default 30: %v", err)
+		days = 30
+	}
+	if days <= 0 {
 		days = 30
 	}
 

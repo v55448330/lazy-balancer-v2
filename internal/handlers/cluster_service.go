@@ -113,7 +113,10 @@ func (h *Handlers) callClusterServiceControl(ctx context.Context, baseURL, actio
 		return "", fmt.Errorf("构造服务控制请求: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := clusterServiceControlClientFactory(h.cfg.DataDir).Do(request)
+	// CL42-2（第 42 轮审计）：从节点启用管理 HTTPS 后明文端口 301——按集群同步
+	// 同一契约对同主机 https Location 重放一次，否则票据调用在空 body 上报解析
+	// 错误、服务控制全线不可用。
+	response, err := services.DoWithSameHostTLSUpgradeRedirect(clusterServiceControlClientFactory(h.cfg.DataDir), request)
 	if err != nil {
 		return "", fmt.Errorf("调用从节点服务控制: %w", err)
 	}

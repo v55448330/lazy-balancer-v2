@@ -763,8 +763,11 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 		return result
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
+	// PERF42-1（第 42 轮审计）：与 handlers/metrics.go fetchCaddyMetrics 同型——
+	// limit+1 探测读取，超 16MB 按读取失败处理（返回空健康表），防指标基数
+	// 膨胀时裸 ReadAll 的无界内存分配。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
+	if err != nil || len(body) > 16<<20 {
 		return result
 	}
 

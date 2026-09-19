@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -47,11 +46,10 @@ func parseAdminTLSCertInfo(certPEM string) (*adminTLSCertInfo, error) {
 		issuer = cert.Issuer.String()
 	}
 	remaining := time.Until(cert.NotAfter)
-	daysLeft := int(math.Floor(remaining.Hours() / 24))
+	// CERT42-3:与 R67(services/certinfo.go)同口径向零截断——未过期 23h→0、
+	// 过期 1天3h→-1;此前未过期 Ceil/已过期 Floor 与规则证书展示相差一天。
+	daysLeft := int(remaining.Hours() / 24)
 	expired := remaining <= 0
-	if !expired {
-		daysLeft = int(math.Ceil(remaining.Hours() / 24))
-	}
 	info := &adminTLSCertInfo{
 		Domain:   domain,
 		Issuer:   issuer,

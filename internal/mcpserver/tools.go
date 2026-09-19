@@ -39,8 +39,8 @@ func ListToolSpecs() []ToolSpec {
 var toolUsage = map[string]string{
 	"list_rules":                   "先了解当前规则全貌（域名/端口/上游/启用状态），所有变更前的现状盘点入口",
 	"get_rule":                     "在修改某条规则前获取其完整配置（上游/证书/路径路由/超时）",
-	"create_rule":                  "新建 HTTP/TCP 代理规则。必填 name/protocol/listen_port/upstreams[{host,port}]；创建即重载生效，失败自动回滚",
-	"update_rule":                  "修改现有规则的任意字段（部分更新）。协议切换会自动迁移上游协议并清理对侧字段。upstreams 为全量替换，须携带完整字段（含 enabled）",
+	"create_rule":                  "新建 HTTP/TCP 代理规则。必填 name/protocol/listen_port/upstreams[{host,port}]；创建即重载生效，失败自动回滚。上游级 dynamic_dns 已废弃（不参与渲染），动态上游用规则级 dynamic_dns",
+	"update_rule":                  "修改现有规则的任意字段（部分更新）。协议切换会自动迁移上游协议并清理对侧字段。upstreams 为全量替换，须携带完整字段（含 enabled）。上游级 dynamic_dns 已废弃（不参与渲染），动态上游用规则级 dynamic_dns",
 	"delete_rule":                  "删除规则并清理关联上游/证书任务/证书文件。不可恢复，先 get_rule 确认。有 worker 正在执行签发时秒回 409（queued/冷却中不拦，稍后重试即可）",
 	"enable_rule":                  "恢复被禁用规则的流量；ACME 规则会按需恢复/重排证书任务",
 	"disable_rule":                 "临时下线规则但保留配置与证书；非终态证书任务置为 disabled。有 worker 正在执行签发时秒回 409（queued/冷却中不拦，稍后重试即可）",

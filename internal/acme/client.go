@@ -324,12 +324,23 @@ func (c *Client) removeStaleAccountKeys() error {
 		if info.ModTime().After(cutoff) {
 			continue
 		}
-		if err := os.Remove(keyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("删除失效 ACME 账户密钥 %s: %w", filepath.Base(keyPath), err)
+		if err := removeStaleAccountKeyPair(keyPath, metadataPath); err != nil {
+			return err
 		}
-		if err := os.Remove(metadataPath); err != nil {
-			return fmt.Errorf("删除失效 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
-		}
+	}
+	return nil
+}
+
+// removeStaleAccountKeyPair 删除一对失效账户密钥及其元数据。两个删除同口径容忍
+// os.ErrNotExist（CERT42-4，第 42 轮审计）：读取元数据到执行删除之间存在外部
+// 清理窗口（其他进程的 RegisterAccount/手工清理），文件已消失即目标终态，不算
+// 失败——此前仅 key 删除容忍，元数据删除在窗口内报错会中止整轮清理。
+func removeStaleAccountKeyPair(keyPath, metadataPath string) error {
+	if err := os.Remove(keyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("删除失效 ACME 账户密钥 %s: %w", filepath.Base(keyPath), err)
+	}
+	if err := os.Remove(metadataPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("删除失效 ACME 账户密钥元数据 %s: %w", filepath.Base(metadataPath), err)
 	}
 	return nil
 }

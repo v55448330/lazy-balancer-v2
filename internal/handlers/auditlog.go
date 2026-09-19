@@ -1,12 +1,12 @@
 package handlers
 
 import (
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -17,13 +17,18 @@ import (
 // auditOptionsCache(SYS40-4):options 三条 GROUP BY 的进程内缓存(60s)——
 // 下拉选项对实时性不敏感,深审计库每次筛选面板打开都做三趟全表 GROUP BY
 // 是无谓放大;写侧不失效(60s 窗口内新动作延迟出现,可接受口径)。
+// SYS42-2:读写并发加 sync.Mutex(与 helpers.go diskUsageCache 同型)——
+// 此前读缓存/写缓存无锁,并发筛选面板打开可交错出撕裂读。
 var auditOptionsCache struct {
+	sync.Mutex
 	expiresAt time.Time
 	payload   map[string]interface{}
 }
 
 // resetAuditOptionsCacheForTest 仅供测试隔离。
 func resetAuditOptionsCacheForTest() {
+	auditOptionsCache.Lock()
+	defer auditOptionsCache.Unlock()
 	auditOptionsCache.expiresAt = time.Time{}
 	auditOptionsCache.payload = nil
 }
@@ -33,11 +38,13 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 		Value string `json:"value"`
 		Count int64  `json:"count"`
 	}
+	auditOptionsCache.Lock()
+	defer auditOptionsCache.Unlock()
 	if time.Now().Before(auditOptionsCache.expiresAt) && auditOptionsCache.payload != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: auditOptionsCache.payload})
 		return
 	}
-	fetchDistinct := func(column string, limit int) []optionRow {
+	fetchDistinct := func(column string, limit int) ([]optionRow, error) {
 		rows, err := db.AuditDB.Query(`
 			SELECT `+column+`, COUNT(*) AS cnt FROM audit_log
 			WHERE `+column+` != ''
@@ -45,7 +52,7 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 			ORDER BY cnt DESC, `+column+`
 			LIMIT ?`, limit)
 		if err != nil {
-			return []optionRow{}
+			return []optionRow{}, err
 		}
 		defer rows.Close()
 		out := []optionRow{}
@@ -55,15 +62,27 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 				out = append(out, o)
 			}
 		}
-		return out
+		return out, nil
+	}
+	var fetchErr error
+	collect := func(column string, limit int) []optionRow {
+		rows, err := fetchDistinct(column, limit)
+		if err != nil && fetchErr == nil {
+			fetchErr = err
+		}
+		return rows
 	}
 	payload := map[string]interface{}{
-		"usernames": fetchDistinct("COALESCE(username,'')", 100),
-		"actions":   fetchDistinct("action", 100),
-		"resources": fetchDistinct("COALESCE(resource,'')", 50),
+		"usernames": collect("COALESCE(username,'')", 100),
+		"actions":   collect("action", 100),
+		"resources": collect("COALESCE(resource,'')", 50),
 	}
-	auditOptionsCache.payload = payload
-	auditOptionsCache.expiresAt = time.Now().Add(60 * time.Second)
+	// SYS42-5:任一 fetchDistinct 出错即跳过本轮缓存写入——空结果是故障形态,
+	// 缓存它会让一次瞬态错误在 60s 窗口内持续喂空下拉。
+	if fetchErr == nil {
+		auditOptionsCache.payload = payload
+		auditOptionsCache.expiresAt = time.Now().Add(60 * time.Second)
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: payload})
 }
 

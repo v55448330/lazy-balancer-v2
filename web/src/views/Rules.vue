@@ -856,7 +856,7 @@
     </el-dialog>
 
     <!-- View Config Dialog -->
-    <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" :close-on-click-modal="true" @close="onConfigDialogClosed">
+    <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" top="5vh" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><Document /></el-icon></div>
@@ -3342,14 +3342,6 @@ onUnmounted(() => {
   text-decoration: underline;
 }
 .domain { font-family: monospace; color: #374151; }
-.description { 
-  display: block;
-  max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #6b7280;
-}
 .port { font-family: monospace; color: #374151; }
 .tls-tag {
   min-width: 44px;
@@ -3447,22 +3439,6 @@ onUnmounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-.upstream-metrics {
-  display: flex !important;
-  align-items: center !important;
-  gap: 2px !important;
-  font-size: 11px;
-  color: #6b7280;
-}
-
-.metric-num {
-  color: #3b82f6;
-}
-
-.metric-fails {
-  color: #ef4444;
-}
-
 /* Fix cell padding issue */
 .el-popover.el-popper {
   padding: 12px;
@@ -3514,21 +3490,6 @@ onUnmounted(() => {
 .upstream-unknown {
   color: #9ca3af;
   font-size: 14px;
-}
-
-.upstream-metrics {
-  display: flex;
-  gap: 12px;
-  font-size: 11px;
-  padding-left: 4px;
-}
-
-.metric-num {
-  color: #3b82f6;
-}
-
-.metric-fails {
-  color: #ef4444;
 }
 
 /* Status switch */

@@ -465,6 +465,13 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 }
 
 func (h *Handlers) GetSetupStatus(c *gin.Context) {
+	// SYS42-3:从节点无初始化语义——users 由主端同步,同步未收敛的瞬态空表
+	// 不得引导建号(建号会被同步覆盖)。查询失败按主节点语义放行(老库形态)。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"needs_setup": false}})
+		return
+	}
 	var count int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查初始化状态失败"})
@@ -474,6 +481,12 @@ func (h *Handlers) GetSetupStatus(c *gin.Context) {
 }
 
 func (h *Handlers) SetupAdmin(c *gin.Context) {
+	// SYS42-3:从节点禁止初始化建号(公开路由无 JWT,is_master 读 global_config)。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点不支持初始化，请在主节点完成初始化"})
+		return
+	}
 	var count int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查初始化状态失败"})

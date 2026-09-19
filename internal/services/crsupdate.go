@@ -221,8 +221,10 @@ func (m *CRSUpdateManager) run(trigger string) {
 	// 起点角色复查（R54-N5）：调度器 tick 的 is_master 守卫与更新启动之间存在
 	// demote 竞态窗口——tick 越过守卫、更新刚发出时节点被降级，从节点继续执行
 	// 会写本地版本行、替换规则树并 reload，瞬时打破只读不变量。
+	// SEC42-2（第 42 轮审计）：NULL 兜底归一为 1，与 IsMaster/readonly 写闸/
+	// 调度器 tick 的 COALESCE(is_master,1) 同口径（历史 NULL 视为主节点）。
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		m.setStage(CRSStatusFailed, "当前节点为从节点，终止 CRS 更新")
 		return
 	}

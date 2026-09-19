@@ -931,7 +931,7 @@ const selectedCustomRules = ref<number[]>([])
 // action 用于多策略冲突检测（放行型 pass / 拦截型 block）；enabled 预留
 const allCustomRules = ref<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>([])
 
-// 返回是否加载成功——R62 D-4：聚焦流程（security-policies-focus-id）需区分
+// 返回是否加载成功——R62 D-4：聚焦流程（FE42-1 起为 ?sp= 策略 ID）需区分
 // 「列表加载失败」与「策略确已删除」，否则瞬时失败会被误报为「已被删除」。
 const fetchData = async (): Promise<boolean> => {
   loading.value = true
@@ -2347,10 +2347,13 @@ const fetchRegions = async () => {
 }
 
 onMounted(async () => {
-  const search = localStorage.getItem('security-policies-search')
-  if (search) { policySearch.value = search; localStorage.removeItem('security-policies-search') }
-  const focusId = Number(localStorage.getItem('security-policies-focus-id') || 0)
-  if (focusId) localStorage.removeItem('security-policies-focus-id')
+  // FE42-1：安全事件页「查看策略」交接改走 URL query（sp=策略 ID / sp-search=名称
+  // 关键词），消费后 replaceState 清除——localStorage 通道在多标签/隐私模式下错乱。
+  const query = new URLSearchParams(window.location.search)
+  const search = query.get('sp-search')
+  if (search) policySearch.value = search
+  const focusId = Number(query.get('sp') || 0)
+  if (search || query.has('sp')) window.history.replaceState(null, '', window.location.pathname)
   const loaded = await fetchData()
   if (focusId && loaded) {
     // R62 D-4：仅列表加载成功时才判定「已被删除」；加载失败时全局拦截器已弹错误

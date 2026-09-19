@@ -76,8 +76,20 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	if err != nil {
 		return err
 	}
-
 	recordID, err := p.createRecord(ctx, domainID, subDomain, value, ttl)
+	if errors.Is(err, errStaleDomainID) {
+		// CERT42-7（第 42 轮审计）：缓存的 zone→domain_id 可能陈旧（域名被移出
+		// 账户/删除后重建，新 ID 与缓存不符），Record.Create 报「域名不存在」类
+		// 错误——作废该 zone 缓存重解析一次并重试一次；重解析或重试失败按最新
+		// 错误返回，不循环（域名真正移出时重解析即失败，见
+		// TestProvider_Present_staleCacheRetryStopsWhenDomainGone）。
+		invalidateDomainIDCache(zone)
+		freshID, resolveErr := p.getDomainID(ctx, zone)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		recordID, err = p.createRecord(ctx, freshID, subDomain, value, ttl)
+	}
 	if err != nil {
 		return err
 	}
@@ -228,6 +240,30 @@ func (n flexNumber) Int64() int64 {
 	return value
 }
 
+// errStaleDomainID 标记 Record.Create 返回的「域名不存在/ID 失效」类错误
+// （CERT42-7）：缓存的 zone→domain_id 因域名移出账户/删除重建而陈旧时由
+// Present 捕获，作废缓存重解析后重试一次。
+var errStaleDomainID = errors.New("dnspod: 域名 ID 已失效")
+
+// isDomainGoneStatus 判定 dnsapi.cn 状态是否属于「域名不存在」类：code 6
+// （域名ID错误）/7（域名不存在），或消息显式含域名缺失字样（apiCall 固定
+// lang=cn，消息为中文）。
+func isDomainGoneStatus(code, message string) bool {
+	if code == "6" || code == "7" {
+		return true
+	}
+	return strings.Contains(message, "域名不存在") ||
+		strings.Contains(message, "域名ID错误") ||
+		strings.Contains(message, "域名 ID 错误")
+}
+
+// invalidateDomainIDCache 作废单个 zone 的缓存映射（CERT42-7）。
+func invalidateDomainIDCache(zone string) {
+	domainIDCacheMu.Lock()
+	delete(domainIDCache, zone)
+	domainIDCacheMu.Unlock()
+}
+
 // domainIDCache(CERT40-4):zone→domain_id 进程内缓存——签发/续签的每次
 // Present/CleanUp 都要解析 zone 的 domain_id,分页遍历 Domain.List 在多
 // 域名/多任务并发下重复全额扫描;zone→id 映射在账户内稳定,命中即省。
@@ -303,7 +339,12 @@ func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value 
 		return "", err
 	}
 	if result.Status.Code.String() != "1" {
-		return "", fmt.Errorf("Record.Create failed: %s", result.Status.Message)
+		err := fmt.Errorf("Record.Create failed: %s", result.Status.Message)
+		if isDomainGoneStatus(result.Status.Code.String(), result.Status.Message) {
+			// CERT42-7：标记「域名不存在」类错误，供 Present 作废缓存重试。
+			err = errors.Join(err, errStaleDomainID)
+		}
+		return "", err
 	}
 	if result.Record.ID.String() == "" {
 		return "", fmt.Errorf("Record.Create returned no record ID")
