@@ -78,6 +78,7 @@ var tools = []toolSpec{
 	{"get_ip2region_update_status", "获取 IP2Region 更新进度状态", http.MethodGet, "/security/ip2region/update/status", nil, nil, emptySchema},
 	{"get_ip2region_update_logs", "获取 IP2Region 更新日志", http.MethodGet, "/security/ip2region/update/logs", nil, nil, emptySchema},
 	{"get_rate_limit_blocks", "获取限流拦截统计", http.MethodGet, "/security/rate-limit-blocks", nil, nil, emptySchema},
+	{"get_rule_stage_stats", "获取单规则三阶段安全统计（阶段 1/3 近 24h 拦截数+限流重载口径计数）", http.MethodGet, "/security/rules/{caddy_id}/stage-stats", []string{"caddy_id"}, nil, emptySchema},
 	{"create_security_policy", "创建安全策略（WAF 模式/CRS/IP ACL/GeoIP/限流/拦截页面）", http.MethodPost, "/security/policies", nil, nil, bodySchema},
 	{"update_security_policy", "更新指定安全策略", http.MethodPut, "/security/policies/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_security_policy", "删除指定安全策略", http.MethodDelete, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},

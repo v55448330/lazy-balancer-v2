@@ -139,11 +139,11 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	// 59 = GET 工具 55 - export_config 隐藏 + 5 个读探测 POST 工具
+	// 60 = GET 工具 56（含 get_rule_stage_stats，阶段化流水线批 2 新增） - export_config 隐藏 + 5 个读探测 POST 工具
 	// (ApiMcp-新1:REST 只读白名单同口径——test_ca_provider/test_certificate_config/
 	// parse_certificate/validate_import/preview_config 转发侧守卫可通过,可见)
-	if len(payload.Result.Tools) != 59 {
-		t.Fatalf("read-only tool count=%d, want 59", len(payload.Result.Tools))
+	if len(payload.Result.Tools) != 60 {
+		t.Fatalf("read-only tool count=%d, want 60", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {

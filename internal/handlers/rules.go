@@ -931,8 +931,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 		host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
-		enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled,
+		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
@@ -941,7 +942,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
-		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, enabledVal, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
+		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, enabledVal, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled,
+		req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
 
 	if err != nil {
 		tx.Rollback()
@@ -1639,6 +1641,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.CAProviderID != nil {
 		query += "ca_provider_id = ?, "
 		args = append(args, *req.CAProviderID)
+	}
+	if req.BlockPageStage1ID != nil {
+		query += "block_page_stage1_id = ?, "
+		args = append(args, *req.BlockPageStage1ID)
+	}
+	if req.BlockPageStage1Status != nil {
+		query += "block_page_stage1_status = ?, "
+		args = append(args, *req.BlockPageStage1Status)
+	}
+	if req.BlockPageStage3ID != nil {
+		query += "block_page_stage3_id = ?, "
+		args = append(args, *req.BlockPageStage3ID)
+	}
+	if req.BlockPageStage3Status != nil {
+		query += "block_page_stage3_status = ?, "
+		args = append(args, *req.BlockPageStage3Status)
 	}
 	if req.TLSCert != "" || protocolChanged {
 		query += "tls_cert = ?, "
@@ -2360,8 +2378,9 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
 	tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
 		custom_routes_enabled,
-		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
+		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
@@ -2372,6 +2391,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
 		rule.CustomRoutesEnabled,
 		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay,
+		rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status,
 	); err != nil {
 		services.Logf("error", "Failed to duplicate rule %s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败，已回滚: " + err.Error()})
@@ -2442,6 +2462,94 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	recordAudit(c, "复制", "负载规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口", Data: gin.H{"caddy_id": newCaddyID}})
+}
+
+// BatchRuleBlockPages 批量设置阶段拦截页（规则列表多选浮动操作条）：
+// {rule_ids:[], block_page_stage1_id, block_page_stage1_status,
+// block_page_stage3_id, block_page_stage3_status}——同校验（页存在/状态码集，
+// validateStageBlockPageRef 共享），单事务逐规则 UPDATE lb_rules 4 列 +
+// 一次 finishTxApply（单渲染）。响应 {bound:n, skipped:[{rule_id,reason}]}。
+func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
+	var req struct {
+		RuleIDs               []string `json:"rule_ids"`
+		BlockPageStage1ID     int      `json:"block_page_stage1_id"`
+		BlockPageStage1Status int      `json:"block_page_stage1_status"`
+		BlockPageStage3ID     int      `json:"block_page_stage3_id"`
+		BlockPageStage3Status int      `json:"block_page_stage3_status"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if len(req.RuleIDs) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		return
+	}
+	if err := validateStageBlockPageRef(req.BlockPageStage1ID, req.BlockPageStage1Status, "阶段 1（IP 访问控制/地域拦截）"); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if err := validateStageBlockPageRef(req.BlockPageStage3ID, req.BlockPageStage3Status, "阶段 3（WAF）"); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	type skippedRule struct {
+		RuleID string `json:"rule_id"`
+		Reason string `json:"reason"`
+	}
+	bound := 0
+	skipped := make([]skippedRule, 0)
+	for _, ruleCaddyID := range req.RuleIDs {
+		ruleCaddyID = strings.TrimSpace(ruleCaddyID)
+		if ruleCaddyID == "" {
+			continue
+		}
+		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=? WHERE caddy_id=?`,
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, ruleCaddyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if affected == 0 {
+			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
+			continue
+		}
+		bound++
+	}
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "负载规则", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("批量设置阶段拦截页（阶段 1 页 %d/码 %d，阶段 3 页 %d/码 %d）：成功 %d 条，跳过 %d 条",
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, bound, len(skipped)),
+		SuccessMsg: "批量设置阶段拦截页完成",
+		Data:       gin.H{"bound": bound, "skipped": skipped},
+	})
 }
 
 func (h *Handlers) EnableRule(c *gin.Context) {

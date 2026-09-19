@@ -1894,6 +1894,172 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	})
 }
 
+// BatchBindSecurityPolicies 批量绑定安全策略（规则列表多选浮动操作条）：
+// {rule_ids:[], policy_ids:[], mode:"merge"|"replace"}。单事务：策略存在性
+// 一次校验；逐规则存在且 protocol=http（否则进 skipped+reason）；merge=现有
+// ∪请求去重后 ≤5（超限进 skipped）、replace=直接采用请求集（≤5）；逐规则
+// DELETE（replace 或绑定变化时）+INSERT OR IGNORE；全程一次 finishTxApply
+// （单渲染——批量绑定的成本模型与逐条调 PUT /security/rules/:id/policies
+// N 次渲染对齐）。响应 {bound:n, skipped:[{rule_id,reason}]}。
+func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
+	var req struct {
+		RuleIDs   []string `json:"rule_ids"`
+		PolicyIDs []int    `json:"policy_ids"`
+		Mode      string   `json:"mode"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "merge"
+	}
+	if req.Mode != "merge" && req.Mode != "replace" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "mode 仅支持 merge 或 replace"})
+		return
+	}
+	if len(req.RuleIDs) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		return
+	}
+	// 去重后上限判定（同 SetRuleSecurityPolicies 的 B-I2 口径）
+	seen := map[int]struct{}{}
+	uniqueIDs := make([]int, 0, len(req.PolicyIDs))
+	for _, id := range req.PolicyIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) > 5 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定 5 条策略"})
+		return
+	}
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	// 策略存在性一次校验（不全在→400 整体拒绝）
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var found int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&found); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if found != len(uniqueIDs) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "部分策略不存在"})
+			return
+		}
+	}
+	type skippedRule struct {
+		RuleID string `json:"rule_id"`
+		Reason string `json:"reason"`
+	}
+	bound := 0
+	skipped := make([]skippedRule, 0)
+	for _, ruleCaddyID := range req.RuleIDs {
+		ruleCaddyID = strings.TrimSpace(ruleCaddyID)
+		if ruleCaddyID == "" {
+			continue
+		}
+		var ruleExists int
+		var ruleProtocol string
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if ruleExists == 0 {
+			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
+			continue
+		}
+		if ruleProtocol != "http" {
+			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
+			continue
+		}
+		existingRows, err := tx.QueryContext(c.Request.Context(), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id", ruleCaddyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		var existing []int
+		for existingRows.Next() {
+			var pid int
+			if err := existingRows.Scan(&pid); err != nil {
+				existingRows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			existing = append(existing, pid)
+		}
+		existingRows.Close()
+		final := uniqueIDs
+		if req.Mode == "merge" {
+			merged := make([]int, 0, len(existing)+len(uniqueIDs))
+			mergeSeen := map[int]struct{}{}
+			for _, id := range append(append([]int{}, existing...), uniqueIDs...) {
+				if _, dup := mergeSeen[id]; dup {
+					continue
+				}
+				mergeSeen[id] = struct{}{}
+				merged = append(merged, id)
+			}
+			if len(merged) > 5 {
+				skipped = append(skipped, skippedRule{ruleCaddyID, "合并后超过 5 条策略上限"})
+				continue
+			}
+			final = merged
+		}
+		// 绑定无变化（merge 幂等）时跳过写入；replace 恒重写（语义即全量替换）
+		changed := req.Mode == "replace" || len(final) != len(existing)
+		if !changed {
+			for i, id := range final {
+				if i >= len(existing) || existing[i] != id {
+					changed = true
+					break
+				}
+			}
+		}
+		if changed {
+			if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			for _, id := range final {
+				if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+					return
+				}
+			}
+		}
+		bound++
+	}
+	idStrs := make([]string, len(uniqueIDs))
+	for i, id := range uniqueIDs {
+		idStrs[i] = strconv.Itoa(id)
+	}
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("批量绑定安全策略 [%s]（%s）：成功 %d 条，跳过 %d 条", strings.Join(idStrs, ","), req.Mode, bound, len(skipped)),
+		SuccessMsg:  "批量绑定完成",
+		Data:        gin.H{"bound": bound, "skipped": skipped},
+	})
+}
+
 func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()

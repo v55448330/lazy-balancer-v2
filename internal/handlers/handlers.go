@@ -350,6 +350,10 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		RequestBodyMaxSizeMB          int
 		UpstreamKeepaliveTimeout      int
 		ServerTokensHidden            int
+		BlockPageStage1ID             int
+		BlockPageStage1Status         int
+		BlockPageStage3ID             int
+		BlockPageStage3Status         int
 		Upstreams                     []requestUpstream
 	}
 
@@ -384,6 +388,10 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		data.RequestBodyMaxSizeMB = r.RequestBodyMaxSizeMB
 		data.UpstreamKeepaliveTimeout = r.UpstreamKeepaliveTimeout
 		data.ServerTokensHidden = r.ServerTokensHidden
+		data.BlockPageStage1ID = r.BlockPageStage1ID
+		data.BlockPageStage1Status = r.BlockPageStage1Status
+		data.BlockPageStage3ID = r.BlockPageStage3ID
+		data.BlockPageStage3Status = r.BlockPageStage3Status
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight,
@@ -440,6 +448,18 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		}
 		if r.ServerTokensHidden != nil {
 			data.ServerTokensHidden = *r.ServerTokensHidden
+		}
+		if r.BlockPageStage1ID != nil {
+			data.BlockPageStage1ID = *r.BlockPageStage1ID
+		}
+		if r.BlockPageStage1Status != nil {
+			data.BlockPageStage1Status = *r.BlockPageStage1Status
+		}
+		if r.BlockPageStage3ID != nil {
+			data.BlockPageStage3ID = *r.BlockPageStage3ID
+		}
+		if r.BlockPageStage3Status != nil {
+			data.BlockPageStage3Status = *r.BlockPageStage3Status
 		}
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
@@ -617,6 +637,15 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		return fmt.Errorf("健康检查恢复阈值不能为负数")
 	}
 
+	// 阶段拦截页覆盖层：页引用存在性 + 状态码集合（Update nil 已合并为 0=
+	// 未配，存在性校验仅作用于显式提供值；存量保留值不经此门——页删除侧
+	// 引用检查与渲染侧「已失效」回落承担）。
+	if err := validateStageBlockPageRef(data.BlockPageStage1ID, data.BlockPageStage1Status, "阶段 1（IP 访问控制/地域拦截）"); err != nil {
+		return err
+	}
+	if err := validateStageBlockPageRef(data.BlockPageStage3ID, data.BlockPageStage3Status, "阶段 3（WAF）"); err != nil {
+		return err
+	}
 	return nil
 }
 

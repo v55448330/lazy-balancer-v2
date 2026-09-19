@@ -412,15 +412,15 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 			rateLimitRoute = route
 		case strings.Contains(expr, "== 403"):
 			blockPageRoute = route
-		case strings.Contains(expr, "== 481 &&"):
-			bySynthetic["481"] = route
-		case strings.Contains(expr, "== 482 &&"):
-			bySynthetic["482"] = route
+		case strings.Contains(expr, "== 483 &&"):
+			bySynthetic["483"] = route
+		case strings.Contains(expr, "== 484 &&"):
+			bySynthetic["484"] = route
 		}
 	}
-	if blockPageRoute == nil || rateLimitRoute == nil || bySynthetic["481"] == nil || bySynthetic["482"] == nil {
-		t.Fatalf("missing error route kind: fallback=%v rateLimit=%v attr481=%v attr482=%v",
-			blockPageRoute != nil, rateLimitRoute != nil, bySynthetic["481"] != nil, bySynthetic["482"] != nil)
+	if blockPageRoute == nil || rateLimitRoute == nil || bySynthetic["483"] == nil || bySynthetic["484"] == nil {
+		t.Fatalf("missing error route kind: fallback=%v rateLimit=%v attr483=%v attr484=%v",
+			blockPageRoute != nil, rateLimitRoute != nil, bySynthetic["483"] != nil, bySynthetic["484"] != nil)
 	}
 	// 兜底路由：host 限定，首绑定策略（p1）的页面与状态码，统一 403 interruption
 	// 子句（"GeoIP blocked" 子句已消亡——预检合并中断与无页策略中断走此）
@@ -429,8 +429,8 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 	assertEqual(t, handler["status_code"], 451)
 	wantExpr := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
 	assertEqual(t, routeMatcher(t, blockPageRoute)["expression"], wantExpr)
-	// 归因路由：逐策略渲染各自拦截页与状态码（481=p1/451，482=p2/503），无 host
-	for code, wantBodyStatus := range map[string][2]interface{}{"481": {"<html>first-block</html>", 451}, "482": {"<html>second-block</html>", 503}} {
+	// 归因路由：逐策略渲染各自拦截页与状态码（483=p1/451，484=p2/503），无 host
+	for code, wantBodyStatus := range map[string][2]interface{}{"483": {"<html>first-block</html>", 451}, "484": {"<html>second-block</html>", 503}} {
 		route := bySynthetic[code]
 		if _, hasHost := routeMatcher(t, route)["host"]; hasHost {
 			t.Fatalf("attribution route %s must not carry host matcher: %#v", code, routeMatcher(t, route))

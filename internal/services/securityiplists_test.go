@@ -234,7 +234,7 @@ func TestBuildIPPrecheckDirectives_mergedDenyUnion(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listB)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 	if !strings.Contains(directives, "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END") {
 		t.Fatalf("deny union rule missing:\n%s", directives)
 	}
@@ -252,7 +252,7 @@ func TestBuildIPPrecheckDirectives_mergedAllowIntersection(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listID)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 	if !strings.Contains(directives, "id:7,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END") {
 		t.Fatalf("allow intersection rule missing:\n%s", directives)
 	}

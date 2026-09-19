@@ -106,8 +106,8 @@
       <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
         <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
         <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
-        <el-step title="IP 访问控制" :icon="Connection" @click="jumpToStep(WIZARD_STEP.IP_ACL)" />
-        <el-step title="限流" :icon="Odometer" @click="jumpToStep(WIZARD_STEP.RATE_LIMIT)" />
+        <el-step title="IP 访问控制（阶段 1）" :icon="Connection" @click="jumpToStep(WIZARD_STEP.IP_ACL)" />
+        <el-step title="速率限制（阶段 2）" :icon="Odometer" @click="jumpToStep(WIZARD_STEP.RATE_LIMIT)" />
         <el-step title="关联规则" :icon="Link" @click="jumpToStep(WIZARD_STEP.BINDINGS)" />
         <el-step title="配置预览" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
       </el-steps>
@@ -135,7 +135,7 @@
             <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
                  会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
             <div class="mode-row" role="group" aria-label="WAF 模式">
-              <span class="mode-row-label">WAF 模式</span>
+              <span class="mode-row-label">WAF 模式（阶段 3）</span>
               <div class="mode-row-content">
                 <el-radio-group v-model="form.mode" class="mode-radio-group">
                   <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
@@ -598,7 +598,7 @@
                   <span class="block-page-rule-annotation-name">{{ row.name }}</span>
                   <span v-if="row.selfBlockPageActive" class="block-page-rule-annotation-status is-active">✓ 拦截页面生效中（触发本策略拦截时显示）</span>
                   <span v-else-if="!form.enabled" class="block-page-rule-annotation-status is-disabled">策略禁用中，拦截页面不生效</span>
-                  <span v-else class="block-page-rule-annotation-status is-warning">拦截时显示实际触发策略的拦截页与状态码；多策略 IP 访问控制的合并拦截显示首位策略的拦截页</span>
+                  <span v-else class="block-page-rule-annotation-status is-warning">规则可配阶段页覆盖；未覆盖时按触发策略显示；多策略 IP 访问控制的合并拦截显示首位策略的拦截页</span>
                 </div>
               </div>
             </el-form-item>
@@ -733,6 +733,7 @@
         <div class="picker-footer">
           <span class="picker-count">已选 {{ pickerSelected.length }} 条</span>
           <div class="picker-footer-buttons">
+            <el-button :disabled="pickerSelected.length === 0" @click="pickerSelected = []">清空</el-button>
             <el-button @click="rulePickerVisible = false">取消</el-button>
             <el-button type="primary" @click="confirmRulePicker">确定</el-button>
           </div>

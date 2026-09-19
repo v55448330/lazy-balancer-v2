@@ -956,6 +956,13 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 		}
 	}
 	if !referencedPage {
+		// 阶段拦截页（规则级覆盖层）同样触发页预载——规则配了阶段页但无任何
+		// 策略配页时，页内容仍需可用（481/482 阶段路由与抬码判定）。
+		if err := store.QueryRow(`SELECT EXISTS(SELECT 1 FROM lb_rules WHERE COALESCE(block_page_stage1_id,0)>0 OR COALESCE(block_page_stage3_id,0)>0)`).Scan(&referencedPage); err != nil {
+			return nil, err
+		}
+	}
+	if !referencedPage {
 		return ctx, nil
 	}
 	pageRows, err := store.Query(`SELECT id, COALESCE(content,'') FROM security_block_pages`)
@@ -997,12 +1004,17 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	return ctx, nil
 }
 
-// 拦截页归因合成中断码区间：481 起按策略身份递增，上限 599（HTTP 状态码
-// 合法区间）。481-599 在标准/常见扩展码中无占用（全仓 grep status:48 零
-// 冲突），且只出现于 {http.error.status_code} matcher 与 coraza status 动作
-// （coraza 对 status 无范围校验，actions/status.go 仅 Atoi）。
+// 拦截页归因合成中断码区间（阶段化模型重排）：阶段码固定 481=阶段 1（IP
+// 访问控制+地域拦截预检）、482=阶段 3（WAF）；逐策略合成码 483 起按策略身份
+// 递增，上限 599（HTTP 状态码合法区间）。481-599 在标准/常见扩展码中无占用
+// （全仓 grep status:48 零冲突），且只出现于 {http.error.status_code} matcher
+// 与 coraza status 动作（coraza 对 status 无范围校验，actions/status.go 仅
+// Atoi）。规则配了阶段页（id>0 且页内容非空）→ 对应阶段全部 deny 抬阶段码；
+// 未配=跟随策略（逐策略 483+ 归因默认层）。
 const (
-	blockPageSyntheticBase = 481
+	blockPageStage1Code    = 481
+	blockPageStage3Code    = 482
+	blockPageSyntheticBase = 483
 	blockPageSyntheticMax  = 599
 )
 
@@ -1109,6 +1121,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		PathRules                     []PathRuleConfig
 		HostHeader                    string
 		LogEnabled                    bool
+		BlockPageStage1ID             int
+		BlockPageStage1Status         int
+		BlockPageStage3ID             int
+		BlockPageStage3Status         int
 	}
 
 	type upstream struct {
@@ -1139,7 +1155,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
-		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
+		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
+		       COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
 		FROM lb_rules WHERE enabled = 1
 		ORDER BY rowid
 	`)
@@ -1158,7 +1175,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled,
 			&r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
-			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay)
+			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
+			&r.BlockPageStage1ID, &r.BlockPageStage1Status, &r.BlockPageStage3ID, &r.BlockPageStage3Status)
 
 		if err != nil {
 			closeErr := rows.Close()
@@ -1543,6 +1561,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
 				GlobalProxyFlushInterval:         global.proxyFlushInterval,
 				GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
+				BlockPageStage1ID:                r.BlockPageStage1ID,
+				BlockPageStage1Status:            r.BlockPageStage1Status,
+				BlockPageStage3ID:                r.BlockPageStage3ID,
+				BlockPageStage3Status:            r.BlockPageStage3Status,
 			}
 			for _, u := range ups {
 				if u.Enabled {
@@ -1568,7 +1590,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				routes = append(routes, route)
 			}
 		}
-
 		server["routes"] = routes
 
 		var errorRoutes []interface{}
@@ -1589,6 +1610,33 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			}
 			if securityCtx == nil {
 				continue
+			}
+			// 阶段拦截页（规则级覆盖层）：规则配了阶段页（id>0 且页内容非空）→
+			// 发射阶段路由（matcher 仅阶段码+interruption 消息，无 host——阶段码
+			// 只可能由配了该页的规则段产生；terminal；status 0 归一 403 由
+			// buildBlockPageAttributionRoute 承担）。按 server 去重同 483+ 机制：
+			// 同 server 多规则配阶段页时先配置者生效（阶段码全局唯一，冲突在
+			// UI 侧按规则语义呈现）。阶段码与逐策略码域（483+）不相交可共存。
+			for _, stage := range []struct {
+				code   int
+				pageID int
+				status int
+			}{
+				{blockPageStage1Code, r.BlockPageStage1ID, r.BlockPageStage1Status},
+				{blockPageStage3Code, r.BlockPageStage3ID, r.BlockPageStage3Status},
+			} {
+				if stage.pageID <= 0 {
+					continue
+				}
+				content := securityCtx.blockPageByID[stage.pageID]
+				if content == "" {
+					continue
+				}
+				if _, done := emittedSynthetic[stage.code]; done {
+					continue
+				}
+				emittedSynthetic[stage.code] = struct{}{}
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(stage.code, content, stage.status))
 			}
 			for _, policy := range policiesForRule(securityCtx, r.CaddyID) {
 				code := securityCtx.policySynthetic[policy.ID]
@@ -2247,6 +2295,12 @@ type SingleRuleConfig struct {
 	GlobalProxyFlushInterval         int
 	GlobalProxyStreamCloseDelay      int
 	Upstreams                        []UpstreamConfig
+	// 阶段拦截页覆盖层（0=跟随策略）：渲染侧判定需页内容非空
+	// （securityPolicyContext.blockPageByID），空内容=未配。
+	BlockPageStage1ID     int
+	BlockPageStage1Status int
+	BlockPageStage3ID     int
+	BlockPageStage3Status int
 }
 
 type PathRuleConfig struct {
@@ -2725,14 +2779,31 @@ func joinUpstreamAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-// blockStatusForPolicy 返回策略在生成上下文中的合成中断码（拦截页归因）：
-// 无批量上下文（非批量生成路径）或策略未分配（无有效拦截页/超区间上限）
-// 时返回 0——BuildCorazaDirectives 逐字节保持现状（403/缺省）。
-func blockStatusForPolicy(securityCtx *securityPolicyContext, policy *models.SecurityPolicy) int {
+// blockStatusForPolicy 返回策略段的中断抬码（阶段化模型）：规则配了阶段 3
+// 拦截页（id>0 且页内容非空）→ 恒 482（规则级覆盖层压过逐策略归因）；否则
+// 该策略在生成上下文中的合成中断码（483+，拦截页逐策略归因默认层）；无批量
+// 上下文（非批量生成路径）或策略未分配（无有效页/超区间上限）时返回 0——
+// BuildCorazaDirectives 逐字节保持现状（403/缺省）。
+func blockStatusForPolicy(securityCtx *securityPolicyContext, rule SingleRuleConfig, policy *models.SecurityPolicy) int {
 	if securityCtx == nil || policy == nil {
 		return 0
 	}
+	if rule.BlockPageStage3ID > 0 && securityCtx.blockPageByID[rule.BlockPageStage3ID] != "" {
+		return blockPageStage3Code
+	}
 	return securityCtx.policySynthetic[policy.ID]
+}
+
+// stage1BlockStatus 返回阶段 1（预检）的中断抬码：规则配了阶段 1 拦截页
+// （id>0 且页内容非空）→ 481，否则 0（预检保持 403 兜底归因边界）。
+func stage1BlockStatus(securityCtx *securityPolicyContext, rule SingleRuleConfig) int {
+	if securityCtx == nil || rule.Protocol != "http" {
+		return 0
+	}
+	if rule.BlockPageStage1ID > 0 && securityCtx.blockPageByID[rule.BlockPageStage1ID] != "" {
+		return blockPageStage1Code
+	}
+	return 0
 }
 
 // buildBlockPageAttributionRoute 返回一条按策略归因的错误路由：matcher 仅
@@ -3036,10 +3107,11 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 不再产生前置策略的检测事件。阶段化模型（2026-09-20）：单策略同构走预检
 	// （GeoIP 已迁入预检 800000+ 段；ACL 并集与策略引擎 id:2/4 幂等重复无害——
 	// 预检先拦，引擎内不再命中；信任 IP 在预检 DetectionOnly 后到策略引擎按
-	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因，
-	// deny 403 → errors 路由 → 拦截页。
+	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因；
+	// 规则配了阶段 1 拦截页时全部 deny 抬码 481（stage1BlockStatus），否则
+	// 403 → errors 路由 → 拦截页。
 	if rule.Protocol == "http" && len(policies) >= 1 {
-		if precheckHandler := buildIPPrecheckHandler(policies); precheckHandler != nil {
+		if precheckHandler := buildIPPrecheckHandler(policies, stage1BlockStatus(ctx, rule)); precheckHandler != nil {
 			handleChain = append(handleChain, precheckHandler)
 		}
 	}
@@ -3102,7 +3174,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
 			// (「信任仅豁免所属策略」边界);单策略保持平原形态(预检虽同构存在,
 			// 但策略层自身信任 DetectionOnly 已正确处理,无跨策略信任边界)。
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, policy), effectiveRequestBodyMaxSizeMB); wafHandler != nil {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}
 		}

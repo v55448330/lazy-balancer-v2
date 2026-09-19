@@ -84,6 +84,10 @@ export interface Rule extends ProxyTimeoutConfig {
   log_enabled: boolean
   custom_routes_enabled: boolean
   path_rules: PathRule[]
+  block_page_stage1_id: number
+  block_page_stage1_status: number
+  block_page_stage3_id: number
+  block_page_stage3_status: number
   created_by: number
   updated_by: number
   created_at: string
@@ -128,6 +132,11 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   enable_compress: boolean
   compress_types: string
   log_enabled: boolean
+  // 阶段拦截页（规则级覆盖层）：0 = 跟随策略；status ∈ {0,400,401,403,404,503}
+  block_page_stage1_id: number
+  block_page_stage1_status: number
+  block_page_stage3_id: number
+  block_page_stage3_status: number
 }
 
 export interface UpdateRuleRequest extends Omit<CreateRuleRequest,

@@ -80,7 +80,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 	t.Run("precheck-trust-union", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: trust}
 		p2 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
-		compileForEngineGate(t, buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}))
+		compileForEngineGate(t, buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 	})
 }
 
@@ -120,7 +120,7 @@ func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 	p2 := &models.SecurityPolicy{
 		ID: 43, Mode: "detection", GeoIPMode: "allow", GeoIPCountries: json.RawMessage(`["江苏"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 	if !strings.Contains(directives, "id:800042,") || !strings.Contains(directives, "id:800043,") {
 		t.Fatalf("precheck must carry per-policy geoip chains, got:\n%s", directives)
 	}
@@ -177,7 +177,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	t.Run("precheck-disjoint-allow-constant-deny", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
 		p2 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["5.6.7.8"]`}
-		directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+		directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 		if !strings.Contains(directives, `SecRule REMOTE_ADDR "@rx .*" "id:7,phase:1,deny`) {
 			t.Fatalf("disjoint allow lists must emit constant-deny @rx .* rule:\n%s", directives)
 		}

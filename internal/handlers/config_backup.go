@@ -270,6 +270,8 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"tls_cert": "", "tls_key": "", "tls_http_redirect": int64(0),
 		"enable_compress": int64(1), "compress_types": "gzip",
 		"enabled": int64(0), "log_enabled": int64(0), "created_by": int64(0), "updated_by": int64(0),
+		"block_page_stage1_id": int64(0), "block_page_stage1_status": int64(0),
+		"block_page_stage3_id": int64(0), "block_page_stage3_status": int64(0),
 		"created_at": "1970-01-01 00:00:00",
 	},
 	"upstreams": {

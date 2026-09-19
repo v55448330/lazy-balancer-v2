@@ -528,7 +528,8 @@ const lbRuleListColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), '', '',
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0),
-	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
+	created_by, created_at, updated_at, updated_by, COALESCE(host_header,''),
+	COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)`
 
 const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, COALESCE(strategy,''),
 	COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
@@ -539,7 +540,8 @@ const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(des
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0),
-	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
+	created_by, created_at, updated_at, updated_by, COALESCE(host_header,''),
+	COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)`
 
 // 规范化规则行扫描：ListRules/GetRule/DuplicateRule 共用，避免列清单多处漂移
 func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
@@ -560,7 +562,8 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &r.LogEnabled,
-			&createdBy, &createdAt, &updatedAt, &updatedBy, &hostHeader); err != nil {
+			&createdBy, &createdAt, &updatedAt, &updatedBy, &hostHeader,
+			&r.BlockPageStage1ID, &r.BlockPageStage1Status, &r.BlockPageStage3ID, &r.BlockPageStage3Status); err != nil {
 			return nil, err
 		}
 		r.Description = description
@@ -734,6 +737,31 @@ func validateRuleACMEReferences(input acmeReferenceInput) error {
 	return nil
 }
 
+// validateStageBlockPageRef 阶段拦截页（规则级覆盖层）引用校验：status ∈
+// {0,400,401,403,404,503}（0=渲染侧归一 403）；pageID>0 须存在于
+// security_block_pages（悬空引用会使阶段路由回落 403 兜底且 UI 显示「已失效」）。
+// 规则保存（validateRulePayloadBeforeSave）与批量设置（batch-block-pages）共用。
+func validateStageBlockPageRef(pageID, status int, label string) error {
+	switch status {
+	case 0, 400, 401, 403, 404, 503:
+	default:
+		return &configValidationError{message: fmt.Sprintf("%s拦截页状态码 %d 无效（可选 400/401/403/404/503）", label, status)}
+	}
+	if pageID < 0 {
+		return &configValidationError{message: fmt.Sprintf("%s拦截页 id 不能为负数", label)}
+	}
+	if pageID > 0 {
+		var pageOK bool
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM security_block_pages WHERE id = ?)", pageID).Scan(&pageOK); err != nil {
+			return fmt.Errorf("校验%s拦截页引用失败: %v", label, err)
+		}
+		if !pageOK {
+			return &configValidationError{message: fmt.Sprintf("%s拦截页不存在（id=%d）", label, pageID)}
+		}
+	}
+	return nil
+}
+
 func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
 	if err != nil {
@@ -898,6 +926,8 @@ func validateRuleConfigGeneration(rule models.LbRule) error {
 		CaddyID: rule.CaddyID, Protocol: rule.Protocol, Domain: rule.Domain, ListenPort: rule.ListenPort,
 		Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS, EnableDnsServer: rule.EnableDnsServer,
 		DnsServer: rule.DnsServer, DnsFamily: rule.DnsFamily, CustomRoutesEnabled: rule.CustomRoutesEnabled,
+		BlockPageStage1ID: rule.BlockPageStage1ID, BlockPageStage1Status: rule.BlockPageStage1Status,
+		BlockPageStage3ID: rule.BlockPageStage3ID, BlockPageStage3Status: rule.BlockPageStage3Status,
 		PathRules: toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
 	})
 	genErr, hasErr := config["error"].(error)

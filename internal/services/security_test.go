@@ -65,7 +65,7 @@ func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8]；P2 deny=[9.9.9.9]
 	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 
 	// Then(2026-09-15 用户裁定,信任 DetectionOnly 取代并入放行集):
 	trustRule := `SecRule REMOTE_ADDR "@ipMatch 5.6.7.8" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
@@ -88,7 +88,7 @@ func TestBuildIPPrecheck_trustDisabledNotIncluded(t *testing.T) {
 	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8] 但信任开关关闭；P2 deny=[9.9.9.9]
 	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 
 	// Then：allow 放行集应仅含 1.2.3.4（信任关闭→不并入）
 	if strings.Contains(directives, "5.6.7.8") {

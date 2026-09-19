@@ -1540,9 +1540,9 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	// 拦截页归因后：403 兜底（host 限定）+ 481 归因（该策略合成码，无 host）
+	// 拦截页归因后：403 兜底（host 限定）+ 483 归因（该策略合成码，无 host）
 	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (403 fallback + 481 attribution), got %#v", errorRoutes)
+		t.Fatalf("want 2 error routes (403 fallback + 483 attribution), got %#v", errorRoutes)
 	}
 	var route, attrRoute map[string]interface{}
 	for _, routeValue := range errorRoutes {
@@ -1550,7 +1550,7 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 		expr, _ := routeMatcher(t, r)["expression"].(string)
 		if strings.Contains(expr, "== 403") {
 			route = r
-		} else if strings.Contains(expr, "== 481") {
+		} else if strings.Contains(expr, "== 483") {
 			attrRoute = r
 		}
 	}
@@ -1560,7 +1560,7 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	matcher := routeMatcher(t, route)
 	assertEqual(t, matcher["host"], []string{"blocked.example.test"})
 	// 兜底路由匹配 coraza 缺省 deny（403, message "interruption triggered"）——
-	// 承接预检/无页策略中断；本策略自身 deny 已抬码 481 走归因路由。
+	// 承接预检/无页策略中断；本策略自身 deny 已抬码 483 走归因路由。
 	assertEqual(t, matcher["expression"], "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')")
 	handler := firstHandler(t, route)
 	assertEqual(t, handler["handler"], "static_response")
@@ -1569,11 +1569,11 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	if route["terminal"] != true {
 		t.Fatalf("error route must be terminal: %#v", route)
 	}
-	// 归因路由：481 子句、无 host、同页同码、terminal
+	// 归因路由：483 子句、无 host、同页同码、terminal
 	if _, hasHost := routeMatcher(t, attrRoute)["host"]; hasHost {
 		t.Fatalf("attribution route must not carry host matcher: %#v", routeMatcher(t, attrRoute))
 	}
-	assertEqual(t, routeMatcher(t, attrRoute)["expression"], "({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
+	assertEqual(t, routeMatcher(t, attrRoute)["expression"], "({http.error.status_code} == 483 && {http.error.message} == 'interruption triggered')")
 	attrHandler := firstHandler(t, attrRoute)
 	assertEqual(t, attrHandler["body"], "<html>branded-block</html>")
 	assertEqual(t, attrHandler["status_code"], 451)
@@ -1601,7 +1601,7 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	// 每规则 1 条 403 兜底（host 限定）+ 每策略 1 条归因（481/482，无 host）
+	// 每规则 1 条 403 兜底（host 限定）+ 每策略 1 条归因（483/484，无 host）
 	if len(errorRoutes) != 4 {
 		t.Fatalf("want 4 error routes (2 fallback + 2 attribution), got %#v", errorRoutes)
 	}
@@ -1615,7 +1615,7 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 			byHost[hosts[0]] = route
 			continue
 		}
-		for _, code := range []string{"481", "482"} {
+		for _, code := range []string{"483", "484"} {
 			if strings.Contains(expr, "== "+code+" &&") {
 				bySynthetic[code] = route
 			}
@@ -1637,17 +1637,17 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	betaHandler := firstHandler(t, beta)
 	assertEqual(t, betaHandler["body"], "<html>beta-block</html>")
 	assertEqual(t, betaHandler["status_code"], 403)
-	// 归因路由：481=alpha 策略（451），482=beta 策略（block_status_code 0 归一 403）
-	attr481 := bySynthetic["481"]
+	// 归因路由：483=alpha 策略（451），484=beta 策略（block_status_code 0 归一 403）
+	attr481 := bySynthetic["483"]
 	if attr481 == nil {
-		t.Fatalf("no 481 attribution route: %#v", errorRoutes)
+		t.Fatalf("no 483 attribution route: %#v", errorRoutes)
 	}
 	attr481Handler := firstHandler(t, attr481)
 	assertEqual(t, attr481Handler["body"], "<html>alpha-block</html>")
 	assertEqual(t, attr481Handler["status_code"], 451)
-	attr482 := bySynthetic["482"]
+	attr482 := bySynthetic["484"]
 	if attr482 == nil {
-		t.Fatalf("no 482 attribution route: %#v", errorRoutes)
+		t.Fatalf("no 484 attribution route: %#v", errorRoutes)
 	}
 	attr482Handler := firstHandler(t, attr482)
 	assertEqual(t, attr482Handler["body"], "<html>beta-block</html>")
@@ -1698,7 +1698,7 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	// 1 条 403 兜底（首绑定=older）+ 2 条归因（481=older, 482=newer）
+	// 1 条 403 兜底（首绑定=older）+ 2 条归因（483=older, 484=newer）
 	if len(errorRoutes) != 3 {
 		t.Fatalf("want 3 error routes (fallback + 2 attribution), got %#v", errorRoutes)
 	}
@@ -1711,7 +1711,7 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 			fallback = route
 			continue
 		}
-		for _, code := range []string{"481", "482"} {
+		for _, code := range []string{"483", "484"} {
 			if strings.Contains(expr, "== "+code+" &&") {
 				bySynthetic[code] = route
 			}
@@ -1723,13 +1723,13 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 	handler := firstHandler(t, fallback)
 	assertEqual(t, handler["body"], "<html>older-block</html>")
 	assertEqual(t, handler["status_code"], 451)
-	// 归因路由逐策略渲染各自拦截页（older=481/451，newer=482/503）
-	h481 := firstHandler(t, bySynthetic["481"])
-	assertEqual(t, h481["body"], "<html>older-block</html>")
-	assertEqual(t, h481["status_code"], 451)
-	h482 := firstHandler(t, bySynthetic["482"])
-	assertEqual(t, h482["body"], "<html>newer-block</html>")
-	assertEqual(t, h482["status_code"], 503)
+	// 归因路由逐策略渲染各自拦截页（older=483/451，newer=484/503）
+	h483 := firstHandler(t, bySynthetic["483"])
+	assertEqual(t, h483["body"], "<html>older-block</html>")
+	assertEqual(t, h483["status_code"], 451)
+	h484 := firstHandler(t, bySynthetic["484"])
+	assertEqual(t, h484["body"], "<html>newer-block</html>")
+	assertEqual(t, h484["status_code"], 503)
 }
 
 // TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy verifies the

@@ -115,7 +115,7 @@ func TestBuildIPPrecheckDirectives_geoipChain(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 0)
 	if directives == "" {
 		t.Fatal("pure-geoip policy must emit precheck directives (stage 1 owns geoip)")
 	}
@@ -146,7 +146,7 @@ func TestBuildIPPrecheckDirectives_geoipProvincesJoinedAlternation(t *testing.T)
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["广东省","北京市"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 0)
 	want := `@rx ^(?:广东省(?:/.*)?|北京市(?:/.*)?)$`
 	if !strings.Contains(directives, want) {
 		t.Fatalf("precheck directives missing province alternation %q:\n%s", want, directives)
@@ -163,7 +163,7 @@ func TestBuildIPPrecheckDirectives_geoipDetectionPolicyStillDenies(t *testing.T)
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 0)
 	starter := geoipRuleLine(t, directives)
 	if !strings.Contains(starter, `"id:800009,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain"`) {
 		t.Fatalf("detection policy geoip chain must deny in precheck:\n%s", starter)
@@ -183,7 +183,7 @@ func TestBuildIPPrecheckDirectives_geoipMultiPolicyOrderAndTrust(t *testing.T) {
 	p2 := &models.SecurityPolicy{
 		ID: 5, Mode: "blocking", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["江苏"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
 	idx1 := strings.Index(directives, "id:800003,")
 	idx2 := strings.Index(directives, "id:800005,")
 	// 全局豁免钉（2026-09-20 裁定）：信任并集 DetectionOnly 必须先于全部 GeoIP
@@ -335,9 +335,10 @@ func TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesPassRoute(t *testing
 }
 
 // TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus：拦截页归因后，
-// geoip 策略分得合成中断码 481——GeoIP deny 中断经 481 归因路由按
-// block_status_code 渲染本策略拦截页；403 兜底路由（host 限定）继续承接无法
-// 归因的中断（预检/无页策略），同页同码。
+// geoip 策略分得合成中断码 483（阶段码 481/482 固定后平移）——策略引擎段 deny
+// 中断经 483 归因路由按 block_status_code 渲染本策略拦截页；403 兜底路由
+// （host 限定）继续承接无法归因的中断（预检 GeoIP/IP ACL 合并段与无页策略），
+// 同页同码。
 func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T) {
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -351,7 +352,7 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (403 fallback + 481 attribution), got %#v", errorRoutes)
+		t.Fatalf("want 2 error routes (403 fallback + 483 attribution), got %#v", errorRoutes)
 	}
 	var fallback, attribution map[string]interface{}
 	for _, routeValue := range errorRoutes {
@@ -359,7 +360,7 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 		expr, _ := routeMatcher(t, route)["expression"].(string)
 		if strings.Contains(expr, "== 403") {
 			fallback = route
-		} else if strings.Contains(expr, "== 481") {
+		} else if strings.Contains(expr, "== 483") {
 			attribution = route
 		}
 	}
@@ -372,12 +373,12 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 	fallbackHandler := firstHandler(t, fallback)
 	assertEqual(t, fallbackHandler["status_code"], 451)
 	assertEqual(t, fallbackHandler["body"], "<html>geoip-block</html>")
-	// 归因：481 子句、无 host 键，GeoIP deny（已抬码 481）实际命中此路由
+	// 归因：483 子句、无 host 键，策略段 deny（已抬码 483）实际命中此路由
 	if _, hasHost := routeMatcher(t, attribution)["host"]; hasHost {
 		t.Fatalf("attribution route must not carry host matcher: %#v", routeMatcher(t, attribution))
 	}
 	assertEqual(t, routeMatcher(t, attribution)["expression"],
-		"({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
+		"({http.error.status_code} == 483 && {http.error.message} == 'interruption triggered')")
 	attrHandler := firstHandler(t, attribution)
 	assertEqual(t, attrHandler["status_code"], 451)
 	assertEqual(t, attrHandler["body"], "<html>geoip-block</html>")
@@ -516,7 +517,7 @@ func TestBuildCorazaDirectives_geoipModeOff_noEmission(t *testing.T) {
 	if strings.Contains(directives, "GeoIP 区域拦截") || strings.Contains(directives, "id:8") {
 		t.Fatalf("geoip_mode=off must not emit geoip rules, got:\n%s", directives)
 	}
-	if precheck := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}); strings.Contains(precheck, "GeoIP 区域拦截") || strings.Contains(precheck, "id:800042") {
+	if precheck := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 0); strings.Contains(precheck, "GeoIP 区域拦截") || strings.Contains(precheck, "id:800042") {
 		t.Fatalf("geoip_mode=off must not emit precheck geoip chains, got:\n%s", precheck)
 	}
 }

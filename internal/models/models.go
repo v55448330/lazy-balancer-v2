@@ -112,57 +112,64 @@ func NewAPIKeyWithUserResponse(key APIKey, username string) APIKeyWithUserRespon
 
 // LbRule represents a load balancing rule
 type LbRule struct {
-	ID                            int          `json:"id"`
-	CaddyID                       string       `json:"caddy_id"`
-	Name                          string       `json:"name"`
-	Description                   string       `json:"description"`
-	Protocol                      string       `json:"protocol"`
-	Domain                        string       `json:"domain"`
-	ListenPort                    int          `json:"listen_port"`
-	Strategy                      string       `json:"strategy"`
-	DynamicDNS                    bool         `json:"dynamic_dns"`
-	EnableDnsServer               bool         `json:"enable_dns_server"`
-	DnsServer                     string       `json:"dns_server"`
-	DnsFamily                     string       `json:"dns_family"`
-	HealthCheckPath               string       `json:"health_check_path"`
-	HealthCheckInterval           int          `json:"health_check_interval"`
-	HealthCheckTimeout            int          `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int          `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int          `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       bool         `json:"enable_active_health_check"`
-	TCPHealthCheckPort            int          `json:"tcp_health_check_port"`
-	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
-	TCPTryDuration                int          `json:"tcp_try_duration"`
-	TCPTryInterval                int          `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          int          `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      int          `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            int          `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	CustomRoutesEnabled           bool         `json:"custom_routes_enabled"`
-	ProxyDialTimeout              int          `json:"proxy_dial_timeout"`
-	ProxyResponseHeaderTimeout    int          `json:"proxy_response_header_timeout"`
-	ProxyReadTimeout              int          `json:"proxy_read_timeout"`
-	ProxyWriteTimeout             int          `json:"proxy_write_timeout"`
-	ProxyStreamTimeout            int          `json:"proxy_stream_timeout"`
-	ProxyFlushInterval            int          `json:"proxy_flush_interval"`
-	ProxyStreamCloseDelay         int          `json:"proxy_stream_close_delay"`
-	PathRules                     []PathRule   `json:"path_rules"`
-	Upstreams                     []Upstream   `json:"upstreams"`
-	HostHeader                    string       `json:"host_header"`
-	EnableTLS                     bool         `json:"enable_tls"`
-	TLSSource                     string       `json:"tls_source"`
-	ACMEConfigID                  int          `json:"acme_config_id"`
-	CAProviderID                  int          `json:"ca_provider_id"`
-	TLSCert                       string       `json:"tls_cert,omitempty"`
-	TLSKey                        string       `json:"tls_key,omitempty"`
-	TLSHTTPRedirect               bool         `json:"tls_http_redirect"`
-	EnableCompress                bool         `json:"enable_compress"`
-	CompressTypes                 string       `json:"compress_types"`
-	Enabled                       bool         `json:"enabled"`
-	LogEnabled                    bool         `json:"log_enabled"`
-	CreatedBy                     int          `json:"created_by"`
-	UpdatedBy                     int          `json:"updated_by"`
-	CreatedAt                     time.Time    `json:"created_at"`
-	UpdatedAt                     JSONNullTime `json:"updated_at"`
+	ID                            int        `json:"id"`
+	CaddyID                       string     `json:"caddy_id"`
+	Name                          string     `json:"name"`
+	Description                   string     `json:"description"`
+	Protocol                      string     `json:"protocol"`
+	Domain                        string     `json:"domain"`
+	ListenPort                    int        `json:"listen_port"`
+	Strategy                      string     `json:"strategy"`
+	DynamicDNS                    bool       `json:"dynamic_dns"`
+	EnableDnsServer               bool       `json:"enable_dns_server"`
+	DnsServer                     string     `json:"dns_server"`
+	DnsFamily                     string     `json:"dns_family"`
+	HealthCheckPath               string     `json:"health_check_path"`
+	HealthCheckInterval           int        `json:"health_check_interval"`
+	HealthCheckTimeout            int        `json:"health_check_timeout"`
+	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool       `json:"tcp_proxy_protocol"`
+	TCPTryDuration                int        `json:"tcp_try_duration"`
+	TCPTryInterval                int        `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	CustomRoutesEnabled           bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout              int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout    int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout              int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout             int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout            int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval            int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay         int        `json:"proxy_stream_close_delay"`
+	PathRules                     []PathRule `json:"path_rules"`
+	Upstreams                     []Upstream `json:"upstreams"`
+	HostHeader                    string     `json:"host_header"`
+	EnableTLS                     bool       `json:"enable_tls"`
+	TLSSource                     string     `json:"tls_source"`
+	ACMEConfigID                  int        `json:"acme_config_id"`
+	CAProviderID                  int        `json:"ca_provider_id"`
+	TLSCert                       string     `json:"tls_cert,omitempty"`
+	TLSKey                        string     `json:"tls_key,omitempty"`
+	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
+	EnableCompress                bool       `json:"enable_compress"`
+	CompressTypes                 string     `json:"compress_types"`
+	Enabled                       bool       `json:"enabled"`
+	LogEnabled                    bool       `json:"log_enabled"`
+	// 阶段拦截页（规则级覆盖层，阶段化安全流水线）：阶段 1=IP 访问控制+地域
+	// 拦截预检，阶段 3=WAF；0=未配（跟随策略，v2.3.1 逐策略归因默认层）。
+	// status ∈ {0,400,401,403,404,503}，0 在渲染侧归一 403。
+	BlockPageStage1ID     int          `json:"block_page_stage1_id"`
+	BlockPageStage1Status int          `json:"block_page_stage1_status"`
+	BlockPageStage3ID     int          `json:"block_page_stage3_id"`
+	BlockPageStage3Status int          `json:"block_page_stage3_status"`
+	CreatedBy             int          `json:"created_by"`
+	UpdatedBy             int          `json:"updated_by"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             JSONNullTime `json:"updated_at"`
 }
 
 // CAProvider represents an ACME certificate authority configuration.
@@ -436,6 +443,11 @@ type CreateRuleRequest struct {
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
 	LogEnabled                    bool       `json:"log_enabled"`
+	// 阶段拦截页覆盖层（0=跟随策略；status ∈ {0,400,401,403,404,503}）
+	BlockPageStage1ID     int `json:"block_page_stage1_id"`
+	BlockPageStage1Status int `json:"block_page_stage1_status"`
+	BlockPageStage3ID     int `json:"block_page_stage3_id"`
+	BlockPageStage3Status int `json:"block_page_stage3_status"`
 	// LB-01：缺省（nil）=创建即启用（向后兼容历史调用方）；显式 false=创建为
 	// 禁用（UI 复制向导按预览「禁用」态落库）。
 	Enabled *bool `json:"enabled,omitempty"`
@@ -496,6 +508,12 @@ type UpdateRuleRequest struct {
 	CompressTypes              string      `json:"compress_types"`
 	Enabled                    *bool       `json:"enabled"`
 	LogEnabled                 *bool       `json:"log_enabled"`
+	// 阶段拦截页覆盖层：指针化——省略（nil）=保留原值（同 CAProviderID 先例），
+	// 显式 0=清除覆盖（跟随策略）。
+	BlockPageStage1ID     *int `json:"block_page_stage1_id"`
+	BlockPageStage1Status *int `json:"block_page_stage1_status"`
+	BlockPageStage3ID     *int `json:"block_page_stage3_id"`
+	BlockPageStage3Status *int `json:"block_page_stage3_status"`
 }
 
 type UpdateConfigRequest struct {

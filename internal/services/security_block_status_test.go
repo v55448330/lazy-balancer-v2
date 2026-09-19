@@ -1,6 +1,6 @@
 package services
 
-// 拦截页按触发策略归因(合成中断码 481+)——引擎行为实证与渲染钉测试。
+// 拦截页按触发策略归因(合成中断码 483+；阶段码 481/482 固定)——引擎行为实证与渲染钉测试。
 //
 // TestEngineBehavior_SecRuleUpdateActionByIdLiftsInterruptionStatus 是本特性的
 // 可行性门禁(coraza v3.7.0,与镜像 coraza-caddy v2.6.1 同版):CRS 拦截统一由
@@ -180,7 +180,7 @@ func TestBuildCorazaDirectives_blockStatusCRSLiftGatedOn949File(t *testing.T) {
 // ---------- 步骤 1.1：policySynthetic 按策略身份分配（RED）----------
 
 // 全部被任一规则绑定的启用策略中 BlockPageID>0 且页内容非空者，按 policy_id ASC
-// 分配 481+序号；无页/空页/禁用策略不进表（值 0=不抬码）。
+// 分配 483+序号（阶段码 481/482 固定后逐策略码平移）；无页/空页/禁用策略不进表（值 0=不抬码）。
 func TestLoadSecurityPolicyContext_policySyntheticAssignedByPolicyIdentity(t *testing.T) {
 	// Given：页 7/8 有内容、页 9 内容为空；p1(页7) p2(页8) p3(无页) p4(空页9) p5(禁用+页7)
 	_, database := newClusterTestService(t)
@@ -203,12 +203,12 @@ func TestLoadSecurityPolicyContext_policySyntheticAssignedByPolicyIdentity(t *te
 		t.Fatalf("loadSecurityPolicyContext: %v", err)
 	}
 
-	// Then：按 policy_id ASC 分配 481/482；无页/空页/禁用不进表
-	if got := ctx.policySynthetic[p1]; got != 481 {
-		t.Fatalf("p1 synthetic=%d, want 481", got)
+	// Then：按 policy_id ASC 分配 483/484；无页/空页/禁用不进表
+	if got := ctx.policySynthetic[p1]; got != 483 {
+		t.Fatalf("p1 synthetic=%d, want 483", got)
 	}
-	if got := ctx.policySynthetic[p2]; got != 482 {
-		t.Fatalf("p2 synthetic=%d, want 482", got)
+	if got := ctx.policySynthetic[p2]; got != 484 {
+		t.Fatalf("p2 synthetic=%d, want 484", got)
 	}
 	for _, id := range []int{p3, p4, p5} {
 		if _, ok := ctx.policySynthetic[id]; ok {
@@ -217,7 +217,7 @@ func TestLoadSecurityPolicyContext_policySyntheticAssignedByPolicyIdentity(t *te
 	}
 }
 
-// 合成码区间上限：481+118=599 为合法状态码上限，超出策略回落不抬码（403 兜底）。
+// 合成码区间上限：483+116=599 为合法状态码上限，超出策略回落不抬码（403 兜底）。
 func TestLoadSecurityPolicyContext_policySyntheticCappedAt599(t *testing.T) {
 	// Given：125 条启用策略均配置同一有内容拦截页
 	_, database := newClusterTestService(t)
@@ -233,12 +233,12 @@ func TestLoadSecurityPolicyContext_policySyntheticCappedAt599(t *testing.T) {
 		t.Fatalf("loadSecurityPolicyContext: %v", err)
 	}
 
-	// Then：恰好 119 条策略获码（481..599），无越界码
-	if len(ctx.policySynthetic) != 119 {
-		t.Fatalf("synthetic entries=%d, want 119 (481..599)", len(ctx.policySynthetic))
+	// Then：恰好 117 条策略获码（483..599），无越界码
+	if len(ctx.policySynthetic) != 117 {
+		t.Fatalf("synthetic entries=%d, want 117 (483..599)", len(ctx.policySynthetic))
 	}
 	for id, code := range ctx.policySynthetic {
-		if code < 481 || code > 599 {
+		if code < 483 || code > 599 {
 			t.Fatalf("policy %d synthetic=%d out of legal range", id, code)
 		}
 	}
@@ -297,7 +297,7 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	// 2 条兜底（每规则）+ 2 条归因（481/482 各一，481 被两规则共用仍一条）
+	// 2 条兜底（每规则）+ 2 条归因（483/484 各一，483 被两规则共用仍一条）
 	if len(errorRoutes) != 4 {
 		t.Fatalf("want 4 error routes (2 fallback + 2 attribution), got %d: %#v", len(errorRoutes), errorRoutes)
 	}
@@ -319,7 +319,7 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 		if _, hasHost := matcher["host"]; hasHost {
 			t.Fatalf("attribution route must not carry host matcher: %#v", matcher)
 		}
-		for _, code := range []string{"481", "482"} {
+		for _, code := range []string{"483", "484"} {
 			if strings.Contains(expr, "== "+code+" &&") {
 				attributionCodes = append(attributionCodes, code)
 				attributionByCode[code] = route
@@ -329,20 +329,20 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 	if len(fallbackHosts) != 2 {
 		t.Fatalf("want 2 host-scoped fallback routes, got %v", fallbackHosts)
 	}
-	if len(attributionCodes) != 2 || attributionByCode["481"] == nil || attributionByCode["482"] == nil {
-		t.Fatalf("want exactly one 481 and one 482 attribution route, got %v", attributionCodes)
+	if len(attributionCodes) != 2 || attributionByCode["483"] == nil || attributionByCode["484"] == nil {
+		t.Fatalf("want exactly one 483 and one 484 attribution route, got %v", attributionCodes)
 	}
-	// 481 → p1 的页与状态码；482 → p2 的页与状态码；matcher 表达式含 interruption 消息子句
-	h481 := firstHandler(t, attributionByCode["481"])
-	assertEqual(t, h481["body"], "<html>first-block</html>")
-	assertEqual(t, h481["status_code"], 451)
-	assertEqual(t, routeMatcher(t, attributionByCode["481"])["expression"],
-		"({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
-	h482 := firstHandler(t, attributionByCode["482"])
-	assertEqual(t, h482["body"], "<html>second-block</html>")
-	assertEqual(t, h482["status_code"], 503)
+	// 483 → p1 的页与状态码；484 → p2 的页与状态码；matcher 表达式含 interruption 消息子句
+	h483 := firstHandler(t, attributionByCode["483"])
+	assertEqual(t, h483["body"], "<html>first-block</html>")
+	assertEqual(t, h483["status_code"], 451)
+	assertEqual(t, routeMatcher(t, attributionByCode["483"])["expression"],
+		"({http.error.status_code} == 483 && {http.error.message} == 'interruption triggered')")
+	h484 := firstHandler(t, attributionByCode["484"])
+	assertEqual(t, h484["body"], "<html>second-block</html>")
+	assertEqual(t, h484["status_code"], 503)
 	// terminal 语义与兜底一致
-	if attributionByCode["481"]["terminal"] != true || attributionByCode["482"]["terminal"] != true {
+	if attributionByCode["483"]["terminal"] != true || attributionByCode["484"]["terminal"] != true {
 		t.Fatalf("attribution routes must be terminal: %#v", attributionByCode)
 	}
 
@@ -352,11 +352,11 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 		t.Fatal("rule1 must generate routes")
 	}
 	joined := strings.Join(wafDirectives(t, routes[len(routes)-1]), "\n")
-	if !strings.Contains(joined, "deny,status:481") {
-		t.Fatalf("p1 segment must lift deny to 481:\n%s", joined)
+	if !strings.Contains(joined, "deny,status:483") {
+		t.Fatalf("p1 segment must lift deny to 483:\n%s", joined)
 	}
-	if !strings.Contains(joined, "deny,status:482") {
-		t.Fatalf("p2 segment must lift deny to 482:\n%s", joined)
+	if !strings.Contains(joined, "deny,status:484") {
+		t.Fatalf("p2 segment must lift deny to 484:\n%s", joined)
 	}
 	// GeoIP 已迁预检（id=800000+policyID 段）——预检 deny 不抬码（阶段 1 保持
 	// 403 兜底归因边界，合成码抬码仅限策略引擎段）。
@@ -374,7 +374,7 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 	}
 }
 
-// 回归形状：无页策略不抬码（481+ 零出现）；其 deny 仍为 403，且只产兜底路由。
+// 回归形状：无页策略不抬码（483+ 零出现）；其 deny 仍为 403，且只产兜底路由。
 func TestMultiPolicy_AttributionRoutes_NoPagePolicyNotLifted(t *testing.T) {
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -397,10 +397,10 @@ func TestMultiPolicy_AttributionRoutes_NoPagePolicyNotLifted(t *testing.T) {
 		t.Fatalf("no-page policy deny must stay 403:\n%s", joined)
 	}
 
-	// 仅 1 条 403 兜底 + 1 条 481 归因（有页策略 p1）
+	// 仅 1 条 403 兜底 + 1 条 483 归因（有页策略 p1）
 	generated := generateCaddyConfigFromStore(database)
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (fallback + 481 attribution), got %d: %#v", len(errorRoutes), errorRoutes)
+		t.Fatalf("want 2 error routes (fallback + 483 attribution), got %d: %#v", len(errorRoutes), errorRoutes)
 	}
 }

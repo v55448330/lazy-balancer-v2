@@ -83,8 +83,10 @@ var mcpUncoveredRoutes = map[string]string{
 	// —— 流式端点（MCP 无流式语义）——
 	"GET /api/v1/rules/:caddy_id/log-stream": "offset 增量续读规则访问日志（单次请求-响应、无长连接）；MCP 工具 get_rule_logs 为最近 1000 行尾读（无 offset 续读），Agent 查近期日志用 get_rule_logs，需增量续读时走本 REST 端点",
 	// —— 批量便捷端点（面向面板列表轮询的批量形态；Agent 用单条工具）——
-	"POST /api/v1/rules/cert-info":           "批量便捷端点：一次查最多 200 个 caddy_id 的证书信息，供面板规则列表轮询；Agent 用 get_rule_cert_info 按单条查",
-	"POST /api/v1/certificates/jobs/current": "批量便捷端点：一次查最多 200 个 rule_id 的当前任务，供面板规则列表轮询任务状态；Agent 用 list_cert_jobs 按 rule_id 过滤",
+	"POST /api/v1/rules/cert-info":              "批量便捷端点：一次查最多 200 个 caddy_id 的证书信息，供面板规则列表轮询；Agent 用 get_rule_cert_info 按单条查",
+	"POST /api/v1/certificates/jobs/current":    "批量便捷端点：一次查最多 200 个 rule_id 的当前任务，供面板规则列表轮询任务状态；Agent 用 list_cert_jobs 按 rule_id 过滤",
+	"POST /api/v1/security/policies/batch-bind": "UI 批量便利端点：规则列表多选批量绑定（单事务单渲染）；绑定原语已被 set_rule_security_policies（PUT /security/rules/:caddy_id/policies）覆盖，Agent 逐规则调用即可",
+	"POST /api/v1/rules/batch-block-pages":      "UI 批量便利端点：规则列表多选批量设置阶段拦截页（单事务单渲染）；阶段页字段属规则载荷，原语已被 update_rule（PUT /rules/:caddy_id 的 4 个阶段页字段）覆盖",
 	// —— OIDC 认证集成(v2.3.0):浏览器跳转/回调链路,Agent 无消费场景;
 	// 配置管理属低频管理面板操作(测试连接为发现探测,面板专用) ——
 	"GET /api/v1/auth/oidc/status":    "登录页按钮显隐(浏览器会话探测),无 Agent 场景",

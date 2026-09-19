@@ -871,21 +871,22 @@ func cidrIntersectEntry(a, b string) string {
 }
 
 // buildIPPrecheckDirectives 合并全部绑定启用策略的 deny 侧 IP 控制（deny 模式
-// ACL 并集 id:2、allow 模式 ACL 交集外拒绝 id:7、遗留黑名单并集 id:4）为一个
-// 极简 coraza 配置。多策略绑定时该预检查器置于处理器链最前（先于全部
-// rate_limit/waf）：被拒 IP 在任何策略的 CRS/自定义规则评估前即中断——修复
-// `[coraza_P1, coraza_P2]` 链中 P1 的 CRS 先评估产生检测事件、P2 的 IP ACL 才
-// 拦截的双重检测问题（IP ACL 最高优先级）。预检仍是 coraza 拒绝：audit log
-// 留痕供安全事件管线归因（id:2/id:4 归因口径不变），deny 403 → errors 路由 →
-// 拦截页。2026-09-15 用户裁定:信任最高优先——预检信任 ctl:ruleEngine=
+// ACL 并集 id:2、allow 模式 ACL 交集外拒绝 id:7、遗留黑名单并集 id:4）与逐策略
+// GeoIP 链（800000+policyID）为一个极简 coraza 配置（阶段 1）。预检查器置于
+// 处理器链最前（先于全部 rate_limit/waf）：被拒 IP/区域在任何策略的 CRS/自定义
+// 规则评估前即中断——修复 `[coraza_P1, coraza_P2]` 链中 P1 的 CRS 先评估产生
+// 检测事件、P2 的 IP ACL 才拦截的双重检测问题（IP ACL 最高优先级）。预检仍是
+// coraza 拒绝：audit log 留痕供安全事件管线归因（id:2/id:4 归因口径不变）。
+// 2026-09-15 用户裁定:信任最高优先——预检信任 ctl:ruleEngine=
 // DetectionOnly 先行(id:3,取代「deny 优先于信任」与「并入 allow 放行集」),
 // 信任 IP 经 DetectionOnly 后 deny/黑名单/GeoIP 全评估不拦但全记录;跨策略
 // 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);限流仍生效。
 // 归因边界（拦截页按触发策略归因）：预检是多策略**合并**段，deny 无法归因
-// 到单策略，故保持 status:403 不抬码——其中断落首绑定有页策略的 403 兜底
-// 错误路由（buildBlockPageErrorRoute），UI 文案按此口径声明。
-// 无 deny 侧控制时返回空串（不发射）。
-func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
+// 到单策略，故 denyStatus=0 时保持 status:403 不抬码——其中断落首绑定有页
+// 策略的 403 兜底错误路由（buildBlockPageErrorRoute）；规则配了阶段 1 拦截页
+// 时调用方传 denyStatus=481，全部 deny 抬码落 481 阶段路由（阶段化模型）。
+// 无 deny 侧控制且无 GeoIP 策略时返回空串（不发射）。
+func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int) string {
 	var denyUnion, blacklistUnion []string
 	var allowLists [][]string
 	for _, p := range policies {
@@ -943,21 +944,26 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", strings.Join(trustUnion, ",")))
 	}
 
+	// denyStatus<=0 归一 403（兜底归因边界）；>0（阶段 1 页已配=481）全部 deny
+	// 显式抬码落 481 阶段路由。
+	if denyStatus <= 0 {
+		denyStatus = 403
+	}
 	if len(allowLists) > 0 {
 		intersection := intersectIPLists(allowLists)
 		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
 		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
 		if len(intersection) == 0 {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID, denyStatus))
 		} else {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(intersection, ","), ipPrecheckAllowRuleID))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(intersection, ","), ipPrecheckAllowRuleID, denyStatus))
 		}
 	}
 	if len(denyUnion) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(denyUnion, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(denyUnion, ","), denyStatus))
 	}
 	if len(blacklistUnion) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(blacklistUnion, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(blacklistUnion, ","), denyStatus))
 	}
 	// 逐策略 GeoIP 链（阶段 1：GeoIP 自策略引擎 id:8 迁入预检，id=800000+policyID
 	// 精确归因段）。链首 deny+skipAfter+chain（disruptive 动作仅允许链首段，
@@ -965,13 +971,18 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 	// route 先于本预检设置该头）；策略有启用信任名单时追加第三续段——预检信任∪
 	// DetectionOnly 是事务级全局的（2026-09-20 用户裁定：信任 IP 对全部策略的
 	// GeoIP 全局放行，取代旧引擎层「跨策略信任不豁免」边界），此续段仅抑制
-	// 本策略链对自有信任 IP 的自欺事件。deny 不带 status：默认 403 → 403 兜底
-	// 错误路由（阶段页未配时跟随策略的默认层）。
+	// 本策略链对自有信任 IP 的自欺事件。denyStatus=403（阶段 1 页未配）时不带
+	// status：默认 403 → 403 兜底错误路由（跟随策略的默认层，回归形状）；
+	// =481 时链首显式抬码（disruptive 动作仅允许链首段，SECLB33-1）。
+	geoipStatusFragment := ""
+	if denyStatus != 403 {
+		geoipStatusFragment = fmt.Sprintf(",status:%d", denyStatus)
+	}
 	for _, p := range policies {
 		if p == nil || !PolicyHasGeoIP(p) {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipPrecheckRuleBase+p.ID))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipPrecheckRuleBase+p.ID, geoipStatusFragment))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoipCountries(p), p.GeoIPMode == "allow"))))
 		if p.IPWhitelistEnabled {
 			if trusted := mergedWhitelist(p); len(trusted) > 0 {
@@ -987,8 +998,8 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 // (IP ACL + GeoIP) for a policy-bound rule — emitted for single- and multi-policy
 // bindings alike (staged execution model), or nil when no bound policy
 // contributes deny-side IP control or GeoIP region control.
-func buildIPPrecheckHandler(policies []*models.SecurityPolicy) map[string]interface{} {
-	directives := buildIPPrecheckDirectives(policies)
+func buildIPPrecheckHandler(policies []*models.SecurityPolicy, denyStatus int) map[string]interface{} {
+	directives := buildIPPrecheckDirectives(policies, denyStatus)
 	if directives == "" {
 		return nil
 	}
