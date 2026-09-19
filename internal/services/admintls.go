@@ -22,7 +22,7 @@ import (
 // AdminTLSConfig holds the admin-panel HTTPS settings stored in global_config.
 type AdminTLSConfig struct {
 	Enabled bool
-	Mode    string // selfsigned | upload | acme
+	Mode    string // selfsigned | upload（acme 未实现：handlers/admintls.go:91,309 仅放行这两者）
 	Cert    string
 	Key     string
 }

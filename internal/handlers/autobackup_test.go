@@ -644,3 +644,49 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 		t.Fatalf("failed rows=%d, want 20(autoBackupFailedRowsKeep)", failed)
 	}
 }
+
+// SYSB43-1(第 43 轮):裁剪时文件删除失败(非 ErrNotExist)必须保留 DB 行
+// 下轮重试——此前行随 warn 一并删除,残留文件成孤儿永不再裁剪。
+func TestPruneAutoBackups_fileRemovalOutcomes(t *testing.T) {
+	// Given:三个 success 行——同名非空目录(Remove 返回 ENOTEMPTY)/文件缺失/
+	// 正常文件,keep=0 全部进入裁剪
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	dir := t.TempDir()
+	const blocked, missing, normal = "lbbak-manual-20260919-000001.lbbak", "lbbak-manual-20260919-000002.lbbak", "lbbak-manual-20260919-000003.lbbak"
+	if err := os.MkdirAll(filepath.Join(dir, blocked), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, blocked, "keep.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, normal), []byte("backup"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, filename := range []string{blocked, missing, normal} {
+		if _, err := insertAutoBackupRow(filename, "success", 128, `["users"]`, "manual", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// When
+	pruneAutoBackups(dir, 0, 20)
+
+	// Then:删除失败的行保留下轮重试;缺失/正常删除的行照常清除
+	if rows := autoBackupRows(t, "WHERE filename=?", blocked); len(rows) != 1 {
+		t.Fatalf("blocked rows=%d, want 1(文件删除失败的行必须保留)", len(rows))
+	}
+	if rows := autoBackupRows(t, "WHERE filename=?", missing); len(rows) != 0 {
+		t.Fatalf("missing rows=%d, want 0(文件缺失容忍删行)", len(rows))
+	}
+	if rows := autoBackupRows(t, "WHERE filename=?", normal); len(rows) != 0 {
+		t.Fatalf("normal rows=%d, want 0(文件删除成功照常删行)", len(rows))
+	}
+}

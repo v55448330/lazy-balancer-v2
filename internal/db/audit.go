@@ -21,7 +21,7 @@ func InitializeAuditDB(dataDir string) error {
 	if err := prepareSQLiteDatabase(path); err != nil {
 		return fmt.Errorf("failed to secure audit database: %w", err)
 	}
-	auditDB, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
+	auditDB, err := sql.Open("sqlite", path+"?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return fmt.Errorf("failed to open audit database: %w", err)
 	}

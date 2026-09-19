@@ -19,6 +19,9 @@ type Config struct {
 	Version   string `json:"version"`
 
 	// Caddy
+	// CaddyAdminURL(2026-09-19 第 43 轮 LB43-1 裁定):生产 admin 恒
+	// 127.0.0.1:2019(渲染侧 caddy.go 硬编码),本字段(与 caddy_metrics_url)
+	// 仅服务测试注入与指标地址;受支持部署不传 -config,恒取默认。
 	CaddyAdminURL   string `json:"caddy_admin_url"`
 	CaddyMetricsURL string `json:"caddy_metrics_url"`
 

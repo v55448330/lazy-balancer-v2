@@ -515,7 +515,7 @@
             <template v-if="form.rate_limit_enabled">
               <el-form-item label="速率上限">
                 <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 120px" />
-                <span class="form-tip-inline">次/秒，持续请求时的速率上限</span>
+                <span class="form-tip-inline">次/秒，持续请求时的速率上限（按客户端 IP 分别计数）</span>
               </el-form-item>
               <el-form-item label="突发余量">
                 <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 120px" />

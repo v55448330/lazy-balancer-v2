@@ -16,6 +16,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 type metricsCursorErrorDriver struct{}
@@ -199,3 +200,45 @@ func TestLoadRuleUpstreams_coalesces_nullable_columns(t *testing.T) {
 }
 
 var _ driver.QueryerContext = metricsCursorErrorConn{}
+
+// PERF43-1(第 43 轮):监控面板聚合端点 5s TTL 缓存(与 helpers.go
+// systemSampleTTL 同模式)——TTL 内重复调用不得重复抓取 Caddy /metrics。
+func TestGetMetricsDashboard_cachesCaddyFetchWithinTTL(t *testing.T) {
+	// Given:假 Caddy 计数 /metrics 命中
+	newMetricsTestDatabase(t)
+	metricsDashboardCache.Lock()
+	metricsDashboardCache.payload = nil
+	metricsDashboardCache.expiresAt = time.Time{}
+	metricsDashboardCache.Unlock()
+	t.Cleanup(func() {
+		metricsDashboardCache.Lock()
+		metricsDashboardCache.payload = nil
+		metricsDashboardCache.expiresAt = time.Time{}
+		metricsDashboardCache.Unlock()
+	})
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("caddy_http_requests_total 100\n"))
+	}))
+	defer server.Close()
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: server.URL}, metricsService: services.NewMetricsService(server.URL, 30)}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/metrics/dashboard", h.GetMetricsDashboard)
+
+	// When:5s TTL 内连续两次调用
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/metrics/dashboard", nil))
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/metrics/dashboard", nil))
+
+	// Then:两次 200,假端点仅命中 1 次
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("status first=%d second=%d, want 双 200", first.Code, second.Code)
+	}
+	if hits != 1 {
+		t.Fatalf("caddy /metrics hits=%d, want 1(5s TTL 缓存命中)", hits)
+	}
+}

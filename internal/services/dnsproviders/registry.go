@@ -1,5 +1,7 @@
 package dnsproviders
 
+import "sort"
+
 type CredentialField struct {
 	Name        string `json:"name"`
 	Label       string `json:"label"`
@@ -42,5 +44,8 @@ func List() []Provider {
 	for _, p := range registry {
 		list = append(list, p)
 	}
+	// B431-3(第 43 轮):map 遍历序不确定,/dns-providers 响应顺序随进程
+	// 随机——按 Code(注册表键,唯一)排序输出稳定切片。
+	sort.Slice(list, func(i, j int) bool { return list[i].Code() < list[j].Code() })
 	return list
 }

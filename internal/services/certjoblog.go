@@ -83,6 +83,9 @@ func getCertJobLogSizeBytes() int64 {
 	}
 	var sizeMB int
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_job_log_size_mb, 10) FROM global_config WHERE id = 1").Scan(&sizeMB); err != nil {
+		// B431-1(第 43 轮):读取失败静默降级 10MB 曾无痕——留 warn 含 err
+		// 便于排查配置漂移(与下方 sizeMB<=0 的防御同口径)。
+		Logf("warn", "读取证书任务日志大小配置失败,按 10MB 降级: %v", err)
 		sizeMB = 10
 	}
 	if sizeMB <= 0 {

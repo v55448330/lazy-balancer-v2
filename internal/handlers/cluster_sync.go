@@ -31,9 +31,14 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 	}
 	if nodeIDValue, exists := c.Get("cluster_node_id"); exists {
 		if nodeID, ok := nodeIDValue.(int); ok {
+			// CL43-3(第 43 轮):节点名查询失败/为空(节点已删除等)回退
+			// 「节点 #<id>」,不再落尾部空名的「节点 」。
 			var nodeName string
-			_ = db.DB.QueryRow("SELECT COALESCE(name,'') FROM nodes WHERE id=?", nodeID).Scan(&nodeName)
-			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), fmt.Sprintf("下发版本：%d", snapshot.Version)), c.ClientIP())
+			nodeLabel := fmt.Sprintf("节点 #%d", nodeID)
+			if err := db.DB.QueryRow("SELECT COALESCE(name,'') FROM nodes WHERE id=?", nodeID).Scan(&nodeName); err == nil && nodeName != "" {
+				nodeLabel = fmt.Sprintf("节点 %s", nodeName)
+			}
+			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(nodeLabel, fmt.Sprintf("下发版本：%d", snapshot.Version)), c.ClientIP())
 		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "快照生成成功", Data: snapshot})

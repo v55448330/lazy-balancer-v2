@@ -59,7 +59,10 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, services.ErrNodeNotFound) {
-			status = http.StatusConflict
+			// CL43-1(第 43 轮):节点不存在属客户端寻址错误,与同族端点
+			// (cluster_registration.go:151、cluster_service.go:71、
+			// cluster_sync.go:135)的 ErrNodeNotFound→404 口径对齐。
+			status = http.StatusNotFound
 		}
 		clusterError(c, status, "生成登录票据失败", err)
 		return

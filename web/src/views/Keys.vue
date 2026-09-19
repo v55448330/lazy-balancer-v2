@@ -720,6 +720,8 @@ const fetchMCPTools = async (): Promise<void> => {
       mcpToolsError.value = `工具清单加载失败：${error.message}`
       return
     }
+    // FE43-6(第 43 轮):非 Error 异常同样置错误态——否则落入「暂无工具」误态。
+    mcpToolsError.value = `工具清单加载失败：${String(error) || '未知错误'}`
     console.error('Failed to fetch MCP tools:', error)
   } finally {
     mcpToolsLoading.value = false

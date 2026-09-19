@@ -88,6 +88,12 @@ func requestProtocol(c *gin.Context) string {
 }
 
 func (h *Handlers) PromoteClusterNode(c *gin.Context) {
+	// CL43-2(第 43 轮):syncService 缺失判定前置——此前 Promote 已生效才报
+	// 503,调用方见到失败但角色已提升,重试撞 ErrAlreadyMaster。
+	if h.syncService == nil {
+		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		return
+	}
 	if err := h.clusterService.Promote(c.Request.Context()); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, services.ErrAlreadyMaster) {
@@ -101,10 +107,6 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 只删 pin 文件，内存 verifiedPins 残留旧主节点指纹会让记录与钉扎状态错位
 	//（M13① 后 do() 不再以内存指纹回写，此处清空保持内存/磁盘 TOFU 生命周期
 	// 对齐）。与 R64 A-N4 的 Resume() 同点位：角色切换的完整收尾。
-	if h.syncService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
-		return
-	}
 	h.syncService.ForgetClusterPins()
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已提升为主节点"})

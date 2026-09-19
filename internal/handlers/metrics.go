@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,15 @@ import (
 )
 
 var caddyMetricsHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// metricsDashboardCache:PERF43-1(第 43 轮)监控面板聚合结果缓存,5s TTL
+// (复用 helpers.go systemSampleTTL 同模式)——面板自动刷新/多开页签在同一
+// 抓取周期内复用聚合;抓取/解析/查询失败不写缓存(错误直出,下次重试)。
+var metricsDashboardCache struct {
+	sync.Mutex
+	payload   gin.H
+	expiresAt time.Time
+}
 
 func fetchCaddyMetrics(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -54,6 +64,15 @@ func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 }
 
 func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
+	// PERF43-1:TTL 内命中直接复用聚合结果(见 metricsDashboardCache 注释);
+	// 锁随整个聚合持有,与 helpers.go getCachedDiskUsage 同模式——并发请求
+	// 串行复用同一抓取,不会击穿到 Caddy。
+	metricsDashboardCache.Lock()
+	defer metricsDashboardCache.Unlock()
+	if time.Now().Before(metricsDashboardCache.expiresAt) {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metricsDashboardCache.payload})
+		return
+	}
 	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
 		caddyMetricsError(c, err)
@@ -135,12 +154,15 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		deductBlockedFrom4xx(metrics, blocked)
 		ruleMetrics[rule.id] = metrics
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+	payload := gin.H{
 		"global":   metricsIndex.globalMetrics(),
 		"hosts":    metricsIndex.hostMetrics(),
 		"overview": h.metricsService.GetOverview(),
 		"rules":    ruleMetrics,
-	}})
+	}
+	metricsDashboardCache.payload = payload
+	metricsDashboardCache.expiresAt = time.Now().Add(systemSampleTTL)
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: payload})
 }
 
 func (h *Handlers) GetRuleMetrics(c *gin.Context) {

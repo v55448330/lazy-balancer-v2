@@ -45,6 +45,10 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		// cluster_version，快照缓存重建、locked_users 当周期下发（否则锁只在下次
 		// 无关变更时才传播）。仅失败计数（login_failed_attempts）不入列：普通失败
 		// 不产生版本抖动；从端本地写由 WHEN is_master=1 守卫排除。
+		// CL43-4(第 43 轮):auth_provider/oidc_subject/oidc_issuer 三列刻意不入
+		// OF——当前唯一写路径是 OIDC JIT 开户 INSERT(auth_oidc.go),无 UPDATE
+		// 写路径;若未来新增该三列 UPDATE 写路径(换绑/issuer 迁移),必须同步
+		// 补 OF,否则稳态变更不 bump 版本、永不传播到从节点。
 		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes,login_locked_until"},
 		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
 		{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},

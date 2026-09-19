@@ -589,9 +589,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 
 <style>
 .ip-location-popper .ipo-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.ip-location-popper .ipo-context { display: flex; gap: 6px; margin: -2px 0 4px 0; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
-.ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-loc-line { font-size: 12px; color: var(--text-secondary, #909399); margin: -4px 0 8px; }
 .ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-list-label { font-size: 12px; color: var(--text-secondary, #909399); white-space: nowrap; }

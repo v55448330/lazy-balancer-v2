@@ -398,6 +398,48 @@ func TestCreateCurrentUserAPIKeyReturnsPlaintextOnce(t *testing.T) {
 	}
 }
 
+// B43-3-3(第 43 轮):API Key 名称 TrimSpace 后非空且 ≤100 字符——空白名/超长名
+// 此前直接落库(api_keys.name VARCHAR(100) 在 SQLite 不强制长度),列表与审计
+// 出现不可读名。重名不拒绝(既有产品决策保持)。
+func TestCreateCurrentUserAPIKey_validatesName(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	gin.SetMode(gin.TestMode)
+	create := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		ctx.Set("user_id", 1)
+		ctx.Set("role", "user")
+		(&Handlers{}).CreateCurrentUserAPIKey(ctx)
+		return recorder
+	}
+
+	// When/Then:空白名与 101 字符名 → 400
+	for _, tc := range []struct{ label, body string }{
+		{"whitespace", `{"name":"   "}`},
+		{"overlong", `{"name":"` + strings.Repeat("密", 101) + `"}`},
+	} {
+		if recorder := create(tc.body); recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status=%d body=%s, want 400", tc.label, recorder.Code, recorder.Body.String())
+		}
+	}
+	// 边界:100 字符接受;首尾空白名修剪后落库
+	if recorder := create(`{"name":"` + strings.Repeat("密", 100) + `"}`); recorder.Code != http.StatusCreated {
+		t.Fatalf("100 字符名: status=%d body=%s, want 201", recorder.Code, recorder.Body.String())
+	}
+	if recorder := create(`{"name":"  padded  "}`); recorder.Code != http.StatusCreated {
+		t.Fatalf("修剪后非空名: status=%d body=%s, want 201", recorder.Code, recorder.Body.String())
+	}
+	var stored string
+	if err := database.QueryRow("SELECT name FROM api_keys WHERE name IN ('padded','  padded  ')").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "padded" {
+		t.Fatalf("stored name=%q, want 修剪后的 padded", stored)
+	}
+}
+
 func TestUpdateCurrentUserAPIKeyRejectsDisablingReadOnly(t *testing.T) {
 	setupAPIKeyTestDB(t)
 	recorder := httptest.NewRecorder()

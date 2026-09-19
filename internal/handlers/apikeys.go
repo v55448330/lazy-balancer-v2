@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -125,6 +126,18 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
+	// B43-3-3(第 43 轮):名称 TrimSpace 后非空且 ≤100 字符——空白名/超长名
+	// 此前直接落库(api_keys.name VARCHAR(100) 在 SQLite 不强制长度),列表与
+	// 审计出现不可读名;修剪后落库。重名不拒绝(既有产品决策保持)。
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称不能为空"})
+		return
+	}
+	if utf8.RuneCountInString(req.Name) > 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称过长(上限 100 字符)"})
 		return
 	}
 	if c.GetString("role") != "admin" {

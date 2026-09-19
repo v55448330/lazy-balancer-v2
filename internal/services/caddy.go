@@ -1906,6 +1906,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		}
 	}
 
+	// LB43-1（2026-09-19 第 43 轮裁定）：Caddy admin 恒 127.0.0.1:2019。
+	// cfg.CaddyAdminURL 配置文件字段仅服务测试注入（main_test.go 死端口隔离），
+	// 生产部署（-config 未使用）两侧恒一致，admin 监听地址不随配置变化。
+
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": "127.0.0.1:2019",
@@ -2327,7 +2331,7 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != ''
 			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ? AND enable_tls = 1
 			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)
-			ORDER BY id`, listenPort)
+			ORDER BY rowid`, listenPort)
 		if err != nil {
 			Logf("error", "GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
 		} else {

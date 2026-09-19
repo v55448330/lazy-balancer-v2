@@ -280,7 +280,8 @@ onMounted(async () => {
         ElMessage.error(`OIDC 登录失败：${oidcError}`)
         params.delete('oidc_error')
         const rest = params.toString()
-        window.history.replaceState(null, '', window.location.pathname + hash.slice(0, qIndex + 1) + rest)
+        // FE43-8(第 43 轮):rest 为空串时不拼「?」——避免 URL 残留「#/?」。
+        window.history.replaceState(null, '', window.location.pathname + hash.slice(0, qIndex) + (rest ? `?${rest}` : ''))
       }
     }
   } catch { /* 隐私模式 */ }

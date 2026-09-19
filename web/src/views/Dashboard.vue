@@ -762,8 +762,9 @@ const fetchAllData = (): Promise<void> => {
   if (disposed) return Promise.resolve()
   if (fetchAllDataPromise) return fetchAllDataPromise
 
-  const headers = { Authorization: `Bearer ${authStore.token}` }
-  const config = { headers, signal: dashboardPolling.signal, silent: true }
+  // FE43-7(第 43 轮):删除手造 Authorization 头——api.ts 请求拦截器对全部
+  // 同域相对路径请求统一从 localStorage 注入同一 token(api.ts:186-196)。
+  const config = { signal: dashboardPolling.signal, silent: true }
   fetchAllDataPromise = Promise.allSettled([
     request.get('/system/info', config).then((res) => {
       if (disposed) return

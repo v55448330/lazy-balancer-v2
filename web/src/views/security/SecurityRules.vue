@@ -1128,10 +1128,15 @@ const deleteCustomRule = (row: CustomRule) => {
 const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
 
 onMounted(() => {
-  const urlTab = new URLSearchParams(location.search).get('tab')
+  // FE43-1(第 43 轮):消费 ?tab= 后剥离(与 FE42-1 sp 口径一致,SecurityPolicies.vue
+  // 先例)——视图切换走 authStore.currentPage 而非 hash 路由,replaceState 仅留
+  // pathname 不破坏页面基座;仅当 URL 实际携带 tab 参数时才剥离。
+  const query = new URLSearchParams(location.search)
+  const urlTab = query.get('tab')
   if (urlTab && ['rules', 'custom', 'ip-lists'].includes(urlTab)) {
     activeTab.value = urlTab
   }
+  if (query.has('tab')) window.history.replaceState(null, '', window.location.pathname)
   fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists()
 })
 

@@ -378,7 +378,14 @@ const handleSubmit = async () => {
       }
       mfaAwareSuccess('更新成功')
     } else {
-      await request.post('/users', form.value)
+      // FE43-5(第 43 轮):创建用户显式白名单字段上行——form 含 password_confirm
+      // 仅前端二次确认用,不随请求提交。
+      await request.post('/users', {
+        username: form.value.username,
+        password: form.value.password,
+        display_name: form.value.display_name,
+        role: form.value.role,
+      })
       mfaAwareSuccess('创建成功')
     }
   } catch (error: unknown) {

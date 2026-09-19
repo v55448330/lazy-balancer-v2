@@ -3321,7 +3321,6 @@ onUnmounted(() => {
 .rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
-.acl-lock-icon.is-deny { color: var(--el-color-danger); }
 .security-tooltip { min-width: 200px; font-size: 13px; }
 /* 防护摘要含合并计数 + 信任启用态（如「黑名单模式 · 列表 12 条 · 黑名单 3 条」），
    240px 会折入省略号；放宽到 320px，完整文本仍有 :title 兜底 */
@@ -3383,13 +3382,6 @@ onUnmounted(() => {
   padding: 12px !important;
 }
 
-.tooltip-title {
-  font-weight: 600;
-  margin: 0 0 4px 0;
-  color: #374151;
-  padding: 0;
-}
-
 .upstream-item {
   display: flex !important;
   flex-direction: row !important;
@@ -3417,22 +3409,8 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.upstream-healthy {
-  color: #22c55e;
-  font-size: 12px;
-}
-
-.upstream-unhealthy {
-  color: #ef4444;
-  font-size: 12px;
-}
-
 .upstream-degraded {
   color: var(--el-color-warning);
-}
-.upstream-unknown {
-  color: #9ca3af;
-  font-size: 12px;
 }
 .upstream-na {
   font-size: 11px;
@@ -3641,12 +3619,6 @@ onUnmounted(() => {
 
 .compact-divider :deep(.el-divider__line) {
   width: calc(50% - 30px);
-}
-
-.active-check-control {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .strategy-card:hover {

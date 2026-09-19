@@ -69,6 +69,45 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	}
 }
 
+// CL43-2(第 43 轮):syncService 缺失的 503 必须先于 Promote 生效——此前先
+// Promote(角色已提升)再报 503,调用方见到失败但节点已变主,重试撞
+// ErrAlreadyMaster。
+func TestPromoteClusterNode_reportsUnavailableBeforePromoting(t *testing.T) {
+	// Given:从节点态 + syncService=nil 的 Handlers
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0, master_url='', cluster_token='' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/cluster/promote", h.PromoteClusterNode)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/cluster/promote", nil))
+
+	// Then:503 且角色未被提升
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%q, want 503", response.Code, response.Body.String())
+	}
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		t.Fatal(err)
+	}
+	if isMaster {
+		t.Fatal("Promote 在 syncService 缺失报错前已生效(is_master=1)")
+	}
+}
+
 func TestSetClusterMode_rejectsCredentialedMasterURLWithoutAuditingCredentials(t *testing.T) {
 	// Given
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB

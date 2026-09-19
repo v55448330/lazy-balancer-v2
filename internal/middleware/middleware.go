@@ -57,9 +57,14 @@ func (limiter *authenticationAuditLimiter) allow(key string, now time.Time) bool
 	if last, exists := limiter.events[key]; exists && now.Sub(last) < time.Minute {
 		return false
 	}
-	for eventKey, last := range limiter.events {
-		if now.Sub(last) >= 2*time.Minute {
-			delete(limiter.events, eventKey)
+	// PERF43-3（2026-09-19 第 43 轮）：仅规模超阈值才全图清扫——唯一键=
+	// reason+path+ip，1024 远超正常认证拒绝规模。阈值以下陈旧键留在 map 中
+	// 不清扫，但再次命中时上方 1 分钟窗口判定照常生效，语义等价。
+	if len(limiter.events) > 1024 {
+		for eventKey, last := range limiter.events {
+			if now.Sub(last) >= 2*time.Minute {
+				delete(limiter.events, eventKey)
+			}
 		}
 	}
 	limiter.events[key] = now
@@ -71,6 +76,13 @@ func (limiter *authenticationAuditLimiter) reset() {
 	limiter.events = make(map[string]time.Time)
 	limiter.mu.Unlock()
 }
+
+// apiKeyWhitelistCache（PERF43-2，2026-09-19 第 43 轮）：API Key IP 白名单的
+// CIDR 解析结果缓存——原实现每请求对每条 CIDR 调 net.ParseCIDR。
+// 键 = keyID + "|" + 白名单原串：键含白名单内容，白名单变更自动产生新键，
+// 无需失效；旧键规模有界（Key 数 × 历史白名单版本数）。解析失败不缓存
+// （下次请求仍重新解析并 500），保持「白名单配置无效→500」语义不变。
+var apiKeyWhitelistCache sync.Map
 
 // auditClientIP 审计源 IP（第 15 轮审计 K-1）：内部 MCP 转发请求（本机回环
 // 自调用）携带网关注入的真实客户端 IP 头；仅当内部认证密钥匹配（与
@@ -803,14 +815,26 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})
 				return
 			}
+			cacheKey := strconv.Itoa(keyID) + "|" + mcpIPWhitelist
+			var networks []*net.IPNet
+			if cached, ok := apiKeyWhitelistCache.Load(cacheKey); ok {
+				networks = cached.([]*net.IPNet)
+			} else {
+				parsed := make([]*net.IPNet, 0, len(whitelist))
+				for _, cidr := range whitelist {
+					_, network, err := net.ParseCIDR(cidr)
+					if err != nil {
+						c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})
+						return
+					}
+					parsed = append(parsed, network)
+				}
+				apiKeyWhitelistCache.Store(cacheKey, parsed)
+				networks = parsed
+			}
 			clientIP := net.ParseIP(c.ClientIP())
 			allowed := false
-			for _, cidr := range whitelist {
-				_, network, err := net.ParseCIDR(cidr)
-				if err != nil {
-					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})
-					return
-				}
+			for _, network := range networks {
 				if network.Contains(clientIP) {
 					allowed = true
 					break

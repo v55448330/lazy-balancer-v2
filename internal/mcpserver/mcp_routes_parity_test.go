@@ -109,7 +109,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/branding":              "面板前端品牌文案渲染（app_name/页脚/版本），公开只读；运维对象是 Caddy 而非面板 UI，Agent 无消费场景",
 	"GET /api/v1/caddy/metrics":         "Caddy 原始指标（请求总量/在途计数），供 Prometheus 抓取与面板展示；Agent 监控走 get_metrics_dashboard/get_metrics_overview 聚合工具",
 	"GET /api/v1/caddy/host-metrics":    "Caddy 按域名粒度的指标统计，面板主机视图数据源；Agent 监控走 get_metrics_dashboard 聚合工具",
-	"GET /api/v1/audit-logs/options":    "审计日志页筛选下拉选项（操作人/操作/对象去重值+频次），面板 UI 辅助数据；Agent 直接用 get_audit_logs 的筛选参数查询",
+	"GET /api/v1/audit-logs/options":    "审计日志页筛选下拉选项（操作人/操作/对象去重值+频次），面板 UI 辅助数据；Agent 直接用 list_audit_logs 的筛选参数查询",
 	"GET /api/v1/logs/stats":            "9 类日志的存储大小/轮转/保留策略状态，面板日志页展示用；不涉及 Agent 的排障操作路径",
 	"GET /api/v1/security/crs/setup":    "CRS setup.conf 配置文件原文查看，面板 CRS 配置展示用；Agent 排查规则走 get_crs_rule/get_crs_rule_index",
 	"GET /api/v1/security/events/count": "IP 弹框上下文查询(近 N 天单 IP 事件计数),轻量专用端点;MCP 场景用 list_security_events 的 ip 过滤+total 覆盖同等信息",

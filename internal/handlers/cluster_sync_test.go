@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,47 @@ func TestPullClusterSnapshot_persists_manual_sync_failure(t *testing.T) {
 	}
 	if response.Code != http.StatusInternalServerError || stored == "" {
 		t.Fatalf("status=%d stored=%q body=%q", response.Code, stored, response.Body.String())
+	}
+}
+
+// CL43-3(第 43 轮):同步下发审计的节点名查询失败(节点已删除)不得落
+// 尾部空名的「节点 」,回退「节点 #<id>」。
+func TestGetClusterSnapshot_auditFallsBackToNodeID(t *testing.T) {
+	// Given:主节点 + cluster_node_id 指向不存在的节点 999
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/cluster/sync/snapshot", func(c *gin.Context) {
+		c.Set("cluster_node_id", 999)
+		h.GetClusterSnapshot(c)
+	})
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/cluster/sync/snapshot", nil))
+
+	// Then:快照下发成功 + 审计含「节点 #999」而非尾部空名的「节点 」
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q, want 200", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow("SELECT detail FROM audit_log WHERE action='同步下发' AND resource='集群节点' ORDER BY id DESC LIMIT 1").Scan(&detail); err != nil {
+		t.Fatalf("query sync audit: %v", err)
+	}
+	if strings.Contains(detail, "节点 ；") {
+		t.Fatalf("audit detail=%q, want 不含尾部空名的「节点 」", detail)
+	}
+	if !strings.Contains(detail, "节点 #999") {
+		t.Fatalf("audit detail=%q, want 含「节点 #999」", detail)
 	}
 }
 

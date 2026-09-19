@@ -51,6 +51,7 @@ func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
 	}
 	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
 	if err != nil {
+		Logf("error", "GetSecurityPoliciesForRule: 查询规则 %s 的安全策略绑定失败: %v", ruleCaddyID, err)
 		return nil
 	}
 	defer rows.Close()
@@ -58,6 +59,7 @@ func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
 	for rows.Next() {
 		var policyID int
 		if err := rows.Scan(&policyID); err != nil {
+			Logf("error", "GetSecurityPoliciesForRule: 扫描规则 %s 的安全策略绑定行失败: %v", ruleCaddyID, err)
 			return nil
 		}
 		// 禁用策略在策略查询处过滤（与单查的 WHERE enabled=1 同口径）。
@@ -66,6 +68,7 @@ func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
 		}
 	}
 	if err := rows.Err(); err != nil {
+		Logf("error", "GetSecurityPoliciesForRule: 迭代规则 %s 的安全策略绑定失败: %v", ruleCaddyID, err)
 		return nil
 	}
 	// 批次引用解析：跨全部已加载策略收集列表 id，一次批量查询（预算：与策略数
@@ -228,7 +231,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	}
 	// F2（v2.2.3）：策略级「记录请求体」开关——开启时审计 parts 加 C，coraza
 	// 在事件事务（RelevantOnly 门控）输出 transaction.request.body，摄入落库
-	// request_body（64KB 截断）。请求体 access 恒 On 不变（上方响应体另由 SecResponseBodyAccess 条件开关），仅审计输出面扩展。
+	// request_body（64KB 截断）。请求体 access 由上方 crsActive/customActive
+	// 门控决定（SLB12-P2-1 后 :214-218 条件发射，不再恒 On）；本开关
+	// （LogRequestBody）仅扩展审计输出面（加 C 段）。
 	auditParts := "ABIJDEFHKZ"
 	if p.LogRequestBody {
 		auditParts = "ABCIJDEFHKZ"

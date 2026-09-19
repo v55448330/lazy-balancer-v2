@@ -79,7 +79,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/rules/:caddy_id/disable", "规则", "禁用规则", "", `{"code":0,"message":"Rule disabled"}`, []string{"404 not_found", "409 cert_job_running", "500 caddy_apply_failed", "400 caddy_validation_failed"}, "非终态证书任务会置为 disabled。有 worker 正在执行签发时秒回 409（queued/冷却中不拦，稍后重试即可）。"},
 	{"POST", "/rules/:caddy_id/duplicate", "规则", "复制规则", "", `{"caddy_id":"lb_new..."}`, []string{"404 not_found", "400 port_or_domain_conflict", "500 tx_failed"}, "不读取请求体；名称固定追加「（副本）」后缀。"},
 	{"GET", "/certificate-configs", "证书", "DNS 提供商配置列表", "", `[{"id":1,"name":"dnspod","dns_provider":"dnspod","enabled":true}]`, []string{"401 unauthenticated"}, "凭证非管理员仅见掩码形态；更新时回传掩码串按未改动处理（sentinel），仅管理员可查看明文与修改。"},
-	{"GET", "/certificates", "证书", "Caddy 证书列表", "", `{"certificates":[]}`, []string{"500 caddy_unavailable"}, "读取 Caddy 当前证书数据。"},
+	{"GET", "/certificates", "证书", "证书任务列表（每域名最新签发任务）", "", `{"code":0,"data":{"certificates":[{"id":1,"rule_id":"lb_...","domain":"example.com","status":"issued","message":"","expires_at":"2026-10-01 00:00:00","updated_at":"2026-09-19 12:00:00"}],"total":1}}`, []string{"401 unauthenticated", "500 query_failed"}, "从证书任务（cert_jobs）聚合，每域名最新一条；不含 Caddy 内部 CA。"},
 	{"POST", "/certificate-configs", "证书", "创建 DNS 提供商配置", `{"name":"dnspod","dns_provider":"dnspod","dns_credentials":{"id":"...","token":"..."},"enabled":true}`, `{"id":1}`, []string{"400 invalid_request", "403 非管理员用户只读(主节点)/从节点只读"}, "凭证保存后非管理员仅见掩码形态（更新回传掩码按未改动处理），仅管理员可修改。"},
 	{"PUT", "/certificate-configs/:id", "证书", "更新 DNS 提供商配置", `{"name":"dnspod","enabled":true}`, `{"code":0,"message":"Config updated"}`, []string{"400 invalid_request", "403 非管理员用户只读(主节点)/从节点只读", "404 not_found"}, ""},
 	{"DELETE", "/certificate-configs/:id", "证书", "删除 DNS 提供商配置", "", `{"code":0,"message":"Config deleted"}`, []string{"403 非管理员用户只读(主节点)/从节点只读", "404 not_found"}, ""},
@@ -450,7 +450,7 @@ func (h *Handlers) GetAPIDocs(c *gin.Context) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Lazy Balancer API</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css" onerror="this.remove();document.getElementById('fallback').style.display='block'">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css" integrity="sha384-rcbEi6xgdPk0iWkAQzT2F3FeBJXdG+ydrawGlfHAFIZG7wU6aKbQaRewysYpmrlW" crossorigin onerror="this.remove();document.getElementById('fallback').style.display='block'">
   <style>body{margin:0}#fallback{display:none;padding:32px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#374151}#fallback a{color:#2563eb}</style>
 </head>
 <body>
@@ -460,7 +460,7 @@ func (h *Handlers) GetAPIDocs(c *gin.Context) {
     <p>可直接访问 OpenAPI YAML：<a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a></p>
   </div>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" crossorigin onerror="document.getElementById('fallback').style.display='block';document.getElementById('swagger-ui').style.display='none'"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" integrity="sha384-NXtFPpN61oWCuN4D42K6Zd5Rt2+uxeIT36R7kpXBuY9tLnZorzrJ4ykpqwJfgjpZ" crossorigin onerror="document.getElementById('fallback').style.display='block';document.getElementById('swagger-ui').style.display='none'"></script>
   <script>
     window.addEventListener("DOMContentLoaded", function() {
       if (typeof SwaggerUIBundle === "undefined") return;

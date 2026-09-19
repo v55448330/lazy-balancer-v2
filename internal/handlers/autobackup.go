@@ -139,7 +139,10 @@ func pruneAutoBackups(dir string, keepSuccess, keepFailed int) {
 			r := all[idx]
 			if autoBackupSafeFilename(r.filename) {
 				if err := os.Remove(filepath.Join(dir, r.filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					// SYSB43-1(第 43 轮):文件删除失败(非 ErrNotExist)保留行
+					// 下轮重试——行随 warn 一并删除会让残留文件成孤儿永不再裁剪。
 					services.Logf("warn", "自动备份裁剪：删除文件失败 %s: %v", r.filename, err)
+					continue
 				}
 			}
 			if _, err := db.DB.Exec(`DELETE FROM auto_backups WHERE id=?`, r.id); err != nil {
