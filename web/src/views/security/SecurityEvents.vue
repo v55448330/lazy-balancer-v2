@@ -827,6 +827,6 @@ onMounted(fetchEvents)
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; margin-right: 0; }
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox .el-checkbox__label { padding-left: 8px; }
 /* 选中项不加粗：EP 2.14 多选下拉 is-selected 默认 font-weight:bold，该筛选常态
-   全选（4 类别全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
+   全选（5 类别全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
 .triggered-filter-popper .el-select-dropdown__item.is-selected { font-weight: normal; }
 </style>

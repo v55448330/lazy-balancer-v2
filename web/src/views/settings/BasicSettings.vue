@@ -972,6 +972,8 @@ const handleImportFile = async (event: Event): Promise<void> => {
 const confirmImport = async (): Promise<void> => {
   const validation = importValidation.value
   if (!validation?.valid || importing.value) return
+  // FE44-6：未选分类先于最终确认弹框拦截（V1 路径强制 ['rules']，不可达此分支）
+  if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
   // R62 D-3：全量导入是全仓破坏性最强的操作（覆盖规则、用户、密钥、证书任务与全部凭证），
   // 此前是唯一缺二次确认弹框的破坏性操作——「确认导入」按钮与警示文案不足以兜底误点。
   try {
@@ -1003,7 +1005,6 @@ const confirmImport = async (): Promise<void> => {
       // R39-1:lbbak 二进制无法体内携带 sections——分类选择经 query 传输
       endpoint = `/config/import?sections=${encodeURIComponent(importSections.value.join(','))}`
     }
-    if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
     const res = await request.post<ImportResponse>(endpoint, importBody, {
       headers: { 'Content-Type': importFileIsLbbak.value ? 'application/octet-stream' : 'application/json' },
     })

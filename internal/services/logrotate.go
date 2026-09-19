@@ -144,9 +144,18 @@ func (w *RotatingFileWriter) rotateLocked() error {
 		return err
 	}
 	w.file = nil
-	rotated := fmt.Sprintf("%s.%s", w.path, time.Now().Format("20060102-150405"))
-	if _, err := os.Stat(rotated); err == nil {
-		rotated = fmt.Sprintf("%s.%d", rotated, time.Now().UnixNano()%1000)
+	stamp := time.Now().Format("20060102-150405")
+	rotated := fmt.Sprintf("%s.%s", w.path, stamp)
+	// SYSB44-2(第 44 轮审计 P3):同秒多次轮转的碰撞后缀原为 UnixNano()%1000
+	// 随机数——撞上既有副本名时 os.Rename 静默覆盖,吞掉上一份轮转日志。
+	// 改循环递增 -2/-3/...(与 autobackup 同秒序号 -2..-201 同模式)直至文件名
+	// 不存在,确定性避让;stat 出非「不存在」错误时按可选用(与原 lenient
+	// 口径一致,rename 失败仍走下方回退)。
+	for n := 2; ; n++ {
+		if _, err := os.Stat(rotated); err != nil {
+			break
+		}
+		rotated = fmt.Sprintf("%s.%s-%d", w.path, stamp, n)
 	}
 	if err := os.Rename(w.path, rotated); err != nil {
 		// Rename failed (e.g. cross-device); keep appending to the old file.

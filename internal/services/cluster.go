@@ -282,7 +282,11 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		return fmt.Errorf("读取注册编号: %w", err)
 	}
 	var oldToken string
-	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_token,'') FROM global_config WHERE id=1").Scan(&oldToken)
+	// CL44-1（第 44 轮审计）：旧令牌仅用于提升成功后的脱离通知（best-effort），
+	// 读取失败不阻断提升，但须留痕——与上下文显式错误处理对齐，不再静默吞错。
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_token,'') FROM global_config WHERE id=1").Scan(&oldToken); err != nil {
+		Logf("info", "Promote: 读取旧集群令牌失败，提升后的旧主节点脱离通知将跳过: %v", err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

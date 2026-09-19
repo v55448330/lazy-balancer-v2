@@ -185,17 +185,17 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	r.Header.Set("X-GeoIP-Country", fields[0])
 	r.Header.Set("X-GeoIP-Country-Code", fields[4])
 	r.Header.Set("X-GeoIP-Region", region)
-	if len(fields) >= 3 {
-		if raw := fields[1]; raw != "" && raw != "0" {
-			// R72 二十三次：省列规范化——xdb 存在双形态（上海/上海市）与
-			// 台湾城市误入省列；策略选项树（internal/services/ip2region.go
-			// normalizeIP2Province，两侧同款表需同步维护）用规范名，发射
-			// 变量同规范化后 CEL 等值匹配才成立。
-			province = normalizeProvince(raw)
-		}
-		caddyhttp.SetVar(ctx, "geoip.province", province)
-		r.Header.Set("X-GeoIP-Province", province)
+	// SEC44-2(第 44 轮):上方 :179 已保证 len(fields)>=5,原两处 len>=3 守卫
+	// 恒真,直接执行块内逻辑。
+	if raw := fields[1]; raw != "" && raw != "0" {
+		// R72 二十三次：省列规范化——xdb 存在双形态（上海/上海市）与
+		// 台湾城市误入省列；策略选项树（internal/services/ip2region.go
+		// normalizeIP2Province，两侧同款表需同步维护）用规范名，发射
+		// 变量同规范化后 CEL 等值匹配才成立。
+		province = normalizeProvince(raw)
 	}
+	caddyhttp.SetVar(ctx, "geoip.province", province)
+	r.Header.Set("X-GeoIP-Province", province)
 	// R72 二十三次：市级粒度——region 第 3 列为城市；无效值（空/0）置空串，
 	// 使 CEL {http.vars.geoip.city} == X 对无城市段恒不命中。
 	// R72 二十五次：城市列经 normalizeCity 规范化——xdb 部分段城市列为拼音/
@@ -203,15 +203,13 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	// 会导致「广东省/广州市」类城市级规则对这些段恒不命中。
 	// 台湾城市误入省列的段：城市名在省列（城市列是该段的乱码罗马化值）——
 	// 城市变量改发省列值，与树侧归并语义一致，使「台湾省/台中市」可命中。
-	if len(fields) >= 3 {
-		if rawProv := strings.TrimSpace(fields[1]); taiwanCities[rawProv] {
-			city = rawProv
-		} else if c := strings.TrimSpace(fields[2]); c != "" && c != "0" {
-			city = normalizeCity(c)
-		}
-		caddyhttp.SetVar(ctx, "geoip.city", city)
-		r.Header.Set("X-GeoIP-City", city)
+	if rawProv := strings.TrimSpace(fields[1]); taiwanCities[rawProv] {
+		city = rawProv
+	} else if c := strings.TrimSpace(fields[2]); c != "" && c != "0" {
+		city = normalizeCity(c)
 	}
+	caddyhttp.SetVar(ctx, "geoip.city", city)
+	r.Header.Set("X-GeoIP-City", city)
 	// X-GeoIP-Loc：地域规则匹配键（coraza SecRule 的锚定正则全值目标）。
 	// 国家列非「中国」（含空/0/海外国名，与 D1 fail-closed 哨兵同口径）→
 	// 「海外」；国内 → 省 或 省/市（均为规范化值，与策略选项树同源，

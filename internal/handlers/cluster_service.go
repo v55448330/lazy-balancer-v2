@@ -121,6 +121,13 @@ func (h *Handlers) callClusterServiceControl(ctx context.Context, baseURL, actio
 		return "", fmt.Errorf("调用从节点服务控制: %w", err)
 	}
 	defer response.Body.Close()
+	// CL44-4（第 44 轮审计）：同主机 https 升级已由 DoWithSameHostTLSUpgradeRedirect
+	// 重放，残留 3xx（跨主机/反代重定向）的空 body 落进 JSON 解析只会报
+	// 「unexpected end of JSON input」——与集群同步 Pull/Register 3xx 分支同款
+	// 可行动指引，在读 body 前拦截。
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return "", fmt.Errorf("从节点返回 %d 重定向(%s)——从节点启用 HTTPS 后请将该节点的访问地址改为 https://，或修正反向代理配置后重试", response.StatusCode, response.Header.Get("Location"))
+	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, clusterServiceControlMaxBytes))
 	if err != nil {
 		return "", fmt.Errorf("读取从节点响应: %w", err)
@@ -222,6 +229,8 @@ func (h *Handlers) executeClusterCaddyAction(action string) (string, error) {
 }
 
 func recordClusterServiceControlAudit(c *gin.Context, action, result string) {
+	// CL44-3（第 44 轮审计）：action 来自未认证请求体，须先经 registerAuditField
+	// 清洗（去控制字符、截断 128B，同注册端点）再拼接，防伪造换行/超长注入审计详情。
 	services.RecordAuditLog("system", "服务控制", "节点服务",
-		services.FormatAuditDetail("来源：主节点", "操作："+action, "结果："+result), c.ClientIP())
+		services.FormatAuditDetail("来源：主节点", "操作："+registerAuditField(action), "结果："+result), c.ClientIP())
 }

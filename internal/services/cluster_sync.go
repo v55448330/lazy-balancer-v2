@@ -613,7 +613,13 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return models.ClusterRegistration{}, errors.New(envelope.Message)
 	}
-	return envelope.Data, nil
+	// CL44-2（第 44 轮审计）：200 但载荷畸形（缺注册编号/注册密钥）不得静默
+	// 落库——残缺注册信息会让后续 confirm/同步链路以零值凭据空转，显式报错。
+	registration := envelope.Data
+	if registration.RegistrationID <= 0 || registration.RegistrationSecret == "" {
+		return models.ClusterRegistration{}, fmt.Errorf("解析主节点注册响应: 注册编号或注册密钥缺失（registration_id=%d）", registration.RegistrationID)
+	}
+	return registration, nil
 }
 
 // maxSnapshotResponseBytes caps the Pull snapshot response body: 合法快照内嵌

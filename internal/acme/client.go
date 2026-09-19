@@ -269,7 +269,12 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 		}
 		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
 	}
-	return c.removeStaleAccountKeys()
+	// CERT44-3（第 44 轮审计）：清理失效账户密钥是卫生动作，注册三分支已成功——
+	// 清理失败仅记 warn，不得连坐注册结果（残留密钥下一轮注册时再清理）。
+	if err := c.removeStaleAccountKeys(); err != nil {
+		log.Printf("acme: 清理失效账户密钥失败（不影响本次注册）: %v", err)
+	}
+	return nil
 }
 
 // staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长，

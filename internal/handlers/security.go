@@ -115,7 +115,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?)`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, getContextUserIDInt(c))
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -209,7 +209,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	}
 	conditionsJSON, _ := json.Marshal(merged.Conditions)
 	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		merged.Name, merged.Description, string(conditionsJSON), merged.Action, merged.Score, merged.Enabled, getContextUserIDInt(c), id)
+		merged.Name, merged.Description, string(conditionsJSON), merged.Action, merged.Score, merged.Enabled, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -362,7 +362,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, false, getContextUserIDInt(c), getContextUserIDInt(c))
+		req.Name, req.Description, req.Content, false, int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -425,7 +425,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, req.Content, getContextUserIDInt(c), id)
+		req.Name, req.Description, req.Content, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -912,7 +912,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, getContextUserIDInt(c))
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1562,7 +1562,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	addBool("enabled", req.Enabled)
 	query += ", updated_by=? WHERE id=?"
-	args = append(args, getContextUserIDInt(c), id)
+	args = append(args, int(contextUserID(c)), id)
 	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -3059,9 +3059,12 @@ func validateRateLimitShape(name string, enabled bool, rps, burst int) error {
 }
 
 func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusCode, anomalyThreshold int) error {
-	validBlockStatus := map[int]bool{400: true, 401: true, 403: true, 404: true, 429: true, 503: true}
+	// SEC44-1(第 44 轮):429 剔除——拦截语义 429 保留给限流(overviewmetrics.go
+	// 限流卡片按 code=429 计数),WAF 拦截页 429 会混入限流指标口径;存量 429
+	// 行由 services 侧 legacySecurityEnumBackfills 归一为 403。
+	validBlockStatus := map[int]bool{400: true, 401: true, 403: true, 404: true, 503: true}
 	if blockStatusCode != 0 && !validBlockStatus[blockStatusCode] {
-		return fmt.Errorf("拦截状态码必须为 400/401/403/404/429/503 之一，当前值 %d", blockStatusCode)
+		return fmt.Errorf("拦截状态码必须为 400/401/403/404/503 之一，当前值 %d", blockStatusCode)
 	}
 	if anomalyThreshold != 0 {
 		// 2026-09-09:新增 15 档(3 条严重命中);1/3 保留兼容存量(UI 已改按
@@ -3121,33 +3124,9 @@ func validIPOrCIDR(entry string) bool {
 	return err == nil && addr.Zone() == ""
 }
 
-func getContextUserIDInt(c *gin.Context) int {
-	if uid, exists := c.Get("user_id"); exists {
-		switch v := uid.(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		case int64:
-			return int(v)
-		}
-	}
-	return 0
-}
-
-func getContextUserID(c *gin.Context) string {
-	if uid, exists := c.Get("user_id"); exists {
-		switch v := uid.(type) {
-		case float64:
-			return fmt.Sprintf("%d", int(v))
-		case int:
-			return fmt.Sprintf("%d", v)
-		case int64:
-			return fmt.Sprintf("%d", v)
-		}
-	}
-	return "0"
-}
+// SEC44-3(第 44 轮):user-id 三 helper 已合一为 rule_features.go 的
+// contextUserID(int64)——原 getContextUserIDInt(→int)/getContextUserID
+// (→string) 删除,调用点按需 int()/strconv.FormatInt 型转换。
 
 func (h *Handlers) ListCRSRules(c *gin.Context) {
 	entries, err := os.ReadDir(crsRulesDir)

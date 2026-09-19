@@ -383,8 +383,7 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
   .stat-col { flex: 1 1 100%; }
 }
 .rate-limit-hint { flex-shrink: 0; }
-.card-header { flex-wrap: nowrap; gap: 8px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 8px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 

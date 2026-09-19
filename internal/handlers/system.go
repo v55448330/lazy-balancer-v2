@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"os"
@@ -122,6 +123,17 @@ func (h *Handlers) GetAppLogs(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志失败: " + err.Error()})
 		return
+	}
+	// SYSB44-3(第 44 轮审计 P5):窗口起点可能落在某行中段——切在多字节
+	// UTF-8 rune 中间时首行残段带无效字节,JSON 编码后以 U+FFFD 污染输出。
+	// 起点非零时丢弃到下一 '\n' 为止的残段(该行本就超出 128KB 窗口语义,
+	// 半行无展示价值;窗口内无 '\n' 则整窗为同一巨行的中段,输出为空)。
+	if startOffset > 0 {
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+			data = data[idx+1:]
+		} else {
+			data = nil
+		}
 	}
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxLines {

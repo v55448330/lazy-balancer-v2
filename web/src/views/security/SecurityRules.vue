@@ -89,7 +89,7 @@
           </el-table>
           <div style="display: flex; justify-content: center; margin-top: 16px;">
           <div class="rules-pagination">
-            <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="fetchRules" />
+            <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="fetchRules" />
           </div>
           </div>
         </el-tab-pane>

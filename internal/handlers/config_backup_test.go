@@ -1283,7 +1283,7 @@ func TestValidateV2Backup_credentials_must_be_json_object(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backup := completeBackupJSON(t, map[string][]map[string]any{
-				"ca_providers":        {{"credentials": tt.caCred}},
+				"ca_providers":        {{"credentials": tt.caCred, "provider": "letsencrypt"}}, // CERT44-1:provider 为 NOT NULL 列,真实导出恒携带,夹具补齐
 				"certificate_configs": {{"dns_credentials": tt.dnsCred}},
 			})
 			var b configBackup

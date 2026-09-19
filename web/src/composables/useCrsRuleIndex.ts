@@ -124,7 +124,7 @@ export const useCrsRuleIndex = () => {
   const loaded = ref(false)
   // 当前持有数据所属的对话框会话序号（null = 页面级加载或尚未加载）
   let loadedSeq: number | null = null
-  // 已发起请求的会话序号：同会话并发去重 + 旧会话在途响应丢弃（null = 页面级加载）
+  // 最近发起请求的会话序号：在途期并发去重（配合 loading）+ 旧会话在途响应丢弃（null = 页面级加载）
   let requestedSeq: number | null = null
 
   const byId = computed(() => {
@@ -161,15 +161,17 @@ export const useCrsRuleIndex = () => {
       rules.value = []
       version.value = ''
       loaded.value = false
-      loadedSeq = openSeq
+      // FE44-5：失败不落 loadedSeq——失败不等于「本会话已加载」，
+      // 同会话下一次 ensureForDialog 可重试（在途并发去重由 requestedSeq+loading 承担）
     } finally {
       if (openSeq === null || openSeq === requestedSeq) loading.value = false
     }
   }
 
-  /** 对话框会话内取一次索引：同一 openSeq 已加载/在途时直接复用 */
+  /** 对话框会话内取一次索引：同一 openSeq 已加载/在途时直接复用；
+   *  上次失败（loadedSeq 未落、请求已 settled）允许同会话重试 */
   const ensureForDialog = (openSeq: number): Promise<void> => {
-    if (loadedSeq === openSeq || requestedSeq === openSeq) return Promise.resolve()
+    if (loadedSeq === openSeq || (requestedSeq === openSeq && loading.value)) return Promise.resolve()
     requestedSeq = openSeq
     return fetchIndex(openSeq)
   }

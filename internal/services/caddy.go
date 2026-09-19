@@ -471,7 +471,9 @@ func (s *CaddyService) GetConfig() (map[string]interface{}, error) {
 	defer resp.Body.Close()
 
 	var config map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+	// LB44-4(第 44 轮):响应体 4MB 上限(对齐 configwatchdog.go:218 口径),
+	// 异常对端/代理截获时的无界读取防线。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&config); err != nil {
 		return nil, err
 	}
 
@@ -1783,7 +1785,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		servers["http_80"] = defaultSite
 	} else {
 		server := servers["http_80"].(map[string]interface{})
-		applyTimeouts(server)
+		// SEM44-2(第 44 轮):不再重复 applyTimeouts——server 在 :1456 创建时已
+		// 应用,两处之间无超时值变异,重复调用是幂等同值覆写。
 		routes, ok := server["routes"].([]interface{})
 		if !ok {
 			routes = []interface{}{}

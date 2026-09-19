@@ -25,6 +25,23 @@ import (
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}
 
+// SEM44-1(第 44 轮审计 P1):迟到表容缺清单——Version=2 导出清单首发(ff632cd,
+// v2.0.10,8 表)与安全族并入(4e46f85,v2.1.1,12 表)之后才加入导出清单的表:
+//
+//	security_crs_version / security_ip2region_version — v2.1.10(76f616a)起
+//	security_ip_lists — v2.2.1(6bf0bf5)起
+//
+// v2.1.2-v2.1.9(12 表)与 v2.1.10-v2.2.13(14 表)全量备份是合法 Version=2
+// 文件,必需表门不得因缺迟到表硬拒;缺席表由导入链「缺席=保留本地」语义承接
+// (validateV2Backup 内补空表仅供校验均匀性,importConfigBackupCore 将未实际
+// 导出的表还原为缺席,restore 跳过未携带表)。v2.1.1 及更早的文件在完整性
+// 校验和门已被拒(R44 C1),与本清单无关。
+var configBackupLateTables = map[string]struct{}{
+	"security_crs_version":       {},
+	"security_ip2region_version": {},
+	"security_ip_lists":          {},
+}
+
 // 三分类合并(2026-09-19 用户裁定):备份分类=集群同步节,收敛为 3 类——
 // 全局配置并入「系统数据」(单行键值表单独成类必产无法导入的死备份,BE-C1-6),
 // 规则库数据库并入「安全防护」(CRS/IP2Region 文件与引用它的安全策略同属
@@ -854,9 +871,15 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	_, hasSecurity := backup.Tables["security_policies"]
 	if (hasUsers && hasRules && hasSecurity) || backup.Meta.Version == 1 {
 		for _, required := range requiredTables {
-			if _, exists := backup.Tables[required]; !exists {
-				return false, errors.New("备份缺少必需的数据表: " + required)
+			if _, exists := backup.Tables[required]; exists {
+				continue
 			}
+			// SEM44-1:迟到表容缺(见 configBackupLateTables)——Version=2 导出
+			// 清单中途新增的表,此前时代的合法全量备份不含,缺席不拒绝。
+			if _, late := configBackupLateTables[required]; late {
+				continue
+			}
+			return false, errors.New("备份缺少必需的数据表: " + required)
 		}
 	} else {
 		known := 0
@@ -893,6 +916,19 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	for _, provider := range backup.Tables["ca_providers"] {
 		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
 			return false, errors.New(invalidCredentialsMsg)
+		}
+		// CERT44-1(第 44 轮审计 P2):provider 白名单与 directory_url 官方常量
+		// 覆写,与保存/更新侧(services/caproviders.go UpdateCAProvider
+		// :194-201)同口径——provider 必须 ∈{letsencrypt,zerossl},否则恶意
+		// CA 类型经备份落库绕过保存侧门;directory_url 无条件覆写为官方常量,
+		// 消除备份携带恶意 ACME 目录 URL 落库(签发/续签被导向攻击者服务器)。
+		switch backupString(provider["provider"]) {
+		case services.ProviderLetsEncrypt:
+			provider["directory_url"] = services.LetsEncryptDirectoryURL
+		case services.ProviderZeroSSL:
+			provider["directory_url"] = services.ZeroSSLDirectoryURL
+		default:
+			return false, fmt.Errorf("备份包含无效的 CA 提供商类型: %s（必须为 %s 或 %s）", backupString(provider["provider"]), services.ProviderLetsEncrypt, services.ProviderZeroSSL)
 		}
 	}
 	for _, certCfg := range backup.Tables["certificate_configs"] {
@@ -1243,6 +1279,12 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 					return fmt.Errorf("安全策略 #%d（%s）：%s 需为字符串，实际类型 %T", index+1, name, field, raw)
 				}
 			}
+		}
+		// W3-R44-3(第 44 轮 W3 评审):429 已剔出保存侧白名单(SEC44-1)——
+		// 导入侧归一为 403,与 CERT44-1 同格(导入不宽于保存侧),修复前时代
+		// 的合法备份不因新白名单硬拒。
+		if v, ok := backupInteger(policy["block_status_code"]); ok && v == 429 {
+			policy["block_status_code"] = int64(403)
 		}
 		mode := backupString(policy["mode"])
 		if mode == "" {

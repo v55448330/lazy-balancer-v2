@@ -599,7 +599,6 @@
                 <el-option :value="401" label="401 Unauthorized" />
                 <el-option :value="403" label="403 Forbidden" />
                 <el-option :value="404" label="404 Not Found" />
-                <el-option :value="429" label="429 Too Many Requests" />
                 <el-option :value="503" label="503 Service Unavailable" />
               </el-select>
               <span class="form-tip-inline">WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）</span>
@@ -942,7 +941,7 @@ const fetchData = async (): Promise<boolean> => {
     const [polRes, ruleRes, crsRes, bpRes, crRes, bindRes, userRes, ipListRes] = await Promise.allSettled([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
-      request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
+      request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=50'),
       request.get<APIResponse<BlockPage[]>>('/security/block-pages'),
       request.get<APIResponse<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>>('/security/custom-rules'),
       request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings'),

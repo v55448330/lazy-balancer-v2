@@ -51,6 +51,18 @@ func init() {
 	loginDummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("lazy-balancer timing-equalizer dummy"), bcrypt.DefaultCost)
 }
 
+// loginCompareHash 返回登录密码比较用的 bcrypt 哈希(SYSB44-1):OIDC JIT
+// 用户 password_hash 为空(auth_oidc.go:476 置空),空哈希使
+// bcrypt.CompareHashAndPassword 走格式错误快路径(µs 级),时序差会暴露
+// 「该用户名存在但无本地密码」——改用 loginDummyBcryptHash 等时占位,与
+// 上方 ErrNoRows 路径同型。
+func loginCompareHash(passwordHash string) []byte {
+	if passwordHash == "" {
+		return loginDummyBcryptHash
+	}
+	return []byte(passwordHash)
+}
+
 // 登录失败锁定阈值/冷却（2026-09 用户裁定：登录阶段密码与 MFA 验证失败同计
 // 一个账户级计数，受基础设置「登录失败锁定」开关 mfa_lockout_enabled 控制——
 // 开关关闭则只计数不锁定；M7 初版的「常开」语义据此调整为开关语义）。
@@ -122,13 +134,21 @@ func (h *Handlers) Login(c *gin.Context) {
 	// 真实 bcrypt 再 429——等时占位，与「用户名或密码错误」路径同耗时，不泄露
 	// 锁定账户的密码正误（防枚举）。
 	if loginLockedNow(loginLockedUntil) {
-		_ = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password))
+		_ = bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账户已锁定"), c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+	// W3-R44-1(第 44 轮 W3 评审):空哈希(OIDC JIT 用户)等时比较只取耗时
+	// 副作用,结果必须恒败——dummy 明文是源码公开常量,比较通过不得成为
+	// 认证依据(auth_oidc.go:476 的设计不变量「OIDC 用户密码登录天然不可
+	// 用」由本分支显式承载,不再依赖 bcrypt 对空哈希的格式错误行为)。
+	compareErr := bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
+	if passwordHash == "" {
+		compareErr = bcrypt.ErrHashTooShort
+	}
+	if compareErr != nil {
 		recordLoginFailure(user.ID)
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
@@ -286,8 +306,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	// SEC19-P5-2:复用 getContextUserIDInt。
-	userIDInt := getContextUserIDInt(c)
+	// SEC19-P5-2:复用 contextUserID。
+	userIDInt := int(contextUserID(c))
 
 	var user models.User
 	var mfaEnabled int
@@ -338,8 +358,8 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 
-	// SEC19-P5-2:复用 getContextUserIDInt。
-	userIDInt := getContextUserIDInt(c)
+	// SEC19-P5-2:复用 contextUserID。
+	userIDInt := int(contextUserID(c))
 
 	var req UpdateCurrentUserRequest
 	if !guardConfiguredJSONBody(c) {

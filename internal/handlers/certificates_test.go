@@ -258,7 +258,8 @@ func TestIssueCertificate_batch_preserves_running_jobs(t *testing.T) {
 			('lb_batch_download','download','http','download.example',9443,1,1,'acme_dns');
 		INSERT INTO cert_jobs (rule_id,domain,status,message,updated_at) VALUES
 			('lb_batch_order','order.example','creating_order','active message',datetime('now')),
-			('lb_batch_download','download.example','downloaded','active message',datetime('now'));
+			-- CERT44-2：批量路径已套用冷却门，已部署任务须回拨越过 2 分钟守卫才重排队。
+			('lb_batch_download','download.example','downloaded','active message',datetime('now','-10 minutes'));
 	`); err != nil {
 		t.Fatalf("seed running jobs: %v", err)
 	}

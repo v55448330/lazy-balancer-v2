@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 var startTime = time.Now()
@@ -107,8 +108,11 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 	info.Valid = true
 	info.Domain = domain
 	info.Issuer = issuer
-	info.NotBefore = x509Cert.NotBefore.Format("2006-01-02")
-	info.NotAfter = x509Cert.NotAfter.Format("2006-01-02")
+	// CERT44-6（第 44 轮审计）：x509 时间为 UTC，直出会比配置时区少一天
+	// （如 Asia/Shanghai 凌晨到期的证书显示前一天）——按配置时区渲染，
+	// 与规则证书卡 formatDate 口径对齐。
+	info.NotBefore = x509Cert.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")
+	info.NotAfter = x509Cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")
 	info.DaysUntilExpiry = int(x509Cert.NotAfter.Sub(time.Now()).Hours() / 24)
 
 	// Check if certificate is expired - warning only

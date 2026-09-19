@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -387,6 +388,13 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 	}
 	response, err := redirectlessClient.Do(request)
 	if err != nil {
+		// APIMCP44-3(第 44 轮审计 P5):超时错误补状态核对提示——回环客户端
+		// 60s 超时仅说明传输层未等到响应,服务端可能已处理完毕(备份/导入/
+		// 重启等长操作),直接重试会重复执行非幂等操作。
+		var netErr net.Error
+		if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("内部 API 请求超时: %w（操作可能已在服务端生效,请先用查询类工具核对状态再重试）", err)
+		}
 		return nil, fmt.Errorf("内部 API 请求失败: %w", err)
 	}
 	// 面板启用 HTTPS 时 HTTP 请求会收到 301；客户端不自动跟随（避免 POST 变 GET），

@@ -309,7 +309,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_ip_lists (name, description, category, entries, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,datetime('now'),?,datetime('now'))`,
-		req.Name, req.Description, req.Category, req.Entries, getContextUserIDInt(c), getContextUserIDInt(c))
+		req.Name, req.Description, req.Category, req.Entries, int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -411,7 +411,7 @@ WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
 		return
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET name=?, description=?, category=?, entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		name, description, category, entriesJSON, getContextUserIDInt(c), id)
+		name, description, category, entriesJSON, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -574,7 +574,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	if _, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), getContextUserIDInt(c), id); err != nil {
+	if _, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}

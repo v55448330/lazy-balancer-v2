@@ -264,6 +264,15 @@
 
 <script setup lang="ts">
 import OIDCSettings from '@/views/settings/OIDCSettings.vue'
+import { computed, nextTick, reactive, ref, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
+import { formatDate } from '@/utils/date'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
+import QRCode from 'qrcode'
+import type { APIResponse, UserListItem } from '@/types'
+
 const oidcOpen = ref(false)
 const oidcEnabled = ref(false)
 const oidcConfigured = ref(false)
@@ -283,14 +292,6 @@ const fetchOIDCStatus = async () => {
     // 静默降级:非管理员/从节点 403 不弹 toast,标签维持隐藏(入口本身按角色收口)
   }
 }
-import { computed, nextTick, reactive, ref, onMounted } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
-import { formatDate } from '@/utils/date'
-import { ElMessageBox, ElMessage } from 'element-plus'
-import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
-import QRCode from 'qrcode'
-import type { APIResponse, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)

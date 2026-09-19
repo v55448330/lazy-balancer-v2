@@ -82,7 +82,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 
 // MFAStatus GET /auth/mfa/status
 func (h *Handlers) MFAStatus(c *gin.Context) {
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	st, err := services.MFAGetStatus(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 MFA 状态失败"})
@@ -103,7 +103,7 @@ func (h *Handlers) MFAStatus(c *gin.Context) {
 func rejectOIDCUserMFAOperation(c *gin.Context, targetUserID int) bool {
 	uid := targetUserID
 	if uid == 0 {
-		uid = getContextUserIDInt(c)
+		uid = int(contextUserID(c))
 	}
 	var provider string
 	if err := db.DB.QueryRow("SELECT COALESCE(auth_provider,'local') FROM users WHERE id=?", uid).Scan(&provider); err != nil {
@@ -125,7 +125,7 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	var mfaEnabled bool
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&mfaEnabled); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 MFA 状态失败"})
@@ -159,7 +159,7 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	// Authenticator 条目都显示「LazyBalancer:1」不可区分。空值回退数字 ID 保可用。
 	username := c.GetString("username")
 	if username == "" {
-		username = getContextUserID(c)
+		username = strconv.FormatInt(contextUserID(c), 10)
 	}
 	secret, uri, err := services.MFAGenerateSecret(username)
 	if err != nil {
@@ -184,7 +184,7 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	var req struct {
 		Code string `json:"code" binding:"required"`
 	}
@@ -222,7 +222,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	var req struct {
 		Code string `json:"code"`
 	}
@@ -259,7 +259,7 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	var enabled bool
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&enabled); err != nil || !enabled {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MFA 未启用"})
@@ -282,7 +282,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	userID := getContextUserIDInt(c)
+	userID := int(contextUserID(c))
 	var req struct {
 		Code string `json:"code" binding:"required"`
 	}
@@ -338,7 +338,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
 		return
 	}
-	operatorID := getContextUserIDInt(c)
+	operatorID := int(contextUserID(c))
 	var req struct {
 		Code string `json:"code"`
 	}

@@ -533,6 +533,9 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		return
 	}
 	queued := 0
+	// CERT44-2（第 44 轮审计）：批量路径套用与定向签发同款冷却门，冷却中
+	// 任务跳过并单列计数（仅批量分支产生非零值）。
+	skippedCooldown := 0
 	if req.CaddyID != "" {
 		var enabled, enableTLS bool
 		var protocol, tlsSource, ruleDomain string
@@ -630,7 +633,28 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return
 		}
 		for _, target := range targets {
-			_, changed, err := services.CreateOrRequeueCertJobWithChange(target.ruleID, target.domain, 0, qm)
+			canonicalDomain, canonicalErr := services.CanonicalACMEDomains(target.domain)
+			if canonicalErr != nil {
+				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, canonicalErr))
+				continue
+			}
+			// CERT44-2（第 44 轮审计）：逐目标套用与定向签发同款冷却门
+			// （certJobRetryBlocked）——失败 5 分钟内/执行中的任务跳过，不再
+			// 被批量重签静默重排队、反复消耗 CA 配额；跳过数单列响应计数。
+			var jobStatus string
+			var jobUpdatedAt sql.NullTime
+			jobErr := db.DB.QueryRow("SELECT status, updated_at FROM cert_jobs WHERE rule_id=? AND domain=?", target.ruleID, canonicalDomain).Scan(&jobStatus, &jobUpdatedAt)
+			switch {
+			case jobErr == nil:
+				if blocked, _ := certJobRetryBlocked(jobStatus, jobUpdatedAt, time.Now()); blocked {
+					skippedCooldown++
+					continue
+				}
+			case !errors.Is(jobErr, sql.ErrNoRows):
+				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, jobErr))
+				continue
+			}
+			_, changed, err := services.CreateOrRequeueCertJobWithChange(target.ruleID, canonicalDomain, 0, qm)
 			if err != nil {
 				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, err))
 				continue
@@ -645,13 +669,22 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return
 		}
 		if len(failed) > 0 {
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务，失败 %d 个", queued, len(failed)), services.AuditResultPart("partial")))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务，%d 个失败: %s", queued, len(failed), strings.Join(failed, "; ")), Data: gin.H{"queued": queued, "failed": len(failed)}})
+			cooldownNote := ""
+			if skippedCooldown > 0 {
+				cooldownNote = fmt.Sprintf("，冷却跳过 %d 个", skippedCooldown)
+			}
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务，失败 %d 个%s", queued, len(failed), cooldownNote), services.AuditResultPart("partial")))
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务，%d 个失败: %s", queued, len(failed), strings.Join(failed, "; ")) + cooldownNote, Data: gin.H{"queued": queued, "failed": len(failed), "skipped_cooldown": skippedCooldown}})
 			return
 		}
+
 	}
-	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务", queued), services.AuditResultPart("requested")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务", queued) + h.caddyApplyNote(c), Data: gin.H{"queued": queued}})
+	cooldownNote := ""
+	if skippedCooldown > 0 {
+		cooldownNote = fmt.Sprintf("，%d 个任务处于冷却期已跳过", skippedCooldown)
+	}
+	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务%s", queued, cooldownNote), services.AuditResultPart("requested")))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务", queued) + cooldownNote + h.caddyApplyNote(c), Data: gin.H{"queued": queued, "skipped_cooldown": skippedCooldown}})
 }
 
 func (h *Handlers) ParseCertificate(c *gin.Context) {

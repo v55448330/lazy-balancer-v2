@@ -64,6 +64,27 @@ func resolveAPIKeyReadOnly(apiKey string) (bool, error) {
 }
 
 func filterReadOnlyTools(response []byte) ([]byte, error) {
+	// APIMCP44-1(第 44 轮审计 P3):错误形态(含 error 成员)或缺 result/
+	// result.tools 的响应原样透传——下方固定结构体重建会把 error 形态改写为
+	// 「result.tools:null」假成功,吞掉上游错误信号。
+	var envelope struct {
+		Error  json.RawMessage `json:"error"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return nil, fmt.Errorf("解析 tools/list 响应: %w", err)
+	}
+	// W3-R44-4(第 44 轮 W3 评审):显式 "error":null 经 RawMessage 得 4 字节
+	// "null",须排除——否则错误判定把正常响应当错误形态透传、跳过过滤。
+	if (len(envelope.Error) > 0 && string(envelope.Error) != "null") || len(envelope.Result) == 0 {
+		return response, nil
+	}
+	var resultProbe struct {
+		Tools json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(envelope.Result, &resultProbe); err != nil || len(resultProbe.Tools) == 0 {
+		return response, nil
+	}
 	var payload struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      any    `json:"id"`

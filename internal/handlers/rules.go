@@ -1344,6 +1344,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.TCPProxyProtocol = &disabled
 			req.TCPTryDuration = &zero
 			req.TCPTryInterval = &zero
+			// LB44-1(第 44 轮):回切 http 恢复 dns_family 默认(与 CreateRule
+			// :758-760 同口径)——切 TCP 已清零(:1337),存量 '' 直接落库会让
+			// DB 终态与创建态分叉(读路径 COALESCE 兜底,快照/导出携带脏空值)。
+			if req.DnsFamily == "" {
+				req.DnsFamily = "ipv4"
+			}
 		}
 	}
 	// R62 C2-N1: 最终协议为 tcp 时一律归一 TLS 字段（与上方切换到 TCP 的分支同

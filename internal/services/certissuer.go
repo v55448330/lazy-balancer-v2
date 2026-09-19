@@ -471,7 +471,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 
 	// Run the ACME issuance flow
-	certPEM, keyPEM, _, err := issuer.Issue(ctx, domainList)
+	certPEM, keyPEM, err := issuer.Issue(ctx, domainList)
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("certificate issuance canceled: %w", ctx.Err())

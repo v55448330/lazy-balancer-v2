@@ -89,7 +89,7 @@ func TestIssuer_Issue_cleans_presented_records_when_later_present_fails(t *testi
 	issuer := &Issuer{Client: client, Provider: provider}
 
 	// When
-	_, _, _, issueErr := issuer.Issue(context.Background(), []string{"example.com", "www.example.com"})
+	_, _, issueErr := issuer.Issue(context.Background(), []string{"example.com", "www.example.com"})
 
 	// Then
 	if issueErr == nil {
@@ -214,7 +214,7 @@ func TestIssuer_preCleanup_spares_concurrent_challenge_values(t *testing.T) {
 	issuer := &Issuer{Client: client, Provider: provider}
 
 	// When: issuance starts (pre-cleanup runs before Present fails)
-	_, _, _, issueErr := issuer.Issue(context.Background(), []string{"example.com"})
+	_, _, issueErr := issuer.Issue(context.Background(), []string{"example.com"})
 
 	// Then
 	if issueErr == nil {

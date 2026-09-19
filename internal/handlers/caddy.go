@@ -655,7 +655,11 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	applyError := ""
 	if db.DB != nil {
-		db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError)
+		// LB44-2(第 44 轮):读取失败不再静默吞——apply_error 缺失会让
+		// 状态接口丢失真实失败横幅,需 warn 留痕(SEC43-2 同格)。
+		if err := db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError); err != nil {
+			services.Logf("warn", "GetCaddyStatus: 读取 caddy_apply_error 失败(状态接口 apply_error 字段为空): %v", err)
+		}
 	}
 	drift := services.CurrentConfigDrift()
 	pid := caddyLivePID()

@@ -207,7 +207,7 @@ var apiDocRoutes = []apiDocRoute{
 func buildOpenAPIYAML() string {
 	var b strings.Builder
 	b.WriteString("openapi: 3.1.0\ninfo:\n  title: Lazy Balancer API\n  version: 1.0.0\n")
-	b.WriteString("  description: |\n    Lazy Balancer v1 REST API。管理接口使用 Authorization: Bearer <JWT 或 lb_sk_ API Key>。\n    集群机器接口使用 X-Cluster-Token 或 X-Registration-Secret。业务 JSON 响应统一为 {code,message,data?}；示例除特别注明外均为 data 载荷，实际响应为 {code,message,data} 包装。\n    例外：登录直接返回登录对象；配置下载直接返回备份 JSON；MCP 返回 JSON-RPC；304 无响应体；API 文档 HTML 与 OpenAPI YAML 使用各自媒体类型。\n    不返回用户密码；TLS 私钥、DNS 凭证及其他配置数据对所有已登录用户可读，仅管理员可修改。集群快照包含密码和密钥哈希及证书私钥，部署时建议使用 HTTPS。\nservers:\n  - url: /api/v1\npaths:\n")
+	b.WriteString("  description: |\n    Lazy Balancer V2 REST API(/api/v1)。管理接口使用 Authorization: Bearer <JWT 或 lb_sk_ API Key>。\n    集群机器接口使用 X-Cluster-Token 或 X-Registration-Secret。业务 JSON 响应统一为 {code,message,data?}；示例除特别注明外均为 data 载荷，实际响应为 {code,message,data} 包装。\n    例外：登录直接返回登录对象；配置下载直接返回备份 JSON；MCP 返回 JSON-RPC；304 无响应体；API 文档 HTML 与 OpenAPI YAML 使用各自媒体类型。\n    不返回用户密码；TLS 私钥、DNS 凭证及其他配置数据对所有已登录用户可读，仅管理员可修改。集群快照包含密码和密钥哈希及证书私钥，部署时建议使用 HTTPS。\nservers:\n  - url: /api/v1\npaths:\n")
 	pathOrder := make([]string, 0)
 	routesByPath := make(map[string][]apiDocRoute)
 	for _, r := range apiDocRoutes {

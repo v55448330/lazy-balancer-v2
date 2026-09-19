@@ -17,6 +17,12 @@ var legacySecurityEnumBackfills = []string{
 	// 跳过阈值 SecAction 而 CRS 回落默认 5（「UI 宣称 0、实际 5」的展示/行为
 	// 漂移，与空串枚举行同型）。归一到 Create 侧 max1(x,5) 的默认值 5。
 	"UPDATE security_policies SET anomaly_threshold=5 WHERE COALESCE(anomaly_threshold,0)=0",
+	// SEC44-1（第 44 轮）：429 已剔除出拦截状态码白名单（限流专用语义，
+	// overviewmetrics.go 限流卡片按 code=429 计数，WAF 拦截页 429 会混入
+	// 限流指标口径）——存量 429 行归一为默认拦截状态码 403。
+	// security_block_pages 无 status_code 列（db.go:492-502，遗留列口径见
+	// db.go:1234-1236），429 仅可能存于 security_policies。
+	"UPDATE security_policies SET block_status_code=403 WHERE block_status_code=429",
 }
 
 // NormalizeLegacySecurityPolicyEnums 启动时一次性归一 security_policies 的

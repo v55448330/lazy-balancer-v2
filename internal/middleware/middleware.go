@@ -938,7 +938,7 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		}
 		// R72 B-1（缺陷二）：jwtAuth 将 user_id 以 float64 存入（JWT JSON 数字），
 		// gin GetString 对非 string 断言失败恒返回 ""——改类型化取值（与
-		// getContextUserIDInt 同口径）。
+		// contextUserID 同口径）。
 		var userID int
 		switch v := c.MustGet("user_id").(type) {
 		case float64:

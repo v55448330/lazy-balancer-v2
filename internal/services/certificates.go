@@ -1293,6 +1293,11 @@ func (s *CertificateService) checkManualCertExpiration() {
 		Logf("warn", "cert expiration check: read cert_expiry_days failed, using default 30: %v", err)
 		warnDays = 30
 	}
+	// CERT44-5（第 44 轮审计）：0/负值下限兜底，与 GetCertExpiryThreshold
+	// （certinfo.go）同形态——否则阈值退化后「即将过期」告警静默失效。
+	if warnDays <= 0 {
+		warnDays = 30
+	}
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.certPEM))
 		if block == nil {
