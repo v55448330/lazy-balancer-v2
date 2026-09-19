@@ -600,3 +600,47 @@ func TestRunAutoBackupOnce_concurrentRunRejected(t *testing.T) {
 		t.Fatalf("err=%v, want 已有任务执行中报错", err)
 	}
 }
+
+// SYS41-1(第 41 轮审计):RunAutoBackupOnce 成功落行后必须接线内务裁剪——
+// keep=1 时连续两次执行仅保留最新 1 个 success(文件+行同删);failed 行按
+// autoBackupFailedRowsKeep=20 上限保留(前端文案「失败记录另保留最近 20 条」)。
+func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	dir := h.cfg.BackupDir
+	if _, err := db.DB.Exec("UPDATE global_config SET auto_backup_keep=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	// Given: 21 条 failed 存量(无文件,裁剪容忍文件缺失)
+	for i := range 21 {
+		if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename, created_at, status, trigger_type, message) VALUES (?, datetime('now', ?), 'failed', 'schedule', 'x')`, fmt.Sprintf("lbbak-auto-stale-fail%d.lbbak", i), fmt.Sprintf("-%d minutes", i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// When: keep=1 下连跑两次(同秒冲突由文件名 -2 后缀消化)
+	if err := h.RunAutoBackupOnce("schedule"); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if err := h.RunAutoBackupOnce("schedule"); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+
+	// Then: 仅最新 1 个 success 行与文件幸存
+	rows := autoBackupRows(t, "WHERE status='success' ORDER BY created_at DESC, id DESC")
+	if len(rows) != 1 {
+		t.Fatalf("success rows=%d, want 1(keep=1 裁剪后仅留最新)", len(rows))
+	}
+	survivor := rows[0]["filename"].(string)
+	matches, err := filepath.Glob(filepath.Join(dir, "lbbak-auto-*.lbbak"))
+	if err != nil || len(matches) != 1 || filepath.Base(matches[0]) != survivor {
+		t.Fatalf("success files=%v err=%v, want exactly survivor %s", matches, err, survivor)
+	}
+	// failed 行按 20 上限一并裁剪
+	var failed int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM auto_backups WHERE status='failed'`).Scan(&failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed != 20 {
+		t.Fatalf("failed rows=%d, want 20(autoBackupFailedRowsKeep)", failed)
+	}
+}

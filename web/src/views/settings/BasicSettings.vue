@@ -141,12 +141,18 @@
 
     <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="min(520px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
       <el-form label-width="110px">
-        <el-form-item label="证书来源">
-          <el-radio-group v-model="adminTlsForm.mode">
-            <el-radio value="selfsigned">本地自签名证书</el-radio>
-            <el-radio value="upload">上传证书</el-radio>
-          </el-radio-group>
-        </el-form-item>
+        <!-- 自管标签行(ClusterModeCard 范式):el-radio-group 会把组容器 DIV id
+             注册为表单输入 id,el-form-item label for 随之指向 DIV——Firefox 报
+             「Incorrect use of <label for>」;改 role=group+aria-label 语义等价 -->
+        <div class="form-radio-row" role="group" aria-label="证书来源">
+          <span class="form-radio-row-label">证书来源</span>
+          <div class="form-radio-row-content">
+            <el-radio-group v-model="adminTlsForm.mode">
+              <el-radio value="selfsigned">本地自签名证书</el-radio>
+              <el-radio value="upload">上传证书</el-radio>
+            </el-radio-group>
+          </div>
+        </div>
         <template v-if="adminTlsForm.mode === 'upload'">
           <el-form-item label="证书文件">
             <input type="file" accept=".crt,.pem,.cer" @change="(e) => onTlsFile(e, 'cert')" />
@@ -229,6 +235,12 @@
                 {{ summaryLabels[key] || key }}·{{ count }}
               </span>
             </div>
+            <!-- C2-41-2:勾选「安全防护」但备份无规则库文件时预览提示(后端兜底
+                 跳过规则库版本记录表并在导入结果 warnings 中说明) -->
+            <el-text
+              v-if="importValidation.has_waf_files === false && importSections.includes('security')"
+              type="warning" size="small" class="import-waf-hint"
+            >该备份不含规则库文件，导入「安全防护」将跳过规则库版本记录</el-text>
             <ul v-if="importValidation.warnings?.length" class="import-warnings">
               <li v-for="(warning, index) in importValidation.warnings" :key="index">{{ warning }}</li>
             </ul>
@@ -309,19 +321,23 @@
           <el-switch v-model="autoBackupForm.enabled" />
           <el-text type="info" size="small" class="tip-inline">调度器仅主节点运行；主从切换后需重启进程才开始备份</el-text>
         </el-form-item>
-        <el-form-item label="频率">
-          <el-radio-group v-model="autoBackupForm.frequency">
-            <el-radio value="daily">日</el-radio>
-            <el-radio value="weekly">周</el-radio>
-            <el-radio value="monthly">月</el-radio>
-          </el-radio-group>
-          <el-select v-if="autoBackupForm.frequency === 'weekly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
-            <el-option v-for="(label, idx) in AUTO_BACKUP_WEEKDAYS" :key="label" :value="idx + 1" :label="label" />
-          </el-select>
-          <el-select v-else-if="autoBackupForm.frequency === 'monthly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
-            <el-option v-for="d in 28" :key="d" :value="d" :label="`${d} 日`" />
-          </el-select>
-        </el-form-item>
+        <!-- 自管标签行(同上 a11y 范式):radio+select 兄弟同行,role=group 收口 -->
+        <div class="form-radio-row" role="group" aria-label="频率">
+          <span class="form-radio-row-label">频率</span>
+          <div class="form-radio-row-content">
+            <el-radio-group v-model="autoBackupForm.frequency">
+              <el-radio value="daily">日</el-radio>
+              <el-radio value="weekly">周</el-radio>
+              <el-radio value="monthly">月</el-radio>
+            </el-radio-group>
+            <el-select v-if="autoBackupForm.frequency === 'weekly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
+              <el-option v-for="(label, idx) in AUTO_BACKUP_WEEKDAYS" :key="label" :value="idx + 1" :label="label" />
+            </el-select>
+            <el-select v-else-if="autoBackupForm.frequency === 'monthly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
+              <el-option v-for="d in 28" :key="d" :value="d" :label="`${d} 日`" />
+            </el-select>
+          </div>
+        </div>
         <el-form-item label="备份时间">
           <el-time-select v-model="autoBackupForm.time" start="00:00" end="23:30" step="00:30" style="width: 120px" />
           <el-text type="info" size="small" class="tip-inline">按系统配置时区执行；停机跨槽会在下次启动补跑一次</el-text>
@@ -742,7 +758,8 @@ const autoBackupScopeSummary = (row: AutoBackupRow): string => {
   const labels = normalizeBackupSectionKeys(row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
   const scope = labels.length > 0 ? labels.join('、') : '-'
   const trigger = row.trigger_type === 'manual' ? '手动' : '定时'
-  return row.message ? `${scope}（${trigger}）· ${row.message}` : `${scope}（${trigger}）`
+  // 「（定时）」置于内容尾部,避免黏在最后一个分类名后(2026-09-19 用户报障)
+  return row.message ? `${scope} · ${row.message}（${trigger}）` : `${scope}（${trigger}）`
 }
 
 const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
@@ -772,15 +789,23 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
     return
   }
   try {
-    const res = await request.post<{ message?: string }>(`/auto-backup/${row.id}/restore`)
+    // 还原走导入 core(config_backup.go importConfigBackupCore),响应同样携带
+    // data.warnings(操作账户替换/会话吊销/ACME 悬挂等)——与导入同口径展示
+    const res = await request.post<{ message?: string; data?: { warnings?: string[] } }>(`/auto-backup/${row.id}/restore`)
     autoBackupVisible.value = false
-    await ElMessageBox.alert(res.message || '配置还原成功', '还原完成', {
-      confirmButtonText: '刷新页面',
-      type: 'success',
-      showClose: false,
-      closeOnClickModal: false,
-      closeOnPressEscape: false,
-    })
+    const warnings = res.data?.warnings ?? []
+    const resultLines = [res.message || '配置还原成功', ...warnings]
+    await ElMessageBox.alert(
+      h('div', resultLines.map((line) => h('div', line))),
+      '还原完成',
+      {
+        confirmButtonText: '刷新页面',
+        type: warnings.length > 0 ? 'warning' : 'success',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      },
+    )
     window.location.reload()
   } catch {
     // 全局拦截器已提示（还原失败已回滚，配置未受影响）
@@ -925,7 +950,9 @@ const handleImportFile = async (event: Event): Promise<void> => {
     if (validationSeq !== importValidationSeq) return
     importFileContent.value = fileContent
     importValidation.value = res.data
-    // V1 仅负载规则(锁定);V2 默认全选;无规则库文件的 V2 备份剔除该分类
+    // V1 仅负载规则(锁定);V2 默认全选。无 WAF 规则库文件的备份不整类剔除
+    // 「安全防护」(该分类同时含策略表)——后端兜底:跳过规则库版本记录表,
+    // 并在响应 warnings 中说明(下方结果弹框展示)
     if (res.data?.type === 'v1') {
       importSections.value = ['rules']
     } else {
@@ -982,8 +1009,12 @@ const confirmImport = async (): Promise<void> => {
     })
     importDialogVisible.value = false
     const disabledConflicts = res.data?.disabled_conflicts ?? []
+    // C2-41-1:后端 data.warnings(操作账户替换/会话吊销/ACME 悬挂/规则库元数据
+    // 跳过)此前被丢弃——与冲突同级展示,非空时结果至少 warning 级
+    const warnings = res.data?.warnings ?? []
     const resultLines = [
       res.message || '配置导入成功',
+      ...warnings,
       `冲突置为禁用：${disabledConflicts.length} 条`,
       ...disabledConflicts.map(formatImportConflict),
     ]
@@ -992,7 +1023,7 @@ const confirmImport = async (): Promise<void> => {
       '导入完成',
       {
         confirmButtonText: '刷新页面',
-        type: disabledConflicts.length > 0 ? 'warning' : 'success',
+        type: disabledConflicts.length > 0 || warnings.length > 0 ? 'warning' : 'success',
         showClose: false,
         closeOnClickModal: false,
         closeOnPressEscape: false,
@@ -1462,4 +1493,14 @@ const handleSave = async () => {
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
 .auto-backup-scope-hint { margin-left: 0; }
 .auto-backup-list { border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
+
+/* 自管标签行(ClusterModeCard 范式,FE41-1):复刻 EP .el-form-item__label 计算
+ * 样式(右对齐/32px 行高/12px 右内边距),110px 与两弹框 label-width 一致;
+ * role=group+aria-label 替代 el-form-item label,规避 el-radio-group 组容器
+ * DIV 被 label for 指向的 Firefox a11y 告警 */
+.form-radio-row { display: flex; margin-bottom: 18px; }
+.auto-backup-form .form-radio-row { margin-bottom: 14px; }
+.form-radio-row-label { width: 110px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
+.form-radio-row-content { flex: 1; min-width: 0; display: flex; align-items: center; }
+.import-waf-hint { display: block; }
 </style>

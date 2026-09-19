@@ -35,6 +35,7 @@
               :class="{ 'is-error-input': rowError(index) }"
             />
             <span v-if="rowError(index)" class="path-field-error">{{ rowError(index) }}</span>
+            <span v-else-if="rowShadowWarning(index)" class="path-field-warning">{{ rowShadowWarning(index) }}</span>
           </label>
 
           <div class="path-rule-actions">
@@ -129,6 +130,36 @@ const rowError = (index: number): string => {
       : `与规则 ${dupIndex + 1} 同路径前缀+精确互相遮蔽`
   }
   return ''
+}
+
+// LB41-6(第 41 轮,P5):前序 prefix 规则遮蔽提示——后端有意放行(测试钉住),
+// 仅 UI 非阻断警告。判定口径与 services/caddy.go pathMatcherSpecs + terminal
+// 路由一致:prefix 渲染 [root, root/*] 双 matcher(root=剥尾 / 与 *,剥空=
+// /* 全匹配),路由按 sort_order 稳定排序、先命中即终结,故前序 prefix P 遮蔽
+// 后序规则 Q 当且仅当 canonical(Q)===root(P) 或以 root(P)+"/" 开头。
+const shadowedByIndex = (index: number): number => {
+  const rule = pathRules.value[index]
+  if (!rule) return -1
+  // 非法/空路径由 rowError 负责,不参与遮蔽判定(避免提示噪音)
+  if (rule.path !== '' && !rule.path.startsWith('/')) return -1
+  if (/[*?{}]/.test(rule.path)) return -1
+  if (rule.path.trim() === '') return -1
+  const canonical = canonicalPathKey(rule.match_type, rule.path)
+  for (let priorIndex = 0; priorIndex < index; priorIndex++) {
+    const prior = pathRules.value[priorIndex]
+    if (!prior || prior.match_type !== 'prefix') continue
+    if (prior.path.trim() === '' || !prior.path.startsWith('/') || /[*?{}]/.test(prior.path)) continue
+    const root = canonicalPathKey('prefix', prior.path)
+    if (root === '/' || canonical === root || canonical.startsWith(`${root}/`)) return priorIndex
+  }
+  return -1
+}
+
+const rowShadowWarning = (index: number): string => {
+  const priorIndex = shadowedByIndex(index)
+  if (priorIndex < 0) return ''
+  const prior = pathRules.value[priorIndex]
+  return `被前序前缀规则 ${priorIndex + 1}（${prior?.path.trim() ?? ''}）遮蔽，不会生效`
 }
 
 const normalizeOrder = (): void => {
@@ -226,6 +257,12 @@ const onWeightChange = (rule: PathRule, index: number): void => {
   margin-top: 4px;
   font-size: 12px;
   color: var(--el-color-danger);
+}
+.path-field-warning {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-color-warning);
 }
 .is-error-input :deep(.el-input__wrapper) {
   box-shadow: 0 0 0 1px var(--el-color-danger) inset;

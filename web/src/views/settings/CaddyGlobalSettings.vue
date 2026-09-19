@@ -32,11 +32,11 @@
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
         <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="1" :max="4096" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline">MB，限制单个请求体最大体积；默认 128MB（与 WAF 引擎默认一致）。需防护可调小，大文件上传场景可调大</el-text>
+        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，请求体体积上限（WAF/代理流量/管理接口），默认 128</el-text>
       </el-form-item>
       <el-form-item label="读取超时">
         <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-block">秒，读取完整请求（含请求行、请求头与请求体）的最长时间；0 = Caddy 默认（无超时）。常规建议 60</el-text>
+        <el-text type="info" size="small" class="tip-inline tip-nowrap">秒，读取完整请求的最长时间；0 = Caddy 默认（无超时），建议 60</el-text>
       </el-form-item>
       <el-form-item label="写入超时">
         <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
@@ -298,6 +298,8 @@ onUnmounted(stopLogPolling)
 .number-input { width: 120px; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
 .tip-block { display: block; flex-basis: 100%; margin-top: 4px; line-height: 1.5; }
+/* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */
+.tip-nowrap { white-space: nowrap; }
 .format-field { width: 100%; min-width: 0; }
 .format-tip { display: block; margin-top: 4px; line-height: 1.5; white-space: normal; }
 .format-tip a { color: var(--primary); text-decoration: none; }

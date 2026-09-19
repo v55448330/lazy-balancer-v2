@@ -222,6 +222,9 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 
 func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	var req models.UpdateConfigRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
@@ -274,6 +277,9 @@ func writeConfigValidationFailure(c *gin.Context, err error) {
 func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	var req models.UpdateConfigRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
@@ -307,8 +313,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB < 100 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 日志大小不能小于 100MB"})
+	// SYS41-7(第 41 轮):补上限与 UI :max=10240(CaddyGlobalSettings.vue)对齐——
+	// 此前仅 ≥100 下限,天文值可落库使轮转实效、日志无限增长。
+	if req.CaddyLogSizeMB != nil && (*req.CaddyLogSizeMB < 100 || *req.CaddyLogSizeMB > 10240) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 日志大小需在 100-10240MB 之间"})
 		return
 	}
 
@@ -587,6 +595,9 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	var configData map[string]interface{}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&configData); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的配置 JSON"})
 		return

@@ -132,17 +132,22 @@
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
-            <el-form-item label="WAF 模式">
-              <el-radio-group v-model="form.mode" class="mode-radio-group">
-                <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
-                     detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
-                <el-radio value="off">关闭（全不生效）</el-radio>
-                <el-radio value="custom_only">仅自定义规则（CRS 不生效）</el-radio>
-                <el-radio value="detection">检测（CRS 只记录）</el-radio>
-                <el-radio value="blocking">拦截（CRS 阻断）</el-radio>
-              </el-radio-group>
-              <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效；自定义规则在检测/拦截/仅自定义模式下按规则内动作执行，计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）</div>
-            </el-form-item>
+            <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
+                 会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
+            <div class="mode-row" role="group" aria-label="WAF 模式">
+              <span class="mode-row-label">WAF 模式</span>
+              <div class="mode-row-content">
+                <el-radio-group v-model="form.mode" class="mode-radio-group">
+                  <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
+                       detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
+                  <el-radio value="off">关闭（全不生效）</el-radio>
+                  <el-radio value="custom_only">仅自定义规则（CRS 不生效）</el-radio>
+                  <el-radio value="detection">检测（CRS 只记录）</el-radio>
+                  <el-radio value="blocking">拦截（CRS 阻断）</el-radio>
+                </el-radio-group>
+                <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效；自定义规则在检测/拦截/仅自定义模式下按规则内动作执行，计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）</div>
+              </div>
+            </div>
             <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭：CRS 与自定义规则均不生效，以下 CRS 配置不可用</div>
             <div v-else-if="form.mode === 'custom_only'" class="waf-off-hint">仅自定义模式：CRS 不生效，以下 CRS 配置不可用</div>
             <el-form-item label="异常阈值">
@@ -398,14 +403,17 @@
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
             <template v-if="form.ip_acl_enabled">
-              <el-form-item label="控制模式">
-                <el-radio-group v-model="form.ip_acl_mode">
-                  <el-radio value="deny">黑名单（拒绝列表中的 IP，其他正常检测）</el-radio>
-                  <el-radio value="allow">白名单（仅允许列表中的 IP，其他一律拒绝）</el-radio>
-                  <!-- 历史 bypass 策略仅作展示，不再提供新选 -->
-                  <el-radio v-if="form.ip_acl_mode === 'bypass'" value="bypass">免检测（列表中的 IP 跳过全部安全检测）</el-radio>
-                </el-radio-group>
-              </el-form-item>
+              <div class="mode-row" role="group" aria-label="IP 访问控制模式">
+                <span class="mode-row-label">控制模式</span>
+                <div class="mode-row-content">
+                  <el-radio-group v-model="form.ip_acl_mode">
+                    <el-radio value="deny">黑名单（拒绝列表中的 IP，其他正常检测）</el-radio>
+                    <el-radio value="allow">白名单（仅允许列表中的 IP，其他一律拒绝）</el-radio>
+                    <!-- 历史 bypass 策略仅作展示，不再提供新选 -->
+                    <el-radio v-if="form.ip_acl_mode === 'bypass'" value="bypass">免检测（列表中的 IP 跳过全部安全检测）</el-radio>
+                  </el-radio-group>
+                </div>
+              </div>
               <el-form-item :label="aclListLabel">
                 <div class="acl-inline-row">
                   <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
@@ -470,12 +478,15 @@
                 title="地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。"
                 style="margin-bottom: 12px"
               />
-              <el-form-item label="控制模式">
-                <el-radio-group v-model="form.geoip_mode">
-                  <el-radio value="deny">拦截所选区域（其他放行）</el-radio>
-                  <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
-                </el-radio-group>
-              </el-form-item>
+              <div class="mode-row" role="group" aria-label="地域控制模式">
+                <span class="mode-row-label">控制模式</span>
+                <div class="mode-row-content">
+                  <el-radio-group v-model="form.geoip_mode">
+                    <el-radio value="deny">拦截所选区域（其他放行）</el-radio>
+                    <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
+                  </el-radio-group>
+                </div>
+              </div>
               <el-form-item label="区域选择">
                 <!-- R72 二十三次（用户裁决）：区域精确到市——省级联选择；只选省 =
                      整省生效（存量语义），展开选市 = 省+市联合匹配（省/市 形态）。
@@ -2366,6 +2377,13 @@ onMounted(async () => {
 .search-input { width: 280px; }
 
 .capability-tags { display: flex; gap: 6px; }
+
+/* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
+ * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
+ * 宽度对齐本向导 label-width=100px */
+.mode-row { display: flex; margin-bottom: 18px; }
+.mode-row-label { width: 100px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
+.mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 
 .mode-radio-group :deep(.el-radio__label) { white-space: nowrap; }
 .mode-radio-group { flex-wrap: wrap; row-gap: 4px; }

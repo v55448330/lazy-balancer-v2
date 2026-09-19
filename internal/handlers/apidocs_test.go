@@ -346,6 +346,45 @@ func TestAPIDocRoutes_document_validation_and_error_statuses(t *testing.T) {
 	}
 }
 
+// CL41-4/APIMCP41-3/APIMCP41-4(第 41 轮文档漂移转正)绊线:
+// export 去不可达 413(GET 无请求体);download 补 428(mfaStepUpGuard GET 特例,
+// middleware.go:886-887);import 响应登记 data.summary/disabled_conflicts/warnings
+// (warnings 为软跳过/会话吊销/ACME 悬挂等警告的唯一机器可读出口);promote 描述
+// 对齐实现(不调 BumpClusterVersion,启动自动备份调度器);/mcp/tools 登记
+// read_only 字段语义(HTTP 语义只读,不代表只读 Key 可见性)。
+func TestAPIDocRoutes_round41_documentation_contracts(t *testing.T) {
+	routes := make(map[string]apiDocRoute, len(apiDocRoutes))
+	for _, route := range apiDocRoutes {
+		routes[route.Method+" "+route.Path] = route
+	}
+
+	for _, routeError := range routes["GET /config/export"].Errors {
+		if strings.HasPrefix(routeError, "413") {
+			t.Errorf("GET /config/export documents unreachable 413 (GET has no request body): %q", routeError)
+		}
+	}
+	if !containsRouteError(routes["GET /auto-backup/:id/download"].Errors, "428") {
+		t.Errorf("GET /auto-backup/:id/download errors=%v, want 428 mfa_step_up_required", routes["GET /auto-backup/:id/download"].Errors)
+	}
+	importRoute := routes["POST /config/import"]
+	for _, field := range []string{"summary", "disabled_conflicts", "warnings"} {
+		if !strings.Contains(importRoute.Response, field) {
+			t.Errorf("POST /config/import response example missing data.%s: %s", field, importRoute.Response)
+		}
+	}
+	promote := routes["POST /cluster/promote"].Description
+	if strings.Contains(promote, "递增版本") {
+		t.Errorf("POST /cluster/promote description retains 递增版本 (Promote does not bump cluster version): %q", promote)
+	}
+	if !strings.Contains(promote, "自动备份调度器") {
+		t.Errorf("POST /cluster/promote description lacks auto-backup scheduler startup: %q", promote)
+	}
+	tools := routes["GET /mcp/tools"].Description
+	if !strings.Contains(tools, "read_only") || !strings.Contains(tools, "可见性") {
+		t.Errorf("GET /mcp/tools description lacks read_only semantics note: %q", tools)
+	}
+}
+
 func TestCreateUser_returnsConflict_whenUsernameAlreadyExists(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

@@ -527,6 +527,9 @@ func TestComputeNodeStatus_marks_stale_approved_node_offline(t *testing.T) {
 
 func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	// Given
+	// Promote 成功路径会拉起自动备份调度器(CL41-1b)——测试结束即停,
+	// 防止泄漏的 worker 跨用例 tick 全局 DB。
+	t.Cleanup(StopAutoBackupScheduler)
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
 	service := NewClusterService(database, lifecycle, "")
@@ -561,6 +564,8 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 
 func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) {
 	// Given
+	// Promote 成功路径会拉起自动备份调度器(CL41-1b)——测试结束即停。
+	t.Cleanup(StopAutoBackupScheduler)
 	_, database := newClusterTestService(t)
 	service := NewClusterService(database, nil, "")
 	masterURL := "https://master.example:8443"
@@ -598,6 +603,8 @@ func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) 
 
 func TestClusterService_Promote_succeeds_when_pin_cleanup_fails_then_retries_on_snapshot(t *testing.T) {
 	// Given
+	// Promote 成功路径会拉起自动备份调度器(CL41-1b)——测试结束即停。
+	t.Cleanup(StopAutoBackupScheduler)
 	service, database := newClusterTestService(t)
 	masterURL := "https://master.example:8443"
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='secret' WHERE id=1", masterURL); err != nil {

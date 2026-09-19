@@ -120,6 +120,9 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 
 func createAPIKeyForUser(c *gin.Context, userID int) {
 	var req models.CreateAPIKeyRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -247,6 +250,9 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	userID := currentUserID(c)
 	var req models.UpdateAPIKeyRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return

@@ -228,31 +228,4 @@ onMounted(() => {
 <style scoped>
 .basic-settings-grid { display: grid; grid-template-columns: 5.2fr 6.8fr; gap: 20px; align-items: start; }
 @media (max-width: 1100px) { .basic-settings-grid { grid-template-columns: 1fr; } }
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.header-left { flex: 1; }
-
-.page-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: #111827;
-  margin: 0;
-}
-
-.title-icon { color: #3b82f6; font-size: 20px; }
-
-.page-desc {
-  font-size: 13px;
-  color: #6b7280;
-  margin: 4px 0 0 28px;
-}
 </style>

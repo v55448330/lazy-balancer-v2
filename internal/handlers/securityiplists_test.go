@@ -190,7 +190,7 @@ func TestDeleteIPList_referenceGuard(t *testing.T) {
 	}
 
 	rec := deleteRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", aclList))
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "该 IP 列表正被 1 个安全策略引用，请先解除引用") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "该 IP 列表正被 1 个启用的安全策略引用，请先解除引用") {
 		t.Fatalf("acl-ref delete status=%d body=%s, want 409 guard", rec.Code, rec.Body.String())
 	}
 	rec = deleteRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", wlList))
@@ -425,5 +425,85 @@ func TestListSecurityPolicies_summaryCarriesRefs(t *testing.T) {
 	}
 	if len(resp.Data) != 1 || resp.Data[0].IPACLListRefs != fmt.Sprintf("[%d]", listID) {
 		t.Fatalf("summary=%+v, want refs carried", resp.Data)
+	}
+}
+
+// SEC41-4（第 41 轮审计）：DeleteIPList 引用门与 DeleteSecurityCustomRule/
+// DeleteSecurityBlockPage 同口径——仅 enabled=1 策略的引用阻止删除；禁用策略
+// 的悬空引用由 R63 B-N1 重启用门兜底（UpdateSecurityPolicy 重启用时按
+// 「显式值 ?? 存量值」有效形态过 validateIPListRefsExistence，见
+// handlers/security.go 重启用门段）。
+func TestDeleteIPList_referenceGuardEnabledPoliciesOnly(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	aclDisabled := seedIPListRow(t, "acl-禁用引用", "[]")
+	wlDisabled := seedIPListRow(t, "wl-禁用引用", "[]")
+	crsDisabled := seedIPListRow(t, "crs-禁用引用", "[]")
+	enabledRef := seedIPListRow(t, "启用引用", "[]")
+
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_list_refs, enabled) VALUES ('禁用ACL策略', ?, 0)`, fmt.Sprintf("[%d]", aclDisabled)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_whitelist_refs, enabled) VALUES ('禁用WL策略', ?, 0)`, fmt.Sprintf("[%d]", wlDisabled)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, crs_excluded_rules, enabled) VALUES ('禁用CRS策略', ?, 0)`, fmt.Sprintf(`[{"target":"942100","scope":"list","listRefs":[%d]}]`, crsDisabled)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_list_refs, enabled) VALUES ('启用ACL策略', ?, 1)`, fmt.Sprintf("[%d]", enabledRef)); err != nil {
+		t.Fatal(err)
+	}
+
+	// 目标形状：仅被禁用策略引用的列表可删（三引用通道同口径）
+	for _, id := range []int64{aclDisabled, wlDisabled, crsDisabled} {
+		rec := deleteRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", id))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete list %d referenced only by disabled policy: status=%d body=%s, want 200", id, rec.Code, rec.Body.String())
+		}
+		var count int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_ip_lists WHERE id=?", id).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("list %d must be deleted, count=%d err=%v", id, count, err)
+		}
+	}
+	// 回归形状：启用策略引用仍 409
+	rec := deleteRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", enabledRef))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enabled-ref delete status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
+// SEC41-4 配套钉住（有意不对称，非遗漏）：UpdateIPList 清空门保持偏严——
+// 禁用 allow 策略引用的列表同样禁止清空（不按 enabled 过滤）。重启用门
+// （R63 B-N1）只校验引用存在性、不校验引用列表条目非空，S1 门只数 ref ID
+// 个数；若清空门放过禁用策略，重启用后 allow+空生效名单 fail-open 无兜底。
+func TestUpdateIPList_clearGateCountsDisabledAllowPolicy(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	id := seedIPListRow(t, "被禁用allow策略引用", `[{"value":"10.0.0.1","remark":""}]`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, enabled) VALUES ('禁用allow策略', 1, 'allow', ?, 0)`, fmt.Sprintf("[%d]", id)); err != nil {
+		t.Fatal(err)
+	}
+	rec := putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", id), map[string]any{"entries": "[]"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("clearing list referenced by disabled allow policy: status=%d body=%s, want 409（重启用路径无空名单兜底，清空门须保持偏严）", rec.Code, rec.Body.String())
+	}
+}
+
+// APIMCP41-2 安全域端点级实证：写端点在 bind 前经 guardConfiguredJSONBody——
+// 配置 1MB 上限时 ≈2MB body 预检 413（未接 guard 的端点会落入正常校验 400）。
+func TestCreateIPList_configuredBodyLimit413(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET request_body_max_size_mb=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	router := newIPListRouter(t)
+	big := `{"name":"big","entries":"` + strings.Repeat("a", 2<<20) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/security/ip-lists", strings.NewReader(big))
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = int64(len(big))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%.200s, want 413", rec.Code, rec.Body.String())
 	}
 }

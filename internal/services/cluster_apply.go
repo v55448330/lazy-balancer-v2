@@ -156,7 +156,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 稳定参照，否则跨构建口径分歧时（如 I-2 COALESCE 加固前后）漂移判定永远不一致、
 	// 每周期全量重拉+Caddy 重载（E3 N-01）。
 	recordAppliedSectionHashes(s.db, snapshot, skip, switches, previous.SectionHashes)
-	logSyncSwitchGuards(snapshot, skip, switches)
+	logSyncSwitchGuards(s.db, snapshot, skip, switches)
 
 	// 门控必须与漂移判定同口径开路：wafFilesDrifted 比较含版本标签的节
 	// 哈希，wafFilesRefDiffers 只比较内容 sha。内容一致而标签分叉时（如
@@ -981,6 +981,40 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	query += " WHERE id=1"
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("写入快照基础设置: %w", err)
+	}
+	// CL41-1(第 41 轮审计):自动备份设置组随 users 节落库。指针缺席=旧主端
+	// 快照未携带该组——跳过写入保留从端本地值(镜像 branding_json 缺席语义,
+	// 不清零);新主端恒携带全组。last_run 为节点本地运行态,永不在此写入。
+	var abClauses []string
+	var abArgs []any
+	if settings.AutoBackupEnabled != nil {
+		abClauses = append(abClauses, "auto_backup_enabled=?")
+		abArgs = append(abArgs, *settings.AutoBackupEnabled)
+	}
+	if settings.AutoBackupFrequency != nil {
+		abClauses = append(abClauses, "auto_backup_frequency=?")
+		abArgs = append(abArgs, *settings.AutoBackupFrequency)
+	}
+	if settings.AutoBackupTime != nil {
+		abClauses = append(abClauses, "auto_backup_time=?")
+		abArgs = append(abArgs, *settings.AutoBackupTime)
+	}
+	if settings.AutoBackupDay != nil {
+		abClauses = append(abClauses, "auto_backup_day=?")
+		abArgs = append(abArgs, *settings.AutoBackupDay)
+	}
+	if settings.AutoBackupKeep != nil {
+		abClauses = append(abClauses, "auto_backup_keep=?")
+		abArgs = append(abArgs, *settings.AutoBackupKeep)
+	}
+	if settings.AutoBackupSections != nil {
+		abClauses = append(abClauses, "auto_backup_sections=?")
+		abArgs = append(abArgs, *settings.AutoBackupSections)
+	}
+	if len(abClauses) > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(abClauses, ",")+` WHERE id=1`, abArgs...); err != nil {
+			return fmt.Errorf("写入快照自动备份设置: %w", err)
+		}
 	}
 	return nil
 }

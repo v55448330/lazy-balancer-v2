@@ -22,7 +22,8 @@ const pages = [
 ] as const
 export type PageId = (typeof pages)[number]
 const validPages: ReadonlySet<string> = new Set(pages)
-const isPageId = (page: string): page is PageId => validPages.has(page)
+// 页面键唯一事实源——App.vue OIDC return_to 校验等处复用,禁止另起字面量清单(双源漂移)。
+export const isPageId = (page: string): page is PageId => validPages.has(page)
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
 // URL hash 优先（刷新/多标签页可靠；导航用 replaceState 不产生历史条目，浏览器返回键会离开面板）；localStorage 作为后备。

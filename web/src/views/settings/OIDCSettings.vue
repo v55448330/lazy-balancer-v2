@@ -263,7 +263,7 @@ const toggleEnabled = async (on: boolean) => {
     await request.put('/settings/oidc', { enabled: on })
     ElMessage.success(on ? '已启用' : '已暂停（本地账号登录不受影响）')
     await load()
-  } finally {
+  } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
   }
 }
@@ -272,7 +272,9 @@ const remove = async () => {
   try {
     await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
   } catch { return }
-  await request.delete('/settings/oidc')
+  try {
+    await request.delete('/settings/oidc')
+  } catch { /* 拦截器已提示 */ return }
   ElMessage.success('已删除')
   form.issuer = ''; form.clientId = ''; form.clientSecret = ''; form.displayName = ''
   probe.checked = false; probe.ok = false; lastTest.value = null

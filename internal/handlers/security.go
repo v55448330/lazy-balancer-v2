@@ -96,6 +96,9 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	var req models.SecurityCustomRule
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -132,6 +135,9 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 
 	id := c.Param("id")
 	var req models.UpdateCustomRuleRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -322,6 +328,9 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	var req models.SecurityBlockPage
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -373,6 +382,9 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 
 	id := c.Param("id")
 	var req models.SecurityBlockPage
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -737,6 +749,9 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	var req models.CreateSecurityPolicyRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -1160,6 +1175,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 
 	id := c.Param("id")
 	var req models.UpdateSecurityPolicyRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -1690,6 +1708,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	var req struct {
 		RuleCaddyID string `json:"rule_caddy_id" binding:"required"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -1784,6 +1805,9 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
 	var req struct {
 		PolicyIDs []int `json:"policy_ids"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
@@ -2652,6 +2676,9 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 	var req struct {
 		AutoUpdate bool `json:"auto_update"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -2776,6 +2803,9 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	var req struct {
 		AutoUpdate bool `json:"auto_update"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -2848,8 +2878,8 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
 }
 
-// GetSecurityPolicyForRule and BuildCorazaDirectives are in services/security.go
-// to avoid circular dependency (services can't import handlers).
+// BuildCorazaDirectives is in services/security.go to avoid circular dependency
+// (services can't import handlers).
 
 // GetAllSecurityBindings（v2.2.0 T2）：一规则可绑多策略——返回 map[string][]BindingInfo，
 // 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。

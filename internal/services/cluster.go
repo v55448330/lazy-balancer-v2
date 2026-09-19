@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -217,7 +218,8 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 		}
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("读取注册状态: %w", err)
 	}
-	if storedSecretHash == "" || storedSecretHash != tokenHash(secret) || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(now)) {
+	// CL41-5(第 41 轮):哈希比对改常量时间——与 HMAC 链路的 hmac.Equal 同口径。
+	if storedSecretHash == "" || subtle.ConstantTimeCompare([]byte(storedSecretHash), []byte(tokenHash(secret))) != 1 || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(now)) {
 		return models.ClusterRegistrationStatus{}, ErrInvalidClusterAuth
 	}
 	response := models.ClusterRegistrationStatus{Status: "pending"}
@@ -305,6 +307,11 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if s.lifecycle != nil {
 		s.lifecycle.StartACME()
 	}
+	// CL41-1b(第 41 轮审计):与 lifecycle.StartACME 对称——提升成功后拉起
+	// 自动备份调度器,不再要求重启进程。executor 由 main.go 无条件注入
+	// (未注入时 tick nil 守卫安全跳过)。Background 上下文:调度器生命周期
+	// 随进程,不随本次请求取消;停止由 main.go defer/BecomeSlave 负责。
+	StartAutoBackupScheduler(context.Background())
 	if crsManager := GetCRSUpdateManager(); crsManager != nil {
 		crsManager.SetMasterRole(true)
 	}

@@ -1087,6 +1087,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		upstreams []upstream
 	}
 
+	// LB41-2：lb_rules.id 为可空遗留列（生产形态恒 NULL），ORDER BY id 语义
+	// 退化；rowid 显式化——行为与现状等价（NULL 排序实践上即 rowid 序）。
 	// Load all enabled rules into memory first to avoid holding cursor while querying upstreams/global_config
 	rows, err := store.Query(`
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
@@ -1101,7 +1103,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM lb_rules WHERE enabled = 1
-		ORDER BY id
+		ORDER BY rowid
 	`)
 	if err != nil {
 		return generationFailure("query enabled rules: %v", err)
@@ -1840,6 +1842,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	}
 
 	apps := map[string]interface{}{
+		// observe_catchall_hosts：Host 头驱动标签基数面——任意 Host 命中落地页
+		// 都会产出新指标序列，公网部署下 Caddy 内存基数由客户端控制。
+		// 2026-09-19 用户裁定接受该权衡（收益=未知域流量可观测），仅文档明示。
 		"http": map[string]interface{}{
 			"metrics": map[string]interface{}{
 				"per_host":               true,

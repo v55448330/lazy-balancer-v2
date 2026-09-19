@@ -92,13 +92,14 @@ func TestComputeSectionSkips_allOnFirstSyncAppliesEverything(t *testing.T) {
 }
 
 // 三分类合并(2026-09-19 用户裁定):同步节收敛为 users/rules/security 三节
-// (全局配置并入系统数据、规则库并入安全防护),标签与备份分类一致;
+// (全局配置并入系统数据、规则库并入安全防护);CL41-3(第 41 轮):rules 节标签
+// 与集群设置卡/主面板开关行统一为「负载均衡规则」(备份分类标签不在此口径)。
 // ComputeSnapshotSectionHashes 只产出 3 键。
 func TestSyncSections_threeCategoryMerge(t *testing.T) {
 	if len(syncSections) != 3 {
 		t.Fatalf("syncSections=%#v, want exactly 3 sections", syncSections)
 	}
-	want := map[string]string{"users": "系统数据", "rules": "负载规则", "security": "安全防护"}
+	want := map[string]string{"users": "系统数据", "rules": "负载均衡规则", "security": "安全防护"}
 	for _, sec := range syncSections {
 		if want[sec.Key] == "" || sec.NewLabel != want[sec.Key] {
 			t.Fatalf("section %q label=%q, want %q", sec.Key, sec.NewLabel, want[sec.Key])

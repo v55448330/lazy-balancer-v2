@@ -392,18 +392,78 @@ func TestOIDCCallback_bad_state_rejected(t *testing.T) {
 	}
 }
 
-// 场景 7:OAuth 配置组装(回调 URL 反代头尊重)。
+// 场景 7:OAuth 配置组装(回调 URL 反代头尊重)。APIMCP41-5 后采信前提=直连
+// 对端为回环/私网可信反代,故 RemoteAddr 置 RFC1918 地址。
 func TestOIDC_requestOrigin_forwarded(t *testing.T) {
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil)
+	req.RemoteAddr = "10.0.0.1:44300"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("X-Forwarded-Host", "lb.example.com")
 	router.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Header().Get("Location"), url.QueryEscape("https://lb.example.com/api/v1/auth/oidc/callback")) {
 		t.Fatalf("redirect_uri must honor forwarded host/proto: %s", rec.Header().Get("Location"))
+	}
+}
+
+// APIMCP41-5(第 41 轮审计,2026-09-19 用户裁定按建议收窄):X-Forwarded-Proto/Host
+// 仅当直连对端为回环/私网(RFC1918+ULA+链路本地)时采信;公网直连一律忽略转发
+// 头——路由器 SetTrustedProxies(nil) 意味着任何客户端都能伪造 X-Forwarded-Host,
+// 无来源校验会把回调 redirect_uri 与成功回跳基址(令牌走 fragment)指向攻击者域。
+func TestOIDC_requestOrigin_trustedProxyGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	origin := func(remoteAddr, fwdProto, fwdHost string) string {
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		req := httptest.NewRequest(http.MethodGet, "http://self.example.com/api/v1/auth/oidc/login", nil)
+		req.RemoteAddr = remoteAddr
+		if fwdProto != "" {
+			req.Header.Set("X-Forwarded-Proto", fwdProto)
+		}
+		if fwdHost != "" {
+			req.Header.Set("X-Forwarded-Host", fwdHost)
+		}
+		ctx.Request = req
+		return requestOrigin(ctx)
+	}
+	// 可信:回环 + RFC1918 三段(含 172.31 上界)+ ULA + 链路本地(v4/v6) → 采信转发头。
+	for _, ra := range []string{"127.0.0.1:9000", "[::1]:9000", "10.1.2.3:9000", "172.16.0.9:9000", "172.31.255.254:9000", "192.168.1.10:9000", "[fd00::5]:9000", "[fe80::1%eth0]:9000", "169.254.1.1:9000"} {
+		if got := origin(ra, "https", "lb.example.com"); got != "https://lb.example.com" {
+			t.Fatalf("trusted %s: origin=%q, want https://lb.example.com", ra, got)
+		}
+	}
+	// 不可信:公网 v4/v6、172.32 出界、畸形、空 → 忽略转发头,用请求自身 scheme/host。
+	for _, ra := range []string{"203.0.113.10:9000", "8.8.8.8:9000", "[2001:db8::1]:9000", "172.32.0.1:9000", "garbage", ""} {
+		if got := origin(ra, "https", "evil.example.com"); got != "http://self.example.com" {
+			t.Fatalf("untrusted %q: origin=%q, want http://self.example.com", ra, got)
+		}
+	}
+	// 无转发头时行为与现状一致(任意对端都用请求自身基址)。
+	if got := origin("203.0.113.10:9000", "", ""); got != "http://self.example.com" {
+		t.Fatalf("origin=%q, want http://self.example.com", got)
+	}
+}
+
+// APIMCP41-5 端到端:公网直连伪造 X-Forwarded-Host 不得污染 OIDC redirect_uri。
+func TestOIDC_login_redirectURI_ignoresForwardedFromPublicRemote(t *testing.T) {
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil)
+	req.RemoteAddr = "203.0.113.10:9000"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "evil.example.com")
+	router.ServeHTTP(rec, req)
+	loc := rec.Header().Get("Location")
+	if strings.Contains(loc, "evil.example.com") {
+		t.Fatalf("公网直连的转发头必须被忽略: %s", loc)
+	}
+	if !strings.Contains(loc, url.QueryEscape("http://example.com/api/v1/auth/oidc/callback")) {
+		t.Fatalf("redirect_uri 应回退请求自身 host: %s", loc)
 	}
 }
 

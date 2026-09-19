@@ -262,7 +262,7 @@
                 <span>负载均衡规则</span>
               </div>
               <div class="card-header-actions">
-                <el-radio-group v-model="rankBy" size="small">
+                <el-radio-group v-model="rankBy" size="small" aria-label="规则排序方式">
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
                 </el-radio-group>
@@ -380,7 +380,7 @@
         </div>
       </template>
       <div class="history-toolbar">
-        <el-radio-group v-model="ruleHistoryRange" size="small" @change="fetchRuleHistory">
+        <el-radio-group v-model="ruleHistoryRange" size="small" aria-label="历史统计时间范围" @change="fetchRuleHistory">
           <el-radio-button value="1h">近 1 小时</el-radio-button>
           <el-radio-button value="6h">近 6 小时</el-radio-button>
           <el-radio-button value="24h">近 24 小时</el-radio-button>

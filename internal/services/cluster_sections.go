@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"lazy-balancer-v2/internal/db"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -28,7 +27,7 @@ var syncSections = []syncSection{
 	// 系统数据排第一(2026-09-11 裁定):恒同步不可禁用,含用户/密钥/ACME
 	// 与全局配置(证书任务行与文件随 rules 开关,R64 A-N5)。
 	{Key: "users", NewLabel: "系统数据"},
-	{Key: "rules", NewLabel: "负载规则"},
+	{Key: "rules", NewLabel: "负载均衡规则"},
 	{Key: "security", NewLabel: "安全防护"},
 }
 
@@ -87,16 +86,6 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 			BlockPages  []models.SecurityBlockPage  `json:"block_pages"`
 			IPLists     json.RawMessage             `json:"ip_lists"`
 		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists}
-	case "global_config":
-		// legacy case:三分类合并前 global_config 节的 payload 形态。保留仅供
-		// 参照,syncSections 不再含该节(ComputeSnapshotSectionHashes 产 3 键)。
-		if s.CaddyConfig != nil {
-			return struct {
-				Basic models.ClusterBasicSettings `json:"basic_settings"`
-				Caddy string                      `json:"caddy_config"`
-			}{s.BasicSettings, *s.CaddyConfig}
-		}
-		return s.BasicSettings
 	case "waf_files":
 		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——
 		// 进哈希会让主从行状态强耦合,漂移判定不可收敛)。CRS/IP2Region 版本行
@@ -361,7 +350,7 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 // logSyncSwitchGuards surfaces cross-section drift: security-switch-off nodes
 // whose master references newer CRS/IP2Region files (file state follows the
 // security switch after the 3-category merge).
-func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
+func logSyncSwitchGuards(dbh *sql.DB, snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
 	// R57 A-#3：告警对象是「开关关闭导致 WAF 文件滞后」的从节点——开关开启时
 	// applySnapshot 随即拉取文件，无滞后可告。三分类合并后判定挂 security
 	// 开关(waf_files 不再是同步节,sk.disabled 只含 3 节键);dedup 记账走
@@ -372,10 +361,10 @@ func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, swit
 		return
 	}
 	var lastWarnVersion int
-	if db.DB != nil {
+	if dbh != nil {
 		// 读失败属稀有基础设施故障——不限频 warn 一行，否则去重依据静默归零、
 		// 每个 apply 周期都刷审计告警且无信号解释。
-		if err := db.DB.QueryRow("SELECT COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1").Scan(&lastWarnVersion); err != nil {
+		if err := dbh.QueryRow("SELECT COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1").Scan(&lastWarnVersion); err != nil {
 			Logf("warn", "读取文件态记账版本失败（同步开关告警去重不可用）: %v", err)
 		}
 	}
@@ -385,7 +374,7 @@ func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, swit
 	RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region 文件已更新（同步开关关闭），本地文件保持不变", "")
 	// CL10-N7:告警后只推进去重版本(哈希不动——security 关闭时哈希列不被
 	// 消费),保证每版本 bump 至多一条告警。
-	if db.DB != nil {
-		_, _ = db.DB.Exec(`UPDATE global_config SET applied_waf_ref_version=? WHERE id=1`, snapshot.Version)
+	if dbh != nil {
+		_, _ = dbh.Exec(`UPDATE global_config SET applied_waf_ref_version=? WHERE id=1`, snapshot.Version)
 	}
 }

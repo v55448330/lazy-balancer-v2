@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -180,18 +182,39 @@ func (h *Handlers) OIDCStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"enabled": true, "display_name": name}})
 }
 
+// trustedProxyRemoteAddr(APIMCP41-5,第 41 轮审计,2026-09-19 用户裁定按建议收窄):
+// 仅当直连对端为回环/私网(RFC1918+ULA+链路本地,即可信反代)时才采信
+// X-Forwarded-Proto/Host。解析失败(畸形/空)一律 false——宁可回退请求自身
+// 基址也不采信可疑来源。
+func trustedProxyRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr // 容忍无端口形态(测试构造/非 TCP  listener)
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
 // requestOrigin 推导回调基址(反向代理场景尊重 X-Forwarded-Proto/Host)。
+// APIMCP41-5:转发头仅当直连对端可信时采信——路由器 SetTrustedProxies(nil)
+// 意味着任何公网客户端都能伪造 X-Forwarded-Host,无来源校验会把回调
+// redirect_uri 与成功回跳基址(令牌走 fragment)指向攻击者域。
 func requestOrigin(c *gin.Context) string {
 	scheme := "http"
 	if c.Request.TLS != nil {
 		scheme = "https"
 	}
-	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	}
-	host := c.GetHeader("X-Forwarded-Host")
-	if host == "" {
-		host = c.Request.Host
+	host := c.Request.Host
+	if trustedProxyRemoteAddr(c.Request.RemoteAddr) {
+		if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		}
+		if fwdHost := c.GetHeader("X-Forwarded-Host"); fwdHost != "" {
+			host = fwdHost
+		}
 	}
 	return scheme + "://" + host
 }
@@ -567,6 +590,9 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		ClientSecret *string `json:"client_secret"`
 		DisplayName  *string `json:"display_name"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -614,6 +640,9 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 		Issuer       string `json:"issuer"`
 		ClientID     string `json:"client_id"`
 		ClientSecret string `json:"client_secret"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	_ = c.ShouldBindJSON(&req)
 	issuer := normalizeOIDCIssuer(req.Issuer)

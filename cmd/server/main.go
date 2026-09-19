@@ -180,11 +180,12 @@ func run() error {
 	// 审计日志轮转由事件摄入循环驱动（先采集后轮转），此处无需独立启动器
 	eventsIngestCtx, stopEventsIngestion := context.WithCancel(context.Background())
 	eventsIngestWait := services.StartSecurityEventsIngestion(eventsIngestCtx)
+	// 自动备份执行体无条件注入(断 services→handlers 反向依赖环,与角色无关);
+	// 调度器仅主节点运行——启动装配在本分支,promote 路径(services/cluster.go)
+	// 对称拉起,demote(BecomeSlave)停止,全程无需重启进程。
+	services.SetAutoBackupExecutor(h.RunAutoBackupOnce)
 	if isMaster {
 		lifecycle.StartACME()
-		// 自动备份调度器（v2.3.x）：仅主节点运行；执行体注入避免 services→handlers
-		// 反向依赖。主从切换（提升）后需重启进程才会开始自动备份。
-		services.SetAutoBackupExecutor(h.RunAutoBackupOnce)
 		services.StartAutoBackupScheduler(context.Background())
 	} else {
 		lifecycle.StopACME()

@@ -28,8 +28,9 @@ import (
 //
 // 完整性:manifest 逐条目 sha256,导入先验后用;版本记录行在 config.json
 // 的表区内,文件在 waf/ 下——分类原子,导入后记录与文件恒一致。
-// 仅当导出勾选「规则库数据库」时产出 lbbak;未勾选保持 JSON(向后兼容,
-// 旧 JSON 备份导入路径不变)。
+// v2.3.0 起导出恒为 lbbak(writeLbbakResponse 以 application/gzip 下发,
+// apidocs.go 登记);waf 文件条目仅在勾选「安全防护」分类时随包附带,未勾选
+// 时仅 config.json+manifest。旧式纯 JSON 备份的导入路径保持不变(向后兼容)。
 
 type lbbakManifest struct {
 	Format   string            `json:"format"`

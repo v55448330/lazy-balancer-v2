@@ -27,6 +27,8 @@ docker run -d --name lazy-balancer --network host \
   v55448330/lazy-balancer-v2:latest
 ```
 
+Mounts: `/app/data` database and config (required), `/app/certs` certificates and private keys (required), `/app/backup` auto-backup output directory (required — without it, backup files are lost when the container is recreated), `/app/logs` logs (recommended), `/app/waf` rule sets and GeoIP (recommended).
+
 Open `http://localhost:8000` for the admin panel. First visit opens an initialization wizard; no default credentials.
 
 <details>

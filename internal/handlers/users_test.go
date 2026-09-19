@@ -349,3 +349,20 @@ func TestResetUserPassword_clearsLoginLockout(t *testing.T) {
 		t.Fatalf("lockout must be cleared on admin reset, got attempts=%d locked_until=%v", attempts, lockedUntil)
 	}
 }
+
+// APIMCP41-2(第 41 轮审计,2026-09-19 用户裁定「统一遵循请求体大小配置项限制」)
+// 端点级实证:CreateUser 在 bind 前经 guardConfiguredJSONBody——配置 1MB 上限时
+// ≈2MB body 预检 413(未接 guard 则落入 username max=50 校验 400),小 body 正常 201。
+func TestCreateUser_configuredBodyLimit413(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET request_body_max_size_mb=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	big := `{"username":"u` + strings.Repeat("a", 2<<20) + `","password":"secret123","role":"user"}`
+	if response := serveUserMutation(h, http.MethodPost, "/users", big, 1, h.CreateUser); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%.200s, want 413", response.Code, response.Body.String())
+	}
+	if response := serveUserMutation(h, http.MethodPost, "/users", `{"username":"newuser1","password":"secret123","role":"user"}`, 1, h.CreateUser); response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%.200s, want 201(配置上限下小 body 不受影响)", response.Code, response.Body.String())
+	}
+}

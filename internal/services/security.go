@@ -20,8 +20,9 @@ import (
 var crsDirectivesDir = "/app/waf/crs"
 
 // scanSecurityPolicyByID 按主键加载一条 enabled 策略行，并把 JSON 文本列转为
-// json.RawMessage；行缺失或 disabled 时返回 nil。GetSecurityPolicyForRule 与
-// GetSecurityPoliciesForRule 共用本扫描，保证两条读路径字段级一致。
+// json.RawMessage；行缺失或 disabled 时返回 nil。GetSecurityPoliciesForRule 与
+// 测试辅助 GetSecurityPolicyForRule（security_policy_helpers_test.go）共用本扫描，
+// 保证两条读路径字段级一致。
 func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
@@ -40,29 +41,6 @@ func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
 	return &p
-}
-
-// GetSecurityPolicyForRule 返回 v2.2.0 单策略语义下的规则生效策略：最高
-// policy_id 绑定生效，最高绑定指向禁用策略时返回 nil（不回退次高）。必须与
-// loadSecurityPolicyContext（caddy.go 批量预载，Round 34 F-5）保持同构。
-// 多策略消费方应改用 GetSecurityPoliciesForRule；待生成路径遍历完整策略列表
-// 后，本函数再退化为该列表的薄包装（取首元素）。
-func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
-	if db.DB == nil {
-		return nil
-	}
-	var policyID int
-	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id DESC LIMIT 1", ruleCaddyID).Scan(&policyID)
-	if err != nil {
-		return nil
-	}
-	policy := scanSecurityPolicyByID(policyID)
-	if policy == nil {
-		return nil
-	}
-	// 引用的 IP 列表在此解析（单策略一次批量查询），发射端经 Merged* 消费。
-	resolvePolicyIPListRefs([]*models.SecurityPolicy{policy}, nil)
-	return policy
 }
 
 // GetSecurityPoliciesForRule returns all enabled policies bound to a rule,

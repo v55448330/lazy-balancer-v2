@@ -27,7 +27,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, defineAsyncComponent } from 'vue'
 import type { AsyncComponentLoader } from 'vue'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore, isPageId } from '@/stores/auth'
 import { ApiRequestError, isTokenExpired } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -97,10 +97,10 @@ onMounted(async () => {
     if (oidcToken) {
       // OIDC 登录:令牌直接建会话,return_to 回跳(缺省 dashboard)
       authStore.applyOIDCToken(oidcToken)
-      // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)
-      const knownPages = ['dashboard', 'rules', 'security-overview', 'security-policies', 'security-rules', 'security-block-pages', 'security-events', 'settings-basic', 'settings-cluster', 'settings-certificates', 'settings-apikeys', 'users', 'audit-log', 'caddy']
+      // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)——
+      // 清单复用 auth store 的 isPageId(页面键唯一事实源)
       const target = oidcReturnTo.replace(/^\//, '')
-      authStore.setCurrentPage(knownPages.includes(target) ? (target as 'dashboard') : 'dashboard')
+      authStore.setCurrentPage(isPageId(target) ? target : 'dashboard')
       await authStore.init()
     } else if (hasLoginTicket) {
       const hadValidSession = authStore.isLoggedIn

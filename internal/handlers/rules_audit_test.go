@@ -1792,3 +1792,163 @@ func TestRuleSave_appliesExactlyOnce(t *testing.T) {
 		})
 	}
 }
+
+// CERT41-4(第 41 轮):手动 TLS 保存侧的证书质量警告——自签单张证书(系统根
+// 不认可→链不完整)不阻断保存,但警告必须随该写操作的审计详情留痕(可观察
+func TestCreateRule_manualTLSSelfSigned_recordsCertWarningAudit(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	t.Cleanup(services.SetCertDirForTest(t.TempDir())) // 手动证书落盘物化目录隔离
+	certPEM, keyPEM, err := generateTestCert("tls-warn.example.test", time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate self-signed cert: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	payload, err := json.Marshal(map[string]any{
+		"name": "tls-warn", "protocol": "http", "domain": "tls-warn.example.test",
+		"listen_port": 8443, "enable_tls": true, "tls_source": "manual",
+		"tls_cert": certPEM, "tls_key": keyPEM,
+		"upstreams": []map[string]any{{"host": "127.0.0.1", "port": 9000, "enabled": true}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：保存成功(警告不阻断)且创建审计详情含链不完整警告
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='创建' AND resource='负载规则' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query create audit: %v", err)
+	}
+	if !strings.Contains(detail, "证书警告") || !strings.Contains(detail, "证书链可能不完整") {
+		t.Fatalf("create audit detail=%q, want incomplete-chain cert warning", detail)
+	}
+}
+
+// CERT41-4 更新方向:替换为自签单张证书同样留痕(不阻断)。
+func TestUpdateRule_manualTLSSelfSigned_recordsCertWarningAudit(t *testing.T) {
+	// Given：既有 manual-TLS 规则,本次更新替换证书材料为自签单张
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	seedAuditRule(t, "lb_tls_warn", "before", "tls-warn.example.test", 8443, true, "manual", true)
+	seedAuditUpstream(t, "lb_tls_warn")
+	certPEM, keyPEM, err := generateTestCert("tls-warn.example.test", time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate self-signed cert: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	payload, err := json.Marshal(map[string]any{
+		"name": "after", "tls_cert": certPEM, "tls_key": keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tls_warn", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='负载规则' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query update audit: %v", err)
+	}
+	if !strings.Contains(detail, "证书警告") || !strings.Contains(detail, "证书链可能不完整") {
+		t.Fatalf("update audit detail=%q, want incomplete-chain cert warning", detail)
+	}
+}
+
+// CERT41-4 回归形状:链可信(注入测试根)且域名覆盖时不得误报——创建审计
+// 详情不含证书警告。
+func TestCreateRule_manualTLSTrustedChain_omitsCertWarningAudit(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	certPEM, keyPEM, roots := generateR41CAChain(t, []string{"tls-ok.example.test"})
+	injectR41Roots(t, roots)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	payload, err := json.Marshal(map[string]any{
+		"name": "tls-ok", "protocol": "http", "domain": "tls-ok.example.test",
+		"listen_port": 8443, "enable_tls": true, "tls_source": "manual",
+		"tls_cert": certPEM, "tls_key": keyPEM,
+		"upstreams": []map[string]any{{"host": "127.0.0.1", "port": 9000, "enabled": true}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='创建' AND resource='负载规则' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query create audit: %v", err)
+	}
+	if strings.Contains(detail, "证书警告") {
+		t.Fatalf("create audit detail=%q, trusted chain must not warn", detail)
+	}
+}
+
+// CERT41-4 畸形形状:TCP 规则携带 TLS 证书材料——材料随 TCP 归一(R69 C-N1)
+// 弃置,其质量警告不得随创建审计留痕(证书未落库,警告即误导)。
+func TestCreateRule_tcpTLSMaterialNormalized_omitsCertWarningAudit(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	certPEM, keyPEM, err := generateTestCert("tcp-cert.example.test", time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate self-signed cert: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	payload, err := json.Marshal(map[string]any{
+		"name": "tcp-cert", "protocol": "tcp",
+		"listen_port": 8553, "enable_tls": true, "tls_source": "manual",
+		"tls_cert": certPEM, "tls_key": keyPEM,
+		"upstreams": []map[string]any{{"host": "127.0.0.1", "port": 9000, "enabled": true}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='创建' AND resource='负载规则' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query create audit: %v", err)
+	}
+	if strings.Contains(detail, "证书警告") {
+		t.Fatalf("create audit detail=%q, TCP-normalized cert material must not warn", detail)
+	}
+}

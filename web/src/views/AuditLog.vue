@@ -193,12 +193,6 @@ onMounted(() => {
 }
 .operator-email { font-size: 11.5px; color: var(--el-text-color-secondary); }
 
-.page { max-width: 1500px; margin: 0 auto; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.header-left { flex: 1; }
-.page-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #111827; margin: 0; }
-.title-icon { color: #3b82f6; font-size: 20px; }
-.page-desc { font-size: 13px; color: #6b7280; margin: 4px 0 0 28px; }
 .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; align-items: center; }
 .filter-actions { display: flex; gap: 0; margin-left: 8px; }
 .filter-actions .el-button + .el-button { margin-left: 8px; }

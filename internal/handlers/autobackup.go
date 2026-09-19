@@ -216,6 +216,10 @@ func (h *Handlers) RunAutoBackupOnce(trigger string) error {
 		_ = os.Remove(finalPath)
 		return fail("备份记录写入失败", err)
 	}
+	// 成功落行后内务裁剪(流程注释「落行→裁剪→审计」的裁剪步,SYS41-1 接线):
+	// success 按 keep 保留、failed 按 autoBackupFailedRowsKeep=20 保留,
+	// 文件+行同删;裁剪失败仅告警不翻转本次成功结果。
+	pruneAutoBackups(dir, loadAutoBackupKeepSetting(), autoBackupFailedRowsKeep)
 	services.Logf("info", "%s完成：文件 %s（%s，%.1f KB）", action, filename, countsSummary, float64(len(payload))/1024)
 	services.RecordAuditLog("system", action, "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", id), "文件："+filename, countsSummary,
@@ -319,8 +323,9 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 // UpdateAutoBackupSettings PUT /api/v1/settings/auto-backup：全量保存设置。
 // 校验：freq∈{daily,weekly,monthly}；time 为 HH:MM；keep 1-30(2026-09-19
 // 追加裁定:上限 100→30)；day weekly 1-7 / monthly 1-28；sections 为已知
-// 分类子集且非空(legacy 键保存时归一为当前三分类落库)。off→on 时清空
-// last_run，下一个到期槽立即执行。
+// 分类子集且非空(legacy 键保存时归一为当前三分类落库)。off→on 时置水位线
+// last_run=now(2026-09-19 用户裁定)——不立即执行、不回补停用期旧槽,
+// 下一次执行=启用后下一个到期槽。
 func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return

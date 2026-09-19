@@ -443,6 +443,24 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		&snapshot.BasicSettings.ServerTokensHidden); err != nil {
 		return fmt.Errorf("读取 Caddy 全局设置: %w", err)
 	}
+	// CL41-1(第 41 轮审计):自动备份六设置列随 users 节同步。指针形态装载,
+	// COALESCE 兜底使主端快照恒携带(非 nil);last_run 为节点本地运行态,
+	// 刻意不在此装载(调度器每轮推进,参与哈希会让 users 节每轮抖动)。
+	var abEnabled bool
+	var abFrequency, abTime, abSections string
+	var abDay, abKeep int
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
+		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), COALESCE(auto_backup_keep,7),
+		COALESCE(auto_backup_sections,'["users","rules","security"]')
+		FROM global_config WHERE id=1`).Scan(&abEnabled, &abFrequency, &abTime, &abDay, &abKeep, &abSections); err != nil {
+		return fmt.Errorf("读取自动备份设置: %w", err)
+	}
+	snapshot.BasicSettings.AutoBackupEnabled = &abEnabled
+	snapshot.BasicSettings.AutoBackupFrequency = &abFrequency
+	snapshot.BasicSettings.AutoBackupTime = &abTime
+	snapshot.BasicSettings.AutoBackupDay = &abDay
+	snapshot.BasicSettings.AutoBackupKeep = &abKeep
+	snapshot.BasicSettings.AutoBackupSections = &abSections
 	return nil
 }
 

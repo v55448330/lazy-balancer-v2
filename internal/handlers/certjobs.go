@@ -207,6 +207,9 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 	var req struct {
 		RuleIDs []string `json:"rule_ids"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误: " + err.Error()})
 		return

@@ -49,6 +49,9 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 
 func (h *Handlers) CreateUser(c *gin.Context) {
 	var req models.CreateUserRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -100,6 +103,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		Password    *string `json:"password" binding:"omitempty,max=72"`
 		Role        *string `json:"role"`
 		DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
@@ -358,6 +364,9 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	var req struct {
 		IsEnabled bool `json:"is_enabled"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -439,6 +448,9 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 
 	var req struct {
 		NewPassword string `json:"new_password" binding:"omitempty,max=72"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})

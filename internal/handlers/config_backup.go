@@ -197,8 +197,10 @@ var backupBooleanTableColumns = map[string][]string{
 // security_policy_bindings 两列）不入映射：NULL 由列约束响亮失败（500
 // 回滚），不属于静默毒化。例外 lb_rules.id：列为可空普通 INTEGER（db.go
 // schema 非 NOT NULL），生产 INSERT 不写 id（新规则恒为 NULL），NULL 静默
-// 落库且无害——dump 侧 COALESCE(id,0) 兜底，无裸读 id 的消费点，同样
-// 不入映射。各表归一列与消费点：
+// 落库且无害——dump 侧 COALESCE(id,0) 兜底；排序消费点（rules.go ListRules
+// 与 services/caddy.go 渲染查询）已显式 ORDER BY rowid（LB41-2，恒 NULL 列
+// 排序本退化，rowid 化行为等价），无裸读 id 的消费点，同样不入映射。
+// 各表归一列与消费点：
 //
 //	users                created_at 为 epoch 文本——auth.go Login 的 time.Time
 //	                     raw 扫描对 NULL/'' 均报错（'' 驱动回退字符串不可扫），
@@ -1044,6 +1046,16 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 // TLS policy → TLS 端口明文服务，且 autohttps.disable_certificates 阻止
 // Caddy 自动签发自愈。
 func validateV2BackupTLSShape(tables map[string][]map[string]any) error {
+	_, err := validateV2BackupTLSShapeSoft(tables, false)
+	return err
+}
+
+// validateV2BackupTLSShapeSoft 同 validateV2BackupTLSShape,额外支持
+// CERT41-1 软降级:softLiveACMERefs=true 时,「备份不含 cert 表、按 live
+// 解析」失败的 ACME 引用不整包 400,计入返回的悬挂数(调用方降级警告,
+// 与 R39-14 预检对称;导入/预览双路径同序)。返回 (悬挂数, 硬错误)。
+func validateV2BackupTLSShapeSoft(tables map[string][]map[string]any, softLiveACMERefs bool) (int, error) {
+	acmeDangling := 0
 	for index, rule := range tables["lb_rules"] {
 		protocol, _ := rule["protocol"].(string)
 		// R62 C2-N1（传播通道钳制）：TCP 规则不终结入站 TLS，携带 enable_tls=1 +
@@ -1059,11 +1071,11 @@ func validateV2BackupTLSShape(tables map[string][]map[string]any) error {
 		}
 		tlsSource := backupString(rule["tls_source"])
 		if tlsSource != "manual" && tlsSource != "acme_dns" {
-			return fmt.Errorf("规则 #%d（%s）：启用 TLS 时必须选择证书来源（manual 或 acme_dns）", index+1, backupString(rule["name"]))
+			return 0, fmt.Errorf("规则 #%d（%s）：启用 TLS 时必须选择证书来源（manual 或 acme_dns）", index+1, backupString(rule["name"]))
 		}
 		if tlsSource == "manual" &&
 			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
-			return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
+			return 0, fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
 		}
 		// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
 		// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
@@ -1076,14 +1088,21 @@ func validateV2BackupTLSShape(tables map[string][]map[string]any) error {
 			// 运行期 certJobRuleApplicable 严格规范化失败 → 续签永久断链且
 			// TLS 端口明文服务。
 			if err := services.ValidateACMEDomains(backupString(rule["domain"])); err != nil {
-				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+				return 0, fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
 			}
 			if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
-				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+				// CERT41-1:「备份不含 cert 表、按 live 解析」失败在软降级方向
+				// (导规则不导系统数据、备份从未携带 cert 表)计入悬挂数,不整包 400。
+				var liveRefErr *acmeLiveRefUnresolvedError
+				if softLiveACMERefs && errors.As(err, &liveRefErr) {
+					acmeDangling++
+					continue
+				}
+				return 0, fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
 			}
 		}
 	}
-	return nil
+	return acmeDangling, nil
 }
 
 // validateV2BackupCertJobs 校验最终处于启用态的 acme_dns 规则携带域名匹配的
@@ -1340,15 +1359,22 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 // validateBackupACMEReferenceIDs 按 validateRuleACMEReferences（rule_features.go）
 // 同口径校验备份行的 ACME 引用，错误文案保持一致。引用优先在备份自带表中解析——
 // 导入为全量替换（deleteOrder 清光 live 的 certificate_configs/ca_providers），
-// 备份行才是导入后的真实数据；备份缺该表时回退 live 表（直测/非常规调用场景），
-// 与 validateBackupRuleReferences 的备份内解析哲学一致。配置/提供商行缺 enabled
-// 键时按表默认值 TRUE 处理（与 backupRuleEnabled 的校验侧口径一致）。
+// 备份行才是导入后的真实数据；备份缺该表时回退 live 表（直测/非常规调用场景，
+// 及 CERT41-1 起「该 cert 表不参与本次分类导入」的常规场景——sections 过滤前置
+// 后，过滤掉的表在 backup.Tables 中缺席，live 回退自动等于「过滤后导入表∪live
+// 保留表」正确口径）。配置/提供商行缺 enabled 键时按表默认值 TRUE 处理（与
+// backupRuleEnabled 的校验侧口径一致）。
+// CERT41-1：live 回退解析失败的错误包装为 acmeLiveRefUnresolvedError——分类
+// 导入「导规则不导系统数据」且备份从未携带 cert 表时，调用方按 R39-14 对称
+// 语义把它降级为悬挂警告；其余错误（备份行解析失败、acme_config_id=0、DB
+// 查询失败）维持整包 400。
 func validateBackupACMEReferenceIDs(tables map[string][]map[string]any, rule map[string]any) error {
 	acmeConfigID, ok := backupInteger(rule["acme_config_id"])
 	if !ok || acmeConfigID == 0 {
 		return errors.New("使用 ACME 签发时必须选择 DNS 提供商配置")
 	}
 	configOK := false
+	configFromLive := false
 	if configRows, exists := tables["certificate_configs"]; exists {
 		for _, configRow := range configRows {
 			id, idOK := backupInteger(configRow["id"])
@@ -1358,18 +1384,24 @@ func validateBackupACMEReferenceIDs(tables map[string][]map[string]any, rule map
 			}
 		}
 	} else {
+		configFromLive = true
 		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM certificate_configs WHERE id = ? AND enabled = 1)", acmeConfigID).Scan(&configOK); err != nil {
 			return fmt.Errorf("校验 DNS 提供商配置失败: %v", err)
 		}
 	}
 	if !configOK {
-		return errors.New("选择的 DNS 提供商配置不存在或已禁用")
+		err := errors.New("选择的 DNS 提供商配置不存在或已禁用")
+		if configFromLive {
+			return &acmeLiveRefUnresolvedError{inner: err}
+		}
+		return err
 	}
 	caProviderID, ok := backupInteger(rule["ca_provider_id"])
 	if !ok || caProviderID == 0 {
 		return nil
 	}
 	providerOK := false
+	providerFromLive := false
 	if providerRows, exists := tables["ca_providers"]; exists {
 		for _, providerRow := range providerRows {
 			id, idOK := backupInteger(providerRow["id"])
@@ -1379,15 +1411,29 @@ func validateBackupACMEReferenceIDs(tables map[string][]map[string]any, rule map
 			}
 		}
 	} else {
+		providerFromLive = true
 		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM ca_providers WHERE id = ? AND enabled = 1)", caProviderID).Scan(&providerOK); err != nil {
 			return fmt.Errorf("校验 CA 提供商失败: %v", err)
 		}
 	}
 	if !providerOK {
-		return errors.New("指定的 CA 提供商不存在或已禁用")
+		err := errors.New("指定的 CA 提供商不存在或已禁用")
+		if providerFromLive {
+			return &acmeLiveRefUnresolvedError{inner: err}
+		}
+		return err
 	}
 	return nil
 }
+
+// acmeLiveRefUnresolvedError 标记「备份不含该 cert 表、按 live 解析」失败的
+// ACME 引用错误（CERT41-1）。导入/预览在「导规则不导 cert 配置且备份从未
+// 携带 cert 表」方向经 errors.As 识别并降级为悬挂警告（与 R39-14 对称，
+// 不阻断）；其余方向维持整包 400。错误文案与硬拒绝口径一致。
+type acmeLiveRefUnresolvedError struct{ inner error }
+
+func (e *acmeLiveRefUnresolvedError) Error() string { return e.inner.Error() }
+func (e *acmeLiveRefUnresolvedError) Unwrap() error { return e.inner }
 
 // validateV2BackupAdminTLS 按 UpdateAdminTLS 同口径校验备份全局配置区的
 // admin_tls_*：缺省键合并当前库内值（与 UpdateAdminTLS 的合并语义一致），
@@ -1747,9 +1793,10 @@ func clampBackupAuditRetentionMonths(value any) (any, bool) {
 }
 
 // clampBackupCaddyLogSizeMB 导入侧 caddy_log_size_mb 钳制(SYS37-2,第 37 轮
-// 审计 P3,R56#3 同族):与写侧(caddy.go:305-308,≥100)同边界——低于 100
-// 钳到 100;非整数形态按 schema 缺省 100 归一(db.go:369)。越界原样落库会
-// 锁死基础设置保存(写侧 400),与 jwt_expire/audit_retention 钳制对称。
+// 审计 P3,R56#3 同族):与写侧(caddy.go UpdateConfig,100-10240)同边界——低于
+// 100 钳到 100、高于 10240 钳到 10240(SYS41-7 补上限,与 UI :max 对齐);非整数
+// 形态按 schema 缺省 100 归一(db.go:369)。越界原样落库会锁死基础设置保存
+// (写侧 400),与 jwt_expire/audit_retention 钳制对称。
 func clampBackupCaddyLogSizeMB(value any) (any, bool) {
 	mb, ok := backupInteger(value)
 	if !ok {
@@ -1757,6 +1804,9 @@ func clampBackupCaddyLogSizeMB(value any) (any, bool) {
 	}
 	if mb < 100 {
 		return 100, true
+	}
+	if mb > 10240 {
+		return 10240, true
 	}
 	return value, false
 }
@@ -1787,7 +1837,7 @@ var errUnknownBackupSection = errors.New("未知的配置分类")
 // buildLbbakExport 生产 lbbak 备份净荷(纯逻辑:无 HTTP、无审计)。sel 为空
 // 表示全部分类;返回净荷字节、实际导出分类(空选择归一为全部 3 类)、各表
 // 行数摘要(与导入审计同文案)与是否包含规则库文件本体。HTTP 导出端点与
-// 自动/手动备份执行器(autobackup_runner.go)共用。
+// 自动/手动备份执行器(autobackup.go)共用。
 func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload []byte, exportedSections []string, countsSummary string, includesWafFiles bool, err error) {
 	sel = normalizeBackupSectionKeys(sel)
 	sectionTables, includeGlobal, ok := configBackupSectionTables(sel)
@@ -1906,6 +1956,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 
 // importConfigBackupCore 携带导入全量逻辑,HTTP 导入端点与自动备份还原端点
 // (autobackup.go)共用。48MB 上限由 HTTP 调用方 limitConfigImportBody 把守。
+// PERF41-1(第 41 轮审计 P5,记录裁定):内存峰值评估——lbbak 解压(gzip
+// 放大,条目上限在读入内存前拦截)+config.json 展开为 map+checksum 重
+// marshal,峰值约为上限的 ~10×(≈500-600MB 瞬态);容器内存 limit 建议 ≥1GB。
+// 导入为管理员手动低频操作,当前不加并发互斥(记录裁定,不再重复评估)。
 // dataOK=false 表示请求体读取失败,body 保持原样(错误透传给 ShouldBindJSON,
 // 保持原 413/400 判定);filename 非空时进入审计来源(还原路径);action 为
 // 审计动作与结果文案前缀(「导入」/「还原」)。
@@ -1962,6 +2016,69 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 		// 显式记审计警告以便追溯（预览端点只读不落审计，避免 UI 选择文件即刷屏）。
 		recordAudit(c, action+"警告", "配置备份", "使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份")
 	}
+	// CERT41-1(第 41 轮审计 P2,用户裁定):sections 过滤前置到全部形态/任务
+	// 校验之前——过滤后 backup.Tables 只剩实际导入表:
+	// ①未选分类的坏行不再误拒整包(此前 validateV2BackupRules 等对全量表执行);
+	// ②validateBackupACMEReferenceIDs「备份有表按备份行、缺表按 live」自动等于
+	//   「过滤后导入表∪live 保留表」正确口径——备份带 certificate_configs 但用户
+	//   未勾系统数据时,不再按将被丢弃的备份行误放行;
+	// ③全局配置区同理:仅 includeGlobal 时参与校验/钳制(未选系统数据时
+	//   backup.Config=nil,validateV2BackupAdminTLS/钳制链自然短路)。
+	// 校验和仍验整包(上方 validateV2Backup),未选分类的表与全局配置保持现状。
+	// (导入/预览双路径同序,见 ValidateConfigImport。)
+	// backupCarriedCertTables:备份是否原本携带 cert 表——下方反向悬挂降级
+	// 仅对「从未携带」开放;携带却被分类丢弃时维持硬拒绝(误放行关闭)。
+	backupCarriedCertTables := false
+	if _, ok := backup.Tables["certificate_configs"]; ok {
+		backupCarriedCertTables = true
+	}
+	if _, ok := backup.Tables["ca_providers"]; ok {
+		backupCarriedCertTables = true
+	}
+	sectionTables, includeGlobal, sectionsOK := configBackupSectionTables(backup.Sections)
+	if !sectionsOK {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
+		return
+	}
+	for table := range backup.Tables {
+		if !sectionTables[table] {
+			delete(backup.Tables, table)
+		}
+	}
+	if !includeGlobal {
+		backup.Config = nil
+	}
+	// 规则库数据库分类要求文件本体(lbbak):分类选择流(显式携带 sections)
+	// 中无文件却勾选该分类 → 剔除其表并警告,防记录与文件分叉(2026-09-18
+	// 用户裁定)。旧式全量 JSON 导入(无 sections 字段)保持原语义不动。
+	// 规则库版本记录与文件必须同批落库:纯 JSON 备份(非 lbbak)不可能携带
+	// 数据文件,版本表恒跳过——否则记录与本地文件分叉(2026-09-18 用户裁定:
+	// 只有元数据=该类配置不应导入)。lbbak 无 waf 条目同理。
+	// CERT41-1:与过滤的相对顺序固定为「先剔除未选表,再按文件缺失跳过版本表」。
+	wafMetadataSkipped := false
+	wafCRSMetadataSkipped := false
+	wafXdbMetadataSkipped := false
+	if sectionTables["security_crs_version"] {
+		crsMissing := lbbakFiles == nil || lbbakFiles.CRSTarGz == nil
+		xdbMissing := lbbakFiles == nil || lbbakFiles.Xdb == nil
+		switch {
+		case crsMissing && xdbMissing:
+			for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
+				delete(backup.Tables, t)
+			}
+			wafMetadataSkipped = true
+			recordAudit(c, action+"警告", "配置备份", warningWafMetadataSkipped)
+		case crsMissing:
+			// BE-C1-10:单侧文件缺失→仅跳过对应版本表(记录与文件同批落地)。
+			delete(backup.Tables, "security_crs_version")
+			wafCRSMetadataSkipped = true
+			recordAudit(c, action+"警告", "配置备份", warningWafCRSMetadataSkipped)
+		case xdbMissing:
+			delete(backup.Tables, "security_ip2region_version")
+			wafXdbMetadataSkipped = true
+			recordAudit(c, action+"警告", "配置备份", warningWafXdbMetadataSkipped)
+		}
+	}
 	// R38 C-3: 空域名行软跳过须先于逐行校验（validateV2BackupRules）——否则
 	// 空域名+非法端口行会先行整包 400，与「空域名规则一律软跳过」语义不符；
 	// 校验和/结构校验已在 validateV2Backup 内完成，不受跳过影响。
@@ -1985,8 +2102,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	// R55 C-1：TLS 形态校验与任务不变量同在冲突置禁用之后执行——将自动禁用
 	// 的规则不投入运行，不参与运行态形态/不变量校验（导入/预览双路径同序，
 	// 见 ValidateConfigImport）。
-	if err := validateV2BackupTLSShape(backup.Tables); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+	// CERT41-1 反向悬挂预检:「导规则不导 cert 配置」且备份从未携带 cert 表时,
+	// live 配置被保留,启用 ACME 规则引用 live 缺失降级为悬挂警告(与下方
+	// R39-14 预检对称,不阻断,进 responseWarnings+审计);备份携带 cert 表却被
+	// 分类过滤丢弃时维持硬拒绝(误放行关闭)。
+	softLiveACMERefs := sectionTables["lb_rules"] &&
+		!sectionTables["certificate_configs"] && !sectionTables["ca_providers"] &&
+		!backupCarriedCertTables
+	acmeDanglingImported, tlsShapeErr := validateV2BackupTLSShapeSoft(backup.Tables, softLiveACMERefs)
+	if tlsShapeErr != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: tlsShapeErr.Error()})
 		return
 	}
 	// R54 新发现2：任务不变量在冲突置禁用之后执行——将自动禁用的规则不投入
@@ -1997,6 +2122,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	}
 	// R55 C-4：写全局配置前按 UpdateAdminTLS 同口径校验 admin_tls_*——坏配置
 	// 会使下次启动进程退出（崩溃循环），整包 400 保持零写入语义。
+	// CERT41-1:仅 includeGlobal 时全局配置区参与校验/钳制(未选系统数据时
+	// backup.Config 已置 nil,本校验与下方钳制链自然短路)。
 	if err := validateV2BackupAdminTLS(backup.Config); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -2072,51 +2199,6 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	}
 	ctx := c.Request.Context()
 	importUsername := c.GetString("username")
-	// v2.3.0 分类导入:校验和已验整包(上方 validateV2Backup),此处按所选
-	// 分类过滤实际覆盖面——未选分类的表与全局配置保持现状。
-	sectionTables, includeGlobal, sectionsOK := configBackupSectionTables(backup.Sections)
-	if !sectionsOK {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
-		return
-	}
-	// 规则库数据库分类要求文件本体(lbbak):分类选择流(显式携带 sections)
-	// 中无文件却勾选该分类 → 剔除其表并警告,防记录与文件分叉(2026-09-18
-	// 用户裁定)。旧式全量 JSON 导入(无 sections 字段)保持原语义不动。
-	// 规则库版本记录与文件必须同批落库:纯 JSON 备份(非 lbbak)不可能携带
-	// 数据文件,版本表恒跳过——否则记录与本地文件分叉(2026-09-18 用户裁定:
-	// 只有元数据=该类配置不应导入)。lbbak 无 waf 条目同理。
-	wafMetadataSkipped := false
-	wafCRSMetadataSkipped := false
-	wafXdbMetadataSkipped := false
-	if sectionTables["security_crs_version"] {
-		crsMissing := lbbakFiles == nil || lbbakFiles.CRSTarGz == nil
-		xdbMissing := lbbakFiles == nil || lbbakFiles.Xdb == nil
-		switch {
-		case crsMissing && xdbMissing:
-			for _, t := range []string{"security_crs_version", "security_ip2region_version"} {
-				delete(backup.Tables, t)
-			}
-			wafMetadataSkipped = true
-			recordAudit(c, action+"警告", "配置备份", warningWafMetadataSkipped)
-		case crsMissing:
-			// BE-C1-10:单侧文件缺失→仅跳过对应版本表(记录与文件同批落地)。
-			delete(backup.Tables, "security_crs_version")
-			wafCRSMetadataSkipped = true
-			recordAudit(c, action+"警告", "配置备份", warningWafCRSMetadataSkipped)
-		case xdbMissing:
-			delete(backup.Tables, "security_ip2region_version")
-			wafXdbMetadataSkipped = true
-			recordAudit(c, action+"警告", "配置备份", warningWafXdbMetadataSkipped)
-		}
-	}
-	for table := range backup.Tables {
-		if !sectionTables[table] {
-			delete(backup.Tables, table)
-		}
-	}
-	if !includeGlobal {
-		backup.Config = nil
-	}
 	// 2026-09-18 用户裁定:「备份不含操作者账户」不再硬阻断——①分类导入可
 	// 能未选系统数据(操作者仍在);②即使勾了系统数据导致操作者被替换,也尊
 	// 重用户选择。降级为响应 warning+审计警告,导入照常(操作者 JWT 由下方
@@ -2150,6 +2232,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	}
 	if acmeDanglingRules > 0 {
 		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
+	}
+	// CERT41-1 反向:导规则不导 cert 配置且备份从未携带 cert 表时,上方 TLS
+	// 形态软校验已计数悬挂引用——降级警告进审计(与 R39-14 同格,不阻断)。
+	if acmeDanglingImported > 0 {
+		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂(引用未随备份导入且现有配置缺失)——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingImported))
 	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
@@ -2337,6 +2424,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	affectedRuleIDs := append([]string(nil), session.existingRuleIDs...)
 	pendingCertificates := make([]importCertificate, 0)
+	// CERT41-4:手动证书材料的链完整性/域名覆盖警告(不阻断)——配对合法性
+	// 仍由 materializeImportCertificates 硬校验;警告并入 responseWarnings/审计。
+	importCertWarnings := make([]string, 0)
 	for _, row := range backup.Tables["lb_rules"] {
 		if caddyID, ok := row["caddy_id"].(string); ok && caddyID != "" {
 			affectedRuleIDs = append(affectedRuleIDs, caddyID)
@@ -2344,6 +2434,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 			keyPEM, _ := row["tls_key"].(string)
 			if certPEM != "" && keyPEM != "" {
 				pendingCertificates = append(pendingCertificates, importCertificate{ruleID: caddyID, certPEM: certPEM, keyPEM: keyPEM})
+				for _, warning := range tlsCertificateWarnings(certPEM, keyPEM, backupString(row["domain"])) {
+					importCertWarnings = append(importCertWarnings, fmt.Sprintf("规则 %s（%s）：%s", backupString(row["name"]), caddyID, warning))
+				}
 			}
 		}
 	}
@@ -2426,6 +2519,10 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		// N+13 H2-F3：列表现含空域名规则与空内容拦截页两类跳过，标签泛化。
 		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings, "；"))
 	}
+	if len(importCertWarnings) > 0 {
+		// CERT41-4:证书链/域名警告随成功审计留痕(不阻断)。
+		auditParts = append(auditParts, "证书警告："+strings.Join(importCertWarnings, "；"))
+	}
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
@@ -2463,6 +2560,15 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if acmeDanglingRules > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
 	}
+	// CERT41-1 反向悬挂警告(与上方审计同文案族;与 acmeDanglingRules 互斥,
+	// 方向不同:此处为导入规则引用 live 缺失)。
+	if acmeDanglingImported > 0 {
+		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", acmeDanglingImported))
+	}
+	// CERT41-4:证书链/域名警告并入响应(行内容类警告,不阻断)。
+	if len(importCertWarnings) > 0 {
+		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings...)
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置"+action+"成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 
@@ -2479,6 +2585,10 @@ func importCountsDetail(tables map[string][]map[string]any) string {
 		{"ca_providers", "CA %d 个"},
 		{"certificate_configs", "DNS %d 个"},
 		{"cert_jobs", "任务 %d 个"},
+		// R41 追加(用户生产观察):安全域用户内容表补入汇总(绑定表为派生数据不加)。
+		{"security_policies", "安全策略 %d 条"},
+		{"security_custom_rules", "自定义规则 %d 条"},
+		{"security_block_pages", "拦截页 %d 个"},
 		{"security_ip_lists", "IP 地址列表 %d 个"},
 		{"security_crs_version", "CRS 版本 %d 条"},
 		{"security_ip2region_version", "IP2Region 版本 %d 条"},

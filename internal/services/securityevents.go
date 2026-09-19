@@ -127,8 +127,10 @@ func securityEventsExtractAnomalyScore(messages []securityEventsAuditMessage) in
 }
 
 // errSecurityEventsEmptyID 标记无 transaction_id 的事务：去重唯一索引是部分索引
-// （WHERE transaction_id != ”），空 id 没有幂等键，重试路径（tick 失败重放、
-// 轮转补采与 tick 重叠）会重复插入，因此视为解析失败跳过。
+// （谓词排除空 transaction_id，DDL 见 db/metrics.go 的 idx_security_events_transaction；
+// gofmt 会把 doc 注释内的空串字面量两单引号改写为全角右引号，故以文字代字面量）。
+// 空 id 没有幂等键，重试路径（tick 失败重放、轮转补采与 tick 重叠）会重复插入，
+// 因此视为解析失败跳过。
 var errSecurityEventsEmptyID = errors.New("transaction has no id")
 
 // errSecurityEventsStalled 标记「残缺文档等待补写」的停等状态（SECLB35-1）：

@@ -148,6 +148,12 @@ func sanitizeRuleID(value string) string {
 }
 
 func globalConfigInt(column string, fallback int64) int64 {
+	// nil 守卫(第 41 轮 APIMCP41-2 集成事故):guardConfiguredJSONBody 经本函数
+	// 读配置,无 DB 脚手架的测试/调用形态下 db.DB 为 nil,QueryRow 直接 panic
+	// ——nil 与读失败同口径回退默认值。
+	if db.DB == nil {
+		return fallback
+	}
 	var v int64
 	if err := db.DB.QueryRow("SELECT COALESCE("+column+",?) FROM global_config WHERE id=1", fallback).Scan(&v); err != nil {
 		return fallback
@@ -203,16 +209,17 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		dataDir = h.cfg.DataDir
 	}
 
-	// S-7（2026-09-06 裁定）：指标历史保留期与操作/运行/安全事件同用「日志保留」
-	//（audit_retention_months）——提示文案补齐指标历史，三链对齐。
+	// S-7（2026-09-06 裁定）已被 2026-09-15 裁定部分覆盖:指标历史固定保留
+	// 最近 7 天(services/services.go cleanupHistory),不再复用「日志保留」
+	// ——ConfigSource 类目清单不得再含指标历史(SYS41-3,第 41 轮)。
 	// 第 37 轮(用户裁定文案精简):可见文案短化——类目清单移 ConfigSource
 	// (tooltip 展示),行内只留「每日清理 · 保留 N 个月」。
 	retentionNote := "每日清理 · 保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
 	caddyLimit := sizeLimitMB("caddy_log_size_mb", 100)
 
 	infos := []LogStorageInfo{
-		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件/指标历史）"},
-		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件/指标历史）"},
+		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
+		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},

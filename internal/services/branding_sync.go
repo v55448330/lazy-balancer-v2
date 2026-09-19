@@ -43,14 +43,35 @@ func RefreshBrandingMirror(dataDir string) (changed bool, err error) {
 	return n > 0, nil
 }
 
+// emptyBrandingTemplate 与 handlers.EnsureBrandingFile 缺失再生的全空模板
+// 逐字节一致(同 map 同 MarshalIndent 参数,键序按字典序稳定)。模板形态的
+// 属主在 handlers 侧(启动期 main.go 调用 EnsureBrandingFile),services
+// 反向 import 成环无法复用,此处复刻并锚定——字段增减须双侧同步。
+var emptyBrandingTemplate = func() string {
+	out, _ := json.MarshalIndent(map[string]string{
+		"app_name":     "",
+		"footer_text":  "",
+		"landing_text": "",
+		"version":      "",
+	}, "", "  ")
+	return string(out)
+}()
+
 // applySnapshotBranding 在 global_config 节应用后(事务已提交、Caddy 重载前)
 // 把快照携带的 branding.json 写入本地文件并注入 landing 渲染。有差异才写
 // (幂等,零 mtime 扰动);内存快照(若有)由 handlers 侧 loadBrandingConfig
 // 的 stat 检测在下一次访问时自动重载;landing 立即注入保证随后的 Caddy
-// 重载渲染新文案。BrandingJSON 为空(开关关闭/旧主节点)不动本地文件。
+// 重载渲染新文案。BrandingJSON 为空=主节点无品牌文件(三分类合并后 users 节
+// 恒同步+schema v3 强制,旧语义「开关关闭/旧主节点」消失,CL41-2):重置为
+// 全空模板收敛默认品牌——不直接删除,loadBrandingConfig 对缺失文件保内存
+// 上一份旧值(2026-09-11 半截写窗口裁定),删除会让从端 /branding 长期陈旧。
 func applySnapshotBranding(dataDir, content string) {
-	if content == "" || dataDir == "" {
+	if dataDir == "" {
 		return
+	}
+	reset := content == ""
+	if reset {
+		content = emptyBrandingTemplate
 	}
 	path := filepath.Join(dataDir, "branding.json")
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
@@ -64,7 +85,11 @@ func applySnapshotBranding(dataDir, content string) {
 		return
 	}
 	injectLandingFromBranding(content)
-	RecordAuditLog("system", "同步", "集群同步", "品牌配置已同步生效", "")
+	if reset {
+		RecordAuditLog("system", "同步", "集群同步", "品牌配置已重置为默认（主节点无品牌文件）", "")
+	} else {
+		RecordAuditLog("system", "同步", "集群同步", "品牌配置已同步生效", "")
+	}
 }
 
 // injectLandingFromBranding 从 branding JSON 原文提取 landing_text 并注入

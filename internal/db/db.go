@@ -402,8 +402,9 @@ func createTables() error {
 		registration_id INTEGER DEFAULT 0,
 		registration_secret TEXT DEFAULT '',
 		sync_fingerprint TEXT DEFAULT '',
-		-- 自动备份设置(v2.3.x):调度器仅主节点运行,列随 global_config 同步
-		-- 到从节点(从节点不消费);last_run 为节点本地运行态。
+	-- 自动备份设置(v2.3.x):调度器仅主节点运行;六设置列随 users 节同步到
+	-- 从节点(CL41-1,提升为主节点后直接生效,从端本地只读态不消费);
+	-- last_run 为节点本地运行态——不同步、不入 cluster_version 触发器 OF 列表。
 		auto_backup_enabled INTEGER DEFAULT 0,
 		auto_backup_frequency TEXT DEFAULT 'daily',
 		auto_backup_time TEXT DEFAULT '03:00',

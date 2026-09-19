@@ -789,3 +789,49 @@ func TestClusterVersionTrigger_loginHotPathNoBump(t *testing.T) {
 		t.Fatalf("unlock should bump to 2, got %d", got)
 	}
 }
+
+// CL41-1(第 41 轮审计):自动备份六设置列入 global_config 触发器 OF 列表——
+// 主端保存设置 bump cluster_version,从端经 304 失效收敛;auto_backup_last_run
+// 为节点本地运行态(调度器每次备份推进),必须排除在 OF 列表外,否则每次备份
+// 引发全集群快照重放。
+func TestClusterVersionTrigger_autoBackupSettingsBumpLastRunExcluded(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	for i, stmt := range []string{
+		"UPDATE global_config SET auto_backup_enabled=1 WHERE id=1",
+		"UPDATE global_config SET auto_backup_frequency='weekly' WHERE id=1",
+		"UPDATE global_config SET auto_backup_time='04:30' WHERE id=1",
+		"UPDATE global_config SET auto_backup_day=3 WHERE id=1",
+		"UPDATE global_config SET auto_backup_keep=5 WHERE id=1",
+		`UPDATE global_config SET auto_backup_sections='["users"]' WHERE id=1`,
+	} {
+		if _, err := database.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+		if got := clusterVersion(t, database); got != i+1 {
+			t.Fatalf("%q should bump cluster_version to %d, got %d", stmt, i+1, got)
+		}
+	}
+	// last_run 推进不得 bump(调度器每次备份都写)
+	if _, err := database.Exec("UPDATE global_config SET auto_backup_last_run='2026-09-19T03:00:00+08:00' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 6 {
+		t.Fatalf("auto_backup_last_run update must not bump, got %d", got)
+	}
+	// 从端写入不 bump(WHEN is_master 守卫)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET auto_backup_keep=9 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 6 {
+		t.Fatalf("slave write must not bump, got %d", got)
+	}
+}

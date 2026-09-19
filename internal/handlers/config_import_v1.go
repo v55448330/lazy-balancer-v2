@@ -560,9 +560,47 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "备份文件格式不正确: " + err.Error()}})
 			return
 		}
+		// CERT41-1:与 ImportConfigBackup 同序——lbbak 的分类选择经 ?sections=
+		// query 传输(JSON 备份以体内 sections 字段为准)。
+		if lbbakPayloadFromCtx(c) != nil {
+			if sel := parseSectionsParam(c.Query("sections")); len(sel) > 0 {
+				backup.Sections = sel
+			}
+		}
+		// CERT41-1:validateV2Backup 会回填缺失表(校验均匀性),快照真实携带
+		// 表集——缺席还原与反向悬挂降级口径都依赖「备份原本是否携带」。
+		exportedTables := map[string]bool{}
+		for table := range backup.Tables {
+			exportedTables[table] = true
+		}
+		backupCarriedCertTables := exportedTables["certificate_configs"] || exportedTables["ca_providers"]
 		if _, err := validateV2Backup(backup); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
+		}
+		// CERT41-1:与 ImportConfigBackup 同序——还原「缺席」语义,回填表不得
+		// 被当作「清空本地表」参与校验/汇总。
+		for table := range backup.Tables {
+			if !exportedTables[table] {
+				delete(backup.Tables, table)
+			}
+		}
+		// CERT41-1:与 ImportConfigBackup 同序——sections 过滤前置到全部形态/
+		// 任务校验之前:①未选分类的坏行预览不误报;②ACME 引用「备份有表按
+		// 备份行、缺表按 live」自动等于「过滤后导入表∪live 保留表」正确口径;
+		// 未选系统数据时全局配置区不参与校验。
+		sectionTables, includeGlobal, sectionsOK := configBackupSectionTables(backup.Sections)
+		if !sectionsOK {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "未知的配置分类"}})
+			return
+		}
+		for table := range backup.Tables {
+			if !sectionTables[table] {
+				delete(backup.Tables, table)
+			}
+		}
+		if !includeGlobal {
+			backup.Config = nil
 		}
 		skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
 		// N+13 H2-F3：与 ImportConfigBackup 同序——空内容拦截页软跳过也须
@@ -588,8 +626,14 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 		// R55 C-1：与 ImportConfigBackup 同序——TLS 形态校验在冲突置禁用之后
 		// 执行，预览结果与实际导入一致（冲突可自愈备份不得在预览误报不可导入）。
-		if err := validateV2BackupTLSShape(backup.Tables); err != nil {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+		// CERT41-1:与 ImportConfigBackup 同序——「导规则不导 cert 配置且备份
+		// 从未携带 cert 表」方向按 live 解析失败的 ACME 引用降级为悬挂警告。
+		softLiveACMERefs := sectionTables["lb_rules"] &&
+			!sectionTables["certificate_configs"] && !sectionTables["ca_providers"] &&
+			!backupCarriedCertTables
+		acmeDanglingImported, tlsShapeErr := validateV2BackupTLSShapeSoft(backup.Tables, softLiveACMERefs)
+		if tlsShapeErr != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: tlsShapeErr.Error()}})
 			return
 		}
 		// R54 新发现2：与 ImportConfigBackup 同序——任务不变量在冲突置禁用之后
@@ -606,10 +650,16 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		}
 		// 2026-09-18 用户裁定:操作者缺席不再阻断——降级为预览 warning(分类
 		// 未选系统数据时操作者不受影响;选了也尊重用户选择)。
+		// CERT41-1:同序后 sections 已知——未选系统数据/备份 users 缺席不再误告
+		// (与导入侧 A40-2-F3 口径一致)。
 		validateWarnings := skipWarnings[:0:0]
 		validateWarnings = append(validateWarnings, skipWarnings...)
-		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
+		if importUsername := c.GetString("username"); importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
 			validateWarnings = append(validateWarnings, "备份不包含当前操作账户——若导入时勾选“系统数据”，导入后请使用备份内的管理员账户登录")
+		}
+		// CERT41-1:反向悬挂降级警告进预览(与导入 responseWarnings 同文案)。
+		if acmeDanglingImported > 0 {
+			validateWarnings = append(validateWarnings, fmt.Sprintf("导入后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", acmeDanglingImported))
 		}
 		hasWaf := false
 		if payload := lbbakPayloadFromCtx(c); payload != nil {

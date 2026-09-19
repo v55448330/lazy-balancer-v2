@@ -198,7 +198,7 @@
           <!-- 操作区收敛为两行：标题 + 「radio 选项 … 确认按钮」同一行并排
                （按钮 margin-left:auto 贴右，与「加入地址列表」行同款 flex 模式） -->
           <div class="crs-action-row crs-exclude-row">
-            <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
+            <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled" aria-label="快捷排除范围">
               <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
               <el-radio value="all">所属策略不限 IP</el-radio>
             </el-radio-group>

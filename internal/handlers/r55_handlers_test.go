@@ -445,6 +445,35 @@ func TestUpdateConfig_rejects_audit_retention_months_out_of_range(t *testing.T) 
 	}
 }
 
+// SYS41-7(第 41 轮):caddy_log_size_mb 写侧补上限——>10240 必须 400,边界 10240 放行
+// (此前仅 ≥100 下限,天文值可落库使轮转实效;上限与 UI :max=10240 对齐)。
+func TestUpdateConfig_rejects_caddy_log_size_mb_above_10240(t *testing.T) {
+	// Given
+	handler := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/config", handler.UpdateConfig)
+
+	for _, body := range []string{
+		`{"source":"basic","caddy_log_size_mb":10241}`,
+		`{"source":"basic","caddy_log_size_mb":99999999}`,
+	} {
+		// When
+		request := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+
+		// Then
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d, want 400", body, response.Code)
+		}
+		if !strings.Contains(response.Body.String(), "100-10240") {
+			t.Fatalf("body=%s, want 范围提示（100-10240），实际: %s", body, response.Body.String())
+		}
+	}
+}
+
 // R55 F3 对照组：边界值 1 与 12 必须放行。
 func TestUpdateConfig_accepts_audit_retention_months_bounds(t *testing.T) {
 	for _, months := range []int{1, 12} {

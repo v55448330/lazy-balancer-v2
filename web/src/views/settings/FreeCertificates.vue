@@ -15,11 +15,11 @@
           <el-text type="info" size="small" class="tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</el-text>
         </el-form-item>
         <el-form-item label="过期提醒天数">
-          <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
+          <el-input-number v-model="global.cert_expiry_days" :min="1" :max="365" />
         </el-form-item>
         <el-form-item label="自动续签时间">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="90" />
-          <el-text type="info" size="small" class="tip-inline">证书到期前多少天自动尝试重签</el-text>
+          <el-text type="info" size="small" class="tip-inline">证书到期前多少天自动尝试重签；0 = 默认 30 天（仅 API 直写/备份导入可达，本控件下限为 1）</el-text>
         </el-form-item>
         <el-form-item label="续签重试次数">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" />

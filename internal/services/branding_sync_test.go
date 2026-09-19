@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,6 +107,63 @@ func TestApplySnapshot_writesBrandingFileAndLanding(t *testing.T) {
 	if !st2.ModTime().Equal(st.ModTime()) {
 		t.Error("unchanged branding must not rewrite file (mtime churned)")
 	}
+}
+
+// CL41-2(第 41 轮):三分类合并后 users 节恒同步+schema v3 强制,BrandingJSON
+// 空串可判定为「主端无品牌文件」(旧语义「开关关闭/旧主节点」随三分类消失)。
+// 从端必须收敛默认品牌:本地文件重置为全空模板(与 handlers.EnsureBrandingFile
+// 缺失再生形态一致——其唯一调用点在启动期 main.go,运行期由同步代行);不直接
+// 删除——loadBrandingConfig 对缺失文件保内存上一份旧值(2026-09-11 半截写窗口
+// 裁定),删除会让从端 /branding 长期陈旧。landing 同步重置默认。
+func TestApplySnapshotBranding_emptyContentResetsToDefaultTemplate(t *testing.T) {
+	dataDir := t.TempDir()
+	defer SetDefaultLandingBody(DefaultLandingText)
+	path := filepath.Join(dataDir, "branding.json")
+	custom := `{"app_name":"我的网关","landing_text":"欢迎使用"}`
+	if err := os.WriteFile(path, []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+	injectLandingFromBranding(custom) // 模拟此前同步已注入的自定义 landing
+
+	applySnapshotBranding(dataDir, "")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reset must leave a template file: %v", err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("reset file must stay valid JSON: %v", err)
+	}
+	for _, k := range []string{"app_name", "footer_text", "landing_text", "version"} {
+		v, ok := fields[k]
+		if !ok {
+			t.Fatalf("template missing field %s (EnsureBrandingFile 同形态)", k)
+		}
+		if v != "" {
+			t.Fatalf("template field %s=%q, want empty (default branding)", k, v)
+		}
+	}
+	if got := DefaultLandingBody(); got != DefaultLandingText {
+		t.Errorf("landing=%q, want reset to default", got)
+	}
+
+	// 幂等:已是模板再次应用零重写(mtime 不动)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applySnapshotBranding(dataDir, "")
+	st2, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st2.ModTime().Equal(st.ModTime()) {
+		t.Error("template reset must be idempotent (mtime churned)")
+	}
+
+	// dataDir 守卫保留:空目录不动作不 panic
+	applySnapshotBranding("", "")
 }
 
 // 三分类合并勘误(2026-09-19 生产实证):users 节哈希并入 basic_settings

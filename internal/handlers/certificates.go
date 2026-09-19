@@ -127,6 +127,9 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 
 	var req models.CreateCertificateConfigRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
@@ -180,6 +183,9 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	}
 
 	var req models.UpdateCertificateConfigRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
@@ -380,6 +386,9 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		DNSProvider    string            `json:"dns_provider"`
 		DNSCredentials map[string]string `json:"dns_credentials"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
@@ -482,6 +491,9 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		Domain  string `json:"domain"`
 		// C-19（2026-09-06 裁定）：批量全量重签须显式 {"all":true} 确认（含已签发任务、消耗 CA 配额）；caddy_id 与 all 同传以 caddy_id 为准
 		All bool `json:"all"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	bindErr := c.ShouldBindJSON(&req)
 	scope := "范围：全部 ACME 规则"

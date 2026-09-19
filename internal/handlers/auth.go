@@ -342,6 +342,9 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	userIDInt := getContextUserIDInt(c)
 
 	var req UpdateCurrentUserRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return

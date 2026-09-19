@@ -269,6 +269,9 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	var req models.CreateIPListRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -326,6 +329,9 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 
 	id := c.Param("id")
 	var req models.UpdateIPListRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
@@ -448,7 +454,11 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 id"})
 		return
 	}
-	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies")
+	// SEC41-4（第 41 轮审计）：仅 enabled=1 策略的引用阻止删除，与
+	// DeleteSecurityCustomRule/DeleteSecurityBlockPage 同口径——禁用策略的
+	// 悬空引用由 R63 B-N1 重启用门兜底（重启用按有效形态过
+	// validateIPListRefsExistence，禁用期间被删的列表不得静默激活）。
+	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE enabled=1")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -483,7 +493,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		return
 	}
 	if len(referencingPolicyIDs) > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个安全策略引用，请先解除引用", len(referencingPolicyIDs))})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个启用的安全策略引用，请先解除引用", len(referencingPolicyIDs))})
 		return
 	}
 	// 快照名称与条目数须在 DELETE 前取（同事务内删除后行已不可见）
@@ -513,6 +523,9 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 
 	id := c.Param("id")
 	var req models.AddIPToListRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return

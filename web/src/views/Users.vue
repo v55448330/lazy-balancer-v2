@@ -144,7 +144,7 @@
             <el-button v-if="row.auth_provider !== 'oidc'" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
+            <el-button v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" type="success" link size="small" :disabled="nodeModeSlave || submitting" @click="openMfaBinding(row)">
               启用 MFA
             </el-button>
             <el-button v-if="row.mfa_enabled && row.auth_provider !== 'oidc' && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
@@ -225,7 +225,7 @@
     </el-dialog>
     <!-- 统一确认/输入弹框:重置密码 / 修改密码 / 重置 MFA(替代 ElMessageBox,
          与全站 icon+标题+副标题弹框语言一致)。 -->
-    <el-dialog v-model="lbDialog.visible" width="min(500px, 92vw)" :close-on-click-modal="false" :show-close="!lbDialog.busy" @update:model-value="!lbDialog.busy && lbCancel()">
+    <el-dialog v-model="lbDialog.visible" width="min(500px, 92vw)" :close-on-click-modal="false" @update:model-value="lbCancel()">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon" :class="`dialog-header__icon--${lbDialog.spec?.tone || 'primary'}`">
@@ -255,7 +255,7 @@
         </div>
       </div>
       <template #footer>
-        <el-button :disabled="lbDialog.busy" @click="lbCancel">取消</el-button>
+        <el-button @click="lbCancel">取消</el-button>
         <el-button type="primary" @click="lbConfirm">{{ lbDialog.spec?.confirmText || '确定' }}</el-button>
       </template>
     </el-dialog>
@@ -473,7 +473,6 @@ type LbDialogSpec = {
 }
 const lbDialog = reactive({
   visible: false,
-  busy: false,
   spec: null as LbDialogSpec | null,
   newPwd: '',
   newPwd2: '',
@@ -489,7 +488,6 @@ function lbOpen(spec: LbDialogSpec): Promise<{ ok: boolean; newPwd?: string; cod
   return new Promise((resolve) => { lbDialog.resolve = resolve })
 }
 function lbCancel() {
-  if (lbDialog.busy) return
   lbDialog.visible = false
   lbDialog.resolve?.({ ok: false })
   lbDialog.resolve = null
@@ -709,35 +707,6 @@ onMounted(() => {
 .lb-fields { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
 .lb-field__label { font-size: 13px; color: var(--text-regular, #374151); margin-bottom: 6px; }
 .oidc-entry-inline { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-
-.page { max-width: 1500px; margin: 0 auto; }
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.header-left { flex: 1; }
-
-.page-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: #111827;
-  margin: 0;
-}
-
-.title-icon { color: #3b82f6; font-size: 20px; }
-
-.page-desc {
-  font-size: 13px;
-  color: #6b7280;
-  margin: 4px 0 0 28px;
-}
 
 .form-card { margin-bottom: 20px; }
 

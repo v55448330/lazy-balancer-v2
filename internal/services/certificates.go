@@ -29,8 +29,52 @@ type CertificateService struct {
 	timersPaused        bool
 	stopping            bool
 	retryDeployment     func(context.Context, int) error
+	// expiryAlertGate 手动证书过期提醒的当日去重门(CERT41-3)——同一证书
+	// 同日同档位只告警一次;nil 时放行不抑制(测试直构防御)。
+	expiryAlertGate *manualCertExpiryAlertGate
 	// cancelWaitTimeout 上限取消部署重试时的在途等待；0 走默认 30s。测试可覆盖。
 	cancelWaitTimeout time.Duration
+}
+
+// CERT41-3:手动证书过期提醒档位(数值即深浅,深档可覆盖浅档的当日记录)。
+const (
+	manualCertExpiryLevelExpiringSoon = 1 // 临期(warn)
+	manualCertExpiryLevelExpired      = 2 // 已过期(critical)
+)
+
+// manualCertExpiryAlertGate 按「证书 ID + 日期」记忆进程内已告警档位:
+// 同一证书同一天同档/浅档不重复告警(10min 扫描不再刷屏);档位加深
+// (临期→已过期)当日可再告(新事件);跨日重新告警。进程内状态,重启后
+// 当日重告一次(可接受,胜过持久化复杂度)。
+type manualCertExpiryAlertGate struct {
+	mu   sync.Mutex
+	seen map[string]manualCertExpiryAlertRecord
+}
+
+type manualCertExpiryAlertRecord struct {
+	day   string
+	level int
+}
+
+func newManualCertExpiryAlertGate() *manualCertExpiryAlertGate {
+	return &manualCertExpiryAlertGate{seen: map[string]manualCertExpiryAlertRecord{}}
+}
+
+// shouldAlert 判定本次扫描是否应告警:是则记录并返回 true。nil 接收者
+// 防御性放行(不抑制)。map 以证书 ID 为键,条目随规则数有界,当日值被
+// 覆写,无累积泄漏。
+func (g *manualCertExpiryAlertGate) shouldAlert(caddyID string, level int, now time.Time) bool {
+	if g == nil {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	day := now.Format("2006-01-02")
+	if record, ok := g.seen[caddyID]; ok && record.day == day && record.level >= level {
+		return false
+	}
+	g.seen[caddyID] = manualCertExpiryAlertRecord{day: day, level: level}
+	return true
 }
 
 type deploymentTimer struct {
@@ -293,6 +337,7 @@ func NewCertificateService() *CertificateService {
 		deploymentRetry:     scheduleCertificateDeploymentRetry,
 		deploymentTimers:    make(map[int]*deploymentTimer),
 		deploymentCallbacks: make(map[int]map[*deploymentTimer]struct{}),
+		expiryAlertGate:     newManualCertExpiryAlertGate(),
 	}
 	service.retryDeployment = func(ctx context.Context, jobID int) error {
 		manager := GetCAQueueManager()
@@ -1259,12 +1304,18 @@ func (s *CertificateService) checkManualCertExpiration() {
 		daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
 
 		if now.After(cert.NotAfter) {
-			Logf("error", "⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s",
-				c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
+			// CERT41-3:同一证书同日同档只告一次(10min 扫描周期去重);
+			// 计数不受门禁影响,汇总如实反映当前状态。
+			if s.expiryAlertGate.shouldAlert(c.caddyID, manualCertExpiryLevelExpired, now) {
+				Logf("error", "⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s",
+					c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
+			}
 			expiredCount++
 		} else if daysUntilExpiry <= warnDays {
-			Logf("warn", "cert expiration check: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
-				c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
+			if s.expiryAlertGate.shouldAlert(c.caddyID, manualCertExpiryLevelExpiringSoon, now) {
+				Logf("warn", "cert expiration check: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
+					c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
+			}
 			expiringSoonCount++
 		}
 	}

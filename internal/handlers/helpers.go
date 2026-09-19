@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -163,6 +164,84 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 	}
 
 	return info, nil
+}
+
+// tlsCertSystemRoots 链完整性校验的系统根来源——var 供测试注入测试 CA 根池
+// (与 systemMetricsReadFile 同款测试隔离约定)。
+var tlsCertSystemRoots = x509.SystemCertPool
+
+// tlsCertificateWarnings(CERT41-4)对手动 TLS 证书做「不阻断」质量检查:
+//  1. 链完整性——系统根 + PEM 内中间证书 x509.Verify,unknown authority 类
+//     失败说明链可能不完整(浏览器/严格客户端将握手失败);
+//  2. 域名覆盖——domain 非空且证书 DNSNames/CN 不覆盖(含通配符语义,
+//     规则多域名逐枚校验)时提示不匹配。
+//
+// 纯警告不阻断:配对/解析合法性由 validateTLSCertificate 硬校验负责,此处
+// 解析失败防御性返回 nil;无警告返回 nil。keyPEM 仅用于配对解析(契约与
+// rules.go 消费侧对称)。
+func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
+	pair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil || len(pair.Certificate) == 0 {
+		return nil
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil
+	}
+	var warnings []string
+	intermediates := x509.NewCertPool()
+	for _, der := range pair.Certificate[1:] {
+		if intermediate, perr := x509.ParseCertificate(der); perr == nil {
+			intermediates.AddCert(intermediate)
+		}
+	}
+	roots, rerr := tlsCertSystemRoots()
+	if rerr == nil {
+		if _, verr := leaf.Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}); verr != nil {
+			var unknownAuthority x509.UnknownAuthorityError
+			if errors.As(verr, &unknownAuthority) {
+				warnings = append(warnings, "证书链可能不完整，部分客户端将握手失败")
+			}
+		}
+	}
+	for _, name := range strings.Split(domain, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !tlsCertCoversDomain(leaf, name) {
+			warnings = append(warnings, "证书域名与规则域名不匹配")
+			break
+		}
+	}
+	return warnings
+}
+
+// tlsCertCoversDomain 判定证书是否覆盖域名:优先标准 SAN 校验(Go 内建通配
+// 语义),无 SAN 的老证书回退 CN 精确/单段通配匹配。比较小写化。
+func tlsCertCoversDomain(cert *x509.Certificate, domain string) bool {
+	if err := cert.VerifyHostname(domain); err == nil {
+		return true
+	}
+	return tlsWildcardMatch(strings.ToLower(cert.Subject.CommonName), strings.ToLower(domain))
+}
+
+// tlsWildcardMatch 单段通配语义:*.example.com 覆盖恰好一级子域,不覆盖裸域
+// 与二级以上子域;非通配模式精确匹配。
+func tlsWildcardMatch(pattern, domain string) bool {
+	if !strings.HasPrefix(pattern, "*.") {
+		return pattern == domain
+	}
+	suffix := pattern[1:]
+	if !strings.HasSuffix(domain, suffix) {
+		return false
+	}
+	label := domain[:len(domain)-len(suffix)]
+	return label != "" && !strings.Contains(label, ".")
 }
 
 func getOutboundIP() string {

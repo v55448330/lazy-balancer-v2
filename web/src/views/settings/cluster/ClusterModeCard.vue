@@ -18,7 +18,7 @@
       <div class="mode-row" role="group" aria-label="节点模式">
         <span class="mode-row-label">节点模式</span>
         <div class="mode-row-content">
-          <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" @change="handleModeChange">
+          <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" aria-label="节点模式" @change="handleModeChange">
             <el-radio value="master">主节点</el-radio>
             <el-radio value="slave">从节点</el-radio>
           </el-radio-group>

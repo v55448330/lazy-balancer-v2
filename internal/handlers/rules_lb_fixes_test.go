@@ -320,3 +320,141 @@ func TestGetRuleCaddyConfig_returns_sibling_path_routes(t *testing.T) {
 		t.Fatalf("config.routes @ids=%v, want [lb_ctx lb_ctx_path_0 lb_ctx_path_1]（含主路由、按运行顺序、排除他规则）", ids)
 	}
 }
+
+// ---- LB41-1（第 41 轮 P2）：UpdateRule 健康检查双阈值指针化 ----
+// （nil=沿用存量，显式值落库；显式 0=落库 0=渲染默认 3/2，与 LB-02 M16 同口径）
+
+func seedHCThresholdRule(t *testing.T, caddyID string, listenPort int) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,
+		health_check_unhealthy_threshold,health_check_healthy_threshold,enable_tls,tls_source,enabled,enable_compress)
+		VALUES (?,'hc-threshold','','http',?,?,'weighted_round_robin',5,4,0,'manual',1,1)`,
+		caddyID, strings.ReplaceAll(caddyID, "_", "-")+".example.test", listenPort); err != nil {
+		t.Fatalf("seed hc threshold rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+}
+
+func readHCThresholds(t *testing.T, caddyID string) (unhealthy, healthy int) {
+	t.Helper()
+	if err := db.DB.QueryRow(`SELECT COALESCE(health_check_unhealthy_threshold,0), COALESCE(health_check_healthy_threshold,0)
+		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&unhealthy, &healthy); err != nil {
+		t.Fatalf("read hc thresholds: %v", err)
+	}
+	return
+}
+
+func TestUpdateRule_keeps_health_check_thresholds_when_absent(t *testing.T) {
+	// Given：存量规则健康检查双阈值为 5/4（非默认）
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	seedHCThresholdRule(t, "lb_hc_keep", 17111)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_hc_keep", strings.NewReader(`{"name":"renamed"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When：部分更新仅改名（不携带双阈值）
+	router.ServeHTTP(response, request)
+
+	// Then：阈值必须保持 5/4——此前非指针 int 无合并，部分更新静默重置为 0
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	unhealthy, healthy := readHCThresholds(t, "lb_hc_keep")
+	if unhealthy != 5 || healthy != 4 {
+		t.Fatalf("absent thresholds must keep existing: unhealthy=%d healthy=%d, want 5/4", unhealthy, healthy)
+	}
+}
+
+func TestUpdateRule_persists_explicit_health_check_thresholds(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	put := func(caddyID, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "/rules/"+caddyID, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	// 形状一：显式更新 7/6 → 落库 7/6
+	seedHCThresholdRule(t, "lb_hc_set", 17112)
+	rec := put("lb_hc_set", `{"health_check_unhealthy_threshold":7,"health_check_healthy_threshold":6}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	unhealthy, healthy := readHCThresholds(t, "lb_hc_set")
+	if unhealthy != 7 || healthy != 6 {
+		t.Fatalf("explicit thresholds must persist: unhealthy=%d healthy=%d, want 7/6", unhealthy, healthy)
+	}
+
+	// 形状二：显式 0 → 落库 0（0=渲染默认 3/2 语义，与渲染兜底一致）
+	seedHCThresholdRule(t, "lb_hc_zero", 17113)
+	rec = put("lb_hc_zero", `{"health_check_unhealthy_threshold":0,"health_check_healthy_threshold":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	unhealthy, healthy = readHCThresholds(t, "lb_hc_zero")
+	if unhealthy != 0 || healthy != 0 {
+		t.Fatalf("explicit zero thresholds must persist: unhealthy=%d healthy=%d, want 0/0", unhealthy, healthy)
+	}
+}
+
+// ---- LB41-4（第 41 轮 P5）：健康检查双阈值负值 400（>=0 放行，0=默认语义）----
+
+func TestCreateRule_rejects_negative_health_check_thresholds(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	post := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	rec := post(`{"name":"neg-unhealthy","protocol":"tcp","listen_port":17121,"health_check_unhealthy_threshold":-1,` +
+		`"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "失败阈值") {
+		t.Fatalf("negative unhealthy threshold must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = post(`{"name":"neg-healthy","protocol":"tcp","listen_port":17122,"health_check_healthy_threshold":-1,` +
+		`"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "恢复阈值") {
+		t.Fatalf("negative healthy threshold must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateRule_rejects_negative_health_check_thresholds(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	seedHCThresholdRule(t, "lb_hc_neg", 17123)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	put := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "/rules/lb_hc_neg", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	rec := put(`{"health_check_unhealthy_threshold":-2}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "失败阈值") {
+		t.Fatalf("negative unhealthy threshold must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = put(`{"health_check_healthy_threshold":-2}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "恢复阈值") {
+		t.Fatalf("negative healthy threshold must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}

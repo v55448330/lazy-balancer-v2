@@ -23,6 +23,9 @@ func TestImportConfigBackup_clamps_caddy_log_size_mb(t *testing.T) {
 		{"负值钳位到 100", -50, 100},
 		{"合法值保持不变", 200, 200},
 		{"边界 100 保持不变", 100, 100},
+		{"边界 10240 保持不变", 10240, 10240},
+		{"10241 钳位到 10240（SYS41-7 上限）", 10241, 10240},
+		{"天文值钳位到 10240", 99999999, 10240},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

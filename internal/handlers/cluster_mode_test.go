@@ -169,3 +169,30 @@ func TestUpdateClusterSettings_rejectsDisablingSyncUsersAs400(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400 (恒同步拒绝=客户端错误)", response.Code, response.Body.String())
 	}
 }
+
+// CL41 观察项转正(第 41 轮):集群设置审计的 sync_rules 标签必须与设置卡/
+// 新版 hover 标签统一为「负载均衡规则」(不再用旧称「负载规则」)。
+func TestUpdateClusterSettings_auditUsesUnifiedRulesLabel(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.PUT("/cluster/settings", h.UpdateClusterSettings)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/cluster/settings", strings.NewReader(`{"sync_rules":false}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='集群设置' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query settings audit: %v", err)
+	}
+	if !strings.Contains(detail, "负载均衡规则：关闭") {
+		t.Fatalf("audit detail=%q, want unified label 负载均衡规则", detail)
+	}
+}

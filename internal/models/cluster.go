@@ -222,6 +222,18 @@ type ClusterBasicSettings struct {
 	// 闭环需要本地可读 issuer/client 凭证(JWKS 验签在从节点本地完成)。
 	OIDCConfig        string `json:"oidc_config,omitempty"`
 	MFALockoutEnabled bool   `json:"mfa_lockout_enabled"`
+	// v2.3.x CL41-1:自动备份设置随 users 节同步——从节点提升为主节点后调度
+	// 直接生效,无需重启。指针+omitempty 缺席语义(镜像 branding_json
+	// d55a675 偏斜处理):旧主端快照缺该组字段时从端 apply 跳过写入、保留
+	// 本地设置,不清零;新主端装载恒非 nil(COALESCE 兜底),快照恒携带。
+	// last_run 为节点本地运行态,不在同步列(调度器每次备份推进,入列会让
+	// 触发器每轮备份 bump cluster_version)。
+	AutoBackupEnabled   *bool   `json:"auto_backup_enabled,omitempty"`
+	AutoBackupFrequency *string `json:"auto_backup_frequency,omitempty"`
+	AutoBackupTime      *string `json:"auto_backup_time,omitempty"`
+	AutoBackupDay       *int    `json:"auto_backup_day,omitempty"`
+	AutoBackupKeep      *int    `json:"auto_backup_keep,omitempty"`
+	AutoBackupSections  *string `json:"auto_backup_sections,omitempty"`
 }
 
 type ClusterUser struct {

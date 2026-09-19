@@ -105,3 +105,45 @@ func TestRulePortTLSMix_rejected(t *testing.T) {
 		t.Fatalf("enable plaintext onto TLS port must 400, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// LB41-3(第 41 轮 P3):checkPortTLSMix 的 enable_tls 裸布尔比较与全仓
+// IIF(enable_tls IN ('1',1),1,0) 归一口径不一——NULL 行（远古存量/直改 DB）
+// 在裸比较下漏检。修复后 NULL 归一为明文（0）参与混布判定。
+func TestRulePortTLSMix_null_enable_tls_row_normalized_as_plaintext(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	router := newTLSMixRouter(t, handler)
+	create := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	seedNullTLSRule := func(caddyID, domain string, listenPort int) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_cert,tls_key)
+			VALUES (?,?,'','http',?,?,'weighted_round_robin',1,1,NULL,'manual','','')`, caddyID, caddyID, domain, listenPort); err != nil {
+			t.Fatalf("seed NULL enable_tls rule %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+
+	// 形状一：NULL enable_tls 存量行归一为明文——同端口新建 TLS 规则必须 400
+	seedNullTLSRule("lb_mix_null1", "mix-null-a.test", 18447)
+	rec := create(tlsMixBody("mix-tls-null", "mix-null-b.test", 18447, true))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "不能混布") {
+		t.Fatalf("create TLS onto NULL-enable_tls (plaintext) port must 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 形状二（回归）：NULL 行归一为明文后不得误拦同形态明文新建
+	seedNullTLSRule("lb_mix_null2", "mix-null-c.test", 18448)
+	rec = create(tlsMixBody("mix-plain-null", "mix-null-d.test", 18448, false))
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("plaintext coexistence with NULL-enable_tls row must pass, got %d %s", rec.Code, rec.Body.String())
+	}
+}

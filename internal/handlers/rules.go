@@ -34,7 +34,10 @@ var (
 var enableCertJobResumePreUpdateHook func(jobID int)
 
 func (h *Handlers) ListRules(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules ORDER BY id`)
+	// LB41-2：lb_rules.id 为可空遗留列（生产形态恒 NULL，cluster_apply 才显式
+	// 带值），ORDER BY id 语义退化；rowid 显式化——行为与现状等价（NULL 排序
+	// 实践上即 rowid 序）。
+	rows, err := db.DB.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules ORDER BY rowid`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
@@ -795,6 +798,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 	// Validate TLS certificate if provided (manual source only)
+	var certWarnings []string
 	if req.EnableTLS && req.TLSSource == "manual" {
 		if strings.TrimSpace(req.TLSCert) == "" || strings.TrimSpace(req.TLSKey) == "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "手动证书模式下必须提供 TLS 证书和私钥"})
@@ -803,6 +807,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
 			return
+		}
+		// CERT41-4:链完整性/域名覆盖质量警告(不阻断)——配对合法性仍由上方
+		// validateTLSCertificate 硬校验;警告随成功审计留痕(与导入侧同格)。
+		certWarnings = tlsCertificateWarnings(req.TLSCert, req.TLSKey, req.Domain)
+		for _, warning := range certWarnings {
+			services.Logf("warn", "CreateRule manual TLS certificate warning (rule %s, domain %s): %s", req.Name, req.Domain, warning)
 		}
 	}
 
@@ -830,6 +840,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.TLSSource = "manual"
 		req.TLSCert, req.TLSKey = "", ""
 		req.ACMEConfigID = 0
+		// CERT41-4:证书材料随 TCP 归一弃置——其质量警告不得随审计留痕(误导)。
+		certWarnings = nil
 	}
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
@@ -1029,7 +1041,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	services.Logf("info", "Rule created with caddy_id=%s", caddyID)
-	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain))
+	createAuditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain}
+	if len(certWarnings) > 0 {
+		// CERT41-4:证书链/域名警告随成功审计留痕(不阻断)。
+		createAuditParts = append(createAuditParts, "证书警告："+strings.Join(certWarnings, "；"))
+	}
+	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(createAuditParts...))
 	reloadNote()
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
 }
@@ -1188,6 +1205,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if req.HealthCheckTimeout == 0 {
 		req.HealthCheckTimeout = existingRule.HealthCheckTimeout
+	}
+	// LB41-1（M16 口径）：nil=沿用存量，显式 0=落库 0（渲染侧 <=0 兜底默认
+	// 3/2，与 HealthCheckPath/Interval/Timeout 合并区同位补齐）。
+	if req.HealthCheckUnhealthyThreshold == nil {
+		req.HealthCheckUnhealthyThreshold = &existingRule.HealthCheckUnhealthyThreshold
+	}
+	if req.HealthCheckHealthyThreshold == nil {
+		req.HealthCheckHealthyThreshold = &existingRule.HealthCheckHealthyThreshold
 	}
 	// LB-02（M16 口径）：nil=沿用存量，显式 0=真实零值（0=不重试/默认间隔/
 	// 跟随上游端口均有消费语义，此前非指针合并使显式清零永不可达）。
@@ -1457,6 +1482,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Validate TLS certificate if provided (manual source only)
+	var certWarnings []string
 	if *req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"})
 		return
@@ -1479,6 +1505,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if err := validateTLSCertificate(tlsCert, tlsKey); err != nil {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
 				return
+			}
+			// CERT41-4:链完整性/域名覆盖质量警告(不阻断)——与 CreateRule/导入侧同格,
+			// 按生效证书材料与合并后域名评估,警告随成功审计留痕。
+			certWarnings = tlsCertificateWarnings(tlsCert, tlsKey, req.Domain)
+			for _, warning := range certWarnings {
+				services.Logf("warn", "UpdateRule manual TLS certificate warning for caddy_id=%s (domain %s): %s", caddyID, req.Domain, warning)
 			}
 		}
 	}
@@ -1535,9 +1567,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "health_check_timeout = ?, "
 	args = append(args, req.HealthCheckTimeout)
 	query += "health_check_unhealthy_threshold = ?, "
-	args = append(args, req.HealthCheckUnhealthyThreshold)
+	args = append(args, *req.HealthCheckUnhealthyThreshold)
 	query += "health_check_healthy_threshold = ?, "
-	args = append(args, req.HealthCheckHealthyThreshold)
+	args = append(args, *req.HealthCheckHealthyThreshold)
 	query += "enable_active_health_check = ?, "
 	args = append(args, *req.EnableActiveHealthCheck)
 	query += "tcp_health_check_port = ?, "
@@ -1975,6 +2007,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		tlsPart = fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))
 	}
 	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
+	if len(certWarnings) > 0 {
+		// CERT41-4:证书链/域名警告随成功审计留痕(不阻断)。
+		auditParts = append(auditParts, "证书警告："+strings.Join(certWarnings, "；"))
+	}
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
 	reloadNote()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})

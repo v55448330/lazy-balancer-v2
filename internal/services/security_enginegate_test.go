@@ -62,7 +62,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 		"single-deny+trust":   {Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: trust},
 		"multi-deny-no-trust": {Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`[]`)},
 		"geoip-chain":         {Mode: "blocking", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["CN"]`)},
-		"custom-chained":      {Mode: "blocking", CustomRules: json.RawMessage(`[{"name":"t","action":"block","conditions":[{"target":"uri","operator":"contains","value":"/admin"},{"target":"user_agent","operator":"contains","value":"bot"}]}]`)},
+		"custom-chained":      {Mode: "blocking", CustomRules: json.RawMessage(`[{"name":"t","action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/admin"},{"target":"user_agent","operator":"contains","pattern":"bot"}]}]`)},
 	}
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -99,4 +99,76 @@ func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 		t.Fatalf("rule with db id 889999 must still emit id:899999, got:\n%s", dOK)
 	}
 	compileForEngineGate(t, dOK)
+}
+
+// SEC41-3（第 41 轮审计）：引擎门禁覆盖此前未送编译的六个发射形状。每个
+// 用例的断言=真实渲染产物被 coraza v3.7.0 NewWAF 接受（R-10 天然满足——
+// 与既有门禁同一 compileForEngineGate 通道）。
+func TestEngineGate_modeAndControlShapes(t *testing.T) {
+	// ① detection 的 id:6 DetectionOnly 切换行
+	t.Run("detection-id6-switch", func(t *testing.T) {
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection"}, nil, "", false)
+		if !strings.Contains(directives, `SecAction "id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly"`) {
+			t.Fatalf("detection mode must emit id:6 switch:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ② bypass id:3（ctl:ruleEngine=Off,ctl:auditEngine=Off）+ bypass 占位后
+	// 信任名单改 id:5 的 DetectionOnly 行
+	t.Run("bypass-id3-engine-off", func(t *testing.T) {
+		p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "bypass", IPACLList: `["198.51.100.9"]`,
+			IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
+		directives := BuildCorazaDirectives(p, nil, "", false)
+		if !strings.Contains(directives, `id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off`) {
+			t.Fatalf("bypass mode must emit id:3 engine-off rule:\n%s", directives)
+		}
+		if !strings.Contains(directives, `id:5,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly`) {
+			t.Fatalf("trust after bypass must emit id:5 DetectionOnly rule:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ③ id:900 异常阈值 SecAction（AnomalyThreshold>0）
+	t.Run("anomaly-threshold-id900", func(t *testing.T) {
+		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking", AnomalyThreshold: 12}, nil, "", false)
+		if !strings.Contains(directives, `id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=12`) {
+			t.Fatalf("AnomalyThreshold>0 must emit id:900 SecAction:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ④ 作用域排除 ctl id:2000000+（夹具参照 crs_exclusion_scope_test.go：
+	// 组 42 在索引夹具中含 942100/942550 两条 → 逐 ID 运行时 ctl）
+	t.Run("scoped-exclusion-ctl", func(t *testing.T) {
+		seedCRSRuleIndexFixture(t)
+		p := &models.SecurityPolicy{Mode: "blocking",
+			CRSExcludedRules: json.RawMessage(`[{"target":"42","scope":"ip","ips":"1.1.1.1"}]`)}
+		directives := BuildCorazaDirectives(p, nil, "", false)
+		if !strings.Contains(directives, `id:2000001,phase:1,pass,nolog,ctl:ruleRemoveById=942100`) {
+			t.Fatalf("scoped exclusion must emit 2000000+ ctl rules:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ⑤ 预检双 allow 不相交（交集为空）的恒拒 @rx .* 形状
+	t.Run("precheck-disjoint-allow-constant-deny", func(t *testing.T) {
+		p1 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
+		p2 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["5.6.7.8"]`}
+		directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2})
+		if !strings.Contains(directives, `SecRule REMOTE_ADDR "@rx .*" "id:7,phase:1,deny`) {
+			t.Fatalf("disjoint allow lists must emit constant-deny @rx .* rule:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
+	// ⑥ SecRequestBodyLimit 追加行（buildWafHandlerWithPolicy 在
+	// BuildCorazaDirectives 产物尾部拼接，门禁直调 BuildCorazaDirectives 不经
+	// 此——本用例走上层取 handler.directives 送编译）
+	t.Run("request-body-limit-appended", func(t *testing.T) {
+		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 8)
+		if handler == nil {
+			t.Fatal("blocking policy must yield a waf handler")
+		}
+		directives, ok := handler["directives"].(string)
+		if !ok || !strings.Contains(directives, "SecRequestBodyLimit 8388608\n") {
+			t.Fatalf("8MB body limit must append SecRequestBodyLimit 8388608, got:\n%s", directives)
+		}
+		compileForEngineGate(t, directives)
+	})
 }

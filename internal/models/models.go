@@ -445,21 +445,24 @@ type UpdateRuleRequest struct {
 	Name string `json:"name"`
 	// 审计 M16：HostHeader/Description/DnsServer/HealthCheckPath 指针化——
 	// 省略（nil）=保留原值，显式空串=清空；旧行为空串与省略无法区分。
-	Description                   *string `json:"description"`
-	Protocol                      string  `json:"protocol"`
-	Domain                        string  `json:"domain"`
-	ListenPort                    int     `json:"listen_port"`
-	Strategy                      string  `json:"strategy"`
-	DynamicDNS                    *bool   `json:"dynamic_dns"`
-	EnableDnsServer               *bool   `json:"enable_dns_server"`
-	DnsServer                     *string `json:"dns_server"`
-	DnsFamily                     string  `json:"dns_family"`
-	HealthCheckPath               *string `json:"health_check_path"`
-	HealthCheckInterval           int     `json:"health_check_interval"`
-	HealthCheckTimeout            int     `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int     `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int     `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       *bool   `json:"enable_active_health_check"`
+	Description         *string `json:"description"`
+	Protocol            string  `json:"protocol"`
+	Domain              string  `json:"domain"`
+	ListenPort          int     `json:"listen_port"`
+	Strategy            string  `json:"strategy"`
+	DynamicDNS          *bool   `json:"dynamic_dns"`
+	EnableDnsServer     *bool   `json:"enable_dns_server"`
+	DnsServer           *string `json:"dns_server"`
+	DnsFamily           string  `json:"dns_family"`
+	HealthCheckPath     *string `json:"health_check_path"`
+	HealthCheckInterval int     `json:"health_check_interval"`
+	HealthCheckTimeout  int     `json:"health_check_timeout"`
+	// LB41-1（M16 口径续）：健康检查双阈值指针化——省略（nil）=保留原值，
+	// 显式 0=落库 0（渲染侧 <=0 兜底默认 3/2，caddy.go）。此前非指针 int 无
+	// 合并，部分更新（如仅改名）把存量阈值静默重置为 0。
+	HealthCheckUnhealthyThreshold *int  `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   *int  `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       *bool `json:"enable_active_health_check"`
 	// LB-02（M16 口径续）：TCP 三字段指针化——省略（nil）=保留原值，显式 0=真实
 	// 零值落库（tcp_try_duration 0=不重试、tcp_try_interval 0=Caddy 默认间隔、
 	// tcp_health_check_port 0=跟随上游端口）。此前非指针 int 的「0=沿用存量」

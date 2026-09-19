@@ -749,20 +749,9 @@ onMounted(() => {
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
-.page { max-width: 1500px; margin: 0 auto; }
-
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-
-.header-left { flex: 1; }
 .header-actions { display: flex; gap: 8px; }
 .header-actions :deep(a.el-button) { text-decoration: none; }
 .header-actions :deep(.el-button .el-icon) { margin-right: 4px; }
-
-.page-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #111827; margin: 0; }
-
-.title-icon { color: #3b82f6; font-size: 20px; }
-
-.page-desc { font-size: 13px; color: #6b7280; margin: 4px 0 0 28px; }
 
 .key-col { margin-bottom: 20px; }
 

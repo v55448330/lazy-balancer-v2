@@ -405,8 +405,12 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		data.HealthCheckPath = derefStr(r.HealthCheckPath)
 		data.HealthCheckInterval = r.HealthCheckInterval
 		data.HealthCheckTimeout = r.HealthCheckTimeout
-		data.HealthCheckUnhealthyThreshold = r.HealthCheckUnhealthyThreshold
-		data.HealthCheckHealthyThreshold = r.HealthCheckHealthyThreshold
+		if r.HealthCheckUnhealthyThreshold != nil {
+			data.HealthCheckUnhealthyThreshold = *r.HealthCheckUnhealthyThreshold
+		}
+		if r.HealthCheckHealthyThreshold != nil {
+			data.HealthCheckHealthyThreshold = *r.HealthCheckHealthyThreshold
+		}
 		if r.EnableTLS != nil {
 			data.EnableTLS = *r.EnableTLS
 		}
@@ -603,6 +607,16 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		return fmt.Errorf("健康检查超时必须 ≥ 1 秒")
 	}
 
+	// LB41-4：双阈值负值 400（>=0 放行，0=默认语义，与渲染侧 <=0 兜底 3/2
+	// 一致）；放在 0→默认值归一之后，负值不被默认值吞掉。
+	if data.HealthCheckUnhealthyThreshold < 0 {
+		return fmt.Errorf("健康检查失败阈值不能为负数")
+	}
+
+	if data.HealthCheckHealthyThreshold < 0 {
+		return fmt.Errorf("健康检查恢复阈值不能为负数")
+	}
+
 	return nil
 }
 
@@ -751,7 +765,9 @@ func checkPortTLSMix(excludeCaddyID string, port int, enableTLS bool) error {
 	if enableTLS {
 		opposite = 0
 	}
-	query := "SELECT COUNT(*) FROM lb_rules WHERE listen_port=? AND protocol='http' AND enabled=1 AND enable_tls=?"
+	// LB41-3：对齐全仓 IIF 归一口径——NULL 行（远古存量/直改 DB）归一为
+	// 明文（0）参与混布判定；裸 enable_tls=? 比较下 NULL 行漏检。
+	query := "SELECT COUNT(*) FROM lb_rules WHERE listen_port=? AND protocol='http' AND enabled=1 AND IIF(enable_tls IN ('1',1),1,0)=?"
 	args := []any{port, opposite}
 	if excludeCaddyID != "" {
 		query += " AND caddy_id!=?"

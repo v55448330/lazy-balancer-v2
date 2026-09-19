@@ -31,6 +31,9 @@ func (h *Handlers) GetRuleCertInfo(c *gin.Context) {
 // GetRulesCertInfo returns parsed certificate information for multiple rules in one call.
 func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	var req models.CertInfoBatchRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
 		return
