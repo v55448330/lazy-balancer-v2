@@ -44,6 +44,8 @@ export interface SecurityStagePolicy {
   has_waf?: boolean
   // 阶段 0 信任名单策略：false=直通上游（零安全事件）；true=保留检测记录（事件动作=检测）
   trust_detection?: boolean
+  // CRS 规则组选择（摘要原生数组或 JSON 文本；阶段 3 概览「CRS 组 N」计数用）
+  crs_rule_groups?: string | string[]
 }
 
 // 规则-策略绑定（GET /security/bindings 值数组元素）
@@ -336,6 +338,12 @@ const buildStage3Rows = (
   if (mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
   else if (mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
   else if (mode === 'custom_only') rows.push({ label: 'WAF（仅自定义）', detail: 'CRS 不生效，自定义规则按规则内动作执行' })
+  // 「CRS 规则组」行（blocking/detection 才有 CRS 评估；0=全部默认）
+  if (mode === 'blocking' || mode === 'detection') {
+    const crsRaw = policy?.crs_rule_groups
+    const crsCount = Array.isArray(crsRaw) ? crsRaw.length : parseIPList(typeof crsRaw === 'string' ? crsRaw : undefined).length
+    rows.push({ label: 'CRS 规则组', detail: crsCount > 0 ? `${crsCount} 组` : '全部（默认）' })
+  }
   if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
   // 「拦截页」行（v2.3.1 归因口径）：配置了页 → <页名>(状态码 XXX)；block_page_id=0 →
   // 默认 403；页已删/内容空 → 已失效(回落首策略)

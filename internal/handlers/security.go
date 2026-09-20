@@ -562,6 +562,31 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	// blocked_24h：近 24h 每策略 blocked 事件数（metrics 库 security_events，
+	// policy_id>0 归因行；走 idx_security_events_time/policy 索引范围）。
+	blockedCounts := map[int]int{}
+	if db.MetricsDB != nil {
+		blockedRows, err := db.MetricsDB.Query(`SELECT policy_id, COUNT(*) FROM security_events WHERE action='blocked' AND policy_id>0 AND event_time >= datetime('now','-1 day') GROUP BY policy_id`)
+		if err != nil {
+			services.Logf("error", "security policies: blocked_24h query failed: %v", err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		for blockedRows.Next() {
+			var pid, cnt int
+			if err := blockedRows.Scan(&pid, &cnt); err != nil {
+				blockedRows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			blockedCounts[pid] = cnt
+		}
+		blockedRows.Close()
+		if err := blockedRows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+	}
 	for rows.Next() {
 		var p models.SecurityPolicy
 		if err := scanSecurityPolicy(rows, &p); err != nil {
@@ -588,6 +613,8 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			AnomalyThreshold:   p.AnomalyThreshold,
 			IPACLMode:          p.IPACLMode,
 			IPACLEnabled:       p.IPACLEnabled,
+			TrustDetection:     p.TrustDetection,
+			Blocked24h:         blockedCounts[p.ID],
 			IPWhitelistEnabled: p.IPWhitelistEnabled,
 			IPACLList:          p.IPACLList,
 			IPWhitelist:        rawJSONString(p.IPWhitelist),
@@ -606,7 +633,6 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			IPACLListRefs:      p.IPACLListRefs,
 			IPWhitelistRefs:    p.IPWhitelistRefs,
 			PolicyType:         p.PolicyType,
-			TrustDetection:     p.TrustDetection,
 		})
 	}
 	if policies == nil {

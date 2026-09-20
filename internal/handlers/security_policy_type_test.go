@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -353,5 +354,47 @@ func TestSplitSecurityPolicy_trustBecomesStage0ChildWithDetection(t *testing.T) 
 	}
 	if whitelist != `["10.0.0.9"]` || !trustDetection {
 		t.Fatalf("stage0 child=(wl %s, detection %v), want trust kept + detection=1", whitelist, trustDetection)
+	}
+}
+
+// 策略列表「内容摘要」列数据源：SecurityPolicySummary.blocked_24h = 近 24h
+// 该策略 blocked 安全事件数（security_events.policy_id，24h 窗口；policy_id=0
+// 的未归因事件不计入）。
+func TestListSecurityPolicies_carriesBlocked24h(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES (1,'b24','blocking','stage3',1),(2,'b24b','off','stage1',1)`); err != nil {
+		t.Fatal(err)
+	}
+	seedEvt := func(policyID int, action, timeExpr string) {
+		t.Helper()
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time,rule_caddy_id,policy_id,client_ip,method,uri,event_type,rule_triggered,rule_msg,action,anomaly_score,rule_name,policy_name,transaction_id)
+			VALUES (`+timeExpr+`,'lb_x',?,'203.0.113.9','GET','/x','waf','942100','msg',?,0,'x','b24',?)`, policyID, action, fmt.Sprintf("tx-%d-%s-%s", policyID, action, timeExpr)); err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+	seedEvt(1, "blocked", "datetime('now','-1 hour')")
+	seedEvt(1, "blocked", "datetime('now','-2 hours')")
+	seedEvt(1, "blocked", "datetime('now','-25 hours')") // 超窗不计
+	seedEvt(1, "logged", "datetime('now','-1 hour')")    // 非 blocked 不计
+	seedEvt(2, "blocked", "datetime('now','-1 hour')")
+	seedEvt(0, "blocked", "datetime('now','-1 hour')") // 未归因不计
+
+	recorder := getRequest(t, router, "/security/policies")
+	var payload struct {
+		Data []struct {
+			Name       string `json:"name"`
+			Blocked24h int    `json:"blocked_24h"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]int{}
+	for _, p := range payload.Data {
+		got[p.Name] = p.Blocked24h
+	}
+	if got["b24"] != 2 || got["b24b"] != 1 {
+		t.Fatalf("blocked_24h=%v, want {b24:2, b24b:1}", got)
 	}
 }

@@ -32,16 +32,44 @@
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
-              <el-tooltip v-if="ruleStageModel(row).hasAnyPolicy" content="查看处理流程" placement="top" :enterable="false">
-                <el-icon
-                  :size="14"
-                  class="acl-lock-icon is-allow"
-                  tabindex="0"
-                  @click="openFlowDialog(row)"
-                  @keydown.enter.prevent="openFlowDialog(row)"
-                  @keydown.space.prevent="openFlowDialog(row)"
-                ><Lock /></el-icon>
-              </el-tooltip>
+              <!-- 锁 hover 摘要（不可点击）：按阶段 0/1/2/3 分组的紧凑摘要；
+                   完整处理流程入口在规则名配置弹框内 -->
+              <el-popover
+                v-if="ruleStageModel(row).hasAnyPolicy"
+                placement="top"
+                trigger="hover"
+                :width="360"
+                popper-class="rule-lock-popper"
+              >
+                <template #reference>
+                  <el-icon :size="14" class="acl-lock-icon is-allow" tabindex="0"><Lock /></el-icon>
+                </template>
+                <div class="lock-summary">
+                  <div class="lock-summary-title">安全防护 · 阶段摘要</div>
+                  <template v-for="stage in ruleStageModel(row).stages" :key="stage.stage">
+                    <div v-if="stage.groups.length > 0" class="lock-stage">
+                      <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
+                      <!-- 阶段 0：每策略 条数+模式一行 -->
+                      <template v-if="stage.stage === 0">
+                        <div v-for="group in stage.groups" :key="group.key" class="lock-stage-line" :class="{ 'is-disabled': !group.enabled }">
+                          <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
+                          <span class="lock-policy-detail">{{ group.rows.map((r) => r.detail).join(' · ') }}</span>
+                        </div>
+                      </template>
+                      <!-- 阶段 1/2：生效策略名列表 -->
+                      <div v-else-if="stage.stage !== 3" class="lock-stage-line">{{ stage.groups.map((g) => g.name).join('、') }}</div>
+                      <!-- 阶段 3：策略名 + WAF 模式 tag -->
+                      <template v-else>
+                        <div v-for="group in stage.groups" :key="group.key" class="lock-stage-line" :class="{ 'is-disabled': !group.enabled }">
+                          <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
+                          <el-tag size="small" effect="plain" :type="wafModeTagType(policyModeOf(group.key))">{{ wafModeLabel(policyModeOf(group.key)) }}</el-tag>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <div class="lock-summary-hint">点击查看完整处理流程（规则名配置弹框内「处理流程」）</div>
+                </div>
+              </el-popover>
               <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
@@ -200,9 +228,10 @@
         <el-table-column label="操作" width="270" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
+              <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
               <el-tooltip
-              :disabled="!isReadOnly && canEditRule(row)"
-              :content="certJobLockTooltip(row, '证书申请中，请等待完成或失败后再修改规则')"
+                :disabled="!isReadOnly && canEditRule(row)"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row, '证书申请中，请等待完成或失败后再修改规则')"
               >
                 <div>
                 <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || saving || !canEditRule(row)">
@@ -210,24 +239,30 @@
                   </el-button>
                 </div>
               </el-tooltip>
-              <div>
-              <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row)">
+              <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
+                <div>
+                <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row)">
                   复制
                 </el-button>
-              </div>
-              <div>
-                <el-button type="primary" link size="small" :disabled="!row.log_enabled" @click="openRuleLogDialog(row)">
+                </div>
+              </el-tooltip>
+              <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
+                <div>
+                <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row)">
                   日志
                 </el-button>
-              </div>
-              <div v-if="row.protocol === 'http'">
+                </div>
+              </el-tooltip>
+              <el-tooltip v-if="row.protocol === 'http'" :disabled="!isReadOnly" :content="readOnlyMessage">
+                <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="openBindDialog(row)">
                   安全
                 </el-button>
-              </div>
+                </div>
+              </el-tooltip>
               <el-tooltip
                 :disabled="!isReadOnly && canDeleteRule(row) && certJobStatusOf(row) !== 'waiting_ca'"
-                :content="certJobLockTooltip(row, '证书申请中，请等待完成或失败后再删除规则')"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row, '证书申请中，请等待完成或失败后再删除规则')"
               >
                 <div>
                 <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canDeleteRule(row)">
@@ -842,12 +877,16 @@
     <!-- View Config Dialog -->
     <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" top="5vh" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <template #header>
-        <div class="dialog-header">
+        <div class="dialog-header dialog-header--with-action">
           <div class="dialog-header__icon"><el-icon :size="18"><Document /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">Caddy 配置</div>
             <div class="dialog-header__subtitle">单规则渲染产物的只读预览（规则信息 / JSON / Caddyfile）</div>
           </div>
+          <!-- 处理流程入口（用户裁定：自锁图标迁入此配置框；点击关配置框开流程弹框） -->
+          <el-button link type="primary" class="dialog-header-action" @click="openFlowFromConfig">
+            <el-icon><Guide /></el-icon>处理流程
+          </el-button>
         </div>
       </template>
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
@@ -1016,7 +1055,6 @@
         </div>
       </template>
     </el-dialog>
-    <!-- 规则安全策略绑定（与策略页「绑定规则」共享同一组件，勿造第二份） -->
     <SecurityBindingEditor
       v-model="bindDialogVisible"
       mode="rule"
@@ -1044,7 +1082,7 @@ import { formatDate } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import RuleFlowDialog from '@/components/RuleFlowDialog.vue'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { buildStageModel } from '@/utils/securityStages'
+import { buildStageModel, wafModeLabel, wafModeTagType } from '@/utils/securityStages'
 import type {
   RuleFlowTarget,
   RuleStageModel,
@@ -1213,6 +1251,8 @@ interface RuleLogStats {
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+// 只读原因文案（从节点只读/非管理员只读/加载中）——操作列禁用 tooltip 统一口径
+const readOnlyMessage = computed(() => authStore.readOnlyMessage)
 let disposed = false
 
 const certTypeLabels = {
@@ -1299,6 +1339,10 @@ const ruleStageModelMap = computed<Map<string, RuleStageModel>>(() => {
 
 const ruleStageModel = (rule: Rule): RuleStageModel =>
   ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPages.value, rule)
+
+// 锁 hover 摘要的阶段 3 模式 tag：策略 id → mode（缺省回落 off）
+const policyModeOf = (policyId: number): string =>
+  securityPolicies.value.find((p) => p.id === policyId)?.mode ?? 'off'
 
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -2631,6 +2675,7 @@ const submitWizard = async () => {
     if (editingRule.value) {
       await request.put<APIResponse>(`/rules/${editingRule.value.caddy_id}`, data)
       mfaAwareSuccess('更新成功')
+
     } else {
       const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
       // 复制路径（openCopyWizard 带入的源规则）：POST /rules 不经 /duplicate、不携带绑定——
@@ -2669,6 +2714,15 @@ const submitWizard = async () => {
 const flowDialogVisible = ref(false)
 const flowDialogTarget = ref<RuleFlowTarget | null>(null)
 const flowDialogModel = ref<RuleStageModel | null>(null)
+
+// 处理流程入口（用户裁定）：配置弹框标题区「处理流程」按钮 → 关配置框开流程弹框
+const configRule = ref<Rule | null>(null)
+const openFlowFromConfig = (): void => {
+  const rule = configRule.value
+  if (!rule) return
+  configDialogVisible.value = false
+  openFlowDialog(rule)
+}
 
 const upstreamSummaryForRule = (rule: Rule): string => {
   const count = getEnabledUpstreams(rule).length
@@ -2861,6 +2915,7 @@ const openCopyWizard = async (rule: Rule) => {
 
 const viewConfig = async (rule: Rule) => {
   const targetId = rule.caddy_id
+  configRule.value = rule
   const requestSeq = ++configRequestSeq
   configDialogVisible.value = true
   configLoading.value = true
@@ -3779,4 +3834,27 @@ onUnmounted(() => {
   white-space: nowrap;
   max-width: 170px;
 }
+</style>
+
+<!-- el-popover popper 挂载到 body，scoped 样式无法命中，单独非 scoped 块
+     （阴影沿用 el-popover 默认 box-shadow token，与健康/证书 hover 框一致） -->
+<style>
+.dialog-header--with-action { position: relative; }
+.dialog-header-action { position: absolute; right: 28px; top: 2px; }
+
+/* 锁 hover 阶段摘要：卡片化分组 + 阶段色阶标题行 */
+.rule-lock-popper { padding: 10px 12px !important; }
+.rule-lock-popper .lock-summary { display: flex; flex-direction: column; gap: 8px; }
+.rule-lock-popper .lock-summary-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.rule-lock-popper .lock-stage { border: 1px solid #ebeef5; border-radius: 8px; padding: 6px 10px; background: #fff; }
+.rule-lock-popper .lock-stage-head { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+.rule-lock-popper .lock-stage-head--s0 { color: var(--el-color-success); }
+.rule-lock-popper .lock-stage-head--s1 { color: var(--el-color-primary); }
+.rule-lock-popper .lock-stage-head--s2 { color: var(--el-color-warning); }
+.rule-lock-popper .lock-stage-head--s3 { color: var(--el-color-danger); }
+.rule-lock-popper .lock-stage-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; line-height: 1.8; }
+.rule-lock-popper .lock-stage-line.is-disabled { opacity: 0.45; }
+.rule-lock-popper .lock-policy-name { font-weight: 500; color: #1f2937; }
+.rule-lock-popper .lock-policy-detail { color: #6b7280; }
+.rule-lock-popper .lock-summary-hint { font-size: 12px; color: #9ca3af; border-top: 1px dashed #e5e7eb; padding-top: 6px; }
 </style>

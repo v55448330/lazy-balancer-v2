@@ -51,30 +51,13 @@
             <template v-else>{{ row.rule_count }}</template>
           </template>
         </el-table-column>
-        <!-- 阶段启用 chips（实体单职化词汇）：阶段 0=信任名单、阶段 1=IP 访问控制/地域拦截、
-             阶段 2=限流、阶段 3=WAF/自定义；灰态=该阶段未启用。hover 明细沿用既有口径 -->
-        <el-table-column label="阶段流水线" min-width="260">
+        <!-- 内容摘要列（按类型一行摘要）+ 24h 拦截计数 chip（blocked_24h 后端字段，
+             未就绪按 0 兜底不显示 chip） -->
+        <el-table-column label="内容摘要" min-width="300">
           <template #default="{ row }">
-            <div class="capability-tags">
-              <el-tooltip :disabled="!hasTrustEntries(row)" :content="trustChipTip(row)" placement="top">
-                <el-tag size="small" effect="plain" :type="hasTrustEntries(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !hasTrustEntries(row) }">阶段 0 · 信任</el-tag>
-              </el-tooltip>
-              <el-tooltip :disabled="!stage1ChipOn(row)" placement="top">
-                <template #content>
-                  <div v-for="line in ipControlTipLines(row)" :key="line">{{ line }}</div>
-                </template>
-                <el-tag size="small" effect="plain" :type="stage1ChipOn(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !stage1ChipOn(row) }">阶段 1 · IP 访问控制</el-tag>
-              </el-tooltip>
-              <el-tooltip :disabled="!row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst} · 拦截恒 429`" placement="top">
-                <el-tag size="small" effect="plain" :type="row.has_rate_limit ? 'warning' : 'info'" class="stage-chip" :class="{ 'is-off': !row.has_rate_limit }">阶段 2 · 限流</el-tag>
-              </el-tooltip>
-              <el-tooltip :disabled="!stage3ChipOn(row)" placement="top">
-                <template #content>
-                  <div>{{ stage3ChipOn(row) ? wafTip(row) : '' }}</div>
-                  <div v-if="row.has_custom_rules">{{ row.custom_rules_count }} 条启用中的自定义规则（按规则内动作执行）</div>
-                </template>
-                <el-tag size="small" effect="plain" :type="stage3ChipOn(row) ? 'danger' : 'info'" class="stage-chip" :class="{ 'is-off': !stage3ChipOn(row) }">阶段 3 · WAF</el-tag>
-              </el-tooltip>
+            <div class="policy-summary-cell">
+              <span class="policy-summary-text" :title="policySummaryLine(row)">{{ policySummaryLine(row) }}</span>
+              <el-tag v-if="(row.blocked_24h ?? 0) > 0" size="small" type="danger" effect="plain" class="policy-blocked-chip">24h 拦截 {{ row.blocked_24h }}</el-tag>
             </div>
           </template>
         </el-table-column>
@@ -690,8 +673,8 @@
                         v-for="(entry, idx) in row.chain"
                         :key="entry.policyId ?? 'self'"
                         class="binding-order-chip"
-                        :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }"
-                      >{{ idx + 1 }}.{{ entry.isSelf ? '本策略' : entry.name }}</span>
+                        :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
+                      >{{ chainChipText(entry, idx) }}</span>
                     </div>
                     <el-alert
                       v-if="row.showPerfTip"
@@ -805,7 +788,7 @@
           </el-form>
         </div>
 
-        <!-- Step: 配置预览（三阶段流水线投影·策略视角——与规则侧流程抽屉共用 buildStageModel 投影） -->
+        <!-- Step: 配置预览（三阶段投影·策略视角——与规则侧流程抽屉共用 buildStageModel 投影） -->
         <div v-show="currentStep === WIZARD_STEP.PREVIEW" class="step-content">
           <div class="preview-meta">
             <span class="preview-meta-name">{{ form.name || '-' }}</span>
@@ -890,9 +873,11 @@
                   v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
                   :key="entry.policyId ?? 'self'"
                   class="binding-order-chip"
-                  :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }"
-                >{{ idx + 1 }}.{{ entry.isSelf ? '本策略' : entry.name }}</span>
-                <span class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
+                  :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
+                >{{ chainChipText(entry, idx) }}</span>
+                <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
+                <span v-if="editorPolicyType === 'stage0'" class="rule-binding-landing rule-binding-landing--trust">阶段 0·拦截判定前优先生效</span>
+                <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
               </template>
             </div>
           </div>
@@ -972,7 +957,6 @@ import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, hasTrustEntries, inferPolicyType, resolveStageOverride } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行携带阶段拦截页覆盖 4 字段（关联规则行内编辑与生效投影同源）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string; block_page_stage1_id?: number; block_page_stage1_status?: number; block_page_stage3_id?: number; block_page_stage3_status?: number }
@@ -988,6 +972,8 @@ interface CRSRuleOption { filename: string; category: string }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
+
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; blocked_24h?: number }
 
 
 
@@ -1075,11 +1061,6 @@ const filteredPolicies = computed(() => {
 const stage1ChipOn = (row: PolicySummary): boolean => hasIpControl(row) || hasGeoControl(row)
 const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.has_custom_rules
 
-// 阶段 0 chip tooltip：信任条目数 + 直通/保留检测模式
-const trustChipTip = (row: PolicySummary): string => {
-  const count = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
-  return `信任名单 ${count} 条 · ${row.trust_detection === true ? '保留检测记录' : '直通上游（不产生安全事件）'}`
-}
 
 // ── 生效投影（阶段步骤顶部）：规则阶段页字段从 GET /rules 读（allRules），
 // 对话框打开时随绑定明细同节奏刷新一次（openDialog 内） ──
@@ -1102,6 +1083,50 @@ const blockPageProjectionText = (caddyId: string): string => {
   if (showS1 && showS3) return `阶段 1 ${stageOverrideText(caddyId, 1)} · 阶段 3 ${stageOverrideText(caddyId, 3)}`
   if (showS1) return stageOverrideText(caddyId, 1)
   return stageOverrideText(caddyId, 3)
+}
+
+// 内容摘要列（按类型一行摘要）：stage0=信任条数+模式、stage1=模式+ACL+GeoIP、
+// stage2=限流值、stage3=WAF 模式+自定义+CRS 组、mixed=混合（任务 2）
+
+// 阶段 0 排位语义（浏览器实证修正）：阶段 0 不在评估链内，绑定链上的 stage0 条目
+// 不显示序数——本策略/其他 stage0 策略统一标注「阶段 0·拦截判定前优先生效」；
+// stage1/2/3/mixed 保持「N.名称」序数（评估序 policy_id ASC）
+const isStage0ChainEntry = (entry: ChainEntry): boolean => {
+  if (entry.isSelf) return editorPolicyType.value === 'stage0'
+  const policy = policies.value.find((p) => p.id === entry.policyId)
+  return policy ? policyTypeOf(policy) === 'stage0' : false
+}
+const chainChipText = (entry: ChainEntry, index: number): string => {
+  const name = entry.isSelf ? '本策略' : entry.name
+  if (isStage0ChainEntry(entry)) return `${name} · 阶段 0·拦截判定前优先生效`
+  return `${index + 1}.${name}`
+}
+const policySummaryLine = (row: PolicySummary): string => {
+  const type = policyTypeOf(row)
+  if (type === 'stage0') {
+    const count = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
+    return `信任 ${count} 条 · ${row.trust_detection === true ? '保留检测记录' : '直通上游'}`
+  }
+  if (type === 'stage2') {
+    return row.has_rate_limit ? `${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}` : '未启用'
+  }
+  if (type === 'stage3') {
+    const wafModeText: Record<string, string> = { blocking: '拦截', detection: '检测', custom_only: '仅自定义', off: '关闭' }
+    const crsCount = Array.isArray(row.crs_rule_groups)
+      ? row.crs_rule_groups.length
+      : parseJsonList(typeof row.crs_rule_groups === 'string' ? row.crs_rule_groups : undefined).length
+    const parts = [`WAF ${wafModeText[row.mode] ?? row.mode}`, `自定义 ${row.custom_rules_count} 条`]
+    if (row.mode === 'blocking' || row.mode === 'detection') parts.push(crsCount > 0 ? `CRS 组 ${crsCount}` : 'CRS 全部')
+    return parts.join(' · ')
+  }
+  if (type === 'stage1') {
+    const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
+    const geoCount = geoipRegionCount(row)
+    const aclPart = row.ip_acl_enabled ? `${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode} · ACL ${aclCount} 条` : '未启用 ACL'
+    const geoPart = geoCount > 0 ? `GeoIP ${geoCount} 区域` : 'GeoIP 未启用'
+    return `${aclPart} · ${geoPart}`
+  }
+  return '混合 · 阶段 1/2/3 组合'
 }
 
 // ── 关联规则行内阶段页编辑（决策 A：规则级 4 字段收口到策略侧，变更即 PUT /rules/:id） ──
@@ -1959,37 +1984,12 @@ const hasIpControl = (row: PolicySummary): boolean => {
   const aclEnabled = row.ip_acl_enabled
   return (aclEnabled && aclCount > 0) || wlCount > 0 || parseJsonList(row.ip_blacklist).length > 0
 }
-
-const wafTip = (row: PolicySummary): string =>
-  `模式：${row.mode === 'blocking' ? '拦截' : '检测'} · 阈值 ${row.anomaly_threshold} · 排除 ${row.crs_excluded_count} 条 · 自定义 ${row.custom_rules_count} 条`
-
 // 地域拦截启用口径与后端 PolicyHasGeoIP 一致：geoip_mode !== 'off' 且区域名单非空
 //（off 为关闭哨兵：区域保留不清单，重开即复用）
 const geoipRegionCount = (row: PolicySummary): number => parseJsonList(row.geoip_countries).length
 const hasGeoControl = (row: PolicySummary): boolean =>
   row.has_geoip ?? ((row.geoip_mode ?? 'off') !== 'off' && geoipRegionCount(row) > 0)
 
-// 地域拦截明细行：启用 → 「地域拦截 N 区域」；关闭但保留区域 → 「地域拦截：已关闭
-//（保留 N 区域）」；未配置任何区域时返回空串不占行
-const geoipTipLine = (row: PolicySummary): string => {
-  const count = geoipRegionCount(row)
-  if ((row.geoip_mode ?? 'off') !== 'off') return `地域拦截：${GEOIP_MODE_LABELS[row.geoip_mode ?? 'deny'] ?? row.geoip_mode} · ${count} 区域`
-  return count > 0 ? `地域拦截：已关闭（保留 ${count} 区域）` : ''
-}
-
-// 「IP 控制」hover 明细行：访问控制（黑/白名单计数）+ 地域拦截（含关闭保留态）。
-// 信任名单已归阶段 0（阶段 0 chip 自带 tooltip），此口径不再混入——任务 G 消除
-// 「没有启用 IP 访问控制但信任名单已启用」式矛盾。计数均为合并口径（内联 ∪ 引用）。
-const ipControlTipLines = (row: PolicySummary): string[] => {
-  const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
-  const blCount = parseJsonList(row.ip_blacklist).length
-  const lines = [
-    `访问控制：${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条`,
-  ]
-  const geoLine = geoipTipLine(row)
-  if (geoLine !== '') lines.push(geoLine)
-  return lines
-}
 
 // /security/bindings 以 rule_caddy_id 为键（v2.2.0 起值为绑定数组，policy_id ASC），
 // 反转为 policy_id → 规则列表供列表 tooltip 使用
@@ -2576,7 +2576,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   }
 }))
 
-// 配置预览 = 三阶段流水线投影（策略视角）：以「本策略为唯一绑定」构造模型——
+// 配置预览 = 三阶段投影（策略视角）：以「本策略为唯一绑定」构造模型——
 // 与规则侧流程抽屉共用 buildStageModel 同一投影；阶段外字段按类型裁剪（与服务端
 // 显式 policy_type 提交时的归一零值同口径，预览即所得）
 const previewModel = computed<RuleStageModel>(() => {
@@ -3016,9 +3016,7 @@ onMounted(async () => {
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .table-toolbar { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 16px; }
-.search-input { width: 280px; }
 
-.capability-tags { display: flex; gap: 6px; }
 
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
  * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
@@ -3173,6 +3171,7 @@ onMounted(async () => {
 .binding-order-chip { font-size: 12px; padding: 0 6px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
 .binding-order-chip.is-self { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; font-weight: 500; }
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
+.binding-order-chip.is-trust { background: #ecfdf5; color: #047857; border-color: #a7f3d0; font-weight: 500; }
 
 /* v2.2.0 拦截页面按规则生效状态注释块：跟随 .form-tip-line 的 12px/灰调，
    仅状态词使用克制的成功/警告/灰着色，避免使用 el-tag 造成视觉噪声。 */
@@ -3227,7 +3226,9 @@ onMounted(async () => {
 /* ── 实体单职化：类型 tab / 阶段 chips / 生效投影 / 行内阶段页编辑 / 流水线预览 ── */
 .policy-type-tabs { margin-bottom: 4px; }
 .policy-type-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
-.stage-chip.is-off { opacity: 0.55; }
+.policy-summary-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.policy-blocked-chip { flex: 0 0 auto; }
 
 /* 生效投影条（阶段步骤顶部）：本阶段在每条已关联规则上的拦截页形态 */
 .stage-projection-bar {
@@ -3249,7 +3250,7 @@ onMounted(async () => {
 .stage-override-status-select { width: 110px; }
 .stage-override-saving { color: var(--el-color-primary); }
 
-/* 配置预览：三阶段流水线投影（策略视角） */
+/* 配置预览：三阶段投影（策略视角） */
 .preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }
 .preview-meta-name { font-size: 15px; font-weight: 600; color: #1f2937; }
 .preview-meta-desc { font-size: 12px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }

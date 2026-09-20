@@ -160,6 +160,7 @@ type SecurityPolicySummary struct {
 	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 	PolicyType       string `json:"policy_type"`
 	TrustDetection   bool   `json:"trust_detection"`
+	Blocked24h       int    `json:"blocked_24h"`
 }
 
 type CreateSecurityPolicyRequest struct {
