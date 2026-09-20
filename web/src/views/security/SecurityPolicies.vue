@@ -90,7 +90,11 @@
         <div class="migrate-preview-section">
           <div class="migrate-preview-title">将创建 {{ migrateChildTypes.length }} 条子策略</div>
           <div class="migrate-preview-tags">
-            <el-tag v-for="type in migrateChildTypes" :key="type" size="small" effect="plain" type="primary">{{ migratePolicy.name }}（{{ POLICY_TYPE_SHORT_LABELS[type] }}）</el-tag>
+            <!-- 四阶段恒出（2026-09-21 用户裁定：与查看弹框/流程弹框同口径）——
+                 空阶段灰态标注「未启用 · 不生成」，不再整段缺席 -->
+            <el-tag v-for="type in (['stage0', 'stage1', 'stage2', 'stage3'] as const)" :key="type" size="small" effect="plain" :type="migrateChildTypes.includes(type) ? 'primary' : 'info'">
+              {{ migrateChildTypes.includes(type) ? `${migratePolicy.name}（${POLICY_TYPE_SHORT_LABELS[type]}）` : `${POLICY_TYPE_SHORT_LABELS[type]} · 未启用（不生成）` }}
+            </el-tag>
           </div>
         </div>
         <div class="migrate-preview-section">
