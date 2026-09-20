@@ -153,7 +153,6 @@
         <!-- 阶段 1/2/3 面板 -->
         <el-collapse-transition v-if="node.key.startsWith('stage') && node.key !== 'stage0'">
           <div v-if="activeNode === node.key && typedStageByKey(node.key)" class="flow-panel tl-panel">
-            <template :key="typedStageByKey(node.key)!.stage">
               <div class="flow-panel-head">
                 <span class="flow-panel-title">{{ typedStageByKey(node.key)!.title }}</span>
                 <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
@@ -238,7 +237,6 @@
               <div class="flow-panel-footnote">
                 {{ typedStageByKey(node.key)!.stage === 1 ? '信任名单归阶段 0 独立生效（拦截判定前）；本阶段未通过即终止' : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}
               </div>
-            </template>
           </div>
         </el-collapse-transition>
 

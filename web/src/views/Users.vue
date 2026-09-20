@@ -143,6 +143,7 @@
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
+            <div class="operation-buttons">
             <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
               <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
@@ -178,6 +179,7 @@
                 </el-button>
               </div>
             </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -778,4 +780,8 @@ onMounted(() => {
 .user-display { font-size: 12px; color: #9ca3af; }
 
 .text-secondary { color: #6b7280; font-size: 13px; }
+
+/* 操作列横向一行（与 Rules.vue 同款 flex 布局；禁用项保持占位 + hover 原因） */
+.operation-buttons { display: flex; gap: 2px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.operation-buttons :deep(.el-button) { margin: 0; padding: 2px 4px; min-width: auto; }
 </style>

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1856,6 +1857,20 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
 		return
 	}
+	// 限流策略唯一绑定（2026-09-20 用户裁定）：该规则已绑定其他 stage2 策略时
+	// 拒绝第二条（幂等重绑同一条放行）。
+	if policyType == models.PolicyTypeStage2 {
+		var otherStage2 int
+		if err := tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id
+			WHERE b.rule_caddy_id=? AND p.policy_type='stage2' AND p.id != ?`, req.RuleCaddyID, policyID).Scan(&otherStage2); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if otherStage2 > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请先解绑现有限流策略"})
+			return
+		}
+	}
 	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
 	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。与策略校验同口径先判
 	// err 再判 COUNT（R45 F2-B）：DB 瞬时故障（锁/IO）时 ruleExists 未赋值，
@@ -2003,6 +2018,19 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 			return
 		}
 	}
+	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多限流绑定不受影响，
+	// 收敛后提交即可）。
+	if len(uniqueIDs) > 0 {
+		stage2Count, err := countStage2Policies(tx, c.Request.Context(), uniqueIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if stage2Count > 1 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略"})
+			return
+		}
+	}
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -2119,6 +2147,19 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			return
 		}
 	}
+	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多限流绑定不受影响，
+	// 收敛后提交即可）。
+	if len(uniqueIDs) > 0 {
+		stage2Count, err := countStage2Policies(tx, c.Request.Context(), uniqueIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if stage2Count > 1 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略"})
+			return
+		}
+	}
 	type skippedRule struct {
 		RuleID string `json:"rule_id"`
 		Reason string `json:"reason"`
@@ -2177,6 +2218,19 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 				continue
 			}
 			final = merged
+		}
+		// 限流策略唯一绑定（merge 路径）：合并后单规则含 ≥2 条 stage2 → 该规则
+		// 进 skipped（保持原绑定不动，与 >5 上限同口径；replace 已由提交集门拦截）。
+		if req.Mode == "merge" {
+			stage2Count, err := countStage2Policies(tx, c.Request.Context(), final)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			if stage2Count > 1 {
+				skipped = append(skipped, skippedRule{ruleCaddyID, "每条规则最多绑定一条限流策略"})
+				continue
+			}
 		}
 		// 绑定无变化（merge 幂等）时跳过写入；replace 恒重写（语义即全量替换）
 		changed := req.Mode == "replace" || len(final) != len(existing)
@@ -3593,6 +3647,7 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 
 // resolveCreatePolicyType 解析创建请求的策略类型（策略实体单职化）：显式
 // stage1/stage2/stage3 合法；缺省（""）按归一后内容推断（models.InferPolicyType
+
 // 单一事实源）；显式 mixed 与非法值报错（mixed 为存量兼容组，不可新建）。
 // 显式类型时调用方必须先经 normalizeOutOfStageFields 归一阶段外字段。
 func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, error) {
@@ -3663,6 +3718,26 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
 		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
 	}
+}
+
+// countStage2Policies 统计给定策略 id 集合中 stage2（限流）策略的数量——限流
+// 策略唯一绑定（2026-09-20 用户裁定：一条规则最多绑定一条限流策略，多限流
+// 叠加无意义且配置面误导；存量多限流绑定保持可运行，写路径收敛到一条）。
+func countStage2Policies(tx *sql.Tx, ctx context.Context, ids []int) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policies WHERE policy_type='stage2' AND id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func validateIPCIDRList(field, raw string) error {

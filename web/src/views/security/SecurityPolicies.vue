@@ -30,14 +30,6 @@
             <el-link type="primary" @click="openDialog(row)">{{ row.name }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column label="WAF 模式" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.mode === 'blocking'" type="danger" size="small" effect="light">拦截</el-tag>
-            <el-tag v-else-if="row.mode === 'detection'" type="warning" size="small" effect="light">检测</el-tag>
-            <el-tag v-else-if="row.mode === 'custom_only'" size="small" effect="light">仅自定义</el-tag>
-            <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="关联规则" width="100" align="center">
           <template #default="{ row }">
             <el-tooltip v-if="policyBoundRules(row.id).length > 0" placement="top" popper-class="policy-rules-popper">
@@ -227,8 +219,11 @@
         <!-- Step: 阶段 0 · 信任名单（stage0 编辑器表单：信任名单内联+引用 + 保留检测记录开关） -->
         <div v-show="currentStep === WIZARD_STEP.TRUST" class="step-content">
           <div class="stage-projection-bar">
-            <div class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——信任 IP 命中后跳过全部后续安全阶段</div>
-            <div v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</div>
+            <span class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——信任 IP 命中后跳过全部后续安全阶段</span>
+            <div class="stage-projection-rules">
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
+              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
+            </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="信任 IP">
@@ -257,15 +252,18 @@
 
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
+          <!-- 投影条：同一信息条左右两段（左=生效说明句、右=关联规则覆盖状态列表，同字号同基线） -->
           <div class="stage-projection-bar">
-            <div class="stage-projection-desc">本策略将在关联规则的 WAF 阶段生效</div>
-            <template v-if="boundRules.length > 0">
-              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                <span class="stage-projection-state">{{ stageOverrideText(cid, 3) }}</span>
-              </span>
-            </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
+            <span class="stage-projection-desc">本策略将在关联规则的 WAF 阶段生效</span>
+            <div class="stage-projection-rules">
+              <template v-if="boundRules.length > 0">
+                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
+                  <span class="stage-projection-state">{{ stageOverrideText(cid, 3) }}</span>
+                </span>
+              </template>
+              <span v-else class="stage-projection-empty">尚未关联规则</span>
+            </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
@@ -530,18 +528,19 @@
             </el-form-item>
           </el-form>
         </div>
-
         <!-- Step 2: IP 访问控制 -->
         <div v-show="currentStep === WIZARD_STEP.IP_ACL" class="step-content">
           <div class="stage-projection-bar">
-            <div class="stage-projection-desc">本策略将在关联规则的 IP 访问控制/地域拦截阶段生效</div>
-            <template v-if="boundRules.length > 0">
-              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                <span class="stage-projection-state">{{ stageOverrideText(cid, 1) }}</span>
-              </span>
-            </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
+            <span class="stage-projection-desc">本策略将在关联规则的 IP 访问控制/地域拦截阶段生效</span>
+            <div class="stage-projection-rules">
+              <template v-if="boundRules.length > 0">
+                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
+                  <span class="stage-projection-state">{{ stageOverrideText(cid, 1) }}</span>
+                </span>
+              </template>
+              <span v-else class="stage-projection-empty">尚未关联规则</span>
+            </div>
           </div>
           <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
@@ -625,12 +624,13 @@
             </template>
           </el-form>
         </div>
-
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
           <div class="stage-projection-bar">
-            <div class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量），不配置拦截页</div>
-            <span class="stage-projection-empty">{{ boundRules.length > 0 ? `将应用于 ${boundRules.length} 条已关联规则` : '尚未关联规则——保存后在「关联规则」步骤绑定' }}</span>
+            <span class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量），不配置拦截页</span>
+            <div class="stage-projection-rules">
+              <span class="stage-projection-empty">{{ boundRules.length > 0 ? `将应用于 ${boundRules.length} 条已关联规则` : '尚未关联规则' }}</span>
+            </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
@@ -747,14 +747,16 @@
         <!-- Step: 拦截页（阶段 1/阶段 3 策略可配；阶段 2 限流恒 429 不配页） -->
         <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
           <div class="stage-projection-bar">
-            <div class="stage-projection-desc">规则可配阶段页覆盖；未覆盖时按触发策略显示</div>
-            <template v-if="boundRules.length > 0">
-              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                <span class="stage-projection-state">{{ blockPageProjectionText(cid) }}</span>
-              </span>
-            </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
+            <span class="stage-projection-desc">规则可配阶段页覆盖；未覆盖时按触发策略显示</span>
+            <div class="stage-projection-rules">
+              <template v-if="boundRules.length > 0">
+                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
+                  <span class="stage-projection-state">{{ blockPageProjectionText(cid) }}</span>
+                </span>
+              </template>
+              <span v-else class="stage-projection-empty">尚未关联规则</span>
+            </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="拦截页面">
@@ -1486,7 +1488,7 @@ const POLICY_TYPE_CREATE_OPTIONS: ReadonlyArray<{ value: 'stage0' | 'stage1' | '
   { value: 'stage3', label: '阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）' },
 ]
 // ── 策略类型（实体单职化）：新建先选类型；编辑态类型由行推断/后端 policy_type 携带 ──
-const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage3')
+const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage0')
 const editingPolicyType = ref<SecurityPolicyType | null>(null)
 const editorPolicyType = computed<SecurityPolicyType>(() =>
   editingId.value === null ? createPolicyType.value : (editingPolicyType.value ?? 'mixed'))
@@ -2217,7 +2219,15 @@ const buildDisplayChain = (caddyId: string): ChainEntry[] => {
     .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false, blockPageId: b.block_page_id, blockStatusCode: b.block_status_code }))
   const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id, blockStatusCode: form.value.block_status_code }
   const all = [...existing, self]
-  all.sort((a, b) => (a.policyId ?? Number.MAX_SAFE_INTEGER) - (b.policyId ?? Number.MAX_SAFE_INTEGER))
+  // 绑定链显示顺序严格按处理流程（任务 7）：阶段 0（信任，最高优先）→ 阶段 1（IP ACL）
+  // → 阶段 2（限流）→ 阶段 3（WAF）→ mixed；同阶段内按 policy_id ASC
+  const rankOf = (entry: ChainEntry): number => {
+    const type = entry.isSelf
+      ? editorPolicyType.value
+      : (() => { const p = policies.value.find((sp) => sp.id === entry.policyId); return p ? policyTypeOf(p) : 'stage3' })()
+    return type === 'stage0' ? 0 : type === 'stage1' ? 1 : type === 'stage2' ? 2 : type === 'stage3' ? 3 : 4
+  }
+  all.sort((a, b) => rankOf(a) - rankOf(b) || (a.policyId ?? Number.MAX_SAFE_INTEGER) - (b.policyId ?? Number.MAX_SAFE_INTEGER))
   return all
 }
 
@@ -3230,14 +3240,17 @@ onMounted(async () => {
 .policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .policy-blocked-chip { flex: 0 0 auto; }
 
-/* 生效投影条（阶段步骤顶部）：本阶段在每条已关联规则上的拦截页形态 */
+/* 生效投影条（任务 8）：同一信息条左右两段——左=生效说明句、右=关联规则覆盖状态
+   列表，同字号（12px）同基线（align-items: baseline） */
 .stage-projection-bar {
-  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 12px;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
   margin: 0 20px 12px; padding: 8px 12px;
   background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px;
   font-size: 12px;
 }
-.stage-projection-desc { font-weight: 600; color: #374151; line-height: 1.8; }
+.stage-projection-desc { font-weight: 600; color: #374151; line-height: 1.8; flex: 0 1 auto; }
+.stage-projection-rules { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; justify-content: flex-end; text-align: right; }
+.stage-projection-item { display: inline-flex; align-items: baseline; gap: 4px; line-height: 1.8; }
 .stage-projection-rule { color: #1f2937; font-weight: 500; }
 .stage-projection-state { color: #6b7280; }
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }

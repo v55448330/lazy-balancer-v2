@@ -33,9 +33,10 @@
           <template #default="{ row }">
             <div class="rule-name-cell">
               <!-- 锁 hover 摘要（不可点击）：按阶段 0/1/2/3 分组的紧凑摘要；
-                   完整处理流程入口在规则名配置弹框内 -->
+                   「查看完整处理流程」链接跳转流程弹框（跳转前 hide 本 popover 防遮挡） -->
               <el-popover
                 v-if="ruleStageModel(row).hasAnyPolicy"
+                :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
                 placement="top"
                 trigger="hover"
                 :width="360"
@@ -67,7 +68,7 @@
                       </template>
                     </div>
                   </template>
-                  <div class="lock-summary-hint">点击查看完整处理流程（规则名配置弹框内「处理流程」）</div>
+                  <div class="lock-summary-hint"><el-link type="primary" class="lock-flow-link" @click="openFlowFromLock(row)">查看完整处理流程 →</el-link></div>
                 </div>
               </el-popover>
               <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
@@ -253,9 +254,10 @@
                 </el-button>
                 </div>
               </el-tooltip>
-              <el-tooltip v-if="row.protocol === 'http'" :disabled="!isReadOnly" :content="readOnlyMessage">
+              <!-- TCP 不再 v-if 隐藏（与只读禁用同构）：不可用项禁用 + hover 原因 -->
+              <el-tooltip :disabled="row.protocol === 'http' && !isReadOnly" :content="row.protocol === 'tcp' ? 'TCP 规则不经过安全链' : readOnlyMessage">
                 <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="openBindDialog(row)">
+                <el-button type="primary" link size="small" :disabled="row.protocol === 'tcp' || isReadOnly || saving" @click="openBindDialog(row)">
                   安全
                 </el-button>
                 </div>
@@ -877,16 +879,12 @@
     <!-- View Config Dialog -->
     <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" top="5vh" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <template #header>
-        <div class="dialog-header dialog-header--with-action">
+        <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><Document /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">Caddy 配置</div>
             <div class="dialog-header__subtitle">单规则渲染产物的只读预览（规则信息 / JSON / Caddyfile）</div>
           </div>
-          <!-- 处理流程入口（用户裁定：自锁图标迁入此配置框；点击关配置框开流程弹框） -->
-          <el-button link type="primary" class="dialog-header-action" @click="openFlowFromConfig">
-            <el-icon><Guide /></el-icon>处理流程
-          </el-button>
         </div>
       </template>
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
@@ -1334,8 +1332,22 @@ const ruleStageModelMap = computed<Map<string, RuleStageModel>>(() => {
       rule,
     ))
   }
+
   return map
 })
+
+// 锁摘要 popover 实例登记（el-popover 组件公开 hide() 方法，其实例类型未导出——
+// 命名校验后落登记表；跳转流程弹框前显式关闭，防 popover 残留遮挡）
+const lockPopovers: Record<string, { hide: () => void }> = {}
+const setLockPopover = (caddyId: string, el: unknown): void => {
+  if (el && typeof el === 'object' && 'hide' in el && typeof (el as { hide: unknown }).hide === 'function') {
+    lockPopovers[caddyId] = el as { hide: () => void }
+  }
+}
+const openFlowFromLock = (rule: Rule): void => {
+  lockPopovers[rule.caddy_id]?.hide()
+  openFlowDialog(rule)
+}
 
 const ruleStageModel = (rule: Rule): RuleStageModel =>
   ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPages.value, rule)
@@ -2715,14 +2727,6 @@ const flowDialogVisible = ref(false)
 const flowDialogTarget = ref<RuleFlowTarget | null>(null)
 const flowDialogModel = ref<RuleStageModel | null>(null)
 
-// 处理流程入口（用户裁定）：配置弹框标题区「处理流程」按钮 → 关配置框开流程弹框
-const configRule = ref<Rule | null>(null)
-const openFlowFromConfig = (): void => {
-  const rule = configRule.value
-  if (!rule) return
-  configDialogVisible.value = false
-  openFlowDialog(rule)
-}
 
 const upstreamSummaryForRule = (rule: Rule): string => {
   const count = getEnabledUpstreams(rule).length
@@ -2915,7 +2919,6 @@ const openCopyWizard = async (rule: Rule) => {
 
 const viewConfig = async (rule: Rule) => {
   const targetId = rule.caddy_id
-  configRule.value = rule
   const requestSeq = ++configRequestSeq
   configDialogVisible.value = true
   configLoading.value = true
@@ -3839,8 +3842,6 @@ onUnmounted(() => {
 <!-- el-popover popper 挂载到 body，scoped 样式无法命中，单独非 scoped 块
      （阴影沿用 el-popover 默认 box-shadow token，与健康/证书 hover 框一致） -->
 <style>
-.dialog-header--with-action { position: relative; }
-.dialog-header-action { position: absolute; right: 28px; top: 2px; }
 
 /* 锁 hover 阶段摘要：卡片化分组 + 阶段色阶标题行 */
 .rule-lock-popper { padding: 10px 12px !important; }

@@ -29,17 +29,19 @@
           <span class="bind-stage-count">已选 {{ section.selection.value.length }} 条</span>
         </div>
         <el-select
-          :model-value="section.selection.value"
-          multiple
-          placeholder="选择策略（可多选）"
+          :model-value="section.single ? (section.selection.value[0] ?? null) : section.selection.value"
+          :multiple="!section.single"
+          :clearable="section.single"
+          :placeholder="section.single ? '选择策略（单选，换选=替换）' : '选择策略（可多选）'"
           style="width: 100%"
-          @update:model-value="section.selection.value = $event"
+          @update:model-value="section.single ? (section.selection.value = $event == null ? [] : [Number($event)]) : (section.selection.value = $event)"
         >
           <el-option v-for="policy in section.options" :key="policy.id" :value="policy.id" :label="policy.name">
             <span>{{ policy.name }}</span>
             <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? '启用' : '已禁用' }}</el-tag>
           </el-option>
         </el-select>
+        <div v-if="section.single" class="form-tip-line">每条规则最多绑定一条限流策略（后端对多限流绑定一律 400，消息原样透出）</div>
         <div v-if="section.options.length === 0" class="form-tip-line">暂无该类策略，到「安全防护 → 安全策略」页创建</div>
       </div>
       <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择，
@@ -159,7 +161,8 @@ import type {
 // 与后端 SetRuleSecurityPolicies 上限同口径
 const MAX_POLICY_BINDINGS = 5
 const PICKER_PAGE_SIZE = 20
-const STAGE_ORDER: readonly SecurityPolicyType[] = ['stage1', 'stage2', 'stage3', 'mixed']
+// 绑定摘要排序严格按处理流程（任务 7）：阶段 0（最高优先）→ 1 → 2 → 3 → mixed
+const STAGE_ORDER: readonly SecurityPolicyType[] = ['stage0', 'stage1', 'stage2', 'stage3', 'mixed']
 
 interface BindingEditorPolicy extends SecurityPolicyTypeInput {
   id: number
@@ -213,7 +216,7 @@ const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]
 const stageSections = computed(() => [
   { type: 'stage0' as const, title: '阶段 0 · 信任名单（直通上游 / 保留检测记录）', options: policiesByType.value.stage0, selection: bindStage0 },
   { type: 'stage1' as const, title: '阶段 1 · IP 访问控制', options: policiesByType.value.stage1, selection: bindStage1 },
-  { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2 },
+  { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2, single: true as const },
   { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3 },
 ])
 

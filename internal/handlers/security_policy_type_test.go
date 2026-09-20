@@ -398,3 +398,87 @@ func TestListSecurityPolicies_carriesBlocked24h(t *testing.T) {
 		t.Fatalf("blocked_24h=%v, want {b24:2, b24b:1}", got)
 	}
 }
+
+// 限流策略唯一绑定（2026-09-20 用户裁定）：一条规则最多绑定一条 stage2
+// 限流策略——BindRuleToPolicy 拒绝第二条限流、SetRuleSecurityPolicies 的
+// 提交集含 ≥2 条 stage2 即 400、batch-bind 提交集含 ≥2 条 stage2 即 400、
+// batch-bind merge 后单规则含 ≥2 条 stage2 进 skipped。存量多限流绑定保持
+// 可运行（重新保存时收敛到一条）。
+func TestBindWritePaths_rateLimitUniqueness(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	gin.SetMode(gin.TestMode)
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeCaddy.Close)
+	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	router := gin.New()
+	router.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
+	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
+	router.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,rate_limit_enabled,rate_limit_rps,enabled) VALUES
+		(1,'rl-a','off','stage2',1,100,1),(2,'rl-b','off','stage2',1,50,1),(3,'waf-a','blocking','stage3',0,0,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rl','rl','http','rl.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_rl','127.0.0.1',9000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 绑第一条限流 → 2xx
+	recorder := postJSON(t, router, "/security/policies/1/bind", map[string]any{"rule_caddy_id": "lb_rl"})
+	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
+		t.Fatalf("bind first rate-limit status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	}
+	// 再绑第二条限流 → 400
+	recorder = postJSON(t, router, "/security/policies/2/bind", map[string]any{"rule_caddy_id": "lb_rl"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bind second rate-limit status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	// 幂等重绑同一条限流 → 仍 2xx
+	recorder = postJSON(t, router, "/security/policies/1/bind", map[string]any{"rule_caddy_id": "lb_rl"})
+	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
+		t.Fatalf("re-bind same rate-limit status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	}
+	// SetRuleSecurityPolicies：提交集含 2 条 stage2 → 400
+	request := httptest.NewRequest(http.MethodPut, "/security/rules/lb_rl/policies", strings.NewReader(`{"policy_ids":[1,2]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("set policies with two stage2 status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	// SetRuleSecurityPolicies：收敛为 1 条 stage2 + WAF → 200
+	request = httptest.NewRequest(http.MethodPut, "/security/rules/lb_rl/policies", strings.NewReader(`{"policy_ids":[1,3]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("set policies with one stage2 status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	// batch-bind：提交集含 2 条 stage2 → 400
+	response = postStageJSON(t, router, "/security/policies/batch-bind", `{"rule_ids":["lb_rl"],"policy_ids":[1,2],"mode":"replace"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("batch-bind with two stage2 status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	// batch-bind：merge 后单规则含 2 条 stage2 → skipped
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rl2','rl2','http','rl2.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_rl2','127.0.0.1',9000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rl2',1)`); err != nil {
+		t.Fatal(err)
+	}
+	response = postStageJSON(t, router, "/security/policies/batch-bind", `{"rule_ids":["lb_rl2"],"policy_ids":[2],"mode":"merge"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("batch-bind merge second stage2 status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	bound, skipped := batchResult(t, response)
+	if bound != 0 || len(skipped) != 1 || skipped[0]["rule_id"] != "lb_rl2" {
+		t.Fatalf("batch-bind merge bound=%d skipped=%v, want bound=0 skipped=[lb_rl2]", bound, skipped)
+	}
+}
