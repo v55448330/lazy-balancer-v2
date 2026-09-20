@@ -509,7 +509,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     WHERE 过滤，NULL-enabled 行须按 schema 默认呈现启用态；生成路径以
 //     WHERE enabled=1 守卫，NULL 行本就被过滤，故裸列即可。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')`
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,'')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
@@ -605,6 +605,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			LogRequestBody:     p.LogRequestBody,
 			IPACLListRefs:      p.IPACLListRefs,
 			IPWhitelistRefs:    p.IPWhitelistRefs,
+			PolicyType:         p.PolicyType,
 		})
 	}
 	if policies == nil {
@@ -819,6 +820,17 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.IPACLMode == "" {
 		req.IPACLMode = "deny"
 	}
+
+	// 策略实体单职化（2026-09-20 用户裁定「实体拆分」）：policy_type 可选——
+	// 显式 stage1/stage2/stage3 时阶段外字段归一零值（类型与内容不漂移，
+	// 归一先于内容校验）；缺省按归一后内容推断（models.InferPolicyType）；
+	// 显式 mixed 拒绝（存量兼容组不可新建）。类型仅作编辑约束与分组元数据，
+	// 渲染侧仍按功能字段发射（行为零变化）。
+	policyType, typeErr := resolveCreatePolicyType(&req)
+	if typeErr != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: typeErr.Error()})
+		return
+	}
 	if err := services.ValidateGeoIPCountries(req.GeoIPCountries, req.GeoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -909,10 +921,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)))
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1245,6 +1257,48 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// ip_acl_mode 同口径（R50 B-#1）：空串落库后发射端仅 allow/deny 分支产出
 	// 规则、零 ACL 生效，而 SecurityPolicyHasIPControl 仍按 enabled+list 非空
 	// 宣称 IP 访问控制已启用。
+	// 策略实体单职化（同 Create 口径）：显式 policy_type=stage1/2/3 → 阶段外
+	// 字段指针强制设为类型零值（UPDATE 随之落零）；显式 mixed 拒绝；非法值
+	// 拒绝。nil=按合并后内容重推断（Exec 后读合并行回写）。
+	if req.PolicyType != nil {
+		emptyArr := "[]"
+		offMode := "off"
+		zeroInt := 0
+		falseVal := false
+		switch *req.PolicyType {
+		case models.PolicyTypeStage1:
+			req.Mode = &offMode
+			req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = &emptyArr, &emptyArr, &emptyArr
+			req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = &falseVal, &zeroInt, &zeroInt
+			req.WAFCheckResponse, req.LogRequestBody = &falseVal, &falseVal
+		case models.PolicyTypeStage2:
+			req.Mode = &offMode
+			req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = &emptyArr, &emptyArr, &emptyArr
+			req.WAFCheckResponse, req.LogRequestBody = &falseVal, &falseVal
+			req.IPACLEnabled = &falseVal
+			req.IPACLList, req.IPACLListRefs = &emptyArr, &emptyArr
+			req.IPWhitelistEnabled = &falseVal
+			req.IPWhitelist, req.IPWhitelistRefs = &emptyArr, &emptyArr
+			req.IPBlacklist = &emptyArr
+			req.GeoIPMode, req.GeoIPCountries = &offMode, &emptyArr
+			req.BlockPageID, req.BlockStatusCode = &zeroInt, &zeroInt
+		case models.PolicyTypeStage3:
+			req.IPACLEnabled = &falseVal
+			req.IPACLList, req.IPACLListRefs = &emptyArr, &emptyArr
+			req.IPWhitelistEnabled = &falseVal
+			req.IPWhitelist, req.IPWhitelistRefs = &emptyArr, &emptyArr
+			req.IPBlacklist = &emptyArr
+			req.GeoIPMode, req.GeoIPCountries = &offMode, &emptyArr
+			req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = &falseVal, &zeroInt, &zeroInt
+		case models.PolicyTypeMixed:
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为存量兼容形态，不可显式设置"})
+			return
+		default:
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("无效的策略类型：%s（可选 stage1/stage2/stage3）", *req.PolicyType)})
+			return
+		}
+	}
+
 	for _, f := range []struct {
 		name string
 		val  *string
@@ -1551,6 +1605,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addBool("log_request_body", req.LogRequestBody)
 	addStr("ip_acl_list_refs", req.IPACLListRefs)
 	addStr("ip_whitelist_refs", req.IPWhitelistRefs)
+	addStr("policy_type", req.PolicyType)
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -1571,6 +1626,20 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
+	}
+	// 缺省（nil）提交按合并后内容重推断 policy_type（类型与内容不漂移；
+	// 显式提交已由上方归一携带，无需重推断）。同时兜住导入/旧快照落库的
+	// '' 存量态——下次编辑即归一。
+	if req.PolicyType == nil {
+		var merged models.SecurityPolicy
+		if err := scanSecurityPolicyRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &merged); err == nil {
+			if inferred := models.InferPolicyType(&merged); inferred != merged.PolicyType {
+				if _, err := tx.ExecContext(c.Request.Context(), "UPDATE security_policies SET policy_type=? WHERE id=?", inferred, id); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新策略类型失败"})
+					return
+				}
+			}
+		}
 	}
 	// 审计用 username（非数字 ID）+ 字段级变更详情——IP 弹窗一键操作和
 	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯。
@@ -1991,6 +2060,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
 			continue
 		}
+
 		existingRows, err := tx.QueryContext(c.Request.Context(), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id", ruleCaddyID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -2057,6 +2127,149 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		AuditDetail: fmt.Sprintf("批量绑定安全策略 [%s]（%s）：成功 %d 条，跳过 %d 条", strings.Join(idStrs, ","), req.Mode, bound, len(skipped)),
 		SuccessMsg:  "批量绑定完成",
 		Data:        gin.H{"bound": bound, "skipped": skipped},
+	})
+}
+
+// SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
+// 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
+// 子策略继承拦截页，阶段 2 恒 429 不配页），全量重映射绑定（每条规则删原
+// 绑定+插全部子策略绑定；合并后 >5 条的规则进 skipped 并保留原绑定），无
+// skipped 才删除原策略（仍有规则引用时保留并在响应标记）。单事务一次
+// finishTxApply（单渲染）。
+func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
+	id := c.Param("id")
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	var p models.SecurityPolicy
+	if err := scanSecurityPolicyRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &p); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if p.PolicyType != models.PolicyTypeMixed {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "仅混合策略支持拆分迁移（单职策略无需拆分）"})
+		return
+	}
+	g1, g2, g3 := models.PolicyTypeFeatures(&p)
+	operator := int(contextUserID(c))
+	type createdPolicy struct {
+		ID         int    `json:"id"`
+		Name       string `json:"name"`
+		PolicyType string `json:"policy_type"`
+	}
+	created := make([]createdPolicy, 0, 3)
+	newIDs := make([]int, 0, 3)
+	insertChild := func(policyType, name, mode, aclMode, aclList string, aclEnabled bool, whitelist json.RawMessage, wlEnabled bool, blacklist json.RawMessage,
+		rlEnabled bool, rlRPS, rlBurst int, crsGroups, crsExcluded, customRules string, blockPageID, blockStatus int,
+		geoCountries json.RawMessage, geoMode string, wafResp, logBody bool, aclRefs, wlRefs string) error {
+		result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
+			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			name, p.Description, mode, p.AnomalyThreshold, aclMode, aclList, aclEnabled, whitelist, wlEnabled, blacklist,
+			rlEnabled, rlRPS, rlBurst, crsGroups, crsExcluded, customRules, blockPageID, blockStatus, p.Enabled, geoCountries, geoMode, wafResp, logBody, aclRefs, wlRefs, operator, policyType)
+		if err != nil {
+			return err
+		}
+		childID, _ := result.LastInsertId()
+		created = append(created, createdPolicy{ID: int(childID), Name: name, PolicyType: policyType})
+		newIDs = append(newIDs, int(childID))
+		return nil
+	}
+	stageSuffix := map[string]string{models.PolicyTypeStage1: "（阶段 1）", models.PolicyTypeStage2: "（阶段 2）", models.PolicyTypeStage3: "（阶段 3）"}
+	if g1 {
+		if err := insertChild(models.PolicyTypeStage1, p.Name+stageSuffix[models.PolicyTypeStage1], "off", p.IPACLMode, p.IPACLList, p.IPACLEnabled,
+			p.IPWhitelist, p.IPWhitelistEnabled, p.IPBlacklist, false, 0, 0, "[]", "[]", "[]", p.BlockPageID, p.BlockStatusCode,
+			p.GeoIPCountries, p.GeoIPMode, false, false, p.IPACLListRefs, p.IPWhitelistRefs); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+	}
+	if g2 {
+		if err := insertChild(models.PolicyTypeStage2, p.Name+stageSuffix[models.PolicyTypeStage2], "off", "deny", "[]", false,
+			json.RawMessage("[]"), false, json.RawMessage("[]"), p.RateLimitEnabled, p.RateLimitRPS, p.RateLimitBurst, "[]", "[]", "[]", 0, 0,
+			json.RawMessage("[]"), "off", false, false, "[]", "[]"); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+	}
+	if g3 {
+		if err := insertChild(models.PolicyTypeStage3, p.Name+stageSuffix[models.PolicyTypeStage3], p.Mode, "deny", "[]", false,
+			json.RawMessage("[]"), false, json.RawMessage("[]"), false, 0, 0, rawJSONString(p.CRSRuleGroups), rawJSONString(p.CRSExcludedRules), rawJSONString(p.CustomRules), p.BlockPageID, p.BlockStatusCode,
+			json.RawMessage("[]"), "off", p.WAFCheckResponse, p.LogRequestBody, "[]", "[]"); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+	}
+	// 全量重映射：逐规则删原绑定+插全部子策略绑定；合并后 >5 条进 skipped
+	// （保留原绑定不动，防止静默丢防护）。
+	boundRules := []string{}
+	ruleRows, err := tx.QueryContext(c.Request.Context(), "SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=? ORDER BY rule_caddy_id", p.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	for ruleRows.Next() {
+		var ruleID string
+		if err := ruleRows.Scan(&ruleID); err != nil {
+			ruleRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		boundRules = append(boundRules, ruleID)
+	}
+	ruleRows.Close()
+	type skippedRule struct {
+		RuleID string `json:"rule_id"`
+		Reason string `json:"reason"`
+	}
+	remapped := 0
+	skipped := make([]skippedRule, 0)
+	for _, ruleID := range boundRules {
+		var existingCount int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id != ?", ruleID, p.ID).Scan(&existingCount); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if existingCount+len(newIDs) > 5 {
+			skipped = append(skipped, skippedRule{ruleID, fmt.Sprintf("合并后超过 5 条策略上限（%d+%d）", existingCount, len(newIDs))})
+			continue
+		}
+		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleID, p.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		for _, childID := range newIDs {
+			if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleID, childID); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+		}
+		remapped++
+	}
+	// 仍有规则引用时保留原策略（skipped 规则的原绑定仍在生效），否则删除。
+	deletedOriginal := false
+	if len(skipped) == 0 {
+		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policies WHERE id=?", p.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		deletedOriginal = true
+	}
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("拆分迁移混合策略「%s」(#%d)：创建 %d 条单职策略，重映射 %d 条规则，跳过 %d 条", p.Name, p.ID, len(created), remapped, len(skipped)),
+		SuccessMsg:  "拆分迁移完成",
+		Data:        gin.H{"created": created, "remapped": remapped, "skipped": skipped, "deleted_original": deletedOriginal},
 	})
 }
 
@@ -3119,7 +3332,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -3182,6 +3395,7 @@ type securityPolicyDetail struct {
 	LogRequestBody     bool   `json:"log_request_body"`
 	IPACLListRefs      string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs    string `json:"ip_whitelist_refs"`
+	PolicyType         string `json:"policy_type"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -3214,6 +3428,7 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		LogRequestBody:     p.LogRequestBody,
 		IPACLListRefs:      p.IPACLListRefs,
 		IPWhitelistRefs:    p.IPWhitelistRefs,
+		PolicyType:         p.PolicyType,
 	}
 }
 
@@ -3277,6 +3492,66 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 		return fmt.Errorf("geoip_mode 必须为 off、allow 或 deny，当前值 %s", geoIPMode)
 	}
 	return nil
+}
+
+// resolveCreatePolicyType 解析创建请求的策略类型（策略实体单职化）：显式
+// stage1/stage2/stage3 合法；缺省（""）按归一后内容推断（models.InferPolicyType
+// 单一事实源）；显式 mixed 与非法值报错（mixed 为存量兼容组，不可新建）。
+// 显式类型时调用方必须先经 normalizeOutOfStageFields 归一阶段外字段。
+func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, error) {
+	switch req.PolicyType {
+	case "":
+		return models.InferPolicyType(&models.SecurityPolicy{
+			Mode: req.Mode, AnomalyThreshold: req.AnomalyThreshold,
+			IPACLMode: req.IPACLMode, IPACLList: req.IPACLList, IPACLEnabled: req.IPACLEnabled,
+			IPWhitelistEnabled: policyWhitelistDefault(req.IPWhitelistEnabled), IPWhitelist: json.RawMessage(req.IPWhitelist),
+			IPBlacklist:      json.RawMessage(req.IPBlacklist),
+			RateLimitEnabled: req.RateLimitEnabled, RateLimitRPS: req.RateLimitRPS, RateLimitBurst: req.RateLimitBurst,
+			CustomRules: json.RawMessage(req.CustomRules),
+			GeoIPMode:   req.GeoIPMode, GeoIPCountries: json.RawMessage(req.GeoIPCountries),
+			IPACLListRefs: req.IPACLListRefs, IPWhitelistRefs: req.IPWhitelistRefs,
+		}), nil
+	case models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3:
+		normalizeOutOfStageFields(req, req.PolicyType)
+		return req.PolicyType, nil
+	case models.PolicyTypeMixed:
+		return "", fmt.Errorf("混合策略为存量兼容形态，请按阶段类型（IP 访问控制/限流/WAF）创建")
+	default:
+		return "", fmt.Errorf("无效的策略类型：%s（可选 stage1/stage2/stage3）", req.PolicyType)
+	}
+}
+
+// normalizeOutOfStageFields 显式类型提交时把阶段外字段归一为零值（类型与
+// 内容不漂移；归一先于内容校验，归一后的空内容天然通过各形状校验）。
+// stage1 保留 IP/GeoIP+拦截页；stage2 仅保留限流（恒 429 不配拦截页）；
+// stage3 保留 WAF+拦截页。mode 归 off（阶段 1/2 策略无 WAF 引擎面）。
+func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyType string) {
+	switch policyType {
+	case models.PolicyTypeStage1:
+		req.Mode = "off"
+		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = "[]", "[]", "[]"
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
+		req.WAFCheckResponse, req.LogRequestBody = false, false
+	case models.PolicyTypeStage2:
+		req.Mode = "off"
+		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = "[]", "[]", "[]"
+		req.WAFCheckResponse, req.LogRequestBody = false, false
+		req.IPACLEnabled = false
+		req.IPACLList, req.IPACLListRefs = "[]", "[]"
+		req.IPWhitelistEnabled = nil
+		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
+		req.IPBlacklist = "[]"
+		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
+		req.BlockPageID, req.BlockStatusCode = 0, 0
+	case models.PolicyTypeStage3:
+		req.IPACLEnabled = false
+		req.IPACLList, req.IPACLListRefs = "[]", "[]"
+		req.IPWhitelistEnabled = nil
+		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
+		req.IPBlacklist = "[]"
+		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
+	}
 }
 
 func validateIPCIDRList(field, raw string) error {

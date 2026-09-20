@@ -111,12 +111,67 @@
               <div class="flow-policy-head">
                 <span class="flow-policy-order">#{{ group.order }}</span>
                 <span class="flow-policy-name" :title="group.name">{{ group.name }}</span>
+                <el-tag v-if="policyTypeOf(group.key) === 'mixed'" type="warning" size="small" effect="plain">混合</el-tag>
                 <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
+                <el-button
+                  v-if="groupHasDetails(group)"
+                  link
+                  type="primary"
+                  size="small"
+                  class="flow-detail-toggle"
+                  @click="togglePolicyDetail(stage.stage, group.key)"
+                >{{ expandedPolicyKey === `${stage.stage}:${group.key}` ? '收起明细' : '明细' }}</el-button>
               </div>
               <div v-for="row in group.rows" :key="row.label" class="flow-row">
                 <span class="flow-row-label">{{ row.label }}</span>
                 <span class="flow-row-detail" :title="row.detail">{{ row.detail }}</span>
               </div>
+              <!-- 二级明细区（懒加载附着；max-height 滚动） -->
+              <el-collapse-transition>
+                <div v-if="expandedPolicyKey === `${stage.stage}:${group.key}`" class="flow-policy-details">
+                  <template v-if="group.details">
+                    <template v-if="group.details.aclEntries">
+                      <div class="flow-detail-block-title">IP 访问控制列表（{{ group.details.aclEntries.length }} 条）</div>
+                      <div v-for="entry in group.details.aclEntries" :key="`acl:${entry.value}`" class="flow-detail-entry">
+                        <span class="flow-detail-value">{{ entry.value }}</span>
+                        <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
+                      </div>
+                    </template>
+                    <template v-if="group.details.trustEntries">
+                      <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条）</div>
+                      <div v-for="entry in group.details.trustEntries" :key="`trust:${entry.value}`" class="flow-detail-entry">
+                        <span class="flow-detail-value">{{ entry.value }}</span>
+                        <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
+                      </div>
+                    </template>
+                    <template v-if="group.details.geoipRegions && group.details.geoipRegions.length > 0">
+                      <div class="flow-detail-block-title">地域拦截区域（{{ group.details.geoipRegions.length }} 个）</div>
+                      <div class="flow-detail-chips">
+                        <el-tag v-for="region in group.details.geoipRegions" :key="region" size="small" effect="plain" class="flow-detail-chip">{{ region }}</el-tag>
+                      </div>
+                    </template>
+                    <template v-if="group.details.rateLimit">
+                      <div class="flow-detail-block-title">限流窗口口径</div>
+                      <div class="flow-detail-line">{{ group.details.rateLimit.caption }}</div>
+                    </template>
+                    <template v-if="group.details.customRules">
+                      <div class="flow-detail-block-title">自定义规则（{{ group.details.customRules.length }} 条）</div>
+                      <div v-for="rule in group.details.customRules" :key="rule.id" class="flow-detail-entry" :class="{ 'is-disabled': !rule.enabled }">
+                        <span class="flow-detail-value">{{ rule.name }}<span class="flow-detail-score">计分 {{ rule.score }}</span></span>
+                        <span class="flow-detail-meta">{{ rule.action === 'pass' ? '放行' : '拦截' }}<template v-if="rule.targets"> · {{ rule.targets }}</template></span>
+                      </div>
+                    </template>
+                    <template v-if="group.details.crsGroups && group.details.crsGroups.length > 0">
+                      <div class="flow-detail-block-title">CRS 规则组（{{ group.details.crsGroups.length }} 组）</div>
+                      <div class="flow-detail-chips">
+                        <el-tag v-for="groupLabel in group.details.crsGroups" :key="groupLabel" size="small" effect="plain" class="flow-detail-chip">{{ groupLabel }}</el-tag>
+                      </div>
+                    </template>
+                  </template>
+                  <div v-else-if="detailLoading" class="flow-detail-line">明细加载中…</div>
+                  <div v-else class="flow-detail-line">该阶段此策略无更多明细</div>
+                </div>
+              </el-collapse-transition>
             </div>
           </template>
           <div v-else class="flow-stage-empty">该阶段未启用（无策略配置对应能力）</div>
@@ -139,13 +194,25 @@
 import { computed, ref } from 'vue'
 import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
-import { STAGE_SHORT_TITLES } from '@/utils/securityStages'
-import type { RuleFlowTarget, RuleStageModel, StageGroup } from '@/utils/securityStages'
+import { STAGE_SHORT_TITLES, attachStageDetails, inferPolicyType } from '@/utils/securityStages'
+import type {
+  CrsRuleFileOption,
+  RuleFlowTarget,
+  RuleStageModel,
+  SecurityStageCustomRule,
+  SecurityStageIPList,
+  SecurityStagePolicy,
+  SecurityStagePolicyDetail,
+  StageGroup,
+  StagePolicyGroup,
+} from '@/utils/securityStages'
 
 const props = defineProps<{
   modelValue: boolean
   target: RuleFlowTarget | null
   model: RuleStageModel | null
+  policies: readonly SecurityStagePolicy[]
+  ipLists: readonly SecurityStageIPList[]
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
@@ -175,8 +242,77 @@ let statsSeq = 0
 
 const activeNode = ref('')
 
+// ── 明细懒加载（决策 C：现有只读端点前端拼装）——阶段面板首次展开时拉取三源并附着，
+// 一次抽屉会话拉一次；失败源回退空集（对应明细块不渲染），不阻断面板
+const detailLoading = ref(false)
+const detailsAttached = ref(false)
+const fullPolicies = ref<Map<number, SecurityStagePolicyDetail>>(new Map())
+const customRules = ref<SecurityStageCustomRule[]>([])
+const crsFiles = ref<CrsRuleFileOption[]>([])
+const expandedPolicyKey = ref('')
+
+const displayModel = computed<RuleStageModel | null>(() => {
+  if (!props.model) return null
+  if (!detailsAttached.value) return props.model
+  return attachStageDetails(props.model, {
+    policies: props.policies,
+    ipLists: props.ipLists,
+    sources: { fullPolicies: fullPolicies.value, customRules: customRules.value, crsFiles: crsFiles.value },
+  })
+})
+
+const stagePanels = computed<StageGroup[]>(() => displayModel.value?.stages ?? [])
+
+const policyTypeOf = (policyId: number) =>
+  inferPolicyType(props.policies.find((p) => p.id === policyId) ?? { has_ip_control: false, has_rate_limit: false, has_custom_rules: false })
+
+const groupHasDetails = (group: StagePolicyGroup): boolean => {
+  const d = group.details
+  if (!d) return false
+  return (d.aclEntries?.length ?? 0) > 0
+    || (d.trustEntries?.length ?? 0) > 0
+    || (d.geoipRegions?.length ?? 0) > 0
+    || d.rateLimit !== undefined
+    || (d.customRules?.length ?? 0) > 0
+    || (d.crsGroups?.length ?? 0) > 0
+}
+
+const ensureDetails = async (): Promise<void> => {
+  if (detailsAttached.value || detailLoading.value) return
+  detailLoading.value = true
+  try {
+    const caddyId = props.target?.caddyId
+    const requests = [
+      request.get<APIResponse<SecurityStageCustomRule[]>>('/security/custom-rules', { silent: true }),
+      request.get<APIResponse<{ rules: CrsRuleFileOption[] }>>('/security/crs/rules?page_size=50', { silent: true }),
+    ] as const
+    const [policyRes, customRes, crsRes] = await Promise.allSettled([
+      caddyId
+        ? request.get<APIResponse<SecurityStagePolicyDetail[]>>(`/security/rules/${encodeURIComponent(caddyId)}/policy`, { silent: true })
+        : Promise.resolve<APIResponse<SecurityStagePolicyDetail[]>>({ code: 0, data: [] }),
+      ...requests,
+    ])
+    if (policyRes.status === 'fulfilled') {
+      fullPolicies.value = new Map((policyRes.value.data ?? []).map((p) => [p.id, p]))
+    }
+    if (customRes.status === 'fulfilled') customRules.value = customRes.value.data ?? []
+    if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value.data?.rules ?? []
+    detailsAttached.value = true
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+const togglePolicyDetail = (stage: 1 | 2 | 3, policyId: number): void => {
+  const key = `${stage}:${policyId}`
+  expandedPolicyKey.value = expandedPolicyKey.value === key ? '' : key
+}
+
 const toggleNode = (key: string): void => {
   activeNode.value = activeNode.value === key ? '' : key
+  expandedPolicyKey.value = ''
+  // 阶段面板首次展开触发明细拉取（接入/上游面板无明细）
+  if (activeNode.value.startsWith('stage')) void ensureDetails()
 }
 
 // 计数 chip 文案：阶段 1/3 = 24h 事件数；阶段 2 = 重载口径（chip 下标注「自最近重载」）
@@ -207,8 +343,6 @@ interface FlowNode {
   chipCaption?: string
   prevInactive?: boolean
 }
-
-const stagePanels = computed<StageGroup[]>(() => props.model?.stages ?? [])
 
 const flowNodes = computed<FlowNode[]>(() => {
   const target = props.target
@@ -256,8 +390,14 @@ const chipWidth = (text: string): number =>
 
 const onDrawerOpen = (): void => {
   activeNode.value = ''
+  expandedPolicyKey.value = ''
   stats.value = null
   statsLoading.value = false
+  // 明细缓存随抽屉会话重置（规则绑定/策略内容可能已在页间变更）
+  detailsAttached.value = false
+  fullPolicies.value = new Map()
+  customRules.value = []
+  crsFiles.value = []
   const caddyId = props.target?.caddyId
   if (!caddyId || isTcp.value) return
   const seq = ++statsSeq
@@ -340,9 +480,22 @@ const onDrawerOpen = (): void => {
 .flow-policy-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-weight: 600; }
 .flow-policy-order { color: #6b7280; font-variant-numeric: tabular-nums; }
 .flow-policy-name { color: #1f2937; }
+.flow-detail-toggle { margin-left: auto; }
 .flow-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.8; }
 .flow-row-label { color: #6b7280; flex-shrink: 0; }
 .flow-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .flow-stage-empty { font-size: 13px; color: #9ca3af; padding: 8px 0; }
 .flow-panel-footnote { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5e7eb; font-size: 12px; color: #9ca3af; }
+
+/* ── 二级明细区（max-height 滚动） ── */
+.flow-policy-details { max-height: 260px; overflow-y: auto; margin-top: 6px; border-top: 1px dashed #e5e7eb; padding-top: 8px; }
+.flow-detail-block-title { font-size: 12px; font-weight: 600; color: #4b5563; margin: 8px 0 4px; }
+.flow-detail-block-title:first-child { margin-top: 0; }
+.flow-detail-entry { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12px; line-height: 1.8; }
+.flow-detail-entry.is-disabled { opacity: 0.45; }
+.flow-detail-value { color: #1f2937; font-family: monospace; }
+.flow-detail-score { margin-left: 6px; font-family: inherit; font-size: 11px; color: #9ca3af; }
+.flow-detail-meta { color: #9ca3af; text-align: right; }
+.flow-detail-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.flow-detail-line { font-size: 12px; color: #6b7280; line-height: 1.8; }
 </style>

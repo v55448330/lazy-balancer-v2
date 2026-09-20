@@ -714,6 +714,7 @@ func runMigrations() error {
 		"lb_rules.block_page_stage3_id":                   "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage3_status":               "INTEGER NOT NULL DEFAULT 0",
 		"security_custom_rules.updated_by":                "INTEGER DEFAULT 0",
+		"security_policies.policy_type":                   "TEXT NOT NULL DEFAULT ''",
 		"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
 		"security_crs_version.message":                    "TEXT DEFAULT ''",
 		"security_crs_version.last_checked":               "DATETIME",
@@ -1171,6 +1172,49 @@ func runMigrations() error {
 	}
 	if _, err := DB.Exec("UPDATE certificate_configs SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
 		return fmt.Errorf("failed to backfill NULL certificate_configs.created_at: %w", err)
+	}
+
+	// 策略实体单职化（2026-09-20 用户裁定「实体拆分」）：policy_type 列经
+	// newColumns 加入后存量行为 ''——按内容推断一次性回填（models.InferPolicyType
+	// 单一事实源；幂等：仅 '' 行参与，显式值不被覆盖，重跑无副作用）。
+	{
+		rows, err := DB.Query(`SELECT id, COALESCE(mode,'off'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'),
+			COALESCE(ip_blacklist,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'),
+			COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(custom_rules,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_countries,'[]')
+			FROM security_policies WHERE policy_type=''`)
+		if err != nil {
+			return fmt.Errorf("failed to list untyped security policies: %w", err)
+		}
+		type typedPolicy struct {
+			id    int
+			type_ string
+		}
+		var pending []typedPolicy
+		for rows.Next() {
+			var id, rlRPS int
+			var mode, aclList, aclRefs, blacklist, whitelist, wlRefs, customRules, geoipMode, geoipCountries string
+			var aclEnabled, rlEnabled, wlEnabled bool
+			if err := rows.Scan(&id, &mode, &aclEnabled, &aclList, &aclRefs, &blacklist, &wlEnabled, &whitelist, &wlRefs, &rlEnabled, &rlRPS, &customRules, &geoipMode, &geoipCountries); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan untyped security policy: %w", err)
+			}
+			pending = append(pending, typedPolicy{id, models.InferPolicyType(&models.SecurityPolicy{
+				Mode: mode, IPACLEnabled: aclEnabled, IPACLList: aclList, IPACLListRefs: aclRefs,
+				IPBlacklist: json.RawMessage(blacklist), IPWhitelistEnabled: wlEnabled, IPWhitelist: json.RawMessage(whitelist), IPWhitelistRefs: wlRefs,
+				RateLimitEnabled: rlEnabled, RateLimitRPS: rlRPS, CustomRules: json.RawMessage(customRules),
+				GeoIPMode: geoipMode, GeoIPCountries: json.RawMessage(geoipCountries),
+			})})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate untyped security policies: %w", err)
+		}
+		rows.Close()
+		for _, tp := range pending {
+			if _, err := DB.Exec("UPDATE security_policies SET policy_type=? WHERE id=? AND policy_type=''", tp.type_, tp.id); err != nil {
+				return fmt.Errorf("failed to backfill security_policies.policy_type: %w", err)
+			}
+		}
 	}
 
 	// C4-F1（审计 N+9）：同一恢复通道对 users/api_keys/path_rules/cert_jobs 的

@@ -311,7 +311,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
-		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0),
+		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0), "policy_type": "",
 		"log_request_body": int64(0),
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
@@ -2320,6 +2320,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 		//（R37 F37-2 / R38 C-1 / R39 C-1）。
 		if table == "lb_rules" || table == "upstreams" || table == "users" {
 			normalizeBackupBooleanNulls(map[string][]map[string]any{table: rows})
+		}
+		// 策略实体单职化：备份行 policy_type 为空（旧版本导出/缺席补默认 ''）
+		// 时按内容推断落库（services.InferSnapshotPolicyType → models.
+		// InferPolicyType 单一事实源）——导入后类型不滞留 ''。
+		if table == "security_policies" {
+			for _, row := range rows {
+				if t, _ := row["policy_type"].(string); t == "" {
+					row["policy_type"] = services.InferSnapshotPolicyType(row)
+				}
+			}
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
 			err = session.abort(err)

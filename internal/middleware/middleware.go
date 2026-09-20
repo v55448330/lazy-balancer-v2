@@ -408,6 +408,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/security/policies/:id/bind/:caddy_id", h.UnbindRuleFromPolicy)
 				admin.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 				admin.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
+				admin.POST("/security/policies/:id/split", h.SplitSecurityPolicy)
 				admin.PUT("/security/crs/auto-update", h.UpdateCRSAutoUpdate)
 				admin.POST("/security/crs/update", h.StartCRSUpdate)
 				admin.PUT("/security/ip2region/auto-update", h.UpdateIP2RegionAutoUpdate)

@@ -603,6 +603,44 @@ func policyWhitelistEnabled(p map[string]interface{}) bool {
 	return true
 }
 
+// InferSnapshotPolicyType 快照行的策略类型：主节点显式值直接透传；”/缺失（旧主
+// 节点快照、旧备份导入的缺列行）按内容推断（models.InferPolicyType 单一事实
+// 源）——从节点/导入侧落库后类型不得滞留 ”（策略页分组与阶段外字段归一的
+// 判定依赖）。
+func InferSnapshotPolicyType(p map[string]interface{}) interface{} {
+	if t, ok := p["policy_type"].(string); ok && t != "" {
+		return t
+	}
+	asString := func(key string) string {
+		s, _ := p[key].(string)
+		return s
+	}
+	asBool := func(key string) bool {
+		switch v := p[key].(type) {
+		case bool:
+			return v
+		case float64:
+			return v != 0
+		}
+		return false
+	}
+	asInt := func(key string) int {
+		if v, ok := p[key].(float64); ok {
+			return int(v)
+		}
+		return 0
+	}
+	return models.InferPolicyType(&models.SecurityPolicy{
+		Mode:         asString("mode"),
+		IPACLEnabled: asBool("ip_acl_enabled"), IPACLList: asString("ip_acl_list"), IPACLListRefs: asString("ip_acl_list_refs"),
+		IPBlacklist:        json.RawMessage(asString("ip_blacklist")),
+		IPWhitelistEnabled: asBool("ip_whitelist_enabled"), IPWhitelist: json.RawMessage(asString("ip_whitelist")), IPWhitelistRefs: asString("ip_whitelist_refs"),
+		RateLimitEnabled: asBool("rate_limit_enabled"), RateLimitRPS: asInt("rate_limit_rps"),
+		CustomRules: json.RawMessage(asString("custom_rules")),
+		GeoIPMode:   asString("geoip_mode"), GeoIPCountries: json.RawMessage(asString("geoip_countries")),
+	})
+}
+
 func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	// 与规则/用户等表一致的全量替换语义：空载荷意味着主节点已清空，从节点必须
 	// 同步删除，不能因载荷为空而提前返回。
@@ -686,7 +724,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 				Logf("warn", "快照携带 mode=off 且挂启用自定义规则的策略 %v(旧主节点语义):新版本 off=全关,该策略自定义规则暂不生效,请升级主节点后由其重发快照(或改用 custom_only)", p["name"])
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], snapshotJSONText(p["ip_acl_list"]), p["ip_acl_enabled"],
 			snapshotJSONText(p["ip_whitelist"]), policyWhitelistEnabled(p), snapshotJSONText(p["ip_blacklist"]),
@@ -694,7 +732,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			snapshotJSONText(p["crs_rule_groups"]), snapshotJSONText(p["crs_excluded_rules"]), snapshotJSONText(p["custom_rules"]),
 			p["block_page_id"], p["block_status_code"], p["enabled"], p["updated_by"], p["created_at"], p["updated_at"],
 			snapshotJSONText(p["geoip_countries"]), p["geoip_mode"], p["waf_check_response"], p["log_request_body"],
-			snapshotJSONText(p["ip_acl_list_refs"]), snapshotJSONText(p["ip_whitelist_refs"])); err != nil {
+			snapshotJSONText(p["ip_acl_list_refs"]), snapshotJSONText(p["ip_whitelist_refs"]), InferSnapshotPolicyType(p)); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}

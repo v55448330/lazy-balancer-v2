@@ -15,6 +15,9 @@
     </div>
 
     <el-card>
+      <el-tabs v-model="activeTypeTab" class="policy-type-tabs">
+        <el-tab-pane v-for="tab in policyTypeTabs" :key="tab.type" :label="`${tab.label}（${tab.count}）`" :name="tab.type" />
+      </el-tabs>
       <div class="table-toolbar">
         <el-input v-model="policySearch" placeholder="搜索策略名称" clearable :prefix-icon="Search" class="search-input" />
       </div>
@@ -48,28 +51,27 @@
             <template v-else>{{ row.rule_count }}</template>
           </template>
         </el-table-column>
-        <el-table-column label="防护能力" min-width="220">
+        <!-- 三阶段启用 chips（实体单职化词汇）：阶段 1=IP 访问控制/地域拦截、阶段 2=限流、
+             阶段 3=WAF/自定义；灰态=该阶段未启用。hover 明细沿用既有口径 -->
+        <el-table-column label="阶段流水线" min-width="220">
           <template #default="{ row }">
             <div class="capability-tags">
-              <el-tooltip v-if="row.has_waf" :content="wafTip(row)" placement="top">
-                <el-tag size="small" effect="plain">WAF</el-tag>
-              </el-tooltip>
-              <el-tooltip v-if="hasIpControl(row)" placement="top">
+              <el-tooltip :disabled="!stage1ChipOn(row)" placement="top">
                 <template #content>
                   <div v-for="line in ipControlTipLines(row)" :key="line">{{ line }}</div>
                 </template>
-                <el-tag size="small" type="success" effect="plain">IP 控制</el-tag>
+                <el-tag size="small" effect="plain" :type="stage1ChipOn(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !stage1ChipOn(row) }">阶段 1 · 预检</el-tag>
               </el-tooltip>
-              <el-tooltip v-if="hasGeoControl(row)" :content="geoipTipLine(row)" placement="top">
-                <el-tag size="small" type="danger" effect="plain">地域拦截</el-tag>
+              <el-tooltip :disabled="!row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst} · 拦截恒 429`" placement="top">
+                <el-tag size="small" effect="plain" :type="row.has_rate_limit ? 'warning' : 'info'" class="stage-chip" :class="{ 'is-off': !row.has_rate_limit }">阶段 2 · 限流</el-tag>
               </el-tooltip>
-              <el-tooltip v-if="row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}`" placement="top">
-                <el-tag size="small" type="warning" effect="plain">限流</el-tag>
+              <el-tooltip :disabled="!stage3ChipOn(row)" placement="top">
+                <template #content>
+                  <div>{{ stage3ChipOn(row) ? wafTip(row) : '' }}</div>
+                  <div v-if="row.has_custom_rules">{{ row.custom_rules_count }} 条启用中的自定义规则（按规则内动作执行）</div>
+                </template>
+                <el-tag size="small" effect="plain" :type="stage3ChipOn(row) ? 'danger' : 'info'" class="stage-chip" :class="{ 'is-off': !stage3ChipOn(row) }">阶段 3 · WAF</el-tag>
               </el-tooltip>
-              <el-tooltip v-if="row.has_custom_rules" :content="`${row.custom_rules_count} 条启用中的自定义规则（按规则内动作执行）`" placement="top">
-                <el-tag size="small" effect="plain">自定义</el-tag>
-              </el-tooltip>
-              <span v-if="!row.has_waf && !row.has_custom_rules && !hasIpControl(row) && !hasGeoControl(row) && !row.has_rate_limit" class="text-secondary">—</span>
             </div>
           </template>
         </el-table-column>
@@ -84,14 +86,66 @@
         <el-table-column label="更新者" width="100" align="center">
           <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
         </el-table-column>
-        <el-table-column v-if="!isReadOnly" label="操作" width="160" fixed="right">
+        <el-table-column v-if="!isReadOnly" label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="openDialog(row)">编辑</el-button>
+            <el-button size="small" link type="primary" @click="openBindRulesDialog(row)">绑定规则</el-button>
+            <el-button v-if="policyTypeOf(row) === 'mixed'" size="small" link type="warning" @click="openSplitDialog(row)">拆分迁移</el-button>
             <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
+
       </el-table>
     </el-card>
+    <!-- 混合策略拆分迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
+    <el-dialog v-model="splitVisible" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><WarningFilled /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">拆分迁移预演</div>
+            <div class="dialog-header__subtitle">混合策略「{{ splitPolicy?.name }}」将按阶段拆分为单职子策略（兼容组不再支持新建）</div>
+          </div>
+        </div>
+      </template>
+      <div v-if="splitPolicy" class="split-preview">
+        <div class="split-preview-section">
+          <div class="split-preview-title">将创建 {{ splitChildTypes.length }} 条子策略</div>
+          <div class="split-preview-tags">
+            <el-tag v-for="type in splitChildTypes" :key="type" size="small" effect="plain" type="primary">{{ splitPolicy.name }}（{{ POLICY_TYPE_SHORT_LABELS[type] }}）</el-tag>
+          </div>
+        </div>
+        <div class="split-preview-section">
+          <div class="split-preview-title">将重映射绑定（原策略的绑定整体改挂到子策略）</div>
+          <template v-if="splitBoundRules.length > 0">
+            <div v-for="rule in splitBoundRules" :key="rule.caddy_id" class="split-preview-rule">
+              <span class="split-preview-rule-name">{{ rule.name }}</span>
+              <span class="split-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
+            </div>
+          </template>
+          <div v-else class="split-preview-empty">当前无规则绑定本策略</div>
+        </div>
+        <el-alert
+          v-if="splitCapRisk.length > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`上限风险：${splitCapRisk.map((r) => r.name).join('、')} 拆分后将超过每条规则 5 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
+          class="split-preview-alert"
+        />
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="全部规则重映射成功后原策略将被删除；存在 skipped 规则时原策略保留（因仍在使用）"
+          class="split-preview-alert"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="splitVisible = false">取消</el-button>
+        <el-button type="warning" :loading="splitSaving" @click="submitSplit">确认拆分迁移</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
@@ -103,19 +157,40 @@
           </div>
         </div>
       </template>
-      <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
-        <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
-        <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
-        <el-step title="IP 访问控制（阶段 1）" :icon="Connection" @click="jumpToStep(WIZARD_STEP.IP_ACL)" />
-        <el-step title="速率限制（阶段 2）" :icon="Odometer" @click="jumpToStep(WIZARD_STEP.RATE_LIMIT)" />
-        <el-step title="关联规则" :icon="Link" @click="jumpToStep(WIZARD_STEP.BINDINGS)" />
-        <el-step title="配置预览" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
+      <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
+        <el-step
+          v-for="step in visibleSteps"
+          :key="step"
+          :title="WIZARD_STEP_META[step].title"
+          :icon="WIZARD_STEP_META[step].icon"
+          @click="jumpToStep(step)"
+        />
       </el-steps>
 
       <div class="wizard-content">
         <!-- Step 0: 基础信息 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
+            <!-- 策略类型：新建时选择（决定步骤条与表单裁剪）；编辑时固定展示。
+                 自管标签行(EP 2.14.4 规避)——el-radio-group 组容器 DIV 会被注册为表单输入 id -->
+            <div class="mode-row" role="group" aria-label="策略类型">
+              <span class="mode-row-label"><span class="required-mark">*</span>策略类型</span>
+              <div class="mode-row-content">
+                <el-radio-group v-if="editingId === null" v-model="createPolicyType">
+                  <el-radio value="stage1">阶段 1 · IP 访问控制（IP 名单 / 信任名单 / 地域拦截 / 拦截页）</el-radio>
+                  <el-radio value="stage2">阶段 2 · 限流（速率上限，拦截恒 429）</el-radio>
+                  <el-radio value="stage3">阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）</el-radio>
+                </el-radio-group>
+                <el-tag v-else :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+              </div>
+            </div>
+            <el-alert
+              v-if="editorPolicyType === 'mixed'"
+              type="info"
+              :closable="false"
+              title="混合策略（兼容旧版）：同时包含多个阶段的能力，可编辑；新建请按阶段拆分类型"
+              class="mixed-policy-banner"
+            />
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" />
             </el-form-item>
@@ -131,6 +206,17 @@
 
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
+          <!-- 生效投影：本阶段（WAF）在每条已关联规则上的拦截页形态 -->
+          <div class="stage-projection-bar">
+            <span class="stage-projection-title">生效投影</span>
+            <template v-if="boundRules.length > 0">
+              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-state">{{ stageOverrideText(cid, 3) }}</span>
+              </span>
+            </template>
+            <span v-else class="stage-projection-empty">尚未关联规则——本阶段将随绑定生效</span>
+          </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
                  会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
@@ -397,6 +483,17 @@
 
         <!-- Step 2: IP 访问控制 -->
         <div v-show="currentStep === WIZARD_STEP.IP_ACL" class="step-content">
+          <!-- 生效投影：本阶段（IP 访问控制/地域拦截）在每条已关联规则上的拦截页形态 -->
+          <div class="stage-projection-bar">
+            <span class="stage-projection-title">生效投影</span>
+            <template v-if="boundRules.length > 0">
+              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-state">{{ stageOverrideText(cid, 1) }}</span>
+              </span>
+            </template>
+            <span v-else class="stage-projection-empty">尚未关联规则——本阶段将随绑定生效</span>
+          </div>
           <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
@@ -508,6 +605,11 @@
 
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
+          <!-- 生效投影：限流拦截恒为 429，不涉及拦截页覆盖 -->
+          <div class="stage-projection-bar">
+            <span class="stage-projection-title">生效投影</span>
+            <span class="stage-projection-empty">本阶段拦截恒为 429（便于指标单独计量），不配置拦截页{{ boundRules.length > 0 ? `；将应用于 ${boundRules.length} 条已关联规则` : '——尚未关联规则' }}</span>
+          </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
               <el-switch v-model="form.rate_limit_enabled" />
@@ -578,11 +680,62 @@
                       :title="hint"
                       class="bound-rule-alert"
                     />
+                    <!-- 行内编辑该规则的阶段拦截页覆盖（决策 A：规则级 4 字段收口到策略侧；
+                         变更即 PUT /rules/:id——UpdateRule 对空 protocol 400，故携带基础现值；
+                         upstreams 省略=保留） -->
+                    <div v-if="!isReadOnly" class="stage-override-editors">
+                      <div v-for="stage in ([1, 3] as const)" :key="stage" class="stage-override-line">
+                        <span class="stage-override-label">阶段 {{ stage }} 拦截页</span>
+                        <el-select
+                          size="small"
+                          :model-value="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id']"
+                          :disabled="stageOverrideSaving[row.caddyId]"
+                          class="stage-override-page-select"
+                          @update:model-value="onStageOverrideChange(row.caddyId, stage, 'id', Number($event))"
+                        >
+                          <el-option :value="0" label="跟随策略" />
+                          <el-option v-for="p in blockPages" :key="p.id" :value="p.id" :label="p.name" />
+                        </el-select>
+                        <el-select
+                          size="small"
+                          :model-value="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_status' : 'stage3_status']"
+                          :disabled="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id'] <= 0 || stageOverrideSaving[row.caddyId]"
+                          class="stage-override-status-select"
+                          @update:model-value="onStageOverrideChange(row.caddyId, stage, 'status', Number($event))"
+                        >
+                          <el-option :value="0" label="默认（403）" />
+                          <el-option :value="400" label="400" />
+                          <el-option :value="401" label="401" />
+                          <el-option :value="403" label="403" />
+                          <el-option :value="404" label="404" />
+                          <el-option :value="503" label="503" />
+                        </el-select>
+                        <el-tag v-if="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id'] > 0" type="warning" size="small" effect="plain">覆盖生效中</el-tag>
+                        <el-icon v-if="stageOverrideSaving[row.caddyId]" class="is-loading stage-override-saving"><Loading /></el-icon>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量；同一规则绑定多条策略时按策略 ID 升序依次评估</div>
               </div>
             </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- Step: 拦截页（阶段 1/阶段 3 策略可配；阶段 2 限流恒 429 不配页） -->
+        <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
+          <!-- 生效投影：规则可配阶段页覆盖——逐规则展示本策略拦截页是否被规则覆盖 -->
+          <div class="stage-projection-bar">
+            <span class="stage-projection-title">生效投影</span>
+            <template v-if="boundRules.length > 0">
+              <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
+                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-state">{{ blockPageProjectionText(cid) }}</span>
+              </span>
+            </template>
+            <span v-else class="stage-projection-empty">尚未关联规则——拦截页随绑定生效</span>
+          </div>
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="拦截页面">
               <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
                 <el-option :value="0" label="无拦截页面" />
@@ -591,8 +744,7 @@
               <div v-if="form.block_page_id === 0" class="form-tip-line">不生成拦截页面错误路由，拦截返回 Caddy 默认 403</div>
               <div v-else-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
-              <!-- 拦截页归因：拦截时显示实际触发策略的拦截页与状态码——每条启用且
-                   配置了拦截页的策略各自生效，不再以首绑定策略为准。 -->
+              <!-- 拦截页归因分层口径：规则可配阶段页覆盖；未覆盖时按触发策略显示 -->
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
                 <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
                   <span class="block-page-rule-annotation-name">{{ row.name }}</span>
@@ -615,57 +767,45 @@
           </el-form>
         </div>
 
-        <!-- Step 5: 配置预览 -->
+        <!-- Step: 配置预览（三阶段流水线投影·策略视角——与规则侧流程抽屉共用 buildStageModel 投影） -->
         <div v-show="currentStep === WIZARD_STEP.PREVIEW" class="step-content">
-          <el-descriptions title="配置预览" :column="1" border>
-            <el-descriptions-item label="名称">{{ form.name || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="描述">{{ form.description || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="启用状态">
-              <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? '启用' : '禁用' }}</el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item v-if="form.mode === 'off'" label="WAF">已关闭</el-descriptions-item>
-            <el-descriptions-item v-else label="WAF 模式">
-              <el-tag v-if="form.mode === 'blocking'" type="danger" size="small" effect="light">拦截</el-tag>
-              <el-tag v-else-if="form.mode === 'detection'" type="warning" size="small" effect="light">检测</el-tag>
-              <el-tag v-else-if="form.mode === 'custom_only'" size="small" effect="light">仅自定义</el-tag>
-              <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="异常阈值">{{ thresholdLabel(form.anomaly_threshold) }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="CRS 规则组">{{ crsRuleGroups.length === 0 ? '全部（默认）' : `${crsGroupSelectCount} 组 + ${crsRuleIdSelectCount} 规则` }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode === 'blocking' || form.mode === 'detection'" label="排除规则">
-              <el-tooltip v-if="exclusionPreviewLines.length > 0" placement="top" popper-class="crs-preview-popper">
-                <template #content>
-                  <div v-for="line in exclusionPreviewLines" :key="line">{{ line }}</div>
-                </template>
-                <span>{{ serializedExcludedRules.length }} 条</span>
-              </el-tooltip>
-              <template v-else>0 条</template>
-            </el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="自定义规则">{{ selectedCustomRules.length }} 条</el-descriptions-item>
-            <el-descriptions-item label="拦截页面">{{ blockPageName }}</el-descriptions-item>
-            <el-descriptions-item label="IP 访问控制">
-              <template v-if="form.ip_acl_enabled">{{ aclModeLabel }} · 列表 {{ aclMergedCount }} 条</template>
-              <template v-else>禁用</template>
-            </el-descriptions-item>
-            <el-descriptions-item label="信任名单">
-              <template v-if="ipWhitelistEnabled">启用 · {{ mergeIpEntries(ipWhitelist, ipWhitelistRefs).length }} 条（含引用列表）</template>
-              <template v-else>禁用{{ ipWhitelist.length > 0 ? `（保留 ${ipWhitelist.length} 条内联）` : '' }}{{ ipWhitelistRefs.length > 0 ? `（保存时将解除 ${ipWhitelistRefs.length} 个引用列表）` : '' }}</template>
-            </el-descriptions-item>
-            <el-descriptions-item label="区域控制">
-              <template v-if="form.geoip_enabled">{{ geoipModeLabel }} · 区域 {{ geoipCountries.length }} 个</template>
-              <template v-else>禁用</template>
-            </el-descriptions-item>
-            <el-descriptions-item label="限流">
-              <template v-if="form.rate_limit_enabled">{{ form.rate_limit_rps }} 次/秒 · 突发 {{ form.rate_limit_burst }} 次</template>
-              <template v-else>禁用</template>
-            </el-descriptions-item>
-            <el-descriptions-item label="关联规则">
-              <template v-if="boundRuleList.length > 0">
-                {{ boundRuleList.length }} 条 · {{ boundRuleList.slice(0, 3).map((rule) => rule.name).join('、') }}{{ boundRuleList.length > 3 ? ' 等' : '' }}
+          <div class="preview-meta">
+            <span class="preview-meta-name">{{ form.name || '-' }}</span>
+            <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" size="small" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+            <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? '启用' : '禁用' }}</el-tag>
+            <span v-if="form.description" class="preview-meta-desc" :title="form.description">{{ form.description }}</span>
+          </div>
+          <div class="preview-pipeline">
+            <div
+              v-for="stage in previewModel.stages"
+              :key="stage.stage"
+              class="preview-stage-card"
+              :class="{ 'is-disabled': !stage.enabled }"
+            >
+              <div class="preview-stage-head">
+                <span class="preview-stage-title">{{ stage.title }}</span>
+                <span v-if="!stage.enabled" class="preview-stage-empty">未启用</span>
+              </div>
+              <template v-if="stage.enabled">
+                <div v-for="group in stage.groups" :key="group.key" class="preview-policy-rows">
+                  <div v-for="row in group.rows" :key="row.label" class="preview-row">
+                    <span class="preview-row-label">{{ row.label }}</span>
+                    <span class="preview-row-detail" :title="row.detail">{{ row.detail }}</span>
+                  </div>
+                </div>
               </template>
-              <template v-else>未关联</template>
-            </el-descriptions-item>
-          </el-descriptions>
+              <div v-if="stage.enabled && stage.footnote" class="preview-stage-footnote">{{ stage.footnote }}</div>
+            </div>
+          </div>
+          <el-divider content-position="left" class="compact-divider">已关联规则的阶段页覆盖</el-divider>
+          <div v-if="boundRules.length === 0" class="form-tip-line">尚未关联规则——保存后在「关联规则」步骤绑定，或在规则行点「安全」绑定</div>
+          <div v-else class="preview-bound-rules">
+            <div v-for="cid in boundRules" :key="cid" class="preview-bound-rule">
+              <span class="preview-bound-rule-name">{{ ruleNameOf(cid) }}</span>
+              <span class="preview-bound-rule-stage">阶段 1：{{ stageOverrideText(cid, 1) }}</span>
+              <span class="preview-bound-rule-stage">阶段 3：{{ stageOverrideText(cid, 3) }}</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -741,7 +881,6 @@
       </template>
     </el-dialog>
 
-    <!-- 提取为地址列表：把当前内联名单一键转为可复用列表并改为引用（语义不变） -->
     <el-dialog v-model="extractDialogVisible" title="提取为地址列表" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
       <el-alert type="warning" :closable="false" show-icon title="将创建列表并清空内联条目，引用后语义不变" class="extract-alert" />
       <el-form label-width="80px" @submit.prevent>
@@ -762,15 +901,28 @@
         <el-button type="primary" :loading="extracting" @click="confirmExtract">创建并引用</el-button>
       </template>
     </el-dialog>
+
+    <!-- 行级「绑定规则」：不经编辑器直接重置该策略绑定集（与规则页「安全」弹框共享同一组件） -->
+    <SecurityBindingEditor
+      v-model="bindRulesVisible"
+      mode="policy"
+      :policy-id="bindRulesPolicy?.id ?? null"
+      :policy-name="bindRulesPolicy?.name"
+      :policies="policies"
+      :bindings="securityBindings"
+      :rules="allRules"
+      :block-pages="blockPages"
+      @saved="onBindRulesSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
-import { request, ApiRequestError } from '@/utils/api'
+import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
@@ -778,10 +930,14 @@ import { useAuthStore } from '@/stores/auth'
 import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
+import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, inferPolicyType, resolveStageOverride } from '@/utils/securityStages'
+import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean }
-interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
+// 规则行携带阶段拦截页覆盖 4 字段（关联规则行内编辑与生效投影同源）
+interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string; block_page_stage1_id?: number; block_page_stage1_status?: number; block_page_stage3_id?: number; block_page_stage3_status?: number }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number; block_status_code?: number }
 // GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
@@ -838,11 +994,201 @@ const loading = ref(false)
 const saving = ref(false)
 const policies = ref<PolicySummary[]>([])
 const policySearch = ref('')
-const filteredPolicies = computed(() => {
-  const query = policySearch.value.trim().toLowerCase()
-  if (!query) return policies.value
-  return policies.value.filter((p) => (p.name || '').toLowerCase().includes(query))
+
+// ── 列表按类型分组（阶段 1/2/3 + 混合兼容组）：policy_type 缺省时按内容推断（inferPolicyType
+// 与后端兜底同形状） ──
+const activeTypeTab = ref<SecurityPolicyType>('stage1')
+const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)
+// 「混合策略（兼容旧版）」tab 条件可见：仅当存在 mixed 策略（导入或存量）时显示；
+// 混合组清空（如拆分迁移完成）后当前 tab 自动切回阶段 1
+const policyTypeTabs = computed(() => {
+  const counts: Record<SecurityPolicyType, number> = { stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
+  for (const p of policies.value) counts[policyTypeOf(p)]++
+  const tabs = (['stage1', 'stage2', 'stage3'] as const).map((type) => ({
+    type: type as SecurityPolicyType,
+    label: POLICY_TYPE_LABELS[type],
+    count: counts[type],
+  }))
+  if (counts.mixed > 0) tabs.push({ type: 'mixed', label: POLICY_TYPE_LABELS.mixed, count: counts.mixed })
+  return tabs
 })
+
+watch(policyTypeTabs, (tabs) => {
+  if (!tabs.some((tab) => tab.type === activeTypeTab.value)) activeTypeTab.value = 'stage1'
+})
+
+const filteredPolicies = computed(() => {
+  const typed = policies.value.filter((p) => policyTypeOf(p) === activeTypeTab.value)
+  const query = policySearch.value.trim().toLowerCase()
+  if (!query) return typed
+  return typed.filter((p) => (p.name || '').toLowerCase().includes(query))
+})
+
+// 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、阶段 3=WAF||自定义规则
+const stage1ChipOn = (row: PolicySummary): boolean => hasIpControl(row) || hasGeoControl(row)
+const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.has_custom_rules
+
+// ── 生效投影（阶段步骤顶部）：规则阶段页字段从 GET /rules 读（allRules），
+// 对话框打开时随绑定明细同节奏刷新一次（openDialog 内） ──
+const ruleNameOf = (caddyId: string): string => allRules.value.find((r) => r.caddy_id === caddyId)?.name || caddyId
+
+const stageOverrideText = (caddyId: string, stage: 1 | 3): string => {
+  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
+  const pageId = stage === 1 ? (rule?.block_page_stage1_id ?? 0) : (rule?.block_page_stage3_id ?? 0)
+  if (pageId <= 0) return '跟随策略'
+  const status = stage === 1 ? rule?.block_page_stage1_status : rule?.block_page_stage3_status
+  const override = resolveStageOverride(pageId, status, blockPages.value)
+  if (!override) return '跟随策略'
+  return override.broken ? '阶段页已失效（回落跟随策略）' : `已被规则覆盖为「${override.pageName}（${override.status}）」`
+}
+
+// 拦截页步骤的投影文案：按策略类型裁剪阶段（stage1 类型只看阶段 1，stage3 只看阶段 3）
+const blockPageProjectionText = (caddyId: string): string => {
+  const showS1 = typeAllowsStage(1)
+  const showS3 = typeAllowsStage(3)
+  if (showS1 && showS3) return `阶段 1 ${stageOverrideText(caddyId, 1)} · 阶段 3 ${stageOverrideText(caddyId, 3)}`
+  if (showS1) return stageOverrideText(caddyId, 1)
+  return stageOverrideText(caddyId, 3)
+}
+
+// ── 关联规则行内阶段页编辑（决策 A：规则级 4 字段收口到策略侧，变更即 PUT /rules/:id） ──
+interface StageOverrideEdit { stage1_id: number; stage1_status: number; stage3_id: number; stage3_status: number }
+const stageOverrideEdits = ref<Record<string, StageOverrideEdit>>({})
+const stageOverrideSaving = ref<Record<string, boolean>>({})
+const stageOverrideSeq = new Map<string, number>()
+
+const stageOverrideSeed = (caddyId: string): StageOverrideEdit => {
+  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
+  return {
+    stage1_id: rule?.block_page_stage1_id ?? 0,
+    stage1_status: rule?.block_page_stage1_status ?? 0,
+    stage3_id: rule?.block_page_stage3_id ?? 0,
+    stage3_status: rule?.block_page_stage3_status ?? 0,
+  }
+}
+
+const overrideEditOf = (caddyId: string): StageOverrideEdit =>
+  stageOverrideEdits.value[caddyId] ?? stageOverrideSeed(caddyId)
+const onStageOverrideChange = (caddyId: string, stage: 1 | 3, field: 'id' | 'status', value: number): void => {
+  const edit = { ...overrideEditOf(caddyId) }
+  if (field === 'id') {
+    if (stage === 1) edit.stage1_id = value
+    else edit.stage3_id = value
+    // 跟随策略（页=0）时状态码归 0（后端归一语义）
+    if (value <= 0) {
+      if (stage === 1) edit.stage1_status = 0
+      else edit.stage3_status = 0
+    }
+  } else if (stage === 1) edit.stage1_status = value
+  else edit.stage3_status = value
+  stageOverrideEdits.value = { ...stageOverrideEdits.value, [caddyId]: edit }
+  void saveStageOverride(caddyId, edit)
+}
+
+// ── 混合策略一键拆分迁移（用户裁定）：预演（子策略/重映射/上限风险）→ POST split → 汇总 ──
+interface SplitPolicyResult {
+  created: Array<{ id: number; name: string; policy_type: string }>
+  remapped: number
+  skipped: Array<{ rule_id: string; reason: string }>
+  deleted_original: boolean
+}
+const splitVisible = ref(false)
+const splitSaving = ref(false)
+const splitPolicy = ref<PolicySummary | null>(null)
+
+// 预演子策略类型 = 特征组探测（与 inferPolicyType 同形状的阶段能力谓词；后端按同口径实际生成）
+const splitChildTypes = computed<SecurityPolicyType[]>(() => {
+  const p = splitPolicy.value
+  if (!p) return []
+  const types: SecurityPolicyType[] = []
+  if (stage1ChipOn(p)) types.push('stage1')
+  if (p.has_rate_limit) types.push('stage2')
+  if (stage3ChipOn(p)) types.push('stage3')
+  return types
+})
+
+const splitBoundRules = computed(() => (splitPolicy.value ? policyBoundRules(splitPolicy.value.id) : []))
+
+// 上限风险：规则当前绑定数 - 1（原策略被替换）+ 子策略数 > 5 → 该规则保持原绑定进 skipped
+const splitCapRisk = computed(() =>
+  splitBoundRules.value.filter((rule) =>
+    (securityBindings.value[rule.caddy_id] || []).length - 1 + splitChildTypes.value.length > MAX_POLICIES_PER_RULE))
+
+const openSplitDialog = (row: PolicySummary): void => {
+  splitPolicy.value = row
+  splitVisible.value = true
+}
+
+const submitSplit = async (): Promise<void> => {
+  const policy = splitPolicy.value
+  if (!policy) return
+  splitSaving.value = true
+  try {
+    const res = await request.post<APIResponse<SplitPolicyResult>>(`/security/policies/${policy.id}/split`)
+    const data = res.data
+    const parts: string[] = []
+    if (data && data.created.length > 0) parts.push(`已创建 ${data.created.length} 条子策略（${data.created.map((c) => c.name).join('、')}）`)
+    if (data && data.remapped > 0) parts.push(`重映射 ${data.remapped} 条规则绑定`)
+    if (data && !data.deleted_original) parts.push('原策略因仍在使用未删除')
+    mfaAwareSuccess(parts.length > 0 ? parts.join('；') : '拆分迁移完成')
+    if (data && data.skipped.length > 0) {
+      ElMessage.warning(`${data.skipped.length} 条规则跳过：${data.skipped.map((s) => s.reason).join('；')}`)
+    }
+    splitVisible.value = false
+    await fetchData()
+  } catch (error: unknown) {
+    // 错误提示已由全局拦截器展示
+    console.error('split policy failed', error)
+  } finally {
+    splitSaving.value = false
+  }
+}
+
+const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit): Promise<void> => {
+  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
+  if (!rule) return
+  const seq = (stageOverrideSeq.get(caddyId) ?? 0) + 1
+  stageOverrideSeq.set(caddyId, seq)
+  stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: true }
+  try {
+    // UpdateRule 对空 protocol 400——携带基础现值；upstreams 省略=保留；4 字段指针化显式提交
+    await request.put<APIResponse>(`/rules/${encodeURIComponent(caddyId)}`, {
+      name: rule.name,
+      protocol: rule.protocol,
+      domain: rule.domain,
+      listen_port: rule.listen_port,
+      block_page_stage1_id: edit.stage1_id,
+      block_page_stage1_status: edit.stage1_id > 0 ? edit.stage1_status : 0,
+      block_page_stage3_id: edit.stage3_id,
+      block_page_stage3_status: edit.stage3_id > 0 ? edit.stage3_status : 0,
+    })
+    if (stageOverrideSeq.get(caddyId) !== seq) return
+    // 成功：回写 allRules 行（生效投影/覆盖徽标同源），不整表刷新打断编辑节奏
+    rule.block_page_stage1_id = edit.stage1_id
+    rule.block_page_stage1_status = edit.stage1_id > 0 ? edit.stage1_status : 0
+    rule.block_page_stage3_id = edit.stage3_id
+    rule.block_page_stage3_status = edit.stage3_id > 0 ? edit.stage3_status : 0
+    mfaAwareSuccess(`规则「${rule.name}」阶段拦截页已更新`)
+  } catch (error: unknown) {
+    if (stageOverrideSeq.get(caddyId) !== seq) return
+    // 失败回本行快照（他行不受影响）；错误提示已由全局拦截器展示
+    stageOverrideEdits.value = { ...stageOverrideEdits.value, [caddyId]: stageOverrideSeed(caddyId) }
+    console.error('save stage override failed', error)
+  } finally {
+    if (stageOverrideSeq.get(caddyId) === seq) {
+      stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: false }
+    }
+  }
+}
+
+// ── 行级「绑定规则」（不经编辑器；与规则页「安全」弹框共享 SecurityBindingEditor） ──
+const bindRulesVisible = ref(false)
+const bindRulesPolicy = ref<PolicySummary | null>(null)
+const openBindRulesDialog = (row: PolicySummary): void => {
+  bindRulesPolicy.value = row
+  bindRulesVisible.value = true
+}
+const onBindRulesSaved = (): void => { void fetchData() }
 const allRules = ref<Rule[]>([])
 const securityBindings = ref<Record<string, BindingInfo[]>>({})
 const dialogVisible = ref(false)
@@ -905,28 +1251,71 @@ const ipBlacklistSelf = ref<string[]>([])
 const geoipCountries = ref<string[]>([])
 const crsRuleGroups = ref<string[]>([])
 const boundRules = ref<string[]>([])
+
+// 绑定集/规则快照变化时回填编辑态（在飞行中的行跳过，避免覆盖用户刚选的值）。
+// 位置约束：immediate watch 在 setup 期即执行，必须晚于 boundRules/allRules 声明（TDZ）
+watch([boundRules, allRules], () => {
+  const next: Record<string, StageOverrideEdit> = {}
+  for (const cid of boundRules.value) {
+    next[cid] = stageOverrideSaving.value[cid] ? overrideEditOf(cid) : stageOverrideSeed(cid)
+  }
+  stageOverrideEdits.value = next
+}, { immediate: true })
 const originalBoundRules = ref<string[]>([])
 // R60 D60-F1：策略对话框打开序列号——丢弃在途详情 GET 的过期返回。
 let policyDialogOpenSeq = 0
 
+// 步骤条按阶段序重排（实体单职化）：基础信息 → 阶段 1 → 阶段 2 → 阶段 3 → 拦截页 → 关联规则 → 预览；
+// 可见性按策略类型裁剪（visibleSteps），无该阶段的步骤不出现
 const WIZARD_STEP = {
   BASIC: 0,
-  WAF_RULES: 1,
-  IP_ACL: 2,
-  RATE_LIMIT: 3,
-  BINDINGS: 4,
-  PREVIEW: 5,
+  IP_ACL: 1,
+  RATE_LIMIT: 2,
+  WAF_RULES: 3,
+  BLOCK_PAGE: 4,
+  BINDINGS: 5,
+  PREVIEW: 6,
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
-const WIZARD_STEPS_ORDER: readonly WizardStep[] = [
-  WIZARD_STEP.BASIC,
-  WIZARD_STEP.WAF_RULES,
-  WIZARD_STEP.IP_ACL,
-  WIZARD_STEP.RATE_LIMIT,
-  WIZARD_STEP.BINDINGS,
-  WIZARD_STEP.PREVIEW,
-]
+const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
+  [WIZARD_STEP.BASIC]: { title: '基础信息', icon: InfoFilled },
+  [WIZARD_STEP.IP_ACL]: { title: '阶段 1·IP 访问控制与地域拦截', icon: Connection },
+  [WIZARD_STEP.RATE_LIMIT]: { title: '阶段 2·速率限制', icon: Odometer },
+  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3·WAF 规则', icon: Lock },
+  [WIZARD_STEP.BLOCK_PAGE]: { title: '拦截页', icon: Document },
+  [WIZARD_STEP.BINDINGS]: { title: '关联规则', icon: Link },
+  [WIZARD_STEP.PREVIEW]: { title: '配置预览', icon: Check },
+}
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
+
+// ── 策略类型（实体单职化）：新建先选类型；编辑态类型由行推断/后端 policy_type 携带 ──
+const createPolicyType = ref<'stage1' | 'stage2' | 'stage3'>('stage3')
+const editingPolicyType = ref<SecurityPolicyType | null>(null)
+const editorPolicyType = computed<SecurityPolicyType>(() =>
+  editingId.value === null ? createPolicyType.value : (editingPolicyType.value ?? 'mixed'))
+
+const typeAllowsStage = (stage: 1 | 2 | 3): boolean =>
+  editorPolicyType.value === 'mixed' || editorPolicyType.value === `stage${stage}`
+
+const visibleSteps = computed<readonly WizardStep[]>(() => {
+  const steps: WizardStep[] = [WIZARD_STEP.BASIC]
+  if (typeAllowsStage(1)) steps.push(WIZARD_STEP.IP_ACL)
+  if (typeAllowsStage(2)) steps.push(WIZARD_STEP.RATE_LIMIT)
+  if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
+  if (editorPolicyType.value !== 'stage2') steps.push(WIZARD_STEP.BLOCK_PAGE)
+  steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
+  return steps
+})
+
+const visualStepIndex = computed(() => {
+  const index = visibleSteps.value.indexOf(currentStep.value)
+  return index >= 0 ? index : 0
+})
+
+// 类型切换（新建态）后当前步可能被裁剪——回落到基础信息
+watch(visibleSteps, (steps) => {
+  if (!steps.includes(currentStep.value)) currentStep.value = WIZARD_STEP.BASIC
+})
 
 const rulePickerVisible = ref(false)
 const pickerSearch = ref('')
@@ -1367,36 +1756,17 @@ const exclusionRowGhostLabel = (target: string): string => {
   return crsGhostOptionFor(v)?.label ?? exclusionTargetLabel(v)
 }
 
-// 作用域摘要：全部 / IP：…（内联条目）/ 列表：…（引用列表名，缓存缺失回退 #id）
-const exclusionScopeSummary = (row: CrsExcludedRow): string => {
-  if (row.scope === 'all') return '全部'
-  if (row.scope === 'ip') return `IP：${row.ips.length > 0 ? row.ips.join('、') : '（未填写）'}`
-  const names = row.listRefs.map((id) => ipLists.value.find((l) => l.id === id)?.name ?? `#${id}`)
-  return `列表：${names.length > 0 ? names.join('、') : '（未选择）'}`
-}
 
-// 配置预览 hover 明细：每条一行「目标 × 作用域摘要」
-const exclusionPreviewLines = computed<string[]>(() =>
-  serializedExcludedRules.value.map((row) => `${exclusionTargetLabel(row.target)} × ${exclusionScopeSummary(row)}`))
-
-// 预览「N 组 + M 规则」：两位组号与 6 位规则 ID 分别计数
-const crsGroupSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{2}$/.test(v)).length)
-const crsRuleIdSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{6}$/.test(v)).length)
 
 // CRS 配置面禁用门(2026-09-09 四态化):off=全关、custom_only=仅自定义,两者 CRS 均不生效
 const crsFieldsOff = computed(() => form.value.mode === 'off' || form.value.mode === 'custom_only')
 
-const THRESHOLD_LABELS: Record<number, string> = { 5: '标准（阈值 5）', 10: '宽松（阈值 10）', 15: '很宽松（阈值 15）', 20: '极宽松（阈值 20）', 1: '严格（阈值 1 · 存量档）', 3: '严格（阈值 3 · 存量档）' }
-const thresholdLabel = (value: number): string => THRESHOLD_LABELS[value] ?? String(value)
 const ACL_MODE_LABELS: Record<string, string> = { deny: '黑名单', allow: '白名单', bypass: '免检测' }
-const aclModeLabel = computed(() => ACL_MODE_LABELS[form.value.ip_acl_mode] ?? form.value.ip_acl_mode)
 
 const ACL_LIST_LABELS: Record<string, string> = { deny: '拒绝 IP', allow: '允许 IP', bypass: '免检测 IP' }
 const aclListLabel = computed(() => ACL_LIST_LABELS[form.value.ip_acl_mode] ?? 'IP 列表')
 
 const GEOIP_MODE_LABELS: Record<string, string> = { deny: '拦截所选区域', allow: '仅允许所选区域' }
-const geoipModeLabel = computed(() => GEOIP_MODE_LABELS[form.value.geoip_mode] ?? form.value.geoip_mode)
-
 // 从 off 态重开开关时控制模式回落 deny（off 只是关闭哨兵，radio 无此项）。
 const onGeoipEnabledChange = (enabled: string | number | boolean) => {
   if (enabled && form.value.geoip_mode === 'off') form.value.geoip_mode = 'deny'
@@ -1408,9 +1778,6 @@ const ACL_MODE_TIPS: Record<string, string> = {
   bypass: '列表中的 IP 将跳过全部安全检测',
 }
 const aclListTip = computed(() => ACL_MODE_TIPS[form.value.ip_acl_mode] ?? '')
-
-const blockPageName = computed(() => (form.value.block_page_id === 0 ? '无拦截页面' : blockPages.value.find((p) => p.id === form.value.block_page_id)?.name || '-'))
-
 // 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空（内联与引用列表合并计数）
 const hasIpControl = (row: PolicySummary): boolean => {
   const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
@@ -1471,12 +1838,11 @@ const policyRulesMap = computed(() => {
 const policyBoundRules = (policyId: number): Rule[] => policyRulesMap.value.get(policyId) ?? []
 
 const stepsClickable = computed(() => editingId.value !== null)
-const hasPreviousStep = computed(() => WIZARD_STEPS_ORDER.indexOf(currentStep.value) > 0)
-const hasNextStep = computed(() => WIZARD_STEPS_ORDER.indexOf(currentStep.value) < WIZARD_STEPS_ORDER.length - 1)
+const hasPreviousStep = computed(() => visualStepIndex.value > 0)
+const hasNextStep = computed(() => visualStepIndex.value < visibleSteps.value.length - 1)
 
 const moveToAdjacentWizardStep = (direction: -1 | 1): void => {
-  const currentIndex = WIZARD_STEPS_ORDER.indexOf(currentStep.value)
-  const targetStep = WIZARD_STEPS_ORDER[currentIndex + direction]
+  const targetStep = visibleSteps.value[visualStepIndex.value + direction]
   if (targetStep !== undefined) currentStep.value = targetStep
 }
 
@@ -1578,13 +1944,6 @@ const handlePickerSelectAll = (checked: string | number | boolean): void => {
   pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
-const boundRuleList = computed(() => boundRules.value.map((caddyId) => {
-  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
-  return { caddy_id: caddyId, name: rule?.name || caddyId }
-}))
-
-// ================= v2.2.0 多策略绑定（SC-BIND-02 配套） =================
-// 语义：评估顺序 = policy_id ASC（后端排序，绑定顺序即策略 ID 顺序）；
 // 拦截页面 = 首绑策略的页面（启用策略中 policy_id 最小者）；单规则最多 5 条；
 // security_policies.id 为 AUTOINCREMENT——新建策略的 ID 必然大于全部现存策略，
 // 因此新建策略在任何规则的绑定链上都落在末位。
@@ -2045,6 +2404,50 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   }
 }))
 
+// 配置预览 = 三阶段流水线投影（策略视角）：以「本策略为唯一绑定」构造模型——
+// 与规则侧流程抽屉共用 buildStageModel 同一投影；阶段外字段按类型裁剪（与服务端
+// 显式 policy_type 提交时的归一零值同口径，预览即所得）
+const previewModel = computed<RuleStageModel>(() => {
+  const previewPolicy: SecurityStagePolicy = {
+    id: editingId.value ?? 0,
+    name: form.value.name || '本策略',
+    mode: typeAllowsStage(3) ? form.value.mode : 'off',
+    enabled: form.value.enabled,
+    has_ip_control: typeAllowsStage(1) && ((form.value.ip_acl_enabled && aclMergedCount.value > 0) || whitelistMergedCount.value > 0 || ipBlacklistSelf.value.length > 0),
+    has_rate_limit: typeAllowsStage(2) && form.value.rate_limit_enabled && form.value.rate_limit_rps > 0,
+    has_geoip: typeAllowsStage(1) && form.value.geoip_enabled && geoipCountries.value.length > 0,
+    has_custom_rules: typeAllowsStage(3) && selectedCustomRules.value.length > 0,
+    geoip_countries: JSON.stringify(typeAllowsStage(1) ? geoipCountries.value : []),
+    custom_rules_count: typeAllowsStage(3) ? selectedCustomRules.value.length : 0,
+    ip_acl_mode: form.value.ip_acl_mode,
+    ip_acl_list: JSON.stringify(ipACLList.value),
+    ip_whitelist: JSON.stringify(ipWhitelist.value),
+    rate_limit_rps: form.value.rate_limit_rps,
+    rate_limit_burst: form.value.rate_limit_burst,
+    ip_blacklist: JSON.stringify(ipBlacklistSelf.value),
+    ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
+    ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
+    ip_whitelist_enabled: ipWhitelistEnabled.value,
+    geoip_mode: form.value.geoip_enabled ? form.value.geoip_mode : 'off',
+  }
+  const showBlockPage = editorPolicyType.value !== 'stage2'
+  return buildStageModel(
+    [{
+      policy_id: previewPolicy.id,
+      name: previewPolicy.name,
+      mode: previewPolicy.mode,
+      enabled: form.value.enabled,
+      rate_limit_enabled: previewPolicy.has_rate_limit,
+      block_page_id: showBlockPage ? form.value.block_page_id : 0,
+      block_status_code: form.value.block_status_code,
+    }],
+    [previewPolicy],
+    ipLists.value,
+    blockPages.value,
+    null,
+  )
+})
+
 const openRulePicker = (): void => {
   pickerSelected.value = [...boundRules.value]
   pickerSearch.value = ''
@@ -2129,6 +2532,8 @@ async function openDialog(row?: PolicySummary) {
   // editingId/表单，把保存语义错位成 PUT 到错误策略。
   const openSeq = ++policyDialogOpenSeq
   editingId.value = row?.id ?? null
+  // 编辑态类型固定（行 policy_type 或内容推断）；新建态由 createPolicyType 驱动
+  editingPolicyType.value = row ? policyTypeOf(row) : null
   if (row) {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
@@ -2198,6 +2603,10 @@ async function openDialog(row?: PolicySummary) {
   request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')
     .then((res) => { if (openSeq !== policyDialogOpenSeq) return; securityBindings.value = res.data || {} })
     .catch(() => { /* 刷新失败保留快照兜底 */ })
+  // 规则阶段页字段（生效投影/行内编辑数据源）同节奏刷新一次，与绑定明细同口径
+  request.get<APIResponse<Rule[]>>('/rules')
+    .then((res) => { if (openSeq !== policyDialogOpenSeq) return; allRules.value = res.data || [] })
+    .catch(() => { /* 刷新失败保留快照兜底 */ })
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
@@ -2211,6 +2620,7 @@ const resetForm = () => {
 const resetWizard = () => {
   currentStep.value = WIZARD_STEP.BASIC
   editingId.value = null
+  editingPolicyType.value = null
   rulePickerVisible.value = false
   ruleBoundPolicies.value = {}
 }
@@ -2225,11 +2635,12 @@ const handleSave = async () => {
     currentStep.value = WIZARD_STEP.BASIC
     return
   }
-  if (!validateIpAclList()) {
+  // 类型裁剪后的阶段不参与校验（步骤已被裁剪，校验跳转目标不存在）
+  if (typeAllowsStage(1) && !validateIpAclList()) {
     currentStep.value = WIZARD_STEP.IP_ACL
     return
   }
-  if (!validateExcludedRules()) {
+  if (typeAllowsStage(3) && !validateExcludedRules()) {
     currentStep.value = WIZARD_STEP.WAF_RULES
     return
   }
@@ -2296,6 +2707,9 @@ const handleSave = async () => {
       geoip_mode: form.value.geoip_enabled ? (form.value.geoip_mode === 'off' ? 'deny' : form.value.geoip_mode) : 'off',
       waf_check_response: form.value.waf_check_response,
       log_request_body: form.value.log_request_body,
+      // 实体单职化：显式提交类型（服务端将阶段外字段归一为零值）；
+      // mixed 不允许显式提交（兼容组仅存量可编辑），省略=后端按内容推断
+      policy_type: editorPolicyType.value === 'mixed' ? undefined : editorPolicyType.value,
     }
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {
@@ -2612,6 +3026,65 @@ onMounted(async () => {
 .picker-footer { display: flex; align-items: center; justify-content: space-between; }
 .picker-count { font-size: 13px; color: #6b7280; }
 .picker-footer-buttons { display: flex; gap: 12px; }
+
+/* ── 实体单职化：类型 tab / 阶段 chips / 生效投影 / 行内阶段页编辑 / 流水线预览 ── */
+.policy-type-tabs { margin-bottom: 4px; }
+.policy-type-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
+.stage-chip.is-off { opacity: 0.55; }
+.mixed-policy-banner { margin: 4px 20px 12px; }
+
+/* 生效投影条（阶段步骤顶部）：本阶段在每条已关联规则上的拦截页形态 */
+.stage-projection-bar {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 12px;
+  margin: 0 20px 12px; padding: 8px 12px;
+  background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px;
+  font-size: 12px;
+}
+.stage-projection-title { font-weight: 600; color: #374151; flex: 0 0 auto; line-height: 1.8; }
+.stage-projection-item { display: inline-flex; align-items: baseline; gap: 6px; line-height: 1.8; }
+.stage-projection-rule { color: #1f2937; font-weight: 500; }
+.stage-projection-state { color: #6b7280; }
+.stage-projection-empty { color: #9ca3af; line-height: 1.8; }
+
+/* 关联规则行内阶段页编辑（变更即 PUT） */
+.stage-override-editors { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
+.stage-override-line { display: flex; align-items: center; gap: 8px; }
+.stage-override-label { font-size: 12px; color: #6b7280; flex: 0 0 auto; }
+.stage-override-page-select { width: 220px; }
+.stage-override-status-select { width: 110px; }
+.stage-override-saving { color: var(--el-color-primary); }
+
+/* 配置预览：三阶段流水线投影（策略视角） */
+.preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }
+.preview-meta-name { font-size: 15px; font-weight: 600; color: #1f2937; }
+.preview-meta-desc { font-size: 12px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+.preview-pipeline { display: flex; flex-direction: column; gap: 8px; margin: 0 20px; }
+.preview-stage-card { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 14px; background: #fff; }
+.preview-stage-card.is-disabled { background: #fafafa; border-style: dashed; }
+.preview-stage-card.is-disabled .preview-stage-title { color: #9ca3af; }
+.preview-stage-head { display: flex; align-items: center; gap: 8px; }
+.preview-stage-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.preview-stage-empty { font-size: 12px; color: #b1b5bd; }
+.preview-policy-rows { margin-top: 6px; }
+.preview-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.8; }
+.preview-row-label { color: #6b7280; flex-shrink: 0; }
+.preview-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.preview-stage-footnote { margin-top: 6px; font-size: 12px; color: #9ca3af; }
+.preview-bound-rules { display: flex; flex-direction: column; gap: 6px; margin: 0 20px; }
+.preview-bound-rule { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.preview-bound-rule-name { font-weight: 500; color: #1f2937; }
+.preview-bound-rule-stage { color: #6b7280; }
+
+/* 混合策略拆分迁移预演 */
+.split-preview { display: flex; flex-direction: column; gap: 14px; }
+.split-preview-section { display: flex; flex-direction: column; gap: 6px; }
+.split-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.split-preview-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.split-preview-rule { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.8; }
+.split-preview-rule-name { color: #1f2937; font-weight: 500; }
+.split-preview-rule-meta { color: #9ca3af; font-size: 12px; }
+.split-preview-empty { font-size: 12px; color: #9ca3af; }
+.split-preview-alert { margin-top: 2px; }
 </style>
 
 <!-- el-tooltip popper 挂载到 body， scoped 样式无法命中，单独非 scoped 块 -->

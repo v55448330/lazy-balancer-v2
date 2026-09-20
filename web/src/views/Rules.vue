@@ -26,65 +26,25 @@
 
     <el-card>
       <div class="table-toolbar">
-        <el-check-tag :checked="filterUnboundOnly" class="unbound-filter-tag" @change="filterUnboundOnly = $event">未绑定策略</el-check-tag>
+        <el-tooltip content="筛出未绑定任何安全策略的 HTTP 规则；到「安全防护 → 安全策略」页关联" placement="top">
+          <el-check-tag :checked="filterUnboundOnly" class="unbound-filter-tag" @change="filterUnboundOnly = $event">未绑定策略</el-check-tag>
+        </el-tooltip>
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
       </div>
-      <el-table ref="rulesTableRef" :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" @selection-change="onRuleSelectionChange">
-        <el-table-column type="selection" width="42" reserve-selection :selectable="(row: Rule) => row.protocol === 'http'" />
+      <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
-              <el-popover
-                v-if="ruleStageModel(row).hasAnyPolicy"
-                placement="top"
-                trigger="hover"
-                :width="340"
-              >
-                <template #reference>
-                  <el-icon
-                    :size="14"
-                    class="acl-lock-icon is-allow"
-                    tabindex="0"
-                    @click="openFlowDrawer(row)"
-                    @keydown.enter.prevent="openFlowDrawer(row)"
-                    @keydown.space.prevent="openFlowDrawer(row)"
-                  ><Lock /></el-icon>
-                </template>
-                <div class="cert-tooltip security-tooltip">
-                  <div class="tooltip-title">安全防护 · 阶段流水线</div>
-                  <div class="security-attribution-note">按阶段顺序执行：预检 → 限流 → WAF；规则可配阶段页覆盖，未覆盖时按触发策略显示</div>
-                  <div
-                    v-for="stage in ruleStageModel(row).stages"
-                    :key="stage.stage"
-                    class="policy-group"
-                    :class="{ 'is-disabled': !stage.enabled }"
-                  >
-                    <div class="policy-group-header">
-                      <span class="stage-group-title">{{ stage.title }}</span>
-                      <el-tag v-if="stage.override && !stage.override.broken" type="warning" size="small" effect="plain">{{ stage.override.pageName }}（{{ stage.override.status }}）</el-tag>
-                      <el-tag v-else-if="stage.override?.broken" type="danger" size="small" effect="plain">阶段页已失效</el-tag>
-                      <el-tag v-if="!stage.enabled" type="info" size="small" effect="plain">未启用</el-tag>
-                    </div>
-                    <div
-                      v-for="group in stage.groups"
-                      :key="group.key"
-                      class="stage-policy-block"
-                      :class="{ 'is-disabled': !group.enabled }"
-                    >
-                      <div class="stage-policy-head">
-                        <span class="policy-order">#{{ group.order }}</span>
-                        <span class="policy-name" :title="group.name">{{ group.name }}</span>
-                        <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
-                      </div>
-                      <div v-for="protection in group.rows" :key="protection.label" class="cert-row">
-                        <span class="cert-label">{{ protection.label }}</span>
-                        <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
-                      </div>
-                    </div>
-                    <div v-if="stage.enabled && stage.footnote" class="stage-footnote">{{ stage.footnote }}</div>
-                  </div>
-                </div>
-              </el-popover>
+              <el-tooltip v-if="ruleStageModel(row).hasAnyPolicy" content="查看处理流程" placement="top" :enterable="false">
+                <el-icon
+                  :size="14"
+                  class="acl-lock-icon is-allow"
+                  tabindex="0"
+                  @click="openFlowDrawer(row)"
+                  @keydown.enter.prevent="openFlowDrawer(row)"
+                  @keydown.space.prevent="openFlowDrawer(row)"
+                ><Lock /></el-icon>
+              </el-tooltip>
               <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
@@ -240,7 +200,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="270" fixed="right" align="center">
+        <el-table-column label="操作" width="310" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <el-tooltip
@@ -266,6 +226,11 @@
               <div>
                 <el-button type="primary" link size="small" @click="openFlowDrawer(row)">
                   流程
+                </el-button>
+              </div>
+              <div v-if="row.protocol === 'http'">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="openBindDialog(row)">
+                  安全
                 </el-button>
               </div>
               <el-tooltip
@@ -295,16 +260,6 @@
       />
     </el-card>
 
-    <!-- 批量操作浮动条：选中 ≥1 条 HTTP 规则时出现 -->
-    <transition name="el-fade-in-linear">
-      <div v-if="selectedRules.length > 0" class="batch-action-bar">
-        <span class="batch-action-count">已选 {{ selectedRules.length }} 条规则</span>
-        <el-button size="small" type="primary" :disabled="isReadOnly" @click="openBatchBindDialog">绑定安全策略</el-button>
-        <el-button size="small" :disabled="isReadOnly" @click="openBatchUnbindDialog">解绑策略</el-button>
-        <el-button size="small" :disabled="isReadOnly" @click="openBatchBlockPageDialog">设置阶段拦截页</el-button>
-        <el-button size="small" link @click="clearRuleSelection">取消选择</el-button>
-      </div>
-    </transition>
 
     <el-dialog v-model="wizardVisible" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
@@ -319,7 +274,6 @@
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
         <el-step title="基本配置" :icon="InfoFilled" />
         <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
-        <el-step v-if="showSecurityStep" title="安全防护" :icon="Key" />
         <el-step title="上游服务器" :icon="Connection" />
         <el-step v-if="showCustomRoutesStep" title="自定义路由" :icon="Guide" />
         <el-step title="高级选项" :icon="Setting" />
@@ -491,85 +445,6 @@
           <el-alert v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" type="info" :closable="false" title="请先在基本配置中启用 HTTPS" style="margin-top: 20px;" />
         </div>
 
-        <!-- Step: 安全防护（仅 HTTP；阶段化安全流水线：预检 → 限流 → WAF） -->
-        <div v-show="currentStep === WIZARD_STEP.SECURITY" class="step-content">
-          <el-form :model="wizardForm" label-width="110px">
-            <el-form-item label="绑定安全策略">
-              <el-select v-model="wizardForm.security_policy_ids" multiple placeholder="选择要绑定的安全策略（可多选）" style="width: 100%">
-                <el-option v-for="policy in securityPolicies" :key="policy.id" :value="policy.id" :label="policy.name">
-                  <span>{{ policy.name }}</span>
-                  <el-tag size="small" effect="plain" :type="wafModeTagType(policy.mode)" class="security-policy-mode-tag">{{ wafModeLabel(policy.mode) }}</el-tag>
-                  <el-tag v-if="!policy.enabled" size="small" type="info" effect="plain" class="security-policy-mode-tag">已禁用</el-tag>
-                </el-option>
-              </el-select>
-              <div v-if="securityPolicies.length === 0" class="form-tip-line">暂无安全策略，可先在「安全防护 / 安全策略」中创建</div>
-              <div v-else class="form-tip-line">绑定后按「预检 → 限流 → WAF」阶段顺序执行；多条策略按策略 ID 升序生效，每条规则最多 5 条</div>
-            </el-form-item>
-
-            <!-- 三阶段实时投影：选中策略 → 各阶段生效能力（与锁弹框/流程抽屉共用 securityStages 投影） -->
-            <div class="stage-projection">
-              <div
-                v-for="stage in wizardStageModel.stages"
-                :key="stage.stage"
-                class="stage-card"
-                :class="{ 'is-disabled': !stage.enabled }"
-              >
-                <div class="stage-card-head">
-                  <span class="stage-card-title">{{ stage.title }}</span>
-                  <el-tag v-if="stage.override && !stage.override.broken" type="warning" size="small" effect="plain">{{ stage.override.pageName }}（{{ stage.override.status }}）</el-tag>
-                  <el-tag v-else-if="stage.override?.broken" type="danger" size="small" effect="plain">阶段页已失效</el-tag>
-                  <span v-if="!stage.enabled" class="stage-card-empty">未启用</span>
-                </div>
-                <template v-if="stage.enabled">
-                  <div
-                    v-for="group in stage.groups"
-                    :key="group.key"
-                    class="stage-card-policy"
-                    :class="{ 'is-disabled': !group.enabled }"
-                  >
-                    <div class="stage-card-policy-name" :title="group.name">{{ group.name }}<span v-if="!group.enabled">（已禁用）</span></div>
-                    <div v-for="row in group.rows" :key="row.label" class="cert-row">
-                      <span class="cert-label">{{ row.label }}</span>
-                      <span class="cert-value" :title="row.detail">{{ row.detail }}</span>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <el-form-item label="阶段 1 拦截页">
-              <el-select v-model="wizardForm.block_page_stage1_id" style="width: 100%">
-                <el-option :value="0" label="跟随策略（按触发策略的拦截页显示）" />
-                <el-option v-for="page in blockPages" :key="page.id" :value="page.id" :label="page.name" />
-              </el-select>
-              <div class="form-tip-line">阶段 1（预检：IP 访问控制 / 地域拦截）拦截时展示；限流阶段恒为 429 不配页</div>
-            </el-form-item>
-            <el-form-item label="阶段 1 状态码">
-              <el-select v-model="wizardForm.block_page_stage1_status" :disabled="wizardForm.block_page_stage1_id <= 0" style="width: 220px">
-                <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
-              </el-select>
-              <span class="form-tip-inline">配置阶段 1 拦截页后生效</span>
-            </el-form-item>
-
-            <el-form-item label="阶段 3 拦截页">
-              <el-select v-model="wizardForm.block_page_stage3_id" style="width: 100%">
-                <el-option :value="0" label="跟随策略（按触发策略的拦截页显示）" />
-                <el-option v-for="page in blockPages" :key="page.id" :value="page.id" :label="page.name" />
-              </el-select>
-              <div class="form-tip-line">阶段 3（WAF：自定义规则 / CRS）拦截时展示</div>
-            </el-form-item>
-            <el-form-item label="阶段 3 状态码">
-              <el-select v-model="wizardForm.block_page_stage3_status" :disabled="wizardForm.block_page_stage3_id <= 0" style="width: 220px">
-                <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
-              </el-select>
-              <span class="form-tip-inline">配置阶段 3 拦截页后生效</span>
-            </el-form-item>
-
-            <el-form-item label=" ">
-              <el-link type="primary" @click="openWizardFlowPreview">预览完整处理流程</el-link>
-            </el-form-item>
-          </el-form>
-        </div>
 
         <!-- Step 2: 上游服务器 -->
         <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
@@ -1149,115 +1024,19 @@
         </div>
       </template>
     </el-dialog>
+    <!-- 规则安全策略绑定（与策略页「绑定规则」共享同一组件，勿造第二份） -->
+    <SecurityBindingEditor
+      v-model="bindDialogVisible"
+      mode="rule"
+      :rule="bindDialogRule"
+      :policies="securityPolicies"
+      :bindings="securityBindings"
+      :rules="rules"
+      :block-pages="blockPages"
+      @saved="fetchSecurityBindings"
+    />
 
-    <!-- 批量绑定安全策略 -->
-    <el-dialog v-model="batchBindVisible" width="min(560px, 94vw)" top="12vh" :close-on-click-modal="false">
-      <template #header>
-        <div class="dialog-header">
-          <div class="dialog-header__icon"><el-icon :size="18"><Key /></el-icon></div>
-          <div class="dialog-header__text">
-            <div class="dialog-header__title">批量绑定安全策略</div>
-            <div class="dialog-header__subtitle">将所选策略绑定到 {{ selectedRules.length }} 条规则</div>
-          </div>
-        </div>
-      </template>
-      <el-form label-width="90px">
-        <el-form-item label="安全策略">
-          <el-select v-model="batchBindPolicyIds" multiple placeholder="选择要绑定的安全策略（可多选）" style="width: 100%">
-            <el-option v-for="policy in securityPolicies" :key="policy.id" :value="policy.id" :label="policy.name">
-              <span>{{ policy.name }}</span>
-              <el-tag size="small" effect="plain" :type="wafModeTagType(policy.mode)" class="security-policy-mode-tag">{{ wafModeLabel(policy.mode) }}</el-tag>
-              <el-tag v-if="!policy.enabled" size="small" type="info" effect="plain" class="security-policy-mode-tag">已禁用</el-tag>
-            </el-option>
-          </el-select>
-        </el-form-item>
-        <!-- 自管标签行(EP 2.14.4 规避):el-radio-group 组容器 DIV 会被注册为表单输入 id -->
-        <div class="mode-row" role="group" aria-label="绑定方式">
-          <span class="mode-row-label">绑定方式</span>
-          <div class="mode-row-content">
-            <el-radio-group v-model="batchBindMode">
-              <el-radio value="merge">合并（保留现有绑定，去重后追加）</el-radio>
-              <el-radio value="replace">覆盖（替换规则的现有绑定）</el-radio>
-            </el-radio-group>
-          </div>
-        </div>
-        <div class="form-tip-line batch-bind-hint">{{ batchBindImpactText }}</div>
-      </el-form>
-      <template #footer>
-        <el-button @click="batchBindVisible = false">取消</el-button>
-        <el-button type="primary" :loading="batchBindSaving" @click="submitBatchBind">确定绑定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 批量解绑策略：从所选规则解绑所选策略（逐规则提交剩余集合） -->
-    <el-dialog v-model="batchUnbindVisible" width="min(560px, 94vw)" top="12vh" :close-on-click-modal="false">
-      <template #header>
-        <div class="dialog-header">
-          <div class="dialog-header__icon"><el-icon :size="18"><Key /></el-icon></div>
-          <div class="dialog-header__text">
-            <div class="dialog-header__title">批量解绑策略</div>
-            <div class="dialog-header__subtitle">从 {{ selectedRules.length }} 条所选规则解绑所选策略</div>
-          </div>
-        </div>
-      </template>
-      <el-form label-width="90px">
-        <el-form-item label="解绑策略">
-          <el-select v-model="batchUnbindPolicyIds" multiple placeholder="选择要解绑的策略" style="width: 100%">
-            <el-option v-for="policy in batchUnbindCandidates" :key="policy.id" :value="policy.id" :label="policy.name" />
-          </el-select>
-          <div class="form-tip-line">仅列出所选规则当前绑定的策略；未绑定所选策略的规则不受影响</div>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="batchUnbindVisible = false">取消</el-button>
-        <el-button type="danger" :loading="batchUnbindSaving" @click="submitBatchUnbind">确定解绑</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 批量设置阶段拦截页 -->
-    <el-dialog v-model="batchPagesVisible" width="min(560px, 94vw)" top="12vh" :close-on-click-modal="false">
-      <template #header>
-        <div class="dialog-header">
-          <div class="dialog-header__icon"><el-icon :size="18"><Document /></el-icon></div>
-          <div class="dialog-header__text">
-            <div class="dialog-header__title">批量设置阶段拦截页</div>
-            <div class="dialog-header__subtitle">应用到 {{ selectedRules.length }} 条所选规则；「跟随策略」即清除该阶段的规则级覆盖</div>
-          </div>
-        </div>
-      </template>
-      <el-form label-width="110px">
-        <el-form-item label="阶段 1 拦截页">
-          <el-select v-model="batchPagesForm.stage1_id" style="width: 100%">
-            <el-option :value="0" label="跟随策略（按触发策略的拦截页显示）" />
-            <el-option v-for="page in blockPages" :key="page.id" :value="page.id" :label="page.name" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="阶段 1 状态码">
-          <el-select v-model="batchPagesForm.stage1_status" :disabled="batchPagesForm.stage1_id <= 0" style="width: 220px">
-            <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="阶段 3 拦截页">
-          <el-select v-model="batchPagesForm.stage3_id" style="width: 100%">
-            <el-option :value="0" label="跟随策略（按触发策略的拦截页显示）" />
-            <el-option v-for="page in blockPages" :key="page.id" :value="page.id" :label="page.name" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="阶段 3 状态码">
-          <el-select v-model="batchPagesForm.stage3_status" :disabled="batchPagesForm.stage3_id <= 0" style="width: 220px">
-            <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
-          </el-select>
-        </el-form-item>
-        <div class="form-tip-line batch-bind-hint">阶段 2（限流）拦截恒为 429，不配置拦截页</div>
-      </el-form>
-      <template #footer>
-        <el-button @click="batchPagesVisible = false">取消</el-button>
-        <el-button type="primary" :loading="batchPagesSaving" @click="submitBatchPages">确定设置</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 规则处理流程抽屉 -->
-    <RuleFlowDrawer v-model="flowDrawerVisible" :target="flowDrawerTarget" :model="flowDrawerModel" />
+    <RuleFlowDrawer v-model="flowDrawerVisible" :target="flowDrawerTarget" :model="flowDrawerModel" :policies="securityPolicies" :ip-lists="ipLists" />
   </div>
 </template>
 
@@ -1265,20 +1044,15 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link, Key } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import RuleFlowDrawer from '@/components/RuleFlowDrawer.vue'
-import {
-  STAGE_BLOCK_STATUS_OPTIONS,
-  bindingsFromPolicyIds,
-  buildStageModel,
-  wafModeLabel,
-  wafModeTagType,
-} from '@/utils/securityStages'
+import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
+import { buildStageModel } from '@/utils/securityStages'
 import type {
   RuleFlowTarget,
   RuleStageModel,
@@ -1313,8 +1087,6 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
-  // 安全防护步骤：选中策略 id 数组（保存后经 PUT /security/rules/:id/policies 提交）
-  security_policy_ids: number[]
   dns_family: string[]
   upstreams: UpstreamInput[]
   acme_config_id?: number
@@ -1559,15 +1331,6 @@ const filteredRules = computed(() => {
   return [...base].sort((a, b) => ruleUpdatedAtMs(b) - ruleUpdatedAtMs(a))
 })
 
-// 表格多选（:selectable 限 HTTP；TCP 规则无 HTTP 安全链，不参与安全批量操作）
-const rulesTableRef = ref<{ clearSelection: () => void } | null>(null)
-const selectedRules = ref<Rule[]>([])
-const onRuleSelectionChange = (rows: Rule[]): void => {
-  selectedRules.value = rows
-}
-const clearRuleSelection = (): void => {
-  rulesTableRef.value?.clearSelection()
-}
 
 const ruleUpdatedAtMs = (rule: Rule): number => {
   const value = rule.updated_at
@@ -1803,11 +1566,10 @@ const isCopyMode = ref(false)
 const WIZARD_STEP = {
   BASIC: 0,
   TLS: 1,
-  SECURITY: 2,
-  UPSTREAMS: 3,
-  CUSTOM_ROUTES: 4,
-  ADVANCED: 5,
-  PREVIEW: 6,
+  UPSTREAMS: 2,
+  CUSTOM_ROUTES: 3,
+  ADVANCED: 4,
+  PREVIEW: 5,
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
@@ -2051,11 +1813,6 @@ const wizardForm = reactive<RuleForm>({
   proxy_stream_timeout: 0,
   proxy_flush_interval: 0,
   proxy_stream_close_delay: 0,
-  security_policy_ids: [] as number[],
-  block_page_stage1_id: 0,
-  block_page_stage1_status: 403,
-  block_page_stage3_id: 0,
-  block_page_stage3_status: 403,
 })
 
 watch(() => wizardForm.path_rules, (pathRules) => {
@@ -2177,27 +1934,14 @@ const httpReservedPorts = [80, 443]
 
 const showTlsStep = computed(() => wizardForm.protocol === 'http' && wizardForm.enable_tls)
 const showCustomRoutesStep = computed(() => wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled)
-// 安全防护步骤：HTTP 规则恒出现（TCP 无 HTTP 安全链）；位于 TLS 与上游之间
-const showSecurityStep = computed(() => wizardForm.protocol === 'http')
-
 const visibleWizardSteps = computed<readonly WizardStep[]>(() => [
   WIZARD_STEP.BASIC,
   ...(showTlsStep.value ? [WIZARD_STEP.TLS] : []),
-  ...(showSecurityStep.value ? [WIZARD_STEP.SECURITY] : []),
   WIZARD_STEP.UPSTREAMS,
   ...(showCustomRoutesStep.value ? [WIZARD_STEP.CUSTOM_ROUTES] : []),
   WIZARD_STEP.ADVANCED,
   WIZARD_STEP.PREVIEW,
 ])
-
-// 向导安全步骤的三阶段实时投影：选中策略 id → 合成绑定视图 → 共享投影模型
-const wizardStageModel = computed<RuleStageModel>(() => buildStageModel(
-  bindingsFromPolicyIds(wizardForm.security_policy_ids, securityPolicies.value),
-  securityPolicies.value,
-  ipLists.value,
-  blockPages.value,
-  wizardForm,
-))
 
 const visualStepIndex = computed(() => {
   const index = visibleWizardSteps.value.indexOf(currentStep.value)
@@ -2413,15 +2157,6 @@ const openWizard = async (rule?: Rule) => {
       console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id)
     }
     }
-    // 绑定快照先行刷新：安全步骤初值与保存时的 PUT 都依赖它，挂载期缓存在并发
-    // 会话下可能过期（过期响应同 openSeq 守卫丢弃；失败沿用现有缓存）
-    if (rule.protocol === 'http') {
-      try {
-        const bindRes = await request.get<APIResponse<typeof securityBindings.value>>('/security/bindings')
-        if (openSeq !== wizardOpenSeq) return
-        if (bindRes.data) securityBindings.value = bindRes.data
-      } catch { /* 快照刷新失败沿用现有缓存 */ }
-    }
     editingRule.value = fullRule
     const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
     Object.assign(wizardForm, {
@@ -2480,12 +2215,6 @@ const openWizard = async (rule?: Rule) => {
       proxy_stream_timeout: fullRule.proxy_stream_timeout || 0,
       proxy_flush_interval: fullRule.proxy_flush_interval || 0,
       proxy_stream_close_delay: fullRule.proxy_stream_close_delay || 0,
-      // 编辑态装载现有策略绑定（securityBindings 已由列表加载刷新）与阶段拦截页字段
-      security_policy_ids: (securityBindings.value[fullRule.caddy_id] || []).map((b) => b.policy_id),
-      block_page_stage1_id: fullRule.block_page_stage1_id || 0,
-      block_page_stage1_status: fullRule.block_page_stage1_status || 403,
-      block_page_stage3_id: fullRule.block_page_stage3_id || 0,
-      block_page_stage3_status: fullRule.block_page_stage3_status || 403,
     })
     weightsToPercent(wizardForm.upstreams)
     if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
@@ -2536,11 +2265,6 @@ const openWizard = async (rule?: Rule) => {
       proxy_write_timeout: 0,
       proxy_stream_timeout: 0,
       proxy_stream_close_delay: 0,
-      security_policy_ids: [],
-      block_page_stage1_id: 0,
-      block_page_stage1_status: 403,
-      block_page_stage3_id: 0,
-      block_page_stage3_status: 403,
     })
   }
   hydratingWizard = false
@@ -2890,34 +2614,12 @@ const submitWizard = async () => {
       proxy_stream_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_timeout : 0,
       proxy_flush_interval: wizardForm.protocol === 'http' ? wizardForm.proxy_flush_interval : 0,
       proxy_stream_close_delay: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_close_delay : 0,
-      // 阶段拦截页覆盖（仅 HTTP 有意义；TCP 恒 0=跟随策略）。页未配时状态码归一 0。
-      block_page_stage1_id: wizardForm.protocol === 'http' ? wizardForm.block_page_stage1_id || 0 : 0,
-      block_page_stage1_status: wizardForm.protocol === 'http' && wizardForm.block_page_stage1_id > 0 ? (wizardForm.block_page_stage1_status || 403) : 0,
-      block_page_stage3_id: wizardForm.protocol === 'http' ? wizardForm.block_page_stage3_id || 0 : 0,
-      block_page_stage3_status: wizardForm.protocol === 'http' && wizardForm.block_page_stage3_id > 0 ? (wizardForm.block_page_stage3_status || 403) : 0,
     }
 
-    // 规则保存成功后提交策略绑定（PUT 全量替换语义）。绑定失败不回滚规则——
-    // 规则已落库，提示「规则已保存，策略绑定失败」由用户重试或到安全策略页处理。
-    let savedCaddyId = editingRule.value?.caddy_id
     if (editingRule.value) {
       await request.put<APIResponse>(`/rules/${editingRule.value.caddy_id}`, data)
     } else {
-      const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
-      savedCaddyId = createRes.data?.caddy_id
-    }
-
-    // 新建且未选策略时跳过空 PUT（否则白白触发一次配置渲染）；编辑态恒提交
-    //（含清空绑定的情形）；TCP 规则无安全链，不提交。
-    const shouldSyncBindings = wizardForm.protocol === 'http' && savedCaddyId
-      && (wizardForm.security_policy_ids.length > 0 || editingRule.value !== null)
-    if (shouldSyncBindings && savedCaddyId) {
-      try {
-        await request.put<APIResponse>(`/security/rules/${encodeURIComponent(savedCaddyId)}/policies`, { policy_ids: wizardForm.security_policy_ids })
-      } catch (bindError: unknown) {
-        console.error('bind policies failed', bindError)
-        ElMessage.error('规则已保存，策略绑定失败')
-      }
+      await request.post<APIResponse>('/rules', data)
     }
 
     mfaAwareSuccess(editingRule.value ? '更新成功' : '创建成功')
@@ -2956,176 +2658,14 @@ const openFlowDrawer = (rule: Rule): void => {
   flowDrawerVisible.value = true
 }
 
-const openWizardFlowPreview = (): void => {
-  flowDrawerTarget.value = {
-    // 预览不携带 caddyId：阶段计数属于已生效配置，未保存的投影不拉取
-    name: wizardForm.name || '未命名规则',
-    protocol: wizardForm.protocol,
-    listenPort: wizardForm.listen_port,
-    enableTls: wizardForm.enable_tls,
-    upstreamSummary: `${wizardForm.upstreams.filter((u) => u.enabled !== false && u.host).length} 个上游（预览）`,
-  }
-  flowDrawerModel.value = wizardStageModel.value
-  flowDrawerVisible.value = true
-}
+// ── 规则安全策略绑定（行「安全」按钮）——编辑交互在共享组件 SecurityBindingEditor 内
+//（与策略页「绑定规则」同一组件，勿造第二份）；本页仅持有打开态
+const bindDialogVisible = ref(false)
+const bindDialogRule = ref<Rule | null>(null)
 
-// ── 批量操作（步骤 7）：绑定 / 解绑 / 阶段拦截页 ──
-interface BatchOperationResult { bound: number; skipped: Array<{ rule_id: string; reason: string }> }
-
-const reportBatchResult = (data: BatchOperationResult | undefined, verb: string): void => {
-  const bound = data?.bound ?? 0
-  const skipped = data?.skipped ?? []
-  if (bound > 0) mfaAwareSuccess(`已${verb} ${bound} 条规则`)
-  if (skipped.length > 0) {
-    ElMessage.warning(`${skipped.length} 条规则被跳过：${skipped.map((s) => s.reason).join('；')}`)
-  }
-  if (bound === 0 && skipped.length === 0) ElMessage.info('没有规则发生变化')
-}
-
-const refreshAfterBatch = async (): Promise<void> => {
-  clearRuleSelection()
-  await fetchRules()
-}
-
-const batchBindVisible = ref(false)
-const batchBindPolicyIds = ref<number[]>([])
-const batchBindMode = ref<'merge' | 'replace'>('merge')
-const batchBindSaving = ref(false)
-
-const batchBindImpactText = computed(() => {
-  const total = selectedRules.value.length
-  const withBindings = selectedRules.value.filter((r) => (securityBindings.value[r.caddy_id] || []).length > 0).length
-  if (batchBindMode.value === 'merge') {
-    return withBindings > 0
-      ? `${total} 条中 ${withBindings} 条已有部分绑定，将去重合并；每条规则最多绑定 5 条策略，超限规则将被跳过`
-      : `${total} 条规则均未绑定策略，将直接建立绑定`
-  }
-  return `覆盖模式：${total} 条规则的现有绑定将全部替换为所选策略`
-})
-
-const openBatchBindDialog = (): void => {
-  batchBindPolicyIds.value = []
-  batchBindMode.value = 'merge'
-  batchBindVisible.value = true
-}
-
-const submitBatchBind = async (): Promise<void> => {
-  if (batchBindPolicyIds.value.length === 0) {
-    ElMessage.warning('请选择要绑定的策略')
-    return
-  }
-  if (batchBindMode.value === 'replace') {
-    try {
-      await ElMessageBox.confirm(
-        `覆盖模式将替换 ${selectedRules.value.length} 条规则的现有绑定，确定继续吗？`,
-        '覆盖确认',
-        { type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '取消' },
-      )
-    } catch { return }
-  }
-  batchBindSaving.value = true
-  try {
-    const res = await request.post<APIResponse<BatchOperationResult>>('/security/policies/batch-bind', {
-      rule_ids: selectedRules.value.map((r) => r.caddy_id),
-      policy_ids: batchBindPolicyIds.value,
-      mode: batchBindMode.value,
-    })
-    reportBatchResult(res.data, '绑定')
-    batchBindVisible.value = false
-    await refreshAfterBatch()
-  } catch (error: unknown) {
-    console.error('batch bind failed', error)
-  } finally {
-    batchBindSaving.value = false
-  }
-}
-
-// 解绑语义：从所选规则解绑所选策略——无批量端点，逐规则 PUT 剩余集合
-const batchUnbindVisible = ref(false)
-const batchUnbindPolicyIds = ref<number[]>([])
-const batchUnbindSaving = ref(false)
-
-// 解绑候选 = 所选规则当前绑定策略的并集
-const batchUnbindCandidates = computed(() => {
-  const ids = new Set<number>()
-  for (const rule of selectedRules.value) {
-    for (const binding of securityBindings.value[rule.caddy_id] || []) ids.add(binding.policy_id)
-  }
-  return securityPolicies.value.filter((p) => ids.has(p.id))
-})
-
-const openBatchUnbindDialog = (): void => {
-  batchUnbindPolicyIds.value = []
-  batchUnbindVisible.value = true
-}
-
-const submitBatchUnbind = async (): Promise<void> => {
-  if (batchUnbindPolicyIds.value.length === 0) {
-    ElMessage.warning('请选择要解绑的策略')
-    return
-  }
-  batchUnbindSaving.value = true
-  try {
-    const removeSet = new Set(batchUnbindPolicyIds.value)
-    const targets = selectedRules.value
-      .map((rule) => {
-        const current = (securityBindings.value[rule.caddy_id] || []).map((b) => b.policy_id)
-        return { caddyId: rule.caddy_id, current, remaining: current.filter((id) => !removeSet.has(id)) }
-      })
-      .filter((t) => t.remaining.length !== t.current.length)
-    if (targets.length === 0) {
-      ElMessage.info('所选规则未绑定这些策略')
-      return
-    }
-    const results = await Promise.allSettled(targets.map((t) =>
-      request.put<APIResponse>(`/security/rules/${encodeURIComponent(t.caddyId)}/policies`, { policy_ids: t.remaining }),
-    ))
-    const failed = results.filter((r) => r.status === 'rejected').length
-    const succeeded = results.length - failed
-    if (succeeded > 0) mfaAwareSuccess(`已从 ${succeeded} 条规则解绑所选策略`)
-    if (failed > 0) ElMessage.error(`${failed} 条规则解绑失败`)
-    batchUnbindVisible.value = false
-    await refreshAfterBatch()
-  } finally {
-    batchUnbindSaving.value = false
-  }
-}
-
-const batchPagesVisible = ref(false)
-const batchPagesSaving = ref(false)
-const batchPagesForm = reactive({
-  stage1_id: 0,
-  stage1_status: 403,
-  stage3_id: 0,
-  stage3_status: 403,
-})
-
-const openBatchBlockPageDialog = (): void => {
-  batchPagesForm.stage1_id = 0
-  batchPagesForm.stage1_status = 403
-  batchPagesForm.stage3_id = 0
-  batchPagesForm.stage3_status = 403
-  batchPagesVisible.value = true
-}
-
-const submitBatchPages = async (): Promise<void> => {
-  batchPagesSaving.value = true
-  try {
-    const res = await request.post<APIResponse<BatchOperationResult>>('/rules/batch-block-pages', {
-      rule_ids: selectedRules.value.map((r) => r.caddy_id),
-      block_page_stage1_id: batchPagesForm.stage1_id,
-      block_page_stage1_status: batchPagesForm.stage1_id > 0 ? batchPagesForm.stage1_status : 0,
-      block_page_stage3_id: batchPagesForm.stage3_id,
-      block_page_stage3_status: batchPagesForm.stage3_id > 0 ? batchPagesForm.stage3_status : 0,
-    })
-    reportBatchResult(res.data, '设置')
-    batchPagesVisible.value = false
-    await refreshAfterBatch()
-  } catch (error: unknown) {
-    console.error('batch block pages failed', error)
-  } finally {
-    batchPagesSaving.value = false
-  }
+const openBindDialog = (rule: Rule): void => {
+  bindDialogRule.value = rule
+  bindDialogVisible.value = true
 }
 
 const toggleRule = async (rule: Rule) => {
@@ -3257,13 +2797,6 @@ const openCopyWizard = async (rule: Rule) => {
     enable_compress: fullRule.enable_compress !== false,
     compress_types: compressTypes,
     enabled: false,
-    // 副本继承阶段拦截页（规则配置的一部分），但不继承策略绑定——绑定是规则间关系，
-    // 静默把副本绑到同一批策略不在复制语义内
-    security_policy_ids: [],
-    block_page_stage1_id: fullRule.block_page_stage1_id || 0,
-    block_page_stage1_status: fullRule.block_page_stage1_status || 403,
-    block_page_stage3_id: fullRule.block_page_stage3_id || 0,
-    block_page_stage3_status: fullRule.block_page_stage3_status || 403,
     })
   weightsToPercent(wizardForm.upstreams)
   if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
@@ -3728,58 +3261,10 @@ onUnmounted(() => {
 /* .page-header/.header-left/.page-title/.title-icon/.page-desc 与
  * styles/main.css 全局定义逐字等价(字面值=对应 CSS 变量解析值),已删除 */
 
-/* ── 阶段化安全流水线（锁弹框 / 向导投影 / 批量操作条） ── */
-.security-tooltip .stage-group-title { color: #1f2937; font-weight: 600; }
-.security-tooltip .stage-policy-block + .stage-policy-block { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #f0f1f3; }
-.security-tooltip .stage-policy-block.is-disabled { opacity: 0.45; }
-.security-tooltip .stage-policy-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; font-weight: 500; }
-.security-tooltip .stage-footnote { margin-top: 4px; font-size: 12px; color: #9ca3af; }
-
-/* 向导「安全防护」步骤的三阶段实时投影卡片 */
-.stage-projection { display: flex; flex-direction: column; gap: 8px; margin: 0 30px 16px 20px; }
-.stage-card { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 14px; background: #fff; }
-.stage-card.is-disabled { background: #fafafa; border-style: dashed; }
-.stage-card.is-disabled .stage-card-title { color: #9ca3af; }
-.stage-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.stage-card-title { font-size: 13px; font-weight: 600; color: #1f2937; }
-.stage-card-empty { font-size: 12px; color: #b1b5bd; }
-.stage-card-policy { margin-top: 6px; }
-.stage-card-policy.is-disabled { opacity: 0.45; }
-.stage-card-policy-name { font-size: 12px; font-weight: 500; color: #4b5563; margin-bottom: 2px; }
-.security-policy-mode-tag { margin-left: 8px; }
-.batch-bind-hint { padding-left: 110px; }
-
-/* 批量操作浮动条：fixed 底部居中卡片 */
-.batch-action-bar {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
-}
-.batch-action-count { font-size: 13px; color: #374151; margin-right: 4px; white-space: nowrap; }
 
 .rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
-.security-tooltip { min-width: 200px; font-size: 13px; }
-.security-tooltip .security-attribution-note { margin: 2px 0 8px; font-size: 12px; color: #6b7280; }
-/* 防护摘要含合并计数 + 信任启用态（如「黑名单模式 · 列表 12 条 · 黑名单 3 条」），
-   240px 会折入省略号；放宽到 320px，完整文本仍有 :title 兜底 */
-.security-tooltip .cert-value { max-width: 320px; }
-.security-tooltip .policy-group + .policy-group { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
-.security-tooltip .policy-group.is-disabled { opacity: 0.45; }
-.security-tooltip .policy-group-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; }
-.security-tooltip .policy-order { color: #6b7280; font-variant-numeric: tabular-nums; }
-.security-tooltip .policy-name { color: #1f2937; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 

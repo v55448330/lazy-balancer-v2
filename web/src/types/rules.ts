@@ -132,11 +132,6 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   enable_compress: boolean
   compress_types: string
   log_enabled: boolean
-  // 阶段拦截页（规则级覆盖层）：0 = 跟随策略；status ∈ {0,400,401,403,404,503}
-  block_page_stage1_id: number
-  block_page_stage1_status: number
-  block_page_stage3_id: number
-  block_page_stage3_status: number
 }
 
 export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
@@ -162,5 +157,11 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   proxy_stream_close_delay?: number
   path_rules?: PathRule[]
   ca_provider_id?: number
+  // 阶段拦截页（规则级覆盖层）：可选——省略=保留原值（后端 *int 合并语义），
+  // 显式 0=清除覆盖（跟随策略）；status ∈ {0,400,401,403,404,503}
+  block_page_stage1_id?: number
+  block_page_stage1_status?: number
+  block_page_stage3_id?: number
+  block_page_stage3_status?: number
   enabled: boolean
 }
