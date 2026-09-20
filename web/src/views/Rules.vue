@@ -48,10 +48,12 @@
                 <div class="lock-summary">
                   <div class="lock-summary-title">安全防护 · 阶段摘要</div>
                   <template v-for="stage in ruleStageModel(row).stages" :key="stage.stage">
-                    <div v-if="stage.groups.length > 0" class="lock-stage">
+                    <div class="lock-stage">
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
+                      <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->
+                      <div v-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">未启用</div>
                       <!-- 阶段 0：每策略 条数+模式一行 -->
-                      <template v-if="stage.stage === 0">
+                      <template v-else-if="stage.stage === 0">
                         <div v-for="group in stage.groups" :key="group.key" class="lock-stage-line" :class="{ 'is-disabled': !group.enabled }">
                           <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
                           <span class="lock-policy-detail">{{ group.rows.map((r) => r.detail).join(' · ') }}</span>
@@ -3855,6 +3857,7 @@ onUnmounted(() => {
 .rule-lock-popper .lock-stage-head--s3 { color: var(--el-color-danger); }
 .rule-lock-popper .lock-stage-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; line-height: 1.8; }
 .rule-lock-popper .lock-stage-line.is-disabled { opacity: 0.45; }
+.rule-lock-popper .lock-stage-empty { color: #b1b5bd; }
 .rule-lock-popper .lock-policy-name { font-weight: 500; color: #1f2937; }
 .rule-lock-popper .lock-policy-detail { color: #6b7280; }
 .rule-lock-popper .lock-summary-hint { font-size: 12px; color: #9ca3af; border-top: 1px dashed #e5e7eb; padding-top: 6px; }
