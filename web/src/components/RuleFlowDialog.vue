@@ -33,6 +33,7 @@
             <span class="tl-dot" :class="`tl-dot--${node.tone}`"><el-icon :size="14"><component :is="node.icon" /></el-icon></span>
             <span v-if="index < flowNodes.length - 1" class="tl-line" :class="{ 'is-inactive': node.nextInactive }" aria-hidden="true" />
           </div>
+          <div class="tl-main">
           <button
             type="button"
             class="tl-card"
@@ -46,7 +47,6 @@
             </span>
             <span class="tl-sub">{{ node.subtitle }}</span>
           </button>
-        </div>
 
         <!-- 接入信息（选中节点下方展开）：我们收到什么样的请求 -->
         <el-collapse-transition v-if="node.key === 'access'">
@@ -104,7 +104,8 @@
 
         <!-- 阶段 0 · 信任名单面板 -->
         <el-collapse-transition v-if="node.key === 'stage0'">
-          <div v-if="activeNode === 'stage0' && stageZero" class="flow-panel tl-panel">
+          <div v-if="activeNode === 'stage0'" class="flow-panel tl-panel">
+            <template v-if="stageZero">
             <div class="flow-panel-head"><span class="flow-panel-title">{{ stageZero.title }}</span></div>
             <div
               v-for="group in stageZero.groups"
@@ -147,6 +148,8 @@
               </el-collapse-transition>
             </div>
             <div class="flow-panel-footnote">信任 IP 命中后跳过全部后续安全阶段；「直通上游」模式不产生任何安全事件（故无计数 chip），「保留检测记录」模式事件动作记为检测</div>
+            </template>
+            <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
           </div>
         </el-collapse-transition>
 
@@ -274,6 +277,8 @@
             <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照</div>
           </div>
         </el-collapse-transition>
+          </div>
+        </div>
       </template>
     </div>
   </el-dialog>
@@ -359,7 +364,7 @@ const displayModel = computed<RuleStageModel | null>(() => {
   })
 })
 
-// 阶段 0 卡仅当绑了 stage0 策略（组非空）；阶段 1/2/3 恒出（未启用灰态）
+// 阶段 0 卡与 1/2/3 同构恒出（未绑定信任策略=灰态「未启用」，面板显示未启用说明）
 const stageZero = computed<StageGroup | undefined>(() => displayModel.value?.stages.find((s) => s.stage === 0 && s.enabled))
 const typedStagePanels = computed<StageGroup[]>(() => (displayModel.value?.stages ?? []).filter((s) => s.stage !== 0))
 const typedStageByKey = (key: string): StageGroup | undefined => typedStagePanels.value.find((s) => `stage${s.stage}` === key)
@@ -484,9 +489,16 @@ const flowNodes = computed<FlowNode[]>(() => {
   const upstream: FlowNode = { key: 'upstream', title: '上游', subtitle: target.upstreamSummary, tone: 'gray', icon: TopRight }
   if (isTcp.value) return [access, upstream]
   const nodes: FlowNode[] = [access]
-  if (stageZero.value) {
-    nodes.push({ key: 'stage0', title: STAGE_SHORT_TITLES[0], subtitle: stageZeroSubtitle.value, tone: 'green', icon: CircleCheck })
-  }
+  // 阶段 0 与 1/2/3 同构恒出：未绑定信任策略时灰态「未启用」（用户裁定 2026-09-21——
+  // 流程图必须完整呈现五个环节，缺环节比灰态更误导）
+  nodes.push({
+    key: 'stage0',
+    title: STAGE_SHORT_TITLES[0],
+    subtitle: stageZero.value ? stageZeroSubtitle.value : '未启用',
+    tone: 'green',
+    icon: CircleCheck,
+    disabled: !stageZero.value,
+  })
   for (const stage of typedStagePanels.value) {
     const stageNo = stage.stage as 1 | 2 | 3
     const { chip, caption } = stageChip(stageNo)
@@ -627,8 +639,6 @@ const onDialogOpen = (): void => {
   font-style: normal;
   font-size: 11px;
   color: #1f6fbd;
-  background: #ecf5ff;
-  border: 1px solid #b3d8ff;
   border-radius: 9px;
   padding: 1px 8px;
   white-space: nowrap;
@@ -636,8 +646,11 @@ const onDialogOpen = (): void => {
 .tl-chip-caption { font-style: normal; color: #9ca3af; margin-left: 4px; }
 .tl-sub { font-size: 12px; color: #6b7280; }
 
-/* 选中节点下方展开面板（与时间线同宽缩进） */
-.tl-panel { margin: -6px 0 14px 40px; }
+/* 卡片+面板同列容器：面板展开时整行撑高，轨道连接线随之连续（用户报告：面板
+   在行间时连接线断开——面板必须是行内成员才能让 flex 轨道线贯穿） */
+.tl-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+/* 选中节点下方展开面板（与卡片同列，负顶边距吸收卡片下间距） */
+.tl-panel { margin: -6px 0 14px 0; }
 
 /* ── 信息区：定义列表双列栅格 + 字级层次 ── */
 .flow-panel { border: 1px solid #ebeef5; border-radius: 8px; padding: 14px 18px; background: #fafafa; box-shadow: var(--el-box-shadow-lighter); }

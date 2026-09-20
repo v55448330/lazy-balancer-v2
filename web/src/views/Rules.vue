@@ -247,7 +247,7 @@
                 </el-button>
                 </div>
               </el-tooltip>
-              <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
+              <el-tooltip :disabled="!isReadOnly && row.log_enabled" :content="isReadOnly ? readOnlyMessage : '该规则未开启访问日志'">
                 <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row)">
                   日志

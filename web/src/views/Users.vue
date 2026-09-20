@@ -151,30 +151,30 @@
                 </el-button>
               </div>
             </el-tooltip>
-            <el-tooltip v-if="row.auth_provider !== 'oidc'" :disabled="!isReadOnly" :content="readOnlyMessage">
+            <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的密码由身份提供商管理' : readOnlyMessage">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
                   重置密码
                 </el-button>
               </div>
             </el-tooltip>
-            <el-tooltip v-if="!row.mfa_enabled && row.auth_provider !== 'oidc' && row.id === authStore.user?.id" :disabled="!isReadOnly" :content="readOnlyMessage">
+            <el-tooltip v-if="!row.mfa_enabled && row.id === authStore.user?.id" :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : readOnlyMessage">
               <div>
-                <el-button type="success" link size="small" :disabled="isReadOnly || nodeModeSlave || submitting" @click="openMfaBinding(row)">
+                <el-button type="success" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || nodeModeSlave || submitting" @click="openMfaBinding(row)">
                   启用 MFA
                 </el-button>
               </div>
             </el-tooltip>
-            <el-tooltip v-if="row.mfa_enabled && row.auth_provider !== 'oidc' && authStore.user?.role === 'admin'" :disabled="!isReadOnly" :content="readOnlyMessage">
+            <el-tooltip v-if="row.mfa_enabled && authStore.user?.role === 'admin'" :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : readOnlyMessage">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
                   重置 MFA
                 </el-button>
               </div>
             </el-tooltip>
-            <el-tooltip v-if="row.id !== authStore.user?.id" :disabled="!isReadOnly" :content="readOnlyMessage">
+            <el-tooltip :disabled="!isReadOnly && row.id !== authStore.user?.id" :content="row.id === authStore.user?.id ? '不能删除当前登录账户' : readOnlyMessage">
               <div>
-                <el-button type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
+                <el-button type="danger" link size="small" :disabled="isReadOnly || row.id === authStore.user?.id || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
                   删除
                 </el-button>
               </div>
