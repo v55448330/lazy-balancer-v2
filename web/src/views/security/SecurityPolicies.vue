@@ -1288,16 +1288,17 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: '启用状态', value: d.enabled ? '启用' : '禁用' },
       ],
     },
-    // 阶段 0 段：仅当信任名单非空（mixed 的信任能力归此阶段；空名单不显示「已启用」——任务 G 口径）
-    ...(trustCount > 0
-      ? [{
-          title: '阶段 0 · 信任名单',
-          rows: [
-            { label: '信任名单', value: `${trustCount} 条` },
+    // 阶段 0 段恒出（与流程弹框同口径 2026-09-21：无信任名单也显「未启用」，
+    // 缺环节比灰态更误导）；有名单时显条目数与模式，开关关闭标注（未启用）
+    {
+      title: '阶段 0 · 信任名单',
+      rows: trustCount === 0
+        ? [{ label: '信任名单', value: '未启用' }]
+        : [
+            { label: '信任名单', value: `${trustCount} 条${d.ip_whitelist_enabled === false ? '（未启用）' : ''}` },
             { label: '模式', value: d.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' },
           ],
-        }]
-      : []),
+    },
     {
       title: '阶段 1 · IP 访问控制',
       rows: [
