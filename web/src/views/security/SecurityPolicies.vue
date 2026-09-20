@@ -88,65 +88,102 @@
         </el-table-column>
         <el-table-column v-if="!isReadOnly" label="操作" width="280" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-button size="small" link type="primary" @click="openBindRulesDialog(row)">绑定规则</el-button>
-            <el-button v-if="policyTypeOf(row) === 'mixed'" size="small" link type="warning" @click="openSplitDialog(row)">拆分迁移</el-button>
+            <el-button size="small" link type="primary" @click="openDialog(row)">{{ policyTypeOf(row) === 'mixed' ? '查看' : '编辑' }}</el-button>
+            <el-button v-if="policyTypeOf(row) !== 'mixed'" size="small" link type="primary" @click="openBindRulesDialog(row)">绑定规则</el-button>
+            <el-button v-if="policyTypeOf(row) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row)">更新迁移</el-button>
             <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
 
       </el-table>
     </el-card>
-    <!-- 混合策略拆分迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
-    <el-dialog v-model="splitVisible" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+    <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
+    <el-dialog v-model="migrateVisible" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><WarningFilled /></el-icon></div>
           <div class="dialog-header__text">
-            <div class="dialog-header__title">拆分迁移预演</div>
-            <div class="dialog-header__subtitle">混合策略「{{ splitPolicy?.name }}」将按阶段拆分为单职子策略（兼容组不再支持新建）</div>
+            <div class="dialog-header__title">更新迁移预演</div>
+            <div class="dialog-header__subtitle">混合策略「{{ migratePolicy?.name }}」将按阶段迁移为单职子策略（兼容组不再支持新建）</div>
           </div>
         </div>
       </template>
-      <div v-if="splitPolicy" class="split-preview">
-        <div class="split-preview-section">
-          <div class="split-preview-title">将创建 {{ splitChildTypes.length }} 条子策略</div>
-          <div class="split-preview-tags">
-            <el-tag v-for="type in splitChildTypes" :key="type" size="small" effect="plain" type="primary">{{ splitPolicy.name }}（{{ POLICY_TYPE_SHORT_LABELS[type] }}）</el-tag>
+      <div v-if="migratePolicy" class="migrate-preview">
+        <div class="migrate-preview-section">
+          <div class="migrate-preview-title">将创建 {{ migrateChildTypes.length }} 条子策略</div>
+          <div class="migrate-preview-tags">
+            <el-tag v-for="type in migrateChildTypes" :key="type" size="small" effect="plain" type="primary">{{ migratePolicy.name }}（{{ POLICY_TYPE_SHORT_LABELS[type] }}）</el-tag>
           </div>
         </div>
-        <div class="split-preview-section">
-          <div class="split-preview-title">将重映射绑定（原策略的绑定整体改挂到子策略）</div>
-          <template v-if="splitBoundRules.length > 0">
-            <div v-for="rule in splitBoundRules" :key="rule.caddy_id" class="split-preview-rule">
-              <span class="split-preview-rule-name">{{ rule.name }}</span>
-              <span class="split-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
+        <div class="migrate-preview-section">
+          <div class="migrate-preview-title">将重映射绑定（原策略的绑定整体改挂到子策略）</div>
+          <template v-if="migrateBoundRules.length > 0">
+            <div v-for="rule in migrateBoundRules" :key="rule.caddy_id" class="migrate-preview-rule">
+              <span class="migrate-preview-rule-name">{{ rule.name }}</span>
+              <span class="migrate-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </div>
           </template>
-          <div v-else class="split-preview-empty">当前无规则绑定本策略</div>
+          <div v-else class="migrate-preview-empty">当前无规则绑定本策略</div>
         </div>
         <el-alert
-          v-if="splitCapRisk.length > 0"
+          v-if="migrateCapRisk.length > 0"
           type="warning"
           :closable="false"
           show-icon
-          :title="`上限风险：${splitCapRisk.map((r) => r.name).join('、')} 拆分后将超过每条规则 5 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
-          class="split-preview-alert"
+          :title="`上限风险：${migrateCapRisk.map((r) => r.name).join('、')} 迁移后将超过每条规则 5 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
+          class="migrate-preview-alert"
         />
         <el-alert
           type="info"
           :closable="false"
           show-icon
           title="全部规则重映射成功后原策略将被删除；存在 skipped 规则时原策略保留（因仍在使用）"
-          class="split-preview-alert"
+          class="migrate-preview-alert"
         />
       </div>
       <template #footer>
-        <el-button @click="splitVisible = false">取消</el-button>
-        <el-button type="warning" :loading="splitSaving" @click="submitSplit">确认拆分迁移</el-button>
+        <el-button @click="migrateVisible = false">取消</el-button>
+        <el-button type="warning" :loading="migrateSaving" @click="submitMigrate">确认更新迁移</el-button>
       </template>
     </el-dialog>
 
+    <!-- 混合策略只读查看：按阶段分组展示全部内容，零可编辑字段，底部唯一操作=更新迁移 -->
+    <el-dialog v-model="viewPolicyVisible" width="min(760px, 94vw)" top="6vh">
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon"><el-icon :size="18"><Lock /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">{{ viewPolicyDetail?.name || viewPolicyRow?.name }}</div>
+            <div class="dialog-header__subtitle">混合策略（兼容旧版）· 只读查看——经「更新迁移」拆分为单职策略后可编辑</div>
+          </div>
+        </div>
+      </template>
+      <div v-loading="viewPolicyLoading" class="view-policy-body">
+        <template v-if="viewPolicyDetail">
+          <div v-for="section in viewPolicySections" :key="section.title" class="view-policy-section">
+            <div class="view-policy-section-title">{{ section.title }}</div>
+            <div v-for="row in section.rows" :key="row.label" class="view-policy-row">
+              <span class="view-policy-label">{{ row.label }}</span>
+              <span class="view-policy-value" :title="row.value">{{ row.value }}</span>
+            </div>
+          </div>
+          <div class="view-policy-section">
+            <div class="view-policy-section-title">关联规则（{{ viewPolicyBoundRuleRows.length }}）</div>
+            <template v-if="viewPolicyBoundRuleRows.length > 0">
+              <div v-for="rule in viewPolicyBoundRuleRows" :key="rule.caddyId" class="view-policy-row">
+                <span class="view-policy-label">{{ rule.name }}</span>
+                <span class="view-policy-value">{{ rule.domain || '-' }}:{{ rule.listenPort }}</span>
+              </div>
+            </template>
+            <div v-else class="view-policy-empty">未关联规则</div>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="viewPolicyVisible = false">关闭</el-button>
+        <el-button type="warning" @click="openMigrateFromView">更新迁移</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="dialogVisible" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
         <div class="dialog-header">
@@ -176,21 +213,17 @@
             <div class="mode-row" role="group" aria-label="策略类型">
               <span class="mode-row-label"><span class="required-mark">*</span>策略类型</span>
               <div class="mode-row-content">
-                <el-radio-group v-if="editingId === null" v-model="createPolicyType">
+                <!-- 纵向一行一个 + 编辑态类型标签内容自适应（不占整行） -->
+                <el-radio-group v-if="editingId === null" v-model="createPolicyType" class="policy-type-radio">
                   <el-radio value="stage1">阶段 1 · IP 访问控制（IP 名单 / 信任名单 / 地域拦截 / 拦截页）</el-radio>
                   <el-radio value="stage2">阶段 2 · 限流（速率上限，拦截恒 429）</el-radio>
                   <el-radio value="stage3">阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）</el-radio>
                 </el-radio-group>
-                <el-tag v-else :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+                <div v-else class="policy-type-static">
+                  <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+                </div>
               </div>
             </div>
-            <el-alert
-              v-if="editorPolicyType === 'mixed'"
-              type="info"
-              :closable="false"
-              title="混合策略（兼容旧版）：同时包含多个阶段的能力，可编辑；新建请按阶段拆分类型"
-              class="mixed-policy-banner"
-            />
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" />
             </el-form-item>
@@ -1000,7 +1033,7 @@ const policySearch = ref('')
 const activeTypeTab = ref<SecurityPolicyType>('stage1')
 const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)
 // 「混合策略（兼容旧版）」tab 条件可见：仅当存在 mixed 策略（导入或存量）时显示；
-// 混合组清空（如拆分迁移完成）后当前 tab 自动切回阶段 1
+// 混合组清空（如更新迁移完成）后当前 tab 自动切回阶段 1
 const policyTypeTabs = computed(() => {
   const counts: Record<SecurityPolicyType, number> = { stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
   for (const p of policies.value) counts[policyTypeOf(p)]++
@@ -1085,20 +1118,20 @@ const onStageOverrideChange = (caddyId: string, stage: 1 | 3, field: 'id' | 'sta
   void saveStageOverride(caddyId, edit)
 }
 
-// ── 混合策略一键拆分迁移（用户裁定）：预演（子策略/重映射/上限风险）→ POST split → 汇总 ──
-interface SplitPolicyResult {
+// ── 混合策略一键更新迁移（用户裁定）：预演（子策略/重映射/上限风险）→ POST split → 汇总 ──
+interface MigratePolicyResult {
   created: Array<{ id: number; name: string; policy_type: string }>
   remapped: number
   skipped: Array<{ rule_id: string; reason: string }>
   deleted_original: boolean
 }
-const splitVisible = ref(false)
-const splitSaving = ref(false)
-const splitPolicy = ref<PolicySummary | null>(null)
+const migrateVisible = ref(false)
+const migrateSaving = ref(false)
+const migratePolicy = ref<PolicySummary | null>(null)
 
 // 预演子策略类型 = 特征组探测（与 inferPolicyType 同形状的阶段能力谓词；后端按同口径实际生成）
-const splitChildTypes = computed<SecurityPolicyType[]>(() => {
-  const p = splitPolicy.value
+const migrateChildTypes = computed<SecurityPolicyType[]>(() => {
+  const p = migratePolicy.value
   if (!p) return []
   const types: SecurityPolicyType[] = []
   if (stage1ChipOn(p)) types.push('stage1')
@@ -1107,41 +1140,139 @@ const splitChildTypes = computed<SecurityPolicyType[]>(() => {
   return types
 })
 
-const splitBoundRules = computed(() => (splitPolicy.value ? policyBoundRules(splitPolicy.value.id) : []))
+const migrateBoundRules = computed(() => (migratePolicy.value ? policyBoundRules(migratePolicy.value.id) : []))
 
 // 上限风险：规则当前绑定数 - 1（原策略被替换）+ 子策略数 > 5 → 该规则保持原绑定进 skipped
-const splitCapRisk = computed(() =>
-  splitBoundRules.value.filter((rule) =>
-    (securityBindings.value[rule.caddy_id] || []).length - 1 + splitChildTypes.value.length > MAX_POLICIES_PER_RULE))
+const migrateCapRisk = computed(() =>
+  migrateBoundRules.value.filter((rule) =>
+    (securityBindings.value[rule.caddy_id] || []).length - 1 + migrateChildTypes.value.length > MAX_POLICIES_PER_RULE))
 
-const openSplitDialog = (row: PolicySummary): void => {
-  splitPolicy.value = row
-  splitVisible.value = true
+const openMigrateDialog = (row: PolicySummary): void => {
+  migratePolicy.value = row
+  migrateVisible.value = true
 }
 
-const submitSplit = async (): Promise<void> => {
-  const policy = splitPolicy.value
+const submitMigrate = async (): Promise<void> => {
+  const policy = migratePolicy.value
   if (!policy) return
-  splitSaving.value = true
+  migrateSaving.value = true
   try {
-    const res = await request.post<APIResponse<SplitPolicyResult>>(`/security/policies/${policy.id}/split`)
+    const res = await request.post<APIResponse<MigratePolicyResult>>(`/security/policies/${policy.id}/split`)
     const data = res.data
     const parts: string[] = []
     if (data && data.created.length > 0) parts.push(`已创建 ${data.created.length} 条子策略（${data.created.map((c) => c.name).join('、')}）`)
     if (data && data.remapped > 0) parts.push(`重映射 ${data.remapped} 条规则绑定`)
     if (data && !data.deleted_original) parts.push('原策略因仍在使用未删除')
-    mfaAwareSuccess(parts.length > 0 ? parts.join('；') : '拆分迁移完成')
+    mfaAwareSuccess(parts.length > 0 ? parts.join('；') : '更新迁移完成')
     if (data && data.skipped.length > 0) {
       ElMessage.warning(`${data.skipped.length} 条规则跳过：${data.skipped.map((s) => s.reason).join('；')}`)
     }
-    splitVisible.value = false
+    migrateVisible.value = false
     await fetchData()
   } catch (error: unknown) {
     // 错误提示已由全局拦截器展示
-    console.error('split policy failed', error)
+    console.error('migrate policy failed', error)
   } finally {
-    splitSaving.value = false
+    migrateSaving.value = false
   }
+}
+
+// ── 混合策略只读查看（决策：mixed 不再可编辑，唯一操作 = 更新迁移） ──
+const viewPolicyVisible = ref(false)
+const viewPolicyLoading = ref(false)
+const viewPolicyRow = ref<PolicySummary | null>(null)
+const viewPolicyDetail = ref<PolicyDetail | null>(null)
+const viewPolicyBindings = ref<string[]>([])
+
+const openViewDialog = async (row: PolicySummary, openSeq: number): Promise<void> => {
+  viewPolicyRow.value = row
+  viewPolicyVisible.value = true
+  viewPolicyLoading.value = true
+  viewPolicyDetail.value = null
+  viewPolicyBindings.value = []
+  try {
+    const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
+    if (openSeq !== policyDialogOpenSeq) return
+    viewPolicyDetail.value = res.data?.policy ?? null
+    viewPolicyBindings.value = res.data?.bindings ?? []
+  } catch (error: unknown) {
+    if (openSeq !== policyDialogOpenSeq) return
+    console.error('view policy failed', error)
+    viewPolicyVisible.value = false
+  } finally {
+    if (openSeq === policyDialogOpenSeq) viewPolicyLoading.value = false
+  }
+}
+
+// 只读查看的分段内容：详情接口为字符串形态（ip_* 列表/geo* 为 JSON 文本），计数用合并口径
+interface ViewPolicySection { title: string; rows: Array<{ label: string; value: string }> }
+const viewPolicySections = computed<ViewPolicySection[]>(() => {
+  const d = viewPolicyDetail.value
+  if (!d) return []
+  const aclCount = mergeIpEntries(parseJsonList(d.ip_acl_list), parseRefIds(d.ip_acl_list_refs)).length
+  const trustCount = mergeIpEntries(parseJsonList(d.ip_whitelist), parseRefIds(d.ip_whitelist_refs)).length
+  const blCount = parseJsonList(d.ip_blacklist).length
+  const geoCount = parseJsonList(d.geoip_countries).length
+  const crsGroupCount = parseJsonList(d.crs_rule_groups).length
+  const excludedCount = parseCrsExcludedRules(d.crs_excluded_rules).length
+  const customCount = parseCustomRuleIds(d.custom_rules).length
+  const wafModeText: Record<string, string> = { blocking: '拦截', detection: '检测', custom_only: '仅自定义', off: '关闭' }
+  const stage3Rows: Array<{ label: string; value: string }> = [{ label: 'WAF 模式', value: wafModeText[d.mode] ?? d.mode }]
+  if (d.mode === 'blocking' || d.mode === 'detection') {
+    stage3Rows.push({ label: '异常阈值', value: String(d.anomaly_threshold) })
+    stage3Rows.push({ label: 'CRS 规则组', value: crsGroupCount === 0 ? '全部（默认）' : `${crsGroupCount} 组` })
+    stage3Rows.push({ label: '排除规则', value: `${excludedCount} 条` })
+  }
+  if (d.mode !== 'off') {
+    stage3Rows.push({ label: '自定义规则', value: `${customCount} 条` })
+    stage3Rows.push({ label: '检查响应体', value: d.waf_check_response ? '启用' : '关闭' })
+    stage3Rows.push({ label: '记录请求体', value: d.log_request_body ? '启用' : '关闭' })
+  }
+  const page = d.block_page_id > 0 ? blockPages.value.find((p) => p.id === d.block_page_id) : undefined
+  return [
+    {
+      title: '基础信息',
+      rows: [
+        { label: '名称', value: d.name },
+        { label: '描述', value: d.description || '-' },
+        { label: '类型', value: POLICY_TYPE_LABELS.mixed },
+        { label: '启用状态', value: d.enabled ? '启用' : '禁用' },
+      ],
+    },
+    {
+      title: '阶段 1 · IP 访问控制',
+      rows: [
+        { label: '访问控制', value: d.ip_acl_enabled ? `${ACL_MODE_LABELS[d.ip_acl_mode] ?? d.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` : '未启用' },
+        { label: '信任名单', value: `${trustCount} 条（${d.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）` },
+        { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off' ? `${GEOIP_MODE_LABELS[d.geoip_mode ?? 'deny'] ?? d.geoip_mode} · ${geoCount} 区域` : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
+      ],
+    },
+    {
+      title: '阶段 2 · 限流',
+      rows: [{ label: '速率限制', value: d.rate_limit_enabled ? `${d.rate_limit_rps} 次/秒 · 突发 ${d.rate_limit_burst} 次 · 拦截恒 429` : '未启用' }],
+    },
+    { title: '阶段 3 · WAF', rows: stage3Rows },
+    {
+      title: '拦截页',
+      rows: [
+        { label: '拦截页面', value: d.block_page_id > 0 ? `${page?.name ?? `页面 #${d.block_page_id}`}（状态码 ${d.block_status_code || 403}）` : '无拦截页面（默认 403）' },
+        { label: '归因口径', value: '规则可配阶段页覆盖；未覆盖时按触发策略显示' },
+      ],
+    },
+  ]
+})
+
+const viewPolicyBoundRuleRows = computed(() => viewPolicyBindings.value.map((caddyId) => {
+  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
+  return { caddyId, name: rule?.name || caddyId, domain: rule?.domain || '', listenPort: rule?.listen_port ?? 0 }
+}))
+
+// 只读查看底部唯一操作：更新迁移（关查看框 → 开迁移预演）
+const openMigrateFromView = (): void => {
+  const row = viewPolicyRow.value
+  if (!row) return
+  viewPolicyVisible.value = false
+  openMigrateDialog(row)
 }
 
 const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit): Promise<void> => {
@@ -1279,9 +1410,9 @@ const WIZARD_STEP = {
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
   [WIZARD_STEP.BASIC]: { title: '基础信息', icon: InfoFilled },
-  [WIZARD_STEP.IP_ACL]: { title: '阶段 1·IP 访问控制与地域拦截', icon: Connection },
-  [WIZARD_STEP.RATE_LIMIT]: { title: '阶段 2·速率限制', icon: Odometer },
-  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3·WAF 规则', icon: Lock },
+  [WIZARD_STEP.IP_ACL]: { title: '阶段 1 · IP 访问控制', icon: Connection },
+  [WIZARD_STEP.RATE_LIMIT]: { title: '阶段 2 · 限流', icon: Odometer },
+  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3 · WAF', icon: Lock },
   [WIZARD_STEP.BLOCK_PAGE]: { title: '拦截页', icon: Document },
   [WIZARD_STEP.BINDINGS]: { title: '关联规则', icon: Link },
   [WIZARD_STEP.PREVIEW]: { title: '配置预览', icon: Check },
@@ -2531,6 +2662,11 @@ async function openDialog(row?: PolicySummary) {
   // 详情 GET 在途期间用户再点"新建策略"或另一行"编辑"，首个返回会覆盖
   // editingId/表单，把保存语义错位成 PUT 到错误策略。
   const openSeq = ++policyDialogOpenSeq
+  // 混合策略（兼容旧版）：「编辑」改为只读查看弹框——零可编辑字段，唯一操作=更新迁移
+  if (row && policyTypeOf(row) === 'mixed') {
+    await openViewDialog(row, openSeq)
+    return
+  }
   editingId.value = row?.id ?? null
   // 编辑态类型固定（行 policy_type 或内容推断）；新建态由 createPolicyType 驱动
   editingPolicyType.value = row ? policyTypeOf(row) : null
@@ -3031,7 +3167,6 @@ onMounted(async () => {
 .policy-type-tabs { margin-bottom: 4px; }
 .policy-type-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .stage-chip.is-off { opacity: 0.55; }
-.mixed-policy-banner { margin: 4px 20px 12px; }
 
 /* 生效投影条（阶段步骤顶部）：本阶段在每条已关联规则上的拦截页形态 */
 .stage-projection-bar {
@@ -3075,16 +3210,31 @@ onMounted(async () => {
 .preview-bound-rule-name { font-weight: 500; color: #1f2937; }
 .preview-bound-rule-stage { color: #6b7280; }
 
-/* 混合策略拆分迁移预演 */
-.split-preview { display: flex; flex-direction: column; gap: 14px; }
-.split-preview-section { display: flex; flex-direction: column; gap: 6px; }
-.split-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }
-.split-preview-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.split-preview-rule { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.8; }
-.split-preview-rule-name { color: #1f2937; font-weight: 500; }
-.split-preview-rule-meta { color: #9ca3af; font-size: 12px; }
-.split-preview-empty { font-size: 12px; color: #9ca3af; }
-.split-preview-alert { margin-top: 2px; }
+/* 混合策略更新迁移预演 */
+.migrate-preview { display: flex; flex-direction: column; gap: 14px; }
+.migrate-preview-section { display: flex; flex-direction: column; gap: 6px; }
+.migrate-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.migrate-preview-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.migrate-preview-rule { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.8; }
+.migrate-preview-rule-name { color: #1f2937; font-weight: 500; }
+
+/* 策略类型：纵向单选（一行一个）+ 编辑态 inline tag 自适应宽度；tab 标签防换行 */
+.policy-type-radio { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.policy-type-radio :deep(.el-radio) { margin-right: 0; white-space: normal; }
+.policy-type-static { display: flex; align-items: center; min-height: 32px; }
+.policy-type-tabs :deep(.el-tabs__item) { white-space: nowrap; }
+.migrate-preview-rule-meta { color: #9ca3af; font-size: 12px; }
+.migrate-preview-empty { font-size: 12px; color: #9ca3af; }
+.migrate-preview-alert { margin-top: 2px; }
+
+/* 混合策略只读查看（信息卡布局） */
+.view-policy-body { min-height: 120px; }
+.view-policy-section { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; }
+.view-policy-section-title { font-size: 13px; font-weight: 600; color: #1f2937; margin-bottom: 4px; }
+.view-policy-row { display: flex; align-items: baseline; gap: 12px; font-size: 13px; line-height: 1.9; }
+.view-policy-label { color: #6b7280; flex: 0 0 96px; }
+.view-policy-value { color: #1f2937; overflow: hidden; text-overflow: ellipsis; }
+.view-policy-empty { font-size: 12px; color: #9ca3af; }
 </style>
 
 <!-- el-tooltip popper 挂载到 body， scoped 样式无法命中，单独非 scoped 块 -->

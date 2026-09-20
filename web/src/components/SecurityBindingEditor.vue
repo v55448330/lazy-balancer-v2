@@ -42,6 +42,18 @@
         </el-select>
         <div v-if="section.options.length === 0" class="form-tip-line">暂无该类策略，到「安全防护 → 安全策略」页创建</div>
       </div>
+      <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择，
+           保存时不携带（后端拒绝新增 mixed 绑定，错误消息原样透出） -->
+      <div v-if="boundMixedPolicies.length > 0" class="bind-stage-group bind-stage-group--readonly">
+        <div class="bind-stage-head">
+          <span class="bind-stage-title">混合策略（兼容旧版）</span>
+          <span class="bind-stage-count">{{ boundMixedPolicies.length }} 条</span>
+        </div>
+        <div class="bind-mixed-tags">
+          <el-tag v-for="policy in boundMixedPolicies" :key="policy.id" type="warning" size="small" effect="plain">{{ policy.name }}</el-tag>
+        </div>
+        <div class="form-tip-line">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
+      </div>
     </div>
 
     <!-- 策略侧：规则选择器（复用 rule picker 交互；每行显示当前绑定集合与阶段页覆盖徽标） -->
@@ -189,7 +201,6 @@ const saving = ref(false)
 const bindStage1 = ref<number[]>([])
 const bindStage2 = ref<number[]>([])
 const bindStage3 = ref<number[]>([])
-const bindStageMixed = ref<number[]>([])
 
 const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]>>(() => {
   const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage1: [], stage2: [], stage3: [], mixed: [] }
@@ -197,14 +208,21 @@ const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]
   return grouped
 })
 
+// 可选策略过滤 mixed：混合组不出现在可选区（已绑定的 mixed 由只读区展示）
 const stageSections = computed(() => [
-  { type: 'stage1' as const, title: '阶段 1 · 预检（IP 访问控制 / 地域拦截）', options: policiesByType.value.stage1, selection: bindStage1 },
+  { type: 'stage1' as const, title: '阶段 1 · IP 访问控制', options: policiesByType.value.stage1, selection: bindStage1 },
   { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2 },
   { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3 },
-  { type: 'mixed' as const, title: '混合策略（兼容旧版）', options: policiesByType.value.mixed, selection: bindStageMixed },
 ])
 
-const ruleModeTotal = computed(() => bindStage1.value.length + bindStage2.value.length + bindStage3.value.length + bindStageMixed.value.length)
+// 当前规则已绑定的 mixed 策略（只读 tag，不可增减）
+const boundMixedPolicies = computed(() => {
+  if (props.mode !== 'rule' || !props.rule) return []
+  const boundIds = new Set((props.bindings[props.rule.caddy_id] || []).map((b) => b.policy_id))
+  return props.policies.filter((p) => boundIds.has(p.id) && inferPolicyType(p) === 'mixed')
+})
+
+const ruleModeTotal = computed(() => bindStage1.value.length + bindStage2.value.length + bindStage3.value.length)
 
 // ── 策略模式：规则选择器（搜索 + 全选筛选 + 分页 + 行内绑定集合/覆盖徽标） ──
 const pickerSearch = ref('')
@@ -288,12 +306,14 @@ const onOpen = (): void => {
     bindStage1.value = []
     bindStage2.value = []
     bindStage3.value = []
-    bindStageMixed.value = []
-    // 当前绑定预选：按策略类型分桶回填（绑定引用了已删除策略时静默落出——保存即清理死绑定）
+    // 当前绑定预选：按策略类型分桶回填；mixed 不进可选桶（只读区另行展示，
+    // 绑定引用了已删除策略时静默落出——保存即清理死绑定）
     const boundIdSet = new Set((props.rule ? props.bindings[props.rule.caddy_id] : null)?.map((b) => b.policy_id) ?? [])
-    const buckets: Record<SecurityPolicyType, typeof bindStage1> = { stage1: bindStage1, stage2: bindStage2, stage3: bindStage3, mixed: bindStageMixed }
+    const buckets: Record<'stage1' | 'stage2' | 'stage3', typeof bindStage1> = { stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
     for (const policy of props.policies) {
-      if (boundIdSet.has(policy.id)) buckets[inferPolicyType(policy)].value.push(policy.id)
+      const type = inferPolicyType(policy)
+      if (type === 'mixed') continue
+      if (boundIdSet.has(policy.id)) buckets[type].value.push(policy.id)
     }
     return
   }
@@ -318,8 +338,9 @@ const submit = async (): Promise<void> => {
     }
     saving.value = true
     try {
+      // mixed 不携带提交（后端拒绝新增 mixed 绑定，错误消息原样透出）
       await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
-        policy_ids: [...bindStage1.value, ...bindStage2.value, ...bindStage3.value, ...bindStageMixed.value],
+        policy_ids: [...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
       })
       mfaAwareSuccess('安全策略绑定已保存')
       emit('update:modelValue', false)
@@ -402,4 +423,7 @@ const submit = async (): Promise<void> => {
 .bind-total { font-size: 13px; color: #6b7280; }
 .bind-total.is-over { color: var(--el-color-danger); font-weight: 600; }
 .bind-footer-buttons { display: flex; gap: 12px; }
+
+.bind-stage-group--readonly { background: #fafafa; border-style: dashed; }
+.bind-mixed-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

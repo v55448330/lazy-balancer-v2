@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 // 策略实体单职化写侧（policy_type）：显式提交 stage1/stage2/stage3 时阶段外
@@ -202,5 +205,60 @@ func TestListAndGetSecurityPolicy_carryPolicyType(t *testing.T) {
 	}
 	if detailPayload.Data.Policy.PolicyType != "stage3" {
 		t.Fatalf("detail policy_type=%q, want stage3", detailPayload.Data.Policy.PolicyType)
+	}
+}
+
+// 混合策略仅可更新迁移（2026-09-20 用户裁定）：三个绑定写入口
+// （BindRuleToPolicy / SetRuleSecurityPolicies / BatchBindSecurityPolicies）
+// 一律 400 拒绝 mixed 策略 id——存量混合绑定保持有效（迁移前不清除），
+// 但不得新增。前端绑定编辑器同步过滤 mixed 可选项。
+func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	gin.SetMode(gin.TestMode)
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeCaddy.Close)
+	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	router := gin.New()
+	router.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
+	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
+	router.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
+
+	// Given：mixed 策略 + 单职策略 + http 规则
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES
+		(1,'mixed-p','blocking','mixed',1),(2,'typed-p','blocking','stage3',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_mb','mb','http','mb.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_mb','127.0.0.1',9000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// BindRuleToPolicy：mixed → 400；typed → 2xx
+	recorder := postJSON(t, router, "/security/policies/1/bind", map[string]any{"rule_caddy_id": "lb_mb"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bind mixed status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	recorder = postJSON(t, router, "/security/policies/2/bind", map[string]any{"rule_caddy_id": "lb_mb"})
+	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
+		t.Fatalf("bind typed status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	}
+
+	// SetRuleSecurityPolicies：集合含 mixed → 400
+	request := httptest.NewRequest(http.MethodPut, "/security/rules/lb_mb/policies", strings.NewReader(`{"policy_ids":[2,1]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("set policies with mixed status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+
+	// BatchBindSecurityPolicies：集合含 mixed → 400
+	response = postStageJSON(t, router, "/security/policies/batch-bind", `{"rule_ids":["lb_mb"],"policy_ids":[1],"mode":"merge"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("batch-bind with mixed status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 }

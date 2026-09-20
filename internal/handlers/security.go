@@ -1798,15 +1798,22 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var policyExists int
+	var policyType string
 	// 先判 err 再判 COUNT（R44 F2）：DB 瞬时故障（锁/IO）时 policyExists 未赋值，
 	// 合并判断会把故障误报为「策略不存在」，前端无法区分重试与真 404——与
 	// DeleteSecurityBlockPage 的 ErrNoRows 先判口径一致。
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(policy_type),'') FROM security_policies WHERE id=?", policyID).Scan(&policyExists, &policyType); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if policyExists == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	// 混合策略仅可更新迁移（2026-09-20 用户裁定）：兼容旧版形态，不得新绑定到
+	// 规则——存量混合绑定保持有效，迁移入口=策略页「更新迁移」（拆分单职策略）。
+	if policyType == models.PolicyTypeMixed {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
 		return
 	}
 	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
@@ -1938,6 +1945,24 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 			return
 		}
 	}
+	// 混合策略仅可更新迁移（同上裁定）：绑定集含 mixed 即 400。
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var mixedCount int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE policy_type='mixed' AND id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&mixedCount); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if mixedCount > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
+			return
+		}
+	}
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -2032,6 +2057,25 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		}
 		if found != len(uniqueIDs) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "部分策略不存在"})
+			return
+		}
+	}
+	// 混合策略仅可更新迁移（同 SetRuleSecurityPolicies 裁定）：批量绑定集含
+	// mixed 即 400 整体拒绝。
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var mixedCount int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE policy_type='mixed' AND id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&mixedCount); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if mixedCount > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
 			return
 		}
 	}

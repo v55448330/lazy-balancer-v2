@@ -116,3 +116,49 @@ func TestDuplicateRule_clearsCAProviderIDForTCP(t *testing.T) {
 		t.Fatalf("duplicate carried dead-form ca_provider_id≠0")
 	}
 }
+
+// 2026-09-20 用户裁定（样式批第 4 项）：复制规则必须携带安全策略绑定——
+// 副本不携带会在「启用副本」时形成零防护静默缺口。副本创建即插绑定行，
+// 成功消息明示携带数量（审计同批：补偿删除清单本就含绑定表，方向相反）。
+func TestDuplicateRule_copiesSecurityPolicyBindings(t *testing.T) {
+	// Given：源规则绑定两条策略
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_dupbind", "dup-bind", "dupbind.example.test", 8080, false, "manual", false)
+	for i, name := range []string{"bind-a", "bind-b"} {
+		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, _ := res.LastInsertId()
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_dupbind',?)`, pid); err != nil {
+			t.Fatal(err)
+		}
+		_ = i
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_dupbind/duplicate", nil))
+
+	// Then：201 + 副本（name LIKE 'dup-bind（副本）%'）携带同样两条绑定
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("duplicate status=%d body=%.200s, want 2xx", response.Code, response.Body.String())
+	}
+	var newID string
+	if err := db.DB.QueryRow(`SELECT caddy_id FROM lb_rules WHERE name LIKE 'dup-bind（副本）%' AND caddy_id<>'lb_dupbind'`).Scan(&newID); err != nil {
+		t.Fatalf("find duplicate: %v", err)
+	}
+	var bindCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=?`, newID).Scan(&bindCount); err != nil {
+		t.Fatal(err)
+	}
+	if bindCount != 2 {
+		t.Fatalf("duplicate bindings=%d, want 2 (copied from source)", bindCount)
+	}
+	// 成功消息明示携带数量
+	if !strings.Contains(response.Body.String(), "2 条策略绑定") {
+		t.Fatalf("success message must state carried bindings, body=%.300s", response.Body.String())
+	}
+}

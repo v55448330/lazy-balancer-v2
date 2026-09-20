@@ -2454,6 +2454,22 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		}
 	}
 
+	// 2026-09-20 用户裁定（样式批第 4 项）：副本携带安全策略绑定——不携带
+	// 会在「启用副本」时形成零防护静默缺口。同事务 INSERT SELECT（与上游/
+	// 路径规则复制同口径），成功消息明示携带数量。
+	if _, err := tx.Exec(`
+		INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
+		SELECT ?, policy_id FROM security_policy_bindings WHERE rule_caddy_id = ?
+	`, newCaddyID, caddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制策略绑定失败，已回滚: " + err.Error()})
+		return
+	}
+	var copiedBindings int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id = ?`, newCaddyID).Scan(&copiedBindings); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取副本绑定失败，已回滚: " + err.Error()})
+		return
+	}
+
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交复制事务失败: " + err.Error()})
 		return
@@ -2461,7 +2477,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "复制", "负载规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口", Data: gin.H{"caddy_id": newCaddyID}})
+	successMsg := "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口"
+	if copiedBindings > 0 {
+		successMsg += fmt.Sprintf("；已携带 %d 条策略绑定", copiedBindings)
+	}
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: successMsg, Data: gin.H{"caddy_id": newCaddyID}})
 }
 
 // BatchRuleBlockPages 批量设置阶段拦截页（规则列表多选浮动操作条）：

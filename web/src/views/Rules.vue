@@ -26,9 +26,6 @@
 
     <el-card>
       <div class="table-toolbar">
-        <el-tooltip content="筛出未绑定任何安全策略的 HTTP 规则；到「安全防护 → 安全策略」页关联" placement="top">
-          <el-check-tag :checked="filterUnboundOnly" class="unbound-filter-tag" @change="filterUnboundOnly = $event">未绑定策略</el-check-tag>
-        </el-tooltip>
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
       </div>
       <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -40,9 +37,9 @@
                   :size="14"
                   class="acl-lock-icon is-allow"
                   tabindex="0"
-                  @click="openFlowDrawer(row)"
-                  @keydown.enter.prevent="openFlowDrawer(row)"
-                  @keydown.space.prevent="openFlowDrawer(row)"
+                  @click="openFlowDialog(row)"
+                  @keydown.enter.prevent="openFlowDialog(row)"
+                  @keydown.space.prevent="openFlowDialog(row)"
                 ><Lock /></el-icon>
               </el-tooltip>
               <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
@@ -200,7 +197,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="310" fixed="right" align="center">
+        <el-table-column label="操作" width="270" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <el-tooltip
@@ -221,11 +218,6 @@
               <div>
                 <el-button type="primary" link size="small" :disabled="!row.log_enabled" @click="openRuleLogDialog(row)">
                   日志
-                </el-button>
-              </div>
-              <div>
-                <el-button type="primary" link size="small" @click="openFlowDrawer(row)">
-                  流程
                 </el-button>
               </div>
               <div v-if="row.protocol === 'http'">
@@ -1036,7 +1028,7 @@
       @saved="fetchSecurityBindings"
     />
 
-    <RuleFlowDrawer v-model="flowDrawerVisible" :target="flowDrawerTarget" :model="flowDrawerModel" :policies="securityPolicies" :ip-lists="ipLists" />
+    <RuleFlowDialog v-model="flowDialogVisible" :target="flowDialogTarget" :model="flowDialogModel" :policies="securityPolicies" :ip-lists="ipLists" />
   </div>
 </template>
 
@@ -1050,7 +1042,7 @@ import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
-import RuleFlowDrawer from '@/components/RuleFlowDrawer.vue'
+import RuleFlowDialog from '@/components/RuleFlowDialog.vue'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import { buildStageModel } from '@/utils/securityStages'
 import type {
@@ -1309,14 +1301,12 @@ const ruleStageModel = (rule: Rule): RuleStageModel =>
   ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPages.value, rule)
 
 const searchQuery = ref('')
-// 「未绑定策略」筛选 chip：HTTP 且当前无任何策略绑定（与搜索框联动，同为 filteredRules 输入）
-const filterUnboundOnly = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(10)
 
 const filteredRules = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  let base = query
+  const base = query
     ? rules.value.filter((rule) => {
         const name = (rule.name || '').toLowerCase()
         const domain = (rule.domain || '').toLowerCase()
@@ -1325,9 +1315,6 @@ const filteredRules = computed(() => {
         return name.includes(query) || domain.includes(query) || port.includes(query) || caddyId.includes(query)
       })
     : rules.value
-  if (filterUnboundOnly.value) {
-    base = base.filter((rule) => rule.protocol === 'http' && (securityBindings.value[rule.caddy_id] || []).length === 0)
-  }
   return [...base].sort((a, b) => ruleUpdatedAtMs(b) - ruleUpdatedAtMs(a))
 })
 
@@ -1347,9 +1334,6 @@ watch(searchQuery, () => {
   currentPage.value = 1
 })
 
-watch(filterUnboundOnly, () => {
-  currentPage.value = 1
-})
 
 watch([() => filteredRules.value.length, pageSize], ([ruleCount, size]) => {
   const maxPage = Math.max(1, Math.ceil(ruleCount / size))
@@ -1563,6 +1547,9 @@ const wizardVisible = ref(false)
 const saving = ref(false)
 const editingRule = ref<Rule | null>(null)
 const isCopyMode = ref(false)
+// 复制源规则（openCopyWizard 带入）——POST /rules 不携带策略绑定，副本创建后
+// 经 PUT /security/rules/:id/policies 从源快照复制（submitWizard 复制分支消费）
+const copySourceRuleId = ref<string | null>(null)
 const WIZARD_STEP = {
   BASIC: 0,
   TLS: 1,
@@ -2139,6 +2126,7 @@ const openWizard = async (rule?: Rule) => {
   resetCertInfo()
   upstreamTouched.value = []
   isCopyMode.value = false
+  copySourceRuleId.value = null
   if (rule) {
     // 编辑态一律保留已存端口：DB 中的 listen_port 即用户显式配置，TLS/协议切换不再静默迁移端口
     userExplicitPort.value = true
@@ -2281,6 +2269,7 @@ const resetWizard = () => {
   upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = false
+  copySourceRuleId.value = null
   currentStep.value = WIZARD_STEP.BASIC
 }
 
@@ -2618,11 +2607,31 @@ const submitWizard = async () => {
 
     if (editingRule.value) {
       await request.put<APIResponse>(`/rules/${editingRule.value.caddy_id}`, data)
+      mfaAwareSuccess('更新成功')
     } else {
-      await request.post<APIResponse>('/rules', data)
+      const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
+      // 复制路径（openCopyWizard 带入的源规则）：POST /rules 不经 /duplicate、不携带绑定——
+      // 源绑定从 bindings 快照取经 PUT 复制到新规则；绑定失败不回滚副本（口径同策略绑定失败）
+      let createMessage = createRes.message || '创建成功'
+      const sourceId = isCopyMode.value ? copySourceRuleId.value : null
+      const sourcePolicyIds = sourceId ? (securityBindings.value[sourceId] || []).map((b) => b.policy_id) : []
+      const newCaddyId = createRes.data?.caddy_id
+      if (sourceId && sourcePolicyIds.length > 0) {
+        if (!newCaddyId) {
+          console.error('copy bindings failed: create response missing caddy_id')
+          ElMessage.error('副本已创建，策略绑定复制失败')
+        } else {
+          try {
+            await request.put<APIResponse>(`/security/rules/${encodeURIComponent(newCaddyId)}/policies`, { policy_ids: sourcePolicyIds })
+            createMessage += `，已携带 ${sourcePolicyIds.length} 条策略绑定`
+          } catch (bindError: unknown) {
+            console.error('copy bindings failed', bindError)
+            ElMessage.error('副本已创建，策略绑定复制失败')
+          }
+        }
+      }
+      mfaAwareSuccess(createMessage)
     }
-
-    mfaAwareSuccess(editingRule.value ? '更新成功' : '创建成功')
     wizardVisible.value = false
     fetchRules()
   } catch (error: unknown) {
@@ -2633,10 +2642,10 @@ const submitWizard = async () => {
   }
 }
 
-// ── 规则流程抽屉（步骤 8）：表格行「流程」按钮 / 锁图标点击 / 向导预览三入口 ──
-const flowDrawerVisible = ref(false)
-const flowDrawerTarget = ref<RuleFlowTarget | null>(null)
-const flowDrawerModel = ref<RuleStageModel | null>(null)
+// ── 规则处理流程弹框：唯一入口 = 锁图标点击（已绑策略时显示） ──
+const flowDialogVisible = ref(false)
+const flowDialogTarget = ref<RuleFlowTarget | null>(null)
+const flowDialogModel = ref<RuleStageModel | null>(null)
 
 const upstreamSummaryForRule = (rule: Rule): string => {
   const count = getEnabledUpstreams(rule).length
@@ -2645,17 +2654,37 @@ const upstreamSummaryForRule = (rule: Rule): string => {
   return `${count} 个上游`
 }
 
-const openFlowDrawer = (rule: Rule): void => {
-  flowDrawerTarget.value = {
+const openFlowDialog = (rule: Rule): void => {
+  const health = healthStatus.value[rule.caddy_id]
+  const upstreamHealth: RuleFlowTarget['upstreamHealth'] = {}
+  if (health?.upstreams) {
+    for (const [key, status] of Object.entries(health.upstreams)) {
+      upstreamHealth[key] = { healthy: status.healthy, unknown: status.unknown, degraded: status.degraded, dynamic: status.dynamic }
+    }
+  }
+  flowDialogTarget.value = {
     caddyId: rule.caddy_id,
     name: rule.name || rule.caddy_id,
     protocol: rule.protocol,
     listenPort: rule.listen_port,
     enableTls: rule.enable_tls,
+    tlsSource: rule.tls_source,
+    acmeConfigName: rule.tls_source === 'acme_dns' ? certConfigs.value.find((c) => c.id === rule.acme_config_id)?.name : undefined,
+    hostHeader: rule.host_header || '',
     upstreamSummary: upstreamSummaryForRule(rule),
+    upstreams: (rule.upstreams || []).map((u) => ({
+      host: u.host,
+      port: u.port,
+      protocol: u.protocol,
+      weight: u.weight,
+      max_connections: u.max_connections ?? 0,
+      enabled: u.enabled !== false,
+    })),
+    health: health ? { healthy: health.healthy, unhealthy: health.unhealthy, degraded: health.degraded, unknown: health.unknown, na: health.na, total: health.total } : undefined,
+    upstreamHealth,
   }
-  flowDrawerModel.value = rule.protocol === 'http' ? ruleStageModel(rule) : null
-  flowDrawerVisible.value = true
+  flowDialogModel.value = rule.protocol === 'http' ? ruleStageModel(rule) : null
+  flowDialogVisible.value = true
 }
 
 // ── 规则安全策略绑定（行「安全」按钮）——编辑交互在共享组件 SecurityBindingEditor 内
@@ -2726,8 +2755,8 @@ const openCopyWizard = async (rule: Rule) => {
   certValidationSeq++
   resetCertInfo()
   upstreamTouched.value = []
-  editingRule.value = null
   isCopyMode.value = true
+  copySourceRuleId.value = rule.caddy_id
   let fullRule: Rule = rule
   if (rule.enable_tls && rule.tls_source === 'manual') {
     try {
@@ -3244,16 +3273,14 @@ onUnmounted(() => {
 }
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
-.table-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.unbound-filter-tag { flex: 0 0 auto; }
+.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }
 .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 .polling-error-meta { font-size: 12px; }
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
- * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
- * 宽度对齐本向导 label-width=100px */
+ * el-form-item 结构——.mode-row-label 宽度对齐本向导 label-width=100px */
 .mode-row { display: flex; margin-bottom: 18px; }
 .mode-row-label { width: 100px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
 .mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }

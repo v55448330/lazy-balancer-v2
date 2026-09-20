@@ -154,19 +154,37 @@ export interface RuleStageModel {
   stages: [StageGroup, StageGroup, StageGroup]
 }
 
-// 流程抽屉的展示目标（规则行 / 向导预览共用；caddyId 存在时才拉取阶段计数）
+// 流程弹框的展示目标（规则行入口；caddyId 存在时才拉取阶段计数与证书信息）
+export interface RuleFlowUpstream {
+  host: string
+  port: number
+  protocol: string
+  weight: number
+  max_connections: number
+  enabled: boolean
+}
+
 export interface RuleFlowTarget {
   caddyId?: string
   name: string
   protocol: 'http' | 'tcp'
   listenPort: number
   enableTls: boolean
+  // 接入卡富化：TLS 来源（manual/acme_dns）与 ACME 配置名（调用方从证书配置列表解析）
+  tlsSource?: string
+  acmeConfigName?: string
+  // 上游卡富化：后端域名（空 = 透传原始 Host）与上游明细行
+  hostHeader?: string
   upstreamSummary: string
+  upstreams?: RuleFlowUpstream[]
+  // 健康口径：规则级计数 + 逐上游状态映射（host:port 键）；无探针数据时调用方不传
+  health?: { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
+  upstreamHealth?: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; dynamic?: boolean }>
 }
 
-// 流程图节点内的短标题（完整标题过长，128px 节点放不下，面板内仍用 STAGE_TITLES）
+// 阶段 1 名称全局统一为「阶段 1 · IP 访问控制」（用户裁定：替代「预检/与地域拦截」等长文案）
 export const STAGE_SHORT_TITLES: Record<1 | 2 | 3, string> = {
-  1: '阶段 1 · 预检',
+  1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
   3: '阶段 3 · WAF',
 }
@@ -181,7 +199,7 @@ export const STAGE_BLOCK_STATUS_OPTIONS: ReadonlyArray<{ value: number; label: s
 ]
 
 export const STAGE_TITLES: Record<1 | 2 | 3, string> = {
-  1: '阶段 1 · 预检（IP 访问控制 / 地域拦截）',
+  1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
   3: '阶段 3 · WAF',
 }
