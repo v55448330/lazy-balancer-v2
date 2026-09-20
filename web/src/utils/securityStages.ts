@@ -42,6 +42,8 @@ export interface SecurityStagePolicy {
   // 实体类型列（后端并行新增）；缺省时由 inferPolicyType 按内容推断
   policy_type?: string
   has_waf?: boolean
+  // 阶段 0 信任名单策略：false=直通上游（零安全事件）；true=保留检测记录（事件动作=检测）
+  trust_detection?: boolean
 }
 
 // 规则-策略绑定（GET /security/bindings 值数组元素）
@@ -141,7 +143,7 @@ export interface StageOverride {
 }
 
 export interface StageGroup {
-  stage: 1 | 2 | 3
+  stage: 0 | 1 | 2 | 3
   title: string
   enabled: boolean
   override: StageOverride | null
@@ -151,7 +153,7 @@ export interface StageGroup {
 
 export interface RuleStageModel {
   hasAnyPolicy: boolean
-  stages: [StageGroup, StageGroup, StageGroup]
+  stages: [StageGroup, StageGroup, StageGroup, StageGroup]
 }
 
 // 流程弹框的展示目标（规则行入口；caddyId 存在时才拉取阶段计数与证书信息）
@@ -170,6 +172,8 @@ export interface RuleFlowTarget {
   protocol: 'http' | 'tcp'
   listenPort: number
   enableTls: boolean
+  // 接入卡富化：规则全部域名（chips 展示，逗号分隔解析由调用方完成）
+  domains?: string[]
   // 接入卡富化：TLS 来源（manual/acme_dns）与 ACME 配置名（调用方从证书配置列表解析）
   tlsSource?: string
   acmeConfigName?: string
@@ -182,8 +186,9 @@ export interface RuleFlowTarget {
   upstreamHealth?: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; dynamic?: boolean }>
 }
 
-// 阶段 1 名称全局统一为「阶段 1 · IP 访问控制」（用户裁定：替代「预检/与地域拦截」等长文案）
-export const STAGE_SHORT_TITLES: Record<1 | 2 | 3, string> = {
+// 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · 限流 → 阶段 3 · WAF
+export const STAGE_SHORT_TITLES: Record<0 | 1 | 2 | 3, string> = {
+  0: '阶段 0 · 信任名单',
   1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
   3: '阶段 3 · WAF',
@@ -198,7 +203,8 @@ export const STAGE_BLOCK_STATUS_OPTIONS: ReadonlyArray<{ value: number; label: s
   { value: 503, label: '503 Service Unavailable' },
 ]
 
-export const STAGE_TITLES: Record<1 | 2 | 3, string> = {
+export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
+  0: '阶段 0 · 信任名单',
   1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
   3: '阶段 3 · WAF',
@@ -285,15 +291,28 @@ export const resolveStageOverride = (
   }
 }
 
+// 信任名单非空谓词（阶段 0 能力：内联 ∪ 引用，内联/引用任一非空即算）
+export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: string }): boolean =>
+  parseIPList(p.ip_whitelist).length > 0 || parseRefIds(p.ip_whitelist_refs).length > 0
+
+// 阶段 0 · 信任名单行：条目数（空=未配置，任务 G 口径）+ 直通/保留检测模式
+const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
+  const rows: StageRow[] = []
+  if (!policy || !hasTrustEntries(policy)) return rows
+  const trustCount = mergeIpEntries(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)).length
+  rows.push({ label: '信任名单', detail: trustCount === 0 ? '未配置' : `${trustCount} 条` })
+  rows.push({ label: '模式', detail: policy.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' })
+  return rows
+}
+
 const buildStage1Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
   const rows: StageRow[] = []
   if (policy?.has_ip_control) {
-    // 摘要口径与安全策略页「IP 控制」明细行一致：合并计数（内联 ∪ 引用列表）+ 黑名单计数 + 信任名单（含启用态）
+    // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
     const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测模式' : '黑名单模式')
     const aclCount = mergeIpEntries(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs)).length
     const blCount = parseIPList(policy.ip_blacklist).length
     rows.push({ label: 'IP 访问控制', detail: `${modeLabel} · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` })
-    rows.push({ label: '信任名单', detail: `${mergeIpEntries(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)).length} 条（${policy.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）` })
   }
   // 地域拦截（启用态）：启用 → 区域数；关闭但保留区域 → 已关闭（保留 N 区域）
   const geoCount = parseGeoipCountryCount(policy?.geoip_countries ?? '')
@@ -337,6 +356,7 @@ export const buildStageModel = (
   blockPages: readonly SecurityStageBlockPage[],
   stagePages?: RuleStagePages | null,
 ): RuleStageModel => {
+  const stage0Groups: StagePolicyGroup[] = []
   const stage1Groups: StagePolicyGroup[] = []
   const stage2Groups: StagePolicyGroup[] = []
   const stage3Groups: StagePolicyGroup[] = []
@@ -344,6 +364,9 @@ export const buildStageModel = (
   bindings.forEach((binding, index) => {
     const policy = policies.find((p) => p.id === binding.policy_id)
     const base = { key: binding.policy_id, order: index + 1, name: binding.name, enabled: binding.enabled }
+
+    const s0rows = buildStage0Rows(policy, ipLists)
+    if (s0rows.length > 0) stage0Groups.push({ ...base, rows: s0rows })
 
     const s1rows = buildStage1Rows(policy, ipLists)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
@@ -360,6 +383,13 @@ export const buildStageModel = (
   return {
     hasAnyPolicy: bindings.length > 0,
     stages: [
+      {
+        stage: 0,
+        title: STAGE_TITLES[0],
+        enabled: stage0Groups.length > 0,
+        override: null,
+        groups: stage0Groups,
+      },
       {
         stage: 1,
         title: STAGE_TITLES[1],
@@ -470,16 +500,20 @@ const parseUnknownStrings = (raw: unknown): string[] => {
 
 const buildGroupDetails = (
   policy: SecurityStagePolicy | undefined,
-  stage: 1 | 2 | 3,
+  stage: 0 | 1 | 2 | 3,
   ipLists: readonly SecurityStageIPList[],
   sources: StageDetailSources | undefined,
 ): StagePolicyDetails | undefined => {
   if (!policy) return undefined
+  // 阶段 0 · 信任名单：条目逐条（内联∪引用带 source/remark）
+  if (stage === 0) {
+    if (!hasTrustEntries(policy)) return undefined
+    return { trustEntries: mergeIpEntryDetails(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)) }
+  }
   if (stage === 1) {
     const details: StagePolicyDetails = {}
     if (policy.has_ip_control) {
       details.aclEntries = mergeIpEntryDetails(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
-      details.trustEntries = mergeIpEntryDetails(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
     }
     const regions = parseIPList(policy.geoip_countries)
     if (policy.has_geoip || regions.length > 0) details.geoipRegions = regions
@@ -526,15 +560,16 @@ export const attachStageDetails = (
       ...group,
       details: buildGroupDetails(input.policies.find((p) => p.id === group.key), stage.stage, input.ipLists, input.sources),
     })),
-  })) as [StageGroup, StageGroup, StageGroup]
+  })) as [StageGroup, StageGroup, StageGroup, StageGroup]
   return { ...model, stages }
 }
 
 // ── 策略类型（实体单职化：policy_type 列由后端携带；缺省时按内容推断兜底，前后端同一份逻辑形状） ──
 
-export type SecurityPolicyType = 'stage1' | 'stage2' | 'stage3' | 'mixed'
+export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'mixed'
 
 export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
+  stage0: '阶段 0 · 信任名单',
   stage1: '阶段 1 · IP 访问控制',
   stage2: '阶段 2 · 限流',
   stage3: '阶段 3 · WAF',
@@ -542,6 +577,7 @@ export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
 }
 
 export const POLICY_TYPE_SHORT_LABELS: Record<SecurityPolicyType, string> = {
+  stage0: '阶段 0',
   stage1: '阶段 1',
   stage2: '阶段 2',
   stage3: '阶段 3',
@@ -557,20 +593,25 @@ export interface SecurityPolicyTypeInput {
   has_waf?: boolean
   has_custom_rules: boolean
   mode?: string
+  // 阶段 0 推断（g0=信任名单非空）：内联 JSON 文本或引用 id 数组文本
+  ip_whitelist?: string
+  ip_whitelist_refs?: string
 }
 
-// 推断形状：阶段 1 能力 = IP 访问控制或地域拦截；阶段 2 = 限流；阶段 3 = WAF 或自定义规则。
-// 恰好一个阶段 → 该类型；跨阶段 → mixed（存量混合兼容组）；零能力 → stage3
-//（存量空策略的 mode 字段定义其为 WAF 策略关闭态）。
+// 推断形状：阶段 0 = 信任名单非空；阶段 1 = IP 访问控制或地域拦截；阶段 2 = 限流；
+// 阶段 3 = WAF 或自定义规则。恰好一个阶段 → 该类型；跨阶段 → mixed（存量混合兼容组）；
+// 零能力 → stage3（存量空策略的 mode 字段定义其为 WAF 策略关闭态）。
 export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType => {
-  if (p.policy_type === 'stage1' || p.policy_type === 'stage2' || p.policy_type === 'stage3' || p.policy_type === 'mixed') {
+  if (p.policy_type === 'stage0' || p.policy_type === 'stage1' || p.policy_type === 'stage2' || p.policy_type === 'stage3' || p.policy_type === 'mixed') {
     return p.policy_type
   }
+  const s0 = hasTrustEntries(p)
   const s1 = p.has_ip_control || p.has_geoip === true
   const s2 = p.has_rate_limit
   const s3 = (p.has_waf ?? (p.mode !== undefined && p.mode !== 'off')) || p.has_custom_rules
-  const stageCount = [s1, s2, s3].filter(Boolean).length
+  const stageCount = [s0, s1, s2, s3].filter(Boolean).length
   if (stageCount > 1) return 'mixed'
+  if (s0) return 'stage0'
   if (s1) return 'stage1'
   if (s2) return 'stage2'
   return 'stage3'

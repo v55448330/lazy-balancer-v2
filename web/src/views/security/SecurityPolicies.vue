@@ -51,16 +51,19 @@
             <template v-else>{{ row.rule_count }}</template>
           </template>
         </el-table-column>
-        <!-- 三阶段启用 chips（实体单职化词汇）：阶段 1=IP 访问控制/地域拦截、阶段 2=限流、
-             阶段 3=WAF/自定义；灰态=该阶段未启用。hover 明细沿用既有口径 -->
-        <el-table-column label="阶段流水线" min-width="220">
+        <!-- 阶段启用 chips（实体单职化词汇）：阶段 0=信任名单、阶段 1=IP 访问控制/地域拦截、
+             阶段 2=限流、阶段 3=WAF/自定义；灰态=该阶段未启用。hover 明细沿用既有口径 -->
+        <el-table-column label="阶段流水线" min-width="260">
           <template #default="{ row }">
             <div class="capability-tags">
+              <el-tooltip :disabled="!hasTrustEntries(row)" :content="trustChipTip(row)" placement="top">
+                <el-tag size="small" effect="plain" :type="hasTrustEntries(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !hasTrustEntries(row) }">阶段 0 · 信任</el-tag>
+              </el-tooltip>
               <el-tooltip :disabled="!stage1ChipOn(row)" placement="top">
                 <template #content>
                   <div v-for="line in ipControlTipLines(row)" :key="line">{{ line }}</div>
                 </template>
-                <el-tag size="small" effect="plain" :type="stage1ChipOn(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !stage1ChipOn(row) }">阶段 1 · 预检</el-tag>
+                <el-tag size="small" effect="plain" :type="stage1ChipOn(row) ? 'success' : 'info'" class="stage-chip" :class="{ 'is-off': !stage1ChipOn(row) }">阶段 1 · IP 访问控制</el-tag>
               </el-tooltip>
               <el-tooltip :disabled="!row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst} · 拦截恒 429`" placement="top">
                 <el-tag size="small" effect="plain" :type="row.has_rate_limit ? 'warning' : 'info'" class="stage-chip" :class="{ 'is-off': !row.has_rate_limit }">阶段 2 · 限流</el-tag>
@@ -209,21 +212,23 @@
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <!-- 策略类型：新建时选择（决定步骤条与表单裁剪）；编辑时固定展示。
-                 自管标签行(EP 2.14.4 规避)——el-radio-group 组容器 DIV 会被注册为表单输入 id -->
-            <div class="mode-row" role="group" aria-label="策略类型">
-              <span class="mode-row-label"><span class="required-mark">*</span>策略类型</span>
-              <div class="mode-row-content">
-                <!-- 纵向一行一个 + 编辑态类型标签内容自适应（不占整行） -->
-                <el-radio-group v-if="editingId === null" v-model="createPolicyType" class="policy-type-radio">
-                  <el-radio value="stage1">阶段 1 · IP 访问控制（IP 名单 / 信任名单 / 地域拦截 / 拦截页）</el-radio>
-                  <el-radio value="stage2">阶段 2 · 限流（速率上限，拦截恒 429）</el-radio>
-                  <el-radio value="stage3">阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）</el-radio>
-                </el-radio-group>
-                <div v-else class="policy-type-static">
-                  <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
-                </div>
+                 与 el-form-item label 完全同构（用户裁定）；radio 不用 el-radio-group
+                 包组——组容器 DIV 会被 EP 注册为表单输入 id 触发 Firefox label-for 告警，
+                 改为同 model-value 的独立 radio 纵向列表（首行与输入框基线对齐） -->
+            <el-form-item v-if="editingId === null" label="策略类型" required>
+              <div class="policy-type-radio-list" role="radiogroup" aria-label="策略类型">
+                <el-radio
+                  v-for="opt in POLICY_TYPE_CREATE_OPTIONS"
+                  :key="opt.value"
+                  :model-value="createPolicyType"
+                  :value="opt.value"
+                  @update:model-value="createPolicyType = opt.value"
+                >{{ opt.label }}</el-radio>
               </div>
-            </div>
+            </el-form-item>
+            <el-form-item v-else label="策略类型">
+              <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+            </el-form-item>
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" />
             </el-form-item>
@@ -236,19 +241,48 @@
             </el-form-item>
           </el-form>
         </div>
+        <!-- Step: 阶段 0 · 信任名单（stage0 编辑器表单：信任名单内联+引用 + 保留检测记录开关） -->
+        <div v-show="currentStep === WIZARD_STEP.TRUST" class="step-content">
+          <div class="stage-projection-bar">
+            <div class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——信任 IP 命中后跳过全部后续安全阶段</div>
+            <div v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</div>
+          </div>
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
+            <el-form-item label="信任 IP">
+              <div class="acl-inline-row">
+                <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
+                <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
+              </div>
+              <div class="form-tip-line">名单内 IP 跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF）；内联与引用列表合并生效</div>
+            </el-form-item>
+            <el-form-item label="引用地址列表">
+              <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
+                <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+              </el-select>
+              <div v-if="showWhitelistRefHint" class="form-tip-line">{{ whitelistRefHint }}</div>
+            </el-form-item>
+            <el-form-item label="保留检测记录">
+              <el-switch v-model="form.trust_detection" />
+              <span class="form-tip-inline">{{ form.trust_detection ? '开启：信任 IP 仍过后续检测流程，事件动作记为检测' : '关闭（默认）：信任 IP 直通上游，不产生任何安全事件' }}</span>
+            </el-form-item>
+            <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单） -->
+            <el-form-item v-if="whitelistSectionAlert" class="wizard-alert-item">
+              <el-alert type="warning" :closable="false" show-icon :title="whitelistSectionAlert" class="wizard-alert" />
+            </el-form-item>
+          </el-form>
+        </div>
 
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
-          <!-- 生效投影：本阶段（WAF）在每条已关联规则上的拦截页形态 -->
           <div class="stage-projection-bar">
-            <span class="stage-projection-title">生效投影</span>
+            <div class="stage-projection-desc">本策略将在关联规则的 WAF 阶段生效</div>
             <template v-if="boundRules.length > 0">
               <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
                 <span class="stage-projection-state">{{ stageOverrideText(cid, 3) }}</span>
               </span>
             </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——本阶段将随绑定生效</span>
+            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
@@ -516,16 +550,15 @@
 
         <!-- Step 2: IP 访问控制 -->
         <div v-show="currentStep === WIZARD_STEP.IP_ACL" class="step-content">
-          <!-- 生效投影：本阶段（IP 访问控制/地域拦截）在每条已关联规则上的拦截页形态 -->
           <div class="stage-projection-bar">
-            <span class="stage-projection-title">生效投影</span>
+            <div class="stage-projection-desc">本策略将在关联规则的 IP 访问控制/地域拦截阶段生效</div>
             <template v-if="boundRules.length > 0">
               <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
                 <span class="stage-projection-state">{{ stageOverrideText(cid, 1) }}</span>
               </span>
             </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——本阶段将随绑定生效</span>
+            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
           </div>
           <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
@@ -562,32 +595,6 @@
                    无 label 的 el-form-item 仍保留 label 宽度偏移，内容落在控件列 -->
               <el-form-item v-if="aclSectionAlert" class="wizard-alert-item">
                 <el-alert type="warning" :closable="false" show-icon :title="aclSectionAlert" class="wizard-alert" />
-              </el-form-item>
-            </template>
-          </el-form>
-          <el-divider content-position="left" class="acl-divider">信任名单</el-divider>
-          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
-            <el-form-item label="启用">
-              <el-switch v-model="ipWhitelistEnabled" />
-            </el-form-item>
-            <template v-if="ipWhitelistEnabled">
-              <el-form-item label="信任 IP">
-                <div class="acl-inline-row">
-                  <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
-                  <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
-                </div>
-                <div class="form-tip-line">名单内 IP 全评估不拦截，检测事件全记录（2026-09-15 信任 DetectionOnly；限流仍然生效；信任仅豁免所属策略——其他策略引用同一信任地址列表即可）</div>
-              </el-form-item>
-              <el-form-item label="引用地址列表">
-                <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
-                  <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
-                </el-select>
-                <div v-if="showWhitelistRefHint" class="form-tip-line">{{ whitelistRefHint }}</div>
-                <div class="form-tip-line">引用的列表条目与信任 IP 合并生效</div>
-              </el-form-item>
-              <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单） -->
-              <el-form-item v-if="whitelistSectionAlert" class="wizard-alert-item">
-                <el-alert type="warning" :closable="false" show-icon :title="whitelistSectionAlert" class="wizard-alert" />
               </el-form-item>
             </template>
           </el-form>
@@ -638,10 +645,9 @@
 
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
-          <!-- 生效投影：限流拦截恒为 429，不涉及拦截页覆盖 -->
           <div class="stage-projection-bar">
-            <span class="stage-projection-title">生效投影</span>
-            <span class="stage-projection-empty">本阶段拦截恒为 429（便于指标单独计量），不配置拦截页{{ boundRules.length > 0 ? `；将应用于 ${boundRules.length} 条已关联规则` : '——尚未关联规则' }}</span>
+            <div class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量），不配置拦截页</div>
+            <span class="stage-projection-empty">{{ boundRules.length > 0 ? `将应用于 ${boundRules.length} 条已关联规则` : '尚未关联规则——保存后在「关联规则」步骤绑定' }}</span>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
@@ -716,8 +722,8 @@
                     <!-- 行内编辑该规则的阶段拦截页覆盖（决策 A：规则级 4 字段收口到策略侧；
                          变更即 PUT /rules/:id——UpdateRule 对空 protocol 400，故携带基础现值；
                          upstreams 省略=保留） -->
-                    <div v-if="!isReadOnly" class="stage-override-editors">
-                      <div v-for="stage in ([1, 3] as const)" :key="stage" class="stage-override-line">
+                    <div v-if="!isReadOnly && editableOverrideStages.length > 0" class="stage-override-editors">
+                      <div v-for="stage in editableOverrideStages" :key="stage" class="stage-override-line">
                         <span class="stage-override-label">阶段 {{ stage }} 拦截页</span>
                         <el-select
                           size="small"
@@ -757,16 +763,15 @@
 
         <!-- Step: 拦截页（阶段 1/阶段 3 策略可配；阶段 2 限流恒 429 不配页） -->
         <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
-          <!-- 生效投影：规则可配阶段页覆盖——逐规则展示本策略拦截页是否被规则覆盖 -->
           <div class="stage-projection-bar">
-            <span class="stage-projection-title">生效投影</span>
+            <div class="stage-projection-desc">规则可配阶段页覆盖；未覆盖时按触发策略显示</div>
             <template v-if="boundRules.length > 0">
               <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                <span class="stage-projection-rule">{{ ruleNameOf(cid) }}</span>
+                <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
                 <span class="stage-projection-state">{{ blockPageProjectionText(cid) }}</span>
               </span>
             </template>
-            <span v-else class="stage-projection-empty">尚未关联规则——拦截页随绑定生效</span>
+            <span v-else class="stage-projection-empty">尚未关联规则——保存后在「关联规则」步骤绑定</span>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="拦截页面">
@@ -810,7 +815,7 @@
           </div>
           <div class="preview-pipeline">
             <div
-              v-for="stage in previewModel.stages"
+              v-for="stage in previewVisibleStages"
               :key="stage.stage"
               class="preview-stage-card"
               :class="{ 'is-disabled': !stage.enabled }"
@@ -964,11 +969,11 @@ import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, inferPolicyType, resolveStageOverride } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, hasTrustEntries, inferPolicyType, resolveStageOverride } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行携带阶段拦截页覆盖 4 字段（关联规则行内编辑与生效投影同源）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string; block_page_stage1_id?: number; block_page_stage1_status?: number; block_page_stage3_id?: number; block_page_stage3_status?: number }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
@@ -1035,15 +1040,24 @@ const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType
 // 「混合策略（兼容旧版）」tab 条件可见：仅当存在 mixed 策略（导入或存量）时显示；
 // 混合组清空（如更新迁移完成）后当前 tab 自动切回阶段 1
 const policyTypeTabs = computed(() => {
-  const counts: Record<SecurityPolicyType, number> = { stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
+  const counts: Record<SecurityPolicyType, number> = { stage0: 0, stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
   for (const p of policies.value) counts[policyTypeOf(p)]++
-  const tabs = (['stage1', 'stage2', 'stage3'] as const).map((type) => ({
+  // 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 → 阶段 2 → 阶段 3（混合兼容组条件可见）
+  const tabs = (['stage0', 'stage1', 'stage2', 'stage3'] as const).map((type) => ({
     type: type as SecurityPolicyType,
     label: POLICY_TYPE_LABELS[type],
     count: counts[type],
   }))
   if (counts.mixed > 0) tabs.push({ type: 'mixed', label: POLICY_TYPE_LABELS.mixed, count: counts.mixed })
   return tabs
+})
+
+// 行内阶段页编辑收敛到当前策略类型对应阶段（任务 D）：stage1→阶段 1、stage3→阶段 3；
+// stage2 无覆盖页编辑；mixed 走只读查看弹框不进编辑器（恒空兜底）
+const editableOverrideStages = computed<readonly (1 | 3)[]>(() => {
+  if (editorPolicyType.value === 'stage1') return [1]
+  if (editorPolicyType.value === 'stage3') return [3]
+  return []
 })
 
 watch(policyTypeTabs, (tabs) => {
@@ -1060,6 +1074,12 @@ const filteredPolicies = computed(() => {
 // 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、阶段 3=WAF||自定义规则
 const stage1ChipOn = (row: PolicySummary): boolean => hasIpControl(row) || hasGeoControl(row)
 const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.has_custom_rules
+
+// 阶段 0 chip tooltip：信任条目数 + 直通/保留检测模式
+const trustChipTip = (row: PolicySummary): string => {
+  const count = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
+  return `信任名单 ${count} 条 · ${row.trust_detection === true ? '保留检测记录' : '直通上游（不产生安全事件）'}`
+}
 
 // ── 生效投影（阶段步骤顶部）：规则阶段页字段从 GET /rules 读（allRules），
 // 对话框打开时随绑定明细同节奏刷新一次（openDialog 内） ──
@@ -1134,6 +1154,8 @@ const migrateChildTypes = computed<SecurityPolicyType[]>(() => {
   const p = migratePolicy.value
   if (!p) return []
   const types: SecurityPolicyType[] = []
+  // 含信任名单 → 产出「原名（阶段 0）」子策略（后端 trust_detection 恒 1=保留检测，行为保持）
+  if (hasTrustEntries(p)) types.push('stage0')
   if (stage1ChipOn(p)) types.push('stage1')
   if (p.has_rate_limit) types.push('stage2')
   if (stage3ChipOn(p)) types.push('stage3')
@@ -1239,11 +1261,21 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: '启用状态', value: d.enabled ? '启用' : '禁用' },
       ],
     },
+    // 阶段 0 段：仅当信任名单非空（mixed 的信任能力归此阶段；空名单不显示「已启用」——任务 G 口径）
+    ...(trustCount > 0
+      ? [{
+          title: '阶段 0 · 信任名单',
+          rows: [
+            { label: '信任名单', value: `${trustCount} 条` },
+            { label: '模式', value: d.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' },
+          ],
+        }]
+      : []),
     {
       title: '阶段 1 · IP 访问控制',
       rows: [
         { label: '访问控制', value: d.ip_acl_enabled ? `${ACL_MODE_LABELS[d.ip_acl_mode] ?? d.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` : '未启用' },
-        { label: '信任名单', value: `${trustCount} 条（${d.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）` },
+        { label: '信任名单', value: trustCount === 0 ? '未配置' : `${trustCount} 条` },
         { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off' ? `${GEOIP_MODE_LABELS[d.geoip_mode ?? 'deny'] ?? d.geoip_mode} · ${geoCount} 区域` : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
       ],
     },
@@ -1400,40 +1432,51 @@ let policyDialogOpenSeq = 0
 // 可见性按策略类型裁剪（visibleSteps），无该阶段的步骤不出现
 const WIZARD_STEP = {
   BASIC: 0,
-  IP_ACL: 1,
-  RATE_LIMIT: 2,
-  WAF_RULES: 3,
-  BLOCK_PAGE: 4,
-  BINDINGS: 5,
-  PREVIEW: 6,
+  TRUST: 1,
+  IP_ACL: 2,
+  RATE_LIMIT: 3,
+  WAF_RULES: 4,
+  BLOCK_PAGE: 5,
+  BINDINGS: 6,
+  PREVIEW: 7,
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
   [WIZARD_STEP.BASIC]: { title: '基础信息', icon: InfoFilled },
+  [WIZARD_STEP.TRUST]: { title: '阶段 0 · 信任名单', icon: Connection },
   [WIZARD_STEP.IP_ACL]: { title: '阶段 1 · IP 访问控制', icon: Connection },
   [WIZARD_STEP.RATE_LIMIT]: { title: '阶段 2 · 限流', icon: Odometer },
-  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3 · WAF', icon: Lock },
+  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3 · WAF 规则', icon: Lock },
   [WIZARD_STEP.BLOCK_PAGE]: { title: '拦截页', icon: Document },
   [WIZARD_STEP.BINDINGS]: { title: '关联规则', icon: Link },
   [WIZARD_STEP.PREVIEW]: { title: '配置预览', icon: Check },
 }
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 
+// 新建类型纵向列表选项（任务 C：与 el-form-item 同构的独立 radio 列表）
+const POLICY_TYPE_CREATE_OPTIONS: ReadonlyArray<{ value: 'stage0' | 'stage1' | 'stage2' | 'stage3'; label: string }> = [
+  { value: 'stage0', label: '阶段 0 · 信任名单（信任名单直接转发上游；可选保留检测记录）' },
+  { value: 'stage1', label: '阶段 1 · IP 访问控制（IP 名单 / 地域拦截 / 拦截页）' },
+  { value: 'stage2', label: '阶段 2 · 限流（速率上限，拦截恒 429）' },
+  { value: 'stage3', label: '阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）' },
+]
 // ── 策略类型（实体单职化）：新建先选类型；编辑态类型由行推断/后端 policy_type 携带 ──
-const createPolicyType = ref<'stage1' | 'stage2' | 'stage3'>('stage3')
+const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage3')
 const editingPolicyType = ref<SecurityPolicyType | null>(null)
 const editorPolicyType = computed<SecurityPolicyType>(() =>
   editingId.value === null ? createPolicyType.value : (editingPolicyType.value ?? 'mixed'))
 
-const typeAllowsStage = (stage: 1 | 2 | 3): boolean =>
+const typeAllowsStage = (stage: 0 | 1 | 2 | 3): boolean =>
   editorPolicyType.value === 'mixed' || editorPolicyType.value === `stage${stage}`
 
 const visibleSteps = computed<readonly WizardStep[]>(() => {
   const steps: WizardStep[] = [WIZARD_STEP.BASIC]
+  if (typeAllowsStage(0)) steps.push(WIZARD_STEP.TRUST)
   if (typeAllowsStage(1)) steps.push(WIZARD_STEP.IP_ACL)
   if (typeAllowsStage(2)) steps.push(WIZARD_STEP.RATE_LIMIT)
   if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
-  if (editorPolicyType.value !== 'stage2') steps.push(WIZARD_STEP.BLOCK_PAGE)
+  // 阶段 0（直通/记录不拦截）与阶段 2（恒 429）无拦截页步骤
+  if (editorPolicyType.value !== 'stage2' && editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
   steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
   return steps
 })
@@ -1453,8 +1496,8 @@ const pickerSearch = ref('')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false, log_request_body: false, trust_detection: false })
 
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false, log_request_body: false })
 const form = ref(defaultForm())
 const selectedCustomRules = ref<number[]>([])
 // action 用于多策略冲突检测（放行型 pass / 拦截型 block）；enabled 预留
@@ -1934,16 +1977,14 @@ const geoipTipLine = (row: PolicySummary): string => {
   return count > 0 ? `地域拦截：已关闭（保留 ${count} 区域）` : ''
 }
 
-// 「IP 控制」hover 明细行：访问控制（黑/白名单计数）+ 信任名单（含启用态，不单独
-// 占 tag 位避免防护能力列膨胀）+ 地域拦截（含关闭保留态）。计数均为合并口径
-//（内联 ∪ 引用列表条目），与向导/冲突检测同源。
+// 「IP 控制」hover 明细行：访问控制（黑/白名单计数）+ 地域拦截（含关闭保留态）。
+// 信任名单已归阶段 0（阶段 0 chip 自带 tooltip），此口径不再混入——任务 G 消除
+// 「没有启用 IP 访问控制但信任名单已启用」式矛盾。计数均为合并口径（内联 ∪ 引用）。
 const ipControlTipLines = (row: PolicySummary): string[] => {
   const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
-  const wlCount = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
   const blCount = parseJsonList(row.ip_blacklist).length
   const lines = [
     `访问控制：${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条`,
-    `信任名单：${wlCount} 条（${row.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）`,
   ]
   const geoLine = geoipTipLine(row)
   if (geoLine !== '') lines.push(geoLine)
@@ -2544,7 +2585,8 @@ const previewModel = computed<RuleStageModel>(() => {
     name: form.value.name || '本策略',
     mode: typeAllowsStage(3) ? form.value.mode : 'off',
     enabled: form.value.enabled,
-    has_ip_control: typeAllowsStage(1) && ((form.value.ip_acl_enabled && aclMergedCount.value > 0) || whitelistMergedCount.value > 0 || ipBlacklistSelf.value.length > 0),
+    // 阶段 1 不再承载信任名单（阶段 0 独立）；has_ip_control 只计 ACL 与黑名单
+    has_ip_control: typeAllowsStage(1) && ((form.value.ip_acl_enabled && aclMergedCount.value > 0) || ipBlacklistSelf.value.length > 0),
     has_rate_limit: typeAllowsStage(2) && form.value.rate_limit_enabled && form.value.rate_limit_rps > 0,
     has_geoip: typeAllowsStage(1) && form.value.geoip_enabled && geoipCountries.value.length > 0,
     has_custom_rules: typeAllowsStage(3) && selectedCustomRules.value.length > 0,
@@ -2558,10 +2600,10 @@ const previewModel = computed<RuleStageModel>(() => {
     ip_blacklist: JSON.stringify(ipBlacklistSelf.value),
     ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
     ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
-    ip_whitelist_enabled: ipWhitelistEnabled.value,
     geoip_mode: form.value.geoip_enabled ? form.value.geoip_mode : 'off',
+    trust_detection: form.value.trust_detection,
   }
-  const showBlockPage = editorPolicyType.value !== 'stage2'
+  const showBlockPage = editorPolicyType.value !== 'stage2' && editorPolicyType.value !== 'stage0'
   return buildStageModel(
     [{
       policy_id: previewPolicy.id,
@@ -2577,6 +2619,15 @@ const previewModel = computed<RuleStageModel>(() => {
     blockPages.value,
     null,
   )
+})
+
+// 配置预览阶段裁剪（任务 F）：分类策略只显示本类型阶段的分组内容（不再出现其他阶段的
+// 「未启用」灰条）；mixed 才显示全阶段
+const previewVisibleStages = computed(() => {
+  const type = editorPolicyType.value
+  if (type === 'mixed') return previewModel.value.stages
+  const stageNo: 0 | 1 | 2 | 3 = type === 'stage0' ? 0 : type === 'stage1' ? 1 : type === 'stage2' ? 2 : 3
+  return previewModel.value.stages.filter((s) => s.stage === stageNo)
 })
 
 const openRulePicker = (): void => {
@@ -2693,6 +2744,7 @@ async function openDialog(row?: PolicySummary) {
         geoip_mode: d.geoip_mode || 'deny',
         waf_check_response: d.waf_check_response ?? false,
         log_request_body: d.log_request_body ?? false,
+        trust_detection: d.trust_detection === true,
     }
     ipACLList.value = parseJsonList(d.ip_acl_list)
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
@@ -2772,6 +2824,12 @@ const handleSave = async () => {
     return
   }
   // 类型裁剪后的阶段不参与校验（步骤已被裁剪，校验跳转目标不存在）
+  // 阶段 0 信任名单策略：名单（内联∪引用合并口径）必须非空
+  if (typeAllowsStage(0) && whitelistMergedCount.value === 0) {
+    ElMessage.error('阶段 0 · 信任名单策略必须配置至少一个信任 IP（内联或引用列表）')
+    currentStep.value = WIZARD_STEP.TRUST
+    return
+  }
   if (typeAllowsStage(1) && !validateIpAclList()) {
     currentStep.value = WIZARD_STEP.IP_ACL
     return
@@ -2824,11 +2882,12 @@ const handleSave = async () => {
       ip_acl_mode: form.value.ip_acl_mode,
       ip_acl_list: JSON.stringify(ipACLList.value),
       ip_whitelist: JSON.stringify(ipWhitelist.value),
-      ip_whitelist_enabled: ipWhitelistEnabled.value,
+      // 阶段 0 信任名单策略：名单非空即生效（恒启用）；其余类型按开关语义保留
+      ip_whitelist_enabled: editorPolicyType.value === 'stage0' ? true : ipWhitelistEnabled.value,
       // 开关关闭即解除引用（内联名单按三态语义保留，refs 指向共享列表——
       // 消费方关闭时释放，IP 地址列表页的引用数反映真实占用，且不阻塞列表删除）
       ip_acl_list_refs: form.value.ip_acl_enabled ? JSON.stringify(ipACLListRefs.value) : '[]',
-      ip_whitelist_refs: ipWhitelistEnabled.value ? JSON.stringify(ipWhitelistRefs.value) : '[]',
+      ip_whitelist_refs: (editorPolicyType.value === 'stage0' ? true : ipWhitelistEnabled.value) ? JSON.stringify(ipWhitelistRefs.value) : '[]',
       rate_limit_enabled: form.value.rate_limit_enabled,
       rate_limit_rps: form.value.rate_limit_rps,
       rate_limit_burst: form.value.rate_limit_burst,
@@ -2843,6 +2902,8 @@ const handleSave = async () => {
       geoip_mode: form.value.geoip_enabled ? (form.value.geoip_mode === 'off' ? 'deny' : form.value.geoip_mode) : 'off',
       waf_check_response: form.value.waf_check_response,
       log_request_body: form.value.log_request_body,
+      // 阶段 0：保留检测记录开关（false=直通上游零安全事件；true=事件动作=检测）
+      trust_detection: form.value.trust_detection,
       // 实体单职化：显式提交类型（服务端将阶段外字段归一为零值）；
       // mixed 不允许显式提交（兼容组仅存量可编辑），省略=后端按内容推断
       policy_type: editorPolicyType.value === 'mixed' ? undefined : editorPolicyType.value,
@@ -3175,8 +3236,7 @@ onMounted(async () => {
   background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px;
   font-size: 12px;
 }
-.stage-projection-title { font-weight: 600; color: #374151; flex: 0 0 auto; line-height: 1.8; }
-.stage-projection-item { display: inline-flex; align-items: baseline; gap: 6px; line-height: 1.8; }
+.stage-projection-desc { font-weight: 600; color: #374151; line-height: 1.8; }
 .stage-projection-rule { color: #1f2937; font-weight: 500; }
 .stage-projection-state { color: #6b7280; }
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }
@@ -3218,10 +3278,10 @@ onMounted(async () => {
 .migrate-preview-rule { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.8; }
 .migrate-preview-rule-name { color: #1f2937; font-weight: 500; }
 
-/* 策略类型：纵向单选（一行一个）+ 编辑态 inline tag 自适应宽度；tab 标签防换行 */
-.policy-type-radio { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.policy-type-radio :deep(.el-radio) { margin-right: 0; white-space: normal; }
-.policy-type-static { display: flex; align-items: center; min-height: 32px; }
+/* 策略类型：与 el-form-item 完全同构的纵向独立 radio 列表（首行 32px 与输入框基线对齐） */
+.policy-type-radio-list { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; }
+.policy-type-radio-list :deep(.el-radio) { margin-right: 0; height: 32px; }
+.policy-type-radio-list :deep(.el-radio__label) { white-space: normal; }
 .policy-type-tabs :deep(.el-tabs__item) { white-space: nowrap; }
 .migrate-preview-rule-meta { color: #9ca3af; font-size: 12px; }
 .migrate-preview-empty { font-size: 12px; color: #9ca3af; }

@@ -22,8 +22,8 @@ func TestInferPolicyType(t *testing.T) {
 		{"custom_only with rule refs", SecurityPolicy{Mode: "custom_only", CustomRules: json.RawMessage(`[3]`)}, PolicyTypeStage3},
 		{"acl deny", SecurityPolicy{Mode: "off", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`}, PolicyTypeStage1},
 		{"acl refs only", SecurityPolicy{Mode: "off", IPACLEnabled: true, IPACLMode: "allow", IPACLListRefs: `[2]`}, PolicyTypeStage1},
-		{"trust list", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage1},
-		{"trust refs only", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelistRefs: `[4]`}, PolicyTypeStage1},
+		{"trust list", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage0},
+		{"trust refs only", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelistRefs: `[4]`}, PolicyTypeStage0},
 		{"legacy blacklist", SecurityPolicy{Mode: "off", IPBlacklist: json.RawMessage(`["1.2.3.4"]`)}, PolicyTypeStage1},
 		{"geoip", SecurityPolicy{Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`)}, PolicyTypeStage1},
 		{"rate limit", SecurityPolicy{Mode: "off", RateLimitEnabled: true, RateLimitRPS: 100}, PolicyTypeStage2},
@@ -34,6 +34,11 @@ func TestInferPolicyType(t *testing.T) {
 		{"empty policy", SecurityPolicy{Mode: "off"}, PolicyTypeStage3},
 		{"acl disabled with retained list", SecurityPolicy{Mode: "off", IPACLEnabled: false, IPACLList: `["10.0.0.0/8"]`}, PolicyTypeStage3},
 		{"geoip off with retained countries", SecurityPolicy{Mode: "off", GeoIPMode: "off", GeoIPCountries: json.RawMessage(`["海外"]`)}, PolicyTypeStage3},
+		{"trust only is stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage0},
+		{"trust refs only is stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelistRefs: `[2]`}, PolicyTypeStage0},
+		{"trust + acl is mixed", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`), IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`}, PolicyTypeMixed},
+		{"trust + waf is mixed", SecurityPolicy{Mode: "blocking", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeMixed},
+		{"trust disabled with retained list is not stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

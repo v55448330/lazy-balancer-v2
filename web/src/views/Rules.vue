@@ -2529,16 +2529,39 @@ const submitWizard = async () => {
     return
   }
 
-  const action = editingRule.value ? '更新' : '创建'
-  try {
-    await ElMessageBox.confirm(
-      `确定要${action}规则 "${wizardForm.name}" 吗？`,
-      `${action}确认`,
-      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
-    )
-  } catch (e) {
-    saving.value = false
-    return
+  // 复制向导确认框双保存按钮（用户裁定）：「含安全策略」=副本携带源规则全部策略绑定；
+  // 「仅负载规则」=副本不含任何安全策略绑定（需后绑定）。普通新建/编辑不受影响
+  let copyWithBindings = false
+  if (!editingRule.value && isCopyMode.value) {
+    const sourceBoundCount = copySourceRuleId.value ? (securityBindings.value[copySourceRuleId.value] || []).length : 0
+    try {
+      await ElMessageBox.confirm(
+        `复制规则 "${wizardForm.name}"：「含安全策略」副本携带源规则的全部 ${sourceBoundCount} 条策略绑定；「仅负载规则」副本不含任何安全策略绑定，保存后可到规则行「安全」再绑定。`,
+        '复制确认',
+        { type: 'warning', confirmButtonText: '含安全策略', cancelButtonText: '仅负载规则', distinguishCancelAndClose: true }
+      )
+      copyWithBindings = true
+    } catch (e) {
+      if (e === 'cancel') {
+        copyWithBindings = false
+      } else {
+        // 关闭/ESC：放弃本次复制
+        saving.value = false
+        return
+      }
+    }
+  } else {
+    const action = editingRule.value ? '更新' : '创建'
+    try {
+      await ElMessageBox.confirm(
+        `确定要${action}规则 "${wizardForm.name}" 吗？`,
+        `${action}确认`,
+        { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
+      )
+    } catch (e) {
+      saving.value = false
+      return
+    }
   }
 
   try {
@@ -2614,7 +2637,7 @@ const submitWizard = async () => {
       // 源绑定从 bindings 快照取经 PUT 复制到新规则；绑定失败不回滚副本（口径同策略绑定失败）
       let createMessage = createRes.message || '创建成功'
       const sourceId = isCopyMode.value ? copySourceRuleId.value : null
-      const sourcePolicyIds = sourceId ? (securityBindings.value[sourceId] || []).map((b) => b.policy_id) : []
+      const sourcePolicyIds = sourceId && copyWithBindings ? (securityBindings.value[sourceId] || []).map((b) => b.policy_id) : []
       const newCaddyId = createRes.data?.caddy_id
       if (sourceId && sourcePolicyIds.length > 0) {
         if (!newCaddyId) {
@@ -2670,6 +2693,8 @@ const openFlowDialog = (rule: Rule): void => {
     enableTls: rule.enable_tls,
     tlsSource: rule.tls_source,
     acmeConfigName: rule.tls_source === 'acme_dns' ? certConfigs.value.find((c) => c.id === rule.acme_config_id)?.name : undefined,
+    // 全部域名（逗号分隔逐个 chip；TCP/空域名回落空数组，接入卡显示「-」）
+    domains: (rule.domain || '').split(',').map((d) => d.trim()).filter((d) => d !== ''),
     hostHeader: rule.host_header || '',
     upstreamSummary: upstreamSummaryForRule(rule),
     upstreams: (rule.upstreams || []).map((u) => ({

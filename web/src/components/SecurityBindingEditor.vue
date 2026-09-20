@@ -197,19 +197,21 @@ const emit = defineEmits<{
 
 const saving = ref(false)
 
-// ── 规则模式：按阶段分区选策略（四分桶独立 ref，打开时按现有绑定回填） ──
+// ── 规则模式：按阶段分区选策略（阶段 0 置最前；打开时按现有绑定回填） ──
+const bindStage0 = ref<number[]>([])
 const bindStage1 = ref<number[]>([])
 const bindStage2 = ref<number[]>([])
 const bindStage3 = ref<number[]>([])
 
 const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]>>(() => {
-  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage1: [], stage2: [], stage3: [], mixed: [] }
+  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage0: [], stage1: [], stage2: [], stage3: [], mixed: [] }
   for (const policy of props.policies) grouped[inferPolicyType(policy)].push(policy)
   return grouped
 })
 
 // 可选策略过滤 mixed：混合组不出现在可选区（已绑定的 mixed 由只读区展示）
 const stageSections = computed(() => [
+  { type: 'stage0' as const, title: '阶段 0 · 信任名单（直通上游 / 保留检测记录）', options: policiesByType.value.stage0, selection: bindStage0 },
   { type: 'stage1' as const, title: '阶段 1 · IP 访问控制', options: policiesByType.value.stage1, selection: bindStage1 },
   { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2 },
   { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3 },
@@ -222,7 +224,7 @@ const boundMixedPolicies = computed(() => {
   return props.policies.filter((p) => boundIds.has(p.id) && inferPolicyType(p) === 'mixed')
 })
 
-const ruleModeTotal = computed(() => bindStage1.value.length + bindStage2.value.length + bindStage3.value.length)
+const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + bindStage2.value.length + bindStage3.value.length)
 
 // ── 策略模式：规则选择器（搜索 + 全选筛选 + 分页 + 行内绑定集合/覆盖徽标） ──
 const pickerSearch = ref('')
@@ -303,13 +305,14 @@ const overrideBadge = (rule: BindingEditorRule, stage: 1 | 3): { text: string; t
 const onOpen = (): void => {
   saving.value = false
   if (props.mode === 'rule') {
+    bindStage0.value = []
     bindStage1.value = []
     bindStage2.value = []
     bindStage3.value = []
     // 当前绑定预选：按策略类型分桶回填；mixed 不进可选桶（只读区另行展示，
     // 绑定引用了已删除策略时静默落出——保存即清理死绑定）
     const boundIdSet = new Set((props.rule ? props.bindings[props.rule.caddy_id] : null)?.map((b) => b.policy_id) ?? [])
-    const buckets: Record<'stage1' | 'stage2' | 'stage3', typeof bindStage1> = { stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
+    const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
     for (const policy of props.policies) {
       const type = inferPolicyType(policy)
       if (type === 'mixed') continue
@@ -340,7 +343,7 @@ const submit = async (): Promise<void> => {
     try {
       // mixed 不携带提交（后端拒绝新增 mixed 绑定，错误消息原样透出）
       await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
-        policy_ids: [...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
+        policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
       })
       mfaAwareSuccess('安全策略绑定已保存')
       emit('update:modelValue', false)

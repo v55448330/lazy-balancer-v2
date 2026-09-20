@@ -187,7 +187,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// BuildCorazaDirectives 产物尾部拼接，门禁直调 BuildCorazaDirectives 不经
 	// 此——本用例走上层取 handler.directives 送编译）
 	t.Run("request-body-limit-appended", func(t *testing.T) {
-		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0, 8)
+		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0, 8, nil)
 		if handler == nil {
 			t.Fatal("blocking policy must yield a waf handler")
 		}

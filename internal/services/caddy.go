@@ -889,7 +889,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
 			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
-			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
+			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
 		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
 			return nil, err
@@ -902,7 +902,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 				&crsRuleGroups, &crsExcludedRules, &customRules,
 				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
+				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -3110,9 +3110,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因；
 	// 规则配了阶段 1 拦截页时全部 deny 抬码 481（stage1BlockStatus），否则
 	// 403 → errors 路由 → 拦截页。
+	// 阶段 0 信任名单（2026-09-20 用户裁定）：直通（trust_detection=0）时安全
+	// 段（预检/压缩/请求体限额/限流/全部 WAF 引擎）整体包进
+	// 「not remote_ip ∈ 信任并集」的 subroute——信任 IP 流程
+	// headers→metrics→counter→(subroute 跳过)→reverse_proxy 直达上游，
+	// 零安全事件（不产生任何 coraza 事务）；保留检测（trust_detection=1）
+	// 无此包裹，信任 IP 经预检/引擎 id:12 DetectionOnly 全评估全记录。
+	detectionTrust, passthroughUnion := stage0TrustSets(policies)
+	var securityChain []interface{}
 	if rule.Protocol == "http" && len(policies) >= 1 {
 		if precheckHandler := buildIPPrecheckHandler(policies, stage1BlockStatus(ctx, rule)); precheckHandler != nil {
-			handleChain = append(handleChain, precheckHandler)
+			securityChain = append(securityChain, precheckHandler)
 		}
 	}
 
@@ -3129,7 +3137,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			}
 		}
 		if len(encodings) > 0 {
-			handleChain = append(handleChain, map[string]interface{}{
+			securityChain = append(securityChain, map[string]interface{}{
 				"handler":        "encode",
 				"encodings":      encodings,
 				"minimum_length": 512,
@@ -3141,7 +3149,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// (128MiB 内全量缓冲后受限额拒绝,超大 body DoS 面收敛)。
 	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
 	if effectiveRequestBodyMaxSizeMB > 0 {
-		handleChain = append(handleChain, map[string]interface{}{
+		securityChain = append(securityChain, map[string]interface{}{
 			"handler":  "request_body",
 			"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 		})
@@ -3164,7 +3172,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 	for _, policy := range policies {
 		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
-			handleChain = append(handleChain, rateLimitHandler)
+			securityChain = append(securityChain, rateLimitHandler)
 		}
 	}
 	for _, policy := range policies {
@@ -3174,10 +3182,27 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
 			// (「信任仅豁免所属策略」边界);单策略保持平原形态(预检虽同构存在,
 			// 但策略层自身信任 DetectionOnly 已正确处理,无跨策略信任边界)。
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB); wafHandler != nil {
-				handleChain = append(handleChain, wafHandler)
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB, detectionTrust); wafHandler != nil {
+				securityChain = append(securityChain, wafHandler)
 			}
 		}
+	}
+	// 直通包裹（阶段 0）：subroute 内层顺序与展平形态逐字节一致——非信任
+	// 流量行为零漂移，信任流量短路到 reverse_proxy。
+	if rule.Protocol == "http" && len(passthroughUnion) > 0 && len(securityChain) > 0 {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "subroute",
+			"routes": []interface{}{map[string]interface{}{
+				"match": []interface{}{map[string]interface{}{
+					"not": []interface{}{map[string]interface{}{
+						"remote_ip": map[string]interface{}{"ranges": passthroughUnion},
+					}},
+				}},
+				"handle": securityChain,
+			}},
+		})
+	} else {
+		handleChain = append(handleChain, securityChain...)
 	}
 
 	upstreamList := make([]interface{}, 0, len(enabledUpstreams))

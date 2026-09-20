@@ -8,20 +8,29 @@ import "encoding/json"
 // mixed（存量混合策略兼容组——可编辑不可新建）。类型是编辑约束与分组元数据；
 // 渲染侧仍按功能字段发射（行为零变化）。
 const (
+	PolicyTypeStage0 = "stage0"
 	PolicyTypeStage1 = "stage1"
 	PolicyTypeStage2 = "stage2"
 	PolicyTypeStage3 = "stage3"
 	PolicyTypeMixed  = "mixed"
 )
 
-// PolicyTypeFeatures 报告策略内容的阶段特征组：g1=IP ACL（启用且内联/引用
-// 非空）/黑名单非空/信任名单（启用且非空）/GeoIP 生效，g2=限流（启用且
-// rps>0），g3=WAF（mode∈blocking/detection/custom_only 或自定义规则引用非空）。
+// PolicyFeatureSet 策略内容的阶段特征组：G0=信任名单（启用且内联/引用非空），
+// G1=IP ACL（启用且内联/引用非空）/黑名单非空/GeoIP 生效，G2=限流（启用且
+// rps>0），G3=WAF（mode∈blocking/detection/custom_only 或自定义规则引用非空）。
 // 推断（InferPolicyType）与拆分迁移（split 按组生成子策略）共用同一份分组
-// 判定，禁止第二份实现。
-func PolicyTypeFeatures(p *SecurityPolicy) (g1, g2, g3 bool) {
+// 判定，禁止第二份实现。阶段 0（2026-09-20 用户裁定）：信任名单独立成策略
+// 类型——默认直通上游（trust_detection=0，不过后续任何流程），保留检测记录
+// 时（trust_detection=1）按 DetectionOnly 全评估全记录不拦。
+type PolicyFeatureSet struct {
+	G0, G1, G2, G3 bool
+}
+
+// PolicyTypeFeatures 见 PolicyFeatureSet 注释。
+func PolicyTypeFeatures(p *SecurityPolicy) PolicyFeatureSet {
+	var fs PolicyFeatureSet
 	if p == nil {
-		return false, false, false
+		return fs
 	}
 	jsonListNonEmpty := func(raw string) bool {
 		var entries []json.RawMessage
@@ -30,22 +39,22 @@ func PolicyTypeFeatures(p *SecurityPolicy) (g1, g2, g3 bool) {
 		}
 		return len(entries) > 0
 	}
-	g1 = (p.IPACLEnabled && (jsonListNonEmpty(p.IPACLList) || jsonListNonEmpty(p.IPACLListRefs))) ||
+	fs.G0 = p.IPWhitelistEnabled && (jsonListNonEmpty(string(p.IPWhitelist)) || jsonListNonEmpty(p.IPWhitelistRefs))
+	fs.G1 = (p.IPACLEnabled && (jsonListNonEmpty(p.IPACLList) || jsonListNonEmpty(p.IPACLListRefs))) ||
 		jsonListNonEmpty(string(p.IPBlacklist)) ||
-		(p.IPWhitelistEnabled && (jsonListNonEmpty(string(p.IPWhitelist)) || jsonListNonEmpty(p.IPWhitelistRefs))) ||
 		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(string(p.GeoIPCountries)))
-	g2 = p.RateLimitEnabled && p.RateLimitRPS > 0
-	g3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || jsonListNonEmpty(string(p.CustomRules))
-	return g1, g2, g3
+	fs.G2 = p.RateLimitEnabled && p.RateLimitRPS > 0
+	fs.G3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || jsonListNonEmpty(string(p.CustomRules))
+	return fs
 }
 
 // InferPolicyType 按内容特征推断策略类型——backfill、写侧缺省提交、旧快照/
-// 旧备份导入的共同单一事实源。恰好一组→对应类型，多组→mixed，零组→stage3
-// （WAF 是安全策略默认心智，空策略归此）。
+// 旧备份导入的共同单一事实源。恰好一组→对应类型（G0→stage0），多组→mixed，
+// 零组→stage3（WAF 是安全策略默认心智，空策略归此）。
 func InferPolicyType(p *SecurityPolicy) string {
-	g1, g2, g3 := PolicyTypeFeatures(p)
+	fs := PolicyTypeFeatures(p)
 	count := 0
-	for _, g := range []bool{g1, g2, g3} {
+	for _, g := range []bool{fs.G0, fs.G1, fs.G2, fs.G3} {
 		if g {
 			count++
 		}
@@ -53,9 +62,11 @@ func InferPolicyType(p *SecurityPolicy) string {
 	switch {
 	case count > 1:
 		return PolicyTypeMixed
-	case g1:
+	case fs.G0:
+		return PolicyTypeStage0
+	case fs.G1:
 		return PolicyTypeStage1
-	case g2:
+	case fs.G2:
 		return PolicyTypeStage2
 	default:
 		return PolicyTypeStage3
@@ -106,6 +117,10 @@ type SecurityPolicy struct {
 	// PolicyType：策略类型（单职化分组元数据，见 InferPolicyType 注释）；''
 	// 为待推断存量态（读侧各入口/backfill 归一，不得长期滞留）。
 	PolicyType string `json:"policy_type"`
+	// TrustDetection：阶段 0（信任名单策略）的「保留检测记录」开关——0=信任 IP
+	// 直通上游（不过后续任何流程，零安全事件）；1=保留检测（DetectionOnly
+	// 全评估全记录不拦）。仅 stage0 策略消费；其他类型恒 0。
+	TrustDetection bool `json:"trust_detection"`
 }
 
 type SecurityPolicySummary struct {
@@ -144,6 +159,7 @@ type SecurityPolicySummary struct {
 	IPACLListRefs    string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 	PolicyType       string `json:"policy_type"`
+	TrustDetection   bool   `json:"trust_detection"`
 }
 
 type CreateSecurityPolicyRequest struct {
@@ -170,9 +186,11 @@ type CreateSecurityPolicyRequest struct {
 	GeoIPMode          string `json:"geoip_mode"`
 	WAFCheckResponse   bool   `json:"waf_check_response"`
 	LogRequestBody     bool   `json:"log_request_body"`
-	// PolicyType：可选，∈ {stage1,stage2,stage3}；缺省（""）按内容推断；
+	// PolicyType：可选，∈ {stage0,stage1,stage2,stage3}；缺省（""）按内容推断；
 	// 显式提交时阶段外字段归一零值；显式 mixed 拒绝（兼容组不可新建）。
-	PolicyType      string `json:"policy_type"`
+	PolicyType string `json:"policy_type"`
+	// TrustDetection：阶段 0「保留检测记录」开关（默认 false=直通上游）。
+	TrustDetection  bool   `json:"trust_detection"`
 	IPACLListRefs   string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs string `json:"ip_whitelist_refs"`
 }
@@ -206,6 +224,8 @@ type UpdateSecurityPolicyRequest struct {
 	// PolicyType：nil=按合并后内容重推断；显式 stage1/2/3=切换类型并归一
 	// 阶段外字段；显式 mixed 拒绝。
 	PolicyType *string `json:"policy_type"`
+	// TrustDetection：阶段 0「保留检测记录」开关；nil=保留现值。
+	TrustDetection *bool `json:"trust_detection"`
 }
 
 type SecurityEvent struct {

@@ -262,3 +262,96 @@ func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
 		t.Fatalf("batch-bind with mixed status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 }
+
+// 阶段 0 信任名单策略（2026-09-20 用户裁定）：显式 stage0 创建保留信任名单
+// +trust_detection（默认直通）；显式 stage1 创建/更新一律清除信任字段
+// （信任已归属阶段 0，类型与内容不漂移）。
+func TestCreateSecurityPolicy_stage0KeepsTrustAndDetection(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	body := `{"name":"trust-vip","policy_type":"stage0","ip_whitelist_enabled":true,"ip_whitelist":"[\"10.0.0.9\"]","trust_detection":true,"mode":"blocking","rate_limit_enabled":true,"rate_limit_rps":100}`
+	request := httptest.NewRequest(http.MethodPost, "/security/policies", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("create stage0 status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	}
+	var policyType, mode, whitelist string
+	var trustDetection, rlEnabled bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(mode,''), COALESCE(ip_whitelist,'[]'), COALESCE(trust_detection,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE name='trust-vip'`).
+		Scan(&policyType, &mode, &whitelist, &trustDetection, &rlEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if policyType != "stage0" || mode != "off" || whitelist != `["10.0.0.9"]` || !trustDetection || rlEnabled {
+		t.Fatalf("stage0 stored=(type %s, mode %s, wl %s, detection %v, rl %v), want stage0 with trust+detection kept, rest zeroed",
+			policyType, mode, whitelist, trustDetection, rlEnabled)
+	}
+}
+
+func TestCreateSecurityPolicy_stage1ClearsTrustFields(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	body := `{"name":"acl-notrust","policy_type":"stage1","ip_acl_enabled":true,"ip_acl_mode":"deny","ip_acl_list":"[\"203.0.113.0/24\"]","ip_whitelist_enabled":true,"ip_whitelist":"[\"10.0.0.1\"]"}`
+	request := httptest.NewRequest(http.MethodPost, "/security/policies", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("create stage1 status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	}
+	var whitelist, wlRefs string
+	var wlEnabled bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(ip_whitelist_enabled,1) FROM security_policies WHERE name='acl-notrust'`).
+		Scan(&whitelist, &wlRefs, &wlEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if whitelist != "[]" || wlRefs != "[]" {
+		t.Fatalf("stage1 trust fields=(wl %s, refs %s), want cleared (trust belongs to stage 0)", whitelist, wlRefs)
+	}
+	_ = wlEnabled
+}
+
+func TestSplitSecurityPolicy_trustBecomesStage0ChildWithDetection(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	// mixed：blocking + 信任名单（g0+g3）
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_whitelist,ip_whitelist_enabled,policy_type,enabled) VALUES ('mix-trust','blocking','["10.0.0.9"]',1,'mixed',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_st','st','http','st.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_st',?)`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	response := postSplit(t, router, int(id))
+	if response.Code != http.StatusOK {
+		t.Fatalf("split status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload splitPayload
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var stage0ID int
+	for _, child := range payload.Data.Created {
+		if child.PolicyType == "stage0" {
+			stage0ID = child.ID
+		}
+	}
+	if stage0ID == 0 {
+		t.Fatalf("split must create a stage0 child for the trust feature group: %+v", payload.Data.Created)
+	}
+	// 阶段 0 子策略：信任保留 + trust_detection=1（保留检测=迁移前语义保持）
+	var whitelist string
+	var trustDetection bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(ip_whitelist,'[]'), COALESCE(trust_detection,0) FROM security_policies WHERE id=?`, stage0ID).Scan(&whitelist, &trustDetection); err != nil {
+		t.Fatal(err)
+	}
+	if whitelist != `["10.0.0.9"]` || !trustDetection {
+		t.Fatalf("stage0 child=(wl %s, detection %v), want trust kept + detection=1", whitelist, trustDetection)
+	}
+}

@@ -311,7 +311,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
-		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0), "policy_type": "",
+		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
 		"log_request_body": int64(0),
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
@@ -2451,6 +2451,25 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
 		return
 	}
+	oidcConverged := false
+	if backup.Config != nil {
+		// G（2026-09-20 用户裁定「配置收敛」）：备份含全局配置区但不含
+		// oidc_config 键（旧版本/未配置 OIDC 时导出）→ OIDC 配置随备份收敛
+		// 清空——PATCH 语义的 UPDATE 只写备份携带键，不收敛会留下「OIDC
+		// 启用（live 残留）+ 用户被备份 users 表替换清空」的不一致死态。
+		if _, hasOIDC := backup.Config["oidc_config"]; !hasOIDC {
+			var liveOIDC string
+			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(oidc_config,'') FROM global_config WHERE id=1").Scan(&liveOIDC); err != nil {
+				err = session.abort(err)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 OIDC 配置失败: " + err.Error()})
+				return
+			}
+			if liveOIDC != "" {
+				backup.Config["oidc_config"] = ""
+				oidcConverged = true
+			}
+		}
+	}
 	if backup.Config != nil {
 		valid, err := tableColumns(ctx, db.DB, "global_config")
 		if err != nil {
@@ -2612,6 +2631,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	if operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
+	}
+	if oidcConverged {
+		responseWarnings = append(append([]string{}, responseWarnings...), "备份未携带 OIDC 配置——现有 OIDC 配置已随备份收敛清空（用户数据按备份替换，避免「OIDC 启用但零用户」不一致状态）")
 	}
 	if revokedSessions && !operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), "系统数据已"+action+"：全部登录会话已吊销，请重新登录")

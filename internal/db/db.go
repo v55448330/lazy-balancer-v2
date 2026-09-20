@@ -715,6 +715,7 @@ func runMigrations() error {
 		"lb_rules.block_page_stage3_status":               "INTEGER NOT NULL DEFAULT 0",
 		"security_custom_rules.updated_by":                "INTEGER DEFAULT 0",
 		"security_policies.policy_type":                   "TEXT NOT NULL DEFAULT ''",
+		"security_policies.trust_detection":               "BOOLEAN NOT NULL DEFAULT 0",
 		"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
 		"security_crs_version.message":                    "TEXT DEFAULT ''",
 		"security_crs_version.last_checked":               "DATETIME",
