@@ -38,6 +38,7 @@ export interface SecurityStagePolicy {
   ip_acl_list_refs?: string
   ip_whitelist_refs?: string
   ip_whitelist_enabled?: boolean
+  ip_acl_enabled?: boolean
   geoip_mode?: string
   // 实体类型列（后端并行新增）；缺省时由 inferPolicyType 按内容推断
   policy_type?: string
@@ -292,24 +293,44 @@ export const resolveStageOverride = (
     broken,
   }
 }
-
 // 信任名单非空谓词（阶段 0 能力：内联 ∪ 引用，内联/引用任一非空即算）
 export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: string }): boolean =>
   parseIPList(p.ip_whitelist).length > 0 || parseRefIds(p.ip_whitelist_refs).length > 0
+
+// 阶段 1 · IP 访问控制谓词（信任除外——2026-09-21 用户裁定：信任恒归独立阶段 0）：
+// ACL 启用且（内联∪引用非空），或遗留黑名单非空。has_ip_control 摘要标志含信任
+// （镜像后端发射语义），阶段归属判定不得直接消费它——否则纯信任策略会在阶段 1
+// 投出「列表 0 条 · 黑名单 0 条」空行并被误判为 mixed。
+export const hasIPACLControl = (p: {
+  has_ip_control?: boolean
+  ip_acl_enabled?: boolean
+  ip_acl_list?: string
+  ip_acl_list_refs?: string
+  ip_blacklist?: string
+}): boolean => {
+  // 原始字段齐备时按定义判定；缺失（如精简绑定载荷）回退摘要标志
+  if (p.ip_acl_enabled !== undefined || p.ip_blacklist !== undefined || p.ip_acl_list !== undefined) {
+    return (
+      (p.ip_acl_enabled === true && (parseIPList(p.ip_acl_list).length > 0 || parseRefIds(p.ip_acl_list_refs).length > 0)) ||
+      parseIPList(p.ip_blacklist).length > 0
+    )
+  }
+  return p.has_ip_control === true
+}
 
 // 阶段 0 · 信任名单行：条目数（空=未配置，任务 G 口径）+ 直通/保留检测模式
 const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
   const rows: StageRow[] = []
   if (!policy || !hasTrustEntries(policy)) return rows
   const trustCount = mergeIpEntries(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)).length
-  rows.push({ label: '信任名单', detail: trustCount === 0 ? '未配置' : `${trustCount} 条` })
+  rows.push({ label: '信任名单', detail: trustCount === 0 ? '未配置' : `${trustCount} 条${policy.ip_whitelist_enabled === false ? '（未启用）' : ''}` })
   rows.push({ label: '模式', detail: policy.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' })
   return rows
 }
 
 const buildStage1Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
   const rows: StageRow[] = []
-  if (policy?.has_ip_control) {
+  if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
     const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测模式' : '黑名单模式')
     const aclCount = mergeIpEntries(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs)).length
@@ -604,6 +625,11 @@ export interface SecurityPolicyTypeInput {
   // 阶段 0 推断（g0=信任名单非空）：内联 JSON 文本或引用 id 数组文本
   ip_whitelist?: string
   ip_whitelist_refs?: string
+  // 阶段 1 信任除外判定（可选原始字段；缺省时回退 has_ip_control 摘要标志）
+  ip_acl_enabled?: boolean
+  ip_acl_list?: string
+  ip_acl_list_refs?: string
+  ip_blacklist?: string
 }
 
 // 推断形状：阶段 0 = 信任名单非空；阶段 1 = IP 访问控制或地域拦截；阶段 2 = 限流；
@@ -614,7 +640,7 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
     return p.policy_type
   }
   const s0 = hasTrustEntries(p)
-  const s1 = p.has_ip_control || p.has_geoip === true
+  const s1 = hasIPACLControl(p) || p.has_geoip === true
   const s2 = p.has_rate_limit
   const s3 = (p.has_waf ?? (p.mode !== undefined && p.mode !== 'off')) || p.has_custom_rules
   const stageCount = [s0, s1, s2, s3].filter(Boolean).length

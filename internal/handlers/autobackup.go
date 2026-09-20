@@ -99,9 +99,11 @@ func nextAutoBackupFilename(dir, trigger string, now time.Time) string {
 	return base + ".lbbak"
 }
 
-func insertAutoBackupRow(filename, status string, sizeBytes int64, sectionsJSON, triggerType, message string) (int64, error) {
-	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, size_bytes, sections, trigger_type, message) VALUES (?, ?, ?, ?, ?, ?)`,
-		filename, status, sizeBytes, sectionsJSON, triggerType, message)
+// appVersion 为系统真实版本（cfg.Version，不受 branding.json 版本覆盖影响，
+// 2026-09-21 用户裁定备份列表「版本号」列）；存量行缺省 ”，前端显示「—」。
+func insertAutoBackupRow(filename, status string, sizeBytes int64, sectionsJSON, triggerType, message, appVersion string) (int64, error) {
+	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, size_bytes, sections, trigger_type, message, app_version) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		filename, status, sizeBytes, sectionsJSON, triggerType, message, appVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +188,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	}
 	fail := func(stage string, err error) error {
 		wrapped := fmt.Errorf("%s: %w", stage, err)
-		if _, ierr := insertAutoBackupRow(filename, "failed", 0, "[]", trigger, stage+": "+err.Error()); ierr != nil {
+		if _, ierr := insertAutoBackupRow(filename, "failed", 0, "[]", trigger, stage+": "+err.Error(), h.cfg.Version); ierr != nil {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)
 		}
 		services.Logf("warn", "%s失败：%s（%s）", action, stage, err)
@@ -215,7 +217,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	if err != nil {
 		sectionsJSON = []byte("[]")
 	}
-	id, err := insertAutoBackupRow(filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary)
+	id, err := insertAutoBackupRow(filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary, h.cfg.Version)
 	if err != nil {
 		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回
 		_ = os.Remove(finalPath)
@@ -252,6 +254,7 @@ type autoBackupRowView struct {
 	Sections    []string `json:"sections"`
 	TriggerType string   `json:"trigger_type"`
 	Message     string   `json:"message"`
+	AppVersion  string   `json:"app_version"`
 }
 
 type sqlRowScanner interface {
@@ -261,7 +264,7 @@ type sqlRowScanner interface {
 func scanAutoBackupRowView(rows sqlRowScanner) (autoBackupRowView, error) {
 	var view autoBackupRowView
 	var sectionsRaw string
-	if err := rows.Scan(&view.ID, &view.Filename, &view.CreatedAt, &view.Status, &view.SizeBytes, &sectionsRaw, &view.TriggerType, &view.Message); err != nil {
+	if err := rows.Scan(&view.ID, &view.Filename, &view.CreatedAt, &view.Status, &view.SizeBytes, &sectionsRaw, &view.TriggerType, &view.Message, &view.AppVersion); err != nil {
 		return view, err
 	}
 	view.Sections = []string{}
@@ -269,7 +272,7 @@ func scanAutoBackupRowView(rows sqlRowScanner) (autoBackupRowView, error) {
 	return view, nil
 }
 
-const autoBackupRowColumns = `id, filename, created_at, status, COALESCE(size_bytes,0), COALESCE(sections,'[]'), trigger_type, COALESCE(message,'')`
+const autoBackupRowColumns = `id, filename, created_at, status, COALESCE(size_bytes,0), COALESCE(sections,'[]'), trigger_type, COALESCE(message,''), COALESCE(app_version,'')`
 
 // AutoBackupSettings GET /api/v1/settings/auto-backup：设置 + 备份列表（DESC）。
 func (h *Handlers) AutoBackupSettings(c *gin.Context) {

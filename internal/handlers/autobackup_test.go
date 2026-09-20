@@ -103,6 +103,34 @@ func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 		t.Fatalf("手动备份 audit rows=%d, want 1", got)
 	}
 }
+func TestRunAutoBackupOnce_recordsRealAppVersion(t *testing.T) {
+	// Given: 标记版本号——必须原样落 auto_backups.app_version（系统真实版本，
+	// 不受 branding.json 版本覆盖影响，2026-09-21 用户裁定新增「版本号」列）
+	h := newAutoBackupTestHandlers(t)
+	h.cfg.Version = "v9.9.9-test"
+
+	// When
+	if err := h.RunAutoBackupOnce("manual", "system"); err != nil {
+		t.Fatalf("RunAutoBackupOnce: %v", err)
+	}
+
+	// Then: DB 列与 API 视图双口径
+	var version string
+	if err := db.DB.QueryRow(`SELECT app_version FROM auto_backups WHERE trigger_type='manual' ORDER BY id DESC LIMIT 1`).Scan(&version); err != nil {
+		t.Fatalf("query app_version: %v", err)
+	}
+	if version != "v9.9.9-test" {
+		t.Fatalf("app_version=%q, want %q", version, "v9.9.9-test")
+	}
+	row := db.DB.QueryRow(`SELECT ` + autoBackupRowColumns + ` FROM auto_backups WHERE trigger_type='manual' ORDER BY id DESC LIMIT 1`)
+	view, err := scanAutoBackupRowView(row)
+	if err != nil {
+		t.Fatalf("scanAutoBackupRowView: %v", err)
+	}
+	if view.AppVersion != "v9.9.9-test" {
+		t.Fatalf("view.AppVersion=%q, want %q", view.AppVersion, "v9.9.9-test")
+	}
+}
 
 func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 	// Given: 备份目录路径被同名文件占据 → MkdirAll 必败
@@ -671,7 +699,7 @@ func TestPruneAutoBackups_fileRemovalOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, filename := range []string{blocked, missing, normal} {
-		if _, err := insertAutoBackupRow(filename, "success", 128, `["users"]`, "manual", ""); err != nil {
+		if _, err := insertAutoBackupRow(filename, "success", 128, `["users"]`, "manual", "", "v9.9.9-test"); err != nil {
 			t.Fatal(err)
 		}
 	}

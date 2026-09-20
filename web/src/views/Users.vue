@@ -141,7 +141,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right" align="center">
+        <el-table-column label="操作" width="300" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
             <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
@@ -165,9 +165,10 @@
                 </el-button>
               </div>
             </el-tooltip>
-            <el-tooltip v-if="row.mfa_enabled && authStore.user?.role === 'admin'" :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : readOnlyMessage">
+            <!-- 重置 MFA 恒渲染（2026-09-21 用户报障：OIDC 管理员视角非 OIDC 未启用 MFA 用户行无任何 MFA 操作）——禁用原因按 OIDC > 未启用 > 只读优先级透出 -->
+            <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc' && row.mfa_enabled" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : (!row.mfa_enabled ? '该用户未启用 MFA' : readOnlyMessage)">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || !row.mfa_enabled || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
                   重置 MFA
                 </el-button>
               </div>

@@ -713,6 +713,7 @@ func runMigrations() error {
 		"lb_rules.block_page_stage1_status":               "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage3_id":                   "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage3_status":               "INTEGER NOT NULL DEFAULT 0",
+		"auto_backups.app_version":                        "TEXT NOT NULL DEFAULT ''",
 		"security_custom_rules.updated_by":                "INTEGER DEFAULT 0",
 		"security_policies.policy_type":                   "TEXT NOT NULL DEFAULT ''",
 		"security_policies.trust_detection":               "BOOLEAN NOT NULL DEFAULT 0",

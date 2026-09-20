@@ -372,6 +372,9 @@
           <el-table-column label="备份时间" width="150">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
+          <el-table-column label="版本号" width="110">
+            <template #default="{ row }">{{ row.app_version || '—' }}</template>
+          </el-table-column>
           <el-table-column label="状态" width="70">
             <template #default="{ row }">
               <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small" effect="light">
@@ -379,8 +382,13 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="内容" min-width="200" show-overflow-tooltip>
-            <template #default="{ row }">{{ autoBackupScopeSummary(row) }}</template>
+          <!-- 内容列只显备份范围（2026-09-21 用户裁定）；各表行数明细+触发方式移入 hover -->
+          <el-table-column label="内容" min-width="170" class-name="auto-backup-scope-cell">
+            <template #default="{ row }">
+              <el-tooltip :content="autoBackupDetailTip(row)" placement="top" :show-after="150">
+                <span class="auto-backup-scope-text">{{ autoBackupScopeText(row) }}</span>
+              </el-tooltip>
+            </template>
           </el-table-column>
           <el-table-column label="大小" width="90">
             <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
@@ -590,6 +598,7 @@ interface AutoBackupRow {
   sections: string[]
   trigger_type: string
   message: string
+  app_version: string
 }
 
 interface AutoBackupSettingsResponse {
@@ -755,12 +764,14 @@ const formatBackupSize = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
 
-const autoBackupScopeSummary = (row: AutoBackupRow): string => {
+// 内容列只显备份范围；hover 明细=各表行数摘要+触发方式（2026-09-21 用户裁定）
+const autoBackupScopeText = (row: AutoBackupRow): string => {
   const labels = normalizeBackupSectionKeys(row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
-  const scope = labels.length > 0 ? labels.join('、') : '-'
+  return labels.length > 0 ? labels.join('、') : '-'
+}
+const autoBackupDetailTip = (row: AutoBackupRow): string => {
   const trigger = row.trigger_type === 'manual' ? '手动' : '定时'
-  // 「（定时）」置于内容尾部,避免黏在最后一个分类名后(2026-09-19 用户报障)
-  return row.message ? `${scope} · ${row.message}（${trigger}）` : `${scope}（${trigger}）`
+  return row.message ? `${row.message}（${trigger}）` : `${autoBackupScopeText(row)}（${trigger}）`
 }
 
 const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
@@ -1494,6 +1505,8 @@ const handleSave = async () => {
 .auto-backup-chips-actions { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
 .auto-backup-scope-hint { margin-left: 0; }
+/* 内容列只显范围标签，单行不换行（明细在 hover tooltip，2026-09-21 用户裁定） */
+.auto-backup-scope-text { white-space: nowrap; }
 .auto-backup-list { border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
 
 /* 自管标签行(ClusterModeCard 范式,FE41-1):复刻 EP .el-form-item__label 计算

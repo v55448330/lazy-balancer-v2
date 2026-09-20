@@ -174,6 +174,50 @@ func TestSplitSecurityPolicy_partialGroups(t *testing.T) {
 		}
 	}
 }
+func TestSplitSecurityPolicy_disabledTrustStillSplitsToStage0(t *testing.T) {
+	// Given: mixed 策略携带信任名单条目但信任开关关闭（ip_whitelist_enabled=0）
+	// ——信任名单属阶段 0 能力，拆分必须保留配置生成 stage0 子策略（禁用态），
+	// 不得因开关关闭静默丢条目（2026-09-21 用户裁定：信任恒归独立阶段 0）。
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_whitelist,ip_whitelist_enabled,policy_type,enabled)
+		VALUES ('mix-disabled-trust','detection','["198.51.100.7"]',0,'mixed',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	// When
+	response := postSplit(t, router, int(id))
+
+	// Then: stage0 子策略照常生成，条目与禁用态原样保留
+	if response.Code != http.StatusOK {
+		t.Fatalf("split status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload splitPayload
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, response.Body.String())
+	}
+	byType := map[string]int{}
+	for _, child := range payload.Data.Created {
+		byType[child.PolicyType] = child.ID
+	}
+	stage0ID, ok := byType["stage0"]
+	if !ok {
+		t.Fatalf("created=%+v, want stage0 child for disabled-trust entries", payload.Data.Created)
+	}
+	var whitelist string
+	var wlEnabled bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_enabled,0) FROM security_policies WHERE id=?`, stage0ID).Scan(&whitelist, &wlEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if whitelist != `["198.51.100.7"]` {
+		t.Fatalf("stage0 whitelist=%q, want entries preserved", whitelist)
+	}
+	if wlEnabled {
+		t.Fatal("stage0 ip_whitelist_enabled=true, want disabled state preserved (false)")
+	}
+}
 
 func TestSplitSecurityPolicy_overflowRuleSkippedAndOriginalKept(t *testing.T) {
 	setupSecurityPolicyTestDB(t)

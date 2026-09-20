@@ -342,6 +342,10 @@ const statsSettled = ref(false)
 const certInfo = ref<FlowCertInfo | null>(null)
 const certLoading = ref(false)
 let statsSeq = 0
+// 证书拉取用独立序列计数器：与 statsSeq 共用时，TLS 规则的 cert-info 请求
+// ++ 会让先发的 stage-stats 响应 seq 失配被丢弃、statsSettled 恒 false——
+// 阶段计数 chip 在 TLS 规则上永不渲染（2026-09-21 生产报障根因）
+let certSeq = 0
 
 // 打开即见接入信息（用户裁定：默认选中「接入」，非空白）
 const activeNode = ref('access')
@@ -554,12 +558,12 @@ const onDialogOpen = (): void => {
   }
   // TLS 启用时拉取证书信息（接入卡富化）
   if (props.target?.enableTls && !isTcp.value) {
-    const seq = ++statsSeq
+    const seq = ++certSeq
     certLoading.value = true
     request.get<APIResponse<FlowCertInfo>>(`/rules/${encodeURIComponent(caddyId)}/cert-info`, { silent: true })
-      .then((res) => { if (seq === statsSeq) certInfo.value = res.data ?? null })
-      .catch(() => { if (seq === statsSeq) certInfo.value = null })
-      .finally(() => { if (seq === statsSeq) certLoading.value = false })
+      .then((res) => { if (seq === certSeq) certInfo.value = res.data ?? null })
+      .catch(() => { if (seq === certSeq) certInfo.value = null })
+      .finally(() => { if (seq === certSeq) certLoading.value = false })
   }
 }
 </script>

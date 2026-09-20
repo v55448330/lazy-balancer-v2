@@ -1979,12 +1979,12 @@ const ACL_MODE_TIPS: Record<string, string> = {
   bypass: '列表中的 IP 将跳过全部安全检测',
 }
 const aclListTip = computed(() => ACL_MODE_TIPS[form.value.ip_acl_mode] ?? '')
-// 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空（内联与引用列表合并计数）
+// 与后端口径一致：ACL 启用且列表非空，或黑名单非空（内联与引用列表合并计数）。
+// 2026-09-21：信任名单（ip_whitelist）不再计入——信任恒归独立阶段 0（用户裁定），
+// 计入会把纯信任策略误判为跨阶段 mixed 并在阶段 1 投出空行。
 const hasIpControl = (row: PolicySummary): boolean => {
   const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
-  const wlCount = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
-  const aclEnabled = row.ip_acl_enabled
-  return (aclEnabled && aclCount > 0) || wlCount > 0 || parseJsonList(row.ip_blacklist).length > 0
+  return (row.ip_acl_enabled && aclCount > 0) || parseJsonList(row.ip_blacklist).length > 0
 }
 // 地域拦截启用口径与后端 PolicyHasGeoIP 一致：geoip_mode !== 'off' 且区域名单非空
 //（off 为关闭哨兵：区域保留不清单，重开即复用）

@@ -2327,7 +2327,20 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 信任名单 → 阶段 0 子策略（2026-09-20 用户裁定）：trust_detection 恒 1
 	// （保留检测记录=迁移前 DetectionOnly 语义的行为保持；用户可在子策略上
 	// 改直通）。阶段 1 子策略不再携带信任字段（信任已归属阶段 0）。
-	if features.G0 {
+	// 2026-09-21 口径修正：拆分谓词按「条目非空」判定而非 features.G0（后者
+	// 另含 ip_whitelist_enabled 门）——信任开关关闭的存量混合策略拆分时不
+	// 再静默丢信任条目，stage0 子策略原样携带禁用态（前端预演 hasTrustEntries
+	// 同口径）。类型推断/回填不受此影响（InferPolicyType 仍用启用门 G0）。
+	trustEntriesNonEmpty := func() bool {
+		for _, raw := range []string{string(p.IPWhitelist), p.IPWhitelistRefs} {
+			var entries []json.RawMessage
+			if err := json.Unmarshal([]byte(raw), &entries); err == nil && len(entries) > 0 {
+				return true
+			}
+		}
+		return false
+	}()
+	if trustEntriesNonEmpty {
 		if err := insertChild(models.PolicyTypeStage0, p.Name+stageSuffix[models.PolicyTypeStage0], "off", "deny", "[]", false,
 			p.IPWhitelist, p.IPWhitelistEnabled, json.RawMessage("[]"), false, 0, 0, "[]", "[]", "[]", 0, 0,
 			json.RawMessage("[]"), "off", false, false, "[]", p.IPWhitelistRefs, true); err != nil {
