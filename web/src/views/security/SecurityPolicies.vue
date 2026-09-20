@@ -1302,7 +1302,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
       title: '阶段 1 · IP 访问控制',
       rows: [
         { label: '访问控制', value: d.ip_acl_enabled ? `${ACL_MODE_LABELS[d.ip_acl_mode] ?? d.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` : '未启用' },
-        { label: '信任名单', value: trustCount === 0 ? '未配置' : `${trustCount} 条` },
+        // 信任名单只归阶段 0 段（2026-09-21 用户裁定：独立阶段 0，阶段 1 不再重复展示）
         { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off' ? `${GEOIP_MODE_LABELS[d.geoip_mode ?? 'deny'] ?? d.geoip_mode} · ${geoCount} 区域` : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
       ],
     },

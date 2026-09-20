@@ -133,15 +133,28 @@
             <el-tag :type="row.auth_provider === 'oidc' ? 'warning' : 'info'" size="small" effect="plain">{{ row.auth_provider === 'oidc' ? 'OIDC' : '本地' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="MFA" width="80" align="center">
+        <el-table-column label="MFA" width="110" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.auth_provider === 'oidc'" type="info" size="small" effect="plain">—</el-tag>
-            <el-tag v-else :type="row.mfa_enabled ? 'success' : 'info'" size="small" effect="plain">
-              {{ row.mfa_enabled ? '已启用' : '未启用' }}
-            </el-tag>
+            <!-- 每行只显示一个必要 MFA 操作——操作即状态（2026-09-21 用户裁定）：
+                 本人本地未启用 → 启用 MFA；其余 → 重置 MFA（禁用原因 hover 透出：
+                 OIDC 提供商管理 / 该用户未启用 / 只读） -->
+            <el-tooltip v-if="!row.mfa_enabled && row.id === authStore.user?.id && row.auth_provider !== 'oidc'" :disabled="!isReadOnly" :content="readOnlyMessage">
+              <div>
+                <el-button type="success" link size="small" :disabled="isReadOnly || nodeModeSlave || submitting" @click="openMfaBinding(row)">
+                  启用 MFA
+                </el-button>
+              </div>
+            </el-tooltip>
+            <el-tooltip v-else :disabled="!isReadOnly && row.auth_provider !== 'oidc' && row.mfa_enabled" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : (!row.mfa_enabled ? '该用户未启用 MFA' : readOnlyMessage)">
+              <div>
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || !row.mfa_enabled || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
+                  重置 MFA
+                </el-button>
+              </div>
+            </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right" align="center">
+        <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
             <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
@@ -155,21 +168,6 @@
               <div>
                 <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
                   重置密码
-                </el-button>
-              </div>
-            </el-tooltip>
-            <el-tooltip v-if="!row.mfa_enabled && row.id === authStore.user?.id" :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : readOnlyMessage">
-              <div>
-                <el-button type="success" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || nodeModeSlave || submitting" @click="openMfaBinding(row)">
-                  启用 MFA
-                </el-button>
-              </div>
-            </el-tooltip>
-            <!-- 重置 MFA 恒渲染（2026-09-21 用户报障：OIDC 管理员视角非 OIDC 未启用 MFA 用户行无任何 MFA 操作）——禁用原因按 OIDC > 未启用 > 只读优先级透出 -->
-            <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc' && row.mfa_enabled" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : (!row.mfa_enabled ? '该用户未启用 MFA' : readOnlyMessage)">
-              <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || !row.mfa_enabled || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
-                  重置 MFA
                 </el-button>
               </div>
             </el-tooltip>
@@ -772,10 +770,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   background: #eff6ff;
-  color: #3b82f6;
 }
-
-.user-info { display: flex; flex-direction: column; }
 
 .user-name { font-weight: 500; color: #111827; font-size: 14px; }
 .user-display { font-size: 12px; color: #9ca3af; }

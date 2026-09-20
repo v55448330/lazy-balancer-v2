@@ -306,7 +306,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(760px, 94vw)" :close-on-click-modal="false" class="backup-dialog" destroy-on-close @opened="onAutoBackupOpened">
+    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog" destroy-on-close @opened="onAutoBackupOpened">
       <template #header>
         <div class="backup-dialog-header">
           <el-icon class="backup-dialog-icon"><Timer /></el-icon>
@@ -369,7 +369,7 @@
       </div>
       <div class="auto-backup-list">
         <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small" :max-height="320">
-          <el-table-column label="备份时间" width="150">
+          <el-table-column label="备份时间" width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
           <el-table-column label="版本号" width="110">
@@ -383,7 +383,7 @@
             </template>
           </el-table-column>
           <!-- 内容列只显备份范围（2026-09-21 用户裁定）；各表行数明细+触发方式移入 hover -->
-          <el-table-column label="内容" min-width="170" class-name="auto-backup-scope-cell">
+          <el-table-column label="内容" width="230" class-name="auto-backup-scope-cell">
             <template #default="{ row }">
               <el-tooltip :content="autoBackupDetailTip(row)" placement="top" :show-after="150">
                 <span class="auto-backup-scope-text">{{ autoBackupScopeText(row) }}</span>
@@ -393,7 +393,7 @@
           <el-table-column label="大小" width="90">
             <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="140" align="right">
+          <el-table-column label="操作" width="150" align="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="downloadAutoBackup(row)">下载</el-button>
               <el-button v-if="row.status === 'success'" link type="warning" size="small" @click="restoreAutoBackup(row)">还原</el-button>
