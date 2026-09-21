@@ -256,6 +256,7 @@
               <span class="flow-kv-label">后端域名</span>
               <span class="flow-kv-value">{{ target.hostHeader || '透传原始 Host' }}</span>
             </div>
+            <div v-if="hasPathRules" class="flow-route-main">主路由 <span class="flow-route-path">/</span></div>
             <el-table v-if="target.upstreams && target.upstreams.length > 0" :data="target.upstreams" size="small" class="flow-upstream-table">
               <el-table-column label="上游" min-width="170">
                 <template #default="{ row }"><span class="flow-upstream-addr">{{ row.host }}:{{ row.port }}</span></template>
@@ -274,6 +275,22 @@
               </el-table-column>
             </el-table>
             <div v-else class="flow-detail-line">{{ target.upstreamSummary }}</div>
+            <template v-if="hasPathRules">
+              <div class="flow-route-title">路由分发</div>
+              <div v-for="pr in target.pathRules" :key="`${pr.match_type}:${pr.path}`" class="flow-route-row">
+                <span class="flow-route-match">{{ pr.path }}<em class="flow-route-type">{{ pathMatchLabel(pr.match_type) }}</em></span>
+                <span class="flow-route-arrow">→</span>
+                <span class="flow-route-targets">
+                  <template v-if="enabledPathUpstreams(pr).length > 0">
+                    <span v-for="u in enabledPathUpstreams(pr)" :key="`${u.host}:${u.port}`" class="flow-route-target">
+                      <span class="flow-upstream-addr">{{ u.host }}:{{ u.port }}</span>
+                      <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
+                    </span>
+                  </template>
+                  <span v-else class="flow-route-none">无启用上游</span>
+                </span>
+              </div>
+            </template>
             <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照</div>
           </div>
         </el-collapse-transition>
@@ -289,6 +306,7 @@ import { computed, ref } from 'vue'
 import { Connection, CircleCheck, Key, Odometer, Aim, TopRight } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
+import type { RuleFlowPathRule } from '@/types/rules'
 import { hostPortKey } from '@/utils/upstreamKeys'
 import { STAGE_SHORT_TITLES, attachStageDetails, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds } from '@/utils/securityStages'
 import type {
@@ -450,21 +468,29 @@ const toggleNode = (key: string): void => {
   if (key.startsWith('stage')) void ensureDetails()
 }
 
-// 上游行状态：禁用优先；有逐上游快照按快照（healthy/degraded/unknown），无快照回落启用态口径
-const upstreamStateText = (row: RuleFlowUpstream): string => {
+// 上游行状态：禁用优先；有逐上游快照按快照（healthy/degraded/unknown），无快照回落启用态口径。
+// 参数取结构子集（host/port/enabled）——主上游表行与「路由分发」路径上游行共用同一逻辑
+const upstreamStateText = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>): string => {
   if (!row.enabled) return '禁用'
   const snapshot = props.target?.upstreamHealth?.[hostPortKey(row.host, row.port)]
   if (!snapshot || snapshot.unknown) return '启用'
   if (snapshot.degraded) return '降级'
   return snapshot.healthy ? '健康' : '异常'
 }
-const upstreamStateType = (row: RuleFlowUpstream): 'success' | 'warning' | 'danger' | 'info' => {
+const upstreamStateType = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>): 'success' | 'warning' | 'danger' | 'info' => {
   if (!row.enabled) return 'info'
   const snapshot = props.target?.upstreamHealth?.[hostPortKey(row.host, row.port)]
   if (!snapshot || snapshot.unknown) return 'info'
   if (snapshot.degraded) return 'warning'
   return snapshot.healthy ? 'success' : 'danger'
 }
+
+// 「路由分发」区块（用户裁定 2026-09-21：流程弹框覆盖自定义路由/自定义上游）：
+// 无 pathRules 完全现状；有则主上游表标「主路由 /」并逐条路径规则一行
+const hasPathRules = computed(() => (props.target?.pathRules?.length ?? 0) > 0)
+const enabledPathUpstreams = (pr: RuleFlowPathRule): Array<{ host: string; port: number; enabled: boolean }> =>
+  pr.upstreams.filter((u) => u.enabled)
+const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? '精确' : '前缀')
 
 // 计数 chip：静默拉取（未到数不渲染 chip；绝不渲染加载态字面）；
 const stageChip = (stage: 1 | 2 | 3): { chip?: string; caption?: string } => {
@@ -695,6 +721,18 @@ const onDialogOpen = (): void => {
 .flow-panel-footnote { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5e7eb; font-size: 12px; color: #9ca3af; }
 .flow-upstream-table { width: 100%; }
 .flow-upstream-addr { font-family: monospace; font-size: 12px; color: #1f2937; }
+
+/* ── 路由分发：主路由标签 + 逐条路径规则「match → 启用上游列表(健康 tag)」 ── */
+.flow-route-main { font-size: 12px; font-weight: 600; color: #4b5563; margin-bottom: 6px; }
+.flow-route-path { font-family: monospace; color: #1f2937; }
+.flow-route-title { font-size: 12px; font-weight: 600; color: #4b5563; margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
+.flow-route-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.9; }
+.flow-route-match { font-family: monospace; color: #1f2937; flex-shrink: 0; }
+.flow-route-type { font-style: normal; font-family: inherit; color: #9ca3af; margin-left: 4px; }
+.flow-route-arrow { color: #9ca3af; flex-shrink: 0; }
+.flow-route-targets { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.flow-route-target { display: inline-flex; align-items: center; gap: 4px; }
+.flow-route-none { color: #9ca3af; }
 
 /* ── 二级明细区（max-height 滚动） ── */
 .flow-policy-details { max-height: 260px; overflow-y: auto; margin-top: 6px; border-top: 1px dashed #e5e7eb; padding-top: 8px; }

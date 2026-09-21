@@ -28,8 +28,8 @@
       <div class="table-toolbar">
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
       </div>
-      <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <el-table-column prop="name" label="规则名称" min-width="180">
+      <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe class="rules-table" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+        <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
               <!-- 锁 hover 摘要（不可点击）：按阶段 0/1/2/3 分组的紧凑摘要；
@@ -39,7 +39,7 @@
               <el-popover
                 v-if="row.protocol === 'http'"
                 :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
-                placement="top"
+                placement="bottom"
                 trigger="hover"
                 :width="360"
                 popper-class="rule-lock-popper"
@@ -54,20 +54,24 @@
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
                       <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->
                       <div v-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">未启用</div>
-                      <!-- 阶段 0：每策略 条数+模式一行 -->
-                      <template v-else-if="stage.stage === 0">
-                        <div v-for="group in stage.groups" :key="group.key" class="lock-stage-line" :class="{ 'is-disabled': !group.enabled }">
-                          <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
-                          <span class="lock-policy-detail">{{ group.rows.map((r) => r.detail).join(' · ') }}</span>
-                        </div>
-                      </template>
-                      <!-- 阶段 1/2：生效策略名列表 -->
-                      <div v-else-if="stage.stage !== 3" class="lock-stage-line">{{ stage.groups.map((g) => g.name).join('、') }}</div>
-                      <!-- 阶段 3：策略名 + WAF 模式 tag -->
+                      <!-- 按策略分小组（2026-09-21 用户裁定）：策略名做弱化小标题，该策略的阶段能力行
+                           （含拦截页行）逐行挂其下，信息密度与流程弹框面板一致；单策略绑定时免分组框
+                           保持紧凑。阶段 3 的 WAF 模式由投影首行（WAF（拦截/检测/仅自定义））承载，
+                           不再单独渲染 mode tag -->
                       <template v-else>
-                        <div v-for="group in stage.groups" :key="group.key" class="lock-stage-line" :class="{ 'is-disabled': !group.enabled }">
-                          <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
-                          <el-tag size="small" effect="plain" :type="wafModeTagType(policyModeOf(group.key))">{{ wafModeLabel(policyModeOf(group.key)) }}</el-tag>
+                        <div
+                          v-for="group in stage.groups"
+                          :key="group.key"
+                          class="lock-policy-group"
+                          :class="{ 'is-compact': stage.groups.length === 1, 'is-disabled': !group.enabled }"
+                        >
+                          <div class="lock-policy-head">
+                            <span class="lock-policy-name" :title="group.name">{{ group.name }}</span>
+                          </div>
+                          <div v-for="row in group.rows" :key="row.label" class="lock-stage-row">
+                            <span class="lock-row-label">{{ row.label }}</span>
+                            <span class="lock-row-detail" :title="row.detail">{{ row.detail }}</span>
+                          </div>
                         </div>
                       </template>
                     </div>
@@ -75,40 +79,40 @@
                   <div class="lock-summary-hint"><el-link type="primary" class="lock-flow-link" @click="openFlowFromLock(row)">查看完整处理流程 →</el-link></div>
                 </div>
               </el-popover>
-              <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
+              <a class="rule-name-link" role="button" tabindex="0" :title="row.name" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="domain" label="域名" min-width="320" show-overflow-tooltip>
+        <el-table-column prop="domain" label="域名" min-width="210" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="协议" width="80">
+        <el-table-column label="协议" width="74">
           <template #default="{ row }">
             <el-tag :type="row.protocol === 'tcp' ? 'warning' : (row.enable_tls ? 'success' : 'primary')" size="small" effect="plain">
               {{ row.protocol === 'tcp' ? 'TCP' : (row.enable_tls ? 'HTTPS' : 'HTTP') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="负载策略" width="100" align="center">
+        <el-table-column label="负载策略" width="94" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="80" align="center">
+        <el-table-column prop="listen_port" label="端口" width="56" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="上游" width="60" align="center">
+        <el-table-column label="上游" width="58" align="center">
           <template #default="{ row }">
             <el-tag :type="row.dynamic_dns ? 'primary' : 'success'" size="small" effect="plain">
               {{ row.dynamic_dns ? '动态' : '静态' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="TLS" width="110" align="center">
+        <el-table-column label="TLS" width="98" align="center">
           <template #default="{ row }">
             <el-popover
               v-if="row.enable_tls"
@@ -168,7 +172,7 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="健康" width="80" align="center">
+        <el-table-column label="健康" width="58" align="center">
           <template #default="{ row }">
             <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
               <template #reference>
@@ -203,23 +207,43 @@
                     </div>
                   </div>
                 </template>
+                <!-- 路径规则自定义上游（2026-09-21 用户裁定）：仅自定义路由开启且路径规则携带上游时，
+                     主上游之后按路径规则分组展示（健康/指标键同 host:port，复用既有查询函数） -->
+                <template v-for="pathRule in healthPathRules(row)" :key="pathRule.id ?? pathRule.path">
+                  <div v-if="pathRule.upstreams && pathRule.upstreams.length > 0" class="path-rule-health-group">
+                    <div class="path-rule-health-title">{{ pathRule.path }}（{{ pathRule.match_type === 'exact' ? '精确' : '前缀' }}）</div>
+                    <div v-for="pu in pathRule.upstreams" :key="`${pu.address}:${pu.port}`" class="upstream-item">
+                      <div class="upstream-item-row">
+                        <span class="upstream-address">{{ pu.address }}:{{ pu.port }}</span>
+                        <span class="upstream-status">
+                          <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                          <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                          <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
+                          <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
+                          <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
+                          <span v-if="getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails > 0" class="upstream-fails">失败 {{ getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails }}</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </div>
             </el-popover>
             <el-tag v-else-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新者" width="80" align="center">
+        <el-table-column label="更新者" width="68" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="160" align="center">
+        <el-table-column label="更新时间" width="140" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="70" align="center">
+        <el-table-column label="状态" width="56" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -230,7 +254,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right" align="center">
+        <el-table-column label="操作" width="168" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
@@ -1084,7 +1108,7 @@ import { formatDate } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import RuleFlowDialog from '@/components/RuleFlowDialog.vue'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { buildStageModel, wafModeLabel, wafModeTagType } from '@/utils/securityStages'
+import { buildStageModel } from '@/utils/securityStages'
 import type {
   RuleFlowTarget,
   RuleStageModel,
@@ -1096,6 +1120,7 @@ import type {
 import type {
   APIResponse,
   CreateRuleRequest,
+  PathRule,
   ProxyTimeoutConfig,
   PathRuleUpstream,
   Rule,
@@ -1355,10 +1380,6 @@ const openFlowFromLock = (rule: Rule): void => {
 
 const ruleStageModel = (rule: Rule): RuleStageModel =>
   ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPages.value, rule)
-
-// 锁 hover 摘要的阶段 3 模式 tag：策略 id → mode（缺省回落 off）
-const policyModeOf = (policyId: number): string =>
-  securityPolicies.value.find((p) => p.id === policyId)?.mode ?? 'off'
 
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -1658,6 +1679,12 @@ interface HealthSummary { healthy: number; unhealthy: number; degraded: number; 
 const getEnabledUpstreams = (rule: Rule): Upstream[] =>
   rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
 
+// 健康 hover 的路径规则自定义上游（2026-09-21 用户裁定）：仅自定义路由开启时展示，主上游之后
+// 按路径规则分组；后端 GetUpstreamHealthDetailed 已含路径规则代理上游（键同 host:port，直达命中）
+const healthPathRules = (rule: Rule): PathRule[] => (rule.custom_routes_enabled ? rule.path_rules || [] : [])
+// PathRuleUpstream.address 即主机（该类型无 enabled 标志，列出即生效上游），适配既有健康/指标查询入参
+const pathUpstreamRef = (upstream: PathRuleUpstream): { host: string; port: number } => ({ host: upstream.address, port: upstream.port })
+
 const getHealthTagType = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded === status.total) return 'danger'
   if (status.unhealthy + status.degraded > 0) return 'warning'
@@ -1685,7 +1712,7 @@ interface UpstreamHealthView {
   dynamic?: boolean
   degraded: boolean
 }
-const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput): UpstreamHealthView => {
+const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput | { host: string; port: number }): UpstreamHealthView => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { healthy: false, unknown: true, degraded: false }
   const upstreamKey = hostPortKey(upstream.host, upstream.port)
@@ -1695,7 +1722,7 @@ const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamIn
     : { healthy: false, unknown: true, degraded: false }
 }
 
-const getUpstreamMetrics = (ruleId: string, upstream: Upstream | UpstreamInput) => {
+const getUpstreamMetrics = (ruleId: string, upstream: Upstream | UpstreamInput | { host: string; port: number }) => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { num_requests: 0, fails: 0 }
   const upstreamKey = hostPortKey(upstream.host, upstream.port)
@@ -3367,6 +3394,9 @@ onUnmounted(() => {
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+/* 表格密度（列宽重排 2026-09-21）：.cell 水平内边距 12→8px，12 列合计省 96px——
+   总最小宽收敛进典型容器宽（消除横向滚动条）的前提项 */
+.rules-table :deep(.el-table .cell) { padding: 0 8px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }
@@ -3490,6 +3520,9 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
+/* 路径规则自定义上游分组（健康 hover，2026-09-21 用户裁定） */
+.path-rule-health-title { font-size: 11px; color: #9ca3af; margin: 6px 0 2px; }
+
 .upstream-item-row {
   display: flex;
   align-items: center;
@@ -3539,7 +3572,7 @@ onUnmounted(() => {
 }
 .operation-buttons .el-button {
   margin: 0;
-  padding: 2px 4px;
+  padding: 2px 2px;
   min-width: auto;
   line-height: 1;
 }
@@ -3855,7 +3888,7 @@ onUnmounted(() => {
 <style>
 
 /* 锁 hover 阶段摘要：卡片化分组 + 阶段色阶标题行 */
-.rule-lock-popper { padding: 10px 12px !important; }
+.rule-lock-popper { padding: 10px 12px !important; max-height: 62vh; overflow-y: auto; }
 .rule-lock-popper .lock-summary { display: flex; flex-direction: column; gap: 8px; }
 .rule-lock-popper .lock-summary-title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .rule-lock-popper .lock-stage { border: 1px solid #ebeef5; border-radius: 8px; padding: 6px 10px; background: #fff; }
@@ -3864,10 +3897,17 @@ onUnmounted(() => {
 .rule-lock-popper .lock-stage-head--s1 { color: var(--el-color-primary); }
 .rule-lock-popper .lock-stage-head--s2 { color: var(--el-color-warning); }
 .rule-lock-popper .lock-stage-head--s3 { color: var(--el-color-danger); }
-.rule-lock-popper .lock-stage-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; line-height: 1.8; }
-.rule-lock-popper .lock-stage-line.is-disabled { opacity: 0.45; }
+.rule-lock-popper .lock-stage-line { font-size: 12px; color: #374151; line-height: 1.8; }
 .rule-lock-popper .lock-stage-empty { color: #b1b5bd; }
-.rule-lock-popper .lock-policy-name { font-weight: 500; color: #1f2937; }
-.rule-lock-popper .lock-policy-detail { color: #6b7280; }
+/* 策略小组：多策略同阶段时框式分区；单策略（is-compact）免框保持紧凑不加重层级 */
+.rule-lock-popper .lock-policy-group { border: 1px solid #f3f4f6; border-radius: 6px; padding: 5px 8px; }
+.rule-lock-popper .lock-policy-group + .lock-policy-group { margin-top: 6px; }
+.rule-lock-popper .lock-policy-group.is-compact { border: none; padding: 0; }
+.rule-lock-popper .lock-policy-group.is-disabled { opacity: 0.45; }
+.rule-lock-popper .lock-policy-head { display: flex; align-items: center; gap: 6px; margin-bottom: 1px; }
+.rule-lock-popper .lock-policy-name { font-size: 12px; font-weight: 500; color: #1f2937; }
+.rule-lock-popper .lock-stage-row { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: #374151; line-height: 1.7; }
+.rule-lock-popper .lock-row-label { flex: 0 0 auto; color: #9ca3af; }
+.rule-lock-popper .lock-row-detail { min-width: 0; color: #374151; word-break: break-all; }
 .rule-lock-popper .lock-summary-hint { font-size: 12px; color: #9ca3af; border-top: 1px dashed #e5e7eb; padding-top: 6px; }
 </style>

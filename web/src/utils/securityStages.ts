@@ -3,6 +3,7 @@
 // 阶段词汇：阶段 1 = IP 访问控制 + 地域拦截（预检）；阶段 2 = 限流（恒 429）；
 // 阶段 3 = WAF（自定义 + CRS）。规则可为阶段 1/3 配拦截页覆盖（0 = 跟随策略，
 // 即 v2.3.1 逐策略归因默认层）。
+import type { RuleFlowPathRule } from '@/types/rules'
 
 export interface SecurityStageIPListEntry { value: string; remark?: string }
 export interface SecurityStageIPList {
@@ -187,6 +188,8 @@ export interface RuleFlowTarget {
   // 健康口径：规则级计数 + 逐上游状态映射（host:port 键）；无探针数据时调用方不传
   health?: { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
   upstreamHealth?: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; dynamic?: boolean }>
+  // 自定义路径规则分发（流程弹框「路由分发」区块）；缺省/空 = 仅主路由，渲染不变
+  pathRules?: RuleFlowPathRule[]
 }
 
 // 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · 限流 → 阶段 3 · WAF
@@ -211,19 +214,6 @@ export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
   1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
   3: '阶段 3 · WAF',
-}
-
-export const wafModeLabel = (mode: string): string => {
-  if (mode === 'blocking') return '拦截'
-  if (mode === 'detection') return '检测'
-  if (mode === 'custom_only') return '仅自定义'
-  return '关闭'
-}
-
-export const wafModeTagType = (mode: string): 'danger' | 'warning' | 'info' => {
-  if (mode === 'blocking') return 'danger'
-  if (mode === 'detection') return 'warning'
-  return 'info'
 }
 
 // ip 名单 JSON 文本 → 字符串数组（坏数据回退空数组，不得炸渲染路径）

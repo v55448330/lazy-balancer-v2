@@ -25,6 +25,14 @@ export interface PathRuleUpstream {
   weight: number
 }
 
+// 流程弹框「路由分发」行（RuleFlowTarget.pathRules 元素，渲染投影形状）：上游仅
+// 携带主机/端口/启用位，健康态由弹框按 upstreamHealth 快照同逻辑映射
+export interface RuleFlowPathRule {
+  path: string
+  match_type: string
+  upstreams: Array<{ host: string; port: number; enabled: boolean }>
+}
+
 export interface PathRule {
   id?: number
   match_type: 'prefix' | 'exact'

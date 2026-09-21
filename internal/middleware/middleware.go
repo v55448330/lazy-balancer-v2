@@ -424,6 +424,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/security/ip-lists/:id", h.DeleteIPList)
 				admin.POST("/security/ip-lists/:id/ips", h.AddIPToList)
 
+				// 安全测试事件（R45 验证辅助）：生成/清除固定标记（lb_testevent）
+				// 的 curated 事件集，供面板四条消费链验证；仅写 metrics 库零渲染，
+				// 从节点由 readOnlyGuard 拦截。
+				admin.POST("/security/test-events", h.CreateSecurityTestEvents)
+				admin.DELETE("/security/test-events", h.DeleteSecurityTestEvents)
+
 			}
 
 			// User + Admin

@@ -8,6 +8,8 @@
         </h2>
         <p class="page-desc">查看 WAF 拦截和检测的安全事件记录</p>
       </div>
+      <el-button v-if="isAdmin" size="small" link type="primary" :loading="creatingTestEvents" :disabled="clearingTestEvents" @click="confirmCreateTestEvents">生成测试事件</el-button>
+      <el-button v-if="isAdmin" size="small" link type="danger" :loading="clearingTestEvents" :disabled="creatingTestEvents" @click="confirmClearTestEvents">清除测试事件</el-button>
       <el-button :icon="Refresh" @click="fetchEvents">刷新</el-button>
     </div>
 
@@ -311,7 +313,7 @@ import { Refresh, Warning, ArrowRight, View, Hide } from '@element-plus/icons-vu
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CheckboxValueType } from 'element-plus'
 import { showSaveResult } from '@/utils/saveResult'
-import { request, ApiRequestError } from '@/utils/api'
+import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
@@ -756,6 +758,58 @@ const fetchEvents = async () => {
     if (requestSeq === fetchEventsSeq) loading.value = false
   }
 }
+// —— 测试事件生成/清除（R45 验证辅助，admin-only，与 Keys.isAdmin 同判定口径）——
+// 生成 12 条标记 lb_testevent 的 curated 模拟事件（覆盖各阶段/各 IP/时间分布，
+// 计入安全总览与阶段统计）；清除仅删标记行，用户真实事件不受影响。两动作 loading
+// 互斥（各自 disabled 对方）；非 admin 的 403 文案由全局拦截器原样透出。
+const isAdmin = computed(() => authStore.user?.role === 'admin')
+const creatingTestEvents = ref(false)
+const clearingTestEvents = ref(false)
+
+const confirmCreateTestEvents = async (): Promise<void> => {
+  if (creatingTestEvents.value || clearingTestEvents.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将写入 12 条标记为 lb_testevent 的模拟事件（覆盖各阶段/各 IP/时间分布），计入安全总览与阶段统计，可用清除按钮删除。是否继续？',
+      '生成测试事件',
+      { confirmButtonText: '生成', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  creatingTestEvents.value = true
+  try {
+    const res = await request.post<APIResponse<{ inserted: number }>>('/security/test-events')
+    mfaAwareSuccess(`已生成 ${res.data?.inserted ?? 0} 条测试事件`)
+    page.value = 1
+    await fetchEvents()
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    creatingTestEvents.value = false
+  }
+}
+
+const confirmClearTestEvents = async (): Promise<void> => {
+  if (creatingTestEvents.value || clearingTestEvents.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将删除全部标记为 lb_testevent 的测试事件，用户真实事件不受影响。是否继续？',
+      '清除测试事件',
+      { confirmButtonText: '清除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  clearingTestEvents.value = true
+  try {
+    const res = await request.delete<APIResponse<{ deleted: number }>>('/security/test-events')
+    mfaAwareSuccess(`已清除 ${res.data?.deleted ?? 0} 条测试事件`)
+    page.value = 1
+    await fetchEvents()
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    clearingTestEvents.value = false
+  }
+}
+
 onMounted(fetchEvents)
 </script>
 

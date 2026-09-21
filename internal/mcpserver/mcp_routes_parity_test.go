@@ -116,6 +116,9 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/logs/stats":            "9 类日志的存储大小/轮转/保留策略状态，面板日志页展示用；不涉及 Agent 的排障操作路径",
 	"GET /api/v1/security/crs/setup":    "CRS setup.conf 配置文件原文查看，面板 CRS 配置展示用；Agent 排查规则走 get_crs_rule/get_crs_rule_index",
 	"GET /api/v1/security/events/count": "IP 弹框上下文查询(近 N 天单 IP 事件计数),轻量专用端点;MCP 场景用 list_security_events 的 ip 过滤+total 覆盖同等信息",
+	// —— 管理员测试辅助(UI-only)——
+	"POST /api/v1/security/test-events":   "管理员测试辅助端点,UI-only:生成固定标记(lb_testevent)的 curated 安全事件集供面板展示验证;Agent 无消费场景",
+	"DELETE /api/v1/security/test-events": "管理员测试辅助端点,UI-only:清除固定标记的安全测试事件;Agent 无消费场景",
 	// —— MCP 自身镜像端点 ——
 	"POST /api/v1/mcp":             "MCP Streamable HTTP JSON-RPC 端点本身：工具调用的入口即 MCP 协议，不是可经 MCP 转发的 REST 操作",
 	"GET /api/v1/mcp/tools":        "MCP 自身镜像端点：OpenAPI 形态的工具清单，供外部集成方发现工具",
