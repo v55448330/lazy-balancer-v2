@@ -44,8 +44,8 @@
         <div v-if="section.single" class="form-tip-line">每条规则最多绑定一条限流策略（后端对多限流绑定一律 400，消息原样透出）</div>
         <div v-if="section.options.length === 0" class="form-tip-line">暂无该类策略，到「安全防护 → 安全策略」页创建</div>
       </div>
-      <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择，
-           保存时不携带（后端拒绝新增 mixed 绑定，错误消息原样透出） -->
+      <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择。
+           存在绑定 mixed 时保存禁用——后端按提交集全量替换绑定，照常提交会静默剥离 mixed -->
       <div v-if="boundMixedPolicies.length > 0" class="bind-stage-group bind-stage-group--readonly">
         <div class="bind-stage-head">
           <span class="bind-stage-title">混合策略（兼容旧版）</span>
@@ -128,12 +128,20 @@
         <span v-else class="bind-total">已选 {{ pickerSelected.length }} 条规则</span>
         <div class="bind-footer-buttons">
           <el-button @click="emit('update:modelValue', false)">取消</el-button>
-          <el-button
-            type="primary"
-            :loading="saving"
-            :disabled="mode === 'rule' && ruleModeTotal > MAX_POLICY_BINDINGS"
-            @click="submit"
-          >保存绑定</el-button>
+          <el-tooltip
+            :disabled="!(mode === 'rule' && boundMixedPolicies.length > 0)"
+            content="存在已绑定的混合策略（只读），请先在策略页对其执行「更新迁移」，再调整绑定"
+            placement="top"
+          >
+            <span>
+              <el-button
+                type="primary"
+                :loading="saving"
+                :disabled="mode === 'rule' && (ruleModeTotal > MAX_POLICY_BINDINGS || boundMixedPolicies.length > 0)"
+                @click="submit"
+              >保存绑定</el-button>
+            </span>
+          </el-tooltip>
         </div>
       </div>
     </template>
@@ -344,7 +352,8 @@ const submit = async (): Promise<void> => {
     }
     saving.value = true
     try {
-      // mixed 不携带提交（后端拒绝新增 mixed 绑定，错误消息原样透出）
+      // mixed 不携带提交：后端按提交集全量替换绑定（携带 mixed 会被拒绝，不含
+      // mixed 的提交会静默剥离）；存在已绑 mixed 时保存按钮已禁用，不会走到这里
       await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
         policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
       })

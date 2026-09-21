@@ -452,3 +452,33 @@ func TestProvider_CleanUp_removes_ownership_of_independently_deleted_records(t *
 		t.Fatalf("ownership left=%+v, want only the failed record 200", left)
 	}
 }
+
+// U5-2（第 45 轮审计）基线钉：内存模式下删除失败仍回填 owned——failed 存储
+// 的唯一消费者是 ownership==nil 分支，失败条目门控后该既有形状不得破坏。
+func TestProvider_CleanUp_memoryModeReappendsFailedRecord(t *testing.T) {
+	// Given: memory-mode ownership whose only record fails to delete
+	provider, err := New("secret-id", "secret-key")
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	transport := &deleteFailTransport{recordTransport: recordTransport{records: map[uint64]string{}}, failRecordID: 200}
+	provider.client.WithHttpTransport(transport)
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600); err != nil {
+		t.Fatalf("present record: %v", err)
+	}
+
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: the failure is reported and the record returns to the in-memory
+	// owned table for a later cleanup within this process
+	if err == nil {
+		t.Fatal("clean up swallowed the deletion failure")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	entries := provider.owned["example.com|_acme-challenge"]
+	if len(entries) != 1 || entries[0].recordID != 200 {
+		t.Fatalf("owned entries=%+v, want failed record 200 re-appended", entries)
+	}
+}

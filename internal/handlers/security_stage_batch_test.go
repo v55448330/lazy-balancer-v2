@@ -288,3 +288,65 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 // 占位防漂移：seedEvent 的时间表达式拼接必须保持常量形态（防 SQL 注入面，
 // 本测试全部用例为字面量）。若未来参数化时间表达式，须改占位符绑定。
 var _ = fmt.Sprintf
+
+// APIMCP45-3：stage-stats 对不存在规则此前误归 500（message 借「规则不存在」
+// 文案但 code 500）——ErrNoRows 分判 404 not_found；其余 DB 故障保持 500 且
+// message 归位「阶段统计查询失败」。前端 RuleFlowDialog 对非 200 一律
+// stats=null（catch 分支），404 化不改变前端表现。
+func TestGetRuleStageStats_unknownRuleReturns404(t *testing.T) {
+	t.Run("unknown rule", func(t *testing.T) {
+		// Given：无 lb_rules 行的 caddy_id（metrics 查询空集照常成功）
+		handler, _ := newStageBatchTestHandlers(t)
+		router := stageBatchRouter(handler)
+
+		// When
+		request := httptest.NewRequest(http.MethodGet, "/security/rules/lb_absent/stage-stats", nil)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+
+		// Then
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("unknown rule status=%d body=%s, want 404", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode stage-stats: %v (body=%s)", err, response.Body.String())
+		}
+		if payload.Code != 404 || payload.Message != "规则不存在" {
+			t.Fatalf("payload=(%d,%q), want (404,规则不存在)", payload.Code, payload.Message)
+		}
+	})
+
+	t.Run("database failure stays 500", func(t *testing.T) {
+		// Given：主库句柄关闭（metrics 库为独立句柄，首个查询照常成功，
+		// 查询失败点落在 lb_rules 存在性检查——非 ErrNoRows 的 DB 故障）
+		handler, _ := newStageBatchTestHandlers(t)
+		router := stageBatchRouter(handler)
+		if err := db.DB.Close(); err != nil {
+			t.Fatalf("close main db: %v", err)
+		}
+
+		// When
+		request := httptest.NewRequest(http.MethodGet, "/security/rules/lb_absent/stage-stats", nil)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+
+		// Then
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("db failure status=%d body=%s, want 500", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode stage-stats: %v (body=%s)", err, response.Body.String())
+		}
+		if payload.Code != 500 || payload.Message != "阶段统计查询失败" {
+			t.Fatalf("payload=(%d,%q), want (500,阶段统计查询失败)", payload.Code, payload.Message)
+		}
+	})
+}

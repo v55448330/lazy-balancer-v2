@@ -143,7 +143,12 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			}
-			failed = append(failed, ownedRecord{recordID: recordID})
+			if p.ownership == nil {
+				// U5-2：failed 的唯一消费点是下方 ownership==nil 的 owned
+				// 回填；ownership 模式下失败条目由 ownership 留存（删除失败
+				// 不 Remove），不再写入死存储。
+				failed = append(failed, ownedRecord{recordID: recordID})
+			}
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
 			return err
 		}

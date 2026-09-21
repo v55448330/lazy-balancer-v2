@@ -200,7 +200,8 @@
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="closeProfile">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">保存</el-button>
+        <!-- U9-4：OIDC 用户全部字段只读（显示名/密码源自 IdP），保存必败（后端 400）——直接隐藏保存钮 -->
+        <el-button v-if="!isOIDCUser" type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">保存</el-button>
       </template>
     </el-dialog>
   </el-container>

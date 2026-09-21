@@ -31,8 +31,8 @@
 
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
-        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="1" :max="4096" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，请求体体积上限（WAF/代理流量/管理接口），默认 128</el-text>
+        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="4096" controls-position="right" class="number-input" />
+        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，请求体体积上限（WAF/代理流量/管理接口）；0 = 使用默认 128</el-text>
       </el-form-item>
       <el-form-item label="读取超时">
         <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />

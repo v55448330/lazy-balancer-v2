@@ -2551,3 +2551,113 @@ func TestValidateV2Backup_rejectsNonObjectIPListEntries(t *testing.T) {
 		t.Fatal("non-object entry (bare string) in IP list must be rejected (zone form hidden inside)")
 	}
 }
+
+// U6B-1（第 45 轮审计）：备份布尔门枚举漏 trust_detection——security_policies
+// 的阶段 0 信任检测开关（BOOLEAN NOT NULL DEFAULT 0）不在 backupBooleanTableColumns，
+// 字符串 "true" 形态经导入落库后由布尔门漏过：校验期读 false、存储期 SQLite 亲和性
+// 保留文本，同一值两期含义相反。畸形形态整包 400；布尔/0-1 数值放行且落库正确。
+func TestValidateV2BackupBooleanTypes_rejectsMalformedTrustDetection(t *testing.T) {
+	rejects := []struct {
+		name string
+		raw  any
+	}{
+		{"string true", "true"},
+		{"string 1", "1"},
+		{"number 2", 2},
+	}
+	for _, tt := range rejects {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			backup := completeBackupJSON(t, map[string][]map[string]any{
+				"security_policies": {{"id": 1, "name": "p", "trust_detection": tt.raw}},
+			})
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("trust_detection=%v(%T): status=%d body=%s, want 400", tt.raw, tt.raw, response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), "trust_detection") {
+				t.Fatalf("rejection must name the column, body=%s", response.Body.String())
+			}
+		})
+	}
+	accepts := []struct {
+		name string
+		raw  any
+		want int
+	}{
+		{"bool true", true, 1},
+		{"bool false", false, 0},
+		{"numeric 1", 1, 1},
+	}
+	for _, tt := range accepts {
+		t.Run("accepts_"+tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			backup := completeBackupJSON(t, map[string][]map[string]any{
+				"security_policies": {{"id": 1, "name": "p", "trust_detection": tt.raw}},
+			})
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("trust_detection=%v: status=%d body=%s, want 200", tt.raw, response.Code, response.Body.String())
+			}
+			var stored int
+			if err := db.DB.QueryRow("SELECT trust_detection FROM security_policies WHERE id=1").Scan(&stored); err != nil {
+				t.Fatalf("read imported policy: %v", err)
+			}
+			if stored != tt.want {
+				t.Fatalf("trust_detection=%d, want %d", stored, tt.want)
+			}
+		})
+	}
+}
+
+// U6B-2（第 45 轮审计）：备份校验缺 policy_type 值域门——显式未知类型
+// （手编辑/带外改库导出）原样落库后策略页分组与阶段外字段归一判定漂移；
+// 非字符串形态与三枚举门同口径拒绝（R48-3 同型，backupString 不得静默
+// 归一）。空串/null/缺省放行——导入侧 restoreTable 对空行按内容重推断。
+func TestValidateV2BackupSecurityPolicies_rejectsUnknownPolicyType(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		raw  any
+	}{
+		{"unknown value", "bogus"},
+		{"non-string", 2},
+	} {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			tables := map[string][]map[string]any{
+				"security_policies": {{"id": 1, "name": "p", "policy_type": tt.raw}},
+			}
+			err := validateV2BackupSecurityPolicies(tables)
+			if err == nil {
+				t.Fatalf("policy_type=%v(%T) must be rejected", tt.raw, tt.raw)
+			}
+			if !strings.Contains(err.Error(), "policy_type") {
+				t.Fatalf("error=%q, want mention of policy_type", err)
+			}
+		})
+	}
+	legal := []string{"", "stage0", "stage1", "stage2", "stage3", "mixed"}
+	for _, value := range legal {
+		t.Run("accepts_"+value, func(t *testing.T) {
+			tables := map[string][]map[string]any{
+				"security_policies": {{"id": 1, "name": "p", "policy_type": value}},
+			}
+			if err := validateV2BackupSecurityPolicies(tables); err != nil {
+				t.Fatalf("policy_type=%q must pass (empty is re-inferred at restore; explicit five enums pass through): %v", value, err)
+			}
+		})
+	}
+}

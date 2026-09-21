@@ -247,3 +247,62 @@ func TestMCPEndpointRejectsRequestBodyLargerThanOneMiB(t *testing.T) {
 		t.Fatalf("status=%d body=%q, want 413", response.Code, response.Body.String())
 	}
 }
+
+// APIMCP45-6：mcpAccessGuard 两拒绝分支此前不留任何审计——无凭证探测 /mcp 与
+// 未开启 MCP 的 Key 使用在认证拒绝台账零痕迹（同链 adminOnly/apiKeyReadOnly/
+// readOnly 守卫均已留痕）。镜像既有形态：recordAuthenticationRejection +
+// securityAuditLimiter 去重（同 reason+path+ip 一分钟窗记 1 条）。
+func TestMCPAccessGuard_rejectionsAreAudited(t *testing.T) {
+	// Given：桩 apiKeyAuth 产物（auth_type/api_key_mcp_enabled 即守卫的全部输入）
+	recorded := captureAuthenticationSecurityAudits(t)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		if key := c.GetHeader("X-API-Key"); key != "" {
+			c.Set("auth_type", "api_key")
+			c.Set("api_key_mcp_enabled", key == "lb_sk_mcp-on")
+		}
+		c.Next()
+	}, mcpAccessGuard())
+	router.POST("/api/v1/mcp", noContent)
+
+	// When：无凭证（JWT/匿名同形——auth_type 非 api_key），窗口内双发
+	serveRepeatedDeniedRequests(router, http.MethodPost, "/api/v1/mcp", "Authorization", "Bearer jwt-plaintext")
+
+	// Then：401 且落 mcp_auth_rejected 审计（限重窗去重为 1 条，不泄漏凭证）
+	assertSingleSecurityAudit(t, *recorded, "mcp_auth_rejected", "jwt-plaintext")
+
+	// When：Key 有效但未开启 MCP
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", nil)
+	request.RemoteAddr = "198.51.100.77:1234"
+	request.Header.Set("X-API-Key", "lb_sk_mcp-off")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：403 且落 mcp_disabled 审计（独立原因类别，不与上一窗合并）
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("mcp disabled status=%d body=%s, want 403", response.Code, response.Body.String())
+	}
+	if len(*recorded) != 2 {
+		t.Fatalf("security audit events=%d, want 2: %q", len(*recorded), *recorded)
+	}
+	if !strings.Contains((*recorded)[1], "原因类别：mcp_disabled") {
+		t.Fatalf("security audit=%q, want reason mcp_disabled", (*recorded)[1])
+	}
+	if strings.Contains((*recorded)[1], "lb_sk_mcp-off") {
+		t.Fatalf("security audit leaked credential: %q", (*recorded)[1])
+	}
+
+	// When：已开启 MCP 的有效 Key 正常透传
+	passage := httptest.NewRecorder()
+	passageRequest := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", nil)
+	passageRequest.Header.Set("X-API-Key", "lb_sk_mcp-on")
+	router.ServeHTTP(passage, passageRequest)
+
+	// Then：透传至业务 handler，且不新增拒绝审计
+	if passage.Code != http.StatusNoContent {
+		t.Fatalf("valid key status=%d, want pass-through 204", passage.Code)
+	}
+	if len(*recorded) != 2 {
+		t.Fatalf("pass-through must not add rejection audits, got %d: %q", len(*recorded), *recorded)
+	}
+}

@@ -853,6 +853,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.ACMEConfigID = 0
 		// CERT41-4:证书材料随 TCP 归一弃置——其质量警告不得随审计留痕(误导)。
 		certWarnings = nil
+		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 创建携带页引用即归一 0
+		// (跟随策略),不留永不消费的死引用。
+		req.BlockPageStage1ID, req.BlockPageStage1Status = 0, 0
+		req.BlockPageStage3ID, req.BlockPageStage3Status = 0, 0
 	}
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
@@ -1340,6 +1344,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.HostHeader = &empty
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
+			// U3-1:阶段页 4 列仅 http 渲染消费,切换即清零(0=跟随策略)——
+			// 残留是永不消费的死配置,随快照/导出/复制放大。
+			req.BlockPageStage1ID = &zero
+			req.BlockPageStage1Status = &zero
+			req.BlockPageStage3ID = &zero
+			req.BlockPageStage3Status = &zero
 		case "http":
 			// LB-02：TCP 三字段已指针化，切回 http 时以显式零指针清理。
 			req.TCPHealthCheckPort = &zero
@@ -1360,9 +1370,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 隐藏 TLS 开关而无自救路径）；协议未变的 tcp 编辑在此顺带自愈。
 	if req.Protocol == "tcp" {
 		tcpDisabled := false
+		tcpZero := 0
 		req.EnableTLS = &tcpDisabled
 		req.TLSSource = "manual"
 		req.TLSCert, req.TLSKey = "", ""
+		// U3-1:阶段页 4 列仅 http 渲染消费——协议未变的 tcp 编辑在此自愈清零
+		// (存量行/导入态残留),显式携带同样归一 0(跟随策略,TCP 无消费面)。
+		req.BlockPageStage1ID = &tcpZero
+		req.BlockPageStage1Status = &tcpZero
+		req.BlockPageStage3ID = &tcpZero
+		req.BlockPageStage3Status = &tcpZero
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
@@ -1449,7 +1466,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Load existing upstreams if not provided in request
 	// LB43-4(第 43 轮):nil 判定区分「省略」与「显式空数组」——len==0 会把显式
 	// [] 归并进保留存量,与 updateRuleFeatures(:87 按 nil 判空)的校验输入分叉。
-	// 显式 []=清空(零上游为合法形态:渲染整跳过,Round 31 C-2 特判)。
+	// 显式 []=非合法形态:下游 validateRulePayloadBeforeSave「至少需要一个上游
+	// 服务器」(handlers.go:546)400 拒绝、存量不变(U3-3 注释纠正:此处曾误称
+	// 「显式 []=清空,零上游为合法形态」——实际清空路径被 400 拒绝,LB43-4 裁定)。
 	if req.Upstreams == nil {
 		req.Upstreams = oldUpstreams
 	}
@@ -2299,6 +2318,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// LB43-5(第 43 轮):TCP 死形态归一补齐 CAProviderID——CreateRule(:890)
 		// 与 UpdateRule(:1296)两入口均已清零,复制路径漏清会把源行遗留死形态放大到副本。
 		rule.CAProviderID = 0
+		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 源行的存量非零值(导入态残留)
+		// 不再放大到副本,副本落 0(跟随策略)。
+		rule.BlockPageStage1ID, rule.BlockPageStage1Status = 0, 0
+		rule.BlockPageStage3ID, rule.BlockPageStage3Status = 0, 0
 	}
 
 	userIDInt := contextUserID(c)
@@ -2348,6 +2371,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		ProxyReadTimeout: rule.ProxyReadTimeout, ProxyWriteTimeout: rule.ProxyWriteTimeout,
 		ProxyStreamTimeout: rule.ProxyStreamTimeout, ProxyFlushInterval: rule.ProxyFlushInterval,
 		ProxyStreamCloseDelay: rule.ProxyStreamCloseDelay,
+		// U3-4:TCP 三字段随负值门接入——复制路径与 CreateRule/UpdateRule 同校验
+		// (Round 38 B3 契约),不留绕行口。
+		TCPHealthCheckPort: rule.TCPHealthCheckPort,
+		TCPTryDuration:     rule.TCPTryDuration,
+		TCPTryInterval:     rule.TCPTryInterval,
 	}); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "源规则配置不合法：" + err.Error()})
 		return
@@ -2488,7 +2516,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 // {rule_ids:[], block_page_stage1_id, block_page_stage1_status,
 // block_page_stage3_id, block_page_stage3_status}——同校验（页存在/状态码集，
 // validateStageBlockPageRef 共享），单事务逐规则 UPDATE lb_rules 4 列 +
-// 一次 finishTxApply（单渲染）。响应 {bound:n, skipped:[{rule_id,reason}]}。
+// 一次 finishTxApply（单渲染）。非 http（tcp）规则跳过不 UPDATE——阶段页
+// 仅 http 渲染消费（与 batch-bind 同口径）。响应 {bound:n, skipped:[{rule_id,reason}]}。
 func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
@@ -2544,6 +2573,22 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	for _, ruleCaddyID := range req.RuleIDs {
 		ruleCaddyID = strings.TrimSpace(ruleCaddyID)
 		if ruleCaddyID == "" {
+			continue
+		}
+		// U3-1:阶段页 4 列仅 http 渲染消费——非 http(tcp)先查后跳过不 UPDATE
+		// (与 batch-bind 的 TCP 跳过同文案同口径),仅不存在记「规则不存在」。
+		var ruleExists int
+		var ruleProtocol string
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if ruleExists == 0 {
+			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
+			continue
+		}
+		if ruleProtocol != "http" {
+			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
 			continue
 		}
 		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=? WHERE caddy_id=?`,

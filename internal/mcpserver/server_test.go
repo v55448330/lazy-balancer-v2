@@ -761,3 +761,47 @@ func TestExportConfigToolRejectsNonJSONContentType(t *testing.T) {
 		t.Fatalf("export_config result leaked binary payload: %s", result)
 	}
 }
+
+// APIMCP45-1：get_rule_stage_stats 带必填路径参数却声明 emptySchema——运行时未
+// 启用 WithInputSchemaValidation，input_schema 是 Agent 侧唯一的参数契约文档，
+// 缺 caddy_id 声明会让 Agent 无从得知该 GET 需要路径参数。与同族
+// get_rule_security_policy 的 idSchema 形态对齐。
+func TestToolSpecs_stageStatsSchemaDeclaresCaddyID(t *testing.T) {
+	// Given
+	found := false
+	var schemaJSON json.RawMessage
+	for _, item := range ListToolSpecs() {
+		if item.Name == "get_rule_stage_stats" {
+			found = true
+			schemaJSON = item.InputSchema
+			break
+		}
+	}
+	if !found {
+		t.Fatal("get_rule_stage_stats missing from ListToolSpecs")
+	}
+
+	// When
+	var schema struct {
+		Required   []string       `json:"required"`
+		Properties map[string]any `json:"properties"`
+	}
+	err := json.Unmarshal([]byte(schemaJSON), &schema)
+
+	// Then
+	if err != nil {
+		t.Fatalf("parse stage-stats input schema: %v (%s)", err, schemaJSON)
+	}
+	if _, exists := schema.Properties["caddy_id"]; !exists {
+		t.Fatalf("stage-stats input_schema missing caddy_id property: %s", schemaJSON)
+	}
+	required := false
+	for _, name := range schema.Required {
+		if name == "caddy_id" {
+			required = true
+		}
+	}
+	if !required {
+		t.Fatalf("stage-stats input_schema required=%v, want caddy_id declared required", schema.Required)
+	}
+}

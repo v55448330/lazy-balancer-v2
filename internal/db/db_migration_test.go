@@ -567,7 +567,11 @@ func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *test
 			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
 			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
 			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
+			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
@@ -1406,7 +1410,11 @@ func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
 			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
 			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
+			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
@@ -1798,7 +1806,11 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
 			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
 			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
+			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
@@ -2043,5 +2055,279 @@ func TestRunMigrations_addsUserLoginLockoutColumns(t *testing.T) {
 	}
 	if attempts != 0 {
 		t.Fatalf("login_failed_attempts=%d, want default 0", attempts)
+	}
+}
+
+// U6B-3（第 45 轮审计）：fresh CREATE 的 DDL 滞后——security_policies 缺
+// policy_type/trust_detection、lb_rules 缺 block_page_stage1/3_id/status、
+// auto_backups 缺 app_version，四组列此前仅靠 newColumns 启动补列；新库
+// 建表即应携带完整形状（newColumns 保留作存量库 ALTER 通道不动）。
+func TestCreateTables_freshSchemaCarriesStagedPolicyRuleAndBackupColumns(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	expectColumns := map[string][]struct {
+		name string
+		dflt string
+	}{
+		"security_policies": {{"policy_type", "''"}, {"trust_detection", "0"}},
+		"lb_rules":          {{"block_page_stage1_id", "0"}, {"block_page_stage1_status", "0"}, {"block_page_stage3_id", "0"}, {"block_page_stage3_status", "0"}},
+		"auto_backups":      {{"app_version", "''"}},
+	}
+	for table, columns := range expectColumns {
+		for _, col := range columns {
+			var notNull int
+			var dflt string
+			if err := database.QueryRow(`SELECT "notnull", COALESCE(dflt_value,'') FROM pragma_table_info('`+table+`') WHERE name=?`, col.name).Scan(&notNull, &dflt); err != nil {
+				t.Fatalf("%s.%s missing from fresh schema: %v", table, col.name, err)
+			}
+			if notNull != 1 {
+				t.Fatalf("%s.%s notnull=%d, want 1", table, col.name, notNull)
+			}
+			if dflt != col.dflt {
+				t.Fatalf("%s.%s default=%q, want %q", table, col.name, dflt, col.dflt)
+			}
+		}
+	}
+}
+
+// U6B-3（第 45 轮审计）：migrateSecurityPoliciesNullable 重建 DDL 滞后——
+// DDL 未携带 policy_type/trust_detection，窗口期库重建把 newColumns 早前
+// 加的两列连同数据一并丢弃：trust_detection 无任何回填路径（显式值永久
+// 归零）；policy_type 靠内容重推断「自愈」但显式 stage0 空信任列表行会被
+// 误推断为 stage3。重建必须携带两列并保数据。
+func TestInitialize_preservesStagedColumnsOnSecurityPoliciesRebuild(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	// 构造窗口期形态：四列 NOT NULL（触发重建）+ 已携带 policy_type/
+	// trust_detection（模拟上一轮启动 ensureNewColumns 已加列）与存量行。
+	if _, err := DB.Exec(`DROP TABLE security_policies;
+		CREATE TABLE security_policies (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			mode TEXT DEFAULT 'off',
+			anomaly_threshold INTEGER DEFAULT 5,
+			ip_acl_mode TEXT DEFAULT '',
+			ip_acl_list TEXT DEFAULT '[]',
+			ip_acl_enabled BOOLEAN DEFAULT FALSE,
+			ip_whitelist TEXT DEFAULT '[]',
+			ip_blacklist TEXT DEFAULT '[]',
+			rate_limit_enabled BOOLEAN DEFAULT FALSE,
+			rate_limit_rps INTEGER DEFAULT 0,
+			rate_limit_burst INTEGER DEFAULT 0,
+			crs_rule_groups TEXT DEFAULT '[]',
+			crs_excluded_rules TEXT DEFAULT '[]',
+			custom_rules TEXT DEFAULT '[]',
+			block_page_id INTEGER DEFAULT 0,
+			block_status_code INTEGER NOT NULL DEFAULT 0,
+			enabled BOOLEAN DEFAULT TRUE,
+			updated_by INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT (datetime('now')),
+			updated_at DATETIME DEFAULT (datetime('now')),
+			geoip_countries TEXT NOT NULL DEFAULT '[]',
+			geoip_mode TEXT NOT NULL DEFAULT 'deny',
+			waf_check_response INTEGER NOT NULL DEFAULT 0,
+			policy_type TEXT NOT NULL DEFAULT '',
+			trust_detection BOOLEAN NOT NULL DEFAULT 0
+		);
+		INSERT INTO security_policies (id,name,geoip_countries,geoip_mode,waf_check_response,block_status_code,enabled,policy_type,trust_detection)
+		VALUES (1,'window-era','[]','deny',0,0,1,'stage0',1);`); err != nil {
+		t.Fatalf("seed window-era security_policies: %v", err)
+	}
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+
+	// Then: 显式 policy_type 与 trust_detection 存活
+	var policyType string
+	var trustDetection int
+	if err := DB.QueryRow(`SELECT policy_type, trust_detection FROM security_policies WHERE id=1`).Scan(&policyType, &trustDetection); err != nil {
+		t.Fatalf("read migrated policy staged columns: %v", err)
+	}
+	if policyType != "stage0" {
+		t.Fatalf("policy_type=%q, want stage0 (explicit type must survive rebuild; content re-inference misreads empty-trust stage0 as stage3)", policyType)
+	}
+	if trustDetection != 1 {
+		t.Fatalf("trust_detection=%d, want 1 (explicit value has no backfill path; rebuild must preserve it)", trustDetection)
+	}
+}
+
+// U6B-3（第 45 轮审计）：migrateLbRulesPrimaryKey 重建 DDL/拷贝清单滞后——
+// 未携带 block_page_stage1/3_id/status 四列，遗留 id-主键库启动重建把阶段
+// 拦截页列连同值一并丢弃；且本重建位于 D403-P2-1 二次 ensureNewColumns
+// 安全网之后，丢列无同启动自愈（规则保存/读取直接 no such column）。
+func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE lb_rules (
+			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
+			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
+			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
+			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
+			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
+			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
+			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
+			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
+			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
+			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
+			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
+			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
+			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
+			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE upstreams (
+			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
+			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT
+		);
+		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id, block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
+		VALUES (7, 'legacy', 'http', 8080, 'lb_stagepages', 5, 2, 7, 1);
+	`); err != nil {
+		t.Fatalf("seed legacy load-balancer schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When：遗留库启动一次（PK 重建 DROP 并重建 lb_rules）
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize legacy database: %v", err)
+	}
+
+	// Then：四列存在且值存活
+	for _, col := range []string{"block_page_stage1_id", "block_page_stage1_status", "block_page_stage3_id", "block_page_stage3_status"} {
+		var cnt int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?`, col).Scan(&cnt); err != nil {
+			t.Fatalf("read lb_rules.%s schema: %v", col, err)
+		}
+		if cnt != 1 {
+			t.Fatalf("lb_rules.%s missing after PK rebuild boot (rebuild DDL lag, no same-boot self-heal)", col)
+		}
+	}
+	var s1ID, s1Status, s3ID, s3Status int
+	if err := DB.QueryRow(`SELECT block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status
+		FROM lb_rules WHERE caddy_id='lb_stagepages'`).Scan(&s1ID, &s1Status, &s3ID, &s3Status); err != nil {
+		t.Fatalf("read migrated rule stage pages: %v", err)
+	}
+	if s1ID != 5 || s1Status != 2 || s3ID != 7 || s3Status != 1 {
+		t.Fatalf("stage pages=(%d,%d,%d,%d), want (5,2,7,1)", s1ID, s1Status, s3ID, s3Status)
+	}
+}
+
+// U6a-1（第 45 轮审计）：OIDC 身份三元组唯一索引——JIT 开户并发回调窗口可
+// 产生重复 (issuer,subject) 行。partial 索引只约束 oidc 行：本地用户、历史
+// 空 subject 行不受影响。
+func TestInitialize_createsOidcIdentityUniqueIndex(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+
+	var indexCount int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('users') WHERE name='u_oidc_identity'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect users indexes: %v", err)
+	}
+	if indexCount != 1 {
+		t.Fatalf("u_oidc_identity index missing after initialize, want 1")
+	}
+
+	seed := func(username, provider, subject, issuer string) error {
+		_, err := DB.Exec(`INSERT INTO users (username, password_hash, role, is_enabled, auth_provider, oidc_subject, oidc_issuer)
+			VALUES (?, 'x', 'user', 1, ?, ?, ?)`, username, provider, subject, issuer)
+		return err
+	}
+	if err := seed("oidc-a", "oidc", "sub-1", "https://idp.example.com"); err != nil {
+		t.Fatalf("seed first identity: %v", err)
+	}
+	if err := seed("oidc-b", "oidc", "sub-1", "https://idp.example.com"); err == nil {
+		t.Fatal("duplicate oidc identity insert must violate u_oidc_identity")
+	} else if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Fatalf("duplicate identity error = %v, want UNIQUE constraint violation", err)
+	}
+	// 负控：同 subject 异 issuer、local 同身份、空 subject 两行各自放行
+	controls := []struct{ username, provider, subject, issuer string }{
+		{"oidc-c", "oidc", "sub-1", "https://other.example.com"},
+		{"local-a", "local", "sub-1", "https://idp.example.com"},
+		{"oidc-empty-1", "oidc", "", "https://idp.example.com"},
+		{"oidc-empty-2", "oidc", "", "https://idp.example.com"},
+	}
+	for _, tc := range controls {
+		if err := seed(tc.username, tc.provider, tc.subject, tc.issuer); err != nil {
+			t.Fatalf("seed control %s must pass: %v", tc.username, err)
+		}
+	}
+}
+
+// U6a-1（第 45 轮审计）：安全阀——存量库存在重复 OIDC 身份时跳过建索引并
+// 告警，绝不因历史脏数据拖垮启动；重复行原样保留，待人工处置后重启自动建索引。
+func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	// 移除索引后播种重复身份（模拟索引诞生前的历史脏数据）
+	if _, err := DB.Exec("DROP INDEX IF EXISTS u_oidc_identity"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	for _, username := range []string{"dup-a", "dup-b"} {
+		if _, err := DB.Exec(`INSERT INTO users (username, password_hash, role, is_enabled, auth_provider, oidc_subject, oidc_issuer)
+			VALUES (?, 'x', 'user', 1, 'oidc', 'sub-dup', 'https://idp.example.com')`, username); err != nil {
+			t.Fatalf("seed duplicate %s: %v", username, err)
+		}
+	}
+
+	// When：安全阀启动——不得报错
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize with duplicate oidc identities must not fail: %v", err)
+	}
+
+	// Then：索引未建，重复行原样保留
+	var indexCount int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('users') WHERE name='u_oidc_identity'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect users indexes: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("u_oidc_identity must be skipped on duplicate identities, found %d", indexCount)
+	}
+	var dupCount int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM users WHERE auth_provider='oidc' AND oidc_subject='sub-dup'`).Scan(&dupCount); err != nil {
+		t.Fatalf("count duplicates: %v", err)
+	}
+	if dupCount != 2 {
+		t.Fatalf("duplicate rows=%d, want 2 (untouched by safety valve)", dupCount)
 	}
 }

@@ -1615,8 +1615,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			// 发射阶段路由（matcher 仅阶段码+interruption 消息，无 host——阶段码
 			// 只可能由配了该页的规则段产生；terminal；status 0 归一 403 由
 			// buildBlockPageAttributionRoute 承担）。按 server 去重同 483+ 机制：
-			// 同 server 多规则配阶段页时先配置者生效（阶段码全局唯一，冲突在
-			// UI 侧按规则语义呈现）。阶段码与逐策略码域（483+）不相交可共存。
+			// 同 server 多规则配阶段页时先配置者生效（UI 无冲突提示面——web/src
+			// 反查零命中）；后配规则的阶段页中断将沿用先配置规则的页面与状态码。
+			// 阶段码与逐策略码域（483+）不相交可共存。
 			for _, stage := range []struct {
 				code   int
 				pageID int

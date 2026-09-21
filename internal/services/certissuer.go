@@ -631,6 +631,12 @@ func deploymentCommittedByConcurrentWinner(jobID int, material issuedCertificate
 	return err == nil && bytes.Equal(deployed, []byte(material.certPEM))
 }
 
+// confirmCertificateDeployment 校验任务与规则的当前状态仍允许落盘这份签发
+// 材料。刻意不过滤 r.enable_tls/r.tls_source（U5-4）：与扫描/物化路径
+// （certificates.go 的 rescan/renew 查询、certstore.go 的启动物化）统一附加
+// `enable_tls=1 AND tls_source='acme_dns'` 的口径不同，本函数只把关「任务与
+// 规则是否仍对得上」——已签发材料写盘后不被 manual 渲染消费，保留材料便于
+// 规则切回 acme_dns 时直接复用。材料保留取向为有意设计，勿对齐过滤口径。
 func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {
 	var status, jobDomains, ruleDomains string
 	err := db.DB.QueryRowContext(ctx, `SELECT j.status, j.domain, r.domain FROM cert_jobs j

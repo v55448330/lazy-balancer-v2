@@ -747,9 +747,10 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 
 // SecurityPolicyHasIPControl reports whether the policy applies any IP-level
 // control, mirroring the emission condition in BuildCorazaDirectives: a
-// non-empty trust list (ip_whitelist) or legacy blacklist (ip_blacklist)
-// always applies, while the ACL list (allow/deny/bypass) only applies when
-// ip_acl_enabled is on. Referenced IP lists count the same as inline entries
+// non-empty trust list (ip_whitelist) applies when ip_whitelist_enabled is
+// on, a legacy blacklist (ip_blacklist) always applies, while the ACL list
+// (allow/deny/bypass) only applies when ip_acl_enabled is on. Referenced IP
+// lists count the same as inline entries
 // (refs-only policies still advertise IP control)——仅解析 refs JSON 本身，
 // 无需加载数据库（摘要/绑定路径与生成路径同判定）。
 func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
@@ -835,6 +836,14 @@ const ipPrecheckAllowRuleID = 7
 // （securityEventsPolicyContainsRule 800xxx case）。emitCustomRules 发射守卫
 // （DB id ≥790000 跳过）保证自定义规则 emit id（DB id+10000）不撞入本段。
 const geoipPrecheckRuleBase = 800000
+
+// IsGeoIPPrecheckID 报告 n 是否落在阶段 1 GeoIP 预检归因段
+// [geoipPrecheckRuleBase, geoipPrecheckRuleBase+100000)。段界单一事实源——
+// 事件归因、stage-stats 分桶、筛选族条件等消费方一律经本谓词取段界,
+// 禁止各自复写字面量(U2-1:字面量散布六处,段基址调整时漏改即静默分叉)。
+func IsGeoIPPrecheckID(n int) bool {
+	return n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000
+}
 
 // intersectIPLists 返回多组 IP/CIDR 名单的网络感知交集（裁定 2026-09-07 S2）：
 // 对每对条目判断 CIDR 包含关系，保留更具体的一方（10.0.0.0/8 ∩ 10.1.0.5
@@ -1032,6 +1041,15 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	}
 	for _, p := range policies {
 		if p == nil || !PolicyHasGeoIP(p) {
+			continue
+		}
+		// U1-3（第 45 轮审计）：policyID 过大使 800000+policyID 落入 CRS 保留段
+		// （900000+）时跳过该策略链并告警（镜像 emitCustomRules ≥790000 跳过+告警
+		// 先例）。危害是归因/分桶错位——securityEventsPolicyContainsRule 的 800xxx
+		// case 与 stage-stats 的 800xxx 分桶都不再命中，而非编译失败（预检是独立
+		// coraza 配置，段内 id 彼此唯一，无同 id 冲突）。
+		if geoipPrecheckRuleBase+p.ID >= 900000 {
+			Logf("warn", "策略 %d 的 GeoIP 预检链 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, geoipPrecheckRuleBase+p.ID)
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipPrecheckRuleBase+p.ID, geoipStatusFragment))

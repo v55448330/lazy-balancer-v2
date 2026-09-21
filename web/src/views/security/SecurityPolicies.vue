@@ -273,7 +273,7 @@
             <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
                  会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
             <div class="mode-row" role="group" aria-label="WAF 模式">
-              <span class="mode-row-label">WAF 模式（阶段 3）</span>
+              <span class="mode-row-label">WAF 模式</span>
               <div class="mode-row-content">
                 <el-radio-group v-model="form.mode" class="mode-radio-group">
                   <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
@@ -1063,9 +1063,11 @@ const filteredPolicies = computed(() => {
   return typed.filter((p) => (p.name || '').toLowerCase().includes(query))
 })
 
-// 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、阶段 3=WAF||自定义规则
+// 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、
+// 阶段 3=后端 G3 口径（has_waf=CRS 生效 ∪ custom_only ∪ 自定义规则数>0；
+// has_custom_rules 带 S7 off 门且不含 custom_only 空规则形，不再直接消费）
 const stage1ChipOn = (row: PolicySummary): boolean => hasIpControl(row) || hasGeoControl(row)
-const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.has_custom_rules
+const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.mode === 'custom_only' || row.custom_rules_count > 0
 
 
 // ── 生效投影（阶段步骤顶部）：规则阶段页字段从 GET /rules 读（allRules），
@@ -3036,7 +3038,7 @@ onMounted(async () => {
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
  * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
  * 宽度对齐本向导 label-width=100px */
-.mode-row { display: flex; margin-bottom: 18px; }
+.mode-row { display: flex; margin-bottom: 18px; /* 与 .step-content 内 el-form-item 的 0 30px 0 20px 侧距一致——标题列/描述缩进对齐同页其他配置项 */ padding: 0 30px 0 20px; }
 .mode-row-label { width: 100px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
 .mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 

@@ -282,3 +282,113 @@ func TestSplitSecurityPolicy_nonMixedRejected(t *testing.T) {
 		t.Fatalf("missing policy split status=%d, want 404", response.Code)
 	}
 }
+
+// 限流策略唯一门（U1-2）：mixed 存量形态可合法与 stage2 并存绑定（[mixed,
+// stage2]——BindRuleToPolicy 唯一门不追溯存量），拆分产出 stage2 子策略后
+// 若直接重映射会出现单规则双限流——冲突规则必须进 skipped 保留原绑定
+// （与 >5 上限同口径），无冲突规则照常重映射，原策略因 skipped 保留。
+func TestSplitSecurityPolicy_skipsRuleWithExistingStage2(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	// Given：mixed 仅限流特征（G2）——拆分产出单个 stage2 子策略；
+	// 两条规则已并存绑定 [mixed, stage2]，一条规则仅绑 mixed
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
+		VALUES ('legacy-rl','off',1,100,50,'mixed',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixedID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
+		VALUES ('rl-live','off',1,200,100,'stage2',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage2ID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{"lb_dual", "lb_dual2"} {
+		for _, pid := range []int64{mixedID, stage2ID} {
+			if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, rule, pid); err != nil {
+				t.Fatalf("seed binding %s->%d: %v", rule, pid, err)
+			}
+		}
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_clean',?)`, mixedID); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	response := postSplit(t, router, int(mixedID))
+
+	// Then：冲突规则进 skipped（限流原因），无冲突规则重映射，原策略保留
+	if response.Code != http.StatusOK {
+		t.Fatalf("split status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload splitPayload
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, response.Body.String())
+	}
+	if payload.Data.Remapped != 1 || len(payload.Data.Skipped) != 2 || payload.Data.DeletedOriginal {
+		t.Fatalf("split result=%+v, want remapped=1 skipped=2 deleted=false", payload.Data)
+	}
+	skippedIDs := map[string]bool{}
+	for _, s := range payload.Data.Skipped {
+		skippedIDs[s["rule_id"].(string)] = true
+		if reason, _ := s["reason"].(string); !strings.Contains(reason, "限流") {
+			t.Fatalf("skip reason=%q, want 限流 uniqueness message", reason)
+		}
+	}
+	if !skippedIDs["lb_dual"] || !skippedIDs["lb_dual2"] {
+		t.Fatalf("skipped rules=%v, want lb_dual+lb_dual2", skippedIDs)
+	}
+	if len(payload.Data.Created) != 1 || payload.Data.Created[0].PolicyType != "stage2" {
+		t.Fatalf("created=%+v, want single stage2 child", payload.Data.Created)
+	}
+	childID := payload.Data.Created[0].ID
+	// 冲突规则原绑定不动：仍为 {mixed, stage2}，无 stage2 子策略混入
+	for _, rule := range []string{"lb_dual", "lb_dual2"} {
+		var mixedBound, total int
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?`, rule, mixedID).Scan(&mixedBound); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=?`, rule).Scan(&total); err != nil {
+			t.Fatal(err)
+		}
+		if mixedBound != 1 || total != 2 {
+			t.Fatalf("rule %s bindings mixed=%d total=%d, want original [mixed,stage2] kept", rule, mixedBound, total)
+		}
+		var childBound int
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?`, rule, childID).Scan(&childBound); err != nil {
+			t.Fatal(err)
+		}
+		if childBound != 0 {
+			t.Fatalf("rule %s must not gain the stage2 child binding", rule)
+		}
+	}
+	// 无冲突规则正常重映射：mixed 绑定删除、stage2 子策略绑定在位
+	var cleanMixed, cleanTotal, cleanChild int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_clean' AND policy_id=?`, mixedID).Scan(&cleanMixed); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_clean'`).Scan(&cleanTotal); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_clean' AND policy_id=?`, childID).Scan(&cleanChild); err != nil {
+		t.Fatal(err)
+	}
+	if cleanMixed != 0 || cleanTotal != 1 || cleanChild != 1 {
+		t.Fatalf("lb_clean remap mixed=%d total=%d child=%d, want [stage2 child] only", cleanMixed, cleanTotal, cleanChild)
+	}
+	// skipped 非空 → 原 mixed 策略保留
+	var original int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE id=?`, mixedID).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if original != 1 {
+		t.Fatal("original mixed policy must be kept while a skipped rule still references it")
+	}
+}

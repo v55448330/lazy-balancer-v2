@@ -258,9 +258,12 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		byKey("security_events").DBBytes = &sz
 	}
 	// SizeBytes=真实审计日志文件(2026-09-14 用户裁定:不再用 metrics.db 库文件
-	// 虚标——日志文件与 coraza_audit 同目录同口径,DBBytes 单独展示库容量)
+	// 虚标——日志文件与 coraza_audit 同目录同口径,DBBytes 单独展示库容量)。
+	// U2-4:security_events 与 coraza_audit 两行共用同一文件——一次 dirBytes
+	// 两行复用(原先每次响应各调一次,重复全目录 ReadDir)。
+	auditActive, auditRotated := dirBytes(wafAuditLogFile)
 	if info := byKey("security_events"); info != nil {
-		info.SizeBytes, info.RotatedBytes = dirBytes(wafAuditLogFile)
+		info.SizeBytes, info.RotatedBytes = auditActive, auditRotated
 	}
 
 	if info := byKey("runtime"); info != nil {
@@ -276,7 +279,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		info.SizeBytes, info.RotatedBytes = active, rotated
 	}
 	if info := byKey("coraza_audit"); info != nil {
-		info.SizeBytes, info.RotatedBytes = dirBytes(wafAuditLogFile)
+		info.SizeBytes, info.RotatedBytes = auditActive, auditRotated
 	}
 	if info := byKey("crs_update"); info != nil {
 		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "crs-update.log"))

@@ -274,6 +274,12 @@ func createTables() error {
 		compress_types VARCHAR(100) DEFAULT 'gzip',
 		enabled BOOLEAN NOT NULL DEFAULT 1,
 		log_enabled BOOLEAN DEFAULT 0,
+		-- U6B-3（第 45 轮审计）：阶段拦截页四列——此前仅靠 newColumns 启动补列，
+		-- fresh DDL 滞后于存量库 ALTER 通道。
+		block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+		block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+		block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+		block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
 		created_by INTEGER,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME,
@@ -551,7 +557,12 @@ func createTables() error {
 	waf_check_response INTEGER DEFAULT 0,
 	log_request_body INTEGER DEFAULT 0,
 	ip_acl_list_refs TEXT DEFAULT '[]',
-	ip_whitelist_refs TEXT DEFAULT '[]'
+	ip_whitelist_refs TEXT DEFAULT '[]',
+	-- U6B-3（第 45 轮审计）：实体单职化/阶段 0 两列与 newColumns 对齐
+	-- （TEXT NOT NULL DEFAULT '' / BOOLEAN NOT NULL DEFAULT 0），fresh 建库
+	-- 不再依赖启动补列。
+	policy_type TEXT NOT NULL DEFAULT '',
+	trust_detection BOOLEAN NOT NULL DEFAULT 0
 	);
 	CREATE TABLE IF NOT EXISTS security_policy_bindings (
 		rule_caddy_id TEXT NOT NULL,
@@ -586,7 +597,8 @@ func createTables() error {
 		size_bytes INTEGER DEFAULT 0,
 		sections TEXT DEFAULT '[]',
 		trigger_type TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger_type IN ('schedule','manual')),
-		message TEXT DEFAULT ''
+		message TEXT DEFAULT '',
+		app_version TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_auto_backups_created_at ON auto_backups(created_at);
 	INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', 1);
@@ -897,6 +909,11 @@ func runMigrations() error {
 	// 补齐收敛——重建迁移自身漏列不再造成列永久丢失（数据按列默认值回填）。
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
+	}
+	// U6a-1（第 45 轮审计）：置于二次 ensureNewColumns 之后——users 的
+	// auth_provider/oidc_subject/oidc_issuer 三列此刻在任意形态库上均已就位。
+	if err := migrateOidcIdentityUniqueIndex(); err != nil {
+		return fmt.Errorf("failed to migrate oidc identity unique index: %w", err)
 	}
 	if _, err := DB.Exec("DROP TABLE IF EXISTS tls_certificates"); err != nil {
 		return fmt.Errorf("failed to drop tls_certificates: %w", err)
@@ -2066,16 +2083,18 @@ func migrateSecurityPoliciesNullable() error {
 			waf_check_response INTEGER DEFAULT 0,
 			log_request_body INTEGER DEFAULT 0,
 			ip_acl_list_refs TEXT DEFAULT '[]',
-			ip_whitelist_refs TEXT DEFAULT '[]'
+			ip_whitelist_refs TEXT DEFAULT '[]',
+			policy_type TEXT NOT NULL DEFAULT '',
+			trust_detection BOOLEAN NOT NULL DEFAULT 0
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
-			log_request_body,ip_acl_list_refs,ip_whitelist_refs)
+			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
-			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]')
+			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0)
 		FROM security_policies;
 		DROP TABLE security_policies;
 		ALTER TABLE security_policies_new RENAME TO security_policies;`); err != nil {
@@ -2141,6 +2160,43 @@ func migrateNodesDeadColumns() error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit nodes migration: %w", err)
+	}
+	return nil
+}
+
+// migrateOidcIdentityUniqueIndex（U6a-1，第 45 轮审计）：OIDC 身份三元组唯一
+// 索引——JIT 开户在并发回调窗口（双请求同走 no-rows 分支）下可产生重复
+// (oidc_issuer, oidc_subject) 行，命中 SELECT 无 ORDER BY 时取行不确定，会话
+// 随机落到重复行之一。partial 索引只约束 auth_provider='oidc' 且 subject 非空
+// 的行，本地用户与历史空串行不受影响。安全阀：建索引前先查重，存量库存在
+// 重复身份则跳过建索引并告警（绝不因历史脏数据拖垮启动；重复行需人工合并/
+// 清理后重启自动建索引）。幂等：IF NOT EXISTS，重跑零开销。
+func migrateOidcIdentityUniqueIndex() error {
+	rows, err := DB.Query(`SELECT oidc_issuer, oidc_subject, COUNT(*) FROM users
+		WHERE auth_provider='oidc' AND oidc_subject<>'' GROUP BY oidc_issuer, oidc_subject HAVING COUNT(*)>1`)
+	if err != nil {
+		return fmt.Errorf("inspect duplicate oidc identities: %w", err)
+	}
+	var duplicates []string
+	for rows.Next() {
+		var issuer, subject string
+		var count int
+		if err := rows.Scan(&issuer, &subject, &count); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan duplicate oidc identities: %w", err)
+		}
+		duplicates = append(duplicates, fmt.Sprintf("%s/%s×%d", issuer, subject, count))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate duplicate oidc identities: %w", err)
+	}
+	if len(duplicates) > 0 {
+		log.Printf("WARN: users 表存在重复 OIDC 身份(%s)，跳过 u_oidc_identity 唯一索引创建——请人工合并/清理重复行后重启", strings.Join(duplicates, ", "))
+		return nil
+	}
+	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS u_oidc_identity ON users(oidc_issuer, oidc_subject) WHERE auth_provider='oidc' AND oidc_subject<>''"); err != nil {
+		return fmt.Errorf("create u_oidc_identity index: %w", err)
 	}
 	return nil
 }
@@ -2311,6 +2367,13 @@ func migrateLbRulesPrimaryKey() error {
 			compress_types VARCHAR(100) DEFAULT 'gzip',
 			enabled BOOLEAN NOT NULL DEFAULT 1,
 			log_enabled BOOLEAN DEFAULT 0,
+			-- U6B-3（第 45 轮审计）：与 fresh CREATE 同步携带阶段拦截页四列——
+			-- ensureNewColumns 在本重建之前已加列，陈旧 DDL 会把列连同值一并
+			-- 丢弃，且本重建位于二次 ensureNewColumns 安全网之后（无同启动自愈）。
+			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
 			created_by INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME,
@@ -2338,7 +2401,8 @@ func migrateLbRulesPrimaryKey() error {
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled, log_enabled,
-			created_by, created_at, updated_at, updated_by, caddy_id
+			created_by, created_at, updated_at, updated_by, caddy_id,
+			block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status
 		)
 		SELECT
 			id, name, description, protocol, domain, listen_port,
@@ -2352,7 +2416,8 @@ func migrateLbRulesPrimaryKey() error {
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, COALESCE(enabled,0), COALESCE(log_enabled,0),
-			created_by, created_at, updated_at, updated_by, caddy_id
+			created_by, created_at, updated_at, updated_by, caddy_id,
+			COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
 		FROM lb_rules
 	`)
 	if err != nil {

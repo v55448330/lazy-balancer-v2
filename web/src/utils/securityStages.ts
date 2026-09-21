@@ -1,5 +1,5 @@
 // 阶段化安全流水线共享投影（v2.3.1 阶段化重构）。
-// 锁弹框 / 规则向导「安全防护」步骤 / 规则流程抽屉三处消费同一分组模型，避免第二数据源。
+// 锁弹框 / 流程抽屉 / 策略向导预览 / SecurityBindingEditor 四处消费同一分组模型，避免第二数据源。
 // 阶段词汇：阶段 1 = IP 访问控制 + 地域拦截（预检）；阶段 2 = 限流（恒 429）；
 // 阶段 3 = WAF（自定义 + CRS）。规则可为阶段 1/3 配拦截页覆盖（0 = 跟随策略，
 // 即 v2.3.1 逐策略归因默认层）。
@@ -328,7 +328,12 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
   return rows
 }
 
-const buildStage1Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
+const buildStage1Rows = (
+  policy: SecurityStagePolicy | undefined,
+  ipLists: readonly SecurityStageIPList[],
+  blockPages: readonly SecurityStageBlockPage[],
+  stagePages?: RuleStagePages | null,
+): StageRow[] => {
   const rows: StageRow[] = []
   if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
@@ -343,6 +348,15 @@ const buildStage1Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
     const geoModeLabel = policy?.geoip_mode === 'allow' ? '仅允许所选区域' : '拦截所选区域'
     rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
   }
+  // 规则级阶段页覆盖行（阶段 1 无策略级页；v2.3.1 逐策略归因默认层 = 403）：
+  // 已配 → 规则覆盖；页已删/内容空 → 失效（回落跟随策略）；未配 → 跟随默认 403。
+  // 仅携带于有能力行的策略组——空能力不虚增阶段 1 组（未启用判定不受影响）
+  if (rows.length > 0) {
+    const override = resolveStageOverride(stagePages?.block_page_stage1_id, stagePages?.block_page_stage1_status, blockPages)
+    if (override === null) rows.push({ label: '拦截页', detail: '未配置（跟随默认 403）' })
+    else if (override.broken) rows.push({ label: '拦截页', detail: '已失效（回落跟随策略）' })
+    else rows.push({ label: '拦截页', detail: `规则覆盖：${override.pageName}（状态码 ${override.status}）` })
+  }
   return rows
 }
 
@@ -350,6 +364,7 @@ const buildStage3Rows = (
   binding: SecurityStageBinding,
   policy: SecurityStagePolicy | undefined,
   blockPages: readonly SecurityStageBlockPage[],
+  stagePages?: RuleStagePages | null,
 ): StageRow[] => {
   const rows: StageRow[] = []
   const mode = policy ? policy.mode : binding.mode
@@ -366,14 +381,26 @@ const buildStage3Rows = (
     rows.push({ label: 'CRS 规则组', detail: crsCount > 0 ? `${crsCount} 组` : '全部（默认）' })
   }
   if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
-  // 「拦截页」行（v2.3.1 归因口径）：配置了页 → <页名>(状态码 XXX)；block_page_id=0 →
-  // 默认 403；页已删/内容空 → 已失效(回落首策略)
+  // 「拦截页」行（v2.3.1 归因口径）：规则级覆盖与策略级页并存展示，措辞区分——
+  // 规则覆盖已配 → 「拦截页（规则覆盖）：页名（状态码 X）」（渲染语义=覆盖优先）；
+  // 覆盖页已删/内容空 → 已失效（回落跟随策略 = 下方策略级行生效）；
+  // 未配 → 仅现有策略级行（binding.block_page_id → 页名 / 默认 403 / 已失效回落首策略）
   const pageId = binding.block_page_id ?? 0
   const page = pageId > 0 ? blockPages.find((p) => p.id === pageId) : undefined
   const pageBroken = pageId > 0 && (!page || (page.content ?? '') === '')
-  if (pageId <= 0) rows.push({ label: '拦截页', detail: '默认 403' })
-  else if (pageBroken) rows.push({ label: '拦截页', detail: '已失效（回落首策略）' })
-  else rows.push({ label: '拦截页', detail: `${page?.name}（状态码 ${binding.block_status_code || 403}）` })
+  const policyPageDetail = pageId <= 0 ? '默认 403'
+    : pageBroken ? '已失效（回落首策略）'
+    : `${page?.name}（状态码 ${binding.block_status_code || 403}）`
+  const ruleOverride = resolveStageOverride(stagePages?.block_page_stage3_id, stagePages?.block_page_stage3_status, blockPages)
+  if (ruleOverride === null) {
+    rows.push({ label: '拦截页', detail: policyPageDetail })
+  } else {
+    rows.push({
+      label: '拦截页（规则覆盖）',
+      detail: ruleOverride.broken ? '已失效（回落跟随策略）' : `${ruleOverride.pageName}（状态码 ${ruleOverride.status}）`,
+    })
+    rows.push({ label: '拦截页（策略页）', detail: policyPageDetail })
+  }
   return rows
 }
 
@@ -397,7 +424,7 @@ export const buildStageModel = (
     const s0rows = buildStage0Rows(policy, ipLists)
     if (s0rows.length > 0) stage0Groups.push({ ...base, rows: s0rows })
 
-    const s1rows = buildStage1Rows(policy, ipLists)
+    const s1rows = buildStage1Rows(policy, ipLists, blockPages, stagePages)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
 
     // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）
@@ -405,7 +432,7 @@ export const buildStageModel = (
       stage2Groups.push({ ...base, rows: [{ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` }] })
     }
 
-    const s3rows = buildStage3Rows(binding, policy, blockPages)
+    const s3rows = buildStage3Rows(binding, policy, blockPages, stagePages)
     if (s3rows.length > 0) stage3Groups.push({ ...base, rows: s3rows })
   })
 
@@ -444,23 +471,6 @@ export const buildStageModel = (
     ],
   }
 }
-
-// 向导「安全防护」步骤的实时投影输入：选中策略 id → 合成绑定视图（页/状态码未绑时按默认口径）
-export const bindingsFromPolicyIds = (
-  policyIds: readonly number[],
-  policies: readonly SecurityStagePolicy[],
-): SecurityStageBinding[] =>
-  policies
-    .filter((p) => policyIds.includes(p.id))
-    .map((p) => ({
-      policy_id: p.id,
-      name: p.name,
-      mode: p.mode,
-      enabled: p.enabled,
-      rate_limit_enabled: p.has_rate_limit,
-      block_page_id: 0,
-      block_status_code: 403,
-    }))
 
 // ── 明细拼装（流程抽屉首次展开时调用；纯函数，不持有缓存） ──
 
@@ -639,6 +649,12 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   if (p.policy_type === 'stage0' || p.policy_type === 'stage1' || p.policy_type === 'stage2' || p.policy_type === 'stage3' || p.policy_type === 'mixed') {
     return p.policy_type
   }
+  // 兜底推断与后端 PolicyTypeFeatures G 门的两处已知口径差异（现状由显式
+  // policy_type 列遮蔽——后端写侧缺省/迁移均回填该列；新增消费方须知）：
+  // ① s0 不校验 ip_whitelist_enabled 启用门（后端 G0 要求启用，信任关闭的
+  //    存量策略在此多计一个阶段 0）；
+  // ② s3 依赖摘要 has_waf（=CRS 生效口径，不含 custom_only），custom_only 且
+  //    零自定义规则的摘要载荷在此漏计（后端 G3：mode∈三态或自定义非空）。
   const s0 = hasTrustEntries(p)
   const s1 = hasIPACLControl(p) || p.has_geoip === true
   const s2 = p.has_rate_limit

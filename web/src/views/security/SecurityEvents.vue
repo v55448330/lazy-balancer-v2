@@ -58,7 +58,7 @@
             >全选</el-checkbox>
           </template>
           <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
-          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
+          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（预检 id 800000+策略）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
           <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
           <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
@@ -332,6 +332,8 @@ const triggeredLabel = (row: SecurityEvent): string => {
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4' || t === '5' || t === '7') return 'IP 访问控制'
   if (t === '8') return '地域拦截'
+  // 阶段化预检链（v2.3.1）：GeoIP 迁入预检后按 800000+策略_id 发射，同归地域拦截
+  if (/^8\d{5}$/.test(t)) return '地域拦截'
   if (t === '11') return '请求体解析失败'
   if (/^949/.test(t) || /^959/.test(t)) return '评分拦截'
   if (/^920/.test(t)) return '协议异常'

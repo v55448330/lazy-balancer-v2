@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -559,5 +560,235 @@ func TestProvider_CleanUp_removes_ownership_of_independently_deleted_records(t *
 	}
 	if len(left) != 1 || left[0].RecordID != "200" {
 		t.Fatalf("ownership left=%+v, want only the failed record 200", left)
+	}
+}
+
+// staleRemoveTransport 模拟 cleanUp 阶段的陈旧 zone→domain_id（U5-1）：
+// Domain.List 恒返回 currentID；Record.Remove 对 staleID 报「域名不存在」
+// （code 7），对 currentID 默认删除成功（failFreshID 时改报非域名类错误）。
+// 记录每次 Remove 的 {domain_id, record_id} 与 Domain.List 调用数。
+type staleRemoveTransport struct {
+	mu          sync.Mutex
+	currentID   string
+	staleID     string
+	failFreshID bool
+	records     map[string]string
+	nextID      int
+	removes     [][2]string
+	listCalls   int
+}
+
+func (transport *staleRemoveTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	if closeErr := request.Body.Close(); closeErr != nil {
+		return nil, closeErr
+	}
+	params, err := url.ParseQuery(string(body))
+	if err != nil {
+		return nil, err
+	}
+	responseBody := `{"status":{"code":"1","message":"ok"}}`
+	transport.mu.Lock()
+	switch {
+	case strings.HasSuffix(request.URL.Path, "Domain.List"):
+		transport.listCalls++
+		responseBody = fmt.Sprintf(`{"status":{"code":"1","message":"ok"},"domains":[{"id":%q,"name":"example.com"}],"info":{"domain_total":1}}`, transport.currentID)
+	case strings.HasSuffix(request.URL.Path, "Record.Create"):
+		transport.nextID++
+		recordID := strconv.Itoa(299 + transport.nextID)
+		transport.records[recordID] = params.Get("value")
+		responseBody = fmt.Sprintf(`{"status":{"code":"1","message":"ok"},"record":{"id":%q}}`, recordID)
+	case strings.HasSuffix(request.URL.Path, "Record.Remove"):
+		removal := [2]string{params.Get("domain_id"), params.Get("record_id")}
+		transport.removes = append(transport.removes, removal)
+		switch {
+		case removal[0] == transport.staleID:
+			responseBody = `{"status":{"code":"7","message":"域名不存在"}}`
+		case transport.failFreshID:
+			responseBody = `{"status":{"code":"11","message":"没有权限"}}`
+		default:
+			delete(transport.records, removal[1])
+		}
+	}
+	transport.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+		Request:    request,
+	}, nil
+}
+
+// flipStaleDomain 把已缓存的 id 变为陈旧值：API 侧域名重建为 freshID，对旧
+// cachedID 的删除报「域名不存在」；failFresh 置位时对 freshID 的删除也失败。
+func (transport *staleRemoveTransport) flipStaleDomain(cachedID, freshID string, failFresh bool) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.staleID = cachedID
+	transport.currentID = freshID
+	transport.failFreshID = failFresh
+}
+
+// U5-1（第 45 轮审计）：cleanUp 侧的 CERT42-7 同族自愈——缓存的 zone→
+// domain_id 陈旧（域名移出账户/删除重建）时，deleteRecord 对旧 ID 报「域名
+// 不存在」类错误，须作废缓存重解析后重试一次，而非把清理失败抛给签发链。
+func TestDNSPodCleanUp_staleDomainIDInvalidatesAndRetries(t *testing.T) {
+	// Given: the zone is cached as id 1 while the API now serves it as id 2
+	seedDomainIDCache(t, map[string]string{})
+	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
+	dataDir := t.TempDir()
+	provider, err := NewPersistent("id,token", dataDir)
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	provider.client.Transport = transport
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "this-task", 600); err != nil {
+		t.Fatalf("present owned record: %v", err)
+	}
+	transport.flipStaleDomain("1", "2", false)
+
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: the stale id was invalidated, re-resolved once and the deletion
+	// retried against the fresh id
+	if err != nil {
+		t.Fatalf("clean up with stale cached domain id: %v", err)
+	}
+	transport.mu.Lock()
+	removes := append([][2]string(nil), transport.removes...)
+	listCalls := transport.listCalls
+	transport.mu.Unlock()
+	want := [][2]string{{"1", "300"}, {"2", "300"}}
+	if !reflect.DeepEqual(removes, want) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（陈旧一次+重解析后重试一次）", removes, want)
+	}
+	if listCalls != 2 {
+		t.Fatalf("Domain.List calls=%d, want 2（Present 解析一次+作废后重解析一次）", listCalls)
+	}
+	store, err := ownership.New(dataDir)
+	if err != nil {
+		t.Fatalf("open ownership store: %v", err)
+	}
+	left, err := store.Matching("dnspod", "example.com", "_acme-challenge.example.com.")
+	if err != nil {
+		t.Fatalf("matching: %v", err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("ownership left=%+v, want empty after successful cleanup", left)
+	}
+}
+
+// U5-1 回归形状一：未命中陈旧 ID 时清理恰好删除一次——不作废缓存、不重解析、
+// 不发第二次删除。
+func TestDNSPodCleanUp_freshDomainIDDeletesOnce(t *testing.T) {
+	// Given: the cached id still matches the API
+	seedDomainIDCache(t, map[string]string{})
+	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
+	provider, err := NewPersistent("id,token", t.TempDir())
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	provider.client.Transport = transport
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "this-task", 600); err != nil {
+		t.Fatalf("present owned record: %v", err)
+	}
+
+	// When
+	if err := provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com."); err != nil {
+		t.Fatalf("clean up with fresh domain id: %v", err)
+	}
+
+	// Then: exactly one deletion against the cached id, no re-resolution
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	want := [][2]string{{"1", "300"}}
+	if !reflect.DeepEqual(transport.removes, want) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（删除恰好一次）", transport.removes, want)
+	}
+	if transport.listCalls != 1 {
+		t.Fatalf("Domain.List calls=%d, want 1（仅 Present 的初始解析，清理命中缓存）", transport.listCalls)
+	}
+}
+
+// U5-1 回归形状二 + U5-2 基线钉：重试仍失败照旧记 failed（不循环）——内存
+// 模式下失败记录须回到 owned 表（failed 存储的唯一消费者），供同进程后续
+// 清理重试。
+func TestDNSPodCleanUp_staleRetryStillFailsReappendsOwnedRecord(t *testing.T) {
+	// Given: a stale cached id and an API that also fails the fresh-id retry
+	seedDomainIDCache(t, map[string]string{})
+	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
+	provider := New("id,token")
+	provider.client.Transport = transport
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "this-task", 600); err != nil {
+		t.Fatalf("present owned record: %v", err)
+	}
+	transport.flipStaleDomain("1", "2", true)
+
+	// When
+	err := provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: exactly one invalidation+retry (no loop), the failure is
+	// reported and the record returns to the in-memory owned table
+	if err == nil {
+		t.Fatal("clean up swallowed the persistent deletion failure")
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	want := [][2]string{{"1", "300"}, {"2", "300"}}
+	if !reflect.DeepEqual(transport.removes, want) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（重试一次后停止，不循环）", transport.removes, want)
+	}
+	provider.mu.Lock()
+	entries := provider.owned["1|_acme-challenge"]
+	provider.mu.Unlock()
+	if len(entries) != 1 || entries[0].recordID != "300" {
+		t.Fatalf("owned entries=%+v, want failed record 300 re-appended", entries)
+	}
+}
+
+// U5-1 回归形状三（生产形状）：ownership 模式下重试仍失败时，失败记录保留
+// ownership 条目（DNS 记录可能仍存在），后续清理可自愈。
+func TestDNSPodCleanUp_staleRetryFailureKeepsOwnershipEntry(t *testing.T) {
+	// Given: a stale cached id and an API that also fails the fresh-id retry
+	seedDomainIDCache(t, map[string]string{})
+	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
+	dataDir := t.TempDir()
+	provider, err := NewPersistent("id,token", dataDir)
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	provider.client.Transport = transport
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "this-task", 600); err != nil {
+		t.Fatalf("present owned record: %v", err)
+	}
+	transport.flipStaleDomain("1", "2", true)
+
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: one retry, failure reported, ownership entry kept
+	if err == nil {
+		t.Fatal("clean up swallowed the persistent deletion failure")
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	want := [][2]string{{"1", "300"}, {"2", "300"}}
+	if !reflect.DeepEqual(transport.removes, want) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（重试一次后停止，不循环）", transport.removes, want)
+	}
+	store, err := ownership.New(dataDir)
+	if err != nil {
+		t.Fatalf("open ownership store: %v", err)
+	}
+	left, err := store.Matching("dnspod", "example.com", "_acme-challenge.example.com.")
+	if err != nil {
+		t.Fatalf("matching: %v", err)
+	}
+	if len(left) != 1 || left[0].RecordID != "300" {
+		t.Fatalf("ownership left=%+v, want failed record 300 kept", left)
 	}
 }

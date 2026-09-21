@@ -44,24 +44,47 @@
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <el-alert v-else-if="policiesError" type="error" :closable="false" title="策略列表加载失败" />
     <template v-else-if="rows.length > 0">
-      <div class="ipo-tip">各策略当前 IP 访问控制状态，按需加入名单：</div>
-      <div v-for="row in rows" :key="row.policy.id" class="ipo-row">
-        <div class="ipo-row-head">
-          <span class="ipo-name" :title="row.policy.name">{{ row.policy.name }}</span>
-          <el-tag size="small" :type="row.tagType">{{ row.tagLabel }}</el-tag>
-          <span v-if="row.countLabel" class="ipo-count">{{ row.countLabel }}</span>
+      <!-- U8-2 分组④：阶段 2/3（限流/WAF）不渲染操作行，顶部汇总一行 -->
+      <div v-if="groupedRows.offstage > 0" class="ipo-tip">另有 {{ groupedRows.offstage }} 条限流/WAF 策略不涉及 IP 管控</div>
+      <template v-if="visibleGroups.length > 0">
+        <div class="ipo-tip">各策略当前 IP 名单状态，按管辖阶段分组：</div>
+        <div v-for="group in visibleGroups" :key="group.key" class="ipo-group">
+          <div class="ipo-group-title">{{ group.title }}</div>
+          <div v-for="row in group.rows" :key="row.policy.id" class="ipo-row">
+            <div class="ipo-row-head">
+              <span class="ipo-name" :title="row.policy.name">{{ row.policy.name }}</span>
+              <el-tag size="small" :type="row.tagType">{{ row.tagLabel }}</el-tag>
+              <span v-if="row.countLabel" class="ipo-count">{{ row.countLabel }}</span>
+            </div>
+            <!-- 阶段 0 组行内模式：直通上游 / 保留检测记录（与 buildStage0Rows 同文案） -->
+            <div v-if="group.key === 'stage0'" class="ipo-status">{{ row.trustDetectionLabel }}</div>
+            <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
+            <div v-if="row.inLegacy && group.key !== 'stage0'" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段中，可经 API 更新策略（ip_blacklist 字段）清理</div>
+            <!-- 混合（兼容）组迁移入口提示 -->
+            <div v-if="group.key === 'mixed'" class="ipo-legacy">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
+            <div class="ipo-actions">
+              <!-- ACL 动作：阶段 1 / 混合组（阶段 0 策略无 ACL 面；stage2/3 不渲染行） -->
+              <template v-if="group.key !== 'stage0'">
+                <el-button v-if="row.canAddDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">加入黑名单</el-button>
+                <el-button v-if="row.canAddAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">加入白名单</el-button>
+                <el-button v-if="row.canEnableDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">启用并加入黑名单</el-button>
+                <el-button v-if="row.canEnableAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">启用并加入白名单</el-button>
+                <el-button v-if="row.canRemove" size="small" plain :loading="isBusy(row.policy.id, 'remove')" @click="removeFromAcl(row.policy)">移除</el-button>
+              </template>
+              <!-- 信任动作：阶段 0 / 混合组（stage1/2/3 组不出现信任操作）。
+                   U8-7：死条目（信任开关关闭）灰显「未生效」+一键清除，不再出禁用按钮 -->
+              <template v-if="group.key !== 'stage1'">
+                <el-tooltip v-if="row.trustDead" content="该 IP 的信任条目存在，但策略的信任名单已关闭（未启用）——条目暂不生效" placement="top">
+                  <el-tag size="small" type="info" effect="plain">未生效</el-tag>
+                </el-tooltip>
+                <el-button v-if="row.canAddTrust" size="small" type="warning" plain :loading="isBusy(row.policy.id, 'trust')" @click="addTrust(row.policy)">加入信任名单</el-button>
+                <el-button v-if="row.canRemoveTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">移除信任</el-button>
+                <el-button v-if="row.canClearDeadTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">清除条目</el-button>
+              </template>
+            </div>
+          </div>
         </div>
-        <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
-        <div v-if="row.inLegacy" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段中，可经 API 更新策略（ip_blacklist 字段）清理</div>
-        <div class="ipo-actions">
-          <el-button v-if="row.canAddDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">加入黑名单</el-button>
-          <el-button v-if="row.canAddAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">加入白名单</el-button>
-          <el-button v-if="row.canEnableDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">启用并加入黑名单</el-button>
-          <el-button v-if="row.canEnableAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">启用并加入白名单</el-button>
-          <el-button v-if="row.canRemove" size="small" plain :loading="isBusy(row.policy.id, 'remove')" @click="removeFromAcl(row.policy)">移除</el-button>
-          <el-button size="small" type="warning" plain :disabled="row.inTrust" :loading="isBusy(row.policy.id, 'trust')" @click="addTrust(row.policy)">{{ row.inTrust ? '已在信任名单' : '加入信任名单' }}</el-button>
-        </div>
-      </div>
+      </template>
     </template>
     <div v-else class="ipo-tip">暂无启用的安全策略</div>
   </el-popover>
@@ -80,6 +103,9 @@ import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
 import type { IpListOption } from '@/composables/useIpListAdd'
+// 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
+import { inferPolicyType } from '@/utils/securityStages'
+import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
 import type { APIResponse } from '@/types'
 
 // 列表接口与详情接口共用同一组 SELECT 列，列表行直接携带完整 ACL 字段
@@ -96,6 +122,16 @@ interface PolicyRow {
   ip_blacklist: string
   // 审计 W-S2（第六轮）：信任三态开关——加入名单前须提示「当前关闭=零生效」
   ip_whitelist_enabled?: boolean
+  // 分组路由字段（U8-2）：policy_type 由列表/详情接口携带；'' 为存量待推断态。
+  // 摘要标志仅列表摘要携带（详情接口无）——refreshRow 以合并方式保留
+  policy_type?: string
+  trust_detection?: boolean
+  mode?: string
+  rate_limit_enabled?: boolean
+  has_geoip?: boolean
+  has_rate_limit?: boolean
+  has_waf?: boolean
+  has_custom_rules?: boolean
 }
 
 interface PolicyDetail {
@@ -108,11 +144,13 @@ interface PolicyDetail {
   ip_whitelist: string
   ip_whitelist_refs?: string
   ip_blacklist?: string
+  policy_type?: string
+  trust_detection?: boolean
 }
 
 // 黑/白名单统一写入 ip_acl_list，目标仅由模式决定；信任名单独立走 ip_whitelist
 type AclTarget = 'deny' | 'allow'
-type BusyKind = AclTarget | 'remove' | 'trust'
+type BusyKind = AclTarget | 'remove' | 'trust' | 'untrust'
 
 const ACL_LABELS: Record<AclTarget, string> = { deny: '黑名单', allow: '白名单' }
 
@@ -252,7 +290,26 @@ const normalizeRow = (p: PolicyRow): PolicyRow => ({
   ip_whitelist_refs: p.ip_whitelist_refs || '[]',
   ip_blacklist: p.ip_blacklist || '[]',
   ip_whitelist_enabled: p.ip_whitelist_enabled,
+  policy_type: p.policy_type,
+  trust_detection: p.trust_detection,
+  mode: p.mode,
+  rate_limit_enabled: p.rate_limit_enabled,
+  has_geoip: p.has_geoip,
+  has_rate_limit: p.has_rate_limit,
+  has_waf: p.has_waf,
+  has_custom_rules: p.has_custom_rules,
 })
+
+// 分组类型路由（U8-2 四组）：有效 policy_type 交由 inferPolicyType 单一实现直通
+// （其首分支对合法值短路，内容字段不参与）；''/缺省（存量待推断态）按裁定归
+// 「混合（兼容）」组双能力照旧——后端 ACL 启用门对 ''/mixed 存量态不拦，写路径兼容
+const policyTypeOf = (p: PolicyRow): SecurityPolicyType =>
+  inferPolicyType({
+    policy_type: p.policy_type || 'mixed',
+    has_ip_control: false,
+    has_rate_limit: false,
+    has_custom_rules: false,
+  } satisfies SecurityPolicyTypeInput)
 
 let loadPoliciesSeq = 0
 const loadPolicies = async (): Promise<void> => {
@@ -288,6 +345,14 @@ const loadPolicies = async (): Promise<void> => {
 interface RowView {
   policy: PolicyRow
   inTrust: boolean
+  inTrustInline: boolean
+  trustEnabled: boolean
+  trustCount: number
+  trustDetectionLabel: string
+  trustDead: boolean
+  canAddTrust: boolean
+  canRemoveTrust: boolean
+  canClearDeadTrust: boolean
   inLegacy: boolean
   tagType: 'danger' | 'success' | 'info'
   tagLabel: string
@@ -302,9 +367,20 @@ interface RowView {
 }
 
 const rowView = (policy: PolicyRow): RowView => {
+  // 信任口径（内联 ∪ 引用）先行计算——阶段 0 行整行语义即信任，ACL 行也要渲染信任动作
+  const trustEntries = mergedTrustEntries(policy)
   const view: RowView = {
     policy,
-    inTrust: mergedTrustEntries(policy).includes(props.ip),
+    inTrust: trustEntries.includes(props.ip),
+    inTrustInline: parseList(policy.ip_whitelist).includes(props.ip),
+    trustEnabled: policy.ip_whitelist_enabled !== false,
+    trustCount: trustEntries.length,
+    // 与 securityStages.buildStage0Rows 模式行同文案
+    trustDetectionLabel: policy.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）',
+    trustDead: false,
+    canAddTrust: false,
+    canRemoveTrust: false,
+    canClearDeadTrust: false,
     inLegacy: parseList(policy.ip_blacklist).includes(props.ip),
     tagType: 'info',
     tagLabel: '未启用',
@@ -313,19 +389,43 @@ const rowView = (policy: PolicyRow): RowView => {
     countLabel: '',
     canAddDeny: false,
     canAddAllow: false,
-    canEnableDeny: true,
-    canEnableAllow: true,
+    canEnableDeny: false,
+    canEnableAllow: false,
     canRemove: false,
   }
-  if (!policy.ip_acl_enabled) return view
+  view.canAddTrust = !view.inTrust
+  view.canRemoveTrust = view.inTrust && view.trustEnabled && view.inTrustInline
+  view.trustDead = view.inTrust && !view.trustEnabled
+  view.canClearDeadTrust = view.trustDead && view.inTrustInline
+
+  // 阶段 0 行（U8-2 分组②）：信任名单状态即整行语义，无 ACL 面；
+  // 模式行（直通/保留检测）由模板按组渲染
+  if (policyTypeOf(policy) === 'stage0') {
+    view.tagType = view.trustEnabled ? 'success' : 'info'
+    view.tagLabel = view.trustEnabled ? '信任启用' : '信任停用'
+    view.countLabel = view.trustCount > 0 ? `${view.trustCount} 条` : ''
+    if (view.inTrust) {
+      view.statusClass = view.trustEnabled ? 'is-ok' : 'is-warn'
+      const hit = view.inTrustInline ? '✅ 已在信任名单中' : '✅ 已在信任名单中（来自引用列表）'
+      view.statusLabel = view.trustEnabled ? hit : `${hit}——信任名单未启用，暂不生效`
+    } else {
+      view.statusLabel = view.trustCount === 0 ? '信任名单未配置' : `信任名单 ${view.trustCount} 条${view.trustEnabled ? '' : '（未启用）'}`
+    }
+    return view
+  }
+
+  if (!policy.ip_acl_enabled) {
+    // 阶段 1/混合行 ACL 未启用 → 「启用并加入」动作（原逻辑）
+    view.canEnableDeny = true
+    view.canEnableAllow = true
+    return view
+  }
 
   // 生效名单 = 内联 ∪ 引用列表条目；引用命中的条目无法在本弹窗移除
   // （PUT 仅写内联 ip_acl_list），移除按钮仅对内联命中开放
   const list = mergedAclEntries(policy)
   const inInline = parseList(policy.ip_acl_list).includes(props.ip)
   const inList = list.includes(props.ip)
-  view.canEnableDeny = false
-  view.canEnableAllow = false
 
   if (policy.ip_acl_mode === 'deny') {
     view.tagType = 'danger'
@@ -365,6 +465,37 @@ const rowView = (policy: PolicyRow): RowView => {
 
 const rows = computed<RowView[]>(() => policies.value.map(rowView))
 
+// —— U8-2 四组分组：阶段 1（ACL）/ 阶段 0（信任）/ 混合（兼容）/ 阶段 2·3 不涉 IP 管控 ——
+
+type IpGroupKey = 'stage0' | 'stage1' | 'mixed'
+interface IpRowGroup { key: IpGroupKey; title: string; rows: RowView[] }
+
+const groupedRows = computed(() => {
+  const stage1: RowView[] = []
+  const stage0: RowView[] = []
+  const mixed: RowView[] = []
+  let offstage = 0
+  for (const row of rows.value) {
+    switch (policyTypeOf(row.policy)) {
+      case 'stage1': stage1.push(row); break
+      case 'stage0': stage0.push(row); break
+      case 'stage2': case 'stage3': offstage++; break
+      default: mixed.push(row)
+    }
+  }
+  return { stage1, stage0, mixed, offstage }
+})
+
+// 展示顺序（用户裁定）：阶段 1 → 阶段 0 → 混合（兼容）；空组不出标题
+const visibleGroups = computed<IpRowGroup[]>(() => {
+  const g = groupedRows.value
+  const out: IpRowGroup[] = []
+  if (g.stage1.length > 0) out.push({ key: 'stage1', title: '阶段 1 · IP 访问控制', rows: g.stage1 })
+  if (g.stage0.length > 0) out.push({ key: 'stage0', title: '阶段 0 · 信任名单', rows: g.stage0 })
+  if (g.mixed.length > 0) out.push({ key: 'mixed', title: '混合（兼容）', rows: g.mixed })
+  return out
+})
+
 // —— 动作执行 ——
 
 const isBusy = (id: number, kind: BusyKind): boolean => busyKeys.value.has(`${id}:${kind}`)
@@ -388,11 +519,13 @@ const fetchDetail = async (id: number): Promise<PolicyRow | null> => {
   return d ? normalizeRow({ ...d, ip_blacklist: d.ip_blacklist || '[]' }) : null
 }
 
-// 写入成功后拉取最新详情，弹窗内状态即时翻转（✅/⚠️）
+// 写入成功后拉取最新详情，弹窗内状态即时翻转（✅/⚠️）。
+// 详情接口不携带列表摘要标志（has_rate_limit 等）——按字段合并而非整行替换，
+// 避免刷新后分组路由字段退化
 const refreshRow = async (id: number): Promise<void> => {
   try {
     const fresh = await fetchDetail(id)
-    if (fresh) policies.value = policies.value.map((p) => (p.id === fresh.id ? fresh : p))
+    if (fresh) policies.value = policies.value.map((p) => (p.id === fresh.id ? { ...p, ...fresh } : p))
   } catch {
     // 刷新失败保持现有展示，下次打开弹窗会重新加载
   }
@@ -575,6 +708,41 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
     unlockBusy(policy.id, 'trust')
   }
 }
+
+// 移除/清除信任条目：PUT 同款 ip_whitelist 去条目（U8-7 一键清除同路径，仅内联——
+// 引用列表命中的条目本组件不可清）。死条目（信任开关关闭）与生效条目共用入口，
+// 确认文案按开关状态分支
+const removeTrust = async (policy: PolicyRow): Promise<void> => {
+  if (!lockBusy(policy.id, 'untrust')) return
+  try {
+    const detail = await fetchDetail(policy.id)
+    if (!detail) return
+    const list = parseList(detail.ip_whitelist)
+    if (!list.includes(props.ip)) {
+      ElMessage.info(`该 IP 已不在策略「${policy.name}」的信任名单中`)
+      return
+    }
+    const trustEnabled = detail.ip_whitelist_enabled !== false
+    try {
+      await ElMessageBox.confirm(
+        trustEnabled
+          ? `将把 ${props.ip} 从策略「${policy.name}」的信任名单移除，该 IP 将恢复常规评估。是否继续？`
+          : `策略「${policy.name}」的信任名单当前为关闭状态，该条目暂不生效；将把 ${props.ip} 从信任名单条目中清除。是否继续？`,
+        trustEnabled ? '移除信任' : '清除未生效条目',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: trustEnabled ? 'warning' : 'info' },
+      )
+    } catch {
+      return
+    }
+    const res = await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify(list.filter((entry) => entry !== props.ip)) })
+    showSaveResult(res as unknown as { message?: string }, `已从策略「${policy.name}」的信任名单移除 ${props.ip}`)
+    await refreshRow(policy.id)
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    unlockBusy(policy.id, 'untrust')
+  }
+}
 </script>
 
 <style scoped>
@@ -596,6 +764,8 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-location-popper .ipo-list-select { width: 168px; }
 .ip-location-popper .ipo-list-empty { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
+.ip-location-popper .ipo-group { margin-top: 2px; }
+.ip-location-popper .ipo-group-title { font-size: 12px; font-weight: 600; color: var(--el-text-color-regular, #606266); margin: 6px 0 0; }
 .ip-location-popper .ipo-row { padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-row-head { display: flex; align-items: center; gap: 6px; }
 .ip-location-popper .ipo-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

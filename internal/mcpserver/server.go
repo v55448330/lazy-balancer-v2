@@ -78,7 +78,7 @@ var tools = []toolSpec{
 	{"get_ip2region_update_status", "获取 IP2Region 更新进度状态", http.MethodGet, "/security/ip2region/update/status", nil, nil, emptySchema},
 	{"get_ip2region_update_logs", "获取 IP2Region 更新日志", http.MethodGet, "/security/ip2region/update/logs", nil, nil, emptySchema},
 	{"get_rate_limit_blocks", "获取限流拦截统计", http.MethodGet, "/security/rate-limit-blocks", nil, nil, emptySchema},
-	{"get_rule_stage_stats", "获取单规则三阶段安全统计（阶段 1/3 近 24h 拦截数+限流重载口径计数）", http.MethodGet, "/security/rules/{caddy_id}/stage-stats", []string{"caddy_id"}, nil, emptySchema},
+	{"get_rule_stage_stats", "获取单规则三阶段安全统计（阶段 1/3 近 24h 拦截数+限流重载口径计数）", http.MethodGet, "/security/rules/{caddy_id}/stage-stats", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"create_security_policy", "创建安全策略（WAF 模式/CRS/IP ACL/GeoIP/限流/拦截页面）", http.MethodPost, "/security/policies", nil, nil, bodySchema},
 	{"update_security_policy", "更新指定安全策略", http.MethodPut, "/security/policies/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_security_policy", "删除指定安全策略", http.MethodDelete, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},
@@ -245,9 +245,12 @@ const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":
 const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"},"all":{"type":"boolean","enum":[true]}},"oneOf":[{"required":["all"]},{"required":["caddy_id"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"username":{"type":"string","description":"操作人模糊筛选"},"action":{"type":"string","description":"操作模糊筛选"},"resource":{"type":"string","description":"对象模糊筛选"},"ip":{"type":"string","description":"IP 模糊筛选"},"keyword":{"type":"string","description":"详情关键词"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 
-// R68 B-F2：schema 必须覆盖 queryArgs 声明的全部参数——mcp-go 在工具处理器前
-// 按 input_schema 强校验（additionalProperties:false），漏声明的参数（如 page/page_size）
-// 会把 Agent 按工具描述传的分页值以 -32602 拒绝，分页永远不可达。
+// R68 B-F2（APIMCP45-2 更正如实描述）：schema 必须覆盖 queryArgs 声明的全部
+// 参数——运行时未启用 WithInputSchemaValidation（mcp-go v0.58.0 实证：不启用
+// 则 inputValidator 为 nil，参数不校验、也不会产生 -32602），input_schema 仅
+// 是 Agent 侧契约文档：Agent 按 tools/list 的 schema 构参，漏声明的参数（如
+// page/page_size）在 schema 上不可见，Agent 只能漏传或凭工具描述臆测。刻意
+// 不启用运行时校验——启用会把 schema 文档缺口升级为硬失败面，是否启用另行裁定。
 // 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs
 // page≤1000000、page_size≤200 默认 50——见 ListCertJobs maxCertJobPage）。
 const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"string","description":"搜索关键词"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":50}},"additionalProperties":false}`

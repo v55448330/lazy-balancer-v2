@@ -39,6 +39,9 @@ type ruleFeatureInput struct {
 	ProxyStreamTimeout         int
 	ProxyFlushInterval         int
 	ProxyStreamCloseDelay      int
+	TCPHealthCheckPort         int
+	TCPTryDuration             int
+	TCPTryInterval             int
 }
 
 type pathRuleQueryer interface {
@@ -77,6 +80,9 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 		ProxyStreamTimeout:         req.ProxyStreamTimeout,
 		ProxyFlushInterval:         req.ProxyFlushInterval,
 		ProxyStreamCloseDelay:      req.ProxyStreamCloseDelay,
+		TCPHealthCheckPort:         req.TCPHealthCheckPort,
+		TCPTryDuration:             req.TCPTryDuration,
+		TCPTryInterval:             req.TCPTryInterval,
 	}
 }
 
@@ -164,6 +170,17 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.ProxyStreamCloseDelay != nil {
 		input.ProxyStreamCloseDelay = *req.ProxyStreamCloseDelay
+	}
+	// U3-4:TCP 三字段指针字段同口径合并——nil 沿用 existing,非 nil 解引用,
+	// 使 validateRuleFeatures 的负值门在更新路径看到真实值。
+	if req.TCPHealthCheckPort != nil {
+		input.TCPHealthCheckPort = *req.TCPHealthCheckPort
+	}
+	if req.TCPTryDuration != nil {
+		input.TCPTryDuration = *req.TCPTryDuration
+	}
+	if req.TCPTryInterval != nil {
+		input.TCPTryInterval = *req.TCPTryInterval
 	}
 	return input
 }
@@ -304,6 +321,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		}
 		if input.ProxyDialTimeout > 0 || input.ProxyResponseHeaderTimeout > 0 || input.ProxyReadTimeout > 0 || input.ProxyWriteTimeout > 0 || input.ProxyStreamTimeout > 0 || input.ProxyFlushInterval != 0 || input.ProxyStreamCloseDelay > 0 {
 			return fmt.Errorf("TCP 规则不支持 HTTP 代理超时配置")
+		}
+		// U3-4:TCP 三字段无哨兵语义——负值仅被渲染侧静默钳制(caddy.go 3503-3522),
+		// 保存前拒绝显式负值。proxy_flush_interval 的 -1 哨兵仅属 http 侧,不适用此处。
+		if input.TCPHealthCheckPort < 0 || input.TCPTryDuration < 0 || input.TCPTryInterval < 0 {
+			return fmt.Errorf("TCP 健康检查端口与重试时长/间隔不能为负数")
 		}
 	}
 	if !input.CustomRoutesEnabled && len(input.PathRules) > 0 {

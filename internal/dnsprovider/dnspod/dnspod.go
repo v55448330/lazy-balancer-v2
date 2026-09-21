@@ -158,8 +158,28 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 	var cleanupErr error
 	var failed []ownedRecord
 	deleteOne := func(recordID string) error {
-		if err := p.deleteRecord(ctx, domainID, recordID); err != nil {
-			failed = append(failed, ownedRecord{recordID: recordID})
+		err := p.deleteRecord(ctx, domainID, recordID)
+		if errors.Is(err, errStaleDomainID) {
+			// U5-1（第 45 轮审计）：cleanUp 侧的 CERT42-7 同族自愈——缓存的
+			// zone→domain_id 陈旧（域名移出账户/删除重建）时删除对旧 ID 报
+			// 「域名不存在」类错误。作废缓存重解析一次并重试一次；重解析
+			// 或重试失败照旧记 failed，不循环。
+			invalidateDomainIDCache(zone)
+			freshID, resolveErr := p.getDomainID(ctx, zone)
+			if resolveErr != nil {
+				err = errors.Join(err, resolveErr)
+			} else {
+				domainID = freshID
+				err = p.deleteRecord(ctx, freshID, recordID)
+			}
+		}
+		if err != nil {
+			if p.ownership == nil {
+				// U5-2：failed 的唯一消费点是下方 ownership==nil 的 owned
+				// 回填；ownership 模式下失败条目由 ownership 留存（删除失败
+				// 不 Remove），不再写入死存储。
+				failed = append(failed, ownedRecord{recordID: recordID})
+			}
 			cleanupErr = errors.Join(cleanupErr, err)
 			return err
 		}
@@ -240,9 +260,9 @@ func (n flexNumber) Int64() int64 {
 	return value
 }
 
-// errStaleDomainID 标记 Record.Create 返回的「域名不存在/ID 失效」类错误
-// （CERT42-7）：缓存的 zone→domain_id 因域名移出账户/删除重建而陈旧时由
-// Present 捕获，作废缓存重解析后重试一次。
+// errStaleDomainID 标记 Record.Create/Record.Remove 返回的「域名不存在/ID 失效」
+// 类错误（CERT42-7/U5-1）：缓存的 zone→domain_id 因域名移出账户/删除重建而
+// 陈旧时由 Present 与 cleanUp 捕获，作废缓存重解析后重试一次。
 var errStaleDomainID = errors.New("dnspod: 域名 ID 已失效")
 
 // isDomainGoneStatus 判定 dnsapi.cn 状态是否属于「域名不存在」类：code 6
@@ -370,5 +390,11 @@ func (p *Provider) deleteRecord(ctx context.Context, domainID, recordID string) 
 		// 记录ID错误（记录已不存在）：按删除成功处理，保证清理幂等
 		return nil
 	}
-	return fmt.Errorf("Record.Remove failed: %s", result.Status.Message)
+	err := fmt.Errorf("Record.Remove failed: %s", result.Status.Message)
+	if isDomainGoneStatus(result.Status.Code.String(), result.Status.Message) {
+		// U5-1（第 45 轮审计）：与 createRecord 同判据标记「域名不存在」类
+		// 错误，供 cleanUp 作废缓存重试（CERT42-7 Present 侧自愈的删除侧对偶）。
+		err = errors.Join(err, errStaleDomainID)
+	}
+	return err
 }

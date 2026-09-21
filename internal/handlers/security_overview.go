@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,7 +66,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 			return
 		}
 		n, convErr := strconv.Atoi(triggered)
-		if convErr == nil && (n == 2 || n == 4 || n == 7 || n == 8 || (n >= 800000 && n < 900000)) {
+		if convErr == nil && (n == 2 || n == 4 || n == 7 || n == 8 || services.IsGeoIPPrecheckID(n)) {
 			stage1 += count
 		} else {
 			stage3 += count
@@ -80,8 +82,15 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 
 	var domain string
 	if err := db.DB.QueryRow(`SELECT COALESCE(domain,'') FROM lb_rules WHERE caddy_id=?`, ruleCaddyID).Scan(&domain); err != nil {
+		// APIMCP45-3：ErrNoRows（规则不存在）与真实 DB 故障分判——前者归 404
+		// not_found，后者保持 500 且 message 归位查询失败（不再借「规则不存在」
+		// 文案）。前端对非 200 一律 stats=null，404 化不改变前端表现。
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			return
+		}
 		services.Logf("error", "stage-stats read rule domain failed for %s: %v", ruleCaddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "规则不存在"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "阶段统计查询失败"})
 		return
 	}
 	var ratelimit float64

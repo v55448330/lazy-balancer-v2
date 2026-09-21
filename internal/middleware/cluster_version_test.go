@@ -845,3 +845,100 @@ func TestClusterVersionTrigger_autoBackupSettingsBumpLastRunExcluded(t *testing.
 		t.Fatalf("slave write must not bump, got %d", got)
 	}
 }
+
+// CL45-1(第 45 轮审计):lb_rules 触发器 OF 清单补阶段拦截页 4 列——
+// block_page_stage1_id/status、block_page_stage3_id/status 是同步面列
+// (cluster_snapshot.go dump 与 cluster_apply.go 重放均携带),此前不在 OF
+// 清单:UpdateRule 指针逐列拼装与 BatchRuleBlockPages 单事务 4 列 UPDATE
+// 不 bump cluster_version,快照缓存持续命中旧指纹,阶段页变更经 304 门
+// 永不传播到从节点。
+func TestClusterVersionTrigger_bumpsOnStagePageColumns(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_stage_of','stage-of','http',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 目标形状:仅写阶段页 4 列(batch-block-pages 单事务 UPDATE 形态)必须 bump
+	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage1_id=7, block_page_stage1_status=403, block_page_stage3_id=8, block_page_stage3_status=503 WHERE caddy_id='lb_stage_of'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("stage page columns update should bump cluster_version to 1, got %d", got)
+	}
+
+	// 目标形状:单列写(UpdateRule 指针逐列拼装形态)同样 bump
+	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_status=404 WHERE caddy_id='lb_stage_of'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("single stage page column update should bump cluster_version to 2, got %d", got)
+	}
+
+	// 回归形状:既有 OF 列赋值仍 bump
+	if _, err := database.Exec(`UPDATE lb_rules SET description='of-bumped' WHERE caddy_id='lb_stage_of'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 3 {
+		t.Fatalf("existing OF column update should bump cluster_version to 3, got %d", got)
+	}
+
+	// 非 OF 列不 bump(OF 语义既有行为):lb_rules 无 last_login 类簿记列,
+	// 唯一非 OF 列是 id——仅 SET id 不得触发版本 bump。
+	if _, err := database.Exec(`UPDATE lb_rules SET id=id WHERE caddy_id='lb_stage_of'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 3 {
+		t.Fatalf("non-OF column (id) update must not bump, got %d", got)
+	}
+}
+
+// CL45-2(第 45 轮审计):security_policies 触发器 OF 清单补 policy_type/
+// trust_detection——两列是同步面列(快照 dump/apply 携带,从端渲染消费
+// stage0 直通与 id:3 并集),此前不在 OF 清单:UpdateSecurityPolicy 仅提交
+// 类型或检测开关、或缺省提交触发合并后重推断回写时不 bump,阶段 0 类型与
+// 信任语义变更经 304 门滞留主节点。
+func TestClusterVersionTrigger_bumpsOnPolicyTypeColumns(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES ('of-typed','blocking','stage3',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,ip_whitelist,ip_whitelist_enabled,policy_type,trust_detection,enabled) VALUES ('of-trust','off','["198.51.100.7"]',1,'stage0',0,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 目标形状:仅写 policy_type(显式类型提交/重推断回写形态)必须 bump
+	if _, err := database.Exec(`UPDATE security_policies SET policy_type='stage2' WHERE name='of-typed'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("policy_type update should bump cluster_version to 1, got %d", got)
+	}
+
+	// 目标形状:仅写 trust_detection(阶段 0 检测开关形态)必须 bump
+	if _, err := database.Exec(`UPDATE security_policies SET trust_detection=1 WHERE name='of-trust'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("trust_detection update should bump cluster_version to 2, got %d", got)
+	}
+
+	// 回归形状:既有 OF 列赋值仍 bump
+	if _, err := database.Exec(`UPDATE security_policies SET mode='detection' WHERE name='of-typed'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 3 {
+		t.Fatalf("existing OF column update should bump cluster_version to 3, got %d", got)
+	}
+}

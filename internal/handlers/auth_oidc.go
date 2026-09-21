@@ -331,6 +331,12 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, authURL)
 }
 
+// isUniqueConstraintError 判定 SQLite 唯一约束冲突（modernc 驱动错误文本口径，
+// 与 users.go 用户名 409 分支同源）。
+func isUniqueConstraintError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 // OIDCCallback GET /auth/oidc/callback——授权码换令牌→ID Token 验签→
 // 用户命中/禁用检查/JIT 开户→签发本站 JWT(与密码登录同构,auth_method=oidc)。
 func (h *Handlers) OIDCCallback(c *gin.Context) {
@@ -475,15 +481,33 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		// password_hash 置空:bcrypt 对空哈希恒败,OIDC 用户密码登录天然不可用。
 		res, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled, auth_provider, oidc_subject, oidc_issuer) VALUES (?, '', 'user', ?, 1, 'oidc', ?, ?)",
 			candidate, displayName, claims.Sub, cfg.Issuer)
+		fellBack := false
+		if err != nil && isUniqueConstraintError(err) {
+			// U6a-1（第 45 轮审计）：JIT 开户与并发回调竞态——两请求同窗口双双
+			// 走 no-rows 分支，后到的 INSERT 撞 u_oidc_identity 唯一索引。按既有
+			// 命中分支收口：重 SELECT 对端已建行，命中即沿用其账号状态（禁用态
+			// 同口径拒绝）；不补「创建」审计——行非本请求所建。身份行不存在
+			// （冲突发生在 username 等其他唯一键）则维持原失败路径。
+			err = db.DB.QueryRow("SELECT id, username, role, COALESCE(is_enabled,1), COALESCE(password_version,0) FROM users WHERE auth_provider='oidc' AND oidc_issuer=? AND oidc_subject=?", cfg.Issuer, claims.Sub).
+				Scan(&userID, &username, &role, &isEnabled, &passwordVersion)
+			fellBack = err == nil
+			if fellBack && isEnabled != 1 {
+				services.RecordAuditLog(username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s(账号已禁用)", services.AuditUserPart(userID, username)), services.AuditResultPart("failure")), c.ClientIP())
+				fail("账号已被禁用", "")
+				return
+			}
+		}
 		if err != nil {
 			fail("创建 OIDC 用户失败", "OIDC JIT 开户失败")
 			return
 		}
-		newID, _ := res.LastInsertId()
-		userID = int(newID)
-		username = candidate
-		role = "user"
-		services.RecordAuditLog(username, "创建", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 首次登录自动开户(%s)", cfg.Issuer), services.AuditResultPart("success")), c.ClientIP())
+		if !fellBack {
+			newID, _ := res.LastInsertId()
+			userID = int(newID)
+			username = candidate
+			role = "user"
+			services.RecordAuditLog(username, "创建", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 首次登录自动开户(%s)", cfg.Issuer), services.AuditResultPart("success")), c.ClientIP())
+		}
 	default:
 		fail("查询用户失败", "")
 		return

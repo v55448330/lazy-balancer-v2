@@ -377,6 +377,16 @@ const fetchUsers = async () => {
 
 const handleSubmit = async () => {
   if (isReadOnly.value || submitting.value) return
+  // U9-2：用户名前置校验（对齐后端 CreateUser/UpdateUser 的 min=3,max=50 与 Login.vue
+  // setup 口径）——创建必填；编辑态用户名只读，非空时同口径兜底。不合法前置拦截，不发请求。
+  if (!editingUser.value && !form.value.username) {
+    ElMessage.warning('请输入用户名')
+    return
+  }
+  if (form.value.username && (form.value.username.length < 3 || form.value.username.length > 50)) {
+    ElMessage.warning('用户名长度需为 3-50 位')
+    return
+  }
   if ((!editingUser.value && !form.value.password) || (form.value.password && form.value.password.length < 6)) {
     ElMessage.warning('密码长度至少6位')
     return

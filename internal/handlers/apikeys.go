@@ -153,6 +153,9 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// 开启且创建者为启用 MFA 的 JWT 用户时，特权 Key 创建按 mfaStepUpGuard 同
 	// 语义要求 60 秒内 MFA 验证（428 → 全局弹码 → 携新 JWT 重试）；API Key
 	// 机器身份豁免（与路由级守卫一致），未启用 MFA 直通。
+	// U6a-3（第 45 轮审计）：下方内联检查与 middleware mfaStepUpGuard 同构——
+	// R72 B-1 为路由补前置守卫后，守卫开启时本层通常已被前置放行/拦截，保留
+	// 仅作纵深防御（R72 B-1 前守卫独扛时代的产物）。
 	if !req.ReadOnly || req.MCPEnabled {
 		if c.GetString("auth_type") == "jwt" && services.MFAWriteGuardEnabled() {
 			var mfaEnabled bool

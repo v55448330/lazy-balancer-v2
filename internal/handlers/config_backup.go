@@ -186,7 +186,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":               {"enabled"},
 	"certificate_configs":        {"enabled"},
-	"security_policies":          {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body"}, // SYSRENDER27-P5-4: ip_whitelist_enabled 补入(R56 枚举漏列)
+	"security_policies":          {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection"}, // SYSRENDER27-P5-4: ip_whitelist_enabled 补入(R56 枚举漏列); U6B-1: trust_detection 补入(阶段 0 检测开关,同 BOOLEAN NOT NULL 布尔族)
 	"security_custom_rules":      {"enabled"},
 	"security_block_pages":       {"is_default"},
 	"security_crs_version":       {"auto_update"},
@@ -1324,6 +1324,22 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 		policy["mode"] = mode
 		policy["ip_acl_mode"] = ipACLMode
 		policy["geoip_mode"] = geoIPMode
+		// U6B-2（第 45 轮审计）：policy_type 值域门——显式值必须是五枚举之一
+		//（models.PolicyType* 单一事实源），未知类型落库会漂移策略页分组与阶段外
+		// 字段归一判定。空串/null/缺省放行（restoreTable 导入侧对空行按内容重
+		// 推断，InferSnapshotPolicyType 单一事实源）；非字符串形态与三枚举门同
+		// 口径拒绝（R48-3 同型，backupString 不得静默归一）。
+		if rawType, exists := policy["policy_type"]; exists && rawType != nil {
+			typeStr, ok := rawType.(string)
+			if !ok {
+				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为字符串，实际类型 %T", index+1, name, rawType)
+			}
+			switch typeStr {
+			case "", models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3, models.PolicyTypeMixed:
+			default:
+				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为 stage0/stage1/stage2/stage3/mixed 之一，实际 %q", index+1, name, typeStr)
+			}
+		}
 		// R58 C-N4（R57 B-#2 遗留）：导入侧限流形状与保存侧 validateRateLimitShape
 		// 同口径——enabled=true 而 rps<=0 时发射分支直接跳过限流 handler，而
 		// 汇总/绑定宣称已启用；旧备份（保存侧校验前导出）可携带该形状经导入
@@ -1784,7 +1800,7 @@ func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 		candidates[index] = newRuleConflictCandidate(
 			backupString(row["name"]), backupString(row["caddy_id"]), backupString(row["protocol"]), backupString(row["domain"]),
 			backupInt(row["listen_port"]),
-			// Round 32 F-1: 与校验侧 backupRuleEnabled（config_backup.go:284）同口径——
+			// Round 32 F-1: 与校验侧 backupRuleEnabled 同口径——
 			// 手造备份缺 enabled 列时按表结构 COALESCE(enabled,1) 视为启用；此前用
 			// backupBooleanEnabled 缺键按禁用，C1 门控下校验按启用、矩阵按禁用跳过，
 			// 两条同端口同域名规则双双启用导入、运行时相互遮蔽。

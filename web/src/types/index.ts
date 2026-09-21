@@ -274,4 +274,5 @@ export interface GlobalConfigData {
   cert_renewal_attempts: number
   default_ca_provider_id: number
   dns_provider: string
+  github_proxy_url?: string
 }

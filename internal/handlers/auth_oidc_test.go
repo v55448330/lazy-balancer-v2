@@ -7,12 +7,14 @@ package handlers
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,6 +42,11 @@ type mockIdP struct {
 	// usePref/prefUsername:覆盖 id_token 的 preferred_username(测空白用户名形状)
 	usePref      bool
 	prefUsername string
+	// nonceByChallenge:PKCE challenge → nonce——并发双登录各自 authorize 后,
+	// 令牌交换按 code_verifier 派生 challenge 回查本登录的 nonce(单登录场景
+	// lastNonce 兜底同值)。
+	nonceMu          sync.Mutex
+	nonceByChallenge map[string]string
 }
 
 func newMockIdP(t *testing.T) *mockIdP {
@@ -48,7 +55,7 @@ func newMockIdP(t *testing.T) *mockIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &mockIdP{key: key}
+	m := &mockIdP{key: key, nonceByChallenge: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -81,6 +88,9 @@ func newMockIdP(t *testing.T) *mockIdP {
 			http.Error(w, "PKCE required", http.StatusBadRequest)
 			return
 		}
+		m.nonceMu.Lock()
+		m.nonceByChallenge[q.Get("code_challenge")] = q.Get("nonce")
+		m.nonceMu.Unlock()
 		redirect, _ := url.Parse(q.Get("redirect_uri"))
 		rq := redirect.Query()
 		rq.Set("code", "mock-code-1")
@@ -110,6 +120,16 @@ func newMockIdP(t *testing.T) *mockIdP {
 			return
 		}
 		nonce, _ := m.lastNonce.Load().(string)
+		// 并发登录配对:按 code_verifier 派生 S256 challenge 回查本登录的 nonce,
+		// 未命中(单登录)时 lastNonce 兜底同值。
+		if verifier := r.FormValue("code_verifier"); verifier != "" {
+			sum := sha256.Sum256([]byte(verifier))
+			m.nonceMu.Lock()
+			if keyed, ok := m.nonceByChallenge[base64.RawURLEncoding.EncodeToString(sum[:])]; ok {
+				nonce = keyed
+			}
+			m.nonceMu.Unlock()
+		}
 		pref := "oidcalice"
 		if m.usePref {
 			pref = m.prefUsername
@@ -617,4 +637,72 @@ func TestOIDCSettingsTest_verifiesClientCredentials(t *testing.T) {
 			t.Fatalf("unsupported cc: expect ok+unchecked, got ok=%v checked=%v", ok, checked)
 		}
 	})
+}
+
+// 场景 11(U6a-1 第 45 轮审计):JIT 开户并发回调竞态——双请求同窗口双双走
+// no-rows 分支,u_oidc_identity 唯一索引保证至多一行;后到的 INSERT 撞索引后
+// 回退重 SELECT 命中既有行:两个回调都成功签发,最终恰一个身份行。
+func TestOIDCCallback_jit_race_conflict_falls_back_to_existing_row(t *testing.T) {
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+
+	loginOnce := func() (code, state string) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+		u, _ := url.Parse(rec.Header().Get("Location"))
+		return simulateIdPIssuesCode(t, u.String()), u.Query().Get("state")
+	}
+	codeA, stateA := loginOnce()
+	codeB, stateB := loginOnce()
+
+	type callbackResult struct {
+		code     int
+		location string
+	}
+	results := make([]callbackResult, 2)
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ready <- struct{}{}
+		<-start
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code="+codeA+"&state="+stateA, nil))
+		results[0] = callbackResult{rec.Code, rec.Header().Get("Location")}
+	}()
+	go func() {
+		defer wg.Done()
+		ready <- struct{}{}
+		<-start
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code="+codeB+"&state="+stateB, nil))
+		results[1] = callbackResult{rec.Code, rec.Header().Get("Location")}
+	}()
+	<-ready
+	<-ready
+	close(start)
+	wg.Wait()
+
+	var cnt int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE auth_provider='oidc' AND oidc_subject='user-sub-1'").Scan(&cnt); err != nil {
+		t.Fatalf("count identity rows: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("concurrent JIT must yield exactly 1 identity row, got %d", cnt)
+	}
+	for i, r := range results {
+		if r.code != http.StatusFound {
+			t.Fatalf("callback #%d code=%d body=%s, want 302", i, r.code, r.location)
+		}
+		if !strings.Contains(r.location, "#/oidc/callback?token=") {
+			t.Fatalf("callback #%d must redirect with token (UNIQUE loser must fall back to existing row), got %s", i, r.location)
+		}
+	}
+	var username string
+	if err := db.DB.QueryRow("SELECT username FROM users WHERE auth_provider='oidc' AND oidc_subject='user-sub-1'").Scan(&username); err != nil || username == "" {
+		t.Fatalf("identity row must exist with username, got %q err=%v", username, err)
+	}
 }

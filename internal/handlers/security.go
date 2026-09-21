@@ -482,6 +482,19 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
 		return
 	}
+	// 规则级阶段拦截页引用（U1-1）：lb_rules 的 block_page_stage1_id /
+	// block_page_stage3_id 指向该页时，静默删除会让对应规则的阶段 1/3 拦截
+	// 响应回落「跟随策略」或 Caddy 默认页面，必须先解除规则级引用。与策略
+	// 引用检查同事务（写锁已持），并发绑定无法插到检查与 DELETE 之间。
+	var ruleReferenced int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM lb_rules WHERE block_page_stage1_id=? OR block_page_stage3_id=?", id, id).Scan(&ruleReferenced); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if ruleReferenced > 0 {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 条规则的阶段拦截页引用，请先解除", ruleReferenced)})
+		return
+	}
 	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_block_pages WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -1602,6 +1615,34 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
+	// 阶段外 ACL 启用门（U8-2）：显式 stage0/2/3 策略且自身阶段特征在位
+	// （信任/限流/WAF 内容非空）时，PUT {ip_acl_enabled:true} 会使 G1 与原
+	// 阶段特征并存→重推断把类型改写 mixed（类型与内容漂移）——UPDATE 前
+	// 拒绝。空壳单职策略（无任何阶段特征，落推断零组桶 stage3）首次启用
+	// ACL 走既有重推断路径（单组→stage1 或维持零组桶），不拦；stage1 是
+	// ACL 所属阶段不拦；mixed/空串存量兼容态保持现状。指针语义：nil（缺省）
+	// 与显式 false 均不拦；存量 ACL 已启用时真值为幂等不拦。
+	if req.IPACLEnabled != nil && *req.IPACLEnabled {
+		var stored models.SecurityPolicy
+		if err := scanSecurityPolicyRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略类型失败"})
+			return
+		}
+		if !stored.IPACLEnabled {
+			fs := models.PolicyTypeFeatures(&stored)
+			ownStageFeature := (stored.PolicyType == models.PolicyTypeStage0 && fs.G0) ||
+				(stored.PolicyType == models.PolicyTypeStage2 && fs.G2) ||
+				(stored.PolicyType == models.PolicyTypeStage3 && fs.G3)
+			if ownStageFeature {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("阶段 %s 策略不支持启用 IP 访问控制，请创建阶段 1 策略或走更新迁移", strings.TrimPrefix(stored.PolicyType, "stage"))})
+				return
+			}
+		}
+	}
 	query := "UPDATE security_policies SET updated_at=datetime('now')"
 	var args []interface{}
 	addStr := func(field string, val *string) {
@@ -2406,6 +2447,23 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			skipped = append(skipped, skippedRule{ruleID, fmt.Sprintf("合并后超过 5 条策略上限（%d+%d）", existingCount, len(newIDs))})
 			continue
 		}
+		// 限流策略唯一门（U1-2）：拆分产出 stage2 子策略（features.G2）时，
+		// 该规则现存的其他绑定若已含 stage2（mixed 存量 [mixed,stage2] 并存
+		// 形态合法——BindRuleToPolicy 唯一门不追溯存量），直接重映射会出现
+		// 单规则双限流——进 skipped 保留原绑定（与 >5 同口径），解除现有
+		// stage2 绑定后可重新拆分。
+		if features.G2 {
+			var otherStage2 int
+			if err := tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM security_policy_bindings b JOIN security_policies sp ON sp.id=b.policy_id
+				WHERE b.rule_caddy_id=? AND sp.policy_type='stage2' AND b.policy_id != ?`, ruleID, p.ID).Scan(&otherStage2); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			if otherStage2 > 0 {
+				skipped = append(skipped, skippedRule{ruleID, "已有绑定的限流策略（每条规则最多一条限流策略）"})
+				continue
+			}
+		}
 		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleID, p.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -2618,6 +2676,8 @@ const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-
 
 // geoipFamilyCondition 地域拦截族的预检精确段形态条件（阶段化模型：
 // buildIPPrecheckDirectives 逐策略链 id=800000+policyID）——6 位 8xxxxx。
+// 段界单一事实源=services.IsGeoIPPrecheckID；本 GLOB 为 SQL 文本形态,
+// 段基址调整时须与谓词同步修订。
 // 旧共享 id:8 由 ruleTriggeredFamilyPrefixes「地域拦截」表单值精确匹配覆盖。
 const geoipFamilyCondition = "rule_triggered GLOB '8[0-9][0-9][0-9][0-9][0-9]'"
 

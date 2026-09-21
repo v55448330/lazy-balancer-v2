@@ -11,10 +11,12 @@ import (
 func mcpAccessGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.GetString("auth_type") != "api_key" {
+			recordAuthenticationRejection(c, "mcp_auth_rejected")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "MCP 仅支持 API 密钥认证"})
 			return
 		}
 		if !c.GetBool("api_key_mcp_enabled") {
+			recordAuthenticationRejection(c, "mcp_disabled")
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "MCP 功能未开启"})
 			return
 		}

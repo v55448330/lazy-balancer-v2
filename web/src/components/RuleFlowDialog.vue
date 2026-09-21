@@ -221,7 +221,7 @@
                           <div class="flow-detail-block-title">自定义规则（{{ group.details.customRules.length }} 条）</div>
                           <div v-for="rule in group.details.customRules" :key="rule.id" class="flow-detail-entry" :class="{ 'is-disabled': !rule.enabled }">
                             <span class="flow-detail-value">{{ rule.name }}<span class="flow-detail-score">计分 {{ rule.score }}</span></span>
-                            <span class="flow-detail-meta">{{ rule.action === 'pass' ? '放行' : '拦截' }}<template v-if="rule.targets"> · {{ rule.targets }}</template></span>
+                            <span class="flow-detail-meta">{{ rule.action === 'pass' ? '放行' : rule.action === 'log' ? '仅记录' : '拦截' }}<template v-if="rule.targets"> · {{ rule.targets }}</template></span>
                           </div>
                         </template>
                         <template v-if="group.details.crsGroups && group.details.crsGroups.length > 0">
@@ -346,6 +346,10 @@ let statsSeq = 0
 // ++ 会让先发的 stage-stats 响应 seq 失配被丢弃、statsSettled 恒 false——
 // 阶段计数 chip 在 TLS 规则上永不渲染（2026-09-21 生产报障根因）
 let certSeq = 0
+// 明细拉取会话序号：弹框每次打开自增，使上一会话在途明细续体落地前失配被弃
+// （A→B 快速切换后，A 的明细数据不得附着到 B 的模型、也不得置位 detailsAttached
+// 把 B 锁死在「明细按钮缺失且不可重试」状态）
+let detailsSeq = 0
 
 // 打开即见接入信息（用户裁定：默认选中「接入」，非空白）
 const activeNode = ref('access')
@@ -408,6 +412,7 @@ const groupHasDetails = (group: StagePolicyGroup): boolean => {
 
 const ensureDetails = async (): Promise<void> => {
   if (detailsAttached.value || detailLoading.value) return
+  const seq = ++detailsSeq
   detailLoading.value = true
   try {
     const caddyId = props.target?.caddyId
@@ -418,6 +423,9 @@ const ensureDetails = async (): Promise<void> => {
       request.get<APIResponse<SecurityStageCustomRule[]>>('/security/custom-rules', { silent: true }),
       request.get<APIResponse<{ rules: CrsRuleFileOption[] }>>('/security/crs/rules?page_size=50', { silent: true }),
     ])
+    // 续体落地前校验会话序号：弹框已切换（onDialogOpen ++）或更新一次拉取已发起
+    // 时丢弃过期结果，避免旧会话数据附着或抢置 detailsAttached
+    if (seq !== detailsSeq) return
     if (policyRes.status === 'fulfilled') {
       fullPolicies.value = new Map((policyRes.value.data ?? []).map((p) => [p.id, p]))
     }
@@ -425,7 +433,8 @@ const ensureDetails = async (): Promise<void> => {
     if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value.data?.rules ?? []
     detailsAttached.value = true
   } finally {
-    detailLoading.value = false
+    // 失配会话不回落 detailLoading——现行会话（重置区或新一次拉取）自行管理该锁
+    if (seq === detailsSeq) detailLoading.value = false
   }
 }
 
@@ -537,7 +546,10 @@ const onDialogOpen = (): void => {
   statsSettled.value = false
   certInfo.value = null
   certLoading.value = false
-  // 明细缓存随弹框会话重置（规则绑定/策略内容可能已在页间变更）
+  // 明细缓存随弹框会话重置（规则绑定/策略内容可能已在页间变更）；序号自增使
+  // 上一会话在途明细续体失配（修复 A→B 快速切换后 B 明细被 A 续体占死/残留）
+  detailsSeq++
+  detailLoading.value = false
   detailsAttached.value = false
   fullPolicies.value = new Map()
   customRules.value = []

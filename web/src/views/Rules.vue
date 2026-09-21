@@ -29,13 +29,15 @@
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
       </div>
       <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <el-table-column prop="name" label="规则名称" min-width="140">
+        <el-table-column prop="name" label="规则名称" min-width="180">
           <template #default="{ row }">
             <div class="rule-name-cell">
               <!-- 锁 hover 摘要（不可点击）：按阶段 0/1/2/3 分组的紧凑摘要；
-                   「查看完整处理流程」链接跳转流程弹框（跳转前 hide 本 popover 防遮挡） -->
+                   「查看完整处理流程」链接跳转流程弹框（跳转前 hide 本 popover 防遮挡）。
+                   2026-09-21 用户裁定：HTTP/HTTPS 规则恒显示锁（未绑定=warning 黄锁，
+                   四阶段灰态「未启用」；绑定=is-allow 绿锁现状）；TCP 规则不显示。 -->
               <el-popover
-                v-if="ruleStageModel(row).hasAnyPolicy"
+                v-if="row.protocol === 'http'"
                 :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
                 placement="top"
                 trigger="hover"
@@ -43,7 +45,7 @@
                 popper-class="rule-lock-popper"
               >
                 <template #reference>
-                  <el-icon :size="14" class="acl-lock-icon is-allow" tabindex="0"><Lock /></el-icon>
+                  <el-icon :size="14" class="acl-lock-icon" :class="ruleStageModel(row).hasAnyPolicy ? 'is-allow' : 'is-unbound'" tabindex="0"><Lock /></el-icon>
                 </template>
                 <div class="lock-summary">
                   <div class="lock-summary-title">安全防护 · 阶段摘要</div>
@@ -77,7 +79,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="domain" label="域名" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="domain" label="域名" min-width="320" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
@@ -94,7 +96,7 @@
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" min-width="80" align="center">
+        <el-table-column prop="listen_port" label="端口" width="80" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
@@ -228,7 +230,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="270" fixed="right" align="center">
+        <el-table-column label="操作" width="210" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
@@ -2192,6 +2194,10 @@ const openWizard = async (rule?: Rule) => {
     if (rule.enable_tls && rule.tls_source === 'manual') {
       try {
         const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
+        // U9-1：过期返回直接 return，且不得在此复位 hydratingWizard——复位归属
+        // 最新一次打开调用的生命周期（新建/无 GET 编辑同步复位；带 GET 的编辑/复制
+        // 由自身新鲜请求走到函数尾部复位）。此处代为复位会拆掉在途新调用的
+        // hydration 守卫，sync watch 会在半水合表单上误触发端口迁移。
         if (openSeq !== wizardOpenSeq) return
         if (resp.code === 0 && resp.data) {
           fullRule = resp.data
@@ -2199,6 +2205,7 @@ const openWizard = async (rule?: Rule) => {
     } catch {
       // R62 D-1：与 try 路径同款 seq 守卫——过期请求的失败分支同样不得触碰
       // 在途表单（否则「新建」被过期 fullRule 覆盖，保存语义翻转为 PUT 更新既有规则）。
+      // U9-1：过期分支同样不复位 hydratingWizard（归属最新调用的生命周期）。
       if (openSeq !== wizardOpenSeq) return
       console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id)
     }
@@ -2846,6 +2853,7 @@ const openCopyWizard = async (rule: Rule) => {
   if (rule.enable_tls && rule.tls_source === 'manual') {
     try {
       const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
+      // U9-1：同 openWizard——过期返回不复位 hydratingWizard（归属最新调用生命周期）。
       if (openSeq !== wizardOpenSeq) return
       if (resp.code === 0 && resp.data) fullRule = resp.data
     } catch {
@@ -3377,6 +3385,7 @@ onUnmounted(() => {
 .rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
+.acl-lock-icon.is-unbound { color: var(--el-color-warning); }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 

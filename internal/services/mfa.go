@@ -354,14 +354,15 @@ func MFAClearPendingFailures(userID int) {
 	_, _ = db.DB.Exec("UPDATE users SET mfa_pending_fails=0 WHERE id=?", userID)
 }
 
-// MFAResetForUser 管理员重置：清全部 MFA 状态（含锁定/计数/pending）。
+// MFAResetForUser 管理员重置：清全部 MFA 状态（secret/pending/恢复码/重放片，
+// pending 含失败计数）；登录锁定归重置密码路径。
 func MFAResetForUser(userID int) error {
 	// R72 F-5：同上——重置与消费交错时 '[]' 写回可复活已消费项（虽被 secret
 	// 为空挡住，仍按串行化口径统一）。
 	mfaMu.Lock()
 	defer mfaMu.Unlock()
 	_, err := db.DB.Exec(
-		"UPDATE users SET mfa_enabled=0, mfa_secret='', mfa_pending_secret='', mfa_recovery_codes='[]', mfa_last_timestep=0 WHERE id=?",
+		"UPDATE users SET mfa_enabled=0, mfa_secret='', mfa_pending_secret='', mfa_pending_fails=0, mfa_recovery_codes='[]', mfa_last_timestep=0 WHERE id=?",
 		userID)
 	return err
 }

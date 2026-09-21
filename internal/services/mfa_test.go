@@ -193,7 +193,7 @@ func TestMFAResetForUser(t *testing.T) {
 	_ = mfaTestEnv(t)
 	mfaSeedUser(t, 6)
 	secret, _, _ := MFAGenerateSecret("tester")
-	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret=? WHERE id=6", secret); err != nil {
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_pending_fails=3 WHERE id=6", secret); err != nil {
 		t.Fatal(err)
 	}
 	if err := MFAResetForUser(6); err != nil {
@@ -203,13 +203,17 @@ func TestMFAResetForUser(t *testing.T) {
 	if st.Enabled {
 		t.Fatal("reset must disable mfa")
 	}
-	if locked := false; locked {
-		t.Fatal("reset must clear lockout")
+	// U6a-2：pending 失败计数随重置一并清零（原死断言 if locked := false 的
+	// 替换——锁定本就归重置密码路径，此处钉住 reset 对 MFA 自有状态的覆盖）。
+	var enabled, pendingFails int
+	if err := db.DB.QueryRow("SELECT mfa_enabled, COALESCE(mfa_pending_fails,0) FROM users WHERE id=6").Scan(&enabled, &pendingFails); err != nil {
+		t.Fatal(err)
 	}
-	var enabled int
-	_ = db.DB.QueryRow("SELECT mfa_enabled FROM users WHERE id=6").Scan(&enabled)
 	if enabled != 0 {
 		t.Fatal("db state mismatch")
+	}
+	if pendingFails != 0 {
+		t.Fatalf("mfa_pending_fails=%d, want 0 (reset must clear pending fail counter)", pendingFails)
 	}
 }
 
