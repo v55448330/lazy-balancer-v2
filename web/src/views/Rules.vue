@@ -186,7 +186,7 @@
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
                     <el-tooltip v-if="status.unknown && status.dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                    <el-icon v-else-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                    <el-tag v-else-if="status.unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
                     <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                     <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -198,7 +198,7 @@
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
                         <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                        <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                        <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                         <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -217,7 +217,7 @@
                         <span class="upstream-address">{{ pu.address }}:{{ pu.port }}</span>
                         <span class="upstream-status">
                           <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                          <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                          <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                           <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -1757,8 +1757,7 @@ const fetchHealthStatus = async () => {
         // SLB12-P3-3:TCP 被动健康(未开主动探测)为结构性 N/A——caddy-l4 无
         // admin 端点,被动熔断不产指标(gauge 仅主动检查写),与动态 DNS 同口径。
         const tcpPassive = rule.protocol === 'tcp' && !rule.enable_active_health_check
-        for (const upstream of enabledUpstreams) {
-          const upstreamKey = hostPortKey(upstream.host, upstream.port)
+        const probeUpstream = (upstreamKey: string) => {
           let isHealthy = false
           let isUnknown = true
           let isDegraded = false
@@ -1781,12 +1780,30 @@ const fetchHealthStatus = async () => {
               }
             }
           }
-          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, dynamic: isDynamic, degraded: isDegraded, num_requests: numRequests, fails }
-          if (isUnknown && (isDynamic || tcpPassive)) na++
-          else if (isUnknown) unknown++
-          else if (!isHealthy) unhealthy++
-          else if (isDegraded) degraded++
+          return { healthy: isHealthy, unknown: isUnknown, dynamic: isDynamic, degraded: isDegraded, num_requests: numRequests, fails }
+        }
+        for (const upstream of enabledUpstreams) {
+          const upstreamKey = hostPortKey(upstream.host, upstream.port)
+          const entry = probeUpstream(upstreamKey)
+          upstreamStatus[upstreamKey] = entry
+          if (entry.unknown && (entry.dynamic || tcpPassive)) na++
+          else if (entry.unknown) unknown++
+          else if (!entry.healthy) unhealthy++
+          else if (entry.degraded) degraded++
           else healthy++
+        }
+        // 自定义路由上游并入映射（2026-09-21 用户报障：路径规则上游从不入映射，
+        // 健康浮层对它们恒回落 unknown 问号）：仅补 upstreams 查询键空间供浮层
+        // 与流程弹框按 host:port 直查，规则级计数与 total 保持主上游口径不变；
+        // 与主上游同键视为同一上游，去重跳过
+        if (rule.custom_routes_enabled) {
+          for (const pathRule of healthPathRules(rule)) {
+            for (const pathUpstream of pathRule.upstreams || []) {
+              const upstreamKey = hostPortKey(pathUpstream.address, pathUpstream.port)
+              if (upstreamKey in upstreamStatus) continue
+              upstreamStatus[upstreamKey] = probeUpstream(upstreamKey)
+            }
+          }
         }
         if (rule.caddy_id) {
           mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, na, total: enabledUpstreams.length, upstreams: upstreamStatus }
