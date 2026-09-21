@@ -264,17 +264,14 @@
 
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
-          <!-- 投影条：同一信息条左右两段（左=生效说明句、右=关联规则覆盖状态列表，同字号同基线） -->
+          <!-- 投影条：左=生效说明句、右=关联规则覆盖状态。第 47 轮改为摘要口径（原逐规则
+               清单在关联规则多时撑破弹框：右段 flex:0 0 auto 按 max-content 定尺挤压左段
+               成单字竖排，见 SecurityPolicies 弹框实测）；逐规则覆盖状态与编辑在「关联规则」步骤 -->
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">本策略将在关联规则的 WAF 阶段生效</span>
             <div class="stage-projection-rules">
-              <template v-if="boundRules.length > 0">
-                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                  <span class="stage-projection-state">{{ stageOverrideText(cid, 3) }}</span>
-                </span>
-              </template>
-              <span v-else class="stage-projection-empty">尚未关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
+              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
@@ -545,13 +542,8 @@
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">本策略将在关联规则的 IP 访问控制/地域拦截阶段生效</span>
             <div class="stage-projection-rules">
-              <template v-if="boundRules.length > 0">
-                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                  <span class="stage-projection-state">{{ stageOverrideText(cid, 1) }}</span>
-                </span>
-              </template>
-              <span v-else class="stage-projection-empty">尚未关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
+              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
             </div>
           </div>
           <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
@@ -761,13 +753,8 @@
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">规则可配阶段页覆盖；未覆盖时按触发策略显示</span>
             <div class="stage-projection-rules">
-              <template v-if="boundRules.length > 0">
-                <span v-for="cid in boundRules" :key="cid" class="stage-projection-item">
-                  <span class="stage-projection-rule">「{{ ruleNameOf(cid) }}」</span>
-                  <span class="stage-projection-state">{{ blockPageProjectionText(cid) }}</span>
-                </span>
-              </template>
-              <span v-else class="stage-projection-empty">尚未关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
+              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
@@ -833,14 +820,10 @@
             </div>
           </div>
           <el-divider content-position="left" class="compact-divider">已关联规则的阶段页覆盖</el-divider>
+          <!-- 第 47 轮：逐规则清单改为摘要口径（规则多时撑高/撑破弹框）；逐规则覆盖状态
+               与编辑入口在「关联规则」步骤（含行内阶段页覆盖编辑器与「覆盖生效中」标记） -->
           <div v-if="boundRules.length === 0" class="form-tip-line">尚未关联规则——保存后在「关联规则」步骤绑定，或在规则行点「安全」绑定</div>
-          <div v-else class="preview-bound-rules">
-            <div v-for="cid in boundRules" :key="cid" class="preview-bound-rule">
-              <span class="preview-bound-rule-name">{{ ruleNameOf(cid) }}</span>
-              <span class="preview-bound-rule-stage">阶段 1：{{ stageOverrideText(cid, 1) }}</span>
-              <span class="preview-bound-rule-stage">阶段 3：{{ stageOverrideText(cid, 3) }}</span>
-            </div>
-          </div>
+          <div v-else class="form-tip-line">将应用于 {{ boundRules.length }} 条已关联规则——逐规则的阶段页覆盖状态与编辑在「关联规则」步骤</div>
         </div>
       </div>
 
@@ -968,7 +951,7 @@ import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, hasTrustEntries, inferPolicyType, resolveStageOverride } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1078,28 +1061,8 @@ const stage1ChipOn = (row: PolicySummary): boolean => hasIpControl(row) || hasGe
 const stage3ChipOn = (row: PolicySummary): boolean => row.has_waf || row.mode === 'custom_only' || row.custom_rules_count > 0
 
 
-// ── 生效投影（阶段步骤顶部）：规则阶段页字段从 GET /rules 读（allRules），
-// 对话框打开时随绑定明细同节奏刷新一次（openDialog 内） ──
-const ruleNameOf = (caddyId: string): string => allRules.value.find((r) => r.caddy_id === caddyId)?.name || caddyId
-
-const stageOverrideText = (caddyId: string, stage: 1 | 3): string => {
-  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
-  const pageId = stage === 1 ? (rule?.block_page_stage1_id ?? 0) : (rule?.block_page_stage3_id ?? 0)
-  if (pageId <= 0) return '跟随策略'
-  const status = stage === 1 ? rule?.block_page_stage1_status : rule?.block_page_stage3_status
-  const override = resolveStageOverride(pageId, status, blockPages.value)
-  if (!override) return '跟随策略'
-  return override.broken ? '阶段页已失效（回落跟随策略）' : `已被规则覆盖为「${override.pageName}（${override.status}）」`
-}
-
-// 拦截页步骤的投影文案：按策略类型裁剪阶段（stage1 类型只看阶段 1，stage3 只看阶段 3）
-const blockPageProjectionText = (caddyId: string): string => {
-  const showS1 = typeAllowsStage(1)
-  const showS3 = typeAllowsStage(3)
-  if (showS1 && showS3) return `阶段 1 ${stageOverrideText(caddyId, 1)} · 阶段 3 ${stageOverrideText(caddyId, 3)}`
-  if (showS1) return stageOverrideText(caddyId, 1)
-  return stageOverrideText(caddyId, 3)
-}
+// ── 阶段页覆盖：投影条与预览步自第 47 轮起只出摘要（「将应用于 N 条已关联规则」），
+// 逐规则的覆盖状态与编辑入口在「关联规则」步骤（stageOverrideSeed/overrideEditOf 等） ──
 
 // 内容摘要列（按类型一行摘要）：stage0=信任条数+模式、stage1=模式+ACL+GeoIP、
 // stage2=限流值、stage3=WAF 模式+自定义+CRS 组、mixed=混合（任务 2）
@@ -3275,9 +3238,6 @@ onMounted(async () => {
 }
 .stage-projection-desc { font-weight: 600; color: #374151; line-height: 1.8; flex: 0 1 auto; }
 .stage-projection-rules { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; justify-content: flex-end; text-align: right; }
-.stage-projection-item { display: inline-flex; align-items: baseline; gap: 4px; line-height: 1.8; }
-.stage-projection-rule { color: #1f2937; font-weight: 500; }
-.stage-projection-state { color: #6b7280; }
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }
 
 /* 关联规则行内阶段页编辑（变更即 PUT） */
@@ -3304,10 +3264,6 @@ onMounted(async () => {
 .preview-row-label { color: #6b7280; flex-shrink: 0; }
 .preview-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .preview-stage-footnote { margin-top: 6px; font-size: 12px; color: #9ca3af; }
-.preview-bound-rules { display: flex; flex-direction: column; gap: 6px; margin: 0 20px; }
-.preview-bound-rule { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 12px; }
-.preview-bound-rule-name { font-weight: 500; color: #1f2937; }
-.preview-bound-rule-stage { color: #6b7280; }
 
 /* 混合策略更新迁移预演 */
 .migrate-preview { display: flex; flex-direction: column; gap: 14px; }
