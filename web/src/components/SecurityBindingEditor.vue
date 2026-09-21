@@ -26,7 +26,19 @@
       <div v-for="section in stageSections" :key="section.type" class="bind-stage-group">
         <div class="bind-stage-head">
           <span class="bind-stage-title">{{ section.title }}</span>
-          <span class="bind-stage-count">已选 {{ section.selection.value.length }} 条</span>
+          <span class="bind-stage-head-meta">
+            <span class="bind-stage-count">已选 {{ section.selection.value.length }} 条</span>
+            <!-- 存量多限流绑定（第 45 轮 P1 裁定：运行兼容 + 保存即引导清理）：单选控件
+                 仅展示首条，徽标使显示与 ruleModeTotal 计数口径一致（第 47 轮 F-47-37） -->
+            <el-tag
+              v-if="section.single && section.selection.value.length > 1"
+              type="warning"
+              size="small"
+              effect="plain"
+            >
+              已绑定 {{ section.selection.value.length }} 条限流策略 · 单选仅显示首条（保存即引导清理）
+            </el-tag>
+          </span>
         </div>
         <el-select
           :model-value="section.single ? (section.selection.value[0] ?? null) : section.selection.value"
@@ -414,6 +426,7 @@ const submit = async (): Promise<void> => {
 .bind-stage-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .bind-stage-title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .bind-stage-count { font-size: 12px; color: #6b7280; }
+.bind-stage-head-meta { display: inline-flex; align-items: center; gap: 8px; }
 .bind-state-tag { margin-left: 8px; }
 .form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 6px; }
 

@@ -308,6 +308,19 @@ export const hasIPACLControl = (p: {
   return p.has_ip_control === true
 }
 
+// 阶段 1 · 地域拦截谓词（同后端 services.PolicyHasGeoIP：mode≠off 且区域非空）：
+// 原始字段齐备时按定义判定；缺失（如精简绑定载荷）回退 has_geoip 摘要标志。
+export const hasGeoIPControl = (p: {
+  has_geoip?: boolean
+  geoip_mode?: string
+  geoip_countries?: string
+}): boolean => {
+  if (p.geoip_mode !== undefined || p.geoip_countries !== undefined) {
+    return p.geoip_mode !== 'off' && parseGeoipCountryCount(p.geoip_countries ?? '') > 0
+  }
+  return p.has_geoip === true
+}
+
 // 阶段 0 · 信任名单行：条目数（空=未配置，任务 G 口径）+ 直通/保留检测模式
 const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
   const rows: StageRow[] = []
@@ -624,14 +637,20 @@ export interface SecurityPolicyTypeInput {
   has_waf?: boolean
   has_custom_rules: boolean
   mode?: string
-  // 阶段 0 推断（g0=信任名单非空）：内联 JSON 文本或引用 id 数组文本
+  // 阶段 0 推断（g0=信任名单启用且非空）：内联 JSON 文本或引用 id 数组文本
   ip_whitelist?: string
   ip_whitelist_refs?: string
+  ip_whitelist_enabled?: boolean
   // 阶段 1 信任除外判定（可选原始字段；缺省时回退 has_ip_control 摘要标志）
   ip_acl_enabled?: boolean
   ip_acl_list?: string
   ip_acl_list_refs?: string
   ip_blacklist?: string
+  // 阶段 1 地域拦截（可选原始字段；缺省时回退 has_geoip 摘要标志）
+  geoip_mode?: string
+  geoip_countries?: string
+  // 阶段 3 自定义规则（可选原始计数；缺省时回退 has_custom_rules 摘要标志）
+  custom_rules_count?: number
 }
 
 // 推断形状：阶段 0 = 信任名单非空；阶段 1 = IP 访问控制或地域拦截；阶段 2 = 限流；
@@ -641,16 +660,22 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   if (p.policy_type === 'stage0' || p.policy_type === 'stage1' || p.policy_type === 'stage2' || p.policy_type === 'stage3' || p.policy_type === 'mixed') {
     return p.policy_type
   }
-  // 兜底推断与后端 PolicyTypeFeatures G 门的两处已知口径差异（现状由显式
-  // policy_type 列遮蔽——后端写侧缺省/迁移均回填该列；新增消费方须知）：
-  // ① s0 不校验 ip_whitelist_enabled 启用门（后端 G0 要求启用，信任关闭的
-  //    存量策略在此多计一个阶段 0）；
-  // ② s3 依赖摘要 has_waf（=CRS 生效口径，不含 custom_only），custom_only 且
-  //    零自定义规则的摘要载荷在此漏计（后端 G3：mode∈三态或自定义非空）。
-  const s0 = hasTrustEntries(p)
-  const s1 = hasIPACLControl(p) || p.has_geoip === true
+  // 兜底推断与后端 models.PolicyTypeFeatures 逐条同形（第 47 轮 F-47-2 收敛，
+  // 原两处口径差异已消除）：G0=信任名单启用且内联∪引用非空；G1=IP ACL 启用且
+  // 非空 / 黑名单非空 / 地域拦截生效；G2=限流启用且 rps>0；G3=mode∈三态或
+  // 自定义规则非空。原始字段齐备时按定义判定，缺失（如精简绑定载荷）回退摘要
+  // 标志：G3 不可直接用 has_waf（仅 blocking|detection，漏 custom_only），自定义
+  // 规则不可直接用 has_custom_rules（含 off=全关口径，比 G3 窄）。
+  const s0 =
+    p.ip_whitelist_enabled === undefined ? hasTrustEntries(p) : p.ip_whitelist_enabled && hasTrustEntries(p)
+  const s1 = hasIPACLControl(p) || hasGeoIPControl(p)
   const s2 = p.has_rate_limit
-  const s3 = (p.has_waf ?? (p.mode !== undefined && p.mode !== 'off')) || p.has_custom_rules
+  const s3 =
+    p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only'
+      ? true
+      : p.custom_rules_count !== undefined
+        ? p.custom_rules_count > 0
+        : p.has_custom_rules
   const stageCount = [s0, s1, s2, s3].filter(Boolean).length
   if (stageCount > 1) return 'mixed'
   if (s0) return 'stage0'

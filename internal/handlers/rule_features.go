@@ -436,22 +436,150 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	return nil
 }
 
+// storedPathRule 是 path_rules 的现有行投影（仅收敛判定所需列）。
+type storedPathRule struct {
+	id           int
+	sortOrder    int
+	matchType    string
+	path         string
+	upstreamPath string
+	upstreams    string // COALESCE(upstreams_json,'')：NULL 与 '' 判定等价，写回时仍按 nil 保持 NULL
+}
+
+// replacePathRulesTx 以「保留不变行」的方式收敛给定规则的路径规则集合（第 47 轮
+// F-47-10）。修复前恒 DELETE 全删 + INSERT：任何规则编辑（含纯改名）都会重建全部
+// 行（id/created_at/updated_at 重置），且恒触发行级触发器（path_rules 在同步版本
+// 矩阵内）→ 每次 UpdateRule 多一轮从端同步。现语义：
+//   - 内容完全一致（含 sort_order 与上游集合）的存量行 → 零写入，id/时间戳原样保留；
+//   - 内容变更但身份一致（match_type+path+upstream_path）或显式回传真实 id 的行 →
+//     原地 UPDATE，保留 id/created_at、刷新 updated_at；
+//   - 消失的行 DELETE（按 id）、新增的行 INSERT。
+//
+// 身份判定的两个入口：前端编辑既有行回传真实 id（新增行为负的临时 id）；无 id 的
+// 调用方（MCP/导出导入/集群 apply）退化为按身份键配对。
 func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRules []models.PathRule) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM path_rules WHERE rule_id = ?", ruleID); err != nil {
-		return fmt.Errorf("删除规则 %s 的路径规则: %w", ruleID, err)
+	rows, err := tx.QueryContext(ctx, `SELECT id, sort_order, match_type, path, upstream_path, COALESCE(upstreams_json,'')
+		FROM path_rules WHERE rule_id = ? ORDER BY sort_order, id`, ruleID)
+	if err != nil {
+		return fmt.Errorf("读取规则 %s 的路径规则: %w", ruleID, err)
 	}
+	var existing []storedPathRule
+	for rows.Next() {
+		var row storedPathRule
+		if err := rows.Scan(&row.id, &row.sortOrder, &row.matchType, &row.path, &row.upstreamPath, &row.upstreams); err != nil {
+			rows.Close()
+			return fmt.Errorf("解析规则 %s 的路径规则: %w", ruleID, err)
+		}
+		existing = append(existing, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历规则 %s 的路径规则: %w", ruleID, err)
+	}
+
+	indexByID := make(map[int]int, len(existing))
+	for index, row := range existing {
+		indexByID[row.id] = index
+	}
+	consumed := make([]bool, len(existing))
+	inserts := make([]storedPathRule, 0, len(pathRules))
 	for _, pathRule := range pathRules {
-		var upstreamsJSON any
+		var upstreamsValue any
+		upstreamsJSON := ""
 		if pathRule.Upstreams != nil {
 			encoded, err := json.Marshal(pathRule.Upstreams)
 			if err != nil {
 				return fmt.Errorf("序列化路径规则 %s 的上游: %w", pathRule.Path, err)
 			}
 			upstreamsJSON = string(encoded)
+			upstreamsValue = upstreamsJSON
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,updated_at) VALUES (?,?,?,?,?,?,datetime('now'))`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON); err != nil {
-			return fmt.Errorf("写入规则 %s 的路径规则 %s: %w", ruleID, pathRule.Path, err)
+		incoming := storedPathRule{
+			sortOrder:    pathRule.SortOrder,
+			matchType:    pathRule.MatchType,
+			path:         pathRule.Path,
+			upstreamPath: pathRule.UpstreamPath,
+			upstreams:    upstreamsJSON,
 		}
+		// ① 显式 id 命中（前端编辑既有行回传真实 id）
+		if index, ok := indexByID[pathRule.ID]; ok && !consumed[index] {
+			consumed[index] = true
+			if err := updatePathRuleTx(ctx, tx, existing[index], incoming, upstreamsValue); err != nil {
+				return fmt.Errorf("更新规则 %s 的路径规则 %s: %w", ruleID, pathRule.Path, err)
+			}
+			continue
+		}
+		// ② 内容完全一致 → 原样保留（零写入 ⇒ 不触发同步触发器）
+		if index := matchStoredPathRule(existing, consumed, incoming, true); index >= 0 {
+			consumed[index] = true
+			continue
+		}
+		// ③ 身份一致（match_type+path+upstream_path）→ 原地 UPDATE 保留 id/created_at
+		if index := matchStoredPathRule(existing, consumed, incoming, false); index >= 0 {
+			consumed[index] = true
+			if err := updatePathRuleTx(ctx, tx, existing[index], incoming, upstreamsValue); err != nil {
+				return fmt.Errorf("更新规则 %s 的路径规则 %s: %w", ruleID, pathRule.Path, err)
+			}
+			continue
+		}
+		inserts = append(inserts, incoming)
+	}
+	for index, row := range existing {
+		if consumed[index] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM path_rules WHERE id = ?", row.id); err != nil {
+			return fmt.Errorf("删除规则 %s 的路径规则 %d: %w", ruleID, row.id, err)
+		}
+	}
+	for _, insert := range inserts {
+		var upstreamsValue any
+		if insert.upstreams != "" {
+			upstreamsValue = insert.upstreams
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,updated_at) VALUES (?,?,?,?,?,?,datetime('now'))`, ruleID, insert.sortOrder, insert.matchType, insert.path, insert.upstreamPath, upstreamsValue); err != nil {
+			return fmt.Errorf("写入规则 %s 的路径规则 %s: %w", ruleID, insert.path, err)
+		}
+	}
+	return nil
+}
+
+// matchStoredPathRule 在未消费的存量行中定位与 incoming 配对的行：exactContent 为
+// true 时要求含 sort_order 与上游集合完全一致（零写入），否则仅按身份键
+// （match_type+path+upstream_path）配对（原地 UPDATE，保留 created_at）。
+func matchStoredPathRule(existing []storedPathRule, consumed []bool, incoming storedPathRule, exactContent bool) int {
+	if !exactContent {
+		for index, row := range existing {
+			if consumed[index] {
+				continue
+			}
+			if row.matchType == incoming.matchType && row.path == incoming.path && row.upstreamPath == incoming.upstreamPath {
+				return index
+			}
+		}
+		return -1
+	}
+	for index, row := range existing {
+		if consumed[index] {
+			continue
+		}
+		if row.sortOrder == incoming.sortOrder && row.matchType == incoming.matchType && row.path == incoming.path &&
+			row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams {
+			return index
+		}
+	}
+	return -1
+}
+
+// updatePathRuleTx 内容真有变化时才 UPDATE（保留 id/created_at，刷新 updated_at）。
+func updatePathRuleTx(ctx context.Context, tx *sql.Tx, row, incoming storedPathRule, upstreamsValue any) error {
+	if row.sortOrder == incoming.sortOrder && row.matchType == incoming.matchType && row.path == incoming.path &&
+		row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE path_rules SET sort_order=?, match_type=?, path=?, upstream_path=?, upstreams_json=?, updated_at=datetime('now') WHERE id=?`,
+		incoming.sortOrder, incoming.matchType, incoming.path, incoming.upstreamPath, upstreamsValue, row.id); err != nil {
+		return err
 	}
 	return nil
 }
