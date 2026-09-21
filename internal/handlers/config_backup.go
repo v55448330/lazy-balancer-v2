@@ -750,6 +750,32 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 // 或非法 action/名称。与 R56 布尔门同位：结构性校验阶段拒绝，零写入。
 func validateImportedSecurityCustomRules(rows []map[string]any) error {
 	for i, row := range rows {
+		// F-47-1（第 47 轮）：id 区间门。导入/还原经 restoreTable 按 dump 行**显式
+		// 写入 id**，而自定义规则发射 id = DB id + 10000——DB id ≥ 790000 时发射 id
+		// 撞入 GeoIP 预检保留段（800000-899999，geoipPrecheckRuleBase 起），渲染侧
+		// security.go:670 对该形状跳过发射（仅 warn 日志），规则在 UI 显示启用却不
+		// 生效 → 违反「只有可渲染配置可落库」不变量。此处拒绝（省略/NULL id 的行由
+		// AUTOINCREMENT 分配，不受影响）。合法上限与渲染侧守卫同源口径。
+		if rawID, ok := row["id"]; ok && rawID != nil {
+			var id int
+			switch v := rawID.(type) {
+			case float64:
+				id = int(v)
+			case int:
+				id = v
+			case string:
+				parsed, perr := strconv.Atoi(strings.TrimSpace(v))
+				if perr != nil {
+					return fmt.Errorf("security_custom_rules 第 %d 行 id 非数字: %q", i+1, v)
+				}
+				id = parsed
+			default:
+				return fmt.Errorf("security_custom_rules 第 %d 行 id 类型错误", i+1)
+			}
+			if id >= 790000 {
+				return fmt.Errorf("security_custom_rules 第 %d 行 id=%d 越界：发射 id（+10000）将撞入 GeoIP 预检保留段，渲染侧会跳过该规则（可落库但不可发射）", i+1, id)
+			}
+		}
 		// C5 KNOWN-GAP-1：action/score 为 NULL 的可空形态按 schema/dump 默认
 		// （'block'/5，cluster_snapshot.go:428）看待通过校验；写入侧由 restoreTable
 		// 归一为同一默认值。本校验在 checksum 之前执行，不得回写行数据（回写会让

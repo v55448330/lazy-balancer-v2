@@ -22,7 +22,7 @@ import (
 )
 
 func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
-	userID := currentUserID(c)
+	userID := int(contextUserID(c))
 	rows, err := db.DB.Query(`
 		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled,
 		       k.mcp_enabled, k.read_only, COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username
@@ -45,7 +45,7 @@ func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 }
 
 func (h *Handlers) CreateCurrentUserAPIKey(c *gin.Context) {
-	createAPIKeyForUser(c, currentUserID(c))
+	createAPIKeyForUser(c, int(contextUserID(c)))
 }
 
 func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
@@ -54,7 +54,7 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
-	userID := currentUserID(c)
+	userID := int(contextUserID(c))
 	var name string
 	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "DeleteCurrentUserAPIKey query key") {
 		return
@@ -75,20 +75,6 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
-}
-
-func currentUserID(c *gin.Context) int {
-	userID, _ := c.Get("user_id")
-	switch v := userID.(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	case int64:
-		return int(v)
-	default:
-		return 0
-	}
 }
 
 func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
@@ -247,7 +233,7 @@ func (h *Handlers) ListAPIKeys(c *gin.Context) {
 }
 
 func (h *Handlers) CreateAPIKey(c *gin.Context) {
-	createAPIKeyForUser(c, currentUserID(c))
+	createAPIKeyForUser(c, int(contextUserID(c)))
 }
 
 func (h *Handlers) UpdateCurrentUserAPIKeyStatus(c *gin.Context) {
@@ -264,7 +250,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
-	userID := currentUserID(c)
+	userID := int(contextUserID(c))
 	var req models.UpdateAPIKeyRequest
 	if !guardConfiguredJSONBody(c) {
 		return

@@ -2227,7 +2227,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		// Round 36 BLOCKING-2: 证书文件可能被部分删除（cert 已删 / key 残留 或反之），
 		// 即便 Caddy 配置和 DB 事务都恢复了，下次 reload 可能因找不到证书导致 TLS 静默失败。
-		// 用户决策：保留现有顺序（先删文件再 commit），但加 CRITICAL 告警 + audit + 安全事件，
+		// 用户决策：保留现有顺序（先删文件再 commit），但加 CRITICAL 告警 + audit + 操作审计（当前实现无安全事件写入），
 		// 让运维收到通知后人工恢复证书文件（从备份或其他节点同步）。
 		services.Logf("error", "CRITICAL: DeleteRule 证书文件清理失败，可能存在 DB-文件状态不一致。caddy_id=%s cert_path=%s key_path=%s cleanup_error=%v restore_error=%v。请人工检查证书文件并在必要时从备份恢复",
 			caddyID, certPath, keyPath, err, restoreErr)

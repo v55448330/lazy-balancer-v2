@@ -78,7 +78,6 @@ func TestIssuer_Issue_cleans_presented_records_when_later_present_fails(t *testi
 	client := &Client{
 		DirectoryURL: serverURL + "/directory",
 		Email:        "admin@example.com",
-		accountKey:   key,
 		acme: &acme.Client{
 			Key:          key,
 			DirectoryURL: serverURL + "/directory",
@@ -193,7 +192,6 @@ func TestIssuer_preCleanup_spares_concurrent_challenge_values(t *testing.T) {
 	client := &Client{
 		DirectoryURL: serverURL + "/directory",
 		Email:        "admin@example.com",
-		accountKey:   key,
 		acme: &acme.Client{
 			Key:          key,
 			DirectoryURL: serverURL + "/directory",
@@ -537,7 +535,6 @@ func TestIssuer_finalizeOrder_enforces_independent_deadline(t *testing.T) {
 	client := &Client{
 		DirectoryURL: serverURL + "/directory",
 		Email:        "admin@example.com",
-		accountKey:   key,
 		acme: &acme.Client{
 			Key:          key,
 			DirectoryURL: serverURL + "/directory",

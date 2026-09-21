@@ -6,11 +6,12 @@ import (
 )
 
 // 策略实体单职化（2026-09-20 用户裁定）：security_policies.policy_type ∈
-// stage1（IP 访问控制+地域拦截）/ stage2（限流）/ stage3（WAF）/ mixed（存量
-// 混合兼容）。InferPolicyType 按内容特征推断，是 backfill、写侧缺省提交、
-// 旧快照/旧备份导入的共同单一事实源。特征分组：g1=IP ACL/黑白名单/信任/GeoIP，
-// g2=限流，g3=WAF（mode≠off 或自定义规则引用非空）；恰好一组→对应类型，
-// 多组→mixed，零组→stage3（WAF 是安全策略的默认心智，空策略归此）。
+// stage0（信任名单独立策略类型）/ stage1（IP 访问控制+地域拦截）/ stage2（限流）/
+// stage3（WAF）/ mixed（存量混合兼容）。InferPolicyType 按内容特征推断，是
+// backfill、写侧缺省提交、旧快照/旧备份导入的共同单一事实源。特征分组：
+// g0=信任名单（启用且非空），g1=IP ACL/黑白名单/GeoIP，g2=限流，
+// g3=WAF（mode≠off 或自定义规则引用非空）；恰好一组→对应类型，多组→mixed，
+// 零组→stage3（WAF 是安全策略的默认心智，空策略归此）。
 func TestInferPolicyType(t *testing.T) {
 	cases := []struct {
 		name   string

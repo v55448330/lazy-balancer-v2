@@ -89,7 +89,7 @@
           </el-table>
           <div style="display: flex; justify-content: center; margin-top: 16px;">
           <div class="rules-pagination">
-            <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="fetchRules" />
+            <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="onRulesSizeChange" />
           </div>
           </div>
         </el-tab-pane>
@@ -529,6 +529,13 @@ const customRulesPaged = computed(() => {
   const start = (customPage.value - 1) * customPageSize.value
   return customRules.value.slice(start, start + customPageSize.value)
 })
+// F-47-34：删除某页最后一条后 customPage 会超出最大页——slice 越界返回空数组、
+// 表格空白直至手动翻页（IP 列表有 search watch 复位口径,自定义规则无收敛路径）。
+// watch 源不含 customPage 本身,不会自触发死循环
+watch([customRules, customPageSize], () => {
+  const maxPage = Math.max(1, Math.ceil(customRules.value.length / customPageSize.value))
+  if (customPage.value > maxPage) customPage.value = maxPage
+})
 const loadingCustom = ref(false)
 const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
@@ -852,6 +859,9 @@ const removeCondition = (idx: number) => {
 }
 // 搜索提交先回到第 1 页:高页码叠加收窄后的结果集会落在空页上
 const searchRules = () => { page.value = 1; fetchRules() }
+// F-47-33：CRS 标签服务端分页 size-change 不复位 page——高页码叠加放大 pageSize
+// 会请求越界 offset(空表停留在空页);对齐本文件自定义规则/IP 列表「size-change 回第 1 页」口径
+const onRulesSizeChange = () => { page.value = 1; fetchRules() }
 const fetchRules = async () => {
   loadingRules.value = true
   try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch {} finally { loadingRules.value = false }

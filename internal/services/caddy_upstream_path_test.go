@@ -201,3 +201,43 @@ func TestGenerateHTTPRouteObjects_upstreamPathEmpty_chainByteIdenticalWithLegacy
 		t.Fatalf("empty upstream_path chain diverged from main chain:\npath: %s\nmain: %s", pathJSON, mainJSON)
 	}
 }
+
+// 第 47 轮 F-47-8：前缀匹配的 upstream_path 尾斜杠会与剥前缀后的原 URI（以 / 开头）
+// 拼成双斜杠（`/v1/` + `/users` = `/v1//users`）——Go ServeMux 会 301 清洗、
+// 严格框架（Spring strict 等）404。校验侧允许尾斜杠（仅要求前导 / 且无空白?#），
+// 故渲染侧前缀分支拼接前须剥尾斜杠（精确匹配整体替换分支不受影响：其尾斜杠有语义）。
+func TestUpstreamPathRewriteHandlers_prefixTrailingSlashTrimmed(t *testing.T) {
+	cases := []struct {
+		name         string
+		matchType    string
+		upstreamPath string
+		wantURI      string
+	}{
+		{name: "前缀 尾斜杠剥除（目标形状）", matchType: "prefix", upstreamPath: "/v1/", wantURI: "/v1{http.request.uri}"},
+		{name: "前缀 无尾斜杠（回归形状：原样）", matchType: "prefix", upstreamPath: "/v1", wantURI: "/v1{http.request.uri}"},
+		{name: "前缀 根路径（剥后为空=纯转发，无多余斜杠）", matchType: "prefix", upstreamPath: "/", wantURI: "{http.request.uri}"},
+		{name: "精确匹配 尾斜杠保留（目录语义，不受影响）", matchType: "exact", upstreamPath: "/v1/", wantURI: "/v1/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handlers := upstreamPathRewriteHandlers(PathRuleConfig{
+				MatchType:    tc.matchType,
+				Path:         "/api",
+				UpstreamPath: tc.upstreamPath,
+			})
+			if len(handlers) == 0 {
+				t.Fatal("no rewrite handlers emitted")
+			}
+			last, ok := handlers[len(handlers)-1].(map[string]interface{})
+			if !ok {
+				t.Fatalf("last handler shape unexpected: %#v", handlers[len(handlers)-1])
+			}
+			if got, _ := last["uri"].(string); got != tc.wantURI {
+				t.Fatalf("uri=%q want=%q", got, tc.wantURI)
+			}
+			if strings.Contains(last["uri"].(string), "//") {
+				t.Fatalf("uri 含双斜杠: %q", last["uri"])
+			}
+		})
+	}
+}

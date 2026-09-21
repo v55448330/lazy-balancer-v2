@@ -323,6 +323,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Connection, CircleCheck, Key, Odometer, Aim, TopRight } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
@@ -468,6 +469,13 @@ const ensureDetails = async (): Promise<void> => {
     }
     if (customRes.status === 'fulfilled') customRules.value = customRes.value.data ?? []
     if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value.data?.rules ?? []
+    // F-47-36：三端点全部 rejected 时不置 detailsAttached——原无条件置位会把弹框
+    // 锁死在「明细按钮缺失且不可重试」且 silent 请求零反馈；保持可重试（下次点击
+    // 重新拉取）并显式提示一次；部分成功仍置 attached（可用数据降级展示，保持现状语义）
+    if (policyRes.status === 'rejected' && customRes.status === 'rejected' && crsRes.status === 'rejected') {
+      ElMessage.warning('明细数据加载失败，可重试')
+      return
+    }
     detailsAttached.value = true
   } finally {
     // 失配会话不回落 detailLoading——现行会话（重置区或新一次拉取）自行管理该锁

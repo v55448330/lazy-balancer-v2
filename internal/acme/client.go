@@ -38,7 +38,6 @@ type Client struct {
 	DirectoryURL   string
 	Email          string
 	acme           *acme.Client
-	accountKey     crypto.Signer
 	accountKeyPath string
 	eabKID         string
 	eab            *acme.ExternalAccountBinding
@@ -111,7 +110,6 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 				return min(time.Duration(1<<min(n, 4))*time.Second, 10*time.Second)
 			},
 		},
-		accountKey:     key,
 		accountKeyPath: acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey),
 		eabKID:         eabKID,
 		eab:            eab,
@@ -277,7 +275,9 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 	return nil
 }
 
-// staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长，
+// staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长
+// （F-47-18：当前账户密钥路径公式使该清理恒为空操作，见函数内守卫注释；阈值保留
+// 以备路径公式变更时启用），
 // 不得小于签发执行预算封顶（caExecutionTimeoutFor 上限 caExecutionTimeoutMax=60min），
 // 否则会误删在途签发的账户密钥，取 1h。
 const staleAccountKeyIdleThreshold = time.Hour
@@ -316,6 +316,13 @@ func (c *Client) removeStaleAccountKeys() error {
 			continue
 		}
 		keyPath := strings.TrimSuffix(metadataPath, ".json")
+		// F-47-18（第 47 轮审计）：本条件在当前路径公式下**恒真**——账户密钥文件名
+		// 由与元数据同一 4 元组（directory|email|EABKID|hmac 摘要）sha256 派生
+		// （acmeAccountKeyPath），故 `metadata == want ⟺ keyPath == c.accountKeyPath`，
+		// 于是 `metadata != want || keyPath == accountKeyPath` 永不放行删除（仅手工
+		// 复制出的同名元组文件会进入）。R71 F-A2 后的设计是「轮换遗留密钥保留」
+		// （字节级残留无害），因此此处保留为**路径公式未来再变更时的迁移钩子**，
+		// 而非活跃清理。每轮注册仍会做一次目录遍历（条目数为 CA 提供商数量级）。
 		if metadata != want || keyPath == c.accountKeyPath {
 			continue
 		}

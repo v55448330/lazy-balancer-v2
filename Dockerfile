@@ -111,7 +111,8 @@ RUN n=0; until apk add --no-cache curl; do \
     (curl -sfL -o /app/waf.dist/ip2region.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb" || \
      curl -sfL -o /app/waf.dist/ip2region.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb") && \
     apk del curl
-RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
+# 容器以 root 运行（无 USER/降权，与常见 Caddy 镜像同态）；如需非 root，需
+# 同时给 80/443 加 CAP_NET_BIND_SERVICE 并预置 bind 挂载属主（第 47 轮 F-47-29）
 
 COPY --from=backend /app/config /app/config
 

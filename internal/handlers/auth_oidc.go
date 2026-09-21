@@ -316,10 +316,7 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	state := hex.EncodeToString(stateRaw)
 	nonce := hex.EncodeToString(nonceRaw)
 	verifier := oauth2.GenerateVerifier()
-	returnTo := c.Query("return_to")
-	if returnTo != "" && !strings.HasPrefix(returnTo, "/") {
-		returnTo = "" // 仅允许站内相对路径,防开放重定向
-	}
+	returnTo := sanitizeOIDCReturnTo(c.Query("return_to"))
 	oidcStates.Store(state, oidcStateEntry{nonce: nonce, verifier: verifier, returnTo: returnTo, created: time.Now()})
 	oidcStateCount.Add(1)
 
@@ -515,7 +512,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 
 	// 签发本站 JWT(与密码登录同构;auth_method=oidc 标记会话来源——本地
 	// MFA 族功能对 OIDC 用户整体豁免,v2.3.0 用户裁定)。
-	token, expiresAt, err := h.issueOIDCJWT(userID, username, role, passwordVersion, 0)
+	token, expiresAt, err := h.issueOIDCJWT(userID, username, role, passwordVersion)
 	if err != nil {
 		fail("签发登录令牌失败", "")
 		return
@@ -535,7 +532,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 // issueOIDCJWT 与密码登录的令牌同构(auth.go respondLoginWithMFA 口径),
 // 附加 auth_method=oidc 与 pwd_ver(R39-2:jwtAuth 对缺 pwd_ver 且 DB 版本
 // ≠0 的令牌恒拒——无该声明的 OIDC 会话在导入 bump 后永久 401)。
-func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersion int64, mfaTs float64) (string, time.Time, error) {
+func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersion int64) (string, time.Time, error) {
 	expireMinutes := 20
 	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
 		expireMinutes = 20
@@ -569,9 +566,9 @@ func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersi
 		"iat":         now.Unix(),
 		"exp":         now.Add(time.Duration(expireMinutes) * time.Minute).Unix(),
 	}
-	if mfaTs > 0 {
-		tokenClaims["mfa_ts"] = mfaTs
-	}
+	// F-47-20（第 47 轮审计）：原 mfaTs 参数与 mfa_ts claim 分支已删——v2.3.0 裁定
+	// OIDC 会话与本地 MFA 解耦（mfaStepUpGuard 对 auth_method=oidc 短路），唯一
+	// 调用点此前恒传 0，分支永不执行。
 	b, _ := json.Marshal(tokenClaims)
 	var cm jwt.MapClaims
 	_ = json.Unmarshal(b, &cm)
@@ -805,4 +802,20 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 	}
 	recordAudit(c, "删除", "OIDC 配置", services.FormatAuditDetail("认证集成", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "OIDC 配置已删除"})
+}
+
+// sanitizeOIDCReturnTo 归一 OIDC 登录的 return_to（F-47-23，第 47 轮）：
+// 仅放行站内相对路径。此前只校验前导 "/"，协议相对值 `//evil.example.com`（以及
+// `/\evil.example.com` 变体）可绕过后端并写入 OIDC state——浏览器把 `//host`
+// 视为跨域跳转目标，最终拦截点只剩前端页面键白名单（App.vue isPageId），开放
+// 重定向防护成为跨层单点依赖。此处收紧为「前导单个 / 且非 // 与 /\」，前端白名单
+// 退化为第二道防线（纵深防御）。
+func sanitizeOIDCReturnTo(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") {
+		return ""
+	}
+	return raw
 }

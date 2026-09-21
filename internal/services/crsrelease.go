@@ -122,6 +122,11 @@ func parseGitHubLatestTag(body []byte) (string, error) {
 	if payload.TagName == "" {
 		return "", errors.New("GitHub 响应缺少 tag_name")
 	}
+	// F-47-4（第 47 轮）：与 HTML 回退路径同口径校验 tag 形状（控制字符/换行
+	// 会进入版本行、日志与审计，并参与 raw.githubusercontent URL 拼接）。
+	if err := validateReleaseTag(payload.TagName); err != nil {
+		return "", err
+	}
 	return payload.TagName, nil
 }
 

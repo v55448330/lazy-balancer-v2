@@ -27,6 +27,15 @@ services:
       - NODE_NAME=master
       - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped
+    healthcheck:
+      # 探针须模式无关：面板默认强制 HTTPS（明文 HTTP 得 301），而 admin_tls 关闭时
+      # 又只有明文可用；镜像内无 curl（仅构建期临时安装后 apk del），busybox wget
+      # 的 --no-check-certificate 经实证可完成自签 TLS 探测（第 47 轮 F-47-30）。
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8000/health || wget -q -O /dev/null http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     # 生产 fd 上限：每个连接一个 fd（含 TLS/日志），默认 1024 在 LB 场景必炸。
     # 详见 docs/production-tuning.zh-CN.md §1
     ulimits:
@@ -63,6 +72,15 @@ services:
         soft: 1048576
         hard: 1048576
     restart: unless-stopped
+    healthcheck:
+      # 探针须模式无关：面板默认强制 HTTPS（明文 HTTP 得 301），而 admin_tls 关闭时
+      # 又只有明文可用；镜像内无 curl（仅构建期临时安装后 apk del），busybox wget
+      # 的 --no-check-certificate 经实证可完成自签 TLS 探测（第 47 轮 F-47-30）。
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8000/health || wget -q -O /dev/null http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   lb-data:

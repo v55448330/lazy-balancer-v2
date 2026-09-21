@@ -316,6 +316,21 @@ func fetchGitHubLatestTagViaProxy(ctx context.Context, repoSlug string) (string,
 	return "", fmt.Errorf("代理响应 %s 未包含 /releases/tag/ 跳转", proxiedURL)
 }
 
+// releaseTagPattern 是 GitHub release tag 的白名单形状（F-47-4，第 47 轮）：
+// 首字符字母/数字，其余字母/数字/点/下划线/加号/连字符，长度 ≤64。tag 来源为
+// GitHub API 的 tag_name 与 releases/latest 跳转地址，二者此前均无形状校验——
+// API 路径可携带控制字符（换行可伪造日志与审计行、参与版本行写入与
+// raw.githubusercontent URL 拼接）；HTML 回退路径虽被正则 `([^"'/]+)` 间接限制，
+// 仍与 API 路径口径不一致。统一在两条解析漏斗处校验，CRS 与 IP2Region 共用。
+var releaseTagPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+
+func validateReleaseTag(tag string) error {
+	if !releaseTagPattern.MatchString(tag) {
+		return fmt.Errorf("版本 tag 形状非法（仅允许字母/数字/点/下划线/加号/连字符，长度 1-64）: %q", tag)
+	}
+	return nil
+}
+
 // parseGitHubTagFromLocation 从 releases/latest 的跳转地址解析 tag（容忍尾部
 // 的 query/fragment）。
 func parseGitHubTagFromLocation(location string) (string, error) {
@@ -330,6 +345,9 @@ func parseGitHubTagFromLocation(location string) (string, error) {
 	}
 	if tag == "" {
 		return "", fmt.Errorf("跳转地址 %q 未携带 tag", location)
+	}
+	if err := validateReleaseTag(tag); err != nil {
+		return "", err
 	}
 	return tag, nil
 }

@@ -9,7 +9,6 @@ mkdir -p /app/data/caddy
 if [ ! -f /app/data/lazy-balancer.db ]; then
     echo "Initializing database..."
     /usr/local/bin/lazy-balancer --init
-    chown -R caddy:caddy /app/data
 fi
 
 # Generate Caddyfile if not exists

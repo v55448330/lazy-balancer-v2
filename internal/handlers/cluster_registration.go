@@ -42,7 +42,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 	if !h.requireMaster(c) {
 		return
 	}
-	token, expiresAt, err := h.clusterService.GenerateRegisterToken(c.Request.Context(), currentUserID(c), time.Now())
+	token, expiresAt, err := h.clusterService.GenerateRegisterToken(c.Request.Context(), int(contextUserID(c)), time.Now())
 	if err != nil {
 		clusterError(c, http.StatusInternalServerError, "生成注册令牌失败", err)
 		return

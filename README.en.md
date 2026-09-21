@@ -13,7 +13,7 @@ A visual load balancing platform built on **Caddy v2.11**, with a full WAF secur
 | Free Certificates | ACME auto-issuance (DNS-01), auto-renewal |
 | Primary-Replica Cluster | Incremental sync, tamper-proof signatures, read-only replicas, one-click promotion |
 | Monitoring | Traffic/latency P50-P99, upstream health, security event dashboard |
-| MCP Service | AI agents can operate all features via 127 tools |
+| MCP Service | AI agents can operate all features via 128 tools |
 | Auto Backup | Scheduled daily/weekly/monthly config backups to the server `backup` directory, one-click restore |
 
 ## Quick Start

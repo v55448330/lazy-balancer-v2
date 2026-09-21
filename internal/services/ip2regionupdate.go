@@ -251,7 +251,11 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	// fail-open 的 message 注明「内存未切换、重启后生效」。
 	reloadErr := installErr
 	memSwitched := installErr == nil
-	if reloadErr == nil {
+	// F-47-3（第 47 轮）：nil reloader 守卫——镜像 CRS 侧（crsinstall.go:314 /
+	// crsupdate.go:305 的 CRS25-8 口径）：包内直构（测试/未来重构）注入 nil 时
+	// 此前会 panic；生产唯一注入点 cmd/server/main.go:121 恒非 nil。nil 语义与
+	// CRS 一致：不尝试重载、不记审计、视为成功。
+	if reloadErr == nil && m.reloader != nil {
 		reloadErr = m.reloader()
 		recordSystemReloadAudit("ip2region_update", reloadErr)
 	}
@@ -509,8 +513,12 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 // 重启前无任何可见痕迹。
 func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr, rbErr error, memSwitched bool) {
 	warn := ""
-	rErr := m.reloader()
-	recordSystemReloadAudit("ip2region_update", rErr)
+	// F-47-3（第 47 轮）：同上 nil 守卫（非生产路径；语义与 CRS 一致：nil=跳过）。
+	var rErr error
+	if m.reloader != nil {
+		rErr = m.reloader()
+		recordSystemReloadAudit("ip2region_update", rErr)
+	}
 	if rErr != nil {
 		Logf("error", "ip2region update: fail-open reload retry failed: %v", rErr)
 		warn = fmt.Sprintf("已生效，但重载 Caddy 配置失败: %v（Caddy 侧待下次重载生效）", reloadErr)

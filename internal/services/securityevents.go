@@ -372,7 +372,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 不发射 CRS，不得认领 CRS 事件）；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(policy_type,''), COALESCE(trust_detection,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
@@ -381,7 +381,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
 		var customJSON, crsJSON, blacklistJSON, geoipJSON, whitelistJSON, whitelistRefsJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &p.Mode, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &p.IPWhitelistEnabled, &whitelistJSON, &whitelistRefsJSON, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		if err := polRows.Scan(&p.ID, &p.Name, &p.Mode, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &p.IPWhitelistEnabled, &whitelistJSON, &whitelistRefsJSON, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse, &p.PolicyType, &p.TrustDetection); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
@@ -392,6 +392,10 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		// 既有 SELECT 未携带，能力层不读库补查（摄入 tick 热路径），在此装载。
 		p.IPWhitelist = json.RawMessage(whitelistJSON)
 		p.IPWhitelistRefs = whitelistRefsJSON
+		// 策略类型 / 保留检测（F-47-5，第 47 轮）：IP 族能力首选层的信任分支须镜像
+		// 引擎信任门（security.go:166 `PolicyType != stage0`；预检 id:3 排除 stage0，
+		// 保留检测由 id:12 承载）——不装载则摄入态恒空值，镜像判定失效（stage0 直通
+		// 策略会凭「whitelist 非空」抢认它物理上产不出的 logged IP 族事件）。
 		policyByID[p.ID] = p
 		policies = append(policies, p)
 	}
@@ -683,7 +687,13 @@ func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
 //	  仅 allow 参与交集）；
 //	· 信任名单（ip_whitelist）：仅 logged（检测）语义计入 id 2/4/7 能力——信任
 //	  只以 DetectionOnly 降级事务、令 deny 规则以检测动作留痕，自身发射的
-//	  id:3/5/12 为 nolog pass 永不产事件，更不可能产 blocked。
+//	  id:3/5/12 为 nolog pass 永不产事件，更不可能产 blocked。**镜像引擎/预检
+//	  信任门（2026-09-21 第 47 轮 F-47-5）**：stage0 + trust_detection=0（直通）
+//	  的信任 IP 走路由层 subroute 短路（零 coraza 事务）、非信任 IP 全链评估且
+//	  无 DetectionOnly 降级 ⇒ 该策略物理上不产任何 logged IP 族事件，故要求
+//	  `PolicyType != stage0 || TrustDetection`（对齐 security.go:166 引擎门与
+//	  security.go:990-1005 预检 id:3 排除 / id:12 承载保留检测）；无 policy_type
+//	  的存量信任策略（mixed 语义，走 id:3 并集）不受影响。
 //
 // 名单读取与 SecurityPolicyHasIPControl 同源（inline ∪ refs；MergedACLList 为
 // 摄入映射解析集，缺失回退 inline）。返回 false 不代表事件归零：attribute
@@ -716,7 +726,7 @@ func securityEventsIPFamilyEventSurface(p *models.SecurityPolicy, action, ruleTr
 			return true
 		}
 	}
-	if action != "blocked" && p.IPWhitelistEnabled {
+	if action != "blocked" && p.IPWhitelistEnabled && (p.PolicyType != models.PolicyTypeStage0 || p.TrustDetection) {
 		var wl []string
 		if err := json.Unmarshal(p.IPWhitelist, &wl); err == nil &&
 			(len(wl) > 0 || ipListRefsNonEmpty(p.IPWhitelistRefs)) {

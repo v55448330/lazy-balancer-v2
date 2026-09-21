@@ -1615,8 +1615,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			// 发射阶段路由（matcher 仅阶段码+interruption 消息，无 host——阶段码
 			// 只可能由配了该页的规则段产生；terminal；status 0 归一 403 由
 			// buildBlockPageAttributionRoute 承担）。按 server 去重同 483+ 机制：
-			// 同 server 多规则配阶段页时先配置者生效（UI 无冲突提示面——web/src
-			// 反查零命中）；后配规则的阶段页中断将沿用先配置规则的页面与状态码。
+			// 同 server 多规则配阶段页时按 rules 切片迭代序（≈先创建者）先到先得（481/482
+			// 无 host 区分，同 server 仅能一份；UI 无冲突提示面——web/src 反查零命中）；
+			// 后配规则的阶段页中断将沿用先配置规则的页面与状态码。
 			// 阶段码与逐策略码域（483+）不相交可共存。
 			for _, stage := range []struct {
 				code   int
@@ -2832,9 +2833,17 @@ func upstreamPathRewriteHandlers(pathRule PathRuleConfig) []interface{} {
 			})
 		}
 	}
+	// F-47-8（第 47 轮）：前缀分支的 upstream_path 尾斜杠会与剥前缀后的原 URI
+	// （以 / 开头）拼成双斜杠（`/v1/` + `/users` = `/v1//users`）——Go ServeMux
+	// 301 清洗、严格框架 404；校验侧允许尾斜杠（仅要求前导 / 且无空白?#），故在
+	// 拼接前剥除。精确匹配为整体替换、尾斜杠有目录语义，保持原样。
+	base := pathRule.UpstreamPath
+	if pathRule.MatchType == "prefix" {
+		base = strings.TrimRight(base, "/")
+	}
 	rewrites = append(rewrites, map[string]interface{}{
 		"handler": "rewrite",
-		"uri":     pathRule.UpstreamPath + prefixURIPlaceholder(pathRule),
+		"uri":     base + prefixURIPlaceholder(pathRule),
 	})
 	return rewrites
 }

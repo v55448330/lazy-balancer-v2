@@ -577,7 +577,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		return
 	}
 	// blocked_24h / trigger_24h：近 24h 每策略事件计数（metrics 库 security_events，
-	// policy_id>0 归因行；走 idx_security_events_time/policy 索引范围，单趟扫描）。
+	// policy_id>0 归因行；走 idx_security_events_action_time 索引范围（action 等值 + event_time 范围），单趟扫描）。
 	// blocked_24h 仅计 blocked；trigger_24h 计 blocked+logged（「24h 触发」列口径）。
 	blockedCounts := map[int]int{}
 	triggerCounts := map[int]int{}

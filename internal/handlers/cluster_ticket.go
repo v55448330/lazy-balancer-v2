@@ -25,7 +25,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// v2.3.0 用户裁定:OIDC 用户与本地 MFA 体系完全解耦(IdP 侧已验证二因子),
 	// 两道 MFA 门仅对本地用户生效——OIDC 会话直接放行发票。
 	if c.GetString("auth_method") != "oidc" {
-		mfaEnabled, err := services.MFAUserEnabled(currentUserID(c))
+		mfaEnabled, err := services.MFAUserEnabled(int(contextUserID(c)))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取 MFA 状态失败"})
 			return
@@ -54,7 +54,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		return
 	}
 	response, err := h.clusterService.GenerateLoginTicket(c.Request.Context(), models.ClusterLoginTicketClaims{
-		UserID: currentUserID(c), Username: c.GetString("username"), NodeID: nodeID,
+		UserID: int(contextUserID(c)), Username: c.GetString("username"), NodeID: nodeID,
 	}, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError

@@ -497,7 +497,7 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 // 极简 coraza 预检 WAF，置于处理器链最前（先于全部 rate_limit/waf）——被拒
 // IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件；
 // 预检仍是 coraza 拒绝（audit log 留痕、403 interruption → 拦截页错误路由）。
-// 单策略绑定不发射预检（自身 coraza 内 IP 控制本就先于其 CRS，发射形状不变）。
+// 单策略同构亦走预检（见 caddy.go:3180-3194）：ACL 并集与引擎 id:2/4 幂等重复无害——预检先拦，引擎内不再命中。
 func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) {
 	// Given：p1(detection CRS) < p2(deny ACL 203.0.113.5)
 	_, database := newClusterTestService(t)

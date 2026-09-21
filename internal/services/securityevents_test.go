@@ -3206,3 +3206,65 @@ func TestSecurityEventsAttribution_Stage0ZeroEmissionSurfaceLock(t *testing.T) {
 		t.Fatalf("lb_mix (2,blocked)=(%d), want 9 — 必归属层锚（S3 既有语义,禁归零）", pid)
 	}
 }
+
+// 第 47 轮 F-47-5：IP 族能力首选层的信任分支必须镜像引擎/预检的信任发射门——
+// stage0 + trust_detection=0（直通）策略的信任 IP 走路由层 subroute 短路（零 coraza
+// 事务）、非信任 IP 全链评估且无 DetectionOnly 降级 ⇒ 该策略物理上不产任何 logged
+// IP 族事件；但能力层此前只核「whitelist 启用且非空」，会在漂移窗口（属主名单事后
+// 被编辑 → contains 成员判定落空）把它排在真实 deny 属主之前抢认。
+//
+// 形状对照（security.go:166 引擎门 `IPWhitelistEnabled && PolicyType != stage0`、
+// security.go:990-1005 预检 id:3 并集排除 stage0 / id:12 承载保留检测）：
+//   - stage0 + 直通（trust_detection=0）→ 不可产 logged IP 族事件（本测试目标形状）；
+//   - stage0 + 保留检测（=1）→ id:12 DetectionOnly 降级真实存在 → 仍可产（回归形状）；
+//   - 无 policy_type 的存量信任策略（mixed 语义，id:3 并集承载）→ 仍可产（既有钉
+//     TestSecurityEventsAttribution_IPFamilyFallbackPrefersIPCapablePolicy 保持）。
+func TestSecurityEventsAttribution_Stage0PassthroughTrustDoesNotOwnLoggedIPEvent(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	// 1=stage0 直通信任（更小 policy_id，候选序在前）；2=deny ACL 属主（名单被事后
+	// 改为其他 IP → contains 成员判定落空，但能力面（deny + 名单非空）仍成立）。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies
+		(id,name,enabled,mode,custom_rules,crs_rule_groups,ip_whitelist_enabled,ip_whitelist,policy_type,trust_detection,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES
+		(1,'p-stage0-passthrough',1,'off','[]','[]',1,'["203.0.113.9"]','stage0',0,0,'','[]'),
+		(2,'p-deny-owner-drift',1,'blocking','[]','[]',0,'[]','stage3',0,1,'deny','["198.51.100.7"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_stage0passthrough',1),('lb_stage0passthrough',2)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_stage0passthrough", "2", "logged", "::1", policyByID, bindings)
+	if pid != 2 || pname != "p-deny-owner-drift" {
+		t.Fatalf("attribution=(%d,%q), want (2,p-deny-owner-drift) — stage0 直通策略的信任名单"+
+			"物理上不可能把事务降级为 DetectionOnly（信任 IP 零事务、非信任 IP 无降级），"+
+			"能力首选层不得让它抢认 logged IP 族事件（镜像 security.go:166 引擎门）", pid, pname)
+	}
+
+	// 回归形状：stage0 + 保留检测（trust_detection=1）经 id:12 DetectionOnly 真实降级
+	// → 仍具能力，且候选序在前时优先于无能力候选。
+	if _, err := db.DB.Exec(`UPDATE security_policies SET trust_detection=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_policies SET ip_acl_enabled=0, ip_acl_list='[]' WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err = securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("reload mappings: %v", err)
+	}
+	pid, pname = securityEventsAttributePolicy("lb_stage0passthrough", "2", "logged", "", policyByID, bindings)
+	if pid != 1 || pname != "p-stage0-passthrough" {
+		t.Fatalf("attribution=(%d,%q), want (1,p-stage0-passthrough) — stage0 保留检测"+
+			"（trust_detection=1）经 id:12 真实降级事务，能力面必须保留", pid, pname)
+	}
+}

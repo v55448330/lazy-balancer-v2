@@ -993,10 +993,13 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		// 语义：距上次 MFA 验证超过 1 分钟的写操作都要求验码（「立即生效」的
 		// 观感），紧邻的连续操作（428→弹码→重试→顺手再存一步）不重复骚扰。
 		mfaTs := c.GetFloat64("mfa_ts")
-		// SLB10-N4:守卫验码放行路径置标记——handler(MFAResetByAdmin)采信
-		// 标记而非重读开关,消除开关在中间件后翻转的毫秒窗 TOCTOU。
-		c.Set("mfa_stepup_verified", true)
 		if elapsed := time.Since(time.Unix(int64(mfaTs), 0)); mfaTs > 0 && elapsed < 60*time.Second {
+			// SLB10-N4:守卫验码放行路径置标记——handler(MFAResetByAdmin)采信
+			// 标记而非重读开关,消除开关在中间件后翻转的毫秒窗 TOCTOU。
+			// F-47-21（第 47 轮审计）:置位必须在**放行分支内**——此前写在窗口
+			// 判定之前,428 拒绝路径也置位（当前无行为影响：Abort 后 handler 不执行、
+			// 标记不跨请求，但为未来消费该标记的场景留下「假已验证」隐患）。
+			c.Set("mfa_stepup_verified", true)
 			// R72 八次（用户裁决）：宽限窗内静默放行时告知用户——响应头携带距上次
 			// 验证的秒数（TOTP 同片不可重用，窗口内的操作没有可用码也照常执行），
 			// 前端据此提示「xx 秒内已验证，本次无需验证」。

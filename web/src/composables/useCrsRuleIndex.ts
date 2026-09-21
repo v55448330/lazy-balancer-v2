@@ -112,75 +112,88 @@ export interface CrsRuleOptionView {
  * - ensureForDialog(openSeq)：策略对话框每次打开取一次索引，同一 openSeq 内复用缓存
  *   （步骤间切换不重复请求）；复用 openDialog 的会话序列号守卫模式——对话框快速
  *   关闭重开后，旧会话的在途响应不得覆盖新会话数据（与 fetchIpLists(seq) 同源）。
- * - load()：页面级加载（规则集页等非对话框场景），挂载时无条件刷新一次。
+ * - load()：页面级加载（规则集页等非对话框场景），挂载时刷新一次。
  * 失败语义：HTTP 错误已由全局拦截器 toast，这里退化为空列表（loaded 保持 false，
  * 供消费方区分「索引未就绪」与「规则确实不在索引中」）。
+ *
+ * F-47-35：状态提升为模块级单例——索引纯只读、仅 CRS 库更新时变化，原先每个消费方
+ * （策略向导/事件快捷排除/规则集页）各自挂载都全量拉取同一份 ~832 条索引
+ * （≈100KB+ JSON）。ref 与 seq 计数器提升为模块顶层：会话序列守卫语义不变
+ * （在途失配丢弃、失败不落 loadedSeq 允许同会话重试），并发去重改为跨实例生效
+ * （任一消费方已有在途请求则不重复发起）。导出签名不变，消费方无需改动。
  */
-export const useCrsRuleIndex = () => {
-  const rules = ref<CrsRuleIndexEntry[]>([])
-  const version = ref('')
-  const loading = ref(false)
-  // 仅在成功拿到索引后置 true；失败/未加载时为 false，消费方不得据此判定规则陈旧
-  const loaded = ref(false)
-  // 当前持有数据所属的对话框会话序号（null = 页面级加载或尚未加载）
-  let loadedSeq: number | null = null
-  // 最近发起请求的会话序号：在途期并发去重（配合 loading）+ 旧会话在途响应丢弃（null = 页面级加载）
-  let requestedSeq: number | null = null
+// 模块级共享状态（单例）：所有 useCrsRuleIndex() 消费方共享同一份索引与加载态
+const rules = ref<CrsRuleIndexEntry[]>([])
+const version = ref('')
+const loading = ref(false)
+// 仅在成功拿到索引后置 true；失败/未加载时为 false，消费方不得据此判定规则陈旧
+const loaded = ref(false)
+// 当前持有数据所属的对话框会话序号（null = 页面级加载或尚未加载）
+let loadedSeq: number | null = null
+// 最近发起请求的会话序号：在途期并发去重（配合 loading）+ 旧会话在途响应丢弃（null = 页面级加载）
+let requestedSeq: number | null = null
+// 在途请求句柄（模块级）：同一时刻至多一个索引请求，在途期任何消费方复用不重复发起
+let inflight: Promise<void> | null = null
 
-  const byId = computed(() => {
-    const map = new Map<string, CrsRuleIndexEntry>()
-    for (const rule of rules.value) map.set(rule.id, rule)
-    return map
-  })
+const byId = computed(() => {
+  const map = new Map<string, CrsRuleIndexEntry>()
+  for (const rule of rules.value) map.set(rule.id, rule)
+  return map
+})
 
-  // 下拉选项视图（id — label 主行 + file · category 副行），rules 已按 id 升序
-  const options = computed<CrsRuleOptionView[]>(() =>
-    rules.value.map((r) => ({ id: r.id, ...crsRuleLabelView(r), file: r.file, category: r.category })))
+// 下拉选项视图（id — label 主行 + file · category 副行），rules 已按 id 升序
+const options = computed<CrsRuleOptionView[]>(() =>
+  rules.value.map((r) => ({ id: r.id, ...crsRuleLabelView(r), file: r.file, category: r.category })))
 
-  const fetchIndex = async (openSeq: number | null): Promise<void> => {
-    loading.value = true
-    try {
-      const res = await request.get<APIResponse<CrsRuleIndexData>>('/security/crs/rule-index')
-      // 会话已切换（对话框快速关闭重开）时丢弃过期返回
-      if (openSeq !== null && openSeq !== requestedSeq) return
-      const list = res.data?.rules
-      rules.value = (Array.isArray(list) ? list : [])
-        .filter((r): r is CrsRuleIndexEntry => !!r && typeof r.id === 'string' && r.id !== '')
-        .map((r) => ({
-          id: r.id,
-          msg: typeof r.msg === 'string' ? r.msg : '',
-          file: typeof r.file === 'string' ? r.file : '',
-          category: typeof r.category === 'string' ? r.category : '',
-        }))
-      version.value = typeof res.data?.version === 'string' ? res.data.version : ''
-      loaded.value = true
-      loadedSeq = openSeq
-    } catch (error: unknown) {
-      if (openSeq !== null && openSeq !== requestedSeq) return
-      console.warn('Failed to load CRS rule index:', error)
-      rules.value = []
-      version.value = ''
-      loaded.value = false
-      // FE44-5：失败不落 loadedSeq——失败不等于「本会话已加载」，
-      // 同会话下一次 ensureForDialog 可重试（在途并发去重由 requestedSeq+loading 承担）
-    } finally {
-      if (openSeq === null || openSeq === requestedSeq) loading.value = false
-    }
+const fetchIndex = async (openSeq: number | null): Promise<void> => {
+  loading.value = true
+  try {
+    const res = await request.get<APIResponse<CrsRuleIndexData>>('/security/crs/rule-index')
+    // 会话已切换（对话框快速关闭重开）时丢弃过期返回
+    if (openSeq !== null && openSeq !== requestedSeq) return
+    const list = res.data?.rules
+    rules.value = (Array.isArray(list) ? list : [])
+      .filter((r): r is CrsRuleIndexEntry => !!r && typeof r.id === 'string' && r.id !== '')
+      .map((r) => ({
+        id: r.id,
+        msg: typeof r.msg === 'string' ? r.msg : '',
+        file: typeof r.file === 'string' ? r.file : '',
+        category: typeof r.category === 'string' ? r.category : '',
+      }))
+    version.value = typeof res.data?.version === 'string' ? res.data.version : ''
+    loaded.value = true
+    loadedSeq = openSeq
+  } catch (error: unknown) {
+    if (openSeq !== null && openSeq !== requestedSeq) return
+    console.warn('Failed to load CRS rule index:', error)
+    rules.value = []
+    version.value = ''
+    loaded.value = false
+    // FE44-5：失败不落 loadedSeq——失败不等于「本会话已加载」，
+    // 同会话下一次 ensureForDialog 可重试（在途并发去重由 requestedSeq+loading 承担）
+  } finally {
+    if (openSeq === null || openSeq === requestedSeq) loading.value = false
   }
+}
 
-  /** 对话框会话内取一次索引：同一 openSeq 已加载/在途时直接复用；
+// 发起/复用在途请求：inflight 非空=已有任一消费方的在途请求，直接复用（跨实例去重）
+const startFetch = (openSeq: number | null): Promise<void> => {
+  if (inflight) return inflight
+  requestedSeq = openSeq
+  inflight = fetchIndex(openSeq).finally(() => { inflight = null })
+  return inflight
+}
+
+export const useCrsRuleIndex = () => {
+  /** 对话框会话内取一次索引：同一 openSeq 已加载时直接复用；在途请求不重复发起；
    *  上次失败（loadedSeq 未落、请求已 settled）允许同会话重试 */
   const ensureForDialog = (openSeq: number): Promise<void> => {
-    if (loadedSeq === openSeq || (requestedSeq === openSeq && loading.value)) return Promise.resolve()
-    requestedSeq = openSeq
-    return fetchIndex(openSeq)
+    if (loadedSeq === openSeq) return Promise.resolve()
+    return startFetch(openSeq)
   }
 
-  /** 页面级加载（非对话框场景），无条件刷新 */
-  const load = (): Promise<void> => {
-    requestedSeq = null
-    return fetchIndex(null)
-  }
+  /** 页面级加载（非对话框场景）：挂载时刷新一次；在途请求不重复发起 */
+  const load = (): Promise<void> => startFetch(null)
 
   return { rules, version, loading, loaded, byId, options, ensureForDialog, load }
 }

@@ -99,11 +99,10 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 	return nil
 }
 
-// sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零节点本地记账
-// 字段。last_login（登录时间）与 mfa_last_timestep（从节点本地登录推进）是
-// 「从节点登录端点会写、主节点值无权威意义」的本地态：不清零则从节点每次
-// MFA 登录都触发漂移全量重拉，且从节点锁定在一个同步周期（≤60s）内被主节点
-// 值抹除（R72 F-3）。mfa_failed_attempts/mfa_locked_until 死列已于 2026-09-10
+// sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零 last_login（登录时间）
+// 与 mfa_last_timestep（从节点本地登录推进）。清零仅为哈希稳定（避免从端本地登录
+// 触发漂移重拉）；apply 侧 users 节重放会以主端值覆盖从端显示（全量镜像语义，
+// R72 F-3）。mfa_failed_attempts/mfa_locked_until 死列已于 2026-09-10
 // 物理删除(db.go migrateDropDeadMFALockColumns),快照不再搬运该二值。
 // login_failed_attempts / login_locked_until 是从节点本地登录锁定记账（登录
 // 端点写入，不进快照与节哈希）：users 节重放时由 replaceSnapshotTx 读出并在
@@ -123,7 +122,8 @@ func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
 	return out
 }
 
-// sanitizeAPIKeysForHash 同理清零 api_keys 的 last_used（节点本地使用时间记账）。
+// sanitizeAPIKeysForHash 同理清零 api_keys 的 last_used（使用时间）：清零仅为哈希稳定（避免从端
+// 本地调用触发漂移重拉）；apply 侧 api_keys 节重放会以主端值覆盖从端显示（全量镜像语义）。
 func sanitizeAPIKeysForHash(keys []models.ClusterAPIKey) []models.ClusterAPIKey {
 	if len(keys) == 0 {
 		return keys
