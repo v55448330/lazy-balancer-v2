@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 // syncBuffer is a bytes.Buffer guarded by a mutex for concurrent write/poll.
@@ -2949,5 +2950,259 @@ func TestSecurityEventsAttribution_IPFamilyCapabilityTruthTable(t *testing.T) {
 				t.Fatalf("attributePolicy(%s,%s,%s,ip=%s)=(%d), want %d", tc.rule, tc.id, tc.action, tc.clientIP, pid, tc.wantPID)
 			}
 		})
+	}
+}
+
+// 2026-09-21 自定义族能力首选层（IP 族 securityEventsIPFamilyEventSurface 同模式
+// 扩展）：emitCustomRules 对 Disabled 规则整条跳过（security.go「if !cr.Enabled
+// { continue }」），无启用自定义规则的策略物理上不产任何自定义族事件——fallback
+// 可行性门原本对该族在 custom_only/detection/blocking 下恒放行，无能力首绑凭
+// 候选顺序抢先认领。合成 id（1000000+）在 contains 无分支、恒走 fallback，能力
+// 首选层对该段是唯一精确化手段。全部用例排空 contains（事件 id 10005/1000001
+// 不在任何策略引用集内），确保走的是 fallback 合成路径。
+func TestSecurityEventsAttribution_CustomFamilyCapabilityPreference(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, description, conditions, action, score, enabled) VALUES
+		(20,'启用规则A','', '[]','block',5,1),
+		(21,'启用规则B','', '[]','block',5,1),
+		(22,'启用规则C','', '[]','pass',5,1),
+		(30,'停用规则','', '[]','block',5,0)`); err != nil {
+		t.Fatal(err)
+	}
+	// 每对绑定中无能力策略 id 更小（policy_id ASC = 候选顺序在前），能力首选层
+	// 胜出才可观测。p16（solo 无规则）/p17（引用停用规则）作必归属锚。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES
+		(10,'p-blk-norules',1,'blocking','[]','[]'),
+		(11,'p-blk-hasrules',1,'blocking','[20]','[]'),
+		(12,'p-co-norules',1,'custom_only','[]','[]'),
+		(13,'p-co-hasrules',1,'custom_only','[21]','[]'),
+		(14,'p-det-norules',1,'detection','[]','["94"]'),
+		(15,'p-det-hasrules',1,'detection','[22]','["94"]'),
+		(16,'p-blk-solo-norules',1,'blocking','[]','[]'),
+		(17,'p-blk-disabledref',1,'blocking','[30]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_blk',10),('lb_blk',11),
+		('lb_co',12),('lb_co',13),
+		('lb_det',14),('lb_det',15),
+		('lb_solo',16),
+		('lb_dis',10),('lb_dis',17)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	cases := []struct {
+		name      string
+		rule      string
+		triggered string
+		action    string
+		wantPID   int
+	}{
+		// ── 能力首选层（RED 目标：无启用规则的策略不得抢先认领） ──
+		{"blocking capable wins blocked", "lb_blk", "10005", "blocked", 11},
+		{"blocking capable wins logged", "lb_blk", "10005", "logged", 11},
+		{"blocking capable wins synthetic blocked", "lb_blk", "1000001", "blocked", 11},
+		{"custom_only capable wins blocked", "lb_co", "10005", "blocked", 13},
+		{"custom_only capable wins logged", "lb_co", "10005", "logged", 13},
+		{"detection capable wins blocked", "lb_det", "10005", "blocked", 15},
+		{"detection capable wins logged", "lb_det", "10005", "logged", 15},
+		// detection 对 CRS blocked 恒拒（门既有口径）：能力维度不得放宽
+		{"detection pair CRS blocked still rejected", "lb_det", "942100", "blocked", 0},
+		// ── 必归属锚（摄取必有归属层，能力维度豁免；改动前后均须绿） ──
+		// solo 无启用规则：能力首选层落空后仍归首绑（禁归零）
+		{"solo no-rules still attributed", "lb_solo", "10005", "blocked", 16},
+		// 引用停用规则不计能力：与无能力 p10 平局，归候选顺序第一（若 p17 被误判
+		// 有能力，会经能力首选层抢在 p10 之前，本用例即失败）
+		{"disabled ref counts as incapable", "lb_dis", "10005", "blocked", 10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, "", policyByID, bindings)
+			if pid != tc.wantPID {
+				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, tc.triggered, tc.action, pid, tc.wantPID)
+			}
+		})
+	}
+}
+
+// R-6 真值表（mode × 自定义规则能力 × 动作 × 规则族）：可归因 = 模式/动作门
+// （securityEventsFallbackCanProduce）∧（自定义族 → 存在启用自定义规则）。
+// 门格逐格对照发射侧单一事实：
+//   - off：CRS/自定义/body 守卫全关（仅 IP 族独立发射，非本表维度）；
+//   - custom_only：CRS 全拒（零 Include）；id:11 blocked 拒（pass 动作恒不中断，
+//     无 949 评分链）；logged 可产——emitBodyProcessorRules 在 custom_only 恒发射；
+//   - detection：blocked 拒 CRS（id:6 切换先于 CRS）；自定义/含 id:11 logged 可产；
+//   - blocking：门全域；id:11 blocked 保持可行格（发射面恒在；物理上 pass 恒不
+//     中断、该形状事件不存在，恒真格无害）。
+//     能力维度仅作用于自定义族（CRS 组选择不构成能力差异、id:11 与自定义规则
+//     无关——均维持无能力维度）。
+func TestSecurityEventsFallbackGate_CustomFamilyTruthTable(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, description, conditions, action, score, enabled) VALUES
+		(20,'启用规则','', '[]','block',5,1),
+		(30,'停用规则','', '[]','block',5,0)`); err != nil {
+		t.Fatal(err)
+	}
+	newPolicy := func(mode, ref string) *models.SecurityPolicy {
+		return &models.SecurityPolicy{Mode: mode, CustomRules: json.RawMessage(ref)}
+	}
+	// 能力面直接真值：引用形状 → 是否存在启用规则
+	surfaceCases := []struct {
+		name string
+		ref  string
+		want bool
+	}{
+		{"no refs incapable", `[]`, false},
+		{"enabled ref capable", `[20]`, true},
+		{"disabled ref incapable", `[30]`, false},
+		{"dangling ref incapable", `[99]`, false},
+		{"enabled plus disabled capable", `[20,30]`, true},
+		{"disabled only incapable", `[30,31]`, false},
+	}
+	for _, tc := range surfaceCases {
+		t.Run("surface/"+tc.name, func(t *testing.T) {
+			if got := securityEventsCustomRulesEventSurface(newPolicy("blocking", tc.ref)); got != tc.want {
+				t.Fatalf("customRulesEventSurface(ref=%s)=%v, want %v", tc.ref, got, tc.want)
+			}
+		})
+	}
+	// 合成真值表：want = 门 ∧（自定义族 → 能力面）。字面期望逐格写死。
+	refs := map[string]string{"none": `[]`, "enabled": `[20]`, "disabled": `[30]`, "dangling": `[99]`}
+	cells := []struct {
+		name   string
+		mode   string
+		ref    string
+		action string
+		id     string
+		want   bool
+	}{
+		// ── 自定义族 10005：off 恒不可产（门拒，能力无关） ──
+		{"off none blocked", "off", "none", "blocked", "10005", false},
+		{"off enabled blocked", "off", "enabled", "blocked", "10005", false},
+		{"off enabled logged", "off", "enabled", "logged", "10005", false},
+		// ── custom_only：门放行 logged/blocked，能力维度定真假（RED 格） ──
+		{"custom_only none blocked", "custom_only", "none", "blocked", "10005", false},
+		{"custom_only enabled blocked", "custom_only", "enabled", "blocked", "10005", true},
+		{"custom_only none logged", "custom_only", "none", "logged", "10005", false},
+		{"custom_only enabled logged", "custom_only", "enabled", "logged", "10005", true},
+		// ── detection：同上（blocked 可产：自定义先于 id:6 切换） ──
+		{"detection none blocked", "detection", "none", "blocked", "10005", false},
+		{"detection enabled blocked", "detection", "enabled", "blocked", "10005", true},
+		{"detection none logged", "detection", "none", "logged", "10005", false},
+		{"detection enabled logged", "detection", "enabled", "logged", "10005", true},
+		// ── blocking：门全域，能力维度定真假 ──
+		{"blocking none blocked", "blocking", "none", "blocked", "10005", false},
+		{"blocking enabled blocked", "blocking", "enabled", "blocked", "10005", true},
+		{"blocking none logged", "blocking", "none", "logged", "10005", false},
+		{"blocking enabled logged", "blocking", "enabled", "logged", "10005", true},
+		// 停用/悬空引用均不计能力（enabled 过滤非空）
+		{"blocking disabled blocked", "blocking", "disabled", "blocked", "10005", false},
+		{"blocking dangling logged", "blocking", "dangling", "logged", "10005", false},
+		// ── 合成 id 1000001 与 10005 同族同格（物理同形） ──
+		{"custom_only enabled synthetic", "custom_only", "enabled", "blocked", "1000001", true},
+		{"custom_only none synthetic", "custom_only", "none", "blocked", "1000001", false},
+		{"blocking enabled synthetic logged", "blocking", "enabled", "logged", "1000001", true},
+		// ── CRS 族：无能力维度（组选择不构成差异，维持）；门格锁定 ──
+		{"off CRS blocked", "off", "enabled", "blocked", "942100", false},
+		{"off CRS logged", "off", "enabled", "logged", "942100", false},
+		{"custom_only CRS blocked", "custom_only", "enabled", "blocked", "942100", false},
+		{"custom_only CRS logged", "custom_only", "enabled", "logged", "942100", false},
+		{"detection CRS blocked", "detection", "enabled", "blocked", "942100", false},
+		{"detection CRS logged", "detection", "enabled", "logged", "942100", true},
+		{"blocking CRS none-ref blocked", "blocking", "none", "blocked", "942100", true},
+		// ── id:11：无能力维度（与自定义规则无关）；门格锁定 ──
+		{"off id11 blocked", "off", "enabled", "blocked", "11", false},
+		{"off id11 logged", "off", "enabled", "logged", "11", false},
+		{"custom_only id11 blocked", "custom_only", "enabled", "blocked", "11", false},
+		{"custom_only id11 logged", "custom_only", "none", "logged", "11", true},
+		{"detection id11 blocked", "detection", "enabled", "blocked", "11", false},
+		{"detection id11 logged", "detection", "none", "logged", "11", true},
+		{"blocking id11 blocked", "blocking", "none", "blocked", "11", true},
+		{"blocking id11 logged", "blocking", "enabled", "logged", "11", true},
+	}
+	for _, tc := range cells {
+		t.Run(tc.id+"/"+tc.name, func(t *testing.T) {
+			p := newPolicy(tc.mode, refs[tc.ref])
+			got := securityEventsFallbackCanProduce(p, tc.action, tc.id)
+			if got && securityEventsRuleIsCustomFamily(tc.id) {
+				got = securityEventsCustomRulesEventSurface(p)
+			}
+			if got != tc.want {
+				t.Fatalf("attributable(mode=%s,ref=%s,%s,%s)=%v, want %v", tc.mode, tc.ref, tc.action, tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
+// 阶段 0 信任策略（stage0/直通）引擎零发射面（2026-09-20 裁定：直通=路由层
+// subroute 短路零 coraza 事务；保留检测=id:12 DetectionOnly 全评估不拦，且
+// BuildCorazaDirectives 对 stage0 产空串不出自有 handler）——对非 IP 族的任何
+// 动作事件均不可产（mode=off 门恒拒，含信任 wl：wl 在能力面也仅 logged 语义）。
+// 真值表锁格 + 与有能力兄弟绑定的合成形状；IP 族 blocked 的无属主漂移形状按
+// S3 既有语义走必归属层归首绑（禁归零），一并锚定。
+func TestSecurityEventsAttribution_Stage0ZeroEmissionSurfaceLock(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, description, conditions, action, score, enabled) VALUES
+		(20,'启用规则','', '[]','block',5,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_whitelist,ip_whitelist_enabled,policy_type,trust_detection) VALUES
+		(9,'p-stage0-passthrough',1,'off','[]','[]','["::1"]',1,'stage0',0),
+		(19,'p-stage0-detection',1,'off','[]','[]','["::1"]',1,'stage0',1),
+		(11,'p-blk-hasrules',1,'blocking','[20]','[]','[]',0,'stage3',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_s0p',9),('lb_s0d',19),
+		('lb_mix',9),('lb_mix',11)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	// 两个 stage0 形态 solo 绑定：非 IP 族（自定义/CRS/id:11）× 双动作全部归零
+	for _, rule := range []string{"lb_s0p", "lb_s0d"} {
+		for _, tc := range []struct {
+			id, action string
+		}{
+			{"10005", "blocked"}, {"10005", "logged"},
+			{"942100", "blocked"}, {"942100", "logged"},
+			{"11", "blocked"}, {"11", "logged"},
+		} {
+			if pid, _ := securityEventsAttributePolicy(rule, tc.id, tc.action, "", policyByID, bindings); pid != 0 {
+				t.Fatalf("stage0 %s (%s,%s)=(%d), want 0 — stage0 引擎零发射面,非 IP 族事件不可产", rule, tc.id, tc.action, pid)
+			}
+		}
+	}
+	// 合成形状：stage0（候选序第一）+ 有启用规则 blocking——自定义事件归后者
+	if pid, _ := securityEventsAttributePolicy("lb_mix", "10005", "blocked", "", policyByID, bindings); pid != 11 {
+		t.Fatalf("lb_mix (10005,blocked)=(%d), want 11 — stage0 不得凭候选顺序认领自定义事件", pid)
+	}
+	// IP 族 blocked 无属主（两个绑定均无 ACL 发射面）：按 S3 既有必归属语义归
+	// 首绑 stage0，禁归零（能力首选层已拒绝两者,漂移形状归首启用绑定）
+	if pid, _ := securityEventsAttributePolicy("lb_mix", "2", "blocked", "", policyByID, bindings); pid != 9 {
+		t.Fatalf("lb_mix (2,blocked)=(%d), want 9 — 必归属层锚（S3 既有语义,禁归零）", pid)
 	}
 }

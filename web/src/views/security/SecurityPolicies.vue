@@ -25,7 +25,7 @@
         <template #empty>
           <el-empty description="暂无安全策略" :image-size="60" />
         </template>
-        <el-table-column prop="name" label="策略名称" min-width="140">
+        <el-table-column prop="name" label="策略名称" min-width="200">
           <template #default="{ row }">
             <el-link type="primary" @click="openDialog(row)">{{ row.name }}</el-link>
           </template>
@@ -44,7 +44,7 @@
           </template>
         </el-table-column>
         <!-- 内容摘要列（按类型一行摘要） -->
-        <el-table-column label="内容摘要" min-width="300">
+        <el-table-column label="内容摘要" min-width="340">
           <template #default="{ row }">
             <div class="policy-summary-cell">
               <span class="policy-summary-text" :title="policySummaryLine(row)">{{ policySummaryLine(row) }}</span>
@@ -52,11 +52,11 @@
           </template>
         </el-table-column>
         <!-- 24h 触发列（trigger_24h 后端字段）：近 24h 归因该策略的 blocked+logged 事件数，
-             每条策略恒显示（0=灰字）；列宽按「9999」量级预留 -->
-        <el-table-column label="24h 触发" width="80" align="center">
+             每条策略恒显示（0=灰色 info 标签，与 >0 danger 标签同构）；列宽 92=表头四字+cell padding 单行容纳 -->
+        <el-table-column label="24h 触发" width="92" align="center">
           <template #default="{ row }">
             <el-tag v-if="(row.trigger_24h ?? 0) > 0" size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
-            <span v-else class="policy-trigger-zero">0</span>
+            <el-tag v-else size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="90" align="center">
@@ -70,7 +70,7 @@
         <el-table-column label="更新者" width="100" align="center">
           <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
         </el-table-column>
-        <el-table-column v-if="!isReadOnly" label="操作" width="280" fixed="right">
+        <el-table-column v-if="!isReadOnly" label="操作" width="168" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="openDialog(row)">{{ policyTypeOf(row) === 'mixed' ? '查看' : '编辑' }}</el-button>
             <el-button v-if="policyTypeOf(row) !== 'mixed'" size="small" link type="primary" @click="openBindRulesDialog(row)">绑定规则</el-button>
@@ -3262,7 +3262,6 @@ onMounted(async () => {
 .policy-summary-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .policy-trigger-tag { font-variant-numeric: tabular-nums; }
-.policy-trigger-zero { color: var(--el-text-color-secondary, #909399); font-variant-numeric: tabular-nums; }
 
 /* 生效投影条（任务 8）：同一信息条左右两段——左=生效说明句、右=关联规则覆盖状态
    列表，同字号（12px）同基线（align-items: baseline） */

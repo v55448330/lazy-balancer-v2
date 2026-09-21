@@ -570,6 +570,16 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 //	  无 949 评分链,id:11 守卫(phase:2 pass)恒不产 blocked(F1 标靶保持);
 //	  自定义规则无 id:6 切换任意相位可拦;预检 id:7 与模式无关(:927-935)
 //	  (A35-SECLB-3:初版门允许集漏 7,误拒);
+//	· id:11 发射面(2026-09-21 实证,维持现状):emitBodyProcessorRules 在
+//	  custom_only/blocking/detection 三模式恒发射(security.go :347/:408,
+//	  请求体处理器激活与畸形 body 守卫不依赖自定义规则)——logged 事件三模式
+//	  物理可能,门放行格与发射面一致;blocked 任何模式均不可产(phase:2 pass
+//	  恒不中断),blocking 的 blocked 11 保持可行格(物理上该形状事件不存在,
+//	  恒真格无害);
+//	· 自定义族(10000-799999/1000000+)的物理发射面能力维度由上层首选层
+//	  securityEventsCustomRulesEventSurface 承担(emitCustomRules 对 Disabled
+//	  整条跳过的镜像):无启用自定义规则的策略不得凭候选顺序抢先认领本族事件;
+//	  本门对该族维持 off 拒/custom_only/detection/blocking 放行的模式口径;
 //	· blocking:全域。
 //
 // 合成 id(1000000+)按自定义族同等对待(物理同形;豁免①钉的是 contains
@@ -577,7 +587,9 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 //
 // 本门只核「模式 × 动作」可行性;IP 族(2/4/7/8/800xxx)的物理发射面能力维度
 // 由上层首选层 securityEventsIPFamilyEventSurface 承担(2026-09-21 生产事故:
-// 无 IP 能力策略凭候选顺序抢先认领 id:2),能力首选层落空后仍按本门归属
+// 无 IP 能力策略凭候选顺序抢先认领 id:2),自定义族(10000-799999/1000000+)的
+// 由 securityEventsCustomRulesEventSurface 承担(2026-09-21:无启用自定义规则
+// 的策略凭候选顺序抢先认领自定义族事件),能力首选层落空后仍按本门归属
 // (摄取必有归属,禁止归零)。
 func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, ruleTriggered string) bool {
 	if policy == nil {
@@ -589,7 +601,7 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	}
 	ipControl := securityEventsRuleIsIPFamily(ruleTriggered)
 	crs := n >= 900000 && n < 1000000
-	custom := (n >= 10000 && n < geoipPrecheckRuleBase) || n >= 1000000
+	customFam := securityEventsRuleIsCustomFamily(ruleTriggered)
 	switch policy.Mode {
 	case "off":
 		// off=CRS/自定义/body 守卫全关,但 IP 控制/GeoIP 独立发射照常阻断。
@@ -598,7 +610,7 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 		if action != "blocked" {
 			return true
 		}
-		return ipControl || custom
+		return ipControl || customFam
 	case "custom_only":
 		if crs {
 			return false
@@ -622,6 +634,40 @@ func securityEventsRuleIsIPFamily(ruleTriggered string) bool {
 		return false
 	}
 	return n == 2 || n == 4 || n == 7 || n == 8 || IsGeoIPPrecheckID(n)
+}
+
+// securityEventsRuleIsCustomFamily 报告规则 id 是否属于自定义规则族（5 位发射
+// id 10000-799999 = DB id+10000，及无 id 旧版规则的合成段 1000000+）。单一事实
+// 源：fallback 门与能力首选层共用，禁止各自复写字面量。
+func securityEventsRuleIsCustomFamily(ruleTriggered string) bool {
+	n, err := strconv.Atoi(ruleTriggered)
+	if err != nil {
+		return false
+	}
+	return (n >= 10000 && n < geoipPrecheckRuleBase) || n >= 1000000
+}
+
+// securityEventsCustomRulesEventSurface（2026-09-21，IP 族能力首选层同模式扩展）：
+// 自定义族事件 fallback 首选层的物理发射面判定——emitCustomRules 对 Disabled
+// 规则整条跳过（security.go「if !cr.Enabled { continue }」，合成段 1000000+ 同
+// 一循环同一过滤），无启用自定义规则的策略物理上不产任何自定义族事件
+// （blocked/logged 同判）。策略粒度能力，与 IP 族 surface 同口径：规则 id 归属
+// 与名单成员一样归 contains（custom_rules 引用集比对），此处只核「是否存在启用
+// 规则」——停用/悬空引用均不计能力。读取经 policyCustomRulesCached（store=nil
+// 回退 db.DB，与 contains 读 CustomRules 原文同库同口径；摄取 tick 单线程、
+// 策略对象每 tick 重载，惰性解析单 tick 内按策略记忆化，零事件 tick 零查询）。
+// 返回 false 不代表事件归零：attribute 层能力首选层落空后仍经「模式/动作门」
+// 归属（摄取必有归属）。
+func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
+	if p == nil {
+		return false
+	}
+	for _, cr := range policyCustomRulesCached(p, nil) {
+		if cr.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // securityEventsIPFamilyEventSurface（2026-09-21 生产事故，A-3 ②能力维度）：
@@ -718,10 +764,12 @@ func securityEventsIPInList(ip string, list []string) bool {
 //  1. 能力首选层（2026-09-21 生产事故）：模式/动作门（A34-CORE-F1/F2，
 //     securityEventsFallbackCanProduce）+ IP 族物理发射面
 //     （securityEventsIPFamilyEventSurface）——无任何 IP 控制能力的策略不得凭
-//     候选顺序抢先认领 id:2/4/7/8/800xxx 事件；
-//  2. 摄取必有归属层：仅模式/动作门（IP 族能力维度豁免）——绑定集内不存在
-//     有能力策略（绑定在发射后变更等漂移形状）时事件仍归到首个可行绑定，
-//     禁止归零。
+//     候选顺序抢先认领 id:2/4/7/8/800xxx 事件；+ 自定义族物理发射面
+//     （securityEventsCustomRulesEventSurface，同日扩展）——无启用自定义规则
+//     的策略不得凭候选顺序抢先认领自定义族事件（10000-799999/1000000+）；
+//  2. 摄取必有归属层：仅模式/动作门（IP 族与自定义族能力维度豁免）——绑定集
+//     内不存在有能力策略（绑定/规则启停在发射后变更等漂移形状）时事件仍归到
+//     首个可行绑定，禁止归零。
 //
 // policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该
 // lb_rule 的可用主策略。无任何启用且可行绑定策略、或 lb_rule 完全未绑定（无
@@ -743,6 +791,7 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action, clientIP 
 		}
 	}
 	ipFamily := securityEventsRuleIsIPFamily(ruleTriggered)
+	customFam := securityEventsRuleIsCustomFamily(ruleTriggered)
 	for _, pid := range policyIDs {
 		p := policyByID[pid]
 		if p == nil {
@@ -754,17 +803,18 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action, clientIP 
 		if ipFamily && !securityEventsIPFamilyEventSurface(p, action, ruleTriggered) {
 			continue
 		}
+		if customFam && !securityEventsCustomRulesEventSurface(p) {
+			continue
+		}
 		return pid, p.Name
 	}
-	if ipFamily {
-		for _, pid := range policyIDs {
-			p := policyByID[pid]
-			if p == nil {
-				continue
-			}
-			if securityEventsFallbackCanProduce(p, action, ruleTriggered) {
-				return pid, p.Name
-			}
+	for _, pid := range policyIDs {
+		p := policyByID[pid]
+		if p == nil {
+			continue
+		}
+		if securityEventsFallbackCanProduce(p, action, ruleTriggered) {
+			return pid, p.Name
 		}
 	}
 	return 0, ""
