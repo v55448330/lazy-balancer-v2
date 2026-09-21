@@ -70,10 +70,10 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
     // 与后端同口径：前缀校验用原始串（后端 HasPrefix 在 TrimSpace 之前）
     if (!rule.path.startsWith('/')) return `第 ${rowNumber} 条路径必须以 / 开头`
     if (/[*?{}]/.test(rule.path)) return `第 ${rowNumber} 条路径不能包含 * ? { } 通配字符`
-    // 上游 path 改写：非空须以 / 开头且不含空格 ? #（query/fragment 不允许），与后端校验同口径
+    // 上游路径 改写：非空须以 / 开头且不含空格 ? #（query/fragment 不允许），与后端校验同口径
     if (rule.upstream_path) {
-      if (!rule.upstream_path.startsWith('/')) return `第 ${rowNumber} 条路径的上游 path 必须以 / 开头`
-      if (/[\s?#]/.test(rule.upstream_path)) return `第 ${rowNumber} 条路径的上游 path 不能包含空格 ? # 字符`
+      if (!rule.upstream_path.startsWith('/')) return `第 ${rowNumber} 条路径的上游路径 必须以 / 开头`
+      if (/[\s?#]/.test(rule.upstream_path)) return `第 ${rowNumber} 条路径的上游路径 不能包含空格 ? # 字符`
     }
     const canonical = canonicalPathKey(rule.match_type, rule.path)
     const duplicateKey = `${rule.match_type}:${canonical}`

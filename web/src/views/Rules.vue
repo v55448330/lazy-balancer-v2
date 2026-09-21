@@ -88,31 +88,31 @@
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="协议" width="74">
+        <el-table-column label="协议" width="80">
           <template #default="{ row }">
             <el-tag :type="row.protocol === 'tcp' ? 'warning' : (row.enable_tls ? 'success' : 'primary')" size="small" effect="plain">
               {{ row.protocol === 'tcp' ? 'TCP' : (row.enable_tls ? 'HTTPS' : 'HTTP') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="负载策略" width="84" align="center" show-overflow-tooltip>
+        <el-table-column label="负载策略" width="101" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="62" align="center">
+        <el-table-column prop="listen_port" label="端口" width="67" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="上游" width="58" align="center">
+        <el-table-column label="上游" width="64" align="center">
           <template #default="{ row }">
             <el-tag :type="row.dynamic_dns ? 'primary' : 'success'" size="small" effect="plain">
               {{ row.dynamic_dns ? '动态' : '静态' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="TLS" width="90" align="center">
+        <el-table-column label="TLS" width="106" align="center">
           <template #default="{ row }">
             <el-popover
               v-if="row.enable_tls"
@@ -172,7 +172,7 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="健康" width="58" align="center">
+        <el-table-column label="健康" width="64" align="center">
           <template #default="{ row }">
             <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
               <template #reference>
@@ -233,17 +233,17 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新者" width="62" align="center" show-overflow-tooltip>
+        <el-table-column label="更新者" width="66" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="152" align="center" show-overflow-tooltip>
+        <el-table-column label="更新时间" width="164" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="76" align="center">
+        <el-table-column label="状态" width="64" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -254,7 +254,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="154" fixed="right" align="center">
+        <el-table-column label="操作" width="172" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
@@ -2810,6 +2810,15 @@ const openFlowDialog = (rule: Rule): void => {
       max_connections: u.max_connections ?? 0,
       enabled: u.enabled !== false,
     })),
+    // 路由分发节点数据源：与健康浮层 healthPathRules 同门（仅 custom_routes_enabled），
+    // 零上游路径行不投影（同浮层口径）；PathRuleUpstream 无 enabled 概念，列出即生效
+    pathRules: healthPathRules(rule)
+      .filter((pr) => (pr.upstreams?.length ?? 0) > 0)
+      .map((pr) => ({
+        path: pr.path,
+        match_type: pr.match_type,
+        upstreams: (pr.upstreams || []).map((u) => ({ host: u.address, port: u.port, enabled: true })),
+      })),
     health: health ? { healthy: health.healthy, unhealthy: health.unhealthy, degraded: health.degraded, unknown: health.unknown, na: health.na, total: health.total } : undefined,
     upstreamHealth,
   }
@@ -3407,7 +3416,7 @@ onUnmounted(() => {
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 /* 表格密度（列宽重排 2026-09-21）：.cell 水平内边距 12→8px，12 列合计省 96px——
    总最小宽收敛进典型容器宽（消除横向滚动条）的前提项 */
-.rules-table :deep(.el-table .cell) { padding: 0 8px; }
+.rules-table :deep(.el-table .cell) { padding: 0 6px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }

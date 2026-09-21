@@ -540,7 +540,7 @@ const flowNodes = computed<FlowNode[]>(() => {
   const target = props.target
   if (!target) return []
   const access: FlowNode = { key: 'access', title: '接入', subtitle: `${protocolLabel.value} · 端口 ${target.listenPort}`, tone: 'primary', icon: Connection }
-  const upstream: FlowNode = { key: 'upstream', title: '上游', subtitle: target.upstreamSummary, tone: 'gray', icon: TopRight }
+  const upstream: FlowNode = { key: 'upstream', title: '上游', subtitle: target.upstreamSummary, tone: 'primary', icon: TopRight }
   if (isTcp.value) return [access, upstream]
   const nodes: FlowNode[] = [access]
   // 阶段 0 与 1/2/3 同构恒出：未绑定信任策略时灰态「未启用」（用户裁定 2026-09-21——

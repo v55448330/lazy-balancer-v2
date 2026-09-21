@@ -6,7 +6,7 @@ export const strategyLabels: Record<string, string> = {
   weighted_round_robin: '轮询',
   least_conn: '最少连接',
   ip_hash: 'IP 哈希',
-  cookie: 'Cookie 粘滞',
+  cookie: '粘滞',
   first: '首个可用',
   random: '随机',
 }

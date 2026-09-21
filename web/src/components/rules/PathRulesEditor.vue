@@ -57,19 +57,19 @@
 
           <label class="rule-field upstream-path-field">
             <span class="rule-field-label">
-              上游 path
+              上游路径
               <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
               <el-tooltip placement="top">
                 <template #content>
-                  留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发 path 整体替换为该值
+                  留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发路径整体替换为该值
                 </template>
-                <el-icon class="field-hint-icon" aria-label="上游 path 改写说明"><QuestionFilled /></el-icon>
+                <el-icon class="field-hint-icon" aria-label="上游路径改写说明"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
             <div class="rule-field-control">
               <el-input
                 v-model="rule.upstream_path"
-                :aria-label="`路径规则 ${index + 1} 的上游 path`"
+                :aria-label="`路径规则 ${index + 1} 的上游路径`"
                 placeholder="留空=原样转发"
                 :class="{ 'is-error-input': upstreamError(index) }"
               />
@@ -189,7 +189,7 @@ const normalizeOrder = (): void => {
   pathRules.value.forEach((rule, index) => { rule.sort_order = index })
 }
 
-// 上游 path 改写：与后端 validateRuleFeatures 同口径——非空须以 / 开头且
+// 上游路径改写：与后端 validateRuleFeatures 同口径——非空须以 / 开头且
 // 不含空格 ? #（query/fragment 不允许）；空串=原样转发。返回空串即无错误。
 const upstreamError = (index: number): string => {
   const rule = pathRules.value[index]
@@ -263,14 +263,16 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 /* 行内标签：与向导 el-form-item label 同源（32px 行高/常规文本色/表单字号） */
 .rule-field-label { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 32px; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
 .match-type-select { width: 128px; }
-.rule-field-control { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+/* 报错间距恒定预留（2026-09-21 用户裁定）：错误/提示文案绝对定位于字段下方预留带内,
+   出现与否不改变任何兄弟区块位置,三字段基线对齐恒定 */
+.rule-field-control { position: relative; display: flex; min-width: 0; flex: 1; flex-direction: column; margin-bottom: 18px; }
 .field-hint-icon { color: var(--el-text-color-placeholder); cursor: help; }
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
-/* 层次二/三：开关行单句说明 + 缩进卡片，行距统一 12px */
+/* 层次二/三：开关行单句说明 + 满宽次级卡片（左右贴齐外层卡片内容缘，双侧同 padding），行距统一 12px */
 .custom-upstream-toggle { display: flex; align-items: center; gap: 8px; }
 .custom-upstream-title { color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
-.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; margin-left: 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
@@ -284,26 +286,27 @@ const onWeightChange = (rule: PathRule, index: number): void => {
   .editor-section-header { align-items: flex-start; flex-direction: column; }
   .path-rule-match-row { grid-template-columns: 1fr; }
   .match-type-select { width: 100%; }
-  .custom-upstream-editor { margin-left: 0; }
   .upstream-grid-header { display: none; }
   .upstream-row { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: end; padding-top: 8px; border-top: 1px solid var(--border); }
   .upstream-row:first-of-type { padding-top: 0; border-top: 0; }
   .mobile-field-label { display: inline; }
   .upstream-row > .el-button { justify-self: end; }
 }
-/* 校验提示：对齐 EP 表单错误态度量（12px/行高 1/上距 2px） */
+/* 校验提示：绝对定位于字段下方预留带（18px），不挤推兄弟区块（对齐 EP 表单错误态度量 12px/行高 1） */
 .path-field-error {
-  display: block;
-  margin: 0;
-  padding-top: 2px;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  white-space: nowrap;
   font-size: 12px;
   line-height: 1;
   color: var(--el-color-danger);
 }
 .path-field-warning {
-  display: block;
-  margin: 0;
-  padding-top: 2px;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  white-space: nowrap;
   font-size: 12px;
   line-height: 1;
   color: var(--el-color-warning);
