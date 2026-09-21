@@ -1032,7 +1032,12 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	// route 先于本预检设置该头）；策略有启用信任名单时追加第三续段——预检信任∪
 	// DetectionOnly 是事务级全局的（2026-09-20 用户裁定：信任 IP 对全部策略的
 	// GeoIP 全局放行，取代旧引擎层「跨策略信任不豁免」边界），此续段仅抑制
-	// 本策略链对自有信任 IP 的自欺事件。denyStatus=403（阶段 1 页未配）时不带
+	// 本策略链对自有信任 IP 的自欺事件。R48-SEC-1（第 48 轮审计）：在 id:3
+	// （非 stage0 信任并集）/id:12（stage0 保留检测）已把信任 IP 的事务级引擎
+	// 切为 DetectionOnly 的前提下，该续段对判定结果不产生差异（信任 IP 本就不
+	// 拦）——属防御性冗余，保留为纵深层；删除它同样安全，但若未来收窄
+	// DetectionOnly 的适用范围，此续段是唯一的链内自抑制，勿视作死代码清理。
+	// denyStatus=403（阶段 1 页未配）时不带
 	// status：默认 403 → 403 兜底错误路由（跟随策略的默认层，回归形状）；
 	// =481 时链首显式抬码（disruptive 动作仅允许链首段，SECLB33-1）。
 	geoipStatusFragment := ""

@@ -1011,6 +1011,11 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 // 与 coraza status 动作（coraza 对 status 无范围校验，actions/status.go 仅
 // Atoi）。规则配了阶段页（id>0 且页内容非空）→ 对应阶段全部 deny 抬阶段码；
 // 未配=跟随策略（逐策略 483+ 归因默认层）。
+// R48-SEC-2（第 48 轮审计）容量边界：483..599 ⇒ 最多 117 个「配了非空拦截页」
+// 的启用策略可获得逐策略合成码；超出的策略不获码（下方 break），其拦截中断回落
+// buildBlockPageErrorRoute 的 403 兜底路由——渲染的是该规则首绑定配置了拦截页
+// 的策略页面（可能与实际触发策略不同）。当前规模（策略数十条）不可达；若未来
+// 策略数逼近上限，须先扩展码域（如 600+ 段或改归因头）而非依赖兜底。
 const (
 	blockPageStage1Code    = 481
 	blockPageStage3Code    = 482

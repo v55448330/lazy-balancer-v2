@@ -447,6 +447,10 @@ func (h *Handlers) GetOpenAPIYAML(c *gin.Context) {
 	c.Data(http.StatusOK, "application/yaml; charset=utf-8", []byte(buildOpenAPIYAML()))
 }
 
+// GetAPIDocs 返回 Swagger UI 的 HTML 壳（规格本体在 /api/v1/openapi.yaml，已鉴权）。
+// R48-SYS-1（第 48 轮审计）：本页外部依赖面 = unpkg CDN 的 swagger-ui CSS/bundle
+// （已带 SRI 完整性校验 + 加载失败 fallback），离线环境降级为「直接取 YAML」链接；
+// 该外链为开发者便利通道，面板自身运行不依赖它。
 func (h *Handlers) GetAPIDocs(c *gin.Context) {
 	html := `<!doctype html>
 <html lang="zh-CN">
@@ -461,7 +465,8 @@ func (h *Handlers) GetAPIDocs(c *gin.Context) {
   <div id="fallback">
     <h2>API 文档加载失败</h2>
     <p>无法从 CDN 加载 Swagger UI，可能是网络限制或离线环境。</p>
-    <p>可直接访问 OpenAPI YAML：<a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a></p>
+    <p>规格接口需登录鉴权：请在已登录本面板的同一浏览器中打开本页（页面会用 localStorage 中的登录令牌请求规格）。</p>
+    <p>也可直接访问 OpenAPI YAML：<a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a>（携带 Authorization: Bearer 令牌）</p>
   </div>
   <div id="swagger-ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" integrity="sha384-NXtFPpN61oWCuN4D42K6Zd5Rt2+uxeIT36R7kpXBuY9tLnZorzrJ4ykpqwJfgjpZ" crossorigin onerror="document.getElementById('fallback').style.display='block';document.getElementById('swagger-ui').style.display='none'"></script>
@@ -478,6 +483,15 @@ func (h *Handlers) GetAPIDocs(c *gin.Context) {
         docExpansion: "list",
         filter: true,
         tryItOutEnabled: false,
+        // R48-API-1（第 48 轮审计）：/openapi.yaml 已移入鉴权区，本页取自
+        // localStorage 的登录令牌注入 Authorization 头（面板自身同源同键）。
+        requestInterceptor: function (req) {
+          try {
+            var token = window.localStorage.getItem("token");
+            if (token) req.headers["Authorization"] = "Bearer " + token;
+          } catch (e) { /* 隐私模式等禁用 localStorage：保持无令牌请求（将 401） */ }
+          return req;
+        },
       });
     });
   </script>

@@ -317,8 +317,10 @@
             </el-table-column>
             <!-- R72 二十八次初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
                  四 badge 单行 ~230px 舒适；极端大数字（百万级）由 flex-wrap 换行
-                 兜底（badge 自身 nowrap，不出现数字内折）。 -->
-            <el-table-column label="状态码" width="380">
+                 兜底（badge 自身 nowrap，不出现数字内折）。
+                 第 48 轮（用户反馈）：入站/出站流量列 90→100（字节量级数字易被截），
+                 差额从状态码列 380→360 划出（badge 单行 ~230px 仍有充足余量）。 -->
+            <el-table-column label="状态码" width="360">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
@@ -333,7 +335,7 @@
                 <span v-else class="text-secondary">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="入站流量" width="90">
+            <el-table-column label="入站流量" width="100">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
@@ -341,7 +343,7 @@
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="出站流量" width="90">
+            <el-table-column label="出站流量" width="100">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>

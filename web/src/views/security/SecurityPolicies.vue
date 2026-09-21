@@ -44,7 +44,7 @@
           </template>
         </el-table-column>
         <!-- 内容摘要列（按类型一行摘要） -->
-        <el-table-column label="内容摘要" min-width="340">
+        <el-table-column label="内容摘要" min-width="324">
           <template #default="{ row }">
             <div class="policy-summary-cell">
               <span class="policy-summary-text" :title="policySummaryLine(row)">{{ policySummaryLine(row) }}</span>
@@ -52,10 +52,11 @@
           </template>
         </el-table-column>
         <!-- 24h 触发列（trigger_24h 后端字段）：近 24h 归因该策略的 blocked+logged 事件数，
-             每条策略恒显示（0=灰色 info 标签，与 >0 danger 标签同构）；列宽 92=表头四字+cell padding 单行容纳。
+             每条策略恒显示（0=灰色 info 标签，与 >0 danger 标签同构）；列宽 92=表头四字+cell padding 单行容纳；
+             第 48 轮（用户反馈）92→108（大数字标签留白不足），差额从内容摘要 min-width 340→324 划出。
              disable-transitions：el-tag 内置 <Transition name="el-zoom-in-center" appear>，切阶段 tab 时
              行重建会重播缩放淡入，居中缩放令标签左缘从中心外起步再回位（视觉上「数字先右偏再归位」）。 -->
-        <el-table-column label="24h 触发" width="92" align="center">
+        <el-table-column label="24h 触发" width="108" align="center">
           <template #default="{ row }">
             <el-tag v-if="(row.trigger_24h ?? 0) > 0" disable-transitions size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
             <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
@@ -706,12 +707,14 @@
                       :title="hint"
                       class="bound-rule-alert"
                     />
-                    <!-- 行内编辑该规则的阶段拦截页覆盖（决策 A：规则级 4 字段收口到策略侧；
-                         变更即 PUT /rules/:id——UpdateRule 对空 protocol 400，故携带基础现值；
-                         upstreams 省略=保留） -->
+                    <!-- 行内编辑该规则的阶段拦截页覆盖（规则级 4 字段收口到策略侧）：第 48 轮
+                         用户裁定 A 改为向导内延迟生效——改选只暂存，随向导「保存」收尾逐规则
+                         PUT /rules/:id（提交时携带基础现值：UpdateRule 对空 protocol 400；
+                         upstreams 省略=保留）。旧语义「变更即 PUT」已废弃：会绕过向导保存、
+                         不进配置预览、文案误导。 -->
                     <div v-if="!isReadOnly && editableOverrideStages.length > 0" class="stage-override-editors">
                       <div v-for="stage in editableOverrideStages" :key="stage" class="stage-override-line">
-                        <span class="stage-override-label">阶段 {{ stage }} 拦截页</span>
+                        <span class="stage-override-label">阶段 {{ stage }} 拦截页覆盖</span>
                         <el-select
                           size="small"
                           :model-value="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id']"
@@ -736,13 +739,20 @@
                           <el-option :value="404" label="404" />
                           <el-option :value="503" label="503" />
                         </el-select>
-                        <el-tag v-if="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id'] > 0" type="warning" size="small" effect="plain">覆盖生效中</el-tag>
+                        <el-tag
+                          v-if="overrideEditOf(row.caddyId)[stage === 1 ? 'stage1_id' : 'stage3_id'] > 0"
+                          :type="pendingStageOverride(row.caddyId, stage) ? 'primary' : 'warning'"
+                          size="small"
+                          effect="plain"
+                          disable-transitions
+                        >{{ pendingStageOverride(row.caddyId, stage) ? '待保存' : '已覆盖' }}</el-tag>
                         <el-icon v-if="stageOverrideSaving[row.caddyId]" class="is-loading stage-override-saving"><Loading /></el-icon>
                       </div>
                     </div>
                   </div>
                 </div>
                 <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量；同一规则绑定多条策略时按策略 ID 升序依次评估</div>
+                <div v-if="editableOverrideStages.length > 0 && !isReadOnly" class="form-tip-line">「阶段 N 拦截页覆盖」是规则级字段（存于规则，非本策略）：改选后随本向导「保存」一并写入；未保存前不影响规则现状</div>
               </div>
             </el-form-item>
           </el-form>
@@ -821,9 +831,10 @@
           </div>
           <el-divider content-position="left" class="compact-divider">已关联规则的阶段页覆盖</el-divider>
           <!-- 第 47 轮：逐规则清单改为摘要口径（规则多时撑高/撑破弹框）；逐规则覆盖状态
-               与编辑入口在「关联规则」步骤（含行内阶段页覆盖编辑器与「覆盖生效中」标记） -->
+               与编辑入口在「关联规则」步骤（含行内阶段页覆盖编辑器与「已覆盖/待保存」标记） -->
           <div v-if="boundRules.length === 0" class="form-tip-line">尚未关联规则——保存后在「关联规则」步骤绑定，或在规则行点「安全」绑定</div>
           <div v-else class="form-tip-line">将应用于 {{ boundRules.length }} 条已关联规则——逐规则的阶段页覆盖状态与编辑在「关联规则」步骤</div>
+          <div v-if="pendingOverrideRules.length > 0" class="form-tip-line">本次保存将写入 {{ pendingOverrideRules.length }} 条规则的阶段拦截页覆盖（规则级字段，随本向导保存生效）</div>
         </div>
       </div>
 
@@ -1108,7 +1119,8 @@ const policySummaryLine = (row: PolicySummary): string => {
   return '混合 · 阶段 1/2/3 组合'
 }
 
-// ── 关联规则行内阶段页编辑（决策 A：规则级 4 字段收口到策略侧，变更即 PUT /rules/:id） ──
+// ── 关联规则行内阶段页编辑（规则级 4 字段收口到策略侧；第 48 轮起向导内延迟生效：
+// 改选暂存 → 向导保存收尾逐规则 PUT /rules/:id，失败逐条列出并保持对话框打开） ──
 interface StageOverrideEdit { stage1_id: number; stage1_status: number; stage3_id: number; stage3_status: number }
 const stageOverrideEdits = ref<Record<string, StageOverrideEdit>>({})
 const stageOverrideSaving = ref<Record<string, boolean>>({})
@@ -1122,6 +1134,16 @@ const stageOverrideSeed = (caddyId: string): StageOverrideEdit => {
     stage3_id: rule?.block_page_stage3_id ?? 0,
     stage3_status: rule?.block_page_stage3_status ?? 0,
   }
+}
+
+// 该规则该阶段的覆盖是否为本次会话暂存（未保存）——供「待保存/已覆盖」标签与
+// 覆盖编辑器状态区分（seed=库值，edit=暂存值）。
+const pendingStageOverride = (caddyId: string, stage: 1 | 3): boolean => {
+  const edit = overrideEditOf(caddyId)
+  const seed = stageOverrideSeed(caddyId)
+  return stage === 1
+    ? edit.stage1_id !== seed.stage1_id || edit.stage1_status !== seed.stage1_status
+    : edit.stage3_id !== seed.stage3_id || edit.stage3_status !== seed.stage3_status
 }
 
 const overrideEditOf = (caddyId: string): StageOverrideEdit =>
@@ -1139,7 +1161,8 @@ const onStageOverrideChange = (caddyId: string, stage: 1 | 3, field: 'id' | 'sta
   } else if (stage === 1) edit.stage1_status = value
   else edit.stage3_status = value
   stageOverrideEdits.value = { ...stageOverrideEdits.value, [caddyId]: edit }
-  void saveStageOverride(caddyId, edit)
+  // 第 48 轮（用户裁定 A）：只暂存，不再即时 PUT——规则级覆盖随向导「保存」
+  // 统一提交（handleSave 收尾逐规则 PUT），与向导其余步骤的延迟语义一致。
 }
 
 // ── 混合策略一键更新迁移（用户裁定）：预演（子策略/重映射/上限风险）→ POST split → 汇总 ──
@@ -1312,9 +1335,9 @@ const openMigrateFromView = (): void => {
   openMigrateDialog(row)
 }
 
-const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit): Promise<void> => {
+const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit, silent = false): Promise<boolean> => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
-  if (!rule) return
+  if (!rule) return false
   const seq = (stageOverrideSeq.get(caddyId) ?? 0) + 1
   stageOverrideSeq.set(caddyId, seq)
   stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: true }
@@ -1330,18 +1353,20 @@ const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit): Prom
       block_page_stage3_id: edit.stage3_id,
       block_page_stage3_status: edit.stage3_id > 0 ? edit.stage3_status : 0,
     })
-    if (stageOverrideSeq.get(caddyId) !== seq) return
+    if (stageOverrideSeq.get(caddyId) !== seq) return false
     // 成功：回写 allRules 行（生效投影/覆盖徽标同源），不整表刷新打断编辑节奏
     rule.block_page_stage1_id = edit.stage1_id
     rule.block_page_stage1_status = edit.stage1_id > 0 ? edit.stage1_status : 0
     rule.block_page_stage3_id = edit.stage3_id
     rule.block_page_stage3_status = edit.stage3_id > 0 ? edit.stage3_status : 0
-    mfaAwareSuccess(`规则「${rule.name}」阶段拦截页已更新`)
+    if (!silent) mfaAwareSuccess(`规则「${rule.name}」阶段拦截页已更新`)
+    return true
   } catch (error: unknown) {
-    if (stageOverrideSeq.get(caddyId) !== seq) return
+    if (stageOverrideSeq.get(caddyId) !== seq) return false
     // 失败回本行快照（他行不受影响）；错误提示已由全局拦截器展示
     stageOverrideEdits.value = { ...stageOverrideEdits.value, [caddyId]: stageOverrideSeed(caddyId) }
     console.error('save stage override failed', error)
+    return false
   } finally {
     if (stageOverrideSeq.get(caddyId) === seq) {
       stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: false }
@@ -1425,10 +1450,23 @@ const boundRules = ref<string[]>([])
 watch([boundRules, allRules], () => {
   const next: Record<string, StageOverrideEdit> = {}
   for (const cid of boundRules.value) {
-    next[cid] = stageOverrideSaving.value[cid] ? overrideEditOf(cid) : stageOverrideSeed(cid)
+    // 第 48 轮（用户裁定 A：向导内延迟生效）：已暂存的选择优先保留——旧语义下
+    // 每次改选即时 PUT，allRules 刷新即等于库值故重置无害；延迟语义下重置会
+    // 静默丢弃用户尚未保存的选择（allRules 有轮询刷新）。
+    next[cid] = stageOverrideEdits.value[cid] ?? stageOverrideSeed(cid)
   }
   stageOverrideEdits.value = next
 }, { immediate: true })
+
+// 本次向导会话内、与库值不同的阶段拦截页覆盖（随向导「保存」一并提交）。
+// seed 来自 allRules（库值），edit 为用户暂存值；两者相异即待提交项。
+const pendingOverrideRules = computed<Array<{ caddyId: string; edit: StageOverrideEdit }>>(() =>
+  boundRules.value
+    .map((caddyId) => ({ caddyId, edit: overrideEditOf(caddyId), seed: stageOverrideSeed(caddyId) }))
+    .filter(({ edit, seed }) =>
+      edit.stage1_id !== seed.stage1_id || edit.stage1_status !== seed.stage1_status
+      || edit.stage3_id !== seed.stage3_id || edit.stage3_status !== seed.stage3_status)
+    .map(({ caddyId, edit }) => ({ caddyId, edit })))
 const originalBoundRules = ref<string[]>([])
 // R60 D60-F1：策略对话框打开序列号——丢弃在途详情 GET 的过期返回。
 let policyDialogOpenSeq = 0
@@ -2801,6 +2839,7 @@ async function openDialog(row?: PolicySummary) {
 const resetForm = () => {
   form.value = defaultForm()
   ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
+  stageOverrideEdits.value = {}; stageOverrideSaving.value = {}
 }
 
 const resetWizard = () => {
@@ -2934,6 +2973,22 @@ const handleSave = async () => {
       console.error('Failed to sync policy bindings:', error)
      ElMessage.warning('策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
       return
+    }
+    // 第 48 轮（用户裁定 A：向导内延迟生效）：本次会话暂存的规则级阶段拦截页覆盖
+    // 在策略落库后逐规则 PUT（lb_rules 上的独立资源，无法与策略保存同一事务）；
+    // 任一失败即列出规则名并保持对话框打开以便重试（与绑定同步失败同款处理）。
+    const pendingOverrides = pendingOverrideRules.value
+    if (pendingOverrides.length > 0) {
+      const failedRules: string[] = []
+      for (const { caddyId, edit } of pendingOverrides) {
+        const ok = await saveStageOverride(caddyId, edit, true)
+        if (!ok) failedRules.push(allRules.value.find((r) => r.caddy_id === caddyId)?.name || caddyId)
+      }
+      if (failedRules.length > 0) {
+        ElMessage.error(`策略已保存，但以下规则的阶段拦截页覆盖未写入：${failedRules.join('、')}；对话框保持打开，重新点击保存可重试`)
+        return
+      }
+      mfaAwareSuccess(`已同步 ${pendingOverrides.length} 条规则的阶段拦截页覆盖`)
     }
     showSaveResult(saveRes, '保存成功')
     // 2026-09-08 审计 FE1：bind/unbind 的退化 200+后缀也需可见（有后缀才弹，
@@ -3240,7 +3295,7 @@ onMounted(async () => {
 .stage-projection-rules { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; justify-content: flex-end; text-align: right; }
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }
 
-/* 关联规则行内阶段页编辑（变更即 PUT） */
+/* 关联规则行内阶段页编辑（改选暂存，随向导保存提交） */
 .stage-override-editors { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
 .stage-override-line { display: flex; align-items: center; gap: 8px; }
 .stage-override-label { font-size: 12px; color: #6b7280; flex: 0 0 auto; }

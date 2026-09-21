@@ -477,6 +477,11 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_mfa_challenges_expires_at ON mfa_challenges(expires_at);
 
+	-- 登录令牌吊销表（logout 写入 jti_hash，jwtAuth 逐请求查）。
+	-- R48-SYS-2（第 48 轮审计）边界：不参与配置备份/还原与集群同步（备份节注册表
+	-- config_backup.go:50-59 不含本表）——恢复后未过期的已吊销令牌在本节点复活。
+	-- 判定有意设计-可接受：吊销项短时（expires_at 随令牌 exp，下方清理），且改密
+	-- bump users.password_version 是持久吊销通道（pwd_ver 不匹配即拒）。
 	CREATE TABLE IF NOT EXISTS revoked_jti (
 		jti_hash TEXT PRIMARY KEY,
 		expires_at DATETIME NOT NULL

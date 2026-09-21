@@ -42,6 +42,7 @@
                 placement="bottom"
                 trigger="hover"
                 :width="360"
+                :popper-options="popperViewportSafe"
                 popper-class="rule-lock-popper"
               >
                 <template #reference>
@@ -119,6 +120,7 @@
               placement="top"
               trigger="hover"
               :width="280"
+              :popper-options="popperViewportSafe"
               :disabled="!certInfoMap[row.caddy_id]"
             >
               <template #reference>
@@ -174,7 +176,7 @@
         </el-table-column>
         <el-table-column label="健康" width="64" align="center">
           <template #default="{ row }">
-            <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
+            <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240" :popper-options="popperViewportSafe">
               <template #reference>
                 <el-tag :type="getHealthTagType(healthStatus[row.caddy_id])" size="small" effect="plain" class="health-tag">
                   {{ getHealthLabel(healthStatus[row.caddy_id]) }}
@@ -1372,6 +1374,17 @@ const setLockPopover = (caddyId: string, el: unknown): void => {
   if (el && typeof el === 'object' && 'hide' in el && typeof (el as { hide: unknown }).hide === 'function') {
     lockPopovers[caddyId] = el as { hide: () => void }
   }
+}
+
+// 第 48 轮（用户反馈）：表格 hover 弹框（锁摘要/TLS/健康）在靠底或靠顶行会被视口裁切
+// ——Element Plus 未显式开启 Popper 的 flip（placement 固定则不回退）且无 preventOverflow。
+// 统一补：flip 双向回退 + preventOverflow（视口内留 8px 余量）；弹框内容超高时由
+// .rule-lock-popper 的 max-height + overflow-y 内部滚动承接。
+const popperViewportSafe = {
+  modifiers: [
+    { name: 'flip', options: { fallbackPlacements: ['top', 'bottom', 'top-end', 'bottom-end'] } },
+    { name: 'preventOverflow', options: { padding: 8 } },
+  ],
 }
 const openFlowFromLock = (rule: Rule): void => {
   lockPopovers[rule.caddy_id]?.hide()

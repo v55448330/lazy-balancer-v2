@@ -284,7 +284,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			c.Request = c.Request.WithContext(mcpserver.WithClientIP(c.Request.Context(), c.ClientIP()))
 			gin.WrapH(mcpHandler)(c)
 		})
-		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", loginRateLimit(), h.Login)
 		v1.POST("/auth/ticket-login", loginRateLimit(), h.TicketLogin)
@@ -323,6 +322,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			c.Next()
 		})
 		{
+			// R48-API-1（第 48 轮审计）：OpenAPI 规格移入已认证区——此前置于公开块
+			// 使完整 API 目录（路径/载荷示例/错误码说明）可被匿名枚举（实测 200）。
+			// /docs 仅 HTML 壳保持公开：壳内 Swagger 用 localStorage.token 注入
+			// Authorization 头取本路径，未认证者拿到壳也取不到规格（见 apidocs.go）。
+			v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 			v1.POST("/auth/logout", h.Logout)
 			// User management (admin only)
