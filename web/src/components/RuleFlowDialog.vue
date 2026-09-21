@@ -306,7 +306,41 @@
               </el-table-column>
             </el-table>
             <div v-else class="flow-detail-line">{{ target.upstreamSummary }}</div>
-            <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照</div>
+            <!-- 路由分发明细分组：概览在「路由分发」节点（平铺卡），此处为主路由+逐条路径行
+                 的健康明细——主路由行含禁用位（主上游表上方已列全量，明细口径一致） -->
+            <div v-if="target.pathRules && target.pathRules.length > 0" class="flow-route-group">
+              <div class="flow-route-group-head">
+                <span class="flow-route-group-title">路由分发</span>
+                <span class="flow-route-group-sub">{{ target.pathRules.length }} 条自定义路由 · 未命中走主路由</span>
+              </div>
+              <div class="flow-route-row">
+                <span class="flow-route-match">/<em class="flow-route-type">主路由</em></span>
+                <span class="flow-route-arrow">→</span>
+                <span class="flow-route-targets">
+                  <template v-if="target.upstreams && target.upstreams.length > 0">
+                    <span v-for="u in target.upstreams" :key="`${u.host}:${u.port}`" class="flow-route-target">
+                      <span class="flow-upstream-addr">{{ u.host }}:{{ u.port }}</span>
+                      <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
+                    </span>
+                  </template>
+                  <span v-else class="flow-route-none">无主上游</span>
+                </span>
+              </div>
+              <div v-for="pr in target.pathRules" :key="`${pr.match_type}:${pr.path}`" class="flow-route-row">
+                <span class="flow-route-match">{{ pr.path }}<em class="flow-route-type">{{ pathMatchLabel(pr.match_type) }}</em></span>
+                <span class="flow-route-arrow">→</span>
+                <span class="flow-route-targets">
+                  <template v-if="enabledPathUpstreams(pr).length > 0">
+                    <span v-for="u in enabledPathUpstreams(pr)" :key="`${u.host}:${u.port}`" class="flow-route-target">
+                      <span class="flow-upstream-addr">{{ u.host }}:{{ u.port }}</span>
+                      <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
+                    </span>
+                  </template>
+                  <span v-else class="flow-route-none">无启用上游</span>
+                </span>
+              </div>
+            </div>
+            <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照；自定义路由上游与主路由同享规则级健康检查</div>
           </div>
         </el-collapse-transition>
           </div>
@@ -484,11 +518,13 @@ const toggleNode = (key: string): void => {
 }
 
 // 上游行状态：禁用优先；有逐上游快照按快照（healthy/degraded/unknown），无快照回落启用态口径。
-// 参数取结构子集（host/port/enabled）——主上游表行与「路由分发」路径上游行共用同一逻辑
+// 「启用·待观测」：unknown = 尚无真实流量经该上游，被动熔断无样本可判——属数据可用性
+// 而非健康异常（2026-09-21 用户问询口径）；触发过流量后被动熔断数据到位即转「健康/异常」。
+// 参数取结构子集（host/port/enabled）——主上游表行、「路由分发」节点与上游面板分组行共用
 const upstreamStateText = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>): string => {
   if (!row.enabled) return '禁用'
   const snapshot = props.target?.upstreamHealth?.[hostPortKey(row.host, row.port)]
-  if (!snapshot || snapshot.unknown) return '启用'
+  if (!snapshot || snapshot.unknown) return '启用·待观测'
   if (snapshot.degraded) return '降级'
   return snapshot.healthy ? '健康' : '异常'
 }
@@ -763,6 +799,12 @@ const onDialogOpen = (): void => {
 .flow-route-targets { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
 .flow-route-target { display: inline-flex; align-items: center; gap: 4px; }
 .flow-route-none { color: #9ca3af; }
+/* 上游面板「路由分发」分组：复用节点行样式，仅加分隔与标题层次 */
+.flow-route-group { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
+.flow-route-group .flow-route-row + .flow-route-row { margin-top: 2px; }
+.flow-route-group-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.flow-route-group-title { font-size: 13px; font-weight: 600; color: #4b5563; }
+.flow-route-group-sub { font-size: 12px; color: #9ca3af; }
 
 /* ── 二级明细区（max-height 滚动） ── */
 .flow-policy-details { max-height: 260px; overflow-y: auto; margin-top: 6px; border-top: 1px dashed #e5e7eb; padding-top: 8px; }

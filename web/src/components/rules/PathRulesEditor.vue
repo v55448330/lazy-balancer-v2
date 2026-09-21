@@ -259,7 +259,9 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rule-order { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 /* 匹配行：三字段同一基线，start 对齐——校验文案只在字段下方出现，不再推移输入框 */
 .path-rule-match-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
-.rule-field { display: flex; min-width: 0; align-items: center; gap: 8px; }
+/* flex-start：control 含 18px 预留带高于 input，center 会让标签相对输入行上浮；
+   顶对齐后 32px 标签与首行 32px 输入框中线恒对齐（预留带在下方不影响） */
+.rule-field { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
 /* 行内标签：与向导 el-form-item label 同源（32px 行高/常规文本色/表单字号） */
 .rule-field-label { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 32px; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
 .match-type-select { width: 128px; }
