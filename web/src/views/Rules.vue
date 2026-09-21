@@ -100,7 +100,7 @@
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="64" align="center">
+        <el-table-column prop="listen_port" label="端口" width="62" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
@@ -233,7 +233,7 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新者" width="60" align="center" show-overflow-tooltip>
+        <el-table-column label="更新者" width="62" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>

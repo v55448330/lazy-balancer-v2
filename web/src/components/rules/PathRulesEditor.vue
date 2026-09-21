@@ -15,41 +15,9 @@
         shadow="never"
         class="path-rule-card"
       >
-        <div class="path-rule-main-row">
+        <!-- 组内层次(用户裁定重构):徽标+操作行 → 匹配行 → 自定义上游开关行 → 缩进上游表格 -->
+        <div class="path-rule-head">
           <span class="path-rule-order">规则 {{ index + 1 }}</span>
-
-          <label class="rule-field match-type-field">
-            <span class="rule-field-label">匹配方式</span>
-            <el-select v-model="rule.match_type" aria-label="匹配方式">
-              <el-option label="前缀匹配" value="prefix" />
-              <el-option label="精确匹配" value="exact" />
-            </el-select>
-          </label>
-
-          <label class="rule-field path-field">
-            <span class="rule-field-label">路径</span>
-            <el-input
-              v-model="rule.path"
-              :aria-label="`路径规则 ${index + 1} 的路径`"
-              placeholder="例如：/api"
-              :class="{ 'is-error-input': rowError(index) }"
-            />
-            <span v-if="rowError(index)" class="path-field-error">{{ rowError(index) }}</span>
-            <span v-else-if="rowShadowWarning(index)" class="path-field-warning">{{ rowShadowWarning(index) }}</span>
-          </label>
-
-          <label class="rule-field upstream-path-field">
-            <span class="rule-field-label">上游 path</span>
-            <el-input
-              v-model="rule.upstream_path"
-              :aria-label="`路径规则 ${index + 1} 的上游 path`"
-              placeholder="留空=原样转发"
-              :class="{ 'is-error-input': upstreamError(index) }"
-            />
-            <span v-if="upstreamError(index)" class="path-field-error">{{ upstreamError(index) }}</span>
-            <span v-else class="path-field-hint">{{ upstreamHint(rule) }}</span>
-          </label>
-
           <div class="path-rule-actions">
             <el-tooltip content="上移" placement="top">
               <el-button :icon="ArrowUp" size="small" plain :disabled="index === 0" aria-label="上移路径规则" @click="moveRule(index, -1)" />
@@ -63,51 +31,94 @@
           </div>
         </div>
 
-        <div class="custom-upstream-section">
-          <div class="custom-upstream-toggle">
-            <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
-            <div class="custom-upstream-copy">
-              <span class="custom-upstream-title">使用自定义上游</span>
-              <el-text type="info" size="small">关闭时使用规则的默认上游服务器</el-text>
-            </div>
-          </div>
+        <!-- 匹配行:三字段同一基线;行内标签与向导 el-form-item label 同源样式 -->
+        <div class="path-rule-match-row">
+          <label class="rule-field match-type-field">
+            <span class="rule-field-label">匹配方式</span>
+            <el-select v-model="rule.match_type" class="match-type-select" aria-label="匹配方式">
+              <el-option label="前缀匹配" value="prefix" />
+              <el-option label="精确匹配" value="exact" />
+            </el-select>
+          </label>
 
-          <div v-if="rule.upstreams !== null" class="custom-upstream-editor">
-            <div class="upstream-grid upstream-grid-header" aria-hidden="true">
-              <span>协议</span>
-              <span>地址</span>
-              <span>端口</span>
-              <span>权重 %</span>
-              <span>操作</span>
+          <label class="rule-field path-field">
+            <span class="rule-field-label">路径</span>
+            <div class="rule-field-control">
+              <el-input
+                v-model="rule.path"
+                :aria-label="`路径规则 ${index + 1} 的路径`"
+                placeholder="例如：/api"
+                :class="{ 'is-error-input': rowError(index) }"
+              />
+              <span v-if="rowError(index)" class="path-field-error">{{ rowError(index) }}</span>
+              <span v-else-if="rowShadowWarning(index)" class="path-field-warning">{{ rowShadowWarning(index) }}</span>
             </div>
-            <div v-for="(upstream, upstreamIndex) in rule.upstreams" :key="upstreamIndex" class="upstream-grid upstream-row">
-              <label class="upstream-field">
-                <span class="mobile-field-label">协议</span>
-                <el-select v-model="upstream.protocol" aria-label="协议">
-                  <el-option value="http" label="HTTP" />
-                  <el-option value="https" label="HTTPS" />
-                </el-select>
-              </label>
-              <label class="upstream-field upstream-address-field">
-                <span class="mobile-field-label">地址</span>
-                <el-input v-model="upstream.address" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
-              </label>
-              <label class="upstream-field">
-                <span class="mobile-field-label">端口</span>
-                <el-input-number v-model="upstream.port" :min="1" :max="65535" aria-label="端口" controls-position="right" />
-              </label>
-              <label class="upstream-field">
-                <span class="mobile-field-label">权重</span>
-                <el-input v-model.number="upstream.weight" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
-                  <template #suffix>%</template>
-                </el-input>
-              </label>
-              <el-button :icon="Delete" type="danger" link aria-label="删除自定义上游" @click="removeUpstream(rule, upstreamIndex)" />
+          </label>
+
+          <label class="rule-field upstream-path-field">
+            <span class="rule-field-label">
+              上游 path
+              <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
+              <el-tooltip placement="top">
+                <template #content>
+                  留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发 path 整体替换为该值
+                </template>
+                <el-icon class="field-hint-icon" aria-label="上游 path 改写说明"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <div class="rule-field-control">
+              <el-input
+                v-model="rule.upstream_path"
+                :aria-label="`路径规则 ${index + 1} 的上游 path`"
+                placeholder="留空=原样转发"
+                :class="{ 'is-error-input': upstreamError(index) }"
+              />
+              <span v-if="upstreamError(index)" class="path-field-error">{{ upstreamError(index) }}</span>
             </div>
-            <div class="add-upstream-actions">
-              <el-button class="add-upstream-button" size="small" plain :icon="Plus" :disabled="rule.upstreams.length >= MAX_UPSTREAM_ROWS" @click="addUpstream(rule)">添加上游</el-button>
-              <el-text v-if="rule.upstreams.length >= MAX_UPSTREAM_ROWS" type="info" size="small">最多添加 {{ MAX_UPSTREAM_ROWS }} 个上游</el-text>
-            </div>
+          </label>
+        </div>
+
+        <div class="custom-upstream-toggle">
+          <span class="custom-upstream-title">使用自定义上游</span>
+          <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
+          <el-text type="info" size="small">关闭时使用规则的默认上游服务器</el-text>
+        </div>
+
+        <div v-if="rule.upstreams !== null" class="custom-upstream-editor">
+          <div class="upstream-grid upstream-grid-header" aria-hidden="true">
+            <span>协议</span>
+            <span>地址</span>
+            <span>端口</span>
+            <span>权重 %</span>
+            <span>操作</span>
+          </div>
+          <div v-for="(upstream, upstreamIndex) in rule.upstreams" :key="upstreamIndex" class="upstream-grid upstream-row">
+            <label class="upstream-field">
+              <span class="mobile-field-label">协议</span>
+              <el-select v-model="upstream.protocol" aria-label="协议">
+                <el-option value="http" label="HTTP" />
+                <el-option value="https" label="HTTPS" />
+              </el-select>
+            </label>
+            <label class="upstream-field upstream-address-field">
+              <span class="mobile-field-label">地址</span>
+              <el-input v-model="upstream.address" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
+            </label>
+            <label class="upstream-field">
+              <span class="mobile-field-label">端口</span>
+              <el-input-number v-model="upstream.port" :min="1" :max="65535" aria-label="端口" controls-position="right" />
+            </label>
+            <label class="upstream-field">
+              <span class="mobile-field-label">权重</span>
+              <el-input v-model.number="upstream.weight" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
+                <template #suffix>%</template>
+              </el-input>
+            </label>
+            <el-button :icon="Delete" type="danger" link aria-label="删除自定义上游" @click="removeUpstream(rule, upstreamIndex)" />
+          </div>
+          <div class="add-upstream-actions">
+            <el-button class="add-upstream-button" size="small" plain :icon="Plus" :disabled="rule.upstreams.length >= MAX_UPSTREAM_ROWS" @click="addUpstream(rule)">添加上游</el-button>
+            <el-text v-if="rule.upstreams.length >= MAX_UPSTREAM_ROWS" type="info" size="small">最多添加 {{ MAX_UPSTREAM_ROWS }} 个上游</el-text>
           </div>
         </div>
       </el-card>
@@ -116,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Delete, Plus, QuestionFilled } from '@element-plus/icons-vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 import { canonicalPathKey } from '@/utils/ruleValidation'
@@ -188,12 +199,6 @@ const upstreamError = (index: number): string => {
   return ''
 }
 
-// 上游 path 改写的生效方式随匹配方式变化，展示语义提示替代报错文案。
-const upstreamHint = (rule: PathRule): string => {
-  if (!rule.upstream_path) return '留空=原样转发'
-  return rule.match_type === 'prefix' ? '剥匹配前缀后前置该 path' : '转发 path 整体替换为该 path'
-}
-
 const addRule = (): void => {
   pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null })
 }
@@ -249,54 +254,59 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rules-list { display: flex; flex-direction: column; gap: 12px; }
 .path-rule-card { border-color: var(--border); background: var(--bg-primary); }
 .path-rule-card :deep(.el-card__body) { padding: 16px; }
-.path-rule-main-row { display: grid; grid-template-columns: auto minmax(0, 0.6fr) minmax(0, 1.1fr) minmax(0, 0.9fr) auto; align-items: end; gap: 12px; }
-.path-rule-order { align-self: center; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
-.rule-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.rule-field-label, .mobile-field-label { color: var(--text-regular); font-size: 13px; font-weight: 500; }
+/* 层次一：徽标 + 行内操作，动作列固定右上不随字段挤压 */
+.path-rule-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.path-rule-order { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
+/* 匹配行：三字段同一基线，start 对齐——校验文案只在字段下方出现，不再推移输入框 */
+.path-rule-match-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
+.rule-field { display: flex; min-width: 0; align-items: center; gap: 8px; }
+/* 行内标签：与向导 el-form-item label 同源（32px 行高/常规文本色/表单字号） */
+.rule-field-label { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 32px; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
+.match-type-select { width: 128px; }
+.rule-field-control { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.field-hint-icon { color: var(--el-text-color-placeholder); cursor: help; }
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.custom-upstream-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-lighter); }
+/* 层次二/三：开关行单句说明 + 缩进卡片，行距统一 12px */
 .custom-upstream-toggle { display: flex; align-items: center; gap: 8px; }
-.custom-upstream-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.custom-upstream-title { color: var(--text-regular); font-size: 13px; font-weight: 500; }
-.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.custom-upstream-title { color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
+.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; margin-left: 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .upstream-field :deep(.el-input-number) { width: 100%; }
-.mobile-field-label { display: none; }
+.mobile-field-label { display: none; color: var(--text-regular); font-size: 13px; font-weight: 500; }
 .add-upstream-button { align-self: flex-start; }
 .add-upstream-actions { display: flex; align-items: center; gap: 8px; }
 
 @media (max-width: 767px) {
   .path-rules-editor { padding: 0; }
   .editor-section-header { align-items: flex-start; flex-direction: column; }
-  .path-rule-main-row { grid-template-columns: 1fr; align-items: stretch; }
-  .path-rule-order { justify-self: start; }
-  .path-rule-actions { justify-content: flex-end; }
+  .path-rule-match-row { grid-template-columns: 1fr; }
+  .match-type-select { width: 100%; }
+  .custom-upstream-editor { margin-left: 0; }
   .upstream-grid-header { display: none; }
   .upstream-row { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: end; padding-top: 8px; border-top: 1px solid var(--border); }
   .upstream-row:first-of-type { padding-top: 0; border-top: 0; }
   .mobile-field-label { display: inline; }
   .upstream-row > .el-button { justify-self: end; }
 }
+/* 校验提示：对齐 EP 表单错误态度量（12px/行高 1/上距 2px） */
 .path-field-error {
   display: block;
-  margin-top: 4px;
+  margin: 0;
+  padding-top: 2px;
   font-size: 12px;
+  line-height: 1;
   color: var(--el-color-danger);
 }
 .path-field-warning {
   display: block;
-  margin-top: 4px;
+  margin: 0;
+  padding-top: 2px;
   font-size: 12px;
+  line-height: 1;
   color: var(--el-color-warning);
-}
-.path-field-hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 .is-error-input :deep(.el-input__wrapper) {
   box-shadow: 0 0 0 1px var(--el-color-danger) inset;
