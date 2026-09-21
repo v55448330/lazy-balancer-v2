@@ -128,10 +128,6 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/security/ip-lists/:id":                   AuditPolicyExplicit,
 	"DELETE /api/v1/security/ip-lists/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/ip-lists/:id/ips":              AuditPolicyExplicit,
-	// 安全测试事件（R45 验证辅助）：handler 显式留痕生成/清除（响应含清除提示，
-	// 详情写明统计污染面）。
-	"POST /api/v1/security/test-events":   AuditPolicyExplicit,
-	"DELETE /api/v1/security/test-events": AuditPolicyExplicit,
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
@@ -264,8 +260,6 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"PUT /api/v1/security/ip-lists/:id",
 		"DELETE /api/v1/security/ip-lists/:id",
 		"POST /api/v1/security/ip-lists/:id/ips",
-		"POST /api/v1/security/test-events",
-		"DELETE /api/v1/security/test-events",
 		"PUT /api/v1/settings/auto-backup",
 		"POST /api/v1/auto-backup/run",
 		"DELETE /api/v1/auto-backup/:id",

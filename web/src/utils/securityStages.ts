@@ -188,7 +188,7 @@ export interface RuleFlowTarget {
   // 健康口径：规则级计数 + 逐上游状态映射（host:port 键）；无探针数据时调用方不传
   health?: { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
   upstreamHealth?: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; dynamic?: boolean }>
-  // 自定义路径规则分发（流程弹框「路由分发」区块）；缺省/空 = 仅主路由，渲染不变
+  // 自定义路径规则分发（流程弹框「路由分发」节点）；缺省/空 = 仅主路由，流程图不出该节点
   pathRules?: RuleFlowPathRule[]
 }
 
@@ -363,7 +363,8 @@ const buildStage3Rows = (
   if (mode === 'off') return rows
   if (mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
   else if (mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
-  else if (mode === 'custom_only') rows.push({ label: 'WAF（仅自定义）', detail: 'CRS 不生效，自定义规则按规则内动作执行' })
+  // 仅自定义：CRS 不参与评估由模式名承载，明细行保持短句不折行（2026-09-21 用户裁定）
+  else if (mode === 'custom_only') rows.push({ label: 'WAF（仅自定义）', detail: '自定义规则按动作执行' })
   // 「CRS 规则组」行（blocking/detection 才有 CRS 评估；0=全部默认）
   if (mode === 'blocking' || mode === 'detection') {
     const crsRaw = policy?.crs_rule_groups
@@ -374,11 +375,12 @@ const buildStage3Rows = (
   // 「拦截页」行（v2.3.1 归因口径）：规则级覆盖与策略级页并存展示，措辞区分——
   // 规则覆盖已配 → 「拦截页（规则覆盖）：页名（状态码 X）」（渲染语义=覆盖优先）；
   // 覆盖页已删/内容空 → 已失效（回落跟随策略 = 下方策略级行生效）；
-  // 未配 → 仅现有策略级行（binding.block_page_id → 页名 / 默认 403 / 已失效回落首策略）
+  // 未配 → 仅现有策略级行（binding.block_page_id → 页名 / 未配置（跟随默认 403）/ 已失效回落首策略）；
+  // 未配置措辞与阶段 1 统一（2026-09-21 用户裁定），失效措辞保留差异：回落目标不同（首策略 vs 跟随策略）
   const pageId = binding.block_page_id ?? 0
   const page = pageId > 0 ? blockPages.find((p) => p.id === pageId) : undefined
   const pageBroken = pageId > 0 && (!page || (page.content ?? '') === '')
-  const policyPageDetail = pageId <= 0 ? '默认 403'
+  const policyPageDetail = pageId <= 0 ? '未配置（跟随默认 403）'
     : pageBroken ? '已失效（回落首策略）'
     : `${page?.name}（状态码 ${binding.block_status_code || 403}）`
   const ruleOverride = resolveStageOverride(stagePages?.block_page_stage3_id, stagePages?.block_page_stage3_status, blockPages)

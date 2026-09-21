@@ -26,15 +26,18 @@
         class="flow-tcp-alert"
       />
 
-      <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 上游 -->
+      <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 路由分发（有自定义路由时） → 上游 -->
       <template v-for="(node, index) in flowNodes" :key="node.key">
         <div class="tl-row" :class="{ 'is-off': node.disabled }" :style="{ animationDelay: `${index * 90}ms` }">
           <div class="tl-rail">
             <span class="tl-dot" :class="`tl-dot--${node.tone}`"><el-icon :size="14"><component :is="node.icon" /></el-icon></span>
-            <span v-if="index < flowNodes.length - 1" class="tl-line" :class="{ 'is-inactive': node.nextInactive }" aria-hidden="true" />
+            <span v-if="index < flowNodes.length - 1" class="tl-line" aria-hidden="true" />
           </div>
           <div class="tl-main">
+          <!-- 连线=流量路径（2026-09-21 用户裁定）：流量恒从接入到上游，连线无灰态，
+               恒为流动主线；阶段启用与否由节点灰态（is-off）承载 -->
           <button
+            v-if="node.key !== 'route'"
             type="button"
             class="tl-card"
             :class="{ 'is-active': activeNode === node.key }"
@@ -47,6 +50,35 @@
             </span>
             <span class="tl-sub">{{ node.subtitle }}</span>
           </button>
+
+          <!-- 路由分发独立节点（2026-09-21 用户裁定）：路径行平铺卡内，无展开面板不可点击 -->
+          <div v-else class="tl-card tl-card--route">
+            <span class="tl-card-head">
+              <span class="tl-title">{{ node.title }}</span>
+              <span v-if="node.chip" class="tl-chip">{{ node.chip }}</span>
+            </span>
+            <span class="tl-sub">{{ node.subtitle }}</span>
+            <div class="tl-route-rows">
+              <div class="flow-route-row">
+                <span class="flow-route-match">/<em class="flow-route-type">主路由</em></span>
+                <span class="flow-route-arrow">→</span>
+                <span class="flow-route-targets"><span class="flow-route-target">主上游</span></span>
+              </div>
+              <div v-for="pr in target.pathRules" :key="`${pr.match_type}:${pr.path}`" class="flow-route-row">
+                <span class="flow-route-match">{{ pr.path }}<em class="flow-route-type">{{ pathMatchLabel(pr.match_type) }}</em></span>
+                <span class="flow-route-arrow">→</span>
+                <span class="flow-route-targets">
+                  <template v-if="enabledPathUpstreams(pr).length > 0">
+                    <span v-for="u in enabledPathUpstreams(pr)" :key="`${u.host}:${u.port}`" class="flow-route-target">
+                      <span class="flow-upstream-addr">{{ u.host }}:{{ u.port }}</span>
+                      <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
+                    </span>
+                  </template>
+                  <span v-else class="flow-route-none">无启用上游</span>
+                </span>
+              </div>
+            </div>
+          </div>
 
         <!-- 接入信息（选中节点下方展开）：我们收到什么样的请求 -->
         <el-collapse-transition v-if="node.key === 'access'">
@@ -256,7 +288,6 @@
               <span class="flow-kv-label">后端域名</span>
               <span class="flow-kv-value">{{ target.hostHeader || '透传原始 Host' }}</span>
             </div>
-            <div v-if="hasPathRules" class="flow-route-main">主路由 <span class="flow-route-path">/</span></div>
             <el-table v-if="target.upstreams && target.upstreams.length > 0" :data="target.upstreams" size="small" class="flow-upstream-table">
               <el-table-column label="上游" min-width="170">
                 <template #default="{ row }"><span class="flow-upstream-addr">{{ row.host }}:{{ row.port }}</span></template>
@@ -275,22 +306,6 @@
               </el-table-column>
             </el-table>
             <div v-else class="flow-detail-line">{{ target.upstreamSummary }}</div>
-            <template v-if="hasPathRules">
-              <div class="flow-route-title">路由分发</div>
-              <div v-for="pr in target.pathRules" :key="`${pr.match_type}:${pr.path}`" class="flow-route-row">
-                <span class="flow-route-match">{{ pr.path }}<em class="flow-route-type">{{ pathMatchLabel(pr.match_type) }}</em></span>
-                <span class="flow-route-arrow">→</span>
-                <span class="flow-route-targets">
-                  <template v-if="enabledPathUpstreams(pr).length > 0">
-                    <span v-for="u in enabledPathUpstreams(pr)" :key="`${u.host}:${u.port}`" class="flow-route-target">
-                      <span class="flow-upstream-addr">{{ u.host }}:{{ u.port }}</span>
-                      <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
-                    </span>
-                  </template>
-                  <span v-else class="flow-route-none">无启用上游</span>
-                </span>
-              </div>
-            </template>
             <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照</div>
           </div>
         </el-collapse-transition>
@@ -303,7 +318,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Connection, CircleCheck, Key, Odometer, Aim, TopRight } from '@element-plus/icons-vue'
+import { Connection, CircleCheck, Key, Odometer, Aim, TopRight, Guide } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
@@ -485,8 +500,9 @@ const upstreamStateType = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enable
   return snapshot.healthy ? 'success' : 'danger'
 }
 
-// 「路由分发」区块（用户裁定 2026-09-21：流程弹框覆盖自定义路由/自定义上游）：
-// 无 pathRules 完全现状；有则主上游表标「主路由 /」并逐条路径规则一行
+// 「路由分发」独立节点（2026-09-21 用户裁定：从上游面板子块上提为流程图节点）：
+// 无 pathRules 节点不出、链形不变；有则阶段 3 与上游之间插入节点，主路由行 +
+// 逐条路径规则「path(前缀/精确) → 启用上游 host:port(健康 tag)」平铺卡内
 const hasPathRules = computed(() => (props.target?.pathRules?.length ?? 0) > 0)
 const enabledPathUpstreams = (pr: RuleFlowPathRule): Array<{ host: string; port: number; enabled: boolean }> =>
   pr.upstreams.filter((u) => u.enabled)
@@ -518,7 +534,6 @@ interface FlowNode {
   disabled?: boolean
   chip?: string
   chipCaption?: string
-  nextInactive?: boolean
 }
 
 const flowNodes = computed<FlowNode[]>(() => {
@@ -552,10 +567,18 @@ const flowNodes = computed<FlowNode[]>(() => {
       chipCaption: caption,
     })
   }
+  // 路由分发独立节点：自定义路由非空才出（阶段 3 与上游之间）；TCP 已在上方提前返回，
+  // 链形天然不受影响。路由是恒生效的转发决策，无禁用灰态
+  if (hasPathRules.value) {
+    nodes.push({
+      key: 'route',
+      title: '路由分发',
+      subtitle: `${target.pathRules?.length ?? 0} 条自定义路由`,
+      tone: 'blue',
+      icon: Guide,
+    })
+  }
   nodes.push(upstream)
-  nodes.forEach((node, index) => {
-    node.nextInactive = index < nodes.length - 1 && (nodes[index + 1].disabled === true || node.disabled === true)
-  })
   return nodes
 })
 
@@ -651,7 +674,6 @@ const onDialogOpen = (): void => {
   background-size: 2px 12px;
   animation: tl-flow-down 0.7s linear infinite;
 }
-.tl-line.is-inactive { background-image: none; background-color: transparent; border-left: 2px dashed #dcdfe6; animation: none; }
 .tl-card {
   flex: 1 1 auto;
   min-width: 0;
@@ -722,10 +744,18 @@ const onDialogOpen = (): void => {
 .flow-upstream-table { width: 100%; }
 .flow-upstream-addr { font-family: monospace; font-size: 12px; color: #1f2937; }
 
-/* ── 路由分发：主路由标签 + 逐条路径规则「match → 启用上游列表(健康 tag)」 ── */
-.flow-route-main { font-size: 12px; font-weight: 600; color: #4b5563; margin-bottom: 6px; }
-.flow-route-path { font-family: monospace; color: #1f2937; }
-.flow-route-title { font-size: 12px; font-weight: 600; color: #4b5563; margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
+/* ── 路由分发独立节点：卡内平铺「match(类型) → 启用上游列表(健康 tag)」行 ── */
+.tl-card--route,
+.tl-card--route:hover { cursor: default; border-color: #e5e7eb; box-shadow: var(--el-box-shadow-light); }
+.tl-route-rows {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e7eb;
+}
 .flow-route-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.9; }
 .flow-route-match { font-family: monospace; color: #1f2937; flex-shrink: 0; }
 .flow-route-type { font-style: normal; font-family: inherit; color: #9ca3af; margin-left: 4px; }

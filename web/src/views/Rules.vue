@@ -95,12 +95,12 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="负载策略" width="94" align="center" show-overflow-tooltip>
+        <el-table-column label="负载策略" width="84" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="56" align="center">
+        <el-table-column prop="listen_port" label="端口" width="64" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
@@ -112,7 +112,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="TLS" width="98" align="center">
+        <el-table-column label="TLS" width="90" align="center">
           <template #default="{ row }">
             <el-popover
               v-if="row.enable_tls"
@@ -233,17 +233,17 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新者" width="68" align="center" show-overflow-tooltip>
+        <el-table-column label="更新者" width="60" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="140" align="center" show-overflow-tooltip>
+        <el-table-column label="更新时间" width="152" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="56" align="center">
+        <el-table-column label="状态" width="76" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -254,7 +254,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="168" fixed="right" align="center">
+        <el-table-column label="操作" width="154" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
@@ -328,13 +328,13 @@
           </div>
         </div>
       </template>
-      <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
-        <el-step title="基本配置" :icon="InfoFilled" />
-        <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
-        <el-step title="上游服务器" :icon="Connection" />
-        <el-step v-if="showCustomRoutesStep" title="自定义路由" :icon="Guide" />
-        <el-step title="高级选项" :icon="Setting" />
-        <el-step title="预览保存" :icon="Check" />
+      <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
+        <el-step title="基本配置" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
+        <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" @click="jumpToStep(WIZARD_STEP.TLS)" />
+        <el-step title="上游服务器" :icon="Connection" @click="jumpToStep(WIZARD_STEP.UPSTREAMS)" />
+        <el-step v-if="showCustomRoutesStep" title="自定义路由" :icon="Guide" @click="jumpToStep(WIZARD_STEP.CUSTOM_ROUTES)" />
+        <el-step title="高级选项" :icon="Setting" @click="jumpToStep(WIZARD_STEP.ADVANCED)" />
+        <el-step title="预览保存" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
       </el-steps>
 
       <div class="wizard-content">
@@ -2025,6 +2025,16 @@ const visualStepIndex = computed(() => {
 const hasPreviousStep = computed(() => visualStepIndex.value > 0)
 const hasNextStep = computed(() => visualStepIndex.value < visibleWizardSteps.value.length - 1)
 
+// 步骤可点击快跳(镜像 SecurityPolicies.vue 向导先例,同口径):仅编辑态开放——
+// 新建/复制时基本配置步骤的协议/TLS/自定义路由选择决定可见步骤集,且表单尚未水合,
+// 跳过前置步骤会绕过步进校验。快跳本身不执行校验(与策略向导一致:步进校验只作用于上一页/下一页按钮)。
+const stepsClickable = computed(() => editingRule.value !== null)
+
+const jumpToStep = (step: WizardStep): void => {
+  if (!stepsClickable.value) return
+  currentStep.value = step
+}
+
 const portWarning = computed(() => {
   // Get existing ports (excluding current editing rule)
   const currentRule = editingRule.value
@@ -3573,7 +3583,7 @@ onUnmounted(() => {
 }
 .operation-buttons .el-button {
   margin: 0;
-  padding: 2px 2px;
+  padding: 2px 1px;
   min-width: auto;
   line-height: 1;
 }
@@ -3648,6 +3658,7 @@ onUnmounted(() => {
 }
 
 .wizard-steps { margin-bottom: 24px; }
+.wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }
 
 .wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
 
