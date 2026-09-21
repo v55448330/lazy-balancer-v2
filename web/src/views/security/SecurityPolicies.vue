@@ -52,16 +52,18 @@
           </template>
         </el-table-column>
         <!-- 24h 触发列（trigger_24h 后端字段）：近 24h 归因该策略的 blocked+logged 事件数，
-             每条策略恒显示（0=灰色 info 标签，与 >0 danger 标签同构）；列宽 92=表头四字+cell padding 单行容纳 -->
+             每条策略恒显示（0=灰色 info 标签，与 >0 danger 标签同构）；列宽 92=表头四字+cell padding 单行容纳。
+             disable-transitions：el-tag 内置 <Transition name="el-zoom-in-center" appear>，切阶段 tab 时
+             行重建会重播缩放淡入，居中缩放令标签左缘从中心外起步再回位（视觉上「数字先右偏再归位」）。 -->
         <el-table-column label="24h 触发" width="92" align="center">
           <template #default="{ row }">
-            <el-tag v-if="(row.trigger_24h ?? 0) > 0" size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
-            <el-tag v-else size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
+            <el-tag v-if="(row.trigger_24h ?? 0) > 0" disable-transitions size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
+            <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="更新时间" width="170" align="center">
