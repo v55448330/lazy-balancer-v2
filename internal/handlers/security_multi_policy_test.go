@@ -17,8 +17,9 @@ import (
 )
 
 // T2（v2.2.0 多策略绑定）：一规则绑多策略的 RED 测试。
-// 覆盖：POST additive（SC-BIND-02）、PUT 原子替换（SC-BIND-01，max5/单 ID/审计/
+// 覆盖：POST additive（SC-BIND-02）、PUT 原子替换（SC-BIND-01，max8/单 ID/审计/
 // 排序）、DELETE 精确 unbind（SC-BIND-03）、GET 数组有序（SC-GET-01/02）。
+// 上限 2026-09-21 用户裁定 5→8（maxBindingsPerRule）。
 
 func newMultiPolicyRouter(t *testing.T) *gin.Engine {
 	t.Helper()
@@ -163,47 +164,94 @@ func TestSetRuleSecurityPolicies_replacesAtomicallyOrderedASC(t *testing.T) {
 	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_put"), []int{p2})
 }
 
-// SC-BIND-01：超过 5 条策略 → 400「最多绑定 5 条策略」。
-func TestSetRuleSecurityPolicies_rejectsMoreThanFive(t *testing.T) {
+// SC-BIND-01：超过 8 条策略 → 400「最多绑定 8 条策略」（2026-09-21 上限 5→8）。
+func TestSetRuleSecurityPolicies_rejectsMoreThanEight(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
 	seedHTTPRule(t, "lb_mp_max")
 	ids := []int{}
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= 9; i++ {
 		ids = append(ids, createMultiPolicy(t, router, fmt.Sprintf("策略%d", i)))
 	}
 	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_max/policies", map[string]any{"policy_ids": ids})
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("PUT status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("最多绑定")) {
-		t.Fatalf("PUT body=%s, want message containing 最多绑定", recorder.Body.String())
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("最多绑定 8 条策略")) {
+		t.Fatalf("PUT body=%s, want message containing 最多绑定 8 条策略", recorder.Body.String())
 	}
 	if got := queryBoundPolicyIDs(t, "lb_mp_max"); len(got) != 0 {
 		t.Fatalf("rejected PUT wrote bindings: %v", got)
 	}
 }
 
-// SC-BIND-01 边界（B-I2）：上限判定须先去重——[1,1,2,3,4,5] 为 5 条唯一策略，
-// 不得因原始数组长度 6 误判超限；写入结果按 policy_id ASC 去重后为 5 行。
-func TestSetRuleSecurityPolicies_dedupsBeforeMaxFiveCheck(t *testing.T) {
-	// Given 5 条策略与一条 HTTP 规则
+// SC-BIND-01 上限边界：恰好 8 条唯一策略 → 200（2026-09-21 上限 5→8）。
+func TestSetRuleSecurityPolicies_acceptsExactlyEight(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_cap8")
+	ids := []int{}
+	for i := 1; i <= 8; i++ {
+		ids = append(ids, createMultiPolicy(t, router, fmt.Sprintf("策略%d", i)))
+	}
+	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_cap8/policies", map[string]any{"policy_ids": ids})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_cap8"), ids)
+}
+
+// SC-BIND-01 边界（B-I2）：上限判定须先去重——8 条唯一策略携带一个重复 id
+// （9 元素数组）不得因原始数组长度 9 误判超限；写入结果为去重后的 8 行。
+func TestSetRuleSecurityPolicies_dedupsBeforeMaxCheck(t *testing.T) {
+	// Given 8 条策略与一条 HTTP 规则
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
 	seedHTTPRule(t, "lb_mp_dedup")
 	ids := []int{}
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 8; i++ {
 		ids = append(ids, createMultiPolicy(t, router, fmt.Sprintf("策略%d", i)))
 	}
 
-	// When PUT 携带重复 id 的 6 元素数组（5 条唯一）
-	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_dedup/policies", map[string]any{"policy_ids": []int{ids[0], ids[0], ids[1], ids[2], ids[3], ids[4]}})
+	// When PUT 携带重复 id 的 9 元素数组（8 条唯一）
+	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_dedup/policies", map[string]any{"policy_ids": []int{ids[0], ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7]}})
 
-	// Then 接受 200，绑定为去重后的 5 条
+	// Then 接受 200，绑定为去重后的 8 条
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("PUT status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_dedup"), ids)
+}
+
+// 类型回归（2026-09-21 上限 5→8）：8 条 policy_type 各异（stage0/stage1/单条
+// stage2/stage3×5）混合绑定 → 200——上限抬升不改变类型门（mixed 禁绑、限流唯一）。
+func TestSetRuleSecurityPolicies_eightTypedPoliciesAccepted(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_typed")
+	typed := []struct{ name, mode, ptype string }{
+		{"t0", "off", "stage0"}, {"t1", "off", "stage1"}, {"t2", "off", "stage2"},
+		{"t3a", "blocking", "stage3"}, {"t3b", "detection", "stage3"}, {"t3c", "off", "stage3"},
+		{"t3d", "blocking", "stage3"}, {"t3e", "off", "stage3"},
+	}
+	ids := []int{}
+	for _, tp := range typed {
+		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?,?,?,1)`, tp.name, tp.mode, tp.ptype)
+		if err != nil {
+			t.Fatalf("seed typed policy %s: %v", tp.name, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("last id for %s: %v", tp.name, err)
+		}
+		ids = append(ids, int(id))
+	}
+
+	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_typed/policies", map[string]any{"policy_ids": ids})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT 8 typed policies status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_typed"), ids)
 }
 
 // SC-BIND-01：单元素 policy_ids 向后兼容（PUT [1] 与 POST bind 等价行为）。
@@ -639,43 +687,54 @@ func TestDeleteRule_preservesOtherRulesBindingsOnSamePolicy(t *testing.T) {
 	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_del_b"), []int{int(policyID)})
 }
 
-// Max-5 服务端守卫（B-I1）：POST additive 与 PUT 同上限——规则已绑满 5 条时
-// POST 第 6 条（新策略对）→ 400「最多绑定 5 条策略」；重绑已存在的 (rule,policy)
-// 对保持幂等 200（INSERT OR IGNORE 不产生新行）。
-func TestBindRuleToPolicy_postAdditiveRejectsSixthBinding(t *testing.T) {
-	// Given 规则已通过 PUT 绑满 5 条策略
+// 绑定上限（B-I1，2026-09-21 上限 5→8）：POST additive 与 PUT 同上限——第 8 条
+// （新策略对）照常 200；规则绑满 8 条后 POST 第 9 条 → 400「最多绑定 8 条策略」；
+// 重绑已存在的 (rule,policy) 对保持幂等 200（INSERT OR IGNORE 不产生新行）。
+func TestBindRuleToPolicy_postAdditiveCapAtEight(t *testing.T) {
+	// Given 规则已通过 PUT 绑定 7 条策略
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
-	seedHTTPRule(t, "lb_mp_six")
+	seedHTTPRule(t, "lb_mp_cap")
 	ids := []int{}
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 7; i++ {
 		ids = append(ids, createMultiPolicy(t, router, fmt.Sprintf("策略%d", i)))
 	}
-	if r := putMultiJSON(t, router, "/security/rules/lb_mp_six/policies", map[string]any{"policy_ids": ids}); r.Code != http.StatusOK {
+	if r := putMultiJSON(t, router, "/security/rules/lb_mp_cap/policies", map[string]any{"policy_ids": ids}); r.Code != http.StatusOK {
 		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
 	}
-	p6 := createMultiPolicy(t, router, "第六策略")
+	p8 := createMultiPolicy(t, router, "第八策略")
 
-	// When POST additive 绑定第 6 条（新策略对）
-	recorder := postJSON(t, router, "/security/policies/"+strconv.Itoa(p6)+"/bind", map[string]any{"rule_caddy_id": "lb_mp_six"})
+	// When POST additive 绑定第 8 条（新策略对）
+	recorder := postJSON(t, router, "/security/policies/"+strconv.Itoa(p8)+"/bind", map[string]any{"rule_caddy_id": "lb_mp_cap"})
 
-	// Then 服务端拒绝 400，绑定仍为 5 条
+	// Then 接受 200，绑定共 8 条
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("POST 8th bind status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	all := append(ids, p8)
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_cap"), all)
+
+	// When POST additive 绑定第 9 条（新策略对）
+	p9 := createMultiPolicy(t, router, "第九策略")
+	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(p9)+"/bind", map[string]any{"rule_caddy_id": "lb_mp_cap"})
+
+	// Then 服务端拒绝 400，绑定仍为 8 条
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("POST 6th bind status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+		t.Fatalf("POST 9th bind status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("最多绑定 5 条策略")) {
-		t.Fatalf("POST 6th bind body=%s, want message containing 最多绑定 5 条策略", recorder.Body.String())
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("最多绑定 8 条策略")) {
+		t.Fatalf("POST 9th bind body=%s, want message containing 最多绑定 8 条策略", recorder.Body.String())
 	}
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_six"), ids)
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_cap"), all)
 
 	// When 重绑已存在的 (rule,policy) 对
-	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(ids[0])+"/bind", map[string]any{"rule_caddy_id": "lb_mp_six"})
+	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(ids[0])+"/bind", map[string]any{"rule_caddy_id": "lb_mp_cap"})
 
 	// Then 幂等 200，绑定集合不变
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("re-bind existing pair status=%d body=%s, want 200 (idempotent)", recorder.Code, recorder.Body.String())
 	}
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_six"), ids)
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_cap"), all)
 }
 
 // SC-GET-02 扩展（D-I1）：GET /security/bindings 每绑定携带 block_page_id——前端

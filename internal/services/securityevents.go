@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -371,7 +372,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 不发射 CRS，不得认领 CRS 事件）；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
@@ -379,14 +380,18 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	var policies []*models.SecurityPolicy
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
-		var customJSON, crsJSON, blacklistJSON, geoipJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &p.Mode, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		var customJSON, crsJSON, blacklistJSON, geoipJSON, whitelistJSON, whitelistRefsJSON string
+		if err := polRows.Scan(&p.ID, &p.Name, &p.Mode, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &p.IPWhitelistEnabled, &whitelistJSON, &whitelistRefsJSON, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
 		p.GeoIPCountries = json.RawMessage(geoipJSON)
 		p.CRSRuleGroups = json.RawMessage(crsJSON)
 		p.IPBlacklist = json.RawMessage(blacklistJSON)
+		// 信任名单（IP 族 fallback 能力首选层的 logged 语义能力判定）：
+		// 既有 SELECT 未携带，能力层不读库补查（摄入 tick 热路径），在此装载。
+		p.IPWhitelist = json.RawMessage(whitelistJSON)
+		p.IPWhitelistRefs = whitelistRefsJSON
 		policyByID[p.ID] = p
 		policies = append(policies, p)
 	}
@@ -413,7 +418,14 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 // 发射端对 allow 与 deny 两种模式都发 id 2（security.go「IP 白名单拒绝」/
 // 「IP 黑名单拒绝」）；归属端有意只认 deny 模式策略（allow 模式事件经回退归到
 // 首个启用策略，仅展示层影响——IPACLAllowModeDoesNotOwnDenyEvent 钉住该口径）。
-func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTriggered string) bool {
+// 成员精确归因（2026-09-21 生产事故，A-3 ①「名单命中者优先」）：clientIP 非空
+// 且可解析时，id 2/4 在名单非空基础上追加成员判定——名单未命中事件源 IP 的
+// deny/黑名单策略不认领（多 deny 策略绑定下，首绑非属主凭「名单非空」曾误夺
+// 真属主的归属）；名单命中判定内联优先、缺失时回退 IPACLList（mergedACLList
+// 同一读法）。事件源 IP 不在任何名单＝名单在发射后被编辑的漂移形状，contains
+// 让位、由 fallback 能力首选层归属（绝不归零）。clientIP 为空（历史调用形状/
+// 记录缺 IP）保持既有「名单非空即认领」口径。
+func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTriggered, clientIP string) bool {
 	if policy == nil || ruleTriggered == "" {
 		return false
 	}
@@ -446,21 +458,28 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		if err := json.Unmarshal(policy.IPBlacklist, &blacklist); err != nil {
 			return false
 		}
-		return len(blacklist) > 0
+		if len(blacklist) == 0 {
+			return false
+		}
+		return clientIP == "" || securityEventsIPInList(clientIP, blacklist)
 	case n == 2:
 		if !policy.IPACLEnabled || policy.IPACLMode != "deny" {
 			return false
 		}
 		// 审计 V1-S2（第五轮）：deny 归因应含 refs 合并集（inline ∪ ip_acl_list_refs），
 		// 否则 refs-only deny 策略无法认领自己的 id:2 事件。
-		if len(policy.MergedACLList) > 0 {
-			return true
+		aclList := policy.MergedACLList
+		if len(aclList) == 0 {
+			var inline []string
+			if err := json.Unmarshal([]byte(policy.IPACLList), &inline); err != nil {
+				return false
+			}
+			aclList = inline
 		}
-		var aclList []string
-		if err := json.Unmarshal([]byte(policy.IPACLList), &aclList); err != nil {
+		if len(aclList) == 0 {
 			return false
 		}
-		return len(aclList) > 0
+		return clientIP == "" || securityEventsIPInList(clientIP, aclList)
 	case n >= 900000 && n < 1000000:
 		// 审计 V1-S1（第五轮）+ W-I1（第六轮回归修复）：v2.2.2 混合选择——
 		// crs_rule_groups 可含六位 CRS ID 正选；六位 ID 触发的 CRS 事件应先按
@@ -555,6 +574,11 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 //
 // 合成 id(1000000+)按自定义族同等对待(物理同形;豁免①钉的是 contains
 // 覆盖区间,fallback 门不扩不缩)。
+//
+// 本门只核「模式 × 动作」可行性;IP 族(2/4/7/8/800xxx)的物理发射面能力维度
+// 由上层首选层 securityEventsIPFamilyEventSurface 承担(2026-09-21 生产事故:
+// 无 IP 能力策略凭候选顺序抢先认领 id:2),能力首选层落空后仍按本门归属
+// (摄取必有归属,禁止归零)。
 func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, ruleTriggered string) bool {
 	if policy == nil {
 		return false
@@ -563,7 +587,7 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	if err != nil {
 		return false
 	}
-	ipControl := n == 2 || n == 4 || n == 7 || n == 8 || (n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000)
+	ipControl := securityEventsRuleIsIPFamily(ruleTriggered)
 	crs := n >= 900000 && n < 1000000
 	custom := (n >= 10000 && n < geoipPrecheckRuleBase) || n >= 1000000
 	switch policy.Mode {
@@ -588,16 +612,123 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	}
 }
 
+// securityEventsRuleIsIPFamily 报告规则 id 是否属于 IP 控制/GeoIP 族（2/4/7/8 +
+// GeoIP 预检 800xxx 段）。单一事实源：fallback 门（securityEventsFallbackCanProduce
+// 的 ipControl 维度）与能力首选层（securityEventsIPFamilyEventSurface）共用，
+// 禁止各自复写字面量。
+func securityEventsRuleIsIPFamily(ruleTriggered string) bool {
+	n, err := strconv.Atoi(ruleTriggered)
+	if err != nil {
+		return false
+	}
+	return n == 2 || n == 4 || n == 7 || n == 8 || IsGeoIPPrecheckID(n)
+}
+
+// securityEventsIPFamilyEventSurface（2026-09-21 生产事故，A-3 ②能力维度）：
+// IP 族事件 fallback 首选层的物理发射面判定，逐 id 对照发射侧单一事实——
+//
+//	· id 8/800xxx（GeoIP）：PolicyHasGeoIP（mode!=off 且名单非空），与发射门
+//	  （buildIPPrecheckDirectives :964/:1043、contains id:8 分支）同源；
+//	· id 2（ACL 拒绝带）：deny 模式且合并名单非空（BuildCorazaDirectives :287
+//	  「IPACLEnabled && len(ipACLList)>0」+ :306 deny 分支；allow 模式发射的
+//	  id:2 归属口径有意不认（A3 I-6，IPACLAllowModeDoesNotOwnDenyEvent 钉）；
+//	· id 4（遗留黑名单）：黑名单非空（:322 无模式门）；
+//	· id 7（预检 allow 交集）：allow 模式且合并名单非空（buildIPPrecheckDirectives
+//	  仅 allow 参与交集）；
+//	· 信任名单（ip_whitelist）：仅 logged（检测）语义计入 id 2/4/7 能力——信任
+//	  只以 DetectionOnly 降级事务、令 deny 规则以检测动作留痕，自身发射的
+//	  id:3/5/12 为 nolog pass 永不产事件，更不可能产 blocked。
+//
+// 名单读取与 SecurityPolicyHasIPControl 同源（inline ∪ refs；MergedACLList 为
+// 摄入映射解析集，缺失回退 inline）。返回 false 不代表事件归零：attribute
+// 层的能力首选层落空后仍经「模式/动作门」归属（摄取必有归属）。
+func securityEventsIPFamilyEventSurface(p *models.SecurityPolicy, action, ruleTriggered string) bool {
+	if p == nil {
+		return false
+	}
+	n, err := strconv.Atoi(ruleTriggered)
+	if err != nil {
+		return false
+	}
+	if n == 8 || IsGeoIPPrecheckID(n) {
+		return PolicyHasGeoIP(p)
+	}
+	aclEntries := mergedACLList(p)
+	aclCapable := p.IPACLEnabled && (len(aclEntries) > 0 || ipListRefsNonEmpty(p.IPACLListRefs))
+	switch n {
+	case 2:
+		if p.IPACLMode == "deny" && aclCapable {
+			return true
+		}
+	case 4:
+		var blacklist []string
+		if err := json.Unmarshal(p.IPBlacklist, &blacklist); err == nil && len(blacklist) > 0 {
+			return true
+		}
+	case 7:
+		if p.IPACLMode == "allow" && aclCapable {
+			return true
+		}
+	}
+	if action != "blocked" && p.IPWhitelistEnabled {
+		var wl []string
+		if err := json.Unmarshal(p.IPWhitelist, &wl); err == nil &&
+			(len(wl) > 0 || ipListRefsNonEmpty(p.IPWhitelistRefs)) {
+			return true
+		}
+	}
+	return false
+}
+
+// securityEventsIPInList 报告事件源 IP 是否命中名单条目（精确或 CIDR 包含）。
+// 条目解析失败按不命中跳过（与渲染端 @ipMatch 的宽松容忍一致——坏条目在
+// 生成期告警，不在此重复报）。IPv4-mapped IPv6 归一后比较。
+func securityEventsIPInList(ip string, list []string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, entry := range list {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if entry == ip {
+			return true
+		}
+		if prefix, perr := netip.ParsePrefix(entry); perr == nil {
+			if prefix.Contains(addr) {
+				return true
+			}
+			continue
+		}
+		if entryAddr, aerr := netip.ParseAddr(entry); aerr == nil && entryAddr.Unmap() == addr {
+			return true
+		}
+	}
+	return false
+}
+
 // securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
-// ID 属于哪个策略（custom_rules / CRS 组 / IP ACL 拒绝带匹配），重叠时取绑定顺序
-// 第一条（policy_id ASC 的第一个）。策略均未显式包含时回退到绑定顺序中第一个
-// ENABLED 且模式/动作可行的策略（A34-CORE-F1/F2 门,securityEventsFallbackCanProduce;
+// ID 属于哪个策略（custom_rules / CRS 组 / IP ACL 拒绝带匹配，IP 族带事件源 IP
+// 成员精确判定），重叠时取绑定顺序第一条（policy_id ASC 的第一个）。策略均未
+// 显式包含时走 fallback，两层判定：
+//
+//  1. 能力首选层（2026-09-21 生产事故）：模式/动作门（A34-CORE-F1/F2，
+//     securityEventsFallbackCanProduce）+ IP 族物理发射面
+//     （securityEventsIPFamilyEventSurface）——无任何 IP 控制能力的策略不得凭
+//     候选顺序抢先认领 id:2/4/7/8/800xxx 事件；
+//  2. 摄取必有归属层：仅模式/动作门（IP 族能力维度豁免）——绑定集内不存在
+//     有能力策略（绑定在发射后变更等漂移形状）时事件仍归到首个可行绑定，
+//     禁止归零。
+//
 // policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该
-// lb_rule 的可用主策略）。无任何启用且可行绑定策略、或 lb_rule 完全未绑定（无
+// lb_rule 的可用主策略。无任何启用且可行绑定策略、或 lb_rule 完全未绑定（无
 // security_policy_bindings 行）返回零值 (0, "")。ACL 拒绝带（id 4/2）无属主时
 // 同样走该回退而非归零：事件既已被摄取，必是某绑定策略在发射时的配置发出了它
 // （当前配置可能已变更），归到首启用绑定是最接近发射现实的归属。
-func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
+func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action, clientIP string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
 	policyIDs := bindings[ruleCaddyID]
 	if len(policyIDs) == 0 {
 		return 0, ""
@@ -607,16 +738,33 @@ func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action string, po
 		if p == nil {
 			continue
 		}
-		if securityEventsPolicyContainsRule(p, ruleTriggered) {
+		if securityEventsPolicyContainsRule(p, ruleTriggered, clientIP) {
 			return pid, p.Name
 		}
 	}
+	ipFamily := securityEventsRuleIsIPFamily(ruleTriggered)
 	for _, pid := range policyIDs {
-		if p := policyByID[pid]; p != nil {
-			if !securityEventsFallbackCanProduce(p, action, ruleTriggered) {
+		p := policyByID[pid]
+		if p == nil {
+			continue
+		}
+		if !securityEventsFallbackCanProduce(p, action, ruleTriggered) {
+			continue
+		}
+		if ipFamily && !securityEventsIPFamilyEventSurface(p, action, ruleTriggered) {
+			continue
+		}
+		return pid, p.Name
+	}
+	if ipFamily {
+		for _, pid := range policyIDs {
+			p := policyByID[pid]
+			if p == nil {
 				continue
 			}
-			return pid, p.Name
+			if securityEventsFallbackCanProduce(p, action, ruleTriggered) {
+				return pid, p.Name
+			}
 		}
 	}
 	return 0, ""
@@ -1057,7 +1205,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			if rule.caddyID == "" {
 				rule = securityEventsMapHost(rec.Host, rules)
 			}
-			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, rec.Action, policyByID, bindings)
+			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, rec.Action, rec.ClientIP, policyByID, bindings)
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
 				rule.name, policyName, rec.TransactionID, rec.RequestHeaders, rec.RequestBody); ierr != nil {

@@ -576,27 +576,30 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	// blocked_24h：近 24h 每策略 blocked 事件数（metrics 库 security_events，
-	// policy_id>0 归因行；走 idx_security_events_time/policy 索引范围）。
+	// blocked_24h / trigger_24h：近 24h 每策略事件计数（metrics 库 security_events，
+	// policy_id>0 归因行；走 idx_security_events_time/policy 索引范围，单趟扫描）。
+	// blocked_24h 仅计 blocked；trigger_24h 计 blocked+logged（「24h 触发」列口径）。
 	blockedCounts := map[int]int{}
+	triggerCounts := map[int]int{}
 	if db.MetricsDB != nil {
-		blockedRows, err := db.MetricsDB.Query(`SELECT policy_id, COUNT(*) FROM security_events WHERE action='blocked' AND policy_id>0 AND event_time >= datetime('now','-1 day') GROUP BY policy_id`)
+		eventRows, err := db.MetricsDB.Query(`SELECT policy_id, SUM(action='blocked'), COUNT(*) FROM security_events WHERE action IN ('blocked','logged') AND policy_id>0 AND event_time >= datetime('now','-1 day') GROUP BY policy_id`)
 		if err != nil {
-			services.Logf("error", "security policies: blocked_24h query failed: %v", err)
+			services.Logf("error", "security policies: 24h event count query failed: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		for blockedRows.Next() {
-			var pid, cnt int
-			if err := blockedRows.Scan(&pid, &cnt); err != nil {
-				blockedRows.Close()
+		for eventRows.Next() {
+			var pid, blockedCnt, totalCnt int
+			if err := eventRows.Scan(&pid, &blockedCnt, &totalCnt); err != nil {
+				eventRows.Close()
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 				return
 			}
-			blockedCounts[pid] = cnt
+			blockedCounts[pid] = blockedCnt
+			triggerCounts[pid] = totalCnt
 		}
-		blockedRows.Close()
-		if err := blockedRows.Err(); err != nil {
+		eventRows.Close()
+		if err := eventRows.Err(); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
@@ -629,6 +632,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			IPACLEnabled:       p.IPACLEnabled,
 			TrustDetection:     p.TrustDetection,
 			Blocked24h:         blockedCounts[p.ID],
+			Trigger24h:         triggerCounts[p.ID],
 			IPWhitelistEnabled: p.IPWhitelistEnabled,
 			IPACLList:          p.IPACLList,
 			IPWhitelist:        rawJSONString(p.IPWhitelist),
@@ -1851,6 +1855,13 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	})
 }
 
+// maxBindingsPerRule 单规则安全策略绑定上限（2026-09-21 用户裁定 5→8）：所有写
+// 路径同源此常量——BindRuleToPolicy additive、SetRuleSecurityPolicies 原子替换、
+// BatchBindSecurityPolicies 提交集与 merge 合并、SplitSecurityPolicy 重映射。
+// 前端 SecurityBindingEditor/SecurityPolicies 的 MAX_POLICY_BINDINGS 与
+// mcpserver schema maxItems 为镜像口径，调整时须同步。
+const maxBindingsPerRule = 8
+
 func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
@@ -1932,10 +1943,11 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
 	}
-	// 上限守卫（B-I1）：POST additive 与 PUT 同上限——一规则最多绑定 5 条策略。
-	// 重绑已存在的 (rule,policy) 对保持幂等 200（INSERT OR IGNORE 不产生新行），
-	// 仅当该对尚未绑定且兄弟绑定已达 5 条时拒绝；COUNT 与 INSERT 同事务（写锁
-	// 由 _txlock=immediate 在 BEGIN 处获取），并发绑定无法在校验与写入间插队。
+	// 上限守卫（B-I1）：POST additive 与 PUT 同上限——一规则最多绑定
+	// maxBindingsPerRule 条策略。重绑已存在的 (rule,policy) 对保持幂等 200
+	// （INSERT OR IGNORE 不产生新行），仅当该对尚未绑定且兄弟绑定已达上限时
+	// 拒绝；COUNT 与 INSERT 同事务（写锁由 _txlock=immediate 在 BEGIN 处获取），
+	// 并发绑定无法在校验与写入间插队。
 	var alreadyBound int
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", req.RuleCaddyID, policyID).Scan(&alreadyBound); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -1947,8 +1959,8 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		if siblingCount >= 5 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最多绑定 5 条策略"})
+		if siblingCount >= maxBindingsPerRule {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("最多绑定 %d 条策略", maxBindingsPerRule)})
 			return
 		}
 	}
@@ -1968,8 +1980,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 
 // SetRuleSecurityPolicies（v2.2.0 T2）：PUT /security/rules/:caddy_id/policies
 // 原子替换一规则的全部策略绑定（单事务 DELETE + 按 policy_ids 顺序 INSERT）。
-// 服务器强制上限 5 条；规则必须存在且为 HTTP；所有 policy_id 必须存在。
-// 空数组（或缺省 policy_ids 字段）= 解除该规则全部绑定，与 apidocs/MCP 契约一致。
+// 服务器强制上限 maxBindingsPerRule 条；规则必须存在且为 HTTP；所有 policy_id
+// 必须存在。空数组（或缺省 policy_ids 字段）= 解除该规则全部绑定，与
+// apidocs/MCP 契约一致。
 func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
@@ -1997,8 +2010,8 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 		seen[id] = struct{}{}
 		uniqueIDs = append(uniqueIDs, id)
 	}
-	if len(uniqueIDs) > 5 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最多绑定 5 条策略"})
+	if len(uniqueIDs) > maxBindingsPerRule {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("最多绑定 %d 条策略", maxBindingsPerRule)})
 		return
 	}
 	// 与 BindRuleToPolicy 同事务口径：存在性校验 + DELETE + 有序 INSERT 同事务，
@@ -2100,7 +2113,8 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 // BatchBindSecurityPolicies 批量绑定安全策略（规则列表多选浮动操作条）：
 // {rule_ids:[], policy_ids:[], mode:"merge"|"replace"}。单事务：策略存在性
 // 一次校验；逐规则存在且 protocol=http（否则进 skipped+reason）；merge=现有
-// ∪请求去重后 ≤5（超限进 skipped）、replace=直接采用请求集（≤5）；逐规则
+// ∪请求去重后不超 maxBindingsPerRule（超限进 skipped）、replace=直接采用请求集
+// （同上限）；逐规则
 // DELETE（replace 或绑定变化时）+INSERT OR IGNORE；全程一次 finishTxApply
 // （单渲染——批量绑定的成本模型与逐条调 PUT /security/rules/:id/policies
 // N 次渲染对齐）。响应 {bound:n, skipped:[{rule_id,reason}]}。
@@ -2141,8 +2155,8 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		seen[id] = struct{}{}
 		uniqueIDs = append(uniqueIDs, id)
 	}
-	if len(uniqueIDs) > 5 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定 5 条策略"})
+	if len(uniqueIDs) > maxBindingsPerRule {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("每条规则最多绑定 %d 条策略", maxBindingsPerRule)})
 		return
 	}
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
@@ -2254,14 +2268,14 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 				mergeSeen[id] = struct{}{}
 				merged = append(merged, id)
 			}
-			if len(merged) > 5 {
-				skipped = append(skipped, skippedRule{ruleCaddyID, "合并后超过 5 条策略上限"})
+			if len(merged) > maxBindingsPerRule {
+				skipped = append(skipped, skippedRule{ruleCaddyID, fmt.Sprintf("合并后超过 %d 条策略上限", maxBindingsPerRule)})
 				continue
 			}
 			final = merged
 		}
 		// 限流策略唯一绑定（merge 路径）：合并后单规则含 ≥2 条 stage2 → 该规则
-		// 进 skipped（保持原绑定不动，与 >5 上限同口径；replace 已由提交集门拦截）。
+		// 进 skipped（保持原绑定不动，与绑定上限同口径；replace 已由提交集门拦截）。
 		if req.Mode == "merge" {
 			stage2Count, err := countStage2Policies(tx, c.Request.Context(), final)
 			if err != nil {
@@ -2312,7 +2326,8 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 // SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
 // 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
 // 子策略继承拦截页，阶段 2 恒 429 不配页），全量重映射绑定（每条规则删原
-// 绑定+插全部子策略绑定；合并后 >5 条的规则进 skipped 并保留原绑定），无
+// 绑定+插全部子策略绑定；合并后超 maxBindingsPerRule 上限的规则进 skipped
+// 并保留原绑定），无
 // skipped 才删除原策略（仍有规则引用时保留并在响应标记）。单事务一次
 // finishTxApply（单渲染）。
 func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
@@ -2413,7 +2428,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	// 全量重映射：逐规则删原绑定+插全部子策略绑定；合并后 >5 条进 skipped
+	// 全量重映射：逐规则删原绑定+插全部子策略绑定；合并后超上限进 skipped
 	// （保留原绑定不动，防止静默丢防护）。
 	boundRules := []string{}
 	ruleRows, err := tx.QueryContext(c.Request.Context(), "SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=? ORDER BY rule_caddy_id", p.ID)
@@ -2443,14 +2458,14 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		if existingCount+len(newIDs) > 5 {
-			skipped = append(skipped, skippedRule{ruleID, fmt.Sprintf("合并后超过 5 条策略上限（%d+%d）", existingCount, len(newIDs))})
+		if existingCount+len(newIDs) > maxBindingsPerRule {
+			skipped = append(skipped, skippedRule{ruleID, fmt.Sprintf("合并后超过 %d 条策略上限（%d+%d）", maxBindingsPerRule, existingCount, len(newIDs))})
 			continue
 		}
 		// 限流策略唯一门（U1-2）：拆分产出 stage2 子策略（features.G2）时，
 		// 该规则现存的其他绑定若已含 stage2（mixed 存量 [mixed,stage2] 并存
 		// 形态合法——BindRuleToPolicy 唯一门不追溯存量），直接重映射会出现
-		// 单规则双限流——进 skipped 保留原绑定（与 >5 同口径），解除现有
+		// 单规则双限流——进 skipped 保留原绑定（与绑定上限同口径），解除现有
 		// stage2 绑定后可重新拆分。
 		if features.G2 {
 			var otherStage2 int

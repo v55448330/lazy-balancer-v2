@@ -88,7 +88,7 @@ var tools = []toolSpec{
 	// forward 按 pathArgs 从 arguments 取值)。
 	{"unbind_security_policy", "解除安全策略与规则的绑定", http.MethodDelete, "/security/policies/{id}/bind/{caddy_id}", []string{"id", "caddy_id"}, nil, `{"type":"object","required":["id","caddy_id"],"properties":{"id":{"type":"integer","description":"策略 ID"},"caddy_id":{"type":"string","description":"规则 Caddy ID"}},"additionalProperties":false}`},
 	// v2.2.0 多策略绑定：原子替换规则绑定的策略集合（整体替换而非追加），
-	// policy_ids maxItems=5 与后端「最多绑定 5 条策略」校验对齐。
+	// policy_ids maxItems=8 与后端 maxBindingsPerRule 校验对齐。
 	{"set_rule_security_policies", "原子设置规则的安全策略集合（按 policy_id ASC 顺序评估）", http.MethodPut, "/security/rules/{caddy_id}/policies", []string{"caddy_id"}, nil, setRuleSecurityPoliciesSchema},
 	{"create_custom_rule", "创建自定义安全规则", http.MethodPost, "/security/custom-rules", nil, nil, bodySchema},
 	{"update_custom_rule", "更新指定自定义安全规则", http.MethodPut, "/security/custom-rules/{id}", []string{"id"}, nil, bodySchema},
@@ -259,9 +259,9 @@ const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"int
 const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls"]}},"additionalProperties":false}`
 const metricsHistorySchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"可选规则 ID（Caddy ID），省略时返回全局聚合趋势"},"interval":{"type":"string","description":"时间范围（如 1h、24h、7d），默认 1h"}},"additionalProperties":false}`
 
-// setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems=5 与后端
-// SetRuleSecurityPolicies 的「最多绑定 5 条策略」校验对齐，避免 MCP 放行后端拒绝的载荷。
-const setRuleSecurityPoliciesSchema = `{"type":"object","required":["caddy_id","policy_ids"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"policy_ids":{"type":"array","items":{"type":"integer"},"maxItems":5,"description":"策略 ID 列表（整体替换现有绑定，按 policy_id ASC 顺序评估）"}},"additionalProperties":false}`
+// setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems 与后端
+// SetRuleSecurityPolicies 的 maxBindingsPerRule=8 校验对齐，避免 MCP 放行后端拒绝的载荷。
+const setRuleSecurityPoliciesSchema = `{"type":"object","required":["caddy_id","policy_ids"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"policy_ids":{"type":"array","items":{"type":"integer"},"maxItems":8,"description":"策略 ID 列表（整体替换现有绑定，按 policy_id ASC 顺序评估）"}},"additionalProperties":false}`
 
 // ruleMetricsHistorySchema（2026-09 审计 F5）：range 的 enum 与 REST 侧
 // metricsHistoryRange 支持集逐项一致（1h/6h/24h/7d，缺省走 REST 默认 24h），

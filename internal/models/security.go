@@ -161,6 +161,9 @@ type SecurityPolicySummary struct {
 	PolicyType       string `json:"policy_type"`
 	TrustDetection   bool   `json:"trust_detection"`
 	Blocked24h       int    `json:"blocked_24h"`
+	// Trigger24h：近 24h 归因该策略的 blocked+logged 事件数（「24h 触发」列，
+	// 归因口径同 Blocked24h：policy_id>0）。
+	Trigger24h int `json:"trigger_24h"`
 }
 
 type CreateSecurityPolicyRequest struct {

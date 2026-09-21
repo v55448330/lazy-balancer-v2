@@ -399,6 +399,62 @@ func TestListSecurityPolicies_carriesBlocked24h(t *testing.T) {
 	}
 }
 
+// 策略列表「24h 触发」列数据源：SecurityPolicySummary.trigger_24h = 近 24h
+// 归因该策略的 blocked+logged 事件数（security_events.policy_id，24h 窗口；
+// policy_id=0 的未归因事件不计入）。blocked_24h 口径不变（仅 blocked）。
+func TestListSecurityPolicies_carriesTrigger24h(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES (1,'trg','blocking','stage3',1),(2,'trgb','off','stage1',1)`); err != nil {
+		t.Fatal(err)
+	}
+	seedEvt := func(policyID int, action, timeExpr string) {
+		t.Helper()
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time,rule_caddy_id,policy_id,client_ip,method,uri,event_type,rule_triggered,rule_msg,action,anomaly_score,rule_name,policy_name,transaction_id)
+			VALUES (`+timeExpr+`,'lb_x',?,'203.0.113.9','GET','/x','waf','942100','msg',?,0,'x','trg',?)`, policyID, action, fmt.Sprintf("tx-%d-%s-%s", policyID, action, timeExpr)); err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+	seedEvt(1, "blocked", "datetime('now','-1 hour')")
+	seedEvt(1, "logged", "datetime('now','-2 hours')")
+	seedEvt(1, "logged", "datetime('now','-1 hour')")
+	seedEvt(1, "logged", "datetime('now','-25 hours')") // 超窗不计
+	seedEvt(2, "logged", "datetime('now','-1 hour')")
+	seedEvt(0, "logged", "datetime('now','-1 hour')") // 未归因不计
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES (3,'trgz','blocking','stage3',1)`); err != nil {
+		t.Fatal(err)
+	} // trgz：零事件策略
+
+	recorder := getRequest(t, router, "/security/policies")
+	var payload struct {
+		Data []struct {
+			Name       string `json:"name"`
+			Trigger24h *int   `json:"trigger_24h"`
+			Blocked24h int    `json:"blocked_24h"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	trigger := map[string]int{}
+	blocked := map[string]int{}
+	for _, p := range payload.Data {
+		// 指针判缺：「24h 触发」列每条策略恒显示（含 0）——字段必须显式携带，
+		// 缺省（omitempty/漏赋值）时前端 ?? 0 兜底会掩盖漏算缺陷。
+		if p.Trigger24h == nil {
+			t.Fatalf("trigger_24h 缺失于策略 %s（零事件策略也须显式携带）", p.Name)
+		}
+		trigger[p.Name] = *p.Trigger24h
+		blocked[p.Name] = p.Blocked24h
+	}
+	if trigger["trg"] != 3 || trigger["trgb"] != 1 || trigger["trgz"] != 0 {
+		t.Fatalf("trigger_24h=%v, want {trg:3, trgb:1, trgz:0}", trigger)
+	}
+	if blocked["trg"] != 1 || blocked["trgb"] != 0 || blocked["trgz"] != 0 {
+		t.Fatalf("blocked_24h=%v, want {trg:1, trgb:0, trgz:0}（口径不变）", blocked)
+	}
+}
+
 // 限流策略唯一绑定（2026-09-20 用户裁定）：一条规则最多绑定一条 stage2
 // 限流策略——BindRuleToPolicy 拒绝第二条限流、SetRuleSecurityPolicies 的
 // 提交集含 ≥2 条 stage2 即 400、batch-bind 提交集含 ≥2 条 stage2 即 400、

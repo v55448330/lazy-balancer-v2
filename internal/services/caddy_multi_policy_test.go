@@ -8,7 +8,7 @@ import (
 )
 
 // SC-GEN-01..05（v2.2.0 多策略绑定 · Caddy 生成路径）：一条 LB 规则可绑定至多
-// 5 条安全策略，评估顺序 = policy_id ASC；每策略的 [rate_limit?, waf?] 处理器组
+// maxBindingsPerRule=8 条安全策略，评估顺序 = policy_id ASC；每策略的 [rate_limit?, waf?] 处理器组
 // 按序编入规则主路由。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
 // 为下游 coraza 的 GeoIP SecRule 设置 X-GeoIP-* headers；地域拦截在各自策略的
 // waf directives 内评估，无 Caddy 原生 block 路由）；错误路由取首绑定（最低

@@ -167,14 +167,82 @@ func TestBatchBindSecurityPolicies_singleRenderAndShapes(t *testing.T) {
 		t.Fatalf("merge must union dedupe to [1,2], got [%s]", pids)
 	}
 
-	// When：超 5 条策略 → 400；策略不存在 → 400
+	// When：超 8 条策略 → 400（2026-09-21 上限 5→8）；恰好 8 条 → 200；策略不存在 → 400
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (3,'bp-3','off',1),(4,'bp-4','off',1),(5,'bp-5','off',1),(6,'bp-6','off',1),(7,'bp-7','off',1),(8,'bp-8','off',1),(9,'bp-9','off',1)`); err != nil {
+		t.Fatalf("seed policies 3-9: %v", err)
+	}
 	if response := postStageJSON(t, router, "/security/policies/batch-bind",
-		`{"rule_ids":["lb_b1"],"policy_ids":[1,2,3,4,5,6],"mode":"merge"}`); response.Code != http.StatusBadRequest {
-		t.Fatalf("over-5 status=%d, want 400", response.Code)
+		`{"rule_ids":["lb_b1"],"policy_ids":[1,2,3,4,5,6,7,8,9],"mode":"merge"}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("over-9 status=%d, want 400", response.Code)
+	}
+	response = postStageJSON(t, router, "/security/policies/batch-bind",
+		`{"rule_ids":["lb_b3"],"policy_ids":[1,2,3,4,5,6,7,8],"mode":"replace"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("exactly-8 status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	bound, _ = batchResult(t, response)
+	if bound != 1 {
+		t.Fatalf("exactly-8 bound=%d, want 1", bound)
+	}
+	var b3Count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_b3'`).Scan(&b3Count); err != nil || b3Count != 8 {
+		t.Fatalf("exactly-8 binding count=%d (err=%v), want 8", b3Count, err)
 	}
 	if response := postStageJSON(t, router, "/security/policies/batch-bind",
 		`{"rule_ids":["lb_b1"],"policy_ids":[999],"mode":"merge"}`); response.Code != http.StatusBadRequest {
 		t.Fatalf("dangling policy status=%d, want 400", response.Code)
+	}
+}
+
+// merge 上限边界（2026-09-21 上限 5→8）：lb_b1 现有 6 条 + merge 2 条 = 8 → bound；
+// 再 merge 1 条 = 9 → 该规则 skipped「合并后超过 8 条策略上限」且原绑定保留。
+func TestBatchBindSecurityPolicies_mergeCapBoundary(t *testing.T) {
+	handler, _ := newStageBatchTestHandlers(t)
+	seedStageBatchRules(t)
+	router := stageBatchRouter(handler)
+	for i := 3; i <= 9; i++ {
+		if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (?,?,?,1)`, i, fmt.Sprintf("cap-%d", i), "off"); err != nil {
+			t.Fatalf("seed policy %d: %v", i, err)
+		}
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) SELECT 'lb_b1', id FROM security_policies WHERE id<=6`); err != nil {
+		t.Fatalf("seed 6 bindings: %v", err)
+	}
+
+	// When merge 至恰好 8 条
+	response := postStageJSON(t, router, "/security/policies/batch-bind",
+		`{"rule_ids":["lb_b1"],"policy_ids":[7,8],"mode":"merge"}`)
+
+	// Then bound=1、绑定共 8 条
+	if response.Code != http.StatusOK {
+		t.Fatalf("merge-to-8 status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	bound, skipped := batchResult(t, response)
+	if bound != 1 || len(skipped) != 0 {
+		t.Fatalf("merge-to-8 bound=%d skipped=%v, want bound=1 skipped=0", bound, skipped)
+	}
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_b1'`).Scan(&count); err != nil || count != 8 {
+		t.Fatalf("merge-to-8 binding count=%d (err=%v), want 8", count, err)
+	}
+
+	// When 再 merge 1 条 → 9 条唯一 → 规则级 skipped
+	response = postStageJSON(t, router, "/security/policies/batch-bind",
+		`{"rule_ids":["lb_b1"],"policy_ids":[9],"mode":"merge"}`)
+
+	// Then 200（整体受理）但 lb_b1 skipped 且原 8 条绑定保留
+	if response.Code != http.StatusOK {
+		t.Fatalf("merge-to-9 status=%d body=%s, want 200 (rule-level skip)", response.Code, response.Body.String())
+	}
+	bound, skipped = batchResult(t, response)
+	if bound != 0 || len(skipped) != 1 || skipped[0]["rule_id"] != "lb_b1" {
+		t.Fatalf("merge-to-9 bound=%d skipped=%v, want bound=0 skipped=[lb_b1]", bound, skipped)
+	}
+	if reason, _ := skipped[0]["reason"].(string); !strings.Contains(reason, "合并后超过 8 条策略上限") {
+		t.Fatalf("skip reason=%q, want containing 合并后超过 8 条策略上限", reason)
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_b1'`).Scan(&count); err != nil || count != 8 {
+		t.Fatalf("skipped rule must keep 8 bindings, got %d (err=%v)", count, err)
 	}
 }
 

@@ -265,7 +265,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 		t.Errorf("mapHost(GO029.COM)=(%q,%q), want (lb_rule1,test rule)", rule.caddyID, rule.name)
 	}
 	// And: attribution resolves policy 7 (crs_rule_groups 空数组 = 包含全部 CRS 规则)
-	pid, pname := securityEventsAttributePolicy(rule.caddyID, "942100", "blocked", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy(rule.caddyID, "942100", "blocked", "", policyByID, bindings)
 	if pid != 7 || pname != "policy-seven" {
 		t.Errorf("attributePolicy=(%d,%q), want (7,policy-seven)", pid, pname)
 	}
@@ -273,7 +273,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 	if rule := securityEventsMapHost("unknown.example.com", rules); rule.caddyID != "" {
 		t.Errorf("mapHost(unknown)=%q, want \"\"", rule.caddyID)
 	}
-	if pid, pname := securityEventsAttributePolicy("", "942100", "blocked", policyByID, bindings); pid != 0 || pname != "" {
+	if pid, pname := securityEventsAttributePolicy("", "942100", "blocked", "", policyByID, bindings); pid != 0 || pname != "" {
 		t.Errorf("attributePolicy(empty)=(%d,%q), want (0,\"\")", pid, pname)
 	}
 	// When/Then: bare IPs never match a domain rule
@@ -1922,7 +1922,7 @@ func TestSecurityEventsAttribution_LegacyBlacklistDenyPicksOwnerPolicy(t *testin
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", "", policyByID, bindings)
 	if pid != 3 || pname != "policy-B" {
 		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 遗留黑名单拒绝必须归因到拥有 ip_blacklist 的策略", pid, pname)
 	}
@@ -1954,7 +1954,7 @@ func TestSecurityEventsAttribution_IPACLDenyPicksOwnerPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", "", policyByID, bindings)
 	if pid != 4 || pname != "policy-C" {
 		t.Fatalf("attribution=(%d,%q), want (4,policy-C) — IP ACL 黑名单模式拒绝必须归因到拥有该 ACL 的策略", pid, pname)
 	}
@@ -1981,7 +1981,7 @@ func TestSecurityEventsAttribution_BlacklistDenyFallsBackToFirstEnabledWhenNoOwn
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", "blocked", "", policyByID, bindings)
 	if pid != 1 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — 无属主时必须回退到第一个启用绑定策略", pid, pname)
 	}
@@ -2010,7 +2010,7 @@ func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", policyByID, bindings)
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", "blocked", "", policyByID, bindings)
 	if pid != 1 || pname != "policy-A" {
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — allow 模式 ACL 不拥有 id:2 归属，必须回退首绑定", pid, pname)
 	}
@@ -2672,7 +2672,7 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, policyByID, bindings)
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, "", policyByID, bindings)
 			if pid != tc.wantPID {
 				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, tc.triggered, tc.action, pid, tc.wantPID)
 			}
@@ -2727,9 +2727,226 @@ func TestSecurityEventsAttribution_geoipPrecheckExactSegment(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, policyByID, bindings)
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.triggered, tc.action, "", policyByID, bindings)
 			if pid != tc.wantPID {
 				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, tc.triggered, tc.action, pid, tc.wantPID)
+			}
+		})
+	}
+}
+
+// 2026-09-21 05:29 生产事故(lb_dq2351774e)复现:摄入时刻绑定快照 [42 观察模式
+// detection 无 ACL, 49 ooo off+信任名单含事件源 IP] 中不存在 deny 属主,contains
+// 全部落空走 fallback——旧门只核 mode/动作,无任何 IP 发射面的 42 作为首候选
+// 直接胜出,id:2 事件错挂「观察模式」。能力首选层修后期望:logged(检测)语义下
+// 信任名单策略(真实 IP 控制发射面,SecurityPolicyHasIPControl 同源字段)优先于
+// 无能力策略。RED:当前代码返回首候选 42。
+func TestSecurityEventsAttribution_IPFamilyFallbackPrefersIPCapablePolicy(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_whitelist_enabled,ip_whitelist) VALUES
+		(1,'p-detection-noacl',1,'detection','[]','[]',0,'[]'),
+		(2,'p-off-trust',1,'off','[]','[]',1,'["::1"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_incident',1),('lb_incident',2)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_incident", "2", "logged", "", policyByID, bindings)
+	if pid != 2 || pname != "p-off-trust" {
+		t.Fatalf("attribution=(%d,%q), want (2,p-off-trust) — IP 族 fallback 首选层必须优先具备 IP 控制发射面的策略(信任名单 logged 语义),而非无能力首候选", pid, pname)
+	}
+}
+
+// A-3 ①「名单命中者优先」：多 deny 策略绑定下，contains 追加事件源 IP 成员判定
+// ——名单未命中本 IP 的首绑 deny 策略不再凭「名单非空」误夺真属主（id 2/4 同
+// 口径；条目支持精确与 CIDR）。IPv6 形状即生产事件源（::1）。
+func TestSecurityEventsAttribution_IPACLMemberOwnerWinsOverNonMemberDeny(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list,ip_blacklist) VALUES
+		(1,'p-deny-other',1,'blocking','[]','[]',1,'deny','["203.0.113.5"]','[]'),
+		(2,'p-deny-owner',1,'blocking','[]','[]',1,'deny','["2001:db8::/32"]','["10.0.0.0/8"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_member',1),('lb_member',2),
+		('lb_member4',1),('lb_member4',2)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	cases := []struct {
+		name     string
+		rule     string
+		clientIP string
+		wantPID  int
+	}{
+		{"member owner wins (CIDR hit)", "lb_member", "2001:db8::5", 2},
+		{"id:4 blacklist member wins", "lb_member", "10.0.0.7", 2},
+		{"ip in no list (drift) -> first capable deny, never zero", "lb_member", "198.51.100.7", 1},
+		{"empty clientIP keeps legacy non-empty-owner semantics", "lb_member", "", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" "+tc.clientIP, func(t *testing.T) {
+			triggered := "2"
+			if tc.clientIP == "10.0.0.7" {
+				triggered = "4"
+			}
+			pid, _ := securityEventsAttributePolicy(tc.rule, triggered, "blocked", tc.clientIP, policyByID, bindings)
+			if pid != tc.wantPID {
+				t.Fatalf("attributePolicy(%s,%s,%s)=(%d), want %d", tc.rule, triggered, tc.clientIP, pid, tc.wantPID)
+			}
+		})
+	}
+}
+
+// 任务书复现形状（生产合同钉）：[41 形 custom_only 无ACL, 42 形 detection 无ACL,
+// 48 形 stage1 deny 含 ::1] + id:2 blocked（事件源 ::1）→ 归因 deny 属主 48 形。
+// 2026-09-21 05:29 生产事故中该归属被「摄入快照绑定集不含属主 + fallback 无能力
+// 首候选」双重击穿；本钉锁住「属主在绑定集内必胜出」的合同。
+func TestSecurityEventsAttribution_Stage1DenyOwnerBeatsIncapablePolicies(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,policy_type,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES
+		(1,'p-custom-only',1,'custom_only','stage3','[]','[]',0,'','[]'),
+		(2,'p-detection',1,'detection','stage3','[]','[]',0,'','[]'),
+		(3,'p-stage1-deny',1,'off','stage1','[]','[]',1,'deny','["::1"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_dq2351774e',1),('lb_dq2351774e',2),('lb_dq2351774e',3)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_dq2351774e", "2", "blocked", "::1", policyByID, bindings)
+	if pid != 3 || pname != "p-stage1-deny" {
+		t.Fatalf("attribution=(%d,%q), want (3,p-stage1-deny) — deny 属主在绑定集内必须经 contains 成员命中胜出", pid, pname)
+	}
+}
+
+// 畸形兜底（摄取必有归属）：绑定集内不存在任何有 IP 发射面的策略（含已知事件
+// 源 IP 不在任何名单的漂移形状）时，能力首选层落空，仍按「模式/动作门」归属
+// 首个可行绑定——禁止归零，禁止报错。
+func TestSecurityEventsAttribution_IncapableOnlyStillAttributed(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES
+		(1,'p-detection-noacl',1,'detection','[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_orphan',1)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	for _, clientIP := range []string{"", "::1", "198.51.100.7"} {
+		pid, pname := securityEventsAttributePolicy("lb_orphan", "2", "blocked", clientIP, policyByID, bindings)
+		if pid != 1 || pname != "p-detection-noacl" {
+			t.Fatalf("attributePolicy(clientIP=%q)=(%d,%q), want (1,p-detection-noacl) — 无能力策略唯一存在必须回退首绑定,禁止归零", clientIP, pid, pname)
+		}
+	}
+}
+
+// R-6 真值表扩格（mode × IP 能力 × 动作）：能力首选层不得误拒既有合法形状——
+// off+deny-ACL blocked 照旧首选（A35-SECLB-1 形状且真有能力）；refs-only deny
+// 计能力（与发射端 refs 合并口径同源）；信任名单仅 logged 语义计能力，blocked
+// 下不得抢过门禁可行但无能力的 detection 绑定；allow 模式不认领 id:2（A3 I-6
+// 钉住的既有口径在能力层保持）；黑名单属主走 contains 不受影响。
+func TestSecurityEventsAttribution_IPFamilyCapabilityTruthTable(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list,ip_acl_list_refs,ip_whitelist_enabled,ip_whitelist) VALUES
+		(1,'p-detection-noacl',1,'detection','[]','[]',0,'','[]','[]',0,'[]'),
+		(2,'p-off-deny',1,'off','[]','[]',1,'deny','["::1"]','[]',0,'[]'),
+		(3,'p-deny-refs-only',1,'blocking','[]','[]',1,'deny','[]','[9]',0,'[]'),
+		(4,'p-off-trust',1,'off','[]','[]',0,'','[]','[]',1,'["::1"]'),
+		(5,'p-allow',1,'blocking','[]','[]',1,'allow','["::1"]','[]',0,'[]'),
+		(6,'p-geo-deny',1,'off','[]','[]',0,'','[]','[]',0,'[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_policies SET geoip_mode='deny', geoip_countries='["海外"]' WHERE id=6`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_off',1),('lb_off',2),
+		('lb_refs',1),('lb_refs',3),
+		('lb_trust',1),('lb_trust',4),
+		('lb_allow',1),('lb_allow',5),
+		('lb_geo',1),('lb_geo',6)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	cases := []struct {
+		name     string
+		rule     string
+		id       string
+		action   string
+		clientIP string
+		wantPID  int
+	}{
+		// off+deny-ACL blocked：clientIP 不在名单（漂移形状）排空 contains 后，
+		// 能力首选层照旧首选（A35-SECLB-1 不得回归误拒、不归零）
+		{"off deny-ACL blocked tier1", "lb_off", "2", "blocked", "198.51.100.7", 2},
+		// off+deny-ACL blocked + 事件源在名单：contains 成员命中直达属主（合同形状）
+		{"off deny-ACL member contains hit", "lb_off", "2", "blocked", "::1", 2},
+		// refs-only deny（inline 空仅引用）计能力：logged 语义下优先于无能力 detection
+		{"refs-only deny logged tier1", "lb_refs", "2", "logged", "198.51.100.7", 3},
+		// 信任名单仅 logged 计能力：logged 下信任策略优先于无能力 detection
+		{"trust wl logged tier1", "lb_trust", "2", "logged", "", 4},
+		// blocked 下信任名单不计能力：无能力 detection 依模式门归属（不归零）
+		{"trust wl blocked not capable", "lb_trust", "2", "blocked", "", 1},
+		// allow 模式不认领 id:2（含成员命中形状）：blocked 下无能力 detection 归属
+		{"allow mode never owns deny event", "lb_allow", "2", "blocked", "", 1},
+		{"allow mode member ip still not owner", "lb_allow", "2", "blocked", "::1", 1},
+		// 800xxx 属主漂移（属主 99 不在绑定集）：geoip 能力策略经能力首选层胜出
+		{"800xxx drift geoip-capable tier1", "lb_geo", "800099", "blocked", "", 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, _ := securityEventsAttributePolicy(tc.rule, tc.id, tc.action, tc.clientIP, policyByID, bindings)
+			if pid != tc.wantPID {
+				t.Fatalf("attributePolicy(%s,%s,%s,ip=%s)=(%d), want %d", tc.rule, tc.id, tc.action, tc.clientIP, pid, tc.wantPID)
 			}
 		})
 	}

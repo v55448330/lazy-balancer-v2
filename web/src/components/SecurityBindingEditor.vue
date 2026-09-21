@@ -81,7 +81,7 @@
               <span class="picker-rule-name">{{ rule.name }}</span>
               <span class="picker-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
-            <el-tooltip v-if="pickerWouldExceed(rule)" content="该规则已绑定 5 条策略（上限），需先解绑" placement="top">
+            <el-tooltip v-if="pickerWouldExceed(rule)" :content="`该规则已绑定 ${MAX_POLICY_BINDINGS} 条策略（上限），需先解绑`" placement="top">
               <el-icon class="picker-cap-icon"><WarningFilled /></el-icon>
             </el-tooltip>
           </div>
@@ -166,8 +166,8 @@ import type {
   SecurityStageBlockPage,
 } from '@/utils/securityStages'
 
-// 与后端 SetRuleSecurityPolicies 上限同口径
-const MAX_POLICY_BINDINGS = 5
+// 与后端 SetRuleSecurityPolicies 上限（maxBindingsPerRule=8）同口径
+const MAX_POLICY_BINDINGS = 8
 const PICKER_PAGE_SIZE = 20
 // 绑定摘要排序严格按处理流程（任务 7）：阶段 0（最高优先）→ 1 → 2 → 3 → mixed
 const STAGE_ORDER: readonly SecurityPolicyType[] = ['stage0', 'stage1', 'stage2', 'stage3', 'mixed']

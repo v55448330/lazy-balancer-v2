@@ -43,14 +43,20 @@
             <template v-else>{{ row.rule_count }}</template>
           </template>
         </el-table-column>
-        <!-- 内容摘要列（按类型一行摘要）+ 24h 拦截计数 chip（blocked_24h 后端字段，
-             未就绪按 0 兜底不显示 chip） -->
+        <!-- 内容摘要列（按类型一行摘要） -->
         <el-table-column label="内容摘要" min-width="300">
           <template #default="{ row }">
             <div class="policy-summary-cell">
               <span class="policy-summary-text" :title="policySummaryLine(row)">{{ policySummaryLine(row) }}</span>
-              <el-tag v-if="(row.blocked_24h ?? 0) > 0" size="small" type="danger" effect="plain" class="policy-blocked-chip">24h 拦截 {{ row.blocked_24h }}</el-tag>
             </div>
+          </template>
+        </el-table-column>
+        <!-- 24h 触发列（trigger_24h 后端字段）：近 24h 归因该策略的 blocked+logged 事件数，
+             每条策略恒显示（0=灰字）；列宽按「9999」量级预留 -->
+        <el-table-column label="24h 触发" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="(row.trigger_24h ?? 0) > 0" size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
+            <span v-else class="policy-trigger-zero">0</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="90" align="center">
@@ -112,7 +118,7 @@
           type="warning"
           :closable="false"
           show-icon
-          :title="`上限风险：${migrateCapRisk.map((r) => r.name).join('、')} 迁移后将超过每条规则 5 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
+          :title="`上限风险：${migrateCapRisk.map((r) => r.name).join('、')} 迁移后将超过每条规则 ${MAX_POLICIES_PER_RULE} 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
           class="migrate-preview-alert"
         />
         <el-alert
@@ -172,7 +178,7 @@
           <div class="dialog-header__icon dialog-header__icon--primary"><el-icon :size="18"><Lock /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略' }}</div>
-            <div class="dialog-header__subtitle">配置 WAF 检测规则、IP 访问控制、限流与规则关联</div>
+            <div class="dialog-header__subtitle">{{ EDITOR_SUBTITLES[editorPolicyType] }}</div>
           </div>
         </div>
       </template>
@@ -871,9 +877,9 @@
               <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
             <!-- v2.2.0：每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
-                 已达 5 条上限的规则禁用并说明原因。 -->
+                 已达上限（MAX_POLICIES_PER_RULE）的规则禁用并说明原因。 -->
             <div class="rule-binding-preview">
-              <span v-if="pickerMeta(rule.caddy_id).wouldExceed" class="rule-binding-limit">已达 5 条绑定上限，无法继续绑定</span>
+              <span v-if="pickerMeta(rule.caddy_id).wouldExceed" class="rule-binding-limit">已达 {{ MAX_POLICIES_PER_RULE }} 条绑定上限，无法继续绑定</span>
               <template v-else>
                 <span
                   v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
@@ -979,7 +985,7 @@ interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; blocked_24h?: number }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; blocked_24h?: number; trigger_24h?: number }
 
 
 
@@ -1197,7 +1203,7 @@ const migrateChildTypes = computed<SecurityPolicyType[]>(() => {
 
 const migrateBoundRules = computed(() => (migratePolicy.value ? policyBoundRules(migratePolicy.value.id) : []))
 
-// 上限风险：规则当前绑定数 - 1（原策略被替换）+ 子策略数 > 5 → 该规则保持原绑定进 skipped
+// 上限风险：规则当前绑定数 - 1（原策略被替换）+ 子策略数 > MAX_POLICIES_PER_RULE → 该规则保持原绑定进 skipped
 const migrateCapRisk = computed(() =>
   migrateBoundRules.value.filter((rule) =>
     (securityBindings.value[rule.caddy_id] || []).length - 1 + migrateChildTypes.value.length > MAX_POLICIES_PER_RULE))
@@ -1499,6 +1505,15 @@ const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage0'
 const editingPolicyType = ref<SecurityPolicyType | null>(null)
 const editorPolicyType = computed<SecurityPolicyType>(() =>
   editingId.value === null ? createPolicyType.value : (editingPolicyType.value ?? 'mixed'))
+
+// 弹框副标题按策略类型描述；mixed/缺省保持兼容组总述文案
+const EDITOR_SUBTITLES: Record<SecurityPolicyType, string> = {
+  stage0: '配置信任名单条目与直通/保留检测模式',
+  stage1: '配置 IP 访问控制、地域拦截与拦截页',
+  stage2: '配置速率限制(恒 429)',
+  stage3: '配置 WAF 模式、CRS 规则组、自定义规则与拦截页',
+  mixed: '配置 WAF 检测规则、IP 访问控制、限流与规则关联',
+}
 
 const typeAllowsStage = (stage: 0 | 1 | 2 | 3): boolean =>
   editorPolicyType.value === 'mixed' || editorPolicyType.value === `stage${stage}`
@@ -2103,7 +2118,7 @@ watch(pickerSearch, () => {
   pickerPage.value = 1
 })
 
-// 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达 5 条绑定上限的规则
+// 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达绑定上限的规则
 // 不可选，不参与全选），selection 存于 pickerSelected 与分页无关
 const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => !pickerMeta(rule.caddy_id).wouldExceed))
 const pickerFilteredSelectedCount = computed(() => {
@@ -2125,10 +2140,11 @@ const handlePickerSelectAll = (checked: string | number | boolean): void => {
   pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
-// 拦截页面 = 首绑策略的页面（启用策略中 policy_id 最小者）；单规则最多 5 条；
+// 拦截页面 = 首绑策略的页面（启用策略中 policy_id 最小者）；单规则最多
+// MAX_POLICIES_PER_RULE=8 条（与后端 maxBindingsPerRule 同口径）；
 // security_policies.id 为 AUTOINCREMENT——新建策略的 ID 必然大于全部现存策略，
 // 因此新建策略在任何规则的绑定链上都落在末位。
-const MAX_POLICIES_PER_RULE = 5
+const MAX_POLICIES_PER_RULE = 8
 const PERF_POLICY_THRESHOLD = 3
 
 // 选中规则的完整绑定策略明细（冲突检测需要 crs_rule_groups/custom_rules 内容，
@@ -2238,7 +2254,7 @@ const buildDisplayChain = (caddyId: string): ChainEntry[] => {
   return all
 }
 
-// 选择器单条规则元信息：绑定链、本策略落点（1-based）、是否因达 5 条上限而不可选。
+// 选择器单条规则元信息：绑定链、本策略落点（1-based）、是否因达绑定上限而不可选。
 // 本策略已在绑定中的规则重选不新增绑定，永不受上限限制。
 const pickerMeta = (caddyId: string): { chain: ChainEntry[]; selfPos: number; wouldExceed: boolean } => {
   const existing = securityBindings.value[caddyId] || []
@@ -2862,7 +2878,7 @@ const handleSave = async () => {
   saving.value = true
   try {
     // v2.2.0 上限守卫（SC-BIND-02 配套）：POST bind 为 additive 且服务端不强制上限
-    //（上限由 PUT /security/rules/:caddy_id/policies 强制），本流程的 5 条闸门在客户端。
+    //（上限由 PUT /security/rules/:caddy_id/policies 强制），本流程的绑定上限闸门在客户端。
     // 保存前刷新绑定快照，避免并发会话下用过期数据放行超限绑定。
     try {
       const bindRes = await request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')
@@ -2876,7 +2892,7 @@ const handleSave = async () => {
     })
     if (overLimit.length > 0) {
       const names = overLimit.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join('、')
-      ElMessage.error(`以下规则已达 5 条绑定上限，无法继续关联：${names}`)
+      ElMessage.error(`以下规则已达 ${MAX_POLICIES_PER_RULE} 条绑定上限，无法继续关联：${names}`)
       currentStep.value = WIZARD_STEP.BINDINGS
       return
     }
@@ -3245,7 +3261,8 @@ onMounted(async () => {
 .policy-type-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .policy-summary-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.policy-blocked-chip { flex: 0 0 auto; }
+.policy-trigger-tag { font-variant-numeric: tabular-nums; }
+.policy-trigger-zero { color: var(--el-text-color-secondary, #909399); font-variant-numeric: tabular-nums; }
 
 /* 生效投影条（任务 8）：同一信息条左右两段——左=生效说明句、右=关联规则覆盖状态
    列表，同字号（12px）同基线（align-items: baseline） */

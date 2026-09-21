@@ -16,8 +16,9 @@ import (
 
 // 混合策略一键拆分迁移（2026-09-20 用户裁定）：POST /security/policies/:id/split
 // 仅 mixed 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成），
-// 全量重映射绑定（≤5 上限的规则进 skipped 并保留原绑定），无 skipped 才删除
-// 原策略；单事务单渲染；响应 {created, remapped, skipped, deleted_original}。
+// 全量重映射绑定（合并后超绑定上限的规则进 skipped 并保留原绑定），无 skipped
+// 才删除原策略；单事务单渲染；响应 {created, remapped, skipped, deleted_original}。
+// 绑定上限 2026-09-21 用户裁定 5→8（maxBindingsPerRule）。
 
 func splitRouter(t *testing.T) *gin.Engine {
 	t.Helper()
@@ -223,8 +224,8 @@ func TestSplitSecurityPolicy_overflowRuleSkippedAndOriginalKept(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)
 	mixedID := seedSplitFixture(t)
-	// lb_s1 再绑 4 条其他策略（含原混合共 5 条）——拆分后 4+3=7 超限 → skipped
-	for i := 0; i < 4; i++ {
+	// lb_s1 再绑 7 条其他策略（含原混合共 8 条）——拆分后 7+3=10 超上限 → skipped
+	for i := range 7 {
 		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, "other-"+strconv.Itoa(i))
 		if err != nil {
 			t.Fatal(err)
@@ -263,6 +264,81 @@ func TestSplitSecurityPolicy_overflowRuleSkippedAndOriginalKept(t *testing.T) {
 	}
 	if original != 1 {
 		t.Fatal("original mixed policy must be kept while in use")
+	}
+}
+
+// 上限边界与双门共存（2026-09-21 上限 5→8）：lb_s3 现存 5 条其他绑定+原混合，
+// 拆分后 5+3=8 恰达上限 → 照常重映射；lb_s1 现存 7 条其他（含原混合共 8）→
+// 7+3=10 超上限 skipped；lb_s2 现存 4 条其他+1 条 stage2 并存（5+3=8 不超上限）
+// → 命中限流唯一门 skipped——两门同事务内同时生效，任一命中即保留原绑定，
+// 原策略因 skipped 保留。
+func TestSplitSecurityPolicy_capBoundaryAndStage2GateCoexist(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	mixedID := seedSplitFixture(t)
+	// stage2 存量策略（与 lb_s2 并存绑定，触发限流唯一门）
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
+		VALUES ('cap-rl-live','off',1,200,100,'stage2',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage2ID, _ := res.LastInsertId()
+	addOtherBindings := func(rule string, n int) {
+		t.Helper()
+		for i := range n {
+			res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, rule+"-other-"+strconv.Itoa(i))
+			if err != nil {
+				t.Fatal(err)
+			}
+			oid, _ := res.LastInsertId()
+			if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, rule, oid); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	addOtherBindings("lb_s1", 7) // 现存 8（7+原混合）→ 7+3=10 超上限
+	addOtherBindings("lb_s2", 4) // 现存 5 其他+1 stage2 → 5+3=8 过上限门、中限流门
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_s2',?)`, stage2ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_s3','lb_s3','http','s3.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_s3',?)`, mixedID); err != nil {
+		t.Fatal(err)
+	}
+	addOtherBindings("lb_s3", 5) // 现存 5 其他+原混合 → 5+3=8 恰达上限
+
+	response := postSplit(t, router, mixedID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("split status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload splitPayload
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.Remapped != 1 || len(payload.Data.Skipped) != 2 || payload.Data.DeletedOriginal {
+		t.Fatalf("split result=%+v, want remapped=1 skipped=2 deleted=false", payload.Data)
+	}
+	reasons := map[string]string{}
+	for _, s := range payload.Data.Skipped {
+		id, _ := s["rule_id"].(string)
+		reasons[id], _ = s["reason"].(string)
+	}
+	if !strings.Contains(reasons["lb_s1"], "合并后超过 8 条策略上限") {
+		t.Fatalf("lb_s1 reason=%q, want containing 合并后超过 8 条策略上限", reasons["lb_s1"])
+	}
+	if !strings.Contains(reasons["lb_s2"], "限流") {
+		t.Fatalf("lb_s2 reason=%q, want 限流 uniqueness message", reasons["lb_s2"])
+	}
+	// lb_s3 重映射后恰 8 条绑定（5 其他+3 子策略），原混合绑定消失
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_s3'`).Scan(&count); err != nil || count != 8 {
+		t.Fatalf("lb_s3 binding count=%d (err=%v), want 8", count, err)
+	}
+	var mixedBound int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_s3' AND policy_id=?`, mixedID).Scan(&mixedBound); err != nil || mixedBound != 0 {
+		t.Fatalf("lb_s3 must drop original mixed binding (count=%d, err=%v)", mixedBound, err)
 	}
 }
 
