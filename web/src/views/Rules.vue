@@ -39,7 +39,7 @@
               <el-popover
                 v-if="row.protocol === 'http'"
                 :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
-                placement="bottom"
+                placement="right-start"
                 trigger="hover"
                 :width="360"
                 :popper-options="popperViewportSafe"
@@ -1378,11 +1378,16 @@ const setLockPopover = (caddyId: string, el: unknown): void => {
 
 // 第 48 轮（用户反馈）：表格 hover 弹框（锁摘要/TLS/健康）在靠底或靠顶行会被视口裁切
 // ——Element Plus 未显式开启 Popper 的 flip（placement 固定则不回退）且无 preventOverflow。
-// 统一补：flip 双向回退 + preventOverflow（视口内留 8px 余量）；弹框内容超高时由
+// 统一补：flip 多向回退 + preventOverflow（视口内留 8px 余量）；弹框内容超高时由
 // .rule-lock-popper 的 max-height + overflow-y 内部滚动承接。
+// 第 48 轮追加（用户反馈：靠底行仍越界）：回退候选必须含水平方向——摘要弹框可达视口
+// 高度量级（62vh），上下都不够时纯垂直回退无解，Popper 只能保持原 placement 并溢出
+// （实测 620px 视口下靠底行溢出 116px）。锁摘要弹框改以 right-start 为首选（用户裁定：
+// 太靠下时显示在右侧），上下空间充足与否都不再影响其可见性；小弹框（TLS/健康）保持
+// top 首选，回退顺序统一为 右 → 左 → 上 → 下。
 const popperViewportSafe = {
   modifiers: [
-    { name: 'flip', options: { fallbackPlacements: ['top', 'bottom', 'top-end', 'bottom-end'] } },
+    { name: 'flip', options: { fallbackPlacements: ['right', 'left', 'top', 'bottom'] } },
     { name: 'preventOverflow', options: { padding: 8 } },
   ],
 }
