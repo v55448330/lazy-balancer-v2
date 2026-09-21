@@ -277,14 +277,17 @@ type PathRuleUpstream struct {
 }
 
 type PathRule struct {
-	ID        int                `json:"id"`
-	RuleID    string             `json:"-"`
-	SortOrder int                `json:"sort_order"`
-	MatchType string             `json:"match_type"`
-	Path      string             `json:"path"`
-	Upstreams []PathRuleUpstream `json:"upstreams"`
-	CreatedAt time.Time          `json:"-"`
-	UpdatedAt sql.NullTime       `json:"-"`
+	ID        int    `json:"id"`
+	RuleID    string `json:"-"`
+	SortOrder int    `json:"sort_order"`
+	MatchType string `json:"match_type"`
+	Path      string `json:"path"`
+	// 上游 path 改写：空串=原样转发（现状语义）；非空前缀匹配剥匹配前缀后前置、
+	// 精确匹配整体替换（query 均保留，形状经 caddy 2.11.4 引擎实证）。
+	UpstreamPath string             `json:"upstream_path"`
+	Upstreams    []PathRuleUpstream `json:"upstreams"`
+	CreatedAt    time.Time          `json:"-"`
+	UpdatedAt    sql.NullTime       `json:"-"`
 }
 
 // CertificateConfig represents free certificate configuration (ACME + DNS provider)

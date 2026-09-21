@@ -2331,3 +2331,32 @@ func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
 		t.Fatalf("duplicate rows=%d, want 2 (untouched by safety valve)", dupCount)
 	}
 }
+
+// 上游 path 改写：path_rules.upstream_path 列（TEXT NOT NULL 且默认空串）由
+// fresh DDL 与 newColumns 双通道提供——fresh 初始化后列必须存在且带默认值，
+// 存量库由 ensureNewColumns 幂等补列。
+func TestInitialize_adds_path_rules_upstream_path_column(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+
+	// Then
+	var notNull int
+	var columnDefault string
+	if err := DB.QueryRow(`SELECT "notnull", COALESCE(dflt_value,'') FROM pragma_table_info('path_rules') WHERE name='upstream_path'`).Scan(&notNull, &columnDefault); err != nil {
+		t.Fatalf("read path_rules.upstream_path schema: %v", err)
+	}
+	// SQLite 将 DEFAULT 空串存为带引号字面量（同 policy_type 断言口径）
+	if notNull != 1 || columnDefault != "''" {
+		t.Fatalf("path_rules.upstream_path notnull=%d default=%q, want notnull=1 default empty string", notNull, columnDefault)
+	}
+}

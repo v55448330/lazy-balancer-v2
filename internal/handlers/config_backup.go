@@ -302,6 +302,9 @@ var backupTableNullDefaults = map[string]map[string]any{
 	},
 	"path_rules": {
 		"created_at": "1970-01-01 00:00:00",
+		// 上游 path 改写：NOT NULL 且默认空串的列——NULL 行归一空串（原样转发），
+		// 防手造备份 NULL 撞列约束响亮 500；缺键行由列 DEFAULT 兜底。
+		"upstream_path": "",
 	},
 	"security_policies": {
 		"description": "", "mode": "off", "anomaly_threshold": int64(5),
@@ -1636,9 +1639,10 @@ func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.Path
 		}
 		found = true
 		pathRule := models.PathRule{
-			SortOrder: backupInt(row["sort_order"]),
-			MatchType: backupString(row["match_type"]),
-			Path:      backupString(row["path"]),
+			SortOrder:    backupInt(row["sort_order"]),
+			MatchType:    backupString(row["match_type"]),
+			Path:         backupString(row["path"]),
+			UpstreamPath: backupString(row["upstream_path"]),
 		}
 		if raw, ok := row["upstreams_json"].(string); ok && raw != "" {
 			if err := json.Unmarshal([]byte(raw), &pathRule.Upstreams); err != nil {

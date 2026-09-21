@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"unicode"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -202,9 +203,10 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 	configs := make([]services.PathRuleConfig, 0, len(pathRules))
 	for _, pathRule := range pathRules {
 		config := services.PathRuleConfig{
-			SortOrder: pathRule.SortOrder,
-			MatchType: pathRule.MatchType,
-			Path:      pathRule.Path,
+			SortOrder:    pathRule.SortOrder,
+			MatchType:    pathRule.MatchType,
+			Path:         pathRule.Path,
+			UpstreamPath: pathRule.UpstreamPath,
 		}
 		if pathRule.Upstreams != nil {
 			config.Upstreams = make([]services.UpstreamConfig, 0, len(pathRule.Upstreams))
@@ -351,6 +353,16 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		default:
 			return fmt.Errorf("第 %d 条路径规则的匹配类型只能是 prefix 或 exact", index+1)
 		}
+		// 上游 path 改写：非空须以 / 开头且不含空格与 ? #（query/fragment 不允许，
+		// 空白字符会破坏 Caddy rewrite URI 形状）；空串=原样转发放行。
+		if pathRule.UpstreamPath != "" {
+			if !strings.HasPrefix(pathRule.UpstreamPath, "/") {
+				return fmt.Errorf("第 %d 条路径规则的上游 path 必须以 / 开头", index+1)
+			}
+			if strings.ContainsFunc(pathRule.UpstreamPath, unicode.IsSpace) || strings.ContainsAny(pathRule.UpstreamPath, "?#") {
+				return fmt.Errorf("第 %d 条路径规则的上游 path 不能包含空格 ? # 字符", index+1)
+			}
+		}
 		trimmedPath := strings.TrimSpace(pathRule.Path)
 		canonicalPath := trimmedPath
 		if pathRule.MatchType == "prefix" {
@@ -437,7 +449,7 @@ func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRule
 			}
 			upstreamsJSON = string(encoded)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstreams_json,updated_at) VALUES (?,?,?,?,?,datetime('now'))`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, upstreamsJSON); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,updated_at) VALUES (?,?,?,?,?,?,datetime('now'))`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON); err != nil {
 			return fmt.Errorf("写入规则 %s 的路径规则 %s: %w", ruleID, pathRule.Path, err)
 		}
 	}
@@ -665,7 +677,7 @@ func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json
+	rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json
 		FROM path_rules WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY rule_id, sort_order, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("批量读取路径规则: %w", err)
@@ -674,7 +686,7 @@ func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 	for rows.Next() {
 		var pathRule models.PathRule
 		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON); err != nil {
 			return nil, err
 		}
 		if upstreamsJSON.Valid {

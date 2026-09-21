@@ -2429,7 +2429,7 @@ const removeUpstream = (index: number) => {
 
 const onCustomRoutesToggle = (enabled: string | number | boolean): void => {
   if (Boolean(enabled) && wizardForm.path_rules.length === 0) {
-    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', sort_order: 0, upstreams: null })
+    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', upstream_path: '', sort_order: 0, upstreams: null })
     nextTemporaryPathRuleId -= 1
   }
   if (!enabled) wizardForm.path_rules = []
@@ -2707,6 +2707,7 @@ const submitWizard = async () => {
             ...(pathRule.id !== undefined && pathRule.id > 0 ? { id: pathRule.id } : {}),
             match_type: pathRule.match_type,
             path: pathRule.path,
+            upstream_path: pathRule.upstream_path || '',
             sort_order: index,
             upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
           }))

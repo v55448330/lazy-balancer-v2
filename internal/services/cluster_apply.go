@@ -990,9 +990,9 @@ func insertSnapshotPathRules(ctx context.Context, tx *sql.Tx, ruleID string, pat
 		}
 		var err error
 		if pathRule.ID > 0 {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstreams_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, upstreamsJSON, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
 		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstreams_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, upstreamsJSON, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
 		}
 		if err != nil {
 			return fmt.Errorf("写入快照路径 %s: %w", pathRule.Path, err)

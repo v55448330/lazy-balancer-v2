@@ -800,7 +800,7 @@ func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapsho
 }
 
 func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapshotStore) (map[string][]models.PathRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at FROM path_rules ORDER BY rule_id, sort_order, id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstream_path, upstreams_json, created_at, updated_at FROM path_rules ORDER BY rule_id, sort_order, id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照路径规则: %w", err)
 	}
@@ -809,7 +809,7 @@ func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapsho
 	for rows.Next() {
 		var pathRule models.PathRule
 		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON, &pathRule.CreatedAt, &pathRule.UpdatedAt); err != nil {
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON, &pathRule.CreatedAt, &pathRule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照路径规则: %w", err)
 		}
 		if upstreamsJSON.Valid {

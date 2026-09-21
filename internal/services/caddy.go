@@ -1235,7 +1235,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 
 	if hasCustomRoutes {
 		pathRows, pathErr := store.Query(`
-			SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstreams_json
+			SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstream_path, p.upstreams_json
 			FROM path_rules p JOIN lb_rules r ON r.caddy_id = p.rule_id
 			WHERE r.enabled = 1 AND r.custom_routes_enabled = 1
 			ORDER BY p.rule_id, p.sort_order, p.id
@@ -1247,7 +1247,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			var ruleID string
 			var pathRule PathRuleConfig
 			var upstreamsJSON sql.NullString
-			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); scanErr != nil {
+			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON); scanErr != nil {
 				closeErr := pathRows.Close()
 				return generationFailure("scan path rule: %v", errors.Join(scanErr, closeErr))
 			}
@@ -2308,7 +2308,10 @@ type PathRuleConfig struct {
 	SortOrder int
 	MatchType string
 	Path      string
-	Upstreams []UpstreamConfig
+	// 上游 path 改写：空串=原样转发（零插入）；非空前缀匹配剥前缀后前置、
+	// 精确匹配整体替换（引擎实证形状，见 upstreamPathRewriteHandlers）。
+	UpstreamPath string
+	Upstreams    []UpstreamConfig
 }
 
 type proxyTimeouts struct {
@@ -2742,6 +2745,7 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 			if handleErr != nil {
 				return nil, nil, handleErr
 			}
+			handle = insertUpstreamPathRewrites(handle, pathRule)
 			matcher := map[string]interface{}{
 				"host": domainHosts,
 				"path": pathMatcherSpecs(pathRule),
@@ -2769,11 +2773,79 @@ func pathMatcherSpecs(pathRule PathRuleConfig) []string {
 	if pathRule.MatchType != "prefix" {
 		return []string{pathRule.Path}
 	}
-	root := strings.TrimRight(pathRule.Path, "/*")
+	root := pathPrefixRoot(pathRule.Path)
 	if root == "" {
 		return []string{"/*"}
 	}
 	return []string{root, root + "/*"}
+}
+
+// pathPrefixRoot 归一路径规则前缀根（剥尾部 / 与 *，与校验侧 canonicalPath
+// 同源）；root 为空即「匹配一切」形态（path / 或 /*）。
+func pathPrefixRoot(path string) string {
+	return strings.TrimRight(path, "/*")
+}
+
+// insertUpstreamPathRewrites 在链内最后一个 reverse_proxy 之前插入上游 path
+// 改写 handler。形状经 caddy 2.11.4 容器行为实证：
+//   - 前缀匹配：先 strip_path_prefix 剥匹配前缀根（root 空则无可剥，跳过），
+//     再 rewrite uri 前置 upstream_path——/api/users?x=1 → /v1/users?x=1；
+//   - 精确匹配：单一 rewrite uri 整体替换——/old?a=b → /new?a=b（引擎保留
+//     query；strip+前置形态会产生多余尾斜杠，实证后弃用）；
+//
+// 两个 rewrite 均插在 reverse_proxy 之前：安全段（预检/压缩/限流/WAF）与
+// 指标计数仍检原始 URI。空 upstream_path 零插入（链与现状逐字节一致）。
+func insertUpstreamPathRewrites(handle []interface{}, pathRule PathRuleConfig) []interface{} {
+	rewrites := upstreamPathRewriteHandlers(pathRule)
+	if len(rewrites) == 0 {
+		return handle
+	}
+	proxyIndex := -1
+	for index := len(handle) - 1; index >= 0; index-- {
+		if handler, ok := handle[index].(map[string]interface{}); ok && handler["handler"] == "reverse_proxy" {
+			proxyIndex = index
+			break
+		}
+	}
+	if proxyIndex < 0 {
+		// 链尾恒为 reverse_proxy（buildHTTPHandleChain 契约）；无 proxy 时
+		// 原样返回，不产生无法执行的改写链。
+		return handle
+	}
+	rewritten := make([]interface{}, 0, len(handle)+len(rewrites))
+	rewritten = append(rewritten, handle[:proxyIndex]...)
+	rewritten = append(rewritten, rewrites...)
+	rewritten = append(rewritten, handle[proxyIndex:]...)
+	return rewritten
+}
+
+func upstreamPathRewriteHandlers(pathRule PathRuleConfig) []interface{} {
+	if pathRule.UpstreamPath == "" {
+		return nil
+	}
+	rewrites := make([]interface{}, 0, 2)
+	if pathRule.MatchType == "prefix" {
+		if root := pathPrefixRoot(pathRule.Path); root != "" {
+			rewrites = append(rewrites, map[string]interface{}{
+				"handler":           "rewrite",
+				"strip_path_prefix": root,
+			})
+		}
+	}
+	rewrites = append(rewrites, map[string]interface{}{
+		"handler": "rewrite",
+		"uri":     pathRule.UpstreamPath + prefixURIPlaceholder(pathRule),
+	})
+	return rewrites
+}
+
+// prefixURIPlaceholder 前缀匹配把剥前缀后的原始 URI（含 query）接到
+// upstream_path 之后；精确匹配整体替换，无占位符（query 由引擎保留）。
+func prefixURIPlaceholder(pathRule PathRuleConfig) string {
+	if pathRule.MatchType == "prefix" {
+		return "{http.request.uri}"
+	}
+	return ""
 }
 
 func joinUpstreamAddress(host string, port int) string {

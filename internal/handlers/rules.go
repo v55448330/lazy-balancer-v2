@@ -2474,8 +2474,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	if rule.CustomRoutesEnabled {
 		if _, err := tx.Exec(`
-			INSERT INTO path_rules (rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at)
-			SELECT ?, sort_order, match_type, path, upstreams_json, datetime('now'), datetime('now') FROM path_rules WHERE rule_id = ?
+			INSERT INTO path_rules (rule_id, sort_order, match_type, path, upstream_path, upstreams_json, created_at, updated_at)
+			SELECT ?, sort_order, match_type, path, upstream_path, upstreams_json, datetime('now'), datetime('now') FROM path_rules WHERE rule_id = ?
 		`, newCaddyID, caddyID); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制路径规则失败，已回滚: " + err.Error()})
 			return

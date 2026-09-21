@@ -37,6 +37,8 @@ export interface PathRule {
   id?: number
   match_type: 'prefix' | 'exact'
   path: string
+  // 上游 path 改写：空串=原样转发；非空前缀剥匹配前缀后前置、精确整体替换（query 保留）
+  upstream_path: string
   sort_order: number
   upstreams: PathRuleUpstream[] | null
 }

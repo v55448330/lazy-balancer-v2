@@ -38,6 +38,18 @@
             <span v-else-if="rowShadowWarning(index)" class="path-field-warning">{{ rowShadowWarning(index) }}</span>
           </label>
 
+          <label class="rule-field upstream-path-field">
+            <span class="rule-field-label">上游 path</span>
+            <el-input
+              v-model="rule.upstream_path"
+              :aria-label="`路径规则 ${index + 1} 的上游 path`"
+              placeholder="留空=原样转发"
+              :class="{ 'is-error-input': upstreamError(index) }"
+            />
+            <span v-if="upstreamError(index)" class="path-field-error">{{ upstreamError(index) }}</span>
+            <span v-else class="path-field-hint">{{ upstreamHint(rule) }}</span>
+          </label>
+
           <div class="path-rule-actions">
             <el-tooltip content="上移" placement="top">
               <el-button :icon="ArrowUp" size="small" plain :disabled="index === 0" aria-label="上移路径规则" @click="moveRule(index, -1)" />
@@ -166,8 +178,24 @@ const normalizeOrder = (): void => {
   pathRules.value.forEach((rule, index) => { rule.sort_order = index })
 }
 
+// 上游 path 改写：与后端 validateRuleFeatures 同口径——非空须以 / 开头且
+// 不含空格 ? #（query/fragment 不允许）；空串=原样转发。返回空串即无错误。
+const upstreamError = (index: number): string => {
+  const rule = pathRules.value[index]
+  if (!rule || !rule.upstream_path) return ''
+  if (!rule.upstream_path.startsWith('/')) return '必须以 / 开头'
+  if (/[\s?#]/.test(rule.upstream_path)) return '不能包含空格 ? # 字符'
+  return ''
+}
+
+// 上游 path 改写的生效方式随匹配方式变化，展示语义提示替代报错文案。
+const upstreamHint = (rule: PathRule): string => {
+  if (!rule.upstream_path) return '留空=原样转发'
+  return rule.match_type === 'prefix' ? '剥匹配前缀后前置该 path' : '转发 path 整体替换为该 path'
+}
+
 const addRule = (): void => {
-  pathRules.value.push({ match_type: 'prefix', path: '/', sort_order: pathRules.value.length, upstreams: null })
+  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null })
 }
 
 const removeRule = (index: number): void => {
@@ -221,7 +249,7 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rules-list { display: flex; flex-direction: column; gap: 12px; }
 .path-rule-card { border-color: var(--border); background: var(--bg-primary); }
 .path-rule-card :deep(.el-card__body) { padding: 16px; }
-.path-rule-main-row { display: grid; grid-template-columns: auto minmax(0, 0.7fr) minmax(0, 1.3fr) auto; align-items: end; gap: 12px; }
+.path-rule-main-row { display: grid; grid-template-columns: auto minmax(0, 0.6fr) minmax(0, 1.1fr) minmax(0, 0.9fr) auto; align-items: end; gap: 12px; }
 .path-rule-order { align-self: center; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .rule-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .rule-field-label, .mobile-field-label { color: var(--text-regular); font-size: 13px; font-weight: 500; }
@@ -263,6 +291,12 @@ const onWeightChange = (rule: PathRule, index: number): void => {
   margin-top: 4px;
   font-size: 12px;
   color: var(--el-color-warning);
+}
+.path-field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 .is-error-input :deep(.el-input__wrapper) {
   box-shadow: 0 0 0 1px var(--el-color-danger) inset;
