@@ -2,7 +2,7 @@ services:
   # 主从两个容器共用同一镜像（image 标签与 Docker Hub 推送的一致）。
   # 本地开发迭代时执行：docker compose build lazy-balancer && docker compose up -d
   lazy-balancer:
-    image: v55448330/lazy-balancer-v2:v2.3.0
+    image: v55448330/lazy-balancer-v2:v2.3.1
     logging:
       driver: json-file
       options:
@@ -11,12 +11,12 @@ services:
     build:
       context: .
       args:
-        VERSION: v2.3.0
+        VERSION: v2.3.1
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
     volumes:
-      - ./data:/app/data
+      - lb-data:/app/data # named volume：SQLite WAL 不经宿主共享层（gRPC FUSE/VirtioFS 丢页族根治，2026-09-20 两次事故后裁定）
       - ./logs:/app/logs
       - ./certs:/app/certs
       - ./waf:/app/waf
@@ -37,7 +37,7 @@ services:
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 主节点地址注册时填写: http://host.docker.internal:8000
   lazy-balancer-slave:
-    image: v55448330/lazy-balancer-v2:v2.3.0
+    image: v55448330/lazy-balancer-v2:v2.3.1
     logging:
       driver: json-file
       options:
@@ -47,7 +47,7 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - ./data-slave:/app/data
+      - lb-data-slave:/app/data # 同上（从节点独立卷）
       - ./logs-slave:/app/logs
       - ./certs-slave:/app/certs
       # 独立 WAF 目录：两节点的 CRS/IP2Region 每日更新会并发写共享目录，存在竞争
@@ -63,3 +63,7 @@ services:
         soft: 1048576
         hard: 1048576
     restart: unless-stopped
+
+volumes:
+  lb-data:
+  lb-data-slave:
