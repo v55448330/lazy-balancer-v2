@@ -299,11 +299,16 @@ type CRSInfo struct {
 	IsLatest     *bool  `json:"is_latest,omitempty"`
 	UpdateStatus string `json:"update_status"`
 	Message      string `json:"message"`
-	Trigger      string `json:"trigger"`
+	// Available：规则目录真实可用（探针文件在）——缺库降级（2026-09-24 裁定）
+	// 的前端感知面；false 时安全链整体不渲染（见 SecurityLibrariesAvailable）。
+	Available bool   `json:"available"`
+	Trigger   string `json:"trigger"`
 }
 
 type IP2RegionInfo struct {
-	Version      string `json:"version"`
+	Version string `json:"version"`
+	// Available：库文件存在非空（缺库降级感知面，同 CRSInfo.Available）
+	Available    bool   `json:"available"`
 	DbSize       int    `json:"db_size"`
 	UpdatedAt    string `json:"updated_at"`
 	AutoUpdate   bool   `json:"auto_update"`

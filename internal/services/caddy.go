@@ -3274,9 +3274,19 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// headers→metrics→counter→(subroute 跳过)→reverse_proxy 直达上游，
 	// 零安全事件（不产生任何 coraza 事务）；保留检测（trust_detection=1）
 	// 无此包裹，信任 IP 经预检/引擎 id:12 DetectionOnly 全评估全记录。
-	detectionTrust, passthroughUnion := stage0TrustSets(policies)
+	// 缺库降级（2026-09-24 用户裁定）：CRS/IP2Region 库缺失时全部安全规则不
+	// 渲染（预检/ACL/限流/WAF/GeoIP 一并缺席），告警日志提示补库——coraza
+	// Include 缺失文件会使整份配置被 caddy validate 拒绝，负载均衡也被拖死。
+	securityLibsOK := SecurityLibrariesAvailable()
+	var detectionTrust []string
+	var passthroughUnion []string
+	if securityLibsOK {
+		detectionTrust, passthroughUnion = stage0TrustSets(policies)
+	} else if rule.Protocol == "http" && len(policies) >= 1 {
+		Logf("warn", "安全规则库缺失（%s），规则 %s 的所有安全规则本次渲染不生效", securityLibrariesMissingDesc(), rule.CaddyID)
+	}
 	var securityChain []interface{}
-	if rule.Protocol == "http" && len(policies) >= 1 {
+	if securityLibsOK && rule.Protocol == "http" && len(policies) >= 1 {
 		// 单行护栏错误（48KiB 超限）向上传播——保存侧经 CLI 校验/事务门控回滚。
 		precheckHandler, err := buildIPPrecheckHandler(policies, stage1BlockStatus(ctx, rule))
 		if err != nil {
@@ -3333,13 +3343,15 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		}
 		return chainFingerprint
 	}
-	for _, policy := range policies {
-		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
-			securityChain = append(securityChain, rateLimitHandler)
+	if securityLibsOK {
+		for _, policy := range policies {
+			if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
+				securityChain = append(securityChain, rateLimitHandler)
+			}
 		}
 	}
 	for _, policy := range policies {
-		if rule.Protocol == "http" {
+		if securityLibsOK && rule.Protocol == "http" {
 			// SECLB32-1(第 32 轮审计,取代 SECLB31-2 抑制):多策略时传
 			// multiPolicy=true——策略层 IP ACL 改链式自排除本策略信任集:
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截

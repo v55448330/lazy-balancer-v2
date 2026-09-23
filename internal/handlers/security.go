@@ -954,7 +954,17 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	// crs_excluded_rules 作用域条目引用的 IP 列表同口径单批存在性校验。
-	if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(req.CRSExcludedRules), nil); err != nil {
+	crsRefIDs := crsExcludedListRefs(req.CRSExcludedRules)
+	if msg, err := validateIPListRefsExistence(tx, crsRefIDs, nil); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+		return
+	}
+	// 内置威胁名单引用门禁（2026-09-24 用户裁定）：system=1 名单仅允许
+	// IP ACL 黑名单（deny）引用；信任名单/白名单模式/CRS 排除一律拒绝。
+	if msg, err := validateBuiltinThreatListRefs(tx, aclRefsIDs, wlRefsIDs, crsRefIDs, req.IPACLMode); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	} else if msg != "" {
@@ -1612,6 +1622,43 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// DeleteIPList 的引用扫描拦截。
 	if req.CRSExcludedRules != nil {
 		if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(*req.CRSExcludedRules), nil); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		} else if msg != "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+			return
+		}
+	}
+	// 内置威胁名单引用门禁（2026-09-24 用户裁定，update 口径）：system=1 名单
+	// 仅允许 IP ACL 黑名单（deny）引用。请求值 ?? 存量值合并后判定——只改模式
+	// （deny→allow）而存量引用携带内置名单、或只改引用为内置名单而存量模式为
+	// allow，都必须拦截。
+	if req.IPACLListRefs != nil || req.IPWhitelistRefs != nil || req.IPACLMode != nil || req.CRSExcludedRules != nil {
+		var storedMode, storedACLRefs, storedWLRefs string
+		if err := tx.QueryRow("SELECT COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies WHERE id=?", id).Scan(&storedMode, &storedACLRefs, &storedWLRefs); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			} else {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略引用配置失败"})
+			}
+			return
+		}
+		effMode := storedMode
+		if ipACLMode != "" {
+			effMode = ipACLMode
+		}
+		effACLRefs, effWLRefs := aclRefsIDs, wlRefsIDs
+		if req.IPACLListRefs == nil {
+			effACLRefs = parseIPListRefsIDs(storedACLRefs)
+		}
+		if req.IPWhitelistRefs == nil {
+			effWLRefs = parseIPListRefsIDs(storedWLRefs)
+		}
+		var effCRSRefs []int64
+		if req.CRSExcludedRules != nil {
+			effCRSRefs = crsExcludedListRefs(*req.CRSExcludedRules)
+		}
+		if msg, err := validateBuiltinThreatListRefs(tx, effACLRefs, effWLRefs, effCRSRefs, effMode); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		} else if msg != "" {
@@ -3255,10 +3302,12 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 }
 
 func (h *Handlers) GetCRSInfo(c *gin.Context) {
+	crsOK, _ := services.SecurityLibraryStatus()
 	info := models.CRSInfo{
 		Version:       services.CRSBundledVersion,
 		ServerVersion: getCaddyVersion(),
 		AutoUpdate:    true,
+		Available:     crsOK,
 		// N2(第 16 轮):默认 nil=未知(latest 缓存未知/版本解析失败时三态化,
 		// 不再 fail-open 宣称「已是最新」)。
 		UpdateStatus: "idle",
@@ -3398,9 +3447,11 @@ func (h *Handlers) GetCRSUpdateLogs(c *gin.Context) {
 }
 
 func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
+	_, ipOK := services.SecurityLibraryStatus()
 	info := models.IP2RegionInfo{
-		Version: services.GetIP2RegionVersion(),
-		DbSize:  services.GetIP2RegionEntryCount(),
+		Available: ipOK,
+		Version:   services.GetIP2RegionVersion(),
+		DbSize:    services.GetIP2RegionEntryCount(),
 		// R72 二十六次 D2：行缺失兜底与 schema/种子默认对齐（TRUE）。
 		AutoUpdate:   true,
 		UpdateStatus: "idle",

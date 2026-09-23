@@ -202,8 +202,9 @@ const ipLists = ref<IpListOption[]>([])
 const selectedListId = ref<number | undefined>(undefined)
 const { adding: savingToList, addIpToList } = useIpListAdd()
 
-// 引用列表条目缓存：/security/ip-lists 响应本身携带 entries，选项下拉与
-// 「内联 ∪ 引用」合并口径共用同一次拉取，避免为 refs 引入第二次请求
+// 引用列表条目缓存：v2.3.2 起 /security/ip-lists 列表载荷不再内联 entries
+// （大名单 460KB/行），条目值按需经 GET /security/ip-lists/:id 拉取——
+// 仅拉取在案策略引用到的名单，避免为 refs 背全量条目
 interface IpListWithEntries extends IpListOption {
   entries?: Array<{ value: string; remark?: string }>
 }
@@ -212,12 +213,22 @@ const ipListEntries = ref<Record<number, string[]>>({})
 const loadIpLists = async (): Promise<void> => {
   try {
     const res = await request.get<APIResponse<IpListWithEntries[]>>('/security/ip-lists')
-    const lists = res.data || []
-    ipLists.value = lists
-    const map: Record<number, string[]> = {}
-    for (const l of lists) {
-      map[l.id] = (l.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+    ipLists.value = res.data || []
+    // 在案策略引用到的名单按需拉条目（成员判定/合并口径的真实值来源）
+    const refIds = new Set<number>()
+    for (const p of policies.value) {
+      for (const id of parseRefIds(p.ip_acl_list_refs)) refIds.add(id)
+      for (const id of parseRefIds(p.ip_whitelist_refs)) refIds.add(id)
     }
+    const results = await Promise.allSettled(
+      [...refIds].map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)),
+    )
+    const map: Record<number, string[]> = {}
+    results.forEach((r) => {
+      if (r.status === 'fulfilled' && r.value.data) {
+        map[r.value.data.id] = (r.value.data.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+      }
+    })
     ipListEntries.value = map
   } catch {
     ipLists.value = []
@@ -322,15 +333,17 @@ const loadPolicies = async (): Promise<void> => {
   // 注:loadIpLists 内部写 ipLists ref 未纳入本 seq(独立加载面,
   // 亚秒级关开竞态的展示瞬态;若需彻底,可在该函数加同款守卫)。
   const seq = ++loadPoliciesSeq
-  const listsPromise = loadIpLists()
   policiesLoading.value = true
   try {
     const url = props.ruleCaddyId
       ? `/security/policies?enabled=true&rule_caddy_id=${encodeURIComponent(props.ruleCaddyId)}`
       : '/security/policies?enabled=true'
-    const [res] = await Promise.all([request.get<APIResponse<PolicyRow[]>>(url), listsPromise])
+    const res = await request.get<APIResponse<PolicyRow[]>>(url)
     if (seq !== loadPoliciesSeq) return
     policies.value = (res.data || []).map(normalizeRow)
+    // 名单条目按需拉取依赖 policies 的引用清单（列表载荷不含 entries）——
+    // 须在 policies 就位后执行
+    await loadIpLists()
     policiesError.value = false
   } catch {
     if (seq !== loadPoliciesSeq) return

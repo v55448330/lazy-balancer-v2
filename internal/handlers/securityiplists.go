@@ -127,6 +127,70 @@ func validateIPListRefsExistence(q policyQueryRower, aclIDs, wlIDs []int64) (str
 	return "", nil
 }
 
+// validateBuiltinThreatListRefs 内置威胁名单引用门禁（2026-09-24 用户裁定）：
+// system=1 名单（威胁情报库三源）仅允许 IP ACL 黑名单（deny）引用——
+// 信任名单 / ACL 白名单（allow、bypass）/ CRS 排除作用域一律拒绝。
+// aclMode 为生效模式（请求值 ?? 存量值，由调用方合并）。与存在性校验同型：
+// 单批 IN 查询取 system 标记，命中即返回用户可读提示。
+func validateBuiltinThreatListRefs(q policyQueryRower, aclIDs, wlIDs, excludedIDs []int64, aclMode string) (string, error) {
+	all := append(append(append([]int64{}, aclIDs...), wlIDs...), excludedIDs...)
+	if len(all) == 0 {
+		return "", nil
+	}
+	seen := make(map[int64]struct{}, len(all))
+	unique := make([]interface{}, 0, len(all))
+	placeholders := make([]string, 0, len(all))
+	for _, id := range all {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+		placeholders = append(placeholders, "?")
+	}
+	builtin := make(map[int64]string)
+	rows, err := q.Query("SELECT id, name FROM security_ip_lists WHERE system=1 AND id IN ("+strings.Join(placeholders, ",")+")", unique...)
+	if err != nil {
+		return "", err
+	}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return "", err
+		}
+		builtin[id] = name
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(builtin) == 0 {
+		return "", nil
+	}
+	in := func(ids []int64) (int64, bool) {
+		for _, id := range ids {
+			if _, ok := builtin[id]; ok {
+				return id, true
+			}
+		}
+		return 0, false
+	}
+	if id, hit := in(wlIDs); hit {
+		return fmt.Sprintf("「%s」是内置威胁情报名单，仅允许用于 IP 访问控制的黑名单模式，不能用于信任名单", builtin[id]), nil
+	}
+	if aclMode != "deny" {
+		if id, hit := in(aclIDs); hit {
+			return fmt.Sprintf("「%s」是内置威胁情报名单，仅允许用于 IP 访问控制的黑名单模式", builtin[id]), nil
+		}
+	}
+	if id, hit := in(excludedIDs); hit {
+		return fmt.Sprintf("「%s」是内置威胁情报名单，仅允许用于 IP 访问控制的黑名单模式，不能用于 CRS 排除", builtin[id]), nil
+	}
+	return "", nil
+}
+
 // validateIPListShape 校验列表载荷并返回解析后的条目：名称非空 ≤50、描述 ≤200、
 // 分类 ≤32、条目数 ≤500、value 过 validIPOrCIDR、remark ≤100。
 func validateIPListShape(name, description, category, entriesJSON string) ([]models.IPListEntry, error) {
@@ -324,6 +388,13 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	if dup > 0 {
+		// 与内置威胁名单重名给出专属提示（2026-09-24 用户裁定：用户名单
+		// 不允许与内置名单重名——选择器分组依赖名字区分归属）
+		var sysDup int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", req.Name).Scan(&sysDup); err == nil && sysDup > 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该名称为内置威胁情报名单保留，请换一个名称"})
+			return
+		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
 		return
 	}

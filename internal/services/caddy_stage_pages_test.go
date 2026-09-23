@@ -14,6 +14,7 @@ import (
 // 阶段 1 覆盖：预检全部 deny（IP ACL 并集 id:2 与 GeoIP 链首 800000+）抬码
 // 481，错误路由装配发射 481 阶段路由（阶段页内容+状态码）。
 func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：规则配阶段 1 页（页 7，状态码 451）；策略带 deny ACL + GeoIP（无策略页）
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -89,6 +90,7 @@ func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
 // 阶段 3 覆盖：全部策略段 deny 抬 482（逐策略合成码 483+ 被覆盖层压过），
 // 发射 482 阶段路由；阶段 1 未配 → 预检保持 403。
 func TestStageBlockPages_stage3LiftsAllPolicySegmentsAndRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：两条有页策略（本可分 483/484）+ 规则配阶段 3 页（页 9，503）
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -152,6 +154,7 @@ func TestStageBlockPages_stage3LiftsAllPolicySegmentsAndRoute(t *testing.T) {
 // 阶段页内容为空 = 视为未配（跟随策略）：策略段回落逐策略合成码 483+，
 // 不发射 482 阶段路由。
 func TestStageBlockPages_emptyPageContentFallsBackToPolicy(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：阶段 3 页 id 指向空内容页；两条有页策略
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)

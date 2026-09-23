@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -19,6 +20,25 @@ func (m *ThreatUpdateManager) SetMasterRole(isMaster bool) {
 		return
 	}
 	m.StopScheduler()
+}
+
+// 威胁库自动更新总开关（v2.3.2 用户裁定）：global_config.threat_auto_update
+// 为任务级总闸（规则库卡片父行开关）；逐源 update_enabled 决定任务更新
+// 哪些源（弹框内开关）。两者解耦——总闸关闭时整任务不启动。
+func SetThreatAutoUpdate(enabled bool) error {
+	if _, err := db.DB.Exec(`UPDATE global_config SET threat_auto_update=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
+		return fmt.Errorf("更新威胁库自动更新开关: %w", err)
+	}
+	return nil
+}
+
+// ThreatAutoUpdateEnabled 读任务级总闸（读错 fail-closed=视为关）。
+func ThreatAutoUpdateEnabled() bool {
+	var v int
+	if err := db.DB.QueryRow(`SELECT COALESCE(threat_auto_update,1) FROM global_config WHERE id=1`).Scan(&v); err != nil {
+		return false
+	}
+	return v != 0
 }
 
 func (m *ThreatUpdateManager) StartScheduler() {
@@ -61,6 +81,10 @@ func (m *ThreatUpdateManager) StopScheduler() {
 func (m *ThreatUpdateManager) schedulerTick(now time.Time) {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		return
+	}
+	// 任务级总闸：关闭时整任务不启动（逐源开关决定更新哪些源，与总闸解耦）。
+	if !ThreatAutoUpdateEnabled() {
 		return
 	}
 	if m.IsRunning() {

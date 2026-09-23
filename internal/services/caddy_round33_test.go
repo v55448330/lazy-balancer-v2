@@ -11,6 +11,7 @@ import (
 // 策略变更（此前逐规则 GetSecurityPolicyForRule 走全局 db.DB，SQLite 下另一
 // 连接看不到未提交事务，主从节点事务性重载存在安全配置滞后）。
 func TestGenerateCaddyConfigFromStore_readsUncommittedPolicyThroughTx(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)

@@ -9,6 +9,8 @@ export interface IpListOption {
   id: number
   name: string
   entry_count: number
+  /** system=内置威胁名单（只读，更新任务独占写）——「加入/存入」下永不列出 */
+  system?: boolean
 }
 
 /** 地址列表下拉选项 label（列表名 + 条数）——两处消费统一格式 */
@@ -20,7 +22,8 @@ export const ipListOptionLabel = (list: IpListOption): string => `${list.name}�
  */
 export const fetchIpListOptions = async (): Promise<IpListOption[]> => {
   const res = await request.get<APIResponse<IpListOption[]>>('/security/ip-lists')
-  return res.data || []
+  // 内置威胁名单只读（后端拒写），从「加入/存入」类选择器剔除（2026-09-24 裁定）
+  return (res.data || []).filter((l) => !l.system)
 }
 
 export interface AddIpToListOptions {

@@ -197,6 +197,7 @@ func TestApplySnapshot_emptySecurityPayloadDeletesRows(t *testing.T) {
 }
 
 func TestSyncService_applySnapshot_securityVisibleToCommittedCaddyConfig(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given: a master snapshot with a WAF policy bound to an HTTP rule
 	cluster, database := newClusterTestService(t)
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_sec','sec','http','sec.example.com',80,1)`); err != nil {

@@ -132,6 +132,7 @@ func mpCountGeoipPassRoutes(t *testing.T, routes []map[string]interface{}) int {
 // 限流（全部策略 rate_limit 集中）→ 阶段 3 每策略独立 WAF 引擎（policy_id ASC）。
 // 纯 GeoIP 策略（p1 off+geoip）不再贡献策略 waf，GeoIP 链由预检 800000+ 段承接。
 func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given 一条规则绑定三条启用策略（绑定顺序故意打乱，验证按 policy_id ASC）：
 	// p1(off+geoip) < p2(blocking+限流) < p3(detection+geoip)
 	_, database := newClusterTestService(t)
@@ -229,6 +230,7 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 // SC-GEN-02：两条策略同时开启限流 → 2 个 rate_limit 处理器，zone 键互不相同且
 // 嵌入 policy_id（{ruleID}-p{policyID}-sec / -min；burst=0 时 {ruleID}-p{policyID}）。
 func TestMultiPolicy_RateLimitZoneKeys_EmbedPolicyID(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen2", "gen2.example.test", 8080)
@@ -283,6 +285,7 @@ func TestMultiPolicy_RateLimitZoneKeys_EmbedPolicyID(t *testing.T) {
 // 策略 waf 的索引（单/多策略链形状同构：阶段 1 预检 → 阶段 2 限流 → 阶段 3
 // WAF；限流恒 429，被前位 WAF 拦的请求也消耗后位策略配额为已裁定口径）。
 func TestMultiPolicy_RateLimitStagePrecedesAllWafEngines(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given 一条规则绑定两条 blocking+限流策略（无 IP 控制/GeoIP → 无预检段）：
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_stage", "stage.example.test", 8080)
@@ -450,6 +453,7 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 // SC-GEN-05：disabled 策略在生成中零贡献（无处理器/路由/错误路由），同规则的
 // enabled 兄弟策略照常贡献。
 func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given p1(enabled, blocking) < p2(DISABLED, 限流+geoip+拦截页)——旧 MAX 语义
 	// 取最高绑定会命中 disabled 而整规则无策略，新语义必须只看见 p1。
 	useTemporaryCertDir(t)
@@ -499,6 +503,7 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 // 预检仍是 coraza 拒绝（audit log 留痕、403 interruption → 拦截页错误路由）。
 // 单策略同构亦走预检（见 caddy.go:3180-3194）：ACL 并集与引擎 id:2/4 幂等重复无害——预检先拦，引擎内不再命中。
 func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：p1(detection CRS) < p2(deny ACL 203.0.113.5)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen6", "gen6.example.test", 8080)
@@ -557,6 +562,7 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 // 重复无害——预检先拦，引擎内不再命中）；无 deny 侧 IP 控制且无 GeoIP 时
 // 主链形状不变（不新增预检 waf）。
 func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given A：单策略 + deny ACL → 预检同构发射（阶段 1）+ 策略引擎各一
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen7a", "gen7a.example.test", 8080)
@@ -604,6 +610,7 @@ func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
 // SC-GEN-08：allow 模式白名单并入预检——多条 allow 模式策略取交集，仅交集内
 // IP 通过预检；交集为空（互斥名单）时拒绝一切（与逐策略顺序评估等价）。
 func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：p1(detection) < p2(allow 203.0.113.0/24,10.0.0.1) < p3(allow 10.0.0.1)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen8", "gen8.example.test", 8080)
@@ -640,6 +647,7 @@ func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
 // (链序在 waf 之前)——coraza 响应拦截器包在 coraza handler 外层,encode 若在
 // waf 内侧,响应体规则扫描的是压缩后字节(≥512B 可压缩响应恒不匹配,静默失明)。
 func TestMultiPolicy_EncodeHandlerPrecedesWafForResponseBodyInspection(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	_, database := newClusterTestService(t)
 	rule := mpGenHTTPRule("mp-encode-r", "encode.test")
 	rule.EnableCompress = true
@@ -672,6 +680,7 @@ func TestMultiPolicy_EncodeHandlerPrecedesWafForResponseBodyInspection(t *testin
 // 用户限额>128MiB 时 WAF 活跃规则 body 在 128MiB 处被拦;413 语义被压平。
 // 修复:按规则有效限额发射 SecRequestBodyLimit(min(用户值,1GiB))。
 func TestMultiPolicy_RequestBodyLimitInWafDirectives(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	_, database := newClusterTestService(t)
 	rule := mpGenHTTPRule("mp-bodylimit-r", "bodylimit.test")
 	rule.RequestBodyMaxSizeMB = 50
@@ -708,6 +717,7 @@ func TestMultiPolicy_RequestBodyLimitInWafDirectives(t *testing.T) {
 // 不拦但全记录(取代 S1 的「并入 allow 放行集」——并入会使信任 IP 不触发
 // 规则=无检测事件,与「可见放行」冲突)。
 func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given:两策略,P1 allow 模式+信任 198.51.100.9,P2 deny 模式(198.51.100.9 在 deny 名单)
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec(`INSERT INTO security_policies (name, mode, enabled, ip_acl_enabled, ip_acl_mode, ip_acl_list, ip_whitelist_enabled, ip_whitelist) VALUES

@@ -417,6 +417,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/security/crs/update", h.StartCRSUpdate)
 				admin.PUT("/security/ip2region/auto-update", h.UpdateIP2RegionAutoUpdate)
 				admin.POST("/security/ip2region/update", h.StartIP2RegionUpdate)
+				admin.PUT("/security/threat-lib/auto-update", h.UpdateThreatAutoUpdate)
 				admin.PUT("/security/threat-lib/:id/flags", h.UpdateThreatSourceFlags)
 				admin.POST("/security/threat-lib/update", h.StartThreatLibUpdate)
 				admin.POST("/security/custom-rules", h.CreateSecurityCustomRule)

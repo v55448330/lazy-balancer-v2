@@ -45,6 +45,7 @@ func seedCustomRuleInTx(t *testing.T, tx *sql.Tx, name string) int {
 // 发射的 WAF 指令必须包含该规则的 id 与 msg——修复前
 // resolvePolicyCustomRules 走全局 db.DB 看不到未提交行，规则静默丢失。
 func TestGenerateCaddyConfigFromStore_readsUncommittedCustomRuleThroughTx(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)

@@ -306,7 +306,7 @@ func TestThreatDueSources_emptyListIsDue(t *testing.T) {
 	}
 
 	// ustc 名单填内容 → 仅剩 2 个到期
-	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='[{"value":"203.0.113.1/32","remark":""}]' WHERE name='威胁情报库-中科大黑 IP'`); err != nil {
+	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='[{"value":"203.0.113.1/32","remark":""}]' WHERE name=?`, db.ThreatListNameBySource("ustc")); err != nil {
 		t.Fatal(err)
 	}
 	due, err = threatDueSources("auto")

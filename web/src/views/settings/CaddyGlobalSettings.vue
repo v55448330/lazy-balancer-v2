@@ -61,12 +61,14 @@
       </el-form-item>
 
       <el-divider content-position="left">安全防护</el-divider>
-      <el-form-item label="启用受信代理">
-        <el-switch v-model="settings.trusted_proxy_enabled" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
-        <el-text type="info" size="small" class="tip-inline">站点经 CDN/前置代理回源时开启：按网段+请求头取真实客户端 IP（IP 名单/地域/限流随之按真实 IP 判定）</el-text>
+      <el-form-item label="启用授信代理">
+        <div class="trusted-toggle">
+          <el-switch v-model="settings.trusted_proxy_enabled" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
+          <el-text type="info" size="small" class="tip-block">站点经 CDN/前置代理回源时开启：按网段+请求头取真实客户端 IP（IP 名单/地域/限流随之按真实 IP 判定）</el-text>
+        </div>
       </el-form-item>
       <template v-if="settings.trusted_proxy_enabled">
-        <el-form-item label="受信网段">
+        <el-form-item label="授信网段">
           <el-select
             v-model="trustedRanges"
             multiple
@@ -96,13 +98,14 @@
           <el-select
             v-model="trustedPresetKey"
             :disabled="isReadOnly"
-            placeholder="按 CDN 填充请求头（仅辅助输入）"
+            placeholder="按 CDN 填充请求头"
             clearable
-            class="trusted-field"
+            class="trusted-preset-field"
             @change="applyTrustedPreset"
           >
             <el-option v-for="preset in CDN_PRESETS" :key="preset.label" :label="preset.label" :value="preset.label" />
           </el-select>
+          <el-text type="info" size="small" class="tip-block">按所选 CDN 一键填充上方「请求头」推荐值；仅辅助输入，不影响已填内容以外的配置</el-text>
         </el-form-item>
         <el-form-item label="严格模式">
           <el-switch v-model="settings.trusted_proxy_strict" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
@@ -398,6 +401,8 @@ onUnmounted(stopLogPolling)
 .compact-select { width: 240px; max-width: 100%; }
 .number-input { width: 120px; }
 .trusted-field { width: 100%; max-width: 560px; }
+.trusted-preset-field { width: 260px; }
+.trusted-toggle { display: flex; flex-direction: column; align-items: flex-start; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
 .tip-block { display: block; flex-basis: 100%; margin-top: 4px; line-height: 1.5; }
 /* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */

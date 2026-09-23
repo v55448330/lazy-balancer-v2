@@ -90,6 +90,7 @@ func TestTrustedProxyRender_absentWhenDisabled(t *testing.T) {
 // 阶段 0 信任直通 subroute matcher 改用 client_ip（受信代理启用时=真实 IP；
 // 未启用时与 remote_ip 同值，行为不变）。
 func TestStage0MatcherIsClientIP(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：stage0 直通策略绑定
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_trust", "trust.example.test", 8080)
@@ -117,6 +118,7 @@ func TestStage0MatcherIsClientIP(t *testing.T) {
 // 限流 zone key 改用 {http.vars.client_ip}（受信代理启用时=真实 IP，
 // 未启用=socket IP，行为不变）——单 zone 与 burst 双 zone 分支同口径。
 func TestRateLimitKeyIsClientIP(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：burst=0 单 zone + burst>0 双 zone 各一规则
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_rl_single", "rl-single.example.test", 8080)

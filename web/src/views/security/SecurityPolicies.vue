@@ -248,7 +248,10 @@
             </el-form-item>
             <el-form-item label="引用地址列表">
               <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
-                <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                <!-- 内置威胁名单仅可用于 IP ACL 黑名单（2026-09-24 用户裁定），信任名单不可引用 -->
+                <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-option-group>
               </el-select>
               <div v-if="showWhitelistRefHint" class="form-tip-line">{{ whitelistRefHint }}</div>
             </el-form-item>
@@ -503,7 +506,9 @@
                           placeholder="选择 IP 地址列表"
                           class="exclusion-scope-control-list"
                         >
-                          <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                          <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-option-group>
                         </el-select>
                         <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
                       </div>
@@ -573,7 +578,12 @@
               </el-form-item>
               <el-form-item label="引用地址列表">
                 <el-select v-model="ipACLListRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
-                  <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                  <el-option-group v-if="form.ip_acl_mode === 'deny' && builtinIpLists.length > 0" label="内置威胁名单">
+                  <el-option v-for="l in builtinIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-option-group>
+                <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-option-group>
                 </el-select>
                 <div v-if="showAclRefHint" class="form-tip-line">{{ aclRefHint }}</div>
                 <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联名单合并生效</div>
@@ -1094,7 +1104,7 @@ const chainChipText = (entry: ChainEntry, index: number): string => {
 const policySummaryLine = (row: PolicySummary): string => {
   const type = policyTypeOf(row)
   if (type === 'stage0') {
-    const count = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
+    const count = mergedIpEntryCount(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs))
     return `信任 ${count} 条 · ${row.trust_detection === true ? '保留检测记录' : '直通上游'}`
   }
   if (type === 'stage2') {
@@ -1110,7 +1120,7 @@ const policySummaryLine = (row: PolicySummary): string => {
     return parts.join(' · ')
   }
   if (type === 'stage1') {
-    const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
+    const aclCount = mergedIpEntryCount(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs))
     const geoCount = geoipRegionCount(row)
     const aclPart = row.ip_acl_enabled ? `${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode} · ACL ${aclCount} 条` : '未启用 ACL'
     const geoPart = geoCount > 0 ? `GeoIP ${geoCount} 区域` : 'GeoIP 未启用'
@@ -1244,6 +1254,9 @@ const openViewDialog = async (row: PolicySummary, openSeq: number): Promise<void
     if (openSeq !== policyDialogOpenSeq) return
     viewPolicyDetail.value = res.data?.policy ?? null
     viewPolicyBindings.value = res.data?.bindings ?? []
+    // 查看弹框的分段计数走合并口径——按需补齐该策略引用名单的条目值
+    const d = viewPolicyDetail.value
+    if (d) void ensureIpListDetails([...parseRefIds(d.ip_acl_list_refs), ...parseRefIds(d.ip_whitelist_refs)], openSeq)
   } catch (error: unknown) {
     if (openSeq !== policyDialogOpenSeq) return
     console.error('view policy failed', error)
@@ -1394,8 +1407,32 @@ const ipWhitelistEnabled = ref(false)
 const ipACLListRefs = ref<number[]>([])
 const ipWhitelistRefs = ref<number[]>([])
 // 引用列表缓存：对话框打开与页面加载时刷新，供引用选择器 / 合计条数 / 冲突比较共用
-interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
+// v2.3.2 弹框性能重构后续：列表载荷不再内联 entries（大名单 460KB/行）——
+// 条目值按需经 GET /security/ip-lists/:id 拉取并缓存于 ipListDetails；
+// 仅需条数的口径（列表页摘要/向导 hint）一律走 entry_count，不背条目。
+interface IPListRefOption { id: number; name: string; entry_count: number; system?: boolean; entries?: Array<{ value: string; remark: string }> }
 const ipLists = ref<IPListRefOption[]>([])
+// 引用选择器分组（2026-09-24 用户裁定）：内置威胁名单恒置顶，与自定义列表
+// 分两组展示（el-option-group 自带分隔线+组标题）
+const builtinIpLists = computed(() => ipLists.value.filter((l) => l.system))
+const customIpLists = computed(() => ipLists.value.filter((l) => !l.system))
+// 引用列表条目值缓存（按 id）：向导冲突比较/合并口径的唯一值来源，
+// 打开向导时对「本策略 + 同列策略」引用到的名单按需补齐
+const ipListDetails = ref<Record<number, Array<{ value: string; remark: string }>>>({})
+// 按需补齐引用名单条目（缺失才请求；openSeq 过期丢弃，同 fetchIpLists 口径）
+const ensureIpListDetails = async (ids: number[], seq?: number): Promise<void> => {
+  const missing = [...new Set(ids)].filter((id) => id > 0 && !(id in ipListDetails.value))
+  if (missing.length === 0) return
+  const results = await Promise.allSettled(
+    missing.map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string; remark: string }> }>>(`/security/ip-lists/${id}`)),
+  )
+  if (seq !== undefined && seq !== policyDialogOpenSeq) return
+  const next = { ...ipListDetails.value }
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') next[missing[i]] = r.value.data?.entries || []
+  })
+  ipListDetails.value = next
+}
 const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '可信地址', '恶意 IP', '其他']
 const fetchIpLists = async (seq?: number): Promise<void> => {
   try {
@@ -1421,14 +1458,21 @@ const parseRefIds = (raw: string | undefined): number[] => {
 const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
   const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
   for (const id of refs) {
-    const list = ipLists.value.find((l) => l.id === id)
-    if (!list) continue
-    for (const entry of list.entries) {
+    const entries = ipListDetails.value[id]
+    if (!entries) continue // 详情未加载/加载失败：防御性回退为仅内联
+    for (const entry of entries) {
       const v = entry.value.trim()
       if (v !== '') set.add(v)
     }
   }
   return [...set]
+}
+// 条数-only 合并口径（列表页摘要用，不拉条目值）：内联去重数 + Σ引用名单
+// entry_count。与 mergeIpEntries 的去重合计可能略有出入（内联与引用重叠时），
+// 仅作列表页一行摘要展示；精确合计以向导内（条目已加载）为准。
+const mergedIpEntryCount = (inline: string[], refs: number[]): number => {
+  const inlineCount = new Set(inline.map((v) => v.trim()).filter((v) => v !== '')).size
+  return refs.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), inlineCount)
 }
 // 引用侧合计条数（各列表条目数之和，不去重——去重后的合计在 hint 的「合计」中给出）
 const selectedRefEntryCount = (refs: number[]): number => refs.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), 0)
@@ -1989,6 +2033,19 @@ const crsFieldsOff = computed(() => form.value.mode === 'off' || form.value.mode
 
 const ACL_MODE_LABELS: Record<string, string> = { deny: '黑名单', allow: '白名单', bypass: '免检测' }
 
+// 内置威胁名单仅可用于黑名单模式（2026-09-24 用户裁定，与后端
+// validateBuiltinThreatListRefs 同口径）：模式切到白名单/免检测时，
+// 已选的内置名单引用自动剥离并提示（否则保存将被后端 400 拒绝）
+watch(() => form.value.ip_acl_mode, (mode) => {
+  if (mode === 'deny') return
+  const builtinIds = new Set(builtinIpLists.value.map((l) => l.id))
+  const kept = ipACLListRefs.value.filter((id) => !builtinIds.has(id))
+  if (kept.length !== ipACLListRefs.value.length) {
+    ipACLListRefs.value = kept
+    ElMessage.warning('内置威胁名单仅可用于黑名单模式，已从引用中移除')
+  }
+})
+
 const ACL_LIST_LABELS: Record<string, string> = { deny: '拒绝 IP', allow: '允许 IP', bypass: '免检测 IP' }
 const aclListLabel = computed(() => ACL_LIST_LABELS[form.value.ip_acl_mode] ?? 'IP 列表')
 
@@ -2517,9 +2574,8 @@ const wafStepCrsAlert = computed<string>(() => {
 const entrySourceSuffix = (entry: string, inline: string[], refs: number[]): string => {
   if (inline.includes(entry)) return ''
   const names = refs
-    .map((id) => ipLists.value.find((l) => l.id === id))
-    .filter((l): l is IPListRefOption => !!l && l.entries.some((e) => e.value.trim() === entry))
-    .map((l) => `「${l.name}」`)
+    .filter((id) => (ipListDetails.value[id] || []).some((e) => e.value.trim() === entry))
+    .map((id) => `「${ipLists.value.find((l) => l.id === id)?.name ?? `#${id}`}」`)
   return names.length > 0 ? `（来自引用列表${names.join('、')}）` : ''
 }
 
@@ -2817,7 +2873,16 @@ async function openDialog(row?: PolicySummary) {
   } else { resetForm() }
   // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）；
   // A4-S2：传入 openSeq 丢弃过期返回，防止快速关闭重开后旧响应覆盖新缓存
-  void fetchIpLists(openSeq)
+  void fetchIpLists(openSeq).then(() => {
+    if (openSeq !== policyDialogOpenSeq) return
+    // 名单条目值按需补齐：本策略引用 + 全部同列策略引用（冲突比较合并口径）。
+    // 列表载荷不再内联 entries（v2.3.2），值一律经 GET /security/ip-lists/:id 拉取。
+    const ids = [...ipACLListRefs.value, ...ipWhitelistRefs.value]
+    for (const p of policies.value) {
+      ids.push(...parseRefIds(p.ip_acl_list_refs), ...parseRefIds(p.ip_whitelist_refs))
+    }
+    void ensureIpListDetails(ids, openSeq)
+  })
   // CRS 规则索引同口径：每次对话框打开取一次（同会话内步骤切换复用缓存），
   // 供规则组/排除目标的单条规则选项与预览明细共用（openSeq 过期守卫见 useCrsRuleIndex）
   void ensureCrsRuleIndex(openSeq)

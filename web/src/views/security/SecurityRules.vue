@@ -16,11 +16,11 @@
           <div class="crs-header-title">
             <span style="font-weight: 500;">规则库</span>
           </div>
-          <div class="lib-summary">{{ libSummary }}</div>
+          <div class="lib-summary" :class="{ 'lib-summary--warn': libSummaryWarn }">{{ libSummary }}</div>
         </div>
       </template>
       <el-table :data="libRows" size="small" class="lib-table">
-        <el-table-column label="名称" min-width="220">
+        <el-table-column label="名称" min-width="340">
           <template #default="{ row }">
             <div class="lib-name">
               <span class="lib-icon" :class="row.iconClass"><el-icon :size="15"><component :is="row.icon" /></el-icon></span>
@@ -449,8 +449,15 @@
         <el-tag :type="crsStatusTagType(threatUpdateRunning ? 'running' : (threatUpdateInfo?.outcome || 'idle'))" size="small" effect="light">{{ threatUpdateRunning ? '更新中' : (threatUpdateInfo?.outcome === 'success' ? '更新成功' : threatUpdateInfo?.outcome === 'failed' ? '更新失败' : '空闲') }}</el-tag>
       </div>
       <el-table :data="threatSources" size="small" class="threat-source-table">
-        <el-table-column label="来源" min-width="170">
-          <template #default="{ row }">{{ row.display_name }}</template>
+        <el-table-column label="来源" min-width="260">
+          <!-- 标题加粗 + 更新地址次行（与规则库表格「名称+描述」两行同构，
+               2026-09-24 用户裁定替代独立更新地址列） -->
+          <template #default="{ row }">
+            <div class="lib-name-text">
+              <div class="lib-name-main">{{ row.display_name }}</div>
+              <div class="lib-name-sub threat-source-url">{{ row.url }}</div>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="条目数" width="100" align="right">
           <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
@@ -508,14 +515,16 @@ interface ThreatSource {
   last_checked: string; next_update: string; list_id: number
 }
 const threatSources = ref<ThreatSource[]>([])
+const threatAutoUpdate = ref(true)
 const threatMergedCount = ref(0)
 
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: ThreatSource[]; total_entries: number }>>('/security/threat-lib')
+    const res = await request.get<APIResponse<{ sources: ThreatSource[]; total_entries: number; auto_update?: boolean }>>('/security/threat-lib')
     if (res.data) {
       threatSources.value = res.data.sources
       threatMergedCount.value = res.data.total_entries
+      threatAutoUpdate.value = res.data.auto_update !== false
     }
   } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
 }
@@ -580,11 +589,11 @@ const libRows = computed<LibRow[]>(() => {
     rows.push({
       key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
       name: '威胁情报库',
-      sub: srcs.length + ' 个来源：' + srcs.map(x => ({ ustc: '中科大黑', firehol_l1: 'FireHOL', et_compromised: 'ET' } as Record<string, string>)[x.name] ?? x.display_name).join(' / '),
+      sub: 'IP 威胁名单，可被黑名单策略引用 · 来源：' + srcs.map(x => ({ ustc: '中科大', firehol_l1: 'FireHOL', et_compromised: 'ET' } as Record<string, string>)[x.name] ?? x.display_name).join(' / '),
       version: latestVersion || '未更新',
       count: totalEntries > 0 ? totalEntries.toLocaleString() + ' 条' : '—',
       status, statusMessage: anyFailed?.message || '',
-      autoUpdate: srcs.every(x => x.update_enabled),
+      autoUpdate: threatAutoUpdate.value,
       lastChecked: srcs.map(x => formatDate(x.last_checked)).filter(Boolean).sort().pop() || '—',
       nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
     })
@@ -592,16 +601,19 @@ const libRows = computed<LibRow[]>(() => {
   return rows
 })
 
-// 卡头摘要：库数 + 合计条目（威胁三源条目数 + IP 库条目数）。
+// 卡头摘要（2026-09-24 用户裁定）：不再做库数/条目统计——改述库健康：
+// 缺库异常优先（缺库时后端渲染层已停用全部安全规则，见
+// SecurityLibrariesAvailable），正常时简述三库状态。
 const libSummary = computed(() => {
-  let totalEntries = 0
-  for (const src of threatSources.value) totalEntries += src.entry_count
-  if (ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled') {
-    totalEntries += ip2regionInfo.value.db_size
-  }
-  const threatOk = threatSources.value.filter(x => x.update_status === 'success').length
-  return `共 ${libRows.value.length} 个库 · 合计 ${totalEntries.toLocaleString()} 条 · 威胁库 ${threatOk}/3 就绪`
+  const missing: string[] = []
+  if (crsInfo.value.available === false) missing.push('CRS 规则库')
+  if (ip2regionInfo.value.available === false) missing.push('IP 地址库')
+  if (missing.length > 0) return `⚠ ${missing.join('、')}不可用——所有安全规则已暂停生效，请立即检查规则库`
+  const threatFail = threatSources.value.filter(x => x.update_status === 'failed').length
+  if (threatFail > 0) return `威胁情报库 ${threatFail} 个来源更新失败，其余库正常`
+  return 'CRS 规则库 / IP 地址库 / 威胁情报库 状态正常'
 })
+const libSummaryWarn = computed(() => libSummary.value.startsWith('⚠'))
 
 // 自动更新开关：按行分发到三个库的既有端点（开关状态以服务端为准，
 // 失败由对应 fetch 回滚）。
@@ -613,10 +625,20 @@ const toggleLibAutoUpdate = (row: LibRow, val: boolean) => {
     ip2regionInfo.value.auto_update = val
     toggleIP2RegionAutoUpdate(val)
   } else if (row.key === 'threat') {
-    // 父开关=三源全开/全关（逐源微调在更新弹框内）
-    for (const src of threatSources.value) {
-      if (src.update_enabled !== val) toggleThreatFlag(src, 'update_enabled', val)
-    }
+    // 父开关=任务级总闸（整任务启停）；逐源微调在更新弹框内（update_enabled
+    // 决定任务更新哪些源）——两者解耦，不再逐源循环写（曾连弹三次提示）。
+    toggleThreatAutoUpdate(val)
+  }
+}
+
+// 任务级总闸开关（单次写 + 单次提示）。
+const toggleThreatAutoUpdate = async (val: boolean) => {
+  try {
+    await request.put('/security/threat-lib/auto-update', { auto_update: val })
+    threatAutoUpdate.value = val
+    mfaAwareSuccess('已更新')
+  } catch {
+    fetchThreatLib() // 失败回滚显示值
   }
 }
 
@@ -741,7 +763,7 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
   return 'info'
 }
 
-const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
+const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true })
 const crsFailureMessage = computed(() => {
   const s = crsInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
@@ -765,7 +787,7 @@ const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | '
   if (s === 'failed') return 'danger'
   return 'info'
 }
-const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
+const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true })
 const ip2regionVersionLabel = computed(() => {
   if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
   return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'
@@ -1537,9 +1559,23 @@ onUnmounted(() => {
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 /* 弹框表单右缘留白（字段贴右边距视觉失衡，2026-09-24 用户反馈） */
 .ip-list-dialog .el-form { padding-right: 20px; }
+.threat-source-url {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #64748b;
+}
+
 .threat-source-table { margin-bottom: 12px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
+.lib-summary--warn { color: #dc2626; font-weight: 600; }
+
 .lib-summary { color: #909399; font-size: 12px; font-weight: 400; }
 .lib-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .lib-icon { flex-shrink: 0; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; }

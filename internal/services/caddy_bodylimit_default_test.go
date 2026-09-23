@@ -39,6 +39,7 @@ func wafDirectivesOf(t *testing.T, route map[string]interface{}) string {
 }
 
 func TestRequestBodyLimit_unifiedDefault128(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	_, database := newClusterTestService(t)
 
 	// 形状③:global=0 + 无 WAF → request_body handler 恒发射 max_size=128MiB

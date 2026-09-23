@@ -101,7 +101,7 @@
                 <div class="stat-box__icon"><el-icon><Aim /></el-icon></div>
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ threatLatestVersion || '未更新' }}</div>
-                  <div class="stat-box__label">威胁情报库{{ threatMergedCount > 0 ? ' · ' + threatMergedCount.toLocaleString() + ' 条' : '' }}</div>
+                  <div class="stat-box__label">威胁情报库</div>
                   <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
                   <el-tag v-else-if="threatStatus" :type="statusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(threatStatus) }}</el-tag>
                 </div>
@@ -394,7 +394,6 @@ const fetchIP2RegionInfo = async () => {
 }
 
 // 威胁情报库 stat（v2.3.x）：合并生效条数 + 最近版本（各源 version 最大者）。
-const threatMergedCount = ref(0)
 const threatLatestVersion = ref('')
 const threatRunning = ref(false)
 const threatError = ref(false)
@@ -408,8 +407,7 @@ const threatStatus = computed(() => {
 const threatSourcesStatus = ref('')
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; total_entries: number }>>('/security/threat-lib')
-    threatMergedCount.value = res.data?.total_entries || 0
+    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; total_entries?: number }>>('/security/threat-lib')
     threatLatestVersion.value = (res.data?.sources || []).map(s => s.version).filter(Boolean).sort().pop() || ''
     threatRunning.value = (res.data?.sources || []).some(s => s.update_status === 'running')
     const statuses = (res.data?.sources || []).map(s => s.update_status)

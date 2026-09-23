@@ -36,6 +36,7 @@ func seedStage0Policy(t *testing.T, database *sql.DB, ruleCaddyID, whitelist str
 }
 
 func TestTrustedPassthrough_subrouteSkipsAllSecurityStages(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：规则绑定 stage0 直通策略（信任 10.0.0.9）+ stage3 WAF 策略
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_trust", "trust.example.test", 8080)
@@ -112,6 +113,7 @@ func TestTrustedPassthrough_subrouteSkipsAllSecurityStages(t *testing.T) {
 }
 
 func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：规则绑定 stage0 保留检测策略（信任 10.0.0.9）+ stage3 WAF 策略
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_td", "td.example.test", 8080)

@@ -640,12 +640,16 @@ func createTables() error {
 	// 威胁库三源种子（v2.3.x）——USTC URL 含「?」必须走参数化（原始 SQL 中
 	// 会被当作占位符）。INSERT OR IGNORE 幂等，存量库重启重复执行安全。
 	for _, seed := range [][3]string{
-		{"ustc", "中科大黑 IP", "https://blackip.ustc.edu.cn/list.php?txt"},
-		{"firehol_l1", "FireHOL level1", "https://iplists.firehol.org/files/firehol_level1.netset"},
+		{"ustc", "中科大恶意 IP（USTC）", "https://blackip.ustc.edu.cn/list.php?txt"},
+		{"firehol_l1", "FireHOL Level 1", "https://iplists.firehol.org/files/firehol_level1.netset"},
 		{"et_compromised", "Emerging Threats Compromised", "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"},
 	} {
 		if _, err := DB.Exec(`INSERT OR IGNORE INTO security_threat_sources (name, display_name, url) VALUES (?, ?, ?)`, seed[0], seed[1], seed[2]); err != nil {
 			return fmt.Errorf("failed to seed threat source %s: %w", seed[0], err)
+		}
+		// 存量行 display_name 专业化跟进（2026-09-24 用户裁定；name 为定位键不变）
+		if _, err := DB.Exec(`UPDATE security_threat_sources SET display_name=? WHERE name=?`, seed[1], seed[0]); err != nil {
+			return fmt.Errorf("failed to refresh threat source display_name %s: %w", seed[0], err)
 		}
 	}
 	return nil
@@ -789,6 +793,7 @@ func runMigrations() error {
 		"security_ip2region_version.finished_at":          "DATETIME",
 		"security_ip2region_version.consecutive_failures": "INTEGER DEFAULT 0",
 		"upstreams.max_connections":                       "INTEGER DEFAULT 0",
+		"global_config.threat_auto_update":                "INTEGER NOT NULL DEFAULT 1",
 		"security_ip_lists.system":                        "INTEGER NOT NULL DEFAULT 0",
 		"path_rules.upstream_path":                        "TEXT NOT NULL DEFAULT ''",
 		"certificate_configs.dns_credentials":             "TEXT",
@@ -1432,6 +1437,11 @@ func runMigrations() error {
 		return err
 	}
 
+	// 存量内置名单专业化改名（2026-09-24 用户裁定，保 id）——须在种子前执行，
+	// 否则按新名查重落空会插入第二组名单行。
+	if err := migrateThreatSystemListNames(); err != nil {
+		return err
+	}
 	// 威胁情报库内置只读名单种子（v2.3.2 名单化重构）：name 稳定（更新任务
 	// 定位键），条目空，由更新任务独占写；system=1 行面板/API 拒改拒删。
 	for _, sl := range ThreatSystemLists {

@@ -238,6 +238,7 @@ func TestBuildCorazaDirectives_geoipMovedToPrecheck(t *testing.T) {
 // pass 路由（设置 X-GeoIP-* headers 供下游 coraza），不再有 Caddy 原生 block
 // 路由；地域拦截在主路由的 coraza 处理器内评估。
 func TestGenerateHTTPRouteObjects_geoip_passRouteOnlyNoBlockRoutes(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	setupGeoipConfigTestDB(t)
 	seedGeoipPolicy(t, "rule-http", `["海外"]`, "deny")
 

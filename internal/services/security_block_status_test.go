@@ -269,6 +269,7 @@ func wafDirectives(t *testing.T, routeValue interface{}) []string {
 // 首绑定有页策略）+ 每有页策略 1 条合成码归因路由（无 host 键，按策略去重——
 // 同 server 多规则共用同策略仅一条）；策略段 deny 行携带对应合成码。
 func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：同端口两规则；p1(页7,451) 绑两规则，p2(页8,503) 仅绑 rule1
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -376,6 +377,7 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 
 // 回归形状：无页策略不抬码（483+ 零出现）；其 deny 仍为 403，且只产兜底路由。
 func TestMultiPolicy_AttributionRoutes_NoPagePolicyNotLifted(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_nolift", "nolift.example.test", 8080)

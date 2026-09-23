@@ -1090,6 +1090,7 @@ func findChainHandler(t *testing.T, routeValue interface{}, name string) map[str
 }
 
 func TestGenerateRouteObject_placesWafHandlerFirst_whenBlockingPolicyBound(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
@@ -1121,6 +1122,7 @@ func TestGenerateRouteObject_placesWafHandlerFirst_whenBlockingPolicyBound(t *te
 }
 
 func TestGenerateRouteObject_rendersWafDetectionOnlyDirectives_whenDetectionPolicyBound(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
@@ -1347,6 +1349,7 @@ func seedBoundSecurityPolicyWithRateLimit(t *testing.T, database *sql.DB, ruleCa
 }
 
 func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
@@ -1389,6 +1392,7 @@ func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit
 }
 
 func TestGenerateRouteObject_rendersSingleRateLimitZone_whenBurstZero(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
@@ -1414,6 +1418,7 @@ func TestGenerateRouteObject_rendersSingleRateLimitZone_whenBurstZero(t *testing
 }
 
 func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
@@ -1437,6 +1442,7 @@ func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t
 }
 
 func TestGenerateRouteObject_rendersRateLimitWithoutWaf_whenPolicyModeOff(t *testing.T) {
+	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")

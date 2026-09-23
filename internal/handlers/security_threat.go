@@ -67,7 +67,27 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"sources":       sources,
 		"total_entries": totalEntries,
+		"auto_update":   services.ThreatAutoUpdateEnabled(),
 	}})
+}
+
+// UpdateThreatAutoUpdate 任务级总开关（规则库卡片父行开关；镜像
+// UpdateCRSAutoUpdate/UpdateIP2RegionAutoUpdate 形态）。逐源 update_enabled
+// 决定任务更新哪些源（弹框内开关），与总闸解耦。
+func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
+	var body struct {
+		AutoUpdate *bool `json:"auto_update"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.AutoUpdate == nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
+		return
+	}
+	if err := services.SetThreatAutoUpdate(*body.AutoUpdate); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新失败: " + err.Error()})
+		return
+	}
+	recordAudit(c, "更新", "威胁情报库", "自动更新总开关")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
 // UpdateThreatSourceFlags 仅允许改 update_enabled——名单化后「应用」=
