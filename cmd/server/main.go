@@ -159,11 +159,6 @@ func run() error {
 	// 配置一致性看门狗：周期比对 DB 规则与 Caddy 运行配置，不一致时三通道告知
 	// （系统日志/操作日志/前端横幅），恢复由用户手动重启完成。
 	services.StartConfigWatchdog(cfg.CaddyAdminURL)
-	// 威胁情报库降级信号（v2.3.x）：合并文件缺失时 id:14 规则静默跳过——
-	// 启动 WARN 一条让运维可见（更新任务/调度器会补齐）。
-	if info, err := os.Stat(filepath.Join(services.ThreatDataDir, "intel-merged.txt")); err != nil || info.Size() == 0 {
-		services.Logf("warn", "威胁情报库合并文件缺失或为空——id:14 拦截规则暂不生效，待首次更新后启用")
-	}
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)

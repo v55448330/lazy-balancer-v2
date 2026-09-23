@@ -386,8 +386,8 @@ const threatRunning = ref(false)
 const threatError = ref(false)
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; merged_apply_count: number }>>('/security/threat-lib')
-    threatMergedCount.value = res.data?.merged_apply_count || 0
+    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; total_entries: number }>>('/security/threat-lib')
+    threatMergedCount.value = res.data?.total_entries || 0
     threatLatestVersion.value = (res.data?.sources || []).map(s => s.version).filter(Boolean).sort().pop() || ''
     threatRunning.value = (res.data?.sources || []).some(s => s.update_status === 'running')
     threatError.value = false

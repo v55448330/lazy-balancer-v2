@@ -25,7 +25,6 @@ func ConfigureWafDirs(dataDir string) {
 	}
 	wafDir := filepath.Join(filepath.Dir(dataDir), "waf")
 	IPListDataDir = filepath.Join(wafDir, "ip-lists")
-	ThreatDataDir = filepath.Join(wafDir, "threat")
 	wafiplist.AllowedPathPrefix = wafDir + string(filepath.Separator)
 }
 

@@ -682,8 +682,8 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	for _, l := range ipLists {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_ip_lists (id,name,description,category,entries,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			l["id"], l["name"], l["description"], l["category"], snapshotJSONText(l["entries"]), l["created_by"], l["created_at"], l["updated_by"], l["updated_at"]); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_ip_lists (id,name,description,category,entries,created_by,created_at,updated_by,updated_at,system) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			l["id"], l["name"], l["description"], l["category"], snapshotJSONText(l["entries"]), l["created_by"], l["created_at"], l["updated_by"], l["updated_at"], l["system"]); err != nil {
 			return fmt.Errorf("写入 security_ip_list: %w", err)
 		}
 	}

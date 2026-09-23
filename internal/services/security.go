@@ -1012,15 +1012,8 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			break
 		}
 	}
-	// 威胁情报库（v2.3.x）：合并文件存在且非空即参与预检（id:14 独立 deny
-	// 规则）；缺失/为空跳过（降级不打断渲染，与 GeoIP xdb 缺失先例同族）。
-	threatMergedPath := filepath.Join(ThreatDataDir, "intel-merged.txt")
-	threatAvailable := false
-	if info, err := os.Stat(threatMergedPath); err == nil && info.Size() > 0 {
-		threatAvailable = true
-	}
 	detectionTrust, _ := stage0TrustSets(policies)
-	if len(denyUnion) == 0 && len(blacklistUnion) == 0 && len(allowLists) == 0 && !hasGeoIP && len(detectionTrust) == 0 && !threatAvailable {
+	if len(denyUnion) == 0 && len(blacklistUnion) == 0 && len(allowLists) == 0 && !hasGeoIP && len(detectionTrust) == 0 {
 		return "", nil
 	}
 	var sb strings.Builder
@@ -1098,12 +1091,6 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			return "", err
 		}
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", operand, denyStatus))
-	}
-	// 威胁情报库（id:14，阶段 1 预检，位于 id:4 之后、GeoIP 链之前）：合并
-	// 名单为独立 deny 规则——文件直引（更新任务已聚合+原子落盘，渲染侧零
-	// 加工）；denyStatus 与 id:2/4 同口径（规则配阶段 1 拦截页时 481，否则 403）。
-	if threatAvailable {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipListFast %s\" \"id:14,phase:1,deny,status:%d,log,msg:'威胁情报库拦截',skipAfter:SECURITY_RULES_END\"\n", threatMergedPath, denyStatus))
 	}
 	// 逐策略 GeoIP 链（阶段 1：GeoIP 自策略引擎 id:8 迁入预检，id=800000+policyID
 	// 精确归因段）。链首 deny+skipAfter+chain（disruptive 动作仅允许链首段，

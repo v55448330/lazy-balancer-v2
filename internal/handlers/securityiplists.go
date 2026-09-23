@@ -178,6 +178,8 @@ type ipListRow struct {
 	CreatedAt   string            `json:"created_at"`
 	UpdatedBy   int               `json:"updated_by"`
 	UpdatedAt   string            `json:"updated_at"`
+	// System=内置只读名单（威胁情报库三源，v2.3.2 名单化）——前端据此只读化。
+	System bool `json:"system"`
 }
 
 // loadIPListRefPolicies 一次查询全部策略的两列 refs 并在 Go 侧解析引用关系。
@@ -224,7 +226,7 @@ func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
 }
 
 func (h *Handlers) ListIPLists(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,'') FROM security_ip_lists ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -239,7 +241,7 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	for rows.Next() {
 		var row ipListRow
 		var entriesJSON string
-		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &entriesJSON, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &entriesJSON, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
@@ -343,12 +345,18 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var name, description, category, entriesJSON string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&name, &description, &category, &entriesJSON); err != nil {
+	var system int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&name, &description, &category, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	// 内置只读名单（威胁情报库，system=1）：内容只读，由更新任务独占维护。
+	if system != 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
 		return
 	}
 	if req.Name != nil {
@@ -449,6 +457,15 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 		return
 	}
+	var system int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&system); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if system != 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+		return
+	}
 	listID, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 id"})
@@ -541,12 +558,17 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var entriesJSON, listName string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON); err != nil {
+	var system int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if system != 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
 		return
 	}
 	var entries []models.IPListEntry

@@ -48,7 +48,13 @@ func TestImportConfigBackup_rejectsPolicyReferencingMissingIPList(t *testing.T) 
 	}
 	for _, table := range []string{"security_policies", "security_ip_lists"} {
 		var count int
-		if err := db.DB.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+		// security_ip_lists 含三行 system=1 内置名单种子（v2.3.2 名单化）——
+		// 与被拒备份无关，只计用户行（security_policies 无 system 列）。
+		query := "SELECT COUNT(*) FROM " + table
+		if table == "security_ip_lists" {
+			query += " WHERE COALESCE(system,0)=0"
+		}
+		if err := db.DB.QueryRow(query).Scan(&count); err != nil {
 			t.Fatalf("read %s: %v", table, err)
 		}
 		if count != 0 {
@@ -171,10 +177,10 @@ func TestImportConfigBackup_rejectsIPListWithInvalidEntries(t *testing.T) {
 func TestExportConfigBackup_includesSecurityIPLists(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,description,category,entries) VALUES (3,'exp-list','d','allow','[{"value":"10.0.0.1","remark":""}]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,description,category,entries) VALUES (13,'exp-list','d','allow','[{"value":"10.0.0.1","remark":""}]')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,ip_acl_list_refs) VALUES (4,'p','off','[3]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,ip_acl_list_refs) VALUES (4,'p','off','[13]')`); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()
@@ -193,14 +199,25 @@ func TestExportConfigBackup_includesSecurityIPLists(t *testing.T) {
 		t.Fatalf("decode export: %v", err)
 	}
 	listRows, ok := backup.Tables["security_ip_lists"]
-	if !ok || len(listRows) != 1 {
-		t.Fatalf("export must carry security_ip_lists with 1 row, got %+v", backup.Tables["security_ip_lists"])
+	if !ok {
+		t.Fatal("export must carry security_ip_lists")
 	}
-	if listRows[0]["name"] != "exp-list" || listRows[0]["category"] != "allow" {
-		t.Fatalf("exported ip list row mismatch: %+v", listRows[0])
+	// 3 行 system=1 内置名单（v2.3.2 名单化）随表导出——引用它们的策略
+	// 经备份还原后引用目标必须存在；用户行按 system=0 过滤断言。
+	var userRows []map[string]any
+	for _, row := range listRows {
+		if row["system"] == float64(0) || row["system"] == nil {
+			userRows = append(userRows, row)
+		}
+	}
+	if len(userRows) != 1 {
+		t.Fatalf("export must carry exactly 1 user ip list row, got %+v", listRows)
+	}
+	if userRows[0]["name"] != "exp-list" || userRows[0]["category"] != "allow" {
+		t.Fatalf("exported ip list row mismatch: %+v", userRows[0])
 	}
 	policyRows := backup.Tables["security_policies"]
-	if len(policyRows) != 1 || policyRows[0]["ip_acl_list_refs"] != "[3]" {
+	if len(policyRows) != 1 || policyRows[0]["ip_acl_list_refs"] != "[13]" {
 		t.Fatalf("exported policy refs missing: %+v", policyRows)
 	}
 }

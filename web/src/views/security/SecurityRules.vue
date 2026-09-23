@@ -14,109 +14,46 @@
       <template #header>
         <div class="crs-header">
           <div class="crs-header-title">
-            <span style="font-weight: 500;">规则集</span>
-          </div>
-          <div class="crs-header-actions">
-            <el-button size="small" type="primary" plain @click="manualUpdate">CRS 更新</el-button>
-            <el-button size="small" type="primary" plain @click="manualIP2RegionUpdate">IP 库更新</el-button>
+            <span style="font-weight: 500;">规则库</span>
           </div>
         </div>
       </template>
-      <el-descriptions :column="3" border>
-        <el-descriptions-item label="CRS 版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="规则文件数">{{ total }}</el-descriptions-item>
-        <el-descriptions-item v-if="!isSlaveNode" label="更新时间">{{ formatDate(crsInfo.updated_at) || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="自动更新">
-          <div class="crs-cell-flex">
-            <el-switch v-model="crsInfo.auto_update" :disabled="isReadOnly" @change="toggleAutoUpdate" />
-          </div>
-        </el-descriptions-item>
-        <el-descriptions-item label="更新状态">
-          <div class="crs-cell-flex">
-            <el-tooltip :disabled="!crsFailureMessage" :content="crsFailureMessage">
-              <el-tag :type="crsStatusTagType(crsInfo.update_status)" size="small" effect="light">{{ crsStatusLabel(crsInfo.update_status) }}</el-tag>
-            </el-tooltip>
-          </div>
-        </el-descriptions-item>
-        <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(crsInfo.next_update) || '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="isSlaveNode" label="数据来源"><el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag></el-descriptions-item>
-      </el-descriptions>
-      <el-descriptions :column="3" border class="ip2region-desc">
-        <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionVersionLabel }}</span></el-descriptions-item>
-        <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size && ip2regionInfo.version && ip2regionInfo.version !== 'unknown' && ip2regionInfo.version !== 'bundled' ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="!isSlaveNode" label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="自动更新">
-          <div class="crs-cell-flex">
-            <el-switch v-model="ip2regionInfo.auto_update" :disabled="isReadOnly" @change="toggleIP2RegionAutoUpdate" />
-          </div>
-        </el-descriptions-item>
-        <el-descriptions-item label="更新状态">
-          <div class="crs-cell-flex">
-            <el-tooltip :disabled="!ip2regionFailureMessage" :content="ip2regionFailureMessage">
-              <!-- R72 二十四次：单 tag 形态（v-if/v-else 双分支在数据加载时切换
-                   DOM 结构引发 descriptions 列宽重排——「表格中间闪一下」）；unknown
-                   由计算属性并入口径，结构恒定。 -->
-              <el-tag :type="ip2regionStatusTagType(ip2regionStatusForTag)" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionStatusForTag) }}</el-tag>
-            </el-tooltip>
-          </div>
-        </el-descriptions-item>
-        <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(ip2regionInfo.next_update) || '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="isSlaveNode" label="数据来源"><el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag></el-descriptions-item>
-      </el-descriptions>
-    </el-card>
-
-    <el-card class="crs-card mb-5">
-      <template #header>
-        <div class="crs-header">
-          <div class="crs-header-title">
-            <span style="font-weight: 500;">威胁情报库</span>
-            <el-tag size="small" type="info" effect="plain" style="margin-left: 8px;">合并生效 {{ threatMergedCount.toLocaleString() }} 条</el-tag>
-          </div>
-          <div class="crs-header-actions">
-            <el-button size="small" type="primary" plain :disabled="isReadOnly || isSlaveNode" :loading="threatUpdating" @click="manualThreatUpdate">更新</el-button>
-          </div>
-        </div>
-      </template>
-      <el-table :data="threatSources" size="small">
-        <el-table-column label="来源" min-width="200">
+      <el-table :data="libRows" size="small">
+        <el-table-column label="名称" min-width="220">
           <template #default="{ row }">
-            <div>{{ row.display_name }}</div>
-            <div class="threat-url">{{ row.url }}</div>
+            <div>{{ row.name }}</div>
+            <div v-if="row.sub" class="threat-url">{{ row.sub }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="条目数" width="110" align="right">
-          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+        <el-table-column label="版本" width="120">
+          <template #default="{ row }">{{ row.version }}</template>
         </el-table-column>
-        <el-table-column label="版本" width="110">
-          <template #default="{ row }">{{ row.version || '未更新' }}</template>
+        <el-table-column label="条目数" width="110" align="right">
+          <template #default="{ row }">{{ row.count }}</template>
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tooltip :disabled="!(row.update_status === 'failed' && row.message)" :content="row.message">
-              <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
+            <el-tooltip :disabled="!row.statusMessage" :content="row.statusMessage">
+              <el-tag :type="crsStatusTagType(row.status)" size="small" effect="light">{{ crsStatusLabel(row.status) }}</el-tag>
             </el-tooltip>
           </template>
         </el-table-column>
+        <el-table-column label="自动更新" width="90" align="center">
+          <template #default="{ row }">
+            <el-switch :model-value="row.autoUpdate" :disabled="isReadOnly || isSlaveNode" @change="(v: boolean) => toggleLibAutoUpdate(row, v)" />
+          </template>
+        </el-table-column>
         <el-table-column v-if="!isSlaveNode" label="上次更新" width="150">
-          <template #default="{ row }">{{ formatDate(row.last_checked) || '—' }}</template>
+          <template #default="{ row }">{{ row.lastChecked }}</template>
         </el-table-column>
         <el-table-column v-if="!isSlaveNode" label="下次更新" width="150">
-          <template #default="{ row }">{{ formatDate(row.next_update) || '—' }}</template>
+          <template #default="{ row }">{{ row.nextUpdate }}</template>
         </el-table-column>
-        <el-table-column label="更新" width="70" align="center">
+        <el-table-column label="操作" width="170" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.update_enabled" :disabled="isReadOnly" @change="(v: boolean) => toggleThreatFlag(row, 'update_enabled', v)" />
-          </template>
-        </el-table-column>
-        <el-table-column label="应用" width="70" align="center">
-          <template #default="{ row }">
-            <el-switch v-model="row.apply_enabled" :disabled="isReadOnly" @change="(v: boolean) => toggleThreatFlag(row, 'apply_enabled', v)" />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140" align="center">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="viewThreatEntries(row)">查看</el-button>
-            <el-button size="small" link type="primary" @click="exportThreatSource(row)">导出</el-button>
+            <el-button size="small" link type="primary" :disabled="isReadOnly || isSlaveNode" @click="openLibDialog(row, true)">更新</el-button>
+            <el-button size="small" link type="primary" @click="openLibDialog(row, false)">日志</el-button>
+            <el-button v-if="row.listID" size="small" link type="primary" @click="viewThreatList(row)">查看</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -209,6 +146,7 @@
             <el-table-column prop="name" label="名称" min-width="150">
               <template #default="{ row }">
                 <el-link type="primary" @click="openIpListDialog(row)">{{ row.name }}</el-link>
+                <el-tag v-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">内置</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="分类" width="120" align="center">
@@ -239,8 +177,8 @@
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openIpListDialog(row)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
-                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openIpListDialog(row)">{{ isReadOnly || row.system ? '查看' : '编辑' }}</el-button>
+                <el-button v-if="!row.system" size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -367,12 +305,12 @@
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><List /></el-icon></div>
           <div class="dialog-header__text">
-            <div class="dialog-header__title">{{ editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表' }}</div>
+            <div class="dialog-header__title">{{ editingIpListId ? (ipListDialogReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表' }}</div>
             <div class="dialog-header__subtitle">可复用 IP/CIDR 集合，供安全策略引用（黑白名单 / 信任名单）</div>
           </div>
         </div>
       </template>
-      <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="isReadOnly">
+      <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="ipListDialogReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
         </el-form-item>
@@ -401,12 +339,12 @@
               </el-table-column>
               <el-table-column label="" width="80" align="center">
                 <template #default="{ $index }">
-                  <el-button link type="danger" size="small" :disabled="isReadOnly" @click="ipListForm.entries.splice($index, 1)">删除</el-button>
+                  <el-button link type="danger" size="small" :disabled="ipListDialogReadOnly" @click="ipListForm.entries.splice($index, 1)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
             <div class="entries-toolbar">
-              <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="ipListForm.entries.push({ value: '', remark: '' })">
+              <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain @click="ipListForm.entries.push({ value: '', remark: '' })">
                 + 添加条目
               </el-button>
               <div class="entries-toolbar-right">
@@ -421,7 +359,7 @@
       </el-form>
       <template #footer>
         <el-button @click="ipListDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="isReadOnly" :loading="savingIpList" @click="saveIpList">保存</el-button>
+        <el-button type="primary" :disabled="ipListDialogReadOnly" :loading="savingIpList" @click="saveIpList">保存</el-button>
       </template>
     </el-dialog>
 
@@ -476,25 +414,29 @@
     </el-dialog>
 
     <el-dialog
-      v-model="threatEntriesDialogVisible"
-      :title="`威胁库条目 — ${threatEntriesSourceName}`"
-      width="min(720px, 92vw)"
+      v-model="threatUpdateDialogVisible"
+      title="更新威胁情报库"
+      width="min(900px, 94vw)"
       destroy-on-close
+      @opened="onThreatUpdateDialogOpened"
+      @closed="onThreatUpdateDialogClosed"
     >
-      <el-table :data="threatEntries" size="small" v-loading="threatEntriesLoading" max-height="420">
-        <el-table-column type="index" label="#" width="70" :index="(i: number) => (threatEntriesPage - 1) * threatEntriesSize + i + 1" />
-        <el-table-column prop="entry" label="条目" />
-      </el-table>
-      <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
-        <el-pagination
-          layout="total, prev, pager, next"
-          :total="threatEntriesTotal"
-          :page-size="threatEntriesSize"
-          :current-page="threatEntriesPage"
-          @current-change="(p: number) => fetchThreatEntries(p)"
-        />
+      <div class="update-status-row">
+        <span>当前状态</span>
+        <el-tag :type="crsStatusTagType(threatUpdateRunning ? 'running' : (threatUpdateInfo?.outcome || 'idle'))" size="small" effect="light">{{ threatUpdateRunning ? '更新中' : (threatUpdateInfo?.outcome === 'success' ? '更新成功' : threatUpdateInfo?.outcome === 'failed' ? '更新失败' : '空闲') }}</el-tag>
       </div>
+      <div ref="threatUpdateLogRef" class="update-log-container">
+        <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
+        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      </div>
+      <template #footer>
+        <div style="display: flex; align-items: center;">
+          <el-button @click="threatUpdateDialogVisible = false">关闭</el-button>
+          <el-button v-if="!threatUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingThreatUpdate" @click="confirmThreatUpdate">立即更新</el-button>
+        </div>
+      </template>
     </el-dialog>
+
   </div>
 </template>
 
@@ -514,111 +456,193 @@ import type { APIResponse, UserListItem } from '@/types'
 // —— 威胁情报库（v2.3.x 第二张规则来源卡）——
 interface ThreatSource {
   id: number; name: string; display_name: string; url: string; format: string
-  update_enabled: boolean; apply_enabled: boolean
+  update_enabled: boolean
   entry_count: number; version: string; update_status: string; message: string
-  last_checked: string; next_update: string
+  last_checked: string; next_update: string; list_id: number
 }
 const threatSources = ref<ThreatSource[]>([])
 const threatMergedCount = ref(0)
-const threatUpdating = ref(false)
 
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: ThreatSource[]; merged_apply_count: number }>>('/security/threat-lib')
+    const res = await request.get<APIResponse<{ sources: ThreatSource[]; total_entries: number }>>('/security/threat-lib')
     if (res.data) {
       threatSources.value = res.data.sources
-      threatMergedCount.value = res.data.merged_apply_count
+      threatMergedCount.value = res.data.total_entries
     }
   } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
 }
 
-const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled' | 'apply_enabled', val: boolean) => {
+const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled', val: boolean) => {
   try {
     await request.put(`/security/threat-lib/${row.id}/flags`, { [field]: val })
     mfaAwareSuccess('已更新')
-    if (field === 'apply_enabled') ElMessage.info('重新加载后生效')
   } catch {
     row[field] = !val // 失败回滚开关
   }
   fetchThreatLib()
 }
 
-// 手动更新：POST 受理后轮询列表直至无 running 源（单任务串行三源，
-// 状态逐源落库——列表轮询即进度，无需独立日志流）。
-const manualThreatUpdate = async () => {
-  threatUpdating.value = true
+// —— 规则库统一表（v2.3.2）：CRS/IP2Region/威胁三源五行同一口径 ——
+interface LibRow {
+  key: string
+  name: string
+  sub: string
+  version: string
+  count: string
+  status: string
+  statusMessage: string
+  autoUpdate: boolean
+  lastChecked: string
+  nextUpdate: string
+  listID: number
+}
+
+const libRows = computed<LibRow[]>(() => {
+  const rows: LibRow[] = [
+    {
+      key: 'crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
+      version: crsInfo.value.version || '—',
+      count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
+      status: crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
+      autoUpdate: crsInfo.value.auto_update,
+      lastChecked: formatDate(crsInfo.value.updated_at) || '—',
+      nextUpdate: formatDate(crsInfo.value.next_update) || '—',
+      listID: 0,
+    },
+    {
+      key: 'ip2region', name: 'IP2Region IP 库', sub: 'IP 地理归属数据库',
+      version: ip2regionVersionLabel.value,
+      count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
+      status: ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value,
+      statusMessage: ip2regionFailureMessage.value,
+      autoUpdate: ip2regionInfo.value.auto_update,
+      lastChecked: formatDate(ip2regionInfo.value.updated_at) || '—',
+      nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
+      listID: 0,
+    },
+  ]
+  for (const src of threatSources.value) {
+    rows.push({
+      key: 'threat:' + src.name, name: src.display_name, sub: src.url,
+      version: src.version || '未更新',
+      count: src.entry_count ? src.entry_count.toLocaleString() : '—',
+      status: src.update_status, statusMessage: src.update_status === 'failed' ? src.message : '',
+      autoUpdate: src.update_enabled,
+      lastChecked: formatDate(src.last_checked) || '—',
+      nextUpdate: formatDate(src.next_update) || '—',
+      listID: src.list_id,
+    })
+  }
+  return rows
+})
+
+// 自动更新开关：按行分发到三个库的既有端点（开关状态以服务端为准，
+// 失败由对应 fetch 回滚）。
+const toggleLibAutoUpdate = (row: LibRow, val: boolean) => {
+  if (row.key === 'crs') {
+    crsInfo.value.auto_update = val
+    toggleAutoUpdate(val)
+  } else if (row.key === 'ip2region') {
+    ip2regionInfo.value.auto_update = val
+    toggleIP2RegionAutoUpdate(val)
+  } else {
+    const src = threatSources.value.find(s => 'threat:' + s.name === row.key)
+    if (src) toggleThreatFlag(src, 'update_enabled', val)
+  }
+}
+
+// 更新/日志按钮：打开对应库的更新弹框（autoStart=false 时仅查看日志）。
+const openLibDialog = (row: LibRow, _autoFocus: boolean) => {
+  if (row.key === 'crs') {
+    manualUpdate()
+  } else if (row.key === 'ip2region') {
+    manualIP2RegionUpdate()
+  } else {
+    threatRequestSeq++
+    threatUpdateInfo.value = null
+    threatUpdateLog.value = ''
+    threatUpdateDialogVisible.value = true
+  }
+}
+
+// 查看（威胁三源）：跳到 IP 地址列表 tab 并打开对应内置名单的只读弹框。
+const viewThreatList = async (row: LibRow) => {
+  activeTab.value = 'ip-lists'
+  await fetchIpLists() // 恒重拉——威胁库更新后缓存行是旧内容（实测踩坑）
+  const target = ipLists.value.find(l => l.id === row.listID)
+  if (target) openIpListDialog(target)
+}
+
+// —— 威胁库更新弹框（与 CRS/IP 库同款：状态 + 日志流 + 立即更新）——
+const threatUpdateDialogVisible = ref(false)
+const threatUpdateInfo = ref<{ running: boolean; trigger: string; started_at: string; finished_at: string; outcome: string } | null>(null)
+const threatUpdateLog = ref('')
+const threatUpdateLogRef = ref<HTMLDivElement | null>(null)
+const startingThreatUpdate = ref(false)
+let threatRequestSeq = 0
+
+const threatUpdateRunning = computed(() => threatUpdateInfo.value?.running === true)
+
+const refreshThreatUpdateStatus = async () => {
+  if (!threatUpdateDialogVisible.value) return
+  const requestSeq = ++threatRequestSeq
+  const [statusResult, logsResult] = await Promise.allSettled([
+    request.get<APIResponse<{ running: boolean; trigger: string; started_at: string; finished_at: string; outcome: string }>>('/security/threat-lib/update/status', { silent: true }),
+    request.get<APIResponse<{ content: string }>>('/security/threat-lib/update/logs', { silent: true }),
+  ])
+  if (!threatUpdateDialogVisible.value || requestSeq !== threatRequestSeq) return
+  if (statusResult.status === 'fulfilled') {
+    threatUpdateInfo.value = statusResult.value.data || null
+  }
+  if (logsResult.status === 'fulfilled') {
+    threatUpdateLog.value = logsResult.value.data?.content || ''
+    await nextTick()
+    if (threatUpdateLogRef.value) threatUpdateLogRef.value.scrollTop = threatUpdateLogRef.value.scrollHeight
+  }
+  if (!threatUpdateRunning.value && threatUpdateInfo.value) {
+    stopThreatPolling()
+    if (threatUpdateInfo.value.outcome === 'success') fetchThreatLib()
+  }
+}
+
+const threatUpdatePolling = usePollingTask(async () => { await refreshThreatUpdateStatus() }, { interval: 2000 })
+const startThreatPolling = () => { threatUpdatePolling.resume() }
+const stopThreatPolling = () => { threatUpdatePolling.pause() }
+
+const onThreatUpdateDialogOpened = async () => {
+  await refreshThreatUpdateStatus()
+  if (threatUpdateRunning.value) startThreatPolling()
+}
+const onThreatUpdateDialogClosed = () => {
+  threatRequestSeq++
+  stopThreatPolling()
+  threatUpdateInfo.value = null
+  threatUpdateLog.value = ''
+}
+
+const confirmThreatUpdate = async () => {
+  startingThreatUpdate.value = true
   try {
-    await request.post('/security/threat-lib/update')
-    ElMessage.success('威胁情报库更新已开始')
-    const deadline = Date.now() + 120_000
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 1500))
-      await fetchThreatLib()
-      if (!threatSources.value.some(s => s.update_status === 'running')) break
+    await request.post('/security/threat-lib/update', undefined, { silent: true })
+  } catch (error) {
+    if (!(error instanceof ApiRequestError && error.status === 409)) {
+      ElMessage.error(error instanceof Error ? error.message : '触发更新失败')
     }
-  } catch (e) {
-    if (!(e instanceof ApiRequestError && e.status === 409)) ElMessage.error('威胁情报库更新启动失败')
   } finally {
-    threatUpdating.value = false
-    fetchThreatLib()
+    startingThreatUpdate.value = false
   }
-}
-
-const threatEntriesDialogVisible = ref(false)
-const threatEntriesSourceName = ref('')
-const threatEntriesSourceID = ref(0)
-const threatEntries = ref<{ entry: string }[]>([])
-const threatEntriesTotal = ref(0)
-const threatEntriesPage = ref(1)
-const threatEntriesSize = 200
-const threatEntriesLoading = ref(false)
-
-const fetchThreatEntries = async (p: number) => {
-  threatEntriesLoading.value = true
-  try {
-    const res = await request.get<APIResponse<{ total: number; entries: string[] }>>(`/security/threat-lib/${threatEntriesSourceID.value}/entries?page=${p}&size=${threatEntriesSize}`)
-    if (res.data) {
-      threatEntriesTotal.value = res.data.total
-      threatEntries.value = (res.data.entries || []).map(entry => ({ entry }))
-      threatEntriesPage.value = p
-    }
-  } catch {
-    threatEntries.value = []
-    threatEntriesTotal.value = 0
-  } finally {
-    threatEntriesLoading.value = false
-  }
-}
-
-const viewThreatEntries = (row: ThreatSource) => {
-  threatEntriesSourceID.value = row.id
-  threatEntriesSourceName.value = row.display_name
-  threatEntriesPage.value = 1
-  threatEntriesDialogVisible.value = true
-  fetchThreatEntries(1)
-}
-
-// 鉴权下载（window.open 不带 Authorization 会 401）——与备份导出同款的
-// blob + objectURL 模式。
-const exportThreatSource = async (row: ThreatSource) => {
-  try {
-    const blob = await request.get<Blob>(`/security/threat-lib/${row.id}/export`, { responseType: 'blob' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `threat-${row.name}-${new Date().toISOString().slice(0, 10)}.txt`
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch {
-    ElMessage.error('导出失败（该源可能尚无已下载数据）')
-  }
+  if (!threatUpdateDialogVisible.value) return
+  await refreshThreatUpdateStatus()
+  if (!threatUpdateDialogVisible.value) return
+  startThreatPolling()
 }
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
 interface IPListEntry { value: string; remark: string }
 interface IPListRefPolicy { id: number; name: string }
-interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_policies: IPListRefPolicy[]; created_by: number; created_at: string; updated_by: number; updated_at: string }
+interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_policies: IPListRefPolicy[]; created_by: number; created_at: string; updated_by: number; updated_at: string; system: boolean }
 interface CRSUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 
@@ -634,6 +658,7 @@ const getUpdaterName = (userId?: number) => {
 }
 
 const crsStageLabels: Record<string, string> = {
+  running: '更新中',
   checking: '检查更新',
   downloading: '下载规则库',
   installing: '安装规则库',
@@ -646,7 +671,7 @@ const crsStatusLabel = (s: string): string => crsStageLabels[s] || s || '—'
 
 const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
   if (!s || s === 'idle') return 'info'
-  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading') return 'warning'
+  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading' || s === 'running') return 'warning'
   if (s === 'success' || s === '已最新' || s === '更新成功') return 'success'
   if (s === 'failed' || s === '更新失败') return 'danger'
   if (s.includes('失败') || s.includes('错误')) return 'danger'
@@ -674,7 +699,7 @@ const ip2regionStageLabelsWithNotInstalled: Record<string, string> = { ...ip2reg
 const ip2regionStatusLabel = (s: string): string => ip2regionStageLabelsWithNotInstalled[s] || s || '—'
 const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
   if (s === 'not-installed' || !s || s === 'idle') return 'info'
-  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading') return 'warning'
+  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading' || s === 'running') return 'warning'
   if (s === 'success') return 'success'
   if (s === 'failed') return 'danger'
   return 'info'
@@ -757,6 +782,8 @@ const ipListsPaged = computed(() => {
 // 搜索收窄后高页码会落在空页，回到第 1 页
 watch(ipListSearch, () => { ipListPage.value = 1 })
 const ipListDialogVisible = ref(false)
+// 内置名单（威胁情报库 system=1）弹框恒只读（管理员同）——内容只读查看/导出。
+const ipListDialogReadOnly = computed(() => isReadOnly.value || editingIpListSystem.value)
 const editingIpListId = ref<number | null>(null)
 const savingIpList = ref(false)
 const ipListForm = ref<{ name: string; description: string; category: string; entries: IPListEntry[] }>({ name: '', description: '', category: '', entries: [] })
@@ -766,7 +793,9 @@ const fetchIpLists = async () => {
   try { const res = await request.get<APIResponse<IPListRow[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch {} finally { loadingIpLists.value = false }
 }
 
+const editingIpListSystem = ref(false)
 const openIpListDialog = (row?: IPListRow) => {
+  editingIpListSystem.value = row?.system === true
   editingIpListId.value = row?.id ?? null
   ipListForm.value = row
     ? { name: row.name, description: row.description, category: row.category, entries: row.entries.map((e) => ({ value: e.value, remark: e.remark })) }

@@ -368,9 +368,6 @@ type ClusterWafFilesRef struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
-	// ThreatSha256 威胁情报库目录（/app/waf/threat/*.txt）内容哈希——
-	// v2.3.x 威胁库文件随 waf-files 通道下发。
-	ThreatSha256 string `json:"threat_sha256,omitempty"`
 }
 
 type ClusterSecurityCRSVersion struct {

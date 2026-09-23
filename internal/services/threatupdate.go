@@ -2,30 +2,29 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/wafiplist"
 )
 
-// 威胁情报库（v2.3.x）：三个内置只读源（USTC/FireHOL level1/ET Compromised）
-// 的单一顺序更新任务。状态机镜像 CRS/IP2Region 更新族（idle/running/
-// success/failed + 失败指数退避），差异：多行表（每源一行状态）、产物为
-// 纯文本名单（无内存热换——@ipListFast 算子按 mtime/size 自动重建）。
+// 威胁情报库（v2.3.2 名单化重构）：三个内置只读源（USTC/FireHOL level1/ET
+// Compromised）的单一顺序更新任务。内容落 security_ip_lists 的 system=1
+// 内置名单行（策略经 ip_acl_list_refs/ip_whitelist_refs 引用生效——
+// 「引用即应用」，无全局兜底规则）；状态/计数/版本落 security_threat_sources
+// （状态机镜像 CRS/IP2Region 更新族：idle/running/success/failed + 失败
+// 指数退避）。内容与状态两表分离，渲染走名单引用的既有链路
+// （mergedACLList → 聚合 → @ipListFast 文件投影）。
 
 var ErrThreatUpdateRunning = errors.New("威胁情报库更新任务正在进行中")
-
-// ThreatDataDir 是威胁库文件目录（每源 <name>.txt + 合并 intel-merged.txt）。
-// 测试可改。
-var ThreatDataDir = "/app/waf/threat"
 
 const (
 	threatMaxBodyBytes   = 16 << 20 // 16MB
@@ -40,6 +39,11 @@ type ThreatUpdateManager struct {
 	runDone       chan struct{}
 	schedulerStop chan struct{}
 	schedulerDone chan struct{}
+	// lastTrigger/lastFinishedAt 为任务级状态（status 端点 + 弹框展示）。
+	lastTrigger     string
+	lastStartedAt   string
+	lastFinishedAt  string
+	lastTaskOutcome string // success / failed / ""（未跑过）
 }
 
 // nil-until-init（镜像 CRS/IP2Region 管理器）：仅 main.go 初始化——集群
@@ -71,14 +75,30 @@ func (m *ThreatUpdateManager) IsRunning() bool {
 	return m.running
 }
 
-// RebuildMergedFile 导出合并重建（apply 开关变更后由 handler 调用，
-// 使 id:14 规则随新开关即时收敛，无需等下次更新任务）。
-func (m *ThreatUpdateManager) RebuildMergedFile() {
-	m.rebuildMergedFile()
+// TaskStatus 任务级状态快照（status 端点）。
+type ThreatTaskStatus struct {
+	Running    bool   `json:"running"`
+	Trigger    string `json:"trigger"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	Outcome    string `json:"outcome"`
 }
 
-// threatReloader 合并文件变化后的 Caddy 重载（main.go 注入 caddyReloader；
-// 镜像 CRS/IP2Region 更新后 reloader 同族——否则 id:14 拦截面不随更新收敛）。
+func (m *ThreatUpdateManager) StatusSnapshot() ThreatTaskStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return ThreatTaskStatus{
+		Running:    m.running,
+		Trigger:    m.lastTrigger,
+		StartedAt:  m.lastStartedAt,
+		FinishedAt: m.lastFinishedAt,
+		Outcome:    m.lastTaskOutcome,
+	}
+}
+
+// threatReloader 名单内容变化后的 Caddy 重载（main.go 注入 caddyReloader）——
+// 引用名单的策略渲染产物（@ipListFast 文件）随新内容收敛，否则更新「成功」
+// 但拦截面不变。
 var threatReloader func() error
 
 // SetThreatReloader 注册重载回调（nil=清除，测试用）。
@@ -129,13 +149,12 @@ type threatSourceRow struct {
 	name          string
 	url           string
 	updateEnabled bool
-	applyEnabled  bool
 }
 
 // threatDueSources 返回本次任务处理的源：manual=全部启用源；auto=启用且到期
 // （next_update 空或已过）——失败源按退避排程单独重试，不拖累健康源的重下载。
 func threatDueSources(trigger string) ([]threatSourceRow, error) {
-	rows, err := db.DB.Query(`SELECT id, name, url, update_enabled, apply_enabled, COALESCE(next_update,'')
+	rows, err := db.DB.Query(`SELECT id, name, url, update_enabled, COALESCE(next_update,'')
 		FROM security_threat_sources WHERE update_enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -146,7 +165,7 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 	for rows.Next() {
 		var s threatSourceRow
 		var nextUpdate string
-		if err := rows.Scan(&s.id, &s.name, &s.url, &s.updateEnabled, &s.applyEnabled, &nextUpdate); err != nil {
+		if err := rows.Scan(&s.id, &s.name, &s.url, &s.updateEnabled, &nextUpdate); err != nil {
 			return nil, err
 		}
 		if trigger != "manual" && nextUpdate != "" {
@@ -160,6 +179,10 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 }
 
 func (m *ThreatUpdateManager) run(trigger string) {
+	m.mu.Lock()
+	m.lastTrigger = trigger
+	m.lastStartedAt = time.Now().UTC().Format(crsTimeLayout)
+	m.mu.Unlock()
 	sources, err := threatDueSources(trigger)
 	if err != nil {
 		Logf("error", "威胁情报库: 读取源列表失败: %v", err)
@@ -168,38 +191,59 @@ func (m *ThreatUpdateManager) run(trigger string) {
 	if len(sources) == 0 {
 		return
 	}
+	AppendThreatUpdateLog("INFO", "checking", fmt.Sprintf("开始更新威胁情报库（%d 个启用源）", len(sources)))
+	contentChanged := false
+	anyFailed := false
 	for _, source := range sources {
-		m.updateOneSource(source, trigger)
+		changed, failed := m.updateOneSource(source, trigger)
+		contentChanged = contentChanged || changed
+		anyFailed = anyFailed || failed
 	}
-	if m.rebuildMergedFile() && threatReloader != nil {
+	m.mu.Lock()
+	m.lastFinishedAt = time.Now().UTC().Format(crsTimeLayout)
+	if anyFailed {
+		m.lastTaskOutcome = "failed"
+	} else {
+		m.lastTaskOutcome = "success"
+	}
+	m.mu.Unlock()
+	// 名单内容变化 → 一次重载（引用名单的策略渲染随新内容收敛）。
+	if contentChanged && threatReloader != nil {
+		AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化，重载 Caddy 配置")
 		if err := threatReloader(); err != nil {
-			Logf("error", "威胁情报库: 合并文件变化后重载失败: %v", err)
+			Logf("error", "威胁情报库: 名单变化后重载失败: %v", err)
+			AppendThreatUpdateLog("ERROR", "reloading", fmt.Sprintf("重载 Caddy 配置失败: %v", err))
 		}
 	}
 }
 
-// updateOneSource 下载→解析→写文件→更新行状态；失败仅影响该源。
-func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger string) {
+// updateOneSource 下载→解析→写内置名单→更新行状态；失败仅影响该源。
+// 返回（名单内容是否变化， 是否失败）。
+func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger string) (bool, bool) {
 	now := time.Now().UTC()
 	nowStr := now.Format(crsTimeLayout)
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='running', message='', trigger=?, started_at=?, last_checked=?, updated_at=datetime('now') WHERE id=?`,
 		trigger, nowStr, nowStr, source.id); err != nil {
 		Logf("error", "威胁情报库: 标记源 %s 运行中失败: %v", source.name, err)
-		return
+		return false, true
 	}
+	AppendThreatUpdateLog("INFO", "downloading", fmt.Sprintf("下载 %s（%s）", source.name, source.url))
 
 	entries, err := downloadAndParseThreatSource(source)
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
 		failSourceRow(source.id, finished, err)
-		return
+		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 更新失败: %v", source.name, err))
+		return false, true
 	}
 
-	// 条目文件（原子写；空名单写空文件——源合法为空时该源贡献零条目）
-	path := filepath.Join(ThreatDataDir, source.name+".txt")
-	if err := writeTextFileAtomic(path, strings.Join(entries, "\n")+"\n"); err != nil {
-		failSourceRow(source.id, finished, fmt.Errorf("写入源文件失败: %w", err))
-		return
+	// 聚合归一后写内置名单（内容未变化零写入——不重载、不 bump 集群版本）。
+	merged := wafiplist.AggregateIPEntries(entries)
+	changed, werr := writeThreatSystemList(source.name, merged)
+	if werr != nil {
+		failSourceRow(source.id, finished, fmt.Errorf("写入内置名单失败: %w", werr))
+		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 写入名单失败: %v", source.name, werr))
+		return false, true
 	}
 	version := time.Now().UTC().Format("2006.01.02")
 	next := time.Now().UTC().Add(24 * time.Hour).Format(crsTimeLayout)
@@ -208,6 +252,52 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 		Logf("error", "威胁情报库: 更新源 %s 成功状态失败: %v", source.name, err)
 	}
 	Logf("info", "威胁情报库: 源 %s 更新成功（%d 条，版本 %s）", source.name, len(entries), version)
+	AppendThreatUpdateLog("INFO", "success", fmt.Sprintf("源 %s 更新成功（%d 条，版本 %s）", source.name, len(entries), version))
+	return changed, false
+}
+
+// writeThreatSystemList 把聚合条目写入源对应的内置只读名单行
+// （security_ip_lists system=1，name 经 db.ThreatListNameBySource 映射）；
+// 行缺失时补建（备份还原/异常清理后的自愈）。返回 changed=内容真实变化。
+func writeThreatSystemList(source string, entries []string) (bool, error) {
+	name := db.ThreatListNameBySource(source)
+	if name == "" {
+		return false, fmt.Errorf("源 %s 未登记内置名单", source)
+	}
+	payload := make([]models.IPListEntry, 0, len(entries))
+	for _, e := range entries {
+		payload = append(payload, models.IPListEntry{Value: e})
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("编码名单条目失败: %w", err)
+	}
+	var existing string
+	err = db.DB.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE name=?`, name).Scan(&existing)
+	if err != nil {
+		// 行缺失自愈补建
+		if _, ierr := db.DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
+			VALUES (?, ?, '恶意 IP', ?, 1, datetime('now'), datetime('now'))`, name, threatListDescription(source), string(encoded)); ierr != nil {
+			return false, fmt.Errorf("补建内置名单失败: %w", ierr)
+		}
+		return true, nil
+	}
+	if existing == string(encoded) {
+		return false, nil
+	}
+	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name); err != nil {
+		return false, fmt.Errorf("更新内置名单失败: %w", err)
+	}
+	return true, nil
+}
+
+func threatListDescription(source string) string {
+	for _, sl := range db.ThreatSystemLists {
+		if sl.Source == source {
+			return sl.Description
+		}
+	}
+	return ""
 }
 
 // failSourceRow 失败落库：status=failed + message + consecutive_failures+1 +
@@ -262,7 +352,7 @@ func downloadAndParseThreatSource(source threatSourceRow) ([]string, error) {
 			continue
 		}
 		total++
-		if _, err := parseThreatEntry(line); err == nil {
+		if _, err := wafiplist.ParseIPEntry(line); err == nil {
 			entries = append(entries, line)
 		}
 	}
@@ -276,79 +366,4 @@ func downloadAndParseThreatSource(source threatSourceRow) ([]string, error) {
 		return nil, fmt.Errorf("条目数 %d 超过 200000 上限", len(entries))
 	}
 	return entries, nil
-}
-
-func parseThreatEntry(entry string) (any, error) {
-	return wafiplist.ParseIPEntry(entry)
-}
-
-// rebuildMergedFile 取全部 apply_enabled 源的当前条目文件并集（含失败源的
-// 上次成功文件——失败不清空已生效判定），聚合后原子写 intel-merged.txt；
-// 全部源关闭应用时删除合并文件（预检 id:14 随之跳过）。
-// 返回 changed=合并文件内容真实变化（调用方据此决定是否重载 Caddy）。
-func (m *ThreatUpdateManager) rebuildMergedFile() bool {
-	rows, err := db.DB.Query(`SELECT name FROM security_threat_sources WHERE apply_enabled=1 ORDER BY id`)
-	if err != nil {
-		Logf("error", "威胁情报库: 读取应用开关失败: %v", err)
-		return false
-	}
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			Logf("error", "威胁情报库: 扫描应用开关失败: %v", err)
-			return false
-		}
-		names = append(names, name)
-	}
-	rows.Close()
-
-	mergedPath := filepath.Join(ThreatDataDir, "intel-merged.txt")
-	var union []string
-	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(ThreatDataDir, name+".txt"))
-		if err != nil {
-			continue // 无文件（从未成功/被禁用更新）——该源本轮无贡献
-		}
-		for _, line := range strings.Split(string(raw), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				union = append(union, line)
-			}
-		}
-	}
-	if len(union) == 0 {
-		if _, statErr := os.Stat(mergedPath); statErr == nil {
-			_ = os.Remove(mergedPath)
-			return true
-		}
-		return false
-	}
-	merged := wafiplist.AggregateIPEntries(union)
-	newContent := strings.Join(merged, "\n") + "\n"
-	if old, readErr := os.ReadFile(mergedPath); readErr == nil && string(old) == newContent {
-		return false
-	}
-	if err := writeTextFileAtomic(mergedPath, newContent); err != nil {
-		Logf("error", "威胁情报库: 合并文件写入失败: %v", err)
-		return false
-	}
-	Logf("info", "威胁情报库: 合并生效 %d 条（%d 源）", len(merged), len(names))
-	return true
-}
-
-// writeTextFileAtomic tmp+rename 原子写。
-func writeTextFileAtomic(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
 }

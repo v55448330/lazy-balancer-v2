@@ -535,7 +535,7 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 // 的目标表，NULL 归一口径与 security_policies 一致（entries '[]'、审计列
 // 0/”），保证主从落库行为一致。
 func (s *ClusterService) snapshotSecurityIPLists(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_ip_lists", "id,name,COALESCE(description,'') AS description,COALESCE(category,'') AS category,COALESCE(entries,'[]') AS entries,COALESCE(created_by,0) AS created_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_by,0) AS updated_by,COALESCE(updated_at,'') AS updated_at", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_ip_lists", "id,name,COALESCE(description,'') AS description,COALESCE(category,'') AS category,COALESCE(entries,'') AS entries,COALESCE(created_by,0) AS created_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_by,0) AS updated_by,COALESCE(updated_at,'') AS updated_at,COALESCE(system,0) AS system", "id")
 }
 
 // snapshotSecurityThreatSources（v2.3.x）dump 威胁情报库源表：NULL 归一口径

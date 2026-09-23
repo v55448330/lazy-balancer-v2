@@ -531,7 +531,8 @@ func createTables() error {
 		created_by INTEGER DEFAULT 0,
 		created_at TEXT DEFAULT '',
 		updated_by INTEGER DEFAULT 0,
-		updated_at TEXT DEFAULT ''
+		updated_at TEXT DEFAULT '',
+		system INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS security_policies (
@@ -788,6 +789,7 @@ func runMigrations() error {
 		"security_ip2region_version.finished_at":          "DATETIME",
 		"security_ip2region_version.consecutive_failures": "INTEGER DEFAULT 0",
 		"upstreams.max_connections":                       "INTEGER DEFAULT 0",
+		"security_ip_lists.system":                        "INTEGER NOT NULL DEFAULT 0",
 		"path_rules.upstream_path":                        "TEXT NOT NULL DEFAULT ''",
 		"certificate_configs.dns_credentials":             "TEXT",
 		"cert_jobs.ca_provider_id":                        "INTEGER DEFAULT 0",
@@ -1428,6 +1430,17 @@ func runMigrations() error {
 	}
 	if err := migrateDropMergedSyncSwitchColumns(); err != nil {
 		return err
+	}
+
+	// 威胁情报库内置只读名单种子（v2.3.2 名单化重构）：name 稳定（更新任务
+	// 定位键），条目空，由更新任务独占写；system=1 行面板/API 拒改拒删。
+	for _, sl := range ThreatSystemLists {
+		if _, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
+			SELECT ?, ?, '恶意 IP', '[]', 1, datetime('now'), datetime('now')
+			WHERE NOT EXISTS (SELECT 1 FROM security_ip_lists WHERE name=?)`,
+			sl.Name, sl.Description, sl.Name); err != nil {
+			return fmt.Errorf("failed to seed threat system list %s: %w", sl.Name, err)
+		}
 	}
 
 	return nil

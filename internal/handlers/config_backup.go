@@ -335,6 +335,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"security_ip_lists": {
 		"description": "", "category": "", "entries": "[]",
 		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
+		"system": int64(0), // v2.3.2 名单化：NULL 归一 0（非内置）
 	},
 	"security_crs_version": {
 		"updated_at": "", "auto_update": int64(1), "update_status": "idle", "message": "",

@@ -32,7 +32,7 @@
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
         <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="4096" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，请求体体积上限（WAF/代理流量/管理接口）；0 = 使用默认 128</el-text>
+        <el-text type="info" size="small" class="tip-inline tip-nowrap">MB，请求体体积上限（WAF/代理流量/管理接口）；0 = 使用默认 128（保存后显示为实际生效值）</el-text>
       </el-form-item>
       <el-form-item label="读取超时">
         <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
@@ -169,7 +169,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
@@ -299,14 +299,20 @@ const handleSave = async (): Promise<void> => {
       source: 'caddy',
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
-    if (preview.data?.changed) {
-      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
-      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || 'Caddy 配置'}？`, {
+    const changed = preview.data?.changed ?? false
+    if (changed) {
+      const changes = preview.data?.changes?.length ? preview.data.changes.join('；') : '检测到配置变更'
+      await ElMessageBox.confirm(changes, `确认保存${preview.data?.section || 'Caddy 配置'}？`, {
         confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
       })
     }
-    await request.put('/config', payload)
-    mfaAwareSuccess('保存成功')
+    const saved = await request.put('/config', payload)
+    // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」
+    if (!changed || saved?.message === '配置无变化') {
+      ElMessage.info('配置无变化')
+    } else {
+      mfaAwareSuccess('保存成功')
+    }
     emit('save')
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return

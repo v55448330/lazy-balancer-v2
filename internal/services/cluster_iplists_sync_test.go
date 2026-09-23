@@ -34,6 +34,15 @@ func TestClusterSnapshot_securityIPListsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(snapshot.SecurityIPLists, &lists); err != nil {
 		t.Fatalf("parse security ip lists: %v", err)
 	}
+	// 3 行 system=1 内置名单种子随表同步（v2.3.2 名单化）——按 system 过滤
+	// 断言用户行。
+	var userLists []map[string]any
+	for _, l := range lists {
+		if l["system"] == float64(0) || l["system"] == nil {
+			userLists = append(userLists, l)
+		}
+	}
+	lists = userLists
 	if len(lists) != 1 {
 		t.Fatalf("ip lists=%d, want 1", len(lists))
 	}
