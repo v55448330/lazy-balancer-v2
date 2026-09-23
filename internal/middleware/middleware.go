@@ -511,6 +511,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/custom-rules", h.ListSecurityCustomRules)
 				business.GET("/security/block-pages", h.ListSecurityBlockPages)
 				business.GET("/security/ip-lists", h.ListIPLists)
+				business.GET("/security/ip-lists/:id", h.GetIPList)
 				business.GET("/security/crs/rules", h.ListCRSRules)
 				business.GET("/security/crs/rule-index", h.GetCRSRuleIndex)
 				business.GET("/security/crs/rules/:filename", h.GetCRSRuleContent)

@@ -20,8 +20,8 @@
     />
 
     <el-row :gutter="20" class="mb-5">
-      <el-col :span="24">
-        <el-card shadow="always">
+      <el-col :xs="24" :md="12">
+        <el-card shadow="always" class="overview-card">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -60,6 +60,20 @@
                 </div>
               </div>
             </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :md="12">
+        <el-card shadow="always" class="overview-card">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Files /></el-icon>
+                <span>规则库状态</span>
+              </div>
+            </div>
+          </template>
+          <div class="stat-row">
             <div class="stat-col">
               <div class="stat-box stat-box--success">
                 <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
@@ -86,10 +100,10 @@
               <div class="stat-box stat-box--success">
                 <div class="stat-box__icon"><el-icon><Aim /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ threatMergedCount > 0 ? threatMergedCount.toLocaleString() + ' 条' : '未更新' }}</div>
-                  <div class="stat-box__label">威胁情报库{{ threatLatestVersion ? ' · ' + threatLatestVersion : '' }}</div>
+                  <div class="stat-box__value">{{ threatLatestVersion || '未更新' }}</div>
+                  <div class="stat-box__label">威胁情报库{{ threatMergedCount > 0 ? ' · ' + threatMergedCount.toLocaleString() + ' 条' : '' }}</div>
                   <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
-                  <el-tag v-else-if="threatRunning" type="warning" size="small" effect="plain" style="margin-top: 4px">更新中</el-tag>
+                  <el-tag v-else-if="threatStatus" :type="statusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(threatStatus) }}</el-tag>
                 </div>
               </div>
             </div>
@@ -384,12 +398,22 @@ const threatMergedCount = ref(0)
 const threatLatestVersion = ref('')
 const threatRunning = ref(false)
 const threatError = ref(false)
+// 聚合三源状态（与 CRS/IP 库框的常驻状态 tag 同构）：更新中>失败>成功>未更新
+const threatStatus = computed(() => {
+  if (threatRunning.value) return 'reloading'
+  if (threatSourcesStatus.value === 'failed') return 'failed'
+  if (threatLatestVersion.value) return 'success'
+  return ''
+})
+const threatSourcesStatus = ref('')
 const fetchThreatLib = async () => {
   try {
     const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; total_entries: number }>>('/security/threat-lib')
     threatMergedCount.value = res.data?.total_entries || 0
     threatLatestVersion.value = (res.data?.sources || []).map(s => s.version).filter(Boolean).sort().pop() || ''
     threatRunning.value = (res.data?.sources || []).some(s => s.update_status === 'running')
+    const statuses = (res.data?.sources || []).map(s => s.update_status)
+    threatSourcesStatus.value = statuses.some(x => x === 'failed') ? 'failed' : ''
     threatError.value = false
   } catch {
     threatError.value = true
@@ -401,6 +425,7 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 
 <style scoped>
 /* 等宽统计卡行:flex 五列严格等宽(原 el-col 5/5/5/5/4 末卡窄 20%) */
+.overview-card { height: 100%; }
 .stat-row { display: flex; gap: 16px; }
 .stat-col { flex: 1 1 0; min-width: 0; }
 @media (max-width: 1200px) {
@@ -416,6 +441,7 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 .title-icon { font-size: 16px; color: #3b82f6; }
 
 .stat-box {
+  min-height: 108px;
   display: flex;
   align-items: center;
   gap: 12px;

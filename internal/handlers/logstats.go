@@ -223,6 +223,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
+		{Key: "threat_update", Name: "威胁库更新日志", LimitBytes: sizeLimitMB("cert_job_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "runtime", Name: "运行日志", LimitBytes: sizeLimitMB("runtime_log_size_mb", 100), KeepCount: 0, RetentionNote: "时间戳轮转，按保留期清理（份数随保留期）", ConfigSource: "基础设置 · 运行日志大小"},
 		{Key: "caddy", Name: "Caddy 运行日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
 		{Key: "rule_access", Name: "规则访问日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
@@ -286,6 +287,9 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 	if info := byKey("ip2region_update"); info != nil {
 		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "ip2region-update.log"))
+	}
+	if info := byKey("threat_update"); info != nil {
+		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "threat-update.log"))
 	}
 
 	ruleID := strings.TrimSpace(c.Query("caddy_id"))

@@ -16,20 +16,26 @@
           <div class="crs-header-title">
             <span style="font-weight: 500;">规则库</span>
           </div>
+          <div class="lib-summary">{{ libSummary }}</div>
         </div>
       </template>
-      <el-table :data="libRows" size="small">
+      <el-table :data="libRows" size="small" class="lib-table">
         <el-table-column label="名称" min-width="220">
           <template #default="{ row }">
-            <div>{{ row.name }}</div>
-            <div v-if="row.sub" class="threat-url">{{ row.sub }}</div>
+            <div class="lib-name">
+              <span class="lib-icon" :class="row.iconClass"><el-icon :size="15"><component :is="row.icon" /></el-icon></span>
+              <div class="lib-name-text">
+                <div class="lib-name-main">{{ row.name }}</div>
+                <div v-if="row.sub" class="lib-name-sub">{{ row.sub }}</div>
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="版本" width="120">
-          <template #default="{ row }">{{ row.version }}</template>
+          <template #default="{ row }"><span class="lib-version">{{ row.version }}</span></template>
         </el-table-column>
         <el-table-column label="条目数" width="110" align="right">
-          <template #default="{ row }">{{ row.count }}</template>
+          <template #default="{ row }"><span class="lib-count">{{ row.count }}</span></template>
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
@@ -51,9 +57,7 @@
         </el-table-column>
         <el-table-column label="操作" width="170" align="center">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" :disabled="isReadOnly || isSlaveNode" @click="openLibDialog(row, true)">更新</el-button>
-            <el-button size="small" link type="primary" @click="openLibDialog(row, false)">日志</el-button>
-            <el-button v-if="row.listID" size="small" link type="primary" @click="viewThreatList(row)">查看</el-button>
+            <el-button size="small" link type="primary" @click="openLibDialog(row)">更新详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -300,7 +304,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="ipListDialogVisible" width="min(760px, 94vw)" class="ip-list-dialog" top="6vh">
+    <el-dialog v-model="ipListDialogVisible" width="min(900px, 94vw)" class="ip-list-dialog" top="6vh">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><List /></el-icon></div>
@@ -310,7 +314,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="ipListDialogReadOnly">
+      <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="ipListDialogReadOnly" v-loading="loadingIpListDetail">
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
         </el-form-item>
@@ -325,30 +329,44 @@
         </el-form-item>
         <el-form-item label="条目" required>
           <div class="entries-block">
-            <el-table :data="ipListForm.entries" size="small" max-height="360" empty-text="">
+            <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
-              <el-table-column label="IP / CIDR" min-width="220">
+              <el-table-column label="#" width="70" align="right">
+                <template #default="{ $index }"><span class="ip-entry-index">{{ ipListEntryPageStart + $index + 1 }}</span></template>
+              </el-table-column>
+              <el-table-column label="IP / CIDR" min-width="260">
                 <template #default="{ row }">
-                  <el-input v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'ip-entry-invalid': !isValidCidr(row.value) }" />
+                  <span v-if="ipListDialogReadOnly" class="ip-entry-text">{{ row.value }}</span>
+                  <el-input v-else v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'ip-entry-invalid': !isValidCidr(row.value) }" />
                 </template>
               </el-table-column>
               <el-table-column label="备注" min-width="160">
                 <template #default="{ row }">
-                  <el-input v-model="row.remark" placeholder="可选备注" size="small" maxlength="100" />
+                  <span v-if="ipListDialogReadOnly" class="ip-entry-text">{{ row.remark }}</span>
+                  <el-input v-else v-model="row.remark" placeholder="可选备注" size="small" maxlength="100" />
                 </template>
               </el-table-column>
-              <el-table-column label="" width="80" align="center">
+              <el-table-column v-if="!ipListDialogReadOnly" label="" width="80" align="center">
                 <template #default="{ $index }">
-                  <el-button link type="danger" size="small" :disabled="ipListDialogReadOnly" @click="ipListForm.entries.splice($index, 1)">删除</el-button>
+                  <el-button link type="danger" size="small" @click="ipListForm.entries.splice(ipListEntryPageStart + $index, 1)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
+            <div v-if="ipListForm.entries.length > ipListEntryPageSize" class="entries-pagination">
+              <el-pagination
+                v-model:current-page="ipListEntryPage"
+                :page-size="ipListEntryPageSize"
+                :total="ipListForm.entries.length"
+                layout="total, prev, pager, next"
+                size="small"
+              />
+            </div>
             <div class="entries-toolbar">
-              <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain @click="ipListForm.entries.push({ value: '', remark: '' })">
+              <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain @click="addIpListEntry">
                 + 添加条目
               </el-button>
               <div class="entries-toolbar-right">
-                <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="triggerImportEntries">导入</el-button>
+                <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain @click="triggerImportEntries">导入</el-button>
                 <el-button size="small" type="primary" plain @click="exportIpListEntries">导出</el-button>
               </div>
             </div>
@@ -358,8 +376,13 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="ipListDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="ipListDialogReadOnly" :loading="savingIpList" @click="saveIpList">保存</el-button>
+        <template v-if="ipListDialogReadOnly">
+          <el-button @click="ipListDialogVisible = false">关闭</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="ipListDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="savingIpList" @click="saveIpList">保存</el-button>
+        </template>
       </template>
     </el-dialog>
 
@@ -425,12 +448,36 @@
         <span>当前状态</span>
         <el-tag :type="crsStatusTagType(threatUpdateRunning ? 'running' : (threatUpdateInfo?.outcome || 'idle'))" size="small" effect="light">{{ threatUpdateRunning ? '更新中' : (threatUpdateInfo?.outcome === 'success' ? '更新成功' : threatUpdateInfo?.outcome === 'failed' ? '更新失败' : '空闲') }}</el-tag>
       </div>
+      <el-table :data="threatSources" size="small" class="threat-source-table">
+        <el-table-column label="来源" min-width="170">
+          <template #default="{ row }">{{ row.display_name }}</template>
+        </el-table-column>
+        <el-table-column label="条目数" width="100" align="right">
+          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="版本" width="110">
+          <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tooltip :disabled="!(row.update_status === 'failed' && row.message)" :content="row.message">
+              <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column label="自动更新" width="90" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.update_enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: boolean) => toggleThreatFlag(row, 'update_enabled', v)" />
+          </template>
+        </el-table-column>
+      </el-table>
       <div ref="threatUpdateLogRef" class="update-log-container">
         <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
         <el-empty v-else description="暂无更新日志" :image-size="60" />
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
+          <LogStorageBar log-key="threat_update" style="margin-right: auto" />
           <el-button @click="threatUpdateDialogVisible = false">关闭</el-button>
           <el-button v-if="!threatUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingThreatUpdate" @click="confirmThreatUpdate">立即更新</el-button>
         </div>
@@ -442,7 +489,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import { Filter, List, Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
+import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -486,6 +533,8 @@ const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled', val:
 // —— 规则库统一表（v2.3.2）：CRS/IP2Region/威胁三源五行同一口径 ——
 interface LibRow {
   key: string
+  icon: typeof Lock
+  iconClass: string
   name: string
   sub: string
   version: string
@@ -495,23 +544,21 @@ interface LibRow {
   autoUpdate: boolean
   lastChecked: string
   nextUpdate: string
-  listID: number
 }
 
 const libRows = computed<LibRow[]>(() => {
   const rows: LibRow[] = [
     {
-      key: 'crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
+      key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
       version: crsInfo.value.version || '—',
       count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
       status: crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
       autoUpdate: crsInfo.value.auto_update,
       lastChecked: formatDate(crsInfo.value.updated_at) || '—',
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
-      listID: 0,
     },
     {
-      key: 'ip2region', name: 'IP2Region IP 库', sub: 'IP 地理归属数据库',
+      key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: 'IP2Region IP 库', sub: 'IP 地理归属数据库',
       version: ip2regionVersionLabel.value,
       count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
       status: ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value,
@@ -519,22 +566,41 @@ const libRows = computed<LibRow[]>(() => {
       autoUpdate: ip2regionInfo.value.auto_update,
       lastChecked: formatDate(ip2regionInfo.value.updated_at) || '—',
       nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
-      listID: 0,
     },
   ]
-  for (const src of threatSources.value) {
+  // 威胁情报库=父行（三源为子集）：版本=最近更新日期，条目=三源合计，
+  // 状态聚合（任一失败>更新中>成功>未更新），开关=全开/全关。
+  if (threatSources.value.length > 0) {
+    const srcs = threatSources.value
+    const totalEntries = srcs.reduce((sum, x) => sum + x.entry_count, 0)
+    const latestVersion = srcs.map(x => x.version).filter(Boolean).sort().pop() || ''
+    const anyFailed = srcs.find(x => x.update_status === 'failed')
+    const anyRunning = srcs.some(x => x.update_status === 'running')
+    const status = anyRunning ? 'running' : anyFailed ? 'failed' : latestVersion ? 'success' : 'idle'
     rows.push({
-      key: 'threat:' + src.name, name: src.display_name, sub: src.url,
-      version: src.version || '未更新',
-      count: src.entry_count ? src.entry_count.toLocaleString() : '—',
-      status: src.update_status, statusMessage: src.update_status === 'failed' ? src.message : '',
-      autoUpdate: src.update_enabled,
-      lastChecked: formatDate(src.last_checked) || '—',
-      nextUpdate: formatDate(src.next_update) || '—',
-      listID: src.list_id,
+      key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
+      name: '威胁情报库',
+      sub: srcs.length + ' 个来源：' + srcs.map(x => ({ ustc: '中科大黑', firehol_l1: 'FireHOL', et_compromised: 'ET' } as Record<string, string>)[x.name] ?? x.display_name).join(' / '),
+      version: latestVersion || '未更新',
+      count: totalEntries > 0 ? totalEntries.toLocaleString() + ' 条' : '—',
+      status, statusMessage: anyFailed?.message || '',
+      autoUpdate: srcs.every(x => x.update_enabled),
+      lastChecked: srcs.map(x => formatDate(x.last_checked)).filter(Boolean).sort().pop() || '—',
+      nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
     })
   }
   return rows
+})
+
+// 卡头摘要：库数 + 合计条目（威胁三源条目数 + IP 库条目数）。
+const libSummary = computed(() => {
+  let totalEntries = 0
+  for (const src of threatSources.value) totalEntries += src.entry_count
+  if (ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled') {
+    totalEntries += ip2regionInfo.value.db_size
+  }
+  const threatOk = threatSources.value.filter(x => x.update_status === 'success').length
+  return `共 ${libRows.value.length} 个库 · 合计 ${totalEntries.toLocaleString()} 条 · 威胁库 ${threatOk}/3 就绪`
 })
 
 // 自动更新开关：按行分发到三个库的既有端点（开关状态以服务端为准，
@@ -546,19 +612,21 @@ const toggleLibAutoUpdate = (row: LibRow, val: boolean) => {
   } else if (row.key === 'ip2region') {
     ip2regionInfo.value.auto_update = val
     toggleIP2RegionAutoUpdate(val)
-  } else {
-    const src = threatSources.value.find(s => 'threat:' + s.name === row.key)
-    if (src) toggleThreatFlag(src, 'update_enabled', val)
+  } else if (row.key === 'threat') {
+    // 父开关=三源全开/全关（逐源微调在更新弹框内）
+    for (const src of threatSources.value) {
+      if (src.update_enabled !== val) toggleThreatFlag(src, 'update_enabled', val)
+    }
   }
 }
 
 // 更新/日志按钮：打开对应库的更新弹框（autoStart=false 时仅查看日志）。
-const openLibDialog = (row: LibRow, _autoFocus: boolean) => {
+const openLibDialog = (row: LibRow) => {
   if (row.key === 'crs') {
     manualUpdate()
   } else if (row.key === 'ip2region') {
     manualIP2RegionUpdate()
-  } else {
+  } else if (row.key === 'threat') {
     threatRequestSeq++
     threatUpdateInfo.value = null
     threatUpdateLog.value = ''
@@ -566,13 +634,6 @@ const openLibDialog = (row: LibRow, _autoFocus: boolean) => {
   }
 }
 
-// 查看（威胁三源）：跳到 IP 地址列表 tab 并打开对应内置名单的只读弹框。
-const viewThreatList = async (row: LibRow) => {
-  activeTab.value = 'ip-lists'
-  await fetchIpLists() // 恒重拉——威胁库更新后缓存行是旧内容（实测踩坑）
-  const target = ipLists.value.find(l => l.id === row.listID)
-  if (target) openIpListDialog(target)
-}
 
 // —— 威胁库更新弹框（与 CRS/IP 库同款：状态 + 日志流 + 立即更新）——
 const threatUpdateDialogVisible = ref(false)
@@ -794,13 +855,43 @@ const fetchIpLists = async () => {
 }
 
 const editingIpListSystem = ref(false)
-const openIpListDialog = (row?: IPListRow) => {
+const loadingIpListDetail = ref(false)
+const ipListEntryPage = ref(1)
+const ipListEntryPageSize = 200
+const ipListEntryPageStart = computed(() => (ipListEntryPage.value - 1) * ipListEntryPageSize)
+// 分页只切窗口（slice 共享底层数组引用——编辑直接写回 ipListForm.entries，
+// 跨页修改随保存整体提交）；只读形态纯文本渲染，万级条目不再实例化 input。
+const ipListEntriesPaged = computed(() =>
+  ipListForm.value.entries.slice(ipListEntryPageStart.value, ipListEntryPageStart.value + ipListEntryPageSize))
+
+const addIpListEntry = (): void => {
+  ipListForm.value.entries.push({ value: '', remark: '' })
+  ipListEntryPage.value = Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize)
+}
+
+const openIpListDialog = async (row?: IPListRow) => {
   editingIpListSystem.value = row?.system === true
+  ipListEntryPage.value = 1
   editingIpListId.value = row?.id ?? null
-  ipListForm.value = row
-    ? { name: row.name, description: row.description, category: row.category, entries: row.entries.map((e) => ({ value: e.value, remark: e.remark })) }
-    : { name: '', description: '', category: '', entries: [{ value: '', remark: '' }] }
+  if (!row) {
+    ipListForm.value = { name: '', description: '', category: '', entries: [{ value: '', remark: '' }] }
+    ipListDialogVisible.value = true
+    return
+  }
+  // 列表载荷不再内联 entries（大名单瘦身）——弹框按需拉详情。
+  ipListForm.value = { name: row.name, description: row.description, category: row.category, entries: [] }
   ipListDialogVisible.value = true
+  loadingIpListDetail.value = true
+  try {
+    const res = await request.get<APIResponse<IPListRow>>(`/security/ip-lists/${row.id}`)
+    if (res.data && ipListDialogVisible.value) {
+      ipListForm.value.entries = (res.data.entries || []).map((e) => ({ value: e.value, remark: e.remark }))
+    }
+  } catch {
+    ElMessage.error('加载列表条目失败')
+  } finally {
+    loadingIpListDetail.value = false
+  }
 }
 
 const saveIpList = async () => {
@@ -897,6 +988,7 @@ const importEntriesFromText = (text: string): void => {
     ipListForm.value.entries.push({ value: parsed.value, remark: parsed.remark })
     success++
   }
+  ipListEntryPage.value = Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize)
   if (success === 0) {
     ElMessage.error(duplicate > 0
       ? `没有可导入的新条目（非法 ${invalid} 条 / 重复 ${duplicate} 条）`
@@ -1438,10 +1530,27 @@ onUnmounted(() => {
 .entries-toolbar { display: flex; align-items: center; margin-top: 8px; }
 .entries-toolbar-right { margin-left: auto; }
 .entries-import-input { display: none; }
+.ip-entry-text { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 13px; }
+.ip-entry-index { color: #9ca3af; font-variant-numeric: tabular-nums; }
+.entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+/* 弹框表单右缘留白（字段贴右边距视觉失衡，2026-09-24 用户反馈） */
+.ip-list-dialog .el-form { padding-right: 20px; }
+.threat-source-table { margin-bottom: 12px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.update-log-container { max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
+.update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
+.lib-summary { color: #909399; font-size: 12px; font-weight: 400; }
+.lib-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lib-icon { flex-shrink: 0; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; }
+.lib-icon--crs { background: #eff6ff; color: #3b82f6; }
+.lib-icon--ip { background: #f0fdfa; color: #0d9488; }
+.lib-icon--threat { background: #fff1f2; color: #e11d48; }
+.lib-name-text { min-width: 0; }
+.lib-name-main { font-weight: 500; color: #1f2937; }
+.lib-name-sub { color: #909399; font-size: 12px; word-break: break-all; }
+.lib-version { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
+.lib-count { font-variant-numeric: tabular-nums; }
 .threat-url { color: #909399; font-size: 12px; word-break: break-all; }
 .update-log-content { margin: 0; color: #e4e4e7; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
 </style>

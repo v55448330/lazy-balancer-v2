@@ -170,7 +170,7 @@ type ipListRow struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Category    string            `json:"category"`
-	Entries     json.RawMessage   `json:"entries"`
+	Entries     json.RawMessage   `json:"entries,omitempty"`
 	EntryCount  int               `json:"entry_count"`
 	RefCount    int               `json:"ref_count"`
 	RefPolicies []ipListRefPolicy `json:"ref_policies"`
@@ -250,7 +250,8 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("IP 列表 %d 的条目解析失败: %v", row.ID, err)})
 			return
 		}
-		row.Entries = json.RawMessage(entriesJSON)
+		// v2.3.2 弹框性能重构：列表载荷不再内联 entries（大名单 1.4 万条
+		// 会背 ~460KB/行）；弹框经 GET /security/ip-lists/:id 按需拉取。
 		row.EntryCount = len(entries)
 		row.RefPolicies = refs[int64(row.ID)]
 		if row.RefPolicies == nil {
@@ -264,6 +265,31 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: lists})
+}
+
+// GetIPList 单条详情（含 entries）——弹框按需拉取（v2.3.2 弹框性能重构：
+// 列表接口不再内联 entries，大名单查看/编辑不再背全表载荷）。
+func (h *Handlers) GetIPList(c *gin.Context) {
+	id := c.Param("id")
+	var row ipListRow
+	var entriesJSON string
+	if err := db.DB.QueryRow("SELECT id, name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).
+		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &entriesJSON, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	var entries []models.IPListEntry
+	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("IP 列表 %s 的条目解析失败: %v", id, err)})
+		return
+	}
+	row.Entries = json.RawMessage(entriesJSON)
+	row.EntryCount = len(entries)
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: row})
 }
 
 func (h *Handlers) CreateIPList(c *gin.Context) {
