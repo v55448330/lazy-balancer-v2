@@ -3148,6 +3148,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	todayStartUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC().Format("2006-01-02 15:04:05")
 
 	var overview models.SecurityOverview
+	overview.CRSAvailable, overview.IP2RegionAvailable = services.SecurityLibraryStatus()
 	// 任一查询失败都必须在结束时显式报错：否则 metrics 库故障会静默返回
 	// 全零面板，与「无攻击」不可区分（R35 D2）。
 	var firstErr error

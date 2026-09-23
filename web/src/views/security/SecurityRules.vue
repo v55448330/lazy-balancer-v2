@@ -16,7 +16,12 @@
           <div class="crs-header-title">
             <span style="font-weight: 500;">规则库</span>
           </div>
-          <div class="lib-summary" :class="{ 'lib-summary--warn': libSummaryWarn }">{{ libSummary }}</div>
+          <!-- 库健康标签组（2026-09-24 用户裁定）：逐库彩色标签（正常=success/
+               异常=danger），缺库时追加红色警示后缀；替换原统计文本摘要 -->
+          <div class="lib-summary lib-summary-tags">
+            <el-tag v-for="t in libHealthTags" :key="t.label" :type="t.type" size="small" effect="light" disable-transitions class="lib-health-tag">{{ t.label }}</el-tag>
+            <span v-if="libSummaryWarn" class="lib-summary-warn-text">所有安全规则已暂停生效，请立即检查规则库</span>
+          </div>
         </div>
       </template>
       <el-table :data="libRows" size="small" class="lib-table">
@@ -561,7 +566,7 @@ const libRows = computed<LibRow[]>(() => {
       key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
       version: crsInfo.value.version || '—',
       count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
-      status: crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
+      status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
       autoUpdate: crsInfo.value.auto_update,
       lastChecked: formatDate(crsInfo.value.updated_at) || '—',
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
@@ -570,7 +575,7 @@ const libRows = computed<LibRow[]>(() => {
       key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: 'IP2Region IP 库', sub: 'IP 地理归属数据库',
       version: ip2regionVersionLabel.value,
       count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
-      status: ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value,
+      status: ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
       statusMessage: ip2regionFailureMessage.value,
       autoUpdate: ip2regionInfo.value.auto_update,
       lastChecked: formatDate(ip2regionInfo.value.updated_at) || '—',
@@ -589,7 +594,7 @@ const libRows = computed<LibRow[]>(() => {
     rows.push({
       key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
       name: '威胁情报库',
-      sub: 'IP 威胁名单，可被黑名单策略引用 · 来源：' + srcs.map(x => ({ ustc: '中科大', firehol_l1: 'FireHOL', et_compromised: 'ET' } as Record<string, string>)[x.name] ?? x.display_name).join(' / '),
+      sub: 'IP 威胁名单，可被黑名单策略引用',  // 来源明细见「更新详情」弹框（2026-09-24：名称列收窄后三源名折行断词，撤）
       version: latestVersion || '未更新',
       count: totalEntries > 0 ? totalEntries.toLocaleString() + ' 条' : '—',
       status, statusMessage: anyFailed?.message || '',
@@ -601,19 +606,25 @@ const libRows = computed<LibRow[]>(() => {
   return rows
 })
 
-// 卡头摘要（2026-09-24 用户裁定）：不再做库数/条目统计——改述库健康：
-// 缺库异常优先（缺库时后端渲染层已停用全部安全规则，见
-// SecurityLibrariesAvailable），正常时简述三库状态。
-const libSummary = computed(() => {
-  const missing: string[] = []
-  if (crsInfo.value.available === false) missing.push('CRS 规则库')
-  if (ip2regionInfo.value.available === false) missing.push('IP 地址库')
-  if (missing.length > 0) return `⚠ ${missing.join('、')}不可用——所有安全规则已暂停生效，请立即检查规则库`
+// 卡头库健康标签组（2026-09-24 用户裁定）：逐库彩色标签，异常 danger/
+// 正常 success；缺库（后端渲染层已停用全部安全规则，见
+// SecurityLibrariesAvailable）时模板追加红色警示后缀。
+const libHealthTags = computed<Array<{ label: string; type: 'success' | 'danger' | 'warning' }>>(() => {
+  const tags: Array<{ label: string; type: 'success' | 'danger' | 'warning' }> = [
+    crsInfo.value.available === false
+      ? { label: 'CRS 规则库 · 缺失', type: 'danger' }
+      : { label: 'CRS 规则库 · 正常', type: 'success' },
+    ip2regionInfo.value.available === false
+      ? { label: 'IP 地址库 · 缺失', type: 'danger' }
+      : { label: 'IP 地址库 · 正常', type: 'success' },
+  ]
   const threatFail = threatSources.value.filter(x => x.update_status === 'failed').length
-  if (threatFail > 0) return `威胁情报库 ${threatFail} 个来源更新失败，其余库正常`
-  return 'CRS 规则库 / IP 地址库 / 威胁情报库 状态正常'
+  tags.push(threatFail > 0
+    ? { label: `威胁情报库 · ${threatFail} 源更新失败`, type: 'warning' }
+    : { label: '威胁情报库 · 正常', type: 'success' })
+  return tags
 })
-const libSummaryWarn = computed(() => libSummary.value.startsWith('⚠'))
+const libSummaryWarn = computed(() => crsInfo.value.available === false || ip2regionInfo.value.available === false)
 
 // 自动更新开关：按行分发到三个库的既有端点（开关状态以服务端为准，
 // 失败由对应 fetch 回滚）。
@@ -750,9 +761,10 @@ const crsStageLabels: Record<string, string> = {
   failed: '更新失败',
   idle: '空闲',
 }
-const crsStatusLabel = (s: string): string => crsStageLabels[s] || s || '—'
+const crsStatusLabel = (s: string): string => s === 'missing' ? '缺失' : (crsStageLabels[s] || s || '—')
 
 const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
+  if (s === 'missing') return 'danger'
   if (!s || s === 'idle') return 'info'
   if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading' || s === 'running') return 'warning'
   if (s === 'success' || s === '已最新' || s === '更新成功') return 'success'
@@ -1574,7 +1586,9 @@ onUnmounted(() => {
 .threat-source-table { margin-bottom: 12px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
-.lib-summary--warn { color: #dc2626; font-weight: 600; }
+.lib-summary-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lib-health-tag { margin: 0; }
+.lib-summary-warn-text { color: #dc2626; font-weight: 600; font-size: 12px; margin-left: 4px; }
 
 .lib-summary { color: #909399; font-size: 12px; font-weight: 400; }
 .lib-name { display: flex; align-items: center; gap: 10px; min-width: 0; }

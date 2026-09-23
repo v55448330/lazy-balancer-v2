@@ -139,8 +139,8 @@
               <el-collapse-transition>
                 <div v-if="expandedPolicyKey === `0:${group.key}`" class="flow-policy-details">
                   <template v-if="group.details?.trustEntries">
-                    <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条）</div>
-                    <div v-for="entry in group.details.trustEntries" :key="`trust:${entry.value}`" class="flow-detail-entry">
+                    <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条{{ group.details.trustEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                    <div v-for="entry in group.details.trustEntries.slice(0, 200)" :key="`trust:${entry.value}`" class="flow-detail-entry">
                       <span class="flow-detail-value">{{ entry.value }}</span>
                       <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
                     </div>
@@ -196,15 +196,15 @@
                     <div v-if="expandedPolicyKey === `${typedStageByKey(node.key)!.stage}:${group.key}`" class="flow-policy-details">
                       <template v-if="group.details">
                         <template v-if="group.details.aclEntries">
-                          <div class="flow-detail-block-title">IP 访问控制列表（{{ group.details.aclEntries.length }} 条）</div>
-                          <div v-for="entry in group.details.aclEntries" :key="`acl:${entry.value}`" class="flow-detail-entry">
+                          <div class="flow-detail-block-title">IP 访问控制列表（{{ group.details.aclEntries.length }} 条{{ group.details.aclEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                          <div v-for="entry in group.details.aclEntries.slice(0, 200)" :key="`acl:${entry.value}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ entry.value }}</span>
                             <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
                           </div>
                         </template>
                         <template v-if="group.details.trustEntries">
-                          <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条）</div>
-                          <div v-for="entry in group.details.trustEntries" :key="`trust:${entry.value}`" class="flow-detail-entry">
+                          <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条{{ group.details.trustEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                          <div v-for="entry in group.details.trustEntries.slice(0, 200)" :key="`trust:${entry.value}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ entry.value }}</span>
                             <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
                           </div>
@@ -396,6 +396,13 @@ const activeNode = ref('access')
 const detailLoading = ref(false)
 const detailsAttached = ref(false)
 const fullPolicies = ref<Map<number, SecurityStagePolicyDetail>>(new Map())
+// 引用名单条目按需缓存（2026-09-24：列表载荷不再内联 entries——大名单
+// 460KB/行；明细展开时按引用 id 拉 GET /security/ip-lists/:id）
+const ipListEntryCache = ref<Map<number, Array<{ value: string; remark?: string }>>>(new Map())
+// 富化名单视图 = 摘要列表 + 已拉取条目的覆盖层（attachStageDetails/trustPreview 消费）
+const enrichedIpLists = computed(() => props.ipLists.map((l) =>
+  ipListEntryCache.value.has(l.id) ? { ...l, entries: ipListEntryCache.value.get(l.id) } : l,
+))
 const customRules = ref<SecurityStageCustomRule[]>([])
 const crsFiles = ref<CrsRuleFileOption[]>([])
 const expandedPolicyKey = ref('')
@@ -405,7 +412,7 @@ const displayModel = computed<RuleStageModel | null>(() => {
   if (!detailsAttached.value) return props.model
   return attachStageDetails(props.model, {
     policies: props.policies,
-    ipLists: props.ipLists,
+    ipLists: enrichedIpLists.value,
     sources: { fullPolicies: fullPolicies.value, customRules: customRules.value, crsFiles: crsFiles.value },
   })
 })
@@ -428,7 +435,7 @@ const stageZeroSubtitle = computed(() => {
 const trustPreview = (policyId: number): string => {
   const policy = props.policies.find((p) => p.id === policyId)
   if (!policy) return ''
-  const entries = mergeIpEntries(props.ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
+  const entries = mergeIpEntries(enrichedIpLists.value, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
   if (entries.length === 0) return ''
   const preview = entries.slice(0, 2).join('、')
   return entries.length > 2 ? `${preview} 等` : preview
@@ -469,6 +476,24 @@ const ensureDetails = async (): Promise<void> => {
     }
     if (customRes.status === 'fulfilled') customRules.value = customRes.value.data ?? []
     if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value.data?.rules ?? []
+    // 引用名单条目：绑定策略的 ACL/信任引用集合（摘要行已含 refs 字段）
+    const refIds = new Set<number>()
+    for (const pol of props.policies) {
+      for (const id of parseRefIds(pol.ip_acl_list_refs)) refIds.add(id)
+      for (const id of parseRefIds(pol.ip_whitelist_refs)) refIds.add(id)
+    }
+    const missing = [...refIds].filter((id) => !ipListEntryCache.value.has(id))
+    if (missing.length > 0) {
+      const listRes = await Promise.allSettled(
+        missing.map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string; remark?: string }> }>>(`/security/ip-lists/${id}`, { silent: true })),
+      )
+      if (seq !== detailsSeq) return
+      const cache = new Map(ipListEntryCache.value)
+      listRes.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value.data) cache.set(missing[i], r.value.data.entries ?? [])
+      })
+      ipListEntryCache.value = cache
+    }
     // F-47-36：三端点全部 rejected 时不置 detailsAttached——原无条件置位会把弹框
     // 锁死在「明细按钮缺失且不可重试」且 silent 请求零反馈；保持可重试（下次点击
     // 重新拉取）并显式提示一次；部分成功仍置 attached（可用数据降级展示，保持现状语义）

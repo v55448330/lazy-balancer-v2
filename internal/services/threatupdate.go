@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -223,9 +224,16 @@ func (m *ThreatUpdateManager) run(trigger string) {
 	}
 	m.mu.Unlock()
 	// 名单内容变化 → 一次重载（引用名单的策略渲染随新内容收敛）。
+	if !contentChanged {
+		AppendThreatUpdateLog("INFO", "unchanged", "全部源名单内容未变化，不重载 Caddy 配置")
+	}
 	if contentChanged && threatReloader != nil {
 		AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化，重载 Caddy 配置")
-		if err := threatReloader(); err != nil {
+		err := threatReloader()
+		// 数据类更新触发的重载统一留操作日志（2026-09-24 用户裁定补齐——
+		// 与 crs_update/ip2region_update 同口径，此前威胁库重载无审计）
+		recordSystemReloadAudit("threat_update", err)
+		if err != nil {
 			Logf("error", "威胁情报库: 名单变化后重载失败: %v", err)
 			AppendThreatUpdateLog("ERROR", "reloading", fmt.Sprintf("重载 Caddy 配置失败: %v", err))
 		}
@@ -260,6 +268,11 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 写入名单失败: %v", source.name, werr))
 		return false, true
 	}
+	// 未变化也留痕（2026-09-24 用户裁定）：源级一条「未变化」日志，
+	// 否则日志只见成功不见比对结论，无法区分「未拉取」与「未变化」。
+	if !changed {
+		AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（哈希一致），跳过写入", source.name))
+	}
 	version := time.Now().UTC().Format("2006.01.02")
 	next := time.Now().UTC().Add(24 * time.Hour).Format(crsTimeLayout)
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
@@ -273,7 +286,12 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 
 // writeThreatSystemList 把聚合条目写入源对应的内置只读名单行
 // （security_ip_lists system=1，name 经 db.ThreatListNameBySource 映射）；
-// 行缺失时补建（备份还原/异常清理后的自愈）。返回 changed=内容真实变化。
+// 行缺失时补建（备份还原/异常清理后的自愈）。
+// 变更判定=内容哈希比对（2026-09-24 用户裁定）：聚合规范字节的 sha256 存
+// security_threat_sources.content_hash——源站乱序返回同一集合（USTC 实测）
+// 经聚合排序后字节稳定，哈希一致即未变化（不写名单、不重载、不 bump 集群
+// 版本）；升级存量空哈希首跑按变化处理一次（自愈写哈希）。
+// 返回 changed=内容真实变化。
 func writeThreatSystemList(source string, entries []string) (bool, error) {
 	name := db.ThreatListNameBySource(source)
 	if name == "" {
@@ -287,21 +305,32 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("编码名单条目失败: %w", err)
 	}
-	var existing string
-	err = db.DB.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE name=?`, name).Scan(&existing)
-	if err != nil {
+	hash := fmt.Sprintf("%x", sha256.Sum256(encoded))
+	// 名单行存在 + 哈希一致 → 未变化（名单行缺失即使哈希命中也须补建）
+	var listExists int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, name).Scan(&listExists); err != nil {
+		return false, fmt.Errorf("读内置名单失败: %w", err)
+	}
+	var storedHash string
+	if err := db.DB.QueryRow(`SELECT COALESCE(content_hash,'') FROM security_threat_sources WHERE name=?`, source).Scan(&storedHash); err != nil {
+		return false, fmt.Errorf("读源哈希失败: %w", err)
+	}
+	if listExists > 0 && storedHash == hash && storedHash != "" {
+		return false, nil
+	}
+	if listExists == 0 {
 		// 行缺失自愈补建
 		if _, ierr := db.DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
 			VALUES (?, ?, '恶意 IP', ?, 1, datetime('now'), datetime('now'))`, name, threatListDescription(source), string(encoded)); ierr != nil {
 			return false, fmt.Errorf("补建内置名单失败: %w", ierr)
 		}
-		return true, nil
+	} else {
+		if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name); err != nil {
+			return false, fmt.Errorf("更新内置名单失败: %w", err)
+		}
 	}
-	if existing == string(encoded) {
-		return false, nil
-	}
-	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name); err != nil {
-		return false, fmt.Errorf("更新内置名单失败: %w", err)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET content_hash=? WHERE name=?`, hash, source); err != nil {
+		return false, fmt.Errorf("写源哈希失败: %w", err)
 	}
 	return true, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -320,5 +321,78 @@ func TestThreatDueSources_emptyListIsDue(t *testing.T) {
 		if s.name == "ustc" {
 			t.Fatal("ustc 名单有内容且未到期, 不应进 auto 任务")
 		}
+	}
+}
+
+// 内容哈希比对（2026-09-24 用户裁定）：聚合规范字节的 sha256 落
+// security_threat_sources.content_hash；同集乱序（USTC 源实测每次请求乱序
+// 返回同一集合）不得判变化；重载须留操作日志审计。
+func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	t.Cleanup(SetUpdateLogDirForTest(t.TempDir()))
+	var reloads int
+	SetThreatReloader(func() error { reloads++; return nil })
+	t.Cleanup(func() { SetThreatReloader(nil) })
+
+	readHash := func() string {
+		var h string
+		if err := db.DB.QueryRow(`SELECT COALESCE(content_hash,'') FROM security_threat_sources WHERE name='ustc'`).Scan(&h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	// run1：写入 + 哈希落库 + 重载 + 审计
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run1: %v", err)
+	}
+	h1 := readHash()
+	if len(h1) != 64 {
+		t.Fatalf("run1 后 content_hash 应为 64 位 hex, got %q", h1)
+	}
+	var auditCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND detail LIKE '%威胁情报库%'`).Scan(&auditCount); err != nil {
+		t.Fatalf("读审计库: %v", err)
+	}
+	if auditCount == 0 {
+		t.Fatal("名单变化触发的重载须写操作日志（来源：威胁情报库更新）")
+	}
+
+	// run2：同内容（同序）→ 不重载、哈希不变、更新日志留痕「未变化」
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	if reloads != 1 {
+		t.Fatalf("同内容不应重载: reloads=%d", reloads)
+	}
+	logRaw, lerr := os.ReadFile(ThreatUpdateLogPath())
+	if lerr != nil {
+		t.Fatalf("读更新日志: %v", lerr)
+	}
+	if !strings.Contains(string(logRaw), "名单内容未变化") {
+		t.Fatalf("无变化须留更新日志痕迹:\n%s", logRaw)
+	}
+	if readHash() != h1 {
+		t.Fatal("同内容哈希不应变化")
+	}
+
+	// run3：同集乱序（USTC 实测形态）→ 哈希不变、不重载
+	ustcBody := []string{"10.9.0.0/24", "203.0.113.1"} // 与基座同集、顺序颠倒
+	shuffled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Join(ustcBody, "\n") + "\n"))
+	}))
+	t.Cleanup(shuffled.Close)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET url=? WHERE name='ustc'`, shuffled.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run3: %v", err)
+	}
+	if reloads != 1 {
+		t.Fatalf("乱序同集不应重载: reloads=%d", reloads)
+	}
+	if readHash() != h1 {
+		t.Fatal("乱序同集哈希应不变（聚合规范字节口径）")
 	}
 }

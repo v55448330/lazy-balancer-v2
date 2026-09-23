@@ -61,14 +61,14 @@
       </el-form-item>
 
       <el-divider content-position="left">安全防护</el-divider>
-      <el-form-item label="启用授信代理">
+      <el-form-item label="受信代理">
         <div class="trusted-toggle">
           <el-switch v-model="settings.trusted_proxy_enabled" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
           <el-text type="info" size="small" class="tip-block">站点经 CDN/前置代理回源时开启：按网段+请求头取真实客户端 IP（IP 名单/地域/限流随之按真实 IP 判定）</el-text>
         </div>
       </el-form-item>
       <template v-if="settings.trusted_proxy_enabled">
-        <el-form-item label="授信网段">
+        <el-form-item label="受信网段">
           <el-select
             v-model="trustedRanges"
             multiple

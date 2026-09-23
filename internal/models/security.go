@@ -256,14 +256,18 @@ type SecurityEvent struct {
 }
 
 type SecurityOverview struct {
-	TodayBlocked   int                  `json:"today_blocked"`
-	TodayDetected  int                  `json:"today_detected"`
-	ActivePolicies int                  `json:"active_policies"`
-	CRSVersion     string               `json:"crs_version"`
-	UpdateStatus   string               `json:"update_status"`
-	Trend          []SecurityTrendPoint `json:"trend"`
-	TopIPs         []SecurityTopIP      `json:"top_ips"`
-	AttackTypes    []SecurityAttackType `json:"attack_types"`
+	TodayBlocked   int    `json:"today_blocked"`
+	TodayDetected  int    `json:"today_detected"`
+	ActivePolicies int    `json:"active_policies"`
+	CRSVersion     string `json:"crs_version"`
+	// CRSAvailable/IP2RegionAvailable：库文件级可用性（缺库降级感知面，
+	// 2026-09-24 裁定）——版本号是历史更新记录，库缺失时前端状态标签改「缺失」
+	CRSAvailable       bool                 `json:"crs_available"`
+	IP2RegionAvailable bool                 `json:"ip2region_available"`
+	UpdateStatus       string               `json:"update_status"`
+	Trend              []SecurityTrendPoint `json:"trend"`
+	TopIPs             []SecurityTopIP      `json:"top_ips"`
+	AttackTypes        []SecurityAttackType `json:"attack_types"`
 }
 
 type SecurityTrendPoint struct {

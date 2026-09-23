@@ -796,7 +796,7 @@ func runMigrations() error {
 		"global_config.threat_auto_update":                "INTEGER NOT NULL DEFAULT 1",
 		"security_ip_lists.system":                        "INTEGER NOT NULL DEFAULT 0",
 		"path_rules.upstream_path":                        "TEXT NOT NULL DEFAULT ''",
-		"certificate_configs.dns_credentials":             "TEXT",
+		"security_threat_sources.content_hash":            "TEXT DEFAULT ''",
 		"cert_jobs.ca_provider_id":                        "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":                      "INTEGER DEFAULT 0",
 		"cert_jobs.ca_available_after":                    "DATETIME",

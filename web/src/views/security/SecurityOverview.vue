@@ -80,7 +80,9 @@
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ overview.crs_version }}</div>
                   <div class="stat-box__label">CRS 规则集</div>
-                  <el-tag v-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
+                  <!-- 库文件缺失优先于更新状态（缺库降级口径，2026-09-24 裁定） -->
+                  <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
+                  <el-tag v-else-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
                 </div>
               </div>
             </div>
@@ -91,6 +93,7 @@
                   <div class="stat-box__value">{{ ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</div>
                   <div class="stat-box__label">IP 地理库</div>
                   <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
+                  <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
                   <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" style="margin-top: 4px">未安装</el-tag>
                   <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
                 </div>
@@ -255,7 +258,7 @@ use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, Legen
 interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
-interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
+interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; crs_available?: boolean; ip2region_available?: boolean; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string }
 interface RateLimitBlockHost { host: string; count: number }
 interface RateLimitBlocks { total: number; hosts: RateLimitBlockHost[] }

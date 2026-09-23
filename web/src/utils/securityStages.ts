@@ -9,6 +9,7 @@ export interface SecurityStageIPListEntry { value: string; remark?: string }
 export interface SecurityStageIPList {
   id: number
   name?: string
+  entry_count?: number
   entries?: SecurityStageIPListEntry[]
 }
 
@@ -248,6 +249,19 @@ export const parseGeoipCountryCount = (raw: string): number => {
   }
 }
 
+// 条数-only 合并口径（列表载荷不内联 entries 后的计数面——锁摘要/流程弹框
+// 标题条数）：内联去重数 + Σ引用名单 entry_count。与 mergeIpEntries 的去重
+// 合计在「内联与引用重叠」时略有出入；仅作展示计数，精确明细由
+// mergeIpEntryDetails（按需详情拉取后）承担。
+export const mergeIpEntryCount = (
+  ipLists: readonly SecurityStageIPList[],
+  inline: readonly string[],
+  refs: readonly number[],
+): number => {
+  const inlineCount = new Set(inline.map((v) => v.trim()).filter((v) => v !== '')).size
+  return refs.reduce((sum, id) => sum + (ipLists.find((l) => l.id === id)?.entry_count ?? 0), inlineCount)
+}
+
 // 合并内联 + 引用列表条目（按精确字符串去重），缺失的引用列表跳过（防御性回退为仅内联）
 export const mergeIpEntries = (
   ipLists: readonly SecurityStageIPList[],
@@ -325,7 +339,7 @@ export const hasGeoIPControl = (p: {
 const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: readonly SecurityStageIPList[]): StageRow[] => {
   const rows: StageRow[] = []
   if (!policy || !hasTrustEntries(policy)) return rows
-  const trustCount = mergeIpEntries(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)).length
+  const trustCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
   rows.push({ label: '信任名单', detail: trustCount === 0 ? '未配置' : `${trustCount} 条${policy.ip_whitelist_enabled === false ? '（未启用）' : ''}` })
   rows.push({ label: '模式', detail: policy.trust_detection === true ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' })
   return rows
@@ -341,7 +355,7 @@ const buildStage1Rows = (
   if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
     const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测模式' : '黑名单模式')
-    const aclCount = mergeIpEntries(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs)).length
+    const aclCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
     const blCount = parseIPList(policy.ip_blacklist).length
     rows.push({ label: 'IP 访问控制', detail: `${modeLabel} · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` })
   }

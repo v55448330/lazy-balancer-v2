@@ -127,6 +127,8 @@ func AuditSourcePart(source string) string {
 		return "来源：IP 库更新"
 	case "crs_update":
 		return "来源：CRS 规则库更新"
+	case "threat_update":
+		return "来源：威胁情报库更新"
 	default:
 		return fmt.Sprintf("来源：%s", source)
 	}
