@@ -168,7 +168,9 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 		if err := rows.Scan(&s.id, &s.name, &s.url, &s.updateEnabled, &nextUpdate); err != nil {
 			return nil, err
 		}
-		if trigger != "manual" && nextUpdate != "" {
+		// 名单为空视为到期（v2.3.2 名单化升级窗口：旧版写文件新版写名单，
+		// 不补这条则升级后最长 24h 名单为空、引用策略零拦截）。
+		if trigger != "manual" && nextUpdate != "" && !threatListEmpty(s.name) {
 			if due, err := time.Parse(crsTimeLayout, nextUpdate); err == nil && now.Before(due) {
 				continue
 			}
@@ -176,6 +178,19 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 		sources = append(sources, s)
 	}
 	return sources, rows.Err()
+}
+
+// threatListEmpty 报告源对应内置名单是否为空（缺失/[] 视为空）。
+func threatListEmpty(source string) bool {
+	name := db.ThreatListNameBySource(source)
+	if name == "" {
+		return true
+	}
+	var entries string
+	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE name=?`, name).Scan(&entries); err != nil {
+		return true
+	}
+	return entries == "" || entries == "[]"
 }
 
 func (m *ThreatUpdateManager) run(trigger string) {

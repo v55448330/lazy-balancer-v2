@@ -285,3 +285,40 @@ func TestThreatUpdate_duplicateStartRejected(t *testing.T) {
 	close(block)
 	<-done1
 }
+
+// 名单为空视为到期（升级窗口：旧版写文件新版写名单——next_update 未到期但
+// 名单空的源必须进 auto 任务；名单有内容且未到期才跳过）。
+func TestThreatDueSources_emptyListIsDue(t *testing.T) {
+	newClusterTestService(t)
+	// Given：三源 next_update 全在未来
+	future := time.Now().UTC().Add(24 * time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=?`, future); err != nil {
+		t.Fatal(err)
+	}
+
+	// 名单全空 → 全部到期
+	due, err := threatDueSources("auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 3 {
+		t.Fatalf("名单为空时应全部到期, got %d", len(due))
+	}
+
+	// ustc 名单填内容 → 仅剩 2 个到期
+	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='[{"value":"203.0.113.1/32","remark":""}]' WHERE name='威胁情报库-中科大黑 IP'`); err != nil {
+		t.Fatal(err)
+	}
+	due, err = threatDueSources("auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("ustc 名单有内容后应剩 2 个到期, got %d", len(due))
+	}
+	for _, s := range due {
+		if s.name == "ustc" {
+			t.Fatal("ustc 名单有内容且未到期, 不应进 auto 任务")
+		}
+	}
+}
