@@ -195,11 +195,17 @@
                   <el-collapse-transition>
                     <div v-if="expandedPolicyKey === `${typedStageByKey(node.key)!.stage}:${group.key}`" class="flow-policy-details">
                       <template v-if="group.details">
-                        <template v-if="group.details.aclEntries">
-                          <div class="flow-detail-block-title">IP 访问控制列表（{{ group.details.aclEntries.length }} 条{{ group.details.aclEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
-                          <div v-for="entry in group.details.aclEntries.slice(0, 200)" :key="`acl:${entry.value}`" class="flow-detail-entry">
-                            <span class="flow-detail-value">{{ entry.value }}</span>
-                            <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
+                        <!-- ACL 明细=列表级汇总（2026-09-24 用户裁定）：不逐条列 IP，
+                             只列内联条数+各引用名单的名称/条数（威胁库上万条逐条渲染不可行） -->
+                        <template v-if="group.details.aclInlineCount || (group.details.aclLists && group.details.aclLists.length > 0)">
+                          <div class="flow-detail-block-title">IP 访问控制列表（合计 {{ (group.details.aclInlineCount ?? 0) + (group.details.aclLists ?? []).reduce((sum, l) => sum + l.count, 0) }} 条）</div>
+                          <div v-if="group.details.aclInlineCount" class="flow-detail-entry">
+                            <span class="flow-detail-value">内联名单</span>
+                            <span class="flow-detail-meta">{{ group.details.aclInlineCount }} 条</span>
+                          </div>
+                          <div v-for="list in group.details.aclLists" :key="`acl-list:${list.name}`" class="flow-detail-entry">
+                            <span class="flow-detail-value">{{ list.name }}</span>
+                            <span class="flow-detail-meta">{{ list.count.toLocaleString() }} 条</span>
                           </div>
                         </template>
                         <template v-if="group.details.trustEntries">
@@ -447,7 +453,7 @@ const policyTypeOf = (policyId: number) =>
 const groupHasDetails = (group: StagePolicyGroup): boolean => {
   const d = group.details
   if (!d) return false
-  return (d.aclEntries?.length ?? 0) > 0
+  return (d.aclInlineCount ?? 0) > 0 || (d.aclLists?.length ?? 0) > 0
     || (d.trustEntries?.length ?? 0) > 0
     || (d.geoipRegions?.length ?? 0) > 0
     || d.rateLimit !== undefined
@@ -476,10 +482,10 @@ const ensureDetails = async (): Promise<void> => {
     }
     if (customRes.status === 'fulfilled') customRules.value = customRes.value.data ?? []
     if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value.data?.rules ?? []
-    // 引用名单条目：绑定策略的 ACL/信任引用集合（摘要行已含 refs 字段）
+    // 引用名单条目：仅信任名单引用需条目值（阶段 0 明细逐条展示）；
+    // ACL 明细为列表级汇总（名称+entry_count），不拉条目
     const refIds = new Set<number>()
     for (const pol of props.policies) {
-      for (const id of parseRefIds(pol.ip_acl_list_refs)) refIds.add(id)
       for (const id of parseRefIds(pol.ip_whitelist_refs)) refIds.add(id)
     }
     const missing = [...refIds].filter((id) => !ipListEntryCache.value.has(id))

@@ -797,6 +797,7 @@ func runMigrations() error {
 		"security_ip_lists.system":                        "INTEGER NOT NULL DEFAULT 0",
 		"path_rules.upstream_path":                        "TEXT NOT NULL DEFAULT ''",
 		"security_threat_sources.content_hash":            "TEXT DEFAULT ''",
+		"security_threat_sources.raw_hash":                "TEXT DEFAULT ''",
 		"cert_jobs.ca_provider_id":                        "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":                      "INTEGER DEFAULT 0",
 		"cert_jobs.ca_available_after":                    "DATETIME",

@@ -373,6 +373,11 @@ func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
 	if !strings.Contains(string(logRaw), "名单内容未变化") {
 		t.Fatalf("无变化须留更新日志痕迹:\n%s", logRaw)
 	}
+	// 两层哈希（2026-09-24 用户裁定）：原始字节哈希一致 → 快速路径跳过
+	// 解析/聚合/写库（日志口径可辨）；原始不同才聚合规范哈希终判。
+	if !strings.Contains(string(logRaw), "原始内容哈希一致") {
+		t.Fatalf("同内容再跑须命中原始哈希快速路径:\n%s", logRaw)
+	}
 	if readHash() != h1 {
 		t.Fatal("同内容哈希不应变化")
 	}

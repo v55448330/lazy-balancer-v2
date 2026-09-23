@@ -106,7 +106,10 @@ export interface StageRateLimitDetail {
 }
 
 export interface StagePolicyDetails {
-  aclEntries?: StageDetailEntry[]
+  // aclLists=引用名单汇总（名称+条数，entry_count 口径，不拉条目值）；
+  // aclInlineCount=内联去重条数。两者替代原逐条 aclEntries。
+  aclLists?: Array<{ name: string; count: number }>
+  aclInlineCount?: number
   trustEntries?: StageDetailEntry[]
   geoipRegions?: string[]
   rateLimit?: StageRateLimitDetail
@@ -571,7 +574,14 @@ const buildGroupDetails = (
   if (stage === 1) {
     const details: StagePolicyDetails = {}
     if (policy.has_ip_control) {
-      details.aclEntries = mergeIpEntryDetails(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+      const inline = new Set(parseIPList(policy.ip_acl_list).map((v) => v.trim()).filter((v) => v !== ''))
+      if (inline.size > 0) details.aclInlineCount = inline.size
+      const refs = parseRefIds(policy.ip_acl_list_refs)
+      const lists = refs.map((id) => {
+        const l = ipLists.find((x) => x.id === id)
+        return { name: l?.name ?? `列表 #${id}`, count: l?.entry_count ?? 0 }
+      })
+      if (lists.length > 0) details.aclLists = lists
     }
     const regions = parseIPList(policy.geoip_countries)
     if (policy.has_geoip || regions.length > 0) details.geoipRegions = regions

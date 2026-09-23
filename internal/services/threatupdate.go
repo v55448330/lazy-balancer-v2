@@ -252,12 +252,29 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 	}
 	AppendThreatUpdateLog("INFO", "downloading", fmt.Sprintf("下载 %s（%s）", source.name, source.url))
 
-	entries, err := downloadAndParseThreatSource(source)
+	entries, rawHash, err := downloadAndParseThreatSource(source)
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
 		failSourceRow(source.id, finished, err)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 更新失败: %v", source.name, err))
 		return false, true
+	}
+
+	// 两层哈希（2026-09-24 用户裁定）：原始字节哈希一致 → 内容必然未变，
+	// 跳过聚合/写库（稳定源零聚合成本）；原始不同才聚合（乱序源如 USTC
+	// 每次请求换序——原始哈希必然不同，聚合规范字节哈希终判防误判变化）。
+	var storedRaw string
+	if err := db.DB.QueryRow(`SELECT COALESCE(raw_hash,'') FROM security_threat_sources WHERE id=?`, source.id).Scan(&storedRaw); err != nil {
+		Logf("error", "威胁情报库: 读源 %s 原始哈希失败: %v", source.name, err)
+	}
+	if storedRaw != "" && storedRaw == rawHash {
+		// 名单行缺失（备份还原/异常清理）须穿透快速路径补建
+		var listExists int
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource(source.name)).Scan(&listExists); err != nil || listExists > 0 {
+			AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（原始内容哈希一致），跳过解析写入", source.name))
+			markSourceSuccess(source.id, len(entries), finished)
+			return false, false
+		}
 	}
 
 	// 聚合归一后写内置名单（内容未变化零写入——不重载、不 bump 集群版本）。
@@ -273,15 +290,28 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 	if !changed {
 		AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（哈希一致），跳过写入", source.name))
 	}
+	markSourceSuccess(source.id, len(entries), finished, rawHash)
+	return changed, false
+}
+
+// markSourceSuccess 源成功状态落库（版本/条数/退避清零/下一窗口 + 原始字节哈希）。
+// rawHash 空=兼容旧调用形态不写。
+func markSourceSuccess(id int, entryCount int, finished string, rawHash ...string) {
 	version := time.Now().UTC().Format("2006.01.02")
 	next := time.Now().UTC().Add(24 * time.Hour).Format(crsTimeLayout)
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
-		len(entries), version, finished, next, source.id); err != nil {
-		Logf("error", "威胁情报库: 更新源 %s 成功状态失败: %v", source.name, err)
+	raw := ""
+	if len(rawHash) > 0 {
+		raw = rawHash[0]
 	}
-	Logf("info", "威胁情报库: 源 %s 更新成功（%d 条，版本 %s）", source.name, len(entries), version)
-	AppendThreatUpdateLog("INFO", "success", fmt.Sprintf("源 %s 更新成功（%d 条，版本 %s）", source.name, len(entries), version))
-	return changed, false
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
+		entryCount, version, finished, next, raw, id); err != nil {
+		Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
+	}
+	// 源名仅用于日志，按 id 反查一次
+	var name string
+	_ = db.DB.QueryRow(`SELECT name FROM security_threat_sources WHERE id=?`, id).Scan(&name)
+	Logf("info", "威胁情报库: 源 %s 更新成功（%d 条，版本 %s）", name, entryCount, version)
+	AppendThreatUpdateLog("INFO", "success", fmt.Sprintf("源 %s 更新成功（%d 条，版本 %s）", name, entryCount, version))
 }
 
 // writeThreatSystemList 把聚合条目写入源对应的内置只读名单行
@@ -365,28 +395,31 @@ func failSourceRow(id int, finished string, cause error) {
 // downloadAndParseThreatSource 下载并解析单源（format=plain）：
 // 30s 超时、HTTP 200、body ≤16MB；空行与 #/; 注释跳过；可解析行比例 <50%
 // 判失败（防错页/HTML 劫持）；条目 >200000 拒绝。
-func downloadAndParseThreatSource(source threatSourceRow) ([]string, error) {
+// 返回原始字节 sha256（两层哈希第一层快速路径，2026-09-24 用户裁定）：
+// 原始一致即内容必然未变，调用方跳过聚合/写库；原始不同才走聚合规范哈希终判。
+func downloadAndParseThreatSource(source threatSourceRow) ([]string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), threatDownloadTimout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("构造请求失败: %w", err)
+		return nil, "", fmt.Errorf("构造请求失败: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("下载失败: %w", err)
+		return nil, "", fmt.Errorf("下载失败: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, threatMaxBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
+		return nil, "", fmt.Errorf("读取响应失败: %w", err)
 	}
 	if len(body) > threatMaxBodyBytes {
-		return nil, fmt.Errorf("响应体超过 16MB 上限")
+		return nil, "", fmt.Errorf("响应体超过 16MB 上限")
 	}
+	rawHash := fmt.Sprintf("%x", sha256.Sum256(body))
 
 	var entries []string
 	total := 0
@@ -401,13 +434,13 @@ func downloadAndParseThreatSource(source threatSourceRow) ([]string, error) {
 		}
 	}
 	if total == 0 {
-		return nil, fmt.Errorf("响应无可解析条目（空名单）")
+		return nil, "", fmt.Errorf("响应无可解析条目（空名单）")
 	}
 	if float64(len(entries))/float64(total) < threatMinParseRatio {
-		return nil, fmt.Errorf("可解析行比例 %d/%d 低于 50%%——疑似错页或劫持", len(entries), total)
+		return nil, "", fmt.Errorf("可解析行比例 %d/%d 低于 50%%——疑似错页或劫持", len(entries), total)
 	}
 	if len(entries) > threatMaxEntries {
-		return nil, fmt.Errorf("条目数 %d 超过 200000 上限", len(entries))
+		return nil, "", fmt.Errorf("条目数 %d 超过 200000 上限", len(entries))
 	}
-	return entries, nil
+	return entries, rawHash, nil
 }

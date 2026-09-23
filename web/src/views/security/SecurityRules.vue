@@ -564,7 +564,7 @@ const libRows = computed<LibRow[]>(() => {
   const rows: LibRow[] = [
     {
       key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
-      version: crsInfo.value.version || '—',
+      version: crsInfo.value.available === false ? '未安装' : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
       count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
       status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
       autoUpdate: crsInfo.value.auto_update,
@@ -573,7 +573,7 @@ const libRows = computed<LibRow[]>(() => {
     },
     {
       key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: 'IP2Region IP 库', sub: 'IP 地理归属数据库',
-      version: ip2regionVersionLabel.value,
+      version: ip2regionInfo.value.available === false ? '未安装' : ip2regionVersionLabel.value,
       count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
       status: ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
       statusMessage: ip2regionFailureMessage.value,

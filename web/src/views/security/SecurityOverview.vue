@@ -75,10 +75,10 @@
           </template>
           <div class="stat-row">
             <div class="stat-col">
-              <div class="stat-box stat-box--success">
+              <div class="stat-box" :class="overview.crs_available === false ? 'stat-box--danger' : 'stat-box--success'">
                 <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.crs_version }}</div>
+                  <div class="stat-box__value">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</div>
                   <div class="stat-box__label">CRS 规则集</div>
                   <!-- 库文件缺失优先于更新状态（缺库降级口径，2026-09-24 裁定） -->
                   <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
@@ -87,10 +87,10 @@
               </div>
             </div>
             <div class="stat-col">
-              <div class="stat-box stat-box--success">
+              <div class="stat-box" :class="overview.ip2region_available === false ? 'stat-box--danger' : 'stat-box--success'">
                 <div class="stat-box__icon"><el-icon><Location /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</div>
+                  <div class="stat-box__value">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</div>
                   <div class="stat-box__label">IP 地理库</div>
                   <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
                   <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
@@ -465,7 +465,7 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
   font-size: 20px;
 }
 .stat-box__body { flex: 1; min-width: 0; }
-.stat-box__value { font-size: 22px; font-weight: 700; line-height: 1.3; }
+.stat-box__value { font-size: 20px; font-weight: 700; line-height: 1.3; }
 .stat-box__label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
 .stat-box--danger .stat-box__icon { background: #fef0f0; color: #f56c6c; }
