@@ -1301,7 +1301,10 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 			if err := database.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, tc.caddyID).Scan(&protocol); err != nil || protocol != "http" {
 				protocol = "tcp"
 			}
-			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "", false, 0, 0, nil)
+			handler, wafErr := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil, "", false, 0, 0, nil)
+			if wafErr != nil {
+				t.Fatalf("buildWafHandlerWithPolicy(%q) err=%v", tc.caddyID, wafErr)
+			}
 			if protocol != "http" {
 				handler = nil
 			}
@@ -1376,11 +1379,11 @@ func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit
 		t.Fatalf("want exactly two rate limit zones (sec/min) when burst > 0, got %v", zones)
 	}
 	secZone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d-sec", policyID)], "sec rate limit zone")
-	assertEqual(t, secZone["key"], "{http.request.remote.host}")
+	assertEqual(t, secZone["key"], "{http.vars.client_ip}")
 	assertEqual(t, secZone["window"], "1s")
 	assertEqual(t, secZone["max_events"], 150)
 	minZone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d-min", policyID)], "min rate limit zone")
-	assertEqual(t, minZone["key"], "{http.request.remote.host}")
+	assertEqual(t, minZone["key"], "{http.vars.client_ip}")
 	assertEqual(t, minZone["window"], "60s")
 	assertEqual(t, minZone["max_events"], 6000)
 }
@@ -1405,7 +1408,7 @@ func TestGenerateRouteObject_rendersSingleRateLimitZone_whenBurstZero(t *testing
 		t.Fatalf("want exactly one rate limit zone when burst is zero, got %v", zones)
 	}
 	zone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d", policyID)], "rate limit zone")
-	assertEqual(t, zone["key"], "{http.request.remote.host}")
+	assertEqual(t, zone["key"], "{http.vars.client_ip}")
 	assertEqual(t, zone["window"], "1s")
 	assertEqual(t, zone["max_events"], 20)
 }
@@ -1839,15 +1842,19 @@ func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *test
 		t.Fatalf("exclusions/block page not loaded: excluded=%s block_page_id=%d", policy.CRSExcludedRules, policy.BlockPageID)
 	}
 
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	for _, want := range []string{
-		"@ipMatch 203.0.113.0/24",
+		"@ipListFast ",
 		"SecRuleRemoveById 942100",
 		"setvar:tx.inbound_anomaly_score_threshold=10",
 	} {
 		if !strings.Contains(directives, want) {
 			t.Fatalf("directives missing %q:\n%s", want, directives)
 		}
+	}
+	// ACL 名单内容钉：投影文件须含 203.0.113.0/24
+	if got := readRenderedIPList(t, directives, "-acl"); !strings.Contains(got, "203.0.113.0/24") {
+		t.Fatalf("ACL 名单文件须含 203.0.113.0/24: %q", got)
 	}
 	// SecDefaultAction must NOT be emitted: crs-setup.conf already defines one
 	// per phase and coraza rejects duplicates; blocking rides CRS 949 instead.
@@ -1868,9 +1875,12 @@ func TestBuildCorazaDirectives_allowModeDeniesNonListedIPs(t *testing.T) {
 		t.Fatalf("bind allow policy: %v", err)
 	}
 
-	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"), nil, "", false, 0)
-	if !strings.Contains(directives, `!@ipMatch 198.51.100.7`) {
+	directives := mustDirectives(BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"), nil, "", false, 0))
+	if !strings.Contains(directives, `!@ipListFast `) {
 		t.Fatalf("allow mode must deny non-listed IPs via negated match:\n%s", directives)
+	}
+	if got := readRenderedIPList(t, directives, "-acl"); got != "198.51.100.7/32\n" {
+		t.Fatalf("allow 名单文件=%q, want 仅 198.51.100.7/32", got)
 	}
 	if strings.Contains(directives, "@noMatch") {
 		t.Fatalf("allow mode must not use the never-firing @noMatch operator:\n%s", directives)
@@ -1887,7 +1897,7 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 			`{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]` +
 			`}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	lines := strings.Split(directives, "\n")
 	var chainLines []string
 	for _, line := range lines {

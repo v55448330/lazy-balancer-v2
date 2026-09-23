@@ -607,11 +607,47 @@ func createTables() error {
 		app_version TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_auto_backups_created_at ON auto_backups(created_at);
+	-- 威胁情报库（v2.3.x）：三个内置只读源，双开关（更新/应用）默认开；
+	-- 版本=成功更新日期（YYYY.MM.DD），状态机镜像 CRS/IP2Region 更新族。
+	CREATE TABLE IF NOT EXISTS security_threat_sources (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE,
+		display_name TEXT NOT NULL DEFAULT '',
+		url TEXT NOT NULL DEFAULT '',
+		format TEXT NOT NULL DEFAULT 'plain',
+		update_enabled INTEGER NOT NULL DEFAULT 1,
+		apply_enabled INTEGER NOT NULL DEFAULT 1,
+		entry_count INTEGER NOT NULL DEFAULT 0,
+		version TEXT NOT NULL DEFAULT '',
+		update_status TEXT NOT NULL DEFAULT 'idle',
+		message TEXT NOT NULL DEFAULT '',
+		last_checked DATETIME,
+		next_update DATETIME,
+		trigger TEXT NOT NULL DEFAULT '',
+		started_at DATETIME,
+		finished_at DATETIME,
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
 	INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', 1);
 	`
 
-	_, err := DB.Exec(schema)
-	return err
+	if _, err := DB.Exec(schema); err != nil {
+		return err
+	}
+	// 威胁库三源种子（v2.3.x）——USTC URL 含「?」必须走参数化（原始 SQL 中
+	// 会被当作占位符）。INSERT OR IGNORE 幂等，存量库重启重复执行安全。
+	for _, seed := range [][3]string{
+		{"ustc", "中科大黑 IP", "https://blackip.ustc.edu.cn/list.php?txt"},
+		{"firehol_l1", "FireHOL level1", "https://iplists.firehol.org/files/firehol_level1.netset"},
+		{"et_compromised", "Emerging Threats Compromised", "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"},
+	} {
+		if _, err := DB.Exec(`INSERT OR IGNORE INTO security_threat_sources (name, display_name, url) VALUES (?, ?, ?)`, seed[0], seed[1], seed[2]); err != nil {
+			return fmt.Errorf("failed to seed threat source %s: %w", seed[0], err)
+		}
+	}
+	return nil
 }
 
 func runMigrations() error {
@@ -774,13 +810,20 @@ func runMigrations() error {
 		// OIDC 集成(2026-09-17 v2.3.0):用户来源标记与身份三元组——
 		// auth_provider 'local'/'oidc';oidc 用户不绑定本地账号(独立行),
 		// (issuer, subject) 唯一定位,重复登录按此命中。
-		"users.auth_provider":                         "TEXT NOT NULL DEFAULT 'local'",
-		"users.oidc_subject":                          "TEXT DEFAULT ''",
-		"users.oidc_issuer":                           "TEXT DEFAULT ''",
-		"global_config.oidc_config":                   "TEXT",
-		"mfa_challenges.attempts":                     "INTEGER DEFAULT 0",
-		"global_config.mfa_write_guard":               "BOOLEAN DEFAULT 0",
-		"global_config.mfa_lockout_enabled":           "BOOLEAN DEFAULT 0",
+		"users.auth_provider":               "TEXT NOT NULL DEFAULT 'local'",
+		"users.oidc_subject":                "TEXT DEFAULT ''",
+		"users.oidc_issuer":                 "TEXT DEFAULT ''",
+		"global_config.oidc_config":         "TEXT",
+		"mfa_challenges.attempts":           "INTEGER DEFAULT 0",
+		"global_config.mfa_write_guard":     "BOOLEAN DEFAULT 0",
+		"global_config.mfa_lockout_enabled": "BOOLEAN DEFAULT 0",
+		// v2.3.x 真实 IP 支持：受信代理（CDN 回源）四列——启用开关、回源网段
+		// （CIDR JSON 数组）、请求头名（有序 JSON 数组）、严格模式。渲染层
+		// （servers.trusted_proxies）与 caddygeoip/限流/阶段 0 取值共用。
+		"global_config.trusted_proxy_enabled":         "INTEGER NOT NULL DEFAULT 0",
+		"global_config.trusted_proxy_ranges":          "TEXT NOT NULL DEFAULT '[]'",
+		"global_config.trusted_proxy_headers":         "TEXT NOT NULL DEFAULT '[]'",
+		"global_config.trusted_proxy_strict":          "INTEGER NOT NULL DEFAULT 1",
 		"global_config.default_ca_provider_id":        "INTEGER DEFAULT 0",
 		"global_config.cert_renewal_days":             "INTEGER DEFAULT 30",
 		"global_config.cert_renewal_attempts":         "INTEGER DEFAULT 5",

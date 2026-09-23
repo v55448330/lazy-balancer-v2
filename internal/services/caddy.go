@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -1037,6 +1038,63 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
 
+// trustedProxyServerFields 渲染受信代理（CDN 真实 IP）的 server 级字段
+// （v2.3.x）：enabled=false 或读错时返回空 map（读错 fail-closed=不注入，
+// 与「未启用」同形——宁可退回 socket IP 也不采信未校验的头）。启用时：
+// trusted_proxies 静态网段 + trusted_proxies_strict（1/0 恒输出）+
+// client_ip_headers（非空才输出，空=仅 X-Forwarded-For）。
+// store 形参保证事务内渲染（ApplyConfigFromTx）读到未提交的设置。
+func trustedProxyServerFields(store caddyConfigStore) map[string]interface{} {
+	var enabled, strict bool
+	var rangesJSON, headersJSON string
+	if err := store.QueryRow(`SELECT COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1) FROM global_config WHERE id = 1`).
+		Scan(&enabled, &rangesJSON, &headersJSON, &strict); err != nil {
+		Logf("error", "读取受信代理设置失败（按未启用渲染）: %v", err)
+		return nil
+	}
+	if !enabled {
+		return nil
+	}
+	var ranges, headers []string
+	if err := json.Unmarshal([]byte(rangesJSON), &ranges); err != nil {
+		Logf("error", "解析受信代理网段失败（按未启用渲染）: %v", err)
+		return nil
+	}
+	if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
+		Logf("error", "解析受信代理请求头失败（按未启用渲染）: %v", err)
+		return nil
+	}
+	fields := map[string]interface{}{
+		"trusted_proxies": map[string]interface{}{
+			"source": "static",
+			"ranges": ranges,
+		},
+	}
+	if strict {
+		fields["trusted_proxies_strict"] = 1
+	} else {
+		fields["trusted_proxies_strict"] = 0
+	}
+	if len(headers) > 0 {
+		fields["client_ip_headers"] = headers
+	}
+	return fields
+}
+
+// mergeTrustedProxyServerFields 把受信代理字段并入每个 HTTP server 条目
+// （含 :80 默认站）；layer4/admin 不在此函数视野内，天然不注入。
+func mergeTrustedProxyServerFields(servers map[string]interface{}, store caddyConfigStore) {
+	fields := trustedProxyServerFields(store)
+	if len(fields) == 0 {
+		return
+	}
+	for _, serverVal := range servers {
+		if srv, ok := serverVal.(map[string]interface{}); ok {
+			maps.Copy(srv, fields)
+		}
+	}
+}
+
 // acmeCertCandidatesQuery 只取「启用 + TLS + acme_dns」规则名下未禁用任务的
 // 证书候选（与 db 迁移的 legacyHTTPSHasCertPredicate 及 SelectCertificate 的
 // 跳过口径同源）。R47 前为全库全量拉取：已删除规则的残留行、disabled 任务与
@@ -1956,6 +2014,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		}
 	}
 
+	// 受信代理（CDN 真实 IP）：每个 HTTP server（含 :80 默认站）注入；
+	// 未启用时零字段（行为不变）。
+	mergeTrustedProxyServerFields(servers, store)
+
 	apps := map[string]interface{}{
 		// observe_catchall_hosts：Host 头驱动标签基数面——任意 Host 命中落地页
 		// 都会产出新指标序列，公网部署下 Caddy 内存基数由客户端控制。
@@ -2656,6 +2718,13 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		return conf
 	}
 
+	// 受信代理（CDN 真实 IP）：单规则预览路径同样注入（读已提交库，
+	// 与 GenerateSingleRuleCaddyConfig 的只读语义一致）。db.DB 缺失
+	//（纯内存单规则测试等）时跳过——与「读错按未启用渲染」同口径。
+	if db.DB != nil {
+		mergeTrustedProxyServerFields(servers, db.DB)
+	}
+
 	apps := map[string]interface{}{
 		"http": map[string]interface{}{
 			"servers": servers,
@@ -3067,20 +3136,22 @@ func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) ma
 	zonePrefix := fmt.Sprintf("%s-p%d", ruleCaddyID, policy.ID)
 	rateLimits := map[string]interface{}{
 		zonePrefix: map[string]interface{}{
-			"key":        "{http.request.remote.host}",
+			// v2.3.x：{http.vars.client_ip}（受信代理启用时=真实 IP，未启用=socket IP，行为不变）。
+			"key":        "{http.vars.client_ip}",
 			"window":     "1s",
 			"max_events": policy.RateLimitRPS,
 		},
 	}
 	if policy.RateLimitBurst > 0 {
 		rateLimits = map[string]interface{}{
+			// v2.3.x：key 同为 {http.vars.client_ip}（与单 zone 分支同口径）。
 			zonePrefix + "-sec": map[string]interface{}{
-				"key":        "{http.request.remote.host}",
+				"key":        "{http.vars.client_ip}",
 				"window":     "1s",
 				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
 			},
 			zonePrefix + "-min": map[string]interface{}{
-				"key":        "{http.request.remote.host}",
+				"key":        "{http.vars.client_ip}",
 				"window":     "60s",
 				"max_events": policy.RateLimitRPS * 60,
 			},
@@ -3206,7 +3277,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	detectionTrust, passthroughUnion := stage0TrustSets(policies)
 	var securityChain []interface{}
 	if rule.Protocol == "http" && len(policies) >= 1 {
-		if precheckHandler := buildIPPrecheckHandler(policies, stage1BlockStatus(ctx, rule)); precheckHandler != nil {
+		// 单行护栏错误（48KiB 超限）向上传播——保存侧经 CLI 校验/事务门控回滚。
+		precheckHandler, err := buildIPPrecheckHandler(policies, stage1BlockStatus(ctx, rule))
+		if err != nil {
+			return nil, err
+		}
+		if precheckHandler != nil {
 			securityChain = append(securityChain, precheckHandler)
 		}
 	}
@@ -3269,7 +3345,11 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
 			// (「信任仅豁免所属策略」边界);单策略保持平原形态(预检虽同构存在,
 			// 但策略层自身信任 DetectionOnly 已正确处理,无跨策略信任边界)。
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB, detectionTrust); wafHandler != nil {
+			wafHandler, err := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB, detectionTrust)
+			if err != nil {
+				return nil, err
+			}
+			if wafHandler != nil {
 				securityChain = append(securityChain, wafHandler)
 			}
 		}
@@ -3282,7 +3362,10 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"routes": []interface{}{map[string]interface{}{
 				"match": []interface{}{map[string]interface{}{
 					"not": []interface{}{map[string]interface{}{
-						"remote_ip": map[string]interface{}{"ranges": passthroughUnion},
+						// v2.3.x：client_ip（受信代理启用时=真实 IP）替代
+						// remote_ip（socket）——CDN 回源下信任名单按真实 IP 判定；
+						// 未启用受信代理时二者同值，行为零变化。
+						"client_ip": map[string]interface{}{"ranges": passthroughUnion},
 					}},
 				}},
 				"handle": securityChain,

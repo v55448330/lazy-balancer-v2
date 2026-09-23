@@ -223,10 +223,15 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	}
 }
 
-// realClientIP extracts the client IP from RemoteAddr only. X-Forwarded-For /
-// X-Real-IP are deliberately ignored: this handler runs on the edge proxy, so
-// honoring client-supplied headers would let attackers spoof their region.
+// realClientIP 取真实客户端 IP：优先 Caddy client_ip 变量（v2.3.x）——
+// trusted_proxies 启用时它经「回源网段 + 有序请求头」校验，伪造头不改变
+// 判定；X-Forwarded-For 仅在 Caddy 配置 trusted_proxies 时被采信（此
+// handler 运行在边缘，未经 Caddy 受信代理判定的头不可信）。变量缺席
+// （非 Caddy 上下文）回退 RemoteAddr 解析——直连部署行为不变。
 func realClientIP(r *http.Request) string {
+	if ip, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok && ip != "" {
+		return ip
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		if net.ParseIP(r.RemoteAddr) != nil {

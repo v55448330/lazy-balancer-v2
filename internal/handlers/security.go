@@ -2662,6 +2662,7 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"IP 访问控制": {"2", "3", "4", "5", "7"},
 	"请求体异常":   {"11"},
 	"地域拦截":    {"8"}, // + geoipFamilyCondition（预检精确段 800000-899999）
+	"威胁情报库":   {"14"},
 	"评分拦截":    {"949", "959"},
 	"协议异常":    {"920"},
 	"协议攻击":    {"921"},
@@ -2678,7 +2679,9 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 // 为精确匹配——LIKE 前缀会让自定义规则 5 位 ID(24567 等)交叉命中 IP/地域族;
 // 多字符前缀(949/959/920/921)对应 6 位 CRS ID,保持前缀语义。
 func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
-	if len(prefix) == 1 {
+	// 单数字族（2/3/4/5/7/8）与两位完整 id 族（14=威胁情报库）为精确匹配——
+	// LIKE 前缀会让自定义规则 5 位 ID（24567/14xxxx 等）交叉命中 IP/威胁族。
+	if len(prefix) == 1 || prefix == "14" {
 		*ors = append(*ors, "rule_triggered = ?")
 		*args = append(*args, prefix)
 		return
@@ -3056,6 +3059,10 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "自定义规则"
 	case ruleTriggered == "11":
 		return "请求体异常"
+	case ruleTriggered == "14" || strings.Contains(ruleMsg, "威胁情报库拦截"):
+		// 14 = 威胁情报库预检拦截（阶段 1，v2.3.x）。精确匹配——LIKE 前缀
+		// 会误并自定义规则发射 id 14xxxx（emit=DB id+10000）。
+		return "威胁情报库"
 	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
 		// 8 = 旧共享 GeoIP id（策略引擎时代历史事件）；6 位 8xxxxx = 预检精确段
 		// 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。

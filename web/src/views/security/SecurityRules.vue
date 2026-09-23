@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><Notebook /></el-icon>
           规则集
         </h2>
-        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP2Region IP 库、自定义规则与 IP 地址列表</p>
+        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP2Region IP 库、威胁情报库、自定义规则与 IP 地址列表</p>
       </div>
     </div>
 
@@ -63,6 +63,66 @@
         <el-descriptions-item v-if="!isSlaveNode" label="下次更新">{{ formatDate(ip2regionInfo.next_update) || '—' }}</el-descriptions-item>
         <el-descriptions-item v-if="isSlaveNode" label="数据来源"><el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag></el-descriptions-item>
       </el-descriptions>
+    </el-card>
+
+    <el-card class="crs-card mb-5">
+      <template #header>
+        <div class="crs-header">
+          <div class="crs-header-title">
+            <span style="font-weight: 500;">威胁情报库</span>
+            <el-tag size="small" type="info" effect="plain" style="margin-left: 8px;">合并生效 {{ threatMergedCount.toLocaleString() }} 条</el-tag>
+          </div>
+          <div class="crs-header-actions">
+            <el-button size="small" type="primary" plain :disabled="isReadOnly || isSlaveNode" :loading="threatUpdating" @click="manualThreatUpdate">更新</el-button>
+          </div>
+        </div>
+      </template>
+      <el-table :data="threatSources" size="small">
+        <el-table-column label="来源" min-width="200">
+          <template #default="{ row }">
+            <div>{{ row.display_name }}</div>
+            <div class="threat-url">{{ row.url }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="条目数" width="110" align="right">
+          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="版本" width="110">
+          <template #default="{ row }">{{ row.version || '未更新' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tooltip :disabled="!(row.update_status === 'failed' && row.message)" :content="row.message">
+              <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isSlaveNode" label="上次更新" width="150">
+          <template #default="{ row }">{{ formatDate(row.last_checked) || '—' }}</template>
+        </el-table-column>
+        <el-table-column v-if="!isSlaveNode" label="下次更新" width="150">
+          <template #default="{ row }">{{ formatDate(row.next_update) || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="更新" width="70" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.update_enabled" :disabled="isReadOnly" @change="(v: boolean) => toggleThreatFlag(row, 'update_enabled', v)" />
+          </template>
+        </el-table-column>
+        <el-table-column label="应用" width="70" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.apply_enabled" :disabled="isReadOnly" @change="(v: boolean) => toggleThreatFlag(row, 'apply_enabled', v)" />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" align="center">
+          <template #default="{ row }">
+            <el-button size="small" link type="primary" @click="viewThreatEntries(row)">查看</el-button>
+            <el-button size="small" link type="primary" @click="exportThreatSource(row)">导出</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="isSlaveNode" style="margin-top: 8px;">
+        <el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag>
+      </div>
     </el-card>
 
     <el-card>
@@ -414,6 +474,27 @@
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="threatEntriesDialogVisible"
+      :title="`威胁库条目 — ${threatEntriesSourceName}`"
+      width="min(720px, 92vw)"
+      destroy-on-close
+    >
+      <el-table :data="threatEntries" size="small" v-loading="threatEntriesLoading" max-height="420">
+        <el-table-column type="index" label="#" width="70" :index="(i: number) => (threatEntriesPage - 1) * threatEntriesSize + i + 1" />
+        <el-table-column prop="entry" label="条目" />
+      </el-table>
+      <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+        <el-pagination
+          layout="total, prev, pager, next"
+          :total="threatEntriesTotal"
+          :page-size="threatEntriesSize"
+          :current-page="threatEntriesPage"
+          @current-change="(p: number) => fetchThreatEntries(p)"
+        />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -427,8 +508,111 @@ import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { useAuthStore } from '@/stores/auth'
+
 import { usePollingTask } from '@/composables/usePollingTask'
 import type { APIResponse, UserListItem } from '@/types'
+// —— 威胁情报库（v2.3.x 第二张规则来源卡）——
+interface ThreatSource {
+  id: number; name: string; display_name: string; url: string; format: string
+  update_enabled: boolean; apply_enabled: boolean
+  entry_count: number; version: string; update_status: string; message: string
+  last_checked: string; next_update: string
+}
+const threatSources = ref<ThreatSource[]>([])
+const threatMergedCount = ref(0)
+const threatUpdating = ref(false)
+
+const fetchThreatLib = async () => {
+  try {
+    const res = await request.get<APIResponse<{ sources: ThreatSource[]; merged_apply_count: number }>>('/security/threat-lib')
+    if (res.data) {
+      threatSources.value = res.data.sources
+      threatMergedCount.value = res.data.merged_apply_count
+    }
+  } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
+}
+
+const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled' | 'apply_enabled', val: boolean) => {
+  try {
+    await request.put(`/security/threat-lib/${row.id}/flags`, { [field]: val })
+    mfaAwareSuccess('已更新')
+    if (field === 'apply_enabled') ElMessage.info('重新加载后生效')
+  } catch {
+    row[field] = !val // 失败回滚开关
+  }
+  fetchThreatLib()
+}
+
+// 手动更新：POST 受理后轮询列表直至无 running 源（单任务串行三源，
+// 状态逐源落库——列表轮询即进度，无需独立日志流）。
+const manualThreatUpdate = async () => {
+  threatUpdating.value = true
+  try {
+    await request.post('/security/threat-lib/update')
+    ElMessage.success('威胁情报库更新已开始')
+    const deadline = Date.now() + 120_000
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1500))
+      await fetchThreatLib()
+      if (!threatSources.value.some(s => s.update_status === 'running')) break
+    }
+  } catch (e) {
+    if (!(e instanceof ApiRequestError && e.status === 409)) ElMessage.error('威胁情报库更新启动失败')
+  } finally {
+    threatUpdating.value = false
+    fetchThreatLib()
+  }
+}
+
+const threatEntriesDialogVisible = ref(false)
+const threatEntriesSourceName = ref('')
+const threatEntriesSourceID = ref(0)
+const threatEntries = ref<{ entry: string }[]>([])
+const threatEntriesTotal = ref(0)
+const threatEntriesPage = ref(1)
+const threatEntriesSize = 200
+const threatEntriesLoading = ref(false)
+
+const fetchThreatEntries = async (p: number) => {
+  threatEntriesLoading.value = true
+  try {
+    const res = await request.get<APIResponse<{ total: number; entries: string[] }>>(`/security/threat-lib/${threatEntriesSourceID.value}/entries?page=${p}&size=${threatEntriesSize}`)
+    if (res.data) {
+      threatEntriesTotal.value = res.data.total
+      threatEntries.value = (res.data.entries || []).map(entry => ({ entry }))
+      threatEntriesPage.value = p
+    }
+  } catch {
+    threatEntries.value = []
+    threatEntriesTotal.value = 0
+  } finally {
+    threatEntriesLoading.value = false
+  }
+}
+
+const viewThreatEntries = (row: ThreatSource) => {
+  threatEntriesSourceID.value = row.id
+  threatEntriesSourceName.value = row.display_name
+  threatEntriesPage.value = 1
+  threatEntriesDialogVisible.value = true
+  fetchThreatEntries(1)
+}
+
+// 鉴权下载（window.open 不带 Authorization 会 401）——与备份导出同款的
+// blob + objectURL 模式。
+const exportThreatSource = async (row: ThreatSource) => {
+  try {
+    const blob = await request.get<Blob>(`/security/threat-lib/${row.id}/export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `threat-${row.name}-${new Date().toISOString().slice(0, 10)}.txt`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    ElMessage.error('导出失败（该源可能尚无已下载数据）')
+  }
+}
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
@@ -1147,7 +1331,7 @@ onMounted(() => {
     activeTab.value = urlTab
   }
   if (query.has('tab')) window.history.replaceState(null, '', window.location.pathname)
-  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists()
+  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists(); fetchThreatLib()
 })
 
 onUnmounted(() => {
@@ -1229,6 +1413,7 @@ onUnmounted(() => {
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
+.threat-url { color: #909399; font-size: 12px; word-break: break-all; }
 .update-log-content { margin: 0; color: #e4e4e7; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
 </style>
 

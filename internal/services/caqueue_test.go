@@ -322,12 +322,14 @@ func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
-	go queue.loop()
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error {
 		close(started)
 		<-release
 		return nil
 	}
+	// 先手工 prepare 再启动 loop——原顺序（loop 先行）存在竞态：loop 可能
+	// 抢先消费 pending 使 prepareExecutionLocked 落空（断言 336 偶发失败，
+	// 调度时序敏感）。prepare 已取走唯一 pending 项，loop 启动后无可消费。
 	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_stop", domains: "example.com"})
 	queue.mu.Lock()
 	execution, ok := queue.prepareExecutionLocked(queue.ctx)
@@ -335,6 +337,7 @@ func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
+	go queue.loop()
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}

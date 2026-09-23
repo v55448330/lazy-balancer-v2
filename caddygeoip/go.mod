@@ -1,13 +1,31 @@
 module lazy-balancer-v2/caddygeoip
 
-go 1.25.1
+go 1.26.0
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.4
+	github.com/corazawaf/coraza/v3 v3.7.0
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260810050043-e05f0cb75ffd
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	go.uber.org/zap v1.28.0
+)
+
+require (
+	github.com/corazawaf/libinjection-go v0.3.2 // indirect
+	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/gotnospirit/makeplural v0.0.0-20180622080156-a5f48d94d976 // indirect
+	github.com/gotnospirit/messageformat v0.0.0-20221001023931-dfe49f1eb092 // indirect
+	github.com/kaptinlin/go-i18n v0.1.4 // indirect
+	github.com/kaptinlin/jsonschema v0.4.6 // indirect
+	github.com/magefile/mage v1.17.0 // indirect
+	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/valllabh/ocsf-schema-golang v1.0.3 // indirect
+	rsc.io/binaryregexp v0.2.0 // indirect
 )
 
 require (
@@ -150,4 +168,7 @@ require (
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.5.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	howett.net/plist v1.0.0 // indirect
+	lazy-balancer-v2/wafiplist v0.0.0
 )
+
+replace lazy-balancer-v2/wafiplist => ../wafiplist

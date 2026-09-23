@@ -110,7 +110,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	}
 
 	// When directives are built
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then the deny action carries no status override; the block page's status governs
 	if !strings.Contains(directives, `deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 拒绝规则 命中'`) {
@@ -127,7 +127,7 @@ func TestBuildCorazaDirectives_userAgentTargetUsesColonNotation(t *testing.T) {
 		CRSRuleGroups: json.RawMessage(`["9"]`),
 		CustomRules:   json.RawMessage(`[{"id":9,"name":"ua","enabled":true,"action":"pass","score":1,"conditions":[{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	if !strings.Contains(directives, "REQUEST_HEADERS:User-Agent") {
 		t.Fatalf("user_agent target must use colon notation:\n%s", directives)
 	}
@@ -144,7 +144,7 @@ func TestBuildCorazaDirectives_equalsOperatorEmitsStreq(t *testing.T) {
 		Mode:        "blocking",
 		CustomRules: json.RawMessage(`[{"id":11,"name":"等于规则","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"equals","pattern":"/admin"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	if !strings.Contains(directives, `SecRule REQUEST_URI "@streq /admin"`) {
 		t.Fatalf("equals must emit case-sensitive exact match @streq:\n%s", directives)
 	}

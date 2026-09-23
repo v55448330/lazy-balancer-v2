@@ -21,6 +21,7 @@ require (
 	github.com/corazawaf/coraza/v3 v3.7.0
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/pquerna/otp v1.5.0
+	lazy-balancer-v2/wafiplist v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -30,7 +31,7 @@ require (
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect
-	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
@@ -73,7 +74,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
@@ -86,3 +87,5 @@ require (
 	modernc.org/sqlite v1.56.0 // indirect
 	rsc.io/binaryregexp v0.2.0 // indirect
 )
+
+replace lazy-balancer-v2/wafiplist => ./wafiplist

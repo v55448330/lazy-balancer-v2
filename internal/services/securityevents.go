@@ -637,7 +637,7 @@ func securityEventsRuleIsIPFamily(ruleTriggered string) bool {
 	if err != nil {
 		return false
 	}
-	return n == 2 || n == 4 || n == 7 || n == 8 || IsGeoIPPrecheckID(n)
+	return n == 2 || n == 4 || n == 7 || n == 8 || n == 14 || IsGeoIPPrecheckID(n)
 }
 
 // securityEventsRuleIsCustomFamily 报告规则 id 是否属于自定义规则族（5 位发射

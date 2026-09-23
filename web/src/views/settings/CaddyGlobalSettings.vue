@@ -60,6 +60,58 @@
         <el-text type="info" size="small" class="tip-inline">开启后在响应头中隐藏 Server 字段，减少服务器指纹暴露</el-text>
       </el-form-item>
 
+      <el-divider content-position="left">安全防护</el-divider>
+      <el-form-item label="启用受信代理">
+        <el-switch v-model="settings.trusted_proxy_enabled" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
+        <el-text type="info" size="small" class="tip-inline">站点经 CDN/前置代理回源时开启：按网段+请求头取真实客户端 IP（IP 名单/地域/限流随之按真实 IP 判定）</el-text>
+      </el-form-item>
+      <template v-if="settings.trusted_proxy_enabled">
+        <el-form-item label="受信网段">
+          <el-select
+            v-model="trustedRanges"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :disabled="isReadOnly"
+            placeholder="粘贴该 CDN 回源网段（CIDR），以官方公布为准"
+            class="trusted-field"
+          />
+          <el-text type="info" size="small" class="tip-block">仅这些网段发来的请求头会被采信；未配对网段时所有头一律被忽略（最小 /8 与 /96）。{{ trustedPresetRangesDoc }}</el-text>
+        </el-form-item>
+        <el-form-item label="请求头">
+          <el-select
+            v-model="trustedHeaders"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :disabled="isReadOnly"
+            placeholder="留空 = 仅 X-Forwarded-For"
+            class="trusted-field"
+          />
+          <el-text type="info" size="small" class="tip-block">按顺序优先取：把该 CDN 保证覆盖的权威头放最前。{{ trustedPresetNote }}</el-text>
+        </el-form-item>
+        <el-form-item label="预设填充">
+          <el-select
+            v-model="trustedPresetKey"
+            :disabled="isReadOnly"
+            placeholder="按 CDN 填充请求头（仅辅助输入）"
+            clearable
+            class="trusted-field"
+            @change="applyTrustedPreset"
+          >
+            <el-option v-for="preset in CDN_PRESETS" :key="preset.label" :label="preset.label" :value="preset.label" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="严格模式">
+          <el-switch v-model="settings.trusted_proxy_strict" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
+          <el-tooltip content="关闭后按最左值取 IP，可被伪造，不建议关闭" placement="top">
+            <el-text type="info" size="small" class="tip-inline">严格取「最右可信」值；关闭仅用于特殊代理链</el-text>
+          </el-tooltip>
+        </el-form-item>
+      </template>
+
       <el-divider content-position="left">访问日志</el-divider>
       <el-form-item label="自定义格式">
         <el-switch v-model="settings.access_log_json" :disabled="isReadOnly" active-text="自定义 JSON" inactive-text="Caddy JSON" />
@@ -122,7 +174,7 @@ import { RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
 import { request, mfaAwareSuccess } from '@/utils/api'
-import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
+import { CDN_PRESETS, DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import type { ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
@@ -137,6 +189,11 @@ type CaddySettingsConfig = ProxyTimeoutConfig & {
   server_tokens_hidden: boolean
   access_log_json: boolean
   access_log_format: string
+  // v2.3.x 受信代理（CDN 真实 IP）
+  trusted_proxy_enabled: boolean
+  trusted_proxy_ranges: string
+  trusted_proxy_headers: string
+  trusted_proxy_strict: boolean
 }
 
 type ConfigPreviewResponse = {
@@ -160,6 +217,10 @@ const CADDY_CONFIG_KEYS = [
   'server_tokens_hidden',
   'access_log_json',
   'access_log_format',
+  'trusted_proxy_enabled',
+  'trusted_proxy_ranges',
+  'trusted_proxy_headers',
+  'trusted_proxy_strict',
   'proxy_dial_timeout',
   'proxy_response_header_timeout',
   'proxy_read_timeout',
@@ -178,6 +239,40 @@ const emit = defineEmits<{ (event: 'save'): void }>()
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const saving = ref(false)
+
+// —— 受信代理（CDN 真实 IP，v2.3.x）：settings 携 JSON 文本，表单用数组代理 ——
+const trustedRanges = ref<string[]>([])
+const trustedHeaders = ref<string[]>([])
+const trustedPresetKey = ref('')
+const trustedPresetNote = computed(() => CDN_PRESETS.find(p => p.label === trustedPresetKey.value)?.note || '')
+const trustedPresetRangesDoc = computed(() => {
+  const doc = CDN_PRESETS.find(p => p.label === trustedPresetKey.value)?.rangesDoc
+  return doc ? `官方网段：${doc}` : ''
+})
+
+const parseTrustedList = (raw: string): string[] => {
+  try {
+    const parsed: unknown = JSON.parse(raw || '[]')
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+// settings（外部回填/加载）→ 表单数组
+watch(() => [settings.value.trusted_proxy_ranges, settings.value.trusted_proxy_headers], ([ranges, headers]) => {
+  trustedRanges.value = parseTrustedList(ranges)
+  trustedHeaders.value = parseTrustedList(headers)
+}, { immediate: true })
+// 表单数组 → settings（保存载荷经 CADDY_CONFIG_KEYS 拾取 JSON 文本）
+watch(trustedRanges, (list) => { settings.value.trusted_proxy_ranges = JSON.stringify(list) })
+watch(trustedHeaders, (list) => { settings.value.trusted_proxy_headers = JSON.stringify(list) })
+
+const applyTrustedPreset = (label: string): void => {
+  const preset = CDN_PRESETS.find(p => p.label === label)
+  if (!preset) return
+  trustedHeaders.value = [...preset.headers]
+}
 const reloading = ref(false)
 const logDialogVisible = ref(false)
 const logContent = ref('')
@@ -296,6 +391,7 @@ onUnmounted(stopLogPolling)
 .caddy-form { width: 100%; }
 .compact-select { width: 240px; max-width: 100%; }
 .number-input { width: 120px; }
+.trusted-field { width: 100%; max-width: 560px; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
 .tip-block { display: block; flex-basis: 100%; margin-top: 4px; line-height: 1.5; }
 /* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */

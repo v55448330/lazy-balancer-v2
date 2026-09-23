@@ -65,18 +65,22 @@ func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8]；P2 deny=[9.9.9.9]
 	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 
 	// Then(2026-09-15 用户裁定,信任 DetectionOnly 取代并入放行集):
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 5.6.7.8" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
-	if !strings.Contains(directives, trustRule) {
+	trustRule := `"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	if !strings.Contains(directives, trustRule) || !strings.Contains(directives, "@ipListFast ") {
 		t.Fatalf("directives missing trust DetectionOnly rule:\n%s", directives)
 	}
-	if strings.Contains(directives, "1.2.3.4,5.6.7.8") {
-		t.Fatalf("trust must NOT be merged into allow set (merge = no detection event):\n%s", directives)
+	if got := readRenderedIPList(t, directives, "u-trust"); got != "5.6.7.8/32\n" {
+		t.Fatalf("信任并集文件=%q, want 仅 5.6.7.8/32", got)
+	}
+	// 信任不并入 allow 放行集（并入=信任 IP 不触发规则=无检测事件）
+	if got := readRenderedIPList(t, directives, "u-allow"); strings.Contains(got, "5.6.7.8") {
+		t.Fatalf("trust must NOT be merged into allow set: %q", got)
 	}
 	trustIdx := strings.Index(directives, trustRule)
-	denyIdx := strings.Index(directives, `"@ipMatch 9.9.9.9" "id:2,phase:1,deny`)
+	denyIdx := strings.Index(directives, `"id:2,phase:1,deny`)
 	if trustIdx > denyIdx {
 		t.Fatalf("trust DetectionOnly must precede deny rules:\n%s", directives)
 	}
@@ -88,14 +92,15 @@ func TestBuildIPPrecheck_trustDisabledNotIncluded(t *testing.T) {
 	// Given：P1 allow=[1.2.3.4] trust=[5.6.7.8] 但信任开关关闭；P2 deny=[9.9.9.9]
 	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 
-	// Then：allow 放行集应仅含 1.2.3.4（信任关闭→不并入）
-	if strings.Contains(directives, "5.6.7.8") {
-		t.Fatalf("directives contains disabled trust IP:\n%s", directives)
+	// Then：allow 放行集应仅含 1.2.3.4（信任关闭→不并入）；
+	// 信任并集规则整体不发射（含信任 IP 的文件不应存在引用）。
+	if strings.Contains(directives, "id:3,") {
+		t.Fatalf("trust switch rule must not be emitted when trust disabled:\n%s", directives)
 	}
-	if !strings.Contains(directives, "1.2.3.4") {
-		t.Fatalf("directives missing ACL allow IP:\n%s", directives)
+	if got := readRenderedIPList(t, directives, "u-allow"); got != "1.2.3.4/32\n" {
+		t.Fatalf("allow 放行集文件=%q, want 仅 1.2.3.4/32", got)
 	}
 }
 
@@ -160,7 +165,7 @@ func TestBuildCorazaDirectives_BodyAccessTruthTable(t *testing.T) {
 				p.IPACLMode = "deny"
 				p.IPACLList = `["10.0.0.0/8"]`
 			}
-			directives := BuildCorazaDirectives(p, nil, "", false, 0)
+			directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
 			if tc.mode == "custom_only" && tc.rulesState == "none" && !tc.ipControl {
 				if directives != "" {
 					t.Fatalf("空策略应产空串, got %q", directives)
@@ -189,13 +194,17 @@ func TestBuildCorazaDirectives_multiPolicyDenySelfTrustExclusion(t *testing.T) {
 	// Given:多策略模式(flag=true)+deny 名单+本策略信任名单
 	p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
 	// When
-	directives := BuildCorazaDirectives(p, nil, "", true, 0)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", true, 0))
 	// Then:id:2 以链式自排除形态存在(非抑制删除、非平原形态)
 	if !strings.Contains(directives, "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain") {
 		t.Fatalf("multi-policy deny must emit chain-starter id:2 with deny in head (SECLB33-1), got:\n%s", directives)
 	}
-	if !strings.Contains(directives, "!@ipMatch 10.0.0.1") {
-		t.Fatalf("chained rule must exclude own trust list, got:\n%s", directives)
+	// 链续段信任集经 @ipListFast 文件投影（p0-trust scope，内容=本策略信任名单）
+	if !strings.Contains(directives, "!@ipListFast ") {
+		t.Fatalf("chained rule must exclude own trust list via file operand, got:\n%s", directives)
+	}
+	if got := readRenderedIPList(t, directives[strings.Index(directives, "!@ipListFast "):], "-trust"); got != "10.0.0.1/32\n" {
+		t.Fatalf("信任排除文件=%q, want 仅 10.0.0.1/32", got)
 	}
 }
 
@@ -203,7 +212,7 @@ func TestBuildCorazaDirectives_multiPolicyDenyNoTrustPlain(t *testing.T) {
 	// Given:多策略+deny 名单+信任关闭(无排除项→平原 id:2,形状不变)
 	p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`[]`)}
 	// When
-	directives := BuildCorazaDirectives(p, nil, "", true, 0)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", true, 0))
 	// Then
 	if !strings.Contains(directives, "id:2,phase:1,deny") {
 		t.Fatalf("no-trust multi-policy must keep plain id:2 deny, got:\n%s", directives)
@@ -217,7 +226,7 @@ func TestBuildCorazaDirectives_singlePolicyTrustNoChain(t *testing.T) {
 	// Given:单策略(flag=false)+deny+信任(回归形状:同实例 DetectionOnly 已正确,无链)
 	p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
 	// When
-	directives := BuildCorazaDirectives(p, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
 	// Then
 	if !strings.Contains(directives, "id:2,phase:1,deny") {
 		t.Fatalf("single policy must keep plain id:2 deny, got:\n%s", directives)
@@ -231,7 +240,7 @@ func TestBuildCorazaDirectives_multiPolicyBlacklistSelfTrustExclusion(t *testing
 	// Given:多策略+旧版黑名单+本策略信任
 	p := &models.SecurityPolicy{Mode: "blocking", IPBlacklist: json.RawMessage(`["198.51.100.9"]`), IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
 	// When
-	directives := BuildCorazaDirectives(p, nil, "", true, 0)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", true, 0))
 	// Then:id:4 链式自排除
 	if !strings.Contains(directives, "id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END,chain") {
 		t.Fatalf("multi-policy blacklist must emit chain-starter id:4 with deny in head (SECLB33-1), got:\n%s", directives)
@@ -242,12 +251,15 @@ func TestBuildCorazaDirectives_multiPolicyAllowSelfTrustExclusion(t *testing.T) 
 	// Given:多策略+allow 模式+本策略信任(信任 IP 不在白名单时不拦,预检记录)
 	p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
 	// When
-	directives := BuildCorazaDirectives(p, nil, "", true, 0)
-	// Then:id:2 链式(!@ipMatch allow AND !@ipMatch trust → deny)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", true, 0))
+	// Then:id:2 链式(!@ipListFast allow AND !@ipListFast trust → deny)
 	if !strings.Contains(directives, "id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END,chain") {
 		t.Fatalf("multi-policy allow must emit chain-starter id:2 with deny in head (SECLB33-1), got:\n%s", directives)
 	}
-	if !strings.Contains(directives, "!@ipMatch 10.0.0.1") {
-		t.Fatalf("allow chain must exclude own trust list, got:\n%s", directives)
+	if !strings.Contains(directives, "!@ipListFast ") {
+		t.Fatalf("allow chain must exclude own trust list via file operand, got:\n%s", directives)
+	}
+	if got := readRenderedIPList(t, directives[strings.Index(directives, "!@ipListFast "):], "-trust"); got != "10.0.0.1/32\n" {
+		t.Fatalf("信任排除文件=%q, want 仅 10.0.0.1/32", got)
 	}
 }

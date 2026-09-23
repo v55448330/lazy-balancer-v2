@@ -664,6 +664,8 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		"DELETE FROM security_policies",
 		"DELETE FROM security_custom_rules",
 		"DELETE FROM security_block_pages",
+		// 威胁情报库源表（v2.3.x）：随本节全量替换——开关/计数/版本镜像
+		// 主节点。缺席语义：旧主端快照不携带该载荷时跳过删除（见下方 nil 门）。
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -683,6 +685,28 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_ip_lists (id,name,description,category,entries,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			l["id"], l["name"], l["description"], l["category"], snapshotJSONText(l["entries"]), l["created_by"], l["created_at"], l["updated_by"], l["updated_at"]); err != nil {
 			return fmt.Errorf("写入 security_ip_list: %w", err)
+		}
+	}
+	// 威胁情报库源行（v2.3.x）：载荷缺席（旧主端快照）= 保留本地（不清空），
+	// 与 backup 侧「缺席表保留本地」同口径；携带即全量替换。
+	if snapshot.SecurityThreatSources != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM security_threat_sources"); err != nil {
+			return fmt.Errorf("清理威胁库源表: %w", err)
+		}
+		var threatSources []map[string]interface{}
+		if len(snapshot.SecurityThreatSources) > 0 {
+			if err := json.Unmarshal(snapshot.SecurityThreatSources, &threatSources); err != nil {
+				return fmt.Errorf("解析 security_threat_sources: %w", err)
+			}
+		}
+		for _, row := range threatSources {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO security_threat_sources (id,name,display_name,url,format,update_enabled,apply_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				row["id"], row["name"], row["display_name"], row["url"], row["format"], row["update_enabled"], row["apply_enabled"], row["entry_count"], row["version"], row["update_status"], row["message"],
+				snapshotNullableDatetime(row["last_checked"]), snapshotNullableDatetime(row["next_update"]), row["trigger"],
+				snapshotNullableDatetime(row["started_at"]), snapshotNullableDatetime(row["finished_at"]),
+				row["consecutive_failures"], row["created_at"], row["updated_at"]); err != nil {
+				return fmt.Errorf("写入威胁库源行: %w", err)
+			}
 		}
 	}
 	var policies []map[string]interface{}
@@ -1022,11 +1046,11 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		} else if settings.RequestBodyMaxSizeMB > 4096 {
 			settings.RequestBodyMaxSizeMB = 4096
 		}
-		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?"
+		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?,trusted_proxy_enabled=?,trusted_proxy_ranges=?,trusted_proxy_headers=?,trusted_proxy_strict=?"
 		args = append(args, *snapshot.CaddyConfig, settings.AccessLogJSON, settings.AccessLogFormat, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
 			settings.RequestBodyMaxSizeMB, settings.HTTPReadTimeout, settings.HTTPWriteTimeout, settings.HTTPIdleTimeout,
 			settings.UpstreamKeepaliveTimeout, settings.ProxyDialTimeout, settings.ProxyResponseHeaderTimeout, settings.ProxyReadTimeout, settings.ProxyWriteTimeout, settings.ProxyStreamTimeout, settings.ProxyFlushInterval, settings.ProxyStreamCloseDelay,
-			settings.ServerTokensHidden)
+			settings.ServerTokensHidden, settings.TrustedProxyEnabled, settings.TrustedProxyRanges, settings.TrustedProxyHeaders, settings.TrustedProxyStrict)
 	}
 	query += " WHERE id=1"
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
@@ -1083,6 +1107,13 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// snapshotNullableDatetime 快照可空时间列的 any 入口（dumpTableAsJSON 行值
+// 为 JSON any）：空串/nil → NULL，与版本行 nullableString 调用同口径。
+func snapshotNullableDatetime(value interface{}) any {
+	s, _ := snapshotJSONText(value).(string)
+	return nullableString(s)
 }
 
 func nullableTime(value sql.NullTime) any {

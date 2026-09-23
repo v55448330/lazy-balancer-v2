@@ -528,9 +528,12 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 	assertEqual(t, setHeaders["X-LB-Rule-ID"], []string{"lb_gen6"})
 	wafs := wafHandlers(t, mainRoute)
 	precheck := wafs[0]["directives"].(string)
-	// 预检含 p2 的拒绝 IP（deny 并集、id:2、audit 留痕）
-	if !strings.Contains(precheck, `@ipMatch 203.0.113.5" "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
+	// 预检含 p2 的拒绝 IP（deny 并集、id:2、audit 留痕；名单经 @ipListFast 文件投影）
+	if !strings.Contains(precheck, `@ipListFast `) || !strings.Contains(precheck, `"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
 		t.Fatalf("precheck must deny p2's ACL union with id:2:\n%s", precheck)
+	}
+	if got := readRenderedIPList(t, precheck, "u-deny"); !strings.Contains(got, "203.0.113.5/32") {
+		t.Fatalf("deny 并集文件须含 203.0.113.5/32: %q", got)
 	}
 	// 预检不得包含任何 CRS Include / DetectionOnly / 自定义规则——仅 IP 控制
 	for _, unwanted := range []string{"Include ", "DetectionOnly", "SecRuleRemoveById"} {
@@ -574,8 +577,11 @@ func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
 	// 预检在前、策略引擎在后；预检携带 deny 并集（id:2）
 	wafsA := wafHandlers(t, mainA)
 	precheckA := wafsA[0]["directives"].(string)
-	if !strings.Contains(precheckA, `@ipMatch 203.0.113.5" "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
+	if !strings.Contains(precheckA, `"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
 		t.Fatalf("single-policy precheck must carry the deny union:\n%s", precheckA)
+	}
+	if got := readRenderedIPList(t, precheckA, "u-deny"); !strings.Contains(got, "203.0.113.5/32") {
+		t.Fatalf("deny 并集文件须含 203.0.113.5/32: %q", got)
 	}
 
 	// Given B：多策略但无任何 deny 侧 IP 控制（信任名单不算 deny 侧）→ 无预检
@@ -618,11 +624,15 @@ func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
 		t.Fatalf("no waf handler (expect the IP precheck): %v", handlerNames(t, mainRoute))
 	}
 	precheck := wafs[0]["directives"].(string)
-	if !strings.Contains(precheck, `"!@ipMatch 10.0.0.1" "id:7,phase:1,deny,status:403`) {
+	if !strings.Contains(precheck, `"!@ipListFast `) || !strings.Contains(precheck, `"id:7,phase:1,deny,status:403`) {
 		t.Fatalf("precheck allow rule must negate-match the intersection with id:7:\n%s", precheck)
 	}
-	if strings.Contains(precheck, "203.0.113.0/24") || strings.Contains(precheck, "id:2,") {
-		t.Fatalf("precheck must not carry non-intersection entries or a deny-union rule:\n%s", precheck)
+	// 交集名单文件恰为 10.0.0.1/32（非交集条目 203.0.113.0/24 不出现）
+	if got := readRenderedIPList(t, precheck, "u-allow"); got != "10.0.0.1/32\n" {
+		t.Fatalf("allow 交集文件=%q, want 仅 10.0.0.1/32", got)
+	}
+	if strings.Contains(precheck, "id:2,") {
+		t.Fatalf("precheck must not carry a deny-union rule:\n%s", precheck)
 	}
 }
 
@@ -726,22 +736,29 @@ func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
 		t.Fatalf("no waf handler: %v", handlerNames(t, mainRoute))
 	}
 	precheck := wafs[0]["directives"].(string)
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
-	if !strings.Contains(precheck, trustRule) {
+	// v2.3.x：名单经 @ipListFast 文件投影——形状钉 id/动作，内容钉文件。
+	trustRule := `"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	if !strings.Contains(precheck, trustRule) || !strings.Contains(precheck, "@ipListFast ") {
 		t.Fatalf("precheck missing trust DetectionOnly rule:\n%s", precheck)
+	}
+	if got := readRenderedIPList(t, precheck, "u-trust"); !strings.Contains(got, "198.51.100.9/32") {
+		t.Fatalf("信任并集文件须含 198.51.100.9/32: %q", got)
 	}
 	trustIdx := strings.Index(precheck, trustRule)
 	// deny 规则(id:2)在信任之后,且信任 IP 也在 deny 名单——DetectionOnly 使其
 	// 评估不拦但记录(信任最高优先,不再被 403)
-	denyIdx := strings.Index(precheck, `"@ipMatch 198.51.100.9" "id:2,phase:1,deny`)
+	denyIdx := strings.Index(precheck, `"id:2,phase:1,deny`)
 	if denyIdx < 0 {
 		t.Fatalf("precheck missing deny rule for trusted IP (must log as detection):\n%s", precheck)
+	}
+	if got := readRenderedIPList(t, precheck, "u-deny"); !strings.Contains(got, "198.51.100.9/32") {
+		t.Fatalf("deny 并集文件须含信任 IP 198.51.100.9/32: %q", got)
 	}
 	if trustIdx > denyIdx {
 		t.Fatalf("trust DetectionOnly (offset %d) must precede deny rules (offset %d):\n%s", trustIdx, denyIdx, precheck)
 	}
 	// 信任不再并入 allow intersection(并入会使信任 IP 不触发规则=无检测事件)
-	if strings.Contains(precheck, `"!@ipMatch 10.0.0.1,198.51.100.9"`) {
-		t.Fatalf("trust must NOT be merged into allow intersection (merge = no detection event):\n%s", precheck)
+	if got := readRenderedIPList(t, precheck, "u-allow"); strings.Contains(got, "198.51.100.9") {
+		t.Fatalf("trust must NOT be merged into allow intersection (merge = no detection event): %q", got)
 	}
 }

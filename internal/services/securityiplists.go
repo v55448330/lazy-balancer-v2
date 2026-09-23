@@ -257,21 +257,23 @@ func resolvePolicyIPListRefs(policies []*models.SecurityPolicy, store caddyConfi
 
 // mergedACLList 返回策略生效的 ACL 条目集：加载路径已附加合并集时直接使用，
 // 否则（未解析/直接构造的策略）回退 inline-only——保证既有调用与测试不变。
+// v2.3.x：返回处统一过 CIDR 聚合（去重/兄弟归并/覆盖剔除，匹配集合不变）——
+// 发射面（@ipListFast 文件与残留内联）共享同一规范形态。
 func mergedACLList(p *models.SecurityPolicy) []string {
 	if p.MergedACLList != nil {
-		return p.MergedACLList
+		return aggregateIPEntries(p.MergedACLList)
 	}
 	var list []string
 	json.Unmarshal([]byte(p.IPACLList), &list)
-	return list
+	return aggregateIPEntries(list)
 }
 
 // mergedWhitelist 同 mergedACLList，作用于信任名单（ip_whitelist）。
 func mergedWhitelist(p *models.SecurityPolicy) []string {
 	if p.MergedWhitelist != nil {
-		return p.MergedWhitelist
+		return aggregateIPEntries(p.MergedWhitelist)
 	}
 	var list []string
 	json.Unmarshal(p.IPWhitelist, &list)
-	return list
+	return aggregateIPEntries(list)
 }

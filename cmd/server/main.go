@@ -140,6 +140,13 @@ func run() error {
 	if err := services.EnsureWafAuditDir(); err != nil {
 		log.Printf("warning: create waf audit dir failed: %v", err)
 	}
+	// WAF 文件目录按 data_dir 派生（容器 /app/data → /app/waf 恒等；本地开发
+	// 落到数据目录同级）。须在首个渲染（ApplyConfigOnStartup）之前。
+	services.ConfigureWafDirs(cfg.DataDir)
+	// @ipListFast 名单投影目录（v2.3.x）：渲染期 fail-closed 依赖目录可写。
+	if err := services.EnsureIPListDir(); err != nil {
+		services.Logf("error", "初始化 IP 名单目录失败: %v", err)
+	}
 	services.SeedCRSRules()
 	services.ReconcileCRSState()
 	// 归一 R50 前落库的安全策略枚举空串行（发射端零产出 + Update 拒修的
@@ -152,6 +159,11 @@ func run() error {
 	// 配置一致性看门狗：周期比对 DB 规则与 Caddy 运行配置，不一致时三通道告知
 	// （系统日志/操作日志/前端横幅），恢复由用户手动重启完成。
 	services.StartConfigWatchdog(cfg.CaddyAdminURL)
+	// 威胁情报库降级信号（v2.3.x）：合并文件缺失时 id:14 规则静默跳过——
+	// 启动 WARN 一条让运维可见（更新任务/调度器会补齐）。
+	if info, err := os.Stat(filepath.Join(services.ThreatDataDir, "intel-merged.txt")); err != nil || info.Size() == 0 {
+		services.Logf("warn", "威胁情报库合并文件缺失或为空——id:14 拦截规则暂不生效，待首次更新后启用")
+	}
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)
@@ -171,6 +183,9 @@ func run() error {
 		services.Logf("error", "failed to read cluster role: %v", err)
 		isMaster = true
 	}
+	services.SetThreatReloader(caddyReloader)
+	services.InitThreatUpdateManager()
+	services.GetThreatUpdateManager().SetMasterRole(isMaster)
 	crsManager.SetMasterRole(isMaster)
 	if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
 		ip2RegionManager.SetMasterRole(isMaster)

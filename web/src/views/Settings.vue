@@ -87,6 +87,10 @@ const settings = ref<SettingsConfig>({
   runtime_log_size_mb: 100,
   access_log_json: true,
   access_log_format: DEFAULT_ACCESS_LOG_FORMAT,
+  trusted_proxy_enabled: false,
+  trusted_proxy_ranges: '[]',
+  trusted_proxy_headers: '[]',
+  trusted_proxy_strict: true,
   audit_retention_months: 3,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
@@ -157,6 +161,11 @@ const applyCaddyKeys = (data: ConfigPayload) => {
   settings.value.access_log_json = data.access_log_json ?? true
   // 空格式需双向一致：DB 为空时 UI 同步清空，避免旧模板被下次保存写回 DB（S-2）
   settings.value.access_log_format = data.access_log_format ?? ''
+  // v2.3.x 受信代理（CDN 真实 IP）
+  settings.value.trusted_proxy_enabled = data.trusted_proxy_enabled ?? false
+  settings.value.trusted_proxy_ranges = data.trusted_proxy_ranges ?? '[]'
+  settings.value.trusted_proxy_headers = data.trusted_proxy_headers ?? '[]'
+  settings.value.trusted_proxy_strict = data.trusted_proxy_strict ?? true
 }
 
 const applyCertKeys = (data: ConfigPayload) => {

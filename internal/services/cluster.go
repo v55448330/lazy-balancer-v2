@@ -329,6 +329,11 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
 		ip2regionMgr.SetMasterRole(true)
 	}
+	// 威胁情报库调度器同族（v2.3.x）：提升为主节点即启动（nil=未初始化，
+	// 测试二进制跳过——与 CRS/IP2Region 管理器同模式）。
+	if threatMgr := GetThreatUpdateManager(); threatMgr != nil {
+		threatMgr.SetMasterRole(true)
+	}
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {

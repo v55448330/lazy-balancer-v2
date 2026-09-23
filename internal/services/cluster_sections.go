@@ -80,12 +80,13 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 		// 漂移由 wafFilesDrifted 专用通道(含退避与标签自愈)独占,版本行与文件
 		// 差量通道随安全防护开关(cluster_apply.go/cluster_sync.go)。
 		return struct {
-			Policies    json.RawMessage             `json:"policies"`
-			Bindings    json.RawMessage             `json:"bindings"`
-			CustomRules []models.SecurityCustomRule `json:"custom_rules"`
-			BlockPages  []models.SecurityBlockPage  `json:"block_pages"`
-			IPLists     json.RawMessage             `json:"ip_lists"`
-		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists}
+			Policies      json.RawMessage             `json:"policies"`
+			Bindings      json.RawMessage             `json:"bindings"`
+			CustomRules   []models.SecurityCustomRule `json:"custom_rules"`
+			BlockPages    []models.SecurityBlockPage  `json:"block_pages"`
+			IPLists       json.RawMessage             `json:"ip_lists"`
+			ThreatSources json.RawMessage             `json:"threat_sources"`
+		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists, s.SecurityThreatSources}
 	case "waf_files":
 		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——
 		// 进哈希会让主从行状态强耦合,漂移判定不可收敛)。CRS/IP2Region 版本行

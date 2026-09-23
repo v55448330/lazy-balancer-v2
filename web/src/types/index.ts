@@ -268,6 +268,11 @@ export interface GlobalConfigData {
   timezone: string
   mfa_write_guard: boolean
   mfa_lockout_enabled: boolean
+  // v2.3.x 受信代理（CDN 真实 IP）：ranges/headers 为 JSON 数组文本（有序）。
+  trusted_proxy_enabled: boolean
+  trusted_proxy_ranges: string
+  trusted_proxy_headers: string
+  trusted_proxy_strict: boolean
   acme_email: string
   cert_expiry_days: number
   cert_renewal_days: number

@@ -23,7 +23,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}
+var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version", "security_threat_sources"}
 
 // SEM44-1(第 44 轮审计 P1):迟到表容缺清单——Version=2 导出清单首发(ff632cd,
 // v2.0.10,8 表)与安全族并入(4e46f85,v2.1.1,12 表)之后才加入导出清单的表:
@@ -40,6 +40,9 @@ var configBackupLateTables = map[string]struct{}{
 	"security_crs_version":       {},
 	"security_ip2region_version": {},
 	"security_ip_lists":          {},
+	// 威胁情报库（v2.3.x 起入导出清单）——更早版本的备份缺席由
+	// 「缺席=保留本地」语义承接。
+	"security_threat_sources": {},
 }
 
 // 三分类合并(2026-09-19 用户裁定):备份分类=集群同步节,收敛为 3 类——
@@ -55,7 +58,7 @@ var configBackupSections = []struct {
 }{
 	{Key: "users", Label: "系统数据", Tables: []string{"users", "api_keys", "ca_providers", "certificate_configs"}, Global: true},
 	{Key: "rules", Label: "负载规则", Tables: []string{"lb_rules", "upstreams", "path_rules", "cert_jobs"}},
-	{Key: "security", Label: "安全防护", Tables: []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}},
+	{Key: "security", Label: "安全防护", Tables: []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version", "security_threat_sources"}},
 }
 
 // normalizeBackupSectionKeys 归一 legacy 分类键:三分类合并前的
@@ -191,6 +194,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"security_block_pages":       {"is_default"},
 	"security_crs_version":       {"auto_update"},
 	"security_ip2region_version": {"auto_update"},
+	"security_threat_sources":    {"update_enabled", "apply_enabled"},
 }
 
 // audit I-A：备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖
@@ -342,6 +346,14 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
 		"consecutive_failures": int64(0),
 	},
+	// v2.3.x 威胁情报库：与集群 dump 侧 COALESCE 口径对齐。
+	"security_threat_sources": {
+		"display_name": "", "url": "", "format": "plain",
+		"update_enabled": int64(1), "apply_enabled": int64(1), "entry_count": int64(0),
+		"version": "", "update_status": "idle", "message": "",
+		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
+		"consecutive_failures": int64(0), "created_at": "", "updated_at": "",
+	},
 }
 
 // 全局配置区布尔键（global_config）。protected 键（is_master/sync_users 等）
@@ -353,6 +365,7 @@ var backupBooleanConfigKeys = []string{
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
 	"sync_switches_migrated", "waf_mode4_migrated", // SYSRENDER27-P5-4: waf_mode4_migrated 补入(R56 枚举漏列)
 	"mfa_write_guard", "mfa_lockout_enabled",
+	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
 }
 
 func isBackupBooleanColumn(table, column string) bool {
@@ -744,6 +757,23 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	return nil
 }
 
+// 威胁库种子源名（与 db.go createTables 种子同源——改种子须同步）。
+var threatSourceSeedNames = map[string]struct{}{
+	"ustc": {}, "firehol_l1": {}, "et_compromised": {},
+}
+
+// validateImportedThreatSources 拒绝种子集合外的源行（伪造源 URL 经备份
+// 通道注入会使更新任务下载任意地址——响亮拒绝，整包 400 零写入）。
+func validateImportedThreatSources(rows []map[string]any) error {
+	for _, row := range rows {
+		name, _ := row["name"].(string)
+		if _, ok := threatSourceSeedNames[name]; !ok {
+			return fmt.Errorf("威胁库源不受支持: %s", name)
+		}
+	}
+	return nil
+}
+
 // validateImportedSecurityCustomRules（R72 二十六次 W1-5）：导入路径复用保存侧
 // validateSecurityCustomRule 的行级约束——此前导入对 security_custom_rules 零验证，
 // 篡改/损坏备份可带入 score=-5（coraza setvar:+-5 运行时减分，异常评分静默失真）
@@ -850,6 +880,13 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	// R72 二十六次 W1-5：自定义规则行级验证（保存侧同款约束）。
 	if rows, ok := backup.Tables["security_custom_rules"]; ok {
 		if err := validateImportedSecurityCustomRules(rows); err != nil {
+			return false, err
+		}
+	}
+	// 威胁情报库（v2.3.x）：内置只读三源——备份携带种子集合外的源行
+	// （伪造源 URL）一律响亮拒绝，防备份通道注入任意下载地址。
+	if rows, ok := backup.Tables["security_threat_sources"]; ok {
+		if err := validateImportedThreatSources(rows); err != nil {
 			return false, err
 		}
 	}
@@ -2343,7 +2380,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	// W2：security_ip_lists 先删/先插 security_policies——refs 是策略行上的
 	// JSON 引用（无外键，顺序本自由），固定 lists→policies 与集群 apply 侧
 	// 一致，保证插入后引用即时指向存在行。
-	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
+	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
@@ -2355,7 +2392,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_ip_lists", "security_policies", "security_crs_version", "security_ip2region_version", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
+	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_ip_lists", "security_policies", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
 	for _, table := range insertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {
@@ -2719,6 +2756,7 @@ func importCountsDetail(tables map[string][]map[string]any) string {
 		{"security_ip_lists", "IP 地址列表 %d 个"},
 		{"security_crs_version", "CRS 版本 %d 条"},
 		{"security_ip2region_version", "IP2Region 版本 %d 条"},
+		{"security_threat_sources", "威胁情报库源 %d 条"},
 	}
 	for _, item := range labels {
 		if rows, ok := tables[item.table]; ok {

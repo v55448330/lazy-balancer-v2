@@ -28,8 +28,54 @@ type WafFileBundle struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
-	CRSTarGzB64  []byte `json:"crs_tar_gz,omitempty"`
-	XdbB64       []byte `json:"xdb,omitempty"`
+	// 威胁情报库（v2.3.x）：ThreatSha256=目录内容哈希；ThreatFiles=文件名→
+	// 内容（纯文本名单，源文件 + intel-merged.txt）。
+	ThreatSha256 string            `json:"threat_sha256,omitempty"`
+	ThreatFiles  map[string]string `json:"threat_files,omitempty"`
+	CRSTarGzB64  []byte            `json:"crs_tar_gz,omitempty"`
+	XdbB64       []byte            `json:"xdb,omitempty"`
+}
+
+// threatDirListing 读取威胁目录（文件名排序 + 逐文件内容），目录不存在返回
+// nil。哈希口径：sha256("name\x00content\x00" 依次拼接)。
+func threatDirListing() (map[string]string, string) {
+	entries, err := os.ReadDir(ThreatDataDir)
+	if err != nil {
+		return nil, ""
+	}
+	files := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(ThreatDataDir, entry.Name()))
+		if err != nil {
+			return nil, ""
+		}
+		files[entry.Name()] = string(data)
+	}
+	if len(files) == 0 {
+		return nil, ""
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	sum := sha256.New()
+	for _, name := range names {
+		sum.Write([]byte(name))
+		sum.Write([]byte{0})
+		sum.Write([]byte(files[name]))
+		sum.Write([]byte{0})
+	}
+	return files, hex.EncodeToString(sum.Sum(nil))
+}
+
+// threatDirHash 仅哈希形态（ref 热路径不携内容时同口径）。
+func threatDirHash() string {
+	_, sum := threatDirListing()
+	return sum
 }
 
 // BuildWafFileRef computes the live rule-file hashes without file content;
@@ -56,6 +102,10 @@ func BuildWafFileRef() *models.ClusterWafFilesRef {
 		// 与从端同一规则推导 tag（R35-2 形状校验）：主端原文、从端置空会让
 		// waf_files 节哈希两端永不对齐，从端永久节流重拉（E5 IMP-1）。
 		ref.IP2RegionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
+	}
+	if sum := threatDirHash(); sum != "" {
+		ref.ThreatSha256 = sum
+		seen = true
 	}
 	if !seen {
 		return nil
@@ -84,6 +134,12 @@ func BuildWafFileBundle() *WafFileBundle {
 	if ref.IP2RegionSha != "" {
 		if data, err := os.ReadFile(ip2regionLivePath); err == nil {
 			bundle.XdbB64 = data
+		}
+	}
+	if ref.ThreatSha256 != "" {
+		if files, _ := threatDirListing(); files != nil {
+			bundle.ThreatSha256 = ref.ThreatSha256
+			bundle.ThreatFiles = files
 		}
 	}
 	return bundle
@@ -126,6 +182,9 @@ func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
 	if r.IP2RegionSha != "" && fileSha256(ip2regionLivePath) != r.IP2RegionSha {
 		return true
 	}
+	if r.ThreatSha256 != "" && threatDirHash() != r.ThreatSha256 {
+		return true
+	}
 	return false
 }
 
@@ -139,6 +198,9 @@ func wafFilesRefMatchesBundle(r *models.ClusterWafFilesRef, b *WafFileBundle) bo
 		return false
 	}
 	if r.IP2RegionSha != "" && b.IP2RegionSha != r.IP2RegionSha {
+		return false
+	}
+	if r.ThreatSha256 != "" && b.ThreatSha256 != r.ThreatSha256 {
 		return false
 	}
 	return true
@@ -160,6 +222,9 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	}
 	if bundle.IP2RegionSha != "" && len(bundle.XdbB64) == 0 {
 		return crsChanged, xdbChanged, errors.New("同步包声明 IP2Region 哈希非空但未携带内容，拒绝应用该同步包")
+	}
+	if bundle.ThreatSha256 != "" && len(bundle.ThreatFiles) == 0 {
+		return crsChanged, xdbChanged, errors.New("同步包声明威胁库哈希非空但未携带内容，拒绝应用该同步包")
 	}
 	if len(bundle.CRSTarGzB64) > 0 {
 		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
@@ -208,6 +273,55 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			}
 			if tagErr := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", bundle.IP2RegionTag); tagErr != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库版本标记: %w", tagErr)
+			}
+			xdbChanged = true
+		}
+	}
+	if len(bundle.ThreatFiles) > 0 {
+		// 声明哈希为空但携带内容：同 CRS/xdb 纵深防御，拒绝裸写未验证字节。
+		if bundle.ThreatSha256 == "" {
+			return crsChanged, xdbChanged, errors.New("同步威胁情报库缺少声明哈希，已拒绝落盘")
+		}
+		// 内容哈希自检（防传输/构造分叉）。
+		sum := sha256.New()
+		names := make([]string, 0, len(bundle.ThreatFiles))
+		for name := range bundle.ThreatFiles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			sum.Write([]byte(name))
+			sum.Write([]byte{0})
+			sum.Write([]byte(bundle.ThreatFiles[name]))
+			sum.Write([]byte{0})
+		}
+		if got := hex.EncodeToString(sum.Sum(nil)); got != bundle.ThreatSha256 {
+			return crsChanged, xdbChanged, fmt.Errorf("同步威胁情报库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.ThreatSha256, got)
+		}
+		if threatDirHash() != bundle.ThreatSha256 {
+			if err := os.MkdirAll(ThreatDataDir, 0o755); err != nil {
+				return crsChanged, xdbChanged, fmt.Errorf("创建威胁库目录: %w", err)
+			}
+			// 主端权威镜像：bundle 外（含 intel-merged.txt 被主端删除形态）的
+			// 本地 *.txt 全部移除——主端全关应用时从端 id:14 随之停止生效。
+			localEntries, err := os.ReadDir(ThreatDataDir)
+			if err != nil {
+				return crsChanged, xdbChanged, fmt.Errorf("读取威胁库目录: %w", err)
+			}
+			for _, entry := range localEntries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+					continue
+				}
+				if _, keep := bundle.ThreatFiles[entry.Name()]; !keep {
+					if err := os.Remove(filepath.Join(ThreatDataDir, entry.Name())); err != nil {
+						return crsChanged, xdbChanged, fmt.Errorf("移除陈旧威胁库文件 %s: %w", entry.Name(), err)
+					}
+				}
+			}
+			for _, name := range names {
+				if err := writeTextFileAtomic(filepath.Join(ThreatDataDir, name), bundle.ThreatFiles[name]); err != nil {
+					return crsChanged, xdbChanged, fmt.Errorf("写入威胁库文件 %s: %w", name, err)
+				}
 			}
 			xdbChanged = true
 		}

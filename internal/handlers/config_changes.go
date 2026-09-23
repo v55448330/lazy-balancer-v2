@@ -43,6 +43,11 @@ type configSnapshot struct {
 	//（此前缺位：安全开关可无确认直存且变更零审计留痕）。
 	MFAWriteGuard     bool
 	MFALockoutEnabled bool
+	// v2.3.x 受信代理（CDN 真实 IP）：预览变更清单与字段级审计。
+	TrustedProxyEnabled bool
+	TrustedProxyRanges  string
+	TrustedProxyHeaders string
+	TrustedProxyStrict  bool
 }
 
 type configChangePlan struct {
@@ -68,7 +73,8 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(jwt_expire_minutes,20),
 		COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
 		COALESCE(mfa_write_guard,0),
-		COALESCE(mfa_lockout_enabled,0)
+		COALESCE(mfa_lockout_enabled,0),
+		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1)
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
@@ -81,7 +87,8 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.AccessLogJSON, &old.AccessLogFormat,
 		&old.CertJobLogSizeMB, &old.AuditLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes,
 		&old.GitHubProxyURL,
-		&old.MFAWriteGuard, &old.MFALockoutEnabled)
+		&old.MFAWriteGuard, &old.MFALockoutEnabled,
+		&old.TrustedProxyEnabled, &old.TrustedProxyRanges, &old.TrustedProxyHeaders, &old.TrustedProxyStrict)
 	return old, err
 }
 
@@ -115,6 +122,10 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)
 	add("mfa_lockout_enabled", "登录失败锁定", req.MFALockoutEnabled != nil && *req.MFALockoutEnabled != old.MFALockoutEnabled)
+	add("trusted_proxy_enabled", "受信代理开关", req.TrustedProxyEnabled != nil && *req.TrustedProxyEnabled != old.TrustedProxyEnabled)
+	add("trusted_proxy_ranges", "受信代理网段", req.TrustedProxyRanges != nil && *req.TrustedProxyRanges != old.TrustedProxyRanges)
+	add("trusted_proxy_headers", "受信代理请求头", req.TrustedProxyHeaders != nil && *req.TrustedProxyHeaders != old.TrustedProxyHeaders)
+	add("trusted_proxy_strict", "受信代理严格模式", req.TrustedProxyStrict != nil && *req.TrustedProxyStrict != old.TrustedProxyStrict)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
 	add("audit_log_size_mb", "审计日志大小", req.AuditLogSizeMB != nil && *req.AuditLogSizeMB != old.AuditLogSizeMB)
 	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)

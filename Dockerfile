@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       --with github.com/mholt/caddy-ratelimit@v0.1.0 \
       --with github.com/corazawaf/coraza-caddy/v2@v2.6.1 \
       --with lazy-balancer-v2/caddygeoip=./caddygeoip \
-      --with lazy-balancer-v2/caddydeps=./caddydeps; then \
+      --with lazy-balancer-v2/caddydeps=./caddydeps \
+      --with lazy-balancer-v2/wafiplist=./wafiplist; then \
       built=1; break; \
     fi; \
     echo ">>> xcaddy build 第 ${attempt}/3 次失败，10s 后重试" >&2; \
@@ -62,7 +63,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Final image
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-ARG VERSION=v2.3.1
+ARG VERSION=v2.3.2
 ENV APP_VERSION=${VERSION}
 # 安全修复：显式钉版 openssl=3.5.8-r0（CVE 修复版）——openssl 经 curl 的
 # libssl3/libcrypto3 依赖隐式装入，钉版保证镜像可复现且不携带旧版；

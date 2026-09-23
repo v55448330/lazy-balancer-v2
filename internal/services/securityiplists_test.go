@@ -131,9 +131,10 @@ func TestBuildCorazaDirectives_mergedEmission_inlinePlusListEntries(t *testing.T
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
-	if !strings.Contains(directives, "@ipMatch 1.2.3.4,10.0.0.0/8,192.0.2.0/24") {
-		t.Fatalf("directives must emit inline + list entries in one deny rule:\n%s", directives)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
+	// v2.3.x：inline + 列表条目合并进同一 @ipListFast 投影文件（聚合排序）
+	if got := readRenderedIPList(t, directives, "-acl"); got != "1.2.3.4/32\n10.0.0.0/8\n192.0.2.0/24\n" {
+		t.Fatalf("deny 名单文件须含 inline + list 聚合条目: %q", got)
 	}
 }
 
@@ -153,9 +154,9 @@ func TestBuildCorazaDirectives_refsOnlyPolicyStillEmits(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
-	if !strings.Contains(directives, "@ipMatch 203.0.113.0/24") {
-		t.Fatalf("refs-only policy must emit list entries:\n%s", directives)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
+	if got := readRenderedIPList(t, directives, "-acl"); got != "203.0.113.0/24\n" {
+		t.Fatalf("refs-only policy must emit list entries via file: %q", got)
 	}
 	if !strings.Contains(directives, "SecRuleEngine On") {
 		t.Fatalf("refs-only policy must still turn the engine on:\n%s", directives)
@@ -170,12 +171,10 @@ func TestBuildCorazaDirectives_unresolvedPolicyFallsBackToInline(t *testing.T) {
 		IPACLEnabled:  true,
 		IPACLListRefs: "[42]",
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
-	if !strings.Contains(directives, "@ipMatch 1.2.3.4") {
-		t.Fatalf("inline entries must survive:\n%s", directives)
-	}
-	if strings.Contains(directives, "@ipMatch 1.2.3.4,") {
-		t.Fatalf("unresolved refs must not append anything after inline entries:\n%s", directives)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
+	// 未解析引用（refs 指向不存在的列表）回退 inline-only——名单文件恰含 inline 条目
+	if got := readRenderedIPList(t, directives, "-acl"); got != "1.2.3.4/32\n" {
+		t.Fatalf("inline entries must survive (file=%q), 未解析引用不得追加内容", got)
 	}
 }
 
@@ -195,12 +194,13 @@ func TestBuildCorazaDirectives_whitelistRefsMergedIntoTrustRule(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	if !strings.Contains(directives, "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly") {
 		t.Fatalf("trust rule must be emitted (DetectionOnly, 2026-09-15 裁定):\n%s", directives)
 	}
-	if !strings.Contains(directives, "@ipMatch 198.51.100.9,198.51.100.7") {
-		t.Fatalf("trust rule must contain inline + list entries (inline first):\n%s", directives)
+	// inline ∪ 引用聚合进同一信任名单文件（排序规范形）
+	if got := readRenderedIPList(t, directives, "-trust"); got != "198.51.100.7/32\n198.51.100.9/32\n" {
+		t.Fatalf("trust 名单文件须含 inline + list 聚合条目: %q", got)
 	}
 }
 
@@ -234,13 +234,14 @@ func TestBuildIPPrecheckDirectives_mergedDenyUnion(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listB)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 	if !strings.Contains(directives, "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END") {
 		t.Fatalf("deny union rule missing:\n%s", directives)
 	}
-	for _, want := range []string{"1.2.3.4", "10.0.0.0/8", "192.0.2.0/24"} {
-		if !strings.Contains(directives, want) {
-			t.Fatalf("deny union must contain %s:\n%s", want, directives)
+	union := readRenderedIPList(t, directives, "u-deny")
+	for _, want := range []string{"1.2.3.4/32", "10.0.0.0/8", "192.0.2.0/24"} {
+		if !strings.Contains(union, want) {
+			t.Fatalf("deny union file must contain %s: %q", want, union)
 		}
 	}
 }
@@ -252,16 +253,17 @@ func TestBuildIPPrecheckDirectives_mergedAllowIntersection(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listID)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 	if !strings.Contains(directives, "id:7,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END") {
 		t.Fatalf("allow intersection rule missing:\n%s", directives)
 	}
 	// P1 合并集 [198.51.100.1 203.0.113.5] ∩ P2 合并集 [203.0.113.5] = [203.0.113.5]
-	if !strings.Contains(directives, "!@ipMatch 203.0.113.5") {
-		t.Fatalf("intersection must be merged(P1) ∩ merged(P2) = [203.0.113.5]:\n%s", directives)
+	intersection := readRenderedIPList(t, directives, "u-allow")
+	if intersection != "203.0.113.5/32\n" {
+		t.Fatalf("intersection must be merged(P1) ∩ merged(P2) = [203.0.113.5/32]: %q", intersection)
 	}
-	if strings.Contains(directives, "198.51.100.1") {
-		t.Fatalf("198.51.100.1 only in P1 must not survive the allow intersection:\n%s", directives)
+	if strings.Contains(intersection, "198.51.100.1") {
+		t.Fatalf("198.51.100.1 only in P1 must not survive the allow intersection: %q", intersection)
 	}
 }
 

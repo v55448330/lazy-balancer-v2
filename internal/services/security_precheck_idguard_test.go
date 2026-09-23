@@ -17,14 +17,14 @@ import (
 func TestEngineGate_precheckGeoipPolicyIDGuard(t *testing.T) {
 	// 越界形状：ID=100000 → 预检 id=900000 撞 CRS 保留段，必须整链跳过。
 	pBig := &models.SecurityPolicy{ID: 100000, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["CN"]`)}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{pBig}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pBig}, 0))
 	if strings.Contains(directives, "id:900000") {
 		t.Fatalf("policy id 100000 must skip its precheck geoip chain (900000 collides CRS reserved space), got:\n%s", directives)
 	}
 	compileForEngineGate(t, directives)
 	// 回归形状：常规 ID=42 照常发射 id:800042（与 precheckGeoipChainShapes 同口径）。
 	pOK := &models.SecurityPolicy{ID: 42, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["CN"]`)}
-	dOK := buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, 0)
+	dOK := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, 0))
 	if !strings.Contains(dOK, "id:800042,") {
 		t.Fatalf("policy id 42 must still emit id:800042 chain, got:\n%s", dOK)
 	}

@@ -83,8 +83,9 @@ func TestTrustedPassthrough_subrouteSkipsAllSecurityStages(t *testing.T) {
 		t.Fatalf("marshal matcher: %v", err)
 	}
 	matcherJSON := string(raw)
-	if !strings.Contains(matcherJSON, `"not"`) || !strings.Contains(matcherJSON, `"remote_ip"`) || !strings.Contains(matcherJSON, "10.0.0.9") {
-		t.Fatalf("subroute matcher must be not-remote_ip in trust set: %s", matcherJSON)
+	// v2.3.x：matcher 改 client_ip（受信代理启用时=真实 IP；未启用与 remote_ip 同值）。
+	if !strings.Contains(matcherJSON, `"not"`) || !strings.Contains(matcherJSON, `"client_ip"`) || !strings.Contains(matcherJSON, "10.0.0.9") {
+		t.Fatalf("subroute matcher must be not-client_ip in trust set: %s", matcherJSON)
 	}
 	// 安全段在 subroute 内（precheck/rate_limit/waf 均不在主链裸层）
 	innerNames := map[string]bool{}
@@ -128,9 +129,12 @@ func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
 		}
 	}
 	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
-	wantRule := `SecRule REMOTE_ADDR "@ipMatch 10.0.0.9" "id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	wantRule := `"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
 	if !strings.Contains(joined, wantRule) {
 		t.Fatalf("precheck must carry id:12 DetectionOnly for detection trust set:\n%s", joined)
+	}
+	if got := readRenderedIPList(t, joined, "u-trust12"); got != "10.0.0.9/32\n" {
+		t.Fatalf("id:12 信任名单文件=%q, want 仅 10.0.0.9/32", got)
 	}
 	// 策略引擎同样含 id:12（各自 coraza 事务的 DetectionOnly 独立生效）
 	engineCount := strings.Count(joined, "id:12,")
@@ -143,13 +147,16 @@ func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
 // 由渲染链按规则绑定的 stage0 保留检测策略并集透传。
 func TestBuildCorazaDirectives_stage0DetectionTrustEmitsId12(t *testing.T) {
 	policy := &models.SecurityPolicy{Mode: "blocking"}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0, []string{"10.0.0.9", "192.168.1.0/24"})
-	want := `SecRule REMOTE_ADDR "@ipMatch 10.0.0.9,192.168.1.0/24" "id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
-	if !strings.Contains(directives, want) {
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0, []string{"10.0.0.9", "192.168.1.0/24"}))
+	want := `"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	if !strings.Contains(directives, want) || !strings.Contains(directives, "@ipListFast ") {
 		t.Fatalf("engine must emit id:12 for stage0 detection trust union:\n%s", directives)
 	}
+	if got := readRenderedIPList(t, directives, "u-trust12"); got != "10.0.0.9/32\n192.168.1.0/24\n" {
+		t.Fatalf("id:12 名单文件=%q, want 两条聚合排序条目", got)
+	}
 	// 缺省（无第 6 参）零发射——存量调用形状不漂移。
-	plain := BuildCorazaDirectives(policy, nil, "", false, 0)
+	plain := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	if strings.Contains(plain, "id:12,") {
 		t.Fatalf("engine without stage0 trust must not emit id:12:\n%s", plain)
 	}

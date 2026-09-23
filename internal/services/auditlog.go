@@ -41,8 +41,13 @@ var configFieldSections = map[string]string{
 	"proxy_flush_interval":          "Caddy配置",
 	"proxy_stream_close_delay":      "Caddy配置",
 	"server_tokens_hidden":          "Caddy配置",
-	"access_log_json":               "Caddy配置",
-	"access_log_format":             "Caddy配置",
+	// v2.3.x 受信代理（CDN 真实 IP）：与 CDN/网络面同在 Caddy 配置卡片。
+	"trusted_proxy_enabled": "Caddy配置",
+	"trusted_proxy_ranges":  "Caddy配置",
+	"trusted_proxy_headers": "Caddy配置",
+	"trusted_proxy_strict":  "Caddy配置",
+	"access_log_json":       "Caddy配置",
+	"access_log_format":     "Caddy配置",
 
 	"log_level":              "基础设置",
 	"cert_job_log_size_mb":   "基础设置",

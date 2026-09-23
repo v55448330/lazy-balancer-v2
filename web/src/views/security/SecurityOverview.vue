@@ -82,6 +82,17 @@
                 </div>
               </div>
             </div>
+            <div class="stat-col">
+              <div class="stat-box stat-box--success">
+                <div class="stat-box__icon"><el-icon><Aim /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ threatMergedCount > 0 ? threatMergedCount.toLocaleString() + ' 条' : '未更新' }}</div>
+                  <div class="stat-box__label">威胁情报库{{ threatLatestVersion ? ' · ' + threatLatestVersion : '' }}</div>
+                  <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
+                  <el-tag v-else-if="threatRunning" type="warning" size="small" effect="plain" style="margin-top: 4px">更新中</el-tag>
+                </div>
+              </div>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -214,7 +225,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files } from '@element-plus/icons-vue'
+import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
@@ -368,7 +379,24 @@ const fetchIP2RegionInfo = async () => {
   }
 }
 
-onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo() })
+// 威胁情报库 stat（v2.3.x）：合并生效条数 + 最近版本（各源 version 最大者）。
+const threatMergedCount = ref(0)
+const threatLatestVersion = ref('')
+const threatRunning = ref(false)
+const threatError = ref(false)
+const fetchThreatLib = async () => {
+  try {
+    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; merged_apply_count: number }>>('/security/threat-lib')
+    threatMergedCount.value = res.data?.merged_apply_count || 0
+    threatLatestVersion.value = (res.data?.sources || []).map(s => s.version).filter(Boolean).sort().pop() || ''
+    threatRunning.value = (res.data?.sources || []).some(s => s.update_status === 'running')
+    threatError.value = false
+  } catch {
+    threatError.value = true
+  }
+}
+
+onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo(); fetchThreatLib() })
 </script>
 
 <style scoped>

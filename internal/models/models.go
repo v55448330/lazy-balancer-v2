@@ -244,16 +244,21 @@ type GlobalConfig struct {
 	SyncInterval               int    `json:"sync_interval"`
 	DefaultCAProviderID        int    `json:"default_ca_provider_id"`
 	// v2.1.8 MFA 全局开关（响应面）
-	MFAWriteGuard      bool         `json:"mfa_write_guard"`
-	MFALockoutEnabled  bool         `json:"mfa_lockout_enabled"`
-	ClusterVersion     int          `json:"cluster_version"`
-	ClusterToken       string       `json:"-"`
-	RegistrationID     int          `json:"-"`
-	RegistrationSecret string       `json:"-"`
-	AppliedVersion     int          `json:"applied_version"`
-	LastSyncError      string       `json:"last_sync_error"`
-	LastSync           JSONNullTime `json:"last_sync"`
-	UpdatedAt          JSONNullTime `json:"updated_at"`
+	MFAWriteGuard     bool `json:"mfa_write_guard"`
+	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
+	// v2.3.x 受信代理（CDN 真实 IP）：响应面。
+	TrustedProxyEnabled bool         `json:"trusted_proxy_enabled"`
+	TrustedProxyRanges  string       `json:"trusted_proxy_ranges"`
+	TrustedProxyHeaders string       `json:"trusted_proxy_headers"`
+	TrustedProxyStrict  bool         `json:"trusted_proxy_strict"`
+	ClusterVersion      int          `json:"cluster_version"`
+	ClusterToken        string       `json:"-"`
+	RegistrationID      int          `json:"-"`
+	RegistrationSecret  string       `json:"-"`
+	AppliedVersion      int          `json:"applied_version"`
+	LastSyncError       string       `json:"last_sync_error"`
+	LastSync            JSONNullTime `json:"last_sync"`
+	UpdatedAt           JSONNullTime `json:"updated_at"`
 }
 
 // Upstream represents an upstream server
@@ -556,6 +561,12 @@ type UpdateConfigRequest struct {
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
 	MFAWriteGuard     *bool `json:"mfa_write_guard"`
 	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`
+	// v2.3.x 受信代理（CDN 真实 IP）：指针化，nil=保留原值；ranges/headers
+	// 为 JSON 数组文本（有序），写侧校验并归一（裸 IP 补 /32 //128）。
+	TrustedProxyEnabled *bool   `json:"trusted_proxy_enabled"`
+	TrustedProxyRanges  *string `json:"trusted_proxy_ranges"`
+	TrustedProxyHeaders *string `json:"trusted_proxy_headers"`
+	TrustedProxyStrict  *bool   `json:"trusted_proxy_strict"`
 }
 
 type CreateCertificateConfigRequest struct {

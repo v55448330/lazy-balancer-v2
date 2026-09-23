@@ -57,7 +57,7 @@ func TestEngineGate_multiPolicyChainedShapes(t *testing.T) {
 	}
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
-			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", true, 0))
+			compileForEngineGate(t, mustDirectives(BuildCorazaDirectives(p, nil, "", true, 0)))
 		})
 	}
 }
@@ -74,13 +74,13 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
 			multi := strings.HasPrefix(name, "multi-")
-			compileForEngineGate(t, BuildCorazaDirectives(p, nil, "", multi, 0))
+			compileForEngineGate(t, mustDirectives(BuildCorazaDirectives(p, nil, "", multi, 0)))
 		})
 	}
 	t.Run("precheck-trust-union", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: trust}
 		p2 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
-		compileForEngineGate(t, buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
+		compileForEngineGate(t, mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)))
 	})
 }
 
@@ -91,7 +91,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 	p := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
 		`[{"id":790000,"name":"collider","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
-	directives := BuildCorazaDirectives(p, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
 	if strings.Contains(directives, "id:800000") {
 		t.Fatalf("rule with db id 790000 must be skipped (emit id 800000 collides geoip precheck space), got:\n%s", directives)
 	}
@@ -102,7 +102,7 @@ func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 	// 回归形状:合法 id(790000 以下)照常发射
 	pOK := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(
 		`[{"id":789999,"name":"safe","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"/y"}]}]`)}
-	dOK := BuildCorazaDirectives(pOK, nil, "", false, 0)
+	dOK := mustDirectives(BuildCorazaDirectives(pOK, nil, "", false, 0))
 	if !strings.Contains(dOK, "id:799999") {
 		t.Fatalf("rule with db id 789999 must still emit id:799999, got:\n%s", dOK)
 	}
@@ -120,7 +120,7 @@ func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 	p2 := &models.SecurityPolicy{
 		ID: 43, Mode: "detection", GeoIPMode: "allow", GeoIPCountries: json.RawMessage(`["江苏"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 	if !strings.Contains(directives, "id:800042,") || !strings.Contains(directives, "id:800043,") {
 		t.Fatalf("precheck must carry per-policy geoip chains, got:\n%s", directives)
 	}
@@ -133,7 +133,7 @@ func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// ① detection 的 id:6 DetectionOnly 切换行
 	t.Run("detection-id6-switch", func(t *testing.T) {
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection"}, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection"}, nil, "", false, 0))
 		if !strings.Contains(directives, `SecAction "id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly"`) {
 			t.Fatalf("detection mode must emit id:6 switch:\n%s", directives)
 		}
@@ -144,7 +144,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	t.Run("bypass-id3-engine-off", func(t *testing.T) {
 		p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "bypass", IPACLList: `["198.51.100.9"]`,
 			IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
-		directives := BuildCorazaDirectives(p, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
 		if !strings.Contains(directives, `id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off`) {
 			t.Fatalf("bypass mode must emit id:3 engine-off rule:\n%s", directives)
 		}
@@ -155,7 +155,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	})
 	// ③ id:900 异常阈值 SecAction（AnomalyThreshold>0）
 	t.Run("anomaly-threshold-id900", func(t *testing.T) {
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking", AnomalyThreshold: 12}, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking", AnomalyThreshold: 12}, nil, "", false, 0))
 		if !strings.Contains(directives, `id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=12`) {
 			t.Fatalf("AnomalyThreshold>0 must emit id:900 SecAction:\n%s", directives)
 		}
@@ -167,7 +167,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 		seedCRSRuleIndexFixture(t)
 		p := &models.SecurityPolicy{Mode: "blocking",
 			CRSExcludedRules: json.RawMessage(`[{"target":"42","scope":"ip","ips":"1.1.1.1"}]`)}
-		directives := BuildCorazaDirectives(p, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
 		if !strings.Contains(directives, `id:2000001,phase:1,pass,nolog,ctl:ruleRemoveById=942100`) {
 			t.Fatalf("scoped exclusion must emit 2000000+ ctl rules:\n%s", directives)
 		}
@@ -177,7 +177,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	t.Run("precheck-disjoint-allow-constant-deny", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
 		p2 := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["5.6.7.8"]`}
-		directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0)
+		directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0))
 		if !strings.Contains(directives, `SecRule REMOTE_ADDR "@rx .*" "id:7,phase:1,deny`) {
 			t.Fatalf("disjoint allow lists must emit constant-deny @rx .* rule:\n%s", directives)
 		}
@@ -187,7 +187,10 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// BuildCorazaDirectives 产物尾部拼接，门禁直调 BuildCorazaDirectives 不经
 	// 此——本用例走上层取 handler.directives 送编译）
 	t.Run("request-body-limit-appended", func(t *testing.T) {
-		handler := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0, 8, nil)
+		handler, wafErr := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0, 8, nil)
+		if wafErr != nil {
+			t.Fatalf("buildWafHandlerWithPolicy err=%v", wafErr)
+		}
 		if handler == nil {
 			t.Fatal("blocking policy must yield a waf handler")
 		}
@@ -208,7 +211,7 @@ func TestEngineGate_blockStatusSyntheticShapes(t *testing.T) {
 	t.Run("chained-trust-exclusion-lifted", func(t *testing.T) {
 		p := &models.SecurityPolicy{Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`,
 			IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}
-		directives := BuildCorazaDirectives(p, nil, "", true, 481)
+		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", true, 481))
 		if !strings.Contains(directives, `id:2,phase:1,deny,status:481,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END,chain`) {
 			t.Fatalf("chained head must carry status:481:\n%s", directives)
 		}
@@ -219,7 +222,7 @@ func TestEngineGate_blockStatusSyntheticShapes(t *testing.T) {
 	t.Run("custom-lifted-and-geoip-absent", func(t *testing.T) {
 		p := &models.SecurityPolicy{Mode: "blocking", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`),
 			CustomRules: json.RawMessage(`[{"id":11,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/admin"}]}]`)}
-		directives := BuildCorazaDirectives(p, nil, "", false, 482)
+		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 482))
 		if strings.Contains(directives, "msg:'GeoIP 区域拦截'") {
 			t.Fatalf("policy engine must not emit geoip rules (moved to precheck):\n%s", directives)
 		}
@@ -239,7 +242,7 @@ func TestEngineGate_blockStatusSyntheticShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 		useCRSDirectivesDir(t, dir)
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 481)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 481))
 		if !strings.Contains(directives, `SecRuleUpdateActionById 949110 "deny,status:481"`) {
 			t.Fatalf("949 file present must emit CRS status lift:\n%s", directives)
 		}

@@ -270,6 +270,9 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	if snapshot.SecurityIPLists, err = s.snapshotSecurityIPLists(ctx, tx); err != nil {
 		return nil, err
 	}
+	if snapshot.SecurityThreatSources, err = s.snapshotSecurityThreatSources(ctx, tx); err != nil {
+		return nil, err
+	}
 	// CL9-N1(第 9 轮审计):CRS/IP2Region 版本行装载已删——版本行移出全部
 	// 守卫节 payload(766f4c81 差分门控裁定)后此处为死装载,每 304 白扫
 	// 2 表且引入无谓失败面。
@@ -433,14 +436,16 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
 		COALESCE(upstream_keepalive_timeout,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-		COALESCE(server_tokens_hidden,0)
+		COALESCE(server_tokens_hidden,0),
+		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1)
 		FROM global_config WHERE id=1`).Scan(
 		&snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
 		&snapshot.BasicSettings.AccessLogJSON, &snapshot.BasicSettings.AccessLogFormat,
 		&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,
 		&snapshot.BasicSettings.UpstreamKeepaliveTimeout,
 		&snapshot.BasicSettings.ProxyDialTimeout, &snapshot.BasicSettings.ProxyResponseHeaderTimeout, &snapshot.BasicSettings.ProxyReadTimeout, &snapshot.BasicSettings.ProxyWriteTimeout, &snapshot.BasicSettings.ProxyStreamTimeout, &snapshot.BasicSettings.ProxyFlushInterval, &snapshot.BasicSettings.ProxyStreamCloseDelay,
-		&snapshot.BasicSettings.ServerTokensHidden); err != nil {
+		&snapshot.BasicSettings.ServerTokensHidden,
+		&snapshot.BasicSettings.TrustedProxyEnabled, &snapshot.BasicSettings.TrustedProxyRanges, &snapshot.BasicSettings.TrustedProxyHeaders, &snapshot.BasicSettings.TrustedProxyStrict); err != nil {
 		return fmt.Errorf("读取 Caddy 全局设置: %w", err)
 	}
 	// CL41-1(第 41 轮审计):自动备份六设置列随 users 节同步。指针形态装载,
@@ -509,6 +514,9 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.SecurityIP2RegionVersion, err = s.snapshotSecurityIP2RegionVersion(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.SecurityThreatSources, err = s.snapshotSecurityThreatSources(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
 }
 
@@ -528,6 +536,14 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 // 0/”），保证主从落库行为一致。
 func (s *ClusterService) snapshotSecurityIPLists(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
 	return s.dumpTableAsJSON(ctx, store, "security_ip_lists", "id,name,COALESCE(description,'') AS description,COALESCE(category,'') AS category,COALESCE(entries,'[]') AS entries,COALESCE(created_by,0) AS created_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_by,0) AS updated_by,COALESCE(updated_at,'') AS updated_at", "id")
+}
+
+// snapshotSecurityThreatSources（v2.3.x）dump 威胁情报库源表：NULL 归一口径
+// 与备份 restoreTable 写入侧（backupTableNullDefaults）逐列对齐——两条
+// 「全量替换」通道对同一 NULL 行产出同一落库值。
+func (s *ClusterService) snapshotSecurityThreatSources(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "security_threat_sources",
+		"id,name,COALESCE(display_name,'') AS display_name,COALESCE(url,'') AS url,COALESCE(format,'plain') AS format,COALESCE(update_enabled,1) AS update_enabled,COALESCE(apply_enabled,1) AS apply_enabled,COALESCE(entry_count,0) AS entry_count,COALESCE(version,'') AS version,COALESCE(update_status,'idle') AS update_status,COALESCE(message,'') AS message,COALESCE(last_checked,'') AS last_checked,COALESCE(next_update,'') AS next_update,COALESCE(trigger,'') AS trigger,COALESCE(started_at,'') AS started_at,COALESCE(finished_at,'') AS finished_at,COALESCE(consecutive_failures,0) AS consecutive_failures,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {

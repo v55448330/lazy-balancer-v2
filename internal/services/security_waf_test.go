@@ -21,7 +21,7 @@ func useCRSDirectivesDir(t *testing.T, dir string) {
 func TestBuildCorazaDirectives_WAFAuditLogPartsIncludeK(t *testing.T) {
 	// Given a blocking policy
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0))
 
 	// Then the audit log keeps part K so matched rule ids/messages populate the
 	// audit messages array (without K, event rule attribution is lost)
@@ -45,13 +45,14 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then the bypass rule keeps id:3 (Off+auditOff,超授权外保持);
 	// 信任名单 id:5 改 DetectionOnly(2026-09-15 用户裁定:信任流量全评估+
 	// 事件记录动作=检测,不再静默)——两语义共存无重复 SecRule id。
-	bypassRule := `SecRule REMOTE_ADDR "@ipMatch 203.0.113.0/24,192.0.2.7" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:5,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	// v2.3.x：名单经 @ipListFast 文件投影——形状钉 id/动作，内容钉文件。
+	bypassRule := `"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
+	trustRule := `"id:5,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
 	if !strings.Contains(directives, bypassRule) {
 		t.Fatalf("directives missing bypass rule %q:\n%s", bypassRule, directives)
 	}
@@ -67,6 +68,12 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 	if strings.Index(directives, bypassRule) > strings.Index(directives, trustRule) {
 		t.Fatalf("bypass rule must precede the trust-list rule:\n%s", directives)
 	}
+	if got := readRenderedIPList(t, directives, "-acl"); got != "192.0.2.7/32\n203.0.113.0/24\n" {
+		t.Fatalf("bypass 名单文件=%q, want 聚合排序两条", got)
+	}
+	if got := readRenderedIPList(t, directives, "-trust"); got != "198.51.100.9/32\n" {
+		t.Fatalf("信任名单文件=%q, want 仅 198.51.100.9/32", got)
+	}
 }
 
 func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
@@ -81,13 +88,13 @@ func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then the trust-list rule takes id:3 (no bypass rule present)——
 	// DetectionOnly short-circuit(2026-09-15 用户裁定:信任可见放行)emitted
 	// before the ACL deny rule
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
-	aclRule := `SecRule REMOTE_ADDR "!@ipMatch 203.0.113.0/24" "id:2,phase:1,deny,status:403`
+	trustRule := `"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
+	aclRule := `SecRule REMOTE_ADDR "!@ipListFast `
 	if !strings.Contains(directives, trustRule) {
 		t.Fatalf("directives missing trust-list rule %q:\n%s", trustRule, directives)
 	}
@@ -107,15 +114,21 @@ func TestBuildCorazaDirectives_allowAndDenyModesUnchangedByBypass(t *testing.T) 
 	deny := &models.SecurityPolicy{Mode: "blocking", IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`, IPACLEnabled: true}
 
 	// When
-	allowDirectives := BuildCorazaDirectives(allow, nil, "", false, 0)
-	denyDirectives := BuildCorazaDirectives(deny, nil, "", false, 0)
+	allowDirectives := mustDirectives(BuildCorazaDirectives(allow, nil, "", false, 0))
+	denyDirectives := mustDirectives(BuildCorazaDirectives(deny, nil, "", false, 0))
 
 	// Then allow still denies non-listed IPs and deny still blocks listed IPs, neither emits a bypass id:3
-	if !strings.Contains(allowDirectives, `SecRule REMOTE_ADDR "!@ipMatch 198.51.100.7" "id:2,phase:1,deny,status:403`) {
+	if !strings.Contains(allowDirectives, `SecRule REMOTE_ADDR "!@ipListFast `) || !strings.Contains(allowDirectives, `"id:2,phase:1,deny,status:403`) {
 		t.Fatalf("allow mode directives changed:\n%s", allowDirectives)
 	}
-	if !strings.Contains(denyDirectives, `SecRule REMOTE_ADDR "@ipMatch 203.0.113.0/24" "id:2,phase:1,deny,status:403`) {
+	if !strings.Contains(denyDirectives, `SecRule REMOTE_ADDR "@ipListFast `) || !strings.Contains(denyDirectives, `"id:2,phase:1,deny,status:403`) {
 		t.Fatalf("deny mode directives changed:\n%s", denyDirectives)
+	}
+	if got := readRenderedIPList(t, allowDirectives, "-acl"); got != "198.51.100.7/32\n" {
+		t.Fatalf("allow 名单文件=%q, want 仅 198.51.100.7/32", got)
+	}
+	if got := readRenderedIPList(t, denyDirectives, "-acl"); got != "203.0.113.0/24\n" {
+		t.Fatalf("deny 名单文件=%q, want 仅 203.0.113.0/24", got)
 	}
 	if strings.Contains(allowDirectives, "id:3") || strings.Contains(denyDirectives, "id:3") {
 		t.Fatalf("allow/deny modes must not emit the bypass id:3 rule")
@@ -135,7 +148,7 @@ func TestBuildCorazaDirectives_ipACLDenyCarriesSkipAfterAndMarker(t *testing.T) 
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then：deny 规则携带 skipAfter 引用，且终点 SecMarker 存在
 	if !strings.Contains(directives, `deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
@@ -242,7 +255,7 @@ func TestBuildCorazaDirectives_trimsLegacyCRSGroupWhitespace(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then REQUEST/RESPONSE 两行均为 trim 后的合法 glob，且不存在畸形 glob
 	if !strings.Contains(directives, "Include /app/waf/crs/rules/REQUEST-942-*.conf\n") {
@@ -265,7 +278,7 @@ func TestBuildCorazaDirectives_includesUserOverridesWhenFileExists(t *testing.T)
 	useCRSDirectivesDir(t, dir)
 
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0))
 
 	// Then the overrides include follows the crs-setup include
 	setupIdx := strings.Index(directives, "Include /app/waf/crs/crs-setup.conf")
@@ -286,7 +299,7 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 	useCRSDirectivesDir(t, t.TempDir())
 
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil, "", false, 0))
 
 	// Then
 	if strings.Contains(directives, "zz-user-overrides") {
@@ -309,7 +322,7 @@ func TestBuildCorazaDirectives_activatesJSONXMLBodyProcessors(t *testing.T) {
 
 	for _, mode := range []string{"blocking", "detection"} {
 		// Given / When：CRS 加载的两种模式
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil, "", false, 0))
 
 		// Then：两条激活规则存在，且位于 crs-setup Include 之前（phase:1 按
 		// 发射序执行，晚于 901340 的激活无法阻止 URLENCODED 兜底）
@@ -338,7 +351,7 @@ func TestBuildCorazaDirectives_flagsBodyProcessorErrors(t *testing.T) {
 	guard := `SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'请求体解析失败'"`
 	for _, mode := range []string{"blocking", "detection"} {
 		// Given / When
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: mode}, nil, "", false, 0))
 
 		// Then
 		if !strings.Contains(directives, guard) {
@@ -360,7 +373,7 @@ func TestBuildCorazaDirectives_offModeOmitsCustomRules(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then:新语义 off=全关——自定义规则不再触发引擎,整份发射为空
 	if directives != "" {
@@ -377,7 +390,7 @@ func TestBuildCorazaDirectives_customOnlyModeEmitsCustomRulesWithoutCRS(t *testi
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then:引擎开、自定义规则发射、body processor 激活规则在位
 	for _, want := range []string{
@@ -402,7 +415,7 @@ func TestBuildCorazaDirectives_customOnlyModeEmitsCustomRulesWithoutCRS(t *testi
 func TestBuildCorazaDirectives_customOnlyWithoutAnythingIsEmpty(t *testing.T) {
 	// Given:custom_only 但无自定义规则/IP 控制/GeoIP
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "custom_only"}, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "custom_only"}, nil, "", false, 0))
 	// Then:无可发射内容,整份为空(不产空转 coraza handler)
 	if directives != "" {
 		t.Fatalf("custom_only without any active component must emit nothing:\n%s", directives)
@@ -418,7 +431,7 @@ func TestBuildCorazaDirectives_skipsIllegalSecRuleRemoveTargets(t *testing.T) {
 		CRSRuleGroups:    json.RawMessage(`["942"]`),
 		CRSExcludedRules: json.RawMessage(`["942100","ABCDEF","942100-abc","REQUEST-942.conf","1-999999","932100-932200"]`),
 	}
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 	if !strings.Contains(directives, "SecRuleRemoveById 942100") {
 		t.Fatal("legal single ID must be emitted")
 	}
@@ -475,7 +488,7 @@ func TestBuildCorazaDirectives_emitsCustomRuleWithNullColumns(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy, database, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, database, "", false, 0))
 
 	// Then：r2（action=NULL → COALESCE 'block'）必须发射为 deny 规则
 	wantID2 := fmt.Sprintf("id:%d", r2ID+10000)
@@ -533,7 +546,7 @@ func TestBuildCorazaDirectives_crsPoolFingerprint(t *testing.T) {
 	policy := &models.SecurityPolicy{Mode: "blocking"}
 
 	// When：第一次渲染
-	d1 := BuildCorazaDirectives(policy, database, "", false, 0)
+	d1 := mustDirectives(BuildCorazaDirectives(policy, database, "", false, 0))
 
 	// Then：输出必须包含 crs-pool 指纹行
 	if !strings.Contains(d1, "# crs-pool=") {
@@ -547,7 +560,7 @@ func TestBuildCorazaDirectives_crsPoolFingerprint(t *testing.T) {
 	}
 
 	// When：第二次渲染
-	d2 := BuildCorazaDirectives(policy, database, "", false, 0)
+	d2 := mustDirectives(BuildCorazaDirectives(policy, database, "", false, 0))
 
 	// Then：指纹必须不同（overrides 文件出现 → mtime/size 非零）
 	fp1 := extractCRSPoolFingerprint(t, d1)
@@ -562,7 +575,7 @@ func TestBuildCorazaDirectives_crsPoolFingerprint(t *testing.T) {
 	}
 
 	// When：第三次渲染
-	d3 := BuildCorazaDirectives(policy, database, "", false, 0)
+	d3 := mustDirectives(BuildCorazaDirectives(policy, database, "", false, 0))
 
 	// Then：指纹再次不同（size 变化）
 	fp3 := extractCRSPoolFingerprint(t, d3)
@@ -594,16 +607,16 @@ func TestBuildCorazaDirectives_responseBodyAccessGatedByCRSMode(t *testing.T) {
 		{"detection", true},
 		{"custom_only", false},
 	} {
-		directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: tc.mode, WAFCheckResponse: true,
-			CustomRules: json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}, nil, "", false, 0)
+		directives := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: tc.mode, WAFCheckResponse: true,
+			CustomRules: json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}, nil, "", false, 0))
 		got := strings.Contains(directives, "SecResponseBodyAccess On")
 		if got != tc.want {
 			t.Fatalf("mode=%s SecResponseBodyAccess On=%v, want %v:\n%s", tc.mode, got, tc.want, directives)
 		}
 	}
 	// off + IP 控制(引擎开):同样不缓冲
-	d := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "off", WAFCheckResponse: true,
-		IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["1.2.3.4"]`}, nil, "", false, 0)
+	d := mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{Mode: "off", WAFCheckResponse: true,
+		IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["1.2.3.4"]`}, nil, "", false, 0))
 	if strings.Contains(d, "SecResponseBodyAccess On") {
 		t.Fatalf("off+IP控制 SecResponseBodyAccess On 应不发射:\n%s", d)
 	}

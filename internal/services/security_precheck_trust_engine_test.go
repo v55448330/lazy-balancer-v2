@@ -54,7 +54,7 @@ func TestEngineBehavior_PrecheckTrustDetectionOnlyExemptsGeoIPDeny(t *testing.T)
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := buildIPPrecheckDirectives([]*models.SecurityPolicy{stage0, geoip}, 403)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{stage0, geoip}, 403))
 	if !strings.Contains(directives, "id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly") {
 		t.Fatalf("预检未发射阶段 0 保留检测 id:12:\n%s", directives)
 	}

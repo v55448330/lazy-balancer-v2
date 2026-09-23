@@ -179,6 +179,10 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	       COALESCE(github_proxy_url,'https://v4.gh-proxy.org/') as github_proxy_url,
 		       COALESCE(mfa_write_guard,0) as mfa_write_guard,
 		       COALESCE(mfa_lockout_enabled,0) as mfa_lockout_enabled,
+		       COALESCE(trusted_proxy_enabled,0) as trusted_proxy_enabled,
+		       COALESCE(trusted_proxy_ranges,'[]') as trusted_proxy_ranges,
+		       COALESCE(trusted_proxy_headers,'[]') as trusted_proxy_headers,
+		       COALESCE(trusted_proxy_strict,1) as trusted_proxy_strict,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -190,6 +194,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
 		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
+		&cfg.TrustedProxyEnabled, &cfg.TrustedProxyRanges, &cfg.TrustedProxyHeaders, &cfg.TrustedProxyStrict,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	// CL37-P5-1(第 37 轮审计):展示口径与运行时 clamp 对齐(<10 → 60)。
@@ -227,6 +232,10 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
+		return
+	}
+	if err := validateTrustedProxyFields(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	old, err := loadConfigSnapshot()
@@ -288,6 +297,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// 与规则写路径同一锁序：先 caddyOpMu，DB 写入与 Caddy 应用全程持锁
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
+	if err := validateTrustedProxyFields(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 
 	if req.LogLevel != nil {
 		level := strings.ToLower(strings.TrimSpace(*req.LogLevel))
@@ -519,13 +532,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				github_proxy_url = COALESCE(?, github_proxy_url),
 				mfa_write_guard = COALESCE(?, mfa_write_guard),
 				mfa_lockout_enabled = COALESCE(?, mfa_lockout_enabled),
+				trusted_proxy_enabled = COALESCE(?, trusted_proxy_enabled),
+				trusted_proxy_ranges = COALESCE(?, trusted_proxy_ranges),
+				trusted_proxy_headers = COALESCE(?, trusted_proxy_headers),
+				trusted_proxy_strict = COALESCE(?, trusted_proxy_strict),
 				updated_at = datetime('now')
 			WHERE id = 1
 		`, req.DNSProvider, req.DNSCredentials, req.DNSCredentials, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
 		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.MFAWriteGuard, req.MFALockoutEnabled)
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.MFAWriteGuard, req.MFALockoutEnabled,
+		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyHeaders, req.TrustedProxyStrict)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败"})

@@ -61,6 +61,9 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		{name: "security_ip_lists", snapshotColumns: "id,name,description,category,entries,created_by,created_at,updated_by,updated_at"},
 		{name: "security_crs_version", snapshotColumns: "id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at"},
 		{name: "security_ip2region_version", snapshotColumns: "id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at"},
+		// 威胁情报库（v2.3.x）：多行表（每源一行状态机），随集群快照同步；
+		// last_checked 为运行态读路径指标，UPDATE 触发列排除（同 CRS/IP2Region）。
+		{name: "security_threat_sources", snapshotColumns: "id,name,display_name,url,format,update_enabled,apply_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures"},
 	}
 	const newCertificateMember = "NEW.status<>'disabled' AND COALESCE(NEW.cert_pem,'')<>'' AND COALESCE(NEW.key_pem,'')<>'' AND datetime(NEW.expires_at)>datetime('now')"
 	const oldCertificateMember = "OLD.status<>'disabled' AND COALESCE(OLD.cert_pem,'')<>'' AND COALESCE(OLD.key_pem,'')<>'' AND datetime(OLD.expires_at)>datetime('now')"
@@ -81,7 +84,7 @@ func installClusterVersionTriggers(database *sql.DB) error {
 				// 各从节点强制 Caddy 重载。从触发列排除(consecutive_failures 同
 				// 型先例:纯运行态计数不入版本)。
 				ofColumns := table.snapshotColumns
-				if table.name == "security_crs_version" || table.name == "security_ip2region_version" {
+				if table.name == "security_crs_version" || table.name == "security_ip2region_version" || table.name == "security_threat_sources" {
 					ofColumns = strings.Replace(ofColumns, ",last_checked", "", 1)
 				}
 				operationClause += " OF " + ofColumns

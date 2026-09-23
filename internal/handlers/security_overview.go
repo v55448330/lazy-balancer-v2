@@ -39,8 +39,8 @@ func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 
 // GetRuleStageStats 返回单规则的三阶段计数（流程抽屉计数 chip）：
 //   - stage1_blocked_24h / stage3_blocked_24h：近 24h 该规则 blocked 安全事件
-//     按 rule_triggered id 形状分桶——阶段 1（IP 访问控制+地域拦截预检）=
-//     {2,4,7,8} ∪ [800000,900000)，其余（CRS 9xxxxx/自定义/合成 id）归阶段 3；
+//     按 rule_triggered id 形状分桶——阶段 1（IP 访问控制+威胁情报库+地域拦截预检）=
+//     {2,4,7,8,14} ∪ [800000,900000)，其余（CRS 9xxxxx/自定义/合成 id）归阶段 3；
 //   - ratelimit_blocks_reload：Caddy /metrics 429 计数（重载口径，自最近一次
 //     配置重载以来累计）按规则 domain 映射回规则求和——规则域名与 host 标签
 //     不匹配的部署（泛域名/CNAME）显示 0 而非报错（已声明口径，不新造时序）。
@@ -66,7 +66,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 			return
 		}
 		n, convErr := strconv.Atoi(triggered)
-		if convErr == nil && (n == 2 || n == 4 || n == 7 || n == 8 || services.IsGeoIPPrecheckID(n)) {
+		if convErr == nil && (n == 2 || n == 4 || n == 7 || n == 8 || n == 14 || services.IsGeoIPPrecheckID(n)) {
 			stage1 += count
 		} else {
 			stage3 += count

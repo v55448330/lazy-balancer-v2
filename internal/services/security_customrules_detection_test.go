@@ -17,7 +17,7 @@ func TestCustomRuleBlockActionSurvivesDetectionMode(t *testing.T) {
 	}
 
 	// When directives are built
-	directives := BuildCorazaDirectives(policy, nil, "", false, 0)
+	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0))
 
 	// Then the custom deny runs before the DetectionOnly switch, so the
 	// rule-level 拦截 action still blocks in detection mode

@@ -214,10 +214,16 @@ type ClusterBasicSettings struct {
 	ProxyStreamCloseDelay      int    `json:"proxy_stream_close_delay,omitempty"`
 	GitHubProxyURL             string `json:"github_proxy_url,omitempty"`
 	ServerTokensHidden         bool   `json:"server_tokens_hidden,omitempty"`
-	AdminTLSEnabled            bool   `json:"admin_tls_enabled,omitempty"`
-	AdminTLSMode               string `json:"admin_tls_mode,omitempty"`
-	AdminTLSCert               string `json:"admin_tls_cert,omitempty"`
-	AdminTLSKey                string `json:"admin_tls_key,omitempty"`
+	// v2.3.x 受信代理（CDN 真实 IP）：随 Caddy 全局轴同步——从节点渲染层
+	// （servers.trusted_proxies）与数据面取值与主节点一致。
+	TrustedProxyEnabled bool   `json:"trusted_proxy_enabled,omitempty"`
+	TrustedProxyRanges  string `json:"trusted_proxy_ranges,omitempty"`
+	TrustedProxyHeaders string `json:"trusted_proxy_headers,omitempty"`
+	TrustedProxyStrict  bool   `json:"trusted_proxy_strict,omitempty"`
+	AdminTLSEnabled     bool   `json:"admin_tls_enabled,omitempty"`
+	AdminTLSMode        string `json:"admin_tls_mode,omitempty"`
+	AdminTLSCert        string `json:"admin_tls_cert,omitempty"`
+	AdminTLSKey         string `json:"admin_tls_key,omitempty"`
 	// v2.1.8 MFA 全局开关（决策3：从节点行为与主节点一致）。
 	MFAWriteGuard bool `json:"mfa_write_guard"`
 	// v2.3.0:OIDC 配置(原样 JSON 字符串)随 global 节同步——从节点回调独立
@@ -332,7 +338,10 @@ type ClusterSnapshot struct {
 	SecurityCRSVersion       []ClusterSecurityCRSVersion       `json:"security_crs_version,omitempty"`
 	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
 	WafFiles                 *ClusterWafFilesRef               `json:"waf_files,omitempty"`
-	SectionHashes            map[string]string                 `json:"section_hashes,omitempty"`
+	// 威胁情报库源行（v2.3.x）：随 security 节同步（多行状态机表，
+	// 开关/计数/版本全量镜像）。
+	SecurityThreatSources json.RawMessage   `json:"security_threat_sources,omitempty"`
+	SectionHashes         map[string]string `json:"section_hashes,omitempty"`
 	// MasterSyncSwitches 为主节点五类同步开关，随快照下发；从节点跳过判定
 	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。
 	MasterSyncSwitches *ClusterSyncSwitchesPayload `json:"master_sync_switches,omitempty"`
@@ -359,6 +368,9 @@ type ClusterWafFilesRef struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
+	// ThreatSha256 威胁情报库目录（/app/waf/threat/*.txt）内容哈希——
+	// v2.3.x 威胁库文件随 waf-files 通道下发。
+	ThreatSha256 string `json:"threat_sha256,omitempty"`
 }
 
 type ClusterSecurityCRSVersion struct {
