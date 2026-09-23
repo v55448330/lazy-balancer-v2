@@ -49,6 +49,9 @@ RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend
 WORKDIR /app
+# wafiplist 叶模块经根 go.mod replace ./wafiplist 引用（v2.3.2）——go mod
+# download 解析 replace 需要被替换模块的 go.mod/go.sum 在场。
+COPY wafiplist/go.mod wafiplist/go.sum ./wafiplist/
 COPY go.mod go.sum ./
 # 模块缓存挂载（lazy-builder GC 48h）：go.sum 未变时 download 直接命中缓存
 RUN --mount=type=cache,target=/go/pkg/mod \
