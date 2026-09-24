@@ -14,7 +14,7 @@
       </el-button>
     </div>
 
-    <el-card class="block-pages-card">
+    <el-card class="list-card">
       <el-table :data="pages" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
           <el-empty description="暂无拦截页面" :image-size="60" />
@@ -22,6 +22,7 @@
         <el-table-column prop="name" label="页面名称" min-width="180">
           <template #default="{ row }">
             <el-link type="primary" @click="previewPage(row)">{{ row.name }}</el-link>
+            <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">内置</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
@@ -34,8 +35,8 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button size="small" link :type="row.is_default || isReadOnly ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default || isReadOnly ? '查看' : '编辑' }}</el-button>
-            <el-button size="small" link type="danger" :disabled="row.is_default || isReadOnly" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" link :type="row.is_default || row.is_builtin || isReadOnly ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default || row.is_builtin || isReadOnly ? '查看' : '编辑' }}</el-button>
+            <el-button size="small" link type="danger" :disabled="row.is_default || row.is_builtin || isReadOnly" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -53,24 +54,24 @@
       </template>
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form">
         <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="页面名称" :readonly="isReadOnly || currentPage?.is_default" />
+          <el-input v-model="form.name" placeholder="页面名称" :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" placeholder="页面描述" :readonly="isReadOnly || currentPage?.is_default" />
+          <el-input v-model="form.description" placeholder="页面描述" :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" />
         </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
-            <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default" :content="form.content" language="markup" height="520px" />
+            <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
             <CodeEditor v-else v-model="form.content" language="markup" height="520px" placeholder="HTML 内容，支持内联 CSS 样式" />
           </div>
           <div class="form-tip-line">
-            {{ currentPage?.is_default ? '默认页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
+            {{ (currentPage?.is_default || currentPage?.is_builtin) ? '内置页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button v-if="!currentPage?.is_default && !isReadOnly" type="primary" :loading="saving" @click="handleSave">保存</el-button>
+        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
 
@@ -91,7 +92,7 @@ import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import type { APIResponse, UserListItem } from '@/types'
-interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -175,8 +176,8 @@ onMounted(fetchData)
 
 <style scoped>
 /* ── 通用弹框头部 ── */
-/* 拦截页面表格卡片限宽——稀疏五列表格不应横贯整个内容列（用户反馈 2026-09-25） */
-.block-pages-card { max-width: 1100px; }
+/* 少数据时卡片不塌陷（2026-09-25 用户裁定）：至少与空表格占位同高；上界天然受页面高度约束 */
+.list-card :deep(.el-card__body) { min-height: 360px; }
 .dialog-header { display: flex; align-items: flex-start; gap: 12px; }
 .dialog-header__icon {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;

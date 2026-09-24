@@ -1,6 +1,6 @@
 <template>
   <div class="cluster-settings">
-    <el-alert v-if="clusterPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+    <el-alert v-if="clusterPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
           <span>集群状态加载失败：{{ clusterPollingError.errorMessage.value }}</span>

@@ -141,14 +141,16 @@
         type="error"
         :closable="false"
         show-icon
-        class="config-drift-banner"
+        class="config-drift-banner error-banner"
       >
         <template #title>
           <div class="polling-error-title">
             <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
             <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
           </div>
-          <div v-if="configDriftSince" class="polling-error-meta">检测于 {{ configDriftSince }} UTC（重启服务后按数据库重新应用全部规则配置）</div>
+          <!-- 高度稳定（2026-09-25：安全总览偶发 43px 塌缩实证）——Since 未回填的瞬时窗口
+               meta 行不卸载，横幅恒两行，杜绝跨页/轮询周期内的高度跳变 -->
+          <div class="polling-error-meta error-banner-meta">{{ configDriftSince ? `检测于 ${configDriftSince} UTC（重启服务后按数据库重新应用全部规则配置）` : '检测中…（重启服务后按数据库重新应用全部规则配置）' }}</div>
         </template>
       </el-alert>
 
@@ -417,12 +419,16 @@ onUnmounted(() => {
 
 .config-drift-banner {
   border-radius: 0;
+  /* 2026-09-25 用户反馈：内容距上下边框太近——加大垂直留白 */
+  padding-top: 12px;
+  padding-bottom: 12px;
 }
 /* 与站内 polling-error-alert 统一模式（Rules/CertJobs/ClusterSettings）同构：
    图标+标题 flex（文案左、动作右）+ 12px meta 次行 */
-.config-drift-banner .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.config-drift-banner .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; line-height: 1.5; }
 .config-drift-banner .drift-text { font-weight: 500; }
-.config-drift-banner .polling-error-meta { font-size: 12px; margin-top: 2px; }
+/* 2026-09-25 用户反馈：两行行间距过宽——meta 贴合主行 */
+.config-drift-banner .polling-error-meta { font-size: 12px; margin-top: 0; line-height: 1.5; }
 
 .layout-aside {
   background: #ffffff;

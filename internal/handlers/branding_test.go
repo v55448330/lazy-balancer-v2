@@ -51,22 +51,29 @@ func TestRenderDefaultBlockPage_substitutes_app_name_and_footer_text(t *testing.
 	}
 }
 
-// D5 KNOWN-GAP-1（用户预期 2026-08-10）：默认拦截页卡片应占满页面宽度，
-// 旧模板 max-width:640px 的居中卡片只占约 60% 宽。锁定新模板的全宽卡片
-// CSS（浏览器布局引擎消费的结构化 token），防止回退到居中卡片布局。
-func TestRenderDefaultBlockPage_card_spans_full_width(t *testing.T) {
+// 2026-09-25 用户裁定（推翻 D5 KNOWN-GAP-1 全宽裁定）：默认拦截页改浅色精美
+// 风，内容卡片限宽居中、不占满页面宽度。锁定限宽 token 与精美化形状
+// （SVG 徽章 + 403 胶囊），防止回退到全宽或纯文字布局。
+func TestRenderDefaultBlockPage_card_width_capped_and_centered(t *testing.T) {
 	// Given
 	cfg := brandingConfig{AppName: "Acme"}
 
 	// When
 	html := renderDefaultBlockPage(cfg)
 
-	// Then
-	if !strings.Contains(html, "max-width: none; width: auto; margin: 0 4%") {
-		t.Errorf("rendered default block page card must span full width:\n%s", html)
+	// Then 卡片限宽居中（新裁定），全宽 token 与旧 640px 布局均不得回潮
+	if !strings.Contains(html, "width: min(560px") {
+		t.Errorf("rendered default block page card must be width-capped via min(560px, ...):\n%s", html)
 	}
-	if strings.Contains(html, "max-width: 640px") {
-		t.Errorf("rendered default block page card still uses centered 640px layout:\n%s", html)
+	if strings.Contains(html, "margin: 0 4%") || strings.Contains(html, "max-width: none") {
+		t.Errorf("rendered default block page card still spans full width (revoked contract):\n%s", html)
+	}
+	if strings.Contains(html, "max-width:640px") || strings.Contains(html, "max-width: 640px") {
+		t.Errorf("rendered default block page card still uses legacy 640px layout:\n%s", html)
+	}
+	// 精美化形状：内联 SVG 徽章 + 403 状态胶囊（纯 emoji/文字布局不达标）
+	if !strings.Contains(html, "<svg") || !strings.Contains(html, "403 Forbidden") {
+		t.Errorf("rendered default block page missing svg badge or 403 chip:\n%s", html)
 	}
 }
 

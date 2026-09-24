@@ -14,7 +14,7 @@
       </el-button>
     </div>
 
-    <el-card>
+    <el-card class="list-card">
       <el-tabs v-model="activeTypeTab" class="policy-type-tabs">
         <el-tab-pane v-for="tab in policyTypeTabs" :key="tab.type" :label="`${tab.label}（${tab.count}）`" :name="tab.type" />
       </el-tabs>
@@ -780,7 +780,7 @@
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="拦截页面">
               <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
-                <el-option :value="0" label="无拦截页面" />
+                <el-option :value="0" label="不使用自定义页面（Caddy 默认 403）" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
               <div v-if="form.block_page_id === 0" class="form-tip-line">不生成拦截页面错误路由，拦截返回 Caddy 默认 403</div>
@@ -1326,7 +1326,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
     {
       title: '拦截页',
       rows: [
-        { label: '拦截页面', value: d.block_page_id > 0 ? `${page?.name ?? `页面 #${d.block_page_id}`}（状态码 ${d.block_status_code || 403}）` : '无拦截页面（默认 403）' },
+        { label: '拦截页面', value: d.block_page_id > 0 ? `${page?.name ?? `页面 #${d.block_page_id}`}（状态码 ${d.block_status_code || 403}）` : '不使用自定义页面（Caddy 默认 403）' },
         { label: '归因口径', value: '规则可配阶段页覆盖；未覆盖时按触发策略显示' },
       ],
     },
@@ -3122,6 +3122,8 @@ onMounted(async () => {
 
 <style scoped>
 /* ── 通用弹框头部 ── */
+/* 少数据时卡片不塌陷（2026-09-25 用户裁定）：至少与空表格占位同高；上界天然受页面高度约束 */
+.list-card :deep(.el-card__body) { min-height: 360px; }
 .dialog-header { display: flex; align-items: flex-start; gap: 12px; }
 .dialog-header__icon {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;

@@ -297,7 +297,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(content,''), COALESCE(is_default,0), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,'') FROM security_block_pages ORDER BY is_default DESC, id")
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(content,''), COALESCE(is_default,0), COALESCE(is_builtin,0), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,'') FROM security_block_pages ORDER BY is_default DESC, is_builtin DESC, id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -306,7 +306,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
@@ -403,7 +403,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能超过 64KB"})
 		return
 	}
-	var isDefault bool
+	var isDefault, isBuiltin bool
 	// R41 B2: is_default 检查与 UPDATE 必须同事务（镜像 DeleteSecurityBlockPage
 	// R37 I1）。非事务读 + 错误丢弃的旧实现存在并发窗口：导入路径可在 SELECT 与
 	// UPDATE 之间把该页重建为默认页，使 UPDATE 绕过 403 契约改到默认页内容。
@@ -413,7 +413,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault, &isBuiltin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		} else {
@@ -421,8 +421,13 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		}
 		return
 	}
+	// 内置备选页（限流/维护）与默认页同门禁（2026-09-25 用户裁定：不可编辑/删除）
 	if isDefault {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
+		return
+	}
+	if isBuiltin {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "内置拦截页面不可编辑"})
 		return
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
@@ -458,8 +463,8 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	var isDefault bool
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+	var isDefault, isBuiltin bool
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault, &isBuiltin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		} else {
@@ -469,6 +474,11 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	if isDefault {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可删除"})
+		return
+	}
+	// 内置备选页（限流/维护）与默认页同门禁（2026-09-25 用户裁定：不可编辑/删除）
+	if isBuiltin {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "内置拦截页面不可删除"})
 		return
 	}
 	// 被启用策略引用的拦截页面不可删除：静默删除会让这些策略的拦截

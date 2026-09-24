@@ -1,5 +1,5 @@
 <template>
-  <el-alert v-if="jobsPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+  <el-alert v-if="jobsPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
     <template #title>
       <div class="polling-error-title">
         <span>证书任务加载失败：{{ jobsPollingError.errorMessage.value }}</span>

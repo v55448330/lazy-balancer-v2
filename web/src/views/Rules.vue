@@ -14,7 +14,7 @@
       </el-button>
     </div>
 
-    <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+    <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
           <span>证书状态加载失败：{{ certPollingError.errorMessage.value }}</span>

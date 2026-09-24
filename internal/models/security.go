@@ -379,6 +379,7 @@ type SecurityBlockPage struct {
 	Description string `json:"description"`
 	Content     string `json:"content"`
 	IsDefault   bool   `json:"is_default"`
+	IsBuiltin   bool   `json:"is_builtin"`
 	CreatedBy   int    `json:"created_by"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedBy   int    `json:"updated_by"`

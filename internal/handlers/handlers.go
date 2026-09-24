@@ -712,15 +712,32 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 	defer rows.Close()
 
 	count := 0
+	ownRouteIDs := make(map[string]bool)
 	for rows.Next() {
 		var caddyID string
 		if err := rows.Scan(&caddyID); err != nil {
 			return err
 		}
 		count++
+		ownRouteIDs[caddyID] = true
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+
+	// C 加固（2026-09-25 漂移根因裁定）：host 网络下默认 admin 地址无鉴权共享，
+	// 外来实例误指会把自身配置 /load 进本实例 Caddy（09-18 多余路由、09-24
+	// 清空路由两次实证）。启动应用前发现运行配置含非本库规则路由时响亮留痕——
+	// 覆盖方（生产恢复）与被覆盖方（误指实例）下次启动都会在审计中可见；
+	// 应用照常执行，恢复性收敛不可阻断。探测失败按无正向证据跳过。
+	if foreign, probeErr := services.ForeignRunningRuleRoutes(h.cfg.CaddyAdminURL, ownRouteIDs); probeErr == nil && len(foreign) > 0 {
+		shown := foreign
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		wrapped := fmt.Sprintf("运行配置含非本库规则路由（%s，共 %d 条）——疑似 Caddy Admin 地址误配或外来实例曾写入本实例 Caddy，本次启动应用将覆盖收敛", strings.Join(shown, "、"), len(foreign))
+		services.Logf("error", "CRITICAL: %s", wrapped)
+		services.RecordAuditLog("system", "启动警告", "系统配置", wrapped, "")
 	}
 
 	// F49-15（第 49 轮审计·漂移横幅事故）：未初始化实例（无任何用户）空库

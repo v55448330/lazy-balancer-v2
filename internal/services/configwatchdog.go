@@ -247,6 +247,30 @@ func RunningConfigHasRuleRoutes(adminURL string) (bool, error) {
 	return len(ids) > 0, nil
 }
 
+// ForeignRunningRuleRoutes 返回运行配置中不被本库规则认领的规则路由 @id
+// （2026-09-25 漂移根因 C 加固）：host 网络下默认 admin 地址（localhost:2019）
+// 无鉴权共享，外来实例（dev/e2e 误指）会把自身配置 /load 进本实例 Caddy——
+// 启动应用前以此检出「非本库规则路由」并响亮留痕（09-18 多余路由、09-24
+// 清空路由两次实证事故）。子路由（lb_x_path_0 等）归主规则认领，不计外来。
+// admin 不可达返回错误，调用方按「无正向证据」跳过告警（与看门狗同口径）。
+func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) ([]string, error) {
+	running, err := runningRuleRouteIDs(adminURL)
+	if err != nil {
+		return nil, err
+	}
+	own := make(map[string]string, len(ownIDs))
+	for id := range ownIDs {
+		own[id] = id
+	}
+	var foreign []string
+	for routeID := range running {
+		if !routeClaimedByAny(routeID, own) {
+			foreign = append(foreign, routeID)
+		}
+	}
+	return foreign, nil
+}
+
 func diffExpectedMissing(expected map[string]string, running map[string]bool) []string {
 	var missing []string
 	for caddyID, name := range expected {

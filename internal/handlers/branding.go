@@ -336,32 +336,123 @@ func renderDefaultBlockPage(cfg brandingConfig) string {
 	} else {
 		footer += "<br>" + html.EscapeString(defaultFooterText) + ` · <a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
 	}
+	return renderBlockPageShell(cfg, blockPageSpecs["default"])
+}
+
+// renderBuiltinBlockPage 渲染内置备选拦截页（ratelimit/maintenance，2026-09-25
+// 用户裁定：仅作模板供手动选用，无自动绑定）；未知变体返回空串——调用方拼写
+// 漂移不得渲染出无语义页面。
+func renderBuiltinBlockPage(cfg brandingConfig, variant string) string {
+	spec, ok := blockPageSpecs[variant]
+	if !ok {
+		return ""
+	}
+	return renderBlockPageShell(cfg, spec)
+}
+
+// blockPageSpec 是内置拦截页的视觉/文案规格：三页共用同一浅色 v3 壳
+// （2026-09-25 用户裁定），仅主题色/图标/胶囊/文案不同。
+type blockPageSpec struct {
+	accent     string // 发丝线主色 / 胶囊圆点
+	accentSoft string // 发丝线两侧过渡色
+	ringFrom   string // 徽章环渐变起（兼作胶囊底色）
+	ringTo     string // 徽章环渐变止
+	ringBorder string
+	haloBorder string
+	chipText   string
+	chipBorder string
+	iconSVG    string // 内联 SVG（stroke 已含主题色）
+	chip       string
+	title      string
+	line1      string
+	line2      string
+}
+
+var blockPageSpecs = map[string]blockPageSpec{
+	"default": {
+		accent: "#ef4444", accentSoft: "#f87171", ringFrom: "#fef2f2", ringTo: "#fee2e2",
+		ringBorder: "#fecaca", haloBorder: "#fecdd3", chipText: "#b91c1c", chipBorder: "#fecaca",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/><line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/></svg>`,
+		chip:    "403 Forbidden", title: "Access Denied",
+		line1: `Your request has been blocked by the <strong>security policy</strong>.`,
+		line2: "If you believe this is an error, please contact the administrator.",
+	},
+	"ratelimit": {
+		accent: "#f59e0b", accentSoft: "#fbbf24", ringFrom: "#fffbeb", ringTo: "#fef3c7",
+		ringBorder: "#fde68a", haloBorder: "#fcd34d", chipText: "#b45309", chipBorder: "#fde68a",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4.5-4.5"/><circle cx="12" cy="15" r="1.4" fill="#d97706" stroke="none"/></svg>`,
+		chip:    "429 Too Many Requests", title: "Too Many Requests",
+		line1: "You have sent too many requests in a short time.",
+		line2: "Please wait a moment and try again.",
+	},
+	"maintenance": {
+		accent: "#3b82f6", accentSoft: "#60a5fa", ringFrom: "#eff6ff", ringTo: "#dbeafe",
+		ringBorder: "#bfdbfe", haloBorder: "#93c5fd", chipText: "#1d4ed8", chipBorder: "#bfdbfe",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.2 4.2 0 0 0-5.8 5.8L4.6 16.4a1.5 1.5 0 0 0 0 2.1l.9.9a1.5 1.5 0 0 0 2.1 0l4.3-4.3a4.2 4.2 0 0 0 5.8-5.8l-2.6 2.6-2.1-2.1 2.6-2.6z"/></svg>`,
+		chip:    "System Maintenance", title: "Under Maintenance",
+		line1: "The service is temporarily unavailable while we perform maintenance.",
+		line2: "Please check back soon.",
+	},
+}
+
+// renderBlockPageShell 渲染浅色 v3 壳（2026-09-25 用户裁定：限宽 min(560px) 居中
+// 卡片/渐变发丝线/双层环徽章/状态胶囊/环境光斑），单文件零外链——拦截即返回，
+// 不得依赖外部资源。
+func renderBlockPageShell(cfg brandingConfig, spec blockPageSpec) string {
+	appName := html.EscapeString(cfg.AppName)
+	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
+	if cfg.FooterText != "" {
+		footer += "<br>" + blockPageFooterHTML(cfg.FooterText)
+	} else {
+		footer += "<br>" + html.EscapeString(defaultFooterText) + ` · <a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
+	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied — %s</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s — %s</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f9fafb; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-.card { background: #fff; border-radius: 12px; padding: 48px 40px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.08); max-width: none; width: auto; margin: 0 4%%; flex: 1; }
-.icon { font-size: 48px; margin-bottom: 16px; }
-h1 { font-size: 24px; color: #1f2937; margin-bottom: 12px; }
-p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
-.footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; }
-.footer .name { font-weight: 600; color: #4b5563; }
-.footer a { color: inherit; text-decoration: underline; text-decoration-color: #d1d5db; }
-.footer a:hover { color: #4b5563; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(165deg, #f8fafc 0%%, #f1f5f9 45%%, #eef2f7 100%%); position: relative; overflow: hidden; }
+.blob { position: absolute; border-radius: 50%%; filter: blur(70px); }
+.blob-a { width: 380px; height: 380px; background: rgba(59,130,246,.10); top: -120px; right: -80px; }
+.blob-b { width: 320px; height: 320px; background: rgba(244,63,94,.08); bottom: -110px; left: -70px; }
+.card { position: relative; background: #fff; border-radius: 22px; padding: 52px 48px 34px; text-align: center; width: min(560px, calc(100vw - 40px)); box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -8px rgba(16,24,40,.12), 0 32px 64px -16px rgba(16,24,40,.10); }
+.card::before { content: ""; position: absolute; top: 0; left: 24px; right: 24px; height: 3px; border-radius: 0 0 4px 4px; background: linear-gradient(90deg, transparent, %s 18%%, %s 50%%, %s 82%%, transparent); }
+.badge { position: relative; width: 84px; height: 84px; margin: 0 auto 20px; }
+.badge-ring { position: absolute; inset: 0; border-radius: 24px; background: linear-gradient(145deg, %s, %s); border: 1px solid %s; box-shadow: 0 4px 12px -2px rgba(16,24,40,.12); }
+.badge-halo { position: absolute; inset: -12px; border-radius: 32px; border: 1px dashed %s; }
+.badge svg { position: absolute; inset: 0; margin: auto; width: 38px; height: 38px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; letter-spacing: .6px; color: %s; background: %s; border: 1px solid %s; border-radius: 999px; padding: 5px 14px; margin-bottom: 16px; }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%%; background: %s; }
+h1 { font-size: 28px; font-weight: 700; color: #0f172a; letter-spacing: .2px; margin-bottom: 14px; }
+p { font-size: 14px; color: #64748b; line-height: 1.75; margin-bottom: 6px; }
+p strong { color: #334155; font-weight: 600; }
+.divider { margin: 26px auto 0; padding-top: 18px; width: 75%%; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8; }
+.divider .name { font-weight: 600; color: #475569; }
+.divider a { color: inherit; text-decoration: underline; text-decoration-color: #cbd5e1; text-underline-offset: 2px; }
+.divider a:hover { color: #475569; }
 </style>
 </head>
 <body>
+<div class="blob blob-a"></div>
+<div class="blob blob-b"></div>
 <div class="card">
-<div class="icon">🚫</div>
-<h1>Access Denied</h1>
-<p>Your request has been blocked by the security policy.</p>
-<p>If you believe this is an error, please contact the administrator.</p>
-<div class="footer">%s</div>
+<div class="badge">
+<div class="badge-halo"></div>
+<div class="badge-ring"></div>
+%s
+</div>
+<div class="chip">%s</div>
+<h1>%s</h1>
+<p>%s</p>
+<p>%s</p>
+<div class="divider">%s</div>
 </div>
 </body>
-</html>`, appName, footer)
+</html>`, spec.title, appName,
+		spec.accentSoft, spec.accent, spec.accentSoft,
+		spec.ringFrom, spec.ringTo, spec.ringBorder, spec.haloBorder,
+		spec.chipText, spec.ringFrom, spec.chipBorder, spec.accent,
+		spec.iconSVG, spec.chip, spec.title, spec.line1, spec.line2, footer)
 }
 
 // blockPageFooterHTML escapes the footer text and linkifies bare http(s) URLs,
@@ -377,7 +468,9 @@ func blockPageFooterHTML(text string) string {
 var urlLinkRe = regexp.MustCompile(`https?://(?:[^\s"'&]|&amp;)+`)
 
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
-// branding.json. Idempotent: an unchanged render writes nothing (updated_at is
+// branding.json，并对内置备选页（id 9001 限流/9002 维护，2026-09-25 用户裁定）
+// 播种+自愈——内容漂移或 is_builtin 标志丢失（备份导入/带外改库形态）均归位
+// 库存。Idempotent: an unchanged render writes nothing (updated_at is
 // not churned); custom pages are never touched.
 func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	if db.DB == nil {
@@ -390,11 +483,36 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		// here would overwrite the synced content with local defaults.
 		return false, nil
 	}
-	content := renderDefaultBlockPage(loadBrandingConfig(dataDir))
+	cfg := loadBrandingConfig(dataDir)
+	content := renderDefaultBlockPage(cfg)
 	result, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, updated_at=datetime('now') WHERE is_default=1 AND content != ?`, content, content)
 	if err != nil {
 		return false, fmt.Errorf("更新默认拦截页面内容: %w", err)
 	}
 	n, _ := result.RowsAffected()
-	return n > 0, nil
+	changed := n > 0
+	// 内置备选页：INSERT OR IGNORE 播种（新库/被删形态），漂移行重写归位——
+	// 标志修复与内容库存同事完成，仅漂移时写（updated_at 不抖动）。
+	for _, bp := range []struct {
+		id      int
+		name    string
+		desc    string
+		variant string
+	}{
+		{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
+		{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
+	} {
+		stock := renderBuiltinBlockPage(cfg, bp.variant)
+		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
+			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.id, err)
+		}
+		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (name != ? OR description != ? OR content != ? OR COALESCE(is_builtin,0) != 1)`,
+			bp.name, bp.desc, stock, bp.id, bp.name, bp.desc, stock)
+		if err != nil {
+			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.id, err)
+		}
+		bn, _ := res.RowsAffected()
+		changed = changed || bn > 0
+	}
+	return changed, nil
 }

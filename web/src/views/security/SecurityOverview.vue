@@ -16,7 +16,7 @@
       type="error"
       show-icon
       :closable="false"
-      class="mb-5"
+      class="mb-5 error-banner"
     />
 
     <el-row :gutter="20" class="mb-5">
@@ -162,7 +162,7 @@
               <el-link type="primary" @click="goToEvents">查看全部</el-link>
             </div>
           </template>
-          <el-alert v-if="blockedEventsError" title="最近拦截事件加载失败" type="error" show-icon :closable="false" />
+          <el-alert v-if="blockedEventsError" title="最近拦截事件加载失败" type="error" show-icon :closable="false" class="error-banner" />
           <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
             <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
@@ -193,7 +193,7 @@
             </el-tooltip>
             </div>
           </template>
-          <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" />
+          <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" class="error-banner" />
           <template v-else>
             <div class="rate-limit-total">
               <span class="stat-label">累计拦截</span>

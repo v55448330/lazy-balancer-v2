@@ -866,8 +866,8 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 
 func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.SecurityBlockPage) error {
 	for _, page := range pages {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_block_pages (id,name,description,content,is_default,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			page.ID, page.Name, page.Description, page.Content, page.IsDefault, page.CreatedBy, page.CreatedAt, page.UpdatedBy, page.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_block_pages (id,name,description,content,is_default,is_builtin,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			page.ID, page.Name, page.Description, page.Content, page.IsDefault, page.IsBuiltin, page.CreatedBy, page.CreatedAt, page.UpdatedBy, page.UpdatedAt); err != nil {
 			return fmt.Errorf("写入快照拦截页面 %d: %w", page.ID, err)
 		}
 	}
