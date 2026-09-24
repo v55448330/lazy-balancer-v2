@@ -307,6 +307,9 @@ type CRSInfo struct {
 	// 的前端感知面；false 时安全链整体不渲染（见 SecurityLibrariesAvailable）。
 	Available bool   `json:"available"`
 	Trigger   string `json:"trigger"`
+	// 定时更新排程（v2.3.x）：星期集（1=周一…7=周日）+ HH:MM，时区遵循基础设置。
+	ScheduleDays []int  `json:"schedule_days"`
+	ScheduleTime string `json:"schedule_time"`
 }
 
 type IP2RegionInfo struct {
@@ -321,6 +324,9 @@ type IP2RegionInfo struct {
 	Trigger      string `json:"trigger"`
 	LastChecked  string `json:"last_checked"`
 	NextUpdate   string `json:"next_update"`
+	// 定时更新排程（v2.3.x）：同 CRSInfo。
+	ScheduleDays []int  `json:"schedule_days"`
+	ScheduleTime string `json:"schedule_time"`
 }
 
 type CustomRuleCondition struct {

@@ -57,8 +57,9 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 	}()
 }
 
-// StartScheduler launches the daily auto-update loop (24h cadence, hourly
-// check). It is a no-op on slave nodes and while an update is running.
+// StartScheduler launches the auto-update loop (hourly check; cadence follows
+// the configurable 星期+时间 schedule, default daily 04:00). It is a no-op on
+// slave nodes and while an update is running.
 func (m *CRSUpdateManager) StartScheduler() {
 	m.schedulerMu.Lock()
 	defer m.schedulerMu.Unlock()
@@ -126,7 +127,7 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	if m.IsRunning() {
 		return
 	}
-	next := now.Add(24 * time.Hour).Format(crsTimeLayout)
+	next := versionTableNextSlot("security_crs_version", now)
 	var nextStr string
 	if err := db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_crs_version WHERE id=1").Scan(&nextStr); err != nil {
 		return
@@ -156,8 +157,8 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 }
 
 // rearmAfterCRSUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
-// next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I：
-// 原先运行前写死 +24h，失败整天不重试）。等待可被 stop 打断（R55-A-#1）：
+// next_update 改为退避重试点，成功维持运行前写入的排程槽（R34 I：原先运行前
+// 写死 +24h，失败整天不重试）。等待可被 stop 打断（R55-A-#1）：
 // 降级时 StopScheduler 关闭 stop，调度立即退出而不被在途更新时长（有界
 // 6-7min）拖住；被打断时跳过失败退避重写——调度器已停，rearm 无意义，
 // 在途更新本身仍在后台完成。跳过留下的远期 next_update 由下次启动调度器

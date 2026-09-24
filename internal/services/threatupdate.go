@@ -298,7 +298,7 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 // rawHash 空=兼容旧调用形态不写。
 func markSourceSuccess(id int, entryCount int, finished string, rawHash ...string) {
 	version := time.Now().UTC().Format("2006.01.02")
-	next := time.Now().UTC().Add(24 * time.Hour).Format(crsTimeLayout)
+	next := threatNextSlot(time.Now().UTC())
 	raw := ""
 	if len(rawHash) > 0 {
 		raw = rawHash[0]

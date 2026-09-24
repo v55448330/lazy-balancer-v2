@@ -403,6 +403,14 @@
         <span>当前状态</span>
         <el-tag :type="crsStatusTagType(updateInfo?.status || 'idle')" size="small" effect="light">{{ crsStatusLabel(updateInfo?.status || 'idle') }}</el-tag>
       </div>
+      <RuleLibScheduleEditor
+        :days="crsInfo.schedule_days"
+        :time="crsInfo.schedule_time"
+        :disabled="isReadOnly || isSlaveNode"
+        :saving="savingCRSSchedule"
+        :tz="scheduleTz"
+        @save="saveCRSSchedule"
+      />
       <div ref="updateLogRef" class="update-log-container">
         <pre v-if="updateLog" class="update-log-content">{{ updateLog }}</pre>
         <el-empty v-else description="暂无更新日志" :image-size="60" />
@@ -428,6 +436,14 @@
         <span>当前状态</span>
         <el-tag :type="ip2regionStatusTagType(ip2regionUpdateInfo?.status || 'idle')" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionUpdateInfo?.status || 'idle') }}</el-tag>
       </div>
+      <RuleLibScheduleEditor
+        :days="ip2regionInfo.schedule_days"
+        :time="ip2regionInfo.schedule_time"
+        :disabled="isReadOnly || isSlaveNode"
+        :saving="savingIP2RegionSchedule"
+        :tz="scheduleTz"
+        @save="saveIP2RegionSchedule"
+      />
       <div ref="ip2regionUpdateLogRef" class="update-log-container">
         <pre v-if="ip2regionUpdateLog" class="update-log-content">{{ ip2regionUpdateLog }}</pre>
         <el-empty v-else description="暂无更新日志" :image-size="60" />
@@ -483,6 +499,14 @@
           </template>
         </el-table-column>
       </el-table>
+      <RuleLibScheduleEditor
+        :days="threatSchedule.days"
+        :time="threatSchedule.time"
+        :disabled="isReadOnly || isSlaveNode"
+        :saving="savingThreatSchedule"
+        :tz="scheduleTz"
+        @save="saveThreatSchedule"
+      />
       <div ref="threatUpdateLogRef" class="update-log-container">
         <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
         <el-empty v-else description="暂无更新日志" :image-size="60" />
@@ -504,6 +528,7 @@ import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
+import RuleLibScheduleEditor from '@/components/RuleLibScheduleEditor.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
@@ -522,14 +547,16 @@ interface ThreatSource {
 const threatSources = ref<ThreatSource[]>([])
 const threatAutoUpdate = ref(true)
 const threatMergedCount = ref(0)
+const threatSchedule = ref({ days: [1, 2, 3, 4, 5, 6, 7] as number[], time: '04:00' })
 
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: ThreatSource[]; total_entries: number; auto_update?: boolean }>>('/security/threat-lib')
+    const res = await request.get<APIResponse<{ sources: ThreatSource[]; total_entries: number; auto_update?: boolean; schedule_days?: number[]; schedule_time?: string }>>('/security/threat-lib')
     if (res.data) {
       threatSources.value = res.data.sources
       threatMergedCount.value = res.data.total_entries
       threatAutoUpdate.value = res.data.auto_update !== false
+      if (res.data.schedule_days?.length) threatSchedule.value = { days: res.data.schedule_days, time: res.data.schedule_time || '04:00' }
     }
   } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
 }
@@ -705,6 +732,7 @@ const startThreatPolling = () => { threatUpdatePolling.resume() }
 const stopThreatPolling = () => { threatUpdatePolling.pause() }
 
 const onThreatUpdateDialogOpened = async () => {
+  ensureScheduleTz()
   await refreshThreatUpdateStatus()
   if (threatUpdateRunning.value) startThreatPolling()
 }
@@ -775,7 +803,7 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
   return 'info'
 }
 
-const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true })
+const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const crsFailureMessage = computed(() => {
   const s = crsInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
@@ -799,7 +827,7 @@ const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | '
   if (s === 'failed') return 'danger'
   return 'info'
 }
-const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true })
+const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const ip2regionVersionLabel = computed(() => {
   if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
   return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'
@@ -1231,6 +1259,48 @@ const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/sec
 const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
 const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); mfaAwareSuccess('已更新') } catch { ip2regionInfo.value.auto_update = !val } }
 
+// —— 定时更新排程（三库同构：星期多选 + 时间；保存即重排下次更新，时区遵循基础设置）——
+const scheduleTz = ref('')
+let scheduleTzLoaded = false
+const ensureScheduleTz = async () => {
+  if (scheduleTzLoaded) return
+  scheduleTzLoaded = true
+  try {
+    const res = await request.get<APIResponse<{ timezone?: string }>>('/config', { silent: true })
+    scheduleTz.value = res.data?.timezone || ''
+  } catch { /* 说明行降级为「…」，不影响设置功能 */ }
+}
+
+const savingCRSSchedule = ref(false)
+const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  savingCRSSchedule.value = true
+  try {
+    await request.put('/security/crs/schedule', { days, time })
+    mfaAwareSuccess('定时更新设置已保存')
+    await fetchCRS()
+  } catch { /* 全局拦截器已 toast */ } finally { savingCRSSchedule.value = false }
+}
+
+const savingIP2RegionSchedule = ref(false)
+const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  savingIP2RegionSchedule.value = true
+  try {
+    await request.put('/security/ip2region/schedule', { days, time })
+    mfaAwareSuccess('定时更新设置已保存')
+    await fetchIP2RegionInfo()
+  } catch { /* 全局拦截器已 toast */ } finally { savingIP2RegionSchedule.value = false }
+}
+
+const savingThreatSchedule = ref(false)
+const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  savingThreatSchedule.value = true
+  try {
+    await request.put('/security/threat-lib/schedule', { days, time })
+    mfaAwareSuccess('定时更新设置已保存')
+    await fetchThreatLib()
+  } catch { /* 全局拦截器已 toast */ } finally { savingThreatSchedule.value = false }
+}
+
 const updateDialogVisible = ref(false)
 const updateInfo = ref<CRSUpdateInfo | null>(null)
 const updateLog = ref('')
@@ -1252,6 +1322,7 @@ const manualUpdate = () => {
 
 // 打开弹框只拉取一次当前状态与既有日志；若有任务在跑则继续实时轮询
 const onUpdateDialogOpened = async () => {
+  ensureScheduleTz()
   await refreshUpdateStatus()
   if (crsUpdateRunning.value) {
     startUpdatePolling()
@@ -1354,6 +1425,7 @@ const manualIP2RegionUpdate = () => {
 
 // 打开弹框只拉取一次当前状态与既有日志；若有任务在跑则继续实时轮询
 const onIP2RegionUpdateDialogOpened = async () => {
+  ensureScheduleTz()
   await refreshIP2RegionUpdateStatus()
   if (ip2regionUpdateRunning.value) {
     startIP2RegionPolling()

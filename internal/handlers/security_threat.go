@@ -64,10 +64,13 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 		totalEntries += s.EntryCount
 		sources = append(sources, s)
 	}
+	days, hhmm := services.ThreatSchedule()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"sources":       sources,
 		"total_entries": totalEntries,
 		"auto_update":   services.ThreatAutoUpdateEnabled(),
+		"schedule_days": days,
+		"schedule_time": hhmm,
 	}})
 }
 
@@ -87,6 +90,17 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "威胁情报库", "自动更新总开关")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+}
+
+// UpdateThreatSchedule 任务级排程保存（弹框「定时更新」区；镜像
+// UpdateCRSSchedule 形态——保存即重排启用且非失败源的 next_update）。
+func (h *Handlers) UpdateThreatSchedule(c *gin.Context) {
+	days, hhmm, ok := h.updateLibSchedule(c, services.SetThreatSchedule)
+	if !ok {
+		return
+	}
+	recordAudit(c, "更新", "威胁情报库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 

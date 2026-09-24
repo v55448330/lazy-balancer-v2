@@ -3361,6 +3361,7 @@ func (h *Handlers) GetCRSInfo(c *gin.Context) {
 			info.RuleCount = count
 		}
 	}
+	info.ScheduleDays, info.ScheduleTime = services.CRSSchedule()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }
 
@@ -3391,6 +3392,65 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		autoUpdateText = "开启"
 	}
 	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("自动更新已%s", autoUpdateText))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+}
+
+// updateLibSchedule 三库定时调度端点共享骨架：载荷校验（星期集去重后非空、
+// HH:MM）→ 主节点门（与 UpdateCRSAutoUpdate 同口径 R57 B-#4）→ 保存即重排
+// next_update。成功返回归一后的星期集与时间；审计与 200 响应由各端点自行
+// 完成——recordAudit 的事件对象须字面量（audit_vocabulary_test 卡口）。
+func (h *Handlers) updateLibSchedule(c *gin.Context, save func([]int, string) error) ([]int, string, bool) {
+	var req struct {
+		Days []int  `json:"days"`
+		Time string `json:"time"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return nil, "", false
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return nil, "", false
+	}
+	days := services.NormalizeScheduleDays(req.Days)
+	if len(days) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "至少选择一天"})
+		return nil, "", false
+	}
+	if !services.ValidScheduleHHMM(req.Time) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "时间格式无效（HH:MM）"})
+		return nil, "", false
+	}
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
+		return nil, "", false
+	}
+	if err := save(days, req.Time); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return nil, "", false
+	}
+	return days, req.Time, true
+}
+
+var scheduleWeekdayLabels = []string{"", "一", "二", "三", "四", "五", "六", "日"}
+
+func scheduleDaysLabel(days []int) string {
+	parts := make([]string, 0, len(days))
+	for _, d := range days {
+		if d >= 1 && d <= 7 {
+			parts = append(parts, scheduleWeekdayLabels[d])
+		}
+	}
+	return strings.Join(parts, "、")
+}
+
+// UpdateCRSSchedule 保存 CRS 定时更新排程（星期多选 + 时间；保存即重排）。
+func (h *Handlers) UpdateCRSSchedule(c *gin.Context) {
+	days, hhmm, ok := h.updateLibSchedule(c, services.SetCRSSchedule)
+	if !ok {
+		return
+	}
+	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
@@ -3475,6 +3535,7 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 			info.Message = snap.Message
 		}
 	}
+	info.ScheduleDays, info.ScheduleTime = services.IP2RegionSchedule()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }
 
@@ -3519,6 +3580,17 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 		autoUpdateText = "开启"
 	}
 	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("自动更新已%s", autoUpdateText))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+}
+
+// UpdateIP2RegionSchedule 保存 IP2Region 定时更新排程（星期多选 + 时间；
+// 保存即重排）。
+func (h *Handlers) UpdateIP2RegionSchedule(c *gin.Context) {
+	days, hhmm, ok := h.updateLibSchedule(c, services.SetIP2RegionSchedule)
+	if !ok {
+		return
+	}
+	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 

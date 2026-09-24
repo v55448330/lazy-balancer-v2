@@ -102,7 +102,7 @@ func SetIP2RegionAutoUpdate(enabled bool) error {
 	}
 	nextUpdate := ""
 	if enabled {
-		nextUpdate = time.Now().UTC().Add(24 * time.Hour).Format("2006-01-02 15:04:05")
+		nextUpdate = versionTableNextSlot("security_ip2region_version", time.Now().UTC())
 	}
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=? WHERE id=1", enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 IP2Region 自动更新开关: %w", err)
@@ -221,7 +221,8 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		}
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
+			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
+			versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 		); err != nil {
 			Logf("warn", "ip2region update: failed to record latest-version skip: %v", err)
 		}
@@ -300,8 +301,8 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	os.Remove(ip2regionLivePath + ".bak")
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
-		tag,
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
+		tag, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record success: %v", err)
 	}
@@ -538,8 +539,8 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		warn += "内存 searcher 未切换，重启后生效"
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
-		tag, warn,
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
+		tag, warn, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record fail-open success: %v", err)
 	}

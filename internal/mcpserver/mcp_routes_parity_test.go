@@ -118,10 +118,14 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/security/events/count": "IP 弹框上下文查询(近 N 天单 IP 事件计数),轻量专用端点;MCP 场景用 list_security_events 的 ip 过滤+total 覆盖同等信息",
 	// —— 威胁情报库（v2.3.x）：内置只读源的面板管理面（与 CRS/IP2Region 更新
 	//    端点同类——后者本就无 MCP 工具），MCP 后续按需补工具 ——
-	"GET /api/v1/security/threat-lib":               "威胁库源列表与条目合计数（面板规则集卡片数据源）",
-	"PUT /api/v1/security/threat-lib/auto-update":   "威胁库自动更新总闸（低频管理面板操作）",
-	"PUT /api/v1/security/threat-lib/:id/flags":     "威胁库逐源更新开关（低频管理面板操作）",
-	"POST /api/v1/security/threat-lib/update":       "手动更新威胁库（低频管理面板操作；与 CRS/IP2Region 更新端点同族未覆盖）",
+	"GET /api/v1/security/threat-lib":             "威胁库源列表与条目合计数（面板规则集卡片数据源）",
+	"PUT /api/v1/security/threat-lib/auto-update": "威胁库自动更新总闸（低频管理面板操作）",
+	"PUT /api/v1/security/threat-lib/:id/flags":   "威胁库逐源更新开关（低频管理面板操作）",
+	"POST /api/v1/security/threat-lib/update":     "手动更新威胁库（低频管理面板操作；与 CRS/IP2Region 更新端点同族未覆盖）",
+	// —— 规则库定时调度（v2.3.x）：三库排程设置为低频管理面板操作 ——
+	"PUT /api/v1/security/crs/schedule":             "CRS 定时更新排程（低频管理面板操作）",
+	"PUT /api/v1/security/ip2region/schedule":       "IP2Region 定时更新排程（低频管理面板操作）",
+	"PUT /api/v1/security/threat-lib/schedule":      "威胁库定时更新排程（低频管理面板操作）",
 	"GET /api/v1/security/threat-lib/update/status": "威胁库更新任务状态（面板更新弹框轮询数据源）",
 	"GET /api/v1/security/ip-lists/:id":             "IP 地址列表详情（含条目，面板弹框按需拉取；Agent 用 list_ip_lists 聚合信息）",
 	"GET /api/v1/security/threat-lib/update/logs":   "威胁库更新日志（面板更新弹框日志流）",

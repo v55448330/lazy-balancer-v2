@@ -7,8 +7,9 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// StartScheduler launches the daily auto-update loop (24h cadence, hourly
-// check). It is a no-op on slave nodes and while an update is running.
+// StartScheduler launches the auto-update loop (hourly check; cadence follows
+// the configurable 星期+时间 schedule, default daily 04:00). It is a no-op on
+// slave nodes and while an update is running.
 func (m *IP2RegionUpdateManager) StartScheduler() {
 	m.schedulerMu.Lock()
 	defer m.schedulerMu.Unlock()
@@ -75,7 +76,7 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 	if m.IsRunning() {
 		return
 	}
-	next := now.Add(24 * time.Hour).Format(crsTimeLayout)
+	next := versionTableNextSlot("security_ip2region_version", now)
 	var nextStr string
 	if err := db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1").Scan(&nextStr); err != nil {
 		return
