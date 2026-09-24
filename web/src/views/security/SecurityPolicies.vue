@@ -21,7 +21,7 @@
       <div class="table-toolbar">
         <el-input v-model="policySearch" placeholder="搜索策略名称" clearable :prefix-icon="Search" class="search-input" />
       </div>
-      <el-table :data="filteredPolicies" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+      <el-table :data="pagedPolicies" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
           <el-empty description="暂无安全策略" :image-size="60" />
         </template>
@@ -83,6 +83,17 @@
         </el-table-column>
 
       </el-table>
+      <!-- 与其他表格页同款分页器（2026-09-25 用户裁定）：右对齐 + 16px 上距 -->
+      <div class="rules-pagination">
+        <el-pagination
+          v-model:current-page="policyPage"
+          v-model:page-size="policyPageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="filteredPolicies.length"
+          layout="total, sizes, prev, pager, next"
+          @size-change="policyPage = 1"
+        />
+      </div>
     </el-card>
     <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
     <el-dialog v-model="migrateVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
@@ -1059,6 +1070,17 @@ const filteredPolicies = computed(() => {
   const query = policySearch.value.trim().toLowerCase()
   if (!query) return typed
   return typed.filter((p) => (p.name || '').toLowerCase().includes(query))
+})
+
+// 客户端分页（与其他表格页同款）：tab/搜索变更回首页；删除后夹紧页码
+const policyPage = ref(1)
+const policyPageSize = ref(10)
+watch([activeTypeTab, policySearch], () => { policyPage.value = 1 })
+const pagedPolicies = computed(() => {
+  const maxPage = Math.max(1, Math.ceil(filteredPolicies.value.length / policyPageSize.value))
+  if (policyPage.value > maxPage) policyPage.value = maxPage
+  const start = (policyPage.value - 1) * policyPageSize.value
+  return filteredPolicies.value.slice(start, start + policyPageSize.value)
 })
 
 // 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、
@@ -3109,8 +3131,7 @@ onMounted(async () => {
 
 <style scoped>
 /* ── 通用弹框头部 ── */
-/* 少数据时卡片不塌陷（2026-09-25 用户裁定）：至少与空表格占位同高；上界天然受页面高度约束 */
-.list-card :deep(.el-card__body) { min-height: 360px; }
+/* 少数据时卡片高度随内容（2026-09-25 用户裁定：撤销 360px 定高——留白过多） */
 .dialog-header { display: flex; align-items: flex-start; gap: 12px; }
 .dialog-header__icon {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;

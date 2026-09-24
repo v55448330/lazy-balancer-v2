@@ -238,8 +238,7 @@ onMounted(fetchData)
 
 <style scoped>
 /* ── 通用弹框头部 ── */
-/* 少数据时卡片不塌陷（2026-09-25 用户裁定）：至少与空表格占位同高；上界天然受页面高度约束 */
-.list-card :deep(.el-card__body) { min-height: 360px; }
+/* 少数据时卡片高度随内容（2026-09-25 用户裁定：撤销 360px 定高——留白过多） */
 .dialog-header { display: flex; align-items: flex-start; gap: 12px; }
 .dialog-header__icon {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
