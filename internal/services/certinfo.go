@@ -163,7 +163,7 @@ func GetRuleCertInfo(caddyID string) *models.RuleCertInfo {
 func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	rows, err := db.DB.Query(`
 		SELECT id, status, COALESCE(cert_pem, ''), COALESCE(key_pem, ''),
-		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0), COALESCE(domain, '')
 		FROM cert_jobs
 		WHERE rule_id = ? AND COALESCE(cert_pem, '') != '' AND COALESCE(key_pem, '') != ''
 		ORDER BY updated_at DESC, id DESC`, caddyID)
@@ -175,7 +175,7 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	candidates := make([]CertInfoCandidate, 0)
 	for rows.Next() {
 		var candidate CertInfoCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
 			Logf("error", "GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
 			return missingACMECertInfo(caddyID, ruleDomain)
 		}

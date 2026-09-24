@@ -95,8 +95,8 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 	}
 	// StartUpdate 唯一可预期错误是 ErrIP2RegionUpdateRunning——IsRunning 前置
 	// 守卫与取锁之间存在微秒窗口（R57 B-#5，与 CRS 侧同形）：手动更新恰在窗口
-	// 内启动时返回该错误，此时同样走 rearm 复查，避免 +24h 排程落库而退避
-	// 重写被跳过。其他启动失败形态退避分支不可达（R36 F4 删除）。
+	// 内启动时返回该错误，此时同样走 rearm 复查，避免排程槽落库而退避重写被
+	// 跳过。其他启动失败形态退避分支不可达（R36 F4 删除）。
 	if runDone, err := m.StartUpdate("auto"); err == nil {
 		m.rearmAfterIP2RegionUpdate(now, stop, runDone)
 	} else if errors.Is(err, ErrIP2RegionUpdateRunning) {
@@ -105,7 +105,8 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 }
 
 // rearmAfterIP2RegionUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
-// next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I）。
+// next_update 改为退避重试点（1h→2h→4h→8h→24h 封顶，R35 I1），成功维持运行前
+// 写入的排程槽（R34 I：原为写死 +24h）。
 // 等待可被 stop 打断（R55-A-#1）：降级时 StopScheduler 关闭 stop，调度立即
 // 退出而不被在途更新时长拖住；被打断时跳过失败退避重写，在途更新本身仍在
 // 后台完成。跳过留下的远期 next_update 由下次启动调度器时的

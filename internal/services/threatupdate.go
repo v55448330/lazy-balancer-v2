@@ -270,7 +270,13 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 	if storedRaw != "" && storedRaw == rawHash {
 		// 名单行缺失（备份还原/异常清理）须穿透快速路径补建
 		var listExists int
-		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource(source.name)).Scan(&listExists); err != nil || listExists > 0 {
+		err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource(source.name)).Scan(&listExists)
+		switch {
+		case err != nil:
+			// F49-4：存在性判定失败不得按「存在」跳过（名单可能已缺失，
+			// 跳过快照=拦截面静默为空）——记错并继续完整聚合/写库路径。
+			Logf("error", "威胁情报库: 检查源 %s 内置名单存在性失败: %v", source.name, err)
+		case listExists > 0:
 			AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（原始内容哈希一致），跳过解析写入", source.name))
 			markSourceSuccess(source.id, len(entries), finished)
 			return false, false
@@ -354,6 +360,10 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 			VALUES (?, ?, '恶意 IP', ?, 1, datetime('now'), datetime('now'))`, name, threatListDescription(source), string(encoded)); ierr != nil {
 			return false, fmt.Errorf("补建内置名单失败: %w", ierr)
 		}
+		// F49-P5-4：补建产生新 id——策略经 ip_acl_list_refs/ip_whitelist_refs
+		// 持有的旧 id 引用已失效，必须响亮留痕引导重新绑定。
+		Logf("warn", "威胁情报库: 内置名单 %q 已重建为新 id，原策略引用已失效，需重新绑定", name)
+		RecordAuditLog("system", "重建", "威胁情报库", fmt.Sprintf("内置名单 %s 重建为新 id，原策略引用已失效，需重新绑定", name), "")
 	} else {
 		if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name); err != nil {
 			return false, fmt.Errorf("更新内置名单失败: %w", err)

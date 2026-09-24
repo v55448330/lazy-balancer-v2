@@ -235,6 +235,18 @@ func runningRuleRouteIDs(adminURL string) (map[string]bool, error) {
 	return ids, nil
 }
 
+// RunningConfigHasRuleRoutes 报告 Caddy 运行配置是否仍含规则路由（lb_ 前缀
+// @id）——启动「0 规则应用」守卫的探测面（F49-15）：空库实例启动时若运行
+// 配置仍带规则路由，极可能是数据目录/Admin 地址误配，不得把空配置 /load
+// 进去。admin 不可达返回错误，调用方按「无正向证据」放行（保持既有行为）。
+func RunningConfigHasRuleRoutes(adminURL string) (bool, error) {
+	ids, err := runningRuleRouteIDs(adminURL)
+	if err != nil {
+		return false, err
+	}
+	return len(ids) > 0, nil
+}
+
 func diffExpectedMissing(expected map[string]string, running map[string]bool) []string {
 	var missing []string
 	for caddyID, name := range expected {

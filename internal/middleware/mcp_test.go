@@ -26,7 +26,6 @@ func TestAPIKeyReadOnlyGuardBlocksWritesAndAllowsReadOnlyPOST(t *testing.T) {
 	router.POST("/api/v1/rules", noContent)
 	router.POST("/api/v1/rules/cert-info", noContent)
 	router.POST("/api/v1/certificates/parse", noContent)
-	// 2026-09-10 裁定后仍为写面(管理面工具,非读形态)
 	router.POST("/api/v1/certificate-configs/test", noContent)
 
 	blocked := httptest.NewRecorder()

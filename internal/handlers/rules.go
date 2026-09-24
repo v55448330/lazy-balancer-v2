@@ -1771,13 +1771,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
-		tx.Rollback()
-		services.Logf("error", "UpdateRule upstream delete error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
-		return
-	}
-	for _, u := range req.Upstreams {
+	// F49-11：归一（weight/protocol/tls 校验）前置后走增量收敛——同内容编辑
+	// 不再 DELETE+INSERT 重建全部上游行（id 保留、不触发上游表行级同步触发器）。
+	for i := range req.Upstreams {
+		u := &req.Upstreams[i]
 		if u.Weight == 0 {
 			u.Weight = 1
 		}
@@ -1792,14 +1789,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP 规则的上游协议不支持 tls，请使用 http 或 https"})
 			return
 		}
-		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
-			tx.Rollback()
-			services.Logf("error", "UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
-			return
-		}
+	}
+	if err := replaceUpstreamsTx(c.Request.Context(), tx, caddyID, req.Upstreams); err != nil {
+		tx.Rollback()
+		services.Logf("error", "UpdateRule upstreams replace error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
+		return
 	}
 	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
 		tx.Rollback()
@@ -2512,6 +2507,145 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: successMsg, Data: gin.H{"caddy_id": newCaddyID}})
 }
 
+// storedUpstream 是 upstreams 的现有行投影（仅收敛判定所需列；表无时间戳列，
+// 身份保留 = id 不重建 ⇒ 不触发行级同步触发器）。needsNormalize：存量行在
+// COALESCE/IIF 归一读覆盖的列上为 NULL（legacy 可空 schema 残留）——R34 F-1
+// 契约要求保存后不再存在 NULL 行，此类行即使内容等价也必须原地 UPDATE 归一。
+type storedUpstream struct {
+	id             int
+	host           string
+	port           int
+	weight         int
+	dynamicDNS     bool
+	enabled        bool
+	protocol       string
+	maxConnections int
+	needsNormalize bool
+}
+
+// replaceUpstreamsTx 以「保留不变行」的方式收敛给定规则的上游集合（第 49 轮
+// F49-11，镜像 replacePathRulesTx 三入口语义）。修复前 UpdateRule 恒 DELETE
+// 全删 + INSERT：任何规则编辑（含纯改名）都重建全部上游行（id 递增），且恒
+// 触发行级同步触发器（upstreams 在集群版本矩阵内）→ 每次 UpdateRule 多一轮
+// 从端同步。现语义：
+//   - 内容完全一致的存量行 → 零写入，id 原样保留；
+//   - 内容变更但身份一致（host+port+protocol）或显式回传真实 id 的行 →
+//     原地 UPDATE 保 id；
+//   - 消失的行 DELETE（按 id）、新增的行 INSERT。
+//
+// 身份判定的两个入口：前端编辑既有行回传真实 id；无 id 的调用方
+// （MCP/导出导入/集群 apply）退化为按身份键配对。调用方须先完成归一
+// （weight 0→1、protocol 默认、tls 校验），内容比较以终值为准。
+func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstreams []models.Upstream) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0),
+		IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0),
+		(weight IS NULL OR dynamic_dns IS NULL OR enabled IS NULL OR protocol IS NULL OR max_connections IS NULL)
+		FROM upstreams WHERE rule_id = ? ORDER BY id`, ruleID)
+	if err != nil {
+		return fmt.Errorf("读取规则 %s 的上游: %w", ruleID, err)
+	}
+	var existing []storedUpstream
+	for rows.Next() {
+		var row storedUpstream
+		if err := rows.Scan(&row.id, &row.host, &row.port, &row.weight, &row.dynamicDNS, &row.enabled, &row.protocol, &row.maxConnections, &row.needsNormalize); err != nil {
+			rows.Close()
+			return fmt.Errorf("解析规则 %s 的上游: %w", ruleID, err)
+		}
+		existing = append(existing, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历规则 %s 的上游: %w", ruleID, err)
+	}
+
+	indexByID := make(map[int]int, len(existing))
+	for index, row := range existing {
+		indexByID[row.id] = index
+	}
+	consumed := make([]bool, len(existing))
+	inserts := make([]storedUpstream, 0, len(upstreams))
+	for _, u := range upstreams {
+		incoming := storedUpstream{
+			host: u.Host, port: u.Port, weight: u.Weight, dynamicDNS: u.DynamicDNS,
+			enabled: u.Enabled, protocol: u.Protocol, maxConnections: u.MaxConnections,
+		}
+		// ① 显式 id 命中（前端编辑既有行回传真实 id）
+		if index, ok := indexByID[u.ID]; ok && !consumed[index] {
+			consumed[index] = true
+			if err := updateUpstreamTx(ctx, tx, existing[index], incoming); err != nil {
+				return fmt.Errorf("更新规则 %s 的上游 %s:%d: %w", ruleID, u.Host, u.Port, err)
+			}
+			continue
+		}
+		// ② 内容完全一致且无 NULL 残留 → 原样保留（零写入 ⇒ 不触发同步触发器）；
+		// needsNormalize 行落入 ③ 原地 UPDATE 归一（R34 F-1：保存后无 NULL 行）。
+		if index := matchStoredUpstream(existing, consumed, incoming, true); index >= 0 {
+			consumed[index] = true
+			continue
+		}
+		// ③ 身份一致（host+port+protocol）→ 原地 UPDATE 保留 id
+		if index := matchStoredUpstream(existing, consumed, incoming, false); index >= 0 {
+			consumed[index] = true
+			if err := updateUpstreamTx(ctx, tx, existing[index], incoming); err != nil {
+				return fmt.Errorf("更新规则 %s 的上游 %s:%d: %w", ruleID, u.Host, u.Port, err)
+			}
+			continue
+		}
+		inserts = append(inserts, incoming)
+	}
+	for index, row := range existing {
+		if consumed[index] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM upstreams WHERE id = ?", row.id); err != nil {
+			return fmt.Errorf("删除规则 %s 的上游 %d: %w", ruleID, row.id, err)
+		}
+	}
+	for _, insert := range inserts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			ruleID, insert.host, insert.port, insert.weight, insert.dynamicDNS, insert.enabled, insert.protocol, insert.maxConnections); err != nil {
+			return fmt.Errorf("写入规则 %s 的上游 %s:%d: %w", ruleID, insert.host, insert.port, err)
+		}
+	}
+	return nil
+}
+
+// matchStoredUpstream 在未消费的存量行中定位与 incoming 配对的行：exactContent
+// 为 true 时要求全部内容列一致（零写入），否则仅按身份键（host+port+protocol）
+// 配对（原地 UPDATE 保 id）。
+func matchStoredUpstream(existing []storedUpstream, consumed []bool, incoming storedUpstream, exactContent bool) int {
+	for index, row := range existing {
+		if consumed[index] {
+			continue
+		}
+		if row.host != incoming.host || row.port != incoming.port || row.protocol != incoming.protocol {
+			continue
+		}
+		if exactContent && (row.needsNormalize || row.weight != incoming.weight || row.dynamicDNS != incoming.dynamicDNS ||
+			row.enabled != incoming.enabled || row.maxConnections != incoming.maxConnections) {
+			continue
+		}
+		return index
+	}
+	return -1
+}
+
+// updateUpstreamTx 内容真有变化（或存量行含待归一 NULL 列）时才 UPDATE
+// （保 id ⇒ 不触发同步触发器的 DELETE/INSERT 对）。
+func updateUpstreamTx(ctx context.Context, tx *sql.Tx, row, incoming storedUpstream) error {
+	if !row.needsNormalize && row.host == incoming.host && row.port == incoming.port && row.protocol == incoming.protocol &&
+		row.weight == incoming.weight && row.dynamicDNS == incoming.dynamicDNS &&
+		row.enabled == incoming.enabled && row.maxConnections == incoming.maxConnections {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET host=?, port=?, weight=?, dynamic_dns=?, enabled=?, protocol=?, max_connections=? WHERE id=?`,
+		incoming.host, incoming.port, incoming.weight, incoming.dynamicDNS, incoming.enabled, incoming.protocol, incoming.maxConnections, row.id); err != nil {
+		return err
+	}
+	return nil
+}
+
 // BatchRuleBlockPages 批量设置阶段拦截页（规则列表多选浮动操作条）：
 // {rule_ids:[], block_page_stage1_id, block_page_stage1_status,
 // block_page_stage3_id, block_page_stage3_status}——同校验（页存在/状态码集，
@@ -2591,20 +2725,21 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
 			continue
 		}
-		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=? WHERE caddy_id=?`,
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, ruleCaddyID)
+		// F49-P5-13：同值守卫——四列已在目标态的行不匹配（IS NOT 空安全比较），
+		// 同值批量零写入 ⇒ 不触发 lb_rules 行级同步触发器（阶段页四列在 OF 清单
+		// 内）；存在性与协议已在上方预检，affected=0 即「已在目标态」，仍计
+		// bound 而非误判「规则不存在」。
+		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?
+			WHERE caddy_id=? AND (block_page_stage1_id IS NOT ? OR block_page_stage1_status IS NOT ? OR block_page_stage3_id IS NOT ? OR block_page_stage3_status IS NOT ?)`,
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, ruleCaddyID,
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
+		if _, err := result.RowsAffected(); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
-		}
-		if affected == 0 {
-			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
-			continue
 		}
 		bound++
 	}

@@ -84,6 +84,25 @@ func (limiter *authenticationAuditLimiter) reset() {
 // （下次请求仍重新解析并 500），保持「白名单配置无效→500」语义不变。
 var apiKeyWhitelistCache sync.Map
 
+// PurgeAPIKeyWhitelistCache 按 keyID 前缀清扫白名单 CIDR 解析缓存
+// （F49-P5-19①）：删除/禁用 Key 后其历史白名单版本条目永不再命中却永久
+// 驻留——无界累积。键形 = keyID+"|"+白名单原串，"|" 分隔使 keyID=3 不误伤
+// "30|…" 前缀。由 handlers 侧删除/禁用点经 SetAPIKeyWhitelistCachePurge
+// 注入的钩子调用（middleware 导入 handlers，反向会成环，故钩子倒置装配）。
+func PurgeAPIKeyWhitelistCache(keyID int) {
+	prefix := strconv.Itoa(keyID) + "|"
+	apiKeyWhitelistCache.Range(func(key, _ any) bool {
+		if cacheKey, ok := key.(string); ok && strings.HasPrefix(cacheKey, prefix) {
+			apiKeyWhitelistCache.Delete(cacheKey)
+		}
+		return true
+	})
+}
+
+func init() {
+	handlers.SetAPIKeyWhitelistCachePurge(PurgeAPIKeyWhitelistCache)
+}
+
 // auditClientIP 审计源 IP（第 15 轮审计 K-1）：内部 MCP 转发请求（本机回环
 // 自调用）携带网关注入的真实客户端 IP 头；仅当内部认证密钥匹配（与
 // apiKeyAuth 的 trustedInternalMCP 判定同口径）时采信，外部请求伪造该头不
@@ -879,6 +898,16 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
+// sensitiveExportGetRoutes 与写操作同敏感级的导出类 GET（2026-09-24 用户裁定：
+// 导入导出/备份视为写入操作）——产物均含私钥/凭证明文。apiKeyReadOnlyGuard
+// （只读 Key 403）与 mfaStepUpGuard（JWT step-up 428）共用同一名单，任一侧
+// 新增敏感 GET 必须登记于此（F49-1：download 曾只在 step-up 侧在列，只读
+// Key 侧漏网）。
+var sensitiveExportGetRoutes = map[string]bool{
+	"/api/v1/config/export":            true,
+	"/api/v1/auto-backup/:id/download": true,
+}
+
 func apiKeyReadOnlyGuard() gin.HandlerFunc {
 	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
@@ -890,9 +919,9 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 		if path == "" {
 			path = c.Request.URL.Path
 		}
-		// M8（2026-09 审计）：GET /config/export 导出含全部用户与密钥哈希的完整
-		// 备份，敏感度等同写操作——只读 Key 不得经 GET 旁路导出，单独设卡。
-		if c.Request.Method == http.MethodGet && path == "/api/v1/config/export" {
+		// M8（2026-09 审计）：导出类 GET 敏感度等同写操作（完整备份含全部用户/
+		// 密钥哈希与私钥明文）——只读 Key 不得经 GET 旁路导出，单独设卡。
+		if c.Request.Method == http.MethodGet && sensitiveExportGetRoutes[path] {
 			recordAuthenticationRejection(c, "api_key_read_only")
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "只读 API Key 不能导出配置备份"})
 			return
@@ -924,9 +953,8 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			path = c.Request.URL.Path
 		}
 		covered := writeMethods[c.Request.Method] ||
-			// 敏感 GET(与写操作同门):配置导出与自动备份下载均含私钥/凭证明文
-			(c.Request.Method == http.MethodGet &&
-				(path == "/api/v1/config/export" || path == "/api/v1/auto-backup/:id/download"))
+			// 敏感 GET(与写操作同门)：名单与 apiKeyReadOnlyGuard 共用同一事实源
+			(c.Request.Method == http.MethodGet && sensitiveExportGetRoutes[path])
 		if !covered || c.GetString("auth_type") != "jwt" {
 			c.Next()
 			return

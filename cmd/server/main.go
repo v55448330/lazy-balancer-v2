@@ -16,8 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"lazy-balancer-v2/internal/acme"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/middleware"
 
@@ -68,6 +70,10 @@ func run() error {
 		}
 	}()
 	services.ApplyLogLevel()
+	// F49-P5-16：独立 module 边界包（acme/ownership 不得回依赖 services）的
+	// 日志接缝在此装配——装配后其告警进入统一日志级别链（services.Logf）。
+	acme.SetLogf(services.Logf)
+	ownership.SetLogf(services.Logf)
 	if err := handlers.EnsureBrandingFile(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to ensure branding file: %v", err)
 	}

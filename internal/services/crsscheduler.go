@@ -146,9 +146,9 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	}
 	// StartUpdate 唯一可预期错误是 ErrCRSUpdateRunning——IsRunning 前置守卫
 	// 与取锁之间存在微秒窗口：手动更新恰在此窗口启动时返回该错误（R57 B-#5）。
-	// 此时必须同样走 rearm 复查——否则 +24h 排程已落库而失败退避重写被跳过，
-	// 下次自动重试被推迟 24h（手动更新失败时）。启动失败的其他形态退避分支
-	// 不可达（R36 F4 删除）。
+	// 此时必须同样走 rearm 复查——否则排程槽已落库而失败退避重写被跳过，
+	// 下次自动重试被推迟到下一个排程槽（手动更新失败时）。启动失败的其他
+	// 形态退避分支不可达（R36 F4 删除）。
 	if runDone, err := m.StartUpdate("auto"); err == nil {
 		m.rearmAfterCRSUpdate(now, stop, runDone)
 	} else if errors.Is(err, ErrCRSUpdateRunning) {
@@ -169,8 +169,9 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 // 接管（手动更新在微秒窗口插队），本 tick 的 run 已非最新——跳过退避重写，
 // 由接管 run 的操作者/后续 tick 决定排程，不再按他人终态误判。
 // 已知取舍（R65 B-S1）：「auto 失败 + 手动插队 + 手动也失败」时 auto 的失败
-// 退避被跳过，next_update 停留 tick 预写的 +24h（本应 2h 档）——影响有界
-// （≤24h）且经 restoreFailedUpdateBackoff 在下次 StartScheduler 时拉回；反向
+// 退避被跳过，next_update 停留 tick 预写的排程槽（本应退避档）——影响有界：
+// 最坏推迟到下一个选中星期的槽位（默认全周 04:00 时 ≤24h；仅选单个星期时
+// ≤7 天），且经 restoreFailedUpdateBackoff 在下次 StartScheduler 时拉回；反向
 // 按接管者终态重写则会在「手动成功复位计数」场景错写 +1h。取保守跳过。
 func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
 	wait := runDone
@@ -215,11 +216,12 @@ func updateRetryBackoff(failures int) time.Duration {
 }
 
 // restoreFailedUpdateBackoff 修正「停-wins 放弃退避重写」（R55-A-#1）留下的
-// 过期排程（R56 N-2）：tick 启动更新时写 next_update=+24h，降级打断 rearm 后
-// 在途更新失败，再提升的节点仍按残留的 +24h 排程，失败重试被无谓推迟。调度器
-// 启动（提升为主/进程重启）时，若状态为 failed 且 next_update 晚于按当前连续
-// 失败次数应有的退避点，将其拉回退避排程；成功状态的正常 +24h 排程、以及本就
-// 早于退避点的 next_update 均不动。仅主节点写库（从节点版本行由快照管辖）。
+// 过期排程（R56 N-2）：tick 启动更新时写 next_update=下一个排程槽，降级打断
+// rearm 后在途更新失败，再提升的节点仍按残留的排程槽，失败重试被无谓推迟。
+// 调度器启动（提升为主/进程重启）时，若状态为 failed 且 next_update 晚于按
+// 当前连续失败次数应有的退避点，将其拉回退避排程；成功状态的正常排程槽、
+// 以及本就早于退避点的 next_update 均不动。仅主节点写库（从节点版本行由
+// 快照管辖）。
 func restoreFailedUpdateBackoff(table string, now time.Time) {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {

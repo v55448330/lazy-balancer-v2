@@ -87,8 +87,10 @@ func TestProvision_missing_xdb_disables_lookups_and_passes_through(t *testing.T)
 	if !nextCalled {
 		t.Fatal("next handler was not called")
 	}
-	if cc, ok := repl.GetString("geoip.country_code"); ok && cc != "" {
-		t.Fatalf("country_code = %q, want unset without an xdb", cc)
+	// F49-P5-6：geoip.country_code 死发射已删除（fields[4]=ISP 列语义错位），
+	// 任何路径都不得再产出该变量。
+	if _, ok := repl.GetString("geoip.country_code"); ok {
+		t.Fatal("geoip.country_code must not be published (dead emission removed)")
 	}
 }
 
@@ -128,8 +130,8 @@ func TestServeHTTP_sets_geoip_placeholders_for_known_ip(t *testing.T) {
 	if err := h.ServeHTTP(rec, req, next); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
-	if cc, _ := vars["geoip.country_code"].(string); cc == "" {
-		t.Fatal("geoip.country_code var is empty for a known IP")
+	if _, ok := vars["geoip.country_code"]; ok {
+		t.Fatal("geoip.country_code must not be published (dead emission removed, F49-P5-6)")
 	}
 	if name, _ := vars["geoip.country_name"].(string); name == "" {
 		t.Fatal("geoip.country_name var is empty for a known IP")
@@ -228,6 +230,11 @@ func TestServeHTTP_setsCorazaHeaders_forKnownIP(t *testing.T) {
 	if got := downstream.Header.Get("X-GeoIP-Country"); got != "中国" {
 		t.Fatalf("X-GeoIP-Country = %q, want 中国（spoofed value must be overwritten）", got)
 	}
+	// F49-P5-6：X-GeoIP-Country-Code 头发射已删除（ISP 列语义错位死发射）；
+	// 剥离清单保留（防伪造）但模块自身不再产出该头。
+	if got := downstream.Header.Get("X-GeoIP-Country-Code"); got != "" {
+		t.Fatalf("X-GeoIP-Country-Code = %q, want not emitted", got)
+	}
 	province := downstream.Header.Get("X-GeoIP-Province")
 	if province == "" {
 		t.Fatal("X-GeoIP-Province empty for a known Chinese IP")
@@ -277,7 +284,7 @@ func TestServeHTTP_overseasSentinels_forUnresolvableClient(t *testing.T) {
 		t.Fatalf("serve: %v", err)
 	}
 
-	for _, name := range []string{"X-GeoIP-Country", "X-GeoIP-Country-Code", "X-GeoIP-Region", "X-GeoIP-Province", "X-GeoIP-City"} {
+	for _, name := range []string{"X-GeoIP-Country", "X-GeoIP-Region", "X-GeoIP-Province", "X-GeoIP-City"} {
 		if got := downstream.Header.Get(name); got != "" {
 			t.Fatalf("%s = %q, want empty sentinel", name, got)
 		}
@@ -350,6 +357,70 @@ func TestProvision_sharedSearcherSingletonPerXdbPath(t *testing.T) {
 	}
 	if err := h2.Cleanup(); err != nil {
 		t.Fatalf("cleanup h2: %v", err)
+	}
+}
+
+// TestProvision_replacedSearcherClosedAfterDelay（F49-5）：换库重建后被替换的
+// 旧实例不再「保留至进程退出」——延迟窗口（防重载期在途查询落空误判海外）
+// 过后旧实例被 Close（查询报 pool closed），新实例立即可查。
+func TestProvision_replacedSearcherClosedAfterDelay(t *testing.T) {
+	src := findTestXdb()
+	if src == "" {
+		t.Skip("no ip2region xdb available; place one under caddygeoip/testdata/ to run this test")
+	}
+	path := filepath.Join(t.TempDir(), "ip2region.xdb")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read source xdb: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("seed xdb copy: %v", err)
+	}
+	oldDelay := geoipOldInstanceCloseDelay
+	geoipOldInstanceCloseDelay = 200 * time.Millisecond
+	t.Cleanup(func() { geoipOldInstanceCloseDelay = oldDelay })
+
+	ctx := caddy.Context{Context: context.Background()}
+	h1 := &GeoIPHandler{XdbPath: path}
+	if err := h1.Provision(ctx); err != nil {
+		t.Fatalf("provision h1: %v", err)
+	}
+	old := h1.searcher
+	if old == nil {
+		t.Fatal("h1 searcher nil")
+	}
+
+	// xdb 形态变化 → 重建新实例
+	newMtime := time.Now().Add(2 * time.Minute)
+	if err := os.Chtimes(path, newMtime, newMtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	h2 := &GeoIPHandler{XdbPath: path}
+	if err := h2.Provision(ctx); err != nil {
+		t.Fatalf("provision h2: %v", err)
+	}
+	if h2.searcher == nil || h2.searcher == old {
+		t.Fatalf("xdb 变化须重建实例, got %p (old %p)", h2.searcher, old)
+	}
+
+	// 新实例立即可查
+	if region, err := h2.searcher.Search("114.114.114.114"); err != nil || region == "" {
+		t.Fatalf("新实例立即可查: region=%q err=%v", region, err)
+	}
+	// 延迟窗口内旧实例仍在役（重载期在途查询保护）
+	if _, err := old.Search("114.114.114.114"); err != nil {
+		t.Fatalf("延迟窗口内旧实例不得在役查询失败: %v", err)
+	}
+	// 窗口过后旧实例被关闭（不再保留至进程退出）
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := old.Search("114.114.114.114"); err != nil {
+			break // pool closed
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("旧实例在延迟窗口后仍未被 Close（保留至进程退出的旧行为）")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

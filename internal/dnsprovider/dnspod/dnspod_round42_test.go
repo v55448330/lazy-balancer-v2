@@ -53,10 +53,17 @@ func (transport *staleDomainIDTransport) RoundTrip(request *http.Request) (*http
 	}, nil
 }
 
-func seedDomainIDCache(t *testing.T, entries map[string]string) {
+// seedDomainIDCache 以裸 zone→id 形式给出条目，内部按 provider 的
+// login_token 换算为账户隔离键（F49-7）后写入。
+func seedDomainIDCache(t *testing.T, loginToken string, entries map[string]string) {
 	t.Helper()
+	provider := New(loginToken)
+	scoped := make(map[string]string, len(entries))
+	for zone, id := range entries {
+		scoped[provider.domainIDCacheKey(zone)] = id
+	}
 	domainIDCacheMu.Lock()
-	domainIDCache = entries
+	domainIDCache = scoped
 	domainIDCacheMu.Unlock()
 	t.Cleanup(func() {
 		domainIDCacheMu.Lock()
@@ -70,7 +77,7 @@ func seedDomainIDCache(t *testing.T, entries map[string]string) {
 // 须作废该 zone 缓存并重解析一次再重试一次，而非直接把错误抛给签发链。
 func TestProvider_Present_retriesWithFreshDomainIDOnStaleCache(t *testing.T) {
 	// Given a stale cached zone→domain_id while the API moved the domain to id 42
-	seedDomainIDCache(t, map[string]string{"example.com": "stale-1"})
+	seedDomainIDCache(t, "id,token", map[string]string{"example.com": "stale-1"})
 	transport := &staleDomainIDTransport{currentID: "42"}
 	provider := New("id,token")
 	provider.client.Transport = transport
@@ -93,7 +100,7 @@ func TestProvider_Present_retriesWithFreshDomainIDOnStaleCache(t *testing.T) {
 		t.Fatalf("Domain.List calls=%d, want 1（重解析一次）", listCalls)
 	}
 	domainIDCacheMu.Lock()
-	cached := domainIDCache["example.com"]
+	cached := domainIDCache[provider.domainIDCacheKey("example.com")]
 	domainIDCacheMu.Unlock()
 	if cached != "42" {
 		t.Fatalf("cached domain id=%q, want 42（重解析后回写）", cached)
@@ -104,7 +111,7 @@ func TestProvider_Present_retriesWithFreshDomainIDOnStaleCache(t *testing.T) {
 // 重解析失败直接返回错误——不得循环重试。
 func TestProvider_Present_staleCacheRetryStopsWhenDomainGone(t *testing.T) {
 	// Given a stale cache and an account that no longer holds the zone
-	seedDomainIDCache(t, map[string]string{"example.com": "stale-1"})
+	seedDomainIDCache(t, "id,token", map[string]string{"example.com": "stale-1"})
 	transport := &staleDomainIDTransport{currentID: "42"}
 	provider := New("id,token")
 	// Domain.List 不返回 example.com（域名已不在账户内）
@@ -146,7 +153,7 @@ func (transport *domainGoneTransport) RoundTrip(request *http.Request) (*http.Re
 // CERT42-7 回归形状二：非「域名不存在」类错误（如权限/限流）不作废缓存、不重试。
 func TestProvider_Present_doesNotRetryOnUnrelatedCreateError(t *testing.T) {
 	// Given a cached id and an API that fails Record.Create with a non-domain error
-	seedDomainIDCache(t, map[string]string{"example.com": "cached-7"})
+	seedDomainIDCache(t, "id,token", map[string]string{"example.com": "cached-7"})
 	transport := &createFailingTransport{code: "-1", message: "登录失败"}
 	provider := New("id,token")
 	provider.client.Transport = transport
@@ -165,7 +172,7 @@ func TestProvider_Present_doesNotRetryOnUnrelatedCreateError(t *testing.T) {
 		t.Fatalf("Record.Create domain_ids=%v, want [cached-7]（非域名错误不重试）", creates)
 	}
 	domainIDCacheMu.Lock()
-	cached := domainIDCache["example.com"]
+	cached := domainIDCache[provider.domainIDCacheKey("example.com")]
 	domainIDCacheMu.Unlock()
 	if cached != "cached-7" {
 		t.Fatalf("cached domain id=%q, want cached-7（缓存不得作废）", cached)

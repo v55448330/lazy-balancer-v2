@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/wafiplist"
 )
@@ -95,5 +96,68 @@ func TestWriteIPListFile_emptyWritesNothing(t *testing.T) {
 	path, err := writeIPListFile("u-empty", nil)
 	if err != nil || path != "" {
 		t.Fatalf("空集合 path=%q err=%v, want 空串不写文件", path, err)
+	}
+}
+
+// gcStaleIPListFiles（F49-3 文件+缓存 GC）：成功投影后按「近期渲染引用的
+// 文件集」差集清理——超龄（mtime 早于 24h）且未引用的 scope-*.txt 被删；
+// 引用中的文件与重载窗口内（mtime 新）的未引用文件不动；非投影命名（非
+// scope-sha256[:12].txt 形态）文件不碰。
+func TestGCStaleIPListFiles_removesOldUnreferencedOnly(t *testing.T) {
+	// Given：投影 A（引用中）与 B（将被遗弃）；另造超龄未引用文件 C、新鲜未
+	// 引用文件 D、非投影命名文件 E
+	pathA, err := writeIPListFile("gc-keep", []string{"203.0.113.1"})
+	if err != nil {
+		t.Fatalf("write A: %v", err)
+	}
+	pathB, err := writeIPListFile("gc-drop", []string{"198.51.100.1"})
+	if err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, p := range []string{pathA, pathB} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// B 从引用集中剔除（模拟本轮渲染不再引用）
+	forgetIPListRenderRefForTest(pathB)
+	pathC := filepath.Join(IPListDataDir, "orphan-deadbeef0012.txt")
+	if err := os.WriteFile(pathC, []byte("192.0.2.1/32\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(pathC, old, old); err != nil {
+		t.Fatal(err)
+	}
+	pathD, err := writeIPListFile("gc-fresh", []string{"192.0.2.9"})
+	if err != nil {
+		t.Fatalf("write D: %v", err)
+	}
+	forgetIPListRenderRefForTest(pathD) // 未引用但 mtime 新（重载窗口保护）
+	pathE := filepath.Join(IPListDataDir, "notes.txt")
+	if err := os.WriteFile(pathE, []byte("not a projection\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(pathE, old, old); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(pathC); _ = os.Remove(pathE) })
+
+	// When
+	removed := gcStaleIPListFiles(time.Now(), 24*time.Hour)
+
+	// Then：B/C 删除，A/D/E 保留
+	for _, p := range []string{pathB, pathC} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("超龄未引用文件 %s 应被删除, stat err=%v", filepath.Base(p), err)
+		}
+	}
+	for _, p := range []string{pathA, pathD, pathE} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("文件 %s 应保留: %v", filepath.Base(p), err)
+		}
+	}
+	if removed != 2 {
+		t.Fatalf("removed=%d, want 2", removed)
 	}
 }

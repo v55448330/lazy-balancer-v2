@@ -197,7 +197,8 @@ export interface RuleFlowTarget {
 }
 
 // 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · 限流 → 阶段 3 · WAF
-export const STAGE_SHORT_TITLES: Record<0 | 1 | 2 | 3, string> = {
+// （F49-P5-9：STAGE_SHORT_TITLES 与本常量曾逐字同值双源，已合并为单一份）
+export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
   0: '阶段 0 · 信任名单',
   1: '阶段 1 · IP 访问控制',
   2: '阶段 2 · 限流',
@@ -212,13 +213,6 @@ export const STAGE_BLOCK_STATUS_OPTIONS: ReadonlyArray<{ value: number; label: s
   { value: 404, label: '404 Not Found' },
   { value: 503, label: '503 Service Unavailable' },
 ]
-
-export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
-  0: '阶段 0 · 信任名单',
-  1: '阶段 1 · IP 访问控制',
-  2: '阶段 2 · 限流',
-  3: '阶段 3 · WAF',
-}
 
 // ip 名单 JSON 文本 → 字符串数组（坏数据回退空数组，不得炸渲染路径）
 export const parseIPList = (raw: string | undefined): string[] => {

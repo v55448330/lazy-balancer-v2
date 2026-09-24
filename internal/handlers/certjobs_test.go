@@ -415,6 +415,41 @@ func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 		t.Fatal("restored running job is not active in the CA queue")
 	}
 }
+func TestDeleteCertJob_restores_downloaded_job_with_material_when_delete_fails(t *testing.T) {
+	// F49-8（第 49 轮审计）：删除持有证书材料的 downloaded 任务失败时，恢复
+	// 路径必须原地保持 'downloaded' 并把部署窗口推到 now（对齐 caqueue
+	// requeueCanceledJob 的 R57 A-#5 口径）——转 'queued' 会丢弃已签发证书
+	// 触发整轮重签（Issue 快速路径只认 issued/downloaded）。
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES ('lb_dl','dl.example.test','downloaded','pem-material','key-material');
+		CREATE TRIGGER fail_downloaded_job_delete BEFORE DELETE ON cert_jobs BEGIN SELECT RAISE(ABORT,'delete failed'); END`); err != nil {
+		t.Fatalf("seed downloaded job and trigger: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	var status string
+	var availableAfter sql.NullTime
+	if err := db.DB.QueryRow("SELECT status, deployment_available_after FROM cert_jobs WHERE id=1").Scan(&status, &availableAfter); err != nil {
+		t.Fatal(err)
+	}
+	if status != "downloaded" {
+		t.Fatalf("status=%q, want downloaded（带证书材料的任务不得转 queued/failed）", status)
+	}
+	if !availableAfter.Valid {
+		t.Fatal("deployment_available_after 未推到 now（Resume 补扫无法重新调度部署）")
+	}
+	if services.GetCAQueueManager().IsJobActive(1) {
+		t.Fatal("downloaded 任务删除失败恢复后不得进入签发队列")
+	}
+}
 
 func TestCertJobOperationLock_serializes_retry_and_delete(t *testing.T) {
 	lock := certJobOperationLock(9876)

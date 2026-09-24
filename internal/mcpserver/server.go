@@ -215,7 +215,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
 
-错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
+错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；参数校验在 REST 侧执行，业务错误以 IsError+文本返回（含具体 message，读后修正重试）；协议层暂不启用 input_schema 校验（不产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜测字段名。
 
 完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
 

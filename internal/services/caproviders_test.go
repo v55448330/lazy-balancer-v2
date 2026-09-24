@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -163,5 +164,20 @@ func TestCAProviderService_UpdateCAProvider_rejects_disabling_last_enabled(t *te
 	}
 	if !enabled {
 		t.Fatal("last CA provider was disabled despite rollback")
+	}
+}
+func TestMaskEmail_multibyteLocalPartStaysValidUTF8(t *testing.T) {
+	// F49-P5-15（第 49 轮审计）：@ 前缀为多字节 UTF-8（如 CJK 邮箱本地部分）
+	// 时，按字节截断前两个「字符」会切在 rune 中间产出非法 UTF-8 残片——
+	if got := maskEmail("张小三abc@example.com"); got != "张小***@example.com" {
+		t.Fatalf("maskEmail(张小三abc@example.com)=%q, want 张小***@example.com（前两个 rune）", got)
+	}
+	if got := maskEmail("张三@x.cn"); got != "***@x.cn" {
+		t.Fatalf("maskEmail(张三@x.cn)=%q, want ***@x.cn（rune 数 <=3 不保留首字符）", got)
+	}
+	for _, email := range []string{"张小三abc@example.com", "张三@x.cn", "admin@example.com", "ab@x.cn", "a@b.c", "nosign", "@"} {
+		if got := maskEmail(email); !utf8.ValidString(got) {
+			t.Fatalf("maskEmail(%q)=%q 不是合法 UTF-8", email, got)
+		}
 	}
 }

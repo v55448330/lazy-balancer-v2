@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -302,8 +303,13 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 	var lastChal *acme.Challenge
 	var tickerIterations int
 	for {
-		tickerIterations++
 		if chal, err := i.Client.GetChallenge(ctx, chalURL); err != nil {
+			// F49-9：CA 限流（429）必须立即上抛——外层 detectRateLimit 据此把
+			// 任务记入 waiting_ca 按 Retry-After 退避；吞掉继续轮询会把限流
+			// 错误磨成 10 分钟超时，丢失限流语义并持续给 CA 加压。
+			if isACMERRateLimit(err) {
+				return err
+			}
 			log(fmt.Sprintf("查询 challenge 状态失败: %v", err))
 		} else {
 			lastChal = chal
@@ -314,6 +320,9 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 		}
 
 		if auth, err := i.Client.GetAuthorization(ctx, authURL); err != nil {
+			if isACMERRateLimit(err) {
+				return err
+			}
 			log(fmt.Sprintf("查询授权状态失败: %v", err))
 		} else {
 			if auth.Status != lastAuthStatus {
@@ -345,6 +354,14 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 		case <-ticker.C:
 		}
 	}
+}
+
+// isACMERRateLimit 判定错误是否携带 CA 的 429 限流（F49-9）：x/crypto 对 429
+// 响应返回 *acme.Error（StatusCode=429，RetryBackoff 返回 0 时库内不重试
+// 直接上抛）。仅结构化 429 命中——瞬时网络错误/5xx 维持「日志+重试」。
+func isACMERRateLimit(err error) bool {
+	var acmeErr *acme.Error
+	return errors.As(err, &acmeErr) && acmeErr.StatusCode == http.StatusTooManyRequests
 }
 
 func terminalAuthorizationError(status string, authorizationErr error, challenge *acme.Challenge) error {

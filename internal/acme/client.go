@@ -33,6 +33,19 @@ type Logger interface {
 	Log(stage, message string)
 }
 
+// logf 是包级日志接缝（F49-P5-16，镜像 services/certjoblog.go certJobLogWarnf
+// 先例）：默认落到标准 log（stdout）；acme 是独立 module 边界（services 反向
+// 依赖 acme，acme 不得回依赖），故由 cmd/server/main.go 装配时注入
+// services.Logf，使告警进入统一日志级别链（level 语义同 services.Logf）。
+var logf = func(level, format string, args ...any) { log.Printf(format, args...) }
+
+// SetLogf 装配包级日志函数（main 启动早期调用；nil 忽略）。
+func SetLogf(f func(level, format string, args ...any)) {
+	if f != nil {
+		logf = f
+	}
+}
+
 // Client wraps golang.org/x/crypto/acme.Client with convenience methods.
 type Client struct {
 	DirectoryURL   string
@@ -167,7 +180,7 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 		if fi != nil {
 			created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
 		}
-		log.Printf("ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
+		logf("info", "ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
 		if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
 			return nil, err
 		}
@@ -245,11 +258,11 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 	_, err := c.acme.Register(ctx, acct, acme.AcceptTOS)
 	switch {
 	case err == nil:
-		log.Printf("ACME 账户注册成功（directory: %s）", c.DirectoryURL)
+		logf("info", "ACME 账户注册成功（directory: %s）", c.DirectoryURL)
 	case errors.Is(err, acme.ErrAccountAlreadyExists):
 		// 200 + JWK 匹配：x/crypto registerRFC 已缓存账户 KID，服务端确认
 		// 本密钥持有该账户，复用成立。
-		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
+		logf("info", "ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
 	default:
 		lower := strings.ToLower(err.Error())
 		if !strings.Contains(lower, "account already exists") && !strings.Contains(lower, "already registered") {
@@ -265,12 +278,12 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 			}
 			return fmt.Errorf("acme: 验证复用现有账户失败: %w", regErr)
 		}
-		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
+		logf("info", "ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
 	}
 	// CERT44-3（第 44 轮审计）：清理失效账户密钥是卫生动作，注册三分支已成功——
 	// 清理失败仅记 warn，不得连坐注册结果（残留密钥下一轮注册时再清理）。
 	if err := c.removeStaleAccountKeys(); err != nil {
-		log.Printf("acme: 清理失效账户密钥失败（不影响本次注册）: %v", err)
+		logf("warn", "acme: 清理失效账户密钥失败（不影响本次注册）: %v", err)
 	}
 	return nil
 }
@@ -307,12 +320,12 @@ func (c *Client) removeStaleAccountKeys() error {
 		if err != nil {
 			// R71 F-A3：单条目读/解析失败不再中止整轮清理——与下方 stat 失败的
 			// 「跳过+日志」同口径（原口径会使任一损坏元数据永久阻塞该提供商注册）。
-			log.Printf("acme: 读取账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
+			logf("warn", "acme: 读取账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
 			continue
 		}
 		var metadata accountKeyMetadata
 		if err := json.Unmarshal(data, &metadata); err != nil {
-			log.Printf("acme: 解析账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
+			logf("warn", "acme: 解析账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
 			continue
 		}
 		keyPath := strings.TrimSuffix(metadataPath, ".json")
@@ -330,7 +343,7 @@ func (c *Client) removeStaleAccountKeys() error {
 		if err != nil {
 			// 单条目 stat 失败（权限/外部并发删除）不应中止整轮清理（R45 发现4）：
 			// 跳过该条目并记日志，下一轮注册时自愈。
-			log.Printf("清理 ACME 账户密钥：读取元数据状态失败，跳过 %s: %v", entry.Name(), err)
+			logf("warn", "清理 ACME 账户密钥：读取元数据状态失败，跳过 %s: %v", entry.Name(), err)
 			continue
 		}
 		if info.ModTime().After(cutoff) {

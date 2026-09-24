@@ -268,7 +268,7 @@ type Upstream struct {
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	Weight         int    `json:"weight"`
-	DynamicDNS     bool   `json:"dynamic_dns"`
+	DynamicDNS     bool   `json:"dynamic_dns"` // 遗留死列，渲染勿消费（渲染只读规则级 DynamicDNS）
 	Enabled        bool   `json:"enabled"`
 	Protocol       string `json:"protocol"`
 	MaxConnections int    `json:"max_connections"`

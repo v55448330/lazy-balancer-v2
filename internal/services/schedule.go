@@ -176,8 +176,10 @@ func setVersionTableSchedule(table, seedVersion string, days []int, hhmm string)
 	if _, err := db.DB.Exec(`INSERT OR IGNORE INTO `+table+` (id, version, auto_update) VALUES (1, ?, TRUE)`, seedVersion); err != nil {
 		return fmt.Errorf("初始化版本记录: %w", err)
 	}
+	// F49-2（第 49 轮审计）：失败退避 pending 的行保留退避排程（先恢复服务，
+	// 下个成功后回到排程节奏）——与 SetThreatSchedule 的失败源保留同口径。
 	next := NextScheduledSlot(time.Now().UTC(), norm, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
-	if _, err := db.DB.Exec(`UPDATE `+table+` SET schedule_days=?, schedule_time=?, next_update=? WHERE id=1`,
+	if _, err := db.DB.Exec(`UPDATE `+table+` SET schedule_days=?, schedule_time=?, next_update=IIF(COALESCE(update_status,'')='failed', next_update, ?) WHERE id=1`,
 		FormatScheduleDays(norm), hhmm, next); err != nil {
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}

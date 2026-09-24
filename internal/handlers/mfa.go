@@ -35,7 +35,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	var user models.User
 	err := db.DB.QueryRow(`SELECT u.id, u.password_version, u.username, u.role, u.display_name, u.is_enabled, u.created_at, u.last_login, COALESCE(u.auth_provider,'local')
 		FROM mfa_challenges ch JOIN users u ON u.id = ch.user_id
-		WHERE ch.token=? AND ch.consumed=0 AND ch.expires_at > datetime('now')`, req.MFAToken).
+		WHERE ch.token=? AND ch.expires_at > datetime('now')`, req.MFAToken).
 		Scan(&userID, &passwordVersion, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &user.AuthProvider)
 	if err != nil || !user.IsEnabled {
 		// 挑战无效不泄露具体原因
@@ -51,11 +51,20 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	var loginLockedUntil sql.NullString
 	if err := db.DB.QueryRow("SELECT login_locked_until FROM users WHERE id=?", userID).Scan(&loginLockedUntil); err == nil && loginLockedNow(loginLockedUntil) {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(userID, user.Username), "账户已锁定"), c.ClientIP())
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: fmt.Sprintf("账户已锁定，请 %d 分钟后重试", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC()))})
 		return
 	}
 
+	// F49-13：先消费挑战、后验码——消费判定是挑战状态的唯一权威（已消费/并发
+	// 落败/过期窗口在此 401，不触碰凭证）；旧顺序先验码，恢复码「提交即消费」
+	// 会在「挑战已被使用」路径白烧。验码失败归还挑战（错误码不烧挑战，同 token
+	// 可重试；失败计数由 MFARecordChallengeFailure 负责，达阈值仍作废）。
+	if !services.MFAConsumeChallenge(req.MFAToken, userID) {
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战已被使用，请重新登录"})
+		return
+	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+		services.MFARestoreChallenge(req.MFAToken, userID)
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证码错误"), c.ClientIP())
 		// R72 B-I-4：挑战级失败计数——分布式 IP 限流绕过下对单挑战的爆破收敛
 		//（10 次作废，需重新走密码步取新挑战）。
@@ -67,10 +76,6 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 			msg = verr.Error()
 		}
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
-		return
-	}
-	if !services.MFAConsumeChallenge(req.MFAToken, userID) {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战已被使用，请重新登录"})
 		return
 	}
 	// 完整登录成功：清零登录失败计数与锁定（密码步未清零，见 Login 注释）。

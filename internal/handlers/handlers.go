@@ -723,6 +723,24 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 		return err
 	}
 
+	// F49-15（第 49 轮审计·漂移横幅事故）：未初始化实例（无任何用户）空库
+	// 启动时，若 Caddy 运行配置仍含规则路由，跳过本次应用——几乎必然是数据
+	// 目录/Admin 地址误配（2026-09-24 实证：dev 实例误指生产 admin 清空运行
+	// 配置）。运行配置保持原样，分叉由看门狗「多余规则路由」横幅持续上报；
+	// 探测失败（admin 不可达等）按无正向证据放行。已初始化实例（≥1 用户）
+	// 的 0 规则状态视为管理意图（规则删除时即已即时应用收敛），不在此守卫
+	// 范围——否则「删光规则后重启」永远无法收敛到空配置（评审截获的陷阱）。
+	if count == 0 {
+		var userCount int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err == nil && userCount == 0 {
+			if hasRoutes, probeErr := services.RunningConfigHasRuleRoutes(h.cfg.CaddyAdminURL); probeErr == nil && hasRoutes {
+				wrapped := "启动守卫：未初始化实例（无用户、无启用规则），但 Caddy 运行配置仍含规则路由——跳过本次启动应用（疑似数据目录或 Caddy Admin 地址误配），运行配置保持原样；漂移状态由看门狗持续上报"
+				services.Logf("error", "CRITICAL: %s", wrapped)
+				services.RecordAuditLog("system", "启动警告", "系统配置", wrapped, "")
+				return nil
+			}
+		}
+	}
 	services.Logf("info", "Applying Caddy config on startup (enabled rules: %d)", count)
 	if err := h.applyCaddyConfigE(); err != nil {
 		// 2026-09-06 裁定 ③：DB 渲染被拒时回退最后已知正确配置——负载均衡

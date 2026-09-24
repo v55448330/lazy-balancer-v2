@@ -237,7 +237,15 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 // —— HTTP 端点 ——
 
 func (h *Handlers) requireAutoBackupMaster(c *gin.Context) bool {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
+	isMaster, err := h.clusterService.IsMaster(c.Request.Context())
+	// F49-P5-19②：角色查询失败（DB 故障）≠ 从节点——403 会断言一个并不掌握
+	// 的角色信息且提示文案误导（「仅主节点支持」暗示节点角色已定）；查询失败
+	// 响亮报 500。
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "节点角色查询失败"})
+		return false
+	}
+	if !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持管理自动备份"})
 		return false
 	}

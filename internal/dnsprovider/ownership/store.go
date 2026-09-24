@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// logf 是包级日志接缝（F49-P5-16，镜像 services/certjoblog.go certJobLogWarnf
+// 先例）：默认落到标准 log（stdout）；ownership 是独立 module 边界（被
+// dnsprovider/services 反向依赖，不得回依赖 services），故由
+// cmd/server/main.go 装配时注入 services.Logf，使告警进入统一日志级别链。
+var logf = func(level, format string, args ...any) { log.Printf(format, args...) }
+
+// SetLogf 装配包级日志函数（main 启动早期调用；nil 忽略）。
+func SetLogf(f func(level, format string, args ...any)) {
+	if f != nil {
+		logf = f
+	}
+}
+
 const ownershipFileName = "acme_dns_ownership.json"
 
 // staleOwnershipAge is the age beyond which an ownership entry can no longer
@@ -154,7 +167,7 @@ func (s *Store) load() (state, error) {
 		if err := os.Rename(s.path, quarantined); err != nil {
 			return state{}, fmt.Errorf("quarantine DNS ownership %s: %w", s.path, errors.Join(decodeErr, err))
 		}
-		log.Printf("DNS ownership file %s undecodable (%v), quarantined to %s and continued with empty state", s.path, decodeErr, quarantined)
+		logf("warn", "DNS ownership file %s undecodable (%v), quarantined to %s and continued with empty state", s.path, decodeErr, quarantined)
 		return state{Version: 1}, nil
 	}
 	return current, nil

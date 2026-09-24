@@ -334,7 +334,7 @@ import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hostPortKey } from '@/utils/upstreamKeys'
-import { STAGE_SHORT_TITLES, attachStageDetails, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds } from '@/utils/securityStages'
+import { STAGE_TITLES, attachStageDetails, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds } from '@/utils/securityStages'
 import type {
   CrsRuleFileOption,
   RuleFlowTarget,
@@ -589,7 +589,7 @@ const flowNodes = computed<FlowNode[]>(() => {
   // 流程图必须完整呈现五个环节，缺环节比灰态更误导）
   nodes.push({
     key: 'stage0',
-    title: STAGE_SHORT_TITLES[0],
+    title: STAGE_TITLES[0],
     subtitle: stageZero.value ? stageZeroSubtitle.value : '未启用',
     tone: 'green',
     icon: CircleCheck,
@@ -600,7 +600,7 @@ const flowNodes = computed<FlowNode[]>(() => {
     const { chip, caption } = stageChip(stageNo)
     nodes.push({
       key: `stage${stage.stage}`,
-      title: STAGE_SHORT_TITLES[stage.stage],
+      title: STAGE_TITLES[stage.stage],
       subtitle: stage.enabled ? stageSub(stageNo) : '未启用',
       tone: stageNo === 1 ? 'blue' : stageNo === 2 ? 'orange' : 'red',
       icon: stageNo === 1 ? Key : stageNo === 2 ? Odometer : Aim,

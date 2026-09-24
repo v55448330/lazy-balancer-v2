@@ -118,8 +118,8 @@
         </div>
         <div class="info-item">
           <span class="info-label">运行模式</span>
-          <el-tag :type="authStore.nodeMode === 'master' ? 'success' : 'warning'" size="small">
-            {{ authStore.nodeMode === 'master' ? '主节点' : '从节点' }}
+          <el-tag :type="authStore.nodeMode === 'master' ? 'success' : authStore.nodeMode === 'slave' ? 'warning' : 'info'" size="small">
+            {{ authStore.nodeMode === 'master' ? '主节点' : authStore.nodeMode === 'slave' ? '从节点' : '加载中' }}
           </el-tag>
         </div>
         <div class="info-item">

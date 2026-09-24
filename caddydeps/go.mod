@@ -1,4 +1,4 @@
-module lazy-balancer-2/caddydeps
+module lazy-balancer-v2/caddydeps
 
 go 1.26.0
 

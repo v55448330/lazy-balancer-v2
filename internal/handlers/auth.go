@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -99,6 +100,25 @@ func loginLockedNow(lockedUntil sql.NullString) bool {
 	return loginLockoutEnabled() && lockedUntil.Valid && lockedUntil.String > time.Now().UTC().Format("2006-01-02 15:04:05")
 }
 
+// loginLockRemainingMinutes 剩余锁定时长（分钟，向上取整，下限 1）——锁定
+// 文案据此派生（F49-P5-19③）：硬编码「10 分钟」与 loginLockCooldown 漂移，
+// 且锁定中途重试时剩余时长本就更短。解析失败/无值兜底为冷却全长。
+func loginLockRemainingMinutes(lockedUntil sql.NullString, now time.Time) int {
+	fallback := int(loginLockCooldown / time.Minute)
+	if !lockedUntil.Valid {
+		return fallback
+	}
+	until, err := time.Parse("2006-01-02 15:04:05", lockedUntil.String)
+	if err != nil {
+		return fallback
+	}
+	remaining := int(math.Ceil(until.Sub(now).Minutes()))
+	if remaining < 1 {
+		return 1
+	}
+	return remaining
+}
+
 func (h *Handlers) Login(c *gin.Context) {
 	var req models.LoginRequest
 	if !guardAuthJSONBody(c) {
@@ -136,7 +156,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	if loginLockedNow(loginLockedUntil) {
 		_ = bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账户已锁定"), c.ClientIP())
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "账户已锁定，请 10 分钟后重试"})
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: fmt.Sprintf("账户已锁定，请 %d 分钟后重试", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC()))})
 		return
 	}
 

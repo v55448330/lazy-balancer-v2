@@ -2,6 +2,8 @@ package dnspod
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,7 +85,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 		// 错误——作废该 zone 缓存重解析一次并重试一次；重解析或重试失败按最新
 		// 错误返回，不循环（域名真正移出时重解析即失败，见
 		// TestProvider_Present_staleCacheRetryStopsWhenDomainGone）。
-		invalidateDomainIDCache(zone)
+		p.invalidateDomainIDCache(zone)
 		freshID, resolveErr := p.getDomainID(ctx, zone)
 		if resolveErr != nil {
 			return resolveErr
@@ -164,7 +166,7 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 			// zone→domain_id 陈旧（域名移出账户/删除重建）时删除对旧 ID 报
 			// 「域名不存在」类错误。作废缓存重解析一次并重试一次；重解析
 			// 或重试失败照旧记 failed，不循环。
-			invalidateDomainIDCache(zone)
+			p.invalidateDomainIDCache(zone)
 			freshID, resolveErr := p.getDomainID(ctx, zone)
 			if resolveErr != nil {
 				err = errors.Join(err, resolveErr)
@@ -277,24 +279,36 @@ func isDomainGoneStatus(code, message string) bool {
 		strings.Contains(message, "域名 ID 错误")
 }
 
-// invalidateDomainIDCache 作废单个 zone 的缓存映射（CERT42-7）。
-func invalidateDomainIDCache(zone string) {
+// invalidateDomainIDCache 作废本账户单个 zone 的缓存映射（CERT42-7；
+// F49-7 起键含账户摘要，只能作废本账户的条目）。
+func (p *Provider) invalidateDomainIDCache(zone string) {
 	domainIDCacheMu.Lock()
-	delete(domainIDCache, zone)
+	delete(domainIDCache, p.domainIDCacheKey(zone))
 	domainIDCacheMu.Unlock()
 }
 
-// domainIDCache(CERT40-4):zone→domain_id 进程内缓存——签发/续签的每次
+// domainIDCache(CERT40-4):账户+zone→domain_id 进程内缓存——签发/续签的每次
 // Present/CleanUp 都要解析 zone 的 domain_id,分页遍历 Domain.List 在多
 // 域名/多任务并发下重复全额扫描;zone→id 映射在账户内稳定,命中即省。
+// F49-7（第 49 轮审计）：键必须含账户（login_token 的 sha256 前 8 位十六
+// 进制）——同进程可配置多条 DNS 凭证（多账户），裸 zone 键会让账户 B 首调
+// 即命中账户 A 缓存的 domain_id；token 不落明文键（缓存转储/调试可读）。
 var (
 	domainIDCacheMu sync.Mutex
 	domainIDCache   = map[string]string{}
 )
 
+// domainIDCacheKey 返回本账户隔离的缓存键：sha256(login_token) 前 8 位
+// 十六进制 + "|" + zone。
+func (p *Provider) domainIDCacheKey(zone string) string {
+	sum := sha256.Sum256([]byte(p.LoginToken))
+	return hex.EncodeToString(sum[:4]) + "|" + zone
+}
+
 func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error) {
+	cacheKey := p.domainIDCacheKey(zone)
 	domainIDCacheMu.Lock()
-	cached, ok := domainIDCache[zone]
+	cached, ok := domainIDCache[cacheKey]
 	domainIDCacheMu.Unlock()
 	if ok {
 		return cached, nil
@@ -324,7 +338,7 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 			if d.Name == zone {
 				id := d.ID.String()
 				domainIDCacheMu.Lock()
-				domainIDCache[zone] = id
+				domainIDCache[cacheKey] = id
 				domainIDCacheMu.Unlock()
 				return id, nil
 			}

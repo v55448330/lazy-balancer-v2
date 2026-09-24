@@ -131,7 +131,7 @@
           </el-tooltip>
           <div class="node-tag" :class="authStore.nodeMode">
             <el-icon><Connection /></el-icon>
-            <span>{{ authStore.nodeMode === 'master' ? '主节点' : '从节点' }}</span>
+            <span>{{ authStore.nodeMode === 'master' ? '主节点' : authStore.nodeMode === 'slave' ? '从节点' : '加载中' }}</span>
           </div>
         </div>
       </el-header>
@@ -140,11 +140,15 @@
         v-if="configDrift && authStore.nodeMode === 'master'"
         type="error"
         :closable="false"
+        show-icon
         class="config-drift-banner"
       >
         <template #title>
-          <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
-          <el-button v-if="authStore.readOnlyReason === null" size="small" type="danger" plain :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
+          <div class="polling-error-title">
+            <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
+            <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
+          </div>
+          <div v-if="configDriftSince" class="polling-error-meta">检测于 {{ configDriftSince }} UTC（重启服务后按数据库重新应用全部规则配置）</div>
         </template>
       </el-alert>
 
@@ -348,6 +352,7 @@ const saveProfile = async () => {
 
 // 配置一致性看门狗横幅：轮询 /caddy/status，漂移时展示并给出重启恢复入口。
 const configDrift = ref('')
+const configDriftSince = ref('')
 const restarting = ref(false)
 let driftTimer: number | undefined
 let disposed = false
@@ -355,7 +360,9 @@ let disposed = false
 const fetchDriftStatus = async () => {
   try {
     const res = await request.get('/caddy/status', { silent: true })
-    configDrift.value = res.data?.config_consistent === 'false' ? (res.data?.config_drift || '规则路由与运行配置不一致') : ''
+    const drifted = res.data?.config_consistent === 'false'
+    configDrift.value = drifted ? (res.data?.config_drift || '规则路由与运行配置不一致') : ''
+    configDriftSince.value = drifted ? (res.data?.config_drift_since || '') : ''
   } catch {
     // 状态查询失败静默——网络层错误已有全局处理
   }
@@ -408,10 +415,11 @@ onUnmounted(() => {
 .config-drift-banner {
   border-radius: 0;
 }
-.config-drift-banner .drift-text {
-  margin-right: 12px;
-  font-weight: 500;
-}
+/* 与站内 polling-error-alert 统一模式（Rules/CertJobs/ClusterSettings）同构：
+   图标+标题 flex（文案左、动作右）+ 12px meta 次行 */
+.config-drift-banner .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.config-drift-banner .drift-text { font-weight: 500; }
+.config-drift-banner .polling-error-meta { font-size: 12px; margin-top: 2px; }
 
 .layout-aside {
   background: #ffffff;

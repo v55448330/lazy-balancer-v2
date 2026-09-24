@@ -85,6 +85,13 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
 	}
+	// F49-P5-7：与 UpdateCRSAutoUpdate 同口径主节点门（R57 B-#4）——从节点
+	// 状态行在集群同步段内，本地写会被下次快照覆盖。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
+		return
+	}
 	if err := services.SetThreatAutoUpdate(*body.AutoUpdate); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新失败: " + err.Error()})
 		return
@@ -122,6 +129,12 @@ func (h *Handlers) UpdateThreatSourceFlags(c *gin.Context) {
 	}
 	if body.UpdateEnabled == nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无可更新字段"})
+		return
+	}
+	// F49-P5-7：与 UpdateCRSAutoUpdate 同口径主节点门（R57 B-#4）。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
 		return
 	}
 	var name string

@@ -401,3 +401,40 @@ func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
 		t.Fatal("乱序同集哈希应不变（聚合规范字节口径）")
 	}
 }
+
+// F49-4：原始哈希快速路径中的名单存在性 COUNT 查询失败时，不得按「存在」
+// 走跳过分支标 success——必须记错并继续完整聚合/写库路径（本测试用 DROP
+// TABLE 使 COUNT 与后续写库一并失败，可观察终态=failed 而非 success）。
+func TestThreatUpdate_listExistenceQueryErrorNotFastPathSuccess(t *testing.T) {
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+
+	// Given：run1 成功（raw_hash 落库，名单行存在）
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run1: %v", err)
+	}
+	if status, _, _, _, _ := readThreatRow(t, "ustc"); status != "success" {
+		t.Fatalf("run1 ustc status=%s, want success", status)
+	}
+	// 存在性 COUNT 必失败的环境；聚焦 ustc 单源
+	if _, err := db.DB.Exec(`DROP TABLE security_ip_lists`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_enabled=0 WHERE name!='ustc'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：同内容 run2 —— 原始哈希一致进入快速路径，COUNT 失败
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+
+	// Then：不得标 success 快速返回——完整路径写库失败落 failed
+	status, _, message, _, _ := readThreatRow(t, "ustc")
+	if status != "failed" {
+		t.Fatalf("COUNT 失败时被按「存在」跳过并标 success: status=%s message=%q, want failed", status, message)
+	}
+	if message == "" {
+		t.Fatal("failed 行必须携带失败原因")
+	}
+}

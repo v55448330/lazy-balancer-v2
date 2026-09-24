@@ -581,7 +581,9 @@ func createTables() error {
 		id INTEGER PRIMARY KEY,
 		version TEXT NOT NULL,
 		updated_at DATETIME DEFAULT (datetime('now')),
-		auto_update BOOLEAN DEFAULT TRUE
+		auto_update BOOLEAN DEFAULT TRUE,
+		schedule_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+		schedule_time TEXT NOT NULL DEFAULT '04:00'
 	);
 	CREATE TABLE IF NOT EXISTS security_ip2region_version (
 		id INTEGER PRIMARY KEY,
@@ -804,24 +806,24 @@ func runMigrations() error {
 		// 每天）+ HH:MM 时间（默认 04:00），槽位按基础设置时区本地日历计算、
 		// UTC 落库。CRS/IP2Region 列落版本表；威胁库为任务级排程，列挂
 		// global_config（与 threat_auto_update 同表先例）。
-		"security_crs_version.schedule_days":       "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
-		"security_crs_version.schedule_time":       "TEXT NOT NULL DEFAULT '04:00'",
-		"security_ip2region_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
-		"security_ip2region_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
-		"global_config.threat_schedule_days":       "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
-		"global_config.threat_schedule_time":       "TEXT NOT NULL DEFAULT '04:00'",
-		"cert_jobs.ca_provider_id":                 "INTEGER DEFAULT 0",
-		"cert_jobs.renewal_attempts":               "INTEGER DEFAULT 0",
-		"cert_jobs.ca_available_after":             "DATETIME",
-		"cert_jobs.last_error_code":                "VARCHAR(20)",
-		"cert_jobs.deployment_attempts":            "INTEGER DEFAULT 0",
-		"cert_jobs.deployment_available_after":     "DATETIME",
-		"users.mfa_enabled":                        "BOOLEAN DEFAULT 0",
-		"users.mfa_secret":                         "TEXT DEFAULT ''",
-		"users.mfa_pending_secret":                 "TEXT DEFAULT ''",
-		"users.mfa_recovery_codes":                 "TEXT DEFAULT '[]'",
-		"users.mfa_last_timestep":                  "INTEGER DEFAULT 0",
-		"users.mfa_pending_fails":                  "INTEGER DEFAULT 0",
+		"security_crs_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
+		"security_crs_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
+		// global_config 单行表恒经 newColumns 补列（threat_auto_update 起的既定
+		// 口径——fresh DDL 不追平，U6B-3 对齐仅适用多行版本/策略表）。
+		"global_config.threat_schedule_days":   "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
+		"global_config.threat_schedule_time":   "TEXT NOT NULL DEFAULT '04:00'",
+		"cert_jobs.ca_provider_id":             "INTEGER DEFAULT 0",
+		"cert_jobs.renewal_attempts":           "INTEGER DEFAULT 0",
+		"cert_jobs.ca_available_after":         "DATETIME",
+		"cert_jobs.last_error_code":            "VARCHAR(20)",
+		"cert_jobs.deployment_attempts":        "INTEGER DEFAULT 0",
+		"cert_jobs.deployment_available_after": "DATETIME",
+		"users.mfa_enabled":                    "BOOLEAN DEFAULT 0",
+		"users.mfa_secret":                     "TEXT DEFAULT ''",
+		"users.mfa_pending_secret":             "TEXT DEFAULT ''",
+		"users.mfa_recovery_codes":             "TEXT DEFAULT '[]'",
+		"users.mfa_last_timestep":              "INTEGER DEFAULT 0",
+		"users.mfa_pending_fails":              "INTEGER DEFAULT 0",
 		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 写保护的
 		// mfa_* 计数列独立，登录锁定与 MFA 冷却互不牵连）。计数列 NOT NULL——
 		// 存量行取默认 0，不存在 NULL 语义。

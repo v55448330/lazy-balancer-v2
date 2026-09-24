@@ -360,19 +360,22 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 	return nil
 }
 
-// maskEmail 脱敏邮箱地址（C-08，2026-09-05 证书域审计：注释此前与实现不符）。
-// 三分支真实行为：@ 前缀长度 >3 时保留前两个字符与域名（ad***@example.com）；
-// @ 前缀过短（at<=3，如 ab@x.cn）时仅保留域名、连首字符也不保留（***@x.cn）；
+// maskEmail 脱敏邮箱地址（C-08，2026-09-05 证书域审计：注释此前与实现不符；
+// F49-P5-15 起按 rune 截断——多字节 UTF-8 本地部分（如 CJK 邮箱）按字节切
+// 前两个「字符」会切在 rune 中间产出非法 UTF-8 残片）。
+// 三分支真实行为：@ 前缀 rune 数 >3 时保留前两个字符与域名（ad***@example.com）；
+// @ 前缀过短（rune 数 <=3，如 ab@x.cn）时仅保留域名、连首字符也不保留（***@x.cn）；
 // 无 @ 或 @ 恰在首/尾时整体 ***。
 func maskEmail(email string) string {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {
 		return "***"
 	}
-	if at <= 3 {
+	local := []rune(email[:at])
+	if len(local) <= 3 {
 		return "***" + email[at:]
 	}
-	return string(email[:2]) + "***" + email[at:]
+	return string(local[:2]) + "***" + email[at:]
 }
 
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {

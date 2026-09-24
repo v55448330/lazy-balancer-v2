@@ -177,6 +177,14 @@ func MFAConsumeChallenge(token string, userID int) bool {
 	return n == 1
 }
 
+// MFARestoreChallenge 归还已消费挑战（F49-13 消费前置的配套）：MFAVerifyLogin
+// 先消费后验码，验码失败时挑战必须恢复未消费——错误验证码不烧挑战，用户可持
+// 同一 token 重试；失败计数仍由 MFARecordChallengeFailure 负责（达阈值作废）。
+// 仅归还属主匹配的挑战；过期行恢复亦无妨（消费判定恒带 expires_at 门）。
+func MFARestoreChallenge(token string, userID int) {
+	_, _ = db.DB.Exec("UPDATE mfa_challenges SET consumed=0 WHERE token=? AND user_id=?", token, userID)
+}
+
 // —— 主验证入口 ——
 
 // MFAVerifyCode 对启用 MFA 的用户验证 6 位 TOTP 或恢复码（按长度自动分流）。

@@ -637,7 +637,7 @@ func (transport *staleRemoveTransport) flipStaleDomain(cachedID, freshID string,
 // 不存在」类错误，须作废缓存重解析后重试一次，而非把清理失败抛给签发链。
 func TestDNSPodCleanUp_staleDomainIDInvalidatesAndRetries(t *testing.T) {
 	// Given: the zone is cached as id 1 while the API now serves it as id 2
-	seedDomainIDCache(t, map[string]string{})
+	seedDomainIDCache(t, "id,token", map[string]string{})
 	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
 	dataDir := t.TempDir()
 	provider, err := NewPersistent("id,token", dataDir)
@@ -686,7 +686,7 @@ func TestDNSPodCleanUp_staleDomainIDInvalidatesAndRetries(t *testing.T) {
 // 不发第二次删除。
 func TestDNSPodCleanUp_freshDomainIDDeletesOnce(t *testing.T) {
 	// Given: the cached id still matches the API
-	seedDomainIDCache(t, map[string]string{})
+	seedDomainIDCache(t, "id,token", map[string]string{})
 	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
 	provider, err := NewPersistent("id,token", t.TempDir())
 	if err != nil {
@@ -719,7 +719,7 @@ func TestDNSPodCleanUp_freshDomainIDDeletesOnce(t *testing.T) {
 // 清理重试。
 func TestDNSPodCleanUp_staleRetryStillFailsReappendsOwnedRecord(t *testing.T) {
 	// Given: a stale cached id and an API that also fails the fresh-id retry
-	seedDomainIDCache(t, map[string]string{})
+	seedDomainIDCache(t, "id,token", map[string]string{})
 	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
 	provider := New("id,token")
 	provider.client.Transport = transport
@@ -754,7 +754,7 @@ func TestDNSPodCleanUp_staleRetryStillFailsReappendsOwnedRecord(t *testing.T) {
 // ownership 条目（DNS 记录可能仍存在），后续清理可自愈。
 func TestDNSPodCleanUp_staleRetryFailureKeepsOwnershipEntry(t *testing.T) {
 	// Given: a stale cached id and an API that also fails the fresh-id retry
-	seedDomainIDCache(t, map[string]string{})
+	seedDomainIDCache(t, "id,token", map[string]string{})
 	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
 	dataDir := t.TempDir()
 	provider, err := NewPersistent("id,token", dataDir)

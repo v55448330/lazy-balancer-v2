@@ -21,6 +21,23 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// apiKeyWhitelistCachePurge 由 middleware 包注入（middleware 导入 handlers，
+// 反向会成环——F49-P5-19①）：删除/禁用 Key 时按 keyID 前缀清扫白名单 CIDR
+// 解析缓存（历史条目永不再命中却永久驻留=无界累积）。nil=未装配（单测直连
+// handlers 时静默跳过）。
+var apiKeyWhitelistCachePurge func(keyID int)
+
+// SetAPIKeyWhitelistCachePurge 装配缓存清扫钩子（middleware init 注册）。
+func SetAPIKeyWhitelistCachePurge(purge func(keyID int)) {
+	apiKeyWhitelistCachePurge = purge
+}
+
+func purgeAPIKeyWhitelistCache(keyID int) {
+	if apiKeyWhitelistCachePurge != nil {
+		apiKeyWhitelistCachePurge(keyID)
+	}
+}
+
 func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 	userID := int(contextUserID(c))
 	rows, err := db.DB.Query(`
@@ -74,6 +91,7 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	purgeAPIKeyWhitelistCache(id)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
 }
 
@@ -335,6 +353,10 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	recordAudit(c, "更新", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	// F49-P5-19①：禁用即清扫白名单解析缓存（条目随 Key 失活永不再命中）。
+	if req.IsEnabled != nil && !*req.IsEnabled {
+		purgeAPIKeyWhitelistCache(id)
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已更新"})
 }
 
@@ -374,5 +396,6 @@ func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	purgeAPIKeyWhitelistCache(id)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
 }

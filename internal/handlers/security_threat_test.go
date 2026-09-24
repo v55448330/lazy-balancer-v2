@@ -210,3 +210,40 @@ func TestThreatLib_autoUpdateMasterSwitch(t *testing.T) {
 		t.Fatalf("关闭后回读应 false: %s", resp.Body.String()[:200])
 	}
 }
+
+// F49-P5-7：威胁库自动更新总开关与逐源开关端点从节点一律 403（与
+// UpdateCRSAutoUpdate 同口径 R57 B-#4——从节点状态行在集群同步段内，
+// 本地写会被下次快照覆盖），且不得产生任何写。
+func TestThreatLib_slaveGatesRejected403(t *testing.T) {
+	// Given 从节点
+	router := newThreatTestRouter(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0, threat_auto_update=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	put := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
+	}
+
+	// When/Then：任务级总开关 403 且文案为主节点专属
+	resp := put("/security/threat-lib/auto-update", `{"auto_update":false}`)
+	if resp.Code != http.StatusForbidden || !strings.Contains(resp.Body.String(), "该操作仅允许在主节点执行") {
+		t.Fatalf("auto-update slave status=%d body=%s, want 403 主节点专属", resp.Code, resp.Body.String())
+	}
+	// 逐源开关 403
+	resp = put("/security/threat-lib/1/flags", `{"update_enabled":false}`)
+	if resp.Code != http.StatusForbidden || !strings.Contains(resp.Body.String(), "该操作仅允许在主节点执行") {
+		t.Fatalf("flags slave status=%d body=%s, want 403 主节点专属", resp.Code, resp.Body.String())
+	}
+	// 从节点请求不得落任何写
+	var autoUpdate bool
+	if err := db.DB.QueryRow(`SELECT threat_auto_update FROM global_config WHERE id=1`).Scan(&autoUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if !autoUpdate {
+		t.Fatal("从节点请求不得写入 threat_auto_update")
+	}
+}

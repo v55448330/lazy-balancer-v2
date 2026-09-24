@@ -164,6 +164,22 @@ func staleOrError(path string, cached *ipListFileState, err error, fresh bool) (
 	return nil, err
 }
 
+// EvictIPListCache 淘汰指定路径的运行期缓存条目（services 侧 GC 删除超龄
+// 未引用名单文件后调用）——否则 fail-stale 会把已删文件的集合无限期留在
+// 内存。返回实际淘汰条数。
+func EvictIPListCache(paths ...string) int {
+	ipListCache.Lock()
+	defer ipListCache.Unlock()
+	evicted := 0
+	for _, path := range paths {
+		if _, ok := ipListCache.states[path]; ok {
+			delete(ipListCache.states, path)
+			evicted++
+		}
+	}
+	return evicted
+}
+
 // parseIPListFile 读盘+严格解析+防御性归并（写入侧已聚合，加载侧再跑一次
 // 保证「排序+去重+不相交」检索不变式——二分正确性依赖不相交）。
 func parseIPListFile(path string, info os.FileInfo) (*ipListFileState, error) {
@@ -223,15 +239,27 @@ func (op *ipListFastOperator) Evaluate(_ plugintypes.TransactionState, value str
 }
 
 // ParseIPEntry 解析单条名单条目：CIDR 或裸 IP（补 /32 //128，主机位掩码
-// 归零）。渲染层/威胁库下载解析共用。
+// 归零）。4in6 映射形态（::ffff:a.b.c.d、::ffff:a.b.c.d/120）Unmap 归一为
+// v4 前缀（前缀 bits-96）——netip 的 v4 前缀不含 4in6 地址，Evaluate 侧
+// 查询已 Unmap，条目不归一会落入 v6 集导致 v4 查询恒不命中（名单静默失效）。
+// 渲染层/威胁库下载解析共用。
 func ParseIPEntry(entry string) (netip.Prefix, error) {
 	if prefix, err := netip.ParsePrefix(entry); err == nil {
-		return prefix.Masked(), nil
+		addr := prefix.Addr().Unmap()
+		bits := prefix.Bits()
+		if addr.Is4() && prefix.Addr().Is4In6() {
+			bits -= 96
+			if bits < 0 {
+				return netip.Prefix{}, fmt.Errorf("4in6 前缀 %q 位数小于 /96，无法归一为 v4", entry)
+			}
+		}
+		return netip.PrefixFrom(addr, bits).Masked(), nil
 	}
 	addr, err := netip.ParseAddr(entry)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
+	addr = addr.Unmap()
 	bits := 32
 	if addr.Is6() {
 		bits = 128

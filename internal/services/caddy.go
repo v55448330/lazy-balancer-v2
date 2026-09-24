@@ -3641,6 +3641,8 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		upstreamEntry := map[string]interface{}{
 			"dial": []string{dial},
 		}
+		// TCP 权重不约分（layer4 WRR 直接接受正权重比例，与 HTTP 侧
+		// normalizeWeights 的 gcd 约分路径不同——F49-P5-11 如实标注）。
 		weight := u.Weight
 		if weight > 1 {
 			upstreamEntry["weight"] = weight

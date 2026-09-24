@@ -326,9 +326,30 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 			return
 		}
 	}
+	// F49-P5-19①：连带删除的 Key 同样按 keyID 前缀清扫白名单解析缓存——
+	// 先取 id 集（删除后无从按键清扫），删除成功后逐键清扫。
+	var cascadeKeyIDs []int
+	keyRows, keyErr := tx.QueryContext(c.Request.Context(), "SELECT id FROM api_keys WHERE created_by = ?", id)
+	if keyErr != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
+		return
+	}
+	for keyRows.Next() {
+		var keyID int
+		if err := keyRows.Scan(&keyID); err != nil {
+			keyRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
+			return
+		}
+		cascadeKeyIDs = append(cascadeKeyIDs, keyID)
+	}
+	keyRows.Close()
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
+	}
+	for _, keyID := range cascadeKeyIDs {
+		purgeAPIKeyWhitelistCache(keyID)
 	}
 	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM users WHERE id = ?", id)
 	if err != nil {

@@ -942,3 +942,22 @@ func TestClusterVersionTrigger_bumpsOnPolicyTypeColumns(t *testing.T) {
 		t.Fatalf("existing OF column update should bump cluster_version to 3, got %d", got)
 	}
 }
+
+// F49-P5-8：受信代理四列（trusted_proxy_enabled/ranges/headers/strict）入
+// global_config UPDATE 触发器 OF 列表（防御对齐）——主端保存受信代理设置
+// 须即 bump cluster_version 随快照下发；不在 OF 内则稳态变更永不传播。
+func TestClusterVersionTriggers_bumpForTrustedProxyColumns(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_ranges='["203.0.113.0/24"]', trusted_proxy_headers='["CF-Connecting-IP","X-Forwarded-For"]', trusted_proxy_strict=0 WHERE id=1`); err != nil {
+		t.Fatalf("update trusted proxy columns: %v", err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after trusted proxy update=%d, want 1", got)
+	}
+}

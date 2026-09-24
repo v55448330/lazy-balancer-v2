@@ -430,9 +430,9 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	operationLock := certJobOperationLock(id)
 	operationLock.Lock()
 	defer operationLock.Unlock()
-	var ruleID, domain, status string
+	var ruleID, domain, status, certPEM, keyPEM string
 	var caProviderID int
-	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); dbQueryNotFound(c, err, "Job not found", "DeleteCertJob query job") {
+	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0), COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID, &certPEM, &keyPEM); dbQueryNotFound(c, err, "Job not found", "DeleteCertJob query job") {
 		return
 	}
 	// R52 N4 + R54 S-2：删除持有证书的 issued/downloaded 任务、或删除仍在
@@ -500,7 +500,16 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	result, err = db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
 	if err != nil {
 		deleteErr := err
-		if status == "issued" || status == "failed" {
+		if status == "downloaded" && certPEM != "" && keyPEM != "" {
+			// F49-8（对齐 caqueue requeueCanceledJob 的 R57 A-#5 口径）：持有证书
+			// 材料的 downloaded 任务停在部署窗口——转 'queued' 会丢弃已签发证书
+			// 并触发整轮重签（Issue 快速路径只认 issued/downloaded）。原地恢复
+			// 'downloaded' 并把重试窗口推到 now，Resume 的
+			// rescanDroppedDeploymentRetries 会统一重新调度部署。
+			if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status='downloaded', deployment_available_after=datetime('now'), message='删除失败，等待恢复部署', updated_at=datetime('now') WHERE id=?", id); restoreErr != nil {
+				deleteErr = errors.Join(deleteErr, restoreErr)
+			}
+		} else if status == "issued" || status == "failed" {
 			if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=?", status, id); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)
 			}

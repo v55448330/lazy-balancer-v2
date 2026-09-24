@@ -29,7 +29,7 @@ interface RequestClient {
   get(url: '/metrics/realtime', config?: AxiosRequestConfig): Promise<APIResponse<RealtimeTraffic>>
   get(url: '/rules', config?: AxiosRequestConfig): Promise<APIResponse<Rule[]>>
   get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<APIResponse<ConnectionStats>>
-  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<APIResponse<{ status: string; pid?: string; apply_error?: string; config_consistent?: string; config_drift?: string }>>
+  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<APIResponse<{ status: string; pid?: string; apply_error?: string; config_consistent?: string; config_drift?: string; config_drift_since?: string }>>
   get(url: '/config', config?: AxiosRequestConfig): Promise<APIResponse<GlobalConfigData>>
   get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<APIResponse<{ enabled: boolean; mode: string; cert_info?: { domain: string; issuer: string; not_after: string; days_left: number } | null }>>
   get<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>

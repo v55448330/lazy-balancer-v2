@@ -52,7 +52,9 @@ interface AuthResponse {
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<CurrentUser | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
-  const nodeMode = ref<ClusterNodeMode>('master')
+  // F49-10（第 49 轮审计）：节点模式三态化——null=未知（/config 未成功拉取），
+  // 不再默认 'master'：从节点刷新+瞬时失败窗口曾按主节点 fail-open 渲染写控件。
+  const nodeMode = ref<ClusterNodeMode | null>(null)
   const timezone = ref<string>('Asia/Shanghai')
   const loading = ref(false)
   const intentionalLogout = ref(false)
@@ -61,7 +63,13 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
   const readOnlyReason = computed<'slave' | 'non-admin' | 'unknown' | null>(() => {
     if (nodeMode.value === 'slave') return 'slave'
-    if (user.value) return user.value.role !== 'admin' ? 'non-admin' : null
+    if (user.value) {
+      if (user.value.role !== 'admin') return 'non-admin'
+      // F49-10：admin 用户但节点模式未知（/config 未成功拉取）同样按只读呈现
+      // （fail-closed），与下方用户信息未知窗口同口径。
+      if (nodeMode.value === null) return isLoggedIn.value ? 'unknown' : null
+      return null
+    }
     // token 有效但用户信息尚未成功拉取（如 /users/me 瞬时失败）：权限未知按只读
     // 呈现（fail-closed），避免该窗口期按 admin 视图放行（fail-open）
     return isLoggedIn.value ? 'unknown' : null
@@ -69,22 +77,22 @@ export const useAuthStore = defineStore('auth', () => {
   const readOnlyMessage = computed(() => {
     if (readOnlyReason.value === 'slave') return '从节点只读，请在主节点操作'
     if (readOnlyReason.value === 'non-admin') return '非管理员用户只读'
-    if (readOnlyReason.value === 'unknown') return '用户信息加载中，暂以只读模式呈现'
+    if (readOnlyReason.value === 'unknown') return '信息加载中，暂以只读模式呈现'
     return ''
   })
 
-  let userRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let userRetryTimer: number | null = null
 
   const clearUserRetryTimer = (): void => {
     if (userRetryTimer !== null) {
-      clearTimeout(userRetryTimer)
+      window.clearTimeout(userRetryTimer)
       userRetryTimer = null
     }
   }
 
   const scheduleUserRetry = (): void => {
     if (userRetryTimer !== null || !token.value) return
-    userRetryTimer = setTimeout(() => {
+    userRetryTimer = window.setTimeout(() => {
       userRetryTimer = null
       void fetchUser()
     }, 15_000)
@@ -120,6 +128,24 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  let configRetryTimer: number | null = null
+
+  const clearConfigRetryTimer = (): void => {
+    if (configRetryTimer !== null) {
+      window.clearTimeout(configRetryTimer)
+      configRetryTimer = null
+    }
+  }
+
+  // F49-10：节点模式拉取失败与用户身份同口径——定时重试使未知窗口自动恢复
+  const scheduleConfigRetry = (): void => {
+    if (configRetryTimer !== null || !token.value) return
+    configRetryTimer = window.setTimeout(() => {
+      configRetryTimer = null
+      void fetchConfig(true)
+    }, 15_000)
+  }
+
   async function fetchConfig(silent = false) {
     if (!token.value) return
     try {
@@ -127,8 +153,12 @@ export const useAuthStore = defineStore('auth', () => {
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
         if (res.data.timezone) timezone.value = res.data.timezone
+      } else {
+        scheduleConfigRetry()
       }
     } catch (e) {
+      // 瞬时失败保留最近一次已知模式，未知态由重试循环收敛（401 走全局拦截器）
+      if (!(e instanceof ApiRequestError && e.status === 401)) scheduleConfigRetry()
       console.error(e)
     }
   }
@@ -183,6 +213,7 @@ interface LoginResult {
   function applyAuthResponse(res: AuthResponse) {
     intentionalLogout.value = false
     clearUserRetryTimer()
+    clearConfigRetryTimer()
     token.value = res.token
     nodeMode.value = res.node_mode
     localStorage.setItem('token', res.token)
@@ -204,6 +235,7 @@ interface LoginResult {
   function applyOIDCToken(rawToken: string) {
     intentionalLogout.value = false
     clearUserRetryTimer()
+    clearConfigRetryTimer()
     token.value = rawToken
     localStorage.setItem('token', rawToken)
   }
@@ -229,9 +261,10 @@ interface LoginResult {
       console.warn('服务端注销失败，已执行本地退出', caught)
     } finally {
       clearUserRetryTimer()
+      clearConfigRetryTimer()
       user.value = null
       token.value = null
-      nodeMode.value = 'master'
+      nodeMode.value = null
       localStorage.removeItem('token')
     }
   }
@@ -243,9 +276,10 @@ interface LoginResult {
   function localLogout(): void {
     intentionalLogout.value = true
     clearUserRetryTimer()
+    clearConfigRetryTimer()
     user.value = null
     token.value = null
-    nodeMode.value = 'master'
+    nodeMode.value = null
     localStorage.removeItem('token')
   }
 

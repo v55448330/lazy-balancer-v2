@@ -23,7 +23,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { request } from '@/utils/api'
+import { request, formatBytes } from '@/utils/api'
 
 interface LogStorageInfo {
   key: string
@@ -35,7 +35,7 @@ interface LogStorageInfo {
   db_bytes?: number | null
   keep_count: number
   rows?: number | null
-  retention_note?: string
+  retention_note: string
   config_source: string
 }
 
@@ -43,17 +43,9 @@ const props = defineProps<{ logKey: string; caddyId?: string }>()
 
 const info = ref<LogStorageInfo | null>(null)
 
-const humanSize = (bytes: number): string => {
-  if (!bytes || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = bytes
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i += 1
-  }
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
-}
+// F49-P5-10：复用 api.ts 的 formatBytes（站内字节格式化单一事实源，原私有
+// humanSize 与 Dashboard 精度不一致）
+const humanSize = formatBytes
 
 const isEmpty = computed(() => {
   const i = info.value

@@ -82,5 +82,5 @@
 |---|---|
 | 401 | 密钥无效/缺失，或使用 JWT（MCP 仅支持 API Key）→ 换用开启了 MCP 的 lb_sk_ 密钥 |
 | 403 | 未开启 MCP / 来源 IP 不在白名单 / 只读 Key 越权 / 从节点非集群写工具 → 开启 MCP 开关、放行来源 IP、换非只读 Key；集群运维对目标从节点本身调用、其余写操作对主节点调用 |
-| -32602 | 参数不符合 `input_schema` → 重新读该工具 schema，按契约修正，不要猜字段名 |
+| 参数错误 | 参数校验在 REST 侧执行，以 IsError + 文本返回（含具体 message）→ 读 message 修正重试；协议层暂不启用 `input_schema` 校验（不会产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜字段名 |
 | IsError + 4xx/5xx 文本 | 内部 REST 返回的业务错误，响应体里有具体 message |

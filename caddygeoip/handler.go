@@ -24,7 +24,7 @@ func init() {
 }
 
 // GeoIPHandler looks up the client IP in the ip2region database and sets the
-// geoip.country_code and geoip.country_name placeholders on the request
+// geoip.country_name/region/province/city placeholders on the request
 // replacer. Blocking decisions belong to downstream matchers; this handler
 // always passes the request through.
 type GeoIPHandler struct {
@@ -80,10 +80,18 @@ var (
 	geoipSharedSearchers = map[string]*geoipSharedSearcher{}
 )
 
+// geoipOldInstanceCloseDelay 换库重建后旧实例的延迟关闭窗口：重载窗口内旧
+// 配置的 handler 仍可能持旧实例在途查询（BorrowSearcher 落空会判「海外」
+// 误拦——恰是 M2 要修的问题），故不立即关闭；但旧实例也不再「保留至进程
+// 退出」（每次 xdb 更新遗留 20 个 fd + vIndex 缓冲），延迟窗口过后 Close
+// 收敛。测试可缩短。
+var geoipOldInstanceCloseDelay = 60 * time.Second
+
 // sharedGeoIPSearcher 返回按路径共享的单例：文件形态未变时命中缓存，变化时重建。
-// 被替换的旧实例不关闭——重载窗口内旧配置的 handler 仍在用它查询，关闭会使
-// BorrowSearcher 落空、查询失败被判「海外」（恰是 M2 要修的误拦）；旧实例的
-// 20 个 fd 保留至进程退出（每次 xdb 更新至多一份，可忽略）。
+// 被替换的旧实例经 geoipOldInstanceCloseDelay 延迟关闭——新实例先接管（下方
+// 缓存替换完成后 Provision 返回，新配置随之重载），旧实例在窗口内继续服务
+// 在途查询，窗口过后由定时器 Close（Ip2Region.Close 等待借出的 searcher
+// 归还，在途查询不受截断）。
 func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -98,6 +106,10 @@ func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 	searcher, err := service.NewIp2RegionWithPath(path, "")
 	if err != nil {
 		return nil, err
+	}
+	if replaced, ok := geoipSharedSearchers[path]; ok {
+		old := replaced.searcher
+		time.AfterFunc(geoipOldInstanceCloseDelay, func() { old.Close() })
 	}
 	geoipSharedSearchers[path] = &geoipSharedSearcher{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
 	return searcher, nil
@@ -155,13 +167,11 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	// 与 R57 fail-closed 立场一致）；省/市项对空串恒不匹配（不误伤）。
 	// 头镜像同语义：X-GeoIP-Loc 哨兵恒为「海外」（承载 fail-closed 海外裁决），
 	// 省/市空串对 coraza 锚定正则（^(?:...)$）恒不匹配。
-	caddyhttp.SetVar(ctx, "geoip.country_code", "")
 	caddyhttp.SetVar(ctx, "geoip.country_name", "")
 	caddyhttp.SetVar(ctx, "geoip.region", "")
 	caddyhttp.SetVar(ctx, "geoip.province", "")
 	caddyhttp.SetVar(ctx, "geoip.city", "")
 	r.Header.Set("X-GeoIP-Country", "")
-	r.Header.Set("X-GeoIP-Country-Code", "")
 	r.Header.Set("X-GeoIP-Region", "")
 	r.Header.Set("X-GeoIP-Province", "")
 	r.Header.Set("X-GeoIP-City", "")
@@ -179,11 +189,9 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	if len(fields) < 5 {
 		return
 	}
-	caddyhttp.SetVar(ctx, "geoip.country_code", fields[4])
 	caddyhttp.SetVar(ctx, "geoip.country_name", fields[0])
 	caddyhttp.SetVar(ctx, "geoip.region", region)
 	r.Header.Set("X-GeoIP-Country", fields[0])
-	r.Header.Set("X-GeoIP-Country-Code", fields[4])
 	r.Header.Set("X-GeoIP-Region", region)
 	// SEC44-2(第 44 轮):上方 :179 已保证 len(fields)>=5,原两处 len>=3 守卫
 	// 恒真,直接执行块内逻辑。

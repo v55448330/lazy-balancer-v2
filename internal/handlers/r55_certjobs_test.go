@@ -45,7 +45,8 @@ func (certJobRereadFailingConn) Begin() (driver.Tx, error) { return nil, errors.
 func (certJobRereadFailingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	switch {
 	case strings.Contains(query, "rule_id, domain, status"):
-		return &fakeQueryRows{values: [][]driver.Value{{"lb_reread_500", "reread.example.test", "validating", int64(1)}}}, nil
+		// F49-8 起 DeleteCertJob 的首个 SELECT 同时扫 cert_pem/key_pem（6 列）。
+		return &fakeQueryRows{values: [][]driver.Value{{"lb_reread_500", "reread.example.test", "validating", int64(1), "", ""}}}, nil
 	case strings.Contains(query, "SELECT status FROM cert_jobs"):
 		return nil, errors.New("注入的重读故障")
 	default:

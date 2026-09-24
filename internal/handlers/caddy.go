@@ -683,11 +683,12 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	pid := caddyLivePID()
 	statusData := func(state string) map[string]string {
 		return map[string]string{
-			"status":            state,
-			"pid":               strconv.Itoa(pid),
-			"apply_error":       applyError,
-			"config_consistent": strconv.FormatBool(drift.Consistent),
-			"config_drift":      driftBannerText(drift),
+			"status":             state,
+			"pid":                strconv.Itoa(pid),
+			"apply_error":        applyError,
+			"config_consistent":  strconv.FormatBool(drift.Consistent),
+			"config_drift":       driftBannerText(drift),
+			"config_drift_since": driftSinceText(drift),
 		}
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -708,15 +709,24 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: statusData("stopped")})
 }
 
-// driftBannerText 生成前端全局横幅的展示文案（一致时为空串）。
+// driftBannerText 生成前端全局横幅的主文案（一致时为空串；F49-P5-1：检测时间
+// 拆出到 driftSinceText 供 meta 次行展示，不再内嵌正文）。
 func driftBannerText(drift services.ConfigDriftStatus) string {
 	if drift.Consistent {
 		return ""
 	}
-	return formatDriftBanner(drift.Missing, drift.Extra, drift.Since)
+	return formatDriftBanner(drift.Missing, drift.Extra)
 }
 
-func formatDriftBanner(missing, extra []string, since string) string {
+// driftSinceText 漂移首次检测时间（一致时为空串）。
+func driftSinceText(drift services.ConfigDriftStatus) string {
+	if drift.Consistent {
+		return ""
+	}
+	return drift.Since
+}
+
+func formatDriftBanner(missing, extra []string) string {
 	parts := make([]string, 0, 2)
 	if len(missing) > 0 {
 		parts = append(parts, "缺失规则路由: "+strings.Join(missing, "、"))
@@ -724,7 +734,7 @@ func formatDriftBanner(missing, extra []string, since string) string {
 	if len(extra) > 0 {
 		parts = append(parts, "多余规则路由: "+strings.Join(extra, "、"))
 	}
-	return strings.Join(parts, "；") + "（检测于 " + since + " UTC）"
+	return strings.Join(parts, "；")
 }
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {

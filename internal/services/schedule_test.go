@@ -256,6 +256,52 @@ func TestSetIP2RegionSchedule_persistsAndRearms(t *testing.T) {
 	}
 }
 
+// F49-2（第 49 轮审计）：CRS/IP2Region 保存排程必须保留失败退避排程——
+// 「先恢复服务」原则三库同口径（威胁库 SetThreatSchedule 已显式保留）。
+func TestSetCRSSchedule_failedRowKeepsBackoff(t *testing.T) {
+	// Given 失败退避中的 CRS 版本行（next_update=1h 退避点）
+	newTestCRSManager(t)
+	useShanghaiLocation(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	backoff := time.Now().UTC().Add(time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec(`UPDATE security_crs_version SET update_status='failed', consecutive_failures=1, next_update=? WHERE id=1`, backoff); err != nil {
+		t.Fatal(err)
+	}
+
+	// When 退避窗口内保存排程
+	if err := SetCRSSchedule([]int{2}, "04:30"); err != nil {
+		t.Fatalf("SetCRSSchedule: %v", err)
+	}
+
+	// Then 排程列落库，但 next_update 保留退避点（不被推到下个排程槽）
+	days, hhmm, nextUpdate := readVersionSchedule(t, "security_crs_version")
+	if days != "2" || hhmm != "04:30" {
+		t.Fatalf("schedule=(%q,%q), want (2,04:30)", days, hhmm)
+	}
+	if nextUpdate != backoff {
+		t.Fatalf("next_update=%q, want 保留失败退避 %q（先恢复服务）", nextUpdate, backoff)
+	}
+}
+
+func TestSetIP2RegionSchedule_failedRowKeepsBackoff(t *testing.T) {
+	newTestIP2RegionManager(t)
+	useShanghaiLocation(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	backoff := time.Now().UTC().Add(2 * time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET update_status='failed', consecutive_failures=2, next_update=? WHERE id=1`, backoff); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetIP2RegionSchedule([]int{6}, "23:15"); err != nil {
+		t.Fatalf("SetIP2RegionSchedule: %v", err)
+	}
+
+	_, _, nextUpdate := readVersionSchedule(t, "security_ip2region_version")
+	if nextUpdate != backoff {
+		t.Fatalf("next_update=%q, want 保留失败退避 %q", nextUpdate, backoff)
+	}
+}
+
 func TestSetThreatSchedule_persistsAndRearmsEnabledSources(t *testing.T) {
 	// Given 三源：ustc 失败退避中，其余启用且非失败
 	newClusterTestService(t)
