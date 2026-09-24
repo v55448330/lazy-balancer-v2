@@ -182,27 +182,29 @@ func TestProvider_CleanUp_deletes_persisted_record_after_restart(t *testing.T) {
 	}
 }
 
-func TestProvider_Present_retries_transient_5xx(t *testing.T) {
-	// Given: CreateRecord hits a 502 then succeeds; the retrying transport
-	// (the provider's production wiring) absorbs the transient failure
+func TestProvider_Present_does_not_replay_create_on_5xx(t *testing.T) {
+	// F50-6（第 50 轮审计，迁移自 retries_transient_5xx）：CreateRecord 命中
+	// 502 不得重放——创建响应丢失时重试会产生无 ID 幽灵 TXT（ownership 清理
+	// 只按记录 ID 删除），首个 502 原样上抛、单次调用。
 	provider, err := New("secret-id", "secret-key")
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	transport := &flakyRecordTransport{failAction: "CreateRecord", failStatus: http.StatusBadGateway, failCount: 1}
+	transport := &flakyRecordTransport{failAction: "CreateRecord", failStatus: http.StatusBadGateway, failCount: 3}
 	transport.records = map[uint64]string{100: "another-task"}
 	provider.client.WithHttpTransport(&retry.Transport{Base: transport, InitialBackoff: time.Millisecond})
 
 	// When
-	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600); err != nil {
-		t.Fatalf("present: %v", err)
-	}
+	err = provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600)
 
-	// Then
+	// Then：502 直接失败且不产生第二条创建调用
+	if err == nil {
+		t.Fatal("present succeeded, want 502 surfaced（创建类 5xx 不重放）")
+	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	if transport.attempts != 2 {
-		t.Fatalf("attempts=%d, want 2", transport.attempts)
+	if transport.attempts != 1 {
+		t.Fatalf("attempts=%d, want 1（创建类 5xx 单次调用不重放）", transport.attempts)
 	}
 }
 
@@ -316,19 +318,20 @@ func TestProvider_CleanUpValue_memory_mode_tracks_values(t *testing.T) {
 	}
 }
 
-// slowFlakyTransport answers the first failCount CreateRecord calls with a
+// slowFlakyTransport answers the first failCount calls of failAction with a
 // slow 5xx response, then behaves like recordTransport.
 type slowFlakyTransport struct {
 	recordTransport
-	failCount int
-	attempts  int
-	delay     time.Duration
+	failAction string
+	failCount  int
+	attempts   int
+	delay      time.Duration
 }
 
 func (transport *slowFlakyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	transport.mu.Lock()
 	transport.attempts++
-	failing := request.Header.Get("X-TC-Action") == "CreateRecord" && transport.attempts <= transport.failCount
+	failing := request.Header.Get("X-TC-Action") == transport.failAction && transport.attempts <= transport.failCount
 	transport.mu.Unlock()
 	time.Sleep(transport.delay)
 	if failing {
@@ -348,24 +351,28 @@ func (transport *slowFlakyTransport) RoundTrip(request *http.Request) (*http.Res
 	return transport.recordTransport.RoundTrip(request)
 }
 
-func TestProvider_Present_survives_slow_5xx_sequence(t *testing.T) {
-	// Given: a slow 502,502,200 sequence replayed inside the SDK client's
-	// request timeout, which must cover the whole retry envelope rather than
-	// cutting the backoff loop short
+func TestProvider_CleanUp_survives_slow_5xx_sequence(t *testing.T) {
+	// F50-6 迁移（原 Present 慢 502 序列）：创建类 5xx 不再重放，超时不截断
+	// 语义改由非创建动作承载——DeleteRecord 的慢 502,502,200 序列必须在 SDK
+	// 客户端单次请求超时内完成整个重试包络，而非被退避循环截断。
 	provider, err := New("secret-id", "secret-key")
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	transport := &slowFlakyTransport{failCount: 2, delay: 100 * time.Millisecond}
+	transport := &slowFlakyTransport{failAction: "DeleteRecord", failCount: 2, delay: 100 * time.Millisecond}
 	transport.records = map[uint64]string{100: "another-task"}
 	provider.client.WithHttpTransport(&retry.Transport{Base: transport, InitialBackoff: time.Millisecond})
-
-	// When
 	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600); err != nil {
 		t.Fatalf("present: %v", err)
 	}
 
-	// Then: the delayed retry sequence completes within the client timeout
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then：延迟重试序列在客户端超时内完成
+	if err != nil {
+		t.Fatalf("clean up: %v", err)
+	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	if transport.attempts != 3 {

@@ -89,7 +89,9 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 }
 
 func (s *ClusterService) ConfirmRegistration(ctx context.Context, token string) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL WHERE cluster_token_hash=?", tokenHash(token))
+	// P5-6（第 50 轮审计）：清列与上方旧协议交付确认（:84）对齐——过期时间戳
+	// 一并置 NULL，不与已清空的 secret 残留分叉。
+	result, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL, registration_secret_expires_at=NULL WHERE cluster_token_hash=?", tokenHash(token))
 	if err != nil {
 		return fmt.Errorf("确认集群令牌交付: %w", err)
 	}

@@ -358,6 +358,9 @@ let driftTimer: number | undefined
 let disposed = false
 
 const fetchDriftStatus = async () => {
+  // 看门狗语义主节点权威（横幅本就仅 master 渲染）：从节点不发请求；
+  // 节点模式未知（null，/config 未就绪窗口）同样跳过，下轮 interval 自然补查。
+  if (authStore.nodeMode !== 'master') return
   try {
     const res = await request.get('/caddy/status', { silent: true })
     const drifted = res.data?.config_consistent === 'false'

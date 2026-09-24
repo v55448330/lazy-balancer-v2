@@ -21,8 +21,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 默认连本地 Docker 部署（面板强制 HTTPS，明文 301）——secure:false 跳过自签证书校验。
+        // 裸 go run 起的 dev 后端无 TLS：target 改回 http://localhost:8000 并移除 secure。
+        target: 'https://localhost:8000',
         changeOrigin: true,
+        secure: false,
       },
     },
   },

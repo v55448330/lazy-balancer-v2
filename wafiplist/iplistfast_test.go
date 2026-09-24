@@ -167,3 +167,41 @@ func TestIPMatchVsIPListFast_equivalenceProbe(t *testing.T) {
 		}
 	}
 }
+
+// P5-1（第 50 轮审计）：写锁代际守卫——并发重建时，基于更早 stat 的解析
+// 结果（旧代际）不得覆盖已落地的新代际缓存，否则旧内容会回流服役。
+func TestLoadIPListFile_staleGenerationDoesNotOverwriteNewer(t *testing.T) {
+	dir := useAllowedDir(t)
+	path := writeListFile(t, dir, "gen.txt", []string{"192.0.2.1"})
+	old := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+
+	// 新代际先落地：内容 B + 更晚 mtime
+	if err := os.WriteFile(path, []byte("198.51.100.77\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Now().Truncate(time.Second)
+	if err := os.Chtimes(path, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	newerState, err := loadIPListFileFresh(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 旧代际解析随后完成：基于更早 stat 的内容 A + 更老 mtime
+	if err := os.WriteFile(path, []byte("192.0.2.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadIPListFileFresh(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：缓存仍是新代际（旧解析不得覆盖）
+	if state != newerState {
+		t.Fatal("旧代际解析覆盖了新代际缓存（写锁缺代际守卫）")
+	}
+}

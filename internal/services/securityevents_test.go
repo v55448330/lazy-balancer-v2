@@ -2577,6 +2577,24 @@ func TestSecurityEventsAttribution_sameDomainTwoRules(t *testing.T) {
 	}
 }
 
+// P5-12（第 50 轮审计）：摄入映射的策略加载对 ip_whitelist_enabled=NULL 必须
+// 按 1 归一——与渲染侧 scanSecurityPolicyByID 的 COALESCE(...,1) 同口径；
+// 按 0 归一会让带外编辑产生的 NULL 行在归因能力判定与渲染行为间分叉。
+func TestSecurityEventsLoadMappings_nullWhitelistEnabledNormalizedTrue(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_whitelist_enabled) VALUES (1,'policy-null-wl',1,'[]','[]',NULL)`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	if policyByID[1] == nil || !policyByID[1].IPWhitelistEnabled {
+		t.Fatalf("IPWhitelistEnabled=%v, want true（NULL 须与渲染侧同口径归一为 1）", policyByID[1] != nil && policyByID[1].IPWhitelistEnabled)
+	}
+}
+
 // 单规则形态(2026-09-15 用户问):仅一条规则时,双写键+端口优先无回归。
 func TestSecurityEventsAttribution_singleRuleForms(t *testing.T) {
 	_, database := newClusterTestService(t)

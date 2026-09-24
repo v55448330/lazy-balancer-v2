@@ -34,3 +34,23 @@ func TestPurgeAPIKeyWhitelistCache_sweepsByKeyIDPrefix(t *testing.T) {
 		t.Fatal("keyID=30 的条目被误伤（前缀必须含 | 分隔）")
 	}
 }
+
+// P5-21（第 50 轮审计）：配置导入/集群快照的 api_keys 整体替换后，白名单
+// CIDR 解析缓存必须整体清空——键含 keyID 前缀无法枚举存活 Key，逐 Key
+// 清扫不可行；批量替换后缓存必须为空（解析缓存重建廉价）。
+func TestPurgeAllAPIKeyWhitelistCache_emptiesCache(t *testing.T) {
+	// Given：两个 Key 的白名单条目
+	_, network, _ := net.ParseCIDR("10.0.0.0/8")
+	apiKeyWhitelistCache.Store(`3|["10.0.0.0/8"]`, []*net.IPNet{network})
+	apiKeyWhitelistCache.Store(`30|["10.0.0.0/8"]`, []*net.IPNet{network})
+
+	// When
+	PurgeAllAPIKeyWhitelistCache()
+
+	// Then：缓存全空
+	remaining := 0
+	apiKeyWhitelistCache.Range(func(_, _ any) bool { remaining++; return true })
+	if remaining != 0 {
+		t.Fatalf("缓存剩余 %d 条, want 0（api_keys 整体替换后必须清空）", remaining)
+	}
+}

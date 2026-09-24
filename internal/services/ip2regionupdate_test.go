@@ -441,6 +441,53 @@ func TestIP2RegionUpdateRun_installReloadFailureGoesToRollback(t *testing.T) {
 	}
 }
 
+// P5-11（第 50 轮审计）：restored 分支 reloader 调用补 nil 守卫（镜像本函数
+// F-47-3 两处与 CRS 侧口径）——包内直构（测试/未来重构）注入 nil reloader
+// 时，回滚还原后的对称重载此前会 panic。nil 语义与 CRS 一致：不尝试重载、
+// 不记审计，回滚落库路径照常。
+func TestIP2RegionUpdateRun_rollbackReloadSkippedWhenReloaderNil(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldBytes, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldReload := reloadIP2RegionSearcher
+	reloadCalls := 0
+	reloadIP2RegionSearcher = func() error {
+		reloadCalls++
+		if reloadCalls == 1 {
+			return errors.New("forced: install hot-swap failure")
+		}
+		return Reload()
+	}
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.reloader = nil
+
+	// When 安装热换失败 → 回滚 restored 分支（nil reloader 不得 panic）
+	m.run("manual")
+
+	// Then 磁盘回滚、.bak 消费、DB 记 failed+旧版本
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != string(oldBytes) {
+		t.Fatalf("live xdb not rolled back: %v", err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
+		t.Fatal(".bak should be consumed by rollback")
+	}
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+	}
+}
+
 func TestIP2RegionUpdateRun_rollbackRenameSuccessReloadFailKeepsBaseline(t *testing.T) {
 	// Given R48 B-1：rename 级磁盘还原成功（live=更新前基线 v2，.bak 被消费）
 	// 后内存热换失败——不得升级到 copy/dist：rename 已消费 .bak，copy 级必然

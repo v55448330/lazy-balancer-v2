@@ -319,6 +319,9 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 		}
 		// 漂移节已被强制重放、本地数据镜像主节点：落本地重建口径哈希作为
 		// 稳定参照（见 applySnapshot 调用点注释）；本地哈希缺失回退快照侧。
+		// 代价如实化（P5-7）：同构建常态下每次漂移会多 1 轮全量重拉才收敛
+		//（本轮强制重放+落本地口径，下轮起哈希一致走跳过）——这是有意取舍，
+		// E3 N-01 的跨构建漂移防护优先于省一轮重拉。
 		if sk.wasDrifted(sec.Key) {
 			if lh, lok := localHashes[sec.Key]; lok && lh != "" {
 				h = lh

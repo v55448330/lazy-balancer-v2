@@ -2734,6 +2734,9 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if len(importCertWarnings) > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings...)
 	}
+	// P5-21（第 50 轮审计）：api_keys 已随导入整体替换——清空白名单 CIDR
+	// 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
+	purgeAllAPIKeyWhitelistCache()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置"+action+"成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 

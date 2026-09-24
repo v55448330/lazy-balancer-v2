@@ -396,6 +396,91 @@ func TestSetIP2RegionAutoUpdate_enableUsesConfiguredSchedule(t *testing.T) {
 	}
 }
 
+// F50-4（第 50 轮审计）：开关重开（enable）必须与保存排程同口径保留失败退避
+// 排程（F49-2 的 setVersionTableSchedule 守卫）——否则失败退避中的行被重开
+// 开关覆写为下个排程槽（最坏等一周），「先恢复服务」退避语义被击穿。
+func TestSetCRSAutoUpdate_failedRowKeepsBackoff(t *testing.T) {
+	// Given 失败退避中的 CRS 版本行（next_update=1h 退避点），当前开关关闭
+	newTestCRSManager(t)
+	useShanghaiLocation(t)
+	seedCRSVersionRow(t, "v4.14.0", false)
+	backoff := time.Now().UTC().Add(time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec(`UPDATE security_crs_version SET update_status='failed', consecutive_failures=1, next_update=? WHERE id=1`, backoff); err != nil {
+		t.Fatal(err)
+	}
+
+	// When 重开自动更新
+	if err := SetCRSAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then 退避点不变（不被推到下个排程槽）
+	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
+	if nextUpdate != backoff {
+		t.Fatalf("next_update=%q, want 保留失败退避 %q（先恢复服务）", nextUpdate, backoff)
+	}
+}
+
+func TestSetCRSAutoUpdate_healthyRowRearmsToSlot(t *testing.T) {
+	// Given 正常（非失败）行，开关关闭
+	newTestCRSManager(t)
+	loc := useShanghaiLocation(t)
+	seedCRSVersionRow(t, "v4.14.0", false)
+	if err := SetCRSSchedule([]int{2}, "04:30"); err != nil {
+		t.Fatal(err)
+	}
+	want := NextScheduledSlot(time.Now().UTC(), []int{2}, "04:30", loc)
+
+	// When 重开自动更新
+	if err := SetCRSAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then next_update=排程槽（守卫不误伤正常行）
+	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
+	if got := parseSlotUTC(t, nextUpdate); !got.Equal(want.UTC()) {
+		t.Fatalf("next_update=%v, want 排程槽 %v", got, want.UTC())
+	}
+}
+
+func TestSetIP2RegionAutoUpdate_failedRowKeepsBackoff(t *testing.T) {
+	newTestIP2RegionManager(t)
+	useShanghaiLocation(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", false)
+	backoff := time.Now().UTC().Add(time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET update_status='failed', consecutive_failures=1, next_update=? WHERE id=1`, backoff); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetIP2RegionAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
+	if nextUpdate != backoff {
+		t.Fatalf("next_update=%q, want 保留失败退避 %q", nextUpdate, backoff)
+	}
+}
+
+func TestSetIP2RegionAutoUpdate_healthyRowRearmsToSlot(t *testing.T) {
+	newTestIP2RegionManager(t)
+	loc := useShanghaiLocation(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", false)
+	if err := SetIP2RegionSchedule([]int{2}, "04:30"); err != nil {
+		t.Fatal(err)
+	}
+	want := NextScheduledSlot(time.Now().UTC(), []int{2}, "04:30", loc)
+
+	if err := SetIP2RegionAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
+	if got := parseSlotUTC(t, nextUpdate); !got.Equal(want.UTC()) {
+		t.Fatalf("next_update=%v, want 排程槽 %v", got, want.UTC())
+	}
+}
+
 func TestCRSSchedulerTick_prewritesConfiguredSlot(t *testing.T) {
 	// Given 自动更新开、无 next_update、排程=周四 06:00
 	m := newTestCRSManager(t)

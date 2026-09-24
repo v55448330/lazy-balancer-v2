@@ -583,6 +583,8 @@ func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersi
 // ── 管理端点(显示/测试/修改/删除) ──
 
 // OIDCSettings GET /settings/oidc(admin)——secret 掩码返回。
+// client_secret_masked 为文档性字段（apidocs 登记；P5-22 第 50 轮审计核实
+// 前端不消费——前端仅用 has_secret 显隐），保留供 API 消费者辨别 secret 已配置。
 func (h *Handlers) OIDCSettings(c *gin.Context) {
 	cfg, _ := loadOIDCConfig()
 	masked := cfg.ClientSecret

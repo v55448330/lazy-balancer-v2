@@ -621,6 +621,7 @@ func createTables() error {
 		url TEXT NOT NULL DEFAULT '',
 		format TEXT NOT NULL DEFAULT 'plain',
 		update_enabled INTEGER NOT NULL DEFAULT 1,
+		-- 弃用保留（P5-9）：v2.3.2 名单化后零消费（「引用即应用」），保留仅为旧备份还原/旧快照兼容。
 		apply_enabled INTEGER NOT NULL DEFAULT 1,
 		entry_count INTEGER NOT NULL DEFAULT 0,
 		version TEXT NOT NULL DEFAULT '',

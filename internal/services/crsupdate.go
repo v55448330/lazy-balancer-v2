@@ -146,7 +146,10 @@ func SetCRSAutoUpdate(enabled bool) error {
 	if enabled {
 		nextUpdate = versionTableNextSlot("security_crs_version", time.Now().UTC())
 	}
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=? WHERE id=1", enabled, nextUpdate); err != nil {
+	// F50-4（第 50 轮审计）：开启重排时失败退避 pending 的行保留退避点
+	//（先恢复服务，下个成功后回到排程节奏）——与 setVersionTableSchedule
+	// 的 F49-2 守卫同口径；关闭仍无条件清空。
+	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=CASE WHEN ? THEN IIF(COALESCE(update_status,'')='failed', next_update, ?) ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 CRS 自动更新开关: %w", err)
 	}
 	return nil

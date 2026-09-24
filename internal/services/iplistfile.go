@@ -162,6 +162,16 @@ func gcStaleIPListFiles(now time.Time, maxAge time.Duration) (removed int) {
 		wafiplist.EvictIPListCache(deleted...)
 		Logf("info", "IP 名单 GC: 清理 %d 个超龄未引用名单文件", len(deleted))
 	}
+	// P5-19（第 50 轮审计）：顺带 prune 引用集中早于 maxAge 的条目——文件已删
+	// 或长期未再渲染的 lastRef 记录只增不删会无限驻留；再次渲染时
+	// noteIPListRenderRef 会重建条目，prune 无正确性代价。
+	ipListRenderRefs.Lock()
+	for p, ts := range ipListRenderRefs.lastRef {
+		if now.Sub(ts) >= maxAge {
+			delete(ipListRenderRefs.lastRef, p)
+		}
+	}
+	ipListRenderRefs.Unlock()
 	return len(deleted)
 }
 

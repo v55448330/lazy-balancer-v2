@@ -97,6 +97,9 @@ var tools = []toolSpec{
 	{"update_block_page", "更新指定拦截页面", http.MethodPut, "/security/block-pages/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_block_page", "删除指定拦截页面", http.MethodDelete, "/security/block-pages/{id}", []string{"id"}, nil, idSchema("id", "页面 ID", "integer")},
 	{"list_ip_lists", "列出全部 IP 地址列表", http.MethodGet, "/security/ip-lists", nil, nil, emptySchema},
+	// F50-2（第 50 轮审计）：v2.3.2 名单瘦身后 list_ip_lists 仅含 entry_count，
+	// 读条目唯一通道是 GET /security/ip-lists/:id——补工具覆盖，免豁免。
+	{"get_ip_list", "获取指定 IP 地址列表详情（含全部条目）", http.MethodGet, "/security/ip-lists/{id}", []string{"id"}, nil, idSchema("id", "列表 ID", "integer")},
 	{"create_ip_list", "创建 IP 地址列表", http.MethodPost, "/security/ip-lists", nil, nil, bodySchema},
 	{"update_ip_list", "更新指定 IP 地址列表", http.MethodPut, "/security/ip-lists/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_ip_list", "删除指定 IP 地址列表", http.MethodDelete, "/security/ip-lists/{id}", []string{"id"}, nil, idSchema("id", "列表 ID", "integer")},

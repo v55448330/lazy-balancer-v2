@@ -86,7 +86,15 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules[0]})
+	rule := rules[0]
+	// F50-7（第 50 轮审计）：手动证书私钥与导出备份同敏感级——仅管理员 JWT
+	// 与管理员读写 Key 可回读；只读 Key/非管理员掩码为空串并置 TLSKeySet，
+	// 供编辑表单区分「未配置」与「已隐藏」（UpdateRule 空值=保留原私钥）。
+	if rule.TLSKey != "" && (c.GetString("role") != "admin" || (c.GetString("auth_type") == "api_key" && c.GetBool("api_key_read_only"))) {
+		rule.TLSKey = ""
+		rule.TLSKeySet = true
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rule})
 }
 
 func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
@@ -2423,8 +2431,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	// Round 34 F-1: 同 UpdateRule——NULL enabled 行须 IIF 归一化（NULL 视同禁用），
 	// 复制出的新行显式落 0，避免裸 scan 500 与复制后意外启用。
+	// F50-1（第 50 轮审计）：dynamic_dns 同列同病——legacy NULL 行裸 scan
+	// NULL→bool 报错恒 500，按 0 归一（遗留死列，渲染只读规则级值）。
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, COALESCE(weight,1), dynamic_dns, IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {
@@ -2729,15 +2739,10 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		// 同值批量零写入 ⇒ 不触发 lb_rules 行级同步触发器（阶段页四列在 OF 清单
 		// 内）；存在性与协议已在上方预检，affected=0 即「已在目标态」，仍计
 		// bound 而非误判「规则不存在」。
-		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?
+		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?
 			WHERE caddy_id=? AND (block_page_stage1_id IS NOT ? OR block_page_stage1_status IS NOT ? OR block_page_stage3_id IS NOT ? OR block_page_stage3_status IS NOT ?)`,
 			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, ruleCaddyID,
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-		if _, err := result.RowsAffected(); err != nil {
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}

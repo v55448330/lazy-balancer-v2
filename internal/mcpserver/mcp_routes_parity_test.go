@@ -127,7 +127,6 @@ var mcpUncoveredRoutes = map[string]string{
 	"PUT /api/v1/security/ip2region/schedule":       "IP2Region 定时更新排程（低频管理面板操作）",
 	"PUT /api/v1/security/threat-lib/schedule":      "威胁库定时更新排程（低频管理面板操作）",
 	"GET /api/v1/security/threat-lib/update/status": "威胁库更新任务状态（面板更新弹框轮询数据源）",
-	"GET /api/v1/security/ip-lists/:id":             "IP 地址列表详情（含条目，面板弹框按需拉取；Agent 用 list_ip_lists 聚合信息）",
 	"GET /api/v1/security/threat-lib/update/logs":   "威胁库更新日志（面板更新弹框日志流）",
 	// —— MCP 自身镜像端点 ——
 	"POST /api/v1/mcp":             "MCP Streamable HTTP JSON-RPC 端点本身：工具调用的入口即 MCP 协议，不是可经 MCP 转发的 REST 操作",

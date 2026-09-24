@@ -96,6 +96,7 @@ var toolUsage = map[string]string{
 	"update_block_page":            "更新拦截页面内容",
 	"delete_block_page":            "删除拦截页面（默认页面不可删除）",
 	"list_ip_lists":                "列出全部 IP 地址列表（名称/分类/条目数/引用该列表的安全策略）",
+	"get_ip_list":                  "读取指定 IP 地址列表的完整条目（list_ip_lists 仅含条目数不内联 entries）；安全修改路径=本工具读→改 entries→update_ip_list 全量写回；处置单条追加用 add_ip_to_list（幂等，无需读全表）",
 	"create_ip_list":               "创建 IP 地址列表：entries 为 {value, remark} 对象数组的 JSON 文本（IP/CIDR+备注）；名称全局唯一（忽略大小写）",
 	"update_ip_list":               "更新 IP 地址列表（entries 为 {value, remark} 对象数组的 JSON 文本，全量替换；名称全局唯一）；省略的字段保持现值",
 	"delete_ip_list":               "删除 IP 地址列表；被安全策略引用时返回 409，需先解除引用",

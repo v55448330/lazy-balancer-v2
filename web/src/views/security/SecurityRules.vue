@@ -424,7 +424,7 @@
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="crs_update" style="margin-right: auto" />
           <el-button @click="updateDialogVisible = false">关闭</el-button>
-        <el-button v-if="!crsUpdateRunning" type="primary" :disabled="isReadOnly" :loading="startingUpdate" @click="confirmUpdate">立即更新</el-button>
+        <el-button v-if="!crsUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingUpdate" @click="confirmUpdate">立即更新</el-button>
         </div>
       </template>
     </el-dialog>
@@ -462,7 +462,7 @@
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="ip2region_update" style="margin-right: auto" />
           <el-button @click="ip2regionUpdateDialogVisible = false">关闭</el-button>
-        <el-button v-if="!ip2regionUpdateRunning" type="primary" :disabled="isReadOnly" :loading="startingIP2RegionUpdate" @click="confirmIP2RegionUpdate">立即更新</el-button>
+        <el-button v-if="!ip2regionUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingIP2RegionUpdate" @click="confirmIP2RegionUpdate">立即更新</el-button>
         </div>
       </template>
     </el-dialog>

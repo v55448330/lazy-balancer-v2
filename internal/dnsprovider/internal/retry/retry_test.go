@@ -57,7 +57,12 @@ func (t *retryAfterTransport) RoundTrip(request *http.Request) (*http.Response, 
 
 func newRequest(t *testing.T, body string) *http.Request {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://dns.example/Record.Create", strings.NewReader(body))
+	return newRequestPath(t, "https://dns.example/Record.Create", body)
+}
+
+func newRequestPath(t *testing.T, url, body string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -65,12 +70,13 @@ func newRequest(t *testing.T, body string) *http.Request {
 }
 
 func TestTransport_retries_transient_5xx_then_succeeds(t *testing.T) {
-	// Given: first two attempts return 500/502, third returns 200
+	// Given: first two attempts of a non-create action return 500/502, third 200
+	// （F50-6 起 5xx 重试仅限非创建类动作；创建类见下方专项测试）
 	base := &countingTransport{statuses: []int{http.StatusInternalServerError, http.StatusBadGateway}}
 	transport := &Transport{Base: base, InitialBackoff: time.Millisecond}
 
 	// When
-	resp, err := transport.RoundTrip(newRequest(t, "value=abc"))
+	resp, err := transport.RoundTrip(newRequestPath(t, "https://dns.example/Record.List", "value=abc"))
 
 	// Then
 	if err != nil {
@@ -82,6 +88,91 @@ func TestTransport_retries_transient_5xx_then_succeeds(t *testing.T) {
 	}
 	if base.attempts != 3 {
 		t.Fatalf("attempts=%d, want 3", base.attempts)
+	}
+}
+
+// F50-6（第 50 轮审计）：创建类请求（DNSPod Record.Create / 腾讯云
+// CreateRecord）对 5xx 不重放——创建响应丢失时重试会在 DNS 侧产生无 ID
+// 幽灵 TXT（清理只按 ownership 记录 ID 删除，幽灵条目永不收敛）。
+func TestTransport_createRecord_5xx_is_not_replayed(t *testing.T) {
+	for _, shape := range []struct {
+		name string
+		req  func(t *testing.T) *http.Request
+	}{
+		{name: "dnspod path", req: func(t *testing.T) *http.Request {
+			return newRequest(t, "value=abc")
+		}},
+		{name: "tencent header", req: func(t *testing.T) *http.Request {
+			req := newRequestPath(t, "https://dns.example/", "value=abc")
+			req.Header.Set("X-TC-Action", "CreateRecord")
+			return req
+		}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			// Given：持续 502
+			base := &countingTransport{statuses: []int{http.StatusBadGateway, http.StatusBadGateway, http.StatusBadGateway}}
+			transport := &Transport{Base: base, InitialBackoff: time.Millisecond}
+
+			// When
+			resp, err := transport.RoundTrip(shape.req(t))
+
+			// Then：首个 502 原样返回，单次调用不重试
+			if err != nil {
+				t.Fatalf("round trip: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadGateway {
+				t.Fatalf("status=%d, want 502（创建类 5xx 原样返回）", resp.StatusCode)
+			}
+			if base.attempts != 1 {
+				t.Fatalf("attempts=%d, want 1（创建类 5xx 不重放）", base.attempts)
+			}
+		})
+	}
+}
+
+// F50-6：创建类请求遇 429 恒定重试——限流响应意味着记录未被创建，
+// 重放无幽灵条目风险。
+func TestTransport_createRecord_429_is_still_retried(t *testing.T) {
+	// Given：先 429 后 200
+	base := &countingTransport{statuses: []int{http.StatusTooManyRequests}}
+	transport := &Transport{Base: base, InitialBackoff: time.Millisecond}
+
+	// When
+	resp, err := transport.RoundTrip(newRequest(t, "value=abc"))
+
+	// Then
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200（429 后重试成功）", resp.StatusCode)
+	}
+	if base.attempts != 2 {
+		t.Fatalf("attempts=%d, want 2（创建类 429 恒定重试）", base.attempts)
+	}
+}
+
+// F50-6：非创建类动作（Record.List/Remove 等）5xx 维持现状重试。
+func TestTransport_nonCreateAction_5xx_is_still_retried(t *testing.T) {
+	// Given：Record.List 先 503 后 200
+	base := &countingTransport{statuses: []int{http.StatusServiceUnavailable}}
+	transport := &Transport{Base: base, InitialBackoff: time.Millisecond}
+
+	// When
+	resp, err := transport.RoundTrip(newRequestPath(t, "https://dns.example/Record.List", "value=abc"))
+
+	// Then
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200", resp.StatusCode)
+	}
+	if base.attempts != 2 {
+		t.Fatalf("attempts=%d, want 2（非创建类 5xx 仍重试）", base.attempts)
 	}
 }
 

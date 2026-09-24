@@ -104,7 +104,10 @@ func SetIP2RegionAutoUpdate(enabled bool) error {
 	if enabled {
 		nextUpdate = versionTableNextSlot("security_ip2region_version", time.Now().UTC())
 	}
-	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=? WHERE id=1", enabled, nextUpdate); err != nil {
+	// F50-4（第 50 轮审计）：开启重排时失败退避 pending 的行保留退避点
+	//（先恢复服务，下个成功后回到排程节奏）——与 setVersionTableSchedule
+	// 的 F49-2 守卫同口径；关闭仍无条件清空。
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=CASE WHEN ? THEN IIF(COALESCE(update_status,'')='failed', next_update, ?) ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 IP2Region 自动更新开关: %w", err)
 	}
 	return nil
@@ -278,10 +281,16 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 			m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
 			return
 		case restored:
-			rErr := m.reloader()
-			recordSystemReloadAudit("ip2region_update", rErr)
-			if rErr != nil {
-				Logf("error", "ip2region update: reload after rollback failed: %v", rErr)
+			// P5-11（第 50 轮审计）：nil reloader 守卫——镜像本函数上方 F-47-3
+			// 主重载处与 successAfterReloadFailOpen 两处口径（及 CRS 侧
+			// crsinstall.go:314 / crsupdate.go:307）；nil 语义一致：不尝试重载、
+			// 不记审计，回滚落库路径照常。
+			if m.reloader != nil {
+				rErr := m.reloader()
+				recordSystemReloadAudit("ip2region_update", rErr)
+				if rErr != nil {
+					Logf("error", "ip2region update: reload after rollback failed: %v", rErr)
+				}
 			}
 			if errors.Is(reloadErr, errIP2RegionReload) {
 				m.fail(reloadErr)

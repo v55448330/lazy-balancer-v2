@@ -257,8 +257,9 @@ func threatListIDBySource(source string) int {
 }
 
 // threatListsReferencedByEnabledPolicy 报告任一名单 id 被启用策略引用
-// （ip_acl_list_refs/ip_whitelist_refs 均为 JSON 数字数组）。查询失败按
-// 「可能被引用」处理——宁可多一次重载，不欠引用方的渲染收敛。
+// （ip_acl_list_refs/ip_whitelist_refs 均为 JSON 数字数组）。查询失败与
+// refs JSON 解析失败（P5-10，第 50 轮审计）均按「可能被引用」处理——
+// 宁可多一次重载，不欠引用方的渲染收敛。
 func threatListsReferencedByEnabledPolicy(listIDs []int) bool {
 	want := map[int]bool{}
 	for _, id := range listIDs {
@@ -279,7 +280,9 @@ func threatListsReferencedByEnabledPolicy(listIDs []int) bool {
 		for _, raw := range []string{aclRefs, wlRefs} {
 			var ids []int
 			if err := json.Unmarshal([]byte(raw), &ids); err != nil {
-				continue
+				// P5-10：解析失败按「可能被引用」处理（与查询失败同口径）。
+				Logf("error", "威胁情报库: 策略引用 JSON 解析失败（按被引用处理）: %v", err)
+				return true
 			}
 			for _, id := range ids {
 				if want[id] {

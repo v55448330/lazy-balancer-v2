@@ -1410,3 +1410,28 @@ func TestClusterService_ReRegisterPreservesAccessURL(t *testing.T) {
 		t.Fatalf("access_url=%q after re-register, want preserved %q", accessURL, "https://node.example:8443")
 	}
 }
+
+// P5-6（第 50 轮审计）：ConfirmRegistration 清列必须与 Snapshot 旧协议交付
+// 确认（cluster_snapshot.go:84）对齐——registration_secret_expires_at 一并
+// 置 NULL，否则残留过期时间戳与已清空的 secret 长期分叉。
+func TestConfirmRegistration_clearsSecretAndExpiry(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO nodes (name,mode,ip_address,cluster_token_hash,registration_secret,registration_secret_expires_at,is_approved,status)
+		VALUES ('s1','slave','10.0.0.2',?, 'pending-secret', datetime('now','+30 minutes'),1,'online')`, tokenHash("slave-token")); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := service.ConfirmRegistration(context.Background(), "slave-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：secret 与过期时间戳双列均 NULL
+	var secret, expires sql.NullString
+	if err := database.QueryRow(`SELECT registration_secret, registration_secret_expires_at FROM nodes WHERE name='s1'`).Scan(&secret, &expires); err != nil {
+		t.Fatal(err)
+	}
+	if secret.Valid || expires.Valid {
+		t.Fatalf("registration_secret.Valid=%v expires_at.Valid=%v（值 %q/%q）, want 双列均 NULL", secret.Valid, expires.Valid, secret.String, expires.String)
+	}
+}

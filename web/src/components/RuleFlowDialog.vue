@@ -271,7 +271,9 @@
               <el-table-column label="协议" width="70" align="center">
                 <template #default="{ row }"><el-tag size="small" effect="plain" :type="row.protocol === 'https' || row.protocol === 'tls' ? 'warning' : 'primary'">{{ (row.protocol || 'http').toUpperCase() }}</el-tag></template>
               </el-table-column>
-              <el-table-column prop="weight" label="权重 %" width="70" align="center" />
+              <el-table-column label="权重 %" width="70" align="center">
+                <template #default="{ row }">{{ upstreamWeightPercent(target.upstreams ?? [], row) }}</template>
+              </el-table-column>
               <el-table-column prop="max_connections" :label="isTcp ? '最大连接' : '最大请求数'" width="90" align="center">
                 <template #default="{ row }">{{ row.max_connections > 0 ? row.max_connections : '不限' }}</template>
               </el-table-column>
@@ -548,6 +550,17 @@ const upstreamStateType = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enable
 // 自定义路由路径行辅助（上游面板路由分发明细分组共用）
 const enabledPathUpstreams = (pr: RuleFlowPathRule): Array<{ host: string; port: number; enabled: boolean }> =>
   pr.upstreams.filter((u) => u.enabled)
+
+// 权重 % 与 Rules.vue weightPercent 同口径（启用上游权重占比；禁用行与总和 ≤0 时 0）。
+// Rules.vue 的 weightPercent 为视图内本地函数、共享 utils 归本批次其他归属文件，
+// 此处同口径复刻，避免越界改动（F50-5）。
+const upstreamWeightPercent = (upstreams: readonly RuleFlowUpstream[], row: RuleFlowUpstream): number => {
+  if (upstreams.length === 0) return 0
+  if (row.enabled === false) return 0
+  const sum = upstreams.filter((u) => u.enabled !== false).reduce((s, u) => s + (u.weight || 0), 0)
+  if (sum <= 0) return 0
+  return Math.round(((row.weight || 0) / sum) * 100)
+}
 const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? '精确' : '前缀')
 
 // 计数 chip：静默拉取（未到数不渲染 chip；绝不渲染加载态字面）；

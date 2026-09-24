@@ -240,12 +240,13 @@ func TestProvider_getDomainID_not_found_after_all_pages(t *testing.T) {
 	}
 }
 
-// flakyTransport answers the first failCount requests with failStatus, then
-// with the DNSPod success envelope.
+// flakyTransport answers the first failCount requests of failPath with
+// failStatus, then with the DNSPod success envelope.
 type flakyTransport struct {
 	mu         sync.Mutex
 	failStatus int
 	failCount  int
+	failPath   string
 	attempts   int
 }
 
@@ -258,7 +259,10 @@ func (transport *flakyTransport) RoundTrip(request *http.Request) (*http.Respons
 	}
 	transport.mu.Lock()
 	transport.attempts++
-	failing := transport.attempts <= transport.failCount
+	// F50-6：失败注入限定 failPath 动作——创建类 5xx 不再重放（见
+	// TestProvider_Present_does_not_replay_create_on_5xx），接线本意
+	// 「瞬时故障重试」由非创建动作承载。
+	failing := transport.attempts <= transport.failCount && strings.HasSuffix(request.URL.Path, transport.failPath)
 	status := transport.failStatus
 	transport.mu.Unlock()
 
@@ -284,8 +288,9 @@ func (transport *flakyTransport) RoundTrip(request *http.Request) (*http.Respons
 }
 
 func TestProvider_apiCall_retries_transient_failures(t *testing.T) {
-	// Given: transient HTTP failures precede a success; the retrying
-	// transport (the provider's production wiring) must absorb them
+	// Given: transient HTTP failures on the non-create Domain.List action
+	// precede a success; the retrying transport (the provider's production
+	// wiring) must absorb them
 	testCases := []struct {
 		name     string
 		statuses []int
@@ -296,8 +301,10 @@ func TestProvider_apiCall_retries_transient_failures(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			// 包级 domainID 缓存按账户共享——清空以保证 Domain.List 真实走线。
+			seedDomainIDCache(t, "id,token", map[string]string{})
 			provider := New("id,token")
-			transport := &flakyTransport{failCount: len(testCase.statuses), failStatus: testCase.statuses[len(testCase.statuses)-1]}
+			transport := &flakyTransport{failCount: len(testCase.statuses), failStatus: testCase.statuses[len(testCase.statuses)-1], failPath: "Domain.List"}
 			provider.client.Transport = &retry.Transport{
 				Base:           transport,
 				InitialBackoff: time.Millisecond,
@@ -317,6 +324,34 @@ func TestProvider_apiCall_retries_transient_failures(t *testing.T) {
 				t.Fatalf("attempts=%d, want at least %d (failures retried)", transport.attempts, len(testCase.statuses)+1)
 			}
 		})
+	}
+}
+
+// F50-6（第 50 轮审计）：Record.Create 命中 5xx 不得重放——创建响应丢失时
+// 重试会产生无 ID 幽灵 TXT（ownership 清理只按记录 ID 删除），首个 5xx
+// 原样上抛、创建动作单次调用。
+func TestProvider_Present_does_not_replay_create_on_5xx(t *testing.T) {
+	// Given：Domain.List 正常、Record.Create 持续 500
+	// （清空包级 domainID 缓存，保证 Domain.List 真实走线）
+	seedDomainIDCache(t, "id,token", map[string]string{})
+	provider := New("id,token")
+	transport := &flakyTransport{failCount: 5, failStatus: http.StatusInternalServerError, failPath: "Record.Create"}
+	provider.client.Transport = &retry.Transport{
+		Base:           transport,
+		InitialBackoff: time.Millisecond,
+	}
+
+	// When
+	err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600)
+
+	// Then：500 直接失败且创建只调用一次（Domain.List 一次 + Create 一次）
+	if err == nil {
+		t.Fatal("present succeeded, want 500 surfaced（创建类 5xx 不重放）")
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if transport.attempts != 2 {
+		t.Fatalf("attempts=%d, want 2（Domain.List 一次 + Record.Create 单次不重放）", transport.attempts)
 	}
 }
 

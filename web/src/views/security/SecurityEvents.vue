@@ -33,11 +33,11 @@
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 100px" @keyup.enter="applyFilters" />
         <!-- 触发规则筛选：多选 + 头部全选（勾的就是看的，统一正向心智）。
-             全选（5 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
+             全选（6 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
              自定义 tag 时全部选中值英文逗号连接发送 rule_triggered（后端逐段按
              family/前缀/纯数字 ID 解析，OR 连接）。filterable + allow-create：可直接
              输入 CRS 规则 ID（如 942100）等自定义 tag 混入同一参数；自定义 tag 不参与
-             全选判定（只看 5 个类别是否全中）。 -->
+             全选判定（只看 6 个类别是否全中）。 -->
         <el-select
           v-model="filters.rule_triggered"
           multiple
@@ -59,6 +59,7 @@
           </template>
           <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
           <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（预检 id 800000+策略）" />
+          <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库预检拦截（id 14）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
           <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
           <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
@@ -89,7 +90,7 @@
         <el-table-column label="触发规则" min-width="100">
           <template #default="{ row }">
             <!-- CRS 规则（6 位 9xxxxx）：链接打开详情 + 快捷排除弹框；自定义 5 位/IP 族
-                 1-8 维持原纯文本 + msg 悬浮，无链接行为 -->
+                 1-8 与威胁情报库 id 14 维持原纯文本 + msg 悬浮，无链接行为 -->
             <el-link v-if="isCrsRuleId(row.rule_triggered)" type="primary" @click="openCrsDialog(row)">{{ triggeredLabel(row) }}</el-link>
             <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
               <span class="cell-tip">{{ triggeredLabel(row) }}</span>
@@ -326,7 +327,7 @@ import type { APIResponse } from '@/types'
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number; request_headers: string; request_body: string }
 
 // 触发规则 family 映射：'2'-'5' 与 '7'（允许模式预检拒绝，IP 白名单拒绝）为 IP 访问控制拦截，
-// '8' 为地域拦截，'11' 为请求体解析失败，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
+// '8' 为地域拦截，'14' 为威胁情报库预检拦截，'11' 为请求体解析失败，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
 const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
@@ -334,6 +335,7 @@ const triggeredLabel = (row: SecurityEvent): string => {
   if (t === '8') return '地域拦截'
   // 阶段化预检链（v2.3.1）：GeoIP 迁入预检后按 800000+策略_id 发射，同归地域拦截
   if (/^8\d{5}$/.test(t)) return '地域拦截'
+  if (t === '14') return '威胁情报库'
   if (t === '11') return '请求体解析失败'
   if (/^949/.test(t) || /^959/.test(t)) return '评分拦截'
   if (/^920/.test(t)) return '协议异常'
@@ -669,22 +671,22 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 
-// 触发规则筛选的 5 个类别（与后端 family 映射对齐，硬编码）；手输的自定义 tag
+// 触发规则筛选的 6 个类别（与后端 family 映射对齐，硬编码）；手输的自定义 tag
 //（如 CRS 规则 ID 942100）不属类别、不参与全选判定
-const TRIGGERED_CATEGORIES = ['IP 访问控制', '地域拦截', '请求体异常', 'WAF 规则（CRS）', '自定义规则'] as const
+const TRIGGERED_CATEGORIES = ['IP 访问控制', '地域拦截', '威胁情报库', '请求体异常', 'WAF 规则（CRS）', '自定义规则'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 const isTriggeredCategory = (v: string): v is TriggeredCategory => (TRIGGERED_CATEGORIES as readonly string[]).includes(v)
 
 const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
 
-// 头部全选复选框三态：5 类别全中=全选（自定义 tag 不影响判定）；部分中=半选
+// 头部全选复选框三态：6 类别全中=全选（自定义 tag 不影响判定）；部分中=半选
 const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
 const triggeredIndeterminate = computed(() => {
   const selected = filters.value.rule_triggered
   const hit = TRIGGERED_CATEGORIES.filter((c) => selected.includes(c)).length
   return hit > 0 && hit < TRIGGERED_CATEGORIES.length
 })
-// 全选复选框只管辖 5 个类别：勾选=类别全中、取消=类别全清，均保留自定义 tag
+// 全选复选框只管辖 6 个类别：勾选=类别全中、取消=类别全清，均保留自定义 tag
 const toggleTriggeredAll = (checked: CheckboxValueType) => {
   const custom = filters.value.rule_triggered.filter((v) => !isTriggeredCategory(v))
   filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES, ...custom] : custom
@@ -731,8 +733,8 @@ const fetchEvents = async () => {
     if (filters.value.action) p.set('action', filters.value.action)
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
-    // 触发规则：全选（5 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；
-    // 子集（1~4 个类别）或含自定义 tag 时，全部选中值英文逗号连接发送 rule_triggered
+    // 触发规则：全选（6 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；
+    // 子集（1~5 个类别）或含自定义 tag 时，全部选中值英文逗号连接发送 rule_triggered
     //（后端逐段独立解析、OR 连接；含逗号的消息关键词会整串回退为消息搜索，前端只管连接）
     const triggeredSelected = filters.value.rule_triggered
     const triggeredAllHit = TRIGGERED_CATEGORIES.every((c) => triggeredSelected.includes(c))
@@ -829,6 +831,6 @@ onMounted(fetchEvents)
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; margin-right: 0; }
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox .el-checkbox__label { padding-left: 8px; }
 /* 选中项不加粗：EP 2.14 多选下拉 is-selected 默认 font-weight:bold，该筛选常态
-   全选（5 类别全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
+   全选（6 类别全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
 .triggered-filter-popper .el-select-dropdown__item.is-selected { font-weight: normal; }
 </style>

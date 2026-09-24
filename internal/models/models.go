@@ -154,11 +154,14 @@ type LbRule struct {
 	CAProviderID                  int        `json:"ca_provider_id"`
 	TLSCert                       string     `json:"tls_cert,omitempty"`
 	TLSKey                        string     `json:"tls_key,omitempty"`
-	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
-	EnableCompress                bool       `json:"enable_compress"`
-	CompressTypes                 string     `json:"compress_types"`
-	Enabled                       bool       `json:"enabled"`
-	LogEnabled                    bool       `json:"log_enabled"`
+	// TLSKeySet 标记「已有隐藏私钥」——GetRule 对只读 Key/非管理员掩码 tls_key
+	// 为空串时置 true，编辑表单借此区分「未配置」与「已隐藏」（F50-7）。
+	TLSKeySet       bool   `json:"tls_key_set,omitempty"`
+	TLSHTTPRedirect bool   `json:"tls_http_redirect"`
+	EnableCompress  bool   `json:"enable_compress"`
+	CompressTypes   string `json:"compress_types"`
+	Enabled         bool   `json:"enabled"`
+	LogEnabled      bool   `json:"log_enabled"`
 	// 阶段拦截页（规则级覆盖层，阶段化安全流水线）：阶段 1=IP 访问控制+地域
 	// 拦截预检，阶段 3=WAF；0=未配（跟随策略，v2.3.1 逐策略归因默认层）。
 	// status ∈ {0,400,401,403,404,503}，0 在渲染侧归一 403。

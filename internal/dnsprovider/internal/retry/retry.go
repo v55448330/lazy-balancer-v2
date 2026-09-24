@@ -2,6 +2,12 @@
 // failures (HTTP 429 and 5xx) with exponential backoff. It is shared by the
 // DNSPod and Tencent Cloud providers so a momentary API hiccup does not
 // immediately fail an ACME DNS-01 challenge and burn CA order quota.
+//
+// F50-6（第 50 轮审计）：创建类请求（DNSPod Record.Create / 腾讯云
+// CreateRecord）对 5xx 不重放——创建响应丢失时重试会在 DNS 侧产生一条
+// 无 ID 幽灵 TXT（清理只按 ownership 记录 ID 删除，幽灵条目永不收敛）；
+// 429 恒定重试（限流响应意味着记录未被创建）。非创建类动作维持重试；
+// 传输错误/超时本就不重试（RoundTrip 直接返回错误）。
 package retry
 
 import (
@@ -9,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +49,15 @@ func After(header string) time.Duration {
 		}
 	}
 	return 0
+}
+
+// createRecordAction 判定创建类 DNS 请求：DNSPod 走 URL 路径
+// （apiBase+"Record.Create"），腾讯云走 X-TC-Action 头。
+func createRecordAction(request *http.Request) bool {
+	if strings.EqualFold(request.Header.Get("X-TC-Action"), "CreateRecord") {
+		return true
+	}
+	return strings.HasSuffix(request.URL.Path, "/Record.Create")
 }
 
 // Transport wraps a base RoundTripper and retries requests whose response is
@@ -84,6 +100,10 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		if attempt >= attempts || !Retryable(response.StatusCode) {
+			return response, nil
+		}
+		if response.StatusCode != http.StatusTooManyRequests && createRecordAction(request) {
+			// F50-6：创建类动作的 5xx 不重放（幽灵 TXT，见包注释）；429 恒定重试。
 			return response, nil
 		}
 		wait := backoff

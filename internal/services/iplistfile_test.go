@@ -161,3 +161,31 @@ func TestGCStaleIPListFiles_removesOldUnreferencedOnly(t *testing.T) {
 		t.Fatalf("removed=%d, want 2", removed)
 	}
 }
+
+// P5-19（第 50 轮审计）：gcStaleIPListFiles 顺带 prune lastRef 中早于 maxAge
+// 的引用条目——否则引用集只增不删（孤儿文件的引用记录永久驻留内存）；
+// 未超龄条目保留（prune 不依赖文件是否存在）。
+func TestGCStaleIPListFiles_prunesStaleRefEntries(t *testing.T) {
+	stale := filepath.Join(IPListDataDir, "stale-deadbeef00aa.txt")
+	fresh := filepath.Join(IPListDataDir, "fresh-deadbeef00bb.txt")
+	ipListRenderRefs.Lock()
+	ipListRenderRefs.lastRef[stale] = time.Now().Add(-48 * time.Hour)
+	ipListRenderRefs.lastRef[fresh] = time.Now()
+	ipListRenderRefs.Unlock()
+	t.Cleanup(func() { forgetIPListRenderRefForTest(stale); forgetIPListRenderRefForTest(fresh) })
+
+	// When
+	gcStaleIPListFiles(time.Now(), 24*time.Hour)
+
+	// Then：超龄条目被 prune，未超龄保留
+	ipListRenderRefs.Lock()
+	_, staleOK := ipListRenderRefs.lastRef[stale]
+	_, freshOK := ipListRenderRefs.lastRef[fresh]
+	ipListRenderRefs.Unlock()
+	if staleOK {
+		t.Fatal("超龄引用条目未被 prune（lastRef 只增不删）")
+	}
+	if !freshOK {
+		t.Fatal("未超龄引用条目被误 prune")
+	}
+}

@@ -87,6 +87,8 @@ export interface Rule extends ProxyTimeoutConfig {
   ca_provider_id: number
   tls_cert?: string
   tls_key?: string
+  // F50-7：GetRule 对只读 Key/非管理员掩码 tls_key 时的「已有隐藏私钥」标记
+  tls_key_set?: boolean
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string

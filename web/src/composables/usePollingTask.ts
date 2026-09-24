@@ -137,6 +137,9 @@ export const usePollingTask = (
 
   const resume = (): void => {
     start()
+    // 恢复即刷新（F50-8）：与 visibilitychange 恢复路径（beginInterval + void run()）
+    // 同口径——pause 的 invalidate 已丢弃 pending，run 内 inFlight 去重，不会重复执行。
+    void run()
   }
 
   onUnmounted(stop)

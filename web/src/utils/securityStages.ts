@@ -343,25 +343,32 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
 }
 
 // 阶段 1 · IP 访问控制摘要（2026-09-24 用户裁定「所有统计类型数据必须是真实
-// 数据」）：deny 模式的生效黑名单 = 名单侧（内联 ∪ 引用）+ 独立 ip_blacklist
-// 字段，两源合计如实呈现；此前摘要恒挂「黑名单 N 条」独立字段尾巴，该字段为
-// 0 时「黑名单 0 条」会被读成生效数为零。锁摘要/流程弹框/策略列表共用。
+// 数据」）：deny 模式的生效黑名单 = 名单侧（内联 ∪ 引用，须 ip_acl_enabled）
+// + 独立 ip_blacklist 字段，两源合计如实呈现。锁摘要/流程弹框/策略列表共用。
+// F50-11（第 50 轮审计·U9 四链实证）收窄：①名单侧计数必须过 ip_acl_enabled
+// 门——ACL 已关闭（保留名单）时名单不生效（渲染 buildIPPrecheckDirectives
+// security.go:996 同门）；②独立黑名单无模式/开关门（security.go:1004-1006，
+// 既有有意裁定）——allow/bypass 模式下摘要不得隐去它仍在拦截的事实。
 export const aclEffectiveCounts = (
   ipLists: readonly SecurityStageIPList[],
-  policy: { ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
+  policy: { ip_acl_enabled?: boolean; ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
 ): { aclCount: number; blCount: number; effective: number } => {
-  const aclCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+  const aclCount = policy.ip_acl_enabled === false
+    ? 0
+    : mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
   const blCount = parseIPList(policy.ip_blacklist).length
   return { aclCount, blCount, effective: policy.ip_acl_mode === 'deny' ? aclCount + blCount : aclCount }
 }
 
 export const formatAclModeDetail = (
   ipLists: readonly SecurityStageIPList[],
-  policy: { ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
+  policy: { ip_acl_enabled?: boolean; ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
 ): string => {
   const { aclCount, blCount, effective } = aclEffectiveCounts(ipLists, policy)
-  if (policy.ip_acl_mode === 'allow') return `白名单模式 · ${effective} 条`
-  if (policy.ip_acl_mode === 'bypass') return `免检测模式 · ${effective} 条`
+  // 独立黑名单无模式门——非 deny 模式下如实追告「仍在生效」（渲染侧照常拦截）
+  const blAlive = blCount > 0 && policy.ip_acl_mode !== 'deny' ? `；独立黑名单 ${blCount} 条仍生效` : ''
+  if (policy.ip_acl_mode === 'allow') return `白名单模式 · ${effective} 条${blAlive}`
+  if (policy.ip_acl_mode === 'bypass') return `免检测模式 · ${effective} 条${blAlive}`
   if (aclCount > 0 && blCount > 0) return `黑名单模式 · ${effective} 条（名单 ${aclCount} + 独立 ${blCount}）`
   return `黑名单模式 · ${effective} 条`
 }
@@ -651,11 +658,13 @@ export const attachStageDetails = (
 
 export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'mixed'
 
+// F50-11 追加（P5-24）：阶段文案单一事实源=STAGE_TITLES——F49-P5-9 合并后
+// 的遗留双源消除，阶段措辞微调不再需双处同步
 export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
-  stage0: '阶段 0 · 信任名单',
-  stage1: '阶段 1 · IP 访问控制',
-  stage2: '阶段 2 · 限流',
-  stage3: '阶段 3 · WAF',
+  stage0: STAGE_TITLES[0],
+  stage1: STAGE_TITLES[1],
+  stage2: STAGE_TITLES[2],
+  stage3: STAGE_TITLES[3],
   mixed: '混合策略（兼容旧版）',
 }
 

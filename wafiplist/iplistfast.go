@@ -138,11 +138,19 @@ func loadIPListFile(path string, fresh bool) (state *ipListFileState, err error)
 	}
 	ipListCache.Lock()
 	// 双检：并发重建只保留一份（后到者若基于同一 stat 形态则为同内容重复）。
-	if current := ipListCache.states[path]; current != nil &&
-		current.mtime.Equal(info.ModTime()) && current.size == info.Size() && current != cached {
-		ipListCache.Unlock()
-		current.lastCheckNano.Store(time.Now().UnixNano())
-		return current, nil
+	if current := ipListCache.states[path]; current != nil {
+		if current.mtime.Equal(info.ModTime()) && current.size == info.Size() && current != cached {
+			ipListCache.Unlock()
+			current.lastCheckNano.Store(time.Now().UnixNano())
+			return current, nil
+		}
+		// P5-1（第 50 轮审计）代际守卫：并发重建时缓存里已是更晚 mtime 的
+		// 新代际——本代际基于更早 stat 的解析结果不得覆盖（旧内容回流）。
+		if current.mtime.After(info.ModTime()) {
+			ipListCache.Unlock()
+			current.lastCheckNano.Store(time.Now().UnixNano())
+			return current, nil
+		}
 	}
 	ipListCache.states[path] = state
 	ipListCache.Unlock()

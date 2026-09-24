@@ -38,6 +38,22 @@ func purgeAPIKeyWhitelistCache(keyID int) {
 	}
 }
 
+// apiKeyWhitelistCachePurgeAll 由 middleware 包注入（同上的倒置装配，P5-21）：
+// 配置备份导入整体替换 api_keys 表——键含 keyID 前缀无法枚举存活 Key，须全量
+// 清空。nil=未装配（单测直连 handlers 时静默跳过）。
+var apiKeyWhitelistCachePurgeAll func()
+
+// SetAPIKeyWhitelistCachePurgeAll 装配全量清扫钩子（middleware init 注册）。
+func SetAPIKeyWhitelistCachePurgeAll(purge func()) {
+	apiKeyWhitelistCachePurgeAll = purge
+}
+
+func purgeAllAPIKeyWhitelistCache() {
+	if apiKeyWhitelistCachePurgeAll != nil {
+		apiKeyWhitelistCachePurgeAll()
+	}
+}
+
 func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 	userID := int(contextUserID(c))
 	rows, err := db.DB.Query(`

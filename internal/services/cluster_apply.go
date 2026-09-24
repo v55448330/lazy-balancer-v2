@@ -67,6 +67,17 @@ func RequestRestart() bool {
 	return true
 }
 
+// apiKeyWhitelistCachePurgeAll 由 middleware 包 init 装配（middleware→services
+// 单向导入无环，P5-21 第 50 轮审计）：users 节（含 api_keys）整体替换提交后
+// 清空 API Key 白名单 CIDR 解析缓存——缓存键形 keyID|白名单原串无法枚举存活
+// Key，逐 Key 清扫不可行。默认空操作（单测直连 services 时无 middleware 装配）。
+var apiKeyWhitelistCachePurgeAll = func() {}
+
+// SetAPIKeyWhitelistCachePurgeAll 装配全量清扫钩子（middleware init 注册）。
+func SetAPIKeyWhitelistCachePurgeAll(purge func()) {
+	apiKeyWhitelistCachePurgeAll = purge
+}
+
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
 	// C-4(2026-09-10 审计):ACME 状态校验由 Pull 侧 verifiedSnapshotIntegrity 统一
 	// 执行(验签后、apply 前单点);此处重复执行已删——applySnapshot 唯一生产
@@ -140,6 +151,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 不重放。失败仅记日志（ApplyLogLevel 内部已记），不中断同步。
 	if !skip.skip("users") {
 		ApplyLogLevel()
+		// P5-21（第 50 轮审计）：api_keys 已随 users 节整体替换并提交——清空
+		// 白名单 CIDR 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
+		apiKeyWhitelistCachePurgeAll()
 		// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
 		// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
 		// CL9-N13:与 materializeSnapshotDNSOwnership 同口径 nil 防御。

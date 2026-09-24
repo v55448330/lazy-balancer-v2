@@ -163,3 +163,44 @@ func TestDeleteCertJob_row_disappearing_before_disable_returns_404(t *testing.T)
 		t.Fatalf("body=%s, want Job not found", response.Body.String())
 	}
 }
+
+func TestDeleteCertJob_restore_skips_when_row_left_disabled(t *testing.T) {
+	// P5-20（第 50 轮审计）：恢复 UPDATE 必须带 AND status='disabled' 守卫——
+	// 删除窗口内行被并发移离 disabled（如 worker 重新排队）时，恢复不得把
+	// 已推进的状态覆写回原态；RowsAffected=0 须并入 deleteErr 上抛 500。
+	// Given：failed 任务 + DELETE 恒失败（触发器注入）
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_restore','restore.example.test','failed')`); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if _, err := db.DB.Exec(`CREATE TRIGGER certjob_delete_abort BEFORE DELETE ON cert_jobs BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("DROP TRIGGER IF EXISTS certjob_delete_abort") })
+	oldHook := deleteCertJobPreRestoreHook
+	deleteCertJobPreRestoreHook = func(jobID int) {
+		// 模拟 worker 在删除窗口内把行重新排队（移离 disabled）
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='queued', updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+			t.Errorf("simulate worker requeue: %v", err)
+		}
+	}
+	t.Cleanup(func() { deleteCertJobPreRestoreHook = oldHook })
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+
+	// Then：500 上抛；行状态不被恢复覆写（保持 queued）
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（恢复跳过须并入 deleteErr 上抛）", response.Code, response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=1").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("status=%q, want queued（行已移离 disabled，恢复不得覆写）", status)
+	}
+}

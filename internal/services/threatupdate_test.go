@@ -536,3 +536,35 @@ func TestThreatUpdate_listExistenceQueryErrorNotFastPathSuccess(t *testing.T) {
 		t.Fatal("failed 行必须携带失败原因")
 	}
 }
+
+// P5-10（第 50 轮审计）：策略 refs JSON 解析失败按「可能被引用」处理——与
+// 同函数查询失败口径一致（宁可多一次重载，不欠引用方的渲染收敛）。
+func TestThreatListsReferenced_invalidRefsTreatedAsReferenced(t *testing.T) {
+	newClusterTestService(t)
+	// Given：启用策略持有不可解析的 refs JSON
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, policy_type, enabled)
+		VALUES (901, '坏引用策略', 'blocking', 1, 'deny', 'not-json', 'stage1', 1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When/Then：按被引用处理（true）
+	if !threatListsReferencedByEnabledPolicy([]int{424242}) {
+		t.Fatal("refs JSON 解析失败须按可能被引用处理（true）——与查询失败口径一致")
+	}
+}
+
+// 回归形状：可解析且不含目标 id 的 refs 不受影响（false）。
+func TestThreatListsReferenced_parseableRefsMiss(t *testing.T) {
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, policy_type, enabled)
+		VALUES (902, '正常引用策略', 'blocking', 1, 'deny', '[7,8]', 'stage1', 1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if threatListsReferencedByEnabledPolicy([]int{424242}) {
+		t.Fatal("可解析 refs 不含目标 id 时应为 false")
+	}
+	if !threatListsReferencedByEnabledPolicy([]int{8}) {
+		t.Fatal("可解析 refs 含目标 id 时应为 true")
+	}
+}

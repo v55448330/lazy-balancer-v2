@@ -4,7 +4,7 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Setting /></el-icon>
-          <span>主节点同步设置</span>
+          <span>{{ status.node_mode === 'slave' ? '集群同步设置（主端下发）' : '主节点同步设置' }}</span>
         </div>
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
       </div>

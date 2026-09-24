@@ -152,6 +152,38 @@ func TestDuplicateRule_toleratesNullEnabledUpstream(t *testing.T) {
 	}
 }
 
+// F50-1（第 50 轮审计）：DuplicateRule 复制含 NULL dynamic_dns 上游的规则
+// 不得 500（裸 scan NULL→bool 报错）；副本按 0 归一落库（与 NULL enabled
+// 同批的 IIF 归一口径）。
+func TestDuplicateRule_toleratesNullDynamicDNSUpstream(t *testing.T) {
+	// Given
+	handler := newRuleFeatureTestHandlers(t)
+	seedAuditRule(t, "lb_nulldns_dup", "source", "nulldns.example.test", 8080, true, "manual", false)
+	simulateLegacyNullableUpstreams(t, db.DB)
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,dynamic_dns,enabled,protocol) VALUES ('lb_nulldns_dup','127.0.0.1',9001,1,NULL,1,'http')`); err != nil {
+		t.Fatalf("seed null-dynamic_dns upstream: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+	request := httptest.NewRequest(http.MethodPost, "/rules/lb_nulldns_dup/duplicate", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then 201，副本上游 dynamic_dns 归一为 0
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var count, dynDNS int
+	if err := db.DB.QueryRow(`SELECT COUNT(*), COALESCE(dynamic_dns,9) FROM upstreams WHERE rule_id=(SELECT caddy_id FROM lb_rules WHERE name='source（副本）')`).Scan(&count, &dynDNS); err != nil {
+		t.Fatalf("read duplicated upstream: %v", err)
+	}
+	if count != 1 || dynDNS != 0 {
+		t.Fatalf("duplicated upstream count=%d dynamic_dns=%d, want 1/0", count, dynDNS)
+	}
+}
+
 // Round 34 F-4: AuditLogSizeMB ≤ 0 拒绝（与 RuntimeLogSizeMB/CertJobLogSizeMB
 // 的 >0 校验同口径），负值不再经集群同步照单全收。
 func TestUpdateConfig_rejectsAuditLogSizeMBAtOrBelowZero(t *testing.T) {

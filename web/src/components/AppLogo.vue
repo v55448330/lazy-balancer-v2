@@ -1,12 +1,12 @@
 <template>
   <svg :width="size" :height="size" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" class="app-logo" aria-hidden="true">
     <defs>
-      <linearGradient id="lb-logo-grad" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <linearGradient :id="gradId" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="#3b82f6" />
         <stop offset="1" stop-color="#2563eb" />
       </linearGradient>
     </defs>
-    <rect width="40" height="40" rx="9" fill="url(#lb-logo-grad)" />
+    <rect width="40" height="40" rx="9" :fill="`url(#${gradId})`" />
     <g stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.95">
       <path d="M12 20 C 17 20, 21 13, 26 11.5" />
       <path d="M12 20 L26 20" />
@@ -20,7 +20,12 @@
 </template>
 
 <script setup lang="ts">
+import { useId } from 'vue'
+
 withDefaults(defineProps<{ size?: number | string }>(), { size: 40 })
+
+// P5-23：字面量 id 在多实例页（如登录页+布局）会重复，useId 生成实例唯一 id
+const gradId = useId()
 </script>
 
 <style scoped>

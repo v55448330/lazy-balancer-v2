@@ -447,7 +447,7 @@
                     v-model="wizardForm.tls_key" 
                     type="textarea" 
                     :rows="8" 
-                    placeholder="-----BEGIN PRIVATE KEY-----..." 
+                    :placeholder="wizardForm.tlsKeySet && !wizardForm.tls_key.trim() ? '已配置（私钥已隐藏，粘贴新私钥可更换）' : '-----BEGIN PRIVATE KEY-----...'"
                     class="cert-textarea"
                     @blur="validateCertificate"
                   />
@@ -1152,6 +1152,8 @@ interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 
   ca_provider_id?: number
   compress_types: string[]
   enabled: boolean
+  // F50-7：编辑手动证书规则时 GetRule 回传的「私钥已隐藏」标记
+  tlsKeySet: boolean
 }
 
 interface CertificateConfig {
@@ -1905,6 +1907,7 @@ const wizardForm = reactive<RuleForm>({
   ca_provider_id: undefined as number | undefined,
   tls_cert: '',
   tls_key: '',
+  tlsKeySet: false,
   tls_http_redirect: false,
   enable_compress: false,
   compress_types: ['gzip'],
@@ -2318,6 +2321,9 @@ const openWizard = async (rule?: Rule) => {
       ca_provider_id: fullRule.ca_provider_id ?? 0,
       tls_cert: fullRule.tls_cert || '',
       tls_key: fullRule.tls_key || '',
+      // F50-7：GetRule 掩码私钥时仅回 tls_key_set 标记——表单据此区分「未配置」
+      // 与「已隐藏」（提交空 tls_key 后端保留原值）
+      tlsKeySet: fullRule.tls_key_set === true,
       tls_http_redirect: fullRule.tls_http_redirect || false,
       enable_compress: fullRule.enable_compress !== false,
       compress_types: compressTypes,
@@ -2534,8 +2540,9 @@ const nextStep = (): void => {
       ElMessage.warning('请选择 DNS 提供商配置')
       return
     }
-    if (wizardForm.tls_source === 'manual' && (!wizardForm.tls_cert.trim() || !wizardForm.tls_key.trim())) {
-      ElMessage.warning('请上传证书和私钥')
+    // F50-7：掩码私钥（tlsKeySet=true）且未粘贴新私钥时允许通过——后端保留原值
+    if (wizardForm.tls_source === 'manual' && (!wizardForm.tls_cert.trim() || (!wizardForm.tls_key.trim() && !wizardForm.tlsKeySet))) {
+      ElMessage.warning(wizardForm.tls_cert.trim() ? '请上传证书和私钥（或粘贴新私钥以更换）' : '请上传证书和私钥')
       return
     }
     moveToAdjacentWizardStep(1)

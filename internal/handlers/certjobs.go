@@ -34,6 +34,10 @@ var retryCertJobPreEnqueueHook func(jobID int)
 // 回归测试）。
 var deleteCertJobPreDisableHook func(jobID int)
 
+// deleteCertJobPreRestoreHook 是测试专用钩子：DELETE 失败后、状态恢复 UPDATE
+// 之前触发，用于模拟「行在删除窗口内被并发移离 disabled」（P5-20 回归测试）。
+var deleteCertJobPreRestoreHook func(jobID int)
+
 var certJobIndexState struct {
 	sync.Mutex
 	databases map[*sql.DB]struct{}
@@ -500,18 +504,28 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	result, err = db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
 	if err != nil {
 		deleteErr := err
+		if deleteCertJobPreRestoreHook != nil {
+			deleteCertJobPreRestoreHook(id)
+		}
 		if status == "downloaded" && certPEM != "" && keyPEM != "" {
 			// F49-8（对齐 caqueue requeueCanceledJob 的 R57 A-#5 口径）：持有证书
 			// 材料的 downloaded 任务停在部署窗口——转 'queued' 会丢弃已签发证书
 			// 并触发整轮重签（Issue 快速路径只认 issued/downloaded）。原地恢复
 			// 'downloaded' 并把重试窗口推到 now，Resume 的
 			// rescanDroppedDeploymentRetries 会统一重新调度部署。
-			if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status='downloaded', deployment_available_after=datetime('now'), message='删除失败，等待恢复部署', updated_at=datetime('now') WHERE id=?", id); restoreErr != nil {
+			// P5-20（第 50 轮审计）：恢复带 status='disabled' 守卫——行在删除窗口
+			// 内被并发移离 disabled 时不得覆写其新状态；命中 0 行并入 deleteErr。
+			if res, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status='downloaded', deployment_available_after=datetime('now'), message='删除失败，等待恢复部署', updated_at=datetime('now') WHERE id=? AND status='disabled'", id); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)
+			} else if n, _ := res.RowsAffected(); n == 0 {
+				deleteErr = errors.Join(deleteErr, fmt.Errorf("任务 %d 已被并发移离 disabled，恢复已跳过", id))
 			}
 		} else if status == "issued" || status == "failed" {
-			if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=?", status, id); restoreErr != nil {
+			// P5-20：同上方守卫口径。
+			if res, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=? AND status='disabled'", status, id); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)
+			} else if n, _ := res.RowsAffected(); n == 0 {
+				deleteErr = errors.Join(deleteErr, fmt.Errorf("任务 %d 已被并发移离 disabled，恢复已跳过", id))
 			}
 		} else {
 			qm := services.GetCAQueueManager()

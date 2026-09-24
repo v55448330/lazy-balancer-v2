@@ -2,7 +2,7 @@
 
 ## 概述
 
-Lazy Balancer V2 内置 **Model Context Protocol (MCP)** 服务，AI 代理可通过 128 个工具操作全部功能。
+Lazy Balancer V2 内置 **Model Context Protocol (MCP)** 服务，AI 代理可通过 129 个工具操作全部功能。
 
 ## 接入
 
@@ -27,7 +27,7 @@ curl -s http://localhost:8000/api/v1/mcp \
 
 | Key 类型 | 可用工具 |
 |---|---|
-| 管理员 Key（读写） | 全部 128 个工具 |
+| 管理员 Key（读写） | 全部 129 个工具 |
 | 只读 Key（read_only） | GET 查询工具（export_config 除外——导出含用户/密钥哈希，与写操作同级隐藏）+ 5 个读探测 POST 工具（test_ca_provider / test_certificate_config / parse_certificate / validate_import / preview_config） |
 | IP 白名单 Key | 请求来源 IP 必须命中白名单（MCP 内部转发不受影响） |
 

@@ -139,11 +139,11 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	// 60 = GET 工具 56（含 get_rule_stage_stats，阶段化流水线批 2 新增） - export_config 隐藏 + 5 个读探测 POST 工具
+	// 61 = GET 工具 57（含 get_ip_list，F50-2 第 50 轮审计新增） - export_config 隐藏 + 5 个读探测 POST 工具
 	// (ApiMcp-新1:REST 只读白名单同口径——test_ca_provider/test_certificate_config/
 	// parse_certificate/validate_import/preview_config 转发侧守卫可通过,可见)
-	if len(payload.Result.Tools) != 60 {
-		t.Fatalf("read-only tool count=%d, want 60", len(payload.Result.Tools))
+	if len(payload.Result.Tools) != 61 {
+		t.Fatalf("read-only tool count=%d, want 61", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {
@@ -627,6 +627,44 @@ func TestAddIPToListToolForwardsValue(t *testing.T) {
 	}
 	if receivedBody != `{"value":"203.0.113.7"}` {
 		t.Fatalf("body=%s, want value only (id belongs to path)", receivedBody)
+	}
+}
+
+func TestGetIPListToolForwardsID(t *testing.T) {
+	// Given：v2.3.2 名单瘦身后 list_ip_lists 仅含 entry_count，读条目唯一通道
+	// 是 GET /security/ip-lists/:id——F50-2（第 50 轮审计）补 get_ip_list 工具
+	// 覆盖该端点（GET 只读，id 进路径）。
+	var receivedMethod, receivedPath string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod, receivedPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":9,"name":"办公网","entries":[{"value":"10.0.0.0/8","remark":"内网段"}],"entry_count":1,"system":false}}`))
+	}))
+	defer rest.Close()
+
+	// When/Then：tools/list 含 get_ip_list（GET，路径参数契约形态）
+	found := false
+	for _, spec := range ListToolSpecs() {
+		if spec.Name == "get_ip_list" {
+			found = true
+			if spec.Method != http.MethodGet || spec.Path != "/api/v1/security/ip-lists/{id}" {
+				t.Errorf("spec=%s %s", spec.Method, spec.Path)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tools/list 缺 get_ip_list")
+	}
+
+	// When
+	result := callTool(t, New(rest.URL+"/api/v1", rest.Client()), "get_ip_list", `{"id":9}`)
+
+	// Then：转发到 GET /api/v1/security/ip-lists/9，响应原文含 entries
+	if receivedMethod != http.MethodGet || receivedPath != "/api/v1/security/ip-lists/9" {
+		t.Fatalf("request=%s %s", receivedMethod, receivedPath)
+	}
+	if !strings.Contains(result, "entries") {
+		t.Fatalf("result=%q, want forwarded entries payload", result)
 	}
 }
 

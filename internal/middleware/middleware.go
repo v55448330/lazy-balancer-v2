@@ -99,8 +99,20 @@ func PurgeAPIKeyWhitelistCache(keyID int) {
 	})
 }
 
+// PurgeAllAPIKeyWhitelistCache 清空全部白名单 CIDR 解析缓存（P5-21，第 50 轮
+// 审计）：配置备份导入与集群快照应用都整体替换 api_keys 表——键含 keyID
+// 前缀无法枚举存活 Key，逐 Key 清扫不可行，必须全清（解析缓存重建廉价）。
+func PurgeAllAPIKeyWhitelistCache() {
+	apiKeyWhitelistCache.Range(func(key, _ any) bool {
+		apiKeyWhitelistCache.Delete(key)
+		return true
+	})
+}
+
 func init() {
 	handlers.SetAPIKeyWhitelistCachePurge(PurgeAPIKeyWhitelistCache)
+	handlers.SetAPIKeyWhitelistCachePurgeAll(PurgeAllAPIKeyWhitelistCache)
+	services.SetAPIKeyWhitelistCachePurgeAll(PurgeAllAPIKeyWhitelistCache)
 }
 
 // auditClientIP 审计源 IP（第 15 轮审计 K-1）：内部 MCP 转发请求（本机回环
