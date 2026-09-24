@@ -501,7 +501,7 @@
               <span class="form-tip-inline">将 HTTP 请求自动重定向到 HTTPS</span>
             </el-form-item>
           </el-form>
-          <el-alert v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" type="info" :closable="false" title="请先在基本配置中启用 HTTPS" style="margin-top: 20px;" />
+          <div v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" class="info-note-bar info-note-bar--inset" style="margin-top: 20px"><span class="info-note-desc">请先在基本配置中启用 HTTPS</span></div>
         </div>
 
 
@@ -514,7 +514,7 @@
                 <el-icon><Plus /></el-icon>添加上游
               </el-button>
             </div>
-            <el-alert v-if="wizardForm.dynamic_dns" type="info" :closable="false" title="动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP" style="margin-bottom: 12px;" />
+            <div v-if="wizardForm.dynamic_dns" class="info-note-bar info-note-bar--inset"><span class="info-note-desc">动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP</span></div>
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
               <el-table-column label="主机地址 *" min-width="180">

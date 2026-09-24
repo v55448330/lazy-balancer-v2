@@ -145,13 +145,7 @@
         </el-form-item>
       </el-form>
 
-      <el-alert
-        class="mcp-auth-alert"
-        description="请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
+      <div class="info-note-bar"><span class="info-note-desc">请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。</span></div>
 
       <el-collapse class="mcp-agent-guide">
         <el-collapse-item title="AI Agent 接入指南（协议流程 / 自签证书 / 错误码）" name="agent-guide">
@@ -237,6 +231,7 @@
 
     <el-dialog
       v-model="createDialogVisible"
+      class="key-form-dialog"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!creating"
@@ -299,12 +294,7 @@
             @input="createWhitelistError = ''"
           />
         </el-form-item>
-        <el-alert
-          title="IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。"
-          type="info"
-          :closable="false"
-          show-icon
-        />
+        <div class="info-note-bar"><span class="info-note-desc">IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。</span></div>
       </el-form>
       <template #footer>
         <el-button :disabled="creating" @click="createDialogVisible = false">取消</el-button>
@@ -314,6 +304,7 @@
 
     <el-dialog
       v-model="featureDialogVisible"
+      class="key-form-dialog"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!featureSaving"
@@ -361,12 +352,7 @@
             @input="featureWhitelistError = ''"
           />
         </el-form-item>
-        <el-alert
-          title="IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。"
-          type="info"
-          :closable="false"
-          show-icon
-        />
+        <div class="info-note-bar"><span class="info-note-desc">IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。</span></div>
       </el-form>
       <template #footer>
         <el-button :disabled="featureSaving" @click="featureDialogVisible = false">取消</el-button>
@@ -774,13 +760,6 @@ onMounted(() => {
 
 .readonly-alert { margin: -2px 0 18px; }
 
-.mcp-auth-alert { margin-bottom: 20px; }
-/* 2026-09-19 用户反馈:认证方式说明的标题/描述/图标默认大号(el-alert 无 size
-   约束),与弹框正文不协调——收敛到 small 形态字号 */
-.mcp-auth-alert :deep(.el-alert__title) { font-size: 13px; }
-.mcp-auth-alert :deep(.el-alert__description) { font-size: 12px; line-height: 1.6; margin-top: 2px; }
-.mcp-auth-alert :deep(.el-alert__icon) { font-size: 15px; width: 15px; }
-
 .mcp-agent-guide { margin-bottom: 20px; }
 .mcp-guide-subtitle { font-weight: 600; margin: 10px 0 6px; }
 .mcp-guide-text { color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }
@@ -796,8 +775,8 @@ onMounted(() => {
 .mcp-tools-table { min-height: 120px; overflow-x: auto; }
 .mcp-tools-table :deep(.el-table) { min-width: 800px; }
 .mcp-tool-description { line-height: 1.5; white-space: normal; }
-
-:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; }
+:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; padding: 0 20px; }
+:deep(.key-form-dialog .el-dialog__body) { padding: 0 20px; }
 
 .created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: 6px; background: #f9fafb; }
 

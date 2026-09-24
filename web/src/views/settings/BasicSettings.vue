@@ -257,14 +257,7 @@
               show-icon
               class="import-alert"
             />
-            <el-alert
-              v-else
-              title="仅导入负载均衡规则，其他数据不受影响"
-              type="info"
-              :closable="false"
-              show-icon
-              class="import-alert"
-            />
+            <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">仅导入负载均衡规则，其他数据不受影响</span></div>
           </div>
         </template>
       </template>
@@ -1371,7 +1364,8 @@ const handleSave = async () => {
 
 <style scoped>
 .backup-sections-item { flex-direction: column; align-items: flex-start; gap: 4px; }
-/* 备份弹框 */
+/* 备份弹框（正文统一 20px 水平留白，与信息说明横幅同宽，2026-09-25 用户裁定） */
+.backup-dialog .el-dialog__body { padding: 0 20px; }
 .backup-dialog-header { display: flex; align-items: center; gap: 12px; }
 .backup-dialog-icon {
   width: 38px; height: 38px; border-radius: 10px;

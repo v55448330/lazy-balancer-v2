@@ -85,7 +85,7 @@
       </el-table>
     </el-card>
     <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
-    <el-dialog v-model="migrateVisible" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+    <el-dialog v-model="migrateVisible" class="migrate-dialog" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><WarningFilled /></el-icon></div>
@@ -124,13 +124,7 @@
           :title="`上限风险：${migrateCapRisk.map((r) => r.name).join('、')} 迁移后将超过每条规则 ${MAX_POLICIES_PER_RULE} 条绑定上限——这些规则保持原绑定并进入 skipped 清单`"
           class="migrate-preview-alert"
         />
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          title="全部规则重映射成功后原策略将被删除；存在 skipped 规则时原策略保留（因仍在使用）"
-          class="migrate-preview-alert"
-        />
+        <div class="info-note-bar" style="margin-top: 2px"><span class="info-note-desc">全部规则重映射成功后原策略将被删除；存在 skipped 规则时原策略保留（因仍在使用）</span></div>
       </div>
       <template #footer>
         <el-button @click="migrateVisible = false">取消</el-button>
@@ -605,13 +599,7 @@
             <template v-if="form.geoip_enabled">
               <!-- R72 二十七次 N3（裁决）：披露 IPv6/不可解析客户端语义——
                    fail-closed 设计下它们按「海外」处理。 -->
-              <el-alert
-                type="info"
-                :closable="false"
-                show-icon
-                title="地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。"
-                style="margin-bottom: 12px"
-              />
+              <div class="info-note-bar info-note-bar--inset"><span class="info-note-desc">地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。</span></div>
               <div class="mode-row" role="group" aria-label="地域控制模式">
                 <span class="mode-row-label">控制模式</span>
                 <div class="mode-row-content">
@@ -708,15 +696,11 @@
                       :title="hint"
                       class="bound-rule-alert"
                     />
-                    <el-alert
+                    <div
                       v-for="hint in row.infoHints"
                       :key="hint"
-                      type="info"
-                      :closable="false"
-                      show-icon
-                      :title="hint"
-                      class="bound-rule-alert"
-                    />
+                      class="info-note-bar bound-rule-note"
+                    ><span class="info-note-desc">{{ hint }}</span></div>
                     <!-- 行内编辑该规则的阶段拦截页覆盖（规则级 4 字段收口到策略侧）：第 48 轮
                          用户裁定 A 改为向导内延迟生效——改选只暂存，随向导「保存」收尾逐规则
                          PUT /rules/:id（提交时携带基础现值：UpdateRule 对空 protocol 400；
@@ -3261,6 +3245,7 @@ onMounted(async () => {
 .bound-rule-remove { margin-left: auto; }
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .bound-rule-alert { margin-top: 8px; }
+.bound-rule-note { margin: 8px 0 0; max-width: 640px; }
 /* 步骤内警告置于表单项控件列（el-form-item__content 为 flex 容器）——
    width:100% 使其独占一行并填满控件列（上限 640px），与 select/说明文字左对齐 */
 .wizard-alert { margin-bottom: 12px; width: 100%; }
@@ -3384,7 +3369,8 @@ onMounted(async () => {
 .preview-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .preview-stage-footnote { margin-top: 6px; font-size: 12px; color: #9ca3af; }
 
-/* 混合策略更新迁移预演 */
+/* 混合策略更新迁移预演（正文统一 20px 水平留白，与信息说明横幅同宽，2026-09-25 用户裁定） */
+.migrate-dialog .el-dialog__body { padding: 0 20px; }
 .migrate-preview { display: flex; flex-direction: column; gap: 14px; }
 .migrate-preview-section { display: flex; flex-direction: column; gap: 6px; }
 .migrate-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }

@@ -294,7 +294,7 @@
         </template>
         <template v-else>
           <el-alert v-if="ctxBodyParsed.truncated" type="warning" :closable="false" show-icon title="请求体已截断，仅显示保留的前段内容" class="ctx-banner" />
-          <el-alert v-if="ctxBodyParsed.binary" type="info" :closable="false" show-icon title="请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符" class="ctx-banner" />
+          <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符</span></div>
           <el-alert v-if="ctxBodyParsed.state === 'error'" type="error" :closable="false" show-icon title="Base64 解码失败，以下为原始内容" class="ctx-banner" />
           <pre class="ctx-body-pre">{{ ctxBodyParsed.text }}</pre>
         </template>
@@ -823,6 +823,8 @@ onMounted(fetchEvents)
 
 /* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
 .crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
+/* 请求上下文弹框：正文统一 20px 水平留白，与信息说明横幅同宽（2026-09-25 用户裁定） */
+.ctx-event-dialog .el-dialog__body { padding: 0 20px; }
 
 /* 触发规则筛选下拉：头部「全选」复选框整行可点（EP 自定义头部官方用法同款排布）；
    padding-left 20px 与选项行（EP 默认 20px）左对齐——默认 header-padding 10px 会

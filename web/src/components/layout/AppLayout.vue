@@ -172,7 +172,7 @@
           </div>
         </div>
       </template>
-      <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="profile-readonly-alert" />
+      <div v-if="isReadOnly" class="info-note-bar profile-readonly-note"><span class="info-note-desc">{{ authStore.readOnlyMessage }}</span></div>
       <el-form :model="profileForm" label-width="80px" class="profile-form" :disabled="saving">
         <el-form-item label="用户名">
           <el-input v-model="profileForm.username" disabled />
@@ -708,7 +708,7 @@ onUnmounted(() => {
 .profile-form { padding: 4px 28px 0; }
 .profile-form :deep(.el-form-item) { margin-bottom: 20px; }
 .profile-form :deep(.el-form-item__label) { color: var(--el-text-color-regular); }
-.profile-readonly-alert { margin: 0 20px 20px; }
+.profile-readonly-note { margin: 0 28px 12px; }
 .user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-source-tag { flex-shrink: 0; height: 18px; padding: 0 6px; font-size: 11px; line-height: 16px; }
 .profile-dialog .backup-dialog-header { display: flex; align-items: center; gap: 12px; }

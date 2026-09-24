@@ -11,8 +11,7 @@
         </div>
       </div>
     </template>
-    <el-alert v-if="!configured" type="info" :closable="false" class="mb12"
-      title="通过企业认证服务（OIDC）登录——配置仅 3 项，端点自动发现；本地账号登录始终保留。" />
+    <div v-if="!configured" class="info-note-bar"><span class="info-note-desc">通过企业认证服务（OIDC）登录——配置仅 3 项，端点自动发现；本地账号登录始终保留。</span></div>
     <el-alert v-else-if="enabled" type="success" :closable="false" class="mb12"
       :title="`OIDC 已启用（${displayName || 'OIDC'}）——登录页默认展示认证服务入口，本地账号可折叠进入。`" />
 

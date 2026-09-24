@@ -13,7 +13,7 @@
 
       <template v-if="!checkingSetup">
         <el-form v-if="setupMode" ref="setupFormRef" :model="setupForm" :rules="setupRules" @submit.prevent="handleSetup" class="login-form">
-          <el-alert title="首次启动，请创建管理员账号" type="info" show-icon :closable="false" class="login-error" />
+          <div class="info-note-bar"><span class="info-note-desc">首次启动，请创建管理员账号</span></div>
           <el-form-item prop="username">
             <el-input v-model="setupForm.username" name="username" autocomplete="username" placeholder="管理员用户名" size="large" :prefix-icon="User" maxlength="50" clearable />
           </el-form-item>

@@ -16,15 +16,10 @@
     </template>
 
     <div v-if="target" class="flow-body">
-      <el-alert
-        v-if="isTcp"
-        type="info"
-        :closable="false"
-        show-icon
-        title="TCP 规则无 HTTP 安全链"
-        description="TCP（L4）流量不经信任名单、IP 访问控制、限流与 WAF 阶段，接入后直接转发至上游。"
-        class="flow-tcp-alert"
-      />
+      <div v-if="isTcp" class="info-note-bar info-note-bar--inset">
+        <span class="info-note-desc">TCP 规则无 HTTP 安全链</span>
+        <span class="info-note-sub">TCP（L4）流量不经信任名单、IP 访问控制、限流与 WAF 阶段，接入后直接转发至上游。</span>
+      </div>
 
       <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 上游 -->
       <template v-for="(node, index) in flowNodes" :key="node.key">
@@ -200,12 +195,12 @@
                         <template v-if="group.details.aclInlineCount || (group.details.aclLists && group.details.aclLists.length > 0)">
                           <div class="flow-detail-block-title">IP 访问控制列表（合计 {{ (group.details.aclInlineCount ?? 0) + (group.details.aclLists ?? []).reduce((sum, l) => sum + l.count, 0) }} 条）</div>
                           <div v-if="group.details.aclInlineCount" class="flow-detail-entry">
-                            <span class="flow-detail-value">内联名单</span>
+                            <span class="flow-detail-value">直接填写</span>
                             <span class="flow-detail-meta">{{ group.details.aclInlineCount }} 条</span>
                           </div>
                           <div v-for="list in group.details.aclLists" :key="`acl-list:${list.name}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ list.name }}</span>
-                            <span class="flow-detail-meta">{{ list.count.toLocaleString() }} 条</span>
+                            <span class="flow-detail-meta">{{ list.count }} 条</span>
                           </div>
                         </template>
                         <template v-if="group.details.trustEntries">
@@ -678,7 +673,6 @@ const onDialogOpen = (): void => {
 .flow-header-title { font-size: 16px; font-weight: 600; color: #1f2937; }
 .flow-header-name { font-size: 13px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-body { display: flex; flex-direction: column; gap: 0; }
-.flow-tcp-alert { margin-bottom: 14px; }
 
 /* ── 纵向时间线：图标圆点 + 阶段色阶 + 竖向连接线流动粒子 + 错峰进场 ── */
 @keyframes tl-row-in {

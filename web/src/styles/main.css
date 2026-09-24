@@ -193,3 +193,10 @@ body {
 .error-banner.el-alert { padding-top: 12px; padding-bottom: 12px; }
 .error-banner .el-alert__title { line-height: 1.5; }
 .error-banner .error-banner-meta { display: block; font-size: 12px; margin-top: 0; line-height: 1.5; }
+
+/* 信息说明横幅统一模式（2026-09-25 用户裁定）：全站信息说明框同形——虚线边框
+   浅灰底、12px 600 主文字、无图标；语义同 SecurityPolicies .stage-projection-bar */
+.info-note-bar { margin: 0 0 12px; padding: 8px 12px; background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px; font-size: 12px; }
+.info-note-desc { font-weight: 600; color: #374151; line-height: 1.8; }
+.info-note-sub { display: block; font-weight: 400; color: #6b7280; line-height: 1.8; }
+.info-note-bar--inset { margin-left: 20px; margin-right: 20px; }
