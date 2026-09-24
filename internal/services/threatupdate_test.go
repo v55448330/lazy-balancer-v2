@@ -227,8 +227,8 @@ func TestThreatUpdate_updateDisabledSourceSkipped(t *testing.T) {
 	}
 }
 
-// 名单内容变化触发一次 Caddy 重载（引用名单的策略渲染产物随新内容收敛）；
-// 内容未变化不重载。
+// 名单内容变化且被启用策略引用时触发一次 Caddy 重载（引用方渲染随新内容
+// 收敛）；内容未变化不重载；无引用方的变化同样不重载（2026-09-24 裁定）。
 func TestThreatUpdate_listChangeTriggersReload(t *testing.T) {
 	newClusterTestService(t)
 	setupThreatTest(t, nil, nil, nil)
@@ -239,13 +239,15 @@ func TestThreatUpdate_listChangeTriggersReload(t *testing.T) {
 	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1（名单新增内容→重载）", reloads)
+	if reloads != 0 {
+		t.Fatalf("无策略引用时内容新增也不重载: reloads=%d", reloads)
 	}
+	// 引用 ustc 名单后，同内容仍不重载
+	seedThreatPolicyRefForSource(t, 900, "ustc")
 	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
 		t.Fatalf("run2: %v", err)
 	}
-	if reloads != 1 {
+	if reloads != 0 {
 		t.Fatalf("内容未变化不应重载: reloads=%d", reloads)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -258,8 +260,84 @@ func TestThreatUpdate_listChangeTriggersReload(t *testing.T) {
 	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
 		t.Fatalf("run3: %v", err)
 	}
-	if reloads != 2 {
-		t.Fatalf("名单内容变化须再重载: reloads=%d", reloads)
+	if reloads != 1 {
+		t.Fatalf("被引用的名单内容变化须重载: reloads=%d", reloads)
+	}
+}
+
+// seedThreatPolicyRefForSource 建一条启用策略并引用指定源的内置名单
+// （重载门/归因类测试的引用方夹具）。
+func seedThreatPolicyRefForSource(t *testing.T, policyID int, source string) {
+	t.Helper()
+	var listID int
+	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource(source)).Scan(&listID); err != nil {
+		t.Fatalf("内置名单缺失 %s: %v", source, err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, policy_type, enabled)
+		VALUES (?, ?, 'blocking', 1, 'deny', ?, 'stage1', 1)`, policyID, "引用夹具-"+source, fmt.Sprintf("[%d]", listID)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 重载门（2026-09-24 用户裁定）：名单变化且**被启用策略引用**才重载 Caddy——
+// 未被引用的源即使内容变化也不重载（重载只服务引用方的渲染收敛）。
+func TestThreatUpdate_reloadsOnlyWhenChangedListReferenced(t *testing.T) {
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	var reloads int
+	SetThreatReloader(func() error { reloads++; return nil })
+	t.Cleanup(func() { SetThreatReloader(nil) })
+
+	// When 首轮写入全部名单（无任何策略引用）
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run1: %v", err)
+	}
+	// Then 内容新增但零引用 → 不重载
+	if reloads != 0 {
+		t.Fatalf("无策略引用时不得重载: reloads=%d", reloads)
+	}
+
+	// Given 启用策略引用 ustc 内置名单（firehol_l1 不被引用）
+	var ustcListID int
+	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource("ustc")).Scan(&ustcListID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, policy_type, enabled)
+		VALUES (900, '引用ustc的ACL策略', 'blocking', 1, 'deny', ?, 'stage1', 1)`, fmt.Sprintf("[%d]", ustcListID)); err != nil {
+		t.Fatal(err)
+	}
+	// And 只有 firehol_l1 的内容变化
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.55\n"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET url=? WHERE name='firehol_l1'`, srv.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	// When 仅未被引用的源变化
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	// Then 仍不重载（变化的名单无人引用）
+	if reloads != 0 {
+		t.Fatalf("未被引用的源变化不得重载: reloads=%d", reloads)
+	}
+
+	// When 被引用的 ustc 内容变化
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.77\n"))
+	}))
+	t.Cleanup(srv2.Close)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET url=? WHERE name='ustc'`, srv2.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run3: %v", err)
+	}
+	// Then 重载一次（被引用的名单变了）
+	if reloads != 1 {
+		t.Fatalf("被引用的名单变化须重载: reloads=%d, want 1", reloads)
 	}
 }
 
@@ -342,8 +420,7 @@ func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
 		}
 		return h
 	}
-
-	// run1：写入 + 哈希落库 + 重载 + 审计
+	// run1：写入 + 哈希落库（无策略引用 → 不重载）
 	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
 		t.Fatalf("run1: %v", err)
 	}
@@ -351,6 +428,27 @@ func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
 	if len(h1) != 64 {
 		t.Fatalf("run1 后 content_hash 应为 64 位 hex, got %q", h1)
 	}
+
+	// 重载门（2026-09-24 裁定）：审计断言前须有引用方——先验证无引用不重载
+	if reloads != 0 {
+		t.Fatalf("run1 无策略引用不得重载: reloads=%d", reloads)
+	}
+	seedThreatPolicyRefForSource(t, 901, "ustc")
+	// 被引用的 ustc 内容变化 → 重载 + 审计
+	srvNew := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("198.51.100.9\n10.9.0.0/24\n"))
+	}))
+	t.Cleanup(srvNew.Close)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET url=? WHERE name='ustc'`, srvNew.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := GetThreatUpdateManager().RunUpdate("manual"); err != nil {
+		t.Fatalf("run1b: %v", err)
+	}
+	if reloads != 1 {
+		t.Fatalf("被引用名单变化须重载: reloads=%d", reloads)
+	}
+	h1 = readHash() // 内容已换一轮——后续「同内容不变」断言以新哈希为基线
 	var auditCount int
 	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND detail LIKE '%威胁情报库%'`).Scan(&auditCount); err != nil {
 		t.Fatalf("读审计库: %v", err)
@@ -383,7 +481,7 @@ func TestThreatUpdate_contentHashCompare_andReloadAudit(t *testing.T) {
 	}
 
 	// run3：同集乱序（USTC 实测形态）→ 哈希不变、不重载
-	ustcBody := []string{"10.9.0.0/24", "203.0.113.1"} // 与基座同集、顺序颠倒
+	ustcBody := []string{"10.9.0.0/24", "198.51.100.9"} // 与 run1b 同集、顺序颠倒
 	shuffled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Join(ustcBody, "\n") + "\n"))
 	}))

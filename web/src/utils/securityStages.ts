@@ -342,6 +342,30 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
   return rows
 }
 
+// 阶段 1 · IP 访问控制摘要（2026-09-24 用户裁定「所有统计类型数据必须是真实
+// 数据」）：deny 模式的生效黑名单 = 名单侧（内联 ∪ 引用）+ 独立 ip_blacklist
+// 字段，两源合计如实呈现；此前摘要恒挂「黑名单 N 条」独立字段尾巴，该字段为
+// 0 时「黑名单 0 条」会被读成生效数为零。锁摘要/流程弹框/策略列表共用。
+export const aclEffectiveCounts = (
+  ipLists: readonly SecurityStageIPList[],
+  policy: { ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
+): { aclCount: number; blCount: number; effective: number } => {
+  const aclCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+  const blCount = parseIPList(policy.ip_blacklist).length
+  return { aclCount, blCount, effective: policy.ip_acl_mode === 'deny' ? aclCount + blCount : aclCount }
+}
+
+export const formatAclModeDetail = (
+  ipLists: readonly SecurityStageIPList[],
+  policy: { ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
+): string => {
+  const { aclCount, blCount, effective } = aclEffectiveCounts(ipLists, policy)
+  if (policy.ip_acl_mode === 'allow') return `白名单模式 · ${effective} 条`
+  if (policy.ip_acl_mode === 'bypass') return `免检测模式 · ${effective} 条`
+  if (aclCount > 0 && blCount > 0) return `黑名单模式 · ${effective} 条（名单 ${aclCount} + 独立 ${blCount}）`
+  return `黑名单模式 · ${effective} 条`
+}
+
 const buildStage1Rows = (
   policy: SecurityStagePolicy | undefined,
   ipLists: readonly SecurityStageIPList[],
@@ -351,10 +375,7 @@ const buildStage1Rows = (
   const rows: StageRow[] = []
   if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
-    const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测模式' : '黑名单模式')
-    const aclCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
-    const blCount = parseIPList(policy.ip_blacklist).length
-    rows.push({ label: 'IP 访问控制', detail: `${modeLabel} · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` })
+    rows.push({ label: 'IP 访问控制', detail: formatAclModeDetail(ipLists, policy) })
   }
   // 地域拦截（启用态）：启用 → 区域数；关闭但保留区域 → 已关闭（保留 N 区域）
   const geoCount = parseGeoipCountryCount(policy?.geoip_countries ?? '')

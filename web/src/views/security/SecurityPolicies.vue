@@ -972,7 +972,7 @@ import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, aclEffectiveCounts, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1120,9 +1120,9 @@ const policySummaryLine = (row: PolicySummary): string => {
     return parts.join(' · ')
   }
   if (type === 'stage1') {
-    const aclCount = mergedIpEntryCount(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs))
+    const { effective } = aclEffectiveCounts(ipLists.value, row)
     const geoCount = geoipRegionCount(row)
-    const aclPart = row.ip_acl_enabled ? `${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode} · ACL ${aclCount} 条` : '未启用 ACL'
+    const aclPart = row.ip_acl_enabled ? `${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode} · ${effective} 条` : '未启用 ACL'
     const geoPart = geoCount > 0 ? `GeoIP ${geoCount} 区域` : 'GeoIP 未启用'
     return `${aclPart} · ${geoPart}`
   }
@@ -1271,9 +1271,7 @@ interface ViewPolicySection { title: string; rows: Array<{ label: string; value:
 const viewPolicySections = computed<ViewPolicySection[]>(() => {
   const d = viewPolicyDetail.value
   if (!d) return []
-  const aclCount = mergeIpEntries(parseJsonList(d.ip_acl_list), parseRefIds(d.ip_acl_list_refs)).length
   const trustCount = mergeIpEntries(parseJsonList(d.ip_whitelist), parseRefIds(d.ip_whitelist_refs)).length
-  const blCount = parseJsonList(d.ip_blacklist).length
   const geoCount = parseJsonList(d.geoip_countries).length
   const crsGroupCount = parseJsonList(d.crs_rule_groups).length
   const excludedCount = parseCrsExcludedRules(d.crs_excluded_rules).length
@@ -1315,7 +1313,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
     {
       title: '阶段 1 · IP 访问控制',
       rows: [
-        { label: '访问控制', value: d.ip_acl_enabled ? `${ACL_MODE_LABELS[d.ip_acl_mode] ?? d.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` : '未启用' },
+        { label: '访问控制', value: d.ip_acl_enabled ? formatAclModeDetail(ipLists.value, d) : '未启用' },
         // 信任名单只归阶段 0 段（2026-09-21 用户裁定：独立阶段 0，阶段 1 不再重复展示）
         { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off' ? `${GEOIP_MODE_LABELS[d.geoip_mode ?? 'deny'] ?? d.geoip_mode} · ${geoCount} 区域` : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
       ],

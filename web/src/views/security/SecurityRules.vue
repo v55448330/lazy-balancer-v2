@@ -393,16 +393,21 @@
 
     <el-dialog
       v-model="updateDialogVisible"
-            title="更新 CRS 规则库"
       width="min(900px, 94vw)"
+      top="8vh"
       destroy-on-close
       @opened="onUpdateDialogOpened"
       @closed="onUpdateDialogClosed"
     >
-      <div class="update-status-row">
-        <span>当前状态</span>
-        <el-tag :type="crsStatusTagType(updateInfo?.status || 'idle')" size="small" effect="light">{{ crsStatusLabel(updateInfo?.status || 'idle') }}</el-tag>
-      </div>
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon lib-icon--crs"><el-icon :size="18"><Lock /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">更新 CRS 规则库</div>
+            <div class="dialog-header__subtitle">OWASP 核心规则集的更新任务与更新日志</div>
+          </div>
+        </div>
+      </template>
       <RuleLibScheduleEditor
         :days="crsInfo.schedule_days"
         :time="crsInfo.schedule_time"
@@ -426,16 +431,21 @@
 
     <el-dialog
       v-model="ip2regionUpdateDialogVisible"
-      title="更新 IP 库"
       width="min(900px, 94vw)"
+      top="8vh"
       destroy-on-close
       @opened="onIP2RegionUpdateDialogOpened"
       @closed="onIP2RegionUpdateDialogClosed"
     >
-      <div class="update-status-row">
-        <span>当前状态</span>
-        <el-tag :type="ip2regionStatusTagType(ip2regionUpdateInfo?.status || 'idle')" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionUpdateInfo?.status || 'idle') }}</el-tag>
-      </div>
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon lib-icon--ip"><el-icon :size="18"><Location /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">更新 IP 库</div>
+            <div class="dialog-header__subtitle">IP2Region 地理归属数据库的更新任务与更新日志</div>
+          </div>
+        </div>
+      </template>
       <RuleLibScheduleEditor
         :days="ip2regionInfo.schedule_days"
         :time="ip2regionInfo.schedule_time"
@@ -459,16 +469,21 @@
 
     <el-dialog
       v-model="threatUpdateDialogVisible"
-      title="更新威胁情报库"
       width="min(900px, 94vw)"
+      top="8vh"
       destroy-on-close
       @opened="onThreatUpdateDialogOpened"
       @closed="onThreatUpdateDialogClosed"
     >
-      <div class="update-status-row">
-        <span>当前状态</span>
-        <el-tag :type="crsStatusTagType(threatUpdateRunning ? 'running' : (threatUpdateInfo?.outcome || 'idle'))" size="small" effect="light">{{ threatUpdateRunning ? '更新中' : (threatUpdateInfo?.outcome === 'success' ? '更新成功' : threatUpdateInfo?.outcome === 'failed' ? '更新失败' : '空闲') }}</el-tag>
-      </div>
+      <template #header>
+        <div class="dialog-header">
+          <div class="dialog-header__icon lib-icon--threat"><el-icon :size="18"><Aim /></el-icon></div>
+          <div class="dialog-header__text">
+            <div class="dialog-header__title">更新威胁情报库</div>
+            <div class="dialog-header__subtitle">三个内置恶意 IP 源的更新任务与更新日志</div>
+          </div>
+        </div>
+      </template>
       <el-table :data="threatSources" size="small" class="threat-source-table">
         <el-table-column label="来源" min-width="260">
           <!-- 标题加粗 + 更新地址次行（与规则库表格「名称+描述」两行同构，
@@ -507,7 +522,7 @@
         :tz="scheduleTz"
         @save="saveThreatSchedule"
       />
-      <div ref="threatUpdateLogRef" class="update-log-container">
+      <div ref="threatUpdateLogRef" class="update-log-container update-log-container--compact">
         <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
         <el-empty v-else description="暂无更新日志" :image-size="60" />
       </div>
@@ -809,24 +824,6 @@ const crsFailureMessage = computed(() => {
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
 })
 
-const ip2regionStageLabels: Record<string, string> = {
-  checking: '检查更新',
-  downloading: '下载IP库',
-  installing: '安装',
-  reloading: '重载配置',
-  success: '更新成功',
-  failed: '更新失败',
-  idle: '空闲',
-}
-const ip2regionStageLabelsWithNotInstalled: Record<string, string> = { ...ip2regionStageLabels, 'not-installed': '未安装' }
-const ip2regionStatusLabel = (s: string): string => ip2regionStageLabelsWithNotInstalled[s] || s || '—'
-const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
-  if (s === 'not-installed' || !s || s === 'idle') return 'info'
-  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading' || s === 'running') return 'warning'
-  if (s === 'success') return 'success'
-  if (s === 'failed') return 'danger'
-  return 'info'
-}
 const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const ip2regionVersionLabel = computed(() => {
   if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
@@ -1656,7 +1653,6 @@ onUnmounted(() => {
 }
 
 .threat-source-table { margin-bottom: 12px; }
-.update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
 .lib-summary-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lib-health-tag { margin: 0; }
@@ -1669,7 +1665,7 @@ onUnmounted(() => {
 .lib-icon--ip { background: #f0fdfa; color: #0d9488; }
 .lib-icon--threat { background: #fff1f2; color: #e11d48; }
 .lib-name-text { min-width: 0; }
-.lib-name-main { font-weight: 500; color: #1f2937; }
+.update-log-container--compact { min-height: 200px; max-height: 240px; }
 .lib-name-sub { color: #909399; font-size: 12px; word-break: break-all; }
 .lib-version { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
 .lib-count { font-variant-numeric: tabular-nums; }

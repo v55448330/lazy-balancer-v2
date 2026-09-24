@@ -1,11 +1,13 @@
 <template>
   <div class="schedule-editor">
+    <div class="schedule-editor__head">
+      <span class="schedule-editor__title">定时更新</span>
+      <span class="schedule-editor__hint">按基础设置时区（{{ tz || '…' }}）执行</span>
+    </div>
     <div class="schedule-editor__controls">
-      <span class="schedule-editor__label">定时更新</span>
       <el-select
         v-model="editDays"
         multiple
-        collapse-tags
         :disabled="disabled"
         class="schedule-editor__days"
         placeholder="选择星期"
@@ -20,9 +22,9 @@
         placeholder="时间"
         class="schedule-editor__time"
       />
-      <el-button size="small" type="primary" plain :disabled="disabled" :loading="saving" @click="emitSave">保存定时</el-button>
+      <el-button size="small" type="primary" :disabled="disabled" :loading="saving" @click="emitSave">保存定时</el-button>
     </div>
-    <div class="schedule-editor__tip">按基础设置时区（{{ tz || '…' }}）执行；自动更新开关关闭时不执行，手动「立即更新」不受影响</div>
+    <div class="schedule-editor__tip">自动更新开关关闭时不执行；手动「立即更新」不受影响</div>
   </div>
 </template>
 
@@ -30,7 +32,7 @@
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
-// 规则库（CRS/IP2Region/威胁情报库）更新弹框共享的「定时更新」区：
+// 规则库（CRS/IP2Region/威胁情报库）更新弹框共享的「定时更新」卡片区：
 // 星期多选（1=周一…7=周日）+ HH:MM 时间，保存即由后端重排下次更新。
 
 const props = withDefaults(defineProps<{
@@ -78,10 +80,18 @@ const emitSave = () => {
 </script>
 
 <style scoped>
-.schedule-editor { margin-bottom: 12px; }
+.schedule-editor {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+.schedule-editor__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.schedule-editor__title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.schedule-editor__hint { font-size: 12px; color: #909399; }
 .schedule-editor__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.schedule-editor__label { font-size: 13px; color: #606266; }
-.schedule-editor__days { width: 220px; }
+.schedule-editor__days { flex: 1 1 220px; min-width: 180px; }
 .schedule-editor__time { width: 110px; }
-.schedule-editor__tip { margin-top: 6px; font-size: 12px; color: #909399; line-height: 1.6; }
+.schedule-editor__tip { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 </style>

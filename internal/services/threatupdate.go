@@ -208,11 +208,15 @@ func (m *ThreatUpdateManager) run(trigger string) {
 		return
 	}
 	AppendThreatUpdateLog("INFO", "checking", fmt.Sprintf("开始更新威胁情报库（%d 个启用源）", len(sources)))
-	contentChanged := false
+	var changedIDs []int // 内容真实变化的名单 id（重载门的判定面）
 	anyFailed := false
 	for _, source := range sources {
 		changed, failed := m.updateOneSource(source, trigger)
-		contentChanged = contentChanged || changed
+		if changed {
+			if id := threatListIDBySource(source.name); id > 0 {
+				changedIDs = append(changedIDs, id)
+			}
+		}
 		anyFailed = anyFailed || failed
 	}
 	m.mu.Lock()
@@ -224,11 +228,14 @@ func (m *ThreatUpdateManager) run(trigger string) {
 	}
 	m.mu.Unlock()
 	// 名单内容变化 → 一次重载（引用名单的策略渲染随新内容收敛）。
-	if !contentChanged {
+	// 重载门（2026-09-24 用户裁定）：变化的名单须被启用策略引用才重载——
+	// 无引用方的变化不打扰在役配置。
+	if len(changedIDs) == 0 {
 		AppendThreatUpdateLog("INFO", "unchanged", "全部源名单内容未变化，不重载 Caddy 配置")
-	}
-	if contentChanged && threatReloader != nil {
-		AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化，重载 Caddy 配置")
+	} else if !threatListsReferencedByEnabledPolicy(changedIDs) {
+		AppendThreatUpdateLog("INFO", "unchanged", "名单内容已变化但无启用策略引用，不重载 Caddy 配置")
+	} else if threatReloader != nil {
+		AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化且被策略引用，重载 Caddy 配置")
 		err := threatReloader()
 		// 数据类更新触发的重载统一留操作日志（2026-09-24 用户裁定补齐——
 		// 与 crs_update/ip2region_update 同口径，此前威胁库重载无审计）
@@ -238,6 +245,50 @@ func (m *ThreatUpdateManager) run(trigger string) {
 			AppendThreatUpdateLog("ERROR", "reloading", fmt.Sprintf("重载 Caddy 配置失败: %v", err))
 		}
 	}
+}
+
+// threatListIDBySource 源名 → 内置名单 id（缺失=0）。
+func threatListIDBySource(source string) int {
+	var id int
+	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=?`, db.ThreatListNameBySource(source)).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// threatListsReferencedByEnabledPolicy 报告任一名单 id 被启用策略引用
+// （ip_acl_list_refs/ip_whitelist_refs 均为 JSON 数字数组）。查询失败按
+// 「可能被引用」处理——宁可多一次重载，不欠引用方的渲染收敛。
+func threatListsReferencedByEnabledPolicy(listIDs []int) bool {
+	want := map[int]bool{}
+	for _, id := range listIDs {
+		want[id] = true
+	}
+	rows, err := db.DB.Query(`SELECT COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies WHERE enabled=1`)
+	if err != nil {
+		Logf("error", "威胁情报库: 读取策略引用失败（按被引用处理）: %v", err)
+		return true
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var aclRefs, wlRefs string
+		if err := rows.Scan(&aclRefs, &wlRefs); err != nil {
+			Logf("error", "威胁情报库: 扫描策略引用失败（按被引用处理）: %v", err)
+			return true
+		}
+		for _, raw := range []string{aclRefs, wlRefs} {
+			var ids []int
+			if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+				continue
+			}
+			for _, id := range ids {
+				if want[id] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // updateOneSource 下载→解析→写内置名单→更新行状态；失败仅影响该源。
