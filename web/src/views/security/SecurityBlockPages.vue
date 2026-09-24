@@ -52,15 +52,18 @@
           </template>
         </el-table-column>
       </el-table>
-      <!-- 与其他表格页同款分页器（2026-09-25 用户裁定）：总数/页大小/翻页 -->
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :page-sizes="[10, 20, 50]"
-        :total="pages.length"
-        layout="total, sizes, prev, pager, next"
-        @size-change="page = 1"
-      />
+      <!-- 与其他表格页同款分页器（2026-09-25 用户裁定）：右对齐 + 16px 上距，同
+           Rules/SecurityRules 的 .rules-pagination 范式 -->
+      <div class="rules-pagination">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="pages.length"
+          layout="total, sizes, prev, pager, next"
+          @size-change="page = 1"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="dialog-body-inset">
@@ -191,6 +194,7 @@ const fetchData = async () => {
 
 const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
+
   const user = users.value.find(u => u.id === userId)
   return user?.display_name || user?.username || '-'
 }
@@ -248,5 +252,8 @@ onMounted(fetchData)
 
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; max-width: 100%; }
+
+/* 分页器：与 Rules/SecurityRules 的 .rules-pagination 同款（右对齐 + 16px 上距） */
+.rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 </style>
