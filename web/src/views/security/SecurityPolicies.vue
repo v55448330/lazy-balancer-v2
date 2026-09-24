@@ -972,7 +972,7 @@ import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, aclEffectiveCounts, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1120,9 +1120,9 @@ const policySummaryLine = (row: PolicySummary): string => {
     return parts.join(' · ')
   }
   if (type === 'stage1') {
-    const { effective } = aclEffectiveCounts(ipLists.value, row)
     const geoCount = geoipRegionCount(row)
-    const aclPart = row.ip_acl_enabled ? `${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode} · ${effective} 条` : '未启用 ACL'
+    // 与锁摘要/详情弹框共用 formatAclModeDetail——计数分解（直接填写 vs 引用列表）口径一致
+    const aclPart = row.ip_acl_enabled ? formatAclModeDetail(ipLists.value, row) : '未启用 ACL'
     const geoPart = geoCount > 0 ? `GeoIP ${geoCount} 区域` : 'GeoIP 未启用'
     return `${aclPart} · ${geoPart}`
   }
@@ -2029,7 +2029,6 @@ const exclusionRowGhostLabel = (target: string): string => {
 // CRS 配置面禁用门(2026-09-09 四态化):off=全关、custom_only=仅自定义,两者 CRS 均不生效
 const crsFieldsOff = computed(() => form.value.mode === 'off' || form.value.mode === 'custom_only')
 
-const ACL_MODE_LABELS: Record<string, string> = { deny: '黑名单', allow: '白名单', bypass: '免检测' }
 
 // 内置威胁名单仅可用于黑名单模式（2026-09-24 用户裁定，与后端
 // validateBuiltinThreatListRefs 同口径）：模式切到白名单/免检测时，

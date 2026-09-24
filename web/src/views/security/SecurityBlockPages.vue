@@ -14,7 +14,7 @@
       </el-button>
     </div>
 
-    <el-card>
+    <el-card class="block-pages-card">
       <el-table :data="pages" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
           <el-empty description="暂无拦截页面" :image-size="60" />
@@ -175,6 +175,8 @@ onMounted(fetchData)
 
 <style scoped>
 /* ── 通用弹框头部 ── */
+/* 拦截页面表格卡片限宽——稀疏五列表格不应横贯整个内容列（用户反馈 2026-09-25） */
+.block-pages-card { max-width: 1100px; }
 .dialog-header { display: flex; align-items: flex-start; gap: 12px; }
 .dialog-header__icon {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;

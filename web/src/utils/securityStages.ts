@@ -299,9 +299,11 @@ export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: 
   parseIPList(p.ip_whitelist).length > 0 || parseRefIds(p.ip_whitelist_refs).length > 0
 
 // 阶段 1 · IP 访问控制谓词（信任除外——2026-09-21 用户裁定：信任恒归独立阶段 0）：
-// ACL 启用且（内联∪引用非空），或遗留黑名单非空。has_ip_control 摘要标志含信任
-// （镜像后端发射语义），阶段归属判定不得直接消费它——否则纯信任策略会在阶段 1
-// 投出「列表 0 条 · 黑名单 0 条」空行并被误判为 mixed。
+// **ACL 启用即算**（能力口径，2026-09-25 用户实证修正）——空名单的启用策略也必须
+// 显示（「黑名单模式 · 0 条」与「未启用」语义天差地别；空 allow 名单在渲染侧
+// 为空交集恒拒的输入面之一，隐藏会误导）；或遗留黑名单非空。has_ip_control
+// 摘要标志含信任（镜像后端发射语义），阶段归属判定不得直接消费它——否则纯信任
+// 策略会在阶段 1 投出空行并被误判为 mixed。
 export const hasIPACLControl = (p: {
   has_ip_control?: boolean
   ip_acl_enabled?: boolean
@@ -311,10 +313,7 @@ export const hasIPACLControl = (p: {
 }): boolean => {
   // 原始字段齐备时按定义判定；缺失（如精简绑定载荷）回退摘要标志
   if (p.ip_acl_enabled !== undefined || p.ip_blacklist !== undefined || p.ip_acl_list !== undefined) {
-    return (
-      (p.ip_acl_enabled === true && (parseIPList(p.ip_acl_list).length > 0 || parseRefIds(p.ip_acl_list_refs).length > 0)) ||
-      parseIPList(p.ip_blacklist).length > 0
-    )
+    return p.ip_acl_enabled === true || parseIPList(p.ip_blacklist).length > 0
   }
   return p.has_ip_control === true
 }
@@ -352,25 +351,37 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
 export const aclEffectiveCounts = (
   ipLists: readonly SecurityStageIPList[],
   policy: { ip_acl_enabled?: boolean; ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
-): { aclCount: number; blCount: number; effective: number } => {
-  const aclCount = policy.ip_acl_enabled === false
-    ? 0
-    : mergeIpEntryCount(ipLists, parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+): { aclCount: number; blCount: number; effective: number; inlineCount: number; refCount: number } => {
+  const inline = policy.ip_acl_enabled === false ? [] : parseIPList(policy.ip_acl_list)
+  const refs = policy.ip_acl_enabled === false ? [] : parseRefIds(policy.ip_acl_list_refs)
+  const inlineCount = new Set(inline.map((v) => v.trim()).filter((v) => v !== '')).size
+  const refCount = refs.reduce((sum, id) => sum + (ipLists.find((l) => l.id === id)?.entry_count ?? 0), 0)
+  const aclCount = policy.ip_acl_enabled === false ? 0 : inlineCount + refCount
   const blCount = parseIPList(policy.ip_blacklist).length
-  return { aclCount, blCount, effective: policy.ip_acl_mode === 'deny' ? aclCount + blCount : aclCount }
+  return { aclCount, blCount, effective: policy.ip_acl_mode === 'deny' ? aclCount + blCount : aclCount, inlineCount, refCount }
 }
 
 export const formatAclModeDetail = (
   ipLists: readonly SecurityStageIPList[],
   policy: { ip_acl_enabled?: boolean; ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
 ): string => {
-  const { aclCount, blCount, effective } = aclEffectiveCounts(ipLists, policy)
+  const { aclCount, blCount, effective, inlineCount, refCount } = aclEffectiveCounts(ipLists, policy)
   // 独立黑名单无模式门——非 deny 模式下如实追告「仍在生效」（渲染侧照常拦截）
   const blAlive = blCount > 0 && policy.ip_acl_mode !== 'deny' ? `；独立黑名单 ${blCount} 条仍生效` : ''
-  if (policy.ip_acl_mode === 'allow') return `白名单模式 · ${effective} 条${blAlive}`
-  if (policy.ip_acl_mode === 'bypass') return `免检测模式 · ${effective} 条${blAlive}`
+  // 计数分解（2026-09-25 用户裁定，通俗口径）：直接填写 vs 引用列表——只给一个
+  // 总数时用户无法对账「我只加了 1 个 IP 为什么显示上万条」（引用列表含内置威胁
+  // 名单，条目量巨大）。仅当两个来源同时存在时才展开；纯引用时标注来源；纯内联
+  // 无歧义保持原形。
+  const breakdown = inlineCount > 0 && refCount > 0
+    ? `（直接填写 ${inlineCount} + 引用列表 ${refCount}）`
+    : inlineCount === 0 && refCount > 0
+      ? '（全部来自引用列表）'
+      : ''
+  const total = breakdown !== '' ? `共 ${effective} 条${breakdown}` : `${effective} 条`
+  if (policy.ip_acl_mode === 'allow') return `白名单模式 · ${total}${blAlive}`
+  if (policy.ip_acl_mode === 'bypass') return `免检测模式 · ${total}${blAlive}`
   if (aclCount > 0 && blCount > 0) return `黑名单模式 · ${effective} 条（名单 ${aclCount} + 独立 ${blCount}）`
-  return `黑名单模式 · ${effective} 条`
+  return `黑名单模式 · ${total}`
 }
 
 const buildStage1Rows = (

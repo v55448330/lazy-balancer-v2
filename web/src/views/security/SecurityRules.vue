@@ -93,10 +93,8 @@
               <template #default><el-button link type="primary" size="small">查看</el-button></template>
             </el-table-column>
           </el-table>
-          <div style="display: flex; justify-content: center; margin-top: 16px;">
           <div class="rules-pagination">
             <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="onRulesSizeChange" />
-          </div>
           </div>
         </el-tab-pane>
       <el-tab-pane label="自定义规则" name="custom">
