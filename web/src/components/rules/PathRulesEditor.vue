@@ -35,7 +35,7 @@
         <div class="path-rule-match-row">
           <label class="rule-field match-type-field">
             <span class="rule-field-label">匹配方式</span>
-            <el-select v-model="rule.match_type" class="match-type-select" aria-label="匹配方式">
+            <el-select v-model="rule.match_type" class="match-type-select" size="small" aria-label="匹配方式">
               <el-option label="前缀匹配" value="prefix" />
               <el-option label="精确匹配" value="exact" />
             </el-select>
@@ -46,6 +46,7 @@
             <div class="rule-field-control">
               <el-input
                 v-model="rule.path"
+                size="small"
                 :aria-label="`路径规则 ${index + 1} 的路径`"
                 placeholder="例如：/api"
                 :class="{ 'is-error-input': rowError(index) }"
@@ -69,6 +70,7 @@
             <div class="rule-field-control">
               <el-input
                 v-model="rule.upstream_path"
+                size="small"
                 :aria-label="`路径规则 ${index + 1} 的上游路径`"
                 placeholder="留空=原样转发"
                 :class="{ 'is-error-input': upstreamError(index) }"
@@ -95,22 +97,22 @@
           <div v-for="(upstream, upstreamIndex) in rule.upstreams" :key="upstreamIndex" class="upstream-grid upstream-row">
             <label class="upstream-field">
               <span class="mobile-field-label">协议</span>
-              <el-select v-model="upstream.protocol" aria-label="协议">
+              <el-select v-model="upstream.protocol" size="small" aria-label="协议">
                 <el-option value="http" label="HTTP" />
                 <el-option value="https" label="HTTPS" />
               </el-select>
             </label>
             <label class="upstream-field upstream-address-field">
               <span class="mobile-field-label">地址</span>
-              <el-input v-model="upstream.address" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
+              <el-input v-model="upstream.address" size="small" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
             </label>
             <label class="upstream-field">
               <span class="mobile-field-label">端口</span>
-              <el-input-number v-model="upstream.port" :min="1" :max="65535" aria-label="端口" controls-position="right" />
+              <el-input-number v-model="upstream.port" size="small" :min="1" :max="65535" aria-label="端口" controls-position="right" />
             </label>
             <label class="upstream-field">
               <span class="mobile-field-label">权重</span>
-              <el-input v-model.number="upstream.weight" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
+              <el-input v-model.number="upstream.weight" size="small" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
                 <template #suffix>%</template>
               </el-input>
             </label>
@@ -252,18 +254,16 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .editor-heading-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .editor-title { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 600; }
 .path-rules-list { display: flex; flex-direction: column; gap: 12px; }
-.path-rule-card { border-color: var(--border); background: var(--bg-primary); }
-.path-rule-card :deep(.el-card__body) { padding: 16px; }
+.path-rule-card :deep(.el-card__body) { padding: 12px 14px; }
 /* 层次一：徽标 + 行内操作，动作列固定右上不随字段挤压 */
 .path-rule-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .path-rule-order { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 /* 匹配行：三字段同一基线，start 对齐——校验文案只在字段下方出现，不再推移输入框 */
 .path-rule-match-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
 /* flex-start：control 含 18px 预留带高于 input，center 会让标签相对输入行上浮；
-   顶对齐后 32px 标签与首行 32px 输入框中线恒对齐（预留带在下方不影响） */
+   顶对齐后 24px 标签与首行 24px 输入框（size=small，2026-09-25 用户裁定紧凑化）中线恒对齐 */
 .rule-field { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
-/* 行内标签：与向导 el-form-item label 同源（32px 行高/常规文本色/表单字号） */
-.rule-field-label { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 32px; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
+.rule-field-label { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 24px; color: var(--el-text-color-regular); font-size: 13px; }
 .match-type-select { width: 128px; }
 /* 报错间距恒定预留（2026-09-21 用户裁定）：错误/提示文案绝对定位于字段下方预留带内,
    出现与否不改变任何兄弟区块位置,三字段基线对齐恒定 */
@@ -272,9 +272,8 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
 /* 层次二/三：开关行单句说明 + 满宽次级卡片（左右贴齐外层卡片内容缘，双侧同 padding），行距统一 12px */
-.custom-upstream-toggle { display: flex; align-items: center; gap: 8px; }
-.custom-upstream-title { color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
-.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.custom-upstream-title { color: var(--el-text-color-regular); font-size: 13px; }
+.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
