@@ -272,7 +272,7 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
 /* 层次二/三：开关行单句说明 + 满宽次级卡片（左右贴齐外层卡片内容缘，双侧同 padding），行距统一 12px */
-.custom-upstream-toggle { display: flex; align-items: center; gap: 12px; min-height: 24px; }
+.custom-upstream-toggle { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .custom-upstream-title { color: var(--el-text-color-regular); font-size: 13px; }
 .custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
