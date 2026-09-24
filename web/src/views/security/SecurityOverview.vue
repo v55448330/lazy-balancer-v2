@@ -81,8 +81,10 @@
                   <div class="stat-box__value">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</div>
                   <div class="stat-box__label">CRS 规则集</div>
                   <!-- 库文件缺失优先于更新状态（缺库降级口径，2026-09-24 裁定） -->
-                  <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
-                  <el-tag v-else-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
+                  <!-- disable-transitions：异步数据到达时标签实例新建会重播 EP
+                       zoom-in-center（先漂后归位，2026-09-25 用户反馈修复，Dashboard 判例同款） -->
+                  <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>缺失</el-tag>
+                  <el-tag v-else-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ statusLabel(overview.update_status) }}</el-tag>
                 </div>
               </div>
             </div>
@@ -92,10 +94,10 @@
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</div>
                   <div class="stat-box__label">IP 地理库</div>
-                  <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
-                  <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px">缺失</el-tag>
-                  <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" style="margin-top: 4px">未安装</el-tag>
-                  <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
+                  <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
+                  <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>缺失</el-tag>
+                  <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" style="margin-top: 4px" disable-transitions>未安装</el-tag>
+                  <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ statusLabel(ip2regionStatus) }}</el-tag>
                 </div>
               </div>
             </div>
@@ -105,8 +107,8 @@
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ threatLatestVersion || '未更新' }}</div>
                   <div class="stat-box__label">威胁情报库</div>
-                  <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
-                  <el-tag v-else-if="threatStatus" :type="statusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(threatStatus) }}</el-tag>
+                  <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
+                  <el-tag v-else-if="threatStatus" :type="statusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ statusLabel(threatStatus) }}</el-tag>
                 </div>
               </div>
             </div>
