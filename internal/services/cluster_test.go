@@ -45,7 +45,7 @@ func v3SnapshotWithACMESection(snapshot models.ClusterSnapshot) models.ClusterSn
 }
 
 func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
-	t.Helper()
+	stubUpdateRetrySleep(t) // 任务内重试等待即时化（威胁库失败路径测试）
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)

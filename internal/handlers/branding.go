@@ -485,7 +485,9 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	}
 	cfg := loadBrandingConfig(dataDir)
 	content := renderDefaultBlockPage(cfg)
-	result, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, updated_at=datetime('now') WHERE is_default=1 AND content != ?`, content, content)
+	// 默认页 Content-Type 恒 html（带外改库漂移自愈；白名单类型不影响——
+	// 渲染处空值回退与写侧白名单把守，此处仅归位默认页）。
+	result, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, content_type=?, updated_at=datetime('now') WHERE is_default=1 AND (content != ? OR COALESCE(content_type,'') != ?)`, content, models.DefaultBlockPageContentType, content, models.DefaultBlockPageContentType)
 	if err != nil {
 		return false, fmt.Errorf("更新默认拦截页面内容: %w", err)
 	}
@@ -506,8 +508,8 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
 			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.id, err)
 		}
-		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (name != ? OR description != ? OR content != ? OR COALESCE(is_builtin,0) != 1)`,
-			bp.name, bp.desc, stock, bp.id, bp.name, bp.desc, stock)
+		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (name != ? OR description != ? OR content != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
+			bp.name, bp.desc, stock, models.DefaultBlockPageContentType, bp.id, bp.name, bp.desc, stock, models.DefaultBlockPageContentType)
 		if err != nil {
 			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.id, err)
 		}

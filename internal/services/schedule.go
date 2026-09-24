@@ -13,15 +13,40 @@ import (
 // 规则库定时调度（v2.3.x）：CRS/IP2Region/威胁情报库三个更新任务的排程从固定
 // 24h 间隔改为「星期多选 + 时间」可配置——DB 存逗号串星期（1=周一…7=周日，
 // 默认全选=每天）与 HH:MM（默认 04:00），槽位按基础设置时区（CurrentLocation）
-// 的本地日历计算、UTC 落库。到期判定仍走 next_update<=now 不变，变的只是
-// 「重排时写什么」。失败退避优先：失败后 1h/指数退避的 next_update 覆写排程槽
-// （先恢复服务，下个成功后再回到排程节奏）；威胁库保存排程时失败源保留退避
-// 不重排。手动「立即更新」不受影响（成功路径同样按排程槽重排）。
+// 的本地日历计算、UTC 落库。到期判定走 next_update<=now。
+// 2026-09-25 用户裁定（排程语义重构）：①任务必须真正按设置的日期+时间触发
+// ——next_update 恒为排程槽（真实触发时间），失败退避不再改写它（原 1h/指数
+// 退避覆写机制撤除）；②失败重试在当前任务内完成（见下方 updateMaxAttempts），
+// 日志记「第 x 次，共 x 次」；重试耗尽后任务落定 failed，下一运行=下一排程槽。
 
 const (
 	defaultScheduleDays = "1,2,3,4,5,6,7"
 	defaultScheduleTime = "04:00"
+
+	// updateMaxAttempts 任务内重试：同一任务内对失败步骤最多尝试 3 次
+	// （1 初始 + 2 重试），重试等待见 updateAttemptWaits。
+	updateMaxAttempts = 3
 )
+
+// updateAttemptWaits 第 N 次失败后的重试等待（30s/60s）。
+var updateAttemptWaits = []time.Duration{30 * time.Second, 60 * time.Second}
+
+// updateRetrySleep 重试等待（测试可替换为即时返回）。
+var updateRetrySleep = func(d time.Duration) { time.Sleep(d) }
+
+// runWithInTaskRetry 在同一任务内重试失败步骤：第 N 次失败后经 onWait 回调
+// （调用方落「等待 Ns 重试，第 x 次，共 x 次」日志），等待后重试；耗尽返回最后错误。
+func runWithInTaskRetry(op func() error, onWait func(nextAttempt int, wait time.Duration, err error)) error {
+	var err error
+	for attempt := 1; ; attempt++ {
+		if err = op(); err == nil || attempt >= updateMaxAttempts {
+			return err
+		}
+		wait := updateAttemptWaits[attempt-1]
+		onWait(attempt+1, wait, err)
+		updateRetrySleep(wait)
+	}
+}
 
 // NormalizeScheduleDays 归一写侧输入：过滤非法值、去重、升序；结果为空表示
 // 输入无有效星期（调用方按校验失败拒绝）。
@@ -176,10 +201,10 @@ func setVersionTableSchedule(table, seedVersion string, days []int, hhmm string)
 	if _, err := db.DB.Exec(`INSERT OR IGNORE INTO `+table+` (id, version, auto_update) VALUES (1, ?, TRUE)`, seedVersion); err != nil {
 		return fmt.Errorf("初始化版本记录: %w", err)
 	}
-	// F49-2（第 49 轮审计）：失败退避 pending 的行保留退避排程（先恢复服务，
-	// 下个成功后回到排程节奏）——与 SetThreatSchedule 的失败源保留同口径。
+	// 2026-09-25 用户裁定：失败退避撤除——一律重排到新槽（原 F49-2 失败行保留
+	// 退避的 IIF 守卫随退避机制一并移除）。
 	next := NextScheduledSlot(time.Now().UTC(), norm, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
-	if _, err := db.DB.Exec(`UPDATE `+table+` SET schedule_days=?, schedule_time=?, next_update=IIF(COALESCE(update_status,'')='failed', next_update, ?) WHERE id=1`,
+	if _, err := db.DB.Exec(`UPDATE `+table+` SET schedule_days=?, schedule_time=?, next_update=? WHERE id=1`,
 		FormatScheduleDays(norm), hhmm, next); err != nil {
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}
@@ -196,8 +221,8 @@ func SetIP2RegionSchedule(days []int, hhmm string) error {
 	return setVersionTableSchedule("security_ip2region_version", "unknown", days, hhmm)
 }
 
-// SetThreatSchedule 保存威胁库任务级排程（global_config）并重排启用且非失败
-// 源的 next_update；失败源保留退避排程（先恢复服务，下个成功后回到排程节奏）。
+// SetThreatSchedule 保存威胁库任务级排程（global_config）并重排全部启用源的
+// next_update（2026-09-25 用户裁定：失败源不再保留退避，一律重排到新槽）。
 func SetThreatSchedule(days []int, hhmm string) error {
 	norm, err := validateScheduleInput(days, hhmm)
 	if err != nil {
@@ -208,7 +233,7 @@ func SetThreatSchedule(days []int, hhmm string) error {
 		FormatScheduleDays(norm), hhmm); err != nil {
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(update_status,'') != 'failed'`, next); err != nil {
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1`, next); err != nil {
 		return fmt.Errorf("重排威胁库源更新计划: %w", err)
 	}
 	return nil

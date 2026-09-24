@@ -630,7 +630,7 @@
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量），不配置拦截页</span>
+            <span class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量）；拦截页在下一步配置，缺省时跟随同规则其他策略的页面</span>
             <div class="stage-projection-rules">
               <span class="stage-projection-empty">{{ boundRules.length > 0 ? `将应用于 ${boundRules.length} 条已关联规则` : '尚未关联规则' }}</span>
             </div>
@@ -642,7 +642,6 @@
             <template v-if="form.rate_limit_enabled">
               <el-form-item label="速率上限">
                 <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 120px" />
-                <span class="form-tip-inline">次/秒，持续请求时的速率上限（按客户端 IP 分别计数）</span>
               </el-form-item>
               <el-form-item label="突发余量">
                 <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 120px" />
@@ -752,7 +751,7 @@
           </el-form>
         </div>
 
-        <!-- Step: 拦截页（阶段 1/阶段 3 策略可配；阶段 2 限流恒 429 不配页） -->
+        <!-- Step: 拦截页（阶段 1/2/3 策略可配；阶段 2 状态码恒 429——步内隐藏状态码项） -->
         <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">规则可配阶段页覆盖；未覆盖时按触发策略显示</span>
@@ -767,8 +766,7 @@
                 <el-option :value="0" label="不使用自定义页面（Caddy 默认 403）" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
-              <div v-if="form.block_page_id === 0" class="form-tip-line">不生成拦截页面错误路由，拦截返回 Caddy 默认 403</div>
-              <div v-else-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
+              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? '不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）' : '不生成拦截页面错误路由，拦截返回 Caddy 默认 403' }}</div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
               <!-- 拦截页归因分层口径：规则可配阶段页覆盖；未覆盖时按触发策略显示 -->
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
@@ -780,7 +778,7 @@
                 </div>
               </div>
             </el-form-item>
-            <el-form-item label="返回状态码">
+            <el-form-item v-if="editorPolicyType !== 'stage2'" label="返回状态码">
               <el-select v-model="form.block_status_code" style="width: 200px">
                 <el-option :value="400" label="400 Bad Request" />
                 <el-option :value="401" label="401 Unauthorized" />
@@ -789,6 +787,10 @@
                 <el-option :value="503" label="503 Service Unavailable" />
               </el-select>
               <span class="form-tip-inline">WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）</span>
+            </el-form-item>
+            <el-form-item v-else label="返回状态码">
+              <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
+              <span class="form-tip-inline">限流拦截恒为 429（便于指标单独计量），不可修改</span>
             </el-form-item>
           </el-form>
         </div>
@@ -1553,8 +1555,9 @@ const visibleSteps = computed<readonly WizardStep[]>(() => {
   if (typeAllowsStage(1)) steps.push(WIZARD_STEP.IP_ACL)
   if (typeAllowsStage(2)) steps.push(WIZARD_STEP.RATE_LIMIT)
   if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
-  // 阶段 0（直通/记录不拦截）与阶段 2（恒 429）无拦截页步骤
-  if (editorPolicyType.value !== 'stage2' && editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
+  // 阶段 0（直通/记录不拦截）无拦截页步骤；阶段 2 可配页（2026-09-25 用户裁定，
+  // 状态码恒 429 不可改——步内状态码项按类型隐藏）
+  if (editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
   steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
   return steps
 })

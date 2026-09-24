@@ -13,7 +13,7 @@ import (
 )
 
 func newTestIP2RegionManager(t *testing.T) *IP2RegionUpdateManager {
-	t.Helper()
+	stubUpdateRetrySleep(t) // 任务内重试等待即时化（同 newTestCRSManager）
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}

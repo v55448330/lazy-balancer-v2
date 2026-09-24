@@ -306,7 +306,17 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 	}
 	AppendThreatUpdateLog("INFO", "downloading", fmt.Sprintf("下载 %s（%s）", source.name, source.url))
 
-	entries, rawHash, err := downloadAndParseThreatSource(source)
+	// 任务内重试（2026-09-25 用户裁定）：瞬断在当前任务内重试，耗尽才落定——
+	// 失败退避不再改写排程槽（failSourceRow 写下一排程槽）。
+	var entries []string
+	var rawHash string
+	err := runWithInTaskRetry(func() error {
+		var derr error
+		entries, rawHash, derr = downloadAndParseThreatSource(source)
+		return derr
+	}, func(nextAttempt int, wait time.Duration, rerr error) {
+		AppendThreatUpdateLog("WARN", "retry", fmt.Sprintf("源 %s 下载失败: %v；等待 %s 重试，第 %d 次，共 %d 次", source.name, rerr, wait, nextAttempt, updateMaxAttempts))
+	})
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
 		failSourceRow(source.id, finished, err)
@@ -438,17 +448,14 @@ func threatListDescription(source string) string {
 	return ""
 }
 
-// failSourceRow 失败落库：status=failed + message + consecutive_failures+1 +
-// 指数退避 next_update（1h→2h→4h→8h→24h 封顶，镜像 CRS/IP2Region 语义）。
+// failSourceRow 失败落库：status=failed + message + consecutive_failures+1（遥测计数，
+// 不再驱动排程）+ next_update=下一排程槽（2026-09-25 用户裁定：退避不污染排程，
+// 重试已在任务内完成，耗尽后下一运行=下一排程槽）。
 func failSourceRow(id int, finished string, cause error) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET consecutive_failures=consecutive_failures+1 WHERE id=?`, id); err != nil {
 		Logf("error", "威胁情报库: 失败计数更新失败: %v", err)
 	}
-	var failures int
-	if err := db.DB.QueryRow(`SELECT consecutive_failures FROM security_threat_sources WHERE id=?`, id).Scan(&failures); err != nil {
-		failures = 1
-	}
-	next := time.Now().UTC().Add(updateRetryBackoff(failures)).Format(crsTimeLayout)
+	next := threatNextSlot(time.Now().UTC())
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message=?, finished_at=?, next_update=?, updated_at=datetime('now') WHERE id=?`,
 		cause.Error(), finished, next, id); err != nil {
 		Logf("error", "威胁情报库: 失败状态落库失败: %v", err)

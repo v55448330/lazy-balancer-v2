@@ -100,6 +100,14 @@ func crsTransientPath(crsDir, name string) string {
 	return filepath.Join(crsTransientDir(crsDir), name)
 }
 
+// crsReloadError 包装「下载安装成功但 Caddy 重载失败」——非瞬断网络错误，
+// 任务内重试（crsupdate.go runWithInTaskRetry）不覆盖（重试会重复整套
+// 下载/安装/restore 编舞；ip2regionupdate.go 的 errIP2RegionReload 同型先例）。
+type crsReloadError struct{ cause error }
+
+func (e *crsReloadError) Error() string { return e.cause.Error() }
+func (e *crsReloadError) Unwrap() error { return e.cause }
+
 // downloadAndInstall downloads, validates and swaps in the new rules. The
 // live tree persists across rebuilds via the /app/waf bind mount, so no
 // snapshot is taken. On failure the live tree is restored from backup by
@@ -324,7 +332,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 			); rbErr != nil {
 				writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("版本行回滚失败（重启后 ReconcileCRSState 自愈）: %v", rbErr))
 			}
-			return fmt.Errorf("重载 Caddy: %w", err)
+			return &crsReloadError{cause: fmt.Errorf("重载 Caddy: %w", err)}
 		}
 	}
 

@@ -506,6 +506,9 @@ func createTables() error {
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
 		content TEXT DEFAULT '',
+		-- 拦截响应 Content-Type（2026-09-25 用户裁定可配置，白名单见 models）；
+		-- 存量行由 ensureNewColumns 补列，默认即内置三页的形态。
+		content_type TEXT DEFAULT 'text/html; charset=utf-8',
 		is_default BOOLEAN DEFAULT FALSE,
 		is_builtin BOOLEAN DEFAULT FALSE,
 		created_by INTEGER DEFAULT 0,
@@ -927,8 +930,9 @@ func runMigrations() error {
 		"security_block_pages.updated_by":             "INTEGER DEFAULT 0",
 		// 内置备选拦截页标志（2026-09-25 裁定）：id 9001 限流/9002 维护，与
 		// is_default 同门禁（不可编辑/删除），仅作模板手动选用，无自动绑定。
-		"security_block_pages.is_builtin": "INTEGER DEFAULT 0",
-		"security_policies.updated_by":    "INTEGER DEFAULT 0",
+		"security_block_pages.is_builtin":   "INTEGER DEFAULT 0",
+		"security_block_pages.content_type": "TEXT DEFAULT 'text/html; charset=utf-8'",
+		"security_policies.updated_by":      "INTEGER DEFAULT 0",
 		// 四列刻意可空（不加 NOT NULL）：restoreTable/快照/带外脏数据可携带 NULL，
 		// 读路径 loadSecurityPolicyContext 以 COALESCE 归一化；加 NOT NULL 会拒绝 null 恢复（A-I2/F3 回归测试）。
 		"security_policies.ip_whitelist_enabled": "INTEGER DEFAULT 1",

@@ -13,7 +13,7 @@ import (
 )
 
 func newTestCRSManager(t *testing.T) *CRSUpdateManager {
-	t.Helper()
+	stubUpdateRetrySleep(t) // 任务内重试等待即时化（30s/60s 真睡会拖垮失败路径测试）
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}

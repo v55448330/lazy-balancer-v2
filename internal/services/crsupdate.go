@@ -101,7 +101,7 @@ func newCRSUpdateManager(reloader func() error) *CRSUpdateManager {
 		downloadTarball:   defaultDownloadCRSTarball,
 		crsDir:            crsLiveDir,
 		ruleCount:         -1,
-		schedulerInterval: time.Hour,
+		schedulerInterval: time.Minute,
 		state:             crsTaskState{status: CRSStatusIdle},
 	}
 }
@@ -146,10 +146,9 @@ func SetCRSAutoUpdate(enabled bool) error {
 	if enabled {
 		nextUpdate = versionTableNextSlot("security_crs_version", time.Now().UTC())
 	}
-	// F50-4（第 50 轮审计）：开启重排时失败退避 pending 的行保留退避点
-	//（先恢复服务，下个成功后回到排程节奏）——与 setVersionTableSchedule
-	// 的 F49-2 守卫同口径；关闭仍无条件清空。
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=CASE WHEN ? THEN IIF(COALESCE(update_status,'')='failed', next_update, ?) ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
+	// 2026-09-25 用户裁定：失败退避机制撤除——开启重排一律写下一排程槽，
+	// 失败行不再保留退避点（重试在任务内完成）；关闭仍无条件清空。
+	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=CASE WHEN ? THEN ? ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 CRS 自动更新开关: %w", err)
 	}
 	return nil
@@ -242,10 +241,19 @@ func (m *CRSUpdateManager) run(trigger string) {
 	}
 
 	m.setStage(CRSStatusChecking, "查询最新 CRS 版本")
-	tag, err := m.fetchLatestTag(context.Background())
-	if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
-		Logf("error", "crs update: failed to record last_checked: %v", dbErr)
-	}
+	// 任务内重试（2026-09-25 用户裁定）：瞬断在当前任务内重试，耗尽才落定失败——
+	// 失败退避不再改写排程槽，下一运行=下一排程槽。
+	var tag string
+	err := runWithInTaskRetry(func() error {
+		var ferr error
+		tag, ferr = m.fetchLatestTag(context.Background())
+		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
+			Logf("error", "crs update: failed to record last_checked: %v", dbErr)
+		}
+		return ferr
+	}, func(nextAttempt int, wait time.Duration, rerr error) {
+		writeCRSUpdateLog("WARN", "retry", fmt.Sprintf("查询 CRS 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
+	})
 	if err != nil {
 		m.fail(err, false)
 		return
@@ -279,11 +287,23 @@ func (m *CRSUpdateManager) run(trigger string) {
 	m.state.version = tag
 	m.mu.Unlock()
 
-	if err := m.downloadAndInstall(tag); err != nil {
-		m.fail(err, true)
+	var installErr error
+	_ = runWithInTaskRetry(func() error {
+		installErr = m.downloadAndInstall(tag)
+		// crsReloadError=安装成功但重载失败（restore 编舞已执行）——非瞬断，不重试
+		// （errIP2RegionReload 同型先例）。
+		var rerr *crsReloadError
+		if errors.As(installErr, &rerr) {
+			return nil
+		}
+		return installErr
+	}, func(nextAttempt int, wait time.Duration, rerr error) {
+		writeCRSUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 CRS %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
+	})
+	if installErr != nil {
+		m.fail(installErr, true)
 		return
 	}
-
 	if _, err := db.DB.Exec(
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
 		tag, versionTableNextSlot("security_crs_version", time.Now().UTC()),

@@ -822,6 +822,9 @@ type caddyConfigStore interface {
 type securityPolicyContext struct {
 	policyByRule  map[string][]*models.SecurityPolicy
 	blockPageByID map[int]string
+	// blockPageTypeByID 页 id → Content-Type（2026-09-25 用户裁定可配置）；
+	// 缺失/空值在渲染处回退 text/html; charset=utf-8。
+	blockPageTypeByID map[int]string
 	// policySynthetic 是拦截页按触发策略归因的合成中断码分配（policy_id →
 	// 481+序号）：取全部被任一规则绑定的启用策略中 BlockPageID>0 且页内容
 	// 非空者，按 policy_id ASC 分配。按策略身份（非绑定序）使同一策略在所有
@@ -844,10 +847,11 @@ type securityPolicyContext struct {
 // 顺序收集启用策略（禁用绑定仅占位，不产生元素）。
 func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
 	ctx := &securityPolicyContext{
-		policyByRule:    make(map[string][]*models.SecurityPolicy),
-		blockPageByID:   make(map[int]string),
-		policySynthetic: make(map[int]int),
-		store:           store,
+		policyByRule:      make(map[string][]*models.SecurityPolicy),
+		blockPageByID:     make(map[int]string),
+		blockPageTypeByID: make(map[int]string),
+		policySynthetic:   make(map[int]int),
+		store:             store,
 	}
 	bindingRows, err := store.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rule_caddy_id, policy_id ASC`)
 	if err != nil {
@@ -966,18 +970,19 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	if !referencedPage {
 		return ctx, nil
 	}
-	pageRows, err := store.Query(`SELECT id, COALESCE(content,'') FROM security_block_pages`)
+	pageRows, err := store.Query(`SELECT id, COALESCE(content,''), COALESCE(content_type,'') FROM security_block_pages`)
 	if err != nil {
 		return nil, err
 	}
 	for pageRows.Next() {
 		var id int
-		var content string
-		if err := pageRows.Scan(&id, &content); err != nil {
+		var content, contentType string
+		if err := pageRows.Scan(&id, &content, &contentType); err != nil {
 			_ = pageRows.Close()
 			return nil, err
 		}
 		ctx.blockPageByID[id] = content
+		ctx.blockPageTypeByID[id] = contentType
 	}
 	if err := pageRows.Err(); err != nil {
 		_ = pageRows.Close()
@@ -1701,7 +1706,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 					continue
 				}
 				emittedSynthetic[stage.code] = struct{}{}
-				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(stage.code, content, stage.status))
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(stage.code, content, stage.status, securityCtx.blockPageTypeByID[stage.pageID]))
 			}
 			for _, policy := range policiesForRule(securityCtx, r.CaddyID) {
 				code := securityCtx.policySynthetic[policy.ID]
@@ -1712,7 +1717,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 					continue
 				}
 				emittedSynthetic[code] = struct{}{}
-				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode))
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID]))
 			}
 		}
 		if len(errorRoutes) > 0 {
@@ -2962,11 +2967,20 @@ func stage1BlockStatus(securityCtx *securityPolicyContext, rule SingleRuleConfig
 	return 0
 }
 
+// blockPageContentType 渲染处 Content-Type 归一：空值回退默认 html
+// （2026-09-25 用户裁定可配置，白名单由写侧 models.ValidBlockPageContentType 把守）。
+func blockPageContentType(contentType string) string {
+	if contentType == "" {
+		return models.DefaultBlockPageContentType
+	}
+	return contentType
+}
+
 // buildBlockPageAttributionRoute 返回一条按策略归因的错误路由：matcher 仅
 // 合成中断码 + interruption 消息（不带 host——合成码只可能由绑定该策略的
 // 规则段产生），static_response 渲染该策略的拦截页内容与其配置状态码
 // （0 归一 403）。与兜底路由（403,host 限定）状态码域不相交，顺序无关。
-func buildBlockPageAttributionRoute(synthetic int, content string, statusCode int) map[string]interface{} {
+func buildBlockPageAttributionRoute(synthetic int, content string, statusCode int, contentType string) map[string]interface{} {
 	if statusCode == 0 {
 		statusCode = 403
 	}
@@ -2982,7 +2996,7 @@ func buildBlockPageAttributionRoute(synthetic int, content string, statusCode in
 				"body":        content,
 				"status_code": statusCode,
 				"headers": map[string]interface{}{
-					"Content-Type": []string{"text/html; charset=utf-8"},
+					"Content-Type": []string{blockPageContentType(contentType)},
 				},
 			},
 		},
@@ -3059,7 +3073,7 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 				"body":        content,
 				"status_code": statusCode,
 				"headers": map[string]interface{}{
-					"Content-Type": []string{"text/html; charset=utf-8"},
+					"Content-Type": []string{blockPageContentType(securityCtx.blockPageTypeByID[pagePolicy.BlockPageID])},
 				},
 			},
 		},
@@ -3109,7 +3123,7 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, security
 				"body":        content,
 				"status_code": 429,
 				"headers": map[string]interface{}{
-					"Content-Type": []string{"text/html; charset=utf-8"},
+					"Content-Type": []string{blockPageContentType(securityCtx.blockPageTypeByID[pagePolicy.BlockPageID])},
 					"Retry-After":  []string{"1"},
 				},
 			},

@@ -66,7 +66,7 @@ func newIP2RegionUpdateManager(reloader func() error) *IP2RegionUpdateManager {
 		reloader:          reloader,
 		fetchLatestTag:    defaultFetchIP2RegionLatestTag,
 		downloadXDB:       defaultDownloadIP2RegionXDB,
-		schedulerInterval: time.Hour,
+		schedulerInterval: time.Minute,
 		state:             ip2RegionTaskState{status: IP2RegionStatusIdle},
 	}
 }
@@ -104,10 +104,9 @@ func SetIP2RegionAutoUpdate(enabled bool) error {
 	if enabled {
 		nextUpdate = versionTableNextSlot("security_ip2region_version", time.Now().UTC())
 	}
-	// F50-4（第 50 轮审计）：开启重排时失败退避 pending 的行保留退避点
-	//（先恢复服务，下个成功后回到排程节奏）——与 setVersionTableSchedule
-	// 的 F49-2 守卫同口径；关闭仍无条件清空。
-	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=CASE WHEN ? THEN IIF(COALESCE(update_status,'')='failed', next_update, ?) ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
+	// 2026-09-25 用户裁定：失败退避机制撤除——开启重排一律写下一排程槽；
+	// 关闭仍无条件清空。
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=CASE WHEN ? THEN ? ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 IP2Region 自动更新开关: %w", err)
 	}
 	return nil
@@ -202,10 +201,18 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	}
 
 	m.setStage(IP2RegionStatusChecking, "查询最新 ip2region 版本")
-	tag, err := m.fetchLatestTag(context.Background())
-	if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
-		Logf("error", "ip2region update: failed to record last_checked: %v", dbErr)
-	}
+	// 任务内重试（2026-09-25 用户裁定）：同 CRS 侧——耗尽才落定，排程槽不污染。
+	var tag string
+	err := runWithInTaskRetry(func() error {
+		var ferr error
+		tag, ferr = m.fetchLatestTag(context.Background())
+		if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
+			Logf("error", "ip2region update: failed to record last_checked: %v", dbErr)
+		}
+		return ferr
+	}, func(nextAttempt int, wait time.Duration, rerr error) {
+		writeIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("查询 ip2region 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
+	})
 	if err != nil {
 		m.fail(err)
 		return
@@ -242,7 +249,17 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	m.state.version = tag
 	m.mu.Unlock()
 
-	installErr := m.downloadAndInstall(tag)
+	var installErr error
+	_ = runWithInTaskRetry(func() error {
+		installErr = m.downloadAndInstall(tag)
+		// errIP2RegionReload=内存热换失败（fail-open 回滚路径），非瞬断——不重试。
+		if errors.Is(installErr, errIP2RegionReload) {
+			return nil
+		}
+		return installErr
+	}, func(nextAttempt int, wait time.Duration, rerr error) {
+		writeIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 ip2region %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
+	})
 	if installErr != nil && !errors.Is(installErr, errIP2RegionReload) {
 		m.fail(fmt.Errorf("安装 ip2region xdb 失败: %w", installErr))
 		return

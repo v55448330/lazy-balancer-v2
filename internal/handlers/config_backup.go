@@ -327,7 +327,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"enabled": int64(1), "updated_by": int64(0), "created_at": "", "updated_at": "",
 	},
 	"security_block_pages": {
-		"description": "", "content": "", "is_default": int64(0),
+		"description": "", "content": "", "content_type": "text/html; charset=utf-8", "is_default": int64(0),
 		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
 	},
 	// v2.3.0 security_ip_lists：默认值与集群 dump 侧 COALESCE 口径逐列对齐

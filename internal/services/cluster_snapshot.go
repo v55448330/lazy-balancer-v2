@@ -574,7 +574,7 @@ func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store 
 }
 
 func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store snapshotStore) ([]models.SecurityBlockPage, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(content,''),COALESCE(is_default,0),COALESCE(is_builtin,0),COALESCE(created_by,0),COALESCE(created_at,''),COALESCE(updated_by,0),COALESCE(updated_at,'') FROM security_block_pages ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(content,''),COALESCE(content_type,''),COALESCE(is_default,0),COALESCE(is_builtin,0),COALESCE(created_by,0),COALESCE(created_at,''),COALESCE(updated_by,0),COALESCE(updated_at,'') FROM security_block_pages ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照拦截页面: %w", err)
 	}
@@ -582,7 +582,7 @@ func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store s
 	pages := make([]models.SecurityBlockPage, 0)
 	for rows.Next() {
 		var page models.SecurityBlockPage
-		if err := rows.Scan(&page.ID, &page.Name, &page.Description, &page.Content, &page.IsDefault, &page.IsBuiltin, &page.CreatedBy, &page.CreatedAt, &page.UpdatedBy, &page.UpdatedAt); err != nil {
+		if err := rows.Scan(&page.ID, &page.Name, &page.Description, &page.Content, &page.ContentType, &page.IsDefault, &page.IsBuiltin, &page.CreatedBy, &page.CreatedAt, &page.UpdatedBy, &page.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照拦截页面: %w", err)
 		}
 		pages = append(pages, page)

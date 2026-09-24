@@ -25,6 +25,18 @@
             <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">内置</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="内容类型" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="contentTypeTagType(row.content_type)" effect="plain">{{ contentTypeLabel(row.content_type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="规则引用" width="90" align="center">
+          <template #default="{ row }">
+            <el-tooltip :disabled="!row.rule_ref_count" content="引用本页的负载均衡规则数（启用策略绑定 ∪ 规则级阶段覆盖）" placement="top">
+              <span>{{ row.rule_ref_count ?? 0 }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
         <el-table-column label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
@@ -48,7 +60,7 @@
           <div class="dialog-header__icon dialog-header__icon--warning"><el-icon :size="18"><Document /></el-icon></div>
           <div class="dialog-header__text">
             <div class="dialog-header__title">{{ dialogTitle }}</div>
-            <div class="dialog-header__subtitle">命中拦截规则时返回的 HTML 页面，支持内联 CSS 样式</div>
+            <div class="dialog-header__subtitle">命中拦截规则时返回给客户端的响应页面，支持自定义内容类型</div>
           </div>
         </div>
       </template>
@@ -58,6 +70,12 @@
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" placeholder="页面描述" :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" />
+        </el-form-item>
+        <el-form-item label="内容类型">
+          <el-select v-model="form.content_type" style="width: 320px" :disabled="isReadOnly || currentPage?.is_default || currentPage?.is_builtin">
+            <el-option v-for="opt in CONTENT_TYPE_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
+          </el-select>
+          <span class="form-tip-inline">拦截响应的 Content-Type（均 UTF-8 编码）</span>
         </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
@@ -92,7 +110,7 @@ import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import type { APIResponse, UserListItem } from '@/types'
-interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -114,7 +132,28 @@ const dialogTitle = computed(() => {
   return currentPage.value?.is_default || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
 })
 
-const form = ref({ name: '', description: '', content: '' })
+const form = ref({ name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' })
+
+// 可选内容类型（与后端 models.BlockPageContentTypes 白名单同口径）
+const CONTENT_TYPE_OPTIONS = [
+  { value: 'text/html; charset=utf-8', label: 'HTML 页面（text/html）' },
+  { value: 'application/json; charset=utf-8', label: 'JSON（application/json）' },
+  { value: 'application/xml; charset=utf-8', label: 'XML（application/xml）' },
+  { value: 'text/plain; charset=utf-8', label: '纯文本（text/plain）' },
+] as const
+const contentTypeLabel = (ct?: string): string => {
+  if (!ct) return 'HTML'
+  if (ct.includes('json')) return 'JSON'
+  if (ct.includes('xml')) return 'XML'
+  if (ct.includes('plain')) return 'TXT'
+  return 'HTML'
+}
+const contentTypeTagType = (ct?: string): 'primary' | 'success' | 'warning' | 'info' => {
+  if (!ct || ct.includes('html')) return 'primary'
+  if (ct.includes('json')) return 'success'
+  if (ct.includes('xml')) return 'warning'
+  return 'info'
+}
 
 const fetchData = async () => {
   loading.value = true
@@ -141,9 +180,9 @@ const openDialog = (row?: BlockPage) => {
   editingId.value = row?.id ?? null
   currentPage.value = row ?? null
   if (row) {
-      form.value = { name: row.name, description: row.description, content: row.content }
+      form.value = { name: row.name, description: row.description, content: row.content, content_type: row.content_type || 'text/html; charset=utf-8' }
   } else {
-      form.value = { name: '', description: '', content: '' }
+      form.value = { name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' }
   }
   dialogVisible.value = true
 }

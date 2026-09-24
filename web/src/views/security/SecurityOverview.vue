@@ -439,7 +439,10 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 .rate-limit-hint { flex-shrink: 0; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 8px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
-.title-icon { font-size: 16px; color: #3b82f6; }
+/* 卡片标题图标 16px；页头图标走全局 .title-icon（20px，2026-09-25 用户裁定
+   与其他安全页面对齐——原裸 .title-icon 覆盖把页头图标也压成 16px 致
+   page-desc 28px 缩进与标题文字错位） */
+.card-title .title-icon { font-size: 16px; color: #3b82f6; }
 
 .stat-box {
   min-height: 108px;

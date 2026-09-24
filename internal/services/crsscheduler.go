@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -57,16 +56,16 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 	}()
 }
 
-// StartScheduler launches the auto-update loop (hourly check; cadence follows
-// the configurable 星期+时间 schedule, default daily 04:00). It is a no-op on
-// slave nodes and while an update is running.
+// StartScheduler launches the auto-update loop（分钟级 tick：排程槽准点触发，
+// 迟到 ≤1min，2026-09-25 用户裁定；原小时级 tick 槽位最多迟到 59min）。从节点
+// 与更新在途时为 no-op。
 func (m *CRSUpdateManager) StartScheduler() {
 	m.schedulerMu.Lock()
 	defer m.schedulerMu.Unlock()
 	if m.schedulerStop != nil {
 		return
 	}
-	restoreFailedUpdateBackoff("security_crs_version", time.Now().UTC())
+	// 退避 restore 已撤除（重试在任务内完成，next_update 恒为排程槽）。
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	m.schedulerStop = stop
@@ -144,115 +143,10 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	// StartUpdate 唯一可预期错误是 ErrCRSUpdateRunning——IsRunning 前置守卫
-	// 与取锁之间存在微秒窗口：手动更新恰在此窗口启动时返回该错误（R57 B-#5）。
-	// 此时必须同样走 rearm 复查——否则排程槽已落库而失败退避重写被跳过，
-	// 下次自动重试被推迟到下一个排程槽（手动更新失败时）。启动失败的其他
-	// 形态退避分支不可达（R36 F4 删除）。
-	if runDone, err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterCRSUpdate(now, stop, runDone)
-	} else if errors.Is(err, ErrCRSUpdateRunning) {
-		m.rearmAfterCRSUpdate(now, stop, nil)
-	}
-}
-
-// rearmAfterCRSUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
-// next_update 改为退避重试点，成功维持运行前写入的排程槽（R34 I：原先运行前
-// 写死 +24h，失败整天不重试）。等待可被 stop 打断（R55-A-#1）：
-// 降级时 StopScheduler 关闭 stop，调度立即退出而不被在途更新时长（有界
-// 6-7min）拖住；被打断时跳过失败退避重写——调度器已停，rearm 无意义，
-// 在途更新本身仍在后台完成。跳过留下的远期 next_update 由下次启动调度器
-// （提升为主/进程重启）时的 restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
-// R64 B-F2：runDone 为本次 tick 启动的 run 的完成通道（ErrCRSUpdateRunning
-// 插队分支传 nil，回退等待现行 m.runDone——那是手动 run，其终态由操作者直接
-// 观察管理）。终态读取附带归属校验：等待结束时若 m.runDone 已被更新的 run
-// 接管（手动更新在微秒窗口插队），本 tick 的 run 已非最新——跳过退避重写，
-// 由接管 run 的操作者/后续 tick 决定排程，不再按他人终态误判。
-// 已知取舍（R65 B-S1）：「auto 失败 + 手动插队 + 手动也失败」时 auto 的失败
-// 退避被跳过，next_update 停留 tick 预写的排程槽（本应退避档）——影响有界：
-// 最坏推迟到下一个选中星期的槽位（默认全周 04:00 时 ≤24h；仅选单个星期时
-// ≤7 天），且经 restoreFailedUpdateBackoff 在下次 StartScheduler 时拉回；反向
-// 按接管者终态重写则会在「手动成功复位计数」场景错写 +1h。取保守跳过。
-func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
-	wait := runDone
-	if wait == nil {
-		m.mu.Lock()
-		wait = m.runDone
-		m.mu.Unlock()
-	}
-	if wait != nil {
-		select {
-		case <-wait:
-		case <-stop:
-			return
-		}
-	}
-	m.mu.Lock()
-	failed := m.state.status == CRSStatusFailed
-	overtaken := runDone != nil && m.runDone != runDone
-	m.mu.Unlock()
-	if !failed || overtaken {
-		return
-	}
-	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；
-	// fail() 已把 consecutive_failures +1。
-	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_crs_version"))).Format(crsTimeLayout)
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); err != nil {
-		Logf("error", "crs update: failed to record retry next_update: %v", err)
-	}
-}
-
-// updateRetryBackoff 返回连续失败后的下次重试间隔：1h→2h→4h→8h→24h 封顶
-// （failures≥5 起固定 24h）。成功更新会把计数复位，退避随之回到 1h。
-func updateRetryBackoff(failures int) time.Duration {
-	backoff := time.Hour
-	for i := 2; i <= failures && i <= 4; i++ {
-		backoff *= 2
-	}
-	if failures >= 5 {
-		backoff = 24 * time.Hour
-	}
-	return backoff
-}
-
-// restoreFailedUpdateBackoff 修正「停-wins 放弃退避重写」（R55-A-#1）留下的
-// 过期排程（R56 N-2）：tick 启动更新时写 next_update=下一个排程槽，降级打断
-// rearm 后在途更新失败，再提升的节点仍按残留的排程槽，失败重试被无谓推迟。
-// 调度器启动（提升为主/进程重启）时，若状态为 failed 且 next_update 晚于按
-// 当前连续失败次数应有的退避点，将其拉回退避排程；成功状态的正常排程槽、
-// 以及本就早于退避点的 next_update 均不动。仅主节点写库（从节点版本行由
-// 快照管辖）。
-func restoreFailedUpdateBackoff(table string, now time.Time) {
-	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
-		return
-	}
-	var status, nextStr string
-	if err := db.DB.QueryRow("SELECT COALESCE(update_status,''), COALESCE(next_update,'') FROM "+table+" WHERE id=1").Scan(&status, &nextStr); err != nil {
-		return
-	}
-	if status != string(CRSStatusFailed) || nextStr == "" {
-		return
-	}
-	due, err := time.Parse(crsTimeLayout, nextStr)
-	if err != nil {
-		return
-	}
-	retry := now.Add(updateRetryBackoff(readConsecutiveFailures(table)))
-	if !due.After(retry) {
-		return
-	}
-	if _, err := db.DB.Exec("UPDATE "+table+" SET next_update=? WHERE id=1", retry.Format(crsTimeLayout)); err != nil {
-		Logf("error", "update scheduler: failed to restore backoff next_update: %v", err)
-	}
-}
-
-// readConsecutiveFailures 读取组件状态表的连续失败计数（R35 I1 持久化列）；
-// 读取失败按 0 处理，退避退化为固定 1h，不影响排程推进。
-func readConsecutiveFailures(table string) int {
-	var failures int
-	if err := db.DB.QueryRow("SELECT consecutive_failures FROM " + table + " WHERE id=1").Scan(&failures); err != nil {
-		return 0
-	}
-	return failures
+	// 失败退避机器已撤除（2026-09-25 用户裁定）：重试在任务内完成（run 内
+	// runWithInTaskRetry），next_update 恒为排程槽——失败落定后下一运行=下一排程槽。
+	// StartUpdate 唯一可预期错误是 ErrXXXUpdateRunning——IsRunning 前置守卫与取锁
+	// 之间的微秒窗口被手动更新插队时返回，属正常竞态，静默忽略（手动 run 的终态
+	// 由操作者直接观察）。
+	_, _ = m.StartUpdate("auto")
 }

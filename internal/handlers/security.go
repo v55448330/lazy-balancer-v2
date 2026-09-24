@@ -297,7 +297,12 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(content,''), COALESCE(is_default,0), COALESCE(is_builtin,0), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,'') FROM security_block_pages ORDER BY is_default DESC, is_builtin DESC, id")
+	rows, err := db.DB.Query(`SELECT bp.id, bp.name, COALESCE(bp.description,''), COALESCE(bp.content,''), COALESCE(bp.content_type,'text/html; charset=utf-8'), COALESCE(bp.is_default,0), COALESCE(bp.is_builtin,0), COALESCE(bp.created_by,0), COALESCE(bp.created_at,''), COALESCE(bp.updated_by,0), COALESCE(bp.updated_at,''),
+		(SELECT COUNT(*) FROM (
+			SELECT b.rule_caddy_id FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id WHERE p.block_page_id=bp.id AND p.enabled=1
+			UNION SELECT r.caddy_id FROM lb_rules r WHERE r.block_page_stage1_id=bp.id OR r.block_page_stage3_id=bp.id
+		)) AS rule_ref_count
+		FROM security_block_pages bp ORDER BY bp.is_default DESC, bp.is_builtin DESC, bp.id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -306,7 +311,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.ContentType, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt, &p.RuleRefCount); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
@@ -349,6 +354,14 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能超过 64KB"})
 		return
 	}
+	// Content-Type 白名单（2026-09-25 用户裁定）：空=默认 html。
+	if req.ContentType == "" {
+		req.ContentType = models.DefaultBlockPageContentType
+	}
+	if !models.ValidBlockPageContentType(req.ContentType) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内容类型不支持，可选：text/html、application/json、application/xml、text/plain（均 UTF-8）"})
+		return
+	}
 	// API 不允许创建默认拦截页（R40 F3）：默认页仅 db 种子行，第二个
 	// is_default=1 页面不可编辑（:243）不可删除（:283），且 branding 重渲染
 	// 会覆盖全部默认页内容——产生不可管理的死行。
@@ -362,8 +375,8 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, false, int(contextUserID(c)), int(contextUserID(c)))
+	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, content_type, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Content, req.ContentType, false, int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -403,6 +416,14 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能超过 64KB"})
 		return
 	}
+	// Content-Type 白名单（2026-09-25 用户裁定，与创建同口径）：空=默认 html。
+	if req.ContentType == "" {
+		req.ContentType = models.DefaultBlockPageContentType
+	}
+	if !models.ValidBlockPageContentType(req.ContentType) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内容类型不支持，可选：text/html、application/json、application/xml、text/plain（均 UTF-8）"})
+		return
+	}
 	var isDefault, isBuiltin bool
 	// R41 B2: is_default 检查与 UPDATE 必须同事务（镜像 DeleteSecurityBlockPage
 	// R37 I1）。非事务读 + 错误丢弃的旧实现存在并发窗口：导入路径可在 SELECT 与
@@ -430,8 +451,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "内置拦截页面不可编辑"})
 		return
 	}
-	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, req.Content, int(contextUserID(c)), id)
+	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, req.Content, req.ContentType, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1358,7 +1379,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			req.IPWhitelist, req.IPWhitelistRefs = &emptyArr, &emptyArr
 			req.IPBlacklist = &emptyArr
 			req.GeoIPMode, req.GeoIPCountries = &offMode, &emptyArr
-			req.BlockPageID, req.BlockStatusCode = &zeroInt, &zeroInt
+			// 2026-09-25 用户裁定：stage2 允许配置拦截页（429 路由按其取页渲染）；
+			// 状态码仍归一 0——限流拦截恒 429（指标单独计量），页面由用户选。
+			req.BlockStatusCode = &zeroInt
 		case models.PolicyTypeStage3:
 			req.IPACLEnabled = &falseVal
 			req.IPACLList, req.IPACLListRefs = &emptyArr, &emptyArr
@@ -3937,7 +3960,8 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
 		req.IPBlacklist = "[]"
 		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
-		req.BlockPageID, req.BlockStatusCode = 0, 0
+		// 2026-09-25 用户裁定：stage2 允许配置拦截页（同 UPDATE 路径口径）。
+		req.BlockStatusCode = 0
 	case models.PolicyTypeStage3:
 		req.IPACLEnabled = false
 		req.IPACLList, req.IPACLListRefs = "[]", "[]"

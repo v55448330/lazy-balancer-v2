@@ -608,7 +608,7 @@ const libRows = computed<LibRow[]>(() => {
       count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
       status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
       autoUpdate: crsInfo.value.auto_update,
-      lastChecked: formatDate(crsInfo.value.updated_at) || '—',
+      lastChecked: formatDate(crsInfo.value.last_checked) || '—',
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
     },
     {
@@ -618,7 +618,7 @@ const libRows = computed<LibRow[]>(() => {
       status: ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
       statusMessage: ip2regionFailureMessage.value,
       autoUpdate: ip2regionInfo.value.auto_update,
-      lastChecked: formatDate(ip2regionInfo.value.updated_at) || '—',
+      lastChecked: formatDate(ip2regionInfo.value.last_checked) || '—',
       nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
     },
   ]
@@ -816,13 +816,13 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
   return 'info'
 }
 
-const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
+const crsInfo = ref({ version: '', auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const crsFailureMessage = computed(() => {
   const s = crsInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
 })
 
-const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
+const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const ip2regionVersionLabel = computed(() => {
   if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
   return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'

@@ -1,22 +1,19 @@
 package services
 
 import (
-	"errors"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
 
-// StartScheduler launches the auto-update loop (hourly check; cadence follows
-// the configurable 星期+时间 schedule, default daily 04:00). It is a no-op on
-// slave nodes and while an update is running.
+// StartScheduler launches the auto-update loop（分钟级 tick：排程槽准点触发，
+// 迟到 ≤1min，2026-09-25 用户裁定）。从节点与更新在途时为 no-op。
 func (m *IP2RegionUpdateManager) StartScheduler() {
 	m.schedulerMu.Lock()
 	defer m.schedulerMu.Unlock()
 	if m.schedulerStop != nil {
 		return
 	}
-	restoreFailedUpdateBackoff("security_ip2region_version", time.Now().UTC())
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	m.schedulerStop = stop
@@ -93,52 +90,7 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	// StartUpdate 唯一可预期错误是 ErrIP2RegionUpdateRunning——IsRunning 前置
-	// 守卫与取锁之间存在微秒窗口（R57 B-#5，与 CRS 侧同形）：手动更新恰在窗口
-	// 内启动时返回该错误，此时同样走 rearm 复查，避免排程槽落库而退避重写被
-	// 跳过。其他启动失败形态退避分支不可达（R36 F4 删除）。
-	if runDone, err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterIP2RegionUpdate(now, stop, runDone)
-	} else if errors.Is(err, ErrIP2RegionUpdateRunning) {
-		m.rearmAfterIP2RegionUpdate(now, stop, nil)
-	}
-}
-
-// rearmAfterIP2RegionUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
-// next_update 改为退避重试点（1h→2h→4h→8h→24h 封顶，R35 I1），成功维持运行前
-// 写入的排程槽（R34 I：原为写死 +24h）。
-// 等待可被 stop 打断（R55-A-#1）：降级时 StopScheduler 关闭 stop，调度立即
-// 退出而不被在途更新时长拖住；被打断时跳过失败退避重写，在途更新本身仍在
-// 后台完成。跳过留下的远期 next_update 由下次启动调度器时的
-// restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
-// R64 B-F2：runDone 为本次 tick 启动的 run 的完成通道（插队分支传 nil 回退
-// 等待现行 m.runDone）；终态读取附带归属校验——被更新的 run 接管时跳过退避
-// 重写，不按他人终态误判（与 CRS 侧同形）。
-func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
-	wait := runDone
-	if wait == nil {
-		m.mu.Lock()
-		wait = m.runDone
-		m.mu.Unlock()
-	}
-	if wait != nil {
-		select {
-		case <-wait:
-		case <-stop:
-			return
-		}
-	}
-	m.mu.Lock()
-	failed := m.state.status == IP2RegionStatusFailed
-	overtaken := runDone != nil && m.runDone != runDone
-	m.mu.Unlock()
-	if !failed || overtaken {
-		return
-	}
-	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；
-	// fail() 已把 consecutive_failures +1。
-	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_ip2region_version"))).Format(crsTimeLayout)
-	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", retry); err != nil {
-		Logf("error", "ip2region update: failed to record retry next_update: %v", err)
-	}
+	// 失败退避机器已撤除（2026-09-25 用户裁定，与 CRS 侧同形）：重试在任务内
+	// 完成，next_update 恒为排程槽；手动插队竞态静默忽略。
+	_, _ = m.StartUpdate("auto")
 }

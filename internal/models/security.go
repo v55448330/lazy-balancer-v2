@@ -378,12 +378,42 @@ type SecurityBlockPage struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Content     string `json:"content"`
+	// ContentType 拦截响应的 Content-Type（2026-09-25 用户裁定可配置）；
+	// 白名单见 BlockPageContentTypes，空值按 DefaultBlockPageContentType 归一。
+	ContentType string `json:"content_type"`
 	IsDefault   bool   `json:"is_default"`
 	IsBuiltin   bool   `json:"is_builtin"`
 	CreatedBy   int    `json:"created_by"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedBy   int    `json:"updated_by"`
 	UpdatedAt   string `json:"updated_at"`
+	// RuleRefCount 规则引用数（仅列表端点返回）：引用本页的规则去重计数
+	// （启用策略经绑定 ∪ 规则级阶段 1/3 覆盖）。
+	RuleRefCount int `json:"rule_ref_count"`
+}
+
+// DefaultBlockPageContentType 拦截页默认 Content-Type（内置三页同此）。
+const DefaultBlockPageContentType = "text/html; charset=utf-8"
+
+// BlockPageContentTypes 可选 Content-Type 白名单（含编码；创建/更新写侧校验）。
+var BlockPageContentTypes = []string{
+	DefaultBlockPageContentType,
+	"application/json; charset=utf-8",
+	"application/xml; charset=utf-8",
+	"text/plain; charset=utf-8",
+}
+
+// ValidBlockPageContentType 报告 contentType 是否在白名单内（空串视为默认合法）。
+func ValidBlockPageContentType(contentType string) bool {
+	if contentType == "" {
+		return true
+	}
+	for _, t := range BlockPageContentTypes {
+		if contentType == t {
+			return true
+		}
+	}
+	return false
 }
 
 // IPList 是可复用 IP 地址列表（security_ip_lists 行）：entries 为

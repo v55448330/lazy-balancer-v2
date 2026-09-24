@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,108 +112,6 @@ func TestIP2RegionStopScheduler_returnsPromptly_whenUpdateInFlight(t *testing.T)
 	runDone := m.runDone
 	m.mu.Unlock()
 	<-runDone
-}
-
-// TestCRSScheduler_promoteRestoresFailedBackoff_afterStopWinsAbandonedRearm 验证
-// R56 N-2：tick 启动更新时已写 next_update=排程槽（原 +24h），降级 stop 获胜使
-// rearm 的失败退避重写被跳过（R55-A-#1 有意取舍），在途更新失败后再提升的节点
-// 仍按残留的远期排程，失败重试被无谓推迟（设计退避 1h 起）。提升为主（启动
-// 调度器）时必须把失败状态的过期排程拉回连续失败次数对应的退避点。
-func TestCRSScheduler_promoteRestoresFailedBackoff_afterStopWinsAbandonedRearm(t *testing.T) {
-	// Given 主节点 + 到期的 CRS 自动更新排程，更新在 fetch 阶段被卡住（随后失败）
-	_, _ = newClusterTestService(t)
-	InitCRSUpdateManager(func() error { return nil })
-	t.Cleanup(ResetCRSUpdateManagerForTest)
-	m := GetCRSUpdateManager()
-	// 排程槽锚定明日 04:00：tick 预写值恒 >1h 退避点，后段「保持预写/拉回退避」
-	// 断言与墙钟无关（排程化改造后预写=排程槽而非 +24h）。
-	tomorrowISO := int(time.Now().In(CurrentLocation()).AddDate(0, 0, 1).Weekday())
-	if tomorrowISO == 0 {
-		tomorrowISO = 7
-	}
-	if err := SetCRSSchedule([]int{tomorrowISO}, "04:00"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=1, next_update=? WHERE id=1",
-		time.Now().UTC().Add(-time.Hour).Format(crsTimeLayout)); err != nil {
-		t.Fatal(err)
-	}
-	block := make(chan struct{})
-	entered := make(chan struct{})
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		close(entered)
-		<-block
-		return "", errors.New("upstream unreachable")
-	}
-	m.StartScheduler()
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("given: due scheduler tick should start an auto update")
-	}
-	_, _, _, _, _, prewritten, _ := crsVersionRow(t)
-
-	// When 降级（stop 获胜）→ 在途更新失败
-	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
-		t.Fatal(err)
-	}
-	m.StopScheduler()
-	close(block)
-	waitCRSRunFinished(m)
-
-	// Then 失败已落库，且退避重写确被跳过（N-4 固化）：next_update 仍是 tick
-	// 启动时写入的排程槽
-	_, status, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if status != "failed" {
-		t.Fatalf("update status=%q, want failed", status)
-	}
-	if nextUpdate != prewritten {
-		t.Fatalf("next_update=%q, want 保持 tick 预写 %q（stop-wins 须跳过退避重写）", nextUpdate, prewritten)
-	}
-
-	// When 节点再提升为主（启动调度器）
-	if _, err := db.DB.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
-		t.Fatal(err)
-	}
-	m.StartScheduler()
-
-	// Then 过期排程被拉回正常退避（1 次失败 → 1h），不再残留远期排程槽
-	_, _, _, _, _, nextUpdate, _ = crsVersionRow(t)
-	due, err := time.Parse(crsTimeLayout, nextUpdate)
-	if err != nil {
-		t.Fatalf("parse next_update %q: %v", nextUpdate, err)
-	}
-	if remain := time.Until(due); remain < 50*time.Minute || remain > 70*time.Minute {
-		t.Fatalf("next_update remaining=%v, want ≈1h backoff restored on promotion", remain)
-	}
-}
-
-// TestIP2RegionScheduler_promoteRestoresFailedBackoff 验证 R56 N-2 对 IP2Region
-// 调度器同样生效：失败状态 + 残留远期 next_update 在调度器启动（提升/进程
-// 重启）时被拉回连续失败次数对应的退避点。
-func TestIP2RegionScheduler_promoteRestoresFailedBackoff(t *testing.T) {
-	// Given 主节点 + 连续失败 2 次、next_update 残留 +24h（停-wins 放弃退避后的形态）
-	m := newTestIP2RegionManager(t)
-	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET update_status='failed', consecutive_failures=2, next_update=? WHERE id=1",
-		time.Now().UTC().Add(24*time.Hour).Format(crsTimeLayout)); err != nil {
-		t.Fatal(err)
-	}
-
-	// When 提升为主（启动调度器）
-	m.StartScheduler()
-	defer m.StopScheduler()
-
-	// Then next_update 拉回 2 次失败对应的 2h 退避
-	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	due, err := time.Parse(crsTimeLayout, nextUpdate)
-	if err != nil {
-		t.Fatalf("parse next_update %q: %v", nextUpdate, err)
-	}
-	if remain := time.Until(due); remain < 100*time.Minute || remain > 130*time.Minute {
-		t.Fatalf("next_update remaining=%v, want ≈2h backoff (2 consecutive failures)", remain)
-	}
 }
 
 // TestCRSScheduler_startKeepsSuccessSchedule 验证提升恢复只针对失败退避残留：

@@ -55,7 +55,7 @@ func (m *ThreatUpdateManager) StartScheduler() {
 	go func() {
 		defer close(done)
 		m.schedulerTick(time.Now().UTC())
-		ticker := time.NewTicker(time.Hour)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
