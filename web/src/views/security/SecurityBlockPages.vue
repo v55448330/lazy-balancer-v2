@@ -15,7 +15,7 @@
     </div>
 
     <el-card class="list-card">
-      <el-table :data="pages" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+      <el-table :data="pagedPages" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
           <el-empty description="暂无拦截页面" :image-size="60" />
         </template>
@@ -52,6 +52,15 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- 与其他表格页同款分页器（2026-09-25 用户裁定）：总数/页大小/翻页 -->
+      <el-pagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50]"
+        :total="pages.length"
+        layout="total, sizes, prev, pager, next"
+        @size-change="page = 1"
+      />
     </el-card>
 
     <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="dialog-body-inset">
@@ -116,6 +125,16 @@ const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const loading = ref(false)
+
+const page = ref(1)
+const pageSize = ref(10)
+// 客户端分页（与 Rules/SecurityRules 同款：页大小变更回第一页；删除后夹紧页码）
+const pagedPages = computed(() => {
+  const maxPage = Math.max(1, Math.ceil(pages.value.length / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+  const start = (page.value - 1) * pageSize.value
+  return pages.value.slice(start, start + pageSize.value)
+})
 const saving = ref(false)
 const users = ref<UserListItem[]>([])
 const pages = ref<BlockPage[]>([])

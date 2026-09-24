@@ -83,7 +83,7 @@
               :placeholder="settings.has_github_token ? '已配置（留空保持不变）' : '未配置（未认证限流 60 次/小时）'"
               maxlength="255"
             />
-            <el-text type="info" size="small" class="tip-inline">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流提升至 5000 次/小时，缓解自动更新 403</el-text>
+            <div class="form-tip-line">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流由 60 提升至 5000 次/小时，缓解规则库自动更新 403；令牌仅随 GitHub 直连发送，不经第三方代理。<el-link type="primary" href="https://github.com/settings/tokens" target="_blank" rel="noopener">前往 GitHub 创建令牌</el-link>（只需公共仓库只读权限，无需勾选任何 scope）</div>
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
