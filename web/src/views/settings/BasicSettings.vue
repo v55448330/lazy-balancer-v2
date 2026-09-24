@@ -21,7 +21,7 @@
           </el-form-item>
           <el-form-item label="任务日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，证书/CRS/IP 库轮转阈值（建议 10-50）</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，证书任务与 CRS/IP 库/威胁库更新日志轮转阈值（建议 10-50）</el-text>
           </el-form-item>
           <el-form-item label="审计日志大小">
           <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="512" controls-position="right" style="width: 120px;" />
@@ -73,6 +73,17 @@
               />
             </el-select>
             <el-text type="info" size="small" class="tip-inline">CRS 规则库与 IP2Region 的下载代理</el-text>
+          </el-form-item>
+          <el-form-item label="GitHub 令牌">
+            <el-input
+              v-model="githubTokenInput"
+              type="password"
+              show-password
+              style="width: 320px"
+              :placeholder="settings.has_github_token ? '已配置（留空保持不变）' : '未配置（未认证限流 60 次/小时）'"
+              maxlength="255"
+            />
+            <el-text type="info" size="small" class="tip-inline">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流提升至 5000 次/小时，缓解自动更新 403</el-text>
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
@@ -1081,6 +1092,7 @@ interface BasicSettingsConfig {
   // 可选：父级 Settings.vue 的 SettingsConfig 尚未声明此键（vue-tsc 模板检查
   // 要求父类型可赋值给本接口），由下方 computed 兜底默认值
   github_proxy_url?: string
+  has_github_token?: boolean
 }
 
 // GitHub 加速代理固定选项（CRS / IP2Region 下载）
@@ -1153,6 +1165,15 @@ const loadGithubProxyUrl = async (): Promise<void> => {
   }
 }
 loadGithubProxyUrl()
+// GitHub 令牌：输入框空=保持现值（后端同口径），has_github_token 仅显隐占位
+const githubTokenInput = ref('')
+const loadGithubTokenState = async (): Promise<void> => {
+  try {
+    const res = await request.get<{ data?: { has_github_token?: boolean } }>('/config')
+    settings.value.has_github_token = res.data?.has_github_token ?? false
+  } catch { /* 拉取失败按未配置展示，不影响保存语义 */ }
+}
+loadGithubTokenState()
 
 const saving = ref(false)
 
@@ -1344,6 +1365,10 @@ const handleSave = async () => {
       mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
       github_proxy_url: githubProxyUrl.value,
       source: 'basic',
+    }
+    // 令牌：仅在用户实际输入时随载荷提交（空=保持现值，后端 CASE WHEN 同口径）
+    if (githubTokenInput.value.trim() !== '') {
+      ;(payload as Record<string, unknown>).github_token = githubTokenInput.value.trim()
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     const changes = [...(preview.data?.changes ?? [])]

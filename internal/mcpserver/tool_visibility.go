@@ -13,6 +13,15 @@ import (
 
 type readOnlyResolver func(apiKey string) (bool, error)
 
+// ReadOnlyProbeTools 只读 Key 可见的读探测 POST 工具清单（REST 白名单
+// auditpolicy.go readOnlyWriteRoutes 同口径）——serveWithToolVisibility 与
+// 可见性钉测试（server_test.go）共用的单一事实源（第 51 轮审计 P5-4：
+// 原工具侧/测试侧两份手工平行清单收敛为一份）。
+var ReadOnlyProbeTools = map[string]struct{}{
+	"test_ca_provider": {}, "test_certificate_config": {}, "parse_certificate": {},
+	"validate_import": {}, "preview_config": {},
+}
+
 func serveWithToolVisibility(writer http.ResponseWriter, request *http.Request, next http.Handler, resolver readOnlyResolver) {
 	requestBody, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -100,11 +109,8 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 	readOnlyHiddenTools := map[string]struct{}{"export_config": {}}
 	// ApiMcp-新1(第 2 轮审计):REST 只读白名单(auditpolicy.go readOnlyWriteRoutes)
 	// 对只读 Key 开放的读探测 POST 对应的 MCP 工具——转发侧守卫可通过,
-	// tools/list 须对只读 Key 可见(消除能力与可见性漂移)。
-	readOnlyProbeTools := map[string]struct{}{
-		"test_ca_provider": {}, "test_certificate_config": {}, "parse_certificate": {},
-		"validate_import": {}, "preview_config": {},
-	}
+	// tools/list 须对只读 Key 可见(消除能力与可见性漂移)。清单=包级
+	// ReadOnlyProbeTools 单一事实源（第 51 轮 P5-4，钉测试直接消费）。
 	readOnlyNames := make(map[string]struct{}, len(tools))
 	for _, spec := range tools {
 		if spec.method == http.MethodGet {
@@ -113,7 +119,7 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 			}
 		}
 		// 只读 Key 可见的读探测 POST 工具(REST 白名单同口径)
-		if _, probe := readOnlyProbeTools[spec.name]; probe {
+		if _, probe := ReadOnlyProbeTools[spec.name]; probe {
 			readOnlyNames[spec.name] = struct{}{}
 		}
 	}

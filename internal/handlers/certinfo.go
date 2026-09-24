@@ -94,11 +94,11 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		return
 	}
 	defer jobRows.Close()
-	candidates := make(map[string][]services.CertInfoCandidate, len(rules))
+	candidates := make(map[string][]services.CertificateCandidate, len(rules))
 	now := time.Now()
 	for jobRows.Next() {
 		var id string
-		var candidate services.CertInfoCandidate
+		var candidate services.CertificateCandidate
 		if err := jobRows.Scan(&id, &candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
 			return

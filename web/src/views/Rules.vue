@@ -501,7 +501,9 @@
               <span class="form-tip-inline">将 HTTP 请求自动重定向到 HTTPS</span>
             </el-form-item>
           </el-form>
-          <div v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" class="info-note-bar info-note-bar--inset" style="margin-top: 20px"><span class="info-note-desc">请先在基本配置中启用 HTTPS</span></div>
+          <!-- 原「请先在基本配置中启用 HTTPS」说明框已删除（第 51 轮审计 P3-8）：
+               showTlsStep=protocol http && enable_tls 时本步才渲染，而该框 v-if 要
+               !enable_tls——恒不可达的死模板。 -->
         </div>
 
 

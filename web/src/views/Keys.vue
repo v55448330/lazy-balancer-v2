@@ -140,7 +140,7 @@
             </template>
           </el-input>
           <div class="mcp-config-hints">
-            如客户端报证书错误，可在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
+            如客户端报证书错误，处置方式见下方「AI Agent 接入指南」自签证书段。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
           </div>
         </el-form-item>
       </el-form>
@@ -162,7 +162,7 @@
             <div class="mcp-guide-subtitle">自签证书（可选配置）</div>
             <div class="mcp-guide-text">如客户端报证书错误，在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。</div>
             <div class="mcp-guide-subtitle">常见错误</div>
-            <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
+            <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；参数错误：校验在 REST 侧执行，以 IsError + 具体 message 文本返回（协议层不做 input_schema 校验，无 -32602）——读 message 修正后重试。</div>
             <div class="mcp-guide-subtitle">权限范围（scope）</div>
             <div class="mcp-guide-text">只读 Key 可调用 GET 查询类工具及 5 个读探测 POST 工具（test_ca_provider / test_certificate_config / parse_certificate / validate_import / preview_config）；其余写工具（POST/PUT/DELETE）需非只读 Key 且仅在主节点可用（从节点一律 403——集群端点 promote_cluster / pull_sync / set_cluster_mode / forget_cluster_pins 除外，在从节点本身可用）。写操作校验后即时生效，失败自动回滚，无需手动 reload。</div>
             <div class="mcp-guide-subtitle">常用流程</div>

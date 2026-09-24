@@ -150,14 +150,13 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 		if tool.Name == "get_metrics_dashboard" {
 			dashboardVisible = true
 		}
-		// ApiMcp-新1:5 个读探测 POST 工具对只读 Key 合法可见(REST 白名单同口径)
-		readOnlyProbeAllow := map[string]bool{
-			"test_ca_provider": true, "test_certificate_config": true, "parse_certificate": true,
-			"validate_import": true, "preview_config": true,
-		}
+		// ApiMcp-新1:5 个读探测 POST 工具对只读 Key 合法可见(单一事实源
+		// ReadOnlyProbeTools，第 51 轮 P5-4 收敛)
 		for _, spec := range tools {
-			if spec.name == tool.Name && spec.method != http.MethodGet && !readOnlyProbeAllow[tool.Name] {
-				t.Errorf("read-only tools/list exposes write tool %s", tool.Name)
+			if spec.name == tool.Name && spec.method != http.MethodGet {
+				if _, probe := ReadOnlyProbeTools[tool.Name]; !probe {
+					t.Errorf("read-only tools/list exposes write tool %s", tool.Name)
+				}
 			}
 		}
 	}

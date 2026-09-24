@@ -242,10 +242,14 @@ type GlobalConfig struct {
 	JWTExpireMinutes           int    `json:"jwt_expire_minutes"`
 	Timezone                   string `json:"timezone"`
 	GitHubProxyURL             string `json:"github_proxy_url"`
-	IsMaster                   bool   `json:"is_master"`
-	MasterURL                  string `json:"master_url"`
-	SyncInterval               int    `json:"sync_interval"`
-	DefaultCAProviderID        int    `json:"default_ca_provider_id"`
+	// GitHubToken 可选 GITHUB_TOKEN（2026-09-25 用户裁定）：响应面永不回显
+	// 原文（json:"-"），仅 HasGitHubToken 显隐；写路径 UpdateConfigRequest。
+	GitHubToken         string `json:"-"`
+	HasGitHubToken      bool   `json:"has_github_token"`
+	IsMaster            bool   `json:"is_master"`
+	MasterURL           string `json:"master_url"`
+	SyncInterval        int    `json:"sync_interval"`
+	DefaultCAProviderID int    `json:"default_ca_provider_id"`
 	// v2.1.8 MFA 全局开关（响应面）
 	MFAWriteGuard     bool `json:"mfa_write_guard"`
 	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
@@ -560,7 +564,10 @@ type UpdateConfigRequest struct {
 	JWTExpireMinutes           *int    `json:"jwt_expire_minutes"`
 	Timezone                   *string `json:"timezone"`
 	GitHubProxyURL             *string `json:"github_proxy_url"`
-	DefaultCAProviderID        *int    `json:"default_ca_provider_id"`
+	// GitHubToken 可选令牌：nil 或空串=保持现值（OIDC client_secret 同口径），
+	// 非空=覆盖。响应面永不回显（GlobalConfig.GitHubToken json:"-"）。
+	GitHubToken         *string `json:"github_token"`
+	DefaultCAProviderID *int    `json:"default_ca_provider_id"`
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
 	MFAWriteGuard     *bool `json:"mfa_write_guard"`
 	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`

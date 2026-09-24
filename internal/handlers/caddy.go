@@ -177,6 +177,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
 	       COALESCE(timezone,'Asia/Shanghai') as timezone,
 	       COALESCE(github_proxy_url,'https://v4.gh-proxy.org/') as github_proxy_url,
+	       COALESCE(github_token,'') as github_token,
 		       COALESCE(mfa_write_guard,0) as mfa_write_guard,
 		       COALESCE(mfa_lockout_enabled,0) as mfa_lockout_enabled,
 		       COALESCE(trusted_proxy_enabled,0) as trusted_proxy_enabled,
@@ -193,7 +194,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
-		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
+		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.GitHubToken, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
 		&cfg.TrustedProxyEnabled, &cfg.TrustedProxyRanges, &cfg.TrustedProxyHeaders, &cfg.TrustedProxyStrict,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
@@ -211,6 +212,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	// v1/v2 导入走 DB 直读不受影响），GET /config 不再返回其值，恒为空串。
 	// UpdateConfig 写路径与集群快照同步保留不动（v1 导入兼容）。
 
+	cfg.HasGitHubToken = cfg.GitHubToken != ""
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
@@ -394,13 +396,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	// LB42-4:与 caddy_log_size_mb(SYS41-7,100-10240)同族补上限——此前仅 >0
-	// 下限,天文值落库使轮转实效、日志无限增长;UI :max=10240 同口径。
-	if req.CertJobLogSizeMB != nil && (*req.CertJobLogSizeMB <= 0 || *req.CertJobLogSizeMB > 10240) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书日志大小需在 1-10240MB 之间"})
+	// 下限,天文值落库使轮转实效、日志无限增长。2026-09-25 用户裁定：上限收
+	// 窄为 1024（原 10240 过宽），与 UI :max=1024 同口径。
+	if req.CertJobLogSizeMB != nil && (*req.CertJobLogSizeMB <= 0 || *req.CertJobLogSizeMB > 1024) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书日志大小需在 1-1024MB 之间"})
 		return
 	}
-	if req.RuntimeLogSizeMB != nil && (*req.RuntimeLogSizeMB <= 0 || *req.RuntimeLogSizeMB > 10240) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小需在 1-10240MB 之间"})
+	if req.RuntimeLogSizeMB != nil && (*req.RuntimeLogSizeMB <= 0 || *req.RuntimeLogSizeMB > 1024) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小需在 1-1024MB 之间"})
 		return
 	}
 	// Round 33 N-5: 审计日志轮转大小上限 512MB（主节点侧校验；从节点经集群
@@ -530,6 +533,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
 				github_proxy_url = COALESCE(?, github_proxy_url),
+				github_token = CASE WHEN ? IS NULL OR ? = '' THEN github_token ELSE ? END,
 				mfa_write_guard = COALESCE(?, mfa_write_guard),
 				mfa_lockout_enabled = COALESCE(?, mfa_lockout_enabled),
 				trusted_proxy_enabled = COALESCE(?, trusted_proxy_enabled),
@@ -542,7 +546,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.MFAWriteGuard, req.MFALockoutEnabled,
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.GitHubToken, req.GitHubToken, req.GitHubToken, req.MFAWriteGuard, req.MFALockoutEnabled,
 		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyHeaders, req.TrustedProxyStrict)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))

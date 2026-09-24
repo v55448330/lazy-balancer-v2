@@ -401,6 +401,9 @@ func createTables() error {
 		jwt_expire_minutes INTEGER DEFAULT 20,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		github_proxy_url TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/',
+		-- 可选 GITHUB_TOKEN（2026-09-25 用户裁定）：未认证 GitHub API 限流
+		-- 60/h/IP（共享出口易打满），令牌提升 5000/h；仅发 api.github.com 直连。
+		github_token TEXT NOT NULL DEFAULT '',
 		last_sync DATETIME,
 		last_sync_error TEXT DEFAULT '',
 		applied_version INTEGER DEFAULT 0,
@@ -879,6 +882,7 @@ func runMigrations() error {
 		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
 		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"global_config.github_proxy_url":              "TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/'",
+		"global_config.github_token":                  "TEXT NOT NULL DEFAULT ''",
 		"lb_rules.log_enabled":                        "BOOLEAN DEFAULT 0",
 		"lb_rules.custom_routes_enabled":              "BOOLEAN NOT NULL DEFAULT 0",
 		"lb_rules.proxy_dial_timeout":                 "INTEGER NOT NULL DEFAULT 0",
@@ -1395,8 +1399,8 @@ func runMigrations() error {
 	// - security_block_pages.status_code / security_custom_rules.status_code
 	//   已由 security_policies.block_status_code 统一承载拦截状态码，页面与自定义
 	//   规则的状态码列不再写入也不被读取（Caddy 配置渲染统一走策略的 block_status_code）。
-	// - global_config.admin_tls_acme_rule_id / admin_tls_port 在 UpdateAdminTLS 中仅写入
-	//   空值/监听端口，从未被任何读取路径消费（管理面板 HTTPS 只使用 enabled/mode/cert/key）。
+	// - global_config.admin_tls_acme_rule_id / admin_tls_port：历史遗留死列——
+	//   写点与读点均已移除（第 51 轮审计核实全仓零写零读），存量库启动时删除。
 	// - lb_rules.ip_acl_mode / ip_acl_list 为规则级 IP 访问控制的遗留列，规则级 IP ACL 早已
 	//   迁入 security_policies（策略级 ip_acl_* 仍在使用），这两列不再被读取或写入。
 	deadColumnDrops := []struct{ table, column string }{

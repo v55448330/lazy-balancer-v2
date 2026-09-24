@@ -28,10 +28,10 @@ import (
 var ErrThreatUpdateRunning = errors.New("威胁情报库更新任务正在进行中")
 
 const (
-	threatMaxBodyBytes   = 16 << 20 // 16MB
-	threatMaxEntries     = 200000
-	threatMinParseRatio  = 0.5
-	threatDownloadTimout = 30 * time.Second
+	threatMaxBodyBytes    = 16 << 20 // 16MB
+	threatMaxEntries      = 200000
+	threatMinParseRatio   = 0.5
+	threatDownloadTimeout = 30 * time.Second
 )
 
 type ThreatUpdateManager struct {
@@ -469,7 +469,7 @@ func failSourceRow(id int, finished string, cause error) {
 // 返回原始字节 sha256（两层哈希第一层快速路径，2026-09-24 用户裁定）：
 // 原始一致即内容必然未变，调用方跳过聚合/写库；原始不同才走聚合规范哈希终判。
 func downloadAndParseThreatSource(source threatSourceRow) ([]string, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), threatDownloadTimout)
+	ctx, cancel := context.WithTimeout(context.Background(), threatDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.url, nil)
 	if err != nil {

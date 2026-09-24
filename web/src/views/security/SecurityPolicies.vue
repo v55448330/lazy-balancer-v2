@@ -766,7 +766,7 @@
                 <el-option :value="0" label="不使用自定义页面（Caddy 默认 403）" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
-              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? '不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）' : '不生成拦截页面错误路由，拦截返回 Caddy 默认 403' }}</div>
+              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? '不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）' : '不配置拦截页；规则无阶段页覆盖且同规则无其他策略页时，拦截返回 Caddy 默认 403' }}</div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
               <!-- 拦截页归因分层口径：规则可配阶段页覆盖；未覆盖时按触发策略显示 -->
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
@@ -1541,7 +1541,7 @@ const editorPolicyType = computed<SecurityPolicyType>(() =>
 const EDITOR_SUBTITLES: Record<SecurityPolicyType, string> = {
   stage0: '配置信任名单条目与直通/保留检测模式',
   stage1: '配置 IP 访问控制、地域拦截与拦截页',
-  stage2: '配置速率限制(恒 429)',
+  stage2: '配置速率限制（恒 429）',
   stage3: '配置 WAF 模式、CRS 规则组、自定义规则与拦截页',
   mixed: '配置 WAF 检测规则、IP 访问控制、限流与规则关联',
 }

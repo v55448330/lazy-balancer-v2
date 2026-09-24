@@ -606,7 +606,10 @@ const buildGroupDetails = (
   }
   if (stage === 1) {
     const details: StagePolicyDetails = {}
-    if (policy.has_ip_control) {
+    // F50-11 同门（第 51 轮审计 P2-1 修复）：ACL 已关闭（保留名单）时名单
+    // 不生效——明细与摘要（aclEffectiveCounts:355）及渲染（security.go:996）
+    // 共用同一 ip_acl_enabled 门，否则「黑名单 1 条」摘要旁挂「合计 100 条」明细。
+    if (policy.has_ip_control && policy.ip_acl_enabled !== false) {
       const inline = new Set(parseIPList(policy.ip_acl_list).map((v) => v.trim()).filter((v) => v !== ''))
       if (inline.size > 0) details.aclInlineCount = inline.size
       const refs = parseRefIds(policy.ip_acl_list_refs)

@@ -11,9 +11,7 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-type CertInfoCandidate = CertificateCandidate
-
-func SelectRuleCertificate(candidates []CertInfoCandidate, ruleDomains string, now time.Time) (string, bool) {
+func SelectRuleCertificate(candidates []CertificateCandidate, ruleDomains string, now time.Time) (string, bool) {
 	selection, selected := SelectCertificate(candidates, ruleDomains, now)
 	if selected {
 		return selection.Candidate.CertPEM, true
@@ -172,9 +170,9 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 		return missingACMECertInfo(caddyID, ruleDomain)
 	}
 	defer rows.Close()
-	candidates := make([]CertInfoCandidate, 0)
+	candidates := make([]CertificateCandidate, 0)
 	for rows.Next() {
-		var candidate CertInfoCandidate
+		var candidate CertificateCandidate
 		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
 			Logf("error", "GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
 			return missingACMECertInfo(caddyID, ruleDomain)
@@ -202,7 +200,7 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 // 的已过期候选按 expired 呈现(Error=「ACME 证书已过期」),不再误报「尚未
 // 签发或不存在」;无已过期候选(解析失败/未过期)返回 nil,调用方维持原口径。
 // 单规则(GetRuleCertInfo)与批量(handlers GetRulesCertInfo)两路径同用。
-func ExpiredACMECertInfoFallback(candidates []CertInfoCandidate, caddyID, ruleDomain string) *models.RuleCertInfo {
+func ExpiredACMECertInfoFallback(candidates []CertificateCandidate, caddyID, ruleDomain string) *models.RuleCertInfo {
 	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate.CertPEM) == "" || candidate.Status == "disabled" {
 			continue

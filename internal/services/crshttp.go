@@ -295,9 +295,10 @@ func fetchGitHubLatestTagViaProxy(ctx context.Context, repoSlug string) (string,
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("User-Agent", "lazy-balancer-v2") // UA 卫生；令牌绝不发第三方代理
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("代理查询最新版本 %s: %w", proxiedURL, err)
+		return "", err
 	}
 	defer resp.Body.Close()
 	if location != "" {
@@ -357,12 +358,33 @@ func parseGitHubTagFromLocation(location string) (string, error) {
 // 中断，以及 403 未认证限流——代理查询的是 github.com 的 releases/latest 页面
 // 而非 api.github.com，可绕过 API 限流；其余 4xx 与 tag 解析失败不重试（R57：
 // 对 api.github.com 本身重试只会放大延迟）。
+
+// gitHubAPIToken 读取可选 GITHUB_TOKEN（global_config.github_token，
+// 2026-09-25 用户裁定）：未认证 GitHub API 限流 60/h/IP（共享出口 IP 常被打满
+// 致自动更新连日 403，第 51 轮审计 P2-4），令牌提升至 5000/h。仅用于
+// api.github.com 直连——绝不随请求发往第三方加速代理（防泄漏）。
+func gitHubAPIToken() string {
+	if db.DB == nil {
+		return ""
+	}
+	var token string
+	if err := db.DB.QueryRow(`SELECT COALESCE(github_token,'') FROM global_config WHERE id=1`).Scan(&token); err != nil {
+		return ""
+	}
+	return token
+}
 func fetchGitHubLatestTagFromAPI(ctx context.Context, client *http.Client, apiURL string) (string, error, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return "", err, false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "lazy-balancer-v2")
+	// 可选令牌仅随 api.github.com 直连发送（防共享出口 60/h 限流，提升 5000/h）；
+	// 第三方代理路径见 fetchGitHubLatestTagViaProxy——不带令牌防泄漏。
+	if tok := gitHubAPIToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err, true

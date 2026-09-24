@@ -39,6 +39,7 @@ type configSnapshot struct {
 	AuditRetentionMonths       int
 	JWTExpireMinutes           int
 	GitHubProxyURL             string
+	GitHubToken                string
 	// R72 D-新3：v2.1.8 两个 MFA 全局开关——预览变更清单与字段级审计需要
 	//（此前缺位：安全开关可无确认直存且变更零审计留痕）。
 	MFAWriteGuard     bool
@@ -72,6 +73,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3),
 		COALESCE(jwt_expire_minutes,20),
 		COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
+		COALESCE(github_token,''),
 		COALESCE(mfa_write_guard,0),
 		COALESCE(mfa_lockout_enabled,0),
 		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1)
@@ -87,6 +89,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.AccessLogJSON, &old.AccessLogFormat,
 		&old.CertJobLogSizeMB, &old.AuditLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes,
 		&old.GitHubProxyURL,
+		&old.GitHubToken,
 		&old.MFAWriteGuard, &old.MFALockoutEnabled,
 		&old.TrustedProxyEnabled, &old.TrustedProxyRanges, &old.TrustedProxyHeaders, &old.TrustedProxyStrict)
 	return old, err
@@ -118,6 +121,8 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("log_level", "系统日志级别", req.LogLevel != nil && *req.LogLevel != old.LogLevel)
 	add("timezone", "时区", req.Timezone != nil && *req.Timezone != old.Timezone)
 	add("github_proxy_url", "GitHub加速代理", req.GitHubProxyURL != nil && *req.GitHubProxyURL != old.GitHubProxyURL)
+	// 令牌变更只记字段名（不落值）——config_changes 预览面无敏感信息
+	add("github_token", "GitHub 令牌", req.GitHubToken != nil && *req.GitHubToken != "" && *req.GitHubToken != old.GitHubToken)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)
