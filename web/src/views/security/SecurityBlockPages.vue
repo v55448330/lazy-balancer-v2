@@ -42,7 +42,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="block-page-dialog">
+    <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="dialog-body-inset">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon dialog-header__icon--warning"><el-icon :size="18"><Document /></el-icon></div>
@@ -190,4 +190,5 @@ onMounted(fetchData)
 
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; max-width: 100%; }
+
 </style>

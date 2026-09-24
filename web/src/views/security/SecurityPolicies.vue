@@ -85,7 +85,7 @@
       </el-table>
     </el-card>
     <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
-    <el-dialog v-model="migrateVisible" class="migrate-dialog" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+    <el-dialog v-model="migrateVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><el-icon :size="18"><WarningFilled /></el-icon></div>
@@ -3369,8 +3369,6 @@ onMounted(async () => {
 .preview-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .preview-stage-footnote { margin-top: 6px; font-size: 12px; color: #9ca3af; }
 
-/* 混合策略更新迁移预演（正文统一 20px 水平留白，与信息说明横幅同宽，2026-09-25 用户裁定） */
-.migrate-dialog .el-dialog__body { padding: 0 20px; }
 .migrate-preview { display: flex; flex-direction: column; gap: 14px; }
 .migrate-preview-section { display: flex; flex-direction: column; gap: 6px; }
 .migrate-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }

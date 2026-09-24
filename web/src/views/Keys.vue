@@ -231,7 +231,7 @@
 
     <el-dialog
       v-model="createDialogVisible"
-      class="key-form-dialog"
+      class="dialog-body-inset"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!creating"
@@ -304,7 +304,7 @@
 
     <el-dialog
       v-model="featureDialogVisible"
-      class="key-form-dialog"
+      class="dialog-body-inset"
       width="min(620px, 92vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!featureSaving"
@@ -776,7 +776,6 @@ onMounted(() => {
 .mcp-tools-table :deep(.el-table) { min-width: 800px; }
 .mcp-tool-description { line-height: 1.5; white-space: normal; }
 :deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; padding: 0 20px; }
-:deep(.key-form-dialog .el-dialog__body) { padding: 0 20px; }
 
 .created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: 6px; background: #f9fafb; }
 

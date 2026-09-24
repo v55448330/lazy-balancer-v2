@@ -249,7 +249,7 @@
          _dropped 渲染为信息行而非头行。请求体按契约前缀解析：base64-truncated: →
          base64: → 明文；明文尾部 \n...[TRUNCATED] 标记转为截断横幅；atob 解码失败
          展示原始内容 + 错误说明。宽度/顶距与 crs-event-dialog 一致。 -->
-    <el-dialog v-model="ctxDialogVisible" title="请求上下文" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog">
+    <el-dialog v-model="ctxDialogVisible" title="请求上下文" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog dialog-body-inset">
       <template v-if="ctxEvent">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
@@ -823,8 +823,8 @@ onMounted(fetchEvents)
 
 /* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
 .crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
-/* 请求上下文弹框：正文统一 20px 水平留白，与信息说明横幅同宽（2026-09-25 用户裁定） */
-.ctx-event-dialog .el-dialog__body { padding: 0 20px; }
+/* 请求上下文弹框正文 20px 水平留白走全局 .dialog-body-inset（2026-09-25 用户裁定；
+   append-to-body teleport 场景 scoped :deep 不可靠，故类挂弹框、规则在 main.css） */
 
 /* 触发规则筛选下拉：头部「全选」复选框整行可点（EP 自定义头部官方用法同款排布）；
    padding-left 20px 与选项行（EP 默认 20px）左对齐——默认 header-padding 10px 会

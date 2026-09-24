@@ -200,3 +200,6 @@ body {
 .info-note-desc { font-weight: 600; color: #374151; line-height: 1.8; }
 .info-note-sub { display: block; font-weight: 400; color: #6b7280; line-height: 1.8; }
 .info-note-bar--inset { margin-left: 20px; margin-right: 20px; }
+/* 弹框正文 20px 水平留白工具类（2026-09-25 用户裁定）：挂到 el-dialog class 即生效；
+   全局规则以兼容 append-to-body/teleport 弹框（scoped :deep 对子组件根不落 data-v 不可靠） */
+.dialog-body-inset .el-dialog__body { padding: 0 20px; }

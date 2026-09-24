@@ -139,7 +139,16 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="min(520px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
+    <el-dialog v-model="adminTlsDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
+      <template #header>
+        <div class="backup-dialog-header">
+          <el-icon class="backup-dialog-icon"><Lock /></el-icon>
+          <div>
+            <div class="backup-dialog-title">HTTPS 证书配置</div>
+            <div class="backup-dialog-sub">管理面板（:8000）强制 HTTPS 使用的证书，保存后服务重启生效</div>
+          </div>
+        </div>
+      </template>
       <el-form label-width="110px">
         <!-- 自管标签行(ClusterModeCard 范式):el-radio-group 会把组容器 DIV id
              注册为表单输入 id,el-form-item label for 随之指向 DIV——Firefox 报
@@ -155,10 +164,16 @@
         </div>
         <template v-if="adminTlsForm.mode === 'upload'">
           <el-form-item label="证书文件">
-            <input type="file" accept=".crt,.pem,.cer" @change="(e) => onTlsFile(e, 'cert')" />
+            <div class="tls-file-field">
+              <el-button size="small" @click="pickTlsFile('cert')">选择文件</el-button>
+              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.certFile }">{{ adminTlsForm.certFile?.name ?? '未选择（支持 .crt / .pem / .cer）' }}</span>
+            </div>
           </el-form-item>
           <el-form-item label="私钥文件">
-            <input type="file" accept=".key,.pem" @change="(e) => onTlsFile(e, 'key')" />
+            <div class="tls-file-field">
+              <el-button size="small" @click="pickTlsFile('key')">选择文件</el-button>
+              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.keyFile }">{{ adminTlsForm.keyFile?.name ?? '未选择（支持 .key / .pem）' }}</span>
+            </div>
           </el-form-item>
           <el-form-item v-if="adminTlsForm.inspecting" label=" ">
             <el-text type="info" size="small">解析中…</el-text>
@@ -166,22 +181,24 @@
           <template v-if="adminTlsForm.certInfo">
             <el-form-item label="证书信息">
               <div class="tls-cert-info">
-                <div>域名：{{ adminTlsForm.certInfo.domain }}</div>
-                <div>签发者：{{ adminTlsForm.certInfo.issuer }}</div>
-                <div>过期时间：{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">域名</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">签发者</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">过期时间</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</span></div>
               </div>
             </el-form-item>
           </template>
         </template>
-        <el-form-item v-if="adminTlsForm.mode === 'selfsigned'" label="说明">
-          <el-text type="info" size="small">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</el-text>
-        </el-form-item>
+        <div v-if="adminTlsForm.mode === 'selfsigned'" class="info-note-bar"><span class="info-note-desc">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</span></div>
       </el-form>
       <template #footer>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
         <el-button type="primary" :disabled="adminTlsForm.mode === 'upload' && (!adminTlsForm.certInfo || adminTlsForm.certInfo.days_left <= 0)" @click="confirmAdminTls">确定</el-button>
       </template>
     </el-dialog>
+    <!-- 隐藏文件选择器（弹框 destroy-on-close 会销毁内部 input——置于弹框外，
+         由「选择文件」按钮代理触发；onTlsFile 逻辑不变） -->
+    <input ref="tlsCertFileInput" type="file" accept=".crt,.pem,.cer" style="display: none" @change="(e) => onTlsFile(e, 'cert')" />
+    <input ref="tlsKeyFileInput" type="file" accept=".key,.pem" style="display: none" @change="(e) => onTlsFile(e, 'key')" />
 
     <el-dialog v-model="appLogVisible" title="Lazy Balancer 运行日志" width="min(1100px, 94vw)" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
       <div class="log-toolbar">
@@ -192,7 +209,7 @@
       <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog" @close="onImportDialogClosed">
+    <el-dialog v-model="importDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" @close="onImportDialogClosed">
       <template #header>
         <div class="backup-dialog-header">
           <el-icon class="backup-dialog-icon"><Upload /></el-icon>
@@ -268,7 +285,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="exportDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog">
+    <el-dialog v-model="exportDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset">
       <template #header>
         <div class="backup-dialog-header">
           <el-icon class="backup-dialog-icon"><Download /></el-icon>
@@ -299,7 +316,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog" destroy-on-close @opened="onAutoBackupOpened">
+    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened">
       <template #header>
         <div class="backup-dialog-header">
           <el-icon class="backup-dialog-icon"><Timer /></el-icon>
@@ -411,10 +428,17 @@
   <!-- R72 十四次（用户裁决）：写操作验证「支持的操作」清单——与后端 mfaStepUpGuard
        实际覆盖面一致（全部 RESTful 写端点：POST/PUT/PATCH/DELETE，排除测试/预览/
        解析类只读 POST 与 MFA 自身端点）。 -->
-  <el-dialog v-model="mfaScopeVisible" title="写操作验证支持的操作" width="640px">
-    <el-text type="info" size="small" style="display: block; margin-bottom: 12px">
-      开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。测试连接、预览、解析类操作不受影响。
-    </el-text>
+  <el-dialog v-model="mfaScopeVisible" class="dialog-body-inset" width="min(640px, 94vw)">
+    <template #header>
+      <div class="backup-dialog-header">
+        <el-icon class="backup-dialog-icon"><Lock /></el-icon>
+        <div>
+          <div class="backup-dialog-title">写操作验证支持的操作</div>
+          <div class="backup-dialog-sub">覆盖全部 RESTful 写端点，与后端实际拦截面一致</div>
+        </div>
+      </div>
+    </template>
+    <div class="info-note-bar"><span class="info-note-desc">开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。测试连接、预览、解析类操作不受影响。</span></div>
     <div class="mfa-scope-list">
       <div v-for="group in mfaScopeGroups" :key="group.title" class="mfa-scope-row">
         <div class="mfa-scope-title">{{ group.title }}</div>
@@ -431,7 +455,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
 import { formatDate } from '@/utils/date'
-import { Setting, InfoFilled, Check, View, Upload, Download, Timer } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
@@ -1138,6 +1162,12 @@ const adminTlsHasCert = ref(false)
 const adminTlsForm = ref<AdminTlsForm>({ mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false })
 const stagedAdminTlsCert = ref<{ certFile: File; keyFile: File; certInfo: AdminTlsCertInfo } | null>(null)
 const adminTlsDialogVisible = ref(false)
+// 隐藏文件选择器代理（弹框 destroy-on-close，input 置于弹框外）
+const tlsCertFileInput = ref<HTMLInputElement | null>(null)
+const tlsKeyFileInput = ref<HTMLInputElement | null>(null)
+const pickTlsFile = (kind: 'cert' | 'key'): void => {
+  ;(kind === 'cert' ? tlsCertFileInput.value : tlsKeyFileInput.value)?.click()
+}
 
 const adminTlsDirty = computed(() => {
   if (adminTls.value.enabled !== adminTlsSaved.value.enabled) return true
@@ -1364,8 +1394,6 @@ const handleSave = async () => {
 
 <style scoped>
 .backup-sections-item { flex-direction: column; align-items: flex-start; gap: 4px; }
-/* 备份弹框（正文统一 20px 水平留白，与信息说明横幅同宽，2026-09-25 用户裁定） */
-.backup-dialog .el-dialog__body { padding: 0 20px; }
 .backup-dialog-header { display: flex; align-items: center; gap: 12px; }
 .backup-dialog-icon {
   width: 38px; height: 38px; border-radius: 10px;
@@ -1455,7 +1483,7 @@ const handleSave = async () => {
    改自绘行布局：标题列 flex 定宽 + nowrap，内容列自动换行。 */
 .mfa-scope-list {
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
+  border-radius: 8px;
   overflow: hidden;
 }
 .mfa-scope-row {
@@ -1468,14 +1496,17 @@ const handleSave = async () => {
 .mfa-scope-title {
   flex: 0 0 130px;
   padding: 8px 12px;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  background: var(--el-fill-color-light);
+  background: #f9fafb;
   border-right: 1px solid var(--el-border-color-lighter);
 }
 .mfa-scope-items {
   flex: 1;
   padding: 8px 12px;
+  font-size: 12px;
+  color: #374151;
   line-height: 1.8;
 }
 
@@ -1511,5 +1542,16 @@ const handleSave = async () => {
 .auto-backup-form .form-radio-row { margin-bottom: 14px; }
 .form-radio-row-label { width: 110px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
 .form-radio-row-content { flex: 1; min-width: 0; display: flex; align-items: center; }
+
+/* HTTPS 证书配置弹框（2026-09-25 用户裁定重构）：正文 20px 水平留白；
+   文件选择=按钮+文件名展示；证书信息=浅底卡片行布局 */
+.admin-tls-dialog :deep(.el-dialog__body) { padding: 0 20px; }
+.tls-file-field { display: flex; align-items: center; gap: 10px; width: 100%; }
+.tls-file-name { font-size: 12px; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tls-file-name.is-empty { color: #9ca3af; }
+.tls-cert-info { display: flex; flex-direction: column; gap: 2px; width: 100%; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; background: #fafafa; font-size: 12px; line-height: 1.8; }
+.tls-cert-info-row { display: flex; gap: 8px; }
+.tls-cert-info-label { flex: 0 0 60px; color: #6b7280; }
+.tls-cert-info-row .is-expired { color: var(--el-color-danger); font-weight: 600; }
 .import-waf-hint { display: block; }
 </style>
