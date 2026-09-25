@@ -41,7 +41,14 @@ func TestCaddyService_GenerateAndApplyConfig_generates_after_waiting_for_config_
 		t.Fatalf("seed old rule domain: %v", err)
 	}
 	applied := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		// GET /config/ = 同字节短路门的只读快照（2026-09-25 审计真实性改造）——
+		// 回 {}（与渲染必然不同、不触发短路），不占用 applied 缓冲（原实现把
+		// 空 body 也写入容量 1 的 channel，后续 /load POST 卡死在写入端）。
+		if request.Method == http.MethodGet && request.URL.Path == "/config/" {
+			_, _ = response.Write([]byte(`{}`))
+			return
+		}
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Errorf("read applied config: %v", err)

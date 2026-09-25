@@ -165,6 +165,9 @@ func (h *Handlers) caddyApplyNote(c *gin.Context) string {
 
 func (h *Handlers) caddyApplyNoteLocked() string {
 	err := h.caddyService.GenerateAndApplyConfig()
+	if services.IsSameConfig(err) {
+		err = nil // 同字节短路：无真实重载，也非失败（2026-09-25 审计真实性裁定）
+	}
 	h.recordCaddyApplyResult(err)
 	if err != nil {
 		return "；但 Caddy 配置应用失败：" + err.Error()
@@ -192,6 +195,11 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 		services.Logf("warn", "caddy CLI 校验器不可用，跳过预检（事务内应用仍门控）: %v", err)
 	}
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+		// 审计真实性裁定（2026-09-25 用户裁定）：同字节短路=未发生真实重载——
+		// 按成功收尾但 note 不落「重载」审计（否则出现从未发生的重载记录）。
+		if services.IsSameConfig(err) {
+			return func() { h.recordCaddyApplyResult(nil) }, nil
+		}
 		// 乱填保障（2026-09-06 补充裁定）：应用失败且配置未经任何 Caddy 级
 		// 校验（CLI 不可用 + 传输失败同时发生）——无法排除坏配置，标记为
 		// 不可退化提交，调用方必须回滚。

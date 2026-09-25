@@ -56,6 +56,12 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 		case request.Method == http.MethodGet && request.URL.Path == "/config/":
 			stateMu.Lock()
 			body := currentConfig
+			// 2026-09-25 审计真实性改造配套：restore 失败注入——首次 GET（快照
+			// 摄取）返回 before-import 后即漂移，restore 的同字节比对才会失败、
+			// /load 真发并被 rejectLoads 拒绝（否则 restore 恒同字节短路不可达）。
+			if rejectLoads {
+				currentConfig = `{"marker":"drifted-after-snapshot"}`
+			}
 			stateMu.Unlock()
 			_, _ = response.Write([]byte(body))
 		case request.Method == http.MethodPost && request.URL.Path == "/load":
@@ -439,13 +445,16 @@ func TestImportV1Config_restores_partial_certificate_materialization(t *testing.
 	if len(entries) != 0 {
 		t.Fatalf("certificate directory contains %d files after rollback, want none", len(entries))
 	}
-	if harness.loadCalls() != 1 || harness.currentConfig() != `{"marker":"before-import"}` {
-		t.Fatalf("Caddy loads=%d config=%s, want one restore to pre-import config", harness.loadCalls(), harness.currentConfig())
+	// loads=0：同字节短路（2026-09-25 审计真实性改造）——restore 目标=快照=
+	// 当前运行配置（导入失败于证书验证、未触达 /load），恢复为成功空操作。
+	if harness.loadCalls() != 0 || harness.currentConfig() != `{"marker":"before-import"}` {
+		t.Fatalf("Caddy loads=%d config=%s, want 恢复为空操作（同字节短路）且运行态保持 before-import", harness.loadCalls(), harness.currentConfig())
 	}
 }
 
 func TestImportV1Config_reports_import_and_runtime_restore_failures(t *testing.T) {
 	// Given
+
 	harness := newImportRollbackHarness(t)
 	harness.failRestore()
 	backup := `{

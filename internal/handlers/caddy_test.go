@@ -222,7 +222,7 @@ func TestStartCaddy_does_not_overlap_UpdateRule(t *testing.T) {
 	router.POST("/caddy/start", harness.handler.StartCaddy)
 	updateDone := make(chan struct{})
 	go func() {
-		request := httptest.NewRequest(http.MethodPut, "/rules/lb_lifecycle", strings.NewReader(`{"name":"updated"}`))
+		request := httptest.NewRequest(http.MethodPut, "/rules/lb_lifecycle", strings.NewReader(`{"name":"updated","listen_port":8081}`))
 		request.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(httptest.NewRecorder(), request)
 		close(updateDone)
@@ -286,10 +286,16 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 	newBackupTestHandlers(t)
 	requests := 0
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		requests++
+		// GET /config/ = 同字节短路门的只读快照（2026-09-25 审计真实性改造），
+		// 零运行时扰动，与 validate-only 语义兼容——不计数；仅 /load POST 计入。
+		if request.Method == http.MethodGet && request.URL.Path == "/config/" {
+			_, _ = response.Write([]byte(`{}`))
+			return
+		}
 		if request.URL.Path != "/load" {
 			t.Fatalf("validation request path=%q query=%q", request.URL.Path, request.URL.RawQuery)
 		}
+		requests++
 		var config map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&config); err != nil {
 			t.Fatalf("decode submitted config: %v", err)

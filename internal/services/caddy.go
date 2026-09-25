@@ -129,7 +129,14 @@ func GenerateCaddyID() (string, error) {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLocked(config)
+	err = s.applyConfigLocked(config)
+	if IsSameConfig(err) {
+		// 同字节短路=成功空操作（2026-09-25 审计真实性裁定）：restore 调用点把
+		// 哨兵 join 进失败消息=把「无需恢复」谎报成「恢复失败」——此处归一为成功；
+		// 需要感知短路的只有审计层（applyFromTxNote，走 ApplyConfigFromTx）。
+		return nil
+	}
+	return err
 }
 
 func (s *CaddyService) GenerateAndApplyConfig() error {
@@ -149,6 +156,29 @@ func (s *CaddyService) GenerateAndApplyConfigForce() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applyConfigLockedOpt(generateCaddyConfigFromStore(db.DB), true)
+}
+
+// errSameConfig 渲染产物与运行配置字节一致（Caddy changeConfig 同源短路）。
+// 审计真实性裁定（2026-09-25 用户裁定：审计事件必须真实有效）——同字节时
+// 跳过 /load 调用（Caddy 端本就零 provision），调用方据此不落「重载」审计。
+var errSameConfig = errors.New("config byte-identical to running config")
+
+// IsSameConfig 报告错误为「配置同字节未变化」短路。
+func IsSameConfig(err error) bool { return errors.Is(err, errSameConfig) }
+
+// getRunningConfigBytes 拉取 Caddy 当前运行配置的原始字节（admin GET /config/）。
+// 失败时返回错误——比对调用方按「未知→照常 /load」处理（fail-open，
+// 与 Caddy 自身短路同向：误放行的代价只是一次被 Caddy 短路的 /load）。
+func (s *CaddyService) getRunningConfigBytes() ([]byte, error) {
+	resp, err := s.client.Get(s.adminURL + "/config/")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /config/ returned %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err error) {
@@ -188,6 +218,15 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+	// 审计真实性门（2026-09-25 用户裁定）：非强制路径先比对运行配置字节——
+	// 相同则跳过 /load（Caddy changeConfig 本就短路零 provision），返回
+	// errSameConfig 让审计层知道「没有发生真实重载」。比对失败按未知照常
+	// /load（fail-open，与 Caddy 自身短路同向）。
+	if !force {
+		if running, err := s.getRunningConfigBytes(); err == nil && bytes.Equal(running, data) {
+			return errSameConfig
+		}
+	}
 
 	req, err := http.NewRequest(http.MethodPost, s.adminURL+"/load", bytes.NewReader(data))
 	if err != nil {
@@ -205,7 +244,6 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 		return fmt.Errorf("failed to apply config: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= 400 {
 		inner := fmt.Errorf("config apply failed: %s", string(readCaddyErrorBody(resp.Body)))
 		if resp.StatusCode < 500 {

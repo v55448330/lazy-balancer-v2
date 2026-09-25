@@ -1668,8 +1668,11 @@ func TestImportConfigBackup_restores_partial_certificate_materialization(t *test
 	if string(cert) != oldCert || string(key) != oldKey {
 		t.Fatalf("restored certificate pair=(%q,%q), want (%q,%q)", cert, key, oldCert, oldKey)
 	}
-	if harness.loadCalls() != 1 || harness.currentConfig() != `{"marker":"before-import"}` {
-		t.Fatalf("Caddy loads=%d config=%s, want one restore to pre-import config", harness.loadCalls(), harness.currentConfig())
+	// loads=0：restore 目标=导入前快照=当前运行配置（导入在证书验证阶段失败、
+	// 从未触达 /load）——同字节短路跳过恢复 /load（2026-09-25 审计真实性改造），
+	// 运行态本就在 before-import，恢复为成功空操作。
+	if harness.loadCalls() != 0 || harness.currentConfig() != `{"marker":"before-import"}` {
+		t.Fatalf("Caddy loads=%d config=%s, want 恢复为空操作（同字节短路）且运行态保持 before-import", harness.loadCalls(), harness.currentConfig())
 	}
 }
 

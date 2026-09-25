@@ -280,7 +280,7 @@ func TestUpdateRule_restores_database_when_request_is_canceled_before_compensati
 		t.Fatalf("prime update status=%d body=%s", firstResponse.Code, firstResponse.Body.String())
 	}
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
-	secondRequest := httptest.NewRequest(http.MethodPut, "/rules/lb_cancel_restore", strings.NewReader(`{"name":"must-rollback"}`)).WithContext(requestCtx)
+	secondRequest := httptest.NewRequest(http.MethodPut, "/rules/lb_cancel_restore", strings.NewReader(`{"name":"must-rollback","listen_port":8081}`)).WithContext(requestCtx)
 	secondRequest.Header.Set("Content-Type", "application/json")
 	secondResponse := httptest.NewRecorder()
 	done := make(chan struct{})
@@ -362,8 +362,11 @@ func TestPutCaddyConfig_uses_service_load_and_preserves_database_when_Caddy_reje
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if stored != "old-config" || currentConfig != `{"old":true}` || loads != 2 {
-		t.Fatalf("stored=%q runtime=%s loads=%d, want DB and runtime restored", stored, currentConfig, loads)
+	// loads=1：restore 的恢复目标与运行配置同字节（首轮 /load 已被 reject、
+	// 运行态未变）——同字节短路跳过恢复 /load（2026-09-25 审计真实性改造），
+	// DB 与运行态本就在旧值，恢复为成功空操作。
+	if stored != "old-config" || currentConfig != `{"old":true}` || loads != 1 {
+		t.Fatalf("stored=%q runtime=%s loads=%d, want DB and runtime restored（restore 同字节短路=空操作）", stored, currentConfig, loads)
 	}
 }
 

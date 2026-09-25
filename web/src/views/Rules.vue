@@ -550,7 +550,13 @@
                   </el-select>
                 </template>
               </el-table-column>
-              <el-table-column label="权重 %" width="110">
+              <el-table-column width="110">
+                <template #header>
+                  权重 %
+                  <el-tooltip placement="top" content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。">
+                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </template>
                 <template #default="{ row, $index }">
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
@@ -583,9 +589,8 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div class="form-tip-line">
-              <span v-if="upstreamHostWarning" class="port-warning">{{ upstreamHostWarning }}</span>
-              <span v-else>权重：数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。</span>
+            <div v-if="upstreamHostWarning" class="form-tip-line">
+              <span class="port-warning">{{ upstreamHostWarning }}</span>
             </div>
 
             <template v-if="wizardForm.protocol === 'http'">

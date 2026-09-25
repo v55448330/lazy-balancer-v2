@@ -1743,7 +1743,10 @@ func TestRuleSave_appliesExactlyOnce(t *testing.T) {
 			},
 			method: http.MethodPut,
 			path:   "/rules/lb_single_apply",
-			body:   `{"name":"after"}`,
+			// listen_port 变更使渲染与运行配置不同（2026-09-25 审计真实性改造：
+			// 同字节短路后 name-only 更新不再产生 /load）——「恰好应用一次」的
+			// 判定点保持为一次真实最终应用。
+			body: `{"name":"after","listen_port":8093}`,
 			prep: func(t *testing.T, router *gin.Engine) string {
 				request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"prep","protocol":"http","domain":"single-apply.example.test","listen_port":8092,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
 				request.Header.Set("Content-Type", "application/json")
