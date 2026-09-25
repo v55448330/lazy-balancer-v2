@@ -1727,6 +1727,20 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
+	// 审计真 delta 的存量基准（2026-09-25 用户裁定 A 方案）：UPDATE 前事务内读
+	// 一次现值（写锁已持、与写入零竞态）——changedFields 只记「提交值≠存量值」。
+	// ErrNoRows 放行由下方 RowsAffected=0 统一 404；其余读取失败 fail-closed
+	// （审计完整性优先于一次写入）。
+	var stored models.SecurityPolicy
+	storedFound := true
+	if err := scanSecurityPolicyRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			storedFound = false
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略现值失败"})
+			return
+		}
+	}
 	query := "UPDATE security_policies SET updated_at=datetime('now')"
 	var args []interface{}
 	addStr := func(field string, val *string) {
@@ -1807,90 +1821,68 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	// 审计用 username（非数字 ID）+ 字段级变更详情——IP 弹窗一键操作和
-	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯。
+	// 审计用 username（非数字 ID）+ 真 delta 变更详情（2026-09-25 用户裁定
+	// A 方案）：只记「提交值≠存量值」的字段（旧值→新值），IP 弹窗一键操作和
+	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯；
+	// 同值全量提交（编辑页未改点保存）落「（无字段变化）」而非全字段噪音。
 	var policyName string
 	_ = tx.QueryRowContext(c.Request.Context(), "SELECT name FROM security_policies WHERE id=?", id).Scan(&policyName)
 	auditDetail := fmt.Sprintf("策略「%s」(#%s)", policyName, id)
 	var changedFields []string
-	if req.IPACLList != nil {
-		changedFields = append(changedFields, fmt.Sprintf("IP ACL 列表→%s", *req.IPACLList))
-	}
-	if req.IPACLMode != nil {
-		changedFields = append(changedFields, fmt.Sprintf("ACL 模式→%s", *req.IPACLMode))
-	}
-	if req.IPACLEnabled != nil {
-		changedFields = append(changedFields, fmt.Sprintf("ACL 启用→%v", *req.IPACLEnabled))
-	}
-	if req.IPWhitelist != nil {
-		changedFields = append(changedFields, fmt.Sprintf("信任名单→%s", *req.IPWhitelist))
-	}
-	if req.IPBlacklist != nil {
-		changedFields = append(changedFields, fmt.Sprintf("旧版黑名单→%s", *req.IPBlacklist))
-	}
-	if req.IPACLListRefs != nil {
-		changedFields = append(changedFields, fmt.Sprintf("ACL 列表引用→%s", *req.IPACLListRefs))
-	}
-	if req.IPWhitelistRefs != nil {
-		changedFields = append(changedFields, fmt.Sprintf("信任名单列表引用→%s", *req.IPWhitelistRefs))
-	}
-	// SLB12-P3-1:两安全开关的字段级审计补记(此前仅提交该字段时变更列表全空)。
-	if req.IPWhitelistEnabled != nil {
-		changedFields = append(changedFields, fmt.Sprintf("信任名单启用→%v", *req.IPWhitelistEnabled))
-	}
-	if req.LogRequestBody != nil {
-		changedFields = append(changedFields, fmt.Sprintf("请求体落日志→%v", *req.LogRequestBody))
-	}
-	if req.Name != nil {
-		changedFields = append(changedFields, fmt.Sprintf("名称→%s", *req.Name))
-	}
-	if req.Mode != nil {
-		changedFields = append(changedFields, fmt.Sprintf("WAF 模式→%s", *req.Mode))
-	}
-	if req.Enabled != nil {
-		changedFields = append(changedFields, fmt.Sprintf("启用→%v", *req.Enabled))
-	}
-	if req.BlockPageID != nil {
-		changedFields = append(changedFields, fmt.Sprintf("拦截页→#%d", *req.BlockPageID))
-	}
-	if req.Description != nil {
-		changedFields = append(changedFields, fmt.Sprintf("描述→%s", *req.Description))
-	}
-	if req.AnomalyThreshold != nil {
-		changedFields = append(changedFields, fmt.Sprintf("异常分阈值→%d", *req.AnomalyThreshold))
-	}
-	if req.BlockStatusCode != nil {
-		changedFields = append(changedFields, fmt.Sprintf("拦截状态码→%d", *req.BlockStatusCode))
-	}
-	if req.GeoIPCountries != nil {
-		changedFields = append(changedFields, fmt.Sprintf("GeoIP 名单→%s", *req.GeoIPCountries))
-	}
-	if req.GeoIPMode != nil {
-		changedFields = append(changedFields, fmt.Sprintf("GeoIP 模式→%s", *req.GeoIPMode))
-	}
-	if req.RateLimitEnabled != nil {
-		changedFields = append(changedFields, fmt.Sprintf("限流启用→%v", *req.RateLimitEnabled))
-	}
-	if req.RateLimitRPS != nil {
-		changedFields = append(changedFields, fmt.Sprintf("限流 RPS→%d", *req.RateLimitRPS))
-	}
-	if req.RateLimitBurst != nil {
-		changedFields = append(changedFields, fmt.Sprintf("限流突发→%d", *req.RateLimitBurst))
-	}
-	if req.CRSRuleGroups != nil {
-		changedFields = append(changedFields, fmt.Sprintf("CRS 规则组→%s", *req.CRSRuleGroups))
-	}
-	if req.CRSExcludedRules != nil {
-		changedFields = append(changedFields, fmt.Sprintf("CRS 排除→%s", *req.CRSExcludedRules))
-	}
-	if req.CustomRules != nil {
-		changedFields = append(changedFields, fmt.Sprintf("自定义规则→%s", *req.CustomRules))
-	}
-	if req.WAFCheckResponse != nil {
-		changedFields = append(changedFields, fmt.Sprintf("响应体检测→%v", *req.WAFCheckResponse))
+	if storedFound {
+		clip := func(v string) string {
+			if len(v) > 60 {
+				return fmt.Sprintf("（%d 字符）", len(v))
+			}
+			return v
+		}
+		deltaStr := func(label string, nv *string, ov string) {
+			if nv != nil && *nv != ov {
+				changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, clip(ov), clip(*nv)))
+			}
+		}
+		deltaInt := func(label string, nv *int, ov int) {
+			if nv != nil && *nv != ov {
+				changedFields = append(changedFields, fmt.Sprintf("%s：%d→%d", label, ov, *nv))
+			}
+		}
+		deltaBool := func(label string, nv *bool, ov bool) {
+			if nv != nil && *nv != ov {
+				changedFields = append(changedFields, fmt.Sprintf("%s：%v→%v", label, ov, *nv))
+			}
+		}
+		deltaStr("名称", req.Name, stored.Name)
+		deltaStr("描述", req.Description, stored.Description)
+		deltaStr("WAF 模式", req.Mode, stored.Mode)
+		deltaInt("异常分阈值", req.AnomalyThreshold, stored.AnomalyThreshold)
+		deltaStr("ACL 模式", req.IPACLMode, stored.IPACLMode)
+		deltaStr("IP ACL 列表", req.IPACLList, stored.IPACLList)
+		deltaBool("ACL 启用", req.IPACLEnabled, stored.IPACLEnabled)
+		deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
+		deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
+		deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
+		deltaStr("ACL 列表引用", req.IPACLListRefs, stored.IPACLListRefs)
+		deltaStr("信任名单列表引用", req.IPWhitelistRefs, stored.IPWhitelistRefs)
+		deltaBool("限流启用", req.RateLimitEnabled, stored.RateLimitEnabled)
+		deltaInt("限流 RPS", req.RateLimitRPS, stored.RateLimitRPS)
+		deltaInt("限流突发", req.RateLimitBurst, stored.RateLimitBurst)
+		deltaStr("CRS 规则组", req.CRSRuleGroups, string(stored.CRSRuleGroups))
+		deltaStr("CRS 排除", req.CRSExcludedRules, string(stored.CRSExcludedRules))
+		deltaStr("自定义规则", req.CustomRules, string(stored.CustomRules))
+		deltaStr("GeoIP 名单", req.GeoIPCountries, string(stored.GeoIPCountries))
+		deltaStr("GeoIP 模式", req.GeoIPMode, stored.GeoIPMode)
+		deltaBool("响应体检测", req.WAFCheckResponse, stored.WAFCheckResponse)
+		deltaBool("请求体落日志", req.LogRequestBody, stored.LogRequestBody)
+		if req.BlockPageID != nil && *req.BlockPageID != stored.BlockPageID {
+			changedFields = append(changedFields, fmt.Sprintf("拦截页：#%d→#%d", stored.BlockPageID, *req.BlockPageID))
+		}
+		deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
+		deltaBool("启用", req.Enabled, stored.Enabled)
 	}
 	if len(changedFields) > 0 {
 		auditDetail += "；" + strings.Join(changedFields, "；")
+	} else {
+		auditDetail += "（无字段变化）"
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
