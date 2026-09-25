@@ -577,7 +577,10 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 	defer resp.Body.Close()
 
 	var config map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+	// LB44-4 同族防线（第 54 轮 P5-5）：admin 响应无界解码补上限——取 32MB
+	// （较 GetConfig 的 4MB 宽：本端点返回完整 routes 视图，超大部署体积大，
+	// 上限只为异常对端兜底，不得截断正常健康视图）。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&config); err != nil {
 		return nil, err
 	}
 
@@ -791,7 +794,8 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 	}
 
 	var upstreams []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&upstreams); err != nil {
+	// 32MB 上限同族防线（第 54 轮 P5-5，口径见 GetUpstreamHealthDetailed）。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&upstreams); err != nil {
 		Logf("error", "Failed to decode reverse_proxy/upstreams: %v", err)
 		return result
 	}

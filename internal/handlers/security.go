@@ -2447,8 +2447,9 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 
 // SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
 // 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
-// 子策略继承拦截页，阶段 2 恒 429 不配页），全量重映射绑定（每条规则删原
-// 绑定+插全部子策略绑定；合并后超 maxBindingsPerRule 上限的规则进 skipped
+// 子策略继承拦截页，阶段 2 恒 429、拦截页继承原策略——2026-09-25 用户裁
+// 定可配），全量重映射绑定（每条规则删原绑定+插全部子策略绑定；合并后超
+// maxBindingsPerRule 上限的规则进 skipped
 // 并保留原绑定），无 skipped 才删除原策略（仍有规则引用时保留并在响应
 // 标记）。单事务一次
 // finishTxApply（单渲染）。
@@ -2535,8 +2536,11 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		}
 	}
 	if features.G2 {
+		// stage2 子策略继承原策略拦截页（第 54 轮 P5-2，用户裁定：2026-09-25
+		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 保持归一 0
+		//（阶段 2 恒 429 自动语义，与 normalizeOutOfStageFields 同口径）。
 		if err := insertChild(models.PolicyTypeStage2, p.Name+stageSuffix[models.PolicyTypeStage2], "off", "deny", "[]", false,
-			json.RawMessage("[]"), false, json.RawMessage("[]"), p.RateLimitEnabled, p.RateLimitRPS, p.RateLimitBurst, "[]", "[]", "[]", 0, 0,
+			json.RawMessage("[]"), false, json.RawMessage("[]"), p.RateLimitEnabled, p.RateLimitRPS, p.RateLimitBurst, "[]", "[]", "[]", p.BlockPageID, 0,
 			json.RawMessage("[]"), "off", false, false, "[]", "[]", false); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -3971,7 +3975,8 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 // 内容不漂移；归一先于内容校验，归一后的空内容天然通过各形状校验）。
 // stage0 仅保留信任名单+trust_detection（直通/保留检测二选一，无拦截页）；
 // stage1 保留 IP ACL/黑名单/GeoIP+拦截页（信任已归属阶段 0，一律清除）；
-// stage2 仅保留限流（恒 429 不配拦截页）；stage3 保留 WAF+拦截页。
+// stage2 仅保留限流（恒 429、拦截页保留——2026-09-25 用户裁定可配）；
+// stage3 保留 WAF+拦截页。
 // mode 归 off（阶段 0/1/2 策略无 WAF 引擎面）。
 func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyType string) {
 	switch policyType {

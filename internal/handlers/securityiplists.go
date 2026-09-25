@@ -26,6 +26,9 @@ const (
 
 // parseIPListRefsIDs 宽松解析 refs JSON 为 id 列表：畸形/空 → nil（重启用悬空
 // 引用门读取存量值用；存量列恒为写入侧校验过的合法形态，畸形仅见于带外改库）。
+// parseIPListRefsIDs 与 services.parseIPListRefs 为镜像实现（第 54 轮 P5-4
+// 裁定保留双份并声明）：本侧服务载荷校验路径不去重（保原始序列语义），
+// services 侧投影路径去重保序——语义有意分叉，勿单方面合并。
 func parseIPListRefsIDs(raw string) []int64 {
 	var ids []int64
 	if err := json.Unmarshal([]byte(raw), &ids); err != nil {

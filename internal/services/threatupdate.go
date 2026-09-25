@@ -146,17 +146,16 @@ func (m *ThreatUpdateManager) RunUpdate(trigger string) error {
 }
 
 type threatSourceRow struct {
-	id            int
-	name          string
-	url           string
-	updateEnabled bool
+	id   int
+	name string
+	url  string
 }
 
 // threatDueSources 返回本次任务处理的源：manual=全部启用源；auto=启用且到期
 // （next_update 空或已过）——失败重试在任务内完成（runWithInTaskRetry），
 // 落定后下一运行=下一排程槽，不拖累健康源的重下载。
 func threatDueSources(trigger string) ([]threatSourceRow, error) {
-	rows, err := db.DB.Query(`SELECT id, name, url, update_enabled, COALESCE(next_update,'')
+	rows, err := db.DB.Query(`SELECT id, name, url, COALESCE(next_update,'')
 		FROM security_threat_sources WHERE update_enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -167,7 +166,7 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 	for rows.Next() {
 		var s threatSourceRow
 		var nextUpdate string
-		if err := rows.Scan(&s.id, &s.name, &s.url, &s.updateEnabled, &nextUpdate); err != nil {
+		if err := rows.Scan(&s.id, &s.name, &s.url, &nextUpdate); err != nil {
 			return nil, err
 		}
 		// 名单为空视为到期（v2.3.2 名单化升级窗口：旧版写文件新版写名单，

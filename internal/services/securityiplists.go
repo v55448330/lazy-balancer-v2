@@ -24,6 +24,9 @@ type policyIPRefExpansion struct {
 // parseIPListRefs 解析 refs JSON（[]int64 形态）：nil/空串/空白 → nil；畸形 → nil
 // （跳过引用，仅保留 inline，发射不因此失败——与 resolvePolicyCustomRules 的
 // 悬空引用仅留痕口径一致）。条目去重，保持出现顺序。
+// parseIPListRefs 与 handlers.parseIPListRefsIDs 为镜像实现（第 54 轮 P5-4
+// 裁定保留双份并声明）：本侧投影路径去重保序，handlers 侧校验路径不去重
+// ——语义有意分叉，勿单方面合并。
 func parseIPListRefs(raw string) []int64 {
 	if strings.TrimSpace(raw) == "" {
 		return nil
