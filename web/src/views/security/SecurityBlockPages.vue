@@ -25,11 +25,19 @@
             <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">内置</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="内容类型" width="110" align="center">
+        <el-table-column label="内容类型" width="105" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="contentTypeTagType(row.content_type)" effect="plain">{{ contentTypeLabel(row.content_type) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="大小" width="90" align="center">
+          <template #default="{ row }">
+            <el-tooltip content="拦截响应体字节数——评估拦截面传输压力（ egress = 拦截 QPS × 页面大小，64KB 上限）" placement="top">
+              <span>{{ contentSize(row.content) }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
         <el-table-column label="规则引用" width="90" align="center">
           <template #default="{ row }">
             <el-tooltip :disabled="!row.rule_ref_count" content="引用本页的负载均衡规则数（启用策略绑定 ∪ 规则级阶段覆盖）" placement="top">
@@ -37,7 +45,6 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
         <el-table-column label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
         </el-table-column>
@@ -154,6 +161,12 @@ const dialogTitle = computed(() => {
   return currentPage.value?.is_default || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
 })
 
+
+// 内容大小（响应体字节数）：用于评估拦截面传输压力（用户裁定新列）
+const contentSize = (content?: string): string => {
+  const n = new Blob([content ?? '']).size
+  return n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`
+}
 const form = ref({ name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' })
 
 // 可选内容类型（与后端 models.BlockPageContentTypes 白名单同口径）
