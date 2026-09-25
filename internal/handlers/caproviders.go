@@ -86,9 +86,6 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	if req.Provider != nil && *req.Provider != oldProvider {
 		changed = append(changed, "提供商类型")
 	}
-	if req.DirectoryURL != nil && *req.DirectoryURL != oldDirectoryURL {
-		changed = append(changed, "目录地址")
-	}
 	if req.Credentials != nil && credentialsMeaningfullyChanged(*req.Credentials, oldCredentials) {
 		changed = append(changed, "凭证")
 	}

@@ -382,12 +382,16 @@ func markSourceSuccess(id int, entryCount int, finished string, rawHash ...strin
 			entryCount, version, finished, next, rawHash[0], id); err != nil {
 			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 		}
-		return
+	} else {
+		// raw_hash 缺省（快路径内容未变）不覆写该列（第 55 轮 P3-1 修法）。
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
+			entryCount, version, finished, next, id); err != nil {
+			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
+		}
 	}
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
-		entryCount, version, finished, next, id); err != nil {
-		Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
-	}
+	// 成功留痕（尾部共享，两分支同达，第 56 轮 P3-1 修法）：rawHash 分支=内容
+	// 更新；无参分支=哈希一致跳过写入。原 P3-1 修复在 rawHash 分支加的 return
+	// 切断了本段日志（真实更新零留痕），已撤除。
 	// 源名仅用于日志，按 id 反查一次
 	var name string
 	_ = db.DB.QueryRow(`SELECT name FROM security_threat_sources WHERE id=?`, id).Scan(&name)

@@ -339,12 +339,16 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		if err != nil {
 			Logf("info", "parse old cluster master URL after promotion: %v", err)
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
+			// 地址损坏时无法定位旧主节点 pin 文件——磁盘残留为已知边界
+			// （第 56 轮 F56B2-4 如实化）：残留仅在该 host:port 将来重新注册
+			// 为从节点时引发一次 PinMismatch，forget-pins 可恢复。
 			return nil
 		}
 		pinPath, err := clusterPinPathForDatabase(s.db, parsedMasterURL.Host)
 		if err != nil {
 			Logf("info", "locate old cluster master pin after promotion: %v", err)
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
+			// 同上：pin 路径定位失败，磁盘清理不可达，残留边界已知。
 			return nil
 		}
 		// 先读取已知指纹，再清理并通知：脱离通知的 transport 按连接读取 pin 文件

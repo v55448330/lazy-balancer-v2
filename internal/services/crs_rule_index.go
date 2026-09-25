@@ -57,6 +57,9 @@ func (idx *CRSRuleIndex) Has(ruleID string) bool {
 }
 
 // Find 返回 ruleID 的索引条目（id 升序线性扫描）；不存在返回 nil。
+// Find 线性扫描返回首个同 id 条目（切片升序即最低 id）。第 56 轮 F56B1-4
+// 评估过集合化：需把 ids 集合值改为切片下标，收益在每条目 µs 级——裁定保留
+// 现实现（调用点为配置构建/预览路径，非请求热路径），注释声明为有意取舍。
 func (idx *CRSRuleIndex) Find(ruleID string) *CRSRuleIndexEntry {
 	if idx == nil {
 		return nil

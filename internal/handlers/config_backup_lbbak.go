@@ -229,7 +229,7 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload, ip2regionTag stri
 	return ""
 }
 
-// isLbbakRequest 按魔数识别 tar.gz 备份(gzip 0x1f 0x8b)。
+// isLbbakBytes 按魔数识别 tar.gz 备份(gzip 0x1f 0x8b)。
 func isLbbakBytes(body []byte) bool {
 	return len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b
 }

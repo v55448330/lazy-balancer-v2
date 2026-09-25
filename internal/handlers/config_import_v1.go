@@ -521,8 +521,7 @@ func isRequestBodyTooLarge(err error) bool {
 }
 
 func (h *Handlers) ValidateConfigImport(c *gin.Context) {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
+	if !h.requireMaster(c) {
 		return
 	}
 	if !limitConfigImportBody(c) {
@@ -726,8 +725,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 }
 
 func (h *Handlers) ImportV1Config(c *gin.Context) {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
+	if !h.requireMaster(c) {
 		return
 	}
 	if !limitConfigImportBody(c) {

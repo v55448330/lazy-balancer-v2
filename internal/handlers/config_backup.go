@@ -586,23 +586,12 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 		if len(columns) == 0 {
 			continue
 		}
-		query := "INSERT INTO " + table + " (" + joinStrings(columns, ",") + ") VALUES (" + joinStrings(placeholders, ",") + ")"
+		query := "INSERT INTO " + table + " (" + strings.Join(columns, ",") + ") VALUES (" + strings.Join(placeholders, ",") + ")"
 		if _, err := tx.ExecContext(ctx, query, values...); err != nil {
 			return fmt.Errorf("写入表 %s: %w", table, err)
 		}
 	}
 	return nil
-}
-
-func joinStrings(parts []string, sep string) string {
-	out := ""
-	for i, part := range parts {
-		if i > 0 {
-			out += sep
-		}
-		out += part
-	}
-	return out
 }
 
 type importRuntimeSnapshot struct {
@@ -2059,8 +2048,7 @@ func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload 
 }
 
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
+	if !h.requireMaster(c) {
 		return
 	}
 	qs := c.Query("sections")
@@ -2088,8 +2076,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 }
 
 func (h *Handlers) ImportConfigBackup(c *gin.Context) {
-	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
+	if !h.requireMaster(c) {
 		return
 	}
 	if !limitConfigImportBody(c) {
@@ -2600,7 +2587,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 			values = append(values, value)
 		}
 		if len(sets) > 0 {
-			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+joinStrings(sets, ",")+" WHERE id=1", values...); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+strings.Join(sets, ",")+" WHERE id=1", values...); err != nil {
 				err = session.abort(err)
 				recordAudit(c, action+"失败", "配置备份", err.Error())
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入全局配置失败，已回滚: " + err.Error()})
@@ -2791,5 +2778,5 @@ func importCountsDetail(tables map[string][]map[string]any) string {
 			parts = append(parts, fmt.Sprintf(item.label, len(rows)))
 		}
 	}
-	return joinStrings(parts, "；")
+	return strings.Join(parts, "；")
 }

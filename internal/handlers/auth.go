@@ -281,6 +281,9 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 	// R72 十次：登录/step-up 响应携带 mfa_enabled——NewUserResponse 不含该字段
 	//（User 模型无此列），此前所有登录路径的 user.mfa_enabled 恒 false，导致
 	// 前端「登录从节点需先启用 MFA」预检对自己已启用的用户误报。一次查询填齐。
+	// 与登录密码步的 mfa_enabled 判定查询为两处独立查询（第 56 轮 F56B2-5
+	// 裁定保留：step-up/登录共用本函数，透传会增加 MFA 关键流签名复杂度，
+	// 代价仅一次索引点查）。
 	var mfaEnabled int
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", user.ID).Scan(&mfaEnabled); err == nil {
 		response.MFAEnabled = mfaEnabled == 1

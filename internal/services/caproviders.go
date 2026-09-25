@@ -174,9 +174,8 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if req.Provider != nil {
 		existing.Provider = *req.Provider
 	}
-	if req.DirectoryURL != nil {
-		existing.DirectoryURL = *req.DirectoryURL
-	}
+	// DirectoryURL 非用户可写字段（R71 N-3：任何取值都被官方固定 URL 覆写，
+	// 第 56 轮 F2/F6 裁定删除死参数与审计失真源）。
 	if req.Credentials != nil {
 		existing.Credentials = *req.Credentials
 	}
@@ -202,7 +201,7 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if existing.Name == "" {
 		return ErrCAProviderInvalidName
 	}
-	if len(existing.Name) > 100 {
+	if len([]rune(existing.Name)) > 100 {
 		return ErrCAProviderNameTooLong
 	}
 

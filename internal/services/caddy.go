@@ -206,7 +206,8 @@ func (s *CaddyService) getRunningConfigBytes() ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET /config/ returned %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// LB44-4 同族防线（第 56 轮 P5：全文件最后一处无界 admin 读取收口）。
+	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
 func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err error) {

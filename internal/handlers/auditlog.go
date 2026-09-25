@@ -88,7 +88,7 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 
 // buildAuditLogFilters 组装列筛选 WHERE 子句。时间参数按配置时区解析后
 // 换算为 UTC 与 created_at 比较；日期-only 输入自动补全天/日边界。
-func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interface{}) {
+func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interface{}, bool) {
 	// SYS40-3:LIKE 值侧转义——用户输入中的 %/_/\ 是字面字符,不转义会被
 	// 当通配符(搜「100%」命中 100abc);SQL 追加 ESCAPE '\' 声明转义符。
 	like := func(column, value string) (string, interface{}) {
@@ -124,35 +124,43 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		conds = append(conds, c1)
 		args = append(args, a1)
 	}
-	parseBoundary := func(raw, endOfDay string) (time.Time, bool) {
+	// 畸形时间筛选改 400（第 56 轮 F8，用户裁定）：此前解析失败静默丢弃条件
+	// 返回全量数据——用户以为在按时间过滤而实际没有。解析统一在此处做，
+	// 失败即 400（aborted=true 让调用方短路）。
+	parseBoundary := func(raw, endOfDay string) (time.Time, bool, bool) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
-			return time.Time{}, false
+			return time.Time{}, false, false
 		}
 		if len(raw) == 10 { // YYYY-MM-DD → 起点取 00:00:00，终点取 23:59:59
 			raw += " " + endOfDay
 		}
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
 		if err != nil {
-			return time.Time{}, false
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "时间筛选格式无效，应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"})
+			return time.Time{}, false, true
 		}
-		return t.UTC(), true
+		return t.UTC(), true, false
 	}
-	if t, ok := parseBoundary(c.Query("start_time"), "00:00:00"); ok {
+	if startT, ok1, abort1 := parseBoundary(c.Query("start_time"), "00:00:00"); abort1 {
+		return "", nil, true
+	} else if ok1 {
 		// SYS-5(2026-09-10 审计):裸列比较替代 datetime(created_at) 包裹——包裹
 		// 使 idx_audit_log_created 失效全表扫;created_at 为 SQLite 规范 UTC 文本
 		// 与 datetime(?) 输出同格式,直接比较等价且可走索引。
 		conds = append(conds, " AND created_at >= datetime(?)")
-		args = append(args, t.Format("2006-01-02 15:04:05"))
+		args = append(args, startT.Format("2006-01-02 15:04:05"))
 	}
-	if t, ok := parseBoundary(c.Query("end_time"), "23:59:59"); ok {
+	if endT, ok2, abort2 := parseBoundary(c.Query("end_time"), "23:59:59"); abort2 {
+		return "", nil, true
+	} else if ok2 {
 		conds = append(conds, " AND created_at <= datetime(?)")
-		args = append(args, t.Format("2006-01-02 15:04:05"))
+		args = append(args, endT.Format("2006-01-02 15:04:05"))
 	}
 	if len(conds) == 0 {
-		return "", nil
+		return "", nil, false
 	}
-	return " WHERE 1=1" + strings.Join(conds, ""), args
+	return " WHERE 1=1" + strings.Join(conds, ""), args, false
 }
 
 func (h *Handlers) GetAuditLogs(c *gin.Context) {
@@ -184,7 +192,10 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	} else {
 		services.Logf("error", "GetAuditLogs: failed to load timezone %q, using UTC: %v", tzStr, lerr)
 	}
-	where, args := buildAuditLogFilters(c, loc)
+	where, args, aborted := buildAuditLogFilters(c, loc)
+	if aborted {
+		return
+	}
 
 	var total int64
 	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log"+where, args...).Scan(&total); err != nil {

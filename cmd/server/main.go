@@ -199,7 +199,10 @@ func run() error {
 	// 自动备份执行体无条件注入(断 services→handlers 反向依赖环,与角色无关);
 	// 调度器仅主节点运行——启动装配在本分支,promote 路径(services/cluster.go)
 	// 对称拉起,demote(BecomeSlave)停止,全程无需重启进程。
-	services.SetAutoBackupExecutor(h.RunAutoBackupOnce)
+	services.SetAutoBackupExecutor(func(trigger, operator string) error {
+		_, err := h.RunAutoBackupOnce(trigger, operator)
+		return err
+	})
 	if isMaster {
 		lifecycle.StartACME()
 		services.StartAutoBackupScheduler(context.Background())

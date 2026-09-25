@@ -137,6 +137,10 @@ func installClusterVersionTriggers(database *sql.DB) error {
 					valueChange = append(valueChange, "(OLD.status='disabled' AND NEW.status<>'disabled')")
 					whenClause += " AND (" + strings.Join(valueChange, " OR ") + ")"
 				case "DELETE":
+					// DELETE 侧成员守卫与 UPDATE 同款——注意其不对称性（第 56 轮 F56B2-1
+					// 如实化）：删除非成员行（disabled/过期/无材料）时 WHEN 恒假不 bump，
+					// 从节点该行残留至下次任意语义 bump 自愈（展示面-only，快照证书选择
+					// 同样只认成员行，签发不受影响）。
 					whenClause += " AND " + oldCertificateMember
 				}
 			}

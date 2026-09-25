@@ -200,7 +200,6 @@ type CAProviderCredentials struct {
 type UpdateCAProviderRequest struct {
 	Name          *string `json:"name"`
 	Provider      *string `json:"provider"`
-	DirectoryURL  *string `json:"directory_url"`
 	Credentials   *string `json:"credentials"`
 	MaxConcurrent *int    `json:"max_concurrent"`
 	MinIntervalMS *int    `json:"min_interval_ms"`

@@ -240,6 +240,9 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		m.state.status = IP2RegionStatusSuccess
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
+		// SLB12-P3-11 同型补 version（第 56 轮 P3-2）：内存态优先后 version
+		// 此前在「已是最新」时退化为空串（CRS 侧已修，本侧漏同步）。
+		m.state.version = currentIP2RegionVersion()
 		m.mu.Unlock()
 		RecordAuditLog("system", "更新", "IP数据库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return

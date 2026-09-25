@@ -46,6 +46,8 @@ func ip2RegionStoredStatusSnapshot() IP2RegionUpdateStatusSnapshot {
 		FROM security_ip2region_version WHERE id=1`).
 		Scan(&stored.status, &stored.trigger, &stored.startedAt, &stored.finishedAt, &stored.message, &stored.version)
 	if err != nil {
+		// 同 crsstatus 口径（第 56 轮 P5）：失败留 warn 后回退 idle。
+		Logf("warn", "IP2Region 状态: 读取存储快照失败，回退 idle: %v", err)
 		return IP2RegionUpdateStatusSnapshot{Status: string(IP2RegionStatusIdle)}
 	}
 	return IP2RegionUpdateStatusSnapshot{

@@ -278,6 +278,25 @@ type brandingResponse struct {
 	LandingUsesDefault bool   `json:"landing_uses_default"`
 }
 
+// brandingSyncGate 60s 采样门（第 56 轮 P5，用户裁定）：GetBranding 是公开
+// 无鉴权端点，幂等同步/种子/镜像每请求 ~7 条 SQL 是残余放大面——boot+首请求
+// 已完成播种，门内跳过仅推迟带外变更 ≤60s 可见；branding 配置写路径调用
+// resetBrandingSyncGate 主动失效，管理面操作零延迟。
+var (
+	brandingSyncMu   sync.Mutex
+	brandingSyncLast time.Time
+)
+
+func brandingSyncGateAllow() bool {
+	brandingSyncMu.Lock()
+	defer brandingSyncMu.Unlock()
+	if time.Since(brandingSyncLast) < time.Minute {
+		return false
+	}
+	brandingSyncLast = time.Now()
+	return true
+}
+
 func (h *Handlers) GetBranding(c *gin.Context) {
 	cfg := loadBrandingConfig(h.cfg.DataDir)
 	resp := brandingResponse{
@@ -299,29 +318,34 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	}
 	// landing_text 变化时同步注入 services 渲染并触发 Caddy 重应用
 	// (与 SeedDefaultBlockPage 同模式:主节点限定、异步、幂等)。
-	needApply := false
-	if changed, _ := SyncDefaultLandingText(h.cfg.DataDir); changed {
-		needApply = true
-	}
-	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
-		needApply = true
-	}
-	// 品牌镜像(2026-09-11):文件变化时刷新 global_config.branding_json,
-	// 触发器 bump cluster_version → 快照流向从节点。镜像变化本身不需要本地
-	// Caddy 重载(本地渲染变化已由上方 Sync/Seed 的 needApply 覆盖)。
-	if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
-		services.Logf("error", "branding 镜像刷新失败: %v", err)
-	}
-	if needApply {
-		go func() {
-			var isMaster bool
-			if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
-				return
-			}
-			if err := h.applyCaddyConfigE(); err != nil {
-				services.Logf("error", "branding 触发的 Caddy 配置应用失败: %v", err)
-			}
-		}()
+	// 编辑最坏延迟 60s 可见）。原注释：幂等同步在 boot+首请求已完成，
+	// 稳态每请求 ~7 条 SQL 是公开无鉴权端点的残余放大面——门内跳过同步/
+	// 种子/镜像（branding.json 为手工编辑的文档化用法，无管理写路径；带外
+	if brandingSyncGateAllow() {
+		needApply := false
+		if changed, _ := SyncDefaultLandingText(h.cfg.DataDir); changed {
+			needApply = true
+		}
+		if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
+			needApply = true
+		}
+		// 品牌镜像(2026-09-11):文件变化时刷新 global_config.branding_json,
+		// 触发器 bump cluster_version → 快照流向从节点。镜像变化本身不需要本地
+		// Caddy 重载(本地渲染变化已由上方 Sync/Seed 的 needApply 覆盖)。
+		if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
+			services.Logf("error", "branding 镜像刷新失败: %v", err)
+		}
+		if needApply {
+			go func() {
+				var isMaster bool
+				if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+					return
+				}
+				if err := h.applyCaddyConfigE(); err != nil {
+					services.Logf("error", "branding 触发的 Caddy 配置应用失败: %v", err)
+				}
+			}()
+		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }

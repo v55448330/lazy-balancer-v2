@@ -141,7 +141,9 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 	deleteOne := func(recordID uint64) error {
 		if err := p.deleteRecord(ctx, zone, recordID); err != nil {
 			if ctx.Err() != nil {
-				err = ctx.Err()
+				// 保留原始 provider 错误（第 56 轮 P5：整体覆写会丢失具体
+				// API 失败原因，诊断信息归零）；与 dnspod 侧口径对齐。
+				err = errors.Join(err, ctx.Err())
 			}
 			if p.ownership == nil {
 				// U5-2：failed 的唯一消费点是下方 ownership==nil 的 owned

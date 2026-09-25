@@ -169,9 +169,9 @@ func pruneAutoBackups(dir string, keepSuccess, keepFailed int) {
 // 调度与手动同时触发时后到者立即报错，不排队。
 // operator 为审计操作者:调度路径传 system,手动触发传当前登录用户
 // (2026-09-20 用户反馈:手动备份审计恒 system,看不出是谁点的)。
-func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
+func (h *Handlers) RunAutoBackupOnce(trigger, operator string) (autoBackupRowView, error) {
 	if !autoBackupRunMu.TryLock() {
-		return errors.New("已有备份任务正在执行，请稍后重试")
+		return autoBackupRowView{}, errors.New("已有备份任务正在执行，请稍后重试")
 	}
 	defer autoBackupRunMu.Unlock()
 
@@ -198,20 +198,20 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fail("创建备份目录失败", err)
+		return autoBackupRowView{}, fail("创建备份目录失败", err)
 	}
 	payload, exportedSections, countsSummary, _, err := h.buildLbbakExport(context.Background(), loadAutoBackupSectionsSetting())
 	if err != nil {
-		return fail("备份构建失败", err)
+		return autoBackupRowView{}, fail("备份构建失败", err)
 	}
 	finalPath := filepath.Join(dir, filename)
 	tmpPath := finalPath + ".tmp"
 	if err := os.WriteFile(tmpPath, payload, 0o600); err != nil {
-		return fail("备份文件写入失败", err)
+		return autoBackupRowView{}, fail("备份文件写入失败", err)
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fail("备份文件落盘失败", err)
+		return autoBackupRowView{}, fail("备份文件落盘失败", err)
 	}
 	sectionsJSON, err := json.Marshal(exportedSections)
 	if err != nil {
@@ -221,7 +221,7 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	if err != nil {
 		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回
 		_ = os.Remove(finalPath)
-		return fail("备份记录写入失败", err)
+		return autoBackupRowView{}, fail("备份记录写入失败", err)
 	}
 	// 成功落行后内务裁剪(流程注释「落行→裁剪→审计」的裁剪步,SYS41-1 接线):
 	// success 按 keep 保留、failed 按 autoBackupFailedRowsKeep=20 保留,
@@ -231,7 +231,13 @@ func (h *Handlers) RunAutoBackupOnce(trigger, operator string) error {
 	services.RecordAuditLog(operator, action, "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", id), "文件："+filename, countsSummary,
 		fmt.Sprintf("大小：%d 字节", len(payload)), services.AuditResultPart("success")), "")
-	return nil
+	// 行视图在 TryLock 持有区内取——调用方回查「最新 manual 行」在并发手动
+	// 备份下会取到他人行（第 56 轮 F4 展示竞态，此处从根上消除）。
+	view, verr := scanAutoBackupRowView(db.DB.QueryRow(`SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id))
+	if verr != nil {
+		return autoBackupRowView{}, nil
+	}
+	return view, nil
 }
 
 // —— HTTP 端点 ——
@@ -461,13 +467,14 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if operator == "" {
 		operator = "system"
 	}
-	if err := h.RunAutoBackupOnce("manual", operator); err != nil {
+	// 行视图由 RunAutoBackupOnce 在 TryLock 持有区内返回（第 56 轮 F4：解锁后
+	// 回查「最新 manual 行」在并发手动备份下会取到他人行）。
+	view, err := h.RunAutoBackupOnce("manual", operator)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份执行失败: " + err.Error()})
 		return
 	}
-	row := db.DB.QueryRow(`SELECT ` + autoBackupRowColumns + ` FROM auto_backups WHERE trigger_type='manual' ORDER BY id DESC LIMIT 1`)
-	view, err := scanAutoBackupRowView(row)
-	if err != nil {
+	if view.Filename == "" {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动备份完成"})
 		return
 	}
@@ -503,13 +510,16 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := os.Remove(filepath.Join(h.cfg.BackupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份文件删除失败: " + err.Error()})
-		return
-	}
+	// 行先删、文件后删（第 56 轮 F5，用户裁定）：先删文件后删行会在「文件已删、
+	// 行 DELETE 失败」时留下指向不存在文件的行（还原/下载 404）；反过来行已删
+	// 而文件残留仅为磁盘孤儿（无害，可手动清理），一致性方向更优。
 	if _, err := db.DB.Exec(`DELETE FROM auto_backups WHERE id=?`, view.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
 		return
+	}
+	if err := os.Remove(filepath.Join(h.cfg.BackupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// 行已删、文件残留：孤儿文件不阻断响应，留 warn 供清理。
+		services.Logf("warn", "自动备份: 行已删但文件删除失败 %s: %v", view.Filename, err)
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, services.AuditResultPart("success")))

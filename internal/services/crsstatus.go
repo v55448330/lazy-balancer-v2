@@ -15,6 +15,8 @@ func storedStatusSnapshot() CRSUpdateStatusSnapshot {
 		FROM security_crs_version WHERE id=1`).
 		Scan(&stored.status, &stored.trigger, &stored.startedAt, &stored.finishedAt, &stored.message, &stored.version)
 	if err != nil {
+		// DB 读失败静默回退 idle 会丢可回溯性（第 56 轮 P5）：留 warn 后回退。
+		Logf("warn", "CRS 状态: 读取存储快照失败，回退 idle: %v", err)
 		return CRSUpdateStatusSnapshot{Status: string(CRSStatusIdle)}
 	}
 	return CRSUpdateStatusSnapshot{

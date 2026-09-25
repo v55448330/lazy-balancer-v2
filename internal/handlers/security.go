@@ -3947,7 +3947,7 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 // stage1/stage2/stage3 合法；缺省（""）按归一后内容推断（models.InferPolicyType
 
 // 单一事实源）；显式 mixed 与非法值报错（mixed 为存量兼容组，不可新建）。
-// 显式类型时调用方必须先经 normalizeOutOfStageFields 归一阶段外字段。
+// 显式类型时由本函数内部调用 normalizeOutOfStageFields 归一阶段外字段。
 func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, error) {
 	switch req.PolicyType {
 	case "":
