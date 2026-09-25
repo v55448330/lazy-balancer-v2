@@ -159,6 +159,12 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		}
 		if strings.HasPrefix(strings.ToLower(line), "host:") {
 			host = strings.TrimSpace(line[len("host:"):])
+			// Host 行内裸 CR 等控制字符不得反射进 Location（第 55 轮 P3-3：
+			// TrimSpace 只去首尾，中置 CR 曾原样进响应头）——含控制字符即视为
+			// 无效 Host，回退本地地址。
+			if strings.ContainsFunc(host, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+				host = ""
+			}
 		}
 	}
 	if host == "" {

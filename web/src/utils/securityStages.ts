@@ -49,6 +49,9 @@ export interface SecurityStagePolicy {
   trust_detection?: boolean
   // CRS 规则组选择（摘要原生数组或 JSON 文本；阶段 3 概览「CRS 组 N」计数用）
   crs_rule_groups?: string | string[]
+  // 策略级拦截页（2026-09-25 裁定 stage1/stage2 均可配；投影面此前未呈现）
+  block_page_id?: number
+  block_status_code?: number
 }
 
 // 规则-策略绑定（GET /security/bindings 值数组元素）
@@ -401,7 +404,14 @@ const buildStage1Rows = (
     const geoModeLabel = policy?.geoip_mode === 'allow' ? '仅允许所选区域' : '拦截所选区域'
     rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
   }
-  // 规则级阶段页覆盖行（阶段 1 无策略级页；v2.3.1 逐策略归因默认层 = 403）：
+  // 策略级拦截页行（第 55 轮：2026-09-25 起 stage1 可配策略页，投影补呈现）
+  const s1PageId = policy?.block_page_id ?? 0
+  if (s1PageId > 0) {
+    const page = blockPages.find((p) => p.id === s1PageId)
+    const broken = !page || (page.content ?? '') === ''
+    rows.push({ label: '拦截页（策略页）', detail: broken ? '已失效（回落默认 403）' : `${page?.name}（状态码 ${policy?.block_status_code || 403}）` })
+  }
+  // 规则级阶段页覆盖行（v2.3.1 逐策略归因默认层 = 403）：
   // 已配 → 规则覆盖；页已删/内容空 → 失效（回落跟随策略）；未配 → 跟随默认 403。
   // 仅携带于有能力行的策略组——空能力不虚增阶段 1 组（未启用判定不受影响）
   if (rows.length > 0) {
@@ -484,7 +494,14 @@ export const buildStageModel = (
 
     // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）
     if (policy?.has_rate_limit) {
-      stage2Groups.push({ ...base, rows: [{ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` }] })
+      const s2rows = [{ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` }]
+      // 策略级拦截页（第 55 轮：stage2 可配策略页，429 时渲染；未配不虚增行）
+      const s2PageId = binding.block_page_id ?? policy?.block_page_id ?? 0
+      if (s2PageId > 0) {
+        const page = blockPages.find((p) => p.id === s2PageId)
+        if (page && (page.content ?? '') !== '') s2rows.push({ label: '拦截页（策略页）', detail: `${page.name}（429 时渲染）` })
+      }
+      stage2Groups.push({ ...base, rows: s2rows })
     }
 
     const s3rows = buildStage3Rows(binding, policy, blockPages, stagePages)

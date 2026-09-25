@@ -21,6 +21,9 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// apiKeyMaxPerUser 每用户 API Key 数量配额（第 55 轮 P5-8，用户裁定）。
+const apiKeyMaxPerUser = 50
+
 // apiKeyWhitelistCachePurge 由 middleware 包注入（middleware 导入 handlers，
 // 反向会成环——F49-P5-19①）：删除/禁用 Key 时按 keyID 前缀清扫白名单 CIDR
 // 解析缓存（历史条目永不再命中却永久驻留=无界累积）。nil=未装配（单测直连
@@ -158,6 +161,17 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	if utf8.RuneCountInString(req.Name) > 100 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称过长(上限 100 字符)"})
+		return
+	}
+	// 每用户配额 ≤50（第 55 轮 P5-8，用户裁定）：此前无数量上限，普通用户可
+	// 无界增长 api_keys 表（自伤型资源膨胀）。
+	var owned int
+	if err := db.DB.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM api_keys WHERE created_by=?", userID).Scan(&owned); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询 Key 数量失败"})
+		return
+	}
+	if owned >= apiKeyMaxPerUser {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("API Key 数量已达上限（每用户 %d 个），请先删除不再使用的密钥", apiKeyMaxPerUser)})
 		return
 	}
 	if c.GetString("role") != "admin" {

@@ -155,7 +155,7 @@ type threatSourceRow struct {
 // （next_update 空或已过）——失败重试在任务内完成（runWithInTaskRetry），
 // 落定后下一运行=下一排程槽，不拖累健康源的重下载。
 func threatDueSources(trigger string) ([]threatSourceRow, error) {
-	rows, err := db.DB.Query(`SELECT id, name, url, COALESCE(next_update,'')
+	rows, err := db.DB.Query(`SELECT id, name, url, COALESCE(next_update,''), COALESCE(consecutive_failures,0)
 		FROM security_threat_sources WHERE update_enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -166,14 +166,21 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 	for rows.Next() {
 		var s threatSourceRow
 		var nextUpdate string
-		if err := rows.Scan(&s.id, &s.name, &s.url, &nextUpdate); err != nil {
+		var consecutiveFailures int
+		if err := rows.Scan(&s.id, &s.name, &s.url, &nextUpdate, &consecutiveFailures); err != nil {
 			return nil, err
 		}
 		// 名单为空视为到期（v2.3.2 名单化升级窗口：旧版写文件新版写名单，
-		// 不补这条则升级后最长 24h 名单为空、引用策略零拦截）。
-		if trigger != "manual" && nextUpdate != "" && !threatListEmpty(s.name) {
-			if due, err := time.Parse(crsTimeLayout, nextUpdate); err == nil && now.Before(due) {
-				continue
+		// 不补这条则升级后最长 24h 名单为空、引用策略零拦截）——但仅限
+		// 「从未失败」形态（consecutive_failures=0，第 55 轮 P3-2，用户裁
+		// 定）：持续产不出条目的失败源按排程门控，不再每分钟整任务重跑。
+		if trigger != "manual" && nextUpdate != "" {
+			isEmpty := threatListEmpty(s.name)
+			gated := !isEmpty || consecutiveFailures > 0
+			if gated {
+				if due, err := time.Parse(crsTimeLayout, nextUpdate); err == nil && now.Before(due) {
+					continue
+				}
 			}
 		}
 		sources = append(sources, s)
@@ -365,16 +372,20 @@ func (m *ThreatUpdateManager) updateOneSource(source threatSourceRow, trigger st
 }
 
 // markSourceSuccess 源成功状态落库（版本/条数/退避清零/下一窗口 + 原始字节哈希）。
-// rawHash 空=兼容旧调用形态不写。
+// rawHash 缺省=兼容旧调用形态【不写】raw_hash 列（第 55 轮 P3-1：无条件覆写
+// 空串曾使快路径自我失效——缺省时动态剔除该列，保留上次慢路径哈希）。
 func markSourceSuccess(id int, entryCount int, finished string, rawHash ...string) {
 	version := time.Now().UTC().Format("2006.01.02")
 	next := threatNextSlot(time.Now().UTC())
-	raw := ""
 	if len(rawHash) > 0 {
-		raw = rawHash[0]
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
+			entryCount, version, finished, next, rawHash[0], id); err != nil {
+			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
+		}
+		return
 	}
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
-		entryCount, version, finished, next, raw, id); err != nil {
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
+		entryCount, version, finished, next, id); err != nil {
 		Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 	}
 	// 源名仅用于日志，按 id 反查一次

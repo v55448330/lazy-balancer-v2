@@ -220,10 +220,14 @@ const loadIpLists = async (): Promise<void> => {
       for (const id of parseRefIds(p.ip_acl_list_refs)) refIds.add(id)
       for (const id of parseRefIds(p.ip_whitelist_refs)) refIds.add(id)
     }
+    // 会话内条目缓存（第 55 轮 B3-P5：原实现每次 @show 对全部引用名单整表
+    // 重拉，三源全引 1.5-2MB/次）——仅拉取缓存缺失的名单 id；存入名单成功后
+    // 由调用方把新 IP 写回缓存，成员判定保持即时正确
+    const map: Record<number, string[]> = { ...ipListEntries.value }
+    const missing = [...refIds].filter((id) => !(id in map))
     const results = await Promise.allSettled(
-      [...refIds].map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)),
+      missing.map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)),
     )
-    const map: Record<number, string[]> = {}
     results.forEach((r) => {
       if (r.status === 'fulfilled' && r.value.data) {
         map[r.value.data.id] = (r.value.data.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
@@ -245,7 +249,12 @@ const saveToListAction = async (): Promise<void> => {
   const list = ipLists.value.find((l) => l.id === selectedListId.value)
   if (!list) return
   const done = await addIpToList(props.ip, list, { verb: '存入', successText: `已存入列表「${list.name}」` })
-  if (done) await loadIpLists()
+  if (done) {
+    // 条目缓存写回：会话内缓存后新存 IP 必须即时反映在成员判定上
+    const merged = new Set([...(ipListEntries.value[list.id] ?? []), props.ip.trim()])
+    ipListEntries.value = { ...ipListEntries.value, [list.id]: [...merged] }
+    await loadIpLists()
+  }
 }
 
 // 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导 mergeIpEntries 同口径）；

@@ -125,6 +125,11 @@ func checkConfigConsistency(adminURL string) {
 	}
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		if err != nil {
+			// 查询失败与「非主节点」同为跳过，但失败应留痕（第 55 轮 P5，
+			// 对齐同文件 first-warn 标准——静默吞错会掩盖 DB 异常）。
+			Logf("warn", "配置看门狗: 读取集群角色失败，本轮跳过: %v", err)
+		}
 		return
 	}
 	expected, err := expectedRenderedRules()
@@ -157,7 +162,7 @@ func checkConfigConsistency(adminURL string) {
 }
 
 // expectedRenderedRules 计算应出现在运行配置中的规则：启用中且至少有一个启用上游，
-// 并排除渲染侧有意跳过的两类（与 caddy.go:1517-1542 同口径——TCP+动态 DNS 逐规则
+// 并排除渲染侧有意跳过的两类（与 caddy.go:1949-1974 同口径——TCP+动态 DNS 逐规则
 // 跳过、同端口多 TCP 整组拒绝），否则这两类规则会被误报为「缺失」（R37 F-1）。
 // 返回 caddy_id → 规则名称。
 func expectedRenderedRules() (map[string]string, error) {

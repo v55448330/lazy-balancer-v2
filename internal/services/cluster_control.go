@@ -251,6 +251,11 @@ func DoWithSameHostTLSUpgradeRedirect(client *http.Client, req *http.Request) (*
 			return nil, fmt.Errorf("重放 https 升级请求: %w", err)
 		}
 		retry.Body = body
+	} else if req.Body != nil {
+		// 无 GetBody 的带体请求不可重放（body 已被首次请求消费，重放会发送
+		// 空/残缺载荷——第 55 轮 P5-4 防御门）：按原响应返回（升级前的明文
+		// 响应），不让调用方拿到残缺重放结果。
+		return resp, nil
 	}
 	return client.Do(retry)
 }

@@ -755,7 +755,9 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 返回错误状态"})
 		return
 	}
-	body, err := io.ReadAll(resp.Body)
+	// LB44-4 同族防线（第 55 轮 P5-1，口径对齐 services/caddy.go 32MB）：
+	// admin 响应无界读取兜底上限。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 Caddy 配置失败: " + err.Error()})
 		return

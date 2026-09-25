@@ -139,7 +139,13 @@ func rotateAuditLogIfNeeded() {
 	// 轮转前记录已持久化的摄取偏移：tick 读到 EOF 后、复制完成前 Coraza 新写入
 	// 的事件只存在于 .1，活文件截断后 tailer 重置偏移也不会再读 .1，需在归档后
 	// 从 [persistedOffset, .1 size) 区间补采。
-	persistedOffset, _ := securityEventsReadOffset(securityEventsOffsetPath)
+	// 读取失败不得静默按 0 补采（第 55 轮 P5，用户裁定）：0 起点会把整个 .1
+	// 重灌 security_events（transaction_id 唯一索引去重兜底，量级=全文件重复
+	// 解析）——留 warn 供诊断，行为保持 0 兜底（轮转不能因读取失败而阻塞）。
+	persistedOffset, offErr := securityEventsReadOffset(securityEventsOffsetPath)
+	if offErr != nil {
+		throttledAuditFailureLogf("audit log rotation: 读取摄取偏移失败，补采起点退化为 0: %v", offErr)
+	}
 	dir := filepath.Dir(auditLogPath)
 	base := auditLogBaseName()
 	// 先滚动历史副本：.4→.5、.3→.4、.2→.3、.1→.2

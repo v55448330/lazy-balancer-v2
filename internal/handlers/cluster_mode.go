@@ -74,7 +74,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	h.syncService.Resume()
 	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
 	message := "已切换为从节点，等待主节点审批"
-	if strings.HasPrefix(strings.ToLower(req.MasterURL), "http://") {
+	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(req.MasterURL)), "http://") {
 		message += "；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})

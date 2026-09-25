@@ -2261,6 +2261,7 @@ const openWizard = async (rule?: Rule) => {
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
+  wizardForm.tlsKeySet = false // 掩码态随向导重置（第 55 轮 B3-P5）
   upstreamTouched.value = []
   isCopyMode.value = false
   copySourceRuleId.value = null
@@ -2381,6 +2382,7 @@ const openWizard = async (rule?: Rule) => {
       ca_provider_id: 0,
       tls_cert: '',
       tls_key: '',
+      tlsKeySet: false, // 私钥掩码态随表单重置（第 55 轮 B3-P5：stale true 曾致新建/复制误显「已配置」）
       tls_http_redirect: false,
       enable_compress: false,
       compress_types: ['gzip'],
@@ -2411,6 +2413,7 @@ const resetWizard = () => {
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
+  wizardForm.tlsKeySet = false // 掩码态随向导重置（第 55 轮 B3-P5）
   upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = false
@@ -2937,6 +2940,7 @@ const openCopyWizard = async (rule: Rule) => {
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
+  wizardForm.tlsKeySet = false // 掩码态随向导重置（第 55 轮 B3-P5）
   upstreamTouched.value = []
   isCopyMode.value = true
   copySourceRuleId.value = rule.caddy_id
@@ -2988,6 +2992,7 @@ const openCopyWizard = async (rule: Rule) => {
     ca_provider_id: fullRule.ca_provider_id ?? 0,
     tls_cert: fullRule.tls_cert || '',
     tls_key: fullRule.tls_key || '',
+    tlsKeySet: fullRule.tls_key_set === true,
     request_body_max_size_mb: fullRule.request_body_max_size_mb || 0,
     upstream_keepalive_timeout: fullRule.upstream_keepalive_timeout || 0,
     server_tokens_hidden: fullRule.server_tokens_hidden || 0,

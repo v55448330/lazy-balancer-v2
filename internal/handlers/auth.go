@@ -174,9 +174,6 @@ func (h *Handlers) Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
 		return
 	}
-	// 密码正确但账户启用 MFA 时不在密码步清零计数——完整登录以 MFA 验证成功
-	// 为准（否则「输对密码→连错 4 次验证码→重登清零」可无限绕过锁定）；未启用
-	// MFA 则密码即完整登录，清零计数。
 	if !user.IsEnabled {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账号已禁用"), c.ClientIP())
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "账号已禁用，请联系管理员"})
@@ -194,6 +191,9 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 	if mfaEnabled {
+		// 密码正确但账户启用 MFA 时不在密码步清零计数——完整登录以 MFA 验证
+		// 成功为准（否则「输对密码→连错 4 次验证码→重登清零」可无限绕过锁定）；
+		// 未启用 MFA 则密码即完整登录，清零计数（第 55 轮 P5：注释随分支归位）。
 		mfaToken, ierr := services.MFAIssueChallenge(user.ID)
 		if ierr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发 MFA 挑战失败"})

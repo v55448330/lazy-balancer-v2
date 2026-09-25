@@ -2701,7 +2701,8 @@ const previewModel = computed<RuleStageModel>(() => {
     geoip_mode: form.value.geoip_enabled ? form.value.geoip_mode : 'off',
     trust_detection: form.value.trust_detection,
   }
-  const showBlockPage = editorPolicyType.value !== 'stage2' && editorPolicyType.value !== 'stage0'
+  // stage2 也投影策略页（第 55 轮：可配拦截页的只读视图补呈现；stage0 无拦截页概念）
+  const showBlockPage = editorPolicyType.value !== 'stage0'
   return buildStageModel(
     [{
       policy_id: previewPolicy.id,
