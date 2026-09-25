@@ -79,3 +79,55 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 		}
 	}
 }
+
+// ID 引用→名称（2026-09-25 用户裁定）：ACL 列表引用/自定义规则/拦截页的
+// 审计详情以名称呈现（缺失 ID 回落 #id，空数组=（空），拦截页 0=（无））。
+func TestUpdateSecurityPolicy_auditResolvesRefNames(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	router := newSecurityRouter(t)
+
+	// Given：名单两条、自定义规则一条、stage1 策略（refs=[7]、custom=[16]、page=0）
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id, name) VALUES (7, '中科大恶意 IP 名单（USTC）'), (10, '测试列表')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, conditions, action, score, enabled) VALUES (16, '发版探针规则', '[]', 'block', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list_refs, custom_rules, enabled, policy_type, geoip_mode, ip_whitelist_enabled)
+		VALUES ('引用策略', 'off', 1, 'deny', '[7]', '[16]', 1, 'stage1', 'off', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyID, _ := res.LastInsertId()
+
+	// When：refs [7]→[7,10]、custom [16]→[]、page 0→9002
+	r := putJSON(t, router, fmt.Sprintf("/security/policies/%d", policyID), map[string]any{
+		"policy_type": "stage1", "ip_acl_list_refs": "[7,10]", "custom_rules": "[]", "block_page_id": 9002,
+	})
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", r.Code, r.Body.String())
+	}
+
+	// Then：详情呈现名称而非裸 ID
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='安全策略' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ACL 列表引用：中科大恶意 IP 名单（USTC）→中科大恶意 IP 名单（USTC）、测试列表",
+		"自定义规则：发版探针规则→（空）",
+		"拦截页：（无）→系统维护页面",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail 缺 %q: %q", want, detail)
+		}
+	}
+	for _, notWant := range []string{"[7]", "[16]", "#9002"} {
+		if strings.Contains(detail, notWant) {
+			t.Fatalf("详情不应残留裸 ID %q: %q", notWant, detail)
+		}
+	}
+}

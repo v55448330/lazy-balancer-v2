@@ -29,7 +29,9 @@ func TestApplyConfig_skipsLoadWhenByteIdentical(t *testing.T) {
 		defer mu.Unlock()
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
-			_, _ = w.Write(lastBody) // 初始为空 → 字节不等 → 首次照常 /load
+			// 生产形态：Caddy GET /config/ 在原文末尾补换行（2026-09-25 实测差
+			// 1 字节——纯字节比对永不命中，必须结构级相等才短路）
+			_, _ = w.Write(append(lastBody, '\n')) // 初始 lastBody=nil → 仅 "\n" → 结构不等 → 首次照常 /load
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
 			posts++
 			lastBody, _ = io.ReadAll(r.Body)

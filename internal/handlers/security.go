@@ -1851,6 +1851,43 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 				changedFields = append(changedFields, fmt.Sprintf("%s：%v→%v", label, ov, *nv))
 			}
 		}
+		// ID 引用→名称（2026-09-25 用户裁定）：refs/自定义规则/拦截页在审计里
+		// 以名称呈现。解析失败（JSON 畸形/查询失败）回落原始文本——审计可读性
+		// 不阻断写路径。
+		namesOfRefs := func(table, refsJSON string) string {
+			var ids []int
+			if err := json.Unmarshal([]byte(refsJSON), &ids); err != nil {
+				return clip(refsJSON)
+			}
+			if len(ids) == 0 {
+				return "（空）"
+			}
+			names := make([]string, 0, len(ids))
+			for _, refID := range ids {
+				var name string
+				if err := tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(name,'') FROM `+table+` WHERE id=?`, refID).Scan(&name); err != nil || name == "" {
+					names = append(names, fmt.Sprintf("#%d", refID))
+				} else {
+					names = append(names, name)
+				}
+			}
+			return strings.Join(names, "、")
+		}
+		deltaRefs := func(label, table string, nv *string, ov string) {
+			if nv != nil && *nv != ov {
+				changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, namesOfRefs(table, ov), namesOfRefs(table, *nv)))
+			}
+		}
+		blockPageName := func(pageID int) string {
+			if pageID == 0 {
+				return "（无）"
+			}
+			var name string
+			if err := tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(name,'') FROM security_block_pages WHERE id=?`, pageID).Scan(&name); err != nil || name == "" {
+				return fmt.Sprintf("#%d", pageID)
+			}
+			return name
+		}
 		deltaStr("名称", req.Name, stored.Name)
 		deltaStr("描述", req.Description, stored.Description)
 		deltaStr("WAF 模式", req.Mode, stored.Mode)
@@ -1861,20 +1898,20 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
 		deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
 		deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
-		deltaStr("ACL 列表引用", req.IPACLListRefs, stored.IPACLListRefs)
-		deltaStr("信任名单列表引用", req.IPWhitelistRefs, stored.IPWhitelistRefs)
+		deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
+		deltaRefs("信任名单列表引用", "security_ip_lists", req.IPWhitelistRefs, stored.IPWhitelistRefs)
 		deltaBool("限流启用", req.RateLimitEnabled, stored.RateLimitEnabled)
 		deltaInt("限流 RPS", req.RateLimitRPS, stored.RateLimitRPS)
 		deltaInt("限流突发", req.RateLimitBurst, stored.RateLimitBurst)
 		deltaStr("CRS 规则组", req.CRSRuleGroups, string(stored.CRSRuleGroups))
 		deltaStr("CRS 排除", req.CRSExcludedRules, string(stored.CRSExcludedRules))
-		deltaStr("自定义规则", req.CustomRules, string(stored.CustomRules))
+		deltaRefs("自定义规则", "security_custom_rules", req.CustomRules, string(stored.CustomRules))
 		deltaStr("GeoIP 名单", req.GeoIPCountries, string(stored.GeoIPCountries))
 		deltaStr("GeoIP 模式", req.GeoIPMode, stored.GeoIPMode)
 		deltaBool("响应体检测", req.WAFCheckResponse, stored.WAFCheckResponse)
 		deltaBool("请求体落日志", req.LogRequestBody, stored.LogRequestBody)
 		if req.BlockPageID != nil && *req.BlockPageID != stored.BlockPageID {
-			changedFields = append(changedFields, fmt.Sprintf("拦截页：#%d→#%d", stored.BlockPageID, *req.BlockPageID))
+			changedFields = append(changedFields, fmt.Sprintf("拦截页：%s→%s", blockPageName(stored.BlockPageID), blockPageName(*req.BlockPageID)))
 		}
 		deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
 		deltaBool("启用", req.Enabled, stored.Enabled)

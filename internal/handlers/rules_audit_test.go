@@ -192,7 +192,7 @@ func TestUpdateRule_stops_when_existing_upstream_scan_fails(t *testing.T) {
 
 func TestDeleteRule_rolls_back_database_and_runtime_when_Caddy_rejects_config(t *testing.T) {
 	// Given
-	handler, loadCalls, lastLoad := newAuditRuleHandlers(t, 1)
+	handler, loadCalls, _ := newAuditRuleHandlers(t, 1)
 	seedAuditRule(t, "lb_delete", "delete", "delete.example.test", 8080, true, "manual", false)
 	router := gin.New()
 	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
@@ -212,8 +212,11 @@ func TestDeleteRule_rolls_back_database_and_runtime_when_Caddy_rejects_config(t 
 	if count != 1 {
 		t.Fatalf("rule count=%d, want rollback", count)
 	}
-	if loadCalls.Load() != 2 || !strings.Contains(*lastLoad, `"old":true`) {
-		t.Fatalf("Caddy load calls=%d last=%s, want failed apply plus runtime restore", loadCalls.Load(), *lastLoad)
+	// loads=1：唯一一次 /load=被拒的失败 apply——运行态从未偏离旧配置，restore
+	// 目标与之同字节 → 短路为空操作（2026-09-25 审计真实性改造）。恢复成立的
+	// 实证即上方 DB 回滚断言（count=1）；runtime 无变化可恢复（apply 全被拒）。
+	if loadCalls.Load() != 1 {
+		t.Fatalf("Caddy load calls=%d, want 仅失败 apply 一次（restore 同字节空操作）", loadCalls.Load())
 	}
 }
 
@@ -1018,8 +1021,10 @@ func TestUpdateRule_restores_database_and_Caddy_when_TLS_reload_fails(t *testing
 	if name != "before" || domain != "tls-old.example.test" || enableTLS {
 		t.Fatalf("restored rule name=%q domain=%q tls=%v", name, domain, enableTLS)
 	}
-	if loadCalls.Load() != 2 || !strings.Contains(currentConfig(), `"old":true`) {
-		t.Fatalf("Caddy loads=%d config=%s, want failed TLS load plus old full-config restore", loadCalls.Load(), currentConfig())
+	// loads=1：失败 TLS apply 未改变运行态 → restore 同字节短路为空操作
+	// （2026-09-25 审计真实性改造）；运行态保持 "old":true 即恢复成立。
+	if loadCalls.Load() != 1 || !strings.Contains(currentConfig(), `"old":true`) {
+		t.Fatalf("Caddy loads=%d config=%s, want 失败 apply 一次 + restore 同字节空操作", loadCalls.Load(), currentConfig())
 	}
 }
 

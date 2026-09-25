@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -152,6 +153,21 @@ func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (load
 	return true, err
 }
 
+// caddyConfigJSONEqual 结构级 JSON 相等（键序/空白/尾换行不敏感）——Caddy
+// GET /config/ 会在原文末尾补换行（2026-09-25 生产实测差 1 字节，纯字节比对
+// 永不命中致同字节门形同虚设），与 Caddy changeConfig 的结构化 sameConfig
+// 判定同语义。
+func caddyConfigJSONEqual(a, b []byte) bool {
+	var aj, bj interface{}
+	if err := json.Unmarshal(a, &aj); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bj); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(aj, bj)
+}
+
 func (s *CaddyService) GenerateAndApplyConfig() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,7 +252,7 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 	// errSameConfig 让审计层知道「没有发生真实重载」。比对失败按未知照常
 	// /load（fail-open，与 Caddy 自身短路同向）。
 	if !force {
-		if running, err := s.getRunningConfigBytes(); err == nil && bytes.Equal(running, data) {
+		if running, err := s.getRunningConfigBytes(); err == nil && caddyConfigJSONEqual(running, data) {
 			return errSameConfig
 		}
 	}

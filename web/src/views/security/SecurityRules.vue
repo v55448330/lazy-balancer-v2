@@ -44,9 +44,9 @@
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tooltip :disabled="!row.statusMessage" :content="row.statusMessage">
-              <el-tag :type="crsStatusTagType(row.status)" size="small" effect="light">{{ crsStatusLabel(row.status) }}</el-tag>
-            </el-tooltip>
+            <!-- 失败 hover 长文案已撤（2026-09-25 用户裁定）：用户直接看更新日志，
+                 状态标签自身已表达失败态 -->
+            <el-tag :type="crsStatusTagType(row.status)" size="small" effect="light">{{ crsStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="自动更新" width="90" align="center">
@@ -501,9 +501,7 @@
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tooltip :disabled="!(row.update_status === 'failed' && row.message)" :content="row.message">
-              <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
-            </el-tooltip>
+            <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="自动更新" width="90" align="center">
@@ -594,7 +592,6 @@ interface LibRow {
   version: string
   count: string
   status: string
-  statusMessage: string
   autoUpdate: boolean
   lastChecked: string
   nextUpdate: string
@@ -606,7 +603,7 @@ const libRows = computed<LibRow[]>(() => {
       key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
       version: crsInfo.value.available === false ? '未安装' : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
       count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
-      status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status, statusMessage: crsFailureMessage.value,
+      status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status,
       autoUpdate: crsInfo.value.auto_update,
       lastChecked: formatDate(crsInfo.value.last_checked) || '—',
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
@@ -616,7 +613,6 @@ const libRows = computed<LibRow[]>(() => {
       version: ip2regionInfo.value.available === false ? '未安装' : ip2regionVersionLabel.value,
       count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
       status: ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
-      statusMessage: ip2regionFailureMessage.value,
       autoUpdate: ip2regionInfo.value.auto_update,
       lastChecked: formatDate(ip2regionInfo.value.last_checked) || '—',
       nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
@@ -637,7 +633,7 @@ const libRows = computed<LibRow[]>(() => {
       sub: 'IP 威胁名单，可被黑名单策略引用',  // 来源明细见「更新详情」弹框（2026-09-24：名称列收窄后三源名折行断词，撤）
       version: latestVersion || '未更新',
       count: totalEntries > 0 ? totalEntries.toLocaleString() + ' 条' : '—',
-      status, statusMessage: anyFailed?.message || '',
+      status,
       autoUpdate: threatAutoUpdate.value,
       lastChecked: srcs.map(x => formatDate(x.last_checked)).filter(Boolean).sort().pop() || '—',
       nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
@@ -817,10 +813,6 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
 }
 
 const crsInfo = ref({ version: '', auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
-const crsFailureMessage = computed(() => {
-  const s = crsInfo.value.update_status
-  return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
-})
 
 const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 const ip2regionVersionLabel = computed(() => {
@@ -831,10 +823,6 @@ const ip2regionStatusForTag = computed(() => {
   const v = ip2regionInfo.value.version
   if (!v || v === 'unknown') return 'not-installed'
   return ip2regionInfo.value.update_status
-})
-const ip2regionFailureMessage = computed(() => {
-  const s = ip2regionInfo.value.update_status
-  return (s === 'failed' || s === '更新失败') ? ip2regionInfo.value.message : ''
 })
 
 const activeTab = ref('rules')
