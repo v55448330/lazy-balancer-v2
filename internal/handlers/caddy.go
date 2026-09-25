@@ -933,7 +933,8 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败"})
 		return
 	}
-	if err := h.caddyService.ApplyConfig(configData); err != nil {
+	loaded, applyErr := h.caddyService.ApplyConfigReporting(configData)
+	if err := applyErr; err != nil {
 		rollbackErr := tx.Rollback()
 		if errors.Is(rollbackErr, sql.ErrTxDone) {
 			rollbackErr = nil
@@ -966,7 +967,11 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
 	// 事务型路径重载审计（69d809b4 曾误删，2026-09-06 恢复）。
-	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
+	// 2026-09-25 审计真实性裁定：仅在真实 /load 发生时落笔——自定义配置与
+	// 运行配置同字节时短路零 provision，记「重载」即虚假事件。
+	if loaded {
+		recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
+	}
 	// R72 二十六次 D3（裁决：保留逃生口 + 明示后果）：自定义 Caddy 配置是
 	// 一次性逃生口，数据库生成器从不消费 caddy_config 列——任何后续规则/
 	// 配置变更或集群同步都会以权威生成配置覆盖它。保存成功即明示。

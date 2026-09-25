@@ -139,6 +139,19 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	return err
 }
 
+// ApplyConfigReporting 同 ApplyConfig，但报告是否发生了真实 /load——审计
+// 真实性裁定（2026-09-25）：自记「重载」审计的调用方（PutCaddyConfig）据
+// loaded 决定落笔与否（同字节短路 loaded=false=零真实重载，不落审计）。
+func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (loaded bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err = s.applyConfigLocked(config)
+	if IsSameConfig(err) {
+		return false, nil
+	}
+	return true, err
+}
+
 func (s *CaddyService) GenerateAndApplyConfig() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
