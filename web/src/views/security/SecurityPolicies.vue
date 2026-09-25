@@ -3141,6 +3141,9 @@ onMounted(async () => {
 .dialog-header__title { font-size: 16px; font-weight: 600; color: var(--text-primary, #111827); line-height: 1.4; }
 .dialog-header__subtitle { font-size: 12px; color: var(--text-secondary, #6b7280); margin-top: 2px; }
 .table-toolbar { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 16px; }
+/* 分页器：与 Rules/SecurityRules/拦截页面 的 .rules-pagination 同款
+   （右对齐 + 16px 上距，2026-09-25 用户裁定——模板挂类漏定义致的左对齐修复） */
+.rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
