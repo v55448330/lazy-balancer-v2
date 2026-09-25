@@ -82,8 +82,11 @@
               style="width: 320px"
               :placeholder="settings.has_github_token ? '已配置（留空保持不变）' : '未配置（未认证限流 60 次/小时）'"
               maxlength="255"
+              @input="githubTokenClearPending = false"
             />
-            <div class="form-tip-line">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流由 60 提升至 5000 次/小时，缓解规则库自动更新 403；令牌仅随 GitHub 直连发送，不经第三方代理。<el-link type="primary" href="https://github.com/settings/tokens" target="_blank" rel="noopener">前往 GitHub 创建令牌</el-link>（只需公共仓库只读权限，无需勾选任何 scope）</div>
+            <el-button v-if="settings.has_github_token && !githubTokenClearPending" type="danger" link size="small" style="margin-left: 8px" @click="clearGithubToken">清除</el-button>
+            <el-text v-if="githubTokenClearPending" type="danger" size="small" class="tip-inline" style="margin-left: 8px">已标记清除，保存后生效</el-text>
+            <div class="form-tip-line">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流由 60 提升至 5000 次/小时，缓解规则库自动更新 403；令牌仅随 GitHub 直连发送，不经第三方代理；点「清除」可撤销已配置令牌（保存后生效）。<el-link type="primary" href="https://github.com/settings/tokens" target="_blank" rel="noopener">前往 GitHub 创建令牌</el-link>（只需公共仓库只读权限，无需勾选任何 scope）</div>
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
@@ -463,7 +466,7 @@
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request, mfaAwareSuccess, formatBytes } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
 import { formatDate } from '@/utils/date'
 import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock } from '@element-plus/icons-vue'
@@ -785,12 +788,8 @@ const runAutoBackupNow = async (): Promise<void> => {
   }
 }
 
-const formatBackupSize = (bytes: number): string => {
-  if (!bytes || bytes <= 0) return '-'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
-}
+// 备份大小：零值占位 '-'，格式化走 formatBytes 单一事实源（第 52 轮 P3-9）
+const formatBackupSize = (bytes: number): string => (!bytes || bytes <= 0 ? '-' : formatBytes(bytes))
 
 // 内容列只显备份范围；hover 明细=各表行数摘要+触发方式（2026-09-21 用户裁定）
 const autoBackupScopeText = (row: AutoBackupRow): string => {
@@ -1165,8 +1164,15 @@ const loadGithubProxyUrl = async (): Promise<void> => {
   }
 }
 loadGithubProxyUrl()
-// GitHub 令牌：输入框空=保持现值（后端同口径），has_github_token 仅显隐占位
+// GitHub 令牌三态（第 52 轮 P2-3）：省略=保持、显式空串（清除钮）=撤销、非空=覆盖；has_github_token 仅显隐占位
 const githubTokenInput = ref('')
+// 清除标记（第 52 轮 P2-3，用户裁定三态语义：nil=保持/空串=清除/非空=覆盖）：
+// 点「清除」置位，保存时显式提交空串撤销令牌；用户重新输入自动撤销标记。
+const githubTokenClearPending = ref(false)
+const clearGithubToken = () => {
+  githubTokenInput.value = ''
+  githubTokenClearPending.value = true
+}
 const loadGithubTokenState = async (): Promise<void> => {
   try {
     const res = await request.get<{ data?: { has_github_token?: boolean } }>('/config')
@@ -1366,8 +1372,11 @@ const handleSave = async () => {
       github_proxy_url: githubProxyUrl.value,
       source: 'basic',
     }
-    // 令牌：仅在用户实际输入时随载荷提交（空=保持现值，后端 CASE WHEN 同口径）
-    if (githubTokenInput.value.trim() !== '') {
+    // 令牌三态（第 52 轮 P2-3，用户裁定）：清除标记→显式空串撤销；有输入→覆盖；
+    // 两者皆无→省略字段保持现值
+    if (githubTokenClearPending.value) {
+      ;(payload as Record<string, unknown>).github_token = ''
+    } else if (githubTokenInput.value.trim() !== '') {
       ;(payload as Record<string, unknown>).github_token = githubTokenInput.value.trim()
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
@@ -1387,6 +1396,14 @@ const handleSave = async () => {
       })
     }
     await request.put('/config', payload)
+    // 保存成功后同步令牌显隐态：清除→has_github_token=false；覆盖→置 true 并清空输入框
+    if (githubTokenClearPending.value) {
+      settings.value.has_github_token = false
+      githubTokenClearPending.value = false
+    } else if (githubTokenInput.value.trim() !== '') {
+      settings.value.has_github_token = true
+      githubTokenInput.value = ''
+    }
     // 保存成功后立即刷新全局配置，让 timezone 在 authStore 中立竿见影（date.ts formatDate 展示侧即时生效）；
     // silent：保存已成功，随后的 GET /config 刷新失败不应再弹误导性错误 toast
     await authStore.fetchConfig(true)

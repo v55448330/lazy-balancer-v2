@@ -9,10 +9,10 @@ import (
 )
 
 // 威胁情报库调度器（v2.3.x）：主节点专属——启动即检查一次（从未更新过的源
-// 立即首轮更新），随后每小时检查到期源（next_update<=now 或空）；成功的源
-// 按排程槽节奏（任务级星期+时间，默认每天 04:00）、失败的源指数退避（行状态
-// 由 threatupdate.go 写）。从节点不更新——文件经 waf-files 通道下发（见
-// cluster_sync.go）。
+// 立即首轮更新），随后分钟级 tick 检查到期源（next_update<=now 或空）；成功的
+// 源按排程槽节奏（任务级星期+时间，默认每天 04:00）落定 next_update，失败源
+// 由任务内重试（runWithInTaskRetry 3 次）兜底，落定后下一运行=下一排程槽。
+// 从节点不更新——文件经 waf-files 通道下发（见 cluster_sync.go）。
 
 // SetMasterRole 按集群角色启停调度器（镜像 ip2region 同族语义）。
 func (m *ThreatUpdateManager) SetMasterRole(isMaster bool) {

@@ -541,12 +541,13 @@ import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import RuleLibScheduleEditor from '@/components/RuleLibScheduleEditor.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
+import { request, ApiRequestError, mfaAwareSuccess, formatBytes } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { useAuthStore } from '@/stores/auth'
 
 import { usePollingTask } from '@/composables/usePollingTask'
+import { useClampedPagination } from '@/composables/useClampedPagination'
 import type { APIResponse, UserListItem } from '@/types'
 // —— 威胁情报库（v2.3.x 第二张规则来源卡）——
 interface ThreatSource {
@@ -840,17 +841,9 @@ const currentContent = ref('')
 const customRules = ref<CustomRule[]>([])
 const customPage = ref(1)
 const customPageSize = ref(10)
-const customRulesPaged = computed(() => {
-  const start = (customPage.value - 1) * customPageSize.value
-  return customRules.value.slice(start, start + customPageSize.value)
-})
-// F-47-34：删除某页最后一条后 customPage 会超出最大页——slice 越界返回空数组、
-// 表格空白直至手动翻页（IP 列表有 search watch 复位口径,自定义规则无收敛路径）。
-// watch 源不含 customPage 本身,不会自触发死循环
-watch([customRules, customPageSize], () => {
-  const maxPage = Math.max(1, Math.ceil(customRules.value.length / customPageSize.value))
-  if (customPage.value > maxPage) customPage.value = maxPage
-})
+// 分页夹紧+切片：useClampedPagination 单一范式（第 52 轮 P5-3）——删除末页
+// 末条后自动回夹，不再空页。
+const { pagedItems: customRulesPaged } = useClampedPagination(customRules, customPage, customPageSize)
 const loadingCustom = ref(false)
 const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
@@ -881,10 +874,9 @@ const ipListsFiltered = computed(() => {
   if (!query) return ipLists.value
   return ipLists.value.filter((l) => l.name.toLowerCase().includes(query) || (l.category || '').toLowerCase().includes(query))
 })
-const ipListsPaged = computed(() => {
-  const start = (ipListPage.value - 1) * ipListPageSize.value
-  return ipListsFiltered.value.slice(start, start + ipListPageSize.value)
-})
+// IP 地址列表同款（第 52 轮 P3-8）：删除末页末条后自动回夹——此前仅搜索有
+// 复位 watch，删除路径无收敛，越界 slice 返回空数组呈空白表格。
+const { pagedItems: ipListsPaged } = useClampedPagination(ipListsFiltered, ipListPage, ipListPageSize)
 // 搜索收窄后高页码会落在空页，回到第 1 页
 watch(ipListSearch, () => { ipListPage.value = 1 })
 const ipListDialogVisible = ref(false)
@@ -1529,7 +1521,8 @@ const deleteCustomRule = (row: CustomRule) => {
     .then(async () => { const del = await request.delete(`/security/custom-rules/${row.id}`); showSaveResult(del, '已删除'); fetchCustomRules() }).catch(() => {})
 }
 
-const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
+// WAF 文件大小：formatBytes 单一事实源（第 52 轮 P3-9）
+const formatSize = (b: number) => formatBytes(b)
 
 onMounted(() => {
   // FE43-1(第 43 轮):消费 ?tab= 后剥离(与 FE42-1 sp 口径一致,SecurityPolicies.vue

@@ -38,7 +38,7 @@ func TestGetConfig_masksGitHubToken(t *testing.T) {
 	}
 }
 
-func TestPutConfig_githubTokenSetAndKeep(t *testing.T) {
+func TestPutConfig_githubTokenSetClearAndKeep(t *testing.T) {
 	handler := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -66,17 +66,23 @@ func TestPutConfig_githubTokenSetAndKeep(t *testing.T) {
 		t.Fatalf("token=%q, want ghp_new_token（非空覆盖）", got)
 	}
 
-	// When：空串与省略——均保持现值（OIDC 同口径）
+	// When：显式空串——清除（第 52 轮 P2-3，用户裁定三态语义：
+	// nil=保持、空串=清除、非空=覆盖；令牌必须有撤销路径，对照 OIDC 整清端点）
 	if r := put(`{"source":"basic","github_token":""}`); r.Code != http.StatusOK {
 		t.Fatalf("空串 status=%d, want 200", r.Code)
 	}
-	if got := readToken(); got != "ghp_new_token" {
-		t.Fatalf("空串后 token=%q, want 保持 ghp_new_token", got)
+	if got := readToken(); got != "" {
+		t.Fatalf("空串后 token=%q, want 已清除为空", got)
+	}
+
+	// When：省略字段——保持现值（nil 语义不变）
+	if r := put(`{"source":"basic","github_token":"ghp_second"}`); r.Code != http.StatusOK {
+		t.Fatalf("重写 status=%d, want 200", r.Code)
 	}
 	if r := put(`{"source":"basic","log_level":"info"}`); r.Code != http.StatusOK {
 		t.Fatalf("省略 status=%d, want 200", r.Code)
 	}
-	if got := readToken(); got != "ghp_new_token" {
-		t.Fatalf("省略后 token=%q, want 保持 ghp_new_token", got)
+	if got := readToken(); got != "ghp_second" {
+		t.Fatalf("省略后 token=%q, want 保持 ghp_second", got)
 	}
 }

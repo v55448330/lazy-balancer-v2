@@ -297,7 +297,8 @@
                   <el-radio value="detection">检测（CRS 只记录）</el-radio>
                   <el-radio value="blocking">拦截（CRS 阻断）</el-radio>
                 </el-radio-group>
-                <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效；自定义规则在检测/拦截/仅自定义模式下按规则内动作执行，计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）</div>
+                <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效。</div>
+                <div class="form-tip-line">自定义规则在检测/拦截/仅自定义模式下按规则内动作执行；计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）。</div>
               </div>
             </div>
             <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭：CRS 与自定义规则均不生效，以下 CRS 配置不可用</div>
@@ -311,7 +312,8 @@
                 <el-option :value="15" label="很宽松（阈值 15）" />
                 <el-option :value="20" label="极宽松（阈值 20）" />
               </el-select>
-              <div class="form-tip-line">阈值以异常分为单位：CRS 严重规则每条 +5（错误 +4、警告 +3），自定义「计分」规则按其分值累加；累计达到阈值拦截，低于阈值的命中不拦截但记录为检测事件（计入安全总览「今日检测」）</div>
+              <div class="form-tip-line">阈值以异常分为单位：CRS 严重规则每条 +5（错误 +4、警告 +3），自定义「计分」规则按其分值累加。</div>
+              <div class="form-tip-line">累计达到阈值拦截；低于阈值的命中不拦截，但记录为检测事件（计入安全总览「今日检测」）。</div>
             </el-form-item>
             <el-form-item label="CRS 规则组">
               <!-- 懒加载级联多选：一级规则组节点（剔 01/49/59），展开组时才生成该组
@@ -966,6 +968,7 @@ import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
+import { useClampedPagination } from '@/composables/useClampedPagination'
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
@@ -1076,12 +1079,9 @@ const filteredPolicies = computed(() => {
 const policyPage = ref(1)
 const policyPageSize = ref(10)
 watch([activeTypeTab, policySearch], () => { policyPage.value = 1 })
-const pagedPolicies = computed(() => {
-  const maxPage = Math.max(1, Math.ceil(filteredPolicies.value.length / policyPageSize.value))
-  if (policyPage.value > maxPage) policyPage.value = maxPage
-  const start = (policyPage.value - 1) * policyPageSize.value
-  return filteredPolicies.value.slice(start, start + policyPageSize.value)
-})
+// 分页夹紧+切片：useClampedPagination 单一范式（第 52 轮 P5-3，取代 computed
+// 内副作用赋值反模式）
+const { pagedItems: pagedPolicies } = useClampedPagination(filteredPolicies, policyPage, policyPageSize)
 
 // 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、
 // 阶段 3=后端 G3 口径（has_waf=CRS 生效 ∪ custom_only ∪ 自定义规则数>0；

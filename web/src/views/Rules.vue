@@ -1150,6 +1150,7 @@ import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
@@ -1433,20 +1434,14 @@ const ruleUpdatedAtMs = (rule: Rule): number => {
   return Number.isNaN(t) ? 0 : t
 }
 
-const pagedRules = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredRules.value.slice(start, start + pageSize.value)
-})
+// 分页夹紧+切片：useClampedPagination 单一范式（第 52 轮 P5-3）
+const { pagedItems: pagedRules } = useClampedPagination(filteredRules, currentPage, pageSize)
 
 watch(searchQuery, () => {
   currentPage.value = 1
 })
 
 
-watch([() => filteredRules.value.length, pageSize], ([ruleCount, size]) => {
-  const maxPage = Math.max(1, Math.ceil(ruleCount / size))
-  currentPage.value = Math.min(Math.max(currentPage.value, 1), maxPage)
-})
 const users = ref<UserListItem[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})

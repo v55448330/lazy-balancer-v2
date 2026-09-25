@@ -121,8 +121,10 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("log_level", "系统日志级别", req.LogLevel != nil && *req.LogLevel != old.LogLevel)
 	add("timezone", "时区", req.Timezone != nil && *req.Timezone != old.Timezone)
 	add("github_proxy_url", "GitHub加速代理", req.GitHubProxyURL != nil && *req.GitHubProxyURL != old.GitHubProxyURL)
-	// 令牌变更只记字段名（不落值）——config_changes 预览面无敏感信息
-	add("github_token", "GitHub 令牌", req.GitHubToken != nil && *req.GitHubToken != "" && *req.GitHubToken != old.GitHubToken)
+	// 令牌变更只记字段名（不落值）——config_changes 预览面无敏感信息；
+	// nil=保持、空串=清除（第 52 轮 P2-3，用户裁定：显式空串须计入变更，
+	// 否则「空串清除」请求整包落入「配置无变化」短路，撤销永不到达 UPDATE）。
+	add("github_token", "GitHub 令牌", req.GitHubToken != nil && *req.GitHubToken != old.GitHubToken)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)

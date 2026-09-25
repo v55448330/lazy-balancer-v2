@@ -1896,6 +1896,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		deltaStr("IP ACL 列表", req.IPACLList, stored.IPACLList)
 		deltaBool("ACL 启用", req.IPACLEnabled, stored.IPACLEnabled)
 		deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
+		deltaStr("策略类型", req.PolicyType, stored.PolicyType)
+		deltaBool("信任检测", req.TrustDetection, stored.TrustDetection)
 		deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
 		deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
 		deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)

@@ -153,7 +153,8 @@ type threatSourceRow struct {
 }
 
 // threatDueSources 返回本次任务处理的源：manual=全部启用源；auto=启用且到期
-// （next_update 空或已过）——失败源按退避排程单独重试，不拖累健康源的重下载。
+// （next_update 空或已过）——失败重试在任务内完成（runWithInTaskRetry），
+// 落定后下一运行=下一排程槽，不拖累健康源的重下载。
 func threatDueSources(trigger string) ([]threatSourceRow, error) {
 	rows, err := db.DB.Query(`SELECT id, name, url, update_enabled, COALESCE(next_update,'')
 		FROM security_threat_sources WHERE update_enabled=1 ORDER BY id`)

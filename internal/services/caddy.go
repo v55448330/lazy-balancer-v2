@@ -3034,10 +3034,11 @@ func stage1BlockStatus(securityCtx *securityPolicyContext, rule SingleRuleConfig
 	return 0
 }
 
-// blockPageContentType 渲染处 Content-Type 归一：空值回退默认 html
-// （2026-09-25 用户裁定可配置，白名单由写侧 models.ValidBlockPageContentType 把守）。
+// blockPageContentType 渲染处 Content-Type 归一：空值回退默认 html；白名单
+// 双保险（第 52 轮 P2-1，用户裁定）——带外通道（备份导入/集群快照）落库的
+// 白名单外值同样归一默认，杜绝 CRLF 等脏值原样渲染进响应头。
 func blockPageContentType(contentType string) string {
-	if contentType == "" {
+	if contentType == "" || !models.ValidBlockPageContentType(contentType) {
 		return models.DefaultBlockPageContentType
 	}
 	return contentType

@@ -94,15 +94,20 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 	if err := json.Unmarshal(envelope.Result, &resultProbe); err != nil || len(resultProbe.Tools) == 0 {
 		return response, nil
 	}
-	var payload struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      any    `json:"id"`
-		Result  struct {
-			Tools []json.RawMessage `json:"tools"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(response, &payload); err != nil {
+	// map 保字段重建（第 52 轮 P5-4，用户裁定）：result/顶层除 tools 外的字段
+	// （如 mcp-go 未来引入的 nextCursor）原样透传，不随过滤重建丢失；键序不保证，
+	// JSON-RPC 消费方不依赖键序。
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(response, &doc); err != nil {
 		return nil, fmt.Errorf("解析 tools/list 响应: %w", err)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(doc["result"], &result); err != nil {
+		return nil, fmt.Errorf("解析 tools/list result: %w", err)
+	}
+	var toolsArr []json.RawMessage
+	if err := json.Unmarshal(result["tools"], &toolsArr); err != nil {
+		return nil, fmt.Errorf("解析 tools/list tools: %w", err)
 	}
 	// readOnlyHiddenTools：GET 但对只读 Key 禁用的工具（M8：export_config 走
 	// apiKeyReadOnlyGuard 403，只读 Key 不可见，避免呈现必然 403 的工具）。
@@ -123,8 +128,8 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 			readOnlyNames[spec.name] = struct{}{}
 		}
 	}
-	filtered := make([]json.RawMessage, 0, len(payload.Result.Tools))
-	for _, rawTool := range payload.Result.Tools {
+	filtered := make([]json.RawMessage, 0, len(toolsArr))
+	for _, rawTool := range toolsArr {
 		var tool struct {
 			Name string `json:"name"`
 		}
@@ -135,8 +140,17 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 			filtered = append(filtered, rawTool)
 		}
 	}
-	payload.Result.Tools = filtered
-	data, err := json.Marshal(payload)
+	filteredJSON, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 tools 过滤结果: %w", err)
+	}
+	result["tools"] = filteredJSON
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 tools/list result: %w", err)
+	}
+	doc["result"] = resultJSON
+	data, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("序列化 tools/list 响应: %w", err)
 	}

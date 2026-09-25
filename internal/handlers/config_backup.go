@@ -1862,6 +1862,25 @@ func skipEmptyBlockPages(tables map[string][]map[string]any) []string {
 	return warnings
 }
 
+// normalizeBlockPageContentTypes 把导入备份中 security_block_pages.content_type
+// 的白名单外值归一为默认 text/html; charset=utf-8（第 52 轮 P2-1，用户裁定，
+// 与 mode 枚举门同口径的导入侧值域收敛）——CRUD 写侧有
+// models.ValidBlockPageContentType 把守，备份导入是带外通道：手造备份可将
+// 含 CRLF 的任意字符串落库为 content_type 渲染进响应头。渲染侧
+// blockPageContentType 另有白名单回退双保险。
+func normalizeBlockPageContentTypes(tables map[string][]map[string]any) {
+	rows, exists := tables["security_block_pages"]
+	if !exists {
+		return
+	}
+	for _, row := range rows {
+		contentType, _ := row["content_type"].(string)
+		if !models.ValidBlockPageContentType(contentType) {
+			row["content_type"] = models.DefaultBlockPageContentType
+		}
+	}
+}
+
 func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 	candidates := make([]ruleConflictCandidate, len(rows))
 	for index, row := range rows {
@@ -2219,6 +2238,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	// N+13 H2-F3：空内容拦截页同款软跳过（校验和已在 validateV2Backup 内
 	// 验证完毕，跳过不影响完整性；预览端 ValidateConfigImport 同序）。
 	skipWarnings = append(skipWarnings, skipEmptyBlockPages(backup.Tables)...)
+	// 第 52 轮 P2-1：content_type 白名单值域收敛（带外通道门，渲染侧另有双保险）。
+	normalizeBlockPageContentTypes(backup.Tables)
 	if err := validateBackupRuleReferences(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return

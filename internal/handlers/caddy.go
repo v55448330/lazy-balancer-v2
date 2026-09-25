@@ -533,7 +533,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
 				github_proxy_url = COALESCE(?, github_proxy_url),
-				github_token = CASE WHEN ? IS NULL OR ? = '' THEN github_token ELSE ? END,
+				github_token = CASE WHEN ? IS NULL THEN github_token ELSE ? END,
 				mfa_write_guard = COALESCE(?, mfa_write_guard),
 				mfa_lockout_enabled = COALESCE(?, mfa_lockout_enabled),
 				trusted_proxy_enabled = COALESCE(?, trusted_proxy_enabled),
@@ -546,7 +546,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.GitHubToken, req.GitHubToken, req.GitHubToken, req.MFAWriteGuard, req.MFALockoutEnabled,
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.GitHubToken, req.GitHubToken, req.MFAWriteGuard, req.MFALockoutEnabled,
 		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyHeaders, req.TrustedProxyStrict)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))

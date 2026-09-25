@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><DataAnalysis /></el-icon>
           安全总览
         </h2>
-        <p class="page-desc">WAF 防护统计概览</p>
+        <p class="page-desc">安全防护统计概览</p>
       </div>
     </div>
 

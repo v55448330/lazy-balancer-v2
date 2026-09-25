@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><Document /></el-icon>
           拦截页面
         </h2>
-        <p class="page-desc">管理 WAF 拦截时返回给客户端的自定义页面</p>
+        <p class="page-desc">管理各阶段拦截（IP 访问控制 / 限流 / WAF）返回给客户端的自定义页面</p>
       </div>
       <el-button v-if="!isReadOnly" type="primary" :disabled="loading" @click="openDialog()">
         <el-icon><Plus /></el-icon>
@@ -32,7 +32,7 @@
         </el-table-column>
         <el-table-column label="大小" width="90" align="center">
           <template #default="{ row }">
-            <el-tooltip content="拦截响应体字节数——评估拦截面传输压力（ egress = 拦截 QPS × 页面大小，64KB 上限）" placement="top">
+            <el-tooltip content="拦截响应体字节数——评估拦截面传输压力（出站流量 ≈ 每秒拦截次数 × 页面大小，64KB 上限）" placement="top">
               <span>{{ contentSize(row.content) }}</span>
             </el-tooltip>
           </template>
@@ -99,10 +99,10 @@
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
             <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
-            <CodeEditor v-else v-model="form.content" language="markup" height="520px" placeholder="HTML 内容，支持内联 CSS 样式" />
+            <CodeEditor v-else v-model="form.content" language="markup" height="520px" placeholder="响应内容（HTML 类型支持内联 CSS）" />
           </div>
           <div class="form-tip-line">
-            {{ (currentPage?.is_default || currentPage?.is_builtin) ? '内置页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
+            {{ (currentPage?.is_default || currentPage?.is_builtin) ? '内置页面内容只读，仅可查看' : '拦截时返回给客户端的响应内容（HTML 类型支持内联 CSS）' }}
           </div>
         </el-form-item>
       </el-form>
@@ -122,7 +122,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { Plus, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request } from '@/utils/api'
+import { request, formatBytes } from '@/utils/api'
+import { useClampedPagination } from '@/composables/useClampedPagination'
 import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
@@ -138,16 +139,13 @@ const loading = ref(false)
 
 const page = ref(1)
 const pageSize = ref(10)
-// 客户端分页（与 Rules/SecurityRules 同款：页大小变更回第一页；删除后夹紧页码）
-const pagedPages = computed(() => {
-  const maxPage = Math.max(1, Math.ceil(pages.value.length / pageSize.value))
-  if (page.value > maxPage) page.value = maxPage
-  const start = (page.value - 1) * pageSize.value
-  return pages.value.slice(start, start + pageSize.value)
-})
+
 const saving = ref(false)
 const users = ref<UserListItem[]>([])
 const pages = ref<BlockPage[]>([])
+// 分页夹紧+切片：useClampedPagination 单一范式（第 52 轮 P5-3，取代 computed
+// 内副作用赋值反模式）
+const { pagedItems: pagedPages } = useClampedPagination(pages, page, pageSize)
 const dialogVisible = ref(false)
 const previewVisible = ref(false)
 const previewContent = ref('')
@@ -162,11 +160,9 @@ const dialogTitle = computed(() => {
 })
 
 
-// 内容大小（响应体字节数）：用于评估拦截面传输压力（用户裁定新列）
-const contentSize = (content?: string): string => {
-  const n = new Blob([content ?? '']).size
-  return n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`
-}
+// 内容大小（响应体字节数）：用于评估拦截面传输压力（用户裁定新列）；
+// 格式化走 formatBytes 单一事实源（第 52 轮 P3-9）
+const contentSize = (content?: string): string => formatBytes(new Blob([content ?? '']).size)
 const form = ref({ name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' })
 
 // 可选内容类型（与后端 models.BlockPageContentTypes 白名单同口径）
@@ -240,8 +236,17 @@ const handleDelete = (row: BlockPage) => {
     .then(async () => { const del = await request.delete(`/security/block-pages/${row.id}`); showSaveResult(del, '已删除'); fetchData() }).catch(() => {})
 }
 
+const escapeHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const previewPage = (row: BlockPage) => {
-  previewContent.value = row.content || '<p style="color: #999; padding: 20px; text-align: center">(空内容)</p>'
+  // 非 HTML 类型按源码展示（第 52 轮 P3-7）——srcdoc 恒按 text/html 解析，
+  // JSON/XML/纯文本直接塞入会被吞标签/压成无格式文本流，与真实响应不一致
+  const content = row.content || ''
+  const isHtml = !row.content_type || row.content_type.startsWith('text/html')
+  previewContent.value = !content
+    ? '<p style="color: #999; padding: 20px; text-align: center">(空内容)</p>'
+    : isHtml
+      ? content
+      : `<pre style="white-space: pre-wrap; word-break: break-all; margin: 0; padding: 12px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace">${escapeHtml(content)}</pre>`
   previewKey.value++
   previewVisible.value = true
 }

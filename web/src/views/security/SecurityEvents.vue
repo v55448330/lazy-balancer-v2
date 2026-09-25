@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><Warning /></el-icon>
           事件日志
         </h2>
-        <p class="page-desc">查看 WAF 拦截和检测的安全事件记录</p>
+        <p class="page-desc">查看安全拦截与检测事件记录</p>
       </div>
       <el-button :icon="Refresh" @click="fetchEvents">刷新</el-button>
     </div>
