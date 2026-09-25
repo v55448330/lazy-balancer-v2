@@ -130,6 +130,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/security/ip-lists/:id":                   AuditPolicyExplicit,
 	"DELETE /api/v1/security/ip-lists/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/ip-lists/:id/ips":              AuditPolicyExplicit,
+	"POST /api/v1/security/ip-lists/:id/remove-ip":        AuditPolicyExplicit,
 	// 威胁情报库（v2.3.x）：handler 显式记录（开关/手动更新/导出）。
 	"PUT /api/v1/security/threat-lib/auto-update": AuditPolicyExplicit,
 	"PUT /api/v1/security/threat-lib/schedule":    AuditPolicyExplicit,
@@ -269,6 +270,7 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"PUT /api/v1/security/ip-lists/:id",
 		"DELETE /api/v1/security/ip-lists/:id",
 		"POST /api/v1/security/ip-lists/:id/ips",
+		"POST /api/v1/security/ip-lists/:id/remove-ip",
 		"PUT /api/v1/security/threat-lib/auto-update",
 		"PUT /api/v1/security/threat-lib/schedule",
 		"PUT /api/v1/security/threat-lib/:id/flags",

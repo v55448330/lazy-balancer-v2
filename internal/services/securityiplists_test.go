@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,17 +36,15 @@ func TestExpandPolicyIPRefs_mergeDedupInlineFirst(t *testing.T) {
 	}
 	exp := expandPolicyIPRefs(p, lists)
 
-	wantACL := []string{"1.2.3.4", "10.0.0.0/8", "192.0.2.1"}
-	if len(exp.ACLList) != len(wantACL) {
-		t.Fatalf("ACLList=%v, want %v", exp.ACLList, wantACL)
+	// 第 57 轮 P5：合并即聚合——输出为聚合规范形（排序、兄弟归并、覆盖剔除），
+	// 匹配集合与旧 inline-first 去重口径逐点等价（1.2.3.4 与 10/8、192.0.2.1
+	// 互不覆盖，条数不变仅排序变化）。
+	wantACL := []string{"1.2.3.4/32", "10.0.0.0/8", "192.0.2.1/32"}
+	if !reflect.DeepEqual(exp.ACLList, wantACL) {
+		t.Fatalf("ACLList=%v, want %v (aggregated canonical order)", exp.ACLList, wantACL)
 	}
-	for i := range wantACL {
-		if exp.ACLList[i] != wantACL[i] {
-			t.Fatalf("ACLList=%v, want %v (inline-first dedup order)", exp.ACLList, wantACL)
-		}
-	}
-	wantWL := []string{"198.51.100.1", "203.0.113.0/24"}
-	if len(exp.Whitelist) != len(wantWL) || exp.Whitelist[0] != wantWL[0] || exp.Whitelist[1] != wantWL[1] {
+	wantWL := []string{"198.51.100.1/32", "203.0.113.0/24"}
+	if !reflect.DeepEqual(exp.Whitelist, wantWL) {
 		t.Fatalf("Whitelist=%v, want %v", exp.Whitelist, wantWL)
 	}
 }
@@ -66,7 +65,7 @@ func TestExpandPolicyIPRefs_missingAndMalformedRefsSkipped(t *testing.T) {
 			p := *base
 			p.IPACLListRefs = tc.refs
 			exp := expandPolicyIPRefs(&p, map[int64][]string{})
-			if len(exp.ACLList) != 1 || exp.ACLList[0] != "1.2.3.4" {
+			if len(exp.ACLList) != 1 || exp.ACLList[0] != "1.2.3.4/32" {
 				t.Fatalf("ACLList=%v, want inline-only [1.2.3.4]", exp.ACLList)
 			}
 		})
@@ -81,7 +80,7 @@ func TestExpandPolicyIPRefs_nilMapFallsBackToInline(t *testing.T) {
 		IPWhitelistRefs: "[1]",
 	}
 	exp := expandPolicyIPRefs(p, nil)
-	if len(exp.ACLList) != 1 || exp.ACLList[0] != "1.2.3.4" {
+	if len(exp.ACLList) != 1 || exp.ACLList[0] != "1.2.3.4/32" {
 		t.Fatalf("ACLList=%v, want inline-only", exp.ACLList)
 	}
 	if len(exp.Whitelist) != 0 {

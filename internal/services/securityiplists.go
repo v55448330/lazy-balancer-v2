@@ -84,8 +84,12 @@ func expandPolicyIPRefs(p *models.SecurityPolicy, listsByID map[int64][]string) 
 		}
 		return merged
 	}
-	exp.ACLList = merge(p.IPACLList, p.IPACLListRefs)
-	exp.Whitelist = merge(string(p.IPWhitelist), p.IPWhitelistRefs)
+	// 合并即聚合（第 57 轮 P5 修复，用户上报「规则越多保存越慢」根因）：
+	// 发射端 mergedACLList/mergedWhitelist 按规则×策略逐次调用，若在此处不
+	// 聚合，万条级合并集（如 USTC 11415 条）会被每次调用全量重聚合——保存
+	// 耗时随绑定规则数线性放大。聚合幂等，此处一次完成后发射端直接返回。
+	exp.ACLList = aggregateIPEntries(merge(p.IPACLList, p.IPACLListRefs))
+	exp.Whitelist = aggregateIPEntries(merge(string(p.IPWhitelist), p.IPWhitelistRefs))
 	return exp
 }
 
@@ -264,7 +268,7 @@ func resolvePolicyIPListRefs(policies []*models.SecurityPolicy, store caddyConfi
 // 发射面（@ipListFast 文件与残留内联）共享同一规范形态。
 func mergedACLList(p *models.SecurityPolicy) []string {
 	if p.MergedACLList != nil {
-		return aggregateIPEntries(p.MergedACLList)
+		return p.MergedACLList // 扩展开期已聚合（见 expandPolicyIPRefs），直接返回
 	}
 	var list []string
 	json.Unmarshal([]byte(p.IPACLList), &list)
@@ -274,7 +278,7 @@ func mergedACLList(p *models.SecurityPolicy) []string {
 // mergedWhitelist 同 mergedACLList，作用于信任名单（ip_whitelist）。
 func mergedWhitelist(p *models.SecurityPolicy) []string {
 	if p.MergedWhitelist != nil {
-		return aggregateIPEntries(p.MergedWhitelist)
+		return p.MergedWhitelist // 同上：扩开期已聚合
 	}
 	var list []string
 	json.Unmarshal(p.IPWhitelist, &list)

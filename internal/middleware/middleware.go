@@ -464,6 +464,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/security/ip-lists/:id", h.UpdateIPList)
 				admin.DELETE("/security/ip-lists/:id", h.DeleteIPList)
 				admin.POST("/security/ip-lists/:id/ips", h.AddIPToList)
+				admin.POST("/security/ip-lists/:id/remove-ip", h.RemoveIPFromList)
 
 			}
 

@@ -972,7 +972,7 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType, parseRefIds } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType, mergeIpEntryCount, parseRefIds } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1262,9 +1262,8 @@ const openViewDialog = async (row: PolicySummary, openSeq: number): Promise<void
     if (openSeq !== policyDialogOpenSeq) return
     viewPolicyDetail.value = res.data?.policy ?? null
     viewPolicyBindings.value = res.data?.bindings ?? []
-    // 查看弹框的分段计数走合并口径——按需补齐该策略引用名单的条目值
-    const d = viewPolicyDetail.value
-    if (d) void ensureIpListDetails([...parseRefIds(d.ip_acl_list_refs), ...parseRefIds(d.ip_whitelist_refs)], openSeq)
+    // 查看弹框分段计数改 mergeIpEntryCount 纯计数口径（第 57 轮修复：
+    // 此前打开查看弹框会拉取引用名单全量条目，USTC 单源 ~460KB）
   } catch (error: unknown) {
     if (openSeq !== policyDialogOpenSeq) return
     console.error('view policy failed', error)
@@ -1279,7 +1278,7 @@ interface ViewPolicySection { title: string; rows: Array<{ label: string; value:
 const viewPolicySections = computed<ViewPolicySection[]>(() => {
   const d = viewPolicyDetail.value
   if (!d) return []
-  const trustCount = mergeIpEntries(parseJsonList(d.ip_whitelist), parseRefIds(d.ip_whitelist_refs)).length
+  const trustCount = mergeIpEntryCount(ipLists.value, parseJsonList(d.ip_whitelist), parseRefIds(d.ip_whitelist_refs))
   const geoCount = parseJsonList(d.geoip_countries).length
   const crsGroupCount = parseJsonList(d.crs_rule_groups).length
   const excludedCount = parseCrsExcludedRules(d.crs_excluded_rules).length
@@ -1535,6 +1534,22 @@ const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFil
   [WIZARD_STEP.PREVIEW]: { title: '配置预览', icon: Check },
 }
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
+// 条目值惰性拉取（第 57 轮 F55 追加问题修复，方案 A）：进入 IP 访问控制/信任
+// 名单步骤且本策略已含内容（内联条目或引用）时才补缺失条目——打开向导不再
+// 触发威胁库全量条目传输（三源全引 1.5-2MB/次，WAN 下数秒）；无内容的
+// 新建策略与 stage2/stage3 流程零条目拉取。冲突计数类展示走
+// mergeIpEntryCount 纯计数（entry_count），不需要条目值。
+watch([currentStep, ipACLList, ipWhitelist, ipACLListRefs, ipWhitelistRefs], ([step]) => {
+  if (step !== WIZARD_STEP.IP_ACL && step !== WIZARD_STEP.TRUST) return
+  const hasContent = ipACLList.value.length > 0 || ipWhitelist.value.length > 0 ||
+    ipBlacklistSelf.value.length > 0 || ipACLListRefs.value.length > 0 || ipWhitelistRefs.value.length > 0
+  if (!hasContent) return
+  const ids = [...ipACLListRefs.value, ...ipWhitelistRefs.value]
+  for (const p of policies.value) {
+    ids.push(...parseRefIds(p.ip_acl_list_refs), ...parseRefIds(p.ip_whitelist_refs))
+  }
+  void ensureIpListDetails(ids, policyDialogOpenSeq)
+})
 
 // 新建类型纵向列表选项（任务 C：与 el-form-item 同构的独立 radio 列表）
 const POLICY_TYPE_CREATE_OPTIONS: ReadonlyArray<{ value: 'stage0' | 'stage1' | 'stage2' | 'stage3'; label: string }> = [
@@ -2870,16 +2885,7 @@ async function openDialog(row?: PolicySummary) {
   } else { resetForm() }
   // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）；
   // A4-S2：传入 openSeq 丢弃过期返回，防止快速关闭重开后旧响应覆盖新缓存
-  void fetchIpLists(openSeq).then(() => {
-    if (openSeq !== policyDialogOpenSeq) return
-    // 名单条目值按需补齐：本策略引用 + 全部同列策略引用（冲突比较合并口径）。
-    // 列表载荷不再内联 entries（v2.3.2），值一律经 GET /security/ip-lists/:id 拉取。
-    const ids = [...ipACLListRefs.value, ...ipWhitelistRefs.value]
-    for (const p of policies.value) {
-      ids.push(...parseRefIds(p.ip_acl_list_refs), ...parseRefIds(p.ip_whitelist_refs))
-    }
-    void ensureIpListDetails(ids, openSeq)
-  })
+  void fetchIpLists(openSeq)
   // CRS 规则索引同口径：每次对话框打开取一次（同会话内步骤切换复用缓存），
   // 供规则组/排除目标的单条规则选项与预览明细共用（openSeq 过期守卫见 useCrsRuleIndex）
   void ensureCrsRuleIndex(openSeq)

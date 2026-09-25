@@ -703,10 +703,89 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)),
 		SuccessMsg:  "已追加",
 		Data:        gin.H{"added": true},
+	})
+}
+
+// RemoveIPFromList DELETE /security/ip-lists/:id/ips：从地址列表移除单条 IP
+// （第 57 轮弹框重构配套端点，用户裁定：加入/移除统一走地址列表，内置威胁
+// 名单只读）。与追加幂等对称：值不在名单时 200 {removed:false}（重复移除
+// 无害）；成功移除 200 {removed:true}。移除/追加经 finishTxApply 同链触发
+// 引用策略重载。
+func (h *Handlers) RemoveIPFromList(c *gin.Context) {
+	id := c.Param("id")
+	var req models.AddIPToListRequest
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if !validIPOrCIDR(req.Value) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 IP/CIDR：" + req.Value})
+		return
+	}
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	var entriesJSON, listName string
+	var system int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if system != 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+		return
+	}
+	var entries []models.IPListEntry
+	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请删除后重建"})
+		return
+	}
+	kept := make([]models.IPListEntry, 0, len(entries))
+	removed := false
+	for _, entry := range entries {
+		if !removed && entry.Value == req.Value {
+			removed = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if !removed {
+		if err := tx.Commit(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"removed": false}})
+		return
+	}
+	mergedJSON, err := json.Marshal(kept)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if _, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "IP 地址列表", AuditAction: "写入",
+		AuditDetail: fmt.Sprintf("名称：%s（#%s）移除 IP %s（现共 %d 条）", listName, id, req.Value, len(kept)),
+		SuccessMsg:  "已移除",
+		Data:        gin.H{"removed": true},
 	})
 }

@@ -52,6 +52,9 @@ func openAPIToGinPath(path string) string {
 // 无机制迫使决策者考虑 MCP 暴露——本清单 + 双向断言补上：新增无工具路由必须
 // 在此登记豁免理由（或补工具）；清单项不再注册时测试同样报错，防清单腐化。
 var mcpUncoveredRoutes = map[string]string{
+	// —— IP 快捷弹框处置（第 57 轮新增：前端弹框专用；Agent 侧 get_ip_list →
+	//    update_ip_list 全量写回可达成移除，专用工具冗余）——
+	"POST /api/v1/security/ip-lists/:id/remove-ip": "IP 快捷弹框移除处置端点：从地址列表移除单条 IP；Agent 可用 get_ip_list+update_ip_list 组合等价完成",
 	// —— 认证 / 会话 / MFA（JWT 会话专属；MCP 仅 API Key，无用户会话概念）——
 	"GET /api/v1/auth/setup":               "首次初始化探测：用户表为空时返回 needs_setup=true，前端引导创建首个管理员",
 	"POST /api/v1/auth/setup":              "首次初始化：创建首个管理员账号，用户表非空后 403",

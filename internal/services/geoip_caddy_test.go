@@ -641,7 +641,8 @@ func TestLoadSecurityPolicyContext_carriesTriStateGateFields(t *testing.T) {
 		t.Fatalf("GeoIPMode=%q, want off", p.GeoIPMode)
 	}
 	// refs-only 信任合并集仍应装载（数据在，仅被开关门压制）
-	if len(p.MergedWhitelist) != 1 || p.MergedWhitelist[0] != "198.51.100.7" {
+	// 第 57 轮 P5：合并集规范化为 CIDR 形（裸 IP → /32），匹配语义等价
+	if len(p.MergedWhitelist) != 1 || p.MergedWhitelist[0] != "198.51.100.7/32" {
 		t.Fatalf("MergedWhitelist=%v, want [198.51.100.7]", p.MergedWhitelist)
 	}
 }

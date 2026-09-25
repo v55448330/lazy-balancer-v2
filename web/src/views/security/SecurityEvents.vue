@@ -46,7 +46,7 @@
           collapse-tags
           collapse-tags-tooltip
           :max-collapse-tags="1"
-          placeholder="触发规则"
+          placeholder="触发阶段"
           style="width: 170px"
           popper-class="triggered-filter-popper"
         >
@@ -87,15 +87,17 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="触发规则" min-width="100">
+        <el-table-column label="触发阶段" min-width="110">
           <template #default="{ row }">
             <!-- CRS 规则（6 位 9xxxxx）：链接打开详情 + 快捷排除弹框；自定义 5 位/IP 族
                  1-8 与威胁情报库 id 14 维持原纯文本 + msg 悬浮，无链接行为 -->
-            <el-link v-if="isCrsRuleId(row.rule_triggered)" type="primary" @click="openCrsDialog(row)">{{ triggeredLabel(row) }}</el-link>
+            <el-link v-if="isWafCrs(row)" type="primary" @click="openCrsDialog(row)">{{ stageLabel(row) }}</el-link>
+            <el-link v-else-if="isWafCustom(row)" type="primary" @click="openCustomRuleDialog(row)">{{ stageLabel(row) }}</el-link>
+            <el-link v-else-if="isIpAclFamily(row)" type="primary" @click="openIpAclDetail(row)">IP 访问控制</el-link>
             <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
-              <span class="cell-tip">{{ triggeredLabel(row) }}</span>
+              <span class="cell-tip">{{ stageLabel(row) }}</span>
             </el-tooltip>
-            <span v-else>{{ triggeredLabel(row) }}</span>
+            <span v-else>{{ stageLabel(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="策略" min-width="150">
@@ -151,6 +153,16 @@
            「加入地址列表」下拉仅列所属策略排除规则（crs_excluded_rules.listRefs
            并集，策略详情随存在性检查取回）引用且当前仍存在的列表——事件 IP 加入
            其中任一列表即被该策略的对应排除规则放行。 -->
+    <IpAclEventDialog
+      v-model="ipAclDetailVisible"
+      :ip="ipAclDetailRow?.client_ip ?? ''"
+      :policy-id="ipAclDetailRow?.policy_id ?? 0"
+      :policy-name="ipAclDetailRow?.policy_name ?? ''"
+      :rule-triggered="ipAclDetailRow?.rule_triggered ?? ''"
+      :rule-caddy-id="ipAclDetailRow?.rule_caddy_id"
+      :location="ipAclDetailRow?.ip_location"
+    />
+    <CustomRuleEventDialog v-model="customRuleDialogVisible" :triggered-id="customRuleTriggered" />
     <el-dialog v-model="crsDialogVisible" :title="`CRS 规则 ${crsEvent?.rule_triggered ?? ''}`" width="min(760px, 94vw)" top="5vh" append-to-body class="crs-event-dialog" @close="crsDialogSeq++">
       <template v-if="crsEvent">
         <el-descriptions :column="1" border size="small">
@@ -314,6 +326,8 @@ import { showSaveResult } from '@/utils/saveResult'
 import { request, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
+import IpAclEventDialog from '@/components/events/IpAclEventDialog.vue'
+import CustomRuleEventDialog from '@/components/events/CustomRuleEventDialog.vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { formatDate } from '@/utils/date'
 import { useCrsRuleIndex, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
@@ -327,23 +341,25 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 
 // 触发规则 family 映射：'2'-'5' 与 '7'（允许模式预检拒绝，IP 白名单拒绝）为 IP 访问控制拦截，
 // '8' 为地域拦截，'14' 为威胁情报库预检拦截，'11' 为请求体解析失败，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
-const triggeredLabel = (row: SecurityEvent): string => {
+// 触发阶段分类（第 57 轮追加需求，用户裁定）：IP ACL 族=黑白名单/信任/地域/
+// 威胁库预检，统一展示「IP 访问控制」；WAF 含 CRS 与自定义两源；请求体异常独立。
+const isIpAclFamily = (row: SecurityEvent): boolean => {
+  const t = row.rule_triggered
+  if (!t) return false
+  const n = Number(t)
+  if ([2, 3, 4, 5, 7, 14].includes(n)) return true
+  return n >= 800000 && n < 900000
+}
+const isWafCrs = (row: SecurityEvent): boolean => /^9\d{5}$/.test(row.rule_triggered ?? '')
+const isWafCustom = (row: SecurityEvent): boolean => /^\d{5}$/.test(row.rule_triggered ?? '')
+
+const stageLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
-  if (t === '2' || t === '3' || t === '4' || t === '5' || t === '7') return 'IP 访问控制'
-  if (t === '8') return '地域拦截'
-  // 阶段化预检链（v2.3.1）：GeoIP 迁入预检后按 800000+策略_id 发射，同归地域拦截
-  if (/^8\d{5}$/.test(t)) return '地域拦截'
-  if (t === '14') return '威胁情报库'
-  if (t === '11') return '请求体解析失败'
-  if (/^949/.test(t) || /^959/.test(t)) return '评分拦截'
-  if (/^920/.test(t)) return '协议异常'
-  if (/^921/.test(t)) return '协议攻击'
-  // 5 位数字 ID 仅自定义规则（emit=crID+10000）；≥7 位以 1 开头为无 id 规则的
-  // 合成 ID（后端筛选 family 的 customRuleFamilyCondition 与总览 categorizeAttack
-  // 均归自定义规则，此处显示原始 ID）；6 位 1xxxxx 属 CRS 保留段余数、无发射
-  // 源，三处口径一致：不归自定义规则
-  if (/^\d{5}$/.test(t)) return '自定义规则'
+  if (t === '11') return '请求体异常'
+  if (isWafCrs(row)) return 'WAF · CRS'
+  if (isWafCustom(row)) return 'WAF · 自定义'
+  if (isIpAclFamily(row)) return 'IP 访问控制'
   return t
 }
 const showTriggeredMsg = (row: SecurityEvent): boolean => {
@@ -359,9 +375,23 @@ const authStore = useAuthStore()
 // admin 只读态（从节点/非管理员）禁用确认按钮——与 IPLocationAction.canManage 同口径
 const canManage = computed(() => authStore.readOnlyReason === null)
 
-const isCrsRuleId = (t: string): boolean => /^9\d{5}$/.test(t)
 
 const crsDialogVisible = ref(false)
+
+// 触发阶段详情弹框（第 57 轮追加需求）：IP 访问控制 与 WAF 自定义 分类弹框
+const ipAclDetailVisible = ref(false)
+const ipAclDetailRow = ref<SecurityEvent | null>(null)
+const customRuleDialogVisible = ref(false)
+const customRuleTriggered = ref('')
+const openIpAclDetail = (row: SecurityEvent): void => {
+  ipAclDetailRow.value = row
+  ipAclDetailVisible.value = true
+}
+const openCustomRuleDialog = (row: SecurityEvent): void => {
+  customRuleTriggered.value = row.rule_triggered
+  customRuleDialogVisible.value = true
+}
+
 const crsEvent = ref<SecurityEvent | null>(null)
 const crsExcludeScope = ref<'ip' | 'all'>('ip')
 const crsSubmitting = ref(false)

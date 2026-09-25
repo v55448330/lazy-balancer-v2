@@ -49,7 +49,7 @@ RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend
 WORKDIR /app
-# wafiplist 叶模块经根 go.mod replace ./wafiplist 引用（v2.3.2）——go mod
+# wafiplist 叶模块经根 go.mod replace ./wafiplist 引用（v2.3.3）——go mod
 # download 解析 replace 需要被替换模块的 go.mod/go.sum 在场。
 COPY wafiplist/go.mod wafiplist/go.sum ./wafiplist/
 COPY go.mod go.sum ./
@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Final image
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-ARG VERSION=v2.3.2
+ARG VERSION=v2.3.3
 ENV APP_VERSION=${VERSION}
 # 安全修复：显式钉版 openssl=3.5.8-r0（CVE 修复版）——openssl 经 curl 的
 # libssl3/libcrypto3 依赖隐式装入，钉版保证镜像可复现且不携带旧版；
