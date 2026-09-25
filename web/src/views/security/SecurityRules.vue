@@ -1664,6 +1664,7 @@ onUnmounted(() => {
 .lib-icon--threat { background: #fff1f2; color: #e11d48; }
 .lib-name-text { min-width: 0; }
 .update-log-container--compact { min-height: 200px; max-height: 240px; }
+.lib-name-main { font-weight: 600; color: var(--el-text-color-primary); }
 .lib-name-sub { color: #909399; font-size: 12px; word-break: break-all; }
 .lib-version { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
 .lib-count { font-variant-numeric: tabular-nums; }
