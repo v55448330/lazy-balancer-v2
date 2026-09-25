@@ -82,7 +82,7 @@ var toolUsage = map[string]string{
 	"get_ip2region_update_status":  "查看 IP2Region 正在进行的更新进度",
 	"get_ip2region_update_logs":    "查看 IP2Region 最近一次更新的详细日志",
 	"get_rate_limit_blocks":        "查看限流拦截统计（按规则/时段聚合）",
-	"get_rule_stage_stats":         "查看单规则三阶段安全统计（IP 访问控制+地域拦截/ WAF 近 24h 拦截数，限流自最近重载累计）",
+	"get_rule_stage_stats":         "查看单规则三阶段安全统计（IP 访问控制+地域拦截 / WAF 近 24h 拦截数，限流自最近重载累计）",
 	"create_security_policy":       "创建安全策略：配置 WAF 模式/异常阈值/CRS 规则组/IP ACL/GeoIP 区域控制/限流/拦截页面；custom_rules 为 JSON 数组字符串",
 	"update_security_policy":       "更新策略任意字段（如调整 WAF 模式、增减区域、修改阈值）",
 	"delete_security_policy":       "删除策略（绑定关系自动解除）",

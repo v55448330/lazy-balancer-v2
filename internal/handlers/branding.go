@@ -329,13 +329,8 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 // renderDefaultBlockPage renders the branded default block page; consumed by
 // SeedDefaultBlockPage(种子默认拦截页)与预览路径。
 func renderDefaultBlockPage(cfg brandingConfig) string {
-	appName := html.EscapeString(cfg.AppName)
-	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
-	if cfg.FooterText != "" {
-		footer += "<br>" + blockPageFooterHTML(cfg.FooterText)
-	} else {
-		footer += "<br>" + html.EscapeString(defaultFooterText) + ` · <a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
-	}
+	// 页脚由 renderBlockPageShell 内部按同一 cfg 构建（第 53 轮补充轮 P3-5：
+	// 此处曾有逐字重复的死计算，已删）。
 	return renderBlockPageShell(cfg, blockPageSpecs["default"])
 }
 

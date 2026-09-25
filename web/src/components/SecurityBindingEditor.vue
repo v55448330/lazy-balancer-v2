@@ -428,7 +428,6 @@ const submit = async (): Promise<void> => {
 .bind-stage-count { font-size: 12px; color: #6b7280; }
 .bind-stage-head-meta { display: inline-flex; align-items: center; gap: 8px; }
 .bind-state-tag { margin-left: 8px; }
-.form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 6px; }
 
 .picker-search { margin-bottom: 10px; }
 .picker-header { display: flex; align-items: center; gap: 12px; padding: 6px 4px; border-bottom: 1px solid #f0f1f3; }

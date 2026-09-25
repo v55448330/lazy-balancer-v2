@@ -1161,7 +1161,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
-	existingRule.PathRules, err = loadPathRules(c.Request.Context(), db.DB, caddyID)
+	existingRule.PathRules, err = db.LoadPathRules(c.Request.Context(), db.DB, caddyID)
 	if err != nil {
 		services.Logf("error", "UpdateRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})

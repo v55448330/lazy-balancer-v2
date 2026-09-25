@@ -156,7 +156,7 @@ const currentPage = ref<BlockPage | null>(null)
 const dialogTitle = computed(() => {
   if (!editingId.value) return '新建拦截页面'
   // R72 二十九次 M6：只读用户打开非默认页也应显示「查看」（此前编辑态误导）。
-  return currentPage.value?.is_default || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
+  return currentPage.value?.is_default || currentPage.value?.is_builtin || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
 })
 
 

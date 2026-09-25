@@ -656,7 +656,7 @@ export const attachStageDetails = (
     sources?: StageDetailSources
   },
 ): RuleStageModel => {
-  // map 产出 StageGroup[]，而 stages 是定长三元组——逐阶段一一对应不增不减，
+  // map 产出 StageGroup[]，而 stages 是定长四元组（阶段 0/1/2/3）——逐阶段一一对应不增不减，
   // 属「结构相同但推断无法合一」的合法断言（先落命名常量再整体返回）
   const stages = model.stages.map((stage) => ({
     ...stage,

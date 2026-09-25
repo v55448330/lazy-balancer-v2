@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +31,8 @@ var autoBackupRunMu sync.Mutex
 // autoBackupFailedRowsKeep:failed 行保留上限（内务裁剪，与 keep 无关）。
 const autoBackupFailedRowsKeep = 20
 
-var autoBackupTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+// HH:MM 校验统一走 services.ValidScheduleHHMM（第 53 轮补充轮 U6B-5：
+// 原本地正则与调度侧解析函数双实现，已收敛）
 
 // autoBackupSafeFilename:文件名一律取自 DB 行，文件操作必须限定在备份目录
 // 内——拒绝任何路径分隔符/点路径/“..”形态（带外改库的深度防御）。
@@ -369,7 +369,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份频率必须是 daily/weekly/monthly"})
 		return
 	}
-	if !autoBackupTimePattern.MatchString(*req.Time) {
+	if !services.ValidScheduleHHMM(*req.Time) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份时间必须为 HH:MM（00:00-23:59）"})
 		return
 	}

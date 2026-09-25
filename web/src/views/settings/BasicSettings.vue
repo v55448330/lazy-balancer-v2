@@ -320,7 +320,7 @@
         <el-button text size="small" @click="exportSections = []">全不选</el-button>
         <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
       </div>
-      <el-alert type="warning" :closable="false" show-icon class="mt8"
+      <el-alert type="warning" :closable="false" show-icon style="margin-top: 8px"
         title="导出为 .lbbak 备份包（勾选「安全防护」时含 CRS/IP2Region 规则库文件）；包含凭证与证书材料，请加密保管" />
       <template #footer>
         <el-button @click="exportDialogVisible = false">取消</el-button>
@@ -1435,7 +1435,6 @@ const handleSave = async () => {
 </script>
 
 <style scoped>
-.backup-sections-item { flex-direction: column; align-items: flex-start; gap: 4px; }
 .backup-dialog-header { display: flex; align-items: center; gap: 12px; }
 .backup-dialog-icon {
   width: 38px; height: 38px; border-radius: 10px;
@@ -1472,8 +1471,6 @@ const handleSave = async () => {
 }
 .import-summary-chip.is-zero { opacity: .45; }
 .import-v1-hint { margin-top: 6px; display: inline-block; }
-.section-card.is-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.section-hint { font-size: 11.5px; color: var(--el-text-color-placeholder); }
 /* 全选/全不选与告警条之间留出间距;chips 单行不换行(弹框 720px) */
 .backup-dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; margin-bottom: 14px; }
 .backup-dialog .section-chips, .import-sections .section-chips { flex-wrap: nowrap; }
@@ -1587,7 +1584,6 @@ const handleSave = async () => {
 
 /* HTTPS 证书配置弹框（2026-09-25 用户裁定重构）：正文 20px 水平留白；
    文件选择=按钮+文件名展示；证书信息=浅底卡片行布局 */
-.admin-tls-dialog :deep(.el-dialog__body) { padding: 0 20px; }
 .tls-file-field { display: flex; align-items: center; gap: 10px; width: 100%; }
 .tls-file-name { font-size: 12px; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tls-file-name.is-empty { color: #9ca3af; }

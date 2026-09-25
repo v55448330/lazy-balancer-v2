@@ -1,8 +1,8 @@
 package handlers
 
-// GITHUB_TOKEN 配置面（2026-09-25 用户裁定）：响应面永不回显原文
-// （仅 has_github_token 显隐，OIDC client_secret 同口径）；PUT nil/空串=
-// 保持现值，非空=覆盖。
+// GITHUB_TOKEN 配置面（2026-09-25 用户裁定；第 52 轮 P2-3 改三态）：响应面
+// 永不回显原文（仅 has_github_token 显隐）；PUT 省略=保持、空串=清除、
+// 非空=覆盖。
 
 import (
 	"net/http"

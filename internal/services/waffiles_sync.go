@@ -28,8 +28,10 @@ type WafFileBundle struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
-	CRSTarGzB64  []byte `json:"crs_tar_gz,omitempty"`
-	XdbB64       []byte `json:"xdb,omitempty"`
+	// 原始字节载荷（JSON 序列化时由 encoding/json 转 base64；lbbak 通道直接
+	// 以原始字节入 tar 条目）——字段名已去 B64 后缀（第 53 轮补充轮 U6B-6）。
+	CRSTarGz []byte `json:"crs_tar_gz,omitempty"`
+	Xdb      []byte `json:"xdb,omitempty"`
 }
 
 // BuildWafFileRef computes the live rule-file hashes without file content;
@@ -78,12 +80,12 @@ func BuildWafFileBundle() *WafFileBundle {
 	}
 	if ref.CRSSha256 != "" {
 		if data, _, err := tarGzDir(crsLiveDir); err == nil && len(data) > 0 {
-			bundle.CRSTarGzB64 = data
+			bundle.CRSTarGz = data
 		}
 	}
 	if ref.IP2RegionSha != "" {
 		if data, err := os.ReadFile(ip2regionLivePath); err == nil {
-			bundle.XdbB64 = data
+			bundle.Xdb = data
 		}
 	}
 	return bundle
@@ -155,13 +157,13 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	// CL40-C1-1:反向防御——声明哈希非空但未携带内容(主端瞬态 IO 读失败
 	// 时 BuildWafFileBundle 会产出该形状):从端应用「无操作」后漂移判定
 	// 永不收敛,必须拒绝(主端恢复后下轮同步自愈)。
-	if bundle.CRSSha256 != "" && len(bundle.CRSTarGzB64) == 0 {
+	if bundle.CRSSha256 != "" && len(bundle.CRSTarGz) == 0 {
 		return crsChanged, xdbChanged, errors.New("同步包声明 CRS 哈希非空但未携带内容，拒绝应用该同步包")
 	}
-	if bundle.IP2RegionSha != "" && len(bundle.XdbB64) == 0 {
+	if bundle.IP2RegionSha != "" && len(bundle.Xdb) == 0 {
 		return crsChanged, xdbChanged, errors.New("同步包声明 IP2Region 哈希非空但未携带内容，拒绝应用该同步包")
 	}
-	if len(bundle.CRSTarGzB64) > 0 {
+	if len(bundle.CRSTarGz) > 0 {
 		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
 		// 仅恶意/损坏主节点可构造——与 xdb 侧同纵深防御；untarGzTo 在
 		// expectSum=="" 时跳过整树哈希校验，必须拒绝而非裸写未验证字节。
@@ -170,7 +172,7 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 		}
 		liveSum, liveErr := tarGzDirSum(crsLiveDir)
 		if liveErr != nil || liveSum != bundle.CRSSha256 {
-			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir, bundle.CRSSha256); err != nil {
+			if err := untarGzTo(bundle.CRSTarGz, crsLiveDir, bundle.CRSSha256); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 CRS 规则文件: %w", err)
 			}
 			// VERSION 随 tar 包以原始字节落盘（R46-E1）：不得以 TrimSpace 后的
@@ -180,7 +182,7 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			crsChanged = true
 		}
 	}
-	if len(bundle.XdbB64) > 0 {
+	if len(bundle.Xdb) > 0 {
 		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
 		// 仅恶意/损坏主节点可构造——与 CRS 侧 F-3 同纵深防御，拒绝整包而非
 		// 裸写原始字节。
@@ -195,12 +197,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库版本标记: %w", tagErr)
 		}
 		if liveSum != bundle.IP2RegionSha {
-			sum := sha256.Sum256(bundle.XdbB64)
+			sum := sha256.Sum256(bundle.Xdb)
 			if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
 				return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
 			}
 			tmp := ip2regionLivePath + ".sync"
-			if err := os.WriteFile(tmp, bundle.XdbB64, 0644); err != nil {
+			if err := os.WriteFile(tmp, bundle.Xdb, 0644); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库: %w", err)
 			}
 			if err := os.Rename(tmp, ip2regionLivePath); err != nil {

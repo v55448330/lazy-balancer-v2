@@ -43,6 +43,9 @@ func EnsureIPListDir() error {
 // 返回绝对路径；空集合返回空串不写文件（调用方据此不发射规则）。文件已存在
 // 直接返回路径（幂等）；写失败返回 error——经渲染错误链路上报（保存侧事务
 // 回滚，fail-closed）。成功投影的路径计入本轮渲染引用集（GC 差集口径）。
+// GC 不在此触发（第 53 轮补充轮 P2-1）：渲染中途按上一轮陈旧引用集差集会误删
+// 在役文件——统一由整轮渲染 apply 成功后触发（maybeGCStaleIPListFiles，引用集
+// 落齐再差集；全部阈值为 time.Since 时长比较，无挂钟排程、与时区配置无关）。
 func writeIPListFile(scope string, merged []string) (string, error) {
 	merged = wafiplist.AggregateIPEntries(merged)
 	if len(merged) == 0 {
@@ -52,7 +55,6 @@ func writeIPListFile(scope string, merged []string) (string, error) {
 	name := fmt.Sprintf("%s-%s.txt", scope, hex.EncodeToString(sum[:])[:12])
 	path := filepath.Join(IPListDataDir, name)
 	noteIPListRenderRef(path)
-	defer maybeGCStaleIPListFiles()
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
@@ -114,7 +116,8 @@ func forgetIPListRenderRefForTest(path string) {
 	ipListRenderRefs.Unlock()
 }
 
-// maybeGCStaleIPListFiles 成功投影后的节流 GC 入口（间隔 ipListGCInterval）。
+// maybeGCStaleIPListFiles 整轮渲染 apply 成功后的节流 GC 入口（间隔
+// ipListGCInterval）——此刻本轮渲染的全部在役名单引用已落齐，差集决策安全。
 func maybeGCStaleIPListFiles() {
 	if time.Since(ipListLastGC) < ipListGCInterval {
 		return

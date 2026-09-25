@@ -454,18 +454,6 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.v2-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: white;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  padding: 2px 6px;
-  border-radius: 3px;
-  letter-spacing: 0.5px;
-}
 
 .login-subtitle {
   font-size: 14px;

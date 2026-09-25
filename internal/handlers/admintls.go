@@ -85,11 +85,15 @@ var errInvalidCert = fmtErrorf("无效的证书 PEM")
 // 同口径）。R55 C-4：v2 备份导入写 admin_tls_* 复用本门——坏配置落库会使下次
 // 启动 ResolveCertificate 失败即进程退出（崩溃循环）。
 func validateAdminTLSConfigValues(cfg services.AdminTLSConfig) error {
+	// mode 值域门与启用态无关（第 53 轮补充轮 P3-6）：禁用态也不得落库白名单外值。
+	if cfg.Mode != "" && cfg.Mode != "selfsigned" && cfg.Mode != "upload" {
+		return fmtErrorf("无效的证书来源：当前仅支持自签名或上传证书")
+	}
 	if !cfg.Enabled {
 		return nil
 	}
-	if cfg.Mode != "selfsigned" && cfg.Mode != "upload" {
-		return fmtErrorf("无效的证书来源：当前仅支持自签名或上传证书")
+	if cfg.Mode == "" {
+		return fmtErrorf("无效的证书来源：启用时必须选择证书来源（自签名或上传证书）")
 	}
 	if cfg.Mode == "upload" {
 		if _, err := tls.X509KeyPair([]byte(cfg.Cert), []byte(cfg.Key)); err != nil {
@@ -305,9 +309,15 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		uploadedCertificate = true
 	}
 
+	// mode 值域门与启用态无关（第 53 轮补充轮 P3-6，用户裁定）——此前仅在
+	// enabled 分支校验，禁用态可落库白名单外值（「只有合法形态可落库」破口）。
+	if mode != "" && mode != "selfsigned" && mode != "upload" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：当前仅支持自签名或上传证书"})
+		return
+	}
 	if enabled {
-		if mode != "selfsigned" && mode != "upload" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：当前仅支持自签名或上传证书"})
+		if mode == "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：启用时必须选择证书来源（自签名或上传证书）"})
 			return
 		}
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}

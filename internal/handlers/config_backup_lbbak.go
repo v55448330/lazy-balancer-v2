@@ -51,11 +51,11 @@ func buildLbbakPayload(backupJSON []byte, bundle *services.WafFileBundle) ([]byt
 		lbbakEntryConfig: backupJSON,
 	}
 	if bundle != nil {
-		if len(bundle.CRSTarGzB64) > 0 {
-			entries[lbbakEntryCRS] = bundle.CRSTarGzB64
+		if len(bundle.CRSTarGz) > 0 {
+			entries[lbbakEntryCRS] = bundle.CRSTarGz
 		}
-		if len(bundle.XdbB64) > 0 {
-			entries[lbbakEntryXdb] = bundle.XdbB64
+		if len(bundle.Xdb) > 0 {
+			entries[lbbakEntryXdb] = bundle.Xdb
 		}
 	}
 	manifest := lbbakManifest{Format: "lbbak", Checksum: map[string]string{}}
@@ -199,11 +199,11 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload, ip2regionTag stri
 	bundle := &services.WafFileBundle{IP2RegionTag: ip2regionTag}
 	if payload.CRSTarGz != nil {
 		bundle.CRSSha256 = payload.CRSSha256
-		bundle.CRSTarGzB64 = payload.CRSTarGz
+		bundle.CRSTarGz = payload.CRSTarGz
 	}
 	if payload.Xdb != nil {
 		bundle.IP2RegionSha = payload.XdbSha256
-		bundle.XdbB64 = payload.Xdb
+		bundle.Xdb = payload.Xdb
 	}
 	if crsChanged, xdbChanged, err := services.ApplyWafFileBundle(bundle); err != nil {
 		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", err)

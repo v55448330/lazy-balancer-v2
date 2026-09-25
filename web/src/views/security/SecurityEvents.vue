@@ -208,7 +208,6 @@
           <div v-if="crsPolicyState !== 'ok'" class="crs-policy-hint">
             <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
             <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
-            <template v-else-if="crsPolicyState === 'no-policy'">归属策略已删除，请在策略向导中操作</template>
             <template v-else>策略状态加载失败，请关闭后重试</template>
           </div>
           <div v-else-if="crsAlreadyExcluded" class="crs-policy-hint">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
@@ -380,7 +379,8 @@ const crsIpListId = ref<number | undefined>(undefined)
 const crsIpListLoading = ref(false)
 const { adding: crsIpListSaving, addIpToList } = useIpListAdd()
 // ok=可提交 / checking=策略检查中 / missing=404 或无 policy_id / error=检查失败
-const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'no-policy' | 'error'>('checking')
+// 'no-policy' 已并入 'missing'（两态文案/行为等价，第 53 轮补充轮去冗余）
+const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'error'>('checking')
 // 策略存在性检查顺带取回的现有排除清单（用于「已存在同等排除」提示；提交时仍重新 GET 最新）
 const crsExistingRows = ref<CrsExcludedRow[]>([])
 // 弹框会话序号：关闭/重开丢弃在途的索引、源码与策略检查返回
@@ -465,7 +465,7 @@ const openCrsDialog = async (row: SecurityEvent): Promise<void> => {
   crsIpListSaving.value = false
   void loadCrsIpLists(seq)
   if (!row.policy_id || row.policy_id <= 0) {
-    crsPolicyState.value = 'no-policy'
+    crsPolicyState.value = 'missing'
   } else {
     crsPolicyState.value = 'checking'
     void checkCrsPolicy(row.policy_id, seq)

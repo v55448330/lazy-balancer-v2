@@ -1874,6 +1874,9 @@ func normalizeBlockPageContentTypes(tables map[string][]map[string]any) {
 		return
 	}
 	for _, row := range rows {
+		// 非字符串值静默归一默认（有意从宽，与 skipEmptyBlockPages 软跳过同
+		// 哲学：导入鲁棒性优先，值域收敛不落 400——与 mode 枚举门「非字符串
+		// 拒绝」口径不同属有意差异，第 53 轮 P5-1 裁定保留）。
 		contentType, _ := row["content_type"].(string)
 		if !models.ValidBlockPageContentType(contentType) {
 			row["content_type"] = models.DefaultBlockPageContentType

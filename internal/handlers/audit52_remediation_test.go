@@ -113,10 +113,16 @@ func TestSecurityPolicyDeltaCoversAllUpdateColumns(t *testing.T) {
 			t.Fatalf("%s 在 UPDATE 但不在 delta 覆盖集——「加列忘加 delta」复发", col)
 		}
 	}
-	// 全等：每个 UPDATE 列都有 delta 覆盖（审计真 delta 完整性）
+	// 真全等（第 53 轮 P3-1：双向）——UPDATE 列都有 delta 覆盖，delta 列也都
+	// 在 UPDATE 列集内（防「删掉 delta 测试不报警」盲区）。
 	for col := range updateCols {
 		if !deltaCols[col] {
 			t.Fatalf("UPDATE 列 %s 缺 delta 覆盖", col)
+		}
+	}
+	for col := range deltaCols {
+		if !updateCols[col] {
+			t.Fatalf("delta 列 %s 不在 UPDATE 列集合（delta 被删或写列形态变更测试须同步）", col)
 		}
 	}
 }
@@ -139,10 +145,16 @@ func securityPolicyUpdateAndDeltaColumns(t *testing.T) (updateCols, deltaCols ma
 	} else {
 		text = text[start:]
 	}
+	// UPDATE 写列双形态（第 53 轮 P3-1）：addStr/addInt/addBool + 显式 query+=
 	updateCols = map[string]bool{}
 	for _, m := range regexp.MustCompile(`add(?:Str|Int|Bool)\("([a-z_]+)"`).FindAllStringSubmatch(text, -1) {
 		updateCols[m[1]] = true
 	}
+	for _, m := range regexp.MustCompile(`query \+= ", ([a-z_]+)=\?"`).FindAllStringSubmatch(text, -1) {
+		updateCols[m[1]] = true
+	}
+	// delta 覆盖双形态：delta* 调用实参里的 stored.<Field> + 裸 if-block
+	// （`if req.X != nil && *req.X != stored.X` 形态，如 block_page_id 拦截页 delta）
 	deltaCols = map[string]bool{}
 	deltaCalls := regexp.MustCompile(`delta(?:Str|Bool|Int|JSON|Refs)\(([^)]*(?:\([^)]*\)[^)]*)*)\)`).FindAllStringSubmatch(text, -1)
 	fieldRef := regexp.MustCompile(`stored\.([A-Za-z0-9]+)`)
@@ -150,6 +162,9 @@ func securityPolicyUpdateAndDeltaColumns(t *testing.T) (updateCols, deltaCols ma
 		for _, f := range fieldRef.FindAllStringSubmatch(call[1], -1) {
 			deltaCols[fieldToColumn(f[1])] = true
 		}
+	}
+	for _, m := range regexp.MustCompile(`if req\.\w+ != nil && \*req\.\w+ != stored\.([A-Za-z0-9]+)`).FindAllStringSubmatch(text, -1) {
+		deltaCols[fieldToColumn(m[1])] = true
 	}
 	return updateCols, deltaCols
 }

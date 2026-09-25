@@ -606,6 +606,10 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		// N+13 H2-F3：与 ImportConfigBackup 同序——空内容拦截页软跳过也须
 		// 进预览，否则预览静默、导入才跳（summary/warnings 口径一致）。
 		skipWarnings = append(skipWarnings, skipEmptyBlockPages(backup.Tables)...)
+		// 第 53 轮 P3-3：与 ImportConfigBackup 同序——content_type 白名单值域收敛
+		// 也进预览，「导入/预览双路径同序」不变量补齐（预览不回显该值，无可观察
+		// 面分叉，纯不变量对齐）。
+		normalizeBlockPageContentTypes(backup.Tables)
 		// R39 C-3: 与 ImportConfigBackup 同序——skip 之后、逐行校验之前校验
 		// upstreams/path_rules 引用存在性，预览结果与实际导入一致（否则悬挂引用
 		// 备份在预览显示可导入、实际导入才 400）。

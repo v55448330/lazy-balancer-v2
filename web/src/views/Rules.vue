@@ -3498,7 +3498,9 @@ onUnmounted(() => {
 .text-secondary { color: #6b7280; }
 .port-warning { color: #eab308; }
 
-/* Fix table cell padding */
+/* 页内其余表格（日志统计等）单元格 padding——主规则表由更特异的
+   .rules-table :deep(.el-table .cell)（0 6px）覆盖，两套密度为有意分层
+   （主表 12 列宽收敛 vs 次表宽松，第 53 轮补充轮 B3 P5-11 裁定保留并注明） */
 :deep(.el-table .cell) {
   padding: 0 10px;
 }

@@ -1559,11 +1559,8 @@ onUnmounted(() => {
 
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }
-.crs-card :deep(.el-card__header) .crs-header-actions { display: flex; gap: 8px; }
 .crs-card :deep(.el-descriptions__table) { table-layout: fixed; width: 100%; }
 .crs-card :deep(.el-descriptions__cell) { height: 48px; vertical-align: middle; }
-.crs-card .ip2region-desc { margin-top: 20px; }
-.crs-cell-flex { display: flex; align-items: center; height: 24px; }
 .rule-condition-row {
   display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; flex-wrap: wrap;
   padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
@@ -1604,7 +1601,6 @@ onUnmounted(() => {
 .regex-test-result.regex-match { color: #10b981; }
 .regex-test-result.regex-nomatch { color: #ef4444; }
 .regex-test-result.regex-invalid { color: #f59e0b; }
-.add-condition-btn { margin-top: 4px; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .ip-list-toolbar { gap: 12px; }
@@ -1649,7 +1645,6 @@ onUnmounted(() => {
 .lib-name-sub { color: #909399; font-size: 12px; word-break: break-all; }
 .lib-version { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
 .lib-count { font-variant-numeric: tabular-nums; }
-.threat-url { color: #909399; font-size: 12px; word-break: break-all; }
 .update-log-content { margin: 0; color: #e4e4e7; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
 </style>
 

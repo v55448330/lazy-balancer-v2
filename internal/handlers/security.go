@@ -297,6 +297,10 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
+	// 引用计数与 DeleteSecurityBlockPage 门同口径（有意设计，第 53 轮补充轮
+	// B1 P5-4 裁定保留）：策略侧仅计启用（禁用策略的配页是休眠配置，删除后
+	// 运行期 JOIN 容忍悬挂）；规则侧阶段页引用全量计（禁用规则重新启用即
+	// 生效，静默丢失引用伤害更大）——两侧口径不同但与删除门逐一对应。
 	rows, err := db.DB.Query(`SELECT bp.id, bp.name, COALESCE(bp.description,''), COALESCE(bp.content,''), COALESCE(bp.content_type,'text/html; charset=utf-8'), COALESCE(bp.is_default,0), COALESCE(bp.is_builtin,0), COALESCE(bp.created_by,0), COALESCE(bp.created_at,''), COALESCE(bp.updated_by,0), COALESCE(bp.updated_at,''),
 		(SELECT COUNT(*) FROM (
 			SELECT b.rule_caddy_id FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id WHERE p.block_page_id=bp.id AND p.enabled=1
@@ -1809,7 +1813,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	// 缺省（nil）提交按合并后内容重推断 policy_type（类型与内容不漂移；
 	// 显式提交已由上方归一携带，无需重推断）。同时兜住导入/旧快照落库的
-	// '' 存量态——下次编辑即归一。
+	// '' 存量态——下次编辑即归一。重推断命中时 policy_type 列被改写，结果
+	// 暂存并落审计 delta（第 53 轮 P3-2：「实际变动的字段都记」原则此前
+	// 在此破例）。
+	var reinferredFrom, reinferredTo string
 	if req.PolicyType == nil {
 		var merged models.SecurityPolicy
 		if err := scanSecurityPolicyRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &merged); err == nil {
@@ -1818,6 +1825,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新策略类型失败"})
 					return
 				}
+				reinferredFrom, reinferredTo = merged.PolicyType, inferred
 			}
 		}
 	}
@@ -1830,6 +1838,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	auditDetail := fmt.Sprintf("策略「%s」(#%s)", policyName, id)
 	var changedFields []string
 	if storedFound {
+		if reinferredTo != "" {
+			changedFields = append(changedFields, fmt.Sprintf("策略类型：%s→%s（按内容重推断）", reinferredFrom, reinferredTo))
+		}
 		clip := func(v string) string {
 			if len(v) > 60 {
 				return fmt.Sprintf("（%d 字符）", len(v))
@@ -2438,8 +2449,8 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 // 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
 // 子策略继承拦截页，阶段 2 恒 429 不配页），全量重映射绑定（每条规则删原
 // 绑定+插全部子策略绑定；合并后超 maxBindingsPerRule 上限的规则进 skipped
-// 并保留原绑定），无
-// skipped 才删除原策略（仍有规则引用时保留并在响应标记）。单事务一次
+// 并保留原绑定），无 skipped 才删除原策略（仍有规则引用时保留并在响应
+// 标记）。单事务一次
 // finishTxApply（单渲染）。
 func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	h.caddyOpMu.Lock()

@@ -300,7 +300,6 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	}
 	stateRaw := make([]byte, 16)
 	nonceRaw := make([]byte, 16)
-	verifierRaw := make([]byte, 32)
 	if _, err := rand.Read(stateRaw); err != nil {
 		fail("生成状态失败")
 		return
@@ -309,10 +308,8 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 		fail("生成 nonce 失败")
 		return
 	}
-	if _, err := rand.Read(verifierRaw); err != nil {
-		fail("生成 PKCE 失败")
-		return
-	}
+	// PKCE verifier 由 oauth2.GenerateVerifier() 内部自行取随机（第 53 轮补充轮
+	// P3-2：原 verifierRaw 随机读取从未消费，死代码已删）。
 	state := hex.EncodeToString(stateRaw)
 	nonce := hex.EncodeToString(nonceRaw)
 	verifier := oauth2.GenerateVerifier()

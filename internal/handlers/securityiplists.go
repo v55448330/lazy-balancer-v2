@@ -290,7 +290,10 @@ func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
 }
 
 func (h *Handlers) ListIPLists(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists ORDER BY id")
+	// entry_count 走 SQL 侧 json_array_length（第 53 轮补充轮 P3-1）——不再全量
+	// 读+逐行解析 entries 仅为计数（万条名单 ≈460KB/行 的 CPU/内存开销归零）；
+	// 畸形 JSON 同样报错 500（json_array_length 解析失败→rows.Err），口径不变。
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(category,''), json_array_length(COALESCE(entries,'[]')), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -304,19 +307,12 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	lists := []ipListRow{}
 	for rows.Next() {
 		var row ipListRow
-		var entriesJSON string
-		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &entriesJSON, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.EntryCount, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-		var entries []models.IPListEntry
-		if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("IP 列表 %d 的条目解析失败: %v", row.ID, err)})
 			return
 		}
 		// v2.3.2 弹框性能重构：列表载荷不再内联 entries（大名单 1.4 万条
 		// 会背 ~460KB/行）；弹框经 GET /security/ip-lists/:id 按需拉取。
-		row.EntryCount = len(entries)
 		row.RefPolicies = refs[int64(row.ID)]
 		if row.RefPolicies == nil {
 			row.RefPolicies = []ipListRefPolicy{}
@@ -512,6 +508,13 @@ WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'
 		return
 	}
 	if dup > 0 {
+		// 改名撞内置名单同 Create 口径给专属提示（第 53 轮补充轮 B1 P5-3：
+		// 同一裁定语义在更新路径此前退化为通用提示）。
+		var sysDup int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", name).Scan(&sysDup); err == nil && sysDup > 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该名称为内置威胁情报名单保留，请换一个名称"})
+			return
+		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
 		return
 	}

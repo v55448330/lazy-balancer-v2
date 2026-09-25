@@ -46,6 +46,7 @@ func normalizeTrustedProxyRanges(raw string) (string, error) {
 		return "", fmt.Errorf("受信代理网段条数上限 64（当前 %d）", len(entries))
 	}
 	normalized := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		prefix, err := netip.ParsePrefix(entry)
 		if err != nil {
@@ -66,6 +67,11 @@ func normalizeTrustedProxyRanges(raw string) (string, error) {
 		if prefix.Bits() < minBits {
 			return "", fmt.Errorf("受信代理网段过宽（%s）：最小允许 /8（IPv4）与 /96（IPv6），请收窄到该 CDN 的回源网段", prefix.String())
 		}
+		// 去重保序（与 headers 侧同口径，第 53 轮补充轮 U6B-7）
+		if _, dup := seen[prefix.String()]; dup {
+			continue
+		}
+		seen[prefix.String()] = struct{}{}
 		normalized = append(normalized, prefix.String())
 	}
 	out, err := json.Marshal(normalized)

@@ -34,7 +34,7 @@ func buildTestLbbak(t *testing.T, jsonBackup string, xdbBytes []byte) []byte {
 		bundle = &services.WafFileBundle{
 			IP2RegionTag: "test-tag",
 			IP2RegionSha: hex.EncodeToString(sum[:]),
-			XdbB64:       xdbBytes,
+			Xdb:          xdbBytes,
 		}
 	}
 	payload, err := buildLbbakPayload([]byte(jsonBackup), bundle)

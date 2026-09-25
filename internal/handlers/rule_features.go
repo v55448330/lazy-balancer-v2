@@ -584,10 +584,6 @@ func updatePathRuleTx(ctx context.Context, tx *sql.Tx, row, incoming storedPathR
 	return nil
 }
 
-func loadPathRules(ctx context.Context, queryer pathRuleQueryer, ruleID string) ([]models.PathRule, error) {
-	return db.LoadPathRules(ctx, queryer, ruleID)
-}
-
 func dumpRowsByKey(ctx context.Context, table, keyColumn string, keyValue any) ([]map[string]any, error) {
 	return queryRowsAsMaps(ctx, db.DB, rowQuery{
 		label: table + " 快照",

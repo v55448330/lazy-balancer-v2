@@ -564,8 +564,8 @@ type UpdateConfigRequest struct {
 	JWTExpireMinutes           *int    `json:"jwt_expire_minutes"`
 	Timezone                   *string `json:"timezone"`
 	GitHubProxyURL             *string `json:"github_proxy_url"`
-	// GitHubToken 可选令牌：nil 或空串=保持现值（OIDC client_secret 同口径），
-	// 非空=覆盖。响应面永不回显（GlobalConfig.GitHubToken json:"-"）。
+	// GitHubToken 可选令牌三态（第 52 轮 P2-3 起）：nil=保持现值、空串=清除
+	// （唯一撤销路径）、非空=覆盖。响应面永不回显（GlobalConfig.GitHubToken json:"-"）。
 	GitHubToken         *string `json:"github_token"`
 	DefaultCAProviderID *int    `json:"default_ca_provider_id"`
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。

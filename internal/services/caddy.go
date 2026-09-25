@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"math/big"
 	"net"
@@ -283,8 +282,11 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 		return inner
 	}
 
-	log.Println("Caddy config applied successfully")
+	Logf("info", "Caddy config applied successfully")
 	s.persistLastGoodLocked(data)
+	// 整轮渲染 apply 成功（=本轮全部在役名单已投影且被 Caddy 接受）后统一
+	// GC 名单投影文件（第 53 轮补充轮 P2-1）——此时引用集落齐，差集安全。
+	maybeGCStaleIPListFiles()
 	return nil
 }
 
@@ -3320,7 +3322,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"request": map[string]interface{}{"set": map[string]interface{}{"X-LB-Rule-ID": []string{rule.CaddyID}}},
 		})
 	}
-	// 多策略 IP ACL 优先（IP 预检）：多策略绑定时把全部绑定策略的 deny 侧 IP
 	// 规则级全量流量指标(2026-09-15 用户裁定):lb_rule_metrics 置于链首
 	// (headers 之后,blocked counter/预检/压缩/限流/全部策略 waf 之前)——
 	// 包装链全流量,caddy_id 直接作 label(替代域名/host 匹配,通配符/

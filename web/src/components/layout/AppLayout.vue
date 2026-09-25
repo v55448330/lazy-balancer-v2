@@ -419,9 +419,7 @@ onUnmounted(() => {
 
 .config-drift-banner {
   border-radius: 0;
-  /* 2026-09-25 用户反馈：内容距上下边框太近——加大垂直留白 */
-  padding-top: 12px;
-  padding-bottom: 12px;
+  /* 垂直留白由全局 .error-banner（main.css）供给（第 53 轮补充轮去双份） */
 }
 /* 与站内 polling-error-alert 统一模式（Rules/CertJobs/ClusterSettings）同构：
    图标+标题 flex（文案左、动作右）+ 12px meta 次行 */
@@ -460,18 +458,6 @@ onUnmounted(() => {
   gap: 6px;
 }
 
-.v2-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: white;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  padding: 2px 5px;
-  border-radius: 3px;
-  letter-spacing: 0.5px;
-}
 
 .layout-menu {
   border-right: none;

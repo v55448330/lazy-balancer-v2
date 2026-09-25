@@ -58,7 +58,7 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
 
 	bundle := BuildWafFileBundle()
-	if bundle == nil || len(bundle.CRSTarGzB64) == 0 || len(bundle.XdbB64) == 0 {
+	if bundle == nil || len(bundle.CRSTarGz) == 0 || len(bundle.Xdb) == 0 {
 		t.Fatalf("bundle incomplete: %+v", bundle)
 	}
 	ref := BuildWafFileRef()
@@ -112,7 +112,7 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
 
 	bundle := BuildWafFileBundle()
-	if bundle == nil || len(bundle.CRSTarGzB64) == 0 || len(bundle.XdbB64) == 0 {
+	if bundle == nil || len(bundle.CRSTarGz) == 0 || len(bundle.Xdb) == 0 {
 		t.Fatalf("bundle incomplete: %+v", bundle)
 	}
 
@@ -126,7 +126,7 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	// Tampered CRS tar.gz: declared hash unchanged, bytes differ.
 	tampered := *bundle
 	tamperDir := t.TempDir()
-	if err := untarGzTo(bundle.CRSTarGzB64, tamperDir, ""); err != nil {
+	if err := untarGzTo(bundle.CRSTarGz, tamperDir, ""); err != nil {
 		t.Fatalf("untar bundle: %v", err)
 	}
 	os.WriteFile(filepath.Join(tamperDir, "rules", "a.conf"), []byte("SecRule X EVIL"), 0644)
@@ -134,8 +134,8 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-archive tampered: %v", err)
 	}
-	tampered.CRSTarGzB64 = data
-	tampered.XdbB64 = nil
+	tampered.CRSTarGz = data
+	tampered.Xdb = nil
 	if _, _, err := ApplyWafFileBundle(&tampered); err == nil {
 		t.Fatalf("tampered CRS must be rejected")
 	}
@@ -145,9 +145,9 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 
 	// Tampered xdb: declared hash unchanged, bytes differ.
 	tamperedXdb := *bundle
-	tamperedXdb.CRSTarGzB64 = nil
-	tamperedXdb.XdbB64 = append([]byte(nil), bundle.XdbB64...)
-	tamperedXdb.XdbB64[0] ^= 0xFF
+	tamperedXdb.CRSTarGz = nil
+	tamperedXdb.Xdb = append([]byte(nil), bundle.Xdb...)
+	tamperedXdb.Xdb[0] ^= 0xFF
 	if _, _, err := ApplyWafFileBundle(&tamperedXdb); err == nil {
 		t.Fatalf("tampered xdb must be rejected")
 	}
@@ -263,7 +263,7 @@ func TestApplyWafFileBundle_rejectsCRSWithoutDeclaredHash(t *testing.T) {
 	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
 	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
 	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	bundle := &WafFileBundle{CRSTarGzB64: rawTarGz(t, []tarEntry{{name: "rules/evil.conf", body: []byte("SecRule X EVIL")}}), CRSSha256: ""}
+	bundle := &WafFileBundle{CRSTarGz: rawTarGz(t, []tarEntry{{name: "rules/evil.conf", body: []byte("SecRule X EVIL")}}), CRSSha256: ""}
 	if _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
 		t.Fatalf("error=%v, want missing declared hash rejection", err)
 	}
@@ -333,7 +333,7 @@ func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
 	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
 	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
 	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	bundle := &WafFileBundle{XdbB64: []byte("raw-bytes"), IP2RegionSha: ""}
+	bundle := &WafFileBundle{Xdb: []byte("raw-bytes"), IP2RegionSha: ""}
 	if _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
 		t.Fatalf("error=%v, want missing declared hash rejection", err)
 	}

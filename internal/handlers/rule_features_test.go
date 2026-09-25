@@ -663,7 +663,7 @@ func TestReplacePathRulesTx_replaces_all_rows_and_preserves_nullable_upstreams(t
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit replacement: %v", err)
 	}
-	loaded, err := loadPathRules(context.Background(), database, "lb_paths1")
+	loaded, err := db.LoadPathRules(context.Background(), database, "lb_paths1")
 
 	// Then
 	if err != nil {

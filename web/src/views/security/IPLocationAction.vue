@@ -104,7 +104,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
 import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
-import { inferPolicyType } from '@/utils/securityStages'
+import { inferPolicyType, parseIPList, parseRefIds } from '@/utils/securityStages'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
 import type { APIResponse } from '@/types'
 
@@ -248,29 +248,6 @@ const saveToListAction = async (): Promise<void> => {
   if (done) await loadIpLists()
 }
 
-const parseList = (raw: string): string[] => {
-  try {
-    const parsed: unknown = JSON.parse(raw || '[]')
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((entry): entry is string => typeof entry === 'string')
-  } catch {
-    return []
-  }
-}
-
-// refs 字段为 JSON 数字数组文本（如 "[1,5]"）——与 SecurityPolicies 向导同口径
-// 解析（parseRefIds）：字符串过滤会丢弃数字 id，这里显式 map(Number)
-const parseRefIds = (raw: string | undefined): number[] => {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(Number).filter((n) => Number.isInteger(n) && n > 0)
-  } catch {
-    return []
-  }
-}
-
 // 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导 mergeIpEntries 同口径）；
 // 缓存中缺失的引用列表跳过（防御性回退为仅内联）
 const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
@@ -285,10 +262,10 @@ const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
 
 // 每策略生效 ACL / 信任名单（内联 ∪ 引用），状态展示与语义反转守卫共用
 const mergedAclEntries = (policy: PolicyRow): string[] =>
-  mergeIpEntries(parseList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+  mergeIpEntries(parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
 
 const mergedTrustEntries = (policy: PolicyRow): string[] =>
-  mergeIpEntries(parseList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
+  mergeIpEntries(parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
 
 const normalizeRow = (p: PolicyRow): PolicyRow => ({
   id: p.id,
@@ -385,7 +362,7 @@ const rowView = (policy: PolicyRow): RowView => {
   const view: RowView = {
     policy,
     inTrust: trustEntries.includes(props.ip),
-    inTrustInline: parseList(policy.ip_whitelist).includes(props.ip),
+    inTrustInline: parseIPList(policy.ip_whitelist).includes(props.ip),
     trustEnabled: policy.ip_whitelist_enabled !== false,
     trustCount: trustEntries.length,
     // 与 securityStages.buildStage0Rows 模式行同文案
@@ -394,7 +371,7 @@ const rowView = (policy: PolicyRow): RowView => {
     canAddTrust: false,
     canRemoveTrust: false,
     canClearDeadTrust: false,
-    inLegacy: parseList(policy.ip_blacklist).includes(props.ip),
+    inLegacy: parseIPList(policy.ip_blacklist).includes(props.ip),
     tagType: 'info',
     tagLabel: '未启用',
     statusClass: '',
@@ -437,7 +414,7 @@ const rowView = (policy: PolicyRow): RowView => {
   // 生效名单 = 内联 ∪ 引用列表条目；引用命中的条目无法在本弹窗移除
   // （PUT 仅写内联 ip_acl_list），移除按钮仅对内联命中开放
   const list = mergedAclEntries(policy)
-  const inInline = parseList(policy.ip_acl_list).includes(props.ip)
+  const inInline = parseIPList(policy.ip_acl_list).includes(props.ip)
   const inList = list.includes(props.ip)
 
   if (policy.ip_acl_mode === 'deny') {
@@ -554,7 +531,7 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     // 先取最新详情，避免用弹窗快照覆盖他人并发修改
     const detail = await fetchDetail(policy.id)
     if (!detail) return
-    const list = parseList(detail.ip_acl_list)
+    const list = parseIPList(detail.ip_acl_list)
     // 语义反转守卫按生效名单（内联 ∪ 引用）判定——内联为空但引用非空时，
     // 切换模式同样会反转全部引用条目的语义，必须走强确认分支
     const mergedList = mergeIpEntries(list, parseRefIds(detail.ip_acl_list_refs))
@@ -653,7 +630,7 @@ const removeFromAcl = async (policy: PolicyRow): Promise<void> => {
   try {
     const detail = await fetchDetail(policy.id)
     if (!detail) return
-    const list = parseList(detail.ip_acl_list)
+    const list = parseIPList(detail.ip_acl_list)
     if (!list.includes(props.ip)) {
       ElMessage.info(`该 IP 已不在策略「${policy.name}」的访问控制列表中`)
       return
@@ -701,7 +678,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
     }
     const detail = await fetchDetail(policy.id)
     if (!detail) return
-    const list = parseList(detail.ip_whitelist)
+    const list = parseIPList(detail.ip_whitelist)
     if (list.includes(props.ip)) {
       ElMessage.info(`该 IP 已在策略「${policy.name}」的信任名单中`)
       return
@@ -730,7 +707,7 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
   try {
     const detail = await fetchDetail(policy.id)
     if (!detail) return
-    const list = parseList(detail.ip_whitelist)
+    const list = parseIPList(detail.ip_whitelist)
     if (!list.includes(props.ip)) {
       ElMessage.info(`该 IP 已不在策略「${policy.name}」的信任名单中`)
       return

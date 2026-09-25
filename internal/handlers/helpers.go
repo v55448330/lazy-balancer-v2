@@ -816,9 +816,8 @@ func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
 			}
 			return emptyRuleMetrics() // 本规则零流量(插件已升级,无序列)
 		}
-		if agg := index.ruleMetricsByRule[target.ruleID]; agg != nil {
-			return agg.ruleMetrics(true)
-		}
+		// 插件未升级（map 全局为空）：无 rule 级序列可查，落空返回上层兜底
+		// （第 53 轮补充轮 U6B-4：此处曾有「空 map 查找」死分支，已删）。
 	}
 	if target.domain == "" {
 		return emptyRuleMetrics()

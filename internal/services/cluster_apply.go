@@ -223,10 +223,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			}
 		} else {
 			// 校验无变动也留痕(仅在实际执行同步校验的周期记录,非每周期刷屏)
-			if bundle.CRSVersion != "" || bundle.CRSTarGzB64 != nil {
+			if bundle.CRSVersion != "" || bundle.CRSTarGz != nil {
 				AppendCRSUpdateLog("INFO", "success", "主节点 CRS 数据无更新，无需同步")
 			}
-			if bundle.IP2RegionTag != "" || bundle.XdbB64 != nil {
+			if bundle.IP2RegionTag != "" || bundle.Xdb != nil {
 				AppendIP2RegionUpdateLog("INFO", "success", "主节点 IP2Region 数据无更新，无需同步")
 			}
 		}
@@ -1050,6 +1050,10 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	// 重建,镜像缺失使从端与主端哈希永久分歧。列与文件同源同值,触发器
 	// WHEN is_master=1 守卫保证从端写入不 bump cluster_version。
 	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?,mfa_write_guard=?,mfa_lockout_enabled=?,github_proxy_url=?,oidc_config=?,branding_json=?`
+	// github_token 有意不下发（第 53 轮 P5，裁定保留）：节点本地机密——三个
+	// GitHub 调度器（CRS/IP2Region/威胁库）均 isMaster 专属，从节点从不直调
+	// GitHub，令牌无同步需求；对照 OIDC client_secret 下发是因从节点需本地
+	// 完成登录校验，性质不同。
 	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey, settings.MFAWriteGuard, settings.MFALockoutEnabled, settings.GitHubProxyURL, settings.OIDCConfig, settings.BrandingJSON}
 	if snapshot.CaddyConfig != nil {
 		// R60 A-N1：全局 body 上限钳制 [0,4096]（与 insertSnapshotRules 的行级

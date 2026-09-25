@@ -642,6 +642,7 @@ const onDialogOpen = (): void => {
   fullPolicies.value = new Map()
   customRules.value = []
   crsFiles.value = []
+  ipListEntryCache.value = new Map() // 引用名单条目缓存同重置（第 53 轮补充轮 P3-3：页间编辑名单后不再显示旧条目）
   const caddyId = props.target?.caddyId
   if (!caddyId) {
     statsSettled.value = true

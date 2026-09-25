@@ -101,7 +101,7 @@
         </div>
       </template>
       <div class="token-box">
-        <code class="token-value">{{ registerToken?.token }}</code>
+        <code>{{ registerToken?.token }}</code>
         <el-button type="primary" @click="copyRegisterToken">
           <el-icon><CopyDocument /></el-icon>复制令牌
         </el-button>
@@ -755,7 +755,6 @@ onUnmounted(() => {
 .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 .polling-error-meta { font-size: 12px; }
 .token-box { display: flex; align-items: center; gap: 12px; margin-top: 4px; padding: 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px dashed var(--border-color, #dcdfe6); }
-.token-value { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.6; word-break: break-all; }
 .token-expiry { margin-top: 10px; }
 
 /* ── 通用弹框头部(icon + 标题 + 副标题)── */

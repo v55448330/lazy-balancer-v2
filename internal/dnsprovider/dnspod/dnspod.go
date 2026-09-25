@@ -253,7 +253,9 @@ func (n *flexNumber) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Int64 尽力解析；缺失/不可解析时返回 0，调用方按"未知总量"处理。
+// Int64 尽力解析；缺失/不可解析时返回 0（第 53 轮补充轮 P3-7 注释如实化：
+// 调用处的翻页终止实际由 len(domains)==0 独立兜底，total=0 永不命中
+// total>0 分支——0 值语义是「不参与判定」而非「未知总量」）。
 func (n flexNumber) Int64() int64 {
 	value, err := strconv.ParseInt(string(n), 10, 64)
 	if err != nil {
