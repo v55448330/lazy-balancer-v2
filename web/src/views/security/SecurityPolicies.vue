@@ -972,7 +972,7 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, buildStageModel, formatAclModeDetail, hasTrustEntries, inferPolicyType, parseRefIds } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1448,16 +1448,6 @@ const fetchIpLists = async (seq?: number): Promise<void> => {
     if (seq !== undefined && seq !== policyDialogOpenSeq) return
     ipLists.value = res.data || []
   } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
-}
-// refs 字段为 JSON 数字数组文本（如 "[1,5]"）——不能复用 parseJsonList：
-// 其字符串过滤会把数字 id 全部丢弃（保存成功但重开显示为空的根因）
-const parseRefIds = (raw: string | undefined): number[] => {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(Number).filter((n) => Number.isInteger(n) && n > 0)
-  } catch { return [] }
 }
 // 合并内联 + 引用列表条目（按精确字符串去重，与 v1 匹配口径一致）；
 // 缓存中缺失的引用列表跳过（防御性回退为仅内联）

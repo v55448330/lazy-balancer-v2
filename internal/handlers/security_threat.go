@@ -78,6 +78,9 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 // UpdateCRSAutoUpdate/UpdateIP2RegionAutoUpdate 形态）。逐源 update_enabled
 // 决定任务更新哪些源（弹框内开关），与总闸解耦。
 func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	var body struct {
 		AutoUpdate *bool `json:"auto_update"`
 	}
@@ -115,6 +118,9 @@ func (h *Handlers) UpdateThreatSchedule(c *gin.Context) {
 // 策略引用名单（无独立 apply 开关）。请求体携带的其余字段一律忽略
 // （内置源不可变造）。
 func (h *Handlers) UpdateThreatSourceFlags(c *gin.Context) {
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的源 ID"})

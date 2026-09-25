@@ -311,7 +311,7 @@ const handleSave = async (): Promise<void> => {
     }
     const saved = await request.put('/config', payload)
     // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」
-    if (!changed || saved?.message === '配置无变化') {
+    if (!changed || saved?.message?.startsWith('配置无变化')) {
       ElMessage.info('配置无变化')
     } else {
       mfaAwareSuccess('保存成功')

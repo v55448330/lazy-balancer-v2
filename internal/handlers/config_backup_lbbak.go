@@ -192,7 +192,7 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 // R39-12:ip2regionTag 从备份表区传入——空 tag 会让 ApplyWafFileBundle 删除
 // .version 伴生文件,破坏「文件与版本记录同批」不变量。
 // R39-13:落盘失败返回警告文本(调用方注入响应 warnings),不再仅审计静默。
-func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload, ip2regionTag string) string {
+func applyLbbakWafFiles(c *gin.Context, action string, payload *lbbakPayload, ip2regionTag string) string {
 	if payload.CRSTarGz == nil && payload.Xdb == nil {
 		return ""
 	}
@@ -207,10 +207,10 @@ func applyLbbakWafFiles(c *gin.Context, payload *lbbakPayload, ip2regionTag stri
 	}
 	if crsChanged, xdbChanged, err := services.ApplyWafFileBundle(bundle); err != nil {
 		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", err)
-		recordAudit(c, "导入警告", "配置备份", "规则库文件落盘失败: "+err.Error())
+		recordAudit(c, action+"警告", "配置备份", "规则库文件落盘失败: "+err.Error())
 		return "规则库文件落盘失败: " + err.Error()
 	} else if crsChanged || xdbChanged {
-		recordAudit(c, "导入", "安全数据", services.FormatAuditDetail("规则库数据库(随备份导入)", services.AuditResultPart("success")))
+		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
 		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
 		if xdbChanged {
 			services.AppendIP2RegionUpdateLog("INFO", "installing", "校验并落盘备份内 IP2Region数据库")

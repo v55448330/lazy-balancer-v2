@@ -255,7 +255,7 @@ func restoreCRSFromSnapshot(liveDir, snapshotDir, version string) error {
 // 须 BumpClusterVersion。
 func ReconcileCRSState() {
 	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
 	}
 	reconcileCRSStateFrom(crsLiveDir, crsSnapshotDir, currentCRSVersion())

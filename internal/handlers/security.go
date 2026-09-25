@@ -28,6 +28,10 @@ import (
 // crsRulesDir 是 CRS 规则文件目录；定义为变量以便测试注入临时目录。
 var crsRulesDir = "/app/waf/crs/rules"
 
+// crsSetupConfPath 与 crsRulesDir 同款测试缝（第 57 轮 P5-3）：默认生产路径，
+// 测试可覆写以覆盖 404/413 分支。
+var crsSetupConf = "/app/waf/crs/crs-setup.conf"
+
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
 	if err != nil {
@@ -2967,6 +2971,11 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 		}
 	}
 	var count int
+	if db.MetricsDB == nil {
+		// MetricsDB 未装配（测试/嵌入形态）：按 0 返回而非 panic（第 57 轮 P5-4）
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]int{"count": 0}})
+		return
+	}
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events WHERE client_ip=? AND event_time >= datetime('now', '-' || ? || ' days')`, ip, days).Scan(&count); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询事件计数失败"})
 		return
@@ -3071,6 +3080,11 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	// 同为合法时间且开始晚于结束时直接拒绝：语义错误的区间否则只会静默返回空页
 	if hasStart && hasEnd && startBoundary > endBoundary {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "开始时间不能晚于结束时间"})
+		return
+	}
+	if db.MetricsDB == nil {
+		// MetricsDB 未装配：返回空列表而非 panic（第 57 轮 P5-4）
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]any{"list": []any{}, "total": 0, "page": 1, "page_size": 20}})
 		return
 	}
 	// event_time 恒为 'YYYY-MM-DD HH:MM:SS' UTC 字符串，参数同形 —— 直接字符串比较
@@ -3236,9 +3250,31 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 			firstErr = err
 		}
 	}
-	trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayBlocked))
-	trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected))
-	trackErr(db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies))
+	if db.MetricsDB != nil {
+		trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayBlocked))
+		trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected))
+	}
+	// 活跃策略=启用且任一阶段特征非空（第 57 轮 P5-1，用户裁定）：旧口径
+	// `mode!='off'` 滞留阶段化前语义——stage1/stage2 策略 mode 恒归一 off，
+	// 纯 stage1/2 部署显示 0。空策略（无任何 G0-G3 特征）不计。
+	policyRows, perr := db.DB.Query("SELECT " + securityPolicySelectColumns + " FROM security_policies WHERE enabled=1")
+	if perr != nil {
+		trackErr(perr)
+	} else {
+		active := 0
+		for policyRows.Next() {
+			var p models.SecurityPolicy
+			if err := scanSecurityPolicy(policyRows, &p); err != nil {
+				continue
+			}
+			fs := models.PolicyTypeFeatures(&p)
+			if fs.G0 || fs.G1 || fs.G2 || fs.G3 {
+				active++
+			}
+		}
+		policyRows.Close()
+		overview.ActivePolicies = active
+	}
 
 	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled.
 	// 时区偏移在 Go 侧拼好（负偏移如 America/New_York 为 "-240 minutes"）；SQLite 的
@@ -4195,7 +4231,7 @@ func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
 	// crs-setup.conf / rules/*.conf；带外手改后池键不变、新配置 Provision 复用
 	// 旧 WAF，手改静默不生效（直到进程重启或下一次 CRS 版本变更）。CRS 配置
 	// 变更必须经 CRS 更新流程；本端点仅为只读查看。
-	f, err := os.Open("/app/waf/crs/crs-setup.conf")
+	f, err := os.Open(crsSetupConf)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CRS 配置文件不存在"})
 		return

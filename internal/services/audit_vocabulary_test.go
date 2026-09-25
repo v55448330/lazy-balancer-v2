@@ -46,11 +46,14 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	"handlers/caddy.go":                {2: {"UpdateConfig"}},
 	"handlers/cluster_registration.go": {1: {"clusterNodeAction"}},
 	"handlers/config_backup.go":        {1: {"importConfigBackupCore"}},
-	"handlers/autobackup.go":           {1: {"RunAutoBackupOnce"}},
-	"handlers/config_import_v1.go":     {1: {"ImportV1Config"}},
-	"handlers/handlers.go":             {1: {"finishTxApply"}, 2: {"finishTxApply"}},
-	"services/certificates.go":         {1: {"renewExpiringCertificates"}},
-	"services/downloadintegrity.go":    {2: {"recordDownloadIntegrity"}},
+	// applyLbbakWafFiles：动作透传 core 的 action（取值仅 导入/还原——第 57 轮
+	// 修复还原路径归因漂移），词汇均在标准动作集内。
+	"handlers/config_backup_lbbak.go": {1: {"applyLbbakWafFiles"}},
+	"handlers/autobackup.go":          {1: {"RunAutoBackupOnce"}},
+	"handlers/config_import_v1.go":    {1: {"ImportV1Config"}},
+	"handlers/handlers.go":            {1: {"finishTxApply"}, 2: {"finishTxApply"}},
+	"services/certificates.go":        {1: {"renewExpiringCertificates"}},
+	"services/downloadintegrity.go":   {2: {"recordDownloadIntegrity"}},
 }
 
 // auditVocabCallSpecs 给出各审计写入口的 动作/对象 参数下标。

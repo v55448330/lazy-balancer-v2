@@ -48,6 +48,11 @@ func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 // 429 抓取失败返回 500（与 GetSecurityRateLimitBlocks 同口径：指标不可达与
 // 暂无限流拦截必须可区分，前端 chip 显示「暂无计数」）。
 func (h *Handlers) GetRuleStageStats(c *gin.Context) {
+	if db.MetricsDB == nil {
+		// MetricsDB 未装配：返回空统计而非 panic（第 57 轮 P5-4）
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]any{}})
+		return
+	}
 	ruleCaddyID := c.Param("caddy_id")
 	rows, err := db.MetricsDB.Query(`SELECT rule_triggered, COUNT(*) FROM security_events WHERE rule_caddy_id=? AND action='blocked' AND event_time >= datetime('now','-1 day') GROUP BY rule_triggered`, ruleCaddyID)
 	if err != nil {

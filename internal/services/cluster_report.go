@@ -41,6 +41,9 @@ func (s *SyncService) Report(ctx context.Context) error {
 	// JSON 字段名 certs_expiring_30d 为历史名，保留以兼容旧版主节点解析。
 	expiryDays := 30
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&expiryDays); err != nil || expiryDays <= 0 {
+		// 读失败/非法值回退 30 时留痕（第 57 轮 R-12 家族扫描唯一漏点，
+		// 同族 certissuer/certificates/certinfo/certjobs 均已带留痕）。
+		Logf("warn", "集群报告: 读取证书到期口径失败，回退 30 天")
 		expiryDays = 30
 	}
 	// expiryDays 经 Scan 已是纯整数（非法/非数字值回退 30），strconv.Itoa 只产生

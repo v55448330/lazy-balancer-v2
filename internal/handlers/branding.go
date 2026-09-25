@@ -318,9 +318,9 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	}
 	// landing_text 变化时同步注入 services 渲染并触发 Caddy 重应用
 	// (与 SeedDefaultBlockPage 同模式:主节点限定、异步、幂等)。
-	// 编辑最坏延迟 60s 可见）。原注释：幂等同步在 boot+首请求已完成，
-	// 稳态每请求 ~7 条 SQL 是公开无鉴权端点的残余放大面——门内跳过同步/
-	// 种子/镜像（branding.json 为手工编辑的文档化用法，无管理写路径；带外
+	// 编辑最坏延迟 60s 可见。原始依据：幂等同步在 boot+首请求已完成，稳态
+	// 每请求 ~7 条 SQL 是公开无鉴权端点的残余放大面；门内跳过同步/种子/镜像
+	// （branding.json 为手工编辑的文档化用法，无管理写路径，带外
 	if brandingSyncGateAllow() {
 		needApply := false
 		if changed, _ := SyncDefaultLandingText(h.cfg.DataDir); changed {

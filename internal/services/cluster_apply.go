@@ -112,7 +112,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if snapshot.MasterSyncSwitches != nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET
 			sync_users=1, sync_rules=?, sync_security=?
-			WHERE id=1 AND COALESCE(is_master,0)=0`,
+			WHERE id=1 AND COALESCE(is_master,1)=0`,
 			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.Security); err != nil {
 			return fmt.Errorf("镜像同步开关: %w", err)
 		}
@@ -463,7 +463,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return err
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,0)=0`, snapshot.BasicSettings.SyncInterval); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,1)=0`, snapshot.BasicSettings.SyncInterval); err != nil {
 			return fmt.Errorf("写入同步间隔: %w", err)
 		}
 	}

@@ -37,7 +37,7 @@ var legacySecurityEnumBackfills = []string{
 //     集群版本（从节点无版本权威，bump 会与主节点版本流冲突）。
 func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	var isMaster, syncSecurity bool
-	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(is_master,0), COALESCE(sync_security,1) FROM global_config WHERE id=1").Scan(&isMaster, &syncSecurity); err != nil {
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(is_master,1), COALESCE(sync_security,1) FROM global_config WHERE id=1").Scan(&isMaster, &syncSecurity); err != nil {
 		Logf("warn", "security enum normalize: failed to read cluster role, skipping: %v", err)
 		return
 	}

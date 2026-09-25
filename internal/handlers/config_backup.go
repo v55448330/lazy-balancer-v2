@@ -2619,7 +2619,7 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
 	wafApplyWarning := ""
 	if lbbakFiles != nil && sectionTables["security_crs_version"] {
-		wafApplyWarning = applyLbbakWafFiles(c, lbbakFiles, services.SanitizeBundleVersion(ip2regionTagFromBackup(backup.Tables)))
+		wafApplyWarning = applyLbbakWafFiles(c, action, lbbakFiles, services.SanitizeBundleVersion(ip2regionTagFromBackup(backup.Tables)))
 	}
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
