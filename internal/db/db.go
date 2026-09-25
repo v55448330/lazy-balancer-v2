@@ -817,6 +817,11 @@ func runMigrations() error {
 		// global_config（与 threat_auto_update 同表先例）。
 		"security_crs_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
 		"security_crs_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
+		// ip2region 侧同族两列（第 57 轮追加问题，用户上报）：fresh DDL 建表
+		// 含两列（db.go ip2region_version CREATE），存量库补列迁移此前漏登记
+		// ——升级安装更新定时排程必报 no such column: schedule_days。
+		"security_ip2region_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
+		"security_ip2region_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
 		// global_config 单行表恒经 newColumns 补列（threat_auto_update 起的既定
 		// 口径——fresh DDL 不追平，U6B-3 对齐仅适用多行版本/策略表）。
 		"global_config.threat_schedule_days":   "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
