@@ -153,12 +153,31 @@
          _dropped 渲染为信息行而非头行。请求体按契约前缀解析：base64-truncated: →
          base64: → 明文；明文尾部 \n...[TRUNCATED] 标记转为截断横幅；atob 解码失败
          展示原始内容 + 错误说明。宽度/顶距与 crs-event-dialog 一致。 -->
-    <el-dialog v-model="ctxDialogVisible" title="请求上下文" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog dialog-body-inset">
+    <el-dialog v-model="ctxDialogVisible" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog dialog-body-inset">
+      <template #header>
+        <div class="ctx-dialog-header">
+          <el-icon class="ctx-dialog-icon"><Document /></el-icon>
+          <div>
+            <div class="ctx-dialog-title">请求详情</div>
+            <div class="ctx-dialog-sub">{{ ctxEvent ? formatDate(ctxEvent.event_time) : '—' }} · {{ ctxEvent?.policy_name || '未知策略' }}</div>
+          </div>
+        </div>
+      </template>
       <template v-if="ctxEvent">
         <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="时间">{{ ctxEvent.event_time || '—' }}</el-descriptions-item>
           <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
           <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
           <el-descriptions-item label="URI" :span="2">{{ ctxEvent.uri || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="触发规则">{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="动作">
+            <el-tag size="small" :type="ctxEvent.action === 'blocked' ? 'danger' : 'warning'" effect="plain">
+              {{ ctxEvent.action === 'blocked' ? '已拦截' : ctxEvent.action === 'logged' ? '已记录' : ctxEvent.action || '—' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="异常评分">{{ ctxEvent.anomaly_score > 0 ? ctxEvent.anomaly_score : '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <div class="ctx-section-title">请求头</div>
@@ -212,7 +231,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, Warning, View, Hide } from '@element-plus/icons-vue'
+import { Refresh, Warning, View, Hide, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { CheckboxValueType } from 'element-plus'
 import { request } from '@/utils/api'
@@ -464,6 +483,11 @@ onMounted(fetchEvents)
 
 
 /* —— 请求上下文详情弹框 —— */
+/* 请求详情弹框头部：图标 + 标题 + 副标题（dialog-header 统一范式） */
+.ctx-dialog-header { display: flex; align-items: center; gap: 10px; }
+.ctx-dialog-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary, #409eff); font-size: 18px; flex-shrink: 0; }
+.ctx-dialog-title { font-size: 16px; font-weight: 700; color: var(--el-text-color-primary); line-height: 1.3; }
+.ctx-dialog-sub { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
 .ctx-section-title { font-size: 13px; font-weight: 600; color: #374151; margin: 16px 0 8px; }
 .ctx-banner { margin-bottom: 8px; }
 .ctx-info-line { font-size: 12px; color: #9ca3af; line-height: 1.6; margin-bottom: 6px; }

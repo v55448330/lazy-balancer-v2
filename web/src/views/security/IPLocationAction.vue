@@ -320,6 +320,8 @@ interface RowView {
   canRemove: boolean
   removableRefLists: Array<{ id: number; name: string }>
   removableTrustRefLists: Array<{ id: number; name: string }>
+  aclHitSourceLabel: string
+  trustHitSourceLabel: string
   geoActive: boolean
   geoRegions: string
 }
@@ -349,6 +351,8 @@ const rowView = (policy: PolicyRow): RowView => {
     canAssociateAllow: false,
     canRemove: false,
     removableRefLists: [] as Array<{ id: number; name: string }>,
+    aclHitSourceLabel: '',
+    trustHitSourceLabel: '',
     removableTrustRefLists: [] as Array<{ id: number; name: string }>,
     geoActive: false,
     geoRegions: '',
@@ -365,6 +369,16 @@ const rowView = (policy: PolicyRow): RowView => {
     .filter((l) => trustRefIds.includes(l.id) && !l.system)
     .filter((l) => (ipListEntries.value[l.id] ?? []).includes(props.ip.trim()))
     .map((l) => ({ id: l.id, name: l.name }))
+  // ACL 引用命中（第 58 轮补）：黑/白名单状态行标注具体来源名单名
+  const aclRefIds = parseRefIds(policy.ip_acl_list_refs)
+  const aclHitNames = ipLists.value
+    .filter((l) => aclRefIds.includes(l.id) && !l.system)
+    .filter((l) => (ipListEntries.value[l.id] ?? []).includes(props.ip.trim()))
+    .map((l) => l.name)
+  const srcTag = (names: string[]): string =>
+    names.length > 0 ? `（来自引用列表「${names.join('」「')}」）` : '（来自引用列表）'
+  view.aclHitSourceLabel = srcTag(aclHitNames)
+  view.trustHitSourceLabel = srcTag(view.removableTrustRefLists.map((l) => l.name))
 
   // 阶段 0 行（U8-2 分组②）：信任名单状态即整行语义，无 ACL 面；
   // 模式行（直通/保留检测）由模板按组渲染
@@ -374,7 +388,7 @@ const rowView = (policy: PolicyRow): RowView => {
     view.countLabel = view.trustCount > 0 ? `${view.trustCount} 条` : ''
     if (view.inTrust) {
       view.statusClass = view.trustEnabled ? 'is-ok' : 'is-warn'
-      const hit = view.inTrustInline ? '✅ 已在信任名单中' : '✅ 已在信任名单中（来自引用列表）'
+      const hit = view.inTrustInline ? '✅ 已在信任名单中' : `✅ 已在信任名单中${view.trustHitSourceLabel}`
       view.statusLabel = view.trustEnabled ? hit : `${hit}——信任名单未启用，暂不生效`
     } else {
       view.statusLabel = view.trustCount === 0 ? '信任名单未配置' : `信任名单 ${view.trustCount} 条${view.trustEnabled ? '' : '（未启用）'}`
@@ -420,7 +434,7 @@ const rowView = (policy: PolicyRow): RowView => {
     view.countLabel = `${list.length} 条`
     if (inList) {
       view.statusClass = 'is-ok'
-      view.statusLabel = inInline ? '✅ 已在黑名单中' : '✅ 已在黑名单中（来自引用列表）'
+      view.statusLabel = inInline ? '✅ 已在黑名单中' : `✅ 已在黑名单中${view.aclHitSourceLabel}`
       view.canRemove = inInline
     } else {
       view.statusLabel = `拒绝列表 · ${list.length} 条`
@@ -432,7 +446,7 @@ const rowView = (policy: PolicyRow): RowView => {
     view.countLabel = `${list.length} 条`
     if (inList) {
       view.statusClass = 'is-ok'
-      view.statusLabel = inInline ? '✅ 已在白名单中' : '✅ 已在白名单中（来自引用列表）'
+      view.statusLabel = inInline ? '✅ 已在白名单中' : `✅ 已在白名单中${view.aclHitSourceLabel}`
       view.canRemove = inInline
     } else {
       view.statusClass = 'is-warn'

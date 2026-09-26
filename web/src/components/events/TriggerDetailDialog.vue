@@ -530,6 +530,21 @@ watch(() => props.modelValue, (v) => {
 .trg-source--acl { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
 .trg-source--waf-crs, .trg-source--waf-custom { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
 .trg-source--body { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
+
+/* ① 命中概览（trg-hero）：类型着色同来源卡 + 三行结构 */
+.trg-hero { border: 1px solid var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.trg-hero--geo { border-color: var(--el-color-warning-light-7); background: var(--el-color-warning-light-9); }
+.trg-hero--threat { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
+.trg-hero--trust { border-color: var(--el-color-success-light-7); background: var(--el-color-success-light-9); }
+.trg-hero--acl { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
+.trg-hero--waf-crs, .trg-hero--waf-custom { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
+.trg-hero--body { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
+.trg-hero-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trg-hero-stage { font-weight: 700; font-size: 14px; }
+.trg-hero-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
+.trg-hero-policy { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.trg-hero-policy-name { font-weight: 600; font-size: 13px; }
+.trg-hero-hit { font-size: 13px; margin-top: 4px; color: var(--el-text-color-primary); }
 .trg-source-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .trg-source-ip { font-weight: 700; font-size: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .trg-source-geo { color: var(--el-text-color-secondary); font-size: 12px; }
