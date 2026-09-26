@@ -57,12 +57,10 @@
               @change="toggleTriggeredAll"
             >全选</el-checkbox>
           </template>
-          <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
-          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（预检 id 800000+策略）" />
-          <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库预检拦截（id 14）" />
+          <el-option label="信任名单" value="信任名单" title="阶段 0 信任名单（id 3/12）" />
+          <el-option label="IP 访问控制" value="IP 访问控制,地域拦截,威胁情报库" title="黑白名单、地域拦截、威胁情报库（阶段 1 合并：id 2/4/5/7/800xxx/14）" />
+          <el-option label="WAF" value="WAF 规则（CRS）,自定义规则" title="CRS 规则与自定义规则（阶段 3）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
-          <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
-          <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
         </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 115px" @keyup.enter="applyFilters" />
@@ -89,11 +87,11 @@
         </el-table-column>
         <el-table-column label="触发阶段" min-width="110">
           <template #default="{ row }">
-            <!-- CRS 规则（6 位 9xxxxx）：链接打开详情 + 快捷排除弹框；自定义 5 位/IP 族
-                 1-8 与威胁情报库 id 14 维持原纯文本 + msg 悬浮，无链接行为 -->
-            <el-link v-if="isWafCrs(row)" type="primary" @click="openCrsDialog(row)">{{ stageLabel(row) }}</el-link>
-            <el-link v-else-if="isWafCustom(row)" type="primary" @click="openCustomRuleDialog(row)">{{ stageLabel(row) }}</el-link>
-            <el-link v-else-if="isIpAclFamily(row)" type="primary" @click="openIpAclDetail(row)">IP 访问控制</el-link>
+            <!-- 触发阶段四分类：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
+                 WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
+            <el-link v-if="stageCategory(row) === 'waf' && isWafCrs(row)" type="primary" @click="openCrsDialog(row)">WAF · CRS</el-link>
+            <el-link v-else-if="stageCategory(row) === 'waf' && isWafCustom(row)" type="primary" @click="openCustomRuleDialog(row)">WAF · 自定义</el-link>
+            <el-link v-else-if="isIpAclFamily(row) || stageCategory(row) === 'trust'" type="primary" @click="openIpAclDetail(row)">{{ stageLabel(row) }}</el-link>
             <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
               <span class="cell-tip">{{ stageLabel(row) }}</span>
             </el-tooltip>
@@ -353,14 +351,24 @@ const isIpAclFamily = (row: SecurityEvent): boolean => {
 const isWafCrs = (row: SecurityEvent): boolean => /^9\d{5}$/.test(row.rule_triggered ?? '')
 const isWafCustom = (row: SecurityEvent): boolean => /^\d{5}$/.test(row.rule_triggered ?? '')
 
-const stageLabel = (row: SecurityEvent): string => {
+const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'waf' | 'body' | 'other' => {
   const t = row.rule_triggered
-  if (!t) return '—'
-  if (t === '11') return '请求体异常'
-  if (isWafCrs(row)) return 'WAF · CRS'
-  if (isWafCustom(row)) return 'WAF · 自定义'
-  if (isIpAclFamily(row)) return 'IP 访问控制'
-  return t
+  if (!t) return 'other'
+  const n = Number(t)
+  if (n === 3 || n === 12) return 'trust'
+  if (t === '11') return 'body'
+  if (isWafCrs(row) || isWafCustom(row)) return 'waf'
+  if (isIpAclFamily(row)) return 'acl'
+  return 'other'
+}
+const stageLabel = (row: SecurityEvent): string => {
+  switch (stageCategory(row)) {
+    case 'trust': return '信任名单'
+    case 'acl': return 'IP 访问控制'
+    case 'waf': return 'WAF'
+    case 'body': return '请求体异常'
+    default: return row.rule_triggered || '—'
+  }
 }
 const showTriggeredMsg = (row: SecurityEvent): boolean => {
   const t = row.rule_triggered

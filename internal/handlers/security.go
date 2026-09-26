@@ -2789,7 +2789,10 @@ func isReservedIP(ip string) bool {
 // 判定共用，改动需与前端筛选选项/triggeredLabel 显示标签、categorizeAttack
 // 总览口径三侧同步。
 var ruleTriggeredFamilyPrefixes = map[string][]string{
-	"IP 访问控制": {"2", "3", "4", "5", "7"},
+	// 第 57 轮触发阶段四分类（用户裁定）：信任独立成族；IP 访问控制合并黑白
+	// 名单/地域/威胁库三族（前端合并选项值以逗号拆分为三段 OR，口径不变）。
+	"信任名单":    {"3", "12"},
+	"IP 访问控制": {"2", "4", "5", "7"},
 	"请求体异常":   {"11"},
 	"地域拦截":    {"8"}, // + geoipFamilyCondition（预检精确段 800000-899999）
 	"威胁情报库":   {"14"},
@@ -2811,7 +2814,7 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
 	// 单数字族（2/3/4/5/7/8）与两位完整 id 族（14=威胁情报库）为精确匹配——
 	// LIKE 前缀会让自定义规则 5 位 ID（24567/14xxxx 等）交叉命中 IP/威胁族。
-	if len(prefix) == 1 || prefix == "14" {
+	if len(prefix) == 1 || len(prefix) == 2 {
 		*ors = append(*ors, "rule_triggered = ?")
 		*args = append(*args, prefix)
 		return

@@ -1,5 +1,5 @@
 <template>
-  <el-popover v-if="canManage" :width="400" trigger="click" popper-class="ip-location-popper" @show="onPopoverShow">
+  <el-popover v-if="canManage" :width="400" trigger="click" popper-class="ip-location-popper" @before-enter="onPopoverShow">
     <template #reference>
       <span class="ip-cell ip-clickable" :title="location ? `${ip} · ${location}` : ip">
         <span class="ip-text">{{ ip }}</span>
@@ -34,13 +34,21 @@
         size="small"
         type="primary"
         plain
-        :disabled="ipLists.length === 0 || selectedListId === undefined"
+        :disabled="selectedListId === undefined || savingToList"
         :loading="savingToList"
         @click="saveToListAction"
       >存入</el-button>
-      <span v-if="ipLists.length === 0" class="ipo-list-empty">暂无列表，可在 规则集→IP 地址列表 创建</span>
+      <el-input
+        v-model="newListName"
+        size="small"
+        placeholder="新建列表名"
+        style="width: 110px"
+        :disabled="creatingList"
+        @keyup.enter="createListInline"
+      >
+        <template #append><el-button size="small" :loading="creatingList" @click="createListInline">新建</el-button></template>
+      </el-input>
     </div>
-
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <el-alert v-else-if="policiesError" type="error" :closable="false" title="策略列表加载失败" />
     <template v-else-if="rows.length > 0">
@@ -63,13 +71,28 @@
             <!-- 混合（兼容）组迁移入口提示 -->
             <div v-if="group.key === 'mixed'" class="ipo-legacy">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
             <div class="ipo-actions">
-              <!-- ACL 动作：阶段 1 / 混合组（阶段 0 策略无 ACL 面；stage2/3 不渲染行） -->
+              <!-- ACL 动作（第 57 轮统一模型，用户裁定）：加入/移除统一走地址列表
+                   （顶部选择或新建），不再写策略内联名单；「关联所选列表」把列表
+                   引用到该策略（deny/allow 随模式），使存入立即对该策略生效 -->
               <template v-if="group.key !== 'stage0'">
-                <el-button v-if="row.canAddDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">加入黑名单</el-button>
-                <el-button v-if="row.canAddAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">加入白名单</el-button>
-                <el-button v-if="row.canEnableDeny" size="small" type="danger" plain :loading="isBusy(row.policy.id, 'deny')" @click="applyAcl(row.policy, 'deny')">启用并加入黑名单</el-button>
-                <el-button v-if="row.canEnableAllow" size="small" type="primary" plain :loading="isBusy(row.policy.id, 'allow')" @click="applyAcl(row.policy, 'allow')">启用并加入白名单</el-button>
-                <el-button v-if="row.canRemove" size="small" plain :loading="isBusy(row.policy.id, 'remove')" @click="removeFromAcl(row.policy)">移除</el-button>
+                <el-button
+                  v-if="row.canAssociate && topListSelected"
+                  size="small" type="danger" plain
+                  :loading="isBusy(row.policy.id, 'associate')"
+                  @click="associateListAndAdd(row.policy)"
+                >关联「{{ selectedListName }}」并拦截此 IP</el-button>
+                <el-button
+                  v-if="row.canAssociateAllow && topListSelected"
+                  size="small" type="primary" plain
+                  :loading="isBusy(row.policy.id, 'associate-allow')"
+                  @click="associateListAndAdd(row.policy)"
+                >关联「{{ selectedListName }}」并加入白名单</el-button>
+                <el-button v-if="row.canRemove" size="small" plain :loading="isBusy(row.policy.id, 'remove')" @click="removeFromAcl(row.policy)">从内联黑名单移除</el-button>
+                <el-button
+                  v-for="m in row.removableRefLists" :key="m.id"
+                  size="small" plain :loading="isBusy(row.policy.id, 'remove-ref-' + m.id)"
+                  @click="removeFromRefList(row.policy, m)"
+                >从「{{ m.name }}」移除</el-button>
               </template>
               <!-- 信任动作：阶段 0 / 混合组（stage1/2/3 组不出现信任操作）。
                    U8-7：死条目（信任开关关闭）灰显「未生效」+一键清除，不再出禁用按钮 -->
@@ -77,8 +100,18 @@
                 <el-tooltip v-if="row.trustDead" content="该 IP 的信任条目存在，但策略的信任名单已关闭（未启用）——条目暂不生效" placement="top">
                   <el-tag size="small" type="info" effect="plain">未生效</el-tag>
                 </el-tooltip>
-                <el-button v-if="row.canAddTrust" size="small" type="warning" plain :loading="isBusy(row.policy.id, 'trust')" @click="addTrust(row.policy)">加入信任名单</el-button>
-                <el-button v-if="row.canRemoveTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">移除信任</el-button>
+                <el-button
+                  v-if="row.canAddTrust && topListSelected"
+                  size="small" type="warning" plain
+                  :loading="isBusy(row.policy.id, 'trust')"
+                  @click="associateListAndAddTrust(row.policy)"
+                >关联「{{ selectedListName }}」并加入信任</el-button>
+                <el-button
+                  v-for="m in row.removableTrustRefLists" :key="'t' + m.id"
+                  size="small" plain :loading="isBusy(row.policy.id, 'untrust-ref-' + m.id)"
+                  @click="removeFromTrustRefList(row.policy, m)"
+                >从「{{ m.name }}」移除</el-button>
+                <el-button v-if="row.canRemoveTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">从内联信任移除</el-button>
                 <el-button v-if="row.canClearDeadTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">清除条目</el-button>
               </template>
             </div>
@@ -128,6 +161,8 @@ interface PolicyRow {
   trust_detection?: boolean
   mode?: string
   rate_limit_enabled?: boolean
+  geoip_enabled?: boolean
+  geoip_countries?: string
   has_geoip?: boolean
   has_rate_limit?: boolean
   has_waf?: boolean
@@ -148,11 +183,7 @@ interface PolicyDetail {
   trust_detection?: boolean
 }
 
-// 黑/白名单统一写入 ip_acl_list，目标仅由模式决定；信任名单独立走 ip_whitelist
-type AclTarget = 'deny' | 'allow'
-type BusyKind = AclTarget | 'remove' | 'trust' | 'untrust'
 
-const ACL_LABELS: Record<AclTarget, string> = { deny: '黑名单', allow: '白名单' }
 
 const props = defineProps<{ ip: string; location: string; ruleCaddyId?: string }>()
 
@@ -244,6 +275,127 @@ const loadIpLists = async (): Promise<void> => {
   }
 }
 
+
+const topListSelected = computed(() => selectedListId.value !== undefined)
+const selectedListName = computed(() => ipLists.value.find((l) => l.id === selectedListId.value)?.name ?? '')
+
+const newListName = ref('')
+const creatingList = ref(false)
+const createListInline = async (): Promise<void> => {
+  const name = newListName.value.trim()
+  if (name === '' || creatingList.value) return
+  creatingList.value = true
+  try {
+    const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', { name, entries: '[]' })
+    const newId = (res.data as unknown as { id: number } | undefined)?.id
+    if (newId) {
+      await loadIpLists()
+      selectedListId.value = newId
+      newListName.value = ''
+      ElMessage.success(`已创建列表「${name}」，可存入 IP 并关联到策略`)
+    }
+  } finally {
+    creatingList.value = false
+  }
+}
+
+// 关联所选列表到策略对应用途的引用字段，并存入此 IP（第 57 轮统一模型）
+const associateListAndAdd = async (policy: PolicyRow): Promise<void> => {
+  if (selectedListId.value === undefined || !lockBusy(policy.id, 'associate')) return
+  try {
+    const kind: 'deny' | 'allow' = policy.ip_acl_mode === 'allow' ? 'allow' : 'deny'
+    const kindLabel = kind === 'allow' ? '白名单' : '黑名单'
+    const refField = kind === 'allow' ? 'ip_whitelist_refs' : 'ip_acl_list_refs'
+    const detail = await fetchDetail(policy.id)
+    if (!detail) return
+    const refs = parseRefIds(detail[refField as 'ip_acl_list_refs' | 'ip_whitelist_refs'])
+    if (refs.includes(selectedListId.value)) {
+      ElMessage.info(`列表已关联到策略「${policy.name}」`)
+      return
+    }
+    await ElMessageBox.confirm(
+      `将把地址列表「${selectedListName.value}」关联到策略「${policy.name}」的${kindLabel}，并加入 ${props.ip}。是否继续？`,
+      '关联地址列表',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+    )
+    const res = await request.put(`/security/policies/${policy.id}`, { [refField]: JSON.stringify([...refs, selectedListId.value]) })
+    showSaveResult(res as unknown as { message?: string }, `已关联并加入 ${props.ip}`)
+    await addIpToRefList(selectedListId.value)
+    await refreshRow(policy.id)
+  } finally {
+    unlockBusy(policy.id, 'associate')
+  }
+}
+
+const associateListAndAddTrust = async (policy: PolicyRow): Promise<void> => {
+  if (selectedListId.value === undefined || !lockBusy(policy.id, 'associate-trust')) return
+  try {
+    const detail = await fetchDetail(policy.id)
+    if (!detail) return
+    const refs = parseRefIds(detail.ip_whitelist_refs)
+    if (refs.includes(selectedListId.value)) {
+      ElMessage.info('列表已关联到该策略的信任名单')
+      return
+    }
+    await ElMessageBox.confirm(
+      `将把地址列表「${selectedListName.value}」关联到策略「${policy.name}」的信任名单，并加入 ${props.ip}。是否继续？`,
+      '关联信任名单',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+    )
+    const res = await request.put(`/security/policies/${policy.id}`, { ip_whitelist_refs: JSON.stringify([...parseRefIds(detail.ip_whitelist_refs), selectedListId.value]) })
+    showSaveResult(res as unknown as { message?: string }, '已关联并加入信任')
+    await addIpToRefList(selectedListId.value)
+    await refreshRow(policy.id)
+  } finally {
+    unlockBusy(policy.id, 'associate-trust')
+  }
+}
+
+// 从引用列表移除单条 IP（POST remove-ip，幂等）并刷新策略行状态
+const removeFromRefList = async (policy: PolicyRow, list: { id: number; name: string }): Promise<void> => {
+  if (!lockBusy(policy.id, 'remove-ref-' + list.id)) return
+  try {
+    await ElMessageBox.confirm(
+      `将从地址列表「${list.name}」移除 ${props.ip}。该列表可能被多条策略引用，移除全局生效。是否继续？`,
+      '从地址列表移除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+    )
+    await request.post(`/security/ip-lists/${list.id}/remove-ip`, { value: props.ip })
+    ElMessage.success(`已从「${list.name}」移除`)
+    const next = { ...ipListEntries.value, [list.id]: (ipListEntries.value[list.id] ?? []).filter((v) => v !== props.ip.trim()) }
+    ipListEntries.value = next
+    await refreshRow(policy.id)
+  } finally {
+    unlockBusy(policy.id, 'remove-ref-' + list.id)
+  }
+}
+
+const removeFromTrustRefList = async (policy: PolicyRow, list: { id: number; name: string }): Promise<void> => {
+  if (!lockBusy(policy.id, 'untrust-ref-' + list.id)) return
+  try {
+    await ElMessageBox.confirm(
+      `将从信任地址列表「${list.name}」移除 ${props.ip}。是否继续？`,
+      '从信任列表移除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+    )
+    await request.post(`/security/ip-lists/${list.id}/remove-ip`, { value: props.ip })
+    ElMessage.success(`已从「${list.name}」移除`)
+    const next = { ...ipListEntries.value, [list.id]: (ipListEntries.value[list.id] ?? []).filter((v) => v !== props.ip.trim()) }
+    ipListEntries.value = next
+    await refreshRow(policy.id)
+  } finally {
+    unlockBusy(policy.id, 'untrust-ref-' + list.id)
+  }
+}
+
+const addIpToRefList = async (listId: number): Promise<void> => {
+  try {
+    await request.post(`/security/ip-lists/${listId}/ips`, { value: props.ip })
+    const next = { ...ipListEntries.value, [listId]: [...(ipListEntries.value[listId] ?? []), props.ip.trim()] }
+    ipListEntries.value = next
+  } catch { /* 全局拦截器已提示 */ }
+}
+
 const saveToListAction = async (): Promise<void> => {
   if (selectedListId.value === undefined || savingToList.value) return
   const list = ipLists.value.find((l) => l.id === selectedListId.value)
@@ -291,6 +443,8 @@ const normalizeRow = (p: PolicyRow): PolicyRow => ({
   trust_detection: p.trust_detection,
   mode: p.mode,
   rate_limit_enabled: p.rate_limit_enabled,
+  geoip_enabled: p.geoip_enabled,
+  geoip_countries: p.geoip_countries || '[]',
   has_geoip: p.has_geoip,
   has_rate_limit: p.has_rate_limit,
   has_waf: p.has_waf,
@@ -353,16 +507,18 @@ interface RowView {
   canRemoveTrust: boolean
   canClearDeadTrust: boolean
   inLegacy: boolean
-  tagType: 'danger' | 'success' | 'info'
+  tagType: 'danger' | 'success' | 'info' | 'warning'
   tagLabel: string
   statusClass: 'is-ok' | 'is-warn' | ''
   statusLabel: string
   countLabel: string
-  canAddDeny: boolean
-  canAddAllow: boolean
-  canEnableDeny: boolean
-  canEnableAllow: boolean
+  canAssociate: boolean
+  canAssociateAllow: boolean
   canRemove: boolean
+  removableRefLists: Array<{ id: number; name: string }>
+  removableTrustRefLists: Array<{ id: number; name: string }>
+  geoActive: boolean
+  geoRegions: string
 }
 
 const rowView = (policy: PolicyRow): RowView => {
@@ -386,11 +542,13 @@ const rowView = (policy: PolicyRow): RowView => {
     statusClass: '',
     statusLabel: 'IP ACL 未启用',
     countLabel: '',
-    canAddDeny: false,
-    canAddAllow: false,
-    canEnableDeny: false,
-    canEnableAllow: false,
+    canAssociate: false,
+    canAssociateAllow: false,
     canRemove: false,
+    removableRefLists: [] as Array<{ id: number; name: string }>,
+    removableTrustRefLists: [] as Array<{ id: number; name: string }>,
+    geoActive: false,
+    geoRegions: '',
   }
   view.canAddTrust = !view.inTrust
   view.canRemoveTrust = view.inTrust && view.trustEnabled && view.inTrustInline
@@ -413,10 +571,25 @@ const rowView = (policy: PolicyRow): RowView => {
     return view
   }
 
+  // 地域拦截维度（第 57 轮：GeoIP 策略不再误标「未启用」——明确展示地域维度）
+  let regionCount = 0
+  try {
+    const regions: unknown = JSON.parse(policy.geoip_countries ?? '[]')
+    if (Array.isArray(regions)) regionCount = regions.length
+  } catch { /* 畸形按 0 处理 */ }
+  const geoActive = (policy.geoip_enabled ?? false) && regionCount > 0
+  view.geoActive = geoActive
+  view.geoRegions = regionCount > 0 ? (JSON.parse(policy.geoip_countries ?? '[]') as string[]).join('、') : '' 
   if (!policy.ip_acl_enabled) {
-    // 阶段 1/混合行 ACL 未启用 → 「启用并加入」动作（原逻辑）
-    view.canEnableDeny = true
-    view.canEnableAllow = true
+    // ACL 未启用：如地域拦截在用则明示「地域拦截在用（本事件可来自地域）」；
+    // 关联地址列表动作仍可用（关联后随 ACL 启用生效）
+    if (geoActive) {
+      view.tagType = 'warning'
+      view.tagLabel = '地域拦截'
+      view.statusLabel = `地域拦截已启用 · 拦截区域：${view.geoRegions}（IP ACL 未启用）`
+      view.canAssociate = true
+      view.canAssociateAllow = true
+    }
     return view
   }
 
@@ -426,6 +599,10 @@ const rowView = (policy: PolicyRow): RowView => {
   const inInline = parseIPList(policy.ip_acl_list).includes(props.ip)
   const inList = list.includes(props.ip)
 
+  view.removableRefLists = ipLists.value
+    .filter((l) => !l.system && parseRefIds(policy.ip_acl_list_refs).includes(l.id))
+    .filter((l) => (ipListEntries.value[l.id] ?? []).includes(props.ip.trim()))
+    .map((l) => ({ id: l.id, name: l.name }))
   if (policy.ip_acl_mode === 'deny') {
     view.tagType = 'danger'
     view.tagLabel = '黑名单'
@@ -436,7 +613,7 @@ const rowView = (policy: PolicyRow): RowView => {
       view.canRemove = inInline
     } else {
       view.statusLabel = `拒绝列表 · ${list.length} 条`
-      view.canAddDeny = true
+      view.canAssociate = true
     }
   } else if (policy.ip_acl_mode === 'allow') {
     view.tagType = 'success'
@@ -449,7 +626,7 @@ const rowView = (policy: PolicyRow): RowView => {
     } else {
       view.statusClass = 'is-warn'
       view.statusLabel = '⚠️ 不在白名单中（当前无法访问）'
-      view.canAddAllow = true
+      view.canAssociateAllow = true
     }
   } else if (policy.ip_acl_mode === 'bypass') {
     view.tagLabel = '免检测'
@@ -497,16 +674,16 @@ const visibleGroups = computed<IpRowGroup[]>(() => {
 
 // —— 动作执行 ——
 
-const isBusy = (id: number, kind: BusyKind): boolean => busyKeys.value.has(`${id}:${kind}`)
+const isBusy = (id: number, kind: string): boolean => busyKeys.value.has(`${id}:${kind}`)
 
-const lockBusy = (id: number, kind: BusyKind): boolean => {
+const lockBusy = (id: number, kind: string): boolean => {
   const key = `${id}:${kind}`
   if (busyKeys.value.has(key)) return false
   busyKeys.value = new Set(busyKeys.value).add(key)
   return true
 }
 
-const unlockBusy = (id: number, kind: BusyKind): void => {
+const unlockBusy = (id: number, kind: string): void => {
   const next = new Set(busyKeys.value)
   next.delete(`${id}:${kind}`)
   busyKeys.value = next
@@ -530,110 +707,8 @@ const refreshRow = async (id: number): Promise<void> => {
   }
 }
 
-const modeLabel = (mode: string): string =>
-  mode === 'deny' ? '黑名单模式' : mode === 'allow' ? '白名单模式' : mode === 'bypass' ? '免检测模式' : `「${mode}」模式`
 
 // 统一入口：黑/白名单均写 ip_acl_list + ip_acl_mode（局部更新，仅发送变更字段）
-const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => {
-  if (!lockBusy(policy.id, target)) return
-  try {
-    // 先取最新详情，避免用弹窗快照覆盖他人并发修改
-    const detail = await fetchDetail(policy.id)
-    if (!detail) return
-    const list = parseIPList(detail.ip_acl_list)
-    // 语义反转守卫按生效名单（内联 ∪ 引用）判定——内联为空但引用非空时，
-    // 切换模式同样会反转全部引用条目的语义，必须走强确认分支
-    const mergedList = mergeIpEntries(list, parseRefIds(detail.ip_acl_list_refs))
-
-    let body: Record<string, unknown>
-    let successMsg: string
-
-    if (!detail.ip_acl_enabled) {
-      // 未启用 → 启用 + 设定模式 + 加入：启用访问控制是行为变更，与其他动作
-      // 同口径先经确认框说明后果；模式与目标一致时保留既有条目，不一致则清空
-      // 重建，避免启用即语义反转
-      try {
-        await ElMessageBox.confirm(
-          `将启用策略「${policy.name}」的 IP 访问控制并设为${modeLabel(target)}（${ACL_LABELS[target]}），同时加入 ${props.ip}。是否继续？`,
-          `启用并加入${ACL_LABELS[target]}`,
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
-        )
-      } catch {
-        return
-      }
-      const nextList = detail.ip_acl_mode === target
-        ? [...list.filter((entry) => entry !== props.ip), props.ip]
-        : [props.ip]
-      body = { ip_acl_enabled: true, ip_acl_mode: target, ip_acl_list: JSON.stringify(nextList) }
-      successMsg = `已启用策略「${policy.name}」的 IP 访问控制并加入${ACL_LABELS[target]}`
-    } else if (detail.ip_acl_mode === target) {
-      // 模式一致 → 确认后追加；命中判定用生效名单口径，避免把引用列表
-      // 已覆盖的 IP 重复写入内联条目
-      if (mergedList.includes(props.ip)) {
-        ElMessage.info(`该 IP 已在策略「${policy.name}」的${ACL_LABELS[target]}中`)
-        return
-      }
-      try {
-        await ElMessageBox.confirm(
-          `将把 ${props.ip} 加入策略「${policy.name}」的${ACL_LABELS[target]}。是否继续？`,
-          `加入${ACL_LABELS[target]}`,
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-        )
-      } catch {
-        return
-      }
-      body = { ip_acl_list: JSON.stringify([...list, props.ip]) }
-      successMsg = `已加入策略「${policy.name}」的${ACL_LABELS[target]}`
-    } else if (mergedList.length > 0) {
-      // 模式切换且生效名单已有条目（K3 语义反转守卫，内联 ∪ 引用口径）：原条目
-      // 语义将整体反转，必须经确认框说明后果；确认后仅清空内联条目、仅保留该 IP——
-      // 引用列表条目随引用保留（本组件不写 refs），但其语义随模式一并反转，须点名
-      const refOnlyCount = mergedList.filter((v) => !list.includes(v)).length
-      const countDesc = refOnlyCount > 0
-        ? `生效名单共 ${mergedList.length} 条 IP（内联 ${list.length} 条 + 引用列表 ${refOnlyCount} 条）`
-        : `列表中已有 ${list.length} 条 IP`
-      const refSurviveTip = refOnlyCount > 0
-        ? `引用列表的 ${refOnlyCount} 条会随引用保留、但语义随模式一并反转；`
-        : ''
-      const targetTip = target === 'allow'
-        ? `加入白名单会把访问控制切换为「仅允许名单内 IP」，原条目语义将反转，内联条目将被清空、仅保留 ${props.ip}；${refSurviveTip}其余所有 IP 将无法访问。`
-        : `加入黑名单会把访问控制切换为「拒绝名单内 IP」，原条目语义将反转，内联条目将被清空、仅保留 ${props.ip}（该 IP 将被直接拦截）；${refSurviveTip}`
-      try {
-        await ElMessageBox.confirm(
-          `策略「${policy.name}」当前为${modeLabel(detail.ip_acl_mode)}，${countDesc}。${targetTip}是否继续？`,
-          '切换访问控制模式',
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
-        )
-      } catch {
-        return
-      }
-      body = { ip_acl_mode: target, ip_acl_list: JSON.stringify([props.ip]) }
-      successMsg = `已切换为${ACL_LABELS[target]}模式并加入 ${props.ip}`
-    } else {
-      // 模式不同但列表为空：无数据可反转，但仍属模式切换，与其他动作同口径确认
-      try {
-        await ElMessageBox.confirm(
-          `策略「${policy.name}」的访问控制将从${modeLabel(detail.ip_acl_mode)}切换为${modeLabel(target)}，并加入 ${props.ip}。是否继续？`,
-          '切换访问控制模式',
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-        )
-      } catch {
-        return
-      }
-      body = { ip_acl_mode: target, ip_acl_list: JSON.stringify([props.ip]) }
-      successMsg = `已切换为${ACL_LABELS[target]}模式并加入 ${props.ip}`
-    }
-
-    const res = await request.put(`/security/policies/${policy.id}`, body)
-    showSaveResult(res as unknown as { message?: string }, successMsg)
-    await refreshRow(policy.id)
-  } catch {
-    // 失败提示由全局拦截器弹出，这里只需终止流程
-  } finally {
-    unlockBusy(policy.id, target)
-  }
-}
-
 const removeFromAcl = async (policy: PolicyRow): Promise<void> => {
   if (!lockBusy(policy.id, 'remove')) return
   try {
@@ -670,41 +745,6 @@ const removeFromAcl = async (policy: PolicyRow): Promise<void> => {
     // 失败提示由全局拦截器弹出，这里只需终止流程
   } finally {
     unlockBusy(policy.id, 'remove')
-  }
-}
-
-const addTrust = async (policy: PolicyRow): Promise<void> => {
-  if (!lockBusy(policy.id, 'trust')) return
-  try {
-    try {
-      await ElMessageBox.confirm(
-        `将把 ${props.ip} 加入策略「${policy.name}」的信任名单，该 IP 将全评估不拦截，检测事件全记录（限流仍然生效；信任仅豁免所属策略——其他策略引用同一信任地址列表即可）。是否继续？`,
-        '加入信任名单',
-        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-      )
-    } catch {
-      return
-    }
-    const detail = await fetchDetail(policy.id)
-    if (!detail) return
-    const list = parseIPList(detail.ip_whitelist)
-    if (list.includes(props.ip)) {
-      ElMessage.info(`该 IP 已在策略「${policy.name}」的信任名单中`)
-      return
-    }
-    // 审计 W-S2（第六轮）：信任开关关闭时明确告知零生效——成功 toast 不再误导
-    const trustEnabled = detail.ip_whitelist_enabled !== false
-    const res = await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
-    if (trustEnabled) {
-      showSaveResult(res as unknown as { message?: string }, `已加入策略「${policy.name}」的信任名单`)
-    } else {
-      showSaveResult(res as unknown as { message?: string }, `已加入策略「${policy.name}」的信任名单——注意：该策略的信任名单当前为关闭状态，此 IP 暂不生效（需在策略向导中开启信任名单）`)
-    }
-    await refreshRow(policy.id)
-  } catch {
-    // 失败提示由全局拦截器弹出，这里只需终止流程
-  } finally {
-    unlockBusy(policy.id, 'trust')
   }
 }
 
