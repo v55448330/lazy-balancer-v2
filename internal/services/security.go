@@ -876,6 +876,12 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 // 回退归到首启用策略，id:7 不改变归因结果）。
 const ipPrecheckAllowRuleID = 7
 
+// ipPrecheckAllowExemptRuleID 是 allow 白名单命中豁免规则（第 58 轮用户裁定）：
+// allow 交集命中的 IP 以 pass+nolog+skipAfter 跳过后续 GeoIP 逐策略链——白名单
+// 作为「VIP 豁免」语义；显式 deny（id:2/4）先于本规则评估，命中照常拦截。
+// nolog：豁免本身不产生安全事件。无 allow 名单时不发射（避免恒真跳过）。
+const ipPrecheckAllowExemptRuleID = 13
+
 // geoipPrecheckRuleBase 是 GeoIP 预检链的 SecRule id 段基址（阶段化执行模型：
 // GeoIP 从策略引擎 id:8 迁入阶段 1 合并预检）。逐策略链 id=800000+policyID——
 // 事件归因从共享 id:8（「首个 geoip 启用策略」非精确）精确化为直接解码属主
@@ -1064,14 +1070,15 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	if denyStatus <= 0 {
 		denyStatus = 403
 	}
+	var allowIntersection []string
 	if len(allowLists) > 0 {
-		intersection := aggregateIPEntries(intersectIPLists(allowLists))
+		allowIntersection = aggregateIPEntries(intersectIPLists(allowLists))
 		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
 		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
-		if len(intersection) == 0 {
+		if len(allowIntersection) == 0 {
 			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID, denyStatus))
 		} else {
-			operand, err := ipListRuleOperand("u-allow", intersection, true)
+			operand, err := ipListRuleOperand("u-allow", allowIntersection, true)
 			if err != nil {
 				return "", err
 			}
@@ -1091,6 +1098,17 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			return "", err
 		}
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", operand, denyStatus))
+	}
+	// allow 白名单豁免（第 58 轮用户裁定）：交集命中 = pass + 跳过后续 GeoIP
+	// 逐策略链（VIP 豁免语义）。置于 deny/blacklist 之后——显式 deny 命中照常
+	// 拦截（其 skipAfter 先行短路，豁免规则不参与评估）；置于 GeoIP 链之前——
+	// 白名单成员不再被区域拦截。交集为空（恒拒形态）时无成员可豁免，不发射。
+	if len(allowIntersection) > 0 {
+		operand, err := ipListRuleOperand("u-allow-exempt", allowIntersection, false)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,pass,nolog,skipAfter:SECURITY_RULES_END\"\n", operand, ipPrecheckAllowExemptRuleID))
 	}
 	// 逐策略 GeoIP 链（阶段 1：GeoIP 自策略引擎 id:8 迁入预检，id=800000+policyID
 	// 精确归因段）。链首 deny+skipAfter+chain（disruptive 动作仅允许链首段，

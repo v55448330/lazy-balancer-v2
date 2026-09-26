@@ -7,117 +7,81 @@
       </span>
     </template>
 
-    <div class="ipo-header">
-      <span class="ipo-ip">{{ ip }}</span>
-      <!-- 事件数标签位于原归属地位置(用户裁定 2026-09-13);30 天窗口,索引 COUNT,弹框打开才查 -->
-      <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain">
-        30天事件 {{ eventCount }}
-      </el-tag>
+    <div class="ipo-head">
+      <div class="ipo-ip-row">
+        <span class="ipo-ip">{{ ip }}</span>
+        <el-tag v-if="eventCount !== null" size="small" :type="eventCount > 0 ? 'warning' : 'success'" effect="plain" round>
+          30天事件 {{ eventCount }}
+        </el-tag>
+      </div>
+      <div v-if="location" class="ipo-loc-line">{{ location }}</div>
     </div>
-    <!-- 详细归属地换行到 IP 下方(不与 IP 同行) -->
-    <div v-if="location" class="ipo-loc-line">{{ location }}</div>
 
-    <div class="ipo-list-row">
-      <span class="ipo-list-label">存入地址列表</span>
-      <el-select
-        v-model="selectedListId"
-        filterable
-        clearable
-        :teleported="false"
-        placeholder="选择列表"
-        size="small"
-        class="ipo-list-select"
-      >
-        <el-option v-for="list in ipLists" :key="list.id" :label="ipListOptionLabel(list)" :value="list.id" />
-      </el-select>
-      <el-button
-        size="small"
-        type="primary"
-        plain
-        :disabled="selectedListId === undefined || savingToList"
-        :loading="savingToList"
-        @click="saveToListAction"
-      >存入</el-button>
-      <el-input
-        v-model="newListName"
-        size="small"
-        placeholder="新建列表名"
-        style="width: 110px"
-        :disabled="creatingList"
-        @keyup.enter="createListInline"
-      >
-        <template #append><el-button size="small" :loading="creatingList" @click="createListInline">新建</el-button></template>
-      </el-input>
+    <div class="ipo-sec">
+      <div class="ipo-sec-title">存入地址列表</div>
+      <div class="ipo-save-row">
+        <el-select
+          v-model="selectedListId"
+          filterable
+          clearable
+          :teleported="false"
+          placeholder="选择列表"
+          size="small"
+          class="ipo-list-select"
+        >
+          <el-option v-for="list in ipLists" :key="list.id" :label="ipListOptionLabel(list)" :value="list.id" />
+        </el-select>
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          :disabled="selectedListId === undefined || savingToList"
+          :loading="savingToList"
+          @click="saveToListAction"
+        >存入</el-button>
+      </div>
+      <div class="ipo-save-new">
+        <el-input
+          v-model="newListName"
+          size="small"
+          placeholder="新建列表名"
+          :disabled="creatingList"
+          @keyup.enter="createListInline"
+        >
+          <template #append><el-button size="small" :loading="creatingList" @click="createListInline">新建</el-button></template>
+        </el-input>
+      </div>
     </div>
+
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <el-alert v-else-if="policiesError" type="error" :closable="false" title="策略列表加载失败" />
     <template v-else-if="rows.length > 0">
-      <!-- U8-2 分组④：阶段 2/3（限流/WAF）不渲染操作行，顶部汇总一行 -->
       <div v-if="groupedRows.offstage > 0" class="ipo-tip">另有 {{ groupedRows.offstage }} 条限流/WAF 策略不涉及 IP 管控</div>
-      <template v-if="visibleGroups.length > 0">
-        <div class="ipo-tip">各策略当前 IP 名单状态，按管辖阶段分组：</div>
-        <div v-for="group in visibleGroups" :key="group.key" class="ipo-group">
-          <div class="ipo-group-title">{{ group.title }}</div>
-          <div v-for="row in group.rows" :key="row.policy.id" class="ipo-row">
-            <div class="ipo-row-head">
-              <span class="ipo-name" :title="row.policy.name">{{ row.policy.name }}</span>
-              <el-tag size="small" :type="row.tagType">{{ row.tagLabel }}</el-tag>
+      <div v-for="group in visibleGroups" :key="group.key" class="ipo-sec">
+        <div class="ipo-sec-title">{{ group.title }}</div>
+        <div v-for="row in group.rows" :key="row.policy.id" class="ipo-card">
+          <div class="ipo-card-head">
+            <span class="ipo-name" :title="row.policy.name">{{ row.policy.name }}</span>
+            <span class="ipo-card-meta">
+              <el-tag size="small" :type="row.tagType" effect="plain">{{ row.tagLabel }}</el-tag>
               <span v-if="row.countLabel" class="ipo-count">{{ row.countLabel }}</span>
-            </div>
-            <!-- 阶段 0 组行内模式：直通上游 / 保留检测记录（与 buildStage0Rows 同文案） -->
-            <div v-if="group.key === 'stage0'" class="ipo-status">{{ row.trustDetectionLabel }}</div>
-            <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
-            <div v-if="row.inLegacy && group.key !== 'stage0'" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段中，可经 API 更新策略（ip_blacklist 字段）清理</div>
-            <!-- 混合（兼容）组迁移入口提示 -->
-            <div v-if="group.key === 'mixed'" class="ipo-legacy">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
-            <div class="ipo-actions">
-              <!-- ACL 动作（第 57 轮统一模型，用户裁定）：加入/移除统一走地址列表
-                   （顶部选择或新建），不再写策略内联名单；「关联所选列表」把列表
-                   引用到该策略（deny/allow 随模式），使存入立即对该策略生效 -->
-              <template v-if="group.key !== 'stage0'">
-                <el-button
-                  v-if="row.canAssociate && topListSelected"
-                  size="small" type="danger" plain
-                  :loading="isBusy(row.policy.id, 'associate')"
-                  @click="associateListAndAdd(row.policy)"
-                >关联「{{ selectedListName }}」并拦截此 IP</el-button>
-                <el-button
-                  v-if="row.canAssociateAllow && topListSelected"
-                  size="small" type="primary" plain
-                  :loading="isBusy(row.policy.id, 'associate-allow')"
-                  @click="associateListAndAdd(row.policy)"
-                >关联「{{ selectedListName }}」并加入白名单</el-button>
-                <el-button v-if="row.canRemove" size="small" plain :loading="isBusy(row.policy.id, 'remove')" @click="removeFromAcl(row.policy)">从内联黑名单移除</el-button>
-                <el-button
-                  v-for="m in row.removableRefLists" :key="m.id"
-                  size="small" plain :loading="isBusy(row.policy.id, 'remove-ref-' + m.id)"
-                  @click="removeFromRefList(row.policy, m)"
-                >从「{{ m.name }}」移除</el-button>
-              </template>
-              <!-- 信任动作：阶段 0 / 混合组（stage1/2/3 组不出现信任操作）。
-                   U8-7：死条目（信任开关关闭）灰显「未生效」+一键清除，不再出禁用按钮 -->
-              <template v-if="group.key !== 'stage1'">
-                <el-tooltip v-if="row.trustDead" content="该 IP 的信任条目存在，但策略的信任名单已关闭（未启用）——条目暂不生效" placement="top">
-                  <el-tag size="small" type="info" effect="plain">未生效</el-tag>
-                </el-tooltip>
-                <el-button
-                  v-if="row.canAddTrust && topListSelected"
-                  size="small" type="warning" plain
-                  :loading="isBusy(row.policy.id, 'trust')"
-                  @click="associateListAndAddTrust(row.policy)"
-                >关联「{{ selectedListName }}」并加入信任</el-button>
-                <el-button
-                  v-for="m in row.removableTrustRefLists" :key="'t' + m.id"
-                  size="small" plain :loading="isBusy(row.policy.id, 'untrust-ref-' + m.id)"
-                  @click="removeFromTrustRefList(row.policy, m)"
-                >从「{{ m.name }}」移除</el-button>
-                <el-button v-if="row.canRemoveTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">从内联信任移除</el-button>
-                <el-button v-if="row.canClearDeadTrust" size="small" plain :loading="isBusy(row.policy.id, 'untrust')" @click="removeTrust(row.policy)">清除条目</el-button>
-              </template>
-            </div>
+            </span>
+          </div>
+          <div v-if="group.key === 'stage0'" class="ipo-mode-line">{{ row.trustDetectionLabel }}</div>
+          <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
+          <div v-if="row.inLegacy && group.key !== 'stage0'" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段，可经 API 更新策略（ip_blacklist）清理</div>
+          <div v-if="group.key === 'mixed'" class="ipo-legacy">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
+          <div v-if="row.trustDead" class="ipo-legacy">该 IP 的信任条目存在，但策略的信任名单已关闭——条目暂不生效</div>
+          <div v-if="rowActions(row).length > 0" class="ipo-acts">
+            <template v-for="act in rowActions(row)" :key="act.key">
+              <el-tooltip v-if="act.tip" :content="act.tip" placement="top">
+                <el-button size="small" :type="act.type" plain :loading="act.loading" @click="act.run()">{{ act.label }}</el-button>
+              </el-tooltip>
+              <el-button v-else size="small" :type="act.type" plain :loading="act.loading" @click="act.run()">{{ act.label }}</el-button>
+            </template>
           </div>
         </div>
-      </template>
+      </div>
     </template>
     <div v-else class="ipo-tip">暂无启用的安全策略</div>
   </el-popover>
@@ -135,6 +99,7 @@ import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
+import { useTrustAssociation } from '@/composables/useTrustAssociation'
 import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
 import { inferPolicyType, parseIPList, parseRefIds } from '@/utils/securityStages'
@@ -220,6 +185,15 @@ const loadEventCount = async (): Promise<void> => {
 }
 
 const onPopoverShow = (): void => { void loadPolicies(); void loadEventCount() }
+
+// —— 信任直接动作（第 58 轮统一模型）：与触发详情弹框共享实现。
+// 信任此 IP 不再依赖顶部列表选择：策略已有信任用途列表→直接加入；
+// 没有→自动创建「{策略名}-信任」并关联+加入。
+const trustApi = useTrustAssociation({
+  getList: () => ipLists.value,
+  onChanged: () => loadPolicies(),
+})
+const { busyTrust, creating: trustCreating, resolveTrustList, joinTrust, removeFromTrustRef } = trustApi
 
 const policies = ref<PolicyRow[]>([])
 const policiesLoading = ref(false)
@@ -327,30 +301,6 @@ const associateListAndAdd = async (policy: PolicyRow): Promise<void> => {
   }
 }
 
-const associateListAndAddTrust = async (policy: PolicyRow): Promise<void> => {
-  if (selectedListId.value === undefined || !lockBusy(policy.id, 'associate-trust')) return
-  try {
-    const detail = await fetchDetail(policy.id)
-    if (!detail) return
-    const refs = parseRefIds(detail.ip_whitelist_refs)
-    if (refs.includes(selectedListId.value)) {
-      ElMessage.info('列表已关联到该策略的信任名单')
-      return
-    }
-    await ElMessageBox.confirm(
-      `将把地址列表「${selectedListName.value}」关联到策略「${policy.name}」的信任名单，并加入 ${props.ip}。是否继续？`,
-      '关联信任名单',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-    )
-    const res = await request.put(`/security/policies/${policy.id}`, { ip_whitelist_refs: JSON.stringify([...parseRefIds(detail.ip_whitelist_refs), selectedListId.value]) })
-    showSaveResult(res as unknown as { message?: string }, '已关联并加入信任')
-    await addIpToRefList(selectedListId.value)
-    await refreshRow(policy.id)
-  } finally {
-    unlockBusy(policy.id, 'associate-trust')
-  }
-}
-
 // 从引用列表移除单条 IP（POST remove-ip，幂等）并刷新策略行状态
 const removeFromRefList = async (policy: PolicyRow, list: { id: number; name: string }): Promise<void> => {
   if (!lockBusy(policy.id, 'remove-ref-' + list.id)) return
@@ -367,24 +317,6 @@ const removeFromRefList = async (policy: PolicyRow, list: { id: number; name: st
     await refreshRow(policy.id)
   } finally {
     unlockBusy(policy.id, 'remove-ref-' + list.id)
-  }
-}
-
-const removeFromTrustRefList = async (policy: PolicyRow, list: { id: number; name: string }): Promise<void> => {
-  if (!lockBusy(policy.id, 'untrust-ref-' + list.id)) return
-  try {
-    await ElMessageBox.confirm(
-      `将从信任地址列表「${list.name}」移除 ${props.ip}。是否继续？`,
-      '从信任列表移除',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
-    )
-    await request.post(`/security/ip-lists/${list.id}/remove-ip`, { value: props.ip })
-    ElMessage.success(`已从「${list.name}」移除`)
-    const next = { ...ipListEntries.value, [list.id]: (ipListEntries.value[list.id] ?? []).filter((v) => v !== props.ip.trim()) }
-    ipListEntries.value = next
-    await refreshRow(policy.id)
-  } finally {
-    unlockBusy(policy.id, 'untrust-ref-' + list.id)
   }
 }
 
@@ -555,6 +487,14 @@ const rowView = (policy: PolicyRow): RowView => {
   view.trustDead = view.inTrust && !view.trustEnabled
   view.canClearDeadTrust = view.trustDead && view.inTrustInline
 
+  // 信任引用命中（全类型行）：信任 refs 中包含此 IP 的非系统列表 → 可移除。
+  // 条目来源 = ipListEntries 缓存（loadPolicies 拉取 acl+whitelist 全部 refs）。
+  const trustRefIds = parseRefIds(policy.ip_whitelist_refs)
+  view.removableTrustRefLists = ipLists.value
+    .filter((l) => trustRefIds.includes(l.id) && !l.system)
+    .filter((l) => (ipListEntries.value[l.id] ?? []).includes(props.ip.trim()))
+    .map((l) => ({ id: l.id, name: l.name }))
+
   // 阶段 0 行（U8-2 分组②）：信任名单状态即整行语义，无 ACL 面；
   // 模式行（直通/保留检测）由模板按组渲染
   if (policyTypeOf(policy) === 'stage0') {
@@ -640,6 +580,47 @@ const rowView = (policy: PolicyRow): RowView => {
 }
 
 const rows = computed<RowView[]>(() => policies.value.map(rowView))
+
+// 行内上下文动作（第 58 轮交互重构）：按行状态只出现该出现的动作。
+// 顺序 = 信任（绿）→ 黑名单移除（红）→ 关联拦截/放行（红/蓝）→ 信任移除（绿）。
+interface RowAction { key: string; label: string; type: 'primary' | 'success' | 'warning' | 'danger' | 'info'; loading?: boolean; tip?: string; run: () => void }
+const rowActions = (row: RowView): RowAction[] => {
+  const acts: RowAction[] = []
+  const pid = row.policy.id
+  if (row.canAddTrust) {
+    const list = resolveTrustList(row.policy)
+    acts.push({
+      key: 'trust',
+      label: list ? `信任此 IP（加入「${list.name}」）` : `信任此 IP（创建「${row.policy.name}-信任」）`,
+      type: 'success',
+      loading: busyTrust.value || trustCreating.value,
+      tip: row.trustEnabled ? undefined : '该策略信任名单已关闭：加入后暂不生效，启用后自动生效',
+      run: () => { void joinTrust(row.policy, props.ip.trim()) },
+    })
+  }
+  if (row.canRemove) {
+    acts.push({ key: 'rm-inline', label: '从内联黑名单移除', type: 'danger', loading: isBusy(pid, 'remove'), run: () => { void removeFromAcl(row.policy) } })
+  }
+  for (const m of row.removableRefLists) {
+    acts.push({ key: `rm-${m.id}`, label: `从「${m.name}」移除`, type: 'danger', loading: isBusy(pid, `remove-ref-${m.id}`), run: () => { void removeFromRefList(row.policy, m) } })
+  }
+  if (row.canAssociate && topListSelected.value) {
+    acts.push({ key: 'assoc', label: `关联「${selectedListName.value}」并拦截此 IP`, type: 'danger', loading: isBusy(pid, 'associate'), run: () => { void associateListAndAdd(row.policy) } })
+  }
+  if (row.canAssociateAllow && topListSelected.value) {
+    acts.push({ key: 'assoc-a', label: `关联「${selectedListName.value}」并加入白名单`, type: 'primary', loading: isBusy(pid, 'associate-allow'), run: () => { void associateListAndAdd(row.policy) } })
+  }
+  for (const m of row.removableTrustRefLists) {
+    acts.push({ key: `unt-${m.id}`, label: `从「${m.name}」移除信任`, type: 'success', run: () => { void removeFromTrustRef(m, props.ip.trim()) } })
+  }
+  if (row.canRemoveTrust) {
+    acts.push({ key: 'unt-in', label: '从内联信任移除', type: 'success', loading: isBusy(pid, 'untrust'), run: () => { void removeTrust(row.policy) } })
+  }
+  if (row.canClearDeadTrust) {
+    acts.push({ key: 'dead', label: '清除条目', type: 'success', tip: '该 IP 的信任条目存在但信任名单已关闭，可一键清除', loading: isBusy(pid, 'untrust'), run: () => { void removeTrust(row.policy) } })
+  }
+  return acts
+}
 
 // —— U8-2 四组分组：阶段 1（ACL）/ 阶段 0（信任）/ 混合（兼容）/ 阶段 2·3 不涉 IP 管控 ——
 
@@ -795,24 +776,33 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
 </style>
 
 <style>
-.ip-location-popper .ipo-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
-.ip-location-popper .ipo-loc-line { font-size: 12px; color: var(--text-secondary, #909399); margin: -4px 0 8px; }
-.ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
-.ip-location-popper .ipo-list-label { font-size: 12px; color: var(--text-secondary, #909399); white-space: nowrap; }
-.ip-location-popper .ipo-list-select { width: 168px; }
-.ip-location-popper .ipo-list-empty { font-size: 12px; color: var(--text-secondary, #909399); }
-.ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
-.ip-location-popper .ipo-group { margin-top: 2px; }
-.ip-location-popper .ipo-group-title { font-size: 12px; font-weight: 600; color: var(--el-text-color-regular, #606266); margin: 6px 0 0; }
-.ip-location-popper .ipo-row { padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
-.ip-location-popper .ipo-row-head { display: flex; align-items: center; gap: 6px; }
-.ip-location-popper .ipo-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ip-location-popper .ipo-count { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; }
-.ip-location-popper .ipo-status { font-size: 12px; color: var(--text-secondary, #909399); margin: 4px 0 6px; }
+.ip-location-popper { padding: 12px 14px; }
+/* 头部：IP 大字等宽 + 事件徽标 + 归属地行 */
+.ip-location-popper .ipo-head { margin-bottom: 10px; }
+.ip-location-popper .ipo-ip-row { display: flex; align-items: center; gap: 8px; }
+.ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; letter-spacing: .3px; }
+.ip-location-popper .ipo-loc-line { font-size: 12px; color: var(--text-secondary, #909399); margin-top: 3px; }
+/* 分区：标题 + 卡片流 */
+.ip-location-popper .ipo-sec { margin-top: 12px; }
+.ip-location-popper .ipo-sec-title { font-size: 12px; font-weight: 600; color: var(--el-text-color-regular, #606266); padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); margin-bottom: 8px; }
+/* 快速处置：存入一行 + 新建一行 */
+.ip-location-popper .ipo-save-row { display: flex; align-items: center; gap: 8px; }
+.ip-location-popper .ipo-list-select { flex: 1; min-width: 0; }
+.ip-location-popper .ipo-save-new { display: flex; margin-top: 8px; }
+.ip-location-popper .ipo-save-new .el-input { flex: 1; }
+/* 策略生效卡 */
+.ip-location-popper .ipo-card { border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: var(--el-fill-color-blank, #fff); }
+.ip-location-popper .ipo-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ip-location-popper .ipo-name { min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ip-location-popper .ipo-card-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ip-location-popper .ipo-count { font-size: 11px; color: var(--text-secondary, #909399); font-variant-numeric: tabular-nums; }
+.ip-location-popper .ipo-mode-line { font-size: 11px; color: var(--text-secondary, #909399); margin-top: 4px; }
+.ip-location-popper .ipo-status { font-size: 12px; color: var(--text-secondary, #909399); margin-top: 6px; }
 .ip-location-popper .ipo-status.is-ok { color: var(--el-color-success, #67c23a); }
 .ip-location-popper .ipo-status.is-warn { color: var(--el-color-warning, #e6a23c); }
-.ip-location-popper .ipo-legacy { font-size: 11px; color: var(--el-color-warning, #e6a23c); margin: -2px 0 6px; }
-.ip-location-popper .ipo-actions { display: flex; flex-wrap: wrap; gap: 0; }
-.ip-location-popper .ipo-actions .el-button + .el-button { margin-left: 8px; }
+.ip-location-popper .ipo-legacy { font-size: 11px; color: var(--el-color-warning, #e6a23c); margin-top: 4px; }
+/* 动作区：语义配色按钮流 */
+.ip-location-popper .ipo-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ip-location-popper .ipo-acts .el-button { margin-left: 0; }
+.ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
 </style>

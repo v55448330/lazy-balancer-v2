@@ -33,11 +33,12 @@
         </div>
       </div>
 
-      <!-- 引用地址列表成员明细 + 处置 -->
-      <div v-if="memberLists.length > 0" class="trg-members">
-        <div class="trg-members-title">此 IP 命中的地址列表</div>
+      <!-- 处置（第 58 轮统一模型）：命中列表移除 + 信任名单直接动作 -->
+      <div class="trg-handle">
+        <div class="trg-handle-title">处置</div>
+        <!-- 命中的引用地址列表（自定义名单可移除；内置只读仅提示） -->
         <div v-for="m in memberLists" :key="m.id" class="trg-member-row">
-          <span class="trg-member-name" :title="m.name">{{ m.name }}</span>
+          <span class="trg-member-name" :title="m.name">黑名单 · {{ m.name }}</span>
           <el-tag v-if="m.system" size="small" effect="plain">内置只读</el-tag>
           <el-button
             v-else
@@ -46,16 +47,35 @@
             plain
             :loading="busyListId === m.id"
             @click="removeFromList(m)"
-          >从此列表移除</el-button>
+          >从「{{ m.name }}」移除</el-button>
         </div>
         <div v-if="memberSystemTip" class="trg-tip">{{ memberSystemTip }}</div>
-      </div>
 
-      <!-- 内联黑名单处置 -->
-      <div v-if="inlineAclHit && triggerPolicy" class="trg-members">
-        <div class="trg-members-title">此 IP 在策略「{{ triggerPolicy.name }}」的内联黑名单中</div>
-        <el-button size="small" type="danger" plain @click="removeFromInlineAcl">从内联黑名单移除</el-button>
-        <div class="trg-tip">移除将修改策略配置并重载 Caddy</div>
+        <!-- 内联黑名单命中 -->
+        <div v-if="inlineAclHit && triggerPolicy" class="trg-member-row">
+          <span class="trg-member-name">黑名单 · 策略内联名单</span>
+          <el-button size="small" type="danger" plain @click="removeFromInlineAcl">从内联黑名单移除</el-button>
+        </div>
+
+        <!-- 信任名单直接动作：命中 → 移除；未命中 → 加入（无信任列表 → 创建并加入） -->
+        <div v-for="t in trustHitLists" :key="t.id" class="trg-member-row">
+          <span class="trg-member-name">信任 · {{ t.name }}</span>
+          <el-button size="small" type="success" plain :loading="creating" @click="removeTrust(t)">从「{{ t.name }}」移除信任</el-button>
+        </div>
+        <div v-if="trustInlineHit && triggerPolicy" class="trg-member-row">
+          <span class="trg-member-name">信任 · 策略内联名单</span>
+          <el-tag size="small" type="success" effect="plain">已在信任名单</el-tag>
+        </div>
+        <div v-if="showJoinTrust && triggerPolicy" class="trg-member-row">
+          <span class="trg-member-name">信任名单</span>
+          <el-button size="small" type="success" plain :loading="creating || busyTrust" @click="joinTrustAction">
+            {{ trustListLabel ? `加入信任名单「${trustListLabel}」` : `创建「${triggerPolicy.name}-信任」并加入` }}
+          </el-button>
+        </div>
+        <div v-if="joinTrustTip" class="trg-tip">{{ joinTrustTip }}</div>
+        <div v-if="!memberLists.length && !inlineAclHit && !trustHitLists.length && !trustInlineHit && !showJoinTrust" class="trg-tip">
+          此 IP 命中维度无需处置（{{ sourceCategoryLabel }}）
+        </div>
       </div>
     </div>
     <template #footer>
@@ -69,6 +89,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import { parseIPList, parseRefIds } from '@/utils/securityStages'
+import { useTrustAssociation } from '@/composables/useTrustAssociation'
 import type { APIResponse } from '@/types'
 
 const props = defineProps<{
@@ -97,7 +118,7 @@ interface PolicyRow {
   geoip_mode?: string
   geoip_countries?: string
 }
-interface ListRow { id: number; name: string; entry_count: number; system?: number }
+interface ListRow { id: number; name: string; entry_count: number; system?: boolean }
 
 const loading = ref(false)
 const policies = ref<PolicyRow[]>([])
@@ -271,6 +292,42 @@ const removeFromInlineAcl = async (): Promise<void> => {
   ElMessage.success('已从内联黑名单移除（策略已重载）')
 }
 
+// —— 信任名单直接动作（第 58 轮统一模型，与 IP 快捷弹框共享实现）——
+const { busyTrust, creating, resolveTrustList, joinTrust, removeFromTrustRef } = useTrustAssociation({
+  getList: () => lists.value,
+  onChanged: () => loadAll(),
+})
+const trustRefs = computed(() => {
+  const p = triggerPolicy.value
+  if (!p) return []
+  return parseRefIds(p.ip_whitelist_refs)
+})
+// 信任引用名单中包含此 IP 的自定义列表（可移除）
+const trustHitLists = computed(() => {
+  const p = triggerPolicy.value
+  if (!p) return []
+  return lists.value
+    .filter((l) => trustRefs.value.includes(l.id) && !l.system)
+    .filter((l) => (entriesCache.value[l.id] ?? []).includes(props.ip.trim()))
+})
+const trustInlineHit = computed(() => {
+  const p = triggerPolicy.value
+  return !!p && parseIPList(p.ip_whitelist).includes(props.ip.trim())
+})
+const trustListLabel = computed(() => resolveTrustList(triggerPolicy.value ?? { id: 0, name: '' })?.name ?? '')
+const showJoinTrust = computed(() => !!triggerPolicy.value && !trustInlineHit.value && trustHitLists.value.length === 0)
+const joinTrustTip = computed(() => {
+  const p = triggerPolicy.value
+  if (!p || !showJoinTrust.value) return ''
+  return p.ip_whitelist_enabled === false ? '该策略信任名单当前未启用：加入后暂不生效，启用后自动生效。' : ''
+})
+const joinTrustAction = async (): Promise<void> => {
+  const p = triggerPolicy.value
+  if (!p) return
+  await joinTrust(p, props.ip.trim())
+}
+const removeTrust = (t: { id: number; name: string }): Promise<void> => removeFromTrustRef(t, props.ip.trim())
+
 watch(() => props.modelValue, (v) => {
   if (v) void loadAll()
 })
@@ -292,9 +349,12 @@ watch(() => props.modelValue, (v) => {
 .trg-policy-body { display: grid; gap: 4px; }
 .trg-kv { display: flex; gap: 8px; font-size: 13px; }
 .trg-kv .k { color: var(--el-text-color-secondary); flex-shrink: 0; width: 64px; }
+.trg-handle { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; }
+.trg-handle-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .trg-members { margin-top: 4px; }
 .trg-members-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-.trg-member-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
+.trg-member-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.trg-member-row:last-of-type { border-bottom: none; }
 .trg-member-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trg-tip { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 6px; }
 </style>
