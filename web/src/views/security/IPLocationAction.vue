@@ -17,42 +17,6 @@
       <div v-if="location" class="ipo-loc-line">{{ location }}</div>
     </div>
 
-    <div class="ipo-sec">
-      <div class="ipo-sec-title">存入地址列表</div>
-      <div class="ipo-save-row">
-        <el-select
-          v-model="selectedListId"
-          filterable
-          clearable
-          :teleported="false"
-          placeholder="选择列表"
-          size="small"
-          class="ipo-list-select"
-        >
-          <el-option v-for="list in ipLists" :key="list.id" :label="ipListOptionLabel(list)" :value="list.id" />
-        </el-select>
-        <el-button
-          size="small"
-          type="primary"
-          plain
-          :disabled="selectedListId === undefined || savingToList"
-          :loading="savingToList"
-          @click="saveToListAction"
-        >存入</el-button>
-      </div>
-      <div class="ipo-save-new">
-        <el-input
-          v-model="newListName"
-          size="small"
-          placeholder="新建列表名"
-          :disabled="creatingList"
-          @keyup.enter="createListInline"
-        >
-          <template #append><el-button size="small" :loading="creatingList" @click="createListInline">新建</el-button></template>
-        </el-input>
-      </div>
-    </div>
-
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <el-alert v-else-if="policiesError" type="error" :closable="false" title="策略列表加载失败" />
     <template v-else-if="rows.length > 0">
@@ -98,7 +62,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
-import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
 import { useTrustAssociation } from '@/composables/useTrustAssociation'
 import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
@@ -193,7 +156,7 @@ const trustApi = useTrustAssociation({
   getList: () => ipLists.value,
   onChanged: () => loadPolicies(),
 })
-const { busyTrust, creating: trustCreating, resolveTrustList, joinTrust, removeFromTrustRef } = trustApi
+const { busyTrust, creating: trustCreating, resolveSideList, ensureListAndJoin, removeFromSideRef } = trustApi
 
 const policies = ref<PolicyRow[]>([])
 const policiesLoading = ref(false)
@@ -204,8 +167,6 @@ const busyKeys = ref<Set<string>>(new Set())
 // 明确反馈），不再作为名单写入后的隐式自动追加；确认/幂等 POST/反馈复用
 // useIpListAdd 共享实现（与 SecurityEvents 事件弹框「加入列表」同一链路） ——
 const ipLists = ref<IpListOption[]>([])
-const selectedListId = ref<number | undefined>(undefined)
-const { adding: savingToList, addIpToList } = useIpListAdd()
 
 // 引用列表条目缓存：v2.3.2 起 /security/ip-lists 列表载荷不再内联 entries
 // （大名单 460KB/行），条目值按需经 GET /security/ip-lists/:id 拉取——
@@ -243,103 +204,13 @@ const loadIpLists = async (): Promise<void> => {
     ipLists.value = []
     ipListEntries.value = {}
   }
-  // 列表已在别处删除时清理悬空选择，避免静默写往不存在的列表
-  if (selectedListId.value !== undefined && !ipLists.value.some((l) => l.id === selectedListId.value)) {
-    selectedListId.value = undefined
-  }
 }
 
 
-const topListSelected = computed(() => selectedListId.value !== undefined)
-const selectedListName = computed(() => ipLists.value.find((l) => l.id === selectedListId.value)?.name ?? '')
 
-const newListName = ref('')
-const creatingList = ref(false)
-const createListInline = async (): Promise<void> => {
-  const name = newListName.value.trim()
-  if (name === '' || creatingList.value) return
-  creatingList.value = true
-  try {
-    const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', { name, entries: '[]' })
-    const newId = (res.data as unknown as { id: number } | undefined)?.id
-    if (newId) {
-      await loadIpLists()
-      selectedListId.value = newId
-      newListName.value = ''
-      ElMessage.success(`已创建列表「${name}」，可存入 IP 并关联到策略`)
-    }
-  } finally {
-    creatingList.value = false
-  }
-}
 
-// 关联所选列表到策略对应用途的引用字段，并存入此 IP（第 57 轮统一模型）
-const associateListAndAdd = async (policy: PolicyRow): Promise<void> => {
-  if (selectedListId.value === undefined || !lockBusy(policy.id, 'associate')) return
-  try {
-    const kind: 'deny' | 'allow' = policy.ip_acl_mode === 'allow' ? 'allow' : 'deny'
-    const kindLabel = kind === 'allow' ? '白名单' : '黑名单'
-    const refField = kind === 'allow' ? 'ip_whitelist_refs' : 'ip_acl_list_refs'
-    const detail = await fetchDetail(policy.id)
-    if (!detail) return
-    const refs = parseRefIds(detail[refField as 'ip_acl_list_refs' | 'ip_whitelist_refs'])
-    if (refs.includes(selectedListId.value)) {
-      ElMessage.info(`列表已关联到策略「${policy.name}」`)
-      return
-    }
-    await ElMessageBox.confirm(
-      `将把地址列表「${selectedListName.value}」关联到策略「${policy.name}」的${kindLabel}，并加入 ${props.ip}。是否继续？`,
-      '关联地址列表',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-    )
-    const res = await request.put(`/security/policies/${policy.id}`, { [refField]: JSON.stringify([...refs, selectedListId.value]) })
-    showSaveResult(res as unknown as { message?: string }, `已关联并加入 ${props.ip}`)
-    await addIpToRefList(selectedListId.value)
-    await refreshRow(policy.id)
-  } finally {
-    unlockBusy(policy.id, 'associate')
-  }
-}
 
-// 从引用列表移除单条 IP（POST remove-ip，幂等）并刷新策略行状态
-const removeFromRefList = async (policy: PolicyRow, list: { id: number; name: string }): Promise<void> => {
-  if (!lockBusy(policy.id, 'remove-ref-' + list.id)) return
-  try {
-    await ElMessageBox.confirm(
-      `将从地址列表「${list.name}」移除 ${props.ip}。该列表可能被多条策略引用，移除全局生效。是否继续？`,
-      '从地址列表移除',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
-    )
-    await request.post(`/security/ip-lists/${list.id}/remove-ip`, { value: props.ip })
-    ElMessage.success(`已从「${list.name}」移除`)
-    const next = { ...ipListEntries.value, [list.id]: (ipListEntries.value[list.id] ?? []).filter((v) => v !== props.ip.trim()) }
-    ipListEntries.value = next
-    await refreshRow(policy.id)
-  } finally {
-    unlockBusy(policy.id, 'remove-ref-' + list.id)
-  }
-}
 
-const addIpToRefList = async (listId: number): Promise<void> => {
-  try {
-    await request.post(`/security/ip-lists/${listId}/ips`, { value: props.ip })
-    const next = { ...ipListEntries.value, [listId]: [...(ipListEntries.value[listId] ?? []), props.ip.trim()] }
-    ipListEntries.value = next
-  } catch { /* 全局拦截器已提示 */ }
-}
-
-const saveToListAction = async (): Promise<void> => {
-  if (selectedListId.value === undefined || savingToList.value) return
-  const list = ipLists.value.find((l) => l.id === selectedListId.value)
-  if (!list) return
-  const done = await addIpToList(props.ip, list, { verb: '存入', successText: `已存入列表「${list.name}」` })
-  if (done) {
-    // 条目缓存写回：会话内缓存后新存 IP 必须即时反映在成员判定上
-    const merged = new Set([...(ipListEntries.value[list.id] ?? []), props.ip.trim()])
-    ipListEntries.value = { ...ipListEntries.value, [list.id]: [...merged] }
-    await loadIpLists()
-  }
-}
 
 // 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导 mergeIpEntries 同口径）；
 // 缓存中缺失的引用列表跳过（防御性回退为仅内联）
@@ -588,30 +459,44 @@ const rowActions = (row: RowView): RowAction[] => {
   const acts: RowAction[] = []
   const pid = row.policy.id
   if (row.canAddTrust) {
-    const list = resolveTrustList(row.policy)
+    const list = resolveSideList(row.policy, 'trust')
     acts.push({
       key: 'trust',
       label: list ? `信任此 IP（加入「${list.name}」）` : `信任此 IP（创建「${row.policy.name}-信任」）`,
       type: 'success',
       loading: busyTrust.value || trustCreating.value,
       tip: row.trustEnabled ? undefined : '该策略信任名单已关闭：加入后暂不生效，启用后自动生效',
-      run: () => { void joinTrust(row.policy, props.ip.trim()) },
+      run: () => { void ensureListAndJoin(row.policy, props.ip.trim(), 'trust') },
     })
   }
   if (row.canRemove) {
     acts.push({ key: 'rm-inline', label: '从内联黑名单移除', type: 'danger', loading: isBusy(pid, 'remove'), run: () => { void removeFromAcl(row.policy) } })
   }
   for (const m of row.removableRefLists) {
-    acts.push({ key: `rm-${m.id}`, label: `从「${m.name}」移除`, type: 'danger', loading: isBusy(pid, `remove-ref-${m.id}`), run: () => { void removeFromRefList(row.policy, m) } })
+    acts.push({ key: `rm-${m.id}`, label: `从「${m.name}」移除`, type: 'danger', loading: isBusy(pid, `remove-ref-${m.id}`), run: () => { void removeFromSideRef(m, props.ip.trim()) } })
   }
-  if (row.canAssociate && topListSelected.value) {
-    acts.push({ key: 'assoc', label: `关联「${selectedListName.value}」并拦截此 IP`, type: 'danger', loading: isBusy(pid, 'associate'), run: () => { void associateListAndAdd(row.policy) } })
+  if (row.canAssociate) {
+    const list = resolveSideList(row.policy, 'deny')
+    acts.push({
+      key: 'assoc',
+      label: list ? `拦截此 IP（加入「${list.name}」）` : `拦截此 IP（创建「${row.policy.name}-黑名单」）`,
+      type: 'danger',
+      loading: isBusy(pid, 'associate'),
+      run: () => { void ensureListAndJoin(row.policy, props.ip.trim(), 'deny') },
+    })
   }
-  if (row.canAssociateAllow && topListSelected.value) {
-    acts.push({ key: 'assoc-a', label: `关联「${selectedListName.value}」并加入白名单`, type: 'primary', loading: isBusy(pid, 'associate-allow'), run: () => { void associateListAndAdd(row.policy) } })
+  if (row.canAssociateAllow) {
+    const list = resolveSideList(row.policy, 'allow')
+    acts.push({
+      key: 'assoc-a',
+      label: list ? `放行此 IP（加入「${list.name}」）` : `放行此 IP（创建「${row.policy.name}-白名单」）`,
+      type: 'primary',
+      loading: isBusy(pid, 'associate-allow'),
+      run: () => { void ensureListAndJoin(row.policy, props.ip.trim(), 'allow') },
+    })
   }
   for (const m of row.removableTrustRefLists) {
-    acts.push({ key: `unt-${m.id}`, label: `从「${m.name}」移除信任`, type: 'success', run: () => { void removeFromTrustRef(m, props.ip.trim()) } })
+    acts.push({ key: `unt-${m.id}`, label: `从「${m.name}」移除信任`, type: 'success', run: () => { void removeFromSideRef(m, props.ip.trim()) } })
   }
   if (row.canRemoveTrust) {
     acts.push({ key: 'unt-in', label: '从内联信任移除', type: 'success', loading: isBusy(pid, 'untrust'), run: () => { void removeTrust(row.policy) } })

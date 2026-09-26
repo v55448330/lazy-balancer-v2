@@ -8,42 +8,29 @@
     @close="emit('update:modelValue', false)"
   >
     <div v-loading="loading">
-      <!-- ① 触发来源卡：类型标签 + IP + 归属地 + 语义行（全类型同构） -->
-      <div class="trg-source" :class="`trg-source--${kind}`">
-        <div class="trg-source-head">
+      <!-- ① 命中概览：阶段 → 策略 → 命中源（一眼可读） -->
+      <div class="trg-hero" :class="`trg-source--${kind}`">
+        <div class="trg-hero-row">
           <el-tag size="small" :type="sourceTagType" effect="dark">{{ categoryLabel }}</el-tag>
-          <span class="trg-source-ip">{{ row?.client_ip }}</span>
+          <span class="trg-hero-stage">{{ heroStage }}</span>
+          <span class="trg-hero-ip">{{ row?.client_ip }}</span>
           <span v-if="geoLabel" class="trg-source-geo">{{ geoLabel }}</span>
         </div>
-        <div class="trg-source-line">{{ sourceLine }}</div>
+        <div class="trg-hero-policy">
+          <span class="trg-hero-policy-name">{{ policy?.name ?? '（策略已删除）' }}</span>
+          <el-tag size="small" :type="policy?.enabled ? 'success' : 'info'" effect="plain">
+            {{ policy?.enabled ? '已启用' : '已禁用' }}
+          </el-tag>
+        </div>
+        <div class="trg-hero-hit">{{ heroHitSource }}</div>
       </div>
 
-      <!-- ② 策略卡：归属策略的关键配置摘要（全类型同构） -->
+      <!-- ② 策略配置与命中明细（仅展示与本次触发相关的维度；零操作，处置在 IP 快捷弹框） -->
       <div class="trg-card">
-        <div class="trg-card-title">归属策略</div>
-        <template v-if="policy">
-          <div class="trg-policy-head">
-            <span class="trg-policy-name">{{ policy.name }}</span>
-            <el-tag size="small" effect="plain">{{ policyTypeLabel }}</el-tag>
-            <el-tag size="small" :type="policy.enabled ? 'success' : 'info'" effect="plain">
-              {{ policy.enabled ? '已启用' : '已禁用' }}
-            </el-tag>
-          </div>
-          <div class="trg-policy-body">
-            <div class="trg-kv"><span class="k">IP 黑白名单</span><span>{{ aclSummary }}</span></div>
-            <div class="trg-kv"><span class="k">信任名单</span><span>{{ trustSummary }}</span></div>
-            <div class="trg-kv"><span class="k">地域拦截</span><span>{{ geoSummary }}</span></div>
-            <div class="trg-kv"><span class="k">WAF</span><span>{{ wafSummary }}</span></div>
-          </div>
-        </template>
-        <div v-else-if="policyMissing" class="trg-tip">归属策略已删除（事件保留为历史记录）</div>
-      </div>
+        <div class="trg-card-title">策略配置 · {{ dimensionTitle }}</div>
+        <div class="trg-kv"><span class="k">当前配置</span><span>{{ relevantSummary }}</span></div>
 
-      <!-- ③ 规则/明细卡：按触发类型展示全部相关内容（信息为主；CRS 排除为规则级管理动作） -->
-      <div class="trg-card">
-        <div class="trg-card-title">{{ detailCardTitle }}</div>
-
-        <!-- IP 黑白名单 / 地域 / 威胁情报库：命中的地址列表与内联名单（只读信息） -->
+        <!-- 命中的地址列表与内联名单（只读信息） -->
         <template v-if="kind === 'acl' || kind === 'geo' || kind === 'threat'">
           <div v-for="m in memberLists" :key="m.id" class="trg-kv">
             <span class="k">命中列表</span>
@@ -61,7 +48,7 @@
           <div class="trg-kv"><span class="k">信任语义</span><span>{{ policy?.trust_detection === true ? '保留检测：继续后续阶段评估，事件动作=检测' : '直通上游：跳过后续安全阶段，不产生拦截' }}</span></div>
         </template>
 
-        <!-- WAF · CRS：规则详情 + 源码折叠 + 快捷排除（规则级管理动作） -->
+        <!-- WAF · CRS：规则信息 + 源码折叠（只读） -->
         <template v-else-if="kind === 'waf-crs'">
           <div class="trg-kv"><span class="k">规则 ID</span><span>{{ row?.rule_triggered }}</span></div>
           <div class="trg-kv">
@@ -99,23 +86,6 @@
               <div v-else-if="!crsSnippetLoading" class="crs-snippet-empty">未在该文件中定位到规则定义（规则文件可能已更新）</div>
             </div>
           </template>
-          <!-- 快捷排除 = 规则级管理动作（非 IP 处置）；误报治理入口 -->
-          <div class="crs-action-group">
-            <div class="crs-action-group-title">快捷排除（误报治理）</div>
-            <div class="crs-action-row">
-              <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled" aria-label="快捷排除范围">
-                <el-radio value="ip">仅排除该 IP（{{ row?.client_ip }}）</el-radio>
-                <el-radio value="all">所属策略不限 IP</el-radio>
-              </el-radio-group>
-              <el-button type="primary" class="crs-exclude-submit" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
-            </div>
-            <div v-if="crsPolicyState !== 'ok'" class="trg-tip">
-              <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
-              <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
-              <template v-else>策略状态加载失败，请关闭后重试</template>
-            </div>
-            <div v-else-if="crsAlreadyExcluded" class="trg-tip">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
-          </div>
         </template>
 
         <!-- WAF · 自定义规则：规则完整明细 -->
@@ -158,14 +128,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
-import { showSaveResult } from '@/utils/saveResult'
 import { parseIPList, parseRefIds } from '@/utils/securityStages'
-import { useCrsRuleIndex, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
-import type { CrsExcludedRow } from '@/composables/useCrsRuleIndex'
-import { useAuthStore } from '@/stores/auth'
+import { useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
 import type { APIResponse } from '@/types'
 
 // 第 58 轮（用户裁定）：统一触发详情弹框——全部触发类型（IP 黑白名单/地域/威胁
@@ -190,9 +156,6 @@ const props = defineProps<{
   row: TriggerRow | null
 }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
-
-const authStore = useAuthStore()
-const canManage = computed(() => authStore.readOnlyReason === null)
 
 type Kind = 'acl' | 'geo' | 'threat' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'other'
 
@@ -226,11 +189,70 @@ const sourceTagType = computed(() =>
       : kind.value === 'trust' ? 'success'
         : kind.value === 'waf-custom' || kind.value === 'acl' ? 'danger' : 'info')
 
-const detailCardTitle = computed(() => {
+
+// 命中概览（用户裁定：一眼可读）——阶段名 / 命中源
+const heroStage = computed(() => {
   switch (kind.value) {
-    case 'waf-crs': return 'CRS 规则明细'
-    case 'waf-custom': return '自定义规则明细'
-    default: return '命中明细'
+    case 'trust': return '阶段 0 · 信任名单'
+    case 'acl': return '阶段 1 · IP 访问控制'
+    case 'geo': return '阶段 1 · 地域拦截'
+    case 'threat': return '阶段 1 · 威胁情报库'
+    case 'waf-crs': case 'waf-custom': return '阶段 3 · WAF'
+    case 'body': return '阶段 3 · 请求体检测'
+    default: return '安全防护'
+  }
+})
+const dimensionTitle = computed(() => {
+  switch (kind.value) {
+    case 'trust': return '信任名单'
+    case 'acl': return 'IP 黑白名单'
+    case 'geo': return '地域拦截'
+    case 'threat': return '威胁情报库'
+    case 'waf-crs': case 'waf-custom': return 'WAF'
+    case 'body': return '请求体检测'
+    default: return 'IP 黑白名单'
+  }
+})
+// 相关维度配置摘要：只展示与本次触发相关的维度
+const relevantSummary = computed(() => {
+  switch (kind.value) {
+    case 'trust': return trustSummary.value
+    case 'geo': return geoSummary.value
+    case 'threat': return `威胁情报库引用 · ${aclSummary.value}`
+    case 'waf-crs': case 'waf-custom': return wafSummary.value
+    case 'body': return '—'
+    default: return aclSummary.value
+  }
+})
+
+// 命中源：具体到规则或地址列表（用户裁定：一眼看出触发了哪条规则/哪个列表）
+const heroHitSource = computed(() => {
+  const ev = props.row
+  if (!ev) return '—'
+  switch (kind.value) {
+    case 'acl': {
+      if (inlineAclHit.value) return `策略内联黑名单（规则 id:${ev.rule_triggered}）`
+      if (memberLists.value.length > 0) return memberLists.value.map((m) => `地址列表「${m.name}」`).join('、')
+      return `规则 id:${ev.rule_triggered}${ev.rule_name ? ` · ${ev.rule_name}` : ''}`
+    }
+    case 'geo':
+      return `地域拦截规则 id:${ev.rule_triggered}（区域：${geoLabel.value || '未知'}）`
+    case 'threat': {
+      const names = threatSourceLists.value.map((l) => `「${l.name}」`)
+      return names.length > 0 ? `威胁情报库 ${names.join('、')}` : `威胁情报库预检（id:${ev.rule_triggered}）`
+    }
+    case 'trust': {
+      const t = trustHitListsText.value
+      return t ? `信任名单「${t}」` : '策略信任名单'
+    }
+    case 'waf-crs':
+      return `CRS 规则 ${ev.rule_triggered}${crsEntry.value?.msg ? ` · ${crsEntry.value.msg}` : ''}`
+    case 'waf-custom':
+      return customRule.value ? `自定义规则「${customRule.value.name}」` : `自定义规则 id:${customDbId.value}`
+    case 'body':
+      return '请求体解析失败'
+    default:
+      return `规则 id:${ev.rule_triggered}`
   }
 })
 
@@ -299,11 +321,6 @@ const loadAll = async (): Promise<void> => {
   }
 }
 
-const policyTypeLabel = computed(() => {
-  const t = policy.value?.policy_type ?? ''
-  const map: Record<string, string> = { stage0: '阶段 0 · 信任名单', stage1: '阶段 1 · IP 访问控制', stage2: '阶段 2 · 限流', stage3: '阶段 3 · WAF', mixed: '存量混合' }
-  return map[t] ?? t ?? '—'
-})
 
 const geoLabel = computed(() => {
   try {
@@ -357,26 +374,6 @@ const wafSummary = computed(() => {
 })
 
 // —— 来源语义行 ——
-const sourceLine = computed(() => {
-  switch (kind.value) {
-    case 'geo':
-      return `策略的地域拦截规则命中（来源区域：${geoLabel.value || '未知'}）`
-    case 'threat': {
-      const hit = threatSourceLists.value.map((l) => l.name)
-      return hit.length > 0 ? `威胁情报库预检命中：${hit.join('、')}` : '威胁情报库预检命中'
-    }
-    case 'trust':
-      return '来源 IP 命中信任名单（保留检测/直通语义，见策略详情）'
-    case 'waf-crs':
-      return `CRS 规则 ${props.row?.rule_triggered} 命中${props.row?.action === 'blocked' ? '（阻断）' : '（检测）'}`
-    case 'waf-custom':
-      return `自定义规则命中（${props.row?.action === 'blocked' ? '阻断' : '检测/记录'}）`
-    case 'body':
-      return '请求体解析失败'
-    default:
-      return '来源 IP 命中策略黑名单'
-  }
-})
 
 // —— ACL/威胁/信任命中明细（只读信息） ——
 const threatSourceLists = computed(() => {
@@ -459,31 +456,20 @@ const loadCustomRule = async (): Promise<void> => {
 
 // —— WAF · CRS：索引 + 源码片段 + 快捷排除（自 SecurityEvents CRS 弹框整体迁入）——
 const { loading: crsIndexLoading, loaded: crsIndexReady, byId: crsIndexById, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
-const crsExcludeScope = ref<'ip' | 'all'>('ip')
-const crsSubmitting = ref(false)
+let crsDialogSeq = 0
+
+const crsEntry = computed(() => (props.row ? crsIndexById.value.get(props.row.rule_triggered) ?? null : null))
+
+// 源码片段状态（只读展示；展开时按需拉取）
 const crsSnippet = ref('')
 const crsSnippetLoading = ref(false)
 const crsSnippetExpanded = ref(false)
 const crsSnippetFetched = ref(false)
 const crsSnippetError = ref(false)
-const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'error'>('checking')
-const crsExistingRows = ref<CrsExcludedRow[]>([])
-let crsDialogSeq = 0
+// 弹框会话序号：关闭/重开丢弃在途的索引与源码返回
 
-const crsEntry = computed(() => (props.row ? crsIndexById.value.get(props.row.rule_triggered) ?? null : null))
 
-const crsAlreadyExcluded = computed<boolean>(() => {
-  const ev = props.row
-  if (!ev) return false
-  return crsExistingRows.value.some((r) =>
-    r.target === ev.rule_triggered
-    && r.scope === crsExcludeScope.value
-    && (crsExcludeScope.value !== 'ip' || r.ips.includes(ev.client_ip)))
-})
 
-const crsActionDisabled = computed(() =>
-  !canManage.value || crsPolicyState.value !== 'ok' || crsSubmitting.value
-  || (crsEntry.value === null && crsIndexReady.value))
 
 const extractRuleSnippet = (content: string, ruleId: string): string => {
   const needles = [`id:${ruleId}`, `id: ${ruleId}`, `id:'${ruleId}'`, `id:"${ruleId}"`]
@@ -493,21 +479,6 @@ const extractRuleSnippet = (content: string, ruleId: string): string => {
   return lines.slice(Math.max(0, idx - 10), Math.min(lines.length, idx + 11)).join('\n')
 }
 
-const checkCrsPolicy = async (policyId: number, seq: number): Promise<void> => {
-  try {
-    const res = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${policyId}`, { silent: true } as never)
-    if (seq !== crsDialogSeq) return
-    if (!res.data?.policy) {
-      crsPolicyState.value = 'missing'
-      return
-    }
-    crsExistingRows.value = parseCrsExcludedRules(res.data.policy.crs_excluded_rules)
-    crsPolicyState.value = 'ok'
-  } catch (error: unknown) {
-    if (seq !== crsDialogSeq) return
-    crsPolicyState.value = error instanceof Error && 'status' in error && (error as { status?: number }).status === 404 ? 'missing' : 'error'
-  }
-}
 
 const toggleCrsSnippet = async (): Promise<void> => {
   crsSnippetExpanded.value = !crsSnippetExpanded.value
@@ -532,50 +503,6 @@ const toggleCrsSnippet = async (): Promise<void> => {
   }
 }
 
-const confirmCrsExclude = async (): Promise<void> => {
-  const ev = props.row
-  if (!ev || crsActionDisabled.value) return
-  const scopeText = crsExcludeScope.value === 'ip' ? `仅排除来源 IP ${ev.client_ip}` : '所属策略不限 IP'
-  try {
-    await ElMessageBox.confirm(
-      `将把规则 ${ev.rule_triggered} 加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单（${scopeText}），保存后立即生效并重载。是否继续？`,
-      '确认排除规则',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch { return }
-  crsSubmitting.value = true
-  try {
-    const detailRes = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${ev.policy_id}`)
-    const detail = detailRes.data?.policy
-    if (!detail) throw new Error('策略详情响应缺少数据')
-    const rows = parseCrsExcludedRules(detail.crs_excluded_rules)
-    const scope = crsExcludeScope.value
-    const ips = scope === 'ip' ? [ev.client_ip] : []
-    if (rows.some((r) => r.target === ev.rule_triggered && r.scope === scope && r.ips.join(',') === ips.join(',') && r.listRefs.length === 0)) {
-      ElMessage.info('该排除已存在于所属策略')
-      emit('update:modelValue', false)
-      return
-    }
-    if (rows.length >= CRS_EXCLUDED_MAX_ROWS) {
-      ElMessage.error(`所属策略的排除清单已达 ${CRS_EXCLUDED_MAX_ROWS} 条上限，请在策略向导中整理`)
-      return
-    }
-    rows.push({ target: ev.rule_triggered, scope, ips, listRefs: [] })
-    const wireRows = rows.map((r) => ({
-      target: r.target,
-      scope: r.scope,
-      ips: r.scope === 'ip' ? r.ips.join(',') : '',
-      listRefs: r.scope === 'list' ? r.listRefs : [],
-    }))
-    const res = await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(wireRows) })
-    showSaveResult(res as unknown as { message?: string }, `已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单`)
-    emit('update:modelValue', false)
-  } catch {
-    // 失败提示由全局拦截器弹出
-  } finally {
-    crsSubmitting.value = false
-  }
-}
 
 // —— 装载编排 ——
 watch(() => props.modelValue, (v) => {
@@ -583,19 +510,11 @@ watch(() => props.modelValue, (v) => {
   void loadAll()
   if (kind.value === 'waf-crs') {
     const seq = ++crsDialogSeq
-    crsExcludeScope.value = 'ip'
     crsSnippet.value = ''
     crsSnippetLoading.value = false
     crsSnippetExpanded.value = false
     crsSnippetFetched.value = false
     crsSnippetError.value = false
-    crsExistingRows.value = []
-    if (props.row && props.row.policy_id > 0) {
-      crsPolicyState.value = 'checking'
-      void checkCrsPolicy(props.row.policy_id, seq)
-    } else {
-      crsPolicyState.value = 'missing'
-    }
     void ensureCrsRuleIndex(seq)
   }
   if (kind.value === 'waf-custom') void loadCustomRule()

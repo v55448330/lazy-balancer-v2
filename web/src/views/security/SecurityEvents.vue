@@ -58,8 +58,8 @@
             >全选</el-checkbox>
           </template>
           <el-option label="信任名单" value="信任名单" title="阶段 0 信任名单（id 3/12）" />
-          <el-option label="IP 访问控制" value="IP 访问控制,地域拦截,威胁情报库" title="黑白名单、地域拦截、威胁情报库（阶段 1 合并：id 2/4/5/7/800xxx/14）" />
-          <el-option label="WAF" value="WAF 规则（CRS）,自定义规则" title="CRS 规则与自定义规则（阶段 3）" />
+          <el-option label="IP 访问控制" value="IP 访问控制" title="黑白名单、地域拦截、威胁情报库（阶段 1 合并：id 2/4/5/7/800xxx/14）" />
+          <el-option label="WAF" value="WAF" title="CRS 规则与自定义规则（阶段 3）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
         </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
@@ -358,25 +358,28 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 
-// 触发规则筛选的 6 个类别（与后端 family 映射对齐，硬编码）；手输的自定义 tag
-//（如 CRS 规则 ID 942100）不属类别、不参与全选判定
-const TRIGGERED_CATEGORIES = ['IP 访问控制', '地域拦截', '威胁情报库', '请求体异常', 'WAF 规则（CRS）', '自定义规则'] as const
+// 触发阶段筛选为固定预置四类（第 58 轮用户裁定：固定预置值，不接受任意值）。
+// 令牌 → 后端族段映射：请求侧展开为族名逗号串（后端逐段 OR）。
+const TRIGGERED_CATEGORIES = ['信任名单', 'IP 访问控制', 'WAF', '请求体异常'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
-const isTriggeredCategory = (v: string): v is TriggeredCategory => (TRIGGERED_CATEGORIES as readonly string[]).includes(v)
+const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
+  '信任名单': ['信任名单'],
+  'IP 访问控制': ['IP 访问控制', '地域拦截', '威胁情报库'],
+  'WAF': ['WAF 规则（CRS）', '自定义规则'],
+  '请求体异常': ['请求体异常'],
+}
 
 const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
 
-// 头部全选复选框三态：6 类别全中=全选（自定义 tag 不影响判定）；部分中=半选
+// 头部全选复选框三态：四类全中=全选；部分中=半选
 const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
 const triggeredIndeterminate = computed(() => {
-  const selected = filters.value.rule_triggered
-  const hit = TRIGGERED_CATEGORIES.filter((c) => selected.includes(c)).length
+  const hit = TRIGGERED_CATEGORIES.filter((c) => filters.value.rule_triggered.includes(c)).length
   return hit > 0 && hit < TRIGGERED_CATEGORIES.length
 })
-// 全选复选框只管辖 6 个类别：勾选=类别全中、取消=类别全清，均保留自定义 tag
+// 全选：勾选=四类全选、取消=全清（固定预置值，无自定义形态）
 const toggleTriggeredAll = (checked: CheckboxValueType) => {
-  const custom = filters.value.rule_triggered.filter((v) => !isTriggeredCategory(v))
-  filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES, ...custom] : custom
+  filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES] : []
 }
 
 const applyFilters = () => {
@@ -423,11 +426,12 @@ const fetchEvents = async () => {
     // 触发规则：全选（6 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；
     // 子集（1~5 个类别）或含自定义 tag 时，全部选中值英文逗号连接发送 rule_triggered
     //（后端逐段独立解析、OR 连接；含逗号的消息关键词会整串回退为消息搜索，前端只管连接）
-    const triggeredSelected = filters.value.rule_triggered
+    const triggeredSelected = filters.value.rule_triggered.filter((v): v is TriggeredCategory =>
+      (TRIGGERED_CATEGORIES as readonly string[]).includes(v))
     const triggeredAllHit = TRIGGERED_CATEGORIES.every((c) => triggeredSelected.includes(c))
-    const triggeredHasCustom = triggeredSelected.some((v) => !isTriggeredCategory(v))
-    if (triggeredSelected.length > 0 && (!triggeredAllHit || triggeredHasCustom)) {
-      p.set('rule_triggered', triggeredSelected.join(','))
+    if (triggeredSelected.length > 0 && !triggeredAllHit) {
+      const segments = triggeredSelected.flatMap((c) => TRIGGERED_FAMILY_SEGMENTS[c])
+      p.set('rule_triggered', segments.join(','))
     }
     if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
     if (filters.value.uri) p.set('uri', filters.value.uri)
