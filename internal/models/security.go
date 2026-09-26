@@ -268,6 +268,9 @@ type SecurityOverview struct {
 	Trend              []SecurityTrendPoint `json:"trend"`
 	TopIPs             []SecurityTopIP      `json:"top_ips"`
 	AttackTypes        []SecurityAttackType `json:"attack_types"`
+	// AttackTypesStage 阶段五桶（信任名单/IP 访问控制/WAF/请求体异常/其他）——
+	// 第 58 轮用户裁定：总览分布图默认按阶段，取消勾选切回具体分类
+	AttackTypesStage []SecurityAttackType `json:"attack_types_stage"`
 }
 
 type SecurityTrendPoint struct {

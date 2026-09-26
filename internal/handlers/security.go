@@ -3218,6 +3218,40 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	}
 }
 
+// stageCategorizeAttack 阶段五桶归并（第 58 轮用户裁定：攻击类型分布默认按
+// 阶段展示，取消勾选切回 categorizeAttack 具体分类）——与触发阶段口径一致：
+//
+//	信任名单（id 3/12）/ IP 访问控制（黑白名单 2/4/5/7 + 地域 8/8xxxxx +
+//	威胁库 14/msg）/ WAF（CRS 9xxxxx + 自定义 5 位与 1 开头 ≥7 位合成）/
+//	请求体异常（id 11）/ 其他。
+//
+// 判定顺序与 categorizeAttack 同构：5 位自定义先行（避免 9 前缀遮蔽），再
+// CRS 前缀族，再精确 id/形态族。与 family 筛选表（ruleTriggeredFamilyPrefixes
+// /customRuleFamilyCondition/geoipFamilyCondition）三侧同口径。
+func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
+	switch {
+	case len(ruleTriggered) == 5:
+		return "WAF"
+	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
+		return "WAF"
+	case strings.HasPrefix(ruleTriggered, "9"):
+		return "WAF"
+	case ruleTriggered == "11":
+		return "请求体异常"
+	case ruleTriggered == "14" || strings.Contains(ruleMsg, "威胁情报库拦截"):
+		return "IP 访问控制"
+	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+		return "IP 访问控制"
+	case ruleTriggered == "3" || ruleTriggered == "12":
+		return "信任名单"
+	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
+		ruleTriggered == "2" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
+		return "IP 访问控制"
+	default:
+		return "其他"
+	}
+}
+
 // joinDistinctFamilies renders a per-IP attack_type: distinct families ordered by
 // frequency desc (name asc on ties), joined by 、. An empty map (no events) yields "".
 func joinDistinctFamilies(counts map[string]int) string {
@@ -3372,16 +3406,25 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	typeRows, err := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY rule_triggered, rule_msg`, todayStartUTC)
 	trackErr(err)
 	familyCounts := map[string]int{}
+	stageCounts := map[string]int{}
 	for typeRows != nil && typeRows.Next() {
 		var ruleTriggered, ruleMsg string
 		var cnt int
 		trackErr(typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt))
 		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
+		stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
 	if typeRows != nil {
 		trackErr(typeRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
 		typeRows.Close()
 	}
+	attackTypesStage := make([]models.SecurityAttackType, 0, len(stageCounts))
+	for name, value := range stageCounts {
+		attackTypesStage = append(attackTypesStage, models.SecurityAttackType{Name: name, Value: value})
+	}
+	sort.Slice(attackTypesStage, func(i, j int) bool { return attackTypesStage[i].Value > attackTypesStage[j].Value })
+	overview.AttackTypesStage = attackTypesStage
+
 	attackTypes := make([]models.SecurityAttackType, 0, len(familyCounts))
 	for name, value := range familyCounts {
 		attackTypes = append(attackTypes, models.SecurityAttackType{Name: name, Value: value})

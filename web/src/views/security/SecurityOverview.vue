@@ -141,11 +141,12 @@
               <div class="card-title">
                 <el-icon class="title-icon"><PieChart /></el-icon>
                 <span>攻击类型分布（近 7 天）</span>
+                <el-checkbox v-model="attackByStage" size="small" style="margin-left: 12px">按阶段展示</el-checkbox>
               </div>
             </div>
           </template>
           <div class="chart-container">
-            <v-chart v-if="overview.attack_types.length > 0" :option="attackChartOption" autoresize style="height: 260px" />
+            <v-chart v-if="(attackByStage ? overview.attack_types_stage : overview.attack_types).length > 0" :option="attackChartOption" autoresize style="height: 260px" />
             <el-empty v-else description="暂无攻击数据" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
           </div>
         </el-card>
@@ -260,7 +261,7 @@ use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, Legen
 interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
-interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; crs_available?: boolean; ip2region_available?: boolean; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
+interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; crs_available?: boolean; ip2region_available?: boolean; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[]; attack_types_stage: AttackType[] }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string }
 interface RateLimitBlockHost { host: string; count: number }
 interface RateLimitBlocks { total: number; hosts: RateLimitBlockHost[] }
@@ -304,7 +305,9 @@ function statusTagType(status: string): TagType {
   }
 }
 
-const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [] })
+const attackByStage = ref(true)
+const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [], attack_types_stage: [] })
+// 分布图展示模式：勾选=按阶段五桶（默认，与触发阶段口径一致）；取消=具体分类
 // 总览加载失败（如 metrics 库故障导致后端 500）时置位：避免把全零面板
 // 误当「无攻击」，用户目标与 R35 D2 的后端显式报错对齐（R36 F1）。
 const overviewError = ref(false)
@@ -331,7 +334,7 @@ const attackChartOption = computed(() => ({
   legend: { bottom: 0, type: 'scroll' },
   series: [{
     type: 'pie', radius: ['40%', '65%'], center: ['50%', '42%'],
-    data: overview.value.attack_types.map(a => ({ name: a.name, value: a.value })),
+    data: (attackByStage.value ? overview.value.attack_types_stage : overview.value.attack_types).map(a => ({ name: a.name, value: a.value })),
     itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
     label: { show: true, formatter: '{b}: {c}' },
   }],
