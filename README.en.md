@@ -41,9 +41,9 @@ docker compose up -d
 # Build from source
 cd web && npm install && npm run build && cd ..
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=v2.3.4 \
+  --build-arg VERSION=v2.3.5 \
   --provenance=false --sbom=false \
-  -t v55448330/lazy-balancer-v2:v2.3.4 --push .
+  -t v55448330/lazy-balancer-v2:v2.3.5 --push .
 ```
 </details>
 

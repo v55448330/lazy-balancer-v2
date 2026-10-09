@@ -380,23 +380,42 @@ func estimateLatencyPercentiles(text string) (int, int, int, error) {
 		}
 	}
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].le < buckets[j].le })
+	// histogram_quantile 桶内线性插值（2026-10-09 用户裁定）：观察值在落桶
+	// 内按均匀分布估计——旧实现恒返回 le 桶边（值永远落在 5/10/25/50/2500ms
+	// 桶边上「太整齐」）。与 Prometheus histogram_quantile 同算法：
+	// rank=q×total，落桶后 value=lower+(upper-lower)×(rank-prevCum)/bucketCount。
 	percentile := func(q float64) int {
-		target := int64(math.Ceil(float64(total) * q))
-		if target < 1 {
-			target = 1
+		if total <= 0 {
+			return 0
 		}
+		rank := float64(total) * q
+		var prevLE float64 // 首个桶下界=0
+		var prevCum int64
 		for _, b := range buckets {
-			if b.count >= target {
+			if float64(b.count) >= rank {
 				if math.IsInf(b.le, 1) {
-					// The +Inf bucket only tells us the tail exists; fall back
-					// to the largest finite bucket instead of a bogus value.
-					if len(buckets) > 1 {
-						return int(buckets[len(buckets)-2].le * 1000)
-					}
-					return 0
+					// +Inf 桶不可插值——回退最大有限桶边（只表明长尾存在）。
+					return int(math.Round(prevLE * 1000))
 				}
-				return int(b.le * 1000)
+				bucketCount := b.count - prevCum
+				if bucketCount <= 0 {
+					prevLE = b.le
+					prevCum = b.count
+					continue
+				}
+				fraction := (rank - float64(prevCum)) / float64(bucketCount)
+				if fraction > 1 {
+					fraction = 1
+				}
+				v := prevLE + (b.le-prevLE)*fraction
+				return int(math.Round(v * 1000))
 			}
+			prevLE = b.le
+			prevCum = b.count
+		}
+		// rank 超出全部累计（畸形输入兜底）——最大有限桶边。
+		if len(buckets) > 0 {
+			return int(math.Round(buckets[len(buckets)-1].le * 1000))
 		}
 		return 0
 	}

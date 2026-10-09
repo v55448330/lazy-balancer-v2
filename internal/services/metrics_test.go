@@ -273,7 +273,9 @@ func TestMetricsService_parsePrometheusMetrics_parses_and_validates_bucket_count
 		wantP50 int
 		wantErr bool
 	}{
-		{name: "scientific notation", count: "2e1", wantP50: 100},
+		// 插值语义（2026-10-09 裁定）：单桶 le=0.1 计 20 → P50 rank=10 →
+		// fraction=0.5 → 50ms（旧桶边语义为 100ms——本用例真契约=科学计数法可解析）
+		{name: "scientific notation", count: "2e1", wantP50: 50},
 		{name: "invalid value", count: "invalid", wantErr: true},
 		{name: "negative count", count: "-1", wantErr: true},
 	}
@@ -327,8 +329,11 @@ func TestMetricsService_parsePrometheusMetrics_aggregates_histograms_across_host
 	if err != nil {
 		t.Fatalf("parse metrics: %v", err)
 	}
-	if metrics.latencyP50 != 500 || metrics.latencyP95 != 1000 || metrics.latencyP99 != 1000 {
-		t.Fatalf("latencies=%d/%d/%d, want 500/1000/1000", metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
+	// 插值语义（2026-10-09 裁定）：聚合 0.1→10/0.5→20/1→29/+Inf→30，total=30。
+	// P50 rank=15 → (0.1,0.5] fraction=0.5 → 300ms；P95 rank=28.5 → (0.5,1]
+	// fraction≈0.944 → 972ms；P99 rank=29.7 → fraction>1 收敛上界 → 1000ms。
+	if metrics.latencyP50 != 300 || metrics.latencyP95 != 972 || metrics.latencyP99 != 1000 {
+		t.Fatalf("latencies=%d/%d/%d, want 300/972/1000", metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
 	}
 }
 
