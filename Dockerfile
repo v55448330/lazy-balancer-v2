@@ -88,10 +88,10 @@ ARG VERSION=v2.3.5
 ARG HTTP_PROXY=""
 ARG HTTPS_PROXY=""
 ENV APP_VERSION=${VERSION}
-# 安全修复：显式钉版 openssl=3.5.8-r0（CVE 修复版）——openssl 经 curl 的
+# 安全修复：显式钉版 openssl=3.5.9-r0（CVE 修复版）——openssl 经 curl 的
 # libssl3/libcrypto3 依赖隐式装入，钉版保证镜像可复现且不携带旧版；
 # 升级源超出此版本时构建会失败提示，届时同步更新钉版值。
-RUN apk add --no-cache ca-certificates shadow sqlite tzdata openssl=3.5.8-r0
+RUN apk add --no-cache ca-certificates shadow sqlite tzdata openssl=3.5.9-r0
 WORKDIR /app
 
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
