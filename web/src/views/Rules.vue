@@ -492,7 +492,7 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="端口" width="84">
+              <el-table-column label="端口" width="88">
                 <template #default="{ row }">
                   <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" />
                 </template>
@@ -3799,8 +3799,12 @@ onUnmounted(() => {
   box-shadow: 0 0 0 1px #f56c6c inset;
 }
 .upstream-input-small { width: 100%; }
-/* 数字输入框左侧空白收敛（2026-10-10 用户反馈）：默认 padding 在窄列下浪费显著 */
-.upstream-input-small :deep(.el-input__inner) { padding-left: 6px; }
+/* 数字输入框左侧空白收敛（2026-10-10 两轮用户反馈，根因实证）：EP
+   el-input-number 的 .el-input__wrapper 恒 padding 42px 双侧（为侧排 +/- 预留），
+   controls-position=right 时左侧 42px 纯浪费——窄值居中/贴边都救不了，须收
+   wrapper 层；右 31px 保留给右侧 spinner。内层同时左对齐。 */
+.upstream-input-small :deep(.el-input__wrapper) { padding-left: 6px; padding-right: 31px; }
+.upstream-input-small :deep(.el-input__inner) { padding-left: 0; text-align: left; }
 /* 上游表列标题不换行（列宽按内容精修后防止标题折行） */
 .upstream-table :deep(.el-table__header th .cell) { white-space: nowrap; }
 
