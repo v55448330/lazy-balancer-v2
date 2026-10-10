@@ -3706,7 +3706,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 实证，httptransport.go:427-446）。已知限制：主动健康检查 probe 用
 			// 全新 replacer（healthchecks.go:442），占位符不展开→probe 不发 SNI；
 			// 项目恒 insecure_skip_verify，TLS 层不断（严格 SNI 多租户上游为边角）。
-			serverName := rule.HostHeader
+			// 静态路径同样剥端口（2026-10-10 用户裁定）：SNI 无端口语义（RFC 6066），
+			// host_header 带端口时原样透传是畸形值；Host 头侧（:3760+）保留端口原样。
+			serverName := stripOriginPort(rule.HostHeader)
 			if len(originDomains) > 0 {
 				serverName = "{lb.upstream_sni}"
 			}

@@ -75,7 +75,6 @@ func TestBuildHTTPHandleChain_originDomainEmitsMapHandler(t *testing.T) {
 	if !ok || len(defaults) != 2 || defaults[0] != "backend.example.com" || defaults[1] != "backend.example.com" {
 		t.Fatalf("map defaults=%#v, want 规则级后端域名回退", m["defaults"])
 	}
-
 	proxy := lastReverseProxy(t, chain)
 	headers := proxy["headers"].(map[string]interface{})["request"].(map[string]interface{})
 	set, ok := headers["set"].(map[string]interface{})
@@ -85,6 +84,34 @@ func TestBuildHTTPHandleChain_originDomainEmitsMapHandler(t *testing.T) {
 	hostSet, ok := set["Host"].([]string)
 	if !ok || len(hostSet) != 1 || hostSet[0] != "{lb.upstream_host}" {
 		t.Fatalf("Host set=%#v, want [{lb.upstream_host}]", set["Host"])
+	}
+}
+
+// Given: 规则级后端域名带端口（存量合法形态——Host 头允许 host:port）
+// When: 无回源域名，https 上游，构建链
+// Then: Host 头保留端口原样（现状不变）；SNI 剥离端口（SNI 无端口语义，
+//
+//	RFC 6066——原样透传是畸形值，严格 SNI 后端选路失败）
+func TestBuildHTTPHandleChain_staticSNIStripsHostHeaderPort(t *testing.T) {
+	rule := SingleRuleConfig{CaddyID: "lb_sniport", Protocol: "http", ListenPort: 443, HostHeader: "backend.example.com:8443"}
+	upstreams := []UpstreamConfig{
+		{Host: "10.0.0.1", Port: 8443, Weight: 1, Enabled: true, Protocol: "https"},
+	}
+
+	chain, err := buildHTTPHandleChain(rule, upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	proxy := lastReverseProxy(t, chain)
+	tls := proxy["transport"].(map[string]interface{})["tls"].(map[string]interface{})
+	if tls["server_name"] != "backend.example.com" {
+		t.Fatalf("tls.server_name=%#v, want backend.example.com（剥端口）", tls["server_name"])
+	}
+	// Host 头保留端口原样（与现状一致）
+	headers := proxy["headers"].(map[string]interface{})["request"].(map[string]interface{})
+	hostSet := headers["set"].(map[string]interface{})["Host"].([]string)
+	if len(hostSet) != 1 || hostSet[0] != "backend.example.com:8443" {
+		t.Fatalf("Host set=%#v, want [backend.example.com:8443]（Host 头保留端口）", hostSet)
 	}
 }
 

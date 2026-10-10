@@ -650,6 +650,18 @@
                 </div>
               </el-form-item>
 
+              <!-- 混合回源域名 + 主动检查警告（2026-10-10 用户裁定）：探测不感知
+                   逐上游回源域名（引擎硬墙：probe 不走处理链、replacer 无提供者），
+                   统一 Host 探测可能误摘按域名严格校验的后端节点 -->
+              <el-alert
+                v-if="mixedOriginActiveCheckWarn"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 12px;"
+                title="各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名/后端域名」——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断"
+              />
+
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查路径">
                   <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
@@ -1681,6 +1693,19 @@ const upstreamRowNeedsHost = (u: UpstreamInput, i: number): boolean =>
 
 const upstreamHostWarning = computed(() =>
   wizardForm.upstreams.some((u, i) => upstreamRowNeedsHost(u, i)) ? '主机地址为必填项，请填写完整' : '')
+
+// 混合回源域名 + 主动健康检查警告谓词（2026-10-10 用户裁定）：HTTP 规则 +
+// 主动检查开启 + 未设统一健康检查域名 + 启用上游的回源域名去重后 ≥2 个
+// 不同值。已设健康检查域名=用户已做统一探测旁路，不再警告。
+const mixedOriginActiveCheckWarn = computed(() => {
+  if (wizardForm.protocol !== 'http' || !wizardForm.enable_active_health_check) return false
+  if ((wizardForm.health_check_host || '').trim() !== '') return false
+  const origins = wizardForm.upstreams
+    .filter(u => u.enabled !== false)
+    .map(u => (u.origin_domain || '').trim())
+    .filter(v => v !== '')
+  return new Set(origins).size >= 2
+})
 
 interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
 
