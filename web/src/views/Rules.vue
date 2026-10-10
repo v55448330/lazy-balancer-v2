@@ -2483,7 +2483,7 @@ const removeUpstream = (index: number) => {
 
 const onCustomRoutesToggle = (enabled: string | number | boolean): void => {
   if (Boolean(enabled) && wizardForm.path_rules.length === 0) {
-    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', upstream_path: '', sort_order: 0, upstreams: null })
+    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', upstream_path: '', sort_order: 0, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
     nextTemporaryPathRuleId -= 1
   }
   if (!enabled) wizardForm.path_rules = []
