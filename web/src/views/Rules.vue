@@ -368,11 +368,6 @@
               </span>
             </el-form-item>
 
-            <el-form-item label="后端域名" v-if="wizardForm.protocol === 'http'">
-              <el-input v-model="wizardForm.host_header" placeholder="例如：www.baidu.com" style="width: 300px;" />
-              <span class="form-tip-inline">设置转发到上游服务器时的 Host 头</span>
-            </el-form-item>
-
             <el-form-item label="启用 HTTPS" v-if="wizardForm.protocol === 'http'">
               <el-switch v-model="wizardForm.enable_tls" :disabled="isCurrentRuleLocked" />
               <span class="form-tip-inline">
@@ -497,12 +492,12 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="端口" width="90">
+              <el-table-column label="端口" width="96">
                 <template #default="{ row }">
                   <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" />
                 </template>
               </el-table-column>
-              <el-table-column label="协议" width="100">
+              <el-table-column label="协议" width="90">
                 <template #default="{ row }">
                   <el-select v-model="row.protocol" size="small" placeholder="协议">
                     <template v-if="wizardForm.protocol === 'tcp'">
@@ -519,7 +514,7 @@
               <el-table-column min-width="170" v-if="wizardForm.protocol === 'http'">
                 <template #header>
                   回源域名
-                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=跟随「后端域名」，后端域名也空=用上游地址/客户端 Host">
+                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）">
                     <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </template>
@@ -527,7 +522,7 @@
                   <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（请使用规则级后端域名）">
                     <el-input
                       v-model="row.origin_domain"
-                      placeholder="继承后端域名"
+                      placeholder="留空=不覆盖"
                       size="small"
                       class="upstream-input"
                       :disabled="wizardForm.dynamic_dns"
@@ -535,7 +530,7 @@
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column width="100">
+              <el-table-column width="92">
                 <template #header>
                   权重 %
                   <el-tooltip placement="top" content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。">
@@ -546,7 +541,7 @@
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
-              <el-table-column width="120">
+              <el-table-column width="112">
                 <template #header>
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
                   <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
@@ -650,17 +645,12 @@
                 </div>
               </el-form-item>
 
-              <!-- 混合回源域名 + 主动检查警告（2026-10-10 用户裁定）：探测不感知
+              <!-- 混合回源域名 + 主动检查提示（2026-10-10 用户裁定）：探测不感知
                    逐上游回源域名（引擎硬墙：probe 不走处理链、replacer 无提供者），
                    统一 Host 探测可能误摘按域名严格校验的后端节点 -->
-              <el-alert
-                v-if="mixedOriginActiveCheckWarn"
-                type="warning"
-                :closable="false"
-                show-icon
-                style="margin-bottom: 12px;"
-                title="各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名/后端域名」——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断"
-              />
+              <div v-if="mixedOriginActiveCheckWarn" class="info-note-bar">
+                各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断
+              </div>
 
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查路径">
@@ -668,9 +658,8 @@
                   <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常</span>
                 </el-form-item>
                 <el-form-item label="健康检查域名">
-                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=携带后端域名" style="width: 220px;" />
-                  <span class="form-tip-inline">探测请求的 Host 头（留空=携带后端域名）</span>
-                  <div class="form-tip-line">HTTPS 上游的探测不携带独立 SNI（回源域名仅作用于代理流量）</div>
+                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=使用上游地址" style="width: 220px;" />
+                  <span class="form-tip-inline">探测请求的 Host 头；HTTPS 上游的探测不携带独立 SNI（回源域名仅作用于代理流量）</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
@@ -818,7 +807,6 @@
             </el-descriptions-item>
             <el-descriptions-item label="域名" v-if="wizardForm.protocol === 'http'">{{ wizardForm.domain || '-' }}</el-descriptions-item>
             <el-descriptions-item label="监听端口">{{ wizardForm.listen_port }}</el-descriptions-item>
-            <el-descriptions-item label="后端域名" v-if="wizardForm.protocol === 'http'">{{ wizardForm.host_header || '-' }}</el-descriptions-item>
             <el-descriptions-item label="负载策略">{{ getStrategyLabel(wizardForm.strategy) }}</el-descriptions-item>
             <el-descriptions-item label="健康检查" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_active_health_check">
@@ -1161,7 +1149,7 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
-interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
+interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types' | 'host_header'> {
   dns_family: string[]
   upstreams: UpstreamInput[]
   acme_config_id?: number
@@ -1225,6 +1213,7 @@ interface RuleCaddyConfigResponse {
 }
 
 interface RuleConfigView {
+  host_header: string
   id: number
   caddy_id: string
   name: string
@@ -1235,7 +1224,6 @@ interface RuleConfigView {
   dynamic_dns: boolean
   enable_dns_server: boolean
   dns_server: string
-  host_header: string
   health_check_host: string
   enable_tls: boolean
   tls_source: string
@@ -1913,7 +1901,6 @@ const wizardForm = reactive<RuleForm>({
   tcp_proxy_protocol: false,
   tcp_try_duration: 0,
   tcp_try_interval: 250,
-  host_header: '',
   health_check_host: '',
   upstreams: [],
   enable_tls: false,
@@ -2324,7 +2311,6 @@ const openWizard = async (rule?: Rule) => {
       tcp_proxy_protocol: fullRule.tcp_proxy_protocol === true,
       tcp_try_duration: fullRule.tcp_try_duration || 0,
       tcp_try_interval: fullRule.tcp_try_interval ?? 250,
-      host_header: fullRule.host_header || '',
       health_check_host: fullRule.health_check_host || '',
       upstreams: fullRule.upstreams?.map(u => ({
         ...u,
@@ -2387,7 +2373,6 @@ const openWizard = async (rule?: Rule) => {
       tcp_proxy_protocol: false,
       tcp_try_duration: 0,
       tcp_try_interval: 250,
-      host_header: '',
       health_check_host: '',
       dns_server: '',
       dns_family: ['ipv4'],
@@ -2814,7 +2799,6 @@ const submitWizard = async () => {
       tcp_proxy_protocol: wizardForm.protocol === 'tcp' && wizardForm.tcp_proxy_protocol,
       tcp_try_duration: wizardForm.tcp_try_duration || 0,
       tcp_try_interval: wizardForm.tcp_try_interval ?? 250,
-      host_header: wizardForm.host_header,
       health_check_host: wizardForm.health_check_host || '',
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
@@ -3059,7 +3043,6 @@ const openCopyWizard = async (rule: Rule) => {
     tcp_proxy_protocol: fullRule.tcp_proxy_protocol === true,
     tcp_try_duration: fullRule.tcp_try_duration || 0,
     tcp_try_interval: fullRule.tcp_try_interval ?? 250,
-    host_header: fullRule.host_header || '',
     health_check_host: fullRule.health_check_host || '',
     upstreams: fullRule.upstreams?.map(u => ({
       ...u,
@@ -3802,6 +3785,10 @@ onUnmounted(() => {
   box-shadow: 0 0 0 1px #f56c6c inset;
 }
 .upstream-input-small { width: 100%; }
+/* 数字输入框左侧空白收敛（2026-10-10 用户反馈）：默认 padding 在窄列下浪费显著 */
+.upstream-input-small :deep(.el-input__inner) { padding-left: 6px; }
+/* 上游表列标题不换行（列宽按内容精修后防止标题折行） */
+.upstream-table :deep(.el-table__header th .cell) { white-space: nowrap; }
 
 .strategy-cards {
   display: flex;

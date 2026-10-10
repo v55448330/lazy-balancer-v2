@@ -159,7 +159,10 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   | 'tcp_proxy_protocol'
   | keyof ProxyTimeoutConfig
   | 'path_rules'
-  | 'ca_provider_id'> {
+  | 'ca_provider_id'
+  | 'host_header'> {
+  // host_header 可选（2026-10-10 向导退役后端域名配置项）：省略=保留原值（后端 *string 合并语义）
+  host_header?: string
   request_body_max_size_mb?: number
   upstream_keepalive_timeout?: number
   server_tokens_hidden?: number
