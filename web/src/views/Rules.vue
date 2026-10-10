@@ -480,7 +480,7 @@
             <div v-if="wizardForm.dynamic_dns" class="info-note-bar"><span class="info-note-desc">动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP</span></div>
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
-              <el-table-column label="主机地址 *" min-width="200">
+              <el-table-column label="主机地址 *" min-width="220">
                 <template #default="{ row, $index }">
                   <el-input 
                     v-model="row.host" 
@@ -492,12 +492,12 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="端口" width="96">
+              <el-table-column label="端口" width="84">
                 <template #default="{ row }">
                   <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" />
                 </template>
               </el-table-column>
-              <el-table-column label="协议" width="90">
+              <el-table-column label="协议" width="96">
                 <template #default="{ row }">
                   <el-select v-model="row.protocol" size="small" placeholder="协议">
                     <template v-if="wizardForm.protocol === 'tcp'">
@@ -511,7 +511,7 @@
                   </el-select>
                 </template>
               </el-table-column>
-              <el-table-column min-width="170" v-if="wizardForm.protocol === 'http'">
+              <el-table-column min-width="180" v-if="wizardForm.protocol === 'http'">
                 <template #header>
                   回源域名
                   <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）">
@@ -530,7 +530,7 @@
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column width="92">
+              <el-table-column width="84">
                 <template #header>
                   权重 %
                   <el-tooltip placement="top" content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。">
@@ -541,7 +541,7 @@
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
-              <el-table-column width="112">
+              <el-table-column width="118">
                 <template #header>
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
                   <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
@@ -2341,6 +2341,8 @@ const openWizard = async (rule?: Rule) => {
         .sort((left, right) => left.sort_order - right.sort_order)
         .map((pathRule) => ({
           ...pathRule,
+          // UI 哨兵：空串模式映射为 'forward'（el-select 空串选项不显示标签）；提交归一 ''
+          response_mode: pathRule.response_mode || 'forward',
           upstreams: pathRuleUpstreamsToPercent(pathRule.upstreams),
         })),
       proxy_dial_timeout: fullRule.proxy_dial_timeout || 0,
@@ -2823,13 +2825,18 @@ const submitWizard = async () => {
             path: pathRule.path,
             upstream_path: pathRule.upstream_path || '',
             sort_order: index,
-            // 直接返回/301 跳转（2026-10-10）：转发模式四字段归一默认（后端写侧同口径归一）
-            response_mode: pathRule.response_mode || '',
-            response_status: pathRule.response_mode === 'static' ? (pathRule.response_status || 200) : 200,
-            response_body: pathRule.response_mode === 'static' ? (pathRule.response_body || '') : '',
-            response_content_type: pathRule.response_mode === 'static' ? (pathRule.response_content_type || '') : '',
-            redirect_to: pathRule.response_mode === 'redirect' ? (pathRule.redirect_to || '') : '',
-            upstreams: pathRule.response_mode ? null : (pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null),
+            // 直接返回/301 跳转（2026-10-10）：'forward' 为 UI 哨兵（el-select 空串选项不显示标签），提交归一 ''
+            ...(() => {
+              const mode: '' | 'static' | 'redirect' = pathRule.response_mode === 'static' || pathRule.response_mode === 'redirect' ? pathRule.response_mode : ''
+              return {
+                response_mode: mode,
+                response_status: mode === 'static' ? (pathRule.response_status || 200) : 200,
+                response_body: mode === 'static' ? (pathRule.response_body || '') : '',
+                response_content_type: mode === 'static' ? (pathRule.response_content_type || '') : '',
+                redirect_to: mode === 'redirect' ? (pathRule.redirect_to || '') : '',
+                upstreams: mode ? null : (pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null),
+              }
+            })(),
           }))
         : [],
       proxy_dial_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_dial_timeout : 0,
@@ -3073,6 +3080,7 @@ const openCopyWizard = async (rule: Rule) => {
       .sort((left, right) => left.sort_order - right.sort_order)
       .map((pathRule) => ({
         ...pathRule,
+        response_mode: pathRule.response_mode || 'forward',
         upstreams: pathRuleUpstreamsToPercent(pathRule.upstreams),
       })),
     proxy_dial_timeout: fullRule.proxy_dial_timeout || 0,

@@ -56,7 +56,7 @@
             </div>
           </label>
 
-          <label v-if="!rule.response_mode" class="rule-field upstream-path-field">
+          <label v-if="isForwardMode(rule)" class="rule-field upstream-path-field">
             <span class="rule-field-label">
               上游路径
               <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
@@ -84,11 +84,12 @@
         <div class="rule-field path-rule-mode-row">
           <span class="rule-field-label">响应方式</span>
           <el-select v-model="rule.response_mode" size="small" style="width: 160px;" aria-label="响应方式" @change="onModeChange(rule)">
-            <el-option label="转发上游（默认）" value="" />
+            <!-- forward 为 UI 哨兵（el-select 空串选项不显示标签）——提交归一 '' -->
+            <el-option label="转发上游（默认）" value="forward" />
             <el-option label="直接返回" value="static" />
             <el-option label="301 跳转" value="redirect" />
           </el-select>
-          <span class="form-tip-inline" v-if="!rule.response_mode">按路径转发到上游</span>
+          <span class="form-tip-inline" v-if="isForwardMode(rule)">按路径转发到上游</span>
           <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">不访问上游，直接返回指定状态码与内容</span>
           <span class="form-tip-inline" v-else>不访问上游，301 永久跳转到目标地址</span>
         </div>
@@ -97,8 +98,9 @@
         <div v-if="rule.response_mode === 'static'" class="path-rule-response-row">
           <label class="rule-field">
             <span class="rule-field-label">状态码</span>
-            <el-select v-model="rule.response_status" size="small" style="width: 110px;" aria-label="状态码">
-              <el-option v-for="code in STATIC_STATUSES" :key="code" :label="String(code)" :value="code" />
+            <!-- 标准全称显示（2026-10-10 用户裁定）：值仍为数字状态码 -->
+            <el-select v-model="rule.response_status" size="small" style="width: 210px;" aria-label="状态码">
+              <el-option v-for="code in STATIC_STATUSES" :key="code" :label="`${code} ${STATUS_REASONS[code]}`" :value="code" />
             </el-select>
           </label>
           <label class="rule-field">
@@ -128,7 +130,7 @@
           </label>
         </div>
 
-        <div v-if="!rule.response_mode" class="custom-upstream-toggle">
+        <div v-if="isForwardMode(rule)" class="custom-upstream-toggle">
           <span class="custom-upstream-title">使用自定义上游</span>
           <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
           <span class="form-tip-inline">关闭时使用规则的默认上游服务器</span>
@@ -239,10 +241,21 @@ const rowShadowWarning = (index: number): string => {
 // validStaticResponseStatuses / ruleValidation.ts 同源）
 const STATIC_STATUSES: readonly number[] = [200, 201, 204, 400, 401, 403, 404, 410, 500, 502, 503]
 
+// STATUS_REASONS 状态码标准全称（下拉显示用；值仍为数字状态码）
+const STATUS_REASONS: Readonly<Record<number, string>> = {
+  200: 'OK', 201: 'Created', 204: 'No Content',
+  400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 410: 'Gone',
+  500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
+}
+
+// isForwardMode 转发判定：''（API 形态）与 'forward'（UI 哨兵——el-select 空串
+// 选项不显示标签）同为转发；提交时归一为 ''。
+const isForwardMode = (rule: PathRule): boolean => !rule.response_mode || rule.response_mode === 'forward'
+
 // onModeChange 模式切换归一：非转发模式清空转发专属字段（上游路径/自定义上游），
 // 跳转/静态互清对方字段，静态进场补默认值（后端写侧同口径归一）。
 const onModeChange = (rule: PathRule): void => {
-  if (rule.response_mode) {
+  if (!isForwardMode(rule)) {
     rule.upstream_path = ''
     rule.upstreams = null
   }
@@ -290,7 +303,7 @@ const upstreamError = (index: number): string => {
 }
 
 const addRule = (): void => {
-  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: '', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
+  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
 }
 
 const removeRule = (index: number): void => {

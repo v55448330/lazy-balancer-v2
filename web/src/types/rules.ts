@@ -44,7 +44,8 @@ export interface PathRule {
   sort_order: number
   upstreams: PathRuleUpstream[] | null
   // 直接返回/301 跳转（2026-10-10 用户裁定）：''=转发上游（现状）/static=静态响应/redirect=301 跳转
-  response_mode?: '' | 'static' | 'redirect'
+  // 'forward' 为 UI 选择器哨兵（el-select 空串选项不显示标签，显示为「请选择」）——提交时归一为 ''
+  response_mode?: '' | 'static' | 'redirect' | 'forward'
   response_status?: number
   response_body?: string
   response_content_type?: '' | 'text/plain' | 'application/json' | 'text/html'

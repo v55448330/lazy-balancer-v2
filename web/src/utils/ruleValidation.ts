@@ -12,7 +12,7 @@ type PathRuleInput = {
   readonly sort_order: number
   readonly upstreams: readonly PathUpstreamInput[] | null
   // 直接返回/301 跳转（2026-10-10）：''=转发（现状）/static/redirect
-  readonly response_mode?: '' | 'static' | 'redirect'
+  readonly response_mode?: '' | 'static' | 'redirect' | 'forward'
   readonly response_status?: number
   readonly response_body?: string
   readonly response_content_type?: string
@@ -102,7 +102,9 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       seenExactNorms.set(canonical, rowNumber)
     }
     // 直接返回/301 跳转（2026-10-10 用户裁定）：与后端 validateRuleFeatures 同口径
-    if (rule.response_mode === 'static') {
+    // 'forward' 为 UI 选择器哨兵（el-select 空串选项不显示标签），与 '' 同义
+    const responseMode = rule.response_mode === 'forward' ? '' : (rule.response_mode ?? '')
+    if (responseMode === 'static') {
       const status = rule.response_status || 200
       if (!STATIC_RESPONSE_STATUSES[status]) return `第 ${rowNumber} 条路径：直接返回的状态码 ${status} 不在常用集合`
       if ([...rule.response_body ?? ''].length > 64) return `第 ${rowNumber} 条路径：响应内容不能超过 64 个字符`
@@ -112,7 +114,7 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：直接返回模式与上游配置互斥`
       continue
     }
-    if (rule.response_mode === 'redirect') {
+    if (responseMode === 'redirect') {
       const target = (rule.redirect_to ?? '').trim()
       if (!target) return `第 ${rowNumber} 条路径：301 跳转需要填写跳转地址`
       // eslint-disable-next-line no-control-regex
@@ -121,7 +123,7 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：301 跳转模式与上游配置互斥`
       continue
     }
-    if (rule.response_mode) return `第 ${rowNumber} 条路径：response_mode 无效`
+    if (responseMode) return `第 ${rowNumber} 条路径：response_mode 无效`
     if (rule.upstreams === null) continue
     if (rule.upstreams.length === 0) return `第 ${rowNumber} 条路径至少需要一个自定义上游`
 
