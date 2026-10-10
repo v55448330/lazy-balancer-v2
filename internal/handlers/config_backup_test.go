@@ -1544,7 +1544,7 @@ func TestValidateBackupRuleReferences_rejects_bad_origin_domain_and_health_check
 		wantErr     string
 	}{
 		{name: "合法回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com"}},
-		{name: "合法带端口回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com:8443"}},
+		{name: "回源域名带端口被拒", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com:8443"}, wantErr: "回源域名"},
 		{name: "空回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk"}},
 		{name: "回源域名端口越界被拒", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com:99999"}, wantErr: "回源域名"},
 		{name: "回源域名 CRLF 被拒", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "evil.com\r\nX-Evil: 1"}, wantErr: "回源域名"},

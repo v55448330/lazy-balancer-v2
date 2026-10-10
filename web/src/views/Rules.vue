@@ -485,7 +485,7 @@
             <div v-if="wizardForm.dynamic_dns" class="info-note-bar"><span class="info-note-desc">动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP</span></div>
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
-              <el-table-column label="主机地址 *" min-width="160">
+              <el-table-column label="主机地址 *" min-width="200">
                 <template #default="{ row, $index }">
                   <el-input 
                     v-model="row.host" 
@@ -497,7 +497,7 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="端口" width="110">
+              <el-table-column label="端口" width="90">
                 <template #default="{ row }">
                   <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" />
                 </template>
@@ -516,10 +516,10 @@
                   </el-select>
                 </template>
               </el-table-column>
-              <el-table-column min-width="150" v-if="wizardForm.protocol === 'http'">
+              <el-table-column min-width="170" v-if="wizardForm.protocol === 'http'">
                 <template #header>
                   回源域名
-                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（可带端口，如 origin.example.com:8443）。留空=跟随「后端域名」，后端域名也空=用上游地址/客户端 Host">
+                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=跟随「后端域名」，后端域名也空=用上游地址/客户端 Host">
                     <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </template>
@@ -535,7 +535,7 @@
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column width="110">
+              <el-table-column width="100">
                 <template #header>
                   权重 %
                   <el-tooltip placement="top" content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。">
@@ -546,7 +546,7 @@
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
-              <el-table-column width="130">
+              <el-table-column width="120">
                 <template #header>
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
                   <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
@@ -561,12 +561,12 @@
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column label="启用" width="60" align="center">
+              <el-table-column label="启用" width="56" align="center">
                 <template #default="{ row, $index }">
                   <el-switch v-model="row.enabled" size="small" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
-              <el-table-column width="50" align="center">
+              <el-table-column width="46" align="center">
                 <template #default="{ $index }">
                   <el-button type="danger" link size="small" @click="removeUpstream($index)">
                     <el-icon><Delete /></el-icon>
@@ -656,8 +656,9 @@
                   <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常</span>
                 </el-form-item>
                 <el-form-item label="健康检查域名">
-                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=携带后端域名" style="width: 300px;" />
-                  <span class="form-tip-inline">探测请求的 Host 头取健康检查域名→后端域名；探测 HTTPS 上游时不携带独立 SNI（回源域名仅作用于代理流量）</span>
+                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=携带后端域名" style="width: 220px;" />
+                  <span class="form-tip-inline">探测请求的 Host 头（留空=携带后端域名）</span>
+                  <div class="form-tip-line">HTTPS 上游的探测不携带独立 SNI（回源域名仅作用于代理流量）</div>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
@@ -2684,16 +2685,9 @@ const submitWizard = async () => {
     return
   }
   // 逐上游回源域名（2026-10-10）：与后端 validateRulePayloadBeforeSave 同口径——
-  // host[:port] 形状、仅 HTTP 静态上游可用
-  const isValidOriginDomain = (value: string): boolean => {
-    const match = value.match(/^([A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)(?::(\d{1,5}))?$/)
-    if (!match) return false
-    if (match[3] !== undefined) {
-      const port = Number(match[3])
-      if (port < 1 || port > 65535) return false
-    }
-    return true
-  }
+  // 纯主机名不带端口（端口已有独立配置列）、仅 HTTP 静态上游可用
+  const isValidOriginDomain = (value: string): boolean =>
+    /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(value)
   for (const [index, upstream] of wizardForm.upstreams.entries()) {
     const origin = (upstream.origin_domain || '').trim()
     if (origin === '') continue
@@ -2708,7 +2702,7 @@ const submitWizard = async () => {
       return
     }
     if (!isValidOriginDomain(origin)) {
-      ElMessage.warning(`上游 #${index + 1}：回源域名 "${origin}" 无效（host 或 host:port）`)
+      ElMessage.warning(`上游 #${index + 1}：回源域名 "${origin}" 无效（仅支持主机名，不带端口）`)
       saving.value = false
       return
     }

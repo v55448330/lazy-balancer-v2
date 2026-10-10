@@ -32,7 +32,7 @@ func lastReverseProxy(t *testing.T, chain []interface{}) map[string]interface{} 
 	return last
 }
 
-// Given: 上游 A 配置回源域名（带端口形态）、上游 B 留空；规则级后端域名已配
+// Given: 上游 A 配置回源域名、上游 B 留空；规则级后端域名已配
 // When: 构建 HTTP handle 链
 // Then: 发射 map 处理器（仅收录 A；SNI 输出剥端口）+ reverse_proxy Host 占位符，
 //
@@ -40,7 +40,7 @@ func lastReverseProxy(t *testing.T, chain []interface{}) map[string]interface{} 
 func TestBuildHTTPHandleChain_originDomainEmitsMapHandler(t *testing.T) {
 	rule := SingleRuleConfig{CaddyID: "lb_origin", Protocol: "http", ListenPort: 80, HostHeader: "backend.example.com"}
 	upstreams := []UpstreamConfig{
-		{Host: "10.0.0.1", Port: 8080, Weight: 1, Enabled: true, OriginDomain: "origin-a.example.com:8443"},
+		{Host: "10.0.0.1", Port: 8080, Weight: 1, Enabled: true, OriginDomain: "origin-a.example.com"},
 		{Host: "10.0.0.2", Port: 8080, Weight: 1, Enabled: true},
 	}
 
@@ -68,8 +68,8 @@ func TestBuildHTTPHandleChain_originDomainEmitsMapHandler(t *testing.T) {
 		t.Fatalf("mapping input=%#v, want 10.0.0.1:8080", mappings[0]["input"])
 	}
 	outputs, ok := mappings[0]["outputs"].([]string)
-	if !ok || len(outputs) != 2 || outputs[0] != "origin-a.example.com:8443" || outputs[1] != "origin-a.example.com" {
-		t.Fatalf("mapping outputs=%#v, want [origin-a.example.com:8443 origin-a.example.com]（SNI 剥端口）", mappings[0]["outputs"])
+	if !ok || len(outputs) != 2 || outputs[0] != "origin-a.example.com" || outputs[1] != "origin-a.example.com" {
+		t.Fatalf("mapping outputs=%#v, want [origin-a.example.com origin-a.example.com]（校验层禁端口，SNI 剥端口为防御性兜底）", mappings[0]["outputs"])
 	}
 	defaults, ok := m["defaults"].([]string)
 	if !ok || len(defaults) != 2 || defaults[0] != "backend.example.com" || defaults[1] != "backend.example.com" {

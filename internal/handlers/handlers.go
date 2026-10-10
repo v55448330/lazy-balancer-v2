@@ -598,8 +598,10 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			if data.DynamicDNS {
 				return fmt.Errorf("上游 #%d：动态上游模式不支持回源域名（请使用规则级后端域名）", i+1)
 			}
-			if err := validateOriginDomainShape(u.OriginDomain); err != nil {
-				return fmt.Errorf("上游 #%d：回源域名 %q 无效：%w", i+1, u.OriginDomain, err)
+			// 纯主机名不带端口（2026-10-10 用户裁定：端口已有独立配置列）；
+			// isValidHost 字符集天然拒绝 CRLF/控制字符与端口冒号形态。
+			if !isValidHost(u.OriginDomain) {
+				return fmt.Errorf("上游 #%d：回源域名 %q 无效（仅支持主机名，不带端口）", i+1, u.OriginDomain)
 			}
 		}
 
@@ -1011,27 +1013,6 @@ func validateSingleDnsAddress(server string) error {
 	}
 	if !strings.Contains(host, ".") {
 		return fmt.Errorf("DNS 服务器地址须为 IP 或完整域名")
-	}
-	return nil
-}
-
-// validateOriginDomainShape 回源域名形状校验：host 或 host:port（Host 头可带
-// 端口，SNI 渲染期剥端口）。host 部分复用 isValidHost（IP/域名/容器服务名，
-// 字符集天然拒绝 CRLF/控制字符）；端口须为 1-65535 数字。
-func validateOriginDomainShape(value string) error {
-	host := value
-	if h, p, err := net.SplitHostPort(value); err == nil {
-		if p == "" {
-			return fmt.Errorf("端口不能为空")
-		}
-		port, perr := strconv.Atoi(p)
-		if perr != nil || port < 1 || port > 65535 {
-			return fmt.Errorf("端口 %q 无效（必须在 1-65535 之间）", p)
-		}
-		host = h
-	}
-	if !isValidHost(host) {
-		return fmt.Errorf("主机 %q 无效", host)
 	}
 	return nil
 }

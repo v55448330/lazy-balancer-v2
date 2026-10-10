@@ -751,8 +751,8 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 		if ruleDynamicDNS[ruleID] {
 			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）动态上游模式不支持回源域名", i+1, ruleID)
 		}
-		if err := validateOriginDomainShape(origin); err != nil {
-			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）回源域名 %q 无效：%w", i+1, ruleID, origin, err)
+		if !isValidHost(origin) {
+			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）回源域名 %q 无效（仅支持主机名，不带端口）", i+1, ruleID, origin)
 		}
 	}
 	// R49 C-#2：security_policy_bindings 无外键约束，悬挂引用可原样落库——绑定指向

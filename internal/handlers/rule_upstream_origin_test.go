@@ -30,9 +30,9 @@ func TestRulePayload_originDomainAndHealthCheckHostValidation(t *testing.T) {
 		wantStatus int
 		wantErr    string
 	}{
-		// 合法形状（回归形：含端口/纯域名/健康检查域名）
+		// 合法形状（回归形：纯域名/健康检查域名；带端口 2026-10-10 用户裁定拒绝——端口已有独立配置列）
 		{"回源域名纯域名放行", "http", "", `{"host":"127.0.0.1","port":9000,"enabled":true,"origin_domain":"origin.example.com"}`, http.StatusCreated, ""},
-		{"回源域名带端口放行", "http", "", `{"host":"127.0.0.1","port":9000,"enabled":true,"origin_domain":"origin.example.com:8443"}`, http.StatusCreated, ""},
+		{"回源域名带端口拒绝", "http", "", `{"host":"127.0.0.1","port":9000,"enabled":true,"origin_domain":"origin.example.com:8443"}`, http.StatusBadRequest, "回源域名"},
 		{"健康检查域名放行", "http", `"health_check_host":"probe.example.com","enable_active_health_check":true`, `{"host":"127.0.0.1","port":9000,"enabled":true}`, http.StatusCreated, ""},
 		{"两字段皆空现状放行", "http", "", `{"host":"127.0.0.1","port":9000,"enabled":true}`, http.StatusCreated, ""},
 		// 畸形形状
