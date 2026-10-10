@@ -35,7 +35,8 @@
               <!-- 锁 hover 摘要（不可点击）：按阶段 0/1/2/3 分组的紧凑摘要；
                    「查看完整处理流程」链接跳转流程弹框（跳转前 hide 本 popover 防遮挡）。
                    2026-09-21 用户裁定：HTTP/HTTPS 规则恒显示锁（未绑定=warning 黄锁，
-                   四阶段灰态「未启用」；绑定=is-allow 绿锁现状）；TCP 规则不显示。 -->
+                   四阶段灰态「未启用」；绑定=is-allow 绿锁现状）；TCP 规则显示灰色锁
+                   （2026-10-10 用户裁定，无弹框，hover 提示不支持原因）。 -->
               <el-popover
                 v-if="row.protocol === 'http'"
                 :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
@@ -80,6 +81,14 @@
                   <div class="lock-summary-hint"><el-link type="primary" class="lock-flow-link" @click="openFlowFromLock(row)">查看完整处理流程 →</el-link></div>
                 </div>
               </el-popover>
+              <!-- TCP 灰色锁（2026-10-10 用户裁定）：无弹框，hover 提示不支持原因 -->
+              <el-tooltip
+                v-else-if="row.protocol === 'tcp'"
+                placement="top"
+                content="TCP 规则不支持安全策略（四层传输无 HTTP 语义，无 WAF/访问控制可挂点）"
+              >
+                <el-icon :size="14" class="acl-lock-icon acl-lock-icon--tcp" tabindex="0"><Lock /></el-icon>
+              </el-tooltip>
               <a class="rule-name-link" role="button" tabindex="0" :title="row.name" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
@@ -3557,6 +3566,7 @@ onUnmounted(() => {
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
 .acl-lock-icon.is-unbound { color: var(--el-color-warning); }
+.acl-lock-icon--tcp { color: var(--el-text-color-placeholder); cursor: default; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 
