@@ -11,6 +11,8 @@ export interface Upstream {
   enabled: boolean
   protocol: UpstreamProtocol
   max_connections: number
+  // 逐上游回源域名（2026-10-10）：驱动该上游回源 Host 头与 HTTPS SNI；空=跟随后端域名
+  origin_domain?: string
 }
 
 export type UpstreamInput = Omit<Upstream, 'id' | 'rule_id'> & {
@@ -80,6 +82,8 @@ export interface Rule extends ProxyTimeoutConfig {
   upstream_keepalive_timeout: number
   server_tokens_hidden: number
   host_header: string
+  // 健康检查域名：主动健康检查 probe 的 Host 头；空=跟随 host_header
+  health_check_host?: string
   upstreams: Upstream[] | null
   enable_tls: boolean
   tls_source: string
@@ -133,6 +137,7 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   custom_routes_enabled: boolean
   path_rules: PathRule[]
   host_header: string
+  health_check_host?: string
   upstreams: UpstreamInput[]
   enable_tls: boolean
   tls_source: string

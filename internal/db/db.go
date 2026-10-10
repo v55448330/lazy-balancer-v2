@@ -265,7 +265,9 @@ func createTables() error {
 		proxy_stream_timeout INTEGER NOT NULL DEFAULT 0,
 		proxy_flush_interval INTEGER NOT NULL DEFAULT 0,
 		proxy_stream_close_delay INTEGER NOT NULL DEFAULT 0,
-		host_header VARCHAR(255),
+	host_header VARCHAR(255),
+	-- 逐上游回源域名特性（2026-10-10）：健康检查域名（probe Host 头），空=跟随 host_header。
+	health_check_host TEXT NOT NULL DEFAULT '',
 		enable_tls BOOLEAN DEFAULT FALSE,
 		tls_cert TEXT,
 		tls_key TEXT,
@@ -312,6 +314,8 @@ func createTables() error {
 		enabled BOOLEAN NOT NULL DEFAULT 1,
 		protocol VARCHAR(10) DEFAULT 'http',
 		max_connections INTEGER DEFAULT 0,
+		-- 逐上游回源域名（2026-10-10）：驱动该上游回源 Host 头与 HTTPS SNI，空=跟随规则后端域名。
+		origin_domain TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id, enabled, id);
@@ -827,11 +831,15 @@ func runMigrations() error {
 		"security_ip2region_version.finished_at":          "DATETIME",
 		"security_ip2region_version.consecutive_failures": "INTEGER DEFAULT 0",
 		"upstreams.max_connections":                       "INTEGER DEFAULT 0",
-		"global_config.threat_auto_update":                "INTEGER NOT NULL DEFAULT 1",
-		"security_ip_lists.system":                        "INTEGER NOT NULL DEFAULT 0",
-		"path_rules.upstream_path":                        "TEXT NOT NULL DEFAULT ''",
-		"security_threat_sources.content_hash":            "TEXT DEFAULT ''",
-		"security_threat_sources.raw_hash":                "TEXT DEFAULT ''",
+		// 逐上游回源域名 + 健康检查域名（2026-10-10）：空串=不配置，
+		// 回退规则级 host_header / 现状默认。
+		"upstreams.origin_domain":              "TEXT NOT NULL DEFAULT ''",
+		"lb_rules.health_check_host":           "TEXT NOT NULL DEFAULT ''",
+		"global_config.threat_auto_update":     "INTEGER NOT NULL DEFAULT 1",
+		"security_ip_lists.system":             "INTEGER NOT NULL DEFAULT 0",
+		"path_rules.upstream_path":             "TEXT NOT NULL DEFAULT ''",
+		"security_threat_sources.content_hash": "TEXT DEFAULT ''",
+		"security_threat_sources.raw_hash":     "TEXT DEFAULT ''",
 		// 规则库定时调度（v2.3.x）：星期多选逗号串（1=周一…7=周日，默认全选=
 		// 每天）+ HH:MM 时间（默认 04:00），槽位按基础设置时区本地日历计算、
 		// UTC 落库。CRS/IP2Region 列落版本表；威胁库为任务级排程，列挂
@@ -2548,6 +2556,9 @@ func migrateLbRulesPrimaryKey() error {
 			proxy_flush_interval INTEGER NOT NULL DEFAULT 0,
 			proxy_stream_close_delay INTEGER NOT NULL DEFAULT 0,
 			host_header VARCHAR(255),
+			-- 与 fresh CREATE 同步携带（ensureNewColumns 在本重建之前已加列，
+			-- 陈旧 DDL 会把列连同值一并丢弃——U6B-3 先例）。
+			health_check_host TEXT NOT NULL DEFAULT '',
 			enable_tls BOOLEAN DEFAULT FALSE,
 			tls_cert TEXT,
 			tls_key TEXT,
@@ -2590,7 +2601,7 @@ func migrateLbRulesPrimaryKey() error {
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			custom_routes_enabled,
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
-			host_header, enable_tls, tls_cert,
+			host_header, health_check_host, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled, log_enabled,
 			created_by, created_at, updated_at, updated_by, caddy_id,
@@ -2605,7 +2616,7 @@ func migrateLbRulesPrimaryKey() error {
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-			host_header, enable_tls, tls_cert,
+			host_header, COALESCE(health_check_host,''), enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, COALESCE(enabled,0), COALESCE(log_enabled,0),
 			created_by, created_at, updated_at, updated_by, caddy_id,
@@ -2642,7 +2653,8 @@ func migrateLbRulesPrimaryKey() error {
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enabled BOOLEAN NOT NULL DEFAULT 1,
 		protocol VARCHAR(10) DEFAULT 'http',
-		max_connections INTEGER DEFAULT 0,
+	max_connections INTEGER DEFAULT 0,
+	origin_domain TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	)
 `)
@@ -2652,9 +2664,9 @@ func migrateLbRulesPrimaryKey() error {
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
-	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
 	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, COALESCE(u.enabled, 0), u.protocol,
-		       COALESCE(u.max_connections, 0)
+		       COALESCE(u.max_connections, 0), COALESCE(u.origin_domain, '')
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)

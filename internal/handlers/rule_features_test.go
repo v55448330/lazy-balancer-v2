@@ -866,6 +866,7 @@ func simulateLegacyNullableLbRules(t *testing.T, database *sql.DB) {
 		proxy_flush_interval INTEGER NOT NULL DEFAULT 0,
 		proxy_stream_close_delay INTEGER NOT NULL DEFAULT 0,
 		host_header VARCHAR(255),
+		health_check_host TEXT NOT NULL DEFAULT '',
 		enable_tls BOOLEAN DEFAULT FALSE,
 		tls_cert TEXT,
 		tls_key TEXT,
@@ -908,6 +909,7 @@ func simulateLegacyNullableUpstreams(t *testing.T, database *sql.DB) {
 		enabled BOOLEAN DEFAULT TRUE,
 		protocol VARCHAR(10) DEFAULT 'http',
 		max_connections INTEGER DEFAULT 0,
+		origin_domain TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	)`); err != nil {
 		t.Fatalf("recreate legacy upstreams: %v", err)

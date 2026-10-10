@@ -1523,6 +1523,57 @@ func TestValidateBackupRuleReferences_rejects_bad_upstream_protocol(t *testing.T
 	}
 }
 
+// 逐上游回源域名 + 健康检查域名（2026-10-10）备份侧形状校验——与保存侧
+// validateRulePayloadBeforeSave 同口径：手造备份可经 restoreTable 直写绕过
+// 保存侧校验，坏形状（CRLF/端口越界/模式错配）会原样落库进入渲染。
+func TestValidateBackupRuleReferences_rejects_bad_origin_domain_and_health_check_host(t *testing.T) {
+	base := func(rule map[string]any) map[string][]map[string]any {
+		return map[string][]map[string]any{"lb_rules": {rule}}
+	}
+	rule := func(extra map[string]any) map[string]any {
+		r := map[string]any{"caddy_id": "lb_origchk", "protocol": "http"}
+		for k, v := range extra {
+			r[k] = v
+		}
+		return r
+	}
+	tests := []struct {
+		name        string
+		rule        map[string]any
+		upstreamAny map[string]any
+		wantErr     string
+	}{
+		{name: "合法回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com"}},
+		{name: "合法带端口回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com:8443"}},
+		{name: "空回源域名放行", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk"}},
+		{name: "回源域名端口越界被拒", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com:99999"}, wantErr: "回源域名"},
+		{name: "回源域名 CRLF 被拒", rule: rule(nil), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "evil.com\r\nX-Evil: 1"}, wantErr: "回源域名"},
+		{name: "TCP 规则回源域名被拒", rule: rule(map[string]any{"protocol": "tcp"}), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com"}, wantErr: "仅 HTTP"},
+		{name: "动态上游规则回源域名被拒", rule: rule(map[string]any{"dynamic_dns": true}), upstreamAny: map[string]any{"rule_id": "lb_origchk", "origin_domain": "origin.example.com"}, wantErr: "动态上游"},
+		{name: "合法健康检查域名放行", rule: rule(map[string]any{"health_check_host": "probe.example.com"})},
+		{name: "健康检查域名带端口被拒", rule: rule(map[string]any{"health_check_host": "probe.example.com:8443"}), wantErr: "健康检查域名"},
+		{name: "TCP 规则健康检查域名被拒", rule: rule(map[string]any{"protocol": "tcp", "health_check_host": "probe.example.com"}), wantErr: "仅 HTTP"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tables := base(tt.rule)
+			if tt.upstreamAny != nil {
+				tables["upstreams"] = []map[string]any{tt.upstreamAny}
+			}
+			err := validateBackupRuleReferences(tables)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("validateBackupRuleReferences err=%v, want contains %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateBackupRuleReferences unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 // R62 C2-N1（传播通道钳制）: v2 备份中 TCP + enable_tls=1 + 空证书的行被静默钳制
 // 为关闭 TLS（不因存量形态拒绝整包导入）。
 func TestValidateV2BackupTLSShape_clamps_tcp_stale_tls(t *testing.T) {

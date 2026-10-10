@@ -485,7 +485,7 @@
             <div v-if="wizardForm.dynamic_dns" class="info-note-bar"><span class="info-note-desc">动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP</span></div>
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
-              <el-table-column label="主机地址 *" min-width="180">
+              <el-table-column label="主机地址 *" min-width="160">
                 <template #default="{ row, $index }">
                   <el-input 
                     v-model="row.host" 
@@ -514,6 +514,25 @@
                       <el-option value="https" label="HTTPS" />
                     </template>
                   </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column min-width="150" v-if="wizardForm.protocol === 'http'">
+                <template #header>
+                  回源域名
+                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（可带端口，如 origin.example.com:8443）。留空=跟随「后端域名」，后端域名也空=用上游地址/客户端 Host">
+                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </template>
+                <template #default="{ row }">
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（请使用规则级后端域名）">
+                    <el-input
+                      v-model="row.origin_domain"
+                      placeholder="继承后端域名"
+                      size="small"
+                      class="upstream-input"
+                      :disabled="wizardForm.dynamic_dns"
+                    />
+                  </el-tooltip>
                 </template>
               </el-table-column>
               <el-table-column width="110">
@@ -634,7 +653,11 @@
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查路径">
                   <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
-                  <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常；携带后端域名作为 Host 头</span>
+                  <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常</span>
+                </el-form-item>
+                <el-form-item label="健康检查域名">
+                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=携带后端域名" style="width: 300px;" />
+                  <span class="form-tip-inline">探测请求的 Host 头取健康检查域名→后端域名；探测 HTTPS 上游时不携带独立 SNI（回源域名仅作用于代理流量）</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
@@ -786,7 +809,7 @@
             <el-descriptions-item label="负载策略">{{ getStrategyLabel(wizardForm.strategy) }}</el-descriptions-item>
             <el-descriptions-item label="健康检查" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_active_health_check">
-                {{ wizardForm.health_check_path || '/' }} ({{ wizardForm.health_check_interval }}s/{{ wizardForm.health_check_timeout }}s)
+                {{ wizardForm.health_check_path || '/' }} ({{ wizardForm.health_check_interval }}s/{{ wizardForm.health_check_timeout }}s){{ wizardForm.health_check_host ? `，Host: ${wizardForm.health_check_host}` : '' }}
               </template>
               <template v-else>被动检查 (失败 {{ wizardForm.health_check_unhealthy_threshold }} 次视为不健康, 超时 {{ wizardForm.health_check_timeout }}s)</template>
             </el-descriptions-item>
@@ -853,6 +876,9 @@
                   <template #default="{ row }">{{ row.enabled ? `${weightPercent(wizardForm.upstreams, row)}%` : '禁用' }}</template>
                 </el-table-column>
                 <el-table-column prop="max_connections" :label="wizardForm.protocol === 'http' ? '最大请求数' : '最大连接'" width="100" />
+                <el-table-column v-if="wizardForm.protocol === 'http'" label="回源域名" min-width="130">
+                  <template #default="{ row }">{{ row.origin_domain || '-' }}</template>
+                </el-table-column>
                 <el-table-column prop="enabled" label="状态" width="70">
                   <template #default="{ row }">
                     {{ row.enabled ? '启用' : '禁用' }}
@@ -913,7 +939,7 @@
             {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types[0] : (ruleConfig.compress_types || 'gzip')) : '禁用' }}
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && ruleConfig.health_check_path">
-            {{ ruleConfig.health_check_path }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s)
+            {{ ruleConfig.health_check_path }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s){{ ruleConfig.health_check_host ? `，Host: ${ruleConfig.health_check_host}` : '' }}
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && !ruleConfig.health_check_path">未启用</el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'tcp' && ruleConfig.enable_active_health_check">
@@ -949,6 +975,9 @@
             <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
           </el-table-column>
           <el-table-column prop="max_connections" :label="ruleConfig?.protocol === 'http' ? '最大请求数' : '最大连接'" align="center" />
+          <el-table-column v-if="ruleConfig?.protocol === 'http'" label="回源域名" align="center">
+            <template #default="{ row }">{{ row.origin_domain || '-' }}</template>
+          </el-table-column>
           <el-table-column prop="enabled" label="状态" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
@@ -1194,6 +1223,7 @@ interface RuleConfigView {
   enable_dns_server: boolean
   dns_server: string
   host_header: string
+  health_check_host: string
   enable_tls: boolean
   tls_source: string
   tls_http_redirect: boolean
@@ -1801,6 +1831,7 @@ const defaultUpstream = (protocol: UpstreamProtocol = 'http'): UpstreamInput => 
   enabled: true,
   protocol,
   max_connections: 0,
+  origin_domain: '',
 })
 
 const pathRuleUpstreamsToPercent = (upstreams: readonly PathRuleUpstream[] | null | undefined): PathRuleUpstream[] | null => {
@@ -1857,6 +1888,7 @@ const wizardForm = reactive<RuleForm>({
   tcp_try_duration: 0,
   tcp_try_interval: 250,
   host_header: '',
+  health_check_host: '',
   upstreams: [],
   enable_tls: false,
   tls_source: 'manual',
@@ -2267,11 +2299,13 @@ const openWizard = async (rule?: Rule) => {
       tcp_try_duration: fullRule.tcp_try_duration || 0,
       tcp_try_interval: fullRule.tcp_try_interval ?? 250,
       host_header: fullRule.host_header || '',
+      health_check_host: fullRule.health_check_host || '',
       upstreams: fullRule.upstreams?.map(u => ({
         ...u,
         dynamic_dns: false,
         protocol: u.protocol || 'http',
         max_connections: u.max_connections ?? 0,
+        origin_domain: u.origin_domain || '',
       })) || [],
       enable_tls: fullRule.enable_tls || false,
       tls_source: fullRule.tls_source || 'manual',
@@ -2328,6 +2362,7 @@ const openWizard = async (rule?: Rule) => {
       tcp_try_duration: 0,
       tcp_try_interval: 250,
       host_header: '',
+      health_check_host: '',
       dns_server: '',
       dns_family: ['ipv4'],
       upstreams: [defaultUpstream()],
@@ -2648,6 +2683,43 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
+  // 逐上游回源域名（2026-10-10）：与后端 validateRulePayloadBeforeSave 同口径——
+  // host[:port] 形状、仅 HTTP 静态上游可用
+  const isValidOriginDomain = (value: string): boolean => {
+    const match = value.match(/^([A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)(?::(\d{1,5}))?$/)
+    if (!match) return false
+    if (match[3] !== undefined) {
+      const port = Number(match[3])
+      if (port < 1 || port > 65535) return false
+    }
+    return true
+  }
+  for (const [index, upstream] of wizardForm.upstreams.entries()) {
+    const origin = (upstream.origin_domain || '').trim()
+    if (origin === '') continue
+    if (wizardForm.protocol !== 'http') {
+      ElMessage.warning(`上游 #${index + 1}：回源域名仅 HTTP 规则支持`)
+      saving.value = false
+      return
+    }
+    if (wizardForm.dynamic_dns) {
+      ElMessage.warning(`上游 #${index + 1}：动态上游模式不支持回源域名（请使用规则级后端域名）`)
+      saving.value = false
+      return
+    }
+    if (!isValidOriginDomain(origin)) {
+      ElMessage.warning(`上游 #${index + 1}：回源域名 "${origin}" 无效（host 或 host:port）`)
+      saving.value = false
+      return
+    }
+  }
+  // 健康检查域名：probe Host 头，纯主机名不带端口（与后端同口径）
+  const healthCheckHost = (wizardForm.health_check_host || '').trim()
+  if (healthCheckHost !== '' && wizardForm.protocol === 'http' && !/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(healthCheckHost)) {
+    ElMessage.warning(`健康检查域名 "${healthCheckHost}" 无效（仅支持主机名，不带端口）`)
+    saving.value = false
+    return
+  }
   const allowedStrategies = wizardForm.protocol === 'tcp'
     ? ['weighted_round_robin', 'ip_hash', 'least_conn', 'random', 'first']
     : ['weighted_round_robin', 'ip_hash', 'least_conn', 'random', 'first', 'cookie']
@@ -2698,6 +2770,8 @@ const submitWizard = async () => {
       weight: u.weight ?? 100,
       dynamic_dns: wizardForm.dynamic_dns,
       max_connections: u.max_connections ?? 0,
+      // 动态上游模式回源域名不可用（后端同口径 400；UI 列已禁用，此处防 stale 值外泄）
+      origin_domain: wizardForm.dynamic_dns ? '' : (u.origin_domain || ''),
     }))
 
     const data: UpdateRuleRequest = {
@@ -2722,6 +2796,7 @@ const submitWizard = async () => {
       tcp_try_duration: wizardForm.tcp_try_duration || 0,
       tcp_try_interval: wizardForm.tcp_try_interval ?? 250,
       host_header: wizardForm.host_header,
+      health_check_host: wizardForm.health_check_host || '',
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
       tls_source: wizardForm.tls_source,
@@ -2966,11 +3041,13 @@ const openCopyWizard = async (rule: Rule) => {
     tcp_try_duration: fullRule.tcp_try_duration || 0,
     tcp_try_interval: fullRule.tcp_try_interval ?? 250,
     host_header: fullRule.host_header || '',
+    health_check_host: fullRule.health_check_host || '',
     upstreams: fullRule.upstreams?.map(u => ({
       ...u,
       dynamic_dns: false,
       protocol: u.protocol || 'http',
       max_connections: u.max_connections ?? 0,
+      origin_domain: u.origin_domain || '',
     })) || [],
     enable_tls: fullRule.enable_tls || false,
     tls_source: fullRule.tls_source || 'manual',
@@ -3036,6 +3113,7 @@ const viewConfig = async (rule: Rule) => {
       enable_dns_server: rule.enable_dns_server || false,
       dns_server: rule.dns_server || '',
       host_header: rule.host_header || '',
+      health_check_host: rule.health_check_host || '',
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,
@@ -3073,6 +3151,7 @@ const viewConfig = async (rule: Rule) => {
       enable_dns_server: rule.enable_dns_server || false,
       dns_server: rule.dns_server || '',
       host_header: rule.host_header || '',
+      health_check_host: rule.health_check_host || '',
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,

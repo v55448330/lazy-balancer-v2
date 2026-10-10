@@ -152,12 +152,14 @@ type LbRule struct {
 	PathRules                     []PathRule `json:"path_rules"`
 	Upstreams                     []Upstream `json:"upstreams"`
 	HostHeader                    string     `json:"host_header"`
-	EnableTLS                     bool       `json:"enable_tls"`
-	TLSSource                     string     `json:"tls_source"`
-	ACMEConfigID                  int        `json:"acme_config_id"`
-	CAProviderID                  int        `json:"ca_provider_id"`
-	TLSCert                       string     `json:"tls_cert,omitempty"`
-	TLSKey                        string     `json:"tls_key,omitempty"`
+	// 健康检查域名（2026-10-10）：主动健康检查 probe 的 Host 头；空=跟随 HostHeader。
+	HealthCheckHost string `json:"health_check_host"`
+	EnableTLS       bool   `json:"enable_tls"`
+	TLSSource       string `json:"tls_source"`
+	ACMEConfigID    int    `json:"acme_config_id"`
+	CAProviderID    int    `json:"ca_provider_id"`
+	TLSCert         string `json:"tls_cert,omitempty"`
+	TLSKey          string `json:"tls_key,omitempty"`
 	// TLSKeySet 标记「已有隐藏私钥」——GetRule 对只读 Key/非管理员掩码 tls_key
 	// 为空串时置 true，编辑表单借此区分「未配置」与「已隐藏」（F50-7）。
 	TLSKeySet       bool   `json:"tls_key_set,omitempty"`
@@ -282,6 +284,9 @@ type Upstream struct {
 	Enabled        bool   `json:"enabled"`
 	Protocol       string `json:"protocol"`
 	MaxConnections int    `json:"max_connections"`
+	// 逐上游回源域名（2026-10-10）：非空时驱动该上游回源 Host 头与 HTTPS SNI
+	// （map 处理器晚绑定查表）；空=跟随规则级 HostHeader/现状默认。
+	OriginDomain string `json:"origin_domain,omitempty"`
 }
 
 type PathRuleUpstream struct {
@@ -450,17 +455,19 @@ type CreateRuleRequest struct {
 	ProxyStreamCloseDelay         int        `json:"proxy_stream_close_delay"`
 	PathRules                     []PathRule `json:"path_rules"`
 	HostHeader                    string     `json:"host_header"`
-	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
-	EnableTLS                     bool       `json:"enable_tls"`
-	TLSSource                     string     `json:"tls_source"`
-	ACMEConfigID                  int        `json:"acme_config_id"`
-	CAProviderID                  int        `json:"ca_provider_id"`
-	TLSCert                       string     `json:"tls_cert"`
-	TLSKey                        string     `json:"tls_key"`
-	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
-	EnableCompress                bool       `json:"enable_compress"`
-	CompressTypes                 string     `json:"compress_types"`
-	LogEnabled                    bool       `json:"log_enabled"`
+	// 健康检查域名：空=跟随 HostHeader（省略与空串同义，创建语义）。
+	HealthCheckHost string     `json:"health_check_host"`
+	Upstreams       []Upstream `json:"upstreams" binding:"required"`
+	EnableTLS       bool       `json:"enable_tls"`
+	TLSSource       string     `json:"tls_source"`
+	ACMEConfigID    int        `json:"acme_config_id"`
+	CAProviderID    int        `json:"ca_provider_id"`
+	TLSCert         string     `json:"tls_cert"`
+	TLSKey          string     `json:"tls_key"`
+	TLSHTTPRedirect bool       `json:"tls_http_redirect"`
+	EnableCompress  bool       `json:"enable_compress"`
+	CompressTypes   string     `json:"compress_types"`
+	LogEnabled      bool       `json:"log_enabled"`
 	// 阶段拦截页覆盖层（0=跟随策略；status ∈ {0,400,401,403,404,503}）
 	BlockPageStage1ID     int `json:"block_page_stage1_id"`
 	BlockPageStage1Status int `json:"block_page_stage1_status"`
@@ -514,18 +521,20 @@ type UpdateRuleRequest struct {
 	ProxyStreamCloseDelay      *int        `json:"proxy_stream_close_delay"`
 	PathRules                  *[]PathRule `json:"path_rules"`
 	HostHeader                 *string     `json:"host_header"`
-	Upstreams                  []Upstream  `json:"upstreams"`
-	EnableTLS                  *bool       `json:"enable_tls"`
-	TLSSource                  string      `json:"tls_source"`
-	ACMEConfigID               int         `json:"acme_config_id"`
-	CAProviderID               *int        `json:"ca_provider_id"`
-	TLSCert                    string      `json:"tls_cert"`
-	TLSKey                     string      `json:"tls_key"`
-	TLSHTTPRedirect            *bool       `json:"tls_http_redirect"`
-	EnableCompress             *bool       `json:"enable_compress"`
-	CompressTypes              string      `json:"compress_types"`
-	Enabled                    *bool       `json:"enabled"`
-	LogEnabled                 *bool       `json:"log_enabled"`
+	// 健康检查域名：指针化同 HostHeader——省略=保留原值，显式空串=清空。
+	HealthCheckHost *string    `json:"health_check_host"`
+	Upstreams       []Upstream `json:"upstreams"`
+	EnableTLS       *bool      `json:"enable_tls"`
+	TLSSource       string     `json:"tls_source"`
+	ACMEConfigID    int        `json:"acme_config_id"`
+	CAProviderID    *int       `json:"ca_provider_id"`
+	TLSCert         string     `json:"tls_cert"`
+	TLSKey          string     `json:"tls_key"`
+	TLSHTTPRedirect *bool      `json:"tls_http_redirect"`
+	EnableCompress  *bool      `json:"enable_compress"`
+	CompressTypes   string     `json:"compress_types"`
+	Enabled         *bool      `json:"enabled"`
+	LogEnabled      *bool      `json:"log_enabled"`
 	// 阶段拦截页覆盖层：指针化——省略（nil）=保留原值（同 CAProviderID 先例），
 	// 显式 0=清除覆盖（跟随策略）。
 	BlockPageStage1ID     *int `json:"block_page_stage1_id"`

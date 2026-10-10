@@ -325,6 +325,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		Enabled        bool
 		Protocol       string
 		MaxConnections int
+		OriginDomain   string
 	}
 
 	type requestData struct {
@@ -351,6 +352,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		CompressTypes                 string
 		EnableActiveHealthCheck       bool
 		HostHeader                    string
+		HealthCheckHost               string
 		RequestBodyMaxSizeMB          int
 		UpstreamKeepaliveTimeout      int
 		ServerTokensHidden            int
@@ -389,6 +391,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
 		data.HostHeader = r.HostHeader
+		data.HealthCheckHost = r.HealthCheckHost
 		data.RequestBodyMaxSizeMB = r.RequestBodyMaxSizeMB
 		data.UpstreamKeepaliveTimeout = r.UpstreamKeepaliveTimeout
 		data.ServerTokensHidden = r.ServerTokensHidden
@@ -400,7 +403,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight,
 				Enabled: u.Enabled, Protocol: u.Protocol,
-				MaxConnections: u.MaxConnections,
+				MaxConnections: u.MaxConnections, OriginDomain: u.OriginDomain,
 			})
 		}
 		data.Upstreams = upstreams
@@ -444,6 +447,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			data.EnableActiveHealthCheck = *r.EnableActiveHealthCheck
 		}
 		data.HostHeader = derefStr(r.HostHeader)
+		data.HealthCheckHost = derefStr(r.HealthCheckHost)
 		if r.RequestBodyMaxSizeMB != nil {
 			data.RequestBodyMaxSizeMB = *r.RequestBodyMaxSizeMB
 		}
@@ -469,7 +473,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight,
 				Enabled: u.Enabled, Protocol: u.Protocol,
-				MaxConnections: u.MaxConnections,
+				MaxConnections: u.MaxConnections, OriginDomain: u.OriginDomain,
 			})
 		}
 		data.Upstreams = upstreams
@@ -585,6 +589,20 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 			return fmt.Errorf("上游 #%d：主机 '%s' 无效", i+1, u.Host)
 		}
 
+		// 逐上游回源域名（2026-10-10）：仅 HTTP 规则静态上游可用——dynamic_dns
+		// 池 dial=解析后 IP（渲染期映射永不命中）；TCP 规则无 Host/SNI 语义。
+		if u.OriginDomain != "" {
+			if data.Protocol != "http" {
+				return fmt.Errorf("上游 #%d：回源域名仅 HTTP 规则支持", i+1)
+			}
+			if data.DynamicDNS {
+				return fmt.Errorf("上游 #%d：动态上游模式不支持回源域名（请使用规则级后端域名）", i+1)
+			}
+			if err := validateOriginDomainShape(u.OriginDomain); err != nil {
+				return fmt.Errorf("上游 #%d：回源域名 %q 无效：%w", i+1, u.OriginDomain, err)
+			}
+		}
+
 		if u.Enabled {
 			enabledUpstreamCount++
 		}
@@ -603,6 +621,17 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 
 	if data.HealthCheckPath != "" && !strings.HasPrefix(data.HealthCheckPath, "/") {
 		return fmt.Errorf("健康检查路径必须以 / 开头")
+	}
+
+	// 健康检查域名（2026-10-10）：probe 的 Host 头（health_checks.active.headers.
+	// Host 特判，不带端口）；仅 HTTP 规则渲染消费（TCP 健康检查走端口探测）。
+	if data.HealthCheckHost != "" {
+		if data.Protocol != "http" {
+			return fmt.Errorf("健康检查域名仅 HTTP 规则支持")
+		}
+		if !isValidHost(data.HealthCheckHost) {
+			return fmt.Errorf("健康检查域名 %q 无效（仅支持主机名，不带端口）", data.HealthCheckHost)
+		}
 	}
 
 	if data.EnableTLS && data.TLSSource == "acme_dns" {
@@ -982,6 +1011,27 @@ func validateSingleDnsAddress(server string) error {
 	}
 	if !strings.Contains(host, ".") {
 		return fmt.Errorf("DNS 服务器地址须为 IP 或完整域名")
+	}
+	return nil
+}
+
+// validateOriginDomainShape 回源域名形状校验：host 或 host:port（Host 头可带
+// 端口，SNI 渲染期剥端口）。host 部分复用 isValidHost（IP/域名/容器服务名，
+// 字符集天然拒绝 CRLF/控制字符）；端口须为 1-65535 数字。
+func validateOriginDomainShape(value string) error {
+	host := value
+	if h, p, err := net.SplitHostPort(value); err == nil {
+		if p == "" {
+			return fmt.Errorf("端口不能为空")
+		}
+		port, perr := strconv.Atoi(p)
+		if perr != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("端口 %q 无效（必须在 1-65535 之间）", p)
+		}
+		host = h
+	}
+	if !isValidHost(host) {
+		return fmt.Errorf("主机 %q 无效", host)
 	}
 	return nil
 }

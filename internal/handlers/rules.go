@@ -942,10 +942,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
-		host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
+		host_header, health_check_host, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 		enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled,
 		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
@@ -953,7 +953,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
-		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
+		req.HostHeader, req.HealthCheckHost, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, enabledVal, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled,
 		req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
 
@@ -976,9 +976,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			}
 		}
 		// Round 37 I-11: HTTP 规则上游 protocol=tls 静默当 http 处理（与 TCP 行为不对称），显式拒绝。
-		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections)
+		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.OriginDomain)
 		if err != nil {
 			tx.Rollback()
 			services.Logf("error", "CreateRule upstream insert error: %v", err)
@@ -1132,7 +1132,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 		COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-		COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
+		COALESCE(host_header,''), COALESCE(health_check_host,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 		IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0), name, description
 	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
@@ -1146,7 +1146,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
 		&existingRule.CustomRoutesEnabled,
 		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout, &existingRule.ProxyFlushInterval, &existingRule.ProxyStreamCloseDelay,
-		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
+		&existingRule.HostHeader, &existingRule.HealthCheckHost, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.LogEnabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
 		// SLB10-N2:分判 ErrNoRows 与真实 DB 故障(同 EnableRule 口径)——
@@ -1168,7 +1168,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Round 34 F-1: 存量 upstreams.enabled 无 NOT NULL，NULL 行裸 scan 进 bool 会 500；
 	// IIF 与生成侧（services/caddy.go）同口径：NULL 视同禁用，回写/回滚保持同一有效状态。
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
+	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(origin_domain,'') FROM upstreams WHERE rule_id = ?", caddyID)
 	if err != nil {
 		services.Logf("error", "UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
@@ -1176,7 +1176,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	for oldUpstreamRows.Next() {
 		var u models.Upstream
-		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.OriginDomain); err != nil {
 			if closeErr := oldUpstreamRows.Close(); closeErr != nil {
 				services.Logf("error", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 			}
@@ -1300,6 +1300,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.HostHeader == nil {
 		req.HostHeader = &existingRule.HostHeader
 	}
+	if req.HealthCheckHost == nil {
+		req.HealthCheckHost = &existingRule.HealthCheckHost
+	}
 	if req.Name == "" {
 		req.Name = existingRule.Name
 	}
@@ -1346,6 +1349,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.DnsServer = &empty
 			req.DnsFamily = ""
 			req.HostHeader = &empty
+			req.HealthCheckHost = &empty
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
 			// U3-1:阶段页 4 列仅 http 渲染消费,切换即清零(0=跟随策略)——
@@ -1676,6 +1680,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, features.ProxyStreamCloseDelay)
 	query += "host_header = ?, "
 	args = append(args, derefStr(req.HostHeader))
+	query += "health_check_host = ?, "
+	args = append(args, derefStr(req.HealthCheckHost))
 	query += "enable_tls = ?, "
 	args = append(args, *req.EnableTLS)
 	query += "tls_source = ?, "
@@ -2458,11 +2464,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
-	tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
+	tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, health_check_host, log_enabled, caddy_id,
 		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
@@ -2470,7 +2476,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden,
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
-		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
+		now, now, rule.HostHeader, rule.HealthCheckHost, rule.LogEnabled, newCaddyID,
 		rule.CustomRoutesEnabled,
 		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay,
 		rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status,
@@ -2485,7 +2491,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// F50-1（第 50 轮审计）：dynamic_dns 同列同病——legacy NULL 行裸 scan
 	// NULL→bool 报错恒 500，按 0 归一（遗留死列，渲染只读规则级值）。
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(origin_domain,'')
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {
@@ -2501,16 +2507,17 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			Enabled        bool
 			Protocol       string
 			MaxConnections int
+			OriginDomain   string
 		}
-		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.OriginDomain); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "扫描上游失败，已回滚: " + err.Error()})
 			return
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, newCaddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
+			INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, newCaddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.OriginDomain); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制上游失败，已回滚: " + err.Error()})
 			return
@@ -2581,6 +2588,7 @@ type storedUpstream struct {
 	enabled        bool
 	protocol       string
 	maxConnections int
+	originDomain   string
 	needsNormalize bool
 }
 
@@ -2599,7 +2607,7 @@ type storedUpstream struct {
 // （weight 0→1、protocol 默认、tls 校验），内容比较以终值为准。
 func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstreams []models.Upstream) error {
 	rows, err := tx.QueryContext(ctx, `SELECT id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0),
-		IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0),
+		IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(origin_domain,''),
 		(weight IS NULL OR dynamic_dns IS NULL OR enabled IS NULL OR protocol IS NULL OR max_connections IS NULL)
 		FROM upstreams WHERE rule_id = ? ORDER BY id`, ruleID)
 	if err != nil {
@@ -2608,7 +2616,7 @@ func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstream
 	var existing []storedUpstream
 	for rows.Next() {
 		var row storedUpstream
-		if err := rows.Scan(&row.id, &row.host, &row.port, &row.weight, &row.dynamicDNS, &row.enabled, &row.protocol, &row.maxConnections, &row.needsNormalize); err != nil {
+		if err := rows.Scan(&row.id, &row.host, &row.port, &row.weight, &row.dynamicDNS, &row.enabled, &row.protocol, &row.maxConnections, &row.originDomain, &row.needsNormalize); err != nil {
 			rows.Close()
 			return fmt.Errorf("解析规则 %s 的上游: %w", ruleID, err)
 		}
@@ -2628,7 +2636,7 @@ func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstream
 	for _, u := range upstreams {
 		incoming := storedUpstream{
 			host: u.Host, port: u.Port, weight: u.Weight, dynamicDNS: u.DynamicDNS,
-			enabled: u.Enabled, protocol: u.Protocol, maxConnections: u.MaxConnections,
+			enabled: u.Enabled, protocol: u.Protocol, maxConnections: u.MaxConnections, originDomain: u.OriginDomain,
 		}
 		// ① 显式 id 命中（前端编辑既有行回传真实 id）
 		if index, ok := indexByID[u.ID]; ok && !consumed[index] {
@@ -2663,9 +2671,9 @@ func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstream
 		}
 	}
 	for _, insert := range inserts {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			ruleID, insert.host, insert.port, insert.weight, insert.dynamicDNS, insert.enabled, insert.protocol, insert.maxConnections); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ruleID, insert.host, insert.port, insert.weight, insert.dynamicDNS, insert.enabled, insert.protocol, insert.maxConnections, insert.originDomain); err != nil {
 			return fmt.Errorf("写入规则 %s 的上游 %s:%d: %w", ruleID, insert.host, insert.port, err)
 		}
 	}
@@ -2684,7 +2692,7 @@ func matchStoredUpstream(existing []storedUpstream, consumed []bool, incoming st
 			continue
 		}
 		if exactContent && (row.needsNormalize || row.weight != incoming.weight || row.dynamicDNS != incoming.dynamicDNS ||
-			row.enabled != incoming.enabled || row.maxConnections != incoming.maxConnections) {
+			row.enabled != incoming.enabled || row.maxConnections != incoming.maxConnections || row.originDomain != incoming.originDomain) {
 			continue
 		}
 		return index
@@ -2697,11 +2705,11 @@ func matchStoredUpstream(existing []storedUpstream, consumed []bool, incoming st
 func updateUpstreamTx(ctx context.Context, tx *sql.Tx, row, incoming storedUpstream) error {
 	if !row.needsNormalize && row.host == incoming.host && row.port == incoming.port && row.protocol == incoming.protocol &&
 		row.weight == incoming.weight && row.dynamicDNS == incoming.dynamicDNS &&
-		row.enabled == incoming.enabled && row.maxConnections == incoming.maxConnections {
+		row.enabled == incoming.enabled && row.maxConnections == incoming.maxConnections && row.originDomain == incoming.originDomain {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET host=?, port=?, weight=?, dynamic_dns=?, enabled=?, protocol=?, max_connections=? WHERE id=?`,
-		incoming.host, incoming.port, incoming.weight, incoming.dynamicDNS, incoming.enabled, incoming.protocol, incoming.maxConnections, row.id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET host=?, port=?, weight=?, dynamic_dns=?, enabled=?, protocol=?, max_connections=?, origin_domain=? WHERE id=?`,
+		incoming.host, incoming.port, incoming.weight, incoming.dynamicDNS, incoming.enabled, incoming.protocol, incoming.maxConnections, incoming.originDomain, row.id); err != nil {
 		return err
 	}
 	return nil

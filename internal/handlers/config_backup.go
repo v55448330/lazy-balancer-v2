@@ -721,6 +721,40 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）协议 %q 无效（TCP 规则仅支持 tcp/tls）", i+1, ruleID, protocol)
 		}
 	}
+	// 逐上游回源域名 + 健康检查域名（2026-10-10）：与保存侧
+	// validateRulePayloadBeforeSave 同口径——手造备份经 restoreTable 直写可
+	// 绕过保存侧校验，坏形状（CRLF/端口越界/模式错配）原样落库进入渲染。
+	ruleDynamicDNS := make(map[string]bool, len(tables["lb_rules"]))
+	for _, row := range tables["lb_rules"] {
+		if id, ok := row["caddy_id"].(string); ok {
+			ruleDynamicDNS[id] = backupBooleanEnabled(row["dynamic_dns"])
+		}
+		if host := backupString(row["health_check_host"]); host != "" {
+			id, _ := row["caddy_id"].(string)
+			if ruleProtocols[id] == "tcp" {
+				return fmt.Errorf("备份校验失败：规则 %q 的健康检查域名仅 HTTP 规则支持", id)
+			}
+			if !isValidHost(host) {
+				return fmt.Errorf("备份校验失败：规则 %q 的健康检查域名 %q 无效（仅支持主机名，不带端口）", id, host)
+			}
+		}
+	}
+	for i, row := range tables["upstreams"] {
+		origin := backupString(row["origin_domain"])
+		if origin == "" {
+			continue
+		}
+		ruleID, _ := row["rule_id"].(string)
+		if ruleProtocols[ruleID] != "http" {
+			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）回源域名仅 HTTP 规则支持", i+1, ruleID)
+		}
+		if ruleDynamicDNS[ruleID] {
+			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）动态上游模式不支持回源域名", i+1, ruleID)
+		}
+		if err := validateOriginDomainShape(origin); err != nil {
+			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）回源域名 %q 无效：%w", i+1, ruleID, origin, err)
+		}
+	}
 	// R49 C-#2：security_policy_bindings 无外键约束，悬挂引用可原样落库——绑定指向
 	// 不存在的策略时，loadSecurityPolicyContext 查不到策略即按无策略渲染，该规则
 	// WAF/限流/GeoIP 全部静默失效（与 R47 B-5 同类的静默 weakening）。保存侧绑定

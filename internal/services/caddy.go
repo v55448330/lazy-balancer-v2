@@ -1275,6 +1275,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		ProxyStreamCloseDelay         int
 		PathRules                     []PathRuleConfig
 		HostHeader                    string
+		HealthCheckHost               string
 		LogEnabled                    bool
 		BlockPageStage1ID             int
 		BlockPageStage1Status         int
@@ -1289,6 +1290,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		Enabled        bool
 		Protocol       string
 		MaxConnections int
+		OriginDomain   string
 	}
 
 	type ruleWithUpstreams struct {
@@ -1308,7 +1310,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
+	       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''), COALESCE(health_check_host,''),
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		       COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
@@ -1328,7 +1330,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
-			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled,
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.HealthCheckHost, &r.LogEnabled,
 			&r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&r.BlockPageStage1ID, &r.BlockPageStage1Status, &r.BlockPageStage3ID, &r.BlockPageStage3Status)
@@ -1362,7 +1364,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	}
 
 	upstreamRows, err := store.Query(`
-		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
+		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0), COALESCE(u.origin_domain,'')
 		FROM upstreams u JOIN lb_rules r ON r.caddy_id = u.rule_id
 		WHERE IIF(u.enabled IN ('1',1),1,0) = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
 	`)
@@ -1372,7 +1374,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	for upstreamRows.Next() {
 		var ruleID string
 		var u upstream
-		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.OriginDomain); err != nil {
 			closeErr := upstreamRows.Close()
 			return generationFailure("scan upstream: %v", errors.Join(err, closeErr))
 		}
@@ -1694,6 +1696,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				CompressTypes:                    r.CompressTypes,
 				EnableActiveHealthCheck:          r.EnableActiveHealthCheck,
 				HostHeader:                       r.HostHeader,
+				HealthCheckHost:                  r.HealthCheckHost,
 				RequestBodyMaxSizeMB:             r.RequestBodyMaxSizeMB,
 				UpstreamKeepaliveTimeout:         r.UpstreamKeepaliveTimeout,
 				ServerTokensHidden:               r.ServerTokensHidden,
@@ -1732,7 +1735,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 					}
 					ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
 						Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-						MaxConnections: u.MaxConnections,
+						MaxConnections: u.MaxConnections, OriginDomain: u.OriginDomain,
 					})
 				}
 			}
@@ -2405,40 +2408,43 @@ func httpsRedirectLocation(listenPort int) string {
 }
 
 type SingleRuleConfig struct {
-	CaddyID                          string
-	Protocol                         string
-	Domain                           string
-	ListenPort                       int
-	Strategy                         string
-	DynamicDNS                       bool
-	EnableDnsServer                  bool
-	DnsServer                        string
-	DnsFamily                        string
-	HealthCheckPath                  string
-	HealthCheckInterval              int
-	HealthCheckTimeout               int
-	HealthCheckUnhealthyThreshold    int
-	HealthCheckHealthyThreshold      int
-	EnableTLS                        bool
-	TLSSource                        string
-	ACMEConfigID                     int
-	TLSCert                          string
-	TLSKey                           string
-	TLSHTTPRedirect                  bool
-	EnableCompress                   bool
-	CompressTypes                    string
-	EnableActiveHealthCheck          bool
-	TCPHealthCheckPort               int
-	TCPProxyProtocol                 bool
-	TCPTryDuration                   int
-	TCPTryInterval                   int
-	RequestBodyMaxSizeMB             int
-	UpstreamKeepaliveTimeout         int
-	ServerTokensHidden               int
-	GlobalRequestBodyMaxSizeMB       int
-	GlobalUpstreamKeepaliveTimeout   int
-	GlobalServerTokensHidden         bool
-	HostHeader                       string
+	CaddyID                        string
+	Protocol                       string
+	Domain                         string
+	ListenPort                     int
+	Strategy                       string
+	DynamicDNS                     bool
+	EnableDnsServer                bool
+	DnsServer                      string
+	DnsFamily                      string
+	HealthCheckPath                string
+	HealthCheckInterval            int
+	HealthCheckTimeout             int
+	HealthCheckUnhealthyThreshold  int
+	HealthCheckHealthyThreshold    int
+	EnableTLS                      bool
+	TLSSource                      string
+	ACMEConfigID                   int
+	TLSCert                        string
+	TLSKey                         string
+	TLSHTTPRedirect                bool
+	EnableCompress                 bool
+	CompressTypes                  string
+	EnableActiveHealthCheck        bool
+	TCPHealthCheckPort             int
+	TCPProxyProtocol               bool
+	TCPTryDuration                 int
+	TCPTryInterval                 int
+	RequestBodyMaxSizeMB           int
+	UpstreamKeepaliveTimeout       int
+	ServerTokensHidden             int
+	GlobalRequestBodyMaxSizeMB     int
+	GlobalUpstreamKeepaliveTimeout int
+	GlobalServerTokensHidden       bool
+	HostHeader                     string
+	// 健康检查域名：主动健康检查 probe 的 Host 头（health_checks.active.headers.Host
+	// 特判实证，healthchecks.go:453-458）；空=跟随 HostHeader。
+	HealthCheckHost                  string
 	CustomRoutesEnabled              bool
 	PathRules                        []PathRuleConfig
 	ProxyDialTimeout                 int
@@ -2491,6 +2497,9 @@ type UpstreamConfig struct {
 	Protocol       string
 	Enabled        bool
 	MaxConnections int
+	// 逐上游回源域名：非空时经 map 处理器（{lb.upstream_host}/{lb.upstream_sni}）
+	// 驱动该上游回源 Host 头与 HTTPS SNI；空=跟随 HostHeader/现状默认。
+	OriginDomain string
 }
 
 func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upstreamKeepalive int, hideServer bool) {
@@ -3045,6 +3054,15 @@ func joinUpstreamAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
+// stripOriginPort 剥离 host:port 形态的端口（SNI 不得含端口）；无端口形态
+// （含裸 IPv6 字面量）原样返回。渲染期预计算 map outputs 第二值专用。
+func stripOriginPort(host string) string {
+	if hostOnly, _, err := net.SplitHostPort(host); err == nil {
+		return hostOnly
+	}
+	return host
+}
+
 // blockStatusForPolicy 返回策略段的中断抬码（阶段化模型）：规则配了阶段 3
 // 拦截页（id>0 且页内容非空）→ 恒 482（规则级覆盖层压过逐策略归因）；否则
 // 该策略在生成上下文中的合成中断码（483+，拦截页逐策略归因默认层）；无批量
@@ -3530,6 +3548,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	upstreamList := make([]interface{}, 0, len(enabledUpstreams))
 	upstreamWeights := make([]int, 0, len(enabledUpstreams))
 	hasHTTPSUpstream := false
+	// 逐上游回源域名（2026-10-10，原生 map 方案）：dial→origin_domain 收敛表。
+	// 仅静态模式收录——dynamic_dns 池 dial=解析后 IP（请求期才确定），静态映射
+	// 永不命中（校验侧另 400 拒绝，此处为渲染守卫）；同 dial 重复条目首现生效
+	// （map Validate 拒绝重复 input，map.go:107-115——保存侧查重之外的防御）。
+	originDomains := make(map[string]string, len(enabledUpstreams))
+	originDialOrder := make([]string, 0, len(enabledUpstreams))
 	for _, upstream := range enabledUpstreams {
 		weight := upstream.Weight
 		if weight <= 0 {
@@ -3560,9 +3584,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			}
 			upstreamList = append(upstreamList, upstreamEntry)
 		} else {
-			entry := map[string]interface{}{"dial": joinUpstreamAddress(upstream.Host, upstream.Port)}
+			dial := joinUpstreamAddress(upstream.Host, upstream.Port)
+			entry := map[string]interface{}{"dial": dial}
 			if upstream.MaxConnections > 0 {
 				entry["max_requests"] = upstream.MaxConnections
+			}
+			if upstream.OriginDomain != "" {
+				if _, dup := originDomains[dial]; !dup {
+					originDomains[dial] = upstream.OriginDomain
+					originDialOrder = append(originDialOrder, dial)
+				}
 			}
 			upstreamList = append(upstreamList, entry)
 		}
@@ -3643,8 +3674,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 				"passes":   hcPasses,
 				"fails":    hcThreshold,
 			}
-			if rule.HostHeader != "" {
-				active["headers"] = map[string]interface{}{"Host": []string{rule.HostHeader}}
+			// 健康检查域名优先于规则级后端域名（probe Host 头特判实证，
+			// healthchecks.go:453-458）；皆空则不输出 headers 键（现状不变）。
+			probeHost := rule.HealthCheckHost
+			if probeHost == "" {
+				probeHost = rule.HostHeader
+			}
+			if probeHost != "" {
+				active["headers"] = map[string]interface{}{"Host": []string{probeHost}}
 			}
 			healthChecks["active"] = active
 		}
@@ -3665,9 +3702,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	if needsTransport {
 		transportConfig := map[string]interface{}{"protocol": "http"}
 		if hasHTTPSUpstream {
+			// 逐上游回源域名在场时 SNI 改走占位符（server_name 占位符逐连接展开
+			// 实证，httptransport.go:427-446）。已知限制：主动健康检查 probe 用
+			// 全新 replacer（healthchecks.go:442），占位符不展开→probe 不发 SNI；
+			// 项目恒 insecure_skip_verify，TLS 层不断（严格 SNI 多租户上游为边角）。
+			serverName := rule.HostHeader
+			if len(originDomains) > 0 {
+				serverName = "{lb.upstream_sni}"
+			}
 			transportConfig["tls"] = map[string]interface{}{
 				"insecure_skip_verify": true,
-				"server_name":          rule.HostHeader,
+				"server_name":          serverName,
 			}
 		}
 		if rule.EnableDnsServer && rule.DnsServer != "" {
@@ -3709,7 +3754,11 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"X-Lb-Security-Timing-Start-Ns",
 		},
 	}
-	if rule.HostHeader != "" {
+	// 回源域名在场时 Host 头改走 map 占位符（defaults 已烘焙 host_header/透传
+	// 回退链）；否则维持静态 host_header 或透传现状。
+	if len(originDomains) > 0 {
+		proxyRequestHeaders["set"] = map[string]interface{}{"Host": []string{"{lb.upstream_host}"}}
+	} else if rule.HostHeader != "" {
 		proxyRequestHeaders["set"] = map[string]interface{}{"Host": []string{rule.HostHeader}}
 	}
 	proxyConfig["headers"] = map[string]interface{}{"request": proxyRequestHeaders}
@@ -3721,6 +3770,39 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 响应头时会把上游的 Server 头重新写回，隐藏永远不生效；deferred 使
 			// 删除推迟到上游响应写入之后（Caddy v2.11.4 headers.go + reverseproxy.go）。
 			"response": map[string]interface{}{"deferred": true, "delete": []string{"Server"}},
+		})
+	}
+	// 逐上游回源域名（2026-10-10）：内建 http.handlers.map 晚绑定查表——Source
+	// {http.reverse_proxy.upstream.hostport} 在占位符被使用时才求值（map.go:138），
+	// 恰为 reverse_proxy 选中上游后（reverseproxy.go:663-692：每次 attempt 先 Set
+	// 上游占位符再展开 headers/transport，重试换上游逐次重展开）。defaults 回退链
+	// 精确复现现状：Host=host_header 或 {http.request.hostport}（r.Host 原样——
+	// 全 http 池=客户端透传、TLS 池=transport 默认注入的选中上游 hostport，
+	// httptransport.go:631-642）；SNI=host_header 剥端口或 dial 主机名（stdlib 空
+	// server_name 默认）。originDialOrder 保持上游 SELECT 序（确定性渲染）。
+	if len(originDialOrder) > 0 {
+		hostFallback := rule.HostHeader
+		if hostFallback == "" {
+			hostFallback = "{http.request.hostport}"
+		}
+		sniFallback := stripOriginPort(rule.HostHeader)
+		if sniFallback == "" {
+			sniFallback = "{http.reverse_proxy.upstream.host}"
+		}
+		mappings := make([]map[string]interface{}, 0, len(originDialOrder))
+		for _, dial := range originDialOrder {
+			origin := originDomains[dial]
+			mappings = append(mappings, map[string]interface{}{
+				"input":   dial,
+				"outputs": []string{origin, stripOriginPort(origin)},
+			})
+		}
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler":      "map",
+			"source":       "{http.reverse_proxy.upstream.hostport}",
+			"destinations": []string{"{lb.upstream_host}", "{lb.upstream_sni}"},
+			"mappings":     mappings,
+			"defaults":     []string{hostFallback, sniFallback},
 		})
 	}
 	handleChain = append(handleChain, proxyConfig)
