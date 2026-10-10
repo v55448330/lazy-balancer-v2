@@ -649,7 +649,7 @@
                    逐上游回源域名（引擎硬墙：probe 不走处理链、replacer 无提供者），
                    统一 Host 探测可能误摘按域名严格校验的后端节点 -->
               <div v-if="mixedOriginActiveCheckWarn" class="info-note-bar">
-                各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断
+                <span class="info-note-desc">各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断</span>
               </div>
 
               <template v-if="wizardForm.enable_active_health_check">
