@@ -56,7 +56,7 @@
             </div>
           </label>
 
-          <label class="rule-field upstream-path-field">
+          <label v-if="!rule.response_mode" class="rule-field upstream-path-field">
             <span class="rule-field-label">
               上游路径
               <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
@@ -80,7 +80,55 @@
           </label>
         </div>
 
-        <div class="custom-upstream-toggle">
+        <!-- 响应方式行（2026-10-10 用户裁定）：转发上游（默认）/直接返回/301 跳转 -->
+        <div class="rule-field path-rule-mode-row">
+          <span class="rule-field-label">响应方式</span>
+          <el-select v-model="rule.response_mode" size="small" style="width: 160px;" aria-label="响应方式" @change="onModeChange(rule)">
+            <el-option label="转发上游（默认）" value="" />
+            <el-option label="直接返回" value="static" />
+            <el-option label="301 跳转" value="redirect" />
+          </el-select>
+          <span class="form-tip-inline" v-if="!rule.response_mode">按路径转发到上游</span>
+          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">不访问上游，直接返回指定状态码与内容</span>
+          <span class="form-tip-inline" v-else>不访问上游，301 永久跳转到目标地址</span>
+        </div>
+
+        <!-- 直接返回字段行 -->
+        <div v-if="rule.response_mode === 'static'" class="path-rule-response-row">
+          <label class="rule-field">
+            <span class="rule-field-label">状态码</span>
+            <el-select v-model="rule.response_status" size="small" style="width: 110px;" aria-label="状态码">
+              <el-option v-for="code in STATIC_STATUSES" :key="code" :label="String(code)" :value="code" />
+            </el-select>
+          </label>
+          <label class="rule-field">
+            <span class="rule-field-label">格式</span>
+            <el-select v-model="rule.response_content_type" size="small" style="width: 130px;" aria-label="响应格式">
+              <el-option label="纯文本" value="text/plain" />
+              <el-option label="JSON" value="application/json" />
+              <el-option label="HTML" value="text/html" />
+            </el-select>
+          </label>
+          <label class="rule-field" style="flex: 1;">
+            <span class="rule-field-label">内容</span>
+            <div class="rule-field-control">
+              <el-input v-model="rule.response_body" size="small" maxlength="64" show-word-limit placeholder="不超过 64 个字符，可留空" :aria-label="`路径规则 ${index + 1} 的响应内容`" />
+            </div>
+          </label>
+        </div>
+
+        <!-- 301 跳转字段行 -->
+        <div v-if="rule.response_mode === 'redirect'" class="path-rule-response-row">
+          <label class="rule-field" style="flex: 1;">
+            <span class="rule-field-label">跳转地址</span>
+            <div class="rule-field-control">
+              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error-input': responseError(index) }" />
+              <span v-if="responseError(index)" class="path-field-error">{{ responseError(index) }}</span>
+            </div>
+          </label>
+        </div>
+
+        <div v-if="!rule.response_mode" class="custom-upstream-toggle">
           <span class="custom-upstream-title">使用自定义上游</span>
           <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
           <span class="form-tip-inline">关闭时使用规则的默认上游服务器</span>
@@ -187,6 +235,46 @@ const rowShadowWarning = (index: number): string => {
   return `被前序前缀规则 ${priorIndex + 1}（${prior?.path.trim() ?? ''}）遮蔽，不会生效`
 }
 
+// 直接返回/301 跳转（2026-10-10 用户裁定）：常用状态码白名单（与后端
+// validStaticResponseStatuses / ruleValidation.ts 同源）
+const STATIC_STATUSES: readonly number[] = [200, 201, 204, 400, 401, 403, 404, 410, 500, 502, 503]
+
+// onModeChange 模式切换归一：非转发模式清空转发专属字段（上游路径/自定义上游），
+// 跳转/静态互清对方字段，静态进场补默认值（后端写侧同口径归一）。
+const onModeChange = (rule: PathRule): void => {
+  if (rule.response_mode) {
+    rule.upstream_path = ''
+    rule.upstreams = null
+  }
+  if (rule.response_mode === 'static') {
+    rule.redirect_to = ''
+    if (!rule.response_status) rule.response_status = 200
+    if (!rule.response_content_type) rule.response_content_type = 'text/plain'
+  } else if (rule.response_mode === 'redirect') {
+    rule.response_body = ''
+    rule.response_content_type = ''
+  } else {
+    rule.response_status = 200
+    rule.response_body = ''
+    rule.response_content_type = ''
+    rule.redirect_to = ''
+  }
+}
+
+// responseError 行内校验（与后端 validateRuleFeatures / ruleValidation.ts 同口径）
+const responseError = (index: number): string => {
+  const rule = pathRules.value[index]
+  if (!rule) return ''
+  if (rule.response_mode === 'redirect') {
+    const target = (rule.redirect_to ?? '').trim()
+    if (!target) return '301 跳转需要填写跳转地址'
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/.test(target)) return '跳转地址含非法字符'
+    if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return '跳转地址须为 http(s):// 绝对地址或 / 开头路径'
+  }
+  return ''
+}
+
 const normalizeOrder = (): void => {
   pathRules.value.forEach((rule, index) => { rule.sort_order = index })
 }
@@ -202,7 +290,7 @@ const upstreamError = (index: number): string => {
 }
 
 const addRule = (): void => {
-  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null })
+  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: '', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
 }
 
 const removeRule = (index: number): void => {
@@ -271,6 +359,9 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .field-hint-icon { color: var(--el-text-color-placeholder); cursor: help; }
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
+/* 响应方式行 + 直接返回/301 跳转字段行（2026-10-10） */
+.path-rule-mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.path-rule-response-row { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 /* 层次二/三：开关行单句说明 + 满宽次级卡片（左右贴齐外层卡片内容缘，双侧同 padding），行距统一 12px */
 .custom-upstream-toggle { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .custom-upstream-title { color: var(--el-text-color-regular); font-size: 13px; }

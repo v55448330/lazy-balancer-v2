@@ -43,6 +43,12 @@ export interface PathRule {
   upstream_path: string
   sort_order: number
   upstreams: PathRuleUpstream[] | null
+  // 直接返回/301 跳转（2026-10-10 用户裁定）：''=转发上游（现状）/static=静态响应/redirect=301 跳转
+  response_mode?: '' | 'static' | 'redirect'
+  response_status?: number
+  response_body?: string
+  response_content_type?: '' | 'text/plain' | 'application/json' | 'text/html'
+  redirect_to?: string
 }
 
 export interface ProxyTimeoutConfig {

@@ -11,6 +11,12 @@ type PathRuleInput = {
   readonly upstream_path?: string
   readonly sort_order: number
   readonly upstreams: readonly PathUpstreamInput[] | null
+  // 直接返回/301 跳转（2026-10-10）：''=转发（现状）/static/redirect
+  readonly response_mode?: '' | 'static' | 'redirect'
+  readonly response_status?: number
+  readonly response_body?: string
+  readonly response_content_type?: string
+  readonly redirect_to?: string
 }
 
 const isValidIpv4 = (value: string): boolean => {
@@ -59,6 +65,12 @@ export const canonicalPathKey = (matchType: 'prefix' | 'exact', raw: string): st
   return canonical === '' ? '/' : canonical
 }
 
+
+// 直接返回的常用状态码白名单（与后端 validStaticResponseStatuses 同源）
+const STATIC_RESPONSE_STATUSES: Readonly<Record<number, true>> = {
+  200: true, 201: true, 204: true, 400: true, 401: true,
+  403: true, 404: true, 410: true, 500: true, 502: true, 503: true,
+}
 export const validatePathRules = (rules: readonly PathRuleInput[]): string | null => {
   const seen = new Map<string, number>()
   // C-F3 同后端：prefix 与 exact 在同一路径上并存时，路由按 SortOrder 首条终结
@@ -89,6 +101,27 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       if (shadowAt !== undefined) return `第 ${rowNumber} 条路径与第 ${shadowAt} 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整`
       seenExactNorms.set(canonical, rowNumber)
     }
+    // 直接返回/301 跳转（2026-10-10 用户裁定）：与后端 validateRuleFeatures 同口径
+    if (rule.response_mode === 'static') {
+      const status = rule.response_status || 200
+      if (!STATIC_RESPONSE_STATUSES[status]) return `第 ${rowNumber} 条路径：直接返回的状态码 ${status} 不在常用集合`
+      if ([...rule.response_body ?? ''].length > 64) return `第 ${rowNumber} 条路径：响应内容不能超过 64 个字符`
+      const ct = rule.response_content_type ?? ''
+      if (ct !== '' && ct !== 'text/plain' && ct !== 'application/json' && ct !== 'text/html') return `第 ${rowNumber} 条路径：响应格式仅支持纯文本/JSON/HTML`
+      if (rule.redirect_to) return `第 ${rowNumber} 条路径：直接返回与跳转地址互斥`
+      if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：直接返回模式与上游配置互斥`
+      continue
+    }
+    if (rule.response_mode === 'redirect') {
+      const target = (rule.redirect_to ?? '').trim()
+      if (!target) return `第 ${rowNumber} 条路径：301 跳转需要填写跳转地址`
+      // eslint-disable-next-line no-control-regex
+      if (/[\x00-\x1f\x7f]/.test(target)) return `第 ${rowNumber} 条路径：跳转地址含非法字符`
+      if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return `第 ${rowNumber} 条路径：跳转地址须为 http(s):// 绝对地址或 / 开头路径`
+      if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：301 跳转模式与上游配置互斥`
+      continue
+    }
+    if (rule.response_mode) return `第 ${rowNumber} 条路径：response_mode 无效`
     if (rule.upstreams === null) continue
     if (rule.upstreams.length === 0) return `第 ${rowNumber} 条路径至少需要一个自定义上游`
 

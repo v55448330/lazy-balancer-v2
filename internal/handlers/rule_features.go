@@ -411,6 +411,57 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			}
 			seenExactNorms[normalizedExact] = index + 1
 		}
+		// 直接返回/301 跳转（2026-10-10 用户裁定）：模式枚举 + 按模式字段门 +
+		// 与转发配置互斥。static=常用状态码白名单 + 响应体 ≤64 字符 + 格式
+		// {text/plain,application/json,text/html}；redirect=目标必填且形状合法。
+		switch pathRule.ResponseMode {
+		case "":
+			// 转发现状：响应字段为死配置，写侧归一为默认值（replacePathRulesTx），
+			// 此处不拒（旧客户端/备份缺省形态直达）。
+		case "static":
+			// 缺省 0=默认 200（写侧归一同口径）；白名单只拦截显式的非常用值。
+			status := pathRule.ResponseStatus
+			if status == 0 {
+				status = 200
+			}
+			if !validStaticResponseStatuses[status] {
+				return fmt.Errorf("第 %d 条路径规则：直接返回的状态码 %d 不在常用集合（200/201/204/400/401/403/404/410/500/502/503）", index+1, pathRule.ResponseStatus)
+			}
+			if len([]rune(pathRule.ResponseBody)) > 64 {
+				return fmt.Errorf("第 %d 条路径规则：响应内容不能超过 64 个字符", index+1)
+			}
+			if pathRule.ResponseContentType != "" && pathRule.ResponseContentType != "text/plain" &&
+				pathRule.ResponseContentType != "application/json" && pathRule.ResponseContentType != "text/html" {
+				return fmt.Errorf("第 %d 条路径规则：响应格式仅支持 text/plain、application/json、text/html", index+1)
+			}
+			if pathRule.RedirectTo != "" {
+				return fmt.Errorf("第 %d 条路径规则：直接返回与跳转目标互斥（请清空跳转地址）", index+1)
+			}
+			if pathRule.Upstreams != nil || pathRule.UpstreamPath != "" {
+				return fmt.Errorf("第 %d 条路径规则：直接返回模式与上游配置互斥（不访问上游）", index+1)
+			}
+		case "redirect":
+			if strings.TrimSpace(pathRule.RedirectTo) == "" {
+				return fmt.Errorf("第 %d 条路径规则：301 跳转需要填写跳转地址", index+1)
+			}
+			for _, r := range pathRule.RedirectTo {
+				if r < 0x20 || r == 0x7f {
+					return fmt.Errorf("第 %d 条路径规则：跳转地址含非法字符", index+1)
+				}
+			}
+			if !strings.HasPrefix(pathRule.RedirectTo, "/") &&
+				!strings.HasPrefix(pathRule.RedirectTo, "http://") && !strings.HasPrefix(pathRule.RedirectTo, "https://") {
+				return fmt.Errorf("第 %d 条路径规则：跳转地址须为 http(s):// 绝对地址或 / 开头路径", index+1)
+			}
+			if pathRule.ResponseBody != "" || pathRule.ResponseContentType != "" {
+				return fmt.Errorf("第 %d 条路径规则：301 跳转与响应内容互斥（请清空内容/格式）", index+1)
+			}
+			if pathRule.Upstreams != nil || pathRule.UpstreamPath != "" {
+				return fmt.Errorf("第 %d 条路径规则：301 跳转模式与上游配置互斥（不访问上游）", index+1)
+			}
+		default:
+			return fmt.Errorf("第 %d 条路径规则：response_mode %q 无效（仅支持空=转发/static=直接返回/redirect=301 跳转）", index+1, pathRule.ResponseMode)
+		}
 		// C-F4: 空数组虽在生成阶段已回退主上游（Round 32 F-3，与 nil 同语义），
 		// 仍禁止写入上游表占位的空 upstreams_json——保存前拒绝保持数据整洁。
 		if pathRule.Upstreams != nil && len(pathRule.Upstreams) == 0 {
@@ -464,6 +515,19 @@ type storedPathRule struct {
 	path         string
 	upstreamPath string
 	upstreams    string // COALESCE(upstreams_json,'')：NULL 与 '' 判定等价，写回时仍按 nil 保持 NULL
+	// 直接返回/301 跳转（2026-10-10）：五列全内容列——变更触发原地 UPDATE。
+	responseMode        string
+	responseStatus      int
+	responseBody        string
+	responseContentType string
+	redirectTo          string
+}
+
+// validStaticResponseStatuses 直接返回的常用状态码白名单（2026-10-10 用户裁定）。
+var validStaticResponseStatuses = map[int]bool{
+	200: true, 201: true, 204: true,
+	400: true, 401: true, 403: true, 404: true, 410: true,
+	500: true, 502: true, 503: true,
 }
 
 // replacePathRulesTx 以「保留不变行」的方式收敛给定规则的路径规则集合（第 47 轮
@@ -478,7 +542,8 @@ type storedPathRule struct {
 // 身份判定的两个入口：前端编辑既有行回传真实 id（新增行为负的临时 id）；无 id 的
 // 调用方（MCP/导出导入/集群 apply）退化为按身份键配对。
 func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRules []models.PathRule) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id, sort_order, match_type, path, upstream_path, COALESCE(upstreams_json,'')
+	rows, err := tx.QueryContext(ctx, `SELECT id, sort_order, match_type, path, upstream_path, COALESCE(upstreams_json,''),
+		response_mode, response_status, response_body, response_content_type, redirect_to
 		FROM path_rules WHERE rule_id = ? ORDER BY sort_order, id`, ruleID)
 	if err != nil {
 		return fmt.Errorf("读取规则 %s 的路径规则: %w", ruleID, err)
@@ -486,7 +551,8 @@ func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRule
 	var existing []storedPathRule
 	for rows.Next() {
 		var row storedPathRule
-		if err := rows.Scan(&row.id, &row.sortOrder, &row.matchType, &row.path, &row.upstreamPath, &row.upstreams); err != nil {
+		if err := rows.Scan(&row.id, &row.sortOrder, &row.matchType, &row.path, &row.upstreamPath, &row.upstreams,
+			&row.responseMode, &row.responseStatus, &row.responseBody, &row.responseContentType, &row.redirectTo); err != nil {
 			rows.Close()
 			return fmt.Errorf("解析规则 %s 的路径规则: %w", ruleID, err)
 		}
@@ -520,6 +586,32 @@ func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRule
 			path:         pathRule.Path,
 			upstreamPath: pathRule.UpstreamPath,
 			upstreams:    upstreamsJSON,
+			// 缺省归一（nil/0 载荷与默认值的同义形态）：模式空=转发；static 缺省
+			// 状态码 200、格式空=text/plain（渲染侧同口径兜底）。
+			responseMode:        pathRule.ResponseMode,
+			responseStatus:      pathRule.ResponseStatus,
+			responseBody:        pathRule.ResponseBody,
+			responseContentType: pathRule.ResponseContentType,
+			redirectTo:          pathRule.RedirectTo,
+		}
+		// 按模式归一死字段（2026-10-10）：转发=五字段全默认；static=清跳转目标，
+		// 缺省状态码 0→200；redirect=清内容/格式（状态码渲染侧恒 301）。保持
+		// 存储值规范形，no-op 编辑不触发原地 UPDATE（零写入语义不破）。
+		switch incoming.responseMode {
+		case "":
+			incoming.responseStatus = 200
+			incoming.responseBody = ""
+			incoming.responseContentType = ""
+			incoming.redirectTo = ""
+		case "static":
+			if incoming.responseStatus == 0 {
+				incoming.responseStatus = 200
+			}
+			incoming.redirectTo = ""
+		case "redirect":
+			incoming.responseStatus = 200
+			incoming.responseBody = ""
+			incoming.responseContentType = ""
 		}
 		// ① 显式 id 命中（前端编辑既有行回传真实 id）
 		if index, ok := indexByID[pathRule.ID]; ok && !consumed[index] {
@@ -557,7 +649,7 @@ func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRule
 		if insert.upstreams != "" {
 			upstreamsValue = insert.upstreams
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,updated_at) VALUES (?,?,?,?,?,?,datetime('now'))`, ruleID, insert.sortOrder, insert.matchType, insert.path, insert.upstreamPath, upstreamsValue); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`, ruleID, insert.sortOrder, insert.matchType, insert.path, insert.upstreamPath, upstreamsValue, insert.responseMode, insert.responseStatus, insert.responseBody, insert.responseContentType, insert.redirectTo); err != nil {
 			return fmt.Errorf("写入规则 %s 的路径规则 %s: %w", ruleID, insert.path, err)
 		}
 	}
@@ -584,7 +676,10 @@ func matchStoredPathRule(existing []storedPathRule, consumed []bool, incoming st
 			continue
 		}
 		if row.sortOrder == incoming.sortOrder && row.matchType == incoming.matchType && row.path == incoming.path &&
-			row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams {
+			row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams &&
+			row.responseMode == incoming.responseMode && row.responseStatus == incoming.responseStatus &&
+			row.responseBody == incoming.responseBody && row.responseContentType == incoming.responseContentType &&
+			row.redirectTo == incoming.redirectTo {
 			return index
 		}
 	}
@@ -594,11 +689,15 @@ func matchStoredPathRule(existing []storedPathRule, consumed []bool, incoming st
 // updatePathRuleTx 内容真有变化时才 UPDATE（保留 id/created_at，刷新 updated_at）。
 func updatePathRuleTx(ctx context.Context, tx *sql.Tx, row, incoming storedPathRule, upstreamsValue any) error {
 	if row.sortOrder == incoming.sortOrder && row.matchType == incoming.matchType && row.path == incoming.path &&
-		row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams {
+		row.upstreamPath == incoming.upstreamPath && row.upstreams == incoming.upstreams &&
+		row.responseMode == incoming.responseMode && row.responseStatus == incoming.responseStatus &&
+		row.responseBody == incoming.responseBody && row.responseContentType == incoming.responseContentType &&
+		row.redirectTo == incoming.redirectTo {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE path_rules SET sort_order=?, match_type=?, path=?, upstream_path=?, upstreams_json=?, updated_at=datetime('now') WHERE id=?`,
-		incoming.sortOrder, incoming.matchType, incoming.path, incoming.upstreamPath, upstreamsValue, row.id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE path_rules SET sort_order=?, match_type=?, path=?, upstream_path=?, upstreams_json=?, response_mode=?, response_status=?, response_body=?, response_content_type=?, redirect_to=?, updated_at=datetime('now') WHERE id=?`,
+		incoming.sortOrder, incoming.matchType, incoming.path, incoming.upstreamPath, upstreamsValue,
+		incoming.responseMode, incoming.responseStatus, incoming.responseBody, incoming.responseContentType, incoming.redirectTo, row.id); err != nil {
 		return err
 	}
 	return nil
@@ -822,7 +921,7 @@ func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json
+	rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to
 		FROM path_rules WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY rule_id, sort_order, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("批量读取路径规则: %w", err)
@@ -831,7 +930,8 @@ func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 	for rows.Next() {
 		var pathRule models.PathRule
 		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON); err != nil {
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
+			&pathRule.ResponseMode, &pathRule.ResponseStatus, &pathRule.ResponseBody, &pathRule.ResponseContentType, &pathRule.RedirectTo); err != nil {
 			return nil, err
 		}
 		if upstreamsJSON.Valid {

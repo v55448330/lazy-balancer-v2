@@ -2644,3 +2644,85 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 		t.Fatalf("origin_domain=%q after PK rebuild, want origin.example.test（重建丢列）", originDomain)
 	}
 }
+
+// 自定义路由静态响应/301 跳转（2026-10-10 用户裁定）：path_rules 补五列——
+// response_mode(”=转发/static/redirect)/response_status/response_body/
+// response_content_type/redirect_to。path_rules 不经 migrateLbRulesPrimaryKey
+// 重建（仅 lb_rules/upstreams），fresh DDL + ensureNewColumns 双通道即可。
+func TestInitialize_freshSchemaCarriesPathRuleResponseColumns(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+
+	// Then
+	for _, tc := range []struct{ column, dflt string }{
+		{"response_mode", "''"},
+		{"response_status", "200"},
+		{"response_body", "''"},
+		{"response_content_type", "''"},
+		{"redirect_to", "''"},
+	} {
+		var notNull int
+		var columnDefault string
+		if err := DB.QueryRow(fmt.Sprintf(`SELECT "notnull", COALESCE(dflt_value,'') FROM pragma_table_info('path_rules') WHERE name='%s'`, tc.column)).Scan(&notNull, &columnDefault); err != nil {
+			t.Fatalf("read path_rules.%s schema: %v", tc.column, err)
+		}
+		if notNull != 1 || columnDefault != tc.dflt {
+			t.Fatalf("path_rules.%s notnull=%d default=%q, want notnull=1 default %s", tc.column, notNull, columnDefault, tc.dflt)
+		}
+	}
+}
+
+// TestRunMigrations_addsPathRuleResponseColumnsToLegacyRows：存量库补列后
+// 旧行五列读回默认值（”=转发/200/空体/空格式/空目标=现状转发语义零漂移）。
+func TestRunMigrations_addsPathRuleResponseColumnsToLegacyRows(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		INSERT INTO lb_rules (name,protocol,domain,listen_port,caddy_id) VALUES ('legacy','http','legacy.example.test',8080,'lb_prresp');
+		INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_prresp',0,'prefix','/api')`); err != nil {
+		t.Fatalf("seed legacy rows: %v", err)
+	}
+	for _, col := range []string{"response_mode", "response_status", "response_body", "response_content_type", "redirect_to"} {
+		var cnt int
+		if err := database.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('path_rules') WHERE name='%s'`, col)).Scan(&cnt); err != nil {
+			t.Fatalf("inspect path_rules.%s: %v", col, err)
+		}
+		if cnt == 1 {
+			if _, err := database.Exec(`ALTER TABLE path_rules DROP COLUMN ` + col); err != nil {
+				t.Fatalf("simulate legacy path_rules.%s: %v", col, err)
+			}
+		}
+	}
+
+	// When（重跑证幂等）
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then
+	var mode, body, contentType, redirectTo string
+	var status int
+	if err := database.QueryRow(`SELECT response_mode, response_status, response_body, response_content_type, redirect_to
+		FROM path_rules WHERE rule_id='lb_prresp'`).Scan(&mode, &status, &body, &contentType, &redirectTo); err != nil {
+		t.Fatalf("read migrated path rule: %v", err)
+	}
+	if mode != "" || status != 200 || body != "" || contentType != "" || redirectTo != "" {
+		t.Fatalf("migrated=(%q,%d,%q,%q,%q), want ('',200,'','','')", mode, status, body, contentType, redirectTo)
+	}
+}

@@ -1737,6 +1737,12 @@ func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.Path
 			MatchType:    backupString(row["match_type"]),
 			Path:         backupString(row["path"]),
 			UpstreamPath: backupString(row["upstream_path"]),
+			// 静态响应/301 跳转（2026-10-10）：缺键=零值=转发形态（旧备份天然兼容）
+			ResponseMode:        backupString(row["response_mode"]),
+			ResponseStatus:      backupInt(row["response_status"]),
+			ResponseBody:        backupString(row["response_body"]),
+			ResponseContentType: backupString(row["response_content_type"]),
+			RedirectTo:          backupString(row["redirect_to"]),
 		}
 		if raw, ok := row["upstreams_json"].(string); ok && raw != "" {
 			if err := json.Unmarshal([]byte(raw), &pathRule.Upstreams); err != nil {

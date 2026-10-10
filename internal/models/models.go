@@ -304,10 +304,17 @@ type PathRule struct {
 	Path      string `json:"path"`
 	// 上游 path 改写：空串=原样转发（现状语义）；非空前缀匹配剥匹配前缀后前置、
 	// 精确匹配整体替换（query 均保留，形状经 caddy 2.11.4 引擎实证）。
-	UpstreamPath string             `json:"upstream_path"`
-	Upstreams    []PathRuleUpstream `json:"upstreams"`
-	CreatedAt    time.Time          `json:"-"`
-	UpdatedAt    sql.NullTime       `json:"-"`
+	UpstreamPath string `json:"upstream_path"`
+	// 直接返回/301 跳转（2026-10-10 用户裁定）：ResponseMode ''=转发上游（现状）
+	// /static=静态响应（Status+Body+ContentType）/redirect=301 跳转（RedirectTo）。
+	ResponseMode        string             `json:"response_mode"`
+	ResponseStatus      int                `json:"response_status"`
+	ResponseBody        string             `json:"response_body"`
+	ResponseContentType string             `json:"response_content_type"`
+	RedirectTo          string             `json:"redirect_to"`
+	Upstreams           []PathRuleUpstream `json:"upstreams"`
+	CreatedAt           time.Time          `json:"-"`
+	UpdatedAt           sql.NullTime       `json:"-"`
 }
 
 // CertificateConfig represents free certificate configuration (ACME + DNS provider)

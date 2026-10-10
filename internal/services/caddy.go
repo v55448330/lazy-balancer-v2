@@ -1392,7 +1392,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 
 	if hasCustomRoutes {
 		pathRows, pathErr := store.Query(`
-			SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstream_path, p.upstreams_json
+		SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstream_path, p.upstreams_json, p.response_mode, p.response_status, p.response_body, p.response_content_type, p.redirect_to
 			FROM path_rules p JOIN lb_rules r ON r.caddy_id = p.rule_id
 			WHERE r.enabled = 1 AND r.custom_routes_enabled = 1
 			ORDER BY p.rule_id, p.sort_order, p.id
@@ -1404,7 +1404,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			var ruleID string
 			var pathRule PathRuleConfig
 			var upstreamsJSON sql.NullString
-			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON); scanErr != nil {
+			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
+				&pathRule.ResponseMode, &pathRule.ResponseStatus, &pathRule.ResponseBody, &pathRule.ResponseContentType, &pathRule.RedirectTo); scanErr != nil {
 				closeErr := pathRows.Close()
 				return generationFailure("scan path rule: %v", errors.Join(scanErr, closeErr))
 			}
@@ -2478,6 +2479,14 @@ type PathRuleConfig struct {
 	// 精确匹配整体替换（引擎实证形状，见 upstreamPathRewriteHandlers）。
 	UpstreamPath string
 	Upstreams    []UpstreamConfig
+	// 直接返回/301 跳转（2026-10-10 用户裁定）：ResponseMode ''=转发上游
+	// （现状，全链渲染）/static=静态响应/redirect=301 跳转——后两者不经
+	// 安全链与 reverse_proxy，整条路由仅 static_response 一个 handler。
+	ResponseMode        string
+	ResponseStatus      int
+	ResponseBody        string
+	ResponseContentType string
+	RedirectTo          string
 }
 
 type proxyTimeouts struct {
@@ -2910,6 +2919,19 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 			return pathRules[i].SortOrder < pathRules[j].SortOrder
 		})
 		for pathIndex, pathRule := range pathRules {
+			// 直接返回/301 跳转（2026-10-10 用户裁定）：整条路由仅原生
+			// static_response 一个 handler——不经安全链/改写/reverse_proxy
+			// （无上游可代理，静态响应天然无后端攻击面；安全策略不覆盖此类路径）。
+			if pathRule.ResponseMode == "static" || pathRule.ResponseMode == "redirect" {
+				staticRoute := map[string]interface{}{
+					"match":    []interface{}{map[string]interface{}{"host": domainHosts, "path": pathMatcherSpecs(pathRule)}},
+					"handle":   []interface{}{buildStaticResponseHandler(pathRule)},
+					"terminal": true,
+				}
+				tagRuleRoute(staticRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
+				routes = append(routes, staticRoute)
+				continue
+			}
 			upstreams := pathRule.Upstreams
 			// Round 32 F-3: 空数组与 nil 统一回退主上游——DB 中 upstreams_json="[]"
 			// 的存量路径规则此前因 `upstreams == nil` 不成立而走 buildHTTPHandleChain
@@ -2993,6 +3015,33 @@ func insertUpstreamPathRewrites(handle []interface{}, pathRule PathRuleConfig) [
 	rewritten = append(rewritten, rewrites...)
 	rewritten = append(rewritten, handle[proxyIndex:]...)
 	return rewritten
+}
+
+// buildStaticResponseHandler 渲染路径规则的直接返回/301 跳转 handler（全原生
+// http.handlers.static_response）：redirect=301+Location（目标经校验侧形状门）；
+// static=status_code+body+Content-Type，缺省兜底 200/text/plain。
+func buildStaticResponseHandler(pathRule PathRuleConfig) map[string]interface{} {
+	if pathRule.ResponseMode == "redirect" {
+		return map[string]interface{}{
+			"handler":     "static_response",
+			"status_code": 301,
+			"headers":     map[string]interface{}{"Location": []string{pathRule.RedirectTo}},
+		}
+	}
+	status := pathRule.ResponseStatus
+	if status <= 0 {
+		status = 200
+	}
+	contentType := pathRule.ResponseContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	return map[string]interface{}{
+		"handler":     "static_response",
+		"status_code": status,
+		"body":        pathRule.ResponseBody,
+		"headers":     map[string]interface{}{"Content-Type": []string{contentType}},
+	}
 }
 
 func upstreamPathRewriteHandlers(pathRule PathRuleConfig) []interface{} {

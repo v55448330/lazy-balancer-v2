@@ -2823,7 +2823,13 @@ const submitWizard = async () => {
             path: pathRule.path,
             upstream_path: pathRule.upstream_path || '',
             sort_order: index,
-            upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+            // 直接返回/301 跳转（2026-10-10）：转发模式四字段归一默认（后端写侧同口径归一）
+            response_mode: pathRule.response_mode || '',
+            response_status: pathRule.response_mode === 'static' ? (pathRule.response_status || 200) : 200,
+            response_body: pathRule.response_mode === 'static' ? (pathRule.response_body || '') : '',
+            response_content_type: pathRule.response_mode === 'static' ? (pathRule.response_content_type || '') : '',
+            redirect_to: pathRule.response_mode === 'redirect' ? (pathRule.redirect_to || '') : '',
+            upstreams: pathRule.response_mode ? null : (pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null),
           }))
         : [],
       proxy_dial_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_dial_timeout : 0,

@@ -328,6 +328,13 @@ func createTables() error {
 		path TEXT NOT NULL,
 		upstream_path TEXT NOT NULL DEFAULT '',
 		upstreams_json TEXT,
+		-- 自定义路由静态响应/301 跳转（2026-10-10 用户裁定）：response_mode ''=转发
+		-- 上游（现状）/static=静态响应/redirect=301 跳转；后四列按模式消费。
+		response_mode TEXT NOT NULL DEFAULT '',
+		response_status INTEGER NOT NULL DEFAULT 200,
+		response_body TEXT NOT NULL DEFAULT '',
+		response_content_type TEXT NOT NULL DEFAULT '',
+		redirect_to TEXT NOT NULL DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME,
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
@@ -846,6 +853,12 @@ func runMigrations() error {
 		// global_config（与 threat_auto_update 同表先例）。
 		"security_crs_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
 		"security_crs_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
+		// 自定义路由静态响应/301 跳转（2026-10-10）：path_rules 五列，''=转发零漂移。
+		"path_rules.response_mode":         "TEXT NOT NULL DEFAULT ''",
+		"path_rules.response_status":       "INTEGER NOT NULL DEFAULT 200",
+		"path_rules.response_body":         "TEXT NOT NULL DEFAULT ''",
+		"path_rules.response_content_type": "TEXT NOT NULL DEFAULT ''",
+		"path_rules.redirect_to":           "TEXT NOT NULL DEFAULT ''",
 		// ip2region 侧同族两列（第 57 轮追加问题，用户上报）：fresh DDL 建表
 		// 含两列（db.go ip2region_version CREATE），存量库补列迁移此前漏登记
 		// ——升级安装更新定时排程必报 no such column: schedule_days。
