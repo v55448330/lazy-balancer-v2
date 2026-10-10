@@ -85,7 +85,7 @@
               <el-tooltip
                 v-else-if="row.protocol === 'tcp'"
                 placement="top"
-                content="TCP 规则不支持安全策略（四层传输无 HTTP 语义，无 WAF/访问控制可挂点）"
+                content="TCP 规则不支持安全策略"
               >
                 <el-icon :size="14" class="acl-lock-icon acl-lock-icon--tcp" tabindex="0"><Lock /></el-icon>
               </el-tooltip>
