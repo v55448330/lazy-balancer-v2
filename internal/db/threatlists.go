@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+)
 
 // ThreatSystemList 威胁情报库内置只读名单条目（v2.3.2 名单化重构）。
 // Source=威胁源名（security_threat_sources.name，更新任务定位键），
@@ -31,10 +34,28 @@ var threatSystemListLegacyNames = map[string]string{
 
 // migrateThreatSystemListNames 存量 system=1 内置名单按旧名改名为新名（保 id——
 // 策略 refs 按 id 引用）。幂等；种子 INSERT 按新名查重，旧名行不改名会双重存在。
+// CORE-U3（第 69 轮）：同名冲突守卫——security_ip_lists.name 无 UNIQUE 约束，
+// 新名已被占用（如用户手工建的同名 system=0 名单）时改名会产出同名双行且种子
+// 查重静默跳过——跳过改名并 WARN 留给人工处置（不阻断启动）。
 func migrateThreatSystemListNames() error {
 	for _, sl := range ThreatSystemLists {
 		legacy, ok := threatSystemListLegacyNames[sl.Name]
 		if !ok {
+			continue
+		}
+		var legacyRows int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE system=1 AND name=?`, legacy).Scan(&legacyRows); err != nil {
+			return fmt.Errorf("failed to check legacy threat system list %s: %w", legacy, err)
+		}
+		if legacyRows == 0 {
+			continue // 幂等零命中
+		}
+		var conflicts int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, sl.Name).Scan(&conflicts); err != nil {
+			return fmt.Errorf("failed to check threat system list name conflict %s: %w", sl.Name, err)
+		}
+		if conflicts > 0 {
+			log.Printf("WARN: 内置威胁名单改名跳过——新名 %q 已被库中既有名单占用（旧名 %q 行保留，请人工改名后重启收敛）", sl.Name, legacy)
 			continue
 		}
 		if _, err := DB.Exec(`UPDATE security_ip_lists SET name=?, description=?, updated_at=datetime('now') WHERE system=1 AND name=?`, sl.Name, sl.Description, legacy); err != nil {

@@ -179,7 +179,7 @@ func TestSecurityWrite_unvalidatedApplyFailsClosed(t *testing.T) {
 	url := closed.URL
 	closed.Close()
 	handler, _, _ := newAuditRuleHandlers(t, 0)
-	handler.caddyService = newUnreachableCaddyService(t, url)
+	handler.caddyService = services.NewCaddyService(url) // LBH-B-R3（第 69 轮）：零增值包装内联（不可达由死 URL 提供）
 	handler.caddyService.SetCLIValidatorForTest(func(rendered []byte) error {
 		return services.ErrCLIValidatorUnavailable
 	})
@@ -204,11 +204,6 @@ func TestSecurityWrite_unvalidatedApplyFailsClosed(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("unvalidated write committed rows=%d, want 0", count)
 	}
-}
-
-func newUnreachableCaddyService(t *testing.T, url string) *services.CaddyService {
-	t.Helper()
-	return services.NewCaddyService(url)
 }
 
 // 裁定 2026-09-07 D2：规则×5 apply 错误统一映射——配置拒绝→400（中文），

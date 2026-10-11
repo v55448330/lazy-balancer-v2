@@ -172,8 +172,8 @@ const onPopoverShow = (): void => { void loadPolicies(); void loadEventCount() }
 
 // 键盘激活（第 60 轮 P3）：Enter/Space 不仅要预取数据，还须真正打开弹层——
 // trigger=click 的 el-popover 在非原生 button 上不合成 click，须持 ref 调 open。
-import { ref as vueRef } from 'vue'
-const popoverRef = vueRef<{ open: () => void } | null>(null)
+// FE-P5a（第 69 轮）：中置二次导入并入文件头 :79 的 `import { computed, ref }`。
+const popoverRef = ref<{ open: () => void } | null>(null)
 const openPopover = (): void => {
   onPopoverShow()
   popoverRef.value?.open()

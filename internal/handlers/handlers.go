@@ -521,20 +521,13 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		return fmt.Errorf("无效的监听端口：必须在 1-65535 之间")
 	}
 
-	httpStrategies := map[string]bool{
-		"ip_hash": true, "least_conn": true,
-		"random": true, "first": true, "weighted_round_robin": true,
-		"cookie": true,
-	}
-	tcpStrategies := map[string]bool{
-		"ip_hash": true, "least_conn": true,
-		"random": true, "first": true, "weighted_round_robin": true,
-	}
-	if data.Protocol == "http" && !httpStrategies[data.Strategy] {
-		return fmt.Errorf("无效的负载策略：HTTP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first / cookie")
-	}
-	if data.Protocol == "tcp" && !tcpStrategies[data.Strategy] {
-		return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
+	// LBH-A-R1（第 69 轮）：策略白名单委托共享实现——此前此处内联
+	// httpStrategies/tcpStrategies 双 map 与 validateStrategyForProtocol
+	// 重复（保存链双重判定，两份 map 是漂移种子）。空 strategy 放行
+	// （渲染侧默认 weighted_round_robin；Create/Update 入口已默认/合并，
+	// 空值不可达）。
+	if err := validateStrategyForProtocol(data.Protocol, data.Strategy); err != nil {
+		return err
 	}
 
 	if data.Domain != "" && data.Protocol == "http" {
@@ -555,6 +548,10 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 	}
 
 	enabledUpstreamCount := 0
+	// LBS-A-L1（第 69 轮 P1）：HTTP 规则 http/https 混布池拒绝——Caddy TLS 决策
+	// 是传输级（shouldUseTLS 无逐上游概念），任一 https 上游使 http 上游明文
+	// 打 TLS 端口静默全灭 502；禁用上游不参与渲染，不计入混布判定。
+	enabledProtocols := make(map[string]bool, 2)
 	hostPortSeen := make(map[string]bool)
 	for i, u := range data.Upstreams {
 		if u.Host == "" {
@@ -607,7 +604,16 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 
 		if u.Enabled {
 			enabledUpstreamCount++
+			proto := u.Protocol
+			if proto == "" {
+				proto = "http"
+			}
+			enabledProtocols[proto] = true
 		}
+	}
+
+	if data.Protocol == "http" && enabledProtocols["http"] && enabledProtocols["https"] {
+		return fmt.Errorf("同一 HTTP 规则的启用上游协议须一致（http/https 混布时 http 上游会被 TLS 化静默全灭；如需共存请拆分为两条规则）")
 	}
 
 	if enabledUpstreamCount == 0 {

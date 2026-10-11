@@ -1027,9 +1027,18 @@ func TestIP2RegionUpdateFail_auditRecordedByRunDeferPerRun(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 
+	// fail() 直调不产生操作审计（计数器职责保留）
 	m.fail(errors.New("第一次失败"))
 	if got := countIP2RegionFailedAudits(t); got != 0 {
 		t.Fatalf("fail() 直调应零审计, got %d", got)
+	}
+
+	// SEC-C-R1（第 69 轮）：镜像 CRS 版补 run() 级断言——经 run() 的失败轮
+	// 每轮恰 1 条（defer 单记）。
+	m.fetchLatestTag = func(context.Context) (string, error) { return "", errors.New("查询失败") }
+	m.run("auto", nil)
+	if got := countIP2RegionFailedAudits(t); got != 1 {
+		t.Fatalf("一次失败 run 应 1 条审计, got %d", got)
 	}
 }
 
@@ -1139,10 +1148,10 @@ func TestIP2RegionUpdateRun_slaveAbortsSkipSemantics(t *testing.T) {
 		t.Fatalf("status=%q, want skipped（从节点中止是跳过语义，镜像 CRS）", snap.Status)
 	}
 	var failed, skipped int
-	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='IP2Region数据库' AND action='更新失败'").Scan(&failed); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='IP数据库' AND action='更新失败'").Scan(&failed); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='IP2Region数据库' AND detail LIKE '%更新跳过%'").Scan(&skipped); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='IP数据库' AND detail LIKE '%更新跳过%'").Scan(&skipped); err != nil {
 		t.Fatal(err)
 	}
 	if failed != 0 || skipped != 1 {

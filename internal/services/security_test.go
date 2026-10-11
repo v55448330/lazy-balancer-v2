@@ -105,10 +105,14 @@ func TestBuildIPPrecheck_trustDisabledNotIncluded(t *testing.T) {
 }
 
 // 2026-09-08 审计 SF1：同基址不同掩码的方向独立性。
-func TestCidrIntersectEntry_directionIndependent(t *testing.T) {
+// SEC-D1（第 69 轮）：语义钉迁移到生产唯一实现 cidrIntersectParsed（经
+// parseEntryCached 构造条目，镜像 intersectIPLists 调用形态）——旧
+// cidrIntersectEntry 自 F62-20 预解析缓存改造后生产零调用，已删除。
+func TestCidrIntersectParsed_directionIndependent(t *testing.T) {
 	// 同基址，/8 比 /16 宽——无论参数顺序，都应返回 /16（更窄）
-	forward := cidrIntersectEntry("10.0.0.0/8", "10.0.0.0/16")
-	backward := cidrIntersectEntry("10.0.0.0/16", "10.0.0.0/8")
+	cache := map[string]*parsedEntry{}
+	forward := cidrIntersectParsed(parseEntryCached("10.0.0.0/8", cache), parseEntryCached("10.0.0.0/16", cache))
+	backward := cidrIntersectParsed(parseEntryCached("10.0.0.0/16", cache), parseEntryCached("10.0.0.0/8", cache))
 	if forward != "10.0.0.0/16" || backward != "10.0.0.0/16" {
 		t.Fatalf("forward=%q backward=%q, both want 10.0.0.0/16（更窄方）", forward, backward)
 	}
@@ -269,15 +273,16 @@ func TestBuildCorazaDirectives_multiPolicyAllowSelfTrustExclusion(t *testing.T) 
 // 顶成非空，恒拒规则（id:7 @rx .*）不发射、改发含坏行投影 → @ipListFast
 // 构建期 fail-closed 整份渲染失败。与聚合面「不可解析不参与匹配」同口径：
 // 非法元素返回 ""（不参与交集）。
-func TestCidrIntersectEntry_equalButInvalidDropped(t *testing.T) {
-	if got := cidrIntersectEntry("not-an-ip", "not-an-ip"); got != "" {
+func TestCidrIntersectParsed_equalButInvalidDropped(t *testing.T) {
+	cache := map[string]*parsedEntry{}
+	if got := cidrIntersectParsed(parseEntryCached("not-an-ip", cache), parseEntryCached("not-an-ip", cache)); got != "" {
 		t.Fatalf("字面相等但非法的条目应丢弃: got=%q", got)
 	}
 	// 合法相等条目保持原样返回
-	if got := cidrIntersectEntry("203.0.113.7", "203.0.113.7"); got != "203.0.113.7" {
+	if got := cidrIntersectParsed(parseEntryCached("203.0.113.7", cache), parseEntryCached("203.0.113.7", cache)); got != "203.0.113.7" {
 		t.Fatalf("合法相等条目应保留: got=%q", got)
 	}
-	if got := cidrIntersectEntry("10.0.0.0/24", "10.0.0.0/24"); got != "10.0.0.0/24" {
+	if got := cidrIntersectParsed(parseEntryCached("10.0.0.0/24", cache), parseEntryCached("10.0.0.0/24", cache)); got != "10.0.0.0/24" {
 		t.Fatalf("合法相等 CIDR 应保留: got=%q", got)
 	}
 }

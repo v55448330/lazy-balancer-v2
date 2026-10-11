@@ -92,30 +92,37 @@ func TestFastFile_Truncated(t *testing.T) {
 	}
 }
 
-// EnsureFastFile: .fast 比 .iplist 新 → 跳过编译
-func TestEnsureFastFile_UpToDate(t *testing.T) {
+// PLUG-L1（第 69 轮 P2）：腐化 bits/乱序条目静默破坏二分判定——ReadFastFile
+// 必须校验 bits 范围（v4≤32/v6≤128）与地址非降序不变量，响亮拒绝腐化文件。
+func TestFastFile_CorruptedBitsRejected(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, "test.iplist")
-	fast := filepath.Join(dir, "test.iplist.fast")
-
-	os.WriteFile(src, []byte("1.2.3.4\n"), 0644)
-	// 先写 .fast（会更新 mtime）
-	WriteFastFile(fast, []netip.Prefix{netip.MustParsePrefix("1.2.3.4/32")}, nil)
-
-	compileCalled := false
-	fn := func(p string) ([]netip.Prefix, []netip.Prefix, error) {
-		compileCalled = true
-		return nil, nil, nil
+	path := filepath.Join(dir, "corrupt.fast")
+	// 一条 v4 条目：addr=10.0.0.0, bits=33（越界）
+	data := make([]byte, 0, 16+5)
+	data = append(data, []byte(fastFileMagic)...)
+	data = append(data, 0, 0, 0, 1) // v4_count=1
+	data = append(data, 0, 0, 0, 0) // v6_count=0
+	data = append(data, 0, 0, 0, 0) // 保留 4 字节（header 共 16B）
+	data = append(data, 10, 0, 0, 0, 33)
+	os.WriteFile(path, data, 0644)
+	if _, err := ReadFastFile(path); err == nil {
+		t.Fatal("bits>32 must be rejected（invalid prefix 静默破坏二分）")
 	}
+}
 
-	result, err := EnsureFastFile(src, fn)
-	if err != nil {
-		t.Fatalf("EnsureFastFile: %v", err)
-	}
-	if result != fast {
-		t.Fatalf("result=%s, want %s", result, fast)
-	}
-	if compileCalled {
-		t.Fatal("compile should be skipped when .fast is up to date")
+// 同族：乱序条目（地址降序）拒绝。
+func TestFastFile_UnorderedRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unordered.fast")
+	data := make([]byte, 0, 16+10)
+	data = append(data, []byte(fastFileMagic)...)
+	data = append(data, 0, 0, 0, 2)      // v4_count=2
+	data = append(data, 0, 0, 0, 0)      // v6_count=0
+	data = append(data, 0, 0, 0, 0)      // 保留 4 字节（header 共 16B）
+	data = append(data, 10, 0, 0, 2, 24) // 10.0.0.2/24
+	data = append(data, 10, 0, 0, 1, 24) // 10.0.0.1/24（降序违例）
+	os.WriteFile(path, data, 0644)
+	if _, err := ReadFastFile(path); err == nil {
+		t.Fatal("descending address order must be rejected")
 	}
 }

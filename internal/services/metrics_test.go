@@ -558,3 +558,59 @@ lazybalancer_bytes_total{direction="out",rule="lb_rl5"} 2048`
 		t.Fatalf("stored=(%d,%d,%d,%d,%d), want (100,80,20,1024,2048)", requests, s2xx, s4xx, bytesIn, bytesOut)
 	}
 }
+
+// LBS-B-P1（第 69 轮）：geoip 透传序列剔除的行为钉——携带
+// handler="http.handlers.geoip2region" 的序列整条剔除（同请求经透传路由+
+// 主路由双计，剔除后恢复真实计数）。钉与实现形态无关（Split+Join → Builder
+// 单副本重构的行为锚）。
+func TestMetricsService_collect_filtersGeoipPassHandlerSeries(t *testing.T) {
+	// Given 双序列暴露文本（reverse_proxy + geoip 透传各 20）
+	setupMetricsRetentionTest(t)
+	isolateMetricsState(t)
+	text := strings.Join([]string{
+		`caddy_http_requests_total{handler="reverse_proxy",host="example.com",server="http_443"} 20`,
+		`caddy_http_requests_total{handler="http.handlers.geoip2region",host="example.com",server="http_443"} 20`,
+		`caddy_http_request_duration_seconds_bucket{code="200",handler="reverse_proxy",host="example.com",method="GET",server="http_443",le="0.5"} 20`,
+	}, "\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(text))
+	}))
+	t.Cleanup(server.Close)
+	service := NewMetricsService(server.URL, 30)
+
+	// When
+	service.collect()
+
+	// Then geoip 透传序列剔除——总数只计 reverse_proxy 的 20（双计=40 为缺陷）
+	if got := service.GetOverview().TotalRequests; got != 20 {
+		t.Fatalf("TotalRequests=%d, want 20（geoip 透传序列未剔除）", got)
+	}
+}
+
+// LBS-B-P3（第 69 轮 P5）：Start 进入循环前补一次 collect——曾 cleanup 立即
+// 跑而首次 collect 要等第一个 interval（默认 30s），口径不对称，重启后面板
+// 首屏 30s 全零。
+func TestMetricsService_Start_collectsBeforeFirstTick(t *testing.T) {
+	// Given 有效端点 + 超长采集间隔（首个 tick 1 小时后才到）
+	setupMetricsRetentionTest(t)
+	isolateMetricsState(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`caddy_http_requests_total{handler="reverse_proxy",host="example.com",server="http_443"} 20` + "\n"))
+	}))
+	t.Cleanup(server.Close)
+	service := NewMetricsService(server.URL, 3600)
+
+	// When
+	go service.Start()
+	t.Cleanup(service.Stop)
+
+	// Then 首个 tick 前 overview 已填充（2s 轮询可见；空窗=超时失败）
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if service.GetOverview().TotalRequests == 20 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("首个采集周期（3600s）前 overview 仍为零——启动首轮空窗")
+}

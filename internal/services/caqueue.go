@@ -472,9 +472,19 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 	for rows.Next() {
 		var job strandedJob
 		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.ruleDomain, &job.ruleBound); err != nil {
+			// LBS-B-L1（第 69 轮）：Scan 失败留痕（曾静默 continue——列类型
+			// 漂移等系统性失败每次巡检零处理且零信号）。
+			Logf("warn", "%s: stranded job scan row failed, skipped: %v", logPrefix, err)
 			continue
 		}
 		jobs = append(jobs, job)
+	}
+	// 迭代错误检查（LBS-B-L1：曾只查 Close——迭代中途出错会把部分任务集
+	// 当全量处理；放弃本轮，下一轮 30s 巡检重试全量）。
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		Logf("error", "%s: stranded job iteration failed: %v", logPrefix, err)
+		return
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {

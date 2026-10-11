@@ -12,7 +12,8 @@ import (
 )
 
 // RDB 验证（Steps 13-20）：20 万条不可聚合 /32 集——.fast 冷加载 vs 文本冷加载
-// 的耗时对照 + 同 IP 查询语义一致。
+// 的耗时对照 + 同 IP 查询语义一致。（PLUG-D1：.fast 侧经 ReadFastFile 直读——
+// 算子 .fast 分支已删，.fast 的生产消费方为 services 侧从节点回退。）
 func TestFastLoad_vs_TextLoad_200k(t *testing.T) {
 	dir := t.TempDir()
 	textPath := filepath.Join(dir, "bench.iplist")
@@ -25,37 +26,41 @@ func TestFastLoad_vs_TextLoad_200k(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 经 EnsureFastFile 编译（与生产路径同构）
-	_, err := EnsureFastFile(textPath, func(p string) ([]netip.Prefix, []netip.Prefix, error) {
-		raw, _ := os.ReadFile(p)
-		var v4 []netip.Prefix
-		for _, line := range strings.Split(string(raw), "\n") {
-			if line == "" {
-				continue
-			}
-			pr, err := ParseIPEntry(line)
-			if err != nil {
-				continue
-			}
-			if pr.Addr().Is4() {
-				v4 = append(v4, pr)
-			}
-		}
-		return v4, nil, nil
-	})
+	// 编译 .fast（与生产 services.CompileFromIplistFile 同构：解析→聚合→
+	// WriteFastFile；PLUG-D2：EnsureFastFile mtime 门面已删，直调写件）
+	raw, err := os.ReadFile(textPath)
 	if err != nil {
-		t.Fatalf("EnsureFastFile: %v", err)
+		t.Fatal(err)
+	}
+	var entries []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line != "" {
+			entries = append(entries, line)
+		}
+	}
+	prefixes := AggregatePrefixes(entries)
+	var v4, v6 []netip.Prefix
+	for _, p := range prefixes {
+		if p.Addr().Is4() {
+			v4 = append(v4, p)
+		} else {
+			v6 = append(v6, p)
+		}
+	}
+	if err := WriteFastFile(textPath+".fast", v4, v6); err != nil {
+		t.Fatalf("WriteFastFile: %v", err)
 	}
 	fi, _ := os.Stat(textPath + ".fast")
 	t.Logf(".fast=%d bytes(text=%d)", fi.Size(), len(buf))
 
-	// 冷加载 .fast（fresh=true 绕过缓存）
+	// 冷加载 .fast（ReadFastFile 直读，测格式加载本身）
 	t0 := time.Now()
-	st1, err1 := loadIPListFile(textPath+".fast", true)
+	fst, err1 := ReadFastFile(textPath + ".fast")
 	d1 := time.Since(t0)
-	if err1 != nil || st1 == nil {
+	if err1 != nil || fst == nil {
 		t.Fatalf("fast: %v", err1)
 	}
+	st1 := &ipListFileState{v4: fst.V4, v6: fst.V6}
 
 	// 冷加载文本
 	t0 = time.Now()

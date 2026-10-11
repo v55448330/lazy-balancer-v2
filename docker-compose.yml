@@ -1,13 +1,32 @@
+# INFRA-R2（第 69 轮）：主从共用配置锚点——logging/ulimits/healthcheck 三处
+# 逐字重复收敛为单份（双份维护改一侧忘另一侧即分叉）。
+x-common-logging: &common-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+x-common-ulimits: &common-ulimits
+  # 生产 fd 上限：每个连接一个 fd（含 TLS/日志），默认 1024 在 LB 场景必炸。
+  # 详见 docs/production-tuning.zh-CN.md §1
+  nofile:
+    soft: 1048576
+    hard: 1048576
+x-common-healthcheck: &common-healthcheck
+  # 探针须模式无关：面板默认强制 HTTPS（明文 HTTP 得 301），而 admin_tls 关闭时
+  # 又只有明文可用；镜像内无 curl（仅构建期临时安装后 apk del），busybox wget
+  # 的 --no-check-certificate 经实证可完成自签 TLS 探测（第 47 轮 F-47-30）。
+  test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8000/health || wget -q -O /dev/null http://127.0.0.1:8000/health"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
+
 services:
   # 主从两个容器共用同一镜像（image 标签与 Docker Hub 推送的一致）。
   # 本地开发迭代时执行：docker compose build lazy-balancer && docker compose up -d
   lazy-balancer:
     image: v55448330/lazy-balancer-v2:v2.3.5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+    logging: *common-logging
     build:
       context: .
       args:
@@ -26,31 +45,17 @@ services:
       - NODE_NAME=master
       - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped
-    healthcheck:
-      # 探针须模式无关：面板默认强制 HTTPS（明文 HTTP 得 301），而 admin_tls 关闭时
-      # 又只有明文可用；镜像内无 curl（仅构建期临时安装后 apk del），busybox wget
-      # 的 --no-check-certificate 经实证可完成自签 TLS 探测（第 47 轮 F-47-30）。
-      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8000/health || wget -q -O /dev/null http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    # 生产 fd 上限：每个连接一个 fd（含 TLS/日志），默认 1024 在 LB 场景必炸。
-    # 详见 docs/production-tuning.zh-CN.md §1
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
+    # INFRA-U5（第 69 轮）：PID1 退出前 POST Caddy admin /stop 排水在途连接，
+    # grace period 覆盖 HTTP ≤10s Shutdown + Caddy 排水窗口。
+    stop_grace_period: 30s
+    healthcheck: *common-healthcheck
+    ulimits: *common-ulimits
 
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 主节点地址注册时填写: http://host.docker.internal:8000
   lazy-balancer-slave:
     image: v55448330/lazy-balancer-v2:v2.3.5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+    logging: *common-logging
     container_name: lazy-balancer-slave
     ports:
       - "8001:8000"
@@ -65,20 +70,10 @@ services:
     environment:
       - NODE_NAME=slave-test
       - LOG_FILE=/app/logs/lazy-balancer.log
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
+    ulimits: *common-ulimits
     restart: unless-stopped
-    healthcheck:
-      # 探针须模式无关：面板默认强制 HTTPS（明文 HTTP 得 301），而 admin_tls 关闭时
-      # 又只有明文可用；镜像内无 curl（仅构建期临时安装后 apk del），busybox wget
-      # 的 --no-check-certificate 经实证可完成自签 TLS 探测（第 47 轮 F-47-30）。
-      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8000/health || wget -q -O /dev/null http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+    stop_grace_period: 30s
+    healthcheck: *common-healthcheck
 
 volumes:
   lb-data:

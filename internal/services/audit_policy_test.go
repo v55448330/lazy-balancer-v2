@@ -2,65 +2,18 @@ package services
 
 import "testing"
 
+// LBS-B-R4（第 69 轮）：原 TestExplicitAuditRoutesAreHandledByHandlers（手抄
+// 43 条 Explicit 路由子集断言 HasExplicitAuditEvent）已删除——F63-B5e2-4 后
+// HasExplicitAuditEvent 从 auditRoutePolicies 派生，子集断言退化为恒真同义
+// 反复（对新增路由静默失效）。覆盖由更强钉吸收：audit_action_mapping_test.go
+// 的 TestAuditExplicitHandlersRecord（全量遍历+AST handler 审计调用扫描）、
+// TestAuditExplicitRoutesMappingEmpty（全量 Explicit 映射空钉）、
+// TestAuditPolicyListsEqual（派生活性钉）。
+
 type auditRouteCase struct {
 	method string
 	path   string
 	policy AuditPolicy
-}
-
-func TestExplicitAuditRoutesAreHandledByHandlers(t *testing.T) {
-	explicitRoutes := []struct {
-		method string
-		path   string
-	}{
-		{"POST", "/api/v1/auth/login"},
-		{"POST", "/api/v1/auth/logout"},
-		{"POST", "/api/v1/users"},
-		{"PUT", "/api/v1/users/:id"},
-		{"PUT", "/api/v1/users/:id/status"},
-		{"POST", "/api/v1/users/:id/reset-password"},
-		{"DELETE", "/api/v1/users/:id"},
-		{"POST", "/api/v1/cluster/register"},
-		{"POST", "/api/v1/cluster/register-tokens"},
-		{"POST", "/api/v1/cluster/nodes/:id/approve"},
-		{"POST", "/api/v1/cluster/nodes/:id/reject"},
-		{"DELETE", "/api/v1/cluster/nodes/:id"},
-		{"POST", "/api/v1/cluster/mode"},
-		{"POST", "/api/v1/cluster/promote"},
-		{"POST", "/api/v1/config/validate"},
-		{"POST", "/api/v1/rules"},
-		{"PUT", "/api/v1/rules/:caddy_id"},
-		{"DELETE", "/api/v1/rules/:caddy_id"},
-		{"POST", "/api/v1/rules/:caddy_id/enable"},
-		{"POST", "/api/v1/rules/:caddy_id/disable"},
-		{"POST", "/api/v1/rules/:caddy_id/duplicate"},
-		{"POST", "/api/v1/certificate-configs"},
-		{"PUT", "/api/v1/certificate-configs/:id"},
-		{"DELETE", "/api/v1/certificate-configs/:id"},
-		{"POST", "/api/v1/certificates/issue"},
-		{"POST", "/api/v1/certificates/jobs/:id/retry"},
-		{"DELETE", "/api/v1/certificates/jobs/:id"},
-		{"POST", "/api/v1/cluster/sync/pull"},
-		{"PUT", "/api/v1/config"},
-		{"POST", "/api/v1/security/policies"},
-		{"PUT", "/api/v1/security/policies/:id"},
-		{"DELETE", "/api/v1/security/policies/:id"},
-		{"PUT", "/api/v1/admin-tls"},
-		{"POST", "/api/v1/security/policies/:id/bind"},
-		{"DELETE", "/api/v1/security/policies/:id/bind/:caddy_id"},
-		{"PUT", "/api/v1/security/crs/auto-update"},
-		{"POST", "/api/v1/security/custom-rules"},
-		{"PUT", "/api/v1/security/custom-rules/:id"},
-		{"DELETE", "/api/v1/security/custom-rules/:id"},
-		{"POST", "/api/v1/security/block-pages"},
-		{"PUT", "/api/v1/security/block-pages/:id"},
-		{"DELETE", "/api/v1/security/block-pages/:id"},
-	}
-	for _, tt := range explicitRoutes {
-		if !HasExplicitAuditEvent(tt.method, tt.path) {
-			t.Fatalf("explicit route not marked handler-owned: %s %s", tt.method, tt.path)
-		}
-	}
 }
 
 func TestClassifyAuditRouteMatrix(t *testing.T) {

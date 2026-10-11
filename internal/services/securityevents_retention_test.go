@@ -59,10 +59,12 @@ func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *
 	}
 }
 
-func TestSecurityEventsRetentionCleanup_trimsOldestRowsWhenCountExceedsMax(t *testing.T) {
-	// Given: a wide age window (120 months) and 5 recent events
-	// The hardcoded safety max (1000000) means count-based trim won't fire for 5 rows.
-	// This test now verifies that with a wide age window, all events survive.
+func TestSecurityEventsRetentionCleanup_keepsAllBelowSafetyMax(t *testing.T) {
+	// SEC-B-GAP-U2（第 69 轮）：原名 trimsOldestRowsWhenCountExceedsMax 与断言
+	// 语义相反（行为变更后复用旧名）——本用例实际钉「宽年龄窗+远低于安全上限
+	// 时全存活」。count-trim 分支（max 恒 1000000）不可经济构造，不修+理由：
+	// 其与年龄裁剪共用批循环，分批/取消同构风险已由 batchesAgeDelete/
+	// stopsPromptly 两钉覆盖。
 	setupSecurityEventsRetentionTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=120 WHERE id=1`); err != nil {
 		t.Fatal(err)
@@ -221,9 +223,10 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 
 	// When
 	done := make(chan struct{})
+	deleted := -1
 	go func() {
 		defer close(done)
-		securityEventsRetentionCleanup(ctx)
+		deleted = securityEventsRetentionCleanup(ctx)
 	}()
 
 	// Then: 清理迅速返回且仅完成一个批次（未删净），证明中途被取消而非跑完
@@ -234,6 +237,11 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 	}
 	if got := countSecurityEventsByType(t, "expired"); got != 12000-securityEventsRetentionDeleteBatch {
 		t.Fatalf("expired events after canceled cleanup = %d, want %d (exactly one batch deleted)", got, 12000-securityEventsRetentionDeleteBatch)
+	}
+	// SEC-L1（第 69 轮）：取消路径的返回契约与其余早退同口径——已提交删
+	// 除的批次数必须如实上报（§6.5 摘要行数据源），不得归 0 丢弃。
+	if deleted != securityEventsRetentionDeleteBatch {
+		t.Fatalf("canceled cleanup returned %d, want %d（恰好一批已删计数）", deleted, securityEventsRetentionDeleteBatch)
 	}
 }
 

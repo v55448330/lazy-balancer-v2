@@ -1,8 +1,8 @@
 package handlers
 
 // SEC40-B1-4:安全域文本字段长度封顶——策略名 ≤100 rune、描述 ≤500 rune、
-// 自定义规则名 ≤100 rune、拦截页 content ≤64KB;DB 列无长度约束,超长串随
-// 审计详情/列表响应/发射文本放大。
+// 自定义规则名 ≤100 rune、自定义规则描述 ≤500 rune（SEC-U1 第 69 轮补齐）、
+// 拦截页 content ≤64KB;DB 列无长度约束,超长串随审计详情/列表响应/发射文本放大。
 
 import (
 	"net/http"
@@ -66,6 +66,26 @@ func TestSecurityInputs_lengthLimits(t *testing.T) {
 		})
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "100") {
 			t.Fatalf("101-rune rule name must 400, got %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// SEC-U1（第 69 轮）：自定义规则 description 补封顶（SEC40-B1-4 家族漏收敛
+	// ——策略描述同口径 500 rune；DB 列无约束，超长串随列表响应/审计详情放大）。
+	t.Run("custom rule description over 500 runes rejected", func(t *testing.T) {
+		rec := postJSON(t, router, "/security/custom-rules", map[string]any{
+			"name": "d", "description": strings.Repeat("描", 501), "action": "block", "score": 5,
+			"conditions": []map[string]any{{"target": "uri", "operator": "contains", "pattern": "/x"}},
+		})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "500") {
+			t.Fatalf("501-rune rule description must 400, got %d %s", rec.Code, rec.Body.String())
+		}
+		// 边界回归：恰好 500 rune 放行
+		rec = postJSON(t, router, "/security/custom-rules", map[string]any{
+			"name": "d2", "description": strings.Repeat("描", 500), "action": "block", "score": 5,
+			"conditions": []map[string]any{{"target": "uri", "operator": "contains", "pattern": "/x"}},
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("500-rune rule description must pass, got %d %s", rec.Code, rec.Body.String())
 		}
 	})
 

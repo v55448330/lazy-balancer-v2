@@ -396,7 +396,22 @@ func ReadThreatIplistForUI(listName string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			// SEC-U2（第 69 轮）：从节点 waf_files 只同步 .fast（零编译裁定）——
+			// .iplist 缺失时展开 .fast 前缀集，与渲染侧 readThreatIplistEntries
+			// 同口径；两个文件都缺失才返回空集（未更新源）。
+			fastPath := wafiplist.FastPath(path)
+			set, ferr := wafiplist.ReadFastFile(fastPath)
+			if ferr != nil {
+				return nil, nil
+			}
+			vals := make([]string, 0, len(set.V4)+len(set.V6))
+			for _, p := range set.V4 {
+				vals = append(vals, p.String())
+			}
+			for _, p := range set.V6 {
+				vals = append(vals, p.String())
+			}
+			return vals, nil
 		}
 		return nil, err
 	}

@@ -2354,7 +2354,6 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAn
 // When：摄取 audit rule_triggered="8"（GeoIP 区域拦截）。
 // Then：归因到 policy-B（携带 geoip 条目者），而非首绑定 policy-A。
 func TestSecurityEventsAttribution_GeoIPOwnerPicksGeoIPCarryingPolicy(t *testing.T) {
-	t.Helper()
 	dataDir := t.TempDir()
 	if err := db.Initialize(dataDir); err != nil {
 		t.Fatal(err)

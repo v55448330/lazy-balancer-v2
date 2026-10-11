@@ -1,17 +1,18 @@
 package services
 
 import (
-	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
 )
 
-// 回归锁定（R12-H1）：GetSecurityPolicyForRule 必须加载 waf_check_response，
-// 否则 buildWafHandlerWithPolicy→BuildCorazaDirectives 看到恒 false，
-// 「检查响应体」开关在 Caddy 渲染层被静默关闭。
+// 回归锁定（R12-H1；SEC-B-GAP-R1 第 69 轮头注改写为现行链路口径）：DB
+// waf_check_response 列必须经 scanSecurityPolicyByID（生产等价路径
+// GetSecurityPoliciesForRule 同用的 SQL 扫描）加载并传导至
+// BuildCorazaDirectives——否则「检查响应体」开关在 Caddy 渲染层被静默关闭。
+// GetSecurityPolicyForRule 已经 SEC41-1 退役为测试专用 helper（生产面零调用），
+// 本测试的独立价值=「DB 列→渲染」端到端形状钉。
 func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	dir := t.TempDir()
 	if err := db.Initialize(dir); err != nil {
@@ -19,7 +20,6 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	}
 	t.Cleanup(func() { db.DB.Close(); db.DB = nil })
 
-	crs := filepath.Join(dir, "waf", "crs")
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, waf_check_response, enabled) VALUES ('resp-off', 'blocking', 0, 1)`); err != nil {
 		t.Fatalf("seed policy: %v", err)
 	}
@@ -57,6 +57,4 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	if d2 := mustDirectives(BuildCorazaDirectives(p2, nil, "", false, 0)); !strings.Contains(d2, "SecResponseBodyAccess Off") {
 		t.Fatalf("directives missing Off:\n%s", d2)
 	}
-	_ = crs
-	_ = context.Background
 }

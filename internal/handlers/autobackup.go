@@ -525,7 +525,9 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动备份完成", Data: view})
 }
 
-// autoBackupRowByID 查行；不存在时写 404 并返回 false。
+// autoBackupRowByID 查行；不存在 404、DB 故障响亮 500（SYS-U3，第 69 轮：
+// dbQueryNotFound 分判——此前 Scan 错误一律 404「备份不存在」，DB 故障窗口
+// 误导排障方向；与 GetCurrentUser/requireAutoBackupMaster 已立先例同口径）。
 func (h *Handlers) autoBackupRowByID(c *gin.Context) (autoBackupRowView, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -534,8 +536,7 @@ func (h *Handlers) autoBackupRowByID(c *gin.Context) (autoBackupRowView, bool) {
 	}
 	row := db.DB.QueryRow(`SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id)
 	view, err := scanAutoBackupRowView(row)
-	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "备份不存在"})
+	if dbQueryNotFound(c, err, "备份不存在", "查询自动备份行") {
 		return autoBackupRowView{}, false
 	}
 	if !autoBackupSafeFilename(view.Filename) {

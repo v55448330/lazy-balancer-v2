@@ -483,6 +483,25 @@ func TestDeleteAutoBackup_removesFileAndRow(t *testing.T) {
 	}
 }
 
+func TestDeleteAutoBackup_dbFailureReturns500(t *testing.T) {
+	// Given 主节点 + auto_backups 表不可用（DB 故障形态）——SYS-U3（第 69 轮）：
+	// DB 故障与「备份不存在」不得混同为 404（排障方向误导）；ErrNoRows 404、
+	// 其余响亮 500（dbQueryNotFound 分判，与 GetCurrentUser/requireAutoBackupMaster
+	// 已立先例同口径）。
+	h := newAutoBackupTestHandlers(t)
+	if _, err := db.DB.Exec("DROP TABLE auto_backups"); err != nil {
+		t.Fatalf("drop auto_backups: %v", err)
+	}
+
+	// When
+	response := serveAutoBackupJSON(t, h, http.MethodDelete, "/auto-backup/:id", "/auto-backup/1", "", h.DeleteAutoBackup)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（DB 故障不得误报 404）", response.Code, response.Body.String())
+	}
+}
+
 func TestDownloadAutoBackup_returnsFileBytesAndAudits(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	name := "lbbak-manual-dl.lbbak"

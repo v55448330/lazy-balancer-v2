@@ -110,7 +110,7 @@ TCP 握手 + 慢启动。高 QPS 场景延迟与上游负载双降。
   reverse_proxy `max_requests`）防止单一上游被打穿。
 - **版本隐藏**：全局开关（基础设置，`server_tokens_hidden`，渲染为 deferred
   headers 处理器隐藏 Server 头）。注：规则级 `server_tokens_hidden` 为
-  API/MCP 预留字段（T-3 裁定，无 UI 入口），取值 0=随全局 / **1=隐藏** /
+  API/MCP 预留字段（2026-09-06 起，无 UI 入口），取值 0=随全局 / **1=隐藏** /
   **2=显示**——与 v2.2.5 前文档所述「2=完全隐藏」相反，以实现为准。
 
 ---
@@ -134,8 +134,8 @@ detection 模式仅记录不拦截；切换 blocking 前用安全事件页确认
 只启用业务相关的规则组（策略编辑 → CRS 规则组），降低每请求的规则评估开销
 与误报面。常用组速查：
 
-> 组名与代码分类（`crs_rule_index.go CategorizeCRSFile`）同源,SR15 修正
-> 此前的系统性映射错误（932 整组遗漏/943 错置/95x 误标）。
+> 组名与代码分类（`crs_rule_index.go CategorizeCRSFile`）同源，早期版本
+> 的组名映射错误（932 整组遗漏/943 错置/95x 误标）已修正。
 
 | 组 | 内容（按 CRS 文件族） | 建议 |
 |---|---|---|

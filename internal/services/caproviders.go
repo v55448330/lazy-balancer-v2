@@ -51,20 +51,6 @@ func scanCAProvider(scanner caProviderScanner, provider *models.CAProvider) erro
 	return nil
 }
 
-// CAProviderListItem is a list view of a CA provider.
-type CAProviderListItem struct {
-	ID            int       `json:"id"`
-	Name          string    `json:"name"`
-	Provider      string    `json:"provider"`
-	DirectoryURL  string    `json:"directory_url"`
-	Credentials   string    `json:"credentials"`
-	MaxConcurrent int       `json:"max_concurrent"`
-	MinIntervalMS int       `json:"min_interval_ms"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
-}
-
 // CAProviderService manages CA provider business logic.
 type CAProviderService struct {
 	dataDir string
@@ -83,26 +69,23 @@ func NewCAProviderService(dataDir ...string) *CAProviderService {
 // CA 凭证（含 ZeroSSL EAB）对全体登录用户明文可读为 2026-09-05 用户裁定口径
 // （所有登录用户至少全局只读、内部可信）；勿按 DNS 凭证掩码口径「修复」——
 // DNS 掩码（R72 D4）与 CA 明文并存是有意差异。
-func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
+// CERT-R1（第 69 轮）：列表直接返回 []models.CAProvider，删除与模型 1:1
+// 同形的 CAProviderListItem 拷贝层（无脱敏/投影价值；JSON 键完全同形，
+// 唯一差异=credentials 空串时省略键，前端 parseCACredentials 对 falsy 兼容）。
+func (s *CAProviderService) ListCAProviders() ([]models.CAProvider, error) {
 	rows, err := db.DB.Query("SELECT " + caProviderColumns + " FROM ca_providers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	list := make([]CAProviderListItem, 0)
+	list := make([]models.CAProvider, 0)
 	for rows.Next() {
 		var provider models.CAProvider
 		if err := scanCAProvider(rows, &provider); err != nil {
 			return nil, err
 		}
-		p := CAProviderListItem{
-			ID: provider.ID, Name: provider.Name, Provider: provider.Provider,
-			DirectoryURL: provider.DirectoryURL, Credentials: provider.Credentials,
-			MaxConcurrent: provider.MaxConcurrent, MinIntervalMS: provider.MinIntervalMS,
-			Enabled: provider.Enabled, CreatedAt: provider.CreatedAt, UpdatedAt: provider.UpdatedAt,
-		}
-		list = append(list, p)
+		list = append(list, provider)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -231,23 +214,22 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		return ErrCAProviderMinIntervalTooHigh
 	}
 
-	if req.Enabled != nil && !*req.Enabled && wasEnabled {
-		var enabledCount int
-		err := tx.QueryRow(`
-			SELECT COUNT(*) FROM ca_providers WHERE id != ? AND enabled=1
-		`, id).Scan(&enabledCount)
-		if err != nil {
-			return err
-		}
-		if enabledCount == 0 {
-			return ErrCAProviderLastEnabled
-		}
-	}
-
-	res, err := tx.Exec(`
+	// CERT-L1（第 69 轮）：「最后一个启用」守卫收敛进 UPDATE 的 WHERE 子查询——
+	// 旧形态为 check-then-act（COUNT 读 + 裸 UPDATE 两句分置），守卫判定与写入不原子，
+	// 并发禁用仅剩的两个启用提供商时存在同穿窗口；原子形态下守卫在写锁内求值，
+	// 后提交者恒 0 行 → ErrCAProviderLastEnabled，不再依赖 _txlock=immediate 的
+	// 事务序列化兜底。
+	disabling := req.Enabled != nil && !*req.Enabled && wasEnabled
+	query := `
 		UPDATE ca_providers SET name=?, provider=?, directory_url=?, credentials=?, max_concurrent=?, min_interval_ms=?, enabled=?, updated_at=datetime('now')
 		WHERE id=?
-	`, existing.Name, existing.Provider, existing.DirectoryURL, existing.Credentials, existing.MaxConcurrent, existing.MinIntervalMS, existing.Enabled, id)
+	`
+	args := []any{existing.Name, existing.Provider, existing.DirectoryURL, existing.Credentials, existing.MaxConcurrent, existing.MinIntervalMS, existing.Enabled, id}
+	if disabling {
+		query += ` AND enabled=1 AND (SELECT COUNT(*) FROM ca_providers WHERE enabled=1 AND id != ?) >= 1`
+		args = append(args, id)
+	}
+	res, err := tx.Exec(query, args...)
 	if err != nil {
 		return err
 	}
@@ -256,6 +238,11 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		return err
 	}
 	if rows == 0 {
+		// 禁用分支的 0 行即守卫子查询拒绝（行存在性已由本事务内 SELECT 证明），
+		// 归因为 ErrCAProviderLastEnabled 而非 ErrCAProviderNotFound。
+		if disabling {
+			return ErrCAProviderLastEnabled
+		}
 		return ErrCAProviderNotFound
 	}
 

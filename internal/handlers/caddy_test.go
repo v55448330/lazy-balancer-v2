@@ -519,3 +519,45 @@ func TestUpdateConfig_appliesExactlyOnce(t *testing.T) {
 		t.Fatalf("/load calls=%d, want 1（探针已撤，仅事务内应用）", loads)
 	}
 }
+
+// LBH-B-U2（第 69 轮 P3）：监督器在场（pid 标记）但 admin 等待超时——不得落
+// 直启回退。修复前超时后直启 caddy：与活监督器双启抢 127.0.0.1:2019/监听端口，
+// 败者触发监督器崩溃重拉 churn（败者=监督器实例时无限循环+就绪探针被幸存实例
+// 应答→reapply_last_good churn；败者=直启实例时假 500）。修复后返回明确错误，
+// 留给监督器继续拉起。
+func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
+	// Given：监督器标记在场 + admin 死端口不就绪 + 调小委托等待
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "supervisor.pid")
+	if err := os.WriteFile(pidFile, []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldPid, oldPause, oldTimeout := caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout
+	caddySupervisorPidFile = pidFile
+	caddyPauseFile = filepath.Join(dir, "paused")
+	caddySupervisorWaitTimeout = 300 * time.Millisecond
+	t.Cleanup(func() {
+		caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout = oldPid, oldPause, oldTimeout
+	})
+
+	startInvoked := make(chan struct{})
+	original := caddyRunCommand
+	caddyRunCommand = func() *exec.Cmd {
+		close(startInvoked)
+		return exec.Command("sh", "-c", "exit 7")
+	}
+	t.Cleanup(func() { caddyRunCommand = original })
+
+	// When
+	err := startCaddy("http://127.0.0.1:1")
+
+	// Then：明确报错（点名监督器委托超时）且未直启
+	if err == nil || !strings.Contains(err.Error(), "监督器") {
+		t.Fatalf("err=%v, want 监督器委托超时错误", err)
+	}
+	select {
+	case <-startInvoked:
+		t.Fatal("监督器在场且委托超时——不得落直启回退（双启竞态）")
+	case <-time.After(200 * time.Millisecond):
+	}
+}

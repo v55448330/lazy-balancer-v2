@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -85,9 +86,6 @@ func run() error {
 	}
 	// 品牌载入留痕(2026-09-11 裁定):操作日志+系统日志记录各字段自定义/默认。
 	handlers.StartupBrandingLog(cfg.DataDir)
-	if runtimeLogFile != "" {
-		_ = runtimeLogFile // M2:清理循环由统一任务引擎接管(见 InitTaskEngine)
-	}
 
 	if *initDB {
 		log.Println("Database initialized successfully")
@@ -292,7 +290,7 @@ func run() error {
 		go func() { serverErrors <- server.ListenAndServe() }()
 	}
 
-	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors})
+	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors, caddyAdminURL: cfg.CaddyAdminURL})
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
 		return fmt.Errorf("serve HTTP: %w", serverErr)
 	}
@@ -313,6 +311,8 @@ type serverStopSignals struct {
 	quit         chan os.Signal
 	restart      <-chan struct{}
 	serverErrors <-chan error
+	// caddyAdminURL Caddy admin 端点（INFRA-U5，第 69 轮：退出前排水用）。
+	caddyAdminURL string
 }
 
 func waitForServerStop(server *http.Server, signals serverStopSignals) error {
@@ -340,7 +340,31 @@ func waitForServerStop(server *http.Server, signals serverStopSignals) error {
 			services.Logf("error", "HTTP server forced close failed: %v", closeErr)
 		}
 	}
+	// INFRA-U5（第 69 轮）：进程退出前给 Caddy 排水窗口——此前 PID1 退出后
+	// 容器 teardown 直接 SIGKILL 残存进程（含监督器与 Caddy），每次升级/重启
+	// 硬断全部在途代理连接。POST /stop 让 Caddy 优雅关停；best-effort：
+	// admin 不可达（已停/独立部署）静默略过。restart 路径同理（进程退出由
+	// 容器编排重建，Caddy 排水后由新容器监督器重拉）。
+	drainCaddy(signals.caddyAdminURL)
 	return nil
+}
+
+// drainCaddy best-effort 请求 Caddy admin /stop（2s 上限，错误只记日志）。
+func drainCaddy(adminURL string) {
+	if adminURL == "" {
+		return
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(adminURL, "/")+"/stop", nil)
+	if err != nil {
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		services.Logf("info", "Caddy 排水请求未达（可能已停止）: %v", err)
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 type tzLogWriter struct {

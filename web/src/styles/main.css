@@ -194,6 +194,12 @@ body {
 .error-banner .el-alert__title { line-height: 1.5; }
 .error-banner .error-banner-meta { display: block; font-size: 12px; margin-top: 0; line-height: 1.5; }
 
+/* 轮询错误横幅行内件（FE-R2，第 69 轮）：Rules/CertJobs/ClusterSettings/AppLayout
+   四处模板共用，此前三文件 scoped 逐字重复；.polling-error-alert 容器声明各异
+   （margin-bottom/align-self）保留在各文件本地。 */
+.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.polling-error-meta { font-size: 12px; }
+
 /* 信息说明横幅统一模式（2026-09-25 用户裁定）：全站信息说明框同形——虚线边框
    浅灰底、12px 600 主文字、无图标；语义同 SecurityPolicies .stage-projection-bar */
 .info-note-bar { margin: 8px 0 12px; padding: 8px 12px; background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px; font-size: 12px; line-height: 1.55; }

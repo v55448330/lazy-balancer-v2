@@ -29,6 +29,8 @@ docker run -d --name lazy-balancer --network host \
 
 Mounts: `/app/data` database and config (required), `/app/certs` certificates and private keys (required), `/app/backup` auto-backup output directory (required — without it, backup files are lost when the container is recreated), `/app/logs` logs (recommended), `/app/waf` rule sets and GeoIP (recommended).
 
+> Docker Desktop (macOS/Windows): prefer a named volume for `/app/data` (`-v lb-data:/app/data`); bind mounts go through the FUSE sharing layer and risk SQLite WAL page loss (bind mounts on Linux hosts are unaffected).
+
 Open `http://localhost:8000` for the admin panel. First visit opens an initialization wizard; no default credentials.
 
 <details>

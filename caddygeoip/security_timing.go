@@ -4,9 +4,12 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // securityTimingLogPath 是耗时侧车日志路径——与 coraza 审计日志同目录
@@ -50,6 +53,20 @@ func AppendSecurityTiming(id string, durationUs int64) {
 		securityTimingFd = f
 	}
 	_, _ = fmt.Fprintf(securityTimingFd, "%s %d\n", id, durationUs)
+}
+
+// recordSecurityTiming 读耗时关联头对（timing ID + 起始纳秒）并记录一段耗时——
+// PLUG-R1（第 69 轮 P4）：SecurityTimingPre/End 两 ServeHTTP 原逐字重复，收敛为
+// 本 helper，suffix 区分收点（":pre" 预检段 / ":end" 全链）。头对缺失或起始
+// 时间戳不可解析时静默跳过（耗时是增强信息，不产生请求路径错误）。
+func recordSecurityTiming(r *http.Request, suffix string) {
+	timingID := r.Header.Get(securityTimingHeader)
+	startNsStr := r.Header.Get(securityTimingStartHeader)
+	if timingID != "" && startNsStr != "" {
+		if startNs, perr := strconv.ParseInt(startNsStr, 10, 64); perr == nil {
+			AppendSecurityTiming(timingID+suffix, (time.Now().UnixNano()-startNs)/1000) // ns→µs
+		}
+	}
 }
 
 // securityTimingID 生成 16 字符随机 hex 作 timing 关联 ID(第 62 轮 F62-29:

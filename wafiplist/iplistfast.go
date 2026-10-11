@@ -192,10 +192,6 @@ func EvictIPListCache(paths ...string) int {
 // 保证「排序+去重+不相交」检索不变式——二分正确性依赖不相交）。
 func parseIPListFile(path string, info os.FileInfo) (*ipListFileState, error) {
 	parseCountForTest.Add(1)
-	// RDB 二进制格式：.fast 文件直接展开（零 parse/sort/aggregate）
-	if strings.HasSuffix(path, ".fast") {
-		return parseFastFile(path, info)
-	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("@ipListFast 名单读取失败 %q: %w", path, err)
@@ -277,21 +273,4 @@ func ParseIPEntry(entry string) (netip.Prefix, error) {
 		bits = 128
 	}
 	return netip.PrefixFrom(addr, bits), nil
-}
-
-// parseFastFile 读取 .fast 二进制格式并展开为 ipListFileState。
-// 零文本解析、零排序（编译时已完成）——20 万条 ~0.2ms vs text ~150ms。
-func parseFastFile(path string, info os.FileInfo) (*ipListFileState, error) {
-	fastState, err := ReadFastFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("@ipListFast .fast 读取失败 %q: %w", path, err)
-	}
-	state := &ipListFileState{
-		mtime: info.ModTime(),
-		size:  info.Size(),
-		v4:    fastState.V4,
-		v6:    fastState.V6,
-	}
-	state.lastCheckNano.Store(time.Now().UnixNano())
-	return state, nil
 }

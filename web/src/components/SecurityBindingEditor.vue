@@ -97,7 +97,6 @@
                   size="small"
                   effect="plain"
                   :type="binding.enabled ? 'primary' : 'info'"
-                  class="picker-bind-tag"
                 >{{ binding.name }}</el-tag>
               </span>
             </template>

@@ -539,3 +539,33 @@ func TestMarkSourceSuccess_usesConfiguredSchedule(t *testing.T) {
 		t.Fatalf("next_update=%v, want 排程槽 %v", got, want.UTC())
 	}
 }
+
+// LBS-B-U1（第 69 轮 P3）：SetThreatSchedule 两步写事务化——第二写点（重排
+// 各源 next_update）失败时，第一写点（global_config 排程列）须整体回滚，
+// 不留「排程已改、槽位照旧」中间态（曾两独立 Exec 先后提交）。
+func TestSetThreatSchedule_rollsBackWhenRearmFails(t *testing.T) {
+	// Given 既有排程值 + 第二写点必败形态（触发器注入：仅 next_update 写失败）
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET threat_schedule_days='1', threat_schedule_time='03:00' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`CREATE TRIGGER trg_test_fail_rearm BEFORE UPDATE OF next_update ON security_threat_sources BEGIN SELECT RAISE(FAIL, 'injected rearm failure'); END`); err != nil {
+		t.Fatalf("inject failure trigger: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec(`DROP TRIGGER IF EXISTS trg_test_fail_rearm`) })
+
+	// When
+	err := SetThreatSchedule([]int{3}, "05:00")
+
+	// Then 返回错误且 global_config 排程列保持旧值（整体回滚）
+	if err == nil {
+		t.Fatal("第二写点失败应返回错误")
+	}
+	var days, hhmm string
+	if qerr := db.DB.QueryRow(`SELECT COALESCE(threat_schedule_days,''), COALESCE(threat_schedule_time,'') FROM global_config WHERE id=1`).Scan(&days, &hhmm); qerr != nil {
+		t.Fatal(qerr)
+	}
+	if days != "1" || hhmm != "03:00" {
+		t.Fatalf("回滚后排程=(%q,%q), want (1,03:00)——曾非事务两步写留中间态", days, hhmm)
+	}
+}

@@ -46,6 +46,47 @@ func TestThreatSystemListRename_migratesLegacyNames(t *testing.T) {
 	}
 }
 
+func TestThreatSystemListRename_skipsWhenNewNameOccupied(t *testing.T) {
+	// Given 旧名 system=1 行 + 用户手工占用的同名（新名）system=0 行——CORE-U3
+	//（第 69 轮）：name 无 UNIQUE 约束，无守卫改名会产出同名双行（选择器混淆），
+	// 须跳过改名留给人工处置。
+	openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	newName := ThreatListNameBySource("ustc")
+	if _, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES
+		('威胁情报库-中科大黑 IP', '旧', '恶意 IP', '[]', 1, datetime('now'), datetime('now')),
+		(?, '用户自建同名名单', '恶意 IP', '[]', 0, datetime('now'), datetime('now'))`, newName); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := migrateThreatSystemListNames(); err != nil {
+		t.Fatalf("migrate: %v（同名冲突须跳过改名而非报错阻断启动）", err)
+	}
+
+	// Then 旧名行保持旧名（未改名），用户同名行不受影响，同名双行未产生
+	var legacyCount int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE system=1 AND name='威胁情报库-中科大黑 IP'`).Scan(&legacyCount); err != nil {
+		t.Fatal(err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("旧名 system=1 行=%d, want 1（同名占用时须跳过改名）", legacyCount)
+	}
+	var sameName int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, newName).Scan(&sameName); err != nil {
+		t.Fatal(err)
+	}
+	if sameName != 1 {
+		t.Fatalf("新名行=%d, want 1（不得产出同名双行）", sameName)
+	}
+	// And 幂等：二次执行仍跳过且不报错
+	if err := migrateThreatSystemListNames(); err != nil {
+		t.Fatalf("二次执行: %v", err)
+	}
+}
+
 // 新名口径：去「威胁情报库-」前缀，专业化命名
 func TestThreatSystemLists_professionalNames(t *testing.T) {
 	names := map[string]string{}

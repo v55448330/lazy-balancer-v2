@@ -428,7 +428,7 @@ func writeTarEntries(dir string, tw *tar.Writer) error {
 	for i := range paths {
 		paths[i], _ = filepath.Rel(dir, paths[i])
 	}
-	sortStrings(paths)
+	sort.Strings(paths)
 	for _, rel := range paths {
 		full := filepath.Join(dir, rel)
 		data, err := os.ReadFile(full)
@@ -596,11 +596,6 @@ func fileSha256(path string) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// SEC25-4(第 25 轮审计):手写插入排序→sort.Strings(标准库,等价语义)
-func sortStrings(s []string) {
-	sort.Strings(s)
 }
 
 // fetchWafFiles pulls the full file bundle from the master's on-demand

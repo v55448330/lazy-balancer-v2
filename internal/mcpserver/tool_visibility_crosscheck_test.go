@@ -14,15 +14,21 @@ import (
 
 // ginPath 将 {param} 形态还原为 Gin 的 :param（mcp_routes_parity_test.go
 // openAPIToGinPath 同义——外部测试包不可共享，此处内联）。
+// APIMCP-R1（第 69 轮）：与 openAPIToGinPath 对齐为全替换循环——旧实现只转
+// 首个 {param}，多参路径（如 /security/policies/{id}/bind/{caddy_id}）会得
+// 半转换形态让互检静默失真。
 func ginPath(path string) string {
-	if i := strings.IndexByte(path, '{'); i >= 0 {
+	for {
+		i := strings.IndexByte(path, '{')
+		if i < 0 {
+			return path
+		}
 		j := strings.IndexByte(path[i:], '}')
 		if j < 0 {
 			return path
 		}
-		return path[:i] + ":" + path[i+1:i+j] + path[i+j+1:]
+		path = path[:i] + ":" + path[i+1:i+j] + path[i+j+1:]
 	}
-	return path
 }
 
 // Given 全部注册工具规格与 REST 只读白名单。

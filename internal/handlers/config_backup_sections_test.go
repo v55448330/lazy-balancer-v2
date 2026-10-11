@@ -30,8 +30,9 @@ func newBackupSectionRouter(h *Handlers) *gin.Engine {
 	return g
 }
 
-// v2.3.0 分类导入导出(用户裁定):分类沿用集群同步五类;导出按 sections
-// 过滤;导入按 sections 只覆盖所选分类(校验和仍验整包)。
+// v2.3.0 分类导入导出(用户裁定):分类初版沿用集群同步五类,2026-09-19 已合并为
+// 三分类(users/rules/security,legacy 键归一——config_backup.go configBackupSections);
+// 导出按 sections 过滤;导入按 sections 只覆盖所选分类(校验和仍验整包)。
 func TestConfigBackup_sectionFiltering(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)

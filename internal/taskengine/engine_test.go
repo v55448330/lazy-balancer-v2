@@ -49,6 +49,9 @@ func TestEngine_SingletonTriggerRejectedWhileRunning(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	e.Register(Descriptor{ID: "t-single", Family: "t", Name: "单飞", Kind: KindPeriodic,
+		// TASK-L2（第 69 轮）配套：Periodic 注册必须带 IntervalFn（本测试经
+		// Trigger 驱动，间隔值不参与断言）。
+		IntervalFn: func() time.Duration { return time.Hour },
 		Run: func(rc RunContext) error {
 			close(started)
 			<-release
@@ -69,6 +72,7 @@ func TestEngine_CancelMarksCancelled(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{})
 	e.Register(Descriptor{ID: "t-cancel", Family: "t", Name: "可取消", Kind: KindPeriodic, Cancelable: true,
+		IntervalFn: func() time.Duration { return time.Hour }, // TASK-L2 配套（Trigger 驱动）
 		Run: func(rc RunContext) error {
 			close(started)
 			<-rc.Ctx.Done()
@@ -305,8 +309,10 @@ func TestEngine_DaemonLifecycle(t *testing.T) {
 }
 
 // Given Periodic 任务（30ms 间隔）。
-// When 调度运行 300ms。
-// Then 每轮独立执行且每轮落行（≈10 行——无 RFO 静默）。
+// When 调度运行至 ≥5 轮落行（3s 截止兜底——全量套件并行争抢 CPU 时墙钟
+// 300ms 窗口可能只排到 4 轮，第 69 轮修复期两次全量运行实证；契约是
+// 「每轮独立执行且每轮落行」，不是 300ms 内的绝对轮数）。
+// Then ≥5 行且全部终态 success（无 RFO 静默）。
 func TestEngine_PeriodicRecordsEveryCycle(t *testing.T) {
 	e := newTestEngine(t)
 	e.Register(Descriptor{ID: "t-per", Family: "t", Name: "循环", Kind: KindPeriodic,
@@ -314,11 +320,14 @@ func TestEngine_PeriodicRecordsEveryCycle(t *testing.T) {
 		Run:        func(rc RunContext) error { return nil }})
 	e.SetRole(true)
 	e.StartLoop("t-per")
-	time.Sleep(300 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
+	for countRuns(t, "t-per") < 5 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	e.StopLoop("t-per")
 	rows := countRuns(t, "t-per")
 	if rows < 5 {
-		t.Fatalf("300ms@30ms 应≥5 轮且每轮落行, got %d 行", rows)
+		t.Fatalf("30ms 间隔 3s 内应≥5 轮且每轮落行, got %d 行", rows)
 	}
 	var success int
 	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id='t-per' AND status='success'`).Scan(&success)
@@ -854,5 +863,84 @@ func TestEngine_TickEvaluatesNextSlotOutsideRegistrationLock(t *testing.T) {
 	case <-probe:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("IsRunning 被 tick 持有的 r.mu 阻塞——NextSlotFn 须锁外求值")
+	}
+}
+
+// TASK-L3（第 69 轮 P3）：RecoverOrphans 补上与同文件其余导出 DB 函数
+// （History/Stats24h/PurgeTaskRuns 等 7 处）同形的 db.DB nil 防护——曾裸用
+// db.DB.Exec，nil 时进程级 panic。
+func TestEngine_RecoverOrphansNilDBReturnsZero(t *testing.T) {
+	// Given 未初始化 DB（db.DB=nil）
+	old := db.DB
+	db.DB = nil
+	t.Cleanup(func() { db.DB = old })
+	e := NewEngine(Options{})
+	t.Cleanup(e.Stop)
+
+	// When/Then nil DB 下调用不 panic 且返回 0
+	if got := e.RecoverOrphans(); got != 0 {
+		t.Fatalf("RecoverOrphans()=%d, want 0（nil DB 防护）", got)
+	}
+}
+
+// TASK-L4（第 69 轮 P4）：Periodic 的 IntervalFn 与 Scheduled 的 NextSlotFn
+// 同形锁外求值（F-L1-68-05 同族收敛补全——IntervalFn 未来改 DB 读取形态时，
+// 持 r.mu 求值会把延迟传导到同任务的 Cancel/IsRunning/StopLoop）。
+//
+// Given Periodic 任务的 IntervalFn 阻塞中（模拟可配置间隔的 DB 读取耗时）。
+// When tick 求值 IntervalFn 期间并发调用 IsRunning（需同一把 r.mu）。
+// Then IsRunning 不得被阻塞——IntervalFn 须快照后锁外求值再回锁复核。
+func TestEngine_TickEvaluatesIntervalOutsideRegistrationLock(t *testing.T) {
+	e := newTestEngine(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var entered atomic.Int32
+	e.Register(Descriptor{ID: "t-int", Family: "t", Name: "循环", Kind: KindPeriodic,
+		IntervalFn: func() time.Duration {
+			entered.Store(1)
+			<-release
+			return time.Hour
+		},
+		Run: func(RunContext) error { return nil },
+	})
+	e.StartLoop("t-int")
+
+	go e.tick()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && entered.Load() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if entered.Load() != 1 {
+		t.Fatal("tick 未进入 IntervalFn")
+	}
+
+	probe := make(chan struct{})
+	go func() { _ = e.IsRunning("t-int"); close(probe) }()
+	select {
+	case <-probe:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("IsRunning 被 tick 持有的 r.mu 阻塞——IntervalFn 须锁外求值")
+	}
+}
+
+// TASK-L9（第 69 轮 P5）：生命周期行时间戳与业务行（TeeTaskLog）统一为
+// 斜杠形态——曾 [start]/[done] 用横杠、业务行用斜杠，同一 tasks/{id}.log
+// 两种时间戳并存。engineNowStr 是 DB datetime 比较口径（SQLite 只认横杠）
+// 不改，日志行单独走斜杠。
+func TestEngine_LifecycleLogLineUsesSlashTimestamp(t *testing.T) {
+	SetLogDir(t.TempDir())
+	t.Cleanup(func() { SetLogDir("") })
+
+	// Given/When 追加一条生命周期行
+	taskLogAppend("t-fmt", "[start] 手动触发")
+
+	// Then 行首时间戳为 YYYY/MM/DD HH:MM:SS（斜杠，与业务行同形态）
+	data, err := os.ReadFile(TaskLogPath("t-fmt"))
+	if err != nil {
+		t.Fatalf("读取任务日志: %v", err)
+	}
+	line := strings.TrimSpace(string(data))
+	if len(line) < 20 || line[4] != '/' || line[7] != '/' {
+		t.Fatalf("生命周期行时间戳形态=%q，want YYYY/MM/DD HH:MM:SS（斜杠）", line)
 	}
 }

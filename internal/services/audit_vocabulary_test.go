@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // 操作日志词汇硬卡控（系统标准：操作标签 ≤4 词、事件对象 ≤5 词，词制计数见
@@ -94,6 +96,15 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 			violations = append(violations, file+":"+strconv.Itoa(line)+" "+kind+" "+strconv.Quote(value)+" 超上限（"+strconv.Itoa(n)+" 词 > "+strconv.Itoa(limit)+"）")
 		}
 	}
+	// SEC-C-U1 ④（第 69 轮）：字面量 (action, resource) 对命中归一表旧侧即违规
+	// ——词数门只查词数不查规范名（「IP2Region数据库」=2 词曾静默放行）。必须
+	// 成对判定：归一表多为动作作用域条目（重载+Caddy配置→Caddy服务），裸资源
+	// 名判定会误伤合法写点（如 更新+Caddy配置）。
+	checkPair := func(file string, line int, action, resource string) {
+		if action != "" && resource != "" && db.IsRetiredAuditVocabulary(action, resource) {
+			violations = append(violations, file+":"+strconv.Itoa(line)+" 词条对 ("+strconv.Quote(action)+","+strconv.Quote(resource)+") 命中归一表旧侧，请改用规范名（见 internal/db/audit.go 归一表）")
+		}
+	}
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
@@ -124,6 +135,8 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 				if !ok {
 					return true
 				}
+				var litAction, litResource string
+				line := fset.Position(call.Pos()).Line
 				for _, arg := range []struct {
 					idx   int
 					kind  string
@@ -132,10 +145,14 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 					if arg.idx >= len(call.Args) {
 						continue
 					}
-					line := fset.Position(call.Pos()).Line
 					if value, ok := auditVocabStringLit(call.Args[arg.idx]); ok {
 						if value != "" {
 							check(path, line, arg.kind, value, arg.limit)
+						}
+						if arg.kind == "操作标签" {
+							litAction = value
+						} else {
+							litResource = value
 						}
 						continue
 					}
@@ -145,6 +162,7 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 						usedAllowlist[rel+"|"+strconv.Itoa(arg.idx)+"|"+enclosing] = true
 					}
 				}
+				checkPair(path, line, litAction, litResource)
 				return true
 			})
 		}
@@ -158,12 +176,16 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 							return true
 						}
 						line := fset.Position(ret.Pos()).Line
+						var retAction, retResource string
 						if value, ok := auditVocabStringLit(ret.Results[0]); ok && value != "" {
 							check(path, line, "操作标签", value, auditActionMaxWords)
+							retAction = value
 						}
 						if value, ok := auditVocabStringLit(ret.Results[1]); ok && value != "" {
 							check(path, line, "事件对象", value, auditResourceMaxWords)
+							retResource = value
 						}
+						checkPair(path, line, retAction, retResource)
 						return true
 					})
 					continue

@@ -88,17 +88,19 @@ func securityEventsRetentionCleanup(ctx context.Context) int {
 		select {
 		case <-ctx.Done():
 			Logf("info", "security events retention: age-based cleanup canceled mid-pass")
-			return 0
+			// SEC-L1（第 69 轮）：返回契约统一为「已删多少报多少」——取消
+			// 路径此前 return 0 丢弃已提交批次，§6.5 摘要行少报。下同三处。
+			return total
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return 0
+		return total
 	}
 	var count int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
 		Logf("warn", "security events retention: row count failed: %v", err)
-		return 0
+		return total // SEC-L1：age 阶段已删计数不丢弃
 	}
 	if overflow := count - max; overflow > 0 {
 		remaining := overflow
@@ -117,11 +119,15 @@ func securityEventsRetentionCleanup(ctx context.Context) int {
 				break
 			}
 			remaining -= int(affected)
+			// SEC-L1：count 阶段删除同样计入返回（此前只减 remaining 从不累加
+			// total——审计建议遗漏点：仅改 return 不补累计，count 阶段删除在
+			// 正常终点同样少报）。
+			total += int(affected)
 			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消（N-4）
 			select {
 			case <-ctx.Done():
 				Logf("info", "security events retention: count-based cleanup canceled mid-pass")
-				return 0
+				return total
 			case <-time.After(10 * time.Millisecond):
 			}
 		}

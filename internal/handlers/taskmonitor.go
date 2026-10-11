@@ -148,9 +148,10 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 }
 
 // ControlSystemTask 常驻循环启停（admin；body {"action":"start|stop|restart"}）。
-// P2-②：经 DescribeAll 的 Controllable 元数据路由——cert-waiting-ca 等
-// Continuous 族真正可控（曾硬编码三 ID map + TaskRuntime 死回退恒 400）；
-// TaskRuntime 注册表已随 M2 退役删除。
+// TASK-L11（第 69 轮）：现形态——Controllable = Kind==Daemon（引擎元数据驱动），
+// 仅常驻族（security-events-ingestion/cert-issuance/cluster-sync）可控；Periodic
+// 族（cert-waiting-ca 等）启停走 toggle 端点，本端点对其恒 400。v2.0 前
+// 「Continuous 族可控」注释已随四类型标准作废。
 func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	id := c.Param("id")
 	var req struct {

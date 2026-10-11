@@ -30,6 +30,9 @@ fi
 # Set timezone from database if available
 if [ -f /app/data/lazy-balancer.db ]; then
     TZ=$(sqlite3 /app/data/lazy-balancer.db "SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1" 2>/dev/null || echo "Asia/Shanghai")
+    # INFRA-U3（第 69 轮）：|| 只兜 sqlite3 非零退出——查询成功但零行（id=1 被
+    # 手工删除）时返回空串，空 TZ 在 musl 下=UTC，与面板时区分叉。
+    [ -z "$TZ" ] && TZ="Asia/Shanghai"
     export TZ
     echo "Timezone: $TZ"
 fi

@@ -528,7 +528,7 @@
                   </el-tooltip>
                 </template>
                 <template #default="{ row }">
-                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（请使用规则级后端域名）">
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）">
                     <el-input
                       v-model="row.origin_domain"
                       placeholder="留空=不覆盖"
@@ -560,7 +560,7 @@
                   </el-tooltip>
                 </template>
                 <template #default="{ row }">
-                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式下最大连接数不生效">
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" :content="`动态上游模式下${wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数'}不生效`">
                     <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" :disabled="wizardForm.dynamic_dns" />
                   </el-tooltip>
                 </template>
@@ -658,7 +658,7 @@
                    逐上游回源域名（引擎硬墙：probe 不走处理链、replacer 无提供者），
                    统一 Host 探测可能误摘按域名严格校验的后端节点 -->
               <div v-if="mixedOriginActiveCheckWarn" class="info-note-bar">
-                <span class="info-note-desc">各上游的回源域名不一致：主动健康检查不感知逐上游回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断</span>
+                <span class="info-note-desc">已配置逐上游回源域名：主动健康检查不感知回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则跟随后端域名（若配置），否则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断</span>
               </div>
 
               <template v-if="wizardForm.enable_active_health_check">
@@ -667,7 +667,7 @@
                   <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常</span>
                 </el-form-item>
                 <el-form-item label="健康检查域名">
-                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=使用上游地址" style="width: 220px;" />
+                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=跟随后端域名（若配置），否则用上游地址" style="width: 220px;" />
                   <span class="form-tip-inline">探测请求的 Host 头；HTTPS 上游的探测不携带独立 SNI（回源域名仅作用于代理流量）</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
@@ -860,9 +860,9 @@
               <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }} ({{ caProviderLabel }})</div>
               <div v-else>
                 <div>{{ certTypeLabels.manual }}</div>
-                <div v-if="certInfo.valid" class="cert-preview-info">
+                <div v-if="certInfo.valid">
                   <el-tag size="small" :type="certInfo.warning ? 'warning' : 'success'">{{ certInfo.domain }}</el-tag>
-                  <span class="cert-expiry">过期: {{ certInfo.expiryDate }}</span>
+                  <span>过期: {{ certInfo.expiryDate }}</span>
                   <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">({{ certInfo.daysUntilExpiry }} 天后)</span>
                 </div>
               </div>
@@ -941,8 +941,8 @@
           <el-descriptions-item label="后端域名" v-if="ruleConfig.protocol === 'http'">{{ ruleConfig.host_header || '-' }}</el-descriptions-item>
           <el-descriptions-item label="TLS" v-if="ruleConfig.enable_tls">
             {{ ruleConfig.tls_http_redirect ? '启用 (HTTP重定向)' : '启用' }}
-            <span v-if="ruleConfig.tls_source === 'manual'" class="tls-source-tag">(手动上传)</span>
-            <span v-else-if="ruleConfig.tls_source === 'acme_dns'" class="tls-source-tag">(ACME 自动)</span>
+            <span v-if="ruleConfig.tls_source === 'manual'">(手动上传)</span>
+            <span v-else-if="ruleConfig.tls_source === 'acme_dns'">(ACME 自动)</span>
           </el-descriptions-item>
           <el-descriptions-item label="TLS" v-else>禁用</el-descriptions-item>
           <el-descriptions-item label="压缩" v-if="ruleConfig.protocol === 'http'">
@@ -1147,7 +1147,7 @@ import type {
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
-import { validatePathRules } from '@/utils/ruleValidation'
+import { isValidHostName, validatePathRules } from '@/utils/ruleValidation'
 import { getStrategyLabel } from '@/utils/strategyLabels'
 import { popperViewportSafe } from '@/utils/popper'
 import { hostPortKey } from '@/utils/upstreamKeys'
@@ -1692,16 +1692,17 @@ const upstreamHostWarning = computed(() =>
   wizardForm.upstreams.some((u, i) => upstreamRowNeedsHost(u, i)) ? '主机地址为必填项，请填写完整' : '')
 
 // 混合回源域名 + 主动健康检查警告谓词（2026-10-10 用户裁定）：HTTP 规则 +
-// 主动检查开启 + 未设统一健康检查域名 + 启用上游的回源域名去重后 ≥2 个
-// 不同值。已设健康检查域名=用户已做统一探测旁路，不再警告。
+// 主动检查开启 + 未设统一健康检查域名 + 任一启用上游配置了回源域名。
+// 已设健康检查域名=用户已做统一探测旁路，不再警告。
+// SEM-U1（第 69 轮）：谓词从「≥2 去重值」放宽到「任一启用上游配了回源域名」——
+// 单值形态（仅一个回源域名+主动检查+健康检查域名空）同样分裂：代理流量
+// Host=回源域名、探测 Host=上游地址/后端域名，无警告会静默误摘后端。
 const mixedOriginActiveCheckWarn = computed(() => {
   if (wizardForm.protocol !== 'http' || !wizardForm.enable_active_health_check) return false
   if ((wizardForm.health_check_host || '').trim() !== '') return false
-  const origins = wizardForm.upstreams
+  return wizardForm.upstreams
     .filter(u => u.enabled !== false)
-    .map(u => (u.origin_domain || '').trim())
-    .filter(v => v !== '')
-  return new Set(origins).size >= 2
+    .some(u => (u.origin_domain || '').trim() !== '')
 })
 
 interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
@@ -2005,8 +2006,12 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     wizardForm.enable_tls = false
     if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
     wizardForm.custom_routes_enabled = false
+    wizardForm.health_check_host = ''
     wizardForm.path_rules = []
     wizardForm.upstreams.forEach(u => {
+      // FE-L1/LBH-A-L1（第 69 轮 P2）：回源域名是 HTTP-only 语义——切换即弃置，
+      // 否则隐藏残留字段被后端「回源域名仅 HTTP 规则支持」门恒拒，卡死保存
+      u.origin_domain = ''
       if (u.protocol === 'http') u.protocol = 'tcp'
       if (u.protocol === 'https') u.protocol = 'tls'
     })
@@ -2705,10 +2710,20 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
+  // 混布门（第 69 轮 LBS-A-L1，与后端同口径）：HTTP 规则启用上游 http/https 混布
+  // 会在 Caddy 池级 TLS 传输下使 http 上游静默全灭——保存前拦截
+  if (wizardForm.protocol === 'http') {
+    const enabledProtos = new Set(wizardForm.upstreams.filter(u => u.enabled !== false).map(u => u.protocol || 'http'))
+    if (enabledProtos.has('http') && enabledProtos.has('https')) {
+      ElMessage.warning('同一 HTTP 规则的启用上游协议须一致（http/https 混布时 http 上游会被 TLS 化而无法访问；如需共存请拆分为两条规则）')
+      saving.value = false
+      return
+    }
+  }
   // 逐上游回源域名（2026-10-10）：与后端 validateRulePayloadBeforeSave 同口径——
   // 纯主机名不带端口（端口已有独立配置列）、仅 HTTP 静态上游可用
-  const isValidOriginDomain = (value: string): boolean =>
-    /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(value)
+  // FE-U3（第 69 轮）：正则双份收敛为共享 isValidHostName（标签首尾 alnum、63/253 与后端对齐）
+  const isValidOriginDomain = isValidHostName
   for (const [index, upstream] of wizardForm.upstreams.entries()) {
     const origin = (upstream.origin_domain || '').trim()
     if (origin === '') continue
@@ -2718,7 +2733,7 @@ const submitWizard = async () => {
       return
     }
     if (wizardForm.dynamic_dns) {
-      ElMessage.warning(`上游 #${index + 1}：动态上游模式不支持回源域名（请使用规则级后端域名）`)
+      ElMessage.warning(`上游 #${index + 1}：动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）`)
       saving.value = false
       return
     }
@@ -2730,7 +2745,7 @@ const submitWizard = async () => {
   }
   // 健康检查域名：probe Host 头，纯主机名不带端口（与后端同口径）
   const healthCheckHost = (wizardForm.health_check_host || '').trim()
-  if (healthCheckHost !== '' && wizardForm.protocol === 'http' && !/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(healthCheckHost)) {
+  if (healthCheckHost !== '' && wizardForm.protocol === 'http' && !isValidHostName(healthCheckHost)) {
     ElMessage.warning(`健康检查域名 "${healthCheckHost}" 无效（仅支持主机名，不带端口）`)
     saving.value = false
     return
@@ -3550,8 +3565,7 @@ onUnmounted(() => {
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }
-.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
-.polling-error-meta { font-size: 12px; }
+/* .polling-error-title/.polling-error-meta 已收敛 main.css（FE-R2） */
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
  * el-form-item 结构——.mode-row-label 宽度对齐本向导 label-width=100px */
 .mode-row { display: flex; margin-bottom: 18px; }
@@ -3582,7 +3596,6 @@ onUnmounted(() => {
 .tls-tag {
   min-width: 44px;
 }
-.text-secondary { color: #6b7280; }
 .port-warning { color: #eab308; }
 
 /* 页内其余表格（日志统计等）单元格 padding——主规则表由更特异的
@@ -3775,12 +3788,6 @@ onUnmounted(() => {
   color: #67c23a;
 }
 
-.cert-warning-text {
-  color: #e6a23c;
-  font-size: 13px;
-  margin-top: 4px;
-  font-weight: 500;
-}
 
 .wizard-steps { margin-bottom: 24px; }
 .wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }

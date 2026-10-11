@@ -340,6 +340,9 @@ func TestEngine_DemoteCancelsInFlightScheduled(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	e.Register(Descriptor{ID: "t-sched", Family: "t", Name: "定时", Kind: KindScheduled, RunsOn: RoleMasterOnly,
+		// TASK-L2（第 69 轮）配套：Scheduled 注册必须带 NextSlotFn（远期槽——
+		// tick 不触发，本测试经 Trigger 驱动在途形态）。
+		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
 		Run: func(rc RunContext) error {
 			close(started)
 			select {

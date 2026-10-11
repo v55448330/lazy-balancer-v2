@@ -143,7 +143,7 @@
           <div class="form-tip-line">DNS-01 验证时向该提供商写入/清理 TXT 记录</div>
         </el-form-item>
         <template v-if="selectedProvider">
-          <el-divider content-position="left" class="cred-divider">认证凭证</el-divider>
+          <el-divider content-position="left" class="section-divider">认证凭证</el-divider>
           <template v-for="field in selectedProvider.credential_fields" :key="field.name">
             <el-form-item :label="field.label" v-if="shouldShowField(field)">
               <el-select
@@ -712,11 +712,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.cred-divider { margin: 24px 0 20px; }
+/* .cred-divider 并入 .section-divider（FE-R2，第 69 轮：同值双类合并） */
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .lb-form :deep(.el-form-item) { margin-bottom: 18px; }
-.cred-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .card-header {
   display: flex;
   justify-content: space-between;

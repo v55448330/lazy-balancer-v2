@@ -1,11 +1,15 @@
 package caddygeoip
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // F62-30(第 62 轮审计):写侧三文件此前零测试——补并发追加/空 ID 短路/目录
@@ -18,10 +22,7 @@ func TestAppendSecurityTiming_concurrentAppend(t *testing.T) {
 	dir := t.TempDir()
 	orig := securityTimingLogPath
 	securityTimingLogPath = filepath.Join(dir, "timing.log")
-	defer func() {
-		securityTimingLogPath = orig
-		securityTimingFd = nil
-	}()
+	defer restoreSecurityTimingPath(orig) // PLUG-U2：关闭旧 fd 再置 nil（原泄漏）
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -57,7 +58,7 @@ func TestAppendSecurityTiming_emptyIdShortCircuit(t *testing.T) {
 	dir := t.TempDir()
 	orig := securityTimingLogPath
 	securityTimingLogPath = filepath.Join(dir, "timing.log")
-	defer func() { securityTimingLogPath = orig; securityTimingFd = nil }()
+	defer restoreSecurityTimingPath(orig) // PLUG-U2：关闭旧 fd 再置 nil（原泄漏）
 
 	AppendSecurityTiming("", 100)
 
@@ -74,7 +75,7 @@ func TestAppendSecurityTiming_mkdirFallback(t *testing.T) {
 	nested := filepath.Join(dir, "a", "b", "timing.log")
 	orig := securityTimingLogPath
 	securityTimingLogPath = nested
-	defer func() { securityTimingLogPath = orig; securityTimingFd = nil }()
+	defer restoreSecurityTimingPath(orig) // PLUG-U2：关闭旧 fd 再置 nil（原泄漏）
 
 	AppendSecurityTiming("testid01", 42)
 
@@ -99,5 +100,60 @@ func TestSecurityTimingID_length(t *testing.T) {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
 			t.Errorf("non-hex char %q in %q", c, id)
 		}
+	}
+}
+
+// restoreSecurityTimingPath 还原侧车路径并关闭旧 fd（PLUG-U2 第 69 轮 P5：
+// 此前重置直接置 nil，每个相关测试泄漏一个 fd 句柄）。
+func restoreSecurityTimingPath(orig string) {
+	if securityTimingFd != nil {
+		_ = securityTimingFd.Close()
+		securityTimingFd = nil
+	}
+	securityTimingLogPath = orig
+}
+
+// PLUG-R1（第 69 轮 P4）：security_timing_pre/end 两 ServeHTTP 逐字重复收敛为
+// recordSecurityTiming helper——钉 helper 契约：合法头对写一行「<id><suffix> <us>」，
+// 缺头对零写入（静默降级语义不变）。
+func TestRecordSecurityTiming_writesSuffixedLine(t *testing.T) {
+	// Given 临时侧车路径 + 携带关联头对的请求（起始时间 12345µs 前）
+	dir := t.TempDir()
+	orig := securityTimingLogPath
+	securityTimingLogPath = filepath.Join(dir, "timing.log")
+	defer restoreSecurityTimingPath(orig)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(securityTimingHeader, "abcdef0123456789")
+	req.Header.Set(securityTimingStartHeader, strconv.FormatInt(time.Now().UnixNano()-12345000, 10))
+
+	// When
+	recordSecurityTiming(req, ":pre")
+
+	// Then：恰好一行 <id>:pre <us>，耗时为正整数
+	if securityTimingFd != nil {
+		_ = securityTimingFd.Sync()
+	}
+	data, err := os.ReadFile(securityTimingLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(data))
+	parts := strings.SplitN(line, " ", 2)
+	if len(parts) != 2 || parts[0] != "abcdef0123456789:pre" {
+		t.Fatalf("line=%q, want %q", line, "abcdef0123456789:pre <us>")
+	}
+	if us, perr := strconv.ParseInt(parts[1], 10, 64); perr != nil || us <= 0 {
+		t.Fatalf("duration=%q, want positive integer µs", parts[1])
+	}
+
+	// And 畸形形状：缺头对的请求零写入
+	recordSecurityTiming(httptest.NewRequest(http.MethodGet, "/", nil), ":end")
+	dataAfter, err := os.ReadFile(securityTimingLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(dataAfter) != string(data) {
+		t.Fatalf("missing headers must write nothing: before=%q after=%q", data, dataAfter)
 	}
 }

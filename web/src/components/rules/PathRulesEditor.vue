@@ -90,8 +90,8 @@
             <el-option label="301 跳转" value="redirect" />
           </el-select>
           <span class="form-tip-inline" v-if="isForwardMode(rule)">按路径转发到上游</span>
-          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">不访问上游，直接返回指定状态码与内容</span>
-          <span class="form-tip-inline" v-else>不访问上游，301 永久跳转到目标地址</span>
+          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">不访问上游，直接返回指定状态码与内容（该路径不经安全链：信任/IP 访问控制/限流/WAF 不生效）</span>
+          <span class="form-tip-inline" v-else>不访问上游，301 永久跳转到目标地址（该路径不经安全链：信任/IP 访问控制/限流/WAF 不生效）</span>
         </div>
 
         <!-- 直接返回字段行 -->

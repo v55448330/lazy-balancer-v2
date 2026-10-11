@@ -1049,7 +1049,7 @@ const chainChipText = (entry: ChainEntry, index: number): string => {
 const policySummaryLine = (row: PolicySummary): string => {
   const type = policyTypeOf(row)
   if (type === 'stage0') {
-    const count = mergedIpEntryCount(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs))
+    const count = mergeIpEntryCount(ipLists.value, parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs))
     return `信任 ${count} 条 · ${row.trust_detection === true ? '保留检测记录' : '直通上游'}`
   }
   if (type === 'stage2') {
@@ -1408,20 +1408,18 @@ const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
 // 条数-only 合并口径（列表页摘要用，不拉条目值）：内联去重数 + Σ引用名单
 // entry_count。与 mergeIpEntries 的去重合计可能略有出入（内联与引用重叠时），
 // 仅作列表页一行摘要展示；精确合计以向导内（条目已加载）为准。
-const mergedIpEntryCount = (inline: string[], refs: number[]): number => {
-  const inlineCount = new Set(inline.map((v) => v.trim()).filter((v) => v !== '')).size
-  return refs.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), inlineCount)
-}
+// FE-R1（第 69 轮）：本地 mergedIpEntryCount 与 utils/securityStages 共享
+// mergeIpEntryCount 逐字重复——删除本地实现，调用点直连共享函数。
 // 引用侧合计条数（各列表条目数之和，不去重——去重后的合计在 hint 的「合计」中给出）
 const selectedRefEntryCount = (refs: number[]): number => refs.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), 0)
 const aclMergedCount = computed(() => mergeIpEntries(ipACLList.value, ipACLListRefs.value).length)
 // U9-F1：保存校验用纯计数口径（不依赖按步惰性拉取的条目值——编辑态跳步
 // 直达预览时 mergeIpEntries 会漏未加载列表致假性「名单为空」阻断保存）
-const aclSaveCount = computed(() => mergedIpEntryCount(ipACLList.value, ipACLListRefs.value))
+const aclSaveCount = computed(() => mergeIpEntryCount(ipLists.value, ipACLList.value, ipACLListRefs.value))
 const aclRefHint = computed(() => `内联 ${ipACLList.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipACLListRefs.value)} 条（合计 ${aclMergedCount.value} 条）`)
 const showAclRefHint = computed(() => ipACLList.value.length > 0 || ipACLListRefs.value.length > 0)
 const whitelistMergedCount = computed(() => mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value).length)
-const whitelistSaveCount = computed(() => mergedIpEntryCount(ipWhitelist.value, ipWhitelistRefs.value))
+const whitelistSaveCount = computed(() => mergeIpEntryCount(ipLists.value, ipWhitelist.value, ipWhitelistRefs.value))
 const whitelistRefHint = computed(() => `内联 ${ipWhitelist.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipWhitelistRefs.value)} 条（合计 ${whitelistMergedCount.value} 条）`)
 const showWhitelistRefHint = computed(() => ipWhitelist.value.length > 0 || ipWhitelistRefs.value.length > 0)
 // 本策略既有 ip_blacklist（仅用于跨策略冲突比较；本对话框不编辑该字段，
@@ -3327,7 +3325,6 @@ onMounted(async () => {
 .policy-type-tabs :deep(.el-tabs__item) { white-space: nowrap; }
 .migrate-preview-rule-meta { color: #9ca3af; font-size: 12px; }
 .migrate-preview-empty { font-size: 12px; color: #9ca3af; }
-.migrate-preview-alert { margin-top: 2px; }
 
 /* 混合策略只读查看（信息卡布局） */
 .view-policy-body { min-height: 120px; }
@@ -3363,7 +3360,4 @@ onMounted(async () => {
 .crs-rule-option { display: flex; flex-direction: column; line-height: 1.4; padding: 4px 0 5px; }
 .crs-rule-option-label { font-size: 13px; }
 .crs-rule-option-meta { font-size: 12px; color: #9ca3af; }
-
-/* 配置预览排除明细 popper（teleported） */
-.crs-preview-popper { line-height: 1.6; max-width: 420px; }
 </style>

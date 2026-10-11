@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -85,27 +84,6 @@ func TestConfigWatchdog_recoversWhenRoutesReturn(t *testing.T) {
 	if drift := CurrentConfigDrift(); !drift.Consistent {
 		t.Fatalf("drift=%+v, want consistent after routes return", drift)
 	}
-}
-
-func TestConfigWatchdog_skipsOnSlave(t *testing.T) {
-	// Given：从节点角色
-	_, database := newClusterTestService(t)
-	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
-		t.Fatalf("set slave role: %v", err)
-	}
-	seedGenerationRule(t, database, "lb_watchdog_slave", false)
-	resetConfigWatchdogForTest(t)
-	server := fakeCaddyWithRoutes(t, emptyCaddyConfig)
-
-	// When
-	checkConfigConsistency(server.URL)
-	checkConfigConsistency(server.URL)
-
-	// Then：从节点不告警（同步链路覆盖）
-	if drift := CurrentConfigDrift(); !drift.Consistent {
-		t.Fatalf("slave must not flag drift, got %+v", drift)
-	}
-	_ = db.DB
 }
 
 // L1-P4-2（第 67 轮审计）：从节点 WatchdogCheckOnce 整轮短路——看门狗是主节点

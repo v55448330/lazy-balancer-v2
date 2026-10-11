@@ -721,6 +721,29 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）协议 %q 无效（TCP 规则仅支持 tcp/tls）", i+1, ruleID, protocol)
 		}
 	}
+	// LBS-A-L1（第 69 轮 P1，保存侧同门）：手造备份的 HTTP 规则启用上游
+	// http/https 混布拒绝——混布渲染后 http 上游被 TLS 化静默全灭。空协议按
+	// 保存侧口径默认 http；禁用行（备份归一后 enabled=0）不参与渲染不计入。
+	poolProtocols := make(map[string]map[string]bool)
+	for _, row := range tables["upstreams"] {
+		if !backupBooleanEnabled(row["enabled"]) {
+			continue
+		}
+		ruleID, _ := row["rule_id"].(string)
+		protocol, _ := row["protocol"].(string)
+		if protocol == "" {
+			protocol = "http"
+		}
+		if poolProtocols[ruleID] == nil {
+			poolProtocols[ruleID] = make(map[string]bool, 2)
+		}
+		poolProtocols[ruleID][protocol] = true
+	}
+	for ruleID, protos := range poolProtocols {
+		if ruleProtocols[ruleID] == "http" && protos["http"] && protos["https"] {
+			return fmt.Errorf("备份校验失败：规则 %q 的启用上游 http/https 混布（同一 HTTP 规则的启用上游协议须一致）", ruleID)
+		}
+	}
 	// 逐上游回源域名 + 健康检查域名（2026-10-10）：与保存侧
 	// validateRulePayloadBeforeSave 同口径——手造备份经 restoreTable 直写可
 	// 绕过保存侧校验，坏形状（CRLF/端口越界/模式错配）原样落库进入渲染。
@@ -2014,6 +2037,43 @@ func clampBackupAuditLogSizeMB(value any) (any, bool) {
 	return value, false
 }
 
+// clampBackupTaskLogSizeMB 导入侧 task_log_size_mb 钳制（SYS-U1，第 69 轮审计
+// P3——SYS37-2/R56#3 同族漏点）：与写侧（caddy.go UpdateConfig，1-1024，
+// LB42-4）同边界——越界钳到 [1,1024] 最近边界；非整数形态按 schema 缺省 10
+// 归一（db.go newColumns 登记 global_config.task_log_size_mb DEFAULT 10）。
+// 越界原样落库会锁死基础设置保存（写侧 400），且轮转实效、日志可无限增长
+// （LB42-4 的封堵向量经备份通道重开）。
+func clampBackupTaskLogSizeMB(value any) (any, bool) {
+	mb, ok := backupInteger(value)
+	if !ok {
+		return 10, true
+	}
+	if mb < 1 {
+		return 1, true
+	}
+	if mb > 1024 {
+		return 1024, true
+	}
+	return value, false
+}
+
+// clampBackupRuntimeLogSizeMB 导入侧 runtime_log_size_mb 钳制（SYS-U1 同族）：
+// 写侧同边界 1-1024；非整数形态按 schema 缺省 100 归一（db.go newColumns 登记
+// global_config.runtime_log_size_mb DEFAULT 100）。
+func clampBackupRuntimeLogSizeMB(value any) (any, bool) {
+	mb, ok := backupInteger(value)
+	if !ok {
+		return 100, true
+	}
+	if mb < 1 {
+		return 1, true
+	}
+	if mb > 1024 {
+		return 1024, true
+	}
+	return value, false
+}
+
 // errUnknownBackupSection:buildLbbakExport 的 4xx 语义哨兵——薄壳端点据此
 // 保持原 400 文案,其余错误一律 500「导出失败: …」。三分类合并后
 // 「仅全局配置」形态不可达(global_config 是 users 别名,恒有表),
@@ -2350,6 +2410,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	auditLogSizeClamped := false
 	if value, exists := backup.Config["audit_log_size_mb"]; exists {
 		backup.Config["audit_log_size_mb"], auditLogSizeClamped = clampBackupAuditLogSizeMB(value)
+	}
+	// SYS-U1（第 69 轮）：同族补漏——task/runtime 日志大小键导入钳制，写侧
+	//（caddy.go UpdateConfig）边界 1-1024（LB42-4），缺省 10/100。
+	taskLogSizeClamped := false
+	if value, exists := backup.Config["task_log_size_mb"]; exists {
+		backup.Config["task_log_size_mb"], taskLogSizeClamped = clampBackupTaskLogSizeMB(value)
+	}
+	runtimeLogSizeClamped := false
+	if value, exists := backup.Config["runtime_log_size_mb"]; exists {
+		backup.Config["runtime_log_size_mb"], runtimeLogSizeClamped = clampBackupRuntimeLogSizeMB(value)
 	}
 	// R57 C-2：续签/有效期数值导入钳制（与写侧 caddy.go 校验同边界）——
 	// cert_renewal_days 超大值会让续签扫描窗口覆盖一切证书（续签成功后仍在
@@ -2759,6 +2829,12 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	}
 	if auditLogSizeClamped {
 		auditParts = append(auditParts, fmt.Sprintf("audit_log_size_mb 越界，已钳位为 %v", backup.Config["audit_log_size_mb"]))
+	}
+	if taskLogSizeClamped {
+		auditParts = append(auditParts, fmt.Sprintf("task_log_size_mb 越界，已钳位为 %v", backup.Config["task_log_size_mb"]))
+	}
+	if runtimeLogSizeClamped {
+		auditParts = append(auditParts, fmt.Sprintf("runtime_log_size_mb 越界，已钳位为 %v", backup.Config["runtime_log_size_mb"]))
 	}
 	auditParts = append(auditParts, certNumericClamped...)
 	if len(skipWarnings) > 0 {

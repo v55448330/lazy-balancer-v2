@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -177,5 +178,51 @@ func assertSingleSecurityAudit(t *testing.T, recorded []string, reason, credenti
 	}
 	if strings.Contains(recorded[0], credential) {
 		t.Fatalf("security audit leaked credential: %q", recorded[0])
+	}
+}
+
+// SYSMW-U1（第 69 轮 P3）：认证审计限流器容量硬上限——PERF43-3 的 1024 清扫阈值
+// 只清 >=2min 陈旧键，洪水期（唯一 reason+path+ip 键高速涌入）全部键新鲜、清扫
+// 零效果，map 曾无界增长（对照 loginRateBuckets 1024 硬拒建桶的真上限）。修复=
+// 清扫后仍达硬上限（4096）则丢弃新键：不进 map 也不记审计（审计丢失可接受，
+// 内存必须有界），与 loginRateBuckets「超限本轮放行不添桶」同族。
+func TestAuthenticationAuditLimiter_floodHardCap(t *testing.T) {
+	// Given：4096 个新鲜唯一键灌满（同分钟窗写入——清扫对新鲜键零效果）
+	securityAuditLimiter.reset()
+	t.Cleanup(securityAuditLimiter.reset)
+	now := time.Now()
+	for i := 0; i < 4096; i++ {
+		if !securityAuditLimiter.allow(fmt.Sprintf("flood-%d", i), now) {
+			t.Fatalf("key %d within hard cap must be admitted", i)
+		}
+	}
+
+	// When：第 4097 个新键（洪水形状）
+	if securityAuditLimiter.allow("flood-overflow", now) {
+		t.Fatal("硬上限已满，新键必须丢弃（不记 map 不记审计）")
+	}
+
+	// Then：map 规模封顶 4096
+	securityAuditLimiter.mu.Lock()
+	size := len(securityAuditLimiter.events)
+	securityAuditLimiter.mu.Unlock()
+	if size != 4096 {
+		t.Fatalf("events size=%d, want hard cap 4096（洪水期内存必须有界）", size)
+	}
+
+	// And 回归形状：既有键超 1min 窗刷新不占新键额——照常放行记审计；
+	// 61s 后清扫仍零效果（<2min），新键依旧拒。
+	later := now.Add(61 * time.Second)
+	if !securityAuditLimiter.allow("flood-0", later) {
+		t.Fatal("既有键超窗刷新不得受容量上限影响")
+	}
+	if securityAuditLimiter.allow("flood-overflow-2", later) {
+		t.Fatal("容量已满时新键仍须丢弃")
+	}
+	securityAuditLimiter.mu.Lock()
+	size = len(securityAuditLimiter.events)
+	securityAuditLimiter.mu.Unlock()
+	if size != 4096 {
+		t.Fatalf("events size after refresh=%d, want 4096（既有键刷新不扩容）", size)
 	}
 }

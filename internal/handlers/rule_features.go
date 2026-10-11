@@ -94,10 +94,11 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ruleFeatureInput {
 	enabledUpstreams := 0
 	var enabledHosts []string
-	upstreams := existing.Upstreams
-	if req.Upstreams != nil {
-		upstreams = req.Upstreams
-	}
+	// LBH-A-D2（第 69 轮）：调用契约——唯一调用点 UpdateRule 在调用前已把
+	// req.Upstreams 合并为非 nil（nil=保留存量，赋值为 oldUpstreams），此处
+	// 不再有 existing.Upstreams 回退（LbRule.Upstreams 本就不随 scanLbRules
+	// 填充，回退拿到的恒为空集，属误导性死分支）。
+	upstreams := req.Upstreams
 	for _, u := range upstreams {
 		if u.Enabled {
 			enabledUpstreams++
@@ -219,6 +220,13 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 			MatchType:    pathRule.MatchType,
 			Path:         pathRule.Path,
 			UpstreamPath: pathRule.UpstreamPath,
+			// LBH-A-P1（第 69 轮）：预检渲染回填直返/301 五列——丢失会让预检
+			// 把 static/redirect 路径规则当转发链渲染，与真实渲染分叉。
+			ResponseMode:        pathRule.ResponseMode,
+			ResponseStatus:      pathRule.ResponseStatus,
+			ResponseBody:        pathRule.ResponseBody,
+			ResponseContentType: pathRule.ResponseContentType,
+			RedirectTo:          pathRule.RedirectTo,
 		}
 		if pathRule.Upstreams != nil {
 			config.Upstreams = make([]services.UpstreamConfig, 0, len(pathRule.Upstreams))
@@ -471,6 +479,19 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		// 同口径;JoinHostPort 兼容 IPv6 裸地址形态)——同 host:port 双条目
 		// 权重翻倍,均衡语义静默漂移。
 		pathHostPortSeen := make(map[string]bool)
+		// LBS-A-L1 同族（第 69 轮 P1）：路径规则自定义上游池同样拒绝 http/https
+		// 混布——同一 reverse_proxy 池级 TLS 传输下 http 上游静默全灭。
+		pathPoolProtos := make(map[string]bool, 2)
+		for _, upstream := range pathRule.Upstreams {
+			proto := upstream.Protocol
+			if proto == "" {
+				proto = "http"
+			}
+			pathPoolProtos[proto] = true
+		}
+		if pathPoolProtos["http"] && pathPoolProtos["https"] {
+			return fmt.Errorf("第 %d 条路径规则的自定义上游 http/https 混布（同一上游池协议须一致）", index+1)
+		}
 		for upstreamIndex, upstream := range pathRule.Upstreams {
 			if strings.TrimSpace(upstream.Address) == "" {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游地址不能为空", index+1, upstreamIndex+1)
@@ -1193,22 +1214,38 @@ func loadRulesForConfigValidation(ctx context.Context, suffix string, args ...an
 	return rules, nil
 }
 
-func validateRuleConfigGeneration(rule models.LbRule) error {
+// precheckRuleConfig 构造预校验渲染输入（EnableRule/启动聚合校验共用）。
+// LBH-A-P1（第 69 轮）回填本日新特性列：upstreams 携带 OriginDomain、
+// path_rules 携带 response_* 五列、规则级携带 HostHeader/HealthCheckHost/
+// EnableCompress/CompressTypes——此前预检渲染把直返/301 路径规则当转发链
+// 渲染、不发射回源域名 map 处理器，与真实渲染分叉（错误拦截时机后移）。
+// 有意保留的空口子集（勿回填）：TLS 开关与证书材料（GenerateSingleRuleCaddyConfig
+// 单规则形态约定——TLS 跳转分支自述无预检调用方）、健康检查间隔族/代理超时族
+// （无生成期错误路径，形状差异由 applyFromTxNote 事务视图全保真渲染 +
+// CLI validate 兜底）。
+func precheckRuleConfig(rule models.LbRule) services.SingleRuleConfig {
 	upstreams := make([]services.UpstreamConfig, 0, len(rule.Upstreams))
 	for _, upstream := range rule.Upstreams {
 		upstreams = append(upstreams, services.UpstreamConfig{
 			Host: upstream.Host, Port: upstream.Port, Weight: upstream.Weight,
 			Protocol: upstream.Protocol, Enabled: upstream.Enabled, MaxConnections: upstream.MaxConnections,
+			OriginDomain: upstream.OriginDomain,
 		})
 	}
-	config := services.GenerateSingleRuleCaddyConfig(services.SingleRuleConfig{
+	return services.SingleRuleConfig{
 		CaddyID: rule.CaddyID, Protocol: rule.Protocol, Domain: rule.Domain, ListenPort: rule.ListenPort,
 		Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS, EnableDnsServer: rule.EnableDnsServer,
 		DnsServer: rule.DnsServer, DnsFamily: rule.DnsFamily, CustomRoutesEnabled: rule.CustomRoutesEnabled,
+		HostHeader: rule.HostHeader, HealthCheckHost: rule.HealthCheckHost,
+		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		BlockPageStage1ID: rule.BlockPageStage1ID, BlockPageStage1Status: rule.BlockPageStage1Status,
 		BlockPageStage3ID: rule.BlockPageStage3ID, BlockPageStage3Status: rule.BlockPageStage3Status,
 		PathRules: toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
-	})
+	}
+}
+
+func validateRuleConfigGeneration(rule models.LbRule) error {
+	config := services.GenerateSingleRuleCaddyConfig(precheckRuleConfig(rule))
 	genErr, hasErr := config["error"].(error)
 	if !hasErr {
 		return nil

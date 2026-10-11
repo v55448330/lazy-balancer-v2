@@ -528,8 +528,9 @@ onMounted(fetchEvents)
   flex: 0 0 auto;
 }
 
-/* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
-.crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
+/* 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口
+   （FE-D1：.crs-event-dialog 左半选择器删除——CRS 事件弹框已迁入 TriggerDetailDialog） */
+.ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 /* 请求上下文弹框正文 20px 水平留白走全局 .dialog-body-inset（2026-09-25 用户裁定；
    append-to-body teleport 场景 scoped :deep 不可靠，故类挂弹框、规则在 main.css） */
 

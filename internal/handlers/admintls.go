@@ -6,9 +6,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -70,15 +70,15 @@ func validateAdminTLSCertPeriod(certPEM string, now time.Time) error {
 		return err
 	}
 	if now.Before(cert.NotBefore) {
-		return fmtErrorf("证书尚未生效，生效时间：" + cert.NotBefore.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
+		return errors.New("证书尚未生效，生效时间：" + cert.NotBefore.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
 	}
 	if !now.Before(cert.NotAfter) {
-		return fmtErrorf("证书已过期，过期时间：" + cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
+		return errors.New("证书已过期，过期时间：" + cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
 	}
 	return nil
 }
 
-var errInvalidCert = fmtErrorf("无效的证书 PEM")
+var errInvalidCert = errors.New("无效的证书 PEM")
 
 // validateAdminTLSConfigValues 校验启用态管理面板 HTTPS 配置形态：mode 白名单
 // （selfsigned/upload）+ upload 模式证书私钥配对与有效期（与 UpdateAdminTLS
@@ -87,17 +87,17 @@ var errInvalidCert = fmtErrorf("无效的证书 PEM")
 func validateAdminTLSConfigValues(cfg services.AdminTLSConfig) error {
 	// mode 值域门与启用态无关（第 53 轮补充轮 P3-6）：禁用态也不得落库白名单外值。
 	if cfg.Mode != "" && cfg.Mode != "selfsigned" && cfg.Mode != "upload" {
-		return fmtErrorf("无效的证书来源：当前仅支持自签名或上传证书")
+		return errors.New("无效的证书来源：当前仅支持自签名或上传证书")
 	}
 	if !cfg.Enabled {
 		return nil
 	}
 	if cfg.Mode == "" {
-		return fmtErrorf("无效的证书来源：启用时必须选择证书来源（自签名或上传证书）")
+		return errors.New("无效的证书来源：启用时必须选择证书来源（自签名或上传证书）")
 	}
 	if cfg.Mode == "upload" {
 		if _, err := tls.X509KeyPair([]byte(cfg.Cert), []byte(cfg.Key)); err != nil {
-			return fmtErrorf("证书与私钥不匹配: " + err.Error())
+			return errors.New("证书与私钥不匹配: " + err.Error())
 		}
 		if err := validateAdminTLSCertPeriod(cfg.Cert, time.Now()); err != nil {
 			return err
@@ -105,12 +105,6 @@ func validateAdminTLSConfigValues(cfg services.AdminTLSConfig) error {
 	}
 	return nil
 }
-
-func fmtErrorf(msg string) error { return &adminTLSError{msg} }
-
-type adminTLSError struct{ msg string }
-
-func (e *adminTLSError) Error() string { return e.msg }
 
 // adminTLSInput 抹平管理面板 HTTPS 入参的两种形态：multipart 表单（面板 UI
 // 文件上传）与 JSON 对象（MCP 转发等程序化通道——forward() 只发
@@ -135,7 +129,7 @@ func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
 	if !strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			return nil, fmtErrorf("请求体读取失败: " + err.Error())
+			return nil, errors.New("请求体读取失败: " + err.Error())
 		}
 		if bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("{")) {
 			return parseAdminTLSJSONInput(body)
@@ -143,7 +137,7 @@ func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	if err := c.Request.ParseMultipartForm(2 << 20); err != nil {
-		return nil, fmtErrorf("表单解析失败: " + err.Error())
+		return nil, errors.New("表单解析失败: " + err.Error())
 	}
 	return &adminTLSInput{
 		c:            c,
@@ -160,7 +154,7 @@ func parseAdminTLSJSONInput(body []byte) (*adminTLSInput, error) {
 		KeyFile  string          `json:"key_file"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, fmtErrorf("JSON 解析失败: " + err.Error())
+		return nil, errors.New("JSON 解析失败: " + err.Error())
 	}
 	input := &adminTLSInput{
 		jsonMode:  true,
@@ -179,7 +173,7 @@ func parseAdminTLSJSONInput(body []byte) (*adminTLSInput, error) {
 			if err := json.Unmarshal(req.Enabled, &stringValue); err == nil {
 				input.enabledValue = stringValue
 			} else {
-				return nil, fmtErrorf("enabled 字段须为布尔或字符串")
+				return nil, errors.New("enabled 字段须为布尔或字符串")
 			}
 		}
 	}
@@ -200,17 +194,15 @@ func (in *adminTLSInput) hasUploadPayload() bool {
 func (in *adminTLSInput) certificatePair() (string, string, error) {
 	if in.jsonMode {
 		if in.certValue == "" {
-			return "", "", fmtErrorf("缺少 cert_file 字段（PEM 字符串）")
+			return "", "", errors.New("缺少 cert_file 字段（PEM 字符串）")
 		}
 		if in.keyValue == "" {
-			return "", "", fmtErrorf("缺少 key_file 字段（PEM 字符串）")
+			return "", "", errors.New("缺少 key_file 字段（PEM 字符串）")
 		}
 		return in.certValue, in.keyValue, nil
 	}
 	return readAdminTLSFiles(in.c)
 }
-
-var exitProcess = os.Exit
 
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
 // UI can show what will be installed before the user confirms.
@@ -246,7 +238,7 @@ func readAdminTLSFiles(c *gin.Context) (string, string, error) {
 	read := func(field string) (string, error) {
 		f, _, err := c.Request.FormFile(field)
 		if err != nil {
-			return "", &adminTLSError{"请上传" + field + " 文件"}
+			return "", errors.New("请上传" + field + " 文件")
 		}
 		defer f.Close()
 		data, err := io.ReadAll(io.LimitReader(f, 1<<20))

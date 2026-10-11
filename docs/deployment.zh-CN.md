@@ -8,9 +8,12 @@
 | `/app/certs` | 证书与私钥 | **是** |
 | `/app/logs` | 应用日志、Caddy 日志、按规则访问日志 | 推荐 |
 | `/app/waf` | CRS 规则、IP2Region xdb（Coraza 审计日志在 `/app/logs/waf-audit`） | 推荐 |
+| `/app/backup` | 自动备份落盘目录（不挂载则容器重建后备份文件丢失） | **是** |
 | `/app/config` | Caddyfile（仅高级定制） | 可选 |
 
 > 不挂载 `/app/waf` 时，容器重建会将 CRS 回退到镜像捆绑版本；系统自动将更新后的规则树快照持久化到数据卷并在启动时对账恢复。数据库是配置的唯一真实来源。
+
+> Docker Desktop（macOS/Windows）用户：`/app/data` 推荐 named volume（`lb-data:/app/data` 形态，见仓库 docker-compose.yml）；bind mount 经 FUSE 共享层有 SQLite WAL 丢页风险（Linux 宿主 bind mount 无此问题）。
 
 ## 环境变量
 

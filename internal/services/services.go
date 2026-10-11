@@ -63,6 +63,9 @@ func (m *MetricsService) Start() {
 	defer ticker.Stop()
 	defer cleanupTicker.Stop()
 	m.cleanupHistory()
+	// LBS-B-P3（第 69 轮）：启动即采集一轮——曾首 collect 等首个 interval
+	// （默认 30s），重启后面板首屏 30s 全零；与 cleanupHistory 同点对称。
+	m.collect()
 
 	for {
 		select {
@@ -186,15 +189,30 @@ func (m *MetricsService) collect() {
 	// 请求的请求数/状态码/字节量在全局与 per-host 全部翻倍。透传路由无
 	// reverse_proxy，其序列不含任何上游语义，整条剔除即恢复真实计数。
 	if strings.Contains(text, `handler="http.handlers.geoip2region"`) {
-		lines := strings.Split(text, "\n")
-		kept := lines[:0]
-		for _, line := range lines {
+		// LBS-B-P1（第 69 轮）：Builder 逐行条件写入单副本（曾 Split+Join——
+		// 行切片 ~24B/行 + 16MB 拼接副本，与上方「拷贝只做一次」口径矛盾）。
+		// 分隔符仅在保留行之间落盘，与 Split+Join 输出逐字节等价（含尾部
+		// 空行与被删末行两形态）。
+		var b strings.Builder
+		b.Grow(len(text))
+		wrote := false
+		start := 0
+		for i := 0; i <= len(text); i++ {
+			if i < len(text) && text[i] != '\n' {
+				continue
+			}
+			line := text[start:i]
+			start = i + 1
 			if strings.Contains(line, `handler="http.handlers.geoip2region"`) {
 				continue
 			}
-			kept = append(kept, line)
+			if wrote {
+				b.WriteByte('\n')
+			}
+			b.WriteString(line)
+			wrote = true
 		}
-		text = strings.Join(kept, "\n")
+		text = b.String()
 	}
 	metrics, err := m.parsePrometheusMetrics(text)
 	if err != nil {

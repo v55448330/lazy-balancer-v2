@@ -2085,13 +2085,11 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			perPort = map[string]interface{}{}
 			loggerNamesByPort[r.ListenPort] = perPort
 		}
-		for _, d := range strings.Split(r.Domain, ",") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				// SLB9-3:与 host matcher 同口径规范化——Caddy 日志查找大小写
-				// 敏感,混合大小写 Host 请求会落到默认 logger(归属错位)。
-				perPort[normalizeHostForMatcher(d)] = "rule_" + r.CaddyID
-			}
+		for _, d := range splitAndTrim(r.Domain) {
+			// SLB9-3:与 host matcher 同口径规范化——Caddy 日志查找大小写
+			// 敏感,混合大小写 Host 请求会落到默认 logger(归属错位)。
+			// LBS-A-R2（第 69 轮）：拆分复用 splitAndTrim（同型去重）。
+			perPort[normalizeHostForMatcher(d)] = "rule_" + r.CaddyID
 		}
 	}
 	if len(loggerNamesByPort) > 0 {
@@ -2157,12 +2155,26 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		} else {
 			encoder = map[string]interface{}{"format": "json"}
 		}
+		// LBS-A-P2（第 69 轮）：ruleLogDir 创建移出逐规则循环（此前每条规则一次
+		// 重复 syscall 且错误被丢弃）——有任一启用日志的 http 规则时创建一次，
+		// 失败记日志（writer 落不了盘会体现为 caddy 配置应用错误，此处点名目录）。
+		ruleLoggerNeeded := false
+		for _, ru := range allRules {
+			if r := ru.rule; r.LogEnabled && r.Protocol == "http" {
+				ruleLoggerNeeded = true
+				break
+			}
+		}
+		if ruleLoggerNeeded {
+			if err := os.MkdirAll(ruleLogDir, 0755); err != nil {
+				Logf("error", "创建规则日志目录 %s 失败: %v", ruleLogDir, err)
+			}
+		}
 		for _, ru := range allRules {
 			r := ru.rule
 			if !r.LogEnabled || r.Protocol != "http" {
 				continue
 			}
-			os.MkdirAll(ruleLogDir, 0755)
 			logsMap["rule_"+r.CaddyID] = map[string]interface{}{
 				"writer": map[string]interface{}{
 					"output":       "file",
@@ -2270,11 +2282,11 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 	}
 }
 
-// acmeCertCandidatesForRule 无 lb_rules 子查询的 per-rule 证书候选查询（R65 A-N1
-// 谓词 miss 补查专用）：查询形态与 acmeCertCandidatesQuery 的行过滤一致（PEM
-// 非空），但绕过 enabled/enable_tls/tls_source 谓词——调用方已确保规则在 allRules
-// （tx 视图）中为启用 acme 规则。status 过滤交由 SelectCertificate 后置执行。
-// 查询/解析失败仅记日志返回 nil（与调用点的空候选语义一致：按无证书渲染）。
+// acmeCertCandidatesForRule 查询指定规则的 ACME 证书候选（PEM 非空行，
+// updated_at/id 倒序）。R65 A-N1 谓词 miss 补查与 loadACMECertificateFromStore
+// 共用本查询体（LBS-A-R1 第 69 轮去重——此前两处同一 SELECT+扫描循环逐字
+// 重复）；status 过滤由调用方 SelectCertificate 后置执行。查询/解析失败仅记
+// 日志返回 nil（调用点按无证书渲染/判定，语义不变）。
 func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []CertificateCandidate {
 	rows, err := store.Query(`
 		SELECT id, domain, status, cert_pem, key_pem,
@@ -2285,7 +2297,7 @@ func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []Certific
 		  AND key_pem IS NOT NULL AND key_pem <> ''
 		ORDER BY updated_at DESC, id DESC`, ruleID)
 	if err != nil {
-		Logf("warn", "ACME 证书候选补查失败（规则 %s，按无证书渲染）: %v", ruleID, err)
+		Logf("warn", "ACME 证书候选查询失败（规则 %s，按无证书处理）: %v", ruleID, err)
 		return nil
 	}
 	defer rows.Close()
@@ -2293,13 +2305,13 @@ func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []Certific
 	for rows.Next() {
 		var candidate CertificateCandidate
 		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
-			Logf("warn", "ACME 证书候选补查解析失败（规则 %s）: %v", ruleID, err)
+			Logf("warn", "ACME 证书候选解析失败（规则 %s）: %v", ruleID, err)
 			return nil
 		}
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		Logf("warn", "ACME 证书候选补查遍历失败（规则 %s）: %v", ruleID, err)
+		Logf("warn", "ACME 证书候选遍历失败（规则 %s）: %v", ruleID, err)
 		return nil
 	}
 	return candidates
@@ -2308,32 +2320,10 @@ func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []Certific
 // loadACMECertificateFromStore reads the issued ACME certificate and key from
 // cert_jobs (via store) for the given rule and domain. Returns
 // (certPEM, keyPEM, true) if issued.
+// LBS-A-R1（第 69 轮）：查询体委托 acmeCertCandidatesForRule，本函数只做
+// SelectCertificate 择优（此前两函数 SELECT+扫描循环逐字重复）。
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
-	rows, err := store.Query(`
-		SELECT id, domain, status, cert_pem, key_pem,
-		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
-		FROM cert_jobs
-		WHERE rule_id=?
-		  AND cert_pem IS NOT NULL AND cert_pem <> ''
-		  AND key_pem IS NOT NULL AND key_pem <> ''
-		ORDER BY updated_at DESC, id DESC`, caddyID)
-	if err != nil {
-		Logf("error", "loadACMECertificate: query failed for rule %s: %v", caddyID, err)
-		return "", "", false
-	}
-	defer rows.Close()
-	candidates := make([]CertificateCandidate, 0)
-	for rows.Next() {
-		var candidate CertificateCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
-			return "", "", false
-		}
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Err(); err != nil {
-		return "", "", false
-	}
-	selected, ok := SelectCertificate(candidates, domain, time.Now())
+	selected, ok := SelectCertificate(acmeCertCandidatesForRule(store, caddyID), domain, time.Now())
 	if ok {
 		return selected.Candidate.CertPEM, selected.Candidate.KeyPEM, true
 	}
@@ -2481,7 +2471,8 @@ type PathRuleConfig struct {
 	Upstreams    []UpstreamConfig
 	// 直接返回/301 跳转（2026-10-10 用户裁定）：ResponseMode ''=转发上游
 	// （现状，全链渲染）/static=静态响应/redirect=301 跳转——后两者不经
-	// 安全链与 reverse_proxy，整条路由仅 static_response 一个 handler。
+	// 安全链与 reverse_proxy；LBS-A-U1（第 69 轮）起链首带 lb_rule_metrics
+	// 纯计数（指标不属于安全链）。
 	ResponseMode        string
 	ResponseStatus      int
 	ResponseBody        string
@@ -2919,13 +2910,17 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 			return pathRules[i].SortOrder < pathRules[j].SortOrder
 		})
 		for pathIndex, pathRule := range pathRules {
-			// 直接返回/301 跳转（2026-10-10 用户裁定）：整条路由仅原生
-			// static_response 一个 handler——不经安全链/改写/reverse_proxy
+			// 直接返回/301 跳转（2026-10-10 用户裁定）：不经安全链/改写/reverse_proxy
 			// （无上游可代理，静态响应天然无后端攻击面；安全策略不覆盖此类路径）。
+			// LBS-A-U1（第 69 轮）：链首补 lb_rule_metrics 纯计数——指标不属于
+			// 安全链，不修时规则全量流量指标漏计该类路径流量（指标页失真）。
 			if pathRule.ResponseMode == "static" || pathRule.ResponseMode == "redirect" {
 				staticRoute := map[string]interface{}{
-					"match":    []interface{}{map[string]interface{}{"host": domainHosts, "path": pathMatcherSpecs(pathRule)}},
-					"handle":   []interface{}{buildStaticResponseHandler(pathRule)},
+					"match": []interface{}{map[string]interface{}{"host": domainHosts, "path": pathMatcherSpecs(pathRule)}},
+					"handle": []interface{}{
+						map[string]interface{}{"handler": "lb_rule_metrics", "rule": rule.CaddyID},
+						buildStaticResponseHandler(pathRule),
+					},
 					"terminal": true,
 				}
 				tagRuleRoute(staticRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
@@ -3020,6 +3015,11 @@ func insertUpstreamPathRewrites(handle []interface{}, pathRule PathRuleConfig) [
 // buildStaticResponseHandler 渲染路径规则的直接返回/301 跳转 handler（全原生
 // http.handlers.static_response）：redirect=301+Location（目标经校验侧形状门）；
 // static=status_code+body+Content-Type，缺省兜底 200/text/plain。
+// LBS-A-P1（第 69 轮，语义声明）：static_response 的 headers 值与 body 在
+// 运行时经 Caddy replacer 展开已知占位符（v2.11.6 staticresp.go:193-208 实证，
+// ReplaceKnown）——redirect_to/body 中的 {http.request.uri} 等会被改写为请求
+// 值（与 httpsRedirectLocation 的占位符用法同引擎机制）。校验侧有意不拒 '{'
+// （保路径跳转的合法占位符用法），审计不重报。
 func buildStaticResponseHandler(pathRule PathRuleConfig) map[string]interface{} {
 	if pathRule.ResponseMode == "redirect" {
 		return map[string]interface{}{
@@ -3827,14 +3827,20 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// {http.reverse_proxy.upstream.hostport} 在占位符被使用时才求值（map.go:138），
 	// 恰为 reverse_proxy 选中上游后（reverseproxy.go:663-692：每次 attempt 先 Set
 	// 上游占位符再展开 headers/transport，重试换上游逐次重展开）。defaults 回退链
-	// 精确复现现状：Host=host_header 或 {http.request.hostport}（r.Host 原样——
-	// 全 http 池=客户端透传、TLS 池=transport 默认注入的选中上游 hostport，
-	// httptransport.go:631-642）；SNI=host_header 剥端口或 dial 主机名（stdlib 空
-	// server_name 默认）。originDialOrder 保持上游 SELECT 序（确定性渲染）。
+	// 精确复现现状：Host=host_header 或池形态回退；SNI=host_header 剥端口或 dial
+	// 主机名（stdlib 空 server_name 默认）。originDialOrder 保持上游 SELECT 序。
+	// LBS-A-L2（第 69 轮 P2 修复）：Host 回退按池形态分流——{http.request.
+	// hostport} 绑原始请求（replacer.go:128-129），在 TLS 池恒为客户端 Host，
+	// 不等于现状的 transport 注入 hostport；TLS 池改 {http.reverse_proxy.
+	// upstream.hostport}（reverseproxy.go:664-668 先于 userOps 设置，可用）。
 	if len(originDialOrder) > 0 {
 		hostFallback := rule.HostHeader
 		if hostFallback == "" {
-			hostFallback = "{http.request.hostport}"
+			if hasHTTPSUpstream {
+				hostFallback = "{http.reverse_proxy.upstream.hostport}"
+			} else {
+				hostFallback = "{http.request.hostport}"
+			}
 		}
 		sniFallback := stripOriginPort(rule.HostHeader)
 		if sniFallback == "" {

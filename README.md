@@ -29,6 +29,8 @@ docker run -d --name lazy-balancer --network host \
 
 挂载说明:`/app/data` 数据库与配置(必选)、`/app/certs` 证书与私钥(必选)、`/app/backup` 自动备份落盘目录(必选——不挂载则容器重建后备份文件丢失)、`/app/logs` 日志(推荐)、`/app/waf` 规则库与 GeoIP(推荐)。
 
+> Docker Desktop（macOS/Windows）用户:`/app/data` 推荐 named volume(`-v lb-data:/app/data`);bind mount 经 FUSE 共享层有 SQLite WAL 丢页风险(Linux 宿主 bind mount 无此问题)。
+
 打开 `http://localhost:8000` 进入管理面板。首次访问进入初始化向导，无默认凭据。
 
 <details>

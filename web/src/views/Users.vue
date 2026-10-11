@@ -764,7 +764,6 @@ onMounted(() => {
 .user-name { font-weight: 500; color: #111827; font-size: 14px; }
 .user-display { font-size: 12px; color: #9ca3af; }
 
-.text-secondary { color: #6b7280; font-size: 13px; }
 
 /* 操作列横向一行（与 Rules.vue 同款 flex 布局；禁用项保持占位 + hover 原因） */
 .operation-buttons { display: flex; gap: 2px; justify-content: center; align-items: center; flex-wrap: wrap; }

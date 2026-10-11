@@ -78,7 +78,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled) VALUES (?, ?, ?, ?, 1)",
 		req.Username, string(hash), req.Role, req.DisplayName)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
+		if isUniqueConstraintError(err) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "用户名已存在"})
 			return
 		}
@@ -214,7 +214,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		}
 		result, err := tx.ExecContext(c.Request.Context(), query, args...)
 		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
+			if isUniqueConstraintError(err) {
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "用户名已存在"})
 				return
 			}

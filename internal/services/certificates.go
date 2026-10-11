@@ -1467,6 +1467,9 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 		if err := rows.Scan(
 			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
 		); err != nil {
+			// CERT-L2（第 69 轮）：对齐 Round 35 B4「不静默」先例——Scan 失败须留告警，
+			// 否则续期扫描遗漏该轮（口径同 checkManualCertExpiration :1374）。
+			Logf("warn", "cert expiration check: scan failed, skipping row: %v", err)
 			continue
 		}
 		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
@@ -1536,6 +1539,9 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.
 		if err := rows.Scan(
 			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
 		); err != nil {
+			// CERT-L2（第 69 轮）：对齐 Round 35 B4「不静默」先例——Scan 失败须留告警，
+			// 否则首发失败重试扫描遗漏该轮（口径同 checkManualCertExpiration :1374）。
+			Logf("warn", "failed first-issuance check: scan failed, skipping row: %v", err)
 			continue
 		}
 		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)

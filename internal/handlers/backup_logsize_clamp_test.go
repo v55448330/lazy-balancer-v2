@@ -80,3 +80,78 @@ func TestImportConfigBackup_clamps_audit_log_size_mb(t *testing.T) {
 		})
 	}
 }
+
+// SYS-U1（第 69 轮审计，P3——SYS37-2/R56#3 同族漏点）：task_log_size_mb 与
+// runtime_log_size_mb 无导入侧钳制——越界值原样落库后基础设置保存被写侧
+// 1-1024 校验锁死（400）。钳到写侧同边界；非整数形态回退 schema 缺省
+//（10/100，db.go newColumns 登记）。
+
+func TestImportConfigBackup_clamps_task_log_size_mb(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{"0 钳位到 1", 0, 1},
+		{"负值钳位到 1", -50, 1},
+		{"1025 钳位到 1024（写侧上限）", 1025, 1024},
+		{"天文值钳位到 1024", 99999, 1024},
+		{"合法值保持不变", 200, 200},
+		{"边界 1 保持不变", 1, 1},
+		{"边界 1024 保持不变", 1024, 1024},
+		{"非法形态回退缺省 10", "garbage", 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			r55SeedCurrentAdmin(t)
+			backup := r55BackupJSONWithConfig(t, map[string][]map[string]any{}, map[string]any{"task_log_size_mb": tt.value})
+			response := r55Post(t, h.ImportConfigBackup, "/config/import", backup)
+			if response.Code != http.StatusOK {
+				t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+			}
+			var stored int
+			if err := db.DB.QueryRow("SELECT COALESCE(task_log_size_mb,10) FROM global_config WHERE id=1").Scan(&stored); err != nil {
+				t.Fatalf("read task_log_size_mb: %v", err)
+			}
+			if stored != tt.want {
+				t.Fatalf("task_log_size_mb=%d, want %d", stored, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportConfigBackup_clamps_runtime_log_size_mb(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{"0 钳位到 1", 0, 1},
+		{"负值钳位到 1", -50, 1},
+		{"1025 钳位到 1024（写侧上限）", 1025, 1024},
+		{"天文值钳位到 1024", 99999, 1024},
+		{"合法值保持不变", 200, 200},
+		{"边界 1 保持不变", 1, 1},
+		{"边界 1024 保持不变", 1024, 1024},
+		{"非法形态回退缺省 100", "garbage", 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			r55SeedCurrentAdmin(t)
+			backup := r55BackupJSONWithConfig(t, map[string][]map[string]any{}, map[string]any{"runtime_log_size_mb": tt.value})
+			response := r55Post(t, h.ImportConfigBackup, "/config/import", backup)
+			if response.Code != http.StatusOK {
+				t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+			}
+			var stored int
+			if err := db.DB.QueryRow("SELECT COALESCE(runtime_log_size_mb,100) FROM global_config WHERE id=1").Scan(&stored); err != nil {
+				t.Fatalf("read runtime_log_size_mb: %v", err)
+			}
+			if stored != tt.want {
+				t.Fatalf("runtime_log_size_mb=%d, want %d", stored, tt.want)
+			}
+		})
+	}
+}

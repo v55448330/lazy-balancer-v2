@@ -979,13 +979,15 @@ func parseEntryCached(s string, cache map[string]*parsedEntry) *parsedEntry {
 	return p
 }
 
-// cidrIntersectParsed 与 cidrIntersectEntry 同语义,但消费预解析条目(免重复
-// ParseCIDR/ParseIP);a 保留原串供返回(交集结果须是原始字符串形态)。
+// cidrIntersectParsed 判断两个预解析 IP/CIDR 条目的网络包含关系，返回更具体
+// 一方（SEC-D1 第 69 轮起为唯一实现——旧字符串入参变体 cidrIntersectEntry 在
+// F62-20 预解析缓存改造后生产零调用，已删除，语义钉迁至 cidrIntersectParsed）。
+// a 保留原串供返回（交集结果须是原始字符串形态）。
 func cidrIntersectParsed(pa, b *parsedEntry) string {
 	if !pa.valid || !b.valid {
 		return ""
 	}
-	// 字面相等且合法(与 cidrIntersectEntry 的 a==b 快路径同口径)
+	// 字面相等且合法（R59-P3 合法性门同口径：bad 条目字面相等不得顶出交集）
 	if pa.raw == b.raw {
 		return pa.raw
 	}
@@ -1007,53 +1009,6 @@ func cidrIntersectParsed(pa, b *parsedEntry) string {
 	if pa.ip != nil && b.net != nil {
 		if b.net.Contains(pa.ip) {
 			return pa.raw
-		}
-		return ""
-	}
-	return ""
-}
-
-// cidrIntersectEntry 判断两个 IP/CIDR 条目的网络包含关系，返回更具体的一方。
-func cidrIntersectEntry(a, b string) string {
-	// 第 59 轮 R59-P3（U5-2）：字面相等仍须过合法性门——坏条目字面相等会让
-	// allow 交集凭空非空（恒拒规则失效→渲染 fail-closed）。与聚合面「不可
-	// 解析不参与匹配」同口径：非法返回 ""（不参与交集）。
-	if a == b {
-		if net.ParseIP(a) != nil {
-			return a
-		}
-		if _, _, err := net.ParseCIDR(a); err == nil {
-			return a
-		}
-		return ""
-	}
-	_, anet, aErr := net.ParseCIDR(a)
-	_, bnet, bErr := net.ParseCIDR(b)
-	aIsCIDR := aErr == nil
-	bIsCIDR := bErr == nil
-	if aIsCIDR && bIsCIDR {
-		// 2026-09-08 审计 SF1：加掩码长度消除方向依赖——同基址不同掩码时
-		// Contains(基址) 双向均为 true，旧实现返回值取决于参数顺序。补
-		// prefix 长度比较保证恒返回更窄（更具体）的一方。
-		aOnes, _ := anet.Mask.Size()
-		bOnes, _ := bnet.Mask.Size()
-		if anet.Contains(bnet.IP) && aOnes <= bOnes {
-			return b
-		}
-		if bnet.Contains(anet.IP) && bOnes <= aOnes {
-			return a
-		}
-		return ""
-	}
-	if aIsCIDR && !bIsCIDR {
-		if bip := net.ParseIP(b); bip != nil && anet.Contains(bip) {
-			return b
-		}
-		return ""
-	}
-	if !aIsCIDR && bIsCIDR {
-		if aip := net.ParseIP(a); aip != nil && bnet.Contains(aip) {
-			return a
 		}
 		return ""
 	}

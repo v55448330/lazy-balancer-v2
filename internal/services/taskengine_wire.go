@@ -108,7 +108,10 @@ func ip2regionNextSlotAware() time.Time {
 	return coveredSlotStepPast("ip2region", "security_ip2region_version", parseUTCSlot(GetIP2RegionUpdateManager().NextScheduledSlot()))
 }
 
-// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 16 任务并启动默认循环。幂等。
+// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 16 任务并启动默认循环。
+// TASK-L8（第 69 轮）：非幂等——调用方保证单次装配；重复调用前须先
+// StopTaskEngine（否则旧 scheduleLoop goroutine 泄漏、双引擎双写 task_runs）。
+// 测试环境须先 db.Initialize。
 func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine {
 	taskengine.SetLocation(CurrentLocation())
 	logsDir := "/app/logs"
@@ -377,7 +380,15 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				return nil
 			}
 			// 引擎已在排程槽调用——直接执行（manager 内部自带总闸/单飞/到期源筛选）
-			return m.RunUpdate(rc.Trigger, &rc)
+			// TASK-L5：demote/中止语义（lastTaskOutcome=skipped）不再失真为 success——
+			// 映射引擎 skipped 终态（ErrTaskSkipped 哨兵，task_runs CHECK 既有值）。
+			if err := m.RunUpdate(rc.Trigger, &rc); err != nil {
+				return err
+			}
+			if m.StatusSnapshot().Outcome == "skipped" {
+				return taskengine.ErrTaskSkipped
+			}
+			return nil
 		},
 	})
 
@@ -386,11 +397,14 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Description: "检查并更新 OWASP CoreRuleSet 规则集到最新版本（保留用户 overrides），供 WAF 拦截模式消费",
 		Category:    "安全防护", Kind: taskengine.KindScheduled, RunsOn: taskengine.RoleMasterOnly, Cancelable: true,
 		NextSlotFn: func() time.Time {
-			m := GetCRSUpdateManager()
-			if m == nil || !m.AutoUpdateEnabled() {
+			// TASK-L1 同批：DB 直读不依赖管理器实例（EnabledFn :395-401 已同形态
+			// DB 直读）——测试环境不建管理器，生产管理器初始化晚于引擎注册，
+			// 管理器门会让首槽武装在窗口期读不到。
+			var en int
+			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_crs_version WHERE id=1").Scan(&en); err != nil || en != 1 {
 				return time.Time{}
 			}
-			return crsNextSlotAware()
+			return coveredSlotStepPast("crs", "security_crs_version", parseUTCSlot(versionTableNextUpdate("security_crs_version")))
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读——manager 未初始化窗口也正确）
 			var en int
@@ -425,6 +439,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				return err
 			}
 			<-done
+			if snap := m.StatusSnapshot(); snap.Status == string(CRSStatusSkipped) {
+				// TASK-L5：demote 中止落 skipped 终态而非 success
+				return taskengine.ErrTaskSkipped
+			}
 			if snap := m.StatusSnapshot(); snap.Status == string(CRSStatusFailed) {
 				return fmt.Errorf("CRS 更新失败: %s", snap.Message)
 			}
@@ -437,11 +455,12 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Description: "更新 IP 地理位置离线库（xdb），供 GeoIP 地域拦截与归属地展示使用",
 		Category:    "安全防护", Kind: taskengine.KindScheduled, RunsOn: taskengine.RoleMasterOnly, Cancelable: true,
 		NextSlotFn: func() time.Time {
-			m := GetIP2RegionUpdateManager()
-			if m == nil || !m.AutoUpdateEnabled() {
+			// TASK-L1 同批：DB 直读不依赖管理器实例（与 crs 同形）
+			var en int
+			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_ip2region_version WHERE id=1").Scan(&en); err != nil || en != 1 {
 				return time.Time{}
 			}
-			return ip2regionNextSlotAware()
+			return coveredSlotStepPast("ip2region", "security_ip2region_version", parseUTCSlot(versionTableNextUpdate("security_ip2region_version")))
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读）
 			var en int
@@ -474,6 +493,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				return err
 			}
 			<-done
+			if snap := m.StatusSnapshot(); snap.Status == string(IP2RegionStatusSkipped) {
+				// TASK-L5：demote 中止落 skipped 终态而非 success
+				return taskengine.ErrTaskSkipped
+			}
 			if snap := m.StatusSnapshot(); snap.Status == string(IP2RegionStatusFailed) {
 				return fmt.Errorf("IP2Region 更新失败: %s", snap.Message)
 			}
@@ -550,6 +573,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	} {
 		taskEngine.StartLoop(id)
 	}
+	// TASK-L1（第 69 轮 P1）：首槽武装——引擎化前旧调度器首个 tick 才武装首槽
+	//（auto_update 开且 next_update 空时写入下一排程槽）；引擎零槽恒不到期
+	//（engine.go:725 零值槽 due=false）。引擎注册完成后对三安全库一次性武装：
+	// 已有排程槽的行不受影响（空判据守门），仅全新安装/空槽行补写。
+	armSecurityLibraryFirstSlots()
 	// B1：BootSync 任务同步执行（startup:config-load——面板监听前完成，
 	// 替代 main.go 直调+legacy startupPhase 记录旁路）
 	taskEngine.RunBootSyncTasks()
@@ -561,5 +589,44 @@ func StopTaskEngine() {
 	if taskEngine != nil {
 		taskEngine.Stop()
 		taskEngine = nil
+	}
+}
+
+// armSecurityLibraryFirstSlots 三安全库首槽武装（TASK-L1，第 69 轮 P1）：
+// auto_update 开且 next_update 空的行写入下一排程槽（versionTableNextSlot/
+// threatNextSlot 与既有排程写侧同函数同口径）。已有槽的行、开关关闭的行
+// 一律不动；武装失败仅告警不阻断启动（下一排程保存路径会自愈）。
+func armSecurityLibraryFirstSlots() {
+	if db.DB == nil {
+		return
+	}
+	now := time.Now().UTC()
+	// 版本表两族（CRS/IP2Region）：单行表——行可能尚未由管理器种子
+	//（ensureCRSVersionRow 在管理器初始化时执行，时序晚于本函数），先补行再补槽。
+	for _, tc := range []struct{ table, seedVersion string }{
+		{"security_crs_version", CRSBundledVersion},
+		{"security_ip2region_version", "unknown"},
+	} {
+		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO `+tc.table+` (id, version, auto_update) VALUES (1, ?, TRUE)`, tc.seedVersion); err != nil {
+			Logf("warn", "首槽武装：%s 种子行写入失败: %v", tc.table, err)
+			continue
+		}
+		var autoUpdate int
+		var nextUpdate string
+		if err := db.DB.QueryRow(`SELECT COALESCE(auto_update,1), COALESCE(next_update,'') FROM `+tc.table+` WHERE id=1`).Scan(&autoUpdate, &nextUpdate); err != nil {
+			continue
+		}
+		if autoUpdate != 1 || nextUpdate != "" {
+			continue
+		}
+		if _, err := db.DB.Exec(`UPDATE `+tc.table+` SET next_update=? WHERE id=1`, versionTableNextSlot(tc.table, now)); err != nil {
+			Logf("warn", "首槽武装：%s 写入 next_update 失败: %v", tc.table, err)
+		}
+	}
+	// 威胁源族：三行源表，仅武装启用更新的源
+	if ThreatAutoUpdateEnabled() {
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`, threatNextSlot(now)); err != nil {
+			Logf("warn", "首槽武装：security_threat_sources 写入 next_update 失败: %v", err)
+		}
 	}
 }

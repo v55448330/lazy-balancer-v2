@@ -144,15 +144,30 @@ func AppendAPIKeyAuditDetail(detail string, keyID int, keyName string) string {
 	return fmt.Sprintf("%s；认证方式：API密钥；%s", detail, apiKeyPart)
 }
 
+// auditRetentionMonths 读取审计保留月数（audit_retention_months，默认 3）。
+// LBS-B-U2（第 69 轮）：三消费点（CleanupAuditLogs/RuntimeLogCleanupOnce/
+// taskLogsHousekeeping）统一口径——读取失败（含 global_config 行缺失的
+// ErrNoRows）回退默认 3 月 + warn 留痕（曾静默跳过/静默默认三态分裂）；
+// 值越界（<1）同回退默认（写侧 1-12 校验+启动钳位兜底，正常不可达）。
+func auditRetentionMonths() int {
+	const defaultMonths = 3
+	if db.DB == nil {
+		return defaultMonths
+	}
+	var months int
+	if err := db.DB.QueryRow("SELECT COALESCE(audit_retention_months, 3) FROM global_config WHERE id=1").Scan(&months); err != nil {
+		Logf("warn", "读取审计保留月数失败，按默认 %d 个月执行: %v", defaultMonths, err)
+		return defaultMonths
+	}
+	if months < 1 {
+		return defaultMonths
+	}
+	return months
+}
+
 // CleanupAuditLogs 按保留月数清理审计日志，返回删除条数（SPEC §6.5 摘要行数据源）。
 func CleanupAuditLogs() int {
-	var retentionMonths int
-	if err := db.DB.QueryRow("SELECT COALESCE(audit_retention_months, 3) FROM global_config WHERE id=1").Scan(&retentionMonths); err != nil {
-		return 0
-	}
-	if retentionMonths < 1 {
-		retentionMonths = 1
-	}
+	retentionMonths := auditRetentionMonths()
 	cutoff := time.Now().UTC().AddDate(0, -retentionMonths, 0).Format("2006-01-02 15:04:05")
 	if db.AuditDB == nil {
 		Logf("warn", "audit log cleanup skipped: audit database is not initialized")

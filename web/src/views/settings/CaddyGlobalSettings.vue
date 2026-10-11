@@ -414,7 +414,6 @@ onUnmounted(stopLogPolling)
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .caddy-form { width: 100%; }
-.compact-select { width: 240px; max-width: 100%; }
 .number-input { width: 120px; }
 .trusted-field { width: 100%; max-width: 560px; }
 .trusted-preset-field { width: 260px; }

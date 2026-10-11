@@ -1,8 +1,8 @@
 package handlers
 
 // 逐上游回源域名 + 健康检查域名（2026-10-10）保存侧字段校验：
-// origin_domain 空或 host[:port]（Host 头可带端口；SNI 渲染期剥端口），
-// 仅 HTTP 规则静态上游可用（dynamic_dns 池 dial=解析后 IP，映射永不命中；
+// origin_domain 空或纯 host（带端口形态拒绝——同日用户裁定，端口已有独立
+// 配置列），仅 HTTP 规则静态上游可用（dynamic_dns 池 dial=解析后 IP，映射永不命中；
 // TCP 无 Host/SNI 语义）；health_check_host 空或纯 host（probe Host 头不带
 // 端口，与 Caddy headers.Host 特判语义对齐，healthchecks.go:453-458）。
 

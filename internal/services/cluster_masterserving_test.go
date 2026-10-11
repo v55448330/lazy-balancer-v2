@@ -162,8 +162,10 @@ func TestTaskEngineWire_ClusterSyncRoleFlipGenerations(t *testing.T) {
 
 // 离线：超阈值节点首轮 WARN 一次，稳态轮不重复。
 func TestMasterServingRound_offlineWarnsOnce(t *testing.T) {
-	te := newWireTestEngine(t)
-	_ = te
+	// 合成轮测试用轻量环境（不启动 daemon）——live 引擎的 cluster-sync daemon
+	// 以真实时间巡检，seed 的旧 last_seen 必触发离线 WARN 污染合成轮断言
+	//（第 69 轮修复期实证：RoleFlip 邻接形态下双 WARN/零日志断言被打穿）。
+	newServingTestEnv(t)
 	seedServingNode(t, "edge-a", servingBase.Add(-10*time.Minute).UTC().Format("2006-01-02 15:04:05"), 3, 60)
 	w := newServingWatch()
 	ctx := context.Background()
@@ -220,8 +222,10 @@ func TestMasterServingRound_offlineThresholdFollowsGlobalSyncInterval(t *testing
 
 // 无异常轮：零日志（心跳轮距未到）。
 func TestMasterServingRound_cleanRoundsSilent(t *testing.T) {
-	te := newWireTestEngine(t)
-	_ = te
+	// 合成轮测试用轻量环境（不启动 daemon）——live 引擎的 cluster-sync daemon
+	// 以真实时间巡检，seed 的旧 last_seen 必触发离线 WARN 污染合成轮断言
+	//（第 69 轮修复期实证：RoleFlip 邻接形态下双 WARN/零日志断言被打穿）。
+	newServingTestEnv(t)
 	seedServingNode(t, "edge-a", servingBase.Add(-10*time.Second).UTC().Format("2006-01-02 15:04:05"), 3, 3600)
 	w := newServingWatch()
 	ctx := context.Background()
@@ -317,8 +321,8 @@ func TestMasterServingRound_lagWarnsAfterPersistence(t *testing.T) {
 
 // 巡检错误：WARN 不中断（下轮继续）。
 func TestMasterServingRound_dbErrorWarnsAndContinues(t *testing.T) {
-	te := newWireTestEngine(t)
-	_ = te
+	// 合成轮测试用轻量环境（不启动 daemon）——与 offlineWarnsOnce/cleanRoundsSilent 同格。
+	newServingTestEnv(t)
 	if _, err := db.DB.Exec(`DROP TABLE nodes`); err != nil {
 		t.Fatal(err)
 	}

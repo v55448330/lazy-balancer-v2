@@ -18,6 +18,18 @@ type PathRuleInput = {
   readonly response_content_type?: string
   readonly redirect_to?: string
 }
+// isValidHostName 与后端 isValidHost（internal/handlers/helpers.go）逐条对齐的
+// 主机名校验（FE-U3，第 69 轮）：标签字符 [A-Za-z0-9_-]、标签首尾须字母或数字、
+// 单标签 ≤63、总长 ≤253。前端方向不放宽到 IP 字面量（SNI 语义不需要）。
+export const isValidHostName = (value: string): boolean => {
+  if (value === '' || value.length > 253) return false
+  return value.split('.').every((part) => {
+    if (part === '' || part.length > 63) return false
+    if (!/^[A-Za-z0-9_-]+$/.test(part)) return false
+    return /^[A-Za-z0-9]/.test(part) && /[A-Za-z0-9]$/.test(part)
+  })
+}
+
 
 const isValidIpv4 = (value: string): boolean => {
   const segments = value.split('.')
@@ -115,8 +127,10 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       continue
     }
     if (responseMode === 'redirect') {
-      const target = (rule.redirect_to ?? '').trim()
-      if (!target) return `第 ${rowNumber} 条路径：301 跳转需要填写跳转地址`
+      const target = rule.redirect_to ?? ''
+      if (!target.trim()) return `第 ${rowNumber} 条路径：301 跳转需要填写跳转地址`
+      // FE-U4（第 69 轮）：形状校验查原串（与后端 rule_features.go 同位）——
+      // 此前 trim 后判定，" http://x" 前端放行、后端按原串 400，口径分叉。
       // eslint-disable-next-line no-control-regex
       if (/[\x00-\x1f\x7f]/.test(target)) return `第 ${rowNumber} 条路径：跳转地址含非法字符`
       if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return `第 ${rowNumber} 条路径：跳转地址须为 http(s):// 绝对地址或 / 开头路径`

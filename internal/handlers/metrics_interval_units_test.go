@@ -13,24 +13,35 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// Review66-Head 发现 ①（2026-10-03 用户裁定核实后全修）：
-// metricsIntervalSeconds 的 m 单位漏乘 60——30m 窗口被算成 30s，桶宽钳位
-// 1s，升序 LIMIT 720 保留最旧桶，静默丢弃最近数据。
+// Review66-Head 发现 ①（2026-10-03 用户裁定核实后全修）：m 单位漏乘 60——30m
+// 窗口被算成 30s，桶宽钳位 1s，升序 LIMIT 720 保留最旧桶，静默丢弃最近数据。
+// SYS-R1（第 69 轮）：双手写解析收敛为 parseMetricsInterval 单源，本测试改靶
+// 并扩为 modifier/seconds 双输出一致性钉（U8a-P4-1 分桶粒度=窗口秒数/720 必须
+// 对应 SQL modifier，单源后编译期保证）。
 
-func TestMetricsIntervalSeconds_unitAgreement(t *testing.T) {
+func TestParseMetricsInterval_modifierSecondsAgreement(t *testing.T) {
 	cases := []struct {
-		in   string
-		want int64
+		in           string
+		wantModifier string
+		wantSeconds  int64
 	}{
-		{"30m", 1800},
-		{"10080m", 604800},
-		{"2h", 7200},
-		{"7d", 604800},
-		{"", 3600},
+		{"30m", "-30 minutes", 1800},
+		{"10080m", "-10080 minutes", 604800},
+		{"10081m", "-10080 minutes", 604800}, // F9：分钟上限 7×24×60 钳位
+		{"2h", "-2 hours", 7200},
+		{"168h", "-168 hours", 604800},
+		{"169h", "-168 hours", 604800}, // F9：小时上限 7×24 钳位
+		{"7d", "-7 days", 604800},
+		{"8d", "-7 days", 604800}, // F9：天上限 7 钳位
+		{"", "-1 hours", 3600},
+		{"garbage", "-1 hours", 3600},
+		{"10x", "-1 hours", 3600},
+		{" 6H ", "-6 hours", 21600}, // 大小写/空白归一
 	}
 	for _, c := range cases {
-		if got := metricsIntervalSeconds(c.in); got != c.want {
-			t.Errorf("metricsIntervalSeconds(%q)=%d, want %d（与 modifier 同解析同上限）", c.in, got, c.want)
+		modifier, seconds := parseMetricsInterval(c.in)
+		if modifier != c.wantModifier || seconds != c.wantSeconds {
+			t.Errorf("parseMetricsInterval(%q)=(%q,%d), want (%q,%d)（modifier 与窗口秒数同源同上限）", c.in, modifier, seconds, c.wantModifier, c.wantSeconds)
 		}
 	}
 }

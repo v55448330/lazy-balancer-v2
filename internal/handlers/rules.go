@@ -744,6 +744,35 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	// R69 C-N1：CreateRule 补 tcp-TLS 归一（R62 C2-N1 五层入口漏掉的第 5 个）——
+	// TCP 规则不终结入站 TLS，保留 enable_tls=1 落库成死形态行（tcp+acme 组合
+	// 还会产生永不消费证书的僵尸续签任务）。与 UpdateRule 归一分支同语义。
+	// LBH-A-U2（第 69 轮）：归一前移至全部 TLS 相关校验（来源白名单/手动证书
+	// 材料/ACME 域名形状）之前——归一后 EnableTLS=false，校验自然跳过；此前
+	// TCP+enable_tls:true+空/bogus tls_source 创建恒 400 而同形态更新放行 200。
+	// LBH-A-U1（第 69 轮）：归一族扩展至全部 HTTP 专属死配置字段（host_header/
+	// health_check_path/enable_compress/compress_types/request_body_max_size_mb/
+	// upstream_keepalive_timeout/server_tokens_hidden）——TCP 渲染零消费
+	// （buildTCPServer/buildTCPProxyRoute grep 实证），携带即弃置，与
+	// protocolChanged 切换归零同格；存量行渲染忽略（不动数据），编辑自愈。
+	if req.Protocol == "tcp" {
+		req.EnableTLS = false
+		req.TLSSource = "manual"
+		req.TLSCert, req.TLSKey = "", ""
+		req.ACMEConfigID = 0
+		req.HostHeader = ""
+		req.HealthCheckPath = ""
+		req.EnableCompress = false
+		req.CompressTypes = ""
+		req.RequestBodyMaxSizeMB = 0
+		req.UpstreamKeepaliveTimeout = 0
+		req.ServerTokensHidden = 0
+		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 创建携带页引用即归一 0
+		// (跟随策略),不留永不消费的死引用。
+		req.BlockPageStage1ID, req.BlockPageStage1Status = 0, 0
+		req.BlockPageStage3ID, req.BlockPageStage3Status = 0, 0
+	}
+
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP/HTTPS 规则的域名不能为空"})
 		return
@@ -835,7 +864,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 	}
 
-	if req.CompressTypes == "" {
+	// LBH-A-U1：gzip 默认仅 http 注入——TCP 归一（创建头部）已清零
+	// CompressTypes，此处不重建死配置（压缩是 HTTP 渲染语义）。
+	if req.Protocol != "tcp" && req.CompressTypes == "" {
 		req.CompressTypes = "gzip"
 	}
 
@@ -850,21 +881,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
-	}
-	// R69 C-N1：CreateRule 补 tcp-TLS 归一（R62 C2-N1 五层入口漏掉的第 5 个）——
-	// TCP 规则不终结入站 TLS，保留 enable_tls=1 落库成死形态行（tcp+acme 组合
-	// 还会产生永不消费证书的僵尸续签任务）。与 UpdateRule 归一分支同语义。
-	if req.Protocol == "tcp" {
-		req.EnableTLS = false
-		req.TLSSource = "manual"
-		req.TLSCert, req.TLSKey = "", ""
-		req.ACMEConfigID = 0
-		// CERT41-4:证书材料随 TCP 归一弃置——其质量警告不得随审计留痕(误导)。
-		certWarnings = nil
-		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 创建携带页引用即归一 0
-		// (跟随策略),不留永不消费的死引用。
-		req.BlockPageStage1ID, req.BlockPageStage1Status = 0, 0
-		req.BlockPageStage3ID, req.BlockPageStage3Status = 0, 0
 	}
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
@@ -975,7 +991,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
-		// Round 37 I-11: HTTP 规则上游 protocol=tls 静默当 http 处理（与 TCP 行为不对称），显式拒绝。
+		// Round 37 I-11：非协议族的上游 protocol（如 HTTP 规则携带 tls，此前
+		// 静默当 http 处理，与 TCP 行为不对称）已在 validateRulePayloadBeforeSave
+		// 显式 400 拒绝——此处 INSERT 只写归一后的合法值。
 		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.OriginDomain)
@@ -1017,7 +1035,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		cleanupCommitted := false
 		defer func() {
 			if !cleanupCommitted {
-				if rollbackErr := cleanupTx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+				// LBH-A-U4 附带（第 69 轮）：ErrTxDone 判定统一 errors.Is（与
+				// 本文件其余五处回滚守卫同格，裸 != 不穿透包装）。
+				if rollbackErr := cleanupTx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
 					services.Logf("error", "CreateRule compensation rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 				}
 			}
@@ -1379,6 +1399,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.Protocol == "tcp" {
 		tcpDisabled := false
 		tcpZero := 0
+		// LBH-A-U1（第 69 轮）：HTTP 专属死配置字段族随 TCP 编辑归一归零——
+		// 与 protocolChanged 分支切换归零同格；存量/导入残留与显式携带一律
+		// 弃置（TCP 渲染零消费），不随快照/导出/复制放大。
+		tcpEmpty := ""
+		req.HostHeader = &tcpEmpty
+		req.HealthCheckPath = &tcpEmpty
+		req.EnableCompress = &tcpDisabled
+		req.CompressTypes = ""
+		req.RequestBodyMaxSizeMB = &tcpZero
+		req.UpstreamKeepaliveTimeout = &tcpZero
+		req.ServerTokensHidden = &tcpZero
 		req.EnableTLS = &tcpDisabled
 		req.TLSSource = "manual"
 		req.TLSCert, req.TLSKey = "", ""
@@ -1473,10 +1504,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Load existing upstreams if not provided in request
 	// LB43-4(第 43 轮):nil 判定区分「省略」与「显式空数组」——len==0 会把显式
-	// [] 归并进保留存量,与 updateRuleFeatures(:87 按 nil 判空)的校验输入分叉。
-	// 显式 []=非合法形态:下游 validateRulePayloadBeforeSave「至少需要一个上游
-	// 服务器」(handlers.go:546)400 拒绝、存量不变(U3-3 注释纠正:此处曾误称
-	// 「显式 []=清空,零上游为合法形态」——实际清空路径被 400 拒绝,LB43-4 裁定)。
+	// [] 归并进保留存量。显式 []=非合法形态:下游 validateRulePayloadBeforeSave
+	// 「至少需要一个上游服务器」(handlers.go)400 拒绝、存量不变(U3-3 注释纠正:
+	// 此处曾误称「显式 []=清空,零上游为合法形态」——实际清空路径被 400 拒绝,
+	// LB43-4 裁定)。updateRuleFeatures 按调用契约直接消费合并后的 req.Upstreams
+	// （LBH-A-D2，第 69 轮删死分支后不再按 nil 判空）。
 	if req.Upstreams == nil {
 		req.Upstreams = oldUpstreams
 	}
@@ -1484,6 +1516,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		for index := range req.Upstreams {
 			switch req.Protocol {
 			case "tcp":
+				// LBH-A-L1（第 69 轮 P2）：回源域名是 HTTP-only 语义——切换即弃置
+				//（与 host_header/health_check_host 归零同格），否则隐藏残留字段
+				// 被「回源域名仅 HTTP 规则支持」门恒拒，卡死保存。
+				req.Upstreams[index].OriginDomain = ""
 				switch req.Upstreams[index].Protocol {
 				case "", "http":
 					req.Upstreams[index].Protocol = "tcp"
@@ -1580,7 +1616,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	// R71 N-1：端口类 400 前移至快照/validate 之前（与 CreateRule :632/:636 顺序对齐）
+	// R71 N-1：端口类 400 前移至快照/validate 之前（与 CreateRule 的
+	// validateRuleListenPortForSave/validatePortFromDB 前置顺序对齐）
 	// ——TCP 候选 server 名含端口，validate 经 /load 真实加载会把同端口启用中规则 B
 	// 的 server 替换为候选（跨规则流量顶替），此前端口冲突在 validate 之后才拒绝且
 	// 无运行配置恢复。前移后该场景在副作用发生前拦截。
@@ -1688,10 +1725,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.TLSSource)
 	query += "acme_config_id = ?, "
 	args = append(args, req.ACMEConfigID)
-	if req.CAProviderID != nil {
-		query += "ca_provider_id = ?, "
-		args = append(args, *req.CAProviderID)
-	}
+	// LBH-A-D2（第 69 轮）：ca_provider_id 恒随更新写入——前方合并区已保证
+	// req.CAProviderID 非 nil（nil=沿用存量），原 if 条件恒真。
+	query += "ca_provider_id = ?, "
+	args = append(args, *req.CAProviderID)
 	if req.BlockPageStage1ID != nil {
 		query += "block_page_stage1_id = ?, "
 		args = append(args, *req.BlockPageStage1ID)
@@ -1806,7 +1843,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（确认规则更新结果）: " + err.Error()})
 		return
 	}
-	services.Logf("debug", "UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
+	services.Logf("debug", "UpdateRule executed for caddy_id=%s: rows_affected=%d", caddyID, rowsAffected)
 	if rowsAffected == 0 {
 		tx.Rollback()
 		// R71 N-1：409 早退（非终态证书任务在途）。裁定 ④' 后保存路径无预校验
@@ -1893,10 +1930,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// disabled 任务行永驻,再启用时按新域查不到任务另建新行,破坏「一规则
 	// 一任务」不变量(块内 needJob 判定仍按启用语义执行)。
 	if *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
-		caProviderID := existingRule.CAProviderID
-		if req.CAProviderID != nil {
-			caProviderID = *req.CAProviderID
-		}
+		// LBH-A-D2 同族（第 69 轮）：合并区已保证 req.CAProviderID 非 nil，
+		// 原 if 判空恒真，直接解引用。
+		caProviderID := *req.CAProviderID
 		resolvedCAProviderID, resolveErr := services.ResolveCAProviderID(caProviderID)
 		resolvedExistingCAProviderID, resolveExistingErr := services.ResolveCAProviderID(existingRule.CAProviderID)
 		if resolveErr != nil || resolveExistingErr != nil {
@@ -2230,7 +2266,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	committed := false
 	defer func() {
 		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) { // LBH-A-U4 附带（第 69 轮）：统一 errors.Is
 				services.Logf("error", "DeleteRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
 			}
 		}
@@ -2381,6 +2417,16 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// 不再放大到副本,副本落 0(跟随策略)。
 		rule.BlockPageStage1ID, rule.BlockPageStage1Status = 0, 0
 		rule.BlockPageStage3ID, rule.BlockPageStage3Status = 0, 0
+		// LBH-A-U1（第 69 轮）：HTTP 专属死配置字段族不放大到副本——与
+		// CreateRule/UpdateRule 归一同口径（TCP 渲染零消费，源行存量/导入
+		// 残留复制即弃置）。
+		rule.HostHeader = ""
+		rule.HealthCheckPath = ""
+		rule.EnableCompress = false
+		rule.CompressTypes = ""
+		rule.RequestBodyMaxSizeMB = 0
+		rule.UpstreamKeepaliveTimeout = 0
+		rule.ServerTokensHidden = 0
 	}
 
 	userIDInt := contextUserID(c)

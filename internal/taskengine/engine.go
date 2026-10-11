@@ -84,7 +84,9 @@ type Descriptor struct {
 	RestartOnRoleFlip bool
 }
 
-// RunRecord task_runs 行视图。
+// RunRecord task_runs 行视图。TASK-L7（第 69 轮）：stage/entry_count 两列
+// 零写入方（恒零值死列）已随列删除一并移除——DB DDL 与存量库迁移见 db.go
+// deadColumnDrops。
 type RunRecord struct {
 	ID         int64  `json:"id"`
 	TaskID     string `json:"task_id"`
@@ -95,12 +97,15 @@ type RunRecord struct {
 	StartedAt  string `json:"started_at"`
 	FinishedAt string `json:"finished_at"`
 	DurationMs int64  `json:"duration_ms"`
-	Stage      string `json:"stage,omitempty"`
 	Message    string `json:"message,omitempty"`
-	EntryCount int    `json:"entry_count,omitempty"`
 }
 
 var ErrAlreadyRunning = errors.New("taskengine: 任务运行中")
+
+// ErrTaskSkipped 任务跳过哨兵（TASK-L5，第 69 轮 P2）：demote 中止等「非故障
+// 放弃」语义由 Run 体返回该哨兵，terminalStatus 映射为 task_runs skipped 终态
+// （CHECK 约束内既有值，此前零写入方）。
+var ErrTaskSkipped = errors.New("taskengine: 任务跳过")
 var ErrNotFound = errors.New("taskengine: 任务未注册")
 
 // ---- registration ----
@@ -304,6 +309,15 @@ func (e *Engine) tryStartDaemon(r *registration, restartIntent bool) {
 func (e *Engine) Register(d Descriptor) error {
 	if d.ID == "" || d.Family == "" {
 		return errors.New("taskengine: ID/Family 必填")
+	}
+	// TASK-L2（第 69 轮 P2）：Kind 与 Fn 配套校验——Periodic 缺 IntervalFn 会在
+	// tick 处 nil 调用 panic（scheduleLoop goroutine 崩→进程退出），Scheduled 缺
+	// NextSlotFn 则永不到期静默停摆。注册期响亮拒绝。
+	if d.Kind == KindPeriodic && d.IntervalFn == nil {
+		return fmt.Errorf("taskengine: %s 为 Periodic 任务，必须提供 IntervalFn", d.ID)
+	}
+	if d.Kind == KindScheduled && d.NextSlotFn == nil {
+		return fmt.Errorf("taskengine: %s 为 Scheduled 任务，必须提供 NextSlotFn", d.ID)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -552,8 +566,7 @@ func (e *Engine) History(id string, limit int) []RunRecord {
 	}
 	rows, err := db.DB.Query(
 		`SELECT id, task_id, family, trigger, COALESCE(operator,''), status, started_at,
-		COALESCE(finished_at,''), COALESCE(duration_ms,0),
-		COALESCE(stage,''), COALESCE(message,''), COALESCE(entry_count,0)
+		COALESCE(finished_at,''), COALESCE(duration_ms,0), COALESCE(message,'')
 		FROM task_runs WHERE task_id=? ORDER BY id DESC LIMIT ?`, id, limit)
 	if err != nil {
 		return nil
@@ -562,7 +575,7 @@ func (e *Engine) History(id string, limit int) []RunRecord {
 	var out []RunRecord
 	for rows.Next() {
 		var r RunRecord
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.Family, &r.Trigger, &r.Operator, &r.Status, &r.StartedAt, &r.FinishedAt, &r.DurationMs, &r.Stage, &r.Message, &r.EntryCount); err != nil {
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.Family, &r.Trigger, &r.Operator, &r.Status, &r.StartedAt, &r.FinishedAt, &r.DurationMs, &r.Message); err != nil {
 			continue
 		}
 		out = append(out, r)
@@ -571,6 +584,11 @@ func (e *Engine) History(id string, limit int) []RunRecord {
 }
 
 func (e *Engine) RecoverOrphans() int64 {
+	// TASK-L3（第 69 轮 P3）：与同文件其余 7 处导出 DB 函数同形的 nil 防护
+	// （曾唯一裸用 db.DB——装配顺序变化即 nil panic）。
+	if db.DB == nil {
+		return 0
+	}
 	res, err := db.DB.Exec(`UPDATE task_runs SET status='interrupted', finished_at=?, message=COALESCE(message,'')||'（进程重启回收）' WHERE status='running'`, engineNowStr())
 	if err != nil {
 		return 0
@@ -661,6 +679,11 @@ func terminalStatus(ctx context.Context, err error) string {
 	if ctx.Err() != nil {
 		return "cancelled"
 	}
+	// TASK-L5：跳过哨兵先于 generic failed 判定——demote 中止等非故障放弃
+	// 落 skipped 终态（task_runs CHECK 约束既有值），不再失真为 success。
+	if errors.Is(err, ErrTaskSkipped) {
+		return "skipped"
+	}
 	if err != nil {
 		return "failed"
 	}
@@ -735,7 +758,24 @@ func (e *Engine) tick() {
 			// 时钟照常走，promote 后首轮要等残余 interval，最坏 6h/24h）。
 			allows := e.roleAllows(r.desc.RunsOn)
 			r.mu.Lock()
-			due := r.loopEnabled && !r.running && (r.lastCheck.IsZero() || now.Sub(r.lastCheck) >= r.desc.IntervalFn())
+			if !r.loopEnabled || r.running {
+				r.mu.Unlock()
+				continue
+			}
+			intervalFn := r.desc.IntervalFn
+			r.mu.Unlock()
+			// TASK-L4（第 69 轮）：IntervalFn 锁外求值——F-L1-68-05 同族收敛
+			// 补全（Scheduled NextSlotFn 已移锁外）。IntervalFn 若含 DB 读取
+			// （wire.go 预告「间隔可配置——读 global_config」形态），持 r.mu
+			// 会把延迟传导到同任务 Cancel/IsRunning/StopLoop。回锁后以新鲜
+			// lastCheck/loopEnabled/running 复核——窗口内 SetRole 置零节拍
+			// 不被陈旧快照覆写。
+			var interval time.Duration
+			if intervalFn != nil {
+				interval = intervalFn()
+			}
+			r.mu.Lock()
+			due := r.loopEnabled && !r.running && (r.lastCheck.IsZero() || now.Sub(r.lastCheck) >= interval)
 			if due {
 				if allows {
 					r.lastCheck = now
@@ -783,6 +823,11 @@ func engineLocPtr() *time.Location { return engineLocAtomic.Load().(*time.Locati
 
 func engineNowStr() string { return time.Now().In(engineLocPtr()).Format("2006-01-02 15:04:05") }
 
+// engineLogTimeStr 任务日志行时间戳（TASK-L9，第 69 轮）：斜杠形态——与
+// TeeTaskLog 业务行统一。engineNowStr 是 DB 写入/datetime() 比较口径
+// （SQLite 时间串只认横杠），两者各司其职勿合并。
+func engineLogTimeStr() string { return time.Now().In(engineLocPtr()).Format("2006/01/02 15:04:05") }
+
 // ---- 日志 ----
 
 var taskLogDir string
@@ -799,18 +844,24 @@ func TaskLogPath(taskID string) string {
 	return filepath.Join(taskLogDir, taskID+".log")
 }
 
-func taskLogAppend(taskID, line string) {
-	path := TaskLogPath(taskID)
-	if path == "" {
-		return
-	}
+// appendTaskLogLine 打开→追加→关闭共享实现（TASK-L10，第 69 轮：taskLogAppend
+// 与 TeeTaskLog 曾双份同形四步；MkdirAll 幂等，保留逐行兜底形态不变）。
+func appendTaskLogLine(path, line string) {
 	_ = os.MkdirAll(taskLogDir, 0755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", engineNowStr(), line)
+	fmt.Fprintln(f, line)
+}
+
+func taskLogAppend(taskID, line string) {
+	path := TaskLogPath(taskID)
+	if path == "" {
+		return
+	}
+	appendTaskLogLine(path, engineLogTimeStr()+" "+line)
 }
 
 // ---- DB 落库 ----
@@ -1020,7 +1071,7 @@ func PurgeTaskRuns(days int) int64 {
 // ---- 业务侧日志 helper ----
 
 func TeeTaskLogTime(taskID, level, stage, message string) {
-	TeeTaskLog(taskID, time.Now().In(engineLocPtr()).Format("2006/01/02 15:04:05"), level, stage, message)
+	TeeTaskLog(taskID, engineLogTimeStr(), level, stage, message)
 }
 
 func TeeTaskLog(taskID, timestamp, level, stage, message string) {
@@ -1028,11 +1079,5 @@ func TeeTaskLog(taskID, timestamp, level, stage, message string) {
 	if path == "" {
 		return
 	}
-	_ = os.MkdirAll(taskLogDir, 0755)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s [%s] %s - %s\n", timestamp, level, stage, message)
+	appendTaskLogLine(path, fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message))
 }

@@ -682,6 +682,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 				validateWarnings = append(validateWarnings, fmt.Sprintf("lbbak 含 manifest 未登记的威胁库条目（%s）——内容未经完整性校验，已按原样落盘；建议核实来源后重新导出备份", strings.Join(payload.UnregisteredThreatEntries, "、")))
 			}
 		}
+		// SYS-U4（第 69 轮，已声明例外）：本剔除步位于全部校验器之后，与导入侧
+		//（ImportConfigBackup 在行级校验之前剔除）顺序不一致——「导入/预览双路径
+		// 同序」不变量的有意例外：现存校验器均不读 security_crs_version/
+		// security_ip2region_version 两行表（第 69 轮逐函数核实），剔除先后无可观察
+		// 分叉。**未来新增读取这两表的校验器时，必须先把本步前移到
+		// validateBackupRuleReferences 之前与导入逐行对齐。**
 		// L6-66-03（第 66 轮审计）：镜像导入侧 BE-C1-10 单侧文件缺失建模——
 		// 单侧缺失剔对应版本表并告警（此前仅建模双侧缺失，单侧形态预览计数
 		// 含两表且无警告，与导入实际落库分叉）；双侧缺失语义保持（L6-F2，

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"lazy-balancer-v2/internal/db"
+	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -1559,5 +1560,30 @@ func TestCAQueue_tick_dispatches_with_refreshed_provider(t *testing.T) {
 	queue.mu.Unlock()
 	if !settled {
 		t.Fatal("dispatch did not settle after completion")
+	}
+}
+
+// LBS-B-L1（第 69 轮 P3）：requeueStrandedJobs 迭代健壮性——Scan 失败补
+// warn 留痕（曾静默 continue 零信号），循环后补 rows.Err() 检查（曾迭代
+// 中途出错时部分任务集被当全量处理）。
+func TestCAQueue_requeueStrandedJobsLogsScanFailure(t *testing.T) {
+	// Given 类型漂移行：ca_provider_id 存非数值文本（INTEGER 亲和列透传），
+	// COALESCE 读出 TEXT → Scan 入 int 必败
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_scan_drift', 'scan-drift.test', 'queued', 'abc')`); err != nil {
+		t.Fatalf("seed drift row: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	oldWriter := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	// When
+	manager.requeueStrandedJobs(`j.status='queued'`, "周期巡检发现队列外滞留，重新排队", "test-scan")
+
+	// Then Scan 失败有 warn 留痕（含 logPrefix——此前静默 continue 零信号）
+	if !strings.Contains(buf.String(), "test-scan") {
+		t.Fatalf("Scan 失败应留 warn（含 logPrefix），日志=%q", buf.String())
 	}
 }

@@ -65,6 +65,50 @@ func TestRunMigrationsAddsTaskRunsOperatorColumn(t *testing.T) {
 	}
 }
 
+// TASK-L7（第 69 轮）：task_runs.stage/entry_count 零写入方死列清理——
+// fresh DDL 不含两列；存量库经 runMigrations 的 deadColumnDrops 幂等删除。
+func TestRunMigrationsDropsTaskRunsStageEntryCount(t *testing.T) {
+	// Given 存量库形态：task_runs 带 stage/entry_count 两列（fresh DDL 已删
+	// 时补回模拟旧库；未删时本已存在——条件补列两种形态通用）
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	for _, col := range []struct{ name, ddl string }{
+		{"stage", "TEXT DEFAULT ''"},
+		{"entry_count", "INTEGER DEFAULT 0"},
+	} {
+		var cnt int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('task_runs') WHERE name=?", col.name).Scan(&cnt); err != nil {
+			t.Fatalf("query task_runs schema: %v", err)
+		}
+		if cnt == 0 {
+			if _, err := database.Exec("ALTER TABLE task_runs ADD COLUMN " + col.name + " " + col.ddl); err != nil {
+				t.Fatalf("simulate legacy column %s: %v", col.name, err)
+			}
+		}
+	}
+
+	// When
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Then 两死列均被移除
+	for _, col := range []string{"stage", "entry_count"} {
+		var cnt int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('task_runs') WHERE name=?", col).Scan(&cnt); err != nil {
+			t.Fatalf("query task_runs schema: %v", err)
+		}
+		if cnt != 0 {
+			t.Fatalf("task_runs.%s count=%d, want 0（死列未删）", col, cnt)
+		}
+	}
+}
+
 func TestRunMigrationsCreatesAuthenticationAndUpstreamIndexes(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
@@ -1558,18 +1602,17 @@ func TestMigrateLegacyDNSCredentials_rollsBackAllRowsOnFailure(t *testing.T) {
 	}
 }
 
-func TestInitialize_adds_security_policy_response_and_event_retention_columns(t *testing.T) {
-	// Given
-	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+func TestEnsureNewColumns_rejectsMalformedKey(t *testing.T) {
+	// Given CORE-U2（第 69 轮）：登记 key 非 "table.column" 形态时须启动期响亮
+	// 失败——此前静默跳过（continue），笔误列静默不补、运行时才以 no such column 暴露。
+	openMigrationTestDB(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
+	err := ensureNewColumns(map[string]string{"lb_rules.no.dot": "TEXT"}, nil)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("err=%v, want malformed-key error（畸形登记键必须响亮失败）", err)
 	}
 }
 

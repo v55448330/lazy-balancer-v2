@@ -403,10 +403,11 @@ func (s *queryRecordingSnapshotStore) QueryRowContext(ctx context.Context, query
 }
 
 func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
-	// E-F2 回归：v2.2.0 多策略后同一 rule_caddy_id 最多 5 行绑定。ORDER BY 只给
-	// rule_caddy_id 时行间顺序在 SQL 层无定义（当前靠复合主键覆盖索引碰巧稳定，
-	// 属查询计划偶然），而快照指纹/缓存键要求字节级确定性——顺序保证必须来自
-	// ORDER BY rule_caddy_id, policy_id 全序，与运行侧 caddy.go:823 同口径。
+	// E-F2 回归：v2.2.0 多策略后同一 rule_caddy_id 最多 8 行绑定（SEC-B-GAP-U3：
+	// 上限 2026-09-21 已 5→8，注释滞同步）。ORDER BY 只给 rule_caddy_id 时行间
+	// 顺序在 SQL 层无定义（当前靠复合主键覆盖索引碰巧稳定，属查询计划偶然），
+	// 而快照指纹/缓存键要求字节级确定性——顺序保证必须来自
+	// ORDER BY rule_caddy_id, policy_id 全序，与运行侧 caddy.go 同口径（去行号化防再漂移）。
 	// Given
 	cluster, database := newClusterTestService(t)
 	store := &queryRecordingSnapshotStore{database: database}

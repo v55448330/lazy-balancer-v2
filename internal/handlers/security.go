@@ -84,6 +84,12 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 	if utf8.RuneCountInString(rule.Name) > 100 {
 		return fmt.Errorf("规则名称不能超过 100 字符")
 	}
+	// SEC-U1（第 69 轮）：description 补封顶（SEC40-B1-4 家族漏收敛点）——
+	// 对齐策略描述 500 rune 口径；DB 列无长度约束，超长串随列表响应/审计
+	// 详情放大。本函数是 Create/Update/导入三路径的单一收口点。
+	if utf8.RuneCountInString(rule.Description) > 500 {
+		return fmt.Errorf("规则描述不能超过 500 字符")
+	}
 	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
 		return fmt.Errorf("动作必须为 block、log 或 pass，当前值 %s", rule.Action)
 	}
@@ -2857,11 +2863,11 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"自定义规则":   {}, // 见 customRuleFamilyCondition（SC-3：与 categorizeAttack 同口径）
 }
 
-// customRuleFamilyCondition 自定义规则族的 ID 形态条件——与 categorizeAttack
-// 的判定（本文件「自定义规则触发 id 的两种形状」注释处）严格同口径：5 位任意
+// customRuleFamilyCondition 自定义规则族的 ID 形态条件——与 attackFamilyClassOf
+// 的自定义判定（SEC-R1 收敛单一事实源，两个 Go 视图函数共用）严格同口径：5 位任意
 // 数字 ID（emit=crID+10000，10000-99999，不以 1 开头的 2xxxx-9xxxx 也在内）
 // 或 ≥7 位且以 1 开头（无 id 规则的合成 ID 1000000+）。6 位 1xxxxx（100000-
-// 199999）属 CRS 保留段余数、无发射源，categorizeAttack 判「其他」，本条件
+// 199999）属 CRS 保留段余数、无发射源，共享谓词判「其他」，本条件
 // 同样不归本族——旧 "10"-"19" LIKE 前缀因无长度约束会误并此类 ID（SC-3）。
 // appendFamilyPrefixCondition(2026-09-10 审计 S4):单数字族(id 2/3/4/5/7/8/11)
 // 为精确匹配——LIKE 前缀会让自定义规则 5 位 ID(24567 等)交叉命中 IP/地域族;
@@ -3201,13 +3207,75 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "total": total, "page": page, "page_size": pageSize}})
 }
 
-func categorizeAttack(ruleTriggered, ruleMsg string) string {
+// attackFamilyClass 攻击族 ID 形态分类——SEC-R1（第 69 轮）收敛的单一事实源：
+// categorizeAttack（概览具体分类）与 stageCategorizeAttack（阶段五桶）此前各
+// 复写同一组形态谓词（5 位自定义/≥7 位 1 开头合成/11/14/8/2/4/5/7/3/12/msg
+// 关键词门），判定顺序分叉已出过一次事故（第 61 轮 P3 msg 门与信任分支先后）。
+// SQL 筛选侧（ruleTriggeredFamilyPrefixes/customRuleFamilyCondition/
+// geoipFamilyCondition）为 GLOB 文本形态，受引擎约束保持独立（同步义务不变）。
+//
+// 判定顺序即两视图既有同构顺序：5 位自定义先行（防 9 前缀遮蔽，N5）→ ≥7 位
+// 1 开头合成 → 精确 id/msg 族（msg 门先于信任分支，第 61 轮 P3）。9 开头 CRS
+// 段不在此判定——概览视图需按 3 位前缀细分（crsAttackLabel）且未列名前缀须
+// 继续落 msg/id 门（fall-through），由调用侧承载（语义钉见
+// TestCategorizeAttack_familyMapping / TestStageCategorizeAttack_buckets 的
+// 960100 用例对）。
+type attackFamilyClass int
+
+const (
+	attackFamilyOther       attackFamilyClass = iota
+	attackFamilyCustomRule                    // 自定义规则：5 位任意数字 / ≥7 位 1 开头合成
+	attackFamilyBodyAnomaly                   // id 11 请求体异常
+	attackFamilyThreatIntel                   // id 14 / msg「威胁情报库拦截」
+	attackFamilyGeoIP                         // id 8 / 6 位 8xxxxx / msg「GeoIP 区域拦截」
+	attackFamilyIPACL                         // msg「IP 黑/白名单/访问控制」/ id 2/4/5/7
+	attackFamilyTrust                         // id 3/12 信任名单
+)
+
+// attackFamilyClassOf 共享形态谓词（SEC-R1）——两个 Go 视图函数的唯一分类入口。
+func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	switch {
-	// N5(第 16 轮):5 位 ID 恒为自定义规则(发射 id=crID+10000 落 10000-99999;
-	// CRS 恒 6 位)——先于 3 位前缀判定,crID≥82000 发射 92000-99999 时不再被
-	// 遮蔽误标;与 customRuleFamilyCondition(SC-3)长度判据同口径。
 	case len(ruleTriggered) == 5:
-		return "自定义规则"
+		// N5(第 16 轮):5 位 ID 恒为自定义规则(发射 id=crID+10000 落 10000-99999;
+		// CRS 恒 6 位)——先于 9 前缀判定,crID≥82000 发射 92000-99999 时不再被
+		// 遮蔽误标;与 customRuleFamilyCondition(SC-3)长度判据同口径。
+		return attackFamilyCustomRule
+	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
+		// 自定义规则触发 id 的第二种形状：R30 起无 id 规则的合成 id 1000000+n
+		// （7 位，1000000-1999999）。6 位 1xxxxx 无归属源（CRS 保留段
+		// 100000-999999 的余数），不归本族。本口径是「自定义规则」ID 形态的
+		// 权威（SC-3）：SQL 筛选族 customRuleFamilyCondition 与前端
+		// triggeredLabel 须与本分支保持一致。
+		return attackFamilyCustomRule
+	case ruleTriggered == "11":
+		return attackFamilyBodyAnomaly
+	case ruleTriggered == "14" || strings.Contains(ruleMsg, "威胁情报库拦截"):
+		// 14 = 威胁情报库预检拦截（阶段 1，v2.3.x）。精确匹配——LIKE 前缀
+		// 会误并自定义规则发射 id 14xxxx（emit=DB id+10000）。
+		return attackFamilyThreatIntel
+	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+		// 8 = 旧共享 GeoIP id（策略引擎时代历史事件）；6 位 8xxxxx = 预检精确段
+		// 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。
+		return attackFamilyGeoIP
+	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
+		ruleTriggered == "2" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
+		return attackFamilyIPACL
+	case ruleTriggered == "3" || ruleTriggered == "12":
+		// 信任预检 id:3/12（第 59 轮 R59-P5 对齐 family 表/stage 桶三侧口径）——
+		// 置于 msg 门之后（第 61 轮 P3）：带「IP 黑/白名单」消息的 id:3 历史行
+		// 仍归 IP 访问控制（既有钉），裸 id 形态（当前发射为 pass,nolog 永不产
+		// 事件——防御性归族）归信任名单。
+		return attackFamilyTrust
+	default:
+		return attackFamilyOther
+	}
+}
+
+// crsAttackLabel CRS 段按 3 位规则组前缀的具体分类标签；未列名前缀返回 ""
+// （调用侧继续走共享形态门——概览视图 fall-through 语义）。调用前须先排除
+// 5 位自定义 ID（categorizeAttack 的 len==5 先行分支）。
+func crsAttackLabel(ruleTriggered string) string {
+	switch {
 	case strings.HasPrefix(ruleTriggered, "942"):
 		return "SQL注入"
 	case strings.HasPrefix(ruleTriggered, "941"):
@@ -3267,34 +3335,34 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "响应阻断评估"
 	case strings.HasPrefix(ruleTriggered, "949"):
 		return "请求阻断评估"
-	// 自定义规则触发 id 的两种形状：旧版内嵌规则 10000+id（5 位，10001-19999）
-	// 与 R30 起无 id 规则的合成 id 1000000+n（7 位，1000000-1999999）。6 位
-	// 1xxxxx 无归属源（CRS 保留段 100000-999999 的余数），保持"其他"。
-	// 5 位数字 ID 仅自定义规则（emit=crID+10000，10000-99999）；首字符不再限定 1。
-	// 本口径是「自定义规则」ID 形态的唯一权威（SC-3）：事件筛选 family 的
-	// customRuleFamilyCondition 与前端 triggeredLabel 须与本分支保持一致。
-	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
-		// SR18-4:N5 前移后 len==5 析取成死条件(2241 已截获),删除;
-		// 7+ 位 1 开头为历史合成 ID 形态保留。
+	default:
+		return ""
+	}
+}
+
+func categorizeAttack(ruleTriggered, ruleMsg string) string {
+	// N5(第 16 轮):5 位 ID 恒为自定义规则——先于 3 位前缀判定,crID≥82000
+	// 发射 92000-99999 时不再被 9 前缀遮蔽误标。
+	if len(ruleTriggered) == 5 {
 		return "自定义规则"
-	case ruleTriggered == "11":
+	}
+	if label := crsAttackLabel(ruleTriggered); label != "" {
+		return label
+	}
+	// 9 开头但未列名 3 位前缀的 CRS 段：继续走共享形态门（SEC-R1 收敛前
+	// fall-through 同口径——历史脏数据 msg 命中 IP 黑白名单仍归 IP 访问控制）。
+	switch attackFamilyClassOf(ruleTriggered, ruleMsg) {
+	case attackFamilyCustomRule:
+		return "自定义规则"
+	case attackFamilyBodyAnomaly:
 		return "请求体异常"
-	case ruleTriggered == "14" || strings.Contains(ruleMsg, "威胁情报库拦截"):
-		// 14 = 威胁情报库预检拦截（阶段 1，v2.3.x）。精确匹配——LIKE 前缀
-		// 会误并自定义规则发射 id 14xxxx（emit=DB id+10000）。
+	case attackFamilyThreatIntel:
 		return "威胁情报库"
-	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
-		// 8 = 旧共享 GeoIP id（策略引擎时代历史事件）；6 位 8xxxxx = 预检精确段
-		// 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。
+	case attackFamilyGeoIP:
 		return "地域拦截"
-	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
-		ruleTriggered == "2" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
+	case attackFamilyIPACL:
 		return "IP 访问控制"
-	// 信任预检 id:3/12（第 59 轮 R59-P5 对齐 family 表/stage 桶三侧口径）——
-	// 置于 msg 门之后：带「IP 黑/白名单」消息的 id:3 历史行仍归 IP 访问控制
-	// （既有钉），裸 id 形态（当前发射为 pass,nolog 永不产事件——防御性归族）
-	// 归信任名单。
-	case ruleTriggered == "3" || ruleTriggered == "12":
+	case attackFamilyTrust:
 		return "信任名单"
 	default:
 		return "其他"
@@ -3308,30 +3376,24 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 //	威胁库 14/msg）/ WAF（CRS 9xxxxx + 自定义 5 位与 1 开头 ≥7 位合成）/
 //	请求体异常（id 11）/ 其他。
 //
-// 判定顺序与 categorizeAttack 同构：5 位自定义先行（避免 9 前缀遮蔽），再
-// CRS 前缀族，再精确 id/形态族。与 family 筛选表（ruleTriggeredFamilyPrefixes
-// /customRuleFamilyCondition/geoipFamilyCondition）三侧同口径。
+// SEC-R1（第 69 轮）：ID 形态判定收敛至 attackFamilyClassOf 单一事实源，
+// 本函数只做类→桶映射。与概览视图的唯一有意分叉：9 开头 CRS 段整段归 WAF
+// （含未列名前缀，不 fall-through 到 msg 门）；概览视图未列名前缀继续走
+// msg/id 门。与 family 筛选表（ruleTriggeredFamilyPrefixes/
+// customRuleFamilyCondition/geoipFamilyCondition）SQL 侧口径同步义务不变。
 func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
-	switch {
-	case len(ruleTriggered) == 5:
+	class := attackFamilyClassOf(ruleTriggered, ruleMsg)
+	// WAF=自定义规则类+CRS 9 前缀段（categorizeAttack 的 crsAttackLabel 细分段
+	// 此处整段归一）。msg 门命中的 9 开头形态同样归 WAF（不 fall-through）。
+	if class == attackFamilyCustomRule || strings.HasPrefix(ruleTriggered, "9") {
 		return "WAF"
-	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
-		return "WAF"
-	case strings.HasPrefix(ruleTriggered, "9"):
-		return "WAF"
-	case ruleTriggered == "11":
+	}
+	switch class {
+	case attackFamilyBodyAnomaly:
 		return "请求体异常"
-	case ruleTriggered == "14" || strings.Contains(ruleMsg, "威胁情报库拦截"):
+	case attackFamilyThreatIntel, attackFamilyGeoIP, attackFamilyIPACL:
 		return "IP 访问控制"
-	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
-		return "IP 访问控制"
-	// 第 61 轮 P3：msg 门先行（与 categorizeAttack 同构——带 IP 黑/白名单消息的
-	// id:3 历史行归 IP 访问控制，裸 id 形态归信任名单；原信任分支前置使同一事件
-	// 在两视图归不同桶，attack_types 与 attack_types_stage 总量对不齐）
-	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
-		ruleTriggered == "2" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
-		return "IP 访问控制"
-	case ruleTriggered == "3" || ruleTriggered == "12":
+	case attackFamilyTrust:
 		return "信任名单"
 	default:
 		return "其他"

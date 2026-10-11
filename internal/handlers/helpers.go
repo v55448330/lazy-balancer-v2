@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
@@ -1136,8 +1137,19 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, enableT
 	return result, nil
 }
 
-func parseRuleMetricsFromSamples(samples []prometheusSample, target ruleMetricTarget) gin.H {
-	return buildPrometheusMetricsIndex(samples).ruleMetrics(target)
+// tailLogWindow 截断尾读日志窗口的首行残段（SYSB44-3 语义，LBH-B-U1 第 69 轮
+// 抽享——此前同一逻辑在 GetAppLogs/GetCaddyLogs 两份实现，第 44 轮修复只收敛了
+// system.go，caddy.go 漏网）：startOffset 非零时窗口首字节可能落在某行中段
+// （切在多字节 rune 中间时残段带无效字节，JSON 编码后以 U+FFFD 污染输出），
+// 丢弃到下一 '\n' 为止；窗口内无 '\n' 则整窗是同一巨行的中段，返回空。
+func tailLogWindow(data []byte, startOffset int64) []byte {
+	if startOffset <= 0 {
+		return data
+	}
+	if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+		return data[idx+1:]
+	}
+	return nil
 }
 
 func classifyStatusCode(code string) string {

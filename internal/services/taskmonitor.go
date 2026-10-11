@@ -91,6 +91,11 @@ func CollectSystemTasks() []TaskInfo {
 // collectCertJobRows 逐签发任务行：非终态（实时队列内容）+ 24h 内终态
 // （结果可见）；id=cert-job:{jobID}，日志走 /certificates/jobs/{id}/logs。
 func collectCertJobRows() []TaskInfo {
+	// TASK-L3（第 69 轮 P3）：db.DB nil 防护——与引擎侧导出 DB 函数同形
+	// （装配顺序变化即 nil panic，曾裸用）。
+	if db.DB == nil {
+		return nil
+	}
 	// 2026-10-01 用户裁定：行存在即显示（无状态/时间过滤——曾按
 	// 「issued 超 1 天隐藏」窗口过滤致主节点签发行消失）；仅排除从节点
 	// 材料物化行（非签发任务，从节点禁签发）。LIMIT 100（U1-P3-2 裁定后
@@ -178,7 +183,8 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		case taskengine.KindOneshot:
 			ti.Cadence = "手动触发"
 		}
-		if m.ID == "cluster-sync" {
+		// TASK-L3（第 69 轮 P3）：db.DB nil 防护（与同层 collectCertJobRows 同形）。
+		if m.ID == "cluster-sync" && db.DB != nil {
 			var iv int
 			if err := db.DB.QueryRow("SELECT COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&iv); err == nil {
 				ti.Cadence = fmt.Sprintf("每 %d 秒（用户配置同步间隔）", iv)

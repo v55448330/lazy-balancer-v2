@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -704,5 +705,26 @@ func TestOIDCCallback_jit_race_conflict_falls_back_to_existing_row(t *testing.T)
 	var username string
 	if err := db.DB.QueryRow("SELECT username FROM users WHERE auth_provider='oidc' AND oidc_subject='user-sub-1'").Scan(&username); err != nil || username == "" {
 		t.Fatalf("identity row must exist with username, got %q err=%v", username, err)
+	}
+}
+
+func TestIsUniqueConstraintError_coversDriverDialects(t *testing.T) {
+	// SYS-R2（第 69 轮）：users.go 两处 409 分支的双段判定（modernc「UNIQUE
+	// constraint failed」+ 历史驱动兼容段「already exists」）并入本 helper——
+	// 钉住两口径，防单侧回归。
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"modernc 唯一约束", errors.New("constraint failed: UNIQUE constraint failed: users.username (1555)"), true},
+		{"历史驱动兼容段", errors.New("constraint failed: already exists"), true},
+		{"无关错误", errors.New("database is locked"), false},
+	}
+	for _, c := range cases {
+		if got := isUniqueConstraintError(c.err); got != c.want {
+			t.Errorf("%s: isUniqueConstraintError=%v, want %v", c.name, got, c.want)
+		}
 	}
 }

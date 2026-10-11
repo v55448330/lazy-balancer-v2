@@ -469,9 +469,10 @@ func materializeCertPair(ruleID, certPEM, keyPEM string) error {
 		// 契约)——私钥被 chmod 0644 后启动路径此前不修复,直到下次 apply。
 		if certInfo, serr := os.Stat(certPath); serr == nil && certInfo.Mode().Perm() == 0644 {
 			if keyInfo, kerr := os.Stat(keyPath); kerr == nil && keyInfo.Mode().Perm() == 0600 {
-				if _, err := tls.X509KeyPair(diskCert, diskKey); err == nil {
-					return nil
-				}
+				// CERT-P1（第 69 轮）：删除对磁盘字节的重复 X509KeyPair 解析——
+				// :467 的 bytes.Equal 已证明磁盘字节与 :458 刚验证通过的库内
+				// 字节完全相同，二次解析不可能产生不同结果。
+				return nil
 			}
 		}
 	}

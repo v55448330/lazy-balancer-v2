@@ -290,7 +290,7 @@ func TestBatchRuleBlockPages_updatesAndSkips(t *testing.T) {
 }
 
 func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
-	// Given：规则 lb_ss（双域名）+ 24h 内 blocked 事件（id 2 / 800123 / 942100 /
+	// Given：规则 lb_ss（双域名）+ 24h 内 blocked 事件（id 2 / 14 / 800123 / 942100 /
 	// 10005）+ 界外事件（logged / 25h 前）+ 指标桩 429 计数
 	handler, _ := newStageBatchTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled) VALUES ('lb_ss','ss','http','ss.example.test,api.ss.test',8080,'weighted_round_robin',1)`); err != nil {
@@ -309,6 +309,7 @@ func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
 		}
 	}
 	seedEvent("2", "blocked", "datetime('now','-1 hour')")
+	seedEvent("14", "blocked", "datetime('now','-1 hour')") // 威胁情报库并入阶段 1（SEC-B-GAP-U4：生产口径 {2,4,7,8,14}∪800xxx）
 	seedEvent("800123", "blocked", "datetime('now','-2 hours')")
 	seedEvent("800123", "blocked", "datetime('now','-3 hours')")
 	seedEvent("942100", "blocked", "datetime('now','-1 hour')")
@@ -332,8 +333,9 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	// Then：阶段 1={2,4,7,8}∪800xxx=3，阶段 3=其余=3（942100/10005/949110），
-	// 429=按域名映射 7+2=9（other.example.test 与 code=200 排除）
+	// Then：阶段 1={2,4,7,8,14}∪800xxx=4（2/14/800123×2），阶段 3=其余=3
+	// （942100/10005/949110），429=按域名映射 7+2=9（other.example.test 与
+	// code=200 排除）
 	if response.Code != http.StatusOK {
 		t.Fatalf("stage-stats status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
@@ -348,14 +350,10 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode stage-stats: %v (body=%s)", err, response.Body.String())
 	}
-	if payload.Data.Stage1 != 3 || payload.Data.Stage3 != 3 || payload.Data.Ratelimit != 9 {
-		t.Fatalf("stage-stats=(%d,%d,%v), want (3,3,9)", payload.Data.Stage1, payload.Data.Stage3, payload.Data.Ratelimit)
+	if payload.Data.Stage1 != 4 || payload.Data.Stage3 != 3 || payload.Data.Ratelimit != 9 {
+		t.Fatalf("stage-stats=(%d,%d,%v), want (4,3,9)", payload.Data.Stage1, payload.Data.Stage3, payload.Data.Ratelimit)
 	}
 }
-
-// 占位防漂移：seedEvent 的时间表达式拼接必须保持常量形态（防 SQL 注入面，
-// 本测试全部用例为字面量）。若未来参数化时间表达式，须改占位符绑定。
-var _ = fmt.Sprintf
 
 // APIMCP45-3：stage-stats 对不存在规则此前误归 500（message 借「规则不存在」
 // 文案但 code 500）——ErrNoRows 分判 404 not_found；其余 DB 故障保持 500 且

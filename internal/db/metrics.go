@@ -288,89 +288,50 @@ func initMetricsSchema(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("failed to initialize metrics database schema: %w", err)
 	}
-	// 幂等迁移：为既有指标库补齐 transaction_id 列（全新库由上面的建表语句直接带出）。
-	// 幂等唯一索引（部分索引 WHERE transaction_id != ''）让重复事务写入被 OR IGNORE
-	// 静默去重，同时保留历史遗留空 transaction_id 行不受唯一约束影响。
-	if err := migrateSecurityEventsTransactionID(db); err != nil {
+	// 幂等迁移：为既有指标库补齐 security_events 缺列（全新库由上面的建表语句
+	// 直接带出全部列）。CORE-R2（第 69 轮）：原四个逐字相同的「pragma 查列→缺则
+	// ADD COLUMN」函数（migrateSecurityEventsTransactionID/RequestContext/
+	// Duration/PrecheckUs）收敛为单一登记点 migrateSecurityEventsColumns。
+	if err := migrateSecurityEventsColumns(db); err != nil {
 		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
 	}
+	// transaction_id 的幂等唯一部分索引（WHERE != ''）让重复事务写入被
+	// OR IGNORE 静默去重，同时保留历史遗留空 transaction_id 行不受唯一约束影响。
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)
 	}
-	// 幂等迁移：事件请求上下文两列（v2.2.3 安全事件增强）——request_headers 恒由
-	// 摄入落库（64KB 截断，2026-09-28 用户裁定上调；本注释第 66 轮纠偏），
-	// request_body 仅策略开 log_request_body 后有值（64KB
-	// 截断）；新库由上方建表语句直接带出。
 	if err := migrateMetricsHistoryBlocked(db); err != nil {
 		return err
 	}
-	if err := migrateSecurityEventsRequestContext(db); err != nil {
-		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
-	}
-	// 幂等迁移：安全处理耗时列（v2.3.3 安全处理耗时）——blocked_counter 在链首
-	// 注入 timing ID 请求头（coraza 审计日志收录），摄取管道按 ID 查耗时表写入；
-	if err := migrateSecurityEventsDuration(db); err != nil {
-		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
-	}
-	// 幂等迁移：预检段耗时快照列（v2.3.3 分段计时）——WAF 事件的触发详情弹框
-	// 显示「预检+WAF」完整分解;流程弹框预检平均用全样本(含 WAF 事件的快照)。
-	if err := migrateSecurityEventsPrecheckUs(db); err != nil {
-		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
-	}
 	return nil
 }
 
-// migrateSecurityEventsDuration 幂等补齐 security_events.duration_us 列。
-func migrateSecurityEventsDuration(db *sql.DB) error {
-	var colCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name='duration_us'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check security_events.duration_us: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN duration_us INTEGER DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add security_events.duration_us: %w", err)
-		}
-	}
-	return nil
+// securityEventsLegacyColumns 存量指标库补列清单（单一登记点）。各列引入背景：
+// transaction_id（幂等去重键，上方部分索引依赖）、request_headers/request_body
+// （v2.2.3 事件请求上下文，摄入落库 64KB 截断；request_body 仅策略开
+// log_request_body 后有值）、duration_us（v2.3.3 安全处理耗时——blocked_counter
+// 在链首注入 timing ID 请求头，摄取管道按 ID 查耗时表写入）、precheck_us
+// （v2.3.3 预检段耗时快照——触发详情弹框「预检+WAF」分解）。
+var securityEventsLegacyColumns = []struct{ column, ddl string }{
+	{"transaction_id", "TEXT DEFAULT ''"},
+	{"request_headers", "TEXT DEFAULT ''"},
+	{"request_body", "TEXT DEFAULT ''"},
+	{"duration_us", "INTEGER DEFAULT 0"},
+	{"precheck_us", "INTEGER DEFAULT 0"},
 }
 
-// migrateSecurityEventsPrecheckUs 幂等补齐 security_events.precheck_us 列。
-func migrateSecurityEventsPrecheckUs(db *sql.DB) error {
-	var colCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name='precheck_us'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check security_events.precheck_us: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN precheck_us INTEGER DEFAULT 0"); err != nil {
-			return fmt.Errorf("failed to add security_events.precheck_us: %w", err)
-		}
-	}
-	return nil
-}
-
-func migrateSecurityEventsRequestContext(db *sql.DB) error {
-	for _, col := range []string{"request_headers", "request_body"} {
+// migrateSecurityEventsColumns 幂等补齐 security_events 缺列（仅服务存量库；
+// 新库由 initMetricsSchema fresh CREATE 直接带出，双通道一致）。
+func migrateSecurityEventsColumns(db *sql.DB) error {
+	for _, col := range securityEventsLegacyColumns {
 		var colCount int
-		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check security_events.%s: %w", col, err)
+		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name=?", col.column).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check security_events.%s: %w", col.column, err)
 		}
 		if colCount == 0 {
-			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE security_events ADD COLUMN %s TEXT DEFAULT ''", col)); err != nil {
-				return fmt.Errorf("failed to add security_events.%s: %w", col, err)
+			if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN " + col.column + " " + col.ddl); err != nil {
+				return fmt.Errorf("failed to add security_events.%s: %w", col.column, err)
 			}
-		}
-	}
-	return nil
-}
-
-func migrateSecurityEventsTransactionID(db *sql.DB) error {
-	var colCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name='transaction_id'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check security_events.transaction_id: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN transaction_id TEXT DEFAULT ''"); err != nil {
-			return fmt.Errorf("failed to add security_events.transaction_id: %w", err)
 		}
 	}
 	return nil

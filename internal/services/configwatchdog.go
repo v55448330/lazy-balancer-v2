@@ -1,7 +1,6 @@
 package services
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,9 +29,8 @@ var (
 	configDriftCleanRounds int  // R66 心跳窗口：连续一致轮计数（60s 节拍 × 60 轮 ≈ 1h 一条心跳）
 	configDriftQueryWarned bool // 规则数据读取失败首报留痕
 	configDriftReadWarned  bool // 运行配置读取失败首报留痕
-	configWatchdogMu       sync.Mutex
-	configWatchdogCancel   context.CancelFunc
-	configWatchdogDone     chan struct{}
+	// LBS-B-D1（第 69 轮）：configWatchdogMu/Cancel/Done 三个引擎化前残留
+	// 死变量已删（StartConfigWatchdog/StopConfigWatchdog 随 M2 退役，零消费方）。
 )
 
 // ResetConfigDrift 角色切换时重置看门狗状态——曾漂移的主节点降级为从节点后，
@@ -57,12 +55,13 @@ func CurrentConfigDrift() ConfigDriftStatus {
 	return status
 }
 
-// StartConfigWatchdog 主节点每 60s 比对「应渲染规则」与 Caddy 运行配置：不一致时
+// 配置一致性看门狗：主节点每 60s 比对「应渲染规则」与 Caddy 运行配置：不一致时
 // 经系统日志 + 操作日志 + GetCaddyStatus（前端全局横幅）三通道告知，连续两轮不一致
 // 才置状态（防配置应用窗口的瞬时误报）。从节点不运行——同步链路已有 drift 检测与
 // 重载失败标记自愈覆盖。恢复由用户手动重启完成（横幅入口），不做自动重应用。
-// 重复调用幂等（已运行时不重启）；停止路径为 StopConfigWatchdog（main.go 优雅退出）。
-// watchdogAdminURLOnce 引擎驱动单轮检查的 admin 地址（首次启动钉定）。
+// LBS-B-D1（第 69 轮）引擎化口径：60s 节拍由任务引擎 config-watchdog 族驱动
+// （taskengine_wire.go 注册），停止随 StopTaskEngine 统一收尾；admin 地址由
+// InitTaskEngine 装配时注入下方包级变量。
 var watchdogAdminURLValue string
 
 // WatchdogCheckOnce 单轮一致性检查（panic 留痕——看门狗是唯一消费者，
@@ -77,8 +76,8 @@ func WatchdogCheckOnce() {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		if err != nil {
-			// 查询失败与「非主节点」同为跳过，失败留痕（对齐 checkConfigConsistency
-			// 内层门第 55 轮 P5 标准——静默吞错会掩盖 DB 异常）。
+			// 查询失败与「非主节点」同为跳过，失败留痕（第 55 轮 P5 标准——
+			// 静默吞错会掩盖 DB 异常）。
 			Logf("warn", "配置看门狗: 读取集群角色失败，本轮跳过: %v", err)
 		}
 		return
@@ -117,15 +116,9 @@ func checkConfigConsistency(adminURL string) {
 	if db.DB == nil {
 		return
 	}
-	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
-		if err != nil {
-			// 查询失败与「非主节点」同为跳过，但失败应留痕（第 55 轮 P5，
-			// 对齐同文件 first-warn 标准——静默吞错会掩盖 DB 异常）。
-			Logf("warn", "配置看门狗: 读取集群角色失败，本轮跳过: %v", err)
-		}
-		return
-	}
+	// LBS-B-R1（第 69 轮）：角色门单层化——内层「非主节点跳过」门删除，
+	// 由唯一生产调用方 WatchdogCheckOnce 外层门承担短路+簿记语义（双层
+	// 背靠背同一句 is_master 查询曾每轮白打一次主库；外层若删会双条 warn）。
 	expected, err := expectedRenderedRules()
 	if err != nil {
 		configDriftMu.Lock()

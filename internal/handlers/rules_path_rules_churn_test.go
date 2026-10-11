@@ -28,20 +28,27 @@ const (
 )
 
 type churnRow struct {
-	ID            int
-	SortOrder     int
-	MatchType     string
-	Path          string
-	UpstreamPath  string
-	UpstreamsJSON string
-	CreatedAt     string
-	UpdatedAt     string
+	ID                  int
+	SortOrder           int
+	MatchType           string
+	Path                string
+	UpstreamPath        string
+	UpstreamsJSON       string
+	ResponseMode        string
+	ResponseStatus      int
+	ResponseBody        string
+	ResponseContentType string
+	RedirectTo          string
+	CreatedAt           string
+	UpdatedAt           string
 }
 
 func readChurnRows(t *testing.T, ruleID string) []churnRow {
 	t.Helper()
 	rows, err := db.DB.Query(`SELECT id, sort_order, match_type, path, upstream_path,
-		COALESCE(upstreams_json,''), COALESCE(created_at,''), COALESCE(updated_at,'')
+		COALESCE(upstreams_json,''), COALESCE(response_mode,''), COALESCE(response_status,0),
+		COALESCE(response_body,''), COALESCE(response_content_type,''), COALESCE(redirect_to,''),
+		COALESCE(created_at,''), COALESCE(updated_at,'')
 		FROM path_rules WHERE rule_id=? ORDER BY sort_order, id`, ruleID)
 	if err != nil {
 		t.Fatalf("read path_rules: %v", err)
@@ -50,7 +57,9 @@ func readChurnRows(t *testing.T, ruleID string) []churnRow {
 	var out []churnRow
 	for rows.Next() {
 		var row churnRow
-		if err := rows.Scan(&row.ID, &row.SortOrder, &row.MatchType, &row.Path, &row.UpstreamPath, &row.UpstreamsJSON, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.SortOrder, &row.MatchType, &row.Path, &row.UpstreamPath, &row.UpstreamsJSON,
+			&row.ResponseMode, &row.ResponseStatus, &row.ResponseBody, &row.ResponseContentType, &row.RedirectTo,
+			&row.CreatedAt, &row.UpdatedAt); err != nil {
 			t.Fatalf("scan path_rules: %v", err)
 		}
 		out = append(out, row)
@@ -205,5 +214,76 @@ func TestUpdateRule_pathRules_preserveIdentityAndTimestamps(t *testing.T) {
 	}
 	if metricsRow.ID == 0 || metricsRow.CreatedAt == churnCreatedSentinel {
 		t.Fatalf("新增行未插入或误用哨兵时间戳：%+v", *metricsRow)
+	}
+}
+
+// LBH-A-U3（第 69 轮 P3）：churn 钉补新列——直返五列必须参与内容比较。
+// 仅改 response_body → 原地 UPDATE（保 id/created_at，updated_at 刷新）；
+// 同值回传 → 零写入（哨兵时间戳原样）。若内容比较回归剔除 response_* 列，
+// 两形状同时失守（变更静默不落库 / 同值误刷新）。
+func TestUpdateRule_pathRules_responseBodyOnlyChangeInPlace(t *testing.T) {
+	// Given：一条 http 规则 + 一条 static 直返路径规则（真实 PUT 落库取真实 id）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled) VALUES ('lb_prchurn','prchurn','','http','prchurn.example.test',8083,'weighted_round_robin',1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_prchurn','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	putRule(t, router, "lb_prchurn", `{"custom_routes_enabled":true,"path_rules":[
+		{"sort_order":0,"match_type":"exact","path":"/ping","response_mode":"static","response_status":200,"response_body":"pong-v1","response_content_type":"text/plain"}]}`)
+	seeded := readChurnRows(t, "lb_prchurn")
+	if len(seeded) != 1 {
+		t.Fatalf("seed rows=%d, want 1", len(seeded))
+	}
+	stampChurnSentinels(t, "lb_prchurn")
+
+	// When 1：同值回传（内容完全一致）
+	putRule(t, router, "lb_prchurn", fmt.Sprintf(`{"path_rules":[
+		{"id":%d,"sort_order":0,"match_type":"exact","path":"/ping","response_mode":"static","response_status":200,"response_body":"pong-v1","response_content_type":"text/plain"}]}`, seeded[0].ID))
+	// Then 1：零写入——id/created_at/updated_at 全部原样
+	after1 := readChurnRows(t, "lb_prchurn")
+	if len(after1) != 1 || after1[0].ID != seeded[0].ID ||
+		after1[0].CreatedAt != churnCreatedSentinel || after1[0].UpdatedAt != churnUpdatedSentinel {
+		t.Fatalf("同值回传改写了行：%+v（应零写入保留哨兵）", after1)
+	}
+
+	// When 2：仅改 response_body（身份键 match_type+path+upstream_path 不变）
+	putRule(t, router, "lb_prchurn", fmt.Sprintf(`{"path_rules":[
+		{"id":%d,"sort_order":0,"match_type":"exact","path":"/ping","response_mode":"static","response_status":200,"response_body":"pong-v2","response_content_type":"text/plain"}]}`, seeded[0].ID))
+	// Then 2：原地 UPDATE——id/created_at 保留，updated_at 刷新，新值落库
+	after2 := readChurnRows(t, "lb_prchurn")
+	if len(after2) != 1 || after2[0].ID != seeded[0].ID {
+		t.Fatalf("response_body 变更重建了行：%+v（want id=%d）", after2, seeded[0].ID)
+	}
+	if after2[0].CreatedAt != churnCreatedSentinel {
+		t.Fatalf("变更行 created_at 被重置：%q（应保留 %q）", after2[0].CreatedAt, churnCreatedSentinel)
+	}
+	if after2[0].UpdatedAt == churnUpdatedSentinel {
+		t.Fatalf("变更行 updated_at 未刷新（比较可能漏 response_body）")
+	}
+	if after2[0].ResponseBody != "pong-v2" {
+		t.Fatalf("response_body 变更未落库：%q", after2[0].ResponseBody)
+	}
+	// When 3：无 id 客户端仅改 response_body（身份键配对路径——钉
+	// matchStoredPathRule 的 exact 比较含 response_* 列；When 2 钉的是
+	// 显式 id 路径的 updatePathRuleTx 比较，两分支各有独立比较实现）
+	stampChurnSentinels(t, "lb_prchurn")
+	putRule(t, router, "lb_prchurn", `{"path_rules":[
+		{"sort_order":0,"match_type":"exact","path":"/ping","response_mode":"static","response_status":200,"response_body":"pong-v3","response_content_type":"text/plain"}]}`)
+	// Then 3：原地 UPDATE——id/created_at 保留，updated_at 刷新，新值落库
+	after3 := readChurnRows(t, "lb_prchurn")
+	if len(after3) != 1 || after3[0].ID != seeded[0].ID || after3[0].CreatedAt != churnCreatedSentinel {
+		t.Fatalf("无 id 变更行未原地复用：%+v（want id=%d）", after3, seeded[0].ID)
+	}
+	if after3[0].UpdatedAt == churnUpdatedSentinel {
+		t.Fatalf("无 id 变更 updated_at 未刷新（matchStoredPathRule 比较可能漏 response_body）")
+	}
+	if after3[0].ResponseBody != "pong-v3" {
+		t.Fatalf("无 id 变更未落库：%q", after3[0].ResponseBody)
 	}
 }

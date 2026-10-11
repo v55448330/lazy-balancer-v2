@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -612,6 +613,44 @@ func TestListCertificateConfigs_masksCredentials_forReadOnlyAPIKey(t *testing.T)
 		// Then：属主为 admin 的 JWT 会话维持明文可读
 		if !strings.Contains(body, "secret-id") || strings.Contains(body, `"***"`) {
 			t.Fatalf("admin JWT should keep plaintext credentials: %s", body)
+		}
+	})
+}
+
+// （SYS-R5，第 69 轮：自 apikeys_current_test.go 迁回——本族为证书配置端点
+// NULL 凭据主题，此前仅因共用 newBackupTestHandlers 夹具寄居于 API Key 文件。）
+func TestCertificateConfigEndpointsHandleNullDNSCredentials(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	result, err := db.DB.Exec("INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled) VALUES ('legacy', 'dnspod', NULL, 1)")
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
+
+	t.Run("list", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/certificate-configs", nil)
+		h.ListCertificateConfigs(ctx)
+
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"dns_credentials":""`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("test", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/certificate-configs/"+strconv.FormatInt(id, 10)+"/test", strings.NewReader(`{"domain":"example.com"}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}}
+		h.TestCertificateConfig(ctx)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want credential validation error instead of 404", recorder.Code, recorder.Body.String())
 		}
 	})
 }

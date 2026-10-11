@@ -325,10 +325,11 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, authURL)
 }
 
-// isUniqueConstraintError 判定 SQLite 唯一约束冲突（modernc 驱动错误文本口径，
-// 与 users.go 用户名 409 分支同源）。
+// isUniqueConstraintError 判定 SQLite 唯一约束冲突——modernc 驱动错误文本口径
+// 「UNIQUE constraint failed」+ 历史驱动兼容段「already exists」（SYS-R2，第 69
+// 轮：users.go 用户名 409 两处双段判定并入本 helper 单一源）。
 func isUniqueConstraintError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	return err != nil && (strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists"))
 }
 
 // OIDCCallback GET /auth/oidc/callback——授权码换令牌→ID Token 验签→

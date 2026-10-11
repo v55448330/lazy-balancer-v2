@@ -1074,3 +1074,48 @@ func TestClusterVersionTrigger_threatConsecutiveFailuresExcluded(t *testing.T) {
 		t.Errorf("version update should bump cluster_version to %d, got %d", base+1, v)
 	}
 }
+
+// CL-U1（第 69 轮审计）：规则面三表新列 OF 钉测试——lb_rules.health_check_host、
+// upstreams.origin_domain、path_rules.upstream_path/response_* 均为快照同步面列
+// （主端导出 SELECT 与从端 INSERT 均携带），OF 漏列则单列 UPDATE 不 bump
+// cluster_version → 快照缓存恒命中旧指纹 → 从端 304 循环，该列稳态永不传播
+// （R72 F-4 MFA 列事故同型）。每步只写目标单列，钉该列自身的 OF 成员资格。
+func TestClusterVersionTriggers_bumpForRuleSurfaceNewColumns(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_newcol','newcol','http',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_newcol','127.0.0.1',9000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_newcol',0,'prefix','/api')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		name string
+		stmt string
+	}{
+		{"lb_rules.health_check_host", `UPDATE lb_rules SET health_check_host='probe.example.test' WHERE caddy_id='lb_newcol'`},
+		{"upstreams.origin_domain", `UPDATE upstreams SET origin_domain='origin.example.test' WHERE rule_id='lb_newcol'`},
+		{"path_rules.upstream_path", `UPDATE path_rules SET upstream_path='/v2' WHERE rule_id='lb_newcol'`},
+		{"path_rules.response_mode", `UPDATE path_rules SET response_mode='static' WHERE rule_id='lb_newcol'`},
+		{"path_rules.response_status", `UPDATE path_rules SET response_status=201 WHERE rule_id='lb_newcol'`},
+		{"path_rules.response_body", `UPDATE path_rules SET response_body='pong' WHERE rule_id='lb_newcol'`},
+		{"path_rules.response_content_type", `UPDATE path_rules SET response_content_type='text/plain' WHERE rule_id='lb_newcol'`},
+		{"path_rules.redirect_to", `UPDATE path_rules SET redirect_to='https://example.test/landing' WHERE rule_id='lb_newcol'`},
+	}
+	for i, step := range steps {
+		if _, err := database.Exec(step.stmt); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := clusterVersion(t, database); got != i+1 {
+			t.Fatalf("%s 单列 UPDATE 后 cluster_version=%d, want %d（新列须入 OF 触发 bump）", step.name, got, i+1)
+		}
+	}
+}

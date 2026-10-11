@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Given KindDaemon 描述符。
@@ -37,7 +38,10 @@ func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
 	e.Register(Descriptor{ID: "t-rsm", Family: "t", Name: "主仅M", Kind: KindScheduled, MasterOnly: true,
-		Run: func(rc RunContext) error { runs.Add(1); return nil }})
+		// TASK-L2（第 69 轮）配套：Scheduled 注册必须带 NextSlotFn（远期槽——
+		// tick 不触发，本测试只验 RunSync 角色门）。
+		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
+		Run:        func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(false) // 从节点
 
 	_, err := e.RunSync("t-rsm", "manual", "tester")

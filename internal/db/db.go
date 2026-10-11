@@ -209,8 +209,8 @@ func createTables() error {
 		last_login DATETIME
 	);
 
-	-- Add display_name column if not exists (for existing databases)
-	-- ALTER TABLE users ADD COLUMN display_name VARCHAR(100);
+	-- users/api_keys/lb_rules 等表的存量库补列统一由 runMigrations 的
+	-- newColumns 通道承担（CORE-R1 收敛后唯一登记点，见该处注释）。
 
 	-- API Keys table
 	CREATE TABLE IF NOT EXISTS api_keys (
@@ -633,6 +633,8 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_auto_backups_created_at ON auto_backups(created_at);
 	-- 统一任务引擎（v2.3.4 lazy-task-engine）：全部任务族的运行历史。
 	-- 304 空轮/纯镜像不落库；仅真实执行与终态。保留随安全事件保留清理族。
+	-- TASK-L7（第 69 轮）：stage/entry_count 零写入方死列已删（存量库经
+	-- deadColumnDrops 幂等移除）。
 	CREATE TABLE IF NOT EXISTS task_runs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		task_id TEXT NOT NULL,
@@ -643,9 +645,7 @@ func createTables() error {
 		started_at TEXT NOT NULL DEFAULT (datetime('now')),
 		finished_at TEXT DEFAULT '',
 		duration_ms INTEGER DEFAULT 0,
-		stage TEXT DEFAULT '',
-		message TEXT DEFAULT '',
-		entry_count INTEGER DEFAULT 0
+		message TEXT DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_task_time ON task_runs(task_id, started_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_time ON task_runs(started_at DESC);
@@ -700,69 +700,12 @@ func createTables() error {
 func runMigrations() error {
 	var colCount int
 
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='display_name'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check users.display_name: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := DB.Exec("ALTER TABLE users ADD COLUMN display_name VARCHAR(100)"); err != nil {
-			return fmt.Errorf("failed to add users.display_name: %w", err)
-		}
-	}
-
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check users.is_enabled: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := DB.Exec("ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1"); err != nil {
-			return fmt.Errorf("failed to add users.is_enabled: %w", err)
-		}
-	}
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name='is_enabled'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check api_keys.is_enabled: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := DB.Exec("ALTER TABLE api_keys ADD COLUMN is_enabled BOOLEAN DEFAULT 1"); err != nil {
-			return fmt.Errorf("failed to add api_keys.is_enabled: %w", err)
-		}
-	}
-	apiKeyColumns := map[string]string{
-		"mcp_enabled":      "INTEGER DEFAULT 0",
-		"read_only":        "INTEGER DEFAULT 0",
-		"mcp_ip_whitelist": "TEXT DEFAULT ''",
-	}
-	for name, dtype := range apiKeyColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name=?", name).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check api_keys.%s: %w", name, err)
-		}
-		if colCount == 0 {
-			if _, err := DB.Exec("ALTER TABLE api_keys ADD COLUMN " + name + " " + dtype); err != nil {
-				return fmt.Errorf("failed to add api_keys.%s: %w", name, err)
-			}
-		}
-	}
-
-	// lb_rules new columns
-	newLbColumns := map[string]string{
-		"domain":                     "VARCHAR(255)",
-		"tls_cert":                   "TEXT",
-		"tls_key":                    "TEXT",
-		"tls_http_redirect":          "BOOLEAN DEFAULT 0",
-		"dynamic_dns":                "BOOLEAN DEFAULT 0",
-		"enable_active_health_check": "BOOLEAN DEFAULT 0",
-		"tls_source":                 "VARCHAR(20) DEFAULT 'manual'",
-		"acme_config_id":             "INTEGER DEFAULT 0",
-	}
-
-	for col, dtype := range newLbColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check lb_rules.%s: %w", col, err)
-		}
-		if colCount == 0 {
-			if _, err := DB.Exec("ALTER TABLE lb_rules ADD COLUMN " + col + " " + dtype); err != nil {
-				return fmt.Errorf("failed to add lb_rules.%s: %w", col, err)
-			}
-		}
-	}
+	// CORE-R1（第 69 轮）：users.display_name/is_enabled、api_keys.is_enabled/
+	// mcp_enabled/read_only/mcp_ip_whitelist 与 lb_rules 八列（domain/tls_cert/
+	// tls_key/tls_http_redirect/dynamic_dns/enable_active_health_check/tls_source/
+	// acme_config_id）的「缺列即补」自此收敛入下方 newColumns 统一通道登记——
+	// 三代并存惯用法（逐列硬编码/局部 map 循环/通用 ensureNewColumns）只留后者，
+	// 下次加列只有一处登记点（schedule_days 单侧漏登记事故即登记点分裂的代价）。
 
 	if _, err := DB.Exec("UPDATE lb_rules SET strategy='weighted_round_robin' WHERE strategy='round_robin'"); err != nil {
 		return fmt.Errorf("failed to normalize lb_rules strategy: %w", err)
@@ -798,7 +741,33 @@ func runMigrations() error {
 	}
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
+	// CORE-U4（第 69 轮声明对齐口径）：fresh DDL 不追平 newColumns 为既定口径，
+	// 适用表——global_config（单行表，原裁定见下文 threat_schedule 段注释）、
+	// security_threat_sources（content_hash/raw_hash）、security_crs_version
+	//（update_status/message/last_checked/next_update/trigger/started_at/
+	// finished_at/consecutive_failures 八列；姊妹表 security_ip2region_version
+	// fresh DDL 全带属历史不对称，不追平）、nodes（access_url 等）、users
+	//（mfa_*/oidc_*/password_* 等）。fresh 库与存量库恒经本通道补列收敛；
+	// 例外：整表重建迁移（users/security_policies/nodes/lb_rules+upstreams/
+	// cert_jobs 重建 DDL）必须同步携列——重建位于二次 ensureNewColumns 安全网
+	// 之后，丢列无同启动自愈（U6B-3/D403-P2-1 先例）。
 	newColumns := map[string]string{
+		// CORE-R1（第 69 轮）迁入登记：原 runMigrations 头部的逐列硬编码检查与
+		// apiKeyColumns/newLbColumns 局部 map 循环——DDL 与默认值逐字沿用原登记。
+		"users.display_name":                  "VARCHAR(100)",
+		"users.is_enabled":                    "BOOLEAN DEFAULT 1",
+		"api_keys.is_enabled":                 "BOOLEAN DEFAULT 1",
+		"api_keys.mcp_enabled":                "INTEGER DEFAULT 0",
+		"api_keys.read_only":                  "INTEGER DEFAULT 0",
+		"api_keys.mcp_ip_whitelist":           "TEXT DEFAULT ''",
+		"lb_rules.domain":                     "VARCHAR(255)",
+		"lb_rules.tls_cert":                   "TEXT",
+		"lb_rules.tls_key":                    "TEXT",
+		"lb_rules.tls_http_redirect":          "BOOLEAN DEFAULT 0",
+		"lb_rules.dynamic_dns":                "BOOLEAN DEFAULT 0",
+		"lb_rules.enable_active_health_check": "BOOLEAN DEFAULT 0",
+		"lb_rules.tls_source":                 "VARCHAR(20) DEFAULT 'manual'",
+		"lb_rules.acme_config_id":             "INTEGER DEFAULT 0",
 		"lb_rules.ca_provider_id":             "INTEGER DEFAULT 0",
 		"lb_rules.caddy_id":                   "VARCHAR(20)",
 		"lb_rules.dns_family":                 "VARCHAR(20) DEFAULT 'ipv4'",
@@ -1270,35 +1239,9 @@ func runMigrations() error {
 	}
 
 	// Drop legacy columns from upstreams if they still exist (no longer used).
-	legacyUpstreamHostHeaderColumns := []string{"host_header"}
-	for _, col := range legacyUpstreamHostHeaderColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
-		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
-				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
-			}
-			log.Printf("Dropped legacy column %s from upstreams", col)
-		}
-	}
-
-	// Drop legacy columns from upstreams if they still exist (no longer used).
-	legacyUpstreamDomainColumns := []string{"domain"}
-	for _, col := range legacyUpstreamDomainColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
-		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
-				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
-			}
-			log.Printf("Dropped legacy column %s from upstreams", col)
-		}
-	}
-
-	// Drop legacy columns from upstreams if they still exist (no longer used).
-	legacyUpstreamDeadColumns := []string{"proxy_protocol", "dns_server"}
+	// CORE-R1（第 69 轮）：host_header/domain/proxy_protocol+dns_server 三个
+	// 逐字相同的独立循环合并为单一登记清单。
+	legacyUpstreamDeadColumns := []string{"host_header", "domain", "proxy_protocol", "dns_server"}
 	for _, col := range legacyUpstreamDeadColumns {
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
 			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
@@ -1455,6 +1398,8 @@ func runMigrations() error {
 	// - lb_rules.ip_acl_mode / ip_acl_list 为规则级 IP 访问控制的遗留列，规则级 IP ACL 早已
 	//   迁入 security_policies（策略级 ip_acl_* 仍在使用），这两列不再被读取或写入。
 	deadColumnDrops := []struct{ table, column string }{
+		{"task_runs", "stage"},              // TASK-L7（第 69 轮）：零写入方死列
+		{"task_runs", "entry_count"},        // TASK-L7（第 69 轮）：零写入方死列
 		{"global_config", "caddy_log_path"}, // 读取但从未使用，日志文件名由渲染层硬编码
 		{"security_block_pages", "status_code"},
 		{"security_custom_rules", "status_code"},
@@ -2126,8 +2071,11 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 	var colCount int
 	for col, dtype := range columns {
 		parts := strings.Split(col, ".")
+		// CORE-U2（第 69 轮）：畸形登记 key 启动期响亮失败——此前静默跳过
+		//（continue），登记笔误（漏点/多段）会让列静默不补、运行时才以
+		// no such column 暴露，与「启动期响亮失败」基调不一致。
 		if len(parts) != 2 {
-			continue
+			return fmt.Errorf("malformed newColumns key %q: want table.column", col)
 		}
 		table, name := parts[0], parts[1]
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, name).Scan(&colCount); err != nil {

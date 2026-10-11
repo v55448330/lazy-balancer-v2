@@ -131,9 +131,6 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time) {
 	if err := db.DB.QueryRow("SELECT auto_update FROM security_crs_version WHERE id=1").Scan(&autoUpdate); err != nil || !autoUpdate {
 		return
 	}
-	if m.IsRunning() {
-		return
-	}
 	next := versionTableNextSlot("security_crs_version", now)
 	var nextStr string
 	if err := db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_crs_version WHERE id=1").Scan(&nextStr); err != nil {
@@ -145,16 +142,23 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time) {
 			return
 		}
 	}
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", next); err != nil {
-		Logf("error", "crs update: failed to record next_update: %v", err)
-	}
 	if nextStr == "" {
-		return // first tick only schedules the first run
+		// 首 tick 只写第一个排程槽（不触发运行）。
+		if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", next); err != nil {
+			Logf("error", "crs update: failed to record next_update: %v", err)
+		}
+		return
 	}
 	// 失败退避机器已撤除（2026-09-25 用户裁定）：重试在任务内完成（run 内
 	// runWithInTaskRetry），next_update 恒为排程槽——失败落定后下一运行=下一排程槽。
-	// StartUpdate 唯一可预期错误是 ErrXXXUpdateRunning——IsRunning 前置守卫与取锁
-	// 之间的微秒窗口被手动更新插队时返回，属正常竞态，静默忽略（手动 run 的终态
-	// 由操作者直接观察）。
-	_, _ = m.StartUpdate("auto", nil)
+	// SEC-C-U2（第 69 轮）：先触发后写槽——StartUpdate 是唯一原子在途门（在途
+	// 或手动插队返回 ErrCRSUpdateRunning，含旧 IsRunning 前置守卫与取锁间的
+	// 微秒竞态窗口），成功后才推进 next_update；旧序「先写槽后触发」被插队时
+	// 空耗排程槽且不回填。
+	if _, err := m.StartUpdate("auto", nil); err != nil {
+		return
+	}
+	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", next); err != nil {
+		Logf("error", "crs update: failed to record next_update: %v", err)
+	}
 }

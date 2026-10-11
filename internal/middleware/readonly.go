@@ -18,9 +18,9 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 		if routePath == "" {
 			routePath = path
 		}
-		switch c.Request.Method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-		default:
+		// SYSMW-R2（第 69 轮 P5）：写方法判定收敛至包级 writeMethods
+		// （middleware.go）——与原 switch 四形态同义集合。
+		if !writeMethods[c.Request.Method] {
 			c.Next()
 			return
 		}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,8 +23,10 @@ func newFakeCaddyServer(t *testing.T, rec *fakeCaddyRecorder) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/load":
-			body := make([]byte, r.ContentLength)
-			_, _ = r.Body.Read(body)
+			// LBH-B-R4（第 69 轮）：io.ReadAll 收满请求体——单次 Read 不保证
+			// 读满（io.Reader 契约），且 ContentLength=-1（chunked）时
+			// make([]byte,-1) 直接 panic。
+			body, _ := io.ReadAll(r.Body)
 			rec.loads = append(rec.loads, string(body))
 			w.WriteHeader(http.StatusOK)
 		case "/config/":

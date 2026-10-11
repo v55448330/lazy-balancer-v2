@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,8 +53,10 @@ func TestCaddyService_ApplyLastKnownGood_sendsFileContentToLoad(t *testing.T) {
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/load" {
+			// LBS-B-L2（第 69 轮）：单次 Read 不保证读满——短读会截断断言
+			// 内容致偶发红，改 io.ReadFull。
 			buf := make([]byte, r.ContentLength)
-			_, _ = r.Body.Read(buf)
+			_, _ = io.ReadFull(r.Body, buf)
 			mu.Lock()
 			bodies = append(bodies, string(buf))
 			mu.Unlock()

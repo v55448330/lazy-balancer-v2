@@ -18,7 +18,9 @@ func TestSecurityTimingLoad_parsesAndTruncates(t *testing.T) {
 	}
 	origPath := securityTimingLogPath
 	securityTimingLogPath = path
-	defer func() { securityTimingLogPath = origPath }()
+	// SEC-B-GAP-U6（第 69 轮）：隔离闭环——map 跨 load 保活（合并语义），
+	// 残留键会泄漏给后续用例；与 missingFile/stageDuration 三例同型归零。
+	defer func() { securityTimingLogPath = origPath; securityTimingTickMap = nil }()
 
 	securityTimingLoad()
 
@@ -86,7 +88,7 @@ func TestSecurityEventsParseTransaction_durationFromTimingHeader(t *testing.T) {
 	}
 	origPath := securityTimingLogPath
 	securityTimingLogPath = path
-	defer func() { securityTimingLogPath = origPath }()
+	defer func() { securityTimingLogPath = origPath; securityTimingTickMap = nil }() // SEC-B-GAP-U6：隔离闭环（同前例）
 	securityTimingLoad()
 
 	rec, err := securityEventsParseTransaction([]byte(auditJSON))

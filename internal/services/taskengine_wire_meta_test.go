@@ -26,6 +26,29 @@ func newWireTestEngine(t *testing.T) *taskengine.Engine {
 	return InitTaskEngine("", t.TempDir()+"/app.log")
 }
 
+// TASK-L1（第 69 轮 P1）：全新安装三安全库自动更新永不排程——引擎化后零槽
+// 恒不到期，首槽武装须由引擎注册路径承担。钉：全新库+默认配置（auto_update
+// 默认开）→ DescribeAll 中 threat/crs/ip2region 三族 NextSlot 全非空。
+func TestTaskEngineWire_SecurityLibrariesFirstSlotArmed(t *testing.T) {
+	te := newWireTestEngine(t)
+
+	descs := te.DescribeAll()
+	for _, id := range []string{"threat", "crs", "ip2region"} {
+		var found bool
+		for _, d := range descs {
+			if d.ID == id {
+				found = true
+				if d.NextSlot == "" {
+					t.Fatalf("task %s NextSlot is zero on fresh install（首槽未武装=永不自动更新）", id)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("task %s not registered", id)
+		}
+	}
+}
+
 // Given 存在 waiting_ca 证书任务且 ca_available_after 非空。
 // When DescribeAll 读取 cert-waiting-ca 元数据。
 // Then NextSlot 非空（P2-③：原 SQL 缺 2 右括号+NULLIF 3 参——恒语法错误，
@@ -99,4 +122,33 @@ func TestTaskEngineWire_MasterSyncShowsServing(t *testing.T) {
 		}
 	}
 	t.Fatal("cluster-sync 未注册")
+}
+
+// TASK-L6（第 69 轮 P2）：wire 元数据钉——8 个 Periodic 生产任务 IntervalSec>0、
+// 4 个 Scheduled 生产任务在启用形态下 NextSlot 可解析（disabled=空串合法）。
+// 缺口形态：手术删除 wire.go 任一生产 Fn 块 → 排程静默停摆且套件全绿。
+func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
+	te := newWireTestEngine(t)
+	metas := te.DescribeAll()
+	if len(metas) == 0 {
+		t.Fatal("DescribeAll empty")
+	}
+	periodic, scheduled := 0, 0
+	for _, m := range metas {
+		switch m.Kind {
+		case "periodic":
+			periodic++
+			if m.IntervalSec <= 0 {
+				t.Fatalf("periodic task %s IntervalSec=%d, want >0（IntervalFn 缺失/被手术删除会静默停摆）", m.ID, m.IntervalSec)
+			}
+		case "scheduled":
+			scheduled++
+		}
+	}
+	if periodic != 8 {
+		t.Fatalf("periodic tasks=%d, want 8（wire.go 注册面）", periodic)
+	}
+	if scheduled != 4 {
+		t.Fatalf("scheduled tasks=%d, want 4（threat/crs/ip2region/auto-backup）", scheduled)
+	}
 }

@@ -284,6 +284,11 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"geoip segment upper bound", "899999", "", "地域拦截"},
 		{"empty input", "", "", "其他"},
 		{"unmatched id", "123456", "something else", "其他"},
+		// SEC-R1（第 69 轮）收敛前语义钉：未列名 3 位前缀的 9xxxxx（CRS 保留段
+		// 余数）在概览视图走 fall-through——msg 命中 IP 黑白名单门仍归 IP 访问
+		// 控制，裸形态归「其他」（阶段视图则整段归 WAF，两视图有意分叉）。
+		{"unlisted crs id with acl msg", "960100", "命中 IP 黑名单", "IP 访问控制"},
+		{"unlisted crs id bare", "960100", "something else", "其他"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

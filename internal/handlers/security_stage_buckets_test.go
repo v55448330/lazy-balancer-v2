@@ -41,6 +41,11 @@ func TestStageCategorizeAttack_buckets(t *testing.T) {
 		// 其他
 		{"empty", "", "", "其他"},
 		{"unmatched", "123456", "something else", "其他"},
+		// SEC-R1（第 69 轮）收敛前语义钉：9 开头 CRS 段（含未列名前缀）整段归
+		// WAF——即使 msg 命中 IP 黑白名单门也不 fall-through（概览视图相反，
+		// 见 TestCategorizeAttack_familyMapping 同 ID 用例）。
+		{"unlisted crs id with acl msg", "960100", "命中 IP 黑名单", "WAF"},
+		{"unlisted crs id bare", "960100", "something else", "WAF"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

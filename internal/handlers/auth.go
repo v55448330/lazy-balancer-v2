@@ -362,13 +362,12 @@ type UpdateCurrentUserRequest struct {
 	// bcrypt 的字节上限 72——x/crypto v0.55+ 超出即返回 ErrPasswordTooLong
 	// (密码策略:8-24 可打印 ASCII,四类字符)
 	Password string `json:"password" binding:"omitempty,max=24"`
-	// M5（用户已批准契约）：提交新密码时必须携带当前密码过共享确认门——此前仅凭
-	// 会话即可改密，劫持会话可直接置换密码把原主锁在门外。仅改昵称不要求。
-	// M5（2026-09 裁定保留，登录后唯一密码确认例外）：提交新密码时必须携带当前密码。
+	// M5（用户已批准契约，2026-09 裁定保留——登录后唯一密码确认例外）：提交新
+	// 密码时必须携带当前密码过共享确认门——此前仅凭会话即可改密，劫持会话可直接
+	// 置换密码把原主锁在门外。仅改昵称不要求。
 	CurrentPassword string `json:"current_password" binding:"omitempty,max=24"`
 }
 
-// 密码策略（2026-09-28 用户裁定，F63-B5a-1）：8-24 个
 // 密码策略（2026-09-28 用户裁定，F63-B5a-1）：8-24 个可打印 ASCII 字符，
 // 仅限数字、大小写字母、特殊字符(可打印 ASCII)——不强制四类全含，
 // 不允许汉字或其他非 ASCII 字符。仅适用于设置/修改/重置——登录不做策略校验

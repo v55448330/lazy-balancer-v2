@@ -79,6 +79,36 @@ func TestSeedDefaultBlockPage_seedsAndRepairsBuiltinPages(t *testing.T) {
 	}
 }
 
+func TestSeedDefaultBlockPage_repairsBuiltinPagesWithNullColumns(t *testing.T) {
+	// Given 带外改库把内置备选页 content/description 置 NULL——SYS-U2（第 69 轮）：
+	// 自愈 UPDATE 的裸 != 比较对 NULL 不命中（NULL != ? 为 NULL），漂移行永不归位；
+	// 与 :510 默认页第 61 轮 P3 修复同口径，须 COALESCE 同防。
+	initBrandingTestDB(t)
+	dataDir := t.TempDir()
+	if _, err := db.DB.Exec(`UPDATE security_block_pages SET content=NULL, description=NULL WHERE id=9001`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When 播种自愈
+	changed, err := SeedDefaultBlockPage(dataDir)
+	if err != nil {
+		t.Fatalf("SeedDefaultBlockPage: %v", err)
+	}
+
+	// Then NULL 漂移行归位库存（内容含 429 标识、描述归位、标志保持）
+	if !changed {
+		t.Fatal("NULL 漂移行未触发自愈写入")
+	}
+	var content, description string
+	var builtin bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(content,''), COALESCE(description,''), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=9001`).Scan(&content, &description, &builtin); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "429 Too Many Requests") || !strings.Contains(description, "限流拦截页面") || !builtin {
+		t.Fatalf("NULL 漂移行未自愈: content=%.40s description=%q builtin=%v", content, description, builtin)
+	}
+}
+
 func TestUpdateSecurityBlockPage_rejectsBuiltinPage(t *testing.T) {
 	// Given 一个内置页面
 	setupSecurityPolicyTestDB(t)

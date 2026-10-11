@@ -115,6 +115,39 @@ func TestBuildHTTPHandleChain_staticSNIStripsHostHeaderPort(t *testing.T) {
 	}
 }
 
+// LBS-A-L2（第 69 轮 P2）：TLS 池 + 空后端域名 + 部分上游配回源域名时，
+// map defaults 的 Host 回退不能用 {http.request.hostport}——该占位符绑原始
+// 请求（replacer.go:128-129），恒为客户端 Host；而现状（无 map）TLS 传输
+// 默认注入 Host=选中上游 hostport（httptransport.go:631-642）。回退须为
+// {http.reverse_proxy.upstream.hostport}（reverseproxy.go:664-668 先于
+// userOps 设置，求值时点可用）。
+func TestBuildHTTPHandleChain_tlsPoolFallbackUsesUpstreamHostport(t *testing.T) {
+	rule := SingleRuleConfig{CaddyID: "lb_tlsfb", Protocol: "http", ListenPort: 443}
+	upstreams := []UpstreamConfig{
+		{Host: "10.0.0.1", Port: 8443, Weight: 1, Enabled: true, Protocol: "https", OriginDomain: "origin-a.example.com"},
+		{Host: "10.0.0.2", Port: 8443, Weight: 1, Enabled: true, Protocol: "https"},
+	}
+
+	chain, err := buildHTTPHandleChain(rule, upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	m := findMapHandler(chain)
+	if m == nil {
+		t.Fatal("map handler must be emitted")
+	}
+	defaults, ok := m["defaults"].([]string)
+	if !ok || len(defaults) != 2 {
+		t.Fatalf("defaults=%#v", m["defaults"])
+	}
+	if defaults[0] != "{http.reverse_proxy.upstream.hostport}" {
+		t.Fatalf("TLS 池 Host 回退=%q, want {http.reverse_proxy.upstream.hostport}（=现状 transport 默认注入值）", defaults[0])
+	}
+	if defaults[1] != "{http.reverse_proxy.upstream.host}" {
+		t.Fatalf("SNI 回退=%q, want {http.reverse_proxy.upstream.host}", defaults[1])
+	}
+}
+
 // Given: 回源域名上游存在且含 https 上游
 // When: 构建链
 // Then: transport.tls.server_name 切换为 {lb.upstream_sni} 占位符

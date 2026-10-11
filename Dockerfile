@@ -10,7 +10,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
-COPY . .
+# INFRA-P1（第 69 轮）：xcaddy 阶段只需三个本地插件目录（--with 引用），
+# 窄化 COPY 面——此前 COPY . . 全仓入镜，任何前端/文档变更即 bust 该层并重跑
+# xcaddy build（缓存挂载兜底仍需分钟级增量编译）。backend 阶段保留全量 COPY
+#（Go 编译需全源码）。
+COPY caddygeoip/ caddygeoip/
+COPY caddydeps/ caddydeps/
+COPY wafiplist/ wafiplist/
 # 双缓存挂载（模块+编译缓存）按 builder 持久（lazy-builder GC 48h）：
 # 根治冷缓存全量重编 42 分钟——命中缓存后增量编译只需数分钟。
 # 3 次重试兜底镜像源偶发供应与 sum.golang.org 校验不符的比特
@@ -106,6 +112,9 @@ RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/au
 # protocol, so use the archive tarball instead of git clone). VERSION marker
 # lets startup reconciliation tell the bundled version from user-updated ones.
 ARG CRS_VERSION=v4.28.0
+# INFRA-R1（第 69 轮）：两段逐字相同的 apk-curl 三次重试循环合并为单个 RUN——
+# 一次装 curl → CRS 下载/校验/解包 → waf.dist 快照 → xdb 下载/校验 → 一次
+# apk del curl；少两层、少一次装删、重试逻辑单份。
 # apk add 包 3 次重试：Alpine CDN 偶发 zstd 解压 I/O error（下载块损坏类
 # 瞬态错误），重试重新拉包即可消化；curl 双源回退逻辑保持不变
 RUN n=0; until apk add --no-cache curl; do \
@@ -122,17 +131,7 @@ RUN n=0; until apk add --no-cache curl; do \
     cp /tmp/crs-src/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
     echo "${CRS_VERSION}" > /app/waf/crs/VERSION && \
     rm -rf /tmp/crs-src /tmp/crs.tar.gz && \
-    apk del curl
-# Pristine copy used to seed an empty bind-mounted /app/waf on first boot
-RUN cp -r /app/waf /app/waf.dist
-# Initial GeoIP database seed (R66: ghfast.top 代理瞬时不可达时回退直连——
-# 构建网络对 raw.githubusercontent 的可达性与代理互为补充，双源重试)
-# apk add 包 3 次重试：同上，兜底 Alpine CDN zstd 解压类瞬态 I/O error
-RUN n=0; until apk add --no-cache curl; do \
-      n=$((n+1)); \
-      if [ "$n" -ge 3 ]; then echo ">>> apk add curl 3 次失败" >&2; exit 1; fi; \
-      echo ">>> apk add curl 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
-    done && \
+    cp -r /app/waf /app/waf.dist && \
     (curl -sfL -o /app/waf.dist/ip2region.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb" || \
      curl -sfL -o /app/waf.dist/ip2region.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb") && \
     echo "6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210  /app/waf.dist/ip2region.xdb" | sha256sum -c - && \
@@ -145,6 +144,7 @@ COPY --from=backend /app/config /app/config
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-EXPOSE 80 443 8000
+# 443/udp = HTTP/3（QUIC）——Caddy 默认启用，EXPOSE 补全声明（INFRA-P2）。
+EXPOSE 80 443 443/udp 8000
 
 ENTRYPOINT ["docker-entrypoint.sh"]

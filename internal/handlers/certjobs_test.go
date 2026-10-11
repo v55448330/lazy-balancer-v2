@@ -777,3 +777,66 @@ func TestListCertJobs_degrades_to_default_expiry_days_when_config_missing(t *tes
 		t.Fatalf("body=%s, want expiring via default 30-day threshold", response.Body.String())
 	}
 }
+
+// （SYS-R5，第 69 轮：自 apikeys_current_test.go 迁回——本族为 cert_jobs 序列化
+// 主题，此前仅因共用 newBackupTestHandlers 夹具寄居于 API Key 文件。）
+func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	validTime := time.Date(2026, time.July, 30, 12, 34, 56, 0, time.UTC)
+	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, expires_at, created_at, updated_at, ca_available_after)
+		VALUES ('lb_valid', 'valid.example', 'issued', ?, ?, ?, ?),
+		       ('lb_null', 'null.example', 'queued', NULL, ?, NULL, NULL)`, validTime, validTime, validTime, validTime, validTime)
+	if err != nil {
+		t.Fatalf("seed certificate jobs: %v", err)
+	}
+	nullID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	validID := nullID - 1
+
+	t.Run("list", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/cert-jobs", nil)
+		h.ListCertJobs(ctx)
+
+		body := recorder.Body.String()
+		if recorder.Code != http.StatusOK || !strings.Contains(body, `"expires_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"updated_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"ca_available_after":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"expires_at":null`) || !strings.Contains(body, `"updated_at":null`) || !strings.Contains(body, `"ca_available_after":null`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, body)
+		}
+		if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
+			t.Fatalf("response leaked sql.NullTime representation: %s", body)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		id   int64
+		want []string
+	}{
+		{name: "valid", id: validID, want: []string{`"expires_at":"2026-07-30T12:34:56Z"`, `"ca_available_after":"2026-07-30T12:34:56Z"`}},
+		{name: "null", id: nullID, want: []string{`"expires_at":null`, `"ca_available_after":null`}},
+	} {
+		t.Run("detail "+tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/cert-jobs/"+strconv.FormatInt(tt.id, 10), nil)
+			ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(tt.id, 10)}}
+			h.GetCertJob(ctx)
+
+			body := recorder.Body.String()
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, body)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("body=%s, want %s", body, want)
+				}
+			}
+			if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
+				t.Fatalf("response leaked sql.NullTime representation: %s", body)
+			}
+		})
+	}
+}

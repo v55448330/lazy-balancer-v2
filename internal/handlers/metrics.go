@@ -211,75 +211,42 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
-// metricsIntervalModifier converts shorthand intervals (1h/6h/24h/7d/30d or
-// "<n>h"/"<n>d") into a SQLite datetime modifier; unknown values fall back to
-// one hour. SQLite has no "1h" syntax and arithmetic concatenation yields NULL.
-func metricsIntervalModifier(interval string) string {
+// parseMetricsInterval 解析 interval 参数（"<n>h"/"<n>d"/"<n>m"，空/非法回退
+// 1h；上限 168h/7d/10080m——F9(第 29 轮审计):保留期固定 7 天）为 SQLite
+// datetime modifier 与窗口秒数。SYS-R1（第 69 轮）：单一解析源——此前
+// metricsIntervalModifier 与 metricsIntervalSeconds 两份手写解析靠注释维持
+// 一致（U8a-P4-1 分桶粒度=窗口秒数/720 必须对应 SQL modifier），收敛后编译期
+// 保证。SQLite 没有 "1h" 语法，算术拼接得 NULL。
+func parseMetricsInterval(interval string) (modifier string, seconds int64) {
 	interval = strings.TrimSpace(strings.ToLower(interval))
 	if interval == "" {
-		return "-1 hours"
+		return "-1 hours", 3600
 	}
 	unit := interval[len(interval)-1:]
 	n := strings.TrimSuffix(interval, unit)
 	value, err := strconv.Atoi(n)
 	if err != nil {
-		return "-1 hours"
+		return "-1 hours", 3600
 	}
 	switch unit {
 	case "h":
 		if value > 168 {
-			value = 168 // F9(第 29 轮审计):保留期固定 7 天——小时上限 7×24
+			value = 168 // F9:保留期固定 7 天——小时上限 7×24
 		}
-		return "-" + strconv.Itoa(value) + " hours"
+		return "-" + strconv.Itoa(value) + " hours", int64(value) * 3600
 	case "d":
 		if value > 7 {
-			value = 7 // F9:保留期固定 7 天——天上限 7(原 30d 超窗静默空)
+			value = 7 // F9:天上限 7(原 30d 超窗静默空)
 		}
-		return "-" + strconv.Itoa(value) + " days"
+		return "-" + strconv.Itoa(value) + " days", int64(value) * 86400
 	case "m":
 		if value > 10080 {
 			value = 10080 // F9:分钟上限 7×24×60
 		}
-		return "-" + strconv.Itoa(value) + " minutes"
+		return "-" + strconv.Itoa(value) + " minutes", int64(value) * 60
 	default:
-		return "-1 hours"
+		return "-1 hours", 3600
 	}
-}
-
-// metricsIntervalSeconds 把 interval 参数换算为窗口秒数（与
-// metricsIntervalModifier 同解析同上限——U8a-P4-1 分桶粒度推导）。
-func metricsIntervalSeconds(interval string) int64 {
-	interval = strings.TrimSpace(strings.ToLower(interval))
-	if interval == "" {
-		return 3600
-	}
-	unit := interval[len(interval)-1:]
-	n := strings.TrimSuffix(interval, unit)
-	value, err := strconv.Atoi(n)
-	if err != nil {
-		return 3600
-	}
-	mult := int64(1)
-	switch unit {
-	case "h":
-		if value > 168 {
-			value = 168
-		}
-		mult = 3600
-	case "d":
-		if value > 7 {
-			value = 7
-		}
-		mult = 86400
-	case "m":
-		if value > 10080 {
-			value = 10080
-		}
-		mult = 60
-	default:
-		return 3600
-	}
-	return int64(value) * mult
 }
 
 func metricsHistoryRange(value string) (string, int, int) {
@@ -371,12 +338,14 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	ruleID := c.Query("rule_id")
 	rawInterval := c.DefaultQuery("interval", "1h")
-	interval := metricsIntervalModifier(rawInterval)
+	// SYS-R1（第 69 轮）：modifier 与窗口秒数取自同一解析（parseMetricsInterval），
+	// 杜绝双解析器漂移（U8a-P4-1 分桶粒度推导的正确性前提）。
+	interval, intervalSeconds := parseMetricsInterval(rawInterval)
 	// U8a-P4-1（第 66 轮）：分桶上限——镜像 get_rule_metrics_history 的窗口
 	// 函数范式（每桶取末行样本，桶数 ≤720）。此前无上限无分桶：默认配置
 	// 7 天窗 30s 间隔可达 ~2 万行 ≈2.5MB 一次性返回（5s 间隔可达 12 万行）。
 	metricsHistoryMaxBuckets := int64(720)
-	bucketSeconds := metricsIntervalSeconds(rawInterval) / metricsHistoryMaxBuckets
+	bucketSeconds := intervalSeconds / metricsHistoryMaxBuckets
 	if bucketSeconds < 1 {
 		bucketSeconds = 1
 	}

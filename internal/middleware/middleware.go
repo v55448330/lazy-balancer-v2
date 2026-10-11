@@ -66,6 +66,14 @@ func (limiter *authenticationAuditLimiter) allow(key string, now time.Time) bool
 			}
 		}
 	}
+	// SYSMW-U1（第 69 轮 P3）：硬上限——上方清扫只清 >=2min 陈旧键，洪水期
+	// 唯一键高速涌入时全部键新鲜、清扫零效果，map 曾无界增长。清扫后仍达
+	// 4096 则丢弃新键：不进 map 也不记审计（审计丢失可接受，内存必须有界），
+	// 与 loginRateBuckets「超限本轮放行不添桶」（R63-U9-P3-2/U6c-P3）同族。
+	// 既有键超窗刷新不占新键额，不受影响。
+	if _, exists := limiter.events[key]; !exists && len(limiter.events) >= 4096 {
+		return false
+	}
 	limiter.events[key] = now
 	return true
 }
@@ -152,51 +160,25 @@ var loginRateBuckets = struct {
 	entries map[string]*loginRateBucket
 }{entries: make(map[string]*loginRateBucket)}
 
+// loginRateLimit 登录族端点限流（10/min/IP：login/ticket-login/mfa-verify/
+// setup×2/oidc-login 共用同一桶）。SYSMW-R1（第 69 轮 P4）：与 clusterRateLimit
+// 桶机制收敛——共享 loginRateBuckets map、1024 容量上限、分钟窗、429 形态全同，
+// 差异仅键形（ip|scope）/限额/文案三个参数；五端点同 scope="login" 共桶语义
+// 不变（内存态无迁移面），oidc/setup 共桶钉测试为回归钉。
 func loginRateLimit() gin.HandlerFunc {
-	const limit = 10
-	return func(c *gin.Context) {
-		now := time.Now()
-		ip := c.ClientIP()
-
-		loginRateBuckets.Lock()
-		bucket, ok := loginRateBuckets.entries[ip]
-		if !ok {
-			// R63-U9-P3-2：容量上限（对齐 securityAuditLimiter 1024——防分布式攻击无界增长）
-			if len(loginRateBuckets.entries) >= 1024 {
-				loginRateBuckets.Unlock()
-				c.Next() // 超限本轮放行（不添桶）——清理周期 1min 内自愈
-				return
-			}
-			bucket = &loginRateBucket{until: now.Add(time.Minute)}
-			loginRateBuckets.entries[ip] = bucket
-		}
-		loginRateBuckets.Unlock()
-
-		bucket.mu.Lock()
-		if now.After(bucket.until) {
-			bucket.count = 0
-			bucket.until = now.Add(time.Minute)
-		}
-		bucket.count++
-		exceeded := bucket.count > limit
-		bucket.mu.Unlock()
-
-		if exceeded {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "登录尝试过于频繁，请稍后再试"})
-			return
-		}
-		c.Next()
-	}
+	return clusterRateLimit("login", 10, "登录尝试过于频繁，请稍后再试")
 }
 
 // clusterRegisterRateLimit 注册端点限流(CL9-N6,第 9 轮审计):唯一公开、
 // 未认证、无速率限制的写端点——每次无效令牌尝试 16KB 体读+条件 UPDATE+
 // 审计 INSERT,互联网可达主节点可被线速打审计库。同威胁模型的 login/setup
 // 均有限流,此处补同等待遇(宽桶:注册属低频管理操作,30/min/IP)。
-// clusterRateLimit 集群公开写端点限流(CL9-N6/CL10-P2-2):register(无效令牌
-// 尝试=16KB 体读+条件 UPDATE+审计 INSERT)与 service-control(匿名可达,
-// 每尝试 BEGIN IMMEDIATE 写锁+恒审计 INSERT,写放大更强)——同威胁模型的
-// login/setup 均有限流,补同等待遇。按端点独立分桶,宽桶(低频管理操作)。
+// clusterRateLimit 是共享桶限流的统一实现（SYSMW-R1 第 69 轮收敛，登录族
+// loginRateLimit 亦为薄包装）：键=ip|scope 按 scope 分桶，桶间独立。
+// 集群公开写端点(CL9-N6/CL10-P2-2):register(无效令牌尝试=16KB 体读+条件
+// UPDATE+审计 INSERT)与 service-control(匿名可达,每尝试 BEGIN IMMEDIATE 写锁+
+// 恒审计 INSERT,写放大更强)——同威胁模型的 login/setup 均有限流,补同等待遇。
+// 按端点独立分桶,宽桶(低频管理操作)。
 func clusterRateLimit(scope string, limit int, message string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		now := time.Now()
@@ -295,9 +277,16 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	r.Use(func(c *gin.Context) {
 		// C403-11:/ui 挂载同源同产物——两侧 assets 前缀都按内容哈希长缓存
 		// (保守保留 /ui 挂载不删)。
-		if strings.HasPrefix(c.Request.URL.Path, "/assets/") || strings.HasPrefix(c.Request.URL.Path, "/ui/assets/") {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/assets/") || strings.HasPrefix(path, "/ui/assets/") {
 			// Vite 产物文件名带内容哈希，可长期缓存
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		} else if path == "/ui" || path == "/ui/" || path == "/ui/index.html" {
+			// SYSMW-U3（第 69 轮 P3）：/ui 壳 index.html 与根路径 GET / 同策略
+			// no-cache——FileServer 直出只有 Last-Modified，浏览器启发式缓存
+			// （10% 规则）会让升级后的旧壳引用已删哈希资产白屏。裸 /ui 实际
+			// 由 gin 尾斜杠 301 重定向先行应答（不经本链），列入仅作防御。
+			c.Header("Cache-Control", "no-cache")
 		}
 		c.Next()
 	})
@@ -502,9 +491,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 			// User + Admin
 			business := v1.Group("")
-			// U7c-68-01：守卫随组级下沉（原 v1 级）——business 组保持原有相对
-			// 次序（step-up 先于 readOnlyGuard，U7c-3 守卫内从节点短路不变）。
-			business.Use(mfaStepUpGuard(), readOnlyGuard(db.DB))
+			// SYSMW-U2（第 69 轮 P3）：business 组次序对称 U7c-68-01——readOnlyGuard
+			// 先于 mfaStepUpGuard：非管理员打管理写端点直见 403 角色真因（旧次序
+			// step-up 在前，验码重试后才见 403，与 admin 组已修的误导链同型）。
+			// 自助路径经 isSelfServicePath 放行后照常进 step-up（428 链不变）；
+			// 从节点 403 先于 428 由只读门直接达成（U7c-3 守卫内短路降级为兜底）。
+			business.Use(readOnlyGuard(db.DB), mfaStepUpGuard())
 			{
 				// 任务监控聚合视图（全员可见；从节点经 readOnlyGuard 只读可用）
 				business.GET("/system/tasks", h.ListSystemTasks)
@@ -654,7 +646,6 @@ func shouldLogRequest(statusCode int, latency time.Duration) bool {
 }
 
 func auditMiddleware() gin.HandlerFunc {
-	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
 		c.Next()
 
@@ -963,8 +954,12 @@ var sensitiveExportGetRoutes = map[string]bool{
 	"/api/v1/auto-backup/:id/download": true,
 }
 
+// writeMethods 写方法集合（SYSMW-R2 第 69 轮 P5 收敛：auditMiddleware/
+// apiKeyReadOnlyGuard/mfaStepUpGuard 三处字面量与 readonly.go 的 switch 四形态
+// 并存）——四处守卫共用同一事实源。包级只读使用，无写入者。
+var writeMethods = map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
+
 func apiKeyReadOnlyGuard() gin.HandlerFunc {
-	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
 		if c.GetString("auth_type") != "api_key" || !c.GetBool("api_key_read_only") {
 			c.Next()
@@ -995,9 +990,10 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 }
 
 // 挂载面：admin/business 两组级（U7c-68-01 自 v1 级下沉）——admin 组内 adminOnly
-// 先于本守卫（非管理员先见 403 角色真因），business 组内本守卫先于 readOnlyGuard
-// （U7c-3 从节点短路在守卫内保持）。v1 级直挂路由（openapi.yaml/caddy/metrics/
-// logout）本就不在覆盖面（GET 非敏感导出、logout 豁免），下沉无行为变化。
+// 先于本守卫（非管理员先见 403 角色真因），business 组内 readOnlyGuard 先于本
+// 守卫（SYSMW-U2 第 69 轮对称同口径；U7c-3 从节点短路保留在守卫内作兜底）。
+// v1 级直挂路由（openapi.yaml/caddy/metrics/logout）本就不在覆盖面（GET 非敏感
+// 导出、logout 豁免），下沉无行为变化。
 
 // mfaStepUpGuard v2.1.8：MFA 写操作验证（全局开关，默认关；R72 五次：60 秒窗）。开启时，启用 MFA
 // 的 JWT 用户执行写操作（readOnlyWriteRoutes 判定源——与只读密钥同一事实源，契约
@@ -1006,7 +1002,6 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 // GET /config/export 与写操作同级（导出含全部用户/密钥哈希的完整备份），一并
 // 纳入 step-up 覆盖。
 func mfaStepUpGuard() gin.HandlerFunc {
-	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
 		path := c.FullPath()
 		if path == "" {
@@ -1124,7 +1119,12 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "节点角色查询失败"})
 			return
 		}
-		if !isMaster {
+		// SYSMW-L1（第 69 轮 P1）：从节点短路排除只读门白名单路径——/cluster/*
+		// 补救端点（forget-pins/promote 等仅能从节点执行，主节点 handler 拒绝）
+		// 若短路 403「请在主节点操作」则前端弹码链（仅 428 触发）断裂、补救
+		// 实质不可达。白名单路径落穿至 428：弹码→verify-step 刷新 mfa_ts→重试
+		// →readOnlyGuard 白名单放行（readonly.go:68-74），链路恢复。
+		if !isMaster && !isReadOnlyGuardWhitelisted(c.Request.URL.Path) {
 			recordAuthenticationRejection(c, "slave_write_denied")
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "从节点只读，请在主节点操作"})
 			return

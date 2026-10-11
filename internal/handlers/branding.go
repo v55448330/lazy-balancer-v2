@@ -528,7 +528,10 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
 			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.id, err)
 		}
-		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (name != ? OR description != ? OR content != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
+		// SYS-U2（第 69 轮）：name/description/content 裸 != 对 NULL 不命中（带外改库
+		// 置 NULL 正是本函数自称要自愈的形态）——COALESCE 同 :510 默认页第 61 轮 P3
+		// 修复口径（name 列 NOT NULL，一并包仅为统一口径）。
+		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (COALESCE(name,'') != ? OR COALESCE(description,'') != ? OR COALESCE(content,'') != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
 			bp.name, bp.desc, stock, models.DefaultBlockPageContentType, bp.id, bp.name, bp.desc, stock, models.DefaultBlockPageContentType)
 		if err != nil {
 			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.id, err)

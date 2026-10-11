@@ -163,6 +163,16 @@ func versionTableSchedule(table string) ([]int, string) {
 	return normalizeScheduleRow(daysRaw, hhmm)
 }
 
+// versionTableNextUpdate 读版本表当前排程槽（空串=未排程）——TASK-L1 同批，
+// 引擎 NextSlotFn 的 DB 直读数据源（不经管理器实例）。
+func versionTableNextUpdate(table string) string {
+	var s string
+	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM ` + table + ` WHERE id=1`).Scan(&s); err != nil {
+		return ""
+	}
+	return s
+}
+
 // versionTableNextSlot 版本表「重排时写什么」的统一答案（UTC 落库串）。
 func versionTableNextSlot(table string, now time.Time) string {
 	days, hhmm := versionTableSchedule(table)
@@ -223,18 +233,28 @@ func SetIP2RegionSchedule(days []int, hhmm string) error {
 
 // SetThreatSchedule 保存威胁库任务级排程（global_config）并重排全部启用源的
 // next_update（2026-09-25 用户裁定：失败源不再保留退避，一律重排到新槽）。
+// LBS-B-U1（第 69 轮）：两步写事务化——跨表双写曾各自独立提交，第二步失败
+// 留「排程已改、槽位照旧」中间态；现失败整体回滚报错。
 func SetThreatSchedule(days []int, hhmm string) error {
 	norm, err := validateScheduleInput(days, hhmm)
 	if err != nil {
 		return err
 	}
 	next := NextScheduledSlot(time.Now().UTC(), norm, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
-	if _, err := db.DB.Exec(`UPDATE global_config SET threat_schedule_days=?, threat_schedule_time=?, updated_at=datetime('now') WHERE id=1`,
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("开启排程事务: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // 已 Commit 后为 no-op
+	if _, err := tx.Exec(`UPDATE global_config SET threat_schedule_days=?, threat_schedule_time=?, updated_at=datetime('now') WHERE id=1`,
 		FormatScheduleDays(norm), hhmm); err != nil {
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1`, next); err != nil {
+	if _, err := tx.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1`, next); err != nil {
 		return fmt.Errorf("重排威胁库源更新计划: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交排程事务: %w", err)
 	}
 	return nil
 }

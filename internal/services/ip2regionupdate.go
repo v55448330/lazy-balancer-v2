@@ -226,9 +226,11 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		}
 		detail := fmt.Sprintf("更新%s（触发：%s）%s", statusLabel, trigger, message)
 		if status == string(IP2RegionStatusFailed) {
-			RecordAuditLog(operator, "更新失败", "IP2Region数据库", detail, "")
+			// SEC-C-U1（第 69 轮）：资源名用归一表规范名「IP数据库」——旧名
+			// 「IP2Region数据库」属归一表旧值，写入即被下次启动迁移重写。
+			RecordAuditLog(operator, "更新失败", "IP数据库", detail, "")
 		} else {
-			RecordAuditLog(operator, "更新", "IP2Region数据库", detail, "")
+			RecordAuditLog(operator, "更新", "IP数据库", detail, "")
 		}
 	}()
 

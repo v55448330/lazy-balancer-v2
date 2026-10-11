@@ -728,8 +728,7 @@ onUnmounted(() => {
 .equal-height-row :deep(.el-card__body) { height: 100%; box-sizing: border-box; }
 .cluster-settings { display: flex; flex-direction: column; gap: 20px; }
 .polling-error-alert { align-self: stretch; }
-.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
-.polling-error-meta { font-size: 12px; }
+/* .polling-error-title/.polling-error-meta 已收敛 main.css（FE-R2） */
 .token-box { display: flex; align-items: center; gap: 12px; margin-top: 4px; padding: 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px dashed var(--border-color, #dcdfe6); }
 .token-expiry { margin-top: 10px; }
 

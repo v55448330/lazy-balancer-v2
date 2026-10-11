@@ -23,16 +23,17 @@ import (
 )
 
 type upstreamChurnRow struct {
-	ID       int
-	Host     string
-	Port     int
-	Weight   int
-	Protocol string
+	ID           int
+	Host         string
+	Port         int
+	Weight       int
+	Protocol     string
+	OriginDomain string
 }
 
 func readUpstreamChurnRows(t *testing.T, ruleID string) []upstreamChurnRow {
 	t.Helper()
-	rows, err := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(protocol,'http')
+	rows, err := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(protocol,'http'), COALESCE(origin_domain,'')
 		FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
 	if err != nil {
 		t.Fatalf("read upstreams: %v", err)
@@ -41,7 +42,7 @@ func readUpstreamChurnRows(t *testing.T, ruleID string) []upstreamChurnRow {
 	var out []upstreamChurnRow
 	for rows.Next() {
 		var row upstreamChurnRow
-		if err := rows.Scan(&row.ID, &row.Host, &row.Port, &row.Weight, &row.Protocol); err != nil {
+		if err := rows.Scan(&row.ID, &row.Host, &row.Port, &row.Weight, &row.Protocol, &row.OriginDomain); err != nil {
 			t.Fatalf("scan upstreams: %v", err)
 		}
 		out = append(out, row)
@@ -163,5 +164,63 @@ func TestUpdateRule_upstreams_incrementalConvergence(t *testing.T) {
 	}
 	if n := upstreamWriteCount(t); n != 3 {
 		t.Fatalf("增删形态累计写 %d 次（应 3=1 UPDATE + 1 DELETE + 1 INSERT）", n)
+	}
+}
+
+// LBH-A-U3（第 69 轮 P3）：churn 钉补新列——origin_domain 必须参与内容比较。
+// 仅改 origin_domain → 原地 UPDATE 一次（保 id）；同值回传 → 零写入。
+// 若内容比较回归剔除 origin_domain，本测试两形状同时失守（变更不落库/
+// 同值误写）。
+func TestUpdateRule_upstreams_originDomainOnlyChangeInPlace(t *testing.T) {
+	// Given：一条 http 规则 + 单上游（真实 PUT 落库取真实 id）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled) VALUES ('lb_orgchurn','orgchurn','','http','orgchurn.example.test',8082,'weighted_round_robin',1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	putRuleBody(t, router, "lb_orgchurn", `{"upstreams":[{"host":"127.0.0.1","port":9100,"weight":1,"enabled":true}]}`)
+	seeded := readUpstreamChurnRows(t, "lb_orgchurn")
+	if len(seeded) != 1 {
+		t.Fatalf("seed rows=%d, want 1", len(seeded))
+	}
+	installUpstreamWriteTally(t)
+
+	// When 1：仅改 origin_domain（身份键 host+port+protocol 不变）
+	putRuleBody(t, router, "lb_orgchurn", `{"upstreams":[{"host":"127.0.0.1","port":9100,"weight":1,"enabled":true,"origin_domain":"origin-a.test"}]}`)
+	// Then 1：原地 UPDATE 一次（tally=1），id 保留，新值落库
+	after1 := readUpstreamChurnRows(t, "lb_orgchurn")
+	if len(after1) != 1 || after1[0].ID != seeded[0].ID {
+		t.Fatalf("origin_domain 变更重建了行：%+v（want id=%d）", after1, seeded[0].ID)
+	}
+	if after1[0].OriginDomain != "origin-a.test" {
+		t.Fatalf("origin_domain 变更未落库：%+v", after1[0])
+	}
+	if n := upstreamWriteCount(t); n != 1 {
+		t.Fatalf("仅改 origin_domain 触发 %d 次上游写（应 1 次=原地 UPDATE）", n)
+	}
+
+	// When 2：同值回传（无 id，内容完全一致）
+	putRuleBody(t, router, "lb_orgchurn", `{"upstreams":[{"host":"127.0.0.1","port":9100,"weight":1,"enabled":true,"origin_domain":"origin-a.test"}]}`)
+	// Then 2：零写入（tally 仍 1）——同值不触发原地 UPDATE
+	if n := upstreamWriteCount(t); n != 1 {
+		t.Fatalf("同值回传触发 %d 次额外表写（应 0 次）", n-1)
+	}
+
+	// When 3：显式 id 回传仅改 origin_domain（钉 updatePathRuleTx 同位的
+	// updateUpstreamTx 内容比较——无 id 路径钉的是 matchStoredUpstream）
+	putRuleBody(t, router, "lb_orgchurn", fmt.Sprintf(`{"upstreams":[{"id":%d,"host":"127.0.0.1","port":9100,"weight":1,"enabled":true,"origin_domain":"origin-b.test"}]}`, seeded[0].ID))
+	// Then 3：原地 UPDATE 一次（累计 tally=2），id 保留，新值落库
+	after3 := readUpstreamChurnRows(t, "lb_orgchurn")
+	if len(after3) != 1 || after3[0].ID != seeded[0].ID {
+		t.Fatalf("显式 id 变更重建了行：%+v（want id=%d）", after3, seeded[0].ID)
+	}
+	if after3[0].OriginDomain != "origin-b.test" {
+		t.Fatalf("显式 id 变更未落库：%+v", after3[0])
+	}
+	if n := upstreamWriteCount(t); n != 2 {
+		t.Fatalf("显式 id 变更累计触发 %d 次上游写（应 2=When1+When3 各 1 次 UPDATE）", n)
 	}
 }

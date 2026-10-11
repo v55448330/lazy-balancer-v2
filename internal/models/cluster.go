@@ -352,7 +352,8 @@ type ClusterSnapshot struct {
 	// 开关/计数/版本全量镜像）。
 	SecurityThreatSources json.RawMessage   `json:"security_threat_sources,omitempty"`
 	SectionHashes         map[string]string `json:"section_hashes,omitempty"`
-	// MasterSyncSwitches 为主节点五类同步开关，随快照下发；从节点跳过判定
+	// MasterSyncSwitches 为主节点三类同步开关（users/rules/security，2026-09-19
+	// 三分类归一；CL-R1 第 69 轮修正「五类」陈旧注释），随快照下发；从节点跳过判定
 	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。
 	MasterSyncSwitches *ClusterSyncSwitchesPayload `json:"master_sync_switches,omitempty"`
 	// LockedUsers（SC-4 修订）：主节点活跃登录锁，独立顶层载荷——不参与任何

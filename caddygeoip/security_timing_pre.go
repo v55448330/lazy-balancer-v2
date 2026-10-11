@@ -2,8 +2,6 @@ package caddygeoip
 
 import (
 	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -33,15 +31,10 @@ func (SecurityTimingPre) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// ServeHTTP 读起始纳秒头记录预检段耗时,原样透传下游。
+// ServeHTTP 记录预检段耗时（键 <timing_id>:pre），原样透传下游。
+// 计时读头逻辑收敛于 recordSecurityTiming（PLUG-R1，security_timing.go）。
 func (h *SecurityTimingPre) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	timingID := r.Header.Get(securityTimingHeader)
-	startNsStr := r.Header.Get(securityTimingStartHeader)
-	if timingID != "" && startNsStr != "" {
-		if startNs, perr := strconv.ParseInt(startNsStr, 10, 64); perr == nil {
-			AppendSecurityTiming(timingID+":pre", (time.Now().UnixNano()-startNs)/1000) // ns→µs
-		}
-	}
+	recordSecurityTiming(r, ":pre")
 	return next.ServeHTTP(w, r)
 }
 

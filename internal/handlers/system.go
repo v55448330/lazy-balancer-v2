@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"os"
@@ -14,6 +13,11 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
+
+// exitProcess 进程退出测试钩（LBH-B-R2 第 69 轮归位：唯一生产消费方是
+// restartProcess 的延迟退出回退，钩随语义属主落户 system.go；M22 前历史
+// 落位于 admintls.go）。生产=os.Exit，测试替换为 channel 信号。
+var exitProcess = os.Exit
 
 // restartProcess 触发进程重启（M22）：优先走 services 统一重启信号——与集群
 // 同步的 Admin TLS 热切换同一触发器（main 注入优雅停机信号，HTTP 优雅关停后
@@ -128,15 +132,8 @@ func (h *Handlers) GetAppLogs(c *gin.Context) {
 	}
 	// SYSB44-3(第 44 轮审计 P5):窗口起点可能落在某行中段——切在多字节
 	// UTF-8 rune 中间时首行残段带无效字节,JSON 编码后以 U+FFFD 污染输出。
-	// 起点非零时丢弃到下一 '\n' 为止的残段(该行本就超出 128KB 窗口语义,
-	// 半行无展示价值;窗口内无 '\n' 则整窗为同一巨行的中段,输出为空)。
-	if startOffset > 0 {
-		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
-			data = data[idx+1:]
-		} else {
-			data = nil
-		}
-	}
+	// 统一口径抽享 tailLogWindow（LBH-B-U1，第 69 轮：GetCaddyLogs 同 helper）。
+	data = tailLogWindow(data, startOffset)
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]

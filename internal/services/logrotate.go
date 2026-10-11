@@ -215,9 +215,9 @@ func RuntimeLogCleanupOnce(logFile string) RuntimeCleanupResult {
 	if database == nil {
 		return result
 	}
-	if err := database.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&months); err != nil || months < 1 {
-		months = 3
-	}
+	// LBS-B-U2（第 69 轮）：统一经 auditRetentionMonths——读取失败回退默认
+	// 3 月 + warn 留痕（曾三消费点三态分裂，此处为静默默认形态）。
+	months = auditRetentionMonths()
 	cutoff := time.Now().AddDate(0, -months, 0)
 
 	dir := filepath.Dir(logFile)
@@ -330,13 +330,9 @@ func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
 	if len(all) == 0 {
 		return result
 	}
-	months := 3
-	if database := db.GetDB(); database != nil {
-		var m int
-		if err := database.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&m); err == nil && m >= 1 {
-			months = m
-		}
-	}
+	// LBS-B-U2（第 69 轮）：统一经 auditRetentionMonths（读取失败回退默认
+	// 3 月 + warn 留痕；nil DB 时静默默认——与既有形态一致）。
+	months := auditRetentionMonths()
 	cutoff := time.Now().AddDate(0, -months, 0)
 	// R63-P2-1：任务日志大小遵循「任务日志大小」配置项（task_log_size_mb，
 	// 默认 10MB——曾硬编码 5MB 与配置/统计三方分裂）。

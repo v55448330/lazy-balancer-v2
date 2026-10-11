@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -39,11 +38,16 @@ var caddyStopCommand = func(adminURL string) *exec.Cmd {
 // caddyPauseFile 与 docker-entrypoint.sh 的 Caddy 监督器协调(F62-28):
 // stopCaddy 建文件 → 监督器见文件不重启(admin 停止是用户意图);
 // startCaddy 删文件 → 监督器 ≤1s 检测并启动;handler 等 admin 就绪。
-const caddyPauseFile = "/tmp/lazy-balancer-caddy-paused"
+// LBH-B-U2（第 69 轮）：改为包级 var 作测试注入缝（caddyProcRoot 同模式）。
+var caddyPauseFile = "/tmp/lazy-balancer-caddy-paused"
 
 // caddySupervisorPidFile 是监督器在位标记(entrypoint 子 shell 启动时写入)——
 // startCaddy 仅在标记在场时走监督器委托路径;测试环境(无监督器)直启不等待。
-const caddySupervisorPidFile = "/tmp/lazy-balancer-caddy-supervisor.pid"
+var caddySupervisorPidFile = "/tmp/lazy-balancer-caddy-supervisor.pid"
+
+// caddySupervisorWaitTimeout 是监督器委托的 admin 就绪等待上限（生产 5s；
+// 测试调小）。LBH-B-U2 测试注入缝。
+var caddySupervisorWaitTimeout = 5 * time.Second
 
 // caddyProcRoot 是进程状态读取的根目录（生产=/proc；测试指向临时伪 /proc 目录）。
 var caddyProcRoot = "/proc"
@@ -106,16 +110,21 @@ func caddyAdminReady(adminURL string) bool {
 
 func startCaddy(adminURL string) error {
 	// F62-28:监督器在场(标记文件)时优先委托(删 pause → 监督器 ≤1s 启动),
-	// 5s 等 admin 就绪;超时或标记不在场(测试环境/监督器死亡)直接 spawn。
+	// 等 admin 就绪;标记不在场(测试环境/监督器死亡)直接 spawn。
 	if _, err := os.Stat(caddySupervisorPidFile); err == nil {
 		_ = os.Remove(caddyPauseFile)
-		supervisorDeadline := time.Now().Add(5 * time.Second)
+		supervisorDeadline := time.Now().Add(caddySupervisorWaitTimeout)
 		for time.Now().Before(supervisorDeadline) {
 			if caddyAdminReady(adminURL) {
 				return nil
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
+		// LBH-B-U2（第 69 轮）：委托超时不落直启——监督器活着但慢启动时
+		// 直启会双启抢 admin/监听端口，败者触发监督器崩溃重拉 churn（或
+		// 假 500：监督器实例其实已正常服务）。pause 已解除，监督器仍在
+		// 重试，返回明确错误即可。
+		return fmt.Errorf("Caddy 监督器在场但 %s 内未拉起就绪的 Caddy（pause 已解除，监督器仍在重试，请稍后复查或检查容器日志）", caddySupervisorWaitTimeout)
 	}
 	cmd := caddyRunCommand()
 	cmd.Stdout = os.Stdout
@@ -222,14 +231,15 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.TrustedProxyEnabled, &cfg.TrustedProxyRanges, &cfg.TrustedProxyHeaders, &cfg.TrustedProxyStrict,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
-	// CL37-P5-1(第 37 轮审计):展示口径与运行时 clamp 对齐(<10 → 60)。
-	if cfg.SyncInterval < 10 {
-		cfg.SyncInterval = 60
-	}
-
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取全局配置失败: " + err.Error()})
 		return
+	}
+	// CL37-P5-1(第 37 轮审计):展示口径与运行时 clamp 对齐(<10 → 60)。
+	// LBH-B-U3（第 69 轮）：钳位移到 err 判定之后——err 非 nil 时 cfg 为零值
+	// 废弃对象，先行钳位是对废弃对象的无意义写（顺序误导读者）。
+	if cfg.SyncInterval < 10 {
+		cfg.SyncInterval = 60
 	}
 	// C-03（2026-09-05 证书域审计裁定）：global_config.dns_credentials 为遗留字段
 	// （签发链唯一凭证来源是 certificate_configs.dns_credentials，前端零消费，
@@ -794,17 +804,21 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
 }
 
+// caddyLogPaths 四份 Caddy 日志的固定路径（写入端写死 /app/logs，与 LOG_FILE
+// 无关——见 logstats.go logPaths 注释）。包级 var 支持测试注入
+// （wafAuditLogFile/defaultRuntimeLogPath 同模式，LBH-B-U1 第 69 轮）。
+var caddyLogPaths = map[string]string{
+	"runtime": "/app/logs/caddy.log",
+	"tls":     "/app/logs/caddy-tls.log",
+	"server":  "/app/logs/caddy-server.log",
+	"proxy":   "/app/logs/caddy-proxy.log",
+}
+
 func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 	logType := c.DefaultQuery("type", "runtime")
-	pathMap := map[string]string{
-		"runtime": "/app/logs/caddy.log",
-		"tls":     "/app/logs/caddy-tls.log",
-		"server":  "/app/logs/caddy-server.log",
-		"proxy":   "/app/logs/caddy-proxy.log",
-	}
-	logPath, ok := pathMap[logType]
+	logPath, ok := caddyLogPaths[logType]
 	if !ok {
-		logPath = pathMap["runtime"]
+		logPath = caddyLogPaths["runtime"]
 	}
 
 	const maxBytes = 128 * 1024
@@ -842,12 +856,10 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志文件失败: " + err.Error()})
 		return
 	}
-
-	if startOffset > 0 {
-		if idx := bytes.Index(data, []byte("\n")); idx != -1 {
-			data = data[idx+1:]
-		}
-	}
+	// LBH-B-U1（第 69 轮）：尾窗首行残段截断统一走 tailLogWindow（SYSB44-3
+	// 口径——窗口内无 '\n' 时整窗为同一巨行中段，输出为空；此前此处分叉
+	// 返回原始中段，多字节 rune 切断处 U+FFFD 污染）。
+	data = tailLogWindow(data, startOffset)
 
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxLines {
@@ -1133,9 +1145,16 @@ func validateAccessLogFormat(format string) error {
 	if err := renameAlias([]string{"request>uri"}, []string{"uri_path"}); err != nil {
 		return err
 	}
+	// LBH-B-L1（第 69 轮 P2）：祖先前缀同样命中——request>headers 或 request
+	// 整树改名会连带移走 User-Agent（与 :1082-1088 fieldKept 的祖先删除、
+	// :1111-1114 renameAlias 的祖先前缀同口径）。
 	for _, r := range rules {
-		if r.path == "request>headers>User-Agent" && r.action != "" && r.action != "delete" {
-			return fmt.Errorf("User-Agent 字段不能重命名（request>headers>User-Agent），UA 统计依赖固定字段名")
+		if r.action == "" || r.action == "delete" {
+			continue
+		}
+		const uaPath = "request>headers>User-Agent"
+		if r.path == uaPath || strings.HasPrefix(uaPath, r.path+">") {
+			return fmt.Errorf("User-Agent 字段不能重命名（%s），UA 统计依赖固定字段名", r.path)
 		}
 	}
 	return nil

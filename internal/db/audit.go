@@ -113,36 +113,68 @@ var auditVocabularyRenames = []struct {
 	{"", "", "HTTPS 访问", "基础设置"},
 }
 
-func migrateAuditVocabulary() {
+// IsRetiredAuditVocabulary 判定 (action, resource) 字面量对是否命中归一表旧侧
+// （SEC-C-U1 ④，第 69 轮）：oldAction/oldResource 空串=该维度通配。写点字面量对
+// 命中即应改用规范名——词数门只查词数不查规范名，「IP2Region数据库」=2 词曾静默
+// 放行；注意归一表多为动作作用域条目（如 重载+Caddy配置→Caddy服务），裸资源名
+// 判定会误伤合法写点，必须成对判定。
+func IsRetiredAuditVocabulary(action, resource string) bool {
 	for _, r := range auditVocabularyRenames {
-		var sets, wheres []string
-		var setArgs, whereArgs []any
-		if r.newAction != "" {
-			sets = append(sets, "action=?")
-			setArgs = append(setArgs, r.newAction)
-		}
-		if r.oldAction != "" {
-			wheres = append(wheres, "action=?")
-			whereArgs = append(whereArgs, r.oldAction)
-		}
-		if r.newResource != "" {
-			sets = append(sets, "resource=?")
-			setArgs = append(setArgs, r.newResource)
-		}
-		if r.oldResource != "" {
-			wheres = append(wheres, "resource=?")
-			whereArgs = append(whereArgs, r.oldResource)
-		}
-		query := "UPDATE audit_log SET " + strings.Join(sets, ", ") + " WHERE " + strings.Join(wheres, " AND ")
-		res, err := AuditDB.Exec(query, append(setArgs, whereArgs...)...)
-		if err != nil {
-			log.Printf("audit vocabulary migration failed (%s): %v", query, err)
+		if r.oldAction != "" && r.oldAction != action {
 			continue
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("audit vocabulary migration: %d rows normalized (%s)", n, query)
+		if r.oldResource != "" && r.oldResource != resource {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// CORE-U1（第 69 轮）：归一表存在链式条目（如 ("重载","Caddy 配置") 单趟只能
+// 命中对象改名条目变 ("重载","Caddy配置")——联动条目在表序上已越过），单趟
+// 循环需两次启动才收敛——循环至不动点（整趟零改动）使单次启动归一终态。
+// 趟数上限=条目数+1：无环表每趟严格推进，超限即未来编辑引入环，WARN 防御
+// 死循环（不改写结果，残留中间态词条下次启动继续收敛）。
+func migrateAuditVocabulary() {
+	maxPasses := len(auditVocabularyRenames) + 1
+	for range maxPasses {
+		changed := false
+		for _, r := range auditVocabularyRenames {
+			var sets, wheres []string
+			var setArgs, whereArgs []any
+			if r.newAction != "" {
+				sets = append(sets, "action=?")
+				setArgs = append(setArgs, r.newAction)
+			}
+			if r.oldAction != "" {
+				wheres = append(wheres, "action=?")
+				whereArgs = append(whereArgs, r.oldAction)
+			}
+			if r.newResource != "" {
+				sets = append(sets, "resource=?")
+				setArgs = append(setArgs, r.newResource)
+			}
+			if r.oldResource != "" {
+				wheres = append(wheres, "resource=?")
+				whereArgs = append(whereArgs, r.oldResource)
+			}
+			query := "UPDATE audit_log SET " + strings.Join(sets, ", ") + " WHERE " + strings.Join(wheres, " AND ")
+			res, err := AuditDB.Exec(query, append(setArgs, whereArgs...)...)
+			if err != nil {
+				log.Printf("audit vocabulary migration failed (%s): %v", query, err)
+				continue
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				changed = true
+				log.Printf("audit vocabulary migration: %d rows normalized (%s)", n, query)
+			}
+		}
+		if !changed {
+			return
 		}
 	}
+	log.Printf("audit vocabulary migration did not converge after %d passes (rename table cycle?)", maxPasses)
 }
 
 // R45 F-2: 启动迁移跑在 InitializeAuditDB 之前，且 db 不能反向依赖

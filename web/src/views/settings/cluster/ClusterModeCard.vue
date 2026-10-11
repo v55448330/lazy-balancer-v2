@@ -218,9 +218,7 @@ const submitRegistration = async (): Promise<void> => {
   flex-direction: column;
   gap: 10px;
 }
-</style>
 
-<style scoped>
 .card-header { display: flex; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .mode-row { display: flex; margin-bottom: 18px; }

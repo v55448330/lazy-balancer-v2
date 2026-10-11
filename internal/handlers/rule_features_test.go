@@ -930,3 +930,72 @@ func initializeRuleFeatureTestDB(t *testing.T) *sql.DB {
 	})
 	return database
 }
+
+// LBH-A-P1（第 69 轮 P3）：预校验渲染输入必须回填本日新特性列——
+// toPathRuleConfigs 此前丢 response_mode/response_status/response_body/
+// response_content_type/redirect_to 五列，EnableRule/启动聚合预检把直返/301
+// 路径规则当转发链渲染，与真实渲染（static_response 单 handler 路由）分叉。
+func TestToPathRuleConfigs_carriesResponseFields(t *testing.T) {
+	// Given：直返 + 301 两条路径规则（全五列非默认）
+	input := []models.PathRule{
+		{SortOrder: 0, MatchType: "exact", Path: "/maint", ResponseMode: "static",
+			ResponseStatus: 503, ResponseBody: "维护中", ResponseContentType: "text/html"},
+		{SortOrder: 1, MatchType: "prefix", Path: "/old", ResponseMode: "redirect",
+			RedirectTo: "https://new.example.com/landing"},
+	}
+
+	// When
+	configs := toPathRuleConfigs(input)
+
+	// Then：五列全保真
+	if len(configs) != 2 {
+		t.Fatalf("configs=%d, want 2", len(configs))
+	}
+	if configs[0].ResponseMode != "static" || configs[0].ResponseStatus != 503 ||
+		configs[0].ResponseBody != "维护中" || configs[0].ResponseContentType != "text/html" {
+		t.Fatalf("static 路径规则五列丢失: %+v", configs[0])
+	}
+	if configs[1].ResponseMode != "redirect" || configs[1].RedirectTo != "https://new.example.com/landing" {
+		t.Fatalf("redirect 路径规则五列丢失: %+v", configs[1])
+	}
+}
+
+// LBH-A-P1 同族：预检 SingleRuleConfig 回填 origin_domain（逐上游回源域名，
+// 真实渲染经 map 处理器消费）与 host_header/health_check_host/enable_compress
+// 族；TLS 材料/开关为有意保留的空口子集（GenerateSingleRuleCaddyConfig 单规则
+// 形态约定，钉零防误回填）。
+func TestPrecheckRuleConfig_carriesNewFeatureColumns(t *testing.T) {
+	// Given
+	rule := models.LbRule{
+		CaddyID: "lb_precheck", Protocol: "http", Domain: "precheck.test", ListenPort: 8080,
+		Strategy: "weighted_round_robin", HostHeader: "backend.example", HealthCheckHost: "probe.example",
+		EnableCompress: true, CompressTypes: "zstd",
+		Upstreams: []models.Upstream{
+			{Host: "10.0.0.1", Port: 8443, Weight: 1, Enabled: true, Protocol: "https", OriginDomain: "origin.example"},
+		},
+		PathRules: []models.PathRule{
+			{SortOrder: 0, MatchType: "exact", Path: "/ping", ResponseMode: "static", ResponseStatus: 200, ResponseBody: "pong"},
+		},
+	}
+
+	// When
+	config := precheckRuleConfig(rule)
+
+	// Then：新特性列全保真
+	if len(config.Upstreams) != 1 || config.Upstreams[0].OriginDomain != "origin.example" {
+		t.Fatalf("upstreams 丢 origin_domain: %+v", config.Upstreams)
+	}
+	if config.HostHeader != "backend.example" || config.HealthCheckHost != "probe.example" {
+		t.Fatalf("丢 host_header/health_check_host: %q/%q", config.HostHeader, config.HealthCheckHost)
+	}
+	if !config.EnableCompress || config.CompressTypes != "zstd" {
+		t.Fatalf("丢压缩配置: %v/%q", config.EnableCompress, config.CompressTypes)
+	}
+	if len(config.PathRules) != 1 || config.PathRules[0].ResponseMode != "static" || config.PathRules[0].ResponseBody != "pong" {
+		t.Fatalf("丢路径规则直返列: %+v", config.PathRules)
+	}
+	// 有意子集钉零：TLS 材料不随预检渲染（单规则形态约定，勿回填）。
+	if config.EnableTLS || config.TLSCert != "" || config.TLSKey != "" {
+		t.Fatalf("预检输入不应携带 TLS 形态: enable_tls=%v", config.EnableTLS)
+	}
+}

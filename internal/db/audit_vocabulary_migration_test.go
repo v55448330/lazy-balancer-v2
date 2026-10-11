@@ -131,6 +131,31 @@ func TestMigrateAuditVocabulary_convertsEveryLegacyEntry(t *testing.T) {
 	}
 }
 
+func TestMigrateAuditVocabulary_convergesChainedRenameInOnePass(t *testing.T) {
+	// Given 链式组合行（CORE-U1，第 69 轮）：("重载","Caddy 配置") 须先经对象改名
+	// 条目变 ("重载","Caddy配置")、再经联动条目变 ("重载","Caddy服务")——单趟循环
+	// 下联动条目已越过，需两次启动才收敛；不动点循环要求单次调用即归一终态。
+	auditDB := openVocabularyTestAuditDB(t)
+	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', '重载', 'Caddy 配置', '', ''), ('system', '重载失败', 'Caddy 配置', '', '')"); err != nil {
+		t.Fatalf("seed chained rows: %v", err)
+	}
+
+	// When：单次调用
+	migrateAuditVocabulary()
+
+	// Then：链式组合一次收敛到终态
+	got := auditVocabularySnapshot(t, auditDB)
+	want := [][2]string{{"重载", "Caddy服务"}, {"重载失败", "Caddy服务"}}
+	if len(got) != len(want) {
+		t.Fatalf("audit rows=%d, want %d", len(got), len(want))
+	}
+	for i, pair := range got {
+		if pair != want[i] {
+			t.Fatalf("row %d = (%q,%q), want (%q,%q)（链式改名须单次启动收敛）", i+1, pair[0], pair[1], want[i][0], want[i][1])
+		}
+	}
+}
+
 // TestMigrateAuditVocabulary_newValuesHaveWritePoints 防「迁移目标与写点漂移」：
 // 每条映射的新值必须作为字面量出现在 internal/ 非测试源码中（即存在真实审计
 // 写点），否则迁移会把存量行归并到一个永不产生新事件的幽灵词条。迁移表自身

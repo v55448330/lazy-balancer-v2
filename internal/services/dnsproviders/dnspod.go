@@ -40,7 +40,10 @@ func (d *DNSPod) CredentialFieldOptions(field string) []string {
 	return nil
 }
 
-func (d *DNSPod) buildCredentialsJSON(creds map[string]string) (string, error) {
+// buildCredentials 校验并产出规范凭据 map（LBS-B-R3，第 69 轮：内核直返
+// map——曾先 Marshal 成 JSON 串、BuildCredentialsJSON 再 Unmarshal 回 map
+// 的序列化往返，仅为类型转换且 Unmarshal 不可能失败）。
+func (d *DNSPod) buildCredentials(creds map[string]string) (map[string]string, error) {
 	mode := creds["auth_mode"]
 	if mode == "" {
 		if creds["secret_id"] != "" && creds["secret_key"] != "" {
@@ -53,47 +56,47 @@ func (d *DNSPod) buildCredentialsJSON(creds map[string]string) (string, error) {
 	switch mode {
 	case "tencent_cloud":
 		if creds["secret_id"] == "" || creds["secret_key"] == "" {
-			return "", fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
+			return nil, fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
 		}
 		// CERT40-3:canonical 不再携带 api_token 拼接值——tencent 模式消费端
 		// (factory.go)只读 secret_id/secret_key,拼接串是零消费死字段。
-		data, _ := json.Marshal(map[string]string{
+		return map[string]string{
 			"mode":       "tencent",
 			"secret_id":  creds["secret_id"],
 			"secret_key": creds["secret_key"],
-		})
-		return string(data), nil
+		}, nil
 	case "dnspod":
 		if creds["app_id"] == "" || creds["app_token"] == "" {
-			return "", fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
+			return nil, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 		}
-		data, _ := json.Marshal(map[string]string{
+		return map[string]string{
 			"mode":      "dnspod",
 			"api_token": creds["app_id"] + "," + creds["app_token"],
-		})
-		return string(data), nil
+		}, nil
 	}
-	return "", fmt.Errorf("请选择认证方式")
+	return nil, fmt.Errorf("请选择认证方式")
 }
 
 func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
-	raw, err := d.buildCredentialsJSON(creds)
+	m, err := d.buildCredentials(creds)
 	if err != nil {
 		return nil, err
 	}
-	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, err
+	result := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		result[k] = v
 	}
 	return result, nil
 }
 
 func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
-	rawJSON, err := d.buildCredentialsJSON(creds)
+	m, err := d.buildCredentials(creds)
 	if err != nil {
 		return err
 	}
-	provider, err := newDNSProviderFromCredentials(rawJSON)
+	// Validate 路径消费 JSON 串形态（factory 契约）——本侧自行 Marshal。
+	data, _ := json.Marshal(m)
+	provider, err := newDNSProviderFromCredentials(string(data))
 	if err != nil {
 		return err
 	}

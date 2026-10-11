@@ -22,25 +22,6 @@ func GetDefaultCAProvider() (int, error) {
 	return int(id.Int64), nil
 }
 
-// SetDefaultCAProvider persists the default CA provider ID in global_config.
-func SetDefaultCAProvider(id int) error {
-	res, err := DB.Exec(
-		"UPDATE global_config SET default_ca_provider_id = ?, updated_at = datetime('now') WHERE id = 1",
-		id,
-	)
-	if err != nil {
-		return fmt.Errorf("set default CA provider: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check default CA provider update: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("global_config row not found")
-	}
-	return nil
-}
-
 // IsCAProviderEnabled reports whether a CA provider with the given ID exists and is enabled.
 func IsCAProviderEnabled(id int) (bool, error) {
 	var enabled bool

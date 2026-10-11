@@ -520,8 +520,7 @@ onUnmounted(() => {
 }
 .cert-jobs-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }
-.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
-.polling-error-meta { font-size: 12px; }
+/* .polling-error-title/.polling-error-meta 已收敛 main.css（FE-R2） */
 .cert-jobs-table :deep(.el-table__cell) {
   vertical-align: middle;
 }

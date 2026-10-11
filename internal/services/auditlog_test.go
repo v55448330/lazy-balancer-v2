@@ -2,6 +2,8 @@ package services
 
 import (
 	"database/sql"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,5 +171,56 @@ func TestAuditUserPart(t *testing.T) {
 	}
 	if got := AuditUserPart(7, ""); got != "用户 7" {
 		t.Errorf("AuditUserPart(7,\"\")=%q, want 用户 7 (empty username fallback)", got)
+	}
+}
+
+// LBS-B-U2（第 69 轮 P3）：「审计保留月数」读取失败三态分裂统一——
+// CleanupAuditLogs 读取失败（含 global_config 行缺失 ErrNoRows）回退默认
+// 3 月继续清理 + warn 留痕（曾静默 return 0：audit-retention 任务每 24h
+// 报「清理 0 条」而 audit_log 永久不清，三消费点中最坏分支）。
+func TestCleanupAuditLogs_fallsBackToDefaultOnMissingConfigRow(t *testing.T) {
+	// Given global_config 行缺失（ErrNoRows 形态）+ 超 3 月的陈旧审计行
+	oldDB, oldAuditDB := db.DB, db.AuditDB
+	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB, db.AuditDB = mainDB, auditDB
+	t.Cleanup(func() {
+		db.DB, db.AuditDB = oldDB, oldAuditDB
+		mainDB.Close()
+		auditDB.Close()
+	})
+	if _, err := mainDB.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY CHECK (id = 1), audit_retention_months INTEGER DEFAULT 3)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
+		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditDB.Exec(`INSERT INTO audit_log (username, action, resource, created_at) VALUES ('u','登录','认证','2020-01-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	oldWriter := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	// When
+	n := CleanupAuditLogs()
+
+	// Then 默认 3 月口径删除陈旧行（曾静默跳过）+ warn 留痕
+	if n != 1 {
+		t.Fatalf("CleanupAuditLogs()=%d, want 1（默认 3 月回退清理）", n)
+	}
+	if !strings.Contains(buf.String(), "审计保留月数") {
+		t.Fatalf("读取失败应 warn 留痕，日志=%q", buf.String())
 	}
 }

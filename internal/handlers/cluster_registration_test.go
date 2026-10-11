@@ -91,3 +91,30 @@ func TestRegisterClusterNode_invalid_token_audit_detail_is_generic(t *testing.T)
 		t.Fatalf("audit detail must not contain attacker input: %q", detail)
 	}
 }
+
+// （SYS-R5，第 69 轮：自 apikeys_current_test.go 迁回——本族为集群注册校验
+// 主题，此前仅因共用 newBackupTestHandlers 夹具寄居于 API Key 文件。）
+func TestRegisterClusterNodeRejectsInvalidAddressAndPort(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid IP", body: `{"token":"token","name":"node","ip_address":"not-an-ip","port":8000}`},
+		{name: "negative port", body: `{"token":"token","name":"node","ip_address":"127.0.0.1","port":-1}`},
+		{name: "port too large", body: `{"token":"token","name":"node","ip_address":"127.0.0.1","port":65536}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/cluster/register", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			h.RegisterClusterNode(ctx)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}

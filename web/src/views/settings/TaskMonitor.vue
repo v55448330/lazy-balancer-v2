@@ -297,6 +297,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDate } from '@/utils/date'
 import { Refresh, PieChart as PieChartIcon, DataLine, List, Monitor, Lock, Box, Timer } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -320,7 +321,8 @@ interface TaskInfo {
 interface RunRecord {
   id: number; task_id: string; family: string; trigger: string; operator?: string; status: string
   started_at: string; finished_at: string; duration_ms: number
-  stage?: string; message?: string; entry_count?: number
+  // TASK-L7（第 69 轮）：stage/entry_count 恒零死列已随后端删除——不再声明。
+  message?: string
 }
 
 const authStore = useAuthStore()
@@ -358,8 +360,9 @@ const polling = usePollingTask(async () => {
 })
 // ===== 证书队列状态（独立卡——非任务族） =====
 interface CertJobRow { id: number; domain: string; status: string; updated_at?: string | null; ca_provider_name?: string }
-const certQueue = ref<{ loaded: boolean; queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[] }>({
-  loaded: false, queued: 0, running: 0, waiting: 0, total: 0, jobs: [],
+// FE-D3（第 69 轮）：certQueue.loaded 死字段删除（写字段零消费方）。
+const certQueue = ref<{ queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[] }>({
+  queued: 0, running: 0, waiting: 0, total: 0, jobs: [],
 })
 const fetchCertQueue = async () => {
   try {
@@ -368,14 +371,13 @@ const fetchCertQueue = async () => {
     const live = (res.data?.list || []).filter(j => !['issued', 'failed', 'disabled'].includes(j.status))
     const count = (pred: (j: CertJobRow) => boolean) => live.filter(pred).length
     certQueue.value = {
-      loaded: true,
       total: live.length,
       queued: count(j => ['queued', 'pending'].includes(j.status)),
       running: live.length - count(j => ['queued', 'pending'].includes(j.status)),
       waiting: count(j => j.status === 'waiting_ca'),
       jobs: live.slice(0, 6),
     }
-  } catch { certQueue.value.loaded = true }
+  } catch { /* 静默：独立卡数据下一轮轮询自愈 */ }
 }
 
 // ===== 概览统计 =====
@@ -570,15 +572,9 @@ const statusResultLabel = (r: string): string =>
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
   r === 'success' || r === 'issued' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 
-const fmtTime = (s?: string) => {
-  if (!s) return ''
-  const t = new Date(s)
-  if (!isNaN(t.getTime()) && /\d{4}-\d{2}-\d{2}T/.test(s)) {
-    const p = (n: number) => String(n).padStart(2, '0')
-    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`
-  }
-  return s.replace('T', ' ').replace(/\.\d+/g, '').replace(/Z$/, '')
-}
+// FE-U5（第 69 轮）：委托 formatDate（配置时区单源）——此前 new Date 浏览器本地
+// 时区格式化，与全站口径分叉；非法串回退 formatDate 的 string-fallback 透传。
+const fmtTime = (s?: string) => formatDate(s)
 const fmtDuration = (ms?: number) => {
   if (!ms || ms <= 0) return '—'
   if (ms < 1000) return `${ms}ms`
@@ -668,6 +664,5 @@ const fmtDuration = (ms?: number) => {
 .tm-log-stats { display: flex; align-items: center; margin-bottom: 10px; }
 .tm-log-container { max-height: 60vh; overflow: auto; background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #1e293b; }
 .tm-log-content { margin: 0; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
-.tm-log-stage { font-size: 11px; color: var(--el-text-color-secondary); margin-bottom: 2px; text-transform: uppercase; letter-spacing: .5px; }
 </style>
 

@@ -185,3 +185,43 @@ func TestMFAStepUpGuard_slaveWriteRejected403Before428(t *testing.T) {
 		t.Fatalf("slave MFA write: got %d, want 403（只读真因不得被 428 遮蔽）", rec.Code)
 	}
 }
+
+// SYSMW-L1（第 69 轮 P1）：从节点短路 403 未排除只读门白名单——/cluster/*
+// 补救端点（ForgetClusterPins 语义上只能在从节点执行，主节点 handler 拒绝）
+// 收误导性 403「请在主节点操作」，前端弹码链（仅 428 触发）断裂。
+// 钉：从节点+守卫开+陈旧 mfa_ts 下白名单路径得 428（弹码→验码→落白名单放行）。
+func TestMFAStepUpGuard_slaveWhitelistedClusterRemedyGets428(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+
+	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0, mfa_write_guard=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("UPDATE global_config SET is_master=1, mfa_write_guard=0 WHERE id=1") })
+
+	username := fmt.Sprintf("slave-w%d", time.Now().UnixNano())
+	res, err := db.DB.Exec("INSERT INTO users (username,password_hash,role,is_enabled,password_version) VALUES (?,?,'admin',1,0)", username, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1 WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	claims := jwt.MapClaims{
+		"user_id": float64(id), "username": username, "pwd_ver": float64(0),
+		"jti": fmt.Sprintf("j%d", time.Now().UnixNano()), "exp": time.Now().Add(time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 白名单路径（从节点补救通道）→ 428 弹码，而非误导性 403
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/forget-pins", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("slave whitelisted remedy write: got %d, want 428（从节点集群补救通道须保持弹码链可达）", rec.Code)
+	}
+}

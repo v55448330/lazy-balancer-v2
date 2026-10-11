@@ -117,3 +117,62 @@ func TestMFAStepUpGuard_adminOnly403BeforeStepUp428(t *testing.T) {
 		t.Fatalf("non-admin POST /users: got %d, want 403（adminOnly 真因不得被 428 遮蔽）", rec.Code)
 	}
 }
+
+// SYSMW-U2（第 69 轮 P3）：business 组守卫次序对称 U7c-68-01——非管理员打
+// business 组管理写端点须先见 readOnlyGuard 的 403 角色真因，而非
+// mfaStepUpGuard 的 428（旧次序 step-up 在前：用户验码重试后才见
+// 「非管理员用户只读」，与 admin 组已修的误导链同型）。
+func TestMFAStepUpGuard_businessWrite403BeforeStepUp428(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	const jwtSecret = "test-secret"
+
+	// Given：启用 MFA 的普通用户（非 admin）、写守卫开启、主节点（库默认）
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_version,mfa_enabled)
+		VALUES (301,'biz-order-user','x','user',1,0,1)`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET mfa_write_guard=1 WHERE id=1"); err != nil {
+		t.Fatalf("enable write guard: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("UPDATE global_config SET mfa_write_guard=0 WHERE id=1") })
+
+	mint := func(mfaTs int64) string {
+		t.Helper()
+		claims := jwt.MapClaims{
+			"user_id": float64(301), "username": "biz-order-user", "pwd_ver": float64(0),
+			"jti": fmt.Sprintf("bizorderj%d", time.Now().UnixNano()), "exp": time.Now().Add(time.Hour).Unix(),
+		}
+		if mfaTs > 0 {
+			claims["mfa_ts"] = float64(mfaTs)
+		}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(jwtSecret))
+		if err != nil {
+			t.Fatalf("sign token: %v", err)
+		}
+		return token
+	}
+	do := func(method, path, token, body string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// When/Then 1（目标形状）：无 mfa_ts（428 条件同样成立）打 business 管理写
+	// 端点 → 403 角色真因必须先于 step-up（旧次序此处为 428）
+	if code := do(http.MethodPost, "/api/v1/rules", mint(0), `{}`); code != http.StatusForbidden {
+		t.Fatalf("non-admin POST /rules without mfa_ts: got %d, want 403（角色真因不得被 428 遮蔽）", code)
+	}
+	// When/Then 2（回归形状）：验码后（mfa_ts 新鲜）仍 403——角色是终态真因，
+	// 与 step-up 窗口无关（新旧次序同为 403）。
+	if code := do(http.MethodPost, "/api/v1/rules", mint(time.Now().Unix()), `{}`); code != http.StatusForbidden {
+		t.Fatalf("non-admin POST /rules with fresh mfa_ts: got %d, want 403", code)
+	}
+	// When/Then 3（回归形状）：自助写次序不变——readOnlyGuard 自助放行后照常
+	// 进 step-up，陈旧 mfa_ts 仍 428（新旧次序同为 428）。
+	if code := do(http.MethodPatch, "/api/v1/users/me", mint(0), `{"display_name":"X"}`); code != http.StatusPreconditionRequired {
+		t.Fatalf("self-service PATCH /users/me without mfa_ts: got %d, want 428（自助路径 step-up 不变）", code)
+	}
+}

@@ -16,7 +16,7 @@ const fastFileMagic = "LBF1"
 const fastFileHeaderSize = 16
 
 // FastFileState 是从 .fast 二进制文件加载的内存态（排序不相交前缀集）。
-// 与 ipListFileState 同构——resolveIPListFile 的返回类型统一。
+// 生产消费方=services 侧从节点回退（securityiplists.go ReadFastFile）。
 type FastFileState struct {
 	V4 []netip.Prefix // 排序不相交 IPv4 前缀
 	V6 []netip.Prefix // 排序不相交 IPv6 前缀
@@ -99,22 +99,36 @@ func ReadFastFile(path string) (*FastFileState, error) {
 		V6: make([]netip.Prefix, v6Count),
 	}
 
+	// PLUG-L1（第 69 轮 P2）：腐化防御——bits 越界（netip.PrefixFrom 产 invalid
+	// 前缀）与地址降序都会静默破坏二分判定的排序不变量，响亮拒绝。
 	// 展开 v4
 	offset := fastFileHeaderSize
 	for i := 0; i < int(v4Count); i++ {
 		var addr [4]byte
 		copy(addr[:], data[offset:offset+4])
 		bits := int(data[offset+4])
+		if bits > 32 {
+			return nil, fmt.Errorf("fastfile: v4 entry %d bits out of range: %d", i, bits)
+		}
 		state.V4[i] = netip.PrefixFrom(netip.AddrFrom4(addr), bits)
+		if i > 0 && state.V4[i-1].Addr().Compare(state.V4[i].Addr()) > 0 {
+			return nil, fmt.Errorf("fastfile: v4 entries not in ascending order at %d", i)
+		}
 		offset += 5
 	}
 
-	// 展开 v6
+	// 展开 v6（同口径校验）
 	for i := 0; i < int(v6Count); i++ {
 		var addr [16]byte
 		copy(addr[:], data[offset:offset+16])
 		bits := int(data[offset+16])
+		if bits > 128 {
+			return nil, fmt.Errorf("fastfile: v6 entry %d bits out of range: %d", i, bits)
+		}
 		state.V6[i] = netip.PrefixFrom(netip.AddrFrom16(addr), bits)
+		if i > 0 && state.V6[i-1].Addr().Compare(state.V6[i].Addr()) > 0 {
+			return nil, fmt.Errorf("fastfile: v6 entries not in ascending order at %d", i)
+		}
 		offset += 17
 	}
 
@@ -124,28 +138,4 @@ func ReadFastFile(path string) (*FastFileState, error) {
 // FastPath 返回 .iplist 源文件对应的 .fast 编译文件路径。
 func FastPath(iplistPath string) string {
 	return iplistPath + ".fast"
-}
-
-// EnsureFastFile 确保 .fast 文件存在且与 .iplist 源文件一致（mtime 比对）。
-// 如果 .fast 不存在或比 .iplist 旧，则重新编译。
-// 返回 .fast 文件路径。
-func EnsureFastFile(iplistPath string, compileFn func(string) ([]netip.Prefix, []netip.Prefix, error)) (string, error) {
-	fastPath := FastPath(iplistPath)
-
-	// .fast 比 .iplist 新 → 直接用
-	if st, err := os.Stat(fastPath); err == nil {
-		if src, err := os.Stat(iplistPath); err == nil && !st.ModTime().Before(src.ModTime()) {
-			return fastPath, nil
-		}
-	}
-
-	// 需要编译
-	v4, v6, err := compileFn(iplistPath)
-	if err != nil {
-		return "", fmt.Errorf("compile %s: %w", iplistPath, err)
-	}
-	if err := WriteFastFile(fastPath, v4, v6); err != nil {
-		return "", err
-	}
-	return fastPath, nil
 }
