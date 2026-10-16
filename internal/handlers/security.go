@@ -3182,6 +3182,12 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"请求体异常":   {"11"},
 	"地域拦截":    {"8"}, // + geoipFamilyCondition（预检精确段 800000-899999）
 	"威胁情报库":   {"14"},
+	// v2.3.8 触发类型扩展：爬虫Bot（810000-899999 全段）、限流（429 精确）、
+	// IP 黑名单（自维护 id:4）、WAF·自定义（customRuleFamilyCondition 复用）
+	"爬虫Bot":   {"81", "85"},
+	"限流":      {"429"},
+	"IP 黑名单":  {"4"},
+	"WAF·自定义": {},
 	"评分拦截":    {"949", "959"},
 	"协议异常":    {"920"},
 	"协议攻击":    {"921"},
@@ -3286,7 +3292,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	// （评分拦截/协议异常）或规则 ID 前缀过滤，family 映射全部保留）。GLOB
 	// 限 9 开头：GeoIP 预检段 800xxx 同为 6 位数字，不限会被本族误吞。
 	const wafCRSCondition = "rule_triggered GLOB '9[0-9][0-9][0-9][0-9][0-9]'"
-	if input == "WAF 规则（CRS）" {
+	if input == "WAF 规则（CRS）" || input == "WAF·CRS" {
 		return "(" + wafCRSCondition + ")"
 	}
 	if prefixes, isFamily := ruleTriggeredFamilyPrefixes[input]; isFamily {
@@ -3296,7 +3302,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		}
 		// 自定义规则族无 LIKE 前缀（表内为空集），以长度约束条件整体并入；
 		// 地域拦截族并入预检精确段形态条件（800xxx，旧 id:8 由前缀表精确覆盖）。
-		if input == "自定义规则" {
+		if input == "自定义规则" || input == "WAF·自定义" {
 			ors = append(ors, customRuleFamilyCondition)
 		}
 		if input == "地域拦截" {

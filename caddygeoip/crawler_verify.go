@@ -14,7 +14,10 @@ package caddygeoip
 
 import (
 	"context"
+	"encoding/json"
+	"lazy-balancer-v2/internal/db"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -77,8 +80,9 @@ func VerifyCrawler(ip, engineID string) bool {
 
 	ok := false
 	if geoipnames.CrawlerEngineVerifyMethod(engineID) == geoipnames.CrawlerVerifyIPRange {
-		// 官方声明不支持 nslookup 的厂商（360）：官方 IP 段验证，零 DNS 开销
-		ok = geoipnames.CrawlerEngineIPMatch(engineID, ip)
+		// 官方声明不支持 nslookup 的厂商（360）：官方 IP 段验证（名单表=
+		// 定时更新任务的快照，更新即生效，无需重载）
+		ok = verifyCrawlerIPRangeFromList(ip, engineID)
 	} else if acquireCrawlerSlot() {
 		ok = verifyCrawlerDNS(ip, engineID)
 		releaseCrawlerSlot()
@@ -153,4 +157,26 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 	} else {
 		crawlerVerifyResolver = &netResolver{}
 	}
+}
+
+// verifyCrawlerIPRangeFromList 从 security_ip_lists 系统名单验证 IP 段命中
+// （name='crawlerbot:<engine>'；名单缺失/为空=fail-closed）。
+func verifyCrawlerIPRangeFromList(ipStr, engineID string) bool {
+	name := "crawlerbot:" + engineID
+	var raw string
+	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'') FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&raw); err != nil {
+		return false
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil || len(entries) == 0 {
+		return false
+	}
+	ip := netip.MustParseAddr(ipStr)
+	for _, cidr := range entries {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err == nil && prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

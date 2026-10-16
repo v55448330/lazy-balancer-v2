@@ -133,10 +133,16 @@
               @change="toggleTriggeredAll"
             >全选</el-checkbox>
           </template>
-          <el-option label="信任名单" value="信任名单" title="阶段 0 信任名单（id 3/12）" />
-          <el-option label="IP 访问控制" value="IP 访问控制" title="黑白名单、地域拦截、威胁情报库（阶段 1 合并：id 2/4/5/7/800xxx/14）" />
-          <el-option label="WAF" value="WAF" title="CRS 规则与自定义规则（阶段 3）" />
+          <el-option label="爬虫Bot" value="爬虫Bot" title="已验证爬虫放行/伪装（id 810000-899999）" />
+          <el-option label="地域拦截" value="地域拦截" title="GeoIP 地域拦截（id 8/800xxx）" />
+          <el-option label="限流" value="限流" title="站点限流 429" />
+          <el-option label="IP 访问控制" value="IP 访问控制" title="IP ACL 黑白名单（id 2/7）" />
+          <el-option label="IP 黑名单" value="IP 黑名单" title="自维护 IP 黑名单（id 4）" />
+          <el-option label="信任名单" value="信任名单" title="信任名单/保留检测（id 3/12）" />
+          <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库命中（id 14）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
+          <el-option label="WAF·CRS" value="WAF·CRS" title="OWASP CRS 规则全集（9xxxxx）" />
+          <el-option label="WAF·自定义" value="WAF·自定义" title="自定义规则库（10000-899999）与合成规则（1000000+）" />
         </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 115px" @keyup.enter="applyFilters" />
@@ -171,6 +177,11 @@
               <span class="cell-tip">{{ stageLabel(row) }}</span>
             </el-tooltip>
             <span v-else>{{ stageLabel(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="触发类型" min-width="100" class-name="col-nowrap">
+          <template #default="{ row }">
+            <span>{{ row.trigger_type || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="策略" min-width="150">
@@ -563,10 +574,7 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'waf' | 'body' | '
     default: return 'other'
   }
 }
-// v2.3.8：trigger_type 后端单源优先（爬虫Bot 独立于地域拦截，429→限流）；
-// 旧数据无该字段时回落五桶。
 const stageLabel = (row: SecurityEvent): string => {
-  if (row.trigger_type) return row.trigger_type
   switch (stageCategory(row)) {
     case 'trust': return '信任名单'
     case 'acl': return 'IP 访问控制'
@@ -678,13 +686,21 @@ const total = ref(0)
 
 // 触发阶段筛选为固定预置四类（第 58 轮用户裁定：固定预置值，不接受任意值）。
 // 令牌 → 后端族段映射：请求侧展开为族名逗号串（后端逐段 OR）。
-const TRIGGERED_CATEGORIES = ['信任名单', 'IP 访问控制', 'WAF', '请求体异常'] as const
+const TRIGGERED_CATEGORIES = ['爬虫Bot', '地域拦截', '限流', 'IP 访问控制', 'IP 黑名单', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
+// v2.3.8 触发类型筛选映射（值=后端 family 键，与新 trigger_type 同语义）：
+// 每类对应的 ruleTriggeredFamilyPrefixes 映射键。
 const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
+  '爬虫Bot': ['爬虫Bot'],
+  '地域拦截': ['地域拦截'],
+  '限流': ['限流'],
+  'IP 访问控制': ['IP 访问控制'],
+  'IP 黑名单': ['IP 黑名单'],
   '信任名单': ['信任名单'],
-  'IP 访问控制': ['IP 访问控制', '地域拦截', '威胁情报库'],
-  'WAF': ['WAF 规则（CRS）', '自定义规则'],
+  '威胁情报库': ['威胁情报库'],
   '请求体异常': ['请求体异常'],
+  'WAF·CRS': ['WAF·CRS'],
+  'WAF·自定义': ['WAF·自定义', '自定义规则'],
 }
 
 const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })

@@ -639,7 +639,7 @@ func triggerTypeForRule(ruleTriggered string) string {
 		case n >= 10000 && n < 900000:
 			return "WAF·自定义"
 		case n >= 900000:
-			return "WAF"
+			return "WAF·CRS"
 		}
 	}
 	switch ruleTriggered {

@@ -715,10 +715,10 @@ func TestTriggerTypeForRule_fullTaxonomy(t *testing.T) {
 		"800007":  "地域拦截",
 		"810016":  "爬虫Bot",
 		"850003":  "爬虫Bot",
-		"942100":  "WAF",
+		"942100":  "WAF·CRS",
 		"10001":   "WAF·自定义",
 		"1000001": "WAF·自定义",
-		"999999":  "WAF",
+		"999999":  "WAF·CRS",
 	}
 	for id, want := range cases {
 		if got := triggerTypeForRule(id); got != want {
