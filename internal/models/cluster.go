@@ -255,6 +255,10 @@ type ClusterBasicSettings struct {
 	ThreatAutoUpdate   *bool   `json:"threat_auto_update,omitempty"`
 	ThreatScheduleDays *string `json:"threat_schedule_days,omitempty"`
 	ThreatScheduleTime *string `json:"threat_schedule_time,omitempty"`
+	// 爬虫地址库独立总闸与排程三列（与 threat_* 完全分离）。
+	CrawlerAutoUpdate   *bool   `json:"crawler_auto_update,omitempty"`
+	CrawlerScheduleDays *string `json:"crawler_schedule_days,omitempty"`
+	CrawlerScheduleTime *string `json:"crawler_schedule_time,omitempty"`
 	// D1（第 74 轮审计）：自动封禁六项配置随 users 节同步——从节点提升为主节点
 	// 后调度按主端配置直接生效（镜像 CL41-1 自动备份组/L5-67-01 威胁排程组）。
 	// 指针+omitempty 缺席语义：旧主端快照缺该组时从端 apply 跳过写入、保留本地
@@ -364,8 +368,10 @@ type ClusterSnapshot struct {
 	WafFiles                 *ClusterWafFilesRef               `json:"waf_files,omitempty"`
 	// 威胁情报库源行（v2.3.x）：随 security 节同步（多行状态机表，
 	// 开关/计数/版本全量镜像）。
-	SecurityThreatSources json.RawMessage   `json:"security_threat_sources,omitempty"`
-	SectionHashes         map[string]string `json:"section_hashes,omitempty"`
+	SecurityThreatSources json.RawMessage `json:"security_threat_sources,omitempty"`
+	// 爬虫地址库独立源行（v2.3.8）：随 security 节同步，不再借威胁源表通道。
+	SecurityCrawlerSources json.RawMessage   `json:"security_crawler_sources,omitempty"`
+	SectionHashes          map[string]string `json:"section_hashes,omitempty"`
 	// MasterSyncSwitches 为主节点三类同步开关（users/rules/security，2026-09-19
 	// 三分类归一；CL-R1 第 69 轮修正「五类」陈旧注释），随快照下发；从节点跳过判定
 	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。

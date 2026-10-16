@@ -161,7 +161,7 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 
 // crawlerIPListFile 厂商 IP 段名单快照文件（root 服务写、插件读——模块边界：
 // caddygeoip 独立模块不 import 根模块，快照经共享文件交换）。
-const crawlerIPListFile = "/app/data/crawler-ip-lists.json"
+var crawlerIPListFile = "/app/data/crawler-ip-lists.json"
 
 var (
 	crawlerFileCacheMu     sync.Mutex

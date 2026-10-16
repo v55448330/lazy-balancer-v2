@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><Notebook /></el-icon>
           规则集
         </h2>
-        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP 地理库、威胁情报库、自定义规则与 IP 地址列表</p>
+        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP 地理库、威胁情报库、爬虫地址库、自定义规则与 IP 地址列表</p>
       </div>
     </div>
 
@@ -517,12 +517,70 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="crawlerUpdateDialogVisible"
+      width="min(900px, 94vw)"
+      top="8vh"
+      destroy-on-close
+      @opened="onCrawlerUpdateDialogOpened"
+      @closed="onCrawlerUpdateDialogClosed"
+    >
+      <template #header>
+        <DialogHeader :icon="Link" title="爬虫地址更新" subtitle="四个官方爬虫 IP 源的更新任务与更新日志" tone-class="lib-icon--crawler" />
+      </template>
+      <el-table :data="crawlerSources" size="small" class="threat-source-table">
+        <el-table-column label="来源" min-width="260">
+          <template #default="{ row }">
+            <div class="lib-name-text">
+              <div class="lib-name-main">{{ row.display_name }}</div>
+              <div class="lib-name-sub threat-source-url">{{ row.url }}</div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="条目数" width="100" align="right">
+          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="版本" width="110">
+          <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="crsStatusTagType(row.update_status)" size="small" effect="light">{{ crsStatusLabel(row.update_status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="自动更新" width="90" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.update_enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: boolean) => toggleCrawlerFlag(row, 'update_enabled', v)" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <RuleLibScheduleEditor
+        :days="crawlerSchedule.days"
+        :time="crawlerSchedule.time"
+        :disabled="isReadOnly || isSlaveNode"
+        :saving="savingCrawlerSchedule"
+        :tz="scheduleTz"
+        @save="saveCrawlerSchedule"
+      />
+      <div ref="crawlerUpdateLogRef" class="update-log-container update-log-container--compact">
+        <pre v-if="crawlerUpdateLog" class="update-log-content">{{ crawlerUpdateLog }}</pre>
+        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      </div>
+      <template #footer>
+        <div style="display: flex; align-items: center;">
+          <LogStorageBar log-key="crawlerbot_update" style="margin-right: auto" />
+          <el-button @click="crawlerUpdateDialogVisible = false">关闭</el-button>
+          <el-button v-if="!crawlerUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingCrawlerUpdate" @click="confirmCrawlerUpdate">立即更新</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
+import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link } from '@element-plus/icons-vue'
 import { formatDate, parseDbTimeMs } from '@/utils/date'
 import { compareVersion, IP_LIST_CATEGORIES} from '@/utils/securityStages'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
@@ -572,6 +630,33 @@ const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled', val:
   fetchThreatLib()
 }
 
+// —— 爬虫地址库（独立源表/总闸/排程/日志，与威胁情报库完全分离）——
+type CrawlerSource = ThreatSource
+const crawlerSources = ref<CrawlerSource[]>([])
+const crawlerAutoUpdate = ref(true)
+const crawlerSchedule = ref({ days: [1, 2, 3, 4, 5, 6, 7] as number[], time: '04:00' })
+
+const fetchCrawlerLib = async () => {
+  try {
+    const res = await request.get<APIResponse<{ sources: CrawlerSource[]; total_entries: number; auto_update?: boolean; schedule_days?: number[]; schedule_time?: string }>>('/security/crawler-lib')
+    if (res.data) {
+      crawlerSources.value = res.data.sources
+      crawlerAutoUpdate.value = res.data.auto_update !== false
+      if (res.data.schedule_days?.length) crawlerSchedule.value = { days: res.data.schedule_days, time: res.data.schedule_time || '04:00' }
+    }
+  } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
+}
+
+const toggleCrawlerFlag = async (row: CrawlerSource, field: 'update_enabled', val: boolean) => {
+  try {
+    await request.put(`/security/crawler-lib/${row.id}/flags`, { [field]: val })
+    mfaAwareSuccess('已更新')
+  } catch {
+    row[field] = !val // 失败回滚开关
+  }
+  fetchCrawlerLib()
+}
+
 // —— 规则库统一表（v2.3.2）：CRS/IP2Region/威胁三源五行同一口径 ——
 interface LibRow {
   key: string
@@ -608,25 +693,47 @@ const libRows = computed<LibRow[]>(() => {
       nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
     },
   ]
-  // 威胁情报库=父行（三源为子集）：版本=最近更新日期，条目=三源合计，
-  // 状态聚合（任一失败>更新中>成功>未更新），开关=全开/全关。
-  if (threatSources.value.length > 0) {
-    const srcs = threatSources.value
+  // 威胁情报库与爬虫地址库共用「多源聚合成一行」的同一口径：
+  // 版本=最近更新日期，条目=源合计，状态=更新中>失败>成功>未更新。
+  const summarize = (srcs: ThreatSource[]) => {
     const totalEntries = srcs.reduce((sum, x) => sum + x.entry_count, 0)
     const latestVersion = srcs.map(x => x.version).filter(Boolean).sort(compareVersion).pop() || ''
     const anyFailed = srcs.find(x => x.update_status === 'failed')
     const anyRunning = srcs.some(x => x.update_status === 'running')
-    const status = anyRunning ? 'running' : anyFailed ? 'failed' : latestVersion ? 'success' : 'idle'
+    return {
+      totalEntries,
+      latestVersion,
+      status: anyRunning ? 'running' : anyFailed ? 'failed' : latestVersion ? 'success' : 'idle',
+      lastChecked: srcs.map(x => formatDate(x.last_checked)).filter(Boolean).sort().pop() || '—',
+      nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
+    }
+  }
+  if (threatSources.value.length > 0) {
+    const summary = summarize(threatSources.value)
     rows.push({
       key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
       name: '威胁情报库',
-      sub: 'IP 威胁名单，可被黑名单策略引用',  // 来源明细见「更新详情」弹框（2026-09-24：名称列收窄后三源名折行断词，撤）
-      version: latestVersion || '未更新',
-      count: totalEntries > 0 ? totalEntries.toLocaleString() + ' 条' : '—',
-      status,
+      sub: 'IP 威胁名单，可被黑名单策略引用',
+      version: summary.latestVersion || '未更新',
+      count: summary.totalEntries > 0 ? summary.totalEntries.toLocaleString() + ' 条' : '—',
+      status: summary.status,
       autoUpdate: threatAutoUpdate.value,
-      lastChecked: srcs.map(x => formatDate(x.last_checked)).filter(Boolean).sort().pop() || '—',
-      nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
+      lastChecked: summary.lastChecked,
+      nextUpdate: summary.nextUpdate,
+    })
+  }
+  if (crawlerSources.value.length > 0) {
+    const summary = summarize(crawlerSources.value)
+    rows.push({
+      key: 'crawler', icon: Link, iconClass: 'lib-icon--crawler',
+      name: '爬虫地址库',
+      sub: 'Google/OpenAI/Bing/360 官方爬虫 IP 段',
+      version: summary.latestVersion || '未更新',
+      count: summary.totalEntries > 0 ? summary.totalEntries.toLocaleString() + ' 条' : '—',
+      status: summary.status,
+      autoUpdate: crawlerAutoUpdate.value,
+      lastChecked: summary.lastChecked,
+      nextUpdate: summary.nextUpdate,
     })
   }
   return rows
@@ -644,15 +751,15 @@ const libHealthTags = computed<Array<{ label: string; type: 'success' | 'danger'
       ? { label: 'IP 地理库 · 缺失', type: 'danger' }
       : { label: 'IP 地理库 · 正常', type: 'success' },
   ]
-  // FR66-3：running 分支补齐（与 libRows 聚合同口径——running 优先于 failed）：
-  // 任一源更新中显示「更新中」warning，不再误标「正常」
-  const threatUpdating = threatSources.value.some(x => x.update_status === 'running')
-  const threatFail = threatSources.value.filter(x => x.update_status === 'failed').length
-  tags.push(threatUpdating
-    ? { label: '威胁情报库 · 更新中', type: 'warning' }
-    : threatFail > 0
-      ? { label: `威胁情报库 · ${threatFail} 源更新失败`, type: 'warning' }
-      : { label: '威胁情报库 · 正常', type: 'success' })
+  const sourceHealth = (srcs: ThreatSource[], label: string): { label: string; type: 'success' | 'warning' } => {
+    const updating = srcs.some(x => x.update_status === 'running')
+    const failed = srcs.filter(x => x.update_status === 'failed').length
+    if (updating) return { label: `${label} · 更新中`, type: 'warning' }
+    if (failed > 0) return { label: `${label} · ${failed} 源更新失败`, type: 'warning' }
+    return { label: `${label} · 正常`, type: 'success' }
+  }
+  tags.push(sourceHealth(threatSources.value, '威胁情报库'))
+  tags.push(sourceHealth(crawlerSources.value, '爬虫地址库'))
   return tags
 })
 const libSummaryWarn = computed(() => crsInfo.value.available === false || ip2regionInfo.value.available === false)
@@ -670,6 +777,8 @@ const toggleLibAutoUpdate = (row: LibRow, val: boolean) => {
     // 父开关=任务级总闸（整任务启停）；逐源微调在更新弹框内（update_enabled
     // 决定任务更新哪些源）——两者解耦，不再逐源循环写（曾连弹三次提示）。
     toggleThreatAutoUpdate(val)
+  } else if (row.key === 'crawler') {
+    toggleCrawlerAutoUpdate(val)
   }
 }
 
@@ -684,6 +793,16 @@ const toggleThreatAutoUpdate = async (val: boolean) => {
   }
 }
 
+const toggleCrawlerAutoUpdate = async (val: boolean) => {
+  try {
+    await request.put('/security/crawler-lib/auto-update', { auto_update: val })
+    crawlerAutoUpdate.value = val
+    mfaAwareSuccess('已更新')
+  } catch {
+    fetchCrawlerLib() // 失败回滚显示值
+  }
+}
+
 // 更新/日志按钮：打开对应库的更新弹框（autoStart=false 时仅查看日志）。
 const openLibDialog = (row: LibRow) => {
   if (row.key === 'crs') {
@@ -692,6 +811,8 @@ const openLibDialog = (row: LibRow) => {
     manualIP2RegionUpdate()
   } else if (row.key === 'threat') {
     threatDialog.open()
+  } else if (row.key === 'crawler') {
+    crawlerDialog.open()
   }
 }
 
@@ -716,6 +837,27 @@ const {
   onClosed: onThreatUpdateDialogClosed,
   confirmUpdate: confirmThreatUpdate,
 } = threatDialog
+
+// —— 爬虫地址库独立更新弹框（同一 composable，独立状态/日志/轮询会话）——
+const crawlerUpdateLogRef = ref<HTMLDivElement | null>(null)
+const crawlerDialog = useLibUpdateDialog<ThreatUpdateInfo>({
+  apiPrefix: '/security/crawler-lib',
+  logContainer: crawlerUpdateLogRef,
+  isRunning: (info) => info?.running === true,
+  isFinished: (info) => info.running !== true,
+  isSuccess: (info) => info.outcome === 'success',
+  onSuccess: fetchCrawlerLib,
+  onOpen: () => { ensureScheduleTz() },
+})
+const {
+  visible: crawlerUpdateDialogVisible,
+  logs: crawlerUpdateLog,
+  updating: crawlerUpdateRunning,
+  starting: startingCrawlerUpdate,
+  onOpened: onCrawlerUpdateDialogOpened,
+  onClosed: onCrawlerUpdateDialogClosed,
+  confirmUpdate: confirmCrawlerUpdate,
+} = crawlerDialog
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
@@ -1286,6 +1428,16 @@ const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string
   } catch { /* 全局拦截器已 toast */ } finally { savingThreatSchedule.value = false }
 }
 
+const savingCrawlerSchedule = ref(false)
+const saveCrawlerSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  savingCrawlerSchedule.value = true
+  try {
+    await request.put('/security/crawler-lib/schedule', { days, time })
+    mfaAwareSuccess('定时更新设置已保存')
+    await fetchCrawlerLib()
+  } catch { /* 全局拦截器已 toast */ } finally { savingCrawlerSchedule.value = false }
+}
+
 // —— CRS 规则库更新弹框（useLibUpdateDialog 统一范式，F62-11）——
 const updateLogRef = ref<HTMLDivElement | null>(null)
 const crsDialog = useLibUpdateDialog<CRSUpdateInfo>({
@@ -1399,7 +1551,7 @@ onMounted(() => {
     activeTab.value = urlTab
   }
   if (query.has('tab')) window.history.replaceState(null, '', window.location.pathname)
-  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists(); fetchThreatLib()
+  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists(); fetchThreatLib(); fetchCrawlerLib()
 })
 
 onUnmounted(() => {
@@ -1407,6 +1559,7 @@ onUnmounted(() => {
   crsDialog.dispose()
   ip2regionDialog.dispose()
   threatDialog.dispose() // U9-F2（第 65 轮）：与两兄弟对齐（曾缺席）
+  crawlerDialog.dispose()
 })
 </script>
 
@@ -1430,6 +1583,7 @@ onUnmounted(() => {
 :deep(.dh-icon.lib-icon--crs) { background: #eff6ff; color: #3b82f6; }
 :deep(.dh-icon.lib-icon--ip) { background: #f0fdfa; color: #0d9488; }
 :deep(.dh-icon.lib-icon--threat) { background: #fff1f2; color: #e11d48; }
+:deep(.dh-icon.lib-icon--crawler) { background: #fff7ed; color: #ea580c; }
 .add-condition-btn { margin-top: 4px; }
 .pattern-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
 .pattern-input-row { display: flex; align-items: center; gap: 6px; }
@@ -1490,6 +1644,7 @@ onUnmounted(() => {
 .lib-icon--crs { background: #eff6ff; color: #3b82f6; }
 .lib-icon--ip { background: #f0fdfa; color: #0d9488; }
 .lib-icon--threat { background: #fff1f2; color: #e11d48; }
+.lib-icon--crawler { background: #fff7ed; color: #ea580c; }
 .lib-name-text { min-width: 0; }
 .update-log-container--compact { min-height: 200px; max-height: 240px; }
 .lib-name-main { font-weight: 600; color: var(--el-text-color-primary); }

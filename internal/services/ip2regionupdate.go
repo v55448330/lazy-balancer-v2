@@ -121,6 +121,7 @@ func SetIP2RegionAutoUpdate(enabled bool) error {
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET auto_update=?, next_update=CASE WHEN ? THEN ? ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 IP2Region 自动更新开关: %w", err)
 	}
+	syncTaskLoop("ip2region", enabled)
 	return nil
 }
 

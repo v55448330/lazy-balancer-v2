@@ -124,48 +124,6 @@ func sanitizePathComponent(value string) string {
 	return string(out)
 }
 
-// Round 35 I-17: 缓存 task_log_size_mb 配置，避免每条日志写入都查 DB。
-// 缓存有效期 5 分钟，过期后下一次调用触发刷新。
-var (
-	certJobLogSizeCached     atomic.Int64
-	certJobLogSizeCachedAt   atomic.Int64
-	certJobLogSizeCacheTTLNs = int64(5 * time.Minute)
-	certJobLogSizeRefreshMu  sync.Mutex
-)
-
-func getTaskLogSizeBytes() int64 {
-	// SVC-F2（第 73 轮）：未初始化库回退默认 10MB，不得 nil deref（当前
-	// 不可达；与同包多数配置读取 helper 的 db.DB==nil 守卫口径一致）。
-	if db.DB == nil {
-		return 10 * 1024 * 1024
-	}
-	now := time.Now().UnixNano()
-	cachedAt := certJobLogSizeCachedAt.Load()
-	if cachedAt != 0 && now-cachedAt < certJobLogSizeCacheTTLNs {
-		return certJobLogSizeCached.Load()
-	}
-	certJobLogSizeRefreshMu.Lock()
-	defer certJobLogSizeRefreshMu.Unlock()
-	// Double-check after acquiring lock to avoid thundering herd.
-	if cachedAt = certJobLogSizeCachedAt.Load(); cachedAt != 0 && time.Now().UnixNano()-cachedAt < certJobLogSizeCacheTTLNs {
-		return certJobLogSizeCached.Load()
-	}
-	var sizeMB int
-	if err := db.DB.QueryRow("SELECT COALESCE(task_log_size_mb, 10) FROM global_config WHERE id = 1").Scan(&sizeMB); err != nil {
-		// B431-1(第 43 轮):读取失败静默降级 10MB 曾无痕——留 warn 含 err
-		// 便于排查配置漂移(与下方 sizeMB<=0 的防御同口径)。
-		Logf("warn", "读取证书任务日志大小配置失败,按 10MB 降级: %v", err)
-		sizeMB = 10
-	}
-	if sizeMB <= 0 {
-		sizeMB = 10
-	}
-	bytes := int64(sizeMB) * 1024 * 1024
-	certJobLogSizeCached.Store(bytes)
-	certJobLogSizeCachedAt.Store(now)
-	return bytes
-}
-
 func (l *CertJobFileLogger) write(level, stage, message string) {
 	// C-11：跨实例按 ruleID 串行化（见 certJobLogWriteLocks 注释）。
 	unlock := lockCertJobLog(l.ruleID)
@@ -185,11 +143,8 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	// 整代丢失）。活动文件恒 ≤ 上限后 housekeeping 尺寸分支永不命中证书任务
 	// 日志，轮转唯一负责方归本写入侧（5 代移位），双轨覆盖窗口根除；
 	// housekeeping 的保留期清理语义不变。
-	if info, err := os.Stat(path); err == nil && info.Size()+int64(len(line)) > getTaskLogSizeBytes() {
-		// 轮转失败不再吞没（C-11）：留痕告警后继续追加，维持原写入可用性。
-		if err := rotateCertJobLogFiles(path); err != nil {
-			certJobLogWarnf("cert job log: rotate %s failed: %v", path, err)
-		}
+	if _, err := taskengine.RotateTaskLogBeforeWrite(path, int64(len(line)), maxRotatedFiles); err != nil {
+		certJobLogWarnf("cert job log: rotate %s failed: %v", path, err)
 	}
 
 	if err := os.MkdirAll(CertJobLogDir(), 0755); err != nil {
@@ -205,27 +160,6 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	defer f.Close()
 
 	fmt.Fprint(f, line)
-}
-
-// rotateCertJobLogFiles 把 current 逐代下移到 .1（.1→.2 … .4→.5，删除旧 .5）。
-// 缺失的中间代（备份不足 maxRotatedFiles 份时的常态）按 IsNotExist 静默跳过；
-// 其余错误收集上抛，由调用方留痕——此前全部丢弃，坏轮转零迹可循（C-11）。
-func rotateCertJobLogFiles(path string) error {
-	var errs []error
-	if err := os.Remove(fmt.Sprintf("%s.%d", path, maxRotatedFiles)); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, fmt.Errorf("remove %s.%d: %w", filepath.Base(path), maxRotatedFiles, err))
-	}
-	for i := maxRotatedFiles - 1; i >= 1; i-- {
-		oldPath := fmt.Sprintf("%s.%d", path, i)
-		newPath := fmt.Sprintf("%s.%d", path, i+1)
-		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("shift %s.%d: %w", filepath.Base(path), i, err))
-		}
-	}
-	if err := os.Rename(path, path+".1"); err != nil {
-		errs = append(errs, fmt.Errorf("rotate current %s: %w", filepath.Base(path), err))
-	}
-	return errors.Join(errs...)
 }
 
 // Log implements the acme.Logger interface (info level).

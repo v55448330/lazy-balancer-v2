@@ -48,7 +48,6 @@ type TaskInfo struct {
 	Category     string       `json:"category"`              // 安全防护/证书/备份/集群/系统
 	Kind         TaskKind     `json:"kind"`
 	Status       TaskStatus   `json:"status"`
-	Enabled      bool         `json:"enabled"`              // 自动调度开关
 	Cancellable  bool         `json:"cancellable"`          // 运行中可手动取消（仅下载类）
 	Controllable bool         `json:"controllable"`         // 常驻循环可启停（start/stop/restart）
 	Triggerable  bool         `json:"triggerable"`          // 支持手动触发（ManualRun 语义族）
@@ -100,7 +99,7 @@ func collectCertJobRows() []TaskInfo {
 	// 「issued 超 1 天隐藏」窗口过滤致主节点签发行消失）；仅排除从节点
 	// 材料物化行（非签发任务，从节点禁签发）。LIMIT 100（U1-P3-2 裁定后
 	// 收敛：20 截断「存在即显示」——100 贴近裁定原文且长周期主节点不触顶）。
-	rows, err := db.DB.Query(`SELECT id, domain, status, COALESCE(message,''), COALESCE(updated_at,created_at)
+	rows, err := db.DB.Query(`SELECT id, rule_id, domain, status, COALESCE(message,''), COALESCE(updated_at,created_at)
 		FROM cert_jobs
 		WHERE COALESCE(message,'') NOT LIKE '从主节点同步%'
 		ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 100`)
@@ -111,8 +110,8 @@ func collectCertJobRows() []TaskInfo {
 	var out []TaskInfo
 	for rows.Next() {
 		var id int
-		var domain, status, message, updatedAt string
-		if err := rows.Scan(&id, &domain, &status, &message, &updatedAt); err != nil {
+		var ruleID, domain, status, message, updatedAt string
+		if err := rows.Scan(&id, &ruleID, &domain, &status, &message, &updatedAt); err != nil {
 			continue
 		}
 		// 终态计数（24h 窗口内 issued=成功 1、failed=失败 1；超窗行显示
@@ -141,6 +140,9 @@ func collectCertJobRows() []TaskInfo {
 				Trigger: "queue", Result: status, Message: message},
 		}
 		ti.Success24h, ti.Fail24h = success, fail
+		if info, err := os.Stat(CertJobLogPath(ruleID)); err == nil {
+			ti.LogSizeBytes = info.Size()
+		}
 		ti.Status = TaskStatusIdle
 		switch status {
 		case "failed":
@@ -173,8 +175,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			ID: m.ID, Name: m.Name, Description: m.Description,
 			Category: m.Category, Kind: TaskKind(m.Kind),
 			Controllable: m.Controllable, Cancellable: m.Cancelable, Triggerable: m.CanTrigger,
-			Enabled: m.Enabled,
-			LoopOn:  m.LoopOn,
+			LoopOn: m.LoopOn,
 		}
 		// 节奏：循环=间隔，定时=排程槽，常驻=自管理，触发=手动
 		switch m.Kind {
@@ -272,18 +273,6 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 	return out
 }
 
-// TaskLogf 业务摘要行（SPEC §6.5：每个真实执行轮在 tasks/{id}.log 留业务
-// 结果——「无临期证书/清理 N 条/摄取 N 条」等；时间戳与 tee 流水同形态）。
-func TaskLogf(taskID, stage, format string, args ...any) {
-	taskengine.TeeTaskLogTime(taskID, "INFO", stage, fmt.Sprintf(format, args...))
-}
-
-// TaskLogfWarn 告警级业务行（WARN——异常状态变化落痕；零噪音裁定下
-// 「状态变化一次」的告警走这里，正常轮零日志）。
-func TaskLogfWarn(taskID, stage, format string, args ...any) {
-	taskengine.TeeTaskLogTime(taskID, "WARN", stage, fmt.Sprintf(format, args...))
-}
-
 func humanInterval(sec int) string {
 	switch {
 	case sec%86400 == 0:
@@ -313,18 +302,6 @@ func localDisplayUTC(ts string) string {
 		}
 	}
 	return ts
-}
-
-func earliestThreatNextUpdate() string {
-	// B1-8（第 74 轮）：nil 库守卫——NextSlotFn fail-closed（零值槽）。
-	if db.DB == nil {
-		return ""
-	}
-	var next string
-	if err := db.DB.QueryRow(`SELECT MIN(COALESCE(NULLIF(next_update,''), '9999')) FROM security_threat_sources WHERE update_enabled=1`).Scan(&next); err != nil || next == "9999" {
-		return ""
-	}
-	return next
 }
 
 // nextAutoBackupSlot 计算自动备份的下一执行槽（复用 autoBackupDueSlot

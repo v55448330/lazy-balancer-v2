@@ -150,6 +150,9 @@ RUN n=0; until apk add --no-cache curl; do \
      curl -sfL -o /app/waf.dist/ip2region.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb") && \
     echo "6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210  /app/waf.dist/ip2region.xdb" | sha256sum -c - && \
     apk del curl
+
+# 爬虫地址库内置首版：离线新实例由 PrimeCrawlerIPLists 读取并落库/生成 .fast。
+COPY config/crawler-ip-lists.seed.json /app/waf.dist/crawler-ip-lists.seed.json
 # 容器以 root 运行（无 USER/降权，与常见 Caddy 镜像同态）；如需非 root，需
 # 同时给 80/443 加 CAP_NET_BIND_SERVICE 并预置 bind 挂载属主（第 47 轮 F-47-29）
 

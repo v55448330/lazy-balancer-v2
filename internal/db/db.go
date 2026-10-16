@@ -691,9 +691,10 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_task_time ON task_runs(task_id, started_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_time ON task_runs(started_at DESC);
-	-- 威胁情报库（v2.3.x）：三个内置只读源，双开关（更新/应用）默认开；
-	-- 版本=成功更新日期（YYYY.MM.DD），状态机镜像 CRS/IP2Region 更新族。
+	-- 爬虫地址库（v2.3.8）：四个官方爬虫 IP 源，update_enabled 默认开；
+	-- 版本=成功更新日期（YYYY.MM.DD），独立源表/排程/状态机，不并入威胁情报库。
 	CREATE TABLE IF NOT EXISTS security_crawler_sources (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE,
 		display_name TEXT NOT NULL DEFAULT '',
 		url TEXT NOT NULL DEFAULT '',
@@ -899,8 +900,13 @@ func runMigrations() error {
 		"security_ip2region_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
 		// global_config 单行表恒经 newColumns 补列（threat_auto_update 起的既定
 		// 口径——fresh DDL 不追平，U6B-3 对齐仅适用多行版本/策略表）。
-		"global_config.threat_schedule_days":   "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
-		"global_config.threat_schedule_time":   "TEXT NOT NULL DEFAULT '04:00'",
+		"global_config.threat_schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
+		"global_config.threat_schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
+		// 爬虫地址库（v2.3.8 独立库）：任务级总闸与排程独立三列，
+		// 不共享 threat_* 配置。
+		"global_config.crawler_auto_update":    "INTEGER NOT NULL DEFAULT 1",
+		"global_config.crawler_schedule_days":  "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
+		"global_config.crawler_schedule_time":  "TEXT NOT NULL DEFAULT '04:00'",
 		"cert_jobs.ca_provider_id":             "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":           "INTEGER DEFAULT 0",
 		"cert_jobs.ca_available_after":         "DATETIME",
@@ -1090,6 +1096,12 @@ func runMigrations() error {
 	}
 	if err := migrateSecurityPoliciesNullable(); err != nil {
 		return fmt.Errorf("failed to migrate security_policies nullable columns: %w", err)
+	}
+	if err := migrateCrawlerSourcesID(); err != nil {
+		return fmt.Errorf("failed to migrate security_crawler_sources id: %w", err)
+	}
+	if err := migrateCrawlerSourcesOutOfThreat(); err != nil {
+		return fmt.Errorf("failed to separate crawler sources from threat sources: %w", err)
 	}
 	if err := migrateNodesDeadColumns(); err != nil {
 		return fmt.Errorf("failed to migrate nodes legacy columns: %w", err)
@@ -2239,6 +2251,99 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 			}
 		}
 	}
+	return nil
+}
+
+// migrateCrawlerSourcesOutOfThreat：早期合并形态把四个爬虫地址库源写进
+// security_threat_sources，导致威胁情报库弹框与更新任务混入爬虫。将源行及
+// 用户开关/版本/状态/排程迁入独立表，再从威胁表删除；名单与快照文件不动。
+func migrateCrawlerSourcesOutOfThreat() error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	const columns = `name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,"trigger",started_at,finished_at,consecutive_failures,created_at,updated_at`
+	for _, name := range []string{"googlebot", "gptbot", "bingbot", "so360spider"} {
+		query := `INSERT INTO security_crawler_sources (` + columns + `)
+			SELECT ` + columns + ` FROM security_threat_sources WHERE name=?
+			ON CONFLICT(name) DO UPDATE SET
+				display_name=excluded.display_name, url=excluded.url, format=excluded.format,
+				update_enabled=excluded.update_enabled, entry_count=excluded.entry_count,
+				version=excluded.version, update_status=excluded.update_status, message=excluded.message,
+				last_checked=excluded.last_checked, next_update=excluded.next_update, "trigger"=excluded."trigger",
+				started_at=excluded.started_at, finished_at=excluded.finished_at,
+				consecutive_failures=excluded.consecutive_failures, updated_at=excluded.updated_at`
+		if _, err := tx.Exec(query, name); err != nil {
+			return fmt.Errorf("迁移爬虫源 %s: %w", name, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM security_threat_sources WHERE name IN ('googlebot','gptbot','bingbot','so360spider')`); err != nil {
+		return fmt.Errorf("清理威胁表爬虫源: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// migrateCrawlerSourcesID：初版 security_crawler_sources 建表漏了 id 主键
+// （管理面 :id/flags 与 ORDER BY id 均依赖）。新库 CREATE 已含 id 直接跳过；
+// 存量无 id 库整表重建并保留全部源行（无 FK 引用，单事务即可）。
+func migrateCrawlerSourcesID() error {
+	var hasID int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_crawler_sources') WHERE name='id'").Scan(&hasID); err != nil {
+		return fmt.Errorf("inspect security_crawler_sources.id: %w", err)
+	}
+	if hasID > 0 {
+		return nil
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`CREATE TABLE security_crawler_sources_with_id (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE,
+		display_name TEXT NOT NULL DEFAULT '',
+		url TEXT NOT NULL DEFAULT '',
+		format TEXT NOT NULL DEFAULT 'plain',
+		update_enabled INTEGER NOT NULL DEFAULT 1,
+		entry_count INTEGER NOT NULL DEFAULT 0,
+		version TEXT NOT NULL DEFAULT '',
+		update_status TEXT NOT NULL DEFAULT 'idle',
+		message TEXT NOT NULL DEFAULT '',
+		last_checked DATETIME,
+		next_update DATETIME,
+		trigger TEXT NOT NULL DEFAULT '',
+		started_at DATETIME,
+		finished_at DATETIME,
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+	INSERT INTO security_crawler_sources_with_id (name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,"trigger",started_at,finished_at,consecutive_failures,created_at,updated_at)
+	SELECT name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,"trigger",started_at,finished_at,consecutive_failures,created_at,updated_at FROM security_crawler_sources;
+	DROP TABLE security_crawler_sources;
+	ALTER TABLE security_crawler_sources_with_id RENAME TO security_crawler_sources;`); err != nil {
+		return fmt.Errorf("rebuild security_crawler_sources: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
 	return nil
 }
 

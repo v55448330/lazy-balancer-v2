@@ -124,7 +124,6 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		if m, ok := te.Lookup(services.AutobanTaskID); ok {
 			resp["running"] = m.Running
 			resp["loop_on"] = m.LoopOn
-			resp["enabled_gate"] = m.Enabled
 		}
 		if last := te.LatestRun(services.AutobanTaskID); last != nil {
 			resp["last_run"] = last.StartedAt

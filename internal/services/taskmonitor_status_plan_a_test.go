@@ -42,22 +42,20 @@ func TestCollectSystemTasks_statusColumnExecutionOnly(t *testing.T) {
 
 	status := map[string]string{}
 	loopOn := map[string]bool{}
-	enabled := map[string]bool{}
 	for _, r := range rows {
 		status[r.ID] = string(r.Status)
 		loopOn[r.ID] = r.LoopOn
-		enabled[r.ID] = r.Enabled
 	}
 	// Then 状态列=空闲（调度关/业务关由开关列表达）
 	if status["t-svc"] != "idle" {
 		t.Errorf("daemon 调度关: status=%q, want idle（调度语义归开关列）", status["t-svc"])
 	}
 	if status["t-biz"] != "idle" {
-		t.Errorf("业务关: status=%q, want idle（开关列并判 enabled 表达）", status["t-biz"])
+		t.Errorf("业务关: status=%q, want idle（开关列表达）", status["t-biz"])
 	}
-	// 开关列双通道：LoopOn/Enabled 齐备（前端并判）
-	if !loopOn["t-biz"] || enabled["t-biz"] {
-		t.Errorf("业务关: LoopOn=%v Enabled=%v, want true/false（双通道供开关列并判）", loopOn["t-biz"], enabled["t-biz"])
+	// 任务视图只保留 loop_on 调度开关，不再暴露额外 enabled 字段。
+	if !loopOn["t-biz"] {
+		t.Errorf("业务关: LoopOn=%v, want true（loop_on 与业务字段独立表达调度状态）", loopOn["t-biz"])
 	}
 }
 

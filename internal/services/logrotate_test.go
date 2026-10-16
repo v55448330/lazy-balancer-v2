@@ -104,28 +104,17 @@ func TestTaskLogsHousekeeping_reportsDetails(t *testing.T) {
 	if len(res.TaskLogs.Deleted) != 1 || res.TaskLogs.Deleted[0] != "stale.log" {
 		t.Fatalf("Deleted=%v, want [stale.log]", res.TaskLogs.Deleted)
 	}
-	if len(res.TaskLogs.Rotated) != 1 {
-		t.Fatalf("Rotated=%v, want 1 entry", res.TaskLogs.Rotated)
-	} else {
-		r := res.TaskLogs.Rotated[0]
-		if !strings.HasPrefix(r, "big.log ") || !strings.Contains(r, ">1MB") {
-			t.Fatalf("Rotated 明细形态不符: %q（应含文件名+大小>上限）", r)
-		}
-	}
-	if res.TaskLogs.SizeCapMB != 1 {
-		t.Fatalf("SizeCapMB=%d, want 1（遵循 task_log_size_mb）", res.TaskLogs.SizeCapMB)
-	}
-	// 摘要含全部要素
+	// 摘要含保留期清理要素，且不再声称由清理任务做尺寸滚动
 	s := res.TaskLogs.Summary()
-	if !strings.Contains(s, "stale.log") || !strings.Contains(s, "big.log") || !strings.Contains(s, "大小上限 1MB") {
+	if !strings.Contains(s, "stale.log") || !strings.Contains(s, "尺寸滚动由写入侧统一执行") {
 		t.Fatalf("Summary 缺要素: %q", s)
 	}
-	// 文件终态：stale 删、big→big.log.1、ok 保留
+	// 文件终态：stale 删、big 保留且不得被二次轮转、ok 保留
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Fatal("stale.log 应已删除")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "big.log.1")); err != nil {
-		t.Fatal("big.log 应轮转为 big.log.1")
+	if _, err := os.Stat(filepath.Join(tasksDir, "big.log.1")); !os.IsNotExist(err) {
+		t.Fatal("big.log 不得由保留期清理再次轮转为 big.log.1")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "ok.log")); err != nil {
 		t.Fatal("ok.log 应保留")

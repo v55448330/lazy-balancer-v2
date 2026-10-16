@@ -334,6 +334,30 @@ func (e *Engine) Register(d Descriptor) error {
 	if d.ID == "" || d.Family == "" {
 		return errors.New("taskengine: ID/Family 必填")
 	}
+	if d.Kind == "" {
+		d.Kind = KindOneshot
+	}
+	switch d.Kind {
+	case KindScheduled, KindDaemon, KindPeriodic, KindOneshot:
+	default:
+		return fmt.Errorf("taskengine: %s 的 Kind 非法（仅 scheduled/daemon/periodic/oneshot）", d.ID)
+	}
+	// BootSync 启动执行面无角色语义，必须显式声明 RoleAny；空值不得
+	// 走下方旧任务兼容默认值，否则「未声明」被误当成显式声明。
+	if d.BootSync && d.RunsOn != RoleAny {
+		return fmt.Errorf("taskengine: %s 为 BootSync 任务，RunsOn 必须显式声明 RoleAny（启动执行面无角色语义）", d.ID)
+	}
+	if d.RunsOn == "" {
+		d.RunsOn = RoleAny
+	}
+	switch d.RunsOn {
+	case RoleAny, RoleMasterOnly, RoleSlaveOnly:
+	default:
+		return fmt.Errorf("taskengine: %s 的 RunsOn 非法（仅 any/master-only/slave-only）", d.ID)
+	}
+	if d.BootSync && d.Kind != KindOneshot {
+		return fmt.Errorf("taskengine: %s 为 BootSync 任务，Kind 必须为 Oneshot", d.ID)
+	}
 	// TASK-L2（第 69 轮 P2）：Kind 与 Fn 配套校验——Periodic 缺 IntervalFn 会在
 	// tick 处 nil 调用 panic（scheduleLoop goroutine 崩→进程退出），Scheduled 缺
 	// NextSlotFn 则永不到期静默停摆。注册期响亮拒绝。
@@ -348,15 +372,6 @@ func (e *Engine) Register(d Descriptor) error {
 	// 常驻业务门归 Run 体首行（autoban 形态，见 docs/task-engine-standard.md §4）。
 	if d.Kind == KindDaemon && d.EnabledFn != nil {
 		return fmt.Errorf("taskengine: %s 为常驻任务，EnabledFn 不参与调度（Daemon 不进 tick，静默忽略）——业务门须内置到 Run 体", d.ID)
-	}
-	// R3（第 77 轮）：BootSync 仅 RoleAny——BootSync 执行面是引擎装配尾部的
-	// 同步启动触发（RunBootSyncTasks，trigger=startup），非角色调度面；声明
-	// 主/从限定会被角色门在对应侧启动期静默跳过成「永不执行的启动任务」。
-	// 与 Daemon∧EnabledFn 同风格注册期响亮拒绝；RunBootSyncTasks 内的
-	// roleAllows 门为纵深防御（绕过 Register 的直注形态仍被拦，见
-	// engine_bootsync_role_test.go ②）。
-	if d.BootSync && d.RunsOn != RoleAny {
-		return fmt.Errorf("taskengine: %s 为 BootSync 任务，RunsOn 必须显式声明 RoleAny（启动执行面无角色语义）", d.ID)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -918,8 +933,7 @@ func TaskLogPath(taskID string) string {
 	// APISYS-F3（第 76 轮）/ P5 白名单统一（第 77 轮）：任务 ID 路径净化由
 	// 黑名单（剔除 '/'、'\\'）改白名单——只保留注册任务 ID 全字母表
 	// [A-Za-z0-9_.:-]，与 handlers sanitizeRuleID 白名单同族口径（净化范式
-	// 单一化，畸形 ID 不再产出黑名单遗漏字符的文件名）。注册 ID 全集
-	// （taskengine_wire.go 17 个：audit-retention/auto-backup/autoban/cert-*/
+	// 单一化，畸形 ID 不再产出黑名单遗漏字符的文件名）。注册 ID 全集 18 个
 	// cluster-sync/config-watchdog/crs/ip2region/log-cleanup/security-events-*/
 	// startup:config-load/threat）仅用小写+数字+'-'+'.'+一个 ':'，大写留作未来
 	// 余量——既有注册 ID 零变化。目录穿越需分隔符，白名单剔除后 :id 用户可控
@@ -942,6 +956,11 @@ func TaskLogPath(taskID string) string {
 // appendTaskLogLine 打开→追加→关闭共享实现（TASK-L10，第 69 轮：taskLogAppend
 // 与 TeeTaskLog 曾双份同形四步；MkdirAll 幂等，保留逐行兜底形态不变）。
 func appendTaskLogLine(path, line string) {
+	// 统一滚动点：taskLogAppend 与 TeeTaskLog 均在此按真实文件大小
+	// 先滚动（保留 1 份）再写入，活动文件不因追加突破配置上限。
+	if _, err := RotateTaskLogBeforeWrite(path, int64(len(line)+1), 1); err != nil {
+		log.Printf("WARNING: taskengine: rotate %s failed: %v", path, err)
+	}
 	_ = os.MkdirAll(taskLogDir, 0755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {

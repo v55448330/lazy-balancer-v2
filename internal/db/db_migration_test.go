@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateTables_omits_dead_upstream_accessURL_column(t *testing.T) {
@@ -2821,5 +2822,103 @@ func TestInitialize_backfillsCertExpiryDays(t *testing.T) {
 				t.Fatalf("cert_expiry_days=%d after backfill, want %d (seed %q)", got, tc.want, tc.seed)
 			}
 		})
+	}
+}
+
+// 初版 security_crawler_sources 漏 id 主键：存量无 id 库整表重建保留源行，
+// 新库（含 id）幂等跳过。
+func TestMigrateCrawlerSourcesID_rebuildsLegacyAndPreservesRows(t *testing.T) {
+	// Given 存量库：旧形 security_crawler_sources（无 id），一行自定义开关状态
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE security_crawler_sources (
+		name TEXT NOT NULL UNIQUE,
+		display_name TEXT NOT NULL DEFAULT '',
+		url TEXT NOT NULL DEFAULT '',
+		format TEXT NOT NULL DEFAULT 'plain',
+		update_enabled INTEGER NOT NULL DEFAULT 1,
+		entry_count INTEGER NOT NULL DEFAULT 0,
+		version TEXT NOT NULL DEFAULT '',
+		update_status TEXT NOT NULL DEFAULT 'idle',
+		message TEXT NOT NULL DEFAULT '',
+		last_checked DATETIME,
+		next_update DATETIME,
+		trigger TEXT NOT NULL DEFAULT '',
+		started_at DATETIME,
+		finished_at DATETIME,
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+	INSERT INTO security_crawler_sources (name,display_name,url,format,update_enabled,entry_count,version)
+	VALUES ('googlebot','爬虫机器人 Google','https://example.com/ips.json','json',0,170,'2026.10.16');`); err != nil {
+		t.Fatalf("seed legacy crawler sources: %v", err)
+	}
+
+	// When
+	if err := migrateCrawlerSourcesID(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then：id 主键存在且源行/开关状态保留
+	var id, enabled, entryCount int
+	var version string
+	if err := database.QueryRow(`SELECT id,update_enabled,entry_count,version FROM security_crawler_sources WHERE name='googlebot'`).Scan(&id, &enabled, &entryCount, &version); err != nil {
+		t.Fatalf("query migrated row: %v", err)
+	}
+	if id != 1 || enabled != 0 || entryCount != 170 || version != "2026.10.16" {
+		t.Errorf("迁移后行内容漂移: id=%d enabled=%d count=%d version=%q", id, enabled, entryCount, version)
+	}
+	// 幂等：再跑一次不报错、行数不变
+	if err := migrateCrawlerSourcesID(); err != nil {
+		t.Fatalf("re-run migrate: %v", err)
+	}
+	var rows int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_crawler_sources`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Errorf("rows=%d want 1", rows)
+	}
+}
+
+func TestMigrateCrawlerSourcesOutOfThreat_preservesStateAndRemovesLegacyRows(t *testing.T) {
+	// Given：历史合并形态的爬虫源行（含用户开关与更新状态），新表已有一行待覆盖
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_threat_sources
+		(id,name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,consecutive_failures)
+		VALUES (1039,'googlebot','Google 官方爬虫 IP','https://example.com/google.json','json',0,170,'2026.10.16','failed','download failed','2026-10-16 01:00:00','2026-10-17 04:00:00',2);
+		INSERT INTO security_crawler_sources (name,display_name,url,format)
+		VALUES ('googlebot','旧占位名','https://example.com/google.json','json');`); err != nil {
+		t.Fatalf("seed merged sources: %v", err)
+	}
+
+	// When
+	if err := migrateCrawlerSourcesOutOfThreat(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then：状态迁入独立源表且不重复，威胁表不再含爬虫地址库源
+	var enabled, entryCount, failures int
+	var displayName, version, status, nextUpdate string
+	if err := database.QueryRow(`SELECT display_name,update_enabled,entry_count,version,update_status,next_update,consecutive_failures
+		FROM security_crawler_sources WHERE name='googlebot'`).Scan(&displayName, &enabled, &entryCount, &version, &status, &nextUpdate, &failures); err != nil {
+		t.Fatalf("query migrated crawler source: %v", err)
+	}
+	nextTime, parseErr := time.Parse(time.RFC3339, nextUpdate)
+	if displayName != "Google 官方爬虫 IP" || enabled != 0 || entryCount != 170 || version != "2026.10.16" || status != "failed" || parseErr != nil || !nextTime.Equal(time.Date(2026, 10, 17, 4, 0, 0, 0, time.UTC)) || failures != 2 {
+		t.Errorf("迁移后状态漂移: name=%q enabled=%d count=%d version=%q status=%q next=%q failures=%d parseErr=%v", displayName, enabled, entryCount, version, status, nextUpdate, failures, parseErr)
+	}
+	var crawlerRows, legacyRows int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_crawler_sources WHERE name='googlebot'`).Scan(&crawlerRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_threat_sources WHERE name IN ('googlebot','gptbot','bingbot','so360spider')`).Scan(&legacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if crawlerRows != 1 || legacyRows != 0 {
+		t.Errorf("迁移行数错误: crawler=%d legacy=%d", crawlerRows, legacyRows)
 	}
 }

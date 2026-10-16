@@ -22,10 +22,6 @@ import (
 const (
 	defaultScheduleDays = "1,2,3,4,5,6,7"
 	defaultScheduleTime = "04:00"
-
-	// updateMaxAttempts 任务内重试：同一任务内对失败步骤最多尝试 3 次
-	// （1 初始 + 2 重试），重试等待见 updateAttemptWaits。
-	updateMaxAttempts = 3
 )
 
 // 排程槽推进门共享 SQL 片段（SEC-C-2，第 70 轮审计）：仅 auto 触发且现存
@@ -48,24 +44,18 @@ const (
 	threatSlotAdvanceSQL = `next_update=IIF(` + slotAdvanceGateSQL + `, ?, next_update)`
 )
 
-// updateAttemptWaits 第 N 次失败后的重试等待（30s/60s）。
-var updateAttemptWaits = []time.Duration{30 * time.Second, 60 * time.Second}
-
-// updateRetrySleep 重试等待（测试可替换为即时返回）。
-var updateRetrySleep = func(d time.Duration) { time.Sleep(d) }
-
-// runWithInTaskRetry 在同一任务内重试失败步骤：第 N 次失败后经 onWait 回调
-// （调用方落「等待 Ns 重试，第 x 次，共 x 次」日志），等待后重试；耗尽返回最后错误。
-func runWithInTaskRetry(op func() error, onWait func(nextAttempt int, wait time.Duration, err error)) error {
-	var err error
-	for attempt := 1; ; attempt++ {
-		if err = op(); err == nil || attempt >= updateMaxAttempts {
-			return err
-		}
-		wait := updateAttemptWaits[attempt-1]
-		onWait(attempt+1, wait, err)
-		updateRetrySleep(wait)
+// parseUTCSlot 解析 DB 存的 UTC 排程串为 time.Time（crsTimeLayout 与
+// RFC3339 双形态——与 localDisplayUTC 同口径）。
+func parseUTCSlot(s string) time.Time {
+	if s == "" {
+		return time.Time{}
 	}
+	for _, layout := range []string{crsTimeLayout, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // NormalizeScheduleDays 归一写侧输入：过滤非法值、去重、升序；结果为空表示
@@ -203,26 +193,73 @@ func versionTableNextSlot(table string, now time.Time) string {
 	return NextScheduledSlot(now, days, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
 }
 
+// versionTableAutoUpdateEnabled 读版本表自动更新开关（读错 fail-closed）。
+func versionTableAutoUpdateEnabled(table string) bool {
+	if db.DB == nil {
+		return false
+	}
+	var enabled int
+	if err := db.DB.QueryRow(`SELECT COALESCE(auto_update,1) FROM ` + table + ` WHERE id=1`).Scan(&enabled); err != nil {
+		return false
+	}
+	return enabled == 1
+}
+
 // CRSSchedule 返回 CRS 更新任务排程（GET 载荷）。
 func CRSSchedule() ([]int, string) { return versionTableSchedule("security_crs_version") }
 
 // IP2RegionSchedule 返回 IP2Region 更新任务排程（GET 载荷）。
 func IP2RegionSchedule() ([]int, string) { return versionTableSchedule("security_ip2region_version") }
 
-// ThreatSchedule 读威胁库任务级排程（global_config 两列；与 threat_auto_update
-// 同表先例——任务级设置不落逐源表）。
-func ThreatSchedule() ([]int, string) {
+// globalTaskSchedule 读任务级排程（global_config 两列；threat/crawler 共用
+// 同一读取与归一逻辑，列前缀隔离配置）。
+func globalTaskSchedule(prefix string) ([]int, string) {
 	var daysRaw, hhmm string
-	if err := db.DB.QueryRow(`SELECT COALESCE(threat_schedule_days,''), COALESCE(threat_schedule_time,'') FROM global_config WHERE id=1`).Scan(&daysRaw, &hhmm); err != nil {
+	query := `SELECT COALESCE(` + prefix + `_schedule_days,''), COALESCE(` + prefix + `_schedule_time,'') FROM global_config WHERE id=1`
+	if err := db.DB.QueryRow(query).Scan(&daysRaw, &hhmm); err != nil {
 		return normalizeScheduleRow(defaultScheduleDays, defaultScheduleTime)
 	}
 	return normalizeScheduleRow(daysRaw, hhmm)
 }
 
+// ThreatSchedule 读威胁库任务级排程（global_config 两列；与 threat_auto_update
+// 同表先例——任务级设置不落逐源表）。
+func ThreatSchedule() ([]int, string) { return globalTaskSchedule("threat") }
+
+// CrawlerSchedule 读爬虫地址库独立排程（不共享 threat_* 配置）。
+func CrawlerSchedule() ([]int, string) { return globalTaskSchedule("crawler") }
+
 // threatNextSlot 威胁库任务级排程槽（UTC 落库串）。
 func threatNextSlot(now time.Time) string {
 	days, hhmm := ThreatSchedule()
 	return NextScheduledSlot(now, days, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
+}
+
+// crawlerNextSlot 爬虫地址库独立排程槽（UTC 落库串）。
+func crawlerNextSlot(now time.Time) string {
+	days, hhmm := CrawlerSchedule()
+	return NextScheduledSlot(now, days, hhmm, CurrentLocation()).UTC().Format(crsTimeLayout)
+}
+
+// earliestEnabledSourceUpdate 返回启用源最早排程槽（空=无排程）。
+// sourceTable 仅由包内固定传入，不接受外部输入。
+func earliestEnabledSourceUpdate(sourceTable string) string {
+	if db.DB == nil {
+		return ""
+	}
+	var next string
+	if err := db.DB.QueryRow(`SELECT MIN(COALESCE(NULLIF(next_update,''), '9999')) FROM ` + sourceTable + ` WHERE update_enabled=1`).Scan(&next); err != nil || next == "9999" {
+		return ""
+	}
+	return next
+}
+
+func earliestThreatNextUpdate() string {
+	return earliestEnabledSourceUpdate("security_threat_sources")
+}
+
+func earliestCrawlerNextUpdate() string {
+	return earliestEnabledSourceUpdate("security_crawler_sources")
 }
 
 // setVersionTableSchedule 版本表排程保存 + 保存即重排（auto_update 关闭时也
@@ -255,11 +292,9 @@ func SetIP2RegionSchedule(days []int, hhmm string) error {
 	return setVersionTableSchedule("security_ip2region_version", "unknown", days, hhmm)
 }
 
-// SetThreatSchedule 保存威胁库任务级排程（global_config）并重排全部启用源的
-// next_update（2026-09-25 用户裁定：失败源不再保留退避，一律重排到新槽）。
-// LBS-B-U1（第 69 轮）：两步写事务化——跨表双写曾各自独立提交，第二步失败
-// 留「排程已改、槽位照旧」中间态；现失败整体回滚报错。
-func SetThreatSchedule(days []int, hhmm string) error {
+// setGlobalTaskSchedule 保存任务级排程并事务化重排启用源 next_update。
+// 配置列前缀与源表由内部调用方固定传入，不接受外部输入。
+func setGlobalTaskSchedule(prefix, sourceTable string, days []int, hhmm string) error {
 	norm, err := validateScheduleInput(days, hhmm)
 	if err != nil {
 		return err
@@ -270,15 +305,28 @@ func SetThreatSchedule(days []int, hhmm string) error {
 		return fmt.Errorf("开启排程事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // 已 Commit 后为 no-op
-	if _, err := tx.Exec(`UPDATE global_config SET threat_schedule_days=?, threat_schedule_time=?, updated_at=datetime('now') WHERE id=1`,
-		FormatScheduleDays(norm), hhmm); err != nil {
+	query := `UPDATE global_config SET ` + prefix + `_schedule_days=?, ` + prefix + `_schedule_time=?, updated_at=datetime('now') WHERE id=1`
+	if _, err := tx.Exec(query, FormatScheduleDays(norm), hhmm); err != nil {
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1`, next); err != nil {
-		return fmt.Errorf("重排威胁库源更新计划: %w", err)
+	if _, err := tx.Exec(`UPDATE `+sourceTable+` SET next_update=? WHERE update_enabled=1`, next); err != nil {
+		return fmt.Errorf("重排规则库源更新计划: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交排程事务: %w", err)
 	}
 	return nil
+}
+
+// SetThreatSchedule 保存威胁库任务级排程（global_config）并重排全部启用源的
+// next_update（2026-09-25 用户裁定：失败源不再保留退避，一律重排到新槽）。
+// LBS-B-U1（第 69 轮）：两步写事务化——跨表双写曾各自独立提交，第二步失败
+// 留「排程已改、槽位照旧」中间态；现失败整体回滚报错。
+func SetThreatSchedule(days []int, hhmm string) error {
+	return setGlobalTaskSchedule("threat", "security_threat_sources", days, hhmm)
+}
+
+// SetCrawlerSchedule 保存爬虫地址库独立排程并重排全部启用爬虫源。
+func SetCrawlerSchedule(days []int, hhmm string) error {
+	return setGlobalTaskSchedule("crawler", "security_crawler_sources", days, hhmm)
 }

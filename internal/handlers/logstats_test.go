@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -133,5 +135,84 @@ func TestGetLogStats_certJobRowFollowsTaskLogDir(t *testing.T) {
 	}
 	if cj.SizeBytes != 2000 {
 		t.Fatalf("certjob size_bytes=%d, want 2000（读侧须与写入端同源 tasks/certjobs/）", cj.SizeBytes)
+	}
+}
+
+func TestGetLogStats_eachTaskUsesOwnRealFileSize(t *testing.T) {
+	// Given：三个不同大小的任务日志文件
+	h := newBackupTestHandlers(t)
+	initTaskEngineForTest(t)
+	tasksDir := filepath.Join(t.TempDir(), "tasks")
+	h.cfg.LogFile = filepath.Join(filepath.Dir(tasksDir), "app.log")
+	taskengine.SetLogDir(tasksDir)
+	t.Cleanup(func() { taskengine.SetLogDir("") })
+	certDir := filepath.Join(tasksDir, "certjobs")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var jobID int
+	if err := db.DB.QueryRow(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_x','x.example','queued') RETURNING id`).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]int{
+		"crawlerbot-update.log": 5,
+		"threat.log":            10,
+		filepath.Join("certjobs", "certjob-lb_x.log"): 15,
+	}
+	for name, size := range files {
+		if err := os.WriteFile(filepath.Join(tasksDir, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if active, _, _ := dirBytes(filepath.Join(tasksDir, "crawlerbot-update.log")); active != 5 {
+		t.Fatalf("探针路径文件大小=%d want 5", active)
+	}
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Logs []struct {
+				Key          string `json:"key"`
+				Name         string `json:"name"`
+				SizeBytes    int64  `json:"size_bytes"`
+				KeepCount    int    `json:"keep_count"`
+				ConfigSource string `json:"config_source"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]struct {
+		Key          string `json:"key"`
+		Name         string `json:"name"`
+		SizeBytes    int64  `json:"size_bytes"`
+		KeepCount    int    `json:"keep_count"`
+		ConfigSource string `json:"config_source"`
+	}{}
+	for _, row := range resp.Data.Logs {
+		byKey[row.Key] = row
+	}
+	certJobKey := "task:cert-job:" + strconv.Itoa(jobID)
+	for key, want := range map[string]int{"task:crawlerbot-update": 5, "task:threat": 10, certJobKey: 15} {
+		row, ok := byKey[key]
+		if !ok {
+			t.Errorf("缺少逐任务统计行 %s", key)
+			continue
+		}
+		if row.SizeBytes != int64(want) {
+			t.Errorf("%s size_bytes=%d want %d", key, row.SizeBytes, want)
+		}
+		if row.ConfigSource == "统一任务日志（tasks/*.log）" {
+			t.Errorf("%s 仍使用通配符聚合口径: %s", key, row.ConfigSource)
+		}
+	}
+	if byKey["task:crawlerbot-update"].KeepCount != 1 || byKey[certJobKey].KeepCount != 5 {
+		t.Errorf("归档份数策略错误: crawler=%d certjob=%d", byKey["task:crawlerbot-update"].KeepCount, byKey[certJobKey].KeepCount)
 	}
 }

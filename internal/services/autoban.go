@@ -156,6 +156,19 @@ var autobanProjectionRefresher func() (IPListProjectionOutcome, error)
 // SetAutobanReloader 注册全量重载回调（nil=清除，测试用）。
 func SetAutobanReloader(fn func() error) { autobanReloader = fn }
 
+// SetAutobanEnabled 写自动封禁业务开关并同步任务调度；禁用前执行与设置页
+// 相同的收尾，再 StopLoop，避免名单变化滞留。
+func SetAutobanEnabled(enabled bool) error {
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
+		return err
+	}
+	if !enabled {
+		AutobanDisableFlush()
+	}
+	syncTaskLoop(AutobanTaskID, enabled)
+	return nil
+}
+
 // SetAutobanProjectionRefresher 注册投影热路径回调（nil=清除，测试用）。
 func SetAutobanProjectionRefresher(fn func() (IPListProjectionOutcome, error)) {
 	autobanProjectionRefresher = fn

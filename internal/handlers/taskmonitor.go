@@ -136,12 +136,25 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "触发类任务不可调度——仅手动/代码触发执行"})
 				return
 			}
+			// 业务驱动任务（自动更新/自动备份/自动封禁）只能由对应业务页开关
+			// 修改；引擎只同步 loop_on，禁止在任务监控反写业务配置或另开第二入口。
+			businessDriven := map[string]bool{
+				"threat": true, "crs": true, "ip2region": true,
+				"crawlerbot-update": true, "auto-backup": true, "autoban": true,
+			}
+			if businessDriven[id] {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该任务由对应业务页开关控制，请在业务页修改自动更新设置"})
+				return
+			}
 			if *req.Enabled {
 				te.StartLoop(id)
+			} else {
+				te.StopLoop(id)
+			}
+			if *req.Enabled {
 				recordAudit(c, "恢复", "任务监控", m.Name+" 调度")
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已恢复 " + m.Name + " 调度"})
 			} else {
-				te.StopLoop(id)
 				recordAudit(c, "停止", "任务监控", m.Name+" 调度")
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已停止 " + m.Name + " 调度"})
 			}

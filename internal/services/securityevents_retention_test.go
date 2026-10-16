@@ -199,13 +199,15 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 	// N-4：批间让出同时检查 ctx——已取消的 ctx 保证第一批次删除后立即返回
 	// （确定性：循环首批次恒执行，其后的批间 select 立即命中 ctx.Done），
 	// 大批量首遍不再阻塞 Stop 的等待。
-	// Given: 12000 条过期事件（完整 pass 需 3 批）+ 已取消的 ctx
+	// Given: 3 倍单批的过期事件（完整 pass 需 3 批；v2.3.8 单批上调 20000 后
+	// 种子随批次缩放，保证「首批后立即取消」语义不依赖具体批大小）+ 已取消的 ctx
+	seedTotal := 3 * securityEventsRetentionDeleteBatch
 	setupSecurityEventsRetentionTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	var sb strings.Builder
-	for start := 0; start < 12000; start += 1000 {
+	for start := 0; start < seedTotal; start += 1000 {
 		sb.Reset()
 		sb.WriteString("INSERT INTO security_events (event_time, client_ip, event_type) VALUES ")
 		for i := 0; i < 1000; i++ {
@@ -235,8 +237,8 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 	case <-time.After(5 * time.Second):
 		t.Fatal("cleanup did not stop promptly on a canceled context")
 	}
-	if got := countSecurityEventsByType(t, "expired"); got != 12000-securityEventsRetentionDeleteBatch {
-		t.Fatalf("expired events after canceled cleanup = %d, want %d (exactly one batch deleted)", got, 12000-securityEventsRetentionDeleteBatch)
+	if got := countSecurityEventsByType(t, "expired"); got != seedTotal-securityEventsRetentionDeleteBatch {
+		t.Fatalf("expired events after canceled cleanup = %d, want %d (exactly one batch deleted)", got, seedTotal-securityEventsRetentionDeleteBatch)
 	}
 	// SEC-L1（第 69 轮）：取消路径的返回契约与其余早退同口径——已提交删
 	// 除的批次数必须如实上报（§6.5 摘要行数据源），不得归 0 丢弃。

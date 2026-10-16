@@ -13,6 +13,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // LogStorageInfo 描述一类日志的体量与治理状态。
@@ -236,10 +237,10 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
-		{Key: "tasks", Name: "任务日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, RetentionNote: "与审计保留月数同配置，运行日志清理任务执行", ConfigSource: "统一任务日志（tasks/*.log）"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/crs.log）"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/ip2region.log）"},
 		{Key: "threat_update", Name: "威胁库更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/threat.log）"},
+		{Key: "crawlerbot_update", Name: "爬虫地址库更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/crawlerbot-update.log）"},
 		{Key: "runtime", Name: "运行日志", LimitBytes: sizeLimitMB("runtime_log_size_mb", 100), KeepCount: 0, RetentionNote: "时间戳轮转，按保留期清理（份数随保留期）", ConfigSource: "基础设置 · 运行日志大小"},
 		{Key: "caddy", Name: "Caddy 运行日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
 		{Key: "caddy_runtime", Name: "Caddy 运行时日志", LimitBytes: caddyLimit, KeepCount: 5, ConfigSource: "Caddy 全局配置 · 日志大小"},
@@ -329,31 +330,31 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	if info := byKey("threat_update"); info != nil {
 		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("threat")
 	}
-	// 任务日志目录聚合行（任务监控日志弹框统计栏消费）：10MB（task_log_size_mb
-	// 默认值）/保 1 份/保留=审计保留月数（taskLogsHousekeeping 口径，log-cleanup 族执行）。
-	if info := byKey("tasks"); info != nil {
-		var total, rotated int64
-		var rotCount int
-		if entries, err := os.ReadDir(tasksDir); err == nil {
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				inf, err := e.Info()
-				if err != nil {
-					continue
-				}
-				if strings.HasSuffix(e.Name(), ".1") {
-					rotated += inf.Size()
-					rotCount++
-				} else {
-					total += inf.Size()
-				}
-			}
-		}
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = total, rotated, rotCount
+	if info := byKey("crawlerbot_update"); info != nil {
+		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("crawlerbot-update")
 	}
-
+	// 逐任务真实文件统计（任务监控弹框 log-key=task:<id>）：活动大小、
+	// 轮转副本与归档份数均按本任务文件计算，不再使用目录聚合值冒充。
+	for _, task := range services.CollectSystemTasks() {
+		path := taskengine.TaskLogPath(task.ID)
+		keep := 1
+		if strings.HasPrefix(task.ID, "cert-job:") {
+			var ruleID string
+			if err := db.DB.QueryRow(`SELECT rule_id FROM cert_jobs WHERE id=?`, strings.TrimPrefix(task.ID, "cert-job:")).Scan(&ruleID); err != nil || ruleID == "" {
+				services.Logf("warn", "证书任务 %s 日志路径解析失败: %v", task.ID, err)
+				continue
+			}
+			path = services.CertJobLogPath(ruleID)
+			keep = 5
+		}
+		active, rotated, rotCount := dirBytes(path)
+		infos = append(infos, LogStorageInfo{
+			Key: "task:" + task.ID, Name: task.Name + "日志",
+			SizeBytes: active, RotatedBytes: rotated, RotatedCount: rotCount,
+			LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: keep,
+			ConfigSource: "统一任务日志（" + filepath.Base(path) + "）",
+		})
+	}
 	ruleID := strings.TrimSpace(c.Query("caddy_id"))
 	if ruleID != "" {
 		// caddy_id 仅允许 caddy_id 字母表（[A-Za-z0-9_-]）；读者侧与写入侧

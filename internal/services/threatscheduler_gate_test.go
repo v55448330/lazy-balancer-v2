@@ -41,3 +41,25 @@ func TestThreatScheduler_masterSwitchGatesTask(t *testing.T) {
 		t.Fatal("总闸开启后须为 true")
 	}
 }
+
+func TestSetThreatAutoUpdate_armsEmptySlots(t *testing.T) {
+	// Given：业务曾关闭，全部威胁源 next_update 为空
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=''`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：开启业务自动更新
+	if err := SetThreatAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：开启时必须补首槽，不能让 NextSlotFn 永不到期
+	var next string
+	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_threat_sources WHERE name='ustc'`).Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	if next == "" {
+		t.Fatal("威胁源开启后仍未补首槽")
+	}
+}

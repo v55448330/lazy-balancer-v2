@@ -844,6 +844,27 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 
 	}
+	// 爬虫地址库独立源行：载荷缺席=保留本地，携带即全量替换（与威胁源同语义）。
+	if snapshot.SecurityCrawlerSources != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM security_crawler_sources"); err != nil {
+			return fmt.Errorf("清理爬虫地址库源表: %w", err)
+		}
+		var crawlerSources []map[string]interface{}
+		if len(snapshot.SecurityCrawlerSources) > 0 {
+			if err := json.Unmarshal(snapshot.SecurityCrawlerSources, &crawlerSources); err != nil {
+				return fmt.Errorf("解析 security_crawler_sources: %w", err)
+			}
+		}
+		for _, row := range crawlerSources {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO security_crawler_sources (id,name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				row["id"], row["name"], row["display_name"], row["url"], row["format"], row["update_enabled"], row["entry_count"], row["version"], row["update_status"], row["message"],
+				snapshotNullableDatetime(row["last_checked"]), snapshotNullableDatetime(row["next_update"]), row["trigger"],
+				snapshotNullableDatetime(row["started_at"]), snapshotNullableDatetime(row["finished_at"]),
+				row["consecutive_failures"], row["created_at"], row["updated_at"]); err != nil {
+				return fmt.Errorf("写入爬虫地址库源行: %w", err)
+			}
+		}
+	}
 	var policies []map[string]interface{}
 	if len(snapshot.SecurityPolicies) > 0 {
 		if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
@@ -1263,6 +1284,18 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	if settings.ThreatScheduleTime != nil {
 		settingClauses = append(settingClauses, "threat_schedule_time=?")
 		settingArgs = append(settingArgs, *settings.ThreatScheduleTime)
+	}
+	if settings.CrawlerAutoUpdate != nil {
+		settingClauses = append(settingClauses, "crawler_auto_update=?")
+		settingArgs = append(settingArgs, *settings.CrawlerAutoUpdate)
+	}
+	if settings.CrawlerScheduleDays != nil {
+		settingClauses = append(settingClauses, "crawler_schedule_days=?")
+		settingArgs = append(settingArgs, *settings.CrawlerScheduleDays)
+	}
+	if settings.CrawlerScheduleTime != nil {
+		settingClauses = append(settingClauses, "crawler_schedule_time=?")
+		settingArgs = append(settingArgs, *settings.CrawlerScheduleTime)
 	}
 	// D1（第 74 轮审计）：自动封禁六项配置同口径入块（指针缺席=旧主端快照未
 	// 携带——跳过写入保留从端本地值，不清零；新主端恒携带全组，升主即生效）。

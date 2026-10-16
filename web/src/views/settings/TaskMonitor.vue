@@ -146,10 +146,10 @@
             <!-- LN-1（第 72 轮）：cert-waiting-ca 默认调度关闭、续期扫描入队
                  唤醒——开关上加 tooltip 说明自动唤醒语义（页内既有 tooltip 范式） -->
             <el-tooltip v-if="row.id === 'cert-waiting-ca'" content="有证书任务入队时自动唤醒" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-switch :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+              <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
             </el-tooltip>
-            <el-tooltip v-else-if="row.kind !== 'oneshot'" content="停止/恢复调度" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-switch :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+            <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="isBusinessDrivenTask(row) ? '由对应业务页自动更新控制' : '停止/恢复调度'" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-switch :model-value="!!row.loop_on" :disabled="!canOperate || isBusinessDrivenTask(row)" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
             </el-tooltip>
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
@@ -241,18 +241,9 @@
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
           <el-descriptions-item label="运行节奏">{{ detailTask.cadence || '—' }}</el-descriptions-item>
           <el-descriptions-item label="调度开关">
-            <!-- B1-4（第 74 轮）：调度/业务两开关拆行——此前单 tag 并判
-                 loop_on&&enabled，业务关时被误读为「调度被关」。本行只承载
-                 loop_on（引擎调度投递开关，列表「调度」列同源）；业务开关
-                 关闭时另起「业务开关」行并 tooltip 引导。 -->
-            <el-tooltip content="引擎调度投递开关（列表「调度」列同源）——业务开关关闭时调度自动跳过" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip content="引擎调度投递开关（列表「调度」列同源）" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-tag v-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on ? '开启' : '关闭' }}</el-tag>
               <el-tag v-else size="small" type="info" effect="plain">不可调度</el-tag>
-            </el-tooltip>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.kind !== 'oneshot' && detailTask.enabled === false" label="业务开关">
-            <el-tooltip content="任务业务开关未启用（如自动更新/自动备份关闭）——引擎跳过调度、状态列显示已停止；与调度开关独立，启用入口在对应业务页" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-tag size="small" type="warning" effect="plain">未启用</el-tag>
             </el-tooltip>
           </el-descriptions-item>
           <el-descriptions-item label="下次执行">{{ detailTask.next_run_at || '—' }}</el-descriptions-item>
@@ -298,13 +289,10 @@
       <template #header>
         <DialogHeader :icon="Timer" :title="`任务日志 · ${logsTask?.name || ''}`" subtitle="统一任务引擎文本日志（实时刷新）" />
       </template>
-      <!-- 日志存储统计栏（cert-job 行同 CertJobs 页 key=certjob，其余任务族 key=tasks；后端未含该键时组件自隐） -->
+      <!-- 日志存储统计栏：task:<id> 逐任务真实文件（含 cert-job 动态行）；后端未含该键时组件自隐 -->
       <div class="tm-log-stats">
-        <LogStorageBar :log-key="logsTask && isCertJobRow(logsTask.id) ? 'certjob' : 'tasks'" style="margin-right: auto" />
+        <LogStorageBar :log-key="logsTaskStorageKey" style="margin-right: auto" />
       </div>
-      <div v-if="logsTask?.log_size_bytes != null" style="font-size:12px;color:#6b7280;margin-bottom:6px">
-            本文件 {{ (logsTask.log_size_bytes / 1024).toFixed(1) }} KB
-          </div>
           <div ref="logContainerRef" class="tm-log-container">
         <pre v-if="logsText" class="tm-log-content">{{ logsText }}</pre>
         <el-empty v-else description="暂无日志" :image-size="60" />
@@ -344,7 +332,7 @@ interface TaskInfo {
   kind: 'scheduled' | 'daemon' | 'periodic' | 'oneshot'
   status: string; cancellable: boolean; controllable?: boolean; triggerable?: boolean
   last_run?: TaskRunInfo; next_run_at?: string; runs_24h: number; success_24h: number; fail_24h: number
-  loop_on?: boolean; enabled?: boolean; started_at?: string; log_size_bytes?: number // 常驻族：循环启停态/业务开关联动（方案 A：开关列并判 loop_on&&enabled）/ 引擎启动时刻
+  loop_on?: boolean; started_at?: string; log_size_bytes?: number // 常驻族：循环启停态/引擎启动时刻
 }
 interface RunRecord {
   id: number; task_id: string; family: string; trigger: string; operator?: string; status: string
@@ -507,11 +495,8 @@ const onTrigger = async (row: TaskInfo) => {
   fetchTasks()
 }
 const onToggle = async (row: TaskInfo, enabled: boolean) => {
-  // 方案 A 配套：业务开关联动关闭（自动更新/自动备份等设置页开关）时，
-  // 开关列显示「已停止」来自 enabled=false——此时拨动只改 loop_on 无实际
-  // 效果且开关仍显示关。给出解释并引导到对应设置页，不误改调度开关。
-  if (row.enabled === false) {
-    ElMessage.warning('该任务的业务开关已关闭（如自动更新/自动备份设置），请到对应设置页开启后调度才会运行')
+  if (isBusinessDrivenTask(row)) {
+    ElMessage.warning('该任务由对应业务页自动更新控制，请在业务页修改')
     return
   }
   // 常驻族停止前确认（功能中断影响大——如安全事件采集停摆）
@@ -596,6 +581,7 @@ const openDetail = async (row: TaskInfo) => {
 const logsVisible = ref(false)
 const logsText = ref('')
 const logsTask = ref<TaskInfo | null>(null)
+const logsTaskStorageKey = computed(() => logsTask.value ? `task:${logsTask.value.id}` : 'tasks')
 const logContainerRef = ref<HTMLElement | null>(null)
 let logsTimer: ReturnType<typeof setInterval> | null = null
 const taskLogEndpoint = (id: string): string =>
@@ -637,6 +623,8 @@ const kindLabel = (k: string) => kindLabels[k] || k
 const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
   k === 'scheduled' ? 'primary' : k === 'daemon' ? 'success' : k === 'periodic' ? 'info' : 'warning'
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
+const businessDrivenTaskIDs = new Set(['threat', 'crs', 'ip2region', 'crawlerbot-update', 'auto-backup', 'autoban'])
+const isBusinessDrivenTask = (row: TaskInfo) => businessDrivenTaskIDs.has(row.id)
 const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4, '触发': 5 }
 const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' =>
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : c === '触发' ? 'info' : 'info'

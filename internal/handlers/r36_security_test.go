@@ -139,7 +139,7 @@ func (securityRowsErrConn) QueryContext(_ context.Context, query string, _ []dri
 		return &rowsErrFixedRows{cols: securityRowsErrPolicyColumns, rows: [][]driver.Value{{
 			int64(1), "混拆迁移", "", "off", int64(5), "", "[]", int64(0), int64(1), "[]", "[]",
 			int64(0), int64(0), int64(0), "[]", "[]", "[]", int64(0), int64(0), int64(1), int64(0),
-			"", "", "[]", "off", int64(0), int64(0), "[]", "[]", "mixed", int64(0),
+			"", "", "[]", "off", int64(0), "[]", int64(0), int64(0), "[]", "[]", "mixed", int64(0),
 		}}}, nil
 	case strings.Contains(query, "FROM security_policy_bindings"):
 		return rowsErrFailingRows{cols: []string{"x"}}, nil
@@ -152,8 +152,8 @@ var securityRowsErrPolicyColumns = []string{
 	"id", "name", "description", "mode", "anomaly_threshold", "ip_acl_mode", "ip_acl_list", "ip_acl_enabled",
 	"ip_whitelist_enabled", "ip_whitelist", "ip_blacklist", "rate_limit_enabled", "rate_limit_rps", "rate_limit_burst",
 	"crs_rule_groups", "crs_excluded_rules", "custom_rules", "block_page_id", "block_status_code", "enabled",
-	"updated_by", "created_at", "updated_at", "geoip_countries", "geoip_mode", "waf_check_response",
-	"log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "policy_type", "trust_detection",
+	"updated_by", "created_at", "updated_at", "geoip_countries", "geoip_mode", "geoip_crawler_exempt", "geoip_crawler_engines",
+	"waf_check_response", "log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "policy_type", "trust_detection",
 }
 
 type rowsErrNoOpTx struct{}

@@ -207,7 +207,8 @@ type threatSourceRow struct {
 // 落定后下一运行=下一排程槽，不拖累健康源的重下载。
 func threatDueSources(trigger string) ([]threatSourceRow, error) {
 	rows, err := db.DB.Query(`SELECT id, name, url, COALESCE(next_update,''), COALESCE(consecutive_failures,0)
-		FROM security_threat_sources WHERE update_enabled=1 ORDER BY id`)
+		FROM security_threat_sources
+		WHERE update_enabled=1 AND name IN ('ustc','firehol_l1','et_compromised') ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

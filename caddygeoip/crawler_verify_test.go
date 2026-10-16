@@ -3,6 +3,8 @@ package caddygeoip
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -62,6 +64,25 @@ func TestVerifyCrawler_passFailMatrix(t *testing.T) {
 	// 缓存：同 IP 二次询问不再触 DNS（通过结论已缓存）
 	if !VerifyCrawler("66.249.66.1", "googlebot") {
 		t.Error("缓存命中应直接通过")
+	}
+}
+
+func TestVerifyCrawlerIPRangeFromList_jsonPerEngine(t *testing.T) {
+	// Given：按引擎隔离的快照 JSON（与 root 服务 writeCrawlerIPListSnapshotAll 同形）
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	defer func() { crawlerIPListFile = oldFile }()
+	if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["140.0.0.0/32"],"googlebot":["66.249.66.0/24"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ResetCrawlerVerifyCacheForTest(nil)
+
+	// When / Then：360 命中只认 360 源，不得混用 Google 段
+	if !verifyCrawlerIPRangeFromList("140.0.0.0", "so360spider") {
+		t.Fatal("360 官方段应命中 iprange")
+	}
+	if verifyCrawlerIPRangeFromList("140.0.0.0", "googlebot") {
+		t.Fatal("360 段不得串入 Googlebot 命中")
 	}
 }
 

@@ -185,9 +185,7 @@ type RuntimeCleanupResult struct {
 
 // TaskLogHousekeepingResult 任务日志清理明细。
 type TaskLogHousekeepingResult struct {
-	Deleted   []string // 超保留期删除（文件名）
-	Rotated   []string // 超大小上限轮转（文件名+大小对比，如 "threat.log 11.3MB>10MB"）
-	SizeCapMB int      // 生效的大小上限（task_log_size_mb）
+	Deleted []string // 超保留期删除（文件名）
 }
 
 // Summary 一行明细摘要（列表超 5 个收敛为「等 N 个」；空=「无」）。
@@ -201,8 +199,7 @@ func (r TaskLogHousekeepingResult) Summary() string {
 		}
 		return strings.Join(names, "、")
 	}
-	return fmt.Sprintf("任务日志：超期删除 %d 个[%s]、超限轮转 %d 个[%s]（大小上限 %dMB）",
-		len(r.Deleted), list(r.Deleted), len(r.Rotated), list(r.Rotated), r.SizeCapMB)
+	return fmt.Sprintf("任务日志：超期删除 %d 个[%s]（尺寸滚动由写入侧统一执行）", len(r.Deleted), list(r.Deleted))
 }
 
 // RuntimeLogCleanupOnce 单轮清理：应用日志过期副本删除 + 任务日志统一
@@ -285,7 +282,7 @@ func wafAuditHousekeeping() []string {
 // taskLogsHousekeeping 任务日志统一清理与轮转（log-cleanup 任务体）——
 // 返回清理明细（哪个文件被删/轮转——用户可见）。
 func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
-	result := TaskLogHousekeepingResult{SizeCapMB: int(getTaskLogSizeBytes() / 1024 / 1024)}
+	result := TaskLogHousekeepingResult{}
 	// B3：tasks 根 + certjobs 子目录统一扫描（证书任务日志并入任务日志体系）
 	dir := filepath.Join(filepath.Dir(logFile), "tasks")
 	certDir := filepath.Join(dir, "certjobs")
@@ -322,22 +319,12 @@ func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
 	// 3 月 + warn 留痕；nil DB 时静默默认——与既有形态一致）。
 	months := auditRetentionMonths()
 	cutoff := time.Now().AddDate(0, -months, 0)
-	// R63-P2-1：任务日志大小遵循「任务日志大小」配置项（task_log_size_mb，
-	// 默认 10MB——曾硬编码 5MB 与配置/统计三方分裂）。
-	sizeCap := getTaskLogSizeBytes()
+	// 尺寸滚动已统一归 taskengine 写入前检查（tasks/*.log 与 certjobs/ 同一
+	// RotateTaskLogBeforeWrite）；本清理任务只处理保留期，不再二次滚动。
 	for _, f := range all {
 		if f.info.ModTime().Before(cutoff) {
 			if os.Remove(f.path) == nil {
 				result.Deleted = append(result.Deleted, f.name)
-			}
-			continue
-		}
-		// L1-P4-1（第 67 轮）：certjobs/ 尺寸轮转归写入侧预写入轮转单一负责
-		// （5 代移位）；housekeeping 对其只做保留期清理——否则孤儿超阈活动
-		// 文件会被 rename 覆盖 .1 代际（双轨覆盖丢史窗口残留面）。
-		if f.info.Size() > sizeCap && filepath.Dir(f.path) != certDir {
-			if os.Rename(f.path, f.path+".1") == nil { // 轮转保一份
-				result.Rotated = append(result.Rotated, fmt.Sprintf("%s %.1fMB>%dMB", f.name, float64(f.info.Size())/1024/1024, sizeCap/1024/1024))
 			}
 		}
 	}

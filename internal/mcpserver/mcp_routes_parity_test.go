@@ -144,6 +144,14 @@ var mcpUncoveredRoutes = map[string]string{
 	"PUT /api/v1/security/threat-lib/schedule":      "威胁库定时更新排程（低频管理面板操作）",
 	"GET /api/v1/security/threat-lib/update/status": "威胁库更新任务状态（面板更新弹框轮询数据源）",
 	"GET /api/v1/security/threat-lib/update/logs":   "威胁库更新日志（面板更新弹框日志流）",
+	// —— 爬虫地址库（v2.3.8）：内置只读源的面板管理面（与威胁库同族未覆盖） ——
+	"GET /api/v1/security/crawler-lib":               "爬虫地址库源列表与条目合计数（面板规则库卡片数据源）",
+	"PUT /api/v1/security/crawler-lib/auto-update":   "爬虫地址库自动更新总闸（低频管理面板操作）",
+	"PUT /api/v1/security/crawler-lib/schedule":      "爬虫地址库定时更新排程（低频管理面板操作）",
+	"PUT /api/v1/security/crawler-lib/:id/flags":     "爬虫地址库逐源更新开关（低频管理面板操作）",
+	"POST /api/v1/security/crawler-lib/update":       "手动更新爬虫地址库（低频管理面板操作；与威胁库更新端点同族未覆盖）",
+	"GET /api/v1/security/crawler-lib/update/status": "爬虫地址库更新任务状态（面板更新弹框轮询数据源）",
+	"GET /api/v1/security/crawler-lib/update/logs":   "爬虫地址库更新任务日志（面板更新弹框日志流）",
 	// —— MCP 自身镜像端点 ——
 	"POST /api/v1/mcp":             "MCP Streamable HTTP JSON-RPC 端点本身：工具调用的入口即 MCP 协议，不是可经 MCP 转发的 REST 操作",
 	"GET /api/v1/mcp/tools":        "MCP 自身镜像端点：OpenAPI 形态的工具清单，供外部集成方发现工具",

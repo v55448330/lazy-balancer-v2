@@ -21,10 +21,12 @@ func useCertJobLogTestEnv(t *testing.T, thresholdBytes int64) {
 	oldDir := taskengine.LogDir()
 	oldCached, oldCachedAt := certJobLogSizeCached.Load(), certJobLogSizeCachedAt.Load()
 	taskengine.SetLogDir(filepath.Join(t.TempDir(), "logs", "tasks"))
+	taskengine.SetTaskLogSizeBytesFn(func() int64 { return thresholdBytes })
 	certJobLogSizeCached.Store(thresholdBytes)
 	certJobLogSizeCachedAt.Store(time.Now().UnixNano())
 	t.Cleanup(func() {
 		taskengine.SetLogDir(oldDir)
+		taskengine.SetTaskLogSizeBytesFn(nil)
 		certJobLogSizeCached.Store(oldCached)
 		certJobLogSizeCachedAt.Store(oldCachedAt)
 	})

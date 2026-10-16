@@ -160,6 +160,11 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/security/threat-lib/schedule":    AuditPolicyExplicit,
 	"PUT /api/v1/security/threat-lib/:id/flags":   AuditPolicyExplicit,
 	"POST /api/v1/security/threat-lib/update":     AuditPolicySkip,
+	// 爬虫地址库（v2.3.8）：flags handler 显式记录；手动触发由任务体 defer 自记。
+	"PUT /api/v1/security/crawler-lib/:id/flags":   AuditPolicyExplicit,
+	"PUT /api/v1/security/crawler-lib/auto-update": AuditPolicyExplicit,
+	"PUT /api/v1/security/crawler-lib/schedule":    AuditPolicyExplicit,
+	"POST /api/v1/security/crawler-lib/update":     AuditPolicySkip,
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
@@ -211,6 +216,7 @@ var taskTriggerSelfAuditIDs = map[string]struct{}{
 	"threat":              {},
 	"crs":                 {},
 	"ip2region":           {},
+	"crawlerbot-update":   {},
 	"auto-backup":         {},
 	"startup:config-load": {},
 }

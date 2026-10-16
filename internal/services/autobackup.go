@@ -26,6 +26,37 @@ func SetAutoBackupExecutor(fn func(trigger, operator string, engineRunID int64) 
 	autoBackupExecMu.Unlock()
 }
 
+// AutoBackupEnabled 读自动备份业务开关（读错 fail-closed）。
+func AutoBackupEnabled() bool {
+	if db.DB == nil {
+		return false
+	}
+	var enabled int
+	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&enabled); err != nil {
+		return false
+	}
+	return enabled == 1
+}
+
+// SetAutoBackupEnabled 写自动备份业务开关并同步任务调度；off→on 保留
+// 既有水位线语义（停用期不追补），与设置页保存同口径。
+func SetAutoBackupEnabled(enabled bool) error {
+	var previous int
+	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&previous); err != nil {
+		return err
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
+		return err
+	}
+	if previous == 0 && enabled {
+		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	syncTaskLoop("auto-backup", enabled)
+	return nil
+}
+
 func currentAutoBackupExecutor() func(trigger, operator string, engineRunID int64) error {
 	autoBackupExecMu.Lock()
 	defer autoBackupExecMu.Unlock()

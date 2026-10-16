@@ -88,6 +88,42 @@ func TestThreatLib_getListsSourcesWithTotal(t *testing.T) {
 	}
 }
 
+func TestThreatLib_excludesCrawlerAddressSources(t *testing.T) {
+	// Given：历史合并形态在威胁源表残留爬虫地址库源行
+	router := newThreatTestRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_threat_sources (id,name,display_name,url,update_enabled,entry_count)
+		VALUES (1039,'googlebot','Google 官方爬虫 IP','https://example.com/google.json',1,170)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/security/threat-lib", nil))
+
+	// Then：威胁情报库管理面只暴露三个威胁源，爬虫地址库走独立端点
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if strings.Contains(body, `"name":"googlebot"`) {
+		t.Fatalf("威胁情报库响应混入爬虫地址库源: %s", body)
+	}
+	var payload struct {
+		Data struct {
+			Sources []struct {
+				Name string `json:"name"`
+			} `json:"sources"`
+			TotalEntries int `json:"total_entries"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data.Sources) != 3 || payload.Data.TotalEntries != 0 {
+		t.Fatalf("威胁源数量/合计被爬虫源污染: sources=%d total=%d", len(payload.Data.Sources), payload.Data.TotalEntries)
+	}
+}
+
 func TestThreatLib_flagsOnlyToggleUpdateEnabled(t *testing.T) {
 	// Given
 	router := newThreatTestRouter(t)

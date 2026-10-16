@@ -119,9 +119,9 @@ func TestTriggerSystemTask_gatesAndMapping(t *testing.T) {
 	}
 }
 
-// toggle：v2.0 统一调度开关——threat 关调度 → 200 + 引擎循环态翻转
-// （业务自动更新开关不受影响——那是安全设置页的字段）。
-func TestToggleSystemTask_threatSwitch(t *testing.T) {
+// toggle：业务驱动任务只读——threat 调度开关由业务页自动更新控制，
+// 任务监控不得反写业务配置或另开第二入口。
+func TestToggleSystemTask_threatBusinessDrivenReadOnly(t *testing.T) {
 	initTaskEngineForTest(t)
 	newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=1, threat_auto_update=1 WHERE id=1`); err != nil {
@@ -134,17 +134,15 @@ func TestToggleSystemTask_threatSwitch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/system/tasks/threat/toggle", strings.NewReader(`{"enabled":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
-		t.Fatalf("toggle status=%d body=%s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("业务驱动任务 toggle 应 400 read-only, got %d body=%s", resp.Code, resp.Body.String())
 	}
-	if te.IsRunning("threat") {
-		t.Fatal("toggle off 后 threat 调度应关闭（IsRunning=false）")
+	if !te.IsRunning("threat") {
+		t.Fatal("只读拒绝不得改变既有调度运行态")
 	}
 	if !services.ThreatAutoUpdateEnabled() {
-		t.Fatal("业务自动更新开关不应被调度开关联动（v2.0 两层独立）")
+		t.Fatal("只读拒绝不得反写业务自动更新")
 	}
-	// 恢复（避免污染其他测试）
-	te.StartLoop("threat")
 }
 
 // cancel：未运行 → 409；不可取消族 → 409（引擎 Cancel 返 false——handler
@@ -167,5 +165,54 @@ func TestCancelSystemTask_semantics(t *testing.T) {
 	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/threat/cancel", nil))
 	if resp2.Code != http.StatusConflict {
 		t.Fatalf("未运行取消应 409, got %d body=%s", resp2.Code, resp2.Body.String())
+	}
+}
+
+func TestToggleSystemTask_businessDrivenTasksReadOnly(t *testing.T) {
+	cases := []struct {
+		id    string
+		table string
+		col   string
+	}{
+		{"threat", "global_config", "threat_auto_update"},
+		{"crs", "security_crs_version", "auto_update"},
+		{"ip2region", "security_ip2region_version", "auto_update"},
+		{"crawlerbot-update", "global_config", "crawler_auto_update"},
+		{"auto-backup", "global_config", "auto_backup_enabled"},
+		{"autoban", "global_config", "autoban_enabled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			initTaskEngineForTest(t)
+			newBackupTestHandlers(t)
+			r, _ := taskMonitorRouter()
+			te := services.TaskEngine()
+			te.StopLoop(tc.id)
+			if tc.table != "global_config" {
+				if _, err := db.DB.Exec(`INSERT OR IGNORE INTO ` + tc.table + ` (id,version,auto_update) VALUES (1,'test',0)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.DB.Exec(`UPDATE ` + tc.table + ` SET ` + tc.col + `=0`); err != nil {
+				t.Fatal(err)
+			}
+
+			// When：试图从任务监控改变业务驱动任务调度
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/"+tc.id+"/toggle", strings.NewReader(`{"enabled":true}`)))
+
+			// Then：只读拒绝，业务字段与 loop_on 均不得被反写
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400 read-only", resp.Code, resp.Body.String())
+			}
+			var enabled int
+			if err := db.DB.QueryRow(`SELECT ` + tc.col + ` FROM ` + tc.table).Scan(&enabled); err != nil {
+				t.Fatal(err)
+			}
+			m, _ := te.Lookup(tc.id)
+			if enabled != 0 || m.LoopOn {
+				t.Fatalf("只读语义被破坏: business=%d loop_on=%v", enabled, m.LoopOn)
+			}
+		})
 	}
 }

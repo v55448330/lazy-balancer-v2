@@ -2,7 +2,6 @@ package services
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -32,25 +31,17 @@ func (m *ThreatUpdateManager) SetMasterRole(isMaster bool) {
 // 为任务级总闸（规则库卡片父行开关）；逐源 update_enabled 决定任务更新
 // 哪些源（弹框内开关）。两者解耦——总闸关闭时整任务不启动。
 func SetThreatAutoUpdate(enabled bool) error {
-	if _, err := db.DB.Exec(`UPDATE global_config SET threat_auto_update=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
-		return fmt.Errorf("更新威胁库自动更新开关: %w", err)
+	if err := setGlobalTaskAutoUpdate("threat", enabled); err != nil {
+		return err
+	}
+	if enabled {
+		ArmThreatFirstSlots()
 	}
 	return nil
 }
 
-// ThreatAutoUpdateEnabled 读任务级总闸（读错 fail-closed=视为关）。
-func ThreatAutoUpdateEnabled() bool {
-	// B1-8（第 74 轮）：nil 库守卫（生产不可达——引擎 wire 晚于 db.Initialize）
-	// ——wire Fn 族读 nil 库 fail-closed，不 panic。
-	if db.DB == nil {
-		return false
-	}
-	var v int
-	if err := db.DB.QueryRow(`SELECT COALESCE(threat_auto_update,1) FROM global_config WHERE id=1`).Scan(&v); err != nil {
-		return false
-	}
-	return v != 0
-}
+// ThreatAutoUpdateEnabled 读威胁库总闸。
+func ThreatAutoUpdateEnabled() bool { return globalTaskAutoUpdateEnabled("threat") }
 
 func (m *ThreatUpdateManager) StartScheduler() {
 	m.mu.Lock()

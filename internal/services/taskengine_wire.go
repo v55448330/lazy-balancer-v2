@@ -1,9 +1,9 @@
 package services
 
 // 任务引擎接线（v2.0 四类型标准）：Kind 决定调度/记录/日志——零 flag。
-// 定时(4)：NextSlotFn 排程槽驱动，Run 纯业务（无到期检查）
+// 定时(5)：NextSlotFn 排程槽驱动，Run 纯业务（无到期检查）
 // 常驻(3)：Run 阻塞自管理循环，引擎仅管生命周期
-// 循环(8)：IntervalFn 固定间隔，每轮独立执行+记录
+// 循环(9)：IntervalFn 固定间隔，每轮独立执行+记录
 // 触发(1)：仅手动/代码触发
 // cert-waiting-ca：默认调度关闭——cert-renewal-scan 入队时唤醒，全部终态自动停。
 
@@ -63,24 +63,10 @@ var certJobsActiveFn = certJobsActive
 // TaskEngine 返回全局引擎实例（未初始化返回 nil——测试环境）。
 func TaskEngine() *taskengine.Engine { return taskEngine }
 
-// parseUTCSlot 解析 DB 存的 UTC 排程串为 time.Time（crsTimeLayout 与
-// RFC3339 双形态——与 localDisplayUTC 同口径）。
-func parseUTCSlot(s string) time.Time {
-	if s == "" {
-		return time.Time{}
-	}
-	for _, layout := range []string{crsTimeLayout, time.RFC3339} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
-}
-
 // （coveredSlotStepPast/slotCoveredByRun/crsNextSlotAware/ip2regionNextSlotAware 已退役——
 // 排程槽生命周期 2026-10-11：失败落定落库推进，NextSlotFn 纯读库。）
 
-// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 17 任务并启动默认循环。
+// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 18 任务并启动默认循环。
 // TASK-L8（第 69 轮）：非幂等——调用方保证单次装配；重复调用前须先
 // StopTaskEngine（否则旧 scheduleLoop goroutine 泄漏、双引擎双写 task_runs）。
 // 测试环境须先 db.Initialize。
@@ -93,6 +79,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	tasksLogDir := filepath.Join(logsDir, "tasks")
 	_ = os.MkdirAll(tasksLogDir, 0755)
 	taskengine.SetLogDir(tasksLogDir)
+	taskengine.SetTaskLogSizeBytesFn(getTaskLogSizeBytes)
 	taskEngine = taskengine.NewEngine(taskengine.Options{})
 	// 角色种子（v2.0 角色门前置）：按 DB 角色初始化——从节点不瞬启
 	// master-only daemon（否则 boot 行噪音：启动→SetRole 停止）。
@@ -127,7 +114,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		ID:          "log-cleanup",
 		Family:      "system",
 		Name:        "日志清理与轮转",
-		Description: "清理超保留期的应用日志轮转副本（app.log.*）；统一清理任务日志（tasks/*.log：超保留期删除、超大小上限轮转保一份）",
+		Description: "清理超保留期的应用日志轮转副本（app.log.*）；统一清理任务日志（tasks/*.log：仅保留期删除，尺寸滚动由写入侧统一执行）",
 		Category:    "系统",
 		Kind:        taskengine.KindPeriodic,
 		IntervalFn:  func() time.Duration { return 24 * time.Hour },
@@ -182,6 +169,25 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			deleted := SecurityEventsRetentionCleanupOnce()
 			TaskLogf("security-events-retention", "cleanup", "安全事件保留清理完成：删除 %d 条（保留期与条数上限，无过期为 0）", deleted)
 			return nil
+		},
+	})
+
+	taskEngine.Register(taskengine.Descriptor{
+		ID: "crawlerbot-update", Family: "security", Name: "爬虫地址更新",
+		Description: "定时更新 Google/OpenAI/Bing/360 官方爬虫 IP 段（security_crawler_sources 独立源表）→ security_ip_lists 系统名单原子快照 + wafiplist .fast 预编译加速；主节点执行，从节点经集群快照同步",
+		Category:    "安全防护",
+		Kind:        taskengine.KindScheduled,
+		RunsOn:      taskengine.RoleMasterOnly,
+		Cancelable:  true,
+		NextSlotFn: func() time.Time {
+			if !CrawlerAutoUpdateEnabled() {
+				return time.Time{}
+			}
+			return parseUTCSlot(earliestCrawlerNextUpdate())
+		},
+		EnabledFn: func() bool { return CrawlerAutoUpdateEnabled() },
+		Run: func(rc taskengine.RunContext) error {
+			return GetCrawlerUpdateManager().RunUpdate(rc.Ctx, rc)
 		},
 	})
 
@@ -323,7 +329,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 	})
 
-	// ============ 定时（4）============
+	// ============ 定时（5）============
 
 	taskEngine.Register(taskengine.Descriptor{
 		ID: "threat", Family: "security", Name: "威胁情报库更新",
@@ -566,10 +572,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 定时/循环/触发均可手动调度；常驻族恒不可（启停即可，启停由调度开关+重启承担）。
 
 	// 默认调度启动：
-	// - 循环 8 个全启动（cert-waiting-ca 除外——默认关闭，续期扫描唤醒；
+	// - 循环 9 个全启动（cert-waiting-ca 除外——默认关闭，续期扫描唤醒；
 	//   autoban 除外——调度唯一前提=业务启用，见下）
 	// - 常驻 3 个全启动（系统启动即运行；关闭调度=启动也不运行）
-	// - 定时 4 个启动排程（EnabledFn/NextSlotFn 内含开关判断）
+	// - 定时 5 个启动排程（EnabledFn/NextSlotFn 内含开关判断）
 	for _, id := range []string{
 		"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention",
 		"cert-renewal-scan", "cert-reconcile", "cert-manual-poll",
@@ -578,21 +584,39 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	} {
 		taskEngine.StartLoop(id)
 	}
+	// 首槽武装先落默认源/版本行，随后的业务开关同步才能读到全新库的
+	// 默认启用态（否则 ErrNoRows 被 fail-closed 误译为关闭并 StopLoop）。
+	armSecurityLibraryFirstSlots()
+	// 业务自动更新即调度任务：所有规则库/备份任务启动均按业务实态对齐。
+	syncTaskLoop("threat", ThreatAutoUpdateEnabled())
+	syncTaskLoop("crs", versionTableAutoUpdateEnabled("security_crs_version"))
+	syncTaskLoop("ip2region", versionTableAutoUpdateEnabled("security_ip2region_version"))
+	syncTaskLoop("crawlerbot-update", CrawlerAutoUpdateEnabled())
+	syncTaskLoop("auto-backup", AutoBackupEnabled())
 	// autoban 例外（2026-10-14 用户裁定）：启动按库内业务开关实态对齐——
 	// 启用才开调度（未启用即 StartLoop 会在首 tick 被 Run 体业务门拦停，
 	// 每次启动都落一行「未启用」假失败）。
 	if AutobanEnabled() {
 		taskEngine.StartLoop("autoban")
 	}
-	// TASK-L1（第 69 轮 P1）：首槽武装——引擎化前旧调度器首个 tick 才武装首槽
-	//（auto_update 开且 next_update 空时写入下一排程槽）；引擎零槽恒不到期
-	//（engine.go:725 零值槽 due=false）。引擎注册完成后对三安全库一次性武装：
-	// 已有排程槽的行不受影响（空判据守门），仅全新安装/空槽行补写。
-	armSecurityLibraryFirstSlots()
 	// B1：BootSync 任务同步执行（startup:config-load——面板监听前完成，
 	// 替代 main.go 直调+legacy startupPhase 记录旁路）
 	taskEngine.RunBootSyncTasks()
 	return taskEngine
+}
+
+// syncTaskLoop 将业务开关直接映射为引擎调度开关：开启自动更新=StartLoop，
+// 关闭=StopLoop。所有规则库 setter 与任务监控 toggle 共用此单一动作。
+func syncTaskLoop(id string, enabled bool) {
+	te := TaskEngine()
+	if te == nil {
+		return
+	}
+	if enabled {
+		te.StartLoop(id)
+	} else {
+		te.StopLoop(id)
+	}
 }
 
 // StopTaskEngine 进程退出收尾。
@@ -603,7 +627,7 @@ func StopTaskEngine() {
 	}
 }
 
-// armSecurityLibraryFirstSlots 三安全库首槽武装（TASK-L1，第 69 轮 P1）：
+// armSecurityLibraryFirstSlots 四个规则库首槽武装（TASK-L1，第 69 轮 P1）：
 // auto_update 开且 next_update 空的行写入下一排程槽（versionTableNextSlot/
 // threatNextSlot 与既有排程写侧同函数同口径）。已有槽的行、开关关闭的行
 // 一律不动；武装失败仅告警不阻断启动（下一排程保存路径会自愈）。
@@ -635,9 +659,17 @@ func armSecurityLibraryFirstSlots() {
 		}
 	}
 	// 威胁源族：三行源表，仅武装启用更新的源
-	if ThreatAutoUpdateEnabled() {
-		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`, threatNextSlot(now)); err != nil {
-			Logf("warn", "首槽武装：security_threat_sources 写入 next_update 失败: %v", err)
-		}
+	ArmThreatFirstSlots()
+	armCrawlerFirstSlots()
+}
+
+// ArmThreatFirstSlots 威胁源首槽武装：开启业务或逐源启用时，空 next_update
+// 的启用源写入威胁排程槽，避免 NextSlotFn 永不到期。
+func ArmThreatFirstSlots() {
+	if !ThreatAutoUpdateEnabled() {
+		return
+	}
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`, threatNextSlot(time.Now().UTC())); err != nil {
+		Logf("warn", "首槽武装：security_threat_sources 写入 next_update 失败: %v", err)
 	}
 }

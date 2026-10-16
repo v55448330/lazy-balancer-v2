@@ -49,15 +49,16 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（LNK71-3，2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（第 76 轮勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费。
 
-## 2. 任务清单（17 注册任务）
+## 2. 任务清单（18 注册任务）
 
-### 定时（4）——排程槽驱动，Run 纯业务
+### 定时（5）——排程槽驱动，Run 纯业务
 
 | 任务 | NextSlotFn 数据源 | Run 体 |
 |---|---|---|
 | threat | `security_threat_sources.next_update` 最早值（UTC） | `m.RunUpdate(trigger)` 直达 |
 | crs | `security_crs_version.next_update` | `StartUpdate`+wait |
 | ip2region | `security_ip2region_version.next_update` | `StartUpdate`+wait |
+| crawlerbot-update | `security_crawler_sources.next_update` 最早值（UTC） | `RunCrawlerBotUpdate` 直达 |
 | auto-backup | `nextAutoBackupSlot()`（last_run 感知——漏跑追补/已跑步进） | `runAutoBackupScheduled` |
 
 到期检查全部移出 Run 体——引擎保证在排程槽调用，Run 只执行业务。
@@ -138,13 +139,14 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 - 调度列：非触发类=开关（绑定 loop_on）；触发类=禁用开关（一致性）；cert-job 动态行=「—」
 - 常驻族停止需确认弹框；操作列常驻族有「重启」
 
-### 4.1 业务开关联动（2026-10-01 用户裁定）
+### 4.1 业务开关与调度开关同源（2026-10-17 用户裁定）
 
-四个定时任务的**业务开关**（安全设置页的 threat/CRS/IP2Region 自动更新、备份设置页的自动备份启用）与任务监控联动：
+四个规则库任务（threat/CRS/IP2Region/crawlerbot-update）的业务自动更新**就是调度任务本身**，因此业务开关与引擎调度开关必须双向同源：
 
-- EnabledFn（DB 直读）暴露业务开关态 → 视图 `enabled=false`（方案 A，2026-10-12：状态列=空闲，开关列并判 loop_on&&enabled 显示「已停止」；cert-waiting-ca 的 StatusFn stopped 借用同轮废除）
-- NextSlotFn 同源判断——业务关=零调度零下次执行
-- 引擎调度开关（loop_on）与业务开关两层独立：调度开关关闭=引擎不投递；业务开关关闭=引擎 tick 跳过（F73-E 第 73 轮 EnabledFn 调度门补全：不调度不落行不推进节拍，恢复后下一 tick 到期即跑；手动触发不受门拦）
+- 业务页开启自动更新 → 写业务字段后立即 `StartLoop`；关闭 → 立即 `StopLoop`。
+- 任务监控的业务驱动任务调度开关**只读**：只允许查看 `loop_on`，不得从引擎或任务监控反写业务配置；非业务驱动任务仍可由任务监控启停。
+- 启动装配按业务实态对齐 `loop_on`；首槽武装必须覆盖全部四个源表，缺槽时开启业务即补槽。
+- `EnabledFn` 仅作执行面纵深校验，不向任务视图暴露额外「业务开关」字段；任务监控与详情只展示 `loop_on` 调度开关。
 
 ## 5. 记录与日志口径
 
@@ -165,6 +167,26 @@ task_runs 保留 90 天（audit-retention 每日清理）。
 - `TaskLogf(taskID, stage, format, ...)` — 业务摘要行（tee 到任务日志）
 - `taskengine.TeeTaskLog` — 分阶段流水
 - `RecordRunStart/RecordRunFinish` — legacy 直调路径（引擎外执行）
+
+### 6.1 统一日志滚动与统计（2026-10-17 用户裁定）
+
+所有任务日志只使用一种滚动标准：**写入前按真实文件大小滚动**。
+
+- 统一入口为 `taskengine.RotateTaskLogBeforeWrite`：`size(path)+len(待写入行) > task_log_size_mb` 时先 `RotateTaskLogFile` 再追加。`taskLogAppend`、`TeeTaskLog` 与证书任务日志全部经过该入口，禁止另设每日巡检滚动或第二套滚动实现。
+- 主流水 `tasks/{id}.log` 保 1 份，证书任务 `tasks/certjobs/*.log` 保 5 份；归档份数是保留策略差异，不是第二种滚动机制。
+- `log-cleanup` 只负责保留期清理，不再负责尺寸滚动。
+- 日志统计与弹框使用 `task:<id>`：每个任务对应自己的真实文件、活动大小、轮转副本和阈值；禁止用 `tasks/*.log` 目录聚合值代替当前任务。
+
+### 6.2 新增任务注册门禁
+
+新增/修改任务必须同时满足，缺一即视为未完成：
+
+1. Descriptor 的 ID/Name/Kind/Run/角色门/调度函数齐全，禁止复用其他任务 ID、状态表、日志或生命周期。
+2. 非 oneshot 任务进入默认 `StartLoop`（或写入带理由的显式豁免清单）；首槽/首间隔有真实可执行值。
+3. 业务自动更新开关与调度开关双向同源（若任务有业务开关）。
+4. 业务日志走 `TaskLogf`/`TeeTaskLog`，状态与 `task_runs` 时间同源；写入前滚动自然覆盖，禁止自行实现第二种滚动。
+5. `/logs/stats` 返回 `task:<id>` 真实文件统计，任务监控弹框不得使用目录聚合值。
+6. 注册级测试必须覆盖：默认调度、首槽/首间隔、业务/调度双向同源、日志与状态时间、逐任务真实文件统计。
 
 ## 7. 修订记录
 

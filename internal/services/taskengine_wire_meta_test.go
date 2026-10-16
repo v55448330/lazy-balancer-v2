@@ -145,8 +145,8 @@ func TestTaskEngineWire_MasterSyncShowsServing(t *testing.T) {
 	t.Fatal("cluster-sync 未注册")
 }
 
-// TASK-L6（第 69 轮 P2）：wire 元数据钉——8 个 Periodic 生产任务 IntervalSec>0、
-// 4 个 Scheduled 生产任务在启用形态下 NextSlot 可解析（disabled=空串合法）。
+// TASK-L6（第 69 轮 P2）：wire 元数据钉——9 个 Periodic 生产任务 IntervalSec>0、
+// 5 个 Scheduled 生产任务在启用形态下 NextSlot 可解析（disabled=空串合法）。
 // 缺口形态：手术删除 wire.go 任一生产 Fn 块 → 排程静默停摆且套件全绿。
 func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 	te := newWireTestEngine(t)
@@ -169,8 +169,8 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 	if periodic != 9 {
 		t.Fatalf("periodic tasks=%d, want 9（wire.go 注册面；F73-A 起 autoban 循环族）", periodic)
 	}
-	if scheduled != 4 {
-		t.Fatalf("scheduled tasks=%d, want 4（threat/crs/ip2region/auto-backup）", scheduled)
+	if scheduled != 5 {
+		t.Fatalf("scheduled tasks=%d, want 5（threat/crawler/crs/ip2region/auto-backup）", scheduled)
 	}
 }
 

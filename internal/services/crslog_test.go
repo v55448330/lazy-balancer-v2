@@ -29,9 +29,9 @@ func TestWriteCRSUpdateLog_singleSinkNoDoubleTee(t *testing.T) {
 	}
 }
 
-// taskLogsHousekeeping 按配置阈值轮转任务日志（R63-P2-1：task_log_size_mb
-// 贯通到 tasks/*.log——本测试为配置消费的行为钉）。
-func TestTaskLogsHousekeeping_rotatesAtConfiguredThreshold(t *testing.T) {
+// taskLogsHousekeeping 只做保留期清理；尺寸滚动已统一归写入前检查，
+// 不再由每日巡检二次滚动。
+func TestTaskLogsHousekeeping_retentionOnlyDoesNotRotate(t *testing.T) {
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +53,9 @@ func TestTaskLogsHousekeeping_rotatesAtConfiguredThreshold(t *testing.T) {
 
 	taskLogsHousekeeping(logsDir + "/app.log")
 
-	if _, err := os.Stat(tasksDir + "/probe.log.1"); err != nil {
-		t.Fatalf("超阈值任务日志应轮转到 .1: %v", err)
+	if _, err := os.Stat(tasksDir + "/probe.log.1"); !os.IsNotExist(err) {
+		t.Fatalf("保留期清理不得再做尺寸滚动: err=%v", err)
 	}
-	// Rename 语义：原文件移 .1，新文件由下次写入重建（不预建空文件）。
 }
 
 // L1-P4-1 收尾（第 67 轮 C2 残余收口）：certjobs/ 尺寸轮转归写入侧预写入轮转

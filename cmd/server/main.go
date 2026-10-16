@@ -227,9 +227,10 @@ func run() error {
 	services.SetAutobanProjectionRefresher(func() (services.IPListProjectionOutcome, error) { return caddyService.RefreshIPListProjectionsInLock() })
 	services.InitThreatUpdateManager()
 	services.GetThreatUpdateManager().SetMasterRole(isMaster)
-	// v2.3.8 爬虫官方 IP 名单定时更新（与威胁情报库更新族同构）：主节点启动
 	if isMaster {
-		services.StartCrawlerBotScheduler(context.Background())
+		if err := services.GetCrawlerUpdateManager().Prime(); err != nil {
+			services.Logf("error", "crawlerbot-update: 内置首版名单预载失败: %v", err)
+		}
 	}
 	crsManager.SetMasterRole(isMaster)
 	if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
@@ -268,7 +269,7 @@ func run() error {
 		if threatMgr := services.GetThreatUpdateManager(); threatMgr != nil {
 			threatMgr.StopScheduler() // U8b-P5-7：三调度器对称收尾（曾漏 threat——退出窗口可 tick 关闭库）
 		}
-		services.StopCrawlerBotScheduler()
+
 		services.StopSecurityEventsRetention()
 		services.StopAuditCleanup()
 		services.StopTimezoneRefresh()

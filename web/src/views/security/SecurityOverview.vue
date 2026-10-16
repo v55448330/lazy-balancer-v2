@@ -24,7 +24,7 @@
     />
 
     <el-row :gutter="20" class="mb-5">
-      <el-col :xs="24" :md="12">
+      <el-col :xs="24" :md="10">
         <el-card shadow="always" class="overview-card">
           <template #header>
             <div class="card-header">
@@ -67,7 +67,7 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :xs="24" :md="12">
+      <el-col :xs="24" :md="14">
         <el-card shadow="always" class="overview-card">
           <template #header>
             <div class="card-header">
@@ -77,7 +77,7 @@
               </div>
             </div>
           </template>
-          <div class="stat-row">
+          <div class="stat-row lib-stat-row">
             <div class="stat-col">
               <div class="stat-box" :class="overview.crs_available === false ? 'stat-box--danger' : 'stat-box--success'">
                 <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
@@ -113,6 +113,17 @@
                   <div class="stat-box__label">威胁情报库</div>
                   <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
                   <el-tag v-else-if="threatStatus" :type="statusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ statusLabel(threatStatus) }}</el-tag>
+                </div>
+              </div>
+            </div>
+            <div class="stat-col">
+              <div class="stat-box stat-box--success">
+                <div class="stat-box__icon"><el-icon><Link /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ crawlerLatestVersion || '未更新' }}</div>
+                  <div class="stat-box__label">爬虫地址库</div>
+                  <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
+                  <el-tag v-else-if="crawlerStatus" :type="statusTagType(crawlerStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ statusLabel(crawlerStatus) }}</el-tag>
                 </div>
               </div>
             </div>
@@ -253,7 +264,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files, Monitor } from '@element-plus/icons-vue'
+import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files, Monitor, Link } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -422,31 +433,57 @@ const fetchIP2RegionInfo = async () => {
   }
 }
 
+// 多源规则库总览投影（威胁情报库/爬虫地址库共用）：版本取最近日期，
+// 状态=更新中>失败>成功>未更新。
+interface OverviewLibrarySource { version: string; update_status: string }
+const summarizeOverviewLibrary = (sources: OverviewLibrarySource[]) => {
+  const latestVersion = sources.map(s => s.version).filter(Boolean).sort(compareVersion).pop() || ''
+  const running = sources.some(s => s.update_status === 'running')
+  const failed = !running && sources.some(s => s.update_status === 'failed')
+  return { latestVersion, running, failed }
+}
+const overviewLibraryStatus = (running: boolean, failed: boolean, latestVersion: string) => {
+  if (running) return 'running'
+  if (failed) return 'failed'
+  if (latestVersion) return 'success'
+  return ''
+}
+
 // 威胁情报库 stat（v2.3.x）：合并生效条数 + 最近版本（各源 version 最大者）。
 const threatLatestVersion = ref('')
 const threatRunning = ref(false)
+const threatFailed = ref(false)
 const threatError = ref(false)
-// 聚合三源状态（与 CRS/IP 库框的常驻状态 tag 同构）：更新中>失败>成功>未更新。
-// U9-8：running 为威胁库专用词（「更新中」）——不再借用 reloading（「重载中」
-// 是 Caddy 配置重载语义，威胁库更新过程不重载配置）
-const threatStatus = computed(() => {
-  if (threatRunning.value) return 'running'
-  if (threatSourcesStatus.value === 'failed') return 'failed'
-  if (threatLatestVersion.value) return 'success'
-  return ''
-})
-const threatSourcesStatus = ref('')
+const threatStatus = computed(() => overviewLibraryStatus(threatRunning.value, threatFailed.value, threatLatestVersion.value))
 const fetchThreatLib = async () => {
   try {
-    const res = await request.get<APIResponse<{ sources: { version: string; update_status: string }[]; total_entries?: number }>>('/security/threat-lib')
-    threatLatestVersion.value = (res.data?.sources || []).map(s => s.version).filter(Boolean).sort(compareVersion).pop() || ''
-    threatRunning.value = (res.data?.sources || []).some(s => s.update_status === 'running')
-    const statuses = (res.data?.sources || []).map(s => s.update_status)
-    // running 优先于 failed：与 SecurityRules libRows 聚合同口径
-    threatSourcesStatus.value = statuses.some(x => x === 'running') ? '' : (statuses.some(x => x === 'failed') ? 'failed' : '')
+    const res = await request.get<APIResponse<{ sources: OverviewLibrarySource[]; total_entries?: number }>>('/security/threat-lib')
+    const summary = summarizeOverviewLibrary(res.data?.sources || [])
+    threatLatestVersion.value = summary.latestVersion
+    threatRunning.value = summary.running
+    threatFailed.value = summary.failed
     threatError.value = false
   } catch {
     threatError.value = true
+  }
+}
+
+// 爬虫地址库 stat：与威胁情报库同口径，但读独立端点/独立任务状态。
+const crawlerLatestVersion = ref('')
+const crawlerRunning = ref(false)
+const crawlerFailed = ref(false)
+const crawlerError = ref(false)
+const crawlerStatus = computed(() => overviewLibraryStatus(crawlerRunning.value, crawlerFailed.value, crawlerLatestVersion.value))
+const fetchCrawlerLib = async () => {
+  try {
+    const res = await request.get<APIResponse<{ sources: OverviewLibrarySource[]; total_entries?: number }>>('/security/crawler-lib')
+    const summary = summarizeOverviewLibrary(res.data?.sources || [])
+    crawlerLatestVersion.value = summary.latestVersion
+    crawlerRunning.value = summary.running
+    crawlerFailed.value = summary.failed
+    crawlerError.value = false
+  } catch {
+    crawlerError.value = true
   }
 }
 
@@ -456,7 +493,7 @@ const openThreatScreen = (): void => {
   authStore.setCurrentPage('threat-screen')
 }
 
-onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo(); fetchThreatLib() })
+onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo(); fetchThreatLib(); fetchCrawlerLib() })
 </script>
 
 <style scoped>
@@ -464,9 +501,17 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 .overview-card { height: 100%; }
 .stat-row { display: flex; gap: 16px; }
 .stat-col { flex: 1 1 0; min-width: 0; }
+/* 规则库状态 4 块：桌面单行等宽；紧凑图标/间距/字号保证版本与库名不换行。
+   中屏 2×2、手机单列，避免 3+1 的孤立末行。 */
+.lib-stat-row { gap: 12px; }
+.lib-stat-row .stat-box { gap: 8px; padding: 12px; }
+.lib-stat-row .stat-box__icon { width: 32px; height: 32px; font-size: 16px; }
+.lib-stat-row .stat-box__value { font-size: 16px; white-space: nowrap; }
+.lib-stat-row .stat-box__label { white-space: nowrap; }
 @media (max-width: 1200px) {
   .stat-row { flex-wrap: wrap; }
   .stat-col { flex: 1 1 30%; }
+  .lib-stat-row .stat-col { flex: 1 1 40%; }
 }
 @media (max-width: 768px) {
   .stat-col { flex: 1 1 100%; }

@@ -276,6 +276,9 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	if snapshot.SecurityThreatSources, err = s.snapshotSecurityThreatSources(ctx, tx); err != nil {
 		return nil, err
 	}
+	if snapshot.SecurityCrawlerSources, err = s.snapshotSecurityCrawlerSources(ctx, tx); err != nil {
+		return nil, err
+	}
 	// CL9-N1(第 9 轮审计):CRS/IP2Region 版本行装载已删——版本行移出全部
 	// 守卫节 payload(766f4c81 差分门控裁定)后此处为死装载,每 304 白扫
 	// 2 表且引入无谓失败面。
@@ -484,6 +487,17 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.ThreatAutoUpdate = &threatAuto
 	snapshot.BasicSettings.ThreatScheduleDays = &threatDays
 	snapshot.BasicSettings.ThreatScheduleTime = &threatTime
+	// 爬虫地址库独立总闸与排程三列（不共享 threat_* 通道）。
+	var crawlerAuto bool
+	var crawlerDays, crawlerTime string
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(crawler_auto_update,1),
+		COALESCE(crawler_schedule_days,'1,2,3,4,5,6,7'), COALESCE(crawler_schedule_time,'04:00')
+		FROM global_config WHERE id=1`).Scan(&crawlerAuto, &crawlerDays, &crawlerTime); err != nil {
+		return fmt.Errorf("读取爬虫地址库排程设置: %w", err)
+	}
+	snapshot.BasicSettings.CrawlerAutoUpdate = &crawlerAuto
+	snapshot.BasicSettings.CrawlerScheduleDays = &crawlerDays
+	snapshot.BasicSettings.CrawlerScheduleTime = &crawlerTime
 	// D1（第 74 轮审计）：自动封禁六项配置随 users 节同步（镜像 CL41-1/L5-67-01
 	// 指针装载+COALESCE 兜底恒携带，升主即按主端配置生效）。局部名 abn* 与上方
 	// 自动备份组 ab* 区分（同一函数作用域）。
@@ -552,6 +566,9 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.SecurityThreatSources, err = s.snapshotSecurityThreatSources(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.SecurityCrawlerSources, err = s.snapshotSecurityCrawlerSources(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
 }
 
@@ -586,6 +603,13 @@ func (s *ClusterService) snapshotSecurityIPLists(ctx context.Context, store snap
 func (s *ClusterService) snapshotSecurityThreatSources(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
 	return s.dumpTableAsJSON(ctx, store, "security_threat_sources",
 		"id,name,COALESCE(display_name,'') AS display_name,COALESCE(url,'') AS url,COALESCE(format,'plain') AS format,COALESCE(update_enabled,1) AS update_enabled,COALESCE(apply_enabled,1) AS apply_enabled,COALESCE(entry_count,0) AS entry_count,COALESCE(version,'') AS version,COALESCE(update_status,'idle') AS update_status,COALESCE(message,'') AS message,COALESCE(last_checked,'') AS last_checked,COALESCE(next_update,'') AS next_update,COALESCE(trigger,'') AS trigger,COALESCE(started_at,'') AS started_at,COALESCE(finished_at,'') AS finished_at,COALESCE(consecutive_failures,0) AS consecutive_failures,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at", "id")
+}
+
+// snapshotSecurityCrawlerSources dump 爬虫地址库独立源表（无 apply_enabled/
+// content_hash 列，其余状态机字段与威胁源同形）。
+func (s *ClusterService) snapshotSecurityCrawlerSources(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "security_crawler_sources",
+		"id,name,COALESCE(display_name,'') AS display_name,COALESCE(url,'') AS url,COALESCE(format,'plain') AS format,COALESCE(update_enabled,1) AS update_enabled,COALESCE(entry_count,0) AS entry_count,COALESCE(version,'') AS version,COALESCE(update_status,'idle') AS update_status,COALESCE(message,'') AS message,COALESCE(last_checked,'') AS last_checked,COALESCE(next_update,'') AS next_update,COALESCE(trigger,'') AS trigger,COALESCE(started_at,'') AS started_at,COALESCE(finished_at,'') AS finished_at,COALESCE(consecutive_failures,0) AS consecutive_failures,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {

@@ -949,3 +949,28 @@ func TestThreatUpdate_needForceFallsBackToReload(t *testing.T) {
 		t.Fatalf("重载失败须留痕: reloads=%d reloadErrs=%d", reloads, reloadErrs)
 	}
 }
+
+func TestThreatDueSources_ignoresCrawlerAddressSources(t *testing.T) {
+	// Given：历史合并形态在威胁源表残留一个启用的爬虫地址库源
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_threat_sources (id,name,display_name,url,update_enabled,next_update)
+		VALUES (1039,'googlebot','Google 官方爬虫 IP','https://example.com/google.json',1,'2000-01-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	sources, err := threatDueSources("manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：威胁任务只处理三个威胁源，爬虫地址库由 crawlerbot-update 独立处理
+	if len(sources) != 3 {
+		t.Fatalf("sources=%d, want 3: %+v", len(sources), sources)
+	}
+	for _, source := range sources {
+		if source.name == "googlebot" {
+			t.Fatalf("威胁任务混入爬虫地址库源: %+v", sources)
+		}
+	}
+}

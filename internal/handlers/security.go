@@ -603,7 +603,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 31 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
+// 33 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——

@@ -158,6 +158,7 @@ func SetCRSAutoUpdate(enabled bool) error {
 	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=CASE WHEN ? THEN ? ELSE '' END WHERE id=1", enabled, enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 CRS 自动更新开关: %w", err)
 	}
+	syncTaskLoop("crs", enabled)
 	return nil
 }
 
@@ -241,17 +242,6 @@ func (m *CRSUpdateManager) setStage(status CRSUpdateStatus, message string) {
 		level = "WARN"
 	}
 	WriteCRSUpdateLog(level, string(status), message)
-}
-
-// updateRunStillMaster 运行中角色复核（F-L2-68-01 demote 在途中止判定）——
-// 与三库起点角色复查同一 SQL 口径（COALESCE(is_master,1)；查询失败按非主
-// 节点→跳过语义，宁停勿写）。
-func updateRunStillMaster() bool {
-	var isMaster bool
-	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
-		return false
-	}
-	return true
 }
 
 // run executes the full update pipeline synchronously.

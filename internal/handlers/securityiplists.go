@@ -363,7 +363,11 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		// F73-A：自动封禁预置名单（system=1 但条目在 DB）不适用威胁库条数
 		// 覆写——threatCounts 无该名会得到 0 假空；条数取 json_array_length 真值。
 		if row.System && row.Name != services.AutobanPresetListName {
-			row.EntryCount = threatCounts[row.Name] // 条数以 threat_sources 为准
+			// 仅威胁库条数由 threat_sources 覆写；其他系统名单（爬虫地址库/
+			// 后续新族）保留 DB entries 的真实计数，不得被缺省 0 假空。
+			if count, ok := threatCounts[row.Name]; ok {
+				row.EntryCount = count
+			}
 		}
 		row.PresetAutoban = row.System && row.Name == services.AutobanPresetListName
 		row.RefPolicies = refs[int64(row.ID)]
@@ -398,8 +402,9 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	// F73-A：预置自动封禁名单（system=1 但条目在 DB）走自定义分支——威胁文件
 	// 读取对该名恒失败（未映射威胁源）会让弹框 500。
 	row.PresetAutoban = row.System && row.Name == services.AutobanPresetListName
-	if row.System && !row.PresetAutoban {
-		// RDB 文件化: 系统列表条目从 .iplist 文件读取
+	if row.System && !row.PresetAutoban && row.Category != "搜索引擎爬虫" {
+		// RDB 文件化: 威胁名单条目从 .iplist 文件读取；爬虫地址库仍由
+		// DB entries 提供（不得误走威胁文件路径返回空集）。
 		vals, ferr := services.ReadThreatIplistForUI(row.Name)
 		if ferr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: ferr.Error()})

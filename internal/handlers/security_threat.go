@@ -38,7 +38,8 @@ type threatSourceDTO struct {
 func (h *Handlers) GetThreatLib(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT t.id, t.name, t.display_name, t.url, t.format, t.update_enabled,
 		t.entry_count, t.version, t.update_status, t.message, COALESCE(t.last_checked,''), COALESCE(t.next_update,'')
-		FROM security_threat_sources t ORDER BY t.id`)
+		FROM security_threat_sources t
+		WHERE t.name IN ('ustc','firehol_l1','et_compromised') ORDER BY t.id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取威胁情报库失败: " + err.Error()})
 		return
@@ -155,6 +156,9 @@ func (h *Handlers) UpdateThreatSourceFlags(c *gin.Context) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_enabled=?, updated_at=datetime('now') WHERE id=?`, *body.UpdateEnabled, id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新失败: " + err.Error()})
 		return
+	}
+	if *body.UpdateEnabled {
+		services.ArmThreatFirstSlots()
 	}
 	recordAudit(c, "更新", "威胁情报库", fmt.Sprintf("%s 更新开关", name))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
