@@ -92,6 +92,11 @@ const settings = ref<SettingsConfig>({
   runtime_log_size_mb: 100,
   access_log_json: true,
   access_log_format: DEFAULT_ACCESS_LOG_FORMAT,
+  server_map_lat: 0,
+  server_map_lon: 0,
+  threat_screen_mode: 'map',
+  security_events_retention_days: 0,
+  security_events_row_cap: 0,
   trusted_proxy_enabled: false,
   trusted_proxy_ranges: '[]',
   trusted_proxy_range_refs: '[]',
@@ -175,6 +180,12 @@ const applyCaddyKeys = (data: ConfigPayload) => {
   settings.value.trusted_proxy_range_refs = data.trusted_proxy_range_refs ?? '[]'
   settings.value.trusted_proxy_headers = data.trusted_proxy_headers ?? '[]'
   settings.value.trusted_proxy_strict = data.trusted_proxy_strict ?? true
+  // 大屏本站坐标（v2.3.x 大屏）：GET 回显装载——缺此装载时表单恒显初值 0
+  settings.value.server_map_lat = data.server_map_lat ?? 0
+  settings.value.server_map_lon = data.server_map_lon ?? 0
+  settings.value.threat_screen_mode = data.threat_screen_mode === 'globe' ? 'globe' : 'map'
+  settings.value.security_events_retention_days = data.security_events_retention_days ?? 0
+  settings.value.security_events_row_cap = data.security_events_row_cap ?? 0
 }
 
 const applyCertKeys = (data: ConfigPayload) => {

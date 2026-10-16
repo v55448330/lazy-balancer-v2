@@ -52,6 +52,12 @@ func openAPIToGinPath(path string) string {
 // 无机制迫使决策者考虑 MCP 暴露——本清单 + 双向断言补上：新增无工具路由必须
 // 在此登记豁免理由（或补工具）；清单项不再注册时测试同样报错，防清单腐化。
 var mcpUncoveredRoutes = map[string]string{
+	// —— 威胁大屏（前端全屏可视化专用；Agent 侧 get_security_overview +
+	//    list_security_events 已覆盖同等数据面，专用工具冗余）——
+	"GET /api/v1/security/overview/threat-screen":              "威胁大屏聚合（24h 总量/拦截率/限流/活跃源/国家计数 Top5）：前端全屏可视化数据源；Agent 可用 get_security_overview/list_security_events 等价获取",
+	"GET /api/v1/security/events/feed":                         "威胁大屏增量事件流（since_id 游标）：大屏 3 秒轮询专用形态；Agent 可用 list_security_events 按时间倒序等价查询",
+	"POST /api/v1/security/overview/threat-screen/site-detect": "大屏本站坐标自动检测：设置页显式按钮的出站探测（公网 IP 回显+本地 GeoIP 定位）；Agent 无面板表单回填场景，且出站请求不应由自动化触发冗余执行",
+	"GET /api/v1/security/overview/threat-screen/traffic":      "大屏实时流量快照代理（Caddy admin 计数器）：光流可视化专用 1-2s 轮询数据源；Agent 无消费场景",
 	// —— IP 快捷弹框处置（第 57 轮新增：前端弹框专用；Agent 侧 get_ip_list →
 	//    update_ip_list 全量写回可达成移除，专用工具冗余）——
 	"POST /api/v1/security/ip-lists/:id/remove-ip": "IP 快捷弹框移除处置端点：从地址列表移除单条 IP；Agent 可用 get_ip_list+update_ip_list 组合等价完成",

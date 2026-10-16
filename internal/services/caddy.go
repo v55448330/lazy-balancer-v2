@@ -3016,6 +3016,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		conf := map[string]interface{}{
 			"admin": map[string]interface{}{
 				"listen": "127.0.0.1:2019",
+				// 流量统计走 caddygeoip admin.api 全量自动挂载（无需配置启用）。
 			},
 			"apps": apps,
 		}

@@ -191,6 +191,18 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 		rec.RuleMsg = doc.Messages[0].Message
 	}
 	rec.AnomalyScore = securityEventsExtractAnomalyScore(doc.Messages)
+	// v2.3.8（用户裁定 2026-10-17）：阶段 1/2 事件（IP 名单/预检/GeoIP/限流）
+	// 审计消息不含 coraza 评分段——入库时补固定语义分，全管线统一评分驱动
+	// （事件日志评分列与威胁大屏危险等级同源）：IP 名单/预检=12（高危），
+	// GeoIP/限流=6（中危）；WAF 事件不受影响。
+	if rec.AnomalyScore == 0 {
+		switch {
+		case rec.RuleTriggered == "2" || rec.RuleTriggered == "3" || securityEventsIsPrecheckRule(rec.RuleTriggered):
+			rec.AnomalyScore = 12
+		case rec.RuleTriggered == "8" || rec.RuleTriggered == "429":
+			rec.AnomalyScore = 6
+		}
+	}
 	// 安全处理耗时（2026-09-27 分段计时；第 76 轮侧车退役）：耗时由审计写插件
 	// （caddygeoip auditwriter.go）注入本行顶层 lb_timing 字段，直接取值。
 	// 选值规则:预检段规则(IP ACL/GeoIP/信任/威胁,id 1-14 与 800xxx)取 pre_us

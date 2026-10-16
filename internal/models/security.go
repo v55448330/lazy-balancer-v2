@@ -236,6 +236,25 @@ type UpdateSecurityPolicyRequest struct {
 	TrustDetection *bool `json:"trust_detection"`
 }
 
+// SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：
+// 仅携带大屏渲染富化字段；攻击族经 categorizeAttack 后端单源归因（前端零复制
+// 家族逻辑），原始 rule_triggered/rule_msg 不下发。
+type SecurityEventFeedItem struct {
+	ID         int    `json:"id"`
+	EventTime  string `json:"event_time"`
+	ClientIP   string `json:"client_ip"`
+	IPLocation string `json:"ip_location"`
+	Action     string `json:"action"`
+	RuleName   string `json:"rule_name"`
+	AttackType string `json:"attack_type"`
+	// v2.3.8 大屏攻击弹框：阶段（event_type）/处理耗时（μs→ms）/异常分
+	//（危险等级真实数据源：≥12 高危、6-11 中危、<6 低危）
+	EventType    string `json:"event_type"`
+	DurationUs   int64  `json:"duration_us"`
+	AnomalyScore int    `json:"anomaly_score"`
+	RuleTrigged  string `json:"rule_triggered"`
+}
+
 type SecurityEvent struct {
 	ID            int    `json:"id"`
 	EventTime     string `json:"event_time"`

@@ -16,7 +16,8 @@ const (
 	// securityEventsRetentionDeleteBatch 是年龄裁剪与 count 超限裁剪共用的单批
 	// 删除行数（R34 E 起年龄裁剪亦按此批次执行，同口径）：大批量单语句 DELETE
 	// 会长时间持指标库写锁，阻塞摄取 tick（R33 F9）。
-	securityEventsRetentionDeleteBatch = 5000
+	// v2.3.8 批次上调（100/s 压力设计：摊销删除吞吐翻四倍，批间让写锁）
+	securityEventsRetentionDeleteBatch = 20000
 )
 
 var (
@@ -25,28 +26,36 @@ var (
 	securityEventsRetentionDone   chan struct{}
 )
 
-// SecurityEventsRetentionMax returns the security events row cap (SYSRENDER23-2:
-// max 恒为常量 securityEventsRetentionDefaultMax,无 DB 列可调——直返,
-// 不再经 securityEventsRetentionSettings 白付一次主库查询)。
+// SecurityEventsRetentionMax 返回安全事件行数上限（v2.3.8 起可经
+// security_events_row_cap 显式设置，0=内置默认）。
 func SecurityEventsRetentionMax() int {
-	return securityEventsRetentionDefaultMax
+	_, max := securityEventsRetentionSettings()
+	return max
 }
 
-// securityEventsRetentionSettings reads the retention policy from global_config,
-// falling back to the defaults when the stored values are unset or non-positive.
+// securityEventsRetentionSettings 读取保留策略（v2.3.8 起双通道）：
+// ①显式设置 security_events_retention_days / security_events_row_cap（0=
+// 未设置走旧通道）；②旧通道 audit_retention_months×30 天 + 内置 100 万行
+// 上限。100/s 攻击压力设计（2026-10-17 用户裁定：保留期/条数均为用户可设，
+// 超限滚动更新）。
 func securityEventsRetentionSettings() (days, max int) {
 	days, max = securityEventsRetentionDefaultDays, securityEventsRetentionDefaultMax
 	database := db.DB
 	if database == nil {
 		return days, max
 	}
-	var retentionMonths int
-	if err := database.QueryRow(`SELECT COALESCE(audit_retention_months,0) FROM global_config WHERE id=1`).Scan(&retentionMonths); err != nil {
-		Logf("warn", "security events retention: read audit_retention_months failed, falling back to %d days: %v", days, err)
+	var retentionMonths, explicitDays, explicitCap int
+	if err := database.QueryRow(`SELECT COALESCE(audit_retention_months,0), COALESCE(security_events_retention_days,0), COALESCE(security_events_row_cap,0) FROM global_config WHERE id=1`).Scan(&retentionMonths, &explicitDays, &explicitCap); err != nil {
+		Logf("warn", "security events retention: read retention settings failed, falling back to %d days: %v", days, err)
 		return days, max
 	}
-	if retentionMonths > 0 {
+	if explicitDays > 0 {
+		days = explicitDays
+	} else if retentionMonths > 0 {
 		days = retentionMonths * 30
+	}
+	if explicitCap > 0 {
+		max = explicitCap
 	}
 	return days, max
 }
@@ -130,6 +139,12 @@ func securityEventsRetentionCleanup(ctx context.Context) int {
 				return total
 			case <-time.After(10 * time.Millisecond):
 			}
+		}
+	}
+	// v2.3.8：本轮有删除时截断 WAL（100/s 持续写入+滚动删除下防 WAL 无界）
+	if total > 0 {
+		if _, err := database.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			Logf("warn", "security events retention: wal checkpoint failed: %v", err)
 		}
 	}
 	return total

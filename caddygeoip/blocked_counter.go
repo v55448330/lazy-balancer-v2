@@ -158,6 +158,11 @@ func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			h.metrics.WithLabelValues(h.Rule).Inc()
 		}
 	}
+	// 大屏全请求实时流量计数（Plan B）：链尾分类点——attack=安全中断
+	// （isSecurityBlock 同口径）、normal=非安全中断的已处理请求（含上游
+	// 透传）；国名取 X-LB-GeoIP-Country（geoip handler 已剥伪造头并按
+	// 客户端 IP 回填，未解析=空串由计数器跳过）。
+	trafficRecord(r.Header.Get("X-LB-GeoIP-Country"), isSecurityBlock)
 	return err
 }
 

@@ -9,13 +9,16 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@types/three": "^0.186.0",
     "@vueuse/core": "^10.9.0",
     "axios": "^1.19.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.4",
+    "globe.gl": "^2.46.2",
     "pinia": "^4.0.3",
     "prismjs": "^1.30.0",
     "qrcode": "^1.5.4",
+    "three": "^0.186.1",
     "vue": "^3.5.41",
     "vue-echarts": "^8.1.0"
   },

@@ -3479,7 +3479,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	}
 
 	queryArgs := append(args, pageSize, offset)
-	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, e.anomaly_score,
+	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, COALESCE(e.anomaly_score, 0),
 		e.rule_name, e.policy_name, e.duration_us, e.precheck_us, e.request_headers, e.request_body
 		FROM security_events e`+where+" ORDER BY e.event_time DESC, e.id DESC LIMIT ? OFFSET ?", queryArgs...)
 	if err != nil {

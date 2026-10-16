@@ -27,6 +27,8 @@ var configChangeFieldTokens = []string{
 	"github_proxy_url",
 	"github_token",
 	"audit_retention_months",
+	"server_map_lat",
+	"server_map_lon",
 	"jwt_expire_minutes",
 	"mfa_write_guard",
 	"mfa_lockout_enabled",

@@ -306,6 +306,11 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	       COALESCE(trusted_proxy_range_refs,'[]') as trusted_proxy_range_refs,
 	       COALESCE(trusted_proxy_headers,'[]') as trusted_proxy_headers,
 	       COALESCE(trusted_proxy_strict,1) as trusted_proxy_strict,
+	       COALESCE(server_map_lat,0) as server_map_lat,
+	       COALESCE(server_map_lon,0) as server_map_lon,
+	       COALESCE(threat_screen_mode,'map') as threat_screen_mode,
+	       COALESCE(security_events_retention_days,0) as security_events_retention_days,
+	       COALESCE(security_events_row_cap,0) as security_events_row_cap,
 	       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 	       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -323,6 +328,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
 		&cfg.ServerTokensHidden, &cfg.TaskLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.GitHubToken, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
 		&cfg.TrustedProxyEnabled, &cfg.TrustedProxyRanges, &cfg.TrustedProxyRangeRefs, &cfg.TrustedProxyHeaders, &cfg.TrustedProxyStrict,
+		&cfg.ServerMapLat, &cfg.ServerMapLon, &cfg.ThreatScreenMode,
+		&cfg.SecurityEventsRetentionDays, &cfg.SecurityEventsRowCap,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -573,6 +580,30 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "日志保留月数必须在 1-12 之间"})
 		return
 	}
+	// 威胁大屏本站坐标（v3）：纬度 ±90、经度 ±180，越界 400 不改库值
+	// （fail-visible——静默钳位会让用户以为坐标已生效）。
+	if req.ServerMapLat != nil && (*req.ServerMapLat < -90 || *req.ServerMapLat > 90) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "本站纬度必须在 -90 到 90 之间"})
+		return
+	}
+	if req.ServerMapLon != nil && (*req.ServerMapLon < -180 || *req.ServerMapLon > 180) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "本站经度必须在 -180 到 180 之间"})
+		return
+	}
+	// 威胁大屏模式（v2.3.8）：枚举白名单，非法值 400（fail-visible）
+	if req.ThreatScreenMode != nil && *req.ThreatScreenMode != "map" && *req.ThreatScreenMode != "globe" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "威胁大屏模式仅支持 map 或 globe"})
+		return
+	}
+	// 安全事件保留（v2.3.8）：天数 0-3650、行数上限 0-1 亿（0=自动通道）
+	if req.SecurityEventsRetentionDays != nil && (*req.SecurityEventsRetentionDays < 0 || *req.SecurityEventsRetentionDays > 3650) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全事件保留天数必须在 0 到 3650 之间"})
+		return
+	}
+	if req.SecurityEventsRowCap != nil && (*req.SecurityEventsRowCap < 0 || *req.SecurityEventsRowCap > 100000000) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全事件行数上限必须在 0 到 100000000 之间"})
+		return
+	}
 	if req.Timezone != nil {
 		if _, err := time.LoadLocation(*req.Timezone); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的时区: " + err.Error()})
@@ -687,6 +718,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				trusted_proxy_range_refs = COALESCE(?, trusted_proxy_range_refs),
 				trusted_proxy_headers = COALESCE(?, trusted_proxy_headers),
 				trusted_proxy_strict = COALESCE(?, trusted_proxy_strict),
+				server_map_lat = COALESCE(?, server_map_lat),
+				server_map_lon = COALESCE(?, server_map_lon),
+				threat_screen_mode = COALESCE(?, threat_screen_mode),
+				security_events_retention_days = COALESCE(?, security_events_retention_days),
+				security_events_row_cap = COALESCE(?, security_events_row_cap),
 				updated_at = datetime('now')
 			WHERE id = 1
 		`, req.DNSProvider, req.DNSCredentials, req.DNSCredentials, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
@@ -694,7 +730,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
 		req.ServerTokensHidden, req.TaskLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.GitHubToken, req.GitHubToken, req.MFAWriteGuard, req.MFALockoutEnabled,
-		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyRangeRefs, req.TrustedProxyHeaders, req.TrustedProxyStrict)
+		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyRangeRefs, req.TrustedProxyHeaders, req.TrustedProxyStrict,
+		req.ServerMapLat, req.ServerMapLon, req.ThreatScreenMode, req.SecurityEventsRetentionDays, req.SecurityEventsRowCap)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败"})

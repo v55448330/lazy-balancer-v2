@@ -290,6 +290,21 @@ func initMetricsSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_security_events_rule ON security_events(rule_caddy_id);
 	CREATE INDEX IF NOT EXISTS idx_security_events_action_time ON security_events(action, event_time DESC);
 	CREATE INDEX IF NOT EXISTS idx_security_events_ip_time ON security_events(client_ip, event_time DESC);
+
+	-- v2.3.8 威胁大屏预聚合（分钟粒度）：国家/省/攻击族/规则名/动作 五维
+	-- 计数，PK 前缀=minute。大屏聚合端点直读此表（毫秒级，与原始表规模
+	-- 解耦——2000/s 正常 + 100/s 攻击压力设计，2026-10-17 用户裁定）。
+	-- 固化=按需懒固（ensureThreatRollup）：每分钟幂等 DELETE+INSERT。
+	CREATE TABLE IF NOT EXISTS security_event_rollup (
+		minute TEXT NOT NULL,
+		country TEXT NOT NULL DEFAULT '',
+		province TEXT NOT NULL DEFAULT '',
+		family TEXT NOT NULL DEFAULT '',
+		rule TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL DEFAULT '',
+		count INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (minute, country, province, family, rule, action)
+	) WITHOUT ROWID;
 	`
 
 	if _, err := db.Exec(schema); err != nil {

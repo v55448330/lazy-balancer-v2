@@ -194,7 +194,7 @@
           <template #default="{ row }">
             <el-tag v-if="row.anomaly_score >= 15" type="danger" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
             <el-tag v-else-if="row.anomaly_score >= 5" type="warning" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
-            <span v-else-if="row.anomaly_score > 0" class="text-secondary">{{ row.anomaly_score }}</span>
+            <el-tag v-else-if="row.anomaly_score > 0" type="info" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
             <span v-else>—</span>
           </template>
         </el-table-column>

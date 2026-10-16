@@ -466,6 +466,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 				admin.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
 				admin.POST("/security/policies/:id/split", h.SplitSecurityPolicy)
+				// 威胁大屏本站坐标自动检测（v4）：显式按钮触发出站探测，管理员
+				admin.POST("/security/overview/threat-screen/site-detect", h.DetectThreatScreenSite)
 				admin.PUT("/security/crs/auto-update", h.UpdateCRSAutoUpdate)
 				admin.PUT("/security/crs/schedule", h.UpdateCRSSchedule)
 				admin.POST("/security/crs/update", h.StartCRSUpdate)
@@ -562,6 +564,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/policies", h.ListSecurityPolicies)
 				business.GET("/security/policies/:id", h.GetSecurityPolicy)
 				business.GET("/security/overview", h.GetSecurityOverview)
+				// 威胁大屏：聚合 + 增量事件流（只读，从节点可读）
+				business.GET("/security/overview/threat-screen", h.GetSecurityThreatScreen)
+				// 实时流量快照代理（Plan B 全请求光流数据源，1-2s 轮询）
+				business.GET("/security/overview/threat-screen/traffic", h.GetThreatScreenTraffic)
+				business.GET("/security/events/feed", h.GetSecurityEventFeed)
 				business.GET("/security/rate-limit-blocks", h.GetSecurityRateLimitBlocks)
 				business.GET("/security/events", h.ListSecurityEvents)
 				business.GET("/security/events/count", h.GetIPEventCount)

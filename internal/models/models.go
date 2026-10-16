@@ -259,6 +259,17 @@ type GlobalConfig struct {
 	MasterURL           string `json:"master_url"`
 	SyncInterval        int    `json:"sync_interval"`
 	DefaultCAProviderID int    `json:"default_ca_provider_id"`
+	// ServerMapLat/ServerMapLon 威胁大屏本站坐标（v3，node-local 列）：
+	// 0,0=未设置（前端回退地图视觉中心）。节点属性不随集群同步。
+	ServerMapLat float64 `json:"server_map_lat"`
+	ServerMapLon float64 `json:"server_map_lon"`
+	// ThreatScreenMode 威胁大屏中央视觉模式（v2.3.8）：map=360°地图+雷达扫掠 /
+	// globe=旋转地球+垂直扫描。node-local 列，缺省 map。
+	ThreatScreenMode string `json:"threat_screen_mode"`
+	// SecurityEventsRetentionDays/RowCap 安全事件保留（v2.3.8 显式设置，0=跟随
+	// 旧通道 audit_retention_months×30 / 内置 100 万行）
+	SecurityEventsRetentionDays int `json:"security_events_retention_days"`
+	SecurityEventsRowCap        int `json:"security_events_row_cap"`
 	// v2.1.8 MFA 全局开关（响应面）
 	MFAWriteGuard     bool `json:"mfa_write_guard"`
 	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
@@ -599,6 +610,15 @@ type UpdateConfigRequest struct {
 	// （唯一撤销路径）、非空=覆盖。响应面永不回显（GlobalConfig.GitHubToken json:"-"）。
 	GitHubToken         *string `json:"github_token"`
 	DefaultCAProviderID *int    `json:"default_ca_provider_id"`
+	// 威胁大屏本站坐标（v3）：nil=保持现值；写侧范围校验（纬度 ±90/经度 ±180）。
+	ServerMapLat *float64 `json:"server_map_lat"`
+	ServerMapLon *float64 `json:"server_map_lon"`
+	// 威胁大屏模式（v2.3.8）：nil=保持现值；仅允许 map/globe。
+	ThreatScreenMode *string `json:"threat_screen_mode"`
+	// 安全事件保留（v2.3.8）：nil=保持现值；天数 0-3650（0=自动）、行数上限
+	// 0-1 亿（0=自动，内置 100 万）。
+	SecurityEventsRetentionDays *int `json:"security_events_retention_days"`
+	SecurityEventsRowCap        *int `json:"security_events_row_cap"`
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
 	MFAWriteGuard     *bool `json:"mfa_write_guard"`
 	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`

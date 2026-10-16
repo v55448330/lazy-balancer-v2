@@ -72,6 +72,8 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/settings/oidc":       AuditPolicyExplicit,
 	"DELETE /api/v1/settings/oidc":    AuditPolicyExplicit,
 	"POST /api/v1/settings/oidc/test": AuditPolicyExplicit,
+	// 威胁大屏本站坐标自动检测（v4）：出站探测 handler 显式留痕（成功/失败）
+	"POST /api/v1/security/overview/threat-screen/site-detect": AuditPolicyExplicit,
 	// 自动备份（v2.3.x）：设置/手动备份/删除/还原 handler 均显式留痕
 	//（还原由 importConfigBackupCore 以「还原」动作记审计）。
 	"PUT /api/v1/settings/auto-backup":     AuditPolicyExplicit,

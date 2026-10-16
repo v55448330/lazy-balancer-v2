@@ -12,6 +12,7 @@ const pages = [
   'security-block-pages',
   'security-overview',
   'security-events',
+  'threat-screen',
   'caddy',
   'users',
   'audit-log',

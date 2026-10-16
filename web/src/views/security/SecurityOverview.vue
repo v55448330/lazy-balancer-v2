@@ -8,6 +8,10 @@
         </h2>
         <p class="page-desc">安全防护统计概览</p>
       </div>
+      <el-button type="primary" plain @click="openThreatScreen">
+        <el-icon style="margin-right: 6px"><Monitor /></el-icon>
+        威胁大屏
+      </el-button>
     </div>
 
     <el-alert
@@ -249,8 +253,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files } from '@element-plus/icons-vue'
+import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files, Monitor } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
 import { compareVersion } from '@/utils/securityStages'
@@ -443,6 +448,12 @@ const fetchThreatLib = async () => {
   } catch {
     threatError.value = true
   }
+}
+
+const authStore = useAuthStore()
+// 威胁大屏入口：全屏页面（App.vue 独立分支渲染，页内 ESC/按钮退出）
+const openThreatScreen = (): void => {
+  authStore.setCurrentPage('threat-screen')
 }
 
 onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo(); fetchThreatLib() })

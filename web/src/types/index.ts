@@ -274,6 +274,12 @@ export interface GlobalConfigData {
   access_log_json: boolean
   access_log_format: string
   audit_retention_months: number
+  // 威胁大屏本站坐标（v3）：0,0=未设置（大屏回退地图视觉中心）
+  server_map_lat: number
+  server_map_lon: number
+  threat_screen_mode: string
+  security_events_retention_days: number
+  security_events_row_cap: number
   jwt_expire_minutes: number
   timezone: string
   mfa_write_guard: boolean

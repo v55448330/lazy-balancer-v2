@@ -8,6 +8,8 @@
     </div>
 
     <Login v-else-if="!authStore.token || isTokenExpired(authStore.token || '')" />
+    <!-- 威胁大屏：全屏模式分支——不进 AppLayout（隐藏侧栏顶栏），ESC 在页内退出 -->
+    <ThreatScreen v-else-if="currentPage === 'threat-screen'" />
     <AppLayout v-else>
       <Dashboard v-if="currentPage === 'dashboard'" />
       <Rules v-else-if="currentPage === 'rules'" />
@@ -53,6 +55,7 @@ const SecurityPolicies = createAsyncPage(() => import('@/views/security/Security
 const SecurityRules = createAsyncPage(() => import('@/views/security/SecurityRules.vue'))
 const SecurityBlockPages = createAsyncPage(() => import('@/views/security/SecurityBlockPages.vue'))
 const SecurityOverview = createAsyncPage(() => import('@/views/security/SecurityOverview.vue'))
+const ThreatScreen = createAsyncPage(() => import('@/views/security/ThreatScreen.vue'))
 const SecurityEvents = createAsyncPage(() => import('@/views/security/SecurityEvents.vue'))
 const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
 const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))

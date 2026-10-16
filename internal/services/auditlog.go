@@ -59,6 +59,8 @@ var ConfigFieldSections = map[string]string{
 	"audit_log_size_mb":      "基础设置",
 	"runtime_log_size_mb":    "基础设置",
 	"audit_retention_months": "基础设置",
+	"server_map_lat":         "基础设置",
+	"server_map_lon":         "基础设置",
 	"jwt_expire_minutes":     "基础设置",
 	"timezone":               "基础设置",
 	"github_proxy_url":       "基础设置",

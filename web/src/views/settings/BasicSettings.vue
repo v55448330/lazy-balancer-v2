@@ -63,6 +63,28 @@
             </el-select>
             <div class="form-tip-line">影响日志时间戳与证书时间；标注夏令时的时区会随夏令时自动偏移；仅 Caddy 日志需重启服务生效</div>
           </el-form-item>
+          <el-form-item label="大屏本站坐标">
+            <el-input-number v-model="settings.server_map_lat" :disabled="isReadOnly" :min="-90" :max="90" :step="0.01" :precision="4" controls-position="right" style="width: 130px;" />
+            <span class="form-tip-inline">纬度</span>
+            <el-input-number v-model="settings.server_map_lon" :disabled="isReadOnly" :min="-180" :max="180" :step="0.01" :precision="4" controls-position="right" style="width: 130px; margin-left: 10px;" />
+            <span class="form-tip-inline">经度</span>
+            <el-button :loading="siteDetecting" :disabled="isReadOnly" style="margin-left: 10px" @click="detectSiteLocation">自动检测</el-button>
+            <div class="form-tip-line">威胁大屏地图本站信标坐标；全 0 表示未设置，按地图视觉中心显示。自动检测：出站获取公网 IP 后按本地 GeoIP 库换算经纬度并回填（显式触发，无后台请求）</div>
+          </el-form-item>
+          <el-form-item label="大屏视觉模式">
+            <el-radio-group v-model="threatScreenMode" :disabled="isReadOnly">
+              <el-radio value="map">360° 地图 · 雷达扫掠</el-radio>
+              <el-radio value="globe">3D 地球 · 垂直扫描</el-radio>
+            </el-radio-group>
+            <div class="form-tip-line">威胁大屏中央攻击流光的呈现方式；进入大屏时生效（已打开的大屏重新进入后切换）</div>
+          </el-form-item>
+          <el-form-item label="安全事件保留">
+            <el-input-number v-model="seRetentionDays" :disabled="isReadOnly" :min="0" :max="3650" :step="30" controls-position="right" style="width: 130px;" />
+            <span class="form-tip-inline">天</span>
+            <el-input-number v-model="seRowCap" :disabled="isReadOnly" :min="0" :max="100000000" :step="100000" controls-position="right" style="width: 170px; margin-left: 10px;" />
+            <span class="form-tip-inline">行数上限</span>
+            <div class="form-tip-line">安全事件滚动保留：超出保留天数或行数上限时按最旧优先滚动删除；0 表示自动（跟随审计日志保留月数 / 内置 100 万行）。高攻击流量部署可按需上调</div>
+          </el-form-item>
           <el-form-item label="GitHub 加速">
             <el-select v-model="githubProxyUrl" :disabled="isReadOnly" style="width: 160px">
               <el-option
@@ -442,7 +464,8 @@
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, mfaAwareSuccess, formatBytes } from '@/utils/api'
+import type { APIResponse } from '@/types'
+import { request, mfaAwareSuccess, formatBytes, ApiRequestError } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
 import { formatDate } from '@/utils/date'
 import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock, Document } from '@element-plus/icons-vue'
@@ -1109,6 +1132,12 @@ interface BasicSettingsConfig {
   audit_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
+  // 威胁大屏本站坐标（v3，可选：父级 SettingsConfig 未声明时由 computed 兜底 0）
+  server_map_lat?: number
+  threat_screen_mode?: string
+  security_events_retention_days?: number
+  security_events_row_cap?: number
+  server_map_lon?: number
   jwt_expire_minutes: number
   timezone: string
   mfa_write_guard: boolean
@@ -1207,6 +1236,37 @@ const clearGithubToken = () => {
 }
 
 const saving = ref(false)
+// 大屏本站坐标「自动检测」（v4）：显式触发出站探测，成功回填表单坐标字段；
+// 失败走友好错误提示，不打断手动填写路径。
+const siteDetecting = ref(false)
+// v2.3.8 威胁大屏中央视觉模式（map/globe）：独立持有，父组件配置装载后经
+// watch 同步（settings 为父级响应式对象）
+const threatScreenMode = ref<'map' | 'globe'>('map')
+// v2.3.8 安全事件滚动保留（0=自动）
+const seRetentionDays = ref(0)
+const seRowCap = ref(0)
+watch(() => settings.value.threat_screen_mode, (v) => { threatScreenMode.value = v === 'globe' ? 'globe' : 'map' }, { immediate: true })
+watch(() => [settings.value.security_events_retention_days, settings.value.security_events_row_cap] as const, ([d, c]) => {
+  seRetentionDays.value = d ?? 0
+  seRowCap.value = c ?? 0
+}, { immediate: true })
+async function detectSiteLocation(): Promise<void> {
+  if (siteDetecting.value) return
+  siteDetecting.value = true
+  try {
+    const res = await request.post<APIResponse<{ ip: string; location: string; lat: number; lon: number }>>('/security/overview/threat-screen/site-detect')
+    const data = res.data
+    if (!data) throw new Error('响应缺失')
+    settings.value.server_map_lat = Number(data.lat.toFixed(4))
+    settings.value.server_map_lon = Number(data.lon.toFixed(4))
+    mfaAwareSuccess(`已检测本站位置：${data.location}（${data.ip}），保存后生效`)
+  } catch (error: unknown) {
+    const message = error instanceof ApiRequestError ? error.message : '自动检测失败（离线或超时），请手动填写坐标'
+    ElMessage.error(message)
+  } finally {
+    siteDetecting.value = false
+  }
+}
 
 const adminTls = ref({ enabled: false, mode: 'selfsigned' })
 const adminTlsSaved = ref({ enabled: false, mode: 'selfsigned' })
@@ -1401,6 +1461,11 @@ const handleSave = async () => {
       audit_retention_months: settings.value.audit_retention_months,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
+      server_map_lat: settings.value.server_map_lat ?? 0,
+      server_map_lon: settings.value.server_map_lon ?? 0,
+      threat_screen_mode: threatScreenMode.value,
+      security_events_retention_days: seRetentionDays.value,
+      security_events_row_cap: seRowCap.value,
       mfa_write_guard: settings.value.mfa_write_guard,
       mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
       github_proxy_url: githubProxyUrl.value,

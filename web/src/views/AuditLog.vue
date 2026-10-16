@@ -154,6 +154,8 @@ const resetFilters = () => {
 // 第 62 轮 F62-13:表驱动(原 60+ 字面量 if 链——后端新增动作词时手改链易漏)
 const ACTION_TAG_TABLE: Record<string, string> = {
   '删除': 'danger',
+  '检测失败': 'danger',
+  '自动检测': 'success',
   '禁用': 'danger',
   '停止': 'danger',
   '重启': 'danger',

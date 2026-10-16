@@ -50,6 +50,12 @@ type configSnapshot struct {
 	TrustedProxyRangeRefs string
 	TrustedProxyHeaders   string
 	TrustedProxyStrict    bool
+	// 威胁大屏本站坐标（v3，node-local）：预览变更清单与字段级审计。
+	ServerMapLat                float64
+	ServerMapLon                float64
+	ThreatScreenMode            string
+	SecurityEventsRetentionDays int
+	SecurityEventsRowCap        int
 }
 
 type configChangePlan struct {
@@ -85,7 +91,8 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(github_token,''),
 		COALESCE(mfa_write_guard,0),
 		COALESCE(mfa_lockout_enabled,0),
-		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1)
+		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1),
+		COALESCE(server_map_lat,0), COALESCE(server_map_lon,0), COALESCE(threat_screen_mode,'map'), COALESCE(security_events_retention_days,0), COALESCE(security_events_row_cap,0)
 		FROM global_config WHERE id=1`, db.DefaultCertExpiryDays).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
@@ -100,7 +107,8 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.GitHubProxyURL,
 		&old.GitHubToken,
 		&old.MFAWriteGuard, &old.MFALockoutEnabled,
-		&old.TrustedProxyEnabled, &old.TrustedProxyRanges, &old.TrustedProxyRangeRefs, &old.TrustedProxyHeaders, &old.TrustedProxyStrict)
+		&old.TrustedProxyEnabled, &old.TrustedProxyRanges, &old.TrustedProxyRangeRefs, &old.TrustedProxyHeaders, &old.TrustedProxyStrict,
+		&old.ServerMapLat, &old.ServerMapLon, &old.ThreatScreenMode, &old.SecurityEventsRetentionDays, &old.SecurityEventsRowCap)
 	return old, err
 }
 
@@ -135,6 +143,11 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	// 否则「空串清除」请求整包落入「配置无变化」短路，撤销永不到达 UPDATE）。
 	add("github_token", "GitHub 令牌", req.GitHubToken != nil && *req.GitHubToken != old.GitHubToken)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
+	add("server_map_lat", "大屏本站坐标", req.ServerMapLat != nil && *req.ServerMapLat != old.ServerMapLat)
+	add("server_map_lon", "大屏本站坐标", req.ServerMapLon != nil && *req.ServerMapLon != old.ServerMapLon)
+	add("threat_screen_mode", "大屏视觉模式", req.ThreatScreenMode != nil && *req.ThreatScreenMode != old.ThreatScreenMode)
+	add("security_events_retention_days", "安全事件保留天数", req.SecurityEventsRetentionDays != nil && *req.SecurityEventsRetentionDays != old.SecurityEventsRetentionDays)
+	add("security_events_row_cap", "安全事件行数上限", req.SecurityEventsRowCap != nil && *req.SecurityEventsRowCap != old.SecurityEventsRowCap)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)
 	add("mfa_lockout_enabled", "登录失败锁定", req.MFALockoutEnabled != nil && *req.MFALockoutEnabled != old.MFALockoutEnabled)
