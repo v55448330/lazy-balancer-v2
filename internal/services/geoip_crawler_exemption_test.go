@@ -90,3 +90,24 @@ func TestEngineGate_crawlerExemptionDirectives(t *testing.T) {
 	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 403, "lb_gate"))
 	compileForEngineGate(t, directives)
 }
+
+// TestEngineGate_crawlerPassLogDetectedAction（v2.3.8）：豁免规则须为
+// pass,log（检测动作事件完整落库），非 pass,nolog。
+func TestEngineGate_crawlerPassLogDetectedAction(t *testing.T) {
+	p := &models.SecurityPolicy{
+		ID: 3, Mode: "blocking", Enabled: true,
+		GeoIPMode:           "deny",
+		GeoIPCountries:      json.RawMessage(`["海外"]`),
+		GeoIPCrawlerExempt:  true,
+		GeoIPCrawlerEngines: json.RawMessage(`["googlebot"]`),
+		IPWhitelistEnabled:  true,
+	}
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 403, "lb_gate"))
+	if strings.Contains(directives, "pass,nolog") {
+		t.Errorf("豁免规则不得为 pass,nolog（须落检测事件）:\n%s", directives)
+	}
+	if !strings.Contains(directives, "pass,log") || !strings.Contains(directives, "搜索引擎爬虫放行（已验证）") {
+		t.Errorf("豁免规则缺 pass,log + 放行 msg:\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
+}

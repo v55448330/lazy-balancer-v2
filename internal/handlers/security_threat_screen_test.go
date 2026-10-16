@@ -701,3 +701,28 @@ func TestThreatScreenRollup_fixationIdempotentAndEquivalent(t *testing.T) {
 		t.Errorf("rollup empty")
 	}
 }
+
+func TestTriggerTypeForRule_fullTaxonomy(t *testing.T) {
+	cases := map[string]string{
+		"429":     "限流",
+		"2":       "IP 访问控制",
+		"4":       "IP 黑名单",
+		"7":       "IP 访问控制",
+		"8":       "地域拦截",
+		"12":      "信任名单",
+		"14":      "威胁情报库",
+		"11":      "请求体异常",
+		"800007":  "地域拦截",
+		"810016":  "爬虫Bot",
+		"850003":  "爬虫Bot",
+		"942100":  "WAF",
+		"10001":   "WAF·自定义",
+		"1000001": "WAF·自定义",
+		"999999":  "WAF",
+	}
+	for id, want := range cases {
+		if got := triggerTypeForRule(id); got != want {
+			t.Errorf("triggerTypeForRule(%q)=%q, want %q", id, got, want)
+		}
+	}
+}

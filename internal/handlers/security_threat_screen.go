@@ -611,6 +611,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 		}
 		e.AttackType = categorizeAttack(ruleTriggered, ruleMsg)
 		e.RuleTrigged = ruleTriggered
+		e.TriggerType = triggerTypeForRule(ruleTriggered)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -619,4 +620,46 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "since_id": sinceID, "limit": limit}})
+}
+
+// triggerTypeForRule 触发类型显示映射（v2.3.8 单源）：阶段 id → 业务语义类型。
+// 爬虫事件独立于地域拦截（豁免/伪装不再落「IP 访问控制」桶，消除歧义）；
+// WAF 拆 CRS/自定义（10000-899999=自定义规则库、1000000+=合成自定义）；
+// 429→限流、GeoIP 老 id:8 兼容。
+func triggerTypeForRule(ruleTriggered string) string {
+	n, err := strconv.Atoi(ruleTriggered)
+	if err == nil {
+		switch {
+		case n >= 810000 && n < 850000, n >= 850000 && n < 900000:
+			return "爬虫Bot"
+		case n >= 800000 && n < 810000:
+			return "地域拦截"
+		case n >= 1000000:
+			return "WAF·自定义"
+		case n >= 10000 && n < 900000:
+			return "WAF·自定义"
+		case n >= 900000:
+			return "WAF"
+		}
+	}
+	switch ruleTriggered {
+	case "429":
+		return "限流"
+	case "2":
+		return "IP 访问控制"
+	case "7":
+		return "IP 访问控制"
+	case "4":
+		return "IP 黑名单"
+	case "8":
+		return "地域拦截"
+	case "12":
+		return "信任名单"
+	case "14":
+		return "威胁情报库"
+	case "11":
+		return "请求体异常"
+	default:
+		return "其他"
+	}
 }

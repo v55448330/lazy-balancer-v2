@@ -161,7 +161,7 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="触发阶段" min-width="110">
+        <el-table-column label="触发类型" min-width="100" class-name="col-nowrap">
           <template #default="{ row }">
             <!-- 触发阶段四分类：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
@@ -353,7 +353,7 @@ import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
 import type { APIResponse } from '@/types'
 
-interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number; duration_us: number; precheck_us: number; request_headers: string; request_body: string }
+interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; trigger_type?: string; action: string; anomaly_score: number; duration_us: number; precheck_us: number; request_headers: string; request_body: string }
 
 // —— 自动封禁（F73-A）：状态卡/配置弹框 ——
 
@@ -563,7 +563,10 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'waf' | 'body' | '
     default: return 'other'
   }
 }
+// v2.3.8：trigger_type 后端单源优先（爬虫Bot 独立于地域拦截，429→限流）；
+// 旧数据无该字段时回落五桶。
 const stageLabel = (row: SecurityEvent): string => {
+  if (row.trigger_type) return row.trigger_type
   switch (stageCategory(row)) {
     case 'trust': return '信任名单'
     case 'acl': return 'IP 访问控制'

@@ -1399,7 +1399,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 					Logf("warn", "策略 %d 的爬虫豁免规则 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, crawlerRuleID)
 					continue
 				}
-				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipPrecheckRuleBase+p.ID))
+				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,log,msg:'搜索引擎爬虫放行（已验证）',ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipPrecheckRuleBase+p.ID))
 			}
 			spoofRuleID := geoipCrawlerSpoofRuleBase + p.ID
 			if spoofRuleID < 900000 {

@@ -197,6 +197,10 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	// GeoIP/限流=6（中危）；WAF 事件不受影响。
 	if rec.AnomalyScore == 0 {
 		switch {
+		case securityEventsIsCrawlerExemptRule(rec.RuleTriggered):
+			rec.AnomalyScore = 0 // 已验证爬虫放行：审计轨迹，不计威胁分
+		case securityEventsIsCrawlerSpoofRule(rec.RuleTriggered):
+			rec.AnomalyScore = 12 // 爬虫伪装（PTR 验证失败）：高危
 		case rec.RuleTriggered == "2" || rec.RuleTriggered == "3" || securityEventsIsPrecheckRule(rec.RuleTriggered):
 			rec.AnomalyScore = 12
 		case rec.RuleTriggered == "8" || rec.RuleTriggered == "429":
@@ -1571,4 +1575,16 @@ func securityEventsIsPrecheckRule(ruleID string) bool {
 		return true
 	}
 	return len(ruleID) == 6 && strings.HasPrefix(ruleID, "8")
+}
+
+// securityEventsIsCrawlerExemptRule 豁免放行规则 id（810000+policyID*16+引擎序号）。
+func securityEventsIsCrawlerExemptRule(id string) bool {
+	n, err := strconv.Atoi(id)
+	return err == nil && n >= 810000 && n < 850000
+}
+
+// securityEventsIsCrawlerSpoofRule 爬虫伪装规则 id（850000+policyID）。
+func securityEventsIsCrawlerSpoofRule(id string) bool {
+	n, err := strconv.Atoi(id)
+	return err == nil && n >= 850000 && n < 900000
 }

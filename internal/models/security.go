@@ -263,6 +263,8 @@ type SecurityEventFeedItem struct {
 	DurationUs   int64  `json:"duration_us"`
 	AnomalyScore int    `json:"anomaly_score"`
 	RuleTrigged  string `json:"rule_triggered"`
+	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/限流/IP 访问控制/WAF/请求体异常）
+	TriggerType string `json:"trigger_type"`
 }
 
 type SecurityEvent struct {
@@ -295,6 +297,8 @@ type SecurityEvent struct {
 	// base64 并带标记前缀）。敏感头掩码是前端展示层姿态，库内为原文。
 	RequestHeaders string `json:"request_headers"`
 	RequestBody    string `json:"request_body"`
+	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/限流/IP 访问控制/WAF/请求体异常）
+	TriggerType string `json:"trigger_type"`
 }
 
 type SecurityOverview struct {
