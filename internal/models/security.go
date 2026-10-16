@@ -103,8 +103,12 @@ type SecurityPolicy struct {
 	UpdatedAt         string          `json:"updated_at"`
 	GeoIPCountries    json.RawMessage `json:"geoip_countries"`
 	GeoIPMode         string          `json:"geoip_mode"`
-	WAFCheckResponse  bool            `json:"waf_check_response"`
-	LogRequestBody    bool            `json:"log_request_body"`
+	// v2.3.8 爬虫豁免：地域拦截豁免已验证搜索引擎/AI 爬虫（方案 B：UA+PTR
+	// 双跳，360=官方 IP 段）。Engines=豁免引擎 ID 数组（geoipnames 注册表）。
+	GeoIPCrawlerExempt  bool            `json:"geoip_crawler_exempt"`
+	GeoIPCrawlerEngines json.RawMessage `json:"geoip_crawler_engines"`
+	WAFCheckResponse    bool            `json:"waf_check_response"`
+	LogRequestBody      bool            `json:"log_request_body"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
 	IPACLListRefs   string `json:"ip_acl_list_refs"`
@@ -151,49 +155,53 @@ type SecurityPolicySummary struct {
 	CRSRuleGroups json.RawMessage `json:"crs_rule_groups"`
 	// R72 三十次追加（多策略绑定 Q2 根因 1）：ruleProtections 的 GeoIP/自定义
 	// 规则行此前永远没有数据（接口只给 has_ip_control/has_rate_limit）。
-	HasGeoIP         bool   `json:"has_geoip"`
-	HasCustomRules   bool   `json:"has_custom_rules"`
-	CustomRulesCount int    `json:"custom_rules_count"`
-	UpdatedBy        int    `json:"updated_by"`
-	UpdatedAt        string `json:"updated_at"`
-	GeoIPCountries   string `json:"geoip_countries"`
-	GeoIPMode        string `json:"geoip_mode"`
-	WAFCheckResponse bool   `json:"waf_check_response"`
-	LogRequestBody   bool   `json:"log_request_body"`
-	IPACLListRefs    string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
-	PolicyType       string `json:"policy_type"`
-	TrustDetection   bool   `json:"trust_detection"`
-	Blocked24h       int    `json:"blocked_24h"`
+	HasGeoIP            bool   `json:"has_geoip"`
+	HasCustomRules      bool   `json:"has_custom_rules"`
+	CustomRulesCount    int    `json:"custom_rules_count"`
+	UpdatedBy           int    `json:"updated_by"`
+	UpdatedAt           string `json:"updated_at"`
+	GeoIPCountries      string `json:"geoip_countries"`
+	GeoIPMode           string `json:"geoip_mode"`
+	GeoIPCrawlerExempt  bool   `json:"geoip_crawler_exempt"`
+	GeoIPCrawlerEngines string `json:"geoip_crawler_engines"`
+	WAFCheckResponse    bool   `json:"waf_check_response"`
+	LogRequestBody      bool   `json:"log_request_body"`
+	IPACLListRefs       string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs     string `json:"ip_whitelist_refs"`
+	PolicyType          string `json:"policy_type"`
+	TrustDetection      bool   `json:"trust_detection"`
+	Blocked24h          int    `json:"blocked_24h"`
 	// Trigger24h：近 24h 归因该策略的 blocked+logged 事件数（「24h 触发」列，
 	// 归因口径同 Blocked24h：policy_id>0）。
 	Trigger24h int `json:"trigger_24h"`
 }
 
 type CreateSecurityPolicyRequest struct {
-	Name               string `json:"name" binding:"required"`
-	Description        string `json:"description"`
-	Mode               string `json:"mode"`
-	AnomalyThreshold   int    `json:"anomaly_threshold"`
-	IPACLMode          string `json:"ip_acl_mode"`
-	IPACLList          string `json:"ip_acl_list"`
-	IPACLEnabled       bool   `json:"ip_acl_enabled"`
-	IPWhitelist        string `json:"ip_whitelist"`
-	IPWhitelistEnabled *bool  `json:"ip_whitelist_enabled"`
-	IPBlacklist        string `json:"ip_blacklist"`
-	RateLimitEnabled   bool   `json:"rate_limit_enabled"`
-	RateLimitRPS       int    `json:"rate_limit_rps"`
-	RateLimitBurst     int    `json:"rate_limit_burst"`
-	CRSRuleGroups      string `json:"crs_rule_groups"`
-	CRSExcludedRules   string `json:"crs_excluded_rules"`
-	CustomRules        string `json:"custom_rules"`
-	BlockPageID        int    `json:"block_page_id"`
-	BlockStatusCode    int    `json:"block_status_code"`
-	Enabled            *bool  `json:"enabled"`
-	GeoIPCountries     string `json:"geoip_countries"`
-	GeoIPMode          string `json:"geoip_mode"`
-	WAFCheckResponse   bool   `json:"waf_check_response"`
-	LogRequestBody     bool   `json:"log_request_body"`
+	Name                string `json:"name" binding:"required"`
+	Description         string `json:"description"`
+	Mode                string `json:"mode"`
+	AnomalyThreshold    int    `json:"anomaly_threshold"`
+	IPACLMode           string `json:"ip_acl_mode"`
+	IPACLList           string `json:"ip_acl_list"`
+	IPACLEnabled        bool   `json:"ip_acl_enabled"`
+	IPWhitelist         string `json:"ip_whitelist"`
+	IPWhitelistEnabled  *bool  `json:"ip_whitelist_enabled"`
+	IPBlacklist         string `json:"ip_blacklist"`
+	RateLimitEnabled    bool   `json:"rate_limit_enabled"`
+	RateLimitRPS        int    `json:"rate_limit_rps"`
+	RateLimitBurst      int    `json:"rate_limit_burst"`
+	CRSRuleGroups       string `json:"crs_rule_groups"`
+	CRSExcludedRules    string `json:"crs_excluded_rules"`
+	CustomRules         string `json:"custom_rules"`
+	BlockPageID         int    `json:"block_page_id"`
+	BlockStatusCode     int    `json:"block_status_code"`
+	Enabled             *bool  `json:"enabled"`
+	GeoIPCountries      string `json:"geoip_countries"`
+	GeoIPMode           string `json:"geoip_mode"`
+	GeoIPCrawlerExempt  bool   `json:"geoip_crawler_exempt"`
+	GeoIPCrawlerEngines string `json:"geoip_crawler_engines"`
+	WAFCheckResponse    bool   `json:"waf_check_response"`
+	LogRequestBody      bool   `json:"log_request_body"`
 	// PolicyType：可选，∈ {stage0,stage1,stage2,stage3}；缺省（""）按内容推断；
 	// 显式提交时阶段外字段归一零值；显式 mixed 拒绝（兼容组不可新建）。
 	PolicyType string `json:"policy_type"`
@@ -204,31 +212,33 @@ type CreateSecurityPolicyRequest struct {
 }
 
 type UpdateSecurityPolicyRequest struct {
-	Name               *string `json:"name"`
-	Description        *string `json:"description"`
-	Mode               *string `json:"mode"`
-	AnomalyThreshold   *int    `json:"anomaly_threshold"`
-	IPACLMode          *string `json:"ip_acl_mode"`
-	IPACLList          *string `json:"ip_acl_list"`
-	IPACLEnabled       *bool   `json:"ip_acl_enabled"`
-	IPWhitelist        *string `json:"ip_whitelist"`
-	IPWhitelistEnabled *bool   `json:"ip_whitelist_enabled"`
-	IPBlacklist        *string `json:"ip_blacklist"`
-	RateLimitEnabled   *bool   `json:"rate_limit_enabled"`
-	RateLimitRPS       *int    `json:"rate_limit_rps"`
-	RateLimitBurst     *int    `json:"rate_limit_burst"`
-	CRSRuleGroups      *string `json:"crs_rule_groups"`
-	CRSExcludedRules   *string `json:"crs_excluded_rules"`
-	CustomRules        *string `json:"custom_rules"`
-	BlockPageID        *int    `json:"block_page_id"`
-	BlockStatusCode    *int    `json:"block_status_code"`
-	Enabled            *bool   `json:"enabled"`
-	GeoIPCountries     *string `json:"geoip_countries"`
-	GeoIPMode          *string `json:"geoip_mode"`
-	WAFCheckResponse   *bool   `json:"waf_check_response"`
-	LogRequestBody     *bool   `json:"log_request_body"`
-	IPACLListRefs      *string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs    *string `json:"ip_whitelist_refs"`
+	Name                *string `json:"name"`
+	Description         *string `json:"description"`
+	Mode                *string `json:"mode"`
+	AnomalyThreshold    *int    `json:"anomaly_threshold"`
+	IPACLMode           *string `json:"ip_acl_mode"`
+	IPACLList           *string `json:"ip_acl_list"`
+	IPACLEnabled        *bool   `json:"ip_acl_enabled"`
+	IPWhitelist         *string `json:"ip_whitelist"`
+	IPWhitelistEnabled  *bool   `json:"ip_whitelist_enabled"`
+	IPBlacklist         *string `json:"ip_blacklist"`
+	RateLimitEnabled    *bool   `json:"rate_limit_enabled"`
+	RateLimitRPS        *int    `json:"rate_limit_rps"`
+	RateLimitBurst      *int    `json:"rate_limit_burst"`
+	CRSRuleGroups       *string `json:"crs_rule_groups"`
+	CRSExcludedRules    *string `json:"crs_excluded_rules"`
+	CustomRules         *string `json:"custom_rules"`
+	BlockPageID         *int    `json:"block_page_id"`
+	BlockStatusCode     *int    `json:"block_status_code"`
+	Enabled             *bool   `json:"enabled"`
+	GeoIPCountries      *string `json:"geoip_countries"`
+	GeoIPMode           *string `json:"geoip_mode"`
+	GeoIPCrawlerExempt  *bool   `json:"geoip_crawler_exempt"`
+	GeoIPCrawlerEngines *string `json:"geoip_crawler_engines"`
+	WAFCheckResponse    *bool   `json:"waf_check_response"`
+	LogRequestBody      *bool   `json:"log_request_body"`
+	IPACLListRefs       *string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs     *string `json:"ip_whitelist_refs"`
 	// PolicyType：nil=按合并后内容重推断；显式 stage1/2/3=切换类型并归一
 	// 阶段外字段；显式 mixed 拒绝。
 	PolicyType *string `json:"policy_type"`

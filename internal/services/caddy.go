@@ -1046,7 +1046,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			       COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
 			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
-			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
+			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
 			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
 		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
@@ -1054,13 +1054,13 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 		}
 		for rows.Next() {
 			var p models.SecurityPolicy
-			var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+			var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
 			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
 				&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &p.IPWhitelistEnabled, &ipBlacklist,
 				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 				&crsRuleGroups, &crsExcludedRules, &customRules,
 				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+				&geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -1070,6 +1070,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
 			p.CustomRules = json.RawMessage(customRules)
 			p.GeoIPCountries = json.RawMessage(geoipCountries)
+			p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
 			policiesByID[p.ID] = &p
 		}
 		if err := rows.Err(); err != nil {

@@ -585,6 +585,17 @@
                 />
                 <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效；只选省份 = 整省生效</div>
               </el-form-item>
+              <!-- v2.3.8 爬虫豁免（方案 B）：已验证搜索引擎/AI 爬虫跳过地域拦截。
+                   验证=UA+PTR 双跳（360=官方 IP 段），伪装 UA 独立记「爬虫伪装」事件。 -->
+              <el-form-item label="爬虫豁免">
+                <el-switch v-model="form.geoip_crawler_exempt" />
+                <template v-if="form.geoip_crawler_exempt">
+                  <el-checkbox-group v-model="form.geoip_crawler_engines" style="margin-left: 12px">
+                    <el-checkbox v-for="e in crawlerEngineOptions" :key="e.id" :value="e.id">{{ e.name }}</el-checkbox>
+                  </el-checkbox-group>
+                  <div class="form-tip-line">勾选的引擎经反向 DNS/官方 IP 段验证为真实爬虫后豁免地域拦截（IP 名单/WAF/限流仍全量生效）；伪装爬虫 UA 的请求会被拒绝并记录攻击事件。360 无反查支持按官方 IP 段验证；标注「观察级」的引擎按厂商域名验证</div>
+                </template>
+              </el-form-item>
             </template>
           </el-form>
         </div>
@@ -906,7 +917,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, buildStageModel, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseRefIds, IP_LIST_CATEGORIES} from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行携带阶段拦截页覆盖 4 字段（关联规则行内编辑与生效投影同源）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string; block_page_stage1_id?: number; block_page_stage1_status?: number; block_page_stage3_id?: number; block_page_stage3_status?: number }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
@@ -1566,9 +1577,27 @@ const pickerSearch = ref('')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false, log_request_body: false, trust_detection: false })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false })
 
 const form = ref(defaultForm())
+// v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
+const crawlerEngineOptions = [
+  { id: 'googlebot', name: 'Google' },
+  { id: 'bingbot', name: 'Bing' },
+  { id: 'baiduspider', name: '百度' },
+  { id: 'sogouspider', name: '搜狗' },
+  { id: 'so360spider', name: '360' },
+  { id: 'yisouspider', name: '神马' },
+  { id: 'petalbot', name: '华为 PetalBot（观察级）' },
+  { id: 'duckduckbot', name: 'DuckDuckGo' },
+  { id: 'yandexbot', name: 'Yandex' },
+  { id: 'gptbot', name: 'OpenAI（GPTBot 等）' },
+  { id: 'deepseekbot', name: 'DeepSeek（观察级）' },
+  { id: 'claudebot', name: 'Anthropic Claude' },
+  { id: 'perplexitybot', name: 'Perplexity' },
+  { id: 'kimisearchbot', name: 'Kimi（观察级）' },
+  { id: 'bytespider', name: '字节 Bytespider' },
+]
 const selectedCustomRules = ref<number[]>([])
 // action 用于多策略冲突检测（放行型 pass / 拦截型 block）；enabled 预留
 const allCustomRules = ref<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>([])
@@ -2660,6 +2689,8 @@ const previewModel = computed<RuleStageModel>(() => {
     ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
     ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
     geoip_mode: form.value.geoip_enabled ? form.value.geoip_mode : 'off',
+    geoip_crawler_exempt: form.value.geoip_enabled && form.value.geoip_crawler_exempt,
+    geoip_crawler_engines: JSON.stringify(form.value.geoip_crawler_engines ?? []),
     trust_detection: form.value.trust_detection,
   }
   // stage2 也投影策略页（第 55 轮：可配拦截页的只读视图补呈现；stage0 无拦截页概念）
@@ -2802,6 +2833,8 @@ async function openDialog(row?: PolicySummary) {
         block_status_code: d.block_status_code || 403,
         geoip_enabled: false,
         geoip_mode: d.geoip_mode || 'deny',
+        geoip_crawler_exempt: d.geoip_crawler_exempt === true,
+        geoip_crawler_engines: parseJsonList(d.geoip_crawler_engines || '').length > 0 ? parseJsonList(d.geoip_crawler_engines) : ['googlebot', 'bingbot', 'baiduspider'],
         waf_check_response: d.waf_check_response ?? false,
         log_request_body: d.log_request_body ?? false,
         trust_detection: d.trust_detection === true,
@@ -2975,6 +3008,8 @@ const handleSave = async () => {
       block_status_code: form.value.block_status_code,
       geoip_countries: JSON.stringify(geoipCountries.value),
       geoip_mode: form.value.geoip_enabled ? (form.value.geoip_mode === 'off' ? 'deny' : form.value.geoip_mode) : 'off',
+      geoip_crawler_exempt: form.value.geoip_enabled && form.value.geoip_crawler_exempt,
+      geoip_crawler_engines: JSON.stringify(form.value.geoip_crawler_engines ?? []),
       waf_check_response: form.value.waf_check_response,
       log_request_body: form.value.log_request_body,
       // 阶段 0：保留检测记录开关（false=直通上游零安全事件；true=事件动作=检测）

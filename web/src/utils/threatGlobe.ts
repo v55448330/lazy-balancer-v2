@@ -157,9 +157,12 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     .hexPolygonMargin(0.25)
     .hexPolygonUseDots(false)
     .hexPolygonColor((f: object) => {
-      const props = f && 'properties' in f ? (f as GeoFeature & { properties: { hover?: boolean } }).properties : null
+      const props = f && 'properties' in f ? (f as GeoFeature & { properties: { hover?: boolean; dim?: boolean } }).properties : null
       if (!props) return LAND_DARK
-      return props.hover ? '#8fe6ff' : heatCss(props.count)
+      if (props.hover) return '#8fe6ff'
+      // 下钻态他国暗度衬底（与地图版 22% 同语义；命中国仍全亮热力）
+      if (props.dim) return 'rgba(27, 42, 65, 0.4)'
+      return heatCss(props.count)
     })
     .hexPolygonsTransitionDuration(0)
     .ringsData([{ lat: server[1], lng: server[0] }])
@@ -220,9 +223,11 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     const t = -b - Math.sqrt(disc)
     if (t < 0) return null
     const p = origin.clone().add(ray.clone().multiplyScalar(t))
-    // three-globe 球面约定（polar2Cartesian 逆变换）
+    // three-globe 球面约定（polar2Cartesian 逆变换）——逆变换产出域为
+    // (-90°, 270°]，必须 wrap 到 [-180,180]：西半球国家（美/加等 lng<-90）
+    // 曾整片 hover/点击 miss（v2.3.8-beta 实测）。
     const lat = 90 - (Math.acos(p.y / R) * 180) / Math.PI
-    const lng = 90 - (Math.atan2(p.z, p.x) * 180) / Math.PI
+    const lng = ((((90 - (Math.atan2(p.z, p.x) * 180) / Math.PI) + 540) % 360) - 180)
     return { lat, lng }
   }
 
@@ -266,7 +271,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   container.appendChild(hoverTipEl)
   let hoverKeyCache: string | null = null
   /** 当前 hex 特征数组（稳定对象引用——hover 只替换新旧 2 个对象，避免 177 国全量重铺）。 */
-  let hexFeatures: (GeoFeature & { properties: { hover?: boolean } })[] = []
+  let hexFeatures: (GeoFeature & { properties: { hover?: boolean; dim?: boolean } })[] = []
 
   function setHexHover(name: string | null): void {
     const arr = hexFeatures.slice()
@@ -327,15 +332,21 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
-  /** 板块层重建：世界=国家六边形板（热力）；下钻=该国一级行政区六边形板。 */
+  /** 板块层重建：世界=国家六边形板（热力）；下钻=省板（全亮）+他国板（暗度
+   * 衬底，与地图版下钻同视觉——用户裁定 2026-10-17）。 */
   function applyLayer(): void {
     if (drilledName) {
-      hexFeatures = buildProvinceFeatures(drilledName, provinceCounts) as (GeoFeature & { properties: { hover?: boolean } })[]
+      type HexF = GeoFeature & { properties: { hover?: boolean; dim?: boolean } }
+      const provinces = buildProvinceFeatures(drilledName, provinceCounts) as HexF[]
+      const others = buildCountryFeatures(countryCounts)
+        .filter((f) => f.properties.name !== drilledName)
+        .map((f) => ({ ...f, properties: { ...f.properties, dim: true } }) as HexF)
+      hexFeatures = [...provinces, ...others]
       globe.hexPolygonsData(hexFeatures)
       const src = drilledName === '中国' ? CHINA_PROVINCES : ADMIN1_PROVINCES[drilledName] ?? []
       provincePolysCache = src.map((p) => ({ polys: p.polys }))
     } else {
-      hexFeatures = buildCountryFeatures(countryCounts) as (GeoFeature & { properties: { hover?: boolean } })[]
+      hexFeatures = buildCountryFeatures(countryCounts) as (GeoFeature & { properties: { hover?: boolean; dim?: boolean } })[]
       globe.hexPolygonsData(hexFeatures)
       provincePolysCache = []
     }

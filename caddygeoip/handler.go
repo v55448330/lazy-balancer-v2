@@ -146,6 +146,10 @@ func (h *GeoIPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	for _, name := range geoipCorazaHeaders {
 		r.Header.Del(name)
 	}
+	// v2.3.8 爬虫豁免：客户端伪造的验证头一并剥除（与 GeoIP 头同防御边界），
+	// 随后 UA 命中引擎时做 PTR 双跳验证并注入结论头（coraza 豁免规则消费）。
+	r.Header.Del(crawlerVerifiedHeader)
+	r.Header.Del(crawlerSpoofHeader)
 	if h.searcher != nil {
 		h.setGeoIPPlaceholders(r)
 	} else {
@@ -156,7 +160,40 @@ func (h *GeoIPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 		// 恢复文档化 fail-closed 语义。
 		r.Header.Set("X-LB-GeoIP-Loc", "海外")
 	}
+	h.applyCrawlerVerification(r)
 	return next.ServeHTTP(w, r)
+}
+
+// 爬虫验证结论头（服务端注入；客户端携带的同名头已在上游剥除）。
+const (
+	crawlerVerifiedHeader = "X-LB-Crawler-Verified"
+	crawlerSpoofHeader    = "X-LB-Crawler-Spoof"
+)
+
+// applyCrawlerVerification UA 命中引擎 → PTR 双跳验证：通过置 Verified=引擎 ID
+// （下游豁免规则 @streq 消费）；未通过置 Spoof=1（伪装事件规则消费）。
+// 非爬虫 UA 零成本直接返回（2000/s 正常流量仅付一次正则）。
+func (h *GeoIPHandler) applyCrawlerVerification(r *http.Request) {
+	if geoipnames.MatchCrawlerEngine(r.Header.Get("User-Agent")) == "" {
+		return
+	}
+	engine := geoipnames.MatchCrawlerEngine(r.Header.Get("User-Agent"))
+	ip := clientIPForVerify(r)
+	if ip != "" && VerifyCrawler(ip, engine) {
+		r.Header.Set(crawlerVerifiedHeader, engine)
+	} else {
+		r.Header.Set(crawlerSpoofHeader, "1")
+	}
+}
+
+// clientIPForVerify 取验证用客户端 IP：RemoteAddr 剥端口（geoip handler 位于
+// 阶段 0 信任代理还原之后，r.RemoteAddr 已是真实客户端地址）。
+func clientIPForVerify(r *http.Request) string {
+	addr := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
 }
 
 // Cleanup releases the handler's reference to the shared singleton (审计 M2)：

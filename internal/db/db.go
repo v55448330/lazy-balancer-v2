@@ -1008,11 +1008,13 @@ func runMigrations() error {
 		"security_policies.updated_by":      "INTEGER DEFAULT 0",
 		// 四列刻意可空（不加 NOT NULL）：restoreTable/快照/带外脏数据可携带 NULL，
 		// 读路径 loadSecurityPolicyContext 以 COALESCE 归一化；加 NOT NULL 会拒绝 null 恢复（A-I2/F3 回归测试）。
-		"security_policies.ip_whitelist_enabled": "INTEGER DEFAULT 1",
-		"security_policies.geoip_countries":      "TEXT DEFAULT '[]'",
-		"security_policies.geoip_mode":           "TEXT DEFAULT 'deny'",
-		"security_policies.waf_check_response":   "INTEGER DEFAULT 0",
-		"security_policies.block_status_code":    "INTEGER DEFAULT 0",
+		"security_policies.ip_whitelist_enabled":  "INTEGER DEFAULT 1",
+		"security_policies.geoip_countries":       "TEXT DEFAULT '[]'",
+		"security_policies.geoip_mode":            "TEXT DEFAULT 'deny'",
+		"security_policies.geoip_crawler_exempt":  "INTEGER NOT NULL DEFAULT 0",
+		"security_policies.geoip_crawler_engines": "TEXT NOT NULL DEFAULT '[]'",
+		"security_policies.waf_check_response":    "INTEGER DEFAULT 0",
+		"security_policies.block_status_code":     "INTEGER DEFAULT 0",
 		// 策略级「记录请求体」开关（v2.2.3）：开启后该策略 handler 的审计 parts
 		// 加 C，事件落 request_body（64KB 截断）。同口径刻意可空，读路径
 		// COALESCE(...,0) 归一。

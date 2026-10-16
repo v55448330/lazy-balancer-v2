@@ -619,7 +619,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     在渲染层 fail-visible（BuildCorazaDirectives 显性报错），展示层不做
 //     行为消费，无需同口径。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)`
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
@@ -1014,6 +1014,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if policyType != models.PolicyTypeStage0 {
 		req.TrustDetection = false
 	}
+	if err := validatePolicyCrawlerExemption(req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines, req.GeoIPMode); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	if err := services.ValidateGeoIPCountries(req.GeoIPCountries, req.GeoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -1114,10 +1118,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, policyType != models.PolicyTypeStage0 && req.GeoIPMode != "off"), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1633,10 +1637,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	// SEC40-B1-1:存量读取移出「请求携带条目」判定——翻转门需要存量 mode,
 	// 且「只改 mode 不带条目」的更新同样要过 GeoIP 可用性门。
-	var storedGeoIP, storedGeoIPMode string
+	var storedGeoIP, storedGeoIPMode, storedCrawlerEngines string
 	// SEC19-P5-3(第 19 轮):读错误三分支(对齐同函数 R64 B-S1 口径)——
 	// 此前吞错使 storedGeoIPMode 落空串,GeoIP off 的可用性门判定漂移。
-	if err := tx.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err != nil {
+	if err := tx.QueryRow("SELECT geoip_countries, geoip_mode, COALESCE(geoip_crawler_engines,'[]') FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode, &storedCrawlerEngines); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 			return
@@ -1665,6 +1669,17 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effCountries = *req.GeoIPCountries
 		}
 		if err := services.ValidateGeoIPCountries(effCountries, effectiveGeoIPMode); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+	// v2.3.8 爬虫豁免（更新路径）：生效值=请求值覆盖存量（nil=保持）
+	if req.GeoIPCrawlerExempt != nil && *req.GeoIPCrawlerExempt {
+		effEngines := storedCrawlerEngines
+		if req.GeoIPCrawlerEngines != nil {
+			effEngines = *req.GeoIPCrawlerEngines
+		}
+		if err := validatePolicyCrawlerExemption(true, effEngines, effectiveGeoIPMode); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
@@ -1894,6 +1909,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("custom_rules", req.CustomRules)
 	addStr("geoip_countries", req.GeoIPCountries)
 	addStr("geoip_mode", req.GeoIPMode)
+	// v2.3.8 爬虫豁免（指针语义：nil=保持现值）
+	addBool("geoip_crawler_exempt", req.GeoIPCrawlerExempt)
+	addStr("geoip_crawler_engines", req.GeoIPCrawlerEngines)
 	addBool("waf_check_response", req.WAFCheckResponse)
 	addBool("log_request_body", req.LogRequestBody)
 	addStr("ip_acl_list_refs", req.IPACLListRefs)
@@ -2043,6 +2061,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		deltaRefs("自定义规则", "security_custom_rules", req.CustomRules, string(stored.CustomRules))
 		deltaStr("GeoIP 名单", req.GeoIPCountries, string(stored.GeoIPCountries))
 		deltaStr("GeoIP 模式", req.GeoIPMode, stored.GeoIPMode)
+		// v2.3.8 爬虫豁免审计（UPDATE 列集合 ↔ delta 覆盖集全等约束）
+		deltaBool("爬虫豁免", req.GeoIPCrawlerExempt, stored.GeoIPCrawlerExempt)
+		deltaStr("豁免引擎", req.GeoIPCrawlerEngines, string(stored.GeoIPCrawlerEngines))
 		deltaBool("响应体检测", req.WAFCheckResponse, stored.WAFCheckResponse)
 		deltaBool("请求体落日志", req.LogRequestBody, stored.LogRequestBody)
 		if req.BlockPageID != nil && *req.BlockPageID != stored.BlockPageID {
@@ -2848,10 +2869,10 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		rlEnabled bool, rlRPS, rlBurst int, crsGroups, crsExcluded, customRules string, blockPageID, blockStatus int,
 		geoCountries json.RawMessage, geoMode string, wafResp, logBody bool, aclRefs, wlRefs string, trustDetection bool) error {
 		result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			name, p.Description, mode, p.AnomalyThreshold, aclMode, aclList, aclEnabled, whitelist, wlEnabled, blacklist,
-			rlEnabled, rlRPS, rlBurst, crsGroups, crsExcluded, customRules, blockPageID, blockStatus, p.Enabled, geoCountries, geoMode, wafResp, logBody, aclRefs, wlRefs, operator, policyType, trustDetection)
+			rlEnabled, rlRPS, rlBurst, crsGroups, crsExcluded, customRules, blockPageID, blockStatus, p.Enabled, geoCountries, geoMode, p.GeoIPCrawlerExempt, string(p.GeoIPCrawlerEngines), wafResp, logBody, aclRefs, wlRefs, operator, policyType, trustDetection)
 		if err != nil {
 			return err
 		}
@@ -4358,9 +4379,9 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 // scanSecurityPolicyInto 是 Row/Rows 两形态的唯一扫描实现(N6,第 16 轮:
 // 此前双份拷贝,加列疏漏成为静默错位扫描而非编译错误)。
 func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPolicy) error {
-	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesJSON string
 	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -4369,6 +4390,7 @@ func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPoli
 	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
+	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesJSON)
 	return nil
 }
 
@@ -4810,4 +4832,46 @@ func derefStr(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// crawlerEnginesJSON（v2.3.8 爬虫豁免）：请求 engines 原样或空串→默认勾选集；
+// 逐项校验 geoipnames 注册表（非法 ID 400 由调用方 validatePolicyGeoIPCrawler
+// 前置完成，此处仅归一空值形态）。
+func crawlerEnginesJSON(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		b, _ := json.Marshal(geoipnames.DefaultCrawlerEngines)
+		return string(b)
+	}
+	return raw
+}
+
+// crawlerExemptBool：INSERT 侧豁免位归一——开关关闭或 geoip 非启用形态恒 0
+// （防 orphan 配置：geoip off 时留下豁免位，重开时意外生效）。
+func crawlerExemptBool(exempt bool, geoipActive bool) bool {
+	return exempt && geoipActive
+}
+
+// validatePolicyCrawlerExemption（v2.3.8）：爬虫豁免字段校验——豁免开启时
+// geoip 须为启用形态、engines 逐项 geoipnames 注册表白名单（fail-visible）。
+func validatePolicyCrawlerExemption(exempt bool, engines string, geoipMode string) error {
+	if !exempt {
+		return nil
+	}
+	if geoipMode == "" || geoipMode == "off" {
+		return fmt.Errorf("开启爬虫豁免要求地域拦截为启用形态（当前 geoip_mode=%q）", geoipMode)
+	}
+	raw := strings.TrimSpace(engines)
+	if raw == "" {
+		return nil // 空=全部引擎（生成侧同语义）
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return fmt.Errorf("geoip_crawler_engines 必须是引擎 ID 数组: %v", err)
+	}
+	for _, id := range list {
+		if !geoipnames.ValidCrawlerEngineID(id) {
+			return fmt.Errorf("未知爬虫引擎 ID: %q（须来自内置引擎注册表）", id)
+		}
+	}
+	return nil
 }

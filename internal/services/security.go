@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"lazy-balancer-v2/geoipnames"
 	"net"
 	"os"
 	"path/filepath"
@@ -32,12 +33,12 @@ var crsDirectivesDir = "/app/waf/crs"
 // COALESCE(...,0) 是类型②省略型/条件消费的规范化（0=未启用/未设置）。
 func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
-	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
 	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
+		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection)
 	if err != nil {
 		return nil
 	}
@@ -47,6 +48,7 @@ func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
+	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
 	return &p
 }
 
@@ -1013,6 +1015,11 @@ const ipPrecheckAllowExemptRuleID = 13
 // （DB id ≥790000 跳过）保证自定义规则 emit id（DB id+10000）不撞入本段。
 const geoipPrecheckRuleBase = 800000
 
+const (
+	geoipCrawlerRuleBase      = 810000 // 爬虫豁免规则基址（+policyID*16+引擎序号）
+	geoipCrawlerSpoofRuleBase = 850000 // 爬虫伪装事件规则基址（+policyID）
+)
+
 // IsGeoIPPrecheckID 报告 n 是否落在阶段 1 GeoIP 预检归因段
 // [geoipPrecheckRuleBase, geoipPrecheckRuleBase+100000)。段界单一事实源——
 // 事件归因、stage-stats 分桶、筛选族条件等消费方一律经本谓词取段界,
@@ -1376,6 +1383,28 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		if geoipPrecheckRuleBase+p.ID >= 900000 {
 			Logf("warn", "策略 %d 的 GeoIP 预检链 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, geoipPrecheckRuleBase+p.ID)
 			continue
+		}
+		// v2.3.8 爬虫豁免（用户裁定方案 B）：已验证爬虫（caddygeoip handler 双跳
+		// PTR/官方 IP 段验证后注入 X-LB-Crawler-Verified=引擎 ID）逐引擎放行——
+		// ctl 移除本策略 GeoIP 链；伪装（UA 声称引擎但验证失败，handler 置
+		// X-LB-Crawler-Spoof=1）独立事件族显式拒绝。规则 id=810000+policyID*16+
+		// 引擎序号（超 900000 CRS 保留段跳过+告警，镜像 800xxx 家族先例）。
+		if p.GeoIPCrawlerExempt {
+			for i, engine := range geoipnames.CrawlerEngines() {
+				if !crawlerEngineSelected(p, engine.ID) {
+					continue
+				}
+				crawlerRuleID := geoipCrawlerRuleBase + p.ID*16 + i
+				if crawlerRuleID >= 900000 {
+					Logf("warn", "策略 %d 的爬虫豁免规则 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, crawlerRuleID)
+					continue
+				}
+				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipPrecheckRuleBase+p.ID))
+			}
+			spoofRuleID := geoipCrawlerSpoofRuleBase + p.ID
+			if spoofRuleID < 900000 {
+				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Spoof \"@eq 1\" \"id:%d,phase:1,deny%s,log,msg:'搜索引擎爬虫伪装（PTR 验证失败）',skipAfter:SECURITY_RULES_END\"\n", spoofRuleID, geoipStatusFragment))
+			}
 		}
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipPrecheckRuleBase+p.ID, geoipStatusFragment))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-LB-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoipCountries(p), p.GeoIPMode == "allow", geoipCountryExact))))
@@ -2187,4 +2216,19 @@ func escapeCorazaPattern(pattern string) string {
 		}
 	}
 	return sb.String()
+}
+
+// crawlerEngineSelected（v2.3.8 爬虫豁免）：策略勾选引擎集合判定——空集视为
+// 全部引擎（向后兼容豁免开启但未存 engines 的形态）。
+func crawlerEngineSelected(p *models.SecurityPolicy, engineID string) bool {
+	var engines []string
+	if err := json.Unmarshal(p.GeoIPCrawlerEngines, &engines); err != nil || len(engines) == 0 {
+		return true
+	}
+	for _, e := range engines {
+		if e == engineID {
+			return true
+		}
+	}
+	return false
 }

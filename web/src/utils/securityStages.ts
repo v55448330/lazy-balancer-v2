@@ -42,6 +42,8 @@ export interface SecurityStagePolicy {
   ip_whitelist_enabled?: boolean
   ip_acl_enabled?: boolean
   geoip_mode?: string
+  geoip_crawler_exempt?: boolean
+  geoip_crawler_engines?: string
   // 实体类型列（后端并行新增）；缺省时由 inferPolicyType 按内容推断
   policy_type?: string
   has_waf?: boolean
@@ -340,6 +342,8 @@ export const hasIPACLControl = (p: {
 export const hasGeoIPControl = (p: {
   has_geoip?: boolean
   geoip_mode?: string
+  geoip_crawler_exempt?: boolean
+  geoip_crawler_engines?: string
   geoip_countries?: string
 }): boolean => {
   if (p.geoip_mode !== undefined || p.geoip_countries !== undefined) {
@@ -753,6 +757,8 @@ export interface SecurityPolicyTypeInput {
   ip_blacklist?: string
   // 阶段 1 地域拦截（可选原始字段；缺省时回退 has_geoip 摘要标志）
   geoip_mode?: string
+  geoip_crawler_exempt?: boolean
+  geoip_crawler_engines?: string
   geoip_countries?: string
   // 阶段 3 自定义规则（可选原始计数；缺省时回退 has_custom_rules 摘要标志）
   custom_rules_count?: number
