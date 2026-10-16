@@ -693,7 +693,27 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_task_runs_time ON task_runs(started_at DESC);
 	-- 威胁情报库（v2.3.x）：三个内置只读源，双开关（更新/应用）默认开；
 	-- 版本=成功更新日期（YYYY.MM.DD），状态机镜像 CRS/IP2Region 更新族。
-	CREATE TABLE IF NOT EXISTS security_threat_sources (
+	CREATE TABLE IF NOT EXISTS security_crawler_sources (
+		name TEXT NOT NULL UNIQUE,
+		display_name TEXT NOT NULL DEFAULT '',
+		url TEXT NOT NULL DEFAULT '',
+		format TEXT NOT NULL DEFAULT 'plain',
+		update_enabled INTEGER NOT NULL DEFAULT 1,
+		entry_count INTEGER NOT NULL DEFAULT 0,
+		version TEXT NOT NULL DEFAULT '',
+		update_status TEXT NOT NULL DEFAULT 'idle',
+		message TEXT NOT NULL DEFAULT '',
+		last_checked DATETIME,
+		next_update DATETIME,
+		trigger TEXT NOT NULL DEFAULT '',
+		started_at DATETIME,
+		finished_at DATETIME,
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+
+CREATE TABLE IF NOT EXISTS security_threat_sources (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE,
 		display_name TEXT NOT NULL DEFAULT '',

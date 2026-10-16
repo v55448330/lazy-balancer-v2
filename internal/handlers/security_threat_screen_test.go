@@ -706,7 +706,7 @@ func TestTriggerTypeForRule_fullTaxonomy(t *testing.T) {
 	cases := map[string]string{
 		"429":     "限流",
 		"2":       "IP 访问控制",
-		"4":       "IP 黑名单",
+		"4":       "IP 访问控制",
 		"7":       "IP 访问控制",
 		"8":       "地域拦截",
 		"12":      "信任名单",

@@ -645,12 +645,8 @@ func triggerTypeForRule(ruleTriggered string) string {
 	switch ruleTriggered {
 	case "429":
 		return "限流"
-	case "2":
+	case "2", "4", "7":
 		return "IP 访问控制"
-	case "7":
-		return "IP 访问控制"
-	case "4":
-		return "IP 黑名单"
 	case "8":
 		return "地域拦截"
 	case "12":

@@ -136,8 +136,7 @@
           <el-option label="爬虫Bot" value="爬虫Bot" title="已验证爬虫放行/伪装（id 810000-899999）" />
           <el-option label="地域拦截" value="地域拦截" title="GeoIP 地域拦截（id 8/800xxx）" />
           <el-option label="限流" value="限流" title="站点限流 429" />
-          <el-option label="IP 访问控制" value="IP 访问控制" title="IP ACL 黑白名单（id 2/7）" />
-          <el-option label="IP 黑名单" value="IP 黑名单" title="自维护 IP 黑名单（id 4）" />
+          <el-option label="IP 访问控制" value="IP 访问控制" title="IP ACL 黑白名单与自维护黑名单（id 2/4/7）" />
           <el-option label="信任名单" value="信任名单" title="信任名单/保留检测（id 3/12）" />
           <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库命中（id 14）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
@@ -686,7 +685,7 @@ const total = ref(0)
 
 // 触发阶段筛选为固定预置四类（第 58 轮用户裁定：固定预置值，不接受任意值）。
 // 令牌 → 后端族段映射：请求侧展开为族名逗号串（后端逐段 OR）。
-const TRIGGERED_CATEGORIES = ['爬虫Bot', '地域拦截', '限流', 'IP 访问控制', 'IP 黑名单', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
+const TRIGGERED_CATEGORIES = ['爬虫Bot', '地域拦截', '限流', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 // v2.3.8 触发类型筛选映射（值=后端 family 键，与新 trigger_type 同语义）：
 // 每类对应的 ruleTriggeredFamilyPrefixes 映射键。
@@ -695,7 +694,6 @@ const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
   '地域拦截': ['地域拦截'],
   '限流': ['限流'],
   'IP 访问控制': ['IP 访问控制'],
-  'IP 黑名单': ['IP 黑名单'],
   '信任名单': ['信任名单'],
   '威胁情报库': ['威胁情报库'],
   '请求体异常': ['请求体异常'],

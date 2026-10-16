@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lazy-balancer-v2/wafiplist"
 	"net/http"
 	"net/netip"
 	"os"
@@ -48,7 +49,7 @@ var crawlerBotSources = []crawlerSource{
 // ensureCrawlerSources 幂等种子（display_name 区分于威胁源；不更新威胁源行）。
 func ensureCrawlerSources() error {
 	for _, src := range crawlerBotSources {
-		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_threat_sources (name, display_name, url, format) VALUES (?, ?, ?, ?)`,
+		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_crawler_sources (name, display_name, url, format) VALUES (?, ?, ?, ?)`,
 			src.Name, crawlerDisplayName(src.Name), src.URL, src.Format); err != nil {
 			return err
 		}
@@ -60,20 +61,20 @@ func ensureCrawlerSources() error {
 func crawlerDisplayName(engineID string) string {
 	switch engineID {
 	case "googlebot":
-		return "Google 官方爬虫 IP（common-crawlers）"
+		return "爬虫机器人 Google"
 	case "gptbot":
-		return "OpenAI 官方爬虫 IP（GPTBot）"
+		return "爬虫机器人 OpenAI"
 	case "bingbot":
-		return "Bing 官方爬虫 IP（Bingbot）"
+		return "爬虫机器人 Bing"
 	case "so360spider":
-		return "360 官方爬虫 IP（360Spider）"
+		return "爬虫机器人 360"
 	}
 	return engineID
 }
 
 // loadCrawlerSources 读启用源（security_threat_sources 的爬虫族行）。
 func loadCrawlerSources() ([]crawlerSource, error) {
-	rows, err := db.DB.Query(`SELECT name, url, format FROM security_threat_sources WHERE name IN ('googlebot','gptbot','bingbot','so360spider') AND update_enabled=1 ORDER BY id`)
+	rows, err := db.DB.Query(`SELECT name, url, format FROM security_crawler_sources WHERE update_enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +267,7 @@ func StopCrawlerBotScheduler() {
 // markCrawlerSourceSuccess 源成功态：entry_count 更新 + version=成功日期 +
 // consecutive_failures 清零 + next_update=+24h（与威胁源状态机同构）。
 func markCrawlerSourceSuccess(name string, entryCount int) {
-	_, err := db.DB.Exec(`UPDATE security_threat_sources SET entry_count=?, version=?, update_status='success', message='', consecutive_failures=0, next_update=datetime('now','+24 hours'), finished_at=datetime('now') WHERE name=?`,
+	_, err := db.DB.Exec(`UPDATE security_crawler_sources SET entry_count=?, version=?, update_status='success', message='', consecutive_failures=0, next_update=datetime('now','+24 hours'), finished_at=datetime('now') WHERE name=?`,
 		entryCount, time.Now().UTC().Format("2006.01.02"), name)
 	if err != nil {
 		Logf("error", "crawlerbot-update: 源 %s 写成功态失败: %v", name, err)
@@ -276,7 +277,7 @@ func markCrawlerSourceSuccess(name string, entryCount int) {
 // markCrawlerSourceFailed 源失败态：consecutive_failures+1、next_update 指数
 // 退避（与威胁源同构：失败保留上次快照，内容表 entries 不动）。
 func markCrawlerSourceFailed(name string) {
-	_, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message='下载或解析失败（保留上次快照）', consecutive_failures=consecutive_failures+1, next_update=datetime('now', printf('+%d minutes', 5 * (1 << consecutive_failures)), finished_at=datetime('now') WHERE name=?`, name)
+	_, err := db.DB.Exec(`UPDATE security_crawler_sources SET update_status='failed', message='下载或解析失败（保留上次快照）', consecutive_failures=consecutive_failures+1, next_update=datetime('now', printf('+%d minutes', 5 * (1 << consecutive_failures)), finished_at=datetime('now') WHERE name=?`, name)
 	if err != nil {
 		Logf("error", "crawlerbot-update: 源 %s 写失败态失败: %v", name, err)
 	}
@@ -284,11 +285,11 @@ func markCrawlerSourceFailed(name string) {
 
 // primeCrawlerIPLists 启动预载：security_ip_lists 全部 crawlerbot: 名单写为
 // 快照文件（root 服务与插件的唯一交换面；模块边界友好）。
-func primeCrawlerIPLists() {
+func primeCrawlerIPLists() error {
 	rows, err := db.DB.Query(`SELECT name, COALESCE(entries,'') FROM security_ip_lists WHERE name LIKE 'crawlerbot:%' AND system=1`)
 	if err != nil {
 		Logf("error", "crawlerbot-update: 预载名单失败: %v", err)
-		return
+		return err
 	}
 	defer rows.Close()
 	all := map[string][]string{}
@@ -305,21 +306,28 @@ func primeCrawlerIPLists() {
 		all[engineID] = entries
 	}
 	if len(all) > 0 {
-		writeCrawlerIPListSnapshotAll(all)
+		return writeCrawlerIPListSnapshotAll(all)
 	}
+	return nil
 }
 
-// writeCrawlerIPListSnapshotAll 全量快照原子写（tmp+rename）。
+// writeCrawlerIPListSnapshotAll 全量快照：写 .iplist 源文件 + wafiplist .fast
+// 预编译二进制（与威胁库同编译链，匹配器 ~82ns）。
 func writeCrawlerIPListSnapshotAll(all map[string][]string) error {
-	data, err := json.Marshal(all)
-	if err != nil {
-		return err
+	lines := make([]string, 0, 2048)
+	for _, entries := range all {
+		lines = append(lines, entries...)
 	}
+	// 单文件全量快照（引擎键并入 .fast 元数据注释行，插件按文件名+键索引读取）
 	tmp := crawlerIPListFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, crawlerIPListFile)
+	if err := os.Rename(tmp, crawlerIPListFile); err != nil {
+		return err
+	}
+	v4, v6 := splitCrawlerPrefixes(lines)
+	return wafiplist.WriteFastFile(wafiplist.FastPath(crawlerIPListFile), v4, v6)
 }
 
 // writeCrawlerIPListSnapshot 单引擎增量快照写（读-改-写；root 服务内串行）。
@@ -330,4 +338,20 @@ func writeCrawlerIPListSnapshot(engineID string, entries []string) error {
 	}
 	all[engineID] = entries
 	return writeCrawlerIPListSnapshotAll(all)
+}
+
+// splitCrawlerPrefixes 文本行 → v4/v6 前缀分拣（WriteFastFile 需要）。
+func splitCrawlerPrefixes(lines []string) (v4, v6 []netip.Prefix) {
+	for _, line := range lines {
+		p, err := netip.ParsePrefix(line)
+		if err != nil {
+			continue
+		}
+		if p.Addr().Is4() {
+			v4 = append(v4, p)
+		} else {
+			v6 = append(v6, p)
+		}
+	}
+	return
 }
