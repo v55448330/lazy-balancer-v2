@@ -25,7 +25,7 @@ services:
   # 主从两个容器共用同一镜像（image 标签与 Docker Hub 推送的一致）。
   # 本地开发迭代时执行：docker compose build lazy-balancer && docker compose up -d
   lazy-balancer:
-    image: v55448330/lazy-balancer-v2:v2.3.7
+    image: v55448330/lazy-balancer-v2:v2.3.8-beta
     logging: *common-logging
     build:
       context: .
@@ -33,7 +33,7 @@ services:
         # FE-8/INFRA-4（第 73 轮登记）：版本号三处硬编码之一（另两处
         # Dockerfile ARG VERSION、web/src/utils/branding.ts appVersion 回退值）。
         # 发版检查单已固化进 lazy-balancer-release 技能步骤 2——仅登记防漏 bump。
-        VERSION: v2.3.7
+        VERSION: v2.3.8-beta
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
@@ -57,7 +57,7 @@ services:
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 主节点地址注册时填写: http://host.docker.internal:8000
   lazy-balancer-slave:
-    image: v55448330/lazy-balancer-v2:v2.3.7
+    image: v55448330/lazy-balancer-v2:v2.3.8-beta
     logging: *common-logging
     container_name: lazy-balancer-slave
     ports:
