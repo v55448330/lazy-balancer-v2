@@ -17,7 +17,9 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,6 +141,7 @@ func crawlerFetchBody(ctx context.Context, src crawlerSource) (string, error) {
 
 // upsertCrawlerIPList 名单行原子快照：内容变化才更新（entries JSON、
 // updated_at、entry_count）；失败/空集不写（保留上次快照）。
+// 同步推送插件内存态（模块边界友好：caddygeoip 独立模块不能 import 根 DB）。
 func upsertCrawlerIPList(engineID string, entries []string) error {
 	if len(entries) == 0 {
 		return errors.New("空 IP 段列表（解析无产出）")
@@ -156,9 +159,14 @@ func upsertCrawlerIPList(engineID string, entries []string) error {
 	if exists == 0 {
 		_, err = db.DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
 			VALUES (?, ?, '搜索引擎爬虫', ?, 1, datetime('now'), datetime('now'))`, name, "crawlerbot:"+engineID, string(encoded))
-		return err
+	} else {
+		_, err = db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name)
 	}
-	_, err = db.DB.Exec(`UPDATE security_ip_lists SET entries=?, updated_at=datetime('now') WHERE name=? AND system=1`, string(encoded), name)
+	if err == nil {
+		if err := writeCrawlerIPListSnapshot(engineID, entries); err != nil {
+			Logf("error", "crawlerbot-update: 源 %s 写快照文件失败: %v", engineID, err)
+		}
+	}
 	return err
 }
 
@@ -200,6 +208,8 @@ func RunCrawlerBotUpdate(ctx context.Context, rc *taskengine.RunContext) error {
 	return firstErr
 }
 
+const crawlerIPListFile = "/app/data/crawler-ip-lists.json"
+
 var (
 	crawlerSchedulerMu     sync.Mutex
 	crawlerSchedulerCancel context.CancelFunc
@@ -207,7 +217,12 @@ var (
 )
 
 // StartCrawlerBotScheduler 启动 24h 定时更新（主节点角色；幂等启动）。
+// 同时把现有名单预载为共享快照文件（root 服务与插件唯一交换面）。
 func StartCrawlerBotScheduler(ctx context.Context) {
+	primeCrawlerIPLists()
+
+	primeCrawlerIPLists()
+
 	crawlerSchedulerMu.Lock()
 	defer crawlerSchedulerMu.Unlock()
 	if crawlerSchedulerDone != nil {
@@ -265,4 +280,54 @@ func markCrawlerSourceFailed(name string) {
 	if err != nil {
 		Logf("error", "crawlerbot-update: 源 %s 写失败态失败: %v", name, err)
 	}
+}
+
+// primeCrawlerIPLists 启动预载：security_ip_lists 全部 crawlerbot: 名单写为
+// 快照文件（root 服务与插件的唯一交换面；模块边界友好）。
+func primeCrawlerIPLists() {
+	rows, err := db.DB.Query(`SELECT name, COALESCE(entries,'') FROM security_ip_lists WHERE name LIKE 'crawlerbot:%' AND system=1`)
+	if err != nil {
+		Logf("error", "crawlerbot-update: 预载名单失败: %v", err)
+		return
+	}
+	defer rows.Close()
+	all := map[string][]string{}
+	for rows.Next() {
+		var name, raw string
+		if err := rows.Scan(&name, &raw); err != nil {
+			continue
+		}
+		engineID := strings.TrimPrefix(name, "crawlerbot:")
+		var entries []string
+		if err := json.Unmarshal([]byte(raw), &entries); err != nil || len(entries) == 0 {
+			continue
+		}
+		all[engineID] = entries
+	}
+	if len(all) > 0 {
+		writeCrawlerIPListSnapshotAll(all)
+	}
+}
+
+// writeCrawlerIPListSnapshotAll 全量快照原子写（tmp+rename）。
+func writeCrawlerIPListSnapshotAll(all map[string][]string) error {
+	data, err := json.Marshal(all)
+	if err != nil {
+		return err
+	}
+	tmp := crawlerIPListFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, crawlerIPListFile)
+}
+
+// writeCrawlerIPListSnapshot 单引擎增量快照写（读-改-写；root 服务内串行）。
+func writeCrawlerIPListSnapshot(engineID string, entries []string) error {
+	all := map[string][]string{}
+	if data, err := os.ReadFile(crawlerIPListFile); err == nil {
+		_ = json.Unmarshal(data, &all)
+	}
+	all[engineID] = entries
+	return writeCrawlerIPListSnapshotAll(all)
 }

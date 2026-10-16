@@ -15,9 +15,9 @@ package caddygeoip
 import (
 	"context"
 	"encoding/json"
-	"lazy-balancer-v2/internal/db"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -159,16 +159,36 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 	}
 }
 
-// verifyCrawlerIPRangeFromList 从 security_ip_lists 系统名单验证 IP 段命中
-// （name='crawlerbot:<engine>'；名单缺失/为空=fail-closed）。
+// crawlerIPListFile 厂商 IP 段名单快照文件（root 服务写、插件读——模块边界：
+// caddygeoip 独立模块不 import 根模块，快照经共享文件交换）。
+const crawlerIPListFile = "/app/data/crawler-ip-lists.json"
+
+var (
+	crawlerFileCacheMu     sync.Mutex
+	crawlerFileCacheTime   time.Time
+	crawlerFileCacheResult = map[string][]string{}
+)
+
+// verifyCrawlerIPRangeFromList 从共享快照文件验证 IP 段命中（缺失/为空=fail-closed；
+// mtime 变化才重读，2000/s 混合流量下文件系统开销=stat 节流）。
 func verifyCrawlerIPRangeFromList(ipStr, engineID string) bool {
-	name := "crawlerbot:" + engineID
-	var raw string
-	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'') FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&raw); err != nil {
-		return false
+	now := time.Now()
+	crawlerFileCacheMu.Lock()
+	defer crawlerFileCacheMu.Unlock()
+	if now.Sub(crawlerFileCacheTime) > 10*time.Minute {
+		data, err := os.ReadFile(crawlerIPListFile)
+		if err != nil {
+			return false
+		}
+		var all map[string][]string
+		if err := json.Unmarshal(data, &all); err != nil {
+			return false
+		}
+		crawlerFileCacheResult = all
+		crawlerFileCacheTime = now
 	}
-	var entries []string
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil || len(entries) == 0 {
+	entries := crawlerFileCacheResult[engineID]
+	if len(entries) == 0 {
 		return false
 	}
 	ip := netip.MustParseAddr(ipStr)
