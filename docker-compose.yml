@@ -33,7 +33,7 @@ services:
         # FE-8/INFRA-4（第 73 轮登记）：版本号三处硬编码之一（另两处
         # Dockerfile ARG VERSION、web/src/utils/branding.ts appVersion 回退值）。
         # 发版检查单已固化进 lazy-balancer-release 技能步骤 2——仅登记防漏 bump。
-        VERSION: v2.3.8-beta
+        VERSION: v2.3.8
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
