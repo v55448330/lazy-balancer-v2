@@ -60,7 +60,7 @@ func resetOverviewMetricsCacheForTest() {
 func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 	overviewMetricsCache.Lock()
 	if entry, ok := overviewMetricsCache.entries[metricsURL]; ok && time.Now().Before(entry.expiresAt) {
-		blocks := append([]RateLimitHostBlocks(nil), entry.blocks...)
+		blocks := cloneRateLimitBlocks(entry.blocks)
 		overviewMetricsCache.Unlock()
 		return blocks, nil
 	}
@@ -70,7 +70,7 @@ func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 		if call.err != nil {
 			return nil, call.err
 		}
-		return append([]RateLimitHostBlocks(nil), call.blocks...), nil
+		return cloneRateLimitBlocks(call.blocks), nil
 	}
 	if overviewMetricsCache.inflight == nil {
 		overviewMetricsCache.inflight = map[string]*overviewMetricsCall{}
@@ -98,7 +98,15 @@ func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]RateLimitHostBlocks(nil), blocks...), nil
+	return cloneRateLimitBlocks(blocks), nil
+}
+
+// cloneRateLimitBlocks 复制并按非 nil 空切片返回：JSON 序列化空结果为 []，
+// 前端可直接读 hosts.length（nil 会编码成 null 导致渲染崩溃）。
+func cloneRateLimitBlocks(src []RateLimitHostBlocks) []RateLimitHostBlocks {
+	out := make([]RateLimitHostBlocks, len(src))
+	copy(out, src)
+	return out
 }
 
 // scrapeRateLimitBlocksUncached 实际抓取与解析（缓存/单飞外壳见

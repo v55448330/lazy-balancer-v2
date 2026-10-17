@@ -274,6 +274,7 @@ import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
+import { normalizeRateLimitBlocks, type RateLimitBlocks } from '@/utils/rateLimitBlocks'
 
 
 interface TrendPoint { date: string; blocked: number; detected: number }
@@ -282,8 +283,6 @@ interface TopIP { ip: string; ip_location: string; blocked: number; detected: nu
 interface AttackType { name: string; value: number }
 interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; crs_available?: boolean; ip2region_available?: boolean; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[]; attack_types_stage: AttackType[] }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string }
-interface RateLimitBlockHost { host: string; count: number }
-interface RateLimitBlocks { total: number; hosts: RateLimitBlockHost[] }
 
 type TagType = 'success' | 'warning' | 'danger' | 'info'
 
@@ -412,8 +411,8 @@ const ip2regionError = ref(false)
 
 const fetchRateLimitBlocks = async () => {
   try {
-    const res = await request.get<APIResponse<RateLimitBlocks>>('/security/rate-limit-blocks')
-    if (res.data) rateLimitBlocks.value = res.data
+    const res = await request.get<APIResponse<unknown>>('/security/rate-limit-blocks')
+    rateLimitBlocks.value = normalizeRateLimitBlocks(res.data)
     rateLimitError.value = false
   } catch {
     rateLimitError.value = true

@@ -229,3 +229,21 @@ func TestScrapeRateLimitBlocks_singleFlight(t *testing.T) {
 		t.Fatalf("并发抓取次数=%d, want 1（单飞未生效）", got)
 	}
 }
+
+func TestScrapeRateLimitBlocks_emptyMetricsReturnsNonNilSlice(t *testing.T) {
+	// 无 429 行时 JSON 必须是 [] 而不是 null——前端直接读 hosts.length。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# no ratelimit metrics\n"))
+	}))
+	t.Cleanup(server.Close)
+	blocks, err := ScrapeRateLimitBlocks(server.URL)
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	if blocks == nil {
+		t.Fatal("empty result must be a non-nil slice (JSON hosts:[], not null)")
+	}
+	if len(blocks) != 0 {
+		t.Fatalf("blocks=%+v, want empty", blocks)
+	}
+}
