@@ -43,11 +43,12 @@ func TestAPIKeyReadOnlyGuardBlocksWritesAndAllowsReadOnlyPOST(t *testing.T) {
 	if parseAllowed.Code != http.StatusNoContent {
 		t.Fatalf("parse POST status=%d, want 204", parseAllowed.Code)
 	}
-	// DNS 凭证测试端点：2026-09-10 终裁开放(读探测,白名单在列)
-	testAllowed := httptest.NewRecorder()
-	router.ServeHTTP(testAllowed, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
-	if testAllowed.Code != http.StatusNoContent {
-		t.Fatalf("cert-config test POST status=%d, want 204", testAllowed.Code)
+	// L04-03（第 78 轮）：DNS 凭证测试端点会真实 Present+CleanUp DNS TXT——已移出
+	// 只读白名单，只读 API Key 必须 403。
+	testBlocked := httptest.NewRecorder()
+	router.ServeHTTP(testBlocked, httptest.NewRequest(http.MethodPost, "/api/v1/certificate-configs/test", nil))
+	if testBlocked.Code != http.StatusForbidden {
+		t.Fatalf("cert-config test POST status=%d, want 403（真实 DNS 写副作用）", testBlocked.Code)
 	}
 }
 
@@ -101,7 +102,7 @@ func TestMCPEndpointAuthenticationGatesAndProtocol(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	// 136 = 全量工具数（v2.3.4 +5 任务监控工具：list/trigger/toggle/cancel/control；与 server_test 只读 64 同步维护）
+	// 136 = 全量工具数（v2.3.4 +5 任务监控工具：list/trigger/toggle/cancel/control；只读计数以 server_test 动态判定为准）
 	if len(payload.Result.Tools) != 136 {
 		t.Fatalf("tool count=%d, want 136", len(payload.Result.Tools))
 	}

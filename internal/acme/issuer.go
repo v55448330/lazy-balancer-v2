@@ -14,7 +14,6 @@ import (
 
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/acme"
-	"golang.org/x/net/publicsuffix"
 )
 
 // Issuer orchestrates the full ACME DNS-01 issuance flow.
@@ -103,6 +102,16 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		}
 
 		log("presenting_dns", fmt.Sprintf("写入 TXT 记录 %s, 值: %s", tokenFQDN, keyAuth))
+		// U06-F01（第 78 轮）：挑战必须在 Present 之前登记进 deferred 清理集合——
+		// provider 可能在记录已落 DNS 后仍返回错误（ownership.Add 失败且回滚删除
+		// 亦失败的双失败形态），只在成功路径登记会让该临时 TXT 永久残留。
+		// 清理按 value 定向（CleanUpValue 只删本挑战值），对未写入/未成功的挑战
+		// 登记是幂等空操作。
+		presentedChallenges = append(presentedChallenges, ChallengeInfo{
+			Domain:    domain,
+			TokenFQDN: tokenFQDN,
+			Value:     keyAuth,
+		})
 		if err := i.Provider.Present(ctx, zone, tokenFQDN, keyAuth, 600); err != nil {
 			return "", "", fmt.Errorf("present dns for %s: %w", domain, err)
 		}
@@ -113,13 +122,6 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			authURL:   authURL,
 			chal:      chal,
 		})
-		challenge := ChallengeInfo{
-			Domain:    domain,
-			TokenFQDN: tokenFQDN,
-			Value:     keyAuth,
-		}
-
-		presentedChallenges = append(presentedChallenges, challenge)
 	}
 
 	// Step 4: Wait for DNS propagation and accept challenges
@@ -260,21 +262,12 @@ type ChallengeInfo struct {
 }
 
 // zoneFromDomain extracts the DNS zone (registered domain) from a domain name.
-// It uses the Public Suffix List so multi-level TLDs (e.g. co.uk, com.cn)
-// are handled correctly.
+// U06-F05（第 78 轮）：解析单源已下沉到 dnsprovider.ResolveZone（PSL），签发链
+// 与 DNS 凭证校验链共用同一口径；此处仅保留签发侧的空域兜底。
 func zoneFromDomain(domain string) string {
-	domain = strings.TrimSuffix(domain, ".")
-	if domain == "" {
-		return domain
-	}
-	zone, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	zone, err := dnsprovider.ResolveZone(domain)
 	if err != nil {
-		// Fallback to the last two labels.
-		parts := strings.Split(domain, ".")
-		if len(parts) <= 2 {
-			return domain
-		}
-		return strings.Join(parts[len(parts)-2:], ".")
+		return strings.TrimSuffix(strings.TrimSpace(domain), ".")
 	}
 	return zone
 }
@@ -610,18 +603,6 @@ func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) b
 			}
 		}
 	}
-}
-
-// probeAuthServers probes every authoritative name server once. Servers whose
-// probe fails (transport error) are dropped from the returned alive list so
-// they stop consuming propagation budget; a miss keeps the server alive for
-// the next round. ready reports whether every server already holds the
-// expected record.
-//
-// 本次调用持全新日志状态（每次调用都打印）——单发形态的兼容接缝；多轮轮询
-// 走 probeAuthServersLogged 共享状态表，仅状态变化时打印（C-3 第 73 轮）。
-func (i *Issuer) probeAuthServers(ctx context.Context, servers []string, fqdn, expected string) (alive []string, ready bool, lastFound []string, lastResolver string) {
-	return i.probeAuthServersLogged(ctx, servers, fqdn, expected, &dnsLogState{})
 }
 
 // probeAuthServersLogged 是多轮轮询形态：state 跨轮记录每台权威上次打印的

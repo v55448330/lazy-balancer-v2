@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const defaultLogFile = "/app/logs/lazy-balancer.log"
@@ -41,6 +42,20 @@ type Config struct {
 	BackupDir string `json:"backup_dir"`
 }
 
+// configFileKeys 是配置文件（-config）支持且会被解析的键集合。其余键不参与
+// 解析（log_file/jwt_secret/backup_dir/node_name/version 只接受环境变量或
+// 默认值），出现在文件中时逐条告警——静默忽略会让「改了配置没生效」无迹可循。
+var configFileKeys = map[string]struct{}{
+	"data_dir":          {},
+	"static_dir":        {},
+	"port":              {},
+	"caddy_admin_url":   {},
+	"caddy_metrics_url": {},
+	"metrics_interval":  {},
+}
+
+// Load 加载运行配置：默认值 → 配置文件（仅 configFileKeys 支持的键）→ 环境变量。
+// 配置文件中的未知键逐条 log 告警后忽略；读取/解析失败同样可见（回退默认值）。
 func Load(path string) *Config {
 	// Default values
 	cfg := &Config{
@@ -71,6 +86,17 @@ func Load(path string) *Config {
 				// 默认值会让「改了配置没生效」排查无门。
 				log.Printf("config: file %s exists but failed to parse (%v); using defaults", path, jerr)
 			} else {
+				// U12-F08（第 78 轮）：未知键必须可见——支持键之外的字段不会生效。
+				unsupported := make([]string, 0, len(fileCfg))
+				for key := range fileCfg {
+					if _, supported := configFileKeys[key]; !supported {
+						unsupported = append(unsupported, key)
+					}
+				}
+				sort.Strings(unsupported)
+				for _, key := range unsupported {
+					log.Printf("config: ignoring unsupported config key %q in %s", key, path)
+				}
 				if v, ok := fileCfg["data_dir"].(string); ok && v != "" {
 					cfg.DataDir = v
 				}
@@ -96,7 +122,15 @@ func Load(path string) *Config {
 	// 自动备份目录(v2.3.x):默认挂 DataDir 同级 backup(容器 /app/data → /app/backup，
 	// 本地 ./data → ./backup)；BACKUP_DIR env 可覆盖。计算在配置文件解析之后——
 	// data_dir 可被文件覆盖，目录锚点必须取最终值。
+	// L05-07：data_dir/backup_dir 进入投影与 @ipListFast 白名单前必须是绝对
+	// 路径；相对路径会让 IPListDataDir 越出 AllowedPathPrefix，整份配置被拒。
+	if abs, err := filepath.Abs(cfg.DataDir); err == nil {
+		cfg.DataDir = abs
+	}
 	cfg.BackupDir = getEnv("BACKUP_DIR", filepath.Join(filepath.Dir(cfg.DataDir), "backup"))
+	if abs, err := filepath.Abs(cfg.BackupDir); err == nil {
+		cfg.BackupDir = abs
+	}
 
 	// JWT secret: env wins; otherwise persist a random one so tokens survive
 	// restarts and the secret is never predictable.

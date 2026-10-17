@@ -524,7 +524,7 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	if err := installClusterVersionTriggers(database); err != nil {
 		t.Fatalf("install triggers: %v", err)
 	}
-	cluster := services.NewClusterService(database, nil, "")
+	cluster := services.NewClusterService(database, "")
 	downloadedSnapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatalf("build downloaded snapshot: %v", err)
@@ -764,6 +764,8 @@ func TestClusterVersionTrigger_ruleLibScheduleBumps(t *testing.T) {
 		{"ip2region 排程列", `UPDATE security_ip2region_version SET schedule_days='1,3,5', schedule_time='23:15' WHERE id=1`},
 		{"威胁库排程列", `UPDATE global_config SET threat_schedule_days='7', threat_schedule_time='05:00' WHERE id=1`},
 		{"威胁库总开关", `UPDATE global_config SET threat_auto_update=0 WHERE id=1`},
+		{"爬虫排程列", `UPDATE global_config SET crawler_schedule_days='6', crawler_schedule_time='06:00' WHERE id=1`},
+		{"爬虫总开关", `UPDATE global_config SET crawler_auto_update=0 WHERE id=1`},
 	}
 	for i, step := range steps {
 		if _, err := database.Exec(step.stmt); err != nil {

@@ -73,8 +73,17 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "节点注册失败", err)
 		return
 	}
-	services.RecordAuditLog("system", "注册", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", registration.RegistrationID), registerAuditField(req.Name), registerAuditField(req.IPAddress), "等待审批"), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册成功，等待主节点审批", Data: registration})
+	// L02-03：重复 ip:port 命中已批准节点时，upsert 会重置审批与令牌——响应与
+	// 审计点名被覆盖节点，避免运营方把覆盖误认为新节点加入。
+	message := "注册成功，等待主节点审批"
+	auditParts := []string{fmt.Sprintf("节点 %d", registration.RegistrationID), registerAuditField(req.Name), registerAuditField(req.IPAddress), "等待审批"}
+	if registration.OverwrittenNodeID > 0 {
+		overwritten := fmt.Sprintf("已覆盖节点 #%d（%s）", registration.OverwrittenNodeID, registerAuditField(registration.OverwrittenNodeName))
+		auditParts = append(auditParts, overwritten)
+		message = "注册成功，" + overwritten + "，等待主节点审批"
+	}
+	services.RecordAuditLog("system", "注册", "集群节点", services.FormatAuditDetail(auditParts...), c.ClientIP())
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: registration})
 }
 
 func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {

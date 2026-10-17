@@ -47,7 +47,7 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	h := &Handlers{
 		cfg:            cfg,
 		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
-		clusterService: services.NewClusterService(closedDB, nil, ""),
+		clusterService: services.NewClusterService(closedDB, ""),
 	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -96,7 +96,7 @@ func TestPromoteClusterNode_reportsUnavailableBeforePromoting(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0, master_url='', cluster_token='' WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/cluster/promote", h.PromoteClusterNode)
@@ -141,7 +141,7 @@ func TestSetClusterMode_rejectsCredentialedMasterURLWithoutAuditingCredentials(t
 	h := &Handlers{
 		cfg:            cfg,
 		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}
 	router := gin.New()
 	router.POST("/cluster/mode", h.SetClusterMode)

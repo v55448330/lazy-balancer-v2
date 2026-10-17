@@ -216,24 +216,30 @@ const crsRepoSlug = "coreruleset/coreruleset"
 // 指向 httptest 服务（R57）。
 var crsLatestReleaseAPIURL = "https://api.github.com/repos/coreruleset/coreruleset/releases/latest"
 
-// defaultFetchCRSLatestTag 查询 CRS 最新版本：先直连 api.github.com（快路径不
-// 变），仅在 403 限流与传输类失败（Do() 错误、5xx、读体中断）时经 GitHub 代理
-// 回退查询 releases/latest 页面（api.github.com 不可代理，verified 403）；其余
-// 4xx 与 tag 解析失败不重试。两路均失败时错误同时点名两个尝试过的 URL（R57）。
-func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
-	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, crsHTTPClient, crsLatestReleaseAPIURL)
+// fetchLatestGitHubTag 是 CRS/ip2region 最新版本查询的单源实现（U02-F14）：
+// 先直连 api.github.com（快路径不变），仅在 403 限流与传输类失败（Do() 错误、
+// 5xx、读体中断）时经 GitHub 代理回退查询 releases/latest 页面（api.github.com
+// 不可代理，verified 403）；其余 4xx 与 tag 解析失败不重试。两路均失败时错误
+// 同时点名两个尝试过的 URL（R57）。resource 仅用于错误文案。
+func fetchLatestGitHubTag(ctx context.Context, client *http.Client, apiURL, slug, resource string) (string, error) {
+	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, client, apiURL)
 	if err == nil {
 		return tag, nil
 	}
 	if !transport {
-		return "", fmt.Errorf("查询 CRS 最新版本: %w", err)
+		return "", fmt.Errorf("查询 %s 最新版本: %w", resource, err)
 	}
-	proxyTag, proxyErr := fetchGitHubLatestTagViaProxy(ctx, crsRepoSlug)
+	proxyTag, proxyErr := fetchGitHubLatestTagViaProxy(ctx, slug)
 	if proxyErr != nil {
-		return "", fmt.Errorf("查询 CRS 最新版本: 直连 %s 失败: %v；经代理 %s 重试仍失败: %v",
-			crsLatestReleaseAPIURL, err, ghProxied(gitHubReleasesLatestURL(crsRepoSlug)), proxyErr)
+		return "", fmt.Errorf("查询 %s 最新版本: 直连 %s 失败: %v；经代理 %s 重试仍失败: %v",
+			resource, apiURL, err, ghProxied(gitHubReleasesLatestURL(slug)), proxyErr)
 	}
 	return proxyTag, nil
+}
+
+// defaultFetchCRSLatestTag 查询 CRS 最新版本（委托单源 helper）。
+func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
+	return fetchLatestGitHubTag(ctx, crsHTTPClient, crsLatestReleaseAPIURL, crsRepoSlug, "CRS")
 }
 
 func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error {

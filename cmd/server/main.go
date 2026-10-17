@@ -132,7 +132,7 @@ func run() error {
 	lifecycle := newRuntimeLifecycle(syncService, func() certificateWorker {
 		return services.NewCertificateService()
 	})
-	clusterService := services.NewClusterService(db.DB, lifecycle, cfg.DataDir)
+	clusterService := services.NewClusterService(db.DB, cfg.DataDir)
 	caProviderService := services.NewCAProviderService(cfg.DataDir)
 
 	h := handlers.NewHandlers(handlers.Dependencies{
@@ -188,6 +188,23 @@ func run() error {
 	// 幂等守卫吸收 lifecycle 直调与 daemon 挂钩的双调用）
 	services.SetCertIssuanceLifecycleHooks(lifecycle.StartACME, lifecycle.StopACME)
 	services.SetSyncLifecycleHooks(syncService.Start, syncService.Stop)
+	// 自动备份执行器必须先于 InitTaskEngine：启用且存在补跑槽时，
+	// 引擎首轮可能在毫秒内到期，不得在 nil executor 下记录成功。
+	services.SetAutoBackupExecutor(func(trigger, operator string, engineRunID int64) error {
+		_, err := h.RunAutoBackupOnce(trigger, operator, engineRunID)
+		return err
+	})
+	// L01-01：威胁库依赖（reloader/投影回调/manager 单例）必须先于
+	// InitTaskEngine 装配——引擎启动即按 due 槽调度 threat，manager nil 曾让
+	// Run 落 success（威胁库永不更新且缺陷不可见）。与 auto-backup executor
+	// 同型：任务体依赖的运行期钩子一律前置。
+	services.SetThreatReloader(caddyReloader)
+	// 投影热路径（2026-10-15 用户裁定：威胁库重载门退役）——名单内容变化的
+	// 引用面收敛改走投影重写（零 /load，@ipListFast 匹配器与受信代理网段
+	// tp.txt/lb_file ≤1s stat 热感知）；threatReloader 仅残留热路径未证实
+	// 收敛时的 fail-safe 回退。
+	services.SetThreatProjectionRefresher(func() (services.IPListProjectionOutcome, error) { return caddyService.RefreshIPListProjections() })
+	services.InitThreatUpdateManager()
 	services.InitTaskEngine(cfg.CaddyAdminURL, runtimeLogFile) // 前置设施——非任务
 	// 引擎收尾统一交由下方 tail defer（StopTaskEngine 幂等）；此处不再重复
 	// defer（INFRA-1 第 73 轮：双 defer 依赖幂等，收敛单点收尾）。
@@ -204,18 +221,11 @@ func run() error {
 		defer close(metricsDone)
 		metricsService.Start()
 	}()
-	crsManager := services.GetCRSUpdateManager()
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		services.Logf("error", "failed to read cluster role: %v", err)
 		isMaster = true
 	}
-	services.SetThreatReloader(caddyReloader)
-	// 投影热路径（2026-10-15 用户裁定：威胁库重载门退役）——名单内容变化的
-	// 引用面收敛改走投影重写（零 /load，@ipListFast 匹配器与受信代理网段
-	// tp.txt/lb_file ≤1s stat 热感知）；threatReloader 仅残留热路径未证实
-	// 收敛时的 fail-safe 回退。
-	services.SetThreatProjectionRefresher(func() (services.IPListProjectionOutcome, error) { return caddyService.RefreshIPListProjections() })
 	// F73-A：自动封禁名单变化后的收敛。投影热路径优先（2026-10-15 用户裁定）：
 	// 资格门（被启用策略引用；受信代理引用面已随 tp.txt/lb_file 热路径化
 	// 退役）命中 → RefreshIPListProjectionsInLock 零 /load 收敛（@ipListFast
@@ -225,53 +235,19 @@ func run() error {
 	// 锁变体在临界区内重入=死锁）。
 	services.SetAutobanReloader(func() error { return caddyService.GenerateAndApplyConfigForceInLock() })
 	services.SetAutobanProjectionRefresher(func() (services.IPListProjectionOutcome, error) { return caddyService.RefreshIPListProjectionsInLock() })
-	services.InitThreatUpdateManager()
-	services.GetThreatUpdateManager().SetMasterRole(isMaster)
 	if isMaster {
 		if err := services.GetCrawlerUpdateManager().Prime(); err != nil {
 			services.Logf("error", "crawlerbot-update: 内置首版名单预载失败: %v", err)
 		}
 	}
-	crsManager.SetMasterRole(isMaster)
-	if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
-		ip2RegionManager.SetMasterRole(isMaster)
-	}
-	// 事件保留清理针对本节点本地表，与集群角色无关（从节点也摄入事件）
-	// M4：任务引擎在场由引擎每日驱动；测试环境（无引擎）回退原生启动器
-	if services.TaskEngine() == nil {
-		services.StartSecurityEventsRetention(context.Background())
-	}
 	// 审计日志轮转由事件摄入循环驱动（先采集后轮转），此处无需独立启动器
 	// 安全事件采集已由任务引擎接管（InitTaskEngine 注册 2s 循环）
-	// 自动备份执行体无条件注入(断 services→handlers 反向依赖环,与角色无关);
-	// 调度器仅主节点运行——启动装配在本分支,promote 路径(services/cluster.go)
-	// 对称拉起,demote(BecomeSlave)停止,全程无需重启进程。
-	services.SetAutoBackupExecutor(func(trigger, operator string, engineRunID int64) error {
-		_, err := h.RunAutoBackupOnce(trigger, operator, engineRunID)
-		return err
-	})
-	if isMaster {
-		lifecycle.StartACME()
-	} else {
-		lifecycle.StopACME()
-		lifecycle.StartSync()
-	}
 	defer func() {
 		// 审计 A5-S2：事件摄入与其余 worker 同生命周期——db.Close 前 cancel，
 		// 否则退出窗口内每 2s 对已关闭 MetricsDB 刷 "database is closed" 告警。
 		services.StopTaskEngine() // M2:引擎统一收尾(摄取/看门狗/清理)
 		metricsService.Stop()
 		<-metricsDone
-		crsManager.StopScheduler()
-		if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
-			ip2RegionManager.StopScheduler()
-		}
-		if threatMgr := services.GetThreatUpdateManager(); threatMgr != nil {
-			threatMgr.StopScheduler() // U8b-P5-7：三调度器对称收尾（曾漏 threat——退出窗口可 tick 关闭库）
-		}
-
-		services.StopSecurityEventsRetention()
-		services.StopAuditCleanup()
 		services.StopTimezoneRefresh()
 		services.StopLogRotate()
 		lifecycle.Shutdown()

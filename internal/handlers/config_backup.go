@@ -144,13 +144,17 @@ func parseSectionsParam(qs string) []string {
 
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
-var configBackupCertJobStatuses = map[string]struct{}{
-	"queued": {}, "pending": {}, "processing": {}, "creating_account": {}, "creating_order": {}, "order_created": {},
-	"cleanup_dns": {}, "cleanup_warning": {}, "presenting_dns": {}, "waiting_propagation": {}, "dns_propagated": {},
-	"accepting_challenge": {}, "validating": {}, "validated": {}, "finalizing": {}, "finalized": {}, "downloading": {},
-	"downloaded": {}, "issued": {}, "failed": {}, "waiting_ca": {}, "disabled": {}, "waiting_order_ready": {}, "order_ready": {},
-	"waiting_order_valid": {}, "order_valid": {},
-}
+// configBackupCertJobStatuses 备份导入的证书任务状态白名单——L04-06：单一
+// 真源 services.AllJobStatuses()（内部 db.CertJobStatuses 规范枚举），此处
+// 仅展开为集合；新增/重命名状态只改真源即自动覆盖，杜绝第二份字面量漂移。
+var configBackupCertJobStatuses = func() map[string]struct{} {
+	statuses := services.AllJobStatuses()
+	set := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		set[status] = struct{}{}
+	}
+	return set
+}()
 
 var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
@@ -189,22 +193,28 @@ var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 // security_policies.waf_check_response）；lb_rules.server_tokens_hidden 是
 // 有意的 0/1/2 三态列（rules.go 保存侧允许 2），不在其列。
 var backupBooleanTableColumns = map[string][]string{
-	"lb_rules":                   {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled"},
-	"upstreams":                  {"dynamic_dns", "enabled"},
-	"users":                      {"is_enabled", "mfa_enabled"},
-	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
-	"ca_providers":               {"enabled"},
-	"certificate_configs":        {"enabled"},
-	"security_policies":          {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection"}, // SYSRENDER27-P5-4: ip_whitelist_enabled 补入(R56 枚举漏列); U6B-1: trust_detection 补入(阶段 0 检测开关,同 BOOLEAN NOT NULL 布尔族)
-	"security_custom_rules":      {"enabled"},
-	"security_block_pages":       {"is_default"},
+	// U09-01（第 78 轮）：ntlm_compatible / upstream_force_http1 为 NOT NULL
+	// DEFAULT 0 的 INTEGER 0/1 语义列——此前漏列，字符串形态可绕过布尔类型门。
+	"lb_rules":              {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled", "ntlm_compatible", "upstream_force_http1"},
+	"upstreams":             {"dynamic_dns", "enabled"},
+	"users":                 {"is_enabled", "mfa_enabled"},
+	"api_keys":              {"is_enabled", "mcp_enabled", "read_only"},
+	"ca_providers":          {"enabled"},
+	"certificate_configs":   {"enabled"},
+	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection"}, // SYSRENDER27-P5-4: ip_whitelist_enabled 补入(R56 枚举漏列); U6B-1: trust_detection 补入(阶段 0 检测开关,同 BOOLEAN NOT NULL 布尔族)
+	"security_custom_rules": {"enabled"},
+	// U09-01：is_builtin（INTEGER DEFAULT 0）为内置页语义布尔列。
+	"security_block_pages":       {"is_default", "is_builtin"},
 	"security_crs_version":       {"auto_update"},
 	"security_ip2region_version": {"auto_update"},
 	"security_threat_sources":    {"update_enabled", "apply_enabled"},
+	// U09-01：system（NOT NULL DEFAULT 0）为系统预置名单语义布尔列。
+	"security_ip_lists": {"system"},
 }
 
-// audit I-A：备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖
-// configBackupTables 全部 15 表）。默认值与集群快照 dump 侧逐列对齐
+// audit I-A：备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖除
+// security_policy_bindings 外的 16 表——绑定表为派生数据，无 NULL 归一列）。
+// 默认值与集群快照 dump 侧逐列对齐
 // （cluster_snapshot.go 各 snapshot* 的 COALESCE 表达式）——「全量替换」
 // 两条通道（备份导入/集群快照）对同一 NULL 行必须产出同一落库值。
 // 仅收录「集群 dump 侧已 COALESCE 硬化」或「NULL 命中 raw-scan 消费点」的
@@ -392,6 +402,8 @@ var backupBooleanConfigKeys = []string{
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
 	"autoban_enabled", "autoban_dry_run", // D2(第 74 轮审计):自动封禁布尔两键——非布尔形态经 v2 类型门整包 400 点名
+	// U09-01（第 78 轮）：自动备份开关为 INTEGER 0/1 语义列，补入配置键枚举。
+	"auto_backup_enabled",
 }
 
 func isBackupBooleanColumn(table, column string) bool {
@@ -501,8 +513,9 @@ func normalizeBackupBooleanValue(value any) any {
 }
 
 type importQueueRecovery struct {
-	manager *services.CAQueueManager
-	done    bool
+	manager   *services.CAQueueManager
+	wasActive bool
+	done      bool
 }
 
 func (recovery *importQueueRecovery) finish() error {
@@ -510,6 +523,9 @@ func (recovery *importQueueRecovery) finish() error {
 		return nil
 	}
 	recovery.done = true
+	if !recovery.wasActive {
+		return nil
+	}
 	recovery.manager.Resume()
 	return requeueNonTerminalCertJobs()
 }
@@ -980,9 +996,27 @@ func validateImportedSecurityCustomRules(rows []map[string]any) error {
 	return nil
 }
 
-// validateV2Backup 校验 v2 备份结构与完整性。返回 usedLegacyChecksum=true 表示
-// 走了旧格式（仅 tables）校验和回退——调用方应记审计警告（R43 F-D）。
+// validateV2Backup = verifyBackupIntegrity + validateV2BackupRows（整包语义
+// 兼容包装，仅供单元测试使用）。导入/预览核心必须按「完整性 → sections 过滤
+// → 行级门」顺序分别调用两段（U09-04），不得经本包装一次性执行。
 func validateV2Backup(backup configBackup) (bool, error) {
+	usedLegacy, err := verifyBackupIntegrity(backup)
+	if err != nil {
+		return false, err
+	}
+	if err := validateV2BackupRows(backup); err != nil {
+		return false, err
+	}
+	return usedLegacy, nil
+}
+
+// verifyBackupIntegrity 整包完整性校验：结构/版本/导出口径、checksum（对全量
+// tables+config 计算，未选分类同样覆盖）、布尔 NULL 归一、必需表门、管理员门。
+// 在 sections 过滤之前执行。返回 usedLegacyChecksum=true 表示走了旧格式
+// （仅 tables）校验和回退——调用方应记审计警告（R43 F-D）；L06-01：legacy
+// 只跳过「checksum 不匹配即拒」，其后所有行级/白名单/凭证/管理员门照常执行。
+func verifyBackupIntegrity(backup configBackup) (bool, error) {
+	usedLegacyChecksum := false
 	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
 		return false, errors.New("不是有效的 Lazy Balancer 备份文件")
 	}
@@ -1001,25 +1035,6 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	}
 	if backup.Meta.Version == 2 && backup.Meta.Checksum == "" {
 		return false, errors.New("备份缺少完整性校验和，请使用 v2.1.2 及以上版本重新导出后再导入")
-	}
-	// R72 二十六次 W1-5：自定义规则行级验证（保存侧同款约束）。
-	if rows, ok := backup.Tables["security_custom_rules"]; ok {
-		if err := validateImportedSecurityCustomRules(rows); err != nil {
-			return false, err
-		}
-	}
-	// 威胁情报库（v2.3.x）：内置只读三源——备份携带种子集合外的源行
-	// （伪造源 URL）一律响亮拒绝，防备份通道注入任意下载地址。
-	if rows, ok := backup.Tables["security_threat_sources"]; ok {
-		if err := validateImportedThreatSources(rows); err != nil {
-			return false, err
-		}
-	}
-	// 爬虫地址库：仅允许四个内置官方源，拒绝伪造下载地址。
-	if rows, ok := backup.Tables["security_crawler_sources"]; ok {
-		if err := validateImportedCrawlerSources(rows); err != nil {
-			return false, err
-		}
 	}
 	if backup.Meta.Checksum != "" {
 		checksumPayload, err := json.Marshal(struct {
@@ -1041,7 +1056,11 @@ func validateV2Backup(backup configBackup) (bool, error) {
 			tablesOnlyMatch := hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum
 			if backup.Meta.ExportedAt == "" && backup.Meta.Version == 1 {
 				if tablesOnlyMatch {
-					return true, nil
+					// L06-01：legacy 形态是受支持路径——只跳过「checksum 不匹配
+					// 即拒」，置标志位后继续执行布尔/cert 状态/CA 白名单/凭证/
+					// 管理员门（此前 early-return 让这些门对 legacy 全失效）。
+					usedLegacyChecksum = true
+					goto afterChecksum
 				}
 			} else if tablesOnlyMatch {
 				// R44 C1: v2.1.1（及更早）导出即「tables-only 校验和 + exported_at
@@ -1052,6 +1071,7 @@ func validateV2Backup(backup configBackup) (bool, error) {
 			return false, errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
 		}
 	}
+afterChecksum:
 	// R39 C-1: 归一须在 checksum 校验之后（避免自带校验和的备份被误判篡改）、
 	// 管理员校验之前（backupBooleanEnabled(nil)=false 会先行 400 拦截全 null 管理员备份）。
 	normalizeBackupBooleanNulls(backup.Tables)
@@ -1096,25 +1116,61 @@ func validateV2Backup(backup configBackup) (bool, error) {
 			backup.Tables[table] = []map[string]any{}
 		}
 	}
+	// v2.3.0 分类导出可不带 users 表:不含/空=本地用户不动,管理员门跳过
+	// (全量导出恒有≥1 管理员;上方 normalize 已把缺失表补成空切片,故按长度判)
+	if len(backup.Tables["users"]) == 0 {
+		return usedLegacyChecksum, nil
+	}
+	for _, user := range backup.Tables["users"] {
+		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
+			return usedLegacyChecksum, nil
+		}
+	}
+	return false, errors.New("备份必须至少包含一个已启用的管理员账号")
+}
+
+// validateV2BackupRows 行级门（布尔类型/白名单/cert 状态/凭证），必须在
+// sections 过滤之后执行（U09-04）：未选分类的坏行不误拒整包，选中分类照常
+// 严格校验。checksum 已在 verifyBackupIntegrity 对全量计算。
+func validateV2BackupRows(backup configBackup) error {
+	// R72 二十六次 W1-5：自定义规则行级验证（保存侧同款约束）。
+	if rows, ok := backup.Tables["security_custom_rules"]; ok {
+		if err := validateImportedSecurityCustomRules(rows); err != nil {
+			return err
+		}
+	}
+	// 威胁情报库（v2.3.x）：内置只读三源——备份携带种子集合外的源行
+	// （伪造源 URL）一律响亮拒绝，防备份通道注入任意下载地址。
+	if rows, ok := backup.Tables["security_threat_sources"]; ok {
+		if err := validateImportedThreatSources(rows); err != nil {
+			return err
+		}
+	}
+	// 爬虫地址库：仅允许四个内置官方源，拒绝伪造下载地址。
+	if rows, ok := backup.Tables["security_crawler_sources"]; ok {
+		if err := validateImportedCrawlerSources(rows); err != nil {
+			return err
+		}
+	}
 	// R56 新发现#1：布尔列类型门须在 normalizeBackupBooleanNulls 之后（NULL 已归一
 	// 为 0/1 数值，不会被误判）、逐行校验之前（字符串布尔先行 400，不再进入下游
 	// backupBooleanEnabled 读取链）。
 	if err := validateV2BackupBooleanTypes(backup); err != nil {
-		return false, err
+		return err
 	}
 	for _, job := range backup.Tables["cert_jobs"] {
 		status, ok := job["status"].(string)
 		if !ok {
-			return false, errors.New("证书任务状态不能为空")
+			return errors.New("证书任务状态不能为空")
 		}
 		if _, allowed := configBackupCertJobStatuses[status]; !allowed {
-			return false, fmt.Errorf("无效的证书任务状态: %s", status)
+			return fmt.Errorf("无效的证书任务状态: %s", status)
 		}
 	}
 	const invalidCredentialsMsg = "备份包含无效的凭证格式（ca_providers.credentials / certificate_configs.dns_credentials 需为 JSON 对象）"
 	for _, provider := range backup.Tables["ca_providers"] {
 		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
-			return false, errors.New(invalidCredentialsMsg)
+			return errors.New(invalidCredentialsMsg)
 		}
 		// CERT44-1(第 44 轮审计 P2):provider 白名单与 directory_url 官方常量
 		// 覆写,与保存/更新侧(services/caproviders.go UpdateCAProvider
@@ -1127,25 +1183,15 @@ func validateV2Backup(backup configBackup) (bool, error) {
 		case services.ProviderZeroSSL:
 			provider["directory_url"] = services.ZeroSSLDirectoryURL
 		default:
-			return false, fmt.Errorf("备份包含无效的 CA 提供商类型: %s（必须为 %s 或 %s）", backupString(provider["provider"]), services.ProviderLetsEncrypt, services.ProviderZeroSSL)
+			return fmt.Errorf("备份包含无效的 CA 提供商类型: %s（必须为 %s 或 %s）", backupString(provider["provider"]), services.ProviderLetsEncrypt, services.ProviderZeroSSL)
 		}
 	}
 	for _, certCfg := range backup.Tables["certificate_configs"] {
 		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
-			return false, errors.New(invalidCredentialsMsg)
+			return errors.New(invalidCredentialsMsg)
 		}
 	}
-	// v2.3.0 分类导出可不带 users 表:不含/空=本地用户不动,管理员门跳过
-	// (全量导出恒有≥1 管理员;上方 normalize 已把缺失表补成空切片,故按长度判)
-	if len(backup.Tables["users"]) == 0 {
-		return false, nil
-	}
-	for _, user := range backup.Tables["users"] {
-		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
-			return false, nil
-		}
-	}
-	return false, errors.New("备份必须至少包含一个已启用的管理员账号")
+	return nil
 }
 
 // validateV2BackupRules 逐行校验备份 lb_rules 的端口与特性（校验侧保守口径）。
@@ -1433,9 +1479,12 @@ func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 // 控制静默失效）。
 func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error {
 	ipListIDs := make(map[int]struct{}, len(tables["security_ip_lists"]))
+	ipListValues := make(map[int][]string, len(tables["security_ip_lists"]))
 	for index, row := range tables["security_ip_lists"] {
+		var listID int
 		if id, ok := backupInteger(row["id"]); ok {
 			ipListIDs[id] = struct{}{}
+			listID = id
 		}
 		if rawEntries, exists := row["entries"]; exists && rawEntries != nil {
 			entries, ok := rawEntries.(string)
@@ -1468,6 +1517,9 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 					}
 					if !validIPOrCIDR(value) {
 						return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：无效 IP/CIDR 值 %q（zone 形态如 fe80::1%%eth0 不被 WAF 引擎支持）", index+1, ei+1, value)
+					}
+					if listID > 0 {
+						ipListValues[listID] = append(ipListValues[listID], value)
 					}
 				}
 			}
@@ -1651,6 +1703,38 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 				}
 			}
 		}
+		// P1-SEC-01：启用 allow 的导入后生效集必须非空——旧校验只看 refs 个数，
+		// 空内联/引用空名单会落库成「allow 但实际放行全部」。这里按备份行实际
+		// 条目计算 inline ∪ refs；时间为空/全部到期仍由渲染层恒拒兜底（P1-SEC-02）。
+		if backupBooleanEnabled(policy["ip_acl_enabled"]) && ipACLMode == "allow" {
+			nonEmpty := false
+			var inline []string
+			if raw := backupString(policy["ip_acl_list"]); strings.TrimSpace(raw) != "" {
+				if err := json.Unmarshal([]byte(raw), &inline); err == nil {
+					for _, v := range inline {
+						if strings.TrimSpace(v) != "" {
+							nonEmpty = true
+							break
+						}
+					}
+				}
+			}
+			if !nonEmpty {
+				var refs []int
+				if raw := backupString(policy["ip_acl_list_refs"]); strings.TrimSpace(raw) != "" {
+					_ = json.Unmarshal([]byte(raw), &refs)
+				}
+				for _, id := range refs {
+					if len(ipListValues[id]) > 0 {
+						nonEmpty = true
+						break
+					}
+				}
+			}
+			if !nonEmpty {
+				return fmt.Errorf("安全策略 #%d（%s）：启用白名单（allow）但生效 IP 列表为空（内联与引用均无可用于导入的条目）", index+1, name)
+			}
+		}
 	}
 	return nil
 }
@@ -1780,8 +1864,8 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 // 预览双路径同序调用，镜像 validateV2BackupAdminTLS 位次）：布尔两键的类型门
 // 已由 backupBooleanConfigKeys 枚举（validateV2BackupBooleanTypes）承担；此处
 // 承担数值钳制与枚举校验——写侧（services.ValidateAutobanConfig）同口径，导入
-// 不宽于保存侧。越界数值钳到写侧同边界（镜像 clampBackupAuditRetentionMonths
-// 族）、非整数形态归一缺省；duration/scope 空串/null 归一缺省（镜像
+// 不宽于保存侧。越界数值钳到写侧同边界（镜像 backupConfigClampRules
+// 钳制族）、非整数形态归一缺省；duration/scope 空串/null 归一缺省（镜像
 // security_policies mode 族「无值归一」）、非空非法与非字符串形态响亮拒绝。
 // 返回钳制/归一留痕（导入侧并入审计明细；预览侧忽略）。归一写回 backup.Config
 // 在 checksum 校验之后执行，不影响完整性判定。
@@ -1912,6 +1996,255 @@ func validateV2BackupTrustedProxyConfig(config map[string]any, tables map[string
 		config["trusted_proxy_headers"] = *req.TrustedProxyHeaders
 	}
 	return nil
+}
+
+// validateV2BackupRuntimeSettings 运行期设置门（L06-05）：导入侧此前对
+// timezone/server_map_lat/server_map_lon/threat_screen_mode/代理超时/
+// caddy_log_level/default_ca_provider_id 零校验——非法值落库后 /config 渲染
+// 或保存侧反校验 500/400。与保存侧（handlers/caddy.go UpdateConfig）同口径：
+// 非法时区/枚举/坐标/负超时 400；default_ca_provider_id 按「导入后视图」
+// （备份携带 ca_providers 表时只看备份行，否则看库内现存行）校验存在性。
+func validateV2BackupRuntimeSettings(config map[string]any, tables map[string][]map[string]any) error {
+	if config == nil {
+		return nil
+	}
+	if raw, exists := config["timezone"]; exists && raw != nil {
+		tz := backupString(raw)
+		if _, err := time.LoadLocation(tz); err != nil {
+			return fmt.Errorf("备份包含无效的时区 %q", tz)
+		}
+	}
+	for _, item := range []struct {
+		key  string
+		lo   float64
+		hi   float64
+		name string
+	}{
+		{"server_map_lat", -90, 90, "本站纬度"},
+		{"server_map_lon", -180, 180, "本站经度"},
+	} {
+		raw, exists := config[item.key]
+		if !exists || raw == nil {
+			continue
+		}
+		value, ok := backupFloat(raw)
+		if !ok {
+			return fmt.Errorf("备份的%s必须为数值", item.name)
+		}
+		if value < item.lo || value > item.hi {
+			return fmt.Errorf("备份的%s必须在 %g 到 %g 之间", item.name, item.lo, item.hi)
+		}
+	}
+	if raw, exists := config["threat_screen_mode"]; exists && raw != nil {
+		switch mode := backupString(raw); mode {
+		case "map", "globe":
+		default:
+			return fmt.Errorf("备份的威胁大屏模式仅支持 map 或 globe，实际 %q", mode)
+		}
+	}
+	for _, key := range []string{"log_level", "caddy_log_level"} {
+		raw, exists := config[key]
+		if !exists || raw == nil {
+			continue
+		}
+		switch backupString(raw) {
+		case "debug", "info", "warn", "error":
+		default:
+			if key == "caddy_log_level" {
+				return fmt.Errorf("备份包含无效的 Caddy 日志级别")
+			}
+			return fmt.Errorf("备份包含无效的应用日志级别")
+		}
+	}
+	for _, key := range []string{"proxy_dial_timeout", "proxy_response_header_timeout", "proxy_read_timeout", "proxy_write_timeout", "proxy_stream_timeout"} {
+		if raw, exists := config[key]; exists && raw != nil {
+			value, ok := backupInteger(raw)
+			if !ok || value < 0 {
+				return fmt.Errorf("备份的代理超时时间 %s 不能为负数或非整数", key)
+			}
+		}
+	}
+	if raw, exists := config["proxy_flush_interval"]; exists && raw != nil {
+		if value, ok := backupInteger(raw); !ok || value < -1 {
+			return fmt.Errorf("备份的代理刷新间隔不能小于 -1")
+		}
+	}
+	if raw, exists := config["proxy_stream_close_delay"]; exists && raw != nil {
+		if value, ok := backupInteger(raw); !ok || value < 0 {
+			return fmt.Errorf("备份的代理流关闭延迟不能为负数")
+		}
+	}
+	for _, key := range []string{"http_read_timeout", "http_write_timeout", "http_idle_timeout"} {
+		if raw, exists := config[key]; exists && raw != nil {
+			if value, ok := backupInteger(raw); ok && value < 0 {
+				return fmt.Errorf("备份的 %s 不能为负数", key)
+			}
+		}
+	}
+	if raw, exists := config["default_ca_provider_id"]; exists && raw != nil {
+		id, ok := backupInteger(raw)
+		if !ok {
+			return fmt.Errorf("备份的默认 CA 提供商 ID 必须为整数")
+		}
+		if id < 0 {
+			return fmt.Errorf("备份的默认 CA 提供商 ID 不能为负数")
+		}
+		if id > 0 && !backupCAProviderExistsPostImport(tables, id) {
+			return fmt.Errorf("备份的默认 CA 提供商（ID %d）在导入后不存在或已禁用", id)
+		}
+	}
+	return nil
+}
+
+// backupCAProviderExistsPostImport 按「导入后视图」校验 CA 提供商存在性：
+// 备份携带 ca_providers 表时，导入后该表=备份行集合（W2 全量替换），只能
+// 在备份行内解析；表缺席（分类导出未选系统数据）=本地行保留，按库内解析。
+func backupCAProviderExistsPostImport(tables map[string][]map[string]any, id int) bool {
+	if rows, carried := tables["ca_providers"]; carried {
+		for _, row := range rows {
+			rowID, ok := backupInteger(row["id"])
+			if !ok || rowID != id {
+				continue
+			}
+			// schema 默认 enabled=TRUE；键缺失/NULL 表示启用，显式 false 才禁用。
+			enabled := true
+			if raw, exists := row["enabled"]; exists && raw != nil {
+				enabled = backupBooleanEnabled(raw)
+			}
+			if enabled {
+				return true
+			}
+		}
+		return false
+	}
+	if db.DB == nil {
+		return false
+	}
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM ca_providers WHERE id=? AND COALESCE(enabled,1)=1`, id).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}
+
+// backupFloat 读取备份中的数值（JSON 反序列化 float64 / 内部 int 形态）。
+func backupFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	}
+	return 0, false
+}
+
+// validateV2BackupAutoBackupConfig 自动备份设置组导入门（U09-03）：frequency
+// 枚举、HH:MM、day 区间（weekly 1-7 / 其余 1-28）、keep 钳到写侧 [1,30]、
+// sections 必须是已知分类子集（legacy 键归一后校验，归一值写回）。非法值
+// 此前原样落库，消费侧（services.nextAutoBackupSlot）返回零槽 → 自动备份
+// 静默停摆且设置页保存被写侧校验锁死。
+func validateV2BackupAutoBackupConfig(config map[string]any) error {
+	if config == nil {
+		return nil
+	}
+	freq := "daily"
+	if raw, exists := config["auto_backup_frequency"]; exists && raw != nil {
+		value, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("备份的 auto_backup_frequency 必须为字符串")
+		}
+		switch value {
+		case "daily", "weekly", "monthly":
+			freq = value
+		default:
+			return fmt.Errorf("备份的 auto_backup_frequency 必须是 daily/weekly/monthly，实际 %q", value)
+		}
+	}
+	if raw, exists := config["auto_backup_time"]; exists && raw != nil {
+		value, ok := raw.(string)
+		if !ok || !services.ValidScheduleHHMM(value) {
+			return fmt.Errorf("备份的 auto_backup_time 必须为 HH:MM（00:00-23:59）")
+		}
+	}
+	if raw, exists := config["auto_backup_day"]; exists && raw != nil {
+		day, ok := backupInteger(raw)
+		if !ok {
+			return fmt.Errorf("备份的 auto_backup_day 必须为整数")
+		}
+		high := 28
+		if freq == "weekly" {
+			high = 7
+		}
+		if day < 1 || day > high {
+			return fmt.Errorf("备份的 auto_backup_day 必须在 1-%d 之间", high)
+		}
+	}
+	if raw, exists := config["auto_backup_keep"]; exists && raw != nil {
+		keep, ok := backupInteger(raw)
+		if !ok {
+			return fmt.Errorf("备份的 auto_backup_keep 必须为整数")
+		}
+		clamped := keep
+		if clamped < 1 {
+			clamped = 1
+		}
+		if clamped > 30 {
+			clamped = 30
+		}
+		config["auto_backup_keep"] = clamped
+	}
+	if raw, exists := config["auto_backup_sections"]; exists && raw != nil {
+		sections, err := parseBackupAutoBackupSections(raw)
+		if err != nil {
+			return err
+		}
+		sections = normalizeBackupSectionKeys(sections)
+		if _, _, ok := configBackupSectionTables(sections); !ok {
+			return fmt.Errorf("备份的 auto_backup_sections 含未知的配置分类")
+		}
+		normalized, err := json.Marshal(sections)
+		if err != nil {
+			return fmt.Errorf("备份的 auto_backup_sections 序列化失败: %w", err)
+		}
+		config["auto_backup_sections"] = string(normalized)
+	}
+	return nil
+}
+
+// parseBackupAutoBackupSections 解析 auto_backup_sections 存储形态（TEXT
+// JSON 数组；容忍备份被手工加工成 JSON 数组的形态）。
+func parseBackupAutoBackupSections(raw any) ([]string, error) {
+	switch value := raw.(type) {
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, nil
+		}
+		var sections []string
+		if err := json.Unmarshal([]byte(trimmed), &sections); err != nil {
+			return nil, fmt.Errorf("备份的 auto_backup_sections 需为 JSON 字符串数组")
+		}
+		return sections, nil
+	case []any:
+		sections := make([]string, 0, len(value))
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("备份的 auto_backup_sections 需为 JSON 字符串数组")
+			}
+			sections = append(sections, text)
+		}
+		return sections, nil
+	}
+	return nil, fmt.Errorf("备份的 auto_backup_sections 需为 JSON 字符串数组")
 }
 
 // trustedProxyBackupListSource 从备份 security_ip_lists 行构建名单解析源
@@ -2243,115 +2576,65 @@ func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 	return conflicts
 }
 
-func clampBackupJWTExpireMinutes(value any) (any, bool) {
-	switch minutes := value.(type) {
-	case float64:
-		if minutes >= 1 && minutes <= 1440 && minutes == math.Trunc(minutes) {
-			return value, false
+// backupConfigClampRule 导入侧整型配置钳制规格（U09-09：六段逐字同构的
+// clampBackup* 收敛为单表）。mode 两种语义：
+//   - clampToBound：越界钳到最近边界（日志大小/保留月数族）
+//   - resetDefault：越界一律回退默认值（jwt 过期分钟：越界与非法同待遇）
+//
+// 非整数形态一律回退 Def（与 schema 缺省/显示侧 COALESCE 对齐）。
+type backupConfigClampRule struct {
+	Key         string
+	Lo, Hi      int
+	Def         int
+	ResetOnHigh bool
+}
+
+var backupConfigClampRules = []backupConfigClampRule{
+	{Key: "jwt_expire_minutes", Lo: 1, Hi: 1440, Def: 20, ResetOnHigh: true},
+	{Key: "audit_retention_months", Lo: 1, Hi: 12, Def: 3},
+	{Key: "caddy_log_size_mb", Lo: 100, Hi: 10240, Def: 100},
+	{Key: "audit_log_size_mb", Lo: 1, Hi: 512, Def: 10},
+	{Key: "task_log_size_mb", Lo: 1, Hi: 1024, Def: 10},
+	{Key: "runtime_log_size_mb", Lo: 1, Hi: 1024, Def: 100},
+}
+
+// clampBackupConfigInts 按 backupConfigClampRules 就地钳制全局配置区，返回
+// 审计留痕（越界/非法形态各一条，文案与历史逐键文本同口径）。
+func clampBackupConfigInts(config map[string]any) []string {
+	if config == nil {
+		return nil
+	}
+	var notes []string
+	for _, rule := range backupConfigClampRules {
+		value, exists := config[rule.Key]
+		if !exists || value == nil {
+			continue
 		}
-	case int:
-		if minutes >= 1 && minutes <= 1440 {
-			return value, false
+		n, ok := backupInteger(value)
+		if !ok {
+			config[rule.Key] = rule.Def
+			notes = append(notes, fmt.Sprintf("%s 非法形态，已重置为 %d", rule.Key, rule.Def))
+			continue
 		}
-	case int64:
-		if minutes >= 1 && minutes <= 1440 {
-			return value, false
+		if n >= rule.Lo && n <= rule.Hi {
+			continue
 		}
+		if rule.ResetOnHigh {
+			config[rule.Key] = rule.Def
+			notes = append(notes, fmt.Sprintf("%s 越界，已重置为 %d", rule.Key, rule.Def))
+			continue
+		}
+		clamped := n
+		if clamped < rule.Lo {
+			clamped = rule.Lo
+		}
+		if clamped > rule.Hi {
+			clamped = rule.Hi
+		}
+		config[rule.Key] = clamped
+		notes = append(notes, fmt.Sprintf("%s 越界（%d），已钳位为 %d", rule.Key, n, clamped))
 	}
-	return 20, true
-}
-
-// clampBackupAuditRetentionMonths 导入侧 audit_retention_months 钳制
-// （R56 新发现#3）：与启动钳位（clampAuditRetentionMonthsOnStartup）同边界
-// ——越界钳到 [1,12] 最近边界；非整数形态按缺省 3 归一（与消费端
-// COALESCE(...,3) 回退口径一致）。此前导入原样落库越界值，基础设置保存被
-// 写侧 1-12 校验锁死（400），直至下次重启钳位才解套；与 jwt_expire_minutes
-// 的导入钳制对称。
-func clampBackupAuditRetentionMonths(value any) (any, bool) {
-	months, ok := backupInteger(value)
-	if !ok {
-		return 3, true
-	}
-	if months < 1 {
-		return 1, true
-	}
-	if months > 12 {
-		return 12, true
-	}
-	return value, false
-}
-
-// clampBackupCaddyLogSizeMB 导入侧 caddy_log_size_mb 钳制(SYS37-2,第 37 轮
-// 审计 P3,R56#3 同族):与写侧(caddy.go UpdateConfig,100-10240)同边界——低于
-// 100 钳到 100、高于 10240 钳到 10240(SYS41-7 补上限,与 UI :max 对齐);非整数
-// 形态按 schema 缺省 100 归一(db.go:369)。越界原样落库会锁死基础设置保存
-// (写侧 400),与 jwt_expire/audit_retention 钳制对称。
-func clampBackupCaddyLogSizeMB(value any) (any, bool) {
-	mb, ok := backupInteger(value)
-	if !ok {
-		return 100, true
-	}
-	if mb < 100 {
-		return 100, true
-	}
-	if mb > 10240 {
-		return 10240, true
-	}
-	return value, false
-}
-
-// clampBackupAuditLogSizeMB 导入侧 audit_log_size_mb 钳制(SYS37-2):与写侧
-// (caddy.go:380-387,1-512)同边界——越界钳到 [1,512] 最近边界;非整数形态
-// 按 schema 缺省 10 归一(db.go:386)。
-func clampBackupAuditLogSizeMB(value any) (any, bool) {
-	mb, ok := backupInteger(value)
-	if !ok {
-		return 10, true
-	}
-	if mb < 1 {
-		return 1, true
-	}
-	if mb > 512 {
-		return 512, true
-	}
-	return value, false
-}
-
-// clampBackupTaskLogSizeMB 导入侧 task_log_size_mb 钳制（SYS-U1，第 69 轮审计
-// P3——SYS37-2/R56#3 同族漏点）：与写侧（caddy.go UpdateConfig，1-1024，
-// LB42-4）同边界——越界钳到 [1,1024] 最近边界；非整数形态按 schema 缺省 10
-// 归一（db.go newColumns 登记 global_config.task_log_size_mb DEFAULT 10）。
-// 越界原样落库会锁死基础设置保存（写侧 400），且轮转实效、日志可无限增长
-// （LB42-4 的封堵向量经备份通道重开）。
-func clampBackupTaskLogSizeMB(value any) (any, bool) {
-	mb, ok := backupInteger(value)
-	if !ok {
-		return 10, true
-	}
-	if mb < 1 {
-		return 1, true
-	}
-	if mb > 1024 {
-		return 1024, true
-	}
-	return value, false
-}
-
-// clampBackupRuntimeLogSizeMB 导入侧 runtime_log_size_mb 钳制（SYS-U1 同族）：
-// 写侧同边界 1-1024；非整数形态按 schema 缺省 100 归一（db.go newColumns 登记
-// global_config.runtime_log_size_mb DEFAULT 100）。
-func clampBackupRuntimeLogSizeMB(value any) (any, bool) {
-	mb, ok := backupInteger(value)
-	if !ok {
-		return 100, true
-	}
-	if mb < 1 {
-		return 1, true
-	}
-	if mb > 1024 {
-		return 1024, true
-	}
-	return value, false
+	return notes
 }
 
 // errUnknownBackupSection:buildLbbakExport 的 4xx 语义哨兵——薄壳端点据此
@@ -2370,9 +2653,18 @@ func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload 
 	if !ok {
 		return nil, nil, "", false, errUnknownBackupSection
 	}
+	// 实际导出分类（空选择=全部 3 类）写入包体 Sections（U09-02）——还原/导入/
+	// 预览按该值过滤，不再依赖 ?sections= query 或恒「全选」。
+	exportedSections = append([]string(nil), sel...)
+	if len(exportedSections) == 0 {
+		for _, sec := range configBackupSections {
+			exportedSections = append(exportedSections, sec.Key)
+		}
+	}
 	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
-		Tables: map[string][]map[string]any{},
+		Sections: exportedSections,
+		Meta:     configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
+		Tables:   map[string][]map[string]any{},
 	}
 	tx, err := db.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -2424,12 +2716,6 @@ func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload 
 	payload, err = buildLbbakPayload(backupJSON, bundle)
 	if err != nil {
 		return nil, nil, "", false, err
-	}
-	exportedSections = append([]string(nil), sel...)
-	if len(exportedSections) == 0 {
-		for _, sec := range configBackupSections {
-			exportedSections = append(exportedSections, sec.Key)
-		}
 	}
 	return payload, exportedSections, importCountsDetail(backup.Tables), bundle != nil, nil
 }
@@ -2532,7 +2818,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 			backup.Sections = sel
 		}
 	}
-	usedLegacyChecksum, err := validateV2Backup(backup)
+	// U09-04：完整性（checksum/结构/必需表/管理员门）先于 sections 过滤；行级门
+	// （布尔/白名单/cert 状态/凭证）在过滤之后执行，未选分类的坏行不误拒整包。
+	usedLegacyChecksum, err := verifyBackupIntegrity(backup)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -2580,6 +2868,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	}
 	if !includeGlobal {
 		backup.Config = nil
+	}
+	// U09-04：行级门在 sections 过滤之后（未选分类的坏行不误拒整包）。
+	if err := validateV2BackupRows(backup); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
 	// L6-66-01（第 66 轮审计 P2）：users 键存在且为空数组=导入将清空全部账户
 	// （合法导出恒携带 ≥1 启用管理员；键缺席的分类导出已在上方缺席还原时删除，
@@ -2682,36 +2975,18 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	jwtExpireClamped := false
-	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
-		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
+	// L06-05：运行期设置门（timezone/坐标/枚举/超时/default_ca 存在性）。
+	if err := validateV2BackupRuntimeSettings(backup.Config, backup.Tables); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
-	// R56 新发现#3：audit_retention_months 导入钳制（与启动钳位同边界），
-	// 避免越界值落库后锁死基础设置保存。
-	auditRetentionClamped := false
-	if value, exists := backup.Config["audit_retention_months"]; exists {
-		backup.Config["audit_retention_months"], auditRetentionClamped = clampBackupAuditRetentionMonths(value)
+	// U09-03：自动备份设置组门（frequency/HH:MM/day/keep/sections）。
+	if err := validateV2BackupAutoBackupConfig(backup.Config); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
-	// SYS37-2(第 37 轮审计 P3,R56-58 同族):两个日志大小键导入钳制——
-	// 越界原样落库会锁死基础设置保存(写侧 400),钳到写侧同边界。
-	caddyLogSizeClamped := false
-	if value, exists := backup.Config["caddy_log_size_mb"]; exists {
-		backup.Config["caddy_log_size_mb"], caddyLogSizeClamped = clampBackupCaddyLogSizeMB(value)
-	}
-	auditLogSizeClamped := false
-	if value, exists := backup.Config["audit_log_size_mb"]; exists {
-		backup.Config["audit_log_size_mb"], auditLogSizeClamped = clampBackupAuditLogSizeMB(value)
-	}
-	// SYS-U1（第 69 轮）：同族补漏——task/runtime 日志大小键导入钳制，写侧
-	//（caddy.go UpdateConfig）边界 1-1024（LB42-4），缺省 10/100。
-	taskLogSizeClamped := false
-	if value, exists := backup.Config["task_log_size_mb"]; exists {
-		backup.Config["task_log_size_mb"], taskLogSizeClamped = clampBackupTaskLogSizeMB(value)
-	}
-	runtimeLogSizeClamped := false
-	if value, exists := backup.Config["runtime_log_size_mb"]; exists {
-		backup.Config["runtime_log_size_mb"], runtimeLogSizeClamped = clampBackupRuntimeLogSizeMB(value)
-	}
+	// U09-09：六个整型钳制键收敛为单表单循环（审计留痕随钳制产生）。
+	configClampNotes := clampBackupConfigInts(backup.Config)
 	// R57 C-2：续签/有效期数值导入钳制（与写侧 caddy.go 校验同边界）——
 	// cert_renewal_days 超大值会让续签扫描窗口覆盖一切证书（续签成功后仍在
 	// 窗口内 → 永久续签风暴耗尽 CA 配额）；负值漂移 Keep/Resume 决策。
@@ -2725,7 +3000,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 		// cert_renewal_attempts=5/cert_expiry_days=30）与显示侧 COALESCE——
 		// 此前 3/90 与写侧校验边界一致但与默认值漂移，修复后的续签窗口/到期
 		// 提醒参数会静默偏离系统默认直至管理员重存。
-		{"cert_renewal_days", 0, 90, 30},
+		// L04-02（第 78 轮）：cert_renewal_days 下界 1（0 会让续签窗口恒空、
+		// 到期即失效；写侧允许 0 属历史形态，导入侧钳到 1 并留痕）。
+		{"cert_renewal_days", 1, 90, 30},
 		{"cert_renewal_attempts", 1, 10, 5},
 		{"cert_expiry_days", 1, 365, 30},
 	} {
@@ -2822,9 +3099,26 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	if acmeDanglingImported > 0 {
 		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂(引用未随备份导入且现有配置缺失)——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingImported))
 	}
+	// L06-07：导入前快照自动备份开关——提交后仅在 off→on 转换时重置水位线。
+	var oldAutoBackupEnabled int
+	if db.DB != nil {
+		_ = db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&oldAutoBackupEnabled)
+	}
+	// U10-F01 配套：记录两版本表单行在导入前是否存在——重装首槽会为缺行补
+	// 种子行，导入未携带该表时必须撤销「本次新补」的种子，但不能删除本地
+	// 既有行（分类/纯 JSON 导入的「保留本地」语义）。
+	versionRowExistedBefore := map[string]bool{}
+	if db.DB != nil {
+		for _, table := range []string{"security_crs_version", "security_ip2region_version"} {
+			var count int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM " + table + " WHERE id=1").Scan(&count); err == nil {
+				versionRowExistedBefore[table] = count > 0
+			}
+		}
+	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		respondImportBeginError(c, err)
 		return
 	}
 	defer session.close()
@@ -2832,6 +3126,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 	// W2：security_ip_lists 先删/先插 security_policies——refs 是策略行上的
 	// JSON 引用（无外键，顺序本自由），固定 lists→policies 与集群 apply 侧
 	// 一致，保证插入后引用即时指向存在行。
+	// L06-08：威胁库文件逐源落盘可能在下方失败——先快照导入前的本地源行，
+	// 失败源在事务内整行回滚为本地值（保留本地 last_updated，文件亦未覆盖）。
+	var localThreatRows map[string]map[string]any
+	if lbbakFiles != nil && len(lbbakFiles.ThreatIplists) > 0 {
+		localThreatRows = captureThreatSourceRows(ctx)
+	}
 	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
@@ -3081,12 +3381,61 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// lbbak:文件落盘必须在 session.commit 之前——commit 内的 Caddy 应用
 	// (ApplyConfigFromTxCertAwareForce)要读到新 CRS 文件;xdb 落盘后立即
 	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
-	wafApplyWarning := ""
-	wafFilesLanded := false
-	wafCrsApplied := false
+	wafApply := lbbakWafApplyResult{}
 	if lbbakFiles != nil && sectionTables["security_crs_version"] {
-		wafApplyWarning, wafFilesLanded, wafCrsApplied = applyLbbakWafFiles(c, action, lbbakFiles, services.SanitizeBundleVersion(ip2regionTagFromBackup(backup.Tables)))
+		wafApply = applyLbbakWafFiles(c, action, lbbakFiles, services.SanitizeBundleVersion(ip2regionTagFromBackup(backup.Tables)))
+		// L06-02：未落盘文件对应版本记录在提交前同批丢弃（此前失败仍 commit
+		// 版本行——记录与文件分裂且响应谎报更新成功）。
+		for _, item := range []struct {
+			failed bool
+			table  string
+		}{
+			{wafApply.FailedCRS, "security_crs_version"},
+			{wafApply.FailedXdb, "security_ip2region_version"},
+		} {
+			if !item.failed {
+				continue
+			}
+			// 记录与文件同批：该表视为未导入（后续首槽武装也不得为它补槽）。
+			delete(backup.Tables, item.table)
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+item.table); err != nil {
+				err = session.abort(err)
+				recordAudit(c, action+"失败", "配置备份", "丢弃未落盘版本记录失败: "+err.Error())
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+				return
+			}
+		}
+		// L06-08：逐源失败——整行回滚为本地快照（表已全量替换；成功源仍按
+		// 备份行导入，失败源保留本地文件与记录）。
+		for _, source := range wafApply.FailedThreatSources {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM security_threat_sources WHERE name=?`, source); err != nil {
+				err = session.abort(err)
+				recordAudit(c, action+"失败", "配置备份", "回滚失败威胁源失败: "+err.Error())
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+				return
+			}
+			if local, ok := localThreatRows[source]; ok {
+				if err := restoreTable(ctx, tx, db.DB, "security_threat_sources", []map[string]any{local}); err != nil {
+					err = session.abort(err)
+					recordAudit(c, action+"失败", "配置备份", "恢复本地威胁源失败: "+err.Error())
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+					return
+				}
+			}
+		}
 	}
+	// U10-F01 门控：仅当本次导入实际携带（且成功落盘）规则库四表之一时才
+	// 需要重装首槽——否则（如 JSON 导入跳过版本表、规则类导入）武装会为
+	// 空表补种子行，改变「未导入=本地零行」的既有语义。
+	securityLibraryTablesImported := false
+	for _, table := range []string{"security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources"} {
+		if _, ok := backup.Tables[table]; ok {
+			securityLibraryTablesImported = true
+			break
+		}
+	}
+	_, crsVersionImported := backup.Tables["security_crs_version"]
+	_, ip2RegionVersionImported := backup.Tables["security_ip2region_version"]
 	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
 		status := http.StatusInternalServerError
 		message := "配置" + action + "失败: " + err.Error()
@@ -3107,11 +3456,11 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		}
 		recordAudit(c, auditAction, "配置备份", auditDetail)
 		failureWarnings := skipWarnings
-		if wafApplyWarning != "" {
-			// A40-2-F4:规则库文件已落盘 live 树而 DB 已回滚——状态分裂必须
-			// 随失败响应可见,不得只在审计侧留痕。
-			failureWarnings = append(append([]string{}, failureWarnings...), wafApplyWarning)
-		} else if wafFilesLanded {
+		if len(wafApply.Warnings) > 0 {
+			// A40-2-F4/L06-02/03/08:未落盘文件/源的告警必须随失败响应可见
+			// （记录已按同批语义丢弃），不得只在审计侧留痕。
+			failureWarnings = append(append([]string{}, failureWarnings...), wafApply.Warnings...)
+		} else if wafApply.FilesLanded {
 			// L6-F1（第 65 轮）：文件成功落盘+commit 失败=文件与版本记录分裂
 			//（旧备份 CRS 覆盖新系统等）——曾仅审计可重构、响应对用户静默。
 			failureWarnings = append(append([]string{}, failureWarnings...),
@@ -3136,14 +3485,6 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if _, listsReplaced := backup.Tables["security_ip_lists"]; listsReplaced {
 		services.ResetAutobanCounters()
 	}
-	// L6-66-04（第 66 轮审计）：CRS「reloading/success」流水在 commit 成功后
-	// 补写——commit 失败路径已在上方 return，任务日志不再出现「重载/更新
-	// 成功」与实际回滚态矛盾的行。
-	if wafCrsApplied {
-		services.WriteCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
-		services.WriteCRSUpdateLog("INFO", "success", "CRS 已随备份导入更新")
-	}
-
 	if reseedBlockPageNeeded {
 		// 提交成功后才渲染 branding 内容：INSERT 只放空 content 占位，真实内容
 		// 由 SeedDefaultBlockPage 依据 branding.json 写入；失败不影响导入结果。
@@ -3164,29 +3505,33 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		}
 	}
 
+	// L06-04：提交后立即应用运行期设置（此前导入只 SyncBusinessTaskDrivers
+	// + 清缓存，log_level 变更要等重启；管理面板 HTTPS 变更需重启才能生效）。
+	services.ApplyLogLevel()
+	adminTLSRestartWarning := ""
+	if services.RuntimeAdminTLSChanged(services.LoadAdminTLSConfig()) {
+		adminTLSRestartWarning = "管理面板 HTTPS 配置已" + action + "，需重启后生效（当前进程继续使用启动时的证书）"
+		recordAudit(c, action+"警告", "配置备份", adminTLSRestartWarning)
+	}
+	// L06-07：off→on 且水位线为空/陈旧（>1 分钟）→ 置 now，避免导入后立即
+	// 补跑停用期首轮。直接写列而非 SetAutoBackupEnabled（后者会二次 StartLoop）。
+	if oldAutoBackupEnabled == 0 {
+		var newEnabled int
+		var lastRun string
+		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_last_run,'') FROM global_config WHERE id=1`).Scan(&newEnabled, &lastRun); err == nil && newEnabled == 1 {
+			if autoBackupWatermarkEmptyOrStale(lastRun) {
+				if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
+					services.Logf("warn", "配置导入：重置 auto_backup_last_run 失败: %v", err)
+				}
+			}
+		}
+	}
 	auditSource := "v2 备份（覆盖" + action + "）"
 	if filename != "" {
 		auditSource = "服务器备份 " + filename + "（覆盖" + action + "）"
 	}
 	auditParts := []string{"来源：" + auditSource, counts}
-	if jwtExpireClamped {
-		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
-	}
-	if auditRetentionClamped {
-		auditParts = append(auditParts, fmt.Sprintf("audit_retention_months 越界，已钳位为 %v", backup.Config["audit_retention_months"]))
-	}
-	if caddyLogSizeClamped {
-		auditParts = append(auditParts, fmt.Sprintf("caddy_log_size_mb 越界，已钳位为 %v", backup.Config["caddy_log_size_mb"]))
-	}
-	if auditLogSizeClamped {
-		auditParts = append(auditParts, fmt.Sprintf("audit_log_size_mb 越界，已钳位为 %v", backup.Config["audit_log_size_mb"]))
-	}
-	if taskLogSizeClamped {
-		auditParts = append(auditParts, fmt.Sprintf("task_log_size_mb 越界，已钳位为 %v", backup.Config["task_log_size_mb"]))
-	}
-	if runtimeLogSizeClamped {
-		auditParts = append(auditParts, fmt.Sprintf("runtime_log_size_mb 越界，已钳位为 %v", backup.Config["runtime_log_size_mb"]))
-	}
+	auditParts = append(auditParts, configClampNotes...)
 	auditParts = append(auditParts, certNumericClamped...)
 	auditParts = append(auditParts, autobanClampNotes...)
 	if len(skipWarnings) > 0 {
@@ -3231,8 +3576,8 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		recordAudit(c, action+"警告", "配置备份", unregisteredDetail)
 		responseWarnings = append(append([]string{}, responseWarnings...), unregisteredDetail)
 	}
-	if wafApplyWarning != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), wafApplyWarning)
+	if len(wafApply.Warnings) > 0 {
+		responseWarnings = append(append([]string{}, responseWarnings...), wafApply.Warnings...)
 	}
 	if operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
@@ -3255,10 +3600,66 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	if len(importCertWarnings) > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings...)
 	}
+	if adminTLSRestartWarning != "" {
+		responseWarnings = append(append([]string{}, responseWarnings...), adminTLSRestartWarning)
+	}
+	// 导入提交后按库实态统一对齐六个业务驱动任务；off→on 无需重启。
+	// U10-F01：四族规则库（CRS/IP2Region/威胁库/爬虫库）的「启用且空槽」
+	// 行重新武装首槽——导入替换了版本表行，不重装则 NextSlotFn 永不到期，
+	// 自动更新静默停摆直到重启。
+	if securityLibraryTablesImported {
+		services.RearmSecurityLibrarySlots()
+		// rearm 会为单行版本表补种子行（启动武装语义）；本次导入明确跳过版本
+		// 表（无文件=记录与文件分叉）时撤销该种子行，维持「未导入=零行」。
+		if !crsVersionImported && !versionRowExistedBefore["security_crs_version"] {
+			if _, err := db.DB.Exec(`DELETE FROM security_crs_version WHERE id=1`); err != nil {
+				services.Logf("warn", "配置导入：撤销 CRS 版本种子行失败: %v", err)
+			}
+		}
+		if !ip2RegionVersionImported && !versionRowExistedBefore["security_ip2region_version"] {
+			if _, err := db.DB.Exec(`DELETE FROM security_ip2region_version WHERE id=1`); err != nil {
+				services.Logf("warn", "配置导入：撤销 IP2Region 版本种子行失败: %v", err)
+			}
+		}
+	}
+	services.SyncBusinessTaskDrivers()
 	// P5-21（第 50 轮审计）：api_keys 已随导入整体替换——清空白名单 CIDR
 	// 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
 	purgeAllAPIKeyWhitelistCache()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置"+action+"成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
+}
+
+// captureThreatSourceRows 快照导入前的威胁库源行（按 name 索引），供逐源
+// 落盘失败时在事务内整行回滚（L06-08）。读失败返回 nil（失败源随之无本地行
+// 可恢复，调用方仍会删除备份行——文件未落盘时宁可少一行也不留假记录）。
+func captureThreatSourceRows(ctx context.Context) map[string]map[string]any {
+	rows, err := dumpTable(ctx, db.DB, "security_threat_sources")
+	if err != nil {
+		services.Logf("warn", "配置导入：快照本地威胁库源行失败（失败源将无本地行可恢复）: %v", err)
+		return nil
+	}
+	out := make(map[string]map[string]any, len(rows))
+	for _, row := range rows {
+		if name := backupString(row["name"]); name != "" {
+			out[name] = row
+		}
+	}
+	return out
+}
+
+// autoBackupWatermarkEmptyOrStale 判定自动备份水位线是否需要重置（L06-07）：
+// 空/非法形态恒陈旧；正常形态仅在距上次执行超过 1 分钟时视为陈旧（同一秒内
+// 刚落的新鲜水位保持不动，避免覆盖并发保存路径刚写入的值）。
+func autoBackupWatermarkEmptyOrStale(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return true
+	}
+	return time.Since(parsed) > time.Minute
 }
 
 func importCountsDetail(tables map[string][]map[string]any) string {

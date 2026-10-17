@@ -168,18 +168,18 @@ var auditRoutePolicies = map[string]AuditPolicy{
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
-	"POST /api/v1/ca-providers/:id/test": {},
-
-	"POST /api/v1/certificate-configs/:id/test": {},
-	"POST /api/v1/certificates/jobs/current":    {},
-	"POST /api/v1/certificate-configs/test":     {},
-	"POST /api/v1/certificates/parse":           {},
-	"POST /api/v1/config/import/validate":       {},
-	"POST /api/v1/config/preview":               {},
+	"POST /api/v1/ca-providers/:id/test":     {},
+	"POST /api/v1/certificates/jobs/current": {},
+	"POST /api/v1/certificates/parse":        {},
+	"POST /api/v1/config/import/validate":    {},
+	"POST /api/v1/config/preview":            {},
 	// 2026-09-10 裁定(全项目审计·权限模型执行缺口,同日用户终裁):仅移除
 	// admin-tls/inspect——上传/解析管理面 TLS 证书属管理面编辑流,非管理员禁用。
-	// certificate-configs 两条测试与 ca-providers/:id/test 经用户裁定开放给
-	// 非管理员(读探测语义,不落库);三守卫对 inspect 恢复完整写面校验。
+	// L04-03（第 78 轮，主审上调 P2）：certificate-configs 两条 test 路由已移出
+	// 只读白名单——providers.Validate 会真实 Present+CleanUp DNS TXT 记录（非读
+	// 探测语义），从节点/只读 API Key 不得触发；三守卫（apiKeyReadOnlyGuard/
+	// mfaStepUpGuard/readOnlyGuard）对两条恢复完整写权限校验。ca-providers/:id/test
+	// 仅探测 ACME 目录/账户可达性（无 DNS 写副作用），保留读探测豁免。
 	// 审计 I-2：POST /config/validate 已移出只读豁免——该端点实际执行真实
 	// Caddy /load（?validate=true 参数被 Caddy v2.11.4 静默忽略，校验成功即
 	// 调用方配置成为运行配置），只读 API key/从节点/MFA 豁免均可触发真实
@@ -189,8 +189,7 @@ var readOnlyWriteRoutes = map[string]struct{}{
 	// 等中间件（Gin 对 group 中间件链做注册期快照），该条目无任何运行时消费者；
 	// MCP 写控制实际由内部转发重入跳完整重跑只读/从节点/管理员守卫承担。
 	// R39-7(C3):OIDC 发现探测为读语义(完整 discovery+JWKS 可达性探测,失败
-	// 仅记审计不落库配置)——与上面 certificate-configs/ca-providers 测试探针
-	// 同口径(2026-09-10 裁定先例),只读 API Key 放行。
+	// 仅记审计不落库配置),只读 API Key 放行。
 	"POST /api/v1/settings/oidc/test": {},
 	"POST /api/v1/rules/cert-info":    {},
 }
@@ -208,8 +207,9 @@ func ClassifyAuditRoute(method, path string) AuditPolicy {
 //   - auto-backup：备份执行器（handlers/autobackup.go）按结果记「备份/备份失败」；
 //   - startup:config-load：runConfigLoad 载入审计（启动与手动同体）。
 //
-// 其余 7 个可手动触发族（log-cleanup/audit-retention/security-events-retention/
-// cert-renewal-scan/cert-reconcile/cert-manual-poll/cert-waiting-ca）任务体零
+// 其余 9 个可手动触发族（config-watchdog/log-cleanup/audit-retention/
+// security-events-retention/cert-renewal-scan/cert-reconcile/cert-manual-poll/
+// cert-waiting-ca/autoban）任务体零
 // RecordAuditLog，由 trigger handler 显式补记。新增可触发族时必须评估本集合
 // （任务体自记 → 加入；否则 handler 自动补记）。
 var taskTriggerSelfAuditIDs = map[string]struct{}{

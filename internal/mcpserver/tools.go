@@ -13,8 +13,10 @@ type ToolSpec struct {
 	Path        string `json:"path"`
 	// ReadOnly 表示该工具对只读 API Key「只读可用」——GET 且非隐藏工具，或读
 	// 探测 POST 白名单（见 isReadOnlyTool）。R73 MISC-F1 修正：此前恒为
-	// method==HTTP GET，与真实只读能力集漂移（5 个读语义 POST 误标 false、
+	// method==HTTP GET，与真实只读能力集漂移（读语义探测 POST 误标 false、
 	// export_config 误标 true——外部契约变更，发布时向 MCP 使用者披露）。
+	// L04-03（第 78 轮）：test_certificate_config 移出探测集（写 DNS TXT），
+	// 当前探测集 4 项。
 	ReadOnly    bool            `json:"read_only"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 	Usage       string          `json:"usage,omitempty"`
@@ -124,7 +126,7 @@ var toolUsage = map[string]string{
 	"list_system_tasks":            "查看系统全部定时/后台任务的运行状态、最近执行与下次排程（任务监控聚合视图）",
 	"trigger_system_task":          "手动触发指定任务（定时/循环/触发类）——仅主节点管理员",
 	"toggle_system_task":           "停止/恢复指定任务的自动调度（enabled 布尔）",
-	"control_system_task":          "重启常驻任务（action=restart——启停已由调度开关承担）",
+	"control_system_task":          "action=restart 重启常驻任务；action=start/stop 用于排障时单独启停常驻循环（日常启停优先用 toggle_system_task 的 enabled）；仅常驻（daemon）族可用，ID 取自 list_system_tasks",
 	"cancel_system_task":           "取消运行中的下载类任务（威胁库/CRS/IP2Region；已完成部分保留）",
 	"promote_cluster":              "将从节点提升为独立主节点（脱离集群）",
 	"pull_sync":                    "手动触发从节点立即拉取主节点快照",

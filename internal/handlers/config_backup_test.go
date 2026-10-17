@@ -172,7 +172,7 @@ func newBackupTestHandlers(t *testing.T) *Handlers {
 	return &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}
 }
 
@@ -1027,7 +1027,6 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
-	services.GetCAQueueManager().PauseAndDrain()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v2','requeue','http','requeue.example.test',8080,1,1,'acme_dns');
 		INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('admin','hash','admin',1);
 		INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_requeue_v2','127.0.0.1',9000,1,1);
@@ -1221,22 +1220,60 @@ func TestConfigBackup_import_rejects_invalid_file(t *testing.T) {
 	}
 }
 
+// v2BackupBody 构造指定 meta/tables/config 的 v2 备份体并按 {tables,config}
+// 重算 checksum（U09-05：此前子例 body 缺 exported_at/checksum，全部在
+// validateV2Backup 首段早退，断言只看到「非 true」而未命中目标错误文案）。
+func v2BackupBody(t *testing.T, version int, tables map[string][]map[string]any, cfg map[string]any) string {
+	t.Helper()
+	backup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: version, ExportedAt: "2026-10-18T00:00:00Z"},
+		Config: cfg,
+		Tables: tables,
+	}
+	if tables != nil {
+		backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
+	}
+	data, err := json.Marshal(backup)
+	if err != nil {
+		t.Fatalf("marshal v2 backup: %v", err)
+	}
+	return string(data)
+}
+
+func v2FullTables() map[string][]map[string]any {
+	tables := make(map[string][]map[string]any, len(configBackupTables))
+	for _, table := range configBackupTables {
+		tables[table] = []map[string]any{}
+	}
+	tables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
+	return tables
+}
+
 func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/config/validate", h.ValidateConfigImport)
 	tests := []struct {
-		name string
-		body string
+		name       string
+		body       string
+		wantValid  bool
+		wantErrSub string
 	}{
-		{name: "unsupported version", body: `{"meta":{"app":"lazy-balancer-v2","version":3},"tables":{"lb_rules":[],"users":[]}}`},
-		{name: "missing tables", body: `{"meta":{"app":"lazy-balancer-v2","version":2}}`},
-		{name: "missing users", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[]}}`},
-		{name: "missing global config", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[],"cert_jobs":[]}}`},
-		{name: "missing exported table", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"config":{},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[]}}`},
+		{name: "unsupported version", body: v2BackupBody(t, 3, map[string][]map[string]any{"lb_rules": {}}, nil), wantErrSub: "不支持的备份版本"},
+		{name: "missing tables", body: v2BackupBody(t, 2, nil, nil), wantErrSub: "不是有效的 Lazy Balancer 备份文件"},
+		// 分类导出（无 users 键）合法：本地用户保留，管理员门跳过。
+		{name: "missing users 分类形态合法", body: v2BackupBody(t, 2, map[string][]map[string]any{"lb_rules": {}}, nil), wantValid: true},
+		// users 键存在且为空数组=导入将清空全部账户 —— 硬拒。
+		{name: "empty users", body: v2BackupBody(t, 2, map[string][]map[string]any{"users": {}}, nil), wantErrSub: "备份 users 表为空"},
+		{name: "missing global config 分类形态合法", body: v2BackupBody(t, 2, v2FullTables(), nil), wantValid: true},
 	}
+	missingTable := v2FullTables()
+	delete(missingTable, "cert_jobs")
+	tests = append(tests, struct {
+		name       string
+		body       string
+		wantValid  bool
+		wantErrSub string
+	}{name: "missing required table in full form", body: v2BackupBody(t, 2, missingTable, nil), wantErrSub: "备份缺少必需的数据表: cert_jobs"})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1244,7 +1281,7 @@ func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *tes
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(tt.body))
 			request.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(response, request)
+			r78ValidateRouter(h).ServeHTTP(response, request)
 
 			// Then
 			var envelope struct {
@@ -1253,11 +1290,14 @@ func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *tes
 			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 				t.Fatalf("decode validation response: %v", err)
 			}
-			if envelope.Data.Valid {
-				t.Fatalf("validation accepted invalid v2 backup: %s", response.Body.String())
-			}
 			if envelope.Data.Type != "v2" {
 				t.Fatalf("validation type=%q, want v2", envelope.Data.Type)
+			}
+			if envelope.Data.Valid != tt.wantValid {
+				t.Fatalf("validation valid=%v err=%q, want %v", envelope.Data.Valid, envelope.Data.Error, tt.wantValid)
+			}
+			if tt.wantErrSub != "" && !strings.Contains(envelope.Data.Error, tt.wantErrSub) {
+				t.Fatalf("validation error=%q, want contains %q", envelope.Data.Error, tt.wantErrSub)
 			}
 		})
 	}
@@ -2480,6 +2520,18 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE global_config SET log_level='debug', sync_interval=45 WHERE id=1"); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
+	// U10-F01 配套夹具：导入提交后会重装四族首槽（armCrawlerFirstSlots 经
+	// ensureCrawlerSources 补种子行，其时间列为 NULL）；生产库在首次生命
+	// 周期调用后恒有这四行。这里按生产形态预置（时间列 '' 而非 NULL），否则
+	// 「导入后首次补种」与「restore 的 NULL→'' 归一」会让 A/B 在 last_checked
+	// 形态上分叉，干扰本测试的 dump/restore 不动点断言。
+	for _, name := range []string{"googlebot", "gptbot", "bingbot", "so360spider"} {
+		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_crawler_sources
+			(name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures,created_at,updated_at)
+			VALUES (?,?,?,'json',1,0,'','idle','','','','','','',0,'','')`, name, name, "https://example.test/"+name); err != nil {
+			t.Fatalf("seed crawler source %s: %v", name, err)
+		}
+	}
 	router := gin.New()
 	router.GET("/config/export", h.ExportConfigBackup)
 	router.POST("/config/import", h.ImportConfigBackup)
@@ -2607,14 +2659,26 @@ func TestImportConfigBackup_toleratesTopLevelStringCustomRules(t *testing.T) {
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 
-	legacyBackup := `{"tables": {"security_policies": [{"id": 1, "name": "top-str", "mode": "off", "custom_rules": "\"str\"", "enabled": 1}]}}`
+	// U09-06：旧夹具缺 meta.app，在 validateV2Backup 首行 400 早退，只断言
+	// 「非 500」等于没测。改用完整 v2 夹具注入顶层字符串 custom_rules，断言
+	// 200 且策略行真实落库（若转红即暴露真实归一缺口）。
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"security_policies": {{"id": 1, "name": "top-str", "mode": "off", "custom_rules": `"str"`, "enabled": 1}},
+	})
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyBackup))
+	req := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(recorder, req)
 
-	if recorder.Code == http.StatusInternalServerError {
-		t.Fatalf("导入含顶层字符串 custom_rules 的备份不得 500: %s", recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("导入含顶层字符串 custom_rules 的备份应 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var stored string
+	if err := db.DB.QueryRow(`SELECT COALESCE(custom_rules,'') FROM security_policies WHERE name='top-str'`).Scan(&stored); err != nil {
+		t.Fatalf("策略未落库: %v", err)
+	}
+	if stored != `"str"` {
+		t.Fatalf("custom_rules=%q, want 原样 \"str\"", stored)
 	}
 }
 

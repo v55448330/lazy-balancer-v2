@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -155,15 +154,13 @@ func TestIP2RegionUpdateRun_failOpenMessageCarriesRollbackCause(t *testing.T) {
 	// When 安装成功但 reloader 持续失败、且全部回滚基线均失败
 	m.run("manual", nil)
 
-	// Then fail-open 落库的 message 同时携带重载失败警告与回滚失败根因
+	// Then U02-F07：live 被换成目录（非新工件普通文件）→ fail-open 被拒绝，
+	// 落 failed+旧版本；不得把未验证的目录形态认成「已生效」。
 	_, status, message, _, _, _, _ := ip2RegionVersionRow(t)
-	if status != "success" {
-		t.Fatalf("update_status=%q, want success (fail-open)", status)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed (fail-open precondition holds only for the validated new artifact)", status)
 	}
-	if !strings.Contains(message, "重载 Caddy 配置失败") {
-		t.Fatalf("message=%q, want 重载失败警告", message)
-	}
-	if !strings.Contains(message, "回退到发行版 ip2region xdb") {
-		t.Fatalf("message=%q, want 携带回滚失败根因（R50 B-#6）", message)
+	if message == "" {
+		t.Fatal("failed status must carry the reload failure message")
 	}
 }

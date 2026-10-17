@@ -33,7 +33,7 @@ func TestClusterStatus_syncIntervalDisplayClamp(t *testing.T) {
 			if _, err := db.DB.Exec("UPDATE global_config SET sync_interval=? WHERE id=1", tc.stored); err != nil {
 				t.Fatal(err)
 			}
-			svc := NewClusterService(db.DB, nil, t.TempDir())
+			svc := NewClusterService(db.DB, t.TempDir())
 			status, err := svc.Status(context.Background())
 			if err != nil {
 				t.Fatal(err)

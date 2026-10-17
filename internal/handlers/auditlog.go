@@ -52,6 +52,9 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 			ORDER BY cnt DESC, `+column+`
 			LIMIT ?`, limit)
 		if err != nil {
+			// U08-F02：查询失败曾零日志（恒 200 空/部分下拉，运维无信号）——
+			// 首错处 warn 留痕，响应携带 partial 标记。
+			services.Logf("warn", "审计日志下拉选项（%s）查询失败: %v", column, err)
 			return []optionRow{}, err
 		}
 		defer rows.Close()
@@ -89,9 +92,13 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 	}
 	// SYS42-5:任一 fetchDistinct 出错即跳过本轮缓存写入——空结果是故障形态,
 	// 缓存它会让一次瞬态错误在 60s 窗口内持续喂空下拉。
+	// U08-F02：故障轮响应携带可选 partial=true（旧字段原样保留，前端/JSON
+	// 消费方兼容），让「部分下拉」与「真空库」可区分。
 	if fetchErr == nil {
 		auditOptionsCache.payload = payload
 		auditOptionsCache.expiresAt = time.Now().Add(60 * time.Second)
+	} else {
+		payload["partial"] = true
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: payload})
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -136,13 +137,8 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	line := fmt.Sprintf("%s [%s] %s - %s\n", timestamp, level, stage, message)
 
 	// L1-P4-1（第 67 轮）：轮转判定计入待写入行——size+len(line) 超阈即在写入
-	// 前轮转，磁盘上活动文件恒 ≤ 上限。log-cleanup housekeeping（tasks/ 主流水，
-	// taskLogsHousekeeping）对超阈文件做「rename → .1」单代覆盖式轮转：此前本
-	// 写入侧仅在 size≥阈值时轮转，追加把活动文件推过阈值后、下一次写入前的窗
-	// 口内，housekeeping 节拍会把活动文件 rename 覆盖既有 .1（5 代链最新一代
-	// 整代丢失）。活动文件恒 ≤ 上限后 housekeeping 尺寸分支永不命中证书任务
-	// 日志，轮转唯一负责方归本写入侧（5 代移位），双轨覆盖窗口根除；
-	// housekeeping 的保留期清理语义不变。
+	// 前轮转，磁盘上活动文件恒 ≤ 上限。尺寸滚动唯一负责方为本写入侧（5 代移位），
+	// log-cleanup 仅负责保留期清理，不再参与尺寸轮转。
 	if _, err := taskengine.RotateTaskLogBeforeWrite(path, int64(len(line)), maxRotatedFiles); err != nil {
 		certJobLogWarnf("cert job log: rotate %s failed: %v", path, err)
 	}
@@ -157,9 +153,19 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 		Logf("error", "cert job log: failed to open %s: %v", path, err)
 		return
 	}
-	defer f.Close()
+	writeCertJobLogLine(f, path, line)
+}
 
-	fmt.Fprint(f, line)
+// writeCertJobLogLine 写一行并关闭，写/关闭错误经 Logf 留痕（U06-F06：磁盘配额
+// 耗尽/只读降级时 OpenFile 可成功而后续写入失败，此前两类错误被静默吞没，
+// 日志与 cert_jobs 状态分叉且无告警）。不改变签发结果。
+func writeCertJobLogLine(dst io.WriteCloser, path, line string) {
+	if _, err := fmt.Fprint(dst, line); err != nil {
+		Logf("error", "cert job log: write %s failed: %v", path, err)
+	}
+	if err := dst.Close(); err != nil {
+		Logf("warn", "cert job log: close %s failed: %v", path, err)
+	}
 }
 
 // Log implements the acme.Logger interface (info level).

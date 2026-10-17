@@ -38,7 +38,7 @@
           <span class="form-tip-inline">全局默认 DNS 提供商，创建规则时默认使用</span>
         </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">
+            <el-button type="primary" :loading="savingGlobal" :disabled="isReadOnly" @click="handleSave">
               <el-icon><Check /></el-icon>
               <span class="btn-text">保存</span>
             </el-button>
@@ -83,7 +83,7 @@
             <el-icon><Connection /></el-icon>
             <span>DNS 提供商配置</span>
           </div>
-          <el-button type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog()">
+          <el-button type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
             <span class="btn-text">添加</span>
           </el-button>
@@ -100,7 +100,7 @@
         <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog(row)">编辑</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog(row)">编辑</el-button>
             <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -176,8 +176,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="saving" @click="closeConfigDialog">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveConfig">保存</el-button>
+        <el-button :disabled="savingConfig" @click="closeConfigDialog">取消</el-button>
+        <el-button type="primary" :loading="savingConfig" :disabled="savingConfig" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
 
@@ -307,7 +307,10 @@ const emit = defineEmits<{
   (e: 'save'): void
 }>()
 
-const saving = ref(false)
+// 两个独立表单的保存态（第 78 轮 U16-F16）：原共用一个 saving——任一保存
+// 期间另一表单的按钮/弹框被连带禁用。CA 提供商历来独立（savingCA）。
+const savingGlobal = ref(false)
+const savingConfig = ref(false)
 const configs = ref<CertConfig[]>([])
 const providers = ref<DNSProvider[]>([])
 const dialogVisible = ref(false)
@@ -491,7 +494,7 @@ const testCAProvider = async (p: CAProvider) => {
 }
 
 const openConfigDialog = (config?: CertConfig) => {
-  if (saving.value) return
+  if (savingConfig.value) return
   if (config) {
     editingId.value = config.id || null
     const rawCreds = config.dns_credentials || {}
@@ -531,15 +534,15 @@ const openConfigDialog = (config?: CertConfig) => {
 }
 
 const beforeConfigDialogClose = (done: () => void): void => {
-  if (!saving.value) done()
+  if (!savingConfig.value) done()
 }
 
 const closeConfigDialog = (): void => {
-  if (!saving.value) dialogVisible.value = false
+  if (!savingConfig.value) dialogVisible.value = false
 }
 
 const saveConfig = async () => {
-  if (saving.value) return
+  if (savingConfig.value) return
   const targetId = editingId.value
   const payload = {
     name: form.value.name,
@@ -551,11 +554,11 @@ const saveConfig = async () => {
     ElMessage.warning('请填写配置名称和 DNS 提供商')
     return
   }
-  saving.value = true
+  savingConfig.value = true
 
   const domain = await promptTestDomain(true)
   if (!domain) {
-    saving.value = false
+    savingConfig.value = false
     return
   }
 
@@ -570,7 +573,7 @@ const saveConfig = async () => {
   } catch (caught: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to verify DNS credentials:', caught)
-    saving.value = false
+    savingConfig.value = false
     return
   }
 
@@ -588,7 +591,7 @@ const saveConfig = async () => {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to save cert config:', caught)
   } finally {
-    saving.value = false
+    savingConfig.value = false
   }
 }
 
@@ -658,7 +661,7 @@ const testConfig = async (config: CertConfig) => {
 
 const handleSave = async () => {
   if (isReadOnly.value) return
-  if (saving.value) return
+  if (savingGlobal.value) return
   if (!global.value.acme_email || !global.value.acme_email.trim()) {
     ElMessage.warning('请填写 ACME 邮箱')
     return
@@ -671,7 +674,7 @@ const handleSave = async () => {
     ElMessage.warning('请选择 CA 提供商')
     return
   }
-  saving.value = true
+  savingGlobal.value = true
   try {
     const payload = {
       // M31：提交侧 trim——避免粘贴带入的首尾空白被原样写入配置并回显扩散
@@ -700,7 +703,7 @@ const handleSave = async () => {
       console.error('Failed to save certificate settings:', error)
     }
   } finally {
-    saving.value = false
+    savingGlobal.value = false
   }
 }
 

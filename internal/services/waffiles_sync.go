@@ -57,6 +57,16 @@ type WafFileBundle struct {
 // BuildWafFileRef computes the live rule-file hashes without file content;
 // the snapshot embeds this reference so unchanged files never ride along.
 func BuildWafFileRef() *models.ClusterWafFilesRef {
+	// U02-F11：读相位统一持 wafFileMu——导出侧（本函数）与写相位（CRS 树交换/
+	// VERSION 标记/xdb 落盘/威胁 .fast）串行，读者只看到旧代或新代，不发布混合代。
+	wafFileMu.Lock()
+	defer wafFileMu.Unlock()
+	return buildWafFileRefLocked()
+}
+
+// buildWafFileRefLocked 是 BuildWafFileRef 的无锁核心（调用方必须已持
+// wafFileMu；BuildWafFileBundle 与导出一侧共用，杜绝锁内自取）。
+func buildWafFileRefLocked() *models.ClusterWafFilesRef {
 	ref := &models.ClusterWafFilesRef{}
 	seen := false
 	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules")); err == nil {
@@ -91,6 +101,16 @@ func BuildWafFileRef() *models.ClusterWafFilesRef {
 	return ref
 }
 
+// validThreatFileName 威胁库源名白名单（U02-F10：与内置三源单一对应，
+// 协议合法输入不变；其余一律拒绝）。
+func validThreatFileName(name string) bool {
+	switch name {
+	case "ustc", "firehol_l1", "et_compromised":
+		return true
+	}
+	return false
+}
+
 // scanThreatFastFiles 扫描 /app/waf/threat-*.iplist.fast 文件，返回源名→sha256 映射。
 func scanThreatFastFiles() map[string]string {
 	result := make(map[string]string)
@@ -119,7 +139,7 @@ func scanThreatFastFiles() map[string]string {
 func BuildWafFileBundle() *WafFileBundle {
 	wafFileMu.Lock()
 	defer wafFileMu.Unlock()
-	ref := BuildWafFileRef()
+	ref := buildWafFileRefLocked()
 	if ref == nil {
 		return nil
 	}
@@ -308,6 +328,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 	}
 	// RDB 文件化：从节点写威胁库 .fast 文件（直接使用，零编译）
 	for _, tf := range bundle.ThreatFiles {
+		// U02-F10：写盘前名称预检——仅允许三个内置源名。恶意/损坏主节点的
+		// name 含路径分隔符/`..`/绝对路径时，fmt.Sprintf("threat-%s...") 可逃出
+		// wafDir（如 name="../../../data/x"）；HasPrefix 再兜底一次。
+		if !validThreatFileName(tf.Name) {
+			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库文件名非法 %q，已拒绝整包", tf.Name)
+		}
 		if len(tf.Content) == 0 {
 			continue
 		}
@@ -324,6 +350,9 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 哈希不匹配（声明 %s，实际 %s），已拒绝落盘", tf.Name, tf.Sha256, got)
 		}
 		fastPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist.fast", tf.Name))
+		if clean := filepath.Clean(fastPath); !strings.HasPrefix(clean, filepath.Clean(wafDir)+string(filepath.Separator)) {
+			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库目标路径越界 %q，已拒绝整包", tf.Name)
+		}
 		// SEC-A-1：读哈希失败按哈希不符处理走重写路径（方向安全）；文件缺失
 		// 是新从节点常态不告警，其余读失败 warn 留痕。
 		if liveSum, sumErr := sha256File(fastPath); sumErr != nil {

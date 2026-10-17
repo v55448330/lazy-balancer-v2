@@ -7,7 +7,6 @@ package handlers
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +40,27 @@ func requireMasterNode(c *gin.Context) bool {
 	return true
 }
 
+// triggerAuditContext 预取异步触发审计上下文（gin.Context 在 handler 返回后
+// 池化复用——goroutine 只能消费快照）。api_key 详情与审计 IP 的取法与
+// recordAudit 同口径（中间件 audit_ip 优先）。
+func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAuditContext {
+	detail := ""
+	if c.GetString("auth_type") == "api_key" {
+		detail = services.AppendAPIKeyAuditDetail("手动触发任务 "+name, c.GetInt("api_key_id"), c.GetString("api_key_name"))
+	}
+	ip := c.GetString("audit_ip")
+	if ip == "" {
+		ip = c.ClientIP()
+	}
+	return services.TriggerAuditContext{
+		Operator: auditOperator(c),
+		IP:       ip,
+		Family:   family,
+		Name:     name,
+		Detail:   detail,
+	}
+}
+
 // TriggerSystemTask 手动触发（admin；仅排程/队列类任务族）。
 func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	id := c.Param("id")
@@ -72,42 +92,15 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务运行中，请稍后重试"})
 				return
 			}
-			// U1-P3-1（第 67 轮）：非自记族（log-cleanup 等 7 族任务体零审计）
-			// 由 handler 显式补记「触发」——此前路由整族 Skip 豁免，手动（更高
-			// 特权）触发反而无痕。自记族（threat/crs/ip2region/auto-backup/
-			// startup:config-load）任务体 defer/执行器已单记且 operator 经
-			// RunContext 归人，handler 复记会违反 U1-P3-2 单记裁定。
-			if !services.TaskTriggerSelfRecordsAudit(id) {
-				recordAudit(c, "触发", "任务监控", "手动触发任务 "+m.Name)
-			}
-			// F-U3-01（第 68 轮）：operator 闭包外预取——gin.Context 在 handler
-			// 返回后被池化复用，闭包内读 c 是数据竞态。
-			op := auditOperator(c)
-			go func() {
-				// F-U1-1（第 68 轮）：Trigger 失败补偿——否则非自记族只剩
-				// 「触发」孤儿行（任务未执行）、自记族零痕迹；日志同步留痕。
-				if err := te.Trigger(id, "manual", op); err != nil { // 异步——耗时由 task_runs 记录；operator 审计归人
-					// TASK-2（第 70 轮 P3）：预检（IsTaskInFlight）与本次 Trigger
-					// 之间无原子性——并发双击后到者 CAS 落败拿 ErrAlreadyRunning，
-					// 任务实际已由先到请求启动，落「触发失败」审计是语义失真。
-					if errors.Is(err, taskengine.ErrAlreadyRunning) {
-						return
-					}
-					// LNK71-1（第 71 轮 P5）：skipped 终态=Run 体「非故障放弃」
-					// （threat/crs/ip2region demote 中止等，TASK-L5 哨兵），task_runs
-					// 已落 skipped 行——非失败，复记「触发失败」是语义失真（镜像
-					// TASK-2 对 ErrAlreadyRunning 的静默裁定）。
-					if errors.Is(err, taskengine.ErrTaskSkipped) {
-						return
-					}
-					services.Logf("error", "手动触发任务 %s 失败: %v", id, err)
-					services.RecordAuditLog(op, "触发失败", "任务监控", fmt.Sprintf("手动触发任务 %s 失败: %v", m.Name, err), "")
-				}
-			}()
+			// L01-02/U10-F12：触发与审计统一走 services.TriggerTaskAsync——
+			// 「触发」审计只在 Trigger 成功后记录（非自记族），并发双击败者
+			// 拿 ErrAlreadyRunning 静默、skipped 终态静默、真失败记补偿审计。
+			// gin.Context 在 handler 返回后池化复用：审计上下文必须在此预取。
+			services.TriggerTaskAsync(te, id, triggerAuditContext(c, "任务监控", m.Name))
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该任务不支持手动触发"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
 		return
 	}
 	// R63：无引擎时统一 503（回退 switch 删除）。
@@ -138,11 +131,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			}
 			// 业务驱动任务（自动更新/自动备份/自动封禁）只能由对应业务页开关
 			// 修改；引擎只同步 loop_on，禁止在任务监控反写业务配置或另开第二入口。
-			businessDriven := map[string]bool{
-				"threat": true, "crs": true, "ip2region": true,
-				"crawlerbot-update": true, "auto-backup": true, "autoban": true,
-			}
-			if businessDriven[id] {
+			if services.IsBusinessDrivenTask(id) {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该任务由对应业务页开关控制，请在业务页修改自动更新设置"})
 				return
 			}
@@ -150,6 +139,10 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 				te.StartLoop(id)
 			} else {
 				te.StopLoop(id)
+			}
+			// U10-F02：用户显式启停落节点本地偏好（重启后不得按默认清单复活）。
+			if err := services.RecordTaskLoopPref(id, *req.Enabled); err != nil {
+				services.Logf("warn", "任务调度偏好写入失败（%s）: %v", id, err)
 			}
 			if *req.Enabled {
 				recordAudit(c, "恢复", "任务监控", m.Name+" 调度")
@@ -160,7 +153,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			}
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "任务不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
 		return
 	}
 	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "任务引擎未初始化"})
@@ -171,10 +164,15 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 // 不再硬编码三族清单；无引擎回退（测试环境）直调 manager。
 func (h *Handlers) CancelSystemTask(c *gin.Context) {
 	id := c.Param("id")
-	// 取消不需要主节点门：从节点只读模式下任务本来不跑；万一在跑（demote 竞态
-	// 窗口内）也应能取消。manager 自身有 running 判定（路由组 readOnlyGuard
-	// 会先行拦截从节点写——此处语义为纵深注释，见 U3-P4-3 修正）。
+	if !requireMasterNode(c) {
+		return
+	}
+	// 取消与 Trigger/Toggle/Control 共用集群写门；引擎 RunsOn 另管执行角色。
 	if te := services.TaskEngine(); te != nil {
+		if _, ok := te.Lookup(id); !ok {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
+			return
+		}
 		if !te.Cancel(id) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务未在运行中或不支持取消"})
 			return
@@ -194,6 +192,9 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 // 「Continuous 族可控」注释已随四类型标准作废。
 func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	id := c.Param("id")
+	if !requireMasterNode(c) {
+		return
+	}
 	var req struct {
 		Action string `json:"action"`
 	}
@@ -203,11 +204,15 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	}
 	te := services.TaskEngine()
 	if te == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "任务引擎未初始化"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "任务引擎未初始化"})
 		return
 	}
 	m, ok := te.Lookup(id)
-	if !ok || !m.Controllable {
+	if !ok {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
+		return
+	}
+	if !m.Controllable {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该任务不支持启停（角色驱动或纯被动循环）"})
 		return
 	}
@@ -219,6 +224,10 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	case "restart":
 		te.StopLoop(id)
 		te.StartLoop(id)
+	}
+	// U10-F02：用户显式启停落节点本地偏好；restart 的终态为运行。
+	if err := services.RecordTaskLoopPref(id, req.Action != "stop"); err != nil {
+		services.Logf("warn", "任务调度偏好写入失败（%s）: %v", id, err)
 	}
 	switch req.Action {
 	case "start":
@@ -262,7 +271,11 @@ func (h *Handlers) GetSystemTaskStats24hSeries(c *gin.Context) {
 // 更新族含分阶段流水 tee）。
 func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	id := c.Param("id")
-	path := taskengine.TaskLogPath(id)
+	path, err := systemTaskLogPath(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务日志路径解析失败: " + err.Error()})
+		return
+	}
 	if path == "" {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": ""}})
 		return

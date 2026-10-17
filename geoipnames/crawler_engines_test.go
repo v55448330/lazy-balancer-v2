@@ -38,22 +38,3 @@ func TestCrawlerEngines_matchAndVerify(t *testing.T) {
 		t.Error("引擎 ID 校验错误")
 	}
 }
-
-func TestCrawlerEngines_ipRangeVerification(t *testing.T) {
-	// 360 官方段（42.236.8.0/21 + 180.163.220.0/24）：段内过、段外拒、PTR 引擎不吃 IP 段
-	if !CrawlerEngineIPMatch("so360spider", "42.236.12.130") {
-		t.Error("360 官方段内 IP 应通过")
-	}
-	if !CrawlerEngineIPMatch("so360spider", "180.163.220.41") {
-		t.Error("360 官方电信段 IP 应通过")
-	}
-	if CrawlerEngineIPMatch("so360spider", "8.8.8.8") {
-		t.Error("段外 IP 应拒绝")
-	}
-	if CrawlerEngineIPMatch("googlebot", "42.236.12.130") {
-		t.Error("PTR 验证引擎不应吃 IP 段")
-	}
-	if CrawlerEngineVerifyMethod("so360spider") != CrawlerVerifyIPRange {
-		t.Error("360 应为 iprange 验证方式")
-	}
-}

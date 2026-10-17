@@ -9,7 +9,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -178,6 +180,30 @@ func quarantineMetricsFileUnconditionally(path string) (string, error) {
 // 文件份数：留新删旧，兼顾取证与磁盘无界累积（C4-F3）。
 const quarantineKeepPerBase = 3
 
+// quarantineFileOrder 从隔离文件名解析 (unix 秒, 同秒序号)，用于「按文件名
+// 时间」排序。U12-F06（第 78 轮）：os.Rename 保留源文件 mtime，隔离发生的
+// 时刻只记录在文件名里——按 ModTime 排序会把源 mtime 较旧的最新隔离件误判
+// 为最老而删除。解析失败（非本函数生成的形态）返回 false，排到最后。
+var quarantineFileNamePattern = regexp.MustCompile(`\.corrupt\.(\d+)(?:-(\d+))?$`)
+
+func quarantineFileOrder(path string) (int64, int, bool) {
+	match := quarantineFileNamePattern.FindStringSubmatch(path)
+	if len(match) != 3 {
+		return 0, 0, false
+	}
+	seconds, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	sequence := 0
+	if match[2] != "" {
+		if parsed, err := strconv.Atoi(match[2]); err == nil {
+			sequence = parsed
+		}
+	}
+	return seconds, sequence, true
+}
+
 // gcQuarantinedMetricsFiles 清理历史 metrics 隔离文件：每个基础名仅保留最新
 // quarantineKeepPerBase 份 .corrupt.*，更老的删除。启动时调用；尽力而为，
 // 删除失败记日志不上抛（GC 失败不得阻断启动/自愈路径），不触碰其他基础名。
@@ -192,25 +218,35 @@ func gcQuarantinedMetricsFiles(dbPath string) {
 			continue
 		}
 		infos := make([]struct {
-			path    string
-			modTime time.Time
+			path   string
+			second int64
+			order  int
+			parsed bool
 		}, 0, len(matches))
 		for _, path := range matches {
-			info, err := os.Stat(path)
-			if err != nil {
-				log.Printf("gc quarantined metrics files: stat %s: %v", path, err)
-				continue
-			}
+			seconds, order, parsed := quarantineFileOrder(path)
 			infos = append(infos, struct {
-				path    string
-				modTime time.Time
-			}{path, info.ModTime()})
+				path   string
+				second int64
+				order  int
+				parsed bool
+			}{path, seconds, order, parsed})
 		}
-		sort.Slice(infos, func(i, j int) bool { return infos[i].modTime.After(infos[j].modTime) })
+		sort.Slice(infos, func(i, j int) bool {
+			if infos[i].parsed != infos[j].parsed {
+				return infos[i].parsed
+			}
+			if infos[i].second != infos[j].second {
+				return infos[i].second > infos[j].second
+			}
+			return infos[i].order > infos[j].order
+		})
 		for _, stale := range infos[quarantineKeepPerBase:] {
 			if err := os.Remove(stale.path); err != nil {
 				log.Printf("gc quarantined metrics files: remove %s: %v", stale.path, err)
+				continue
 			}
+			log.Printf("gc quarantined metrics files: removed %s", stale.path)
 		}
 	}
 }
@@ -304,6 +340,14 @@ func initMetricsSchema(db *sql.DB) error {
 		action TEXT NOT NULL DEFAULT '',
 		count INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (minute, country, province, family, rule, action)
+	) WITHOUT ROWID;
+
+	-- 指标库通用状态表（第 78 轮 U03-F03）：rollup 固化水位等持久元数据。
+	-- 键值单行形态，水位与分钟数据同事务提交——不再以数据行 MAX(minute)
+	-- 反推水位（空分钟不产行，MAX 水位会让空分钟永不推进）。
+	CREATE TABLE IF NOT EXISTS metrics_state (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
 	) WITHOUT ROWID;
 	`
 

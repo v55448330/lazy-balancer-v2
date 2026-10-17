@@ -115,6 +115,28 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务失败"})
 		return
 	}
+	statusCounts := map[string]int64{}
+	statusRows, err := db.DB.Query("SELECT j.status, COUNT(*) FROM cert_jobs j"+whereClause+" GROUP BY j.status", filterArgs...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+		return
+	}
+	for statusRows.Next() {
+		var status string
+		var count int64
+		if err := statusRows.Scan(&status, &count); err != nil {
+			statusRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+			return
+		}
+		statusCounts[status] = count
+	}
+	if err := statusRows.Err(); err != nil {
+		statusRows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+		return
+	}
+	statusRows.Close()
 	var expiryDays int
 	// R2（第 77 轮）：字面量 30 → db.DefaultCertExpiryDays 绑定参数（caddy.go
 	// G4 形态，库值唯一真相单源）。
@@ -177,20 +199,11 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		j.Issuer = certificateIssuer(certPEM)
 		j.CertificateStatus = "unknown"
 		if j.ExpiresAt.Valid {
-			// 第 76 轮：剩余天数收敛 CertDaysRemaining 单源（两分支原同表达式
-			// 随 R66/R67 截断统一——提升为分支前单次计算）。
+			// 第 76 轮：剩余天数收敛 CertDaysRemaining 单源；U06-F03（第 78 轮）：
+			// 状态判定收敛 CertificateExpiryStatus（天粒度——原 `<= days*24h`
+			// 纳秒口径与 certinfo 截断天数在阈值 +1m 处结论分叉）。
 			j.DaysRemaining = services.CertDaysRemaining(j.ExpiresAt.Time, now)
-			if !now.Before(j.ExpiresAt.Time) {
-				// R66 D-N4/R67 D-2：过期天数与 certinfo.go 同表达式（int() 向零截断）。
-				j.CertificateStatus = "expired"
-			} else {
-				// R67 D-2：非过期分支同步截断（原 Ceil 使 23h 报 1 天，certinfo 报 0）
-				if remaining := j.ExpiresAt.Time.Sub(now); remaining <= time.Duration(expiryDays)*24*time.Hour {
-					j.CertificateStatus = "expiring"
-				} else {
-					j.CertificateStatus = "valid"
-				}
-			}
+			j.CertificateStatus = services.CertificateExpiryStatus(j.ExpiresAt.Time, now, expiryDays)
 		}
 		jobs = append(jobs, j)
 	}
@@ -201,7 +214,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	c.Header("X-Page", strconv.FormatInt(page, 10))
 	c.Header("X-Page-Size", strconv.Itoa(pageSize))
 	c.Header("X-Total", strconv.FormatInt(total, 10))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"list": jobs, "total": total, "page": page, "page_size": pageSize}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"list": jobs, "total": total, "page": page, "page_size": pageSize, "status_counts": statusCounts}})
 }
 
 // GetCurrentCertJobs returns the latest non-disabled job per requested rule so
@@ -369,9 +382,8 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// U1-66-05：手动重试入队成功=有在途证书工作——唤醒 cert-waiting-ca
 	// （默认调度关闭，waiting_ca 冷却重排/滞留重入队的唯一属主；此前重试
 	// 绕过单点唤醒，任务滞留至 cert-reconcile 周期至多 6h）。
-	if te := services.TaskEngine(); te != nil {
-		te.StartLoop("cert-waiting-ca")
-	}
+	// L01-09：入队成功即真实工作，唤醒入口不重查活跃态（队列可能已快速失败）。
+	services.WakeCertWaitingCAForEnqueuedJob()
 	recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("queued")))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Retry triggered"})
@@ -602,9 +614,8 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				// U1-66-05：删除失败恢复重入队成功=有在途证书工作——唤醒
 				// cert-waiting-ca（与 RetryCertJob/CreateOrRequeueCertJobWithChange
 				// 同族收敛：全部入队成功路径必须唤醒唯一属主）。
-				if te := services.TaskEngine(); te != nil {
-					te.StartLoop("cert-waiting-ca")
-				}
+				// L01-09：恢复重入队成功即真实工作，唤醒不重查活跃态。
+				services.WakeCertWaitingCAForEnqueuedJob()
 			}
 		}
 		services.Logf("error", "DeleteCertJob failed for job %d: %v", id, deleteErr)

@@ -58,7 +58,8 @@ func TestSweepOrphanedCertJobs_disables_unreferenced_non_terminal_jobs(t *testin
 	}
 }
 
-func TestSweepOrphanedCertJobs_leaves_rule_disabled_jobs_alone(t *testing.T) {
+// U06-F08（第 78 轮）：名称按现断言更名——规则停用后其非终态任务应由巡检禁用。
+func TestSweepOrphanedCertJobs_disables_jobs_of_disabled_rules(t *testing.T) {
 	// Given：规则被停用（enabled=0），其非终态任务不再适用，应被巡检禁用
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec(`

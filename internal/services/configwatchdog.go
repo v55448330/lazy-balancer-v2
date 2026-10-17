@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,13 +21,17 @@ type ConfigDriftStatus struct {
 	Extra      []string `json:"extra"`   // 运行配置中存在但 DB 已不存在的规则路由
 	Since      string   `json:"since"`   // 首次确认不一致的时间（UTC）
 	CheckedAt  string   `json:"checked_at"`
+	// SkippedRounds 自上次真实检查以来未能判定的轮数（规则读取失败/Caddy
+	// 不可达整轮跳过）——U12-F02：跳过轮不构成「一致」证据，心跳文案附此计数。
+	SkippedRounds int `json:"skipped_rounds,omitempty"`
 }
 
 var (
 	configDriftMu          sync.RWMutex
 	configDriftStatus      = ConfigDriftStatus{Consistent: true}
 	configDriftStreak      int
-	configDriftCleanRounds int  // R66 心跳窗口：连续一致轮计数（60s 节拍 × 60 轮 ≈ 1h 一条心跳）
+	configDriftCleanRounds int  // R66 心跳窗口：连续「真实检查且一致」轮计数（60s 节拍 × 60 轮 ≈ 1h 一条心跳）
+	configDriftSkipped     int  // U12-F02：自上次真实检查以来的跳过轮数（未判定，不计入干净轮）
 	configDriftQueryWarned bool // 规则数据读取失败首报留痕
 	configDriftReadWarned  bool // 运行配置读取失败首报留痕
 	// LBS-B-D1（第 69 轮）：configWatchdogMu/Cancel/Done 三个引擎化前残留
@@ -41,6 +46,7 @@ func ResetConfigDrift() {
 	configDriftStatus = ConfigDriftStatus{Consistent: true}
 	configDriftStreak = 0
 	configDriftCleanRounds = 0
+	configDriftSkipped = 0
 	configDriftQueryWarned = false
 	configDriftReadWarned = false
 }
@@ -89,32 +95,56 @@ func WatchdogCheckOnce() {
 				TaskLogf("config-watchdog", "check", "检查异常（panic 已拦，明细见运行日志）")
 			}
 		}()
-		checkConfigConsistency(watchdogAdminURLValue)
+		checked, _ := checkConfigConsistency(watchdogAdminURLValue)
 		// R66 日志收敛（2026-10-03 裁定，R65「日志只记真实执行」延伸）：一致轮
 		// 零逐轮行，每 configWatchdogHeartbeatRounds 轮（60s×60≈1h）一条心跳；
 		// 漂移期逐轮漂移行与恢复事件照旧（task_runs 维持失败留痕不膨胀）。
-		d := CurrentConfigDrift()
+		// U12-F02：只有真实完成的检查轮才累加干净轮——整轮跳过（规则/运行配置
+		// 读取失败、Caddy 不可达）不构成「一致」证据，此前会把跳过轮计入干净轮
+		// 并发出「配置一致」假心跳。跳过轮单独计数并附在心跳文案里。
 		configDriftMu.Lock()
-		if d.Consistent {
+		if !checked {
+			configDriftSkipped++
+		} else if configDriftStatus.Consistent {
 			configDriftCleanRounds++
 		} else {
 			configDriftCleanRounds = 0
+			configDriftSkipped = 0 // 漂移证据丢弃本窗口（恢复后重新累计）
 		}
 		rounds := configDriftCleanRounds
+		skipped := configDriftSkipped
+		heartbeat := checked && configDriftStatus.Consistent && rounds%configWatchdogHeartbeatRounds == 0
+		if heartbeat {
+			configDriftSkipped = 0 // 窗口关闭：跳过轮计数随心跳归零
+		}
+		configDriftStatus.SkippedRounds = configDriftSkipped
+		status := configDriftStatus
+		status.Missing = append([]string(nil), configDriftStatus.Missing...)
+		status.Extra = append([]string(nil), configDriftStatus.Extra...)
 		configDriftMu.Unlock()
-		if d.Consistent {
-			if rounds%configWatchdogHeartbeatRounds == 0 {
+		switch {
+		case !checked:
+			return // 跳过轮不输出「一致」结论
+		case heartbeat:
+			if skipped > 0 {
+				TaskLogf("config-watchdog", "check", "配置一致（心跳，近 60 轮有效检查无漂移；期间跳过 %d 轮未判定）", skipped)
+			} else {
 				TaskLogf("config-watchdog", "check", "配置一致（心跳，近 60 轮无漂移）")
 			}
+		case status.Consistent:
 			return
+		default:
+			TaskLogf("config-watchdog", "check", "配置漂移：缺失 %d 条 / 多余 %d 条（自 %s）", len(status.Missing), len(status.Extra), status.Since)
 		}
-		TaskLogf("config-watchdog", "check", "配置漂移：缺失 %d 条 / 多余 %d 条（自 %s）", len(d.Missing), len(d.Extra), d.Since)
 	}()
 }
 
-func checkConfigConsistency(adminURL string) {
+// checkConfigConsistency 单轮真实比对，返回本轮是否真正完成判定（checked）：
+// false=整轮跳过（规则读取失败/Caddy 运行配置不可读），调用方不得据此记
+// 「一致」簿记（U12-F02）。
+func checkConfigConsistency(adminURL string) (checked bool, err error) {
 	if db.DB == nil {
-		return
+		return false, nil
 	}
 	// LBS-B-R1（第 69 轮）：角色门单层化——内层「非主节点跳过」门删除，
 	// 由唯一生产调用方 WatchdogCheckOnce 外层门承担短路+簿记语义（双层
@@ -127,7 +157,7 @@ func checkConfigConsistency(adminURL string) {
 			Logf("warn", "配置一致性看门狗：读取规则失败（本轮起跳过检查）: %v", err)
 		}
 		configDriftMu.Unlock()
-		return
+		return false, err
 	}
 	running, err := runningRuleRouteIDs(adminURL)
 	if err != nil {
@@ -139,13 +169,14 @@ func checkConfigConsistency(adminURL string) {
 			Logf("warn", "配置一致性看门狗：读取运行配置失败（本轮起跳过检查）: %v", err)
 		}
 		configDriftMu.Unlock()
-		return
+		return false, err
 	}
 	configDriftMu.Lock()
 	configDriftQueryWarned = false
 	configDriftReadWarned = false
 	configDriftMu.Unlock()
 	updateConfigDrift(diffExpectedMissing(expected, running), diffRunningExtra(expected, running))
+	return true, nil
 }
 
 // expectedRenderedRules 计算应出现在运行配置中的规则：启用中且至少有一个启用上游，
@@ -225,9 +256,22 @@ func runningRuleRouteIDs(adminURL string) (map[string]bool, error) {
 		app, _ := apps[appName].(map[string]interface{})
 		servers, _ := app["servers"].(map[string]interface{})
 		for _, srv := range servers {
-			routes, _ := srv.(map[string]interface{})["routes"].([]interface{})
+			// U12-F03：形状异常（带外 /load 或版本漂移）不得 panic——一律
+			// comma-ok 断言跳过。
+			srvObj, ok := srv.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			routes, ok := srvObj["routes"].([]interface{})
+			if !ok {
+				continue
+			}
 			for _, route := range routes {
-				if id, ok := route.(map[string]interface{})["@id"].(string); ok && strings.HasPrefix(id, "lb_") {
+				routeObj, ok := route.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if id, ok := routeObj["@id"].(string); ok && strings.HasPrefix(id, "lb_") {
 					ids[id] = true
 				}
 			}
@@ -240,7 +284,15 @@ func runningRuleRouteIDs(adminURL string) (map[string]bool, error) {
 // @id）——启动「0 规则应用」守卫的探测面（F49-15）：空库实例启动时若运行
 // 配置仍带规则路由，极可能是数据目录/Admin 地址误配，不得把空配置 /load
 // 进去。admin 不可达返回错误，调用方按「无正向证据」放行（保持既有行为）。
-func RunningConfigHasRuleRoutes(adminURL string) (bool, error) {
+func RunningConfigHasRuleRoutes(adminURL string) (has bool, err error) {
+	// U12-F03：导出入口兜底 recover——运行配置是外部输入（Caddy admin 可能被
+	// 其他实例/版本写入），解析 panic 不得带崩启动守卫调用方。
+	defer func() {
+		if r := recover(); r != nil {
+			has = false
+			err = fmt.Errorf("运行配置解析 panic: %v", r)
+		}
+	}()
 	ids, err := runningRuleRouteIDs(adminURL)
 	if err != nil {
 		return false, err
@@ -254,7 +306,14 @@ func RunningConfigHasRuleRoutes(adminURL string) (bool, error) {
 // 启动应用前以此检出「非本库规则路由」并响亮留痕（09-18 多余路由、09-24
 // 清空路由两次实证事故）。子路由（lb_x_path_0 等）归主规则认领，不计外来。
 // admin 不可达返回错误，调用方按「无正向证据」跳过告警（与看门狗同口径）。
-func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) ([]string, error) {
+func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) (foreign []string, err error) {
+	// U12-F03：同上——导出入口兜底 recover（外部输入解析 panic 不得带崩启动守卫）。
+	defer func() {
+		if r := recover(); r != nil {
+			foreign = nil
+			err = fmt.Errorf("运行配置解析 panic: %v", r)
+		}
+	}()
 	running, err := runningRuleRouteIDs(adminURL)
 	if err != nil {
 		return nil, err
@@ -264,12 +323,12 @@ func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) ([]string
 		own[id] = id
 	}
 	claimed := claimedRoutePrefixes(own)
-	var foreign []string
 	for routeID := range running {
 		if !routeClaimedByAny(routeID, claimed) {
 			foreign = append(foreign, routeID)
 		}
 	}
+	sort.Strings(foreign)
 	return foreign, nil
 }
 
@@ -280,6 +339,9 @@ func diffExpectedMissing(expected map[string]string, running map[string]bool) []
 			missing = append(missing, fmt.Sprintf("%s（%s）", name, caddyID))
 		}
 	}
+	// U12-F14：map 遍历顺序随机——状态切片直接进横幅/审计文本会造成展示抖动；
+	// 排序保证同一集合的检查结果稳定（missing 按「名称（id）」字典序）。
+	sort.Strings(missing)
 	return missing
 }
 
@@ -294,6 +356,7 @@ func diffRunningExtra(expected map[string]string, running map[string]bool) []str
 			extra = append(extra, routeID)
 		}
 	}
+	sort.Strings(extra) // U12-F14：同上，顺序稳定
 	return extra
 }
 
@@ -327,34 +390,50 @@ func routeClaimedByAny(routeID string, claimed map[string]struct{}) bool {
 	return false
 }
 
+// updateConfigDrift 写入一轮比对结果。U12-F07：锁内只更新状态并拷贝待写
+// 内容，日志/审计落库移到 Unlock 之后——审计库 busy（30s busy_timeout）时
+// 持有 configDriftMu 会阻塞读者（GetCaddyStatus 的 CurrentConfigDrift）。
 func updateConfigDrift(missing, extra []string) {
 	drifted := len(missing) > 0 || len(extra) > 0
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	// 展示/审计文本顺序稳定（U12-F14：调用方若传未排序切片也不抖动）。
+	sort.Strings(missing)
+	sort.Strings(extra)
+	// 待写动作（0=无, 1=恢复, 2=漂移）——锁外执行。
+	pendingIO := 0
+	detail := ""
 	configDriftMu.Lock()
-	defer configDriftMu.Unlock()
 	if !drifted {
 		if !configDriftStatus.Consistent {
-			Logf("info", "配置一致性看门狗：运行配置与规则数据已恢复一致")
-			RecordAuditLog("system", "配置恢复", "Caddy配置", "运行配置与规则数据已恢复一致", "")
+			pendingIO = 1
 		}
 		configDriftStreak = 0
-		configDriftStatus = ConfigDriftStatus{Consistent: true, CheckedAt: now}
-		return
+		configDriftStatus = ConfigDriftStatus{Consistent: true, CheckedAt: now, SkippedRounds: configDriftStatus.SkippedRounds}
+	} else {
+		configDriftStreak++
+		if configDriftStatus.Consistent && configDriftStreak < 2 {
+			configDriftStatus.CheckedAt = now
+		} else {
+			if configDriftStatus.Consistent {
+				detail = formatDriftDetail(missing, extra)
+				pendingIO = 2
+				configDriftStatus = ConfigDriftStatus{Consistent: false, Since: now, SkippedRounds: configDriftStatus.SkippedRounds}
+			}
+			configDriftStatus.Missing = missing
+			configDriftStatus.Extra = extra
+			configDriftStatus.CheckedAt = now
+		}
 	}
-	configDriftStreak++
-	if configDriftStatus.Consistent && configDriftStreak < 2 {
-		configDriftStatus.CheckedAt = now
-		return
-	}
-	if configDriftStatus.Consistent {
-		detail := formatDriftDetail(missing, extra)
+	configDriftMu.Unlock()
+
+	switch pendingIO {
+	case 1:
+		Logf("info", "配置一致性看门狗：运行配置与规则数据已恢复一致")
+		RecordAuditLog("system", "配置恢复", "Caddy配置", "运行配置与规则数据已恢复一致", "")
+	case 2:
 		Logf("error", "配置一致性看门狗：%s", detail)
 		RecordAuditLog("system", "配置漂移", "Caddy配置", detail, "")
-		configDriftStatus = ConfigDriftStatus{Consistent: false, Since: now}
 	}
-	configDriftStatus.Missing = missing
-	configDriftStatus.Extra = extra
-	configDriftStatus.CheckedAt = now
 }
 
 func formatDriftDetail(missing, extra []string) string {

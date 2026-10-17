@@ -60,6 +60,7 @@ func unpackLbbakJSONTables(t *testing.T, raw []byte) map[string]any {
 
 func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 	h := newBackupTestHandlers(t)
+	t.Cleanup(services.ResetIP2RegionSearcherForTest)
 	g := newBackupSectionRouter(h)
 	// seed 临时 CRS 目录与 xdb(生产路径是容器内绝对路径)
 	crsDir := t.TempDir()
@@ -73,7 +74,13 @@ func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	xdbPath := filepath.Join(t.TempDir(), "ip2region.xdb")
-	if err := os.WriteFile(xdbPath, bytes.Repeat([]byte{0xAB}, 4096), 0o644); err != nil {
+	// L06-03（第 78 轮）：导入落盘前校验 xdb 可装载——夹具必须是真实可装载
+	// 的 ip2region 库（此前 4096 字节 0xAB 垃圾被当合法文件断言 200）。
+	xdbBytes, err := os.ReadFile(filepath.Join("..", "..", "caddygeoip", "testdata", "ip2region_v4.xdb"))
+	if err != nil {
+		t.Fatalf("read xdb fixture: %v", err)
+	}
+	if err := os.WriteFile(xdbPath, xdbBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	restore := services.OverrideWafLivePathsForTest(crsDir, xdbPath)
@@ -140,7 +147,7 @@ func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 		t.Fatalf("lbbak import must write CRS files: %v", err)
 	}
 	got, err := os.ReadFile(xdbPath)
-	if err != nil || len(got) != 4096 {
+	if err != nil || len(got) != len(xdbBytes) {
 		t.Fatalf("lbbak import must write xdb: err=%v len=%d", err, len(got))
 	}
 

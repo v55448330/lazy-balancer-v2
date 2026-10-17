@@ -261,6 +261,9 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if err := tx.Commit(); err != nil {
 		return models.CAProvider{}, err
 	}
+	// U06-F02（第 78 轮）：配置提交后发布失效事件——队列 tick 见版本变化即按新值
+	// 复核 max_concurrent/min_interval，不再等 running 归零或缓存间隔到期。
+	caProviderConfigVersion.Add(1)
 	return old, nil
 }
 

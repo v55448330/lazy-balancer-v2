@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -493,5 +494,104 @@ func TestBrandingHotReload_touchNoChurn(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("unchanged content must not log reload, got %d", n)
+	}
+}
+
+// U08-F03：公开无鉴权 GetBranding 端点的失败分支不再每请求重读+记日志——
+// 60s 探测/日志限流；文件恢复后下一次访问立即读到新值（last-known-good 不变）。
+func TestLoadBrandingConfig_failureProbeThrottledAndRecovers(t *testing.T) {
+	resetBrandingStore()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+	if err := os.WriteFile(path, []byte(`{"app_name":"甲"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "甲" {
+		t.Fatalf("boot load app_name=%q", cfg.AppName)
+	}
+
+	oldWriter := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	failureLogs := func() int { return strings.Count(buf.String(), "branding: 文件暂不可解析") }
+
+	// 半截写：连续 10 次调用只允许一条失败留痕。
+	st, _ := os.Stat(path)
+	if err := os.WriteFile(path, []byte(`{"app_name":"乙"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForDistinctMtime(t, path, st.ModTime())
+	for range 10 {
+		if cfg := loadBrandingConfig(dir); cfg.AppName != "甲" {
+			t.Fatalf("半截写必须保 last-known-good, got %q", cfg.AppName)
+		}
+	}
+	if got := failureLogs(); got != 1 {
+		t.Fatalf("半截写失败日志=%d 条, want 1（60s 限流）: %q", got, buf.String())
+	}
+
+	// 恢复完整：下一次调用立即读到新值。
+	st2, _ := os.Stat(path)
+	if err := os.WriteFile(path, []byte(`{"app_name":"丙"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForDistinctMtime(t, path, st2.ModTime())
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "丙" {
+		t.Fatalf("恢复后必须立即读到新值, got %q", cfg.AppName)
+	}
+
+	// 删除窗口：60s 内不重复探测/留痕；重建文件后立即收敛。
+	buf.Reset()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if cfg := loadBrandingConfig(dir); cfg.AppName != "丙" {
+			t.Fatalf("删除窗口必须保 last-known-good, got %q", cfg.AppName)
+		}
+	}
+	if got := failureLogs(); got != 1 {
+		t.Fatalf("删除窗口失败日志=%d 条, want 1（探测缓存）: %q", got, buf.String())
+	}
+	if err := os.WriteFile(path, []byte(`{"app_name":"丁"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "丁" {
+		t.Fatalf("重建文件后必须立即读到新值, got %q", cfg.AppName)
+	}
+}
+
+// U08-F05：内置页 id 被自定义页占用时，播种 UPDATE 不得改写该行
+// （INSERT OR IGNORE 冲突后原实现仍按 id 改写自定义内容/标志）。
+func TestSeedDefaultBlockPage_skipsWhenBuiltinIDOccupiedByCustomPage(t *testing.T) {
+	initBrandingTestDB(t)
+	dataDir := t.TempDir()
+	if _, err := db.DB.Exec(`DELETE FROM security_block_pages WHERE id=9001`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_block_pages (id, name, description, content, is_default, is_builtin) VALUES (9001, '我的自定义页', '自定义描述', '<html>custom</html>', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWriter := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
+		t.Fatalf("SeedDefaultBlockPage: %v", err)
+	}
+
+	var name, description, content string
+	var builtin bool
+	if err := db.DB.QueryRow(`SELECT name, COALESCE(description,''), COALESCE(content,''), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=9001`).Scan(&name, &description, &content, &builtin); err != nil {
+		t.Fatal(err)
+	}
+	if name != "我的自定义页" || description != "自定义描述" || content != "<html>custom</html>" || builtin {
+		t.Fatalf("自定义页被改写: name=%q desc=%q content=%q builtin=%v", name, description, content, builtin)
+	}
+	if !strings.Contains(buf.String(), "已被自定义页面占用") {
+		t.Fatalf("id 占用须 warn 点名: %q", buf.String())
 	}
 }

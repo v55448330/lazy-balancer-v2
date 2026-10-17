@@ -490,7 +490,7 @@ func TestProvision_replacedSearcherClosedAfterDelay(t *testing.T) {
 	}
 }
 
-func TestRealClientIP_honorsHeadersAndStripsPort(t *testing.T) {
+func TestRealClientIP_ignoresUntrustedProxyHeadersAndStripsPort(t *testing.T) {
 	tests := []struct {
 		name   string
 		remote string
@@ -650,5 +650,75 @@ func TestSharedGeoIPSearcher_statFailureEvictsCachedEntry(t *testing.T) {
 	}
 	if region, err := second.Search("114.114.114.114"); err != nil || region == "" {
 		t.Fatalf("rebuilt instance must serve lookups: region=%q err=%v", region, err)
+	}
+}
+
+// ---- 第 78 轮 U14-01 / U14-05 ----
+
+const googlebotUA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+
+func TestCrawlerVerify_usesClientIPVarOverRemoteAddr(t *testing.T) {
+	ResetCrawlerVerifyCacheForTest(&fakeResolver{
+		ptr: map[string][]string{
+			"66.249.66.1": {"crawl-66-249-66-1.googlebot.com."},
+			// socket 对端（CDN 回源）没有官方 PTR：若实现仍用 RemoteAddr 必判伪装
+		},
+		host: map[string][]string{
+			"crawl-66-249-66-1.googlebot.com": {"66.249.66.1"},
+		},
+	})
+	h := &GeoIPHandler{CrawlerExempt: true}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.50:443" // CDN 回源 IP
+	req.Header.Set("User-Agent", googlebotUA)
+	ctx := context.WithValue(req.Context(), caddyhttp.VarsCtxKey, map[string]any{
+		caddyhttp.ClientIPVarKey: "66.249.66.1",
+	})
+	req = req.WithContext(ctx)
+
+	h.applyCrawlerVerification(req)
+
+	if got := req.Header.Get(crawlerVerifiedHeader); got != "googlebot" {
+		t.Fatalf("verified header=%q, want googlebot (client_ip variable must win over socket addr)", got)
+	}
+	if got := req.Header.Get(crawlerSpoofHeader); got != "" {
+		t.Fatalf("spoof header=%q, want empty", got)
+	}
+
+	// 变量缺席 → 回退 socket（fail-closed 回归：CDN 回源 IP 不属官方段）。
+	ResetCrawlerVerifyCacheForTest(&fakeResolver{})
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.RemoteAddr = "203.0.113.50:443"
+	req2.Header.Set("User-Agent", googlebotUA)
+	h.applyCrawlerVerification(req2)
+	if got := req2.Header.Get(crawlerVerifiedHeader); got != "" {
+		t.Fatalf("verified header=%q without client_ip, want empty", got)
+	}
+	if got := req2.Header.Get(crawlerSpoofHeader); got != "googlebot" {
+		t.Fatalf("spoof header=%q, want googlebot (fallback socket IP fails closed)", got)
+	}
+}
+
+func TestCrawlerVerification_gatedByRenderFlag(t *testing.T) {
+	resolver := &fakeResolver{
+		ptr:  map[string][]string{"66.249.66.1": {"crawl-66-249-66-1.googlebot.com."}},
+		host: map[string][]string{"crawl-66-249-66-1.googlebot.com": {"66.249.66.1"}},
+	}
+	ResetCrawlerVerifyCacheForTest(resolver)
+	off := &GeoIPHandler{} // crawler_exempt 未配置 = false
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "66.249.66.1:443"
+	req.Header.Set("User-Agent", googlebotUA)
+	off.applyCrawlerVerification(req)
+	if req.Header.Get(crawlerVerifiedHeader) != "" || req.Header.Get(crawlerSpoofHeader) != "" {
+		t.Fatal("crawler_exempt=false must not set verification headers")
+	}
+	// 门控 true 时验证路径不变。
+	onReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	onReq.RemoteAddr = "66.249.66.1:443"
+	onReq.Header.Set("User-Agent", googlebotUA)
+	(&GeoIPHandler{CrawlerExempt: true}).applyCrawlerVerification(onReq)
+	if onReq.Header.Get(crawlerVerifiedHeader) != "googlebot" {
+		t.Fatal("crawler_exempt=true must keep the verification path")
 	}
 }

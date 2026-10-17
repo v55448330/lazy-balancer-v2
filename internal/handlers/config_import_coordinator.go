@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -61,9 +65,13 @@ type configImportSession struct {
 	recovery        importQueueRecovery
 	existingRuleIDs []string
 	runtime         *importRuntimeSnapshot
-	committed       bool
 	finished        bool
 }
+
+// errCertQueueDrainIncomplete 证书队列排空未完成（L06-06）：PauseAndDrain
+// 超时后仍有执行中的签发任务——此时开始导入会让证书任务与全量替换并发，
+// 明确拒绝（409）而非沿用「已排干」假设。
+var errCertQueueDrainIncomplete = errors.New("证书任务执行中，请稍后重试")
 
 func (h *Handlers) beginConfigImport(ctx context.Context) (*configImportSession, error) {
 	h.caddyOpMu.Lock()
@@ -75,7 +83,18 @@ func (h *Handlers) beginConfigImport(ctx context.Context) (*configImportSession,
 	}
 	session.existingRuleIDs = ruleIDs
 	if session.recovery.manager != nil {
-		session.recovery.manager.PauseAndDrain()
+		session.recovery.wasActive = session.recovery.manager.IsActive()
+		// L06-06：排空结果必须被消费——未完全排空（30s 超时仍有执行中任务）
+		// 不得继续导入。
+		if !session.recovery.manager.PauseAndDrain() {
+			h.caddyOpMu.Unlock()
+			// 本次 Pause 已停掉新任务登记；恢复既有活动态交给 finishImportFailure
+			// 语义——此处无事务可回滚，直接恢复队列避免永久暂停。
+			if session.recovery.wasActive {
+				session.recovery.manager.Resume()
+			}
+			return nil, errCertQueueDrainIncomplete
+		}
 	}
 	session.tx, err = db.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -84,6 +103,16 @@ func (h *Handlers) beginConfigImport(ctx context.Context) (*configImportSession,
 		return nil, fmt.Errorf("开始导入事务: %w", err)
 	}
 	return session, nil
+}
+
+// respondImportBeginError 导入会话建立失败的统一响应：排空未完成 → 409
+// （可重试语义），其余（读规则/开事务）→ 500。
+func respondImportBeginError(c *gin.Context, err error) {
+	if errors.Is(err, errCertQueueDrainIncomplete) {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 }
 
 func (session *configImportSession) close() {
@@ -140,7 +169,6 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	if err := session.tx.Commit(); err != nil {
 		return &importCoordinatorError{phase: importPhaseCommit, err: session.abort(err)}
 	}
-	session.committed = true
 	session.runtime = nil
 	// R66 C-F1/C-F2：全量替换导入对消失规则的产物清理。v2/v1 导入均清光
 	// lb_rules 后重插（v1 还换新 caddy_id），但产物轴此前只写不删：消失规则的

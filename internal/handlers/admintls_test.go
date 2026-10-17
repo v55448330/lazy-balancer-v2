@@ -266,3 +266,96 @@ func TestAdminTLSOversizedBodyReturns413(t *testing.T) {
 		t.Fatalf("POST /admin-tls/inspect oversized status=%d body=%s, want 413", inspectResponse.Code, inspectResponse.Body.String())
 	}
 }
+
+// U13-10（第 78 轮）：审计 detail 须显式记录本次是否替换了证书材料——
+// 仅启用/禁用 + 来源无法区分「只开关」与「换证书」。
+func TestUpdateAdminTLS_auditDetailRecordsCertificateReplacement(t *testing.T) {
+	newRouter := func(handler gin.HandlerFunc) *gin.Engine {
+		router := gin.New()
+		router.PUT("/admin-tls", handler)
+		return router
+	}
+	latestDetail := func(t *testing.T) string {
+		t.Helper()
+		var detail string
+		if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='基础设置' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+			t.Fatalf("read audit detail: %v", err)
+		}
+		return detail
+	}
+	sendJSON := func(t *testing.T, payload map[string]any) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		request := httptest.NewRequest(http.MethodPut, "/admin-tls", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		newRouter((&Handlers{cfg: &config.Config{Port: 8000}}).UpdateAdminTLS).ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+		}
+		return response
+	}
+
+	t.Run("上传替换证书", func(t *testing.T) {
+		initializeRuleFeatureTestDB(t)
+		oldExit := exitProcess
+		exited := make(chan struct{}, 1)
+		exitProcess = func(int) { exited <- struct{}{} }
+		t.Cleanup(func() { exitProcess = oldExit })
+		if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=0,admin_tls_mode='selfsigned',
+			admin_tls_cert='',admin_tls_key='' WHERE id=1`); err != nil {
+			t.Fatalf("seed admin TLS config: %v", err)
+		}
+		certPEM, keyPEM, err := generateTestCert("u13-10-replace.example.com", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+		if err != nil {
+			t.Fatalf("generate cert pair: %v", err)
+		}
+
+		sendJSON(t, map[string]any{"enabled": true, "mode": "upload", "cert_file": certPEM, "key_file": keyPEM})
+
+		if detail := latestDetail(t); !strings.Contains(detail, "证书：已更换（来源 upload）") {
+			t.Fatalf("audit detail=%q, want 含「证书：已更换（来源 upload）」", detail)
+		}
+		// 等待 restartProcess 的延迟退出 goroutine 在桩生效期内消费，避免清理
+		// 还原 exitProcess 后被迟到的 os.Exit 打穿测试进程（同既有用例口径）。
+		select {
+		case <-exited:
+		case <-time.After(time.Second):
+			t.Fatal("restart was not scheduled")
+		}
+	})
+
+	t.Run("仅开关未换证书", func(t *testing.T) {
+		initializeRuleFeatureTestDB(t)
+		oldExit := exitProcess
+		exited := make(chan struct{}, 1)
+		exitProcess = func(int) { exited <- struct{}{} }
+		t.Cleanup(func() { exitProcess = oldExit })
+		certPEM, keyPEM, err := generateTestCert("u13-10-toggle.example.com", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+		if err != nil {
+			t.Fatalf("generate cert pair: %v", err)
+		}
+		if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=1,admin_tls_mode='upload',
+			admin_tls_cert=?,admin_tls_key=? WHERE id=1`, certPEM, keyPEM); err != nil {
+			t.Fatalf("seed admin TLS config: %v", err)
+		}
+
+		sendJSON(t, map[string]any{"enabled": false})
+
+		detail := latestDetail(t)
+		if !strings.Contains(detail, "证书：未更换") {
+			t.Fatalf("audit detail=%q, want 含「证书：未更换」", detail)
+		}
+		if strings.Contains(detail, "已更换") {
+			t.Fatalf("audit detail=%q, want 不应声称证书更换（本次仅切换启用态）", detail)
+		}
+		select {
+		case <-exited:
+		case <-time.After(time.Second):
+			t.Fatal("restart was not scheduled")
+		}
+	})
+}

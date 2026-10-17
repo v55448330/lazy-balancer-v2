@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -357,8 +356,8 @@ func TestIP2RegionUpdateRun_reloadFailureFallsBackToDistOnFreshInstall(t *testin
 	if status != "failed" {
 		t.Fatalf("update_status=%q, want failed", status)
 	}
-	if version != "unknown" {
-		t.Fatalf("version=%q, want unknown (保持旧版本)", version)
+	if version != "bundled" {
+		t.Fatalf("version=%q, want bundled (dist 基线，版本不可知)", version)
 	}
 }
 
@@ -448,7 +447,7 @@ func TestIP2RegionUpdateRun_installReloadFailureGoesToRollback(t *testing.T) {
 		t.Fatalf("update_status=%q, want failed", status)
 	}
 	if version != "v3.0.0" {
-		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+		t.Fatalf("version=%q, want v3.0.0 (回滚到更新前基线时回写 prevVersion)", version)
 	}
 	if !strings.Contains(message, "重载 ip2region 内存索引失败") {
 		t.Fatalf("message=%q, want 注明内存热换失败", message)
@@ -721,8 +720,8 @@ func TestIP2RegionUpdateRun_rollbackDistCopySuccessReloadFailKeepsBaseline(t *te
 	if status != "failed" {
 		t.Fatalf("update_status=%q, want failed (dist copy 成功后 fail-open 前提不成立)", status)
 	}
-	if version != "v3.0.0" {
-		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+	if version != "bundled" {
+		t.Fatalf("version=%q, want bundled (U02-F08: dist 回退不得冒称 prevVersion)", version)
 	}
 	if !strings.Contains(message, "重载 ip2region 内存索引失败") {
 		t.Fatalf("message=%q, want 保留热换失败注记", message)
@@ -834,19 +833,16 @@ func TestIP2RegionUpdateRun_rollbackAllBaselinesFailFailOpen(t *testing.T) {
 	// When 安装成功但 reloader 持续失败、且全部回滚基线均失败
 	m.run("manual", nil)
 
-	// Then 调用方走 fail-open：DB 记 success+新 tag，message 保留重载失败警告
-	// 并注明 Caddy 侧待下次重载生效；.bak 未被消费（保全副本）；fail-open 路径
-	// 按 F1-C 补一次 reloader 重试
+	// Then U02-F07：回滚全败时 live 是目录（非新工件普通文件）→ fail-open
+	// **被拒绝**，DB 记 failed+旧版本（不得把未验证字节认成已生效）。
 	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
-	if status != "success" {
-		t.Fatalf("update_status=%q, want success (R45 F1-A fail-open)", status)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed (fail-open precondition must reject a directory live path)", status)
 	}
-	if version != "v3.1.0" {
-		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (回写旧版本)", version)
 	}
-	if !strings.Contains(message, "重载 Caddy 配置失败") || !strings.Contains(message, "待下次重载生效") {
-		t.Fatalf("message=%q, want 重载失败警告并注明 Caddy 侧待下次重载生效", message)
-	}
+	_ = message
 	if info, err := os.Stat(ip2regionLivePath); err != nil || !info.IsDir() {
 		t.Fatalf("live path should remain the swapped-in directory (no restore succeeded): %v", err)
 	}
@@ -856,8 +852,8 @@ func TestIP2RegionUpdateRun_rollbackAllBaselinesFailFailOpen(t *testing.T) {
 	if _, err := os.Stat(ip2regionLivePath + ".tmp"); !os.IsNotExist(err) {
 		t.Fatal("copyFile tmp residue should be cleaned up after failed restore")
 	}
-	if reloads != 2 {
-		t.Fatalf("reloads=%d, want 2 (install reload fails, fail-open retry fails)", reloads)
+	if reloads != 1 {
+		t.Fatalf("reloads=%d, want 1 (fail-open rejected; no retry reloader)", reloads)
 	}
 }
 
@@ -893,118 +889,6 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	<-m.runDone
 	if m.IsRunning() {
 		t.Fatal("IsRunning()=true after run finished")
-	}
-}
-
-func TestIP2RegionSchedulerTick_autoOffDoesNothing(t *testing.T) {
-	m := newTestIP2RegionManager(t)
-	seedIP2RegionVersionRow(t, "v3.0.0", false)
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v3.0.0", nil
-	}
-
-	// When the scheduler ticks with auto_update off
-	m.schedulerTick(time.Now())
-
-	// Then nothing happens and next_update stays empty
-	if fetchCalled {
-		t.Fatal("no update should run when auto_update is off")
-	}
-	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	if nextUpdate != "" {
-		t.Fatalf("next_update=%q, want empty", nextUpdate)
-	}
-}
-
-func TestIP2RegionSchedulerTick_initializesNextUpdate(t *testing.T) {
-	m := newTestIP2RegionManager(t)
-	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v3.0.0", nil
-	}
-
-	// When the scheduler ticks with auto on and no next_update recorded
-	m.schedulerTick(now)
-
-	// Then next_update is scheduled 24h out without running immediately
-	if fetchCalled {
-		t.Fatal("first tick should only schedule, not run")
-	}
-	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	// R69（用户报告修复）：成功路径以 DB 时钟再刷新 next_update=+24h——断言
-	// 收敛为非空未来排程（tick 预写与成功刷新任一生效即满足原意图）。
-	if nextUpdate == "" || nextUpdate <= now.Format(crsTimeLayout) {
-		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format(crsTimeLayout))
-	}
-}
-
-func TestIP2RegionSchedulerTick_runsWhenDue(t *testing.T) {
-	m := newTestIP2RegionManager(t)
-	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1",
-		now.Add(-time.Hour).Format(crsTimeLayout)); err != nil {
-		t.Fatal(err)
-	}
-
-	fetched := make(chan struct{})
-	var fetchOnce func()
-	fetchOnce = func() { close(fetched) }
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		if fetchOnce != nil {
-			fetchOnce()
-			fetchOnce = nil
-		}
-		return "v3.0.0", nil // same version -> auto no-op, finishes fast
-	}
-
-	// When the scheduler ticks past next_update
-	m.schedulerTick(now)
-
-	// Then an auto update starts and next_update is pushed 24h out
-	select {
-	case <-fetched:
-	case <-time.After(5 * time.Second):
-		t.Fatal("due scheduler tick should start an auto update")
-	}
-	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	// R69（用户报告修复）：成功路径以 DB 时钟再刷新 next_update=+24h——断言
-	// 收敛为非空未来排程（tick 预写与成功刷新任一生效即满足原意图）。
-	if nextUpdate == "" || nextUpdate <= now.Format(crsTimeLayout) {
-		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format(crsTimeLayout))
-	}
-}
-
-func TestIP2RegionSchedulerTick_slaveSkips(t *testing.T) {
-	m := newTestIP2RegionManager(t)
-	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
-		t.Fatal(err)
-	}
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v3.0.0", nil
-	}
-
-	// When the scheduler ticks on a slave node
-	m.schedulerTick(time.Now())
-
-	// Then it does nothing
-	if fetchCalled {
-		t.Fatal("slave node must not run IP2Region updates")
-	}
-	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	if nextUpdate != "" {
-		t.Fatalf("next_update=%q, want empty on slave", nextUpdate)
 	}
 }
 
@@ -1090,8 +974,8 @@ func TestWriteIP2RegionUpdateLog_rotatesAtSize(t *testing.T) {
 		WriteIP2RegionUpdateLog("INFO", "checking", "x")
 	}
 
-	// R63-P2-3：写入落 tasks/ip2region.log（轮转归 taskLogsHousekeeping——
-	// 由 crslog_test.go TestTaskLogsHousekeeping_rotatesAtConfiguredThreshold 钉）
+	// R63-P2-3：写入落 tasks/ip2region.log（写前尺寸滚动统一入口；
+	// 保留期清理由 crslog_test.go TestTaskLogsHousekeeping_retentionOnlyDoesNotRotate 钉）
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1172,5 +1056,52 @@ func TestIP2RegionUpdateRun_slaveAbortsSkipSemantics(t *testing.T) {
 	}
 	if failed != 0 || skipped != 1 {
 		t.Fatalf("failed=%d skipped=%d, want 0/1（从节点中止不得记更新失败）", failed, skipped)
+	}
+}
+
+func TestIP2RegionUpdateRun_usesTaskRunStartedAt(t *testing.T) {
+	// Given：task_runs 预插行与期望 UTC 时刻。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "", errors.New("stop after start") }
+	runID, wantUTC := seedTaskRunForTime(t, "ip2region", "2026-10-17 14:09:17")
+
+	// When：经生产 StartUpdate 入口运行。
+	done, err := m.StartUpdate("manual", &taskengine.RunContext{Ctx: context.Background(), RunID: runID, Trigger: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	// Then：版本行 started_at 与 task_runs 同源。
+	var startedAt string
+	if err := db.DB.QueryRow(`SELECT COALESCE(started_at,'') FROM security_ip2region_version WHERE id=1`).Scan(&startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if startedAt != wantUTC {
+		t.Fatalf("started_at=%q, want task_runs 同源 UTC %q", startedAt, wantUTC)
+	}
+}
+
+func TestIP2RegionUpdateRun_bundledSentinelCanEstablishRemoteBaseline(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "bundled", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.reloader = func() error { return nil }
+
+	m.run("manual", nil)
+
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "success" || version != "v3.1.0" {
+		t.Fatalf("bundled baseline update: version=%q status=%q, want v3.1.0/success", version, status)
+	}
+}
+
+func TestIP2RegionFailOpenPrecondition_rejectsMissingLive(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	m.newXdbSha = "deadbeef"
+	if m.failOpenPreconditionHolds() {
+		t.Fatal("missing live xdb must not satisfy fail-open precondition")
 	}
 }

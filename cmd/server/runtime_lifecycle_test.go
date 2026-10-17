@@ -63,7 +63,13 @@ func TestRuntimeLifecycle_StopACME_waitsForWorkerExit(t *testing.T) {
 func TestRuntimeLifecycle_StopACME_clearsActiveCertificateService(t *testing.T) {
 	// Given：临时库 + 一张已过期手动证书，注入真实证书服务
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	t.Cleanup(func() { db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB })
+	t.Cleanup(func() {
+		// U12-F12（第 78 轮）：仅复位指针会泄漏本测试打开的三个 *sql.DB——
+		// 先关闭再恢复外层句柄。
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize db: %v", err)
 	}

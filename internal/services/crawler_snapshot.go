@@ -135,9 +135,14 @@ func upsertCrawlerIPList(engineID string, entries []string) error {
 		return scanErr
 	}
 	if scanErr == nil && existing == string(encoded) {
-		if _, statErr := os.Stat(crawlerIPListFile); statErr == nil {
-			return nil // 内容与快照均在场，跳过重复 DB 回写和快照重写
+		// U02-F03：快速路径必须校验**快照内容**（本引擎条目 == DB 条目），
+		// 不能只看文件存在——文件缺失/坏 JSON/陈旧内容（首轮快照写失败、
+		// 升级遗留）都要从 DB/entries 重建；writeCrawlerIPListSnapshot 从 DB
+		// 全量重建并覆盖本引擎，其他引擎分片保留。
+		if crawlerSnapshotMatchesEngine(engineID, entries) {
+			return nil
 		}
+		return writeCrawlerIPListSnapshot(engineID, entries)
 	}
 	exists := 0
 	if scanErr == nil {
@@ -154,6 +159,32 @@ func upsertCrawlerIPList(engineID string, entries []string) error {
 	}
 	// DB 与运行快照是同一更新事务语义：快照写失败不得继续标记源成功。
 	return writeCrawlerIPListSnapshot(engineID, entries)
+}
+
+// crawlerSnapshotMatchesEngine 快照文件可解析且本引擎条目集合与期望一致。
+func crawlerSnapshotMatchesEngine(engineID string, entries []string) bool {
+	data, err := os.ReadFile(crawlerIPListFile)
+	if err != nil {
+		return false
+	}
+	var all map[string][]string
+	if err := json.Unmarshal(data, &all); err != nil {
+		return false
+	}
+	got, ok := all[engineID]
+	if !ok || len(got) != len(entries) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(got))
+	for _, v := range got {
+		seen[v] = struct{}{}
+	}
+	for _, v := range entries {
+		if _, ok := seen[v]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // writeCrawlerIPListSnapshotAll 全量快照：写 map[engine][]string JSON

@@ -75,7 +75,7 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		return nil
 	}
 	TaskLogf("crawlerbot-update", "checking", "开始更新爬虫地址库（%d 个启用源）", len(sources))
-	runStarted := crawlerRunStartedAt(rc)
+	runStarted := taskRunStartedAt(&rc)
 	var firstErr error
 	successCount, failedCount, totalEntries := 0, 0, 0
 	for _, src := range sources {
@@ -136,21 +136,6 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		TaskLogf("crawlerbot-update", "success", "爬虫地址更新完成：%d 个源成功，共 %d 条", successCount, totalEntries)
 	}
 	return firstErr
-}
-
-// crawlerRunStartedAt 取任务引擎预插行的 started_at（配置时区墙钟）并归一
-// 为 UTC 存储；前端 formatDate 再按配置时区显示，与任务监控展示同一时刻。
-// 直接调用（RunID=0）或行不可读时回退当前 UTC。
-func crawlerRunStartedAt(rc taskengine.RunContext) string {
-	if rc.RunID > 0 {
-		var started string
-		if err := db.DB.QueryRow(`SELECT started_at FROM task_runs WHERE id=?`, rc.RunID).Scan(&started); err == nil && started != "" {
-			if instant, err := time.ParseInLocation(crsTimeLayout, started, CurrentLocation()); err == nil {
-				return instant.UTC().Format(crsTimeLayout)
-			}
-		}
-	}
-	return time.Now().UTC().Format(crsTimeLayout)
 }
 
 // markCrawlerSourceRunning 源开始态：任务开始时刻统一以 UTC 写 started_at/

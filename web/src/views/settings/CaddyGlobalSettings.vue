@@ -31,20 +31,20 @@
 
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
-        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="4096" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">MB，请求体上限；0 = 默认 128</span>
+        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="1" :max="4096" controls-position="right" class="number-input" />
+        <span class="form-tip-inline tip-nowrap">MB，请求体上限；默认 128，必须为 1-4096（0 不再表示默认）</span>
       </el-form-item>
       <el-form-item label="读取超时">
-        <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">秒，读请求超时；0 = 无超时</span>
+        <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="1" :max="86400" controls-position="right" class="number-input" />
+        <span class="form-tip-inline tip-nowrap">秒，读请求超时；必须为 1-86400（0 不再表示无超时）</span>
       </el-form-item>
       <el-form-item label="写入超时">
-        <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">秒，写响应超时；0 = 无超时</span>
+        <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="1" :max="86400" controls-position="right" class="number-input" />
+        <span class="form-tip-inline">秒，写响应超时；必须为 1-86400（0 不再表示无超时）</span>
       </el-form-item>
       <el-form-item label="空闲超时">
-        <el-input-number v-model="settings.http_idle_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">秒，Keep-Alive 空闲超时；0 = 默认</span>
+        <el-input-number v-model="settings.http_idle_timeout" :disabled="isReadOnly" :min="1" :max="86400" controls-position="right" class="number-input" />
+        <span class="form-tip-inline">秒，Keep-Alive 空闲超时；必须为 1-86400（0 不再表示默认）</span>
       </el-form-item>
       <el-form-item label="上游 Keepalive">
         <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />

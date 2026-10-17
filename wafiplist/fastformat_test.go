@@ -12,6 +12,8 @@ func TestFastFile_WriteReadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.fast")
 
+	// 乱序输入：本函数原地排序（U14-12 契约声明）。期望值用**独立**的已序
+	// 切片——旧测试复用被原地排序的同一入参比较，删除排序仍绿（假绿）。
 	v4 := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
 		netip.MustParsePrefix("192.168.1.0/24"),
@@ -20,6 +22,15 @@ func TestFastFile_WriteReadRoundtrip(t *testing.T) {
 	v6 := []netip.Prefix{
 		netip.MustParsePrefix("2001:db8::/32"),
 		netip.MustParsePrefix("::1/128"),
+	}
+	wantV4 := []netip.Prefix{
+		netip.MustParsePrefix("1.2.3.4/32"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("192.168.1.0/24"),
+	}
+	wantV6 := []netip.Prefix{
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("2001:db8::/32"),
 	}
 
 	if err := WriteFastFile(path, v4, v6); err != nil {
@@ -37,12 +48,12 @@ func TestFastFile_WriteReadRoundtrip(t *testing.T) {
 	if len(state.V6) != len(v6) {
 		t.Fatalf("V6 count=%d, want %d", len(state.V6), len(v6))
 	}
-	for i, p := range v4 {
+	for i, p := range wantV4 {
 		if state.V4[i] != p {
 			t.Errorf("V4[%d]=%v, want %v", i, state.V4[i], p)
 		}
 	}
-	for i, p := range v6 {
+	for i, p := range wantV6 {
 		if state.V6[i] != p {
 			t.Errorf("V6[%d]=%v, want %v", i, state.V6[i], p)
 		}

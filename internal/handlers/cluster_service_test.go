@@ -49,7 +49,7 @@ func seedControlNode(t *testing.T, clusterToken string, extra map[string]any) in
 // issueControlTicketOnTestDB 在测试库上以主节点身份签发票据，随后切换为从节点身份。
 func issueControlTicketOnTestDB(t *testing.T, nodeID int, clusterToken, action string) string {
 	t.Helper()
-	service := services.NewClusterService(db.DB, nil, "")
+	service := services.NewClusterService(db.DB, "")
 	issued, err := service.IssueServiceControlTicket(context.Background(), nodeID, action, time.Now())
 	if err != nil {
 		t.Fatalf("issue control ticket: %v", err)
@@ -65,7 +65,11 @@ func becomeSlave(t *testing.T, nodeID int, clusterToken string) {
 }
 
 func postServiceControl(router *gin.Engine, action, ticket string) *httptest.ResponseRecorder {
-	body, _ := json.Marshal(models.ClusterServiceControlRequest{Action: action, Ticket: ticket})
+	return postServiceControlWithOperator(router, action, ticket, "")
+}
+
+func postServiceControlWithOperator(router *gin.Engine, action, ticket, operator string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(models.ClusterServiceControlRequest{Action: action, Ticket: ticket, Operator: operator})
 	request := httptest.NewRequest(http.MethodPost, "/service-control", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -74,7 +78,7 @@ func postServiceControl(router *gin.Engine, action, ticket string) *httptest.Res
 }
 
 func newSlaveTestHandler(cfg *config.Config) (*Handlers, *gin.Engine) {
-	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, nil, ""), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
+	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, ""), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
 	router := gin.New()
 	router.POST("/service-control", handler.ClusterServiceControl)
 	return handler, router
@@ -205,7 +209,7 @@ func TestClusterServiceControl_restart_app_delays_exit(t *testing.T) {
 	clusterServiceExitDelay = 50 * time.Millisecond
 	defer func() { clusterServiceExit, clusterServiceExitDelay = originalExit, originalDelay }()
 
-	response := postServiceControl(router, models.ClusterServiceActionRestartApp, ticket)
+	response := postServiceControlWithOperator(router, models.ClusterServiceActionRestartApp, ticket, "alice")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "服务正在重启") {
 		t.Fatalf("status=%d body=%s, want 200 restarting", response.Code, response.Body.String())
 	}
@@ -218,6 +222,14 @@ func TestClusterServiceControl_restart_app_delays_exit(t *testing.T) {
 	details := auditDetailsServiceControlRows(t)
 	if len(details) == 0 || !strings.Contains(details[0], "操作：restart_app") {
 		t.Fatalf("audit details=%v, want restart_app row", details)
+	}
+	// U05-F04：restart_app 与 caddy 分支同口径记录主节点侧实际操作人。
+	var username string
+	if err := db.AuditDB.QueryRow("SELECT username FROM audit_log WHERE action='服务控制' AND resource='节点服务' ORDER BY id DESC LIMIT 1").Scan(&username); err != nil {
+		t.Fatalf("read restart_app audit username: %v", err)
+	}
+	if username != "alice" {
+		t.Fatalf("restart_app audit username=%q, want operator %q", username, "alice")
 	}
 }
 
@@ -305,7 +317,7 @@ func TestClusterServiceControl_rejects_replay(t *testing.T) {
 
 func newMasterTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}, clusterService: services.NewClusterService(db.DB, nil, "")}
+	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}, clusterService: services.NewClusterService(db.DB, "")}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set("username", "admin")

@@ -19,15 +19,18 @@ func TestIP2RegionUpdateRun_versionComparisonGate(t *testing.T) {
 		wantDownload bool
 		wantVersion  string
 		wantMessage  string
+		wantStatus   string
 	}{
 		// 目标形状：远端更旧 → 跳过（现行精确相等判定会下载安装更旧库）
-		{"older remote tag skipped", "v4.5.0", "v4.4.0", false, "v4.5.0", "已是最新版本"},
+		{"older remote tag skipped", "v4.5.0", "v4.4.0", false, "v4.5.0", "已是最新版本", "success"},
+		// U02-F05：非数字但精确相等 → 跳过（与格式无关）
+		{"equal non-numeric tag skipped", "release-2026_09", "release-2026_09", false, "release-2026_09", "已是最新版本", "success"},
 		// 回归形状：相等 → 跳过
-		{"equal remote tag skipped", "v4.5.0", "v4.5.0", false, "v4.5.0", "已是最新版本"},
+		{"equal remote tag skipped", "v4.5.0", "v4.5.0", false, "v4.5.0", "已是最新版本", "success"},
 		// 回归形状：远端更新 → 照常更新
-		{"newer remote tag updates", "v4.4.0", "v4.5.0", true, "v4.5.0", ""},
-		// 畸形形状：tag 不可解析 → 保持「不等即更新」
-		{"malformed remote tag updates", "v4.5.0", "not-a-version", true, "not-a-version", ""},
+		{"newer remote tag updates", "v4.4.0", "v4.5.0", true, "v4.5.0", "", "success"},
+		// U02-F05：不同且不可比较 → 显式失败（不再隐含更新/静默降级）
+		{"malformed remote tag rejected", "v4.5.0", "not-a-version", false, "v4.5.0", "", "failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,13 +54,13 @@ func TestIP2RegionUpdateRun_versionComparisonGate(t *testing.T) {
 				t.Fatalf("downloadCalled=%v, want %v", downloadCalled, tc.wantDownload)
 			}
 			version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
-			if status != "success" {
-				t.Fatalf("update_status=%q, want success", status)
+			if status != tc.wantStatus {
+				t.Fatalf("update_status=%q, want %q", status, tc.wantStatus)
 			}
 			if version != tc.wantVersion {
 				t.Fatalf("version=%q, want %q", version, tc.wantVersion)
 			}
-			if message != tc.wantMessage {
+			if tc.wantMessage != "" && message != tc.wantMessage {
 				t.Fatalf("message=%q, want %q", message, tc.wantMessage)
 			}
 		})

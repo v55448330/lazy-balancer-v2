@@ -91,6 +91,19 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "用户创建成功", Data: gin.H{"id": id}})
 }
 
+// passwordResetColumns 改密时必须同步更新的列片段（U07-F02 单一事实源）：
+// 密码哈希/变更时间/版本递增 + 登录失败计数与锁定清零。UpdateUser 的密码分支
+// 与 ResetUserPassword 共用，防止两处再次分裂。
+func passwordResetColumns() []string {
+	return []string{
+		"password_hash = ?",
+		"password_changed_at = datetime('now')",
+		"password_version = password_version + 1",
+		"login_failed_attempts = 0",
+		"login_locked_until = NULL",
+	}
+}
+
 func (h *Handlers) UpdateUser(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -201,7 +214,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		changed = append(changed, "昵称："+oldDisplayName+"→"+*req.DisplayName)
 	}
 	if passwordHash != "" {
-		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")
+		// U07-F02：改密同时清空登录锁定（与 ResetUserPassword 共用同一列片段）
+		// ——否则锁定态用户改密后仍被 auth.go 的锁判定拒绝。
+		sets = append(sets, passwordResetColumns()...)
 		args = append(args, passwordHash)
 		changed = append(changed, "密码")
 	}
@@ -531,7 +546,8 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 			}
 		}
 	}()
-	result, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET password_hash = ?, password_changed_at = datetime('now'), password_version = password_version + 1, login_failed_attempts = 0, login_locked_until = NULL WHERE id = ?", string(hash), id)
+	query := "UPDATE users SET " + strings.Join(passwordResetColumns(), ", ") + " WHERE id = ?"
+	result, err := tx.ExecContext(c.Request.Context(), query, string(hash), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return

@@ -22,8 +22,11 @@ type FastFileState struct {
 	V6 []netip.Prefix // 排序不相交 IPv6 前缀
 }
 
-// WriteFastFile 将排序前缀集序列化为 .fast 二进制格式并原子写入。
-// 输入必须已排序且不相交（CIDR 聚合后）——本函数不做排序/聚合。
+// WriteFastFile 将前缀集序列化为 .fast 二进制格式并原子写入。
+// 输入应已聚合为不相交集合；为守住二分查询契约，本函数会对 prefix **防御性
+// 原地排序**——传入切片的元素顺序会被改写（U14-12：旧注释「不做排序」与实现
+// 相反，且调用方若复用同一底层数组会被静默改序）。本函数不聚合/不去重；
+// 嵌套/同址形态由 ReadFastFile 拒绝。
 func WriteFastFile(path string, v4, v6 []netip.Prefix) error {
 	// 防御性排序：.fast 的二分查询契约要求升序不相交。调用方（生产路径
 	// AggregatePrefixes）已排序，此处兜底防静默损坏——乱序输入会产出

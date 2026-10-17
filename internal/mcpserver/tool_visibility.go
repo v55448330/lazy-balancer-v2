@@ -16,9 +16,11 @@ type readOnlyResolver func(apiKey string) (bool, error)
 // ReadOnlyProbeTools 只读 Key 可见的读探测 POST 工具清单（REST 白名单
 // auditpolicy.go readOnlyWriteRoutes 同口径）——serveWithToolVisibility 与
 // 可见性钉测试（server_test.go）共用的单一事实源（第 51 轮审计 P5-4：
-// 原工具侧/测试侧两份手工平行清单收敛为一份）。
+// 原工具侧/测试侧两份手工平行清单收敛为一份）。L04-03（第 78 轮）：
+// test_certificate_config 会写 DNS TXT 验证记录，移出探测集（工具本身保留，
+// 管理员仍可用；只读 Key 不可见）。
 var ReadOnlyProbeTools = map[string]struct{}{
-	"test_ca_provider": {}, "test_certificate_config": {}, "parse_certificate": {},
+	"test_ca_provider": {}, "parse_certificate": {},
 	"validate_import": {}, "preview_config": {},
 }
 

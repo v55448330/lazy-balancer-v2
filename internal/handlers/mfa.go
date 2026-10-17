@@ -344,10 +344,10 @@ func mfaStepUpVerifiedInContext(c *gin.Context) bool {
 	return ok && v == true
 }
 
-// MFAResetByAdmin POST /users/:id/mfa/reset — 重置指定用户（含自己）。
-// R72 二次（用户裁决）：重置需确认 + 校验——操作者自己启用了 MFA 时须提供有效
-// 验证码（防会话劫持后一键拆第二因子）；操作者是管理员（admin 组路由门）或
-// 目标即本人（self-service）。请求体可选 {code}。
+// MFAResetByAdmin POST /users/:id/mfa/reset — 仅 admin 组可达（middleware.go
+// 路由门）；本人自助解绑请用 POST /auth/mfa/disable。重置需确认 + 校验——操作者
+// 自己启用了 MFA 时须提供有效验证码（防会话劫持后一键拆第二因子）。请求体
+// 可选 {code}。
 func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {

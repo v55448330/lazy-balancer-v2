@@ -1,9 +1,15 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -128,6 +134,141 @@ func TestMigrateAuditVocabulary_convertsEveryLegacyEntry(t *testing.T) {
 		if after[i] != before[i] {
 			t.Fatalf("second run changed row %d: (%q,%q) -> (%q,%q)（迁移须幂等）", i+1, before[i][0], before[i][1], after[i][0], after[i][1])
 		}
+	}
+}
+
+// U12-F05（第 78 轮）：归一化此前每次启动无条件执行 30 条 UPDATE（多数零命中
+// 仍走全表扫描/无索引 resource 列）。一次性 marker 置位后二次调用必须零写语句
+// ——用 PRAGMA query_only 把「试图写」变成可见错误：若仍执行 UPDATE，会打出
+// 「audit vocabulary migration failed」日志。
+func TestMigrateAuditVocabulary_secondRunIssuesNoUpdate(t *testing.T) {
+	// Given：一条链式旧词条，首次归一完成
+	auditDB := openVocabularyTestAuditDB(t)
+	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', '重载', 'Caddy 配置', '', '')"); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	migrateAuditVocabulary()
+
+	var fingerprint string
+	if err := auditDB.QueryRow(`SELECT fingerprint FROM audit_migration_state WHERE name='audit_vocabulary_migrated'`).Scan(&fingerprint); err != nil {
+		t.Fatalf("read migration marker: %v", err)
+	}
+	if fingerprint == "" {
+		t.Fatalf("marker fingerprint must not be empty")
+	}
+
+	// When：把连接切成只读并二次调用
+	auditDB.SetMaxOpenConns(1)
+	auditDB.SetMaxIdleConns(1)
+	if _, err := auditDB.Exec("PRAGMA query_only=1"); err != nil {
+		t.Fatalf("set query_only: %v", err)
+	}
+	var logBuf bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(oldOut)
+	migrateAuditVocabulary()
+
+	// Then：零 UPDATE 尝试（否则只读连接报错并被记日志），数据保持归一终态
+	if strings.Contains(logBuf.String(), "audit vocabulary migration failed") {
+		t.Fatalf("second run attempted writes after marker was set: %s", logBuf.String())
+	}
+	if _, err := auditDB.Exec("PRAGMA query_only=0"); err != nil {
+		t.Fatalf("reset query_only: %v", err)
+	}
+	got := auditVocabularySnapshot(t, auditDB)
+	if len(got) != 1 || got[0] != [2]string{"重载", "Caddy服务"} {
+		t.Fatalf("rows=%v, want normalized terminal state", got)
+	}
+}
+
+// U12-F04（第 78 轮）：归一表旧侧的成对字面量判定从 services 测试迁入本包
+// （谓词导出已删除）。扫描 internal/ 全部非测试源码的审计写入口调用，action/
+// resource 均为字面量且命中归一表旧侧即违规——动态传参不参与（其词条在调用方
+// 字面量处已由 services 的词数门扫描）。归一表多为动作作用域条目（重载+
+// Caddy配置→Caddy服务），必须成对判定。
+func TestAuditWritePointsUseCanonicalVocabulary(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "internal"))
+	if err != nil {
+		t.Fatalf("resolve internal dir: %v", err)
+	}
+	// 写入口 → (action 参数下标, resource 参数下标)。
+	argIndices := map[string][2]int{
+		"RecordAuditLog":                    {1, 2},
+		"recordAudit":                       {1, 2},
+		"recordSystemAudit":                 {0, 1},
+		"recordAuthenticationSecurityAudit": {1, 2},
+	}
+	isRetired := func(action, resource string) bool {
+		for _, r := range auditVocabularyRenames {
+			if r.oldAction != "" && r.oldAction != action {
+				continue
+			}
+			if r.oldResource != "" && r.oldResource != resource {
+				continue
+			}
+			return true
+		}
+		return false
+	}
+	literal := func(e ast.Expr) (string, bool) {
+		lit, ok := e.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		if unquoted, err := strconv.Unquote(lit.Value); err == nil {
+			return unquoted, true
+		}
+		return strings.Trim(lit.Value, "\""), true
+	}
+
+	var violations []string
+	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Errorf("parse %s: %v", path, err)
+			return nil
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			var name string
+			switch fn := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			case *ast.Ident:
+				name = fn.Name
+			}
+			indices, ok := argIndices[name]
+			if !ok || indices[1] >= len(call.Args) {
+				return true
+			}
+			action, ok := literal(call.Args[indices[0]])
+			if !ok || action == "" {
+				return true
+			}
+			resource, ok := literal(call.Args[indices[1]])
+			if !ok || resource == "" {
+				return true
+			}
+			if isRetired(action, resource) {
+				violations = append(violations, fset.Position(call.Pos()).String()+" ("+strconv.Quote(action)+","+strconv.Quote(resource)+") 命中归一表旧侧，请改用规范名")
+			}
+			return true
+		})
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk internal: %v", walkErr)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("审计写点使用归一表旧词条:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

@@ -3,64 +3,50 @@ package handlers
 // U8-P4-1（Round 62 审计）：ConfigFieldSections 必须覆盖 config_changes.go
 // planConfigChanges 全部 add() 字段，否则字段级审计归因落「全局配置」
 // （github_token 曾漏——R72 同批字段，SYS-2 同族漏点）。
-// 字段清单为 config_changes.go add() 首参的硬编码镜像（R-8 验证源直取；
-// 两侧同步责任由本测试与 ConfigFieldSections 注释双向钉住）。
+// U08-F04（第 78 轮）：原用例维护一份手抄字段清单——实现新增 add() 字段时
+// 清单同步漏改即假绿（threat_screen_mode/security_events_retention_days/
+// security_events_row_cap 三字段即此形态漏检）。改为直接扫描源码提取
+// `add("field"` 首参，与 ConfigFieldSections 双向比对（源码为唯一清单）。
 
 import (
+	"os"
+	"regexp"
 	"testing"
 
 	"lazy-balancer-v2/internal/services"
 )
 
-// configChangeFieldTokens planConfigChanges 全部 add() 首参（令牌），
-// 顺序与 config_changes.go 调用顺序一致。
-var configChangeFieldTokens = []string{
-	"acme_email",
-	"dns_provider",
-	"dns_credentials",
-	"cert_expiry_days",
-	"default_ca_provider_id",
-	"cert_renewal_days",
-	"cert_renewal_attempts",
-	"log_level",
-	"timezone",
-	"github_proxy_url",
-	"github_token",
-	"audit_retention_months",
-	"server_map_lat",
-	"server_map_lon",
-	"jwt_expire_minutes",
-	"mfa_write_guard",
-	"mfa_lockout_enabled",
-	"trusted_proxy_enabled",
-	"trusted_proxy_ranges",
-	"trusted_proxy_range_refs",
-	"trusted_proxy_headers",
-	"trusted_proxy_strict",
-	"task_log_size_mb",
-	"audit_log_size_mb",
-	"runtime_log_size_mb",
-	"caddy_log_level",
-	"caddy_log_size_mb",
-	"request_body_max_size_mb",
-	"http_read_timeout",
-	"http_write_timeout",
-	"http_idle_timeout",
-	"upstream_keepalive_timeout",
-	"proxy_dial_timeout",
-	"proxy_response_header_timeout",
-	"proxy_read_timeout",
-	"proxy_write_timeout",
-	"proxy_stream_timeout",
-	"proxy_flush_interval",
-	"proxy_stream_close_delay",
-	"server_tokens_hidden",
-	"access_log_json",
-	"access_log_format",
+// configChangeAddFieldRe 匹配 planConfigChanges 的 add("field", ...) 调用；
+// 闭包定义行 `add := func(field, ...)` 不含 `add("`，不会误命中。
+var configChangeAddFieldRe = regexp.MustCompile(`add\("([^"]+)",`)
+
+// configChangeFieldTokensFromSource 从源码提取 planConfigChanges 全部 add()
+// 首参（令牌），顺序与实现一致。
+func configChangeFieldTokensFromSource(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile("config_changes.go")
+	if err != nil {
+		t.Fatalf("read config_changes.go: %v", err)
+	}
+	matches := configChangeAddFieldRe.FindAllStringSubmatch(string(data), -1)
+	fields := make([]string, 0, len(matches))
+	for _, m := range matches {
+		fields = append(fields, m[1])
+	}
+	return fields
 }
 
-func TestConfigFieldSections_coverAllConfigChangeFields(t *testing.T) {
-	for _, field := range configChangeFieldTokens {
+func TestConfigFieldSections_matchConfigChangeSource(t *testing.T) {
+	fields := configChangeFieldTokensFromSource(t)
+	if len(fields) < 40 {
+		t.Fatalf("源码提取 add() 字段=%d 个（期望 ≥40）——提取器失配或计划函数结构变更", len(fields))
+	}
+	seen := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if seen[field] {
+			continue // 同字段多次 add() 合法
+		}
+		seen[field] = true
 		section, ok := services.ConfigFieldSections[field]
 		if !ok {
 			t.Errorf("ConfigFieldSections missing add() field %q: audit attribution falls back to 全局配置", field)
@@ -70,14 +56,24 @@ func TestConfigFieldSections_coverAllConfigChangeFields(t *testing.T) {
 			t.Errorf("ConfigFieldSections[%q] has empty section", field)
 		}
 	}
+	// 反向：映射不得含 add() 未使用的孤儿条目（字段改名/删除后的残留漂移）。
+	for field := range services.ConfigFieldSections {
+		if !seen[field] {
+			t.Errorf("ConfigFieldSections 含 add() 未使用的字段 %q——映射残留/字段已改名", field)
+		}
+	}
 }
 
 func TestConfigFieldSections_recentDriftKeysPinned(t *testing.T) {
-	// 近两轮漂移键显式钉死（U8-P4-1 + SYS-2），防止镜像清单漏列时静默通过。
+	// 近两轮漂移键显式钉死（U8-P4-1 + SYS-2 + U08-F04），防止镜像清单漏列时
+	// 静默通过。
 	pinned := map[string]string{
-		"github_token":        "基础设置",
-		"mfa_write_guard":     "基础设置",
-		"mfa_lockout_enabled": "基础设置",
+		"github_token":                   "基础设置",
+		"mfa_write_guard":                "基础设置",
+		"mfa_lockout_enabled":            "基础设置",
+		"threat_screen_mode":             "基础设置",
+		"security_events_retention_days": "基础设置",
+		"security_events_row_cap":        "基础设置",
 	}
 	for field, want := range pinned {
 		if got := services.ConfigFieldSections[field]; got != want {

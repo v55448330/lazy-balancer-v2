@@ -41,6 +41,49 @@ type clusterSnapshotCache struct {
 
 var clusterSnapshotCaches sync.Map
 
+// snapshotRowIsolation 是单行损坏数据的限频告警状态（U05-F01，第 78 轮）：
+// 同一「表:行 ID」在 snapshotRowIsolationWindow 内只告警一次，避免每次快照
+// 重建/每轮同步把同一坏行刷成日志与审计洪泛。
+var (
+	snapshotRowIsolationMu     sync.Mutex
+	snapshotRowIsolationSeen   = map[string]time.Time{}
+	snapshotRowIsolationWindow = 10 * time.Minute
+	// snapshotRowIsolationHook 测试观察点（生产恒 nil）。
+	snapshotRowIsolationHook func(table string, rowID any, err error)
+)
+
+// resetSnapshotRowIsolationThrottle 清空限频表（仅测试使用）。
+func resetSnapshotRowIsolationThrottle() {
+	snapshotRowIsolationMu.Lock()
+	snapshotRowIsolationSeen = map[string]time.Time{}
+	snapshotRowIsolationMu.Unlock()
+}
+
+// warnCorruptedSnapshotRow 显式隔离（跳过）单行损坏数据并留下结构化告警：
+// 快照是主→从的整包下发通道，一行 JSON 畸形不得让全部规则/策略/节点数据
+// 500——坏行不进入快照（从节点保留本地既有行），告警必须点名表与行 ID。
+func warnCorruptedSnapshotRow(table string, rowID any, err error) {
+	key := fmt.Sprintf("%s:%v", table, rowID)
+	now := time.Now()
+	snapshotRowIsolationMu.Lock()
+	last, seen := snapshotRowIsolationSeen[key]
+	duplicate := seen && now.Sub(last) < snapshotRowIsolationWindow
+	if !duplicate {
+		snapshotRowIsolationSeen[key] = now
+	}
+	hook := snapshotRowIsolationHook
+	snapshotRowIsolationMu.Unlock()
+	if duplicate {
+		return
+	}
+	if hook != nil {
+		hook(table, rowID, err)
+	}
+	Logf("error", "集群快照隔离损坏行：表 %s 行 %v 解析失败（该行不下发，健康行照常同步；请修复主节点数据）: %v", table, rowID, err)
+	RecordAuditLog("system", "同步失败", "集群快照",
+		FormatAuditDetail(fmt.Sprintf("表 %s 行 %v", table, rowID), "行数据解析失败，已隔离该行", err.Error()), "")
+}
+
 type snapshotStore interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -630,7 +673,9 @@ func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store 
 			return nil, fmt.Errorf("扫描快照自定义安全规则: %w", err)
 		}
 		if err := json.Unmarshal([]byte(conditionsJSON), &rule.Conditions); err != nil {
-			return nil, fmt.Errorf("解析快照自定义安全规则 %d 的条件: %w", rule.ID, err)
+			// U05-F01：单行损坏不得整包 500——隔离该行（不下发），健康行照常发布。
+			warnCorruptedSnapshotRow("security_custom_rules", rule.ID, err)
+			continue
 		}
 		rules = append(rules, rule)
 	}
@@ -890,7 +935,10 @@ func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapsho
 		}
 		if upstreamsJSON.Valid {
 			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
-				return nil, fmt.Errorf("解析快照路径规则 %d 的上游: %w", pathRule.ID, err)
+				// U05-F01：同族收敛——上游列畸形只隔离该路由行（下发空上游会让
+				// 路由静默 502），并点名 path_rules 行 ID。
+				warnCorruptedSnapshotRow("path_rules", pathRule.ID, err)
+				continue
 			}
 		}
 		byRule[pathRule.RuleID] = append(byRule[pathRule.RuleID], pathRule)
@@ -964,7 +1012,10 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStor
 		}
 		if whitelistJSON != "" {
 			if err := json.Unmarshal([]byte(whitelistJSON), &key.MCPIPWhitelist); err != nil {
-				return nil, fmt.Errorf("解析快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
+				// U05-F01 同族：白名单畸形不能降级为空名单（会放宽 MCP 访问面），
+				// 隔离该 Key 行并点名 api_keys 行 ID。
+				warnCorruptedSnapshotRow("api_keys", key.ID, err)
+				continue
 			}
 		}
 		keys = append(keys, key)

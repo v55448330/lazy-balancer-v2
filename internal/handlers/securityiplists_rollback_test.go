@@ -242,7 +242,7 @@ func TestImportConfigBackup_cliRejectionRestoresCommittedProjection(t *testing.T
 	f := newHotPathIPListFixture(t)
 	// ImportConfigBackup 经 requireMaster——夹具未装配 ClusterService，补同款；
 	// 导入核心读 branding 配置（h.cfg.DataDir），补最小 cfg。
-	f.h.clusterService = services.NewClusterService(db.DB, nil, "")
+	f.h.clusterService = services.NewClusterService(db.DB, "")
 	f.h.cfg = &config.Config{DataDir: f.dir}
 	f.router.POST("/config/import", f.h.ImportConfigBackup)
 	policyID := seedR77InlineACLPolicy(t, `["203.0.113.5"]`)

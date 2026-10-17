@@ -146,6 +146,143 @@ func isDigits(s string) bool {
 	return len(s) > 0
 }
 
+// logStatsReadDir 是统计面的目录枚举入口（包级 var 支持测试注入计数——
+// U08-F07 断言聚合只做一次 ReadDir）。
+var logStatsReadDir = os.ReadDir
+
+// dirStats 单个基名日志文件的体量归并结果。
+type dirStats struct {
+	Active   int64
+	Rotated  int64
+	RotCount int
+}
+
+// aggregateDirStats 单次目录枚举归并匹配文件的活跃/轮转体量与归档份数
+// （U08-F07：替代「逐目录项 dirBytes → 其内部再 ReadDir」的 O(N²) 形态；
+// U08-F12：聚合累加 RotatedCount，且 .gz 归档不再冒充活跃）。
+// 返回 基名 → 归并结果。分类口径与 dirBytes 一致：
+//   - base（匹配、非轮转副本、非 .gz）计入 Active；
+//   - .1..9 移位副本、运行日志族 base.YYYYMMDD-HHMMSS、timberjack
+//     <stem>-<ts>-size.log[.gz] 副本计入所属 base 的 Rotated/RotCount；
+//   - 不归属任何匹配 base 的 .gz 按归档计入 Rotated（压缩归档不是活跃文件）。
+func aggregateDirStats(dir string, match func(name string) bool) map[string]dirStats {
+	out := map[string]dirStats{}
+	entries, err := logStatsReadDir(dir)
+	if err != nil {
+		return out
+	}
+	bases := make(map[string]struct{}, len(entries))
+	stemToBase := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !match(name) || isRotationCopyShape(name) {
+			continue
+		}
+		bases[name] = struct{}{}
+		stemToBase[strings.TrimSuffix(name, filepath.Ext(name))] = name
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		info, infoErr := e.Info()
+		if infoErr != nil {
+			continue
+		}
+		if _, isBase := bases[name]; isBase {
+			st := out[name]
+			st.Active += info.Size()
+			out[name] = st
+			continue
+		}
+		if !match(name) {
+			continue
+		}
+		if base, ok := rotationCopyBaseOf(name, bases, stemToBase); ok {
+			st := out[base]
+			st.Rotated += info.Size()
+			st.RotCount++
+			out[base] = st
+			continue
+		}
+		if strings.HasSuffix(name, ".gz") {
+			st := out[name]
+			st.Rotated += info.Size()
+			st.RotCount++
+			out[name] = st
+		}
+	}
+	return out
+}
+
+// isRotationCopyShape 按文件名形态判定轮转副本（与基名集合无关，供基名
+// 预筛避免「副本被当成 base」的循环依赖）。
+func isRotationCopyShape(name string) bool {
+	if isTimberjackRotationCopy(name) || strings.HasSuffix(name, ".gz") {
+		return true
+	}
+	// .1..9 移位副本
+	if dot := strings.LastIndexByte(name, '.'); dot > 0 && isDigits(name[dot+1:]) {
+		if n, err := strconv.Atoi(name[dot+1:]); err == nil && n >= 1 && n <= 9 {
+			return true
+		}
+	}
+	// 运行日志族 base.YYYYMMDD-HHMMSS（rest 恰 16 字符）
+	if len(name) > 17 {
+		rest := name[len(name)-16:]
+		if rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// rotationCopyBaseOf 把轮转副本归到所属 base（与 dirBytes/timestampedRotationStats
+// 同口径：移位后缀、运行日志时间戳后缀、timberjack 时间戳后缀三族）。
+func rotationCopyBaseOf(name string, bases map[string]struct{}, stemToBase map[string]string) (string, bool) {
+	if dot := strings.LastIndexByte(name, '.'); dot > 0 && isDigits(name[dot+1:]) {
+		if n, err := strconv.Atoi(name[dot+1:]); err == nil && n >= 1 && n <= 9 {
+			if base := name[:dot]; base != "" {
+				if _, ok := bases[base]; ok {
+					return base, true
+				}
+			}
+		}
+	}
+	if len(name) > 17 {
+		rest := name[len(name)-16:]
+		if rest[0] == '.' && isDigits(rest[1:9]) && rest[9] == '-' && isDigits(rest[10:]) {
+			if base := name[:len(name)-16]; base != "" {
+				if _, ok := bases[base]; ok {
+					return base, true
+				}
+			}
+		}
+	}
+	for i := range name {
+		if name[i] != '-' {
+			continue
+		}
+		base, ok := stemToBase[name[:i]]
+		if !ok {
+			continue
+		}
+		rest := name[i:]
+		if !strings.HasSuffix(rest, "-size.log") && !strings.HasSuffix(rest, "-size.log.gz") {
+			continue
+		}
+		// B-2：stem 后紧跟的 '-<ts>' 段须以数字开头（区分 caddy 与 caddy-tls）
+		if len(rest) > 1 && rest[1] >= '0' && rest[1] <= '9' {
+			return base, true
+		}
+	}
+	return "", false
+}
+
 // sanitizeRuleID 与写入侧 sanitizePathComponent / sanitizeRuleLogName 同口径，
 // 只保留 caddy_id 字母表 [A-Za-z0-9_-]，其余字符剔除。
 func sanitizeRuleID(value string) string {
@@ -218,6 +355,52 @@ func securityEventsMaxRows() *int64 {
 	return &v
 }
 
+// requestedLogKeys 解析可选 ?key=a,b / ?keys=a,b（缺省 nil=全量）——任务监控
+// 弹框只关心单行日志统计（U08-F07）。空串与空白项忽略。
+func requestedLogKeys(c *gin.Context) map[string]bool {
+	raw := strings.TrimSpace(c.Query("key"))
+	if extra := strings.TrimSpace(c.Query("keys")); extra != "" {
+		if raw != "" {
+			raw += ","
+		}
+		raw += extra
+	}
+	if raw == "" {
+		return nil
+	}
+	keys := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		if key := strings.TrimSpace(part); key != "" {
+			keys[key] = true
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
+}
+
+// caddyLogFamilyBases caddy 四份日志基名（写入端写死 /app/logs）。
+var caddyLogFamilyBases = []string{"caddy.log", "caddy-tls.log", "caddy-server.log", "caddy-proxy.log"}
+
+// caddyLogFamilyMatch 匹配 caddy 四份日志及其轮转副本（移位/时间戳/timberjack
+// 形态）——聚合一次目录枚举即可归并四文件与总行（U08-F07）。
+func caddyLogFamilyMatch(name string) bool {
+	for _, base := range caddyLogFamilyBases {
+		if name == base || strings.HasPrefix(name, base+".") {
+			return true
+		}
+	}
+	if strings.HasSuffix(strings.TrimSuffix(name, ".gz"), "-size.log") {
+		for _, base := range caddyLogFamilyBases {
+			if strings.HasPrefix(name, strings.TrimSuffix(base, ".log")+"-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (h *Handlers) GetLogStats(c *gin.Context) {
 	fixedLogsDir, runtimePath := logPaths(h.cfg)
 	dataDir := "/app/data"
@@ -225,17 +408,26 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		dataDir = h.cfg.DataDir
 	}
 
+	// U08-F07：可选 key/keys 收窄——缺省（nil）保持旧全量语义；指定时跳过
+	// 未请求行的 DB/文件统计并只回这些行（任务监控弹框轮询不再放大全族统计）。
+	requested := requestedLogKeys(c)
+	want := func(key string) bool { return requested == nil || requested[key] }
+
 	// S-7（2026-09-06 裁定）已被 2026-09-15 裁定部分覆盖:指标历史固定保留
 	// 最近 7 天(services/services.go cleanupHistory),不再复用「日志保留」
 	// ——ConfigSource 类目清单不得再含指标历史(SYS41-3,第 41 轮)。
 	// 第 37 轮(用户裁定文案精简):可见文案短化——类目清单移 ConfigSource
 	// (tooltip 展示),行内只留「每日清理 · 保留 N 个月」。
 	retentionNote := "每日清理 · 保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
+	// U08-F01：安全事件行文案/行帽由 services 单源生成（显式
+	// security_events_retention_days/row_cap 生效，不再复用审计月数文案）；
+	// 其写入侧与审计日志同文件，大小限值随 audit_log_size_mb。
+	securityRetentionNote := services.SecurityEventsRetentionSummary()
 	caddyLimit := sizeLimitMB("caddy_log_size_mb", 100)
 
 	infos := []LogStorageInfo{
 		{Key: "audit", Name: "操作日志", KeepCount: 0, RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
-		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), RetentionNote: retentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
+		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitRows: securityEventsMaxRows(), LimitBytes: sizeLimitMB("audit_log_size_mb", 10), RetentionNote: securityRetentionNote, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 5, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/crs.log）"},
 		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: 1, ConfigSource: "统一任务日志（tasks/ip2region.log）"},
@@ -263,57 +455,66 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 
 	// DB 体量按库文件大小近似；行数供 UI 显示条目规模
-	if db.AuditDB != nil {
-		var n int64
-		if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log").Scan(&n); err == nil {
-			byKey("audit").Rows = &n
+	if want("audit") {
+		if db.AuditDB != nil {
+			var n int64
+			if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log").Scan(&n); err == nil {
+				byKey("audit").Rows = &n
+			}
+		}
+		if st, err := os.Stat(filepath.Join(dataDir, "lazy-balancer-audit.db")); err == nil {
+			byKey("audit").SizeBytes = st.Size()
 		}
 	}
-	if db.MetricsDB != nil {
-		var n int64
-		if err := db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events").Scan(&n); err == nil {
-			byKey("security_events").Rows = &n
+	if want("security_events") {
+		if db.MetricsDB != nil {
+			var n int64
+			if err := db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events").Scan(&n); err == nil {
+				byKey("security_events").Rows = &n
+			}
 		}
-	}
-	if st, err := os.Stat(filepath.Join(dataDir, "lazy-balancer-audit.db")); err == nil {
-		byKey("audit").SizeBytes = st.Size()
-	}
-	if st, err := os.Stat(filepath.Join(dataDir, "lazy-balancer-metrics.db")); err == nil {
-		sz := st.Size()
-		byKey("security_events").DBBytes = &sz
-	}
-	// SizeBytes=真实审计日志文件(2026-09-14 用户裁定:不再用 metrics.db 库文件
-	// 虚标,DBBytes 单独展示库容量)。一次 dirBytes 供 security_events 行复用
-	// (原先每次响应各调一次,重复全目录 ReadDir)。
-	auditActive, auditRotated, auditRotCount := dirBytes(wafAuditLogFile)
-	if info := byKey("security_events"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = auditActive, auditRotated, auditRotCount
+		if st, err := os.Stat(filepath.Join(dataDir, "lazy-balancer-metrics.db")); err == nil {
+			sz := st.Size()
+			byKey("security_events").DBBytes = &sz
+		}
+		// SizeBytes=真实审计日志文件(2026-09-14 用户裁定:不再用 metrics.db 库文件
+		// 虚标,DBBytes 单独展示库容量)。一次 dirBytes 供 security_events 行复用
+		// (原先每次响应各调一次,重复全目录 ReadDir)。
+		auditActive, auditRotated, auditRotCount := dirBytes(wafAuditLogFile)
+		if info := byKey("security_events"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = auditActive, auditRotated, auditRotCount
+		}
 	}
 
-	if info := byKey("runtime"); info != nil {
-		rtA, rtR, rtC := dirBytes(runtimePath)
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = rtA, rtR, rtC
-	}
-	// U4-P5-3:每文件恰好一次 dirBytes——四个体行与「caddy」聚合行共用同一批
-	// 结果(原先聚合行对同 4 文件再次 dirBytes,单响应 8 次 ReadDir,前端轮询放大)。
-	var caddyActive, caddyRotated int64
-	var caddyRotCount int
-	for _, entry := range []struct{ key, file string }{
-		{"caddy_runtime", "caddy.log"},
-		{"caddy_tls", "caddy-tls.log"},
-		{"caddy_server", "caddy-server.log"},
-		{"caddy_proxy", "caddy-proxy.log"},
-	} {
-		a, r, c := dirBytes(filepath.Join(fixedLogsDir, entry.file))
-		if info := byKey(entry.key); info != nil {
-			info.SizeBytes, info.RotatedBytes, info.RotatedCount = a, r, c
+	if want("runtime") {
+		if info := byKey("runtime"); info != nil {
+			rtA, rtR, rtC := dirBytes(runtimePath)
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = rtA, rtR, rtC
 		}
-		caddyActive += a
-		caddyRotated += r
-		caddyRotCount += c
 	}
-	if info := byKey("caddy"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = caddyActive, caddyRotated, caddyRotCount
+	// U4-P5-3 + U08-F07:四文件与「caddy」聚合行共用一次目录枚举——聚合按
+	// 基名归并（原实现每文件各一次 dirBytes、聚合行再扫一遍）。
+	if want("caddy") || want("caddy_runtime") || want("caddy_tls") || want("caddy_server") || want("caddy_proxy") {
+		caddyStats := aggregateDirStats(fixedLogsDir, caddyLogFamilyMatch)
+		var caddyActive, caddyRotated int64
+		var caddyRotCount int
+		for _, entry := range []struct{ key, file string }{
+			{"caddy_runtime", "caddy.log"},
+			{"caddy_tls", "caddy-tls.log"},
+			{"caddy_server", "caddy-server.log"},
+			{"caddy_proxy", "caddy-proxy.log"},
+		} {
+			st := caddyStats[entry.file]
+			if info := byKey(entry.key); info != nil {
+				info.SizeBytes, info.RotatedBytes, info.RotatedCount = st.Active, st.Rotated, st.RotCount
+			}
+			caddyActive += st.Active
+			caddyRotated += st.Rotated
+			caddyRotCount += st.RotCount
+		}
+		if info := byKey("caddy"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = caddyActive, caddyRotated, caddyRotCount
+		}
 	}
 	// 单一日志数据源（2026-09-29 用户裁定）：三库更新行与任务日志同文件
 	// （tasks/{crs|ip2region|threat}.log）——统计与内容同源。
@@ -321,35 +522,83 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	taskFileBytes := func(id string) (int64, int64, int) {
 		return dirBytes(filepath.Join(tasksDir, id+".log"))
 	}
-	if info := byKey("crs_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("crs")
+	if want("crs_update") {
+		if info := byKey("crs_update"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("crs")
+		}
 	}
-	if info := byKey("ip2region_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("ip2region")
+	if want("ip2region_update") {
+		if info := byKey("ip2region_update"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("ip2region")
+		}
 	}
-	if info := byKey("threat_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("threat")
+	if want("threat_update") {
+		if info := byKey("threat_update"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("threat")
+		}
 	}
-	if info := byKey("crawlerbot_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("crawlerbot-update")
+	if want("crawlerbot_update") {
+		if info := byKey("crawlerbot_update"); info != nil {
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = taskFileBytes("crawlerbot-update")
+		}
 	}
 	// 逐任务真实文件统计（任务监控弹框 log-key=task:<id>）：活动大小、
 	// 轮转副本与归档份数均按本任务文件计算，不再使用目录聚合值冒充。
+	// U08-F07：cert-job 行的 cert_jobs.rule_id 一次性载入（原逐行
+	// systemTaskLogPath 每行一次点查 = N+1）。
+	certJobRuleIDs := map[string]string{}
+	certJobRuleIDsLoaded := false
+	taskLogPath := func(taskID string) (string, error) {
+		if !strings.HasPrefix(taskID, "cert-job:") {
+			return taskengine.TaskLogPath(taskID), nil
+		}
+		if !certJobRuleIDsLoaded {
+			certJobRuleIDsLoaded = true
+			if db.DB != nil {
+				rows, err := db.DB.Query(`SELECT id, rule_id FROM cert_jobs`)
+				if err != nil {
+					return "", err
+				}
+				for rows.Next() {
+					var jobID int
+					var ruleID string
+					if scanErr := rows.Scan(&jobID, &ruleID); scanErr == nil {
+						certJobRuleIDs[strconv.Itoa(jobID)] = ruleID
+					}
+				}
+				err = rows.Err()
+				rows.Close()
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		ruleID := certJobRuleIDs[strings.TrimPrefix(taskID, "cert-job:")]
+		if ruleID == "" {
+			return "", nil
+		}
+		return services.CertJobLogPath(ruleID), nil
+	}
 	for _, task := range services.CollectSystemTasks() {
-		path := taskengine.TaskLogPath(task.ID)
+		key := "task:" + task.ID
+		if !want(key) {
+			continue
+		}
+		path, err := taskLogPath(task.ID)
+		if err != nil {
+			services.Logf("warn", "任务 %s 日志路径解析失败: %v", task.ID, err)
+			continue
+		}
+		if path == "" {
+			continue
+		}
 		keep := 1
 		if strings.HasPrefix(task.ID, "cert-job:") {
-			var ruleID string
-			if err := db.DB.QueryRow(`SELECT rule_id FROM cert_jobs WHERE id=?`, strings.TrimPrefix(task.ID, "cert-job:")).Scan(&ruleID); err != nil || ruleID == "" {
-				services.Logf("warn", "证书任务 %s 日志路径解析失败: %v", task.ID, err)
-				continue
-			}
-			path = services.CertJobLogPath(ruleID)
 			keep = 5
 		}
 		active, rotated, rotCount := dirBytes(path)
 		infos = append(infos, LogStorageInfo{
-			Key: "task:" + task.ID, Name: task.Name + "日志",
+			Key: key, Name: task.Name + "日志",
 			SizeBytes: active, RotatedBytes: rotated, RotatedCount: rotCount,
 			LimitBytes: sizeLimitMB("task_log_size_mb", 10), KeepCount: keep,
 			ConfigSource: "统一任务日志（" + filepath.Base(path) + "）",
@@ -365,7 +614,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 			return
 		}
 	}
-	if info := byKey("certjob"); info != nil {
+	if info := byKey("certjob"); info != nil && want("certjob") {
 		// L1-66-02 读侧同源：与写入端 CertJobLogPath 同取 {任务日志目录}/certjobs
 		// （曾读写死 /app/logs 根——B3 惰性化后写入端已迁，不同源恒 0B）。
 		certJobDir := services.CertJobLogDir()
@@ -373,43 +622,69 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 			cjA, cjR, cjC := dirBytes(filepath.Join(certJobDir, "certjob-"+ruleID+".log"))
 			info.SizeBytes, info.RotatedBytes, info.RotatedCount = cjA, cjR, cjC
 			info.Name = "证书任务日志 #" + ruleID
-		} else if entries, err := os.ReadDir(certJobDir); err == nil {
+		} else {
+			// U08-F07/F12：一次目录枚举归并（原逐文件 dirBytes = O(N²)）；
+			// 归档份数与 .gz 归档同时计入（原丢弃 rotCount、.gz 冒充活跃）。
 			var active, rotated int64
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasPrefix(e.Name(), "certjob-") || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
-					continue
-				}
-				if isTimberjackRotationCopy(e.Name()) {
-					continue
-				}
-				a, r, _ := dirBytes(filepath.Join(certJobDir, e.Name()))
-				active += a
-				rotated += r
+			var rotCount int
+			for _, st := range aggregateDirStats(certJobDir, isCertJobLogName) {
+				active += st.Active
+				rotated += st.Rotated
+				rotCount += st.RotCount
 			}
-			info.SizeBytes, info.RotatedBytes = active, rotated
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = active, rotated, rotCount
 		}
 	}
-	if info := byKey("rule_access"); info != nil {
+	if info := byKey("rule_access"); info != nil && want("rule_access") {
 		if ruleID != "" {
 			raA, raR, raC := dirBytes(filepath.Join(fixedLogsDir, "rules", ruleID+".log"))
 			info.SizeBytes, info.RotatedBytes, info.RotatedCount = raA, raR, raC
 			info.Name = "访问日志 #" + ruleID
-		} else if entries, err := os.ReadDir(filepath.Join(fixedLogsDir, "rules")); err == nil {
+		} else {
 			var active, rotated int64
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") && !strings.HasSuffix(e.Name(), ".log.gz") {
-					continue
-				}
-				if isTimberjackRotationCopy(e.Name()) {
-					continue
-				}
-				a, r, _ := dirBytes(filepath.Join(fixedLogsDir, "rules", e.Name()))
-				active += a
-				rotated += r
+			var rotCount int
+			for _, st := range aggregateDirStats(filepath.Join(fixedLogsDir, "rules"), isRuleAccessLogName) {
+				active += st.Active
+				rotated += st.Rotated
+				rotCount += st.RotCount
 			}
-			info.SizeBytes, info.RotatedBytes = active, rotated
+			info.SizeBytes, info.RotatedBytes, info.RotatedCount = active, rotated, rotCount
 		}
 	}
 
+	if requested != nil {
+		filtered := make([]LogStorageInfo, 0, len(infos))
+		for _, info := range infos {
+			if requested[info.Key] {
+				filtered = append(filtered, info)
+			}
+		}
+		infos = filtered
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{"logs": infos}})
+}
+
+// isCertJobLogName 证书任务日志文件名（含 .N 移位副本与 .gz 压缩归档）。
+func isCertJobLogName(name string) bool {
+	if !strings.HasPrefix(name, "certjob-") {
+		return false
+	}
+	return isTaskLogFamilyName(name)
+}
+
+// isRuleAccessLogName 规则访问日志文件名（含 .N 移位副本与 .gz 压缩归档）。
+func isRuleAccessLogName(name string) bool {
+	return isTaskLogFamilyName(name)
+}
+
+// isTaskLogFamilyName 任务日志文件名族：base.log[.gz] 与其 .N 移位副本
+// （聚合按 base 归并，副本必须参与匹配才能归到所属 base）。
+func isTaskLogFamilyName(name string) bool {
+	if strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.gz") {
+		return true
+	}
+	if dot := strings.LastIndexByte(name, '.'); dot > 0 && isDigits(name[dot+1:]) {
+		return strings.HasSuffix(name[:dot], ".log")
+	}
+	return false
 }

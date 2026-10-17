@@ -3,7 +3,6 @@ package acme
 import (
 	"context"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -202,5 +201,4 @@ func TestPropagationConsensusDefaults(t *testing.T) {
 	if propagationConsensusMinRounds < 2 {
 		t.Fatalf("propagationConsensusMinRounds=%d < 2 would release on a single poll round", propagationConsensusMinRounds)
 	}
-	var _ atomic.Bool // 占位：保持 atomic 导入供后续时间接缝扩展使用
 }

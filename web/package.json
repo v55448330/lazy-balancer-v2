@@ -2,8 +2,13 @@
   "name": "lazy-balancer-web",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
   "scripts": {
     "dev": "vite",
+    "test": "node --test tests/*.spec.ts",
+    "typecheck:test": "vue-tsc -p tsconfig.test.json --noEmit",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview"
   },

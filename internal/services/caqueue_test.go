@@ -389,7 +389,10 @@ func TestCAQueueManager_PauseAndDrain_cancels_pending_and_waits_for_running(t *t
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
 
 	// When
-	manager.PauseAndDrain()
+	// L06-06（第 78 轮）：执行体响应取消正常退出 → 必须报告完全排空（true）。
+	if drained := manager.PauseAndDrain(); !drained {
+		t.Fatal("PauseAndDrain drained=false, want true（执行体已响应取消退出）")
+	}
 
 	// Then
 	<-finished
@@ -777,7 +780,11 @@ func TestCAQueueManager_PauseAndDrain_timeout_straggler_not_double_executed(t *t
 	manager := &CAQueueManager{queues: map[int]*caQueue{7: queue}, active: true}
 
 	// When：PauseAndDrain 超时返回（滞行执行未退出），随后 Resume
-	manager.PauseAndDrain()
+	// L06-06（第 78 轮）：滞行执行不响应取消 → 必须报告未完全排空（false），
+	// 调用方（配置导入）据此拒绝在证书任务仍在执行时继续。
+	if drained := manager.PauseAndDrain(); drained {
+		t.Fatal("PauseAndDrain drained=true, want false（issuer 未响应取消，滞行仍在执行）")
+	}
 
 	// Then：滞行执行经 retiredQueues 仍视为在途，Resume 不得重入队
 	if !manager.IsJobActive(42) {
@@ -1588,4 +1595,100 @@ func TestCAQueue_requeueStrandedJobsLogsScanFailure(t *testing.T) {
 	if !strings.Contains(buf.String(), "test-scan") {
 		t.Fatalf("Scan 失败应留 warn（含 logPrefix），日志=%q", buf.String())
 	}
+}
+
+// U06-F02（第 78 轮）：provider 配置提交后必须发布失效事件——缓存闸门（N+11 性能
+// 优化）此前先于 loadCAProvider 判定，max_concurrent/min_interval 修改在积压窗口
+// 内不生效（缓存=1+running=1 时抬到 3 仍不派发；间隔下调同理）。版本号脏标记
+// 让队列在下一 tick 先按新值复核。
+func TestCAQueue_tick_appliesProviderConfigUpdateWhileQueued(t *testing.T) {
+	type seed struct {
+		queue      *caQueue
+		jobID      int
+		providerID int
+	}
+	seedQueue := func(t *testing.T, cachedMaxConcurrent, cachedMinInterval, dbMaxConcurrent, dbMinInterval int) seed {
+		t.Helper()
+		_, database := newClusterTestService(t)
+		result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled, max_concurrent, min_interval_ms) VALUES ('refresh', 'letsencrypt', 'https://invalid.example/directory', 1, ?, ?)`, dbMaxConcurrent, dbMinInterval)
+		if err != nil {
+			t.Fatalf("seed CA provider: %v", err)
+		}
+		providerID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("read CA provider ID: %v", err)
+		}
+		jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_refresh', 'example.com', 'queued', ?)`, providerID)
+		if err != nil {
+			t.Fatalf("seed certificate job: %v", err)
+		}
+		jobID, err := jobResult.LastInsertId()
+		if err != nil {
+			t.Fatalf("read certificate job ID: %v", err)
+		}
+		queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: cachedMaxConcurrent, MinIntervalMS: cachedMinInterval}, func() error { return nil })
+		dispatched := make(chan struct{}, 1)
+		release := make(chan struct{})
+		queue.executeFn = func(context.Context, queueItem, models.CAProvider) error {
+			dispatched <- struct{}{}
+			<-release
+			return nil
+		}
+		queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_refresh", domains: "example.com"})
+		t.Cleanup(func() {
+			close(release)
+			queue.cancel()
+		})
+		return seed{queue: queue, jobID: int(jobID), providerID: int(providerID)}
+	}
+
+	t.Run("max concurrent raised", func(t *testing.T) {
+		// Given：缓存 MaxConcurrent=1 且 running=1（闸门关闭），DB 改为 3
+		s := seedQueue(t, 1, 1, 1, 1)
+		s.queue.mu.Lock()
+		s.queue.running = 1
+		s.queue.mu.Unlock()
+		three := 3
+		service := NewCAProviderService()
+		if _, err := service.UpdateCAProvider(s.providerID, models.UpdateCAProviderRequest{MaxConcurrent: &three}); err != nil {
+			t.Fatalf("update provider: %v", err)
+		}
+
+		// When
+		s.queue.tick()
+
+		// Then：按新值复核后派发（running=2, pending 清空）
+		s.queue.mu.Lock()
+		pending := len(s.queue.pending)
+		running := s.queue.running
+		s.queue.mu.Unlock()
+		if pending != 0 || running != 2 {
+			t.Fatalf("pending=%d running=%d, want 0/2（配置提交后必须按新上限复核）", pending, running)
+		}
+	})
+
+	t.Run("min interval lowered", func(t *testing.T) {
+		// Given：缓存间隔 60s 且刚派发过（闸门关闭），DB 下调为 1ms
+		s := seedQueue(t, 1, 60000, 1, 60000)
+		s.queue.mu.Lock()
+		s.queue.lastOrder = time.Now()
+		s.queue.mu.Unlock()
+		one := 1
+		service := NewCAProviderService()
+		if _, err := service.UpdateCAProvider(s.providerID, models.UpdateCAProviderRequest{MinIntervalMS: &one}); err != nil {
+			t.Fatalf("update provider: %v", err)
+		}
+
+		// When：更新与 tick 之间留出 >1ms 墙钟余量（新间隔=1ms；否则 time.Since
+		// 可能仍在亚毫秒内，测试会与实现速度耦合）
+		time.Sleep(5 * time.Millisecond)
+		s.queue.tick()
+		s.queue.mu.Lock()
+		pending := len(s.queue.pending)
+		running := s.queue.running
+		s.queue.mu.Unlock()
+		if pending != 0 || running != 1 {
+			t.Fatalf("pending=%d running=%d, want 0/1（间隔下调后必须按新值放行）", pending, running)
+		}
+	})
 }

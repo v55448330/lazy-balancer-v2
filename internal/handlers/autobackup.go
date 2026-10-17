@@ -456,23 +456,14 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化备份范围失败: " + err.Error()})
 		return
 	}
-	var prevEnabled bool
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&prevEnabled); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取当前设置失败: " + err.Error()})
-		return
-	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=?, auto_backup_frequency=?, auto_backup_time=?, auto_backup_day=?, auto_backup_keep=?, auto_backup_sections=? WHERE id=1`,
-		*req.Enabled, *req.Frequency, *req.Time, *req.Day, *req.Keep, string(sectionsJSON)); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_frequency=?, auto_backup_time=?, auto_backup_day=?, auto_backup_keep=?, auto_backup_sections=? WHERE id=1`,
+		*req.Frequency, *req.Time, *req.Day, *req.Keep, string(sectionsJSON)); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
 		return
 	}
-	if !prevEnabled && *req.Enabled {
-		// 2026-09-19 用户裁定:启用不得立即触发备份——off→on 置水位线(=now),
-		// 覆盖停用期前的陈旧 last_run(否则跨停用回补),下一次执行=启用后的
-		// 下一个到期槽;仅手动触发与停机跨槽补跑属预期。
-		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
-			services.Logf("warn", "自动备份：启用时写入水位线失败: %v", err)
-		}
+	if err := services.SetAutoBackupEnabled(*req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份开关失败: " + err.Error()})
+		return
 	}
 	freqLabel := map[string]string{"daily": "每日", "weekly": "每周", "monthly": "每月"}[*req.Frequency]
 	recordAudit(c, "备份设置", "配置备份", services.FormatAuditDetail(
@@ -509,7 +500,16 @@ func autoBackupSectionLabels(sections []string) []string {
 	return labels
 }
 
+// autoBackupTriggerMu 手动触发单飞门（L01-05）：请求线程只负责抢占+接受，
+// 实际备份在后台任务执行（te.RunSync），完成后释放。
+var autoBackupTriggerMu sync.Mutex
+
 // RunAutoBackupNow POST /api/v1/auto-backup/run：手动触发一次完整备份。
+//
+// L01-05（第 78 轮）：响应前转后台——此前同步 te.RunSync 让「备份 >60s」
+// 撞 main.go WriteTimeout(60s) 截断响应；现抢占单飞门后立即 202 返回，
+// 备份由引擎在后台执行（task_runs/auto_backups 均照常落行），前端轮询
+// 备份列表/任务历史查看结果。双击/并发触发 → 409（不排队）。
 func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
@@ -518,28 +518,28 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if operator == "" {
 		operator = "system"
 	}
-	// B2（第 65 轮后裁定）：单轨化——经引擎 RunSync（手动执行与任务监控触发
-	// 同一通道；引擎 CAS 单飞使「RunSync 成功返回后最新 manual 行必为本行」，
-	// 第 56 轮 F4 的并发回查竞态在引擎层从根上消除）。
 	te := services.TaskEngine()
 	if te == nil {
 		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "任务引擎未初始化"})
 		return
 	}
-	if _, err := te.RunSync("auto-backup", "manual", operator); err != nil {
-		if errors.Is(err, taskengine.ErrAlreadyRunning) {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "已有备份任务正在执行，请稍后重试"})
-			return
+	if !autoBackupTriggerMu.TryLock() {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "已有备份任务正在执行，请稍后重试"})
+		return
+	}
+	go func() {
+		defer autoBackupTriggerMu.Unlock()
+		// B2（第 65 轮后裁定）：单轨化——经引擎 RunSync（手动执行与任务监控
+		// 触发同一通道；引擎 CAS 单飞 + 本层门双保险）。
+		if _, err := te.RunSync("auto-backup", "manual", operator); err != nil {
+			if errors.Is(err, taskengine.ErrAlreadyRunning) {
+				services.Logf("warn", "手动备份：引擎报告任务运行中（后台触发被拒）")
+				return
+			}
+			services.Logf("error", "手动备份后台执行失败: %v", err)
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份执行失败: " + err.Error()})
-		return
-	}
-	view, verr := scanAutoBackupRowView(db.DB.QueryRow(`SELECT ` + autoBackupRowColumns + ` FROM auto_backups WHERE trigger_type='manual' ORDER BY id DESC LIMIT 1`))
-	if verr != nil || view.Filename == "" {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动备份完成"})
-		return
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动备份完成", Data: view})
+	}()
+	c.JSON(http.StatusAccepted, models.APIResponse{Code: 0, Message: "手动备份已开始，完成后可在备份列表查看"})
 }
 
 // autoBackupRowByID 查行；不存在 404、DB 故障响亮 500（SYS-U3，第 69 轮：

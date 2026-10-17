@@ -113,7 +113,7 @@ func TestApplyLbbakWafFiles_blocks_while_waf_file_lock_held(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _, _ = applyLbbakWafFiles(c, "导入", payload, "test-tag")
+		_ = applyLbbakWafFiles(c, "导入", payload, "test-tag")
 	}()
 	select {
 	case <-done:
@@ -185,9 +185,8 @@ func TestBuildLbbakExport_blocks_while_waf_file_lock_held(t *testing.T) {
 // Given lbbak 备份（含 CRS 文件）导入，Caddy stub 拒绝一切请求使 session.commit
 // 失败（POST /load 被拒→Caddy 拒绝→400 回滚）。
 // When 导入执行完毕。
-// Then 任务日志 tasks/crs.log 只允许有「installing」（文件确实落盘），不得有
-// 「reloading」/「success」行（commit 已失败，重载与更新从未发生）。
-func TestLbbakImport_commit_failure_does_not_log_crs_success(t *testing.T) {
+// Then 普通 HTTP 导入不是 CRS 更新任务，不得写 tasks/crs.log。
+func TestLbbakImport_commit_failure_does_not_write_crs_task_log(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)
 	crsDir, _ := overrideTestWafPaths(t)
@@ -236,21 +235,16 @@ func TestLbbakImport_commit_failure_does_not_log_crs_success(t *testing.T) {
 	}
 
 	logBytes, err := os.ReadFile(taskengine.TaskLogPath("crs"))
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read tasks/crs.log: %v", err)
 	}
-	log := string(logBytes)
-	if !strings.Contains(log, "installing") {
-		t.Fatalf("文件相位 installing 行应在（文件已落盘）: %s", log)
-	}
-	if strings.Contains(log, "reloading") || strings.Contains(log, "CRS 已随备份导入更新") {
-		t.Fatalf("commit 失败后任务日志不得出现 reloading/success 行: %s", log)
+	if len(logBytes) > 0 {
+		t.Fatalf("普通 HTTP 导入不得写 CRS 任务日志: %s", logBytes)
 	}
 }
 
-// 回归形状：commit 成功时「reloading/success」流水仍必须出现在任务日志
-// （移位不得变成丢失——成功导入的完整流水与自动更新器同款）。
-func TestLbbakImport_commit_success_logs_crs_reload_and_success(t *testing.T) {
+// 回归形状：commit 成功仍写安全数据审计，但普通 HTTP 导入不得写 CRS 任务日志。
+func TestLbbakImport_commit_success_uses_audit_not_crs_task_log(t *testing.T) {
 	h := newBackupTestHandlers(t) // 默认 caddy stub 接受 /load → commit 成功
 	g := newBackupSectionRouter(h)
 	crsDir, _ := overrideTestWafPaths(t)
@@ -279,12 +273,18 @@ func TestLbbakImport_commit_success_logs_crs_reload_and_success(t *testing.T) {
 		t.Fatalf("import status=%d body=%s, want 200", importRec.Code, importRec.Body.String())
 	}
 	logBytes, err := os.ReadFile(taskengine.TaskLogPath("crs"))
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read tasks/crs.log: %v", err)
 	}
-	log := string(logBytes)
-	if !strings.Contains(log, "installing") || !strings.Contains(log, "reloading") || !strings.Contains(log, "CRS 已随备份导入更新") {
-		t.Fatalf("成功导入的 CRS 流水应含 installing/reloading/success 三行: %s", log)
+	if len(logBytes) > 0 {
+		t.Fatalf("普通 HTTP 导入不得写 CRS 任务日志: %s", logBytes)
+	}
+	var auditCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='安全数据' AND detail LIKE '%规则库数据库%'`).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("安全数据审计行=%d, want 1（移除任务日志不得影响审计）", auditCount)
 	}
 }
 

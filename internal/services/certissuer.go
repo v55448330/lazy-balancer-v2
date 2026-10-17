@@ -226,6 +226,14 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 		fields["ca_provider_id"] = material.providerID
 	}
 	updateErr := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, status, fields)
+	// L04-04（第 78 轮）：部署失败必须落 certjob-*.log（此前部署链零 WriteCertJobLog，
+	// 磁盘日志只剩签发阶段，排障需反查 DB）。ERROR 行业务行恒写；状态回写失败
+	// （CAS 冲突/DB 故障）补 WARN 行，且不改变部署失败语义与签发结果。
+	WriteCertJobLog(jobID, "ERROR", "deployment_failed", storedMessage)
+	if updateErr != nil {
+		Logf("warn", "cert job %d deployment status writeback failed (status=%s, attempt=%d): %v", jobID, status, attempt, updateErr)
+		WriteCertJobLog(jobID, "WARN", "deployment_status_update_failed", fmt.Sprintf("部署失败状态回写失败 [attempt=%d/%d]: %v", attempt, maxCertificateDeploymentAttempts, updateErr))
+	}
 	if updateErr == nil && status == "downloaded" && s.deploymentRetry != nil {
 		material.deploymentAttempt = attempt
 		// R57 A-#1：异步再调度。此处常在部署回调 goroutine 内被同步调用——

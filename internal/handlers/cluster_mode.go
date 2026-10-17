@@ -65,12 +65,14 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		})
 		return
 	}
-	// R64 A-N4：令牌撤销/schema 不匹配会把同步循环置为 Halted 终态，而 BecomeSlave
-	// 只调 StartSync()→Start()——Start 对 Halted 态是 no-op（cluster_sync.go startLocked
-	// 门控），重新注册后循环永不重启、注册轮询不可达，从节点静默永久脱同步（唯一
-	// 出口 Resume 此前只有手动同步一处调用，且重新注册后 token='' 使 Pull 在 Resume
-	// 之前就失败早退）。Resume 对非 Halted 态是 no-op，幂等安全；此时 run 循环已
-	// 终止（done 已关），Resume 立即拉起新循环进入注册轮询。
+	// R64 A-N4：令牌撤销/schema 不匹配会把同步循环置为 Halted 终态，而角色翻转
+	// 由引擎 SetRole 唯一驱动（cluster-sync daemon 换代重启；BecomeSlave 侧仅
+	// SetRole + 恢复调度开关，不再有旧 StartSync 生命周期旁路）——Start() 对
+	// Halted 态是 no-op（cluster_sync.go startLocked 门控），重新注册后循环永不
+	// 重启、注册轮询不可达，从节点静默永久脱同步（唯一出口 Resume 此前只有手动
+	// 同步一处调用，且重新注册后 token='' 使 Pull 在 Resume 之前就失败早退）。
+	// Resume 对非 Halted 态是 no-op，幂等安全；此时 run 循环已终止（done 已关），
+	// Resume 立即拉起新循环进入注册轮询。
 	h.syncService.Resume()
 	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
 	message := "已切换为从节点，等待主节点审批"
@@ -113,9 +115,8 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	//（M13① 后 do() 不再以内存指纹回写，此处清空保持内存/磁盘 TOFU 生命周期
 	// 对齐）。与 R64 A-N4 的 Resume() 同点位：角色切换的完整收尾。
 	h.syncService.ForgetClusterPins()
-	// 调度器生命周期由服务层 Promote 单点驱动（cluster.go：CRS/IP2Region/威胁
-	// 三调度器 SetMasterRole(true)，全 nil 守卫）——U6-P5-1 删除 handler 侧
-	// 重复调用（SetMasterRole 幂等，crsscheduler_role_test 钉）。
+	// 生命周期由任务引擎统一驱动（Promote → SetRole → daemon hook/角色门），
+	// handler 不再直调管理器或旧调度器。
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已提升为主节点"})
 }

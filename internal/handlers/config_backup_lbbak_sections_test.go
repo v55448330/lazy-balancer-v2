@@ -247,7 +247,9 @@ func TestLbbakImport_wafFileFailureWarns(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("import should still succeed: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "规则库文件落盘失败") {
+	// L06-03：坏 xdb 在落盘前即被装载验证拒绝，响应必须同时明示「无法装载」
+	// 与版本记录同批丢弃（文件未落盘 → 记录不得存活）。
+	if !strings.Contains(rec.Body.String(), "无法装载") || !strings.Contains(rec.Body.String(), "版本记录已丢弃") {
 		t.Fatalf("waf file apply failure must surface in response warnings: %s", rec.Body.String())
 	}
 }

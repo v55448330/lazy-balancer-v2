@@ -7,6 +7,7 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,17 +56,15 @@ type IP2RegionUpdateManager struct {
 	// 旧 xdb 时（run() restored 分支）行与 sidecar 必须回滚到本值——否则
 	// 「磁盘旧/行新」三方分叉。每次成功安装锁段内刷新。
 	prevVersion string
+	// newXdbSha 本次安装新工件的 sha256（U02-F07）：rollback 全败时 fail-open
+	// 必须验证 live 仍是该工件（普通文件 + 摘要一致 + validate 通过）方可认 success。
+	newXdbSha string
 
 	reloader       func() error
 	fetchLatestTag func(ctx context.Context) (tag string, err error)
 	// runCancel 取消当前运行中的下载阶段（任务监控手动取消，v2.3.4）。
 	runCancel   context.CancelFunc
 	downloadXDB func(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error
-
-	schedulerMu       sync.Mutex
-	schedulerStop     chan struct{}
-	schedulerDone     chan struct{}
-	schedulerInterval time.Duration
 }
 
 var (
@@ -75,11 +74,10 @@ var (
 
 func newIP2RegionUpdateManager(reloader func() error) *IP2RegionUpdateManager {
 	return &IP2RegionUpdateManager{
-		reloader:          reloader,
-		fetchLatestTag:    defaultFetchIP2RegionLatestTag,
-		downloadXDB:       defaultDownloadIP2RegionXDB,
-		schedulerInterval: time.Minute,
-		state:             ip2RegionTaskState{status: IP2RegionStatusIdle},
+		reloader:       reloader,
+		fetchLatestTag: defaultFetchIP2RegionLatestTag,
+		downloadXDB:    defaultDownloadIP2RegionXDB,
+		state:          ip2RegionTaskState{status: IP2RegionStatusIdle},
 	}
 }
 
@@ -96,9 +94,6 @@ func GetIP2RegionUpdateManager() *IP2RegionUpdateManager {
 }
 
 func ResetIP2RegionUpdateManagerForTest() {
-	if ip2RegionUpdateManager != nil {
-		ip2RegionUpdateManager.StopScheduler()
-	}
 	ip2RegionUpdateManager = nil
 	ip2RegionUpdateManagerOnce = sync.Once{}
 }
@@ -173,20 +168,6 @@ func (m *IP2RegionUpdateManager) StartUpdate(trigger string, rc *taskengine.RunC
 		m.run(trigger, rc)
 	}()
 	return done, nil
-}
-
-// AutoUpdateEnabled IP 库自动更新是否开启。
-func (m *IP2RegionUpdateManager) AutoUpdateEnabled() bool {
-	var v bool
-	db.DB.QueryRow("SELECT COALESCE(auto_update,0) FROM security_ip2region_version WHERE id=1").Scan(&v)
-	return v
-}
-
-// NextScheduledSlot 返回下次更新排程槽。
-func (m *IP2RegionUpdateManager) NextScheduledSlot() string {
-	var s string
-	db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1").Scan(&s)
-	return s
 }
 
 func (m *IP2RegionUpdateManager) IsRunning() bool {
@@ -277,9 +258,10 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	m.bakCreated = false
 
 	ensureIP2RegionVersionRow()
+	runStartedAt := taskRunStartedAt(rc)
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET trigger=?, started_at=datetime('now'), finished_at=NULL WHERE id=1",
-		trigger,
+		"UPDATE security_ip2region_version SET trigger=?, started_at=?, last_checked=?, finished_at=NULL WHERE id=1",
+		trigger, runStartedAt, runStartedAt,
 	); err != nil {
 		Logf("error", "ip2region update: failed to mark start: %v", err)
 	}
@@ -290,7 +272,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	err := runWithInTaskRetry(func() error {
 		var ferr error
 		tag, ferr = m.fetchLatestTag(runCtx)
-		if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
+		if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=? WHERE id=1", runStartedAt); dbErr != nil {
 			Logf("error", "ip2region update: failed to record last_checked: %v", dbErr)
 		}
 		return ferr
@@ -313,7 +295,18 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	// SEC42-1（第 42 轮审计）：与 CRS 同口径（crsupdate.go，CRS-1）——tag 不新于
 	// current（cmp<=0）即按「已是最新」跳过，防上游 release 回退/删除时静默降级
 	// 安装更旧 xdb；格式不可比（cmpErr!=nil）保持现行「不等即更新」行为。
-	if cmp, cmpErr := CompareCRSVersions(tag, currentIP2RegionVersion()); cmpErr == nil && cmp <= 0 {
+	// U02-F05：精确相等短路（与格式无关）并入既有跳过分支；不同且不可比较
+	// 显式失败（不再隐含「必然更新」）。
+	currentVersion := currentIP2RegionVersion()
+	cmp, cmpErr := CompareCRSVersions(tag, currentVersion)
+	// 空 current（首装）永远走安装路径；`bundled`/`unknown` 是未写版本哨兵，
+	// 同样允许从远端建立基线；不同且不可比较（非首装）显式失败。
+	if cmpErr != nil && currentVersion != "" && !strings.EqualFold(currentVersion, "unknown") && !strings.EqualFold(currentVersion, "bundled") && tag != currentVersion {
+		m.fail(fmt.Errorf("版本格式不可比较（远端 %q / 当前 %q），已中止更新以避免静默降级", tag, currentVersion))
+		m.advanceSlotIfAuto(trigger)
+		return
+	}
+	if tag == currentVersion || (cmpErr == nil && cmp <= 0) {
 		// R72 二十七次 N6（补正重写——首版实施脚本缺失落盘调用丢失）：已是最新也
 		// 补写 .version sidecar——此前该分支提前 return 不写，崩溃遗留的 stale tag
 		// 将无限期不愈（愈于下次「安装」而非下次「检查」）；幂等，写失败仅记日志。
@@ -341,6 +334,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 
 	m.mu.Lock()
 	m.state.version = tag
+	m.newXdbSha = ""
 	m.mu.Unlock()
 
 	var installErr error
@@ -389,14 +383,35 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		// 次更新安装或重启后收敛（无周期性 reload；Caddy 侧 geoip 强制随
 		// reloader 重试收敛），不影响磁盘/DB 一致性。回滚或重试失败仅记录，
 		// 不改变失败落库。
-		restored, rbErr := m.rollbackXDB()
+		restored, distRestore, rbErr := m.rollbackXDB()
 		switch {
 		case rbErr != nil:
-			// R45 F1-A：回滚升级链（rename→copy→dist）全部失败——磁盘已是新库，
-			// 若按 failed+旧版本落库会重演三方分叉；改走 fail-open 让 DB
-			// 跟随实际状态，rbErr 记录到组件日志供排查。
-			Logf("error", "ip2region update: rollback xdb failed, fail-open with new xdb recorded: %v", rbErr)
-			m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
+			// U02-F07：回滚升级链全败时 fail-open **必须**验证 live 仍是本次
+			// 新工件（普通文件 + sha 等于新工件 + validate 通过）；否则按失败
+			// 落库并回写旧版本（不得把未验证的字节认成「已生效」）。
+			Logf("error", "ip2region update: rollback xdb failed: %v", rbErr)
+			if m.failOpenPreconditionHolds() {
+				m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
+			} else {
+				Logf("error", "ip2region update: fail-open rejected: live xdb is not the validated new artifact; recording failure with previous version")
+				m.restorePreviousVersionRow()
+				m.fail(reloadErr)
+				m.advanceSlotIfAuto(trigger)
+			}
+			return
+		case restored && distRestore:
+			// U02-F08：dist 基线不是「更新前版本」——不得冒称 prevVersion。
+			// 写保守标识 unknown（=未装载哨兵，下次更新不被「已是最新」短路）。
+			m.writeDistRollbackMarkers()
+			if m.reloader != nil {
+				rErr := m.reloader()
+				recordSystemReloadAudit("ip2region_update", rErr)
+				if rErr != nil {
+					Logf("error", "ip2region update: reload after dist rollback failed: %v", rErr)
+				}
+			}
+			m.fail(reloadErr)
+			m.advanceSlotIfAuto(trigger)
 			return
 		case restored:
 			// F-L6-68-02：磁盘已还原旧 xdb——安装段（锁内）写入的新版本行与
@@ -431,10 +446,16 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 			return
 		default:
 			// R44 F1 fail-open：bakCreated==false（全新部署首次更新，无旧 live
-			// 可备份）且 dist 也缺失，无任何「更新前基线」可回退。此时磁盘已是
-			// 新库，若仍按 failed 落库会重演「磁盘/内存新库、DB 记
-			// failed+旧版本」的三方不一致；按成功落库让 DB 追上实际状态。
-			m.successAfterReloadFailOpen(tag, reloadErr, nil, memSwitched)
+			// 可备份）且 dist 也缺失，无任何「更新前基线」可回退。但 live 必须
+			// 仍是本次已验证的新工件才可按成功落库（与 rbErr 分支同门）。
+			if m.failOpenPreconditionHolds() {
+				m.successAfterReloadFailOpen(tag, reloadErr, nil, memSwitched)
+			} else {
+				Logf("error", "ip2region update: fail-open rejected: live xdb is not the validated new artifact; recording failure")
+				m.restorePreviousVersionRow()
+				m.fail(reloadErr)
+				m.advanceSlotIfAuto(trigger)
+			}
 			return
 		}
 	}
@@ -516,6 +537,12 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 	m.setStage(IP2RegionStatusInstalling, "校验并安装数据库")
 	if err := validateIP2RegionXDB(staged); err != nil {
 		return err
+	}
+	// U02-F07：记录新工件摘要，供回滚全败时 fail-open 前置校验。
+	if sum, sumErr := sha256File(staged); sumErr == nil {
+		m.newXdbSha = sum
+	} else {
+		m.newXdbSha = ""
 	}
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件留下基线
 	// 会让下次同 tag 好下载误报。I/O 类记录失败不阻断安装；mismatch 必须中止
@@ -614,7 +641,7 @@ func (m *IP2RegionUpdateManager) downloadXDBLogged(ctx context.Context, tag, des
 // dist copy 成功后磁盘=dist 基线，fail-open 前提「磁盘已是新库」不成立，
 // 热换失败同样 warn + restored=true；仅 dist copy 本身失败（磁盘未动、仍
 // 是新库）才返回 error，由调用方走 fail-open。
-func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
+func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, distRestore bool, err error) {
 	if m.bakCreated {
 		bak := ip2regionLivePath + ".bak"
 		if _, err := os.Stat(bak); err == nil {
@@ -627,7 +654,7 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 					// searcher 滞后至下次更新安装或重启收敛（R49 B-N3）。
 					Logf("error", "ip2region update: reload after rename restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
-				return true, nil
+				return true, false, nil
 			} else {
 				Logf("error", "ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", renameErr)
 			}
@@ -642,17 +669,23 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 					// 记 warn，不得升级到 dist 覆盖基线（滞后收敛口径同上）。
 					Logf("error", "ip2region update: reload after copy restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
-				return true, nil
+				return true, false, nil
 			} else {
 				Logf("error", "ip2region update: copy restore from bak failed: %v", copyErr)
 			}
 		}
 	}
 	if _, err := os.Stat(ip2regionDistPath); err != nil {
-		return false, nil
+		return false, false, nil
+	}
+	if _, statErr := os.Stat(ip2regionLivePath); statErr == nil {
+		// dist 回退前提：live 仍为普通文件；目录/缺失形态不得 copyFile 覆盖。
+		if info, ierr := os.Stat(ip2regionLivePath); ierr != nil || info.IsDir() {
+			return false, false, fmt.Errorf("回退到发行版前 live xdb 形态异常: %v", ierr)
+		}
 	}
 	if err := copyFile(ip2regionDistPath, ip2regionLivePath); err != nil {
-		return false, fmt.Errorf("回退到发行版 ip2region xdb: %w", err)
+		return false, false, fmt.Errorf("回退到发行版 ip2region xdb: %w", err)
 	}
 	if err := reloadIP2RegionSearcher(); err != nil {
 		// R49 B-N1：dist copy 已成功、磁盘=dist 基线，fail-open 前提「磁盘已
@@ -661,7 +694,48 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 		// copy 本身失败（上方，磁盘未动、仍是新库）才返回 error 走 fail-open。
 		Logf("error", "ip2region update: reload after dist restore failed (%v); disk restored to dist baseline; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", err)
 	}
-	return true, nil
+	return true, true, nil
+}
+
+// failOpenPreconditionHolds 校验 fail-open 前置（U02-F07）：live 为普通文件、
+// 摘要等于本次新工件、且 validateIP2RegionXDB 通过。
+func (m *IP2RegionUpdateManager) failOpenPreconditionHolds() bool {
+	info, err := os.Lstat(ip2regionLivePath)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	if m.newXdbSha == "" {
+		return false
+	}
+	sum, err := sha256File(ip2regionLivePath)
+	if err != nil || sum != m.newXdbSha {
+		return false
+	}
+	return validateIP2RegionXDB(ip2regionLivePath) == nil
+}
+
+// restorePreviousVersionRow 回写事件前版本行与 sidecar（失败仅日志）。
+func (m *IP2RegionUpdateManager) restorePreviousVersionRow() {
+	if m.prevVersion == "" {
+		return
+	}
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET version=?, updated_at=datetime('now') WHERE id=1", m.prevVersion); err != nil {
+		Logf("error", "ip2region update: 回滚版本行失败（下次成功更新自愈）: %v", err)
+	}
+	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", m.prevVersion); err != nil {
+		Logf("error", "ip2region update: 回滚 .version sidecar 失败（下次成功更新自愈）: %v", err)
+	}
+}
+
+// writeDistRollbackMarkers dist 回退后写保守标识 bundled（已装载内置库，
+// 版本不可知；U02-F08 不得冒称 prevVersion），下次远端数值 tag 可建立基线。
+func (m *IP2RegionUpdateManager) writeDistRollbackMarkers() {
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET version='bundled', updated_at=datetime('now') WHERE id=1"); err != nil {
+		Logf("error", "ip2region update: 写入 dist 回退标识失败: %v", err)
+	}
+	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", "bundled"); err != nil {
+		Logf("error", "ip2region update: 写入 dist 回退 sidecar 失败: %v", err)
+	}
 }
 
 // successAfterReloadFailOpen 在「reloader 失败但无任何回退基线」时按成功落库

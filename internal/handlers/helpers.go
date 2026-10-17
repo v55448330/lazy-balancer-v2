@@ -61,7 +61,8 @@ type CertificateInfo struct {
 	NotAfter        string `json:"not_after"`
 	DaysUntilExpiry int    `json:"days_until_expiry"`
 	Warning         string `json:"warning,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// U13-08（第 78 轮）：原 Error 字段在本包零赋值点（恒空契约噪音），已删除
+	// ——解析失败走 4xx message，前端自备错误通道。
 }
 
 // validateTLSCertificate validates that the certificate and private key match
@@ -118,12 +119,12 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 
 	// Check if certificate is expired - warning only
 	if time.Now().After(x509Cert.NotAfter) {
-		info.Warning = fmt.Sprintf("证书已过期 (过期时间: %s)", x509Cert.NotAfter.Format("2006-01-02"))
+		info.Warning = fmt.Sprintf("证书已过期 (过期时间: %s)", x509Cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02"))
 	}
 
 	// Check if certificate is not yet valid - warning only
 	if time.Now().Before(x509Cert.NotBefore) {
-		info.Warning = fmt.Sprintf("证书尚未生效 (生效时间: %s)", x509Cert.NotBefore.Format("2006-01-02"))
+		info.Warning = fmt.Sprintf("证书尚未生效 (生效时间: %s)", x509Cert.NotBefore.In(services.CurrentLocation()).Format("2006-01-02"))
 	}
 
 	// Extract public key from certificate

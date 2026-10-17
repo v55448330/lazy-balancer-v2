@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -144,8 +145,9 @@ func TestGetLogStats_eachTaskUsesOwnRealFileSize(t *testing.T) {
 	initTaskEngineForTest(t)
 	tasksDir := filepath.Join(t.TempDir(), "tasks")
 	h.cfg.LogFile = filepath.Join(filepath.Dir(tasksDir), "app.log")
+	oldLogDir := taskengine.LogDir() // U08-F13：保存旧值，cleanup 无条件恢复（原置空——跨用例污染）
 	taskengine.SetLogDir(tasksDir)
-	t.Cleanup(func() { taskengine.SetLogDir("") })
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
 	certDir := filepath.Join(tasksDir, "certjobs")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -214,5 +216,210 @@ func TestGetLogStats_eachTaskUsesOwnRealFileSize(t *testing.T) {
 	}
 	if byKey["task:crawlerbot-update"].KeepCount != 1 || byKey[certJobKey].KeepCount != 5 {
 		t.Errorf("归档份数策略错误: crawler=%d certjob=%d", byKey["task:crawlerbot-update"].KeepCount, byKey[certJobKey].KeepCount)
+	}
+}
+
+// U08-F01：安全事件行的保留文案改由 services.SecurityEventsRetentionSummary
+// 单源生成——显式 security_events_retention_days 生效（此前恒复用审计月数
+// 文案，显式设置被无视），且该行补 LimitBytes（审计写入侧 audit_log_size_mb）。
+func TestGetLogStats_securityEventsRetentionUsesExplicitSettings(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	oldWafLog := wafAuditLogFile
+	wafAuditLogFile = filepath.Join(t.TempDir(), "audit.log")
+	t.Cleanup(func() { wafAuditLogFile = oldWafLog })
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=3, security_events_retention_days=30 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats?key=security_events", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Logs []struct {
+				Key           string `json:"key"`
+				LimitBytes    *int64 `json:"limit_bytes"`
+				RetentionNote string `json:"retention_note"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Logs) != 1 || resp.Data.Logs[0].Key != "security_events" {
+		t.Fatalf("logs=%+v, want exactly security_events row", resp.Data.Logs)
+	}
+	row := resp.Data.Logs[0]
+	if !strings.Contains(row.RetentionNote, "30 天") {
+		t.Errorf("retention_note=%q, want 显式 30 天（不得复用审计月数文案）", row.RetentionNote)
+	}
+	if row.LimitBytes == nil || *row.LimitBytes != 10*1024*1024 {
+		t.Errorf("limit_bytes=%v, want 默认 audit_log_size_mb=10MB", row.LimitBytes)
+	}
+
+	// 回归形态：未显式设置时回退旧通道月表述。
+	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats?key=security_events", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Logs) != 1 || !strings.Contains(resp.Data.Logs[0].RetentionNote, "3 个月") {
+		t.Errorf("retention_note=%q, want 回退月表述「3 个月」", resp.Data.Logs[0].RetentionNote)
+	}
+}
+
+// U08-F07：key/keys 收窄——任务监控弹框只取单行，缺省保持旧全量形状。
+func TestGetLogStats_keyFilterNarrowsRows(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	oldWafLog := wafAuditLogFile
+	wafAuditLogFile = filepath.Join(t.TempDir(), "audit.log")
+	t.Cleanup(func() { wafAuditLogFile = oldWafLog })
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+
+	get := func(query string) []string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats"+query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Data struct {
+				Logs []struct {
+					Key string `json:"key"`
+				} `json:"logs"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		keys := make([]string, 0, len(resp.Data.Logs))
+		for _, row := range resp.Data.Logs {
+			keys = append(keys, row.Key)
+		}
+		return keys
+	}
+
+	if keys := get("?key=certjob"); len(keys) != 1 || keys[0] != "certjob" {
+		t.Fatalf("key=certjob → %v, want 仅 certjob 一行", keys)
+	}
+	keys := get("?keys=audit,threat_update")
+	if len(keys) != 2 || keys[0] != "audit" || keys[1] != "threat_update" {
+		t.Fatalf("keys=audit,threat_update → %v, want 两行", keys)
+	}
+	if all := get(""); len(all) < 10 {
+		t.Fatalf("缺省应保持全量形状，got %d 行", len(all))
+	}
+}
+
+// U08-F07：聚合一次 ReadDir——200 文件的 certjobs 目录单次请求只枚举一次
+// （原逐文件 dirBytes 在其内部再 ReadDir，O(N²)）。
+func TestGetLogStats_aggregateDirReadsOnce(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	base := t.TempDir()
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(filepath.Join(base, "tasks"))
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	certDir := filepath.Join(base, "tasks", "certjobs")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		if err := os.WriteFile(filepath.Join(certDir, "certjob-lb_"+strconv.Itoa(i)+".log"), make([]byte, 10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var readDirCalls int
+	oldReadDir := logStatsReadDir
+	logStatsReadDir = func(dir string) ([]os.DirEntry, error) {
+		readDirCalls++
+		return os.ReadDir(dir)
+	}
+	t.Cleanup(func() { logStatsReadDir = oldReadDir })
+
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats?key=certjob", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if readDirCalls != 1 {
+		t.Fatalf("certjobs 聚合 ReadDir 调用=%d, want 1（O(N²) 形态未收敛）", readDirCalls)
+	}
+	var resp struct {
+		Data struct {
+			Logs []struct {
+				Key       string `json:"key"`
+				SizeBytes int64  `json:"size_bytes"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Logs) != 1 || resp.Data.Logs[0].SizeBytes != 2000 {
+		t.Fatalf("certjob 聚合=%+v, want 单行 2000B", resp.Data.Logs)
+	}
+}
+
+// U08-F12：聚合累加归档份数，且 .gz 归档不再冒充活跃文件。
+func TestGetLogStats_aggregateCountsRotationsAndGzAsArchive(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	base := t.TempDir()
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(filepath.Join(base, "tasks"))
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	certDir := filepath.Join(base, "tasks", "certjobs")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, size := range map[string]int{
+		"certjob-lb_a.log":    100,
+		"certjob-lb_a.log.1":  50,
+		"certjob-lb_a.log.gz": 30,
+	} {
+		if err := os.WriteFile(filepath.Join(certDir, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats?key=certjob", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Logs []struct {
+				Key          string `json:"key"`
+				SizeBytes    int64  `json:"size_bytes"`
+				RotatedBytes int64  `json:"rotated_bytes"`
+				RotatedCount int    `json:"rotated_count"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Logs) != 1 {
+		t.Fatalf("logs=%+v, want 单行", resp.Data.Logs)
+	}
+	row := resp.Data.Logs[0]
+	if row.SizeBytes != 100 {
+		t.Errorf("size_bytes=%d, want 100（.gz 不计活跃）", row.SizeBytes)
+	}
+	if row.RotatedBytes != 80 || row.RotatedCount != 2 {
+		t.Errorf("rotated=%d/%d, want 80/2（移位副本 + .gz 归档）", row.RotatedBytes, row.RotatedCount)
 	}
 }

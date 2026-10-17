@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeResolver 可编程 DNS 替身：PTR 与正向结果按表返回。
@@ -72,16 +73,16 @@ func TestVerifyCrawlerIPRangeFromList_jsonPerEngine(t *testing.T) {
 	oldFile := crawlerIPListFile
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
 	defer func() { crawlerIPListFile = oldFile }()
-	if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["140.0.0.0/32"],"googlebot":["66.249.66.0/24"]}`), 0o600); err != nil {
+	if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["42.236.8.0/21"],"googlebot":["66.249.66.0/24"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ResetCrawlerVerifyCacheForTest(nil)
 
 	// When / Then：360 命中只认 360 源，不得混用 Google 段
-	if !verifyCrawlerIPRangeFromList("140.0.0.0", "so360spider") {
+	if !verifyCrawlerIPRangeFromList("42.236.8.1", "so360spider") {
 		t.Fatal("360 官方段应命中 iprange")
 	}
-	if verifyCrawlerIPRangeFromList("140.0.0.0", "googlebot") {
+	if verifyCrawlerIPRangeFromList("42.236.8.1", "googlebot") {
 		t.Fatal("360 段不得串入 Googlebot 命中")
 	}
 }
@@ -92,5 +93,67 @@ func TestVerifyCrawler_dnsFailureFailClosed(t *testing.T) {
 	})
 	if VerifyCrawler("5.6.7.8", "googlebot") {
 		t.Error("DNS 失败必须 fail-closed 拒绝")
+	}
+}
+
+// ---- 第 78 轮 U14-06 / U14-09 ----
+
+func resetCrawlerIPRangeCacheForTest() {
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = nil
+	crawlerFileCacheMu.Unlock()
+}
+
+func TestCrawlerIPRangeList_precompiledAndFailureThrottled(t *testing.T) {
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+	resetCrawlerIPRangeCacheForTest()
+
+	// 缺失快照：fail-closed，且失败也写节流时间戳。
+	if verifyCrawlerIPRangeFromList("66.249.66.1", "googlebot") {
+		t.Fatal("missing snapshot must fail closed")
+	}
+	if err := os.WriteFile(crawlerIPListFile, []byte(`{"googlebot":["66.249.66.0/24"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 10 分钟内不重读：失败节流生效（旧实现在失败路径不写时间戳，会立即重读）。
+	if verifyCrawlerIPRangeFromList("66.249.66.1", "googlebot") {
+		t.Fatal("failure must be throttled for the reload interval")
+	}
+	// 过期后重读 → 命中；命中用预编译前缀（判定不再逐条 ParsePrefix）。
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap.loadedAt = time.Now().Add(-11 * time.Minute)
+	crawlerFileCacheMu.Unlock()
+	if !verifyCrawlerIPRangeFromList("66.249.66.1", "googlebot") {
+		t.Fatal("snapshot reload must match the configured prefix")
+	}
+	crawlerFileCacheMu.Lock()
+	snap := crawlerFileCacheSnap
+	crawlerFileCacheMu.Unlock()
+	if snap == nil || len(snap.prefixes["googlebot"]) != 1 {
+		t.Fatalf("prefixes must be precompiled at load, got %#v", snap)
+	}
+	// 回归形状：段外地址不命中。
+	if verifyCrawlerIPRangeFromList("66.249.67.1", "googlebot") {
+		t.Fatal("address outside the prefix must not match")
+	}
+}
+
+func TestVerifyCrawlerIPRange_invalidAddrNoPanic(t *testing.T) {
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+	if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["140.0.0.0/24"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resetCrawlerIPRangeCacheForTest()
+	for _, bad := range []string{"@", "not-an-addr", ""} {
+		if verifyCrawlerIPRangeFromList(bad, "so360spider") {
+			t.Fatalf("invalid address %q must not match", bad)
+		}
+	}
+	if !verifyCrawlerIPRangeFromList("140.0.0.1", "so360spider") {
+		t.Fatal("valid address regression: expected match")
 	}
 }

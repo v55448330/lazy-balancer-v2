@@ -241,6 +241,8 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		user.LastLogin = sql.NullTime{Time: lastLogin, Valid: true}
 	}
 
+	// node_mode 仅用于登录响应体的展示字段（U07-F07：JWT claim 已删除——
+	// jwtAuth 不消费，客户端声明无意义；响应体 NodeMode 保留）。
 	nodeMode := "master"
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
@@ -259,14 +261,13 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 	}
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":   user.ID,
-		"username":  user.Username,
-		"role":      user.Role,
-		"node_mode": nodeMode,
-		"pwd_ver":   passwordVersion,
-		"jti":       hex.EncodeToString(jtiBytes),
-		"iat":       now.Unix(),
-		"exp":       now.Add(expireDuration).Unix(),
+		"user_id":  user.ID,
+		"username": user.Username,
+		"role":     user.Role,
+		"pwd_ver":  passwordVersion,
+		"jti":      hex.EncodeToString(jtiBytes),
+		"iat":      now.Unix(),
+		"exp":      now.Add(expireDuration).Unix(),
 	})
 	if mfaTs > 0 {
 		claims := token.Claims.(jwt.MapClaims)

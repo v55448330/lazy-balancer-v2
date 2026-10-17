@@ -770,6 +770,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		if errors.Is(rollbackErr, sql.ErrTxDone) {
 			rollbackErr = nil
 		}
+		// U04-03: apply 已把未提交事务视图的投影文件写盘；commit 失败必须
+		// 与 apply 拒绝分支同构回滚到已提交视图，再恢复运行配置。
+		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		err = errors.Join(err, rollbackErr, restoreErr)
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("提交配置失败", err.Error(), services.AuditResultPart("failure")))

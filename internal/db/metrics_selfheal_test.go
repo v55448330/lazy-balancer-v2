@@ -266,6 +266,46 @@ func TestGCQuarantinedMetricsFiles_keepsNewestThreePerBase(t *testing.T) {
 	}
 }
 
+// U12-F06（第 78 轮）：隔离文件的时间真相在文件名（os.Rename 保留源 mtime），
+// GC 曾按 ModTime 排序——源文件 mtime 越旧的最新隔离件会被误删。4 份副本、
+// 文件名最新者的 mtime 最旧：GC 后必须保留文件名最新的 3 份，并记录删除。
+func TestGCQuarantinedMetricsFiles_ordersByFilenameTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "lazy-balancer-metrics.db")
+	base := time.Now().Add(-10 * time.Hour).Truncate(time.Second)
+	paths := make([]string, 4)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("%s.corrupt.%d", dbPath, base.Add(time.Duration(i)*time.Minute).Unix())
+		if err := os.WriteFile(paths[i], []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// 反向 mtime：文件名越新 → 源 mtime 越旧
+		mod := base.Add(time.Duration(3-i) * time.Minute)
+		if err := os.Chtimes(paths[i], mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var logBuf bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(oldOut)
+
+	gcQuarantinedMetricsFiles(dbPath)
+
+	if _, err := os.Stat(paths[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest-by-filename %s must be GC'd (err=%v)", paths[0], err)
+	}
+	for _, kept := range paths[1:] {
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("newest-by-filename %s must be kept: %v", kept, err)
+		}
+	}
+	if !strings.Contains(logBuf.String(), "gc quarantined metrics files: removed") {
+		t.Fatalf("GC deletion must be logged, log=%q", logBuf.String())
+	}
+}
+
 // R72 CORE-F1：Stat 返回非 ErrNotExist 持久错误（父路径是普通文件 → ENOTDIR）
 // 时，nextQuarantinePath 必须记日志并返回现值，不得无界自旋。
 func TestNextQuarantinePath_returnsCandidateOnPersistentStatError(t *testing.T) {

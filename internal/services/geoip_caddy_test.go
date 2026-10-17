@@ -647,3 +647,34 @@ func TestLoadSecurityPolicyContext_carriesTriStateGateFields(t *testing.T) {
 		t.Fatalf("MergedWhitelist=%v, want [198.51.100.7]", p.MergedWhitelist)
 	}
 }
+
+// 第 78 轮 U14-02：爬虫验证控制头（X-LB-Crawler-Verified/Spoof）由 caddygeoip
+// 在 coraza phase:1 之前注入并已消费，必须与 X-LB-GeoIP-* 同口径无条件剥离——
+// 无 GeoIP 策略绑定的规则（handler 不在场）下客户端伪造值绝不能直达上游。
+func TestRenderUpstreamStrip_crawlerHeaders(t *testing.T) {
+	upstreams := []UpstreamConfig{{Host: "127.0.0.1", Port: 8080, Weight: 1, Enabled: true}}
+	rule := SingleRuleConfig{HealthCheckInterval: 10, HealthCheckTimeout: 2, HealthCheckUnhealthyThreshold: 3, HealthCheckHealthyThreshold: 2, GlobalRequestBodyMaxSizeMB: 128, CaddyID: "lb_crawlerstrip", Protocol: "http", ListenPort: 80}
+	chain, err := buildHTTPHandleChain(rule, upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	last, ok := chain[len(chain)-1].(map[string]interface{})
+	if !ok || last["handler"] != "reverse_proxy" {
+		t.Fatalf("last handler must be reverse_proxy, got %#v", chain[len(chain)-1])
+	}
+	headers := last["headers"].(map[string]interface{})
+	request := headers["request"].(map[string]interface{})
+	del, ok := request["delete"].([]string)
+	if !ok {
+		t.Fatalf("headers.request.delete must be []string, got %#v", request["delete"])
+	}
+	have := make(map[string]bool, len(del))
+	for _, h := range del {
+		have[h] = true
+	}
+	for _, h := range []string{"X-LB-Crawler-Verified", "X-LB-Crawler-Spoof"} {
+		if !have[h] {
+			t.Fatalf("headers.request.delete must contain %s, got %v", h, del)
+		}
+	}
+}

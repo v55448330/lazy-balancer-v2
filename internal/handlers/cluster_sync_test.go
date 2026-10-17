@@ -78,7 +78,7 @@ func TestGetClusterSnapshot_auditFallsBackToNodeID(t *testing.T) {
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 		db.SetDB(oldDB)
 	})
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/cluster/sync/snapshot", func(c *gin.Context) {
@@ -176,7 +176,7 @@ func TestGetClusterWafFiles_demotedMasterForbidden(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest("GET", "/api/v1/cluster/waf/files", nil).WithContext(context.Background())
 	ginContext, _ := gin.CreateTestContext(response)

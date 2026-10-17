@@ -15,6 +15,7 @@ var auditResultTextMap = map[string]string{
 	"missing_material":     "证书数据缺失",
 	"queued":               "已重新排队",
 	"requested":            "已触发",
+	"skipped":              "已跳过",
 	"invalid_request":      "请求格式错误",
 	"invalid_credentials":  "用户名或密码错误",
 	"credentials_invalid":  "凭证无效",

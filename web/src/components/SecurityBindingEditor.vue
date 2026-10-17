@@ -153,7 +153,8 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import DialogHeader from '@/components/DialogHeader.vue'
 import type { APIResponse } from '@/types'
 import {
@@ -371,11 +372,13 @@ const submit = async (): Promise<void> => {
     saving.value = true
     try {
       // mixed 不携带提交：后端按提交集全量替换绑定（携带 mixed 会被拒绝，不含
-      // mixed 的提交会静默剥离）；存在已绑 mixed 时保存按钮已禁用，不会走到这里
-      await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
+      // mixed 的提交会静默剥离）；存在已绑 mixed 时保存按钮已禁用，不会走到这里。
+      // 响应经 showSaveResult 统一呈现（第 78 轮 U15-F01）：退化 200（DB 已提交
+      // 但 Caddy 应用失败）带 message 后缀时必须常驻警告，原实现丢弃返回值。
+      const res = await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
         policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
       })
-      mfaAwareSuccess('安全策略绑定已保存')
+      showSaveResult(res, '安全策略绑定已保存')
       emit('update:modelValue', false)
       emit('saved')
     } catch (error: unknown) {
@@ -410,10 +413,14 @@ const submit = async (): Promise<void> => {
   }
   saving.value = true
   try {
-    await request.post(`/security/policies/${pid}/bindings/bulk`, { bind: toBind, unbind: toUnbind })
-    mfaAwareSuccess(`已更新 ${toBind.length + toUnbind.length} 条规则的绑定`)
+    const res = await request.post<APIResponse>(`/security/policies/${pid}/bindings/bulk`, { bind: toBind, unbind: toUnbind })
+    showSaveResult(res, `已更新 ${toBind.length + toUnbind.length} 条规则的绑定`)
     emit('update:modelValue', false)
     emit('saved')
+  } catch (error: unknown) {
+    // 与规则侧对齐（第 78 轮 U15-F10）：原无 catch → 请求失败产生 unhandled
+    // rejection（全局拦截器已 toast，这里仅记录并保持弹框可重试）
+    console.error('save policy bindings failed', error)
   } finally {
     saving.value = false
   }

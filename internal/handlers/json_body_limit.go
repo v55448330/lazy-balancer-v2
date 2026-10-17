@@ -10,8 +10,9 @@ import (
 
 // configuredRequestBodyBytes 读取全局配置 request_body_max_size_mb 作为请求体
 // 上限（APIMCP41-2，第 41 轮审计，2026-09-19 用户裁定「统一遵循请求体大小配置项
-// 限制」）。0/缺列/读失败/越界均回退 128MB（与配置项写侧 0=默认 128、0-4096
-// 边界同口径，见 handlers/caddy.go UpdateConfig 校验）。
+// 限制」）。读侧：0/缺列/读失败/越界均回退 128MB；写侧：值型 1-4096，0 被
+// 400 拒绝（见 handlers/caddy.go UpdateConfig 校验与 db_truth_write_gate_test）。
+// 两侧口径不同——0 不是合法的「默认 128」写值，回退只发生在读侧。
 func configuredRequestBodyBytes() int64 {
 	mb := globalConfigInt("request_body_max_size_mb", 128)
 	if mb < 1 || mb > 4096 {

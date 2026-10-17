@@ -12,6 +12,10 @@ package caddygeoip
 //     误差——大屏光流为密度示意，可接受。
 //   - 国名口径：X-LB-GeoIP-Country 原始国名（xdb 英文名/「中国」），由 app
 //     代理端点翻译为中文（app 单源 geoipnames），本模块不加依赖。
+//   - 统计边界（U14-07）：计数由 geoip2region handler 记入——**仅统计经过
+//     geoip handler 的规则流量**（无 GeoIP 策略的规则不挂该 handler，因此
+//    不进此统计）。大屏流量卡是「已启用地域能力规则的流量」口径，不是全站
+//     请求总量。
 //   - 注册语义：admin 路由进程级注册一次（reload 期新旧实例并存，同路径
 //     二次注册会 panic；路由无实例状态——读全局计数器，实例无关）。
 
@@ -33,18 +37,51 @@ var (
 	trafficMu        sync.RWMutex
 	trafficCountries = map[string]*trafficEntry{}
 
-	trafficSeq        atomic.Uint64 // 请求总序（含未抽样）
-	trafficSecond     atomic.Int64  // 惰性翻秒：当前 unix 秒
-	trafficSecondHits atomic.Uint32 // 当前秒请求计数
-	trafficSampleN    atomic.Uint32 // 抽样因子 N（1=全量）
-
-	trafficRouteRegistered atomic.Bool
+	// trafficSecondState 惰性翻秒 + 当前秒计数的打包原子态：
+	// (unixSec<<32)|hits。U14-13（第 78 轮）：旧实现 second 与 hits 是
+	// 两个独立原子——翻秒路径 Swap(sec) 与并发 Add(1) 之间无配对，跨秒瞬间
+	// 的命中会落在被随后 Swap(0) 丢弃的计数里（翻秒丢计）。打包 CAS 把
+	// 「读当前秒 + 自增」变成单一线性化操作。
+	trafficSecondState atomic.Uint64
+	trafficSampleN     atomic.Uint32 // 抽样因子 N（1=全量）
 )
 
+// trafficSecondState 的打包布局。
 const (
-	fuseQPSPerSecond      = 4000 // 单秒请求计数超过此值 → 进入 1/8 抽样
-	fuseSampleN           = 8
-	fuseFallbackPerSecond = 1000 // 抽样期单秒计数低于此值（真值≈×8 < fuseQPS）→ 回落全量
+	trafficHitsMask = 0xffffffff
+)
+
+// trafficBumpSecond 在当前秒计数 +1 并返回 (新 hits, 上一秒 hits, 是否翻秒)。
+func trafficBumpSecond(nowSec uint64) (hits, prevHits uint32, rolled bool) {
+	for {
+		old := trafficSecondState.Load()
+		oldSec := old >> 32
+		oldHits := uint32(old & trafficHitsMask)
+		if oldSec == nowSec && oldHits < trafficHitsMask {
+			if trafficSecondState.CompareAndSwap(old, (nowSec<<32)|uint64(oldHits+1)) {
+				return oldHits + 1, oldHits, false
+			}
+			continue
+		}
+		if oldSec != nowSec {
+			// 翻秒（含时钟回拨）：新秒从 1 起算，上一秒计数完整交还调用方。
+			if trafficSecondState.CompareAndSwap(old, (nowSec<<32)|1) {
+				return 1, oldHits, true
+			}
+			continue
+		}
+		// hits 饱和（理论不可达：1e9 QPS）：保持当前秒不再自增。
+		return oldHits, oldHits, false
+	}
+}
+
+const (
+	fuseQPSPerSecond = 4000 // 单秒请求计数超过此值 → 进入 1/8 抽样
+	fuseSampleN      = 8
+	// 抽样期单秒计数低于此值 → 回落全量：×8 估计真值 <8000，与进入阈值
+	// 4000 构成 4000–8000 的滞回带（U14-13：旧注释「真值≈×8 < fuseQPS」
+	// 与数值不符——1000×8=8000 > 4000）。
+	fuseFallbackPerSecond = 1000
 )
 
 func trafficEntryFor(country string) *trafficEntry {
@@ -69,16 +106,14 @@ func trafficRecord(country string, attack bool) {
 	if country == "" {
 		return
 	}
-	// 惰性翻秒 + 保险丝状态机（全量→1/8 抽样→全量，滞回防抖动）
-	sec := time.Now().Unix()
-	if trafficSecond.Swap(sec) != sec {
-		prev := trafficSecondHits.Swap(0)
-		if prev < fuseFallbackPerSecond {
-			trafficSampleN.Store(1)
-		}
+	// 惰性翻秒 + 保险丝状态机（全量→1/8 抽样→全量，滞回防抖动）。
+	// U14-13：翻秒与自增是单个 CAS（打包秒戳+计数），并发 Add 不会被
+	// 随后清零的上一秒计数吞掉。
+	hits, prevHits, rolled := trafficBumpSecond(uint64(time.Now().Unix()))
+	if rolled && prevHits < fuseFallbackPerSecond {
+		trafficSampleN.Store(1)
 	}
 	trafficSampleN.CompareAndSwap(0, 1)
-	hits := trafficSecondHits.Add(1)
 	if hits == fuseQPSPerSecond+1 {
 		trafficSampleN.Store(fuseSampleN)
 	}

@@ -156,19 +156,6 @@ var autobanProjectionRefresher func() (IPListProjectionOutcome, error)
 // SetAutobanReloader 注册全量重载回调（nil=清除，测试用）。
 func SetAutobanReloader(fn func() error) { autobanReloader = fn }
 
-// SetAutobanEnabled 写自动封禁业务开关并同步任务调度；禁用前执行与设置页
-// 相同的收尾，再 StopLoop，避免名单变化滞留。
-func SetAutobanEnabled(enabled bool) error {
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
-		return err
-	}
-	if !enabled {
-		AutobanDisableFlush()
-	}
-	syncTaskLoop(AutobanTaskID, enabled)
-	return nil
-}
-
 // SetAutobanProjectionRefresher 注册投影热路径回调（nil=清除，测试用）。
 func SetAutobanProjectionRefresher(fn func() (IPListProjectionOutcome, error)) {
 	autobanProjectionRefresher = fn
@@ -251,6 +238,10 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if prev.WindowMinutes != cfg.WindowMinutes || prev.Scope != cfg.Scope {
 		ResetAutobanCounters()
 	}
+	if !cfg.Enabled {
+		AutobanDisableFlush()
+	}
+	syncTaskLoop(AutobanTaskID, cfg.Enabled)
 	return nil
 }
 
@@ -274,7 +265,8 @@ type autobanCounter struct {
 	// LastSeen 窗口内末次命中（feed 更新点记录；建议列表「首末时间」数据源）。
 	LastSeen time.Time
 	// Reached 本窗口内已达到过封禁阈值（计数分级日志的判据：threshold 行
-	// 每 IP 每窗口恰一行；窗口过期清零时若为真落 expire 行）。
+	// 仅由 Run 的评估/修剪路径产生，热路径喂入恒不写该行；窗口过期清零时
+	// 若为真落 expire 行）。
 	Reached bool
 }
 
@@ -353,8 +345,7 @@ func autobanObserveEventScoped(cfg AutobanConfig, ip, action, ruleTriggered stri
 		return
 	}
 	now := autobanNow()
-	var capWarn, expiredReached, thresholdHit bool
-	var thresholdCount, thresholdWindowMin int
+	var capWarn bool
 	autobanMu.Lock()
 	w, exists := autobanWindows[ip]
 	if !exists {
@@ -368,31 +359,19 @@ func autobanObserveEventScoped(cfg AutobanConfig, ip, action, ruleTriggered stri
 	}
 	if w != nil {
 		if w.WindowStart.IsZero() || now.Sub(w.WindowStart) >= window {
-			// 窗口过期清零：曾达标 IP 落一行 expire（计数分级日志，非逐事件）。
-			expiredReached = w.Reached
 			w.Count = 0
 			w.WindowStart = now
 			w.Reached = false
 		}
 		w.Count++
 		w.LastSeen = now
-		// 首次达到阈值 → 恰一行 threshold（跨阈值后不再重复记）。
 		if !w.Reached && cfg.Threshold > 0 && w.Count >= cfg.Threshold {
 			w.Reached = true
-			thresholdHit = true
-			thresholdCount = w.Count
-			thresholdWindowMin = cfg.WindowMinutes
 		}
 	}
 	autobanMu.Unlock()
 	if capWarn {
 		Logf("warn", "自动封禁计数器达 %d 键上限，新 IP 不再计数（既有键不受影响）", autobanMaxTrackedIPs)
-	}
-	if expiredReached {
-		TaskLogf(AutobanTaskID, "expire", "IP %s 计数窗口过期，清零", ip)
-	}
-	if thresholdHit {
-		TaskLogf(AutobanTaskID, "threshold", "IP %s 达到封禁阈值（%d 次/%d 分钟）", ip, thresholdCount, thresholdWindowMin)
 	}
 }
 
@@ -444,9 +423,10 @@ func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion 
 		}
 		return out[i].IP < out[j].IP
 	})
-	if len(out) > autobanSuggestionCap {
-		out = out[:autobanSuggestionCap]
-	}
+	// U01-F02（第 78 轮）：候选评估不做展示/建议上限截断——正式 merge 必须
+	// 看到全部达标候选（旧实现复用 autobanSuggestionCap=200 截断候选项，
+	// 第 201 个达标 IP 永远不会被封禁）；容量由 AutobanListEntryCap 收敛。
+	// 观察模式在 autobanSetSuggestions 前单独截断（展示口径）。
 	autobanMu.Unlock()
 	for _, ip := range expiredReached {
 		TaskLogf(AutobanTaskID, "expire", "IP %s 计数窗口过期，清零", ip)
@@ -903,8 +883,12 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 	autobanFlushPendingReload()
 
 	if cfg.DryRun {
-		// 观察模式不写名单，无 TOCTOU 面——候选评估无需临界区。
+		// 观察模式不写名单，无 TOCTOU 面——候选评估无需临界区。展示/建议
+		// 口径在此截断（U01-F02：评估层不截断，正式 merge 消费全量）。
 		candidates := autobanCandidates(cfg.Threshold, window)
+		if len(candidates) > autobanSuggestionCap {
+			candidates = candidates[:autobanSuggestionCap]
+		}
 		autobanSetSuggestions(candidates)
 		TaskLogf(AutobanTaskID, "cycle", "观察模式：计数 %d IP / 活跃 %d 个 IP / 达阈值 %d（阈值 %d 次/%d 分钟，口径 %s）",
 			autobanTrackedCount(), autobanReachedCount(), len(candidates), cfg.Threshold, cfg.WindowMinutes, autobanScopeLabel(cfg.Scope))

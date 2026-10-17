@@ -130,68 +130,33 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 	}
 }
 
-func TestStartSecurityEventsRetention_idempotentAndAlwaysRunning(t *testing.T) {
-	// R69 REMOVE 后的契约锁定：worker 生命周期由 main.go 单点拥有——重复启动
-	// 幂等（不重启 worker）；不存在任何「停止」生产路径（从节点也摄入事件，
-	// 停止会致事件表越过 10 万行上限无界增长，R62 B-NEW-2 确立的设计语义）。
+func TestSecurityEventsRetention_engineTriggerDeletesExpired(t *testing.T) {
+	// Given：引擎驱动路径 + 过期与保留事件。
 	setupSecurityEventsRetentionTestDB(t)
-	t.Cleanup(StopSecurityEventsRetention)
-	workerDone := func() chan struct{} {
-		securityEventsRetentionMu.Lock()
-		defer securityEventsRetentionMu.Unlock()
-		return securityEventsRetentionDone
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
+		(datetime('now', '-40 days'), '198.51.100.1', 'expired'),
+		(datetime('now', '-1 day'), '198.51.100.2', 'recent')`); err != nil {
+		t.Fatal(err)
+	}
+	SetConfigLoadRerun(func(string) error { return nil })
+	t.Cleanup(func() { SetConfigLoadRerun(nil) })
+	te := InitTaskEngine("", t.TempDir()+"/app.log")
+	t.Cleanup(StopTaskEngine)
+
+	// When：经引擎手动触发（与 24h Periodic 同一 Run 体）。
+	if err := te.Trigger("security-events-retention", "manual", ""); err != nil {
+		t.Fatal(err)
 	}
 
-	StartSecurityEventsRetention(context.Background())
-	first := workerDone()
-	if first == nil {
-		t.Fatal("StartSecurityEventsRetention must start the retention worker")
+	// Then：过期事件删除，近期事件保留。
+	if got := countSecurityEventsByType(t, "expired"); got != 0 {
+		t.Fatalf("expired events after engine cleanup = %d, want 0", got)
 	}
-	StartSecurityEventsRetention(context.Background())
-	if second := workerDone(); second != first {
-		t.Fatal("repeated start must not restart the retention worker")
-	}
-	select {
-	case <-first:
-		t.Fatal("worker must keep running（无停止路径是设计语义）")
-	default:
-	}
-}
-
-func TestStartSecurityEventsRetention_stopsWhenParentContextCanceled(t *testing.T) {
-	// Given: a worker bound to a cancelable parent context
-	setupSecurityEventsRetentionTestDB(t)
-	t.Cleanup(StopSecurityEventsRetention)
-	ctx, cancel := context.WithCancel(context.Background())
-	StartSecurityEventsRetention(ctx)
-	securityEventsRetentionMu.Lock()
-	done := securityEventsRetentionDone
-	securityEventsRetentionMu.Unlock()
-	if done == nil {
-		t.Fatal("worker did not publish its completion channel")
-	}
-
-	// When
-	cancel()
-
-	// Then: the worker exits and clears its state so a restart is possible
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("worker must stop when the parent context is canceled")
-	}
-	securityEventsRetentionMu.Lock()
-	cleared := securityEventsRetentionDone == nil
-	securityEventsRetentionMu.Unlock()
-	if !cleared {
-		t.Fatal("worker state must be cleared after parent context cancellation")
-	}
-	StartSecurityEventsRetention(context.Background())
-	securityEventsRetentionMu.Lock()
-	restarted := securityEventsRetentionDone != nil
-	securityEventsRetentionMu.Unlock()
-	if !restarted {
-		t.Fatal("worker must be restartable after parent context cancellation")
+	if got := countSecurityEventsByType(t, "recent"); got != 1 {
+		t.Fatalf("recent events after engine cleanup = %d, want 1", got)
 	}
 }
 
@@ -248,13 +213,16 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 }
 
 func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
-	// Given: 12000 expired events（超过单批 5000，必须分批循环）+ 1 条近期事件
+	// Given: securityEventsRetentionDeleteBatch+1000 expired events（超过单批
+	// 20000，必须分批循环）+ 1 条近期事件。U01-F08（第 78 轮）：原种子 12000
+	// 小于单批上限，实际只走一次 DELETE，「分批」断言恒成立却从未覆盖批循环。
+	seedTotal := securityEventsRetentionDeleteBatch + 1000
 	setupSecurityEventsRetentionTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	var sb strings.Builder
-	for start := 0; start < 12000; start += 1000 {
+	for start := 0; start < seedTotal; start += 1000 {
 		sb.Reset()
 		sb.WriteString("INSERT INTO security_events (event_time, client_ip, event_type) VALUES ")
 		for i := 0; i < 1000; i++ {
@@ -272,7 +240,7 @@ func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
 	}
 
 	// When
-	securityEventsRetentionCleanup(context.Background())
+	deleted := securityEventsRetentionCleanup(context.Background())
 
 	// Then：全部过期事件被分批删除，近期事件保留
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {
@@ -281,4 +249,58 @@ func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
 	if got := countSecurityEventsByType(t, "recent"); got != 1 {
 		t.Fatalf("recent events after cleanup = %d, want 1", got)
 	}
+	// And：删除行数超过单批上限——证明批循环真的跑了（不是一次 DELETE）
+	if deleted <= securityEventsRetentionDeleteBatch {
+		t.Fatalf("deleted=%d, want > single batch %d", deleted, securityEventsRetentionDeleteBatch)
+	}
+}
+
+// ---- 第 78 轮 A 域：RG-TS-ROLLUP-RETENTION（U03-F07）----
+
+func countRollupRowsBefore(t *testing.T, cutoff string) int {
+	t.Helper()
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_event_rollup WHERE minute < ?`, cutoff).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestSecurityEventRollupRetention_batches(t *testing.T) {
+	// Given：40 天前的 150 个分钟组（每行 1 条）+ 昨天的分钟组 + 当前分钟
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().AddDate(0, 0, -40).Truncate(time.Minute)
+	for i := 0; i < 150; i++ {
+		minute := old.Add(time.Duration(i) * time.Minute).Format("2006-01-02 15:04")
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_rollup (minute, country, province, family, rule, action, count) VALUES (?, '美国', '', 'SQL注入', 'r', 'blocked', 1)`, minute); err != nil {
+			t.Fatalf("seed old rollup %d: %v", i, err)
+		}
+	}
+	recentMinute := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Minute).Format("2006-01-02 15:04")
+	currentMinute := time.Now().UTC().Truncate(time.Minute).Format("2006-01-02 15:04")
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_rollup (minute, country, province, family, rule, action, count) VALUES (?, '中国', '广东省', 'XSS', 'r', 'blocked', 2), (?, '', '', '', '', 'blocked', 1)`, recentMinute, currentMinute); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	securityEventsRetentionCleanup(context.Background())
+
+	// Then：40 天前全部清掉，24h 内与当前分钟保留
+	cutoff := time.Now().UTC().AddDate(0, 0, -31).Format("2006-01-02 15:04")
+	if got := countRollupRowsBefore(t, cutoff); got != 0 {
+		t.Fatalf("rollup rows older than 31d=%d, want 0", got)
+	}
+	var kept int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_event_rollup WHERE minute IN (?, ?)`, recentMinute, currentMinute).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 2 {
+		t.Fatalf("recent rollup rows=%d, want 2", kept)
+	}
+
+	// 空表形状：再跑一次无错误（幂等）
+	securityEventsRetentionCleanup(context.Background())
 }

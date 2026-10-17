@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/mcpserver"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -380,8 +381,188 @@ func TestAPIDocRoutes_round41_documentation_contracts(t *testing.T) {
 		t.Errorf("POST /cluster/promote description lacks auto-backup scheduler startup: %q", promote)
 	}
 	tools := routes["GET /mcp/tools"].Description
-	if !strings.Contains(tools, "read_only") || !strings.Contains(tools, "可见性") {
-		t.Errorf("GET /mcp/tools description lacks read_only semantics note: %q", tools)
+	// U11-1（第 78 轮）：read_only 是「对只读 Key 可用」的能力语义，与
+	// method==GET 不等价——描述必须点名 export_config 例外与 4 个读探测
+	// POST，并逐工具钉死分类（弱子串断言曾把相反语义钉住）。
+	for _, fragment := range []string{"read_only", "只读 API Key", "export_config"} {
+		if !strings.Contains(tools, fragment) {
+			t.Errorf("GET /mcp/tools description lacks %q: %q", fragment, tools)
+		}
+	}
+	if strings.Contains(tools, "HTTP 语义只读") || strings.Contains(tools, "method==GET") {
+		t.Errorf("GET /mcp/tools description retains stale HTTP-semantics read_only: %q", tools)
+	}
+	readOnlyProbes := map[string]bool{
+		"test_ca_provider":  true,
+		"parse_certificate": true, "validate_import": true, "preview_config": true,
+	}
+	// L04-03（第 78 轮）：test_certificate_config 会写 DNS TXT 验证记录，
+	// 已移出只读探测集——对只读 Key 不可见（工具保留给管理员）。
+	specs := mcpserver.ListToolSpecs()
+	if len(specs) == 0 {
+		t.Fatal("ListToolSpecs returned no tools")
+	}
+	for _, spec := range specs {
+		wantReadOnly := spec.Method == http.MethodGet && spec.Name != "export_config"
+		if readOnlyProbes[spec.Name] {
+			wantReadOnly = true
+		}
+		if spec.ReadOnly != wantReadOnly {
+			t.Errorf("tool %s (%s) read_only=%v, want %v（只读 Key 可用性语义）", spec.Name, spec.Method, spec.ReadOnly, wantReadOnly)
+		}
+	}
+	if config := specsReadOnly(specs, "export_config"); config != false {
+		t.Errorf("export_config read_only=%v, want false（只读 Key 不可见）", config)
+	}
+	for name := range readOnlyProbes {
+		if !specsReadOnly(specs, name) {
+			t.Errorf("%s read_only=false, want true（读探测 POST 对只读 Key 可用）", name)
+		}
+	}
+}
+
+func specsReadOnly(specs []mcpserver.ToolSpec, name string) bool {
+	for _, spec := range specs {
+		if spec.Name == name {
+			return spec.ReadOnly
+		}
+	}
+	return false
+}
+
+// U11-3（第 78 轮）：非 JSON 响应示例（二进制/TXT）必须登记 rawResponse 与
+// 显式媒体类型——此前两个下载端点默认 application/json 且被 documentedResponse
+// 包成 {"code":0,...,"data":非 JSON}，OpenAPI 消费方按 JSON 解析必失败。
+func TestAPIDocs_nonJSONResponsesDeclareExplicitMediaType(t *testing.T) {
+	// Given 全部路由及其生成规格
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Example any `yaml:"example"`
+				} `yaml:"content"`
+			} `yaml:"responses"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	expected := map[string]string{
+		"GET /auto-backup/:id/download":     "application/octet-stream",
+		"GET /security/ip-lists/:id/export": "text/plain; charset=utf-8",
+	}
+
+	// When 逐路由检查非 JSON 响应示例（合法 JSON 数组/对象由生成器包成
+	// {code,message,data} 信封；{...} 形态为文档占位符，同样按 JSON 处理；
+	// 只有纯文本/二进制形态才必须显式登记）
+	for _, route := range apiDocRoutes {
+		response := strings.TrimSpace(route.Response)
+		if response == "" || strings.HasPrefix(response, "{") || strings.HasPrefix(response, "[") || json.Valid([]byte(response)) {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		contract := apiDocContracts[key]
+		if !contract.rawResponse {
+			t.Errorf("%s response example %q lacks rawResponse registration（会被包成 JSON 信封）", key, response)
+		}
+		if contract.responseContentType == "" {
+			t.Errorf("%s response example %q lacks explicit responseContentType", key, response)
+		}
+	}
+
+	// Then 两个已知下载端点：契约与生成的 YAML 媒体类型一致、示例为纯文本
+	for key, contentType := range expected {
+		contract := apiDocContracts[key]
+		if !contract.rawResponse || contract.responseContentType != contentType {
+			t.Errorf("%s contract=%+v, want rawResponse with %s", key, contract, contentType)
+		}
+		method, path := splitRouteKey(t, key)
+		operation := document.Paths[openAPIPath(path)][strings.ToLower(method)]
+		media := operation.Responses["200"].Content
+		if _, ok := media[contentType]; !ok {
+			t.Errorf("%s 200 content=%v, want %s", key, mediaTypeKeys(media), contentType)
+		}
+		if _, isJSON := media["application/json"]; isJSON {
+			t.Errorf("%s still documents application/json response", key)
+		}
+		for _, entry := range media {
+			if _, isMap := entry.Example.(map[string]any); isMap {
+				t.Errorf("%s example=%v, want plain-text example (not JSON object)", key, entry.Example)
+			}
+		}
+	}
+}
+
+func splitRouteKey(t *testing.T, key string) (string, string) {
+	t.Helper()
+	method, path, found := strings.Cut(key, " ")
+	if !found {
+		t.Fatalf("malformed route key %q", key)
+	}
+	return method, path
+}
+
+func mediaTypeKeys(media map[string]struct {
+	Example any `yaml:"example"`
+}) []string {
+	keys := make([]string, 0, len(media))
+	for key := range media {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// U11-6（第 78 轮）：媒体类型与示例形态须自洽——ops-playbook 声明
+// text/markdown 却给 JSON 示例；/admin-tls 与 /admin-tls/inspect 只登记
+// multipart，遗漏 MCP 通道唯一的 application/json 变体。
+func TestBuildOpenAPIYAML_documentsMarkdownAndAdminTLSContentVariants(t *testing.T) {
+	// Given
+	var document struct {
+		Paths map[string]map[string]struct {
+			RequestBody struct {
+				Content map[string]struct {
+					Example any `yaml:"example"`
+				} `yaml:"content"`
+			} `yaml:"requestBody"`
+			Responses map[string]struct {
+				Content map[string]struct {
+					Example any `yaml:"example"`
+				} `yaml:"content"`
+			} `yaml:"responses"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+
+	// Then ops-playbook 示例是 markdown 正文而非 JSON 对象
+	playbook := document.Paths["/mcp/ops-playbook"]["get"].Responses["200"].Content
+	markdown, ok := playbook["text/markdown"]
+	if !ok {
+		t.Fatalf("/mcp/ops-playbook 200 content=%v, want text/markdown", mediaTypeKeys(playbook))
+	}
+	text, isString := markdown.Example.(string)
+	if !isString || !strings.HasPrefix(text, "#") || !strings.Contains(text, "手册") {
+		t.Errorf("/mcp/ops-playbook example=%v, want markdown text starting with #", markdown.Example)
+	}
+
+	// Then 两个 admin-tls 端点同时声明 multipart 与 application/json
+	for _, operation := range []struct {
+		path   string
+		method string
+	}{{"/admin-tls", "put"}, {"/admin-tls/inspect", "post"}} {
+		content := document.Paths[operation.path][operation.method].RequestBody.Content
+		if _, ok := content["multipart/form-data"]; !ok {
+			t.Errorf("%s %s request content=%v, want multipart/form-data", operation.method, operation.path, mediaTypeKeys(content))
+		}
+		jsonEntry, ok := content["application/json"]
+		if !ok {
+			t.Errorf("%s %s request content=%v, want application/json variant (MCP 通道)", operation.method, operation.path, mediaTypeKeys(content))
+			continue
+		}
+		if _, isMap := jsonEntry.Example.(map[string]any); !isMap {
+			t.Errorf("%s %s JSON example=%v, want object", operation.method, operation.path, jsonEntry.Example)
+		}
 	}
 }
 

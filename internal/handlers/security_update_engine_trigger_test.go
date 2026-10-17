@@ -48,6 +48,14 @@ func waitTaskRun(t *testing.T, taskID string) {
 func TestSecurityUpdateEndpoints_scheduleViaEngine(t *testing.T) {
 	initTaskEngineForTest(t)
 	newBackupTestHandlers(t)
+	services.ResetCRSUpdateManagerForTest()
+	services.ResetIP2RegionUpdateManagerForTest()
+	services.ClearThreatUpdateManagerForTest()
+	t.Cleanup(func() {
+		services.ResetCRSUpdateManagerForTest()
+		services.ResetIP2RegionUpdateManagerForTest()
+		services.ClearThreatUpdateManagerForTest()
+	})
 
 	gin.SetMode(gin.TestMode)
 	h := &Handlers{}
@@ -75,19 +83,16 @@ func TestSecurityUpdateEndpoints_scheduleViaEngine(t *testing.T) {
 }
 
 // 回归形状：引擎在跑时端点同步 409（单飞归引擎口径，与 TriggerSystemTask 一致）。
-// SEC-B-GAP-U1（第 69 轮）：重写为确定性在跑构造——旧版「允许 200/409」是
-// 空气断言（Run 体 nil manager 立即完成，生产 409 分支从不被必然触发）。现经
-// te.Register 重注册 crs 为阻塞桩占住单飞，第二次调用恒 409；放行后第三次恒
-// 200（反向对照，证明 409 源自单飞占位而非其他分支）。测试结束 StopTaskEngine
-// 归零全局引擎（桩注册随之销毁），后续用例经 initTaskEngineForTest 重建真实接线。
+// SEC-B-GAP-U1（第 69 轮）：确定性在跑构造——独立引擎只注册 crs 阻塞桩
+// 占住单飞，第二次调用恒 409；放行后第三次恒 200（反向对照，证明 409 源自
+// 单飞占位而非其他分支）。测试结束 StopTaskEngine 归零全局引擎。
 func TestSecurityUpdateEndpoints_conflictWhileInFlight(t *testing.T) {
 	initTaskEngineForTest(t)
 	newBackupTestHandlers(t)
 
-	te := services.TaskEngine()
-	if te == nil {
-		t.Fatal("引擎未初始化")
-	}
+	services.StopTaskEngine()
+	te := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
+	services.SetTaskEngineForTest(te)
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	if err := te.Register(taskengine.Descriptor{

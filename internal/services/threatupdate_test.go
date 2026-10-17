@@ -513,6 +513,10 @@ func TestThreatDueSources_emptyListIsDue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist"), []byte("203.0.113.1/32\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// U02-F09：fast 同样必须在场，否则仍视为未装载。
+	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist.fast"), []byte("LBF1"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	due, err = threatDueSources("auto")
 	if err != nil {
 		t.Fatal(err)
@@ -972,5 +976,39 @@ func TestThreatDueSources_ignoresCrawlerAddressSources(t *testing.T) {
 		if source.name == "googlebot" {
 			t.Fatalf("威胁任务混入爬虫地址库源: %+v", sources)
 		}
+	}
+}
+
+func TestThreatUpdateRun_usesTaskRunStartedAt(t *testing.T) {
+	// Given：三个成功源与 task_runs 预插开始时刻。
+	newClusterTestService(t)
+	overrideWafDirForTest(t)
+	setupThreatTest(t, nil, nil, nil)
+	runID, wantUTC := seedTaskRunForTime(t, "threat", "2026-10-17 14:09:17")
+
+	// When：经生产 RunUpdate 入口运行。
+	if err := GetThreatUpdateManager().RunUpdate("manual", &taskengine.RunContext{Ctx: context.Background(), RunID: runID, Trigger: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：每个源的 started_at/last_checked 均与 task_runs 同源。
+	rows, err := db.DB.Query(`SELECT name, COALESCE(started_at,''), COALESCE(last_checked,'') FROM security_threat_sources ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var name, startedAt, lastChecked string
+		if err := rows.Scan(&name, &startedAt, &lastChecked); err != nil {
+			t.Fatal(err)
+		}
+		if startedAt != wantUTC || lastChecked != wantUTC {
+			t.Errorf("%s started_at=%q last_checked=%q, want %q", name, startedAt, lastChecked, wantUTC)
+		}
+		seen++
+	}
+	if seen != 3 {
+		t.Fatalf("源行数=%d, want 3", seen)
 	}
 }

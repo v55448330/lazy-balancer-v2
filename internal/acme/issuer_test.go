@@ -102,8 +102,11 @@ func TestIssuer_Issue_cleans_presented_records_when_later_present_fails(t *testi
 			firstRecordCleanups++
 		}
 	}
-	if len(provider.cleaned) != 3 || firstRecordCleanups != 2 {
-		t.Fatalf("cleaned records=%v, want stale cleanup for both records and deferred cleanup for the first", provider.cleaned)
+	// U06-F01（第 78 轮）：挑战在 Present 前登记——第二个域名的 Present 失败也
+	// 会进 deferred 清理集合（按 value 幂等；provider 不实现 CleanUpValue 时按名
+	// 兜底）。计数=2 次 stale 预清理 + 2 次 deferred 清理。
+	if len(provider.cleaned) != 4 || firstRecordCleanups != 2 {
+		t.Fatalf("cleaned records=%v, want stale cleanup for both records and deferred cleanup for both", provider.cleaned)
 	}
 }
 
@@ -153,7 +156,11 @@ func (p *valueAwareProvider) CleanUp(_ context.Context, _ string, _ string) erro
 func (p *valueAwareProvider) CleanUpValue(_ context.Context, _, _, value string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.cleanedValues = append(p.cleanedValues, value)
+	// 按 value 幂等：仅在确有该值记录时记一次删除。挑战会在 Present 前登记进
+	// deferred 清理（U06-F01），已由 stale 预清理删掉的值不得重复计数。
+	if _, ok := p.records[value]; ok {
+		p.cleanedValues = append(p.cleanedValues, value)
+	}
 	delete(p.records, value)
 	return nil
 }
@@ -229,6 +236,15 @@ func TestIssuer_preCleanup_spares_concurrent_challenge_values(t *testing.T) {
 	if _, exists := provider.records[keyAuth]; exists {
 		t.Fatal("pre-cleanup did not remove the same-value leftover")
 	}
+}
+
+// probeAuthServers 是单发形态的测试夹具（U06-F08：原生产 helper 零调用，已
+// 移入测试文件）。probes every authoritative name server once; a miss keeps the
+// server alive for the next round. ready reports whether every server already
+// holds the expected record. 多轮轮询走 probeAuthServersLogged 共享状态表，
+// 仅状态变化时打印（C-3 第 73 轮）。
+func (i *Issuer) probeAuthServers(ctx context.Context, servers []string, fqdn, expected string) (alive []string, ready bool, lastFound []string, lastResolver string) {
+	return i.probeAuthServersLogged(ctx, servers, fqdn, expected, &dnsLogState{})
 }
 
 // startFakeDNSServer 在随机端口同时监听 UDP/TCP（probeTXT 会先 UDP 后 TCP 回退，
@@ -617,5 +633,116 @@ func TestIssuer_finalizeOrder_enforces_independent_deadline(t *testing.T) {
 	case <-finalizeStarted:
 	default:
 		t.Fatal("finalize endpoint was never reached")
+	}
+}
+
+// presentThenFailProvider 模拟 provider 的「双失败」形态（A-2 第 73 轮）：记录
+// 已写入 DNS，但 Present 仍返回错误（ownership.Add 失败且回滚删除亦失败）。此时
+// 签发侧若只在 Present 成功后登记 deferred 清理，临时 TXT 会永久残留。
+type presentThenFailProvider struct {
+	mu             sync.Mutex
+	written        map[string]string
+	presentedValue string
+	deletedValues  []string
+}
+
+func (p *presentThenFailProvider) Present(_ context.Context, _, tokenFQDN, value string, _ int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.written == nil {
+		p.written = make(map[string]string)
+	}
+	p.written[value] = tokenFQDN
+	p.presentedValue = value
+	return errors.New("present failed after record write")
+}
+
+func (p *presentThenFailProvider) CleanUp(_ context.Context, _, _ string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.written = nil
+	return nil
+}
+
+func (p *presentThenFailProvider) CleanUpValue(_ context.Context, _, _, value string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.written[value]; !ok {
+		return nil
+	}
+	delete(p.written, value)
+	p.deletedValues = append(p.deletedValues, value)
+	return nil
+}
+
+// U06-F01（第 78 轮）：challenge 必须在 Present 调用前登记进 deferred 清理集合。
+// Present 自身失败（且内部回滚删除亦失败）时记录已落 DNS——登记顺序修复前
+// deferred Cleanup 看不到该挑战，临时 TXT 无任何删除尝试。
+func TestIssuer_Issue_cleans_challenge_when_present_itself_fails(t *testing.T) {
+	// Given: 单授权 stub ACME 服务 + 写后报错的 provider
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Replay-Nonce", "test-nonce")
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/directory":
+			_, _ = fmt.Fprintf(response, `{"newNonce":%q,"newAccount":%q,"newOrder":%q}`, serverURL+"/nonce", serverURL+"/account", serverURL+"/order")
+		case "/nonce":
+			response.WriteHeader(http.StatusOK)
+		case "/account":
+			response.Header().Set("Location", serverURL+"/account/1")
+			response.WriteHeader(http.StatusCreated)
+			_, _ = response.Write([]byte(`{"status":"valid"}`))
+		case "/order":
+			response.Header().Set("Location", serverURL+"/order/1")
+			response.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(response, `{"status":"pending","authorizations":[%q],"finalize":%q}`, serverURL+"/auth/1", serverURL+"/finalize/1")
+		case "/auth/1":
+			_, _ = fmt.Fprintf(response, `{"status":"pending","identifier":{"type":"dns","value":"example.com"},"challenges":[{"type":"dns-01","url":%q,"status":"pending","token":"token-one"}]}`, serverURL+"/challenge/1")
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate account key: %v", err)
+	}
+	client := &Client{
+		DirectoryURL: serverURL + "/directory",
+		Email:        "admin@example.com",
+		acme: &acme.Client{
+			Key:          key,
+			DirectoryURL: serverURL + "/directory",
+			HTTPClient:   server.Client(),
+		},
+	}
+	provider := &presentThenFailProvider{}
+	issuer := &Issuer{Client: client, Provider: provider}
+
+	// When
+	_, _, issueErr := issuer.Issue(context.Background(), []string{"example.com"})
+
+	// Then：签发失败，但已落 DNS 的挑战值必须被 deferred 清理删除
+	if issueErr == nil {
+		t.Fatal("issuance succeeded despite present failure")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.presentedValue == "" {
+		t.Fatal("provider.Present was never called")
+	}
+	cleaned := false
+	for _, value := range provider.deletedValues {
+		if value == provider.presentedValue {
+			cleaned = true
+		}
+	}
+	if !cleaned {
+		t.Fatalf("deferred cleanup did not delete presented value %q (deleted=%v)：Present 失败路径的临时 TXT 残留", provider.presentedValue, provider.deletedValues)
+	}
+	if len(provider.written) != 0 {
+		t.Fatalf("records=%v, want empty after deferred cleanup", provider.written)
 	}
 }

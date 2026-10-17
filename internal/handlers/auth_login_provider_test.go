@@ -18,7 +18,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/config"
-	"lazy-balancer-v2/internal/db"
 )
 
 func TestLogin_responseCarriesAuthProvider(t *testing.T) {
@@ -108,5 +107,4 @@ func TestMFAVerifyLogin_responseCarriesAuthProvider(t *testing.T) {
 	if resp.User.AuthProvider != "local" {
 		t.Fatalf("mfa verify must carry auth_provider=local, got %q", resp.User.AuthProvider)
 	}
-	_ = db.DB // keep import stable if assertions change
 }

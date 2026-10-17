@@ -7,6 +7,8 @@
 - **Swagger UI**（交互调试）：`http://<host>:8000/api/v1/docs`
 - **OpenAPI 规范**：`http://<host>:8000/api/v1/openapi.yaml`
 
+> **鉴权提示**：`/api/v1/openapi.yaml` 需登录鉴权——请求须携带 `Authorization: Bearer <JWT>`（或已登录面板的登录态），匿名直接访问返回 `401`。`/api/v1/docs` 页面本身公开，但页面内加载规格同样依赖已登录浏览器（从 localStorage 取令牌注入请求头）；未登录时页面会提示改用带令牌的请求。
+
 ## 认证
 
 | 方式 | Header | 说明 |

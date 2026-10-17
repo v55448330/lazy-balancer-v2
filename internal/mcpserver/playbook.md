@@ -13,7 +13,7 @@
 
 | 范围 | 说明 |
 |---|---|
-| 只读 Key（read_only） | 可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，隐藏）及 5 个读探测 POST 工具（test_ca_provider/test_certificate_config/parse_certificate/validate_import/preview_config）；其余写工具返回 403 |
+| 只读 Key（read_only） | 可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，隐藏）及 4 个读探测 POST 工具（test_ca_provider/parse_certificate/validate_import/preview_config）；其余写工具返回 403（test_certificate_config 证书配置测试会写 DNS TXT 记录，只读 Key 不可用） |
 | 写工具（POST/PUT/DELETE） | 需非只读 Key，且 Key 属主须为 admin 角色（非管理员 Key 调用写工具返回 403）；从节点上仅 /cluster/ 前缀端点可过只读门，非从节点语义的集群操作由业务层拒绝（403/400），其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点 |
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |

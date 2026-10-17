@@ -92,7 +92,7 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 		handler: &Handlers{
 			cfg:            cfg,
 			caddyService:   services.NewCaddyService(fakeCaddy.URL),
-			clusterService: services.NewClusterService(db.DB, nil, ""),
+			clusterService: services.NewClusterService(db.DB, ""),
 		},
 		certDir: testServicesCertDir,
 		currentConfig: func() string {
@@ -304,7 +304,6 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
-	services.GetCAQueueManager().PauseAndDrain()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v1','old-rule','http','old.example.test',8080,1,1,'acme_dns');
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v1','old.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed original non-terminal job: %v", err)

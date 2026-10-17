@@ -67,7 +67,9 @@ func TestACMEAccountKeyPath_changes_when_EAB_HMAC_changes(t *testing.T) {
 	}
 }
 
-func TestClient_RegisterAccount_removes_stale_key_after_EAB_HMAC_rotation(t *testing.T) {
+// U06-F08（第 78 轮）：名称按现断言更名——轮换前代密钥是不同账户身份，必须保留
+// （R71 F-A2：删除前代密钥会让被删方以再生密钥撞既有账户，签发持续失败）。
+func TestClient_RegisterAccount_keeps_rotated_predecessor_key(t *testing.T) {
 	// Given
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -49,24 +49,21 @@ func maskDNSCredentialsJSON(raw string) string {
 	return string(out)
 }
 
-// isMaskedDNSCredentials 判断提交的凭证是否为全掩码回传（GET 掩码 → 未改动
-// → 保持原值）。空串值不算掩码（允许部分字段清空的语义保留给显式提交）。
+// isMaskedDNSCredentials 判断提交的凭证是否为「GET 掩码原样回传」（未改动）。
+// U06-F07（第 78 轮 P4）：只有**全部值均为掩码哨兵**（且至少一个键）才算未改动。
+// 旧口径把空串视为「可以共存」，`{"app_id":"","app_token":"***"}` 被整体吞成未修改
+// ——用户显式清空 app_id 的意图静默丢失。含空串/真实值的回传一律走
+// mergeMaskedDNSCredentials（空串保留为空 = 显式清空，哨兵逐字段取库值）。
 func isMaskedDNSCredentials(m map[string]string) bool {
 	if len(m) == 0 {
 		return false
 	}
 	for _, v := range m {
-		if v != "" && v != maskedDNSCredentialsSentinel {
+		if v != maskedDNSCredentialsSentinel {
 			return false
 		}
 	}
-	// 至少一个非空值（全空串 = 显式清空语义，交给原逻辑）。
-	for _, v := range m {
-		if v == maskedDNSCredentialsSentinel {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 // mergeMaskedDNSCredentials(CERT40-2):部分掩码回传逐字段合并——值为掩码
@@ -317,6 +314,11 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
 
+// deleteCertificateConfigPreDeleteHook 测试钩子（U06-F04）：在引用查询完成、
+// DELETE 执行前运行——用于断言「查询→DELETE」窗口仍持有 caddyOpMu，且并发
+// UpdateRule 无法在该窗口提交绑定。生产恒 nil。
+var deleteCertificateConfigPreDeleteHook func()
+
 func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
@@ -324,6 +326,13 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
 		return
 	}
+	// U06-F04（第 78 轮 P3）：引用查询与 DELETE 必须同一临界区——lb_rules.
+	// acme_config_id 上没有外键约束（certificate_configs 的引用无 FK 兜底，SQLite
+	// DDL 亦未声明），并发的 UpdateRule（持 caddyOpMu、锁内 validateRuleACMEReferences
+	// 查询本表）会在「查到零引用 → DELETE」窗口提交绑定，留下悬空引用（续签/首签
+	// 静默失败）。与规则写路径共用 caddyOpMu 串行化；查询在锁内即读，DELETE 在锁内落库。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	var name, provider string
 	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); dbQueryNotFound(c, err, "Config not found", "DeleteCertificateConfig query config") {
 		return
@@ -375,6 +384,9 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
 		return
+	}
+	if deleteCertificateConfigPreDeleteHook != nil {
+		deleteCertificateConfigPreDeleteHook()
 	}
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete config"})
@@ -521,6 +533,25 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": len(certs)}})
 }
 
+// formulaSkippedNote 生成批量签发跳过归因片段（L04-01）：仅列出非零项，
+// 全零返回空串。计数全部来自 changed=false/冷却门出口，响应与审计共用。
+func formulaSkippedNote(cooldown, inFlight, blocked, unsupported int) string {
+	parts := make([]string, 0, 4)
+	if cooldown > 0 {
+		parts = append(parts, fmt.Sprintf("冷却跳过 %d 个", cooldown))
+	}
+	if inFlight > 0 {
+		parts = append(parts, fmt.Sprintf("在途跳过 %d 个", inFlight))
+	}
+	if blocked > 0 {
+		parts = append(parts, fmt.Sprintf("规则屏障跳过 %d 个", blocked))
+	}
+	if unsupported > 0 {
+		parts = append(parts, fmt.Sprintf("状态不支持重排 %d 个", unsupported))
+	}
+	return strings.Join(parts, "，")
+}
+
 func (h *Handlers) IssueCertificate(c *gin.Context) {
 	var req struct {
 		CaddyID string `json:"caddy_id"`
@@ -557,11 +588,31 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
 		return
 	}
+	// L04-01（第 78 轮 P3）：队列暂停必须 409 点名原因——EnqueueIfActive 的
+	// !active 出口返回 changed=false（jobID=0 时上游再折成 "CA queue is paused"
+	// 错误），原实现走「200 已创建 0 个任务」的假成功或 500。规则屏障与在途
+	// 两条 changed=false 出口在下方定向/批量分支分别归因。
+	if !qm.IsActive() {
+		auditFailure("skipped", "证书签发队列已暂停")
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+		return
+	}
 	queued := 0
 	// CERT44-2（第 44 轮审计）：批量路径套用与定向签发同款冷却门，冷却中
 	// 任务跳过并单列计数（仅批量分支产生非零值）。
 	skippedCooldown := 0
+	// L04-01：其余 changed=false 出口的归因计数（仅批量分支产生非零值）。
+	skippedInFlight := 0
+	skippedBlocked := 0
+	skippedUnsupported := 0
 	if req.CaddyID != "" {
+		// L04-01：规则删除/迁移屏障期按冲突语义 409 点名（EnqueueIfActive 内部
+		// 同判据兜底，此处给出可读原因）。
+		if qm.IsRuleBlocked(req.CaddyID) {
+			auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则证书操作被屏障阻塞（规则正在删除或迁移），请稍后重试"})
+			return
+		}
 		var enabled, enableTLS bool
 		var protocol, tlsSource, ruleDomain string
 		err := db.DB.QueryRow(`SELECT COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(protocol,''), COALESCE(tls_source,''), COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?`, req.CaddyID).
@@ -609,15 +660,33 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败"})
 			return
 		}
-		_, changed, err := services.CreateOrRequeueCertJobWithChange(req.CaddyID, canonicalRuleDomain, 0, qm)
+		jobID, changed, err := services.CreateOrRequeueCertJobWithChange(req.CaddyID, canonicalRuleDomain, 0, qm)
 		if err != nil {
 			auditFailure("failed", "创建签发任务失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
 			return
 		}
-		if changed {
-			queued++
+		if !changed {
+			// L04-01：changed=false 必须区分三条出口，不得统一回 200 queued=0。
+			switch {
+			case !qm.IsActive():
+				auditFailure("skipped", "证书签发队列已暂停")
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+			case qm.IsRuleBlocked(req.CaddyID):
+				auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则证书操作被屏障阻塞（规则正在删除或迁移），请稍后重试"})
+			case qm.IsJobActive(jobID):
+				// 在途：保留 200，但明确 queued=0 与归因（未新建任务）。
+				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "任务正在执行中，未重复入队", services.AuditResultPart("skipped")))
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "签发任务正在执行中，未重复入队", Data: gin.H{"queued": 0, "skipped_cooldown": 0, "in_flight": true}})
+			default:
+				// 任务处于不可重排状态（非在途、非冷却）——如实 409，不伪装成功。
+				auditFailure("skipped", "任务状态不支持重新入队")
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "签发任务状态不支持重新入队，请刷新任务状态后重试"})
+			}
+			return
 		}
+		queued++
 	} else {
 		if !req.All {
 			auditFailure("invalid_request", "请求格式错误")
@@ -631,6 +700,8 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return
 		}
 		var failed []string
+		// L04-01：批量循环中队列被并发暂停（不可再入队）的显式信号。
+		pausedMidBatch := false
 		type certTarget struct {
 			ruleID string
 			domain string
@@ -658,6 +729,15 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return
 		}
 		for _, target := range targets {
+			if !qm.IsActive() {
+				// L04-01：循环中队列被并发暂停——不再当失败项累积，统一 409。
+				pausedMidBatch = true
+				break
+			}
+			if qm.IsRuleBlocked(target.ruleID) {
+				skippedBlocked++
+				continue
+			}
 			canonicalDomain, canonicalErr := services.CanonicalACMEDomains(target.domain)
 			if canonicalErr != nil {
 				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, canonicalErr))
@@ -679,27 +759,77 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, jobErr))
 				continue
 			}
-			_, changed, err := services.CreateOrRequeueCertJobWithChange(target.ruleID, canonicalDomain, 0, qm)
+			jobID, changed, err := services.CreateOrRequeueCertJobWithChange(target.ruleID, canonicalDomain, 0, qm)
 			if err != nil {
 				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, err))
 				continue
 			}
-			if changed {
-				queued++
+			if !changed {
+				// L04-01：changed=false 逐目标归因，不得静默计入「成功」。
+				switch {
+				case qm.IsJobActive(jobID):
+					skippedInFlight++
+				case qm.IsRuleBlocked(target.ruleID):
+					skippedBlocked++
+				case !qm.IsActive():
+					pausedMidBatch = true
+				default:
+					skippedUnsupported++
+				}
+				continue
 			}
+			queued++
+		}
+		skippedTotal := skippedCooldown + skippedBlocked + skippedInFlight + skippedUnsupported
+		if pausedMidBatch {
+			auditFailure("skipped", formulaSkippedNote(skippedCooldown, skippedInFlight, skippedBlocked, skippedUnsupported), "证书签发队列已暂停")
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+			return
 		}
 		if queued == 0 && len(failed) > 0 {
 			auditFailure("failed")
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "全部签发任务创建失败: " + strings.Join(failed, "; ")})
 			return
 		}
-		if len(failed) > 0 {
-			cooldownNote := ""
-			if skippedCooldown > 0 {
-				cooldownNote = fmt.Sprintf("，冷却跳过 %d 个", skippedCooldown)
+		if queued == 0 {
+			// L04-01：批量全部跳过（冷却/在途/屏障/状态不支持）→ 409，不得 200 假成功。
+			skipNote := formulaSkippedNote(skippedCooldown, skippedInFlight, skippedBlocked, skippedUnsupported)
+			auditFailure("skipped", skipNote)
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "未创建任何签发任务：" + skipNote, Data: gin.H{
+				"queued":            0,
+				"failed":            len(failed),
+				"skipped_cooldown":  skippedCooldown,
+				"skipped_in_flight": skippedInFlight,
+				"skipped_blocked":   skippedBlocked,
+				"skipped_other":     skippedUnsupported,
+			}})
+			return
+		}
+		if len(failed) > 0 || skippedTotal > 0 {
+			skipNote := formulaSkippedNote(skippedCooldown, skippedInFlight, skippedBlocked, skippedUnsupported)
+			format := "入队 %d 个任务"
+			message := fmt.Sprintf("已创建 %d 个签发任务", queued)
+			if len(failed) > 0 {
+				format += "，失败 %d 个"
+				message += fmt.Sprintf("，%d 个失败: %s", len(failed), strings.Join(failed, "; "))
 			}
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务，失败 %d 个%s", queued, len(failed), cooldownNote), services.AuditResultPart("partial")))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务，%d 个失败: %s", queued, len(failed), strings.Join(failed, "; ")) + cooldownNote, Data: gin.H{"queued": queued, "failed": len(failed), "skipped_cooldown": skippedCooldown}})
+			if skipNote != "" {
+				format += "，" + skipNote
+				message += "，" + skipNote
+			}
+			args := []any{queued}
+			if len(failed) > 0 {
+				args = append(args, len(failed))
+			}
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf(format, args...), services.AuditResultPart("partial")))
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{
+				"queued":            queued,
+				"failed":            len(failed),
+				"skipped_cooldown":  skippedCooldown,
+				"skipped_in_flight": skippedInFlight,
+				"skipped_blocked":   skippedBlocked,
+				"skipped_other":     skippedUnsupported,
+			}})
 			return
 		}
 

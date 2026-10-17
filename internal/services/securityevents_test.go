@@ -21,6 +21,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // syncBuffer is a bytes.Buffer guarded by a mutex for concurrent write/poll.
@@ -1057,6 +1058,43 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 	}
 	if uri != "/BlockedPath" {
 		t.Fatalf("recovered event uri=%q, want /BlockedPath", uri)
+	}
+}
+
+func TestSecurityEventsPollOnce_returnsCountWithoutWritingTaskLog(t *testing.T) {
+	// Given：一条可摄取事务与空任务日志目录。
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldAuditLog, oldAuditOffset := auditLogPath, securityEventsOffsetPath
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	resetSecurityEventsPollState(t)
+	t.Cleanup(func() { auditLogPath, securityEventsOffsetPath = oldAuditLog, oldAuditOffset })
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+
+	// When：非 ingestion 调用方直接执行一轮摄取。
+	got := SecurityEventsPollOnce()
+
+	// Then：条数交给调用方，函数自身不得越权写 ingestion 任务日志。
+	if got != 1 {
+		t.Fatalf("ingested=%d, want 1", got)
+	}
+	if data, err := os.ReadFile(taskengine.TaskLogPath("security-events-ingestion")); err == nil && len(data) > 0 {
+		t.Fatalf("PollOnce 直接写任务日志: %q", data)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 
@@ -3314,4 +3352,159 @@ func TestSecurityEventsPolicyContainsRule_leadingZeroRuleIDGroupDecode(t *testin
 	// 畸形形状：前导零串同样不得被真实组 21 策略按错位解码误配/误拒 panic
 	g21Policy := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", CRSRuleGroups: json.RawMessage(`["21"]`)}
 	_ = securityEventsPolicyContainsRule(g21Policy, "0942100", "198.51.100.9") // 断言不 panic
+}
+
+// ---- 第 78 轮 A 域：RG-SEC-INGEST-COUNT（U01-F01 / U01-F06）----
+
+// securityEventsRound78Fixture 生成一条可摄取事务（rule 942100 非中断形态，
+// 足以通过自动封禁喂入门：rule_triggered 非空 + action=blocked）。
+func securityEventsRound78Fixture(txID, ip, uri string) string {
+	return fmt.Sprintf(`{
+  "transaction": {
+    "timestamp": "2026/08/11 19:16:57",
+    "unix_timestamp": 1786447017841320426,
+    "id": %q,
+    "client_ip": %q,
+    "server_id": "go029.com",
+    "request": { "method": "GET", "uri": %q, "headers": { "host": ["go029.com"] } },
+    "response": { "status": 403 },
+    "is_interrupted": true
+  },
+  "messages": [
+    { "message": "SQL Injection Attack Detected via libinjection", "data": { "id": 942100, "raw": "SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,block,log,msg:'SQL Injection Attack Detected via libinjection'\"" } }
+  ]
+}`, txID, ip, uri)
+}
+
+// installSecurityEventsAutobanFixture 装配摄取 + 自动封禁计数器可观测环境：
+// 真 metrics DB、主节点、启用、口径 all。返回清理用的还原闭包（t.Cleanup）。
+func installSecurityEventsAutobanFixture(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	setAutobanConfigRaw(t, true, 5, 60, "1h", "all", false)
+	oldMaster := autobanIsMaster
+	autobanIsMaster = func() bool { return true }
+	t.Cleanup(func() { autobanIsMaster = oldMaster })
+	resetAutobanStateForTest()
+	t.Cleanup(resetAutobanStateForTest)
+}
+
+func autobanCountForTest(ip string) int {
+	autobanMu.Lock()
+	defer autobanMu.Unlock()
+	if w, ok := autobanWindows[ip]; ok {
+		return w.Count
+	}
+	return 0
+}
+
+func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) {
+	installSecurityEventsAutobanFixture(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	dup := securityEventsRound78Fixture("tx-dup-1", "203.0.113.77", "/dup")
+	// 形状 1：同一事务在日志中出现两次（轮转/并发可见的重复形态）。
+	content := dup + "\n" + dup + "\n" + securityEventsRound78Fixture("tx-dup-2", "203.0.113.78", "/other") + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if got := autobanCountForTest("203.0.113.77"); got != 1 {
+		t.Fatalf("duplicate transaction fed %d times to autoban, want 1", got)
+	}
+	if got := autobanCountForTest("203.0.113.78"); got != 1 {
+		t.Fatalf("unique transaction fed %d times, want 1", got)
+	}
+
+	// 形状 2：offset 重放（轮转补采重叠）——重复行被 INSERT OR IGNORE 忽略，
+	// 不得再次喂计数器。
+	if err := os.Remove(offsetPath); err != nil {
+		t.Fatal(err)
+	}
+	replay := securityEventsNewTailer(logPath, offsetPath)
+	if err := replay.securityEventsTick(); err != nil {
+		t.Fatalf("replay tick: %v", err)
+	}
+	if got := autobanCountForTest("203.0.113.77"); got != 1 {
+		t.Fatalf("offset replay fed duplicate to autoban (count=%d), want 1", got)
+	}
+
+	// 反例形状：Exec 报错（触发器 ABORT）→ 本批不提交且不喂计数器。
+	if _, err := db.MetricsDB.Exec(`CREATE TRIGGER fail_security_events_insert BEFORE INSERT ON security_events BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	failing := securityEventsRound78Fixture("tx-fail-1", "203.0.113.99", "/fail")
+	if err := os.WriteFile(logPath, []byte(content+failing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(offsetPath); err != nil {
+		t.Fatal(err)
+	}
+	failingTailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := failingTailer.securityEventsTick(); err == nil {
+		t.Fatal("injected insert failure must surface as tick error")
+	}
+	if got := autobanCountForTest("203.0.113.99"); got != 0 {
+		t.Fatalf("failed insert fed %d items to autoban, want 0", got)
+	}
+}
+
+func TestSecurityEventsIngest_insertedCountExcludesIgnoredRows(t *testing.T) {
+	installSecurityEventsAutobanFixture(t)
+	cases := []struct {
+		name  string
+		total int
+		dup   bool
+		want  int
+	}{
+		{name: "exactly one batch", total: 500, want: 500},
+		{name: "one over batch", total: 501, want: 501},
+		{name: "two full batches", total: 1000, want: 1000},
+		{name: "duplicate ignored", total: 500, dup: true, want: 499},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			installSecurityEventsAutobanFixture(t)
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "audit.log")
+			offsetPath := filepath.Join(dir, "security_events.offset")
+			var sb strings.Builder
+			for i := 0; i < tc.total; i++ {
+				id := fmt.Sprintf("tx-%d", i)
+				if tc.dup && i == 1 {
+					id = "tx-0" // 与首条同 transaction_id：INSERT OR IGNORE 忽略
+				}
+				sb.WriteString(securityEventsRound78Fixture(id, "198.51.100.10", fmt.Sprintf("/p/%d", i)))
+				sb.WriteString("\n")
+			}
+			if err := os.WriteFile(logPath, []byte(sb.String()), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tailer := securityEventsNewTailer(logPath, offsetPath)
+			if err := tailer.securityEventsTick(); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if tailer.lastIngested != tc.want {
+				t.Fatalf("lastIngested=%d, want %d (batch counter must not reset the pass total)", tailer.lastIngested, tc.want)
+			}
+			var rows int
+			if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != tc.want {
+				t.Fatalf("stored rows=%d, want %d", rows, tc.want)
+			}
+		})
+	}
 }

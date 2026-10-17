@@ -250,84 +250,138 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 	return payload, nil
 }
 
+// lbbakWafApplyResult 逐文件落盘结果（L06-02/03/08）：此前失败仅返回单条
+// warning 且仍 commit，版本记录与文件分裂；现按文件/威胁源逐个记账，调用方
+// 据此在事务内丢弃未落盘文件的版本记录并把逐源失败并入 responseWarnings。
+type lbbakWafApplyResult struct {
+	Warnings            []string
+	FilesLanded         bool
+	CRSApplied          bool
+	FailedCRS           bool
+	FailedXdb           bool
+	FailedThreatSources []string
+}
+
+func (result *lbbakWafApplyResult) warn(c *gin.Context, action, message string) {
+	result.Warnings = append(result.Warnings, message)
+	recordAudit(c, action+"警告", "配置备份", message)
+}
+
+// validateLbbakXdbPayload 把待落盘 xdb 写到临时文件后用运行时同一条装载路径
+// 验证（L06-03）：manifest sha256 只证明字节未损坏，不证明可装载。
+func validateLbbakXdbPayload(data []byte) error {
+	tmp, err := os.CreateTemp("", "lbbak-xdb-*.xdb")
+	if err != nil {
+		return err
+	}
+	path := tmp.Name()
+	defer os.Remove(path)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return services.ValidateIP2RegionFile(path)
+}
+
 // applyLbbakWafFiles 落盘 waf 文件(sha 比对幂等);与集群同步落盘同构。
 // R39-12:ip2regionTag 从备份表区传入——空 tag 会让 ApplyWafFileBundle 删除
 // .version 伴生文件,破坏「文件与版本记录同批」不变量。
-// R39-13:落盘失败返回警告文本(调用方注入响应 warnings),不再仅审计静默。
-// 返回 (warning, filesLanded, crsApplied)：filesLanded=有文件真实落盘（L6-F1——
-// commit 失败时据此追加「文件/DB 分裂」可见警告；A40-2-F4 意图补全）；
-// crsApplied=CRS 文件已随本导入落盘（L6-66-04——「reloading/success」流水由
-// 调用方在 session.commit 成功后补写，commit 失败不得谎报更新成功）。
+// R39-13/L06-02/03/08:逐文件结果返回（不再是单一 warning）——落盘失败的
+// CRS/xdb 由调用方在事务内丢弃对应版本表、威胁库逐源失败并入响应告警；
+// xdb 落盘前必须通过装载验证（坏文件拒绝并保留本地文件）。
 // L6-66-02：本函数是 WAF 数据文件写者（CRS 树交换/xdb/威胁 .iplist+.fast），
 // 全文件相位持 services wafFileMu——与三库更新器串行（调用方已在
 // caddyOpMu 内，wafFileMu 为叶锁不反向嵌套）。
-func applyLbbakWafFiles(c *gin.Context, action string, payload *lbbakPayload, ip2regionTag string) (string, bool, bool) {
+func applyLbbakWafFiles(c *gin.Context, action string, payload *lbbakPayload, ip2regionTag string) lbbakWafApplyResult {
+	var result lbbakWafApplyResult
 	if payload.CRSTarGz == nil && payload.Xdb == nil && len(payload.ThreatIplists) == 0 {
-		return "", false, false
+		return result
 	}
 	services.WafFileLock().Lock()
 	defer services.WafFileLock().Unlock()
-	threatLanded := false
+	threatFailed := map[string]struct{}{}
 	bundle := &services.WafFileBundle{IP2RegionTag: ip2regionTag}
 	if payload.CRSTarGz != nil {
 		bundle.CRSSha256 = payload.CRSSha256
 		bundle.CRSTarGz = payload.CRSTarGz
 	}
 	if payload.Xdb != nil {
-		bundle.IP2RegionSha = payload.XdbSha256
-		bundle.Xdb = payload.Xdb
+		// L06-03：可装载性验证先于落盘——坏 xdb 拒绝该条目并保留本地文件，
+		// 版本记录由调用方同批丢弃（文件与记录恒一致）。
+		if err := validateLbbakXdbPayload(payload.Xdb); err != nil {
+			services.Logf("error", "lbbak 导入: IP2Region 数据文件无法装载，已拒绝落盘: %v", err)
+			result.FailedXdb = true
+			result.warn(c, action, "IP2Region 数据文件无法装载（"+err.Error()+"）——已拒绝该文件并保留本地文件；IP2Region 版本记录已丢弃（记录与文件须同批）")
+		} else {
+			bundle.IP2RegionSha = payload.XdbSha256
+			bundle.Xdb = payload.Xdb
+		}
 	}
 	// RDB: 威胁库 .iplist 落盘 + 编译 .fast（先于 CRS/Xdb 处理，失败仅警告不阻断）
 	for source, data := range payload.ThreatIplists {
+		if _, failed := threatFailed[source]; failed {
+			continue
+		}
 		iplistPath := filepath.Join(services.WafDir(), "threat-"+source+".iplist")
+		fail := func(stage string, err error) {
+			threatFailed[source] = struct{}{}
+			result.FailedThreatSources = append(result.FailedThreatSources, source)
+			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage, err)
+			result.warn(c, action, "威胁库 "+source+" "+stage+": "+err.Error()+"——该源保留本地文件与记录")
+		}
 		if err := os.MkdirAll(filepath.Dir(iplistPath), 0755); err != nil {
-			services.Logf("error", "lbbak 导入威胁库 %s: mkdir 失败: %v", source, err)
-			recordAudit(c, action+"警告", "配置备份", "威胁库 "+source+" 落盘失败: "+err.Error())
+			fail("mkdir 失败", err)
 			continue
 		}
 		if err := os.WriteFile(iplistPath, data, 0644); err != nil {
-			services.Logf("error", "lbbak 导入威胁库 %s: 写文件失败: %v", source, err)
-			recordAudit(c, action+"警告", "配置备份", "威胁库 "+source+" 落盘失败: "+err.Error())
+			fail("落盘失败", err)
 			continue
 		}
-		threatLanded = true
 		if err := services.CompileFromIplistFile(iplistPath); err != nil {
-			services.Logf("error", "lbbak 导入威胁库 %s: 编译 .fast 失败: %v", source, err)
-			recordAudit(c, action+"警告", "配置备份", "威胁库 "+source+" 编译失败: "+err.Error())
+			fail("编译失败", err)
 			continue
 		}
-		services.AppendThreatUpdateLog("INFO", "success", "威胁库 "+source+" 已随备份导入(.iplist 落盘 + .fast 编译)")
 	}
 	crsChanged, xdbChanged := false, false
 	if _, _, _, err := services.ApplyWafFileBundle(bundle); err != nil {
 		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", err)
-		recordAudit(c, action+"警告", "配置备份", "规则库文件落盘失败: "+err.Error())
-		return "规则库文件落盘失败: " + err.Error(), threatLanded, false
-	} else {
-		// ApplyWafFileBundle 内部已判定变更；此处以「有携带即视为可能落盘」
-		// 保守口径（变更判定不外泄——filesLanded 用于失败分裂警告，宁可多报）
-		crsChanged = payload.CRSTarGz != nil
-		xdbChanged = payload.Xdb != nil
+		// 落盘失败：对应版本表必须由调用方丢弃（记录与文件同批语义）。
+		if payload.CRSTarGz != nil {
+			result.FailedCRS = true
+		}
+		if payload.Xdb != nil && !result.FailedXdb {
+			result.FailedXdb = true
+		}
+		if result.FailedCRS {
+			result.warn(c, action, "CRS 规则库文件落盘失败: "+err.Error()+"——CRS 版本记录已丢弃（记录与文件须同批）")
+		}
+		if !result.FailedCRS && result.FailedXdb {
+			result.warn(c, action, "规则库文件落盘失败: "+err.Error()+"——IP2Region 版本记录已丢弃（记录与文件须同批）")
+		}
+		return result
 	}
+	// ApplyWafFileBundle 内部已判定变更；此处以「有携带即视为可能落盘」
+	// 保守口径（变更判定不外泄——filesLanded 用于失败分裂警告，宁可多报）
+	crsChanged = payload.CRSTarGz != nil
+	xdbChanged = payload.Xdb != nil && !result.FailedXdb
+	result.FilesLanded = true
 	if crsChanged || xdbChanged {
 		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
 		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
 		if xdbChanged {
-			services.WriteIP2RegionUpdateLog("INFO", "installing", "校验并落盘备份内 IP2Region数据库")
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
+				// L06-03：热换失败必须对用户可见（磁盘与内存分裂，重启才收敛）。
+				result.warn(c, action, "IP2Region 内存缓存热换失败（重启后生效）: "+err.Error())
 			}
 			services.RebuildRegionTreeCacheForSync()
-			services.WriteIP2RegionUpdateLog("INFO", "success", "ip2region 已随备份导入更新")
-		}
-		if crsChanged {
-			// L6-66-04：仅写「installing」（文件确已落盘）；「reloading/success」
-			// 由调用方在 session.commit 成功后补写——commit 失败（Caddy 拒绝
-			// 回滚）时任务日志不得谎报更新成功。
-			services.WriteCRSUpdateLog("INFO", "installing", "校验并落盘备份内 CRS 规则")
 		}
 	}
-	return "", true, crsChanged
+	result.CRSApplied = crsChanged
+	return result
 }
 
 // isLbbakBytes 按魔数识别 tar.gz 备份(gzip 0x1f 0x8b)。

@@ -3,6 +3,7 @@ package taskengine
 import (
 	"fmt"
 	"os"
+	"sync"
 )
 
 // 任务日志统一滚动：所有写入都在追加前按真实文件大小判断。
@@ -17,6 +18,27 @@ func TaskLogSizeBytes() int64 {
 		return taskLogSizeBytesFn()
 	}
 	return 10 * 1024 * 1024
+}
+
+// 按路径粒度的写入锁（U10-F08）：stat→rotate→append 必须整体互斥——两个写入
+// 方在 stat 与 rotate 之间交错会各写一份「轮转后」内容到同名活动文件，或
+// 互相覆盖归档代（并发跨阈值丢行）。锁表按路径惰性创建；路径集合=任务日志
+// 固定集（注册任务 + 证书任务日志），不随写入行增长。
+var (
+	taskLogPathLocksMu sync.Mutex
+	taskLogPathLocks   = map[string]*sync.Mutex{}
+)
+
+// lockTaskLogPath 返回路径写入锁（调用方 Lock/Unlock）。
+func lockTaskLogPath(path string) *sync.Mutex {
+	taskLogPathLocksMu.Lock()
+	defer taskLogPathLocksMu.Unlock()
+	l, ok := taskLogPathLocks[path]
+	if !ok {
+		l = &sync.Mutex{}
+		taskLogPathLocks[path] = l
+	}
+	return l
 }
 
 // RotateTaskLogBeforeWrite 在 size+incoming 超阈时先滚动再写入。

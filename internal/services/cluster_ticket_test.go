@@ -90,7 +90,7 @@ func TestClusterLoginTicketRejectsReplayAfterServiceRebuild(t *testing.T) {
 	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
 		t.Fatalf("first validation: %v", err)
 	}
-	rebuilt := NewClusterService(service.db, nil, "")
+	rebuilt := NewClusterService(service.db, "")
 	if _, _, _, err := rebuilt.ValidateLoginTicket(context.Background(), ticket, now); !errors.Is(err, ErrLoginTicketReplay) {
 		t.Fatalf("replayed ticket after rebuild error=%v", err)
 	}
@@ -125,8 +125,10 @@ func TestGenerateLoginTicketRejectsStaleApprovedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	claims := models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", NodeID: 9}
-	if _, err := service.GenerateLoginTicket(context.Background(), claims, now); !errors.Is(err, ErrNodeNotFound) {
-		t.Fatalf("stale node error=%v, want ErrNodeNotFound", err)
+	// L02-04：已批准但长期未上报=离线，返回 ErrNodeOffline（handler 409，
+	// 可行动文案）；未批准/无 keyHash 仍为 ErrNodeNotFound（404）。
+	if _, err := service.GenerateLoginTicket(context.Background(), claims, now); !errors.Is(err, ErrNodeOffline) {
+		t.Fatalf("stale node error=%v, want ErrNodeOffline", err)
 	}
 	if _, err := database.Exec(`UPDATE nodes SET last_seen=? WHERE id=9`, now.Format("2006-01-02 15:04:05")); err != nil {
 		t.Fatal(err)

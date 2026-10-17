@@ -36,17 +36,22 @@ func SeedCRSRules() {
 
 func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	rulesPath := filepath.Join(liveDir, "rules")
+	// U02-F06：rules 完整时不得直接 return——setup/stock/overrides 可能单独缺失
+	// （挂载卷只读残影/部分删除），旧实现让这些文件永久缺失而渲染侧 Include
+	// 恒失败。规则树完整则跳过树复制，但仍补种缺失的辅助文件（存在不覆盖）。
+	rulesIntact := false
 	if _, err := os.Stat(rulesPath); err == nil {
 		if crsRulesTreeIntact(rulesPath) {
-			return
-		}
-		// R50 B-#5：崩溃窗口（moveTree copyDir 回退直写 live 中途崩溃）留下的
-		// 部分残树——目录存在但探针缺失，按缺失处理：清除后重新播种。ReconcileCRSState
-		// 只按版本标记对账，发现不了这种退化。
-		Logf("info", "crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
-		if err := os.RemoveAll(rulesPath); err != nil {
-			Logf("error", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
-			return
+			rulesIntact = true
+		} else {
+			// R50 B-#5：崩溃窗口（moveTree copyDir 回退直写 live 中途崩溃）留下的
+			// 部分残树——目录存在但探针缺失，按缺失处理：清除后重新播种。ReconcileCRSState
+			// 只按版本标记对账，发现不了这种退化。
+			Logf("info", "crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
+			if err := os.RemoveAll(rulesPath); err != nil {
+				Logf("error", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
+				return
+			}
 		}
 	}
 	// waf/custom 已移除（审计 W4 裁定）：自定义规则存 DB、内联发射为 coraza
@@ -89,9 +94,11 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		src = snapshotDir
 		srcVersion = snapshotVersion
 	}
-	if err := copyDir(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
-		Logf("error", "crs seed: failed to seed rules from %s: %v", src, err)
-		return
+	if !rulesIntact {
+		if err := copyDir(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
+			Logf("error", "crs seed: failed to seed rules from %s: %v", src, err)
+			return
+		}
 	}
 	setupPath := filepath.Join(liveDir, "crs-setup.conf")
 	if _, err := os.Stat(setupPath); os.IsNotExist(err) {
@@ -100,17 +107,35 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		}
 	}
 	for _, aux := range []string{"crs-setup.stock.conf", "zz-user-overrides.conf"} {
+		// U02-F06：存在即不覆盖（用户自定义 overrides/基线不得被播种回写）。
+		if _, err := os.Stat(filepath.Join(liveDir, aux)); err == nil {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(src, aux)); err == nil {
-			_ = copyFile(filepath.Join(src, aux), filepath.Join(liveDir, aux))
+			if err := copyFile(filepath.Join(src, aux), filepath.Join(liveDir, aux)); err != nil {
+				Logf("error", "crs seed: failed to seed %s from %s: %v", aux, src, err)
+			}
 		}
 	}
 	// 播种后落版本标记：对账逻辑据此区分「磁盘实际版本」与「数据库记录版本」。
-	writeCRSVersionMarker(liveDir, srcVersion)
-	Logf("info", "crs seed: seeded %s from %s", liveDir, src)
+	if !rulesIntact {
+		writeCRSVersionMarker(liveDir, srcVersion)
+		Logf("info", "crs seed: seeded %s from %s", liveDir, src)
+	}
 	// R52 发现2：退化快照回退播种成功后，用新播种的 live 树重建快照，让快照
-	// 自愈而不是永远停留在退化状态直到下次成功更新。
+	// 自愈而不是永远停留在退化状态直到下次成功更新。P2-1：live 本就完整时
+	// 版本取 live 自身标记，不得用 dist 版本给用户更新树错标。
 	if snapshotDegenerate {
-		healDegenerateCRSSnapshot(liveDir, snapshotDir, srcVersion)
+		healVersion := srcVersion
+		if rulesIntact {
+			// live 已完整：版本只认 live 自身标记；标记缺失/空则版本不可知，
+			// 保持退化快照留现场，不得用 dist 版本冒充。
+			healVersion = ""
+			if raw, readErr := os.ReadFile(filepath.Join(liveDir, "VERSION")); readErr == nil {
+				healVersion = strings.TrimSpace(string(raw))
+			}
+		}
+		healDegenerateCRSSnapshot(liveDir, snapshotDir, healVersion)
 	}
 }
 

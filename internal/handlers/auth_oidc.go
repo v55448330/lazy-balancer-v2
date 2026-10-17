@@ -12,7 +12,10 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -260,6 +263,61 @@ func sanitizeOIDCErrorParam(raw string) string {
 	return code
 }
 
+// oidcStateCookieName 是 OIDC state↔浏览器绑定的 cookie 名（U07-F01）。
+const oidcStateCookieName = "oidc_state"
+
+// oidcStateBindingEnabled 是绑定校验开关（默认开）。既有流程测试（无 cookie
+// 容器）在 setupOIDCTest 中显式关闭；绑定行为由
+// TestOIDCCallback_stateBoundToBrowser 专题覆盖。
+var oidcStateBindingEnabled = true
+
+// oidcStateBinding 计算 state 的 HMAC-SHA256 绑定值（十六进制）。cookie 只承载
+// 绑定值（非明文 state），且绝不作为认证凭证——它的唯一用途是证明「发起
+// 授权的浏览器」与「回调的浏览器」是同一个。
+func oidcStateBinding(secret, state string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(state))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// oidcCookieSecure 判定是否加 Secure：直连 TLS，或受信代理声明的 https。
+// 不可信来源的 X-Forwarded-Proto 不得影响 cookie 属性（与 requestOrigin 同门）。
+func oidcCookieSecure(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	if !trustedProxyRemoteAddr(c.Request.RemoteAddr) {
+		return false
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
+// setOIDCStateCookie 下发 state 绑定 cookie（HttpOnly，10 分钟，Lax）。
+func setOIDCStateCookie(c *gin.Context, secret, state string) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oidcStateCookieName,
+		Value:    oidcStateBinding(secret, state),
+		Path:     "/",
+		MaxAge:   int(oidcStateTTL / time.Second),
+		HttpOnly: true,
+		Secure:   oidcCookieSecure(c),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearOIDCStateCookie 回调消费后清除绑定 cookie。
+func clearOIDCStateCookie(c *gin.Context) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oidcStateCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   oidcCookieSecure(c),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // OIDCLogin GET /auth/oidc/login?return_to=...
 // 生成 state/nonce/PKCE 后跳转提供商授权页。
 func (h *Handlers) OIDCLogin(c *gin.Context) {
@@ -316,6 +374,9 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 	returnTo := sanitizeOIDCReturnTo(c.Query("return_to"))
 	oidcStates.Store(state, oidcStateEntry{nonce: nonce, verifier: verifier, returnTo: returnTo, created: time.Now()})
 	oidcStateCount.Add(1)
+	// U07-F01：state 与发起登录的浏览器绑定——回调侧校验同名 cookie 的 HMAC
+	// 绑定值，跨浏览器/跨会话的 code+state 组合无法完成登录。
+	setOIDCStateCookie(c, h.cfg.JWTSecret, state)
 
 	oauthCfg := oidcOAuthConfig(cfg, p, oidcCallbackURL(c))
 	authURL := oauthCfg.AuthCodeURL(state,
@@ -330,6 +391,19 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 // 轮：users.go 用户名 409 两处双段判定并入本 helper 单一源）。
 func isUniqueConstraintError(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists"))
+}
+
+// truncateRunes 按 rune 截断（U07-F04：display_name 与 username 共用 50 rune
+// 预算，避免 byte 截断切坏 UTF-8 或超列宽）。
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max])
 }
 
 // OIDCCallback GET /auth/oidc/callback——授权码换令牌→ID Token 验签→
@@ -349,7 +423,22 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		}
 		c.Redirect(http.StatusFound, requestOrigin(c)+"/#/oidc/callback?error="+url.QueryEscape(msg))
 	}
-	stateEntryRaw, ok := oidcStates.LoadAndDelete(c.Query("state"))
+	// U07-F01：先验 state↔浏览器绑定，再消费 state（失败不消耗合法 state 之外
+	// 的语义：cookie 缺失/不匹配一律拒绝，不回显 token）。
+	queryState := c.Query("state")
+	if oidcStateBindingEnabled {
+		bindingCookie, cookieErr := c.Cookie(oidcStateCookieName)
+		if cookieErr != nil || bindingCookie == "" {
+			fail("登录状态与当前浏览器不匹配,请重新登录", "OIDC state 缺少浏览器绑定")
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(bindingCookie), []byte(oidcStateBinding(h.cfg.JWTSecret, queryState))) != 1 {
+			fail("登录状态与当前浏览器不匹配,请重新登录", "OIDC state 浏览器绑定不匹配")
+			return
+		}
+		clearOIDCStateCookie(c)
+	}
+	stateEntryRaw, ok := oidcStates.LoadAndDelete(queryState)
 	if ok {
 		oidcStateCount.Add(-1)
 	}
@@ -413,6 +502,12 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		fail("nonce 不匹配(疑似重放)", "OIDC nonce 不匹配")
 		return
 	}
+	// U07-F13：sub 是 (issuer,subject) 身份主键，空 sub 会把多个自然人折叠到
+	// oidc_subject='' 同一行——fail-visible，不建空主体身份。
+	if strings.TrimSpace(claims.Sub) == "" {
+		fail("提供商未返回用户标识(sub)", "OIDC 缺少 sub")
+		return
+	}
 
 	// 用户命中:OIDC 用户独立行(不绑定本地账号),按 (issuer, subject) 定位。
 	// R39-2:同查 password_version——OIDC JWT 携带 pwd_ver,与本地会话同构,
@@ -447,10 +542,8 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		}
 		// A40-1-3:截断按 rune 计数——byte 截断会把中文/emoji 切成无效 UTF-8
 		// 落库(前端展示乱码);列宽 VARCHAR(50) 的语义单位是字符不是字节。
-		if runes := []rune(base); len(runes) > 50 {
-			base = string(runes[:50])
-		}
-		displayName := claims.Name
+		base = truncateRunes(base, 50)
+		displayName := truncateRunes(claims.Name, 50)
 		if displayName == "" {
 			displayName = base
 		}
@@ -543,27 +636,10 @@ func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersi
 	if _, err := rand.Read(jtiBytes); err != nil {
 		return "", time.Time{}, err
 	}
-	nodeMode := "master"
-	if h.clusterService != nil {
-		if isMaster, err := h.clusterService.IsMaster(context.Background()); err == nil && !isMaster {
-			nodeMode = "slave"
-		}
-	} else {
-		// 单测路径(无集群服务注入):直读全局 is_master。U7a-P5-1(第 66 轮审计):
-		// Scan 失败时 isMasterVal 保持零值 0 → 判 slave——与 respondLoginWithMFA
-		// 的「查询失败保持 master」口径相反,两处各自如实描述,不强行统一;
-		// 行存在时 is_master=1 或 NULL(经 COALESCE 归 1)均判 master。
-		var isMasterVal int
-		_ = db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMasterVal)
-		if isMasterVal == 0 {
-			nodeMode = "slave"
-		}
-	}
 	tokenClaims := map[string]interface{}{
 		"user_id":     userID,
 		"username":    username,
 		"role":        role,
-		"node_mode":   nodeMode,
 		"auth_method": "oidc",
 		"pwd_ver":     passwordVersion,
 		"jti":         hex.EncodeToString(jtiBytes),
@@ -634,8 +710,21 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		// 「httpxy://…」类伪 scheme。空 issuer 保留清除语义。
 		if *req.Issuer != "" {
 			u, perr := url.Parse(issuer)
-			if issuer == "" || perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "服务地址须为 http(s) URL"})
+			if issuer == "" || perr != nil || u.Host == "" {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "服务地址须为 https URL"})
+				return
+			}
+			// U07-F05（第 78 轮收紧）：issuer 仅允许 https；http 只保留回环地址
+			// （127.0.0.0/8、::1）供本机 mock/测试——其余 http 会把 client_secret
+			// 明文 POST 到 token_endpoint。
+			if u.Scheme == "http" {
+				host := u.Hostname()
+				if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 服务地址须为 https（http 仅允许回环地址用于本机测试）"})
+					return
+				}
+			} else if u.Scheme != "https" {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "服务地址须为 https URL"})
 				return
 			}
 		}

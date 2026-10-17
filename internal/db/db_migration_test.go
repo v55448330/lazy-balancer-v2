@@ -639,36 +639,8 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
+	createLegacyLbRulesTables(t, database, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, withNewHealthCols: true, upstreams: legacyUpstreamsLegacyOrigin})
 	if _, err := database.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
-			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
-			-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
-			health_check_host TEXT NOT NULL DEFAULT '',
-			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
-			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE upstreams (
-			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
-			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
-			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT, origin_domain TEXT NOT NULL DEFAULT ''
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (7, 'legacy', 'tcp', 443, 'lb_preserve');
 		INSERT INTO upstreams (id, rule_id, host, port, max_connections, proxy_protocol)
 		VALUES (9, 7, '127.0.0.1', 8443, 37, 'v2');
@@ -934,23 +906,8 @@ func TestInitialize_canonicalizes_lb_rule_domain_after_caddy_id_backfill(t *test
 	if err != nil {
 		t.Fatalf("open legacy database: %v", err)
 	}
+	createLegacyLbRulesTables(t, legacy, legacyLbRulesSchema{})
 	if _, err := legacy.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, domain) VALUES (7, 'legacy', 'http', 80, 'Example.COM.');`); err != nil {
 		t.Fatalf("seed legacy lb_rules: %v", err)
 	}
@@ -1486,36 +1443,8 @@ func TestInitialize_cleansOrphanedPathRules(t *testing.T) {
 
 func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 	database := openMigrationTestDB(t)
+	createLegacyLbRulesTables(t, database, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, withNewHealthCols: true, upstreams: legacyUpstreamsMinimal})
 	if _, err := database.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
-			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
-			-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
-			health_check_host TEXT NOT NULL DEFAULT '',
-			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
-			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE upstreams (
-			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
-			weight INTEGER, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, max_connections INTEGER,
-			origin_domain TEXT NOT NULL DEFAULT ''
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (7, 'legacy', 'tcp', 443, 'lb_enabled_nn');
 		INSERT INTO upstreams (id, rule_id, host, port, enabled) VALUES (9, 7, '127.0.0.1', 8443, NULL);
 	`); err != nil {
@@ -1893,32 +1822,8 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open legacy database: %v", err)
 	}
+	createLegacyLbRulesTables(t, legacy, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, upstreams: legacyUpstreamsLegacy})
 	if _, err := legacy.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
-			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE upstreams (
-			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
-			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
-			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (7, 'legacy', 'http', 8080, 'lb_rebuild');
 		INSERT INTO upstreams (id, rule_id, host, port) VALUES (9, 7, '127.0.0.1', 9000);
 	`); err != nil {
@@ -2050,6 +1955,121 @@ func openMigrationTestDB(t *testing.T) *sql.DB {
 		DB = oldDB
 	})
 	return database
+}
+
+// legacyLbRulesSchema 描述「PK 重建前」的 lb_rules/upstreams 形态变体
+// （第 78 轮 U12-F10）：此前 6 处测试各自复制同一份 DDL，漂移风险与维护成本
+// 双高。每个变体逐列对应原有 DDL（含可选列与 upstreams 两侧历史死列），
+// 迁移前置断言所依赖的差异（有无 caddy_id/阶段页列/新健康列、upstreams 死列
+// 或 origin_domain）由调用方显式声明。
+type legacyLbRulesSchema struct {
+	withCaddyID       bool
+	withStagePages    bool
+	withNewHealthCols bool
+	upstreams         string
+}
+
+const (
+	legacyUpstreamsNone         = ""
+	legacyUpstreamsMinimal      = "minimal"       // 仅 origin_domain（无历史死列）
+	legacyUpstreamsLegacy       = "legacy"        // 历史死列，无 origin_domain
+	legacyUpstreamsLegacyOrigin = "legacy_origin" // 历史死列 + origin_domain
+)
+
+// createLegacyLbRulesTables 建出指定变体的旧 schema（lb_rules 以 id 为 PK）。
+func createLegacyLbRulesTables(t *testing.T, database *sql.DB, variant legacyLbRulesSchema) {
+	t.Helper()
+	var schema strings.Builder
+	schema.WriteString(`CREATE TABLE lb_rules (
+		id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
+		strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
+		health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
+		health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
+		enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
+		tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
+		upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
+		custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
+		proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
+		proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
+		host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
+		tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
+		compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
+		updated_at DATETIME, updated_by INTEGER`)
+	if variant.withCaddyID {
+		schema.WriteString(`, caddy_id TEXT`)
+	}
+	if variant.withStagePages {
+		schema.WriteString(`,
+		block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
+		block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
+		block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
+		block_page_stage3_status INTEGER NOT NULL DEFAULT 0`)
+	}
+	if variant.withNewHealthCols {
+		schema.WriteString(`,
+		-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
+		health_check_host TEXT NOT NULL DEFAULT '',
+		ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+		upstream_force_http1 INTEGER NOT NULL DEFAULT 0`)
+	}
+	schema.WriteString("\n);")
+	switch variant.upstreams {
+	case legacyUpstreamsMinimal:
+		schema.WriteString(`
+	CREATE TABLE upstreams (
+		id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+		weight INTEGER, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, max_connections INTEGER,
+		origin_domain TEXT NOT NULL DEFAULT ''
+	);`)
+	case legacyUpstreamsLegacy:
+		schema.WriteString(`
+	CREATE TABLE upstreams (
+		id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+		weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
+		dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT
+	);`)
+	case legacyUpstreamsLegacyOrigin:
+		schema.WriteString(`
+	CREATE TABLE upstreams (
+		id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+		weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
+		dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT, origin_domain TEXT NOT NULL DEFAULT ''
+	);`)
+	}
+	if _, err := database.Exec(schema.String()); err != nil {
+		t.Fatalf("seed legacy load-balancer schema: %v", err)
+	}
+}
+
+// L04-06（第 78 轮）：cert_jobs 状态枚举单源（db.CertJobStatuses ← fresh CHECK /
+// 重建 DDL / 迁移拷贝白名单全部由 strings.Join 生成）。本测试钉住 DDL 与枚举
+// 一致，并以真实 INSERT 验证每个枚举值被接受、枚举外值被拒绝。
+func TestCertJobStatuses_drivesDDLAndAcceptance(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	var tableSQL string
+	if err := database.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
+		t.Fatalf("read cert_jobs schema: %v", err)
+	}
+	if !hasExactStatusConstraint(tableSQL, CertJobStatuses()) {
+		t.Fatalf("cert_jobs CHECK constraint does not match CertJobStatuses()")
+	}
+	for _, status := range CertJobStatuses() {
+		if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_status','status.test',?)", status); err != nil {
+			t.Fatalf("status %q rejected by DDL: %v", status, err)
+		}
+	}
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_status','status.test','future_unmapped_status')"); err == nil {
+		t.Fatal("unlisted status accepted by cert_jobs DDL")
+	}
+	statuses := CertJobStatuses()
+	original := statuses[0]
+	statuses[0] = "mutated_by_test"
+	if CertJobStatuses()[0] != original {
+		t.Fatal("CertJobStatuses leaked mutable global state")
+	}
 }
 
 func createLegacyCertJobs(t *testing.T, database *sql.DB, defaultStatus, allowedStatuses string) {
@@ -2275,32 +2295,8 @@ func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open legacy database: %v", err)
 	}
+	createLegacyLbRulesTables(t, legacy, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, upstreams: legacyUpstreamsLegacy})
 	if _, err := legacy.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
-			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_status INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE upstreams (
-			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
-			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
-			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id, block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
 		VALUES (7, 'legacy', 'http', 8080, 'lb_stagepages', 5, 2, 7, 1);
 	`); err != nil {
@@ -2634,36 +2630,8 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open legacy database: %v", err)
 	}
+	createLegacyLbRulesTables(t, legacy, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, withNewHealthCols: true, upstreams: legacyUpstreamsLegacyOrigin})
 	if _, err := legacy.Exec(`
-		CREATE TABLE lb_rules (
-			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
-			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
-			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
-			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
-			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
-			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
-			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
-			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
-			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
-			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
-			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
-			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
-			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
-			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT,
-			block_page_stage1_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
-			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
-			health_check_host TEXT NOT NULL DEFAULT '',
-			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
-			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE upstreams (
-			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
-			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
-			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT,
-			origin_domain TEXT NOT NULL DEFAULT ''
-		);
 		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id, health_check_host)
 		VALUES (7, 'legacy', 'http', 8080, 'lb_originhost', 'probe.example.test');
 		INSERT INTO upstreams (id, rule_id, host, port, enabled, protocol, origin_domain)

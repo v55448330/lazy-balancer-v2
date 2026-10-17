@@ -1,6 +1,6 @@
 import { onUnmounted } from 'vue'
 
-export interface PollingTaskContext {
+interface PollingTaskContext {
   readonly signal: AbortSignal
   readonly sequence: number
   readonly isCurrent: () => boolean
@@ -11,7 +11,7 @@ interface PollingTaskOptions {
   readonly onError?: (error: unknown) => void
 }
 
-export interface PollingTask {
+interface PollingTask {
   readonly signal: AbortSignal
   readonly run: () => Promise<void>
   readonly start: () => void

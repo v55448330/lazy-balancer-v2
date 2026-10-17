@@ -55,7 +55,7 @@ func readRenderedIPList(t *testing.T, directives, scopeMarker string) string {
 // 本身即投影实例身份——策略 id/并集描述符；名单改名/内容变化都不改变文件名）、
 // 聚合后落盘、原子写（tmp+rename）、同字节跳写（全量渲染重投影 stat 命中且
 // 内容一致 → 不重写，mtime 保持）、内容变化 → 同路径原子换内容（配置字节
-// 不变，@ipListFast 匹配器 ≤1s stat 热感知）、空集合不写文件返回空串。
+// 不变，@ipListFast 匹配器 ≤1s stat 热感知）、空集合投影空文件并返回路径。
 func TestWriteIPListFile_stableNaming(t *testing.T) {
 	// Given
 	entries := []string{"10.0.0.128/25", "10.0.0.0/25", "203.0.113.7", "203.0.113.7"}
@@ -341,5 +341,43 @@ func TestWriteIPListFile_uniqueTempNotBlockedByStalePath(t *testing.T) {
 		if info, err := os.Stat(m); err == nil && !info.IsDir() {
 			t.Fatalf("成功写入不得遗留 tmp: %v", matches)
 		}
+	}
+}
+
+// ---- 第 78 轮 A 域：RG-SEC-IPLIST-GC-OWNERSHIP（U01-F07）----
+
+func TestIPListGC_tempOwnershipBothWays(t *testing.T) {
+	now := time.Now()
+	seed := func(name string, age time.Duration) string {
+		t.Helper()
+		p := filepath.Join(IPListDataDir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stamp := now.Add(-age)
+		if err := os.Chtimes(p, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(p) })
+		return p
+	}
+	staleOwned := seed("p1-acl-12345.tmp", 48*time.Hour)
+	staleOwnedUnion := seed("u-bl-42.tmp", 48*time.Hour)
+	freshOwned := seed("u-deny-lb_x-777.tmp", time.Minute)
+	unrelated := seed("ops-notes.tmp", 48*time.Hour)
+
+	gcStaleIPListFiles(now, 24*time.Hour)
+
+	if _, err := os.Stat(staleOwned); !os.IsNotExist(err) {
+		t.Errorf("超龄投影残留 %s 应被回收（err=%v）", staleOwned, err)
+	}
+	if _, err := os.Stat(staleOwnedUnion); !os.IsNotExist(err) {
+		t.Errorf("超龄 u-* 投影残留 %s 应被回收（err=%v）", staleOwnedUnion, err)
+	}
+	if _, err := os.Stat(freshOwned); err != nil {
+		t.Errorf("新鲜临时文件必须保留（在役写保护）：%v", err)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Errorf("无关超龄 .tmp 不得被删除：%v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -981,5 +982,94 @@ func TestExtractRetryAfterFromError_stripsTrailingCommaAndPeriod(t *testing.T) {
 	}
 	if d := extractRetryAfterFromError("rate limited. retry after 3600s."); d != 3600*time.Second {
 		t.Fatalf("period-suffixed seconds=%v, want 3600s", d)
+	}
+}
+
+// L04-04（第 78 轮）：部署失败必须在 certjob-*.log 留一条 ERROR 业务行（attempt+
+// 原因）——此前部署链 grep WriteCertJobLog 零命中，磁盘日志只剩签发阶段，
+// 排障需反查 DB；重载/写文件/CAS 冲突等附带失败补 WARN 行，不改变签发结果。
+func TestDeploymentFailed_writesCertJobLogWithAttemptAndReason(t *testing.T) {
+	useCertJobLogTestEnv(t, 1<<20)
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	issuer := NewCertIssuer(nil)
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+
+	// When：首次部署失败（attempt=1/10）
+	if err := issuer.deploymentFailed(jobID, material, "重载 Caddy 失败: boom", errors.New("boom")); err == nil {
+		t.Fatal("deploymentFailed returned nil error")
+	}
+
+	// Then：job 日志含 ERROR 行（阶段/attempt/原因）
+	data, err := os.ReadFile(CertJobLogPath(ruleID))
+	if err != nil {
+		t.Fatalf("read cert job log: %v", err)
+	}
+	logText := string(data)
+	for _, want := range []string{"[ERROR]", "deployment_failed", "attempt=1/10", "重载 Caddy 失败: boom"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("cert job log missing %q:\n%s", want, logText)
+		}
+	}
+}
+
+// L04-04 封顶形态：第 10 次部署失败落 failed 终态，日志行同样带 attempt=10/10。
+func TestDeploymentFailed_writesTerminalLogAtMaxAttempts(t *testing.T) {
+	useCertJobLogTestEnv(t, 1<<20)
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=9 WHERE id=?", jobID); err != nil {
+		t.Fatalf("seed attempts: %v", err)
+	}
+	issuer := NewCertIssuer(nil)
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+
+	_ = issuer.deploymentFailed(jobID, material, "重载 Caddy 失败: boom", errors.New("boom"))
+
+	data, err := os.ReadFile(CertJobLogPath(ruleID))
+	if err != nil {
+		t.Fatalf("read cert job log: %v", err)
+	}
+	if !strings.Contains(string(data), "attempt=10/10") {
+		t.Fatalf("cert job log missing terminal attempt=10/10:\n%s", data)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read job status: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("job status=%q, want failed at max attempts", status)
+	}
+}
+
+// L04-04：状态回写失败（CAS 冲突/DB 故障）不得静默——补 WARN 行留痕，返回值仍
+// 是部署失败（签发结果不变）。
+func TestDeploymentFailed_warnsWhenStatusWritebackFails(t *testing.T) {
+	useCertJobLogTestEnv(t, 1<<20)
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	if _, err := db.DB.Exec(`CREATE TRIGGER force_cert_job_update_fail BEFORE UPDATE ON cert_jobs BEGIN SELECT RAISE(ABORT, 'forced'); END;`); err != nil {
+		t.Fatalf("create fail trigger: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("DROP TRIGGER IF EXISTS force_cert_job_update_fail") })
+	issuer := NewCertIssuer(nil)
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+
+	if err := issuer.deploymentFailed(jobID, material, "重载 Caddy 失败: boom", errors.New("boom")); err == nil {
+		t.Fatal("deploymentFailed returned nil error")
+	}
+
+	data, err := os.ReadFile(CertJobLogPath(ruleID))
+	if err != nil {
+		t.Fatalf("read cert job log: %v", err)
+	}
+	if !strings.Contains(string(data), "[WARN]") || !strings.Contains(string(data), "deployment_status_update_failed") {
+		t.Fatalf("status writeback failure not surfaced as WARN:\n%s", data)
 	}
 }

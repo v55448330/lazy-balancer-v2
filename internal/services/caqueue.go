@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -57,6 +58,13 @@ var (
 	caQueueManager     *CAQueueManager
 	caQueueManagerOnce sync.Once
 )
+
+// caProviderConfigVersion 是 CA provider 配置版本号（U06-F02）：UpdateCAProvider
+// 提交后递增，队列 tick 发现版本与本地快照不一致时先重载 provider 再评估闸门。
+// 修复「缓存闸门先于 loadCAProvider」的滞后：积压窗口内把 max_concurrent 抬高
+// 或把 min_interval 下调，旧实现会一直用缓存值放行/拦截到 running 归零或间隔
+// 到期。原子读写避免 q.mu→m.mu 反向锁序（锁序恒为 m.mu→q.mu）。
+var caProviderConfigVersion atomic.Uint64
 
 // caExecutionTimeout 是单域名签发的执行预算。单域名签发器内部分段最坏耗时
 // 之和为注册 30s + DNS 传播 5m + 递归逐域 2m + 验证 10m + 订单就绪 3m +
@@ -367,8 +375,12 @@ func ruleDeletionCompensationBackoff(attempt int) time.Duration {
 }
 
 // PauseAndDrain prevents new work, cancels every queue, and waits for all
-// workers to exit before returning.
-func (m *CAQueueManager) PauseAndDrain() {
+// workers to exit before returning. The returned flag reports whether every
+// queue fully drained within caQueueDrainTimeout (L06-06): false means an
+// execution that ignores ctx cancellation is still running (and was registered
+// in retiredQueues). Callers requiring a quiescent queue state (e.g. config
+// import) must reject/retry rather than proceed on false.
+func (m *CAQueueManager) PauseAndDrain() bool {
 	// 先暂停部署重试 timer 再停队列：若先置 active=false，部署 timer 回调
 	// 可能恰好越过 timersPaused 检查开始重载，破坏暂停屏障语义。
 	pauseCertificateDeploymentRetries()
@@ -377,8 +389,11 @@ func (m *CAQueueManager) PauseAndDrain() {
 	queues := m.stopQueuesLocked()
 	m.mu.Unlock()
 
+	drained := true
 	for _, q := range queues {
-		q.wait()
+		if !q.wait() {
+			drained = false
+		}
 	}
 	// q.wait 超时返回时滞行执行（issuer 不响应 ctx 取消）可能仍未退出：旧队列已被
 	// stopQueuesLocked 整体摘出 m.queues，Resume 的 stranded 扫描经 IsJobActive 只查
@@ -395,6 +410,7 @@ func (m *CAQueueManager) PauseAndDrain() {
 		}
 	}
 	if len(retired) > 0 {
+		drained = false
 		m.mu.Lock()
 		now := time.Now()
 		for _, q := range retired {
@@ -402,6 +418,7 @@ func (m *CAQueueManager) PauseAndDrain() {
 		}
 		m.mu.Unlock()
 	}
+	return drained
 }
 
 func (m *CAQueueManager) stopQueuesLocked() []*caQueue {
@@ -418,6 +435,13 @@ func (m *CAQueueManager) stopQueuesLocked() []*caQueue {
 	}
 	m.queues = make(map[int]*caQueue)
 	return queues
+}
+
+// IsActive 返回队列是否允许执行签发任务（只读活动态，供导入恢复保留）。
+func (m *CAQueueManager) IsActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active
 }
 
 func (m *CAQueueManager) Resume() {
@@ -659,9 +683,8 @@ func (m *CAQueueManager) releaseZombieJob(jobID int, done <-chan struct{}) {
 	m.mu.Unlock()
 }
 
-// Enqueue adds or re-enqueues a cert job.
-// CLCC32-2(第 32 轮审计备查):零生产调用方——生产入队走 EnqueueIfActive
-// (在途守卫+状态迁移),本方法仅测试使用;保留导出形态避免平行测试脚手架。
+// Enqueue 是测试夹具（仅测试使用）：生产入队一律走 EnqueueIfActive
+// （在途守卫 + 状态迁移）或内部 enqueueLocked。保留导出形态避免平行测试脚手架（U06-F08）。
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -737,6 +760,7 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 		// 队列缓存的 provider 快照可能早于用户修改的凭证/配置，每次入队刷新
 		q.mu.Lock()
 		q.provider = provider
+		q.providerVersion = caProviderConfigVersion.Load()
 		q.mu.Unlock()
 	}
 	if m.beforeEnqueue != nil {
@@ -816,24 +840,25 @@ type queueItem struct {
 }
 
 type caQueue struct {
-	provider      models.CAProvider
-	pending       []queueItem
-	running       int
-	active        map[int]struct{} // jobIDs currently pending or running
-	cancels       map[int]context.CancelFunc
-	executionDone map[int]chan struct{}
-	runningRules  map[int]string
-	lastOrder     time.Time
-	reloader      func() error
-	mu            sync.Mutex
-	stopCh        chan struct{}
-	wakeCh        chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
-	loopDone      chan struct{}
-	executions    sync.WaitGroup
-	stopping      bool
-	executeFn     func(context.Context, queueItem, models.CAProvider) error
+	provider        models.CAProvider
+	providerVersion uint64 // 最近一次加载 provider 时的 caProviderConfigVersion 快照
+	pending         []queueItem
+	running         int
+	active          map[int]struct{} // jobIDs currently pending or running
+	cancels         map[int]context.CancelFunc
+	executionDone   map[int]chan struct{}
+	runningRules    map[int]string
+	lastOrder       time.Time
+	reloader        func() error
+	mu              sync.Mutex
+	stopCh          chan struct{}
+	wakeCh          chan struct{}
+	ctx             context.Context
+	cancel          context.CancelFunc
+	loopDone        chan struct{}
+	executions      sync.WaitGroup
+	stopping        bool
+	executeFn       func(context.Context, queueItem, models.CAProvider) error
 }
 
 type queueExecution struct {
@@ -849,17 +874,18 @@ func newCAQueue(provider models.CAProvider, reloader func() error, dataDir ...st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &caQueue{
-		provider:      provider,
-		reloader:      reloader,
-		active:        make(map[int]struct{}),
-		cancels:       make(map[int]context.CancelFunc),
-		executionDone: make(map[int]chan struct{}),
-		runningRules:  make(map[int]string),
-		stopCh:        make(chan struct{}),
-		wakeCh:        make(chan struct{}, 1),
-		loopDone:      make(chan struct{}),
-		ctx:           ctx,
-		cancel:        cancel,
+		provider:        provider,
+		providerVersion: caProviderConfigVersion.Load(),
+		reloader:        reloader,
+		active:          make(map[int]struct{}),
+		cancels:         make(map[int]context.CancelFunc),
+		executionDone:   make(map[int]chan struct{}),
+		runningRules:    make(map[int]string),
+		stopCh:          make(chan struct{}),
+		wakeCh:          make(chan struct{}, 1),
+		loopDone:        make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 	q.executeFn = func(ctx context.Context, item queueItem, provider models.CAProvider) error {
 		return NewCertIssuer(q.reloader, dataDir...).Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
@@ -912,6 +938,15 @@ func (q *caQueue) tick() {
 	// 与内存态即可判定，必须先于 loadCAProvider：积压窗口内每 100ms tick 都打
 	// 1-2 次 provider 查询（~10 次/秒，N+11 D1-S2）。代价是闸门关闭期间对
 	// provider 失效的发现推迟到下一次真实派发窗口，由 drain 路径统一收口。
+	//
+	// U06-F02（第 78 轮）：UpdateCAProvider 提交后递增 caProviderConfigVersion——
+	// 版本不一致即先重载快照再评估闸门，max_concurrent 抬高/min_interval 下调
+	// 在积压窗口内下一个 tick 生效；版本一致时不额外查库，N+11 查询收敛不回退。
+	if q.providerVersion != caProviderConfigVersion.Load() {
+		if !q.refreshProviderLocked() {
+			return // 已解锁并处置 pending（provider 被禁用/删除）
+		}
+	}
 	if q.running >= q.provider.MaxConcurrent {
 		q.mu.Unlock()
 		return
@@ -938,6 +973,7 @@ func (q *caQueue) tick() {
 		provider.MaxConcurrent = 1
 	}
 	q.provider = provider
+	q.providerVersion = caProviderConfigVersion.Load()
 	// 加载到的新配置可能收紧，按新值复核（纯内存比较）：派发决策始终按最新
 	// provider 配置评估，不弱于原先"每次 tick 先加载再评估"的语义。
 	if q.running >= provider.MaxConcurrent {
@@ -958,6 +994,31 @@ func (q *caQueue) tick() {
 	q.mu.Unlock()
 
 	go q.execute(execution)
+}
+
+// refreshProviderLocked 在 provider 配置版本变化时（调用方持 q.mu）重载快照并按
+// 新值刷新本地版本快照。provider 被禁用/删除时排空 pending、删 active 占位并
+// 解锁后逐个 failJob，返回 false（调用方须直接 return，锁已释放）。
+func (q *caQueue) refreshProviderLocked() bool {
+	providerID := q.provider.ID
+	provider, err := loadCAProvider(providerID)
+	if err != nil || provider.ID != providerID {
+		pending := q.pending
+		q.pending = nil
+		for _, item := range pending {
+			delete(q.active, item.jobID)
+		}
+		q.mu.Unlock()
+		message := fmt.Sprintf("CA Provider 不可用：配置已禁用或删除（ID %d）", providerID)
+		q.failPendingProviderUnavailable(pending, message)
+		return false
+	}
+	if provider.MaxConcurrent <= 0 {
+		provider.MaxConcurrent = 1
+	}
+	q.provider = provider
+	q.providerVersion = caProviderConfigVersion.Load()
+	return true
 }
 
 // failPendingProviderUnavailable 在解锁后逐个处置因 provider 失效而排空的
@@ -1071,7 +1132,7 @@ func (q *caQueue) stop() {
 	close(q.stopCh)
 }
 
-func (q *caQueue) wait() {
+func (q *caQueue) wait() bool {
 	<-q.loopDone
 	// executions.Wait 必须套 30s 上限：issuer 异常不响应 ctx 取消时 Wait 永不返回，
 	// PauseAndDrain/进程 Stop 会被永久挂起（R43 A-2，与 CancelJob 同口径）。
@@ -1082,8 +1143,10 @@ func (q *caQueue) wait() {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-time.After(caQueueDrainTimeout):
 		Logf("warn", "CA 队列暂停：等待在途执行退出超时（%s），继续关闭流程", caQueueDrainTimeout)
+		return false
 	}
 }
 

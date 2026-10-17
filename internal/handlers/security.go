@@ -1042,16 +1042,17 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	// S1(2026-09-10 审计):allow 模式+空生效名单——发射端 len>0 门静默跳过
 	// (「其余一律拒绝」实际全放行 fail-open)。写入侧 400(与 UI 守卫同口径,
-	// R50/R57 同型先例;内联∪引用合并判定)。
+	// R50/R57 同型先例)。U03-F01：判定口径从「内联∪引用个数」改为
+	// 「内联∪引用名单**实际条目**并集」——引用一个空名单同样是空生效集合。
+	// 查询失败按 500（fail-closed），不按空/非空猜测。
 	if req.IPACLEnabled && req.IPACLMode == "allow" {
-		var inlineACL []string
-		json.Unmarshal([]byte(req.IPACLList), &inlineACL)
-		var refIDs []int
-		if s := req.IPACLListRefs; s != "" {
-			json.Unmarshal([]byte(s), &refIDs)
+		nonEmpty, gerr := allowEffectiveListNonEmpty(db.DB, req.IPACLList, req.IPACLListRefs)
+		if gerr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败: " + gerr.Error()})
+			return
 		}
-		if len(inlineACL) == 0 && len(refIDs) == 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下 IP 列表不能为空，否则所有请求将被拒绝"})
+		if !nonEmpty {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下生效 IP 列表不能为空（内联条目与所引用名单均无条目；空名单会放行所有请求）"})
 			return
 		}
 	}
@@ -1515,6 +1516,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("无效的策略类型：%s（可选 stage1/stage2/stage3）", *req.PolicyType)})
 			return
 		}
+		if *req.PolicyType != models.PolicyTypeStage2 && req.BlockPageID != nil && *req.BlockPageID == 0 {
+			zero := 0
+			req.BlockStatusCode = &zero
+		}
 	}
 
 	for _, f := range []struct {
@@ -1625,12 +1630,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			if req.IPACLListRefs != nil {
 				effRefs = *req.IPACLListRefs
 			}
-			var inlineACL []string
-			var refIDs []int
-			json.Unmarshal([]byte(effList), &inlineACL)
-			json.Unmarshal([]byte(effRefs), &refIDs)
-			if len(inlineACL) == 0 && len(refIDs) == 0 {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下 IP 列表不能为空，否则所有请求将被拒绝"})
+			// U03-F01：生效集合 = 内联 ∪ 引用名单实际条目（引用空名单同样为空）。
+			nonEmpty, gerr := allowEffectiveListNonEmpty(tx, effList, effRefs)
+			if gerr != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败: " + gerr.Error()})
+				return
+			}
+			if !nonEmpty {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下生效 IP 列表不能为空（内联条目与所引用名单均无条目；空名单会放行所有请求）"})
 				return
 			}
 		}
@@ -3184,7 +3191,10 @@ var ruleTriggeredFamilyPrefixes = map[string][]string{
 	"威胁情报库":   {"14"},
 	// v2.3.8 触发类型扩展：爬虫Bot（810000-899999 全段）、限流（429 精确）、
 	// IP 黑名单（自维护 id:4）、WAF·自定义（customRuleFamilyCondition 复用）
-	"爬虫Bot": {"81", "85"},
+	// 第 78 轮 U03-F06：爬虫族数值段单一事实源 [810000,900000)——旧两位前缀
+	// "81"/"85" 生成 rule_triggered='81' 精确匹配，永不命中 6 位真实 id。
+	// 形态条件由 crawlerFamilyCondition 承载（互斥 6 位 GLOB）。
+	"爬虫Bot": {},
 	"限流":    {"429"},
 
 	"WAF·自定义": {},
@@ -3226,7 +3236,12 @@ const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-
 // 段界单一事实源=services.IsGeoIPPrecheckID；本 GLOB 为 SQL 文本形态,
 // 段基址调整时须与谓词同步修订。
 // 旧共享 id:8 由 ruleTriggeredFamilyPrefixes「地域拦截」表单值精确匹配覆盖。
-const geoipFamilyCondition = "rule_triggered GLOB '8[0-9][0-9][0-9][0-9][0-9]'"
+const geoipFamilyCondition = "rule_triggered GLOB '80[0-9][0-9][0-9][0-9]'"
+
+// crawlerFamilyCondition 爬虫两族（豁免 [810000,850000) + 伪装 [850000,900000)）
+// 的 SQL 形态：6 位 8 开头且第二位非 0——与 geoipFamilyCondition('80....') 互斥，
+// 与 services 侧 encode/decodePrecheckRuleID 段界单一事实源同步。
+const crawlerFamilyCondition = "rule_triggered GLOB '8[1-9][0-9][0-9][0-9][0-9]'"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
 // 精确/family 部分前缀/WAF 规则（CRS）或其前缀/纯数字）——只能走消息关键词
@@ -3308,6 +3323,9 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		if input == "地域拦截" {
 			ors = append(ors, geoipFamilyCondition)
 		}
+		if input == "爬虫Bot" {
+			ors = append(ors, crawlerFamilyCondition)
+		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
 	// family 标签的部分输入：宽匹配（前缀命中任一 family 即并入其前缀集合）。
@@ -3331,6 +3349,9 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		}
 		if strings.HasPrefix("地域拦截", input) {
 			ors = append(ors, geoipFamilyCondition)
+		}
+		if strings.HasPrefix("爬虫Bot", input) {
+			ors = append(ors, crawlerFamilyCondition)
 		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
@@ -3520,12 +3541,14 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		var e models.SecurityEvent
 		// Scan 失败必须中止：否则部分零值的事件行会被当作真实事件返回（R35 D3）
 		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName, &e.DurationUs, &e.PrecheckUs, &e.RequestHeaders, &e.RequestBody); err != nil {
-			e.TriggerType = triggerTypeForRule(e.RuleTriggered)
 			services.Logf("error", "security events: scan failed: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
 		}
 		e.IPLocation = enrichIPLocation(e.ClientIP)
+		// U03-F05（第 78 轮）：触发类型必须在 Scan 成功后、append 前接线——
+		// 旧实现把赋值放在错误分支里，成功路径恒为空串（前端列全空）。
+		e.TriggerType = triggerTypeForRule(e.RuleTriggered)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -3559,7 +3582,8 @@ const (
 	attackFamilyCustomRule                    // 自定义规则：5 位任意数字 / ≥7 位 1 开头合成
 	attackFamilyBodyAnomaly                   // id 11 请求体异常
 	attackFamilyThreatIntel                   // id 14 / msg「威胁情报库拦截」
-	attackFamilyGeoIP                         // id 8 / 6 位 8xxxxx / msg「GeoIP 区域拦截」
+	attackFamilyGeoIP                         // id 8 / 6 位 80xxxx / msg「GeoIP 区域拦截」
+	attackFamilyCrawler                       // 6 位 8[1-9]xxxx（爬虫豁免/伪装）
 	attackFamilyIPACL                         // msg「IP 黑/白名单/访问控制」/ id 2/4/5/7
 	attackFamilyTrust                         // id 3/12 信任名单
 )
@@ -3585,7 +3609,10 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		// 14 = 威胁情报库预检拦截（阶段 1，v2.3.x）。精确匹配——LIKE 前缀
 		// 会误并自定义规则发射 id 14xxxx（emit=DB id+10000）。
 		return attackFamilyThreatIntel
-	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "8")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+	case len(ruleTriggered) == 6 && ruleTriggered[0] == '8' && ruleTriggered[1] != '0':
+		// U03-F06：爬虫两族 [810000,900000) 与地域段 [800000,810000) 互斥。
+		return attackFamilyCrawler
+	case ruleTriggered == "8" || (len(ruleTriggered) == 6 && strings.HasPrefix(ruleTriggered, "80")) || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
 		// 8 = 旧共享 GeoIP id（策略引擎时代历史事件）；6 位 8xxxxx = 预检精确段
 		// 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。
 		return attackFamilyGeoIP
@@ -3692,6 +3719,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "威胁情报库"
 	case attackFamilyGeoIP:
 		return "地域拦截"
+	case attackFamilyCrawler:
+		return "爬虫Bot"
 	case attackFamilyIPACL:
 		return "IP 访问控制"
 	case attackFamilyTrust:
@@ -3723,7 +3752,7 @@ func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
 	switch class {
 	case attackFamilyBodyAnomaly:
 		return "请求体异常"
-	case attackFamilyThreatIntel, attackFamilyGeoIP, attackFamilyIPACL:
+	case attackFamilyThreatIntel, attackFamilyGeoIP, attackFamilyCrawler, attackFamilyIPACL:
 		return "IP 访问控制"
 	case attackFamilyTrust:
 		return "信任名单"
@@ -4135,14 +4164,10 @@ func (h *Handlers) StartCRSUpdate(c *gin.Context) {
 		return
 	}
 	op := auditOperator(c)
-	go func() {
-		// F-U1-1（第 68 轮）：Trigger 失败补偿（任务未执行/失败否则零痕迹——
-		// 自记族的失败审计以任务体真实执行为前提）。
-		if err := te.Trigger("crs", "manual", op); err != nil {
-			services.Logf("error", "手动触发 CRS 更新失败: %v", err)
-			services.RecordAuditLog(op, "触发失败", "CRS规则库", "手动触发 CRS 更新失败: "+err.Error(), "")
-		}
-	}()
+	// L01-02：统一异步触发与错误分类（见 services.TriggerTaskAsync）。
+	services.TriggerTaskAsync(te, "crs", services.TriggerAuditContext{
+		Operator: op, Family: "CRS规则库", Name: "CRS 更新",
+	})
 	// 审计由任务体自记（operator 经 RunContext 归人——2026-09-29 裁定单记口径）
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
@@ -4298,13 +4323,10 @@ func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
 		return
 	}
 	op := auditOperator(c)
-	go func() {
-		// F-U1-1（第 68 轮）：Trigger 失败补偿（同 StartCRSUpdate 口径）。
-		if err := te.Trigger("ip2region", "manual", op); err != nil {
-			services.Logf("error", "手动触发 IP2Region 更新失败: %v", err)
-			services.RecordAuditLog(op, "触发失败", "IP数据库", "手动触发 IP2Region 更新失败: "+err.Error(), "")
-		}
-	}()
+	// L01-02：统一异步触发与错误分类（见 services.TriggerTaskAsync）。
+	services.TriggerTaskAsync(te, "ip2region", services.TriggerAuditContext{
+		Operator: op, Family: "IP数据库", Name: "IP2Region 更新",
+	})
 	// 审计由任务体自记（operator 经 RunContext 归人——2026-09-29 裁定单记口径）
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
@@ -4631,6 +4653,10 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 		req.IPBlacklist = "[]"
 		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
 		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
+	}
+	if policyType != models.PolicyTypeStage2 && req.BlockPageID == 0 {
+		// 无自定义页面时状态码不被渲染消费；写侧归一，避免 UI 宣称生效。
+		req.BlockStatusCode = 0
 	}
 }
 

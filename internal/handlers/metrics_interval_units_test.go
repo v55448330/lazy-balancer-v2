@@ -37,6 +37,14 @@ func TestParseMetricsInterval_modifierSecondsAgreement(t *testing.T) {
 		{"garbage", "-1 hours", 3600},
 		{"10x", "-1 hours", 3600},
 		{" 6H ", "-6 hours", 21600}, // 大小写/空白归一
+		// U08-F09：非正值（Atoi 可解析的负数与 0）回退默认窗口——不得拼出
+		// 非法/零长 modifier 或负桶宽。
+		{"-5h", "-1 hours", 3600},
+		{"-1d", "-1 hours", 3600},
+		{"-30m", "-1 hours", 3600},
+		{"0h", "-1 hours", 3600},
+		{"0d", "-1 hours", 3600},
+		{"0m", "-1 hours", 3600},
 	}
 	for _, c := range cases {
 		modifier, seconds := parseMetricsInterval(c.in)

@@ -43,6 +43,12 @@ var (
 	certJobLogSizeRefreshMu  sync.Mutex
 )
 
+// InvalidateTaskLogSizeCache 使任务日志大小配置缓存失效（U10-F04）。
+// 设置保存成功后必须调用——否则改库后仍有最长 5 分钟（TTL）按旧阈值滚动。
+func InvalidateTaskLogSizeCache() {
+	certJobLogSizeCachedAt.Store(0)
+}
+
 func getTaskLogSizeBytes() int64 {
 	// 未初始化库回退默认 10MB；与多数配置读取 helper 的 db.DB==nil 守卫一致。
 	if db.DB == nil {

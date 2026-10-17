@@ -3,6 +3,7 @@ package taskengine
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -365,6 +366,61 @@ func TestEngine_DemoteCancelsInFlightScheduled(t *testing.T) {
 	}
 	if lr := e.LatestRun("t-sched"); lr == nil || lr.Status != "cancelled" {
 		t.Fatalf("在途中止终态=%v, want cancelled", lr)
+	}
+}
+
+func TestEngine_StopLoopSuppressesDueScheduled(t *testing.T) {
+	// Given：到期 Scheduled 已执行一次。
+	e := newTestEngine(t)
+	started := make(chan struct{}, 1)
+	var runs atomic.Int32
+	e.Register(Descriptor{ID: "t-stop-sched", Family: "t", Name: "停止定时", Kind: KindScheduled, RunsOn: RoleAny,
+		NextSlotFn: func() time.Time { return time.Now().Add(-time.Hour) },
+		Run: func(RunContext) error {
+			runs.Add(1)
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			return nil
+		}})
+	e.StartLoop("t-stop-sched")
+	e.tick()
+	<-started
+	// When：关闭调度后再次 tick（槽仍是过去值）。
+	e.StopLoop("t-stop-sched")
+	e.tick()
+	// Then：不得再触发（StopLoop 是 Scheduled 唯一停调入口）。
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("StopLoop 后 Run 次数=%d, want 1", got)
+	}
+}
+
+func TestEngine_RapidRoleFlipRestartsMasterOnlyDaemon(t *testing.T) {
+	// Given：master-only daemon 第一代运行中。
+	e := newTestEngine(t)
+	starts := make(chan struct{}, 2)
+	e.Register(Descriptor{ID: "t-flip-fast", Family: "t", Name: "快速翻转", Kind: KindDaemon, RunsOn: RoleMasterOnly,
+		Run: func(rc RunContext) error {
+			starts <- struct{}{}
+			<-rc.Ctx.Done()
+			return rc.Ctx.Err()
+		}})
+	e.StartLoop("t-flip-fast")
+	<-starts
+
+	// When：demote 后立即 promote（旧代尚未退出清理）。
+	e.SetRole(false)
+	e.SetRole(true)
+
+	// Then：必须记录重启意图并在旧代退出后拉起第二代，不得 loop_on=true/running=false。
+	select {
+	case <-starts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("快速 demote→promote 后未拉起第二代 daemon")
+	}
+	if !daemonRunning(e, "t-flip-fast") {
+		t.Fatal("快速角色翻转后 daemon 实态为 stopped")
 	}
 }
 

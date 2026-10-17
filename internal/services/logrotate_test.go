@@ -162,3 +162,54 @@ func TestRuntimeLogCleanupOnce_wafAuditFallbackWhenIngestionStopped(t *testing.T
 		t.Fatal("WafAudit 明细为空——兜底动作必须可见（2026-10-01 用户裁定口径）")
 	}
 }
+
+// L04-09：保留期清理删除证书任务日志须与写入侧共用 ruleID 写锁——
+// 在途写入持锁期间清理必须等待（原实现无锁 os.Remove，与写侧
+// 「stat→轮转移位→append」交错可吞掉刚移位的新一代）。
+func TestTaskLogsHousekeeping_waitsForCertJobWriteLock(t *testing.T) {
+	base := t.TempDir()
+	logFile := filepath.Join(base, "app.log")
+	certDir := filepath.Join(base, "tasks", "certjobs")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(certDir, "certjob-lb_lock.log")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().AddDate(0, -6, 0)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	lock := lockCertJobLog("lb_lock")
+	lock.Lock()
+	done := make(chan TaskLogHousekeepingResult, 1)
+	go func() { done <- taskLogsHousekeeping(logFile) }()
+
+	// 持锁期间清理不得删除（等待写入侧锁）。
+	select {
+	case res := <-done:
+		lock.Unlock()
+		t.Fatalf("清理未等待写入锁即删除: %+v", res)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Stat(path); err != nil {
+		lock.Unlock()
+		t.Fatalf("持锁期间过期文件被删除: %v", err)
+	}
+
+	// 解锁后清理继续并删除过期文件（保留期用例回归）。
+	lock.Unlock()
+	select {
+	case res := <-done:
+		if len(res.Deleted) != 1 || res.Deleted[0] != "certjob-lb_lock.log" {
+			t.Fatalf("解锁后应删除过期文件, got %+v", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("解锁后清理未完成")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("过期文件应已删除, stat err=%v", err)
+	}
+}

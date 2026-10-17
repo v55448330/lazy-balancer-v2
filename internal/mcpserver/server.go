@@ -32,9 +32,30 @@ type toolSpec struct {
 	schema      string
 }
 
-const controlTaskSchema = `{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["start","stop","restart"],"description":"启动/停止/重启"}}}`
+const controlTaskSchema = `{"type":"object","required":["id","action"],"properties":{"id":{"type":"string","description":"任务 ID（见 list_system_tasks）"},"action":{"type":"string","enum":["start","stop","restart"],"description":"启动/停止/重启"}}}`
 
-const toggleTaskSchema = `{"type":"object","required":["enabled"],"properties":{"enabled":{"type":"boolean","description":"true=恢复 false=停止"}}}`
+// U11-4（第 78 轮）：单/少字段写工具的 input_schema 声明 properties/required
+// （保留 additionalProperties:true 的向前兼容形态）——运行时未启用 input schema
+// 校验，schema 是 Agent 唯一的构参契约，漏字段会让 Agent 只能凭描述猜名。
+const toggleAutoUpdateSchema = `{"type":"object","required":["auto_update"],"properties":{"auto_update":{"type":"boolean","description":"true=启用自动更新，false=关闭"}},"additionalProperties":true}`
+
+const toggleUserStatusSchema = `{"type":"object","required":["id","is_enabled"],"properties":{"id":{"type":"integer","description":"用户 ID"},"is_enabled":{"type":"boolean","description":"true=启用，false=禁用"}},"additionalProperties":true}`
+
+const setClusterModeSchema = `{"type":"object","required":["mode","master_url","register_token"],"properties":{"mode":{"type":"string","enum":["slave"],"description":"目标模式（仅 slave；提升主节点用 promote_cluster）"},"master_url":{"type":"string","description":"目标主节点地址，如 https://master:8000（http:// 明文会记录警告）"},"register_token":{"type":"string","description":"目标主节点生成的一次性注册令牌"},"node_name":{"type":"string","description":"节点名称，省略=使用本机配置名"}},"additionalProperties":true}`
+
+const updateClusterSettingsSchema = `{"type":"object","properties":{"sync_interval":{"type":"integer","minimum":10,"maximum":86400,"description":"同步间隔秒数（10-86400）"},"sync_users":{"type":"boolean","description":"同步系统数据（含全局配置，恒同步——提交 false 返回 400）"},"sync_rules":{"type":"boolean","description":"同步负载规则"},"sync_security":{"type":"boolean","description":"同步安全防护（含 CRS/IP2Region 规则库）"}},"additionalProperties":true}`
+
+const parseCertificateSchema = `{"type":"object","required":["cert_pem","key_pem"],"properties":{"cert_pem":{"type":"string","description":"证书 PEM"},"key_pem":{"type":"string","description":"私钥 PEM"}},"additionalProperties":true}`
+
+const updateNodeAccessURLSchema = `{"type":"object","required":["id","access_url"],"properties":{"id":{"type":"integer","description":"节点 ID"},"access_url":{"type":"string","description":"访问地址，允许空串（登录票据回退 protocol://ip:port）"}},"additionalProperties":true}`
+
+const updateCAProviderSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"CA ID"},"name":{"type":"string","description":"名称（≤100 字符）"},"provider":{"type":"string","enum":["letsencrypt","zerossl"]},"credentials":{"type":"string","description":"凭证 JSON 字符串（Let's Encrypt 必须为空字符串）"},"max_concurrent":{"type":"integer","description":"最大并发（≤100）"},"min_interval_ms":{"type":"integer","description":"最小间隔毫秒（≤60000）"},"enabled":{"type":"boolean"}},"additionalProperties":true}`
+
+const updateAdminTLSSchema = `{"type":"object","properties":{"enabled":{"type":"boolean","description":"省略=保持现值；false=禁用"},"mode":{"type":"string","enum":["selfsigned","upload"],"description":"证书来源"},"cert_file":{"type":"string","description":"证书 PEM（JSON 通道；multipart 通道为文件字段）"},"key_file":{"type":"string","description":"私钥 PEM（JSON 通道；multipart 通道为文件字段）"}},"additionalProperties":true}`
+
+const inspectAdminTLSSchema = `{"type":"object","required":["cert_file","key_file"],"properties":{"cert_file":{"type":"string","description":"证书 PEM（JSON 通道；multipart 通道为文件字段）"},"key_file":{"type":"string","description":"私钥 PEM（JSON 通道；multipart 通道为文件字段）"}},"additionalProperties":true}`
+
+const toggleTaskSchema = `{"type":"object","required":["id","enabled"],"properties":{"id":{"type":"string","description":"任务 ID（见 list_system_tasks）"},"enabled":{"type":"boolean","description":"true=恢复 false=停止"}}}`
 
 var tools = []toolSpec{
 	{"list_rules", "列出全部负载均衡规则", http.MethodGet, "/rules", nil, nil, emptySchema},
@@ -110,21 +131,21 @@ var tools = []toolSpec{
 	// F12-a（2026-09 审计）：安全事件处置工作流——单条追加幂等（已存在返回
 	// added=false），免去 Agent 读全表-改-全量替换的竞态路径。
 	{"add_ip_to_list", "向 IP 地址列表追加单条 IP/CIDR（安全事件处置用，幂等）", http.MethodPost, "/security/ip-lists/{id}/ips", []string{"id"}, nil, `{"type":"object","required":["id","value"],"properties":{"id":{"type":"integer","description":"列表 ID"},"value":{"type":"string","description":"IP 或 CIDR，如 203.0.113.7 或 10.0.0.0/8；新条目备注固定为「事件处置」"}},"additionalProperties":false}`},
-	{"toggle_crs_auto_update", "开关 CRS 自动更新", http.MethodPut, "/security/crs/auto-update", nil, nil, bodySchema},
+	{"toggle_crs_auto_update", "开关 CRS 自动更新", http.MethodPut, "/security/crs/auto-update", nil, nil, toggleAutoUpdateSchema},
 	{"trigger_crs_update", "手动触发 CRS 规则库更新", http.MethodPost, "/security/crs/update", nil, nil, emptySchema},
-	{"toggle_ip2region_auto_update", "开关 IP2Region 自动更新", http.MethodPut, "/security/ip2region/auto-update", nil, nil, bodySchema},
+	{"toggle_ip2region_auto_update", "开关 IP2Region 自动更新", http.MethodPut, "/security/ip2region/auto-update", nil, nil, toggleAutoUpdateSchema},
 	{"trigger_ip2region_update", "手动触发 IP2Region 数据库更新", http.MethodPost, "/security/ip2region/update", nil, nil, emptySchema},
 	{"list_cluster_nodes", "列出全部集群节点", http.MethodGet, "/cluster/nodes", nil, nil, emptySchema},
 	{"create_register_token", "生成集群注册令牌", http.MethodPost, "/cluster/register-tokens", nil, nil, bodySchema},
 	{"approve_cluster_node", "审批通过从节点注册", http.MethodPost, "/cluster/nodes/{id}/approve", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"reject_cluster_node", "拒绝从节点注册", http.MethodPost, "/cluster/nodes/{id}/reject", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"create_login_ticket", "为从节点生成登录票据（操作者账户必须已启用 MFA，否则 403；人类 JWT 路径还需 60 秒内通过 MFA 验证（428 step-up），API Key/MCP 路径仅豁免该验证窗口）", http.MethodPost, "/cluster/nodes/{id}/login-ticket", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
-	{"update_node_access_url", "更新从节点访问地址", http.MethodPut, "/cluster/nodes/{id}/access-url", []string{"id"}, nil, bodySchema},
+	{"update_node_access_url", "更新从节点访问地址", http.MethodPut, "/cluster/nodes/{id}/access-url", []string{"id"}, nil, updateNodeAccessURLSchema},
 	{"delete_cluster_node", "删除指定集群节点", http.MethodDelete, "/cluster/nodes/{id}", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"control_cluster_node_service", "主节点遥控从节点服务（仅主节点管理员 Key 可用；从节点证书指纹不匹配时先 forget_cluster_node_pin）", http.MethodPost, "/cluster/nodes/{id}/service", []string{"id"}, nil, `{"type":"object","required":["id","action"],"properties":{"id":{"type":"integer","description":"节点 ID"},"action":{"type":"string","enum":["start_caddy","stop_caddy","restart_caddy","restart_app"],"description":"服务控制动作（与后端 IsValidClusterServiceAction 支持集一致）"}},"additionalProperties":false}`},
 	{"forget_cluster_node_pin", "清除主节点对指定从节点的证书指纹钉（C-3 单节点重钉；无钉时幂等成功）", http.MethodPost, "/cluster/nodes/{id}/forget-pin", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"forget_cluster_pins", "清除本节点对主节点的全部证书指纹钉（从节点 PinMismatch 自救；主节点调用返回 400）", http.MethodPost, "/cluster/forget-pins", nil, nil, emptySchema},
-	{"set_cluster_mode", "注册并切换为从节点（standalone/master → slave，需主节点审批）", http.MethodPost, "/cluster/mode", nil, nil, bodySchema},
+	{"set_cluster_mode", "注册并切换为从节点（standalone/master → slave，需主节点审批）", http.MethodPost, "/cluster/mode", nil, nil, setClusterModeSchema},
 	{"promote_cluster", "将从节点提升为主节点", http.MethodPost, "/cluster/promote", nil, nil, emptySchema},
 	{"pull_sync", "手动触发从节点同步", http.MethodPost, "/cluster/sync/pull", nil, nil, emptySchema},
 	// 任务监控（v2.3.4）：聚合视图 + 三操作
@@ -134,8 +155,8 @@ var tools = []toolSpec{
 	{"trigger_system_task", "手动触发任务（全部非常驻任务族——以 GET /system/tasks 的 triggerable 字段为准；证书队列行用 cert-job:<job_id>）", http.MethodPost, "/system/tasks/{id}/trigger", []string{"id"}, nil, idSchema("id", "任务 ID（见 GET /system/tasks 的 can_trigger 族）", "string")},
 	{"toggle_system_task", "统一调度开关（定时/循环=停止/恢复调度、常驻=启停；触发类不可调度）", http.MethodPost, "/system/tasks/{id}/toggle", []string{"id"}, nil, toggleTaskSchema},
 	{"cancel_system_task", "取消运行中任务（仅下载类）", http.MethodPost, "/system/tasks/{id}/cancel", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
-	{"control_system_task", "重启常驻任务（action=restart——启停已由调度开关承担）", http.MethodPost, "/system/tasks/{id}/control", []string{"id"}, nil, controlTaskSchema},
-	{"update_cluster_settings", "更新集群同步设置", http.MethodPut, "/cluster/settings", nil, nil, bodySchema},
+	{"control_system_task", "常驻任务控制（action=start|stop|restart 均可用；常驻任务的启停也可经 toggle_system_task 的 enabled 实现，control 额外提供 restart 组合动作）", http.MethodPost, "/system/tasks/{id}/control", []string{"id"}, nil, controlTaskSchema},
+	{"update_cluster_settings", "更新集群同步设置", http.MethodPut, "/cluster/settings", nil, nil, updateClusterSettingsSchema},
 	{"list_certificate_configs", "列出全部 DNS 证书配置", http.MethodGet, "/certificate-configs", nil, nil, emptySchema},
 	{"create_certificate_config", "创建 DNS 证书配置", http.MethodPost, "/certificate-configs", nil, nil, bodySchema},
 	{"update_certificate_config", "更新指定 DNS 证书配置", http.MethodPut, "/certificate-configs/{id}", []string{"id"}, nil, bodySchema},
@@ -147,14 +168,14 @@ var tools = []toolSpec{
 	{"list_dns_providers", "列出支持的 DNS 提供商", http.MethodGet, "/dns-providers", nil, nil, emptySchema},
 	{"list_ca_providers", "列出全部 CA 提供商", http.MethodGet, "/ca-providers", nil, nil, emptySchema},
 	{"get_ca_provider", "获取指定 CA 提供商详情", http.MethodGet, "/ca-providers/{id}", []string{"id"}, nil, idSchema("id", "CA ID", "integer")},
-	{"update_ca_provider", "更新指定 CA 提供商", http.MethodPut, "/ca-providers/{id}", []string{"id"}, nil, bodySchema},
+	{"update_ca_provider", "更新指定 CA 提供商", http.MethodPut, "/ca-providers/{id}", []string{"id"}, nil, updateCAProviderSchema},
 	{"test_ca_provider", "测试指定 CA 提供商连接", http.MethodPost, "/ca-providers/{id}/test", []string{"id"}, nil, idSchema("id", "CA ID", "integer")},
 	{"get_cert_job", "获取指定证书签发任务详情", http.MethodGet, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
 	{"get_cert_job_logs", "获取指定证书签发任务日志", http.MethodGet, "/certificates/jobs/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
-	{"parse_certificate", "解析上传的证书内容", http.MethodPost, "/certificates/parse", nil, nil, bodySchema},
+	{"parse_certificate", "解析上传的证书内容", http.MethodPost, "/certificates/parse", nil, nil, parseCertificateSchema},
 	{"create_user", "创建用户", http.MethodPost, "/users", nil, nil, bodySchema},
 	{"update_user", "更新指定用户", http.MethodPut, "/users/{id}", []string{"id"}, nil, bodySchema},
-	{"toggle_user_status", "启用/禁用指定用户", http.MethodPut, "/users/{id}/status", []string{"id"}, nil, bodySchema},
+	{"toggle_user_status", "启用/禁用指定用户", http.MethodPut, "/users/{id}/status", []string{"id"}, nil, toggleUserStatusSchema},
 	{"reset_user_password", "重置指定用户密码", http.MethodPost, "/users/{id}/reset-password", []string{"id"}, nil, idSchema("id", "用户 ID", "integer")},
 	{"delete_user", "删除指定用户", http.MethodDelete, "/users/{id}", []string{"id"}, nil, idSchema("id", "用户 ID", "integer")},
 	{"reset_user_mfa", "重置用户 MFA（仅管理员；操作者已启用 MFA 时须提交本人 6 位动态验证码，未启用传空串——MCP/API Key 路径不走 428 step-up，直接在本接口验码）", http.MethodPost, "/users/{id}/mfa/reset", []string{"id"}, nil, `{"type":"object","required":["id","code"],"properties":{"id":{"type":"integer","description":"用户 ID"},"code":{"type":"string","description":"操作者自己的 6 位 MFA 动态验证码；操作者未启用 MFA 时传空串"}},"additionalProperties":false}`},
@@ -178,8 +199,8 @@ var tools = []toolSpec{
 	{"stop_caddy", "停止 Caddy", http.MethodPost, "/caddy/stop", nil, nil, emptySchema},
 	{"restart_caddy", "重启 Caddy", http.MethodPost, "/caddy/restart", nil, nil, emptySchema},
 	{"get_admin_tls", "获取管理面板 HTTPS 配置", http.MethodGet, "/admin-tls", nil, nil, emptySchema},
-	{"update_admin_tls", "更新管理面板 HTTPS 配置", http.MethodPut, "/admin-tls", nil, nil, bodySchema},
-	{"inspect_admin_tls", "检查管理面板 HTTPS 证书", http.MethodPost, "/admin-tls/inspect", nil, nil, bodySchema},
+	{"update_admin_tls", "更新管理面板 HTTPS 配置", http.MethodPut, "/admin-tls", nil, nil, updateAdminTLSSchema},
+	{"inspect_admin_tls", "检查管理面板 HTTPS 证书", http.MethodPost, "/admin-tls/inspect", nil, nil, inspectAdminTLSSchema},
 	{"get_system_metrics", "获取系统资源指标（CPU/内存/磁盘）", http.MethodGet, "/system/metrics", nil, nil, emptySchema},
 	{"get_system_logs", "获取应用日志", http.MethodGet, "/system/logs", nil, nil, emptySchema},
 	{"restart_system", "重启应用服务", http.MethodPost, "/system/restart", nil, nil, emptySchema},
@@ -218,7 +239,7 @@ func ClientIPFromContext(ctx context.Context) string {
 const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证：X-API-Key 头或 Authorization: Bearer lb_sk_...，Key 需开启 MCP 功能。
 
 权限范围：
-- 只读 Key（read_only）可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，与写操作同级隐藏）及 5 个读探测 POST 工具（test_ca_provider/test_certificate_config/parse_certificate/validate_import/preview_config）；其余写工具（POST/PUT/DELETE）需非只读 Key
+- 只读 Key（read_only）可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，与写操作同级隐藏）及 4 个读探测 POST 工具（test_ca_provider/parse_certificate/validate_import/preview_config）；其余写工具（POST/PUT/DELETE）需非只读 Key
 - 写操作需要管理员权限（API Key 所属用户角色为 admin），非管理员 Key 调用写工具返回 403
 - 从节点上仅 /cluster/ 前缀端点可过只读门，非从节点语义的集群操作由业务层拒绝（403/400），其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
 - 配置 IP 白名单的 Key 还需来源 IP 命中白名单（MCP 内部转发不受白名单影响）

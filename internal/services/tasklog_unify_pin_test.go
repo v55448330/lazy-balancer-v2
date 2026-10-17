@@ -96,7 +96,7 @@ func TestCollectSystemTasks_DaemonNeverRunStartedAtEmpty(t *testing.T) {
 		got[ti.ID] = ti
 	}
 	tn := got["t-never"]
-	if tn.Kind != TaskKindDaemon {
+	if tn.Kind != taskengine.KindDaemon {
 		t.Fatalf("应为常驻族, got %s", tn.Kind)
 	}
 	if tn.StartedAt != "" {
@@ -117,6 +117,11 @@ func TestCollectCertJobRows_excludesSyncedMaterialRows(t *testing.T) {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at) VALUES ('r1','ghost.test','issued','从主节点同步，源任务状态：issued',?)`, now)
 	db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at) VALUES ('r2','real.test','issued','',?)`, now)
+	// L04-07：镜像行过滤绑定「本节点当前为从节点」——物化行只在从节点存在，
+	// 主节点（promote 后）这些行归本节点，必须可见（见 mirrorFilterOnlyOnSlave）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatalf("set slave role: %v", err)
+	}
 	rows := collectCertJobRows()
 	for _, r := range rows {
 		if strings.Contains(r.Name, "ghost.test") {

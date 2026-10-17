@@ -195,15 +195,21 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	// 审计消息不含 coraza 评分段——入库时补固定语义分，全管线统一评分驱动
 	// （事件日志评分列与威胁大屏危险等级同源）：IP 名单/预检=12（高危），
 	// GeoIP/限流=6（中危）；WAF 事件不受影响。
+	// 第 78 轮 U01-F04：爬虫两族必须先判（否则普通 GeoIP 的 8xxxxx 被当
+	// 爬虫豁免得 0 分）；普通 GeoIP（id 8 / 8xxxxx 非爬虫族）的 6 分必须先于
+	// 通用预检 12 分判定；429 不在预检谓词内，保持 6。分支内不重复 2/3 字面量
+	// （securityEventsIsPrecheckRule 已含）。
 	if rec.AnomalyScore == 0 {
 		switch {
 		case securityEventsIsCrawlerExemptRule(rec.RuleTriggered):
 			rec.AnomalyScore = 0 // 已验证爬虫放行：审计轨迹，不计威胁分
 		case securityEventsIsCrawlerSpoofRule(rec.RuleTriggered):
 			rec.AnomalyScore = 12 // 爬虫伪装（PTR 验证失败）：高危
-		case rec.RuleTriggered == "2" || rec.RuleTriggered == "3" || securityEventsIsPrecheckRule(rec.RuleTriggered):
+		case securityEventsIsGeoIPScoringRule(rec.RuleTriggered):
+			rec.AnomalyScore = 6 // GeoIP 区域拦截：中危
+		case securityEventsIsPrecheckRule(rec.RuleTriggered):
 			rec.AnomalyScore = 12
-		case rec.RuleTriggered == "8" || rec.RuleTriggered == "429":
+		case rec.RuleTriggered == "429":
 			rec.AnomalyScore = 6
 		}
 	}
@@ -478,12 +484,18 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		return false
 	}
 	switch {
-	case n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000:
-		// GeoIP 预检精确段（阶段化模型：id=800000+policyID，buildIPPrecheckDirectives
-		// 逐策略链）——直接解码属主策略，取代共享 id:8 的「首个 geoip 启用策略」
-		// 非精确归因。发射侧只对 PolicyHasGeoIP 策略发射，属主不在绑定集（配置
-		// 已在发射后变更）时自然落空走 fallback。
-		return policy.ID == n-geoipPrecheckRuleBase
+	case n > geoipPrecheckRuleBase && n < geoipPrecheckRuleLimit:
+		// 阶段 1 预检 8xxxxx 段（第 78 轮 U01-F03/F05 收敛）：普通 GeoIP
+		// [800001,810000)、爬虫豁免 [810000,850000)、爬虫伪装 [850000,900000)
+		// 三族互斥，属主由 decodePrecheckRuleID 唯一解码——不再用
+		// policy.ID == n-800000 猜属主（该公式把 crawler id 解成万级策略编号）。
+		// 无法唯一解码（p=0 边界值/历史越界行）返回 false，由能力首选层
+		// fallback 归属，绝不伪造属主。
+		family, pid, _, ok := decodePrecheckRuleID(ruleTriggered)
+		if !ok || family == precheckRuleFamilyUnknown {
+			return false
+		}
+		return policy.ID == pid
 	case n == 8:
 		// GeoIP 拦截（遗留共享 id:8，策略引擎时代的历史事件）：所有权与发射门
 		// （PolicyHasGeoIP）同口径——mode!='off' 且名单非空。off 态名单仅为
@@ -1183,7 +1195,15 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 	decoderStart := offset
 	decoder := json.NewDecoder(f)
 	const batchSize = 500
-	count := 0
+	// batchCount 只控「每 500 条尝试提交」的批次节奏；它必须与 pass 级实际
+	// 插入计数分离——旧实现复用一个 count，批次提交清零后 EOF 写出的
+	// lastIngested 只剩余数（1000 条→0、501 条→1），PollOnce 的任务日志条数
+	// 与「本轮摄取 N 条」展示随之失真（第 78 轮 U01-F06）。
+	batchCount := 0
+	// passInsertedTotal 本 pass 实际插入行数（RowsAffected==1 才 +1）：
+	// 同一事务重复行/轮转补采重叠/offset 重放的 INSERT OR IGNORE 忽略行
+	// 不计入（U01-F06），与自动封禁喂入口径同源（U01-F01）。
+	passInsertedTotal := 0
 	// F73-A 自动封禁喂入：本事务批次内成功解析的 WAF 事件随「提交点」喂计数器
 	// ——commit 成功后才喂（回滚路径不喂，重试不重复计数）；feedBatch 为 nil
 	// 时 autobanObserveBatch 零动作（未启用/从节点等门在函数内收敛）。
@@ -1204,7 +1224,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			if cerr := commit(); cerr != nil {
 				return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
 			}
-			t.lastIngested = count
+			t.lastIngested = passInsertedTotal
 			return offset, nil
 		}
 		if err != nil {
@@ -1337,16 +1357,31 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				rule = securityEventsMapHost(rec.Host, rules)
 			}
 			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, rec.Action, rec.ClientIP, policyByID, bindings)
-			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
+			res, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-				rule.name, policyName, rec.TransactionID, rec.DurationUs, rec.PrecheckUs, rec.RequestHeaders, rec.RequestBody); ierr != nil {
+				rule.name, policyName, rec.TransactionID, rec.DurationUs, rec.PrecheckUs, rec.RequestHeaders, rec.RequestBody)
+			if ierr != nil {
 				_ = stmt.Close()
 				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
 			}
-			autobanBatch = append(autobanBatch, autobanFeedItem{IP: rec.ClientIP, Action: rec.Action, RuleTriggered: rec.RuleTriggered})
-			count++
-			if count >= batchSize {
+			// U01-F01：INSERT OR IGNORE 对重复 transaction_id 静默跳过——必须取
+			// RowsAffected 区分「实际插入」与「忽略」，否则轮转补采/offset 重放
+			// 把同一事件重复喂自动封禁计数器（阈值提前达成）。RowsAffected 失败
+			// 属于未知写入结果：回滚本批、偏移不推进，下个 tick 以同一偏移重试
+			// （保留批次重试语义，不猜测结果）。
+			affected, aerr := res.RowsAffected()
+			if aerr != nil {
+				_ = stmt.Close()
+				_ = tx.Rollback()
+				return committedOffset, fmt.Errorf("security events: insert result: %w", aerr)
+			}
+			if affected == 1 {
+				autobanBatch = append(autobanBatch, autobanFeedItem{IP: rec.ClientIP, Action: rec.Action, RuleTriggered: rec.RuleTriggered})
+				passInsertedTotal++
+			}
+			batchCount++
+			if batchCount >= batchSize {
 				stmt.Close()
 				if cerr := commit(); cerr != nil {
 					return committedOffset, fmt.Errorf("security events: commit batch: %w", cerr)
@@ -1363,7 +1398,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 					tx.Rollback()
 					return committedOffset, fmt.Errorf("security events: prepare batch insert: %w", err)
 				}
-				count = 0
+				batchCount = 0
 			}
 		}
 		offset = docEnd
@@ -1474,8 +1509,8 @@ var securityEventsPollState struct {
 }
 
 // SecurityEventsPollOnce 单轮摄取（先采集后轮转——引擎 2s 节拍调用）。
-// 与原生循环体同序：tailer.securityEventsTick + rotateAuditLogIfNeeded。
-func SecurityEventsPollOnce() {
+// 返回本轮摄取条数；任务日志只由 ingestion daemon 自己写，其他调用方不得越权。
+func SecurityEventsPollOnce() int {
 	securityEventsPollState.Lock()
 	defer securityEventsPollState.Unlock()
 	if !securityEventsPollState.inited {
@@ -1489,11 +1524,10 @@ func SecurityEventsPollOnce() {
 	if err := securityEventsPollState.tailer.securityEventsTick(); err != nil {
 		securityEventsPollState.tailer.securityEventsRateLimitedWarn(err)
 	}
-	if securityEventsPollState.tailer.lastIngested > 0 {
-		TaskLogf("security-events-ingestion", "ingest", "摄取 %d 条安全事件", securityEventsPollState.tailer.lastIngested)
-		securityEventsPollState.tailer.lastIngested = 0
-	}
+	ingested := securityEventsPollState.tailer.lastIngested
+	securityEventsPollState.tailer.lastIngested = 0
 	rotateAuditLogIfNeeded()
+	return ingested
 }
 
 // runIngestionLoop 常驻自管理摄取循环（v2.0 Daemon 标准）：2s 节拍尾读 +
@@ -1507,7 +1541,9 @@ func runIngestionLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			SecurityEventsPollOnce()
+			if ingested := SecurityEventsPollOnce(); ingested > 0 {
+				TaskLogf("security-events-ingestion", "ingest", "摄取 %d 条安全事件", ingested)
+			}
 		}
 	}
 }
@@ -1567,8 +1603,9 @@ func timingUsOrNil(v *int64) (int64, bool) {
 }
 
 // securityEventsIsPrecheckRule 判定规则 ID 是否预检段——IP ACL(2/4/5/7)、
-// 信任(3/12)、GeoIP(8)、威胁情报(14)与 GeoIP 区域规则(800xxx,6 位 8 开头)。
-// 与 stageCategorizeAttack 的预检分支同口径。
+// 信任(3/12)、GeoIP(8)、威胁情报(14)与阶段 1 预检 8xxxxx 段（普通 GeoIP /
+// 爬虫豁免 / 爬虫伪装三族，6 位 8 开头）。与 stageCategorizeAttack 的预检
+// 分支同口径。
 func securityEventsIsPrecheckRule(ruleID string) bool {
 	switch ruleID {
 	case "2", "3", "4", "5", "7", "8", "12", "14":
@@ -1577,14 +1614,48 @@ func securityEventsIsPrecheckRule(ruleID string) bool {
 	return len(ruleID) == 6 && strings.HasPrefix(ruleID, "8")
 }
 
+// securityEventsIsGeoIPScoringRule 普通 GeoIP 固定分谓词（第 78 轮 U01-F04）：
+// id 8 或 8xxxxx 段中「能唯一解码且不属爬虫两族」的 id。p=0 边界值（810000/
+// 850000）不属任何合法爬虫族，按普通 GeoIP 计——不得被当爬虫豁免得 0 分。
+func securityEventsIsGeoIPScoringRule(ruleID string) bool {
+	if ruleID == "8" {
+		return true
+	}
+	n, err := strconv.Atoi(ruleID)
+	if err != nil || n <= geoipPrecheckRuleBase || n >= geoipPrecheckRuleLimit {
+		return false
+	}
+	family, _, _, ok := decodePrecheckRuleID(ruleID)
+	return !ok || family != precheckRuleFamilyCrawlerExempt && family != precheckRuleFamilyCrawlerSpoof
+}
+
 // securityEventsIsCrawlerExemptRule 豁免放行规则 id（810000+policyID*16+引擎序号）。
+// 第 78 轮 U01-F05：与生成公式同源——decode + 编码回环校验，越界 id（如
+// policyID≥2500 溢入伪装段的形态）不得误判为豁免。
 func securityEventsIsCrawlerExemptRule(id string) bool {
 	n, err := strconv.Atoi(id)
-	return err == nil && n >= 810000 && n < 850000
+	if err != nil {
+		return false
+	}
+	family, pid, idx, ok := decodePrecheckRuleID(id)
+	if !ok || family != precheckRuleFamilyCrawlerExempt {
+		return false
+	}
+	enc, eok := encodeCrawlerExemptRuleID(pid, idx)
+	return eok && enc == n
 }
 
 // securityEventsIsCrawlerSpoofRule 爬虫伪装规则 id（850000+policyID）。
+// 与生成公式同源（decode + 编码回环校验）。
 func securityEventsIsCrawlerSpoofRule(id string) bool {
 	n, err := strconv.Atoi(id)
-	return err == nil && n >= 850000 && n < 900000
+	if err != nil {
+		return false
+	}
+	family, pid, _, ok := decodePrecheckRuleID(id)
+	if !ok || family != precheckRuleFamilyCrawlerSpoof {
+		return false
+	}
+	enc, eok := encodeCrawlerSpoofRuleID(pid)
+	return eok && enc == n
 }

@@ -676,6 +676,242 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, restoreErr er
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，规则未" + verb + ": " + applyErr.Error()})
 }
 
+// tcpDeadFields 是 TCP 写入侧「HTTP 专属字段」的指针视图：CreateRule（值
+// 字段）/ UpdateRule（指针字段）/ DuplicateRule（存量行）共用同一张归一
+// 清单。nil 目标 = 该入口有意不处置该字段（当前仅 Create 的 NTLMCompatible）。
+type tcpDeadFields struct {
+	EnableTLS                *bool
+	TLSSource                *string
+	TLSCert                  *string
+	TLSKey                   *string
+	ACMEConfigID             *int
+	CAProviderID             *int
+	Domain                   *string
+	TLSHTTPRedirect          *bool
+	HostHeader               *string
+	HealthCheckPath          *string
+	EnableCompress           *bool
+	CompressTypes            *string
+	RequestBodyMaxSizeMB     *int
+	UpstreamKeepaliveTimeout *int
+	ServerTokensHidden       *int
+	NTLMCompatible           *int
+	UpstreamForceHTTP1       *int
+	BlockPageStage1ID        *int
+	BlockPageStage1Status    *int
+	BlockPageStage3ID        *int
+	BlockPageStage3Status    *int
+}
+
+// tcpDeadFieldReset 是 TCP 规则归一的单一事实源（U04-07，2026-10-18）：
+// TCP 渲染不消费下列 HTTP 专属字段（buildTCPServer/buildTCPProxyRoute
+// 实证），携带即弃置——与协议切换归零同格，防止死配置随快照/导出/复制
+// 放大。三入口各自用适配器把字段接进本清单，新增字段只改这一处。
+func tcpDeadFieldReset(protocol string, fields tcpDeadFields) {
+	if protocol != "tcp" {
+		return
+	}
+	deadFalse, deadZero, deadEmpty := false, 0, ""
+	for _, target := range []*bool{fields.EnableTLS, fields.TLSHTTPRedirect, fields.EnableCompress} {
+		if target != nil {
+			*target = deadFalse
+		}
+	}
+	if fields.TLSSource != nil {
+		*fields.TLSSource = "manual"
+	}
+	for _, target := range []*string{fields.TLSCert, fields.TLSKey, fields.Domain, fields.HostHeader, fields.HealthCheckPath, fields.CompressTypes} {
+		if target != nil {
+			*target = deadEmpty
+		}
+	}
+	for _, target := range []*int{
+		fields.ACMEConfigID, fields.CAProviderID, fields.RequestBodyMaxSizeMB,
+		fields.UpstreamKeepaliveTimeout, fields.ServerTokensHidden,
+		fields.NTLMCompatible, fields.UpstreamForceHTTP1,
+		fields.BlockPageStage1ID, fields.BlockPageStage1Status,
+		fields.BlockPageStage3ID, fields.BlockPageStage3Status,
+	} {
+		if target != nil {
+			*target = deadZero
+		}
+	}
+}
+
+// createRuleTCPDeadFields 接 CreateRule 的值字段；NTLMCompatible 留空——
+// TCP 创建携带 NTLM 必须经 validateRuleFeatures 显式 400（2026-10-12 定稿）。
+func createRuleTCPDeadFields(req *models.CreateRuleRequest) tcpDeadFields {
+	return tcpDeadFields{
+		EnableTLS:                &req.EnableTLS,
+		TLSSource:                &req.TLSSource,
+		TLSCert:                  &req.TLSCert,
+		TLSKey:                   &req.TLSKey,
+		ACMEConfigID:             &req.ACMEConfigID,
+		CAProviderID:             &req.CAProviderID,
+		Domain:                   &req.Domain,
+		TLSHTTPRedirect:          &req.TLSHTTPRedirect,
+		HostHeader:               &req.HostHeader,
+		HealthCheckPath:          &req.HealthCheckPath,
+		EnableCompress:           &req.EnableCompress,
+		CompressTypes:            &req.CompressTypes,
+		RequestBodyMaxSizeMB:     &req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout: &req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:       &req.ServerTokensHidden,
+		UpstreamForceHTTP1:       &req.UpstreamForceHTTP1,
+		BlockPageStage1ID:        &req.BlockPageStage1ID,
+		BlockPageStage1Status:    &req.BlockPageStage1Status,
+		BlockPageStage3ID:        &req.BlockPageStage3ID,
+		BlockPageStage3Status:    &req.BlockPageStage3Status,
+	}
+}
+
+// updateRuleTCPDeadFields 接 UpdateRule 合并后的指针字段（调用点已保证非 nil）。
+func updateRuleTCPDeadFields(req *models.UpdateRuleRequest) tcpDeadFields {
+	return tcpDeadFields{
+		EnableTLS:                req.EnableTLS,
+		TLSSource:                &req.TLSSource,
+		TLSCert:                  &req.TLSCert,
+		TLSKey:                   &req.TLSKey,
+		ACMEConfigID:             &req.ACMEConfigID,
+		CAProviderID:             req.CAProviderID,
+		Domain:                   &req.Domain,
+		TLSHTTPRedirect:          req.TLSHTTPRedirect,
+		HostHeader:               req.HostHeader,
+		HealthCheckPath:          req.HealthCheckPath,
+		EnableCompress:           req.EnableCompress,
+		CompressTypes:            &req.CompressTypes,
+		RequestBodyMaxSizeMB:     req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout: req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:       req.ServerTokensHidden,
+		NTLMCompatible:           req.NTLMCompatible,
+		UpstreamForceHTTP1:       req.UpstreamForceHTTP1,
+		BlockPageStage1ID:        req.BlockPageStage1ID,
+		BlockPageStage1Status:    req.BlockPageStage1Status,
+		BlockPageStage3ID:        req.BlockPageStage3ID,
+		BlockPageStage3Status:    req.BlockPageStage3Status,
+	}
+}
+
+// storedRuleTCPDeadFields 接 DuplicateRule 的存量源行。
+func storedRuleTCPDeadFields(rule *models.LbRule) tcpDeadFields {
+	return tcpDeadFields{
+		EnableTLS:                &rule.EnableTLS,
+		TLSSource:                &rule.TLSSource,
+		TLSCert:                  &rule.TLSCert,
+		TLSKey:                   &rule.TLSKey,
+		ACMEConfigID:             &rule.ACMEConfigID,
+		CAProviderID:             &rule.CAProviderID,
+		Domain:                   &rule.Domain,
+		TLSHTTPRedirect:          &rule.TLSHTTPRedirect,
+		HostHeader:               &rule.HostHeader,
+		HealthCheckPath:          &rule.HealthCheckPath,
+		EnableCompress:           &rule.EnableCompress,
+		CompressTypes:            &rule.CompressTypes,
+		RequestBodyMaxSizeMB:     &rule.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout: &rule.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:       &rule.ServerTokensHidden,
+		NTLMCompatible:           &rule.NTLMCompatible,
+		UpstreamForceHTTP1:       &rule.UpstreamForceHTTP1,
+		BlockPageStage1ID:        &rule.BlockPageStage1ID,
+		BlockPageStage1Status:    &rule.BlockPageStage1Status,
+		BlockPageStage3ID:        &rule.BlockPageStage3ID,
+		BlockPageStage3Status:    &rule.BlockPageStage3Status,
+	}
+}
+
+// validateRuleRequestBodyMaxSizeMB 是 request_body_max_size_mb 的单一值域门
+// （0-4096；0=不限制/跟随全局），Create/Update/Duplicate 三入口共用。
+func validateRuleRequestBodyMaxSizeMB(value int) error {
+	if value < 0 || value > 4096 {
+		return fmt.Errorf("请求体大小限制必须在 0-4096 MB 之间")
+	}
+	return nil
+}
+
+// duplicateRulePayloadRequest 把存量源行投影为共享保存输入，供
+// validateRulePayloadBeforeSave 复用字段层校验（上游 host/端口/权重/查重/
+// 健康检查/ACME 引用）。复制语义放宽 Create 表单门：零上游、零启用上游的
+// 存量行合法（副本默认禁用，可事后补配），以一条探针启用上游满足「至少
+// 一个上游 + 至少一个启用上游」两门后，其余字段仍逐项校验。
+func duplicateRulePayloadRequest(rule models.LbRule) models.CreateRuleRequest {
+	req := models.CreateRuleRequest{
+		Name:                          rule.Name,
+		Description:                   rule.Description,
+		Protocol:                      rule.Protocol,
+		Domain:                        rule.Domain,
+		ListenPort:                    rule.ListenPort,
+		Strategy:                      rule.Strategy,
+		DynamicDNS:                    rule.DynamicDNS,
+		EnableDnsServer:               rule.EnableDnsServer,
+		DnsServer:                     rule.DnsServer,
+		DnsFamily:                     rule.DnsFamily,
+		HealthCheckPath:               rule.HealthCheckPath,
+		HealthCheckInterval:           rule.HealthCheckInterval,
+		HealthCheckTimeout:            rule.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold: rule.HealthCheckUnhealthyThreshold,
+		HealthCheckHealthyThreshold:   rule.HealthCheckHealthyThreshold,
+		EnableActiveHealthCheck:       rule.EnableActiveHealthCheck,
+		TCPHealthCheckPort:            rule.TCPHealthCheckPort,
+		TCPProxyProtocol:              rule.TCPProxyProtocol,
+		TCPTryDuration:                rule.TCPTryDuration,
+		TCPTryInterval:                rule.TCPTryInterval,
+		RequestBodyMaxSizeMB:          rule.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:      rule.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:            rule.ServerTokensHidden,
+		NTLMCompatible:                rule.NTLMCompatible,
+		UpstreamForceHTTP1:            rule.UpstreamForceHTTP1,
+		CustomRoutesEnabled:           rule.CustomRoutesEnabled,
+		ProxyDialTimeout:              rule.ProxyDialTimeout,
+		ProxyResponseHeaderTimeout:    rule.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout:              rule.ProxyReadTimeout,
+		ProxyWriteTimeout:             rule.ProxyWriteTimeout,
+		ProxyStreamTimeout:            rule.ProxyStreamTimeout,
+		ProxyFlushInterval:            rule.ProxyFlushInterval,
+		ProxyStreamCloseDelay:         rule.ProxyStreamCloseDelay,
+		PathRules:                     rule.PathRules,
+		HostHeader:                    rule.HostHeader,
+		HealthCheckHost:               rule.HealthCheckHost,
+		EnableTLS:                     rule.EnableTLS,
+		TLSSource:                     rule.TLSSource,
+		ACMEConfigID:                  rule.ACMEConfigID,
+		CAProviderID:                  rule.CAProviderID,
+		TLSCert:                       rule.TLSCert,
+		TLSKey:                        rule.TLSKey,
+		TLSHTTPRedirect:               rule.TLSHTTPRedirect,
+		EnableCompress:                rule.EnableCompress,
+		CompressTypes:                 rule.CompressTypes,
+		LogEnabled:                    rule.LogEnabled,
+		// 阶段页引用是「存量保留值」：与 UpdateRule 的 nil=保留现值口径
+		// 一致（页面存在性由页删除侧引用检查与渲染侧「已失效」回落承担），
+		// 复制路径不把存量行重新送进存在性门（否则存量坏引用使复制恒 400，
+		// 而副本本就默认禁用、页面修复后可再启用）。
+	}
+	req.Upstreams = append(req.Upstreams, rule.Upstreams...)
+	hasEnabled := false
+	for _, upstream := range req.Upstreams {
+		if upstream.Enabled {
+			hasEnabled = true
+			break
+		}
+	}
+	if !hasEnabled {
+		req.Upstreams = append(req.Upstreams, models.Upstream{
+			Host: "duplicate-probe.invalid", Port: 1, Weight: 1, Enabled: true, Protocol: rule.Protocol,
+		})
+	}
+	return req
+}
+
+// validateDuplicateRulePayload 是复制路径的字段层校验（U04-04）：源行的
+// 上游 host/端口/权重/查重/健康检查与请求体大小等坏形态必须 400 点名源
+// 规则，不得原样放大到副本。
+func (h *Handlers) validateDuplicateRulePayload(rule models.LbRule) error {
+	if err := validateRuleRequestBodyMaxSizeMB(rule.RequestBodyMaxSizeMB); err != nil {
+		return err
+	}
+	return h.validateRulePayloadBeforeSave(duplicateRulePayloadRequest(rule))
+}
+
 // 数据库即唯一事实源契约（CreateRule/UpdateRule 保存路径，2026-09-06 裁定 ④'）：
 //  1. 三层校验：后端字段校验（validateRuleFeatures/validateRulePayloadBeforeSave）先于
 //     任何写库；Caddy 层由 applyFromTxNote 内的 CLI 校验（真 validate-only）+ 事务内
@@ -754,29 +990,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// LBH-A-U2（第 69 轮）：归一前移至全部 TLS 相关校验（来源白名单/手动证书
 	// 材料/ACME 域名形状）之前——归一后 EnableTLS=false，校验自然跳过；此前
 	// TCP+enable_tls:true+空/bogus tls_source 创建恒 400 而同形态更新放行 200。
-	// LBH-A-U1（第 69 轮）：归一族扩展至全部 HTTP 专属死配置字段（host_header/
-	// health_check_path/enable_compress/compress_types/request_body_max_size_mb/
-	// upstream_keepalive_timeout/server_tokens_hidden）——TCP 渲染零消费
-	// （buildTCPServer/buildTCPProxyRoute grep 实证），携带即弃置，与
-	// protocolChanged 切换归零同格；存量行渲染忽略（不动数据），编辑自愈。
+	// LBH-A-U1（第 69 轮）+ U04-07（第 78 轮）：HTTP 专属死配置字段（含
+	// tls_http_redirect/domain/upstream_force_http1）经同一 tcpDeadFieldReset
+	// 清单弃置——TCP 渲染零消费（buildTCPServer/buildTCPProxyRoute grep 实证），
+	// 携带即归一 0，不随快照/导出/复制放大。NTLM 兼容是清单的唯一例外：
+	// TCP 创建携带 ntlm_compatible=1 由保存门（validateRuleFeatures）显式 400
+	// 拒绝，不做静默弃置（2026-10-12 定稿），故 create 适配器不提供该字段。
 	if req.Protocol == "tcp" {
-		req.EnableTLS = false
-		req.TLSSource = "manual"
-		req.TLSCert, req.TLSKey = "", ""
-		req.ACMEConfigID = 0
-		req.HostHeader = ""
-		req.HealthCheckPath = ""
-		req.EnableCompress = false
-		req.CompressTypes = ""
-		req.RequestBodyMaxSizeMB = 0
-		req.UpstreamKeepaliveTimeout = 0
-		req.ServerTokensHidden = 0
-		// NTLM 兼容仅 HTTP 语义——TCP 创建携带 ntlm_compatible=1 由保存门
-		// （validateRuleFeatures）显式 400 拒绝，不做静默弃置（2026-10-12 定稿）。
-		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 创建携带页引用即归一 0
-		// (跟随策略),不留永不消费的死引用。
-		req.BlockPageStage1ID, req.BlockPageStage1Status = 0, 0
-		req.BlockPageStage3ID, req.BlockPageStage3Status = 0, 0
+		tcpDeadFieldReset(req.Protocol, createRuleTCPDeadFields(&req))
+	} else if req.Protocol == "http" {
+		// L05-11：HTTP 渲染不消费 TCP-only 字段，创建时显式弃置。
+		req.TCPProxyProtocol = false
+		req.TCPHealthCheckPort = 0
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
@@ -873,8 +1098,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.CompressTypes = "gzip"
 	}
 
-	if req.RequestBodyMaxSizeMB < 0 || req.RequestBodyMaxSizeMB > 4096 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制必须在 0-4096 MB 之间"})
+	if err := validateRuleRequestBodyMaxSizeMB(req.RequestBodyMaxSizeMB); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	if req.UpstreamKeepaliveTimeout < 0 {
@@ -1284,6 +1509,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	// LB-02（M16 口径）：nil=沿用存量，显式 0=真实零值（0=不重试/默认间隔/
 	// 跟随上游端口均有消费语义，此前非指针合并使显式清零永不可达）。
+	// U04-05（第 78 轮）：合并前先记录请求是否显式提供——显式越界必须 400
+	// （交 validateRuleFeatures 上界门，错误点名字段），只有存量/导入/直改
+	// DB 的越界值允许随编辑自愈。
+	tcpTryDurationProvided := req.TCPTryDuration != nil
+	tcpTryIntervalProvided := req.TCPTryInterval != nil
 	if req.TCPHealthCheckPort == nil {
 		req.TCPHealthCheckPort = &existingRule.TCPHealthCheckPort
 	}
@@ -1293,17 +1523,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.TCPTryInterval == nil {
 		req.TCPTryInterval = &existingRule.TCPTryInterval
 	}
-	// LBH-1（第 73 轮 P4）：重试窗口上界自愈（http/tcp 共用字段，上界同值）——
-	// 存量/导入/直改 DB 行携带 >60000 的越界值随任意编辑归零（0=默认窗口），
-	// 避免命中新增上界门 400 死端（与 LBH-A-N1 负值自愈同格；http 侧 td=-1 是
-	// NTLM 接管态合法哨兵，不在本门，TCP 侧负值由下方 TCP 块按 LBH-A-N1 归零）。
-	if req.TCPTryDuration != nil && *req.TCPTryDuration > 60000 {
+	// LBH-1（第 73 轮 P4）：重试窗口上界自愈——仅存量/导入/直改 DB 行携带
+	// >60000 的越界值随任意编辑归零（0=默认窗口），避免命中新增上界门 400
+	// 死端（与 LBH-A-N1 负值自愈同格；http 侧 td=-1 是 NTLM 接管态合法哨兵，
+	// 不在本门，TCP 侧负值由下方 TCP 块按 LBH-A-N1 归零）。
+	if !tcpTryDurationProvided && *req.TCPTryDuration > 60000 {
 		upperZero := 0
 		req.TCPTryDuration = &upperZero
 	}
-	if req.TCPTryInterval != nil && *req.TCPTryInterval > 60000 {
+	if !tcpTryIntervalProvided && *req.TCPTryInterval > 60000 {
 		upperZero := 0
 		req.TCPTryInterval = &upperZero
+		// U04-05：interval 是 duration>0 时的渲染必填值（caddy.go 两处
+		// 渲染门：td>0 && ti<=0 直接生成失败）——interval 越界归零后
+		// duration 不得残留正值，否则保存成功但配置生成必败（自相矛盾）。
+		if *req.TCPTryDuration > 0 {
+			req.TCPTryDuration = &upperZero
+		}
 	}
 	if req.RequestBodyMaxSizeMB == nil {
 		req.RequestBodyMaxSizeMB = &existingRule.RequestBodyMaxSizeMB
@@ -1378,22 +1614,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if req.Strategy == "cookie" {
 				req.Strategy = "weighted_round_robin"
 			}
-			req.Domain = ""
-			req.EnableTLS = &disabled
-			req.TLSSource = "manual"
-			req.ACMEConfigID = 0
-			req.CAProviderID = &zero
-			req.TLSCert = ""
-			req.TLSKey = ""
-			req.TLSHTTPRedirect = &disabled
-			req.HealthCheckPath = &empty
-			req.RequestBodyMaxSizeMB = &zero
-			req.UpstreamKeepaliveTimeout = &zero
-			req.ServerTokensHidden = &zero
-			// NTLM 仅 HTTP 语义：协议切到 TCP 即归零（与 cookie 策略改写同格）。
-			req.NTLMCompatible = &zero
-			// 上游强制 HTTP/1.1 是 HTTP 传输语义——切 TCP 同步弃置。
-			req.UpstreamForceHTTP1 = &zero
+			// U04-07：HTTP 专属死配置字段统一由下方最终协议 tcp 块的
+			// tcpDeadFieldReset 清单处置（这里只保留协议形态切换自身需要的
+			// 归一：路径规则/代理超时/DNS——它们由 validateRuleFeatures 对
+			// tcp 显式拒绝，不属静默弃置清单）。
 			req.CustomRoutesEnabled = &disabled
 			emptyPathRules := []models.PathRule{}
 			req.PathRules = &emptyPathRules
@@ -1411,16 +1635,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.EnableDnsServer = &disabled
 			req.DnsServer = &empty
 			req.DnsFamily = ""
-			req.HostHeader = &empty
 			req.HealthCheckHost = &empty
-			req.EnableCompress = &disabled
-			req.CompressTypes = ""
-			// U3-1:阶段页 4 列仅 http 渲染消费,切换即清零(0=跟随策略)——
-			// 残留是永不消费的死配置,随快照/导出/复制放大。
-			req.BlockPageStage1ID = &zero
-			req.BlockPageStage1Status = &zero
-			req.BlockPageStage3ID = &zero
-			req.BlockPageStage3Status = &zero
 		case "http":
 			// LB-02：TCP 三字段已指针化，切回 http 时以显式零指针清理。
 			req.TCPHealthCheckPort = &zero
@@ -1439,32 +1654,29 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 语义）——存量 v1 导入可能携带 enable_tls=1 + 空 manual 证书的死形态（渲染
 	// 忽略，但下方非协议门控的手动证书检查会让该规则任何编辑恒 400，UI 又对 TCP
 	// 隐藏 TLS 开关而无自救路径）；协议未变的 tcp 编辑在此顺带自愈。
+	// U04-07（第 78 轮）：HTTP 专属死配置字段族（host_header/health_check_path/
+	// enable_compress/compress_types/request_body_max_size_mb/
+	// upstream_keepalive_timeout/server_tokens_hidden/ntlm_compatible/
+	// upstream_force_http1/tls_http_redirect/domain/TLS 族/阶段页）统一经
+	// tcpDeadFieldReset 清单弃置——与 CreateRule/DuplicateRule 共用同一清单。
 	if req.Protocol == "tcp" {
-		tcpDisabled := false
 		tcpZero := 0
-		// LBH-A-U1（第 69 轮）：HTTP 专属死配置字段族随 TCP 编辑归一归零——
-		// 与 protocolChanged 分支切换归零同格；存量/导入残留与显式携带一律
-		// 弃置（TCP 渲染零消费），不随快照/导出/复制放大。
-		tcpEmpty := ""
-		req.HostHeader = &tcpEmpty
-		req.HealthCheckPath = &tcpEmpty
-		req.EnableCompress = &tcpDisabled
-		req.CompressTypes = ""
-		req.RequestBodyMaxSizeMB = &tcpZero
-		req.UpstreamKeepaliveTimeout = &tcpZero
-		req.ServerTokensHidden = &tcpZero
-		// NTLM 仅 HTTP 语义：TCP 编辑（含存量残留）自愈归零。
-		req.NTLMCompatible = &tcpZero
-		req.UpstreamForceHTTP1 = &tcpZero
-		req.EnableTLS = &tcpDisabled
-		req.TLSSource = "manual"
-		req.TLSCert, req.TLSKey = "", ""
-		// U3-1:阶段页 4 列仅 http 渲染消费——协议未变的 tcp 编辑在此自愈清零
-		// (存量行/导入态残留),显式携带同样归一 0(跟随策略,TCP 无消费面)。
-		req.BlockPageStage1ID = &tcpZero
-		req.BlockPageStage1Status = &tcpZero
-		req.BlockPageStage3ID = &tcpZero
-		req.BlockPageStage3Status = &tcpZero
+		// 阶段页四列在 UpdateRule 是「仅非 nil 才写库」的指针语义——TCP 归一
+		// 必须显式提供零值指针，否则协议切换/同协议编辑不会把存量非零值落库
+		// 归零（tcpDeadFieldReset 对 nil 目标跳过）。
+		if req.BlockPageStage1ID == nil {
+			req.BlockPageStage1ID = &tcpZero
+		}
+		if req.BlockPageStage1Status == nil {
+			req.BlockPageStage1Status = &tcpZero
+		}
+		if req.BlockPageStage3ID == nil {
+			req.BlockPageStage3ID = &tcpZero
+		}
+		if req.BlockPageStage3Status == nil {
+			req.BlockPageStage3Status = &tcpZero
+		}
+		tcpDeadFieldReset(req.Protocol, updateRuleTCPDeadFields(&req))
 		// LBH-A-N1（第 72 轮）：重试窗口是 http/tcp 共用字段（方案 C），http 侧
 		// -1=NTLM 接管态合法；指针合并（nil=沿用存量）会把存量 -1 带进 TCP
 		// 值域门（rule_features.go TCP 分支拒负值）——切换与同协议编辑双路径
@@ -1477,6 +1689,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if req.TCPTryInterval != nil && *req.TCPTryInterval < 0 {
 			req.TCPTryInterval = &tcpZero
 		}
+	} else if req.Protocol == "http" {
+		// L05-11：HTTP 渲染不消费 TCP-only 字段；同协议编辑也显式清零，
+		// 防止历史 TCP→HTTP 残留随快照/导出放大。
+		zero, disabled := 0, false
+		req.TCPHealthCheckPort = &zero
+		req.TCPProxyProtocol = &disabled
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
@@ -1595,9 +1813,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 0 || *req.RequestBodyMaxSizeMB > 4096) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制必须在 0-4096 MB 之间"})
-		return
+	if req.RequestBodyMaxSizeMB != nil {
+		if err := validateRuleRequestBodyMaxSizeMB(*req.RequestBodyMaxSizeMB); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 	if req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上游 keepalive 超时不能为负数"})
@@ -2451,40 +2671,25 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	//（API/MCP/导入/直改 DB 落库的历史值）时，副本不得原样放大并命中新增
 	// 上界门 400 死端（与 LBH-A-N1 负值自愈同格；http/tcp 上界同值）。负值
 	// 由下方 TCP 块按协议处理（http td=-1 是 NTLM 接管态合法哨兵）。
+	// U04-05（第 78 轮）：interval 越界归零时 duration 同步归零——td>0+ti=0
+	// 是渲染必填门的自相矛盾形态（保存成功但配置生成必败）。
+	if rule.TCPTryInterval > 60000 {
+		rule.TCPTryInterval = 0
+		if rule.TCPTryDuration > 0 {
+			rule.TCPTryDuration = 0
+		}
+	}
 	if rule.TCPTryDuration > 60000 {
 		rule.TCPTryDuration = 0
 	}
-	if rule.TCPTryInterval > 60000 {
-		rule.TCPTryInterval = 0
-	}
 
-	// 审计 A2-S2：tcp-TLS 死形态归一与 CreateRule/UpdateRule 同口径——源行
-	// 遗留 enable_tls=1/tls_source=acme_dns 时，副本会原样携带死形态（tcp 不
-	// 终结入站 TLS、ACME 任务永不消费证书）。
+	// 审计 A2-S2 + LBH-A-U1 + U04-07：tcp-TLS / HTTP 专属死配置字段族归一
+	// 与 CreateRule/UpdateRule 共用同一 tcpDeadFieldReset 清单——源行遗留
+	// enable_tls=1/tls_source=acme_dns、tls_http_redirect、domain、
+	// upstream_force_http1 等死形态时，副本会原样携带（tcp 不终结入站 TLS、
+	// ACME 任务永不消费证书、HTTP 专属字段 TCP 渲染零消费）。
 	if rule.Protocol == "tcp" {
-		rule.EnableTLS = false
-		rule.TLSSource = "manual"
-		rule.TLSCert, rule.TLSKey = "", ""
-		rule.ACMEConfigID = 0
-		// LB43-5(第 43 轮):TCP 死形态归一补齐 CAProviderID——CreateRule(:890)
-		// 与 UpdateRule(:1296)两入口均已清零,复制路径漏清会把源行遗留死形态放大到副本。
-		rule.CAProviderID = 0
-		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 源行的存量非零值(导入态残留)
-		// 不再放大到副本,副本落 0(跟随策略)。
-		rule.BlockPageStage1ID, rule.BlockPageStage1Status = 0, 0
-		rule.BlockPageStage3ID, rule.BlockPageStage3Status = 0, 0
-		// LBH-A-U1（第 69 轮）：HTTP 专属死配置字段族不放大到副本——与
-		// CreateRule/UpdateRule 归一同口径（TCP 渲染零消费，源行存量/导入
-		// 残留复制即弃置）。
-		rule.HostHeader = ""
-		rule.HealthCheckPath = ""
-		rule.EnableCompress = false
-		rule.CompressTypes = ""
-		rule.RequestBodyMaxSizeMB = 0
-		rule.UpstreamKeepaliveTimeout = 0
-		rule.ServerTokensHidden = 0
-		rule.NTLMCompatible = 0
-		rule.UpstreamForceHTTP1 = 0
+		tcpDeadFieldReset(rule.Protocol, storedRuleTCPDeadFields(&rule))
 		// LBH-A-N1 同族（R-12 收敛）：负值重试窗口不喂进复制校验（td/ti 原样
 		// 传入会让直改 DB 残留的 tcp 源行复制即 400 死端），也不放大到副本——
 		// 与 UpdateRule 最终协议 tcp 块负值自愈同格；非负窗口是合法 tcp 配置，
@@ -2495,6 +2700,14 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		if rule.TCPTryInterval < 0 {
 			rule.TCPTryInterval = 0
 		}
+	}
+
+	// U04-04（第 78 轮）：复制前把源行投影为共享保存输入并执行字段层校验
+	// （host/端口/权重/查重/健康检查/请求体大小）——坏上游/坏值不得原样
+	// 放大到副本，400 点名源规则。
+	if err := h.validateDuplicateRulePayload(rule); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("源规则 %s（%s）：%s", rule.Name, caddyID, err.Error())})
+		return
 	}
 
 	userIDInt := contextUserID(c)
@@ -2843,7 +3056,9 @@ func updateUpstreamTx(ctx context.Context, tx *sql.Tx, row, incoming storedUpstr
 // block_page_stage3_id, block_page_stage3_status}——同校验（页存在/状态码集，
 // validateStageBlockPageRef 共享），单事务逐规则 UPDATE lb_rules 4 列 +
 // 一次 finishTxApply（单渲染）。非 http（tcp）规则跳过不 UPDATE——阶段页
-// 仅 http 渲染消费（与 batch-bind 同口径）。响应 {bound:n, skipped:[{rule_id,reason}]}。
+// 仅 http 渲染消费（与 batch-bind 同口径）。响应
+// {bound:n, unchanged:n, skipped:[{rule_id,reason}]}——bound=RowsAffected>0
+// 的真实变更数，unchanged=已在目标态的同值命中数（U04-06）。
 func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
@@ -2866,6 +3081,26 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
 		return
 	}
+	// U04-06（第 78 轮）：trim+去重保序——重复 id 只处理一次（修复前逐个
+	// UPDATE 并放大计数）；全空白视为空清单。
+	dedupedRuleIDs := make([]string, 0, len(req.RuleIDs))
+	seenRuleIDs := make(map[string]struct{}, len(req.RuleIDs))
+	for _, rawRuleID := range req.RuleIDs {
+		ruleID := strings.TrimSpace(rawRuleID)
+		if ruleID == "" {
+			continue
+		}
+		if _, duplicate := seenRuleIDs[ruleID]; duplicate {
+			continue
+		}
+		seenRuleIDs[ruleID] = struct{}{}
+		dedupedRuleIDs = append(dedupedRuleIDs, ruleID)
+	}
+	if len(dedupedRuleIDs) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		return
+	}
+	req.RuleIDs = dedupedRuleIDs
 	if err := validateStageBlockPageRef(req.BlockPageStage1ID, req.BlockPageStage1Status, "阶段 1（IP 访问控制/地域拦截）"); err != nil {
 		var validationErr *configValidationError
 		if errors.As(err, &validationErr) {
@@ -2895,12 +3130,9 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		Reason string `json:"reason"`
 	}
 	bound := 0
+	unchanged := 0
 	skipped := make([]skippedRule, 0)
 	for _, ruleCaddyID := range req.RuleIDs {
-		ruleCaddyID = strings.TrimSpace(ruleCaddyID)
-		if ruleCaddyID == "" {
-			continue
-		}
 		// U3-1:阶段页 4 列仅 http 渲染消费——非 http(tcp)先查后跳过不 UPDATE
 		// (与 batch-bind 的 TCP 跳过同文案同口径),仅不存在记「规则不存在」。
 		var ruleExists int
@@ -2919,23 +3151,33 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		}
 		// F49-P5-13：同值守卫——四列已在目标态的行不匹配（IS NOT 空安全比较），
 		// 同值批量零写入 ⇒ 不触发 lb_rules 行级同步触发器（阶段页四列在 OF 清单
-		// 内）；存在性与协议已在上方预检，affected=0 即「已在目标态」，仍计
-		// bound 而非误判「规则不存在」。
-		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?
+		// 内）；U04-06：bound 按 RowsAffected>0 计（真实变更），affected=0 即
+		// 「已在目标态」计入 unchanged（不再把零写入算作成功/误判「规则不存在」）。
+		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?
 			WHERE caddy_id=? AND (block_page_stage1_id IS NOT ? OR block_page_stage1_status IS NOT ? OR block_page_stage3_id IS NOT ? OR block_page_stage3_status IS NOT ?)`,
 			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, ruleCaddyID,
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status); err != nil {
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		bound++
+		affected, err := result.RowsAffected()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if affected > 0 {
+			bound++
+		} else {
+			unchanged++
+		}
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "负载规则", AuditAction: "更新",
-		AuditDetail: fmt.Sprintf("批量设置阶段拦截页（阶段 1 页 %d/码 %d，阶段 3 页 %d/码 %d）：成功 %d 条，跳过 %d 条",
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, bound, len(skipped)),
+		AuditDetail: fmt.Sprintf("批量设置阶段拦截页（阶段 1 页 %d/码 %d，阶段 3 页 %d/码 %d）：成功 %d 条，不变 %d 条，跳过 %d 条",
+			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, bound, unchanged, len(skipped)),
 		SuccessMsg: "批量设置阶段拦截页完成",
-		Data:       gin.H{"bound": bound, "skipped": skipped},
+		Data:       gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
 	})
 }
 

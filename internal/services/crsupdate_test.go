@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 func newTestCRSManager(t *testing.T) *CRSUpdateManager {
@@ -326,120 +326,6 @@ func TestCRSUpdate_manualTriggerAtLatestSkipsDownload(t *testing.T) {
 	}
 }
 
-func TestCRSSchedulerTick_autoOffDoesNothing(t *testing.T) {
-	m := newTestCRSManager(t)
-	seedCRSVersionRow(t, "v4.14.0", false)
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v4.15.0", nil
-	}
-
-	// When the scheduler ticks with auto_update off
-	m.schedulerTick(time.Now())
-
-	// Then nothing happens and next_update stays empty
-	if fetchCalled {
-		t.Fatal("no update should run when auto_update is off")
-	}
-	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if nextUpdate != "" {
-		t.Fatalf("next_update=%q, want empty", nextUpdate)
-	}
-}
-
-func TestCRSSchedulerTick_initializesNextUpdate(t *testing.T) {
-	m := newTestCRSManager(t)
-	seedCRSVersionRow(t, "v4.14.0", true)
-	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v4.15.0", nil
-	}
-
-	// When the scheduler ticks with auto on and no next_update recorded
-	m.schedulerTick(now)
-
-	// Then next_update is scheduled 24h out without running immediately
-	if fetchCalled {
-		t.Fatal("first tick should only schedule, not run")
-	}
-	// R69（用户报告修复）：成功路径会以 DB 时钟再刷新 next_update=+24h
-	//（与 tick 预写的注入时钟可能不同）——断言收敛为「非空的未来排程」，
-	// tick 预写与成功刷新任一生效即满足原意图（due tick 推进排程）。
-	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if nextUpdate == "" || nextUpdate <= now.Format("2006-01-02 15:04:05") {
-		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format("2006-01-02 15:04:05"))
-	}
-}
-
-func TestCRSSchedulerTick_runsWhenDue(t *testing.T) {
-	m := newTestCRSManager(t)
-	seedCRSVersionRow(t, "v4.14.0", true)
-	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1",
-		now.Add(-time.Hour).Format("2006-01-02 15:04:05")); err != nil {
-		t.Fatal(err)
-	}
-
-	fetched := make(chan struct{})
-	var fetchOnce func()
-	fetchOnce = func() { close(fetched) }
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		if fetchOnce != nil {
-			fetchOnce()
-			fetchOnce = nil
-		}
-		return "v4.14.0", nil // same version -> auto no-op, finishes fast
-	}
-
-	// When the scheduler ticks past next_update
-	m.schedulerTick(now)
-
-	// Then an auto update starts and next_update is pushed 24h out
-	select {
-	case <-fetched:
-	case <-time.After(5 * time.Second):
-		t.Fatal("due scheduler tick should start an auto update")
-	}
-	// R69（用户报告修复）：成功路径会以 DB 时钟再刷新 next_update=+24h
-	//（与 tick 预写的注入时钟可能不同）——断言收敛为「非空的未来排程」，
-	// tick 预写与成功刷新任一生效即满足原意图（due tick 推进排程）。
-	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if nextUpdate == "" || nextUpdate <= now.Format("2006-01-02 15:04:05") {
-		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format("2006-01-02 15:04:05"))
-	}
-}
-
-func TestCRSSchedulerTick_slaveSkips(t *testing.T) {
-	m := newTestCRSManager(t)
-	seedCRSVersionRow(t, "v4.14.0", true)
-	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
-		t.Fatal(err)
-	}
-
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v4.15.0", nil
-	}
-
-	// When the scheduler ticks on a slave node
-	m.schedulerTick(time.Now())
-
-	// Then it does nothing
-	if fetchCalled {
-		t.Fatal("slave node must not run CRS updates")
-	}
-	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if nextUpdate != "" {
-		t.Fatalf("next_update=%q, want empty on slave", nextUpdate)
-	}
-}
-
 func countCRSUpdateFailedAudits(t *testing.T) int {
 	t.Helper()
 	var n int
@@ -616,5 +502,29 @@ func TestCRSUpdateRun_slaveAbortsSkipSemantics(t *testing.T) {
 	}
 	if failed != 0 || skipped != 1 {
 		t.Fatalf("failed=%d skipped=%d, want 0/1（从节点中止不得记更新失败）", failed, skipped)
+	}
+}
+
+func TestCRSUpdateRun_usesTaskRunStartedAt(t *testing.T) {
+	// Given：task_runs 预插行使用配置时区墙钟，期望业务表存同一瞬间的 UTC。
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "", errors.New("stop after start") }
+	runID, wantUTC := seedTaskRunForTime(t, "crs", "2026-10-17 14:09:17")
+
+	// When：经生产 StartUpdate 入口运行。
+	done, err := m.StartUpdate("manual", &taskengine.RunContext{Ctx: context.Background(), RunID: runID, Trigger: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	// Then：版本行 started_at 与 task_runs 是同一瞬间，不得另取墙钟。
+	var startedAt string
+	if err := db.DB.QueryRow(`SELECT COALESCE(started_at,'') FROM security_crs_version WHERE id=1`).Scan(&startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if startedAt != wantUTC {
+		t.Fatalf("started_at=%q, want task_runs 同源 UTC %q", startedAt, wantUTC)
 	}
 }

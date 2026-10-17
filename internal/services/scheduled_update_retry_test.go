@@ -89,49 +89,6 @@ func TestCRSRun_inTaskRetry_exhaustedKeepsScheduleSlot(t *testing.T) {
 	}
 }
 
-// Given：调度 tick 到期启动的自动更新失败（fetch 恒失败）。
-// When：schedulerTick 完成整个生命周期。Then：失败落定后 next_update 推进到
-// 紧邻下一排程槽（排程槽生命周期 2026-10-11 用户裁定——失败不推进的过期槽
-// 经步进重算永不到期，曾致排程停摆）。
-func TestCRSSchedulerTick_failedRunKeepsScheduleSlot(t *testing.T) {
-	overrideWafDirForTest(t)
-	stubUpdateRetrySleep(t)
-	m := newTestCRSManager(t)
-	seedCRSVersionRow(t, "v4.14.0", true)
-	now := time.Date(2026, 9, 25, 20, 0, 0, 0, time.UTC)
-	if _, err := db.DB.Exec(`UPDATE security_crs_version SET next_update=? WHERE id=1`, now.Add(-time.Minute).Format(crsTimeLayout)); err != nil {
-		t.Fatal(err)
-	}
-
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		return "", errors.New("GitHub 返回 403")
-	}
-	m.schedulerTick(now)
-
-	deadline := time.Now().Add(5 * time.Second)
-	for m.IsRunning() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	// rearm 等待 run 完成是异步的——状态落定后再读行
-	deadline = time.Now().Add(5 * time.Second)
-	for {
-		_, status, _, _, _, _, _ := crsVersionRow(t)
-		if status == "failed" || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	_, status, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if status != "failed" {
-		t.Fatalf("status=%q, want failed", status)
-	}
-	wantReal := versionTableNextSlot("security_crs_version", time.Now().UTC())
-	if nextUpdate != wantReal {
-		t.Fatalf("next_update=%q, want 失败落定推进到紧邻下一排程槽 %q（排程槽生命周期 2026-10-11）", nextUpdate, wantReal)
-	}
-}
-
 // Given：IP2Region fetchLatestTag 恒失败。When：执行一次更新。
 // Then：尝试 3 次后失败落定，next_update 保持排程槽。
 func TestIP2RegionRun_inTaskRetry_exhaustedKeepsScheduleSlot(t *testing.T) {
@@ -190,7 +147,7 @@ func TestThreatUpdateOneSource_inTaskRetry_succeedsAfterTransientFailures(t *tes
 	}
 
 	m := GetThreatUpdateManager()
-	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto")
+	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto", taskRunStartedAt(nil))
 
 	if failed {
 		t.Fatal("源更新失败, want 任务内重试后成功")

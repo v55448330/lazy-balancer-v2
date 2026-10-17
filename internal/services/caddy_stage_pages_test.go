@@ -7,9 +7,9 @@ import (
 
 // 阶段拦截页渲染（阶段化安全流水线批 2）：阶段码 481=阶段 1（IP 访问控制+
 // 地域拦截预检）、482=阶段 3（WAF）固定；逐策略合成码平移 483+。规则配了
-// 阶段页（id>0 且页内容非空）→ 对应阶段全部 deny 抬阶段码 + 按 code 去重
-// 发射阶段错误路由（无 host、terminal、status 0 归一 403）；未配=跟随策略
-// （v2.3.1 逐策略归因默认层完整保留，合成码 483+）。
+// 阶段页（id>0 且页内容非空）→ 对应阶段全部 deny 抬阶段码 + 按 (code,host-set)
+// 发射 host 限定的阶段错误路由（terminal、status 0 归一 403）；未配=跟随策略
+// （v2.3.1 逐策略归因默认层完整保留，合成码 483+ 不带 host）。
 
 // 阶段 1 覆盖：预检全部 deny（IP ACL 并集 id:2 与 GeoIP 链首 800000+）抬码
 // 481，错误路由装配发射 481 阶段路由（阶段页内容+状态码）。
@@ -61,7 +61,7 @@ func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
 		t.Fatalf("stage-1 code must not leak into policy engine segments:\n%s", joined)
 	}
 
-	// Then：481 阶段路由（无 host、阶段页内容+状态码、terminal）
+	// Then：481 阶段路由（host 限定本规则域名、阶段页内容+状态码、terminal）
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	var stageRoute map[string]interface{}
 	for _, routeValue := range errorRoutes {
@@ -74,8 +74,9 @@ func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
 	if stageRoute == nil {
 		t.Fatalf("missing 481 stage route: %#v", errorRoutes)
 	}
-	if _, hasHost := routeMatcher(t, stageRoute)["host"]; hasHost {
-		t.Fatalf("stage route must not carry host matcher: %#v", routeMatcher(t, stageRoute))
+	hosts, ok := routeMatcher(t, stageRoute)["host"].([]string)
+	if !ok || len(hosts) != 1 || hosts[0] != "st1.example.test" {
+		t.Fatalf("stage route must be scoped to rule host: %#v", routeMatcher(t, stageRoute))
 	}
 	assertEqual(t, routeMatcher(t, stageRoute)["expression"],
 		"({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
@@ -149,6 +150,62 @@ func TestStageBlockPages_stage3LiftsAllPolicySegmentsAndRoute(t *testing.T) {
 	handler := firstHandler(t, stageRoute)
 	assertEqual(t, handler["body"], "<html>stage-three</html>")
 	assertEqual(t, handler["status_code"], 503)
+}
+
+func TestStageBlockPages_sameServerMultipleHostsKeepOwnStagePage(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_sta", "a.example.test", 8080)
+	seedHTTPRuleForGeneration(t, database, "lb_stb", "b.example.test", 8080)
+	seedSecurityBlockPage(t, database, 11, "<html>page-a</html>")
+	seedSecurityBlockPage(t, database, 12, "<html>page-b</html>")
+	mpGenBindPolicy(t, database, "lb_sta", "shared-policy", mpGenPolicySpec{
+		mode: "blocking", enabled: true,
+		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
+	})
+	mpGenBindPolicy(t, database, "lb_stb", "shared-policy", mpGenPolicySpec{
+		mode: "blocking", enabled: true,
+		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
+	})
+	for _, tc := range []struct {
+		caddyID string
+		pageID  int
+		status  int
+	}{
+		{"lb_sta", 11, 451},
+		{"lb_stb", 12, 503},
+	} {
+		if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_id=?, block_page_stage3_status=? WHERE caddy_id=?`, tc.pageID, tc.status, tc.caddyID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	generated := generateCaddyConfigFromStore(database)
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	byHost := map[string]string{}
+	for _, routeValue := range errorRoutes {
+		route := mustMap(t, routeValue, "error route")
+		matcher := routeMatcher(t, route)
+		expr, _ := matcher["expression"].(string)
+		if !strings.Contains(expr, "== 482") {
+			continue
+		}
+		hosts, _ := matcher["host"].([]string)
+		if len(hosts) != 1 {
+			t.Fatalf("stage route must carry exactly one rule host, got %#v (route=%#v)", matcher["host"], route)
+		}
+		handler := firstHandler(t, route)
+		byHost[hosts[0]], _ = handler["body"].(string)
+	}
+	if len(byHost) != 2 {
+		t.Fatalf("stage routes by host = %#v, want a/b.example.test each one", byHost)
+	}
+	assertEqual(t, byHost["a.example.test"], "<html>page-a</html>")
+	assertEqual(t, byHost["b.example.test"], "<html>page-b</html>")
 }
 
 // 阶段页内容为空 = 视为未配（跟随策略）：策略段回落逐策略合成码 483+，

@@ -1,7 +1,9 @@
 package services
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -183,48 +185,51 @@ func TestCertJobFileLogger_concurrent_writers_keep_lines_intact(t *testing.T) {
 	}
 }
 
-// L1-P4-1（第 67 轮）：写入侧 5 代移位轮转与 log-cleanup housekeeping（tasks/
-// 主流水，logrotate.go taskLogsHousekeeping）的「rename → .1」单代覆盖式轮转双轨
-// 并存——活动文件被追加推过阈值后、下一次写入前的窗口内，housekeeping 节拍把
-// 活动文件 rename 覆盖既有 .1，5 代链中最新一代历史整代丢失。
-// Given 阈值 1000 字节、每行约 602 字节，写入序列制造「代际存在 + 活动文件已
-// 超阈值」的双轨窗口态。
-// When housekeeping 节拍运行。
-// Then 全部已写入内容仍在活动文件或 .1-.5 代际链内（无任何一代丢失）。
-func TestCertJobFileLogger_housekeepingTickNeverDropsGeneration(t *testing.T) {
-	useCertJobLogTestEnv(t, 1000)
-	logger := NewCertJobFileLogger("lb_dualtrack")
-	payload := strings.Repeat("x", 560) // 行全长 ≈602 字节：两行必超 1000 阈值
-	write := func(tag string) { logger.Log("stage", tag+payload) }
-
-	// Given：旧实现下第 2/4 次写入把活动文件推过阈值而不轮转（窗口态），
-	// 第 3 次写入触发 5 代移位使 .1=[GEN-1,GEN-2]。
-	write("GEN-1-")
-	write("GEN-2-")
-	write("GEN-3-")
-	write("GEN-4-")
-
-	// When：log-cleanup housekeeping 节拍（tasks/ 主流水第二轮转轨）。
-	logFile := filepath.Join(filepath.Dir(taskengine.LogDir()), "lazy-balancer.log")
-	taskLogsHousekeeping(logFile)
-
-	// Then：全部四代内容须仍在活动文件或 .1-.5 代际链内。
-	var b strings.Builder
-	base := CertJobLogPath("lb_dualtrack")
-	for i := 0; i <= maxRotatedFiles; i++ {
-		p := base
-		if i > 0 {
-			p = fmt.Sprintf("%s.%d", base, i)
-		}
-		if data, err := os.ReadFile(p); err == nil {
-			b.Write(data)
+// L04-08（第 78 轮）：taskLogsHousekeeping 的唯一职责是保留期清理——尺寸轮转
+// 已归写入侧 RotateTaskLogBeforeWrite，旧用例（调 housekeeping 后断言四代不丢）
+// 对被测逻辑零耦合，是无 RED 能力的空转。现注入「过期」与「活跃」两个证书任务
+// 日志：只删过期文件、活跃文件必须保留；保留期删除被移除/阈值失效即红。
+func TestCertJobFileLogger_housekeepingDeletesOnlyExpiredFiles(t *testing.T) {
+	// Given：certjobs 目录下有过期（10 年前）与活跃（现在）两个日志文件
+	useCertJobLogTestEnv(t, 1<<20)
+	dir := CertJobLogDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("seed certjobs dir: %v", err)
+	}
+	expiredPath := CertJobLogPath("lb_retention_expired")
+	activePath := CertJobLogPath("lb_retention_active")
+	for _, path := range []string{expiredPath, activePath} {
+		if err := os.WriteFile(path, []byte("line\n"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
 		}
 	}
-	all := b.String()
-	for _, tag := range []string{"GEN-1-", "GEN-2-", "GEN-3-", "GEN-4-"} {
-		if !strings.Contains(all, tag) {
-			t.Fatalf("housekeeping 后历史内容 %q 丢失（双轨 .1 覆盖丢史），链内容=\n%s", tag, all)
+	stale := time.Now().AddDate(-10, 0, 0)
+	if err := os.Chtimes(expiredPath, stale, stale); err != nil {
+		t.Fatalf("backdate expired log: %v", err)
+	}
+	if err := os.Chtimes(activePath, time.Now(), time.Now()); err != nil {
+		t.Fatalf("touch active log: %v", err)
+	}
+
+	// When：log-cleanup housekeeping 节拍
+	logFile := filepath.Join(filepath.Dir(taskengine.LogDir()), "lazy-balancer.log")
+	result := taskLogsHousekeeping(logFile)
+
+	// Then：过期文件被删（且进入 Deleted 清单），活跃文件原样保留
+	if _, err := os.Stat(expiredPath); !os.IsNotExist(err) {
+		t.Fatalf("expired log still present (stat err=%v)：保留期清理未生效", err)
+	}
+	deletedExpired := false
+	for _, name := range result.Deleted {
+		if name == filepath.Base(expiredPath) {
+			deletedExpired = true
 		}
+	}
+	if !deletedExpired {
+		t.Fatalf("Deleted=%v, want %s", result.Deleted, filepath.Base(expiredPath))
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active log must survive retention cleanup: %v", err)
 	}
 }
 
@@ -269,3 +274,50 @@ func TestCertJobFileLogger_singleTrackRotationKeepsFiveGenerations(t *testing.T)
 		t.Fatal("最老一代 GEN-1 应随 5 代上限退役")
 	}
 }
+
+// failingCertJobLogWriter 注入写/关闭失败（U06-F06：磁盘配额/只读降级时
+// OpenFile(O_APPEND) 可成功而后续 write 失败，此前 fmt.Fprint 与 Close 错误全被丢弃）。
+type failingCertJobLogWriter struct {
+	writeErr error
+	closeErr error
+}
+
+func (w *failingCertJobLogWriter) Write([]byte) (int, error) { return 0, w.writeErr }
+func (w *failingCertJobLogWriter) Close() error              { return w.closeErr }
+
+// U06-F06（第 78 轮）：写/关闭错误必须经 Logf 留痕（error/warn），不得静默吞没——
+// 任务日志是证书域业务留痕的唯一文件源，磁盘故障时无告警会让日志与 DB 状态分叉。
+func TestCertJobFileLogger_writeAndCloseErrorsAreSurfaced(t *testing.T) {
+	// Given：捕获标准日志输出（Logf 经 log.Printf）
+	var buf strings.Builder
+	var mu sync.Mutex
+	oldWriter := log.Writer()
+	log.SetOutput(writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		buf.Write(p)
+		return len(p), nil
+	}))
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	// When：写入与关闭均失败
+	writeCertJobLogLine(&failingCertJobLogWriter{
+		writeErr: errors.New("no space left on device"),
+		closeErr: errors.New("close failed"),
+	}, "/tmp/certjob-lb_fail.log", "line\n")
+
+	// Then：两条告警均留痕且包含路径与原因
+	mu.Lock()
+	defer mu.Unlock()
+	got := buf.String()
+	if !strings.Contains(got, "write /tmp/certjob-lb_fail.log failed") || !strings.Contains(got, "no space left on device") {
+		t.Fatalf("write failure not surfaced, log=%q", got)
+	}
+	if !strings.Contains(got, "close /tmp/certjob-lb_fail.log failed") || !strings.Contains(got, "close failed") {
+		t.Fatalf("close failure not surfaced, log=%q", got)
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

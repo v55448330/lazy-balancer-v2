@@ -7,6 +7,8 @@ package services
 // 给 -2）；过期判定不以返回值 ≤0 兼判（-1h→0）。
 
 import (
+	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,5 +32,46 @@ func TestCertDaysRemaining_truncationTowardZero(t *testing.T) {
 				t.Fatalf("CertDaysRemaining(offset=%v)=%d, want %d", tc.offset, got, tc.want)
 			}
 		})
+	}
+}
+
+// L04-02（第 78 轮）：cert_renewal_days 读侧——库值 0/负值（带外直写/导入
+// 遗留）此前静默改 30，无任何可观测痕迹；读取失败分支已 error 留痕，非法值
+// 分支必须同口径显性留痕（值 + 降级结果），再取治理默认 30。
+func TestGetCertRenewalDays_logsNonPositiveStoredValue(t *testing.T) {
+	_, database := newClusterTestService(t)
+	var buf strings.Builder
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	for _, days := range []int{0, -5} {
+		buf.Reset()
+		if _, err := database.Exec("UPDATE global_config SET cert_renewal_days=? WHERE id=1", days); err != nil {
+			t.Fatalf("seed cert_renewal_days=%d: %v", days, err)
+		}
+
+		// When
+		got := GetCertRenewalDays()
+
+		// Then：返回治理默认 30，且 error 级留痕含库值与字段名
+		if got != 30 {
+			t.Fatalf("cert_renewal_days=%d: GetCertRenewalDays()=%d, want 30", days, got)
+		}
+		if !strings.Contains(buf.String(), "cert_renewal_days") || !strings.Contains(buf.String(), "ERROR") || !strings.Contains(buf.String(), "30") {
+			t.Fatalf("cert_renewal_days=%d: log=%q, want error 级留痕（字段名 + 降级值）", days, buf.String())
+		}
+	}
+
+	// 回归形状：合法值原样生效且不告警
+	buf.Reset()
+	if _, err := database.Exec("UPDATE global_config SET cert_renewal_days=45 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetCertRenewalDays(); got != 45 {
+		t.Fatalf("GetCertRenewalDays()=%d, want 45", got)
+	}
+	if strings.Contains(buf.String(), "ERROR") {
+		t.Fatalf("合法值不应告警，log=%q", buf.String())
 	}
 }

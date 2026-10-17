@@ -4,7 +4,7 @@
 // 结构：国家中文分组 → 多边形[] → 环[] → 扁平 [lon,lat,…]；名称与
 // countryCentroids.ts / 后端 ip_location 首段（geoipnames.CountryNamesCN）对齐，
 // 供 choropleth 填充与点击命中；未收录面以英文原名保底（暗色弱化渲染）。
-export interface CountryBorders {
+interface CountryBorders {
   name: string
   polys: number[][][]
 }
@@ -188,3 +188,9 @@ export const WORLD_COUNTRIES: CountryBorders[] = [
 { name: "黎巴嫩", polys: [[[35.82,33.28,35.55,33.26,35.46,33.09,35.13,33.09,35.48,33.91,36.0,34.64,36.45,34.59,36.61,34.2,36.07,33.82,35.82,33.28]]] },
 { name: "黑山", polys: [[[20.07,42.59,19.8,42.5,19.74,42.69,19.3,42.2,19.37,41.88,19.16,41.96,18.88,42.28,18.45,42.48,18.56,42.65,18.71,43.2,19.22,43.52,19.63,43.21,19.96,43.11,20.34,42.9,20.26,42.81,20.07,42.59]]] },
 ]
+
+// 威胁大屏国家全集（v2.3.8 用户裁定剔除南极洲；第 78 轮 U15-F12 单源）：
+// 地图/地球两引擎此前各写一份过滤（地图排除、地球未排除）导致同一数据在两
+// 视图渲染不一致（地球出现南极洲板块且可下钻到「南极洲」无省层空洞）。
+// 全部渲染/命中/下钻路径消费此表。
+export const THREAT_COUNTRIES: CountryBorders[] = WORLD_COUNTRIES.filter((c) => c.name !== 'Antarctica')

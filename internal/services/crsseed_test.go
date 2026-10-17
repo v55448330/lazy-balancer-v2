@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -278,5 +279,26 @@ func TestPersistCRSSnapshotFrom_roundTrip(t *testing.T) {
 	}
 	if got := readCRSVersionMarker(snapshotDir); got != "v4.15.0" {
 		t.Fatalf("snapshot marker=%q, want v4.15.0", got)
+	}
+}
+
+func TestSeedCRSRules_healsDegenerateSnapshotWithLiveVersion(t *testing.T) {
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	distDir := filepath.Join(root, "waf.dist", "crs")
+	writeTestFile(t, filepath.Join(liveDir, "rules", "REQUEST-900.conf"), "SecRule live")
+	writeTestFile(t, filepath.Join(liveDir, "rules", crsRulesProbeFile), "SecRule init")
+	writeTestFile(t, filepath.Join(liveDir, "VERSION"), "v4.15.0\n")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", "REQUEST-900.conf"), "SecRule snapshot-partial")
+
+	seedCRSRulesFrom(liveDir, snapshotDir, distDir)
+
+	raw, err := os.ReadFile(filepath.Join(snapshotDir, "VERSION"))
+	if err != nil {
+		t.Fatalf("read healed snapshot VERSION: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != "v4.15.0" {
+		t.Fatalf("snapshot VERSION=%q, want live v4.15.0 (not bundled)", strings.TrimSpace(string(raw)))
 	}
 }

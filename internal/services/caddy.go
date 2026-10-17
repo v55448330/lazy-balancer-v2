@@ -136,7 +136,7 @@ func GenerateCaddyID() (string, error) {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err = s.applyConfigLocked(config)
+	err = s.applyConfigLocked(config, true)
 	if IsSameConfig(err) {
 		// 同字节短路=成功空操作（2026-09-25 审计真实性裁定）：restore 调用点把
 		// 哨兵 join 进失败消息=把「无需恢复」谎报成「恢复失败」——此处归一为成功；
@@ -152,7 +152,7 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (loaded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err = s.applyConfigLocked(config)
+	err = s.applyConfigLocked(config, true)
 	if IsSameConfig(err) {
 		return false, nil
 	}
@@ -177,7 +177,7 @@ func caddyConfigJSONEqual(a, b []byte) bool {
 func (s *CaddyService) GenerateAndApplyConfig() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLocked(generateCaddyConfigFromStore(db.DB))
+	return s.applyConfigLocked(generateCaddyConfigFromStore(db.DB), true)
 }
 
 // GenerateAndApplyConfigForce 强制重载变体：POST /load 带 Cache-Control:
@@ -201,7 +201,7 @@ func (s *CaddyService) GenerateAndApplyConfigForce() error {
 func (s *CaddyService) GenerateAndApplyConfigForceInLock() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLockedOpt(generateCaddyConfigFromStore(db.DB), true)
+	return s.applyConfigLockedOpt(generateCaddyConfigFromStore(db.DB), true, true)
 }
 
 // CaddyOpLock 跨层 Caddy 写互斥（L5-01）：handler 写路径（原 handlers 包
@@ -268,8 +268,8 @@ func (s *CaddyService) getRunningConfigBytes() ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
-func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err error) {
-	return s.applyConfigLockedOpt(config, false)
+func (s *CaddyService) applyConfigLocked(config map[string]interface{}, persistDegradation bool) (err error) {
+	return s.applyConfigLockedOpt(config, false, persistDegradation)
 }
 
 // ApplyConfigForce 与 ApplyConfig 同语义，但强制 Caddy 重载（Cache-Control:
@@ -277,10 +277,10 @@ func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err err
 func (s *CaddyService) ApplyConfigForce(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLockedOpt(config, true)
+	return s.applyConfigLockedOpt(config, true, true)
 }
 
-func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force bool) (err error) {
+func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force, persistDegradation bool) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		// 生成失败 = 该 DB 视图渲染不出合法配置，按「配置被拒」分类（门控回滚）。
 		return &ConfigRejectedError{Err: errors.New(message)}
@@ -352,7 +352,10 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 	if degraded, _ := config[caddyConfigDegradationKey].(string); degraded != "" {
 		setLastRenderDegradation(degraded)
 		RecordAuditLog("system", "应用降级", "Caddy配置", degraded, "")
-		if db.DB != nil {
+		// U04-03/L05-01：事务内 apply 时主库写锁仍在未提交事务手里，此处
+		// 用 db.DB 第二连接写横幅会等待 busy_timeout 后必败。持久化交给
+		// commit 后的 recordCaddyApplyResult(nil)；非事务路径保持即时落库。
+		if persistDegradation && db.DB != nil {
 			if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, degraded); err != nil {
 				Logf("warn", "D3: 持久化渲染降级横幅失败: %v", err)
 			}
@@ -1935,7 +1938,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		// 键——合成码只可能由绑定该策略的规则段产生，同 server 其他规则不会
 		// 发出该码）。按策略去重：同 server 多规则绑定同一策略仅一条，路由规模
 		// = 每规则 1 条兜底（现状）+ 每有页策略 1 条（数十条级，不膨胀）。
-		emittedSynthetic := make(map[int]struct{})
+		emittedSynthetic := make(map[string]struct{})
 		for _, ru := range rules {
 			r := ru.rule
 			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
@@ -1948,13 +1951,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				continue
 			}
 			// 阶段拦截页（规则级覆盖层）：规则配了阶段页（id>0 且页内容非空）→
-			// 发射阶段路由（matcher 仅阶段码+interruption 消息，无 host——阶段码
-			// 只可能由配了该页的规则段产生；terminal；status 0 归一 403 由
-			// buildBlockPageAttributionRoute 承担）。按 server 去重同 483+ 机制：
-			// 同 server 多规则配阶段页时按 rules 切片迭代序（≈先创建者）先到先得（481/482
-			// 无 host 区分，同 server 仅能一份；UI 无冲突提示面——web/src 反查零命中）；
-			// 后配规则的阶段页中断将沿用先配置规则的页面与状态码。
-			// 阶段码与逐策略码域（483+）不相交可共存。
+			// 发射 host 限定的阶段路由（481/482 + interruption 消息；terminal；
+			// status 0 归一 403）。阶段码是规则级覆盖，不同域名的规则必须各得
+			// 一条路由；去重键=(code, host-set)，避免同端口多规则串用页面。
+			// 逐策略码（483+）仍按策略身份全局唯一、不带 host。
 			for _, stage := range []struct {
 				code   int
 				pageID int
@@ -1970,22 +1970,25 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				if content == "" {
 					continue
 				}
-				if _, done := emittedSynthetic[stage.code]; done {
+				hosts := splitAndTrim(r.Domain)
+				key := fmt.Sprintf("stage:%d:%s", stage.code, strings.Join(hosts, "\x00"))
+				if _, done := emittedSynthetic[key]; done {
 					continue
 				}
-				emittedSynthetic[stage.code] = struct{}{}
-				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(stage.code, content, stage.status, securityCtx.blockPageTypeByID[stage.pageID]))
+				emittedSynthetic[key] = struct{}{}
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(stage.code, hosts, content, stage.status, securityCtx.blockPageTypeByID[stage.pageID]))
 			}
 			for _, policy := range policiesForRule(securityCtx, r.CaddyID) {
 				code := securityCtx.policySynthetic[policy.ID]
 				if code == 0 {
 					continue
 				}
-				if _, done := emittedSynthetic[code]; done {
+				key := fmt.Sprintf("policy:%d", code)
+				if _, done := emittedSynthetic[key]; done {
 					continue
 				}
-				emittedSynthetic[code] = struct{}{}
-				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID]))
+				emittedSynthetic[key] = struct{}{}
+				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, nil, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID]))
 			}
 		}
 		if len(errorRoutes) > 0 {
@@ -3101,16 +3104,23 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 	// 未设置、地域规则恒不命中。至多一条（任一绑定启用策略带 geoip 即存在，
 	// v2.2.0 多策略语义）。
 	var geoipPassPolicy *models.SecurityPolicy
+	crawlerExempt := false
 	for _, policy := range policiesForRule(ctx, rule.CaddyID) {
 		if PolicyHasGeoIP(policy) {
-			geoipPassPolicy = policy
-			break
+			if geoipPassPolicy == nil {
+				geoipPassPolicy = policy
+			}
+			// U14-05：渲染门控——任一绑定策略启用爬虫豁免时，geoip handler 才
+			// 做 PTR/DNS 验证（豁免/伪装规则只在该策略链上发射）。
+			if policy.GeoIPCrawlerExempt {
+				crawlerExempt = true
+			}
 		}
 	}
 	if geoipPassPolicy != nil {
 		// LB-13：GeoIP pass 路由补挂 @id（caddyID_geoip）——此前无 @id，
 		// GetRuleCaddyConfig 的兄弟路由收集与规则删除清理均无法识别。
-		geoipRoute := buildGeoipPassRoute(domainHosts, geoipPassPolicy)
+		geoipRoute := buildGeoipPassRoute(domainHosts, crawlerExempt)
 		tagRuleRoute(geoipRoute, rule.CaddyID, "geoip")
 		routes = append(routes, geoipRoute)
 	}
@@ -3359,20 +3369,22 @@ func blockPageContentType(contentType string) string {
 	return contentType
 }
 
-// buildBlockPageAttributionRoute 返回一条按策略归因的错误路由：matcher 仅
-// 合成中断码 + interruption 消息（不带 host——合成码只可能由绑定该策略的
-// 规则段产生），static_response 渲染该策略的拦截页内容与其配置状态码
-// （0 归一 403）。与兜底路由（403,host 限定）状态码域不相交，顺序无关。
-func buildBlockPageAttributionRoute(synthetic int, content string, statusCode int, contentType string) map[string]interface{} {
+// buildBlockPageAttributionRoute 返回一条按策略/规则归因的错误路由：matcher
+// 为合成中断码 + interruption 消息，hosts 非空时追加 host 限定（规则级 481/482
+// 必须按规则域名隔离；逐策略 483+ 传 nil，保持全局唯一）。static_response
+// 渲染对应拦截页内容与配置状态码（0 归一 403）。
+func buildBlockPageAttributionRoute(synthetic int, hosts []string, content string, statusCode int, contentType string) map[string]interface{} {
 	if statusCode == 0 {
 		statusCode = 403
 	}
+	matcher := map[string]interface{}{
+		"expression": fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'interruption triggered')", synthetic),
+	}
+	if len(hosts) > 0 {
+		matcher["host"] = hosts
+	}
 	return map[string]interface{}{
-		"match": []interface{}{
-			map[string]interface{}{
-				"expression": fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'interruption triggered')", synthetic),
-			},
-		},
+		"match": []interface{}{matcher},
 		"handle": []interface{}{
 			map[string]interface{}{
 				"handler":     "static_response",
@@ -3573,18 +3585,18 @@ func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) (m
 }
 
 // buildGeoipHandler returns the geoip2region handler, or nil when geoip is disabled.
-func buildGeoipHandler(policy *models.SecurityPolicy) map[string]interface{} {
-	if !PolicyHasGeoIP(policy) {
-		return nil
-	}
-	return map[string]interface{}{"handler": "geoip2region"}
+// buildGeoipHandler 渲染 geoip2region handler；crawlerExempt 为规则级门控
+// （任一绑定策略 GeoIPCrawlerExempt，U14-05）——caddygeoip 在 false 时只剥
+// 客户端伪造的验证头、不做 PTR/DNS 验证。
+func buildGeoipHandler(crawlerExempt bool) map[string]interface{} {
+	return map[string]interface{}{"handler": "geoip2region", "crawler_exempt": crawlerExempt}
 }
 
 // buildGeoipPassRoute populates the region placeholders before the block matcher evaluates.
-func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) map[string]interface{} {
+func buildGeoipPassRoute(domainHosts []string, crawlerExempt bool) map[string]interface{} {
 	return map[string]interface{}{
 		"match":  []interface{}{map[string]interface{}{"host": domainHosts}},
-		"handle": []interface{}{buildGeoipHandler(policy)},
+		"handle": []interface{}{buildGeoipHandler(crawlerExempt)},
 	}
 }
 
@@ -4058,11 +4070,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 同时防客户端伪造同名头直达后端。头名清单与 caddygeoip/handler.go 的
 	// geoipCorazaHeaders(caddygeoip/handler.go) 同源，变更需双侧同步。X-LB-Rule-ID 同型：链首注入的归因头
 	//（F3）仅供 coraza 事务内消费，同口径无条件剥离。
+	// 第 78 轮 U14-02：爬虫验证控制头（X-LB-Crawler-Verified / X-LB-Crawler-Spoof）
+	// 同样由 caddygeoip 在 coraza phase:1 之前注入、coraza 预检规则已消费；
+	// 与 geoip 头同口径**无条件**剥离——无 GeoIP 策略的规则（handler 不在场）
+	// 下客户端伪造的同名头也绝不能直达上游。常量名与 caddygeoip/handler.go
+	// 的 crawlerHeaderVerified/crawlerHeaderSpoof 同源。
 	proxyRequestHeaders := map[string]interface{}{
 		"delete": []string{
 			"X-LB-GeoIP-Country", "X-LB-GeoIP-Country-Code", "X-LB-GeoIP-Region",
 			"X-LB-GeoIP-Province", "X-LB-GeoIP-City", "X-LB-GeoIP-Loc",
 			"X-LB-Rule-ID",
+			"X-LB-Crawler-Verified", "X-LB-Crawler-Spoof",
 			// 安全处理耗时关联头（v2.3.3）：blocked_counter 注入，coraza 审计
 			// 日志收录后由审计写插件作进程内计时注册表关联键（第 76 轮耗时随
 			// 审计行内嵌 lb_timing 流转）——coraza 之后链路不再需要,与
@@ -4137,7 +4155,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLocked(generateCaddyConfigFromStore(tx))
+	return s.applyConfigLocked(generateCaddyConfigFromStore(tx), false)
 }
 
 // RefreshIPListProjectionsFromTxInLock 投影热路径（2026-10-15 用户裁定）：
@@ -4279,7 +4297,7 @@ func (s *CaddyService) RollbackIPListProjectionsToCommittedInLock() {
 func (s *CaddyService) ApplyConfigFromTxCertAwareForce(tx *sql.Tx) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyConfigLockedOpt(generateCaddyConfigWithCertSource(tx, tx), true)
+	return s.applyConfigLockedOpt(generateCaddyConfigWithCertSource(tx, tx), true, false)
 }
 
 func normalizeWeights(weights []int) []int {

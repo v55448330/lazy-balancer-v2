@@ -4,6 +4,7 @@ package taskengine
 // 角色门/动态间隔/Daemon 生命周期/Scheduled 槽位驱动/每轮记录。
 
 import (
+	"context"
 	"errors"
 	"os"
 	"runtime"
@@ -116,14 +117,14 @@ func TestEngine_RecoverOrphansMarksInterrupted(t *testing.T) {
 // Then 不执行（角色门拦截）。
 func TestEngine_RoleGateSlaveOnlyOnMasterSkips(t *testing.T) {
 	e := newTestEngine(t)
-	ran := false
+	var ran atomic.Bool
 	e.Register(Descriptor{ID: "t-role", Family: "t", Name: "从节点任务", Kind: KindPeriodic, RunsOn: RoleSlaveOnly,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
-		Run:        func(rc RunContext) error { ran = true; return nil }})
+		Run:        func(rc RunContext) error { ran.Store(true); return nil }})
 	e.StartLoop("t-role")
 	e.SetRole(true) // 主节点
 	time.Sleep(150 * time.Millisecond)
-	if ran {
+	if ran.Load() {
 		t.Fatal("主节点不应执行 slave-only 任务")
 	}
 }
@@ -686,7 +687,7 @@ func TestEngine_CancelHookPathLandsCancelled(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{})
 	hookFired := make(chan struct{}, 1)
-	e.Register(Descriptor{ID: "t-chk", Family: "t", Name: "Hook取消", Cancelable: true,
+	e.Register(Descriptor{ID: "t-chk", Family: "t", Name: "Hook取消", Kind: KindOneshot, Cancelable: true,
 		CancelHook: func() bool { hookFired <- struct{}{}; return true },
 		Run: func(rc RunContext) error {
 			close(started)
@@ -942,5 +943,148 @@ func TestEngine_LifecycleLogLineUsesSlashTimestamp(t *testing.T) {
 	line := strings.TrimSpace(string(data))
 	if len(line) < 20 || line[4] != '/' || line[7] != '/' {
 		t.Fatalf("生命周期行时间戳形态=%q，want YYYY/MM/DD HH:MM:SS（斜杠）", line)
+	}
+}
+
+func TestEngine_StopWaitsForInflightRunAndRejectsNew(t *testing.T) {
+	// Given：一个 Periodic 在途 Run 阻塞中。
+	e := newTestEngine(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease)
+	d := Descriptor{ID: "t-stop", Family: "t", Name: "停止等待", Kind: KindPeriodic, RunsOn: RoleAny,
+		IntervalFn: func() time.Duration { return time.Nanosecond },
+		Run: func(RunContext) error {
+			close(started)
+			<-release
+			return nil
+		}}
+	if err := e.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	e.StartLoop(d.ID)
+	go e.tick()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run 未进入在途态")
+	}
+
+	// When：Stop 与在途 Run 并发。
+	stopDone := make(chan struct{})
+	go func() { e.Stop(); close(stopDone) }()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop 在 Run 退出前返回，终态可能跨进程/跨测试继续写入")
+	case <-time.After(100 * time.Millisecond):
+	}
+	closeRelease()
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("释放 Run 后 Stop 仍未返回")
+	}
+
+	// Then：终态已落库，停止后的新 Trigger 被拒绝。
+	if latest := e.LatestRun(d.ID); latest == nil || latest.Status == "running" || latest.FinishedAt == "" {
+		t.Fatalf("Stop 返回时在途行未落定终态: %+v", latest)
+	}
+	if err := e.Trigger(d.ID, "manual", ""); err == nil {
+		t.Fatal("Engine.Stop 后新 Trigger 必须被拒绝")
+	}
+}
+
+func TestEngine_StartLoopAfterStopDoesNotStartDaemon(t *testing.T) {
+	// Given：已停止的引擎与一个未启动 daemon。
+	e := newTestEngine(t)
+	var starts atomic.Int32
+	e.Register(Descriptor{ID: "t-stop-start", Family: "t", Name: "停止后启动", Kind: KindDaemon, RunsOn: RoleAny,
+		Run: func(RunContext) error { starts.Add(1); return nil }})
+	e.Stop()
+
+	// When：停止后 StartLoop 与 SetRole 再次调用。
+	e.StartLoop("t-stop-start")
+	e.SetRole(true)
+
+	// Then：不得新增 daemon 生命周期或 WaitGroup Add。
+	if got := starts.Load(); got != 0 {
+		t.Fatalf("Stop 后启动次数=%d, want 0", got)
+	}
+	if meta, ok := e.Lookup("t-stop-start"); ok && meta.Running {
+		t.Fatal("Stop 后 daemon Running=true")
+	}
+}
+
+func TestEngine_ConcurrentStopStartLoopDoesNotStartDaemon(t *testing.T) {
+	// Given：Stop 与 StartLoop 并发，调用顺序由调度器随机交错。
+	e := newTestEngine(t)
+	var starts atomic.Int32
+	e.Register(Descriptor{ID: "t-stop-race", Family: "t", Name: "停止竞态", Kind: KindDaemon, RunsOn: RoleAny,
+		Run: func(rc RunContext) error {
+			starts.Add(1)
+			<-rc.Ctx.Done()
+			return rc.Ctx.Err()
+		}})
+	for i := 0; i < 50; i++ {
+		done := make(chan struct{})
+		go func() { e.Stop(); close(done) }()
+		e.StartLoop("t-stop-race")
+		<-done
+	}
+	// Then：任何交错都不得在 Stop 返回后保留运行中的 daemon（Stop 前启动可被取消）。
+	if daemonRunning(e, "t-stop-race") {
+		t.Fatal("Stop 与 StartLoop 并发后仍有 daemon 在运行")
+	}
+}
+
+func TestEngine_StartDaemonStoppedRollsBackRegistration(t *testing.T) {
+	// Given：已停止引擎和一个已预登记 running/cancel 的注册项。
+	e := newTestEngine(t)
+	e.Register(Descriptor{ID: "t-stopped-register", Family: "t", Name: "停止登记", Kind: KindDaemon, RunsOn: RoleAny,
+		Run: func(RunContext) error { return nil }})
+	e.mu.RLock()
+	r := e.regs["t-stopped-register"]
+	e.mu.RUnlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.running = true
+	r.cancel = cancel
+	e.Stop()
+
+	// When/Then：启动被 stopped 拒绝时必须回滚预登记，不得留下 running=true。
+	if started := e.startDaemon("t-stopped-register", r, ctx, cancel); started {
+		t.Fatal("Stop 后 startDaemon 不应启动")
+	}
+	if r.running || r.cancel != nil {
+		t.Fatalf("startDaemon stopped 回滚不完整: running=%v cancelNil=%v", r.running, r.cancel == nil)
+	}
+}
+
+func TestEngine_DaemonFailureRecordsErrorMessage(t *testing.T) {
+	// Given：异常退出的 daemon。
+	e := newTestEngine(t)
+	d := Descriptor{ID: "t-daemon-error", Family: "t", Name: "daemon 异常", Kind: KindDaemon, RunsOn: RoleAny,
+		Run: func(RunContext) error { return errors.New("daemon boom") }}
+	if err := e.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	// When：daemon 运行并异常退出。
+	e.StartLoop(d.ID)
+	var latest *RunRecord
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		latest = e.LatestRun(d.ID)
+		if latest != nil && latest.Status == "failed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Then：failed 行包含真实错误，不只是任务日志可见。
+	if latest == nil || latest.Status != "failed" {
+		t.Fatalf("缺少 daemon failed 行: %+v", latest)
+	}
+	if !strings.Contains(latest.Message, "daemon boom") {
+		t.Fatalf("daemon failed message=%q，want 包含 daemon boom", latest.Message)
 	}
 }

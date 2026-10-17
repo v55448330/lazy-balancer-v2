@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"lazy-balancer-v2/internal/db"
 )
 
 // 操作日志词汇硬卡控（系统标准：操作标签 ≤4 词、事件对象 ≤5 词，词制计数见
@@ -49,11 +47,15 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	"handlers/cluster_registration.go": {1: {"clusterNodeAction"}},
 	"handlers/config_backup.go":        {1: {"importConfigBackupCore"}},
 	// applyLbbakWafFiles：动作透传 core 的 action（取值仅 导入/还原——第 57 轮
-	// 修复还原路径归因漂移），词汇均在标准动作集内。
-	"handlers/config_backup_lbbak.go": {1: {"applyLbbakWafFiles"}},
-	"handlers/autobackup.go":          {1: {"RunAutoBackupOnce"}},
-	"handlers/config_import_v1.go":    {1: {"ImportV1Config"}},
-	"handlers/handlers.go":            {1: {"finishTxApply"}, 2: {"finishTxApply"}},
+	// 修复还原路径归因漂移），词汇均在标准动作集内。warn 是同一 action 的
+	// 逐文件失败包装（action+"警告" ∈ 导入警告/还原警告，均 ≤4 词）。
+	"handlers/config_backup_lbbak.go": {1: {"applyLbbakWafFiles", "warn"}},
+	// TriggerTaskAsync 的对象（Family）由调用点字面量传入（任务监控/安全防护/
+	// 配置备份等，均 ≤5 词）；动作固定为字面量「触发」/「触发失败」。
+	"services/task_trigger.go":     {2: {"TriggerTaskAsync"}},
+	"handlers/autobackup.go":       {1: {"RunAutoBackupOnce"}},
+	"handlers/config_import_v1.go": {1: {"ImportV1Config"}},
+	"handlers/handlers.go":         {1: {"finishTxApply"}, 2: {"finishTxApply"}},
 	// tryIPListHotPathApply 的动作/对象透传 txApplyFinish 字段（热路径收尾镜像
 	// finishTxApply 家族语义；字面量词条在各名单写路径调用点核清，
 	// 2026-10-15 核清入白名单）。
@@ -104,15 +106,9 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 			violations = append(violations, file+":"+strconv.Itoa(line)+" "+kind+" "+strconv.Quote(value)+" 超上限（"+strconv.Itoa(n)+" 词 > "+strconv.Itoa(limit)+"）")
 		}
 	}
-	// SEC-C-U1 ④（第 69 轮）：字面量 (action, resource) 对命中归一表旧侧即违规
-	// ——词数门只查词数不查规范名（「IP2Region数据库」=2 词曾静默放行）。必须
-	// 成对判定：归一表多为动作作用域条目（重载+Caddy配置→Caddy服务），裸资源
-	// 名判定会误伤合法写点（如 更新+Caddy配置）。
-	checkPair := func(file string, line int, action, resource string) {
-		if action != "" && resource != "" && db.IsRetiredAuditVocabulary(action, resource) {
-			violations = append(violations, file+":"+strconv.Itoa(line)+" 词条对 ("+strconv.Quote(action)+","+strconv.Quote(resource)+") 命中归一表旧侧，请改用规范名（见 internal/db/audit.go 归一表）")
-		}
-	}
+	// SEC-C-U1 ④（第 69 轮）：字面量 (action, resource) 对命中归一表旧侧的
+	// 成对判定已随 U12-F04 移入 internal/db（谓词不再导出）：
+	// audit_vocabulary_migration_test.go 的 TestAuditWritePointsUseCanonicalVocabulary。
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
@@ -143,7 +139,6 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 				if !ok {
 					return true
 				}
-				var litAction, litResource string
 				line := fset.Position(call.Pos()).Line
 				for _, arg := range []struct {
 					idx   int
@@ -157,11 +152,6 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 						if value != "" {
 							check(path, line, arg.kind, value, arg.limit)
 						}
-						if arg.kind == "操作标签" {
-							litAction = value
-						} else {
-							litResource = value
-						}
 						continue
 					}
 					if !slices.Contains(auditVocabDynamicAllowlist[rel][arg.idx], enclosing) {
@@ -170,7 +160,6 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 						usedAllowlist[rel+"|"+strconv.Itoa(arg.idx)+"|"+enclosing] = true
 					}
 				}
-				checkPair(path, line, litAction, litResource)
 				return true
 			})
 		}
@@ -184,16 +173,12 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 							return true
 						}
 						line := fset.Position(ret.Pos()).Line
-						var retAction, retResource string
 						if value, ok := auditVocabStringLit(ret.Results[0]); ok && value != "" {
 							check(path, line, "操作标签", value, auditActionMaxWords)
-							retAction = value
 						}
 						if value, ok := auditVocabStringLit(ret.Results[1]); ok && value != "" {
 							check(path, line, "事件对象", value, auditResourceMaxWords)
-							retResource = value
 						}
-						checkPair(path, line, retAction, retResource)
 						return true
 					})
 					continue

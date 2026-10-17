@@ -243,6 +243,10 @@ func TestCRSUpdateRun_installFailureRemovesFreshlyCreatedOverrides(t *testing.T)
 	if reloads != 2 {
 		t.Fatalf("reloads=%d, want 2 (install reload fails, restore reload succeeds)", reloads)
 	}
+	marker, err := os.ReadFile(filepath.Join(m.crsDir, "VERSION"))
+	if err != nil || strings.TrimSpace(string(marker)) != "v4.14.0" {
+		t.Fatalf("VERSION=%q,%v, want rolled back v4.14.0", strings.TrimSpace(string(marker)), err)
+	}
 }
 
 // TestCRSUpdateRun_installFailureRestoresPreexistingOverrides 验证 overrides 在

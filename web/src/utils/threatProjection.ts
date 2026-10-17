@@ -65,37 +65,36 @@ export function panBy(cam: Cam2D, dxPx: number, dyPx: number): { camX: number; c
   return { camX, camY }
 }
 
-/** 滚轮缩放（锚点=指针）：返回新 camX/camY/zoom。 */
-export function zoomAt(cam: Cam2D, px: number, py: number, factor: number, minZoom: number, maxZoom: number): Cam2D {
-  // v26：lon/camX 环绕（缩放漂移至 ±180 外时归一）
-  const lon = wrapDeg(cam.camX + (px - cam.width / 2) / cam.zoom)
-  const y = cam.camY + (py - cam.height / 2) / cam.zoom
-  const zoom = Math.min(maxZoom, Math.max(minZoom, cam.zoom * factor))
-  const camX = wrapDeg(lon - (px - cam.width / 2) / zoom)
-  let camY = y - (py - cam.height / 2) / zoom
-  const visH = cam.height / zoom
-  if (visH >= WORLD_D) camY = WORLD_D / 2
-  else camY = Math.min(WORLD_D - visH / 2, Math.max(visH / 2, camY))
-  return { ...cam, camX, camY, zoom }
-}
+/** 下钻统一视角倍率（用户裁定 2026-10-17）：任意国家一致，配合拖动查看。
+ *  单源常量放在此模块——引擎与确定性单测同源消费（原置于 threatScene 内，
+ *  只能源文本断言）。 */
+export const DRILL_UNIFIED_ZOOM = 9
 
 /**
- * 下钻取景（v14⑤a 2D 口径）：包围盒宽高分别适配视口取较小 zoom
- * （2D 中 zoom 小=看得多），钳 [minZoom, 24]；unwrap 后中心经度归一主带。
+ * 视口经度范围 → 覆盖的 12° 分桶键序列（去重、按世界带归一）。
+ *
+ * 世界点阵按 `Math.floor(lon / 12)` 分桶（lon∈[-180,180) → 键 -15..14）。
+ * 下钻态横向拖动跨日界线时 minLon/maxLon 会越出世界带（camX 自由实数），
+ * 直接 floor 得到的键不在桶表中 → 整段点阵消失。此处把每个键按
+ * `((b + 15) % 30) - 15` 归一，与渲染公式 `wrapDeg` 同源。
  */
-export function fitDrillZoom(
-  bboxW: number,
-  bboxH: number,
-  width: number,
-  height: number,
-  minZoom: number,
-): number {
-  const zoomW = width / (bboxW * 1.15)
-  const zoomH = height / (bboxH * 1.35)
-  return Math.min(200, Math.max(minZoom, Math.min(zoomW, zoomH)))
+export function wrappedBucketKeys(minLon: number, maxLon: number, bucketSize = 12): number[] {
+  const count = Math.round(WORLD_W / bucketSize)
+  const first = Math.floor(minLon / bucketSize)
+  const last = Math.floor(maxLon / bucketSize)
+  const half = count / 2
+  const keys: number[] = []
+  const seen = new Set<number>()
+  for (let b = first; b <= last; b++) {
+    const key = (((b + half) % count) + count) % count - half
+    if (seen.has(key)) continue
+    seen.add(key)
+    keys.push(key)
+  }
+  return keys
 }
 
-export interface BoundsBox {
+interface BoundsBox {
   minLon: number
   maxLon: number
   minLat: number

@@ -86,7 +86,15 @@ var brandingStore = struct {
 	cfg     brandingConfig
 	modTime time.Time
 	size    int64
+	// failedProbeAt 失败探测缓存时间戳（U08-F03）：GetBranding 是公开无鉴权
+	// 端点，文件缺失/半截写时每请求一次重读+日志是放大面——同一失败形态
+	// 60s 内只探测/留痕一次（stat 成功但仍不可解析的形态仍逐请求重读，保证
+	// 恢复后立即收敛）。
+	failedProbeAt time.Time
 }{}
+
+// brandingFailureProbeWindow 失败探测/日志的限流窗口（U08-F03）。
+const brandingFailureProbeWindow = time.Minute
 
 // loadBrandingConfig returns the in-memory branding snapshot, transparently
 // reloading when the file's mtime/size changed (or dataDir switched).
@@ -105,6 +113,15 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 		brandingStore.mu.RUnlock()
 		return cfg
 	}
+	// U08-F03：stat 失败（文件缺失/不可读）且近期已探测过失败 → 直接返回
+	// last-known-good，不再每请求重读+记日志；文件恢复（stat 成功）即走
+	// 慢路径立即收敛。
+	if stErr != nil && brandingStore.loaded && brandingStore.dataDir == dataDir &&
+		!brandingStore.failedProbeAt.IsZero() && time.Since(brandingStore.failedProbeAt) < brandingFailureProbeWindow {
+		cfg := brandingStore.cfg
+		brandingStore.mu.RUnlock()
+		return cfg
+	}
 	brandingStore.mu.RUnlock()
 
 	brandingStore.mu.Lock()
@@ -114,14 +131,27 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	}
 	prevLoaded := brandingStore.loaded
 	prev := brandingStore.cfg
-	cfg, ok := readBrandingFile(path)
+	cfg, ok, readErr := readBrandingFile(path)
 	if !ok && prevLoaded && brandingStore.dataDir == dataDir {
 		// 半截写/删除窗口(2026-09-11 裁定,限同一 dataDir):保内存上一份
 		// 有效配置,不更新 stat 标记——文件恢复完整后下次访问立即重读收敛;
 		// 跨目录的前值不属于本文件,不保(测试隔离即依赖此语义);boot 无
 		// 前值时 ok=false 的 cfg(默认)照常入库。
-		services.Logf("info", "branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s", path)
+		// U08-F03：失败日志 60s 限流（公开端点每请求一条是放大面；lookup 失败
+		// 原因仅窗口内记一次，同一形态重复无新增信息）。
+		if brandingStore.failedProbeAt.IsZero() || time.Since(brandingStore.failedProbeAt) >= brandingFailureProbeWindow {
+			brandingStore.failedProbeAt = time.Now()
+			if readErr != nil {
+				services.Logf("warn", "branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s: %v", path, readErr)
+			} else {
+				services.Logf("warn", "branding: 文件暂不可解析(半截写/缺失),保留上一份有效配置: %s", path)
+			}
+		}
 		return prev
+	}
+	if !ok && readErr != nil && !prevLoaded {
+		// boot 首载（无前值）：一次性留痕（不是每请求路径）。
+		services.Logf("error", "branding: 载入品牌配置失败，使用默认值: %s: %v", path, readErr)
 	}
 	if prevLoaded && cfg != prev {
 		// 热重载留痕(2026-09-11 裁定):仅实际变更记,内容未变(touch)与
@@ -133,6 +163,10 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	brandingStore.cfg = cfg
 	brandingStore.loaded = true
 	brandingStore.dataDir = dataDir
+	if ok {
+		// 成功读取即清失败探测标记（U08-F03）：下一轮失败重新计时/留痕。
+		brandingStore.failedProbeAt = time.Time{}
+	}
 	if stErr == nil {
 		brandingStore.modTime = st.ModTime()
 		brandingStore.size = st.Size()
@@ -181,18 +215,16 @@ func brandingReloadDetail(prev, next brandingConfig) string {
 // 「该字段用默认」语义处理。
 // ok=false 表示文件缺失/不可读/整体 JSON 非法(调用方:boot 用默认 cfg,
 // 热重载保旧值);字段级类型错不改变 ok=true(该字段回退默认,既有裁定)。
-func readBrandingFile(path string) (brandingConfig, bool) {
+// U08-F03：失败原因经 readErr 上抛，由调用方按 60s 窗口限流留痕（原此处
+// 每请求 error 日志——公开 GetBranding 端点的日志放大面）。
+func readBrandingFile(path string) (brandingConfig, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			services.Logf("error", "loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
-		}
-		return brandingConfig{AppName: defaultBranding.AppName}, false
+		return brandingConfig{AppName: defaultBranding.AppName}, false, err
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		services.Logf("error", "loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
-		return brandingConfig{AppName: defaultBranding.AppName}, false
+		return brandingConfig{AppName: defaultBranding.AppName}, false, err
 	}
 	var cfg brandingConfig
 	stringField := func(field string) string {
@@ -214,7 +246,7 @@ func readBrandingFile(path string) (brandingConfig, bool) {
 	if cfg.AppName == "" {
 		cfg.AppName = defaultBranding.AppName
 	}
-	return cfg, true
+	return cfg, true, nil
 }
 
 // EnsureBrandingFile 启动时(Caddy 载入前)确保 branding.json 字段齐备
@@ -280,8 +312,9 @@ type brandingResponse struct {
 
 // brandingSyncGate 60s 采样门（第 56 轮 P5，用户裁定）：GetBranding 是公开
 // 无鉴权端点，幂等同步/种子/镜像每请求 ~7 条 SQL 是残余放大面——boot+首请求
-// 已完成播种，门内跳过仅推迟带外变更 ≤60s 可见；branding 配置写路径调用
-// resetBrandingSyncGate 主动失效，管理面操作零延迟。
+// 已完成播种，门内跳过仅推迟带外变更 ≤60s 可见。branding.json 为手工编辑/
+// 集群同步文件，无管理面写路径（因此无需写侧主动失效）；内容热重载由 stat
+// 即时检测，仅幂等同步（landing 注入/拦截页种子/镜像）受本 60s 门约束。
 var (
 	brandingSyncMu   sync.Mutex
 	brandingSyncLast time.Time
@@ -531,13 +564,25 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		// SYS-U2（第 69 轮）：name/description/content 裸 != 对 NULL 不命中（带外改库
 		// 置 NULL 正是本函数自称要自愈的形态）——COALESCE 同 :510 默认页第 61 轮 P3
 		// 修复口径（name 列 NOT NULL，一并包仅为统一口径）。
-		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (COALESCE(name,'') != ? OR COALESCE(description,'') != ? OR COALESCE(content,'') != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
-			bp.name, bp.desc, stock, models.DefaultBlockPageContentType, bp.id, bp.name, bp.desc, stock, models.DefaultBlockPageContentType)
+		// U08-F05：UPDATE 增身份守卫——INSERT OR IGNORE 因 id 冲突未插入时，无守卫的
+		// UPDATE 会按 id 改写「占用了内置 id 的自定义页」。身份判据=is_builtin=1
+		// （正常行）或 name=库存名（备份导入/带外改库丢了标志但仍是内置页——既有
+		// 自愈用例要求该形态归位）。其余（自定义页占 id）一律跳过并 warn。
+		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (COALESCE(is_builtin,0)=1 OR name=?) AND (COALESCE(name,'') != ? OR COALESCE(description,'') != ? OR COALESCE(content,'') != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
+			bp.name, bp.desc, stock, models.DefaultBlockPageContentType, bp.id, bp.name, bp.name, bp.desc, stock, models.DefaultBlockPageContentType)
 		if err != nil {
 			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.id, err)
 		}
 		bn, _ := res.RowsAffected()
 		changed = changed || bn > 0
+		if bn == 0 {
+			// 未命中且该 id 被非内置行（名称亦非库存名）占用 → 明确告警并跳过
+			// （U08-F05：自定义页永不改写）。
+			var occupied int
+			if err := db.DB.QueryRow(`SELECT COALESCE(is_builtin,0) FROM security_block_pages WHERE id=? AND name<>?`, bp.id, bp.name).Scan(&occupied); err == nil && occupied != 1 {
+				services.Logf("warn", "内置拦截页面 %d（%s）的 ID 已被自定义页面占用，跳过播种（不改写自定义页）", bp.id, bp.name)
+			}
+		}
 	}
 	return changed, nil
 }

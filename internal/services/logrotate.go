@@ -292,6 +292,7 @@ func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
 	}
 	type fileInfo struct {
 		path string
+		dir  string
 		name string
 		info os.FileInfo
 	}
@@ -309,7 +310,7 @@ func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
 			if err != nil {
 				continue
 			}
-			all = append(all, fileInfo{path: filepath.Join(d, e.Name()), name: e.Name(), info: info})
+			all = append(all, fileInfo{path: filepath.Join(d, e.Name()), dir: d, name: e.Name(), info: info})
 		}
 	}
 	if len(all) == 0 {
@@ -322,11 +323,49 @@ func taskLogsHousekeeping(logFile string) TaskLogHousekeepingResult {
 	// 尺寸滚动已统一归 taskengine 写入前检查（tasks/*.log 与 certjobs/ 同一
 	// RotateTaskLogBeforeWrite）；本清理任务只处理保留期，不再二次滚动。
 	for _, f := range all {
-		if f.info.ModTime().Before(cutoff) {
-			if os.Remove(f.path) == nil {
-				result.Deleted = append(result.Deleted, f.name)
+		if !f.info.ModTime().Before(cutoff) {
+			continue
+		}
+		if f.dir == certDir {
+			// L04-09：certjobs 子目录的证书任务日志与写入侧共用 ruleID 粒度写锁
+			// （C-11，certjoblog.go lockCertJobLog）——删除必须在同一把锁内重新
+			// stat 再 remove。锁外拿到的 FileInfo 可能已被写侧的
+			// 「stat→轮转移位→append」改写：移位后该名字指向新一代文件，无锁
+			// 删除会吞掉未过期的一代（写侧并发下丢行）。
+			if ruleID, ok := certJobLogRuleIDFromName(f.name); ok {
+				lock := lockCertJobLog(ruleID)
+				lock.Lock()
+				info, statErr := os.Stat(f.path)
+				removed := statErr == nil && info.ModTime().Before(cutoff) && os.Remove(f.path) == nil
+				lock.Unlock()
+				if removed {
+					result.Deleted = append(result.Deleted, f.name)
+				}
+				continue
 			}
+		}
+		if os.Remove(f.path) == nil {
+			result.Deleted = append(result.Deleted, f.name)
 		}
 	}
 	return result
+}
+
+// certJobLogRuleIDFromName 从证书任务日志文件名（certjob-<rule>.log 及
+// .N/.gz 轮转副本）解析 ruleID——与写入侧 lockCertJobLog 的键空间同源
+// （写入端 ruleID 经 sanitizePathComponent 后落文件名；caddy_id 字母表下
+// 二者恒等）。
+func certJobLogRuleIDFromName(name string) (string, bool) {
+	if !strings.HasPrefix(name, "certjob-") {
+		return "", false
+	}
+	stem := name
+	if idx := strings.IndexByte(stem, '.'); idx >= 0 {
+		stem = stem[:idx]
+	}
+	ruleID := strings.TrimPrefix(stem, "certjob-")
+	if ruleID == "" {
+		return "", false
+	}
+	return ruleID, true
 }

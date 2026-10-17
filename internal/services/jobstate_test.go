@@ -57,6 +57,41 @@ func TestJobLifecycle_mapsEveryPersistedStatus(t *testing.T) {
 	}
 }
 
+// L04-06（第 78 轮）：状态枚举单源（db.CertJobStatuses ← DDL CHECK 生成 +
+// services 状态机派生）。导出 API 返回副本；集合必须与生命周期映射完全一致
+// ——新增状态只改 db 一处即全链生效（映射缺失由本测试的集合对比暴露）。
+func TestAllJobStatuses_matchesLifecycleMapAndReturnsCopy(t *testing.T) {
+	// Given
+	statuses := AllJobStatuses()
+
+	// Then：与 jobLifecycleByStatus 键集完全一致
+	got := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		if _, exists := got[status]; exists {
+			t.Fatalf("duplicate status %q in AllJobStatuses", status)
+		}
+		got[status] = struct{}{}
+	}
+	if len(got) != len(jobLifecycleByStatus) {
+		t.Fatalf("AllJobStatuses has %d statuses, lifecycle map has %d", len(got), len(jobLifecycleByStatus))
+	}
+	for status := range jobLifecycleByStatus {
+		if _, ok := got[status]; !ok {
+			t.Fatalf("status %q in lifecycle map missing from AllJobStatuses", status)
+		}
+	}
+
+	// And：返回副本，调用方修改不污染全局
+	if len(statuses) == 0 {
+		t.Fatal("AllJobStatuses must not be empty")
+	}
+	original := statuses[0]
+	statuses[0] = "mutated_by_test"
+	if AllJobStatuses()[0] != original {
+		t.Fatalf("AllJobStatuses leaked mutable global state")
+	}
+}
+
 func TestJobLifecycle_classifiesUnknownStatusAsFailed(t *testing.T) {
 	// Given
 	const status = "future_unmapped_status"

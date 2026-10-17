@@ -35,6 +35,39 @@ func TestCleanupExpiredRegistrationSecretsClearsDeliveredSecretAfterWindow(t *te
 	}
 }
 
+// U12-F13（第 78 轮）：Close 关闭三句柄后必须清空包级句柄与 currentDB——
+// 残留的已关闭 *sql.DB 会让后续 GetDB() 返回不可用句柄且在测试间泄漏；
+// 重复 Close 必须幂等（nil 句柄跳过）。
+func TestClose_clearsHandlesAndIsIdempotent(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	oldCurrent := GetDB()
+	t.Cleanup(func() {
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		SetDB(oldCurrent)
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Then：句柄全部清空，重复 Close 幂等
+	if DB != nil || MetricsDB != nil || AuditDB != nil {
+		t.Fatalf("handles after Close: DB=%v MetricsDB=%v AuditDB=%v, want all nil", DB, MetricsDB, AuditDB)
+	}
+	if got := GetDB(); got != nil {
+		t.Fatalf("GetDB() after Close=%v, want nil", got)
+	}
+	if err := Close(); err != nil {
+		t.Fatalf("second Close must be idempotent: %v", err)
+	}
+}
+
 func TestFlushAPIKeyLastUsedBatchesDirtyKeys(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
@@ -43,6 +76,10 @@ func TestFlushAPIKeyLastUsedBatchesDirtyKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	SetDB(database)
+	// U12-F12（第 78 轮）：currentDB 是包级全局，测试结束必须复位，否则后续
+	// 测试的 GetDB()/flush 会落到本测试的已关闭临时库。
+	oldCurrent := GetDB()
+	t.Cleanup(func() { SetDB(oldCurrent) })
 	MarkAPIKeyUsed(1)
 	MarkAPIKeyUsed(1)
 	MarkAPIKeyUsed(2)
@@ -68,7 +105,11 @@ func TestCloseFlushesDirtyAPIKeyUsage(t *testing.T) {
 	// Given
 	dir := t.TempDir()
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() { DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB })
+	oldCurrent := GetDB()
+	t.Cleanup(func() {
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		SetDB(oldCurrent)
+	})
 	if err := Initialize(dir); err != nil {
 		t.Fatal(err)
 	}

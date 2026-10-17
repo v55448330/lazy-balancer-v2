@@ -32,38 +32,6 @@ func TestGetConfigSourceSection(t *testing.T) {
 	}
 }
 
-func TestStartAuditCleanup_starts_once_and_stops(t *testing.T) {
-	// Given
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
-	StartAuditCleanup()
-	firstDone := auditCleanupDone
-
-	// When
-	StartAuditCleanup()
-	secondDone := auditCleanupDone
-	StopAuditCleanup()
-
-	// Then
-	if firstDone != secondDone {
-		t.Fatal("repeated startup created another audit cleanup worker")
-	}
-	if firstDone == nil {
-		t.Fatal("audit cleanup worker did not publish its completion channel")
-	}
-	select {
-	case <-firstDone:
-	default:
-		t.Fatal("audit cleanup worker did not stop")
-	}
-}
-
 // （R69 过度修复审查 REMOVE：TestFormatAuditActionDirectConfigReload 已删除——
 // 其断言被 TestAuditGenericRoutesExactlyOnce 的 /config/reload 子测试完全吸收
 //（B/D 双域独立确认零覆盖）；R65 决策文档化于 auditlog.go FormatAuditAction

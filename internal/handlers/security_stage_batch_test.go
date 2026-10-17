@@ -47,7 +47,7 @@ func newStageBatchTestHandlers(t *testing.T) (*Handlers, *int) {
 	return &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}, &loadCount
 }
 

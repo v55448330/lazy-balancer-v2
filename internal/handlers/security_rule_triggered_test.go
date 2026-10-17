@@ -139,9 +139,9 @@ func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *
 	}
 }
 
-// 阶段化模型：GeoIP 预检精确段 800000-899999（6 位 8xxxxx）必须被「地域拦截」
-// family 命中（旧仅精确 id 8），且不得落入「WAF 规则（CRS）」family（6 位纯
-// 数字 GLOB 会把 800xxx 误标为 CRS——CRS 规则 ID 恒 9xxxxx）。
+// 阶段化模型（第 78 轮 U03-F06 收敛）：地域拦截 = [800000,810000)，爬虫
+// = [810000,900000)。两者以互斥 6 位 GLOB 表达，且均不得落入「WAF 规则
+// （CRS）」family（CRS 规则 ID 恒 9xxxxx）。
 func TestRuleTriggeredFilterSQL_geoipPrecheckSegmentFamily(t *testing.T) {
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -152,7 +152,9 @@ func TestRuleTriggeredFilterSQL_geoipPrecheckSegmentFamily(t *testing.T) {
 	probes := []string{
 		"8",      // 旧共享 GeoIP id（策略引擎时代，历史事件）
 		"800123", // 预检精确段 800000+policyID
-		"899999", // 段上界
+		"809999", // 地域段上界
+		"810016", // 爬虫段下界
+		"899999", // 爬虫段上界
 		"900000", // CRS 保留段起（非 GeoIP）
 		"942100", // CRS
 		"80012",  // 5 位自定义规则（非 GeoIP 段）
@@ -183,18 +185,29 @@ func TestRuleTriggeredFilterSQL_geoipPrecheckSegmentFamily(t *testing.T) {
 		return matched
 	}
 	geoip := matchSet(t, "地域拦截")
-	for _, id := range []string{"8", "800123", "899999"} {
+	for _, id := range []string{"8", "800123", "809999"} {
 		if !geoip[id] {
 			t.Errorf("地域拦截 family 必须命中 %q", id)
 		}
 	}
-	for _, id := range []string{"900000", "942100", "80012", "2"} {
+	for _, id := range []string{"810016", "899999", "900000", "942100", "80012", "2"} {
 		if geoip[id] {
 			t.Errorf("地域拦截 family 不得命中 %q", id)
 		}
 	}
+	crawler := matchSet(t, "爬虫Bot")
+	for _, id := range []string{"810016", "899999"} {
+		if !crawler[id] {
+			t.Errorf("爬虫Bot family 必须命中 %q", id)
+		}
+	}
+	for _, id := range []string{"800123", "809999", "942100"} {
+		if crawler[id] {
+			t.Errorf("爬虫Bot family 不得命中 %q", id)
+		}
+	}
 	crs := matchSet(t, "WAF 规则（CRS）")
-	if crs["800123"] || crs["899999"] {
+	if crs["800123"] || crs["809999"] || crs["810016"] || crs["899999"] {
 		t.Errorf("WAF 规则（CRS）family 不得吞 GeoIP 预检段 800xxx: %v", crs)
 	}
 	if !crs["942100"] || !crs["900000"] {

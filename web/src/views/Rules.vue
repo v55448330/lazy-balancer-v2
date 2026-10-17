@@ -396,6 +396,10 @@
 
         <!-- Step 1: TLS 配置 (仅当启用 HTTPS 时显示) -->
         <div v-show="currentStep === WIZARD_STEP.TLS" class="step-content">
+          <div v-if="tlsDetailError" class="info-note-bar">
+            <span class="info-note-desc">证书详情加载失败：手动 TLS 配置可能不完整，已阻止进入下一步与保存。</span>
+            <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">重新加载</el-button>
+          </div>
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'">
             <el-form-item label="证书来源">
               <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" aria-label="证书来源">
@@ -790,8 +794,8 @@
               </el-form-item>
 
               <el-form-item label="重试间隔">
-                <el-input-number v-model="wizardForm.tcp_try_interval" :min="0" :max="10000" controls-position="right" style="width: 120px;" :disabled="ntlmOn || (wizardForm.tcp_try_duration || 0) <= 0" />
-                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔') }}</span>
+                <el-input-number v-model="wizardForm.tcp_try_interval" :min="(wizardForm.tcp_try_duration || 0) > 0 ? 1 : 0" :max="10000" controls-position="right" style="width: 120px;" :disabled="ntlmOn || (wizardForm.tcp_try_duration || 0) <= 0" />
+                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；窗口启用时必须 ≥1') }}</span>
               </el-form-item>
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
@@ -920,7 +924,7 @@
           <el-button v-if="hasNextStep" type="primary" @click="nextStep">
             下一步<el-icon><ArrowRight /></el-icon>
           </el-button>
-          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" @click="submitWizard">
+          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" :disabled="tlsDetailError" title="证书详情加载失败：请先在 TLS 步骤重新加载" @click="submitWizard">
             <span>保存规则</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
@@ -1931,6 +1935,43 @@ const certInfo = reactive({
 })
 let certValidationSeq = 0
 let certValidationSessionSeq = 0
+// 手动 TLS 详情加载失败（第 78 轮 U16-F23）：列表行不含证书正文（rule_features
+// 直取时省略），详情 GET 失败若仅 console，表单会以空证书快照静默继续——保存
+// 后把既有证书覆盖为空。失败即阻断 TLS 步/保存，并提供重试。
+const tlsDetailError = ref(false)
+const tlsDetailLoading = ref(false)
+const tlsDetailRuleId = ref('')
+
+function markTlsDetailFailed(caddyId: string): void {
+  tlsDetailError.value = true
+  tlsDetailRuleId.value = caddyId
+  ElMessage.warning('证书详情加载失败：TLS 配置可能不完整，已阻止保存；请在 TLS 步骤点「重新加载」')
+}
+
+/** TLS 步重试：只回填证书相关字段（不重水合整表单，避免覆盖用户已改内容）。 */
+async function retryTlsDetail(): Promise<void> {
+  const caddyId = tlsDetailRuleId.value
+  if (!caddyId || tlsDetailLoading.value) return
+  tlsDetailLoading.value = true
+  try {
+    const resp = await request.get<APIResponse<Rule>>(`/rules/${encodeURIComponent(caddyId)}`)
+    if (resp.code !== 0 || !resp.data) {
+      ElMessage.warning('证书详情仍不可用，请稍后重试')
+      return
+    }
+    wizardForm.tls_cert = resp.data.tls_cert || ''
+    wizardForm.tls_key = resp.data.tls_key || ''
+    // F50-7：掩码私钥标记——已配置且回显空串时允许沿用原值
+    wizardForm.tlsKeySet = resp.data.tls_key_set === true
+    tlsDetailError.value = false
+    ElMessage.success('证书详情已重新加载')
+  } catch (error: unknown) {
+    console.warn('[retryTlsDetail] failed', error)
+    ElMessage.warning('证书详情加载失败，请稍后重试')
+  } finally {
+    tlsDetailLoading.value = false
+  }
+}
 
 const resetCertInfo = (): void => {
   Object.assign(certInfo, {
@@ -2340,6 +2381,7 @@ const openWizard = async (rule?: Rule) => {
   certValidationSeq++
   resetCertInfo()
   wizardForm.tlsKeySet = false // 掩码态随向导重置（第 55 轮 B3-P5）
+  tlsDetailError.value = false
   upstreamTouched.value = []
   isCopyMode.value = false
   copySourceRuleId.value = null
@@ -2358,12 +2400,13 @@ const openWizard = async (rule?: Rule) => {
         if (resp.code === 0 && resp.data) {
           fullRule = resp.data
         }
-    } catch {
+    } catch (error: unknown) {
       // R62 D-1：与 try 路径同款 seq 守卫——过期请求的失败分支同样不得触碰
       // 在途表单（否则「新建」被过期 fullRule 覆盖，保存语义翻转为 PUT 更新既有规则）。
       // U9-1：过期分支同样不复位 hydratingWizard（归属最新调用的生命周期）。
       if (openSeq !== wizardOpenSeq) return
-      console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id)
+      console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id, error)
+      markTlsDetailFailed(rule.caddy_id)
     }
     }
     editingRule.value = fullRule
@@ -2688,6 +2731,10 @@ const nextStep = (): void => {
     return
   }
   if (currentStep.value === WIZARD_STEP.TLS) {
+    if (tlsDetailError.value) {
+      ElMessage.warning('证书详情加载失败：请先在 TLS 步骤点「重新加载」')
+      return
+    }
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
       ElMessage.warning('请选择 DNS 提供商配置')
       return
@@ -3193,6 +3240,7 @@ const openCopyWizard = async (rule: Rule) => {
   certValidationSeq++
   resetCertInfo()
   wizardForm.tlsKeySet = false // 掩码态随向导重置（第 55 轮 B3-P5）
+  tlsDetailError.value = false
   upstreamTouched.value = []
   isCopyMode.value = true
   copySourceRuleId.value = rule.caddy_id
@@ -3203,10 +3251,12 @@ const openCopyWizard = async (rule: Rule) => {
       // U9-1：同 openWizard——过期返回不复位 hydratingWizard（归属最新调用生命周期）。
       if (openSeq !== wizardOpenSeq) return
       if (resp.code === 0 && resp.data) fullRule = resp.data
-    } catch {
+    } catch (error: unknown) {
       // R62 D-1：与 try 路径同款 seq 守卫（详见 openWizard catch 处注释）。
       if (openSeq !== wizardOpenSeq) return
-      /* fallback to list data */
+      // 不允许静默回退列表快照（证书记载缺失 → 保存会写空证书）
+      console.warn('[openCopyWizard] Failed to fetch cert data for', rule.caddy_id, error)
+      markTlsDetailFailed(rule.caddy_id)
     }
   }
   const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']

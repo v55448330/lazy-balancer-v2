@@ -54,11 +54,9 @@ const (
 )
 
 type ThreatUpdateManager struct {
-	mu            sync.Mutex
-	running       bool
-	runDone       chan struct{}
-	schedulerStop chan struct{}
-	schedulerDone chan struct{}
+	mu      sync.Mutex
+	running bool
+	runDone chan struct{}
 	// runCancel 取消当前运行中的下载阶段（任务监控手动取消，v2.3.4）。
 	runCancel context.CancelFunc
 	// lastCancelled 标记最近一次运行被手动取消（区分 failed）。
@@ -70,9 +68,10 @@ type ThreatUpdateManager struct {
 	lastTaskOutcome string // success / failed / ""（未跑过）
 }
 
-// nil-until-init（镜像 CRS/IP2Region 管理器）：仅 main.go 初始化——集群
-// promote/demote 路径的 SetMasterRole 在测试二进制中经 nil 守卫跳过，
-// 不会把调度器（首轮即下载）带进无关测试。
+// nil-until-init（镜像 CRS/IP2Region 管理器）：仅 main.go 初始化。角色传播
+// 统一由任务引擎 SetRole 驱动（BecomeSlave/Promote 仅调用 SetRole，不再有
+// SetMasterRole 旁路）；未初始化时相关调度钩子经 nil 守卫跳过，不会把
+// 调度器（首轮即下载）带进无关测试。
 var threatUpdateManager *ThreatUpdateManager
 
 // InitThreatUpdateManager 初始化单例（main.go 启动装配调用一次）。
@@ -87,11 +86,28 @@ func GetThreatUpdateManager() *ThreatUpdateManager {
 // ResetThreatUpdateManagerForTest 换成全新实例（含停调度器）——测试二进制
 // 中初始化入口（main 不运行），同时切断跨测试的 running/调度器残留。
 func ResetThreatUpdateManagerForTest() {
-	if threatUpdateManager != nil {
-		threatUpdateManager.StopScheduler()
-	}
 	threatUpdateManager = &ThreatUpdateManager{}
 }
+
+// 威胁库自动更新总开关（v2.3.2 用户裁定）：global_config.threat_auto_update
+// 为任务级总闸（规则库卡片父行开关）；逐源 update_enabled 决定任务更新
+// 哪些源（弹框内开关）。两者解耦——总闸关闭时整任务不启动。
+func SetThreatAutoUpdate(enabled bool) error {
+	if err := setGlobalTaskAutoUpdate("threat", enabled); err != nil {
+		return err
+	}
+	if enabled {
+		ArmThreatFirstSlots()
+	}
+	return nil
+}
+
+// ThreatAutoUpdateEnabled 读威胁库总闸。
+func ThreatAutoUpdateEnabled() bool { return globalTaskAutoUpdateEnabled("threat") }
+
+// ClearThreatUpdateManagerForTest 清空单例（用于要求 manager 未初始化的
+// 引擎接线测试；与 Reset 返回新实例的更新行为测试区分）。
+func ClearThreatUpdateManagerForTest() { threatUpdateManager = nil }
 
 func (m *ThreatUpdateManager) IsRunning() bool {
 	m.mu.Lock()
@@ -248,7 +264,9 @@ func threatDueSources(trigger string) ([]threatSourceRow, error) {
 // 每分钟空转更新（USTC 内容逐请求漂移 → .fast 每轮变化 → 从节点每轮
 // 「已同步」刷屏）。判据改为文件物化状态：.iplist 缺失 = 未装载。
 func threatListEmpty(source string) bool {
-	return threatIplistMissing(source)
+	// U02-F09：.iplist 或 .fast 任一缺失都视为未装载——fast 是运行消费面，
+	// 只补文本不补 fast 会让新从节点/崩溃窗口永远缺加速文件。
+	return threatIplistMissing(source) || threatFastMissing(source)
 }
 
 func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
@@ -272,6 +290,23 @@ func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 			RecordAuditLog(operator, "更新", "威胁情报库", detail, "")
 		}
 	}()
+	// U02-F12（第 78 轮）：本轮四个状态字段在角色门之前初始化——旧实现 skipped
+	// 早退只写 lastFinishedAt/lastTaskOutcome，status 端点会展示上一成功轮的
+	// trigger/start/cancelled，四个字段不同轮（自相矛盾）。
+	runBase := context.Background()
+	if rc != nil && rc.Ctx != nil {
+		runBase = rc.Ctx
+	}
+	// F-L2-68-01（第 68 轮）：runCtx 派生自 rc.Ctx——引擎 demote 中止随 rc.Ctx
+	// 传播；nil rc（测试/内部路径）回退 Background 保持旧语义。
+	runCtx, runCancel := context.WithCancel(runBase)
+	m.mu.Lock()
+	m.lastTrigger = trigger
+	m.lastStartedAt = time.Now().UTC().Format(crsTimeLayout)
+	m.lastCancelled = false
+	m.runCancel = runCancel
+	m.mu.Unlock()
+	defer runCancel()
 	// 起点角色复查（第 59 轮 R59-P3，R54-N5 家族收敛）：调度器 tick 的 is_master
 	// 守卫与更新启动之间存在 demote 竞态窗口——从节点继续执行会写
 	// security_ip_lists 并触发重载，打破只读不变量。NULL 兜底归一为 1（同
@@ -285,22 +320,7 @@ func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 		m.mu.Unlock()
 		return
 	}
-	// F-L2-68-01（第 68 轮）：runCtx 派生自 rc.Ctx（镜像 CRS/IP2Region 侧）——
-	// 引擎 demote 中止（SetRole 取消在途 Scheduled）随 rc.Ctx 传播；nil rc
-	// （测试/内部路径）回退 Background 保持旧语义。
-	runBase := context.Background()
-	if rc != nil && rc.Ctx != nil {
-		runBase = rc.Ctx
-	}
-	runCtx, runCancel := context.WithCancel(runBase)
 	// R63 单写方：task_runs 由引擎统一记录。
-	m.mu.Lock()
-	m.lastTrigger = trigger
-	m.lastStartedAt = time.Now().UTC().Format(crsTimeLayout)
-	m.lastCancelled = false
-	m.runCancel = runCancel
-	m.mu.Unlock()
-	defer runCancel()
 	sources, err := threatDueSources(trigger)
 	finishWith := func(outcome string) {
 		m.mu.Lock()
@@ -322,6 +342,7 @@ func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	anyFailed := false
 	cancelled := false
 	demoted := false // F-L2-68-01：demote 在途中止标记（outcome=skipped，优先于 cancelled/failed）
+	runStartedAt := taskRunStartedAt(rc)
 	for _, source := range sources {
 		if runCtx.Err() != nil {
 			// F-L2-68-01：取消源分流——demote（角色已翻转）落 skipped（与起点
@@ -335,7 +356,7 @@ func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 			}
 			break
 		}
-		changed, failed := m.updateOneSource(runCtx, source, trigger)
+		changed, failed := m.updateOneSource(runCtx, source, trigger, runStartedAt)
 		if changed {
 			if id := threatListIDBySource(source.name); id > 0 {
 				changedIDs = append(changedIDs, id)
@@ -502,27 +523,35 @@ func ipListsReferencedByEnabledPolicyLabeled(logPrefix string, listIDs []int) bo
 
 // updateOneSource 下载→解析→写内置名单→更新行状态；失败仅影响该源。
 // 返回（名单内容是否变化， 是否失败）。
-func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threatSourceRow, trigger string) (bool, bool) {
-	now := time.Now().UTC()
-	nowStr := now.Format(crsTimeLayout)
+func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threatSourceRow, trigger string, runStartedAt string) (bool, bool) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='running', message='', trigger=?, started_at=?, last_checked=?, updated_at=datetime('now') WHERE id=?`,
-		trigger, nowStr, nowStr, source.id); err != nil {
+		trigger, runStartedAt, runStartedAt, source.id); err != nil {
 		Logf("error", "威胁情报库: 标记源 %s 运行中失败: %v", source.name, err)
 		return false, true
 	}
 	AppendThreatUpdateLog("INFO", "downloading", fmt.Sprintf("下载 %s（%s）", source.name, source.url))
 
-	// 任务内重试（2026-09-25 用户裁定）：瞬断在当前任务内重试，耗尽才落定——
-	// 失败退避不再改写排程槽（failSourceRow 写下一排程槽）。
+	// U02-F09：fast-only 缺失（文本仍在）优先从现有文本重建，不依赖重新下载。
 	var entries []string
 	var rawHash string
-	err := runWithInTaskRetry(func() error {
-		var derr error
-		entries, rawHash, derr = downloadAndParseThreatSourceCtx(ctx, source)
-		return derr
-	}, func(nextAttempt int, wait time.Duration, rerr error) {
-		AppendThreatUpdateLog("WARN", "retry", fmt.Sprintf("源 %s 下载失败: %v；等待 %s 重试，第 %d 次，共 %d 次", source.name, rerr, wait, nextAttempt, updateMaxAttempts))
-	})
+	healed := false
+	if threatIplistMissing(source.name) == false && threatFastMissing(source.name) {
+		if e, h, ok := healThreatFastFromText(source.name); ok {
+			entries, rawHash, healed = e, h, true
+		}
+	}
+	// 任务内重试（2026-09-25 用户裁定）：瞬断在当前任务内重试，耗尽才落定——
+	// 失败退避不再改写排程槽（failSourceRow 写下一排程槽）。
+	err := error(nil)
+	if !healed {
+		err = runWithInTaskRetry(func() error {
+			var derr error
+			entries, rawHash, derr = downloadAndParseThreatSourceCtx(ctx, source)
+			return derr
+		}, func(nextAttempt int, wait time.Duration, rerr error) {
+			AppendThreatUpdateLog("WARN", "retry", fmt.Sprintf("源 %s 下载失败: %v；等待 %s 重试，第 %d 次，共 %d 次", source.name, rerr, wait, nextAttempt, updateMaxAttempts))
+		})
+	}
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
 		failSourceRow(source.id, finished, err, trigger)
@@ -546,7 +575,7 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 			// F49-4：存在性判定失败不得按「存在」跳过（名单可能已缺失，
 			// 跳过快照=拦截面静默为空）——记错并继续完整聚合/写库路径。
 			Logf("error", "威胁情报库: 检查源 %s 内置名单存在性失败: %v", source.name, err)
-		case listExists > 0 && threatIplistMissing(source.name):
+		case listExists > 0 && threatFilesMissing(source.name):
 			// RDB 文件化升级引导：名单行在但 .iplist 缺失（v2.3.3 升级、
 			// 内容未变形态）——穿透快速路径照常写盘，否则文件永不落地。
 			Logf("info", "威胁情报库: 源 %s 原始哈希一致但 .iplist 文件缺失，执行落盘（升级引导）", source.name)
@@ -636,7 +665,7 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 	}
 	// RDB 文件化：文件缺失时哈希命中不得跳过（升级引导——v2.3.3 升上来
 	// 内容未变，但 .iplist/.fast 尚未落地，须照常写盘）。
-	if listExists > 0 && storedHash == hash && storedHash != "" && !threatIplistMissing(source) {
+	if listExists > 0 && storedHash == hash && storedHash != "" && !threatFilesMissing(source) {
 		return false, nil
 	}
 	// RDB 文件化：条目写 .iplist 文件 + 编译 .fast，DB entries 恒空
@@ -697,16 +726,13 @@ func failSourceRow(id int, finished string, cause error, trigger string) {
 	Logf("warn", "威胁情报库: 源更新失败: %v", cause)
 }
 
-// downloadAndParseThreatSource 下载并解析单源（format=plain）：
+// downloadAndParseThreatSourceCtx 下载并解析单源（ctx 可被任务监控取消）：
 // 30s 超时、HTTP 200、body ≤16MB；空行与 #/; 注释跳过；可解析行比例 <50%
 // 判失败（防错页/HTML 劫持）；条目 >200000 拒绝。
 // 返回原始字节 sha256（两层哈希第一层快速路径，2026-09-24 用户裁定）：
 // 原始一致即内容必然未变，调用方跳过聚合/写库；原始不同才走聚合规范哈希终判。
-func downloadAndParseThreatSource(source threatSourceRow) ([]string, string, error) {
-	return downloadAndParseThreatSourceCtx(context.Background(), source)
-}
-
-// downloadAndParseThreatSourceCtx 下载并解析单源（ctx 可被任务监控取消）。
+// U02-F13（第 78 轮）：无 ctx 的零消费包装已删；生产统一走本函数（任务内重试 +
+// 下一排程槽）。
 func downloadAndParseThreatSourceCtx(parent context.Context, source threatSourceRow) ([]string, string, error) {
 	ctx, cancel := context.WithTimeout(parent, threatDownloadTimeout)
 	defer cancel()
@@ -762,6 +788,43 @@ func downloadAndParseThreatSourceCtx(parent context.Context, source threatSource
 func threatIplistMissing(source string) bool {
 	_, err := os.Stat(filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", source)))
 	return err != nil
+}
+
+// threatFastMissing 报告源的 .fast 加速文件是否缺失。
+func threatFastMissing(source string) bool {
+	_, err := os.Stat(filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist.fast", source)))
+	return err != nil
+}
+
+// threatFilesMissing .iplist 或 .fast 任一缺失。
+func threatFilesMissing(source string) bool {
+	return threatIplistMissing(source) || threatFastMissing(source)
+}
+
+// healThreatFastFromText 从现有 .iplist 文本重建 .fast（U02-F09：不依赖
+// 重新下载）。返回条目与原始文本哈希，供后续快速路径判定；失败返回 false。
+func healThreatFastFromText(source string) ([]string, string, bool) {
+	iplistPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", source))
+	data, err := os.ReadFile(iplistPath)
+	if err != nil {
+		return nil, "", false
+	}
+	wafFileMu.Lock()
+	err = CompileFromIplistFile(iplistPath)
+	wafFileMu.Unlock()
+	if err != nil {
+		Logf("warn", "威胁情报库: 源 %s .fast 从文本重建失败: %v", source, err)
+		return nil, "", false
+	}
+	entries := make([]string, 0, 1024)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			entries = append(entries, line)
+		}
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(data))
+	AppendThreatUpdateLog("INFO", "healed", fmt.Sprintf("源 %s .fast 缺失，已从现有文本重建（未重新下载）", source))
+	return entries, sum, true
 }
 
 // writeThreatIplist 将威胁库条目写为 .iplist 纯文本文件（原子写）。

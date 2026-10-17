@@ -109,12 +109,12 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 		}
 		ruleHosts := make(map[string]struct{})
 		for _, host := range strings.Split(domain, ",") {
-			if trimmed := strings.ToLower(strings.TrimSpace(host)); trimmed != "" {
+			if trimmed := services.NormalizeMetricsHost(host); trimmed != "" {
 				ruleHosts[trimmed] = struct{}{}
 			}
 		}
 		for _, block := range blocks {
-			if _, ok := ruleHosts[strings.ToLower(block.Host)]; ok {
+			if _, ok := ruleHosts[services.NormalizeMetricsHost(block.Host)]; ok {
 				ratelimit += block.Count
 			}
 		}

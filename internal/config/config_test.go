@@ -68,6 +68,43 @@ func TestLoad_resolves_log_file_with_default(t *testing.T) {
 	}
 }
 
+// U12-F08（第 78 轮）：配置文件只解析六个支持键，其余键此前静默忽略——
+// log_file/node_name/jwt_secret/backup_dir/version 写在文件里既无效也无提示。
+// 未知键必须逐条告警；支持键零告警且照常生效。
+func TestLoad_warnsOnUnsupportedConfigFileKeys(t *testing.T) {
+	// Given：支持键 + 未知键混排的配置文件
+	t.Setenv("JWT_SECRET", "test-secret")
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	content := `{"data_dir":"/tmp/config-test-data","port":8081,"metrics_interval":10,"log_file":"/tmp/x.log","node_name":"n2"}`
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	// When
+	loaded := Load(configPath)
+
+	// Then：支持键生效
+	if loaded.Port != 8081 || loaded.DataDir != "/tmp/config-test-data" || loaded.MetricsInterval != 10 {
+		t.Fatalf("supported keys not applied: port=%d data_dir=%q interval=%d", loaded.Port, loaded.DataDir, loaded.MetricsInterval)
+	}
+	// And：未知键逐条告警，支持键零告警
+	logs := logBuf.String()
+	for _, unsupported := range []string{"log_file", "node_name"} {
+		if !strings.Contains(logs, `ignoring unsupported config key "`+unsupported+`"`) {
+			t.Fatalf("unsupported key %q must warn, log=%q", unsupported, logs)
+		}
+	}
+	for _, supported := range []string{"data_dir", "port", "metrics_interval"} {
+		if strings.Contains(logs, `ignoring unsupported config key "`+supported+`"`) {
+			t.Fatalf("supported key %q must not warn, log=%q", supported, logs)
+		}
+	}
+}
+
 // ADNS-N1（第 72 轮）：jwt_secret 文件存在但内容过短（非空且 <32 字节）时，
 // 覆写重生成必须 log warn——对齐同文件端口回退/密钥目录创建失败分支的可见性
 // 准则；此前静默覆写，旧令牌全部失效且零信号。
@@ -151,4 +188,21 @@ func TestLoadOrCreateJWTSecret_validReusedAndEmptyQuiet(t *testing.T) {
 			t.Fatalf("empty file must not trigger short-secret warning, got %q", logBuf.String())
 		}
 	})
+}
+
+func TestLoad_normalizesRelativeDataDir(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("config.json", []byte(`{"data_dir":"./data"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Load("config.json")
+	wantData := filepath.Join(dir, "data")
+	if cfg.DataDir != wantData {
+		t.Fatalf("DataDir=%q, want absolute %q", cfg.DataDir, wantData)
+	}
+	if cfg.BackupDir != filepath.Join(dir, "backup") {
+		t.Fatalf("BackupDir=%q, want absolute sibling backup", cfg.BackupDir)
+	}
 }

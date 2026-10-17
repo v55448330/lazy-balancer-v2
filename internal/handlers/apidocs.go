@@ -64,16 +64,16 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/settings/auto-backup", "配置", "保存自动备份设置", `{"enabled":true,"frequency":"weekly","time":"03:00","day":1,"keep":7,"sections":["users","rules","security"]}`, `{"code":0,"message":"自动备份设置已保存"}`, []string{"400 invalid_request", "403 slave_or_admin_required", "428 mfa_step_up_required"}, "frequency=daily/weekly/monthly；time 为 HH:MM（按系统时区）；day：weekly 1-7（周一=1）、monthly 1-28（短月自动收敛到月末）；keep 1-30（超出上限返回 400；升级前保存的越界存量值读取时回退 7）；sections 为三分类（users=系统数据含全局配置、rules=负载规则、security=安全防护含 CRS/IP2Region 规则库）子集且不能为空；旧版 global_config/waf_files 键自动归一为 users/security。关闭→开启时置水位线（不回补停用期间的槽，也不立即执行），下一次执行=启用后的下一个到期槽；停机跨槽在下次启动补跑一次。"},
 	{"GET", "/system/tasks/:id/logs", "系统", "任务文本日志（统一任务引擎管理——tasks/{id}.log 尾部 256KB；更新族含分阶段流水）", "", `{"content":"2026/09/29 04:23:49 [start] 手动触发\n2026/09/29 04:23:50 [INFO] downloading - 下载 ustc\n2026/09/29 04:23:51 [done] success 耗时=1043ms 触发=manual"}`, []string{"401 unauthenticated"}, "每任务一个文本日志文件；运行日志轮转副本清理任务统一清理（保留期同审计月数）与轮转（10MB 上限超限保一份，task_log_size_mb）；生命周期与业务行时间戳均为 YYYY/MM/DD HH:MM:SS。"},
 	{"GET", "/system/tasks/:id/history", "系统", "任务运行历史（task_runs 时间倒序，最多 50 条）", "", `{"runs":[{"id":1,"task_id":"threat","family":"security","trigger":"manual","operator":"alice","status":"success","started_at":"2026-09-29 00:30:00","finished_at":"2026-09-29 00:30:01","duration_ms":1043,"message":""}]}`, []string{"401 unauthenticated"}, "每次真实执行落一行（含手动/自动）；无历史的任务族返回空数组。status ∈ running/success/failed/cancelled/skipped/interrupted。"},
-	{"GET", "/system/tasks", "系统", "任务监控聚合视图（全部定时/后台任务族）", "", `{"tasks":[{"id":"threat","name":"威胁情报库更新","category":"安全防护","kind":"scheduled","status":"idle","cancellable":false,"controllable":false,"triggerable":true,"loop_on":true,"last_run":{"started_at":"2026-09-28 20:00:00","finished_at":"2026-09-28 20:00:01","duration_ms":1043,"trigger":"auto","operator":"","result":"success"},"next_run_at":"2026-09-29 20:00:00","runs_24h":3,"success_24h":3,"fail_24h":0}]}`, []string{"401 unauthenticated"}, "全员可见（从节点只读）；status=running 且 cancellable=true 的任务可经 /system/tasks/:id/cancel 取消（仅下载类）。"},
+	{"GET", "/system/tasks", "系统", "任务监控聚合视图（全部定时/后台任务族）", "", `{"tasks":[{"id":"threat","name":"威胁情报库更新","category":"安全防护","kind":"scheduled","status":"idle","cancellable":false,"controllable":false,"triggerable":true,"loop_on":true,"business_driven":true,"last_run":{"started_at":"2026-09-28 20:00:00","finished_at":"2026-09-28 20:00:01","duration_ms":1043,"trigger":"auto","operator":"","result":"success"},"next_run_at":"2026-09-29 20:00:00","runs_24h":3,"success_24h":3,"fail_24h":0}]}`, []string{"401 unauthenticated"}, "全员可见（从节点只读）；status=running 且 cancellable=true 的任务可经 /system/tasks/:id/cancel 取消（仅下载类）。"},
 	{"GET", "/system/tasks/stats-24h-series", "系统", "近 24 小时任务执行分小时桶序列（时间序列图数据源）", "", `{"series":[{"hour":"2026-10-11 03:00:00","success":12,"failed":1}]}`, []string{"401 unauthenticated"}, "全员可见（从节点只读）；恒 24 桶升序（now-23h..now 配置时区墙面小时），空桶零填。"},
 	{"POST", "/system/tasks/:id/trigger", "系统", "手动触发任务（全部非常驻任务族——类型派生，见 GET /system/tasks triggerable；证书队列行用 cert-job:<job_id>）", "", `{"code":0,"data":{"status":"running","trigger":"manual"}}`, []string{"400 not_triggerable", "401 unauthenticated", "403 admin_or_master_required", "409 running", "428 mfa_step_up_required"}, "仅管理员+主节点；统一经任务引擎（单飞/主节点门/历史单写）。手动触发操作者记入任务运行历史 operator 列。"},
-	{"POST", "/system/tasks/:id/toggle", "系统", "停止/恢复任务自动调度", `{"enabled":false}`, `{"code":0,"message":"已停止威胁情报库自动更新"}`, []string{"400 not_toggleable", "401 unauthenticated", "403 admin_or_master_required", "428 mfa_step_up_required"}, "统一调度开关（v2.0 四类型标准）：定时/循环=停止/恢复调度、常驻=启停自管理循环；触发类不可调度（400）。"},
-	{"POST", "/system/tasks/:id/control", "系统", "常驻循环任务启停（start/stop/restart）", `{"action":"restart"}`, `{"code":0,"message":"已重启任务 config-watchdog"}`, []string{"400 not_controllable", "401 unauthenticated", "403 admin_required", "428 mfa_step_up_required"}, "仅常驻（daemon）任务可控：security-events-ingestion、cert-issuance、cluster-sync；其余类型恒 400 not_controllable。停止类操作前端有二次确认。"},
+	{"POST", "/system/tasks/:id/toggle", "系统", "停止/恢复任务自动调度", `{"enabled":false}`, `{"code":0,"message":"已停止威胁情报库自动更新"}`, []string{"400 not_toggleable", "401 unauthenticated", "403 admin_or_master_required", "428 mfa_step_up_required"}, "统一调度开关（v2.0 四类型标准）：定时/循环=停止/恢复调度、常驻=启停自管理循环；触发类不可调度（400）。threat/CRS/IP2Region/crawlerbot-update/auto-backup/autoban 六个业务驱动任务 toggle 只读，只能经对应业务页修改。"},
+	{"POST", "/system/tasks/:id/control", "系统", "常驻循环任务启停（start/stop/restart）", `{"action":"restart"}`, `{"code":0,"message":"已重启任务 cluster-sync"}`, []string{"400 not_controllable", "401 unauthenticated", "403 admin_required", "428 mfa_step_up_required"}, "仅常驻（daemon）任务可控：security-events-ingestion、cert-issuance、cluster-sync；其余类型恒 400 not_controllable。停止类操作前端有二次确认。"},
 	{"POST", "/system/tasks/:id/cancel", "系统", "取消运行中任务（仅下载类）", "", `{"code":0,"message":"已发出取消信号，任务将在当前下载阶段中断"}`, []string{"401 unauthenticated", "403 admin_or_master_required", "409 not_running", "428 mfa_step_up_required"}, "下载阶段中断，已完成源的结果保留；非下载类任务（备份/重载）不支持取消。"},
 	{"POST", "/auto-backup/run", "配置", "手动触发一次完整备份", "", `{"code":0,"message":"手动备份完成","data":{"id":2,"filename":"lbbak-manual-20260920-040000.lbbak","status":"success","trigger_type":"manual"}}`, []string{"403 slave_or_admin_required", "428 mfa_step_up_required", "500 run_failed"}, "仅主节点；与导出同构（lbbak，含凭证与证书材料），落盘服务器 backup 目录；已有任务执行中返回 500（不排队）。"},
 	{"DELETE", "/auto-backup/:id", "配置", "删除备份记录与文件", "", `{"code":0,"message":"备份已删除"}`, []string{"400 invalid_id", "403 slave_or_admin_required", "404 not_found", "428 mfa_step_up_required"}, "行不存在 404；文件缺失容忍（仅删行）。"},
 	{"POST", "/auto-backup/:id/restore", "配置", "从备份还原配置", "", `{"message":"配置还原成功：..."}`, []string{"400 invalid_id", "403 slave_or_admin_required", "404 not_found", "428 mfa_step_up_required"}, "按行读服务器 backup 目录内的备份文件走导入链（单事务，失败回滚）；还原的是备份实际包含的内容（导出时未选的分类不在备份内）。审计动作「还原」。"},
-	{"GET", "/auto-backup/:id/download", "配置", "下载备份文件", "", "(lbbak 二进制流)", []string{"400 invalid_id", "403 slave_or_admin_required", "404 not_found", "428 mfa_step_up_required"}, "与手动导出同敏感级（备份含私钥与凭证明文），下载审计留痕。"},
+	{"GET", "/auto-backup/:id/download", "配置", "下载备份文件", "", "(lbbak tar.gz 二进制包，以 application/octet-stream 流式下发，非 JSON)", []string{"400 invalid_id", "403 slave_or_admin_required", "404 not_found", "428 mfa_step_up_required"}, "与手动导出同敏感级（备份含私钥与凭证明文），下载审计留痕。"},
 	{"POST", "/config/preview", "配置", "预览配置变更", `{"source":"basic","log_level":"debug"}`, `{"changed":true,"section":"基础设置","changes":["系统日志级别"]}`, []string{"400 invalid_request", "403 admin_required"}, "不写数据库，不触发 Caddy。"},
 	{"POST", "/config/reload", "配置", "手动重载 Caddy", "", `{"code":0,"message":"Caddy 配置已重载"}`, []string{"403 admin_required", "500 caddy_reload_failed"}, ""},
 	{"POST", "/config/validate", "配置", "验证 Caddy 配置", `{}`, `{"code":0,"message":"配置有效"}`, []string{"400 config_invalid", "403 admin_required", "428 mfa_step_up_required", "500 config_restore_failed"}, ""},
@@ -93,8 +93,8 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/certificate-configs/:id", "证书", "更新 DNS 提供商配置", `{"name":"dnspod","enabled":true}`, `{"code":0,"message":"Config updated"}`, []string{"400 invalid_request", "403 非管理员用户只读(主节点)/从节点只读", "404 not_found"}, ""},
 	{"DELETE", "/certificate-configs/:id", "证书", "删除 DNS 提供商配置", "", `{"code":0,"message":"Config deleted"}`, []string{"403 非管理员用户只读(主节点)/从节点只读", "404 not_found"}, ""},
 	{"GET", "/dns-providers", "证书", "DNS 提供商能力列表", "", `{"code":0,"data":[{"code":"dnspod","name":"DNSPod","credential_fields":[]}]}`, []string{"401 unauthenticated"}, "所有已登录用户可读；返回提供商代码及凭证字段定义。"},
-	{"POST", "/certificate-configs/test", "证书", "测试未保存的 DNS 提供商配置", `{"domain":"example.com","dns_provider":"dnspod","dns_credentials":{"id":"...","token":"..."}}`, `{"code":0,"message":"凭证有效"}`, []string{"400 invalid_credentials"}, "测试成功/失败都会记录操作日志，不记录凭证。"},
-	{"POST", "/certificate-configs/:id/test", "证书", "测试 DNS 提供商配置", `{"domain":"example.com"}`, `{"code":0,"message":"凭证有效"}`, []string{"400 invalid_credentials", "404 not_found"}, "测试成功/失败都会记录操作日志，不记录凭证。"},
+	{"POST", "/certificate-configs/test", "证书", "测试未保存的 DNS 提供商配置", `{"domain":"example.com","dns_provider":"dnspod","dns_credentials":{"id":"...","token":"..."}}`, `{"code":0,"message":"凭证有效"}`, []string{"400 invalid_credentials", "403 forbidden"}, "测试成功/失败都会记录操作日志，不记录凭证。"},
+	{"POST", "/certificate-configs/:id/test", "证书", "测试 DNS 提供商配置", `{"domain":"example.com"}`, `{"code":0,"message":"凭证有效"}`, []string{"400 invalid_credentials", "403 forbidden", "404 not_found"}, "测试成功/失败都会记录操作日志，不记录凭证。"},
 	{"GET", "/ca-providers", "证书", "CA 提供商列表", "", `[{"id":1,"name":"Let's Encrypt","provider":"letsencrypt","enabled":true}]`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/ca-providers/:id", "证书", "CA 提供商详情", "", `{"code":0,"data":{"id":1,"name":"Let's Encrypt","provider":"letsencrypt","enabled":true}}`, []string{"400 invalid_request", "404 not_found"}, "所有已登录用户可读。"},
 	{"PUT", "/ca-providers/:id", "证书", "更新 CA 提供商", `{"name":"Let's Encrypt","enabled":true}`, `{"code":0,"message":"CA provider updated"}`, []string{"400 invalid_request", "404 not_found"}, ""},
@@ -120,7 +120,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/cluster/nodes/:id/access-url", "集群", "更新从节点访问地址", `{"access_url":"http://127.0.0.1:8001"}`, `{"code":0,"message":"更新访问地址节点成功"}`, []string{"400 地址格式无效", "403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；access_url 允许置空，登录票据将回退到 protocol://ip_address:port。"},
 	{"DELETE", "/cluster/nodes/:id", "集群", "移除集群节点", "", `{"code":0,"message":"删除节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；删除节点及其长期令牌哈希。"},
 	{"POST", "/cluster/mode", "集群", "主节点注册并切换为从节点", `{"mode":"slave","master_url":"https://master:8000","register_token":"...","node_name":"slave-a"}`, `{"code":0,"message":"已切换为从节点，等待主节点审批"}`, []string{"400 参数无效", "502 向目标主节点注册失败"}, "admin JWT 或管理员 API Key；仅在目标主节点注册成功后持久化 slave。http:// 地址成功但 message 包含明文传输警告。"},
-	{"POST", "/cluster/promote", "集群", "从节点提升为主节点", "", `{"code":0,"message":"已提升为主节点"}`, []string{"500 提升失败"}, "admin JWT 或管理员 API Key；清空主节点地址与集群令牌、重置同步残留状态（应用版本/指纹/错误）并停止同步，启动 ACME 与自动备份调度器、CRS/IP2Region 自动更新转主角色，清理旧主节点证书指纹钉；不递增集群版本。"},
+	{"POST", "/cluster/promote", "集群", "从节点提升为主节点", "", `{"code":0,"message":"已提升为主节点"}`, []string{"500 提升失败"}, "admin JWT 或管理员 API Key；清空主节点地址与集群令牌、重置同步残留状态（应用版本/指纹/错误）并停止同步，任务引擎按主角色恢复 ACME、自动备份调度器与规则库更新调度，清理旧主节点证书指纹钉；不递增集群版本。"},
 	{"PUT", "/cluster/settings", "集群", "更新集群设置", `{"sync_interval":60,"sync_users":true,"sync_rules":true,"sync_security":true}`, `{"code":0,"message":"集群设置已更新"}`, []string{"400 参数无效/恒同步项禁用", "403 从节点只读（全部集群设置）"}, "admin JWT 或管理员 API Key；三类同步开关默认全开：系统数据（含全局配置，恒同步不可禁用——置 false 返回 400）/负载规则/安全防护（含 CRS/IP2Region 规则库，文件哈希一致时跳过传输）；旧版 sync_global_config/sync_waf_files 字段已随三分类合并移除。从节点逐节比对哈希，一致跳过并记录操作日志。仅主节点可改。"},
 	{"GET", "/cluster/sync/snapshot", "集群机器接口", "拉取全量集群快照", "", fmt.Sprintf(`{"code":0,"data":{"schema_version":%d,"min_reader_version":%d,"version":3,"fingerprint":"sha256","signature":"hmac-sha256","rules":[],"users":[],"api_keys":[],"basic_settings":{},"certs":[]}}`, services.CurrentSnapshotSchema, services.CurrentSnapshotSchema), []string{"400 快照缺少签名", "401 集群凭证无效"}, "X-Cluster-Token 或 Bearer cluster token；query: since_version,fingerprint。schema_version 表示快照结构版本，min_reader_version 表示可读取该快照的最低实现版本；signature 为以节点令牌为键的 HMAC-SHA256（含版本号），从节点强制验签并拒绝版本回退。用户密码哈希、API key 哈希和证书私钥只通过此机器接口传输。"},
 	{"GET", "/cluster/sync/waf-files", "集群机器接口", "按需拉取安全数据包", "", `{"code":0,"data":{"crs_version":"v4.28.0","crs_sha256":"...","ip2region_version":"v3.17.0","ip2region_sha256":"...","crs_tar_gz":"...","xdb":"..."}}`, []string{"401 集群凭证无效", "404 主节点无安全数据"}, "X-Cluster-Token；快照只携带文件哈希引用，从节点本地哈希不一致时才调用本端点拉取完整 CRS 规则树与 GeoIP 数据库，内容与快照引用哈希核验后落盘。"},
@@ -134,8 +134,8 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/caddy/stop", "Caddy", "停止 Caddy", "", `{"code":0,"message":"Caddy 已停止"}`, []string{"500 stop_failed", "403 admin_required"}, "仅管理员。"},
 	{"POST", "/caddy/restart", "Caddy", "重启 Caddy", "", `{"code":0,"message":"Caddy 已重启"}`, []string{"500 restart_failed", "403 admin_required"}, "仅管理员。"},
 	{"GET", "/admin-tls", "系统", "管理面板 HTTPS 配置", "", `{"enabled":true,"mode":"selfsigned"}`, []string{"401 unauthenticated"}, "不返回证书内容。"},
-	{"PUT", "/admin-tls", "系统", "启用/禁用管理面板 HTTPS", `{"enabled":true,"mode":"selfsigned"}`, `{"code":0,"message":"已保存，服务正在重启以应用 HTTPS 配置"}`, []string{"400 invalid_request", "403 admin_required", "413 body_exceeds_2MiB"}, "multipart 表单；亦接受 application/json（cert_file/key_file 为 PEM 字符串）。mode=selfsigned 或 upload（upload 需 cert_file/key_file 文件字段）。请求体超过 2 MiB 返回 413。保存后服务自动重启，从节点同步后亦自动重启。"},
-	{"POST", "/admin-tls/inspect", "系统", "解析上传证书信息（不保存）", `"multipart form: cert_file, key_file"`, `{"domain":"example.com","issuer":"Let's Encrypt","not_after":"2027-01-01 00:00:00","days_left":365}`, []string{"400 invalid_certificate", "413 body_exceeds_2MiB"}, "亦接受 application/json（cert_file/key_file 为 PEM 字符串）；仅解析并返回证书信息，供保存前展示。请求体超过 2 MiB 返回 413。"},
+	{"PUT", "/admin-tls", "系统", "启用/禁用管理面板 HTTPS", "multipart 表单：enabled、mode、cert_file/key_file 文件字段", `{"code":0,"message":"已保存，服务正在重启以应用 HTTPS 配置"}`, []string{"400 invalid_request", "403 admin_required", "413 body_exceeds_2MiB"}, "multipart 表单；亦接受 application/json（cert_file/key_file 为 PEM 字符串）。mode=selfsigned 或 upload（upload 需 cert_file/key_file 文件字段）。请求体超过 2 MiB 返回 413。保存后服务自动重启，从节点同步后亦自动重启。"},
+	{"POST", "/admin-tls/inspect", "系统", "解析上传证书信息（不保存）", "multipart 表单：cert_file、key_file 文件字段", `{"domain":"example.com","issuer":"Let's Encrypt","not_after":"2027-01-01 00:00:00","days_left":365}`, []string{"400 invalid_certificate", "413 body_exceeds_2MiB"}, "亦接受 application/json（cert_file/key_file 为 PEM 字符串）；仅解析并返回证书信息，供保存前展示。请求体超过 2 MiB 返回 413。"},
 	{"POST", "/system/restart", "系统", "重启服务", "", `{"code":0,"message":"服务正在重启"}`, []string{"403 admin_required"}, "进程退出后由容器重启策略拉起，用于应用进程级配置（如 Caddy 日志时区）。"},
 	{"GET", "/system/logs", "系统", "读取应用运行日志", "", `{"content":"..."}`, []string{"401 unauthenticated"}, "运行日志恒写文件(内建轮转),LOG_FILE 仅覆盖路径。"},
 	{"GET", "/rules/:caddy_id/logs", "规则", "规则访问日志（最近 1000 行）", "", `{"content":"...","offset":12345}`, []string{}, "需规则开启访问日志；offset 为尾部结束位置，供 log-stream 续读。规则不存在或未启用日志时返回空内容。"},
@@ -166,12 +166,12 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/settings/oidc", "系统", "OIDC 配置更新", `{"issuer":"https://sso.example.com","client_id":"...","client_secret":"...","display_name":"公司统一登录","enabled":true}`, `{"code":0}`, []string{"400 invalid_request", "403 admin_required"}, "空 client_secret=保持现值;启用前 issuer+client_id+secret 须齐备。"},
 	{"POST", "/settings/oidc/test", "系统", "OIDC 发现探测", `{"issuer":"https://sso.example.com"}`, `{"ok":true,"provider_name":"...","token_endpoint":"..."}`, []string{"400 invalid_request(缺服务地址)/error(只读 Key 仅支持测试已保存配置)", "403 admin_required"}, "完整 discovery+JWKS 可达性探测。"},
 	{"DELETE", "/settings/oidc", "系统", "OIDC 配置删除", "", `{"code":0}`, []string{"403 admin_required"}, "清空配置(等效禁用);已建 OIDC 用户保留。"},
-	{"GET", "/logs/stats", "日志", "日志存储状态", "", `{"logs":[{"key":"audit","name":"操作日志","size_bytes":1048576,"rotated_bytes":0,"keep_count":0,"rows":6895,"retention_note":"每日清理 · 保留 3 个月","config_source":"基础设置 · 日志保留"}]}`, []string{"401 unauthenticated"}, "9 类日志的当前大小/阈值/保留策略；caddy_id 参数收窄证书任务与规则访问到单规则。"},
+	{"GET", "/logs/stats", "日志", "日志存储状态", "", `{"logs":[{"key":"audit","name":"操作日志","size_bytes":1048576,"rotated_bytes":0,"keep_count":0,"rows":6895,"retention_note":"每日清理 · 保留 3 个月","config_source":"基础设置 · 日志保留"}]}`, []string{"401 unauthenticated"}, "静态日志类别与逐任务 task:<id> 行的当前大小/阈值/保留策略；caddy_id 参数收窄证书任务与规则访问到单规则。"},
 	{"GET", "/security/overview", "安全", "安全总览", "", `{"today_blocked":0,"today_detected":0,"active_policies":0,"crs_version":"v4.28.0","trend":[{"date":"2026-08-04","blocked":0,"detected":0}],"top_ips":[{"ip":"1.2.3.4","blocked":5,"detected":10,"last_time":"2026-08-10 14:32:01","attack_type":"SQL注入"}],"attack_types":[{"name":"SQL注入","value":42}]}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/security/overview/threat-screen", "安全", "威胁大屏聚合", "", `{"hours":24,"window_start":"2026-10-14 20:00:00","total_events":123,"blocked_events":100,"block_rate":81.3,"ratelimit_blocks":12,"active_sources":4,"countries":{"美国":30},"china_provinces":{"广东省":12},"top_countries":[{"name":"美国","value":30}],"top_attack_types":[{"name":"SQL注入","value":42}]}`, []string{"401 unauthenticated", "500 metrics_unavailable"}, "威胁大屏数据源。query: hours（缺省 24，非法/越界回退 24，上限 720）。窗口总量/拦截率按 security_events 计数；ratelimit_blocks 为 Caddy /metrics 429 总计（重载口径，抓取失败 500）；active_sources=近 10 分钟去重 client_ip；countries/top_countries 按 ip_location 首段（国家）计数、空归属跳过；china_provinces 仅首段=「中国」的事件取省段（第 2 段）计数（大屏省级下钻数据源）；top_attack_types 按 family 归因 Top5。任一安全库查询失败 500。"},
-	{"GET", "/security/events/feed", "安全", "威胁大屏增量事件流", "", `{"events":[{"id":210,"event_time":"2026-10-15 12:00:00","client_ip":"1.2.3.4","ip_location":"美国·加州·洛杉矶·ISP","action":"blocked","rule_name":"SQL注入检测","attack_type":"SQL注入"}],"since_id":0,"limit":50}`, []string{"401 unauthenticated"}, "id 降序增量流：仅返回 id > since_id 的事件（消费者游标=已消费最大 id，恒递增，无重复）；limit 缺省 50、上限 200。attack_type 为后端 family 归因（与安全总览同源），原始 rule_triggered/rule_msg 不下发。"},
-	{"POST", "/security/overview/threat-screen/site-detect", "安全", "大屏本站坐标自动检测", "", `{"ip":"116.9.130.80","location":"中国·上海·上海·电信","lat":31.23,"lon":121.47}`, []string{"403 admin_required", "422 location_unresolvable", "502 ip_fetch_failed"}, "显式按钮触发的出站探测（无后台轮询）：公网 IP 回显服务多源回退（checkip.amazonaws.com→ip.3322.net→api.ipify.org→icanhazip→ifconfig.me，纯文本无鉴权，单源 4s 超时+IPv4 校验）→ 本地 ip2region 归属地 → 质心表换算经纬度。定位失败 422 指引手动填写；回填后保存仍走 PUT /config 范围校验。仅管理员。"},
-	{"GET", "/security/overview/threat-screen/traffic", "安全", "大屏实时流量快照", "", `{"countries":{"美国":{"attack":12,"normal":345}},"available":true,"sample_n":1}`, []string{"401 unauthenticated"}, "代理 Caddy admin /lb/traffic-stats（caddygeoip per-country 原子计数器：attack=安全中断、normal=非安全中断，累计口径自进程启动）。国名翻译中文、Reserved 过滤；admin 不可达 200 空数据降级（available=false）。sample_n=QPS 保险丝抽样因子（1/N 抽样×N 还原，误差 ±N）。大屏 1-2s 轮询消费。"},
+	{"GET", "/security/events/feed", "安全", "威胁大屏增量事件流", "", `{"events":[{"id":210,"event_time":"2026-10-15 12:00:00","client_ip":"1.2.3.4","ip_location":"美国·加州·洛杉矶·ISP","action":"blocked","rule_name":"SQL注入检测","attack_type":"SQL注入"}],"since_id":0,"limit":50}`, []string{"401 unauthenticated"}, "id 降序增量流：仅返回 id > since_id 的事件；响应 next_since_id=本批实际扫描到的最大 id（含被保留地址过滤的行），消费者应推进到 next_since_id（恒 ≥ since_id、无重复）；limit 缺省 50、上限 200。突发超过 limit 时只返回最新 limit 条、较早事件不补发（大屏实时语义；暂停/突发恢复可能跳过中间事件）。attack_type 为后端 family 归因（与安全总览同源），同时下发 trigger_type 与 rule_triggered；rule_msg 不下发。"},
+	{"POST", "/security/overview/threat-screen/site-detect", "安全", "大屏本站坐标自动检测", "", `{"ip":"116.9.130.80","location":"中国·上海·上海·电信","lat":31.23,"lon":121.47}`, []string{"403 admin_required", "422 location_unresolvable", "502 ip_fetch_failed"}, "显式按钮触发的出站探测（无后台轮询）：公网 IP 回显服务多源回退（myip.ipip.net→cip.cc→ipv4.icanhazip.com→api.ipify.org，纯文本无鉴权，单源 3.5s 超时+整体 10s 上限+IPv4 校验）→ 本地 ip2region 归属地 → 质心表换算经纬度。定位失败 422 指引手动填写；回填后保存仍走 PUT /config 范围校验。仅管理员。"},
+	{"GET", "/security/overview/threat-screen/traffic", "安全", "大屏实时流量快照", "", `{"countries":{"美国":{"attack":12,"normal":345}},"available":true,"sample_n":1}`, []string{"401 unauthenticated"}, "代理 Caddy admin /lb/traffic-stats（caddygeoip per-country 原子计数器：attack=安全中断、normal=非安全中断，累计口径自进程启动；统计边界=仅经过 geoip2region 的规则流量，无 GeoIP 策略的规则不计入）。国名翻译中文、Reserved 过滤；admin 不可达 200 空数据降级（available=false）。sample_n=QPS 保险丝抽样因子（1/N 抽样×N 还原，误差 ±N）。大屏 1-2s 轮询消费。"},
 	// 口径实证(SECLB34-ACL-1,第 34 轮):任何 /load 重建 metrics registry,
 	// 429 计数随重载归零——公开文档只留净口径,追踪语留本注释。
 	{"GET", "/security/rate-limit-blocks", "安全", "各站点限流拦截累计次数", "", `{"total":12,"hosts":[{"host":"go029.com","count":9}]}`, []string{"401 unauthenticated", "500 metrics_unavailable"}, "数据来自 Caddy /metrics 的 429 计数，仅按 code=429 过滤（含上游自返 429），自最近一次 Caddy 配置重载以来累计，进程重启归零；采集失败返回 500。"},
@@ -288,9 +288,21 @@ func writeOpenAPIOperation(b *strings.Builder, route apiDocRoute) {
 	}
 	writeOpenAPIParameters(b, route, contract.queryParameters)
 	if route.Request != "" {
-		fmt.Fprintf(b, "      requestBody:\n        required: %t\n        content:\n          %s:\n            example: %s\n", !contract.requestOptional, contract.requestContentType, route.Request)
+		if len(contract.requestVariants) > 0 {
+			fmt.Fprintf(b, "      requestBody:\n        required: %t\n        content:\n", !contract.requestOptional)
+			for _, variant := range contract.requestVariants {
+				example := variant.example
+				if example == "" {
+					example = route.Request
+				}
+				fmt.Fprintf(b, "          %s:\n            example: %s\n", variant.contentType, example)
+			}
+		} else {
+			fmt.Fprintf(b, "      requestBody:\n        required: %t\n        content:\n          %s:\n            example: %s\n", !contract.requestOptional, contract.requestContentType, route.Request)
+		}
 	}
-	fmt.Fprintf(b, "      responses:\n        '%d':\n          description: 成功\n          content:\n            %s:\n              example: %s\n", contract.successStatus, contract.responseContentType, documentedResponse(route, contract.rawResponse))
+	fmt.Fprintf(b, "      responses:\n        '%d':\n          description: 成功\n          content:\n            %s:\n", contract.successStatus, contract.responseContentType)
+	writeYAMLExample(b, "              ", documentedResponse(route, contract.rawResponse))
 	for _, status := range contract.emptySuccessStatuses {
 		fmt.Fprintf(b, "        '%d':\n          description: 未修改\n", status)
 	}
@@ -317,6 +329,11 @@ type apiDocParameter struct {
 	description string
 }
 
+type apiDocContentExample struct {
+	contentType string
+	example     string
+}
+
 type apiDocContract struct {
 	successStatus        int
 	requestContentType   string
@@ -325,7 +342,25 @@ type apiDocContract struct {
 	rawResponse          bool
 	emptySuccessStatuses []int
 	queryParameters      []apiDocParameter
+	requestVariants      []apiDocContentExample
 	security             string
+}
+
+// U11-6（第 78 轮）：/admin-tls 与 /admin-tls/inspect 同时接受 multipart
+// 表单与 JSON（MCP 通道固定发 application/json）——两个 content type 都必须
+// 出现在生成规格中，各自携带形态匹配的示例。
+func adminTLSRequestVariants() []apiDocContentExample {
+	return []apiDocContentExample{
+		{"multipart/form-data", "multipart 表单：enabled=true、mode=upload、cert_file/key_file 为文件字段"},
+		{"application/json", `{"enabled":true,"mode":"selfsigned"}`},
+	}
+}
+
+func inspectAdminTLSRequestVariants() []apiDocContentExample {
+	return []apiDocContentExample{
+		{"multipart/form-data", "multipart 表单：cert_file、key_file 为文件字段"},
+		{"application/json", `{"cert_file":"（PEM 证书文本）","key_file":"（PEM 私钥文本）"}`},
+	}
 }
 
 var apiDocContracts = map[string]apiDocContract{
@@ -356,10 +391,14 @@ var apiDocContracts = map[string]apiDocContract{
 	"POST /certificate-configs":          {successStatus: http.StatusCreated},
 	// R39-8(C2):v2.3.0 起导出恒为 lbbak tar.gz(writeLbbakResponse 以
 	// application/gzip 下发);sections query 与导入侧对称(五分类,默认全选)。
-	"GET /config/export":                   {rawResponse: true, responseContentType: "application/gzip", queryParameters: []apiDocParameter{{"sections", "string", "可选配置分类（逗号分隔）：users、rules、security，默认全选；旧版 global_config/waf_files 键自动归一（分别视为 users/security）；未知分类返回 400"}}},
+	"GET /config/export": {rawResponse: true, responseContentType: "application/gzip", queryParameters: []apiDocParameter{{"sections", "string", "可选配置分类（逗号分隔）：users、rules、security，默认全选；旧版 global_config/waf_files 键自动归一（分别视为 users/security）；未知分类返回 400"}}},
+	// U11-3（第 78 轮）：两个非 JSON 下载端点显式登记 media type——漏登记
+	// 会回落到 application/json 并被包成 {"code":0,...,"data":非 JSON}。
+	"GET /auto-backup/:id/download":        {rawResponse: true, responseContentType: "application/octet-stream"},
+	"GET /security/ip-lists/:id/export":    {rawResponse: true, responseContentType: "text/plain; charset=utf-8"},
 	"GET /mcp/ops-playbook":                {rawResponse: true, responseContentType: "text/markdown"},
-	"PUT /admin-tls":                       {requestContentType: "multipart/form-data"},
-	"POST /admin-tls/inspect":              {requestContentType: "multipart/form-data"},
+	"PUT /admin-tls":                       {requestContentType: "multipart/form-data", requestVariants: adminTLSRequestVariants()},
+	"POST /admin-tls/inspect":              {requestContentType: "multipart/form-data", requestVariants: inspectAdminTLSRequestVariants()},
 	"GET /rules/:caddy_id/metrics-history": {queryParameters: []apiDocParameter{{"range", "string", "时间范围：1h、6h、24h 或 7d，默认 24h"}}},
 	"GET /rules/:caddy_id/log-stream":      {queryParameters: []apiDocParameter{{"offset", "integer", "上次响应返回的字节偏移"}}},
 	"GET /certificates/jobs":               {queryParameters: []apiDocParameter{{"rule_id", "string", "按规则 ID 过滤"}, {"page", "integer", "页码，默认 1，1-1000000"}, {"page_size", "integer", "每页数量，默认 50，1-200"}}},
@@ -426,6 +465,19 @@ func writeOpenAPIParameters(b *strings.Builder, route apiDocRoute, queryParamete
 	}
 }
 
+// writeYAMLExample 输出 example 节点；多行纯文本（如 TXT/日志形态）用块标量，
+// 避免裸换行截断 YAML——U11-3 的 TXT 下载示例即此形态。
+func writeYAMLExample(b *strings.Builder, indent, example string) {
+	if strings.Contains(example, "\n") {
+		b.WriteString(indent + "example: |\n")
+		for _, line := range strings.Split(strings.TrimRight(example, "\n"), "\n") {
+			b.WriteString(indent + "  " + line + "\n")
+		}
+		return
+	}
+	fmt.Fprintf(b, "%sexample: %s\n", indent, example)
+}
+
 func documentedResponse(route apiDocRoute, raw bool) string {
 	if raw || strings.HasPrefix(strings.TrimSpace(route.Response), `{"code"`) {
 		return route.Response
@@ -463,7 +515,10 @@ func operationDescription(route apiDocRoute) string {
 		retry = "不可安全重试：首次删除成功，重复调用返回 404。"
 	case "PUT /users/:id", "PUT /users/:id/status", "PUT /config", "PUT /rules/:caddy_id", "PUT /cluster/settings", "PUT /cluster/nodes/:id/access-url", "PUT /certificate-configs/:id", "PUT /ca-providers/:id", "PUT /caddy/config", "PUT /admin-tls", "PUT /settings/oidc",
 		"PUT /settings/auto-backup", "PUT /security/policies/:id", "PUT /security/rules/:caddy_id/policies", "PUT /security/custom-rules/:id", "PUT /security/block-pages/:id", "PUT /security/ip-lists/:id", "PUT /security/crs/auto-update", "PUT /security/ip2region/auto-update",
-		"PUT /security/threat-lib/auto-update", "PUT /security/threat-lib/:id/flags", "PUT /security/crs/schedule", "PUT /security/ip2region/schedule", "PUT /security/threat-lib/schedule":
+		"PUT /security/threat-lib/auto-update", "PUT /security/threat-lib/:id/flags", "PUT /security/crs/schedule", "PUT /security/ip2region/schedule", "PUT /security/threat-lib/schedule",
+		// U11-2（第 78 轮）：爬虫库同族三条状态型 PUT 与自动封禁配置写
+		// （同参数重发保持目标态，窗口/口径不变时不会二次重置计数器）。
+		"PUT /security/crawler-lib/auto-update", "PUT /security/crawler-lib/schedule", "PUT /security/crawler-lib/:id/flags", "PUT /security/autoban":
 		retry = "可安全重试：相同请求重复调用保持相同目标状态。"
 	case "PATCH /users/me", "PATCH /users/me/api-keys/:id", "PATCH /api-keys/:id/status":
 		// APIMCP50-P5-16:PATCH 语义化部分更新与 PUT 同格幂等。
@@ -475,6 +530,10 @@ func operationDescription(route apiDocRoute) string {
 		// APIMCP-6(C7):OIDC 删除为幂等清空——重复调用保持配置为已删除状态
 		// 并返回成功(与资源型 DELETE 的 404 语义不同)。
 		retry = "可安全重试：重复调用保持 OIDC 配置为已删除状态并返回成功。"
+	case "DELETE /security/policies/:id/bind/:caddy_id":
+		// U11-2（第 78 轮）：unbind 是无条件删除绑定行——未绑定时同样返回
+		// 成功、状态不变（handler 不返回 404），与资源型 DELETE 不同。
+		retry = "可安全重试：重复解除同一绑定保持已解绑状态并返回成功（未绑定时不做变更）。"
 	case "POST /config/preview", "POST /config/validate", "POST /config/import/validate", "POST /rules/cert-info", "POST /certificate-configs/test", "POST /certificate-configs/:id/test", "POST /ca-providers/:id/test", "POST /certificates/parse", "POST /admin-tls/inspect", "POST /settings/oidc/test":
 		retry = "可安全重试：相同请求重复调用返回等价校验或查询结果。"
 	case "POST /mcp":
@@ -486,8 +545,8 @@ func operationDescription(route apiDocRoute) string {
 	return description + " " + retry
 }
 
-// APIMCP-P1（第 69 轮）：内容完全静态（apiDocRoutes 进程内不变），199 条路由
-// 的 YAML 拼接缓存一次——此前每请求全量重建。
+// APIMCP-P1（第 69 轮）：内容完全静态（apiDocRoutes 进程内不变，路由数随
+// 扩表增长），YAML 拼接缓存一次——此前每请求全量重建。
 var openAPIYAMLOnce = sync.OnceValue(buildOpenAPIYAML)
 
 func (h *Handlers) GetOpenAPIYAML(c *gin.Context) {

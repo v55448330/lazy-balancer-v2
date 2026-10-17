@@ -7,7 +7,7 @@ export const DEFAULT_ACCESS_LOG_FORMAT =
 // CDN 受信代理预设（v2.3.x 真实 IP 支持）：仅辅助填充请求头（有序，权威头
 // 在前）与提示文案——**不预置网段**（回源网段随时间变化，必须按官方文档
 // 粘贴）。rangesDoc 为官方网段文档链接提示。
-export interface CDNPreset {
+interface CDNPreset {
   label: string
   headers: string[]
   note: string

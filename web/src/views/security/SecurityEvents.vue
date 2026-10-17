@@ -16,6 +16,12 @@
          启用/禁用 toggle（直接切换业务开关并联动调度；「立即执行」废除——任务只能
          由「启用后按配置调度执行」） -->
     <el-card class="autoban-card" v-loading="autobanStatusLoading">
+      <div v-if="autobanStatusError" class="info-note-bar autoban-warn-bar">
+        <span class="info-note-desc">自动封禁状态加载失败：控制项已禁用（不影响事件日志主功能），请稍后刷新重试。</span>
+      </div>
+      <div v-else-if="autobanBlockedReason" class="info-note-bar">
+        <span class="info-note-desc">{{ autobanBlockedReason }}</span>
+      </div>
       <div class="autoban-bar">
           <div class="autoban-main">
             <div class="autoban-title">
@@ -43,10 +49,10 @@
           </div>
         <div class="autoban-actions">
           <template v-if="autobanStatus.enabled">
-            <el-button size="small" type="danger" plain :disabled="!autobanStatus.is_master" :loading="autobanToggling" @click="toggleAutobanEnabled">禁用</el-button>
-            <el-button size="small" plain :disabled="!autobanStatus.is_master" @click="openAutobanConfig">编辑</el-button>
+            <el-button size="small" type="danger" plain :disabled="!autobanWritable" :loading="autobanToggling" @click="toggleAutobanEnabled">禁用</el-button>
+            <el-button size="small" plain :disabled="!autobanWritable" @click="openAutobanConfig">编辑</el-button>
           </template>
-          <el-button v-else size="small" type="success" plain :disabled="!autobanStatus.is_master" @click="openAutobanConfigForEnable">启用</el-button>
+          <el-button v-else size="small" type="success" plain :disabled="!autobanWritable" @click="openAutobanConfigForEnable">启用</el-button>
         </div>
       </div>
       <!-- 未关联策略黄条：名单未被启用中的安全策略引用，封禁不生效 -->
@@ -135,7 +141,8 @@
           </template>
           <el-option label="爬虫Bot" value="爬虫Bot" title="已验证爬虫放行/伪装（id 810000-899999）" />
           <el-option label="地域拦截" value="地域拦截" title="GeoIP 地域拦截（id 8/800xxx）" />
-          <el-option label="限流" value="限流" title="站点限流 429" />
+          <!-- 限流（429）不进安全事件表（caddy-ratelimit 直接返回、无审计行）：
+               筛选选项移除，限流数据看安全总览「限流拦截」卡片。 -->
           <el-option label="IP 访问控制" value="IP 访问控制" title="IP ACL 黑白名单与自维护黑名单（id 2/4/7）" />
           <el-option label="信任名单" value="信任名单" title="信任名单/保留检测（id 3/12）" />
           <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库命中（id 14）" />
@@ -266,7 +273,7 @@
       <div class="info-note-bar"><span class="info-note-desc">修改统计窗口或口径会立即重置计数器（旧计数与新口径不可混算）</span></div>
       <template #footer>
         <el-button @click="autobanDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="autobanSaving" @click="saveAutobanConfig">保存</el-button>
+        <el-button type="primary" :loading="autobanSaving" :disabled="!autobanWritable" @click="saveAutobanConfig">保存</el-button>
       </template>
     </el-dialog>
 
@@ -356,6 +363,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CheckboxValueType } from 'element-plus'
 import { request } from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import TriggerDetailDialog from '@/components/events/TriggerDetailDialog.vue'
 import { formatDurationUs, triggerStageFamily } from '@/utils/securityStages'
@@ -371,9 +379,10 @@ interface AutobanSuggestion { ip: string; count: number; ip_location?: string; w
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
-  list_referenced: boolean; tracked_ips: number; suggestions: AutobanSuggestion[]
-  is_master: boolean; role: string
-  running: boolean; last_run: string; last_status: string
+  list_referenced: boolean; suggestions: AutobanSuggestion[]
+  // 后端另有 running/last_run/last_status/role/tracked_ips（API 契约保留）——
+  // 本卡零消费，不再声明（U16-F20：声明即暗示已渲染）。
+  is_master: boolean
 }
 const AUTOBAN_DURATIONS = [
   { value: '10m', label: '10 分钟' }, { value: '30m', label: '30 分钟' },
@@ -387,12 +396,22 @@ const AUTOBAN_SCOPES = [
 
 const autobanStatus = ref<AutobanStatus>({
   enabled: false, dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all',
-  banned_today: 0, list_entries: 0, list_referenced: true, tracked_ips: 0, suggestions: [],
-  is_master: true, role: 'master',
-  running: false, last_run: '', last_status: '',
+  banned_today: 0, list_entries: 0, list_referenced: true, suggestions: [],
+  // 默认 false：成功响应前不得假定主节点可写（U16-F17 失败关闭）
+  is_master: false,
 })
 const autobanStatusLoading = ref(false)
 const autobanToggling = ref(false)
+// 状态读取失败（U16-F02/F17）：错误态不得按「确定状态」展示——写入口一律禁用
+const autobanStatusError = ref(false)
+const authStore = useAuthStore()
+// 四写入口统一门控（启用/禁用/编辑/保存）：全局只读契约 ∧ 主节点 ∧ 状态已加载
+const autobanWritable = computed(() => authStore.readOnlyReason === null && autobanStatus.value.is_master && !autobanStatusError.value && !autobanStatusLoading.value)
+const autobanBlockedReason = computed(() => {
+  if (authStore.readOnlyReason !== null) return authStore.readOnlyMessage
+  if (!autobanStatus.value.is_master) return '仅主节点可修改自动封禁配置'
+  return ''
+})
 const autobanScopeText = computed(() => AUTOBAN_SCOPES.find((s) => s.value === autobanStatus.value.scope)?.label ?? autobanStatus.value.scope)
 const autobanDurationText = computed(() => AUTOBAN_DURATIONS.find((d) => d.value === autobanStatus.value.duration)?.label ?? autobanStatus.value.duration)
 
@@ -427,7 +446,11 @@ const fetchAutobanStatus = async (): Promise<void> => {
   try {
     const res = await request.get<APIResponse<AutobanStatus>>('/security/autoban/status', { silent: true })
     if (res.data) autobanStatus.value = res.data
-  } catch { /* 静默：状态卡退化为默认值，不打断事件日志主功能 */ }
+    autobanStatusError.value = false
+  } catch {
+    // 显性错误态（U16-F02）：不再退化为「未启用」默认值并放行写按钮
+    autobanStatusError.value = true
+  }
   finally { autobanStatusLoading.value = false }
 }
 
@@ -685,14 +708,14 @@ const total = ref(0)
 
 // 触发阶段筛选为固定预置四类（第 58 轮用户裁定：固定预置值，不接受任意值）。
 // 令牌 → 后端族段映射：请求侧展开为族名逗号串（后端逐段 OR）。
-const TRIGGERED_CATEGORIES = ['爬虫Bot', '地域拦截', '限流', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
+// 第 78 轮 L03-10：限流（429）无 sec_events 数据源，不再作为筛选项/分类。
+const TRIGGERED_CATEGORIES = ['爬虫Bot', '地域拦截', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 // v2.3.8 触发类型筛选映射（值=后端 family 键，与新 trigger_type 同语义）：
 // 每类对应的 ruleTriggeredFamilyPrefixes 映射键。
 const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
   '爬虫Bot': ['爬虫Bot'],
   '地域拦截': ['地域拦截'],
-  '限流': ['限流'],
   'IP 访问控制': ['IP 访问控制'],
   '信任名单': ['信任名单'],
   '威胁情报库': ['威胁情报库'],

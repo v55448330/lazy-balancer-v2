@@ -11,6 +11,7 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,40 @@ const (
 	// legacySecurityEnumBackfills）+DB 侧钉测三处单源。
 	DefaultAnomalyThreshold = 5
 )
+
+// certJobStatuses 是 cert_jobs.status 的规范枚举（L04-06，第 78 轮单源化）。
+// 唯一声明点在此：fresh CREATE 的 CHECK 枚举、迁移重建 DDL、迁移拷贝的
+// CASE WHEN 白名单全部由 strings.Join 生成；services 侧的任务状态机
+// （jobstate.go 的 allJobStatuses/withoutJobStatuses）经 CertJobStatuses()
+// 派生——services 依赖 db 而 db 不能反向 import services（import 环），故
+// 真源落在 db，对外 API 仍由 services.AllJobStatuses() 提供。
+var certJobStatuses = []string{
+	"queued", "pending", "processing", "creating_account", "creating_order", "order_created",
+	"cleanup_dns", "cleanup_warning", "presenting_dns", "waiting_propagation", "dns_propagated",
+	"accepting_challenge", "validating", "validated", "finalizing", "finalized", "downloading",
+	"downloaded", "issued", "failed", "waiting_ca", "disabled", "waiting_order_ready", "order_ready",
+	"waiting_order_valid", "order_valid",
+}
+
+// CertJobStatuses 返回 cert_jobs.status 规范枚举的副本（防调用方篡改全局）。
+func CertJobStatuses() []string {
+	return slices.Clone(certJobStatuses)
+}
+
+// certJobStatusListSQL 返回单引号包裹、逗号连接的枚举，制式与既有 DDL 一致
+// （无空格）——hasExactStatusConstraint 的存量形态判定依赖该制式。
+func certJobStatusListSQL() string {
+	quoted := make([]string, len(certJobStatuses))
+	for i, status := range certJobStatuses {
+		quoted[i] = "'" + status + "'"
+	}
+	return strings.Join(quoted, ",")
+}
+
+// certJobStatusCheckSQL 是 fresh/重建 DDL 共用的 CHECK 子句。
+func certJobStatusCheckSQL() string {
+	return "CHECK (status IN (" + certJobStatusListSQL() + "))"
+}
 
 func CanonicalDomains(value string) (string, error) {
 	seen := make(map[string]struct{})
@@ -391,7 +426,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
+		status VARCHAR(20) NOT NULL DEFAULT 'queued' ` + certJobStatusCheckSQL() + `,
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -691,6 +726,14 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_task_time ON task_runs(task_id, started_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_task_runs_time ON task_runs(started_at DESC);
+	-- 任务调度偏好（U10-F02，第 78 轮）：节点本地持久化用户显式启停，
+	-- 进程重启/角色翻转后据此覆盖默认启动清单；业务驱动任务以业务字段为
+	-- 唯一事实源，不写本表。节点本地表：不进入集群快照/备份导出。
+	CREATE TABLE IF NOT EXISTS task_loop_prefs (
+		task_id TEXT PRIMARY KEY,
+		enabled INTEGER NOT NULL,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
 	-- 爬虫地址库（v2.3.8）：四个官方爬虫 IP 源，update_enabled 默认开；
 	-- 版本=成功更新日期（YYYY.MM.DD），独立源表/排程/状态机，不并入威胁情报库。
 	CREATE TABLE IF NOT EXISTS security_crawler_sources (
@@ -761,8 +804,6 @@ CREATE TABLE IF NOT EXISTS security_threat_sources (
 }
 
 func runMigrations() error {
-	var colCount int
-
 	// CORE-R1（第 69 轮）：users.display_name/is_enabled、api_keys.is_enabled/
 	// mcp_enabled/read_only/mcp_ip_whitelist 与 lb_rules 八列（domain/tls_cert/
 	// tls_key/tls_http_redirect/dynamic_dns/enable_active_health_check/tls_source/
@@ -777,14 +818,8 @@ func runMigrations() error {
 	if _, err := DB.Exec("DROP TABLE IF EXISTS config_versions"); err != nil {
 		return fmt.Errorf("failed to drop config_versions: %w", err)
 	}
-	var accessLogCol int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='access_log_enabled'").Scan(&accessLogCol); err != nil {
-		return fmt.Errorf("failed to check global_config.access_log_enabled: %w", err)
-	}
-	if accessLogCol > 0 {
-		if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN access_log_enabled"); err != nil {
-			return fmt.Errorf("failed to drop global_config.access_log_enabled: %w", err)
-		}
+	if _, err := dropColumnIfExists("global_config", "access_log_enabled"); err != nil {
+		return err
 	}
 	// S-6/S-7（2026-09-05/06 审计裁定）：metrics_public/metrics_origins 为零
 	// 消费死列（历史上预留给「指标公开访问/CORS」设想，从未接线）；
@@ -792,14 +827,8 @@ func runMigrations() error {
 	//（2026-09-06 裁定，S-7）——三列存量库逐列删除（逐列判定使单列残留
 	// 形态也可收敛）；新库由建表语句与 newColumns 不再补建。
 	for _, deadMetricsColumn := range []string{"metrics_public", "metrics_origins", "metrics_retention_days"} {
-		var deadCol int
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", deadMetricsColumn).Scan(&deadCol); err != nil {
-			return fmt.Errorf("failed to check global_config.%s: %w", deadMetricsColumn, err)
-		}
-		if deadCol > 0 {
-			if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + deadMetricsColumn); err != nil {
-				return fmt.Errorf("failed to drop global_config.%s: %w", deadMetricsColumn, err)
-			}
+		if _, err := dropColumnIfExists("global_config", deadMetricsColumn); err != nil {
+			return err
 		}
 	}
 
@@ -1320,13 +1349,11 @@ func runMigrations() error {
 	// Drop legacy columns from lb_rules if they still exist (no longer used).
 	legacyLbColumns := []string{"tls_auto_cert", "tls_email"}
 	for _, col := range legacyLbColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check legacy lb_rules.%s: %w", col, err)
+		dropped, err := dropColumnIfExists("lb_rules", col)
+		if err != nil {
+			return err
 		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE lb_rules DROP COLUMN " + col); err != nil {
-				return fmt.Errorf("failed to drop legacy lb_rules.%s: %w", col, err)
-			}
+		if dropped {
 			log.Printf("Dropped legacy column %s from lb_rules", col)
 		}
 	}
@@ -1374,13 +1401,11 @@ func runMigrations() error {
 	// 逐字相同的独立循环合并为单一登记清单。
 	legacyUpstreamDeadColumns := []string{"host_header", "domain", "proxy_protocol", "dns_server"}
 	for _, col := range legacyUpstreamDeadColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
+		dropped, err := dropColumnIfExists("upstreams", col)
+		if err != nil {
+			return err
 		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
-				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
-			}
+		if dropped {
 			log.Printf("Dropped legacy column %s from upstreams", col)
 		}
 	}
@@ -1509,13 +1534,11 @@ func runMigrations() error {
 	// 切换它只会触发无意义的全量重拉。
 	legacyGlobalConfigDeadColumns := []string{"sync_caddy_config"}
 	for _, col := range legacyGlobalConfigDeadColumns {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", col).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check legacy global_config.%s: %w", col, err)
+		dropped, err := dropColumnIfExists("global_config", col)
+		if err != nil {
+			return err
 		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + col); err != nil {
-				return fmt.Errorf("failed to drop legacy global_config.%s: %w", col, err)
-			}
+		if dropped {
 			log.Printf("Dropped legacy column %s from global_config", col)
 		}
 	}
@@ -1540,13 +1563,11 @@ func runMigrations() error {
 		{"lb_rules", "ip_acl_list"},
 	}
 	for _, drop := range deadColumnDrops {
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", drop.table, drop.column).Scan(&colCount); err != nil {
-			return fmt.Errorf("failed to check dead column %s.%s: %w", drop.table, drop.column, err)
+		dropped, err := dropColumnIfExists(drop.table, drop.column)
+		if err != nil {
+			return err
 		}
-		if colCount > 0 {
-			if _, err := DB.Exec("ALTER TABLE " + drop.table + " DROP COLUMN " + drop.column); err != nil {
-				return fmt.Errorf("failed to drop dead column %s.%s: %w", drop.table, drop.column, err)
-			}
+		if dropped {
 			log.Printf("Dropped dead column %s from %s", drop.column, drop.table)
 		}
 	}
@@ -1659,15 +1680,12 @@ func runMigrations() error {
 // 字段集不一致由同版本升级前提保证。幂等:列存在才 DROP。
 func migrateDropDeadMFALockColumns() error {
 	for _, col := range []string{"mfa_failed_attempts", "mfa_locked_until"} {
-		var colCount int
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name=?", col).Scan(&colCount); err != nil {
+		dropped, err := dropColumnIfExists("users", col)
+		if err != nil {
 			return err
 		}
-		if colCount == 0 {
+		if !dropped {
 			continue
-		}
-		if _, err := DB.Exec("ALTER TABLE users DROP COLUMN " + col); err != nil {
-			return fmt.Errorf("failed to drop users.%s: %w", col, err)
 		}
 		log.Printf("已删除 users.%s(M7 残留死列,现行锁定走 login_* 列)", col)
 	}
@@ -1684,15 +1702,12 @@ func migrateDropDeadMFALockColumns() error {
 // 执行,重启不回灌;行删除恒幂等。
 func migrateDropMergedSyncSwitchColumns() error {
 	for _, col := range []string{"sync_global_config", "sync_waf_files"} {
-		var colCount int
-		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", col).Scan(&colCount); err != nil {
+		dropped, err := dropColumnIfExists("global_config", col)
+		if err != nil {
 			return err
 		}
-		if colCount == 0 {
+		if !dropped {
 			continue
-		}
-		if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + col); err != nil {
-			return fmt.Errorf("failed to drop global_config.%s: %w", col, err)
 		}
 		log.Printf("已删除 global_config.%s(三分类合并:开关随分类并入收敛)", col)
 	}
@@ -2293,6 +2308,65 @@ func migrateCrawlerSourcesOutOfThreat() error {
 	return nil
 }
 
+// withTableRebuild 是整表重建迁移的统一事务骨架（U12-F10，第 78 轮）：独立
+// 连接（PRAGMA foreign_keys 是会话级设置，必须与事务同连接）→ 读取并关闭 FK →
+// 事务内执行 fn → 提交 → 还原 FK。fn 返回错误或提交失败时整体回滚，崩溃不会
+// 留下半建表（DROP 与 RENAME 之间失败曾可致表丢失/残留 _new 表阻断重跑）。
+// label 只用于日志与错误上下文。
+func withTableRebuild(ctx context.Context, label string, fn func(tx *sql.Tx) error) error {
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire %s migration connection: %w", label, err)
+	}
+	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("failed to read foreign_keys setting: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+	defer func() {
+		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
+			log.Printf("failed to restore foreign_keys=%d after %s migration: %v", fkPrev, label, err)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin %s migration transaction: %w", label, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit %s migration: %w", label, err)
+	}
+	committed = true
+	return nil
+}
+
+// dropColumnIfExists 幂等删除表列（U12-F10，第 78 轮）：列存在才 DROP，返回
+// 是否实际删除（调用方按需记日志）。table/column 仅来自代码常量，拼接安全。
+func dropColumnIfExists(table, column string) (bool, error) {
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, column).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to check %s.%s: %w", table, column, err)
+	}
+	if count == 0 {
+		return false, nil
+	}
+	if _, err := DB.Exec("ALTER TABLE " + table + " DROP COLUMN " + column); err != nil {
+		return false, fmt.Errorf("failed to drop %s.%s: %w", table, column, err)
+	}
+	return true, nil
+}
+
 // migrateCrawlerSourcesID：初版 security_crawler_sources 建表漏了 id 主键
 // （管理面 :id/flags 与 ORDER BY id 均依赖）。新库 CREATE 已含 id 直接跳过；
 // 存量无 id 库整表重建并保留全部源行（无 FK 引用，单事务即可）。
@@ -2304,17 +2378,8 @@ func migrateCrawlerSourcesID() error {
 	if hasID > 0 {
 		return nil
 	}
-	tx, err := DB.Begin()
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if _, err := tx.Exec(`CREATE TABLE security_crawler_sources_with_id (
+	return withTableRebuild(context.Background(), "security_crawler_sources", func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE security_crawler_sources_with_id (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE,
 		display_name TEXT NOT NULL DEFAULT '',
@@ -2338,13 +2403,10 @@ func migrateCrawlerSourcesID() error {
 	SELECT name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,"trigger",started_at,finished_at,consecutive_failures,created_at,updated_at FROM security_crawler_sources;
 	DROP TABLE security_crawler_sources;
 	ALTER TABLE security_crawler_sources_with_id RENAME TO security_crawler_sources;`); err != nil {
-		return fmt.Errorf("rebuild security_crawler_sources: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+			return fmt.Errorf("rebuild security_crawler_sources: %w", err)
+		}
+		return nil
+	})
 }
 
 func migrateUsersIsEnabledNotNull() error {
@@ -2355,35 +2417,8 @@ func migrateUsersIsEnabledNotNull() error {
 	if notNull == 1 {
 		return nil
 	}
-	ctx := context.Background()
-	conn, err := DB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire migration connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-		return fmt.Errorf("disable foreign keys: %w", err)
-	}
-	defer func() {
-		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
-			log.Printf("failed to restore foreign_keys=%d after users migration: %v", fkPrev, err)
-		}
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin users migration: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if _, err := tx.Exec(`UPDATE users SET is_enabled=1 WHERE is_enabled IS NULL;
+	return withTableRebuild(context.Background(), "users", func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE users SET is_enabled=1 WHERE is_enabled IS NULL;
 		CREATE TABLE users_not_null (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username VARCHAR(50) UNIQUE NOT NULL,
@@ -2411,13 +2446,10 @@ func migrateUsersIsEnabledNotNull() error {
 		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_pending_fails,login_failed_attempts,login_locked_until,auth_provider,oidc_subject,oidc_issuer FROM users;
 		DROP TABLE users;
 		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
-		return fmt.Errorf("rebuild users table: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit users migration: %w", err)
-	}
-	committed = true
-	return nil
+			return fmt.Errorf("rebuild users table: %w", err)
+		}
+		return nil
+	})
 }
 
 // migrateSecurityPoliciesNullable（A4-S2）：历史 NOT-NULL 窗口期建库的
@@ -2436,38 +2468,11 @@ func migrateSecurityPoliciesNullable() error {
 	if notNullCount == 0 {
 		return nil
 	}
-	ctx := context.Background()
-	conn, err := DB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire migration connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-		return fmt.Errorf("disable foreign keys: %w", err)
-	}
-	defer func() {
-		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
-			log.Printf("failed to restore foreign_keys=%d after security_policies migration: %v", fkPrev, err)
-		}
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin security_policies migration: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	// rebuild 必须与 fresh CREATE（含 refs 两列）同形状并搬运其数据——
-	// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
-	//（审计 I-1：窗口期库首启安全策略子系统整体 no such column）。
-	if _, err := tx.Exec(`CREATE TABLE security_policies_new (
+	if err := withTableRebuild(context.Background(), "security_policies", func(tx *sql.Tx) error {
+		// rebuild 必须与 fresh CREATE（含 refs 两列）同形状并搬运其数据——
+		// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
+		//（审计 I-1：窗口期库首启安全策略子系统整体 no such column）。
+		if _, err := tx.Exec(`CREATE TABLE security_policies_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			description TEXT DEFAULT '',
@@ -2511,12 +2516,12 @@ func migrateSecurityPoliciesNullable() error {
 		FROM security_policies;
 		DROP TABLE security_policies;
 		ALTER TABLE security_policies_new RENAME TO security_policies;`); err != nil {
-		return fmt.Errorf("rebuild security_policies table: %w", err)
+			return fmt.Errorf("rebuild security_policies table: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit security_policies migration: %w", err)
-	}
-	committed = true
 	log.Printf("Rebuilt security_policies with nullable geoip/waf columns (converged %d NOT NULL columns)", notNullCount)
 	return nil
 }
@@ -2529,33 +2534,11 @@ func migrateNodesDeadColumns() error {
 	if legacyColumns == 0 {
 		return nil
 	}
-	ctx := context.Background()
-	conn, err := DB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire nodes migration connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-		return fmt.Errorf("disable foreign keys: %w", err)
-	}
-	defer func() {
-		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
-			log.Printf("failed to restore foreign_keys=%d after nodes migration: %v", fkPrev, err)
-		}
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin nodes migration: %w", err)
-	}
-	defer tx.Rollback()
-	// CL10-N15:重建目标对齐新 schema(无 master_id/自引用 FK,idx_nodes_master;
-	// 补 UNIQUE(ip,port))——master_id 死列经本路径与 migrateNodesDropMasterID
-	// 双路径收敛为同一形态。
-	if _, err := tx.Exec(`DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port);
+	return withTableRebuild(context.Background(), "nodes", func(tx *sql.Tx) error {
+		// CL10-N15:重建目标对齐新 schema(无 master_id/自引用 FK,idx_nodes_master；
+		// 补 UNIQUE(ip,port))——master_id 死列经本路径与 migrateNodesDropMasterID
+		// 双路径收敛为同一形态。
+		if _, err := tx.Exec(`DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port);
 		CREATE TABLE nodes_without_legacy_sync (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, mode VARCHAR(10) NOT NULL DEFAULT 'slave',
 		ip_address VARCHAR(45) NOT NULL, port INTEGER DEFAULT 8000, protocol VARCHAR(10) DEFAULT 'http', access_url VARCHAR(255) DEFAULT '',
@@ -2569,12 +2552,10 @@ func migrateNodesDeadColumns() error {
 		DROP TABLE nodes;
 		ALTER TABLE nodes_without_legacy_sync RENAME TO nodes;
 		CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);`); err != nil {
-		return fmt.Errorf("rebuild nodes table: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit nodes migration: %w", err)
-	}
-	return nil
+			return fmt.Errorf("rebuild nodes table: %w", err)
+		}
+		return nil
+	})
 }
 
 // migrateOidcIdentityUniqueIndex（U6a-1，第 45 轮审计）：OIDC 身份三元组唯一
@@ -2708,33 +2689,9 @@ func migrateLbRulesPrimaryKey() error {
 
 	log.Println("Migrating lb_rules to use caddy_id as primary key...")
 
-	// PRAGMA 是会话级设置，必须与后续事务使用同一连接
-	conn, err := DB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to acquire connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(context.Background(), conn)
-	if err != nil {
-		return fmt.Errorf("failed to read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
-		return fmt.Errorf("failed to disable foreign keys: %w", err)
-	}
-	fkRestored := false
-	defer func() {
-		if !fkRestored {
-			_ = restoreForeignKeysSetting(context.Background(), conn, fkPrev)
-		}
-	}()
-
-	tx, err := conn.BeginTx(context.Background(), nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	// Create new lb_rules table with caddy_id as primary key
-	_, err = tx.Exec(`
+	if err := withTableRebuild(context.Background(), "lb_rules", func(tx *sql.Tx) error {
+		// Create new lb_rules table with caddy_id as primary key
+		_, err := tx.Exec(`
 		CREATE TABLE lb_rules_new (
 			id INTEGER,
 			name VARCHAR(100) NOT NULL,
@@ -2748,15 +2705,18 @@ func migrateLbRulesPrimaryKey() error {
 			dns_server VARCHAR(255) DEFAULT '',
 			dns_family VARCHAR(20) DEFAULT 'ipv4',
 			health_check_path VARCHAR(255),
-			health_check_interval INTEGER DEFAULT 10,
-			health_check_timeout INTEGER DEFAULT 5,
-			health_check_unhealthy_threshold INTEGER DEFAULT 3,
-			health_check_healthy_threshold INTEGER DEFAULT 2,
+			health_check_interval INTEGER NOT NULL DEFAULT 10,
+			-- U12-F01（第 78 轮）：重建 DDL 与 fresh CREATE 同形——健康检查族五列
+			-- 均为 NOT NULL + 治理默认（回填 defaultUpdates 在本重建之前已收敛
+			-- NULL/<=0，重建拷贝不再可能写入 NULL）。
+			health_check_timeout INTEGER NOT NULL DEFAULT 2,
+			health_check_unhealthy_threshold INTEGER NOT NULL DEFAULT 3,
+			health_check_healthy_threshold INTEGER NOT NULL DEFAULT 2,
 			enable_active_health_check BOOLEAN DEFAULT FALSE,
 			tcp_health_check_port INTEGER DEFAULT 0,
 			tcp_proxy_protocol BOOLEAN DEFAULT 0,
 			tcp_try_duration INTEGER DEFAULT 0,
-			tcp_try_interval INTEGER DEFAULT 250,
+			tcp_try_interval INTEGER NOT NULL DEFAULT 250,
 			request_body_max_size_mb INTEGER DEFAULT 0,
 			upstream_keepalive_timeout INTEGER DEFAULT 0,
 			server_tokens_hidden INTEGER DEFAULT 0,
@@ -2801,14 +2761,14 @@ func migrateLbRulesPrimaryKey() error {
 			caddy_id VARCHAR(20) PRIMARY KEY
 		)
 	`)
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to create lb_rules_new: %w", err))
-	}
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to create lb_rules_new: %w", err))
+		}
 
-	// Copy data from old table to new table。注意：ip_acl_mode / ip_acl_list 是已废弃的规则级
-	// IP ACL 列（已迁入 security_policies 的策略级 ip_acl_*），此处列清单与 INSERT...SELECT
-	// 映射有意排除它们，重建时随旧表一并丢弃。
-	_, err = tx.Exec(`
+		// Copy data from old table to new table。注意：ip_acl_mode / ip_acl_list 是已废弃的规则级
+		// IP ACL 列（已迁入 security_policies 的策略级 ip_acl_*），此处列清单与 INSERT...SELECT
+		// 映射有意排除它们，重建时随旧表一并丢弃。
+		_, err = tx.Exec(`
 		INSERT INTO lb_rules_new (
 			id, name, description, protocol, domain, listen_port,
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
@@ -2827,9 +2787,14 @@ func migrateLbRulesPrimaryKey() error {
 		SELECT
 			id, name, description, protocol, domain, listen_port,
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
-			health_check_path, health_check_interval, health_check_timeout,
-			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
+			health_check_path,
+			-- U12-F01：重建目标列 NOT NULL——启动序中 defaultUpdates 已先收敛
+			-- NULL/<=0，COALESCE 仅覆盖直接调用迁移（测试/运维脚本）的旧形态。
+			COALESCE(health_check_interval,` + fmt.Sprint(DefaultHealthCheckInterval) + `),
+			COALESCE(health_check_timeout,` + fmt.Sprint(DefaultHealthCheckTimeout) + `),
+			COALESCE(health_check_unhealthy_threshold,` + fmt.Sprint(DefaultHealthCheckUnhealthyThreshold) + `),
+			COALESCE(health_check_healthy_threshold,` + fmt.Sprint(DefaultHealthCheckHealthyThreshold) + `),
+			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, COALESCE(tcp_try_interval,` + fmt.Sprint(DefaultTCPTryInterval) + `),
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
 			COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
@@ -2840,27 +2805,27 @@ func migrateLbRulesPrimaryKey() error {
 			COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
 		FROM lb_rules
 	`)
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to copy lb_rules data: %w", err))
-	}
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to copy lb_rules data: %w", err))
+		}
 
-	// Drop old table
-	_, err = tx.Exec("DROP TABLE lb_rules")
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to drop old lb_rules: %w", err))
-	}
+		// Drop old table
+		_, err = tx.Exec("DROP TABLE lb_rules")
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to drop old lb_rules: %w", err))
+		}
 
-	// Rename new table
-	_, err = tx.Exec("ALTER TABLE lb_rules_new RENAME TO lb_rules")
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to rename lb_rules_new: %w", err))
-	}
+		// Rename new table
+		_, err = tx.Exec("ALTER TABLE lb_rules_new RENAME TO lb_rules")
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to rename lb_rules_new: %w", err))
+		}
 
-	// Create new upstreams table with VARCHAR rule_id
-	// enabled 与 fresh CREATE 对齐为 NOT NULL DEFAULT 1（A4-S3 消除双通道
-	// schema 漂移）；本迁移先于 Round-35 NULL 归一化执行，拷贝侧以
-	// COALESCE(enabled,0) 兜底（与 lb_rules_new 拷贝同口径，NULL 视禁用）。
-	_, err = tx.Exec(`
+		// Create new upstreams table with VARCHAR rule_id
+		// enabled 与 fresh CREATE 对齐为 NOT NULL DEFAULT 1（A4-S3 消除双通道
+		// schema 漂移）；本迁移先于 Round-35 NULL 归一化执行，拷贝侧以
+		// COALESCE(enabled,0) 兜底（与 lb_rules_new 拷贝同口径，NULL 视禁用）。
+		_, err = tx.Exec(`
 		CREATE TABLE upstreams_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
@@ -2875,42 +2840,37 @@ func migrateLbRulesPrimaryKey() error {
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	)
 `)
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to create upstreams_new: %w", err))
-	}
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to create upstreams_new: %w", err))
+		}
 
-	// Copy data from old upstreams table to new (convert rule_id from int to string)
-	_, err = tx.Exec(`
+		// Copy data from old upstreams table to new (convert rule_id from int to string)
+		_, err = tx.Exec(`
 	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
 	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, COALESCE(u.enabled, 0), u.protocol,
 		       COALESCE(u.max_connections, 0), COALESCE(u.origin_domain, '')
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to copy upstreams data: %w", err))
-	}
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to copy upstreams data: %w", err))
+		}
 
-	// Drop old upstreams table
-	_, err = tx.Exec("DROP TABLE upstreams")
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to drop old upstreams: %w", err))
-	}
+		// Drop old upstreams table
+		_, err = tx.Exec("DROP TABLE upstreams")
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to drop old upstreams: %w", err))
+		}
 
-	// Rename new upstreams table
-	_, err = tx.Exec("ALTER TABLE upstreams_new RENAME TO upstreams")
-	if err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to rename upstreams_new: %w", err))
+		// Rename new upstreams table
+		_, err = tx.Exec("ALTER TABLE upstreams_new RENAME TO upstreams")
+		if err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to rename upstreams_new: %w", err))
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	if err := restoreForeignKeysSetting(context.Background(), conn, fkPrev); err != nil {
-		return fmt.Errorf("failed to restore foreign keys: %w", err)
-	}
-	fkRestored = true
 
 	log.Println("Successfully migrated lb_rules to use caddy_id as primary key")
 	return nil
@@ -2957,13 +2917,7 @@ func migrateCertJobsStatusConstraint() error {
 	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
 		return fmt.Errorf("failed to read cert_jobs schema: %w", err)
 	}
-	requiredStatuses := []string{
-		"queued", "pending", "processing", "creating_account", "creating_order", "order_created",
-		"cleanup_dns", "cleanup_warning", "presenting_dns", "waiting_propagation", "dns_propagated",
-		"accepting_challenge", "validating", "validated", "finalizing", "finalized", "downloading",
-		"downloaded", "issued", "failed", "waiting_ca", "disabled", "waiting_order_ready", "order_ready",
-		"waiting_order_valid", "order_valid",
-	}
+	requiredStatuses := CertJobStatuses()
 	constraintComplete := hasExactStatusConstraint(tableSQL, requiredStatuses)
 	defaultQueued := false
 	statusNotNull := false
@@ -2997,40 +2951,17 @@ func migrateCertJobsStatusConstraint() error {
 
 	log.Println("Migrating cert_jobs status constraint...")
 
-	conn, err := DB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to acquire connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(context.Background(), conn)
-	if err != nil {
-		return fmt.Errorf("failed to read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
-		return fmt.Errorf("failed to disable foreign keys: %w", err)
-	}
-	fkRestored := false
-	defer func() {
-		if !fkRestored {
-			_ = restoreForeignKeysSetting(context.Background(), conn, fkPrev)
+	if err := withTableRebuild(context.Background(), "cert_jobs", func(tx *sql.Tx) error {
+		if _, err := tx.Exec("ALTER TABLE cert_jobs RENAME TO cert_jobs_old"); err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to rename cert_jobs: %w", err))
 		}
-	}()
 
-	tx, err := conn.BeginTx(context.Background(), nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	if _, err := tx.Exec("ALTER TABLE cert_jobs RENAME TO cert_jobs_old"); err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to rename cert_jobs: %w", err))
-	}
-
-	if _, err := tx.Exec(`
+		if _, err := tx.Exec(`
 		CREATE TABLE cert_jobs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
 			domain VARCHAR(255) NOT NULL,
-			status VARCHAR(20) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
+			status VARCHAR(20) NOT NULL DEFAULT 'queued' ` + certJobStatusCheckSQL() + `,
 			message TEXT,
 			expires_at DATETIME,
 			cert_pem TEXT,
@@ -3045,10 +2976,10 @@ func migrateCertJobsStatusConstraint() error {
 			updated_at DATETIME
 		)
 	`); err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to create new cert_jobs table: %w", err))
-	}
+			return rollbackMigration(tx, fmt.Errorf("failed to create new cert_jobs table: %w", err))
+		}
 
-	if _, err := tx.Exec(`
+		if _, err := tx.Exec(`
 		INSERT INTO cert_jobs (
 			id, rule_id, domain, status, message, expires_at, cert_pem, key_pem,
 			ca_provider_id, renewal_attempts, ca_available_after, last_error_code, deployment_attempts, deployment_available_after,
@@ -3056,25 +2987,22 @@ func migrateCertJobsStatusConstraint() error {
 		)
 		SELECT
 			id, rule_id, domain,
-			CASE WHEN COALESCE(status,'queued') IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid') THEN COALESCE(status,'queued') ELSE 'queued' END,
+			CASE WHEN COALESCE(status,'queued') IN (` + certJobStatusListSQL() + `) THEN COALESCE(status,'queued') ELSE 'queued' END,
 			message, expires_at, cert_pem, key_pem,
 			ca_provider_id, renewal_attempts, ca_available_after, last_error_code, deployment_attempts, deployment_available_after,
 			created_at, updated_at
 		FROM cert_jobs_old
 	`); err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to copy cert_jobs data: %w", err))
-	}
+			return rollbackMigration(tx, fmt.Errorf("failed to copy cert_jobs data: %w", err))
+		}
 
-	if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
-		return rollbackMigration(tx, fmt.Errorf("failed to drop old cert_jobs table: %w", err))
+		if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
+			return rollbackMigration(tx, fmt.Errorf("failed to drop old cert_jobs table: %w", err))
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)
-	}
-	if err := restoreForeignKeysSetting(context.Background(), conn, fkPrev); err != nil {
-		return fmt.Errorf("failed to restore foreign keys: %w", err)
-	}
-	fkRestored = true
 
 	log.Println("cert_jobs status constraint migration completed")
 	return nil
@@ -3085,14 +3013,21 @@ func Close() error {
 	flushErr := FlushAPIKeyLastUsed()
 	var err error
 	err = errors.Join(err, flushErr)
+	// U12-F13（第 78 轮）：Close 后包级句柄必须清空——残留的已关闭 *sql.DB
+	// 会让 GetDB()/后台循环把「已关闭句柄」当有效连接使用，且在测试间泄漏。
+	// currentDB 同步复位（flush 已在关闭前完成）；重复 Close 因 nil 判定而幂等。
+	SetDB(nil)
 	if AuditDB != nil {
 		err = errors.Join(err, AuditDB.Close())
+		AuditDB = nil
 	}
 	if MetricsDB != nil {
 		err = errors.Join(err, MetricsDB.Close())
+		MetricsDB = nil
 	}
 	if DB != nil {
 		err = errors.Join(err, DB.Close())
+		DB = nil
 	}
 	return err
 }
@@ -3163,31 +3098,10 @@ func migrateNodesDropMasterID() error {
 	// 全部兄弟表重建迁移(migrateNodesDeadColumns 等)同模式。此前裸 DB.Exec
 	// 逐语句自动提交:半失败→nodes_new 残留→重跑 CREATE 报 already exists→
 	// 启动死循环;DROP 与 RENAME 之间崩溃→nodes 表丢失→下次启动静默重建
-	// 空表,节点注册表全量丢失。事务化后失败整体回滚、重跑幂等。
-	ctx := context.Background()
-	conn, err := DB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire nodes migration connection: %w", err)
-	}
-	defer conn.Close()
-	fkPrev, err := readForeignKeysSetting(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("read foreign_keys setting: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-		return fmt.Errorf("disable foreign keys: %w", err)
-	}
-	defer func() {
-		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
-			log.Printf("failed to restore foreign_keys=%d after nodes master_id migration: %v", fkPrev, err)
-		}
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin nodes master_id migration: %w", err)
-	}
-	defer tx.Rollback()
-	const rebuild = `DROP INDEX IF EXISTS idx_nodes_master;
+	// 空表,节点注册表全量丢失。事务化后失败整体回滚、重跑幂等（U12-F10：骨架
+	// 已收敛到 withTableRebuild）。
+	return withTableRebuild(context.Background(), "nodes master_id", func(tx *sql.Tx) error {
+		const rebuild = `DROP INDEX IF EXISTS idx_nodes_master;
 	DELETE FROM nodes WHERE id NOT IN (SELECT MIN(id) FROM nodes GROUP BY ip_address, port);
 	CREATE TABLE nodes_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3217,13 +3131,11 @@ func migrateNodesDropMasterID() error {
 	DROP TABLE nodes;
 	ALTER TABLE nodes_new RENAME TO nodes;
 	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);`
-	if _, err := tx.Exec(rebuild); err != nil {
-		return fmt.Errorf("rebuild nodes: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit nodes master_id migration: %w", err)
-	}
-	return nil
+		if _, err := tx.Exec(rebuild); err != nil {
+			return fmt.Errorf("rebuild nodes: %w", err)
+		}
+		return nil
+	})
 }
 
 func ensureClusterAppliedSections() error {

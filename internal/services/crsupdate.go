@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/taskengine"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,11 +90,6 @@ type CRSUpdateManager struct {
 	latestKnown      bool
 	latestFetchedAt  time.Time
 	latestRefreshing bool
-
-	schedulerMu       sync.Mutex
-	schedulerStop     chan struct{}
-	schedulerDone     chan struct{}
-	schedulerInterval time.Duration
 }
 
 var (
@@ -103,13 +99,12 @@ var (
 
 func newCRSUpdateManager(reloader func() error) *CRSUpdateManager {
 	return &CRSUpdateManager{
-		reloader:          reloader,
-		fetchLatestTag:    defaultFetchCRSLatestTag,
-		downloadTarball:   defaultDownloadCRSTarball,
-		crsDir:            crsLiveDir,
-		ruleCount:         -1,
-		schedulerInterval: time.Minute,
-		state:             crsTaskState{status: CRSStatusIdle},
+		reloader:        reloader,
+		fetchLatestTag:  defaultFetchCRSLatestTag,
+		downloadTarball: defaultDownloadCRSTarball,
+		crsDir:          crsLiveDir,
+		ruleCount:       -1,
+		state:           crsTaskState{status: CRSStatusIdle},
 	}
 }
 
@@ -128,9 +123,6 @@ func GetCRSUpdateManager() *CRSUpdateManager {
 }
 
 func ResetCRSUpdateManagerForTest() {
-	if crsUpdateManager != nil {
-		crsUpdateManager.StopScheduler()
-	}
 	crsUpdateManager = nil
 	crsUpdateManagerOnce = sync.Once{}
 }
@@ -174,6 +166,49 @@ func ensureCRSVersionRow() {
 // CurrentCRSVersionForLog 面向日志的当前 CRS 版本（main 载入摘要行消费）。
 func CurrentCRSVersionForLog() string { return currentCRSVersion() }
 
+// LatestVersionCached returns the last fetched upstream tag without network I/O.
+func (m *CRSUpdateManager) LatestVersionCached() (string, bool) {
+	m.latestMu.Lock()
+	defer m.latestMu.Unlock()
+	return m.latestTag, m.latestKnown
+}
+
+// RefreshLatestAsync refreshes the cached upstream tag in the background when
+// the cache is older than 10 minutes; it never blocks the caller.
+// latestFetchedAt 记录最近一次尝试（含失败）：失败路径同样受 10 分钟守卫约束。
+func (m *CRSUpdateManager) RefreshLatestAsync() {
+	m.latestMu.Lock()
+	if m.latestRefreshing || time.Since(m.latestFetchedAt) < 10*time.Minute {
+		m.latestMu.Unlock()
+		return
+	}
+	m.latestRefreshing = true
+	m.latestMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tag, err := m.fetchLatestTag(ctx)
+		m.latestMu.Lock()
+		m.latestRefreshing = false
+		m.latestFetchedAt = time.Now()
+		if err == nil {
+			m.latestTag = tag
+			m.latestKnown = true
+		}
+		m.latestMu.Unlock()
+		var isMaster bool
+		if qerr := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); qerr == nil && isMaster {
+			if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
+				Logf("error", "crs update: failed to record last_checked: %v", dbErr)
+			}
+		}
+		if err != nil {
+			Logf("error", "crs update: background version check failed: %v", err)
+		}
+	}()
+}
+
 func currentCRSVersion() string {
 	var version string
 	if err := db.DB.QueryRow("SELECT version FROM security_crs_version WHERE id=1").Scan(&version); err != nil || version == "" {
@@ -206,20 +241,6 @@ func (m *CRSUpdateManager) StartUpdate(trigger string, rc *taskengine.RunContext
 		m.run(trigger, rc)
 	}()
 	return done, nil
-}
-
-// AutoUpdateEnabled CRS 自动更新是否开启（从 wire Run 体到期检查消费）。
-func (m *CRSUpdateManager) AutoUpdateEnabled() bool {
-	var v bool
-	db.DB.QueryRow("SELECT COALESCE(auto_update,0) FROM security_crs_version WHERE id=1").Scan(&v)
-	return v
-}
-
-// NextScheduledSlot 返回下次更新排程槽（空串=未设置）。
-func (m *CRSUpdateManager) NextScheduledSlot() string {
-	var s string
-	db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_crs_version WHERE id=1").Scan(&s)
-	return s
 }
 
 func (m *CRSUpdateManager) IsRunning() bool {
@@ -305,9 +326,10 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	}
 
 	ensureCRSVersionRow()
+	runStartedAt := taskRunStartedAt(rc)
 	if _, err := db.DB.Exec(
-		"UPDATE security_crs_version SET trigger=?, started_at=datetime('now'), finished_at=NULL WHERE id=1",
-		trigger,
+		"UPDATE security_crs_version SET trigger=?, started_at=?, last_checked=?, finished_at=NULL WHERE id=1",
+		trigger, runStartedAt, runStartedAt,
 	); err != nil {
 		Logf("error", "crs update: failed to mark start: %v", err)
 	}
@@ -319,7 +341,7 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	err := runWithInTaskRetry(func() error {
 		var ferr error
 		tag, ferr = m.fetchLatestTag(runCtx)
-		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
+		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=? WHERE id=1", runStartedAt); dbErr != nil {
 			Logf("error", "crs update: failed to record last_checked: %v", dbErr)
 		}
 		return ferr
@@ -342,7 +364,32 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	// CRS-1(第 5 轮审计 P2):tag < current 时也跳过(防静默降级)——
 	// 此前仅精确相等跳过,捆绑版本 > 远端最新(如上游 release 被删/转 pre)时
 	// 无条件 downloadAndInstall 降级为更旧树,与 UI IsLatest(<=0 即最新)语义相悖。
-	if cmp, cmpErr := CompareCRSVersions(tag, currentCRSVersion()); cmpErr == nil && cmp <= 0 {
+	// U02-F05：精确相等短路（与格式无关）——相同版本即「已是最新」，不再依赖
+	// 版本解析；不同且不可比较显式 fail-visible（见下方 else-if）。
+	currentVersion := currentCRSVersion()
+	if tag == currentVersion {
+		WriteCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
+		if _, err := db.DB.Exec(
+			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
+			trigger, versionTableNextSlot("security_crs_version", time.Now().UTC()),
+		); err != nil {
+			Logf("warn", "crs update: failed to record latest-version skip: %v", err)
+		}
+		m.mu.Lock()
+		m.state.status = CRSStatusSuccess
+		m.state.message = "已是最新版本"
+		m.state.finishedAt = time.Now().UTC()
+		m.state.version = currentCRSVersion()
+		m.mu.Unlock()
+		return
+	}
+	if cmp, cmpErr := CompareCRSVersions(tag, currentVersion); cmpErr != nil && currentVersion != "" && !strings.EqualFold(currentVersion, "unknown") {
+		// 不同且不可比较：不再隐含「必然更新」（格式漂移静默降级/升级的温床），
+		// 显式失败等待人工确认。空 current（首装）走安装路径。
+		m.fail(fmt.Errorf("版本格式不可比较（远端 %q / 当前 %q），已中止更新以避免静默降级", tag, currentVersion), false)
+		m.advanceSlotIfAuto(trigger)
+		return
+	} else if cmpErr == nil && cmp <= 0 {
 		WriteCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			// 排程槽——手动触发不得改变下一次预约执行时间；现存未来槽不被回拨。

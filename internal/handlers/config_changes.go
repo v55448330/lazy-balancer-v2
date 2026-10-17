@@ -123,6 +123,13 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 			return
 		}
 		plan.Changed = true
+		// U08-F08：同 label 的多字段（大屏本站坐标 lat/lon 共用「大屏本站坐标」）
+		// 只列一次——变更清单/审计预览不重复；Changed 真值保持（任一字段变更即 true）。
+		for _, existing := range plan.Changes {
+			if existing == label {
+				return
+			}
+		}
 		plan.Changes = append(plan.Changes, label)
 		section := services.GetConfigSection(field)
 		plan.SectionChanges[section] = append(plan.SectionChanges[section], label)

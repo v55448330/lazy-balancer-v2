@@ -929,7 +929,7 @@ func TestUpdateRule_preserves_omitted_boolean_fields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate certificate: %v", err)
 	}
-	if _, err := db.DB.Exec(`UPDATE lb_rules SET tls_cert=?, tls_key=?, dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tcp_proxy_protocol=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_keep'`, certPEM, keyPEM); err != nil {
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET tls_cert=?, tls_key=?, dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_keep'`, certPEM, keyPEM); err != nil {
 		t.Fatalf("seed boolean fields: %v", err)
 	}
 	seedAuditUpstream(t, "lb_bool_keep")
@@ -946,13 +946,13 @@ func TestUpdateRule_preserves_omitted_boolean_fields(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
 	}
-	var dynamicDNS, dnsServer, activeHealth, proxyProtocol, enableTLS, redirect, compress, enabled, logEnabled bool
-	if err := db.DB.QueryRow(`SELECT dynamic_dns,enable_dns_server,enable_active_health_check,tcp_proxy_protocol,enable_tls,tls_http_redirect,enable_compress,enabled,log_enabled FROM lb_rules WHERE caddy_id='lb_bool_keep'`).Scan(
-		&dynamicDNS, &dnsServer, &activeHealth, &proxyProtocol, &enableTLS, &redirect, &compress, &enabled, &logEnabled); err != nil {
+	var dynamicDNS, dnsServer, activeHealth, enableTLS, redirect, compress, enabled, logEnabled bool
+	if err := db.DB.QueryRow(`SELECT dynamic_dns,enable_dns_server,enable_active_health_check,enable_tls,tls_http_redirect,enable_compress,enabled,log_enabled FROM lb_rules WHERE caddy_id='lb_bool_keep'`).Scan(
+		&dynamicDNS, &dnsServer, &activeHealth, &enableTLS, &redirect, &compress, &enabled, &logEnabled); err != nil {
 		t.Fatalf("read booleans: %v", err)
 	}
-	if !dynamicDNS || !dnsServer || !activeHealth || !proxyProtocol || !enableTLS || !redirect || !compress || !enabled || !logEnabled {
-		t.Fatalf("omitted booleans changed: dynamic_dns=%v dns_server=%v active=%v proxy=%v tls=%v redirect=%v compress=%v enabled=%v log=%v", dynamicDNS, dnsServer, activeHealth, proxyProtocol, enableTLS, redirect, compress, enabled, logEnabled)
+	if !dynamicDNS || !dnsServer || !activeHealth || !enableTLS || !redirect || !compress || !enabled || !logEnabled {
+		t.Fatalf("omitted booleans changed: dynamic_dns=%v dns_server=%v active=%v tls=%v redirect=%v compress=%v enabled=%v log=%v", dynamicDNS, dnsServer, activeHealth, enableTLS, redirect, compress, enabled, logEnabled)
 	}
 	if !strings.Contains(currentConfig(), `"lb_bool_keep"`) {
 		t.Fatalf("Caddy config lost updated route: %s", currentConfig())
@@ -1379,7 +1379,7 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	harness.handler = &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}
 	harness.loadCalls = &loadCalls
 	harness.currentConfig = func() string {
@@ -1444,7 +1444,7 @@ func newAuditRuleHandlers(t *testing.T, failedLoads int32) (*Handlers, *atomic.I
 	return &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}, &loadCalls, &lastLoad
 }
 

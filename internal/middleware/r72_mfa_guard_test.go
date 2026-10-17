@@ -30,7 +30,6 @@ func TestMFAStepUpGuard_endToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		id, _ := res.LastInsertId()
-		_ = username
 		if mfaEnabled {
 			if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1 WHERE id=?", id); err != nil {
 				t.Fatal(err)
@@ -76,21 +75,21 @@ func TestMFAStepUpGuard_endToEnd(t *testing.T) {
 		t.Fatalf("MFA user without mfa_ts: got %d, want 428（守卫生效证明）", code)
 	}
 
-	// Case 2：verify-step 豁免 → 不是 428（401 也行——证明未被守卫拦截）
-	if code := post("/api/v1/auth/mfa/verify-step", tokenOld); code == http.StatusPreconditionRequired {
-		t.Fatal("verify-step must be exempt from step-up guard（C-I-1 自锁）")
+	// Case 2：verify-step 豁免 → 不得被守卫 428，且不得落 5xx
+	if code := post("/api/v1/auth/mfa/verify-step", tokenOld); code == http.StatusPreconditionRequired || code >= 500 {
+		t.Fatalf("verify-step must be exempt from step-up guard and reach handler, got %d", code)
 	}
 
-	// Case 3：非 MFA 用户 → 直通到后续中间件（非 428）
+	// Case 3：非 MFA 用户 → 直通到后续中间件（不得 428/5xx）
 	tokenPlain := seedUser(false, 0)
-	if code := put("/api/v1/config", tokenPlain); code == http.StatusPreconditionRequired {
-		t.Fatal("non-MFA user must not be challenged")
+	if code := put("/api/v1/config", tokenPlain); code == http.StatusPreconditionRequired || code >= 500 {
+		t.Fatalf("non-MFA user must not be challenged or crash, got %d", code)
 	}
 
-	// Case 4：MFA 用户 + 新鲜 mfa_ts → 非 428
+	// Case 4：MFA 用户 + 新鲜 mfa_ts → 不得 428/5xx
 	tokenFresh := seedUser(true, time.Now().Unix())
-	if code := put("/api/v1/config", tokenFresh); code == http.StatusPreconditionRequired {
-		t.Fatal("fresh mfa_ts must pass")
+	if code := put("/api/v1/config", tokenFresh); code == http.StatusPreconditionRequired || code >= 500 {
+		t.Fatalf("fresh mfa_ts must pass, got %d", code)
 	}
 
 	// Case 5（R72 十六次）：只读语义 POST（readOnlyWriteRoutes：批量证书状态

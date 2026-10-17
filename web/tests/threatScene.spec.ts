@@ -1,28 +1,31 @@
-// 威胁大屏 v16 确定性验收单测（node --test，纯数学+数据级断言，无框架依赖）：
+// 威胁大屏确定性验收单测（node --test，纯数学+数据级断言，无框架依赖）：
 //   ① 2D 投影往返：worldToScreen→screenToLonLat 误差 < 1e-9°（5×5 网格+中心+角点）
 //   ② 360° 环绕：panBy 横向平移后中心拾取正确（wrap 归一）；纵向钳制生效
 //   ③ 省板包含：10 国省级 bbox ⊆ 国家 bbox ±18°（数据级，含中国高精度省界）
-//   ④ 缩放锚点：zoomAt 指针锚定（锚点地理坐标缩放前后不变）
-//   ⑤ 下钻取景一致性：俄/中/美/法/沙特 占屏比例方差 < 0.12（v14⑤a 2D 口径）
-//   ⑤b 反日界线 unwrap：俄罗斯主环 bbox 不跨全宽
+//   ④ 下钻口径：统一倍率常量 / 主环取景中心 / 南界钳制（已退役的按国自适应
+//      fitDrillZoom 不再有生产消费方——v2.3.8 用户裁定统一倍率）
+//   ④b 反日界线 unwrap：俄罗斯主环 bbox 不跨全宽
+//   ⑥ 下钻分桶环绕：wrappedBucketKeys 跨日界线键序列去重且覆盖视口
 //
-// 运行：cd web && node --test tests/threatScene.spec.ts
+// 运行：cd web && npm test
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   LAT_TOP,
+  LAT_BOTTOM,
   WORLD_D,
+  WORLD_W,
+  DRILL_UNIFIED_ZOOM,
   worldToScreen,
   screenToLonLat,
   panBy,
-  zoomAt,
-  fitDrillZoom,
   principalBounds,
+  wrappedBucketKeys,
   type Cam2D,
 } from '../src/utils/threatProjection.ts'
 import { ADMIN1_PROVINCES } from '../src/utils/admin1Provinces.ts'
@@ -92,15 +95,70 @@ test('②360° 环绕：panBy 横向平移后中心拾取正确；纵向钳制�
   void centerY
 })
 
-test('④b 缩放锚点：zoomAt 后锚点地理坐标不变（放大后仍局部视图）', () => {
-  const anchor = { x: 1100, y: 500 }
-  const start = { ...CAM, zoom: 6 }
-  const before = screenToLonLat(anchor.x, anchor.y, start)
-  const next = zoomAt(start, anchor.x, anchor.y, 1.5, 1, 200)
-  const after = screenToLonLat(anchor.x, anchor.y, next)
-  assert.ok(Math.abs(before.lon - after.lon) < 1e-9, `锚点经度漂移 ${before.lon} → ${after.lon}`)
-  assert.ok(Math.abs(before.lat - after.lat) < 1e-9, `锚点纬度漂移 ${before.lat} → ${after.lat}`)
-  assert.ok(next.zoom > CAM.zoom, 'zoom 应放大')
+test('④下钻口径：统一倍率=9、主环取景中心为 bbox 中心、南界 -55 钳制', () => {
+  // v2.3.8 用户裁定：任意国家统一下钻倍率（按 bbox 自适应的 fitDrillZoom 已退役，
+  // 生产零消费方——见本文件 ⑥ 后的断言）
+  assert.equal(DRILL_UNIFIED_ZOOM, 9, '下钻统一倍率必须为 9')
+  // 主环取景中心：五国 bbox 中心落在各自经纬范围内（取景落点不漂移到邻国）
+  const names = ['俄罗斯', '中国', '美国', '法国', '沙特阿拉伯']
+  for (const name of names) {
+    const c = WORLD_COUNTRIES.find((x) => x.name === name)
+    assert.ok(c, `worldBorders 缺 ${name}`)
+    const b = principalBounds(c.polys)
+    const clon0 = (b.minLon + b.maxLon) / 2
+    const clon = clon0 > 180 ? clon0 - 360 : clon0
+    const clat = (b.minLat + b.maxLat) / 2
+    assert.ok(clon >= -180 && clon <= 180, `${name} 取景中心经度越界 ${clon}`)
+    assert.ok(clat >= b.minLat - 1e-9 && clat <= b.maxLat + 1e-9, `${name} 取景中心纬度 ${clat} 不在 bbox 内`)
+  }
+  // 南界：投影域裁到 -55（南极洲无业务流量）——世界高与相机纵向钳制同源。
+  // 总览 zoom 下可视高 ≥ 世界高 → 相机恒居中；下钻倍率下越界拖动被钳在
+  // [visH/2, WORLD_D - visH/2]，画面永不越出 -55° 南界。
+  assert.equal(LAT_BOTTOM, -55)
+  assert.equal(WORLD_D, LAT_TOP - LAT_BOTTOM)
+  const overviewCam = { camX: 0, camY: WORLD_D - 1, zoom: 3, width: W, height: H }
+  assert.ok(H / 3 >= WORLD_D)
+  assert.equal(panBy(overviewCam, 0, -100000).camY, WORLD_D / 2, '世界完整可见时相机必须纵向居中')
+  const drillCam = { camX: 0, camY: 0, zoom: DRILL_UNIFIED_ZOOM, width: W, height: H }
+  const visH = H / DRILL_UNIFIED_ZOOM
+  const panned = panBy(drillCam, 0, -100000)
+  assert.ok(Math.abs(panned.camY - (WORLD_D - visH / 2)) < 1e-9, `下钻相机下缘未钳制: camY=${panned.camY}`)
+  assert.ok(panned.camY + visH / 2 <= WORLD_D + 1e-9, '相机下缘越出世界高（-55° 钳制失效）')
+})
+
+test('④c 已退役取景辅助零生产消费方（fitDrillZoom / zoomAt）', () => {
+  const srcDir = join(ROOT, 'src')
+  const offenders: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) { walk(full); continue }
+      if (!/\.(ts|vue)$/.test(entry.name)) continue
+      const text = readFileSync(full, 'utf8')
+      if (/\b(fitDrillZoom|zoomAt)\b/.test(text)) offenders.push(full)
+    }
+  }
+  walk(srcDir)
+  assert.deepEqual(offenders, [], `已退役取景辅助仍有生产消费方: ${offenders.join(', ')}`)
+})
+
+test('⑥下钻分桶环绕：跨日界线键序列去重且覆盖视口', () => {
+  // 世界带内：键集单调且覆盖视口
+  const inside = wrappedBucketKeys(-20, 40)
+  assert.deepEqual(inside, [-2, -1, 0, 1, 2, 3])
+  // 跨日界线（minLon < -180 或 maxLon > 180）：归一后无重复、键值 ∈ [-15, 14]
+  for (const [minLon, maxLon] of [[170, 190], [-190, -170], [-380, 380]] as const) {
+    const keys = wrappedBucketKeys(minLon, maxLon)
+    assert.equal(new Set(keys).size, keys.length, `键序列含重复: ${keys}`)
+    for (const key of keys) assert.ok(key >= -15 && key <= 14, `桶键 ${key} 越出世界带`)
+  }
+  // 170°→190° 覆盖 15→(15 归一 -15)：日界线两侧同一份点阵副本
+  assert.deepEqual(wrappedBucketKeys(170, 190), [14, -15])
+  // 整世界带：30 个键一个不少
+  assert.equal(wrappedBucketKeys(-180, 180).length, 30)
+  // 桶宽参数化：6° 桶=60 键
+  assert.equal(wrappedBucketKeys(-180, 180, 6).length, 60)
+  void WORLD_W
 })
 
 // ---- 数据级：省板包含断言（逐行解析三个静态模块） ----
@@ -220,29 +278,7 @@ test('③省板包含：10 国省级 bbox ⊆ 国家 bbox ±18°（拦截生成/
   assert.ok(Array.isArray(WORLD_COUNTRIES) && WORLD_COUNTRIES.length >= 150)
 })
 
-test('⑤下钻取景一致性：俄/中/美/法/沙特 占屏比例方差 < 0.12（2D 线性）', () => {
-  // 新加坡不在 NE 110m 数据（SKIP 披露，非取景缺陷）
-  const names = ['俄罗斯', '中国', '美国', '法国', '沙特阿拉伯']
-  const doms: number[] = []
-  for (const name of names) {
-    const c = WORLD_COUNTRIES.find((x) => x.name === name)
-    assert.ok(c, `worldBorders 缺 ${name}`)
-    const b = principalBounds(c.polys)
-    const bboxW = b.maxLon - b.minLon
-    const bboxH = b.maxLat - b.minLat
-    const zoom = fitDrillZoom(bboxW, bboxH, W, H, 1)
-    const fw = (bboxW * zoom) / W
-    const fh = (bboxH * zoom) / H
-    const dom = Math.max(fw, fh)
-    doms.push(dom)
-    assert.ok(dom >= 0.7 && dom <= 1.0, `${name} 主导占屏 ${dom.toFixed(2)} 超出 [0.70, 1.00]`)
-  }
-  const mean = doms.reduce((a, b) => a + b, 0) / doms.length
-  const std = Math.sqrt(doms.reduce((a, b) => a + (b - mean) ** 2, 0) / doms.length)
-  assert.ok(std < 0.12, `五国占屏比例 stddev ${std.toFixed(3)} >= 0.12`)
-})
-
-test('⑤b 反日界线 unwrap：俄罗斯主环 bbox 不再跨全宽', () => {
+test('⑤反日界线 unwrap：俄罗斯主环 bbox 不再跨全宽', () => {
   const c = WORLD_COUNTRIES.find((x) => x.name === '俄罗斯')
   assert.ok(c)
   const b = principalBounds(c.polys)

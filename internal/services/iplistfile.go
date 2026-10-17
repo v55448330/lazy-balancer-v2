@@ -24,7 +24,7 @@ func ConfigureWafDirs(dataDir string) {
 	if filepath.Dir(dataDir) == "/app" {
 		return // 容器默认形态：保持 /app/waf/* 常量
 	}
-	wafDir := filepath.Join(filepath.Dir(dataDir), "waf")
+	wafDir = filepath.Join(filepath.Dir(dataDir), "waf")
 	IPListDataDir = filepath.Join(wafDir, "ip-lists")
 	wafiplist.AllowedPathPrefix = wafDir + string(filepath.Separator)
 }
@@ -121,6 +121,13 @@ const ipListGCInterval = time.Hour
 //     自行失效。
 var ipListProjectedFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|.+-[0-9a-f]{12})\.txt$`)
 
+// ipListTempFileName 匹配 writeIPListFile 的临时文件名形态
+// （CreateTemp(IPListDataDir, scope+"-*.tmp")：<投影 scope>-<随机数字>.tmp）。
+// U01-F07（第 78 轮）：GC 只委托删除本模块拥有的临时文件——目录内的无关
+// .tmp（运维投放的 ops-notes.tmp 等）一律不动；24h 超龄门槛仍保护在役写入
+// （在役 tmp 恒新鲜）。scope 白名单与 ipListProjectedFileName 同源。
+var ipListTempFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*-[0-9]+|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))-[0-9]+|tp-[0-9]+|.+-[0-9a-f]{12}-[0-9]+)\.tmp$`)
+
 // ipListRenderRefs 记录本进程渲染引用过的投影文件及最近引用时间：一次全量
 // 配置渲染会重新投影全部在役名单（同字节跳写也计引用），故「长期
 // 未被引用 + 超龄」即孤儿（策略解绑/删除、发射面变化后的旧文件）。
@@ -200,7 +207,9 @@ func gcStaleIPListFiles(now time.Time, maxAge time.Duration) (removed int) {
 	// 第 59 轮 R59-P5：顺带清理超龄崩溃残留的投影临时文件（CreateTemp 半截
 	// .tmp 无引用语义，超龄即可删；在役写入的 .tmp 恒新鲜，不受影响）。
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tmp") {
+		// U01-F07：名字形态门——只回收本模块 CreateTemp 产出的临时文件，
+		// 无关 .tmp 不碰（旧实现仅按后缀匹配，会删除目录内任意超龄 .tmp）。
+		if entry.IsDir() || !ipListTempFileName.MatchString(entry.Name()) {
 			continue
 		}
 		tmpFull := filepath.Join(IPListDataDir, entry.Name())

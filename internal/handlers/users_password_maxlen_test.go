@@ -26,7 +26,7 @@ func TestUserPasswordEndpoints_reject_passwords_over_policy_max(t *testing.T) {
 	}{
 		{name: "create user", method: http.MethodPost, path: "/users", body: `{"username":"long-create","password":"` + longPassword + `","role":"user"}`, mount: func(r *gin.Engine, h *Handlers) { r.POST("/users", h.CreateUser) }},
 		{name: "update user", method: http.MethodPut, path: "/users/1", body: `{"password":"` + longPassword + `"}`, mount: func(r *gin.Engine, h *Handlers) { r.PUT("/users/:id", h.UpdateUser) }},
-		{name: "reset password", method: http.MethodPost, path: "/users/1/password", body: `{"new_password":"` + longPassword + `"}`, mount: func(r *gin.Engine, h *Handlers) { r.POST("/users/:id/password", h.ResetUserPassword) }},
+		{name: "reset password", method: http.MethodPost, path: "/users/1/reset-password", body: `{"new_password":"` + longPassword + `"}`, mount: func(r *gin.Engine, h *Handlers) { r.POST("/users/:id/reset-password", h.ResetUserPassword) }},
 		{name: "update current user", method: http.MethodPut, path: "/me", body: `{"password":"` + longPassword + `"}`, mount: func(r *gin.Engine, h *Handlers) {
 			r.PUT("/me", func(c *gin.Context) { c.Set("user_id", 1); h.UpdateCurrentUser(c) })
 		}},

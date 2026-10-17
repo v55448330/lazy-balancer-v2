@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 const (
@@ -20,13 +22,9 @@ const (
 
 var (
 	ErrJobTransitionConflict = errors.New("certificate job status transition conflict")
-	allJobStatuses           = []string{
-		"queued", "pending", "processing", "creating_account", "creating_order", "order_created",
-		"cleanup_dns", "cleanup_warning", "presenting_dns", "waiting_propagation", "dns_propagated",
-		"accepting_challenge", "validating", "validated", "finalizing", "finalized", "downloading",
-		"downloaded", "issued", "failed", "waiting_ca", "disabled", "waiting_order_ready", "order_ready",
-		"waiting_order_valid", "order_valid",
-	}
+	// allJobStatuses 派生自 db.CertJobStatuses()（L04-06 单源：cert_jobs 的
+	// CHECK 枚举与 DDL 由同一列表生成；services 依赖 db，反向不可行）。
+	allJobStatuses            = db.CertJobStatuses()
 	jobStatusesExceptDisabled = withoutJobStatuses("disabled")
 	nonTerminalJobStatuses    = withoutJobStatuses("issued", "failed", "disabled")
 	jobLifecycleByStatus      = map[string]string{
@@ -64,6 +62,11 @@ type jobTransitionExecutor interface {
 }
 
 type jobSQLExpression string
+
+// AllJobStatuses 返回 cert_jobs.status 规范枚举的副本（L04-06 单一真源：
+// 与 db.CertJobStatuses()/fresh DDL CHECK/迁移白名单同源）。调用方可安全修改
+// 返回值，不影响状态机。
+func AllJobStatuses() []string { return db.CertJobStatuses() }
 
 func withoutJobStatuses(excluded ...string) []string {
 	exclude := make(map[string]struct{}, len(excluded))

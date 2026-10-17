@@ -514,6 +514,80 @@ func TestCertificateService_Stop_waits_for_deployment_retry_callback(t *testing.
 	<-stopDone
 }
 
+func TestSetActiveCertificateService_rearmsPeriodicTasks(t *testing.T) {
+	// Given：两个长间隔证书周期任务已完成首轮，lastCheck 已推进。
+	te := taskengine.NewEngine(taskengine.Options{TickInterval: 5 * time.Millisecond})
+	SetTaskEngineForTest(te)
+	t.Cleanup(func() {
+		StopTaskEngine()
+		SetActiveCertificateService(nil)
+	})
+	counts := map[string]*atomic.Int32{}
+	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+		id := id
+		counts[id] = &atomic.Int32{}
+		mustRegisterTask(te, taskengine.Descriptor{
+			ID: id, Family: "certificates", Name: id, Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
+			IntervalFn: func() time.Duration { return time.Hour },
+			Run: func(taskengine.RunContext) error {
+				counts[id].Add(1)
+				return nil
+			},
+		})
+		te.StartLoop(id)
+	}
+	waitForCond(t, 2*time.Second, func() bool {
+		return counts["cert-renewal-scan"].Load() == 1 && counts["cert-manual-poll"].Load() == 1
+	})
+
+	// When：证书服务就绪（active 指针注入）后再次 tick。
+	SetActiveCertificateService(NewCertificateService())
+	waitForCond(t, 100*time.Millisecond, func() bool {
+		return counts["cert-renewal-scan"].Load() == 2 && counts["cert-manual-poll"].Load() == 2
+	})
+
+	// Then：服务就绪必须重置节拍并立即补首轮，不得静默等到 6h/10min 后。
+	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+		if got := counts[id].Load(); got != 2 {
+			t.Errorf("%s 服务就绪后执行次数=%d, want 2（重置首轮）", id, got)
+		}
+	}
+}
+
+func TestSetActiveCertificateService_preservesStoppedTasks(t *testing.T) {
+	// Given：用户明确停止两个非业务驱动周期任务。
+	te := taskengine.NewEngine(taskengine.Options{TickInterval: 5 * time.Millisecond})
+	SetTaskEngineForTest(te)
+	t.Cleanup(func() {
+		StopTaskEngine()
+		SetActiveCertificateService(nil)
+	})
+	var runs atomic.Int32
+	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+		id := id
+		mustRegisterTask(te, taskengine.Descriptor{
+			ID: id, Family: "certificates", Name: id, Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
+			IntervalFn: func() time.Duration { return time.Hour },
+			Run:        func(taskengine.RunContext) error { runs.Add(1); return nil },
+		})
+		te.StopLoop(id)
+	}
+
+	// When：cert-issuance 就绪触发 active 注入。
+	SetActiveCertificateService(NewCertificateService())
+
+	// Then：只能重置已开启任务的节拍，不得重新打开用户停止的调度或执行 Run。
+	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+		meta, ok := te.Lookup(id)
+		if !ok || meta.LoopOn {
+			t.Errorf("%s 被 active 注入重新启用（用户停止态被覆盖）", id)
+		}
+	}
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("停止任务被执行 %d 次, want 0", got)
+	}
+}
+
 func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

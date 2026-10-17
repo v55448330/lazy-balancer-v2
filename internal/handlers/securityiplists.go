@@ -38,6 +38,189 @@ func parseIPListRefsIDs(raw string) []int64 {
 	return ids
 }
 
+// ipListQueryer 是 allow 生效集合校验的查询面（*sql.DB 与 *sql.Tx 共用）。
+type ipListQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// loadIPListEntriesForAllow 读取引用名单的实际条目（allow 生效集合判定单源）。
+func loadIPListEntriesForAllow(q ipListQueryer, ids []int64) (map[int64][]string, error) {
+	out := make(map[int64][]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	// 去重（同一名单重复引用不放大绑定变量）+ 分块，避免超过 SQLite 变量上限。
+	unique := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	for start := 0; start < len(unique); start += 500 {
+		end := start + 500
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		rows, err := q.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			var raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var entries []models.IPListEntry
+			if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("IP 列表 #%d 条目损坏: %w", id, err)
+			}
+			// 与渲染投影层共用同一条目到期判据：仅已到期条目的名单不得被当非空。
+			entries = services.AutobanActiveEntries(entries)
+			values := make([]string, 0, len(entries))
+			for _, e := range entries {
+				if e.Value != "" {
+					values = append(values, e.Value)
+				}
+			}
+			out[id] = values
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
+// allowEffectiveListNonEmpty 判定 allow 模式的生效集合是否非空：内联条目 ∪
+// 全部引用名单的**实际条目**并集（不要求每个引用名单非空）。U03-F01：旧写侧
+// 门只看引用个数，引用一个空名单即落库「启用 allow + 空生效集」——发射端
+// len>0 门静默跳过 ACL，实际效果是放行全部（fail-open）。查询失败返回错误，
+// 调用方按 500 处理（不得按空集合或非空猜测）。
+func allowEffectiveListNonEmpty(q ipListQueryer, inlineRaw, refsRaw string) (bool, error) {
+	var inline []string
+	if strings.TrimSpace(inlineRaw) != "" {
+		if err := json.Unmarshal([]byte(inlineRaw), &inline); err != nil {
+			return false, fmt.Errorf("内联 IP 列表解析失败: %w", err)
+		}
+	}
+	for _, v := range inline {
+		if strings.TrimSpace(v) != "" {
+			return true, nil
+		}
+	}
+	refs := parseIPListRefsIDs(refsRaw)
+	if len(refs) == 0 {
+		return false, nil
+	}
+	entries, err := loadIPListEntriesForAllow(q, refs)
+	if err != nil {
+		return false, err
+	}
+	for _, values := range entries {
+		if len(values) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// allowEmptyingBlockedByPolicies 判定「把 listID 清空为 replacement」是否会让
+// 任一 allow 策略的生效集合变为空（U03-F01 的删除侧门）。偏严语义：检查全部
+// 启用 allow 策略（含 disabled 策略——与 Create/Update 对禁用策略同样设门的
+// 口径一致）。查询失败返回错误（调用方 500，fail-closed）。
+func allowEmptyingBlockedByPolicies(q ipListQueryer, listID int64, replacement []string) (bool, error) {
+	rows, err := q.Query(`SELECT COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	type policyAllowShape struct {
+		inline string
+		refs   []int64
+	}
+	var shapes []policyAllowShape
+	needIDs := make(map[int64]bool)
+	for rows.Next() {
+		var inline, refsRaw string
+		if err := rows.Scan(&inline, &refsRaw); err != nil {
+			return false, err
+		}
+		refs := parseIPListRefsIDs(refsRaw)
+		references := false
+		for _, r := range refs {
+			if r == listID {
+				references = true
+			} else {
+				needIDs[r] = true
+			}
+		}
+		if references {
+			shapes = append(shapes, policyAllowShape{inline: inline, refs: refs})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if len(shapes) == 0 {
+		return false, nil
+	}
+	ids := make([]int64, 0, len(needIDs))
+	for id := range needIDs {
+		ids = append(ids, id)
+	}
+	entries, err := loadIPListEntriesForAllow(q, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, shape := range shapes {
+		var inline []string
+		if strings.TrimSpace(shape.inline) != "" {
+			if err := json.Unmarshal([]byte(shape.inline), &inline); err != nil {
+				return false, fmt.Errorf("策略内联 IP 列表解析失败: %w", err)
+			}
+		}
+		nonEmpty := false
+		for _, v := range inline {
+			if strings.TrimSpace(v) != "" {
+				nonEmpty = true
+				break
+			}
+		}
+		if nonEmpty {
+			continue
+		}
+		for _, ref := range shape.refs {
+			values := replacement
+			if ref != listID {
+				values = entries[ref]
+			}
+			if len(values) > 0 {
+				nonEmpty = true
+				break
+			}
+		}
+		if !nonEmpty {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // parseIPListRefsPayload 校验并归一 refs 载荷：空白归一为 "[]"；非空必须是
 // 整数数组 JSON（字符串/对象条目拒绝），同时把归一结果写回 *val，返回去重 id。
 func parseIPListRefsPayload(field string, val *string) ([]int64, error) {
@@ -261,6 +444,11 @@ type ipListRow struct {
 	// PresetAutoban=预置「自动封禁名单」（F73-A）：system=1 但条目可改/禁删
 	// ——前端据此渲染编辑形态与到期列（与威胁名单只读形态区分）。
 	PresetAutoban bool `json:"preset_autoban"`
+	// TrustedProxyReferenced 名单被 Caddy 全局「受信代理网段」引用（U03-F09）：
+	// 引用视图纳入受信代理面——旧实现展示 0 引用但删除 409。不伪造 policy id。
+	TrustedProxyReferenced bool `json:"trusted_proxy_referenced"`
+	// TrustedProxyScope 受信代理引用范围的可读说明（空=未引用）。
+	TrustedProxyScope string `json:"trusted_proxy_scope,omitempty"`
 }
 
 // loadIPListRefPolicies 一次查询全部策略的两列 refs 并在 Go 侧解析引用关系。
@@ -327,6 +515,20 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	// U03-F09：受信代理引用面（global_config.trusted_proxy_range_refs）——与
+	// DeleteIPList 的 409 守卫同源，消除「展示 0 引用却删不掉」的观测缺口。
+	trustedProxyRefs := map[int64]bool{}
+	{
+		var raw string
+		if qerr := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&raw); qerr != nil {
+			// 与删除守卫同口径 fail-closed：查询失败按「可能被引用」展示（不假绿）。
+			services.Logf("warn", "受信代理引用面查询失败（名单引用视图可能不完整）: %v", qerr)
+		} else {
+			for _, id := range parseIPListRefsIDs(raw) {
+				trustedProxyRefs[id] = true
+			}
+		}
+	}
 	// RDB 文件化：威胁库条数以 threat_sources 为准（DB entries 恒空）
 	threatCounts := map[string]int{}
 	trows, terr := db.DB.Query(`SELECT name, COALESCE(entry_count,0) FROM security_threat_sources`)
@@ -375,6 +577,11 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 			row.RefPolicies = []ipListRefPolicy{}
 		}
 		row.RefCount = len(row.RefPolicies)
+		if trustedProxyRefs[int64(row.ID)] {
+			row.TrustedProxyReferenced = true
+			row.TrustedProxyScope = "受信代理网段"
+			row.RefCount++ // 展示计数合并（ref_policies 不伪造策略项）
+		}
 		lists = append(lists, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -930,7 +1137,9 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	kept := make([]models.IPListEntry, 0, len(entries))
 	removed := false
 	for _, entry := range entries {
-		if !removed && entry.Value == req.Value {
+		// U03-F10：按 value 移除**所有**精确同值条目（旧实现 !removed 门只删
+		// 第一条，重复行残留需多次操作；前端已有重复行入口，端点侧收敛）。
+		if entry.Value == req.Value {
 			removed = true
 			continue
 		}
@@ -943,6 +1152,25 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"removed": false}})
 		return
+	}
+	// U03-F01：删后形态若使任一启用 allow 策略的生效集合为空（fail-open），
+	// 拒绝移除（409）；只有策略 inline 或其他引用名单仍有条目时才允许清空。
+	listID, idErr := strconv.ParseInt(id, 10, 64)
+	if idErr != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 id"})
+		return
+	}
+	if len(kept) == 0 {
+		keptValues := make([]string, 0)
+		blocked, berr := allowEmptyingBlockedByPolicies(tx, listID, keptValues)
+		if berr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验 IP 列表引用失败: " + berr.Error()})
+			return
+		}
+		if blocked {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "移除后该名单为空，会使引用它的白名单策略生效集合为空（空名单会放行所有请求）；请先调整相关安全策略"})
+			return
+		}
 	}
 	mergedJSON, err := json.Marshal(kept)
 	if err != nil {

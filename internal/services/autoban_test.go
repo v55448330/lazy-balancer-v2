@@ -320,6 +320,38 @@ func TestAutobanSetConfig_resetsCountersOnWindowOrScopeChange(t *testing.T) {
 	}
 }
 
+func TestAutobanSetConfig_syncsEngineLoop(t *testing.T) {
+	// Given：autoban 业务关闭、调度关闭。
+	te := newWireTestEngine(t)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+	te.StopLoop(AutobanTaskID)
+	loopOn := func() bool {
+		meta, ok := te.Lookup(AutobanTaskID)
+		if !ok {
+			t.Fatal("autoban 未注册")
+		}
+		return meta.LoopOn
+	}
+	if loopOn() {
+		t.Fatal("前置态错误：调度应关闭")
+	}
+
+	// When/Then：服务写侧启用立即开调度。
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !loopOn() {
+		t.Error("SetAutobanConfig 启用后 LoopOn=false，业务与调度分叉")
+	}
+	// And：服务写侧禁用立即停调度。
+	if err := SetAutobanConfig(AutobanConfig{Enabled: false, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if loopOn() {
+		t.Error("SetAutobanConfig 禁用后 LoopOn=true，业务与调度分叉")
+	}
+}
+
 func TestAutobanSetConfig_rejectsOutOfRange(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	cases := []AutobanConfig{
@@ -1140,12 +1172,12 @@ func TestAutobanCounter_tieredLogging(t *testing.T) {
 		t.Fatalf("未达标 IP 不得留任何分级日志:\n%s", s)
 	}
 
-	// 首次达到阈值 → 恰好一行（非逐事件：第 4 次不再记）
+	// 摄取热路径只更新计数，不写 autoban 文件；日志由 Run 同链产生。
 	for range 4 {
 		autobanObserveEvent("203.0.113.7", "blocked", "942100")
 	}
-	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 达到封禁阈值（3 次/5 分钟）"); got != 1 {
-		t.Fatalf("阈值日志=%d 行, want 恰 1 行:\n%s", got, autobanLogNow(t))
+	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 达到封禁阈值（3 次/5 分钟）"); got != 0 {
+		t.Fatalf("热路径阈值日志=%d 行, want 0（不得越权写文件）:\n%s", got, autobanLogNow(t))
 	}
 
 	// 每轮摘要行含「活跃 M 个 IP」（M=当前窗口内达过阈值的 IP 数）
@@ -1156,26 +1188,26 @@ func TestAutobanCounter_tieredLogging(t *testing.T) {
 		t.Fatalf("摘要行应含「活跃 1 个 IP」:\n%s", s)
 	}
 
-	// Feed 路径窗口过期：曾达标 IP 再次来事件 → 清零一行 + 新窗口重新计数
+	// Feed 路径窗口过期只重置计数，不写 autoban 文件；新窗口也不直接记阈值。
 	f.Advance(6 * time.Minute)
 	autobanObserveEvent("203.0.113.7", "blocked", "942100")
-	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 计数窗口过期，清零"); got != 1 {
-		t.Fatalf("feed 路径清零日志=%d 行, want 1:\n%s", got, autobanLogNow(t))
+	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 计数窗口过期，清零"); got != 0 {
+		t.Fatalf("feed 路径清零日志=%d 行, want 0（不得越权写文件）:\n%s", got, autobanLogNow(t))
 	}
-	if got := strings.Count(autobanLogNow(t), "203.0.113.7 达到封禁阈值"); got != 1 {
-		t.Fatalf("新窗口单次事件（1<3）不得再记阈值日志，得到 %d 行", got)
+	if got := strings.Count(autobanLogNow(t), "203.0.113.7 达到封禁阈值"); got != 0 {
+		t.Fatalf("新窗口单次事件不得直接写阈值日志，得到 %d 行", got)
 	}
 
-	// 新窗口内再次达标 → 第二行阈值日志；随后修剪路径过期 → 第二行清零
+	// 新窗口内再次达标仍不写热路径日志；只有 Run 修剪路径可写过期行。
 	autobanObserveEvent("203.0.113.7", "blocked", "942100")
 	autobanObserveEvent("203.0.113.7", "blocked", "942100")
-	if got := strings.Count(autobanLogNow(t), "203.0.113.7 达到封禁阈值"); got != 2 {
-		t.Fatalf("新窗口达标应再记一行（共 2），得到 %d 行", got)
+	if got := strings.Count(autobanLogNow(t), "203.0.113.7 达到封禁阈值"); got != 0 {
+		t.Fatalf("热路径阈值日志应恒为 0，得到 %d 行", got)
 	}
 	f.Advance(6 * time.Minute)
 	autobanCandidates(3, 5*time.Minute)
-	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 计数窗口过期，清零"); got != 2 {
-		t.Fatalf("修剪路径清零日志=%d 行, want 共 2:\n%s", got, autobanLogNow(t))
+	if got := strings.Count(autobanLogNow(t), "IP 203.0.113.7 计数窗口过期，清零"); got != 1 {
+		t.Fatalf("Run 修剪路径清零日志=%d 行, want 1（同链保留）:\n%s", got, autobanLogNow(t))
 	}
 }
 
@@ -1336,5 +1368,71 @@ func TestAutobanDisableFlush_expiresOnceAndForceFlushes(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("到期解封审计行=%d, want 1", n)
+	}
+}
+
+// ---- 第 78 轮 A 域：RG-SEC-AUTOBAN-CANDIDATE-CAP（U01-F02）----
+
+func TestAutobanFormalMerge_beyondSuggestionCap(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 10:00:00")
+	setAutobanConfigRaw(t, true, 2, 60, "1h", "all", false)
+	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 60, Duration: "1h", Scope: "all"}
+
+	total := autobanSuggestionCap + 1
+	// 前 200 个 IP 预置为「已在名单」的手动条目：正式 merge 应把它们过滤掉，
+	// 只剩第 201 个新 IP 落名单。旧实现 autobanCandidates 在 200 处截断，
+	// 第 201 个候选根本不存在（按计数/IP 排序后恰为最大 IP，被截掉）。
+	entries := make([]models.IPListEntry, 0, autobanSuggestionCap)
+	for i := 0; i < autobanSuggestionCap; i++ {
+		entries = append(entries, models.IPListEntry{Value: fmt.Sprintf("198.51.100.%d", i+1), Remark: "手动"})
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=? WHERE name=?`, string(raw), AutobanPresetListName); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < total; i++ {
+		ip := fmt.Sprintf("198.51.100.%d", i+1)
+		if i == autobanSuggestionCap {
+			ip = "203.0.113.201"
+		}
+		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
+		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
+	}
+
+	cands := autobanCandidates(cfg.Threshold, time.Hour)
+	if len(cands) != total {
+		t.Fatalf("candidates=%d, want %d（候选评估不得按展示上限截断）", len(cands), total)
+	}
+	out, err := autobanMergeEntries(cfg, cands)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if len(out.Banned) != 1 || out.Banned[0] != "203.0.113.201" {
+		t.Fatalf("banned=%v, want [203.0.113.201]（第 201 个候选必须可被封禁）", out.Banned)
+	}
+
+	// 观察模式仍按展示上限截断（展示口径不变）。
+	resetAutobanStateForTest()
+	for i := 0; i < total; i++ {
+		ip := fmt.Sprintf("198.51.100.%d", i+1)
+		if i == autobanSuggestionCap {
+			ip = "203.0.113.201"
+		}
+		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
+		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
+	}
+	setAutobanConfigRaw(t, true, 2, 60, "1h", "all", true)
+	// 名单里的 200 个 IP 不再影响候选（候选只看计数）。
+	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
+		t.Fatalf("dry-run cycle: %v", err)
+	}
+	autobanMu.Lock()
+	stored := len(autobanSuggestions)
+	autobanMu.Unlock()
+	if stored != autobanSuggestionCap {
+		t.Fatalf("dry-run suggestions stored=%d, want %d（展示口径截断）", stored, autobanSuggestionCap)
 	}
 }

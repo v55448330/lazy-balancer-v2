@@ -2,6 +2,7 @@ package services
 
 import (
 	"database/sql"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,13 +173,45 @@ func loadAutoBackupSettings() (autoBackupSettingsRow, error) {
 	return row, nil
 }
 
+// nextAutoBackupSlot 计算自动备份的下一执行槽（复用 autoBackupDueSlot
+// 逐槽推进语义；禁用或参数非法返回 false）。
+func nextAutoBackupSlot(now time.Time) (time.Time, bool) {
+	row, err := loadAutoBackupSettings()
+	if err != nil || !row.enabled {
+		return time.Time{}, false
+	}
+	loc := CurrentLocation()
+	due, ok := autoBackupDueSlot(now.In(loc), row.freq, row.hhmm, row.day, loc)
+	if !ok {
+		return time.Time{}, false
+	}
+	if !due.After(now.In(loc)) {
+		// 漏跑追补：最近过去的槽未被 last_run 覆盖 → 返回该槽（≤now——
+		// v2.0 Scheduled 引擎到点立即触发=跨停机窗口补跑）
+		if row.lastRun == nil || due.After(*row.lastRun) {
+			return due, true
+		}
+		// 已执行——步进到下一未来槽
+		// （R63-P2-4：曾恒 +24h——weekly/monthly 时追不上下一槽，下次执行恒显示过去时刻）
+		step := now.In(loc).Add(24 * time.Hour)
+		switch row.freq {
+		case "weekly":
+			step = now.In(loc).Add(7 * 24 * time.Hour)
+		case "monthly":
+			step = now.In(loc).AddDate(0, 1, 0)
+		}
+		due, ok = autoBackupDueSlot(step, row.freq, row.hhmm, row.day, loc)
+	}
+	return due, ok
+}
+
 // runAutoBackupScheduled 定时任务执行体（v2.0 Scheduled 标准——引擎在排程
 // 槽调用；追补/去重判定在 NextSlotFn=nextAutoBackupSlot）。成败均推进
 // last_run（失败已由执行器落 failed 行+审计，防重试风暴）。
 func runAutoBackupScheduled(engineRunID int64) error {
 	exec := currentAutoBackupExecutor()
 	if exec == nil {
-		return nil // 执行器未注入（测试二进制）——安全跳过
+		return errors.New("自动备份执行器未就绪")
 	}
 	execErr := exec("schedule", "system", engineRunID) // engineRunID=引擎已记行——执行器跳过自记（单写方）
 	row, err := loadAutoBackupSettings()

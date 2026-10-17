@@ -33,6 +33,11 @@ type GeoIPHandler struct {
 	// defaults to /app/data/ip2region.xdb.
 	XdbPath string `json:"xdb_path,omitempty"`
 
+	// CrawlerExempt 由渲染侧按绑定策略输出（任一策略 GeoIPCrawlerExempt）。
+	// U14-05：false 时只剥离客户端伪造的验证头、不做 PTR/DNS 验证（无豁免
+	// 规则消费结论，验证纯属浪费；旧实现无法关闭验证）。未配置按 false。
+	CrawlerExempt bool `json:"crawler_exempt,omitempty"`
+
 	searcher *service.Ip2Region
 }
 
@@ -174,26 +179,34 @@ const (
 // （下游豁免规则 @streq 消费）；未通过置 Spoof=1（伪装事件规则消费）。
 // 非爬虫 UA 零成本直接返回（2000/s 正常流量仅付一次正则）。
 func (h *GeoIPHandler) applyCrawlerVerification(r *http.Request) {
-	if geoipnames.MatchCrawlerEngine(r.Header.Get("User-Agent")) == "" {
+	// U14-05：渲染门控字段 false（无爬虫豁免策略）时零 DNS/PTR 开销；
+	// 客户端伪造头已在 ServeHTTP 入口剥离，因此「只剥不验」是安全形态。
+	if !h.CrawlerExempt {
 		return
 	}
+	// U14-08（并入 U14-05）：UA 只匹配一次（旧实现对同一 UA 调两次
+	// MatchCrawlerEngine，2000/s 正常流量下多付一次全表正则）。
 	engine := geoipnames.MatchCrawlerEngine(r.Header.Get("User-Agent"))
+	if engine == "" {
+		return
+	}
 	ip := clientIPForVerify(r)
 	if ip != "" && VerifyCrawler(ip, engine) {
 		r.Header.Set(crawlerVerifiedHeader, engine)
 	} else {
-		r.Header.Set(crawlerSpoofHeader, "1")
+		// U14-16：值携带引擎 ID（与 Verified 对称）——coraza 伪装规则按
+		// 策略已选引擎集合匹配，不再全局 @eq 1。
+		r.Header.Set(crawlerSpoofHeader, engine)
 	}
 }
 
-// clientIPForVerify 取验证用客户端 IP：RemoteAddr 剥端口（geoip handler 位于
-// 阶段 0 信任代理还原之后，r.RemoteAddr 已是真实客户端地址）。
+// clientIPForVerify 取验证用客户端 IP（U14-01）：复用 realClientIP 单源——
+// 优先 Caddy client_ip 变量（受信代理还原后的真实客户端），而非 socket
+// RemoteAddr。旧注释「RemoteAddr 已是真实客户端地址」在 CDN/受信代理部署下
+// 不成立：socket 对端是 CDN 回源 IP，PTR 验证必然失败（真爬虫被判伪装）。
+// 变量缺席时 realClientIP 回退 RemoteAddr 并做 ParseIP 校验（fail-closed）。
 func clientIPForVerify(r *http.Request) string {
-	addr := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
-	}
-	return addr
+	return realClientIP(r)
 }
 
 // Cleanup releases the handler's reference to the shared singleton (审计 M2)：

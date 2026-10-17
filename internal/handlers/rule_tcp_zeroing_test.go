@@ -370,6 +370,100 @@ func TestDuplicateRule_tcpCopyDropsHTTPOnlyFieldFamily(t *testing.T) {
 	assertTCPRuleFamilyZeroed(t, "副本行", "name='tcpdup（副本）'")
 }
 
+// U04-07（第 78 轮 P4）：TCP 归一的 HTTP 专属字段清单补齐 TLSHTTPRedirect/
+// Domain/UpstreamForceHTTP1——单一 tcpDeadFieldReset 清单由 Create/Update/
+// Duplicate 共用（此前 Create 显式携带落库、Update/Duplicate 仅零散归零，
+// 死配置随快照/导出/复制放大）。
+func TestCreateRule_tcpDropsHTTPOnlyTransportFields(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+
+	body := `{"name":"tcp-transport","protocol":"tcp","listen_port":18820,` +
+		`"domain":"dead-transport.example","tls_http_redirect":true,"upstream_force_http1":1,` +
+		`"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,` +
+		`"upstreams":[{"host":"10.0.0.9","port":9000,"enabled":true}]}`
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	assertTCPDeadTransportFieldsZeroed(t, "创建行", "caddy_id IS NOT NULL AND name='tcp-transport'")
+}
+
+// U04-07 同族：协议未变化的 TCP 编辑同样归一（存量/导入残留的编辑自愈）。
+func TestUpdateRule_tcpEditDropsHTTPOnlyTransportFields(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,
+		tls_http_redirect,upstream_force_http1)
+		VALUES ('lb_tcptransport','tcp-transport-upd','','tcp','dead-transport.example',18821,'weighted_round_robin',1,
+		1,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_tcptransport','up.test',9000,1,1,'tcp')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tcptransport", strings.NewReader(`{"name":"tcp-transport-upd-renamed"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	assertTCPDeadTransportFieldsZeroed(t, "编辑自愈", "caddy_id='lb_tcptransport'")
+}
+
+// U04-07 同族：DuplicateRule 不把源 TCP 行的 HTTP 专属传输字段放大到副本。
+func TestDuplicateRule_tcpCopyDropsHTTPOnlyTransportFields(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,
+		tls_http_redirect,upstream_force_http1)
+		VALUES ('lb_tcptransportdup','tcp-transport-dup','','tcp','dead-transport.example',18822,'weighted_round_robin',1,
+		1,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_tcptransportdup','up.test',9000,1,1,'tcp')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/rules/lb_tcptransportdup/duplicate", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s, want 201", response.Code, response.Body.String())
+	}
+	assertTCPDeadTransportFieldsZeroed(t, "副本行", "name='tcp-transport-dup（副本）'")
+}
+
+// assertTCPDeadTransportFieldsZeroed 断言 TCP 行不携带 HTTP 专属传输字段。
+func assertTCPDeadTransportFieldsZeroed(t *testing.T, label, where string) {
+	t.Helper()
+	var domain string
+	var tlsHTTPRedirect, upstreamForceHTTP1 int
+	if err := db.DB.QueryRow(`SELECT COALESCE(domain,''), IIF(tls_http_redirect IN ('1',1),1,0), COALESCE(upstream_force_http1,0)
+		FROM lb_rules WHERE `+where).Scan(&domain, &tlsHTTPRedirect, &upstreamForceHTTP1); err != nil {
+		t.Fatalf("%s readback: %v", label, err)
+	}
+	if domain != "" || tlsHTTPRedirect != 0 || upstreamForceHTTP1 != 0 {
+		t.Fatalf("%s HTTP 专属传输字段未归一: domain=%q tls_http_redirect=%d upstream_force_http1=%d", label, domain, tlsHTTPRedirect, upstreamForceHTTP1)
+	}
+}
+
 // assertTCPRuleFamilyZeroed 断言 lb_rules 中匹配 where 的行七字段全部为零值形态。
 func assertTCPRuleFamilyZeroed(t *testing.T, label, where string) {
 	t.Helper()
@@ -386,5 +480,33 @@ func assertTCPRuleFamilyZeroed(t *testing.T, label, where string) {
 		bodyMax != 0 || keepalive != 0 || tokensHidden != 0 {
 		t.Fatalf("%s HTTP 专属死配置未归一: host_header=%q health_check_path=%q enable_compress=%d compress_types=%q body_max=%d keepalive=%d tokens_hidden=%d",
 			label, hostHeader, healthCheckPath, enableCompress, compressTypes, bodyMax, keepalive, tokensHidden)
+	}
+}
+
+func TestUpdateRule_httpEditDropsTCPOnlyFields(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,tcp_health_check_port,tcp_proxy_protocol)
+		VALUES ('lb_http_tcpdead','http-tcpdead','','http','hdead.test',18583,'weighted_round_robin',1,99,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_http_tcpdead','up.test',80,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_http_tcpdead", strings.NewReader(`{"name":"http-tcpdead-renamed"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("http edit status=%d body=%s", response.Code, response.Body.String())
+	}
+	var port, proxy int
+	if err := db.DB.QueryRow(`SELECT COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0) FROM lb_rules WHERE caddy_id='lb_http_tcpdead'`).Scan(&port, &proxy); err != nil {
+		t.Fatal(err)
+	}
+	if port != 0 || proxy != 0 {
+		t.Fatalf("http edit must clear TCP-only fields, got port=%d proxy=%d", port, proxy)
 	}
 }

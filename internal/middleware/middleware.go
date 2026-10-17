@@ -647,12 +647,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		}
 	}
 
-	// U1-P3-4：引擎在场时审计保留清理由 audit-retention 任务族承担（24h 节拍
-	// +启动首轮）——原生循环仅测试环境（无引擎）启动，消除平行双跑。
-	if services.TaskEngine() == nil {
-		services.StartAuditCleanup()
-	}
-
 	return r
 }
 

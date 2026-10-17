@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -826,4 +827,143 @@ func TestSecurityTimingIDFromHeaders(t *testing.T) {
 	if got := securityTimingIDFromHeaders(map[string][]string{"Other": {"x"}}); got != "" {
 		t.Fatalf("missing header must be empty, got %q", got)
 	}
+}
+
+// ---- 第 78 轮 U14-03 / U14-04 / U14-10 ----
+
+func TestAuditTiming_closeOnlyPathSweepsExpired(t *testing.T) {
+	useTestAuditPipeline(t)
+	const stale = "cccccccccccccccc"
+	auditTimingRecord(stale, "pre", 1)
+	auditTimingMu.Lock()
+	auditTimingEntries[stale].created = time.Now().Add(-time.Hour)
+	// 把创建计数推到清扫触发点前一条：下一次 close 建条（纯 close 路径）即
+	// 触发摊销清扫——旧实现 close 不递增计数，从不触发。
+	auditTimingCreateCount = 63
+	auditTimingMu.Unlock()
+
+	auditTimingClose("dddddddddddddddd")
+
+	auditTimingMu.Lock()
+	_, staleExists := auditTimingEntries[stale]
+	_, freshExists := auditTimingEntries["dddddddddddddddd"]
+	auditTimingMu.Unlock()
+	if staleExists {
+		t.Fatal("close-only path must sweep expired entries")
+	}
+	if !freshExists {
+		t.Fatal("closed entry must be registered")
+	}
+}
+
+type failingFormatter struct{}
+
+func (failingFormatter) Format(plugintypes.AuditLog) ([]byte, error) {
+	return nil, fmt.Errorf("injected format failure")
+}
+func (failingFormatter) MIME() string { return "application/json" }
+
+func TestAuditDrain_ioErrorSurfacedAndReopens(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	oldLog := auditIOLogf
+	auditIOLogf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	t.Cleanup(func() { auditIOLogf = oldLog })
+
+	target := filepath.Join(t.TempDir(), "audit.log")
+	p := &auditPipeline{target: target, mode: 0o644}
+	if err := p.openFile(p.mode); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟粘性 IO 错误：先入缓冲（空 bufio 刷盘不触 fd），再关闭 fd 后刷盘必须
+	// 报错并重建。
+	p.ioMu.Lock()
+	p.appendLine([]byte("buffered-before-error"))
+	_ = p.fd.Close()
+	p.flushLocked()
+	p.ioMu.Unlock()
+
+	mu.Lock()
+	if len(logs) == 0 {
+		mu.Unlock()
+		t.Fatal("io error must be surfaced via auditIOLogf")
+	}
+	mu.Unlock()
+
+	p.ioMu.Lock()
+	p.appendLine([]byte("line-after-reopen"))
+	p.flushLocked()
+	p.ioMu.Unlock()
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "line-after-reopen") {
+		t.Fatalf("write must continue after fd reopen, got %q", data)
+	}
+
+	// 格式化失败：单条跳过、后续行继续落盘（process 自行取 ioMu，不得在
+	// 测试侧持锁调用——否则自死锁）。
+	p.process(lbAuditItem{snap: &auditSnapshot{}, formatter: failingFormatter{}})
+	p.process(lbAuditItem{snap: &auditSnapshot{}, formatter: jsonFormatterForTest{}})
+	p.ioMu.Lock()
+	p.flushLocked()
+	p.ioMu.Unlock()
+	data, err = os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `{"transaction"`) {
+		t.Fatalf("line after a format failure must still be written, got %q", data)
+	}
+	p.closeFile()
+}
+
+func TestAuditPipelineRelease_doesNotHoldRegistryLockWhileDraining(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "audit.log")
+	p := &auditPipeline{target: target, mode: 0o644, queue: make(chan lbAuditItem, 1), done: make(chan struct{}), refs: 1}
+	if err := p.openFile(p.mode); err != nil {
+		t.Fatal(err)
+	}
+	auditPipelinesMu.Lock()
+	auditPipelines[target] = p
+	auditPipelinesMu.Unlock()
+
+	released := make(chan struct{})
+	go func() {
+		p.release()
+		close(released)
+	}()
+	// 等待 release 进入 <-p.done（延迟 20ms 足够覆盖删表动作）。
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-released:
+		t.Fatal("release must wait for the drain goroutine")
+	default:
+	}
+
+	acquired := make(chan *auditPipeline, 1)
+	go func() {
+		np, err := acquireAuditPipeline(target, 0o644)
+		if err != nil {
+			acquired <- nil
+			return
+		}
+		acquired <- np
+	}()
+	select {
+	case np := <-acquired:
+		if np == nil {
+			t.Fatal("acquire failed")
+		}
+		np.release()
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquire blocked on the registry lock while release waited for drain (U14-10)")
+	}
+	close(p.done) // 放行 release
+	<-released
 }

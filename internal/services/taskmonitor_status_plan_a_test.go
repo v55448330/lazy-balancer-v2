@@ -59,17 +59,41 @@ func TestCollectSystemTasks_statusColumnExecutionOnly(t *testing.T) {
 	}
 }
 
-// cert-waiting-ca（Periodic）StatusFn 不再借用 stopped——无活跃证书任务时镜像=idle。
-func TestCertWaitingCAStatusMirror_idleWhenNoActiveJobs(t *testing.T) {
-	te := newWireTestEngine(t) // 装配 17 任务族（空库：无活跃证书任务）
+// cert-waiting-ca（Periodic）不再以业务活跃数生成 StatusMirror；空库由执行实态得 idle。
+func TestCertWaitingCAStatus_usesExecutionStateWhenNoActiveJobs(t *testing.T) {
+	te := newWireTestEngine(t)
 	for _, m := range te.DescribeAll() {
 		if m.ID != "cert-waiting-ca" {
 			continue
 		}
-		if m.StatusMirror != "idle" {
-			t.Fatalf("cert-waiting-ca StatusMirror=%q（空库无活跃任务应为 idle——stopped 仅常驻模型已废,方案 A 2026-10-12）", m.StatusMirror)
+		if m.StatusMirror != "" {
+			t.Fatalf("cert-waiting-ca 不得携带业务 StatusMirror，got %q", m.StatusMirror)
 		}
-		return
 	}
-	t.Fatal("cert-waiting-ca 未注册")
+	for _, ti := range collectEngineFamilies(te) {
+		if ti.ID == "cert-waiting-ca" && ti.Status != TaskStatusIdle {
+			t.Fatalf("空库无活跃任务应为 idle，got %s", ti.Status)
+		}
+	}
+}
+
+func TestCertTasksStatus_businessActivityDoesNotOverrideStoppedExecution(t *testing.T) {
+	// Given：有活跃 cert_jobs，但两个证书任务的调度均已停止。
+	te := newWireTestEngine(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('r1','a.test','pending')`); err != nil {
+		t.Fatal(err)
+	}
+	te.StopLoop("cert-waiting-ca")
+	te.StopLoop("cert-issuance")
+	waitForCond(t, 2*time.Second, func() bool { return !te.IsRunning("cert-issuance") })
+
+	// When/Then：状态列只承载执行实态，不得被业务活跃镜像覆盖为 running。
+	for _, ti := range collectEngineFamilies(te) {
+		if ti.ID != "cert-issuance" && ti.ID != "cert-waiting-ca" {
+			continue
+		}
+		if ti.Status != TaskStatusIdle {
+			t.Errorf("%s 调度已停但 status=%q，want idle（业务活跃≠任务执行中）", ti.ID, ti.Status)
+		}
+	}
 }

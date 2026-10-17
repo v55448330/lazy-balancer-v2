@@ -107,3 +107,26 @@ func TestValidateEnabledStoredRuleConfigs_namesTCPDynamicDNS(t *testing.T) {
 		t.Fatalf("aggregate validation must name tcp+dynamic_dns rule, got: %v", err)
 	}
 }
+
+func TestValidateEnabledStoredRuleConfigs_namesTCPHTTPOnlyStrategy(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	seedTCPStoredRule(t, "lb_tcp_cookie_on", "tcp-cookie-on", 19094, true, "cookie", false)
+
+	err := validateEnabledStoredRuleConfigs(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "lb_tcp_cookie_on") || !strings.Contains(err.Error(), "负载策略") {
+		t.Fatalf("aggregate validation must name tcp+cookie rule, got: %v", err)
+	}
+}
+
+func TestValidateEnabledStoredRuleConfigs_namesTCPNTLM(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	seedTCPStoredRule(t, "lb_tcp_ntlm_on", "tcp-ntlm-on", 19095, true, "weighted_round_robin", false)
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET ntlm_compatible=1 WHERE caddy_id='lb_tcp_ntlm_on'`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := validateEnabledStoredRuleConfigs(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "lb_tcp_ntlm_on") || !strings.Contains(err.Error(), "NTLM") {
+		t.Fatalf("aggregate validation must name tcp+ntlm rule, got: %v", err)
+	}
+}

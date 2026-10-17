@@ -31,35 +31,26 @@ func (s *ClusterService) IsMaster(ctx context.Context) (bool, error) {
 func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, registration models.ClusterRegistration) error {
 	s.roleMu.Lock()
 	defer s.roleMu.Unlock()
-	if _, err := s.db.ExecContext(ctx, `UPDATE global_config SET is_master=0, master_url=?, cluster_token='', registration_id=?, registration_secret=?, applied_version=0, sync_fingerprint='', last_sync_error='', registration_confirm_failures=0 WHERE id=1`, masterURL, registration.RegistrationID, registration.RegistrationSecret); err != nil {
+	// L02-05（RG-CLUSTER-STATUS-RESET）：last_sync 与 applied_version 同语义
+	// ——旧集群的同步时间对新集群无意义，同一 UPDATE 里置 NULL，状态卡不残留
+	// 旧集群时间（Status() 仅对 Valid 值格式化）。
+	if _, err := s.db.ExecContext(ctx, `UPDATE global_config SET is_master=0, master_url=?, cluster_token='', registration_id=?, registration_secret=?, applied_version=0, sync_fingerprint='', last_sync_error='', registration_confirm_failures=0, last_sync=NULL WHERE id=1`, masterURL, registration.RegistrationID, registration.RegistrationSecret); err != nil {
 		return fmt.Errorf("保存从节点注册状态: %w", err)
 	}
-	if s.lifecycle != nil {
-		s.lifecycle.StopACME()
-		s.lifecycle.StartSync()
-	}
-	// 与 Promote 的 SetMasterRole(true) 对称（R54-N5）：降级时停掉 CRS/IP2Region
-	// 自动更新调度器。tick 首行的 is_master 守卫只能拦住未发起的 tick；已越过
-	// 守卫的 in-flight 更新会在从节点上继续写版本行、替换规则树并 reload，
-	// 瞬时打破从节点只读不变量。
-	// C7（第 76 轮）：引擎角色显式直调收口——原仅经下方三管理器 SetMasterRole
-	// 间接传播（三者在场时各自转调 TaskEngine().SetRole(false) 后提前返回），
-	// 三管理器同时为 nil 时引擎角色不翻转（master-only 常驻/周期任务在从节点
-	// 继续运行，破坏只读不变量；生产 main.go 恒初始化三管理器故不可达，属防御
-	// 性收敛）。管理器路径保留：SetMasterRole 内部转调引擎=幂等重申（SetRole
-	// 重申非重启意图，U1-66-01）。
+	// 角色翻转由引擎 SetRole 唯一驱动：master-only 任务统一停调，cluster-sync
+	// 经 RestartOnRoleFlip 换代为从节点分支；无管理器/旧调度器旁路。
 	if te := TaskEngine(); te != nil {
 		te.SetRole(false)
-	}
-	if crsManager := GetCRSUpdateManager(); crsManager != nil {
-		crsManager.SetMasterRole(false)
-	}
-	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
-		ip2regionMgr.SetMasterRole(false)
-	}
-	// 威胁情报库调度器同族（v2.3.x）：降级即从节点停调度（nil 守卫同上）。
-	if threatMgr := GetThreatUpdateManager(); threatMgr != nil {
-		threatMgr.SetMasterRole(false)
+		// L02-02（RG-CLUSTER-SLAVE-SYNC-START）：SetRole 只按角色启停 daemon，
+		// 不会覆盖主节点期间被用户停止的 loopEnabled——切从是本机拓扑变更
+		// （等价基线的 StartSync 直调），不同步即为静默脱管，必须显式恢复调度。
+		te.StartLoop("cluster-sync")
+		// P2-4：偏好表若仍保留主节点期间的 cluster-sync=0，下次重启会再次
+		// 停同步。切从是显式拓扑变更——持久偏好同步恢复（写失败仅告警，
+		// 当前进程已启动）。
+		if err := RecordTaskLoopPref("cluster-sync", true); err != nil {
+			Logf("warn", "切成从节点后持久化 cluster-sync 调度偏好失败（当前进程已恢复）: %v", err)
+		}
 	}
 	// 自动备份：v2.0 引擎 Scheduled 驱动（RunsOn=MasterOnly 角色门）——
 	// 降级后由引擎 SetRole 停调度，无需单独停止。

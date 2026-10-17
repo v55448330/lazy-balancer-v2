@@ -87,12 +87,11 @@ func (h *Handlers) StartCrawlerLibUpdate(c *gin.Context) {
 		return
 	}
 	op := auditOperator(c)
-	go func() {
-		if err := te.Trigger("crawlerbot-update", "manual", op); err != nil {
-			services.Logf("error", "手动触发爬虫地址更新失败: %v", err)
-			services.RecordAuditLog(op, "触发失败", "爬虫地址库", "手动触发爬虫地址更新失败: "+err.Error(), "")
-		}
-	}()
+	// L01-02：统一异步触发与错误分类（自记族成功零 handler 审计，
+	// ErrAlreadyRunning/ErrTaskSkipped 静默，真失败留补偿审计）。
+	services.TriggerTaskAsync(te, "crawlerbot-update", services.TriggerAuditContext{
+		Operator: op, Family: "爬虫地址库", Name: "爬虫地址更新",
+	})
 	// 审计由任务体 defer 自记（operator 经 RunContext 归人，与威胁库同口径）
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }

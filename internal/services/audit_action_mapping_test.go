@@ -26,12 +26,6 @@ import (
 	"testing"
 )
 
-// auditMappingNeverPersisted 是提取到但永不落库、因此无需前端映射的动作：
-// 「登录」仅是 FormatAuditAction 对 POST /api/v1/auth/login 的兜底映射——该路由
-// 命中 middleware.go auditMiddleware 的 HasExplicitAuditEvent 跳过分支
-// （auditpolicy.go:125），实际落库的是 auth.go 显式记录的 登录成功/登录失败。
-var auditMappingNeverPersisted = map[string]bool{"登录": true}
-
 // auditMappingDangerContract 是不以「失败」结尾但必须 danger 分类的动作（与
 // 前端 danger 行的语义约定）。
 var auditMappingDangerContract = map[string]bool{
@@ -53,7 +47,7 @@ func backendAuditActions(t *testing.T) map[string]string {
 	}
 	actions := map[string]string{}
 	add := func(file string, line int, value string) {
-		if value == "" || auditMappingNeverPersisted[value] {
+		if value == "" {
 			return
 		}
 		if _, exists := actions[value]; !exists {

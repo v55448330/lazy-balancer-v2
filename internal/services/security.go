@@ -204,7 +204,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, crs
 	// opt-in，flag 门控会使全部默认策略凭空获得引擎/信任规则——发射面膨胀，
 	// 门禁钉测实证），维持内容门控；allow ACL（否定算子）与遗留黑名单同理
 	// 维持内容门控（见下 ipListRuleOperand 调用点注释）。
-	emitIPControl := (p.IPWhitelistEnabled && p.PolicyType != models.PolicyTypeStage0 && len(ipWL) > 0) || len(ipBL) > 0 || (p.IPACLEnabled && (p.IPACLMode != "allow" || len(ipACLList) > 0))
+	// U03-F01/P1-SEC-02：启用 allow 时即使合并后有效条目为空也必须发射
+	// 否定算子（空文件 = 全不匹配 = 恒拒），覆盖备份导入、带外改库和条目
+	// 自然到期三条路径；内容门只用于语义不等价的信任/黑名单/deny。
+	emitIPControl := (p.IPWhitelistEnabled && p.PolicyType != models.PolicyTypeStage0 && len(ipWL) > 0) || len(ipBL) > 0 || p.IPACLEnabled
 	customRules := policyCustomRulesCached(p, store)
 	hasCustomRules := false
 	for _, cr := range customRules {
@@ -310,7 +313,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, crs
 	//（否定算子）：空集=恒命中=全拒，与「无规则=全放」语义不等价且有全站
 	// 锁死风险——同样维持内容门控。遗留黑名单为内联字段，仅经策略保存（全
 	// 量链）变化，维持内容门控。
-	if p.IPACLEnabled && (p.IPACLMode != "allow" || len(ipACLList) > 0) {
+	// allow 内容的空集不是“无规则”：否定算子空文件=恒拒。删除内容门，
+	// 让条目全部过期/备份导入空引用时仍发射 deny（P1-SEC-02）。
+	if p.IPACLEnabled {
 		operand, err := ipListRuleOperand(fmt.Sprintf("p%d-acl", p.ID), ipACLList, p.IPACLMode == "allow")
 		if err != nil {
 			return "", err
@@ -742,14 +747,15 @@ func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
 		return "空条件"
 	}
 	for _, cond := range conditions {
-		if strings.HasSuffix(cond.Pattern, `\`) {
-			return "含尾部反斜杠"
-		}
-		if customRuleTargets[cond.Target] == "" {
+		if customRuleTargets[cond.Target] == "" || customRuleOperators[cond.Operator] == "" {
 			return "非法 target 或 operator"
 		}
-		if customRuleOperators[cond.Operator] == "" {
-			return "非法 target 或 operator"
+		// L03-11（第 78 轮）：模式内容（空/纯空白、控制字符、尾部反斜杠）与
+		// 保存/导入侧共用 validateCustomRulePattern 单一实现——集群 apply 等
+		// 绕过保存校验的路径在这里兜底；空模式 @contains "" 等于匹配一切，
+		// 绝不能发射成无条件 deny。
+		if err := validateCustomRulePattern(cond.Operator, cond.Pattern); err != nil {
+			return err.Error()
 		}
 	}
 	return ""
@@ -768,14 +774,14 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 	if len(cr.Conditions) > 0 {
 		return conditionsEmissionIssue(cr.Conditions)
 	}
-	if strings.HasSuffix(cr.Pattern, `\`) {
-		return "含尾部反斜杠"
-	}
 	if cr.Target == "" || cr.Operator == "" {
 		return "空条件"
 	}
 	if customRuleTargets[cr.Target] == "" || customRuleOperators[cr.Operator] == "" {
 		return "非法 target 或 operator"
+	}
+	if err := validateCustomRulePattern(cr.Operator, cr.Pattern); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -1010,22 +1016,108 @@ const ipPrecheckAllowExemptRuleID = 13
 
 // geoipPrecheckRuleBase 是 GeoIP 预检链的 SecRule id 段基址（阶段化执行模型：
 // GeoIP 从策略引擎 id:8 迁入阶段 1 合并预检）。逐策略链 id=800000+policyID——
-// 事件归因从共享 id:8（「首个 geoip 启用策略」非精确）精确化为直接解码属主
-// （securityEventsPolicyContainsRule 800xxx case）。emitCustomRules 发射守卫
-// （DB id ≥790000 跳过）保证自定义规则 emit id（DB id+10000）不撞入本段。
-const geoipPrecheckRuleBase = 800000
-
+// 事件归因从共享 id:8（「首个 geoip 启用策略」非精确）精确化为直接解码属主。
+// emitCustomRules 发射守卫（DB id ≥790000 跳过）保证自定义规则 emit id
+// （DB id+10000）不撞入本段。
+//
+// 第 78 轮 U01-F03/L03-12：三个家族的段界与编码收敛到本文件的 encode/decode
+// 函数（单一事实源）。族划分互斥且编码越界即拒绝——此前三段各自只守
+// 「<900000」，爬虫豁免 id（810000+policyID*16+引擎序号）在 policyID≥2500 时
+// 溢入伪装段 [850000,900000)，既与伪装 id 碰撞（p=2666, i=10 → 852666）又被
+// 评分/归因当成伪装族。
 const (
-	geoipCrawlerRuleBase      = 810000 // 爬虫豁免规则基址（+policyID*16+引擎序号）
-	geoipCrawlerSpoofRuleBase = 850000 // 爬虫伪装事件规则基址（+policyID）
+	geoipPrecheckRuleBase     = 800000 // 普通 GeoIP 预检段 [800000,810000)
+	geoipCrawlerRuleBase      = 810000 // 爬虫豁免段 [810000,850000)（+policyID*16+引擎序号）
+	geoipCrawlerSpoofRuleBase = 850000 // 爬虫伪装段 [850000,900000)（+policyID）
+	geoipPrecheckRuleLimit    = 900000 // CRS 保留段起点（预检段右开界）
+	// geoipCrawlerEngineSlots 每策略爬虫豁免槽位（编码位移 16；当前引擎 15 个，
+	// 留 1 槽余量——引擎表扩容到 16 个以内不需要改段界）。
+	geoipCrawlerEngineSlots = 16
 )
 
-// IsGeoIPPrecheckID 报告 n 是否落在阶段 1 GeoIP 预检归因段
-// [geoipPrecheckRuleBase, geoipPrecheckRuleBase+100000)。段界单一事实源——
-// 事件归因、stage-stats 分桶、筛选族条件等消费方一律经本谓词取段界,
-// 禁止各自复写字面量(U2-1:字面量散布六处,段基址调整时漏改即静默分叉)。
+// precheckRuleFamily 预检规则 ID 家族（三族互斥）。
+type precheckRuleFamily uint8
+
+const (
+	precheckRuleFamilyUnknown precheckRuleFamily = iota
+	precheckRuleFamilyGeoIP
+	precheckRuleFamilyCrawlerExempt
+	precheckRuleFamilyCrawlerSpoof
+)
+
+// encodeGeoIPPrecheckRuleID 普通 GeoIP 预检 id（policyID ∈ [1,9999]）。
+func encodeGeoIPPrecheckRuleID(policyID int) (int, bool) {
+	if policyID <= 0 {
+		return 0, false
+	}
+	id := geoipPrecheckRuleBase + policyID
+	if id <= geoipPrecheckRuleBase || id >= geoipCrawlerRuleBase {
+		return 0, false
+	}
+	return id, true
+}
+
+// encodeCrawlerExemptRuleID 爬虫豁免 id（policyID*16+engineIndex 必须落在
+// 豁免段内；越界返回 false，调用方跳过+告警）。
+func encodeCrawlerExemptRuleID(policyID, engineIndex int) (int, bool) {
+	if policyID <= 0 || engineIndex < 0 || engineIndex >= geoipCrawlerEngineSlots {
+		return 0, false
+	}
+	id := geoipCrawlerRuleBase + policyID*geoipCrawlerEngineSlots + engineIndex
+	if id < geoipCrawlerRuleBase || id >= geoipCrawlerSpoofRuleBase {
+		return 0, false
+	}
+	return id, true
+}
+
+// encodeCrawlerSpoofRuleID 爬虫伪装 id（policyID ∈ [1,49999]）。
+func encodeCrawlerSpoofRuleID(policyID int) (int, bool) {
+	if policyID <= 0 {
+		return 0, false
+	}
+	id := geoipCrawlerSpoofRuleBase + policyID
+	if id < geoipCrawlerSpoofRuleBase || id >= geoipPrecheckRuleLimit {
+		return 0, false
+	}
+	return id, true
+}
+
+// decodePrecheckRuleID 把 rule_triggered 文本解码为家族+属主策略（+引擎序号）。
+// 唯一解码是归因与评分的共同前提：越界/无法唯一解码（历史行、p=0 边界值）
+// 返回 ok=false，消费方走能力 fallback，禁止用 n-800000 猜属主。
+func decodePrecheckRuleID(ruleID string) (precheckRuleFamily, int, int, bool) {
+	n, err := strconv.Atoi(ruleID)
+	if err != nil {
+		return precheckRuleFamilyUnknown, 0, 0, false
+	}
+	switch {
+	case n > geoipPrecheckRuleBase && n < geoipCrawlerRuleBase:
+		return precheckRuleFamilyGeoIP, n - geoipPrecheckRuleBase, 0, true
+	case n >= geoipCrawlerRuleBase && n < geoipCrawlerSpoofRuleBase:
+		pid := (n - geoipCrawlerRuleBase) / geoipCrawlerEngineSlots
+		idx := (n - geoipCrawlerRuleBase) % geoipCrawlerEngineSlots
+		if pid <= 0 {
+			return precheckRuleFamilyUnknown, 0, 0, false
+		}
+		return precheckRuleFamilyCrawlerExempt, pid, idx, true
+	case n >= geoipCrawlerSpoofRuleBase && n < geoipPrecheckRuleLimit:
+		pid := n - geoipCrawlerSpoofRuleBase
+		if pid <= 0 {
+			return precheckRuleFamilyUnknown, 0, 0, false
+		}
+		return precheckRuleFamilyCrawlerSpoof, pid, 0, true
+	}
+	return precheckRuleFamilyUnknown, 0, 0, false
+}
+
+// IsGeoIPPrecheckID 报告 n 是否落在阶段 1 预检的 8xxxxx 段
+// [geoipPrecheckRuleBase, geoipPrecheckRuleLimit)——含普通 GeoIP（800xxx 属主
+// 精确段）与爬虫豁免/伪装两族。段界单一事实源——事件归因、stage-stats 分桶、
+// 筛选族条件等消费方一律经本谓词取段界, 禁止各自复写字面量(U2-1:字面量散布
+// 六处,段基址调整时漏改即静默分叉)。逐策略属主解码请用 decodePrecheckRuleID
+// （本谓词只判「是否预检 8 段」，不区分家族）。
 func IsGeoIPPrecheckID(n int) bool {
-	return n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleBase+100000
+	return n >= geoipPrecheckRuleBase && n < geoipPrecheckRuleLimit
 }
 
 // IsStage1PrecheckID 判定事件触发 id 是否属阶段 1 预检族（第 59 轮 R59-P5
@@ -1220,9 +1312,9 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 					denyUnion = append(denyUnion, aclList...)
 				}
 			case "allow":
-				if len(aclList) > 0 {
-					allowLists = append(allowLists, aclList)
-				}
+				// 空集也加入 allowLists：交集为空 → 下方发射恒拒规则，
+				// 不得因内容门静默 fail-open（P1-SEC-02）。
+				allowLists = append(allowLists, aclList)
 			}
 		}
 		var blacklist []string
@@ -1371,42 +1463,72 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			geoipCountryExact[c] = true
 		}
 	}
+	// precheckRuleIDs 本函数已发射的 SecRule id：跨家族唯一性硬错误（第 78 轮
+	// U01-F03）——编码函数已保证族内唯一且互斥，本表是防御层：任何未来改动
+	// 让两族产生同 id 时渲染直接失败，而不是把碰撞送进引擎/事件归因。
+	precheckRuleIDs := map[int]bool{}
+	claimRuleID := func(id int, desc string) error {
+		if precheckRuleIDs[id] {
+			return fmt.Errorf("预检规则 id 冲突：%s 与已发射规则同为 id:%d（请检查策略编号与爬虫族段界）", desc, id)
+		}
+		precheckRuleIDs[id] = true
+		return nil
+	}
 	for _, p := range policies {
 		if p == nil || !PolicyHasGeoIP(p) {
 			continue
 		}
-		// U1-3（第 45 轮审计）：policyID 过大使 800000+policyID 落入 CRS 保留段
-		// （900000+）时跳过该策略链并告警（镜像 emitCustomRules ≥790000 跳过+告警
-		// 先例）。危害是归因/分桶错位——securityEventsPolicyContainsRule 的 800xxx
-		// case 与 stage-stats 的 800xxx 分桶都不再命中，而非编译失败（预检是独立
-		// coraza 配置，段内 id 彼此唯一，无同 id 冲突）。
-		if geoipPrecheckRuleBase+p.ID >= 900000 {
-			Logf("warn", "策略 %d 的 GeoIP 预检链 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, geoipPrecheckRuleBase+p.ID)
+		// U1-3（第 45 轮审计）：策略编号越出普通 GeoIP 段 [800001,810000) 时
+		// 跳过该策略链并告警（第 78 轮 U01-F03 起段界由编码函数单一裁决；
+		// 旧实现只守 <900000，policyID≥10000 会溢入爬虫段）。危害是归因/分桶
+		// 错位而非编译失败（预检是独立 coraza 配置）。
+		geoipRuleID, ok := encodeGeoIPPrecheckRuleID(p.ID)
+		if !ok {
+			Logf("warn", "策略 %d 的 GeoIP 预检链 id 越出普通 GeoIP 段 [%d,%d)，已跳过发射", p.ID, geoipPrecheckRuleBase+1, geoipCrawlerRuleBase)
 			continue
+		}
+		if err := claimRuleID(geoipRuleID, fmt.Sprintf("策略 %d GeoIP 链", p.ID)); err != nil {
+			return "", err
 		}
 		// v2.3.8 爬虫豁免（用户裁定方案 B）：已验证爬虫（caddygeoip handler 双跳
 		// PTR/官方 IP 段验证后注入 X-LB-Crawler-Verified=引擎 ID）逐引擎放行——
 		// ctl 移除本策略 GeoIP 链；伪装（UA 声称引擎但验证失败，handler 置
-		// X-LB-Crawler-Spoof=1）独立事件族显式拒绝。规则 id=810000+policyID*16+
-		// 引擎序号（超 900000 CRS 保留段跳过+告警，镜像 800xxx 家族先例）。
+		// X-LB-Crawler-Spoof=1）独立事件族显式拒绝。id 编码见
+		// encodeCrawlerExemptRuleID/encodeCrawlerSpoofRuleID（第 78 轮：豁免 id
+		// 越出 [810000,850000) 时跳过+告警，不再溢出伪装段）。
 		if p.GeoIPCrawlerExempt {
+			// U14-16：伪装头改为携带引擎 ID（与 Verified 对称），规则条件
+			// 收窄到「本策略已勾选的引擎集合」——旧实现 @eq 1 对任何引擎的
+			// 伪装都 deny（仅勾选 googlebot 的策略会把 bingbot 失败也拦下）。
+			selectedEngines := make([]string, 0, 4)
 			for i, engine := range geoipnames.CrawlerEngines() {
 				if !crawlerEngineSelected(p, engine.ID) {
 					continue
 				}
-				crawlerRuleID := geoipCrawlerRuleBase + p.ID*16 + i
-				if crawlerRuleID >= 900000 {
-					Logf("warn", "策略 %d 的爬虫豁免规则 id %d 将撞入 CRS 保留段，已跳过发射", p.ID, crawlerRuleID)
+				selectedEngines = append(selectedEngines, engine.ID)
+				crawlerRuleID, ok := encodeCrawlerExemptRuleID(p.ID, i)
+				if !ok {
+					Logf("warn", "策略 %d 的爬虫豁免规则（引擎 %s，序号 %d）id 越出豁免段 [%d,%d)，已跳过发射", p.ID, engine.ID, i, geoipCrawlerRuleBase, geoipCrawlerSpoofRuleBase)
 					continue
 				}
-				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,log,msg:'搜索引擎爬虫放行（已验证）',ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipPrecheckRuleBase+p.ID))
+				if err := claimRuleID(crawlerRuleID, fmt.Sprintf("策略 %d 爬虫豁免(%s)", p.ID, engine.ID)); err != nil {
+					return "", err
+				}
+				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,log,msg:'搜索引擎爬虫放行（已验证）',ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipRuleID))
 			}
-			spoofRuleID := geoipCrawlerSpoofRuleBase + p.ID
-			if spoofRuleID < 900000 {
-				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Spoof \"@eq 1\" \"id:%d,phase:1,deny%s,log,msg:'搜索引擎爬虫伪装（PTR 验证失败）',skipAfter:SECURITY_RULES_END\"\n", spoofRuleID, geoipStatusFragment))
+			if len(selectedEngines) > 0 {
+				if spoofRuleID, ok := encodeCrawlerSpoofRuleID(p.ID); !ok {
+					Logf("warn", "策略 %d 的爬虫伪装规则 id 越出伪装段 [%d,%d)，已跳过发射", p.ID, geoipCrawlerSpoofRuleBase, geoipPrecheckRuleLimit)
+				} else {
+					if err := claimRuleID(spoofRuleID, fmt.Sprintf("策略 %d 爬虫伪装", p.ID)); err != nil {
+						return "", err
+					}
+					spoofPattern := escapeCorazaPattern("^(?:" + strings.Join(selectedEngines, "|") + ")$")
+					sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Spoof \"@rx %s\" \"id:%d,phase:1,deny%s,log,msg:'搜索引擎爬虫伪装（PTR 验证失败）',skipAfter:SECURITY_RULES_END\"\n", spoofPattern, spoofRuleID, geoipStatusFragment))
+				}
 			}
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipPrecheckRuleBase+p.ID, geoipStatusFragment))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipRuleID, geoipStatusFragment))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-LB-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoipCountries(p), p.GeoIPMode == "allow", geoipCountryExact))))
 		if p.IPWhitelistEnabled {
 			// 信任维持内容门控（不收敛，2026-10-15：ip_whitelist_enabled 表

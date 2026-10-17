@@ -14,16 +14,6 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// TaskKind 任务类型（v2.0 四类型标准）。
-type TaskKind string
-
-const (
-	TaskKindScheduled TaskKind = "scheduled" // 定时：排程槽驱动
-	TaskKindDaemon    TaskKind = "daemon"    // 常驻：自管理循环
-	TaskKindPeriodic  TaskKind = "periodic"  // 循环：固定间隔
-	TaskKindOneshot   TaskKind = "oneshot"   // 触发：手动/代码触发
-)
-
 // TaskStatus 任务当前状态。
 type TaskStatus string
 
@@ -41,24 +31,25 @@ const (
 
 // TaskInfo 是单任务族的聚合视图。
 type TaskInfo struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Description  string       `json:"description,omitempty"` // 任务作用说明（任务名 hover 提示）
-	Cadence      string       `json:"cadence,omitempty"`     // 运行节奏（如「每 6 小时」；非下次时间）
-	Category     string       `json:"category"`              // 安全防护/证书/备份/集群/系统
-	Kind         TaskKind     `json:"kind"`
-	Status       TaskStatus   `json:"status"`
-	Cancellable  bool         `json:"cancellable"`          // 运行中可手动取消（仅下载类）
-	Controllable bool         `json:"controllable"`         // 常驻循环可启停（start/stop/restart）
-	Triggerable  bool         `json:"triggerable"`          // 支持手动触发（ManualRun 语义族）
-	StartedAt    string       `json:"started_at,omitempty"` // 常驻族启动时刻；其他类型空
-	LogSizeBytes int64        `json:"log_size_bytes"`       // 本任务日志文件大小（字节）
-	LoopOn       bool         `json:"loop_on"`              // 调度开关当前态（定时/循环/常驻调度列绑定值）
-	LastRun      *TaskRunInfo `json:"last_run,omitempty"`
-	NextRunAt    string       `json:"next_run_at,omitempty"`
-	Runs24h      int          `json:"runs_24h"`
-	Success24h   int          `json:"success_24h"`
-	Fail24h      int          `json:"fail_24h"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description,omitempty"` // 任务作用说明（任务名 hover 提示）
+	Cadence        string          `json:"cadence,omitempty"`     // 运行节奏（如「每 6 小时」；非下次时间）
+	Category       string          `json:"category"`              // 安全防护/证书/备份/集群/系统
+	Kind           taskengine.Kind `json:"kind"`
+	Status         TaskStatus      `json:"status"`
+	Cancellable    bool            `json:"cancellable"`          // 运行中可手动取消（仅下载类）
+	Controllable   bool            `json:"controllable"`         // 常驻循环可启停（start/stop/restart）
+	Triggerable    bool            `json:"triggerable"`          // 支持手动触发（ManualRun 语义族）
+	StartedAt      string          `json:"started_at,omitempty"` // 常驻族启动时刻；其他类型空
+	LogSizeBytes   int64           `json:"log_size_bytes"`       // 本任务日志文件大小（字节）
+	LoopOn         bool            `json:"loop_on"`              // 调度开关当前态（定时/循环/常驻调度列绑定值；用户显式启停持久化于 task_loop_prefs，无记录走默认启动清单）
+	BusinessDriven bool            `json:"business_driven"`      // 仅由业务页驱动调度（任务监控 toggle 只读）
+	LastRun        *TaskRunInfo    `json:"last_run,omitempty"`
+	NextRunAt      string          `json:"next_run_at,omitempty"`
+	Runs24h        int             `json:"runs_24h"`
+	Success24h     int             `json:"success_24h"`
+	Fail24h        int             `json:"fail_24h"`
 }
 
 // TaskRunInfo 最近一次运行。
@@ -99,10 +90,20 @@ func collectCertJobRows() []TaskInfo {
 	// 「issued 超 1 天隐藏」窗口过滤致主节点签发行消失）；仅排除从节点
 	// 材料物化行（非签发任务，从节点禁签发）。LIMIT 100（U1-P3-2 裁定后
 	// 收敛：20 截断「存在即显示」——100 贴近裁定原文且长周期主节点不触顶）。
+	//
+	// L04-07：镜像行过滤条件绑定「本节点当前为从节点」——曾无条件按 message
+	// 前缀过滤，promote 后保留下来的同主节点同步行永久不可见（它们已经是本
+	// 节点自己的签发工作项）。读角色失败按主节点处理（行可见：多展示无害，
+	// 静默丢行不可恢复）。
+	isMaster := 1
+	var roleVal int
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&roleVal); err == nil {
+		isMaster = roleVal
+	}
 	rows, err := db.DB.Query(`SELECT id, rule_id, domain, status, COALESCE(message,''), COALESCE(updated_at,created_at)
 		FROM cert_jobs
-		WHERE COALESCE(message,'') NOT LIKE '从主节点同步%'
-		ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 100`)
+		WHERE ?=1 OR COALESCE(message,'') NOT LIKE '从主节点同步%'
+		ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 100`, isMaster)
 	if err != nil {
 		return nil
 	}
@@ -129,7 +130,7 @@ func collectCertJobRows() []TaskInfo {
 			ID:       fmt.Sprintf("cert-job:%d", id),
 			Name:     "ACME 签发 · " + domain,
 			Category: "证书",
-			Kind:     TaskKindOneshot, // 动态签发行=按需触发的工作项
+			Kind:     taskengine.KindOneshot, // 动态签发行=按需触发的工作项
 			// 触发语义（2026-10-11 用户裁定）：cert-job 行视为触发任务——可自动
 			// 调度（签发守护消费）即可手动调度（证书可重签发）；重试门（在途 409/
 			// 退役 429/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
@@ -173,9 +174,9 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 	for _, m := range te.DescribeAll() {
 		ti := TaskInfo{
 			ID: m.ID, Name: m.Name, Description: m.Description,
-			Category: m.Category, Kind: TaskKind(m.Kind),
+			Category: m.Category, Kind: m.Kind,
 			Controllable: m.Controllable, Cancellable: m.Cancelable, Triggerable: m.CanTrigger,
-			LoopOn: m.LoopOn,
+			LoopOn: m.LoopOn, BusinessDriven: IsBusinessDrivenTask(m.ID),
 		}
 		// 节奏：循环=间隔，定时=排程槽，常驻=自管理，触发=手动
 		switch m.Kind {
@@ -203,9 +204,9 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		latestRun := te.LatestRun(m.ID)
 		// 状态分流（方案 A，2026-10-12 用户裁定）：状态列只承载执行语义
 		// （运行中/空闲/失败；cert-job 退役行「已禁用」走 cert-job 行集）。
-		// 调度语义（调度关/业务关）全部归开关列——前端并判 loop_on && enabled。
-		// stopped/disabled 不再作为状态列产出（原「stopped 仅常驻」模型与
-		// disabled 三源混用同轮废除）。
+		// 调度语义全部归开关列——调度语义只由 loop_on 表达；business_driven
+		// 为只读态（由对应业务页开关驱动调度）。stopped/disabled 不再作为
+		// 状态列产出（原「stopped 仅常驻」模型与 disabled 三源混用同轮废除）。
 		if m.StatusMirror != "" {
 			ti.Status = TaskStatus(m.StatusMirror)
 		} else if m.Kind == taskengine.KindDaemon {
@@ -227,6 +228,16 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		}
 		// 下一槽：定时=NextSlotFn（声明式）；循环=last+interval 兜底
 		ti.NextRunAt = m.NextSlot
+		if m.ID == "cert-waiting-ca" && db.DB != nil {
+			// 仅展示「下次 CA 可用时间」，不参与 Periodic 调度；Descriptor 不再携带
+			// Scheduled 专用 NextSlotFn。
+			var at string
+			if err := db.DB.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs WHERE status='waiting_ca'`).Scan(&at); err == nil {
+				if slot := parseUTCSlot(at); !slot.IsZero() {
+					ti.NextRunAt = slot.In(CurrentLocation()).Format("2006-01-02 15:04:05")
+				}
+			}
+		}
 		if latestRun != nil {
 			ti.LastRun = &TaskRunInfo{StartedAt: latestRun.StartedAt, FinishedAt: latestRun.FinishedAt,
 				DurationMs: latestRun.DurationMs, Trigger: latestRun.Trigger, Operator: latestRun.Operator,
@@ -248,11 +259,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		// 置零值——UI '—' 兜底（U1-66-06），不再回退引擎进程启动时刻
 		// （=uptime 语义，与「空闲/已停止」状态矛盾）。L1-12（第 65 轮）。
 		if m.Kind == taskengine.KindDaemon {
-			// 取值语义（2026-10-03 用户两次报告收敛；同日裁定镜像废除）：
-			// 真实运行=本代 boot 行；状态镜像 running（调度关但业务侧活跃
-			// ——如 cert-issuance 在役队列）=引擎启动时刻（当前服务面起点）
-			// ——不得被陈旧历史 boot 行劫持；停用有史=最近一次启动；从未
-			// 运行且未运行=零值。
+			// 真实运行=本代 boot 行；停用有史=最近一次启动；从未运行且未运行=零值。
 			switch {
 			case m.Running:
 				if latestRun != nil {
@@ -260,8 +267,6 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 				} else {
 					ti.StartedAt = te.StartedAt().In(CurrentLocation()).Format("2006-01-02 15:04:05")
 				}
-			case ti.Status == TaskStatusRunning:
-				ti.StartedAt = te.StartedAt().In(CurrentLocation()).Format("2006-01-02 15:04:05")
 			default:
 				if latestRun != nil {
 					ti.StartedAt = latestRun.StartedAt
@@ -302,36 +307,4 @@ func localDisplayUTC(ts string) string {
 		}
 	}
 	return ts
-}
-
-// nextAutoBackupSlot 计算自动备份的下一执行槽（复用 autoBackupDueSlot
-// 逐槽推进语义；禁用或参数非法返回 false）。
-func nextAutoBackupSlot(now time.Time) (time.Time, bool) {
-	row, err := loadAutoBackupSettings()
-	if err != nil || !row.enabled {
-		return time.Time{}, false
-	}
-	loc := CurrentLocation()
-	due, ok := autoBackupDueSlot(now.In(loc), row.freq, row.hhmm, row.day, loc)
-	if !ok {
-		return time.Time{}, false
-	}
-	if !due.After(now.In(loc)) {
-		// 漏跑追补：最近过去的槽未被 last_run 覆盖 → 返回该槽（≤now——
-		// v2.0 Scheduled 引擎到点立即触发=跨停机窗口补跑）
-		if row.lastRun == nil || due.After(*row.lastRun) {
-			return due, true
-		}
-		// 已执行——步进到下一未来槽
-		// （R63-P2-4：曾恒 +24h——weekly/monthly 时追不上下一槽，下次执行恒显示过去时刻）
-		step := now.In(loc).Add(24 * time.Hour)
-		switch row.freq {
-		case "weekly":
-			step = now.In(loc).Add(7 * 24 * time.Hour)
-		case "monthly":
-			step = now.In(loc).AddDate(0, 1, 0)
-		}
-		due, ok = autoBackupDueSlot(step, row.freq, row.hhmm, row.day, loc)
-	}
-	return due, ok
 }

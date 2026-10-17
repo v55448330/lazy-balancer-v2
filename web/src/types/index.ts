@@ -174,7 +174,7 @@ export interface ClusterHealth {
   readonly ip2region_version?: string
 }
 
-export interface ClusterSectionSync {
+interface ClusterSectionSync {
   readonly section: string
   readonly label: string
   readonly hash: string
@@ -200,9 +200,9 @@ export interface ClusterNode {
 }
 
 /** 集群同步错误码（后端下发 health.sync_error_code 的已知值域，驱动错误文案翻译） */
-export type ClusterSyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
+type ClusterSyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
 
-export type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: ClusterSyncErrorCode }
+type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: ClusterSyncErrorCode }
 
 /** 节点视图模型（U9-68-P5-3 收敛：ClusterSettings/ClusterMasterPanel 原两处重复
  *  声明）——health.sync_error_code 收窄为已知错误码联合 */

@@ -644,54 +644,9 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 
 func (s *CertificateService) Start() {
 	defer close(s.done)
-	// Recover any jobs left in non-terminal states from a previous run.
+	// 仅恢复上次运行遗留任务；四个周期任务统一由任务引擎驱动。
 	s.recoverJobs(s.ctx)
-
-	// Run renewal check shortly after startup, then every 6 hours.
-	initialRenewal := time.NewTimer(30 * time.Second)
-	renewalTicker := time.NewTicker(6 * time.Hour)
-	manualTicker := time.NewTicker(10 * time.Minute)
-	waitingCATicker := time.NewTicker(30 * time.Second)
-	reconcileTicker := time.NewTicker(6 * time.Hour)
-	defer initialRenewal.Stop()
-	defer renewalTicker.Stop()
-	defer manualTicker.Stop()
-	defer waitingCATicker.Stop()
-	defer reconcileTicker.Stop()
-	certSelfDriven := func() bool { return TaskEngine() == nil } // 引擎在场:四循环由引擎节拍驱动(单轮体 CertXxxOnce),原生 ticker 让位
-	for {
-		select {
-		case <-initialRenewal.C:
-			if certSelfDriven() {
-				s.renewExpiringCertificates()
-			}
-		case <-renewalTicker.C:
-			if certSelfDriven() {
-				s.renewExpiringCertificates()
-			}
-		case <-manualTicker.C:
-			if certSelfDriven() {
-				s.checkManualCertExpiration()
-			}
-		case <-waitingCATicker.C:
-			// R45/CL21-1：滞留 queued 补扫 + 部署断链重排——引擎在场由
-			// CertWaitingCATickOnce 单轮体统一驱动（含全部补扫），原生分支让位。
-			if certSelfDriven() {
-				s.requeueWaitingCAJobs()
-				if qm := GetCAQueueManager(); qm != nil {
-					qm.requeueStrandedQueuedJobs()
-				}
-				s.rescanDroppedDeploymentRetries()
-			}
-		case <-reconcileTicker.C:
-			if certSelfDriven() {
-				reconcileMissingCertFiles(db.DB)
-				sweepOrphanedCertJobs(s.ctx)
-			}
-		case <-s.ctx.Done():
-			return
-		}
-	}
+	<-s.ctx.Done()
 }
 
 // activeCertService 当前证书服务实例（引擎单轮 tick 消费；lifecycle 启动时注入）。
@@ -705,6 +660,14 @@ func SetActiveCertificateService(svc *CertificateService) {
 	activeCertService.Lock()
 	defer activeCertService.Unlock()
 	activeCertService.svc = svc
+	if svc != nil {
+		// active 注入前引擎可能已首轮跳过（服务未运行）；就绪时重置节拍，
+		// 避免续期/手动轮询静默等待完整 6h/10min 周期。
+		if te := TaskEngine(); te != nil {
+			te.RearmLoop("cert-renewal-scan")
+			te.RearmLoop("cert-manual-poll")
+		}
+	}
 }
 
 // lastCertServiceMissing 证书服务缺失状态门（三个证书 tick 任务共享——全局
@@ -1238,9 +1201,8 @@ func CreateOrRequeueCertJobWithChange(ruleID, domains string, caProviderID int, 
 	// 体自停）。U1-66-05 勘误：本处不再是「全部创建路径的单点」——规则写路径
 	// （EnableRule 的 Create/Retry/Renew）经此收敛；手动重试与删除失败恢复
 	// 直调 EnqueueIfActive，唤醒点在 handlers/certjobs.go 同批落地。
-	if te := TaskEngine(); te != nil && certJobsActive() {
-		te.StartLoop("cert-waiting-ca")
-	}
+	// L01-09：入队成功即真实工作，唤醒不重查活跃态（避免瞬时失败漏唤醒）。
+	WakeCertWaitingCAForEnqueuedJob()
 	return jobID, true, nil
 }
 
@@ -1415,8 +1377,10 @@ func (s *CertificateService) checkManualCertExpiration() {
 		}
 
 		daysUntilExpiry := CertDaysRemaining(cert.NotAfter, now)
-
-		if now.After(cert.NotAfter) {
+		// U06-F03（第 78 轮）：到期状态判定收敛 CertificateExpiryStatus 单源
+		// （天粒度；过期优先于临期）——与 certinfo 列表/任务列表同结论。
+		switch CertificateExpiryStatus(cert.NotAfter, now, warnDays) {
+		case "expired":
 			// CERT41-3:同一证书同日同档只告一次(10min 扫描周期去重);
 			// 计数不受门禁影响,汇总如实反映当前状态。
 			if s.expiryAlertGate.shouldAlert(c.caddyID, manualCertExpiryLevelExpired, now) {
@@ -1424,7 +1388,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 					c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
 			}
 			expiredCount++
-		} else if daysUntilExpiry <= warnDays {
+		case "expiring":
 			if s.expiryAlertGate.shouldAlert(c.caddyID, manualCertExpiryLevelExpiringSoon, now) {
 				Logf("warn", "cert expiration check: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
 					c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))

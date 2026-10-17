@@ -43,19 +43,6 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if !req.Enabled {
-		// AU-8/D5（第 74 轮）：禁用路径先收尾再停调度——禁用后无循环 flush/
-		// 到期清理点，禁用前未收敛的名单变化（含暂存重载）与已到期条目必须
-		// 在此收敛落盘（热路径优先，全量重载回退）。
-		services.AutobanDisableFlush()
-	}
-	if te := services.TaskEngine(); te != nil {
-		if req.Enabled {
-			te.StartLoop(services.AutobanTaskID)
-		} else {
-			te.StopLoop(services.AutobanTaskID)
-		}
-	}
 	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s；调度：%s；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s",
 		boolOnOff(req.Enabled), map[bool]string{true: "已开启", false: "已停止"}[req.Enabled], req.Threshold, req.WindowMinutes,
 		services.AutobanDurationLabel(req.Duration), autobanScopeText(req.Scope),

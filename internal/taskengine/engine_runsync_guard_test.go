@@ -75,6 +75,24 @@ func TestTrigger_masterOnlyRejectedOnSlave(t *testing.T) {
 	}
 }
 
+func TestRunNow_rechecksRoleAtExecutionEntry(t *testing.T) {
+	// Given：从节点角色 + MasterOnly 描述符（绕过 Trigger/RunSync 外层守卫直调 runNow）。
+	e := newTestEngine(t)
+	var runs atomic.Int32
+	e.Register(Descriptor{ID: "t-race-role", Family: "t", Name: "角色复查", Kind: KindOneshot, RunsOn: RoleMasterOnly,
+		Run: func(rc RunContext) error { runs.Add(1); return nil }})
+	e.SetRole(false)
+
+	// When/Then：执行入口自身必须拒绝并跳过 Run，不能只依赖调用方预检。
+	_, err := e.runNow("t-race-role", "auto", "")
+	if err == nil || !strings.Contains(err.Error(), "主节点") {
+		t.Fatalf("runNow 应在入口复查角色，err=%v", err)
+	}
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("从节点上 Run 体执行次数=%d, want 0", got)
+	}
+}
+
 // 回归：Oneshot 任务 RunSync 正常执行（守卫不误伤既有直调入口——auto-backup
 // 同形态：非 Daemon、非 MasterOnly bool）。
 func TestRunSync_oneshotStillExecutes(t *testing.T) {

@@ -102,6 +102,10 @@ func TestThreatRDBSteadyState_emptyDBEntriesWithFileIsNotDue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist"), []byte("192.0.2.0/24\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// U02-F09：.fast 缺失同样视为未装载（运行消费面），稳态需两者齐备。
+	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist.fast"), []byte("LBF1"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='' WHERE name=?`, db.ThreatListNameBySource("ustc")); err != nil {
 		t.Fatal(err)
 	}

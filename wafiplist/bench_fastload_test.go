@@ -50,7 +50,10 @@ func TestFastLoad_vs_TextLoad_200k(t *testing.T) {
 	if err := WriteFastFile(textPath+".fast", v4, v6); err != nil {
 		t.Fatalf("WriteFastFile: %v", err)
 	}
-	fi, _ := os.Stat(textPath + ".fast")
+	fi, err := os.Stat(textPath + ".fast")
+	if err != nil {
+		t.Fatalf("stat .fast artifact: %v", err)
+	}
 	t.Logf(".fast=%d bytes(text=%d)", fi.Size(), len(buf))
 
 	// 冷加载 .fast（ReadFastFile 直读，测格式加载本身）
@@ -70,8 +73,11 @@ func TestFastLoad_vs_TextLoad_200k(t *testing.T) {
 		t.Fatalf("text: %v", err2)
 	}
 	t.Logf("20万条冷加载: .fast=%v text=%v 加速=%.0fx", d1, d2, float64(d2)/float64(d1))
-	if d1 > 2*d2 { // U2b-T-1：2 倍余量防宿主负载假红（曾 1:1 墙钟比较 Flake 面）
-		t.Fatalf(".fast 加载必须不慢于文本: fast=%v text=%v", d1, d2)
+	// U14-14（第 78 轮）：墙钟性能不进单元断言——CI/宿主负载下 2 倍余量仍会假红。
+	// 加速比只作诊断输出，功能语义由下方查询一致性断言覆盖（性能回归用
+	// benchmark 度量）。
+	if d1 > 2*d2 {
+		t.Logf("WARN: .fast 冷加载慢于文本 2 倍（性能诊断，不影响断言）: fast=%v text=%v", d1, d2)
 	}
 
 	// 语义一致: 同 IP 命中判定相同（与 Evaluate 同构的二分查询）

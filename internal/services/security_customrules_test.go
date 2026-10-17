@@ -401,3 +401,37 @@ func TestEmitCustomRules_bodyTargetScansParsedBodyCollections(t *testing.T) {
 		t.Fatalf("body target must scan parsed body collections (JSON processor leaves REQUEST_BODY empty):\n%s", got)
 	}
 }
+
+// 第 78 轮 L03-11：发射守卫复用保存侧 validateCustomRulePattern——空/纯空白
+// pattern 的规则必须整条跳过（@contains "" 等于匹配一切，绝不能落成无条件
+// deny），合法规则不受影响。
+func TestEmitCustomRules_emptyPatternSkipped(t *testing.T) {
+	base := func(id int, pattern string) models.CustomRule {
+		return models.CustomRule{
+			ID: id, Name: "r", Enabled: true, Action: "block", Score: 5,
+			Conditions: []models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: pattern}},
+		}
+	}
+	var sb strings.Builder
+	emitCustomRules(&sb, []models.CustomRule{
+		base(1, ""),
+		base(2, "   "),
+		base(3, "\t"),
+		base(4, "/ok"),
+	}, 403)
+	out := sb.String()
+	for _, id := range []string{"id:10001", "id:10002", "id:10003"} {
+		if strings.Contains(out, id) {
+			t.Fatalf("empty/blank pattern rule %s must be skipped:\n%s", id, out)
+		}
+	}
+	if !strings.Contains(out, "id:10004") {
+		t.Fatalf("valid rule must still be emitted:\n%s", out)
+	}
+	// 合法规则渲染字节不变（回归形状）
+	var sb2 strings.Builder
+	emitCustomRules(&sb2, []models.CustomRule{base(4, "/ok")}, 403)
+	if sb2.String() != "" && !strings.Contains(sb2.String(), `@contains /ok`) {
+		t.Fatalf("valid rule shape changed:\n%s", sb2.String())
+	}
+}

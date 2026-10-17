@@ -11,8 +11,8 @@ import (
 
 // F5-3（bind-error 约定）：MFASetup 重新绑定确认段与 MFAResetByAdmin 的请求体
 // `_ = c.ShouldBindJSON(...)` 吞错——畸形 JSON 落入零值字段，报出误导性的
-// 「密码错误」/「验证码错误」401 而非 400「请求格式错误」。对齐 Login
-// （auth.go:51-55）约定：绑定失败即 400。
+// 「验证码错误」401 而非 400「请求格式错误」。对齐 Login（auth.go:51-55）约定：
+// 绑定失败即 400。登录后端点无密码确认段（2026-09 用户裁定）。
 
 // malformedMfaBody 截断的畸形 JSON（语法层即非法）。
 const malformedMfaBody = `{"password":`
@@ -25,18 +25,18 @@ func postRaw(router *gin.Engine, path, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// 场景 1：已启用 MFA 用户重新 setup（确认段）收到畸形 JSON → 400「请求格式错误」。
-// 修复前：绑定错误被吞，零值密码走 bcrypt 比较 → 401「密码错误」。
+// 场景 1：已启用 MFA 用户重新 setup（验证码确认段）收到畸形 JSON → 400「请求格式错误」。
+// 修复前：绑定错误被吞，零值 code 走 TOTP 校验 → 401「验证码错误」。
 func TestMFASetup_malformedJSON_returns400(t *testing.T) {
-	// Given 已启用 MFA 的用户（进入密码+验证码确认段）
+	// Given 已启用 MFA 的用户（进入验证码确认段）
 	h := newBackupTestHandlers(t)
-	seedMfaGateUser(t, gateTestPassword)
+	seedMfaGateUser(t)
 	router := mfaSetupTestRouter(h)
 
 	// When 畸形 JSON
 	rec := postRaw(router, "/auth/mfa/setup", malformedMfaBody)
 
-	// Then 400 + 请求格式错误（修复前：401 密码错误）
+	// Then 400 + 请求格式错误（修复前：401 验证码错误）
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400（绑定失败应按 Login 约定返回请求格式错误）", rec.Code, rec.Body.String())
 	}

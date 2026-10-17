@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -20,44 +20,69 @@ const (
 	securityEventsRetentionDeleteBatch = 20000
 )
 
-var (
-	securityEventsRetentionMu     sync.Mutex
-	securityEventsRetentionCancel context.CancelFunc
-	securityEventsRetentionDone   chan struct{}
-)
-
 // SecurityEventsRetentionMax 返回安全事件行数上限（v2.3.8 起可经
 // security_events_row_cap 显式设置，0=内置默认）。
 func SecurityEventsRetentionMax() int {
-	_, max := securityEventsRetentionSettings()
-	return max
+	return securityEventsRetentionPolicyFromDB().Max
 }
 
-// securityEventsRetentionSettings 读取保留策略（v2.3.8 起双通道）：
+// securityEventsRetentionPolicy 是安全事件保留策略的解析结果（单源——清理体、
+// 行帽展示与面板摘要共用同一次读逻辑，避免多处口径分裂）。
+type securityEventsRetentionPolicy struct {
+	Days         int  // 生效保留天数
+	Max          int  // 生效行数上限
+	Months       int  // 旧通道月数（audit_retention_months；0=未配置）
+	ExplicitDays bool // security_events_retention_days 显式设置（>0）
+}
+
+// SecurityEventsRetentionSummary 返回安全事件保留口径的可读摘要（日志统计面板
+// security_events 行展示）。U08-F01：面板此前恒复用审计保留月数文案，显式
+// security_events_retention_days 设置被无视——摘要改由本函数单源生成；未显式
+// 设置时回退旧通道（audit_retention_months×30 天）的月表述。
+func SecurityEventsRetentionSummary() string {
+	policy := securityEventsRetentionPolicyFromDB()
+	if policy.ExplicitDays {
+		return fmt.Sprintf("每日清理 · 保留 %d 天", policy.Days)
+	}
+	if policy.Months > 0 {
+		return fmt.Sprintf("每日清理 · 保留 %d 个月", policy.Months)
+	}
+	return fmt.Sprintf("每日清理 · 保留 %d 天", policy.Days)
+}
+
+// securityEventsRetentionPolicyFromDB 读取保留策略（v2.3.8 起双通道）：
 // ①显式设置 security_events_retention_days / security_events_row_cap（0=
 // 未设置走旧通道）；②旧通道 audit_retention_months×30 天 + 内置 100 万行
 // 上限。100/s 攻击压力设计（2026-10-17 用户裁定：保留期/条数均为用户可设，
 // 超限滚动更新）。
-func securityEventsRetentionSettings() (days, max int) {
-	days, max = securityEventsRetentionDefaultDays, securityEventsRetentionDefaultMax
+func securityEventsRetentionPolicyFromDB() securityEventsRetentionPolicy {
+	policy := securityEventsRetentionPolicy{Days: securityEventsRetentionDefaultDays, Max: securityEventsRetentionDefaultMax}
 	database := db.DB
 	if database == nil {
-		return days, max
+		return policy
 	}
-	var retentionMonths, explicitDays, explicitCap int
-	if err := database.QueryRow(`SELECT COALESCE(audit_retention_months,0), COALESCE(security_events_retention_days,0), COALESCE(security_events_row_cap,0) FROM global_config WHERE id=1`).Scan(&retentionMonths, &explicitDays, &explicitCap); err != nil {
-		Logf("warn", "security events retention: read retention settings failed, falling back to %d days: %v", days, err)
-		return days, max
+	var explicitDays, explicitCap int
+	if err := database.QueryRow(`SELECT COALESCE(audit_retention_months,0), COALESCE(security_events_retention_days,0), COALESCE(security_events_row_cap,0) FROM global_config WHERE id=1`).Scan(&policy.Months, &explicitDays, &explicitCap); err != nil {
+		policy.Months = 0
+		Logf("warn", "security events retention: read retention settings failed, falling back to %d days: %v", policy.Days, err)
+		return policy
 	}
 	if explicitDays > 0 {
-		days = explicitDays
-	} else if retentionMonths > 0 {
-		days = retentionMonths * 30
+		policy.Days = explicitDays
+		policy.ExplicitDays = true
+	} else if policy.Months > 0 {
+		policy.Days = policy.Months * 30
 	}
 	if explicitCap > 0 {
-		max = explicitCap
+		policy.Max = explicitCap
 	}
-	return days, max
+	return policy
+}
+
+// securityEventsRetentionSettings 读取保留策略（天数, 行帽）——清理体消费。
+func securityEventsRetentionSettings() (days, max int) {
+	policy := securityEventsRetentionPolicyFromDB()
+	return policy.Days, policy.Max
 }
 
 // securityEventsRetentionCleanup deletes events older than the configured
@@ -141,72 +166,43 @@ func securityEventsRetentionCleanup(ctx context.Context) int {
 			}
 		}
 	}
-	// v2.3.8：本轮有删除时截断 WAL（100/s 持续写入+滚动删除下防 WAL 无界）
-	if total > 0 {
+	// U03-F07（第 78 轮）：security_event_rollup 保留清理——全仓此前无任何
+	// 删除点，分钟聚合行无限增长。保留天数取 max(31, 事件保留天数)：31 天
+	// 下界保证「当前与上一完整分钟」恒在（大屏 recent_rate/小时直方最小窗口
+	// 只有 24h）。按分钟分批（每批 60 个分钟组）删除，批间让写锁并响应 ctx。
+	rollupDays := days
+	if rollupDays < 31 {
+		rollupDays = 31
+	}
+	rollupCutoff := time.Now().UTC().AddDate(0, 0, -rollupDays).Format("2006-01-02 15:04")
+	rollupDeleted := 0
+	for {
+		res, err := database.Exec(`DELETE FROM security_event_rollup WHERE minute < ? AND minute IN (
+			SELECT minute FROM security_event_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
+		if err != nil {
+			Logf("warn", "security events retention: rollup cleanup failed: %v", err)
+			break
+		}
+		affected, _ := res.RowsAffected()
+		rollupDeleted += int(affected)
+		if affected == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			Logf("info", "security events retention: rollup cleanup canceled mid-pass (deleted %d)", rollupDeleted)
+			return total
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if rollupDeleted > 0 {
+		Logf("info", "security events retention: rollup cleanup removed %d rows older than %s", rollupDeleted, rollupCutoff)
+	}
+	// v2.3.8：本轮有删除时截断 WAL（含仅 rollup 清理；100/s 持续写入+滚动删除下防 WAL 无界）
+	if total > 0 || rollupDeleted > 0 {
 		if _, err := database.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 			Logf("warn", "security events retention: wal checkpoint failed: %v", err)
 		}
 	}
 	return total
 }
-
-// StartSecurityEventsRetention launches the daily cleanup worker. It is a no-op
-// when the worker is already running. The worker runs one cleanup pass at start
-// so a fresh boot does not wait a full day, then repeats every 24 hours.
-func StartSecurityEventsRetention(ctx context.Context) {
-	securityEventsRetentionMu.Lock()
-	if securityEventsRetentionDone != nil {
-		securityEventsRetentionMu.Unlock()
-		return
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	securityEventsRetentionCancel = cancel
-	securityEventsRetentionDone = done
-	securityEventsRetentionMu.Unlock()
-
-	go func() {
-		defer func() {
-			close(done)
-			securityEventsRetentionMu.Lock()
-			if securityEventsRetentionDone == done {
-				securityEventsRetentionCancel = nil
-				securityEventsRetentionDone = nil
-			}
-			securityEventsRetentionMu.Unlock()
-		}()
-		securityEventsRetentionCleanup(runCtx)
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-runCtx.Done():
-				return
-			case <-ticker.C:
-				securityEventsRetentionCleanup(runCtx)
-			}
-		}
-	}()
-}
-
-// StopSecurityEventsRetention terminates the worker and waits for it to exit.
-// 停止路径仅 main.go 优雅退出（F5-2：原私有 stopper 无生产调用方，导出供关停接线）。
-func StopSecurityEventsRetention() {
-	securityEventsRetentionMu.Lock()
-	cancel := securityEventsRetentionCancel
-	done := securityEventsRetentionDone
-	securityEventsRetentionCancel = nil
-	securityEventsRetentionDone = nil
-	securityEventsRetentionMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		<-done
-	}
-}
-
-// （R69 过度修复审查 REMOVE：SetSecurityEventsRetentionMasterRole wrapper 已删除。
-// worker 生命周期由 main.go 单点拥有——启动即无条件 StartSecurityEventsRetention
-//（从节点也摄入事件，与集群角色无关，R62 B-NEW-2 确立）；Promote 路径的传 true
-// 调用是幂等 no-op、false 分支生产不可达；停止路径仅 main.go 优雅退出。）

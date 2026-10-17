@@ -87,11 +87,26 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 }
 
 // R39-7(C3):POST /settings/oidc/test 是读探测语义(发现+JWKS 可达性,不落库
-// 配置)——与 certificate-configs 两条 test、ca-providers/:id/test 同口径
-// (2026-09-10 裁定先例),只读 API Key 应可调用,须经 readOnlyWriteRoutes 放行。
+// 配置)——只读 API Key 应可调用,须经 readOnlyWriteRoutes 放行。L04-03（第 78
+// 轮）：certificate-configs 两条 test 因真实 DNS TXT 写副作用已移出白名单，
+// 本端点与 ca-providers/:id/test 仍为纯读探测。
 func TestIsReadOnlyWriteRoute_allowsOIDCDiscoveryProbe(t *testing.T) {
 	if !IsReadOnlyWriteRoute("POST", "/api/v1/settings/oidc/test") {
 		t.Fatal("IsReadOnlyWriteRoute(POST /api/v1/settings/oidc/test)=false, want true (读探测语义)")
+	}
+}
+
+// L04-03（第 78 轮，主审上调 P2）：证书配置两条 test 路由移出只读白名单
+// ——dnsproviders.Validate 会真实 Present+CleanUp DNS TXT（非只读探测）；CA
+// 提供商 test 不发 DNS 写，保留读探测语义。
+func TestIsReadOnlyWriteRoute_certificateConfigTestsAreNotProbes(t *testing.T) {
+	for _, path := range []string{"/api/v1/certificate-configs/:id/test", "/api/v1/certificate-configs/test"} {
+		if IsReadOnlyWriteRoute("POST", path) {
+			t.Fatalf("IsReadOnlyWriteRoute(POST %s)=true, want false（真实 DNS 写副作用，三守卫须恢复）", path)
+		}
+	}
+	if !IsReadOnlyWriteRoute("POST", "/api/v1/ca-providers/:id/test") {
+		t.Fatal("IsReadOnlyWriteRoute(POST /api/v1/ca-providers/:id/test)=false, want true（读探测保留）")
 	}
 }
 
@@ -101,18 +116,18 @@ func TestAuditResultText_translates_partial_result(t *testing.T) {
 	}
 }
 
-// U1-P3-1（第 67 轮）：12 个可手动触发族的自记分流必须与现实一致——5 族
-// 任务体自记审计（handler 跳过复记），7 族任务体零审计（handler 补记）。
+// U1-P3-1（第 67 轮）：15 个可手动触发族的自记分流必须与现实一致——6 族
+// 任务体自记审计（handler 跳过复记），9 族任务体零审计（handler 补记）。
 // 集合漂移（新增可触发族未评估/自记机制撤销）会在这里当场失败。
 func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
-	// Given 5 个自记族（任务体 defer/执行器/载入审计，operator 经 RunContext 归人）
-	for _, id := range []string{"threat", "crs", "ip2region", "auto-backup", "startup:config-load"} {
+	// Given 6 个自记族（任务体 defer/执行器/载入审计，operator 经 RunContext 归人）
+	for _, id := range []string{"threat", "crs", "ip2region", "crawlerbot-update", "auto-backup", "startup:config-load"} {
 		if !TaskTriggerSelfRecordsAudit(id) {
 			t.Fatalf("自记族 %s 应报告 true（handler 复记会双审计，违反 U1-P3-2 单记裁定）", id)
 		}
 	}
-	// When/Then 7 个非自记族报告 false（handler 显式补记「触发/任务监控」）
-	for _, id := range []string{"log-cleanup", "audit-retention", "security-events-retention", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca"} {
+	// When/Then 9 个非自记族报告 false（handler 显式补记「触发/任务监控」）
+	for _, id := range []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban"} {
 		if TaskTriggerSelfRecordsAudit(id) {
 			t.Fatalf("非自记族 %s 应报告 false（任务体零审计，handler 不补记则手动触发无痕）", id)
 		}

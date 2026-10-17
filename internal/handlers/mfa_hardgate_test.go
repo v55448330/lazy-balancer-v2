@@ -22,10 +22,8 @@ import (
 // 提示 401 不计数不锁定；恢复码重生成仅凭 JWT 会话；全系统唯一锁定为登录
 // 阶段 5 次/10 分钟、受「登录失败锁定」开关控制。本文件钉住该契约。
 
-const gateTestPassword = "Gate-Passw0rd!"
-
-// seedMfaGateUser 旧签名（mfa_binderror_test 消费）：种 id=1 已启用 MFA 操作者。
-func seedMfaGateUser(t *testing.T, password string) string {
+// seedMfaGateUser 种 id=1 已启用 MFA 操作者（登录后端点无密码段）。
+func seedMfaGateUser(t *testing.T) string {
 	t.Helper()
 	return seedMfaRulingUser(t)
 }

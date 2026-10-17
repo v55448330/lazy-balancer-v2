@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 const (
@@ -36,9 +37,32 @@ func runWithInTaskRetry(op func() error, onWait func(nextAttempt int, wait time.
 // 与三库起点角色复查同一 SQL 口径（COALESCE(is_master,1)；查询失败按非主
 // 节点→跳过语义，宁停勿写）。
 func updateRunStillMaster() bool {
+	// U10-F11：与同族 B1-8 口径一致——nil 库 fail-closed（按非主节点）。
+	if db.DB == nil {
+		return false
+	}
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return false
 	}
 	return true
+}
+
+// taskRunStartedAt 取任务引擎预插行的 started_at（配置时区墙钟）并归一
+// 为 UTC 存储；前端 formatDate 再按配置时区显示，与任务监控展示同一时刻。
+// 直接调用（rc=nil/RunID=0）或行不可读时回退当前 UTC。
+func taskRunStartedAt(rc *taskengine.RunContext) string {
+	// U10-F11：与同族 B1-8 口径一致——nil 库直接回退当前 UTC（不 panic）。
+	if db.DB == nil {
+		return time.Now().UTC().Format(crsTimeLayout)
+	}
+	if rc != nil && rc.RunID > 0 {
+		var started string
+		if err := db.DB.QueryRow(`SELECT started_at FROM task_runs WHERE id=?`, rc.RunID).Scan(&started); err == nil && started != "" {
+			if instant, err := time.ParseInLocation(crsTimeLayout, started, CurrentLocation()); err == nil {
+				return instant.UTC().Format(crsTimeLayout)
+			}
+		}
+	}
+	return time.Now().UTC().Format(crsTimeLayout)
 }

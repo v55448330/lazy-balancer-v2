@@ -298,6 +298,9 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 		if err != nil {
 			WriteCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
 			m.restoreBackup()
+			// U02/P1-2：restoreBackup 只恢复规则树/setup，live VERSION 仍是新 tag
+			// ——必须同代回滚，否则启动对账会把 DB 校正为新版本并永久短路更新。
+			writeCRSVersionMarker(m.crsDir, prevTag)
 			// 版本行回滚到旧值，恢复下轮重试能力
 			if _, rbErr := db.DB.Exec(
 				"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
@@ -323,7 +326,8 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	os.Remove(crsTransientPath(m.crsDir, "zz-user-overrides.conf.bak"))
 	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
 	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
-	writeCRSVersionMarker(m.crsDir, tag)
+	// U02-F11：VERSION 标记已在 swapCRSTreeFromStaging（wafFileMu 内）与树/DB
+	// 版本行同代落盘，此处不再锁外重写。
 	if err := persistCRSSnapshotFrom(m.crsDir, crsSnapshotDir, tag); err != nil {
 		Logf("error", "crs update: failed to persist snapshot to %s: %v", crsSnapshotDir, err)
 		// R55-B-F2：快照持久化失败不否决本次更新（磁盘规则树已是新版本），但
@@ -391,8 +395,16 @@ func (m *CRSUpdateManager) swapCRSTreeFromStaging(staging, setupPath string, pen
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
 		tag,
 	); err != nil {
-		WriteCRSUpdateLog("WARN", string(CRSStatusReloading), fmt.Sprintf("提前写入版本行失败（稍后重写）: %v", err))
+		// U02-F04（第 78 轮）：版本行写入失败不得仅 WARN 后继续——树已换而
+		// 版本行仍旧会让 crsPoolFingerprint 命中旧池（新规则静默不生效），且
+		// 后续任务内重试会用已变的树覆盖原始备份基线。此刻原备份仍可用：回滚
+		// 规则树并返回明确错误，downloadAndInstall 不会调用 reloader。
+		m.restoreBackup()
+		return prevTag, fmt.Errorf("写入 CRS 版本行失败（已回滚规则树）: %w", err)
 	}
+	// U02-F11：VERSION 标记与规则树/DB 版本行同锁同代——读者（BuildWafFileRef）
+	// 不会观察到「树新/标记旧」或反向的混合代。
+	writeCRSVersionMarker(m.crsDir, tag)
 	return prevTag, nil
 }
 

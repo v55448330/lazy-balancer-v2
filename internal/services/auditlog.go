@@ -1,20 +1,11 @@
 package services
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
-)
-
-var (
-	auditCleanupOnce   sync.Once
-	auditCleanupMu     sync.Mutex
-	auditCleanupCancel context.CancelFunc
-	auditCleanupDone   chan struct{}
 )
 
 // ConfigFieldSections 配置字段 → 面板卡片段落映射（字段级审计归因用）。
@@ -71,6 +62,14 @@ var ConfigFieldSections = map[string]string{
 	"mfa_write_guard":     "基础设置",
 	"mfa_lockout_enabled": "基础设置",
 	"github_token":        "基础设置",
+
+	// U08-F04（第 78 轮）：威胁大屏视觉模式与安全事件保留（显式天/行帽）三字段
+	// 漏同步 section 映射——字段级审计归因曾落「全局配置」（实际在基础设置卡片）。
+	// 覆盖清点钉已改为源码扫描（handlers/config_field_sections_test.go 提取
+	// planConfigChanges 的 add() 首参，与下表双向比对）。
+	"threat_screen_mode":             "基础设置",
+	"security_events_retention_days": "基础设置",
+	"security_events_row_cap":        "基础设置",
 }
 
 func GetConfigSection(field string) string {
@@ -183,44 +182,6 @@ func CleanupAuditLogs() int {
 	}
 	n, _ := res.RowsAffected()
 	return int(n)
-}
-
-func StartAuditCleanup() {
-	auditCleanupOnce.Do(func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan struct{})
-		auditCleanupMu.Lock()
-		auditCleanupCancel = cancel
-		auditCleanupDone = done
-		auditCleanupMu.Unlock()
-		go func() {
-			defer close(done)
-			ticker := time.NewTicker(24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					CleanupAuditLogs()
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-		CleanupAuditLogs()
-	})
-}
-
-func StopAuditCleanup() {
-	auditCleanupMu.Lock()
-	cancel := auditCleanupCancel
-	done := auditCleanupDone
-	auditCleanupMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		<-done
-	}
 }
 
 // FormatAuditAction 中间件侧通用审计的动作映射。R66 D-N3：仅保留 5 条 Generic

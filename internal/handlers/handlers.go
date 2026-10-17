@@ -107,6 +107,12 @@ func ResolveEnableCertJobAction(hasJob bool, status string, expiresAt *time.Time
 		}
 		return EnableCertJobRetry
 	}
+	// U13-03（第 78 轮）：issued 但缺到期日（历史/导入遗留形态）无从判定是否
+	// 临期——此前落 InProgress，续签扫描按 expires_at 非空查询故永不可见。
+	// 按 Retry 重排队（与 failed/disabled 的同形兜底一致）。
+	if status == "issued" && expiresAt == nil {
+		return EnableCertJobRetry
+	}
 	if status == "failed" || status == "disabled" {
 		return EnableCertJobRetry
 	}
@@ -126,10 +132,15 @@ func boolText(value bool) string {
 func (h *Handlers) recordCaddyApplyResult(err error) {
 	if err == nil {
 		// D3（第 74 轮）：渲染降级（如受信代理设置读取失败按未启用渲染）已随
-		// 配置成功应用——降级不是应用失败，横幅不得被成功清除吞掉。services
-		// applyConfigLockedOpt 已在应用成功时落审计行+写入降级横幅；此处保持
-		// 横幅可见，直至下次干净渲染（LastRenderDegradation 归空）恢复常规清除。
+		// 配置成功应用——降级不是应用失败，横幅不得被成功清除吞掉。事务内
+		// apply 不写主库（避免与未提交事务争写锁），由本函数在 commit 后落库；
+		// 下次干净渲染（LastRenderDegradation 归空）恢复常规清除。
 		if degraded := services.LastRenderDegradation(); degraded != "" {
+			if db.DB != nil {
+				if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, degraded); err != nil {
+					services.Logf("warn", "D3: 持久化渲染降级横幅失败: %v", err)
+				}
+			}
 			return
 		}
 		if db.DB != nil {
@@ -163,6 +174,9 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 //  3. applyFromTxNote      — 事务内应用（rule 生命周期 ×5、UpdateConfig）：
 //     重载发生在 Commit 前、审计只能落在 Commit 后，两点必然分离，由返回
 //     的 note 闭包绑定，漏调即编译错误。
+//     注意：UpdateConfig 是家族 3 的严格变体——任何 applyErr（含传输失败）
+//     都回滚事务并返回 400/500，不采用「传输失败退化提交」；该差异由
+//     handlers/caddy.go 的 UpdateConfig 与钉测固化。
 //
 // 家族 3 的变体（不经 tx 渲染）：PutCaddyConfig（ApplyConfig 原始载荷）与
 // 备份导入 ×2（协调器内应用）各自在成功尾部补记，同受契约约束。
@@ -263,10 +277,10 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	if applyErr == nil {
 		if err := tx.Commit(); err != nil {
 			// 2026-09-07 审计 L5：SQLite commit 失败极罕见（磁盘满/IO 错误）。
-			// 此处无运行配置回弹——apply 已成功（Caddy 跑新态），DB 回滚到旧态。
-			// 分叉窗口持续到下次成功 apply；caddy_apply_error 由此前失败遗留
-			// 或看门狗检测。16 安全入口无 snapshotImportRuntime 可用（探针撤除
-			// 后不再预取快照），加回弹需引入快照机制——当前按已知边界处理。
+			// U04-03：apply 已按未提交事务视图重写投影/证书文件，commit 失败
+			// 必须先把磁盘副作用回退到已提交视图；运行配置回弹仍受无快照边界
+			// 限制（后续由看门狗/下次成功 apply 收敛）。
+			h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("提交事务失败", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 			return
@@ -327,6 +341,47 @@ func (h *Handlers) applyCaddyConfigE() error {
 	return err
 }
 
+// rulePayloadInput 是规则保存字段层校验的归一视图：Create 取原值，Update
+// 解引用指针（nil=零值）。U13-07（第 78 轮）：视图与 models.CreateRuleRequest /
+// UpdateRuleRequest 是平行字段清单——保留归一实现但加 parity 门禁
+// （audit78_b_core_test.go：模型字段要么在此声明、要么显式登记由
+// ruleFeatureInput 等单源校验豁免），新增模型字段漏登记即测试红。上游直接
+// 复用 models.Upstream（不再维护第二份上游镜像结构）。
+type rulePayloadInput struct {
+	Protocol                      string
+	Domain                        string
+	ListenPort                    int
+	Strategy                      string
+	DynamicDNS                    bool
+	DnsServer                     string
+	DnsFamily                     string
+	HealthCheckPath               string
+	HealthCheckInterval           int
+	HealthCheckTimeout            int
+	HealthCheckUnhealthyThreshold int
+	HealthCheckHealthyThreshold   int
+	EnableTLS                     bool
+	TLSSource                     string
+	ACMEConfigID                  int
+	CAProviderID                  int
+	TLSCert                       string
+	TLSKey                        string
+	TLSHTTPRedirect               bool
+	EnableCompress                bool
+	CompressTypes                 string
+	EnableActiveHealthCheck       bool
+	HostHeader                    string
+	HealthCheckHost               string
+	RequestBodyMaxSizeMB          int
+	UpstreamKeepaliveTimeout      int
+	ServerTokensHidden            int
+	BlockPageStage1ID             int
+	BlockPageStage1Status         int
+	BlockPageStage3ID             int
+	BlockPageStage3Status         int
+	Upstreams                     []models.Upstream
+}
+
 // validateRulePayloadBeforeSave 是规则保存的后端字段层校验（三层校验第 2 层，
 // 裁定 2026-09-06 ④'）：协议/端口/策略/域名/上游（主机/端口/权重/协议/查重/
 // 启用数）/动态 DNS/健康检查/ACME 引用。Caddy 层由 applyFromTxNote 内的
@@ -334,53 +389,7 @@ func (h *Handlers) applyCaddyConfigE() error {
 // 校验与应用的输入同为事务视图最终渲染——原「候选并入运行配置」的 merged
 // /load 探针（validateCaddyConfigBeforeSave，运行时副作用+平行渲染双轨）已撤。
 func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
-	type requestUpstream struct {
-		Host           string
-		Port           int
-		Weight         int
-		Enabled        bool
-		Protocol       string
-		MaxConnections int
-		OriginDomain   string
-	}
-
-	type requestData struct {
-		Protocol                      string
-		Domain                        string
-		ListenPort                    int
-		Strategy                      string
-		DynamicDNS                    bool
-		DnsServer                     string
-		DnsFamily                     string
-		HealthCheckPath               string
-		HealthCheckInterval           int
-		HealthCheckTimeout            int
-		HealthCheckUnhealthyThreshold int
-		HealthCheckHealthyThreshold   int
-		EnableTLS                     bool
-		TLSSource                     string
-		ACMEConfigID                  int
-		CAProviderID                  int
-		TLSCert                       string
-		TLSKey                        string
-		TLSHTTPRedirect               bool
-		EnableCompress                bool
-		CompressTypes                 string
-		EnableActiveHealthCheck       bool
-		HostHeader                    string
-		HealthCheckHost               string
-		RequestBodyMaxSizeMB          int
-		UpstreamKeepaliveTimeout      int
-		ServerTokensHidden            int
-		BlockPageStage1ID             int
-		BlockPageStage1Status         int
-		BlockPageStage3ID             int
-		BlockPageStage3Status         int
-		Upstreams                     []requestUpstream
-	}
-
-	var data requestData
-	var upstreams []requestUpstream
+	var data rulePayloadInput
 
 	switch r := req.(type) {
 	case models.CreateRuleRequest:
@@ -415,14 +424,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		data.BlockPageStage1Status = r.BlockPageStage1Status
 		data.BlockPageStage3ID = r.BlockPageStage3ID
 		data.BlockPageStage3Status = r.BlockPageStage3Status
-		for _, u := range r.Upstreams {
-			upstreams = append(upstreams, requestUpstream{
-				Host: u.Host, Port: u.Port, Weight: u.Weight,
-				Enabled: u.Enabled, Protocol: u.Protocol,
-				MaxConnections: u.MaxConnections, OriginDomain: u.OriginDomain,
-			})
-		}
-		data.Upstreams = upstreams
+		data.Upstreams = r.Upstreams
 	case models.UpdateRuleRequest:
 		data.Protocol = r.Protocol
 		data.Domain = r.Domain
@@ -485,16 +487,11 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		if r.BlockPageStage3Status != nil {
 			data.BlockPageStage3Status = *r.BlockPageStage3Status
 		}
-		for _, u := range r.Upstreams {
-			upstreams = append(upstreams, requestUpstream{
-				Host: u.Host, Port: u.Port, Weight: u.Weight,
-				Enabled: u.Enabled, Protocol: u.Protocol,
-				MaxConnections: u.MaxConnections, OriginDomain: u.OriginDomain,
-			})
-		}
-		data.Upstreams = upstreams
+		data.Upstreams = r.Upstreams
 	default:
-		return nil
+		// U13-07（第 78 轮）：未知请求类型此前静默放行（零校验通过）——调用方
+		// 只传 Create/Update，落此分支即契约破坏，须显性失败而非放过。
+		return fmt.Errorf("不支持的规则请求类型 %T", req)
 	}
 
 	if data.Strategy == "" {
@@ -878,6 +875,10 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 				wrapped := "启动守卫：未初始化实例（无用户、无启用规则），但 Caddy 运行配置仍含规则路由——跳过本次启动应用（疑似数据目录或 Caddy Admin 地址误配），运行配置保持原样；漂移状态由看门狗持续上报"
 				services.Logf("error", "CRITICAL: %s", wrapped)
 				services.RecordAuditLog(actor, "启动警告", "系统配置", wrapped, "")
+				// U13-11（第 78 轮）：与同函数成功/回退分支一致，守卫命中属真实
+				// 执行轮结论，须在 tasks/startup:config-load.log 留业务摘要行
+				// （此前只有 Logf+审计，任务日志看似「跑了但无结论」）。
+				services.TaskLogf("startup:config-load", "caddy", "启动守卫命中：已跳过配置应用（运行配置含非本库规则路由）")
 				return nil
 			}
 		}

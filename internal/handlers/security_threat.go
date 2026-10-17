@@ -181,13 +181,10 @@ func (h *Handlers) StartThreatLibUpdate(c *gin.Context) {
 		return
 	}
 	op := auditOperator(c)
-	go func() {
-		// F-U1-1（第 68 轮）：Trigger 失败补偿（同 StartCRSUpdate 口径）。
-		if err := te.Trigger("threat", "manual", op); err != nil {
-			services.Logf("error", "手动触发威胁情报库更新失败: %v", err)
-			services.RecordAuditLog(op, "触发失败", "威胁情报库", "手动触发威胁情报库更新失败: "+err.Error(), "")
-		}
-	}()
+	// L01-02：统一异步触发与错误分类（见 services.TriggerTaskAsync）。
+	services.TriggerTaskAsync(te, "threat", services.TriggerAuditContext{
+		Operator: op, Family: "威胁情报库", Name: "威胁情报库更新",
+	})
 	// 审计由任务体自记（operator 经 RunContext 归人——2026-09-29 裁定单记口径）
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }

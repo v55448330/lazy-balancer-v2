@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/binary"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -395,16 +396,23 @@ func TestWriteRegionTreeCache_writeFailureLogsWarn(t *testing.T) {
 	taskengine.SetLogDir(logDir)
 	t.Cleanup(func() { taskengine.SetLogDir("") })
 
+	var appLog strings.Builder
+	oldWriter := log.Writer()
+	log.SetOutput(&appLog)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
 	// When：落盘失败路径
 	writeRegionTreeCache(&IP2RegionRegionTree{Provinces: []string{"海外"}, Cities: map[string][]string{}})
 
-	// Then：WARN「重建落盘失败」留痕，无 INFO 成功行（谎报消除）
+	// Then：失败只写应用日志，不越权写 ip2region 任务日志。
 	data, _ := os.ReadFile(taskengine.TaskLogPath("ip2region"))
-	content := string(data)
-	if !strings.Contains(content, "WARN") || !strings.Contains(content, "重建落盘失败") {
-		t.Fatalf("落盘失败须 WARN 留痕, log:\n%s", content)
+	if len(data) > 0 {
+		t.Fatalf("公共缓存重建不得写 ip2region 任务日志: %s", data)
 	}
-	if strings.Contains(content, "地域树缓存已重建") {
-		t.Fatalf("落盘失败不得写 INFO 成功行（谎报）, log:\n%s", content)
+	if !strings.Contains(appLog.String(), "重建落盘失败") {
+		t.Fatalf("应用日志缺少失败留痕: %s", appLog.String())
+	}
+	if strings.Contains(appLog.String(), "地域树缓存已重建") {
+		t.Fatalf("落盘失败不得写成功行（谎报）: %s", appLog.String())
 	}
 }

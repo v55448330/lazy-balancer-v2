@@ -177,12 +177,23 @@ func simulateIdPIssuesCode(t *testing.T, authURL string) string {
 
 func setupOIDCTest(t *testing.T, idp *mockIdP) (*gin.Engine, *Handlers) {
 	t.Helper()
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	dir := t.TempDir()
 	if err := db.Initialize(dir); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{JWTSecret: "test-secret", DataDir: dir}
 	h := &Handlers{cfg: cfg}
+	// U07-F01：流程测试无 cookie 容器，关闭 state↔浏览器绑定；绑定行为由
+	// TestOIDCCallback_stateBoundToBrowser 专题覆盖。
+	oldBinding := oidcStateBindingEnabled
+	oidcStateBindingEnabled = false
+	t.Cleanup(func() {
+		oidcStateBindingEnabled = oldBinding
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/api/v1/auth/oidc/status", h.OIDCStatus)
@@ -351,15 +362,16 @@ func TestOIDCCallback_repeat_and_disabled(t *testing.T) {
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
-	doLogin := func() int {
+	doLoginRec := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
 		u, _ := url.Parse(rec.Header().Get("Location"))
 		code := simulateIdPIssuesCode(t, u.String())
 		rec = httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code="+code+"&state="+u.Query().Get("state"), nil))
-		return rec.Code
+		return rec
 	}
+	doLogin := func() int { return doLoginRec().Code }
 	if c := doLogin(); c != http.StatusFound {
 		t.Fatalf("first login failed: %d", c)
 	}
@@ -382,10 +394,16 @@ func TestOIDCCallback_repeat_and_disabled(t *testing.T) {
 	if role != "admin" {
 		t.Fatalf("role must persist across logins, got %q", role)
 	}
-	// 禁用后拒绝(C2-7:浏览器导航形态,失败 302 回前端错误页)
+	// 禁用后拒绝(C2-7:浏览器导航形态,失败 302 回前端错误页；不得带 token)
 	db.DB.Exec("UPDATE users SET is_enabled=0 WHERE auth_provider='oidc'")
-	if c := doLogin(); c != http.StatusFound {
-		t.Fatalf("disabled user must be rejected via error redirect, got %d", c)
+	rec := doLoginRec()
+	if rec.Code != http.StatusFound {
+		t.Fatalf("disabled user must be rejected via error redirect, got %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	decoded, _ := url.QueryUnescape(loc)
+	if !strings.Contains(loc, "error=") || strings.Contains(loc, "token=") || !strings.Contains(decoded, "账号已被禁用") {
+		t.Fatalf("disabled callback Location=%q, want error=账号已被禁用 without token", loc)
 	}
 }
 
@@ -527,6 +545,11 @@ func TestOIDCUser_mfa_decoupled(t *testing.T) {
 	}
 	cfg := &config.Config{JWTSecret: "test-secret", DataDir: dir}
 	h := &Handlers{cfg: cfg}
+	// U07-F01：流程测试无 cookie 容器，关闭 state↔浏览器绑定；绑定行为由
+	// TestOIDCCallback_stateBoundToBrowser 专题覆盖。
+	oldBinding := oidcStateBindingEnabled
+	oidcStateBindingEnabled = false
+	t.Cleanup(func() { oidcStateBindingEnabled = oldBinding })
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	// OIDC 目标用户 + 本地操作者(admin)
@@ -568,7 +591,7 @@ func TestOIDCUser_slave_login_gate_exempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{JWTSecret: "test-secret", DataDir: dir}
-	h := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, nil, dir)}
+	h := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, dir)}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/cluster/nodes/:id/login-ticket", func(c *gin.Context) {
@@ -577,14 +600,14 @@ func TestOIDCUser_slave_login_gate_exempt(t *testing.T) {
 		c.Set("auth_method", "oidc")
 		h.GenerateClusterLoginTicket(c)
 	})
-	// OIDC 用户(未绑 MFA)——门应豁免,进入后续(节点不存在 → 409,而非 403 MFA)
+	// OIDC 用户(未绑 MFA)——门应豁免,进入后续(节点不存在 → 404,而非 403 MFA)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/999/login-ticket", nil)
 	router.ServeHTTP(rec, req)
-	if rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "MFA") {
-		t.Fatalf("oidc session must bypass mfa gate, got 403: %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "MFA") {
+		t.Fatalf("oidc session must bypass mfa gate and reach node lookup (404), got %d: %s", rec.Code, rec.Body.String())
 	}
-	h2 := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, nil, dir)}
+	h2 := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, dir)}
 	// 本地用户(未绑 MFA)——门应生效 403
 	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'localadmin','x','admin',1)"); err != nil {
 		t.Fatal(err)
@@ -740,5 +763,88 @@ func TestIsUniqueConstraintError_coversDriverDialects(t *testing.T) {
 		if got := isUniqueConstraintError(c.err); got != c.want {
 			t.Errorf("%s: isUniqueConstraintError=%v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// 第 78 轮 U07-F01：正式路径（绑定开启）下 state 必须与发起登录的浏览器绑定。
+// 无 cookie / 另一 jar 的 cookie 交叉提交 code+state 都必须失败（302 error=，
+// 不含 token）；同 jar 正常流程成功。
+func TestOIDCCallback_stateBoundToBrowser(t *testing.T) {
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	oidcStateBindingEnabled = true // setupOIDCTest 默认关闭，本测试显式开启
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+
+	login := func() (state, code string, cookie *http.Cookie) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+		if rec.Code != http.StatusFound {
+			t.Fatalf("login status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		authURL := rec.Header().Get("Location")
+		u, _ := url.Parse(authURL)
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == oidcStateCookieName {
+				cookie = c
+			}
+		}
+		if cookie == nil {
+			t.Fatal("login must set the oidc_state binding cookie")
+		}
+		return u.Query().Get("state"), simulateIdPIssuesCode(t, authURL), cookie
+	}
+	callback := func(state, code string, cookie *http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code="+code+"&state="+state, nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	assertRejected := func(name string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		loc := rec.Header().Get("Location")
+		if !strings.Contains(loc, "error=") || strings.Contains(loc, "token=") {
+			t.Fatalf("%s: location=%q, want error= and no token", name, loc)
+		}
+	}
+
+	stateA, codeA, cookieA := login()
+	// 形状 1：无 cookie → 拒绝
+	assertRejected("missing cookie", callback(stateA, codeA, nil))
+
+	// 形状 2：另一浏览器的 cookie（不同 state 的绑定值）→ 拒绝
+	stateB, codeB, cookieB := login()
+	_ = stateB
+	assertRejected("cross-jar cookie", callback(stateA, codeA, cookieB))
+
+	// 形状 3：同 jar 正常流程 → token
+	rec := callback(stateA, codeA, cookieA)
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "token=") || strings.Contains(loc, "error=") {
+		t.Fatalf("same jar callback must succeed, location=%q", loc)
+	}
+	// B 的 state 未被 A 的失败消费破坏（各自独立）——用 B 的正常 cookie 完成
+	rec = callback(stateB, codeB, cookieB)
+	if !strings.Contains(rec.Header().Get("Location"), "token=") {
+		t.Fatalf("second jar callback must succeed, location=%q", rec.Header().Get("Location"))
+	}
+}
+
+func TestOIDCCookieSecure_forwardedProtoOnlyFromTrustedProxy(t *testing.T) {
+	makeCtx := func(remote string) *gin.Context {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c.Request.RemoteAddr = remote
+		c.Request.Header.Set("X-Forwarded-Proto", "https")
+		return c
+	}
+	if oidcCookieSecure(makeCtx("203.0.113.9:443")) {
+		t.Fatal("untrusted client must not force Secure cookie via X-Forwarded-Proto")
+	}
+	if !oidcCookieSecure(makeCtx("127.0.0.1:443")) {
+		t.Fatal("trusted proxy https declaration must set Secure cookie")
 	}
 }

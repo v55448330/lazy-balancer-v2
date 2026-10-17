@@ -862,3 +862,32 @@ func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
 		})
 	}
 }
+
+func TestListCertJobs_returnsStatusCountsForQueueBanner(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,created_at) VALUES
+		('lb_q1','q1.example.test','queued',datetime('now')),
+		('lb_q2','q2.example.test','queued',datetime('now')),
+		('lb_w1','w1.example.test','waiting_ca',datetime('now')),
+		('lb_d1','d1.example.test','issued',datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/jobs", h.ListCertJobs)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/jobs?page=1&page_size=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			StatusCounts map[string]int64 `json:"status_counts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.StatusCounts["queued"] != 2 || body.Data.StatusCounts["waiting_ca"] != 1 || body.Data.StatusCounts["issued"] != 1 {
+		t.Fatalf("status_counts=%v", body.Data.StatusCounts)
+	}
+}

@@ -80,6 +80,9 @@ func TestGenerateCaddyConfig_allGlobalOverridesReachRender(t *testing.T) {
 		`"read_timeout":"77s"`,
 		`"write_timeout":"88s"`,
 		`"idle_timeout":"66s"`, // 上游 keepalive
+		`"stream_timeout":"99s"`,
+		`"flush_interval":"-1s"`,
+		`"stream_close_delay":"7s"`,
 	}
 	for _, w := range want {
 		if !strings.Contains(s, w) {

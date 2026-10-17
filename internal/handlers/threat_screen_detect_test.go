@@ -109,10 +109,26 @@ func TestDetectThreatScreenSite_successReturnsCoords(t *testing.T) {
 	}
 }
 
+// U13-09（第 78 轮）：键提取正则容忍前端代码风格差异——此前依赖 TS 恰好写作
+// `"键": [`（双引号+单空格），Prettier 改单引号/换行/单行对象后匹配数=0 而
+// 测试仍然通过（空转）。`\s*` 覆盖冒号与数组括号间的任意空白/换行。
+var (
+	countryCentroidKeyRe = regexp.MustCompile(`["']([^"']+)["']\s*:\s*\[`)
+	provinceShortKeyRe   = regexp.MustCompile(`short\s*:\s*["']([^"']+)["']`)
+)
+
+func extractTableKeys(re *regexp.Regexp, source []byte) []string {
+	matches := re.FindAllStringSubmatch(string(source), -1)
+	keys := make([]string, 0, len(matches))
+	for _, m := range matches {
+		keys = append(keys, m[1])
+	}
+	return keys
+}
+
 func TestThreatScreenCentroids_parityWithFrontendTables(t *testing.T) {
 	// Given: 后端质心表由前端 TS 表构建期派生（同源生成、提交后仍可能一侧
-	// 单独改动）——parity 绊线解析 TS 源断言键覆盖（geoip_mirror_tables_test
-	// 同族：跨语言源文本绊线）。
+	// 单独改动）——parity 绊线解析 TS 源断言键集合双向相等。
 	countryTS, err := os.ReadFile("../../web/src/utils/countryCentroids.ts")
 	if err != nil {
 		t.Fatalf("read countryCentroids.ts: %v", err)
@@ -121,23 +137,71 @@ func TestThreatScreenCentroids_parityWithFrontendTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read chinaProvinces.ts: %v", err)
 	}
-	keyRe := regexp.MustCompile(`"([^"]+)": \[`)
-	for _, m := range keyRe.FindAllStringSubmatch(string(countryTS), -1) {
-		if _, ok := threatScreenCountryCentroids[m[1]]; !ok {
-			t.Errorf("国家 %q 在前端质心表存在但后端 threatScreenCountryCentroids 缺失——重跑派生生成", m[1])
+
+	countryKeys := extractTableKeys(countryCentroidKeyRe, countryTS)
+	// 下限：匹配数必须等于后端键数——格式漂移导致零匹配/漏匹配即红（防空转）。
+	if len(countryKeys) != len(threatScreenCountryCentroids) {
+		t.Fatalf("前端国家键解析数=%d，后端威胁大屏国家质心表=%d，want 相等（解析正则失配或两侧漂移）", len(countryKeys), len(threatScreenCountryCentroids))
+	}
+	countrySet := make(map[string]bool, len(countryKeys))
+	for _, key := range countryKeys {
+		countrySet[key] = true
+		if _, ok := threatScreenCountryCentroids[key]; !ok {
+			t.Errorf("国家 %q 在前端质心表存在但后端 threatScreenCountryCentroids 缺失——重跑派生生成", key)
 		}
 	}
-	provRe := regexp.MustCompile(`short: "([^"]+)"`)
-	for _, m := range provRe.FindAllStringSubmatch(string(provinceTS), -1) {
-		if _, ok := threatScreenProvinceCentroids[m[1]]; !ok {
-			t.Errorf("省份短名 %q 在前端质心表存在但后端 threatScreenProvinceCentroids 缺失——重跑派生生成", m[1])
+	// 反向：后端多出的国家键同样漂移（此前只检查省份）。
+	for key := range threatScreenCountryCentroids {
+		if !countrySet[key] {
+			t.Errorf("国家 %q 仅存在于后端 threatScreenCountryCentroids（前端 countryCentroids.ts 已无）——两侧漂移", key)
 		}
 	}
-	// 反向：后端表不应有前端不存在的一侧单改键
+
+	provinceKeys := extractTableKeys(provinceShortKeyRe, provinceTS)
+	if len(provinceKeys) != len(threatScreenProvinceCentroids) {
+		t.Fatalf("前端省份短名解析数=%d，后端威胁大屏省份质心表=%d，want 相等（解析正则失配或两侧漂移）", len(provinceKeys), len(threatScreenProvinceCentroids))
+	}
+	provinceSet := make(map[string]bool, len(provinceKeys))
+	for _, key := range provinceKeys {
+		provinceSet[key] = true
+		if _, ok := threatScreenProvinceCentroids[key]; !ok {
+			t.Errorf("省份短名 %q 在前端质心表存在但后端 threatScreenProvinceCentroids 缺失——重跑派生生成", key)
+		}
+	}
 	for key := range threatScreenProvinceCentroids {
-		if !strings.Contains(string(provinceTS), `short: "`+key+`"`) {
+		if !provinceSet[key] {
 			t.Errorf("省份短名 %q 仅存在于后端表（前端 chinaProvinces.ts 已无）——两侧漂移", key)
 		}
+	}
+}
+
+// 正则自检：单引号 / 冒号与括号间空白换行 / 单行对象三种前端风格都必须命中，
+// 防后续「简化」回退为依赖双引号紧邻形态的空转正则。
+func TestThreatScreenCentroidKeyRegex_toleratesFormattingVariants(t *testing.T) {
+	cases := []struct {
+		name    string
+		source  string
+		want    []string
+		pattern *regexp.Regexp
+	}{
+		{name: "双引号单行", source: `  "不丹": [90.5, 27.5],`, want: []string{"不丹"}, pattern: countryCentroidKeyRe},
+		{name: "单引号带空白", source: `  '不丹' :  [90.5, 27.5],`, want: []string{"不丹"}, pattern: countryCentroidKeyRe},
+		{name: "冒号后换行", source: "  \"不丹\"\n  : [90.5, 27.5],", want: []string{"不丹"}, pattern: countryCentroidKeyRe},
+		{name: "省份单引号", source: `{ name: '北京市', short: '北京', centroid: [116.42, 40.19] }`, want: []string{"北京"}, pattern: provinceShortKeyRe},
+		{name: "省份空白", source: `{ short :   "广东" }`, want: []string{"广东"}, pattern: provinceShortKeyRe},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractTableKeys(tc.pattern, []byte(tc.source))
+			if len(got) != len(tc.want) {
+				t.Fatalf("keys=%v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("keys=%v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
 

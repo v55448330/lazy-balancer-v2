@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -79,6 +81,37 @@ func SetAPIKeyWhitelistCachePurgeAll(purge func()) {
 	apiKeyWhitelistCachePurgeAll = purge
 }
 
+// snapshotBrandingDegradeWarned 保证「数据目录未配置」的品牌同步降级只留痕一次
+// （U05-F03：dataDir=="" 属显式降级，不得每轮静默跳过）。
+var snapshotBrandingDegradeWarned atomic.Bool
+
+// applySnapshotBrandingChecked 调用单源 applySnapshotBranding（branding_sync.go）
+// 后回读校验落盘结果，把「只记日志」的失败转换成可重试 error，供调用方写
+// apply_ok_branding_failed 标记（U05-F03）。回读路径必须与单源写入路径保持一致
+// （dataDir/branding.json）。cfg 缺失或 dataDir 未配置=显式降级：留痕一次并跳过。
+func applySnapshotBrandingChecked(cfg *config.Config, content string) error {
+	if cfg == nil || cfg.DataDir == "" {
+		if snapshotBrandingDegradeWarned.CompareAndSwap(false, true) {
+			Logf("warn", "集群品牌配置同步已降级：数据目录未配置，branding.json 不落盘（下次重启请检查品牌配置）")
+			RecordAuditLog("system", "警告", "集群同步", "品牌配置同步跳过：数据目录未配置", "")
+		}
+		return nil
+	}
+	applySnapshotBranding(cfg.DataDir, content)
+	expected := content
+	if expected == "" {
+		expected = emptyBrandingTemplate
+	}
+	actual, err := os.ReadFile(filepath.Join(cfg.DataDir, "branding.json"))
+	if err != nil {
+		return fmt.Errorf("回读品牌配置: %w", err)
+	}
+	if string(actual) != expected {
+		return errors.New("品牌配置文件内容与快照不一致")
+	}
+	return nil
+}
+
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
 	// C-4(2026-09-10 审计):ACME 状态校验由 Pull 侧 verifiedSnapshotIntegrity 统一
 	// 执行(验签后、apply 前单点);此处重复执行已删——applySnapshot 唯一生产
@@ -99,6 +132,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 会清空 last_sync_error，提交后再读永远漏判；标记在=上轮 apply 后 /load
 	// 失败，本轮即使渲染输入无变化也必须强制重载（304 补偿重拉通道的终点）。
 	reloadCompensation := s.syncReloadFailureMarkerPresent(ctx)
+	// U05-F03：品牌落盘失败标记必须与重载标记同点捕获——事务内「记录同步
+	// 状态」会清空 last_sync_error，提交后再读永远漏判，品牌节又不在哈希口径内
+	// （users 节未变时不会重放），没有标记就会永久停在上轮失败态。
+	brandingRetry := s.syncBrandingFailureMarkerPresent(ctx)
 	previous, err := s.cluster.clusterSnapshotBypassingCache(ctx)
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)
@@ -111,6 +148,20 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		return fmt.Errorf("开始快照事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// L02-01 事务内二次复核：Pull 的 admission 前复核与本事务之间角色/凭据
+	// 可能被 Promote 翻转（Promote 会先排干在途拉取，本复核是纵深防御——
+	// 任何未来新增的 apply 调用方也在写库前中止）。零值守卫=直接调用
+	// applySnapshot 的测试路径，跳过。
+	if guard := s.applyGuard; guard.MasterURL != "" || guard.Token != "" {
+		var isMaster bool
+		var masterURL, token string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token); err != nil {
+			return fmt.Errorf("复核同步角色: %w", err)
+		}
+		if isMaster || masterURL != guard.MasterURL || token != guard.Token {
+			return errSyncApplyRoleChanged
+		}
+	}
 	// 将主节点开关镜像到本地列：从节点 UI/Status 读取本地列展示真实同步范围。
 	// 移入事务内，apply 失败回滚时开关镜像一并回滚，避免半套开关落盘。
 	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
@@ -164,11 +215,16 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		// P5-21（第 50 轮审计）：api_keys 已随 users 节整体替换并提交——清空
 		// 白名单 CIDR 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
 		apiKeyWhitelistCachePurgeAll()
-		// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
-		// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
-		// CL9-N13:与 materializeSnapshotDNSOwnership 同口径 nil 防御。
-		if s.cfg != nil {
-			applySnapshotBranding(s.cfg.DataDir, snapshot.BasicSettings.BrandingJSON)
+	}
+	// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
+	// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
+	// U05-F03：落盘失败不得只审计——写 apply_ok_branding_failed 标记
+	// （apply_ok_reload_failed 同族），304 分支据此全量重拉并在下一轮强制
+	// 重试；users 节被哈希跳过时标记同样强制重试。
+	if !skip.skip("users") || brandingRetry || reloadCompensation {
+		if brandingErr := applySnapshotBrandingChecked(s.cfg, snapshot.BasicSettings.BrandingJSON); brandingErr != nil {
+			Logf("error", "同步品牌配置未落盘（数据库已应用，文件未收敛，下轮重试）: %v", brandingErr)
+			s.persistSyncError(ctx, syncBrandingFailureMarkerPrefix+": 品牌配置落盘失败（数据库已应用，文件未收敛，下轮同步重试）", models.SyncErrorCodeApplyFailed)
 		}
 	}
 	logSectionSyncOutcome(skip, snapshot.Version)
@@ -190,10 +246,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// changed 标志在函数作用域声明，供末段条件重载判定（F-L5-68-01）。
 	var crsChanged, xdbChanged, threatChanged bool
 	if switches.Security && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted(ctx)) {
-		// 2026-09-18 用户裁定:同步日志与自动更新日志同款分阶段流水——唯一
-		// 区别是来源(主节点 vs GitHub),弹框日志可对照阅读。
-		WriteCRSUpdateLog("INFO", "checking", "从主节点校验 CRS 规则版本")
-		WriteIP2RegionUpdateLog("INFO", "checking", "从主节点校验 IP2Region数据库版本")
+		// 同步校验/应用只写应用日志与审计，不写其他任务的三库日志。
 		bundle, ferr := s.fetchWafFiles(ctx, snapshot.WafFiles)
 		// F-68-U2-02（第 68 轮审计）：调用点持 WafFileLock——与 lbbak 导入
 		// （config_backup_lbbak.go caller-side 持锁）、三库更新器（内锁）与
@@ -210,56 +263,18 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		if ferr != nil {
 			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
 			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("拉取安全数据失败: %v", ferr), "")
-			// CL39-B1-3(D3):checking 已写入弹框日志,失败必须补终态——
-			// 否则规则库更新弹框的日志流停在 checking(对照 config_backup_lbbak.go
-			// 完整链形态,与自动更新器 failed 同款 stage)。
-			WriteCRSUpdateLog("ERROR", "failed", fmt.Sprintf("从主节点拉取安全数据失败: %v", ferr))
-			WriteIP2RegionUpdateLog("ERROR", "failed", fmt.Sprintf("从主节点拉取安全数据失败: %v", ferr))
-			AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("从主节点拉取安全数据失败: %v", ferr))
 		} else if aerr != nil {
 			Logf("error", "落盘同步安全数据失败: %v", aerr)
 			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("落盘安全数据失败: %v", aerr), "")
-			WriteCRSUpdateLog("ERROR", "failed", fmt.Sprintf("落盘主节点安全数据失败: %v", aerr))
-			WriteIP2RegionUpdateLog("ERROR", "failed", fmt.Sprintf("落盘主节点安全数据失败: %v", aerr))
-			AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("落盘主节点安全数据失败: %v", aerr))
 		} else if crsChanged || xdbChanged || threatChanged {
 			detail := wafBundleSyncDetail(bundle, crsChanged, xdbChanged)
 			RecordAuditLog("system", "同步", "安全数据", detail, "")
 			// 同步有变动=完整更新流程(与自动更新器同款阶段流水)
 			if xdbChanged {
-				WriteIP2RegionUpdateLog("INFO", "installing", "校验并落盘主节点 IP2Region数据库")
 				if err := Reload(); err != nil {
 					Logf("error", "同步后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 				}
 				RebuildRegionTreeCacheForSync()
-				tag := bundle.IP2RegionTag
-				if tag == "" {
-					tag = "未知版本"
-				}
-				WriteIP2RegionUpdateLog("INFO", "success", fmt.Sprintf("ip2region 已随主节点同步更新到 %s", tag))
-			}
-			if threatChanged {
-				AppendThreatUpdateLog("INFO", "success", "威胁情报库已随主节点同步更新(.fast 落盘)")
-			}
-			if crsChanged {
-				WriteCRSUpdateLog("INFO", "installing", "校验并落盘主节点 CRS 规则")
-				WriteCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
-				version := bundle.CRSVersion
-				if version == "" {
-					version = "未知版本"
-				}
-				WriteCRSUpdateLog("INFO", "success", fmt.Sprintf("CRS 已随主节点同步更新到 %s", version))
-			}
-		} else {
-			// 校验无变动也留痕(仅在实际执行同步校验的周期记录,非每周期刷屏)
-			if bundle.CRSVersion != "" || bundle.CRSTarGz != nil {
-				WriteCRSUpdateLog("INFO", "success", "主节点 CRS 数据无更新，无需同步")
-			}
-			if bundle.IP2RegionTag != "" || bundle.Xdb != nil {
-				WriteIP2RegionUpdateLog("INFO", "success", "主节点 IP2Region 数据无更新，无需同步")
-			}
-			if len(bundle.ThreatFiles) > 0 {
-				AppendThreatUpdateLog("INFO", "success", "主节点威胁情报库数据无更新，无需同步")
 			}
 		}
 	}
@@ -821,25 +836,6 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 				snapshotNullableDatetime(row["started_at"]), snapshotNullableDatetime(row["finished_at"]),
 				row["consecutive_failures"], row["created_at"], row["updated_at"]); err != nil {
 				return fmt.Errorf("写入威胁库源行: %w", err)
-			}
-		}
-		// F65:从节点威胁情报库同步日志(与 CRS/IP2Region 的 WriteCRSUpdateLog 同构)
-		if len(threatSources) > 0 {
-			threatEnabled := 0
-			entryTotal := 0
-			var sourceNames []string
-			for _, row := range threatSources {
-				if toFloat64(row["apply_enabled"]) >= 1 { // U5-P4（第 65 轮）：json.Unmarshal 产物恒 float64——== 1/== true 双分支恒假
-					threatEnabled++
-					entryTotal += int(toFloat64(row["entry_count"]))
-					if name, ok := row["display_name"].(string); ok && name != "" {
-						sourceNames = append(sourceNames, name)
-					}
-				}
-			}
-			if threatEnabled > 0 {
-				AppendThreatUpdateLog("INFO", "synced", fmt.Sprintf("从主节点同步威胁情报库（%d 个源启用，共 %d 条条目：%s）",
-					threatEnabled, entryTotal, strings.Join(sourceNames, "、")))
 			}
 		}
 

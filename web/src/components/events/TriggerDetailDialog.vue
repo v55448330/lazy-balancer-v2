@@ -145,7 +145,7 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { parseIPList, parseRefIds, entryMatchesIp, triggerStageFamily, sharedEntriesCache, subscribeSharedEntriesCache, formatDurationUs } from '@/utils/securityStages'
+import { parseIPList, parseRefIds, entryMatchesIp, triggerStageFamily, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, formatDurationUs } from '@/utils/securityStages'
 import { useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
 import type { APIResponse } from '@/types'
@@ -405,17 +405,13 @@ const loadAll = async (): Promise<void> => {
       for (const id of parseRefIds(p.ip_acl_list_refs)) refIds.add(id)
       for (const id of parseRefIds(p.ip_whitelist_refs)) refIds.add(id)
     }
-    const results = await Promise.allSettled(
-      [...refIds].map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`, { silent: true })),
-    )
-    const cache: Record<number, string[]> = {}
-    results.forEach((r) => {
-      if (r.status === 'fulfilled' && r.value.data) {
-        cache[r.value.data.id] = (r.value.data.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
-      }
+    // 只补拉共享缓存缺失的名单（第 78 轮 U15-F08）：原实现对全部 refIds 无条件
+    // 并发 GET——连续打开事件详情时同一批名单反复下载。写回/通知由缓存单源负责。
+    await ensureSharedEntries(refIds, async (id) => {
+      const res = await request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`, { silent: true })
+      return (res.data?.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
     })
     if (seq !== loadSeq) return
-    Object.assign(sharedEntriesCache, cache) // 写回共享缓存
     entriesCache.value = { ...sharedEntriesCache }
   } finally {
     if (seq === loadSeq) loading.value = false

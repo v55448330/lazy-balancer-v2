@@ -8,7 +8,6 @@
 package geoipnames
 
 import (
-	"net"
 	"regexp"
 )
 
@@ -32,15 +31,15 @@ type CrawlerEngine struct {
 	VerifyMethod string
 	// PTRSuffixes 该引擎官方爬虫出口 IP 的 PTR 域名后缀（小写）。
 	PTRSuffixes []string
-	// IPRanges VerifyMethod=iprange 时的官方 CIDR 段。
+	// IPRanges 该引擎官方公布的 CIDR 段（U14-11 Ruling：保留为**唯一权威
+	// 数据源**——运行期 360 验证走 crawler-ip-lists.json 快照，而快照内容由
+	// crawler_seed_parity_test 断言必须落在本字段声明的段内，二者不得分叉）。
 	IPRanges []string
 }
 
-// 引擎验证方式常量。
-const (
-	CrawlerVerifyPTR     = "ptr"
-	CrawlerVerifyIPRange = "iprange"
-)
+// 引擎验证方式常量（U14-11：未使用的 CrawlerVerifyPTR 已删除——空串即默认
+// PTR 双跳验证）。
+const CrawlerVerifyIPRange = "iprange"
 
 // crawlerEngines 引擎注册表（顺序=向导展示顺序）。
 var crawlerEngines = []CrawlerEngine{
@@ -184,27 +183,6 @@ func CrawlerEnginePTRMatch(engineID, ptrName string) bool {
 		}
 		for _, suf := range e.PTRSuffixes {
 			if len(ptrName) > len(suf) && ptrName[len(ptrName)-len(suf):] == suf {
-				return true
-			}
-		}
-		return false
-	}
-	return false
-}
-
-// CrawlerEngineIPMatch 引擎 ID + IP → 是否落在官方 IP 段（VerifyMethod=
-// iprange 的引擎用；解析失败/超界一律 false）。
-func CrawlerEngineIPMatch(engineID, ipStr string) bool {
-	for _, e := range crawlerEngines {
-		if e.ID != engineID || e.VerifyMethod != CrawlerVerifyIPRange {
-			continue
-		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			return false
-		}
-		for _, cidr := range e.IPRanges {
-			if _, network, err := net.ParseCIDR(cidr); err == nil && network.Contains(ip) {
 				return true
 			}
 		}

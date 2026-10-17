@@ -281,7 +281,9 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"geoip legacy id 8", "8", "", "地域拦截"},
 		{"geoip precheck segment id", "800123", "", "地域拦截"},
 		{"geoip precheck segment via msg", "800123", "GeoIP 区域拦截", "地域拦截"},
-		{"geoip segment upper bound", "899999", "", "地域拦截"},
+		{"geoip segment upper bound", "809999", "", "地域拦截"},
+		{"crawler segment lower bound", "810016", "", "爬虫Bot"},
+		{"crawler segment upper bound", "899999", "", "爬虫Bot"},
 		{"empty input", "", "", "其他"},
 		{"unmatched id", "123456", "something else", "其他"},
 		// SEC-R1（第 69 轮）收敛前语义钉：未列名 3 位前缀的 9xxxxx（CRS 保留段
@@ -714,5 +716,120 @@ func TestListSecurityEvents_nilMetricsDBFallbackUsesEventsKey(t *testing.T) {
 	}
 	if string(eventsRaw) != "[]" {
 		t.Fatalf("data.events=%s, want []", eventsRaw)
+	}
+}
+
+// ---- 第 78 轮 U03-F05 / U03-F06 ----
+
+func TestListSecurityEvents_triggerTypePopulated(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+	cases := map[string]string{
+		"2":       "IP 访问控制",
+		"800001":  "地域拦截",
+		"810016":  "爬虫Bot",
+		"850003":  "爬虫Bot",
+		"429":     "限流",
+		"942100":  "WAF·CRS",
+		"10000":   "WAF·自定义",
+		"1000001": "WAF·自定义",
+		"11":      "请求体异常",
+	}
+	for rule := range cases {
+		seedSecurityEvent(t, "2026-10-18 10:00:00", "", 0, rule, "")
+	}
+	recorder := getRequest(t, router, "/security/events")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Events []models.SecurityEvent `json:"events"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data.Events) != len(cases) {
+		t.Fatalf("events=%d, want %d", len(payload.Data.Events), len(cases))
+	}
+	for _, e := range payload.Data.Events {
+		want, ok := cases[e.RuleTriggered]
+		if !ok {
+			continue
+		}
+		if e.TriggerType == "" {
+			t.Fatalf("rule %s trigger_type empty（U03-F05 接线缺失）", e.RuleTriggered)
+		}
+		if e.TriggerType != want {
+			t.Fatalf("rule %s trigger_type=%q, want %q", e.RuleTriggered, e.TriggerType, want)
+		}
+	}
+}
+
+func TestRuleTriggeredFilter_crawlerSegmentSQL(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	rows := []string{"800007", "810016", "850003", "899999", "10001", "10091", "942100"}
+	for _, rule := range rows {
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, rule_triggered) VALUES ('2026-10-18 10:00:00', '203.0.113.7', ?)`, rule); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := func(label string) []string {
+		var args []any
+		cond := ruleTriggeredFilterSQL(label, &args)
+		rs, err := db.MetricsDB.Query(`SELECT rule_triggered FROM security_events WHERE `+cond, args...)
+		if err != nil {
+			t.Fatalf("family %s query: %v (sql=%s)", label, err, cond)
+		}
+		defer rs.Close()
+		var out []string
+		for rs.Next() {
+			var v string
+			if err := rs.Scan(&v); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, v)
+		}
+		return out
+	}
+	region := query("地域拦截")
+	if len(region) != 1 || region[0] != "800007" {
+		t.Fatalf("地域拦截 family=%v, want [800007]（爬虫 6 位段不得混入）", region)
+	}
+	crawler := query("爬虫Bot")
+	have := map[string]bool{}
+	for _, v := range crawler {
+		have[v] = true
+	}
+	for _, want := range []string{"810016", "850003", "899999"} {
+		if !have[want] {
+			t.Fatalf("爬虫Bot family missing %s (got %v)", want, crawler)
+		}
+	}
+	if have["800007"] || have["10001"] || have["10091"] || have["942100"] {
+		t.Fatalf("爬虫Bot family leaked non-crawler ids: %v", crawler)
+	}
+}
+
+func TestAttackFamilyClassOf_crawlerSegment(t *testing.T) {
+	cases := map[string]attackFamilyClass{
+		"800007": attackFamilyGeoIP,
+		"810016": attackFamilyCrawler,
+		"850003": attackFamilyCrawler,
+		"899999": attackFamilyCrawler,
+		"10001":  attackFamilyCustomRule,
+		"942100": attackFamilyOther, // CRS 前缀由 crsAttackLabel 承载
+	}
+	for rule, want := range cases {
+		if got := attackFamilyClassOf(rule, ""); got != want {
+			t.Errorf("class(%s)=%v, want %v", rule, got, want)
+		}
+	}
+	if got := categorizeAttack("810016", ""); got != "爬虫Bot" {
+		t.Errorf("categorizeAttack(810016)=%q, want 爬虫Bot", got)
+	}
+	if got := stageCategorizeAttack("850003", ""); got != "IP 访问控制" {
+		t.Errorf("stageCategorizeAttack(850003)=%q, want IP 访问控制", got)
 	}
 }

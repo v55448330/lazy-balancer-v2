@@ -139,19 +139,28 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	// 64 = GET 工具 60 - export_config 隐藏 + 5 个读探测 POST 工具（U9-P5-3 同步）
-	// (ApiMcp-新1:REST 只读白名单同口径——test_ca_provider/test_certificate_config/
-	// parse_certificate/validate_import/preview_config 转发侧守卫可通过,可见)
-	if len(payload.Result.Tools) != 64 {
-		t.Fatalf("read-only tool count=%d, want 64", len(payload.Result.Tools))
+	// U11-8（第 78 轮）：只读可见数按 isReadOnlyTool 动态计算（此前硬编码
+	// 64，每新增 GET 工具都要手工改并只报数字）。只读筛选口径 = GET 且非
+	// 隐藏工具 + 读探测 POST 白名单（与 ListToolSpecs.read_only 同源）。
+	wantReadOnly := 0
+	for _, spec := range tools {
+		if isReadOnlyTool(spec) {
+			wantReadOnly++
+		}
+	}
+	if wantReadOnly == 0 || wantReadOnly == len(tools) {
+		t.Fatalf("read-only tool count=%d/%d——判据退化", wantReadOnly, len(tools))
+	}
+	if len(payload.Result.Tools) != wantReadOnly {
+		t.Fatalf("read-only tool count=%d, want %d (isReadOnlyTool)", len(payload.Result.Tools), wantReadOnly)
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {
 		if tool.Name == "get_metrics_dashboard" {
 			dashboardVisible = true
 		}
-		// ApiMcp-新1:5 个读探测 POST 工具对只读 Key 合法可见(单一事实源
-		// ReadOnlyProbeTools，第 51 轮 P5-4 收敛)
+		// ApiMcp-新1:读探测 POST 工具对只读 Key 合法可见(单一事实源
+		// ReadOnlyProbeTools，第 51 轮 P5-4 收敛；L04-03 后 4 项)
 		for _, spec := range tools {
 			if spec.name == tool.Name && spec.method != http.MethodGet {
 				if _, probe := ReadOnlyProbeTools[tool.Name]; !probe {

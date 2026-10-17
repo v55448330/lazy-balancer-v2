@@ -28,7 +28,7 @@ func TestGenerateClusterLoginTicket_nodeNotFoundReturns404(t *testing.T) {
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 		db.SetDB(oldDB)
 	})
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/cluster/nodes/:id/login-ticket", func(c *gin.Context) {
@@ -64,7 +64,7 @@ func TestGenerateClusterLoginTicket_auditCarriesNodeName(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash,last_seen) VALUES (7,'slave-01','10.0.0.7',8000,'online',1,?,datetime('now'))`, hex.EncodeToString(key[:])); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil, "")}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/cluster/nodes/:id/login-ticket", func(c *gin.Context) {

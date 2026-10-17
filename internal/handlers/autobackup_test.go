@@ -51,6 +51,20 @@ func wireAutoBackupEngineForTest(t *testing.T, h *Handlers) {
 	})
 }
 
+// waitForAutoBackupCondition 轮询等待后台备份/审计落行（L01-05 异步触发后，
+// 响应返回时后台任务可能尚未完成）。
+func waitForAutoBackupCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("后台备份未在超时内完成")
+}
+
 func countAutoBackupAudit(t *testing.T, action string) int {
 	t.Helper()
 	var count int
@@ -383,6 +397,46 @@ func TestUpdateAutoBackupSettings_enableSetsWatermarkNotImmediateRun(t *testing.
 	}
 }
 
+func TestUpdateAutoBackupSettings_businessToggleSyncsEngineLoop(t *testing.T) {
+	// Given：引擎以业务关闭态启动，auto-backup 调度同步关闭。
+	h := newAutoBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	wireAutoBackupEngineForTest(t, h)
+	te := services.TaskEngine()
+	loopOn := func() bool {
+		for _, meta := range te.DescribeAll() {
+			if meta.ID == "auto-backup" {
+				return meta.LoopOn
+			}
+		}
+		t.Fatal("auto-backup 未注册")
+		return false
+	}
+	if loopOn() {
+		t.Fatal("前置态错误：业务关闭时调度应关闭")
+	}
+
+	// When：经设置页启用，再经设置页关闭。
+	enable := `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":7,"sections":["users","rules","security"]}`
+	if resp := serveAutoBackupJSON(t, h, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", enable, h.UpdateAutoBackupSettings); resp.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	// Then：off→on 立即 StartLoop，不需要重启。
+	if !loopOn() {
+		t.Error("设置页启用后 auto-backup LoopOn=false，定时备份将无法运行")
+	}
+	disable := `{"enabled":false,"frequency":"daily","time":"03:00","day":1,"keep":7,"sections":["users","rules","security"]}`
+	if resp := serveAutoBackupJSON(t, h, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", disable, h.UpdateAutoBackupSettings); resp.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	// And：on→off 立即 StopLoop，展示与业务实态一致。
+	if loopOn() {
+		t.Error("设置页关闭后 auto-backup LoopOn=true，调度展示与业务实态分叉")
+	}
+}
+
 func TestAutoBackupSettings_returnsSettingsAndRowsDesc(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	// Given: 两行备份(created_at 递增)
@@ -479,25 +533,19 @@ func TestRunAutoBackupNow_endpointRunsAndRespondsRow(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	wireAutoBackupEngineForTest(t, h)
 	response := serveAutoBackupJSON(t, h, http.MethodPost, "/auto-backup/run", "/auto-backup/run", "", h.RunAutoBackupNow)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	// L01-05：异步接受（202）+ 后台执行，结果落 auto_backups。
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", response.Code, response.Body.String())
 	}
-	var payload struct {
-		Data struct {
-			ID       int64  `json:"id"`
-			Status   string `json:"status"`
-			Filename string `json:"filename"`
-		} `json:"data"`
+	var filename, status string
+	waitForAutoBackupCondition(t, 10*time.Second, func() bool {
+		err := db.DB.QueryRow(`SELECT filename, status FROM auto_backups WHERE trigger_type='manual' ORDER BY id DESC LIMIT 1`).Scan(&filename, &status)
+		return err == nil && status == "success"
+	})
+	if !strings.HasPrefix(filename, "lbbak-manual-") {
+		t.Fatalf("filename=%q, want lbbak-manual- 前缀", filename)
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Data.ID == 0 || payload.Data.Status != "success" || !strings.HasPrefix(payload.Data.Filename, "lbbak-manual-") {
-		t.Fatalf("data=%+v, want 新增 success 行", payload.Data)
-	}
-	if got := countAutoBackupAudit(t, "手动备份"); got != 1 {
-		t.Fatalf("手动备份 audit rows=%d, want 1", got)
-	}
+	waitForAutoBackupCondition(t, 5*time.Second, func() bool { return countAutoBackupAudit(t, "手动备份") == 1 })
 }
 
 func TestDeleteAutoBackup_removesFileAndRow(t *testing.T) {
@@ -829,14 +877,15 @@ func TestRunAutoBackupNow_auditOperatorIsCurrentUser(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/auto-backup/run", nil)
 	router.ServeHTTP(response, request)
 
-	// Then: 200 且「手动备份」审计行操作人为 operator-zhang(修复前恒 system)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	// Then: 202 接受且后台完成后「手动备份」审计行操作人为 operator-zhang
+	// （修复前恒 system；L01-05 起响应先返回，审计行需等待后台执行）。
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", response.Code, response.Body.String())
 	}
 	var username string
-	if err := db.AuditDB.QueryRow(`SELECT username FROM audit_log WHERE action='手动备份' ORDER BY id DESC LIMIT 1`).Scan(&username); err != nil {
-		t.Fatalf("query audit: %v", err)
-	}
+	waitForAutoBackupCondition(t, 10*time.Second, func() bool {
+		return db.AuditDB.QueryRow(`SELECT username FROM audit_log WHERE action='手动备份' ORDER BY id DESC LIMIT 1`).Scan(&username) == nil
+	})
 	if username != "operator-zhang" {
 		t.Fatalf("手动备份 audit username=%q, want operator-zhang(调度路径才记 system)", username)
 	}
@@ -949,4 +998,50 @@ func TestAutoBackupSettings_backupListIterationFailureReturns500(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "读取备份列表失败") {
 		t.Fatalf("body=%s, want explicit backup-list failure message", response.Body.String())
 	}
+}
+
+// L01-05（第 78 轮）：手动触发必须异步——慢备份（>60s 桩）不阻塞响应；
+// 双击/并发触发 409。修复前同步 RunSync 在 main.go WriteTimeout(60s) 下
+// 会被截断客户端连接，且第二个请求排队等待。
+func TestRunAutoBackupNow_asyncReturnsBeforeSlowBackupCompletes(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	wireAutoBackupEngineForTest(t, h)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	services.SetAutoBackupExecutor(func(trigger, operator string, engineRunID int64) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	})
+	t.Cleanup(func() { services.SetAutoBackupExecutor(nil) })
+
+	begin := time.Now()
+	response := serveAutoBackupJSON(t, h, http.MethodPost, "/auto-backup/run", "/auto-backup/run", "", h.RunAutoBackupNow)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", response.Code, response.Body.String())
+	}
+	if elapsed := time.Since(begin); elapsed > 2*time.Second {
+		t.Fatalf("慢备份不得阻塞响应, elapsed=%s", elapsed)
+	}
+
+	// 后台任务已启动（引擎 Run 进入桩）。
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("后台备份未启动")
+	}
+
+	// 双击：执行中再次触发 → 409（不排队）。
+	second := serveAutoBackupJSON(t, h, http.MethodPost, "/auto-backup/run", "/auto-backup/run", "", h.RunAutoBackupNow)
+	if second.Code != http.StatusConflict {
+		close(release)
+		t.Fatalf("second status=%d body=%s, want 409", second.Code, second.Body.String())
+	}
+
+	close(release)
+	var status string
+	waitForAutoBackupCondition(t, 10*time.Second, func() bool {
+		return db.DB.QueryRow(`SELECT status FROM task_runs WHERE task_id='auto-backup' AND trigger='manual' ORDER BY id DESC LIMIT 1`).Scan(&status) == nil && status == "success"
+	})
 }

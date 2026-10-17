@@ -120,6 +120,11 @@ type ClusterSettingsRequest struct {
 type ClusterRegistration struct {
 	RegistrationID     int    `json:"registration_id"`
 	RegistrationSecret string `json:"registration_secret"`
+	// OverwrittenNodeID/OverwrittenNodeName 在重复 ip:port 注册命中「已批准」
+	// 节点时回填（L02-03，第 78 轮）：upsert 是既有兼容路径，但静默重置审批
+	// 与令牌会让运营方误以为是新节点——响应与审计必须点名被覆盖的节点。
+	OverwrittenNodeID   int    `json:"overwritten_node_id,omitempty"`
+	OverwrittenNodeName string `json:"overwritten_node_name,omitempty"`
 }
 
 type ClusterRegistrationStatus struct {
@@ -154,12 +159,17 @@ type ClusterHealth struct {
 }
 
 type ClusterReport struct {
-	AppliedVersion int           `json:"applied_version" binding:"min=0"`
-	ServiceStatus  string        `json:"service_status" binding:"required,oneof=ok degraded"`
-	Health         ClusterHealth `json:"health"`
-	LastSyncAt     string        `json:"last_sync_at"`
-	LastSyncError  string        `json:"last_sync_error"`
-	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid pin_mismatch validation_failed apply_failed transport_error"`
+	AppliedVersion int `json:"applied_version" binding:"min=0"`
+	// ServiceStatus 保留（第 78 轮 U05-F05 裁定：有意设计-保留）：主节点
+	// 当前不消费该字段（cluster_status.go 的节点视图不读它，前端亦无渲染点），
+	// 但 binding 强校验仍要求从节点上报 ok/degraded。删除会破坏旧主/旧从
+	// 滚动升级期的上报契约（旧主节点对缺字段的绑定校验直接 400），故保留到
+	// 协议版本升级时再清理。
+	ServiceStatus string        `json:"service_status" binding:"required,oneof=ok degraded"`
+	Health        ClusterHealth `json:"health"`
+	LastSyncAt    string        `json:"last_sync_at"`
+	LastSyncError string        `json:"last_sync_error"`
+	SyncErrorCode SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid pin_mismatch validation_failed apply_failed transport_error"`
 	// SectionHashes 携带从节点 cluster_applied_sections 的已应用节哈希（本地
 	// 当前已落库口径），供主节点聚合 per-section 同步状态。旧版本从节点不上
 	// 报（nil，omitempty 省略字段），主节点据此展示「旧版本从节点」占位。

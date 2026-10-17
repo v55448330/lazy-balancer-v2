@@ -58,13 +58,20 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	}, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
+		message := "生成登录票据失败"
 		if errors.Is(err, services.ErrNodeNotFound) {
 			// CL43-1(第 43 轮):节点不存在属客户端寻址错误,与同族端点
 			// (cluster_registration.go:151、cluster_service.go:71、
 			// cluster_sync.go:135)的 ErrNodeNotFound→404 口径对齐。
 			status = http.StatusNotFound
 		}
-		clusterError(c, status, "生成登录票据失败", err)
+		if errors.Is(err, services.ErrNodeOffline) {
+			// L02-04（第 78 轮）：已批准但未上报/已离线是「现在不可达」而非
+			// 「不存在」——409 + 可行动文案，运营方据此检查从节点进程/网络。
+			status = http.StatusConflict
+			message = "目标从节点尚未上报或已离线，请确认从节点在线后重试"
+		}
+		clusterError(c, status, message, err)
 		return
 	}
 	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,CL10-N14:ID 必留,

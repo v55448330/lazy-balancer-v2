@@ -150,7 +150,8 @@ func TestClusterSnapshot_roundTrip_preservesACMEState_for_promoted_slave(t *test
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{DataDir: dataDir, CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
 	lifecycle := &clusterLifecycleFake{}
-	promotable := NewClusterService(database, lifecycle, "")
+	promotable := NewClusterService(database, "")
+	wireClusterLifecycleEngineForTest(t, lifecycle, false)
 
 	// When
 	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
@@ -171,8 +172,9 @@ func TestClusterSnapshot_roundTrip_preservesACMEState_for_promoted_slave(t *test
 	if providerCredentials != `{"eab_kid":"kid","eab_hmac_key":"secret"}` || dnsCredentials != `{"secret_id":"dns-id","secret_key":"dns-secret"}` {
 		t.Fatalf("restored credentials provider=%q dns=%q", providerCredentials, dnsCredentials)
 	}
-	if jobStatus != "issued" || jobProviderID != 7 || !lifecycle.acmeStarted {
-		t.Fatalf("promoted job status=%q provider=%d acme_started=%v", jobStatus, jobProviderID, lifecycle.acmeStarted)
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.acmeStarted.Load() })
+	if jobStatus != "issued" || jobProviderID != 7 {
+		t.Fatalf("promoted job status=%q provider=%d", jobStatus, jobProviderID)
 	}
 	var staleProviders, staleConfigs int
 	if err := database.QueryRow(`SELECT (SELECT COUNT(*) FROM ca_providers WHERE id=99),(SELECT COUNT(*) FROM certificate_configs WHERE id=99)`).Scan(&staleProviders, &staleConfigs); err != nil {

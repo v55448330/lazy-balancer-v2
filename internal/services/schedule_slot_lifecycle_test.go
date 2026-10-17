@@ -179,7 +179,7 @@ func TestThreatUpdateOneSource_manualSuccessKeepsSlot(t *testing.T) {
 	defer srv.Close()
 
 	m := GetThreatUpdateManager()
-	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "manual")
+	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "manual", taskRunStartedAt(nil))
 	if failed {
 		t.Fatal("源更新应成功")
 	}
@@ -201,7 +201,7 @@ func TestThreatUpdateOneSource_autoFailureAdvancesSlot(t *testing.T) {
 	defer srv.Close()
 
 	m := GetThreatUpdateManager()
-	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto")
+	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto", taskRunStartedAt(nil))
 	if !failed {
 		t.Fatal("源更新应失败（500 恒失败）")
 	}

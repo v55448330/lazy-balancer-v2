@@ -11,6 +11,7 @@ package handlers
 // 会违反 U1-P3-2 单记裁定（2026-09-29 用户裁定），必须跳过。
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,9 +45,15 @@ func TestTriggerSystemTask_nonSelfRecordingTriggerLeavesAudit(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("log-cleanup 手动触发应 200, got %d %s", resp.Code, resp.Body.String())
 	}
-	if n := countTriggerAudit(t); n == 0 {
-		t.Fatal("手动触发非自记族 log-cleanup 在 audit_log 无痕——高特权操作零追责")
+	// U10-F12：审计在 goroutine 内于 Trigger 成功后记录——轮询落库。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if countTriggerAudit(t) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("手动触发非自记族 log-cleanup 在 audit_log 无痕——高特权操作零追责")
 }
 
 // 回归形状：自记族 auto-backup（执行器注入点，测试环境未注入→任务体立即失败
@@ -62,6 +69,8 @@ func TestTriggerSystemTask_selfRecordingTriggerSkipsHandlerAudit(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("auto-backup 手动触发应 200, got %d %s", resp.Code, resp.Body.String())
 	}
+	// U10-F12：异步审计落库窗口后再断言零复记（自记族恒零 handler 审计）。
+	time.Sleep(200 * time.Millisecond)
 	if n := countTriggerAudit(t); n != 0 {
 		t.Fatalf("自记族 auto-backup 的 handler 复记会产生双审计（U1-P3-2 单记裁定）, got %d 行", n)
 	}
@@ -118,10 +127,10 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 	r, _ := taskMonitorRouter()
 	te := services.TaskEngine()
 
-	waitNotInFlight := func() {
+	waitNotInFlight := func(taskID string) {
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
-			if !te.IsTaskInFlight("t-race") {
+			if !te.IsTaskInFlight(taskID) {
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -130,11 +139,12 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 
 	materialized := false
 	for attempt := 0; attempt < 50 && !materialized; attempt++ {
+		taskID := fmt.Sprintf("t-race-%d", attempt)
 		before := countTriggerFailAudit(t)
 		entered := make(chan struct{})
 		release := make(chan struct{})
 		if err := te.Register(taskengine.Descriptor{
-			ID: "t-race", Family: "t", Name: "双击竞态", Kind: taskengine.KindOneshot,
+			ID: taskID, Family: "t", Name: "双击竞态", Kind: taskengine.KindOneshot,
 			Run: func(taskengine.RunContext) error {
 				close(entered)
 				<-release
@@ -144,8 +154,8 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 			t.Fatal(err)
 		}
 		rec1, rec2 := httptest.NewRecorder(), httptest.NewRecorder()
-		req1 := httptest.NewRequest(http.MethodPost, "/system/tasks/t-race/trigger", nil)
-		req2 := httptest.NewRequest(http.MethodPost, "/system/tasks/t-race/trigger", nil)
+		req1 := httptest.NewRequest(http.MethodPost, "/system/tasks/"+taskID+"/trigger", nil)
+		req2 := httptest.NewRequest(http.MethodPost, "/system/tasks/"+taskID+"/trigger", nil)
 		done := make(chan struct{}, 2)
 		go func() { r.ServeHTTP(rec1, req1); done <- struct{}{} }()
 		go func() { r.ServeHTTP(rec2, req2); done <- struct{}{} }()
@@ -154,7 +164,7 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 		if rec1.Code != http.StatusOK || rec2.Code != http.StatusOK {
 			// 预检已拦（其一 409）——竞态未成形，释放后重试
 			close(release)
-			waitNotInFlight()
+			waitNotInFlight(taskID)
 			continue
 		}
 		select {
@@ -162,7 +172,7 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 			materialized = true
 		case <-time.After(2 * time.Second):
 			close(release)
-			waitNotInFlight()
+			waitNotInFlight(taskID)
 			continue
 		}
 		time.Sleep(200 * time.Millisecond) // 败者补偿路径（审计/日志）落库
@@ -171,7 +181,7 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 			t.Fatalf("并发双击第二请求落了 %d 条「触发失败」审计——任务实际已启动（语义失真）", got)
 		}
 		close(release)
-		waitNotInFlight()
+		waitNotInFlight(taskID)
 	}
 	if !materialized {
 		t.Skip("50 次尝试内双击竞态未成形（预检均拦截）——未验证到目标分支")

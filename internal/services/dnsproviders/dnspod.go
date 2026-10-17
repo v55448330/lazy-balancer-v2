@@ -110,14 +110,23 @@ func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
 	if domain == "" {
 		return fmt.Errorf("测试域名不能为空")
 	}
+	// U06-F05：输入域用于 challenge FQDN，provider 调用必须用可注册根域——
+	// 否则账户只管理 example.com 时输入 www.example.com 会在 getDomainID 精确
+	// 查找处误报「domain not found」，与真实签发链（PSL 解析）口径分裂。
+	// 已知限制：委派子区（账户实际 zone=sub.example.com）PSL 不可见，需以根域
+	// 验证（见 dnsprovider.ResolveZone 注释）。
+	zone, err := dnsprovider.ResolveZone(domain)
+	if err != nil {
+		return fmt.Errorf("测试域名无效: %w", err)
+	}
 	if !strings.HasSuffix(domain, ".") {
 		domain += "."
 	}
 	challengeName := "_acme-challenge.lb-test." + domain
-	if err := provider.Present(ctx, domain, challengeName, "lazy-balancer-test", 600); err != nil {
+	if err := provider.Present(ctx, zone, challengeName, "lazy-balancer-test", 600); err != nil {
 		return fmt.Errorf("DNS 写入测试失败: %w", err)
 	}
-	if err := provider.CleanUp(ctx, domain, challengeName); err != nil {
+	if err := provider.CleanUp(ctx, zone, challengeName); err != nil {
 		// CERT42-6（第 42 轮审计）：清理失败时测试 TXT 记录可能已残留——记告警
 		// 并在错误文案点名手动清理路径；返回错误语义不变（验证仍判失败）。
 		log.Printf("warn: dnspod 验证清理失败，测试记录 %s 可能残留，请手动清理: %v", challengeName, err)

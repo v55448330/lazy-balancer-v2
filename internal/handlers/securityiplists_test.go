@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -28,6 +29,7 @@ func newIPListRouter(t *testing.T) *gin.Engine {
 	router.PUT("/security/ip-lists/:id", h.UpdateIPList)
 	router.DELETE("/security/ip-lists/:id", h.DeleteIPList)
 	router.POST("/security/ip-lists/:id/ips", h.AddIPToList)
+	router.POST("/security/ip-lists/:id/remove-ip", h.RemoveIPFromList)
 	router.POST("/security/policies", h.CreateSecurityPolicy)
 	router.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
 	router.GET("/security/policies/:id", h.GetSecurityPolicy)
@@ -506,5 +508,219 @@ func TestCreateIPList_configuredBodyLimit413(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d body=%.200s, want 413", rec.Code, rec.Body.String())
+	}
+}
+
+// ---- 第 78 轮 A 域：RG-SEC-ALLOW-EFFECTIVE-NONEMPTY（U03-F01 / U03-F10）----
+
+func policyPayloadAllow(name string, inline string, refIDs ...int64) map[string]any {
+	refs := "[]"
+	if len(refIDs) > 0 {
+		parts := make([]string, len(refIDs))
+		for i, id := range refIDs {
+			parts[i] = fmt.Sprintf("%d", id)
+		}
+		refs = "[" + strings.Join(parts, ",") + "]"
+	}
+	return map[string]any{
+		"name": name, "mode": "blocking", "ip_acl_enabled": true, "ip_acl_mode": "allow",
+		"ip_acl_list": inline, "ip_acl_list_refs": refs,
+	}
+}
+
+func TestSecurityPolicyAllowMode_effectiveListNonEmpty(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	emptyID := seedIPListRow(t, "空名单", "[]")
+	filledID := seedIPListRow(t, "有名单", `[{"value":"10.0.0.0/8","remark":""}]`)
+
+	// 形状 1：引用存在但条目为空 → 生效 allow 集合为空，拒绝（旧实现只看引用个数）。
+	rec := postJSON(t, router, "/security/policies", policyPayloadAllow("空引用", "[]", emptyID))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create with empty referenced list status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "放行所有请求") {
+		t.Fatalf("empty allow message must explain fail-open semantics, got %s", rec.Body.String())
+	}
+
+	// 形状 2：引用条目非空 → 通过。
+	rec = postJSON(t, router, "/security/policies", policyPayloadAllow("非空引用", "[]", filledID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create with non-empty referenced list status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	// 形状 3：纯 inline 非空 → 通过。
+	rec = postJSON(t, router, "/security/policies", policyPayloadAllow("纯内联", `["198.51.100.0/24"]`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create with inline entries status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	// 形状 4：更新为「空 inline + 引用空名单」→ 拒绝（合并后生效集合为空）。
+	polyID := createTestPolicy(t, router, policyPayloadAllow("更新策略", "[]", filledID))
+	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
+		"ip_acl_list": "[]", "ip_acl_list_refs": fmt.Sprintf("[%d]", emptyID),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("update to empty effective allow set status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	// 形状 5：多引用其一非空 → 通过（不要求每个 ref 非空）。
+	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
+		"ip_acl_list": "[]", "ip_acl_list_refs": fmt.Sprintf("[%d,%d]", emptyID, filledID),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update with one non-empty ref status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	// 形状 6：更新为「空 inline 且无引用」→ 拒绝（既有语义回归）。
+	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
+		"ip_acl_list": "[]", "ip_acl_list_refs": "[]",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("update to no refs status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSecurityPolicyAllowMode_referenceLookupFailure500(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	if _, err := db.DB.Exec(`DROP TABLE security_ip_lists`); err != nil {
+		t.Fatal(err)
+	}
+	rec := postJSON(t, router, "/security/policies", policyPayloadAllow("查询失败", "[]", 1))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("reference lookup failure status=%d body=%s, want 500 (guard must not fail open)", rec.Code, rec.Body.String())
+	}
+}
+
+func ipListEntriesForTest(t *testing.T, id int64) []string {
+	t.Helper()
+	var raw string
+	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?`, id).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var entries []models.IPListEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("parse entries %q: %v", raw, err)
+	}
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Value
+	}
+	return out
+}
+
+func TestRemoveIPFromList_removesAllDuplicateValues(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	listID := seedIPListRow(t, "重复值", `[{"value":"1.2.3.4","remark":""},{"value":"1.2.3.4","remark":""},{"value":"5.6.7.8","remark":""}]`)
+
+	// When：移除重复值
+	rec := postJSON(t, router, fmt.Sprintf("/security/ip-lists/%d/remove-ip", listID), map[string]any{"value": "1.2.3.4"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove duplicate status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	// Then：所有同值条目删除，异值保留
+	got := ipListEntriesForTest(t, listID)
+	if len(got) != 1 || got[0] != "5.6.7.8" {
+		t.Fatalf("entries after duplicate removal=%v, want [5.6.7.8]", got)
+	}
+	// 回滚形状：事务失败（触发器）时 DB 保持原状
+	if _, err := db.DB.Exec(`CREATE TRIGGER fail_ip_list_update BEFORE UPDATE ON security_ip_lists BEGIN SELECT RAISE(ABORT,'injected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	rec = postJSON(t, router, fmt.Sprintf("/security/ip-lists/%d/remove-ip", listID), map[string]any{"value": "5.6.7.8"})
+	if rec.Code == http.StatusOK {
+		t.Fatalf("injected update failure must not report success: %s", rec.Body.String())
+	}
+	if got := ipListEntriesForTest(t, listID); len(got) != 1 || got[0] != "5.6.7.8" {
+		t.Fatalf("failed removal mutated entries=%v", got)
+	}
+}
+
+func TestRemoveIPFromList_rejectsEmptyingAllowReferencedList(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	listID := seedIPListRow(t, "被引用名单", `[{"value":"10.0.0.0/8","remark":""}]`)
+
+	// Given：allow 策略以「空 inline + 本名单引用」为生效集合
+	rec := postJSON(t, router, "/security/policies", policyPayloadAllow("引用策略", "[]", listID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed policy status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// When：移除最后一条 → 生效 allow 集合将为空（fail-open），必须 409
+	rec = postJSON(t, router, fmt.Sprintf("/security/ip-lists/%d/remove-ip", listID), map[string]any{"value": "10.0.0.0/8"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("emptying allow-referenced list status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if got := ipListEntriesForTest(t, listID); len(got) != 1 {
+		t.Fatalf("rejected removal mutated entries=%v", got)
+	}
+
+	// 多引用其一非空 / 策略 inline 非空 → 允许清空该名单
+	otherID := seedIPListRow(t, "其他名单", `[{"value":"192.0.2.0/24","remark":""}]`)
+	rec = postJSON(t, router, "/security/policies", policyPayloadAllow("多引用策略", "[]", listID, otherID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed multi-ref policy status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 删除 listID 仍被策略1（唯一引用）阻塞——先确认偏严语义：所有 allow 策略逐一检查
+	rec = postJSON(t, router, fmt.Sprintf("/security/ip-lists/%d/remove-ip", listID), map[string]any{"value": "10.0.0.0/8"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("single-ref policy still blocks emptying status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
+// 第 78 轮 U03-F09：引用视图纳入受信代理面——列表接口须显式标注
+// trusted_proxy_referenced（ref_policies 不伪造策略项，ref_count 合并展示）。
+func TestIPListRefView_includesTrustedProxy(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	listID := seedIPListRow(t, "受信代理名单", `[{"value":"10.0.0.0/8","remark":""}]`)
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs=? WHERE id=1`, fmt.Sprintf("[%d]", listID)); err != nil {
+		t.Fatal(err)
+	}
+	rec := getRequest(t, router, "/security/ip-lists")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Data []ipListRow `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range payload.Data {
+		if row.ID != int(listID) {
+			continue
+		}
+		if !row.TrustedProxyReferenced {
+			t.Fatal("trusted_proxy_referenced must be true")
+		}
+		if row.RefCount != 1 || len(row.RefPolicies) != 0 {
+			t.Fatalf("ref_count=%d ref_policies=%d, want merged count 1 with no fake policy rows", row.RefCount, len(row.RefPolicies))
+		}
+		return
+	}
+	t.Fatalf("list %d missing from response", listID)
+}
+
+func TestAllowEffectiveListNonEmpty_ignoresExpiredEntries(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	id := seedIPListRow(t, "expired-allow", `[{"value":"203.0.113.7","expires_at":"2000-01-01 00:00:00"}]`)
+	nonEmpty, err := allowEffectiveListNonEmpty(db.DB, "[]", fmt.Sprintf("[%d]", id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonEmpty {
+		t.Fatal("expired-only referenced list must not count as non-empty allow set")
+	}
+	id2 := seedIPListRow(t, "future-allow", `[{"value":"203.0.113.8","expires_at":"2999-01-01 00:00:00"}]`)
+	nonEmpty, err = allowEffectiveListNonEmpty(db.DB, "[]", fmt.Sprintf("[%d]", id2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nonEmpty {
+		t.Fatal("future entry must count as non-empty allow set")
 	}
 }

@@ -5,7 +5,7 @@
 // 即 v2.3.1 逐策略归因默认层）。
 import type { RuleFlowPathRule } from '@/types/rules'
 
-export interface SecurityStageIPListEntry { value: string; remark?: string }
+interface SecurityStageIPListEntry { value: string; remark?: string }
 export interface SecurityStageIPList {
   id: number
   name?: string
@@ -104,7 +104,7 @@ export interface StageCustomRuleDetail {
   enabled: boolean
 }
 
-export interface StageRateLimitDetail {
+interface StageRateLimitDetail {
   rps: number
   burst: number
   caption: string
@@ -314,11 +314,11 @@ export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: 
   parseIPList(p.ip_whitelist).length > 0 || parseRefIds(p.ip_whitelist_refs).length > 0
 
 // 阶段 1 · IP 访问控制谓词（信任除外——2026-09-21 用户裁定：信任恒归独立阶段 0）：
-// **ACL 启用即算**（能力口径，2026-09-25 用户实证修正）——空名单的启用策略也必须
-// 显示（「黑名单模式 · 0 条」与「未启用」语义天差地别；空 allow 名单在渲染侧
-// 为空交集恒拒的输入面之一，隐藏会误导）；或遗留黑名单非空。has_ip_control
-// 摘要标志含信任（镜像后端发射语义），阶段归属判定不得直接消费它——否则纯信任
-// 策略会在阶段 1 投出空行并被误判为 mixed。
+// 能力口径以 **`ip_acl_enabled && (内联 ∪ 引用非空)`，或遗留黑名单非空** 为准
+// （与后端 models.PolicyTypeFeatures 同源）——空名单的启用策略不记账为「有 IP
+// 管控面」（其渲染产物为空交集，能力上不产生该阶段）；原始字段缺失时回退
+// `has_ip_control` 摘要标志。has_ip_control 摘要标志含信任（镜像后端发射语义），
+// 阶段归属判定不得直接消费它——否则纯信任策略会在阶段 1 投出空行并被误判为 mixed。
 export const hasIPACLControl = (p: {
   has_ip_control?: boolean
   ip_acl_enabled?: boolean
@@ -326,9 +326,9 @@ export const hasIPACLControl = (p: {
   ip_acl_list_refs?: string
   ip_blacklist?: string
 }): boolean => {
-  // 原始字段齐备时按定义判定（第 59 轮 R59-P5 对齐后端 G1：ACL 启用且
-  // 内联∪引用非空，或黑名单非空——旧形态「启用即算」会使启用但空名单的
-  // 策略在兜底推断路径归 stage1、后端归 stage3，SecurityBindingEditor 组位
+  // 原始字段齐备时按定义判定（第 59 轮 R59-P5 对齐后端 G1：ACL 启用 ∧
+  // 内联∪引用非空，或黑名单非空——旧形态只按启用位判定，会使启用但空名单
+  // 的策略在兜底推断路径归 stage1、后端归 stage3，SecurityBindingEditor 组位
   // 分叉）；缺失（如精简绑定载荷）回退摘要标志。
   if (p.ip_acl_enabled !== undefined || p.ip_blacklist !== undefined || p.ip_acl_list !== undefined) {
     const hasEntries = parseIPList(p.ip_acl_list ?? '').length > 0 || parseRefIds(p.ip_acl_list_refs ?? '').length > 0
@@ -851,13 +851,54 @@ export const entryMatchesIp = (entry: string, ip: string): boolean => {
 export const sharedEntriesCache: Record<number, string[]> = {}
 type EntriesCacheListener = () => void
 const entriesCacheListeners = new Set<EntriesCacheListener>()
+function notifyEntriesCache(): void {
+  for (const fn of entriesCacheListeners) fn()
+}
 export const subscribeSharedEntriesCache = (fn: EntriesCacheListener): (() => void) => {
   entriesCacheListeners.add(fn)
   return () => entriesCacheListeners.delete(fn)
 }
+const inflightEntries = new Map<number, Promise<void>>()
+
+/** 写入单名单条目并通知订阅者（加载完成/IP 处置后回写共用）。 */
+export function writeSharedEntries(id: number, values: string[]): void {
+  sharedEntriesCache[id] = values
+  notifyEntriesCache()
+}
+
+/**
+ * 按需补齐名单条目（第 78 轮 U15-F08 / U16-F12）：只对「不在缓存」的 id 发请求，
+ * 并发调用去重（in-flight 复用）；单名单失败不阻塞其他名单且不留失败缓存
+ * （下次调用可重试）。loader 由调用方注入（axios 请求），本模块保持纯状态机。
+ */
+export async function ensureSharedEntries(ids: Iterable<number>, loader: (id: number) => Promise<string[]>): Promise<void> {
+  const todo = [...new Set(ids)].filter((id) => id > 0 && !(id in sharedEntriesCache))
+  if (todo.length === 0) return
+  await Promise.all(todo.map(async (id) => {
+    const existing = inflightEntries.get(id)
+    if (existing) {
+      await existing
+      return
+    }
+    const pending = (async () => {
+      try {
+        writeSharedEntries(id, await loader(id))
+      } catch {
+        /* 单名单失败：保持未缓存，下一次调用重试 */
+      }
+    })()
+    inflightEntries.set(id, pending)
+    try {
+      await pending
+    } finally {
+      inflightEntries.delete(id)
+    }
+  }))
+}
+
 export const invalidateSharedEntriesCache = (): void => {
   for (const k of Object.keys(sharedEntriesCache)) delete sharedEntriesCache[Number(k)]
-  for (const fn of entriesCacheListeners) fn()
+  notifyEntriesCache()
 }
 
 // formatDurationUs 安全处理耗时格式化(微秒→人类可读,分级精度):

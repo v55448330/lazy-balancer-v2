@@ -10,16 +10,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 func initTaskEngineForTest(t *testing.T) {
 	t.Helper()
-	if services.TaskEngine() == nil {
+	if services.TaskEngine() == nil || services.TaskEngine().IsStopped() {
 		oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
 		if err := db.Initialize(t.TempDir()); err != nil {
 			t.Fatal(err)
@@ -58,17 +60,21 @@ func TestListSystemTasks_allFamiliesPresent(t *testing.T) {
 	var payload struct {
 		Data struct {
 			Tasks []struct {
-				ID       string `json:"id"`
-				Name     string `json:"name"`
-				Category string `json:"category"`
-				Kind     string `json:"kind"`
-				Status   string `json:"status"`
-				Enabled  bool   `json:"enabled"`
+				ID             string `json:"id"`
+				Name           string `json:"name"`
+				Category       string `json:"category"`
+				Kind           string `json:"kind"`
+				Status         string `json:"status"`
+				BusinessDriven bool   `json:"business_driven"`
 			} `json:"tasks"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
+	}
+	// U10-F06：任务视图只承载 loop_on，不暴露诊断字段 enabled。
+	if strings.Contains(resp.Body.String(), `"enabled"`) {
+		t.Error("任务列表 JSON 不应含 enabled 键（调度语义只由 loop_on 表达）")
 	}
 	got := map[string]string{}
 	for _, tk := range payload.Data.Tasks {
@@ -80,8 +86,64 @@ func TestListSystemTasks_allFamiliesPresent(t *testing.T) {
 			t.Fatalf("任务族 %s 缺失; got=%v", id, got)
 		}
 	}
+	for _, tk := range payload.Data.Tasks {
+		if tk.ID == "threat" && !tk.BusinessDriven {
+			t.Error("threat 应标记 business_driven=true")
+		}
+		if tk.ID == "config-watchdog" && tk.BusinessDriven {
+			t.Error("config-watchdog 不应标记 business_driven")
+		}
+	}
 	if got["threat"] != "安全防护" || got["cert-renewal-scan"] != "证书" || got["startup:config-load"] != "系统" {
 		t.Fatalf("分类错配: %v", got)
+	}
+}
+
+func TestInitTaskEngineForTest_replacesStoppedEngine(t *testing.T) {
+	// Given：全局引擎已被直接 Stop（模拟跨测试 stopped 残留）。
+	initTaskEngineForTest(t)
+	services.TaskEngine().Stop()
+
+	// When：再次经测试装配初始化。
+	initTaskEngineForTest(t)
+
+	// Then：必须替换为新实例，后续 Trigger 不得返回 ErrEngineStopped。
+	if services.TaskEngine().IsStopped() {
+		t.Fatal("initTaskEngineForTest 复用了 stopped 引擎")
+	}
+	if err := services.TaskEngine().Trigger("log-cleanup", "manual", ""); err != nil {
+		t.Fatalf("重建后 Trigger 仍失败: %v", err)
+	}
+}
+
+func TestTaskWriteHandlers_slaveRejectedConsistently(t *testing.T) {
+	// Given：从节点 DB 实态 + RoleAny 任务（排除 RunsOn 差异）。
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{}
+	router := gin.New()
+	router.POST("/system/tasks/:id/trigger", h.TriggerSystemTask)
+	router.POST("/system/tasks/:id/toggle", h.ToggleSystemTask)
+	router.POST("/system/tasks/:id/cancel", h.CancelSystemTask)
+	router.POST("/system/tasks/:id/control", h.ControlSystemTask)
+	for _, tc := range []struct{ name, path, body string }{
+		{name: "trigger", path: "/system/tasks/log-cleanup/trigger", body: ""},
+		{name: "toggle", path: "/system/tasks/log-cleanup/toggle", body: `{"enabled":true}`},
+		{name: "cancel", path: "/system/tasks/cluster-sync/cancel", body: ""},
+		{name: "control", path: "/system/tasks/cluster-sync/control", body: `{"action":"restart"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// When/Then：四个写端点都必须同步返回 403，不得在引擎异步错误前假成功。
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("从节点写任务 status=%d body=%s，want 403", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -214,5 +276,104 @@ func TestToggleSystemTask_businessDrivenTasksReadOnly(t *testing.T) {
 				t.Fatalf("只读语义被破坏: business=%d loop_on=%v", enabled, m.LoopOn)
 			}
 		})
+	}
+}
+
+// U10-F07：四个任务写端点的状态码统一——引擎未初始化 503、任务不存在 404
+// （语义拒绝仍 400，见各端点既有用例）。
+func TestTaskWriteHandlers_unifiedStatusCodes(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{}
+	router := gin.New()
+	router.POST("/system/tasks/:id/trigger", h.TriggerSystemTask)
+	router.POST("/system/tasks/:id/toggle", h.ToggleSystemTask)
+	router.POST("/system/tasks/:id/cancel", h.CancelSystemTask)
+	router.POST("/system/tasks/:id/control", h.ControlSystemTask)
+
+	writes := []struct{ name, path, body string }{
+		{name: "trigger", path: "/system/tasks/no-such-task/trigger", body: ""},
+		{name: "toggle", path: "/system/tasks/no-such-task/toggle", body: `{"enabled":true}`},
+		{name: "cancel", path: "/system/tasks/no-such-task/cancel", body: ""},
+		{name: "control", path: "/system/tasks/no-such-task/control", body: `{"action":"restart"}`},
+	}
+
+	// Given 引擎已初始化：未知任务 → 404
+	for _, tc := range writes {
+		t.Run("404/"+tc.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+			if resp.Code != http.StatusNotFound {
+				t.Fatalf("未知任务 status=%d body=%s, want 404", resp.Code, resp.Body.String())
+			}
+		})
+	}
+
+	// Given 引擎未初始化：四个端点 → 503（统一「任务引擎未初始化」语义）
+	services.StopTaskEngine()
+	for _, tc := range writes {
+		t.Run("503/"+tc.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+			if resp.Code != http.StatusServiceUnavailable {
+				t.Fatalf("引擎未初始化 status=%d body=%s, want 503", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
+// U10-F12：并发双击下「触发」审计行数必须等于实际 manual task_runs 行数——
+// 审计只在 Trigger 成功后记录，CAS 落败者不得留下孤儿「触发」行。
+func TestTriggerSystemTask_triggerAuditMatchesManualRuns(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	te := services.TaskEngine()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	if err := te.Register(taskengine.Descriptor{
+		ID: "audit-race-probe", Family: "t", Name: "审计竞态探针", Kind: taskengine.KindOneshot,
+		Run: func(taskengine.RunContext) error {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := taskMonitorRouter()
+
+	before := countTriggerAudit(t)
+	rec1, rec2 := httptest.NewRecorder(), httptest.NewRecorder()
+	done := make(chan struct{}, 2)
+	go func() {
+		r.ServeHTTP(rec1, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-race-probe/trigger", nil))
+		done <- struct{}{}
+	}()
+	go func() {
+		r.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-race-probe/trigger", nil))
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+	<-entered
+	close(release)
+
+	var manualRuns int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id='audit-race-probe' AND trigger='manual'`).Scan(&manualRuns); err == nil && manualRuns > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// 等待异步审计落库稳定（Trigger 返回后才写审计）。
+	time.Sleep(200 * time.Millisecond)
+	got := countTriggerAudit(t) - before
+	if got != manualRuns {
+		t.Fatalf("「触发」审计=%d 与实际 manual task_runs=%d 不一致（孤儿/缺失审计）", got, manualRuns)
 	}
 }

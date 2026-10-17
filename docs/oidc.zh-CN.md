@@ -33,7 +33,7 @@ OIDC 是构建在 OAuth 2.0 之上的身份认证协议。配置后,用户点击
 
 ### 第一步:填写服务地址
 
-输入认证服务的 OIDC Issuer 地址(以 `https://` 开头)。失焦后系统自动探测 Discovery 文档(`/.well-known/openid-configuration`),绿勾表示发现成功。
+输入认证服务的 OIDC Issuer 地址(必须为 `https://`;`http://` 仅允许回环地址用于本机测试)。失焦后系统自动探测 Discovery 文档(`/.well-known/openid-configuration`),绿勾表示发现成功。
 
 > 提示:Microsoft Entra 地址形如
 > `https://login.microsoftonline.com/{租户ID}/v2.0`。若漏填 `/v2.0` 后缀,系统会自动补全。
@@ -119,7 +119,7 @@ OIDC 是构建在 OAuth 2.0 之上的身份认证协议。配置后,用户点击
 | MFA 绑定/重置 | 支持 | 不适用(403) |
 | 来源列标识 | 本地 | OIDC |
 
-禁用 OIDC 用户的效果:该用户下次 OIDC 登录被拒;已签发的会话在过期前仍有效(与本地用户禁用行为一致)。
+禁用 OIDC 用户的效果:已签发会话在下一次请求即被拒绝(401 用户不存在或已禁用,与本地用户一致);重新启用后旧会话仍需重新登录。
 
 ## 常见问题
 

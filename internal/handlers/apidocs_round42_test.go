@@ -23,6 +23,14 @@ func TestAPIDocs_idempotentWriteRetryContracts(t *testing.T) {
 		"PUT /security/crs/schedule",
 		"PUT /security/ip2region/schedule",
 		"PUT /security/threat-lib/schedule",
+		// U11-2（第 78 轮）：爬虫库同族三条状态型 PUT 与自动封禁配置写同格幂等。
+		"PUT /security/crawler-lib/auto-update",
+		"PUT /security/crawler-lib/schedule",
+		"PUT /security/crawler-lib/:id/flags",
+		"PUT /security/autoban",
+		// U11-2：unbind 无条件 DELETE 绑定行（未绑定时同样返回成功），
+		// 重复调用保持已解绑状态——不得落入 DELETE 默认「重复调用返回 404」。
+		"DELETE /security/policies/:id/bind/:caddy_id",
 		"POST /security/ip-lists/:id/ips",
 	} {
 		route := routesEntry(t, key)

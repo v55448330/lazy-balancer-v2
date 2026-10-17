@@ -99,7 +99,7 @@ const lastPolicyFilter = moduleRef<number | 'all'>('all')
 </script>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
@@ -108,7 +108,7 @@ import { useTrustAssociation } from '@/composables/useTrustAssociation'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
 import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
-import { inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, mergeIpEntryValues } from '@/utils/securityStages'
+import { inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, ensureSharedEntries, sharedEntriesCache, subscribeSharedEntriesCache, mergeIpEntryValues } from '@/utils/securityStages'
 import { popperViewportSafe } from '@/utils/popper'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
 import type { APIResponse } from '@/types'
@@ -200,7 +200,8 @@ const onPopoverShow = (): void => { void loadPolicies(); void loadEventCount() }
 // FE-P5a（第 69 轮）：中置二次导入并入文件头 :79 的 `import { computed, ref }`。
 const popoverRef = ref<{ open: () => void } | null>(null)
 const openPopover = (): void => {
-  onPopoverShow()
+  // 预取由 el-popover 的 before-enter 统一触发（onPopoverShow）——此处再显式
+  // 调用会让键盘 Enter 打开路径拉取两轮（U16-F21）。
   popoverRef.value?.open()
 }
 
@@ -212,8 +213,8 @@ const trustApi = useTrustAssociation({
   // 第 60 轮验收：写入后必须清条目缓存——loadIpLists 只拉缓存缺失 ID（B3-P5
   // 优化），已缓存列表的新增条目不可见导致「拦截此 IP」按钮在加入后仍显示
   onChanged: () => {
-    ipListEntries.value = {}
-    invalidateSharedEntriesCache() // 第 61 轮 P2-2：同步清空 TriggerDetailDialog 共享缓存
+    // 写入后失效共享缓存（含 TriggerDetailDialog 订阅方），再按需重拉
+    invalidateSharedEntriesCache()
     return loadPolicies()
   },
 })
@@ -235,7 +236,19 @@ const ipLists = ref<IpListOption[]>([])
 interface IpListWithEntries extends IpListOption {
   entries?: Array<{ value: string; remark?: string }>
 }
-const ipListEntries = ref<Record<number, string[]>>({})
+// 与 TriggerDetailDialog 共用模块级缓存（第 78 轮 U16-F12）：原为组件内 ref，
+// 每事件行一个实例 → 同一 IP 弹层多次打开/多行弹层各自整批下载条目。
+const ipListEntries = ref<Record<number, string[]>>({ ...sharedEntriesCache })
+let unregisterEntriesCache: (() => void) | null = null
+onMounted(() => {
+  unregisterEntriesCache = subscribeSharedEntriesCache(() => {
+    ipListEntries.value = { ...sharedEntriesCache }
+  })
+})
+onUnmounted(() => {
+  unregisterEntriesCache?.()
+  unregisterEntriesCache = null
+})
 
 const loadIpLists = async (): Promise<void> => {
   try {
@@ -247,23 +260,16 @@ const loadIpLists = async (): Promise<void> => {
       for (const id of parseRefIds(p.ip_acl_list_refs)) refIds.add(id)
       for (const id of parseRefIds(p.ip_whitelist_refs)) refIds.add(id)
     }
-    // 会话内条目缓存（第 55 轮 B3-P5：原实现每次 @show 对全部引用名单整表
-    // 重拉，三源全引 1.5-2MB/次）——仅拉取缓存缺失的名单 id；存入名单成功后
-    // 由调用方把新 IP 写回缓存，成员判定保持即时正确
-    const map: Record<number, string[]> = { ...ipListEntries.value }
-    const missing = [...refIds].filter((id) => !(id in map))
-    const results = await Promise.allSettled(
-      missing.map((id) => request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)),
-    )
-    results.forEach((r) => {
-      if (r.status === 'fulfilled' && r.value.data) {
-        map[r.value.data.id] = (r.value.data.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
-      }
+    // 仅拉取共享缓存缺失的名单 id（第 78 轮 U16-F12）：跨组件/跨实例共享，
+    // 写入动作经 invalidate 清空后自动重拉；成员判定保持即时正确
+    await ensureSharedEntries(refIds, async (id) => {
+      const res = await request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)
+      return (res.data?.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
     })
-    ipListEntries.value = map
+    ipListEntries.value = { ...sharedEntriesCache }
   } catch {
     ipLists.value = []
-    ipListEntries.value = {}
+    invalidateSharedEntriesCache()
   }
 }
 
@@ -619,11 +625,11 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
       await request.post(`/security/ip-lists/${m.id}/remove-ip`, { value: props.ip })
     }
     ElMessage.success(`已取消 ${props.ip} 对「${row.policy.name}」的信任`)
-    ipListEntries.value = {}
+    invalidateSharedEntriesCache()
     await loadPolicies()
   } catch {
     // 失败提示由全局拦截器弹出；部分移除也刷新到实际状态（第 60 轮 P5）
-    ipListEntries.value = {}
+    invalidateSharedEntriesCache()
     await loadPolicies()
   } finally {
     unlockBusy(row.policy.id, 'untrust')
@@ -638,6 +644,9 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
 const aclRefsAllSystem = (p: PolicyRow): boolean => {
   const refs = parseRefIds(p.ip_acl_list_refs)
   if (refs.length === 0) return false
+  // 内联 ACL 非空时保留卡片（第 78 轮 U16-F10）：原谓词只看 refs 全 system，
+  // 「内联 2 IP + 引用威胁库」的策略被整卡隐藏——用户无法移除内联条目。
+  if (parseIPList(p.ip_acl_list ?? '').length > 0) return false
   return refs.every((id) => Boolean(ipLists.value.find((l) => l.id === id)?.system))
 }
 // 筛选下拉选项池（第 75 轮实测裁定③①）：仅「有 IP 管控面」（stage0/stage1/

@@ -9,14 +9,11 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// SYS41-2(第 41 轮审计):demote 必须停自动备份调度器——与 R54-N5
-// (CRS/IP2Region SetMasterRole(false),TestClusterService_BecomeSlave_
-// stopsUpdateSchedulers)同点位对称;否则降级后调度器继续运行,从节点本地
-// 产出备份文件,打破「调度器仅主节点运行」不变量。
+// SYS41-2(第 41 轮审计):demote 必须停自动备份调度——与 CRS/IP2Region 的角色
+// 门同点位对称，否则降级后从节点本地产出备份文件。
 // v2.0：promote/demote 与自动备份的调度耦合已消除——引擎 Scheduled +
-// RunsOn=MasterOnly 角色门接管（Promote/BecomeSlave 经 manager SetMasterRole
-// 联动 TaskEngine().SetRole；角色门行为由 engine_test 钉死），此处不再
-// 有独立调度器生命周期可测。
+// RunsOn=MasterOnly 角色门接管（Promote/BecomeSlave 直接调用 TaskEngine().SetRole；
+// 角色门行为由 engine_test 钉死），不再有独立调度器生命周期可测。
 
 // CL41-1a(第 41 轮审计)快照面:自动备份六设置列(不含 last_run 节点本地
 // 运行态)随 users 节同步——主端装载恒携带(非 nil 指针),线格式六键齐全。

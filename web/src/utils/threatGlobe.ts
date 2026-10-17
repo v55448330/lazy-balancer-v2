@@ -10,10 +10,11 @@ import type { GlobeInstance } from 'globe.gl'
 import * as THREE from 'three'
 import type { Centroid } from '@/utils/countryCentroids'
 import { COUNTRY_CENTROIDS, FALLBACK_CENTROID } from '@/utils/countryCentroids'
-import { WORLD_COUNTRIES } from '@/utils/worldBorders'
+import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
-import { ADMIN1_PROVINCES } from '@/utils/admin1Provinces'
-import { heatCss, pointInPolys as sharedPointInPolys } from '@/utils/threatShared'
+import type { Admin1Province } from '@/utils/admin1Provinces'
+import { loadAdmin1Tables, loadedAdmin1Tables } from '@/utils/admin1Loader'
+import { heatCss, pointInPolys as sharedPointInPolys, arcEndpoints } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions, CountryHeat } from '@/utils/threatScene'
 
 interface GeoFeature {
@@ -50,17 +51,19 @@ function toMultiPolygon(polys: number[][][]): [number, number][][][] {
   )
 }
 
-/** 国家层 FeatureCollection（count 预置 0，热力随 setCountries 更新重建）。 */
+/** 国家层 FeatureCollection（count 预置 0，热力随 setCountries 更新重建）。
+ *  国家全集消费 THREAT_COUNTRIES（南极洲已剔除——第 78 轮 U15-F12 单源）。 */
 function buildCountryFeatures(counts: Map<string, number>): GeoFeature[] {
-  return WORLD_COUNTRIES.map((c) => ({
+  return THREAT_COUNTRIES.map((c) => ({
     type: 'Feature',
     properties: { name: c.name, count: counts.get(c.name) ?? 0 },
     geometry: { type: 'MultiPolygon', coordinates: toMultiPolygon(c.polys) },
   }))
 }
 
-/** 下钻态：国家一级行政区 FeatureCollection（中国走高精度 34 省表）。 */
-function buildProvinceFeatures(country: string, counts: Map<string, number>): GeoFeature[] {
+/** 下钻态：国家一级行政区 FeatureCollection（中国走高精度 34 省表）。
+ *  tables 为按需加载的省界表（未加载时由调用方保证已 await）。 */
+function buildProvinceFeatures(country: string, counts: Map<string, number>, tables: Record<string, Admin1Province[]>): GeoFeature[] {
   if (country === '中国') {
     return CHINA_PROVINCES.map((p) => ({
       type: 'Feature',
@@ -68,7 +71,7 @@ function buildProvinceFeatures(country: string, counts: Map<string, number>): Ge
       geometry: { type: 'MultiPolygon', coordinates: toMultiPolygon(p.polys) },
     }))
   }
-  const provinces = ADMIN1_PROVINCES[country]
+  const provinces = tables[country]
   if (!provinces) return []
   return provinces.map((p) => ({
     type: 'Feature',
@@ -101,7 +104,7 @@ void main(){
 
 /** 国家板块跨度（度）→ 相机高度：大国产远、小国产近，钳制 0.55-2.2。 */
 function flyAltitudeFor(name: string): number {
-  const c = WORLD_COUNTRIES.find((x) => x.name === name)
+  const c = THREAT_COUNTRIES.find((x) => x.name === name)
   if (!c) return 1.4
   let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
   for (const poly of c.polys) {
@@ -119,7 +122,9 @@ function flyAltitudeFor(name: string): number {
 }
 
 export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOptions): ThreatScene {
-  const server: Centroid = opts?.serverCentroid ?? COUNTRY_CENTROIDS['中国'] ?? [104, 35]
+  // 第 78 轮 L07-F03：本站坐标是可变状态——构造期常量会让 setServer 只改
+  // 环/点，弧线终点与返回视角仍指向旧坐标（本变量由 setServer/返回视角消费）。
+  let server: Centroid = opts?.serverCentroid ?? COUNTRY_CENTROIDS['中国'] ?? [104, 35]
   let countryCounts = new Map<string, number>()
   let provinceCounts = new Map<string, number>()
   let drilledName: string | null = null
@@ -193,7 +198,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
 
   globe.controls().autoRotate = true
   globe.controls().autoRotateSpeed = 0.45
-  // 禁滚轮缩放（用户裁定：两页面交互一致，缩放仅经下钻/返回）
+  // 滚轮不参与缩放（用户裁定：两页面交互一致，缩放仅经下钻/返回）
   globe.controls().enableZoom = false
   globe.pointOfView({ lat: server[1], lng: server[0], altitude: 2.4 }, 0)
 
@@ -239,54 +244,93 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
 
   let provincePolysCache: { polys: number[][][] }[] = []
 
-  function onCanvasClick(ev: MouseEvent): void {
+  /** 下钻省数据源（中国走内置高精度表；其余取按需加载表，未加载=空）。 */
+  function provinceSource(country: string): { name: string; polys: number[][][]; short?: string }[] {
+    if (country === '中国') return CHINA_PROVINCES
+    return loadedAdmin1Tables()?.[country] ?? []
+  }
+
+  let drillSeq = 0
+
+  /** 下钻某国（第 78 轮 L07-F18：下钻态点击他国与地图版一致=切换下钻）。
+   *  无省层数据（含 admin1 chunk 加载失败）时不进入下钻——原实现直接
+   *  drilledName+flyTo，省板为空（被选国家成空洞）。 */
+  async function drillCountry(name: string): Promise<void> {
+    const seq = ++drillSeq
+    if (name !== '中国') {
+      const tables = await loadAdmin1Tables()
+      if (seq !== drillSeq) return
+      if (!tables) {
+        opts?.onProvinceLoadError?.()
+        return
+      }
+      if (!tables[name]?.length) return
+    }
+    drilledName = name
+    const c2 = COUNTRY_CENTROIDS[name] ?? FALLBACK_CENTROID
+    globe.pointOfView({ lat: c2[1], lng: c2[0], altitude: flyAltitudeFor(name) }, 700)
+    globe.controls().autoRotate = false
+    applyLayer()
+    onDrillChange?.(name)
+  }
+
+  async function handleCanvasClick(ev: MouseEvent): Promise<void> {
     const geo = screenToLatLng(ev.clientX, ev.clientY)
     if (!geo) return
     if (drilledName) {
-      if (!pointInEntries(geo.lng, geo.lat, provincePolysCache)) {
-        drilledName = null
-        globe.pointOfView({ lat: server[1], lng: server[0], altitude: 2.4 }, 700)
-        globe.controls().autoRotate = !paused
-        applyLayer()
-        onDrillChange?.(null)
+      // 本省（选中国家内）：保持
+      if (pointInEntries(geo.lng, geo.lat, provincePolysCache)) return
+      // 命中其他国家：切换下钻（手势语义与地图版统一）
+      const other = THREAT_COUNTRIES.find((c) => c.name !== drilledName && pointInEntries(geo.lng, geo.lat, [c]))
+      if (other) {
+        await drillCountry(other.name)
+        return
       }
+      // 空白：返回世界
+      drillSeq += 1
+      drilledName = null
+      globe.pointOfView({ lat: server[1], lng: server[0], altitude: 2.4 }, 700)
+      globe.controls().autoRotate = !paused
+      applyLayer()
+      onDrillChange?.(null)
       return
     }
-    let hit: string | null = null
-    for (const c of WORLD_COUNTRIES) {
-      if (pointInEntries(geo.lng, geo.lat, [c])) { hit = c.name; break }
-    }
+    const hit = THREAT_COUNTRIES.find((c) => pointInEntries(geo.lng, geo.lat, [c]))
     if (!hit) return
-    drilledName = hit
-    const c2 = COUNTRY_CENTROIDS[hit] ?? FALLBACK_CENTROID
-    globe.pointOfView({ lat: c2[1], lng: c2[0], altitude: flyAltitudeFor(hit) }, 700)
-    globe.controls().autoRotate = false
-    applyLayer()
-    onDrillChange?.(hit)
+    await drillCountry(hit.name)
   }
 
-  // ---- hover：国家/省 hex 标记重着色 + 悬浮名（与地图版交互一致） ----
+  // ---- hover：国家/省 hex 标记重着色 + 悬浮名（与地图版同构：pointermove 只
+  // 记坐标，帧内拾取一次——原实现每个 pointermove 事件全量扫描 177 国多边形，
+  // 快速移动时同帧多次射线拾取，hover 明显滞后（第 78 轮 L07-F14）。 ----
   const hoverTipEl = document.createElement('div')
   hoverTipEl.style.cssText = 'position:absolute;z-index:6;pointer-events:none;display:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);color:#e2ecff;font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap;border-radius:2px'
   container.appendChild(hoverTipEl)
   let hoverKeyCache: string | null = null
-  /** 当前 hex 特征数组（稳定对象引用——hover 只替换新旧 2 个对象，避免 177 国全量重铺）。 */
+  let pendingMove: { x: number; y: number } | null = null
+  /** 当前 hex 特征数组（稳定对象引用——hover 只替换属性变化的特征对象）。 */
   let hexFeatures: (GeoFeature & { properties: { hover?: boolean; dim?: boolean } })[] = []
 
   function setHexHover(name: string | null): void {
-    const arr = hexFeatures.slice()
-    for (let i = 0; i < arr.length; i++) {
-      const want = arr[i].properties.name === name
-      if (arr[i].properties.hover !== want) {
-        arr[i] = { ...arr[i], properties: { ...arr[i].properties, hover: want } }
-      }
-    }
+    let changed = false
+    const arr = hexFeatures.map((feature) => {
+      const want = feature.properties.name === name
+      if (feature.properties.hover === want) return feature
+      changed = true
+      // 逐特征属性差量：只替换属性变化的那几个对象（hover 名称切换=2 个）
+      return { ...feature, properties: { ...feature.properties, hover: want } } as typeof feature
+    })
+    if (!changed) return
     hexFeatures = arr
     globe.hexPolygonsData(arr)
   }
 
-  function onCanvasMove(ev: PointerEvent): void {
-    const geo = screenToLatLng(ev.clientX, ev.clientY)
+  /** 帧内 hover 拾取（每帧最多一次）。 */
+  function processHover(): void {
+    const move = pendingMove
+    if (!move) return
+    pendingMove = null
+    const geo = screenToLatLng(move.x, move.y)
     if (!geo) {
       if (hoverKeyCache !== null) {
         hoverKeyCache = null
@@ -298,24 +342,20 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     let name: string | null = null
     let count = 0
     if (drilledName) {
-      const src = drilledName === '中国' ? CHINA_PROVINCES : ADMIN1_PROVINCES[drilledName] ?? []
-      for (const pv of src) {
+      for (const pv of provinceSource(drilledName)) {
         if (pointInEntries(geo.lng, geo.lat, [{ polys: pv.polys }])) {
-          name = 'short' in pv ? String(pv.short) : String(pv.name)
+          name = 'short' in pv && pv.short ? String(pv.short) : String(pv.name)
           count = provinceCounts.get(name) ?? 0
           break
         }
       }
       if (!name) {
-        for (const c of WORLD_COUNTRIES) {
-          if (c.name === drilledName) continue
-          if (pointInEntries(geo.lng, geo.lat, [c])) { name = c.name; count = countryCounts.get(name) ?? 0; break }
-        }
+        const other = THREAT_COUNTRIES.find((c) => c.name !== drilledName && pointInEntries(geo.lng, geo.lat, [c]))
+        if (other) { name = other.name; count = countryCounts.get(name) ?? 0 }
       }
     } else {
-      for (const c of WORLD_COUNTRIES) {
-        if (pointInEntries(geo.lng, geo.lat, [c])) { name = c.name; count = countryCounts.get(name) ?? 0; break }
-      }
+      const hit = THREAT_COUNTRIES.find((c) => pointInEntries(geo.lng, geo.lat, [c]))
+      if (hit) { name = hit.name; count = countryCounts.get(name) ?? 0 }
     }
     if (name !== hoverKeyCache) {
       hoverKeyCache = name
@@ -325,11 +365,22 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
       const r = container.getBoundingClientRect()
       hoverTipEl.style.display = 'block'
       hoverTipEl.textContent = `${name} ${count}`
-      hoverTipEl.style.left = `${ev.clientX - r.left + 14}px`
-      hoverTipEl.style.top = `${ev.clientY - r.top - 6}px`
+      hoverTipEl.style.left = `${move.x - r.left + 14}px`
+      hoverTipEl.style.top = `${move.y - r.top - 6}px`
     } else {
       hoverTipEl.style.display = 'none'
     }
+  }
+
+  function onCanvasMove(ev: PointerEvent): void {
+    pendingMove = { x: ev.clientX, y: ev.clientY }
+  }
+
+  function onPointerLeave(): void {
+    pendingMove = null
+    hoverKeyCache = null
+    hoverTipEl.style.display = 'none'
+    setHexHover(null)
   }
 
   /** 板块层重建：世界=国家六边形板（热力）；下钻=省板（全亮）+他国板（暗度
@@ -337,14 +388,13 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   function applyLayer(): void {
     if (drilledName) {
       type HexF = GeoFeature & { properties: { hover?: boolean; dim?: boolean } }
-      const provinces = buildProvinceFeatures(drilledName, provinceCounts) as HexF[]
+      const provinces = buildProvinceFeatures(drilledName, provinceCounts, loadedAdmin1Tables() ?? {}) as HexF[]
       const others = buildCountryFeatures(countryCounts)
         .filter((f) => f.properties.name !== drilledName)
         .map((f) => ({ ...f, properties: { ...f.properties, dim: true } }) as HexF)
       hexFeatures = [...provinces, ...others]
       globe.hexPolygonsData(hexFeatures)
-      const src = drilledName === '中国' ? CHINA_PROVINCES : ADMIN1_PROVINCES[drilledName] ?? []
-      provincePolysCache = src.map((p) => ({ polys: p.polys }))
+      provincePolysCache = provinceSource(drilledName).map((p) => ({ polys: p.polys }))
     } else {
       hexFeatures = buildCountryFeatures(countryCounts) as (GeoFeature & { properties: { hover?: boolean; dim?: boolean } })[]
       globe.hexPolygonsData(hexFeatures)
@@ -352,15 +402,14 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
+  // click 处理为 async（按需加载省界）——命名包装器承担 add/removeEventListener
+  // 同一引用；void 丢弃 Promise 是刻意的（内部处理全部失败分支）。
+  const onCanvasClick = (ev: MouseEvent): void => { void handleCanvasClick(ev) }
   const cv = container.querySelector('canvas')
   if (cv) {
     cv.addEventListener('click', onCanvasClick)
     cv.addEventListener('pointermove', onCanvasMove)
-    cv.addEventListener('pointerleave', () => {
-      hoverKeyCache = null
-      hoverTipEl.style.display = 'none'
-      setHexHover(null)
-    })
+    cv.addEventListener('pointerleave', onPointerLeave)
   }
 
   // 尺寸重试同步（构造竞态：容器 0×0 时双 RAF 单次尝试会静默失败）
@@ -411,6 +460,8 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     const now = performance.now()
     const dt = now - last
     last = now
+    // hover 拾取每帧最多一次（pointermove 只记坐标——第 78 轮 L07-F14）
+    processHover()
     if (!paused) {
       clock.t += dt / 1000
       if (scanMat) scanMat.uniforms.uTime.value = clock.t
@@ -443,10 +494,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     // 每来一条新弧，其余光流全部跳变（用户实测「光流被打断」）。
     if (arcs.length >= MAX_ARCS) arcs.shift()
     arcs.push({
-      startLat: from[1],
-      startLng: from[0],
-      endLat: server[1],
-      endLng: server[0],
+      ...arcEndpoints(server, from),
       color: normal ? ['rgba(61,220,132,0.1)', 'rgba(61,220,132,0.85)'] : ['rgba(255,122,47,0.1)', 'rgba(255,77,77,0.95)'],
       strokeW: Math.min(3, 0.5 + Math.log10(Math.max(1, weight))),
       born: performance.now(),
@@ -480,8 +528,13 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     },
     setServer(centroid: Centroid | null): void {
       if (!centroid) return
-      globe.ringsData([{ lat: centroid[1], lng: centroid[0] }])
-      globe.pointsData([{ lat: centroid[1], lng: centroid[0], size: 0.45 }])
+      // 第 78 轮 L07-F03：状态化本站坐标——热光点、弧线终点（spawnArc 每次
+      // 读 server）、返回世界视角（zoomOut/resetView）随之更新；原实现只改
+      // 环/点数据，server 常量让后续弧线仍飞向旧坐标。
+      server = [centroid[0], centroid[1]]
+      globe.ringsData([{ lat: server[1], lng: server[0] }])
+      applyHotspots()
+      if (!drilledName) globe.pointOfView({ lat: server[1], lng: server[0], altitude: 2.4 }, 600)
     },
     zoomOut(): void {
       drilledName = null
@@ -517,6 +570,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
       if (cvd) {
         cvd.removeEventListener('click', onCanvasClick)
         cvd.removeEventListener('pointermove', onCanvasMove)
+        cvd.removeEventListener('pointerleave', onPointerLeave)
       }
       cancelAnimationFrame(rafId)
       globe.pauseAnimation()
@@ -528,6 +582,17 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
         scanMat.dispose()
         scanMat = null
       }
+      // WebGL/three 资源释放（第 78 轮 L07-F13）：原仅清数据 + innerHTML，
+      // renderer/几何/纹理驻留 → 反复进出大屏堆内存与 WebGL 上下文持续增长。
+      const destructible = globe as unknown as { _destructor?: () => void; renderer?: () => THREE.WebGLRenderer }
+      try {
+        destructible.renderer?.().dispose()
+        destructible.renderer?.().forceContextLoss()
+        destructible._destructor?.()
+      } catch (error) {
+        console.warn('threat globe teardown failed', error)
+      }
+      delete (window as unknown as Record<string, unknown>).__threatGlobe
       container.innerHTML = ''
     },
   }

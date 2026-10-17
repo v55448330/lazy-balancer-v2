@@ -370,8 +370,8 @@ func TestAutoBackupScheduled_advancesLastRunEvenWhenExecutorFails(t *testing.T) 
 	}
 }
 
-func TestAutoBackupScheduled_skipsWhenNoExecutorInjected(t *testing.T) {
-	// Given: 执行器未装配(main 装配前的窗口)
+func TestAutoBackupScheduled_nilExecutorReturnsError(t *testing.T) {
+	// Given: 执行器未装配（启动装配窗口）。
 	setupAutoBackupTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily', auto_backup_time='03:00' WHERE id=1`); err != nil {
 		t.Fatal(err)
@@ -379,12 +379,10 @@ func TestAutoBackupScheduled_skipsWhenNoExecutorInjected(t *testing.T) {
 	SetAutoBackupExecutor(nil)
 	t.Cleanup(func() { SetAutoBackupExecutor(nil) })
 
-	// When: 不 panic、不推进 last_run
-	if err := runAutoBackupScheduled(0); err != nil {
-		t.Fatalf("未装配应安全跳过: %v", err)
+	// When/Then：必须返回可见错误而非记录成功；last_run 仍不推进。
+	if err := runAutoBackupScheduled(0); err == nil {
+		t.Fatal("未装配执行器不得静默记录成功")
 	}
-
-	// Then
 	var lastRun *string
 	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); err != nil {
 		t.Fatal(err)

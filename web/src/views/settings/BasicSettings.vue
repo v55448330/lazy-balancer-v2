@@ -86,7 +86,7 @@
             <div class="form-tip-line">安全事件滚动保留：超出保留天数或行数上限时按最旧优先滚动删除；0 表示自动（跟随审计日志保留月数 / 内置 100 万行）。高攻击流量部署可按需上调</div>
           </el-form-item>
           <el-form-item label="GitHub 加速">
-            <el-select v-model="githubProxyUrl" :disabled="isReadOnly" style="width: 160px">
+            <el-select v-model="githubProxyUrl" :disabled="isReadOnly || !githubProxyLoaded" style="width: 160px" :placeholder="githubProxyLoaded ? '选择代理' : '未加载'">
               <el-option
                 v-for="option in githubProxyOptions"
                 :key="option.value"
@@ -94,7 +94,8 @@
                 :value="option.value"
               />
             </el-select>
-            <span class="form-tip-inline">CRS 规则库与 IP2Region 的下载代理</span>
+            <span v-if="githubProxyLoaded" class="form-tip-inline">CRS 规则库与 IP2Region 的下载代理</span>
+            <span v-else class="form-tip-inline">代理设置未加载：已禁用编辑且保存不会写入该项</span>
           </el-form-item>
           <el-form-item label="GitHub 令牌">
             <el-input
@@ -1199,9 +1200,15 @@ const emit = defineEmits<{
   (e: 'save'): void
 }>()
 
-// 未加载/后端未返回该键时兜底为默认代理，避免 select 显示空值
+// 读取失败不得把默认值当可写值（第 78 轮 U16-F14）：原 getter 未加载时回退
+// 默认代理、保存 payload 恒带该键——一次 /config 抖动 + 任一保存 = 把用户已选
+// 的 AxisNow 静默改回默认。现以 githubProxyLoaded 门控编辑与提交。
+const githubProxyLoaded = ref(false)
 const githubProxyUrl = computed<string>({
-  get: () => settings.value.github_proxy_url || DEFAULT_GITHUB_PROXY_URL,
+  get: () => {
+    if (!githubProxyLoaded.value) return ''
+    return settings.value.github_proxy_url || DEFAULT_GITHUB_PROXY_URL
+  },
   set: (value: string) => {
     settings.value.github_proxy_url = value
   },
@@ -1220,8 +1227,11 @@ const loadGithubRemoteState = async (): Promise<void> => {
     if (seq !== githubStateSeq) return // F63-B5b-3:竞态守卫
     settings.value.github_proxy_url = res.data?.github_proxy_url || DEFAULT_GITHUB_PROXY_URL
     settings.value.has_github_token = res.data?.has_github_token ?? false
+    githubProxyLoaded.value = true
   } catch {
-    // 拉取失败：代理保持默认值，令牌按未配置展示；保存时仍会提交当前选择
+    // 拉取失败：代理保持未加载（选择器禁用、保存省略该键），令牌按未配置展示；
+    // 不回退默认值冒充库值（U16-F14）。
+    githubProxyLoaded.value = false
   }
 }
 loadGithubRemoteState()
@@ -1468,7 +1478,8 @@ const handleSave = async () => {
       security_events_row_cap: seRowCap.value,
       mfa_write_guard: settings.value.mfa_write_guard,
       mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
-      github_proxy_url: githubProxyUrl.value,
+      // 未加载时省略该键（后端保持现值）——不得以默认值覆盖用户选择
+      ...(githubProxyLoaded.value ? { github_proxy_url: githubProxyUrl.value } : {}),
       source: 'basic',
     }
     // 令牌三态（第 52 轮 P2-3，用户裁定）：清除标记→显式空串撤销；有输入→覆盖；

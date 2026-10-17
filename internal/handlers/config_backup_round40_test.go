@@ -146,7 +146,7 @@ func TestImportBackup_commitFailureCarriesWafApplyWarning(t *testing.T) {
 	h := &Handlers{
 		cfg:            cfg,
 		caddyService:   services.NewCaddyService(cfg.CaddyAdminURL),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(db.DB, ""),
 	}
 	gin.SetMode(gin.TestMode)
 	g := gin.New()
@@ -171,7 +171,9 @@ func TestImportBackup_commitFailureCarriesWafApplyWarning(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Fatalf("import with unreachable caddy must fail, got 200 %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "规则库文件落盘失败") {
+	// L06-03：坏 xdb 在落盘前即被装载验证拒绝（文件未落盘 → 版本记录同批
+	// 丢弃）；commit 失败响应必须携带该落盘/丢弃告警。
+	if !strings.Contains(rec.Body.String(), "版本记录已丢弃") {
 		t.Fatalf("commit-failure response must carry waf apply warning, body=%s", rec.Body.String())
 	}
 }

@@ -55,13 +55,14 @@ func TestVerifySnapshotConsistency_allows_zero_upstream_rule_with_warning(t *tes
 type syncDrainLifecycle struct {
 	sync        *SyncService
 	stopEntered chan struct{}
+	stopOnce    sync.Once
 }
 
 func (l *syncDrainLifecycle) StartACME() {}
 func (l *syncDrainLifecycle) StopACME()  {}
 func (l *syncDrainLifecycle) StartSync() { l.sync.Start() }
 func (l *syncDrainLifecycle) StopSync() {
-	close(l.stopEntered)
+	l.stopOnce.Do(func() { close(l.stopEntered) })
 	l.sync.Stop()
 }
 
@@ -720,7 +721,7 @@ func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cluster := NewClusterService(database, nil, "")
+	cluster := NewClusterService(database, "")
 	if err := cluster.ReportNode(context.Background(), int(nodeID), report, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -960,7 +961,8 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 		waitSyncBarrier(releaseApply)
 	}
 	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
-	cluster := NewClusterService(database, lifecycle, "")
+	cluster := NewClusterService(database, "")
+	wireClusterLifecycleEngineForTest(t, lifecycle, false)
 	pullDone := make(chan error, 1)
 	go func() {
 		_, err := syncService.Pull(context.Background())
@@ -1612,7 +1614,7 @@ func TestSyncService_driftedSections_bypassesStaleSnapshotCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预热快照缓存：记录与主节点一致的 rules 已应用哈希。
-	cluster := NewClusterService(database, nil, "")
+	cluster := NewClusterService(database, "")
 	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -1652,7 +1654,7 @@ func TestSyncService_driftedSections_skipsDisabledSwitch(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET sync_rules=1 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	cluster := NewClusterService(database, nil, "")
+	cluster := NewClusterService(database, "")
 	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
 	if err != nil {
 		t.Fatal(err)

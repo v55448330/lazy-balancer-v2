@@ -3,7 +3,7 @@ package taskengine
 // 第 77 轮 P5：TaskLogPath 净化从黑名单（剔除 '/'、'\\'）改白名单——只保留
 // 注册任务 ID 全字母表 [A-Za-z0-9_.:-]，与 handlers sanitizeRuleID 白名单同族
 // 口径（单一净化范式，畸形 ID 不再产出黑名单遗漏字符的文件名）。注册 ID 全集
-// （taskengine_wire.go 17 个）仅用小写+数字+'-'+'.'+一个 ':'（
+// （taskengine_wire.go 18 个）仅用小写+数字+'-'+'.'+一个 ':'（
 // startup:config-load），大写留作未来余量——既有 ID 零变化。
 
 import (

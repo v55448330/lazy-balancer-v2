@@ -195,8 +195,7 @@ func TestClusterService_Promote_resumesAutobanScheduling(t *testing.T) {
 	}
 
 	// When 升主
-	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(db.DB, lifecycle, "")
+	service := NewClusterService(db.DB, "")
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if err := service.Promote(context.Background()); err != nil {
 		t.Fatalf("promote: %v", err)
@@ -228,8 +227,7 @@ func TestClusterService_Promote_doesNotStartAutobanWhenDisabled(t *testing.T) {
 		t.Fatal("前置失败：未启用时启动不得开调度")
 	}
 
-	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(db.DB, lifecycle, "")
+	service := NewClusterService(db.DB, "")
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0, master_url='' WHERE id=1`); err != nil {
 		t.Fatal(err)

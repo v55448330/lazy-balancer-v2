@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -124,58 +125,111 @@ type ruleConflictOpponent struct {
 func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRuleConflict {
 	reasons := make(map[int][]string)
 	opponents := make(map[int][]ruleConflictOpponent)
-	for leftIndex, left := range candidates {
-		for rightIndex := leftIndex + 1; rightIndex < len(candidates); rightIndex++ {
-			right := candidates[rightIndex]
-			reason := ""
-			switch {
-			case left.protocol == "http" && right.protocol == "http" && left.listenPort == right.listenPort:
-				// Round 31 C-1: 禁用规则无运行时占用——与禁用行的「同端口同域名」不构成
-				// 真实冲突，不得把启用中的一方静默置禁用（与跨端口分支同口径门控）。
-				// R30 F1 放行禁用自环行后该组合首次可达此分支。
-				if left.enabled && right.enabled {
-					leftDomains := make(map[string]struct{})
-					for _, domain := range normalizedRuleDomains(left.domain) {
-						leftDomains[domain] = struct{}{}
-					}
-					for _, domain := range normalizedRuleDomains(right.domain) {
-						if _, exists := leftDomains[domain]; exists {
-							reason = fmt.Sprintf("HTTP 域名 %s 重复", domain)
-							break
-						}
-					}
-				}
-			case left.protocol == "http" && right.protocol == "http" && left.listenPort != right.listenPort:
-				// Round 29 G-1: 跨端口跳转遮蔽方向——TLS+跳转规则在 80 端口服务器头部
-				// 生成 terminal 301（caddy.go redirectRoutes），同域名直接监听 80 的规则
-				// 会被静默遮蔽为死规则。仅双方均启用时判定，按矩阵惯例冲突双方置禁用。
-				if left.enabled && right.enabled {
-					if left.listenPort == 80 && right.enableTLS && right.tlsHTTPRedirect {
-						reason = httpRedirectShadowReason(left.domain, right.domain)
-					} else if right.listenPort == 80 && left.enableTLS && left.tlsHTTPRedirect {
-						reason = httpRedirectShadowReason(right.domain, left.domain)
-					}
-				}
-			case left.listenPort != right.listenPort:
-				continue
-			case left.protocol == "tcp" && right.protocol == "tcp":
-				// Round 32 F-2: 与 HTTP 同端口分支（Round 31 C-1）同口径门控——
-				// 禁用 TCP 规则不渲染（caddy.go WHERE enabled=1）、无运行时端口占用，
-				// 不得把启用中的一方静默置禁用。
-				if left.enabled && right.enabled {
-					reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
-				}
-			case left.protocol == "tcp" || right.protocol == "tcp":
-				if left.enabled && right.enabled {
-					reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
+	// U09-08：一次性预计算 canonical 域名（normalizedRuleDomains 含 IDNA
+	// 转换，逐对调用是 O(N²) 次）与按 listenPort 分桶——矩阵内只做集合
+	// 交集；同端口对只在本桶内枚举，跨端口对仅 80↔非 80 可能相关（其余在
+	// 原 switch 的「端口不同 → continue」分支零产出）。
+	domainLists := make([][]string, len(candidates))
+	domainSets := make([]map[string]struct{}, len(candidates))
+	byPort := make(map[int][]int, 8)
+	for index := range candidates {
+		list := normalizedRuleDomains(candidates[index].domain)
+		domainLists[index] = list
+		set := make(map[string]struct{}, len(list))
+		for _, domain := range list {
+			set[domain] = struct{}{}
+		}
+		domainSets[index] = set
+		byPort[candidates[index].listenPort] = append(byPort[candidates[index].listenPort], index)
+	}
+	intersectFirst := func(primaryIndex, otherIndex int) (string, bool) {
+		for _, domain := range domainLists[primaryIndex] {
+			if _, exists := domainSets[otherIndex][domain]; exists {
+				return domain, true
+			}
+		}
+		return "", false
+	}
+	evaluate := func(leftIndex, rightIndex int) {
+		left, right := candidates[leftIndex], candidates[rightIndex]
+		reason := ""
+		switch {
+		case left.protocol == "http" && right.protocol == "http" && left.listenPort == right.listenPort:
+			// Round 31 C-1: 禁用规则无运行时占用——与禁用行的「同端口同域名」不构成
+			// 真实冲突，不得把启用中的一方静默置禁用（与跨端口分支同口径门控）。
+			// R30 F1 放行禁用自环行后该组合首次可达此分支。
+			if left.enabled && right.enabled {
+				if domain, hit := intersectFirst(rightIndex, leftIndex); hit {
+					reason = fmt.Sprintf("HTTP 域名 %s 重复", domain)
 				}
 			}
-			if reason != "" {
-				reasons[leftIndex] = append(reasons[leftIndex], reason)
-				reasons[rightIndex] = append(reasons[rightIndex], reason)
-				opponents[leftIndex] = append(opponents[leftIndex], ruleConflictOpponent{Name: right.name, CaddyID: right.caddyID, Reason: reason})
-				opponents[rightIndex] = append(opponents[rightIndex], ruleConflictOpponent{Name: left.name, CaddyID: left.caddyID, Reason: reason})
+		case left.protocol == "http" && right.protocol == "http" && left.listenPort != right.listenPort:
+			// Round 29 G-1: 跨端口跳转遮蔽方向——TLS+跳转规则在 80 端口服务器头部
+			// 生成 terminal 301（caddy.go redirectRoutes），同域名直接监听 80 的规则
+			// 会被静默遮蔽为死规则。仅双方均启用时判定，按矩阵惯例冲突双方置禁用。
+			if left.enabled && right.enabled {
+				if left.listenPort == 80 && right.enableTLS && right.tlsHTTPRedirect {
+					if domain, hit := intersectFirst(rightIndex, leftIndex); hit {
+						reason = fmt.Sprintf("HTTP 域名 %s 被 HTTPS 跳转遮蔽", domain)
+					}
+				} else if right.listenPort == 80 && left.enableTLS && left.tlsHTTPRedirect {
+					if domain, hit := intersectFirst(leftIndex, rightIndex); hit {
+						reason = fmt.Sprintf("HTTP 域名 %s 被 HTTPS 跳转遮蔽", domain)
+					}
+				}
 			}
+		case left.listenPort != right.listenPort:
+			return
+		case left.protocol == "tcp" && right.protocol == "tcp":
+			// Round 32 F-2: 与 HTTP 同端口分支（Round 31 C-1）同口径门控——
+			// 禁用 TCP 规则不渲染（caddy.go WHERE enabled=1）、无运行时端口占用，
+			// 不得把启用中的一方静默置禁用。
+			if left.enabled && right.enabled {
+				reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
+			}
+		case left.protocol == "tcp" || right.protocol == "tcp":
+			if left.enabled && right.enabled {
+				reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
+			}
+		}
+		if reason == "" {
+			return
+		}
+		reasons[leftIndex] = append(reasons[leftIndex], reason)
+		reasons[rightIndex] = append(reasons[rightIndex], reason)
+		opponents[leftIndex] = append(opponents[leftIndex], ruleConflictOpponent{Name: right.name, CaddyID: right.caddyID, Reason: reason})
+		opponents[rightIndex] = append(opponents[rightIndex], ruleConflictOpponent{Name: left.name, CaddyID: left.caddyID, Reason: reason})
+	}
+	for leftIndex := range candidates {
+		port := candidates[leftIndex].listenPort
+		rights := make([]int, 0, len(byPort[port]))
+		for _, rightIndex := range byPort[port] {
+			if rightIndex > leftIndex {
+				rights = append(rights, rightIndex)
+			}
+		}
+		if port == 80 {
+			for otherPort, indexes := range byPort {
+				if otherPort == 80 {
+					continue
+				}
+				for _, rightIndex := range indexes {
+					if rightIndex > leftIndex {
+						rights = append(rights, rightIndex)
+					}
+				}
+			}
+		} else {
+			for _, rightIndex := range byPort[80] {
+				if rightIndex > leftIndex {
+					rights = append(rights, rightIndex)
+				}
+			}
+		}
+		// 保持原始 (i<j) 枚举顺序，冲突/对手列表文案与旧实现逐字一致。
+		sort.Ints(rights)
+		for _, rightIndex := range rights {
+			evaluate(leftIndex, rightIndex)
 		}
 	}
 	conflicts := make([]disabledRuleConflict, 0, len(reasons))
@@ -533,6 +587,9 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 48MB"})
 		return
 	}
+	// U09-07：BOM 剥离必须先于 lbbak 魔数检测（与导入核心同序）——带 BOM 的
+	// lbbak 否则被当作纯 JSON 解析失败；BOM 与 gzip 魔数不冲突。
+	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
 	// v2.3.0 lbbak:tar.gz 先解包校验(含逐条目 sha256),内部 config.json
 	// 以其原始字节走下方 V2 解析——validate 端点对两种格式统一返回。
 	if isLbbakBytes(body) {
@@ -574,7 +631,8 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			exportedTables[table] = true
 		}
 		backupCarriedCertTables := exportedTables["certificate_configs"] || exportedTables["ca_providers"]
-		if _, err := validateV2Backup(backup); err != nil {
+		// U09-04：与导入同序——完整性先于 sections 过滤，行级门在过滤之后。
+		if _, err := verifyBackupIntegrity(backup); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
@@ -601,6 +659,11 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		}
 		if !includeGlobal {
 			backup.Config = nil
+		}
+		// U09-04：行级门在 sections 过滤之后（与导入同序）。
+		if err := validateV2BackupRows(backup); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
 		}
 		// L6-66-01（第 66 轮审计 P2）：users 键存在且为空数组——预览与导入
 		// 同位硬拒（同文案），此前预览显示「用户 0 个」仍 valid=true。
@@ -666,6 +729,16 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		if err := validateV2BackupTrustedProxyConfig(backup.Config, backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
+		// L06-05 / U09-03：与 ImportConfigBackup 同序——运行期设置门与自动
+		// 备份设置组门。预览侧归一写回无可观察面（纯不变量对齐）。
+		if err := validateV2BackupRuntimeSettings(backup.Config, backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
+		if err := validateV2BackupAutoBackupConfig(backup.Config); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
@@ -822,7 +895,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	ctx := c.Request.Context()
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		respondImportBeginError(c, err)
 		return
 	}
 	defer session.close()

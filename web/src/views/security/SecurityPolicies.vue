@@ -695,7 +695,7 @@
                           size="small"
                           effect="plain"
                           disable-transitions
-                        >{{ pendingStageOverride(row.caddyId, stage) ? '待保存' : '已覆盖' }}</el-tag>
+                        >{{ stageOverrideFailed[row.caddyId] ? '待重试' : pendingStageOverride(row.caddyId, stage) ? '待保存' : '已覆盖' }}</el-tag>
                         <el-icon v-if="stageOverrideSaving[row.caddyId]" class="is-loading stage-override-saving"><Loading /></el-icon>
                       </div>
                     </div>
@@ -736,10 +736,10 @@
               </div>
             </el-form-item>
             <el-form-item v-if="editorPolicyType !== 'stage2'" label="返回状态码">
-              <el-select v-model="form.block_status_code" style="width: 200px">
+              <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
-              <span class="form-tip-inline">WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）</span>
+              <span class="form-tip-inline">{{ form.block_page_id === 0 ? '未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面' : 'WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）' }}</span>
             </el-form-item>
             <el-form-item v-else label="返回状态码">
               <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
@@ -1116,7 +1116,9 @@ const policySummaryLine = (row: PolicySummary): string => {
 interface StageOverrideEdit { stage1_id: number; stage1_status: number; stage3_id: number; stage3_status: number }
 const stageOverrideEdits = ref<Record<string, StageOverrideEdit>>({})
 const stageOverrideSaving = ref<Record<string, boolean>>({})
-const stageOverrideSeq = new Map<string, number>()
+// 上次保存失败待重试（U16-F03）：失败不得回写 seed（待提交项消失=与「重新
+// 点击保存可重试」承诺矛盾），改记失败标记并在行内显示「待重试」。
+const stageOverrideFailed = ref<Record<string, boolean>>({})
 
 const stageOverrideSeed = (caddyId: string): StageOverrideEdit => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
@@ -1175,9 +1177,10 @@ const migrateChildTypes = computed<SecurityPolicyType[]>(() => {
   const types: SecurityPolicyType[] = []
   // 含信任名单 → 产出「原名（阶段 0）」子策略（后端 trust_detection 恒 1=保留检测，行为保持）
   if (hasTrustEntries(p)) types.push('stage0')
-  // 第 59 轮 R59-P2：改用 securityStages 单一事实源（ACL 启用即算，2026-09-25
-  // 用户实证口径）——旧本地谓词要求「条目非空」且 migrate 路径不拉条目缓存，
-  // 仅靠引用列表的混合策略预演恒漏报阶段 1。
+  // 第 59 轮 R59-P2：改用 securityStages 单一事实源（ACL 启用 ∧ 内联∪引用
+  // 非空，或遗留黑名单非空——与后端 PolicyTypeFeatures 同口径）——旧本地谓词
+  // 要求内联条目非空且 migrate 路径不拉条目值，仅靠引用列表的混合策略预演
+  // 会漏报阶段 1。
   if (hasIPACLControl(p) || hasGeoIPControl(p)) types.push('stage1')
   if (p.has_rate_limit) types.push('stage2')
   if (stage3ChipOn(p)) types.push('stage3')
@@ -1333,42 +1336,19 @@ const openMigrateFromView = (): void => {
   openMigrateDialog(row)
 }
 
-const saveStageOverride = async (caddyId: string, edit: StageOverrideEdit, silent = false): Promise<boolean> => {
+/** 成功回写：规则行（生效投影/覆盖徽标同源）+ 清失败标记；不整表刷新打断编辑节奏。 */
+const applyStageOverrideSuccess = (caddyId: string, edit: StageOverrideEdit): void => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
-  if (!rule) return false
-  const seq = (stageOverrideSeq.get(caddyId) ?? 0) + 1
-  stageOverrideSeq.set(caddyId, seq)
-  stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: true }
-  try {
-    // UpdateRule 对空 protocol 400——携带基础现值；upstreams 省略=保留；4 字段指针化显式提交
-    await request.put<APIResponse>(`/rules/${encodeURIComponent(caddyId)}`, {
-      name: rule.name,
-      protocol: rule.protocol,
-      domain: rule.domain,
-      listen_port: rule.listen_port,
-      block_page_stage1_id: edit.stage1_id,
-      block_page_stage1_status: edit.stage1_id > 0 ? edit.stage1_status : 0,
-      block_page_stage3_id: edit.stage3_id,
-      block_page_stage3_status: edit.stage3_id > 0 ? edit.stage3_status : 0,
-    })
-    if (stageOverrideSeq.get(caddyId) !== seq) return false
-    // 成功：回写 allRules 行（生效投影/覆盖徽标同源），不整表刷新打断编辑节奏
+  if (rule) {
     rule.block_page_stage1_id = edit.stage1_id
     rule.block_page_stage1_status = edit.stage1_id > 0 ? edit.stage1_status : 0
     rule.block_page_stage3_id = edit.stage3_id
     rule.block_page_stage3_status = edit.stage3_id > 0 ? edit.stage3_status : 0
-    if (!silent) mfaAwareSuccess(`规则「${rule.name}」阶段拦截页已更新`)
-    return true
-  } catch (error: unknown) {
-    if (stageOverrideSeq.get(caddyId) !== seq) return false
-    // 失败回本行快照（他行不受影响）；错误提示已由全局拦截器展示
-    stageOverrideEdits.value = { ...stageOverrideEdits.value, [caddyId]: stageOverrideSeed(caddyId) }
-    console.error('save stage override failed', error)
-    return false
-  } finally {
-    if (stageOverrideSeq.get(caddyId) === seq) {
-      stageOverrideSaving.value = { ...stageOverrideSaving.value, [caddyId]: false }
-    }
+  }
+  if (stageOverrideFailed.value[caddyId]) {
+    const next = { ...stageOverrideFailed.value }
+    delete next[caddyId]
+    stageOverrideFailed.value = next
   }
 }
 
@@ -2896,7 +2876,7 @@ async function openDialog(row?: PolicySummary) {
 const resetForm = () => {
   form.value = defaultForm()
   ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
-  stageOverrideEdits.value = {}; stageOverrideSaving.value = {}
+  stageOverrideEdits.value = {}; stageOverrideSaving.value = {}; stageOverrideFailed.value = {}
 }
 
 const resetWizard = () => {
@@ -2909,6 +2889,7 @@ const resetWizard = () => {
   // 暂存的覆盖会跨会话泄漏到绑定同规则的策略 B（保存写入 A 的暂存值）。
   stageOverrideEdits.value = {}
   stageOverrideSaving.value = {}
+  stageOverrideFailed.value = {}
 }
 
 const beforeWizardClose = (done: () => void): void => {
@@ -3056,14 +3037,53 @@ const handleSave = async () => {
     // 任一失败即列出规则名并保持对话框打开以便重试（与绑定同步失败同款处理）。
     const pendingOverrides = pendingOverrideRules.value
     if (pendingOverrides.length > 0) {
-      const failedRules: string[] = []
+      // 第 78 轮 U16-F11：按 4 字段覆盖值分组，改调已发布
+      // POST /rules/batch-block-pages（单事务一次渲染）。原实现逐规则整对象
+      // PUT /rules/:id：N 条规则=N 次全链渲染，且携带 name/protocol/domain/
+      // listen_port 快照会把另一标签页的改名回退。
+      const groups = new Map<string, { ids: string[]; edit: StageOverrideEdit }>()
       for (const { caddyId, edit } of pendingOverrides) {
-        const ok = await saveStageOverride(caddyId, edit, true)
-        if (!ok) failedRules.push(allRules.value.find((r) => r.caddy_id === caddyId)?.name || caddyId)
+        const key = `${edit.stage1_id}|${edit.stage1_status}|${edit.stage3_id}|${edit.stage3_status}`
+        const group = groups.get(key)
+        if (group) group.ids.push(caddyId)
+        else groups.set(key, { ids: [caddyId], edit })
+      }
+      const failedRules: string[] = []
+      const skippedNotes: string[] = []
+      for (const { ids, edit } of groups.values()) {
+        const savingFlags = { ...stageOverrideSaving.value }
+        for (const caddyId of ids) savingFlags[caddyId] = true
+        stageOverrideSaving.value = savingFlags
+        try {
+          const res = await request.post<APIResponse<{ bound: number; skipped?: Array<{ rule_id: string; reason: string }> }>>('/rules/batch-block-pages', {
+            rule_ids: ids,
+            block_page_stage1_id: edit.stage1_id,
+            block_page_stage1_status: edit.stage1_id > 0 ? edit.stage1_status : 0,
+            block_page_stage3_id: edit.stage3_id,
+            block_page_stage3_status: edit.stage3_id > 0 ? edit.stage3_status : 0,
+          })
+          for (const caddyId of ids) applyStageOverrideSuccess(caddyId, edit)
+          for (const item of res.data?.skipped ?? []) skippedNotes.push(`${item.rule_id}（${item.reason}）`)
+        } catch (error: unknown) {
+          for (const caddyId of ids) {
+            failedRules.push(allRules.value.find((r) => r.caddy_id === caddyId)?.name || caddyId)
+          }
+          const flags = { ...stageOverrideFailed.value }
+          for (const caddyId of ids) flags[caddyId] = true
+          stageOverrideFailed.value = flags
+          console.error('save stage overrides failed', error)
+        } finally {
+          const cleared = { ...stageOverrideSaving.value }
+          for (const caddyId of ids) cleared[caddyId] = false
+          stageOverrideSaving.value = cleared
+        }
       }
       if (failedRules.length > 0) {
         ElMessage.error(`策略已保存，但以下规则的阶段拦截页覆盖未写入：${failedRules.join('、')}；对话框保持打开，重新点击保存可重试`)
         return
+      }
+      if (skippedNotes.length > 0) {
+        ElMessage.warning(`部分规则未写入阶段拦截页覆盖：${skippedNotes.join('；')}`)
       }
       mfaAwareSuccess(`已同步 ${pendingOverrides.length} 条规则的阶段拦截页覆盖`)
     }

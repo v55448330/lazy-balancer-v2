@@ -437,38 +437,6 @@ func TestSetIP2RegionAutoUpdate_healthyRowRearmsToSlot(t *testing.T) {
 	}
 }
 
-func TestCRSSchedulerTick_prewritesConfiguredSlot(t *testing.T) {
-	// Given 自动更新开、无 next_update、排程=周四 06:00
-	m := newTestCRSManager(t)
-	loc := useShanghaiLocation(t)
-	seedCRSVersionRow(t, "v4.14.0", true)
-	if err := SetCRSSchedule([]int{4}, "06:00"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.DB.Exec(`UPDATE security_crs_version SET next_update='' WHERE id=1`); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC) // 周二（上海 20:00）
-	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, error) {
-		fetchCalled = true
-		return "v4.15.0", nil
-	}
-
-	// When 首个 tick（只排程不启动）
-	m.schedulerTick(now)
-
-	// Then 预写=周四 06:00 槽且不启动更新
-	if fetchCalled {
-		t.Fatal("first tick should only schedule, not run")
-	}
-	want := NextScheduledSlot(now, []int{4}, "06:00", loc)
-	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	if got := parseSlotUTC(t, nextUpdate); !got.Equal(want.UTC()) {
-		t.Fatalf("next_update=%v, want %v", got, want.UTC())
-	}
-}
-
 func TestCRSUpdate_successReschedulesToConfiguredSlot(t *testing.T) {
 	// Given 排程=周二 04:30，更新结果「已是最新」（成功无下载路径）
 	m := newTestCRSManager(t)

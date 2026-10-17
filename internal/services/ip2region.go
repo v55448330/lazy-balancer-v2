@@ -625,14 +625,14 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 	// SEC-C-6（第 72 轮）：落盘失败写 WARN「重建落盘失败」并返回——此前
 	// 静默吞错且仍写下方 INFO「已重建」成功行（日志谎报，排障误导）。
 	if err := writeProvincesCache(ip2RegionLivePathForTreeCache(), data); err != nil {
-		WriteIP2RegionUpdateLog("WARN", "idle", fmt.Sprintf("地域树缓存重建落盘失败（下次重建）: %v", err))
+		Logf("warn", "地域树缓存重建落盘失败（下次重建）: %v", err)
 		return
 	}
 	cityTotal := 0
 	for _, cities := range tree.Cities {
 		cityTotal += len(cities)
 	}
-	WriteIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市 / %d 海外国家（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, len(tree.Countries), tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
+	Logf("info", "地域树缓存已重建：%d 省级 / %d 城市 / %d 海外国家（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, len(tree.Countries), tree.DroppedASCIIProvinces, tree.DroppedASCIICities)
 }
 
 // RebuildRegionTreeCacheForSync 供集群同步/lbbak 导入路径在 xdb 变更后调用

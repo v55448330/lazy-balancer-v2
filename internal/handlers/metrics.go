@@ -228,6 +228,11 @@ func parseMetricsInterval(interval string) (modifier string, seconds int64) {
 	if err != nil {
 		return "-1 hours", 3600
 	}
+	// U08-F09：Atoi 接受负数/零——"-5h"/"0d" 曾拼出非法或零长 SQL modifier
+	// （"-−5 hours"）与负/零桶宽。非正值一律回退默认窗口（上限钳制不变）。
+	if value <= 0 {
+		return "-1 hours", 3600
+	}
 	switch unit {
 	case "h":
 		if value > 168 {

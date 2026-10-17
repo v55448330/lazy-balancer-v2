@@ -1147,6 +1147,35 @@ func mixedUpstreamPoolError(rule models.LbRule) error {
 	return nil
 }
 
+// validateStoredRuleProtocolFields 是单规则启用门与启动/UpdateConfig 聚合门
+// 共用的字段检查：策略/协议白名单、NTLM 形态、TCP dynamic_dns、上游池混布。
+// 两入口必须同源，否则同一坏规则会「启用时报错、重启时静默降级」。
+func validateStoredRuleProtocolFields(rule models.LbRule, includeMixedPool bool) error {
+	if err := validateStrategyForProtocol(rule.Protocol, rule.Strategy); err != nil {
+		return &configValidationError{message: err.Error()}
+	}
+	if rule.NTLMCompatible != 0 {
+		if rule.NTLMCompatible != 1 {
+			return &configValidationError{message: "ntlm_compatible 必须为 0 或 1"}
+		}
+		if rule.Protocol == "tcp" {
+			return &configValidationError{message: "TCP 规则不支持 NTLM 兼容模式（仅 HTTP 规则可用）"}
+		}
+		if rule.Strategy != "cookie" {
+			return &configValidationError{message: "NTLM 兼容模式要求负载策略为 Cookie 会话保持"}
+		}
+	}
+	if rule.Protocol == "tcp" && rule.DynamicDNS {
+		return &configValidationError{message: "TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议"}
+	}
+	if includeMixedPool {
+		if err := mixedUpstreamPoolError(rule); err != nil {
+			return &configValidationError{message: err.Error()}
+		}
+	}
+	return nil
+}
+
 func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
 	if err != nil {
@@ -1176,35 +1205,10 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 		(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 		return &configValidationError{message: "手动证书模式下必须提供 TLS 证书和私钥"}
 	}
-	// LB42-2:与保存门同口径的策略白名单——存量(校验上线前落库)/直改 DB 的
-	// TCP+cookie 等 HTTP 专属策略启用行透传到 L4 渲染被静默忽略,启用即拒。
-	if err := validateStrategyForProtocol(rule.Protocol, rule.Strategy); err != nil {
-		return &configValidationError{message: err.Error()}
-	}
-	// NTLM 兼容开关启用门（2026-10-12）：与保存门 validateRuleFeatures 同口径
-	// ——直改 DB/旧导入的 ntlm=1+非 cookie（或 TCP+ntlm）行启用即拒，渲染侧
-	// 零特判（按落库字段纯映射），坏形态不得投入运行。
-	if rule.NTLMCompatible != 0 {
-		if rule.NTLMCompatible != 1 {
-			return &configValidationError{message: "ntlm_compatible 必须为 0 或 1"}
-		}
-		if rule.Protocol == "tcp" {
-			return &configValidationError{message: "TCP 规则不支持 NTLM 兼容模式（仅 HTTP 规则可用）"}
-		}
-		if rule.Strategy != "cookie" {
-			return &configValidationError{message: "NTLM 兼容模式要求负载策略为 Cookie 会话保持"}
-		}
-	}
-	// LB42-3①:与保存门(validateRuleFeatures)同口径——TCP+dynamic_dns 规则
-	// 渲染侧整体跳过(无 Host 头驱动解析),启用即拒,不留静默死规则。
-	if rule.Protocol == "tcp" && rule.DynamicDNS {
-		return &configValidationError{message: "TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议"}
-	}
-	// LBH-A-1（第 70 轮 P2）：启用上游池混布与保存门同检——存量（69 轮修复
-	// 前落库/直改 DB）混布行经启用投入运行会让 http 上游被池级 TLS 化静默
-	// 全灭 502（渲染器对混布池无错误路径，静默渲染）。
-	if err := mixedUpstreamPoolError(rule); err != nil {
-		return &configValidationError{message: err.Error()}
+	// LB42-2/LB42-3/LBH-A-1：策略白名单、NTLM、TCP dynamic_dns、上游池混布
+	// 与启动/UpdateConfig 聚合门共用同一 helper。
+	if err := validateStoredRuleProtocolFields(rule, true); err != nil {
+		return err
 	}
 	return validateRuleConfigGeneration(rule)
 }
@@ -1254,10 +1258,14 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）手动证书模式缺少证书或私钥，请补齐材料或切换证书来源", rule.Name, rule.CaddyID)})
 		}
-		// LB42-3①:与单规则门同口径——TCP+dynamic_dns 启用存量在启动/
-		// UpdateConfig 聚合校验点名(渲染整跳过形态,静默死规则)。
-		if rule.Protocol == "tcp" && rule.DynamicDNS {
-			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议", rule.Name, rule.CaddyID)})
+		// LB42-2/LB42-3/LBH-A-1：与单规则 EnableRule 同源的字段门，避免
+		// 「启用时报错、启动/UpdateConfig 静默降级」的不对称。
+		if err := validateStoredRuleProtocolFields(rule, false); err != nil {
+			if validationErr, ok := err.(*configValidationError); ok {
+				problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）%s", rule.Name, rule.CaddyID, validationErr.Error())})
+			} else {
+				problems = append(problems, fmt.Errorf("规则 %s（%s）字段校验失败：%w", rule.Name, rule.CaddyID, err))
+			}
 			continue
 		}
 		if err := validateRuleConfigGeneration(rule); err != nil {

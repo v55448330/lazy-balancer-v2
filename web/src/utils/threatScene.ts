@@ -3,6 +3,7 @@ import {
   LAT_BOTTOM,
   WORLD_W,
   WORLD_D,
+  DRILL_UNIFIED_ZOOM,
   latToY,
   yToLat,
   wrapDeg,
@@ -11,28 +12,27 @@ import {
   screenToLonLat,
   panBy,
   principalBounds,
+  wrappedBucketKeys,
   type Cam2D,
 } from '@/utils/threatProjection'
-import { WORLD_COUNTRIES } from '@/utils/worldBorders'
-
-// v2.3.8：南极洲剔除（无业务流量，用户裁定）——全部渲染/命中路径消费此表
-const RENDER_COUNTRIES = WORLD_COUNTRIES.filter((c) => c.name !== 'Antarctica')
+import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
-import { ADMIN1_PROVINCES } from '@/utils/admin1Provinces'
-import { heatCss, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND } from '@/utils/threatShared'
 import { COUNTRY_CENTROIDS, FALLBACK_CENTROID, type Centroid } from '@/utils/countryCentroids'
+import { loadAdmin1Tables } from '@/utils/admin1Loader'
 
 // 威胁大屏 2D 平面地图引擎（v16 终版：Canvas 2D，参考 Radware/Check Point 平面风格）。
 //
 // v16 终审裁定弃 3D：等距圆柱平铺、等比缩放永不变形、DPR 原生渲染、线宽恒
-// 1 物理像素。分层渲染：静态层（陆地块+染中国+国界）按 zoom 缓存离屏 canvas，
-// 拖动=blit（360° 环绕两份拼接）；动态层（弧线/涟漪/扫掠/信标/hover/下钻省层）
+// 1 物理像素。分层渲染：静态层（陆地+国家点阵热力）按 zoom/数据缓存离屏 canvas，
+// 拖动=blit（360° 环绕三份拼接）；动态层（弧线/涟漪/扫掠/信标/hover/下钻省层）
 // 每帧矢量叠绘。对外接口与 3D 版完全一致（ThreatScreen.vue 零改动）。
 //
 // 热力=绝对标尺（1→1000 命中，log10 归一），砖红三档 #964a3c/#c2553d/#e25454，
 // 低命中向底色 #1b2a41 插值；无挤出无悬浮无双层——纯平面。
-// 交互：左键拖动平移（横向 360° 无缝环绕、纵向钳制）、滚轮缩放（锚点=指针）、
-// hover=国家提亮+浮签、点击国家下钻省级平面、点击空白返回、ESC 语义在 Vue 层。
+// 交互：左键拖动平移（横向 360° 无缝环绕、纵向钳制）、**滚轮不参与缩放**（用户
+// 裁定 2026-10-17：缩放仅经点击下钻/返回流程控制）、hover=国家提亮+浮签、
+// 点击国家下钻省级平面、点击空白返回、ESC 语义在 Vue 层。
 
 const MAX_PIXEL_RATIO = 2
 const MAX_ACTIVE_ARCS = 30
@@ -41,11 +41,12 @@ const ARC_FLIGHT_SECONDS = 0.95
 const ARC_FLIGHT_GAP = 0.22
 const ARC_FLIGHT_PARTICLES = 12
 const ZOOM_SECONDS = 0.6
-const FPS_FLOOR = 30
 const RIPPLE_POOL = 12
+// 静态层离屏位图宽度上限（物理像素）。总览 zoom 随视口宽度增长（width×2/360），
+// 4K 屏可达 ~14，叠加 DPR 2 后宽度 >1 万物理像素（≈160MB）——超过上限时
+// 按上限分配、由 blit 放大（极端屏轻微软化，换取内存有界；第 78 轮 U15-F11
+// 明确要求把 dpr 计入本判定）。
 const MAX_STATIC_WIDTH = 8192
-// 下钻统一视角倍率（用户裁定 2026-10-17）：任意国家一致，配合拖动查看
-const DRILL_UNIFIED_ZOOM = 9
 // 绝对热力标尺（log10(命中)/3 → 0..1），砖红三档，首段向底色插值
 
 const ATTACK_COLOR = '#e25454'
@@ -59,6 +60,8 @@ export interface CountryHeat {
 export interface ThreatSceneOptions {
   serverCentroid?: Centroid | null
   onDrillChange?: (name: string | null) => void
+  /** 省界数据按需加载失败（视图层 toast 一次；引擎按「无省层」降级不白屏）。 */
+  onProvinceLoadError?: () => void
 }
 
 export interface ThreatScene {
@@ -136,10 +139,13 @@ function pointInPolys(lon: number, lat: number, polys: number[][][]): boolean {
 }
 
 function makeLabelElement(text: string, color: string): HTMLDivElement {
+  // 悬停浮签（引擎自管 DOM）：样式内联单源——scoped CSS 无法作用于引擎
+  // 动态创建的节点（原 `.label-layer div` 选择器零匹配），背景/内边距/圆角
+  // 此前完全缺失（深色底图上白字无底衬）。地球版 hoverTip 同视觉。
   const div = document.createElement('div')
   div.className = 'ts-label'
   div.textContent = text
-  div.style.color = color
+  div.style.cssText = 'position:absolute;z-index:6;pointer-events:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);border-radius:2px;color:' + color + ';font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap'
   return div
 }
 
@@ -182,7 +188,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   // ---- 数据 ----
   let countryCounts = new Map<string, number>()
   let provinceCounts = new Map<string, number>()
-  let topCountries: { name: string; count: number; lon: number; lat: number }[] = []
   let serverPos: Centroid2D = { x: 0, y: 0 }
   let userInteracted = false
 
@@ -193,26 +198,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   let pendingHover: Centroid2D | null = null
 
   // ---- DOM 标签 ----
-  const topLabelEls = new Map<string, HTMLDivElement>()
-  const provinceLabelEls: { el: HTMLDivElement; lon: number; lat: number }[] = []
   const hoverTip = makeLabelElement('', '#e2e8f0')
   hoverTip.style.display = 'none'
   labelLayer.appendChild(hoverTip)
-
-
-  function rebuildTopLabels(): void {
-    // v2.3.8：Top 国家 DOM 标签退役（用户裁定）——热度光斑动画+热力点阵已
-    // 表达国家命中，标签长期「跑位」观感问题随层移除。
-    for (const [, el] of topLabelEls) el.remove()
-    topLabelEls.clear()
-  }
-
-  function rebuildProvinceLabels(): void {
-    // v2.3.8：固定省标签退役（用户裁定，与国家标签同款）——高倍视图下东部
-    // 省份标签挤叠成簇观感即「错乱」；省名由 hover 高亮+提示准确承载。
-    for (const item of provinceLabelEls) item.el.remove()
-    provinceLabelEls.length = 0
-  }
 
   function shortName(name: string): string {
     return sharedShortName(name)
@@ -249,7 +237,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   const DOT_R = 0.3
   const DOT_LAND = SHARED_DOT_LAND
   // 国家 bbox 预筛缓存
-  const countryBboxes = RENDER_COUNTRIES.map((c) => ({ name: c.name, minLon: 0, maxLon: 0, minLat: 0, maxLat: 0, polys: c.polys, computed: false }))
+  const countryBboxes = THREAT_COUNTRIES.map((c) => ({ name: c.name, minLon: 0, maxLon: 0, minLat: 0, maxLat: 0, polys: c.polys, computed: false }))
   function bboxOf(i: number): { minLon: number; maxLon: number; minLat: number; maxLat: number } {
     const b = countryBboxes[i]
     if (!b.computed) {
@@ -272,11 +260,11 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     for (let lat = -54.5; lat < 84; lat += DOT_STEP, rowIdx++) {
       const lonOffset = rowIdx % 2 === 1 ? DOT_STEP / 2 : 0
       for (let lon = -179.5 + lonOffset; lon < 180; lon += DOT_STEP) {
-        for (let ci = 0; ci < RENDER_COUNTRIES.length; ci++) {
+        for (let ci = 0; ci < THREAT_COUNTRIES.length; ci++) {
           const b = bboxOf(ci)
           if (lon < b.minLon || lon > b.maxLon || lat < b.minLat || lat > b.maxLat) continue
-          if (pointInPolys(lon, lat, RENDER_COUNTRIES[ci].polys)) {
-            dots.push({ lon, lat, key: RENDER_COUNTRIES[ci].name })
+          if (pointInPolys(lon, lat, THREAT_COUNTRIES[ci].polys)) {
+            dots.push({ lon, lat, key: THREAT_COUNTRIES[ci].name })
             break
           }
         }
@@ -333,15 +321,12 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   }
 
   function rebuildStaticLayer(): void {
-    // v16：超大 zoom（下钻小国）放弃全幅离屏（宽度超限），tick 走直绘分支
-    if (WORLD_W * cam.zoom > MAX_STATIC_WIDTH) {
-      staticCtx.setTransform(1, 0, 0, 1, 0, 0)
-      staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height)
-      staticDirty = false
-      return
-    }
-    const w = Math.ceil(WORLD_W * cam.zoom)
-    const h = Math.ceil(WORLD_D * cam.zoom)
+    // DPR 计入离屏分配（第 78 轮 U15-F11）：原按 CSS 像素分配、blit 时放回 CSS
+    // 尺寸 → Retina 下静态层被 2× 下采样（点阵发虚/边缘糊）。现按
+    // zoom×dpr 分配并以同倍率变换绘制，blit 目标仍是 CSS 尺寸（1:1 物理像素）。
+    const scale = Math.min(cam.zoom * dpr, MAX_STATIC_WIDTH / WORLD_W)
+    const w = Math.ceil(WORLD_W * scale)
+    const h = Math.ceil(WORLD_D * scale)
     staticCanvas.width = w
     staticCanvas.height = h
     staticCtx.setTransform(1, 0, 0, 1, 0, 0)
@@ -349,7 +334,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     // v27 修复（用户实测「中国画在美洲」根因）：原 transform 平移 (WORLD_W/2)*zoom
     // 与 x=lon+180 叠加 → 整幅地图平移 360°（半世界错位：渲染与拾取相差 180°，
     // hover 中国=视觉美洲）。平移移除，x=lon+180 单独承担。
-    staticCtx.setTransform(cam.zoom, 0, 0, cam.zoom, 0, 0)
+    staticCtx.setTransform(scale, 0, 0, scale, 0, 0)
     staticCtx.lineJoin = 'round'
     // 陆地衬底退役（用户裁定：单层点阵自表意，海洋即背景）
     // 点阵：普通陆地暗点，命中国家按热力染色（log10 计数标尺与地球版同源）
@@ -373,19 +358,30 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     staticDirty = false
   }
 
-  /** 下钻省层直接矢量绘（每帧；省数有界，视口外 bbox 剔除）。 */
+  /** 静态层重建请求：下钻态静态层不参与合成（世界衬底走 drawWorldDotsDim），
+   *  只清脏位，避免下钻期间每帧重建全幅离屏位图。 */
+  function requestStaticLayer(): void {
+    if (drillLayerCountry) {
+      staticDirty = false
+      return
+    }
+    if (staticDirty) rebuildStaticLayer()
+  }
+
+  /** 下钻省层直接矢量绘（每帧；省数有界，视口外按 wrap 距离剔除）。 */
   function drawDrillDirect(): void {
     const view = visibleWorldBox()
-    for (const pv of drillProvinceData) {
-      const pb = polysBounds(pv.polys)
-      if (pb.maxLon < view.minLon || pb.minLon > view.maxLon || pb.maxLat < view.minLat || pb.minLat > view.maxLat) continue
-    }
+    const halfW = cam.width / 2 / cam.zoom
     // 省点阵（命中省热力染色；hover 省=放大提亮高亮——用户裁定 2026-10-17）
     if (provinceDots) {
       const hoverShort = hoverName ? shortName(hoverName) : null
       const r = DOT_R * 0.7 * cam.zoom
       for (const d of provinceDots) {
-        if (d.lon < view.minLon - 1 || d.lon > view.maxLon + 1 || d.lat < view.minLat - 1 || d.lat > view.maxLat + 1) continue
+        // 经度剔除与渲染公式同源（wrapDeg 就近副本）：原直接比较未 wrap 的
+        // d.lon 与 view.minLon/maxLon，下钻俄罗斯/美国横向拖过日界线时整段
+        // 点阵被误剔（画面空洞）。
+        if (Math.abs(wrapDeg(d.lon - cam.camX)) > halfW + 1) continue
+        if (d.lat < view.minLat - 1 || d.lat > view.maxLat + 1) continue
         const hovered = hoverShort !== null && d.key === hoverShort
         const cnt = provinceCounts.get(d.key) ?? 0
         ctx.fillStyle = hovered ? 'rgba(143, 230, 255, 0.55)' : cnt > 0 ? heatCss(cnt) : DOT_LAND
@@ -397,18 +393,16 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
-  /** 超大 zoom 直绘世界（视口外国家 bbox 剔除；国界 1 物理像素）。 */
   /** 下钻态世界衬底：全陆地点阵 22% 暗度（未命中色），视口剔除。 */
   function drawWorldDotsDim(): void {
     buildWorldDots()
     if (!worldDots || !worldDotBuckets) return
     const view = visibleWorldBox()
     const hoverCountry = hoverName && drillProvinceData.every((pv) => pv.name !== hoverName) ? hoverName : null
-    // 经度分桶视口剔除（v2.3.8 性能：每帧只遍历命中桶，替代全量 1.3 万点）
-    const b0 = Math.floor((view.minLon - 1) / 12)
-    const b1 = Math.floor((view.maxLon + 1) / 12)
-    ctx.fillStyle = DOT_LAND
-    for (let b = b0; b <= b1; b++) {
+    // 经度分桶视口剔除（v2.3.8 性能：每帧只遍历命中桶，替代全量 1.3 万点）。
+    // 桶键必须按世界带归一（第 78 轮 L07-F11）：camX 自由实数，跨日界线时
+    // floor(lon/12) 得到 -16/15 等桶表外的键 → 该段点阵整体消失。
+    for (const b of wrappedBucketKeys(view.minLon - 1, view.maxLon + 1)) {
       const arr = worldDotBuckets.get(b)
       if (!arr) continue
       for (const d of arr) {
@@ -422,31 +416,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       }
     }
     ctx.globalAlpha = 1
-  }
-
-  function drawStaticDirect(): void {
-    const view = visibleWorldBox()
-    // 点阵主视觉（视口剔除；与静态层/地球版同源）
-    buildWorldDots()
-    if (worldDots) {
-      const r = DOT_R * cam.zoom
-      for (const d of worldDots) {
-        if (d.lon < view.minLon - 1 || d.lon > view.maxLon + 1 || d.lat < view.minLat - 1 || d.lat > view.maxLat + 1) continue
-        const cnt = countryCounts.get(d.key) ?? 0
-        ctx.fillStyle = cnt > 0 ? heatCss(cnt) : DOT_LAND
-        hexPath(ctx, cam.width / 2 + wrapDeg(d.lon - cam.camX) * cam.zoom, cam.height / 2 + ((LAT_TOP - d.lat) - cam.camY) * cam.zoom, r * 1.1)
-        ctx.fill()
-      }
-    }
-    for (const country of RENDER_COUNTRIES) {
-      const pb = polysBounds(country.polys)
-      // 就近副本距离（bbox 中心）
-      const centerShift = wrapDeg((pb.minLon + pb.maxLon) / 2 - cam.camX)
-      const nearCenter = cam.camX + centerShift
-      const halfSpan = (pb.maxLon - pb.minLon) / 2 + 2
-      if (nearCenter + halfSpan < view.minLon || nearCenter - halfSpan > view.maxLon) continue
-      if (pb.maxLat < view.minLat || pb.minLat > view.maxLat) continue
-    }
   }
 
   // ---- 交互 ----
@@ -499,9 +468,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     }
     const p = canvasPoint(event)
     const geo = screenToLonLat(p.x, p.y, cam)
-    for (const country of RENDER_COUNTRIES) {
+    for (const country of THREAT_COUNTRIES) {
       if (pointInPolys(geo.lon, geo.lat, country.polys)) {
-        drillToCountry(country.name)
+        void drillToCountry(country.name)
         return
       }
     }
@@ -509,7 +478,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   }
 
   function onWheel(event: WheelEvent): void {
-    // v2.3.8（用户裁定 2026-10-17）：禁止滚轮缩放——地图尺寸由总览/下钻
+    // v2.3.8（用户裁定 2026-10-17）：滚轮不参与缩放——地图尺寸由总览/下钻
     // 视图固定，缩放仅经点击下钻/返回流程控制。
     if (!controlsEnabled) return
     event.preventDefault()
@@ -526,31 +495,44 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     drillProvinceData = []
     provinceDots = null
     drillLayerCountry = ''
-    for (const item of provinceLabelEls) item.el.remove()
-    provinceLabelEls.length = 0
   }
 
-  function buildProvinceLayer(country: string): void {
+  // ---- 省界数据按需加载（第 78 轮 U15-F06） ----
+  // admin1Provinces 是 1.9MB 静态表——顶栏首屏不需要它（仅下钻时消费）。
+  // 共享加载器动态 import：Vite 切出独立 chunk，总览首屏零下载；加载失败按
+  // 「无省层」降级（不白屏、不进下钻），并经 onProvinceLoadError 让视图 toast。
+  async function loadProvinceRows(country: string): Promise<{ name: string; polys: number[][][]; centroid?: [number, number] }[] | null> {
+    if (country === '中国') {
+      return CHINA_PROVINCES.map((pv) => ({ name: pv.name, polys: pv.polys, centroid: [pv.centroid[0], pv.centroid[1]] }))
+    }
+    const tables = await loadAdmin1Tables()
+    if (!tables) {
+      opts?.onProvinceLoadError?.()
+      return null
+    }
+    return tables[country] ?? []
+  }
+
+  function buildProvinceLayer(country: string, provinces: { name: string; polys: number[][][]; centroid?: [number, number] }[]): void {
     clearProvinceLayer()
-    let provinces: { name: string; polys: number[][][]; centroid?: [number, number] }[] | undefined
-    if (country === '中国') provinces = CHINA_PROVINCES.map((pv) => ({ name: pv.name, polys: pv.polys, centroid: [pv.centroid[0], pv.centroid[1]] }))
-    else provinces = ADMIN1_PROVINCES[country]
-    if (!provinces || provinces.length === 0) return
     drillProvinceData = provinces
     drillLayerCountry = country
     buildProvinceDots()
-    rebuildProvinceLabels()
   }
 
   function returnToWorld(): void {
+    drillSeq += 1 // 作废在途省界加载（加载完成后不得再进入下钻）
     clearProvinceLayer()
     flyToOverview()
     if (onDrillChange) onDrillChange(null)
   }
 
-  function drillToCountry(country: string): void {
-    const c = RENDER_COUNTRIES.find((x) => x.name === country)
+  let drillSeq = 0
+
+  async function drillToCountry(country: string): Promise<void> {
+    const c = THREAT_COUNTRIES.find((x) => x.name === country)
     if (!c) return
+    const seq = ++drillSeq
     const b = principalBounds(c.polys)
     const clon0 = (b.minLon + b.maxLon) / 2
     const clon = clon0 > 180 ? clon0 - 360 : clon0
@@ -564,7 +546,13 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     const targetY = visH >= WORLD_D
       ? WORLD_D / 2
       : Math.min(WORLD_D - visH / 2, Math.max(visH / 2, latToY(clat)))
-    buildProvinceLayer(country)
+    // 中国走内置高精度表（无需异步）；其余国家按需加载省界 chunk。
+    const provinces = await loadProvinceRows(country)
+    if (seq !== drillSeq) return // 加载期间又点击了别国/返回 → 丢弃
+    // 无省层数据（含加载失败）：不进入下钻、不切换提示/返回按钮——
+    // 原实现先 flyTo+onDrillChange 再发现无数据，画面成「被选国家空洞」。
+    if (!provinces || provinces.length === 0) return
+    buildProvinceLayer(country, provinces)
     flyTo(clon, targetY, zoom)
     if (onDrillChange) onDrillChange(country)
   }
@@ -577,11 +565,31 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   }
   let camAnim: CamAnim | null = null
 
+  /** 相机落点归一（tick 末尾同口径）：camX wrap、camY 按可视高钳制。 */
+  function applyCamTarget(camX: number, camY: number, zoom: number): void {
+    cam.camX = wrapDeg(camX)
+    cam.zoom = zoom
+    const visH = cam.height / zoom
+    cam.camY = visH >= WORLD_D
+      ? WORLD_D / 2
+      : Math.min(WORLD_D - visH / 2, Math.max(visH / 2, camY))
+    staticDirty = true
+    serverPos = toScreen(server[0], server[1])
+  }
+
   function flyTo(camX: number, camY: number, zoom: number): void {
     const fromX = cam.camX
+    const toX = fromX + wrapDeg(camX - fromX)
+    // 暂停态无动画帧驱动（rafId=0）：直接落点并补绘一帧，否则「复位视角/返回
+    // 世界/下钻」在暂停中静默无反应（第 78 轮 L07-F12）。
+    if (paused) {
+      applyCamTarget(toX, camY, zoom)
+      renderOnce()
+      return
+    }
     camAnim = {
       from: { camX: fromX, camY: cam.camY, zoom: cam.zoom },
-      to: { camX: fromX + wrapDeg(camX - fromX), camY, zoom },
+      to: { camX: toX, camY, zoom },
       elapsed: 0,
     }
   }
@@ -601,7 +609,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   // ---- 特效 ----
   const arcs: Arc2D[] = []
   const ripples: Ripple2D[] = []
-  let rippleCursor = 0
   let sweepAngle = 0
 
   function spawnArc(origin: Centroid, normal: boolean, weight = 1): void {
@@ -614,7 +621,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   function spawnRipple(): void {
     if (ripples.length >= RIPPLE_POOL) ripples.shift()
     ripples.push({ age: 0 })
-    void rippleCursor
   }
 
   function bezierPoint(p0: Centroid2D, p1: Centroid2D, p2: Centroid2D, t: number): Centroid2D {
@@ -713,14 +719,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
-  function drawSweep(): void {
-    // v27（用户多轮实测反馈收敛）：扫掠扇退役——大半径 conic 渐变扇在地图上
-    // 反复被误读为「色块层/攻击扇/国家高亮错位」，且与信标点视觉打架。
-    // 本站标记保留：十字标+同心圆+光点（drawSiteMarker）。
-  }
-
-
-
   function drawSiteMarker(): void {
     // 十字标
     ctx.strokeStyle = '#e2e8f0'
@@ -755,8 +753,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
 
   // v27 恢复（用户裁定加回）：本站雷达扫掠光线——旋转扇形光束，低透明度
   // 不与热力色块/弧线打架（旧 conic 大扇退役原因），扫过全屏半径以内。
-  function drawSiteSweep(delta: number): void {
-    sweepAngle = (sweepAngle + delta * 0.00055) % (Math.PI * 2)
+  function drawSiteSweep(): void {
+    // 角度由 tick 统一推进（每帧 delta*0.9 rad/s）；此处只消费不复位/不自增
+    // （原实现再叠加 delta*0.00055 并对 2π 取模=重复递增，第 78 轮 U15-F14）。
     const r = Math.hypot(cam.width, cam.height) / 2 + 40
     const grad = ctx.createConicGradient
       ? ctx.createConicGradient(sweepAngle, serverPos.x, serverPos.y)
@@ -778,7 +777,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
 
   function drawHoverHighlight(): void {
     if (!hoverName) return
-    const country = RENDER_COUNTRIES.find((x) => x.name === hoverName)
+    const country = THREAT_COUNTRIES.find((x) => x.name === hoverName)
     if (!country) return
     // v27 修复（用户实测 hover 高亮脱离地图）：原 tracePoly 以「屏幕中心」为
     // 国家中心且无相机 Y 偏移 → 高亮恒在屏幕中上部。改为完整相机投影：
@@ -805,27 +804,8 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   let rafId = 0
   let paused = false
   let lastTime = performance.now()
-  let elapsedTotal = 0
-  let degraded = false
-  let lowFpsSeconds = 0
-  const frameDurations: number[] = []
 
-  function updateLabels(): void {
-    const place = (el: HTMLDivElement, lon: number, lat: number, offsetX = 0, offsetY = 0): void => {
-      const p = toScreen(lon, lat)
-      if (p.x < -80 || p.x > cam.width + 80 || p.y < -40 || p.y > cam.height + 40) {
-        el.style.display = 'none'
-        return
-      }
-      el.style.display = 'block'
-      el.style.transform = `translate(${(p.x + offsetX).toFixed(1)}px, ${(p.y + offsetY).toFixed(1)}px) translate(-50%, -100%)`
-    }
-    for (const [name, el] of topLabelEls) {
-      const entry = topCountries.find((t) => t.name === name)
-      if (entry) place(el, entry.lon, entry.lat)
-    }
-    for (const item of provinceLabelEls) place(item.el, item.lon, item.lat, 0, -6)
-
+  function updateHoverTip(): void {
     if (hoverName && hoverScreen) {
       hoverTip.style.display = 'block'
       hoverTip.style.transform = `translate(${(hoverScreen.x + 14).toFixed(1)}px, ${(hoverScreen.y - 8).toFixed(1)}px)`
@@ -834,12 +814,42 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
+  /** 单帧合成（tick 与暂停补绘共用，第 78 轮 U15-F13）：静态层 + hover +
+   *  下钻省层 + 全部动态层（弧线/涟漪/信标/扫掠/浮签）。暂停帧传 delta=0：
+   *  画面元素在位但动画不推进——原 renderOnce 只画静态层+浮签，暂停后弧线/
+   *  信标/扫掠整层消失。 */
+  function paintComposite(delta: number): void {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, cam.width, cam.height)
+    const dw = WORLD_W * cam.zoom
+    const dh = WORLD_D * cam.zoom
+    if (drillLayerCountry) {
+      // 下钻态：其他国家暗度衬底（用户裁定：仍显示但变暗突出选中国家）
+      drawWorldDotsDim()
+    } else {
+      const baseLon = wrapLon(cam.camX)
+      const sx = cam.width / 2 - (baseLon + WORLD_W / 2) * cam.zoom
+      const sy = cam.height / 2 - cam.camY * cam.zoom
+      for (const offset of [-dw, 0, dw]) {
+        if (sx + offset > cam.width || sx + offset + dw < 0) continue
+        ctx.drawImage(staticCanvas, sx + offset, sy, dw, dh)
+      }
+    }
+    // 世界 hover 提亮（下钻态改为提亮省）
+    if (!drillLayerCountry) drawHoverHighlight()
+    else drawDrillDirect()
+    drawArcs(delta)
+    drawRipples(delta)
+    drawSiteMarker()
+    drawSiteSweep()
+    updateHoverTip()
+  }
+
   const tick = (): void => {
     rafId = requestAnimationFrame(tick)
     const now = performance.now()
     const delta = Math.min(0.1, (now - lastTime) / 1000)
     lastTime = now
-    elapsedTotal += delta
     sweepAngle += delta * 0.9
     serverPos = toScreen(server[0], server[1])
 
@@ -851,8 +861,13 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       cam.camX = camAnim.from.camX + (camAnim.to.camX - camAnim.from.camX) * e
       cam.camY = camAnim.from.camY + (camAnim.to.camY - camAnim.from.camY) * e
       cam.zoom = camAnim.from.zoom + (camAnim.to.zoom - camAnim.from.zoom) * e
-      staticDirty = true
-      if (t >= 1) camAnim = null
+      // 动画期间不重建静态层（原每帧 staticDirty=true → 每帧重分配整幅离屏
+      // 画布并逐点重绘，0.6s 动画≈36 次全量栅格化）。blit 本身已按当前 zoom
+      // 缩放旧位图（短暂软化可接受）；动画结束补一次重建保证清晰度。
+      if (t >= 1) {
+        camAnim = null
+        staticDirty = true
+      }
     }
 
     // hover 拾取（帧内一次）
@@ -871,7 +886,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
           }
         }
         if (!hoverName) {
-          for (const country of RENDER_COUNTRIES) {
+          for (const country of THREAT_COUNTRIES) {
             if (country.name === drillLayerCountry) continue
             if (pointInPolys(geo.lon, geo.lat, country.polys)) {
               hoverName = country.name
@@ -881,7 +896,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
           }
         }
       } else {
-        for (const country of RENDER_COUNTRIES) {
+        for (const country of THREAT_COUNTRIES) {
           if (pointInPolys(geo.lon, geo.lat, country.polys)) {
             hoverName = country.name
             hoverTip.textContent = `${hoverName} ${countryCounts.get(hoverName) ?? 0}`
@@ -893,54 +908,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       pendingHover = null
     }
 
-    if (staticDirty) rebuildStaticLayer()
+    requestStaticLayer()
+    paintComposite(delta)
 
-    // ---- 合成 ----
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, cam.width, cam.height)
-    // 静态层：常规=离屏 blit（环绕三份拼接）；超大 zoom=直接矢量绘
-    const dw = WORLD_W * cam.zoom
-    const dh = WORLD_D * cam.zoom
-    if (drillLayerCountry) {
-      // 下钻态：其他国家暗度衬底（用户裁定：仍显示但变暗突出选中国家）
-      drawWorldDotsDim()
-    } else if (dw > MAX_STATIC_WIDTH) {
-      drawStaticDirect()
-    } else {
-      const baseLon = wrapLon(cam.camX)
-      const sx = cam.width / 2 - (baseLon + WORLD_W / 2) * cam.zoom
-      const sy = cam.height / 2 - cam.camY * cam.zoom
-      for (const offset of [-dw, 0, dw]) {
-        if (sx + offset > cam.width || sx + offset + dw < 0) continue
-        ctx.drawImage(staticCanvas, sx + offset, sy, dw, dh)
-      }
-    }
-    // 世界 hover 提亮（下钻态改为提亮省）
-    if (!drillLayerCountry) drawHoverHighlight()
-    // 下钻省层（直接矢量绘）
-    if (drillLayerCountry) drawDrillDirect()
-    // 动态层
-    // v2.3.8：国家热点光斑层（一度退役后恢复）——光斑是 Top 国家标签的
-    // 视觉锚点：无光斑时标签悬浮于真实坐标上方，观感即「标签跑位」。
-    // 光斑层退役（用户裁定）：国家命中由点阵自身热力染色表达
-
-    drawSweep()
-    drawArcs(delta)
-    drawRipples(delta)
-    drawSiteMarker()
-    drawSiteSweep(delta)
-    updateLabels()
-
-    // 帧率看门狗
-    if (!degraded) {
-      frameDurations.push(delta)
-      if (frameDurations.length > 90) frameDurations.shift()
-      if (frameDurations.length === 90) {
-        const avgFps = frameDurations.length / frameDurations.reduce((a, b) => a + b, 0)
-        lowFpsSeconds = avgFps < FPS_FLOOR ? lowFpsSeconds + delta : 0
-        if (lowFpsSeconds >= 3) degraded = true
-      }
-    }
     // v27 终修（tick 末尾）：camX 每帧归一 + camY 钳制——必须放在 camAnim 插值
     // 之后：动画目标未 wrap 时每帧插值会把 camX 写脏（用户实测 cx=684.4），
     // 开头归一无效。末尾归一保证下一帧渲染/拾取/信标全体消费端一致。
@@ -957,28 +927,12 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     }
   }
 
+  /** 暂停态单帧补绘（尺寸变化/复位/暂停切换共用；与 tick 同合成路径）。 */
   const renderOnce = (): void => {
     if (rafId || !paused) return
-    if (staticDirty) rebuildStaticLayer()
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, cam.width, cam.height)
-    const dw = WORLD_W * cam.zoom
-    const dh = WORLD_D * cam.zoom
-    if (drillLayerCountry) {
-      // 下钻态：其他国家暗度衬底（用户裁定：仍显示但变暗突出选中国家）
-      drawWorldDotsDim()
-    } else if (dw > MAX_STATIC_WIDTH) {
-      drawStaticDirect()
-    } else {
-      const baseLon = wrapLon(cam.camX)
-      const sx = cam.width / 2 - (baseLon + WORLD_W / 2) * cam.zoom
-      const sy = cam.height / 2 - cam.camY * cam.zoom
-      for (const offset of [-dw, 0, dw]) {
-        if (sx + offset > cam.width || sx + offset + dw < 0) continue
-        ctx.drawImage(staticCanvas, sx + offset, sy, dw, dh)
-      }
-    }
-    updateLabels()
+    serverPos = toScreen(server[0], server[1])
+    requestStaticLayer()
+    paintComposite(0)
   }
 
   // ---- 尺寸 ----
@@ -997,6 +951,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     // v27 修复（初始地图偏高）：ResizeObserver 在布局落定后二次触发 applySize，
     // 但 zoom 仍是旧尺寸算的总览值——用户未交互且未下钻时随尺寸刷新总览。
     if (!userInteracted && !drillLayerCountry && !camAnim) cam.zoom = overviewZoom()
+    // 暂停态无 tick 驱动：尺寸变化后必须补绘一帧，否则画布是新尺寸的空白
+    // （第 78 轮 L07-F12）。
+    if (paused) renderOnce()
   }
   const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(applySize) : null
   resizeObserver?.observe(container)
@@ -1006,16 +963,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   cam.camY = latToY(server[1])
   cam.zoom = overviewZoom()
   startLoop()
-
-  function recomputeTops(): void {
-    topCountries = [...countryCounts.entries()]
-      .map(([name, count]) => {
-        const c = COUNTRY_CENTROIDS[name] ?? FALLBACK_CENTROID
-        return { name, count, lon: c[0], lat: c[1] }
-      })
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-      .slice(0, 5)
-  }
 
   return {
     addArc(origin: Centroid): void {
@@ -1037,14 +984,18 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       startLoop()
     },
     setCountries(entries: CountryHeat[]): void {
+      // 30s 轮询同数据不得触发整幅静态层重建（第 78 轮 U15-F07）：长度+逐键
+      // 浅比较，无变化直接返回（原恒 staticDirty=true → 每轮全量栅格化）。
+      if (heatEntriesEqual(countryCounts, entries)) return
       countryCounts = new Map(entries.map((e) => [e.name, e.count]))
-      recomputeTops()
-      rebuildTopLabels()
       staticDirty = true
+      // 暂停态无 tick 驱动：数据到达即补绘（否则热力染色停在上一次暂停帧）
+      if (paused) renderOnce()
     },
     setProvinces(entries: CountryHeat[]): void {
+      if (heatEntriesEqual(provinceCounts, entries)) return
       provinceCounts = new Map(entries.map((e) => [e.name, e.count]))
-      if (drillLayerCountry) rebuildProvinceLabels()
+      if (paused) renderOnce()
     },
     setTraffic(entries: CountryHeat[]): void {
       const sorted = [...entries].sort((a, b) => b.count - a.count).slice(0, 8)
@@ -1064,11 +1015,13 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       }
     },
     zoomOut(): void {
+      drillSeq += 1
       clearProvinceLayer()
       flyToOverview()
       startLoop()
     },
     resetView(): void {
+      drillSeq += 1
       clearProvinceLayer()
       flyToOverview()
     },
@@ -1082,7 +1035,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     pickCountryAt(clientX: number, clientY: number): string | null {
       const rect = canvas.getBoundingClientRect()
       const geo = screenToLonLat(clientX - rect.left, clientY - rect.top, cam)
-      for (const country of RENDER_COUNTRIES) {
+      for (const country of THREAT_COUNTRIES) {
         if (pointInPolys(geo.lon, geo.lat, country.polys)) return country.name
       }
       return null
@@ -1117,8 +1070,6 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('click', onClick)
       canvas.removeEventListener('wheel', onWheel)
-      for (const [, el] of topLabelEls) el.remove()
-      for (const item of provinceLabelEls) item.el.remove()
       hoverTip.remove()
       canvas.remove()
       labelLayer.remove()

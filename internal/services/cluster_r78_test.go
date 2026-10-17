@@ -1,0 +1,550 @@
+package services
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/models"
+)
+
+// ---------------------------------------------------------------------------
+// U05-F01 / RG-CLUSTER-SNAPSHOT-ROW-ISOLATION
+// ---------------------------------------------------------------------------
+
+func TestSnapshot_buildIsolatesCorruptedJSONRows(t *testing.T) {
+	// 主节点单行 JSON 损坏（条件/上游/白名单列）不得让整包快照 500：
+	// 坏行显式隔离（跳过）+ 限频结构化告警（表/行 ID），健康行照常下发。
+	cluster, database := newClusterTestService(t)
+	mustExec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := database.Exec(query, args...); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	// 自定义拦截规则：1=坏行，2=健康行
+	mustExec(`INSERT INTO security_custom_rules (id,name,conditions) VALUES (1,'bad-rule','{not-json')`)
+	mustExec(`INSERT INTO security_custom_rules (id,name,conditions) VALUES (2,'healthy-rule','[]')`)
+	// 自定义路由：11=坏行（upstreams_json 畸形），12=健康行
+	mustExec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_r78','r78','http','r78.example',80,1)`)
+	mustExec(`INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstreams_json) VALUES (11,'lb_r78',0,'prefix','/bad','{not-json')`)
+	mustExec(`INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstreams_json) VALUES (12,'lb_r78',1,'prefix','/ok','[]')`)
+	// API Key：21=坏行（MCP 白名单畸形），22=健康行
+	mustExec(`INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,mcp_enabled,mcp_ip_whitelist) VALUES (21,'bad-key','h1','lb_bad',1,1,'{not-json')`)
+	mustExec(`INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,mcp_enabled,mcp_ip_whitelist) VALUES (22,'healthy-key','h2','lb_ok',1,1,'["10.0.0.0/8"]')`)
+
+	isolated := make(chan string, 16)
+	resetSnapshotRowIsolationThrottle()
+	snapshotRowIsolationHook = func(table string, rowID any, _ error) {
+		isolated <- fmt.Sprintf("%s:%v", table, rowID)
+	}
+	t.Cleanup(func() {
+		snapshotRowIsolationHook = nil
+		resetSnapshotRowIsolationThrottle()
+	})
+
+	snapshot, err := cluster.SnapshotForTest(context.Background())
+	if err != nil {
+		t.Fatalf("snapshot build failed on corrupted single rows: %v", err)
+	}
+
+	// 健康行照常发布，坏行被隔离。
+	if len(snapshot.SecurityCustomRules) != 1 || snapshot.SecurityCustomRules[0].Name != "healthy-rule" {
+		t.Fatalf("custom rules=%+v, want only healthy-rule", snapshot.SecurityCustomRules)
+	}
+	var pathIDs []int
+	for _, rule := range snapshot.Rules {
+		if rule.CaddyID != "lb_r78" {
+			continue
+		}
+		for _, pathRule := range rule.PathRules {
+			pathIDs = append(pathIDs, pathRule.ID)
+		}
+	}
+	if len(pathIDs) != 1 || pathIDs[0] != 12 {
+		t.Fatalf("path rule ids=%v, want [12] (bad row isolated)", pathIDs)
+	}
+	var keyIDs []int
+	for _, key := range snapshot.APIKeys {
+		keyIDs = append(keyIDs, key.ID)
+	}
+	if len(keyIDs) != 1 || keyIDs[0] != 22 {
+		t.Fatalf("api key ids=%v, want [22] (bad row isolated)", keyIDs)
+	}
+
+	// 告警必须点名表与行 ID（结构化），不得静默跳过。
+	seen := map[string]bool{}
+	for range 3 {
+		select {
+		case got := <-isolated:
+			seen[got] = true
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for isolation warnings, seen=%v", seen)
+		}
+	}
+	for _, want := range []string{"security_custom_rules:1", "path_rules:11", "api_keys:21"} {
+		if !seen[want] {
+			t.Fatalf("isolation warnings=%v, want %q", seen, want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// U05-F02 / RG-CLUSTER-WAF-REPULL-RESET
+// ---------------------------------------------------------------------------
+
+func TestSyncService_Pull_304_clears_waf_repull_state_after_manual_convergence(t *testing.T) {
+	// 连续未收敛计数达阈值 + last_sync_error 已上表面后，运营方手工修复
+	// CRS/ip2region 文件 → 下一轮 304 未检出漂移时必须清零计数并清空
+	// WAF 专项文案（此前只在 apply 路径清零，手工修复后错误永驻）。
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9, last_sync_error=? WHERE id=1",
+		master.URL, encodeSyncError(fmt.Sprintf("安全数据持续同步失败（已连续 %d 轮未收敛）", wafRepullMaxFailures), models.SyncErrorCodeTransportError)); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
+	service.wafRepullFailures.Store(wafRepullMaxFailures)
+
+	if _, err := service.Pull(context.Background()); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	if got := service.wafRepullFailures.Load(); got != 0 {
+		t.Fatalf("wafRepullFailures=%d after 304 without drift, want 0", got)
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); msg != "" {
+		t.Fatalf("last_sync_error=%q, want cleared after manual convergence", msg)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// U05-F03 / RG-CLUSTER-POSTCOMMIT-SIDEEFFECT
+// ---------------------------------------------------------------------------
+
+func TestSyncService_applySnapshot_brandingFailureMarksRetryAndClearsOnSuccess(t *testing.T) {
+	cluster, database := newClusterTestService(t)
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	// 注入落盘失败：branding.json 位置被目录占用（os.WriteFile → EISDIR）。
+	if err := os.Mkdir(filepath.Join(dataDir, "branding.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: dataDir, CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	if err := service.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply with branding write failure must stay committed-not-failed: %v", err)
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); !strings.HasPrefix(msg, syncBrandingFailureMarkerPrefix) {
+		t.Fatalf("last_sync_error=%q, want %s retry marker", msg, syncBrandingFailureMarkerPrefix)
+	}
+
+	// 修复落盘条件后，下一轮（users 节被哈希跳过）仍必须重试并清除标记。
+	if err := os.Remove(filepath.Join(dataDir, "branding.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); msg != "" {
+		t.Fatalf("last_sync_error=%q, want cleared after branding retry success", msg)
+	}
+	content, err := os.ReadFile(filepath.Join(dataDir, "branding.json"))
+	if err != nil || string(content) != emptyBrandingTemplate {
+		t.Fatalf("branding.json content=%q err=%v, want default template", content, err)
+	}
+}
+
+func TestSyncService_applySnapshot_brandingWithoutDataDirDegradesExplicitly(t *testing.T) {
+	// dataDir 未配置=显式降级：不得静默跳过（留痕一次），也不得误写重试标记
+	// （重试没有意义——没有任何路径可写）。
+	cluster, database := newClusterTestService(t)
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	snapshotBrandingDegradeWarned.Store(false)
+
+	if err := service.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply without data dir: %v", err)
+	}
+	if !snapshotBrandingDegradeWarned.Load() {
+		t.Fatal("missing data dir must leave an explicit degradation trace")
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); strings.HasPrefix(msg, syncBrandingFailureMarkerPrefix) {
+		t.Fatalf("last_sync_error=%q, degradation must not write a retry marker", msg)
+	}
+}
+
+func TestSyncService_Pull_repulls_after_branding_failure_marker(t *testing.T) {
+	cluster, database := newClusterTestService(t)
+	snapshot := dbConsistentWafDriftFixture(t, cluster, 9, "token")
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 8)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		version := request.URL.Query().Get("since_version")
+		requestedVersions <- version
+		if version == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9, last_sync_error=? WHERE id=1",
+		master.URL, encodeSyncError(syncBrandingFailureMarkerPrefix+": 品牌配置落盘失败", models.SyncErrorCodeApplyFailed)); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dataDir, "branding.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: dataDir, CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// 失败仍在：304 → 全量重拉 → 品牌落盘再次失败 → 标记保留。
+	if _, err := service.Pull(context.Background()); err != nil {
+		t.Fatalf("pull with branding failure: %v", err)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second request since_version=%q, want 0 (branding retry repull)", v)
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); !strings.HasPrefix(msg, syncBrandingFailureMarkerPrefix) {
+		t.Fatalf("last_sync_error=%q, want marker retained while branding write keeps failing", msg)
+	}
+
+	// 修复后：下一轮 304 仍触发重拉，落盘成功即清除标记。
+	if err := os.Remove(filepath.Join(dataDir, "branding.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Pull(context.Background()); err != nil {
+		t.Fatalf("pull after fix: %v", err)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("third request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("fourth request since_version=%q, want 0 (retry until fixed)", v)
+	}
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := decodeSyncError(stored); msg != "" {
+		t.Fatalf("last_sync_error=%q, want cleared after branding write succeeded", msg)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// L02-01 / RG-CLUSTER-PROMOTE-DRAIN
+// ---------------------------------------------------------------------------
+
+func TestClusterService_Promote_drainsPostAdmissionApply(t *testing.T) {
+	// admission 已通过（apply 窗口内）的在途拉取也必须被 Promote 排干：
+	// engine.StopLoop 只取消 daemon ctx，不等旧拉取落定。
+	_, database := newClusterTestService(t)
+	const token = "cluster-token"
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(8, token)})
+	}))
+	defer master.Close()
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatalf("seed slave state: %v", err)
+	}
+	syncService := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	applyEntered := make(chan struct{})
+	releaseApply := make(chan struct{})
+	syncService.beforeApplyWrite = func() {
+		close(applyEntered)
+		waitSyncBarrier(releaseApply)
+	}
+	cluster := NewClusterService(database, "")
+	pullDone := make(chan error, 1)
+	go func() {
+		_, err := syncService.Pull(context.Background())
+		pullDone <- err
+	}()
+	waitSyncTest(t, applyEntered)
+
+	promoteDone := make(chan error, 1)
+	go func() { promoteDone <- cluster.Promote(context.Background()) }()
+	select {
+	case err := <-promoteDone:
+		t.Fatalf("promote returned while an admitted apply was still in flight: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseApply)
+	if err := waitSyncTest(t, pullDone); err != nil {
+		t.Fatalf("in-flight pull: %v", err)
+	}
+	if err := waitSyncTest(t, promoteDone); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	var isMaster bool
+	var appliedVersion int
+	if err := database.QueryRow("SELECT is_master,applied_version FROM global_config WHERE id=1").Scan(&isMaster, &appliedVersion); err != nil {
+		t.Fatalf("read promoted state: %v", err)
+	}
+	if !isMaster || appliedVersion != 0 {
+		t.Fatalf("promoted state is_master=%v applied_version=%d, want master with reset version", isMaster, appliedVersion)
+	}
+	if _, err := syncService.Pull(context.Background()); err == nil {
+		t.Fatal("new pull was accepted after promotion drained the sync service")
+	}
+}
+
+func TestSyncService_applySnapshot_rechecksRoleInsideTransaction(t *testing.T) {
+	// Pull 的 admission 前复核通过后角色被翻转（模拟 Promote 抢先提交）：
+	// apply 事务内二次复核必须中止，绝不把从节点数据写回主节点库。
+	cluster, database := newClusterTestService(t)
+	snapshot := signedTestSnapshot(12, "token")
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url='http://master.example', cluster_token='token', applied_version=5 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	_ = cluster
+	service.applyGuard = syncApplyGuard{MasterURL: "http://master.example", Token: "token"}
+	// 复核之后（模拟）：角色已翻转为主节点。
+	if _, err := database.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := service.applySnapshot(context.Background(), snapshot)
+	if !errors.Is(err, errSyncApplyRoleChanged) {
+		t.Fatalf("apply error=%v, want errSyncApplyRoleChanged", err)
+	}
+	var appliedVersion int
+	if err := database.QueryRow("SELECT COALESCE(applied_version,0) FROM global_config WHERE id=1").Scan(&appliedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if appliedVersion != 5 {
+		t.Fatalf("applied_version=%d, want 5 (aborted apply must not write)", appliedVersion)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// L02-02 / RG-CLUSTER-SLAVE-SYNC-START
+// ---------------------------------------------------------------------------
+
+func TestClusterService_BecomeSlave_startsStoppedClusterSyncLoop(t *testing.T) {
+	_, database := newClusterTestService(t)
+	probe := &roleLifecycleProbe{}
+	te := wireClusterLifecycleEngineForTest(t, probe, false)
+	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
+	te.StopLoop("cluster-sync")
+	waitForCond(t, 2*time.Second, func() bool {
+		for _, meta := range te.DescribeAll() {
+			if meta.ID == "cluster-sync" && !meta.Running {
+				return true
+			}
+		}
+		return false
+	})
+	probe.syncStarts.Store(0)
+
+	service := NewClusterService(database, "")
+	if err := service.BecomeSlave(context.Background(), "https://master.example", models.ClusterRegistration{RegistrationID: 9, RegistrationSecret: "secret"}); err != nil {
+		t.Fatalf("become slave: %v", err)
+	}
+
+	// 切从后首轮同步必须真实发生（daemon 拉起 → StartSync）。
+	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
+	if meta, ok := te.Lookup("cluster-sync"); !ok || !meta.LoopOn {
+		t.Fatalf("cluster-sync loop_on=%v, want re-enabled after demote", meta.LoopOn)
+	}
+	if enabled, found := loadTaskLoopPref("cluster-sync"); !found || !enabled {
+		t.Fatalf("cluster-sync preference persisted=%v found=%v, want enabled", enabled, found)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// L02-03 / RG-CLUSTER-NODE-IDENTITY
+// ---------------------------------------------------------------------------
+
+func TestClusterService_RegisterNode_reportsOverwrittenApprovedNode(t *testing.T) {
+	_, database := newClusterTestService(t)
+	service := NewClusterService(database, "")
+	now := time.Now()
+	request := func(token, name string) models.ClusterRegisterRequest {
+		return models.ClusterRegisterRequest{Token: token, Name: name, IPAddress: "10.0.0.5", Port: 9000}
+	}
+	firstToken, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.RegisterNode(context.Background(), request(firstToken, "first-name"), now)
+	if err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+	if first.OverwrittenNodeID != 0 {
+		t.Fatalf("first registration overwritten_node_id=%d, want 0", first.OverwrittenNodeID)
+	}
+	if err := service.ApproveNode(context.Background(), first.RegistrationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE nodes SET name='original-name' WHERE id=?", first.RegistrationID); err != nil {
+		t.Fatal(err)
+	}
+
+	secondToken, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.RegisterNode(context.Background(), request(secondToken, "second-name"), now)
+	if err != nil {
+		t.Fatalf("duplicate registration: %v", err)
+	}
+	if second.RegistrationID != first.RegistrationID {
+		t.Fatalf("duplicate registration id=%d, want same row %d", second.RegistrationID, first.RegistrationID)
+	}
+	if second.OverwrittenNodeID != first.RegistrationID || second.OverwrittenNodeName != "original-name" {
+		t.Fatalf("overwritten node=%d/%q, want %d/original-name", second.OverwrittenNodeID, second.OverwrittenNodeName, first.RegistrationID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// L02-04 / RG-CLUSTER-TICKET-ERROR
+// ---------------------------------------------------------------------------
+
+func TestClusterService_GenerateLoginTicket_distinguishesOfflineFromMissing(t *testing.T) {
+	_, database := newClusterTestService(t)
+	service := NewClusterService(database, "")
+	now := time.Now()
+	hash := sha256.Sum256([]byte("lb_cluster_offline"))
+	hexHash := hex.EncodeToString(hash[:])
+	mustExec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := database.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 7：已批准但从未上报（last_seen NULL）；8：已批准但凭据缺失；
+	// 9：未批准且在线。
+	mustExec(`INSERT INTO nodes (id,name,ip_address,port,is_approved,cluster_token_hash,last_seen) VALUES (7,'never-reported','10.0.0.7',8000,1,?,NULL)`, hexHash)
+	mustExec(`INSERT INTO nodes (id,name,ip_address,port,is_approved,cluster_token_hash,last_seen) VALUES (8,'no-credential','10.0.0.8',8000,1,'',datetime('now'))`)
+	mustExec(`INSERT INTO nodes (id,name,ip_address,port,is_approved,cluster_token_hash,last_seen) VALUES (9,'not-approved','10.0.0.9',8000,0,?,datetime('now'))`, hexHash)
+
+	claims := func(nodeID int) models.ClusterLoginTicketClaims {
+		return models.ClusterLoginTicketClaims{UserID: 1, Username: "admin", NodeID: nodeID}
+	}
+	if _, err := service.GenerateLoginTicket(context.Background(), claims(7), now); !errors.Is(err, ErrNodeOffline) {
+		t.Fatalf("approved-never-reported error=%v, want ErrNodeOffline", err)
+	}
+	if _, err := service.GenerateLoginTicket(context.Background(), claims(8), now); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("missing-credential error=%v, want ErrNodeNotFound (keyHash empty keeps 404)", err)
+	}
+	if _, err := service.GenerateLoginTicket(context.Background(), claims(9), now); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("not-approved error=%v, want ErrNodeNotFound", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// L02-05 / RG-CLUSTER-STATUS-RESET
+// ---------------------------------------------------------------------------
+
+func TestClusterService_BecomeSlave_resetsLastSync(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET last_sync=datetime('now'), applied_version=7 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewClusterService(database, "")
+	if err := service.BecomeSlave(context.Background(), "https://master.example", models.ClusterRegistration{RegistrationID: 9, RegistrationSecret: "secret"}); err != nil {
+		t.Fatalf("become slave: %v", err)
+	}
+	var lastSync sql.NullTime
+	var appliedVersion int
+	if err := database.QueryRow("SELECT last_sync, COALESCE(applied_version,0) FROM global_config WHERE id=1").Scan(&lastSync, &appliedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if lastSync.Valid {
+		t.Fatalf("last_sync=%v after demote, want NULL", lastSync.Time)
+	}
+	if appliedVersion != 0 {
+		t.Fatalf("applied_version=%d after demote, want 0", appliedVersion)
+	}
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastSyncAt != "" {
+		t.Fatalf("status last_sync_at=%q after demote, want empty", status.LastSyncAt)
+	}
+}

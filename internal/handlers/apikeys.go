@@ -57,16 +57,22 @@ func purgeAllAPIKeyWhitelistCache() {
 	}
 }
 
+// apiKeyListColumns API Key 列表查询的列清单（U07-F12 单一事实源：两处
+// handler 共用，新增列只改一处）。
+const apiKeyListColumns = `k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled,
+	k.mcp_enabled, k.read_only, COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username`
+
+// queryAPIKeys 按可选 WHERE 片段查询 API Key 列表（扫描仍走 scanAPIKeys）。
+func queryAPIKeys(where string, args ...any) (*sql.Rows, error) {
+	return db.DB.Query(`SELECT `+apiKeyListColumns+`
+		FROM api_keys k
+		JOIN users u ON k.created_by = u.id `+where+`
+		ORDER BY k.id`, args...)
+}
+
 func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 	userID := int(contextUserID(c))
-	rows, err := db.DB.Query(`
-		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled,
-		       k.mcp_enabled, k.read_only, COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username
-		FROM api_keys k
-		JOIN users u ON k.created_by = u.id
-		WHERE k.created_by = ?
-		ORDER BY k.id
-	`, userID)
+	rows, err := queryAPIKeys("WHERE k.created_by = ?", userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
@@ -283,13 +289,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 }
 
 func (h *Handlers) ListAPIKeys(c *gin.Context) {
-	rows, err := db.DB.Query(`
-		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled,
-		       k.mcp_enabled, k.read_only, COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username
-		FROM api_keys k
-		JOIN users u ON k.created_by = u.id
-		ORDER BY k.id
-	`)
+	rows, err := queryAPIKeys("")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return

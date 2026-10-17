@@ -248,7 +248,7 @@ type UpdateSecurityPolicyRequest struct {
 
 // SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：
 // 仅携带大屏渲染富化字段；攻击族经 categorizeAttack 后端单源归因（前端零复制
-// 家族逻辑），原始 rule_triggered/rule_msg 不下发。
+// 家族逻辑），同时下发 trigger_type 与 rule_triggered；rule_msg 不下发。
 type SecurityEventFeedItem struct {
 	ID         int    `json:"id"`
 	EventTime  string `json:"event_time"`
@@ -467,21 +467,6 @@ func ValidBlockPageContentType(contentType string) bool {
 		}
 	}
 	return false
-}
-
-// IPList 是可复用 IP 地址列表（security_ip_lists 行）：entries 为
-// IPListEntry 对象数组的 JSON 文本；策略经 ip_acl_list_refs /
-// ip_whitelist_refs 以 id 引用，生成期展开为 inline ∪ 引用条目。
-type IPList struct {
-	ID          int             `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Category    string          `json:"category"`
-	Entries     json.RawMessage `json:"entries"`
-	CreatedBy   int             `json:"created_by"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedBy   int             `json:"updated_by"`
-	UpdatedAt   string          `json:"updated_at"`
 }
 
 // IPListEntry 是 IP 地址列表的单个条目：value 必须是合法的 IP 或 CIDR

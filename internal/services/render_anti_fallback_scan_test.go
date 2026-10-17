@@ -17,6 +17,8 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +39,7 @@ var antiFallbackScanTargets = map[string][]string{
 		"buildRateLimitHandler",
 		"buildBlockPageAttributionRoute",
 		"buildBlockPageErrorRoute",
+		"buildStaticResponseHandler",
 	},
 	"security.go": {
 		"BuildCorazaDirectives",
@@ -78,6 +81,11 @@ var antiFallbackAllowlist = map[string]map[string]string{
 	"buildBlockPageErrorRoute": {
 		"statusCode = 403": "block_status_code=0→403：同 buildBlockPageAttributionRoute（类型②省略型）——批 3 Ruling 披露",
 	},
+	// U12-F09（第 78 轮）覆盖面扫描新发现：路径规则 static_response 的状态码
+	// 缺省形态（写侧允许 0=未配置，声明默认 200；空字符串守卫不在扫描命中面）。
+	"buildStaticResponseHandler": {
+		"status = 200": "path rule ResponseStatus=0→200：类型②省略型（写侧允许 0=未配置并声明默认），非无效库值兜底——U12-F09 Ruling 披露",
+	},
 	"buildIPPrecheckDirectives": {
 		"denyStatus = 403": "阶段 1 预检 denyStatus=0→403：类型②省略型（0=规则未配阶段 1 拦截页，stage1BlockStatus 契约的未设置态；coraza deny 必须显式状态码，省略以默认 403 替换实现，保持 403 兜底归因边界）——批 3 Ruling 披露",
 	},
@@ -102,62 +110,9 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 				continue
 			}
 			scanned[fn.Name.Name] = true
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				ifStmt, ok := n.(*ast.IfStmt)
-				if !ok {
-					return true
-				}
-				// G3：零值守卫条件含 GTR（`x > 0 {…} else {兜底}` 形态的尾 else）。
-				bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
-				if !ok || (bin.Op != token.EQL && bin.Op != token.LEQ && bin.Op != token.GTR) {
-					return true
-				}
-				lit, ok := bin.Y.(*ast.BasicLit)
-				if !ok || lit.Kind != token.INT || lit.Value != "0" {
-					return true
-				}
-				scanAssigns := func(branch ast.Node) {
-					ast.Inspect(branch, func(m ast.Node) bool {
-						assign, ok := m.(*ast.AssignStmt)
-						// G3：仅 plain `=`（:= 定义与 += 累加非兜底赋值）。
-						if !ok || assign.Tok != token.ASSIGN {
-							return true
-						}
-						for _, rhs := range assign.Rhs {
-							// G3：STRING 字面量兜底（"5s"/"250ms" 形态）与 INT 同罪。
-							if num, ok := rhs.(*ast.BasicLit); ok && (num.Kind == token.INT || num.Kind == token.STRING) {
-								var buf bytes.Buffer
-								_ = printer.Fprint(&buf, fset, assign)
-								violations[fn.Name.Name+":"+buf.String()] = fset.Position(assign.Pos()).String()
-								break
-							}
-						}
-						return true
-					})
-				}
-				scanAssigns(ifStmt.Body)
-				// G3：else 链纳入命中面——逐级 else-if 体（同为零值守卫时）+
-				// 终端 else 块（外层守卫的反向兜底形态）。
-				els := ifStmt.Else
-				for els != nil {
-					switch e := els.(type) {
-					case *ast.BlockStmt:
-						scanAssigns(e)
-						els = nil
-					case *ast.IfStmt:
-						if ebin, ok := e.Cond.(*ast.BinaryExpr); ok {
-							if elit, ok := ebin.Y.(*ast.BasicLit); ok && elit.Kind == token.INT && elit.Value == "0" &&
-								(ebin.Op == token.EQL || ebin.Op == token.LEQ || ebin.Op == token.GTR) {
-								scanAssigns(e.Body)
-							}
-						}
-						els = e.Else
-					default:
-						els = nil
-					}
-				}
-				return true
-			})
+			for assign, pos := range fallbackAssignmentsInFunction(fset, fn) {
+				violations[fn.Name.Name+":"+assign] = pos
+			}
 		}
 	}
 
@@ -190,6 +145,123 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 			}
 		}
 	}
+
+	// 方向三（U12-F09）：扫描包内全部非测试 .go——渲染族命名函数若出现兜底
+	// 形态却未登记 antiFallbackScanTargets，说明新增渲染文件/函数绕过了扫描面。
+	listed := map[string]bool{}
+	for fileName, functions := range antiFallbackScanTargets {
+		for _, name := range functions {
+			listed[fileName+"|"+name] = true
+		}
+	}
+	goFiles, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob package sources: %v", err)
+	}
+	for _, path := range goFiles {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || !isRenderFamilyFunction(fn.Name.Name) {
+				continue
+			}
+			if listed[path+"|"+fn.Name.Name] {
+				continue
+			}
+			for assign, pos := range fallbackAssignmentsInFunction(fset, fn) {
+				t.Errorf("渲染族函数 %s（%s）含兜底 %q（%s）但未登记 antiFallbackScanTargets——新增渲染函数必须纳入扫描面或携 Ruling 说明非渲染用途", fn.Name.Name, path, assign, pos)
+			}
+		}
+	}
+}
+
+// fallbackAssignmentsInFunction 扫描函数体内的「零值守卫 + 字面量赋值」兜底
+// 形态（G3 形状：INT/STRING 字面量、plain `=`、else 链纳入），返回
+// 赋值文本 → 位置。
+func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[string]string {
+	hits := map[string]string{}
+	if fn.Body == nil {
+		return hits
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ifStmt, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		// G3：零值守卫条件含 GTR（`x > 0 {…} else {兜底}` 形态的尾 else）。
+		bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
+		if !ok || (bin.Op != token.EQL && bin.Op != token.LEQ && bin.Op != token.GTR) {
+			return true
+		}
+		lit, ok := bin.Y.(*ast.BasicLit)
+		if !ok || lit.Kind != token.INT || lit.Value != "0" {
+			return true
+		}
+		scanAssigns := func(branch ast.Node) {
+			ast.Inspect(branch, func(m ast.Node) bool {
+				assign, ok := m.(*ast.AssignStmt)
+				// G3：仅 plain `=`（:= 定义与 += 累加非兜底赋值）。
+				if !ok || assign.Tok != token.ASSIGN {
+					return true
+				}
+				for _, rhs := range assign.Rhs {
+					// G3：STRING 字面量兜底（"5s"/"250ms" 形态）与 INT 同罪。
+					if num, ok := rhs.(*ast.BasicLit); ok && (num.Kind == token.INT || num.Kind == token.STRING) {
+						var buf bytes.Buffer
+						_ = printer.Fprint(&buf, fset, assign)
+						hits[buf.String()] = fset.Position(assign.Pos()).String()
+						break
+					}
+				}
+				return true
+			})
+		}
+		scanAssigns(ifStmt.Body)
+		// G3：else 链纳入命中面——逐级 else-if 体（同为零值守卫时）+
+		// 终端 else 块（外层守卫的反向兜底形态）。
+		els := ifStmt.Else
+		for els != nil {
+			switch e := els.(type) {
+			case *ast.BlockStmt:
+				scanAssigns(e)
+				els = nil
+			case *ast.IfStmt:
+				if ebin, ok := e.Cond.(*ast.BinaryExpr); ok {
+					if elit, ok := ebin.Y.(*ast.BasicLit); ok && elit.Kind == token.INT && elit.Value == "0" &&
+						(ebin.Op == token.EQL || ebin.Op == token.LEQ || ebin.Op == token.GTR) {
+						scanAssigns(e.Body)
+					}
+				}
+				els = e.Else
+			default:
+				els = nil
+			}
+		}
+		return true
+	})
+	return hits
+}
+
+// isRenderFamilyFunction 按命名识别渲染族函数（U12-F09 覆盖面扫描）：
+// build*/generate*/emit*/resolve*/format* 前缀，或 Handler/Directives/Route 后缀。
+func isRenderFamilyFunction(name string) bool {
+	for _, prefix := range []string{"build", "Build", "generate", "Generate", "emit", "Emit", "resolve", "Resolve", "format", "Format"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	for _, suffix := range []string{"Handler", "Directives", "Route"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitScanKey(key string) (string, string) {

@@ -48,7 +48,7 @@ func TestBuildRateLimitErrorRoute_usesPageContentType(t *testing.T) {
 }
 
 func TestBuildBlockPageAttributionRoute_usesPageContentType(t *testing.T) {
-	route := buildBlockPageAttributionRoute(483, "{\"error\":\"blocked\"}", 403, "text/plain; charset=utf-8")
+	route := buildBlockPageAttributionRoute(483, nil, "{\"error\":\"blocked\"}", 403, "text/plain; charset=utf-8")
 	if got := errorRouteContentType(t, route); got != "text/plain; charset=utf-8" {
 		t.Fatalf("Content-Type=%q, want text/plain; charset=utf-8", got)
 	}

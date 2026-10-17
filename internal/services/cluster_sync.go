@@ -52,6 +52,17 @@ type syncFailure struct {
 	err  error
 }
 
+// syncApplyGuard 是 Pull 在 admission 前复核通过的角色/凭据快照；applySnapshot
+// 在事务内二次复核同一三元组（L02-01，第 78 轮）：即使 Promote 在「复核通过 →
+// 事务开启」之间翻转角色，旧拉取也不得把从节点数据写回已升主的库。
+type syncApplyGuard struct {
+	MasterURL string
+	Token     string
+}
+
+// errSyncApplyRoleChanged 表示快照应用窗口内角色/主节点凭据已变更。
+var errSyncApplyRoleChanged = errors.New("同步角色或主节点凭据已变更，拒绝应用快照")
+
 func (failure *syncFailure) Error() string { return failure.err.Error() }
 func (failure *syncFailure) Unwrap() error { return failure.err }
 
@@ -94,10 +105,6 @@ func (err *SnapshotSchemaTooNewError) Error() string {
 }
 
 type SyncService struct {
-	// F65:lastSyncNoChange 跟踪上次 sync 是否 304(无变化)——仅首次
-	// 304(从有变化→无变化的转换)写三类库「无变化」日志,后续连续 304
-	// 静默(避免每 sync_interval 刷屏)。
-	lastSyncNoChange       bool
 	db                     *sql.DB
 	cfg                    *config.Config
 	caddy                  *CaddyService
@@ -126,7 +133,13 @@ type SyncService struct {
 	beforeBeginPull        func()
 	afterStopAdmission     func()
 	beforeApplySnapshot    func()
+	beforeApplyWrite       func()
 	beforeRecordSyncStatus func()
+	// applyGuard 记录本次拉取在 admission 前复核通过的角色/凭据快照：
+	// applySnapshot 在事务内二次复核（L02-01），覆盖「复核通过 → 事务开启」
+	// 之间角色被 Promote 翻转的窗口。零值=直接调用 applySnapshot 的测试路径，
+	// 跳过复核（生产唯一调用方 Pull 恒填充）。
+	applyGuard syncApplyGuard
 	// wafRepullFailures 记录 WAF 文件兜底重拉的连续未收敛轮数（内存态，
 	// atomic.Int32：常规读写发生在 Pull 的 pullMu 临界区内；startLocked/Stop
 	// 的清零复位不持 pullMu，与 Halted 态手动 Pull 的临界区无共同互斥锁，
@@ -150,10 +163,11 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 			if cfg != nil {
 				dataDir = cfg.DataDir
 			}
-			return NewClusterService(database, nil, dataDir)
+			return NewClusterService(database, dataDir)
 		}(),
 	}
 	service.initClusterClient()
+	registerSyncDrainer(service)
 	return service
 }
 
@@ -550,6 +564,55 @@ func (s *SyncService) Stop() {
 	}
 }
 
+// syncDrainers 按数据库句柄登记同步服务实例，供 ClusterService.Promote 在
+// 角色翻转前显式排干在途拉取（L02-01）。用 *sql.DB 作键隔离测试实例
+// （每个夹具独立库），避免全局单例被跨测试覆盖。
+var (
+	syncDrainersMu sync.Mutex
+	syncDrainers   = map[*sql.DB]*SyncService{}
+)
+
+func registerSyncDrainer(service *SyncService) {
+	if service == nil || service.db == nil {
+		return
+	}
+	syncDrainersMu.Lock()
+	syncDrainers[service.db] = service
+	syncDrainersMu.Unlock()
+}
+
+func syncDrainerFor(database *sql.DB) *SyncService {
+	if database == nil {
+		return nil
+	}
+	syncDrainersMu.Lock()
+	service := syncDrainers[database]
+	syncDrainersMu.Unlock()
+	return service
+}
+
+// DrainPulls 停止拉取准入并把在途 Pull 等到落定（含已通过 admission 的
+// apply 临界区）。Promote 在提交主节点态之前调用：engine.StopLoop 只取消
+// daemon ctx、daemon 的 Stop 在另一 goroutine 异步执行，不显式排干则旧拉取
+// 可能在升主提交后继续把从节点数据写回库（L02-01/RG-CLUSTER-PROMOTE-DRAIN）。
+// ctx 到期返回其错误（调用方中止提升，不做半程角色翻转）。
+func (s *SyncService) DrainPulls(ctx context.Context) error {
+	s.pullAdmissionMu.Lock()
+	s.pullsStopped = true
+	s.pullAdmissionMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		s.pullWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, req models.ClusterRegisterRequest) (models.ClusterRegistration, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -669,10 +732,10 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			if s.beforeRecordSyncStatus != nil {
 				s.beforeRecordSyncStatus()
 			}
-			// 本周期 apply 成功但 Caddy 重载失败时 applySnapshot 已写入
-			// apply_ok_reload_failed 标记；成功路径直接清空会让 304 分支的
+			// 本周期 apply 成功但后置副作用失败（Caddy 重载/品牌落盘）时
+			// applySnapshot 已写入对应补偿标记；成功路径直接清空会让 304 分支的
 			// 标记检测同周期失效。真实拉取错误仍覆盖写入。
-			if err == nil && s.syncReloadFailureMarkerPresent(ctx) {
+			if err == nil && s.syncPostCommitFailureMarkerPresent(ctx) {
 				return
 			}
 			// WAF 兜底重拉轮：applySnapshot 已清空 last_sync_error，但安全
@@ -723,20 +786,22 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// 需要全量重拉以补偿重试（不能靠 304 跳过期瞒）。
 			var lastSyncErr string
 			if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err == nil {
-				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
+				if msg, _ := decodeSyncError(lastSyncErr); syncPostCommitMarkerPrefix(msg) != "" {
 					// R72 二十七次 N4：补偿重拉节流（与 WAF 兜底重拉同款）——
-					// 持续失败 5 轮后降频为每 10 轮一次，避免 Caddy 持续故障时
-					// 每周期全量重拉打主从负载；last_sync_error 中的 marker 保持
-					// 可见（节点页面），恢复后首轮重拉成功即自愈。
+					// 持续失败 5 轮后降频为每 10 轮一次，避免后置副作用持续
+					// 故障时每周期全量重拉打主从负载；last_sync_error 中的
+					// marker 保持可见（节点页面），恢复后首轮重拉成功即自愈。
+					// U05-F03：品牌落盘失败（apply_ok_branding_failed）与重载
+					// 失败共用本补偿通道与退避计数器。
 					failures := s.reloadRepullFailures.Add(1)
 					if failures == wafRepullMaxFailures {
-						Logf("error", "同步应用后 Caddy 重载持续失败（已连续 %d 轮），补偿全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
+						Logf("error", "同步应用后后置操作持续失败（已连续 %d 轮，重载/品牌落盘），补偿全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
 					}
 					if !backoffDue(failures) {
 						// 降频期：本轮跳过补偿重拉，走 304 返回（marker 保持可见）。
 					} else {
-						Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
-						RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置漂移，已改为全量拉取"), "")
+						Logf("warn", "检测到上次同步应用后后置操作失败（%s），全量重拉补偿重试", lastSyncErr)
+						RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后后置操作失败", "配置无变化但后置副作用未完成，已改为全量拉取"), "")
 						resp.Body.Close()
 						sinceVersion, sinceFingerprint = 0, ""
 						continue
@@ -756,7 +821,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// 显式比对，否则从节点安全数据随主节点配置静默永久分叉。兜底重拉
 			// 带连续失败计数（F-1）：持续失败时上表面到 last_sync_error 并把
 			// 重拉降频，避免每 60s 无限循环打主从负载。
-			if s.wafFilesDrifted(ctx) {
+			if s.trackWafRepullConvergence(ctx) {
 				failures := s.wafRepullFailures.Add(1)
 				if failures == wafRepullMaxFailures {
 					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛；若主节点本就无该组件数据则属预期形态，从节点残留文件不会被同步删除——CL9-N3），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
@@ -777,18 +842,8 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
-		// F65:首次 304(上次有变化本次无变化)时写三类库「无变化」日志——
-		// 与主节点 scheduled update 的 unchanged 日志同构;后续连续 304 静默
-		if !s.lastSyncNoChange {
-			WriteCRSUpdateLog("INFO", "unchanged", "集群同步检查完成，CRS 规则库与主节点一致，无需同步")
-			WriteIP2RegionUpdateLog("INFO", "unchanged", "集群同步检查完成，IP2Region 库与主节点一致，无需同步")
-			AppendThreatUpdateLog("INFO", "unchanged", "集群同步检查完成，威胁情报库与主节点一致，无需同步")
-			s.lastSyncNoChange = true
-		}
 		return SyncResult{AppliedVersion: appliedVersion}, nil
 	}
-	// 有变化:清除 no-change 标记(下次 304 会重新记录转换)
-	s.lastSyncNoChange = false
 	// 未跟随的重定向(跨主机):给可行动错误,而非让空 body 落进 JSON 解析报
 	//「unexpected end of JSON input」(2026-09-18 用户实测踩坑)
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -819,8 +874,10 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("重读同步状态: %w", err))
 	}
 	if isMaster || currentMasterURL != masterURL || currentToken != token {
-		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("同步角色或主节点凭据已变更，拒绝应用快照"))
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errSyncApplyRoleChanged)
 	}
+	// L02-01：记录复核通过的守卫三元组，applySnapshot 在事务内二次复核。
+	s.applyGuard = syncApplyGuard{MasterURL: currentMasterURL, Token: currentToken}
 	verifiedSnapshot, err := verifiedSnapshotIntegrity(snapshot, token, appliedVersion)
 	if err != nil {
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", snapshot.Version), err.Error()), "")
@@ -845,6 +902,11 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		// ValidationFailed 落库会覆盖 apply_ok_reload_failed 标记（标记必须跨停机
 		// 存活才能触发 304 补偿重拉）。
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errSyncPullStopped)
+	}
+	// 测试缝：admission 已通过、进入 apply 之前的阻塞点（L02-01 Promote 排干
+	// 语义用例——此处无事务在手，Promote 若不排干会先返回）。
+	if s.beforeApplyWrite != nil {
+		s.beforeApplyWrite()
 	}
 	if err := s.applySnapshot(ctx, snapshot); err != nil {
 		s.pullApplyMu.Unlock()
@@ -920,13 +982,46 @@ func (s *SyncService) wafRepullPersistentlyFailed() bool {
 	return s.wafRepullFailures.Load() >= wafRepullMaxFailures
 }
 
-// trackWafRepullConvergence 在快照成功应用后核对 WAF 文件态：已收敛则清零
-// 连续失败计数，恢复正常兜底重拉频率与 last_sync_error 语义。仅 Pull 的
+// wafRepullFailureMessagePrefix 是「安全数据持续同步失败」上表面文案的前缀：
+// 计数清零时必须同时剥离该文案（U05-F02），否则运营方手工修复文件后错误永驻。
+const wafRepullFailureMessagePrefix = "安全数据持续同步失败"
+
+// trackWafRepullConvergence 核对 WAF 文件态是否已收敛（本地文件 == 已应用
+// 文件态记账），返回 drifted。未漂移时清零连续失败计数并清空 last_sync_error
+// 中的 WAF 专项文案——304 分支（运营方手工修复文件后主节点无变更）与 apply
+// 成功路径共用本单源（U05-F02/RG-CLUSTER-WAF-REPULL-RESET）。仅 Pull 的
 // pullMu 临界区内调用。
-func (s *SyncService) trackWafRepullConvergence(ctx context.Context) {
-	if !s.wafFilesDrifted(ctx) {
-		s.wafRepullFailures.Store(0)
+func (s *SyncService) trackWafRepullConvergence(ctx context.Context) bool {
+	if s.wafFilesDrifted(ctx) {
+		return true
 	}
+	s.wafRepullFailures.Store(0)
+	s.clearWafRepullFailureMessage(ctx)
+	return false
+}
+
+// clearWafRepullFailureMessage 从 last_sync_error 中剥离 WAF 专项文案：
+// · 仅 WAF 文案 → 整体清空；
+// · 与 apply_ok_reload_failed 标记组合（"marker | 同步失败（已连续 N 次）: …"）
+//
+//	→ 只保留标记段，标记的补偿重拉语义不受影响。
+func (s *SyncService) clearWafRepullFailureMessage(ctx context.Context) {
+	var stored string
+	if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil || stored == "" {
+		return
+	}
+	msg, _ := decodeSyncError(stored)
+	if !strings.Contains(msg, wafRepullFailureMessagePrefix) {
+		return
+	}
+	if idx := strings.Index(msg, " | "); idx >= 0 {
+		head := msg[:idx]
+		if syncPostCommitMarkerPrefix(head) != "" {
+			s.persistSyncError(ctx, head, models.SyncErrorCodeApplyFailed)
+			return
+		}
+	}
+	s.persistSyncError(ctx, "", "")
 }
 
 // trackReloadRepullConvergence（R72 二十七次 N4）：快照成功应用且重载成功
@@ -1090,6 +1185,11 @@ func decodeSyncError(stored string) (string, models.SyncErrorCode) {
 // 清空 last_sync_error 前必须保留该标记到下周期。
 const syncReloadFailureMarkerPrefix = "apply_ok_reload_failed"
 
+// syncBrandingFailureMarkerPrefix 标记「快照已提交但品牌配置文件未落盘」：
+// 与 apply_ok_reload_failed 同族——304 分支识别后全量重拉，让 apply 在下一轮
+// 重试品牌落盘；成功路径（事务内 last_sync_error=”）自动清除（U05-F03）。
+const syncBrandingFailureMarkerPrefix = "apply_ok_branding_failed"
+
 // MarkStartupFallbackPending 在启动 last-good 回退成功后写入与 applySnapshot
 // 同语义的 apply_ok_reload_failed 补偿标记（裁定 2026-09-07 K1）：Pull 的 304
 // 分支识别该标记后全量重拉，使从节点在主节点无变更时也能收敛到 DB 最新渲染，
@@ -1132,19 +1232,55 @@ const (
 	syncFailureCountSuffix = " 次）"
 )
 
-// syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
-// R72 三十次 F4（cluster 审计 F-2 同证）：读侧也用 WithoutCancel——Stop 的
+// syncPostCommitMarkerPrefixes 是「快照事务已提交但后置副作用失败」的可重试
+// 标记族（U05-F03 起含品牌落盘）：两者都要求 304 分支全量重拉补偿，且都
+// 必须跨停机/跨周期存活到下一次成功。
+var syncPostCommitMarkerPrefixes = []string{syncReloadFailureMarkerPrefix, syncBrandingFailureMarkerPrefix}
+
+// syncPostCommitMarkerPrefix 返回消息命中的后置副作用标记前缀（无则空串）。
+func syncPostCommitMarkerPrefix(message string) string {
+	for _, prefix := range syncPostCommitMarkerPrefixes {
+		if strings.HasPrefix(message, prefix) {
+			return prefix
+		}
+	}
+	return ""
+}
+
+// syncMarkerPresent 报告 last_sync_error 是否携带指定后置副作用标记。
+// R72 三十次 F4（cluster 审计 F-2 同证）：读侧用 WithoutCancel——Stop 的
 // cancel 在 apply 提交与 defer 检查之间到达时，可取消 ctx 会读失败 → 成功清除
 // defer 误判「标记不存在」→ 跳过清除 → 标记存活（正确语义）；但若标记刚被
 // persistSyncError（WithoutCancel）写入，可取消读也会失败 → 误删刚写的标记。
 // 与写侧（persistSyncError WithoutCancel）对齐。
-func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
+func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool {
 	var stored string
 	if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
 		return false
 	}
 	msg, _ := decodeSyncError(stored)
-	return strings.HasPrefix(msg, syncReloadFailureMarkerPrefix)
+	return strings.HasPrefix(msg, prefix)
+}
+
+// syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
+func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
+	return s.syncMarkerPresent(ctx, syncReloadFailureMarkerPrefix)
+}
+
+// syncBrandingFailureMarkerPresent 报告 last_sync_error 当前是否携带品牌落盘
+// 失败标记（U05-F03）。
+func (s *SyncService) syncBrandingFailureMarkerPresent(ctx context.Context) bool {
+	return s.syncMarkerPresent(ctx, syncBrandingFailureMarkerPrefix)
+}
+
+// syncPostCommitFailureMarkerPresent 报告是否存在任一后置副作用失败标记。
+func (s *SyncService) syncPostCommitFailureMarkerPresent(ctx context.Context) bool {
+	for _, prefix := range syncPostCommitMarkerPrefixes {
+		if s.syncMarkerPresent(ctx, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SyncService) persistSyncError(ctx context.Context, message string, code models.SyncErrorCode) {
@@ -1177,9 +1313,9 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		code = models.SyncErrorCodeTransportError
 	}
 	if msg == "" {
-		// 成功路径不得清掉 apply_ok_reload_failed 标记：它必须在下一周期
-		// 304 分支触发全量重拉补偿（run 循环已在调用点跳过，此处兜底）。
-		if s.syncReloadFailureMarkerPresent(ctx) {
+		// 成功路径不得清掉后置副作用失败标记（Caddy 重载/品牌落盘）：它们必须在
+		// 下一周期 304 分支触发全量重拉补偿（run 循环已在调用点跳过，此处兜底）。
+		if s.syncPostCommitFailureMarkerPresent(ctx) {
 			return
 		}
 		// 安全数据持续同步失败期间（连续 ≥wafRepullMaxFailures 轮未收敛）：
@@ -1212,7 +1348,7 @@ func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message str
 			// 自愈类错误不得覆盖重载失败标记：标记是全量重拉补偿的唯一触发器，
 			// 覆盖后下一周期 304 将跳过补偿，陈旧运行配置保持到下次真实变更。
 			// 组合只保留首个失败原因 + 计数。
-			if storedMsg, _ := decodeSyncError(stored); strings.HasPrefix(storedMsg, syncReloadFailureMarkerPrefix) {
+			if storedMsg, _ := decodeSyncError(stored); syncPostCommitMarkerPrefix(storedMsg) != "" {
 				message = combineSyncErrorWithMarker(storedMsg, message)
 			}
 		}
@@ -1242,14 +1378,18 @@ func syncErrorPreservesReloadMarker(code models.SyncErrorCode) bool {
 // 首个失败原因（按 " | " 切分取第一段，丢弃历史累加的传输错误部分），传输错误以
 // 「已连续 N 次」计数表示（旧消息已含计数则递增），消息长度因此有界。
 func combineSyncErrorWithMarker(storedMsg, newMsg string) string {
+	prefix := syncPostCommitMarkerPrefix(storedMsg)
+	if prefix == "" {
+		return newMsg
+	}
 	markerSegment := storedMsg
 	if idx := strings.Index(storedMsg, " | "); idx >= 0 {
 		markerSegment = storedMsg[:idx]
 	}
-	reason := strings.TrimSpace(strings.TrimPrefix(markerSegment, syncReloadFailureMarkerPrefix))
+	reason := strings.TrimSpace(strings.TrimPrefix(markerSegment, prefix))
 	reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
 	count := syncFailureCountIn(storedMsg) + 1
-	return syncReloadFailureMarkerPrefix + ": " + reason + " | " + syncFailureCountPrefix + strconv.Itoa(count) + syncFailureCountSuffix + ": " + newMsg
+	return prefix + ": " + reason + " | " + syncFailureCountPrefix + strconv.Itoa(count) + syncFailureCountSuffix + ": " + newMsg
 }
 
 // syncFailureCountIn 从旧消息解析「已连续 N 次」计数；消息不含计数片段时返回 0。
@@ -1467,7 +1607,7 @@ func (s *SyncService) run(ctx context.Context) {
 			// R32-2 收敛单写），周期末不再重复写；reportErr 仅在 pullErr 为空时
 			// 参与落库，此处跳过无信息损失。
 			if pullErr == nil {
-				if reportErr != nil || !s.syncReloadFailureMarkerPresent(ctx) {
+				if reportErr != nil || !s.syncPostCommitFailureMarkerPresent(ctx) {
 					s.recordSyncError(ctx, nil, reportErr)
 				}
 			}

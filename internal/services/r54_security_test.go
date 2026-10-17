@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/models"
 )
 
 // TestNormalizeLegacySecurityPolicyEnums_slaveNormalizesLocally_whenSyncSecurityOff
@@ -246,49 +245,6 @@ func TestCRSUpdateRun_successRemovesStockBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(crsTransientPath(m.crsDir, "crs-setup.stock.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("crs-setup.stock.conf.bak should be removed after a successful update")
-	}
-}
-
-// TestClusterService_BecomeSlave_stopsUpdateSchedulers 验证 R54-N5：节点降级
-// 注册进另一集群时，CRS/IP2Region 自动更新调度器一并停止（与 Promote 侧
-// SetMasterRole(true) 对称）——否则已越过 is_master 守卫的 tick 会在从节点
-// 上继续执行更新，瞬时打破从节点只读不变量。
-func TestClusterService_BecomeSlave_stopsUpdateSchedulers(t *testing.T) {
-	// Given 主节点上运行中的 CRS/IP2Region 自动更新调度器
-	service, _ := newClusterTestService(t)
-	InitCRSUpdateManager(func() error { return nil })
-	t.Cleanup(ResetCRSUpdateManagerForTest)
-	InitIP2RegionUpdateManager(func() error { return nil })
-	t.Cleanup(ResetIP2RegionUpdateManagerForTest)
-	crsManager := GetCRSUpdateManager()
-	ip2regionMgr := GetIP2RegionUpdateManager()
-	crsManager.SetMasterRole(true)
-	ip2regionMgr.SetMasterRole(true)
-	crsSchedulerOn := func() bool {
-		crsManager.schedulerMu.Lock()
-		defer crsManager.schedulerMu.Unlock()
-		return crsManager.schedulerStop != nil
-	}
-	ip2regionSchedulerOn := func() bool {
-		ip2regionMgr.schedulerMu.Lock()
-		defer ip2regionMgr.schedulerMu.Unlock()
-		return ip2regionMgr.schedulerStop != nil
-	}
-	if !crsSchedulerOn() || !ip2regionSchedulerOn() {
-		t.Fatal("given: schedulers must be running on the master")
-	}
-
-	// When 节点降级注册进另一集群
-	if err := service.BecomeSlave(context.Background(), "https://master.example", models.ClusterRegistration{RegistrationID: 9, RegistrationSecret: "secret"}); err != nil {
-		t.Fatalf("become slave: %v", err)
-	}
-
-	// Then 两个自动更新调度器都停止
-	if crsSchedulerOn() {
-		t.Fatal("CRS scheduler must stop when the node becomes a slave")
-	}
-	if ip2regionSchedulerOn() {
-		t.Fatal("IP2Region scheduler must stop when the node becomes a slave")
 	}
 }
 

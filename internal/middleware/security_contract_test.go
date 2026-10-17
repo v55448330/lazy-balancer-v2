@@ -226,3 +226,45 @@ func TestAuthenticationAuditLimiter_floodHardCap(t *testing.T) {
 		t.Fatalf("events size after refresh=%d, want 4096（既有键刷新不扩容）", size)
 	}
 }
+
+// 第 78 轮 U07-F06：认证态每请求回读 DB——禁用立即 401、角色取自 DB 而非
+// token claim（旧令牌提升权限必须失效）。
+func TestJWTAuth_disabledUserRejectedImmediately(t *testing.T) {
+	cfg, token := newJWTContractFixture(t, jwt.SigningMethodHS256, true)
+	if _, err := db.DB.Exec("UPDATE users SET is_enabled=0 WHERE id=41"); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "用户不存在或已禁用") {
+		t.Fatalf("status=%d body=%s, want 401 用户不存在或已禁用", rec.Code, rec.Body.String())
+	}
+}
+
+func TestJWTAuth_roleFromDBOverridesClaim(t *testing.T) {
+	cfg, _ := newJWTContractFixture(t, jwt.SigningMethodHS256, true)
+	// token 声称 admin，DB 仍是 user（fixture 写入 role='user'）。
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": 41, "username": "contract-user", "role": "admin", "pwd_ver": 0,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	admin := router.Group("/admin", adminOnly())
+	admin.GET("/ping", noContent)
+	req := httptest.NewRequest(http.MethodGet, "/admin/ping", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s, want 403 (role must come from DB, not the claim)", rec.Code, rec.Body.String())
+	}
+}

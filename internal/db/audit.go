@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"log"
@@ -113,22 +114,49 @@ var auditVocabularyRenames = []struct {
 	{"", "", "HTTPS 访问", "基础设置"},
 }
 
-// IsRetiredAuditVocabulary 判定 (action, resource) 字面量对是否命中归一表旧侧
-// （SEC-C-U1 ④，第 69 轮）：oldAction/oldResource 空串=该维度通配。写点字面量对
-// 命中即应改用规范名——词数门只查词数不查规范名，「IP2Region数据库」=2 词曾静默
-// 放行；注意归一表多为动作作用域条目（如 重载+Caddy配置→Caddy服务），裸资源名
-// 判定会误伤合法写点，必须成对判定。
-func IsRetiredAuditVocabulary(action, resource string) bool {
+// 归一表只服务于存量数据迁移（下方 migrateAuditVocabulary）。写点侧的口径：
+// 新事件必须使用规范名——audit_vocabulary_test.go 的词数门只查词数，规范名
+// 由 audit_vocabulary_migration_test.go 的字面量扫描看守（U12-F04：谓词
+// 生产零消费，导出已删除）。
+
+// U12-F05（第 78 轮）：归一化的一次性 marker。此前每次启动都无条件执行 30 条
+// UPDATE（16 条仅按 resource 命中且该列无索引），已收敛库每启动白跑一轮全表
+// 扫描/不动点循环。marker 存于审计库（归一对象在审计库内，生命周期随库文件
+// 一致），值为归一表指纹而非布尔——未来增删改名条目时指纹变化会自动重跑，
+// 不会因「已迁移」旗标而永久跳过新条目。
+const auditVocabularyMarkerName = "audit_vocabulary_migrated"
+
+const auditMigrationStateTable = `CREATE TABLE IF NOT EXISTS audit_migration_state (
+	name TEXT PRIMARY KEY,
+	fingerprint TEXT NOT NULL
+)`
+
+// auditVocabularyFingerprint 是归一表内容指纹（条目与两侧字段逐字节参与）。
+func auditVocabularyFingerprint() string {
+	var builder strings.Builder
 	for _, r := range auditVocabularyRenames {
-		if r.oldAction != "" && r.oldAction != action {
-			continue
-		}
-		if r.oldResource != "" && r.oldResource != resource {
-			continue
-		}
-		return true
+		builder.WriteString(r.oldAction)
+		builder.WriteByte(0)
+		builder.WriteString(r.newAction)
+		builder.WriteByte(0)
+		builder.WriteString(r.oldResource)
+		builder.WriteByte(0)
+		builder.WriteString(r.newResource)
+		builder.WriteByte('\n')
 	}
-	return false
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(builder.String())))
+}
+
+// auditVocabularyMigrated 报告 marker 是否已按当前指纹置位。
+func auditVocabularyMigrated(fingerprint string) bool {
+	var stored string
+	err := AuditDB.QueryRow(`SELECT fingerprint FROM audit_migration_state WHERE name=?`, auditVocabularyMarkerName).Scan(&stored)
+	if err != nil {
+		// 表缺失（首次启动）或行缺失都视为未迁移；真实读错误同样按未迁移处理，
+		// 迁移自身会再试并在失败时留日志（不阻断启动）。
+		return false
+	}
+	return stored == fingerprint
 }
 
 // CORE-U1（第 69 轮）：归一表存在链式条目（如 ("重载","Caddy 配置") 单趟只能
@@ -136,8 +164,20 @@ func IsRetiredAuditVocabulary(action, resource string) bool {
 // 循环需两次启动才收敛——循环至不动点（整趟零改动）使单次启动归一终态。
 // 趟数上限=条目数+1：无环表每趟严格推进，超限即未来编辑引入环，WARN 防御
 // 死循环（不改写结果，残留中间态词条下次启动继续收敛）。
+// U12-F05：marker 命中当前指纹时直接返回，零 UPDATE。
 func migrateAuditVocabulary() {
+	if AuditDB == nil {
+		return
+	}
+	fingerprint := auditVocabularyFingerprint()
+	if auditVocabularyMigrated(fingerprint) {
+		return
+	}
+	if _, err := AuditDB.Exec(auditMigrationStateTable); err != nil {
+		log.Printf("audit vocabulary migration marker unavailable (%v); running normalization anyway", err)
+	}
 	maxPasses := len(auditVocabularyRenames) + 1
+	failed := false
 	for range maxPasses {
 		changed := false
 		for _, r := range auditVocabularyRenames {
@@ -163,6 +203,7 @@ func migrateAuditVocabulary() {
 			res, err := AuditDB.Exec(query, append(setArgs, whereArgs...)...)
 			if err != nil {
 				log.Printf("audit vocabulary migration failed (%s): %v", query, err)
+				failed = true
 				continue
 			}
 			if n, _ := res.RowsAffected(); n > 0 {
@@ -171,6 +212,13 @@ func migrateAuditVocabulary() {
 			}
 		}
 		if !changed {
+			// 失败时不置位 marker——下次启动重试（残留中间态继续收敛）。
+			if !failed {
+				if _, err := AuditDB.Exec(`INSERT INTO audit_migration_state (name, fingerprint) VALUES (?, ?)
+					ON CONFLICT(name) DO UPDATE SET fingerprint=excluded.fingerprint`, auditVocabularyMarkerName, fingerprint); err != nil {
+					log.Printf("audit vocabulary migration marker write failed: %v", err)
+				}
+			}
 			return
 		}
 	}

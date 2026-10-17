@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/corazawaf/coraza/v3/types"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -110,4 +111,54 @@ func TestEngineGate_crawlerPassLogDetectedAction(t *testing.T) {
 		t.Errorf("豁免规则缺 pass,log + 放行 msg:\n%s", directives)
 	}
 	compileForEngineGate(t, directives)
+}
+
+// 第 78 轮 U14-16：伪装规则条件收敛到「本策略已勾选引擎」——头值携带引擎 ID
+// （与 Verified 对称），未勾选引擎的验证失败不得被本策略 deny。
+func TestGeoIPCrawlerSpoof_scopedToSelectedEngines(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		ID:                  7,
+		Name:                "scoped",
+		Mode:                "off",
+		PolicyType:          models.PolicyTypeStage1,
+		GeoIPMode:           "deny",
+		GeoIPCountries:      json.RawMessage(`["CN"]`),
+		GeoIPCrawlerExempt:  true,
+		GeoIPCrawlerEngines: json.RawMessage(`["googlebot"]`),
+	}
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 403, "lb_scoped"))
+	if !strings.Contains(directives, `@rx ^(?:googlebot)$`) {
+		t.Fatalf("spoof rule must match only the selected engine:\n%s", directives)
+	}
+	if strings.Contains(directives, `@eq 1`) {
+		t.Fatalf("global @eq 1 spoof rule must be gone:\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
+
+	waf := newPrecheckBehaviorWAF(t, directives)
+	run := func(spoof string) *types.Interruption {
+		tx := waf.NewTransaction()
+		defer func() { _ = tx.Close() }()
+		tx.ProcessConnection("198.51.100.7", 12345, "127.0.0.1", 443)
+		tx.ProcessURI("/", "GET", "HTTP/1.1")
+		tx.AddRequestHeader("X-LB-GeoIP-Loc", "中国")
+		tx.AddRequestHeader("X-LB-Crawler-Spoof", spoof)
+		return tx.ProcessRequestHeaders()
+	}
+	if it := run("googlebot"); it == nil {
+		t.Fatal("selected engine spoof must still be denied")
+	}
+	if it := run("bingbot"); it != nil {
+		t.Fatalf("unselected engine spoof must not be denied by this policy (status=%d)", it.Status)
+	}
+}
+
+// 第 78 轮 U14-05：渲染侧输出 crawler_exempt 门控字段（与绑定策略同源）。
+func TestBuildGeoipHandler_emitsCrawlerGate(t *testing.T) {
+	if h := buildGeoipHandler(true); h["crawler_exempt"] != true {
+		t.Fatalf("crawler_exempt=true must be emitted, got %#v", h)
+	}
+	if h := buildGeoipHandler(false); h["crawler_exempt"] != false {
+		t.Fatalf("crawler_exempt=false must be explicit, got %#v", h)
+	}
 }

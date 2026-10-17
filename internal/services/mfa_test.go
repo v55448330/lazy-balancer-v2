@@ -251,3 +251,106 @@ func TestMFAVerifyPending_trimsWhitespace(t *testing.T) {
 		t.Fatal("padded code must verify（pending 验证须与另两个 TOTP 验证器同容错 TrimSpace）")
 	}
 }
+
+// U08-F10：挑战级失败计数硬闸——第 10 次失败即作废挑战（与全局锁定开关无关），
+// 作废后 MFAConsumeChallenge 恒拒绝。
+func TestMFARecordChallengeFailure_invalidatesAtThreshold(t *testing.T) {
+	mfaTestEnv(t)
+	mfaSeedUser(t, 3)
+	const token = "tok-challenge-threshold"
+	if _, err := db.DB.Exec(`INSERT INTO mfa_challenges (token, user_id, expires_at, consumed, attempts)
+		VALUES (?, 3, datetime('now','+10 minutes'), 0, 0)`, token); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt < mfaChallengeFailThreshold; attempt++ {
+		if invalidated := MFARecordChallengeFailure(token); invalidated {
+			t.Fatalf("第 %d 次失败不应作废（阈值 %d）", attempt, mfaChallengeFailThreshold)
+		}
+	}
+	if invalidated := MFARecordChallengeFailure(token); !invalidated {
+		t.Fatalf("第 %d 次失败必须作废并返回 true", mfaChallengeFailThreshold)
+	}
+	var consumed bool
+	var attempts int
+	if err := db.DB.QueryRow(`SELECT COALESCE(consumed,0), COALESCE(attempts,0) FROM mfa_challenges WHERE token=?`, token).Scan(&consumed, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if !consumed {
+		t.Fatal("达阈值后挑战必须置 consumed=1")
+	}
+	if attempts != mfaChallengeFailThreshold {
+		t.Fatalf("attempts=%d, want %d", attempts, mfaChallengeFailThreshold)
+	}
+	if MFAConsumeChallenge(token, 3) {
+		t.Fatal("作废后的挑战不得再被消费")
+	}
+}
+
+// U08-F10：pending 验证失败第 5 次即作废 pending secret（重新 setup 才能再试）。
+func TestMFARecordPendingFailure_invalidatesAtThreshold(t *testing.T) {
+	mfaTestEnv(t)
+	mfaSeedUser(t, 4)
+	secret, _, err := MFAGenerateSecret("tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE users SET mfa_pending_secret=?, mfa_pending_fails=0 WHERE id=4`, secret); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt < mfaPendingFailThreshold; attempt++ {
+		if invalidated := MFARecordPendingFailure(4); invalidated {
+			t.Fatalf("第 %d 次 pending 失败不应作废（阈值 %d）", attempt, mfaPendingFailThreshold)
+		}
+	}
+	if invalidated := MFARecordPendingFailure(4); !invalidated {
+		t.Fatalf("第 %d 次 pending 失败必须作废并返回 true", mfaPendingFailThreshold)
+	}
+	var pending string
+	var fails int
+	if err := db.DB.QueryRow(`SELECT COALESCE(mfa_pending_secret,''), COALESCE(mfa_pending_fails,0) FROM users WHERE id=4`).Scan(&pending, &fails); err != nil {
+		t.Fatal(err)
+	}
+	if pending != "" {
+		t.Fatalf("pending secret 未清空: %q", pending)
+	}
+	if fails != 0 {
+		t.Fatalf("pending 失败计数未复位: %d", fails)
+	}
+	if _, err := MFAVerifyPending(4, "123456", time.Now()); err == nil {
+		t.Fatal("作废后 MFAVerifyPending 必须报「没有待激活的 MFA 密钥」")
+	}
+}
+
+// U08-F10：restore 不复活已作废挑战——按 handler 真实顺序（consume→验码失败
+// →restore→record failure）驱动 10 轮后，第 11 次登录在 consume 门即被拒绝
+// （restore 只在 consume 成功后调用，作废行不经过恢复路径）。
+func TestMFARestoreChallenge_invalidatedChallengeStaysDead(t *testing.T) {
+	mfaTestEnv(t)
+	mfaSeedUser(t, 5)
+	const token = "tok-restore-order"
+	if _, err := db.DB.Exec(`INSERT INTO mfa_challenges (token, user_id, expires_at, consumed, attempts)
+		VALUES (?, 5, datetime('now','+10 minutes'), 0, 0)`, token); err != nil {
+		t.Fatal(err)
+	}
+
+	for round := 1; round <= mfaChallengeFailThreshold; round++ {
+		if !MFAConsumeChallenge(token, 5) {
+			t.Fatalf("第 %d 轮 consume 应成功（未达阈值）", round)
+		}
+		MFARestoreChallenge(token, 5) // 错误码不烧挑战
+		MFARecordChallengeFailure(token)
+	}
+	if MFAConsumeChallenge(token, 5) {
+		t.Fatal("达阈值后的挑战不得复活（consume 门必须拒绝，restore 不可达）")
+	}
+	var consumed bool
+	var attempts int
+	if err := db.DB.QueryRow(`SELECT COALESCE(consumed,0), COALESCE(attempts,0) FROM mfa_challenges WHERE token=?`, token).Scan(&consumed, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if !consumed || attempts != mfaChallengeFailThreshold {
+		t.Fatalf("终态 consumed=%v attempts=%d, want consumed=true attempts=%d", consumed, attempts, mfaChallengeFailThreshold)
+	}
+}

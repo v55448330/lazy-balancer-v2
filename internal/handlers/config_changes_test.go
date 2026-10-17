@@ -57,3 +57,22 @@ func TestPlanConfigChangesIncludesJWTExpire(t *testing.T) {
 		t.Fatalf("JWT expiry change not planned: %#v", plan)
 	}
 }
+
+// U08-F08：大屏本站坐标 lat/lon 共用 label——同时变更时变更清单只列一项
+// （原实现逐字段 add，同一 label 重复出现）。
+func TestPlanConfigChangesDedupesSharedLabel(t *testing.T) {
+	lat, lon := 31.2, 121.5
+	req := models.UpdateConfigRequest{ServerMapLat: &lat, ServerMapLon: &lon, Source: "basic"}
+	old := configSnapshot{ServerMapLat: 0, ServerMapLon: 0}
+
+	plan := planConfigChanges(req, old)
+	if !plan.Changed {
+		t.Fatal("plan.Changed = false, want true（任一坐标变更）")
+	}
+	if len(plan.Changes) != 1 || plan.Changes[0] != "大屏本站坐标" {
+		t.Fatalf("changes=%v, want 单条「大屏本站坐标」", plan.Changes)
+	}
+	if got := plan.SectionChanges["基础设置"]; len(got) != 1 || got[0] != "大屏本站坐标" {
+		t.Fatalf("section changes=%v, want 单条", got)
+	}
+}

@@ -20,13 +20,11 @@ import (
 func newTaskLogDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	old := taskengine.TaskLogPath("probe-x")
+	// U12-F12：保存并恢复旧目录（原实现只在旧目录为空时置空——上一用例的
+	// 临时目录被删后残留指针，跨用例读日志失败/假绿）。
+	old := taskengine.LogDir()
 	taskengine.SetLogDir(filepath.Join(dir, "tasks"))
-	t.Cleanup(func() {
-		if old == "" {
-			taskengine.SetLogDir("")
-		}
-	})
+	t.Cleanup(func() { taskengine.SetLogDir(old) })
 	return filepath.Join(dir, "tasks")
 }
 
@@ -85,13 +83,18 @@ func TestTaskLogf_AuditRetentionCleanupSummary(t *testing.T) {
 
 // Given config-watchdog 已在引擎注册（真实 Run 体：WatchdogCheckOnce——R66 起
 // 一致轮零逐轮行，每 60 轮一条心跳；漂移轮逐轮行不变）。
-// When 经引擎 Trigger 连打 60 轮真实 Run 体（U1-66-10 接线钉——watchdog admin
-// 为空时检查按不可达跳过、状态维持一致，心跳形态恒可达：无外部依赖）。
+// When 经引擎 Trigger 连打 60 轮真实 Run 体（U1-66-10 接线钉——假 Caddy 提供
+// 空运行配置、空规则库 → 每轮真实完成且一致；U12-F02 起跳过轮不计入干净轮，
+// 心跳必须由真实检查轮驱动）。
 // Then tasks/config-watchdog.log 恰含一条「配置一致（心跳…）」结论行。
 func TestTaskLogf_WatchdogSummaryShape(t *testing.T) {
 	newTaskLogDir(t)
 	resetConfigWatchdogForTest(t)
 	te := newWireTestEngine(t)
+	server := fakeCaddyWithRoutes(t, emptyCaddyConfig)
+	oldURL := watchdogAdminURLValue
+	watchdogAdminURLValue = server.URL
+	t.Cleanup(func() { watchdogAdminURLValue = oldURL })
 	for i := 1; i <= 60; i++ {
 		if err := te.Trigger("config-watchdog", "manual", ""); err != nil {
 			t.Fatalf("trigger config-watchdog: %v", err)
@@ -150,7 +153,7 @@ func TestTaskLogf_CertManualPoll_exceptionRoundsOnly(t *testing.T) {
 
 // Given v2.0 四类型标准全量注册。
 // When DescribeAll。
-// Then Kind 映射：定时 4（threat/crs/ip2region/auto-backup）、循环 8、
+// Then Kind 映射：定时 5（threat/crs/ip2region/crawlerbot-update/auto-backup）、循环 9、
 // 常驻 3（ingestion/cert-issuance/cluster-sync）、触发 1（startup:config-load）；
 // cert-waiting-ca 默认 LoopOn=false（调度关闭——续期扫描唤醒）。
 func TestTaskEngineWire_KindMapping(t *testing.T) {
@@ -162,10 +165,12 @@ func TestTaskEngineWire_KindMapping(t *testing.T) {
 	want := map[string]taskengine.Kind{
 		"threat": taskengine.KindScheduled, "crs": taskengine.KindScheduled,
 		"ip2region": taskengine.KindScheduled, "auto-backup": taskengine.KindScheduled,
-		"config-watchdog": taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
+		"crawlerbot-update": taskengine.KindScheduled,
+		"config-watchdog":   taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
 		"audit-retention": taskengine.KindPeriodic, "security-events-retention": taskengine.KindPeriodic,
 		"cert-renewal-scan": taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
 		"cert-manual-poll": taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
+		"autoban":                   taskengine.KindPeriodic,
 		"security-events-ingestion": taskengine.KindDaemon, "cert-issuance": taskengine.KindDaemon,
 		"cluster-sync":        taskengine.KindDaemon,
 		"startup:config-load": taskengine.KindOneshot,

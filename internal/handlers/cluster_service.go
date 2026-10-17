@@ -183,7 +183,9 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 		return
 	}
 	if req.Action == models.ClusterServiceActionRestartApp {
-		recordClusterServiceControlAudit(c, req.Action, "已接受：服务即将重启")
+		// U05-F04：与 caddy 分支同口径带 operator——空 operator 回退「主节点」，
+		// 非空则记录主节点侧实际操作人（此前 restart_app 恒匿名）。
+		recordClusterServiceControlAuditBy(c, req.Action, "已接受：服务即将重启", req.Operator)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "服务正在重启"})
 		go func() {
 			time.Sleep(clusterServiceExitDelay)

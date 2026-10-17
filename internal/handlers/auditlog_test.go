@@ -3,9 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -326,5 +328,61 @@ func TestGetAuditLogs_hugePageDoesNot500(t *testing.T) {
 	}
 	if resp.Data.Page != 10000 {
 		t.Fatalf("page=%d, want clamped 10000", resp.Data.Page)
+	}
+}
+
+// U08-F02：审计库缺表（查询失败）时下拉选项接口须留痕并标记 partial——
+// 此前恒 200 + 空列表，故障与「真空库」不可区分、运维零信号。
+func TestGetAuditLogOptions_queryFailureLogsAndMarksPartial(t *testing.T) {
+	oldDB, oldAuditDB := db.DB, db.AuditDB
+	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db") // 无 audit_log 表
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB, db.AuditDB = mainDB, auditDB
+	t.Cleanup(func() {
+		db.DB, db.AuditDB = oldDB, oldAuditDB
+		mainDB.Close()
+		auditDB.Close()
+	})
+	resetAuditOptionsCacheForTest()
+
+	var logs strings.Builder
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{}
+	router := gin.New()
+	router.GET("/audit-logs/options", h.GetAuditLogOptions)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/audit-logs/options", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Partial bool                     `json:"partial"`
+			Actions []map[string]interface{} `json:"actions"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !body.Data.Partial {
+		t.Fatalf("partial=false, want true（查询失败轮必须标记部分结果）: %s", rec.Body.String())
+	}
+	if body.Data.Actions == nil {
+		t.Errorf("actions 旧字段缺失（兼容性契约）: %s", rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "查询失败") {
+		t.Fatalf("日志缺少「查询失败」留痕: %q", logs.String())
 	}
 }

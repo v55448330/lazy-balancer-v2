@@ -29,19 +29,7 @@ var ip2RegionLatestReleaseAPIURL = "https://api.github.com/repos/lionsoul2014/ip
 // releases/latest 页面；其余 4xx 与 tag 解析失败不重试。两路均失败时错误同时
 // 点名两个尝试过的 URL（R57，口径同 defaultFetchCRSLatestTag）。
 func defaultFetchIP2RegionLatestTag(ctx context.Context) (string, error) {
-	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, ip2RegionHTTPClient, ip2RegionLatestReleaseAPIURL)
-	if err == nil {
-		return tag, nil
-	}
-	if !transport {
-		return "", fmt.Errorf("查询 ip2region 最新版本: %w", err)
-	}
-	proxyTag, proxyErr := fetchGitHubLatestTagViaProxy(ctx, ip2RegionRepoSlug)
-	if proxyErr != nil {
-		return "", fmt.Errorf("查询 ip2region 最新版本: 直连 %s 失败: %v；经代理 %s 重试仍失败: %v",
-			ip2RegionLatestReleaseAPIURL, err, ghProxied(gitHubReleasesLatestURL(ip2RegionRepoSlug)), proxyErr)
-	}
-	return proxyTag, nil
+	return fetchLatestGitHubTag(ctx, ip2RegionHTTPClient, ip2RegionLatestReleaseAPIURL, ip2RegionRepoSlug, "ip2region")
 }
 
 // ip2RegionXDBSourceURL 是 ip2region xdb 的真实来源 URL（含版本 tag，作为完整

@@ -44,6 +44,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/corazawaf/coraza/v3/experimental/plugins"
 	"github.com/corazawaf/coraza/v3/experimental/plugins/plugintypes"
 	"github.com/corazawaf/coraza/v3/types"
@@ -135,10 +136,7 @@ func auditTimingRecord(id, segment string, us int64) {
 	if e == nil {
 		e = &auditTimingEntry{created: now}
 		auditTimingEntries[id] = e
-		auditTimingCreateCount++
-		if auditTimingCreateCount%64 == 0 || len(auditTimingEntries) > auditTimingSweepMin {
-			auditTimingSweepLocked(now)
-		}
+		auditTimingSweepIfDueLocked(now)
 	}
 	auditTimingMu.Unlock()
 	e.mu.Lock()
@@ -165,11 +163,23 @@ func auditTimingClose(id string) {
 	if e == nil {
 		e = &auditTimingEntry{created: now}
 		auditTimingEntries[id] = e
+		// U14-03（第 78 轮）：close 建条路径与 record 共用同一「自增 + 摊销
+		// 清扫」helper——纯 close 流量（无任何分段写点）此前完全不触发清扫，
+		// 过期条目积压到下一次 record 才清。
+		auditTimingSweepIfDueLocked(now)
 	}
 	auditTimingMu.Unlock()
 	e.mu.Lock()
 	e.closed = true
 	e.mu.Unlock()
+}
+
+// auditTimingSweepIfDueLocked 建条计数 + 摊销清扫（调用方持 auditTimingMu）。
+func auditTimingSweepIfDueLocked(now time.Time) {
+	auditTimingCreateCount++
+	if auditTimingCreateCount%64 == 0 || len(auditTimingEntries) > auditTimingSweepMin {
+		auditTimingSweepLocked(now)
+	}
 }
 
 // auditTimingWait 限时等待该请求的计时终态并返回快照。正常形态下 blocked_counter
@@ -716,6 +726,91 @@ type auditPipeline struct {
 	fd   *os.File
 	bw   *bufio.Writer
 	mode os.FileMode
+	// ioErrMu 保护 IO 错误节流状态（drain 与其关闭路径并发可见）。
+	ioErrMu      sync.Mutex
+	lastIOErrLog time.Time
+	ioErrCount   int
+}
+
+// auditIOLogf 审计落盘错误日志缝（测试注入；缺省 caddy.Log）。
+var auditIOLogf = func(format string, args ...any) {
+	caddy.Log().Named("auditwriter").Sugar().Errorf(format, args...)
+}
+
+// reportIOError 记录落盘 IO 错误（U14-04）：首次立即记录，其后每分钟至多
+// 一条（携带被抑制计数），保证「静默丢行」不可能。错误不再只是被丢弃的
+// error 返回值——drain 侧旧实现 `_, _ = p.bw.Write(...)` 完全不可观测。
+func (p *auditPipeline) reportIOError(op string, err error) {
+	if err == nil {
+		return
+	}
+	p.ioErrMu.Lock()
+	now := time.Now()
+	p.ioErrCount++
+	suppressed := p.ioErrCount - 1
+	logNow := p.lastIOErrLog.IsZero() || now.Sub(p.lastIOErrLog) >= time.Minute
+	if logNow {
+		p.lastIOErrLog = now
+		p.ioErrCount = 0
+	}
+	p.ioErrMu.Unlock()
+	if logNow {
+		auditIOLogf("audit writer: %s failed for %s (suppressed %d since last report): %v", op, p.target, suppressed, err)
+	}
+}
+
+// reopenLocked 丢弃当前 bufio/fd 并重建（O_APPEND 兼容 copytruncate）。
+func (p *auditPipeline) reopenLocked() {
+	if p.bw != nil {
+		_ = p.bw.Flush()
+		p.bw = nil
+	}
+	if p.fd != nil {
+		_ = p.fd.Close()
+		p.fd = nil
+	}
+	fd, err := os.OpenFile(p.target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, p.mode)
+	if err != nil {
+		p.reportIOError("reopen", err)
+		return
+	}
+	p.fd = fd
+	p.bw = bufio.NewWriterSize(fd, 64*1024)
+}
+
+// appendLine 写入一行并处理错误（U14-04）：粘性写错误先记录、再重建 fd，
+// 后续行继续落盘；调用方持 ioMu。
+func (p *auditPipeline) appendLine(body []byte) {
+	if p.bw == nil {
+		p.reopenLocked()
+		if p.bw == nil {
+			return
+		}
+	}
+	if _, err := p.bw.Write(body); err != nil {
+		p.reportIOError("write", err)
+		p.reopenLocked()
+		return
+	}
+	if _, err := p.bw.WriteString("\n"); err != nil {
+		p.reportIOError("write", err)
+		p.reopenLocked()
+		return
+	}
+	if p.bw.Buffered() >= auditFlushThreshold {
+		p.flushLocked()
+	}
+}
+
+// flushLocked 刷盘并处理错误（U14-04）。调用方持 ioMu。
+func (p *auditPipeline) flushLocked() {
+	if p.bw == nil {
+		return
+	}
+	if err := p.bw.Flush(); err != nil {
+		p.reportIOError("flush", err)
+		p.reopenLocked()
+	}
 }
 
 var (
@@ -825,23 +920,29 @@ func (p *auditPipeline) syncWrite(item lbAuditItem) error {
 // release 递减引用；最后一个引用释放时关闭队列——drain 排空余量、刷盘、关
 // fd 后退出（close 与 enqueue 的互斥见 mu 注释）。
 func (p *auditPipeline) release() {
+	waitDrain := false
 	auditPipelinesMu.Lock()
-	defer auditPipelinesMu.Unlock()
 	p.mu.Lock()
 	if p.refs > 0 {
 		p.refs--
 	}
-	if p.refs != 0 || p.closed {
-		p.mu.Unlock()
-		return
+	if p.refs == 0 && !p.closed {
+		p.closed = true
+		q := p.queue
+		p.queue = nil
+		waitDrain = true
+		delete(auditPipelines, p.target)
+		close(q)
 	}
-	p.closed = true
-	q := p.queue
-	p.queue = nil
 	p.mu.Unlock()
-	delete(auditPipelines, p.target)
-	close(q)
-	<-p.done
+	auditPipelinesMu.Unlock()
+	// U14-10（第 78 轮）：等待 drain 退出（fd 关闭确认）不得持注册表锁——
+	// 旧实现持 auditPipelinesMu 阻塞在 <-p.done，drain 排空期间所有
+	// acquireAuditPipeline（新 WAF/重载）被卡住。删除+close 已在锁内完成，
+	// 新的同路径管线可并发创建（各自独立 fd，O_APPEND 追加安全）。
+	if waitDrain {
+		<-p.done
+	}
 }
 
 // drain 专职落盘 goroutine：注入 timing → bufio 批量写 → 阈值/周期双触发刷盘。
@@ -883,7 +984,12 @@ func (p *auditPipeline) process(item lbAuditItem) {
 		return
 	}
 	body, err := item.formatter.Format(item.snap)
-	if err != nil || len(body) == 0 {
+	if err != nil {
+		// 单行格式化失败只跳过该行，不阻断后续（错误可见化：旧实现静默丢弃）。
+		p.reportIOError("format", err)
+		return
+	}
+	if len(body) == 0 {
 		return
 	}
 	if item.tid != "" {
@@ -891,22 +997,14 @@ func (p *auditPipeline) process(item lbAuditItem) {
 		body = injectAuditTiming(body, snap)
 	}
 	p.ioMu.Lock()
-	if p.bw == nil {
-		p.ioMu.Unlock()
-		return
-	}
-	_, _ = p.bw.Write(body)
-	_, _ = p.bw.WriteString("\n")
-	if p.bw.Buffered() >= auditFlushThreshold {
-		_ = p.bw.Flush()
-	}
+	p.appendLine(body)
 	p.ioMu.Unlock()
 }
 
 func (p *auditPipeline) flushPending() {
 	p.ioMu.Lock()
 	if p.bw != nil && p.bw.Buffered() > 0 {
-		_ = p.bw.Flush()
+		p.flushLocked()
 	}
 	p.ioMu.Unlock()
 }
@@ -914,11 +1012,13 @@ func (p *auditPipeline) flushPending() {
 func (p *auditPipeline) closeFile() {
 	p.ioMu.Lock()
 	if p.bw != nil {
-		_ = p.bw.Flush()
+		p.flushLocked()
 		p.bw = nil
 	}
 	if p.fd != nil {
-		_ = p.fd.Close()
+		if err := p.fd.Close(); err != nil {
+			p.reportIOError("close", err)
+		}
 		p.fd = nil
 	}
 	p.ioMu.Unlock()

@@ -109,7 +109,6 @@ func newAPIDocTestRouter(t *testing.T) *gin.Engine {
 		t.Fatalf("initialize database: %v", err)
 	}
 	t.Cleanup(func() {
-		services.StopAuditCleanup()
 		if err := db.Close(); err != nil {
 			t.Errorf("close database: %v", err)
 		}
@@ -127,7 +126,7 @@ func newAPIDocTestRouter(t *testing.T) *gin.Engine {
 	caddy := services.NewCaddyService(cfg.CaddyAdminURL)
 	handler := handlers.NewHandlers(handlers.Dependencies{
 		Config: cfg, CaddyService: caddy, MetricsService: services.NewMetricsService(cfg.CaddyMetricsURL, 60),
-		SyncService: services.NewSyncService(db.DB, cfg, caddy), ClusterService: services.NewClusterService(db.DB, nil, ""),
+		SyncService: services.NewSyncService(db.DB, cfg, caddy), ClusterService: services.NewClusterService(db.DB, ""),
 		CAProviderService: services.NewCAProviderService(),
 	})
 	return middleware.SetupRouter(handler, cfg)

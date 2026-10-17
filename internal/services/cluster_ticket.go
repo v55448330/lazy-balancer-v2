@@ -18,6 +18,11 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// ErrNodeOffline 表示目标节点已审批但当前不可达（从未上报或已超过在线阈值）：
+// 与「节点不存在/未审批」（ErrNodeNotFound → 404）区分开，handler 映射 409
+// 并给出「确认从节点在线后重试」的可行动文案（L02-04，第 78 轮）。
+var ErrNodeOffline = errors.New("节点尚未上报或已离线")
+
 var (
 	ErrInvalidLoginTicket         = errors.New("登录票据无效或已过期")
 	ErrLoginTicketSignature       = errors.New("登录票据签名错误")
@@ -47,8 +52,14 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&syncInterval); err != nil {
 		return models.ClusterLoginTicketResponse{}, fmt.Errorf("读取同步间隔: %w", err)
 	}
-	if !approved || ComputeNodeStatus(approved, lastSeen.Time, syncInterval, now) != "online" || keyHash == "" {
+	if !approved || keyHash == "" {
 		return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
+	}
+	// L02-04（RG-CLUSTER-TICKET-ERROR）：已批准但从未上报/已离线与「节点不存在
+	// 或未审批」是两类问题——前者 handler 映射 409 + 「确认从节点在线后重试」，
+	// 后者维持 404。keyHash 为空（从未取得集群令牌）仍按不存在处理。
+	if ComputeNodeStatus(approved, lastSeen.Time, syncInterval, now) != "online" {
+		return models.ClusterLoginTicketResponse{}, ErrNodeOffline
 	}
 	key, err := hex.DecodeString(keyHash)
 	if err != nil || len(key) != sha256.Size {

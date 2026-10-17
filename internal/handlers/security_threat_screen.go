@@ -34,48 +34,6 @@ const threatScreenMaxHours = 24 * 30
 // threatActiveSourceWindow 活跃攻击源窗口（设计定稿）：近 10 分钟去重 client_ip。
 const threatActiveSourceWindow = 10 * time.Minute
 
-// threatCountryFromLocation 从 ip_location 文本（「国家·省州·城市·ISP」，
-// formatIP2RegionLocation 产物）提取国家首段。分隔符「·」为多字节 UTF-8，
-// 必须 strings.Index 按子串定位（按字节扫描会切进分隔符中间产出脏首段）。
-// 空归属返回 ""（上游跳过）。
-func threatCountryFromLocation(location string) string {
-	if idx := strings.Index(location, "·"); idx >= 0 {
-		return location[:idx]
-	}
-	return location
-}
-
-// aggregateThreatCountries 把「IP → 命中数」聚合为「国家 → 命中数」：归属地
-// 经 lookup 逐 IP 富化（调用方传 enrichIPLocation——BufferCache 已按 IP 去重
-// 查询，xb 缺失返回 "" 的 IP 整体跳过，不产出空键）。
-func aggregateThreatCountries(hits map[string]int, lookup func(string) string) map[string]int {
-	countries := make(map[string]int, len(hits))
-	for ip, count := range hits {
-		country := threatCountryFromLocation(lookup(ip))
-		if country == "" {
-			continue
-		}
-		countries[country] += count
-	}
-	return countries
-}
-
-// aggregateChinaProvinces 国内省份聚合（v3 大屏省级下钻数据源）：仅首段=
-// 「中国」的归属地参与，取省段（第 2 段，formatIP2RegionLocation 国内分支
-// 已归一为 ip2RegionShortenName 形态）；省段为空跳过（不产出空键），海外
-// 事件整体不参与。与国家计数共享同一 ipHits（单次遍历伴生聚合，零额外查询）。
-func aggregateChinaProvinces(hits map[string]int, lookup func(string) string) map[string]int {
-	provinces := make(map[string]int, len(hits)/2+1)
-	for ip, count := range hits {
-		parts := strings.SplitN(lookup(ip), "·", 3)
-		if len(parts) < 2 || parts[0] != "中国" || parts[1] == "" {
-			continue
-		}
-		provinces[parts[1]] += count
-	}
-	return provinces
-}
-
 // topThreatEntries 计数 map → 前 n 条（值降序；同值按名称升序——确定性输出，
 // 大屏 30s 轮询重渲染名次不抖动）。
 func topThreatEntries(counts map[string]int, n int) []models.SecurityAttackType {
@@ -191,57 +149,215 @@ var locateSiteCoords = func(ip string) (lat, lon float64, location string, ok bo
 	return 0, 0, "", false
 }
 
-// threatRollupMu 懒固化互斥（每分钟一次 DELETE+INSERT，幂等）。
+// threatRollupMu 懒固化互斥（每次固化幂等 DELETE+INSERT）。
 var threatRollupMu sync.Mutex
 
-// ensureThreatRollup 按需固化 rollup 到 now-1 分钟（幂等、自愈）：
-// 每分钟把原始表按 (国家,省,族,规则,动作) 聚合写入 security_event_rollup。
-// 归属地/攻击族在固化时算一次（enrichIPLocation/categorizeAttack 单源），
-// 之后大屏全部聚合只扫 rollup（PK 前缀 minute），与原始表规模解耦。
-// 追溯上限 24h（更早的洞不补——原始表可能已被保留策略清掉）。
-func ensureThreatRollup() error {
+// threatScreenNow 时钟缝（第 78 轮 U03-F02：可控时间轴验证「上一分钟在完整后
+// 至少终固一次」——迟到写入必须被下一次固化覆盖）。
+var threatScreenNow = func() time.Time { return time.Now().UTC() }
+
+const (
+	// threatRollupWatermarkKey 已覆盖区间的**最新**完整分钟（metrics_state 键）；
+	// threatRollupCoveredFromKey 已覆盖区间的**最旧**分钟（空覆盖=lastComplete）。
+	threatRollupWatermarkKey   = "threat_rollup_last_fixed_minute"
+	threatRollupCoveredFromKey = "threat_rollup_covered_from"
+	// threatRollupBatchMinutes 单事务回填分钟数（L03-06：有界批，批间让写锁）。
+	threatRollupBatchMinutes = 60
+	// threatRollupMaxBatchesPerCall 单次请求最多提交的事务批数（25 批 =
+	// 24h 回填 + 最新两分钟段）——空库首屏先返回部分，后续轮询按水位续做，
+	// 避免单请求长时间占锁/占连接。默认 24h 窗口一轮完成；更大窗口跨请求
+	// 续做。
+	threatRollupMaxBatchesPerCall = 25
+)
+
+// loadThreatRollupState 读持久分钟状态（无行/空值/损坏 = 未初始化）。
+func loadThreatRollupState(database *sql.DB, key string) (time.Time, bool, error) {
+	var raw string
+	err := database.QueryRow(`SELECT value FROM metrics_state WHERE key=?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, perr := time.ParseInLocation("2006-01-02 15:04", raw, time.UTC)
+	if perr != nil {
+		// 状态损坏按「未初始化」处理（回填有界且幂等，重建成本可控）。
+		return time.Time{}, false, nil
+	}
+	return parsed, true, nil
+}
+
+// ensureThreatRollup 按需固化 rollup（幂等、自愈、可跨请求续做）：
+//   - 水位持久化在 metrics_state（U03-F03）——空分钟同样推进，不再用数据行
+//     MAX(minute) 反推（空分钟不产行会让水位停滞）；
+//   - 每次固化集合恒含 lastComplete 与 currentMinute（U03-F02）——上一完整
+//     分钟在首次固化后仍可能被迟到写入补充，必须至少终固一次；当前分钟恒
+//     重固化（recent_rate 等「最近 N 分钟」口径）；
+//   - 回填窗口与请求 hours 一致、下界钳制到 720h（U03-F11）；按 60 分钟一批
+//     提交、单请求最多 24 批（L03-06），水位与分钟数据同事务提交。
+func ensureThreatRollup(hours int) error {
 	threatRollupMu.Lock()
 	defer threatRollupMu.Unlock()
 	if db.MetricsDB == nil {
 		return errors.New("metrics db unavailable")
 	}
-	now := time.Now().UTC()
+	if hours < 1 {
+		hours = 24
+	}
+	if hours > threatScreenMaxHours {
+		hours = threatScreenMaxHours
+	}
+	now := threatScreenNow().UTC()
 	lastComplete := now.Add(-time.Minute).Truncate(time.Minute)
 	currentMinute := now.Truncate(time.Minute)
-	var maxMinute string
-	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(minute), '') FROM security_event_rollup`).Scan(&maxMinute); err != nil {
-		return err
+	horizon := lastComplete.Add(-time.Duration(hours) * time.Hour)
+
+	// 覆盖区间 [coveredFrom, lastFixed]（完整分钟，持久化在 metrics_state）：
+	//   - 空覆盖 = coveredFrom 为 lastComplete（首个未来分钟）、lastFixed 为
+	//     lastComplete-1；
+	//   - 请求窗口 [dFrom, dTo] 中「更旧未覆盖段」与「更新未覆盖段」分别按批
+	//     补齐（U03-F11：先前窄窗口（hours=1）把水位推到最新后，后续宽窗口
+	//     不得因「水位已到最新」而漏掉未回填的旧分钟）。
+	// U03-F03：水位与分钟数据同事务提交；空分钟同样推进；陈旧/未来水位钳制。
+	dFrom := horizon
+	dTo := lastComplete.Add(-time.Minute)
+	if dFrom.After(dTo) {
+		dFrom = dTo
 	}
-	var from time.Time
-	if maxMinute == "" {
-		from = lastComplete.Add(-24 * time.Hour)
-	} else {
-		parsed, err := time.ParseInLocation("2006-01-02 15:04", maxMinute, time.UTC)
-		if err != nil {
-			return err
-		}
-		from = parsed.Add(time.Minute)
-	}
-	// 增量回填（完整分钟，幂等）+ 当前不完整分钟恒重固化（recent_rate 等
-	// 「最近 N 分钟」口径需要覆盖当前分钟；单分钟聚合有界，成本可忽略）
-	ranges := make([]time.Time, 0, 64)
-	for m := from; !m.After(lastComplete); m = m.Add(time.Minute) {
-		ranges = append(ranges, m)
-	}
-	if len(ranges) == 0 || ranges[len(ranges)-1] != currentMinute {
-		ranges = append(ranges, currentMinute)
-	}
-	tx, err := db.MetricsDB.Begin()
+	coveredFrom, okCovered, err := loadThreatRollupState(db.MetricsDB, threatRollupCoveredFromKey)
 	if err != nil {
 		return err
 	}
-	for _, m := range ranges {
-		if err := threatFixMinute(tx, m); err != nil {
+	lastFixed, okFixed, err := loadThreatRollupState(db.MetricsDB, threatRollupWatermarkKey)
+	if err != nil {
+		return err
+	}
+	// 一致性归一（U03-F03 陈旧/损坏标记钳制）：coveredFrom 在窗口之后、lastFixed
+	// 在窗口之后、或 lastFixed 早于 coveredFrom-1（陈旧水位先于已覆盖底端）
+	// 一律按空覆盖处理——空覆盖区间的端点=(dTo+1, dTo)，旧侧缺口一次性覆盖到
+	// 窗口末端，回填有界且幂等。
+	emptyCoverage := !okCovered || !okFixed || coveredFrom.After(dTo) || lastFixed.After(dTo) ||
+		lastFixed.Before(coveredFrom.Add(-time.Minute)) ||
+		// P1-4：窗口起点早于已覆盖末端——中间存在未固化长缺口。不得把新侧
+		// 起点钳到 dFrom 后仍保留旧 coveredFrom（会伪造连续覆盖并永久漏数）。
+		lastFixed.Before(dFrom.Add(-time.Minute))
+	if emptyCoverage {
+		coveredFrom = dTo.Add(time.Minute)
+		lastFixed = dTo
+	}
+	saveCoverage := func(tx *sql.Tx, from, until time.Time) error {
+		if _, err := tx.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, threatRollupCoveredFromKey, from.Format("2006-01-02 15:04")); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, threatRollupWatermarkKey, until.Format("2006-01-02 15:04"))
+		return err
+	}
+	backfillBatches := threatRollupMaxBatchesPerCall - 1 // 预留最新两分钟事务
+	// 1) 旧侧缺口：紧邻已覆盖区间的更旧分钟，从新到旧按批补齐（降序推进，
+	// 每批内部升序固化；批提交后 coveredFrom 前移）。
+	if coveredFrom.After(dFrom) {
+		newestOld := coveredFrom.Add(-time.Minute)
+		if newestOld.After(dTo) {
+			newestOld = dTo
+		}
+		for end := newestOld; !end.Before(dFrom) && backfillBatches > 0; backfillBatches-- {
+			start := end.Add(-time.Duration(threatRollupBatchMinutes-1) * time.Minute)
+			if start.Before(dFrom) {
+				start = dFrom
+			}
+			tx, err := db.MetricsDB.Begin()
+			if err != nil {
+				return err
+			}
+			for m := start; !m.After(end); m = m.Add(time.Minute) {
+				if err := threatFixMinute(tx, m); err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			if err := saveCoverage(tx, start, lastFixed); err != nil {
+				tx.Rollback()
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			coveredFrom = start
+			if start.Equal(dFrom) {
+				break
+			}
+			end = start.Add(-time.Minute)
+		}
+	}
+	// 2) 新侧缺口：已覆盖区间的更新分钟（升序按批推进）。
+	if !lastFixed.Before(dTo) {
+		// 已覆盖到窗口末端，无需新侧回填。
+	} else {
+		start := lastFixed.Add(time.Minute)
+		if start.Before(dFrom) {
+			start = dFrom
+		}
+		for !start.After(dTo) && backfillBatches > 0 {
+			backfillBatches--
+			end := start.Add(time.Duration(threatRollupBatchMinutes-1) * time.Minute)
+			if end.After(dTo) {
+				end = dTo
+			}
+			tx, err := db.MetricsDB.Begin()
+			if err != nil {
+				return err
+			}
+			for m := start; !m.After(end); m = m.Add(time.Minute) {
+				if err := threatFixMinute(tx, m); err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			if err := saveCoverage(tx, coveredFrom, end); err != nil {
+				tx.Rollback()
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			lastFixed = end
+			start = end.Add(time.Minute)
+		}
+	}
+	// 3) 最新段：lastComplete（迟到写入终固，U03-F02）+ currentMinute（实时
+	// 口径）——每轮恒固化，首屏 recent_rate 不依赖回填进度。
+	{
+		tx, err := db.MetricsDB.Begin()
+		if err != nil {
+			return err
+		}
+		if err := threatFixMinute(tx, lastComplete); err != nil {
 			tx.Rollback()
 			return err
 		}
+		if !currentMinute.Equal(lastComplete) {
+			if err := threatFixMinute(tx, currentMinute); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
-	return tx.Commit()
+	return nil
+}
+
+// queryThreatRecentBlocked 近 5 分钟 blocked 计数（大屏 recent_rate 数据源）。
+// 测试注入缝：U03-F08 需要只让最后一条 SUM 失败，验证 500 不被 200 吞掉。
+var queryThreatRecentBlocked = func(sinceMinute string) (int, error) {
+	var blocked int
+	err := db.MetricsDB.QueryRow(`SELECT COALESCE(SUM(count),0) FROM security_event_rollup WHERE minute >= ? AND action='blocked'`, sinceMinute).Scan(&blocked)
+	return blocked, err
 }
 
 // threatFixMinute 单分钟固化：DELETE+INSERT 幂等；保留/私网 IP 排除；归属
@@ -433,7 +549,7 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	// v2.3.8 rollup 路径：懒固化后单次扫描 rollup 产出全部维度（总量/拦截/
 	// 国家/省/攻击族/规则/小时——原 5 条原始表窗口扫描合并为 1 条 rollup 扫
 	// 描，与原始表规模解耦）。保留/私网已在固化时排除（口径不变）。
-	if err := ensureThreatRollup(); err != nil {
+	if err := ensureThreatRollup(hours); err != nil {
 		trackErr(err)
 	}
 	var total, blocked int
@@ -523,33 +639,34 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	}
 	// recent_rate：近 5 分钟 blocked/min（rollup 单前缀扫描；logged 不计）
 	since5Minute := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Minute).Format("2006-01-02 15:04")
-	blocked5 := 0
-	trackErr(db.MetricsDB.QueryRow(`SELECT COALESCE(SUM(count),0) FROM security_event_rollup WHERE minute >= ? AND action='blocked'`, since5Minute).Scan(&blocked5))
+	blocked5, rerr := queryThreatRecentBlocked(since5Minute)
+	trackErr(rerr)
+	// U03-F08：计算/响应前的最终错误检查——旧实现只在 rollup/active 扫描后
+	// 检查一次，recent_rate 的 SUM 失败会被 200 响应吞掉（部分维度静默为 0）。
+	// 产品语义保持整卡 500：不引入「部分卡片降级」的隐式可用性位。
+	if firstErr != nil {
+		services.Logf("error", "threat-screen query failed: %v", firstErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "威胁大屏数据查询失败"})
+		return
+	}
 	recentRate := float64(int(float64(blocked5)/5.0*10+0.5)) / 10
-	services.Logf("debug", "ZZ rate: since5=%s blocked5=%d recentRate=%v", since5Minute, blocked5, recentRate)
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"hours":            hours,
-		"window_start":     since,
-		"total_events":     total,
-		"blocked_events":   blocked,
-		"block_rate":       blockRate,
-		"ratelimit_blocks": ratelimit,
-		"active_sources":   activeSources,
-		"countries":        countries,
-		"china_provinces":  chinaProvinces,
-		"top_countries":    topThreatEntries(countries, 5),
-		"top_attack_types": topThreatEntries(familyCounts, 5),
-		"top_rules":        topThreatEntries(ruleCounts, 6),
-		"hourly_hist":      hourly,
-		"attack_type_share": func() []models.SecurityAttackType {
-			share := topThreatEntries(familyCounts, len(familyCounts))
-			if share == nil {
-				return []models.SecurityAttackType{}
-			}
-			return share
-		}(),
-		"recent_rate": recentRate,
+		"hours":             hours,
+		"window_start":      since,
+		"total_events":      total,
+		"blocked_events":    blocked,
+		"block_rate":        blockRate,
+		"ratelimit_blocks":  ratelimit,
+		"active_sources":    activeSources,
+		"countries":         countries,
+		"china_provinces":   chinaProvinces,
+		"top_countries":     topThreatEntries(countries, 5),
+		"top_attack_types":  topThreatEntries(familyCounts, 5),
+		"top_rules":         topThreatEntries(ruleCounts, 6),
+		"hourly_hist":       hourly,
+		"attack_type_share": topThreatEntries(familyCounts, len(familyCounts)),
+		"recent_rate":       recentRate,
 	}})
 }
 
@@ -578,48 +695,86 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 		limit = maxLimit
 	}
 	empty := func() gin.H {
-		return gin.H{"events": []models.SecurityEventFeedItem{}, "since_id": sinceID, "limit": limit}
+		return gin.H{"events": []models.SecurityEventFeedItem{}, "since_id": sinceID, "next_since_id": sinceID, "limit": limit}
 	}
 	if db.MetricsDB == nil {
 		// MetricsDB 未装配：空列表 200 而非 panic（P5-4 家族口径，键与成功路径同形状）
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: empty()})
 		return
 	}
-	rows, err := db.MetricsDB.Query(`SELECT id, event_time, client_ip, action, COALESCE(rule_name,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(event_type,''), COALESCE(duration_us,0), COALESCE(anomaly_score,0)
-		FROM security_events WHERE id > ? ORDER BY id DESC LIMIT ?`, sinceID, limit)
-	if err != nil {
-		services.Logf("error", "security event feed: query failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
-		return
-	}
-	defer rows.Close()
+	// U03-F04：游标高水位——分页循环扫描直至凑满 limit 或到顶，
+	// next_since_id = 本批**实际扫描到的最大 id**（含被保留地址过滤掉的行）。
+	// 旧实现返回请求 since_id，前端在「整页均为保留地址」时游标不前进，同一
+	// 页会被无限重复拉取且新事件永远进不来。
 	events := make([]models.SecurityEventFeedItem, 0, limit)
-	for rows.Next() {
-		var e models.SecurityEventFeedItem
-		var ruleTriggered, ruleMsg string
-		// Scan 失败必须中止（R35 D3：部分零值行不得当真实事件返回）
-		if err := rows.Scan(&e.ID, &e.EventTime, &e.ClientIP, &e.Action, &e.RuleName, &ruleTriggered, &ruleMsg, &e.EventType, &e.DurationUs, &e.AnomalyScore); err != nil {
-			services.Logf("error", "security event feed: scan failed: %v", err)
+	upperBound := int64(0) // 0=无上界；首页后改为「上一页最小 id」，继续向更老行扫描
+	nextSinceID := sinceID
+	const maxScanPages = 20 // 有界扫描：洪峰下不让单请求无限翻页
+	for page := 0; page < maxScanPages && len(events) < limit; page++ {
+		pageLimit := limit - len(events)
+		query := `SELECT id, event_time, client_ip, action, COALESCE(rule_name,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(event_type,''), COALESCE(duration_us,0), COALESCE(anomaly_score,0)
+			FROM security_events WHERE id > ?`
+		args := []any{sinceID}
+		if upperBound > 0 {
+			query += ` AND id < ?`
+			args = append(args, upperBound)
+		}
+		query += ` ORDER BY id DESC LIMIT ?`
+		args = append(args, pageLimit)
+		rows, err := db.MetricsDB.Query(query, args...)
+		if err != nil {
+			services.Logf("error", "security event feed: query failed: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
 		}
-		e.IPLocation = enrichIPLocation(e.ClientIP)
-		// 保留/私网 IP 不进大屏事件流（v4 裁定，与聚合口径一致）；游标语义
-		// 不受影响——since_id 恒为已消费最大 id，被过滤行只是跳过。
-		if isReservedIP(e.ClientIP) {
-			continue
+		scanned := 0
+		lastID := upperBound
+		scanFailed := false
+		for rows.Next() {
+			scanned++
+			var e models.SecurityEventFeedItem
+			var ruleTriggered, ruleMsg string
+			// Scan 失败必须中止（R35 D3：部分零值行不得当真实事件返回）
+			if err := rows.Scan(&e.ID, &e.EventTime, &e.ClientIP, &e.Action, &e.RuleName, &ruleTriggered, &ruleMsg, &e.EventType, &e.DurationUs, &e.AnomalyScore); err != nil {
+				services.Logf("error", "security event feed: scan failed: %v", err)
+				scanFailed = true
+				break
+			}
+			lastID = int64(e.ID)
+			if int64(e.ID) > nextSinceID {
+				nextSinceID = int64(e.ID)
+			}
+			e.IPLocation = enrichIPLocation(e.ClientIP)
+			// 保留/私网 IP 不进大屏事件流（v4 裁定，与聚合口径一致）；游标
+			// 语义不受影响——next_since_id 恒为已扫描最大 id，被过滤行只是跳过。
+			if isReservedIP(e.ClientIP) {
+				continue
+			}
+			e.AttackType = categorizeAttack(ruleTriggered, ruleMsg)
+			e.RuleTrigged = ruleTriggered
+			e.TriggerType = triggerTypeForRule(ruleTriggered)
+			events = append(events, e)
 		}
-		e.AttackType = categorizeAttack(ruleTriggered, ruleMsg)
-		e.RuleTrigged = ruleTriggered
-		e.TriggerType = triggerTypeForRule(ruleTriggered)
-		events = append(events, e)
+		if scanFailed {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			return
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			services.Logf("error", "security event feed: rows iteration failed: %v", err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			return
+		}
+		rows.Close()
+		if lastID > 0 {
+			upperBound = lastID // 继续向更老的行扫描（首页上界=0 表示从最新行开始）
+		}
+		if scanned < pageLimit {
+			break // 已到顶（本页未填满 = 没有更老的行）
+		}
 	}
-	if err := rows.Err(); err != nil {
-		services.Logf("error", "security event feed: rows iteration failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
-		return
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "since_id": sinceID, "limit": limit}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "since_id": sinceID, "next_since_id": nextSinceID, "limit": limit}})
 }
 
 // triggerTypeForRule 触发类型显示映射（v2.3.8 单源）：阶段 id → 业务语义类型。

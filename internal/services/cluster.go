@@ -33,18 +33,10 @@ var (
 	ErrSyncUsersLocked = errors.New("系统数据为恒同步项（含用户/密钥/ACME），不允许禁用；证书随负载规则开关")
 )
 
-type ClusterLifecycle interface {
-	StartACME()
-	StopACME()
-	StartSync()
-	StopSync()
-}
-
 type ClusterService struct {
 	db *sql.DB
 	// dataDir 用于品牌镜像(branding.json)与未来文件态同步的本地路径。
 	dataDir              string
-	lifecycle            ClusterLifecycle
 	roleMu               sync.Mutex
 	pinCleanupMu         sync.Mutex
 	pendingPinPath       string
@@ -58,8 +50,8 @@ type ClusterService struct {
 	sectionReports map[int]map[string]string
 }
 
-func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle, dataDir string) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle, dataDir: dataDir, snapshotNow: time.Now, sectionReports: make(map[int]map[string]string)}
+func NewClusterService(database *sql.DB, dataDir string) *ClusterService {
+	return &ClusterService{db: database, dataDir: dataDir, snapshotNow: time.Now, sectionReports: make(map[int]map[string]string)}
 }
 
 func randomHex(byteCount int) (string, error) {
@@ -129,9 +121,24 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 		return models.ClusterRegistration{}, err
 	}
 	var nodeID int
+	var overwrittenNodeID int
+	var overwrittenNodeName string
 	err = tx.QueryRowContext(ctx, "SELECT id FROM nodes WHERE ip_address=? AND port=?", req.IPAddress, req.Port).Scan(&nodeID)
 	switch {
 	case err == nil:
+		// L02-03（RG-CLUSTER-NODE-IDENTITY）：命中既有行=upsert（保留重复注册/
+		// 重试的兼容路径），但若该行已批准，重置审批与令牌等于静默覆盖一个在运
+		// 节点——响应与审计必须点名被覆盖节点。协议不新增 replace 参数：旧从节点
+		// 重试注册不携带该标志，强制 409 会让滚动升级期重试永久失败。
+		var existingName string
+		var existingApproved bool
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(name,''), COALESCE(is_approved,0) FROM nodes WHERE id=?", nodeID).Scan(&existingName, &existingApproved); err != nil {
+			return models.ClusterRegistration{}, fmt.Errorf("读取既有节点: %w", err)
+		}
+		if existingApproved {
+			overwrittenNodeID = nodeID
+			overwrittenNodeName = existingName
+		}
 		// CL23-1(第 23 轮审计):access_url 是管理员配置态——重新注册不携带
 		// (cluster_mode.go:49-51 恒空)时保留存量,不静默清空。
 		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, access_url=COALESCE(NULLIF(?,''),access_url), status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, req.AccessURL, tokenHash(secret), nodeID)
@@ -155,7 +162,7 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	if err := tx.Commit(); err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("提交节点注册: %w", err)
 	}
-	return models.ClusterRegistration{RegistrationID: nodeID, RegistrationSecret: secret}, nil
+	return models.ClusterRegistration{RegistrationID: nodeID, RegistrationSecret: secret, OverwrittenNodeID: overwrittenNodeID, OverwrittenNodeName: overwrittenNodeName}, nil
 }
 
 func (s *ClusterService) UpdateNodeAccessURL(ctx context.Context, nodeID int, accessURL string) error {
@@ -268,15 +275,31 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(master_url,'') FROM global_config WHERE id=1").Scan(&masterURL); err != nil {
 		return fmt.Errorf("读取旧主节点地址: %w", err)
 	}
-	if s.lifecycle != nil {
-		s.lifecycle.StopSync()
+	te := TaskEngine()
+	clusterSyncWasOn := false
+	if te != nil {
+		if meta, ok := te.Lookup("cluster-sync"); ok {
+			clusterSyncWasOn = meta.LoopOn
+		}
+		if clusterSyncWasOn {
+			te.StopLoop("cluster-sync")
+		}
 	}
 	promoted := false
 	defer func() {
-		if !promoted && s.lifecycle != nil {
-			s.lifecycle.StartSync()
+		if !promoted && te != nil && clusterSyncWasOn {
+			te.StartLoop("cluster-sync")
 		}
 	}()
+	// L02-01（RG-CLUSTER-PROMOTE-DRAIN）：engine.StopLoop 只取消 daemon ctx，
+	// daemon 的 Stop 在另一 goroutine 异步执行——不显式排干则在途拉取（含已
+	// 通过 admission 的 apply）可能在升主提交后继续把从节点数据写回库。
+	// 排干失败（ctx 到期）即中止提升，不做半程角色翻转。
+	if drainer := syncDrainerFor(s.db); drainer != nil {
+		if err := drainer.DrainPulls(ctx); err != nil {
+			return fmt.Errorf("等待在途同步拉取结束: %w", err)
+		}
+	}
 	var registrationID int
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(registration_id,0) FROM global_config WHERE id=1").Scan(&registrationID); err != nil {
 		return fmt.Errorf("读取注册编号: %w", err)
@@ -315,37 +338,18 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if registrationID > 0 {
 		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
 	}
-	if s.lifecycle != nil {
-		s.lifecycle.StartACME()
-	}
 	// 自动备份：v2.0 引擎 Scheduled 驱动（RunsOn=MasterOnly 角色门）——
 	// promote 后由引擎 SetRole 使能，无需单独拉起。
-	// C7（第 76 轮）：引擎角色显式直调收口——与 BecomeSlave 侧对称（原仅经
-	// 三管理器 SetMasterRole 间接传播，三管理器同时为 nil 时引擎角色不翻转，
-	// master-only 任务升主后不恢复调度；生产恒初始化故不可达，防御性收敛）。
-	// 管理器路径保留（内部转调引擎=幂等重申）。
-	if te := TaskEngine(); te != nil {
+	// 角色翻转由引擎 SetRole 唯一驱动：cert-issuance/cluster-sync 经 daemon
+	// 生命周期挂钩启停，不再存在管理器直调或旧调度器旁路。
+	if te != nil {
 		te.SetRole(true)
+		if clusterSyncWasOn {
+			te.StartLoop("cluster-sync")
+		}
 	}
-	if crsManager := GetCRSUpdateManager(); crsManager != nil {
-		crsManager.SetMasterRole(true)
-	}
-	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
-		ip2regionMgr.SetMasterRole(true)
-	}
-	// 威胁情报库调度器同族（v2.3.x）：提升为主节点即启动（nil=未初始化，
-	// 测试二进制跳过——与 CRS/IP2Region 管理器同模式）。
-	if threatMgr := GetThreatUpdateManager(); threatMgr != nil {
-		threatMgr.SetMasterRole(true)
-	}
-	// D1（第 74 轮审计）：自动封禁调度恢复——从节点期间调度未开（启动门按
-	// 当时刻库内开关对齐；主端快照同步来的 enabled=1 不联动从端调度），升主后
-	// 库值已启用而调度永不开=静默停摆。按 AutobanEnabled() 重开 StartLoop；
-	// 未启用不开（否则首 tick 被 Run 体业务门拦停，每次升主落「未启用」假失败
-	// 行，与启动门同口径）。引擎 RoleMasterOnly 角色门+loopOn 保留语义不变。
-	if te := TaskEngine(); te != nil && AutobanEnabled() {
-		te.StartLoop(AutobanTaskID)
-	}
+	// 升主后按库实态统一恢复六个业务驱动任务，而非只恢复 autoban。
+	SyncBusinessTaskDrivers()
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {

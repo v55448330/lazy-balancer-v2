@@ -109,13 +109,13 @@ func TestBuildCorazaDirectives_stage0DetectionEmptyAlwaysEmitsID12(t *testing.T)
 	}
 }
 
-// allow 模式空名单（否定算子不可收敛）：维持内容门控——无规则、不开引擎
-// （与无名单形态逐字节一致）。
+// allow 模式空名单：P1-SEC-02 失败关闭——必须发射拒绝规则（否定算子命中
+// 全部来源），不得静默放行。
 func TestBuildCorazaDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
 	policy := &models.SecurityPolicy{Mode: "off", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`}
 	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0, "lb_test"))
-	if directives != "" {
-		t.Fatalf("allow 模式空名单（否定算子）不得发射任何规则/开引擎: %q", directives)
+	if !strings.Contains(directives, "!@ipListFast") || !strings.Contains(directives, "deny") {
+		t.Fatalf("allow 模式空名单必须发射失败关闭拒绝规则: %q", directives)
 	}
 }
 
@@ -175,15 +175,16 @@ func TestBuildIPPrecheckDirectives_emptyTrustKeepsContentGate(t *testing.T) {
 	}
 }
 
-// 预检合并段：allow 模式空名单（否定算子）维持内容门控——不发射 id:7。
+// 预检合并段：allow 模式空名单 → 失败关闭，必须发射 id:7 拒绝（否定算子命中
+// 全部来源）。
 func TestBuildIPPrecheckDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
 	policies := []*models.SecurityPolicy{{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`}}
 	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(directives, "id:7,") {
-		t.Fatalf("allow 模式空名单（否定算子）预检不得发射 id:7:\n%s", directives)
+	if !strings.Contains(directives, "id:7,") {
+		t.Fatalf("allow 模式空名单预检必须发射 id:7 拒绝:\n%s", directives)
 	}
 }
 

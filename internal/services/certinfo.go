@@ -28,6 +28,21 @@ func CertDaysRemaining(notAfter, now time.Time) int {
 	return int(notAfter.Sub(now).Hours() / 24)
 }
 
+// CertificateExpiryStatus 证书到期状态单源（U06-F03，第 78 轮）：天粒度判定，
+// 过期优先于临期（-1h 过期时 CertDaysRemaining=0，不得回落 expiring）。
+// 消费点：certinfo 列表（FormatRuleCertInfo）、任务列表（handlers.ListCertJobs）、
+// 手动巡检（checkManualCertExpiration）——三处必须同结论，禁止各自比较完整时长
+// 或另写 switch（原 certjobs 用 `<= days*24h` 纳秒口径，与截断天数在阈值边界分叉）。
+func CertificateExpiryStatus(notAfter, now time.Time, thresholdDays int) string {
+	if !now.Before(notAfter) {
+		return "expired"
+	}
+	if CertDaysRemaining(notAfter, now) <= thresholdDays {
+		return "expiring"
+	}
+	return "valid"
+}
+
 // GetCertExpiryThreshold returns the configured cert expiry warning threshold in days.
 // 库值唯一真相（批 3）：cert_expiry_days 类型①值型列直读（COALESCE 兜底
 // 删除）——NULL/<=0 由启动回填（db.go defaultUpdates）收敛；此处的降级分支
@@ -58,8 +73,9 @@ func GetCertExpiryThreshold() int {
 // U7-P5-2（第 62 轮审计）：cert_renewal_days 读取收敛到本 helper（原四处内联：
 // certificates.go 启动恢复/续签巡检/首发失败重试 + certissuer.go 快速路径）。
 // CERT42-5（第 42 轮审计）：读取失败降级默认值必须告警——静默落 30 天默认会让
-// 配置读取退化无任何可观测痕迹。2026-09-07 C2 核实：UI 输入 min=1，0/负值仅
-// API 直写/导入可达——按默认 30 天兜底（非「禁用续签」语义）。
+// 配置读取退化无任何可观测痕迹。L04-02（第 78 轮）：库值 0/负值（带外直写/导入
+// 遗留；API 与导入下界已钳到 1）同属「读侧带外防线」，降级 30 天时必须 error
+// 级留痕库值，禁止静默改写。
 func GetCertRenewalDays() int {
 	// SVC-F2（第 73 轮）：未初始化库回退默认 30 天（同 GetCertExpiryThreshold）。
 	if db.DB == nil {
@@ -72,6 +88,7 @@ func GetCertRenewalDays() int {
 		return 30
 	}
 	if days <= 0 {
+		Logf("error", "GetCertRenewalDays: cert_renewal_days 库值无效（%d <=0）——写侧下界 1 已钳制，疑似带外直写/旧导入；本轮降级默认 30 留痕", days)
 		return 30
 	}
 	return days
@@ -164,15 +181,7 @@ func FormatRuleCertInfo(certPEM, source, ruleDomains, caddyID string, expiryDays
 	info.NotBefore = cert.NotBefore.Format(timeFmt)
 	info.NotAfter = cert.NotAfter.Format(timeFmt)
 	info.DaysRemaining = CertDaysRemaining(cert.NotAfter, now)
-
-	switch {
-	case !now.Before(cert.NotAfter):
-		info.Status = "expired"
-	case info.DaysRemaining <= expiryDays:
-		info.Status = "expiring"
-	default:
-		info.Status = "valid"
-	}
+	info.Status = CertificateExpiryStatus(cert.NotAfter, now, expiryDays)
 
 	return info
 }

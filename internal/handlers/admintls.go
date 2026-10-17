@@ -360,9 +360,17 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if mode != "" { // 禁用路径未提交 mode——空值段不拼（第 59 轮 R59-P5）
 		modePart = "证书来源：" + mode
 	}
+	// U13-10（第 78 轮）：cert/key 可能被本次上传替换，此前审计只记启用态+
+	// 来源——「只开关未换证书」与「换证书」在审计里不可区分。显式留痕（不落
+	// 证书本体）。
+	certPart := "证书：未更换"
+	if uploadedCertificate {
+		certPart = "证书：已更换（来源 upload）"
+	}
 	recordAudit(c, "更新", "基础设置", services.FormatAuditDetail(
 		map[bool]string{true: "启用", false: "禁用"}[enabled],
 		modePart,
+		certPart,
 		services.AuditResultPart("success"),
 	))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，服务正在重启以应用 HTTPS 配置"})

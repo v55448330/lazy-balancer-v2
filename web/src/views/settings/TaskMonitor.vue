@@ -74,9 +74,9 @@
       <div class="tm-cq-banner-inner">
         <div class="tm-cq-banner-title"><el-icon class="title-icon"><Lock /></el-icon><span>ACME 证书任务队列</span></div>
         <div class="tm-cq-banner-stats">
-          <span class="tm-cq-chip">排队 <b>{{ certQueue.queued }}</b></span>
-          <span class="tm-cq-chip">进行中 <b class="tm-c-run">{{ certQueue.running }}</b></span>
-          <span class="tm-cq-chip">等 CA <b class="tm-c-wait">{{ certQueue.waiting }}</b></span>
+          <span class="tm-cq-chip">排队 <b>{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.queued }}</b></span>
+          <span class="tm-cq-chip">进行中 <b class="tm-c-run">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.running }}</b></span>
+          <span class="tm-cq-chip">等 CA <b class="tm-c-wait">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.waiting }}</b></span>
         </div>
         <div class="tm-cq-banner-live">
           <template v-if="certQueue.jobs.length">
@@ -98,8 +98,12 @@
       <template #header>
         <div class="card-header">
           <div class="card-title"><el-icon class="title-icon"><List /></el-icon><span>全部任务</span>
-            <span class="tm-count">{{ tasks.length }}</span>
+            <span class="tm-count">{{ filteredTasks.length }}</span>
           </div>
+          <el-select v-model="categoryFilter" size="small" clearable placeholder="全部分类" class="tm-category-filter" @change="page = 1">
+            <el-option label="全部分类" value="all" />
+            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+          </el-select>
           <el-radio-group v-model="kindFilter" size="small">
             <el-radio-button value="all">全部</el-radio-button>
             <el-radio-button value="scheduled">定时</el-radio-button>
@@ -122,7 +126,7 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="分类" width="92" :filters="categoryFilters" :filter-method="filterCategory">
+        <el-table-column label="分类" width="92">
           <template #default="{ row }">
             <el-tag size="small" effect="plain" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
           </template>
@@ -207,7 +211,7 @@
             <el-button
               v-if="row.controllable"
               link type="warning" size="small"
-              :disabled="!canOperate"
+              :disabled="!canOperate || taskActionPendingId !== null"
               @click="onRestart(row)"
             >重启</el-button>
             <el-button link type="info" size="small" @click="openLogs(row)">日志</el-button>
@@ -308,7 +312,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import '@/utils/echarts' // 统一注册（含 LineChart——直刷本页不再依赖先到 Dashboard）
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
@@ -332,7 +336,7 @@ interface TaskInfo {
   kind: 'scheduled' | 'daemon' | 'periodic' | 'oneshot'
   status: string; cancellable: boolean; controllable?: boolean; triggerable?: boolean
   last_run?: TaskRunInfo; next_run_at?: string; runs_24h: number; success_24h: number; fail_24h: number
-  loop_on?: boolean; started_at?: string; log_size_bytes?: number // 常驻族：循环启停态/引擎启动时刻
+  loop_on?: boolean; started_at?: string; log_size_bytes?: number; business_driven?: boolean // 常驻族：循环启停态/引擎启动时刻
 }
 interface RunRecord {
   id: number; task_id: string; family: string; trigger: string; operator?: string; status: string
@@ -407,23 +411,41 @@ const retryPolling = async (): Promise<void> => {
 // ===== 证书队列状态（独立卡——非任务族） =====
 interface CertJobRow { id: number; domain: string; status: string; updated_at?: string | null; ca_provider_name?: string }
 // FE-D3（第 69 轮）：certQueue.loaded 死字段删除（写字段零消费方）。
-const certQueue = ref<{ queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[] }>({
-  queued: 0, running: 0, waiting: 0, total: 0, jobs: [],
+const certQueue = ref<{ queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[]; truncated: boolean }>({
+  queued: 0, running: 0, waiting: 0, total: 0, jobs: [], truncated: false,
 })
+// 服务端聚合计数（/certificates/jobs 未提供时按可见行推导，且只在 total 超页时
+// 声明「≥」——第 78 轮 U16-F15：原 page_size=50 忽略 total，>50 任务时计数偏小）
+const CERT_QUEUE_PAGE_SIZE = 200
 const fetchCertQueue = async () => {
   try {
-    const res = await request.get<APIResponse<{ list: CertJobRow[]; total: number }>>('/certificates/jobs', { params: { page: 1, page_size: 50 }, silent: true })
-    // 实时队列 = 非终态（签发执行状态/结果在任务列表 cert-job 行）
-    const live = (res.data?.list || []).filter(j => !['issued', 'failed', 'disabled'].includes(j.status))
-    const count = (pred: (j: CertJobRow) => boolean) => live.filter(pred).length
+    const res = await request.get<APIResponse<{ list: CertJobRow[]; total: number; status_counts?: Record<string, number> }>>('/certificates/jobs', { params: { page: 1, page_size: CERT_QUEUE_PAGE_SIZE }, silent: true })
+    const list = res.data?.list || []
+    const counts = res.data?.status_counts
+    const statusCount = (statuses: string[]): number => statuses.reduce((sum, s) => sum + (counts?.[s] || 0), 0)
+    let liveCount: number
+    let queued: number
+    let waiting: number
+    if (counts) {
+      const terminal = statusCount(['issued', 'failed', 'disabled'])
+      liveCount = Object.values(counts).reduce((sum, n) => sum + n, 0) - terminal
+      queued = statusCount(['queued', 'pending'])
+      waiting = statusCount(['waiting_ca'])
+    } else {
+      const live = list.filter(j => !['issued', 'failed', 'disabled'].includes(j.status))
+      liveCount = live.length
+      queued = live.filter(j => ['queued', 'pending'].includes(j.status)).length
+      waiting = live.filter(j => j.status === 'waiting_ca').length
+    }
+    const liveJobs = list.filter(j => !['issued', 'failed', 'disabled'].includes(j.status))
     certQueue.value = {
-      total: live.length,
-      // FE-70-3：进行中扣除 waiting_ca——曾 live-queued 把「等 CA」双计进
-      // 「进行中」（同屏「进行中 2·等 CA 2」实为同一批任务）；waiting 仅入「等 CA」
-      queued: count(j => ['queued', 'pending'].includes(j.status)),
-      running: live.length - count(j => ['queued', 'pending'].includes(j.status)) - count(j => j.status === 'waiting_ca'),
-      waiting: count(j => j.status === 'waiting_ca'),
-      jobs: live.slice(0, 6),
+      total: liveCount,
+      // status_counts 为空时才依赖首页下界；有聚合计数则完整。
+      truncated: !counts && (res.data?.total ?? 0) > list.length,
+      queued,
+      running: Math.max(0, liveCount - queued - waiting),
+      waiting,
+      jobs: liveJobs.slice(0, 6),
     }
   } catch { /* 静默：独立卡数据下一轮轮询自愈 */ }
 }
@@ -435,16 +457,22 @@ const fail24h = computed(() => tasks.value.reduce((s, t) => s + (t.fail_24h || 0
 
 // ===== 筛选 + 分页 =====
 const kindFilter = ref('all')
+// 第 78 轮 U16-F09：分类筛选原为 el-table 列级 filter（作用在 pagedTasks 切片上=
+// 只过滤当前页），现提升到 filteredTasks 参与计数/分页。
+const categoryFilter = ref('all')
+const categoryOptions = computed(() => [...new Set(tasks.value.map(t => t.category))].sort())
 const filteredTasks = computed(() => {
-  const list = kindFilter.value === 'all' ? tasks.value : tasks.value.filter(t => t.kind === kindFilter.value)
+  const list = tasks.value
+    .filter(t => kindFilter.value === 'all' || t.kind === kindFilter.value)
+    .filter(t => categoryFilter.value === 'all' || !categoryFilter.value || t.category === categoryFilter.value)
   // 默认按分类排序（安全防护→证书→备份→集群→系统→触发），类内稳定
   return [...list].sort((a, b) => (categoryOrder[a.category] ?? 9) - (categoryOrder[b.category] ?? 9))
 })
 const page = ref(1)
 const pageSize = ref(20)
 const pagedTasks = computed(() => filteredTasks.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
-const categoryFilters = computed(() => [...new Set(tasks.value.map(t => t.category))].map(c => ({ text: c, value: c })))
-const filterCategory = (value: string, row: TaskInfo) => row.category === value
+// 筛选条件变化回第 1 页（避免高页码 + 收窄结果落在空页）
+watch([kindFilter, categoryFilter], () => { page.value = 1 })
 
 // ===== 图表（引擎真数据） =====
 const statusPieOption = computed<EChartsOption>((): EChartsOption => {
@@ -486,46 +514,91 @@ const statsBarOption = computed<EChartsOption>((): EChartsOption => {
 })
 
 // ===== 操作 =====
-const onTrigger = async (row: TaskInfo) => {
-  try {
-    await ElMessageBox.confirm(`立即执行「${row.name}」？`, '手动触发', { type: 'info', confirmButtonText: '执行' })
-  } catch { return }
-  const res = await request.post<APIResponse>(`/system/tasks/${row.id}/trigger`)
-  ElMessage.success(res.message || '已触发')
-  fetchTasks()
+// 第 78 轮 U16-F19：请求调用原在 confirm 的 try 之外 → 失败产生 unhandled
+// rejection；且无重入守卫（快速双击叠加多个确认框/重复请求）。统一范式：
+// pending 守卫 → confirm → try/catch 包住请求 → finally 释放。
+const taskActionPendingId = ref<string | null>(null)
+
+interface TaskActionOptions {
+  /** 可选确认框（占位在其之前完成——快速双击只出现一个框）。 */
+  confirm?: { message: string; title: string; type?: 'warning' | 'info'; confirmButtonText: string }
+  request: () => Promise<APIResponse>
+  successFallback: string
+  failureLabel: string
+  /** 失败后回读服务端真实状态（开关类操作用）。 */
+  refreshOnError?: boolean
 }
-const onToggle = async (row: TaskInfo, enabled: boolean) => {
+
+/**
+ * 任务操作统一执行器（第 78 轮 U16-F19）：占位守卫 → 确认 → 请求 → 记录失败
+ * → 释放占位。原实现把 request 放在 confirm 的 try 之外（失败 unhandled
+ * rejection）且无重入守卫（双击叠加确认框/重复请求）。
+ */
+async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise<void> {
+  if (taskActionPendingId.value !== null) return
+  taskActionPendingId.value = row.id
+  try {
+    if (options.confirm) {
+      try {
+        await ElMessageBox.confirm(options.confirm.message, options.confirm.title, {
+          type: options.confirm.type ?? 'warning',
+          confirmButtonText: options.confirm.confirmButtonText,
+        })
+      } catch {
+        return // 用户取消：不请求
+      }
+    }
+    const res = await options.request()
+    ElMessage.success(res.message || options.successFallback)
+    fetchTasks()
+  } catch (error: unknown) {
+    // 全局拦截器已 toast；仅记录，避免 unhandled rejection
+    console.error(`${options.failureLabel} failed`, error)
+    if (options.refreshOnError) fetchTasks()
+  } finally {
+    if (taskActionPendingId.value === row.id) taskActionPendingId.value = null
+  }
+}
+
+const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {
+  confirm: { message: `立即执行「${row.name}」？`, title: '手动触发', type: 'info', confirmButtonText: '执行' },
+  request: () => request.post<APIResponse>(`/system/tasks/${row.id}/trigger`),
+  successFallback: '已触发',
+  failureLabel: 'trigger task',
+})
+
+const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
   if (isBusinessDrivenTask(row)) {
     ElMessage.warning('该任务由对应业务页自动更新控制，请在业务页修改')
     return
   }
   // 常驻族停止前确认（功能中断影响大——如安全事件采集停摆）
-  if (!enabled && row.kind === 'daemon') {
-    try {
-      await ElMessageBox.confirm(`确认停止「${row.name}」？停止后相关功能将中断，可随时重新启动。`, '常驻任务控制', { type: 'warning', confirmButtonText: '停止' })
-    } catch { return }
-  }
-  const res = await request.post<APIResponse>(`/system/tasks/${row.id}/toggle`, { enabled })
-  ElMessage.success(res.message || '已更新')
-  fetchTasks()
+  const needConfirm = !enabled && row.kind === 'daemon'
+  await runTaskAction(row, {
+    confirm: needConfirm
+      ? { message: `确认停止「${row.name}」？停止后相关功能将中断，可随时重新启动。`, title: '常驻任务控制', confirmButtonText: '停止' }
+      : undefined,
+    request: () => request.post<APIResponse>(`/system/tasks/${row.id}/toggle`, { enabled }),
+    successFallback: '已更新',
+    failureLabel: 'toggle task',
+    refreshOnError: true,
+  })
 }
-const onCancel = async (row: TaskInfo) => {
-  try {
-    await ElMessageBox.confirm(`取消运行中的「${row.name}」？下载阶段将中断，已完成部分保留。`, '手动取消', { type: 'warning', confirmButtonText: '取消任务' })
-  } catch { return }
-  const res = await request.post<APIResponse>(`/system/tasks/${row.id}/cancel`)
-  ElMessage.success(res.message || '已发出取消信号')
-  fetchTasks()
-}
+
+const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
+  confirm: { message: `取消运行中的「${row.name}」？下载阶段将中断，已完成部分保留。`, title: '手动取消', confirmButtonText: '取消任务' },
+  request: () => request.post<APIResponse>(`/system/tasks/${row.id}/cancel`),
+  successFallback: '已发出取消信号',
+  failureLabel: 'cancel task',
+})
+
 // U5-P4-6e：常驻行操作列「重启」（control restart——启停已由调度列开关承担）
-const onRestart = async (row: TaskInfo) => {
-  try {
-    await ElMessageBox.confirm(`确认重启「${row.name}」？重启期间相关功能将短暂中断。`, '常驻任务控制', { type: 'warning', confirmButtonText: '重启' })
-  } catch { return }
-  const res = await request.post<APIResponse>(`/system/tasks/${row.id}/control`, { action: 'restart' })
-  ElMessage.success(res.message || '已重启')
-  fetchTasks()
-}
+const onRestart = (row: TaskInfo): Promise<void> => runTaskAction(row, {
+  confirm: { message: `确认重启「${row.name}」？重启期间相关功能将短暂中断。`, title: '常驻任务控制', confirmButtonText: '重启' },
+  request: () => request.post<APIResponse>(`/system/tasks/${row.id}/control`, { action: 'restart' }),
+  successFallback: '已重启',
+  failureLabel: 'restart task',
+})
 
 // ===== 详情 =====
 const detailVisible = ref(false)
@@ -623,8 +696,7 @@ const kindLabel = (k: string) => kindLabels[k] || k
 const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
   k === 'scheduled' ? 'primary' : k === 'daemon' ? 'success' : k === 'periodic' ? 'info' : 'warning'
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
-const businessDrivenTaskIDs = new Set(['threat', 'crs', 'ip2region', 'crawlerbot-update', 'auto-backup', 'autoban'])
-const isBusinessDrivenTask = (row: TaskInfo) => businessDrivenTaskIDs.has(row.id)
+const isBusinessDrivenTask = (row: TaskInfo) => !!row.business_driven
 const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4, '触发': 5 }
 const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' =>
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : c === '触发' ? 'info' : 'info'
@@ -658,7 +730,8 @@ const fmtDuration = (ms?: number) => {
 
 <style scoped>
 .tm-root { display: flex; flex-direction: column; gap: 20px; max-width: 1500px; margin: 0 auto; width: 100%; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.tm-category-filter { width: 150px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,16 +20,20 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// clusterLifecycleFake 的观测位用原子布尔：生命周期回调在引擎 daemon
+// goroutine 上异步执行（StopLoop 只取消 ctx），非原子 bool 既会被 race
+// detector 报数据竞争，也会让「回调是否已发生」的断言变成调度竞猜——
+// 调用方必须 waitForCond + Load 断言，不得读后即断。
 type clusterLifecycleFake struct {
-	acmeStarted bool
-	syncStarted bool
-	syncStopped bool
+	acmeStarted atomic.Bool
+	syncStarted atomic.Bool
+	syncStopped atomic.Bool
 }
 
-func (f *clusterLifecycleFake) StartACME() { f.acmeStarted = true }
+func (f *clusterLifecycleFake) StartACME() { f.acmeStarted.Store(true) }
 func (f *clusterLifecycleFake) StopACME()  {}
-func (f *clusterLifecycleFake) StartSync() { f.syncStarted = true }
-func (f *clusterLifecycleFake) StopSync()  { f.syncStopped = true }
+func (f *clusterLifecycleFake) StartSync() { f.syncStarted.Store(true) }
+func (f *clusterLifecycleFake) StopSync()  { f.syncStopped.Store(true) }
 
 // v3SnapshotWithACMESection 将直调 applySnapshot 的夹具补齐为生产可达形态：
 // 生产快照经 verifiedSnapshotIntegrity 闸门后必为当前 schema 且携带 ACME
@@ -55,7 +60,7 @@ func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 	})
-	return NewClusterService(database, nil, ""), database
+	return NewClusterService(database, ""), database
 }
 
 func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.ClusterSnapshot) error {
@@ -563,7 +568,11 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	// 防止泄漏的 worker 跨用例 tick 全局 DB。
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(database, lifecycle, "")
+	service := NewClusterService(database, "")
+	wireClusterLifecycleEngineForTest(t, lifecycle, false)
+	lifecycle.syncStarted.Store(false)
+	lifecycle.syncStopped.Store(false)
+	lifecycle.acmeStarted.Store(false)
 	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4, applied_version=3, sync_fingerprint='fp-1', last_sync_error='{"code":"transport_error","message":"同步拉取失败"}', registration_confirm_failures=2 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
@@ -588,16 +597,14 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	if appliedVersion != 0 || fingerprint != "" || syncError != "" || confirmFailures != 0 {
 		t.Fatalf("promote left slave residue: applied_version=%d fingerprint=%q sync_error=%q confirm_failures=%d", appliedVersion, fingerprint, syncError, confirmFailures)
 	}
-	if !lifecycle.syncStopped || !lifecycle.acmeStarted {
-		t.Fatalf("lifecycle syncStopped=%v acmeStarted=%v", lifecycle.syncStopped, lifecycle.acmeStarted)
-	}
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped.Load() && lifecycle.acmeStarted.Load() })
 }
 
 func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) {
 	// Given
 	// Promote 成功路径会拉起自动备份调度器(CL41-1b)——测试结束即停。
 	_, database := newClusterTestService(t)
-	service := NewClusterService(database, nil, "")
+	service := NewClusterService(database, "")
 	masterURL := "https://master.example:8443"
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='secret' WHERE id=1", masterURL); err != nil {
 		t.Fatal(err)
@@ -675,7 +682,11 @@ func TestClusterService_Promote_succeeds_when_pin_cleanup_fails_then_retries_on_
 func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.T) {
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
-	service := NewClusterService(database, lifecycle, "")
+	service := NewClusterService(database, "")
+	wireClusterLifecycleEngineForTest(t, lifecycle, false)
+	lifecycle.syncStarted.Store(false)
+	lifecycle.syncStopped.Store(false)
+	lifecycle.acmeStarted.Store(false)
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
@@ -687,9 +698,7 @@ func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.
 	if err := service.Promote(context.Background()); err == nil {
 		t.Fatal("promotion unexpectedly succeeded")
 	}
-	if !lifecycle.syncStopped || !lifecycle.syncStarted {
-		t.Fatalf("lifecycle syncStopped=%v syncStarted=%v", lifecycle.syncStopped, lifecycle.syncStarted)
-	}
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped.Load() && lifecycle.syncStarted.Load() })
 	var isMaster bool
 	if err := database.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		t.Fatalf("read role after failed promotion: %v", err)

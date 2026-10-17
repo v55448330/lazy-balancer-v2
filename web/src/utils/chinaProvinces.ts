@@ -5,7 +5,7 @@
 // （与后端 formatIP2RegionLocation → ip2RegionShortenName 及 china_provinces
 // 响应键严格对齐：广东省→广东、广西壮族自治区→广西）；centroid=外环多边形质心
 // [lon,lat]（省标签/国内事件弧线锚点；Ruling：省质心近似，不内置市级质心表）。
-export interface ChinaProvince {
+interface ChinaProvince {
   name: string
   short: string
   centroid: [number, number]

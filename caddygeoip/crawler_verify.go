@@ -163,38 +163,71 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 // caddygeoip 独立模块不 import 根模块，快照经共享文件交换）。
 var crawlerIPListFile = "/app/data/crawler-ip-lists.json"
 
+// crawlerIPRangeSnapshot 预编译快照：引擎 ID → 已解析前缀列表。加载时一次性
+// ParsePrefix（U14-06），判定热路径零解析/零分配。
+type crawlerIPRangeSnapshot struct {
+	prefixes map[string][]netip.Prefix
+	loadedAt time.Time
+}
+
 var (
-	crawlerFileCacheMu     sync.Mutex
-	crawlerFileCacheTime   time.Time
-	crawlerFileCacheResult = map[string][]string{}
+	crawlerFileCacheMu   sync.Mutex
+	crawlerFileCacheSnap *crawlerIPRangeSnapshot
 )
+
+const crawlerIPListReloadInterval = 10 * time.Minute
+
+// loadCrawlerIPRangeSnapshot 返回当前快照（超过 10min 重读）。读盘与解析在
+// 锁外完成（双检 + 原子快照替换）：文件大/磁盘慢时不再阻塞并发判定。读取/
+// JSON/解析失败同样写入节流时间戳并返回空快照（fail-closed + 失败也节流，
+// 旧实现失败路径不写时间戳，缺失文件时每次判定都尝试读盘）。
+func loadCrawlerIPRangeSnapshot() *crawlerIPRangeSnapshot {
+	now := time.Now()
+	crawlerFileCacheMu.Lock()
+	snap := crawlerFileCacheSnap
+	if snap != nil && now.Sub(snap.loadedAt) <= crawlerIPListReloadInterval {
+		crawlerFileCacheMu.Unlock()
+		return snap
+	}
+	crawlerFileCacheMu.Unlock()
+
+	next := &crawlerIPRangeSnapshot{prefixes: map[string][]netip.Prefix{}, loadedAt: now}
+	if data, err := os.ReadFile(crawlerIPListFile); err == nil {
+		var all map[string][]string
+		if err := json.Unmarshal(data, &all); err == nil {
+			for engine, cidrs := range all {
+				prefixes := make([]netip.Prefix, 0, len(cidrs))
+				for _, cidr := range cidrs {
+					if p, err := netip.ParsePrefix(cidr); err == nil {
+						prefixes = append(prefixes, p)
+					}
+				}
+				next.prefixes[engine] = prefixes
+			}
+		}
+	}
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = next
+	crawlerFileCacheMu.Unlock()
+	return next
+}
 
 // verifyCrawlerIPRangeFromList 从共享快照文件验证 IP 段命中（缺失/为空=fail-closed；
 // mtime 变化才重读，2000/s 混合流量下文件系统开销=stat 节流）。
 func verifyCrawlerIPRangeFromList(ipStr, engineID string) bool {
-	now := time.Now()
-	crawlerFileCacheMu.Lock()
-	defer crawlerFileCacheMu.Unlock()
-	if now.Sub(crawlerFileCacheTime) > 10*time.Minute {
-		data, err := os.ReadFile(crawlerIPListFile)
-		if err != nil {
-			return false
-		}
-		var all map[string][]string
-		if err := json.Unmarshal(data, &all); err != nil {
-			return false
-		}
-		crawlerFileCacheResult = all
-		crawlerFileCacheTime = now
-	}
-	entries := crawlerFileCacheResult[engineID]
+	snap := loadCrawlerIPRangeSnapshot()
+	entries := snap.prefixes[engineID]
 	if len(entries) == 0 {
 		return false
 	}
-	ip := netip.MustParseAddr(ipStr)
-	for _, cidr := range entries {
-		prefix, err := netip.ParsePrefix(cidr)
-		if err == nil && prefix.Contains(ip) {
+	// U14-09：畸形地址不得 panic（MustParseAddr 旧实现可直接崩进程）——
+	// 解析失败即 fail-closed。
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range entries {
+		if prefix.Contains(ip) {
 			return true
 		}
 	}

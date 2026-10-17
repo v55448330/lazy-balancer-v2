@@ -168,9 +168,10 @@
             </el-table-column>
             <el-table-column label="引用" width="90" align="center">
               <template #default="{ row }">
-                <el-tooltip v-if="row.ref_policies.length > 0" placement="top" popper-class="ip-list-refs-popper" :popper-options="popperViewportSafe">
+                <el-tooltip v-if="row.ref_policies.length > 0 || row.trusted_proxy_referenced" placement="top" popper-class="ip-list-refs-popper" :popper-options="popperViewportSafe">
                   <template #content>
                     <div v-for="p in row.ref_policies" :key="p.id">{{ p.name }}</div>
+                    <div v-if="row.trusted_proxy_referenced">{{ row.trusted_proxy_scope || '受信代理网段' }}</div>
                   </template>
                   <span>{{ row.ref_count }}</span>
                 </el-tooltip>
@@ -305,6 +306,10 @@
         <DialogHeader :icon="List" :title="editingIpListId ? (ipListDialogReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'"
           subtitle="可复用 IP/CIDR 集合，供安全策略引用（黑白名单 / 信任名单）" />
       </template>
+      <div v-if="ipListDetailFailed" class="info-note-bar">
+        <span class="info-note-desc">名单条目加载失败：为避免以空条目覆盖原列表，保存已禁用。</span>
+        <el-button size="small" type="primary" plain @click="reloadIpListDetail">重新加载</el-button>
+      </div>
       <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="ipListDialogReadOnly" v-loading="loadingIpListDetail">
         <!-- F73-A：自动封禁预置名单名称/分类/描述为内置字段（后端 400 守卫同口径），
              前端直接禁用灰态——禁止修改的字段不可输入，而非提交后报 400 -->
@@ -388,7 +393,12 @@
         </template>
         <template v-else>
           <el-button @click="ipListDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="savingIpList" @click="saveIpList">保存</el-button>
+          <el-tooltip v-if="ipListDetailFailed" content="名单条目加载失败：保存会以空条目覆盖列表，已禁用；请重试加载" placement="top">
+            <span>
+              <el-button type="primary" disabled>保存</el-button>
+            </span>
+          </el-tooltip>
+          <el-button v-else type="primary" :loading="savingIpList" :disabled="!canSaveIpList(loadingIpListDetail, ipListDetailFailed)" @click="saveIpList">保存</el-button>
         </template>
       </template>
     </el-dialog>
@@ -590,6 +600,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess, formatBytes } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
+import { canSaveIpList, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
+import { formatIpListEntryLine, parseIpListEntryLine } from '@/utils/ipListCsv'
 import { popperViewportSafe } from '@/utils/popper'
 import { useAuthStore } from '@/stores/auth'
 
@@ -617,7 +629,11 @@ const fetchThreatLib = async () => {
       threatAutoUpdate.value = res.data.auto_update !== false
       if (res.data.schedule_days?.length) threatSchedule.value = { days: res.data.schedule_days, time: res.data.schedule_time || '04:00' }
     }
-  } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
+    threatLibError.value = false
+  } catch {
+    // 只读拉取失败：不打断页面，但健康标签必须显性为「加载失败」（U16-F05）
+    threatLibError.value = true
+  }
 }
 
 const toggleThreatFlag = async (row: ThreatSource, field: 'update_enabled', val: boolean) => {
@@ -644,7 +660,10 @@ const fetchCrawlerLib = async () => {
       crawlerAutoUpdate.value = res.data.auto_update !== false
       if (res.data.schedule_days?.length) crawlerSchedule.value = { days: res.data.schedule_days, time: res.data.schedule_time || '04:00' }
     }
-  } catch { /* 只读拉取失败静默（页面其余区域不受影响） */ }
+    crawlerLibError.value = false
+  } catch {
+    crawlerLibError.value = true
+  }
 }
 
 const toggleCrawlerFlag = async (row: CrawlerSource, field: 'update_enabled', val: boolean) => {
@@ -676,18 +695,21 @@ const libRows = computed<LibRow[]>(() => {
   const rows: LibRow[] = [
     {
       key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
-      version: crsInfo.value.available === false ? '未安装' : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
-      count: total.value ? total.value.toLocaleString() + ' 文件' : '—',
-      status: crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status,
+      // 读取失败时版本/条目显示 —（行保留，不冒充默认值；U16-F05）
+      version: crsInfoError.value ? '—' : crsInfo.value.available === false ? '未安装' : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
+      // 库容量=GET /security/crs 的 rule_count（服务端全量）；分页 total 只反映
+      // 当前搜索条件下的结果集，二者不可共用（U16-F04）。
+      count: crsInfoError.value || !crsInfo.value.rule_count ? '—' : crsInfo.value.rule_count.toLocaleString() + ' 文件',
+      status: crsInfoError.value ? 'failed' : crsInfo.value.available === false ? 'missing' : crsInfo.value.update_status,
       autoUpdate: crsInfo.value.auto_update,
       lastChecked: formatDate(crsInfo.value.last_checked) || '—',
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
     },
     {
       key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: 'IP 地理库', sub: 'IP 地理归属数据库',
-      version: ip2regionInfo.value.available === false ? '未安装' : ip2regionVersionLabel.value,
-      count: ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' && ip2regionInfo.value.version !== 'bundled' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
-      status: ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
+      version: ip2regionInfoError.value ? '—' : ip2regionInfo.value.available === false ? '未安装' : ip2regionVersionLabel.value,
+      count: !ip2regionInfoError.value && ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' ? ip2regionInfo.value.db_size.toLocaleString() : '—',
+      status: ip2regionInfoError.value ? 'failed' : ip2regionInfo.value.available === false ? 'missing' : (ip2regionStatusForTag.value === 'not-installed' ? 'idle' : ip2regionStatusForTag.value),
       autoUpdate: ip2regionInfo.value.auto_update,
       lastChecked: formatDate(ip2regionInfo.value.last_checked) || '—',
       nextUpdate: formatDate(ip2regionInfo.value.next_update) || '—',
@@ -708,8 +730,10 @@ const libRows = computed<LibRow[]>(() => {
       nextUpdate: srcs.map(x => formatDate(x.next_update)).filter(Boolean).sort().shift() || '—',
     }
   }
-  if (threatSources.value.length > 0) {
-    const summary = summarize(threatSources.value)
+  if (threatLibError.value || threatSources.value.length > 0) {
+    const summary = threatLibError.value
+      ? { totalEntries: 0, latestVersion: '', status: 'failed', lastChecked: '—', nextUpdate: '—' }
+      : summarize(threatSources.value)
     rows.push({
       key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
       name: '威胁情报库',
@@ -722,8 +746,10 @@ const libRows = computed<LibRow[]>(() => {
       nextUpdate: summary.nextUpdate,
     })
   }
-  if (crawlerSources.value.length > 0) {
-    const summary = summarize(crawlerSources.value)
+  if (crawlerLibError.value || crawlerSources.value.length > 0) {
+    const summary = crawlerLibError.value
+      ? { totalEntries: 0, latestVersion: '', status: 'failed', lastChecked: '—', nextUpdate: '—' }
+      : summarize(crawlerSources.value)
     rows.push({
       key: 'crawler', icon: Link, iconClass: 'lib-icon--crawler',
       name: '爬虫地址库',
@@ -744,22 +770,27 @@ const libRows = computed<LibRow[]>(() => {
 // SecurityLibrariesAvailable）时模板追加红色警示后缀。
 const libHealthTags = computed<Array<{ label: string; type: 'success' | 'danger' | 'warning' }>>(() => {
   const tags: Array<{ label: string; type: 'success' | 'danger' | 'warning' }> = [
-    crsInfo.value.available === false
-      ? { label: 'CRS 规则库 · 缺失', type: 'danger' }
-      : { label: 'CRS 规则库 · 正常', type: 'success' },
-    ip2regionInfo.value.available === false
-      ? { label: 'IP 地理库 · 缺失', type: 'danger' }
-      : { label: 'IP 地理库 · 正常', type: 'success' },
+    crsInfoError.value
+      ? { label: 'CRS 规则库 · 加载失败', type: 'danger' }
+      : crsInfo.value.available === false
+        ? { label: 'CRS 规则库 · 缺失', type: 'danger' }
+        : { label: 'CRS 规则库 · 正常', type: 'success' },
+    ip2regionInfoError.value
+      ? { label: 'IP 地理库 · 加载失败', type: 'danger' }
+      : ip2regionInfo.value.available === false
+        ? { label: 'IP 地理库 · 缺失', type: 'danger' }
+        : { label: 'IP 地理库 · 正常', type: 'success' },
   ]
-  const sourceHealth = (srcs: ThreatSource[], label: string): { label: string; type: 'success' | 'warning' } => {
+  const sourceHealth = (srcs: ThreatSource[], label: string, loadError: boolean): { label: string; type: 'success' | 'warning' | 'danger' } => {
+    if (loadError) return { label: `${label} · 加载失败`, type: 'danger' }
     const updating = srcs.some(x => x.update_status === 'running')
     const failed = srcs.filter(x => x.update_status === 'failed').length
     if (updating) return { label: `${label} · 更新中`, type: 'warning' }
     if (failed > 0) return { label: `${label} · ${failed} 源更新失败`, type: 'warning' }
     return { label: `${label} · 正常`, type: 'success' }
   }
-  tags.push(sourceHealth(threatSources.value, '威胁情报库'))
-  tags.push(sourceHealth(crawlerSources.value, '爬虫地址库'))
+  tags.push(sourceHealth(threatSources.value, '威胁情报库', threatLibError.value))
+  tags.push(sourceHealth(crawlerSources.value, '爬虫地址库', crawlerLibError.value))
   return tags
 })
 const libSummaryWarn = computed(() => crsInfo.value.available === false || ip2regionInfo.value.available === false)
@@ -864,7 +895,7 @@ interface CustomRule { id: number; name: string; description: string; conditions
 // F73-A：自动封禁名单条目携带加入时间/到期时间（UTC 墙钟串，formatDate 消费）
 interface IPListEntry { value: string; remark: string; created_at?: string; expires_at?: string }
 interface IPListRefPolicy { id: number; name: string }
-interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_policies: IPListRefPolicy[]; created_by: number; created_at: string; updated_by: number; updated_at: string; system: boolean; preset_autoban?: boolean }
+interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_policies: IPListRefPolicy[]; trusted_proxy_referenced?: boolean; trusted_proxy_scope?: string; created_by: number; created_at: string; updated_by: number; updated_at: string; system: boolean; preset_autoban?: boolean }
 interface CRSUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface ThreatUpdateInfo { running: boolean; trigger: string; started_at: string; finished_at: string; outcome: string }
@@ -904,9 +935,15 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
   return 'info'
 }
 
-const crsInfo = ref({ version: '', auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
+const crsInfo = ref({ version: '', auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, rule_count: 0, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 
 const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
+// 读取失败标记（U16-F05）：读取失败≠库缺失，更≠正常——标签与表格行都要显性
+// 表达「加载失败」，不能用默认值（available:true/空源列表）冒充正常态。
+const crsInfoError = ref(false)
+const ip2regionInfoError = ref(false)
+const threatLibError = ref(false)
+const crawlerLibError = ref(false)
 const ip2regionVersionLabel = computed(() => {
   if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
   return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'
@@ -987,6 +1024,9 @@ const fetchIpLists = async () => {
 
 const editingIpListSystem = ref(false)
 const loadingIpListDetail = ref(false)
+// 详情加载失败：entries 为空且保存可用 → 全量 PUT 会清空名单（U16-F01）
+const ipListDetailFailed = ref(false)
+const ipListDetailRowId = ref<number | null>(null)
 const ipListEntryPage = ref(1)
 const ipListEntryPageSize = 200
 const ipListEntryPageStart = computed(() => (ipListEntryPage.value - 1) * ipListEntryPageSize)
@@ -1041,12 +1081,16 @@ const openIpListDialog = async (row?: IPListRow) => {
     // seq 已自增：在途详情响应作废且其 finally 不再清 loading——新建表单自身
     // 复位，否则继承上一会话的 v-loading 转圈
     loadingIpListDetail.value = false
+    ipListDetailFailed.value = false
+    ipListDetailRowId.value = null
     ipListForm.value = { name: '', description: '', category: '', entries: [{ value: '', remark: '' }] }
     ipListDialogVisible.value = true
     return
   }
   // 列表载荷不再内联 entries（大名单瘦身）——弹框按需拉详情。
   ipListForm.value = { name: row.name, description: row.description, category: row.category, entries: [] }
+  ipListDetailRowId.value = row.id
+  ipListDetailFailed.value = false
   ipListDialogVisible.value = true
   loadingIpListDetail.value = true
   try {
@@ -1059,7 +1103,30 @@ const openIpListDialog = async (row?: IPListRow) => {
     }
   } catch {
     if (requestSeq !== ipListDetailSeq) return
-    ElMessage.error('加载列表条目失败')
+    // 失败态显性化并禁用保存（U16-F01）：空 entries 下保存=全量清空名单
+    ipListDetailFailed.value = true
+    ElMessage.error('加载列表条目失败，已禁用保存；请重新加载')
+  } finally {
+    if (requestSeq === ipListDetailSeq) loadingIpListDetail.value = false
+  }
+}
+
+/** 详情重试（仅重拉条目，不回填名称/分类等已在表单中的字段）。 */
+const reloadIpListDetail = async (): Promise<void> => {
+  const id = ipListDetailRowId.value
+  if (id == null) return
+  const requestSeq = ++ipListDetailSeq
+  loadingIpListDetail.value = true
+  try {
+    const res = await request.get<APIResponse<IPListRow>>(`/security/ip-lists/${id}`)
+    if (requestSeq !== ipListDetailSeq) return
+    ipListForm.value.entries = (res.data?.entries || []).map((e) => ({ value: e.value, remark: e.remark, created_at: e.created_at, expires_at: e.expires_at }))
+    ipListDetailFailed.value = false
+    ipListEntryPage.value = 1
+  } catch {
+    if (requestSeq !== ipListDetailSeq) return
+    ipListDetailFailed.value = true
+    ElMessage.error('加载列表条目失败，请稍后重试')
   } finally {
     if (requestSeq === ipListDetailSeq) loadingIpListDetail.value = false
   }
@@ -1085,6 +1152,12 @@ const saveIpList = async () => {
   // 允许空列表保存（第 60 轮用户裁定）：后端 validateIPListShape 不要求非空；
   // allow 模式策略引用的清空由后端 N1 守卫 409 拦截（fail-open 防护）
   if (entries.length > 2000) { ElMessage.warning('每个列表最多 2000 条条目'); return }
+  // 已有名单 + 0 条：全量 PUT 会清空——必须二次确认且文案明示（U16-F01）
+  if (needsEmptyListConfirm(editingIpListId.value, entries.length)) {
+    try {
+      await ElMessageBox.confirm(`将清空列表「${name}」的全部条目（保存后不可恢复），确定继续？`, '清空确认', { type: 'warning', confirmButtonText: '清空并保存' })
+    } catch { return }
+  }
   const action = editingIpListId.value ? '保存' : '创建'
   try {
     await ElMessageBox.confirm(`确定${action} IP 地址列表「${name}」（${entries.length} 条条目）？`, '确认', { type: 'warning' })
@@ -1125,15 +1198,10 @@ const triggerImportEntries = (): void => {
   importEntriesInput.value?.click()
 }
 
-// 行格式：第一列 IP/CIDR，第二列备注（可空）；分隔符为半角逗号或空白（取第一段分隔，其余归入备注）
-const parseEntryLine = (line: string): { value: string; remark: string } | null => {
-  const match = line.match(/^([^,\s]+)(?:[,\s]+(.*))?$/)
-  if (!match) return null
-  const value = (match[1] ?? '').trim()
-  if (!isValidCidr(value)) return null
-  const remark = (match[2] ?? '').trim().slice(0, 100)
-  return { value, remark }
-}
+// 行格式：第一列 IP/CIDR，第二列备注（可空）；支持 CSV 双引号字段与 `""`
+// 反转义（与导出单源：utils/ipListCsv，第 78 轮 U16-F18 往返一致）
+const parseEntryLine = (line: string): { value: string; remark: string } | null =>
+  parseIpListEntryLine(line, isValidCidr)
 
 const onImportEntriesFileChange = (event: Event): void => {
   const input = event.target as HTMLInputElement
@@ -1184,10 +1252,9 @@ const exportIpListEntries = (): void => {
     ElMessage.warning('当前没有可导出的条目')
     return
   }
-  // 备注含逗号/引号时按 CSV 规则双引号包裹并转义内部引号
-  const escapeRemark = (remark: string): string => /[",]/.test(remark) ? `"${remark.replace(/"/g, '""')}"` : remark
-  // 首字符写入 UTF-8 BOM，避免 Excel 直接打开中文备注乱码
-  const csv = `\uFEFF${entries.map((e) => `${e.value},${escapeRemark(e.remark)}`).join('\r\n')}`
+  // 首字符写入 UTF-8 BOM，避免 Excel 直接打开中文备注乱码；字段级 CSV
+  // 转义与导入解析同源（utils/ipListCsv）
+  const csv = `\uFEFF${entries.map((e) => formatIpListEntryLine(e.value, e.remark)).join('\r\n')}`
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -1326,7 +1393,16 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	return { re: null, valid: false }
 }
 
-const fetchCRS = async () => { try { const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs'); if (res.data) crsInfo.value = res.data } catch {} }
+const fetchCRS = async () => {
+  try {
+    const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs')
+    if (res.data) crsInfo.value = res.data
+    crsInfoError.value = false
+  } catch {
+    // 读取失败：标签/行状态显性化（U16-F05），不沿用默认值伪装正常
+    crsInfoError.value = true
+  }
+}
 
 const removeCondition = (idx: number) => {
   ruleForm.value.conditions.splice(idx, 1)
@@ -1356,9 +1432,23 @@ const searchRules = () => { page.value = 1; fetchRules() }
 // F-47-33：CRS 标签服务端分页 size-change 不复位 page——高页码叠加放大 pageSize
 // 会请求越界 offset(空表停留在空页);对齐本文件自定义规则/IP 列表「size-change 回第 1 页」口径
 const onRulesSizeChange = () => { page.value = 1; fetchRules() }
+// 乱序响应守卫（U16-F06）：翻页/搜索快速切换时，慢响应晚到不得覆盖当前页
+let rulesRequestSeq = 0
 const fetchRules = async () => {
+  const requestSeq = ++rulesRequestSeq
   loadingRules.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch {} finally { loadingRules.value = false }
+  try {
+    const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) })
+    if (searchQuery.value) p.set('search', searchQuery.value)
+    const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`)
+    if (requestSeq !== rulesRequestSeq) return
+    rules.value = res.data?.rules || []
+    total.value = res.data?.total || 0
+  } catch {
+    // 失败保留上一页数据（全局拦截器已 toast）
+  } finally {
+    if (requestSeq === rulesRequestSeq) loadingRules.value = false
+  }
 }
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch {} finally { loadingCustom.value = false } }
 const fetchUsers = async () => { try { const res = await request.get<APIResponse<UserListItem[]>>('/users'); users.value = res.data || [] } catch {} }
@@ -1383,7 +1473,15 @@ const openRuleContent = async (row: CRSRuleFile) => {
   }
 }
 const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); mfaAwareSuccess('已更新') } catch { crsInfo.value.auto_update = !val } }
-const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
+const fetchIP2RegionInfo = async () => {
+  try {
+    const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region')
+    if (res.data) ip2regionInfo.value = res.data
+    ip2regionInfoError.value = false
+  } catch {
+    ip2regionInfoError.value = true
+  }
+}
 const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); mfaAwareSuccess('已更新') } catch { ip2regionInfo.value.auto_update = !val } }
 
 // —— 定时更新排程（三库同构：星期多选 + 时间；保存即重排下次更新，时区遵循基础设置）——

@@ -19,11 +19,8 @@ func resetTrafficState(t *testing.T) {
 	trafficMu.Lock()
 	trafficCountries = map[string]*trafficEntry{}
 	trafficMu.Unlock()
-	trafficSeq.Store(0)
-	trafficSecond.Store(0)
-	trafficSecondHits.Store(0)
+	trafficSecondState.Store(0)
 	trafficSampleN.Store(1)
-	trafficRouteRegistered.Store(false)
 }
 
 func TestTrafficRecord_attackNormalBuckets(t *testing.T) {
@@ -69,11 +66,38 @@ func TestTrafficRecord_samplingFuse(t *testing.T) {
 	}
 
 	// 回落：显式模拟翻秒且上一秒计数 < fuseFallbackPerSecond → N=1（全量）
-	trafficSecond.Store(time.Now().Unix() - 1)
-	trafficSecondHits.Store(500)
+	trafficSecondState.Store((uint64(time.Now().Unix()-1) << 32) | 500)
 	trafficRecord("德国", true)
 	if n := trafficSampleN.Load(); n != 1 {
 		t.Fatalf("sample_n=%d, want 1（翻秒低计数回落全量）", n)
+	}
+}
+
+// U14-13（第 78 轮）：翻秒丢计回归——秒戳与计数是打包原子态，跨秒瞬间的
+// 并发计数不得被随后清零的上一秒计数吞掉。
+func TestTrafficRecord_noLostHitsAcrossSecondRollover(t *testing.T) {
+	resetTrafficState(t)
+	// 强制「上一秒」态：下一次 record 触发翻秒，同时并发记录。
+	trafficSecondState.Store((uint64(time.Now().Unix()-1) << 32) | 400)
+	const goroutines = 8
+	const perGoroutine = 50
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perGoroutine; j++ {
+				trafficRecord("翻秒国", false)
+			}
+		}()
+	}
+	wg.Wait()
+	e := trafficCountries["翻秒国"]
+	if e == nil {
+		t.Fatal("missing country entry")
+	}
+	if got := e.normal.Load(); got != goroutines*perGoroutine {
+		t.Fatalf("normal=%d, want %d（翻秒期间零丢计）", got, goroutines*perGoroutine)
 	}
 }
 
@@ -133,18 +157,17 @@ func TestTrafficSnapshotJSON_shape(t *testing.T) {
 }
 
 func TestTrafficAdminRoute_registerOnceAndServe(t *testing.T) {
-	// Given: admin 路由进程级注册一次（reload 期新旧实例并存——同路径二次
-	// 注册会 panic；路由读全局计数，实例无关）
+	// U14-07（第 78 轮）：trafficRouteRegistered/trafficSeq 是零生产读写的
+	// 死变量（去重语义由 Caddy admin 模块生命周期保证），已删除。此处改钉
+	// Routes() 的**形状契约**：恰一条 /lb/traffic-stats 路由——返回 0 条或
+	// 2 条都必须失败。
 	resetTrafficState(t)
-	old := trafficRouteRegistered.Load()
-	trafficRouteRegistered.Store(false)
-	t.Cleanup(func() { trafficRouteRegistered.Store(old) })
-
-	if !trafficRouteRegistered.CompareAndSwap(false, true) {
-		t.Fatal("首次注册 CAS 失败")
+	routes := (TrafficStatsAdmin{}).Routes()
+	if len(routes) != 1 {
+		t.Fatalf("Routes()=%d, want exactly 1", len(routes))
 	}
-	if trafficRouteRegistered.CompareAndSwap(false, true) {
-		t.Fatal("二次注册未被去重——reload 双实例并存会 panic")
+	if routes[0].Pattern != "/lb/traffic-stats" {
+		t.Fatalf("route pattern=%q, want /lb/traffic-stats", routes[0].Pattern)
 	}
 
 	// serveTrafficStats 直出快照（HTTP 形状）
