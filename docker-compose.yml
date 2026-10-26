@@ -68,6 +68,9 @@ services:
     stop_grace_period: 30s
     healthcheck: *common-healthcheck
     ulimits: *common-ulimits
+    # PID 配额（按线程计数）默认 4096：面板 + Caddy + 定时任务在高连接场景
+    # 下线程数可达数百，Docker 默认值偏紧；配额打满时容器内无法 fork。
+    pids_limit: 4096
 
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 注册主节点地址时填 http://host.docker.internal:8000——下方 extra_hosts 把该主机名
@@ -96,6 +99,7 @@ services:
       - NODE_NAME=slave-test
       - LOG_FILE=/app/logs/lazy-balancer.log
     ulimits: *common-ulimits
+    pids_limit: 4096
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck: *common-healthcheck
