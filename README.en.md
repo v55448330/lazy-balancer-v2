@@ -46,7 +46,7 @@ docker run -d --name lazy-balancer \
   v55448330/lazy-balancer-v2:latest
 ```
 
-> Image tags: `latest` points at the most recent **stable** release (no channel suffix); pre-release tags carry a `-beta` suffix (e.g. `:v2.3.8-beta`). Pin that exact tag when you need a pre-release or a reproducible install.
+> Image tags: `latest` points at the most recent **stable** release (no channel suffix); pre-release tags carry a `-beta` suffix (e.g. `:v2.3.9-beta`). Pin that exact tag when you need a pre-release or a reproducible install.
 >
 > **Container init**: current images ship an init process (reaps abandoned health-check children) and use the binary's built-in health check, so `--init` is no longer needed. If you pin an older image, add `--init`. The examples default to `--pids-limit=4096` (PID cgroup, threads included); tune it to your deployment size.
 
@@ -74,9 +74,9 @@ docker compose up -d
 #    the panel displays); the image tag may carry a -beta channel suffix - they
 #    differ on purpose: tag minus suffix == APP_VERSION
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=v2.3.8 \
+  --build-arg VERSION=v2.3.9 \
   --provenance=false --sbom=false \
-  -t v55448330/lazy-balancer-v2:v2.3.8-beta --push .   # beta channel; drop -beta for a stable release
+  -t v55448330/lazy-balancer-v2:v2.3.9-beta --push .   # beta channel; drop -beta for a stable release
 ```
 </details>
 

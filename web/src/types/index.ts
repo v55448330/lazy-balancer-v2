@@ -111,8 +111,15 @@ export interface SystemMetrics {
   disk_used: number
   disk_total: number
   disk_percent: number
+  /** 进程/线程配额：cgroup pids.current / pids.max（按线程计数、含僵尸）。 */
+  pids_current: number
+  /** 0 = 不限额（cgroup pids.max 为 "max"）。 */
+  pids_max: number
+  /** PID 1 的 RLIMIT_NPROC 软限（ulimit -u）；0 = 未采集/无限，仅作二级提示。 */
+  nproc_limit: number
+  pids_percent: number
   /**
-   * 分项降级披露：本次采集失败的分项（memory/disk/cpu）。
+   * 分项降级披露：本次采集失败的分项（memory/disk/cpu/pids）。
    * 存在项在卡片内显示「采集失败」而非 0——后端对失败项返回零值，展示层不得
    * 把「没采到」呈现成「用量为 0」。全部失败时后端返回 500（无本字段）。
    */

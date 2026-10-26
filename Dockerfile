@@ -244,7 +244,7 @@ COPY geoipnames/crawler-ip-lists.seed.json /app/waf.dist/crawler-ip-lists.seed.j
 # 未注入时显示 unknown，不参与硬编码）。
 #
 # 双轨口径（有意设计，非分叉）：`VERSION`
-# 恒为**正式版本号**（如 v2.3.8，面板/`/api/v1/branding` 展示口径）；镜像
+# 恒为**正式版本号**（如 v2.3.9，面板/`/api/v1/branding` 展示口径）；镜像
 # 正式版 tag 与 VERSION 相同；beta 通道才给 tag 加 `-beta` 后缀。二者刻意不同，
 # 发布时的判定口径是「tag 去掉通道后缀 == APP_VERSION」。改此约定需同时改
 # README 两版示例、docker-compose.yml、branding/config 回退与发布检查单。
@@ -252,7 +252,7 @@ COPY geoipnames/crawler-ip-lists.seed.json /app/waf.dist/crawler-ip-lists.seed.j
 # 位置约束：ARG/ENV 必须停在上方 CRS/xdb 下载层之后。VERSION 每次发版必变，
 # 提前注入会让 apk 与三条外网下载全部缓存失效（见上方层序说明）——移动前
 # 先确认没有更早的层消费它（当前仅 ENV 自身与运行期二进制消费）。
-ARG VERSION=v2.3.8
+ARG VERSION=v2.3.9
 ENV APP_VERSION=${VERSION}
 
 # 以下各层只随各自产物变化：CRS/xdb 层已在上方固化，不受影响。

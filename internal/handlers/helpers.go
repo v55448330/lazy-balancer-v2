@@ -437,7 +437,7 @@ func getUptime() int64 {
 // 三项全部失败才返回错误（此时确实无可展示数据）。
 func getSystemMetrics() (models.SystemMetrics, error) {
 	failures := map[string]error{}
-	order := []string{"memory", "disk", "cpu"}
+	order := []string{"memory", "disk", "cpu", "pids"}
 
 	memoryTotal, memoryUsed := uint64(0), uint64(0)
 	if vmStat, err := systemMetricsReadFile("/proc/meminfo"); err != nil {
@@ -462,6 +462,13 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		cpuPercent = percent
 	}
 
+	// 进程/线程配额：cgroup pids 是 fork 失败的直接原因层；ulimit -u
+	// （RLIMIT_NPROC）作为二级提示，读取失败不影响 pids 展示。
+	pidsCurrent, pidsMax, nprocLimit, pidsErr := readPidsUsage()
+	if pidsErr != nil {
+		failures["pids"] = pidsErr
+	}
+
 	// 分项留痕按状态转换去重（面板 5s 一轮轮询，不得每轮刷一条 warn）。
 	var degraded []string
 	var joined []error
@@ -483,6 +490,11 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 	if diskTotal > 0 {
 		diskPercent = float64(diskUsed) / float64(diskTotal) * 100
 	}
+	// pids.max 为 "max"（无限）时 PidsMax=0：没有可展示的比例，保持 0。
+	var pidsPercent float64
+	if pidsMax > 0 {
+		pidsPercent = float64(pidsCurrent) / float64(pidsMax) * 100
+	}
 
 	metrics := models.SystemMetrics{
 		CPUPercent:    cpuPercent,
@@ -492,12 +504,100 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		DiskTotal:     diskTotal,
 		DiskUsed:      diskUsed,
 		DiskPercent:   diskPercent,
+		PidsCurrent:   pidsCurrent,
+		PidsMax:       pidsMax,
+		NprocLimit:    nprocLimit,
+		PidsPercent:   pidsPercent,
 		Degraded:      degraded,
 	}
 	if len(joined) == len(order) {
 		return metrics, errors.Join(joined...)
 	}
 	return metrics, nil
+}
+
+// readPidsUsage 读取 cgroup pids 用量/上限（cgroup v2 优先，v1 回落）与
+// RLIMIT_NPROC 软限。cgroup v2 与 v1 的落点不同：v2 在 /sys/fs/cgroup 根，
+// v1 在 /sys/fs/cgroup/pids 子目录。读取失败按分项降级（pids），不影响
+// 内存/磁盘/CPU 展示。
+func readPidsUsage() (current, max, nproc int, err error) {
+	current, max, err = readCgroupPids("/sys/fs/cgroup")
+	if err != nil {
+		current, max, err = readCgroupPids("/sys/fs/cgroup/pids")
+	}
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("读取进程配额失败: %w", err)
+	}
+	return current, max, readNprocLimit(), nil
+}
+
+func readCgroupPids(dir string) (current, max int, err error) {
+	currentRaw, err := systemMetricsReadFile(dir + "/pids.current")
+	if err != nil {
+		return 0, 0, err
+	}
+	maxRaw, err := systemMetricsReadFile(dir + "/pids.max")
+	if err != nil {
+		return 0, 0, err
+	}
+	if current, err = parsePidsCount(string(currentRaw)); err != nil {
+		return 0, 0, err
+	}
+	if max, err = parsePidsLimit(string(maxRaw)); err != nil {
+		return 0, 0, err
+	}
+	return current, max, nil
+}
+
+func parsePidsCount(raw string) (int, error) {
+	value := strings.TrimSpace(raw)
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("pids.current 无效: %q", value)
+	}
+	return n, nil
+}
+
+// parsePidsLimit：cgroup v2 未设上限时文件内容为字面 "max"，统一归一为 0
+// （消费方按「不限额」处理，不参与百分比计算）。
+func parsePidsLimit(raw string) (int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "max" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("pids.max 无效: %q", value)
+	}
+	return n, nil
+}
+
+// readNprocLimit 解析 RLIMIT_NPROC 软限（ulimit -u）。按行首 "Max processes"
+// 取第二列；"unlimited"/读取失败统一返回 0（二级提示，缺失不影响 pids 主值）。
+func readNprocLimit() int {
+	raw, err := systemMetricsReadFile("/proc/self/limits")
+	if err != nil {
+		return 0
+	}
+	return parseNprocLimit(string(raw))
+}
+
+func parseNprocLimit(raw string) int {
+	for _, line := range strings.Split(raw, "\n") {
+		if !strings.HasPrefix(line, "Max processes") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[2] == "unlimited" {
+			return 0
+		}
+		n, err := strconv.Atoi(fields[2])
+		if err != nil || n < 0 {
+			return 0
+		}
+		return n
+	}
+	return 0
 }
 
 // diskUsageGroup / connectionStatsGroup 合并并发刷新：同一刷新窗口内并发请求

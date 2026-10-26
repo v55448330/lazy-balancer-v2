@@ -742,7 +742,15 @@ type SystemMetrics struct {
 	DiskTotal     uint64  `json:"disk_total"`
 	DiskUsed      uint64  `json:"disk_used"`
 	DiskPercent   float64 `json:"disk_percent"`
-	// Degraded 列出本次采集失败的分项（memory/disk/cpu）——分项降级时
+	// 进程/线程配额：cgroup pids.current / pids.max（真正决定 fork 失败的一层，
+	// 按线程计数、含僵尸）。PidsMax=0 表示无限（pids.max 为 "max"）。
+	// NprocLimit 是 PID 1 的 RLIMIT_NPROC 软限（ulimit -u），0=未采集/无限；
+	// 它按宿主 UID 计数，仅作二级提示。
+	PidsCurrent int     `json:"pids_current"`
+	PidsMax     int     `json:"pids_max"`
+	NprocLimit  int     `json:"nproc_limit"`
+	PidsPercent float64 `json:"pids_percent"`
+	// Degraded 列出本次采集失败的分项（memory/disk/cpu/pids）——分项降级时
 	// 对应数值为 0，消费方据此区分「真的是 0」与「采集失败」。
 	Degraded []string `json:"degraded,omitempty"`
 }

@@ -199,49 +199,58 @@
               <span class="info-note-desc">部分指标采集失败：{{ degradedSystemLabels.join('、') }}</span>
               <span>（仅展示其余可用指标；该项数值不代表真实用量）</span>
             </div>
-            <el-row :gutter="32">
-              <el-col :span="8">
-                <div class="resource-item">
-                  <div class="resource-header">
-                    <span class="resource-label">CPU 使用率</span>
-                    <span class="resource-value text-blue">
-                      {{ degradedSystemParts.has('cpu') ? '采集失败' : `${systemMetrics.cpu_percent.toFixed(1)}%` }}
-                    </span>
-                  </div>
-                  <el-progress v-if="!degradedSystemParts.has('cpu')" :percentage="Math.min(systemMetrics.cpu_percent, 100)" :stroke-width="6" color="#3b82f6" :show-text="false" />
+            <div class="resource-grid">
+              <div class="resource-item">
+                <div class="resource-header">
+                  <span class="resource-label">CPU 使用率</span>
+                  <span class="resource-value text-blue">
+                    {{ degradedSystemParts.has('cpu') ? '采集失败' : `${systemMetrics.cpu_percent.toFixed(1)}%` }}
+                  </span>
                 </div>
-              </el-col>
-              <el-col :span="8">
-                <div class="resource-item">
-                  <div class="resource-header">
-                    <span class="resource-label">内存使用</span>
-                    <span class="resource-value text-purple">
-                      <template v-if="degradedSystemParts.has('memory')">采集失败</template>
-                      <template v-else>
-                        {{ formatBytes(systemMetrics.memory_used) }}
-                        <span class="resource-total">/ {{ formatBytes(systemMetrics.memory_total) }}</span>
-                      </template>
-                    </span>
-                  </div>
-                  <el-progress v-if="!degradedSystemParts.has('memory')" :percentage="Math.min(systemMetrics.memory_percent, 100)" :stroke-width="6" color="#8b5cf6" :show-text="false" />
+                <el-progress v-if="!degradedSystemParts.has('cpu')" :percentage="Math.min(systemMetrics.cpu_percent, 100)" :stroke-width="6" color="#3b82f6" :show-text="false" />
+              </div>
+              <div class="resource-item">
+                <div class="resource-header">
+                  <span class="resource-label">内存使用</span>
+                  <span class="resource-value text-purple">
+                    <template v-if="degradedSystemParts.has('memory')">采集失败</template>
+                    <template v-else>
+                      {{ formatBytes(systemMetrics.memory_used) }}
+                      <span class="resource-total">/ {{ formatBytes(systemMetrics.memory_total) }}</span>
+                    </template>
+                  </span>
                 </div>
-              </el-col>
-              <el-col :span="8">
-                <div class="resource-item">
-                  <div class="resource-header">
-                    <span class="resource-label">磁盘使用</span>
-                    <span class="resource-value text-cyan">
-                      <template v-if="degradedSystemParts.has('disk')">采集失败</template>
-                      <template v-else>
-                        {{ formatBytes(systemMetrics.disk_used) }}
-                        <span class="resource-total">/ {{ formatBytes(systemMetrics.disk_total) }}</span>
-                      </template>
-                    </span>
-                  </div>
-                  <el-progress v-if="!degradedSystemParts.has('disk')" :percentage="Math.min(systemMetrics.disk_percent, 100)" :stroke-width="6" color="#06b6d4" :show-text="false" />
+                <el-progress v-if="!degradedSystemParts.has('memory')" :percentage="Math.min(systemMetrics.memory_percent, 100)" :stroke-width="6" color="#8b5cf6" :show-text="false" />
+              </div>
+              <div class="resource-item">
+                <div class="resource-header">
+                  <span class="resource-label">磁盘使用</span>
+                  <span class="resource-value text-cyan">
+                    <template v-if="degradedSystemParts.has('disk')">采集失败</template>
+                    <template v-else>
+                      {{ formatBytes(systemMetrics.disk_used) }}
+                      <span class="resource-total">/ {{ formatBytes(systemMetrics.disk_total) }}</span>
+                    </template>
+                  </span>
                 </div>
-              </el-col>
-            </el-row>
+                <el-progress v-if="!degradedSystemParts.has('disk')" :percentage="Math.min(systemMetrics.disk_percent, 100)" :stroke-width="6" color="#06b6d4" :show-text="false" />
+              </div>
+              <div class="resource-item">
+                <div class="resource-header">
+                  <el-tooltip :content="pidsTooltip" placement="top">
+                    <span class="resource-label">进程配额</span>
+                  </el-tooltip>
+                  <span class="resource-value" :class="pidsValueClass">
+                    <template v-if="degradedSystemParts.has('pids')">采集失败</template>
+                    <template v-else>
+                      {{ pidsUsageLabel(systemMetrics.pids_current, systemMetrics.pids_max) }}
+                      <span v-if="systemMetrics.pids_max > 0" class="resource-total">({{ systemMetrics.pids_percent.toFixed(0) }}%)</span>
+                    </template>
+                  </span>
+                </div>
+                <el-progress v-if="!degradedSystemParts.has('pids') && systemMetrics.pids_max > 0" :percentage="Math.min(systemMetrics.pids_percent, 100)" :stroke-width="6" :color="pidsProgressColor" :show-text="false" />
+              </div>
+            </div>
           </template>
           <div v-else class="collection-state">-</div>
         </el-card>
@@ -486,7 +495,7 @@ import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMe
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
-import { degradedMetricLabels, degradedMetricParts } from '@/utils/systemMetrics'
+import { degradedMetricLabels, degradedMetricParts, pidsTone, pidsUsageLabel } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 
 
@@ -538,6 +547,22 @@ const systemMetricsUnavailable = ref(false)
 // CPU 单点故障时内存/磁盘仍照常展示，只有失败项标注不可用。
 const degradedSystemParts = computed(() => degradedMetricParts(systemMetrics.value?.degraded))
 const degradedSystemLabels = computed(() => degradedMetricLabels(systemMetrics.value?.degraded))
+const pidsToneValue = computed(() => pidsTone(systemMetrics.value?.pids_percent ?? 0))
+const pidsValueClass = computed(() => ({
+  'text-green': pidsToneValue.value === 'normal',
+  'text-amber': pidsToneValue.value === 'warning',
+  'text-red': pidsToneValue.value === 'critical',
+}))
+const pidsTooltip = computed(() => {
+  const limit = systemMetrics.value?.nproc_limit ?? 0
+  const ulimitText = limit > 0 ? String(limit) : '不限'
+  return `cgroup 进程/线程配额（含僵尸进程）。接近上限时容器内无法创建新进程，表现为 fork 失败。ulimit -u：${ulimitText}`
+})
+const pidsProgressColor = computed(() => {
+  if (pidsToneValue.value === 'critical') return '#ef4444'
+  if (pidsToneValue.value === 'warning') return '#f59e0b'
+  return '#10b981'
+})
 // 「已落地」与「可用」分离：/rules 可能先于 /metrics/dashboard 落地，
 // 此时不能把「指标尚未到达」当成「采集失败」——首轮逐规则列会全部闪「采集失败」。
 // landed 只在 dashboard 响应成功/失败后置位；未落地前一律视为「无结论」。
@@ -1252,14 +1277,29 @@ onUnmounted(() => {
 .stat-value { font-size: 20px; font-weight: 600; color: #111827; line-height: 1.2; }
 .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
 
-.resource-item { padding: 4px 0; }
-.resource-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.resource-label { color: #4b5563; font-size: 13px; }
-.resource-value { font-size: 14px; font-weight: 500; }
+.resource-grid {
+  display: grid;
+  /* 四列等宽 + minmax(0,1fr)：数值不换行时压缩间距而不是折行 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+}
+.resource-item { padding: 4px 0; min-width: 0; }
+.resource-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; white-space: nowrap; }
+.resource-label { color: #4b5563; font-size: 13px; white-space: nowrap; }
+.resource-value { font-size: 14px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .text-blue { color: #3b82f6; }
 .text-purple { color: #8b5cf6; }
 .text-cyan { color: #0891b2; }
+.text-green { color: #059669; }
+.text-amber { color: #d97706; }
+.text-red { color: #dc2626; }
 .resource-total { font-size: 12px; color: #9ca3af; font-weight: 400; }
+@media (max-width: 1280px) {
+  .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .resource-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 .chart-card :deep(.el-card__body) { height: 240px; padding: 16px; box-sizing: border-box; }
 .chart-container { height: 200px; }
