@@ -77,7 +77,7 @@ Caddy 审计写侧 → Unix socket → 面板入库（DB commit 后 ack）
 - 成功事件以 metrics DB 为权威，请配置数据库备份；spool 建议一并纳入备份；
 - 自定义 `data_dir` 部署需保证 Caddy 与面板共享同一数据卷，并用
   `LB_SECURITY_EVENTS_IPC_SOCKET` / `LB_SECURITY_EVENTS_SPOOL_DIR` 显式覆盖时保持一致；
-- 旧版 `audit.log` 会在升级后继续消费存量，消费完成后不再新增。
+- 旧版 `audit.log` 会在升级后继续消费存量，消费完成后不再新增；该文件由安全事件摄取链路管理，日志清理任务不再轮转/截断它。
 
 详见 `docs/security.zh-CN.md`。
 

@@ -164,55 +164,6 @@ func TestTaskLogsHousekeeping_reportsDetails(t *testing.T) {
 // 2s tick 驱动）——log-cleanup 任务体补 waf-audit 超阈兜底：audit.log 走
 // SecurityEventsPollOnce 全套安全链（daemon 在场时等价一次普通 tick）。
 // （侧车退役，耗时随审计行内嵌流转。）
-func TestRuntimeLogCleanupOnce_wafAuditFallbackWhenIngestionStopped(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
-
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-	offsetPath := filepath.Join(dir, "security_events.offset")
-	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
-	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
-	resetSecurityEventsPollState(t)
-	t.Cleanup(func() {
-		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
-	})
-
-	// daemon 停机形态：audit.log 超阈（2KB > 1KB 阈值）且无人轮转。
-	// 内容必须是可解析的审计文档：复制前闸门要求尾部可追平（畸形尾不轮转）。
-	stream := securityEventsFixtureClean + "\n" + securityEventsFixtureBlocked + "\n"
-	if len(stream) <= 1024 {
-		t.Fatalf("夹具长度 %d，须超过 1KB 轮转阈值", len(stream))
-	}
-	if err := os.WriteFile(logPath, []byte(stream), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	res := RuntimeLogCleanupOnce(context.Background(), filepath.Join(dir, "app.log"))
-
-	// audit.log 经完整安全链轮转为 .1、活文件截断归零，明细如实上报。
-	if st, err := os.Stat(logPath); err != nil || st.Size() != 0 {
-		sz := int64(-1)
-		if st != nil {
-			sz = st.Size()
-		}
-		t.Fatalf("audit.log 兜底后 size=%d err=%v，应已轮转截断为 0", sz, err)
-	}
-	if len(res.WafAudit) == 0 {
-		t.Fatal("WafAudit 明细为空——兜底动作必须可见（2026-10-01 用户裁定口径）")
-	}
-}
-
-// 保留期清理删除证书任务日志须与写入侧共用 ruleID 写锁——
-// 在途写入持锁期间清理必须等待（原实现无锁 os.Remove，与写侧
-// 「stat→轮转移位→append」交错可吞掉刚移位的新一代）。
-//
-// 保留月数口径必须由本用例自己装配：保留期门读不到库就一条都不删（用户裁定），
-// 断言会退化为「Deleted 为空」并把原因误报成「没等写锁」。此前依赖包内某个
-// 先前用例留下的全局库，定向单跑/乱序运行时必红，且失败文案指错方向。
 func TestTaskLogsHousekeeping_waitsForCertJobWriteLock(t *testing.T) {
 	setupIsolatedDB(t)
 	if months, err := auditRetentionMonths(t.Context()); err != nil {
@@ -533,105 +484,6 @@ func TestStopLogRotateWithin_fastPathDoesNotConsumeBudget(t *testing.T) {
 // 清理失败必须聚合进结果并让日志行不称「完成」：waf-audit 兜底轮转错误
 // （daemon 停机 + 复制失败）此前被完全丢弃——任务日志仍称「日志清理完成」、
 // task_runs 恒绿，磁盘被审计文件填满后才由写侧被动暴露。
-func TestLogCleanupRound_wafFallbackRotationFailureIsReported(t *testing.T) {
-	initServicesDB(t)
-	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
-		t.Fatalf("initialize metrics db: %v", err)
-	}
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
-	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
-	t.Cleanup(func() {
-		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
-	})
-	resetSecurityEventsPollState(t)
-	// daemon 停机形态：超阈且无人轮转；兜底轮转自身失败（复制失败）。
-	// 内容为可解析审计文档（复制前闸门要求尾部可追平，畸形尾会在闸门处推迟，
-	// 根本走不到复制失败分支）。
-	stream := securityEventsFixtureClean + "\n" + securityEventsFixtureBlocked + "\n"
-	if len(stream) <= 1024 {
-		t.Fatalf("夹具长度 %d，须超过 1KB 轮转阈值", len(stream))
-	}
-	if err := os.WriteFile(logPath, []byte(stream), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	auditLogCopyFile = func(string, string) error { return errors.New("injected copy failure") }
-
-	// When
-	res, line := logCleanupRound(context.Background(), filepath.Join(dir, "app.log"))
-
-	// Then：失败进结果、Err 非空、摘要不得称完成
-	if res.WafAuditError == "" {
-		t.Fatal("waf-audit 兜底轮转失败必须进结果（此前错误被丢弃）")
-	}
-	if err := res.Err(); err == nil {
-		t.Fatal("清理失败必须聚合为 Err（任务体据此落 failed）")
-	}
-	if strings.Contains(line, "日志清理完成") {
-		t.Fatalf("失败轮不得称「日志清理完成」: %q", line)
-	}
-	if !strings.HasPrefix(line, "日志清理未完成") || !strings.Contains(line, "injected copy failure") {
-		t.Fatalf("摘要行必须标明未完成与失败原因: %q", line)
-	}
-}
-
-// 兜底 poll 成功但轮转未完成（活文件未截断）时，摘要不得称「清理完成」：
-// 空间未回收，下次兜底在 24h 后——误导性完成文案会把排障方向引向别处。
-func TestLogCleanupRound_wafFallbackReportsRotationDelay(t *testing.T) {
-	initServicesDB(t)
-	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
-		t.Fatalf("initialize metrics db: %v", err)
-	}
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
-	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
-	t.Cleanup(func() {
-		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
-	})
-	resetSecurityEventsPollState(t)
-	// 一条合法审计文档起头；copy 完成后追写超阈空白（模拟 Coraza 持续写入）：
-	// 归档已就位但活文件尾部未收敛 → 本轮不截断（轮转延迟）。
-	payload := append([]byte(securityEventsFixtureClean+"\n"), bytes.Repeat([]byte("\n"), 2<<20)...)
-	if err := os.WriteFile(logPath, payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	auditLogCopyFile = func(src, dst string) error {
-		if err := copyAuditLogTo(src, dst); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = f.Write(bytes.Repeat([]byte("\n"), 2<<20))
-		return err
-	}
-
-	// When
-	res, line := logCleanupRound(context.Background(), filepath.Join(dir, "app.log"))
-
-	// Then：延迟必须进结果、Err 非空、摘要不得称完成
-	if res.WafAuditError == "" {
-		t.Fatal("waf-audit 兜底轮转延迟必须进结果（此前轮转未完成被当作成功）")
-	}
-	if !strings.Contains(res.WafAuditError, "延迟") {
-		t.Fatalf("WafAuditError 未标注延迟语义: %q", res.WafAuditError)
-	}
-	if err := res.Err(); err == nil {
-		t.Fatal("轮转延迟必须聚合为 Err（任务体不得按成功落 task_runs）")
-	}
-	if strings.Contains(line, "日志清理完成") {
-		t.Fatalf("轮转延迟时摘要不得称「日志清理完成」: %q", line)
-	}
-}
-
-// 保留月数读取失败（非 ErrNoRows）时保留期删除一律跳过：应用日志副本与任务
-// 日志都不得按更短默认删除。
 func TestRuntimeLogCleanupOnce_skipsRetentionDeletionWhenReadFails(t *testing.T) {
 	// Given：陈旧副本 + 陈旧任务日志 + 主库查询恒失败
 	dir := t.TempDir()
@@ -763,51 +615,6 @@ func TestTaskLogsHousekeeping_missingDirIsNotScanFailure(t *testing.T) {
 
 // 运行日志 writer 打开失败时 waf-audit 兜底仍须执行（不同目录、独立失败面）：
 // 旧实现因 logFile=="" 直接跳过兜底，daemon 停机场景下 audit.log 无界增长。
-func TestLogCleanupRound_emptyLogFileStillRunsWafFallback(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
-
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-	offsetPath := filepath.Join(dir, "security_events.offset")
-	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
-	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
-	resetSecurityEventsPollState(t)
-	t.Cleanup(func() {
-		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
-	})
-	// 可解析审计文档（复制前闸门要求尾部可追平；畸形尾会在闸门处推迟）。
-	stream := securityEventsFixtureClean + "\n" + securityEventsFixtureBlocked + "\n"
-	if len(stream) <= 1024 {
-		t.Fatalf("夹具长度 %d，须超过 1KB 轮转阈值", len(stream))
-	}
-	if err := os.WriteFile(logPath, []byte(stream), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	res, line := logCleanupRound(context.Background(), "")
-
-	if !strings.HasPrefix(line, "日志清理未启用") {
-		t.Fatalf("logFile 为空时摘要=%q, want 「日志清理未启用…」", line)
-	}
-	if len(res.WafAudit) == 0 {
-		t.Fatalf("logFile 为空时仍须执行 waf-audit 兜底: %+v", res)
-	}
-	st, err := os.Stat(logPath)
-	if err != nil || st.Size() != 0 {
-		t.Fatalf("兜底后 audit.log size=%v err=%v，应已轮转截断为 0", st, err)
-	}
-	if !strings.Contains(line, "waf-audit 兜底") {
-		t.Fatalf("摘要必须包含兜底动作: %q", line)
-	}
-}
-
-// 应用日志副本的元数据读取失败必须进结果错误面与摘要（与任务日志侧
-// InfoFailed 同口径）：无法判定是否过期与「无过期副本」不得同形。
 func TestRuntimeLogCleanupOnce_countsAppMetadataFailures(t *testing.T) {
 	initServicesDB(t)
 	dir := t.TempDir()
@@ -875,5 +682,32 @@ func TestRotatingFileWriter_Write_reopensAfterExplicitClose(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "after-close\n") {
 		t.Fatalf("log content=%q, want after-close entry", data)
+	}
+}
+
+// B 形态后 audit.log 仅是兜底缓存，由摄取链路负责；log-cleanup 不得再轮转/截断它。
+func TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback(t *testing.T) {
+	initServicesDB(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	oldLogPath, oldSizeBytes := auditLogPath, auditLogSizeBytes
+	auditLogPath = logPath
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
+	t.Cleanup(func() { auditLogPath, auditLogSizeBytes = oldLogPath, oldSizeBytes })
+
+	content := []byte(`{"transaction":{"id":"legacy-fallback"}}` + "\n")
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = RuntimeLogCleanupOnce(context.Background(), filepath.Join(dir, "app.log"))
+	after, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("audit.log must remain readable: %v", err)
+	}
+	if string(after) != string(content) {
+		t.Fatalf("log-cleanup 不得改写/截断 audit.log: got %q want %q", string(after), string(content))
+	}
+	if _, err := os.Stat(logPath + ".1"); !os.IsNotExist(err) {
+		t.Fatalf("log-cleanup 不得轮转 audit.log（.1 不应存在）: %v", err)
 	}
 }

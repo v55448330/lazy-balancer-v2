@@ -421,7 +421,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 清理失败必须进 task_runs failed 与任务日志失败行，摘要不得称
 			// 「完成」（同族 audit-retention / security-events-retention /
 			// metrics-orphan-cleanup 均失败上抛）。此前恒 return nil —— daemon
-			// 停机时 waf-audit 兜底轮转失败、单文件删除失败全部只打应用日志。
+			// 单文件删除失败全部只打应用日志；waf-audit 归摄取链路管理。
 			res, line := logCleanupRound(rc.Ctx, logFile)
 			if err := res.Err(); err != nil {
 				TaskLogfWarn("log-cleanup", "cleanup", "%s", line)

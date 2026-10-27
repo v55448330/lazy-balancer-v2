@@ -284,11 +284,17 @@
             <IPLocationAction :ip="row.ip" :location="row.ip_location" />
           </template>
         </el-table-column>
-        <el-table-column prop="blocked" label="拦截" width="80" align="center">
+        <el-table-column prop="blocked" label="拦截" width="100" align="center">
           <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.blocked }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="detected" label="检测" width="80" align="center">
+        <el-table-column prop="detected" label="检测" width="100" align="center">
           <template #default="{ row }"><el-tag type="warning" size="small" effect="plain">{{ row.detected }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="recent_10m" label="近10分钟" width="120" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_10m }}</span> 次</template>
+        </el-table-column>
+        <el-table-column prop="recent_1h" label="近1小时" width="128" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_1h }}</span> 次</template>
         </el-table-column>
         <el-table-column label="攻击类型" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
@@ -320,7 +326,7 @@ import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestion
 
 
 interface TrendPoint { date: string; blocked: number; detected: number }
-interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string; attack_type_stage?: string
+interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; recent_10m: number; recent_1h: number; last_time: string; attack_type: string; attack_type_stage?: string
 }
 interface AttackType { name: string; value: number }
 interface Overview {

@@ -16,13 +16,13 @@
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num">{{ taskFamilyCount }}</div>
-          <div class="tm-kpi-label" title="仅统计引擎任务族，不含证书签发工作项（cert-job 动态行）">任务族<span class="tm-kpi-scope">（不含证书工作项）</span></div>
+          <div class="tm-kpi-label" title="仅统计引擎任务族，不含证书签发工作项（cert-job 动态行）">任务族</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num tm-kpi-run">{{ runningCount }}</div>
-          <div class="tm-kpi-label" title="在途工作项：含证书签发工作项（排队/等待 CA 均计为运行中），可能大于任务族数">运行中<span class="tm-kpi-scope">（含证书工作项）</span></div>
+          <div class="tm-kpi-label" title="在途工作项：含证书签发工作项（排队/等待 CA 均计为运行中），可能大于任务族数">运行中</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :md="6">
@@ -114,17 +114,19 @@
           <div class="card-title"><el-icon class="title-icon"><List /></el-icon><span>全部任务</span>
             <span class="tm-count">{{ filteredTasks.length }}</span>
           </div>
-          <el-select v-model="categoryFilter" size="small" clearable placeholder="全部分类" class="tm-category-filter" @change="page = 1">
-            <el-option label="全部分类" value="all" />
-            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
-          </el-select>
-          <el-radio-group v-model="kindFilter" size="small">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="scheduled">定时</el-radio-button>
-            <el-radio-button value="daemon">常驻</el-radio-button>
-            <el-radio-button value="periodic">循环</el-radio-button>
-            <el-radio-button value="oneshot">触发</el-radio-button>
-                      </el-radio-group>
+          <div class="tm-filter-group">
+            <el-select v-model="categoryFilter" size="small" clearable placeholder="全部分类" class="tm-category-filter" @change="page = 1">
+              <el-option label="全部分类" value="all" />
+              <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+            </el-select>
+            <el-radio-group v-model="kindFilter" size="small">
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button value="scheduled">定时</el-radio-button>
+              <el-radio-button value="daemon">常驻</el-radio-button>
+              <el-radio-button value="periodic">循环</el-radio-button>
+              <el-radio-button value="oneshot">触发</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
       </template>
       <el-table :data="pagedTasks" v-loading="!loaded" size="default" row-key="id" class="tm-nowrap-table">
@@ -222,16 +224,16 @@
             <span class="tm-ok">{{ row.success_24h }}</span> / <span :class="{ 'tm-bad': row.fail_24h > 0 }">{{ row.fail_24h }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="225" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right" class-name="tm-op-cell">
           <template #default="{ row }">
             <el-tooltip v-if="row.triggerable" :disabled="!runCooldownReason(row)" :content="runCooldownReason(row)">
-              <div>
+              <span class="tm-op-trigger">
                 <el-button
                   link type="primary" size="small"
                   :disabled="!canOperate || row.status === 'running' || Boolean(runCooldownReason(row))"
                   @click="onTrigger(row)"
                 >运行</el-button>
-              </div>
+              </span>
             </el-tooltip>
             <el-button
               v-if="row.cancellable && row.status === 'running'"
@@ -241,7 +243,7 @@
             <!-- 常驻行启停已由调度列开关承担（loop_on 同源）——操作列改「重启」-->
             <el-button
               v-if="row.controllable"
-              link type="warning" size="small"
+              link type="primary" size="small"
               :disabled="!canOperate || taskActionPendingId !== null"
               @click="onRestart(row)"
             >重启</el-button>
@@ -870,6 +872,7 @@ const fmtDuration = (ms?: number) => {
 .tm-root { display: flex; flex-direction: column; gap: 20px; max-width: 1500px; margin: 0 auto; width: 100%; }
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .tm-category-filter { width: 150px; }
+.tm-filter-group { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 /* 卡片/横幅标题图标 16px——不得写裸 .title-icon（会压小全局 20px 页头图标，
    与 page-desc 缩进错位，同类事故见 SecurityOverview）；限定到本页容器内。 */
@@ -883,7 +886,6 @@ const fmtDuration = (ms?: number) => {
 .tm-kpi-run { color: #3b82f6; }
 .tm-kpi-bad { color: #f87171; }
 .tm-kpi-label { font-size: 12.5px; color: #6b7280; margin-top: 6px; }
-.tm-kpi-scope { display: block; font-size: 11px; color: #9ca3af; }
 
 /* 队列横幅 */
 .tm-cq-banner :deep(.el-card__body) { padding: 12px 20px; }
@@ -908,6 +910,12 @@ const fmtDuration = (ms?: number) => {
 
 /* 表格 */
 :deep(.tm-nowrap-table .cell) { white-space: nowrap; }
+/* 操作列：单一 flex 行，禁用按钮 tooltip 的包裹节点不得是块级元素（否则“运行”独占一行）。
+   gap 统一承担间距；显式清零 el-button 相邻 margin-left——tooltip 包裹 span 会打断
+   Element Plus 的相邻按钮 margin 规则，导致“运行”与“重启”行间距不一致。 */
+:deep(.tm-nowrap-table .tm-op-cell .cell) { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+:deep(.tm-nowrap-table .tm-op-cell .el-button) { margin-left: 0; }
+.tm-op-trigger { display: inline-flex; align-items: center; }
 .tm-task-name { font-weight: 500; }
 .tm-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .tm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tm-c, #9aa0b5); box-shadow: 0 0 6px var(--tm-c, transparent); }

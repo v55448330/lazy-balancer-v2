@@ -38,6 +38,9 @@
 
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <div v-else-if="policiesError" class="info-note-bar"><span class="info-note-desc">策略列表加载失败</span></div>
+    <div v-else-if="!hasInterceptPolicy" class="info-note-bar">
+      <span class="info-note-desc">尚未创建 IP 访问控制（黑名单）策略；请先到「安全防护 → 安全策略」创建并绑定到规则，再使用快捷拦截。</span>
+    </div>
     <template v-else-if="rows.length > 0">
       <!-- 名单/引用条目加载失败：命中判定退化为仅内联（「已在名单」会被误显示为未命中），
            依据不可靠——处置动作禁用，横幅给出重试 -->
@@ -82,8 +85,7 @@
       </div>
     </template>
     <!-- 全部策略被系统名单接管（裁定①隐藏）时如实说明，不误报「暂无策略」 -->
-    <div v-else-if="policies.length > 0" class="ipo-tip">启用策略的 IP 名单均由系统内置名单管理，本弹窗无快捷处置入口</div>
-    <div v-else class="ipo-tip">暂无启用的安全策略</div>
+    <div v-else-if="policies.length > 0 && hasAclPolicy" class="ipo-tip">启用策略的 IP 名单均由系统内置名单管理，本弹窗无快捷处置入口</div>
   </el-popover>
 
   <span v-else class="ip-cell" :title="location ? `${ip} · ${location}` : ip">
@@ -795,6 +797,20 @@ const aclRefsAllSystem = (p: PolicyRow): boolean => {
 // 筛选下拉选项池（实测裁定③①）：仅「有 IP 管控面」（stage0/stage1/
 // mixed）且未被隐藏的策略；纯 WAF/限流（stage2/3）不入池（底部「另有 N 条」
 // 提示语承担其存在感）
+// 是否存在可承载“拦截此 IP”的 IP 访问控制策略（阶段 1 或混合兼容）。
+// 没有时弹框必须显性提示用户先去建策略/绑定规则——否则用户只会看到
+// “暂无数据”，误以为快捷拦截故障。
+const hasAclPolicy = computed(() => policies.value.some((p) => {
+  const t = policyTypeOf(p)
+  return t === 'stage1' || t === 'mixed'
+}))
+// 白名单/免检测模式没有“拦截此 IP”落点——只有黑名单侧可写才拿出入口提示。
+const hasInterceptPolicy = computed(() => policies.value.some((p) => {
+  const t = policyTypeOf(p)
+  if (t !== 'stage1' && t !== 'mixed') return false
+  return aclAssociateSides(p.ip_acl_mode).deny
+}))
+
 const filterablePolicies = computed(() => policies.value.filter((p) => {
   const t = policyTypeOf(p)
   return t !== 'stage2' && t !== 'stage3' && !aclRefsAllSystem(p)

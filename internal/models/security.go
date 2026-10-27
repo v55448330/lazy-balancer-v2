@@ -396,6 +396,11 @@ type SecurityTopIP struct {
 	IPLocation string `json:"ip_location"`
 	Blocked    int    `json:"blocked"`
 	Detected   int    `json:"detected"`
+	// Recent10m / Recent1h 是该 IP 在近 10 分钟 / 1 小时窗口内的事件数
+	// （与 Top 10 的 7 天排序窗口独立）：用于展示攻击频率，避免只看 7 天
+	// 总量无法判断“最近是否仍在活跃”。
+	Recent10m  int    `json:"recent_10m"`
+	Recent1h   int    `json:"recent_1h"`
 	LastTime   string `json:"last_time"`
 	AttackType string `json:"attack_type"`
 	// AttackTypeStage 是该 IP 的阶段化攻击类型（后端 stageCategorizeAttack

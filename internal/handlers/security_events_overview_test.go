@@ -1654,3 +1654,35 @@ func TestLoadSecurityOverviewAggregates_cacheHitReturnsDeepCopy(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSecurityOverview_topIPsCarryRecentFrequency(t *testing.T) {
+	// Given one IP with events at now / -30m / -2h
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+	now := time.Now().UTC()
+	seedSecurityEvent(t, now.Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
+	seedSecurityEvent(t, now.Add(-30*time.Minute).Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
+	seedSecurityEvent(t, now.Add(-2*time.Hour).Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
+
+	// When
+	recorder := getRequest(t, router, "/security/overview")
+
+	// Then top_ips carries separate 10m/1h windows independent of the 7d total
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int                     `json:"code"`
+		Data models.SecurityOverview `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse overview: %v", err)
+	}
+	if len(resp.Data.TopIPs) != 1 {
+		t.Fatalf("top_ips=%+v, want 1", resp.Data.TopIPs)
+	}
+	got := resp.Data.TopIPs[0]
+	if got.Recent10m != 1 || got.Recent1h != 2 {
+		t.Fatalf("recent_10m/recent_1h=%d/%d, want 1/2", got.Recent10m, got.Recent1h)
+	}
+}

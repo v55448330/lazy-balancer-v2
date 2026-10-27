@@ -229,11 +229,6 @@ type RuntimeCleanupResult struct {
 	// 不依赖保留期口径（按「规则是否还存活」判定），故保留月数读取失败时照常
 	// 执行——规则日志此前只有事件型删除入口，失败即永久残留。
 	RuleLogs RuleLogHousekeepingResult
-	WafAudit []string // waf-audit 目录兜底动作明细（daemon 停机时的超阈轮转）
-	// WafAuditError waf-audit 兜底轮转失败原因（空=正常）。曾完全丢弃
-	// SecurityEventsPollOnce 的轮转错误——daemon 停机时审计文件无界增长这一
-	// 兜底场景失效，任务日志仍称「日志清理完成」。
-	WafAuditError string
 }
 
 // Err 聚合本轮全部清理失败（nil=一轮内每个清理动作都成功）。
@@ -265,9 +260,6 @@ func (r RuntimeCleanupResult) Err() error {
 	}
 	if r.RuleLogs.purgedErr() != nil {
 		errs = append(errs, r.RuleLogs.purgedErr())
-	}
-	if r.WafAuditError != "" {
-		errs = append(errs, fmt.Errorf("waf-audit 兜底轮转失败: %s", r.WafAuditError))
 	}
 	return errors.Join(errs...)
 }
@@ -319,17 +311,11 @@ func (r TaskLogHousekeepingResult) Summary() string {
 }
 
 // RuntimeLogCleanupOnce 单轮清理：应用日志过期副本删除 + 任务日志统一
-// 清理轮转（taskLogsHousekeeping）+ waf-audit 兜底。由任务引擎 log-cleanup
+// 清理轮转（taskLogsHousekeeping）+ 规则访问日志孤儿兜底。由任务引擎 log-cleanup
 // 族驱动（自此无独立启动器）。所有失败聚合进 RuntimeCleanupResult（Err()），
 // 由任务体决定 failed 终态与摘要措辞。
 func RuntimeLogCleanupOnce(ctx context.Context, logFile string) RuntimeCleanupResult {
 	result := RuntimeCleanupResult{}
-	// waf-audit 兜底不依赖保留期口径，先独立执行（失败也照常尝试其余清理）。
-	wafActions, wafErr := wafAuditHousekeeping()
-	result.WafAudit = wafActions
-	if wafErr != nil {
-		result.WafAuditError = wafErr.Error()
-	}
 	// 规则访问日志孤儿兜底同样不依赖保留期口径（按「规则是否还存活」判定），
 	// 先于保留期门执行——事件型删除失败后残留的规则日志不再永久占盘。
 	result.RuleLogs = PurgeOrphanRuleLogs(ctx)
@@ -398,22 +384,14 @@ func logCleanupRound(ctx context.Context, logFile string) (RuntimeCleanupResult,
 		// 兜底的存在理由。应用日志副本与任务日志仍无从扫描（需要运行日志
 		// 目录），保持显式「跳过」措辞。
 		res := RuntimeCleanupResult{}
-		wafActions, wafErr := wafAuditHousekeeping()
-		res.WafAudit = wafActions
-		if wafErr != nil {
-			res.WafAuditError = wafErr.Error()
-		}
 		// 规则访问日志孤儿兜底只需要规则日志目录与存活规则清单（与运行日志
 		// 目录无关），运行日志 writer 打开失败时照常执行。
 		res.RuleLogs = PurgeOrphanRuleLogs(ctx)
 		line := "日志清理未启用：运行日志文件未打开（应用日志副本清理与任务日志清理跳过）"
-		if len(res.WafAudit) > 0 {
-			line += "；waf-audit 兜底：" + strings.Join(res.WafAudit, "、")
-		}
 		if len(res.RuleLogs.Purged) > 0 || res.RuleLogs.RemoveFailed > 0 || res.RuleLogs.ScanError != "" || res.RuleLogs.Remaining > 0 {
 			line += "；" + res.RuleLogs.Summary()
 		}
-		if wafErr != nil || res.RuleLogs.purgedErr() != nil {
+		if res.RuleLogs.purgedErr() != nil {
 			return res, "日志清理未完成：" + line + "；错误：" + res.Err().Error()
 		}
 		return res, line
@@ -454,74 +432,7 @@ func logCleanupDetail(res RuntimeCleanupResult) string {
 	if len(res.RuleLogs.Purged) > 0 || res.RuleLogs.RemoveFailed > 0 || res.RuleLogs.ScanError != "" || res.RuleLogs.Remaining > 0 {
 		summary += "；" + res.RuleLogs.Summary()
 	}
-	// daemon 停机时的 waf-audit 兜底动作如实进
-	// 任务日志（2026-10-01 用户裁定：清理了哪个文件必须可见）；无动作时不加
-	// 尾段，日志行形态不变。
-	if len(res.WafAudit) > 0 {
-		summary += "；waf-audit 兜底：" + strings.Join(res.WafAudit, "、")
-	}
 	return summary
-}
-
-// wafAuditHousekeeping waf-audit 目录超阈兜底——
-// audit.log 轮转的正常驱动面是 security-events-ingestion daemon 的 2s tick
-// （SecurityEventsPollOnce）；daemon 停机（任务被禁用/取消）时文件无守护
-// 无界增长——写侧（Coraza 审计流，经 caddygeoip 审计写插件异步批量落盘）
-// 在 Caddy 进程内持续追加，本进程不消费即只增不减。此处按 audit_log_size_mb
-// 阈值在 log-cleanup 任务体（24h 节拍）内兜底：
-//
-//   - audit.log 超阈 → SecurityEventsPollOnce()（与 daemon tick 同锁同路径，
-//     摄取+pending-delta+copytruncate 全套安全链——绝不无补采截断；daemon
-//     在场时文件本不会积到阈值，触发即等价一次普通 tick，无竞争）。
-//
-// （耗时侧车退役——耗时随审计行内嵌流转，
-// 本目录仅剩 audit.log 家族文件，无需独立截断兜底。）
-//
-// 返回动作明细（log-cleanup 任务日志与运行日志双写——清理了哪个文件必须
-// 可见，2026-10-01 用户裁定口径）与兜底错误：SecurityEventsPollOnce 的轮转
-// 错误此前被完全丢弃——daemon 停机 + 轮转失败（pending 标记损坏/复制失败）
-// 时审计文件继续无界增长，而任务日志仍称「日志清理完成」、task_runs 恒绿。
-func wafAuditHousekeeping() ([]string, error) {
-	var actions []string
-	// 任务体（24h 节拍）不在关停/导入排空预算内：无 ctx 形态读取阈值即可
-	// （摄取 tick 侧的同一读必须走 ctx 版，见 getAuditLogSizeBytesContext）。
-	maxBytes := auditLogSizeBytes(context.Background())
-	info, statErr := os.Stat(auditLogPath)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			// 审计文件不存在（从未产生审计/已迁移）不是失败形态。
-			return nil, nil
-		}
-		return nil, fmt.Errorf("stat %s: %w", auditLogPath, statErr)
-	}
-	if info.Size() < maxBytes {
-		return nil, nil
-	}
-	sizeBefore := info.Size()
-	if _, rotErr := SecurityEventsPollOnce(); rotErr != nil {
-		if errors.Is(rotErr, errAuditRotationDeferred) {
-			// 轮转未完成 ≠ 无需轮转：归档已就位但活文件未截断（尾部未收敛），
-			// 空间未回收。摘要必须写「延迟」而不是「清理完成」——下次兜底只在
-			// 24h 后，误导性完成文案会把排障方向引向别处。
-			return nil, fmt.Errorf("超阈兜底轮转延迟（audit.log %d 字节 ≥ %d 字节，尾部尚未摄取，下次清理重试）: %w", sizeBefore, maxBytes, rotErr)
-		}
-		return nil, fmt.Errorf("超阈兜底轮转失败（audit.log %d 字节 ≥ %d 字节）: %w", sizeBefore, maxBytes, rotErr)
-	}
-	if after, aerr := os.Stat(auditLogPath); aerr != nil {
-		return nil, fmt.Errorf("轮转后 stat %s: %w", auditLogPath, aerr)
-	} else if after.Size() < sizeBefore {
-		actions = append(actions, fmt.Sprintf("audit.log %.1fMB≥%dMB（摄取+轮转）",
-			float64(sizeBefore)/1024/1024, maxBytes/1024/1024))
-	} else if after.Size() >= maxBytes {
-		// poll 成功但未回收空间（阈值缓存/外部写入使活文件仍在阈上）：不得
-		// 以「无动作」呈现为完成。
-		return nil, fmt.Errorf("超阈兜底轮转延迟（audit.log %d 字节仍 ≥ %d 字节，本轮未回收空间）", after.Size(), maxBytes)
-	}
-	for _, action := range actions {
-		Logf("info", "waf-audit 兜底轮转：%s", action)
-		TaskLogf("log-cleanup", "waf-audit", "兜底轮转：%s", action)
-	}
-	return actions, nil
 }
 
 // taskLogsHousekeepingWithRetention 以调用方给定的保留期执行任务日志清理。

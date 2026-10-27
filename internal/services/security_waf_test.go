@@ -698,7 +698,7 @@ func TestBuildCorazaDirectives_malformedJSONWarnRateLimited(t *testing.T) {
 	log.SetOutput(&logBuf)
 	t.Cleanup(func() { log.SetOutput(oldLog) })
 
-	groupsPolicy := &models.SecurityPolicy{ID: 8, Name: "broken-groups-rl", Mode: "blocking", AnomalyThreshold: 5, CRSRuleGroups: json.RawMessage(`{"not":"an array"`)}
+	groupsPolicy := &models.SecurityPolicy{ID: 900008, Name: "broken-groups-rl", Mode: "blocking", AnomalyThreshold: 5, CRSRuleGroups: json.RawMessage(`{"not":"an array"`)}
 	for range 3 {
 		_ = mustDirectives(BuildCorazaDirectives(groupsPolicy, nil, "", false, 0, "lb_broken_groups_rl"))
 	}
@@ -707,7 +707,7 @@ func TestBuildCorazaDirectives_malformedJSONWarnRateLimited(t *testing.T) {
 	}
 
 	logBuf.Reset()
-	geoPolicy := &models.SecurityPolicy{ID: 9, Name: "broken-geo-rl", Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`{"not":"an array"`)}
+	geoPolicy := &models.SecurityPolicy{ID: 900009, Name: "broken-geo-rl", Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`{"not":"an array"`)}
 	for range 3 {
 		// GeoIP 在预检渲染链求值（策略引擎对纯 GeoIP 策略产空串，不经策略渲染）
 		_ = mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{geoPolicy}, 0, "lb_broken_geo_rl"))

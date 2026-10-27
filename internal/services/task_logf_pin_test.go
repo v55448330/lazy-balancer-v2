@@ -6,8 +6,6 @@ package services
 // 漂移/异常轮照旧逐轮留痕。
 
 import (
-	"context"
-	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -291,40 +289,3 @@ func TestTaskLogf_MetricsOrphanCleanupFailureSaysFailed(t *testing.T) {
 // log-cleanup 的 Run 必须透传清理失败：task_runs 落 failed、任务日志写
 // 「未完成」而非「完成」（此前 Run 恒 return nil——daemon 停机时 waf-audit
 // 兜底轮转失败、单文件删除失败全部只打应用日志，任务监控恒绿）。
-func TestTaskLogf_LogCleanupFailureFailsTaskAndLogsIncomplete(t *testing.T) {
-	newTaskLogDir(t)
-	te := newWireTestEngine(t)
-	dir := t.TempDir()
-	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
-	auditLogPath, securityEventsOffsetPath = filepath.Join(dir, "audit.log"), filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
-	t.Cleanup(func() {
-		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
-	})
-	resetSecurityEventsPollState(t)
-	// daemon 停机形态：超阈活文件 + 兜底轮转失败（复制失败）。
-	// 内容为可解析审计文档——畸形尾会在复制前闸门处推迟，走不到复制失败分支。
-	stream := securityEventsFixtureClean + "\n" + securityEventsFixtureBlocked + "\n"
-	if len(stream) <= 1024 {
-		t.Fatalf("夹具长度 %d，须超过 1KB 轮转阈值", len(stream))
-	}
-	if err := os.WriteFile(auditLogPath, []byte(stream), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	auditLogCopyFile = func(string, string) error { return errors.New("injected copy failure") }
-
-	// When
-	err := te.Trigger("log-cleanup", "manual", "")
-
-	// Then：任务失败 + 任务日志不得称完成
-	if err == nil {
-		t.Fatal("清理失败必须让 log-cleanup 落 failed（此前恒 success）")
-	}
-	taskLog := readTaskLog(t, "log-cleanup")
-	if strings.Contains(taskLog, "日志清理完成") {
-		t.Fatalf("失败轮任务日志不得称「日志清理完成」: %q", taskLog)
-	}
-	if !strings.Contains(taskLog, "日志清理未完成") || !strings.Contains(taskLog, "injected copy failure") {
-		t.Fatalf("任务日志必须记录未完成与失败原因: %q", taskLog)
-	}
-}
