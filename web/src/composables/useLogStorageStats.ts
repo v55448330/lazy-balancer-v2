@@ -16,6 +16,16 @@ interface LogStorageInfo {
   // 行数读取失败披露：为真时保持条数口径并标注「计数暂不可用」，不再静默
   // 退回字节口径（口径切换会让用户以为统计规则被改）。
   rows_unavailable?: boolean
+  // 安全事件待补采缓存（IPC 主路径 + 失败落 spool）：IPC 正常时恒为 0，
+  // 有值即代表主路径曾失败、这些事件尚未入库，属需要运维看见的异常态。
+  // 四个计数都可选：旧后端不下发时前端不展示缓存段（不得把缺席当 0 条）。
+  cache_entries?: number | null
+  cache_bytes?: number | null
+  cache_limit_entries?: number | null
+  cache_limit_bytes?: number | null
+  // 缓存计数读取失败披露：为真时标注「缓存计数暂不可用」，不得显示成 0 条
+  // （0 条 = 主路径全通，与「读不到」是相反结论）。
+  cache_unavailable?: boolean
   retention_note: string
   config_source: string
 }

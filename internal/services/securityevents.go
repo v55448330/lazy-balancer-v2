@@ -2921,6 +2921,22 @@ type SecurityEventsIngestionStatus struct {
 	// Healthy；三面据此把「容量延迟」与「采集异常」分开呈现。
 	RotationDeferred       bool   `json:"rotation_deferred"`
 	RotationLastDeferredAt string `json:"rotation_last_deferred_at,omitempty"`
+	// Spool* 是 B 形态（IPC 主路径 + fallback spool）的待补采状态：
+	// 写侧 IPC 失败时把事件落 spool，面板由采集任务补采入库。这些条目仍在
+	// 磁盘上、可入库，属「待补采」而非永久丢失（不得据此置 DataLoss）；
+	// 但目录不可读 / 已达上限（写侧很可能正在丢弃新事件）/ 补采连续失败
+	// 达阈值时健康位降级——静默的积压会把「主路径坏了」伪装成一切正常。
+	SpoolDir                 string `json:"spool_dir,omitempty"`
+	SpoolFiles               int    `json:"spool_files"`
+	SpoolPendingEntries      int64  `json:"spool_pending_entries"`
+	SpoolPendingBytes        int64  `json:"spool_pending_bytes"`
+	SpoolLimitEntries        int64  `json:"spool_limit_entries,omitempty"`
+	SpoolLimitBytes          int64  `json:"spool_limit_bytes,omitempty"`
+	SpoolSaturated           bool   `json:"spool_saturated,omitempty"`
+	SpoolUnavailable         bool   `json:"spool_unavailable,omitempty"`
+	SpoolConsecutiveFailures int    `json:"spool_consecutive_failures,omitempty"`
+	SpoolLastError           string `json:"spool_last_error,omitempty"`
+	SpoolLastErrorAt         string `json:"spool_last_error_at,omitempty"`
 }
 
 var securityEventsIngestionHealth struct {
@@ -3366,6 +3382,9 @@ func securityEventsOverlayIngestionHealth(status SecurityEventsIngestionStatus) 
 	// 未落盘；命中明细截断=事件在库但部分规则命中永久缺失，两者同属丢失事实。
 	status.DataLoss = dropped > 0 || ioErrors > 0 || formatErrors > 0 ||
 		status.MessagesDropped > 0 || skippedRegions > 0
+	// spool 待补采状态叠加（B 形态）：待补采不是丢失，但目录不可读/已满/
+	// 补采连续失败必须降级——静默积压=主路径故障不可见。
+	securityEventsOverlaySpoolHealth(&status)
 	return status
 }
 
@@ -3437,11 +3456,19 @@ func securityEventsPollOnce(ctx context.Context) (int, error) {
 	// 补采事件永不进任务日志）；失败不阻塞返回（轮转自身已限流告警）。
 	rotated, rotErr := rotateAuditLogIfNeeded(ctx)
 	ingested += rotated
+	// fallback spool 补采（B 形态主路径的兜底）：只有 DB commit 完成的 sealed
+	// 文件才会被删除；失败按退避保留，待补采量由健康位/统计暴露。
+	spoolIngested, spoolErr := drainSecurityEventsSpool(ctx)
+	ingested += spoolIngested
 	// 轮转失败与采集失败同口径进健康快照——一轮内
 	// 两类失败只记一次（不双计）；停等（stalled）瞬态不遮蔽轮转失败。
 	healthErr := tickErr
 	if rotErr != nil && (healthErr == nil || errors.Is(healthErr, errSecurityEventsStalled)) {
 		healthErr = rotErr
+	}
+	// spool 补采失败同属采集失败（待补采条目未入库）：同样单记一次。
+	if spoolErr != nil && (healthErr == nil || errors.Is(healthErr, errSecurityEventsStalled)) {
+		healthErr = spoolErr
 	}
 	securityEventsRecordPollResult(healthErr)
 	return ingested, rotErr
@@ -3463,6 +3490,11 @@ func runIngestionLoop(ctx context.Context) error {
 	// 畸形区跳过的边沿留痕基线（跳过=事件永久丢弃，必须进任务日志——
 	// 仅 Logf 应用日志会让排障翻不到任务日志）。
 	lastSkippedRegions := uint64(0)
+	// 待补采（fallback spool）边沿基线：IPC 主路径正常时恒 0；有值=主路径
+	// 曾失败、事件已落盘等补采（不是丢失，但必须可见）。
+	lastSpoolPending := int64(0)
+	lastSpoolSaturated := false
+	lastSpoolUnavailable := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -3503,6 +3535,36 @@ func runIngestionLoop(ctx context.Context) error {
 					TaskLogf("security-events-ingestion", "audit-writer", "审计写侧计数侧车读取已恢复")
 				}
 				lastWriterStatsUnavailable = status.WriterStatsUnavailable
+			}
+			// 待补采状态边沿留痕（B 形态：IPC 主路径失败才产生 spool）：
+			// 有积压=主路径故障，事件仍在磁盘可补采（不是丢失）；清空=已自愈。
+			if status.SpoolPendingEntries != lastSpoolPending {
+				if status.SpoolPendingEntries > 0 {
+					msg := fmt.Sprintf("IPC 入库失败，%d 条安全事件待补采（%d 个文件 / %d 字节）：事件未丢失，采集任务每轮重试补采", status.SpoolPendingEntries, status.SpoolFiles, status.SpoolPendingBytes)
+					if status.SpoolLastError != "" {
+						msg += "；最近失败: " + status.SpoolLastError
+					}
+					TaskLogfWarn("security-events-ingestion", "spool", "%s", msg)
+				} else {
+					TaskLogf("security-events-ingestion", "spool", "待补采安全事件已全部入库（spool 已清空）")
+				}
+				lastSpoolPending = status.SpoolPendingEntries
+			}
+			if status.SpoolSaturated != lastSpoolSaturated {
+				if status.SpoolSaturated {
+					TaskLogfWarn("security-events-ingestion", "spool", "待补采 spool 已达上限（%d 条 / %d 字节）：写侧新事件可能被丢弃，请检查数据库可用性与磁盘空间", status.SpoolLimitEntries, status.SpoolLimitBytes)
+				} else {
+					TaskLogf("security-events-ingestion", "spool", "待补采 spool 已回落到上限以下")
+				}
+				lastSpoolSaturated = status.SpoolSaturated
+			}
+			if status.SpoolUnavailable != lastSpoolUnavailable {
+				if status.SpoolUnavailable {
+					TaskLogfWarn("security-events-ingestion", "spool", "待补采目录 %s 不可读：待补采计数不可用（显示 0 不代表无积压），请检查目录权限与磁盘", status.SpoolDir)
+				} else {
+					TaskLogf("security-events-ingestion", "spool", "待补采目录读取已恢复")
+				}
+				lastSpoolUnavailable = status.SpoolUnavailable
 			}
 			// 轮转写任务摘要——此前任务日志仅在
 			// ingested>0 时留痕，轮转持续失败零可见性。2s 节拍下持续失败每

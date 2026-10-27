@@ -7,7 +7,7 @@
 | `/app/data` | 业务/审计/指标数据库、ACME 账户密钥 | **是** |
 | `/app/certs` | 证书与私钥 | **是** |
 | `/app/logs` | 应用日志、Caddy 日志、按规则访问日志 | 推荐 |
-| `/app/waf` | CRS 规则树（IP2Region xdb 实际位于 `/app/data/ip2region.xdb`，随数据卷持久化；Coraza 审计日志在 `/app/logs/waf-audit`） | 推荐 |
+| `/app/waf` | CRS 规则树（IP2Region xdb 实际位于 `/app/data/ip2region.xdb`，随数据卷持久化；旧版 Coraza 审计日志在 `/app/logs/waf-audit`，B 形态下仅作兜底） | 推荐 |
 | `/app/backup` | 自动备份落盘目录（不挂载则容器重建后备份文件丢失） | **是** |
 | `/app/config` | 启动期最小 Caddyfile（admin 监听等）；运行配置恒由数据库渲染覆盖，手改不持久 | 可选 |
 
@@ -57,6 +57,29 @@
 **停止宽限期**（优雅关停）：面板关停链的最坏路径预算为 25 秒（HTTP 在途请求 → Caddy 排水 → 威胁大屏停止 → 任务引擎排空 → metrics/时区/日志轮转收尾 → ACME 收尾）。Docker 默认停止宽限只有 10 秒，第 10 秒即 SIGKILL：在途代理连接被硬断（`docker events` 里 `die` 的 `exitCode=137`）、`task_runs` 可能滞留在 `running`、日志尾部丢失。因此裸 `docker run` 必须带 `--stop-timeout 30`（compose 文件已内置 `stop_grace_period: 30s`）；systemd/Kubernetes 等自管编排请配置等效的 ≥25 秒停止宽限。
 
 内核级调优（sysctl）均为可选——默认值已生产就绪，完整指南见 [生产调优](production-tuning.zh-CN.md)。
+
+## 安全事件采集（IPC + 兜底补采）
+
+当前镜像的安全事件采集使用 **IPC 主路径 + fallback spool**：
+
+```text
+Caddy 审计写侧 → Unix socket → 面板入库（DB commit 后 ack）
+                      └─ 失败/超时/未确认 → /app/data/security-events-spool
+                                                  ↓
+                                          现有采集任务补采 → 删除已提交文件
+```
+
+- IPC socket：`/app/data/security-events.sock`（仅本机；权限 0600）
+- 兜底目录：`/app/data/security-events-spool`（正常应为空）
+- 正常事件只写 `lazy-balancer-metrics.db` 的 `security_events`，不再保留全量 WAF 审计文件；
+- IPC/DB 失败的事件进入 spool，采集任务补采，**DB commit 成功后才删除**；
+- 补采完成后 spool 为空；事件日志页的“缓存 N 条”即为待补采条目数；
+- 成功事件以 metrics DB 为权威，请配置数据库备份；spool 建议一并纳入备份；
+- 自定义 `data_dir` 部署需保证 Caddy 与面板共享同一数据卷，并用
+  `LB_SECURITY_EVENTS_IPC_SOCKET` / `LB_SECURITY_EVENTS_SPOOL_DIR` 显式覆盖时保持一致；
+- 旧版 `audit.log` 会在升级后继续消费存量，消费完成后不再新增。
+
+详见 `docs/security.zh-CN.md`。
 
 ## 品牌定制
 

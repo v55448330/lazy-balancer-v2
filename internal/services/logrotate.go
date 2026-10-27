@@ -43,6 +43,16 @@ func StartLogRotate(ctx context.Context) {
 	go func() {
 		defer close(done)
 		refresh := func() {
+			// 后台 worker 可能存活到测试/关停收尾之后：此时全局 DB 句柄已
+			// Close，database/sql 在 conn 阶段会 panic。尺寸刷新属于尽力而为，
+			// 不得拖垮进程；转为错误留痕并由下一轮重试。
+			defer func() {
+				if r := recover(); r != nil {
+					if logStateTransition("runtime-log-size-refresh", true) != "" {
+						Logf("warn", "refresh runtime log size panic: %v", r)
+					}
+				}
+			}()
 			database := db.GetDB()
 			if database == nil {
 				return

@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { nextTick, ref } from 'vue'
 
-import { registerModuleHooks, repoCode, section, code } from './_helpers.ts'
+import { registerModuleHooks, repoCode, section, code, codeSection } from './_helpers.ts'
 import { STUB_API } from './_stubs.ts'
 
 interface GetRecord {
@@ -306,5 +306,151 @@ test('rows_unavailable 与后端 logstats.go 的 json tag 同源（跨栈钉）'
     code('src/composables/useLogStorageStats.ts'),
     /rows_unavailable\?: boolean/,
     '前端类型必须声明同名可选字段',
+  )
+})
+
+// ── 安全事件待补采缓存（IPC 主路径 + 失败落 spool）────────────────────────
+// 指标语义：IPC 正常时恒为 0；>0 表示主路径曾失败、这些事件尚未入库。
+// 因此「0 条」「N 条」「计数读不到」「字段缺席」是四个不同事实，界面不得合并：
+// 把缺席/失败显示成 0 条 = 把「情况不明」说成「一切正常」，是这指标最危险的误读。
+
+const securityEventsStats = (over: Record<string, unknown> = {}): unknown => ({
+  data: {
+    logs: [
+      {
+        key: 'security_events',
+        name: '安全事件',
+        size_bytes: 0,
+        rotated_bytes: 0,
+        rotated_count: 0,
+        keep_count: 0,
+        limit_rows: 1_000_000,
+        rows: 42,
+        db_bytes: 1_048_576,
+        cache_entries: 0,
+        cache_bytes: 0,
+        cache_limit_entries: 1000,
+        cache_limit_bytes: 16_777_216,
+        retention_note: '每日清理',
+        config_source: '基础设置',
+        ...over,
+      },
+    ],
+  },
+})
+
+test('缓存计数透传：0 与 N 都原样到消费层（0 是有效值，不是缺席）', async () => {
+  const target = ref({ logKey: 'security_events' })
+  const refreshKey = ref(0)
+  g.__get = async () => securityEventsStats({ cache_entries: 0, cache_bytes: 0 })
+  const { info } = useLogStorageStats({ target: () => target.value, refreshKey: () => refreshKey.value })
+  await flush()
+  assert.equal(info.value?.cache_entries, 0, '0 条必须可读（界面据此显示「缓存 0 条」）')
+  assert.equal(info.value?.cache_bytes, 0)
+
+  refreshKey.value++
+  g.__get = async () => securityEventsStats({ cache_entries: 7, cache_bytes: 4096 })
+  await nextTick()
+  await flush()
+  assert.equal(info.value?.cache_entries, 7, '补采期间 N 条必须可读')
+  assert.equal(info.value?.cache_bytes, 4096)
+  assert.equal(info.value?.cache_limit_entries, 1000)
+  assert.equal(info.value?.cache_limit_bytes, 16_777_216)
+})
+
+test('缓存计数失败：cache_unavailable 透传（不得折成 0 条）', async () => {
+  const target = ref({ logKey: 'security_events' })
+  const refreshKey = ref(0)
+  g.__get = async () => securityEventsStats({ cache_entries: null, cache_unavailable: true })
+  const { info } = useLogStorageStats({ target: () => target.value, refreshKey: () => refreshKey.value })
+  await flush()
+  assert.equal(info.value?.cache_unavailable, true)
+  assert.equal(info.value?.cache_entries, null, '读不到就是 null，不得被改写成 0')
+})
+
+test('缓存字段在取数层声明为可选（旧后端 / 非安全事件行可为缺席）', () => {
+  const types = code('src/composables/useLogStorageStats.ts')
+  for (const decl of [
+    'cache_entries?: number | null',
+    'cache_bytes?: number | null',
+    'cache_limit_entries?: number | null',
+    'cache_limit_bytes?: number | null',
+    'cache_unavailable?: boolean',
+  ]) {
+    assert.ok(types.includes(decl), `响应类型必须声明：${decl}`)
+  }
+})
+
+test('安全事件行内：条数/行帽 + 缓存 N 条 + 库体量；审计日志文件体量退出容量位', () => {
+  const sizeText = codeSection('src/components/LogStorageBar.vue', 'const sizeText = computed(', '\n})\n')
+  assert.match(sizeText, /if \(i\.limit_rows\) \{/, '安全事件保持条数口径')
+  assert.match(sizeText, /cacheCountText\.value/, '缓存条数必须出现在条数口径行内')
+  assert.match(sizeText, /库 \$\{humanSize\(i\.db_bytes\)\}/, '库体量保留')
+  assert.doesNotMatch(
+    sizeText,
+    /日志 \$\{humanSize\(i\.size_bytes\)\}/,
+    'audit.log 文件体量（size_bytes）不得再当安全事件容量展示',
+  )
+  // 缓存段与行数可用性正交：行数缺失时仍要给缓存条数——它正是排查补采的入口。
+  assert.equal(
+    section(sizeText, 'if (cacheCountText.value)', '\n').trim(),
+    'if (cacheCountText.value) parts.push(cacheCountText.value)',
+    '缓存段不得挂在 rowsUnavailable 分支下',
+  )
+})
+
+test('缓存 0 条必须显示：0 不得被真值判断当成缺席', () => {
+  const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
+  assert.match(cacheCount, /`缓存 \$\{i\.cache_entries\.toLocaleString\(\)\} 条`/, '条数文案单源')
+  assert.doesNotMatch(cacheCount, /if \(i\.cache_entries\)/, '真值判断会把 0 条静默吞掉')
+  assert.doesNotMatch(cacheCount, /cache_entries > 0/, '0 条是正常态，不得设 >0 门槛')
+})
+
+test('缓存计数不可用：显式「计数暂不可用」，不退化成 0 条', () => {
+  const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
+  assert.match(cacheCount, /缓存计数暂不可用/, '失败态必须有自己的文案')
+  assert.match(
+    cacheCount,
+    /cache_unavailable === true \|\| i\.cache_entries == null/,
+    'flag 与缺席同口径（后端只留 flag 时不得当 0）',
+  )
+})
+
+test('缓存字段缺席（旧后端 / 非安全事件行）：整段不渲染，也不谎称 0 条', () => {
+  const cacheKnown = codeSection('src/components/LogStorageBar.vue', 'const cacheKnown = computed', '\n})')
+  assert.match(cacheKnown, /i\.cache_entries != null \|\| i\.cache_unavailable === true/, '已知=有计数或有失败披露')
+  const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
+  assert.match(cacheCount, /if \(!i \|\| !cacheKnown\.value\) return ''/, '缺席时不产出缓存段')
+})
+
+test('缓存口径说明：tooltip 讲清「IPC 失败后的待补采条目，正常应为 0」', () => {
+  const cacheDetail = codeSection('src/components/LogStorageBar.vue', 'const cacheDetail = computed', '\n})\n')
+  assert.match(cacheDetail, /缓存为 IPC 失败后的待补采条目，正常应为 0/, '缓存含义必须显式说明')
+  assert.match(cacheDetail, /cache_limit_entries/, '条目上限进入 tooltip')
+  assert.match(cacheDetail, /cache_limit_bytes/, '字节上限进入 tooltip')
+  assert.match(cacheDetail, /cache_unavailable === true \|\| i\.cache_entries == null/, '失败态在 tooltip 同样披露')
+  const tooltip = codeSection('src/components/LogStorageBar.vue', 'const tooltipContent = computed', '\n})\n')
+  assert.match(tooltip, /cacheDetail\.value/, 'tooltip 必须带上缓存口径')
+})
+
+test('其他日志行口径不回归：字节/轮转文案保持原样', () => {
+  const sizeText = codeSection('src/components/LogStorageBar.vue', 'const sizeText = computed(', '\n})\n')
+  assert.match(
+    sizeText,
+    /if \(i\.limit_bytes\) return `\$\{humanSize\(i\.size_bytes\)\} \/ \$\{humanSize\(i\.limit_bytes\)\}`/,
+    '字节上限行（Caddy/任务日志等）不变',
+  )
+  assert.match(sizeText, /return humanSize\(i\.size_bytes\)/, '无上限行仍按字节呈现')
+  const noteText = codeSection('src/components/LogStorageBar.vue', 'const noteText = computed(', '\n})\n')
+  assert.match(noteText, /满 \$\{humanSize\(i\.limit_bytes\)\} 轮转/, '轮转阈值文案不变')
+  assert.match(noteText, /暂无归档（满额保留 \$\{i\.keep_count\} 份）/, '份数上限文案不变')
+  assert.match(noteText, /超限按最旧优先清理/, '条数口径附注不变')
+  // 缓存段只属于有该指标的日志行：通用路径（无 limit_rows）不得插入缓存字面量。
+  const rowsBranch = section(sizeText, 'if (i.limit_rows) {', '\n  }\n')
+  assert.match(rowsBranch, /cacheCountText\.value/)
+  assert.doesNotMatch(
+    sizeText.slice(sizeText.indexOf('if (i.limit_bytes)')),
+    /cacheCountText/,
+    '通用字节口径（Caddy/任务日志等）不得插入缓存段',
   )
 })

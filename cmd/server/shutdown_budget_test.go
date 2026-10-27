@@ -74,6 +74,8 @@ func TestShutdownBudgetWorstCaseFitsComposeGrace(t *testing.T) {
 	now = now.Add(warmerSeg)
 	engineSeg := b.engineDrain()
 	now = now.Add(engineSeg)
+	ipcSeg := b.segment(ipcStopSegmentMax)
+	now = now.Add(ipcSeg)
 	engineHandleStopSeg := b.segmentReserving(engineHandleStopSegmentMax, trailingStopReserve)
 	now = now.Add(engineHandleStopSeg)
 	metricsCleanupSeg := b.segmentReserving(metricsCleanupSegmentMax, trailingStopReserve)
@@ -101,6 +103,9 @@ func TestShutdownBudgetWorstCaseFitsComposeGrace(t *testing.T) {
 	if engineSeg != wantEngine {
 		t.Fatalf("引擎排空=剩余−收尾段预留=%s, got %s", wantEngine, engineSeg)
 	}
+	if ipcSeg != ipcStopSegmentMax {
+		t.Fatalf("安全事件 IPC 关停段=%s, want %s", ipcSeg, ipcStopSegmentMax)
+	}
 	// 最坏路径下引擎已吃满排空段：后两处不可预算等待只能拿到 0（不得侵占预留）。
 	if engineHandleStopSeg != 0 {
 		t.Fatalf("引擎句柄清理等待段=%s, want 0（不得侵占收尾段预留）", engineHandleStopSeg)
@@ -120,7 +125,7 @@ func TestShutdownBudgetWorstCaseFitsComposeGrace(t *testing.T) {
 	if acmeSeg != acmeStopSegmentMax {
 		t.Fatalf("ACME 段=%s, want %s（收尾段预留不得被前方等待挤成 0）", acmeSeg, acmeStopSegmentMax)
 	}
-	total := httpSeg + caddySeg + warmerSeg + engineSeg + engineHandleStopSeg + metricsCleanupSeg + metricsSeg + tzSeg + logRotateSeg + acmeSeg
+	total := httpSeg + caddySeg + warmerSeg + engineSeg + ipcSeg + engineHandleStopSeg + metricsCleanupSeg + metricsSeg + tzSeg + logRotateSeg + acmeSeg
 	if total > processShutdownBudget {
 		t.Fatalf("最坏路径总和 %s 超出总预算 %s", total, processShutdownBudget)
 	}

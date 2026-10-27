@@ -255,6 +255,9 @@
       </el-table>
 
       <div class="events-footer">
+        <!-- 统计口径：安全事件主容量 = 事件行数/行帽（库内真实容量），另附待补采
+             缓存条数（IPC 正常时恒为 0）与库体量；audit.log 文件体量不再当作
+             该行容量展示（写入侧同文件、随轮转与缓存漂移，会误导容量判断）。 -->
         <LogStorageBar log-key="security_events" :refresh-key="logStorageRefreshKey" class="events-storage" />
         <el-pagination
           class="events-pagination"

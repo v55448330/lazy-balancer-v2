@@ -59,6 +59,23 @@ const isEmpty = computed(() => {
 const rowsMode = computed(() => !!info.value?.limit_rows)
 const rowsUnavailable = computed(() => rowsMode.value && (info.value?.rows_unavailable === true || info.value?.rows == null))
 
+// 待补采缓存（安全事件行）：IPC 主路径写入，失败才落 spool，正常应为 0。
+// 三态必须分开——有计数（含 0）/ 计数失败（cache_unavailable）/ 字段缺席
+// （旧后端或非安全事件行）。缺席时整段不渲染：把缺席渲染成「0 条」会把
+// 「不知道」说成「一切正常」，是这个指标最危险的误读。
+const cacheKnown = computed(() => {
+  const i = info.value
+  if (!i) return false
+  return i.cache_entries != null || i.cache_unavailable === true
+})
+const cacheCountText = computed(() => {
+  const i = info.value
+  if (!i || !cacheKnown.value) return ''
+  if (i.cache_unavailable === true || i.cache_entries == null) return '缓存计数暂不可用'
+  // 0 条也要显示（正常态）；不设 >0 门槛，否则「0 条」与「没这项统计」无法区分。
+  return `缓存 ${i.cache_entries.toLocaleString()} 条`
+})
+
 const percentage = computed(() => {
   const i = info.value
   if (!i) return 0
@@ -80,8 +97,10 @@ const sizeText = computed(() => {
     const base = rowsUnavailable.value
       ? `计数暂不可用 / ${i.limit_rows.toLocaleString()} 条`
       : `${(i.rows ?? 0).toLocaleString()} / ${i.limit_rows.toLocaleString()} 条`
+    // 安全事件主容量 = 事件行数/行帽：真实容量在库里，audit.log 的 size_bytes
+    // 只是写入侧同文件的体量（随轮转/缓存补采漂移），不再当该行容量展示。
     const parts = [base]
-    if (i.size_bytes > 0) parts.push(`日志 ${humanSize(i.size_bytes)}`)
+    if (cacheCountText.value) parts.push(cacheCountText.value)
     if (i.db_bytes) parts.push(`库 ${humanSize(i.db_bytes)}`)
     return parts.join(' · ')
   }
@@ -112,7 +131,35 @@ const noteText = computed(() => {
   return parts.join('，')
 })
 
-const tooltipContent = computed(() => `${info.value?.config_source || ''}${info.value?.retention_note ? ' · ' + info.value.retention_note : ''}${info.value?.limit_rows ? ' · 超出上限时按最旧优先清理' : ''}`)
+// 缓存段的口径说明（hover 展开）：条目/字节/上限，以及它到底是什么——
+// 「IPC 失败后的待补采条目，正常应为 0」。行内只放条数，解释留给 tooltip，
+// 避免长文案把右侧分页挤出容器。
+const cacheDetail = computed(() => {
+  const i = info.value
+  if (!i || !cacheKnown.value) return ''
+  const parts: string[] = []
+  if (i.cache_unavailable === true || i.cache_entries == null) {
+    parts.push('缓存计数暂不可用（计数读取失败）')
+  } else {
+    let head = `缓存 ${i.cache_entries.toLocaleString()} 条`
+    if (i.cache_bytes != null) head += ` · ${humanSize(i.cache_bytes)}`
+    if (i.cache_limit_entries != null && i.cache_limit_entries > 0) head += ` / 上限 ${i.cache_limit_entries.toLocaleString()} 条`
+    if (i.cache_limit_bytes != null && i.cache_limit_bytes > 0) head += `（${humanSize(i.cache_limit_bytes)}）`
+    parts.push(head)
+  }
+  parts.push('缓存为 IPC 失败后的待补采条目，正常应为 0')
+  return parts.join(' · ')
+})
+
+const tooltipContent = computed(() => {
+  const i = info.value
+  const parts: string[] = []
+  if (i?.config_source) parts.push(i.config_source)
+  if (i?.retention_note) parts.push(i.retention_note)
+  if (i?.limit_rows) parts.push('超出上限时按最旧优先清理')
+  if (cacheDetail.value) parts.push(cacheDetail.value)
+  return parts.join(' · ')
+})
 </script>
 
 <style scoped>

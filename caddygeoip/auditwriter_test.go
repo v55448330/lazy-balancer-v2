@@ -2435,29 +2435,32 @@ func TestEstimateAuditSnapshotBytes_isUpperBound(t *testing.T) {
 }
 
 // messageOnlyAuditLog 只承载 messages 的最小 AuditLog 实现（截断逻辑单测）。
+// tx 非 nil 时同时携带事务侧内容——messages 动态预算需要 fixed 段参与计算。
 type messageOnlyAuditLog struct {
+	tx   plugintypes.AuditLogTransaction
 	msgs []plugintypes.AuditLogMessage
 }
 
 func (l messageOnlyAuditLog) Parts() types.AuditLogParts { return nil }
 func (l messageOnlyAuditLog) Transaction() plugintypes.AuditLogTransaction {
-	return nil
+	return l.tx
 }
 func (l messageOnlyAuditLog) Messages() []plugintypes.AuditLogMessage { return l.msgs }
 
-// messages 写侧上限：四段全满时，旧形态（messages 无独立上限）让单条快照
-// 越过 auditItemMaxBytes 被**整行丢弃**（命中规则多的高价值行反而丢失）。
-// 截断后整行保留，并在 messages_dropped 显性披露丢弃条数。
+// messages 写侧上限：未截断的 messages 集合让单条快照越过 auditItemMaxBytes 被
+// **整行丢弃**（命中规则多的高价值行反而丢失）。动态预算截断后整行保留，并在
+// messages_dropped 显性披露丢弃条数。
 func TestSnapshotAuditLog_truncatesMessagesUnderItemCap(t *testing.T) {
 	// 每条 6KB：200 条未截断共 ~1.2MB，必然越过 1MiB 单条上限（钉子有效性
-	// 反证的分母；截断后 messages 自身口径仍受 32KiB 预算约束）。
+	// 反证的分母；截断后 messages 受动态预算约束，小固定段时为 clamp 上界）。
 	raw := make([]plugintypes.AuditLogMessage, 0, 200)
 	for range 200 {
 		raw = append(raw, estimateTestMessage{Message_: strings.Repeat("m", 6000)})
 	}
 	snap := snapshotAuditLog(messageOnlyAuditLog{msgs: raw})
-	if got := len(snap.Messages_); got > auditMessagesMaxEntries {
-		t.Fatalf("messages 保留 %d 条 > 上限 %d", got, auditMessagesMaxEntries)
+	maxBytes, maxEntries := auditMessagesBudget(estimateAuditSnapshotFixedBytes(snap))
+	if got := len(snap.Messages_); got > maxEntries {
+		t.Fatalf("messages 保留 %d 条 > 动态条目预算 %d", got, maxEntries)
 	}
 	if snap.MessagesDropped_ != len(raw)-len(snap.Messages_) || snap.MessagesDropped_ == 0 {
 		t.Fatalf("messages_dropped=%d, want %d（丢弃条数须显性披露）",
@@ -2467,24 +2470,26 @@ func TestSnapshotAuditLog_truncatesMessagesUnderItemCap(t *testing.T) {
 	for _, m := range snap.Messages_ {
 		used += estimateAuditMessageBytes(m)
 	}
-	if used > auditMessagesMaxBytes {
-		t.Fatalf("messages 估算 %d 字节 > 上限 %d", used, auditMessagesMaxBytes)
+	if used > maxBytes {
+		t.Fatalf("messages 估算 %d 字节 > 动态预算 %d", used, maxBytes)
 	}
 
-	// 四段全满（请求/响应体与头各 64KiB）且体取转义最坏比（全 `&`）+
-	// 截断后的 messages：必须落在单条上限内；同形但未截断的 messages 集合
-	// 必然超限（钉子有效性反证）。
+	// 四段全满（请求/响应体与头各 64KiB）且体取转义最坏比（全 `&`）+ 同一批
+	// messages：动态预算随固定段收缩，整行必须落在单条上限内；同形但未截断的
+	// messages 集合必然超限（钉子有效性反证）。
 	dense := strings.Repeat("&", auditBodyMaxBytes)
-	reqHeaders, reqExact := snapshotAuditHeaders(map[string][]string{"h": {dense}})
-	respHeaders, respExact := snapshotAuditHeaders(map[string][]string{"h": {dense}})
-	snap.Transaction_ = auditSnapshotTransaction{
-		Request_:  &auditSnapshotRequest{Body_: dense, Headers_: reqHeaders, HeadersBytes_: reqExact},
-		Response_: &auditSnapshotResponse{Body_: dense, Headers_: respHeaders, HeadersBytes_: respExact},
+	denseTx := auxProbeTx{
+		req:  auxProbeReq{body: dense, headers: map[string][]string{"h": {dense}}},
+		resp: auxProbeResp{body: dense, headers: map[string][]string{"h": {dense}}},
 	}
-	if size := estimateAuditSnapshotBytes(snap); size > auditItemMaxBytes {
+	denseSnap := snapshotAuditLog(messageOnlyAuditLog{tx: denseTx, msgs: raw})
+	if size := estimateAuditSnapshotBytes(denseSnap); size > auditItemMaxBytes {
 		t.Fatalf("截断后 size=%d > 单条上限 %d（整行仍会被丢弃）", size, auditItemMaxBytes)
 	}
-	untruncated := *snap
+	if denseSnap.MessagesDropped_ == 0 {
+		t.Fatal("大固定段形态必须截断 messages（动态预算收缩失效）")
+	}
+	untruncated := *denseSnap
 	untruncated.Messages_ = raw
 	untruncated.MessagesDropped_ = 0
 	if estimateAuditSnapshotBytes(&untruncated) <= auditItemMaxBytes {
@@ -2508,8 +2513,8 @@ func TestSnapshotAuditLog_keepsThreatEvaluationMessagesWhenTruncated(t *testing.
 	mk := func(id int, msg string) plugintypes.AuditLogMessage {
 		return estimateTestMessage{Message_: msg, Data_: &estimateTestMessageData{ID_: id, Msg_: msg}}
 	}
-	raw := make([]plugintypes.AuditLogMessage, 0, 200)
-	for i := 0; i < 196; i++ {
+	raw := make([]plugintypes.AuditLogMessage, 0, 400)
+	for i := range 400 {
 		raw = append(raw, mk(942000+i, "attack "+strings.Repeat("m", 100)))
 	}
 	raw = append(raw,
@@ -2521,15 +2526,16 @@ func TestSnapshotAuditLog_keepsThreatEvaluationMessagesWhenTruncated(t *testing.
 		t.Fatalf("messages_dropped=%d, want %d（中间段丢弃条数须显性披露）",
 			snap.MessagesDropped_, len(raw)-len(snap.Messages_))
 	}
-	if got := len(snap.Messages_); got > auditMessagesMaxEntries {
-		t.Fatalf("messages 保留 %d 条 > 上限 %d", got, auditMessagesMaxEntries)
+	maxBytes, maxEntries := auditMessagesBudget(estimateAuditSnapshotFixedBytes(snap))
+	if got := len(snap.Messages_); got > maxEntries {
+		t.Fatalf("messages 保留 %d 条 > 动态条目预算 %d", got, maxEntries)
 	}
 	var used int64
 	for _, m := range snap.Messages_ {
 		used += estimateAuditMessageBytes(m)
 	}
-	if used > auditMessagesMaxBytes {
-		t.Fatalf("messages 估算 %d 字节 > 上限 %d", used, auditMessagesMaxBytes)
+	if used > maxBytes {
+		t.Fatalf("messages 估算 %d 字节 > 动态预算 %d", used, maxBytes)
 	}
 	// 头段保留首条（攻击特征命中的起点），尾段保留评估汇总。
 	if first := snap.Messages_[0]; first.(estimateTestMessage).Data_.ID_ != 942000 {
@@ -3070,28 +3076,48 @@ func TestSnapshotAuditLog_transactionStringsPassThroughWhenUnderCap(t *testing.T
 	}
 }
 
-// auditItemMaxBytes 的上界推导必须可复算：所有客户端可控段的上限之和 + 48KiB
-// 余量 ≤ 单条上限。任何新增客户端可控段（或放宽既有上限）若不同步扩容，本门
-// 立即失败——否则「封顶后仍整行丢弃」的同族缺陷会以新字段形式回归。
+// auditItemMaxBytes 的上界推导必须可复算：**非 messages** 客户端可控段上限之和
+// + 余量 + messages 兼容下限 ≤ 单条上限；且 messages 的动态预算在固定段取最坏
+// 形态时被夹到「剩余空间」以内。任何新增客户端可控段（或放宽既有上限）若不同步
+// 扩容，本门立即失败——否则「封顶后仍整行丢弃」的同族缺陷会以新字段形式回归。
+//
+// 为什么不再把 messages 的 clamp 上界（128KiB）直接加进总和：动态预算的正是
+// 「固定段越大、messages 越小」，两者之和恒 ≤ 单条上限（见 auditMessagesBudget）。
+// 静态相加只对**互不排斥**的段有意义，而 messages 与固定段是互相挤压关系。
 func TestAuditItemMaxBytes_coversAllClientControlledSegments(t *testing.T) {
 	const reserve int64 = 48 * 1024
 	marker := int64(len(auditTruncatedMarker))
-	worst := 2*(6*int64(auditBodyMaxBytes)+marker) + // 请求/响应体（64KiB 全 `&` + 标记）
+	fixedWorst := 2*(6*int64(auditBodyMaxBytes)+marker) + // 请求/响应体（64KiB 全 `&` + 标记）
 		2*int64(auditHeadersMaxBytes) + // 请求/响应头（快照侧已按转义字节封顶）
-		int64(auditMessagesMaxBytes) + // messages 内容预算
 		int64(auditMethodMaxEscapedBytes) + // 内容预算已扣除标记长度
 		int64(auditServerIDMaxEscapedBytes) +
 		int64(auditURIMaxEscapedBytes) +
 		int64(auditFilesMaxEscapedBytes) +
 		int64(auditFilesMaxEntries)*auditFileEntryOverhead // files 条目固定开销
-	if worst+reserve > auditItemMaxBytes {
-		t.Fatalf("客户端可控段上限之和 %d + 余量 %d = %d > 单条上限 %d",
-			worst, reserve, worst+reserve, auditItemMaxBytes)
+	if fixedWorst+reserve+auditMessagesMinBytes > auditItemMaxBytes {
+		t.Fatalf("非 messages 段上限之和 %d + 余量 %d + messages 下限 %d > 单条上限 %d",
+			fixedWorst, reserve, auditMessagesMinBytes, auditItemMaxBytes)
 	}
-	// 夹具有效性：上限之和 + 余量后剩余的头部空间必须小于 16KiB（条目固定
-	// 开销与插件侧字符串的既有实测余量）。放宽到 ≥16KiB 说明出现了未被任何
-	// 段声明的空间，新客户端可控段会在不报错的情况下挤占它。
-	if slack := auditItemMaxBytes - worst - reserve; slack >= 16*1024 {
-		t.Fatalf("余量口径漂移：上限之和 + 余量后仍余 %d 字节未被任何段声明", slack)
+	// 动态预算必须把 messages 夹在「最坏固定段之后的剩余空间」以内：fixedWorst
+	// 取满时预算只能落在下限附近，绝不能仍给 128KiB（否则整行必被丢弃）。
+	budgetBytes, budgetEntries := auditMessagesBudget(fixedWorst)
+	if fixedWorst+budgetBytes+reserve > auditItemMaxBytes {
+		t.Fatalf("最坏固定段 %d + messages 预算 %d + 余量 %d > 单条上限 %d",
+			fixedWorst, budgetBytes, reserve, auditItemMaxBytes)
+	}
+	if budgetBytes > auditMessagesMaxBytesCeiling || budgetEntries > auditMessagesMaxEntriesCeiling {
+		t.Fatalf("动态预算 %d/%d 越过 clamp 上界 %d/%d",
+			budgetBytes, budgetEntries, auditMessagesMaxBytesCeiling, auditMessagesMaxEntriesCeiling)
+	}
+	// 夹具有效性：最坏形态下预算必须已收缩到 clamp 上界之下（否则本门对
+	// 「大 body + messages 挤爆整行」失去区分力）。
+	if budgetBytes >= auditMessagesMaxBytesCeiling {
+		t.Fatalf("最坏固定段下 messages 预算 %d 未收缩（上界 %d）", budgetBytes, auditMessagesMaxBytesCeiling)
+	}
+	// 非 messages 段之后剩余空间必须小于 16KiB（条目固定开销与插件侧字符串的
+	// 既有实测余量）。放宽到 ≥16KiB 说明出现了未被任何段声明的空间，新客户端
+	// 可控段会在不报错的情况下挤占它。
+	if slack := auditItemMaxBytes - fixedWorst - reserve - auditMessagesMinBytes; slack >= 16*1024 || slack < 0 {
+		t.Fatalf("余量口径漂移：非 messages 段 + 余量 + messages 下限后仍余 %d 字节未被任何段声明", slack)
 	}
 }

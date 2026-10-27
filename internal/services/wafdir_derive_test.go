@@ -16,11 +16,13 @@ func saveWafPathVars(t *testing.T) {
 		crsLive, crsDirectives, crsRuleIndex, crsSnapshot, crsDist string
 		xdbLive, xdbDist, crawlerSeed, crawlerLive                 string
 		auditLog, eventsOffset, downloadIntegrity                  string
+		ipcSocket, spoolDir                                        string
 	}{
 		wafDir, wafDistDir, IPListDataDir, wafiplist.AllowedPathPrefix,
 		crsLiveDir, crsDirectivesDir, CRSRuleIndexDir, crsSnapshotDir, crsDistDir,
 		ip2regionLivePath, ip2regionDistPath, crawlerDistSeedFile, crawlerIPListFile,
 		auditLogPath, securityEventsOffsetPath, downloadIntegrityPath,
+		securityEventsIPCSocketPath, securityEventsSpoolDir,
 	}
 	t.Cleanup(func() {
 		wafDir, wafDistDir, IPListDataDir, wafiplist.AllowedPathPrefix =
@@ -31,6 +33,7 @@ func saveWafPathVars(t *testing.T) {
 			old.xdbLive, old.xdbDist, old.crawlerSeed, old.crawlerLive
 		auditLogPath, securityEventsOffsetPath = old.auditLog, old.eventsOffset
 		downloadIntegrityPath = old.downloadIntegrity
+		securityEventsIPCSocketPath, securityEventsSpoolDir = old.ipcSocket, old.spoolDir
 	})
 }
 

@@ -111,6 +111,18 @@ test('data_loss 单独成立：逐项列出曾丢失来源并声明已恢复', (
   assert.match(ingestionWarningMessage({ ...healthy, data_loss: true }), /计数不可用/)
 })
 
+test('仅命中明细截断不得说成事件丢失', () => {
+  const message = ingestionWarningMessage({
+    ...healthy,
+    data_loss: true,
+    messages_dropped: 819,
+  })
+  assert.match(message, /此前曾发生安全事件明细截断/)
+  assert.match(message, /事件本身已记录/)
+  assert.match(message, /命中明细截断 819 条/)
+  assert.doesNotMatch(message, /事件可能缺失/)
+})
+
 test('三处视图消费同源 helper（禁止各自判定）', () => {
   for (const file of [
     'src/views/security/SecurityEvents.vue',

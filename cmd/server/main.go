@@ -254,6 +254,18 @@ func run() error {
 	if err := services.EnsureIPListDir(); err != nil {
 		services.Logf("error", "初始化 IP 名单目录失败: %v", err)
 	}
+	// 安全事件 IPC 服务端（B 形态主路径）：Caddy 审计写侧经 Unix socket 把
+	// 原始 audit JSON 行直接投递给面板入库（Caddy 永不直连数据库）。启动失败
+	// 不阻断面板——写侧会回退 fallback spool，由采集任务补采（有损的只是
+	// 时延，不是事件）。
+	// spool 目录先建好（写侧 IPC 失败时要能立刻落盘兜底）。
+	if err := services.EnsureSecurityEventsSpoolDir(); err != nil {
+		services.Logf("error", "初始化安全事件待补采目录失败（写侧可能无法落盘兜底）: %v", err)
+	}
+	securityEventsIPC, ipcErr := handlers.StartSecurityEventsIPCServer()
+	if ipcErr != nil {
+		services.Logf("error", "安全事件 IPC 服务启动失败（写侧将回退 spool 补采）: %v", ipcErr)
+	}
 	// 系统配置载入（单一 oneshot 任务：规则库→证书→Caddy 渲染三段；完成于
 	// 面板监听之前——载入完成前系统不可达（强于只读））
 	// runConfigLoad 为共享执行体——启动与任务监控手动触发走同一函数
@@ -388,6 +400,15 @@ func run() error {
 		// 否则退出窗口内每 2s 对已关闭 MetricsDB 刷 "database is closed" 告警。
 		// 引擎排空按剩余预算派生（为 ACME 收尾预留），不再使用
 		// StopTaskEngine 的 30s 默认——30s 本身已超 compose stop_grace_period。
+		// 安全事件 IPC 入库服务先于引擎/数据库收尾：关停后写侧按连接失败回退
+		// spool（补采在下次启动/引擎运行期完成），不得在 db.Close 后仍写库。
+		runWithin("安全事件 IPC 关停", shutdown.segment(ipcStopSegmentMax), func() {
+			ctx, cancel := context.WithTimeout(context.Background(), ipcStopSegmentMax)
+			defer cancel()
+			if err := securityEventsIPC.Stop(ctx); err != nil {
+				services.Logf("warn", "安全事件 IPC 服务关停未在预算内完成（进程继续退出）: %v", err)
+			}
+		})
 		stopTaskEngineWithin(shutdown) // M2:引擎统一收尾(摄取/看门狗/清理)
 		// 以下等待全部从关停预算派生有界——旧形态
 		// <-metricsDone / StopX 的无界 <-done 在 collect/refresh 阻塞
@@ -540,6 +561,7 @@ func newRestartSignal() (<-chan struct{}, func()) {
 //
 //	HTTP ≤10s → Caddy 排水 ≤2s → 威胁大屏 warmer ≤2s
 //	→ 引擎排空 = 剩余 − trailingStopReserve
+//	→ 安全事件 IPC 关停 ≤0.5s
 //	→ 引擎句柄清理 = min(≤5s, 剩余 − trailingStopReserve)
 //	→ metrics 清理等待 = min(≤3s, 剩余 − trailingStopReserve)
 //	→ metrics 采集 ≤2s → 时区 ≤1s → 日志轮转 ≤1s
@@ -568,6 +590,9 @@ const (
 	metricsStopSegmentMax   = 2 * time.Second
 	tzStopSegmentMax        = 1 * time.Second
 	logRotateStopSegmentMax = 1 * time.Second
+	// ipcStopSegmentMax 是安全事件 IPC 服务（UDS 上的最小 HTTP 服务端）关停段：
+	// 正常路径无在途请求时 µs 级退出，段上限只兜「大 body 入库中」形态。
+	ipcStopSegmentMax = 500 * time.Millisecond
 	// 关停链中三处「不可预算的同步收尾」的等待上限——对应实现内部的固定
 	// 上界（引擎全局句柄清理的角色对账 5s、metrics 停止清理 3s、威胁大屏
 	// warmer 在途批 2s）。这些调用不接受 deadline，必须由本层按预算有界执行；
@@ -579,8 +604,11 @@ const (
 	// engineHandleSwapGrace 预算耗尽时等待「摘除引擎句柄」的极小窗口：<0.2%
 	// grace，可观测上不改变关停总壁钟，但不允许已停引擎的句柄活过 db.Close。
 	engineHandleSwapGrace = 50 * time.Millisecond
-	// trailingStopReserve 引擎排空必须为后续收尾段预留的预算。
-	trailingStopReserve = metricsStopSegmentMax + tzStopSegmentMax + logRotateStopSegmentMax + acmeStopSegmentMax
+	// trailingStopReserve 引擎排空必须为后续收尾段预留的预算：metrics/时区/
+	// 日志轮转等待 + ACME 收尾，外加引擎排空之后的安全事件 IPC 关停段
+	// （ipcStopSegmentMax 排在引擎排空与两处不可预算等待之间——不并入预留
+	// 就会从 ACME 段里扣，收尾段被挤短）。
+	trailingStopReserve = metricsStopSegmentMax + tzStopSegmentMax + logRotateStopSegmentMax + acmeStopSegmentMax + ipcStopSegmentMax
 )
 
 // shutdownBudget 进程关停的单一时间预算。

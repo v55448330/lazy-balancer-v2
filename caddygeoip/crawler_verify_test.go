@@ -24,6 +24,11 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 	crawlerCache = make(map[string]crawlerVerifyCache)
 	crawlerCachePruneVisitsForTest = 0
 	crawlerCacheMu.Unlock()
+	// 文件快照缓存同样属于跨用例状态：前一用例若有成功的 10min TTL 快照，
+	// 后续用例改写 crawlerIPListFile 后仍会命中旧路径快照（shuffle 下随机红）。
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = nil
+	crawlerFileCacheMu.Unlock()
 	if r != nil {
 		crawlerVerifyResolver = r
 	} else {

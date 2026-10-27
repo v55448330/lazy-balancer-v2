@@ -45,6 +45,18 @@ type LogStorageInfo struct {
 	RowsUnavailable bool   `json:"rows_unavailable,omitempty"`
 	RetentionNote   string `json:"retention_note,omitempty"`
 	ConfigSource    string `json:"config_source"`
+	// Cache* 是安全事件行的「待补采缓存」口径（B 形态：IPC 主路径写入，失败
+	// 才落 fallback spool）。四字段可选——只有 security_events 行下发；旧后端
+	// 不下发时前端整段不渲染（缺席≠0 条）。
+	//   - CacheEntries：spool 中待补采的审计条目数（含未封存的 active 文件）；
+	//   - CacheBytes：spool 全部文件字节数；
+	//   - CacheLimitEntries / CacheLimitBytes：spool 上限（与写侧同一契约）；
+	//   - CacheUnavailable：计数读取失败（不得显示成 0 条——0 条=主路径全通）。
+	CacheEntries      *int64 `json:"cache_entries,omitempty"`
+	CacheBytes        *int64 `json:"cache_bytes,omitempty"`
+	CacheLimitEntries *int64 `json:"cache_limit_entries,omitempty"`
+	CacheLimitBytes   *int64 `json:"cache_limit_bytes,omitempty"`
+	CacheUnavailable  bool   `json:"cache_unavailable,omitempty"`
 }
 
 // rotationCopyKind 轮转副本的形态分类（四族语法单源）。此前 dirBytes 时间戳
@@ -768,12 +780,27 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 			sz := size
 			byKey("security_events").DBBytes = &sz
 		}
-		// SizeBytes=真实审计日志文件(2026-09-14 用户裁定:不再用 metrics.db 库文件
-		// 虚标,DBBytes 单独展示库容量)。一次 dirBytes 供 security_events 行复用
-		// (原先每次响应各调一次,重复全目录 ReadDir)。
+		// SizeBytes=真实审计日志文件（2026-09-14 用户裁定）。B 形态起该文件只
+		// 承载旧版本遗留与写侧兜底，**不再是**安全事件的主容量口径：主容量=
+		// 库内行数/行帽（limit_rows+rows）+ 库容量（db_bytes），cache_* 另给出
+		// IPC 失败后的待补采 spool（正常为 0）。保留 size_bytes 旧字段仅为
+		// 向后兼容（旧前端/外部消费方仍在读）。
 		auditActive, auditRotated, auditRotCount := logFileDirStats(resolvedWafAuditLogFile())
 		if info := byKey("security_events"); info != nil {
 			info.SizeBytes, info.RotatedBytes, info.RotatedCount = auditActive, auditRotated, auditRotCount
+		}
+		// 待补采 spool（cache_*）：services 侧带 TTL 缓存与补采状态叠加的单源
+		// 快照。Unavailable 时必须置 cache_unavailable——把「读不到」显示成
+		// 「0 条」是这个指标最危险的误读（0 条=主路径全通）。
+		spool := services.SecurityEventsSpoolSnapshot()
+		if info := byKey("security_events"); info != nil {
+			if spool.Unavailable {
+				info.CacheUnavailable = true
+			} else {
+				entries, bytes, limitEntries, limitBytes := spool.Entries, spool.Bytes, spool.LimitEntries, spool.LimitBytes
+				info.CacheEntries, info.CacheBytes = &entries, &bytes
+				info.CacheLimitEntries, info.CacheLimitBytes = &limitEntries, &limitBytes
+			}
 		}
 	}
 

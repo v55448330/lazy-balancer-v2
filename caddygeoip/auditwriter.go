@@ -43,14 +43,26 @@ package caddygeoip
 // 长生命周期 fd 恒有效，O_APPEND 恒写当前 EOF），本插件不做 rename 重开；
 // bufio 中暂存的字节在截断后落盘会出现在新文件头部，摄取按行解码+transaction_id
 // 幂等去重，乱序无影响、零丢失。
+//
+// 落库主路径（IPC）：审计文件不再是唯一去向。drain 侧格式化并注入 timing 后的
+// 行先攒批经 Unix socket 投递给根服务（POST /security-events/ingest，204 = 本批
+// DB commit 完成），成功即不落任何文件；连接失败/超时/非 204 转 fallback spool
+// 目录等补采，spool 满/写错才退回审计文件兜底。三层降级链与跨进程契约见文件
+// 末尾「安全事件 IPC 主路径 + fallback spool」段。纯文件模式（IPC 关闭）与改造
+// 前完全一致——包内测试默认走该模式（TestMain 关闭 IPC）。
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -1110,10 +1122,14 @@ func snapshotAuditLog(al plugintypes.AuditLog) *auditSnapshot {
 	if tx := al.Transaction(); !isNilInterface(tx) {
 		s.Transaction_ = *snapshotTransaction(tx)
 	}
-	// messages 写侧上限：条数 + 估算字节双门（与快照估算同口径）。超限不再
-	// 让整行撞 auditItemMaxBytes 被丢弃——保留高价值事务信息并把丢弃条数
-	// 显性记入 messages_dropped。
-	s.Messages_, s.MessagesDropped_ = snapshotAuditMessages(al.Messages())
+	// messages 预算自适应：先算出本条快照的固定段估算（transaction 侧全部
+	// 内容），再从 1MiB 行预算里扣出 messages 可用量（见 auditMessagesBudget）。
+	// 小请求拿到上界 128KiB/256 条（高命中请求的规则命中序列完整保留），大
+	// body 请求自动收缩到剩余空间——两种形态都不越过 auditItemMaxBytes 整行
+	// 上限。超限部分按「掐中间、保两头」截断，丢弃条数显性记入
+	// messages_dropped。
+	maxBytes, maxEntries := auditMessagesBudget(estimateAuditSnapshotFixedBytes(s))
+	s.Messages_, s.MessagesDropped_ = snapshotAuditMessages(al.Messages(), maxBytes, maxEntries)
 	return s
 }
 
@@ -1125,7 +1141,11 @@ func snapshotAuditLog(al plugintypes.AuditLog) *auditSnapshot {
 // 会把汇总消息丢掉，使命中规则多的请求分数归零（与 severityScale 分档冲突），
 // 且这类请求恰是审计价值最高的。尾部估算字节独立预算，评估消息（数十字节）
 // 不会挤压头部条目。
-func snapshotAuditMessages(msgs []plugintypes.AuditLogMessage) ([]plugintypes.AuditLogMessage, int) {
+//
+// maxBytes/maxEntries 是调用方按 1MiB 行预算算出的**动态**预算（见
+// auditMessagesBudget），不是固定常量：旧固定 32KiB/64 条在小请求上浪费空间、
+// 在大 body 请求上又会把整行推过单条上限。
+func snapshotAuditMessages(msgs []plugintypes.AuditLogMessage, maxBytes int64, maxEntries int) ([]plugintypes.AuditLogMessage, int) {
 	if len(msgs) == 0 {
 		return nil, 0
 	}
@@ -1134,6 +1154,9 @@ func snapshotAuditMessages(msgs []plugintypes.AuditLogMessage) ([]plugintypes.Au
 	tailStart := len(msgs)
 	var tailBytes int64
 	tailEntries := 0
+	if maxBytes <= 0 || maxEntries <= 0 {
+		return nil, len(msgs)
+	}
 	for tailStart > 0 && tailEntries < auditMessagesTailEntries*2 {
 		m := msgs[tailStart-1]
 		eval := auditMessageIsEvaluation(m)
@@ -1141,6 +1164,9 @@ func snapshotAuditMessages(msgs []plugintypes.AuditLogMessage) ([]plugintypes.Au
 			break
 		}
 		size := estimateAuditMessageBytes(m)
+		if tailBytes+size > maxBytes {
+			break
+		}
 		if !eval && tailEntries > 0 && tailBytes+size > auditMessagesTailBytes {
 			break
 		}
@@ -1148,16 +1174,16 @@ func snapshotAuditMessages(msgs []plugintypes.AuditLogMessage) ([]plugintypes.Au
 		tailEntries++
 		tailStart--
 	}
-	// 头段：填满剩余条目/字节预算（总字节 = 头 + 尾 ≤ auditMessagesMaxBytes）。
+	// 头段：填满剩余条目/字节预算（总字节 = 头 + 尾 ≤ 动态预算 maxBytes）。
 	headEntries := 0
 	var headBytes int64
-	headLimit := auditMessagesMaxEntries - tailEntries
+	headLimit := maxEntries - tailEntries
 	if headLimit < 0 {
 		headLimit = 0
 	}
 	for headEntries < tailStart && headEntries < headLimit {
 		size := estimateAuditMessageBytes(msgs[headEntries])
-		if headBytes+size > auditMessagesMaxBytes-tailBytes {
+		if headBytes+size > maxBytes-tailBytes {
 			break
 		}
 		headBytes += size
@@ -1405,6 +1431,10 @@ type auditPipeline struct {
 	// statsFailLog 是侧车写盘失败的告警节流状态（磁盘满/目录只读时侧车双向
 	// 失效：写不进也读不到；不留痕则写侧丢弃/IO 计数对外恒 0、健康位假绿）。
 	statsFailLog auditLogThrottle
+	// ipc 非 nil = 安全事件 IPC 主路径（格式化后的行交给 IPC 出货器；审计文件
+	// fd 懒打开，只在 spool 也不可用时兜底写文件）。nil = 纯文件模式（测试与
+	// IPC 关闭的部署），行为与改造前完全一致。
+	ipc *auditIPCShipper
 }
 
 // auditWriterStatsSuffix 是写侧失败计数侧车文件名后缀（紧跟审计日志目标路径）。
@@ -1595,7 +1625,12 @@ func acquireAuditPipeline(target string, mode os.FileMode) (*auditPipeline, erro
 		queue:  make(chan lbAuditItem, auditQueueSize),
 		done:   make(chan struct{}),
 	}
-	if err := p.openFile(mode); err != nil {
+	if cfg := resolveAuditIPCConfig(); cfg.enabled {
+		// IPC 主路径：**不**预先打开审计文件——成功投递的行不落任何文件
+		// （文件只在 spool 也不可用时懒打开兜底）。因此这里也不再以「目标
+		// 不可写」拒绝配置加载：文件只是降级链路，不是主路径的前置条件。
+		p.ipc = newAuditIPCShipper(cfg, p)
+	} else if err := p.openFile(mode); err != nil {
 		return nil, err
 	}
 	// 新进程的计数从 0 起：盘上残留的失败标记描述的是上一代进程的故障，对本代
@@ -1643,15 +1678,34 @@ const (
 	// 每条 message：键名/数字字段/tags 语法 + slice 元素与 RuleMatch 驻留；
 	// 内容串（actionset/message/error_message/data 各字段）另按 len 计入。
 	auditMessageOverhead = 512
-	// auditMessagesMaxEntries / auditMessagesMaxBytes 是写侧 messages 上限：
-	// 四段（请求/响应体与头，各 64KiB）+ 固定开销后仅剩 ~65KiB 余量，约 70-80
-	// 条规则命中即触发 auditItemMaxBytes 整行丢弃——丢的恰是「命中规则多」的
-	// 高价值行。写侧先截断 messages 并标记 messages_dropped，保留整行；
-	// auditItemMaxBytes 仍是兜底（真超限才丢行）。截断方向是「掐中间、保两头」
-	// （见 snapshotAuditMessages）：尾部承载 CRS 评估汇总（949xxx/959xxx，异常
-	// 分的唯一来源），只保开头会让高分请求的分数归零。
-	auditMessagesMaxEntries = 64
-	auditMessagesMaxBytes   = 32 * 1024
+	// messages 预算的三段口径（动态预算，见 auditMessagesBudget）：
+	//
+	//   - 下限 auditMessagesMin*：旧固定上限（64 条 / 32KiB），作为**兼容下限**
+	//     保留——旧形态能完整装下的消息集合在新形态下必须原样保留（旧小消息
+	//     输出逐字节不变）；
+	//   - 上界 auditMessagesMax*Ceiling：小请求（固定段仅几 KiB）时 messages 可
+	//     吃到 128KiB/256 条。旧固定 32KiB/64 条在「命中 200 条」的请求上丢掉
+	//     三分之二命中序列，而规则命中序列正是审计价值最高的证据；
+	//   - 实际值 = 1MiB 行预算 − 固定段实际字节 − auditMessagesBudgetReserve，
+	//     再夹到 [下限, 上界]。不改总行上限（auditItemMaxBytes）：固定上限要么
+	//     在小请求上浪费空间，要么在大 body 请求上把整行推过单条上限被丢弃。
+	//
+	// 截断方向仍是「掐中间、保两头」（见 snapshotAuditMessages）：尾部承载 CRS
+	// 评估汇总（949xxx/959xxx，异常分的唯一来源），只保开头会让高分请求的分数
+	// 归零。
+	auditMessagesMinEntries        = 64
+	auditMessagesMinBytes          = 32 * 1024
+	auditMessagesMaxEntriesCeiling = 256
+	auditMessagesMaxBytesCeiling   = 128 * 1024
+	// auditMessagesBudgetReserve 是动态预算为「未被逐字段声明的空间」保留的
+	// 固定余量（插件/栈侧字符串、producer 段、条目容器开销、评估族溢出、
+	// 手工构造快照的估算误差）。与 auditItemMaxBytes 的 48KiB 余量同一量级。
+	auditMessagesBudgetReserve = 48 * 1024
+	// auditMessageBudgetBytesPerEntry 是字节预算换算条目预算的比例：一条命中/
+	// 评估消息的实测估算 ≈200-600B，取 512B。两口径同源缩放——32KiB→64 条
+	// （与旧下限同值）、128KiB→256 条（与上界同值），不会出现「字节还够但
+	// 条数先撞顶」的荒谬形态。
+	auditMessageBudgetBytesPerEntry = 512
 	// auditMessagesTailEntries / auditMessagesTailBytes 是尾段保留预算：
 	// 评估汇总消息位于消息序列末尾，条数按「4 条评估 × 相位数 + 余量」取 8，
 	// 字节预算独立（评估消息仅数十字节），避免尾段挤压头部攻击特征条目。
@@ -1661,6 +1715,40 @@ const (
 	// 快照骨架：transaction/request/response/producer 的固定键名与 envelope。
 	auditSnapshotFixedBytes = 512
 )
+
+// auditMessagesBudget 按 1MiB 行预算反算单条快照可用的 messages 预算：固定段
+// （transaction/request/response/producer 的全部非 messages 内容 + 骨架开销）
+// 扣除后再留 auditMessagesBudgetReserve，最后夹到 [旧下限, clamp 上界]。
+//
+// fixedBytes 必须来自 estimateAuditSnapshotFixedBytes（同一估算口径）：动态预算
+// 与实际落盘字节同口径，才能保证「预算吃满 + 固定段封顶」仍不超过
+// auditItemMaxBytes——这是「不改总行上限」的前提。
+func auditMessagesBudget(fixedBytes int64) (maxBytes int64, maxEntries int) {
+	maxBytes = auditItemMaxBytes - fixedBytes - auditMessagesBudgetReserve
+	if maxBytes > auditMessagesMaxBytesCeiling {
+		maxBytes = auditMessagesMaxBytesCeiling
+	}
+	// 不能用最小预算把固定段已接近上限的行重新推过 auditItemMaxBytes：
+	// 固定段足够大时按实际剩余空间收缩（可为 0），宁可丢命中明细也保住事件行。
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if maxBytes < auditMessagesMinBytes {
+		// 旧下限是「兼容下限」而非硬下限：仅在空间足够时应用。
+		if maxBytes <= 0 {
+			maxEntries = 0
+			return maxBytes, maxEntries
+		}
+	}
+	maxEntries = int(maxBytes / auditMessageBudgetBytesPerEntry)
+	if maxEntries < auditMessagesMinEntries && maxBytes >= auditMessagesMinBytes {
+		maxEntries = auditMessagesMinEntries
+	}
+	if maxEntries > auditMessagesMaxEntriesCeiling {
+		maxEntries = auditMessagesMaxEntriesCeiling
+	}
+	return maxBytes, maxEntries
+}
 
 // estimateAuditMessageBytes 单条 message 的驻留/序列化字节估算（内容 +
 // 固定开销）。写侧 messages 截断与快照估算共用同一口径，避免两处上限漂移。
@@ -1697,6 +1785,24 @@ func estimateAuditMessageBytes(m plugintypes.AuditLogMessage) int64 {
 // 字节（HeadersBytes_），不再按条固定开销重估——后者在头部密集时高估数倍，
 // 会把实际 ~131KiB 的双向 header 表估成 ~700KiB 并越过单条上限整行丢弃。
 func estimateAuditSnapshotBytes(s *auditSnapshot) int64 {
+	if s == nil {
+		return 0
+	}
+	n := estimateAuditSnapshotFixedBytes(s)
+	if s.MessagesDropped_ > 0 {
+		n += auditMessagesDroppedOverhead
+	}
+	for _, m := range s.Messages_ {
+		n += estimateAuditMessageBytes(m)
+	}
+	return n
+}
+
+// estimateAuditSnapshotFixedBytes 估算「除 messages 外」的全部字节（与
+// estimateAuditSnapshotBytes 同一口径，零分配）。它是动态 messages 预算的输入
+// （1MiB 行预算扣除固定段，见 auditMessagesBudget）；messages_dropped 披露键与
+// messages 内容都不在此列，由调用方分别计入。
+func estimateAuditSnapshotFixedBytes(s *auditSnapshot) int64 {
 	if s == nil {
 		return 0
 	}
@@ -1755,12 +1861,6 @@ func estimateAuditSnapshotBytes(s *auditSnapshot) int64 {
 			n += int64(jsonStringEscapedLen(rs))
 		}
 	}
-	if s.MessagesDropped_ > 0 {
-		n += auditMessagesDroppedOverhead
-	}
-	for _, m := range s.Messages_ {
-		n += estimateAuditMessageBytes(m)
-	}
 	return n
 }
 
@@ -1805,42 +1905,89 @@ func (p *auditPipeline) enqueue(item lbAuditItem) {
 	}
 }
 
-// reportDropped 累计丢弃计数并节流告警（首次立即记录，其后每分钟至多一条，
-// 携带被抑制计数与累计总数）——丢弃必须是可观测事件。reason 标明丢弃根因
-// （queue full / byte budget exceeded / per-item cap），排障不必猜路径。
-func (p *auditPipeline) reportDropped(reason string) {
-	total := p.dropped.Add(1)
+// reportDropped 累计 1 条丢弃计数并节流告警（首次立即记录，其后每分钟至多
+// 一条，携带被抑制计数与累计总数）——丢弃必须是可观测事件。reason 标明丢弃
+// 根因（queue full / byte budget exceeded / per-item cap / 永久拒绝批次），
+// 排障不必猜路径。
+func (p *auditPipeline) reportDropped(reason string) { p.reportDroppedN(reason, 1) }
+
+// reportDroppedN 是 reportDropped 的批量形态（一次丢弃一批行时只告警一条）。
+func (p *auditPipeline) reportDroppedN(reason string, n int) {
+	if n <= 0 {
+		return
+	}
+	total := p.dropped.Add(uint64(n))
 	p.statsDirty.Store(true)
 	suppressed, logNow := p.dropLog.report(time.Now())
 	if logNow {
-		auditDropLogf("audit writer: %s for %s, dropped audit line (total dropped %d, suppressed %d since last report)", reason, p.target, total, suppressed)
+		auditDropLogf("audit writer: %s for %s, dropped %d audit line(s) (total dropped %d, suppressed %d since last report)", reason, p.target, n, total, suppressed)
 	}
 }
 
-// drain 专职落盘 goroutine：注入 timing → bufio 批量写 → 阈值/周期双触发刷盘。
-// 队列关闭后排空余量再退出、刷盘、关 fd。单条处理/刷盘的 panic 均被隔离：
-// drain 是进程级单例消费者，goroutine 一旦退出写侧将再无消费者。
+// drain 专职落盘 goroutine：注入 timing → IPC 攒批投递（IPC 模式）/ bufio 批量
+// 写（纯文件模式）→ 阈值/周期双触发刷盘。队列关闭后排空余量再退出、刷盘、
+// 关 fd、封存 spool。单条处理/刷盘的 panic 均被隔离：drain 是进程级单例消费
+// 者，goroutine 一旦退出写侧将再无消费者。
 func (p *auditPipeline) drain() {
 	defer close(p.done)
 	q := p.queue
 	ticker := time.NewTicker(auditFlushInterval)
 	defer ticker.Stop()
+	var ipcTick <-chan time.Time
+	if p.ipc != nil {
+		ipcTicker := time.NewTicker(auditIPCFlushInterval)
+		defer ipcTicker.Stop()
+		ipcTick = ipcTicker.C
+	}
 	for {
 		select {
 		case item, ok := <-q:
 			if !ok {
 				p.flushPendingSafely()
+				p.closeIPC()
 				p.closeFile()
 				return
 			}
 			p.queueBytes.Add(-item.bytes)
 			p.processSafely(item)
 			p.pending.Add(-1)
+		case <-ipcTick:
+			// IPC 攒批的周期触发（~50ms）：低流量下不让行在批次里滞留到下一个
+			// 500ms 刷盘节拍。panic 隔离同 flushPendingSafely。
+			p.flushIPCSafely()
 		case <-ticker.C:
 			p.flushPendingSafely()
 			p.writeWriterStatsIfDue(time.Now())
 		}
 	}
+}
+
+// flushIPCSafely 隔离 IPC 投递的 panic（socket/http 栈异常形态），drain 继续——
+// 出货器一旦 panic 逃逸，进程级单例消费者就没了。
+func (p *auditPipeline) flushIPCSafely() {
+	if p.ipc == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			auditDropLogf("audit writer: recovered panic while shipping security events for %s: %v", p.target, recovered)
+		}
+	}()
+	p.ipc.flushIfDue(time.Now())
+}
+
+// closeIPC 收尾 IPC 出货器：投递残留批次、封存 spool、关空闲连接（仅 drain
+// 退出时调用一次）。
+func (p *auditPipeline) closeIPC() {
+	if p.ipc == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			auditDropLogf("audit writer: recovered panic while closing security-events shipper for %s: %v", p.target, recovered)
+		}
+	}()
+	p.ipc.close()
 }
 
 // writeWriterStatsIfDue 把累计失败/丢弃计数写入侧车文件（低频节流；仅计数
@@ -1857,15 +2004,43 @@ func (p *auditPipeline) writeWriterStatsIfDue(now time.Time) {
 	}
 	// 先清脏标记再读计数：读到计数后到达的新失败会重新置脏，不丢更新。
 	p.statsDirty.Store(false)
+	ipcSent, ipcFailed, spoolWritten, spoolErrs := p.ipc.counters()
+	dropped := p.dropped.Load()
+	ioErrors := p.ioErrors.Load()
+	mode := "file"
+	if p.ipc != nil {
+		mode = "ipc"
+	}
 	payload := struct {
 		Dropped      uint64 `json:"dropped"`
 		IOErrors     uint64 `json:"io_errors"`
 		FormatErrors uint64 `json:"format_errors"`
-		WrittenAt    string `json:"written_at"`
+		IPCSent      uint64 `json:"ipc_sent"`
+		IPCFailed    uint64 `json:"ipc_failed"`
+		SpoolWritten uint64 `json:"spool_written"`
+		SpoolErrors  uint64 `json:"spool_errors"`
+		// 健康语义的两分口径（读侧不得把两类混成一个「写侧故障」）：
+		//   - recoverable：已安全落在 spool 里、等根服务补采的行——数据没丢，
+		//     面板应报「补采中/延迟」而不是「丢事件」；
+		//   - lost：真丢（入队丢弃 + 落盘 IO 错误）。spool_errors 的行已尝试
+		//     文件兜底：文件写成功则不计入 lost，写失败已在 io_errors 里。
+		// ipc_failed 只是「本次投递失败」的过程量：同批行随后变成
+		// spool_written（可补采）或 spool_errors（再转文件兜底）。
+		Recoverable uint64 `json:"recoverable"`
+		Lost        uint64 `json:"lost"`
+		Mode        string `json:"mode"`
+		WrittenAt   string `json:"written_at"`
 	}{
-		Dropped:      p.dropped.Load(),
-		IOErrors:     p.ioErrors.Load(),
+		Dropped:      dropped,
+		IOErrors:     ioErrors,
 		FormatErrors: p.formatErrors.Load(),
+		IPCSent:      ipcSent,
+		IPCFailed:    ipcFailed,
+		SpoolWritten: spoolWritten,
+		SpoolErrors:  spoolErrs,
+		Recoverable:  spoolWritten,
+		Lost:         dropped + ioErrors,
+		Mode:         mode,
 		WrittenAt:    now.UTC().Format(time.RFC3339),
 	}
 	body, err := json.Marshal(payload)
@@ -1925,9 +2100,9 @@ func (p *auditPipeline) flushPendingSafely() {
 }
 
 // process 处理单条审计行：注册 formatter 格式化快照（请求路径之外）→ 限时等待
-// 计时终态 → 注入 → bufio 写（阈值刷盘）。计时等待在请求路径之外（见文件头
-// 时序契约注释）。格式化失败/空输出跳过该行（与旧同步链 Write 返回错误同效，
-// coraza 已在写错误点记日志）。
+// 计时终态 → 注入 → IPC 攒批（IPC 模式）或 bufio 写（纯文件模式）。计时等待在
+// 请求路径之外（见文件头时序契约注释）。格式化失败/空输出跳过该行（与旧同步链
+// Write 返回错误同效，coraza 已在写错误点记日志）。
 func (p *auditPipeline) process(item lbAuditItem) {
 	if item.snap == nil || item.formatter == nil {
 		return
@@ -1945,6 +2120,12 @@ func (p *auditPipeline) process(item lbAuditItem) {
 	if item.tid != "" {
 		snap := auditTimingWait(item.tid, auditTimingWaitLimit)
 		body = injectAuditTiming(body, snap)
+	}
+	if p.ipc != nil {
+		// IPC 主路径：只入批次（攒批/投递都在本 goroutine，请求路径零参与）。
+		// 批满时 submit 内部立即投递，失败→spool→文件兜底逐层降级。
+		p.ipc.submit(body)
+		return
 	}
 	p.ioMu.Lock()
 	p.appendLine(body)
@@ -1968,6 +2149,11 @@ func (p *auditPipeline) flush() {
 		}
 	}
 	p.ioMu.Unlock()
+	// IPC 模式：把残留批次投递出去（收尾语义 = 已入队行尽量送达 DB，成功不
+	// 落文件；失败按降级链进 spool/文件）。pendingLines 为空时零成本返回。
+	if p.ipc != nil && p.ipc.pendingLines() > 0 {
+		p.flushIPCSafely()
+	}
 }
 
 // auditShutdownDrainWait 收尾刷盘等待 drain 排空的上限：已入队未处理的行
@@ -2144,4 +2330,605 @@ func (w *lbAuditWriter) Close() error {
 		w.pipeline.flushQuiesced()
 	}
 	return nil
+}
+
+// —— 安全事件 IPC 主路径 + fallback spool ——
+//
+// 落库路径从「Caddy 直写审计文件 → 根服务摄取文件」改为「Caddy → Unix socket
+// IPC → 根服务直写 DB」，审计文件保留为最后的兜底链路（IPC 关闭 / spool 也不
+// 可用时）。三层职责各自只做一件事，失败逐层降级：
+//
+//  1. IPC 主路径：格式化并注入 timing 的行攒批（≤auditIPCBatchMaxLines 行 /
+//     ≤auditIPCBatchMaxBytes 字节 / ~auditIPCFlushInterval 周期触发），POST 到
+//     unix socket 的 auditIPCIngestPath。**只有 204 才算成功**（204 的语义是
+//     「本批 DB commit 已完成」，见跨进程契约）；成功即不落任何文件。
+//  2. fallback spool：连接失败/超时/5xx/其它非 204 → 整批原样写入 spool 目录
+//     （active/sealed 两态，见 auditSpool），根服务后续补采。spool 有界
+//     （字节+条目），满/写失败按行计数并节流告警。
+//     例外：400/413 是**永久性**拒绝（该批数据不可入库），写 spool 只会无限重试
+//     毒批——按「真丢」计 dropped 并告警，不进 spool。
+//  3. 审计文件：IPC 关闭（纯文件模式：测试与旧部署）时是主路径；IPC 开启但
+//     spool 不可用（满/IO 错误）时是最后兜底——兜底写失败才计 io_errors。
+//
+// 请求路径零等待：全部动作都在 drain goroutine（process → submit）与
+// flushQuiesced 收尾里，请求侧只看得到既有的入队有界等待（auditEnqueueTimeout）。
+// 单次 IPC 的挂起上限是 auditIPCTimeout（client timeout），drain 最多为此付出
+// 一批的等待，不进入请求路径、也不进入审计耗时数值。
+//
+// 跨进程契约（根服务 internal/services 侧同名 env/路径/文件命名；两侧各有钉测）：
+//   - LB_SECURITY_EVENTS_IPC_SOCKET（默认 /app/data/security-events.sock；
+//     显式设为空串 = 关闭 IPC，退回纯文件模式）
+//   - LB_SECURITY_EVENTS_SPOOL_DIR（默认 /app/data/security-events-spool）
+//   - LB_SECURITY_EVENTS_SPOOL_MAX_BYTES（默认 64MiB）
+//   - LB_SECURITY_EVENTS_SPOOL_MAX_ENTRIES（默认 100000）
+//   - POST /security-events/ingest，body=换行分隔的原始 audit JSON 行（末尾带
+//     \n），Content-Type: application/x-ndjson
+//   - spool 文件：active-<pid>-<seq>.jsonl（写侧在用）/ sealed-<unixnano>.jsonl
+//     （已封存，根服务补采对象）。写侧只写这两类、只重命名自己的 active；别人
+//     pid 的孤儿 active 留给根服务按「pid 不存在 + mtime 静默」清理。
+
+const (
+	auditIPCSocketEnv       = "LB_SECURITY_EVENTS_IPC_SOCKET"
+	auditSpoolDirEnv        = "LB_SECURITY_EVENTS_SPOOL_DIR"
+	auditSpoolMaxBytesEnv   = "LB_SECURITY_EVENTS_SPOOL_MAX_BYTES"
+	auditSpoolMaxEntriesEnv = "LB_SECURITY_EVENTS_SPOOL_MAX_ENTRIES"
+
+	auditIPCDefaultSocket   = "/app/data/security-events.sock"
+	auditIPCDefaultSpoolDir = "/app/data/security-events-spool"
+	auditIPCIngestPath      = "/security-events/ingest"
+	// auditIPCSocketHost 只是 URL 里的占位 host：真实寻址由 DialContext 走 unix
+	// socket（http.Client 不会解析它）。
+	auditIPCSocketHost = "unix"
+
+	auditSpoolActivePrefix = "active-"
+	auditSpoolSealedPrefix = "sealed-"
+	auditSpoolFileSuffix   = ".jsonl"
+)
+
+var (
+	// auditIPCDisabled 是进程内关闭位：测试与「纯文件模式」部署显式关闭 IPC。
+	// 生产默认开启（env 可覆盖成空串关闭）。atomic 存储：测试在 drain 存活
+	// 期间不写它（管线创建时读取一次），但仍按 atomic 使用以避免任何潜在
+	// 的并发读写（-race 门禁口径）。
+	auditIPCDisabled atomic.Bool
+	// auditIPCBatchMaxLines / auditIPCBatchMaxBytes / auditIPCFlushInterval 是
+	// 攒批三阈值（条数/字节/周期先到者触发）。批次远小于面板侧 8MiB 的 body
+	// 上限，且 50ms 周期的端到端延迟对安全事件展示无可感影响。
+	auditIPCBatchMaxLines = 100
+	auditIPCBatchMaxBytes = 1024 * 1024
+	auditIPCFlushInterval = 50 * time.Millisecond
+	// auditIPCTimeout 是单批 IPC 的上限（连接+写出+等响应）：unix socket 的
+	// 正常批在毫秒级，超时只兜底「面板侧卡住」——超时即整批 spool，不重试。
+	auditIPCTimeout = 2 * time.Second
+	// auditSpoolRotateBytes 是 active 文件轮转阈值（超过即原子 rename 成
+	// sealed-<unixnano>.jsonl）：单文件过大会让补采端一次读入过多。
+	auditSpoolRotateBytes = int64(8 << 20)
+	// auditSpoolMaxBytes / auditSpoolMaxEntries 是 spool 总预算默认值（env 可
+	// 覆盖）：字节为跨代约束（open 时扫目录累加），条目为本代写入计数。
+	auditSpoolMaxBytes   = int64(64 << 20)
+	auditSpoolMaxEntries = int64(100_000)
+	// auditSpoolIdleSeal 是 active 静默封存窗口：低失败量下让补采端及时看到
+	// sealed 文件，而不是等到 8MiB/进程退出。
+	auditSpoolIdleSeal = 2 * time.Second
+)
+
+// errAuditSpoolFull 表示 spool 已达字节/条目上限：调用方把余下行交文件兜底。
+var errAuditSpoolFull = errors.New("security-events spool full")
+
+// auditIPCConfig 是解析后的 IPC 配置（空 enabled = 纯文件模式）。
+type auditIPCConfig struct {
+	enabled  bool
+	socket   string
+	spoolDir string
+}
+
+// envInt64 读取整型 env（未设置/非法/非正数时返回默认值）。
+func envInt64(name string, def int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
+// resolveAuditIPCConfig 解析 IPC 配置：进程内关闭位优先，其次 env。
+func resolveAuditIPCConfig() auditIPCConfig {
+	if auditIPCDisabled.Load() {
+		return auditIPCConfig{}
+	}
+	socket := auditIPCDefaultSocket
+	if v, ok := os.LookupEnv(auditIPCSocketEnv); ok {
+		// 显式空串 = 关闭（与「未设置=用默认 socket」区分）。
+		socket = strings.TrimSpace(v)
+	}
+	if socket == "" {
+		return auditIPCConfig{}
+	}
+	spoolDir := auditIPCDefaultSpoolDir
+	if v := strings.TrimSpace(os.Getenv(auditSpoolDirEnv)); v != "" {
+		spoolDir = v
+	}
+	return auditIPCConfig{enabled: true, socket: socket, spoolDir: spoolDir}
+}
+
+// auditSpool 是 IPC 失败行的本地暂存区（根服务补采源）。两态文件：
+// active-<pid>-<seq>.jsonl（本进程正在追加）→ 达轮转阈值或收尾时原子 rename
+// 为 sealed-<unixnano>.jsonl（根服务只消费 sealed）。
+//
+// 预算：字节跨代（open 时累加目录内全部 .jsonl）+ 条目本代（不扫历史文件逐行
+// 统计，避免大目录启动代价）。写满/写错都由调用方转文件兜底，并对每行计数。
+type auditSpool struct {
+	mu           sync.Mutex
+	dir          string
+	maxBytes     int64
+	maxEntries   int64
+	rotateBytes  int64
+	seq          uint64
+	active       *os.File
+	activePath   string
+	bw           *bufio.Writer
+	activeBytes  int64
+	totalBytes   int64
+	totalEntries int64
+	lastWrite    time.Time
+	closed       bool
+}
+
+// openAuditSpool 创建/打开 spool 目录并开启本进程的 active 文件。
+func openAuditSpool(dir string, maxBytes, maxEntries int64) (*auditSpool, error) {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, err
+	}
+	s := &auditSpool{
+		dir:         dir,
+		maxBytes:    maxBytes,
+		maxEntries:  maxEntries,
+		rotateBytes: auditSpoolRotateBytes,
+	}
+	// 字节预算跨代：目录里已有的 sealed/active 都占空间（上一代进程遗留的
+	// 补采队列同样受 64MiB 约束，否则反复失败会无限堆积）。
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), auditSpoolFileSuffix) {
+				continue
+			}
+			if info, ierr := e.Info(); ierr == nil {
+				s.totalBytes += info.Size()
+			}
+		}
+	}
+	// active 文件懒创建（首次真正需要落 spool 时才建）：IPC 全程成功时 spool
+	// 目录里不留任何空文件（补采端的孤儿扫描不会被空 active 干扰）。
+	return s, nil
+}
+
+// openActiveLocked 以 O_EXCL 建本次 active 文件（seq 单调递增，同名即跳过）。
+func (s *auditSpool) openActiveLocked() error {
+	pid := os.Getpid()
+	for s.seq < 1<<40 {
+		s.seq++
+		path := filepath.Join(s.dir, fmt.Sprintf("%s%d-%d%s", auditSpoolActivePrefix, pid, s.seq, auditSpoolFileSuffix))
+		fd, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o640)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		s.active = fd
+		s.activePath = path
+		s.bw = bufio.NewWriterSize(fd, 32*1024)
+		s.activeBytes = 0
+		return nil
+	}
+	return fmt.Errorf("security-events spool: exhausted active names in %s", s.dir)
+}
+
+// appendLines 追加一批行（每行自带换行），返回成功写入的行数与停止原因
+// （非 nil = 余下行需由调用方兜底）。单行写入顺序恒为「内容+换行」。
+func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, errors.New("security-events spool closed")
+	}
+	if s.active == nil {
+		if err := s.openActiveLocked(); err != nil {
+			return 0, err
+		}
+	}
+	written := 0
+	for _, line := range lines {
+		size := int64(len(line)) + 1
+		if s.totalBytes+size > s.maxBytes || s.totalEntries+1 > s.maxEntries {
+			_ = s.flushLocked()
+			return written, errAuditSpoolFull
+		}
+		if _, err := s.bw.Write(line); err != nil {
+			// 底层写失败后 bufio 状态不确定（可能残留半行）：丢弃当前
+			// 文件句柄并重建，避免半行随下次 flush 落盘污染补采数据。
+			s.resetWriterLocked()
+			return written, err
+		}
+		if err := s.bw.WriteByte('\n'); err != nil {
+			s.resetWriterLocked()
+			return written, err
+		}
+		written++
+		s.totalBytes += size
+		s.totalEntries++
+		s.activeBytes += size
+		s.lastWrite = time.Now()
+		if s.activeBytes >= s.rotateBytes {
+			if err := s.rotateLocked(); err != nil {
+				return written, err
+			}
+		}
+	}
+	return written, s.flushLocked()
+}
+
+// resetWriterLocked 丢弃当前 active 写句柄（异常路径：状态不可信）。
+func (s *auditSpool) resetWriterLocked() {
+	s.bw = nil
+	if s.active != nil {
+		_ = s.active.Close()
+		s.active = nil
+	}
+	s.activePath = ""
+}
+
+// flushLocked 把 bufio 内容推入 active 文件。
+func (s *auditSpool) flushLocked() error {
+	if s.bw == nil {
+		return nil
+	}
+	return s.bw.Flush()
+}
+
+// sealedPathLocked 生成本次封存文件名（unixnano + 冲突后缀），同目录唯一。
+func (s *auditSpool) sealedPathLocked() string {
+	for k := 0; ; k++ {
+		name := fmt.Sprintf("%s%d%s", auditSpoolSealedPrefix, time.Now().UnixNano(), auditSpoolFileSuffix)
+		if k > 0 {
+			name = fmt.Sprintf("%s%d-%d%s", auditSpoolSealedPrefix, time.Now().UnixNano(), k, auditSpoolFileSuffix)
+		}
+		path := filepath.Join(s.dir, name)
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return path
+		}
+	}
+}
+
+// rotateLocked 把当前 active 封存为 sealed 并开新 active。rename 是原子的（同
+// 目录），根服务要么看到完整 active、要么看到完整 sealed。封存失败不回退为丢行：
+// 继续在同一个 active 上追加（每次越过阈值都会重试），数据完整性优先于单文件
+// 大小约束——写侧无法通知面板「这批行没封存」，丢行就是真丢。
+func (s *auditSpool) rotateLocked() error {
+	if err := s.flushLocked(); err != nil {
+		s.resetWriterLocked()
+		return err
+	}
+	if s.activePath != "" {
+		if err := os.Rename(s.activePath, s.sealedPathLocked()); err != nil {
+			auditIOLogf("audit writer: security-events spool seal failed for %s (continuing on the same active file): %v", s.activePath, err)
+			return nil
+		}
+		s.activePath = ""
+	}
+	s.bw = nil
+	if s.active != nil {
+		if err := s.active.Close(); err != nil {
+			s.active = nil
+			return err
+		}
+		s.active = nil
+	}
+	return s.openActiveLocked()
+}
+
+// sealIfIdle 把静默超过 idle 的 active 封存为 sealed：失败量很小时 active
+// 可能长期达不到 rotateBytes，而根服务只消费 sealed——不按时间封存会让兜底
+// 条目一直滞留在 active 直到进程重启。静默窗口避免与正在追加的写竞争。
+func (s *auditSpool) sealIfIdle(now time.Time, idle time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.active == nil || s.activePath == "" || s.lastWrite.IsZero() {
+		return nil
+	}
+	if now.Sub(s.lastWrite) < idle {
+		return nil
+	}
+	if err := s.flushLocked(); err != nil {
+		s.resetWriterLocked()
+		return err
+	}
+	if err := os.Rename(s.activePath, s.sealedPathLocked()); err != nil {
+		return err
+	}
+	s.activePath = ""
+	s.bw = nil
+	if s.active != nil {
+		if err := s.active.Close(); err != nil {
+			s.active = nil
+			return err
+		}
+		s.active = nil
+	}
+	return nil
+}
+
+// close 收尾：刷盘 + 把 active 封存为 sealed（根服务只消费 sealed，不封存则
+// 本代最后一批行永远不会被补采；孤儿清理只管「pid 已不存在」的遗留文件）。
+func (s *auditSpool) close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	err := s.flushLocked()
+	if s.bw != nil {
+		s.bw = nil
+	}
+	if s.active != nil {
+		if cerr := s.active.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.active = nil
+	}
+	if s.activePath != "" {
+		if rerr := os.Rename(s.activePath, s.sealedPathLocked()); rerr == nil {
+			s.activePath = ""
+		} else if err == nil {
+			err = rerr
+		}
+	}
+	return err
+}
+
+// auditIPCShipper 是 IPC 出货器：攒批 + POST + 失败落 spool + 最后兜底文件。
+// 计数器（sent/failed/spooled/spoolErrs）就是侧车文件的 ipc_sent / ipc_failed /
+// spool_written / spool_errors 四个字段的来源，健康语义见 writeWriterStatsIfDue。
+type auditIPCShipper struct {
+	socket   string
+	client   *http.Client
+	spool    *auditSpool
+	pipeline *auditPipeline
+	fallback func([]byte)
+
+	mu         sync.Mutex
+	batch      [][]byte
+	batchBytes int
+	batchSince time.Time
+
+	// flushMu 串行化网络投递（mu 只保护批次缓冲，避免 POST 期间长期持锁拖住
+	// submit）。
+	flushMu sync.Mutex
+
+	sent      atomic.Uint64
+	failed    atomic.Uint64
+	spooled   atomic.Uint64
+	spoolErrs atomic.Uint64
+	spoolLog  auditLogThrottle
+}
+
+// newAuditIPCShipper 按配置建出货器。spool 打不开不阻断写侧：IPC 失败时行改走
+// 审计文件兜底（降级链的下一层），并留一条告警——否则「IPC 失败 + spool 缺失」
+// 会静默丢行。
+func newAuditIPCShipper(cfg auditIPCConfig, dest *auditPipeline) *auditIPCShipper {
+	socket := cfg.socket
+	s := &auditIPCShipper{
+		socket:   socket,
+		pipeline: dest,
+		fallback: func(line []byte) {
+			dest.ioMu.Lock()
+			dest.appendLine(line)
+			dest.ioMu.Unlock()
+		},
+		client: &http.Client{
+			Timeout: auditIPCTimeout,
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					var d net.Dialer
+					return d.DialContext(ctx, "unix", socket)
+				},
+				MaxIdleConns:       2,
+				IdleConnTimeout:    30 * time.Second,
+				DisableCompression: true,
+			},
+		},
+	}
+	spool, err := openAuditSpool(
+		cfg.spoolDir,
+		envInt64(auditSpoolMaxBytesEnv, auditSpoolMaxBytes),
+		envInt64(auditSpoolMaxEntriesEnv, auditSpoolMaxEntries),
+	)
+	if err != nil {
+		auditIOLogf("audit writer: security-events spool unavailable at %s (IPC failures will fall back to the audit file): %v", cfg.spoolDir, err)
+		return s
+	}
+	s.spool = spool
+	return s
+}
+
+// submit 把一行接入批次；批满（条数/字节）立即投递。调用方是 drain goroutine，
+// 请求路径永不进入本函数。
+func (s *auditIPCShipper) submit(line []byte) {
+	s.mu.Lock()
+	s.batch = append(s.batch, line)
+	s.batchBytes += len(line) + 1
+	if s.batchSince.IsZero() {
+		s.batchSince = time.Now()
+	}
+	full := len(s.batch) >= auditIPCBatchMaxLines || s.batchBytes >= auditIPCBatchMaxBytes
+	s.mu.Unlock()
+	if full {
+		s.flush()
+	}
+}
+
+// flushIfDue 周期触发（drain 的 IPC ticker）：首行到达满 auditIPCFlushInterval
+// 即投递，低流量下最坏延迟 ≈ 50ms。
+func (s *auditIPCShipper) flushIfDue(now time.Time) {
+	if s.spool != nil {
+		if err := s.spool.sealIfIdle(now, auditSpoolIdleSeal); err != nil {
+			auditIOLogf("audit writer: security-events spool idle seal failed: %v", err)
+		}
+	}
+	s.mu.Lock()
+	due := len(s.batch) > 0 && !s.batchSince.IsZero() && now.Sub(s.batchSince) >= auditIPCFlushInterval
+	s.mu.Unlock()
+	if due {
+		s.flush()
+	}
+}
+
+// flush 投递当前批次（空批直接返回）。204=成功，其余全部失败。
+func (s *auditIPCShipper) flush() {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	s.mu.Lock()
+	batch := s.batch
+	s.batch = nil
+	s.batchBytes = 0
+	s.batchSince = time.Time{}
+	s.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	status, err := s.post(batch)
+	switch {
+	case err == nil:
+		s.sent.Add(uint64(len(batch)))
+		s.markDirty()
+	case status == http.StatusBadRequest || status == http.StatusRequestEntityTooLarge:
+		// 永久拒绝（该批不可入库）：写 spool 只会让毒批在补采侧无限重试。
+		s.failed.Add(uint64(len(batch)))
+		s.markDirty()
+		if s.pipeline != nil {
+			s.pipeline.reportDroppedN(fmt.Sprintf("security-events ingest permanently rejected batch (HTTP %d)", status), len(batch))
+		}
+	default:
+		s.failed.Add(uint64(len(batch)))
+		s.markDirty()
+		s.spill(batch, err)
+	}
+}
+
+// spill 把整批失败行写入 spool；spool 不可用（未配置/满/IO 错误）时余下行走
+// 审计文件兜底，并逐行计 spool_errors（真丢口径的入口，最终是否丢看文件写）。
+func (s *auditIPCShipper) spill(batch [][]byte, cause error) {
+	remaining := batch
+	if s.spool != nil {
+		written, err := s.spool.appendLines(batch)
+		if written > 0 {
+			s.spooled.Add(uint64(written))
+			s.markDirty()
+		}
+		remaining = batch[written:]
+		if err != nil {
+			s.reportSpoolError(cause, err, len(remaining))
+		}
+		if len(remaining) == 0 {
+			return
+		}
+	} else {
+		s.reportSpoolError(cause, errors.New("spool unavailable"), len(remaining))
+	}
+	for _, line := range remaining {
+		s.fallback(line)
+	}
+	s.spoolErrs.Add(uint64(len(remaining)))
+	s.markDirty()
+}
+
+// reportSpoolError 记录 spool 失败（节流告警：首次立即，其后每分钟一条）。
+func (s *auditIPCShipper) reportSpoolError(cause, spoolErr error, lines int) {
+	if suppressed, logNow := s.spoolLog.report(time.Now()); logNow {
+		auditIOLogf("audit writer: security-events spool write failed for %s (%d lines fell back to the audit file, suppressed %d since last report): ipc=%v spool=%v",
+			s.target(), lines, suppressed, cause, spoolErr)
+	}
+}
+
+// target 返回审计文件目标（日志用；pipeline 可能为 nil，仅测试构造时）。
+func (s *auditIPCShipper) target() string {
+	if s.pipeline != nil {
+		return s.pipeline.target
+	}
+	return s.socket
+}
+
+// markDirty 标记侧车计数需要刷新。
+func (s *auditIPCShipper) markDirty() {
+	if s.pipeline != nil {
+		s.pipeline.statsDirty.Store(true)
+	}
+}
+
+// post 投递一批：body=换行分隔行 + 末尾 \n。返回 HTTP 状态码与错误（连接失败
+// 时状态码为 0）。
+func (s *auditIPCShipper) post(batch [][]byte) (int, error) {
+	total := 0
+	for _, line := range batch {
+		total += len(line) + 1
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, total))
+	for _, line := range batch {
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		"http://"+auditIPCSocketHost+auditIPCIngestPath, buf)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusNoContent {
+		return resp.StatusCode, fmt.Errorf("security-events ingest status %d", resp.StatusCode)
+	}
+	return resp.StatusCode, nil
+}
+
+// close 收尾：投递残留批次、封存 spool、关空闲连接。
+func (s *auditIPCShipper) close() {
+	s.flush()
+	if s.spool != nil {
+		if err := s.spool.close(); err != nil {
+			auditIOLogf("audit writer: security-events spool close failed for %s: %v", s.target(), err)
+		}
+	}
+	if tr, ok := s.client.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+}
+
+// counters 返回四个 IPC/spool 计数（侧车文件字段来源）。
+func (s *auditIPCShipper) counters() (sent, failed, spooled, spoolErrs uint64) {
+	if s == nil {
+		return 0, 0, 0, 0
+	}
+	return s.sent.Load(), s.failed.Load(), s.spooled.Load(), s.spoolErrs.Load()
+}
+
+// pending 返回未投递的行数（收尾排空判定用）。
+func (s *auditIPCShipper) pendingLines() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.batch)
 }

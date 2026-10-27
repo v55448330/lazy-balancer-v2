@@ -84,6 +84,10 @@ func ConfigureWafDirs(dataDir string) {
 	// /app/data→/app/logs 同构）；offset 落数据目录内（与 ip2region.xdb 同域）。
 	auditLogPath = filepath.Join(parent, "logs", "waf-audit", "audit.log")
 	securityEventsOffsetPath = filepath.Join(dataDir, "security_events.offset")
+	// IPC socket 与 fallback spool 同属数据卷派生面（默认 /app/data/...）：
+	// 自定义 data_dir 时写侧与读侧必须落在同一目录（env 缺席时以派生值为准）。
+	securityEventsIPCSocketPath = filepath.Join(dataDir, "security-events.sock")
+	securityEventsSpoolDir = filepath.Join(dataDir, "security-events-spool")
 }
 
 // CRSLiveDir 返回 CRS 活树目录（ConfigureWafDirs 派生后的当前值）。handlers

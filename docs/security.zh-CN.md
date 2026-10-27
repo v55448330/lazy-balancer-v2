@@ -10,6 +10,17 @@
 
 受信代理（CDN/前置代理回源）启用时，仅受信网段发来的代理头会被采信，还原后的真实客户端 IP 参与名单/地域/限流/事件判定；未启用或来源不在受信网段时一律按 TCP 源地址判定（fail-closed）。配置方式见[部署指南 · 受信代理](deployment.zh-CN.md#受信代理cdn-真实-ip-还原)。
 
+## 安全事件采集（IPC + 兜底补采）
+
+Caddy 审计写侧通过 Unix socket 把审计事务直接交给面板入库（DB commit 成功后 ack），正常路径不落全量 WAF 审计文件。
+
+- 失败/超时/未确认：写入 `/app/data/security-events-spool` 的 fallback spool；
+- 现有「安全事件采集」任务补采 spool；**DB commit 成功后才删除**已提交文件；
+- 补采完成后 spool 为空；事件日志页显示「缓存 N 条」即待补采条目数；
+- `security_events`（metrics DB）是成功事件的权威数据源，需配套数据库备份；spool 建议一并备份；
+- 旧版 `audit.log` 升级后继续消费存量，消费完成后不再新增；
+- socket/spool 路径可用 `LB_SECURITY_EVENTS_IPC_SOCKET`、`LB_SECURITY_EVENTS_SPOOL_DIR` 覆盖，Caddy 与面板必须指向同一数据卷。
+
 ## 组件版本
 
 | 组件 | 版本 |

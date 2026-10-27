@@ -612,12 +612,13 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 
 	// ============ 常驻（3）============
 
-	// 安全事件摄取：自管理 2s 尾读循环（引擎仅管生命周期）
+	// 安全事件摄取：IPC 主路径（Caddy 写侧经 Unix socket 直接投递）+ 旧
+	// audit.log 存量跟随 + fallback spool 补采，自管理 2s 循环（引擎仅管生命周期）
 	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          securityEventsIngestionTaskID,
 		Family:      "system",
 		Name:        "安全事件采集",
-		Description: "尾读 coraza WAF 审计日志并摄取为安全事件（安全总览/事件页的数据源），含审计日志轮转跟随",
+		Description: "摄取安全事件为安全日志（安全总览/事件页的数据源）：IPC 主路径入库，另跟随旧审计日志存量与 fallback spool 待补采文件",
 		Category:    "系统",
 		Kind:        taskengine.KindDaemon,
 		Run:         func(rc taskengine.RunContext) error { return runIngestionLoop(rc.Ctx) },
