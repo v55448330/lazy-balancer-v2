@@ -385,8 +385,9 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 入口 fail-fast：BackupDir 为空或相对路径时，后续任何文件操作都会落在
 	// 进程 CWD（failed 行裁剪按 DB 行文件名 + dir 相对解析执行 os.Remove）。
 	// 生产配置由 config 载入（LoadCollectWarnings）保证绝对路径，此处防配置缺失/测试构造形态。
-	if strings.TrimSpace(dir) == "" || !filepath.IsAbs(dir) {
-		reason := fmt.Errorf("备份目录未配置或不是绝对路径: %q", dir)
+	// 判据单源 autoBackupDir()——还原/下载/删除三端点共用同一守卫。
+	if _, dirErr := h.autoBackupDir(); dirErr != nil {
+		reason := dirErr
 		services.Logf("warn", "%s失败：%v", action, reason)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
 			"触发："+triggerLabel, "备份目录无效", services.AuditResultPart("failed")), "")
@@ -893,6 +894,19 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	c.JSON(http.StatusAccepted, models.APIResponse{Code: 0, Message: "手动备份已开始，完成后可在备份列表查看"})
 }
 
+// autoBackupDir 返回可安全 filepath.Join 的备份目录：必须非空且绝对。
+// 生产配置由 config.LoadCollectWarnings 保证绝对路径；配置缺失/测试构造/
+// 容器 env 覆盖给出相对路径时，Join 会在进程 CWD 下解析同名文件——写路径
+// （RunAutoBackupOnce）已有同口径入口 fail-fast，读/删三端点此前直接 Join，
+// 故收敛到本 helper 共用同一守卫。
+func (h *Handlers) autoBackupDir() (string, error) {
+	dir := h.cfg.BackupDir
+	if strings.TrimSpace(dir) == "" || !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("备份目录未配置或不是绝对路径: %q", dir)
+	}
+	return dir, nil
+}
+
 // autoBackupRowByID 查行；不存在 404、DB 故障响亮 500（此前 Scan 错误一律
 // 404「备份不存在」，DB 故障窗口误导排障方向；与 GetCurrentUser/
 // requireAutoBackupMaster 已立先例同口径）。verb 是调用方的动作词
@@ -909,7 +923,9 @@ func (h *Handlers) autoBackupRowByID(c *gin.Context, verb string) (autoBackupRow
 		return autoBackupRowView{}, false
 	}
 	subject := fmt.Sprintf("备份 #%d", id)
-	row := db.DB.QueryRow(`SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id)
+	// 读路径统一消费请求上下文：客户端断开/超时即中止（与本包
+	// GetAuditLogs/AutoBackupSettings 的不变量同口径），不留 ctx-less 点查。
+	row := db.DB.QueryRowContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id)
 	view, err := scanAutoBackupRowView(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -944,9 +960,15 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	// 管理员在列表点删除而失败时审计页零记录，与同族还原/下载的收尾契约
 	// 不一致。subject 与文件面同形（备份 id + 文件名）便于按文件复盘。
 	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
+	// 目录守卫先于事务：相对/空目录时不得先删行再在 CWD 下删同名文件。
+	backupDir, dirErr := h.autoBackupDir()
+	if dirErr != nil {
+		failAutoBackupAccess(c, "删除", subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		return
+	}
 	// 行删除先在事务内确认影响行数，再删文件：0 行（并发先到者已删）
 	// 不得碰文件；文件删除失败回滚行删除，保留可重试入口且不记成功审计。
-	tx, err := db.DB.Begin()
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
 			fmt.Errorf("开启删除事务: %w", err))
@@ -969,7 +991,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 		failAutoBackupAccess(c, "删除", subject, "备份不存在（可能已被删除）", http.StatusNotFound, sql.ErrNoRows)
 		return
 	}
-	if err := os.Remove(filepath.Join(h.cfg.BackupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(backupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		failAutoBackupAccess(c, "删除", subject, "删除备份文件失败", http.StatusInternalServerError,
 			fmt.Errorf("删除备份文件 %s: %w", view.Filename, err))
 		return
@@ -1038,8 +1060,15 @@ func (h *Handlers) RestoreAutoBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	path := filepath.Join(h.cfg.BackupDir, view.Filename)
 	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
+	// 目录守卫：相对/空 BackupDir 会在进程 CWD 下解析同名文件（误读非备份
+	// 目录文件），与写路径入口 fail-fast 同口径。
+	backupDir, dirErr := h.autoBackupDir()
+	if dirErr != nil {
+		failRestoreFileAccess(c, false, subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		return
+	}
+	path := filepath.Join(backupDir, view.Filename)
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1088,8 +1117,14 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	path := filepath.Join(h.cfg.BackupDir, view.Filename)
 	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
+	// 目录守卫（同还原）：相对/空 BackupDir 不得在 CWD 下读取同名文件。
+	backupDir, dirErr := h.autoBackupDir()
+	if dirErr != nil {
+		failRestoreFileAccess(c, true, subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		return
+	}
+	path := filepath.Join(backupDir, view.Filename)
 	// 句柄先行——os.Open 成功后才审计并流式交付，
 	// 消除 Stat→FileAttachment 窗口内备份完成 prune 掉目标文件导致的
 	// 打开失败 panic/500 与「审计先于交付」虚记。

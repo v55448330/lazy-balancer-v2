@@ -515,3 +515,29 @@ func TestFetchCRSLatestTag_tokenNeverSentToProxy(t *testing.T) {
 		t.Fatalf("代理请求携带 Authorization=%q——令牌不得发往第三方代理", got)
 	}
 }
+
+// 下载失败（Content-Length 超限 / io.Copy 中断）不得在 dest 留下 0 字节或半截
+// 工件：该函数是 seam（测试/复用方传任意 dest），下一次「跳过下载」的调用会把
+// 残件当成品消费（TOFU 完整性基线与解包都基于错误字节）。生产 dest 在 staging
+// 内由 defer 清理，故此处只补 seam 形态。
+func TestDefaultDownloadCRSTarball_removesPartialArtifactOnFailure(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "crs.tar.gz")
+	oldClient := crsDownloadClient
+	crsDownloadClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Status:        "200 OK",
+			ContentLength: ruleSetDownloadSizeCap + 1,
+			Body:          io.NopCloser(strings.NewReader("partial")),
+			Header:        http.Header{},
+		}, nil
+	})}
+	t.Cleanup(func() { crsDownloadClient = oldClient })
+
+	if err := defaultDownloadCRSTarball(context.Background(), "v4.99.0", dest, nil); err == nil {
+		t.Fatal("Content-Length 超限必须失败")
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("失败下载留下的工件未清理: stat err=%v", err)
+	}
+}

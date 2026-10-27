@@ -7,6 +7,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -61,5 +62,47 @@ func TestRebuildRegionTreeCacheForSync_masterWritesDerivedCache(t *testing.T) {
 
 	if _, err := os.Stat(live + ".regions.json"); err != nil {
 		t.Fatalf("主节点应写地域树派生缓存: %v", err)
+	}
+}
+
+// Given 只读降级形态：live 库缺失、在役 searcher 来自 waf.dist（从节点/写入
+// 失败时的真实形态）
+// When 连续两次取省份列表与地域树
+// Then 省份 336 次采样只跑一次（记忆化键取在役来源，此前恒取 live 路径 →
+// stat 失败 → 键恒空 → 每次调用重扫并全程持全局搜索锁）；地域树按在役来源
+// 扫描（此前直接回退不存在的 regions.json → 恒 nil，UI 退化为采样省份）。
+func TestReadOnlyDegraded_memoizesProvincesAndScansLoadedSource(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "missing-live.xdb")
+	dist := copyRepositoryXDB(t)
+	withIP2RegionPaths(t, live, dist)
+	resetProvincesMemoForTest(t)
+	resetRegionTreeMemoForTest(t)
+
+	searcher, err := openIP2RegionSearcher(dist)
+	if err != nil {
+		t.Fatalf("open fixture searcher: %v", err)
+	}
+	ip2regionMu.Lock()
+	ip2regionSearcher = searcher
+	ip2regionSearcherSource = dist
+	ip2regionMu.Unlock()
+
+	base := ip2regionProvinceScans.Load()
+	first := GetIP2RegionProvinces()
+	second := GetIP2RegionProvinces()
+	if scans := ip2regionProvinceScans.Load() - base; scans != 1 {
+		t.Fatalf("降级形态两次调用采样 %d 次, want 1（记忆化键必须取在役来源）", scans)
+	}
+	if strings.Join(first, ",") != strings.Join(second, ",") {
+		t.Fatalf("记忆化结果漂移: %v vs %v", first, second)
+	}
+
+	tree := GetIP2RegionRegionTree()
+	if tree == nil || len(tree.Provinces) == 0 {
+		t.Fatalf("降级形态必须按在役来源建树, got %+v", tree)
+	}
+	if again := GetIP2RegionRegionTree(); again != tree {
+		t.Fatal("地域树稳态调用必须命中记忆化（同一指针）")
 	}
 }

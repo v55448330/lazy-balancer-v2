@@ -22,6 +22,7 @@ func resetTrafficState(t *testing.T) {
 	trafficMu.Unlock()
 	trafficSecondState.Store(0)
 	trafficSampleN.Store(1)
+	trafficCountryDropped.Store(0)
 	trafficEventSeq.Store(0)
 	trafficLeasesMu.Lock()
 	trafficLeases = map[string]trafficLease{}
@@ -156,6 +157,12 @@ func TestTrafficRecord_normalizesOverseasAliases(t *testing.T) {
 }
 
 func TestTrafficRecord_countryCapacity(t *testing.T) {
+	// 满员丢弃必须可观测（计数 + 节流告警）：否则大屏国家流量少计而零信号。
+	oldInterval := crawlerSnapshotLogInterval
+	crawlerSnapshotLogInterval = 0 // 不节流：断言每次丢弃都有告警
+	t.Cleanup(func() { crawlerSnapshotLogInterval = oldInterval })
+	logBase := crawlerSnapshotLogCallsForTest.Load()
+
 	// Given: 国名桶达到硬上限，且其中一个已有桶随后继续命中。
 	resetTrafficState(t)
 	const limit = 512
@@ -176,6 +183,13 @@ func TestTrafficRecord_countryCapacity(t *testing.T) {
 	if _, exists := trafficCountries["overflow"]; exists {
 		t.Fatal("new country beyond the capacity must be dropped")
 	}
+	if got := trafficCountryDropped.Load(); got != 1 {
+		t.Fatalf("dropped counter=%d, want 1（满员丢弃不得无声）", got)
+	}
+	if got := crawlerSnapshotLogCallsForTest.Load() - logBase; got != 1 {
+		t.Fatalf("满员丢弃告警=%d 条, want 1（首报即记，不节流时逐次）", got)
+	}
+	// 已有国家在满员后继续精确计数（丢弃只作用于新键）。
 	e := trafficCountries["country-000"]
 	if e == nil || e.normal.Load() != 1 || e.attack.Load() != 1 {
 		t.Fatalf("existing country at capacity=%+v, want attack=1 normal=1", e)

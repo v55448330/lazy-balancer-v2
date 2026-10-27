@@ -1200,6 +1200,35 @@ func TestAutobanBannedToday_countsAuditBansOfDay(t *testing.T) {
 	}
 }
 
+// 非 UTC 时区用例：今日边界的时区换算必须真正参与判定。
+// TestAutobanBannedToday_countsAuditBansOfDay 把时区钉为 UTC——此时
+// autobanNow().In(loc) 与 .UTC() 都是恒等变换，删掉换算实现它仍全绿（覆盖
+// 盲区）。本用例以 Asia/Shanghai（UTC+8）+ 时钟 2026-10-14 12:00:00Z（=当地
+// 20:00）钉住「当地零点 = 2026-10-13 16:00:00Z」：15:59:59Z 属昨日不计、
+// 16:00:00Z 恰为今日第一秒必计。
+func TestAutobanBannedToday_usesConfiguredTimezoneDayBoundary(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 12:00:00")
+	previous := CurrentLocation().String()
+	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
+		t.Fatalf("configure Asia/Shanghai: %v", err)
+	}
+	t.Cleanup(func() { _, _ = ConfigureLocation(previous) })
+	seedAudit := func(createdUTC string) {
+		t.Helper()
+		if _, err := db.AuditDB.Exec(`INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('system', ?, 'IP 地址列表', 'IP：x', '', ?)`,
+			AutobanAuditAction, createdUTC); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedAudit("2026-10-13 15:59:59") // 当地 2026-10-13 23:59:59（昨日）→ 不计
+	seedAudit("2026-10-13 16:00:00") // 当地 2026-10-14 00:00:00（今日边界）→ 计
+	seedAudit("2026-10-14 11:59:59") // 当地 2026-10-14 19:59:59（今日）→ 计
+
+	if n := AutobanBannedToday(); n != 2 {
+		t.Fatalf("今日自动封禁数=%d, want 2（按 Asia/Shanghai 当地零点换算 UTC 边界；不换算时全区 3 条都会计入）", n)
+	}
+}
+
 // ---- wire 接线钉：Descriptor 标准七字段 + 调度唯一前提=业务启用 ----
 
 // Given 引擎装配（InitTaskEngine），库内默认未启用（autoban_enabled=0）。

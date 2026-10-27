@@ -143,8 +143,8 @@ func TestScheduleReaders_logReadFailure(t *testing.T) {
 	}
 
 	// Then：失败留痕（含表/列名，首报一条）
-	if !strings.Contains(logs.String(), "读取任务排程失败") {
-		t.Fatalf("logs=%q, want 含「读取任务排程失败」", logs.String())
+	if !strings.Contains(logs.String(), "读取配置失败") {
+		t.Fatalf("logs=%q, want 含「读取配置失败」", logs.String())
 	}
 
 	// 畸形形状：nil 库守卫——读侧走原子句柄 db.GetDB()，必须摘除原子句柄才

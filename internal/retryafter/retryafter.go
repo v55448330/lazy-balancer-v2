@@ -11,9 +11,11 @@
 package retryafter
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,7 +25,7 @@ func Parse(header string, now time.Time) time.Duration {
 	if header == "" {
 		return 0
 	}
-	if seconds, err := strconv.Atoi(header); err == nil {
+	if seconds, err := strconv.ParseInt(header, 10, 64); err == nil {
 		if seconds <= 0 {
 			return 0
 		}
@@ -32,10 +34,18 @@ func Parse(header string, now time.Time) time.Duration {
 		// 9223372037 得到负值，消费方（CA 冷却 3h 上限、DNS MaxBackoff）收到的
 		// 退避会比上游要求的短几个数量级，异常限流下的重试反而更频繁。超界饱和
 		// 为最大时长，由消费方既有的上限继续收敛。
-		if int64(seconds) > math.MaxInt64/int64(time.Second) {
+		if seconds > math.MaxInt64/int64(time.Second) {
 			return time.Duration(math.MaxInt64)
 		}
 		return time.Duration(seconds) * time.Second
+	} else if errors.Is(err, strconv.ErrRange) {
+		// 文本本身就超出 int64：它是「远大于任何上限」的 delay-seconds，不是
+		// HTTP-date——若落到下面的 date 分支会归零（退避从长期等待翻转成立刻
+		// 重试）。负向超界仍是「非正值」语义，按零处理。
+		if strings.HasPrefix(strings.TrimSpace(header), "-") {
+			return 0
+		}
+		return time.Duration(math.MaxInt64)
 	}
 	if date, err := http.ParseTime(header); err == nil {
 		if until := date.Sub(now); until > 0 {

@@ -115,3 +115,27 @@ func TestConfigureWafDirs_containerDefaultKeepsAppPaths(t *testing.T) {
 		t.Fatalf("容器默认完整性基线路径被改写: %q", downloadIntegrityPath)
 	}
 }
+
+// data_dir 为 /app 的直接子目录、但不是容器默认 /app/data 时同样必须派生：旧判据
+// 「父目录 == /app」会把 /app/custom 当成容器默认形态早退，CRS 快照/xdb/crawler
+// 快照/审计日志全部留在 /app/*（容器重建即丢、xdb 指向不存在的库）。
+func TestConfigureWafDirs_appSubdirIsNotContainerDefault(t *testing.T) {
+	saveWafPathVars(t)
+
+	ConfigureWafDirs("/app/custom")
+	cases := []struct{ name, got, want string }{
+		{"wafDir", wafDir, "/app/waf"},
+		{"IPListDataDir", IPListDataDir, "/app/waf/ip-lists"},
+		{"crsLiveDir", crsLiveDir, "/app/waf/crs"},
+		{"crsSnapshotDir", crsSnapshotDir, "/app/custom/crs"},
+		{"ip2regionLivePath", ip2regionLivePath, "/app/custom/ip2region.xdb"},
+		{"crawlerIPListFile", crawlerIPListFile, "/app/custom/crawler-ip-lists.json"},
+		{"securityEventsOffsetPath", securityEventsOffsetPath, "/app/custom/security_events.offset"},
+		{"downloadIntegrityPath", downloadIntegrityPath, "/app/custom/.download-integrity.json"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s=%q, want %q（/app 子目录被误判为容器默认形态→派生被跳过）", c.name, c.got, c.want)
+		}
+	}
+}

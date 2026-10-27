@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,19 +43,20 @@ func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 }
 
 // securityRuleHostMatches 判断指标 host 是否属于规则域名：精确匹配，或规则为
-// *.example.com 通配时匹配其子域（Caddy 通配域不覆盖裸域，与渲染语义一致；
-// 不展开通配会让泛域名规则的限流 chip 恒 0）。
+// *.example.com 通配时匹配其**一级**子域（Caddy 通配域不覆盖裸域，与渲染语义
+// 一致；不展开通配会让泛域名规则的限流 chip 恒 0）。
+//
+// 单段语义以 Caddy host matcher 为准（modules/caddyhttp/matchers.go
+// MatchHost.MatchWithError：通配模式按 "." 切分后要求 len(patternParts) ==
+// len(incomingParts)，即 *.example.com 不匹配 a.b.example.com）。复用
+// tlsWildcardMatch 保持单一实现——此前用 HasSuffix 会把多级子域的 429 计数
+// 并入通配规则（chip 偏高，展示口径失真）。
 func securityRuleHostMatches(ruleHost, metricHost string) bool {
 	if ruleHost == "" || metricHost == "" {
 		return false
 	}
-	if ruleHost == metricHost {
-		return true
-	}
-	if rest, ok := strings.CutPrefix(ruleHost, "*."); ok {
-		return strings.HasSuffix(metricHost, "."+rest)
-	}
-	return false
+	// host matcher 比较大小写不敏感；metrics 标签恒小写，规则域按输入保留。
+	return tlsWildcardMatch(strings.ToLower(ruleHost), strings.ToLower(metricHost))
 }
 
 // GetRuleStageStats 返回单规则的三阶段计数（流程抽屉计数 chip）：
@@ -428,7 +430,10 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	now := time.Now()
 	securityOverviewAggCacheMu.Lock()
 	if entry, ok := securityOverviewAggCache[key]; ok && now.Before(entry.expiresAt) {
-		data := entry.data
+		// 深拷贝：四个切片若与缓存条目共享底层数组，任一消费者就地变更
+		// （sort/截断/改元素）都会污染其他请求的 30s 缓存（同型事故：健康
+		// 缓存的「共享同一克隆」）。
+		data := cloneSecurityOverviewAggregates(entry.data)
 		securityOverviewAggCacheMu.Unlock()
 		return data, nil
 	}
@@ -580,7 +585,18 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 			delete(securityOverviewAggCache, k)
 		}
 	}
-	securityOverviewAggCache[key] = securityOverviewAggCacheEntry{data: data, expiresAt: now.Add(securityOverviewAggCacheTTL)}
+	securityOverviewAggCache[key] = securityOverviewAggCacheEntry{data: cloneSecurityOverviewAggregates(data), expiresAt: now.Add(securityOverviewAggCacheTTL)}
 	securityOverviewAggCacheMu.Unlock()
 	return data, nil
+}
+
+// cloneSecurityOverviewAggregates 复制四组切片（元素为值类型，浅复制切片即
+// 深拷贝）——缓存读写两侧都必须用副本，缓存条目与响应构造不得共享底层数组。
+func cloneSecurityOverviewAggregates(in securityOverviewAggregates) securityOverviewAggregates {
+	return securityOverviewAggregates{
+		trend:            slices.Clone(in.trend),
+		topIPs:           slices.Clone(in.topIPs),
+		attackTypes:      slices.Clone(in.attackTypes),
+		attackTypesStage: slices.Clone(in.attackTypesStage),
+	}
 }

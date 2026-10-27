@@ -540,6 +540,7 @@ func GetIP2RegionProvinces() []string {
 	}
 	ip2regionMu.RLock()
 	searcher := ip2regionSearcher
+	sourcePath := ip2regionSearcherSource
 	ip2regionMu.RUnlock()
 	if searcher == nil {
 		return []string{"海外"}
@@ -547,21 +548,26 @@ func GetIP2RegionProvinces() []string {
 	// stat 键记忆化（与 regionTreeMemo 同构）：下方 336 次采样搜索全程持
 	// ip2regionSearchMu 全局锁——校验端（ValidateGeoIPCountries）与缓存重建
 	// 在同一份 xdb 上的重复调用是纯重复劳动且拖住全局锁。键含 searcher
-	// 指针（测试/热换直换实例不吃陈旧值）+path|size|mtime（xdb 更新落盘
-	// 后 mtime 变化自然失效）。stat 失败（键为空）不记忆化——退化现扫。
-	key := ""
-	if fi, err := os.Stat(ip2regionLivePath); err == nil {
-		key = fmt.Sprintf("%p|%s|%d:%d", searcher, ip2regionLivePath, fi.Size(), fi.ModTime().UnixNano())
+	// 指针（测试/热换直换实例不吃陈旧值）+**在役来源** 的 path|size|mtime
+	// （xdb 更新落盘后 mtime 变化自然失效）。
+	//
+	// 来源必须取 ip2regionSearcherSource 而不是恒取 live 路径：只读降级节点
+	// （从节点/写入失败：live 缺失、searcher 来自 waf.dist）下 live 的 stat
+	// 恒失败 → 键恒空 → 每次调用都重跑 336 次采样并全程持全局搜索锁（面板
+	// 地域选项/策略校验的延迟尖峰 + 事件富化被阻塞）。stat 也失败时退化为
+	// 仅指针键：searcher 实例不可变（BufferCache 构造期整份读入），实例热换
+	// 必然换指针，故键仍然正确、仍然可记忆化。
+	key := fmt.Sprintf("%p|%s", searcher, sourcePath)
+	if fi, err := os.Stat(sourcePath); err == nil && sourcePath != "" {
+		key = fmt.Sprintf("%p|%s|%d:%d", searcher, sourcePath, fi.Size(), fi.ModTime().UnixNano())
 	}
-	if key != "" {
-		provincesMemoMu.Lock()
-		if provincesMemo != nil && provincesMemoKey == key {
-			out := provincesMemo
-			provincesMemoMu.Unlock()
-			return out
-		}
+	provincesMemoMu.Lock()
+	if provincesMemo != nil && provincesMemoKey == key {
+		out := provincesMemo
 		provincesMemoMu.Unlock()
+		return out
 	}
+	provincesMemoMu.Unlock()
 	ip2regionProvinceScans.Add(1)
 	ip2regionSearchMu.Lock()
 	defer ip2regionSearchMu.Unlock()
@@ -807,9 +813,10 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 	return tree
 }
 
-// GetIP2RegionRegionTree 返回地域树：live 扫描优先，文件缓存兜底（与省份
-// 列表同口径——searcher 加载失败时 UI 仍能展示上次成功的树）。
-// live 扫描按 xdb 的 (path,size,mtime) 记忆化——安全策略页
+// GetIP2RegionRegionTree 返回地域树：live 扫描优先，在役来源（回退的
+// waf.dist）次之，文件缓存兜底（与省份列表同口径——searcher 加载失败时
+// UI 仍能展示上次成功的树）。
+// 扫描按 xdb 的 (path,size,mtime) 记忆化——安全策略页
 // 每次打开都调本函数，原实现每次全量扫描 ~220ms（553K+58K preads）。stat
 // 键未变即返回上次扫描结果；带外替换 xdb 改变 stat 键、触发重扫，保留
 // 替换可见性（regions.json 缓存无法做到这一点，故不直接改用它）。扫描
@@ -818,11 +825,27 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 // Provinces/Cities/Countries 可变字段），调用方只读——就地修改会跨请求
 // 污染全局预览/校验源（消费侧目前均为只读或浅拷贝后序列化）。
 func GetIP2RegionRegionTree() *IP2RegionRegionTree {
-	fi, err := os.Stat(ip2regionLivePath)
-	if err != nil {
-		return getCachedRegionTree()
+	ip2regionMu.RLock()
+	sourcePath := ip2regionSearcherSource
+	ip2regionMu.RUnlock()
+	// 扫描源取 live 优先、在役来源兜底：只读降级节点（从节点/写入失败：live
+	// 缺失、searcher 来自 waf.dist）下此前直接回退 regions.json——该派生缓存
+	// 同样不落盘，于是每次都返回 nil，UI/校验退化为 336 点采样的粗粒度省份
+	// （采不到的城市/海外国家整族不可选）。在役来源与 live searcher 同内容，
+	// 扫描它不改变任何判定口径，只是把降级节点的树补齐。
+	scanPath := ip2regionLivePath
+	fi, err := os.Stat(scanPath)
+	if err != nil || scanPath == "" {
+		if sourcePath == "" {
+			return getCachedRegionTree()
+		}
+		if sourceInfo, sourceErr := os.Stat(sourcePath); sourceErr == nil {
+			scanPath, fi = sourcePath, sourceInfo
+		} else {
+			return getCachedRegionTree()
+		}
 	}
-	key := ip2regionLivePath + "|" + fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
+	key := scanPath + "|" + fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
 	regionTreeMemoMu.Lock()
 	if regionTreeMemo != nil && regionTreeMemoKey == key {
 		tree := regionTreeMemo
@@ -830,7 +853,7 @@ func GetIP2RegionRegionTree() *IP2RegionRegionTree {
 		return tree
 	}
 	regionTreeMemoMu.Unlock()
-	tree := regionTreeFromXDB(ip2regionLivePath)
+	tree := regionTreeFromXDB(scanPath)
 	if tree == nil {
 		return getCachedRegionTree()
 	}

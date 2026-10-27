@@ -656,11 +656,10 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			ValidateRuleListenPort: h.validateRuleListenPortForSave,
 		}, &backup, importValidationOptions{LbbakPayload: lbbakPayloadFromCtx(c), RequestedSections: c.Query("sections")})
 		if chainErr != nil {
-			// 受信代理校验内含 DB 读取：服务端故障不回「备份校验失败」（会把
-			// 「硬盘 I/O 错误」说成备份内容问题，并透出 SQL 文本）。
-			var readErr *trustedProxyReadError
-			if errors.As(chainErr, &readErr) {
-				writeInternalError(c, http.StatusInternalServerError, errTrustedProxyRead.Error(), readErr.Unwrap())
+			// 校验链内含 DB 读取（受信代理/整数列门/安全策略 live 回退）：服务端
+			// 故障不回「备份校验失败」（会把「硬盘 I/O 错误」说成备份内容问题，
+			// 并透出 SQL 文本），统一 500 固定文案。
+			if writeImportChainReadFailure(c, chainErr) {
 				return
 			}
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: chainErr.Error()}})

@@ -99,3 +99,22 @@ func TestCollectEngineFamilies_scheduledNextRunAtGatedByRole(t *testing.T) {
 		t.Fatalf("角色不适用定时任务不得给出下次执行（实际永不投递）, got %q", slave.NextRunAt)
 	}
 }
+
+// Given 主节点 + 24h 周期任务的最近一轮在 3 天前（长时间停止后刚恢复调度）。
+// When 聚合任务视图。
+// Then 「下次执行」不得展示已过去的兜底推算时刻（会误导运维「该跑没跑」）；
+// 兜底仅在推算值落在未来时采用。
+func TestCollectEngineFamilies_periodicFallbackSkipsPastNextRun(t *testing.T) {
+	te := newWireTestEngine(t)
+	te.SetRole(true)
+	const id = "cert-renewal-scan"
+	past := time.Now().In(CurrentLocation()).Add(-72 * time.Hour).Format("2006-01-02 15:04:05")
+	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
+		VALUES (?, 'cert', 'auto', 'success', ?)`, id, past); err != nil {
+		t.Fatal(err)
+	}
+	info := findTaskInfo(t, collectEngineFamilies(te), id)
+	if info.NextRunAt != "" {
+		t.Fatalf("最近一轮早于一个周期时不得展示过去的「下次执行」, got %q", info.NextRunAt)
+	}
+}

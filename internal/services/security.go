@@ -433,7 +433,10 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	// 绕过（Off 短路，2026-09-15 裁定语义）才是事务终态；反之绕过被降级为
 	// 「全评估仅记录」，与文档语义不符。
 	绕过WillEmit := p.IPACLEnabled && p.IPACLMode == "绕过"
-	if p.PolicyType != models.PolicyTypeStage0 && p.IPWhitelistEnabled && len(ipWL) > 0 {
+	// 发射判据单源（emitTrustControl 与上方「是否开引擎」共用同一表达式）：
+	// 字面复写会在后续给 stage0/信任名单加门时只改一处，产出「引擎判定开启但
+	// 信任规则不发射」或反向的静默漂移。
+	if emitTrustControl {
 		trustID := 3
 		if 绕过WillEmit {
 			trustID = 5
@@ -535,7 +538,9 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	// 形状下上方 SecRequestBodyAccess 恒 Off（BodyAccessTruthTable 已钉），
 	// id:9/10/11 无消费者，发射即死指令。
 	if p.Mode == "custom_only" && hasCustomRules {
-		emitBodyProcessorRules(&sb, p.AnomalyThreshold)
+		if err := emitBodyProcessorRules(&sb, p.AnomalyThreshold); err != nil {
+			return "", fmt.Errorf("策略 %q %w", p.Name, err)
+		}
 	}
 
 	if p.Mode == "blocking" || p.Mode == "detection" {
@@ -646,7 +651,9 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 				return "", err
 			}
 		}
-		emitBodyProcessorRules(&sb, p.AnomalyThreshold)
+		if err := emitBodyProcessorRules(&sb, p.AnomalyThreshold); err != nil {
+			return "", fmt.Errorf("策略 %q %w", p.Name, err)
+		}
 		// 部署契约（唯一支持形态=Go 进程与 Caddy 同容器共享文件系统、
 		// data_dir=/app/data）：Include 根硬编码 /app/waf/crs——渲染产物写给
 		// Caddy 进程消费，路径必须是 Caddy 视角的绝对路径；存在性门/索引/
@@ -843,10 +850,20 @@ func hasStage0TrustDetection(policies []*models.SecurityPolicy) bool {
 // body-processor 逃逸仅留事件不阻断，与守卫目的（阻止 body 规则隐身）不符；
 // 计满阈值后任意阈值配置下 949 评估即拦（拦截模式；检测模式仅记录，语义不变）。
 // custom_only 模式无 949 消费者，计分退化为事件留痕（与既有口径一致）。
-func emitBodyProcessorRules(sb *strings.Builder, anomalyThreshold int) {
+//
+// anomaly_threshold 是类型①值型列（写侧枚举 1/3/5/10/15/20 + 启动回填 <=0→5）；
+// <=0（NULL 读作哨兵 0/带外直写负值）时必须显性报错而不是拼进 setvar——负值
+// 会渲染成 `=+-5`，coraza 拒绝整份配置（保存/重载失败且报错指向引擎而非字段）。
+// blocking/detection 路径在同一列上有独立 fail-visible 门；custom_only 分支
+// 此前缺失，本函数是两者共用的最后一道门。
+func emitBodyProcessorRules(sb *strings.Builder, anomalyThreshold int) error {
+	if anomalyThreshold <= 0 {
+		return fmt.Errorf("异常阈值无效（anomaly_threshold=%d <=0）：该列为类型①值型列（写侧枚举 1/3/5/10/15/20 + 启动回填），疑似带外直写或旧备份绕过导入门", anomalyThreshold)
+	}
 	sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^application/(?:[\w.+-]+?\+)?json(?:\s*;|$)" "id:9,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"` + "\n")
 	sb.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application|text)/(?:[\w.+-]+?\+)?xml(?:\s*;|$)" "id:10,phase:1,pass,nolog,ctl:requestBodyProcessor=XML"` + "\n")
 	sb.WriteString(fmt.Sprintf(`SecRule REQBODY_PROCESSOR_ERROR "@eq 1" "id:11,phase:2,pass,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'请求体解析失败'"`, anomalyThreshold) + "\n")
+	return nil
 }
 
 // geoipLocOverseas 是 X-LB-GeoIP-Loc 的海外哨兵值：caddygeoip 对解析失败/

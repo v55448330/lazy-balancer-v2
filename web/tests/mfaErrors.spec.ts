@@ -93,9 +93,11 @@ test('非 MFA 端点与其它状态码一律不豁免', () => {
 test('MFA「支持的操作」清单覆盖 middleware 各写端点族', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   assert.match(page, /v-for="group in MFA_SCOPE_GROUPS"/, '弹框必须直接渲染单源清单')
-  const flat = MFA_SCOPE_GROUPS.map((g) => `${g.title}｜${g.items.join('、')}`).join('\n')
+  // 锚点只对 items 求值：把分组标题并进来时，与标题同名的锚点（如「负载规则」）
+  // 会由标题满足——该组 items 被删空也仍绿（清单静默低估报警面）。
+  const itemsFlat = MFA_SCOPE_GROUPS.map((g) => g.items.join('、')).join('\n')
   for (const anchor of ['任务监控 运行', '服务控制', '节点站点坐标', '指纹钉', '自动封禁', '爬虫库', 'IP 名单', 'DNS 凭证连通性测试']) {
-    assert.ok(flat.includes(anchor), `MFA 清单缺「${anchor}」——用户对这些写操作会被要求验码`)
+    assert.ok(itemsFlat.includes(anchor), `MFA 清单缺「${anchor}」——用户对这些写操作会被要求验码`)
   }
   assert.match(page, /subtitle="覆盖全部管理写操作（只读语义写操作与 MFA 验码、登出端点除外）"/)
   // 副标题的豁免集必须与 DecideMFAStepUp 同源：step-up 只豁免 verify-step
@@ -119,7 +121,9 @@ test('MFA「支持的操作」清单覆盖 middleware 各写端点族', () => {
 test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () => {
   const mw = repoCode('internal/middleware/middleware.go')
   const policy = repoCode('internal/services/auditpolicy.go')
-  const flat = MFA_SCOPE_GROUPS.map((g) => `${g.title}｜${g.items.join('、')}`).join('\n')
+  // 只对 items 求值（标题不参与）：族锚点「负载规则」与分组标题同名，含标题时
+  // 该组动作被删空也仍然命中，反查失去鉴别力。
+  const flat = MFA_SCOPE_GROUPS.map((g) => g.items.join('、')).join('\n')
 
   const exemptBlock = section(policy, 'var readOnlyWriteRoutes = map[string]struct{}{', '\n}')
   const exempt = new Set([...exemptBlock.matchAll(/"([A-Z]+) (\/api\/v1[^"]+)"/g)].map((m) => `${m[1]} ${m[2]}`))
@@ -178,7 +182,10 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
     ['/api/v1/security/ip-lists', 'IP 名单'],
     ['/api/v1/security/autoban', '自动封禁'],
     ['/api/v1/rules/batch-block-pages', '拦截页面'],
-    ['/api/v1/rules', '负载规则'],
+    // 规则族锚点用该组 item「复制」：原锚点「负载规则」与分组标题同名，只由
+    // 标题满足——该组 items 全删后反查仍绿。items 是裸动词（创建/编辑/…/复制），
+    // 「复制」在同组内唯一。
+    ['/api/v1/rules', '复制'],
     ['/api/v1/certificate-configs/test', 'DNS 凭证连通性测试'],
     ['/api/v1/certificate-configs/:id/test', 'DNS 凭证连通性测试'],
     ['/api/v1/certificate-configs', '证书配置'],

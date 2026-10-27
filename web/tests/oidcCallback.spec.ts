@@ -127,6 +127,10 @@ test('失败文案：RFC 标准错误码映射为固定中文文案', () => {
   // 后端口径「提供商拒绝授权: <标准码>」只翻译标准码，不原文透出后缀
   assert.equal(oidcErrorMessage('提供商拒绝授权: access_denied'), '授权被拒绝')
   assert.equal(oidcErrorMessage('提供商拒绝授权: made-up-code'), '授权被拒绝')
+  // 码表补齐的 6 码：客户端配置类故障不得被读成「用户拒绝」
+  assert.equal(oidcErrorMessage('提供商拒绝授权: invalid_client'), '客户端凭证无效，请联系管理员检查 OIDC 配置')
+  assert.equal(oidcErrorMessage('提供商拒绝授权: expired_token'), '登录令牌已过期，请重新登录')
+  assert.notEqual(oidcErrorMessage('提供商拒绝授权: unsupported_grant_type'), '授权被拒绝')
 })
 
 test('失败文案：任意链接投放的陌生文案／HTML／超长串归一到通用文案', () => {
@@ -141,6 +145,34 @@ test('失败文案：原型键不得穿透查表（constructor/toString 等）',
   for (const key of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
     assert.equal(oidcErrorMessage(key), GENERIC, `${key} 命中了原型链`)
   }
+})
+
+test('跨栈：后端标准错误码表与前端码表逐键对表（漏一码即落到「授权被拒绝」）', () => {
+  // 后端回调 error 参数只放行 oidcStandardErrorCodes，回显为「提供商拒绝授权: <码>」；
+  // 前端按后缀查 OIDC_STANDARD_ERRORS。两侧码表原先没有任何机械对表——后端放行
+  // 而前端缺码时（invalid_client / expired_token 等），运维看到「授权被拒绝」，
+  // 把客户端凭证配置错误当成用户拒绝，只能逐项试。
+  const backend = repoCode('internal/handlers/auth_oidc.go')
+  const goBlock = section(backend, 'var oidcStandardErrorCodes = map[string]struct{}{', '\n}')
+  const backendCodes = [...goBlock.matchAll(/"([a-z_]+)":\s*\{\}/g)].map((m) => m[1]!)
+  assert.ok(backendCodes.length >= 10, `后端标准码解析失败（${backendCodes.length} 条）`)
+  const frontBlock = section(code('src/utils/oidcCallback.ts'), 'const OIDC_STANDARD_ERRORS: Record<string, string> = {', '\n}')
+  const frontCodes = [...frontBlock.matchAll(/^\s*([a-z_]+):\s*'/gm)].map((m) => m[1]!)
+  assert.ok(frontCodes.length >= 10, `前端码表解析失败（${frontCodes.length} 条）`)
+  const missing = backendCodes.filter((item) => !frontCodes.includes(item))
+  assert.deepEqual(missing, [], `前端码表缺后端放行的标准码：${missing.join(', ')}（会一律落到「授权被拒绝」）`)
+  // 反向：前端多出的码必须同时进后端白名单，否则是不可达死条目
+  const unreachable = frontCodes.filter((item) => !backendCodes.includes(item))
+  assert.deepEqual(unreachable, [], `前端码表有后端白名单外的码（永远不可达）：${unreachable.join(', ')}`)
+})
+
+test('跨栈：提供商拒绝文案前缀两侧同值（改一侧即整族文案失配）', () => {
+  const prefix = /const providerPrefix = '([^']+)'/.exec(code('src/utils/oidcCallback.ts'))?.[1]
+  assert.ok(prefix, '前端缺 providerPrefix 常量（「前缀: 码」形态的切分依据）')
+  const backend = repoCode('internal/handlers/auth_oidc.go')
+  assert.ok(backend.includes(`msg := "${prefix}"`), `后端拒绝文案前缀与前端 providerPrefix「${prefix}」不一致`)
+  // 拼接形态本身也钉住：前端按「前缀: 码」切后缀，形态变了就整族落回通用文案
+  assert.ok(backend.includes('msg += ": " + code'), '后端必须保持「前缀: 空格式码」拼接形态')
 })
 
 test('跨栈：后端 fail() 的每条固定文案都在前端白名单内（文案漂移即红）', () => {
@@ -170,6 +202,30 @@ test('App：已登录会话被 URL 令牌替换须显式确认（取消则保持
   assert.match(branch, /authStore\.token && !isTokenExpired\(authStore\.token\)/, '仅当已有有效会话时要求确认')
   assert.match(branch, /ElMessageBox\.confirm\(/, '换号必须二次确认')
   assert.match(branch, /已保持当前登录/, '取消分支必须明确不切换')
+})
+
+test('App：return_to 导航只在令牌真正落地后执行（拒绝/取消都不跳页）', () => {
+  const app = code('src/App.vue')
+  const branch = section(app, 'if (oidcToken) {', '} else if (hasLoginTicket) {')
+  // 两处 applyOIDCToken 各对应一个落地点，都必须置位导航门——漏一处即「拒绝/
+  // 取消后仍跳转」（提示与行为矛盾）。
+  const applies = [...branch.matchAll(/authStore\.applyOIDCToken\(oidcToken\)/g)]
+  assert.equal(applies.length, 2, '令牌落地应有两处（确认换号 / 直接建会话）')
+  for (const apply of applies) {
+    assert.match(
+      branch.slice(apply.index, apply.index + 80),
+      /tokenApplied = true/,
+      '每次令牌落地都必须置位导航门（tokenApplied）',
+    )
+  }
+  // 导航语句必须落在 if (tokenApplied) 块内：在块外即回到「无条件导航」
+  const navAt = branch.indexOf('authStore.setCurrentPage(target)')
+  assert.ok(navAt > 0, 'return_to 导航语句缺失')
+  const guardAt = branch.lastIndexOf('if (tokenApplied) {', navAt)
+  assert.ok(guardAt >= 0 && guardAt < navAt, 'return_to 导航必须受 tokenApplied 门控')
+  // 门内不得再出现会提前结束分支的 else 旁路（杜绝「拒绝分支也置位」）
+  const rejectBranch = branch.slice(branch.indexOf('if (!verdict.ok) {'), branch.indexOf('} else if (authStore.token'))
+  assert.doesNotMatch(rejectBranch, /tokenApplied = true/, '拒绝分支不得置位导航门')
 })
 
 test('App / Login：失败文案都经白名单映射，不直接拼接 fragment 原文', () => {

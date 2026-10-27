@@ -408,6 +408,9 @@ func TestBuildCorazaDirectives_customOnlyModeEmitsCustomRulesWithoutCRS(t *testi
 	// Given:mode=custom_only 且挂自定义拦截规则(含 body 条件)
 	policy := &models.SecurityPolicy{
 		Mode: "custom_only",
+		// 启用规则会发射 body processor 守卫（id:11 计分=anomaly_threshold），
+		// 按真实库形态给合法值 5（写侧枚举+启动回填保证恒正）。
+		AnomalyThreshold: 5,
 		CustomRules: json.RawMessage(`[{"id":2,"name":"仅自定义body","enabled":true,"action":"block","score":5,` +
 			`"conditions":[{"target":"body","operator":"contains","pattern":"evil"}]}]`),
 	}
@@ -646,9 +649,9 @@ func TestBuildCorazaDirectives_responseBodyAccessGatedByCRSMode(t *testing.T) {
 	} {
 		p := &models.SecurityPolicy{Mode: tc.mode, WAFCheckResponse: true,
 			CustomRules: json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)}
-		if tc.mode == "blocking" || tc.mode == "detection" {
-			p.AnomalyThreshold = 5
-		}
+		// custom_only 在有启用规则时同样发射 body processor 守卫（id:11 计分=阈值），
+		// 三种模式都按真实库形态给合法值 5。
+		p.AnomalyThreshold = 5
 		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0, "lb_test"))
 		got := strings.Contains(directives, "SecResponseBodyAccess On")
 		if got != tc.want {

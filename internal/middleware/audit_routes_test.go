@@ -29,10 +29,11 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// c：/config/validate 已升为 Explicit（handler 记录校验三态）。
 		"POST /api/v1/mcp":             {},
 		"POST /api/v1/rules/cert-info": {},
-		// v2.1.8 MFA：setup/verify-step 为读形态或内部动作（不产生审计；handler
-		// 对失败已按认证拒绝/错误路径细分记录）。recovery-codes 已升为 Explicit
-		//（handler 显式记录「生成/恢复码」），不再属有意跳过。
-		"POST /api/v1/auth/mfa/setup":       {},
+		// v2.1.8 MFA：verify-step 为内部动作（不产生审计；handler 对失败已按
+		// 认证拒绝/错误路径细分记录）。setup 已升 Explicit（重绑成功的 pending
+		// 密钥轮换由 handler 记「重新绑定/用户认证」，首绑由 activate 记
+		// 「启用」）；recovery-codes 已升为 Explicit（handler 显式记录「生成/
+		// 恢复码」），两者均不再属有意跳过。
 		"POST /api/v1/auth/mfa/verify-step": {},
 		// 三库手动更新：审计由任务体 defer 单记（2026-09-29 用户裁定 + 历史
 		// 收敛——handler 补记已撤、operator 经 RunContext 归人）。
@@ -47,10 +48,9 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// 任务体零审计，handler 对非自记族显式补记「触发/任务监控」（自记族
 		// 跳过，保 单记裁定），不再属有意跳过。
 	}
-	writeMethods := map[string]struct{}{
-		http.MethodPost: {}, http.MethodPut: {}, http.MethodPatch: {}, http.MethodDelete: {},
-	}
-
+	// 直接消费包级单一事实源（middleware.go 的 writeMethods）：此前本测试
+	// 自建局部副本（且类型不同）遮蔽它，包级集合扩方法时本测试会静默按旧四
+	// 方法枚举，新增方法的写路由跳过「必须有显式审计分类」断言。
 	// When
 	// 反向对账：intentionalSkip 的每个键必须是真实注册的写路由——路由删除/
 	// 改名后旧键恒不命中，跳过声明就成了永不生效的孤儿（后续新增写路由的
@@ -65,7 +65,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		}
 	}
 	for _, route := range router.Routes() {
-		if _, write := writeMethods[route.Method]; !write {
+		if !writeMethods[route.Method] {
 			continue
 		}
 		key := route.Method + " " + route.Path

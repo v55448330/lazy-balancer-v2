@@ -557,10 +557,10 @@ func TestAutoBackupEnabled_logsReadFailureOnceAndRecovers(t *testing.T) {
 	globalTaskAutoUpdateEnabled("threat")
 
 	// Then：每类只首报一次（状态转换口径，30s×2880 行/天的历史形态）
-	if count := strings.Count(logs.String(), "读取任务排程失败（schedule-read-auto-backup-enabled）"); count != 1 {
+	if count := strings.Count(logs.String(), "读取配置失败（schedule-read-auto-backup-enabled）"); count != 1 {
 		t.Fatalf("auto-backup 开关读失败日志次数=%d, want 1（状态转换去重）: %s", count, logs.String())
 	}
-	if count := strings.Count(logs.String(), "读取任务排程失败（schedule-read-threat-auto-update）"); count != 1 {
+	if count := strings.Count(logs.String(), "读取配置失败（schedule-read-threat-auto-update）"); count != 1 {
 		t.Fatalf("threat 总闸读失败日志次数=%d, want 1: %s", count, logs.String())
 	}
 
@@ -570,17 +570,17 @@ func TestAutoBackupEnabled_logsReadFailureOnceAndRecovers(t *testing.T) {
 	globalTaskAutoUpdateEnabled("threat")
 	AutoBackupEnabled()
 	globalTaskAutoUpdateEnabled("threat")
-	if count := strings.Count(logs.String(), "读取任务排程已恢复（schedule-read-auto-backup-enabled）"); count != 1 {
+	if count := strings.Count(logs.String(), "读取配置已恢复（schedule-read-auto-backup-enabled）"); count != 1 {
 		t.Fatalf("恢复日志次数=%d, want 1: %s", count, logs.String())
 	}
-	if count := strings.Count(logs.String(), "读取任务排程已恢复（schedule-read-threat-auto-update）"); count != 1 {
+	if count := strings.Count(logs.String(), "读取配置已恢复（schedule-read-threat-auto-update）"); count != 1 {
 		t.Fatalf("threat 恢复日志次数=%d, want 1: %s", count, logs.String())
 	}
 
 	// When：恢复后再次失败。Then：去重状态机复位，必须重新首报一次。
 	db.DB = broken
 	AutoBackupEnabled()
-	if count := strings.Count(logs.String(), "读取任务排程失败（schedule-read-auto-backup-enabled）"); count != 2 {
+	if count := strings.Count(logs.String(), "读取配置失败（schedule-read-auto-backup-enabled）"); count != 2 {
 		t.Fatalf("再次失败后告警次数=%d, want 2（恢复后必须重新首报）: %s", count, logs.String())
 	}
 }

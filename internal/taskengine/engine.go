@@ -2022,6 +2022,11 @@ func (e *Engine) tick() {
 			due := !r.nextScheduledTime.IsZero() && now.After(r.nextScheduledTime) && r.nextScheduledTime.After(r.schedDoneSlot)
 			eligible := r.loopEnabled && !r.running
 			r.mu.Unlock()
+			// 第二次 roleAllows 不是冗余：首道（本分支顶部）只做「快照前
+			// 省 DB 读」的前置过滤，而 due 判定到 admission 之间解锁过 mutex
+			// 并调用了 NextSlotFn（闭包，可能耗时可观），期间 SetRole/节点角色
+			// 翻转可发生——按最新角色复核才能避免在已 demote 的节点上投递。
+			// 保留两次调用，勿合并为一次快照。
 			if !due || !eligible || !e.roleAllows(r.desc.RunsOn) {
 				continue
 			}
@@ -2469,10 +2474,14 @@ func globalInsertRun(taskID, family, trigger string) int64 {
 }
 
 func globalInsertRunAt(taskID, family, trigger, startedAt, operator string) int64 {
-	if db.DB == nil {
+	// 局部快照句柄：`db.DB` 两次读之间可能被 db.Close() 置 nil（关停序列
+	// StopTaskEngine→db.Close 时未落定的 Run 仍会走到这里），直接二次解引用
+	// 会 nil-deref panic 掉进程（同 services/securityevents_retention.go 先例）。
+	database := db.DB
+	if database == nil {
 		return 0
 	}
-	res, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, operator, status, started_at) VALUES (?,?,?,?, 'running',?)`, taskID, family, trigger, operator, startedAt)
+	res, err := database.Exec(`INSERT INTO task_runs (task_id, family, trigger, operator, status, started_at) VALUES (?,?,?,?, 'running',?)`, taskID, family, trigger, operator, startedAt)
 	if err != nil {
 		// 插入失败不得静默——runID=0 时后续 finishRun
 		// 全系 no-op，该轮执行在任务历史彻底蒸发（零信号）。
@@ -2501,11 +2510,22 @@ const (
 // 重试语义（瞬时失败后成功）需要可注入的首轮失败才能验证，与同包其他
 // 故障注入缝同模式。
 var taskRunTerminalExec = func(query string, args ...any) (sql.Result, error) {
-	return db.DB.Exec(query, args...)
+	// 索引闭合的重试会跨过 db.Close()：句柄已置 nil 时返回明确错误（交由
+	// 有界重试/兜底回收），不在闭包内二次解引用 db.DB 造成关停尾 panic。
+	database := db.DB
+	if database == nil {
+		return nil, sql.ErrConnDone
+	}
+	return database.Exec(query, args...)
 }
 
 func updateTaskRunTerminal(runID int64, status string, durMs int64, message string) {
-	if runID <= 0 || db.DB == nil {
+	if runID <= 0 {
+		return
+	}
+	// 这里的 nil 判定只是快路径；真正的关停竞态由 taskRunTerminalExec 内的
+	// 句柄快照 + nil 判定兜住（校验后置 nil 的 TOCTOU 不得 panic）。
+	if db.DB == nil {
 		return
 	}
 	// finished_at 在首次尝试前定值：重试不改变实际结束时刻。

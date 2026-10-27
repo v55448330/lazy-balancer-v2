@@ -80,3 +80,16 @@ test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节�
   const validator = section(handlers, 'func validateAccessLogFormatSize', '\n}')
   assert.match(validator, /len\(format\); n > maxAccessLogFormatBytes/, 'Go len(string) 必须执行 UTF-8 字节门')
 })
+
+test('E 重启提示弹框走 h() 组合，不再引入 HTML 字符串汇点', () => {
+  // dangerouslyUseHTMLString 是注入面：一旦后续把节点名/后端 message 并入同一
+  // 模板即成 XSS，且 ESLint 不拦。同文件其余多行提示均为 h() 组合，此处同范式。
+  assert.doesNotMatch(page, /dangerouslyUseHTMLString/, '设置页不得再用 HTML 字符串弹框')
+  const notice = section(page, 'const notifyTlsRestarting = (toHttps: boolean) => {', 'const confirmAdminTls')
+  assert.match(notice, /ElMessageBox\.alert\(\s*h\('div', \[/, '重启提示必须用 h() 组合消息体')
+  assert.match(
+    notice,
+    /h\('a', \{ href: target, target: '_blank', rel: 'noopener noreferrer'/,
+    '目标链接必须是 VNode 且保留 noopener noreferrer',
+  )
+})

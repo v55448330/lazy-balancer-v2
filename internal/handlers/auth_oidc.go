@@ -1297,7 +1297,10 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		var cerr error
 		ident, created, cerr = createOIDCUserWithRetry(cfg.Issuer, claims.Sub, base, displayName)
 		if cerr != nil {
-			fail("创建 OIDC 用户失败", "OIDC JIT 开户失败")
+			// 登录族（含 OIDC 回调）刻意不挂 rejectWriteDuringImport：登录必须在
+			// 任何窗口内可用，写库操作由 DSN busy_timeout 串行等待而非 409 拒绝
+			//（与密码 Login 同口径）。窗口内写锁竞争会让本步超时，故文案明示可重试。
+			fail("创建 OIDC 用户失败，请稍后重试", "OIDC JIT 开户失败")
 			return
 		}
 		if ident.isEnabled != 1 {

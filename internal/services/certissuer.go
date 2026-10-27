@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/x509"
 	"database/sql"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -406,7 +405,12 @@ func displayDeploymentAttempt(attempt int) int {
 }
 
 func certificateDeploymentBackoff(attempt int) time.Duration {
-	// 阶梯 = 1s×2^(attempt-1)，由循环守卫在跨过 5min 处停止加倍（上界 512s）。
+	// 阶梯 = 1s×2^(attempt-1)，循环守卫为「当前值 < 5min 才继续加倍」——所以
+	// 上限不是 5min 而是 512s：attempt 9 = 256s、attempt 10 起 = 512s（8.5min），
+	// 由 TestCertificateDeploymentBackoff_ladderUpperBound 钉住实测值。
+	// 与 30min 慢速重试（blockedDeploymentRetryDelay，重试预算用尽后接管）之间
+	// 存在 8.5min → 30min 的间隔断层：这是有意的（快速重试段覆盖「磁盘/重载
+	// 短暂故障」，超预算段只做低频收敛，避免长期故障反复重载 Caddy）。
 	// 原实现在循环后还有一道 `> 5min → 5min` 钳制：调用方在 attempt≥
 	// maxCertificateDeploymentAttempts 时已改用 30min 慢速重试，钳制对全部
 	// 可达输入都不可达（死代码），删除。
@@ -1000,6 +1004,11 @@ func readCertJobStatus(jobID int) (string, error) {
 	return status, err
 }
 
+// ErrCertificateRoleUndetermined 表示部署确认时「节点角色不可判定」（读
+// global_config 失败）。调用方据此走部署重试链而不是按「材料已无意义」丢弃：
+// 与 sql.ErrNoRows（任务/规则不可部署、角色已翻转）严格区分。
+var ErrCertificateRoleUndetermined = errors.New("无法判定节点角色")
+
 // confirmCertificateDeployment 校验任务与规则的当前状态仍允许落盘这份签发
 // 材料。刻意不过滤 r.enable_tls/r.tls_source：与扫描/物化路径
 // （certificates.go 的 rescan/renew 查询、certstore.go 的启动物化）统一附加
@@ -1007,12 +1016,25 @@ func readCertJobStatus(jobID int) (string, error) {
 // 规则是否仍对得上」——已签发材料写盘后不被 manual 渲染消费，保留材料便于
 // 规则切回 acme_dns 时直接复用。材料保留取向为有意设计，勿对齐过滤口径。
 func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {
+	// 角色判据走单源 RoleOf（三态），不再内联 COALESCE(g.is_master,1)=1：
+	// SQL 谓词把「角色读失败」与「任务/规则已不可部署」同归 sql.ErrNoRows，
+	// 部署失败归因会把 DB 故障读成规则删除/禁用（排障误导，材料还会按
+	// 「无意义」丢弃）；且 RoleOf 口径未来收紧（如校验 master_url）不会
+	// 传播到部署确认。三态映射：
+	//   读失败   → ErrCertificateRoleUndetermined（瞬时，调用方走重试链）
+	//   非主节点 → sql.ErrNoRows（角色翻转=材料无意义，与规则删除/禁用同口径）
+	master, roleErr := RoleOf(ctx, db.DB)
+	if roleErr != nil {
+		Logf("warn", "证书部署确认：读取节点角色失败，按瞬时故障交给重试链: %v", roleErr)
+		return fmt.Errorf("confirm certificate deployment: %w: %v", ErrCertificateRoleUndetermined, roleErr)
+	}
+	if !master {
+		return fmt.Errorf("confirm certificate deployment: %w（本节点已非主节点）", sql.ErrNoRows)
+	}
 	var status, jobDomains, ruleDomains string
 	err := db.DB.QueryRowContext(ctx, `SELECT j.status, j.domain, r.domain FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
-		JOIN global_config g ON g.id=1
-		WHERE j.id=? AND j.rule_id=?
-		  AND r.enabled=1 AND COALESCE(g.is_master,1)=1
+		WHERE j.id=? AND j.rule_id=? AND r.enabled=1
 	`, jobID, material.ruleID).Scan(&status, &jobDomains, &ruleDomains)
 	if err != nil {
 		return fmt.Errorf("confirm certificate deployment: %w", err)
@@ -1287,13 +1309,14 @@ func parseCertNotBefore(certPEM string) (time.Time, error) {
 // parseCertTime 是两条取时入口的单源实现（此前 NotBefore/NotAfter 两份逐字
 // 相同的解码逻辑，任一侧改动会漂移）。
 func parseCertTime(certPEM string, pick func(*x509.Certificate) time.Time) (time.Time, error) {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return time.Time{}, fmt.Errorf("invalid certificate PEM")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
+	cert, err := parseCertificateLeaf(certPEM)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse certificate: %w", err)
+		// 空块保留既有文案（"invalid certificate PEM"）；解析失败沿用
+		// parseCertificateLeaf 的 "parse certificate: ..." 包装。
+		if errors.Is(err, errCertPEMEmpty) {
+			return time.Time{}, fmt.Errorf("invalid certificate PEM")
+		}
+		return time.Time{}, err
 	}
 	return pick(cert), nil
 }

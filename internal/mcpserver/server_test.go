@@ -1633,3 +1633,39 @@ func TestPermissionTextsCoverRegisteredWriteMethods(t *testing.T) {
 		t.Fatal("存在 PATCH 工具时，两处权限说明都必须写全 POST/PUT/PATCH/DELETE")
 	}
 }
+
+// import_config / validate_import 的分类子集必须走 query（等价 REST ?sections=），
+// 不能落在 body：REST 侧体内 sections 是备份打包时的分类记录，参与 v3 校验和
+// 摘要，被改写后 verifyBackupIntegrity 会把健康备份判成「已篡改」硬拒
+// （config_backup.go 的 configBackupChecksumPayload）。转发层只按 queryArgs 拼
+// 查询串，schema 声明却漏登记即「按分类导入」能力整体失效且错误文案误导。
+func TestImportToolsForwardSectionsAsQueryNotBody(t *testing.T) {
+	for _, tool := range []string{"import_config", "validate_import"} {
+		t.Run(tool, func(t *testing.T) {
+			var gotQuery url.Values
+			var gotBody map[string]any
+			rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.Query()
+				gotBody = nil
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"code":0,"message":"配置导入成功"}`))
+			}))
+			defer rest.Close()
+
+			handler := NewForTest(rest.URL+"/api/v1", rest.Client())
+			payload := `{"meta":{"app":"lazy-balancer-v2","version":3,"checksum":"abc"},"tables":{"users":[]},"sections":"users,security"}`
+			_ = callTool(t, handler, tool, payload)
+
+			if got := gotQuery.Get("sections"); got != "users,security" {
+				t.Fatalf("%s 内部请求 sections=%q, want users,security（分类子集必须走 query）", tool, got)
+			}
+			if _, ok := gotBody["sections"]; ok {
+				t.Fatalf("%s 把 sections 写进了请求体：体内 sections 参与备份校验和，改写会被 REST 判成「已篡改」", tool)
+			}
+			if _, ok := gotBody["tables"]; !ok {
+				t.Fatalf("%s 请求体丢失备份正文（tables），body=%v", tool, gotBody)
+			}
+		})
+	}
+}

@@ -9,13 +9,15 @@ import (
 	"strings"
 )
 
-// AuthorizationScheme 是 API Key 在 Authorization 头中的方案前缀。它与 JWT 的
+// authorizationScheme 是 API Key 在 Authorization 头中的方案前缀。它与 JWT 的
 // "Bearer <JWT>" 共用 Bearer 方案，靠 lb_sk_ 前缀区分两种凭据类别。
-const AuthorizationScheme = "Bearer lb_sk_"
+// 包内私有：本包的两个导出函数（IsAPIKeyAuthorization / FromHeader）是唯一
+// 契约面——导出常量会诱使外部改写或按字面复制前缀，绕过「同一规则」的约束。
+const authorizationScheme = "Bearer lb_sk_"
 
 // IsAPIKeyAuthorization 判定 Authorization 头是否为 API Key 形态。
 func IsAPIKeyAuthorization(value string) bool {
-	return strings.HasPrefix(value, AuthorizationScheme)
+	return strings.HasPrefix(value, authorizationScheme)
 }
 
 // FromHeader 按约定顺序提取 API Key：X-API-Key 头优先；否则 Authorization

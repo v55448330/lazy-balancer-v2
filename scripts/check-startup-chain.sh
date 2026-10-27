@@ -58,8 +58,19 @@ done <<<"$script_list"
 # 2) 语义面：entrypoint 的每个 `exec <绝对路径>` 必须由 Dockerfile 提供。
 #    COPY 目标清单派生（含续行拼接）：末位是目标；以 / 结尾的目标是目录，落点
 #    为「目标 + 源码 basename」，否则目标即文件路径。
+#
+#    只取**最后一个 FROM 阶段**（最终镜像）的 COPY：构建阶段（xcaddy-builder /
+#    backend）把文件放到 /app/... 与最终镜像的路径空间无关，混入同一张清单会
+#    让「最终阶段漏 COPY、目标只在构建阶段存在」的形态假绿——容器启动才暴露
+#    exec 失败（与 check-dockerfile-copy-manifest.sh 的阶段切块同理，该脚本
+#    的头注释记录了「前一阶段满足断言 → 假绿」的事故形态）。
+last_from_line="$(grep -nE '^[[:space:]]*FROM[[:space:]]' "$dockerfile" | tail -1 | cut -d: -f1)"
+if [[ -z "$last_from_line" ]]; then
+  echo "FAIL: $dockerfile 里没有 FROM 指令——最终镜像阶段无法确定，exec 目标校验会空转" >&2
+  exit 1
+fi
 image_paths="$(
-  awk '
+  awk -v last_from="$last_from_line" '
     BEGIN { buf = "" }
     {
       line = $0
@@ -72,6 +83,7 @@ image_paths="$(
         next
       }
       if (line ~ /^[ \t]*#/) next
+      if (FNR < last_from) next
       if (toupper(line) ~ /^[ \t]*COPY[ \t]/) {
         if (line ~ /\\[ \t]*$/) {
           sub(/\\[ \t]*$/, "", line)

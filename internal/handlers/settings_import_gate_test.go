@@ -75,8 +75,23 @@ func TestSettingsWrites409DuringImport(t *testing.T) {
 			t.Fatalf("%s %s status=%d body=%s, want 409（导入窗口内设置写端点必须 fast-fail）",
 				call.method, call.path, recorder.Code, recorder.Body.String())
 		}
-		if !strings.Contains(recorder.Body.String(), "配置导入进行中") {
-			t.Fatalf("%s %s body=%s, want 配置导入进行中 文案", call.method, call.path, recorder.Body.String())
+		// 文案收紧为单次前缀 + 动作词：action 只传短动作词，拼接后不得重复
+		// 「配置导入进行中」（重启端点曾传「执行服务重启（配置导入进行中）」）。
+		if got := strings.Count(recorder.Body.String(), "配置导入进行中"); got != 1 {
+			t.Fatalf("%s %s body=%s, want 恰好一次「配置导入进行中」（got %d）",
+				call.method, call.path, recorder.Body.String(), got)
+		}
+	}
+	// 重启端点的完整文案与同族一致：前缀 + 纯动作词。
+	for _, call := range calls {
+		if call.path != "/system/restart" {
+			continue
+		}
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(call.method, call.path, nil)
+		router.ServeHTTP(recorder, request)
+		if !strings.Contains(recorder.Body.String(), "暂不能执行服务重启") || strings.Contains(recorder.Body.String(), "（") {
+			t.Fatalf("POST /system/restart body=%s, want「配置导入进行中，暂不能执行服务重启」（无重复短语）", recorder.Body.String())
 		}
 	}
 

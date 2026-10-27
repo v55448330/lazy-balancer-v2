@@ -117,3 +117,42 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 		t.Fatalf("autoban tracked IPs=%d, want 0（代际重放不得二次喂计数器）", got)
 	}
 }
+
+// 代际重放同样必须复位 messages_dropped 累计：同一份 audit.log 会被从头再解析
+// 一遍，每行按其行内 messages_dropped 递增进程级计数——不清零则历史丢弃量被
+// 二次累计（健康快照虚高到两倍，排障高估写侧截断规模）。契约：重放后该值等于
+// 单遍真实总量。
+func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.T) {
+	logPath, offsetPath := stallSetup(t)
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	// Given：登记当前代际（首次只见证、不复位），并预置上一代已披露的截断量。
+	if _, err := tailer.securityEventsGenerationGuard(0); err != nil {
+		t.Fatalf("first guard: %v", err)
+	}
+	securityEventsMessagesDropped.Store(4)
+	t.Cleanup(func() { securityEventsMessagesDropped.Store(0) })
+
+	// When：metrics 库隔离重建（新代际）→ 代际复位 + 整份日志重放。
+	oldMetrics := db.MetricsDB
+	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
+		t.Fatalf("initialize rebuilt metrics db: %v", err)
+	}
+	t.Cleanup(func() {
+		if db.MetricsDB != nil && db.MetricsDB != oldMetrics {
+			_ = db.MetricsDB.Close()
+		}
+		db.MetricsDB = oldMetrics
+	})
+	offset, err := tailer.securityEventsGenerationGuard(4096)
+
+	// Then
+	if err != nil {
+		t.Fatalf("guard after rebuild: %v", err)
+	}
+	if offset != 0 {
+		t.Fatalf("offset=%d, want 0（代际复位）", offset)
+	}
+	if got := securityEventsMessagesDropped.Load(); got != 0 {
+		t.Fatalf("messages_dropped=%d, want 0（重放前必须清零，否则历史截断量被二次累计）", got)
+	}
+}

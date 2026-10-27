@@ -10,6 +10,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,5 +95,24 @@ func TestSyncService_applySnapshot_reload_holds_caddy_op_lock(t *testing.T) {
 	loadMu.Unlock()
 	if finalLoads != 1 {
 		t.Fatalf("Caddy /load 次数=%d, want 1（重载请求必须真实发出）", finalLoads)
+	}
+}
+
+// 重载段渲染源必须绑定 SyncService 自身句柄：GenerateCaddyConfig() 恒用包级
+// db.DB，多库形态（测试网关/嵌入式多实例）会把 A 库快照提交后按 B 库内容
+// 渲染并 /load（写入 A、渲染 B，静默错配）。生产单库装配（s.db==db.DB）与
+// 任意 db.DB 构造的夹具都观察不到差异——行为断言不可达，故用机制级钉测
+// 固定调用形态（与 render_anti_fallback_scan_test 同口径）。
+func TestSyncService_applySnapshot_renderUsesServiceDBHandle(t *testing.T) {
+	source, err := os.ReadFile("cluster_apply.go")
+	if err != nil {
+		t.Fatalf("read cluster_apply.go: %v", err)
+	}
+	text := string(source)
+	if strings.Contains(text, "ApplyConfigForce(GenerateCaddyConfig())") {
+		t.Fatal("applySnapshot 重载段用包级 db.DB 渲染（多库形态会写入 A 库、渲染 B 库）")
+	}
+	if !strings.Contains(text, "generateCaddyConfigWithCertSource(s.db, s.db, true)") {
+		t.Fatal("applySnapshot 重载段必须用服务句柄渲染：generateCaddyConfigWithCertSource(s.db, s.db, true)")
 	}
 }

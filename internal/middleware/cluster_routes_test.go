@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,8 +23,26 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// newMiddlewareTestRouter 用随机空闲端口而非固定 8000：SetupRouter 用它拼
+// MCP 内部转发 base URL（http://127.0.0.1:<port>/api/v1），固定 8000 在开发机
+// 面板容器常驻监听时会让 tools/call 用例跨进程转发到宿主机真实面板。需要
+// 真实转发的用例改走 newMiddlewareTestRouterAtPort 注入自己的 listener 端口。
 func newMiddlewareTestRouter(t *testing.T) *gin.Engine {
-	return newMiddlewareTestRouterAtPort(t, 8000)
+	return newMiddlewareTestRouterAtPort(t, freeTestPort(t))
+}
+
+// freeTestPort 取一个当前空闲的 127.0.0.1 端口（监听后立即释放）。
+func freeTestPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate free port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release free port: %v", err)
+	}
+	return port
 }
 
 func newMiddlewareTestRouterAtPort(t *testing.T, port int) *gin.Engine {
@@ -391,6 +410,10 @@ func TestUpdateClusterNodeAccessURL(t *testing.T) {
 
 func TestClusterLoginTicketSignsAndLogsIntoSlave(t *testing.T) {
 	router := newMiddlewareTestRouter(t)
+	// 预算敏感：本用例已用掉 login 族 10/min/IP 中的 1 次（ticket-login 与
+	// login/mfa-verify 同桶，httptest RemoteAddr 恒 192.0.2.1）；不隔离时
+	// -count=2 或同包其它用例的登录族调用会把窗口占满 → 与实现无关的 429 假红。
+	withIsolatedRateLimitBuckets(t)
 	key := "lb_sk_ticket-admin-secret"
 	clusterToken := "lb_cluster_ticket-secret"
 	addClusterRouteTestAPIKey(t, 103, "ticket-admin", "admin", key)
@@ -444,8 +467,10 @@ func TestClusterRoutesAcceptAdminAPIKey(t *testing.T) {
 		{http.MethodPost, "/api/v1/cluster/sync/pull"},
 	} {
 		recorder := requestWithAPIKey(router, test.method, test.path, key)
-		if recorder.Code == http.StatusUnauthorized {
-			t.Errorf("%s %s returned 401 for admin API key: %s", test.method, test.path, recorder.Body.String())
+		// 断言「管理员身份被接受」：401（未认证）与 403（角色门误判/次序错置）
+		// 都属失败——此前只挡 401，adminOnly/readOnlyGuard 次序错置时本用例仍绿。
+		if recorder.Code == http.StatusUnauthorized || recorder.Code == http.StatusForbidden {
+			t.Errorf("%s %s rejected admin API key: status=%d body=%s", test.method, test.path, recorder.Code, recorder.Body.String())
 		}
 	}
 }

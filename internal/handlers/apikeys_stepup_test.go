@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -218,6 +219,39 @@ func TestUpdateAPIKeyStatus_enablingPrivilegedKeyRequiresStepUp(t *testing.T) {
 	}
 	if rec := serveAPIKeyStatusUpdate(h, "12", `{"is_enabled":true}`); rec.Code == http.StatusPreconditionRequired {
 		t.Fatalf("启用只读 Key 不构成特权变更（不得 428）: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// 带外 NULL is_enabled 行：鉴权侧裸比较恒 401（运行期即未启用），而列表
+// COALESCE 显示「启用」。更新侧 step-up 判据必须与鉴权侧同口径——否则
+// 提交 {"is_enabled":true} 会把「恒 401 的可写 Key」真正激活却不要求 step-up。
+func TestUpdateAPIKeyStatus_nullEnabledRowActivationRequiresStepUp(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin','x','admin',1)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// 可写（read_only=0）+ is_enabled IS NULL（仅带外改库/导入遗留可造出）。
+	if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,mcp_enabled) VALUES (13,'n','h13','p',1,NULL,0,0)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret='JBSWY3DPEHPK3PXP' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET mfa_write_guard=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("UPDATE global_config SET mfa_write_guard=0 WHERE id=1") })
+
+	if rec := serveAPIKeyStatusUpdate(h, "13", `{"is_enabled":true}`); rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("NULL→1 激活可写 Key 必须要求 step-up: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 拒绝时库内零改动（仍为 NULL——不是部分写）。
+	var enabled sql.NullInt64
+	if err := db.DB.QueryRow("SELECT is_enabled FROM api_keys WHERE id=13").Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Valid {
+		t.Fatalf("is_enabled=%v, want NULL（step-up 拒绝期间不得写入）", enabled.Int64)
 	}
 }
 

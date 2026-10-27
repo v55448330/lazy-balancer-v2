@@ -21,11 +21,13 @@ import {
   extractCrsRuleSnippet,
   formatAclModeDetail,
   hasIPACLControl,
+  hasTrustDetectionBinding,
   inferPolicyType,
   invalidateSharedEntriesCache,
   isTrustExemptionCandidate,
   isWafDurationFamily,
   missingSharedEntryIds,
+  pickDefaultPolicyTab,
   triggerStageFamily,
   trustHitMode,
   type SecurityStageBinding,
@@ -34,6 +36,7 @@ import {
   type SecurityStagePolicy,
   type StageDetailSources,
 } from '../src/utils/securityStages.ts'
+import { trustEnabledForPolicyType } from '../src/utils/policyPayload.ts'
 import { code, section } from './_helpers.ts'
 
 const policyOf = (overrides: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy => ({
@@ -551,11 +554,6 @@ test('多策略绑定链：同阶段两条策略出两组且按绑定顺序编�
   assert.equal(model.stages[0].override, null)
   assert.equal(model.stages[0].enabled, false)
 })
-
-
-// ── 信任降级 / 信任生效 / 列表默认 tab 的补充验收 ──
-import { hasTrustDetectionBinding, pickDefaultPolicyTab } from '../src/utils/securityStages.ts'
-import { trustEnabledForPolicyType } from '../src/utils/policyPayload.ts'
 
 test('fs96-01 阶段 1 脚注降级判定：混合策略存量信任同样降级，不得按 policy_type 等值漏判', () => {
   const bound = new Set([1])

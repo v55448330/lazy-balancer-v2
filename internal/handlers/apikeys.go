@@ -430,17 +430,27 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	// 审计 delta 需要变更前的键状态（启用态/MCP/只读/
 	// 白名单），与更新同条件取行（currentUserOnly 时限定创建者）。
-	query := "SELECT name, COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id = ?"
+	// 启用态取裸列（非 COALESCE）：鉴权侧 db.ResolveAPIKeyIdentity 对
+	// is_enabled 裸比较，NULL 恒 401 即运行期「未启用」；step-up 判据与审计
+	// delta 必须同口径，否则带外 NULL 行被 NULL→1 真正激活时既不判
+	// enablePrivileged 也不记变更（列表 COALESCE 显示「启用」为有意设计，
+	// 属展示面，不参与本判定）。
+	query := "SELECT name, is_enabled, COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id = ?"
 	args := []any{id}
 	if currentUserOnly {
 		query += " AND created_by = ?"
 		args = append(args, userID)
 	}
 	var name string
-	var beforeEnabled, beforeMCPEnabled, beforeReadOnly int
+	var beforeEnabledRaw sql.NullInt64
+	var beforeMCPEnabled, beforeReadOnly int
 	var beforeWhitelist string
-	if err := db.DB.QueryRow(query, args...).Scan(&name, &beforeEnabled, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
+	if err := db.DB.QueryRow(query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
+	}
+	beforeEnabled := 0
+	if beforeEnabledRaw.Valid && beforeEnabledRaw.Int64 != 0 {
+		beforeEnabled = 1
 	}
 	// 特权变更（收回只读/开启 MCP/实际白名单变化）与创建侧同构走
 	// requireAPIKeyStepUp（判定/响应单源）。此集合是「守卫开关读失败」场景下

@@ -183,3 +183,63 @@ func TestBuiltinBlockPageSpecsAndIdentitiesStayInSync(t *testing.T) {
 		}
 	}
 }
+
+// API 不接受 is_builtin 与显式 id：INSERT 列清单不含这两列，静默丢弃会让调用方
+// 以为「已创建内置页/指定了 id」，实际落普通行（伪造内置页本需备份导入门）。
+// 与 is_default 同口径：显式拒绝并点名原因。
+func TestCreateSecurityBlockPage_rejectsBuiltinAndExplicitID(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newBlockPageContentTypeRouter(t)
+	before := countBlockPages(t)
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		wantText string
+	}{
+		{"builtin", `{"name":"伪内置页","content":"x","is_builtin":true}`, "内置拦截页由系统管理"},
+		{"explicit-id", `{"name":"指定ID页","content":"x","id":42}`, "拦截页 ID 由系统分配"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := blockPageRequest(t, router, http.MethodPost, "/security/block-pages", tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantText) {
+				t.Fatalf("body=%s, want 含 %q", rec.Body.String(), tc.wantText)
+			}
+			if after := countBlockPages(t); after != before {
+				t.Fatalf("拒绝路径落库了行：before=%d after=%d", before, after)
+			}
+		})
+	}
+	var builtinRows int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE is_builtin=1`).Scan(&builtinRows); err != nil {
+		t.Fatal(err)
+	}
+	if builtinRows == 0 {
+		t.Fatal("夹具失效：内置页应有播种行")
+	}
+
+	// 回归形状：普通创建仍 200 且落普通行
+	rec := blockPageRequest(t, router, http.MethodPost, "/security/block-pages", `{"name":"普通页","content":"x"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("normal create status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var isBuiltin bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(is_builtin,0) FROM security_block_pages WHERE name='普通页'`).Scan(&isBuiltin); err != nil {
+		t.Fatal(err)
+	}
+	if isBuiltin {
+		t.Fatal("普通创建不得落 is_builtin=1")
+	}
+}
+
+func countBlockPages(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages`).Scan(&n); err != nil {
+		t.Fatalf("count block pages: %v", err)
+	}
+	return n
+}

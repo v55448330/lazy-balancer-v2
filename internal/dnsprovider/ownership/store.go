@@ -43,6 +43,12 @@ const StaleOwnershipAge = 75 * time.Minute
 // FQDN/记录 ID/账户摘要）。超过保留期的已归属条目在下一次写入时退役（只动本地
 // 文件，不触碰远端 DNS，避免误删并发实例仍在使用的记录）；无法证明年龄的
 // legacy 条目（CreatedAt 零值）保留，由 DecideRemoval 的保守口径处理。
+//
+// 已知后果（有意保留，记录于此避免被当成遗漏）：条目退役后远端 TXT 不再被账本
+// 追踪——删除连续失败（provider 5xx/权限错误/换凭据后的 DispositionDrop）超过
+// 保留期的记录只能靠后续签发按值/stale 偶然回收（同名不同值则不会回收）。退役
+// 日志已明示该残留，运维需要时按日志人工清理；不延长保留期是因为「延长」只会
+// 让无法证明归属的条目更久地滞留在明文账本里，并不能提升回收成功率。
 const OwnershipRetention = 30 * 24 * time.Hour
 
 var fileMu sync.Mutex
@@ -397,7 +403,10 @@ func (s *Store) save(current state) error {
 		if retired > 0 {
 			// 条目消失属于可观测事件：单行、只报条数与保留期（不打印 FQDN/记录
 			// ID——账本落盘已是明文，运行日志不再额外扩散用户数据）。
-			logf("info", "DNS ownership: 退役 %d 条超过 %d 天保留期的账本条目（仅本地文件，未触碰远端 DNS）",
+			// 同时必须写明运维含义：按构造，能留在账本里超过保留期的条目都是
+			// 「删除未确认」的（成功删除的条目早已 Remove），退役只动本地文件，
+			// 远端 _acme-challenge TXT 可能继续存在，需要人工到 DNS 区核对。
+			logf("info", "DNS ownership: 退役 %d 条超过 %d 天保留期的账本条目（仅本地文件，未触碰远端 DNS；这些条目从未确认删除成功，远端 _acme-challenge TXT 可能仍残留，必要时人工清理）",
 				retired, int(OwnershipRetention.Hours()/24))
 		}
 	}

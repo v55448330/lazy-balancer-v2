@@ -459,3 +459,148 @@ func TestRejectsForgedSystemIPListNames(t *testing.T) {
 		})
 	}
 }
+
+// 导入侧备注控制字符门与保存侧单源（hasIPListRemarkControlChar）：备注里的
+// 换行会在导出 TXT 里造出「伪条目」（再当名单导入即误加 IP），制表/回车同样
+// 破坏行结构；且该行随后任何保存/改名都会被保存侧同一门 400 挡死。
+func TestImportConfigBackup_rejectsIPListRemarkControlChars(t *testing.T) {
+	for _, tt := range []struct{ name, remark string }{
+		{"newline", "a\n1.2.3.5 b"},
+		{"tab", "a\tb"},
+		{"cr", "a\rb"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			entries := fmt.Sprintf(`[{"value":"10.0.0.1","remark":%q}]`, tt.remark)
+			backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+				"security_ip_lists": {{"id": 1, "name": "ctrl-remark", "entries": entries}},
+			}, EmptyConfigIfNil: true})
+
+			response := postBackupImport(t, h, backup)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+			for _, want := range []string{"安全 IP 列表 #1 条目 #1", "备注不能包含换行"} {
+				if !strings.Contains(response.Body.String(), want) {
+					t.Fatalf("rejection must name %q: %s", want, response.Body.String())
+				}
+			}
+			var rows int
+			if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name='ctrl-remark'`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 0 {
+				t.Fatalf("拒绝路径不得落库，实际 %d 行", rows)
+			}
+		})
+	}
+
+	// 回归形状：合法备注照常导入
+	h := newBackupTestHandlers(t)
+	backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+		"security_ip_lists": {{"id": 1, "name": "plain-remark", "entries": `[{"value":"10.0.0.1","remark":"正常备注"}]`}},
+	}, EmptyConfigIfNil: true})
+	if response := postBackupImport(t, h, backup); response.Code != http.StatusOK {
+		t.Fatalf("合法备注 status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+// 策略↔IP 名单配对的反方向（导入锁内轴）：名单表随包替换、策略表缺席时，
+// live 策略的名单引用必须按「导入后名单集合」复核。初检只遍历备份携带的两表
+// 行——策略不在包内=零覆盖，而名单表是全量 delete+insert（restoreTable 保留
+// 原 id）：同 id 内容整份换人，策略生效/放行 IP 集合静默改变（黑名单失效或
+// 白名单放行），UI 仍显示已绑定、零告警零审计。
+func TestImport_livePolicyListRefsDanglingWhenListsReplaced(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	// Given：live 策略的 ACL 轴引用 live 名单（备份里没有这个 id）
+	liveListID := seedIPListRow(t, "live-acl", `[{"value":"198.51.100.0/24","remark":""}]`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled,ip_acl_enabled,ip_acl_mode,ip_acl_list_refs) VALUES (5,'办公网策略','blocking',1,1,'deny',?)`,
+		fmt.Sprintf("[%d]", liveListID)); err != nil {
+		t.Fatal(err)
+	}
+	backup := buildBackup(t, backupFixtureOptions{
+		FillAll: true,
+		Omit:    map[string]struct{}{"security_policies": {}},
+		Tables: map[string][]map[string]any{
+			"security_ip_lists": {{"id": 9001, "name": "replacement", "entries": `[{"value":"10.0.0.1","remark":""}]`}},
+		},
+		EmptyConfigIfNil: true,
+	})
+
+	// When
+	response := postBackupImport(t, h, backup)
+
+	// Then：400 点名策略与名单 id（不得放行「已绑定但语义换人」）
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "办公网策略") || !strings.Contains(body, fmt.Sprintf("#%d", liveListID)) {
+		t.Fatalf("body=%s, want 点名策略与名单 #%d", body, liveListID)
+	}
+	// 拒绝路径不得落库：live 名单仍在
+	var still int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE id=?`, liveListID).Scan(&still); err != nil {
+		t.Fatal(err)
+	}
+	if still != 1 {
+		t.Fatalf("拒绝路径不得替换名单表，实际 live 名单行数=%d", still)
+	}
+}
+
+// crs_excluded_rules 作用域条目的 listRefs 同属策略引用面（与删除守卫同集合）：
+// 名单替换后该引用悬空同样必须 400——只看 ip_acl/ip_whitelist 两列会漏这条面。
+func TestImport_livePolicyCRSExclusionListRefsDanglingWhenListsReplaced(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	liveListID := seedIPListRow(t, "live-crs-scope", `[{"value":"203.0.113.0/24","remark":""}]`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled,crs_excluded_rules) VALUES (6,'排除条目策略','blocking',1,?)`,
+		fmt.Sprintf(`[{"target":"942100","scope":"ip","ips":"","listRefs":[%d]}]`, liveListID)); err != nil {
+		t.Fatal(err)
+	}
+	backup := buildBackup(t, backupFixtureOptions{
+		FillAll: true,
+		Omit:    map[string]struct{}{"security_policies": {}},
+		Tables: map[string][]map[string]any{
+			"security_ip_lists": {{"id": 9002, "name": "replacement-2", "entries": `[{"value":"10.0.0.2","remark":""}]`}},
+		},
+		EmptyConfigIfNil: true,
+	})
+
+	response := postBackupImport(t, h, backup)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400（crs 排除条目 listRefs 悬空）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "排除条目策略") {
+		t.Fatalf("body=%s, want 点名策略", response.Body.String())
+	}
+}
+
+// 正形状（防过度拒绝）：备份名单集合覆盖 live 策略的全部引用 id 时放行——
+// 同 id 保留=配对语义不变，替换其他名单不影响该策略。
+func TestImport_livePolicyListRefsCoveredByCarriedListsPasses(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	liveListID := seedIPListRow(t, "live-covered", `[{"value":"198.51.100.0/24","remark":""}]`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled,ip_acl_enabled,ip_acl_mode,ip_acl_list_refs) VALUES (7,'覆盖策略','blocking',1,1,'deny',?)`,
+		fmt.Sprintf("[%d]", liveListID)); err != nil {
+		t.Fatal(err)
+	}
+	backup := buildBackup(t, backupFixtureOptions{
+		FillAll: true,
+		Omit:    map[string]struct{}{"security_policies": {}},
+		Tables: map[string][]map[string]any{
+			"security_ip_lists": {
+				{"id": liveListID, "name": "live-covered", "entries": `[{"value":"198.51.100.0/24","remark":""}]`},
+				{"id": 9003, "name": "extra", "entries": `[{"value":"10.0.0.3","remark":""}]`},
+			},
+		},
+		EmptyConfigIfNil: true,
+	})
+
+	response := postBackupImport(t, h, backup)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（引用 id 全在导入后名单集合内）", response.Code, response.Body.String())
+	}
+}

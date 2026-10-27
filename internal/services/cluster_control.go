@@ -58,8 +58,12 @@ func (s *ClusterService) IssueServiceControlTicket(ctx context.Context, nodeID i
 		}
 		return models.ClusterServiceControlIssue{}, fmt.Errorf("读取服务控制目标节点: %w", err)
 	}
-	if !approved || keyHash == "" {
+	if !approved {
 		return models.ClusterServiceControlIssue{}, ErrNodeNotFound
+	}
+	if keyHash == "" {
+		// 与登录票据同口径：已批准但令牌待交付 → 409 族，不落成「节点不存在」。
+		return models.ClusterServiceControlIssue{}, ErrNodeTokenPending
 	}
 	key, err := hex.DecodeString(keyHash)
 	if err != nil || len(key) != sha256.Size {

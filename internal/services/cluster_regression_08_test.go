@@ -646,8 +646,8 @@ func TestClusterService_GenerateLoginTicket_distinguishesOfflineFromMissing(t *t
 	if _, err := service.GenerateLoginTicket(context.Background(), claims(7), now); !errors.Is(err, ErrNodeOffline) {
 		t.Fatalf("approved-never-reported error=%v, want ErrNodeOffline", err)
 	}
-	if _, err := service.GenerateLoginTicket(context.Background(), claims(8), now); !errors.Is(err, ErrNodeNotFound) {
-		t.Fatalf("missing-credential error=%v, want ErrNodeNotFound (keyHash empty keeps 404)", err)
+	if _, err := service.GenerateLoginTicket(context.Background(), claims(8), now); !errors.Is(err, ErrNodeTokenPending) {
+		t.Fatalf("missing-credential error=%v, want ErrNodeTokenPending（已批准但令牌待交付 ≠ 节点不存在）", err)
 	}
 	if _, err := service.GenerateLoginTicket(context.Background(), claims(9), now); !errors.Is(err, ErrNodeNotFound) {
 		t.Fatalf("not-approved error=%v, want ErrNodeNotFound", err)

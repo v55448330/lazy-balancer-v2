@@ -109,6 +109,15 @@ func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	// SecurityTimingPre 记 pre 后把起始头重写为「预检完成」分段锚点,
 	// SecurityTimingEnd 读锚点计算 logged 事件的 WAF 段耗时)。起始头与 ID 头
 	// 均在 proxyRequestHeaders 删除清单剥离,不上泄上游。
+	//
+	// 先删后设(与 handler.go 的 geoip 控制头同族防御原则):两头的值只在
+	// 本方法注入,客户端携带的同名头一律无效。此前只在 ID 生成成功时才
+	// Set——securityTimingID 失败(crypto/rand 出错)时客户端自带头原样
+	// 流入下游,recordSecurityTiming 只校验 16 字符小写 hex 形态而不校验来源,
+	// 于是客户端可自选计时注册表 key 与起始纳秒(审计行 lb_timing 注入任意
+	// 耗时),该头同时是安全事件的请求级去重键,两个不同请求可被误并。
+	r.Header.Del(securityTimingHeader)
+	r.Header.Del(securityTimingStartHeader)
 	timingID := securityTimingID()
 	var timingStartVal string
 	if timingID != "" {

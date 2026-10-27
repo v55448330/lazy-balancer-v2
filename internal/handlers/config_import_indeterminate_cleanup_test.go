@@ -183,6 +183,7 @@ func TestImportV1_cleanupSummaryReportsPartialFailureWhenCertRemovalFails(t *tes
 }
 
 func TestImportV1_cleanupBudgetStopsPerRuleLoopAndReportsRemaining(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	certDir := t.TempDir()
 	t.Cleanup(services.SetCertDirForTest(certDir))

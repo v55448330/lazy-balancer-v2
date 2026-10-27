@@ -170,15 +170,15 @@ func TestMigrateSystemIPListUniqueIndex_keepsReferencedRowAndRewritesRefs(t *tes
 		t.Fatalf("migrate: %v", err)
 	}
 
-	var survivingID, survivingDesc int
-	var desc string
-	if err := database.QueryRow(`SELECT id, description FROM security_ip_lists WHERE name='威胁情报甲' AND system=1`).Scan(&survivingID, &desc); err != nil {
+	// 只断言存活 id：此前还 Scan 了 description 并配一个从未赋值的
+	// survivingDesc + `_ = survivingDesc`，读起来像存在 description 断言。
+	var survivingID int
+	if err := database.QueryRow(`SELECT id FROM security_ip_lists WHERE name='威胁情报甲' AND system=1`).Scan(&survivingID); err != nil {
 		t.Fatalf("surviving row: %v", err)
 	}
 	if survivingID != earlyID {
 		t.Fatalf("surviving id=%d, want %d（被引用行优先，两个被引用 id 取 MIN）", survivingID, earlyID)
 	}
-	_ = survivingDesc
 	var aclRefs string
 	if err := database.QueryRow(`SELECT ip_acl_list_refs FROM security_policies WHERE name='引用策略'`).Scan(&aclRefs); err != nil {
 		t.Fatalf("read policy refs: %v", err)

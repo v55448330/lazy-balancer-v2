@@ -17,6 +17,20 @@ import (
 	"lazy-balancer-v2/wafiplist"
 )
 
+// ResetCrawlerVerifyCacheForTest 清缓存+换 resolver（测试专用；测试缝只存在于
+// _test.go——生产符号表不得出现只有测试消费的入口）。
+func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
+	crawlerCacheMu.Lock()
+	crawlerCache = make(map[string]crawlerVerifyCache)
+	crawlerCachePruneVisitsForTest = 0
+	crawlerCacheMu.Unlock()
+	if r != nil {
+		crawlerVerifyResolver = r
+	} else {
+		crawlerVerifyResolver = &netResolver{}
+	}
+}
+
 // fakeResolver 可编程 DNS 替身：PTR 与正向结果按表返回。
 type fakeResolver struct {
 	mu      sync.Mutex
@@ -401,6 +415,32 @@ func TestVerifyCrawlerIPRange_invalidAddrNoPanic(t *testing.T) {
 }
 
 // 地址归一化（Unmap/zone），方向 fail-closed ----
+
+// Given: DNS 表只登记 v4 规范形态，4in6 映射形态无 PTR 记录
+// When: 先用 v4 形态验证命中缓存，再用同主机的 4in6 文本形态查询
+// Then: 必须复用同一条缓存（键归一），不得重新解析落到「无 PTR」的确定否定
+// （键取原始串时同一地址拆成两条条目、各跑一次 DNS，且可被同机两种形态
+// 额外占用缓存槽与 DNS 配额）。
+func TestVerifyCrawler_cacheKeyUnifiesV4MappedForms(t *testing.T) {
+	ResetCrawlerVerifyCacheForTest(&fakeResolver{
+		ptr: map[string][]string{
+			"66.249.66.1": {"crawl-66-249-66-1.googlebot.com."},
+		},
+		host: map[string][]string{
+			"crawl-66-249-66-1.googlebot.com": {"66.249.66.1"},
+		},
+	})
+	if got := VerifyCrawler("66.249.66.1", "googlebot"); got != CrawlerVerdictVerified {
+		t.Fatalf("v4 形态验证=%v, want Verified", got)
+	}
+	if got := VerifyCrawler("::ffff:66.249.66.1", "googlebot"); got != CrawlerVerdictVerified {
+		t.Fatalf("4in6 同主机形态=%v, want Verified（缓存键必须 Unmap 归一，DNS 表里没有映射形态条目）", got)
+	}
+	// 回归形状：不可解析输入仍 fail-closed（键沿用原串不影响结论）。
+	if got := VerifyCrawler("not-an-ip", "googlebot"); got != CrawlerVerdictSpoof {
+		t.Fatalf("不可解析输入=%v, want Spoof", got)
+	}
+}
 
 // Given: 客户端 IP 为 4in6 映射形态，PTR 属引擎官方域，正向回验返回 v4 规范串
 // When: 双跳验证

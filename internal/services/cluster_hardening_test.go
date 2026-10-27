@@ -289,8 +289,8 @@ func TestClusterHandleProbe_timeoutKeepsRegistrationsUntilConsecutiveStrikes(t *
 	if got := clusterServicesFor(database); len(got) != 0 {
 		t.Fatalf("连续 %d 次探活失败后登记项仍在: %v", clusterHandleUnverifiedStrikes, got)
 	}
-	if _, ok := clusterHandleStrikes[database]; ok {
-		t.Fatal("剔除后探活计数未复位（全局表残留已关闭句柄键）")
+	if got := clusterHandleStrikeCount(database); got != 0 {
+		t.Fatalf("剔除后探活计数未复位（全局表残留已关闭句柄键，count=%d）", got)
 	}
 }
 

@@ -276,14 +276,16 @@ func TestJWTAuth_splitsExpiredVsInvalidMessages(t *testing.T) {
 func TestJWTAuth_rejects_username_mismatch_for_same_user_id(t *testing.T) {
 	// Given
 	cfg := &config.Config{JWTSecret: "username-secret"}
-	oldDB := db.DB
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// db.Close() 会把 AuditDB/MetricsDB 一并关闭并置 nil——收尾必须走
+		// 单源 helper，否则本用例之后包级句柄恒为 nil（后续直读 db.AuditDB 的
+		// 用例只在「先经 Initialize」时侥幸绿，-shuffle 下会 nil 解引用）。
 		_ = db.Close()
-		db.DB = oldDB
-		db.SetDB(oldDB)
+		restoreTestDBHandles(oldDB, oldMetricsDB, oldAuditDB)
 	})
 	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (12,'current-name','hash','admin',1,0)"); err != nil {
 		t.Fatal(err)

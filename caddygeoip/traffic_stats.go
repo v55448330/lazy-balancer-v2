@@ -107,6 +107,10 @@ func trafficCountryKeyValid(country string) bool {
 	return true
 }
 
+// trafficCountryDropped 记录因满员被丢弃的新国名键累计数（可观测面：
+// 大屏少计不再无声——满员时 countries 桶缺该国家而快照无任何信号）。
+var trafficCountryDropped atomic.Uint64
+
 func trafficEntryFor(country string) *trafficEntry {
 	trafficMu.RLock()
 	e := trafficCountries[country]
@@ -115,16 +119,23 @@ func trafficEntryFor(country string) *trafficEntry {
 		return e
 	}
 	trafficMu.Lock()
-	defer trafficMu.Unlock()
 	if e = trafficCountries[country]; e == nil {
 		// 硬上限兜底：即使未来新增其他调用源，也不能让国家键无界增长。
 		// 满员只丢新键，已有国家继续精确计数。
 		if len(trafficCountries) >= trafficCountryLimit {
+			trafficMu.Unlock()
+			trafficCountryDropped.Add(1)
+			// 首报即记 + 窗口抑制（复用快照加载族的节流实现）：满员是持续态，
+			// 不节流会按请求速率刷屏；状态变化不需要区分，永久满员只需一条/分钟。
+			crawlerSnapshotLogfThrottled("traffic-countries", "full",
+				"traffic stats country bucket full (limit %d), new country %q dropped (dropped_total=%d)",
+				trafficCountryLimit, country, trafficCountryDropped.Load())
 			return nil
 		}
 		e = &trafficEntry{}
 		trafficCountries[country] = e
 	}
+	trafficMu.Unlock()
 	return e
 }
 

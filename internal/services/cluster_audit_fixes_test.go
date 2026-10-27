@@ -530,3 +530,47 @@ func TestSyncService_applySnapshot_preservesLocalLastLoginAndAPIKeyLastUsed(t *t
 		t.Fatalf("last_used=%v after replay, want %q preserved", gotKeyUsed, localLogin)
 	}
 }
+
+// locked_users 载荷的时间串必须先归一为平面 UTC 再参与比较：applyLockedUsers
+// 的「只延长」判定是 SQL 字符串比较（login_locked_until < ?），正确性依赖两端
+// 同为 'YYYY-MM-DD HH:MM:SS'。旧主端/带外形态下发 RFC3339（'T' > 空格）时会被
+// 判为「更晚」而把本地锁改成非平面形态（后续 loginLockedNow 的字符串比较与
+// 前端展示同时失真）；无法解析的形态则完全不可信。
+func TestApplyLockedUsers_normalizesPayloadTimestamp(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ctx := context.Background()
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,login_locked_until)
+		VALUES (1,'rf3339','hash','user','2020-01-01 00:00:00'),(2,'garbage','hash','user','2020-01-01 00:00:00')`); err != nil {
+		t.Fatalf("seed users: %v", err)
+	}
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	locked := []models.ClusterLockedUser{
+		// RFC3339 形态（旧主端/带外）：必须归一后落库。
+		{Username: "rf3339", LockedUntil: "2030-01-01T00:00:00Z"},
+		// 完全不可解析：不可信，保留本地锁（fail-closed 方向=不缩短）。
+		{Username: "garbage", LockedUntil: "not-a-timestamp"},
+	}
+	if err := applyLockedUsers(ctx, tx, locked); err != nil {
+		t.Fatalf("applyLockedUsers: %v", err)
+	}
+
+	var normalized string
+	if err := tx.QueryRowContext(ctx, "SELECT login_locked_until FROM users WHERE username='rf3339'").Scan(&normalized); err != nil {
+		t.Fatal(err)
+	}
+	if normalized != "2030-01-01 00:00:00" {
+		t.Fatalf("login_locked_until=%q, want 平面 UTC \"2030-01-01 00:00:00\"（非平面形态会让后续字符串比较失真）", normalized)
+	}
+	var untouched string
+	if err := tx.QueryRowContext(ctx, "SELECT login_locked_until FROM users WHERE username='garbage'").Scan(&untouched); err != nil {
+		t.Fatal(err)
+	}
+	if untouched != "2020-01-01 00:00:00" {
+		t.Fatalf("不可解析载荷不得改写本地锁（got %q）", untouched)
+	}
+}

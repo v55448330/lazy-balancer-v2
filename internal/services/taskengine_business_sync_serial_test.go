@@ -158,7 +158,7 @@ func TestAutobanEnabledState_readFailureLeavesWarnTrace(t *testing.T) {
 	if _, known := autobanEnabledState(); !known {
 		t.Fatal("读恢复后必须可判定")
 	}
-	if got := strings.Count(buf.String(), "读取任务排程已恢复（schedule-read-autoban-enabled）"); got != 1 {
+	if got := strings.Count(buf.String(), "读取配置已恢复（schedule-read-autoban-enabled）"); got != 1 {
 		t.Fatalf("恢复留痕次数=%d, want 1\n%s", got, buf.String())
 	}
 }

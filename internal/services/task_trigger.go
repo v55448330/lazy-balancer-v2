@@ -65,9 +65,11 @@ func RecordTaskTriggerResult(taskID string, actx TriggerAuditContext, runErr err
 		return
 	}
 	if errors.Is(runErr, taskengine.ErrAlreadyRunning) || errors.Is(runErr, taskengine.ErrTaskSkipped) ||
-		errors.Is(runErr, taskengine.ErrRunCancelled) || errors.Is(runErr, context.Canceled) {
+		errors.Is(runErr, taskengine.ErrRunCancelled) || errors.Is(runErr, context.Canceled) ||
+		errors.Is(runErr, taskengine.ErrEngineStopped) {
 		// 用户取消（ErrRunCancelled/context.Canceled）与并发/跳过语义同级——
-		// task_runs 已落 cancelled 行，补记「触发失败」是语义失真。
+		// task_runs 已落 cancelled 行，补记「触发失败」是语义失真。引擎已停止
+		// （关停窗口）同理：admission 拒绝不是任务失败，记「触发失败」误导排障。
 		return
 	}
 	Logf("error", "手动触发任务 %s 失败: %v", taskID, runErr)

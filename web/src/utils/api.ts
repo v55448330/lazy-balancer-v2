@@ -218,11 +218,13 @@ service.interceptors.response.use(
       // 按 status===409 分类的调用方（如 useLibUpdateDialog）将静默绕过分类与
       // 重试逻辑——此契约由 tests/apiErrorContract.spec.ts 钉住现状。
       //
-      // 第三参数与 HTTP 失败分支同形（error.response.data）：失败分支的事实
-      // 披露（导入/还原的 data.warnings 等）只经 ApiRequestError.data 传递，
-      // 两类失败的错误对象形状必须一致，否则改走业务码信封的端点会让消费方
-      // （importFailureReport）静默丢失 warnings。
-      return Promise.reject(new ApiRequestError(res.message || '请求失败', response.status, res.data))
+      // 第三参数与 HTTP 失败分支同形（error.response.data = 完整信封）：失败
+      // 分支的事实披露（导入/还原的 data.warnings 等）只经 ApiRequestError.data
+      // 传递，两类失败的错误对象形状必须一致，否则改走业务码信封的端点会让
+      // 消费方（importFailureReport 读 data.data）静默丢失 warnings。
+      // 此处 `res` 本身就是 response.data（拦截器已解包），故必须传 res 而不是
+      // res.data——后者是载荷，比 HTTP 分支少一层信封。
+      return Promise.reject(new ApiRequestError(res.message || '请求失败', response.status, res))
     }
     return res
   },

@@ -1652,8 +1652,14 @@ const notifyTlsRestarting = (toHttps: boolean) => {
   const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
   // 不盲跳：新进程 HTTPS listener 在完整启动序列后才 bind，固定延时跳转必中连接拒绝窗口
   // 停留当前页，弹窗给出可点击的目标链接，由用户就绪后自行访问。
+  // 用 h() 组合而非危险 HTML 字符串：本文件其余多行提示（还原完成/失败披露/
+  // 导入完成）同范式，HTML 字符串汇点会把未来并入的节点名/后端 message 变成
+  // 注入面（且 ESLint 不拦）。
   ElMessageBox.alert(
-    `已保存，服务正在自动重启（从节点同步后将自动重启生效），就绪后请访问：<a href="${target}" target="_blank" rel="noopener noreferrer" style="word-break: break-all;">${target}</a>`,
+    h('div', [
+      '已保存，服务正在自动重启（从节点同步后将自动重启生效），就绪后请访问：',
+      h('a', { href: target, target: '_blank', rel: 'noopener noreferrer', style: 'word-break: break-all;' }, target),
+    ]),
     '正在重启',
     {
       confirmButtonText: '知道了',
@@ -1661,7 +1667,6 @@ const notifyTlsRestarting = (toHttps: boolean) => {
       showClose: false,
       closeOnClickModal: false,
       closeOnPressEscape: false,
-      dangerouslyUseHTMLString: true,
     },
   )
     .catch((err) => { console.error('TLS restart notification failed:', err) })

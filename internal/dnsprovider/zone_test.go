@@ -51,3 +51,34 @@ func TestResolveZone_table(t *testing.T) {
 		})
 	}
 }
+
+// 公共后缀判定（PSL 单源）：多标签公共后缀与单标签 TLD 都必须命中，注册域
+// （eTLD+1）与更深子域必须不命中。ACME 权威 NS 上溯用该判据拒绝注册局服务器。
+func TestIsPublicSuffix(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"com", true},
+		{"co.uk", true},
+		{"com.cn", true},
+		{"", true},
+		{"example.com", false},
+		{"foo.co.uk", false},
+		{"a.b.example.com.cn", false},
+		{"API.Example.CO.UK", false}, // 大小写不敏感：归一后仍是非后缀
+		{"Co.UK", true},
+	}
+	hit := 0
+	for _, testCase := range cases {
+		if got := IsPublicSuffix(testCase.name); got != testCase.want {
+			t.Errorf("IsPublicSuffix(%q)=%v, want %v", testCase.name, got, testCase.want)
+		}
+		if testCase.want {
+			hit++
+		}
+	}
+	if hit == 0 {
+		t.Fatal("用例集缺少公共后缀样本——判定退化时本测试不会红")
+	}
+}

@@ -69,7 +69,10 @@ func (s *SyncService) Report(ctx context.Context) error {
 	// 状态集必须覆盖部署生命周期——cleanup_dns/cleanup_warning
 	//（JobLifecycle=Downloaded）材料已落库、待部署，此前漏计会与规则页/任务
 	// 页的到期口径分叉（状态集单源见 jobstate.go 的 DeploymentLifecycleJobStatusSQL）。
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','failed',`+DeploymentLifecycleJobStatusSQL+`) AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now','+`+expiryModifier+` days')`).Scan(&expiringCount); err != nil {
+	// 下界 `> now` 必须与上界同时存在：expired 与 expiring 在
+	// CertificateExpiryStatus 里互斥（先判 expired），只有上界会把数月前就过期、
+	// 尚未续期的行算成「临期」，健康卡数字虚高且与规则页状态矛盾。
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','failed',`+DeploymentLifecycleJobStatusSQL+`) AND expires_at IS NOT NULL AND datetime(expires_at)>datetime('now') AND datetime(expires_at)<=datetime('now','+`+expiryModifier+` days')`).Scan(&expiringCount); err != nil {
 		return fmt.Errorf("统计即将到期证书: %w", err)
 	}
 	// 构造契约允许 caddy=nil（测试/独立运维路径）；nil 下按
@@ -297,12 +300,25 @@ func libraryVersionSegmentNumber(segment string) (float64, bool) {
 // splitLibraryVersion 与前端一致：只剥前导 'v'，按 '.'/'-' 分段，不预裁剪
 // 整串空白（空白段由 libraryVersionSegmentNumber 的数值化容错吸收，非数字段
 // 的字符串兜底保持原样，与 JS 侧同形）。
+//
+// 必须保留空段：JS 侧用 String.split(/[.-]/)，连续/前导/尾随分隔符会产出空串
+// 段（JS 侧 Number(空串) === 0）。此前用 strings.FieldsFunc 丢弃空段，`1..2` 被读成
+// [1,2] 而 JS 读成 [1,0,2]，同一库在两侧选出不同「最近版本」（跨栈夹具
+// version-compare.tsv 已补该形态）。
 func splitLibraryVersion(version string) []string {
 	version = strings.TrimPrefix(version, "v")
 	if version == "" {
 		return nil
 	}
-	return strings.FieldsFunc(version, func(r rune) bool { return r == '.' || r == '-' })
+	segments := make([]string, 0, 4)
+	start := 0
+	for i, r := range version {
+		if r == '.' || r == '-' {
+			segments = append(segments, version[start:i])
+			start = i + 1
+		}
+	}
+	return append(segments, version[start:])
 }
 
 // reportWafFileVersions 是 BuildWafFileRef 的轻量版本读取:只读

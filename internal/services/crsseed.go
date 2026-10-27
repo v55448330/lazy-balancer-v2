@@ -77,8 +77,11 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) error 
 			// 只按版本标记对账，发现不了这种退化。
 			Logf("info", "crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
 			if err := os.RemoveAll(rulesPath); err != nil {
-				Logf("error", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
-				return nil
+				// 契约：无法清除残缺树=未完成播种，必须上抛（与「播种后写
+				// VERSION 失败」同一契约）。旧实现返回 nil，上层无法区分
+				// 「已播种」与「未播种」——live 树残缺/缺失时渲染侧对各 Include
+				// 走「缺失→warn+跳过」，WAF 只剩 IP 控制面，仅一条 error 日志。
+				return fmt.Errorf("crs seed: 清除残缺 rules 树 %s 失败: %w", rulesPath, err)
 			}
 		}
 	}

@@ -237,13 +237,15 @@
               </div>
               <div class="resource-item">
                 <div class="resource-header">
-                  <span class="resource-label">进程配额</span>
-                  <FieldHelpIcon :content="pidsTooltip" />
-                  <span class="resource-value" :class="pidsValueClass">
+                  <span class="resource-label-group">
+                    <span class="resource-label">进程配额</span>
+                    <FieldHelpIcon :content="pidsTooltip" />
+                  </span>
+                  <span class="resource-value-group">
                     <template v-if="degradedSystemParts.has('pids')">采集失败</template>
                     <template v-else>
-                      {{ pidsUsageLabel(systemMetrics.pids_current, systemMetrics.pids_max) }}
-                      <span v-if="systemMetrics.pids_max > 0" class="resource-total">({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</span>
+                      <span class="resource-value" :class="pidsValueClass">{{ systemMetrics.pids_current }}</span>
+                      <span class="resource-total">/ {{ systemMetrics.pids_max > 0 ? systemMetrics.pids_max : '不限' }}<template v-if="systemMetrics.pids_max > 0"> ({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</template></span>
                     </template>
                   </span>
                 </div>
@@ -494,7 +496,7 @@ import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMe
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
-import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
+import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 
@@ -1285,7 +1287,9 @@ onUnmounted(() => {
 }
 .resource-item { padding: 4px 0; min-width: 0; }
 .resource-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; white-space: nowrap; }
+.resource-label-group { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .resource-label { color: #4b5563; font-size: 13px; white-space: nowrap; }
+.resource-value-group { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; }
 .resource-value { font-size: 14px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .text-blue { color: #3b82f6; }
 .text-purple { color: #8b5cf6; }

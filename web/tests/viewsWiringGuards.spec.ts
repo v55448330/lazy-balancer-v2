@@ -595,6 +595,10 @@ test('集群同步三分类标签单源（父级确认文案与子级开关行�
   for (const [name, text] of [['子级', master], ['父级', settings]] as const) {
     assert.doesNotMatch(text, /sync_users: '系统数据'|sync_rules: '负载均衡规则'|sync_security: '安全防护'/, `${name}仍有第二份字面量`)
   }
+  // 只读态必须显式落到每个开关：`:disabled="item.locked === true"` 恒为 false，
+  // 会压过外层 <el-form :disabled="readOnly">（Element Plus 取 disabled ?? form.disabled），
+  // 从节点/非管理员看到的开关呈可点态，点了被 handleSwitchChange 静默丢弃后回弹。
+  assert.match(master, /:disabled="readOnly \|\| item\.locked === true"/, '只读态必须显式禁用同步开关')
 })
 
 test('策略向导：阶段覆盖编辑态稀疏持有（不得物化库值 seed）', () => {

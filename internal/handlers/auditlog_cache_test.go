@@ -158,7 +158,7 @@ func TestGetAuditLogs_invalidTimezoneLoggedByStateTransitionOnly(t *testing.T) {
 
 	// Then：断言绑定真实日志文案单源（services.LogConfigReadFailure 的固定
 	// 格式）——失败留痕恰 1 条（第二轮状态未变、不再刷屏）。
-	const failureLine = "读取任务排程失败（audit-log-timezone-value）"
+	const failureLine = "读取配置失败（audit-log-timezone-value）"
 	const detailLine = `审计日志筛选时区 "Mars/Phobos" 非法`
 	if got := strings.Count(logs.String(), failureLine); got != 1 {
 		t.Fatalf("状态转换失败留痕 %d 条, want 1（首报去重）: %q", got, logs.String())

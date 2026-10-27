@@ -120,6 +120,15 @@ func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
 			t.Errorf("%s 字段来源交叉接线: %s（键与 RHS 引用的同族字段不一致）", name, problem)
 		}
 	}
+	// Create 适配器刻意豁免「列覆盖」门（见上方注释：显式携带交保存门 400），
+	// 但**赋值来源**必须在面上：23 条 &req.X 接线一次复制粘贴笔误（TLSCert 取
+	// req.TLSKey 之类）就会把 A 列写成 B 列的值，而列覆盖门按设计看不见它，
+	// 保存门只拒绝「非零的 HTTP 专属值」——恰为 0 的错写列会被当成合法。
+	if problems := literalRHSFieldCrossWires(t, file, "createRuleTCPDeadFields", "tcpDeadFields", known); len(problems) > 0 {
+		for _, problem := range problems {
+			t.Errorf("createRuleTCPDeadFields 字段来源交叉接线: %s（键与 RHS 引用的同族字段不一致）", problem)
+		}
+	}
 }
 
 // TestTCPDeadFieldsSaveFamily_fieldsCoveredOrExempted 反向对账（字段 ⊆ SQL ∪ 豁免）：

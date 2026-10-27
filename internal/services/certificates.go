@@ -941,7 +941,7 @@ const deploymentWindowNullSettle = 10 * time.Minute
 // 逐条动作失败（部署重试登记 / 材料丢失行重排）与读失败同权：只写应用日志时
 // 本轮仍报「补扫完成」，而该行实际上没有回到调度器——任务监控看不到仍有证书
 // 工作未恢复（104 轮补建/滞留/续期已聚合，补扫两条路径此处收口）。
-func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, err error) {
+func (s *CertificateService) rescanDroppedDeploymentRetries(gates ...func() error) (rescheduled int, err error) {
 	if db.DB == nil {
 		return 0, nil
 	}
@@ -1015,6 +1015,11 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, 
 	for _, job := range jobs {
 		if !certJobRuleApplicable(job.applicable, job.ruleDomain, job.jobDomain) {
 			continue
+		}
+		// 写前门（逐项）：本路径的两个写面（无材料行转 queued / 登记部署 timer
+		// ——后者到期会写证书文件并重载 Caddy）在降级窗口内必须零写入。
+		if gateErr := runCertWaitingCAWriteGate(gates); gateErr != nil {
+			return rescheduled, errors.Join(err, gateErr)
 		}
 		if !job.hasCertMaterial {
 			// 部署生命周期 + 无材料：不是「等部署」，是「材料根本没落库」——
@@ -1179,6 +1184,10 @@ func withActiveCertServiceTick(taskID, stage string, fn func(s *CertificateServi
 // 服务缺失时**不得记成功**：此时续期链完全停摆（ACME 证书到期无人处理），
 // 必须落可见业务行并返回 ErrTaskSkipped（task_runs=skipped，非成功）。
 func CertRenewalScanOnce() error {
+	if !certScanDatabaseReady() {
+		TaskLogf("cert-renewal-scan", "scan", "数据库未就绪：本轮续期扫描已跳过（装配完成后由周期节拍重试）")
+		return taskengine.ErrTaskSkipped
+	}
 	activeCertService.Lock()
 	svc := activeCertService.svc
 	activeCertService.Unlock()
@@ -1194,6 +1203,10 @@ func CertRenewalScanOnce() error {
 // 停止「证书签发」调度时手动证书没有自动续签，告警是唯一信号，巡检因此照常
 // 执行（服务实例缺失时使用包级去重门）。巡检读失败必须上抛。
 func CertManualCheckOnce() error {
+	if !certScanDatabaseReady() {
+		TaskLogf("cert-manual-poll", "check", "数据库未就绪：本轮手动证书到期检查已跳过（装配完成后由周期节拍重试）")
+		return taskengine.ErrTaskSkipped
+	}
 	activeCertService.Lock()
 	svc := activeCertService.svc
 	activeCertService.Unlock()
@@ -1202,6 +1215,15 @@ func CertManualCheckOnce() error {
 		gate = svc.expiryAlertGate
 	}
 	return runManualCertExpiryCheck(gate)
+}
+
+// certScanDatabaseReady 报告证书域扫描是否具备可执行的数据库：db.DB 未装配
+// （启动早期装配窗口/测试直构顺序）时所有扫描入口统一静默跳过。此前同包口径
+// 分叉——certJobsActive/rescanDroppedDeploymentRetries 等返回安全默认，而
+// CertRenewalScanOnce/CertManualCheckOnce/CertReconcileOnce 直接 deref db.DB，
+// 一旦顺序变化就从「可解释的降级」变成 nil panic。
+func certScanDatabaseReady() bool {
+	return db.DB != nil
 }
 
 // certJobsActive 报告是否存在非终态证书任务（issued/failed/disabled 之外）——
@@ -1222,26 +1244,60 @@ func certJobsActive() bool {
 // CertWaitingCATickOnce CA 等待/滞留补扫（30s 节拍）。
 // 门控（2026-09-29 用户裁定）：无非终态证书任务即退出——零扫描零动作；
 // 孤儿任务均为非终态，门控天然覆盖，不漏扫。
+// 写前门（与 cert-reconcile / cert-renewal-scan 同族）：三路写路径
+// （CA 冷却重排 / 滞留重入队 / 断链部署重建）在每个写点前复用
+// certReconcileWriteGate——本轮窗口内的降级/换主/导入排空/停机必须零写入。
+// 准入时的角色判定在 30s 巡查窗口内会过期：从节点此后仍按主节点身份改写
+// cert_jobs、登记部署 timer（到期写证书文件并重载 Caddy），破坏「从节点零写」
+// 不变式。取消 → 包装后的 ctx 错误（cancelled 终态）；降级 → ErrTaskSkipped。
 // 摘要行只在有真实动作时落盘并携带分项计数——waiting_ca 冷却可长达 3h，
 // 无条件写行会让 30s 轮次空转刷屏（≈2880 行/日）掩盖真正动作行。
 // 三路扫描的读失败必须上抛（task_runs 失败终态）——持续性读故障（schema
 // 漂移/长期 SQLITE_BUSY）下证书恢复会完全停摆，而此前本任务恒报成功，监控
 // 全绿。无动作轮仍不写摘要行（保留零空转语义）；失败轮写一行 failure 摘要。
-func CertWaitingCATickOnce() error {
+func CertWaitingCATickOnce(ctx context.Context) error {
 	if !certJobsActive() {
 		return nil
 	}
+	writeGate := func() error { return certReconcileWriteGate(ctx) }
+	// 中止判定与 CertReconcileOnce 同口径：驱动层可能返回自己的取消包装错误
+	// （errors.Is 不可达，ctx.Err 兜底）。
+	aborted := func(err error) bool {
+		return errors.Is(err, taskengine.ErrTaskSkipped) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			(ctx != nil && ctx.Err() != nil)
+	}
 	var tickErr error
 	withActiveCertServiceTick("cert-waiting-ca", "rescan", func(s *CertificateService) {
-		requeued, disabled, waitingErr := s.requeueWaitingCAJobs()
-		stranded := 0
-		var strandedErr error
-		if qm := GetCAQueueManager(); qm != nil {
-			stranded, strandedErr = qm.requeueStrandedQueuedJobs()
+		var requeued, disabled, stranded, redeployed int
+		var waitingErr, strandedErr, rescanErr error
+		if gateErr := writeGate(); gateErr != nil {
+			waitingErr = gateErr
+		} else {
+			requeued, disabled, waitingErr = s.requeueWaitingCAJobs(writeGate)
 		}
-		redeployed, rescanErr := s.rescanDroppedDeploymentRetries()
+		// 已中止（降级/取消）就不再进入后续写路径——本轮零写入。
+		if !aborted(waitingErr) {
+			if gateErr := writeGate(); gateErr != nil {
+				strandedErr = gateErr
+			} else if qm := GetCAQueueManager(); qm != nil {
+				stranded, strandedErr = qm.requeueStrandedQueuedJobs()
+			}
+		}
+		if !aborted(waitingErr) && !aborted(strandedErr) {
+			if gateErr := writeGate(); gateErr != nil {
+				rescanErr = gateErr
+			} else {
+				redeployed, rescanErr = s.rescanDroppedDeploymentRetries(writeGate)
+			}
+		}
 		tickErr = errors.Join(waitingErr, strandedErr, rescanErr)
 		if tickErr != nil {
+			if aborted(tickErr) {
+				TaskLogf("cert-waiting-ca", "skipped", "补扫中止：%v（部分计数：CA 冷却重排 %d、孤儿禁用 %d、滞留重入队 %d、部署重建 %d——恢复后下一周期重做）",
+					tickErr, requeued, disabled, stranded, redeployed)
+				return
+			}
 			// 失败轮结果不可信：摘要如实标注「部分完成」并附原因。
 			TaskLogf("cert-waiting-ca", "rescan", "补扫失败（部分计数不可信，下一周期重试）：CA 冷却重排 %d、孤儿禁用 %d、滞留重入队 %d、部署重建 %d：%v",
 				requeued, disabled, stranded, redeployed, tickErr)
@@ -1252,6 +1308,15 @@ func CertWaitingCATickOnce() error {
 		}
 	})
 	return tickErr
+}
+
+// runCertWaitingCAWriteGate 执行本轮写前门（未提供 gate 的直连调用=无门：
+// 供测试与 Resume 等非引擎路径复用既有 helper 语义，不改签名形态）。
+func runCertWaitingCAWriteGate(gates []func() error) error {
+	if len(gates) == 0 || gates[0] == nil {
+		return nil
+	}
+	return gates[0]()
 }
 
 // certReconcileRoleRecheckHook 测试缝：每个对账写点前调用一次——用于在
@@ -1357,6 +1422,10 @@ func backfillIssuedCertExpiry(ctx context.Context) (int, error) {
 // 重建/到期回填/孤儿清理/任务补建）各自在写前经 certReconcileWriteGate 复核
 // ——长轮次内节点降级不得继续写库。
 func CertReconcileOnce(ctx context.Context) error {
+	if !certScanDatabaseReady() {
+		TaskLogf("cert-reconcile", "skipped", "数据库未就绪：本轮状态对账已跳过（装配完成后由周期节拍重试）")
+		return taskengine.ErrTaskSkipped
+	}
 	rebuilt, reconcileErr := reconcileMissingCertFiles(ctx, db.DB)
 	filledExpiry, expiryErr := backfillIssuedCertExpiry(ctx)
 	swept, sweepErr := sweepOrphanedCertJobs(ctx)
@@ -1392,16 +1461,30 @@ func CertReconcileOnce(ctx context.Context) error {
 // 返回（冷却到期重排队数, 孤儿禁用数, error）：查询/迭代/关闭/单行读取失败都
 // 必须上抛（调用方 CertWaitingCATickOnce 收敛为 task_runs 失败终态）——此前
 // 读失败只打应用日志并按成功轮记账，证书自动恢复静默停摆。
-func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err error) {
-	qm := GetCAQueueManager()
-	if qm == nil {
-		return 0, 0, nil
-	}
+// waitingCACandidate 是 CA 冷却补扫的一行候选（扫描阶段产物）。
+type waitingCACandidate struct {
+	id           int
+	ruleID       string
+	domain       string
+	caProviderID int
+	ruleDomain   string
+	ruleBound    bool
+}
 
+// scanWaitingCACandidates 在 s.mu 内完成「查询 → 读全量候选 → 关闭结果集」，
+// 逐任务处置与入队留给调用方在锁外执行。
+//
+// 候选谓词与孤儿 sweep 同口径：规则删除/迁移/停用后的 waiting_ca 任务不得重排
+// 签发（ruleBound 由调用方判定）。冷却时刻缺席（ca_available_after IS NULL）的
+// waiting_ca 行同样收进来：正常运行期 markJobWaitingCA 恒写非空冷却时刻，NULL
+// 只可能来自导入/旧备份/带外改库，而这类行此前没有任何周期通道（补扫要求非空、
+// requeueStrandedQueuedJobs 只收 queued、续期扫描只收有到期时间的行），只能在
+// 重启/Resume/手动重试时收敛。沉降阈值 10min 与启动恢复的 deploymentWindowNullSettle
+// 同款：刚被外部写入行不得与在途写侧竞争。
+func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []error, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 与孤儿 sweep 同口径：规则删除/迁移/停用后的 waiting_ca 任务不得重排签发。
 	rows, err := db.DB.Query(`
 		SELECT j.id, j.rule_id, COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0),
 		       COALESCE(r.domain,''),
@@ -1409,25 +1492,20 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status = 'waiting_ca'
-		  AND j.ca_available_after IS NOT NULL
-		  AND datetime(j.ca_available_after) <= datetime('now')
+		  AND (
+			(j.ca_available_after IS NOT NULL AND datetime(j.ca_available_after) <= datetime('now'))
+			OR (j.ca_available_after IS NULL
+			    AND datetime(COALESCE(j.updated_at,j.created_at)) <= datetime('now','-10 minutes'))
+		  )
 	`)
 	if err != nil {
 		Logf("error", "waiting_ca scan: query failed: %v", err)
-		return 0, 0, fmt.Errorf("扫描 CA 冷却任务: %w", err)
+		return nil, nil, fmt.Errorf("扫描 CA 冷却任务: %w", err)
 	}
-	type waitingJob struct {
-		id           int
-		ruleID       string
-		domain       string
-		caProviderID int
-		ruleDomain   string
-		ruleBound    bool
-	}
-	var jobs []waitingJob
+	var jobs []waitingCACandidate
 	var scanErrors []error
 	for rows.Next() {
-		var job waitingJob
+		var job waitingCACandidate
 		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.caProviderID, &job.ruleDomain, &job.ruleBound); err != nil {
 			Logf("error", "waiting_ca scan: scan row failed: %v", err)
 			scanErrors = append(scanErrors, fmt.Errorf("读取 CA 冷却任务行: %w", err))
@@ -1438,12 +1516,31 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 	if err := rows.Err(); err != nil {
 		Logf("error", "waiting_ca scan: iterate rows failed: %v", err)
 		_ = rows.Close()
-		return 0, 0, fmt.Errorf("遍历 CA 冷却任务: %w", err)
+		return nil, nil, fmt.Errorf("遍历 CA 冷却任务: %w", err)
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时 UPDATE 会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
 		Logf("error", "waiting_ca scan: close rows failed: %v", err)
-		return 0, 0, fmt.Errorf("关闭 CA 冷却任务结果集: %w", err)
+		return nil, nil, fmt.Errorf("关闭 CA 冷却任务结果集: %w", err)
+	}
+	return jobs, scanErrors, nil
+}
+
+func (s *CertificateService) requeueWaitingCAJobs(gates ...func() error) (requeued, disabled int, err error) {
+	qm := GetCAQueueManager()
+	if qm == nil {
+		return 0, 0, nil
+	}
+
+	// 锁粒度：s.mu 只覆盖「查询 → 读全量候选 → 关闭结果集」段（见
+	// scanWaitingCACandidates）。逐任务 CAS 写库与入队在锁外执行——waiting_ca
+	// 任务多/DB 慢时，补扫轮不得把 6h 节拍的续期扫描（CheckExpiration /
+	// checkFailedFirstIssuance 同取 s.mu）推迟到本轮之后。并发安全不依赖该锁：
+	// 写侧全程 CAS（transitionJob 的 from-status 白名单 + EnqueueIfActive 去重），
+	// 两轮扫描对同一行竞争时只有一方 changed=true。
+	jobs, scanErrors, err := s.scanWaitingCACandidates()
+	if err != nil {
+		return 0, 0, err
 	}
 	// 读失败不得被记为成功轮：可读行照常处置（部分成果保留），失败行数与原因在
 	// 返回时并入错误——与 rescanDroppedDeploymentRetries 同口径（部分成功 +
@@ -1459,6 +1556,12 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 	var actionErr error
 
 	for _, job := range jobs {
+		// 写前门（逐项）：扫描判定通过 → 写落定之间节点可能已降级/取消，
+		// 每个写点前复核（与 certReconcileWriteGate 同源语义）。命中即中止本轮，
+		// 已处置的行保留（CAS 写不会回滚已提交部分）。
+		if gateErr := runCertWaitingCAWriteGate(gates); gateErr != nil {
+			return requeued, disabled, gateErr
+		}
 		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
 				if !errors.Is(err, ErrJobTransitionConflict) {

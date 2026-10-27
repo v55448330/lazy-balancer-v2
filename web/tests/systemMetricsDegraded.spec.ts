@@ -88,6 +88,7 @@ test('进程配额帮助文案拼接保留 ulimit 零值歧义', () => {
 
 test('进程配额说明复用可聚焦帮助角标', () => {
   const page = code('src/views/Dashboard.vue')
-  assert.match(page, /<span class="resource-label">进程配额<\/span>\s*<FieldHelpIcon :content="pidsTooltip" \/>/)
+  assert.match(page, /<span class="resource-label-group">\s*<span class="resource-label">进程配额<\/span>\s*<FieldHelpIcon :content="pidsTooltip" \/>\s*<\/span>/)
+  assert.match(page, /<span class="resource-value" :class="pidsValueClass">\{\{ systemMetrics\.pids_current \}\}<\/span>\s*<span class="resource-total">/)
   assert.doesNotMatch(page, /<el-tooltip :content="pidsTooltip"/)
 })

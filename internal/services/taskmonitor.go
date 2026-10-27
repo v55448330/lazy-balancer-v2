@@ -255,6 +255,11 @@ const taskMonitorCertJobsLogKey = "task-monitor-cert-jobs"
 // （同族节流口径：首报警告、恢复补一条）。
 const taskMonitorWaitingCALogKey = "task-monitor-waiting-ca"
 
+// taskIP2RegionStatusLogKey ip2region 任务 StatusFn 状态列读取失败态转换键：
+// 读失败会让状态列回落「执行实态」，与「确实空闲」不可区分，必须留痕
+// （同族首报/恢复节流口径）。
+const taskIP2RegionStatusLogKey = "task-ip2region-status"
+
 // collectEngineFamilies 引擎注册族统一视图（终态：零特化零收集器——
 // 元数据/开关/下一槽/状态镜像全来自 DescribeAll，最近运行与 24h 统计
 // 来自 task_runs，下次时间兜底 last+interval）。
@@ -404,7 +409,12 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			// 投递，与同行的角色不适用标注自相矛盾。
 			if ti.NextRunAt == "" && m.IntervalSec > 0 && m.LoopOn && m.RoleApplicable && m.Kind == taskengine.KindPeriodic {
 				if t, err := time.ParseInLocation("2006-01-02 15:04:05", latestRun.StartedAt, CurrentLocation()); err == nil {
-					ti.NextRunAt = t.Add(time.Duration(m.IntervalSec) * time.Second).Format("2006-01-02 15:04:05")
+					// 兜底推算只在落在未来时展示：任务长时间停止后（或最近一轮
+					// 早于一个周期）推算值已过去，展示过去时刻会让运维误判「该跑
+					// 没跑」；过去则留空让 UI 显示「—」（与「下次执行未知」同义）。
+					if next := t.Add(time.Duration(m.IntervalSec) * time.Second); next.After(time.Now()) {
+						ti.NextRunAt = next.Format("2006-01-02 15:04:05")
+					}
 				}
 			}
 		}

@@ -70,4 +70,36 @@ grep -q '非 git 工作树' "$work/d.err" || {
   fail "非 git 工作树的失败必须点名原因（清单来源不可确定）"
 }
 
-echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git mutations rejected)"
+# ── E) 阶段作用域：exec 目标只在构建阶段 COPY 时必须判红 ─────────────
+# 旧实现把整个 Dockerfile 的 COPY 目标并成一张清单（不跟踪 FROM 阶段），
+# 「最终阶段漏 COPY、目标只在 builder 阶段存在」因此假绿——容器启动时才
+# exec 失败（`sh -n` 对此恒绿，正是本门要补的缺口）。
+stage_df="$work/Dockerfile.stages"
+cat >"$stage_df" <<'DOCKERFILE'
+FROM golang:1.24 AS builder
+COPY docker-entrypoint.sh /usr/local/bin/lazy-balancer
+FROM alpine:3.20
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+DOCKERFILE
+if bash "$gate" "$baseline_entry" "$stage_df" >/dev/null 2>"$work/e.err"; then
+  fail "exec 目标只在构建阶段 COPY 时必须被门禁拒绝（阶段并集 → 假绿）"
+fi
+grep -q '不在 Dockerfile 提供的镜像路径中' "$work/e.err" || {
+  cat "$work/e.err" >&2
+  fail "阶段作用域失败必须点名 exec 目标（失败原因不可混淆）"
+}
+
+# 对照：同一目标由**最终阶段** COPY 时仍须通过（防本用例把门禁改成恒红）。
+cat >"$stage_df" <<'DOCKERFILE'
+FROM golang:1.24 AS builder
+COPY docker-entrypoint.sh /opt/builder-only-entry
+FROM alpine:3.20
+COPY docker-entrypoint.sh /usr/local/bin/lazy-balancer
+COPY --from=builder /opt/builder-only-entry /app/builder-only-entry
+DOCKERFILE
+if ! bash "$gate" "$baseline_entry" "$stage_df" >/dev/null 2>"$work/e2.err"; then
+  cat "$work/e2.err" >&2
+  fail "最终阶段提供 exec 目标的 Dockerfile 必须通过（阶段切块不得恒红）"
+fi
+
+echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope mutations rejected)"

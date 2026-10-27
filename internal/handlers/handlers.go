@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -227,6 +228,26 @@ func (h *Handlers) recordCaddyApplyFailure(err, restoreErr error) {
 	h.writeApplyFailureBanner(caddyApplyFailureSubject("Caddy 配置应用失败"), err, restoreErr)
 }
 
+// caddyAdminEndpointInError 匹配 http.Client 错误文本里的请求地址
+// （*url.Error 的形态恒为 `<Verb> "http://host:port/path": ...`）。
+var caddyAdminEndpointInError = regexp.MustCompile(`(Post|Get|Put|Delete|Head|Patch) "(https?://[^"]*)"`)
+
+// caddyAdminDialInError 匹配同一错误文本里紧随其后的拨号/解析地址形态
+// （`dial tcp 10.0.0.1:2019: connect: ...`、`dial tcp [::1]:2019: ...`），
+// 否则只替换引号内 URL 仍会把 admin 地址与端口留在横幅里。
+var caddyAdminDialInError = regexp.MustCompile(`(dial tcp |lookup )([^:\s"]+:\d+|\[[^\]]+\]:\d+)`)
+
+// redactCaddyAdminEndpoint 把横幅文本里的 Caddy admin 地址替换为占位短语。
+// 横幅是全员可见的全局信号（从节点分叉的唯一提示），而 /load 传输失败的
+// *url.Error 文本恒含「Post "http://<adminURL>/load"」与「dial tcp <admin>」——
+// 自定义 caddy_admin_url 时等于把内部控制面地址与端口披露给任意登录用户
+// （含只读 API Key）。服务端日志保留原文（仅运维可见），只有审计/横幅这两个
+// 全员可见面走本函数。
+func redactCaddyAdminEndpoint(text string) string {
+	redacted := caddyAdminEndpointInError.ReplaceAllString(text, `${1} "<Caddy admin 端点>"`)
+	return caddyAdminDialInError.ReplaceAllString(redacted, `${1}<Caddy admin 端点>`)
+}
+
 // writeApplyFailureBanner 是横幅/系统审计的唯一落盘点。subject 决定横幅正文
 // 对象与审计的动作/事件对象——提交失败、证书清理失败、任务入队失败不得沿用
 // 「Caddy 配置应用失败」模板（错称会让运维按配置内容排障，而处置对象是数据库/
@@ -234,9 +255,11 @@ func (h *Handlers) recordCaddyApplyFailure(err, restoreErr error) {
 func (h *Handlers) writeApplyFailureBanner(subject applyFailureSubject, err, restoreErr error) {
 	wrapped := fmt.Sprintf("%s（%s）：%v", subject.object, caddyApplyFailureLabel(restoreErr), err)
 	services.Logf("error", "%s", wrapped)
-	services.RecordAuditLog("system", subject.action, subject.resource, wrapped, "")
+	// 全员可见面（审计列表 + 刷新后仍可见的横幅）剥离 admin 端点地址。
+	visible := redactCaddyAdminEndpoint(wrapped)
+	services.RecordAuditLog("system", subject.action, subject.resource, visible, "")
 	if db.DB != nil {
-		if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped); derr != nil {
+		if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, visible); derr != nil {
 			services.Logf("warn", "caddy_apply_error_persist_failed: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
 		}
 	}

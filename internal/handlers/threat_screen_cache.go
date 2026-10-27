@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -19,7 +20,7 @@ import (
 // 原始表扫描与 admin 代理出口收敛。所有缓存带 TTL 且失败不缓存（降级响应
 // 下一轮重试自愈）。
 
-// ---- top_targets（被攻击目标 Top3）缓存：TTL 5 分钟 ----
+// ---- top_targets（被攻击目标 Top3）缓存：TTL 与大屏维度聚合同源（30s） ----
 
 // threatTopTarget 大屏「被攻击目标 Top3」条目（JSON 契约：name/domain/value）。
 type threatTopTarget struct {
@@ -31,7 +32,10 @@ type threatTopTarget struct {
 // topTargetsCacheTTL top_targets 进程内缓存有效期——同一窗口锚点内（1 分钟）
 // 合并重复查询；锚点（sinceMinute）变化即换键，卡片窗口与同屏其余维度一致
 // （旧键只有 hours，命中时会把 5 分钟前的旧窗口结果当当前窗口）。
-const topTargetsCacheTTL = time.Minute
+// TTL 与同屏其余维度聚合缓存（threatRollupDimAggregateTTL=30s，即前端轮询
+// 周期）单源对齐：此前 60s/30s 分叉会让同一响应里 Top3 与总量最多差 30s
+// 新鲜度（warmer 每 60s 推进 rollup 时）。
+const topTargetsCacheTTL = threatRollupDimAggregateTTL
 
 // topTargetsCacheKey 缓存键含 *sql.DB 指针与窗口锚点 sinceMinute——
 // 测试换库/换窗口即失效，不串库不串窗口；窗口每分钟前移即新键，不会返回
@@ -76,7 +80,9 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 	if cacheable {
 		topTargetsCacheMu.Lock()
 		if entry, ok := topTargetsCache[key]; ok && now.Before(entry.expiresAt) {
-			targets := entry.targets
+			// 拷贝返回：缓存条目不得与响应共享底层数组（消费者就地改动会污染
+			// 其他请求的缓存，同型事故见安全总览聚合缓存）。
+			targets := slices.Clone(entry.targets)
 			topTargetsCacheMu.Unlock()
 			return targets, nil
 		}
@@ -118,11 +124,17 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 		return ids[i] < ids[j]
 	})
 
-	// 批量解析现存规则（分块 IN，避免逐目标查询的主库往返）。
+	// 按计数降序分批解析现存规则（分块 IN，避免逐目标查询的主库往返），
+	// 凑满前 3 条**现存**目标即停：已删除规则的历史 caddy_id 仍留在 rollup
+	// 分钟行里，全量解析会为 3 条结果做 O(distinct) 次主库往返（宽窗口/大量
+	// 删除规则时被轮询放大）；分批早停把往返收敛到「命中率 × 3」量级，
+	// 且顺序不变（计数降序、同计数 id 升序），结果与全量解析一致。
 	type ruleInfo struct{ name, domain string }
-	existing := make(map[string]ruleInfo, len(ids))
 	const chunk = 500
-	for start := 0; start < len(ids); start += chunk {
+	const topTargetCount = 3
+	existing := make(map[string]ruleInfo, chunk)
+	targets := make([]threatTopTarget, 0, topTargetCount)
+	for start := 0; start < len(ids) && len(targets) < topTargetCount; start += chunk {
 		end := start + chunk
 		if end > len(ids) {
 			end = len(ids)
@@ -155,19 +167,17 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 			return nil, err
 		}
 		rrows.Close()
-	}
-
-	const topTargetCount = 3
-	targets := make([]threatTopTarget, 0, topTargetCount)
-	for _, id := range ids {
-		if len(targets) == topTargetCount {
-			break
+		// 本批结果按全局降序逐个补足
+		for _, id := range chunkIDs {
+			if len(targets) == topTargetCount {
+				break
+			}
+			info, ok := existing[id]
+			if !ok {
+				continue // 规则已删除：跳过，继续补足现存前 3
+			}
+			targets = append(targets, threatTopTarget{Name: info.name, Domain: info.domain, Value: counts[id]})
 		}
-		info, ok := existing[id]
-		if !ok {
-			continue // 规则已删除：跳过，继续补足现存前 3
-		}
-		targets = append(targets, threatTopTarget{Name: info.name, Domain: info.domain, Value: counts[id]})
 	}
 
 	if cacheable {

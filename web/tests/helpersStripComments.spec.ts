@@ -6,8 +6,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
-import { code, member, section, stripComments, webFiles } from './_helpers.ts'
+import { code, member, section, stripComments, webFiles, webRelative } from './_helpers.ts'
 
 test('section：缺 start / 缺 end / 顺序倒置一律抛错（边界不得空转）', () => {
   assert.throws(() => section('abc', 'x', 'c'), /missing start marker/)
@@ -233,4 +234,25 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
   assert.deepEqual(offenders, [], '新增裸 source/repoSource 使用：断言对象是代码存在性时改 code()/repoCode()；确属文案/文档钉才登记进 allowedRaw')
   const deadEntries = [...allowedRaw].filter((name) => !rawImport.test(readSpec(name)))
   assert.deepEqual(deadEntries, [], 'allowedRaw 存在不再使用 raw 的文件——删除死条目')
+})
+
+// webFiles 的键口径：相对 `web/` 的路径。旧实现按 `rel.indexOf(dir)` 取**首次**
+// 出现位置切路径——检出路径本身含同名段时（CI 上 /home/ci/src/app/web/src/…）
+// 键会错位成 src/app/web/src/utils/x.ts，所有「键与硬编码路径比较」的守卫集体
+// 假红；取不到前缀时静默返回绝对路径则是 fail-open。此处钉锚定与硬失败。
+test('webFiles 键锚定 web/ 根：路径含同名段不错位，根外路径硬失败', () => {
+  const root = fileURLToPath(new URL('../', import.meta.url))
+  assert.ok(root.endsWith('/'), '测试前提：web 根路径以分隔符结尾')
+  assert.equal(webRelative(`${root}src/utils/api.ts`), 'src/utils/api.ts')
+  assert.equal(webRelative(`${root}tests/_helpers.ts`), 'tests/_helpers.ts')
+  // 同名段重复出现时按完整相对路径返回（不按首个 `src` 抢位）
+  assert.equal(webRelative(`${root}src/src/x.ts`), 'src/src/x.ts')
+  // 根外路径不得 fail-open 成绝对路径
+  assert.throws(() => webRelative('/etc/passwd'), /不在/, 'web/ 之外的路径必须硬失败')
+  assert.throws(() => webRelative(`${root}../outside.ts`), /不在/, '向上越界同样硬失败')
+  assert.throws(() => webRelative(root.slice(0, -1)), /不在/, '根目录本身不是文件键')
+  // 真实产出必须全部落在扫描目录下（键口径漂移会让所有目录扫描守卫假红）
+  const files = webFiles('src', ['.ts'])
+  assert.ok(files.length > 50, `扫描面过小（${files.length}）`)
+  assert.deepEqual(files.filter((file) => !file.startsWith('src/')), [], 'webFiles 键必须锚定 web/ 根')
 })

@@ -81,6 +81,10 @@ func seedSessionPassword(t *testing.T) string {
 
 func TestUserStatusToggle_revokesOldSessionAcrossDisableEnable(t *testing.T) {
 	router := newMiddlewareTestRouter(t)
+	// 预算敏感：本用例登录族调用累计 9 次（3 次密码登录 + MFA 验码等），与
+	// login/mfa-verify/ticket-login 共享 10/min/IP 桶；不隔离时新增一次调用、
+	// -count=2 或更快机器压进同一 60s 窗都会产生与实现无关的 429 假红。
+	withIsolatedRateLimitBuckets(t)
 	hash := seedSessionPassword(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES
 		(1,'admin',?,'admin',1),(2,'local-user',?,'user',1),

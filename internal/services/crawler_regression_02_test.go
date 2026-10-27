@@ -1,9 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -165,19 +167,59 @@ func TestValidateCrawlerEntriesSanity_singleIPCannotCoverPrefix(t *testing.T) {
 	}
 }
 
-// 系统名单只保留绝对条数上限；相对当前快照的合法扩张必须允许写入。
-func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
-	_, database := newClusterTestService(t)
+// 段外条目被静默丢弃是观测盲区：厂商新增 IP 段（代码 IPRanges 未同步）时合法
+// 爬虫失去豁免，管理员只能看到条目数变小。过滤发生时必须留痕（引擎 + 保留
+// 条数 + 被丢弃样本），段外为 0 时不得新增告警（回归形状）。
+func TestValidateCrawlerEntriesSanity_logsDroppedEntries(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldWriter, oldLevel := log.Writer(), CurrentLogLevel()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		_ = ConfigureLogLevel(oldLevel)
+	})
+	if err := ConfigureLogLevel("warn"); err != nil {
+		t.Fatal(err)
+	}
 
+	payload := append([]string{"198.51.100.0/24", "203.0.113.0/24"}, crawlerFullCoverage...)
+	kept, err := validateCrawlerEntriesSanity("so360spider", payload)
+	if err != nil {
+		t.Fatalf("段内条目覆盖充足时必须通过: %v", err)
+	}
+	if len(kept) != len(crawlerFullCoverage) {
+		t.Fatalf("保留 %d 条, want %d（仅两条段外条目被丢弃）", len(kept), len(crawlerFullCoverage))
+	}
+	out := logBuf.String()
+	if !strings.Contains(out, "不在已声明官方段内") {
+		t.Fatalf("段外条目被丢弃却没有告警:\n%s", out)
+	}
+	for _, want := range []string{"so360spider", "198.51.100.0/24", "203.0.113.0/24"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("告警未点名 %q:\n%s", want, out)
+		}
+	}
+
+	// 回归形状：无段外条目时不新增该告警。
+	logBuf.Reset()
+	if _, err := validateCrawlerEntriesSanity("so360spider", append([]string(nil), crawlerFullCoverage...)); err != nil {
+		t.Fatal(err)
+	}
+	if got := logBuf.String(); strings.Contains(got, "不在已声明官方段内") {
+		t.Fatalf("无段外条目时不得告警:\n%s", got)
+	}
+}
+
+// 系统名单只保留绝对条数上限：crawlerSnapshotGrowthGuard 的签名只有 newCount
+// （不含基线），相对当前快照的「合法扩张」门早已撤销——本测试只钉绝对上限
+// 形态，基线语义由 TestCrawlerSnapshotShrinkGuard 负责，不在两处重复。
+func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
 	if CrawlerIPListEntryCap != 2000 {
 		t.Fatalf("CrawlerIPListEntryCap=%d, want 2000（与 handlers ipListMaxEntries 同口径）", CrawlerIPListEntryCap)
 	}
 
-	// 内置基线 googlebot=170 条：超过两倍但未超绝对上限时放行。
+	// 远低于上限的条数一律放行（不存在相对基线的拒绝面）。
 	if err := crawlerSnapshotGrowthGuard(341); err != nil {
-		t.Fatalf("合法扩张不得按相对快照倍数拒绝: %v", err)
-	}
-	if err := crawlerSnapshotGrowthGuard(340); err != nil {
 		t.Fatalf("未超绝对上限必须放行: %v", err)
 	}
 	// 绝对门：无对照基线的引擎同样受 2000 条上限约束。
@@ -186,34 +228,6 @@ func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
 	}
 	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap); err != nil {
 		t.Fatalf("恰好 2000 条必须放行: %v", err)
-	}
-
-	// DB 基线 1000 条时，2000 条同样属于合法扩张；仅 2001 条撞绝对门。
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i := range 1000 {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(`{"value":"10.`)
-		sb.WriteString(strconv.Itoa(i / 256))
-		sb.WriteString(".")
-		sb.WriteString(strconv.Itoa(i % 256))
-		sb.WriteString(`.0/24"}`)
-	}
-	sb.WriteString("]")
-	if _, err := database.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
-		VALUES (?, '', '搜索引擎爬虫', ?, 1, datetime('now'), datetime('now'))`, CrawlerIPListName("googlebot"), sb.String()); err != nil {
-		t.Fatalf("seed crawler list: %v", err)
-	}
-	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap + 1); err == nil {
-		t.Fatal("DB 基线 1000 条时 2001 条必须拒绝（绝对上限）")
-	}
-	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap); err != nil {
-		t.Fatalf("DB 基线 1000 条时 2000 条合法扩张必须放行: %v", err)
-	}
-	if err := crawlerSnapshotGrowthGuard(1001); err != nil {
-		t.Fatalf("超过快照两倍但未超绝对上限必须放行: %v", err)
 	}
 }
 

@@ -252,25 +252,43 @@ func TestGlobalStateGuard_detectsMetricsSeamLeaks(t *testing.T) {
 	})
 }
 
+// 静态门的 seam 名单必须与快照键集完全一致：名单漏登一个 seam，该 seam 的
+// 测试写入就对静态门不可见（importCleanupShouldStop 曾因此长期逃逸）。
+func TestHandlerRegisteredSeamNames_matchSnapshotKeys(t *testing.T) {
+	seams := captureHandlerGlobalSeams()
+	registered := make(map[string]bool, len(handlerRegisteredSeamNames))
+	for _, name := range handlerRegisteredSeamNames {
+		registered[name] = true
+	}
+	for name := range seams {
+		if !registered[name] {
+			t.Errorf("快照登记的 seam %s 不在静态门名单中（写侧隔离门对它不可见）", name)
+		}
+	}
+	if len(registered) != len(seams) {
+		t.Errorf("静态门名单 %d 项, 快照 %d 项（名单含过期条目）", len(registered), len(seams))
+	}
+	if !sort.StringsAreSorted(handlerRegisteredSeamNames) {
+		t.Error("名单必须排序（派生确定性与报错可读性）")
+	}
+}
+
 // handlerRegisteredSeamNames 是 captureHandlerGlobalState 登记的**可直接赋值**
 // 的 seam（函数与数值旋钮）。缓存结构体经锁写、由各自的 reset helper 复位，
 // 不在此列（它们的泄漏同样由快照比较覆盖）。
-var handlerRegisteredSeamNames = []string{
-	"systemMetricsReadFile",
-	"systemMetricsDFCommand",
-	"netstatCommand",
-	"metricsDashboardFetch",
-	"caddyMetricsHTTPClient",
-	"systemMetricsCommandTimeout",
-	"systemSampleNegativeTTL",
-	"cpuSampleWindow",
-	"netSampleWindow",
-	"metricsDashboardTTL",
-	"metricsDashboardNegativeTTL",
-	"caddyMetricsSnapshotTTL",
-	"caddyMetricsSnapshotNegativeTTL",
-	"caddyMetricsFetchTimeout",
-}
+//
+// 名单由 captureHandlerGlobalSeams 的键集**派生**（单源），不得手抄：手工维护
+// 的第二份名单曾漏登 importCleanupShouldStop，静态门因此对该 seam 的写入完全
+// 不可见（现存用例直接赋值 + t.Cleanup 复位，未经 withIsolatedGlobal 也判绿）。
+var handlerRegisteredSeamNames = func() []string {
+	seams := captureHandlerGlobalSeams()
+	names := make([]string, 0, len(seams))
+	for name := range seams {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}()
 
 // globalStateGuardSelfTestFile 是守卫自身的自测文件：「故意泄漏 → 立即断言 →
 // 同一闭包内复位」是本文件的被测形态，不能反过来要求它使用写侧隔离 helper。

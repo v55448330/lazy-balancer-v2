@@ -26,19 +26,27 @@ import (
 
 func initTaskEngineForTest(t *testing.T) {
 	t.Helper()
-	if services.TaskEngine() == nil || services.TaskEngine().IsStopped() {
+	// 恒重建引擎实例：复用前一用例留下的实例会让注册表、cert-waiting-ca 的
+	// loopEnabled、task_loop_prefs 内存态与任务日志目录指针（前用例的
+	// t.TempDir()，已随清理删除 → 写日志静默熔断）跨用例延续，而 db.DB 已被
+	// newBackupTestHandlers 换成新临时库——顺序依赖会掩盖真实回归。
+	// 库不动（调用方可能已播种）：仅在无库时自建，收尾仍走句柄单源复位。
+	if services.TaskEngine() != nil {
+		services.StopTaskEngine()
+	}
+	t.Cleanup(services.StopTaskEngine)
+	if db.DB == nil {
 		oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
 		if err := db.Initialize(t.TempDir()); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			services.StopTaskEngine()
 			_ = db.Close()
 			db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA
 			db.SetDB(oldDB)
 		})
-		services.InitTaskEngine("", t.TempDir()+"/app.log")
 	}
+	services.InitTaskEngine("", t.TempDir()+"/app.log")
 }
 
 func taskMonitorRouter() (*gin.Engine, *Handlers) {
@@ -306,6 +314,34 @@ func TestCancelSystemTask_semantics(t *testing.T) {
 	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/threat/cancel", nil))
 	if resp2.Code != http.StatusConflict {
 		t.Fatalf("未运行取消应 409, got %d body=%s", resp2.Code, resp2.Body.String())
+	}
+}
+
+// 导入窗口内取消必须 409 fast-fail，与 toggle/control 同门：导入/还原期间
+// 协调器做的是 PauseScheduling+CancelInFlightRuns 的系统性排空，其语义是
+// 「cancel(nil) 不消费已到期槽、恢复后补跑」；此时用户取消会走
+// consumeCancelledSlotLocked 消费掉该自动槽，与排空语义相反——导入完成后
+// 该族自动周期不会补跑。
+func TestCancelSystemTask_blockedDuringImportWindow(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	r, _ := taskMonitorRouter()
+
+	closeWindow := beginImportWindowForTest(t)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/threat/cancel", nil))
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("导入窗口内取消 status=%d body=%s, want 409", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "配置导入进行中") {
+		t.Fatalf("body=%s, want 含导入窗口文案", resp.Body.String())
+	}
+	// 窗口关闭后门必须放行（同一请求落到「未运行 → 409」而非导入文案）
+	closeWindow()
+	resp2 := httptest.NewRecorder()
+	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/threat/cancel", nil))
+	if resp2.Code != http.StatusConflict || strings.Contains(resp2.Body.String(), "配置导入进行中") {
+		t.Fatalf("窗口关闭后 status=%d body=%s, want 非导入门 409", resp2.Code, resp2.Body.String())
 	}
 }
 

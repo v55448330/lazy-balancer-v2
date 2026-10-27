@@ -48,7 +48,7 @@ func TestSecuritySectionHash_matchesSlaveRebuildAfterApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := applySecurityTables(ctx, tx, snapshot); err != nil {
+	if err := applySecurityTables(ctx, tx, snapshot, true); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("apply security tables: %v", err)
 	}

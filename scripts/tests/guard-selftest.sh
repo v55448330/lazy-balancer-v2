@@ -766,6 +766,31 @@ func TestLoopHeadComment(t *testing.T) {
 EOF
 assert_good "loop round wording at comment head"
 
+# 8c) 词元边界误报面：合法文件名里含 round<digit>/audit<digit> 连写片段
+#     （backg|round2、ground2）不是审计产物——宽名族正则若不带边界会阻断
+#     合法提交，并把排查方向误导到「审计记录不得提交」。
+reset_fixture
+mkdir_in web/src/assets/background2.png
+printf 'PNG' >"$tmp_root/web/src/assets/background2.png"
+git -C "$tmp_root" add -f web/src/assets/background2.png
+mkdir_in docs/ground2.md
+printf '地面层说明\n' >"$tmp_root/docs/ground2.md"
+git -C "$tmp_root" add -f docs/ground2.md
+assert_good "word-boundary round/audit tokens in legit file names"
+
+# 8d) 反向控制：带边界的真实审计产物仍须命中（收紧不得把门变成恒绿）。
+reset_fixture
+mkdir_in reports/round106-notes.md
+printf 'x\n' >"$tmp_root/reports/round106-notes.md"
+git -C "$tmp_root" add -f reports/round106-notes.md
+assert_bad "boundary roundNN artifact still hits" "reports/round106-notes.md"
+
+reset_fixture
+mkdir_in docs/audit106-summary.md
+printf 'x\n' >"$tmp_root/docs/audit106-summary.md"
+git -C "$tmp_root" add -f docs/audit106-summary.md
+assert_bad "boundary auditNN artifact still hits" "docs/audit106-summary.md"
+
 # ===========================================================================
 # 9) 网络口径与日志文件名骨架（IPv6-only、YYYYMMDD-HHMMSS）不误判
 reset_fixture

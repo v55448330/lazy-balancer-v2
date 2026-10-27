@@ -28,6 +28,22 @@ import (
 // ownership/challenge_claims 同源）——PSL 查询与 provider 侧 Domain.List 的规范
 // 形态都是小写，保留输入大小写会让混合大小写域名落进「last two labels」兜底
 // （`API.Example.Co.UK` → `Co.UK`），并在 provider 侧精确比较时失配。
+//
+// IsPublicSuffix 判定 name 是否为公共后缀：单标签（TLD 本身、空名/根）或多标签
+// 公共后缀（co.uk / com.cn / PSL 私有段如 s3.amazonaws.com）。
+//
+// PSL 单源：与 ResolveZone 同一判据（publicsuffix.EffectiveTLDPlusOne），消费方
+// （ACME 权威 NS 上溯）不得自写第二份后缀知识——自写「至少两个标签」的粗判会
+// 放过多标签公共后缀，把注册局服务器当成本域权威。
+func IsPublicSuffix(name string) bool {
+	trimmed := dnsname.NormalizeName(name)
+	if trimmed == "" || !strings.Contains(trimmed, ".") {
+		return true
+	}
+	_, err := publicsuffix.EffectiveTLDPlusOne(trimmed)
+	return err != nil
+}
+
 func ResolveZone(domain string) (string, error) {
 	trimmed := dnsname.NormalizeName(domain)
 	if trimmed == "" {

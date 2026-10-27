@@ -27,9 +27,12 @@ func TestMigrateSystemIPListUniqueIndex_rebuildsSameNameNonUniqueIndex(t *testin
 		t.Fatalf("migrate: %v", err)
 	}
 
+	// 列必须是 security_ip_lists 的真实列（name/entries/system）：此前用
+	// value/type/enabled 三个不存在的列，两条语句都以 "no such column" 失败，
+	// 「唯一性未生效才报错」的断言因此恒真通过（假绿）。
 	assertUniqueIndexRebuilt(t, DB, "u_security_ip_lists_system_name",
-		`INSERT INTO security_ip_lists (name, value, type, enabled, system) VALUES ('dup-name','1.1.1.1','blacklist',1,1);
-		 INSERT INTO security_ip_lists (name, value, type, enabled, system) VALUES ('dup-name','2.2.2.2','blacklist',1,1)`)
+		`INSERT INTO security_ip_lists (name, entries, system) VALUES ('dup-name','["1.1.1.1"]',1);
+		 INSERT INTO security_ip_lists (name, entries, system) VALUES ('dup-name','["2.2.2.2"]',1)`)
 }
 
 func TestMigrateOidcIdentityUniqueIndex_rebuildsSameNameNonUniqueIndex(t *testing.T) {

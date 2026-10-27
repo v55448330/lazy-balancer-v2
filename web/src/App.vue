@@ -121,6 +121,8 @@ onMounted(async () => {
         nonce: oidcReturn.nonce,
         expectedNonce,
       })
+      // 本轮令牌是否真正落到会话（拒绝/取消都保持 false）——return_to 导航的门。
+      let tokenApplied = false
       if (!verdict.ok) {
         ElMessage.error(`OIDC 登录失败：${OIDC_REJECTION_TEXT[verdict.reason]}`)
         await authStore.init()
@@ -133,16 +135,24 @@ onMounted(async () => {
           '切换登录账号',
           { type: 'warning', confirmButtonText: '切换', cancelButtonText: '保持当前登录' },
         ).then(() => true).catch(() => false)
-        if (confirmed) authStore.applyOIDCToken(oidcToken)
-        else ElMessage.info('已保持当前登录')
+        if (confirmed) {
+          authStore.applyOIDCToken(oidcToken)
+          tokenApplied = true
+        } else ElMessage.info('已保持当前登录')
       } else {
         // OIDC 登录:令牌直接建会话,return_to 回跳(缺省 dashboard)
         authStore.applyOIDCToken(oidcToken)
+        tokenApplied = true
       }
-      // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)——
-      // 清单复用 utils/pageIds 的 isPageId(页面键唯一事实源)
-      const target = oidcReturn.path.replace(/^\//, '')
-      if (isPageId(target)) authStore.setCurrentPage(target)
+      // return_to 只在令牌真正落地（新建会话 / 确认换号）后生效：拒绝分支与
+      // 「保持当前登录」都不得跳页——否则提示与行为自相矛盾（先告诉用户
+      // 「已拒绝 / 已保持」，界面却仍跳到链接指定的页面）。
+      if (tokenApplied) {
+        // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)——
+        // 清单复用 utils/pageIds 的 isPageId(页面键唯一事实源)
+        const target = oidcReturn.path.replace(/^\//, '')
+        if (isPageId(target)) authStore.setCurrentPage(target)
+      }
       await authStore.init()
     } else if (hasLoginTicket) {
       const hadValidSession = authStore.isLoggedIn

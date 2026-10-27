@@ -398,7 +398,18 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	}
 	operationLock := certJobOperationLock(id)
 	operationLock.Lock()
-	defer operationLock.Unlock()
+	// per-job 锁改为手动配对：部署重排的「登记立即部署」必须落到锁外
+	// （scheduleDeploymentRetry 对在途部署回调做有界等待 ≤30s，而删除方是先
+	// 取 caddyOpMu 再等本锁——持锁登记会把全局面阻塞到等待超时）。锁序铁律：
+	// 先 caddyOpMu 后 operationLock，登记/取消等待一律在两者之外。
+	operationLockHeld := true
+	releaseOperationLock := func() {
+		if operationLockHeld {
+			operationLock.Unlock()
+			operationLockHeld = false
+		}
+	}
+	defer releaseOperationLock()
 	// 失败出口审计：两条路由是 AuditPolicyExplicit，中间件不做自动审计——
 	// 出口不补记会让被拒/失败的重试与越权尝试完全不可追溯（同域
 	// IssueCertificate.auditFailure 覆盖全部出口）。detail 只放固定归因，
@@ -460,7 +471,15 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// requeueCanceledJob / DeleteCertJob 恢复 / requeueCertJobsSnapshot 的取向）。
 	// 改为把部署窗口推到 now 并立即重排部署重试；仅「无材料」的此类任务
 	// （脏行）才回落重新签发。
-	if rescheduled, err := rescheduleDownloadedCertJobDeployment(id, ruleID, domain); err != nil {
+	if rescheduled, err := func() (bool, error) {
+		rescheduled, markErr := markDownloadedCertJobDeploymentPending(id, ruleID, domain)
+		if markErr != nil || !rescheduled {
+			return rescheduled, markErr
+		}
+		// 窗口已在锁内推进；登记立即部署放到锁外（见 operationLock 注释）。
+		releaseOperationLock()
+		return true, registerDownloadedCertJobDeploymentRetry(id, ruleID)
+	}(); err != nil {
 		// 屏障/服务停止时窗口已推进：DB 文案必须如实描述「等待自动部署」，
 		// 与响应对齐；busy 不动文案（旧回调仍在跑，任务行保持原消息）。
 		if !errors.Is(err, services.ErrCertificateDeploymentRetryBusy) {
@@ -650,17 +669,6 @@ func registerDownloadedCertJobDeploymentRetry(id int, ruleID string) error {
 		return err
 	}
 	return nil
-}
-
-// rescheduleDownloadedCertJobDeployment = 锁内 DB 决策 + 登记立即部署的组合，
-// 供不持 caddyOpMu 的入口（证书任务重试）使用。持 caddyOpMu 的入口
-// （IssueCertificate 定向/批量）必须分别调用上面两半，把登记放到锁外。
-func rescheduleDownloadedCertJobDeployment(id int, ruleID, domain string) (bool, error) {
-	rescheduled, err := markDownloadedCertJobDeploymentPending(id, ruleID, domain)
-	if err != nil || !rescheduled {
-		return rescheduled, err
-	}
-	return true, registerDownloadedCertJobDeploymentRetry(id, ruleID)
 }
 
 // certJobRetryCooldown 是重试冷却通用策略的 handlers 侧入口——策略单源在
@@ -1147,12 +1155,26 @@ func readCertJobLogTail(path string, maxBackups, budget int) (string, bool, erro
 // 证书任务 keep=5；调用方必须传本族真实保留数，禁止统一扫满证书代数。
 // 轮转代数读失败按「该代缺失」处理并留 warn（展示型接口，不因单个历史
 // 文件不可读丢掉新一代内容）。
-func prependTaskLogRotations(path, content string, maxBackups int) string {
+//
+// budget 是拼接后的总字节上限（响应 256KiB 预算）：累计长度已达上限即停止读
+// 更旧副本，且只取该副本尾部剩余预算的部分——此前每代固定读 128KiB 并整串
+// 前置拷贝，单请求最多读 ~640KiB 且在调用方最后一步才截断（多标签页轮询时
+// CPU/IO 放大）。更旧内容本来就会被最终截断丢弃，语义不变。
+func prependTaskLogRotations(path, content string, maxBackups, budget int) string {
 	for i := 1; i <= maxBackups; i++ {
+		remaining := budget - len(content)
+		if remaining <= 0 {
+			break
+		}
 		backup, err := readCertJobLogFile(fmt.Sprintf("%s.%d", path, i))
 		if err != nil {
 			services.Logf("warn", "读取任务日志轮转副本失败（%s.%d）: %v", path, i, err)
 			continue
+		}
+		if len(backup) > remaining {
+			// 只保留尾部：前缀（最旧内容）会被最终截断丢弃；被切断的首行由
+			// 调用方的残行丢弃逻辑处理。
+			backup = backup[len(backup)-remaining:]
 		}
 		if backup != "" {
 			content = backup + content

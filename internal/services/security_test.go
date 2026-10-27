@@ -163,8 +163,10 @@ func TestBuildCorazaDirectives_BodyAccessTruthTable(t *testing.T) {
 		t.Run(tc.mode+"/"+tc.rulesState+"/ip="+boolStr(tc.ipControl), func(t *testing.T) {
 			p := &models.SecurityPolicy{Mode: tc.mode, Enabled: true}
 			// 批 3：blocking/detection 消费 anomaly_threshold（类型①值型列）——
-			// 表内 CRS-active 模式给合法值 5，off/custom_only 不消费不设值。
-			if tc.mode == "blocking" || tc.mode == "detection" {
+			// 表内 CRS-active 模式给合法值 5。custom_only 在存在启用规则时同样
+			// 消费它（body processor 守卫 id:11 计分=fail-visible 门，见
+			// emitBodyProcessorRules），故该格也按真实库形态给 5；off 不发射。
+			if tc.mode == "blocking" || tc.mode == "detection" || (tc.mode == "custom_only" && tc.rulesState != "none") {
 				p.AnomalyThreshold = 5
 			}
 			if tc.rulesState != "none" {
@@ -218,7 +220,10 @@ func TestBuildCorazaDirectives_customOnlyIPControlSkipsBodyProcessors(t *testing
 	}
 	// 对照格：custom_only+启用自定义规则 → id:9/10/11 在场（body 条件规则依赖）
 	withRules := &models.SecurityPolicy{Mode: "custom_only", Enabled: true,
-		CustomRules: json.RawMessage(`[{"id":1,"name":"r","conditions":[{"target":"uri","operator":"starts_with","pattern":"/a"}],"action":"block","score":5,"enabled":true}]`)}
+		// 启用规则会发射 body processor 守卫（id:11 计分=anomaly_threshold），
+		// 按真实库形态给合法值 5。
+		AnomalyThreshold: 5,
+		CustomRules:      json.RawMessage(`[{"id":1,"name":"r","conditions":[{"target":"uri","operator":"starts_with","pattern":"/a"}],"action":"block","score":5,"enabled":true}]`)}
 	directives2 := mustDirectives(BuildCorazaDirectives(withRules, nil, "", false, 0, "lb_test"))
 	for _, id := range []string{"id:9,", "id:10,", "id:11,"} {
 		if !strings.Contains(directives2, id) {

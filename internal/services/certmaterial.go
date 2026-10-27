@@ -22,10 +22,18 @@ import (
 // 前者由各消费方按规则当前域名单独判定，后者只能解析证书后判定（SQL 表达不了）。
 
 // certJobCandidatePredicateSQL 返回「持有非空证书材料」的 SQL 谓词（不判
-// status）。渲染候选装载故意保留 disabled 行（selectCertificate 后置跳过，
-// 过期回退展示仍需该行；由 TestACMECertCandidatesForRule_preparses_leaf 钉住
-// 「候选数含 disabled」），但 PEM 判空口径必须与 Go 侧 CertJobMaterialUsable
-// 同源——渲染面把空白 PEM 当有材料会让物化把它写盘。
+// status）。
+//
+// 保留 disabled 行只是 per-rule 补查（acmeCertCandidatesForRule）的口径：该路
+// 让 selectCertificate 之后置跳过、同时供过期回退展示复用该行，由
+// TestACMECertCandidatesForRule_preparses_leaf 钉住「候选数含 disabled」。
+// 批量渲染候选（acmeCertCandidatesQuery）走 CertJobMaterialPredicateSQL，含
+// `status <> 'disabled'`，**不保留** disabled 行——两路在 disabled 维度本就不同，
+// 不得把「渲染装载保留 disabled」当成通则：把需要 disabled/过期行的消费
+// （如 ExpiredACMECertInfoFallback）接到批量装载会静默漏行。
+//
+// PEM 判空口径必须与 Go 侧 CertJobMaterialUsable 同源——渲染面把空白 PEM 当
+// 有材料会让物化把它写盘。
 func certJobCandidatePredicateSQL(alias string) string {
 	prefix := ""
 	if alias != "" {
@@ -40,8 +48,8 @@ func certJobCandidatePredicateSQL(alias string) string {
 
 // CertJobMaterialPredicateSQL 返回「持有可服务证书材料」的 SQL 谓词。alias 为
 // 列前缀（如 "j"），空串=裸列名。所有涉及材料可用性的 SQL 必须复用本函数，
-// 不得另写条件组合；候选装载（需保留 disabled 行）复用其组成部分
-// certJobCandidatePredicateSQL。
+// 不得另写条件组合；per-rule 渲染补查（需保留 disabled 行）复用其组成部分
+// certJobCandidatePredicateSQL（批量候选不走该豁免，见其注释）。
 //
 // 判空必须是 trim 后的判空：只比较 ” 会把 ' ' 这类空白材料当作「有材料」，
 // 而 Go 侧 CertJobMaterialUsable（TrimSpace）判为无材料——同一行在 SQL 扫描

@@ -249,6 +249,46 @@ func TestResolveAuthoritativeNS_rejectsTopLevelAsAuthority(t *testing.T) {
 	}
 }
 
+// Given：候选区 foo.co.uk 不是委托点（NODATA + SOA owner = co.uk），而 co.uk
+// 是**多标签公共后缀**且其注册局 NS 有 A 记录。
+// When：resolveAuthoritativeNS。
+// Then：返回 nil 且从不向 co.uk 发 NS 查询——注册局服务器不是该域的权威，把它
+// 当本域区会让 authReady 恒假、传播判定退化为递归共识并输出误导性诊断。
+func TestResolveAuthoritativeNS_rejectsMultiLabelPublicSuffix(t *testing.T) {
+	// Given
+	fake := installFakeDNSExchange(t, func(m *dns.Msg, network string) *dns.Msg {
+		question := m.Question[0]
+		switch {
+		case question.Qtype == dns.TypeNS && question.Name == "foo.co.uk.":
+			response := answerNS(m, "foo.co.uk.") // NOERROR/NODATA
+			response.Ns = append(response.Ns, &dns.SOA{
+				Hdr:     dns.RR_Header{Name: "co.uk.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 60},
+				Ns:      "ns1.registry.uk.",
+				Mbox:    "hostmaster.co.uk.",
+				Serial:  1,
+				Refresh: 60, Retry: 60, Expire: 60, Minttl: 60,
+			})
+			return response
+		case question.Qtype == dns.TypeNS && question.Name == "co.uk.":
+			return answerNS(m, "co.uk.", "ns1.registry.uk.")
+		case question.Qtype == dns.TypeA && question.Name == "ns1.registry.uk.":
+			return answerA(m, "ns1.registry.uk.", "192.0.2.99")
+		}
+		return answerNS(m, question.Name)
+	})
+
+	// When
+	servers := resolveAuthoritativeNS(t.Context(), "_acme-challenge.foo.co.uk.", nsTestBootstrap)
+
+	// Then
+	if len(servers) != 0 {
+		t.Fatalf("servers=%v, want nil（公共后缀 co.uk 不是该域的权威）", servers)
+	}
+	if got := fake.queried("co.uk.", dns.TypeNS); got != 0 {
+		t.Fatalf("向公共后缀 co.uk 发起了 %d 次 NS 查询，want 0（SOA 停止条件必须拒绝公共后缀）", got)
+	}
+}
+
 // Given：NS 应答的 owner 不是被查询名（污染/上级区串答）。
 // When：resolveAuthoritativeNS。
 // Then：这些 NS 不被采纳（否则会拿别人的服务器探测本挑战记录）。

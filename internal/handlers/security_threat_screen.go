@@ -1532,7 +1532,21 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// 超限/读失败必须显式失败（对齐同文件 GetThreatScreenFlowEvents 口径）：
+	// 截断的 JSON 以 200 透传会让客户端解析失败却看到成功状态码，而本地租约
+	// 已按成功登记（services.AcquireThreatScreenAttackFlowLease）——形成
+	// 「本地已生效 / 客户端认为失败」的分叉。故本分支先于本地登记判定。
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, collectorBodyLimit+1))
+	if readErr != nil {
+		services.Logf("warn", "threat-screen collector: read admin body failed: %v", readErr)
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "流量采集控制响应读取失败"})
+		return
+	}
+	if len(respBody) > collectorBodyLimit {
+		services.Logf("warn", "threat-screen collector: admin response exceeds %d bytes", collectorBodyLimit)
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "流量采集控制上游响应超过 4KB 上限"})
+		return
+	}
 	// 先转发成功再落本地：admin 失败（503/400）时本地租约保持原状，
 	// 避免 app/Caddy 两侧采样状态分叉。
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -1952,7 +1966,9 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	}
 	// recent_rate：近 5 个完整分钟 blocked/min（rollup 单前缀扫描；logged 不计）。
 	// 当前未满分钟不参与——窗口跨度恒定 5.00 分钟（与 rollup 完整分钟语义一致）。
-	nowMinute := threatScreenNow().UTC().Truncate(time.Minute)
+	// 复用请求起始时钟（now）：同一响应内两次读时钟会在跨分钟边界让 5 分钟窗
+	// 与总量窗口错开 1 分钟（展示口径自相矛盾）。
+	nowMinute := now.UTC().Truncate(time.Minute)
 	blocked5, rerr := queryThreatRecentBlocked(
 		nowMinute.Add(-5*time.Minute).Format("2006-01-02 15:04"),
 		nowMinute.Format("2006-01-02 15:04"),

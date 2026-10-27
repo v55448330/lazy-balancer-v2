@@ -90,14 +90,19 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 			return
 		}
 		status := http.StatusInternalServerError
+		message := "签发服务控制票据失败"
 		switch {
 		case errors.Is(err, services.ErrNodeNotFound):
 			status = http.StatusNotFound
+		case errors.Is(err, services.ErrNodeTokenPending):
+			// 已批准但令牌尚未交付：节点存在、只是暂不可签发——409 + 单源文案。
+			status = http.StatusConflict
+			message = err.Error()
 		case errors.Is(err, services.ErrInvalidServiceAction):
 			status = http.StatusBadRequest
 		}
 		auditFailure(nodeID, "签发票据失败（动作："+registerAuditField(req.Action)+"）")
-		clusterError(c, status, "签发服务控制票据失败", err)
+		clusterError(c, status, message, err)
 		return
 	}
 	message, err := h.callClusterServiceControl(c.Request.Context(), issued.URL, req.Action, issued.Ticket, currentUsername(c))

@@ -144,7 +144,10 @@ func serveWithToolVisibility(writer http.ResponseWriter, request *http.Request, 
 		}
 		meta = RequestMeta{Method: rpcRequest.Method, ID: rpcRequest.ID}
 	}
-	if meta.Method != "tools/list" || resolver == nil {
+	// JSON-RPC 通知（无 id）不是请求：MCP Streamable HTTP 对通知回 202 空体，
+	// 客户端不会把任何响应体配对给它。过滤路径必须整段短路——否则 recorder
+	// 收到空体 → 过滤失败 → fail-closed 凭空写出 200 + id:null 的「应答」。
+	if meta.Method != "tools/list" || len(meta.ID) == 0 || resolver == nil {
 		next.ServeHTTP(writer, request)
 		return
 	}

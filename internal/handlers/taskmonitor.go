@@ -117,6 +117,13 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	}
 	// 终态：触发全经任务引擎（CanTrigger 语义族——单飞/主节点门/历史统一）
 	if te := services.TaskEngine(); te != nil {
+		// 已停止引擎：admission 恒 ErrEngineStopped，此前并入 409 Conflict，与
+		// toggle/cancel/control 的 503「任务引擎已停止」成为同一事实的两种状态码
+		// （违文档 §4.3 写端点状态码统一），且会补记一条误导性「触发失败」审计。
+		if te.IsStopped() {
+			respondTaskEngineStopped(c)
+			return
+		}
 		if m, ok := te.Lookup(id); ok { // 单任务元数据（免全量 DescribeAll）
 			if !m.CanTrigger {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该任务不支持手动触发（常驻族启停即可/镜像族）"})
@@ -224,6 +231,15 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 	if !requireMasterNode(c) {
 		return
 	}
+	// 配置导入窗口 409（与 toggle/control 同门）：导入/还原期间协调器执行
+	// PauseScheduling+CancelInFlightRuns+WaitInFlightRuns 的系统性排空；此时
+	// 命中的 auto 轮若被用户取消，Cancel 走 consumeCancelledSlotLocked 消费
+	// 已到期槽——与「导入排空不消费槽（恢复后补跑）」语义相反，回滚后该族
+	// 自动更新会推迟到下一排程槽。
+	if configImportBusy() {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "配置导入进行中，暂不能取消任务"})
+		return
+	}
 	// 取消与 Trigger/Toggle/Control 共用集群写门；引擎 RunsOn 另管执行角色。
 	if te := services.TaskEngine(); te != nil {
 		// 已停止引擎：Cancel 恒 false，409「任务未在运行」会把「引擎已停止」
@@ -240,8 +256,10 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务未在运行中或不支持取消"})
 			return
 		}
-		recordAudit(c, "取消", "任务监控", "手动取消任务 "+id+"（下载阶段中断，已完成部分保留）")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已发出取消信号，任务将在当前下载阶段中断"})
+		// 文案中性化：可取消族含 crs/ip2region（检查→拉取→安装/重载），
+		// 硬编码「下载阶段」会让审计台账与真实中断阶段不一致。
+		recordAudit(c, "取消", "任务监控", "手动取消任务 "+id+"（当前阶段中断，已完成部分保留）")
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已发出取消信号，任务将在当前阶段中断"})
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -458,7 +476,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	if strings.HasPrefix(id, "cert-job:") {
 		keep = certJobLogMaxRotatedBackups
 	}
-	content := prependTaskLogRotations(path, string(data), keep)
+	content := prependTaskLogRotations(path, string(data), keep, tail)
 	// 256KB 是活动文件与轮转副本拼接后的合计预算。必须直接取
 	// 拼接串最后 tail 字节，再丢弃首行残段；tailLogWindow 只负责行边界，
 	// 不能把全串当成已定位的尾窗（否则仅丢首行，响应仍可数倍超限）。

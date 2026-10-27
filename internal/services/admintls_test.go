@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +58,36 @@ func TestSelfSignedCert_corrupt_pair_regenerates(t *testing.T) {
 	}
 	if _, err := (AdminTLSConfig{}).ResolveCertificate(dir); err != nil {
 		t.Fatalf("second resolve after regeneration: %v", err)
+	}
+}
+
+// 证书在场而私钥缺失必须留痕：静默重生成会以新密钥对覆盖既有 crt（已导入
+// 浏览器/系统的信任失效），且日志无线索指向「私钥丢失」这一真实原因。
+func TestSelfSignedCert_missingKeyWarnsAndRegenerates(t *testing.T) {
+	// Given：目录只有证书文件，私钥不存在（卷只挂 crt / 人工删除）
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "admin_tls.crt")
+	if err := os.WriteFile(certPath, []byte("not-a-cert"), 0644); err != nil {
+		t.Fatalf("seed certificate: %v", err)
+	}
+	logs := captureServiceLog(t)
+
+	// When：selfsigned 模式解析证书
+	cert, err := AdminTLSConfig{}.ResolveCertificate(dir)
+
+	// Then：自愈仍成功，且日志点名「私钥不可读」+ 缺失形态
+	if err != nil {
+		t.Fatalf("resolve certificate: %v", err)
+	}
+	if len(cert.Certificate) == 0 || cert.PrivateKey == nil {
+		t.Fatal("regenerated certificate is incomplete")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "私钥不可读") {
+		t.Fatalf("私钥缺失必须留痕（当前日志无线索指向真实原因）: %q", got)
+	}
+	if !strings.Contains(got, "缺失=true") {
+		t.Fatalf("日志必须区分「私钥缺失」与其它读失败形态: %q", got)
 	}
 }
 

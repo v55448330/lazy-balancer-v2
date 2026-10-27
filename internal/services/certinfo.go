@@ -408,16 +408,10 @@ func ExpiredACMECertInfoFallback(candidates []CertificateCandidate, caddyID, rul
 }
 
 // parseCertificateLeafFromPEM 只解析证书首块（不要求私钥配对）——历史行的
-// 私钥可能已损坏/缺失，但「证书覆盖哪些域名」只依赖证书本体。
+// 私钥可能已损坏/缺失，但「证书覆盖哪些域名」只依赖证书本体。解码单源
+// parseCertificateLeaf（与 CertNotAfterFromPEM / parseCertTime 同一实现）。
 func parseCertificateLeafFromPEM(certPEM string) *x509.Certificate {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return nil
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil
-	}
+	leaf, _ := parseCertificateLeaf(certPEM)
 	return leaf
 }
 

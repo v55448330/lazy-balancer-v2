@@ -47,7 +47,9 @@ var crawlerBuiltinSnapshot = geoipnames.BuiltinCrawlerIPLists()
 var crawlerDistSeedFile = "/app/waf.dist/crawler-ip-lists.seed.json"
 
 // loadCrawlerIPListsFromDB 以 DB 为唯一真相读取全部爬虫名单，按内部引擎 ID
-// 返回；用户可见名单名只用于定位，不写进运行快照。
+// 返回；用户可见名单名只用于定位，不写进运行快照。返回值区分两种形态：
+// 键存在且为空的引擎=「行存在但条目被清空（显式空集合）」；键缺失=「行缺失」
+// ——补种判据只对后者生效（见 seedAndRebuildCrawlerIPListSnapshot）。
 func loadCrawlerIPListsFromDB() (map[string][]string, error) {
 	all := map[string][]string{}
 	for _, src := range crawlerBotSources {
@@ -76,7 +78,13 @@ func loadCrawlerIPListsFromDB() (map[string][]string, error) {
 		}
 		if len(values) > 0 {
 			all[src.Name] = values
+			continue
 		}
+		// 行存在但显式为空（entries='[]'）：登记为空集合（非 nil，JSON 落盘为
+		// []），与「行缺失」区分开——补种判据（seedAndRebuildCrawlerIPListSnapshot）
+		// 只对缺失行补内置首版；对显式空行补种会把「管理员带外清空该引擎名单
+		// （意图=停用其豁免）」的意图静默推翻为内置首版。
+		all[src.Name] = []string{}
 	}
 	return all, nil
 }
@@ -152,7 +160,17 @@ func seedAndRebuildCrawlerIPListSnapshot() error {
 	}
 	// 名单名迁移由调用方在读库前完成一次（逐引擎 upsert 不再各自重跑：那等于
 	// 每引擎 N 条 UPDATE，且迁移晚于读库会让旧键行被重复写入）。
+	var explicitEmpty []string
 	for engineID, entries := range all {
+		if len(entries) == 0 {
+			// 行存在但显式为空：不补种内置首版（那是「行缺失」的判据，见
+			// loadCrawlerIPListsFromDB），也不回写（upsert 对空列表报错，且没有
+			// 任何内容可写）。运行快照保留该引擎的空数组——插件对空/缺项均判
+			// Transient，语义都是「该引擎豁免不生效」，但空数组让面板/快照读者
+			// 能看出是显式空而非漏种。
+			explicitEmpty = append(explicitEmpty, engineID)
+			continue
+		}
 		// 逐引擎只落 DB：带快照形态会在 DB 尚未补种完的中间态各写一次全量
 		// 快照（插件可能读到只含部分引擎的合法 JSON）。全量快照在循环末尾
 		// 单次写——变更/需刷新语义此处不消费（末尾写覆盖全部引擎）。
@@ -161,6 +179,10 @@ func seedAndRebuildCrawlerIPListSnapshot() error {
 			// 由调用方错误日志告警后下次启动继续补种。
 			return err
 		}
+	}
+	if len(explicitEmpty) > 0 {
+		// 显式空名单不改写、不补种，但必须留痕：该引擎的豁免当前不生效。
+		Logf("warn", "爬虫名单 %v 在库中显式为空（条目被清空）：运行快照保留空集合，对应引擎的豁免/伪装检测不生效；如需恢复请重新更新该源", explicitEmpty)
 	}
 	return writeCrawlerIPListSnapshotAll(all)
 }
@@ -200,7 +222,11 @@ func upsertCrawlerIPListChangedInner(engineID string, entries []string) (bool, e
 		// 部分提交：DB 已落定而快照失败，调用方仍须计入收敛面。
 		return changed, err
 	}
-	return true, nil
+	// 返回 changed（DB 内容真实变化）而非恒 true：snapshotNeeded 可在 DB 未变、
+	// 仅运行快照缺失/陈旧时为真——那种形态只是修好了快照，名单内容没变，
+	// 不得让调用方按「名单内容变化」触发投影收敛/热路径日志（口径与事实不符，
+	// 排障时会误判源站内容变化）。
+	return changed, nil
 }
 
 // upsertCrawlerIPListChangedInnerNoSnapshot 只落 DB 行，不写运行快照。

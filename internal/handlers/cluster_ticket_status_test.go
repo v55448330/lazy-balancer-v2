@@ -48,6 +48,45 @@ func TestGenerateClusterLoginTicket_nodeNotFoundReturns404(t *testing.T) {
 	}
 }
 
+// 已批准但集群令牌尚未交付（批准后从节点还没轮询注册状态回传哈希）的节点
+// 存在且被信任，只是暂不可签发：必须 409「令牌待交付」而不是 404「节点
+// 不存在」。旧实现把 approved ∧ keyHash=="" 与「未批准/不存在」同归
+// ErrNodeNotFound→404，排障方向被引向「节点是否被删除」。
+func TestGenerateClusterLoginTicket_tokenPendingReturns409(t *testing.T) {
+	// Given：主节点 + OIDC 会话 + 已批准但令牌为空的节点 8
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash,last_seen) VALUES (8,'tokenless','10.0.0.8',8000,'online',1,'',datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, "")}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/cluster/nodes/:id/login-ticket", func(c *gin.Context) {
+		c.Set("auth_method", "oidc")
+		h.GenerateClusterLoginTicket(c)
+	})
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/cluster/nodes/8/login-ticket", nil))
+
+	// Then：409 + 单源文案（与离线语义区分）
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%q, want 409", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), services.ErrNodeTokenPending.Error()) {
+		t.Fatalf("body=%q, want 含 %q", response.Body.String(), services.ErrNodeTokenPending.Error())
+	}
+}
+
 // 用户反馈(后):「生成登录票据」审计只写「节点 %d」,与服务控制事件
 // (cluster_service.go 「节点 %d（%s）」)不对称——补节点名,便于定位目标节点。
 func TestGenerateClusterLoginTicket_auditCarriesNodeName(t *testing.T) {

@@ -306,7 +306,7 @@ func auditTimingRecord(id, segment string, us int64) {
 	auditTimingMu.Unlock()
 	// 首个条目创建时启动周期 sweeper（进程级单例，注册表本身即
 	// 包级生命周期）——停流后过期条目也由周期清扫回收，不再仅依赖建条驱动。
-	startAuditTimingSweeperForTest()
+	startAuditTimingSweeper()
 	e.mu.Lock()
 	// 分段键用同包常量（timingSegmentPre/End）而非字面量：生产调用点传常量，
 	// 此处若写死字面量，改常量值或新增第三段时会静默不命中（分段丢失且无
@@ -323,10 +323,10 @@ func auditTimingRecord(id, segment string, us int64) {
 // auditTimingSweeperOnce 保证周期 sweeper 进程内单例（Caddy reload 不复制）。
 var auditTimingSweeperOnce sync.Once
 
-// startAuditTimingSweeperForTest 启动周期清扫 goroutine（幂等；命名带
-// ForTest 后缀以便测试直接触发启动而不必先建条）。每周期从 FIFO 队首弹出
+// startAuditTimingSweeper 启动周期清扫 goroutine（幂等；生产路径在首个计时
+// 条目创建时调用，测试亦直接调用以提前启动）。每周期从 FIFO 队首弹出
 // TTL 过期条目并压缩已弹出前缀，成本与过期条目数成正比。
-func startAuditTimingSweeperForTest() {
+func startAuditTimingSweeper() {
 	auditTimingSweeperOnce.Do(func() {
 		go func() {
 			// 50ms 量子累加而非一次睡满整周期：测试收窄清扫间隔后下个量子即

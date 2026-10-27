@@ -19,6 +19,7 @@ package services
 
 import (
 	"fmt"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
@@ -33,10 +34,14 @@ func RecordTaskLoopPref(taskID string, enabled bool) error {
 	if IsBusinessDrivenTask(taskID) {
 		return fmt.Errorf("任务调度偏好：%s 为业务驱动任务，调度由业务开关决定", taskID)
 	}
+	// updated_at 与任务域其余时间列同源（配置时区墙钟，见 taskengine 的
+	// engineNowStr 口径）；此前用 SQLite `datetime('now')`（UTC），跨表对账/
+	// 导出时与同域时间列偏差一个时区。
+	updatedAt := time.Now().In(CurrentLocation()).Format("2006-01-02 15:04:05")
 	_, err := db.DB.Exec(`INSERT INTO task_loop_prefs (task_id, enabled, updated_at)
-		VALUES (?, ?, datetime('now'))
+		VALUES (?, ?, ?)
 		ON CONFLICT(task_id) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at`,
-		taskID, boolToInt(enabled))
+		taskID, boolToInt(enabled), updatedAt)
 	return err
 }
 
@@ -82,12 +87,20 @@ func applyTaskLoopPrefs(te *taskengine.Engine, prefs map[string]bool) {
 	if te == nil {
 		return
 	}
+	stale := make([]string, 0, len(prefs))
 	for taskID, enabled := range prefs {
 		if IsBusinessDrivenTask(taskID) {
 			continue // 业务字段唯一事实源
 		}
 		meta, ok := te.Lookup(taskID)
-		if !ok || meta.Kind == taskengine.KindOneshot {
+		if !ok {
+			// 注册表外的残留行（升级删任务/改名后的历史行）：此前静默跳过却
+			// 每次启动加载，属域外状态——启动期清理（失败只 warn，偏好表非
+			// 关键路径）。
+			stale = append(stale, taskID)
+			continue
+		}
+		if meta.Kind == taskengine.KindOneshot {
 			continue
 		}
 		if enabled {
@@ -95,6 +108,21 @@ func applyTaskLoopPrefs(te *taskengine.Engine, prefs map[string]bool) {
 		} else {
 			te.StopLoop(taskID)
 		}
+	}
+	purgeStaleTaskLoopPrefs(stale)
+}
+
+// purgeStaleTaskLoopPrefs 删除注册表外任务的调度偏好残行（启动期一次性）。
+func purgeStaleTaskLoopPrefs(taskIDs []string) {
+	if len(taskIDs) == 0 || db.DB == nil {
+		return
+	}
+	for _, taskID := range taskIDs {
+		if _, err := db.DB.Exec(`DELETE FROM task_loop_prefs WHERE task_id=?`, taskID); err != nil {
+			Logf("warn", "清理未注册任务的调度偏好失败（%s）: %v", taskID, err)
+			continue
+		}
+		Logf("info", "已清理未注册任务的调度偏好残留（%s）", taskID)
 	}
 }
 

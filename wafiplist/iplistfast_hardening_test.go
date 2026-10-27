@@ -599,3 +599,32 @@ func TestIPListFast_symlinkEscapeRejected(t *testing.T) {
 		t.Fatal("白名单内 symlink 指向白名单内目标必须正常加载")
 	}
 }
+
+// 预分配容量必须被 initialPrefixCapacity 封顶：注释/空行密集的大文件
+// （带外写入、损坏残留）按 len/12 预估会一次申请 32MiB（每项 32B）却几乎全空。
+func TestPrefixCapHint_boundedOnCommentHeavyFiles(t *testing.T) {
+	cases := []struct {
+		name string
+		size int
+		want int
+	}{
+		{"empty", 0, 1},
+		{"small list", 12*100 + 1, 101},
+		{"at cap", initialPrefixCapacity * 12, initialPrefixCapacity},
+		{"64MiB comment-only file", 64 << 20, initialPrefixCapacity},
+		{"zero size", 0, 1},
+	}
+	for _, tc := range cases {
+		if got := prefixCapHint(tc.size); got != tc.want {
+			t.Errorf("%s: prefixCapHint(%d)=%d, want %d", tc.name, tc.size, got, tc.want)
+		}
+	}
+	// 上界与 maxEntries 语义无关：即便 maxEntries 被测试收窄到极小值，
+	// 预分配也不得超过条目硬上限。
+	oldEntries := maxEntries
+	maxEntries = 4
+	t.Cleanup(func() { maxEntries = oldEntries })
+	if got := prefixCapHint(64 << 20); got > maxEntries+1 {
+		t.Fatalf("预分配 %d 超过条目硬上限 %d", got, maxEntries+1)
+	}
+}

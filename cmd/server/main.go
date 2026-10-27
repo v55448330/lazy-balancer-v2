@@ -261,7 +261,12 @@ func run() error {
 	// 效果必须一致，含「载入」审计与全部前置物化步骤）。
 	// operator 透传——手动重载载入审计归因操作者，启动（空）归 system。
 	runConfigLoad := func(operator string) error {
-		services.SeedCRSRules()
+		// 播种失败必须可见：残缺规则树未能清除/复制失败=live 树不完整，渲染侧
+		// 会按「Include 缺失→warn+跳过」降级（WAF 只剩 IP 控制面）。不阻断
+		// 配置载入（否则只读挂载/磁盘满会把面板整体打成不可达），但不得静默。
+		if err := services.SeedCRSRules(); err != nil {
+			services.Logf("error", "CRS 规则库播种失败（live 规则树可能不完整，WAF 规则链降级）: %v", err)
+		}
 		services.ReconcileCRSState()
 		services.TaskLogf("startup:config-load", "libs", "规则库载入完成（CRS %s 对账）", services.CurrentCRSVersionForLog())
 		// 归一前落库的安全策略枚举空串行（发射端零产出 + Update 拒修的

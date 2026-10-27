@@ -36,6 +36,16 @@ func TestValidateImportedSecurityCustomRules_rejectsUnrenderableID(t *testing.T)
 	if err := validateImportedSecurityCustomRules([]map[string]any{row(nil)}); err != nil {
 		t.Fatalf("缺 id 行不得被拒（AUTOINCREMENT 分配）: %v", err)
 	}
+	// 非正 id 拒绝（与 nodes 门对齐）：SQLite INTEGER PRIMARY KEY 接受 0/负
+	// rowid，显式写入后发射 id（+10000）落在 10000/负数域，形成非预期 coraza
+	// 规则 id；省略该键仍由自增分配。
+	for _, invalid := range []any{float64(0), float64(-1), "0", "-7"} {
+		if err := validateImportedSecurityCustomRules([]map[string]any{row(invalid)}); err == nil {
+			t.Fatalf("非正 id=%v 必须被拒", invalid)
+		} else if !strings.Contains(err.Error(), "正整数") {
+			t.Fatalf("错误信息须点名「正整数」要求: %v", err)
+		}
+	}
 }
 
 func TestValidateImportedSecurityCustomRules_conditionLogicCompatibility(t *testing.T) {

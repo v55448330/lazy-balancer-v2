@@ -435,3 +435,32 @@ func restoreCRSFromSnapshot(liveDir, snapshotDir, version string) error {
 	defer wafFileMu.Unlock()
 	return restoreCRSFromSnapshotInLock(liveDir, snapshotDir, version)
 }
+
+// 无法清除残缺 rules 树时必须上抛：上层要能区分「已播种」与「未播种」。旧实现
+// 只打一条 error 日志后 return nil，live 树残缺时渲染侧对每个 Include 走
+// 「缺失→warn+跳过」，WAF 被静默降级为只剩 IP 控制面。
+func TestSeedCRSRules_residualTreeClearFailureIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略目录权限位，无法构造 RemoveAll 失败")
+	}
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	distDir := filepath.Join(root, "waf.dist", "crs")
+	// 残缺树：rules 目录存在但探针文件缺失（崩溃窗口形态）
+	writeTestFile(t, filepath.Join(liveDir, "rules", "REQUEST-900.conf"), "SecRule partial")
+	writeTestFile(t, filepath.Join(distDir, "rules", crsRulesProbeFile), "SecRule init")
+	// 去掉 live 父目录写权限 → RemoveAll(rules) 无法 unlink 目录项
+	if err := os.Chmod(liveDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(liveDir, 0o755) })
+
+	err := seedCRSRulesFrom(liveDir, snapshotDir, distDir)
+	if err == nil {
+		t.Fatal("清除残缺 rules 树失败时播种必须返回 error（不得当成功静默）")
+	}
+	if !strings.Contains(err.Error(), "清除残缺 rules 树") {
+		t.Fatalf("error=%v, want 点名清除残缺树失败", err)
+	}
+}

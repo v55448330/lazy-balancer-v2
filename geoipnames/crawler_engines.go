@@ -25,7 +25,8 @@ type CrawlerEngine struct {
 	ID string
 	// Name 中文展示名（策略向导勾选组）。
 	Name string
-	// UARegex 匹配（预编译，大小写不敏感）。
+	// UARegex 匹配（预编译，大小写不敏感）。只读：注册表共享同一 *Regexp，
+	// 禁止调用变异方法（Longest 等）——会改全局匹配语义。
 	UARegex *regexp.Regexp
 	// SpoofUARegex 是「伪装证据」的 UA 加严门：UA 只命中宽标记（厂商品牌串/
 	// 对话式标记，如裸 DeepSeek、ChatGPT-User）不足以单独判定伪装——这类
@@ -181,6 +182,12 @@ func CrawlerSpoofEvidence(engineID, userAgent string) bool {
 // CrawlerEngines 返回引擎注册表的**深拷贝**（防调用方篡改全局）：结构体与
 // 其中的 PTRSuffixes/IPRanges 切片都重新分配——只复制结构体的浅拷贝会让
 // out[i].PTRSuffixes[j] = … 写穿到全局注册表。
+//
+// 例外（只读契约）：UARegex/SpoofUARegex 两个 *regexp.Regexp 指针与全局
+// 注册表**共享**（正则不可变数据，按值复制无意义）。调用方**禁止**对返回值
+// 调变异方法（Longest 等）——那会改变全局匹配语义，让所有规则的爬虫豁免/
+// 伪装证据判定口径被静默改写且无任何测试会红。需要匹配请用包内
+// MatchCrawlerEngine / crawlerUAPrefilter。
 func CrawlerEngines() []CrawlerEngine {
 	out := make([]CrawlerEngine, len(crawlerEngines))
 	for i := range crawlerEngines {

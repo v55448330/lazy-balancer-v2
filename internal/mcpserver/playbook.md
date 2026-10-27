@@ -44,8 +44,9 @@
 ### 4.3 修改规则（安全姿势：先读后写）
 
 1. `get_rule` 取完整现状
-2. `update_rule` 只传要改的字段（部分更新）；协议切换会自动迁移上游协议并清理对侧字段
-3. `get_rule` 复查 + `get_upstream_health` 验证流量
+2. `update_rule` 只传要改的标量字段（部分更新）；协议切换会自动迁移上游协议并清理对侧字段
+3. **例外：`upstreams` 与 `path_rules` 是全量替换**——必须携带完整数组（每个上游含 `enabled`），先用 `get_rule` 取全集再改目标项，漏传的元素会被删除（流量收窄）
+4. `get_rule` 复查 + `get_upstream_health` 验证流量
 
 ### 4.4 排查流量异常
 

@@ -556,6 +556,47 @@ var adminBusiness5xxDetailFunctions = map[string]string{
 	"config_backup.go:importConfigBackupCore": "导入/还原事务与文件回滚失败需管理员看到具体原因",
 }
 
+// 政策前提门（admin 业务族）：清单条目必须是 admin 组的**路由处理器**——
+// 「保留底层细节」的理由是管理员排障接口；条目被移入 business 组时同一政策
+// 会向任意登录用户披露 DB errno/路径。此前只有 caddy 清单有组门，本清单缺，
+// 105 轮修的正是「端点被移组而清单仍绿」这一形态。
+//
+// 清单里有两类条目：路由处理器（须在 admin 组注册）与无路由入口的内部辅助
+// 函数（failImportTx/importConfigBackupCore，由同文件的处理器调用）——后者显式
+// 列在 helper 白名单里并附理由，新增的未注册条目一律判红（不得靠沉默混过）。
+func TestAdminBusiness5xxDetailPolicyRoutesAreAdminGroup(t *testing.T) {
+	helpersWithoutRoutes := map[string]string{
+		"config_backup.go:failImportTx":           "导入事务回滚收尾的内部辅助函数，无独立路由入口",
+		"config_backup.go:importConfigBackupCore": "导入/还原主干内部实现，由其处理器调用，无独立路由入口",
+	}
+	registrations := caddyRouteGroupRegistrations(t)
+	routed := 0
+	for key := range adminBusiness5xxDetailFunctions {
+		_, fn, ok := strings.Cut(key, ":")
+		if !ok || fn == "" {
+			t.Fatalf("政策登记条目 %q 形态非法（want 文件:函数）", key)
+		}
+		groups, registered := registrations[fn]
+		if registered {
+			routed++
+			if !groups["admin"] {
+				t.Errorf("政策清单条目 %q 注册在 %v 组而不是 admin 组——5xx 细节会披露给非管理员", key, groups)
+			}
+			if _, helper := helpersWithoutRoutes[key]; helper {
+				t.Errorf("政策清单条目 %q 已注册路由，必须从「无路由辅助函数」白名单移除", key)
+			}
+			continue
+		}
+		if _, helper := helpersWithoutRoutes[key]; !helper {
+			t.Errorf("政策清单条目 %q 在 middleware.go 中没有路由注册，也不在辅助函数白名单（过期条目或命名漂移）", key)
+		}
+	}
+	// 正向控制：路由条目必须真实命中（否则组门退化为空转）。
+	if routed < 7 {
+		t.Fatalf("政策清单只有 %d 条命中路由注册（< 7）——路由表派生或清单漂移", routed)
+	}
+}
+
 // 政策可判性门禁（admin 业务族）：登记文件里每个 5xx 拼接内部错误文本的函数
 // 都必须在清单内，且清单条目必须仍存在并仍在拼接细节（过期白名单会掩盖新
 // 端点的政策缺口）。4xx 配置拒绝类不受约束。

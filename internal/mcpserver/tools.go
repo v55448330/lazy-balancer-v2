@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"encoding/json"
+
+	"lazy-balancer-v2/internal/apipath"
 )
 
 const restAPIPathPrefix = "/api/v1"
@@ -41,6 +43,39 @@ func ListToolSpecs() []ToolSpec {
 			item.InputSchema = json.RawMessage(spec.schema)
 		}
 		result[index] = item
+	}
+	return result
+}
+
+// ToolTransportForTest 是一个工具的参数传输面事实：schema 属性落在 path /
+// query / body 哪一侧，由 forward 的取值面（pathArgs/queryArgs）唯一决定，
+// body 是「其余全部参数」。handlers 侧的契约对账测试用它把「schema 属性 ↔
+// REST query 参数」做反向核对——属性同名于 REST query 参数却未登记为
+// queryArg 时，转发会把选项写进请求体改写业务数据（import_config 的
+// sections 即该形态：落进 body 会改动备份自身的分类记录，使 v3 校验和不匹配
+// 而被判「已篡改」）。
+type ToolTransportForTest struct {
+	Name      string
+	Method    string
+	GinPath   string
+	PathArgs  []string
+	QueryArgs []string
+	Schema    string
+}
+
+// ToolTransportsForTest 返回全部工具的传输面事实（路径还原为 Gin 形态
+// :param，与 handlers 侧 apiDocContracts 的键同形）。
+func ToolTransportsForTest() []ToolTransportForTest {
+	result := make([]ToolTransportForTest, 0, len(tools))
+	for _, spec := range tools {
+		result = append(result, ToolTransportForTest{
+			Name:      spec.name,
+			Method:    spec.method,
+			GinPath:   apipath.ToGin(spec.path),
+			PathArgs:  append([]string(nil), spec.pathArgs...),
+			QueryArgs: append([]string(nil), spec.queryArgs...),
+			Schema:    spec.schema,
+		})
 	}
 	return result
 }

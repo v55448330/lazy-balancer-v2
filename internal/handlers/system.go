@@ -42,7 +42,9 @@ func restartProcess() {
 func (h *Handlers) RestartService(c *gin.Context) {
 	// 与同族写端点同口径：导入窗口内重启会终止提交前已落盘的 WAF 文件/证书
 	// 回退路径（abort 只存在于进程内），比任何被 409 拦下的写操作更重。
-	if rejectWriteDuringImport(c, "执行服务重启（配置导入进行中）") {
+	// action 只传短动作词——rejectWriteDuringImport 已自带「配置导入进行中，
+	// 暂不能」前缀，再带括号短语会得到重复文案。
+	if rejectWriteDuringImport(c, "执行服务重启") {
 		return
 	}
 	recordAudit(c, "重启", "系统", "用户触发服务重启")

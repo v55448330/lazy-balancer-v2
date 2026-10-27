@@ -80,3 +80,26 @@ func TestParse_saturatesOverflowingSeconds(t *testing.T) {
 		})
 	}
 }
+
+// 超出 int64 的 delay-seconds：Atoi 失败曾让它落进 HTTP-date 分支并最终归零，
+// 语义从「长期退避」翻转成「立刻重试」——比可解析的溢出更危险（后者至少走了
+// 钳制）。超界必须饱和为最大时长；负向超界仍是「非正值」语义，按零处理。
+func TestParse_saturatesSecondsBeyondInt64(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"one past int64", "9223372036854775808", time.Duration(math.MaxInt64)},
+		{"far past int64", "99999999999999999999", time.Duration(math.MaxInt64)},
+		{"negative beyond int64 stays non-positive", "-99999999999999999999", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Parse(tc.header, now); got != tc.want {
+				t.Fatalf("Parse(%q)=%v, want %v", tc.header, got, tc.want)
+			}
+		})
+	}
+}

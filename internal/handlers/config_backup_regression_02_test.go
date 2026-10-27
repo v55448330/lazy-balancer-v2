@@ -695,7 +695,12 @@ func TestLbbakImport_threatSourceFailureWarnsAndKeepsLocal(t *testing.T) {
 func TestImportConfigBackup_appliesLogLevelAndAdminTLSTip(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.RecordRuntimeAdminTLS(services.AdminTLSConfig{Enabled: false, Mode: "selfsigned"})
-	t.Cleanup(func() { _ = services.ConfigureLogLevel("info") })
+	// 复位进程级运行态快照：只复位日志级别会让本用例写入的 admin TLS 快照
+	// 继续影响后续用例（-shuffle 下顺序依赖型假红/假绿）。
+	t.Cleanup(func() {
+		_ = services.ConfigureLogLevel("info")
+		services.ResetRuntimeAdminTLSForTest()
+	})
 
 	body := legacyBackupJSON(t, nil, map[string]any{"log_level": "debug", "admin_tls_enabled": 1, "admin_tls_mode": "selfsigned"}, nil)
 	rec := importBackupShared(h, t, body)

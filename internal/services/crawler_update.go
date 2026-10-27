@@ -109,18 +109,35 @@ func validateCrawlerEntriesSanity(engineID string, entries []string) ([]string, 
 	// 的超网都不得进入豁免名单。
 	filtered := make([]string, 0, len(entries))
 	filteredPrefixes := make([]netip.Prefix, 0, len(entries))
+	dropped := make([]string, 0)
 	for _, entry := range entries {
 		prefix, err := netip.ParsePrefix(entry)
 		if err != nil {
 			continue
 		}
+		contained := false
 		for _, off := range official {
 			if off.Bits() <= prefix.Bits() && off.Contains(prefix.Addr()) {
 				filtered = append(filtered, entry)
 				filteredPrefixes = append(filteredPrefixes, prefix)
+				contained = true
 				break
 			}
 		}
+		if !contained {
+			dropped = append(dropped, entry)
+		}
+	}
+	// 段外条目必须留痕：厂商新增/调整 IP 段而代码 IPRanges 未同步时，这些条目
+	// 会被静默丢弃——合法爬虫失去豁免，管理员只能看到条目数变小，无从判断
+	// 「是错误页还是段集未同步」。本门只在更新任务（日级、逐源）里执行，日志
+	// 量有界，不额外节流。
+	if len(dropped) > 0 {
+		sample := dropped
+		if len(sample) > 5 {
+			sample = sample[:5]
+		}
+		Logf("warn", "爬虫源 %s 解析出 %d 条不在已声明官方段内的条目（保留 %d 条，样本 %v）：厂商新增段需同步 geoipnames.CrawlerEngines.IPRanges，否则该段不会被豁免", engineID, len(dropped), len(filtered), sample)
 	}
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("解析结果（%d 条）未落在 %s 声明的官方 IP 段内（疑似错误页/版本串污染），保留上次快照", len(entries), engineID)

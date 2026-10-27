@@ -73,6 +73,9 @@ test-ui/
 openspec/
 .omo/
 .sisyphus/
+# 代码图索引（本地工具产物，单库可达 ~160MB）：不进构建上下文，
+# 否则每次 docker build 都要传输这份无意义内容（Dockerfile 不 COPY 它）。
+.codegraph/
 data-qa-master/
 data-qa-slave/
 dist/

@@ -458,19 +458,23 @@ func versionTableScheduleStrict(table string) ([]int, string, error) {
 	return days, normHHMM, nil
 }
 
-// logScheduleReadFailure 排程读取失败的状态转换留痕。// 此前三处读取错误全部静默——库不可读/表缺失时威胁库、爬虫地址库、CRS、
+// logScheduleReadFailure 排程/配置读取失败的状态转换留痕（文案必须是通用
+// 「读取配置失败（key）」，因为 LogConfigReadFailure 把本 helper 复用到审计页
+// 时区、请求体上限、日志统计阈值等非排程配置项——此前文案写死「读取任务
+// 排程失败」，审计页时区值非法时排障者被引向调度器）。// 此前三处读取错误
+// 全部静默——库不可读/表缺失时威胁库、爬虫地址库、CRS、
 // IP2Region 自动更新「静默停摆」（auto_update 读成 false + 槽位空），排障
 // 零信号。按首报留痕（同 tz/logrotate 的 logStateTransition 口径），恢复时
 // 补一条 info，避免 30s/60s 轮询刷日志。
 func logScheduleReadFailure(key string, err error) {
 	if lvl := logStateTransition(key, true); lvl != "" {
-		Logf(lvl, "读取任务排程失败（%s），按默认排程/关闭状态继续: %v", key, err)
+		Logf(lvl, "读取配置失败（%s），按默认值继续: %v", key, err)
 	}
 }
 
 func logScheduleReadRecovered(key string) {
 	if lvl := logStateTransition(key, false); lvl != "" {
-		Logf(lvl, "读取任务排程已恢复（%s）", key)
+		Logf(lvl, "读取配置已恢复（%s）", key)
 	}
 }
 

@@ -110,7 +110,7 @@ const updateAPIKeyStatusSchema = `{"type":"object","required":["id"],"properties
 const previewConfigSchema = `{"type":"object","properties":{"source":{"type":"string","description":"配置分区标识（如 caddy/basic/security，分区字段清单同 update_config）"}},"additionalProperties":true,"description":"预览配置变更（不写库不触发 Caddy）；分区字段同 update_config 的 properties"}`
 const validateConfigSchema = `{"type":"object","description":"完整 Caddy 配置 JSON 本体（无固定子集——校验目标是任意 Caddy 配置）","additionalProperties":true}`
 const updateCaddyConfigSchema = `{"type":"object","description":"完整 Caddy 配置 JSON 本体（一次性逃生口：后续任何配置变更以数据库权威配置覆盖它）","additionalProperties":true}`
-const configImportSchema = `{"type":"object","properties":{"meta":{"type":"object","description":"备份元信息（app/version）"},"config":{"type":"object","description":"全局配置段"},"tables":{"type":"object","description":"分表数据段"},"sections":{"type":"array","items":{"type":"string"},"description":"可选导入分类子集（JSON 备份形态）"}},"additionalProperties":true,"description":"v2 配置备份 JSON；lbbak 二进制备份与超过 1 MiB 网关上限的备份请走 REST /config/import 或管理面板"}`
+const configImportSchema = `{"type":"object","properties":{"meta":{"type":"object","description":"备份元信息（app/version）"},"config":{"type":"object","description":"全局配置段"},"tables":{"type":"object","description":"分表数据段"},"sections":{"type":"string","description":"可选导入分类子集（逗号分隔，等价 REST ?sections=；省略=按备份自身记录的分类全选）。注意：备份正文里的 sections 是打包时的分类记录并参与完整性校验和，本参数经 query 传输，不要写进备份正文"}},"additionalProperties":true,"description":"v2 配置备份 JSON；lbbak 二进制备份与超过 1 MiB 网关上限的备份请走 REST /config/import 或管理面板"}`
 const importV1ConfigSchema = `{"type":"object","description":"v1（nginx 版）备份 JSON 整体作为请求体（仅导入负载规则部分；覆盖导入会清理旧规则及其安全策略绑定）","additionalProperties":true}`
 
 var tools = []toolSpec{
@@ -244,8 +244,8 @@ var tools = []toolSpec{
 	{"delete_api_key", "删除指定 API 密钥", http.MethodDelete, "/api-keys/{id}", []string{"id"}, nil, idSchema("id", "密钥 ID", "integer")},
 	{"preview_config", "预览配置变更（不应用）", http.MethodPost, "/config/preview", nil, nil, previewConfigSchema},
 	{"validate_config", "验证配置文件有效性", http.MethodPost, "/config/validate", nil, nil, validateConfigSchema},
-	{"import_config", "导入 v2 配置备份", http.MethodPost, "/config/import", nil, nil, configImportSchema},
-	{"validate_import", "验证导入文件（不写入）", http.MethodPost, "/config/import/validate", nil, nil, configImportSchema},
+	{"import_config", "导入 v2 配置备份", http.MethodPost, "/config/import", nil, []string{"sections"}, configImportSchema},
+	{"validate_import", "验证导入文件（不写入）", http.MethodPost, "/config/import/validate", nil, []string{"sections"}, configImportSchema},
 	{"import_v1_config", "导入 v1（nginx）配置", http.MethodPost, "/config/import/v1", nil, nil, importV1ConfigSchema},
 	{"get_rule_logs", "获取指定规则的访问日志（最近 1000 行尾读，无 offset 续读）", http.MethodGet, "/rules/{caddy_id}/logs", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"get_rule_caddy_config", "获取指定规则的 Caddy 配置片段", http.MethodGet, "/rules/{caddy_id}/caddy-config", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},

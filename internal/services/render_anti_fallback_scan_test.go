@@ -105,6 +105,9 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		`r.Strategy = "weighted_round_robin"`: "负载策略空串=未配置→默认加权轮询：类型②省略型（写侧归一+DB DEFAULT 单源，渲染层承担省略替换）——G3 Ruling 披露",
 		`protocol = "http"`:                   "上游协议空串=未配置→http：类型②省略型（写侧允许空并声明默认）——G3 Ruling 披露",
 	},
+	"trustedProxyServerFields": {
+		`degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/限流/GeoIP 均按回源地址判定"`: "受信代理 enabled=1 但零有效网段：这是用户可见降级信号文案（字段形态不变，仅附加提示），不是用默认值替换无效库值；写侧允许该形态且需显性告知——Ruling 2026-10-28",
+	},
 	"buildCaddyLogging": {
 		"level = \"info\"": "日志级别空串=未配置→info：类型②省略型（字符串缺省，写侧校验非空枚举但存量空值合法）——G3 Ruling 披露",
 	},
@@ -165,10 +168,10 @@ var antiFallbackAllowlist = map[string]map[string]string{
 	"ParseCRSExcludedRules": {
 		`entry.Scope = "all"`: "CRS 排除项 scope 缺省→all：旧格式/缺字段（集群同步、带外改库、降级版本写入）的防御归一到全局限定，属类型②省略型归一而非无效库值兜底——可达性 Ruling 披露",
 	},
-	// 「信任名单 + 绕过」复合条件扫描登记：SecRule 编号按发射形态二选一。
-	"buildCorazaDirectivesWithIndex": {
-		"trustID = 5": "SecRule 编号按形态二选一（3=仅信任、5=信任同时覆盖绕过优先级）：两侧均为显式常量选择，不承载任何库值兜底（编号由代码契约固定）——复合条件扫描 Ruling 披露",
-	},
+	// buildCorazaDirectivesWithIndex 的「信任名单 + 绕过」复合条件条目已退役：
+	// 该函数改为用单源布尔 emitTrustControl 开分支（不再以库值复合条件包裹
+	// trustID 选择），扫描器不再把 `trustID = 5` 识别为守卫分支内兜底——编号
+	// 二选一本来就是显式常量选择，不是库值兜底。
 }
 
 func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {

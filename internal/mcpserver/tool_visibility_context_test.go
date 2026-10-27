@@ -101,3 +101,32 @@ func TestServeWithToolVisibility_gatewayMetaNonToolsListSkipsFiltering(t *testin
 		t.Fatalf("非 tools/list 响应被过滤: %v", names)
 	}
 }
+
+// tools/list 的通知形态（JSON-RPC 无 id）不是请求：MCP Streamable HTTP 对通知
+// 回 202 空体，客户端不会也不该把任何响应体配对给它。旧实现只判 method，
+// 把通知当请求处理：recorder 收到空体 → 过滤失败 → fail-closed 写出
+// 200 + id:null，凭空构造一个客户端无从配对的响应（协议形态偏差）。
+func TestServeWithToolVisibility_notificationToolsListKeepsProtocolNoContent(t *testing.T) {
+	resolver := func(string) (apiKeyVisibility, error) {
+		t.Fatal("通知形态无响应可配对，不得触发可见性解析")
+		return apiKeyVisibility{}, nil
+	}
+	// mcp-go 对无 id 的 tools/list 回 202 空体（response == nil 分支）。
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	note := `{"jsonrpc":"2.0","method":"tools/list","params":{}}`
+	body := &countingReadCloser{reader: strings.NewReader(note)}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", body)
+	request = request.WithContext(WithRequestMeta(request.Context(), RequestMeta{Method: "tools/list"}))
+	response := httptest.NewRecorder()
+
+	serveWithToolVisibility(response, request, next, resolver)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("通知 status=%d, want 202（不得被改写成 200 应答）", response.Code)
+	}
+	if got := strings.TrimSpace(response.Body.String()); got != "" {
+		t.Fatalf("通知响应体=%q, want 空（客户端无从配对该响应）", got)
+	}
+}

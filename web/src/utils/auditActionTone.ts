@@ -33,6 +33,8 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '更新信息': 'warning',
   '修改状态': 'warning',
   '重置密码': 'warning',
+  // MFA 重绑轮换第二因子：风险操作（旧验证器失效/恢复码重生成），按 warning 呈现。
+  '重新绑定': 'warning',
   '重载': 'warning',
   '续签': 'warning',
   // 重新签发（证书重签，与「续签」同族的风险操作）——安全网：后端新动作

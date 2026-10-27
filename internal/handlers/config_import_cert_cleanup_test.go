@@ -130,5 +130,32 @@ func cleanupCertFilesWithoutMaterial(ctx context.Context, t *testing.T) int {
 	if err != nil {
 		t.Fatalf("判定无材料规则: %v", err)
 	}
-	return removeCertFilesForRules(ids)
+	cleaned, unprocessed := removeCertFilesForRules(ctx, ids)
+	if unprocessed != 0 {
+		t.Fatalf("unprocessed=%d, want 0（无预算压力场景）", unprocessed)
+	}
+	return cleaned
+}
+
+// 「无材料规则」通道必须逐项检查清理预算：此前只在进入通道前判一次，批量
+// 通道（可含全部非 TLS 规则）会在预算耗尽后继续跑完，把导入会话锁与调度
+// 暂停拖到无上界。这里以可注入的 stop 钩子钉「逐项生效 + 正确计数」。
+func TestRemoveCertFilesForRules_honorsBudgetPerItem(t *testing.T) {
+	withIsolatedGlobal(t)
+	newBackupTestHandlers(t)
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+
+	original := importCleanupShouldStop
+	t.Cleanup(func() { importCleanupShouldStop = original })
+	calls := 0
+	importCleanupShouldStop = func(context.Context) bool {
+		calls++
+		return calls > 2 // 第 3 次检查（index=2）起预算耗尽
+	}
+
+	cleaned, unprocessed := removeCertFilesForRules(context.Background(),
+		[]string{"lb_budget_a", "lb_budget_b", "lb_budget_c", "lb_budget_d"})
+	if cleaned != 2 || unprocessed != 2 {
+		t.Fatalf("cleaned=%d unprocessed=%d, want 2/2（预算对无材料通道逐项生效）", cleaned, unprocessed)
+	}
 }

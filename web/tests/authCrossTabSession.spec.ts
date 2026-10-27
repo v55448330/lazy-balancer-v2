@@ -72,9 +72,10 @@ export class ApiRequestError extends Error {
   constructor(message, status) { super(message); this.status = status; this.name = 'ApiRequestError' }
 }
 export const isTokenExpired = (token) => !token
-export const request = { get: (url) => globalThis.__authGet(url), post: async () => ({ data: undefined }) }
+export const request = { get: (url) => globalThis.__authGet(url), post: (url, body) => globalThis.__authPost(url, body) }
 `),
 })
+host.__authPost = async () => ({ data: undefined })
 
 // 静态 import 不可行：auth.ts 的模块顶层就读 location/localStorage，必须先搭好
 // 浏览器宿主再加载（且 element-plus 替身经 registerModuleHooks 注册，同样先于加载）。
@@ -311,5 +312,22 @@ test('OIDC 换令牌：清空上一账号的用户与节点模式，迟到响应
     assert.equal(store.user, null, '旧身份的迟到响应不得复活已清空的用户')
   } finally {
     restore()
+  }
+})
+
+// ── 200 缺 token 的契约违约：不得把 undefined 当令牌写进会话与 localStorage ──
+// 后端/网关异常返回 200 但无 token 时，原实现让界面停在登录页且无任何提示，
+// localStorage 还残留字符串 "undefined"（请求层过滤它，故无害但脏）。
+test('登录 200 缺 token：显性报错，且不写脏令牌/不推进身份代际', async () => {
+  storage.set('token', 'tok-keep')
+  const store = newStore()
+  const original = host.__authPost
+  host.__authPost = async () => ({ node_mode: 'master' })
+  try {
+    await assert.rejects(() => store.login('alice', 'pw'), /响应异常/, '缺 token 必须显性失败而不是静默半登录')
+    assert.equal(storage.get('token'), 'tok-keep', 'localStorage 不得被写成 "undefined"')
+    assert.equal(store.token, 'tok-keep', '内存令牌不得被覆写')
+  } finally {
+    host.__authPost = original
   }
 })

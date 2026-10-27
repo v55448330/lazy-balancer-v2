@@ -36,9 +36,9 @@ func TestCreateSecurityPolicy_explicitTypeNormalizesOutOfStageFields(t *testing.
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then：201；mode='off'、CRS/自定义/限流归零、阶段 1 字段保留、type=stage1
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	// Then：200；mode='off'、CRS/自定义/限流归零、阶段 1 字段保留、type=stage1
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var payload struct {
 		Data struct {
@@ -70,8 +70,8 @@ func TestCreateSecurityPolicy_typeInferredAndMixedRejected(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var policyType string
 	if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,'') FROM security_policies WHERE name='infer-waf'`).Scan(&policyType); err != nil {
@@ -114,8 +114,8 @@ func TestCreateSecurityPolicy_explicitTypeNormalizesCrawlerExemption(t *testing.
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
-			if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-				t.Fatalf("create status=%d body=%s, want 2xx", response.Code, response.Body.String())
+			if response.Code != http.StatusOK {
+				t.Fatalf("create status=%d body=%s, want 200", response.Code, response.Body.String())
 			}
 			var exempt bool
 			var engines string
@@ -389,8 +389,8 @@ func TestCreateSecurityPolicy_stage0KeepsTrustAndDetection(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create stage0 status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("create stage0 status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var policyType, mode, whitelist string
 	var trustDetection, rlEnabled bool
@@ -412,8 +412,8 @@ func TestCreateSecurityPolicy_stage1ClearsTrustFields(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create stage1 status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("create stage1 status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var whitelist, wlRefs string
 	var wlEnabled bool
@@ -446,8 +446,8 @@ func TestCreateSecurityPolicy_stage23ZeroWhitelistEnabled(t *testing.T) {
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
-			if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-				t.Fatalf("create %s status=%d body=%s, want 2xx", tc.policyType, response.Code, response.Body.String())
+			if response.Code != http.StatusOK {
+				t.Fatalf("create %s status=%d body=%s, want 200", tc.policyType, response.Code, response.Body.String())
 			}
 			var wlEnabled bool
 			var policyType string
@@ -811,5 +811,67 @@ func seedPolicyAttributionEvent(t *testing.T, policyID int, action, timeExpr, po
 	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time,rule_caddy_id,policy_id,client_ip,method,uri,event_type,rule_triggered,rule_msg,action,anomaly_score,rule_name,policy_name,transaction_id)
 		VALUES (`+timeExpr+`,'lb_x',?,'203.0.113.9','GET','/x','waf','942100','msg',?,0,'x',?,?)`, policyID, action, policyName, fmt.Sprintf("tx-%d-%s-%s", policyID, action, timeExpr)); err != nil {
 		t.Fatalf("seed event: %v", err)
+	}
+}
+
+// 机器客户端 GET→PUT 往返：详情对 ” 存量行（导入/旧快照遗留）回传
+// policy_type:""，PUT 必须按「未提供」处理（合并后内容重推断落库），
+// 不得 400「无效的策略类型」。此前 PUT 的 switch 无 case ""，回写即 400。
+func TestUpdateSecurityPolicy_emptyPolicyTypeTreatedAsOmitted(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, policy_type, enabled) VALUES ('legacy-empty-type','blocking','',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 详情回传空串（存量态，机器客户端据此构造回写载荷）
+	rec := getRequest(t, router, fmt.Sprintf("/security/policies/%d", id))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var detail struct {
+		Data struct {
+			PolicyType string `json:"policy_type"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Data.PolicyType != "" {
+		t.Fatalf("detail policy_type=%q, want \"\"（夹具失效）", detail.Data.PolicyType)
+	}
+
+	// When：原样回写
+	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"policy_type": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT policy_type=\"\" status=%d body=%s, want 200（空串等价省略）", rec.Code, rec.Body.String())
+	}
+	// Then：按合并后内容重推断落库（mode=blocking → stage3）
+	var stored string
+	if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,'') FROM security_policies WHERE id=?`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != models.PolicyTypeStage3 {
+		t.Fatalf("stored policy_type=%q, want %q（按合并内容重推断）", stored, models.PolicyTypeStage3)
+	}
+}
+
+// 反例回归：非法枚举值仍 400（空串特判不得放行任意值）
+func TestUpdateSecurityPolicy_invalidPolicyTypeStillRejected(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, policy_type, enabled) VALUES ('bad-explicit-type','blocking','stage3',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"policy_type": "stage9"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT policy_type=stage9 status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 }

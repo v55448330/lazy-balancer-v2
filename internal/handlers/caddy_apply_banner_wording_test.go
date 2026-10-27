@@ -54,6 +54,33 @@ func TestCaddyApplyFailureBanner_twoStateWording(t *testing.T) {
 	}
 }
 
+// 横幅（全员可见）不得内嵌 Caddy admin 端点地址：/load 传输失败的错误文本恒含
+// 「Post "http://<admin>/load"」，自定义 caddy_admin_url 时等于把内部控制面
+// 地址+端口披露给任意登录用户（含只读 API Key）。服务端日志保留原文。
+func TestCaddyApplyFailureBanner_redactsAdminEndpoint(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	handler := &Handlers{}
+
+	transportErr := errors.New(`failed to apply config: Post "http://10.20.30.40:2019/load": dial tcp 10.20.30.40:2019: connect: connection refused`)
+	handler.recordCaddyApplyFailure(transportErr, nil)
+
+	got := bannerText(t)
+	if strings.Contains(got, "10.20.30.40") || strings.Contains(got, "2019") {
+		t.Fatalf("横幅=%q, want 不含 admin 端点地址/端口", got)
+	}
+	if !strings.Contains(got, "<Caddy admin 端点>") {
+		t.Fatalf("横幅=%q, want 保留「发生了什么」（地址替换为占位短语）", got)
+	}
+	// 正向控制：占位替换不得吃掉其余诊断信息（连接失败原因必须保留）。
+	if !strings.Contains(got, "connection refused") {
+		t.Fatalf("横幅=%q, want 保留底层错误原因", got)
+	}
+	// 纯文本错误不得被改写。
+	if redacted := redactCaddyAdminEndpoint("Caddy 配置应用失败（旧配置已保留）：配置被拒绝"); redacted != "Caddy 配置应用失败（旧配置已保留）：配置被拒绝" {
+		t.Fatalf("无地址文本不得被改写: %q", redacted)
+	}
+}
+
 func TestCaddyApplyFailureLabel_shapes(t *testing.T) {
 	if got := caddyApplyFailureLabel(nil); got != caddyApplyOldConfigKeptLabel {
 		t.Fatalf("label(nil)=%q", got)

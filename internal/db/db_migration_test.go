@@ -2248,7 +2248,7 @@ func TestMigrateCanonicalDomains_dedupeKeepsCertMaterialRowInSinglePass(t *testi
 }
 
 // migrateLbRulesPrimaryKey 重建 lb_rules/upstreams 时，随表
-// DROP 级联删除既有索引——三张高频索引若只在重建前创建，则整个启动周期内缺失，
+// DROP 级联删除既有索引——高频索引若只在重建前创建，则整个启动周期内缺失，
 // 要到下次启动才被 IF NOT EXISTS 自愈。同一启动内必须补齐。
 func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 	// Given：lb_rules 仍以 id 为主键的遗留库（触发 PK 重建）
@@ -2272,8 +2272,9 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 	// When：遗留库启动一次（PK 重建 DROP 并重建两张表）
 	reopenDatabaseForTest(t, dir)
 
-	// Then：随表删除的三张索引在同一启动内重新存在
-	for _, index := range []string{"idx_upstreams_rule_enabled_id", "idx_lb_rules_listen_port", "idx_lb_rules_enabled"} {
+	// Then：随表删除的索引在同一启动内重新存在
+	for _, index := range []string{"idx_upstreams_rule_enabled_id", "idx_lb_rules_listen_port", "idx_lb_rules_enabled",
+		"idx_lb_rules_block_page_stage1", "idx_lb_rules_block_page_stage3"} {
 		var count int
 		if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count); err != nil {
 			t.Fatalf("query index %s: %v", index, err)

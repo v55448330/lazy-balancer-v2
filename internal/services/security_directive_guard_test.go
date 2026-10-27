@@ -67,8 +67,11 @@ func TestDirectiveLineLength_assertHelper(t *testing.T) {
 func TestDirectiveLineLength_engineGuardViaGiantCustomPattern(t *testing.T) {
 	// Given：自定义规则携带 50KB pattern（渲染单行超 48KiB）
 	policy := &models.SecurityPolicy{
-		Mode:        "custom_only",
-		CustomRules: json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"` + strings.Repeat("a", 50*1024) + `"}]}]`),
+		Mode: "custom_only",
+		// custom_only + 启用规则会发射 body processor 守卫（id:11 计分=阈值），
+		// 阈值按真实库形态给合法值 5。
+		AnomalyThreshold: 5,
+		CustomRules:      json.RawMessage(`[{"id":1,"name":"r","enabled":true,"action":"block","conditions":[{"target":"uri","operator":"contains","pattern":"` + strings.Repeat("a", 50*1024) + `"}]}]`),
 	}
 
 	// When

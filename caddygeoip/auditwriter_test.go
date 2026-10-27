@@ -1552,7 +1552,7 @@ func TestAuditTimingRegistry_periodicSweep(t *testing.T) {
 
 	// 种入已过期条目（不经建条路径——建条驱动的清扫不触发）。
 	seedAuditTimingEntryForTest("00000000000000aa", time.Now().Add(-2*time.Duration(auditTimingEntryTTLNs.Load())))
-	startAuditTimingSweeperForTest()
+	startAuditTimingSweeper()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

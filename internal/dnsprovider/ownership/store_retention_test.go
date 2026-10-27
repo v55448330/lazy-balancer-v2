@@ -118,3 +118,43 @@ func TestStore_saveRetiresOnlyBeyondRetentionBoundary(t *testing.T) {
 		}
 	}
 }
+
+// 退役的运维含义必须在日志里说清：能留在账本里超过保留期的条目，按构造都是
+// 「删除未确认」的（成功删除的条目早被 Remove）——退役只动本地文件，远端
+// `_acme-challenge` TXT 可能继续存在。日志只说「退役 N 条」会让运维误以为远端
+// 已回收，30 天累积后区里留下同域多条 TXT 增加排障成本。
+func TestStore_saveRetirementLogStatesRemoteResidue(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var lines []string
+	prev := logf
+	SetLogf(func(level, format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, level+" "+fmt.Sprintf(format, args...))
+	})
+	t.Cleanup(func() { SetLogf(prev) })
+
+	old := Record{Provider: "dnspod", Zone: "example.com", FQDN: "_acme-challenge.example.com", Value: "v1", RecordID: "1", CreatedAt: time.Now().Add(-OwnershipRetention - time.Hour)}
+	if err := store.Add(old); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "退役 1 条") {
+		t.Fatalf("退役日志缺失或条数不符: %q", joined)
+	}
+	if !strings.Contains(joined, "残留") {
+		t.Fatalf("退役日志未说明远端记录可能残留: %q", joined)
+	}
+	// 仍不得扩散用户数据（FQDN/记录 ID/值）。
+	for _, leak := range []string{"_acme-challenge.example.com", "record_id", "v1"} {
+		if strings.Contains(joined, leak) {
+			t.Fatalf("退役日志扩散了用户数据 %q: %q", leak, joined)
+		}
+	}
+}

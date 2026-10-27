@@ -24,6 +24,35 @@ func TestRuleTriggeredMultiFilterSQL_singleValueByteIdentical(t *testing.T) {
 	}
 }
 
+// WAF 标签的部分输入（"W"）同时前缀命中显示标签与紧凑标签时，只并入一次
+// CRS 形态条件——此前两处各自 append 会拼出重复谓词 ((GLOB '9…') OR (GLOB '9…'))。
+func TestRuleTriggeredFilterSQL_wafPrefixDedupesCondition(t *testing.T) {
+	const cond = "rule_triggered GLOB '9[0-9][0-9][0-9][0-9][0-9]'"
+	for _, input := range []string{"W", "WAF", "WAF·"} {
+		var args []any
+		got := ruleTriggeredFilterSQL(input, &args)
+		if n := strings.Count(got, cond); n != 1 {
+			t.Errorf("input %q: CRS condition 出现 %d 次, want 1: %q", input, n, got)
+		}
+		if len(args) != 0 {
+			t.Errorf("input %q: args=%v, want 空（形态条件无占位符）", input, args)
+		}
+	}
+	// 回归形状：完整标签仍只产生一次条件
+	for _, input := range []string{"WAF 规则（CRS）", "WAF·CRS"} {
+		var args []any
+		got := ruleTriggeredFilterSQL(input, &args)
+		if n := strings.Count(got, cond); n != 1 {
+			t.Errorf("input %q: CRS condition 出现 %d 次, want 1: %q", input, n, got)
+		}
+	}
+	// 反例：非 WAF 前缀不受影响（"I"→IP 访问控制族，不得含 CRS 条件）
+	var args []any
+	if got := ruleTriggeredFilterSQL("I", &args); strings.Contains(got, cond) {
+		t.Errorf("input %q 不应命中 CRS 形态条件: %q", "I", got)
+	}
+}
+
 func TestRuleTriggeredMultiFilterSQL_multiFamilyOR(t *testing.T) {
 	var args []any
 	got := ruleTriggeredMultiFilterSQL("地域拦截,自定义规则", &args)

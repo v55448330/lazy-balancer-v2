@@ -7,6 +7,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -110,31 +111,41 @@ func (e *crsReloadError) Unwrap() error { return e.cause }
 // snapshot is taken. On failure the live tree is restored from backup by
 // restoreBackup.
 // cleanupLegacyCRSTransient 2026-09 复审裁定 3：迁移瞬态目录前的历史残留
-// （crsDir 内 .staging/、rules.bak/、rules.old/ 与文件形 *.bak/*.old）随 bind
+// （crsDir 内 .staging/、rules.bak/、rules.old/ 与具名文件形 *.bak）随 bind
 // mount 跨升级存活并混入集群同步 tar——更新成功路径一次性清理，审计留痕。
 func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
-	// 具名瞬态目标；其余按 *.bak/*.old 后缀
-	// 兜底。非具名的点前缀文件不在此删除——waf 同步 tar 的 skipWafSyncTransient
-	// 过滤另行兜底（重构：单次 ReadDir，删除集合与此前逐名重扫完全一致）。
+	// 只删**本产品自己产生**的瞬态目标（具名集合，与 crsTransientPath 的
+	// 写入点一一对应）。不得按 *.bak/*.old 后缀兜底：/app/waf/crs 下的
+	// backup-2026.bak、ops-notes.bak、tree.old 之类是管理员手工留底（改
+	// overrides 前自备份/运维备注），旧实现一次成功更新后把它们静默删除，
+	// 日志也只报「cleaned N」不点名——数据丢失且不可归因。
+	// 非具名的点前缀文件同样不在此删除——waf 同步 tar 的 skipWafSyncTransient
+	// 过滤另行兜底（重构：单次 ReadDir + 具名集合判断）。
 	legacyNames := map[string]bool{
-		".staging": true, "rules.bak": true, "rules.bak.tmp": true, "rules.old": true,
+		".staging":                   true, // crsTransientPath(liveDir, ".staging")
+		"rules.bak":                  true, // 备份目录（事务化生成）
+		"rules.bak.tmp":              true, // 备份拷贝中途残留
+		"rules.old":                  true, // 树交换的旧树
+		"crs-setup.conf.bak":         true, // 事务备份（setupBak）
+		"crs-setup.stock.conf.bak":   true, // 事务备份（stockBak）
+		"zz-user-overrides.conf.bak": true, // 事务备份（overridesBak）
 	}
 	entries, err := os.ReadDir(m.liveDir())
 	if err != nil {
 		return
 	}
-	removed := 0
+	removed := make([]string, 0, len(legacyNames))
 	for _, e := range entries {
-		name := e.Name()
-		if !legacyNames[name] && !strings.HasSuffix(name, ".bak") && !strings.HasSuffix(name, ".old") {
+		if !legacyNames[e.Name()] {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(m.liveDir(), name)); err == nil {
-			removed++
+		if err := os.RemoveAll(filepath.Join(m.liveDir(), e.Name())); err == nil {
+			removed = append(removed, e.Name())
 		}
 	}
-	if removed > 0 {
-		Logf("info", "crs update: cleaned %d legacy transient artifacts from live dir", removed)
+	if len(removed) > 0 {
+		sort.Strings(removed)
+		Logf("info", "crs update: cleaned %d legacy transient artifacts from live dir: %v", len(removed), removed)
 	}
 }
 

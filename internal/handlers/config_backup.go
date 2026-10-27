@@ -807,7 +807,8 @@ func validateV2BackupIntegerTypes(ctx context.Context, database *sql.DB, tables 
 		}
 		columns, err := backupIntegerColumnsForTable(ctx, database, table)
 		if err != nil {
-			return fmt.Errorf("备份校验失败：读取 %s 列类型失败: %w", table, err)
+			// 基础设施读失败（PRAGMA/IO）：映射 500 而非「备份内容非法」400。
+			return importInfraReadFailure(fmt.Errorf("读取 %s 列类型失败: %w", table, err))
 		}
 		if len(columns) == 0 {
 			continue
@@ -1570,6 +1571,12 @@ func validateImportedSecurityCustomRules(rows []map[string]any) error {
 				id = parsed
 			default:
 				return fmt.Errorf("security_custom_rules 第 %d 行 id 类型错误", i+1)
+			}
+			if id <= 0 {
+				// 与 validateV2BackupNodeRows 同口径：显式 id 必须为正整数。
+				// SQLite INTEGER PRIMARY KEY 接受 0/负 rowid，发射 id（+10000）
+				// 会落在 10000/负数域，形成非预期 coraza 规则 id。
+				return fmt.Errorf("security_custom_rules 第 %d 行 id=%d 非法：显式 id 必须为正整数（省略该键由自增分配）", i+1, id)
 			}
 			if id >= 790000 {
 				return fmt.Errorf("security_custom_rules 第 %d 行 id=%d 越界：发射 id（+10000）将撞入 GeoIP 预检保留段，渲染侧会跳过该规则（可落库但不可发射）", i+1, id)
@@ -3192,7 +3199,8 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 	if _, carried := tables["security_ip_lists"]; !carried && len(tables["security_policies"]) > 0 && querier != nil {
 		rows, err := querier.QueryContext(ctx, `SELECT id,COALESCE(name,''),COALESCE(system,0),COALESCE(entries,'[]') FROM security_ip_lists`)
 		if err != nil {
-			return fmt.Errorf("校验安全策略引用的 IP 列表失败: %v", err)
+			// live 回退读失败属基础设施故障（锁/IO）：映射 500，不回 400。
+			return importInfraReadFailure(fmt.Errorf("读取安全策略引用的 IP 列表失败: %w", err))
 		}
 		for rows.Next() {
 			var id int
@@ -3200,7 +3208,7 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 			var system int
 			if err := rows.Scan(&id, &name, &system, &entriesText); err != nil {
 				rows.Close()
-				return fmt.Errorf("校验安全策略引用的 IP 列表失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("读取安全策略引用的 IP 列表失败: %w", err))
 			}
 			ipListIDs[id] = struct{}{}
 			if system == 1 {
@@ -3219,7 +3227,7 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return fmt.Errorf("校验安全策略引用的 IP 列表失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("读取安全策略引用的 IP 列表失败: %w", err))
 		}
 		rows.Close()
 	}
@@ -3270,6 +3278,13 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 						}
 						if len([]rune(remark)) > ipListMaxRemarkLength {
 							return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：备注长度不能超过 %d 个字符", index+1, ei+1, ipListMaxRemarkLength)
+						}
+						// 备注控制字符门与保存侧单源（hasIPListRemarkControlChar）：
+						// 导出件按「值 空格 备注」逐行组文本，备注里的换行会造出
+						// 伪条目（再当名单导入即误加 IP），制表/回车同样破坏行结构；
+						// 且该行随后任何保存/改名都会被保存侧同一门 400 挡死。
+						if hasIPListRemarkControlChar(remark) {
+							return fmt.Errorf("安全 IP 列表 #%d 条目 #%d：备注不能包含换行、制表符或其他控制字符", index+1, ei+1)
 						}
 					}
 					// 缺/空/非 string value 同样拒绝——
@@ -4213,6 +4228,17 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 	if err := revalidateImportTrustedProxyRefs(ctx, tx, backup); err != nil {
 		return err
 	}
+	// 1b) 策略↔IP 名单配对的反方向：名单表被替换、策略表保持 live。初检的
+	// 策略轴只遍历「备份携带」的两表行（策略不在包内=零覆盖），live 策略的
+	// ip_acl_list_refs/ip_whitelist_refs/crs_excluded_rules.listRefs 按「id 存在
+	// 即有效」放行——名单表替换后同 id 内容换人，策略生效 IP 集合静默改变
+	// （黑名单失效/白名单放行），零告警零审计。与受信代理轴同形：悬空即 400
+	// 点名策略与名单 id。
+	if _, listsCarried := backup.Tables["security_ip_lists"]; listsCarried && !policiesCarried {
+		if err := revalidateImportLivePolicyIPListRefs(ctx, tx, backup); err != nil {
+			return err
+		}
+	}
 	// 2) 自动备份排程：frequency/day 缺席列保留 live，必须按事务内 live 行
 	// 重算合并视图（窗口内保存的 weekly/day=9 会静默停摆）。仅全局配置区
 	// 存在时才有这条合并视图（分类备份可不带 Config）；下方默认 CA 与证书
@@ -4367,6 +4393,69 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 				return fmt.Errorf("受信代理不能引用内置地址列表：#%d", id)
 			}
 		}
+	}
+	return nil
+}
+
+// revalidateImportLivePolicyIPListRefs 锁内复核「名单表被替换、策略表保持 live」
+// 组合下 live 策略的三个引用面（与删除守卫同集合）：
+//   - security_policies.ip_acl_list_refs
+//   - security_policies.ip_whitelist_refs
+//   - security_policies.crs_excluded_rules 条目内 listRefs（读侧双格式归一）
+//
+// 判据：引用 id 必须存在于「导入后名单集合」（=备份携带的名单行 id 集）。初检
+// （validateV2BackupSecurityPoliciesWithQuerier）只遍历备份携带的两表行，策略表
+// 缺席时整条轴跳过；名单表替换又是全量 delete+insert（restoreTable 保留原 id），
+// 于是同 id 的内容可以整份换人——策略的生效/放行 IP 集合随备份内容变化而
+// 没有任何告警。悬空即 400 点名策略与名单 id（与受信代理轴同一取向：宁可
+// 要求同时携带策略表，也不放行「已绑定但语义换人」的静默状态）。
+func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backup *configBackup) error {
+	if backup == nil {
+		return nil
+	}
+	carriedListIDs := make(map[int64]struct{}, len(backup.Tables["security_ip_lists"]))
+	for _, row := range backup.Tables["security_ip_lists"] {
+		if id, ok := backupInteger(row["id"]); ok {
+			carriedListIDs[int64(id)] = struct{}{}
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies`)
+	if err != nil {
+		return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+	}
+	defer rows.Close()
+	var firstPolicyID int64
+	var firstName string
+	var firstListID int64
+	found := false
+	for rows.Next() {
+		var policyID int64
+		var policyName, aclRefs, whitelistRefs, crsExcluded string
+		if err := rows.Scan(&policyID, &policyName, &aclRefs, &whitelistRefs, &crsExcluded); err != nil {
+			return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+		}
+		check := func(listID int64) {
+			if found {
+				return
+			}
+			if _, ok := carriedListIDs[listID]; !ok {
+				firstPolicyID, firstName, firstListID, found = policyID, policyName, listID, true
+			}
+		}
+		for _, raw := range []string{aclRefs, whitelistRefs} {
+			for _, listID := range parseIPListRefsIDs(raw) {
+				check(listID)
+			}
+		}
+		for _, listID := range crsExcludedListRefs(crsExcluded) {
+			check(listID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+	}
+	if found {
+		return fmt.Errorf("导入后安全策略 %q(#%d) 引用的地址列表 #%d 将不存在（策略表未随包携带，而名单表被替换为不含该 id 的集合）——请同时携带安全策略表或保留该名单", firstName, firstPolicyID, firstListID)
 	}
 	return nil
 }
@@ -4663,14 +4752,17 @@ func backupRowEnabled(row map[string]any) bool {
 }
 
 // acmeRefResolvablePostImport:导入后某 ACME 引用(id)是否仍可解析——备份携带
-// 该表时以备份行为准(整表替换),否则 live 表原样保留。
+// 该表时以备份行为准(整表替换),否则 live 表原样保留。enabled 口径与
+// backupCAProviderExistsPostImport / acmeImportRefIndex 的 COALESCE(enabled,1)
+// 一致：可空列 NULL 视同启用（正常写路径 NULL→1 归一，NULL 只可能来自带外
+// 改库/极旧遗留；口径分裂会让悬挂告警与实际可用性相反）。
 func acmeRefResolvablePostImport(tables map[string][]map[string]any, table string, id int) bool {
 	if _, carried := tables[table]; carried {
 		row, found := backupRowByID(tables, table, id)
 		return found && backupRowEnabled(row)
 	}
 	var exists bool
-	if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id = ? AND enabled = 1)", id).Scan(&exists); err != nil {
+	if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id = ? AND COALESCE(enabled,1) = 1)", id).Scan(&exists); err != nil {
 		return false
 	}
 	return exists
@@ -5790,9 +5882,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		ValidateRuleListenPort: h.validateRuleListenPortForSave,
 	}, &backup, importValidationOptions{LbbakPayload: lbbakFiles, RequestedSections: c.Query("sections")})
 	if chainErr != nil {
-		var readErr *trustedProxyReadError
-		if errors.As(chainErr, &readErr) {
-			writeInternalError(c, http.StatusInternalServerError, errTrustedProxyRead.Error(), readErr.Unwrap())
+		// 校验链内的基础设施读失败（受信代理 / 整数列门 / 安全策略 live 回退）
+		// 统一 500 + 固定文案；其余仍按 400「备份校验失败」点名。
+		if writeImportChainReadFailure(c, chainErr) {
 			return
 		}
 		failImportValidation(c, action, chainErr.Error())
@@ -6330,7 +6422,17 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		sets := []string{}
 		values := []any{}
-		for column, value := range backup.Config {
+		// 列名排序后再拼 SET：map 迭代序每进程随机 → 同一备份在不同导入/进程
+		// 生成不同 SQL 文本，而 database/sql 以 SQL 文本为键缓存 prepared
+		// statement 且不淘汰（与 restoreRowStatement 同一策略，防每次导入新增
+		// 一条永不命中的 ~60 列语句缓存）。
+		configColumns := make([]string, 0, len(backup.Config))
+		for column := range backup.Config {
+			configColumns = append(configColumns, column)
+		}
+		sort.Strings(configColumns)
+		for _, column := range configColumns {
+			value := backup.Config[column]
 			if configBackupProtectedConfigKeys[column] || !valid[column] {
 				continue
 			}

@@ -1358,3 +1358,52 @@ func TestAutoBackupSettings_disclosesCorruptedRowSections(t *testing.T) {
 		t.Fatalf("sections=%v, want 空数组（键集沿用）", row.Sections)
 	}
 }
+
+// 还原/下载/删除三端点在 BackupDir 为相对路径时必须 fail-fast 500 且不产生任何
+// 文件操作（此前它们直接 filepath.Join —— 相对目录会在进程 CWD 下解析同名
+// 文件，误删/误读非备份目录文件；写路径已有同口径入口守卫）。
+func TestAutoBackupFileEndpoints_rejectRelativeBackupDir(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	name := "lbbak-manual-relative.lbbak"
+	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	// CWD 下放一个同名文件：守卫失效时删除端点会把它删掉。
+	cwdFile, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(cwdFile, name)
+	if err := os.WriteFile(target, []byte("must-survive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(target) })
+	h.cfg.BackupDir = "relative-backup-dir"
+
+	cases := []struct {
+		name   string
+		method string
+		route  string
+		path   string
+		serve  func(*gin.Context)
+	}{
+		{"还原", http.MethodPost, "/auto-backup/:id/restore", fmt.Sprintf("/auto-backup/%d/restore", id), h.RestoreAutoBackup},
+		{"下载", http.MethodGet, "/auto-backup/:id/download", fmt.Sprintf("/auto-backup/%d/download", id), h.DownloadAutoBackup},
+		{"删除", http.MethodDelete, "/auto-backup/:id", fmt.Sprintf("/auto-backup/%d", id), h.DeleteAutoBackup},
+	}
+	for _, test := range cases {
+		response := serveAutoBackupJSON(t, h, test.method, test.route, test.path, "", test.serve)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "备份目录无效") {
+			t.Fatalf("%s: status=%d body=%s, want 500 备份目录无效", test.name, response.Code, response.Body.String())
+		}
+	}
+	// 相对目录期间不得有任何文件被删除/读取失败副作用——行与 CWD 文件仍在。
+	if rows := autoBackupRows(t, "WHERE id=?", id); len(rows) != 1 {
+		t.Fatalf("行被提前删除: %v", rows)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "must-survive" {
+		t.Fatalf("CWD 同名文件被误操作: data=%q err=%v", string(data), err)
+	}
+}

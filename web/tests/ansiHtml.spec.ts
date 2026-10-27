@@ -79,46 +79,56 @@ test('空参数等价 0（复位）', () => {
 // 转义即安全边界：日志内容含请求路径/UA 等外部输入，v-html 只能接「先转义原始
 // 日志、后做着色」的产出；回退成原始日志直出会从「不着色」升级为注入面。
 //
-// 消费面按目录扫描枚举（`webFiles('src', ['.vue'])`），不再手写文件名清单：新增
-// 日志视图、或改写既有管线（去掉转义 / 把转义挪到着色之后）都必须在这里变红。
-// 非日志 v-html 面（SyntaxHighlight/CodeEditor 高亮层、品牌 footerHtml）不在
-// 本条范围内，其首帧转义由 infraWiring 与 utilsSingleSource 承担。
-test('日志消费面（目录扫描）：每个 v-html 日志面都必须先转义再着色', () => {
+// 判据是**全集否证**（不再按绑定名含 log 猜测）：目录内每个 `v-html="X"` 都必须
+// 命中下列白名单之一——非日志面显式登记，其余一律按日志面要求「先转义后着色」。
+// 原实现用 `/log/i` 筛绑定名，新面叫 output/rendered 就整条逃出扫描。
+//
+// 非日志面（登记即裁定）：高亮层首帧转义由 infraWiring 钉，品牌页脚由
+// utilsSingleSource/infraWiring 钉；本文件的判据只覆盖日志面。
+const NON_LOG_VHTML_FACES = [
+  'src/components/CodeEditor.vue#highlighted',
+  'src/components/SyntaxHighlight.vue#highlighted',
+  'src/components/layout/AppLayout.vue#footerHtml',
+] as const
+
+test('全部 v-html 面：日志面必须先转义再着色，非日志面须显式登记', () => {
   const files = webFiles('src', ['.vue'])
   assert.ok(files.length >= 40, `扫描面过小（${files.length} 个 .vue）——目录枚举失效`)
-  const faces: Array<{ file: string; name: string }> = []
+  const bindings: Array<{ key: string; file: string; name: string }> = []
   for (const file of files) {
     const text = code(file)
     // 任何 v-html 都不得直接接原始日志 ref（含 `.value` 的下标形态）
     assert.doesNotMatch(text, /v-html="[^"]*[Cc]ontent\.value[^"]*"/, `${file}：原始日志不得直出（转义缺失即注入面）`)
     for (const match of text.matchAll(/v-html="([^"]+)"/g)) {
       const expr = match[1]!.trim()
-      if (!/log/i.test(expr)) continue
-      // 内联表达式无法静态取源，按日志面处理并强制改走 computed
-      assert.match(expr, /^[A-Za-z_$][\w$]*$/, `${file}：v-html 日志绑定必须是单个标识符（${expr}）`)
-      faces.push({ file, name: expr })
+      // 内联表达式无法静态取源：转义判据无从落地，必须改走 computed/函数
+      assert.match(expr, /^[A-Za-z_$][\w$]*$/, `${file}：v-html 绑定必须是单个标识符（${expr}）`)
+      bindings.push({ key: `${file}#${expr}`, file, name: expr })
     }
   }
-  // 扫描面下限 + 正向名册：现有三个日志面（Caddy 全局日志 / 规则日志 / 证书任务
-  // 日志）。少一个说明同一份管线被拆走而扫描没跟上；多一个必须同步登记。
-  assert.ok(faces.length >= 3, `日志 v-html 面少于 3（${JSON.stringify(faces)}）——目录扫描失效`)
+  const keys = bindings.map((binding) => binding.key)
+  // 登记的非常量面必须仍存在：绑定改名/删除后同批更新登记表（防死条目掩盖缺口）
+  for (const registered of NON_LOG_VHTML_FACES) {
+    assert.ok(keys.includes(registered), `登记的非日志 v-html 面已不存在：${registered}（同步更新登记表）`)
+  }
+  // 全集 = 登记的非日志面 + 日志面；非登记项一律按日志面处理（名称无关）
+  const logFaces = bindings.filter((binding) => !(NON_LOG_VHTML_FACES as readonly string[]).includes(binding.key))
   assert.deepEqual(
-    faces.map((face) => `${face.file}#${face.name}`).sort(),
+    logFaces.map((binding) => binding.key).sort(),
     [
       'src/views/Rules.vue#ruleLogHtml',
       'src/views/settings/CaddyGlobalSettings.vue#logHtml',
       'src/views/settings/CertJobs.vue#logHtml',
     ],
+    '日志面增删必须同步登记（少一个=同一份管线被拆走，多一个=新面未纳入守卫）',
   )
-  for (const face of faces) {
+  assert.equal(bindings.length, NON_LOG_VHTML_FACES.length + logFaces.length, 'v-html 全集计数异常')
+  for (const face of logFaces) {
     const text = code(face.file)
-    // 定义体切到下一个顶层声明：转义必须包住原始日志 ref，且早于任何着色 replace
+    // 定义体切到下一个顶层声明：转义必须包住来源、且早于任何着色 replace。
+    // 不限定入参命名——原判据要求入参名含 log，`ansiToHtml(另一来源)` 会静默通过。
     const decl = section(text, `const ${face.name} = `, '\nconst ')
-    assert.match(
-      decl,
-      /(?:ansiToHtml|escapeHtml)\(\s*\w*[Ll]og\w*\.value/,
-      `${face.file}#${face.name}：必须先转义原始日志（escapeHtml/ansiToHtml 包住 log ref）`,
-    )
+    assert.match(decl, /(?:ansiToHtml|escapeHtml)\(/, `${face.file}#${face.name}：必须先转义来源（escapeHtml/ansiToHtml）`)
     const escaped = decl.search(/(?:ansiToHtml|escapeHtml)\(/)
     const colored = decl.search(/\.replace\(/)
     if (colored >= 0) {

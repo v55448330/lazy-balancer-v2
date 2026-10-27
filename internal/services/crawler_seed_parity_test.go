@@ -109,6 +109,18 @@ func TestCrawlerSeedIPRanges_alignWithGeoIPNames(t *testing.T) {
 			}
 		}
 	}
+	// 反向遍历（注册表 → 种子）：上面只遍历种子 map，注册表新增一个
+	// VerifyMethod=CrawlerVerifyIPRange 的引擎却忘记加种子行时循环看不到它，
+	// 「走 iprange 验证却没有可校验段集」的 fail-open 形态不会被检出。反方向
+	// （种子里有未知/未声明段集的引擎）已由上面的断言覆盖，两个方向都要钉。
+	for _, engine := range geoipnames.CrawlerEngines() {
+		if engine.VerifyMethod != geoipnames.CrawlerVerifyIPRange {
+			continue
+		}
+		if len(seed[engine.ID]) == 0 {
+			t.Errorf("引擎 %q 走 iprange 验证但内置种子缺该引擎名单（fail-open：无可校验段集）", engine.ID)
+		}
+	}
 }
 
 // TestCrawlerSeedFile_matchesEmbeddedAuthority 打包契约：Dockerfile 从本路径

@@ -485,7 +485,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 				// 而不是解引用 panic。
 				reloadErr = errors.New("Caddy 服务未初始化")
 			} else {
-				reloadErr = s.caddy.ApplyConfigForce(GenerateCaddyConfig())
+				// 渲染源必须是本服务句柄（快照刚提交到 s.db）：GenerateCaddyConfig()
+				// 恒用包级 db.DB，多库形态（测试/嵌入式网关）会把 A 库快照提交后
+				// 按 B 库内容渲染并 /load（写入 A、渲染 B，静默错配）。
+				// certSource 同用 s.db（快照事务已提交，证书候选与渲染同一真相）；
+				// rulesWrittenInTx=true：快照写过 lb_rules，谓词 miss 需 per-rule 补查。
+				reloadErr = s.caddy.ApplyConfigForce(generateCaddyConfigWithCertSource(s.db, s.db, true))
 			}
 		})
 	}
@@ -893,7 +898,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		}
 	}
 	if !skip.skip("security") {
-		if err := applySecurityTables(ctx, tx, snapshot); err != nil {
+		if err := applySecurityTables(ctx, tx, snapshot, !skip.disabled["rules"]); err != nil {
 			return err
 		}
 	}
@@ -1062,13 +1067,37 @@ func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[str
 // 尚未随 users 节下发等）UPDATE 命中 0 行，安全落空；载荷 nil（旧主端）no-op，
 // 绝不清除本地锁。主端解锁不传播（从端锁自然过期）——fail-closed 设计。
 func applyLockedUsers(ctx context.Context, tx *sql.Tx, locked []models.ClusterLockedUser) error {
+	skipped := 0
 	for _, entry := range locked {
+		// 载荷时间先归一为平面 UTC：上面的「只延长」判定是 SQL 字符串比较，
+		// 字典序只有在两端同为 'YYYY-MM-DD HH:MM:SS' 时才等于时间序。旧主端/
+		// 带外形态下发 RFC3339（'T' > 空格）会被判为「更晚」，把已过期/更早的
+		// 锁写成非平面形态（后续 loginLockedNow 的比较与前端展示同时失真）；
+		// 无法解析的形态完全不可信，跳过并留一条 warn——保留本地锁是
+		// fail-closed 方向（不缩短）。
+		lockedUntil, ok := normalizeSnapshotLockedUntil(entry.LockedUntil)
+		if !ok {
+			skipped++
+			Logf("warn", "快照登录锁时间形态异常（用户名 %s，值 %q），已跳过该条（保留本地锁）", entry.Username, entry.LockedUntil)
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET login_locked_until=? WHERE username=? AND (login_locked_until IS NULL OR login_locked_until < ?)`,
-			entry.LockedUntil, entry.Username, entry.LockedUntil); err != nil {
+			lockedUntil, entry.Username, lockedUntil); err != nil {
 			return fmt.Errorf("同步用户 %s 的主节点登录锁: %w", entry.Username, err)
 		}
 	}
 	return nil
+}
+
+// normalizeSnapshotLockedUntil 把快照登录锁时间归一为平面 UTC 串（写入侧唯一
+// 格式），供 applyLockedUsers 的字符串比较与落库共用。接受两种来源形态
+// （平面 + RFC3339，单源 parseUTCSlot）；空值/不可解析返回 false。
+func normalizeSnapshotLockedUntil(value string) (string, bool) {
+	parsed := parseUTCSlot(strings.TrimSpace(value))
+	if parsed.IsZero() {
+		return "", false
+	}
+	return parsed.UTC().Format(crsTimeLayout), true
 }
 
 // policyWhitelistEnabled 兼容旧快照缺列：缺省视为启用（语义=名单非空即生效）。
@@ -1160,19 +1189,30 @@ func InferSnapshotPolicyType(p map[string]interface{}) interface{} {
 // 会被静默削弱）——渲染侧对该形态有 60s 限流 warn。取舍是「忠实复制 + 可用性
 // 优先」；如需加固，应在下发侧（validateSnapshotACMEState 家族）加只告警不阻断
 // 的形状检查，而不是让从节点拒绝主机快照。
-func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
+//
+// syncBindings 决定是否按主节点载荷全量替换 security_policy_bindings——
+// 绑定表是「规则 × 策略」的联结表，两个被引用面必须与载荷同源才可镜像。
+// rules 开关关闭时从节点保留本地规则（正是该开关要保护的那批），此时清空
+// 重建绑定会让本地规则静默失去全部 WAF 防护（渲染侧 policiesForRule 无命中
+// = 无 WAF handler，fail-open），且从节点只读无法重建绑定；插入主端绑定则只
+// 产生指向本机不存在规则的悬挂死行。故调用方传 !skip.disabled["rules"]，
+// 本地绑定与本地规则同门保留（与 cert_jobs / ACME 表同一条不变量）。
+// 策略/自定义规则/拦截页不引用规则 id，仍按安全节镜像。
+func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot, syncBindings bool) error {
 	// 与规则/用户等表一致的全量替换语义：空载荷意味着主节点已清空，从节点必须
 	// 同步删除，不能因载荷为空而提前返回。
 	// security_crs_version/security_ip2region_version 的 DELETE 已随版本行
 	// 应用挪至 waf_files 节(2026-09-11 裁定),此处不再清理。
 	statements := []string{
-		"DELETE FROM security_policy_bindings",
 		"DELETE FROM security_policies",
 		"DELETE FROM security_custom_rules",
 		"DELETE FROM security_block_pages",
 		// security_ip_lists（v2.3.0）与威胁情报库源表（v2.3.x）不在此无条件
 		// 删除：旧主端快照不携带该载荷时缺席=保留本地（见下方 nil 门），
 		// 携带空数组 [] 才是显式清空。
+	}
+	if syncBindings {
+		statements = append([]string{"DELETE FROM security_policy_bindings"}, statements...)
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -1330,7 +1370,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	var bindings []map[string]interface{}
-	if len(snapshot.SecurityBindings) > 0 {
+	if syncBindings && len(snapshot.SecurityBindings) > 0 {
 		if err := json.Unmarshal(snapshot.SecurityBindings, &bindings); err != nil {
 			return fmt.Errorf("解析 security_bindings: %w", err)
 		}
@@ -1338,6 +1378,20 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 	for _, b := range bindings {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, b["rule_caddy_id"], b["policy_id"]); err != nil {
 			return fmt.Errorf("写入 security_policy_binding: %w", err)
+		}
+	}
+	if !syncBindings {
+		// 规则轴不同步时保留的本地绑定可能引用主节点策略集里已不存在的
+		// policy_id（例如本机曾是主节点、策略编号与主端不同）——该绑定渲染时
+		// 无命中即无防护。行为不变（保留数据），但把它显式记成一条 warn，
+		// 避免「已保留绑定」被误读为「本地规则仍在防护中」。
+		var dangling int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_policy_bindings b
+			WHERE NOT EXISTS (SELECT 1 FROM security_policies p WHERE p.id=b.policy_id)`).Scan(&dangling); err != nil {
+			return fmt.Errorf("检查保留的本地安全策略绑定: %w", err)
+		}
+		if dangling > 0 {
+			Logf("warn", "规则同步已关闭：保留的本地安全策略绑定有 %d 条引用了主节点不存在的策略，这些绑定不产生防护；如需本地 WAF 请同时关闭安全防护同步", dangling)
 		}
 	}
 	if err := applySecurityCustomRules(ctx, tx, snapshot.SecurityCustomRules); err != nil {

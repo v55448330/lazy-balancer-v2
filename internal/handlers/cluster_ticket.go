@@ -87,6 +87,13 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			status = http.StatusConflict
 			message = "目标从节点尚未上报或已离线，请确认从节点在线后重试"
 		}
+		if errors.Is(err, services.ErrNodeTokenPending) {
+			// 已批准但集群令牌尚未交付（从节点还没轮询注册状态）：节点存在、
+			// 只是暂不可签发——409 + 单源文案，不得落成 404「节点不存在」把
+			// 排障引向「是否被删除」。
+			status = http.StatusConflict
+			message = err.Error()
+		}
 		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), auditReason, services.AuditResultPart(auditCode)))
 		clusterError(c, status, message, err)
 		return

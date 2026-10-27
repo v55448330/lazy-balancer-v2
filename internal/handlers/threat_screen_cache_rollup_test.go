@@ -87,3 +87,19 @@ func TestThreatMinuteAnchor_guardsShortValues(t *testing.T) {
 		}
 	}
 }
+
+// 同屏两份 rollup 读缓存 TTL 必须同源（=前端 30s 轮询周期）：此前 Top3 60s /
+// 维度聚合 30s 分叉，warmer 每 60s 推进 rollup 时同一响应里 Top3 与总量最多
+// 差 30s 新鲜度（展示口径自相矛盾）。本用例与
+// TestThreatActiveSourcesCacheTTL_coversPollingInterval 同主题：改动任一 TTL
+// 都会在另一处变红。
+func TestThreatScreenRollupCaches_shareTTL(t *testing.T) {
+	if topTargetsCacheTTL != threatRollupDimAggregateTTL {
+		t.Fatalf("topTargetsCacheTTL=%v, threatRollupDimAggregateTTL=%v, want 同源（同屏同窗口口径）",
+			topTargetsCacheTTL, threatRollupDimAggregateTTL)
+	}
+	if threatRollupDimAggregateTTL > time.Minute {
+		t.Fatalf("threatRollupDimAggregateTTL=%v, want <= 1 分钟（大屏轮询复用窗口，不得超出轮询一个数量级）",
+			threatRollupDimAggregateTTL)
+	}
+}

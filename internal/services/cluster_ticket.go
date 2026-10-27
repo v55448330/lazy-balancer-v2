@@ -22,6 +22,14 @@ import (
 // 并给出「确认从节点在线后重试」的可行动文案。
 var ErrNodeOffline = errors.New("节点尚未上报或已离线")
 
+// ErrNodeTokenPending 表示目标节点已批准、但集群令牌尚未交付：批准路径把
+// cluster_token_hash 置 NULL，哈希只在从节点轮询注册状态后才回写。此时节点
+// 存在且已被信任，只是还没有可用于签发票据的密钥——与「节点不存在/未审批」
+// （ErrNodeNotFound → 404）必须区分，否则排障方会去查节点是否被删除；与
+// 「已离线」（ErrNodeOffline）区分：tokenless 节点的 last_seen 恒空，文案应
+// 指向「等待从节点完成令牌交付」而不是「确认从节点在线」。
+var ErrNodeTokenPending = errors.New("节点已批准但尚未完成令牌交付（等待从节点上报注册状态后重试）")
+
 var (
 	ErrInvalidLoginTicket         = errors.New("登录票据无效或已过期")
 	ErrLoginTicketSignature       = errors.New("登录票据签名错误")
@@ -116,8 +124,12 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&syncInterval); err != nil {
 		return models.ClusterLoginTicketResponse{}, fmt.Errorf("读取同步间隔: %w", err)
 	}
-	if !approved || keyHash == "" {
+	if !approved {
 		return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
+	}
+	if keyHash == "" {
+		// 已批准但令牌待交付：与「不存在」（404）区分，见 ErrNodeTokenPending。
+		return models.ClusterLoginTicketResponse{}, ErrNodeTokenPending
 	}
 	// 已批准但从未上报/已离线与「节点不存在
 	// 或未审批」是两类问题——前者 handler 映射 409 + 「确认从节点在线后重试」，

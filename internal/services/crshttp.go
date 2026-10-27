@@ -265,6 +265,16 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string, progre
 	}
 	copyErr := writeRuleSetDownload(out, resp, ruleSetDownloadSizeCap, progress)
 	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		// 失败路径不得留下 0 字节/半截工件：ContentLength 超限时 writeRuleSetDownload
+		// 在写入前返回，io.Copy 中断则留下部分字节——seam 调用方（测试/复用）
+		// 传入任意 dest 时，下一次「跳过下载」的调用会把残件当成品消费
+		// （TOFU 完整性基线/解包都基于错误字节）。生产 dest 在 staging 内由
+		// defer RemoveAll 兜底，此处只补 seam 形态。
+		if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			Logf("warn", "crs download: 清理失败下载工件 %s 失败: %v", destPath, rmErr)
+		}
+	}
 	if copyErr != nil {
 		return copyErr
 	}

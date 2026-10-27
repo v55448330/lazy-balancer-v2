@@ -1607,3 +1607,50 @@ func TestListSecurityEvents_oversizedHeadersKeepJSONAndDiscloseDropped(t *testin
 		t.Fatalf("SQL 投影取回 %d 字节 > cap+1", len(projected))
 	}
 }
+
+// 命中缓存必须返回深拷贝：四个切片不得与缓存条目共享底层数组（同型事故：
+// 健康缓存「共享同一克隆」）。此前 data := entry.data 直接返回缓存切片，
+// 任何消费者就地 sort/截断/改元素都会污染其他请求的 30s 缓存。
+func TestLoadSecurityOverviewAggregates_cacheHitReturnsDeepCopy(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	today := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	const todayStart = "2026-10-18 16:00:00"
+	const tzModifier = "+08:00"
+	insertOverviewAggregateEvent(t, db.MetricsDB, "2026-10-19 01:00:00")
+
+	if _, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier); err != nil {
+		t.Fatalf("first aggregate: %v", err)
+	}
+
+	// When：命中缓存后对返回值的切片就地改写/扩容
+	hit, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
+	if err != nil {
+		t.Fatalf("cache hit: %v", err)
+	}
+	if len(hit.trend) != 7 {
+		t.Fatalf("trend len=%d, want 7（夹具失效）", len(hit.trend))
+	}
+	for i := range hit.trend {
+		hit.trend[i].Blocked = 999
+		hit.trend[i].Date = "MUTATED"
+	}
+	hit.topIPs = append(hit.topIPs, hit.topIPs...)
+	hit.attackTypes = append(hit.attackTypes, hit.attackTypes...)
+	hit.attackTypesStage = append(hit.attackTypesStage, hit.attackTypesStage...)
+
+	// Then：再次命中缓存的返回值必须是未被污染的内容
+	again, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
+	if err != nil {
+		t.Fatalf("second cache hit: %v", err)
+	}
+	if got := overviewAggregateEventCount(again); got != 1 {
+		t.Fatalf("缓存被就地改写污染：trend 总计数=%d, want 1", got)
+	}
+	for _, point := range again.trend {
+		if point.Date == "MUTATED" || point.Blocked == 999 {
+			t.Fatalf("缓存日桶被污染: %+v", point)
+		}
+	}
+}

@@ -79,4 +79,29 @@ func TestSchedulingWriteEndpoints_rejectStoppedEngine(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("已停引擎 cancel status=%d body=%s, want 503", rec.Code, rec.Body.String())
 	}
+
+	// Trigger 同口径：已停引擎 admission 恒 ErrEngineStopped，此前并入 409
+	// Conflict（与族内 503 矛盾）并补记一条误导性「触发失败」审计。
+	before := countTaskAuditForTest(t, "触发失败")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("已停引擎 trigger status=%d body=%s, want 503", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "任务引擎已停止") {
+		t.Fatalf("trigger body=%s, want 「任务引擎已停止」", rec.Body.String())
+	}
+	if after := countTaskAuditForTest(t, "触发失败"); after != before {
+		t.Fatalf("已停引擎的 admission 拒绝不得记「触发失败」审计（before=%d after=%d）", before, after)
+	}
+}
+
+// countTaskAuditForTest 统计审计表中指定动作的行数（引擎停止边界用例用）。
+func countTaskAuditForTest(t *testing.T, action string) int {
+	t.Helper()
+	var n int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action=?`, action).Scan(&n); err != nil {
+		t.Fatalf("count audit(%s): %v", action, err)
+	}
+	return n
 }

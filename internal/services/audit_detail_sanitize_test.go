@@ -78,3 +78,30 @@ func TestSanitizeAuditDetail_shortTextUnchanged(t *testing.T) {
 		t.Fatalf("sanitizeAuditDetail 不得改写正常文本：%q", got)
 	}
 }
+
+// 身份列（username/ip_address）与 detail 同口径净化：username 来自 users 表，
+// 导入备份/带外改库可带入换行与控制字符——审计列表可被排版伪造（多行伪记录）。
+func TestRecordAuditLog_sanitizesIdentityColumns(t *testing.T) {
+	auditDB := newAuditDetailTestDB(t)
+
+	RecordAuditLog("alice\n；结果：成功\x00\x07", "登录", "用户", "正常详情", "1.2.3.4\n")
+
+	var username, ipAddress string
+	if err := auditDB.QueryRow(`SELECT username, ip_address FROM audit_log ORDER BY id DESC LIMIT 1`).
+		Scan(&username, &ipAddress); err != nil {
+		t.Fatal(err)
+	}
+	if username != "alice；结果：成功" {
+		t.Fatalf("username=%q, want 控制字符剥离后的单行文本", username)
+	}
+	if ipAddress != "1.2.3.4" {
+		t.Fatalf("ip_address=%q, want 不含换行", ipAddress)
+	}
+	// 超长身份值按短字段上限截断（不得超过 auditIdentityMaxBytes）。
+	if got := sanitizeAuditIdentity(strings.Repeat("a", auditIdentityMaxBytes*2)); len(got) > auditIdentityMaxBytes {
+		t.Fatalf("身份列长度=%d, want <= %d", len(got), auditIdentityMaxBytes)
+	}
+	if got := sanitizeAuditIdentity("用户名"); got != "用户名" {
+		t.Fatalf("正常身份值不得被改写：%q", got)
+	}
+}

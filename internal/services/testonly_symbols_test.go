@@ -28,6 +28,10 @@ func TestServicePackageHasNoProductionTestOnlyEntryPoints(t *testing.T) {
 		"estimateLatencyPercentiles": true,
 		"upsertCrawlerIPList":        true,
 		"upsertCrawlerIPListChanged": true,
+		// 自动封禁单事件喂入测试缝（生产摄取只走 autobanObserveBatch）：
+		// 宿主已迁到 autoban_testonly_helpers_test.go。
+		"autobanObserveEvent":       true,
+		"autobanObserveEventScoped": true,
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {

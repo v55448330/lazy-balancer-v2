@@ -159,11 +159,46 @@ func sanitizeAuditDetail(detail string) string {
 	return cleaned[:cut]
 }
 
+// auditIdentityMaxBytes 是审计身份列（username/action/resource/ip_address）的
+// 落库上限。这些列不承载对端详情文本（详情走 detail 列），但会进入列表排版与
+// 筛选：超长值截断到可展示长度即可，不得因该列异常丢事件（审计写入是
+// best-effort）。
+const auditIdentityMaxBytes = 256
+
+// sanitizeAuditIdentity 净化审计身份列：剥控制字符（含换行——否则审计列表可被
+// 排版成多行伪记录）并按 auditIdentityMaxBytes 截断到合法 UTF-8 边界。
+// 与 detail 的单点净化同口径：此前只有 detail 净化，username 来自 users 表
+// （导入备份/带外改库/未来自助注册均可带入控制字符），action/resource 是内部
+// 词表字面量但仍按同口径纵深防御。
+func sanitizeAuditIdentity(value string) string {
+	if value == "" {
+		return value
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
+	if len(cleaned) <= auditIdentityMaxBytes {
+		return cleaned
+	}
+	cut := auditIdentityMaxBytes
+	for cut > 0 && !utf8.ValidString(cleaned[:cut]) {
+		cut--
+	}
+	return cleaned[:cut]
+}
+
 // beforeAuditLogExec 保留审计写入前注入缝，供关停交错回归测试使用。
 var beforeAuditLogExec = func() {}
 
 func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	detail = sanitizeAuditDetail(detail)
+	username = sanitizeAuditIdentity(username)
+	action = sanitizeAuditIdentity(action)
+	resource = sanitizeAuditIdentity(resource)
+	ipAddress = sanitizeAuditIdentity(ipAddress)
 	auditDB := db.AuditDB
 	if auditDB == nil {
 		Logf("warn", "audit log write skipped: audit database is not initialized")

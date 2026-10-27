@@ -173,12 +173,15 @@ func threatScreenAttackFlowSampleNAt(now time.Time) int {
 	return int(threatScreenAttackFlowSampleN.Load())
 }
 
-// threatScreenAttackFlowFlushCalls 环形缓冲追加批次的加锁/裁剪次数（测试观测
-// 「批内一次加锁」；生产成本=每批一次原子加）。
+// threatScreenAttackFlowFlushCalls 环形缓冲批次的加锁次数（测试观测「批内
+// 一次加锁」；生产成本=每批一次原子加）。含「档位 0 / 纯改判」批次——这些
+// 批次同样必须持锁（改判要读写环），不再是早退免锁。
 var threatScreenAttackFlowFlushCalls atomic.Int64
 
 // threatScreenAttackFlowRecordBatch 在 security_events 事务提交成功后调用。
 // 采样在环形缓冲写入前完成；失败/回滚的日志批次不得进入光流。
+// 采样门只管「新弧入环」：跨批改判（inPlace）不消耗采样配额，采样档位为 0
+// 时照常原地改判（见函数体内注释）。
 //
 // 并发不变量：环形缓冲内 Seq 必须严格递增（消费者按 `Seq <= since` 线性
 // 推进游标，乱序入环会让事件重复返回/游标回退）。采样计数与序号分配因此
@@ -189,22 +192,28 @@ func threatScreenAttackFlowRecordBatch(items []threatScreenAttackFlowItem) {
 		return
 	}
 	n := threatScreenAttackFlowSampleNAt(time.Now())
-	if n == 0 {
-		return
-	}
 	threatScreenAttackFlowFlushCalls.Add(1)
 	threatScreenAttackFlowMu.Lock()
 	batch := make([]ThreatScreenAttackFlowEvent, 0, len(items))
 	for _, item := range items {
-		// 跨批改判：环内已有同请求条目时原地换结论（保留原序号与权重），
-		// 不消耗采样计数、不分配新序号——消费者游标因此不回退，大屏不会为
-		// 同一请求同时画出「检测」与「拦截」两条弧。
+		// 跨批改判先于采样门处理：inPlace 项不消耗采样配额，且租约在「首轮
+		// 入环」与「改判到达」之间关闭（大屏关闭/心跳 TTL 过期）时环内仍有
+		// 旧结论——采样门整批早退会让同一请求残留「检测」而事件表/拦截率按
+		// 「拦截」计，消费者下次 since=0 读到旧弧且不会自愈，直到被容量淘汰。
+		//
+		// 环内已有同请求条目时原地换结论（保留原序号与权重），不消耗采样
+		// 计数、不分配新序号——消费者游标因此不回退，大屏不会为同一请求
+		// 同时画出「检测」与「拦截」两条弧。
 		if item.inPlace && item.key != 0 {
 			if idx, ok := threatScreenAttackFlowIndexLocked(item.key); ok {
 				threatScreenAttackFlowEvents[idx].Action = item.action
 				threatScreenAttackFlowEvents[idx].RuleTriggered = item.ruleTriggered
 				continue
 			}
+		}
+		// 采样档位 0（无存活租约）=新弧不入环（改判项已在上面消费）。
+		if n == 0 {
+			continue
 		}
 		if n > 1 && threatScreenAttackFlowAttempt.Add(1)%uint64(n) != 0 {
 			continue

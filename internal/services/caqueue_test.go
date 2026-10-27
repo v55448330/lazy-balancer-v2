@@ -816,14 +816,12 @@ func TestCAQueueManager_CancelJobsForRule_cancels_and_waits_for_deployment_callb
 }
 
 func TestCAQueueManager_CancelJobsForRule_blocks_retry_created_during_worker_exit(t *testing.T) {
-	// Given
-	_, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (42,'lb_deleted','example.com','downloaded')`); err != nil {
-		t.Fatalf("seed deployment job: %v", err)
-	}
+	// Given 单一夹具初始化：本用例只断言第二个库的行（同一 id 42 的
+	// creating_order）——此前多一次 newClusterTestService + 一条随即被重建丢弃的
+	// downloaded 种子行，属死种子，且让前一测试库句柄多存活到 t.Cleanup。
+	newClusterTestService(t)
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
-	newClusterTestService(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_deleted','example.com','creating_order',0)`); err != nil {
 		t.Fatalf("seed certificate job: %v", err)
 	}

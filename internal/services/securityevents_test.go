@@ -4492,3 +4492,42 @@ func TestSecurityEventsTickContext_cancelStopsPassWithoutLosingEvents(t *testing
 		t.Fatalf("恢复后行数=%d, want 1200（取消不得丢事件）", got)
 	}
 }
+
+// 信任名单能力判据必须与发射面同源（内容门控）：引用存在但名单为空/悬空的策略
+// 渲染时零发射（id:3/12 都不发射），不得凭 refs 认领 logged IP 族事件——否则
+// 多策略绑定同一规则时事件被错挂到空信任集的策略（policy_id 更小时先命中），
+// 事件「策略」列与按策略 24h 计数错挂。旧判据 ipListRefsNonEmpty 只判 refs JSON
+// 可解析出 ≥1 个 id，空名单/条目全到期/列表已删（悬空引用仅 warn）都算「有
+// 发射面」，故形成覆盖盲区。
+func TestSecurityEventsAttribution_trustRefsWithEmptyListDoesNotOwnEvent(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := initSecurityEventsTestDB(t, dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	// 策略 1：无 IP 能力的 detection；策略 2：信任名单仅引用一个不存在的名单
+	// （解析后合并集为空 = 渲染零发射）。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list,ip_acl_list_refs,ip_whitelist_enabled,ip_whitelist,ip_whitelist_refs) VALUES
+		(1,'p-detection-noacl',1,'detection','[]','[]',0,'','[]','[]',0,'[]','[]'),
+		(2,'p-trust-empty-ref',1,'off','[]','[]',0,'','[]','[]',1,'[]','[424242]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_trust','1'),('lb_trust','2')`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	if p := policyByID[2]; p == nil {
+		t.Fatal("policy 2 未加载")
+	} else if len(p.MergedWhitelist) != 0 {
+		t.Fatalf("前提失败：悬空引用的合并信任集=%v, want 空", p.MergedWhitelist)
+	}
+	pid, _ := securityEventsAttributePolicy("lb_trust", "2", "logged", "", policyByID, bindings)
+	if pid != 1 {
+		t.Fatalf("logged id:2 事件归属=%d, want 1（空信任集的策略物理上零发射，不得凭 refs 认领）", pid)
+	}
+}

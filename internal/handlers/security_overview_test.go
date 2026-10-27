@@ -88,3 +88,36 @@ func TestGetSecurityRateLimitBlocks_scrapeFailureReturns500(t *testing.T) {
 		t.Fatalf("status=%d body=%q, want 500", recorder.Code, recorder.Body.String())
 	}
 }
+
+// 规则通配域与 Caddy host matcher 同语义：*.example.com 恰好覆盖一级子域，
+// 不覆盖裸域与二级以上子域（caddyhttp.MatchHost 要求标签数相等）。此前用
+// HasSuffix 会把 a.b.example.com 的 429 计数并入通配规则（chip 偏高）。
+func TestSecurityRuleHostMatches_singleLabelWildcard(t *testing.T) {
+	const rule = "*.example.com"
+	for _, tc := range []struct {
+		metric string
+		want   bool
+	}{
+		{"foo.example.com", true},
+		{"FOO.Example.COM", true}, // host matcher 大小写不敏感
+		{"a.b.example.com", false},
+		{"example.com", false},    // 通配不覆盖裸域
+		{"fooexample.com", false}, // 后缀相似但不是子域
+		{"foo.example.com.evil", false},
+		{"", false},
+	} {
+		if got := securityRuleHostMatches(rule, tc.metric); got != tc.want {
+			t.Errorf("securityRuleHostMatches(%q, %q)=%v, want %v", rule, tc.metric, got, tc.want)
+		}
+	}
+	// 精确域：大小写不敏感，通配进程不影响精确分支
+	if !securityRuleHostMatches("go029.com", "GO029.com") {
+		t.Error("精确域必须大小写不敏感匹配")
+	}
+	if securityRuleHostMatches("go029.com", "api.go029.com") {
+		t.Error("精确域不得匹配子域")
+	}
+	if securityRuleHostMatches("", "go029.com") || securityRuleHostMatches("go029.com", "") {
+		t.Error("空 host 一律不匹配")
+	}
+}

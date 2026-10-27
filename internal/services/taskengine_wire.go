@@ -605,7 +605,8 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			// 三路扫描的读失败上抛（task_runs 失败终态）——此前恒 return nil，
 			// 持续性读故障下证书自动恢复停摆而任务监控全绿。
-			return CertWaitingCATickOnce()
+			// ctx 传入：本轮窗口内的降级/取消由逐写点门收口（从节点零写）。
+			return CertWaitingCATickOnce(rc.Ctx)
 		},
 	})
 
@@ -815,7 +816,16 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			var status string
 			if err := db.DB.QueryRow("SELECT COALESCE(update_status,'') FROM security_ip2region_version WHERE id=1").Scan(&status); err != nil {
+				// 读失败不得静默：状态列会回落「执行实态」，与「确实空闲」不可
+				// 区分（运行按钮可点，点击由单飞 CAS 兜住），且排障无信号。
+				// 按失败态转换留痕（同 taskMonitorCertJobsLogKey 范式）。
+				if lvl := logStateTransition(taskIP2RegionStatusLogKey, true); lvl != "" {
+					Logf(lvl, "IP2Region 更新状态读取失败（状态列按执行实态回落）: %v", err)
+				}
 				return ""
+			}
+			if lvl := logStateTransition(taskIP2RegionStatusLogKey, false); lvl != "" {
+				Logf(lvl, "IP2Region 更新状态读取恢复")
 			}
 			// 同 CRS——仅在途阶段映射 running，
 			// failed/skipped 持久终态不再失真为「运行中」。

@@ -1138,6 +1138,13 @@ func discoverAuthoritativeNS(ctx context.Context, fqdn, bootstrap string) ([]str
 			break
 		}
 		candidate := normalizeDNSName(strings.Join(labels, "."))
+		// 公共后缀（多标签 co.uk/com.cn 与单标签 TLD）没有 ACME 归属：把它当
+		// 本域区会把注册局服务器当成域名权威（authReady 恒假、传播判定退化成
+		// 递归共识、诊断文案误导）。判据与 provider 侧 zone 解析同源
+		// （dnsprovider.IsPublicSuffix，PSL 单源）。
+		if dnsprovider.IsPublicSuffix(candidate) {
+			continue
+		}
 		r := query(candidate, dns.TypeNS)
 		if r == nil {
 			return nil, failure
@@ -1160,7 +1167,7 @@ func discoverAuthoritativeNS(ctx context.Context, fqdn, bootstrap string) ([]str
 		// 在该区上重查 NS，比继续按标签上溯更准确——上溯会把父域甚至顶级域
 		// 当成本域。
 		parent := soaOwner(r)
-		if parent == "" || sameDNSName(parent, candidate) || labelCount(parent) < 2 {
+		if parent == "" || sameDNSName(parent, candidate) || dnsprovider.IsPublicSuffix(parent) {
 			continue
 		}
 		if !dns.IsSubDomain(parent, normalizeDNSName(fqdn)) {
@@ -1251,17 +1258,6 @@ func normalizeDNSName(name string) string {
 // sameDNSName 归一后比较两个 DNS 名字。
 func sameDNSName(a, b string) bool {
 	return normalizeDNSName(a) == normalizeDNSName(b)
-}
-
-// labelCount 返回 DNS 名的标签数（去掉末尾点后按 "." 切分）。空名计 1
-// （单标签口径：递归上溯的 `<2` 判定据此把空名/根形态当作不可再上溯，
-// 与「无标签」在行为上等价，但返回值不是 0）。
-func labelCount(name string) int {
-	trimmed := strings.TrimSuffix(normalizeDNSName(name), ".")
-	if trimmed == "" {
-		return 1
-	}
-	return strings.Count(trimmed, ".") + 1
 }
 
 // soaOwner 返回应答里 SOA 记录的 owner（Answer 优先，其次 Authority 段）：

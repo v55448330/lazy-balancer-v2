@@ -504,3 +504,24 @@ func TestValidateImport_crsTreeReplacementSkipsLiveIndexExistence(t *testing.T) 
 		t.Fatalf("warnings=%v, want CRS 基准降级提示", response.Warnings)
 	}
 }
+
+// 带外 NULL enabled 的证书配置行：运行期按 COALESCE(enabled,1) 视同可用
+// （backupCAProviderExistsPostImport / acmeImportRefIndex 同口径），引用解析
+// 必须一致，否则 acmeDanglingRules 会对实际可用的引用误报「悬挂」。
+func TestAcmeRefResolvablePostImport_nullEnabledLiveRowIsResolvable(t *testing.T) {
+	newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled) VALUES (42,'null-enabled','dnspod','{}',NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	// live 分支（备份未携带该表）。
+	if !acmeRefResolvablePostImport(nil, "certificate_configs", 42) {
+		t.Fatal("NULL enabled 的 live 行必须视为可解析（COALESCE(enabled,1) 口径）")
+	}
+	// 显式禁用仍不可解析（口径放宽不得吞掉真实悬挂）。
+	if _, err := db.DB.Exec(`UPDATE certificate_configs SET enabled=0 WHERE id=42`); err != nil {
+		t.Fatal(err)
+	}
+	if acmeRefResolvablePostImport(nil, "certificate_configs", 42) {
+		t.Fatal("显式 enabled=0 必须判定不可解析")
+	}
+}

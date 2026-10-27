@@ -460,23 +460,6 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	}
 }
 
-// autobanObserveEvent 单事件喂入（测试缝：生产摄取只走 autobanObserveBatch；
-// 本函数仅供测试驱动单事件计数行为）。门：主节点+启用+口径+WAF 事件；配置当轮直读。
-func autobanObserveEvent(ip, action, ruleTriggered string) {
-	if !autobanIsMaster() || ruleTriggered == "" {
-		return
-	}
-	cfg, err := GetAutobanConfig()
-	if err != nil || !cfg.Enabled {
-		return
-	}
-	autobanObserveEventScoped(cfg, ip, action, ruleTriggered)
-}
-
-func autobanObserveEventScoped(cfg AutobanConfig, ip, action, ruleTriggered string) {
-	autobanObserveEventScopedAt(cfg, ip, action, ruleTriggered, time.Time{})
-}
-
 // autobanSourceEligible 只排除真实验证爬虫豁免事件；伪装爬虫是实际 deny，
 // 与普通 WAF 事件一样进入计数。分类复用摄取评分的 ID 编解码单源。
 func autobanSourceEligible(ruleTriggered string) bool {

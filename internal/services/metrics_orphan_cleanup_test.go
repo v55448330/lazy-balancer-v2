@@ -361,3 +361,28 @@ func TestPurgeOrphanMetricsHistory_failureReturnsPartialCount(t *testing.T) {
 		t.Fatalf("失败规则行=%d, want 1（删除失败不得报告已清理）", got)
 	}
 }
+
+// Given 主库/指标库句柄未初始化（启动早期，或关停尾部 db.Close 置 nil）
+// When 执行孤儿清理
+// Then 返回可见错误而非 (0, nil)：任务体据 err 分流，nil 会写「清理完成：删除 0 个」
+// 并落 task_runs success，与「已收敛无残留」同形，也与兄弟族 PurgeOrphanRuleLogs
+// 的 ScanError 口径相反。
+func TestPurgeOrphanMetricsHistory_nilDatabaseIsLoud(t *testing.T) {
+	_, _ = newClusterTestService(t)
+	previousDB, previousMetrics := db.DB, db.MetricsDB
+	db.DB = nil
+	db.MetricsDB = nil
+	t.Cleanup(func() { db.DB, db.MetricsDB = previousDB, previousMetrics })
+
+	deletedRules, err := PurgeOrphanMetricsHistory(t.Context())
+
+	if err == nil {
+		t.Fatal("库未初始化时必须返回错误（本轮清理未执行，不得报成功）")
+	}
+	if !errors.Is(err, errMetricsDBUnavailable) {
+		t.Fatalf("err=%v, want errMetricsDBUnavailable（与孤儿规则日志清理族同口径）", err)
+	}
+	if deletedRules != 0 {
+		t.Fatalf("deletedRules=%d, want 0", deletedRules)
+	}
+}

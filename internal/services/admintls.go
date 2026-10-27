@@ -63,6 +63,11 @@ func RuntimeAdminTLSChanged(cfg AdminTLSConfig) bool {
 	return *v != fingerprintAdminTLS(cfg)
 }
 
+// ResetRuntimeAdminTLSForTest 清空运行态快照（测试缝，生产不调用）：进程级
+// 快照会在用例间继承，若写入者不复位，-shuffle 下后续 admin-tls 用例会读到
+// 前一用例的快照而产生顺序依赖。与 ResetLogStateTransitionForTest 同族。
+func ResetRuntimeAdminTLSForTest() { runtimeAdminTLS.Store(nil) }
+
 // LoadAdminTLSConfigE 是唯一读入口：读取失败（db 未初始化、查询错误、行缺失）
 // 一律返回 error，由调用方按场景处置。
 //   - 写/合并路径必须中止：把降级默认值当现有配置合并，会在「本次 SELECT
@@ -125,10 +130,13 @@ func selfSignedCert(dataDir string) (tls.Certificate, error) {
 				return cert, nil
 			}
 			Logf("warn", "管理面板自签名证书对损坏（%s / %s），将重新生成: %v", certPath, keyPath, err3)
-		} else if !os.IsNotExist(err2) {
-			// 证书可读而私钥读失败（权限/挂载/属主漂移）与「首次生成」不同：
-			// 不清空现场诊断线索，否则会被静默重生成掩盖（证书信任需重建）。
-			Logf("warn", "管理面板自签名私钥读取失败（%s），将重新生成证书对: %v", keyPath, err2)
+		} else {
+			// 证书在场而私钥读失败（缺失/权限/挂载漂移）与「首次生成」不同：
+			// 静默落入重生成分支会以新密钥对覆盖既有 crt，已导入浏览器/系统的
+			// 信任失效且日志无线索指向真实原因（私钥缺失是最常见形态：卷只挂了
+			// crt / 人工删除）。此处一律 warn，文案点名「私钥缺失」与否。
+			Logf("warn", "管理面板自签名私钥不可读（%s，缺失=%t），将重新生成证书对（既有证书信任需重建）: %v",
+				keyPath, os.IsNotExist(err2), err2)
 		}
 	}
 

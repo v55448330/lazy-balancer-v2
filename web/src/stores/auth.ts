@@ -312,6 +312,11 @@ interface LoginResult {
   }
 
   function applyAuthResponse(res: AuthResponse, preserveSession = false) {
+    // 契约违约必须显性失败：200 却缺 token（网关改包/截断/信封变化）时，原实现
+    // 把 undefined 写进 token ref 与 localStorage（存成字符串 "undefined"）——
+    // 表现为「点了登录却没登录」且无任何提示，脏值留到下次登录。与 200 无 data
+    // 必报错的口径一致（ProfileDialog / MfaBindingWizard 同款）。
+    if (!res.token) throw new ApiRequestError('响应异常，请重试', undefined, res)
     // 登录/票据登录换会话；MFA step-up 仅刷新同账号令牌，必须保持请求身份代际。
     if (!preserveSession) advanceSessionGeneration()
     intentionalLogout.value = false

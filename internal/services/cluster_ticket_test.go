@@ -126,7 +126,8 @@ func TestGenerateLoginTicketRejectsStaleApprovedNode(t *testing.T) {
 	}
 	claims := models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", NodeID: 9}
 	// 已批准但长期未上报=离线，返回 ErrNodeOffline（handler 409，
-	// 可行动文案）；未批准/无 keyHash 仍为 ErrNodeNotFound（404）。
+	// 可行动文案）；未批准 → ErrNodeNotFound（404）；已批准但无 keyHash
+	// （令牌待交付）→ ErrNodeTokenPending（409，节点存在但尚不可签发）。
 	if _, err := service.GenerateLoginTicket(context.Background(), claims, now); !errors.Is(err, ErrNodeOffline) {
 		t.Fatalf("stale node error=%v, want ErrNodeOffline", err)
 	}

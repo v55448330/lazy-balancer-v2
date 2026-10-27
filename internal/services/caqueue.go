@@ -1728,8 +1728,12 @@ func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
 // failJobFromStatus 无调用方已删除，本函数唯一消费方为 failJob）：尝试次数
 // 封顶文案、消息截断、UPDATE、留痕。
 func failJobTransition(jobID int, fromSet []string, message string) {
-	if attempts := currentRenewalAttempts(jobID); attempts+1 >= getCertRenewalAttempts() {
-		message = maxRenewalAttemptsMessage(message, getCertRenewalAttempts())
+	// 上限只读一次并复用：getCertRenewalAttempts 每次都点查 global_config（含
+	// 越界留痕分支），CA 故障时 N 个任务同轮失败会白读 2N 次并重复写降级告警。
+	// 该函数恒返回正数（无效值降级默认并留痕），故无需再判零。
+	maxAttempts := getCertRenewalAttempts()
+	if attempts := currentRenewalAttempts(jobID); attempts+1 >= maxAttempts {
+		message = maxRenewalAttemptsMessage(message, maxAttempts)
 	}
 	message = truncateJobMessage(message)
 	err := transitionJob(db.DB, jobID, fromSet, "failed", map[string]any{

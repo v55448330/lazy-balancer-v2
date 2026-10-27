@@ -510,6 +510,16 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "默认拦截页由系统管理，不允许创建"})
 		return
 	}
+	// 内置页（is_builtin）与显式 id 同口径拒绝：INSERT 列清单不含这两列，
+	// 静默丢弃会让调用方以为「已创建内置页/指定了 id」，实际落普通行。
+	if req.IsBuiltin {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置拦截页由系统管理，不允许创建"})
+		return
+	}
+	if req.ID != 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页 ID 由系统分配，不接受指定"})
+		return
+	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
@@ -1693,6 +1703,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 拒绝。nil=按合并后内容重推断（Exec 后读合并行回写）。
 	if req.PolicyType != nil {
 		switch *req.PolicyType {
+		case "":
+			// 空串等价「未提供」：GET 详情对 '' 存量行（导入/旧快照遗留）回传
+			// policy_type:""，机器客户端 GET→PUT 回写时不得被 400 拒绝。
+			// 置 nil 后走下方「按合并后内容重推断」路径，与 Create 的
+			// case "" 同口径（面板编辑器总提交显式类型，不受影响）。
+			req.PolicyType = nil
 		case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3:
 			// 矛盾载荷显式拒绝，先于归零（与 Create 同口径）：静默归零后 200
 			// 会让调用方以为阶段外字段已生效。
@@ -3924,14 +3940,10 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 			}
 		}
 	}
-	if strings.HasPrefix("WAF 规则（CRS）", input) {
-		matched = true
-		ors = append(ors, wafCRSCondition)
-	}
-	// 紧凑标签「WAF·CRS」的部分输入同样宽匹配——否则
-	// 「WAF·」只命中前缀集为空的「WAF·自定义」，ors 为空时拼出 `AND ()` 令
-	// SQLite 语法错误（ListSecurityEvents 500）。
-	if strings.HasPrefix("WAF·CRS", input) {
+	// 两个 WAF 标签（显示标签 + 紧凑标签）任一前缀命中即并入同一条 CRS 形态
+	// 条件——各自 append 会让输入 "W" 这类同时命中两者的前缀拼出重复谓词
+	// `((GLOB '9…') OR (GLOB '9…'))`。
+	if strings.HasPrefix("WAF 规则（CRS）", input) || strings.HasPrefix("WAF·CRS", input) {
 		matched = true
 		ors = append(ors, wafCRSCondition)
 	}
@@ -4851,7 +4863,8 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	overview.UpdateStatus = overlayCRSOverviewUpdateStatus(overview.UpdateStatus, crsSnapshot)
 
 	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled.
-	// 时区偏移在 Go 侧拼好（负偏移如 America/New_York 为 "-240 minutes"）；SQLite 的
+	// 日桶由 loadSecurityOverviewAggregates 按 today 携带的时区逐日本地边界
+	// 构造（DST 正确），本函数只传 loc.String() 作缓存键身份，不拼偏移。
 	// MetricsDB 未装配：主库字段（活跃策略/库状态）照常返回，metrics 面板零值
 	// 200 而非 panic（对齐家族：ListSecurityEvents/
 	// GetIPEventCount/GetRuleStageStats 同口径）。

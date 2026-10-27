@@ -1752,6 +1752,14 @@ func runMigrations() error {
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_enabled ON lb_rules(enabled)"); err != nil {
 		return fmt.Errorf("failed to index lb_rules enabled: %w", err)
 	}
+	// 规则级阶段页两列：拦截页列表的引用计数子查询（block_page_stage1_id OR
+	// block_page_stage3_id）与删除门的引用检查按这两列过滤，无索引时每次全表扫描。
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_block_page_stage1 ON lb_rules(block_page_stage1_id)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules block_page_stage1_id: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_block_page_stage3 ON lb_rules(block_page_stage3_id)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules block_page_stage3_id: %w", err)
+	}
 
 	// 须在 lb_rules 重建之后——重建前的遗留表可能没有 enable_tls 列。
 	if err := migrateLegacyHTTPSProtocol(); err != nil {

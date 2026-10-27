@@ -167,12 +167,13 @@ func TestIssueServiceControlTicketRequiresApprovedNodeWithToken(t *testing.T) {
 	if _, err := service.IssueServiceControlTicket(context.Background(), 999, models.ClusterServiceActionStopCaddy, now); !errors.Is(err, ErrNodeNotFound) {
 		t.Fatalf("missing node error=%v", err)
 	}
-	// 已审批但令牌哈希为空（未交付令牌）——不可控节点
+	// 已审批但令牌哈希为空（未交付令牌）——不可控节点，但节点本身存在：
+	// 与「不存在/未审批」区分（409 族哨兵），否则排障会去查节点是否被删。
 	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,is_approved,cluster_token_hash) VALUES (15,'hashless','10.0.0.15',1,'')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.IssueServiceControlTicket(context.Background(), 15, models.ClusterServiceActionStopCaddy, now); !errors.Is(err, ErrNodeNotFound) {
-		t.Fatalf("hashless node error=%v", err)
+	if _, err := service.IssueServiceControlTicket(context.Background(), 15, models.ClusterServiceActionStopCaddy, now); !errors.Is(err, ErrNodeTokenPending) {
+		t.Fatalf("hashless node error=%v, want ErrNodeTokenPending", err)
 	}
 }
 

@@ -427,3 +427,29 @@ func TestThreatRollup_persistedRebuildContinuesAcrossCalls(t *testing.T) {
 		t.Fatalf("覆盖到达意图起点后必须清除重建标记（remaining=%d）", remaining)
 	}
 }
+
+// 分批解析必须跨越分块边界：前 500 个候选 id 全是已删除规则的幽灵（计数相同
+// 时按 id 升序排在现存规则之前）时，凑满 3 条现存目标的早停逻辑须继续下一批，
+// 否则 Top3 少计/漏项（旧实现全量解析，正确但为 3 条结果做 O(distinct) 次
+// 主库往返）。
+func TestThreatTopTargets_resolvesAcrossChunkBoundary(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	t.Cleanup(resetThreatRollupWarmerForTest)
+	t.Cleanup(resetThreatScreenCachesForTest)
+	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
+	seedThreatLBRule(t, "lb_ok2", "跨越分块站点", "chunk.example.com")
+	// 600 条已删除规则：'lb_ghost_*' 字典序小于 'lb_ok2'，全部落在前 500 个
+	// 候选（第一批）或之后，现存规则在第二批才能被解析。
+	for i := range 600 {
+		seedThreatRuleEvent(t, utcStringAgo(10*time.Minute), "93.184.216.9", fmt.Sprintf("lb_ghost_%04d", i), "blocked")
+	}
+	seedThreatRuleEvent(t, utcStringAgo(10*time.Minute), "93.184.216.10", "lb_ok2", "blocked")
+
+	payload := getThreatScreenR79(t, router, "/security/overview/threat-screen")
+	if len(payload.Data.TopTargets) != 1 {
+		t.Fatalf("top_targets=%+v, want 1 项（跨批解析出的现存规则 lb_ok2）", payload.Data.TopTargets)
+	}
+	if payload.Data.TopTargets[0].Name != "跨越分块站点" {
+		t.Fatalf("top_targets[0]=%+v, want 跨越分块站点", payload.Data.TopTargets[0])
+	}
+}

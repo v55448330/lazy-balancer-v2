@@ -22,17 +22,27 @@ func TestValidateAccessLogFormat_rejectsUARenameIncludingAncestors(t *testing.T)
 		name    string
 		format  string
 		wantErr string
+		// rejectOnly=true 只断言「被拒（错误非空）」，不绑定具体文案：该形状
+		// 由另一个门（remote_ip 保护）先行拦截，文案归属不在本用例目标内——
+		// 绑定对方门措辞会让本用例以与 UA 无关的原因变红/假绿。
+		rejectOnly bool
 	}{
-		{"祖先 headers 整树改名", "request>headers -> hdrs", "User-Agent"},
-		{"精确 UA 改名", "request>headers>User-Agent -> ua", "User-Agent"},
-		{"根 request 整树改名", "request -> req", "统计"}, // 由 remote_ip 门先行拦截（文案不含 UA），拒绝即正确
-		{"合法 remote_ip→src 放行", "request>remote_ip -> src", ""},
-		{"合法 uri→uri_path 放行", "request>uri -> uri_path", ""},
-		{"无关字段改名放行", "request>host -> h", ""},
+		{"祖先 headers 整树改名", "request>headers -> hdrs", "User-Agent", false},
+		{"精确 UA 改名", "request>headers>User-Agent -> ua", "User-Agent", false},
+		{"根 request 整树改名", "request -> req", "", true},
+		{"合法 remote_ip→src 放行", "request>remote_ip -> src", "", false},
+		{"合法 uri→uri_path 放行", "request>uri -> uri_path", "", false},
+		{"无关字段改名放行", "request>host -> h", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateAccessLogFormat(tc.format)
+			if tc.rejectOnly {
+				if err == nil {
+					t.Fatalf("format %q must be rejected（拒绝成立即可，不绑定具体门文案）", tc.format)
+				}
+				return
+			}
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("format %q must pass, got %v", tc.format, err)

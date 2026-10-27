@@ -312,3 +312,32 @@ func TestSecurityBlockedCounter_collectorDisabledSkipsTraffic(t *testing.T) {
 		t.Fatalf("collector disabled created buckets: %+v", trafficCountries)
 	}
 }
+
+// ID 生成失败（crypto/rand 出错）时客户端伪造的计时头必须被剥离。
+// 两段收点（recordSecurityTiming）只校验 16 字符小写 hex 形态、不校验来源，
+// 直接放行等于让客户端自选计时注册表 key 与起始纳秒：审计行 lb_timing 可被
+// 注入任意耗时，且该头是安全事件的请求级去重键（两个请求可被误并为一条）。
+func TestSecurityBlockedCounter_stripsForgedTimingHeadersWhenIDGenerationFails(t *testing.T) {
+	oldRand := securityTimingRandRead
+	securityTimingRandRead = func([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
+	t.Cleanup(func() { securityTimingRandRead = oldRand })
+
+	const forgedID = "0123456789abcdef"
+	const forgedStart = "1700000000000000000"
+	var seenID, seenStart string
+	h := &SecurityBlockedCounter{Rule: "lb_forged_timing", metrics: newSecurityBlockedCounterVec(prometheus.NewRegistry())}
+	next := caddyhttp.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) error {
+		seenID = req.Header.Get(securityTimingHeader)
+		seenStart = req.Header.Get(securityTimingStartHeader)
+		return nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(securityTimingHeader, forgedID)
+	req.Header.Set(securityTimingStartHeader, forgedStart)
+	if err := h.ServeHTTP(httptest.NewRecorder(), req, next); err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
+	}
+	if seenID != "" || seenStart != "" {
+		t.Fatalf("ID 生成失败时伪造计时头必须被剥离, got id=%q start=%q", seenID, seenStart)
+	}
+}

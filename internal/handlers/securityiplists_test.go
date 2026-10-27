@@ -1205,3 +1205,94 @@ func TestValidateIPListShape_rejectsControlCharsInRemark(t *testing.T) {
 		}
 	}
 }
+
+// 元数据-only 更新（entries 缺席）是独立分支：存量条目不是本次输入，不得重跑
+// 条目校验——存量含脏值（导入遗留/带外改库）时改名/改描述不应被
+// 「条目 N 包含无效的 IP/CIDR」400 挡死（文案与用户动作不匹配、无自助修复入口）。
+// 审计条数取库内行数（与导出/删除口径一致），而非到期剔除后的生效条数。
+func TestUpdateIPList_metadataOnlyToleratesDirtyStoredEntries(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	const seed = `[{"value":"bad-ip","remark":"x"},{"value":"203.0.113.9","expires_at":"2000-01-01 00:00:00"}]`
+	listID := seedIPListRow(t, "脏条目名单", seed)
+
+	rec := putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", listID), map[string]any{"description": "只改描述"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（元数据-only 不得重校验存量条目）", rec.Code, rec.Body.String())
+	}
+	// 条目文本原样写回（不丢数据、不静默剔除到期行）
+	var entries string
+	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'') FROM security_ip_lists WHERE id=?`, listID).Scan(&entries); err != nil {
+		t.Fatal(err)
+	}
+	if entries != seed {
+		t.Fatalf("entries=%q, want 原样 %q", entries, seed)
+	}
+	// 审计条数=库内行数（2），不是到期剔除后的生效条数（1）
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='IP 地址列表' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if !strings.Contains(detail, "，2 条）") {
+		t.Fatalf("audit detail=%q, want 库内行数 2 条（与导出/删除口径一致）", detail)
+	}
+
+	// 回归形状：带 entries 的整表保存仍走全量校验（脏值必须 400，不得借
+	// 元数据分支放行）
+	rec = putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", listID), map[string]any{"entries": `[{"value":"bad-ip"}]`})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("整表保存脏条目 status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// 详情端点必须与列表同口径装载引用面：ref_count/ref_count_enabled/
+// ref_policies/trusted_proxy_* 此前在详情恒零值且 ref_policies 为 null
+// （前端契约声明非可选数组），消费详情的调用方会把被引用名单看成 0 引用。
+func TestGetIPList_detailCarriesRefSurface(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	listID := seedIPListRow(t, "详情引用面", `[{"value":"10.0.0.0/8","remark":""}]`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_list_refs, enabled) VALUES ('详情引用方', ?, 1)`, fmt.Sprintf("[%d]", listID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs=? WHERE id=1`, fmt.Sprintf("[%d]", listID)); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := getRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", listID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"ref_policies":null`) {
+		t.Fatalf("ref_policies 必须归一为数组（前端契约非可选）：%s", rec.Body.String())
+	}
+	var payload struct {
+		Data ipListRow `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	row := payload.Data
+	if row.RefCount != 2 || row.RefCountEnabled != 2 {
+		t.Fatalf("ref_count=%d ref_count_enabled=%d, want 2/2（1 策略引用 + 受信代理）", row.RefCount, row.RefCountEnabled)
+	}
+	if len(row.RefPolicies) != 1 || row.RefPolicies[0].Name != "详情引用方" {
+		t.Fatalf("ref_policies=%+v, want 单个「详情引用方」", row.RefPolicies)
+	}
+	if !row.TrustedProxyReferenced || row.TrustedProxyScope != "受信代理网段" {
+		t.Fatalf("trusted_proxy=(%v,%q), want (true,受信代理网段)", row.TrustedProxyReferenced, row.TrustedProxyScope)
+	}
+
+	// 回归形状：无引用名单的详情 ref_policies 为 [] 且计数 0
+	plainID := seedIPListRow(t, "无引用详情", `[{"value":"192.0.2.1"}]`)
+	rec = getRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", plainID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plain detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.RefCount != 0 || payload.Data.RefPolicies == nil || len(payload.Data.RefPolicies) != 0 {
+		t.Fatalf("plain row ref=(%d,%v), want (0, 空数组)", payload.Data.RefCount, payload.Data.RefPolicies)
+	}
+}

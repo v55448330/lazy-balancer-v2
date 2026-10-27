@@ -500,9 +500,9 @@ func InstallClusterVersionTriggers(database *sql.DB) error {
 }
 
 // usersTableWritePostPaths 是「写 users 表同步列」的 POST 路由清单——
-// 生产代码的唯一事实源。分类判定（isUsersTableWritePath）、触发器降级态的
-// 角色分流、以及测试路由注册与 fail-closed 断言全部从本清单派生，测试不再
-// 维护第二份副本（副本漂移时新写路径会漏掉 fail-closed 保护而无人发现）。
+// 生产代码的唯一事实源。分类判定（isUsersTableWritePath）与测试路由注册及
+// fail-closed 断言全部从本清单派生，测试不再维护第二份副本（副本漂移时新写
+// 路径会漏掉 fail-closed 保护而无人发现）。
 var usersTableWritePostPaths = []string{
 	"/api/v1/auth/login",
 	"/api/v1/auth/mfa/verify",
@@ -521,12 +521,11 @@ const usersTableWriteOIDCCallbackPath = "/api/v1/auth/oidc/callback"
 // （auth/setup）、OIDC 回调 JIT 开户（GET 形态）、MFA 三段状态变更
 // （mfa_enabled/mfa_secret/mfa_recovery_codes）。
 //
-// 两处消费方共用本清单，单源防漂移：
-//   - isSynchronizedWrite 的同步写分类（触发器可用时写后必须 bump）；
-//   - 触发器降级态的角色分流——从节点 users 触发器 WHEN is_master=1 本就不
-//     bump，fail-closed 在从端零保护收益、只截断登录/开户可用性，故从端放行、
-//     主端仍 500。此前分流只覆盖 login/mfa-verify，setup/OIDC/改 MFA 在从端
-//     被误伤 500（与分类口径自相矛盾）。
+// 生产消费方仅 isSynchronizedWrite 一处（同步写分类：触发器可用时写后必须
+// bump，不可用时 fail-closed）；测试的路由注册与断言同源派生。触发器的降级
+// 态（installErr≠nil）不再按路径分流，而是对所有同步写统一先读
+// services.RoleOf：从端放行交下游守卫、主端 500（历史：曾只对
+// login/mfa-verify 做从端放行，setup/OIDC/改 MFA 在从端被误伤 500）。
 //
 // 反例（不属于本表写入，刻意不入列）：/auth/mfa/setup 与
 // /auth/mfa/verify-step 只写刻意排除的 pending/记账列（永不 bump），按前缀

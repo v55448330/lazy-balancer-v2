@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { calls, resetCalls, EL_MESSAGE_METHODS, STUB_ELEMENT, STUB_SAVE_RESULT_DEPS, type StubCall } from './_stubs.ts'
@@ -89,4 +89,30 @@ test('_stubs 两处 ElMessage 替身共用同一契约（可调用 + 方法集�
   } finally {
     g.__calls = previous
   }
+})
+
+test('src 里引用的 *.spec.ts 必须真实存在（文档指针不得悬空）', () => {
+  // 单源注释常写「由 web/tests/xxx.spec.ts 对表」；指针指向不存在的文件时，
+  // 维护者/审计者按注释去找门禁会扑空，误判「该不变量无覆盖」而重建第二处
+  // 对表（单源退化为双源）。此处对 src 全量 *.spec.ts 引用逐个断言存在。
+  const specDir = fileURLToPath(new URL('./', import.meta.url))
+  const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
+  const referenced = new Set<string>()
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = `${dir}${entry.name}`
+      if (entry.isDirectory()) {
+        walk(`${full}/`)
+        continue
+      }
+      if (!/\.(ts|vue)$/.test(entry.name)) continue
+      for (const match of readFileSync(full, 'utf8').matchAll(/[A-Za-z0-9_-]+\.spec\.ts/g)) {
+        referenced.add(match[0])
+      }
+    }
+  }
+  walk(srcDir)
+  assert.ok(referenced.size >= 8, `src 中的 spec 指针扫描失效（仅 ${referenced.size} 个）`)
+  const dangling = [...referenced].filter((name) => !existsSync(`${specDir}${name}`)).sort()
+  assert.deepEqual(dangling, [], `注释里的 spec 指针指向不存在的文件：${dangling.join(', ')}`)
 })

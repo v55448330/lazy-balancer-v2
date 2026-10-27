@@ -2481,3 +2481,60 @@ func TestAPIDocs_issueCertificateRedeployedDualTypeDocumented(t *testing.T) {
 		t.Errorf("POST /certificates/issue 描述未给出两种响应示例: %q", description)
 	}
 }
+
+// 文档占位符门：路由示例一旦写成 {...} 之类「看起来像 JSON 但不是合法 JSON」
+// 的占位符，生成器会把它当纯文本走 strconv.Quote → 200 响应示例变成一条
+// 字符串（按规格 codegen 的消费方把响应体建模为 string），请求侧则解析成无
+// 意义的 flow map。示例要么是合法 JSON，要么是明确登记的说明文本（纯文本
+// 表单/二进制下载形态由 TestAPIDocs_nonJSONResponsesDeclareExplicitMediaType
+// 的 rawResponse 判据覆盖）。
+func TestAPIDocRoutes_examplesAreValidJSONWhenJSONShaped(t *testing.T) {
+	jsonShaped := func(example string) bool {
+		trimmed := strings.TrimSpace(example)
+		return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+	}
+	checked := 0
+	for _, route := range apiDocRoutes {
+		key := route.Method + " " + route.Path
+		if request := strings.TrimSpace(route.Request); jsonShaped(request) {
+			checked++
+			if !json.Valid([]byte(request)) {
+				t.Errorf("%s 请求示例不是合法 JSON（占位符会退化成字符串/flow map）: %s", key, request)
+			}
+		}
+		if response := strings.TrimSpace(route.Response); jsonShaped(response) {
+			checked++
+			if !json.Valid([]byte(response)) {
+				t.Errorf("%s 响应示例不是合法 JSON（占位符会让 200 示例退化成字符串）: %s", key, response)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("没有 JSON 形态示例被检查——路由示例表形态失效")
+	}
+
+	// 生成侧实证：三个「逃生口」端点的示例必须是结构化载荷，而不是字符串。
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Example any `yaml:"example"`
+				} `yaml:"content"`
+			} `yaml:"responses"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	for _, key := range []string{"GET /caddy/config", "GET /rules/:caddy_id/caddy-config"} {
+		method, path := splitRouteKey(t, key)
+		operation := document.Paths[apipath.ToOpenAPI(path)][strings.ToLower(method)]
+		entry, ok := operation.Responses["200"].Content["application/json"]
+		if !ok {
+			t.Fatalf("%s 200 未声明 application/json", key)
+		}
+		if _, isString := entry.Example.(string); isString {
+			t.Errorf("%s 200 示例被生成为字符串（占位符形态），want 结构化 JSON: %v", key, entry.Example)
+		}
+	}
+}

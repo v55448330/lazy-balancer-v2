@@ -549,6 +549,26 @@ func ForEachIPListLine(raw []byte, fn func(lineNo int, line string) bool) {
 	}
 }
 
+// prefixCapHint 返回加载侧一次性预分配的条目容量。
+// 按「平均每条约 12 字节」预估在条目密集文件上接近真实值；但注释/空行密集
+// 的文件（带外写入、损坏残留）会把预估放大到 maxEntries+1（每项 32B ≈ 32MiB）
+// 却几乎全空。预分配只服务热路径常量因子，故再封顶 initialPrefixCapacity——
+// 超出部分由 append 的几何增长补齐，不改变任何拒绝语义（体积门与条目门
+// 仍先/后独立生效）。
+func prefixCapHint(size int) int {
+	capHint := size/12 + 1
+	if capHint > maxEntries+1 {
+		capHint = maxEntries + 1
+	}
+	if capHint > initialPrefixCapacity {
+		capHint = initialPrefixCapacity
+	}
+	return capHint
+}
+
+// initialPrefixCapacity 是加载侧预分配的条目上限（2^16 × 32B ≈ 2MiB）。
+const initialPrefixCapacity = 1 << 16
+
 // parseIPListFile 读盘+严格解析+防御性归并（写入侧已聚合，加载侧再跑一次
 // 保证「排序+去重+不相交」检索不变式——二分正确性依赖不相交）。逐条目
 // **只解析一次**（此前「逐行校验解析 → AggregatePrefixes 再解析」
@@ -572,12 +592,8 @@ func parseIPListFile(path string) (*ipListFileState, error) {
 	case err != nil:
 		return nil, fmt.Errorf("IP 名单读取失败 %q: %w", path, err)
 	}
-	// 容量预估：平均每条约 12 字节，封顶 maxEntries+1（超限在追加处拦截）。
-	capHint := len(raw)/12 + 1
-	if capHint > maxEntries+1 {
-		capHint = maxEntries + 1
-	}
-	prefixes := make([]netip.Prefix, 0, capHint)
+	// 容量预估见 prefixCapHint（注释/空行密集文件不得把预分配放大到 32MiB）。
+	prefixes := make([]netip.Prefix, 0, prefixCapHint(len(raw)))
 	// 直接在原始字节上按行迭代（共享 ForEachIPListLine：bytes.IndexByte +
 	// TrimSpace，不再整文件复制成 string（maxFileBytes 64MB 上限时
 	// raw+string 双份常驻=2× 文件体积峰值）；仅实际条目行短生命周期转 string

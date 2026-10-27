@@ -619,6 +619,44 @@ func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
 	return refs, nil
 }
 
+// loadTrustedProxyRefIDs 读取受信代理网段所引用的 IP 名单 id 集合
+// （global_config.trusted_proxy_range_refs）——删除守卫与展示面同源。
+func loadTrustedProxyRefIDs() (map[int64]bool, error) {
+	var raw string
+	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+		return nil, err
+	}
+	ids := make(map[int64]bool)
+	for _, id := range parseIPListRefsIDs(raw) {
+		ids[id] = true
+	}
+	return ids, nil
+}
+
+// applyIPListRefView 把引用面（策略引用 + 受信代理引用）写入单行 DTO——
+// 列表与详情共用，消除「同一资源两个读端点字段语义分叉」：详情此前恒零值
+// （ref_count=0 / ref_policies=null / trusted_proxy_* 零），消费详情的调用方
+// 会把被引用的名单看成 0 引用，且前端契约声明 ref_policies 为非可选数组。
+func applyIPListRefView(row *ipListRow, refs map[int64][]ipListRefPolicy, trustedProxyRefs map[int64]bool) {
+	row.RefPolicies = refs[int64(row.ID)]
+	if row.RefPolicies == nil {
+		row.RefPolicies = []ipListRefPolicy{}
+	}
+	row.RefCount = len(row.RefPolicies)
+	for _, ref := range row.RefPolicies {
+		if ref.Enabled {
+			row.RefCountEnabled++
+		}
+	}
+	if trustedProxyRefs[int64(row.ID)] {
+		row.TrustedProxyReferenced = true
+		row.TrustedProxyScope = "受信代理网段"
+		row.RefCount++ // 展示计数合并（ref_policies 不伪造策略项）
+		// 受信代理引用同属删除门（409），计入阻止删除的引用数。
+		row.RefCountEnabled++
+	}
+}
+
 func (h *Handlers) ListIPLists(c *gin.Context) {
 	// entry_count 走 SQL 侧 json_array_length——不再全量
 	// 读+逐行解析 entries 仅为计数（万条名单 ≈460KB/行 的 CPU/内存开销归零）；
@@ -656,19 +694,13 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	}
 	// 受信代理引用面（global_config.trusted_proxy_range_refs）——与
 	// DeleteIPList 的 409 守卫同源，消除「展示 0 引用却删不掉」的观测缺口。
-	trustedProxyRefs := map[int64]bool{}
-	{
-		var raw string
-		if qerr := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&raw); qerr != nil {
-			// 与删除守卫同口径 fail-closed——查询失败时不得把引用面
-			// 展示为空（页面「无引用可删」与删除 409/500 自相矛盾）；显式
-			// 500 让运维区分「真无引用」与「观测失败」。
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取受信代理引用失败"})
-			return
-		}
-		for _, id := range parseIPListRefsIDs(raw) {
-			trustedProxyRefs[id] = true
-		}
+	trustedProxyRefs, tpErr := loadTrustedProxyRefIDs()
+	if tpErr != nil {
+		// 与删除守卫同口径 fail-closed——查询失败时不得把引用面
+		// 展示为空（页面「无引用可删」与删除 409/500 自相矛盾）；显式
+		// 500 让运维区分「真无引用」与「观测失败」。
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取受信代理引用失败"})
+		return
 	}
 	// RDB 文件化：威胁库条数以 threat_sources 为准（DB entries 恒空）
 	threatCounts := map[string]int{}
@@ -710,23 +742,8 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 			}
 		}
 		row.PresetAutoban = row.System && row.Name == services.AutobanPresetListName
-		row.RefPolicies = refs[int64(row.ID)]
-		if row.RefPolicies == nil {
-			row.RefPolicies = []ipListRefPolicy{}
-		}
-		row.RefCount = len(row.RefPolicies)
-		for _, ref := range row.RefPolicies {
-			if ref.Enabled {
-				row.RefCountEnabled++
-			}
-		}
-		if trustedProxyRefs[int64(row.ID)] {
-			row.TrustedProxyReferenced = true
-			row.TrustedProxyScope = "受信代理网段"
-			row.RefCount++ // 展示计数合并（ref_policies 不伪造策略项）
-			// 受信代理引用同属删除门（409），计入阻止删除的引用数。
-			row.RefCountEnabled++
-		}
+		// 引用面装载与详情同源（applyIPListRefView）。
+		applyIPListRefView(row, refs, trustedProxyRefs)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: lists})
 }
@@ -781,6 +798,21 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 		row.Entries = json.RawMessage(entriesJSON)
 		row.EntryCount = len(entries)
 	}
+	// 引用面与列表同源装载（ref_count/ref_count_enabled/ref_policies/
+	// trusted_proxy_*）——详情此前恒零值且 ref_policies 为 null，与前端契约
+	// （非可选数组）及列表端点分叉。失败 fail-closed（同列表：不得把引用面
+	// 展示为空，否则「无引用可删」与删除 409 自相矛盾）。
+	refs, refErr := loadIPListRefPolicies()
+	if refErr != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取列表引用失败", refErr)})
+		return
+	}
+	trustedProxyRefs, tpErr := loadTrustedProxyRefIDs()
+	if tpErr != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取受信代理引用失败"})
+		return
+	}
+	applyIPListRefView(&row, refs, trustedProxyRefs)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: row})
 }
 
@@ -943,12 +975,14 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		entriesJSON = *req.Entries
 	}
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
-	entries, prunedExpired, err := validateIPListShape(name, description, category, entriesJSON)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
+	var entries []models.IPListEntry
+	var prunedExpired int
 	if req.Entries != nil {
+		entries, prunedExpired, err = validateIPListShape(name, description, category, entriesJSON)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 		// 落库形态=生效条目（到期条目已剔除）：原始条数与生效条数不再有两个
 		// 口径，后续保存不会再被到期残留顶到上限。
 		marshaled, merr := json.Marshal(entries)
@@ -957,6 +991,21 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			return
 		}
 		entriesJSON = string(marshaled)
+	} else {
+		// 元数据-only：存量条目不是本次输入，不重跑条目校验——存量含脏值
+		// （导入遗留/带外改库）时改名/改描述不得被「条目 N 包含无效的
+		// IP/CIDR」400 挡死（用户动作与错误文案不匹配，且无自助修复入口）。
+		// 审计条数取存量行数（与导出/删除口径一致），而非到期剔除后的生效集
+		// 条数——此前「（N 条）」可能小于库内真实行数。
+		if err := validateIPListMetadataShape(name, description, category); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+		if uerr := json.Unmarshal([]byte(entriesJSON), &entries); uerr != nil {
+			// 存量条目无法解析（带外脏行）：元数据维护照常放行，审计条数记 0
+			// （entries 置 nil，len=0）；条目文本原样写回，不丢数据。
+			entries = nil
+		}
 	}
 	// 条目清空 + 本列表被 allow 模式策略引用 → 该策略
 	// 生效名单变空 → 渲染侧对空交集恒发 deny（fail-closed：拒绝所有请求，

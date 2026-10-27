@@ -694,3 +694,122 @@ func TestPrimeCrawlerIPLists_partialFailureKeepsSnapshotAndHeals(t *testing.T) {
 		}
 	}
 }
+
+// changed 的契约是「DB 内容真实变化」。DB 未变、仅运行快照缺失/陈旧时，
+// upsert 只重建快照并返回 changed=false——否则 RunUpdate 会按「名单内容变化」
+// 触发名单投影收敛并写「名单内容变化经投影热路径收敛」日志，口径与事实相反。
+func TestUpsertCrawlerIPList_unchangedContentRebuiltSnapshotIsNotChanged(t *testing.T) {
+	_, database := newClusterTestService(t)
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+
+	entries := []string{"66.249.66.0/24"}
+	if err := upsertCrawlerIPList("googlebot", entries); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE security_ip_lists SET updated_at='2000-01-01 00:00:00' WHERE name=?`, CrawlerIPListName("googlebot")); err != nil {
+		t.Fatal(err)
+	}
+	// Given：DB 内容不变，运行快照缺失（首轮写失败/升级遗留形态）
+	if err := os.Remove(crawlerIPListFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	changed, err := upsertCrawlerIPListChanged("googlebot", entries)
+	if err != nil {
+		t.Fatalf("快照重建必须成功: %v", err)
+	}
+
+	// Then：不算内容变化，快照已按 DB 内容重建，DB 行未被重写
+	if changed {
+		t.Fatal("DB 内容未变时 changed 必须为 false（快照重建不是内容变化）")
+	}
+	var updatedAt string
+	if err := database.QueryRow(`SELECT updated_at FROM security_ip_lists WHERE name=?`, CrawlerIPListName("googlebot")).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != "2000-01-01 00:00:00" {
+		t.Errorf("未变化名单被重复回写: updated_at=%q", updatedAt)
+	}
+	data, err := os.ReadFile(crawlerIPListFile)
+	if err != nil {
+		t.Fatalf("运行快照未重建: %v", err)
+	}
+	var snapshot map[string][]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("invalid snapshot JSON: %v (%s)", err, data)
+	}
+	if got := snapshot["googlebot"]; len(got) != 1 || got[0] != entries[0] {
+		t.Fatalf("快照内容=%v, want %v", got, entries)
+	}
+
+	// 回归形状：DB 内容真实变化时 changed 仍为 true。
+	changed, err = upsertCrawlerIPListChanged("googlebot", []string{"66.249.66.0/24", "66.249.67.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("DB 内容变化必须返回 changed=true")
+	}
+}
+
+// 行存在但显式为空（entries='[]'）与「行缺失」必须区分：前者是带外/导入裁剪
+// 后的显式空集合（意图=该引擎豁免不生效），启动补种不得把它复活成内置首版；
+// 后者才需要补种，否则升级/部分失败会永久丢豁免。
+func TestPrime_explicitEmptyCrawlerListRowIsNotReseeded(t *testing.T) {
+	_, database := newClusterTestService(t)
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+
+	// Given：so360spider 行存在但条目为空；googlebot 行缺失
+	if _, err := database.Exec(`DELETE FROM security_ip_lists WHERE category='搜索引擎爬虫'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
+		VALUES (?, '', '搜索引擎爬虫', '[]', 1, datetime('now'), datetime('now'))`, CrawlerIPListName("so360spider")); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := GetCrawlerUpdateManager().Prime(); err != nil {
+		t.Fatalf("prime: %v", err)
+	}
+
+	// Then：显式空行保持为空（不被内置首版覆盖）
+	all, err := loadCrawlerIPListsFromDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, ok := all["so360spider"]; !ok || len(entries) != 0 {
+		t.Fatalf("显式空名单行被补种复活: %v（应为空集合）", entries)
+	}
+	// And：行缺失的引擎照旧补种内置首版
+	for _, src := range crawlerBotSources {
+		if src.Name == "so360spider" {
+			continue
+		}
+		if len(all[src.Name]) == 0 {
+			t.Errorf("缺失引擎 %s 未被补种（显式空判定不得波及行缺失形态）", src.Name)
+		}
+	}
+	// And：运行快照保留该引擎的空数组（显式空 ≠ 缺失，插件两形态均判 Transient，
+	// 但快照读者能看出是显式空而非漏种）
+	data, err := os.ReadFile(crawlerIPListFile)
+	if err != nil {
+		t.Fatalf("snapshot file missing: %v", err)
+	}
+	var snapshot map[string][]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("invalid snapshot JSON: %v (%s)", err, data)
+	}
+	entries, ok := snapshot["so360spider"]
+	if !ok {
+		t.Fatalf("运行快照丢了显式空引擎: %s", data)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("运行快照把显式空名单写成 %v, want 空集合", entries)
+	}
+}

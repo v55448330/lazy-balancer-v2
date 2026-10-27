@@ -455,7 +455,9 @@ var ruleLogOrphanPurgeBeforeRemoveForTest func()
 // 判定域是 lb_rules.caddy_id：清单读取失败时一个文件都不删（否则会把存活规则
 // 的日志当孤儿清掉），按 ScanError 上抛。文件名还原失败的条目一律跳过——外来
 // 文件不属于本规则的日志族，不得误删。ctx 取消时提前返回，未处理条目计入
-// Remaining；库未初始化（启动早期）时直接返回零值（同 PurgeOrphanMetricsHistory）。
+// Remaining；库未初始化（启动早期）时按 ScanError 上抛（不删除）——与实现
+// 及钉测一致（rulelog_orphan_purge_test.go 要求 ScanError != ""，本轮清理
+// 全停必须在任务终态可见）。
 func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 	result := RuleLogHousekeepingResult{}
 	// 与 PurgeOrphanMetricsHistory 同口径：库未初始化（启动早期/关停竞态里仍

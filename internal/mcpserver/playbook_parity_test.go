@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,9 @@ var playbookNonToolIdentifiers = map[string]string{
 	"input_schema": "tools/list 响应字段",
 	"issued":       "证书任务状态字面量",
 	"failed":       "证书任务状态字面量",
+	"upstreams":    "工具参数：规则上游数组（update_rule 全量替换语义）",
+	"path_rules":   "工具参数：路径路由数组（update_rule 全量替换语义）",
+	"enabled":      "工具参数/上游字段：启用开关",
 }
 
 // TestPlaybookToolMentionsExist 把手册里提到的工具名与真实工具清单对账：
@@ -53,5 +57,34 @@ func TestPlaybookToolMentionsExist(t *testing.T) {
 		if _, isTool := known[name]; !isTool {
 			t.Errorf("手册提到的工具 %q 不在工具清单内——工具已改名/删除，手册需同步", name)
 		}
+	}
+}
+
+// 手册「部分更新」口径必须与工具 usage 的全量替换语义一致：update_rule 的
+// 标量字段是部分更新，upstreams/path_rules 却是全量替换——手册只说「只传要
+// 改的字段」会让 Agent 提交部分上游数组，未列出的上游被删除（流量收窄）。
+// 两侧文案必须同时声明同一关键词语义，任一单边改动即红。
+func TestPlaybookDocumentsUpstreamFullReplacement(t *testing.T) {
+	const keyword = "全量替换"
+	if !strings.Contains(opsPlaybook, keyword) {
+		t.Fatalf("手册缺少 %q 口径：Agent 会把 upstreams 当部分更新提交，未列出的上游被删除", keyword)
+	}
+	// 手册里该口径必须落在 update_rule 段落内（不能只是别处偶然出现）。
+	sectionStart := strings.Index(opsPlaybook, "### 4.3")
+	if sectionStart < 0 {
+		t.Fatal("手册缺少 §4.3 修改规则段落（本绊线按段落锚定）")
+	}
+	sectionEnd := strings.Index(opsPlaybook[sectionStart:], "### 4.4")
+	if sectionEnd < 0 {
+		t.Fatal("手册 §4.3 与 §4.4 的边界丢失")
+	}
+	section := opsPlaybook[sectionStart : sectionStart+sectionEnd]
+	if !strings.Contains(section, keyword) || !strings.Contains(section, "upstreams") || !strings.Contains(section, "path_rules") {
+		t.Fatalf("§4.3 必须点名 upstreams 与 path_rules 的 %q 语义，当前段落：%s", keyword, section)
+	}
+	// 工具 usage（Agent 的另一份读物）必须同口径。
+	usage := toolUsage["update_rule"]
+	if !strings.Contains(usage, keyword) || !strings.Contains(usage, "upstreams") {
+		t.Fatalf("update_rule 的 usage 缺少 %q 口径：%s", keyword, usage)
 	}
 }

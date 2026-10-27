@@ -186,3 +186,31 @@ func TestAuthenticateRegistrationSecret_contract(t *testing.T) {
 		t.Fatalf("expired secret err=%v, want ErrInvalidClusterAuth", err)
 	}
 }
+
+// bearerToken 是 jwtAuth / clusterTokenAuth / registrationAuth / 凭据指纹的
+// 单源解析：RFC 7235 §2.1 规定 auth-scheme 大小写不敏感——小写/大写方案的
+// 手写客户端不得被拒；裸 token（无 scheme）与空令牌仍返回空串（调用方按
+// 既有契约拒绝）。
+func TestBearerToken_schemeIsCaseInsensitive(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"标准大写", "Bearer abc123", "abc123"},
+		{"小写方案", "bearer abc123", "abc123"},
+		{"全大写方案", "BEARER abc123", "abc123"},
+		{"混合大小写", "BeArEr abc123", "abc123"},
+		{"空令牌", "Bearer ", ""},
+		{"只有方案无空格", "Bearer", ""},
+		{"裸 token", "abc123", ""},
+		{"空头", "", ""},
+		{"其它方案", "Basic dXNlcjpwYXNz", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := bearerToken(test.header); got != test.want {
+				t.Fatalf("bearerToken(%q)=%q, want %q", test.header, got, test.want)
+			}
+		})
+	}
+}

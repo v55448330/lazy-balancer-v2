@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, repoCode, section } from './_helpers.ts'
+import { code, openTags, repoCode, section } from './_helpers.ts'
 
 /** Go 侧上限常量声明；缺失时硬失败（不得回退到字面量）。 */
 const certJobRowsLimit = (): number => {
@@ -69,8 +69,13 @@ test('证书行运行按钮按剩余冷却禁用并给出等待提示', () => {
 
   // 运行按钮块：禁用态必须真正接线到冷却原因。只要求符号在页面任意位置出现时，
   // 把 helper 从 :disabled 挪到 tooltip / v-if 仍为绿——冷却期按钮可点。
+  // 按开标签属性集定位（不看缩进/属性书写顺序）：原 marker 内嵌 18 空格缩进 +
+  // `link type` 顺序，纯格式化调整即抛 missing start marker（界面完全没变）。
   const actions = section(page, 'label="操作"', '</el-table-column>')
-  const runButton = section(actions, '<el-button\n                  link type="primary"', '>运行</el-button>')
+  const runTextAt = actions.indexOf('>运行</el-button>')
+  assert.ok(runTextAt > 0, '操作列缺「运行」按钮')
+  const runButton = openTags(actions.slice(actions.lastIndexOf('<el-button', runTextAt)), 'el-button')[0]
+  assert.ok(runButton, `运行按钮开标签解析失败: ${actions.slice(runTextAt - 200, runTextAt)}`)
   const disabled = /:disabled="([^"]*)"/.exec(runButton)?.[1]
   assert.ok(disabled, `运行按钮缺 :disabled 绑定: ${runButton}`)
   assert.match(disabled, /Boolean\(runCooldownReason\(row\)\)/, `运行按钮禁用未接线冷却原因（现为 "${disabled}"）`)

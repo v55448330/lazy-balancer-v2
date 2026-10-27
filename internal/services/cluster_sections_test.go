@@ -690,17 +690,35 @@ func TestComputeSectionSkips_neverDisablesUsers(t *testing.T) {
 // CRS/IP2Region 版本行不进任何节哈希(2026-09-11 修正:差分门控应用,
 // 哈希保持文件态纯 ref 语义——进哈希会让主从行状态强耦合,漂移不可收敛)。
 func TestSectionPayload_wafFilesExcludesCRSVersions(t *testing.T) {
+	// 夹具必须给真实 ref 载荷：WafFiles=nil 时 sectionPayloadFor 返回 nil →
+	// JSON "null"，任何 Contains 断言恒假（用例名承诺的不变量从未被钉住）。
+	ref := &models.ClusterWafFilesRef{
+		CRSVersion:   "4.28.0",
+		CRSSha256:    "sha256:crs",
+		IP2RegionTag: "202607",
+		IP2RegionSha: "sha256:xdb",
+	}
 	snap := models.ClusterSnapshot{
-		WafFiles:                 nil,
+		WafFiles:                 ref,
 		SecurityCRSVersion:       []models.ClusterSecurityCRSVersion{{ID: 1, Version: "4.28.0"}},
 		SecurityIP2RegionVersion: []models.ClusterSecurityIP2RegionVersion{{ID: 1, Version: "202607"}},
 	}
-	wafData, err := json.Marshal(sectionPayloadFor("waf_files", &snap))
+	payload := sectionPayloadFor("waf_files", &snap)
+	if payload == nil {
+		t.Fatal("waf_files 载荷为 nil：ref 未进入节载荷（断言会恒假）")
+	}
+	// 等值断言而非「不含某子串」：ref 自身就带 crs_version/ip2region_version
+	// 字段（版本串是 ref 的一部分），子串断言形态必然假绿/必假。
+	want, err := json.Marshal(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(wafData), "crs_version") || strings.Contains(string(wafData), "4.28.0") {
-		t.Errorf("waf_files payload must stay ref-only, got: %s", wafData)
+	wafData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wafData) != string(want) {
+		t.Fatalf("waf_files payload=%s, want ref 本体 %s（版本行表不得混入）", wafData, want)
 	}
 	secData, err := json.Marshal(sectionPayloadFor("security", &snap))
 	if err != nil {

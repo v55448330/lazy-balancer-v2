@@ -328,7 +328,10 @@ func TestEngineGate_trustOnlyOffAndCustomOnlyDoNotEmitIdleWAF(t *testing.T) {
 	}{
 		{name: "off trust only", policy: &models.SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: trust}},
 		{name: "custom only trust only", policy: &models.SecurityPolicy{Mode: "custom_only", IPWhitelistEnabled: true, IPWhitelist: trust}},
-		{name: "custom only trust and custom", policy: &models.SecurityPolicy{Mode: "custom_only", IPWhitelistEnabled: true, IPWhitelist: trust, CustomRules: enabledCustom}, wantEngine: true},
+		// anomaly_threshold 是类型①值型列（写侧枚举 + 启动回填），真实库行恒为正；
+		// custom_only 分支的 body processor 守卫计分对它做 fail-visible 门，
+		// 故夹具按真实形态给 5（零值不是可达的生产形状）。
+		{name: "custom only trust and custom", policy: &models.SecurityPolicy{Mode: "custom_only", AnomalyThreshold: 5, IPWhitelistEnabled: true, IPWhitelist: trust, CustomRules: enabledCustom}, wantEngine: true},
 		{name: "custom only trust and unemittable custom", policy: &models.SecurityPolicy{Mode: "custom_only", IPWhitelistEnabled: true, IPWhitelist: trust, CustomRules: unemittableCustom}},
 		{name: "off trust and ACL", policy: &models.SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: trust, IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.7"]`}, wantEngine: true},
 		{name: "off trust and parked custom", policy: &models.SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: trust, CustomRules: enabledCustom}},
@@ -454,5 +457,28 @@ func TestEngineGate_infraCRSExclusionsCannotDisableBlocking(t *testing.T) {
 	}
 	if interrupts(stub + "SecRuleRemoveById 949110\n") {
 		t.Fatal("负对照：显式摘除 949110 后必须不再拦截（证明基础设施排除确实会废掉 blocking）")
+	}
+}
+
+// custom_only 模式的 body processor 守卫计分（id:11 setvar +<阈值>）同样必须
+// fail-visible：anomaly_threshold<=0（NULL 哨兵/带外直写负值）曾直接拼进 setvar，
+// 负值渲染成 `=+-5`，coraza 拒绝整份配置——保存/重载失败且报错指向引擎而非
+// 字段。引擎是唯一裁判：合法阈值必须编译通过，非法阈值必须在渲染期报错。
+func TestEngineGate_customOnlyBodyProcessorThreshold(t *testing.T) {
+	customRules := json.RawMessage(`[{"id":1,"name":"t","enabled":true,"action":"block","score":5,"conditions":[{"target":"body","operator":"contains","pattern":"secret"}]}]`)
+	// 正形状：合法阈值下 id:9/10/11 与自定义规则共同被引擎接受。
+	compileForEngineGate(t, mustDirectives(BuildCorazaDirectives(&models.SecurityPolicy{
+		Mode: "custom_only", AnomalyThreshold: 5, CustomRules: customRules,
+	}, nil, "", false, 0, "lb_test")))
+
+	// 故障形状：<=0 必须返回 error（不得渲染 `=+-5` 交给引擎）。
+	directives, err := BuildCorazaDirectives(&models.SecurityPolicy{
+		Mode: "custom_only", AnomalyThreshold: -5, CustomRules: customRules,
+	}, nil, "", false, 0, "lb_test")
+	if err == nil {
+		t.Fatalf("custom_only + anomaly_threshold=-5 必须渲染期报错，实际产物:\n%s", directives)
+	}
+	if strings.Contains(directives, "setvar:tx.inbound_anomaly_score_pl1=+-") {
+		t.Fatalf("负阈值被拼进 setvar: %s", directives)
 	}
 }

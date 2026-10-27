@@ -1311,7 +1311,10 @@ func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
 //	  的存量信任策略（mixed 语义，走 id:3 并集）不受影响。
 //
 // 名单读取与 SecurityPolicyHasIPControl 同源（inline ∪ refs；MergedACLList 为
-// 摄入映射解析集，缺失回退 inline）。返回 false 不代表事件归零：attribute
+// 摄入映射解析集，缺失回退 inline）。信任名单分支额外要求**合并后内容非空**
+// （mergedWhitelist 与渲染侧 trusted 集同源）：引用存在但内容为空/条目全部
+// 到期/列表已删（悬空引用仅 warn）的策略渲染时零发射，不得凭 refs 认领事件。
+// 返回 false 不代表事件归零：attribute
 // 层的能力首选层落空后仍经「模式/动作门」归属（摄取必有归属）。
 func securityEventsIPFamilyEventSurface(p *models.SecurityPolicy, action, ruleTriggered string) bool {
 	if p == nil {
@@ -1343,11 +1346,15 @@ func securityEventsIPFamilyEventSurface(p *models.SecurityPolicy, action, ruleTr
 		}
 	}
 	if action != "blocked" && p.IPWhitelistEnabled && (p.PolicyType != models.PolicyTypeStage0 || p.TrustDetection) {
-		var wl []string
-		if err := json.Unmarshal(p.IPWhitelist, &wl); err == nil &&
-			(len(wl) > 0 || ipListRefsNonEmpty(p.IPWhitelistRefs)) {
-			return true
-		}
+		// 与发射面同源（mergedWhitelist 即渲染侧 trusted 集的唯一取法）：渲染
+		// 侧是**内容门控**——空信任集不发射 id:3/12，物理上产不出本事件；而
+		// 「引用了名单（refs 非空）」并不等于会发射：名单为空集/条目全部到期/
+		// 列表已被删除（悬空引用仅 warn）都渲染为空信任集。旧实现按 refs 存在
+		// 判定，多策略绑定同一规则时回退归因会把 logged IP 族事件错挂到空信任
+		// 集的策略（policy_id 更小时先命中），事件「策略」列与 24h 计数错挂。
+		// 只读投影/解析失败方向：mergedWhitelist 取不到内容时返回空集 → 不认领，
+		// 与「无发射面」同向（归因仍会落到模式/动作门，绝不归零）。
+		return len(mergedWhitelist(p)) > 0
 	}
 	return false
 }
@@ -1659,6 +1666,12 @@ func (t *securityEventsTailer) securityEventsGenerationGuard(offset int64) (int6
 		// 去重表与会话绑定：新库为空，整份审计日志重放必须逐条重新落库——
 		// 旧库时代的去重记忆会把重放事件当重复丢弃（新库永远缺这些行）。
 		t.dedupe = &securityEventsRequestDeduper{}
+		// messages_dropped 是「本代审计日志写侧已披露的截断量」的进程级累计：
+		// 代际重放会把同一份 audit.log 从头再解析一遍，不清零则历史丢弃量
+		// 被二次累计（健康快照虚高到两倍，排障高估写侧截断规模）。重放后
+		// 该值应等于单遍真实总量。skippedBytes/Regions 是「曾丢失」事实，
+		// 与代数无关，保留。
+		securityEventsMessagesDropped.Store(0)
 		if err := securityEventsWriteOffset(t.offsetPath, 0); err != nil {
 			return offset, fmt.Errorf("security events: persist offset reset for new library generation: %w", err)
 		}
@@ -2542,11 +2555,15 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					// 该键（logged 且爬虫放行族=不计攻击、采样闸门当时关闭、环已
 					// 淘汰）才按改判后的 blocked 补入一条——否则事件行/拦截率按
 					// blocked 计而光流永远缺该拦截弧（同屏两面不一致）。
+					// 是否入环由 recordBatch 的采样门决定，产生侧不得按「当下
+					// 档位」预筛：租约可能在首轮入环后关闭（大屏关闭/心跳过期），
+					// 此时环内还留着 logged 旧弧——预筛会连改判项一起丢掉，消费者
+					// 下次 since=0 读到旧结论且不自愈。inPlace 项不消耗采样配额，
+					// 档位为 0 且环内无该键时由 recordBatch 丢弃（不入环）。
 					if idx, ok := attackFlowIndex[dedupeKey]; ok {
 						attackFlowBatch[idx].action = rec.Action
 						attackFlowBatch[idx].ruleTriggered = rec.RuleTriggered
-					} else if threatScreenAttackFlowSampleN.Load() > 0 &&
-						SecurityEventCountsAsAttack(rec.Action, rec.RuleTriggered) &&
+					} else if SecurityEventCountsAsAttack(rec.Action, rec.RuleTriggered) &&
 						!IsReservedClientIP(rec.ClientIP) {
 						attackFlowIndex[dedupeKey] = len(attackFlowBatch)
 						attackFlowBatch = append(attackFlowBatch, threatScreenAttackFlowItem{

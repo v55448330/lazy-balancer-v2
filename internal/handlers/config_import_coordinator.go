@@ -27,6 +27,10 @@ const (
 	importPhaseVersion     importPhase = "version"
 	importPhaseCommit      importPhase = "commit"
 	importPhaseQueue       importPhase = "queue"
+	// importPhasePrepare 事务内收尾准备（提交前产物清理计划的收集）失败：
+	// 事务已回滚，库内容确定未变——此前的 coordinator 错误缺 phase，响应/
+	// 审计缺「数据库未变更」结论，管理员无法判断是否已部分写入。
+	importPhasePrepare importPhase = "prepare"
 )
 
 var (
@@ -75,6 +79,37 @@ func (session *configImportSession) actionLabel() string {
 	return session.action
 }
 
+// errImportInfraRead / importInfraReadError：导入校验链里「读取校验所需的
+// 现有配置」失败（PRAGMA 列类型门、安全策略 live 回退查询）。与受信代理读
+// 失败同族——载荷内容错误仍 400；DB 锁/IO 故障必须 500 + 固定文案，否则
+// 管理员把基础设施故障误判为「备份内容非法」而反复更换备份文件，且响应会
+// 回显 SQL 驱动文本。
+var errImportInfraRead = errors.New("读取校验所需的现有配置失败")
+
+type importInfraReadError struct{ cause error }
+
+func (e *importInfraReadError) Error() string { return errImportInfraRead.Error() }
+func (e *importInfraReadError) Unwrap() error { return e.cause }
+
+func importInfraReadFailure(cause error) error { return &importInfraReadError{cause: cause} }
+
+// writeImportChainReadFailure 把校验链上的「基础设施读失败」（受信代理 /
+// 整数列门 / 安全策略 live 回退）统一映射为 500 + 固定文案 + 运行日志；
+// 非此类错误返回 false，由调用方按 400（导入）或 invalid（预览）处理。
+func writeImportChainReadFailure(c *gin.Context, chainErr error) bool {
+	var proxyErr *trustedProxyReadError
+	if errors.As(chainErr, &proxyErr) {
+		writeInternalError(c, http.StatusInternalServerError, errTrustedProxyRead.Error(), proxyErr.Unwrap())
+		return true
+	}
+	var infraErr *importInfraReadError
+	if errors.As(chainErr, &infraErr) {
+		writeInternalError(c, http.StatusInternalServerError, errImportInfraRead.Error(), infraErr.Unwrap())
+		return true
+	}
+	return false
+}
+
 // importFailurePhaseDescription 返回与动作词无关的阶段判定（审计 detail、
 // HTTP 文案共用单源）。空串=未知阶段。
 //
@@ -84,6 +119,8 @@ func (session *configImportSession) actionLabel() string {
 // 「提交结果不确定」，不得断言未变更。
 func importFailurePhaseDescription(phase importPhase, caddyRejected bool) string {
 	switch phase {
+	case importPhasePrepare:
+		return "准备导入收尾失败，数据库未变更"
 	case importPhaseSnapshot:
 		return "运行配置快照失败，数据库未变更"
 	case importPhaseCertificate:
@@ -270,6 +307,7 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 	if !configImportBusy() {
 		return false
 	}
+	action = strings.ReplaceAll(action, "（配置导入进行中）", "")
 	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: "配置导入进行中，暂不能" + action})
 	return true
 }
@@ -759,7 +797,9 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	// 不再阻塞配置写/重载窗口，会话锁/窗口则延长到清理结束。
 	cleanupPlan, cleanupErr := session.collectPostCommitCleanup()
 	if cleanupErr != nil {
-		return &importCoordinatorError{err: session.abort(cleanupErr), action: session.action}
+		// 事务回滚、库未变更：必须带 phase，否则响应/审计缺「数据库未变更」结论
+		// （与同族 abort 文案不对称）。
+		return &importCoordinatorError{phase: importPhasePrepare, err: session.abort(cleanupErr), action: session.action}
 	}
 	// 计划在提交前即挂到会话：提交成功时 close 在 Caddy 锁外执行；提交报错
 	// （结果不确定）时同样保留——那时规则行可能已消失，本计划是这些规则
@@ -978,13 +1018,13 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 		}
 	}
 	cleanedMaterial := 0
+	materialUnprocessed := 0
 	if importCleanupShouldStop(ctx) {
-		if len(withoutMaterial) > 0 {
-			unprocessed += len(withoutMaterial)
-		}
+		materialUnprocessed = len(withoutMaterial)
 	} else {
-		cleanedMaterial = removeCertFilesForRules(withoutMaterial)
+		cleanedMaterial, materialUnprocessed = removeCertFilesForRules(ctx, withoutMaterial)
 	}
+	unprocessed += materialUnprocessed
 	if unprocessed > 0 {
 		detail := fmt.Sprintf("导入后产物清理预算（%s）耗尽：剩余 %d 条规则的证书文件/指标/日志未处理，请核对 certs/ 与日志目录后人工清理", importCleanupBudget, unprocessed)
 		services.Logf("error", "导入清理：%s", detail)
@@ -1090,11 +1130,19 @@ func rulesWithoutUsableCertMaterial(ctx context.Context, q importCleanupQueryer)
 	return ids, nil
 }
 
-// removeCertFilesForRules 删除给定规则的残留证书/私钥文件，返回实际清理的
-// 规则数（幂等 best-effort，单规则失败仅告警留痕）。
-func removeCertFilesForRules(ruleIDs []string) int {
-	cleaned := 0
-	for _, id := range ruleIDs {
+// removeCertFilesForRules 删除给定规则的残留证书/私钥文件，返回（实际清理
+// 数, 预算耗尽未处理数）（幂等 best-effort，单规则失败仅告警留痕）。
+//
+// 逐项检查 importCleanupShouldStop：此前本通道只在进入前判一次 60s 预算，
+// 「无材料规则」批量（可含全部非 TLS 规则）会在预算耗尽后继续跑完——导入
+// 会话锁（写端点 409）与任务调度暂停被无上界拖长，慢卷/NFS 挂起时单次
+// RemoveCertFiles 无超时。
+func removeCertFilesForRules(ctx context.Context, ruleIDs []string) (cleaned, unprocessed int) {
+	for index, id := range ruleIDs {
+		if importCleanupShouldStop(ctx) {
+			unprocessed = len(ruleIDs) - index
+			break
+		}
 		if err := services.RemoveCertFiles(id); err != nil {
 			services.Logf("warn", "导入清理：删除无材料规则 %s 的证书文件失败: %v", id, err)
 			services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理规则 %s 的残留证书文件失败：%v", id, err), "")
@@ -1102,5 +1150,5 @@ func removeCertFilesForRules(ruleIDs []string) int {
 		}
 		cleaned++
 	}
-	return cleaned
+	return cleaned, unprocessed
 }

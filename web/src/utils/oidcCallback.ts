@@ -150,6 +150,7 @@ const OIDC_BACKEND_MESSAGES: readonly string[] = [
   '账号已被禁用',
   '查询用户失败',
   '创建 OIDC 用户失败',
+  '创建 OIDC 用户失败，请稍后重试',
   '签发登录令牌失败',
 ]
 
@@ -167,6 +168,15 @@ const OIDC_STANDARD_ERRORS: Record<string, string> = {
   account_selection_required: '需要选择账号',
   consent_required: '需要授权确认',
   invalid_grant: '授权已失效，请重新登录',
+  // 以下 6 码后端 oidcStandardErrorCodes 同样放行（回调 error 参数白名单），
+  // 原表缺失会让它们一律落到「授权被拒绝」，把客户端配置类故障说成用户拒绝：
+  // 由 oidcCallback.spec 的跨栈码表对表机械钉住（漏一码即红）。
+  invalid_request_uri: '请求地址无效',
+  invalid_request_object: '请求对象无效',
+  invalid_client: '客户端凭证无效，请联系管理员检查 OIDC 配置',
+  unsupported_grant_type: '认证服务不支持该授权类型',
+  unsupported_token_type: '认证服务不支持该令牌类型',
+  expired_token: '登录令牌已过期，请重新登录',
 }
 
 /**

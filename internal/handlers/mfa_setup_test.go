@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -275,6 +276,41 @@ func TestMFAActivate_noPendingSecretReturns400(t *testing.T) {
 	failure := postRaw(router, "/auth/mfa/activate", `{"code":"000000"}`)
 	if failure.Code != http.StatusInternalServerError {
 		t.Fatalf("pending DB failure status=%d body=%s, want 500", failure.Code, failure.Body.String())
+	}
+}
+
+// 已启用 MFA 的用户重绑成功（pending 密钥轮换）必须留审计——此前该步零
+// 留痕，随后 activate 恒记「启用」，重绑与首绑在审计中不可区分；detail 不得
+// 落 secret 任何片段。
+func TestMFASetup_rebindSuccessWritesRotationAudit(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	secret := seedMfaResetUsers(t, true) // operator(id=1) 已启用 MFA
+	// 年龄键缺失 → mfaStepUpVerifiedForDestructiveOp 回落本层验码（fail-safe）。
+	router := mfaSelfServiceRouterWithAge(h, -1)
+	rec := postMfaSelfService(router, "/auth/mfa/setup", fmt.Sprintf(`{"code":%q}`, currentTOTPCode(t, secret)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Secret string `json:"secret"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Data.Secret) < 8 {
+		t.Fatalf("secret=%q, want 非空 pending secret", body.Data.Secret)
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='重新绑定' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("query audit: %v（重绑成功必须留「重新绑定」审计行）", err)
+	}
+	if !strings.Contains(detail, "pending 密钥已轮换") {
+		t.Fatalf("detail=%q, want 含「pending 密钥已轮换」", detail)
+	}
+	if strings.Contains(detail, body.Data.Secret[:8]) {
+		t.Fatalf("detail=%q 泄漏 pending secret 片段", detail)
 	}
 }
 

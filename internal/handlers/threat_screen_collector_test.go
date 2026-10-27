@@ -235,3 +235,75 @@ func TestControlThreatScreenCollector_deleteQueryLeaseIDFallback(t *testing.T) {
 		t.Fatalf("空体 DELETE 后 sample_n=%d, want 0（必须用 ?lease_id= 回退释放）", got)
 	}
 }
+
+// 上游响应超限/读取失败必须显式失败（对齐同文件 GetThreatScreenFlowEvents 的
+// 413/503 口径）：截断 JSON 以 200 透传会让客户端解析失败却看到成功状态码，
+// 而本地租约已按成功登记（services.AcquireThreatScreenAttackFlowLease），形成
+// 「本地已生效 / 客户端认为失败」分叉。
+func TestControlThreatScreenCollector_oversizedAdminResponseFailsLoudly(t *testing.T) {
+	services.ResetThreatScreenAttackFlowForTest()
+	t.Cleanup(services.ResetThreatScreenAttackFlowForTest)
+	big := `{"enabled":true,"pad":"` + strings.Repeat("x", 8192) + `"}`
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(big))
+	}))
+	defer admin.Close()
+
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL}}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/security/overview/threat-screen/collector", h.ControlThreatScreenCollector)
+
+	req := httptest.NewRequest(http.MethodPost, "/security/overview/threat-screen/collector",
+		strings.NewReader(`{"lease_id":"tab-oversize","ttl_ms":30000,"sample_n":1}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 非 2xx（截断 JSON 不得以 200 透传）", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s, want 502", rec.Code, rec.Body.String())
+	}
+	// 非恒真前置：截断响应绝不登记本地租约（否则客户端认为失败而本地已生效）
+	if got := services.ThreatScreenAttackFlowSampleN(); got != 0 {
+		t.Fatalf("oversized 响应后本地 sample_n=%d, want 0（不得按成功登记租约）", got)
+	}
+}
+
+// 边界回归：恰为 4KB 上限的响应仍原样成功透传（判据是 >上限，不是 >=）
+func TestControlThreatScreenCollector_responseAtLimitStillSucceeds(t *testing.T) {
+	services.ResetThreatScreenAttackFlowForTest()
+	t.Cleanup(services.ResetThreatScreenAttackFlowForTest)
+	const pre, suf = `{"enabled":true,"pad":"`, `"}`
+	exact := pre + strings.Repeat("y", 4096-len(pre)-len(suf)) + suf
+	if len(exact) != 4096 {
+		t.Fatalf("夹具长度=%d, want 4096", len(exact))
+	}
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(exact))
+	}))
+	defer admin.Close()
+
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL}}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/security/overview/threat-screen/collector", h.ControlThreatScreenCollector)
+
+	req := httptest.NewRequest(http.MethodPost, "/security/overview/threat-screen/collector",
+		strings.NewReader(`{"lease_id":"tab-limit","ttl_ms":30000,"sample_n":1}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（上限内不截断）", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 4096 {
+		t.Fatalf("透传长度=%d, want 4096（不得截断）", rec.Body.Len())
+	}
+	if got := services.ThreatScreenAttackFlowSampleN(); got != 1 {
+		t.Fatalf("sample_n=%d, want 1（成功路径照常登记租约）", got)
+	}
+}

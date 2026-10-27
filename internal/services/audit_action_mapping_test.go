@@ -592,9 +592,9 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		wantExplicit = 102
+		wantExplicit = 103
 		wantGeneric  = 5
-		wantSkip     = 17
+		wantSkip     = 16
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0
 	for _, policy := range auditRoutePolicies {

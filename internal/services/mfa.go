@@ -262,12 +262,12 @@ func MFAIssueChallenge(userID int) (string, error) {
 	return token, nil
 }
 
-// MFARecordChallengeFailure 挑战级失败计数：单挑战失败 10 次
-// 即作废（consumed=1）——与全局锁定开关无关的爆破收敛（分布式 IP 池对单个
-// 5 分钟挑战的尝试上限从「10/min/IP × N」收敛为固定 10 次）。
+// mfaChallengeFailThreshold 是单挑战失败次数的硬闸：全部锁定开关关闭时仍生效。
 const mfaChallengeFailThreshold = 10
 
-// MFARecordChallengeFailure 记一次失败；达阈值作废并返回 true。
+// MFARecordChallengeFailure 记一次失败；达阈值作废并返回 true。挑战级失败
+// 计数独立于全局锁定开关：单挑战失败 10 次即作废（consumed=1）——分布式 IP
+// 池对单个 5 分钟挑战的尝试上限从「10/min/IP × N」收敛为固定 10 次。
 // 单语句原子形状（UPDATE…RETURNING，与 MFARecordPendingFailure 同族）：
 // 计数自增与作废判定同语句——三语句形状（自增→读计数→置作废）在
 // 「读计数→置作废」窗口内，并发爆破可越过阈值继续自增且多个调用方同报
@@ -326,8 +326,8 @@ func MFARestoreChallenge(token string, userID int) {
 
 // —— 主验证入口 ——
 
-// mfaVerifyTOTPLocked MFAVerifyCode/MFAVerifyTOTPCode 共享内核
-// 历史收敛；调用方须持 mfaMu）：读取 secret 与重放状态——secret 为空报
+// mfaVerifyTOTPLocked 是 MFAVerifyCode/MFAVerifyTOTPCode 的共享内核
+// （历史收敛；调用方须持 mfaMu）：读取 secret 与重放状态——secret 为空报
 // 「用户未启用 MFA」（两入口同口径）；code 为 6 位时校验 TOTP，成功推进
 // mfa_last_timestep（重放防护：同窗或更早的已用片拒绝，±1 容差窗内；
 // 状态写失败必须传播——吞错时同片码可在容差窗内重放换取新

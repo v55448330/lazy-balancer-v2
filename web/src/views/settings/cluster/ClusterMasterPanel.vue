@@ -13,7 +13,7 @@
       <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
         <el-switch
           :model-value="item.locked ? true : status[item.key]"
-          :disabled="item.locked === true"
+          :disabled="readOnly || item.locked === true"
           :loading="settingsLoading"
           @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)"
         />

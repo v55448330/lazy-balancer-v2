@@ -47,8 +47,12 @@ var IPListDataDir = "/app/waf/ip-lists"
 // 与摄取 offset（<data_dir>/security_events.offset）——此前两者硬编码 /app，
 // 非容器/自定义挂载部署会写到只读或错误的路径。
 func ConfigureWafDirs(dataDir string) {
-	if filepath.Dir(dataDir) == "/app" {
-		return // 容器默认形态：保持 /app/* 常量
+	// 判据必须是「data_dir == 容器默认 /app/data」，而不是「父目录 == /app」：
+	// /app 的任意直接子目录（/app/custom、/app/vol 之外的 /app/xxx）此前也会
+	// 命中早退，导致派生面全部留在 /app/*——CRS 快照与 xdb 写进镜像层（容器
+	// 重建即丢）、审计日志/摄取 offset 落错位置、xdb 路径指向不存在的库。
+	if dataDir == "/app/data" {
+		return // 容器默认形态：保持 /app/* 常量（派生结果与之逐字节一致）
 	}
 	parent := filepath.Dir(dataDir)
 	wafDir = filepath.Join(parent, "waf")
@@ -216,6 +220,15 @@ func writeIPListFile(scope string, merged []string) (string, error) {
 	ipListProjectionMemoMu.Unlock()
 	if memoOK && memo.inputHash == inputHash {
 		if st, err := os.Stat(path); err == nil && st.ModTime().UnixNano() == memo.mtimeNano && st.Size() == memo.size {
+			// 快路同样必须归一权限：慢路的「同字节跳写」会 Chmod 0644 修
+			// 「升级前 0600 投影 + Caddy 换 uid 读不到」，但 memo 只记
+			// inputHash/mtime/size——进程内改过权限（或首个进程写出 0600）后
+			// 内容/mtime/size 都没变，快路直接返回会让 Caddy 永远读不到该名单
+			// （deny 方向静默 fail-open）。chmod 幂等且不改 mtime，不触发
+			// wafiplist 重建。
+			if err := os.Chmod(path, 0o644); err != nil {
+				return "", fmt.Errorf("归一 IP 名单文件权限失败 %s: %w", name, err)
+			}
 			return path, nil
 		}
 	}

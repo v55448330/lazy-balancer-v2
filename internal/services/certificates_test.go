@@ -1259,7 +1259,7 @@ func TestCertWaitingCATickOnce_scanRowFailureWritesFailureSummary(t *testing.T) 
 	}
 
 	// When
-	err := CertWaitingCATickOnce()
+	err := CertWaitingCATickOnce(context.Background())
 
 	// Then 1：扫描不完整必须上抛（task_runs 记失败）
 	if err == nil {
@@ -3127,5 +3127,99 @@ func TestCertificateService_pauseDeploymentRetries_sharesSingleDeadline(t *testi
 	}
 	if !service.timersPaused {
 		t.Fatal("暂停后 timersPaused 必须为 true")
+	}
+}
+
+// 导入/旧备份/带外改库可产生「waiting_ca + ca_available_after IS NULL」的行
+// （正常运行期 markJobWaitingCA 恒写非空冷却时刻）。补扫轮此前要求非空冷却，这类
+// 行在运行期没有任何周期通道（queued 滞留只收 queued、续期扫描只收有到期时间的
+// 行、首发重试只收 failed），只能靠重启/Resume/手动重试收敛——任务列表长期显示
+// 「等待 CA 频率限制冷却」而永不推进。补扫谓词因此容纳 NULL 冷却，并以 10 分钟
+// 沉降阈值区分「带外静置行」与「刚被写侧写入的行」。
+func TestCertificateService_requeueWaitingCAJobs_requeuesImportedNullCooldown(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	GetCAQueueManager().Start()
+	t.Cleanup(ResetCAQueueManagerForTest)
+
+	seedRuleWithCAProvider(t, "lb_null_cooldown", "null-cooldown.example.test", 1)
+	seedRuleWithCAProvider(t, "lb_fresh_cooldown", "fresh-cooldown.example.test", 1)
+	// 导入遗留：冷却时刻 NULL 且已静置 30 分钟（超过沉降阈值）。
+	staleRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id,updated_at,created_at)
+		VALUES ('lb_null_cooldown','null-cooldown.example.test','waiting_ca',NULL,1,datetime('now','-30 minutes'),datetime('now','-30 minutes'))`)
+	if err != nil {
+		t.Fatalf("seed imported waiting_ca row: %v", err)
+	}
+	staleID, _ := staleRes.LastInsertId()
+	// 刚写入的行：沉降窗口内，本轮不得与写侧竞争。
+	freshRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id,updated_at,created_at)
+		VALUES ('lb_fresh_cooldown','fresh-cooldown.example.test','waiting_ca',NULL,1,datetime('now'),datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed fresh waiting_ca row: %v", err)
+	}
+	freshID, _ := freshRes.LastInsertId()
+
+	requeued, disabled, err := NewCertificateService().requeueWaitingCAJobs()
+	if err != nil {
+		t.Fatalf("补扫不得因 NULL 冷却行失败: %v", err)
+	}
+	if requeued != 1 || disabled != 0 {
+		t.Fatalf("requeued=%d disabled=%d, want 1/0（只有静置的 NULL 冷却行可重排）", requeued, disabled)
+	}
+	var staleStatus string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", staleID).Scan(&staleStatus); err != nil {
+		t.Fatal(err)
+	}
+	if staleStatus == "waiting_ca" {
+		t.Fatalf("静置的 NULL 冷却行未离开 waiting_ca（status=%q）", staleStatus)
+	}
+	var freshStatus string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", freshID).Scan(&freshStatus); err != nil {
+		t.Fatal(err)
+	}
+	if freshStatus != "waiting_ca" {
+		t.Fatalf("沉降窗口内的行被提前重排（status=%q）——刚由写侧写入的行不得与在途写竞争", freshStatus)
+	}
+}
+
+// 锁粒度：s.mu 只保护「查询 → 读全量候选 → 关闭结果集」，逐任务 CAS 写库与
+// 入队必须在锁外。waiting_ca 任务多/DB 慢时，补扫轮持锁会把 6h 节拍的续期扫描
+// （CheckExpiration / checkFailedFirstIssuance 同取 s.mu）推迟到本轮之后。
+// 并发安全不依赖该锁：写侧全程 CAS（transitionJob 的 from-status 白名单 +
+// EnqueueIfActive 去重）。
+func TestCertificateService_requeueWaitingCAJobs_doesNotHoldServiceLockDuringProcessing(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	manager := GetCAQueueManager()
+	manager.Start()
+	t.Cleanup(ResetCAQueueManagerForTest)
+
+	seedRuleWithCAProvider(t, "lb_lock_scope", "lock-scope.example.test", 1)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
+		VALUES ('lb_lock_scope','lock-scope.example.test','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		t.Fatalf("seed waiting_ca job: %v", err)
+	}
+	service := NewCertificateService()
+	probeRan := false
+	manager.beforeActiveEnqueue = func() {
+		probeRan = true
+		if !service.mu.TryLock() {
+			t.Error("逐任务处置期间 s.mu 仍被持有：补扫轮会把续期扫描（6h 节拍）推迟到本轮之后")
+			return
+		}
+		service.mu.Unlock()
+	}
+
+	requeued, disabled, err := service.requeueWaitingCAJobs()
+	if err != nil {
+		t.Fatalf("补扫失败: %v", err)
+	}
+	if !probeRan {
+		t.Fatalf("探测点未执行（requeued=%d disabled=%d）——判据未生效", requeued, disabled)
+	}
+	if requeued != 1 || disabled != 0 {
+		t.Fatalf("requeued=%d disabled=%d, want 1/0", requeued, disabled)
 	}
 }

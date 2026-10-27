@@ -31,6 +31,7 @@ func TestImportFailureAuditDescriptionReflectsFailurePhase(t *testing.T) {
 		{name: "Caddy validation preserves database", phase: importPhaseCaddy, want: "数据库未变更"},
 		{name: "certificate failure identifies preparation", phase: importPhaseCertificate, want: "证书准备失败"},
 		{name: "commit failure does not claim unchanged database", phase: importPhaseCommit, want: "数据库提交结果不确定"},
+		{name: "in-transaction cleanup preparation identifies rollback", phase: importPhasePrepare, want: "数据库未变更"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

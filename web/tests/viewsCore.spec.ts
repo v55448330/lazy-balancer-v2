@@ -142,8 +142,17 @@ test('排行榜纳入采集失败行并排在正常行之后（逐列「采集�
   assert.match(rank, /return ruleRankValue\(b\.caddy_id\) - ruleRankValue\(a\.caddy_id\)/, '正常行仍按指标降序')
   const sorted = section(dashboard, 'const sortedRules = computed', 'const rulesEmptyText')
   assert.match(sorted, /ranked\.slice\(0, 10\), \.\.\.failed/, '失败行不占 10 个名额，恒追加在末尾')
-  // 逐列「采集失败」分支保持存在（现为可达态）
-  assert.ok((dashboard.match(/ruleMetricsUnavailable\[row\.caddy_id\]/g) ?? []).length >= 5)
+  // 逐列「采集失败」分支保持存在（现为可达态）。必须逐列判定：按出现次数
+  // 代理时，两列各有 title+文案两处命中，删掉整列后仍有 6 处 ≥ 5 → 守卫假绿，
+  // 该列采集失败会静默渲染成 `-`（把「没采到」读成「零流量」）。
+  for (const label of ['请求数', '状态码', '入站流量', '出站流量', '处理中']) {
+    const column = section(dashboard, `<el-table-column label="${label}"`, '</el-table-column>')
+    assert.match(
+      column,
+      /ruleMetricsUnavailable\[row\.caddy_id\]/,
+      `「${label}」列缺采集失败分支——采不到的单元格会渲染成 -（与零流量不可区分）`,
+    )
+  }
 })
 
 // ============ 历史弹框错误态与空态分文案 ============

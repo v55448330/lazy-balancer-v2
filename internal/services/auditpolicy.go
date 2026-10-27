@@ -28,12 +28,14 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	// v2.1.8 MFA：公开 verify 与登录同语义（挑战令牌即凭据，handler 已细分记录
 	// 认证拒绝/登录成功）；自助端点 handler 显式记录启用/禁用（用户认证对象）；
 	// recovery-codes 重生成成功由 handler 显式记录「生成/恢复码」（2026-09-05
-	// 审计裁定——纯会话门下旧码全作废+明文下发登录可用凭证，须留痕）；setup/
-	// verify-step 为内部动作，显式登记 Skip 以固定契约；admin reset handler
-	// 记录「重置/用户认证」。读端点（如 GET /auth/mfa/status）走默认 Skip，
-	// 不登记——本表只承载写路由的显式分类。
+	// 审计裁定——纯会话门下旧码全作废+明文下发登录可用凭证，须留痕）；setup
+	// 已升 Explicit（重绑时 handler 记录「重新绑定/用户认证」的 pending 密钥
+	// 轮换，首绑不记——由 activate 记「启用」）；verify-step 为内部动作，显式
+	// 登记 Skip 以固定契约；admin reset handler 记录「重置/用户认证」。读端点
+	//（如 GET /auth/mfa/status）走默认 Skip，不登记——本表只承载写路由的显式
+	// 分类。
 	"POST /api/v1/auth/mfa/verify":         AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/setup":          AuditPolicySkip,
+	"POST /api/v1/auth/mfa/setup":          AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/activate":       AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/disable":        AuditPolicyExplicit,
 	"POST /api/v1/auth/mfa/recovery-codes": AuditPolicyExplicit,

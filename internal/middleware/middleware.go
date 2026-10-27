@@ -1195,8 +1195,10 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenString == authHeader {
+		// Bearer scheme 大小写不敏感（RFC 7235 §2.1）——解析与集群/注册鉴权
+		// 共用 bearerToken 单源；空值/裸 token/其它 scheme 一律「认证格式无效」。
+		tokenString := bearerToken(authHeader)
+		if tokenString == "" {
 			recordAuthenticationRejection(c, "jwt_format_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "认证格式无效"})
 			c.Abort()

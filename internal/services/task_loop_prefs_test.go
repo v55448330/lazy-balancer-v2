@@ -7,6 +7,7 @@ package services
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
@@ -153,5 +154,41 @@ func TestTaskLoopPrefs_stoppedDaemonDoesNotStartOnReinit(t *testing.T) {
 	}
 	if after := taskRunCountForTest(t, "cluster-sync"); after != before {
 		t.Fatalf("停止态 daemon 不得产生启动记录：task_runs %d -> %d", before, after)
+	}
+}
+
+// Given 偏好表里有注册表外的残留行（升级删任务/改名遗留）。
+// When 启动期套用偏好。
+// Then 残留行被清理（此前静默跳过且每次启动加载，属域外状态）；已注册任务
+// 的偏好不受影响。同时 updated_at 走配置时区墙钟（非 SQLite UTC datetime）。
+func TestTaskLoopPrefs_staleRowPurgedAndTimestampUsesConfigWallClock(t *testing.T) {
+	te := newWireTestEngine(t)
+	if _, err := db.DB.Exec(`INSERT INTO task_loop_prefs (task_id, enabled, updated_at) VALUES ('removed-task-from-old-version', 1, '2000-01-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	applyTaskLoopPrefs(te, loadTaskLoopPrefs())
+	var stale int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_loop_prefs WHERE task_id='removed-task-from-old-version'`).Scan(&stale); err != nil {
+		t.Fatal(err)
+	}
+	if stale != 0 {
+		t.Fatalf("注册表外残留行未被清理: %d", stale)
+	}
+
+	// 时间列与同域口径同源：写入值必须接近当前配置时区墙钟（±1 分钟），
+	// 而不是 UTC datetime('now')（在非 UTC 时区下相差整小时）。
+	if err := RecordTaskLoopPref("audit-retention", false); err != nil {
+		t.Fatalf("record pref: %v", err)
+	}
+	var updatedAt string
+	if err := db.DB.QueryRow(`SELECT updated_at FROM task_loop_prefs WHERE task_id='audit-retention'`).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	got, err := time.ParseInLocation("2006-01-02 15:04:05", updatedAt, CurrentLocation())
+	if err != nil {
+		t.Fatalf("updated_at=%q 不可按配置时区解析: %v", updatedAt, err)
+	}
+	if delta := time.Since(got); delta > time.Minute || delta < -time.Minute {
+		t.Fatalf("updated_at=%q 与配置时区墙钟相差 %v（应为墙钟，非 UTC datetime('now')）", updatedAt, delta)
 	}
 }

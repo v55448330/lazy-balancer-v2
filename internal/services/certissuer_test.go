@@ -244,6 +244,29 @@ func TestConfirmCertificateDeployment_rejects_roleDisabledDomainAndStatusGates(t
 	}
 }
 
+// 角色读取失败（global_config 行缺失/DB 故障）不得与「任务/规则不可部署」
+// 同归 sql.ErrNoRows：前者是瞬时故障（材料必须随重试链保留），后者材料已无
+// 意义（原样返回即丢弃）。旧实现用 JOIN global_config g ... COALESCE(g.is_master,1)=1
+// 把两种语义折叠成一个 ErrNoRows——部署失败归因会把 DB 故障读成规则删除/禁用。
+func TestConfirmCertificateDeployment_roleReadFailureIsNotErrNoRows(t *testing.T) {
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	if _, err := db.DB.Exec("DELETE FROM global_config WHERE id=1"); err != nil {
+		t.Fatalf("drop global_config: %v", err)
+	}
+
+	err := confirmCertificateDeployment(context.Background(), jobID, issuedCertificate{ruleID: ruleID}, false)
+
+	if err == nil {
+		t.Fatal("角色不可判定时 confirmCertificateDeployment 必须报错")
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("error=%v, 不得归入 sql.ErrNoRows（材料会被按「已无意义」丢弃）", err)
+	}
+	if !errors.Is(err, ErrCertificateRoleUndetermined) {
+		t.Fatalf("error=%v, want ErrCertificateRoleUndetermined", err)
+	}
+}
+
 // 门拒绝时不得触碰磁盘：已禁用规则的证书目录必须保持上一次部署内容。
 func TestCertIssuer_deployIssuedCertificate_disabledRuleKeepsDiskUnchanged(t *testing.T) {
 	jobID, ruleID := seedCertificateJob(t, "downloaded")

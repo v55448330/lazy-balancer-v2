@@ -844,9 +844,13 @@ const triggeredIndeterminate = computed(() => {
   const hit = TRIGGERED_CATEGORIES.filter((c) => filters.value.rule_triggered.includes(c)).length
   return hit > 0 && hit < TRIGGERED_CATEGORIES.length
 })
-// 全选：勾选=八类全选、取消=全清（固定预置值，无自定义形态）
+// 全选：勾选=八类并入当前选择（保留用户已输入的自定义 tag，与绑定编辑器/
+// 策略向导的规则选择器同为并集语义）、取消=只摘八类、自定义 tag 原样保留——
+// 该控件允许 allow-create 自定义规则 ID（如 942100），替换语义会在半选态点
+// 「全选」时静默丢掉这些 tag，筛选结果集被改写而界面只显示「勾上了全选」。
 const toggleTriggeredAll = (checked: CheckboxValueType) => {
-  filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES] : []
+  const custom = filters.value.rule_triggered.filter((v) => !(TRIGGERED_CATEGORIES as readonly string[]).includes(v))
+  filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES, ...custom] : custom
 }
 
 const applyFilters = () => {

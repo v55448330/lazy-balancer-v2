@@ -109,7 +109,7 @@ const (
 // 只有确定性结论（Verified/Spoof）进入缓存；瞬态结论仅作用于本次请求，
 // 不写 10 分钟负缓存。
 func VerifyCrawler(ip, engineID string) CrawlerVerdict {
-	key := ip + "|" + engineID
+	key := crawlerVerifyCacheKey(ip) + "|" + engineID
 	now := time.Now()
 	crawlerCacheMu.Lock()
 	if entry, hit := crawlerCache[key]; hit && now.Before(entry.expires) {
@@ -196,6 +196,19 @@ func VerifyCrawler(ip, engineID string) CrawlerVerdict {
 	return verdict
 }
 
+// crawlerVerifyCacheKey 归一缓存键：4in6 映射形态（::ffff:a.b.c.d）与 v4 规范串
+// 是同一主机，必须共用同一条缓存（验证本体已在 Unmap 后比较，键不归一会让
+// 同一地址占两份条目、各跑一次 PTR+正向回验，攻击者还可用两种文本形态额外
+// 占用缓存槽与 DNS 配额）。不可解析/带 zone 的输入沿用原串——这类输入在验证
+// 侧是确定性否定（fail-closed）或瞬态，键归一与否不影响结论。
+func crawlerVerifyCacheKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" {
+		return ip
+	}
+	return addr.Unmap().String()
+}
+
 // verifyCrawlerDNS 双跳验证本体（无缓存、需已持信号量）。第二个返回值表示
 // 结论是否可缓存：PTR/正向回验的确定性否定为 true，任何解析错误/超时为 false。
 func verifyCrawlerDNS(ip, engineID string) (bool, bool) {
@@ -259,19 +272,6 @@ func releaseCrawlerSlot() {
 	select {
 	case <-crawlerVerifySem:
 	default:
-	}
-}
-
-// ResetCrawlerVerifyCacheForTest 清缓存+换 resolver（测试专用；非测试路径禁用）。
-func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
-	crawlerCacheMu.Lock()
-	crawlerCache = make(map[string]crawlerVerifyCache)
-	crawlerCachePruneVisitsForTest = 0
-	crawlerCacheMu.Unlock()
-	if r != nil {
-		crawlerVerifyResolver = r
-	} else {
-		crawlerVerifyResolver = &netResolver{}
 	}
 }
 

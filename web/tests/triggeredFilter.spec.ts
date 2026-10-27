@@ -13,7 +13,7 @@ import {
   TRIGGERED_FAMILY_SEGMENTS,
   serializeTriggeredFilter,
 } from '../src/utils/triggeredFilter.ts'
-import { repoCode, section } from './_helpers.ts'
+import { code, repoCode, section } from './_helpers.ts'
 
 test('空选 = 不过滤（不发 rule_triggered）', () => {
   assert.equal(serializeTriggeredFilter([]), null)
@@ -87,4 +87,26 @@ test('族段跨栈对表：前端段必须是后端 ruleTriggeredFamilyPrefixes 
       assert.ok(backendKeys.has(segment), `后端缺「${segment}」键（前端「${category}」类别依赖）`)
     }
   }
+})
+
+test('事件页「全选」是并集语义：保留自定义规则 ID（不得静默丢弃用户输入）', () => {
+  // 该控件 allow-create，用户可输入 CRS 规则 ID（如 942100）。头部「全选」若用
+  // 替换语义（checked ? [...八类] : []），半选态点「全选」会把自定义 tag 丢掉，
+  // 筛选结果集被改写而界面只表现为「勾上了全选」。
+  const page = code('src/views/security/SecurityEvents.vue')
+  assert.match(page, /v-model="filters\.rule_triggered"[\s\S]{0,400}allow-create/, '该筛选必须允许自定义 tag（本用例的前提）')
+  const toggle = section(page, 'const toggleTriggeredAll = (checked: CheckboxValueType) => {', '\n}')
+  assert.match(
+    toggle,
+    /filter\(\(v\) => !\(TRIGGERED_CATEGORIES as readonly string\[\]\)\.includes\(v\)\)/,
+    '必须先摘出自定义 tag（非八类值）',
+  )
+  assert.match(
+    toggle,
+    /checked \? \[\.\.\.TRIGGERED_CATEGORIES, \.\.\.custom\] : custom/,
+    '全选=八类并入当前选择、取消=只摘八类（替换语义会静默丢弃自定义 tag）',
+  )
+  // 保留后的选择必须真的落到查询参数：八类全中 + 自定义 tag ≠ 全选，参数含该 ID
+  const afterSelectAll = [...TRIGGERED_CATEGORIES, '942100']
+  assert.match(serializeTriggeredFilter(afterSelectAll) ?? '', /942100/, '保留的自定义 tag 必须进入 rule_triggered')
 })

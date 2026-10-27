@@ -172,3 +172,34 @@ func TestRateLimitKeyIsClientIP(t *testing.T) {
 		t.Fatalf("rate limit must not key on socket IP:\n%s", wire)
 	}
 }
+
+// 启用但零有效网段（内联全非法/过宽、引用名单为空或全悬空）：渲染形态不变
+// （空投影文件 + lb_file 源，与既有行为逐字节一致），但必须随配置图携带降级
+// 说明——否则面板「已启用 CDN 真实 IP」与实际零网段信任不可区分（client_ip
+// 仍是 CDN 回源 IP，IP ACL/限流/GeoIP 全按它判定）。
+func TestTrustedProxyRender_enabledWithNoRangesCarriesDegradation(t *testing.T) {
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tp_empty", "tp-empty.example.test", 8080)
+	if _, err := database.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_ranges='[]', trusted_proxy_range_refs='[]' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	generated := generateCaddyConfigFromStore(database)
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	degraded, _ := generated[caddyConfigDegradationKey].(string)
+	if !strings.Contains(degraded, "没有任何有效网段") {
+		t.Fatalf("启用但零网段必须携带降级说明, got %q", degraded)
+	}
+
+	// 正向控制：配置了一个有效网段时不得出现该降级说明（否则横幅恒亮，
+	// 用户会习惯性忽略）。
+	if _, err := database.Exec(`UPDATE global_config SET trusted_proxy_ranges='["203.0.113.0/24"]' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	generated = generateCaddyConfigFromStore(database)
+	if degraded, _ := generated[caddyConfigDegradationKey].(string); strings.Contains(degraded, "没有任何有效网段") {
+		t.Fatalf("有有效网段时不得报告零网段降级, got %q", degraded)
+	}
+}

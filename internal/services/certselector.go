@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -47,16 +49,33 @@ func ParseCertificateLeaf(certPEM, keyPEM string) *x509.Certificate {
 	return leaf
 }
 
+// errCertPEMEmpty 表示 PEM 里没有可解码的块（空串/纯私钥/损坏的封装）——
+// 与「块存在但证书解析失败」区分开，让需要细分文案的调用方（签发链取时）
+// 保留既有两种错误形态。
+var errCertPEMEmpty = errors.New("pem: no certificate block")
+
+// parseCertificateLeaf 是「PEM 首块 → x509 证书」的唯一实现：到期时间派生
+// （CertNotAfterFromPEM）、签发链取时（parseCertTime，含 NotBefore）、域名覆盖
+// 与生效时间判定（parseCertificateLeafFromPEM）全部经此，三份同形拷贝会任一侧
+// 改动（多块链/容忍尾随垃圾）后静默分叉。
+func parseCertificateLeaf(certPEM string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil, errCertPEMEmpty
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	return leaf, nil
+}
+
 // CertNotAfterFromPEM 解析证书 PEM 首块的 NotAfter（仅证书，不需要私钥）。
 // 用于 cert_jobs.expires_at 缺失（导入/旧备份/集群快照/对账遗留）时回退派生
 // 到期状态——否则任务页显示「-」而规则证书卡按 PEM 显示 valid/N 天，同一条
 // 证书两处结论冲突。
 func CertNotAfterFromPEM(certPEM string) (time.Time, bool) {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return time.Time{}, false
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
+	leaf, err := parseCertificateLeaf(certPEM)
 	if err != nil {
 		return time.Time{}, false
 	}

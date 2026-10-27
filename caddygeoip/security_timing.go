@@ -65,11 +65,15 @@ func recordSecurityTiming(r *http.Request, segment string) {
 // coraza tx.ID 长度,碰撞面消除;rand 失败返回空串=该请求不计耗时,静默降级)。
 func securityTimingID() string {
 	b := make([]byte, 8)
-	if _, err := cryptorand.Read(b); err != nil {
+	if _, err := securityTimingRandRead(b); err != nil {
 		return ""
 	}
 	return hex.EncodeToString(b)
 }
+
+// securityTimingRandRead 是 crypto/rand.Read 的注入缝：只用于在测试里构造
+// 「ID 生成失败」形态（该形态下客户端自带的计时头必须已被剥离），生产不得替换。
+var securityTimingRandRead = cryptorand.Read
 
 // isValidSecurityTimingID 校验计时 ID 与服务端生成形态（securityTimingID，
 // 8 字节小写 hex）逐形一致——该 ID 是计时注册表 key 且头值客户端

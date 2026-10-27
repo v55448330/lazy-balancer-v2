@@ -571,6 +571,17 @@ func TestAutobanListEntryCap_matchesHandlerCap(t *testing.T) {
 	}
 }
 
+// 爬虫系统名单上限的跨包契约钉（与上一条同型）：services 侧声明
+// CrawlerIPListEntryCap 并注明「与 handlers ipListMaxEntries 同义」，若管理面
+// 上限被调整（如降到 1000）而任务仍可写到 2000 条，面板上限与任务写入口径
+// 静默分叉；services 不能 import handlers，故只能由 handlers 侧钉住相等。
+func TestCrawlerIPListEntryCap_matchesHandlerCap(t *testing.T) {
+	if services.CrawlerIPListEntryCap != ipListMaxEntries {
+		t.Fatalf("services.CrawlerIPListEntryCap=%d != handlers ipListMaxEntries=%d（爬虫任务写入会越过管理面上限）",
+			services.CrawlerIPListEntryCap, ipListMaxEntries)
+	}
+}
+
 // 内置名单引用门提示语按名单名分流 ----
 
 // Given 自动封禁预置名单（system=1，非威胁情报源）。

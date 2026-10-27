@@ -202,6 +202,10 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 // ApplyConfigReporting 同 ApplyConfig，但报告是否发生了真实 /load——审计
 // 真实性裁定（2026-09-25）：自记「重载」审计的调用方（PutCaddyConfig）据
 // loaded 决定落笔与否（同字节短路 loaded=false=零真实重载，不落审计）。
+// loaded 的语义是「发生了成功的真实 /load」：失败分支（被拒/传输失败/生成
+// 失败）一律 false——曾返回 true，按注释写 `if loaded { audit }` 的调用方会把
+// 失败应用记成真实重载（审计真实性的反面）。现状唯一调用方先判 applyErr，
+// 故无行为回归。
 func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (loaded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,11 +213,15 @@ func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (load
 	if IsSameConfig(err) {
 		return false, nil
 	}
-	return true, err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ApplyConfigReportingForCommit 应用原始配置但把 last-known-good 延后到
-// 调用方 commit 成功后补写；返回值同时携带已下发字节与真实 /load 标记。
+// 调用方 commit 成功后补写；返回值同时携带已下发字节与真实 /load 标记
+// （失败分支同样 loaded=false，见 ApplyConfigReporting 的语义说明）。
 func (s *CaddyService) ApplyConfigReportingForCommit(config map[string]interface{}) (applied []byte, loaded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,7 +229,10 @@ func (s *CaddyService) ApplyConfigReportingForCommit(config map[string]interface
 	if IsSameConfig(err) {
 		return nil, false, nil
 	}
-	return applied, true, err
+	if err != nil {
+		return applied, false, err
+	}
+	return applied, true, nil
 }
 
 // caddyConfigJSONEqual 结构级 JSON 相等（键序/空白/尾换行不敏感）——Caddy
@@ -442,6 +453,15 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 		if runningErr == nil && caddyConfigJSONEqual(running, data) {
 			// 同字节短路同样收敛降级状态（见函数说明）。
 			applyRenderDegradationState(config, opts.persistDegradation)
+			// LKG 缺失补齐：短路意味着运行配置已等于本次渲染视图（内容已确认
+			// 可用），而 LKG 文件可能因带外删除/卷恢复/早期版本未配置而不存在
+			// ——此时每次 apply 都走短路，启动兜底通道（ApplyLastKnownGood）
+			// 永远无文件可回放，DB 渲染一旦被拒就失去自动恢复。仅在非事务路径
+			// 补齐（persistLastGood=true）：事务内 apply 在 commit 之前执行，
+			// 未提交视图不得成为 LKG。
+			if opts.persistLastGood {
+				s.persistLastGoodIfMissingLocked(data)
+			}
 			return nil, errSameConfig
 		}
 		if errors.Is(runningErr, errCaddyAdminConfigTooLarge) {
@@ -550,6 +570,19 @@ func (s *CaddyService) SetLastGoodPath(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastGoodPath = path
+}
+
+// persistLastGoodIfMissingLocked 只在 LKG 文件缺失时落盘（同字节短路路径专用）：
+// 短路的内容已确认等于运行配置，补写零风险；文件已存在则不动（避免每次短路
+// 都写盘）。stat 的其他错误（权限/父目录缺失）按缺失处理——落盘失败只记日志。
+func (s *CaddyService) persistLastGoodIfMissingLocked(data []byte) {
+	if s.lastGoodPath == "" || len(data) == 0 {
+		return
+	}
+	if _, err := os.Stat(s.lastGoodPath); err == nil {
+		return
+	}
+	s.persistLastGoodLocked(data)
 }
 
 func (s *CaddyService) persistLastGoodLocked(data []byte) {
@@ -1859,7 +1892,18 @@ func trustedProxyServerFields(store caddyConfigStore) (map[string]interface{}, s
 	if len(headers) > 0 {
 		fields["client_ip_headers"] = headers
 	}
-	return fields, ""
+	degraded := ""
+	if len(merged) == 0 {
+		// 启用但零有效网段：渲染形态不变（空投影文件 + lb_file 源），但必须给
+		// 用户可见信号——面板显示「已启用 CDN 真实 IP」而实际零网段被信任，
+		// client_ip 仍是回源（CDN）IP，依赖真实 IP 的 IP ACL/限流 zone/GeoIP
+		// 全部按 CDN 地址判定，现象与「策略配错」不可区分。写侧只做形状/上限
+		// 门（可保存 enabled=1 + 空集合），降级通道此前只覆盖读库/解析/投影
+		// 写失败三类。
+		Logf("warn", "受信代理已启用但没有任何有效网段（面板启用态与实际生效分叉）")
+		degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/限流/GeoIP 均按回源地址判定"
+	}
+	return fields, degraded
 }
 
 // TrustedProxyMinPrefixBits 返回受信代理允许的最小前缀长度（IPv4=/8，
@@ -4707,7 +4751,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 同样由 caddygeoip 在 coraza phase:1 之前注入、coraza 预检规则已消费；
 	// 与 geoip 头同口径**无条件**剥离——无 GeoIP 策略的规则（handler 不在场）
 	// 下客户端伪造的同名头也绝不能直达上游。常量名与 caddygeoip/handler.go
-	// 的 crawlerHeaderVerified/crawlerHeaderSpoof 同源。
+	// 的 crawlerVerifiedHeader/crawlerSpoofHeader 同源，字面量同步由
+	// geoip_plugin_contract_test.go 机械对账（跨模块，插件是独立 module）。
 	proxyRequestHeaders := map[string]interface{}{
 		"delete": []string{
 			"X-LB-GeoIP-Country", "X-LB-GeoIP-Country-Code", "X-LB-GeoIP-Region",

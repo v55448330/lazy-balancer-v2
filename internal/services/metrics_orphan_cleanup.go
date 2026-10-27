@@ -34,9 +34,14 @@ var metricsOrphanPurgeRowsPerBatch = 5000
 // PurgeOrphanMetricsHistory 清理 metrics 库中已删除规则的残留历史指标，
 // 返回本轮删除的规则数。调用方（taskengine metrics-orphan-cleanup）按错误
 // 落 task_runs failed——不得静默成功。
+//
+// 库未初始化（启动早期/关停竞态里仍在跑的本轮/嵌入形态）时返回
+// errMetricsDBUnavailable 而不是 (0, nil)：静默零值会让「本轮清理全停」与
+// 「已收敛无残留」同形（任务体据 err 分流，nil 会写「清理完成：删除 0 个」
+// 并落 success），与兄弟函数 PurgeOrphanRuleLogs 的 ScanError 口径不一致。
 func PurgeOrphanMetricsHistory(ctx context.Context) (int, error) {
 	if db.DB == nil || db.MetricsDB == nil {
-		return 0, nil // 无 metrics 库/无主库：无可清理对象（启动早期）
+		return 0, fmt.Errorf("跳过孤儿规则指标清理（不删除）: %w", errMetricsDBUnavailable)
 	}
 	liveIDs, err := liveRuleIDs(ctx)
 	if err != nil {

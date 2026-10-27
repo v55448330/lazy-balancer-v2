@@ -220,6 +220,15 @@ func resetClusterHandleStrikes(database *sql.DB) {
 	clusterHandleStrikesMu.Unlock()
 }
 
+// clusterHandleStrikeCount 在锁内读取某句柄的连续探活失败次数——测试断言必须
+// 经此入口：直接索引 clusterHandleStrikes 与探活写者（probeClusterDBHandle 在
+// 锁内自增）构成并发读写，-race 下是 data race。
+func clusterHandleStrikeCount(database *sql.DB) int {
+	clusterHandleStrikesMu.Lock()
+	defer clusterHandleStrikesMu.Unlock()
+	return clusterHandleStrikes[database]
+}
+
 // probeClusterDBHandle 报告句柄可用性三态（兜底回收：库已 Close 而未见显式
 // unregister 时，查询路径顺手剔除死条目，防止全局表在测试/重建场景无限累积）。
 // 查询路径仅在主节点巡检与 Promote/BecomeSlave 触发，Ping 成本可忽略。

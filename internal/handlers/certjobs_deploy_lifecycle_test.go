@@ -99,3 +99,41 @@ func TestRetryCertJob_deployLifecycleWithoutMaterialFallsBackToIssuance(t *testi
 		t.Fatalf("status=%d body=%s, want 500 回落重新入队路径", response.Code, response.Body.String())
 	}
 }
+
+// 锁序铁律（同 DeleteCertJob「先 caddyOpMu 后 per-job 锁」的反向面）：重试
+// 入口不得在持有 per-job 操作锁时登记立即部署。scheduleDeploymentRetry 对在途
+// 部署回调做有界等待（≤30s），而在途回调要取 caddyOpMu 才能退出——并发「重试 +
+// 删除」时删除方持全局锁等该 per-job 锁，全局面（规则写/Caddy 启停/配置导入）
+// 最长排队 30s。登记必须与 IssueCertificate「锁内推进窗口、锁外登记」同构。
+func TestRetryCertJob_registersDeploymentOutsideOperationLock(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+
+	id := seedDeployLifecycleRetryJob(t, "lb_lockorder", "lockorder.example.test", "downloaded")
+
+	oldRegistrar := certJobDeploymentRetryRegistrar
+	t.Cleanup(func() { certJobDeploymentRetryRegistrar = oldRegistrar })
+	registrarCalled := false
+	certJobDeploymentRetryRegistrar = func(jobID int, _ string) error {
+		registrarCalled = true
+		lock := certJobOperationLock(jobID)
+		if !lock.TryLock() {
+			t.Fatalf("per-job 操作锁在登记立即部署时仍被持有——删除方持 caddyOpMu 等该锁会把全局面阻塞至多 30s")
+		}
+		lock.Unlock()
+		return nil
+	}
+
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(id, 10)+"/retry", nil))
+
+	if !registrarCalled {
+		t.Fatalf("登记入口未被调用，status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（部署重排登记成功）", response.Code, response.Body.String())
+	}
+}

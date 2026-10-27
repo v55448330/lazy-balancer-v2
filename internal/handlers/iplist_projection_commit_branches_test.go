@@ -26,6 +26,8 @@ package handlers
 //     transportFailure 用例（以同一库值独立重渲染对齐字节）。
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -163,13 +165,39 @@ func TestSecurityPolicySave_adminRejectionRestoresCommittedProjection(t *testing
 // 在 COMMIT 阶段失败（延迟外键约束）：事务内 apply 已按候选视图 /load 成功，
 // 只有提交失败——正是「投影已写、事务未提交」的最坏收尾形态。
 //
-// 依赖连接级 PRAGMA foreign_keys：本用例全程单 goroutine 且 PRAGMA 与 Begin
-// 之间无并发读写（连接池 LIFO 复用同一连接）；若约束未生效，响应会是 200 而
-// 非 500，用例立刻失败，不会假绿。
+// PRAGMA foreign_keys 是**连接级**设置，主库池有 maxOpen 条连接、事务可能派发
+// 到任一连接：只 Exec 一次 PRAGMA 不保证事务连接已启用延迟约束（响应会是 200
+// 而非 500）。修法有两面：
+//   - 不能把池钳到单连接（SetMaxOpenConns(1)）——handler 事务内会经 db.DB 再取
+//     连接（GenerateAndApplyConfig 等），单连接池自锁死（实测 1m40s 超时）；
+//   - 改为先**占满全部 maxOpen 条连接**并逐条设置 PRAGMA foreign_keys=ON，再
+//     放回池中：池里每条连接（含既有连接）都已启用 FK，事务连接必然合规，
+//     判据不再依赖池复用顺序（-shuffle/并发下不漂移）。
 func installDeferredCommitFailureOnPolicyUpdate(t *testing.T) {
 	t.Helper()
-	if _, err := db.DB.Exec(`PRAGMA foreign_keys=ON;
-		CREATE TABLE commit_parent(id INTEGER PRIMARY KEY);
+	ctx := context.Background()
+	maxOpen := db.DB.Stats().MaxOpenConnections
+	if maxOpen <= 0 {
+		t.Fatalf("主库池 maxOpen=%d, 无法预置 FK 连接", maxOpen)
+	}
+	primed := make([]*sql.Conn, 0, maxOpen)
+	for range maxOpen {
+		conn, cerr := db.DB.Conn(ctx)
+		if cerr != nil {
+			t.Fatalf("acquire connection for FK prime: %v", cerr)
+		}
+		if _, perr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); perr != nil {
+			_ = conn.Close()
+			t.Fatalf("prime foreign_keys: %v", perr)
+		}
+		primed = append(primed, conn)
+	}
+	for _, conn := range primed {
+		if cerr := conn.Close(); cerr != nil {
+			t.Fatalf("release primed connection: %v", cerr)
+		}
+	}
+	if _, err := db.DB.Exec(`CREATE TABLE commit_parent(id INTEGER PRIMARY KEY);
 		CREATE TABLE commit_guard(parent_id INTEGER, FOREIGN KEY(parent_id) REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
 		CREATE TRIGGER fail_policy_commit AFTER UPDATE ON security_policies BEGIN INSERT INTO commit_guard(parent_id) VALUES (999); END`); err != nil {
 		t.Fatalf("install deferred commit failure: %v", err)

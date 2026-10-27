@@ -351,6 +351,12 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 MFA 密钥失败"})
 		return
 	}
+	// 已启用用户重绑时本步轮换 pending 密钥：此前零留痕，随后 activate 恒记
+	// 「启用」，重绑与首绑在审计中不可区分（多管理员/被盗会话时无法归因）。
+	// 首绑不记（activate 记「启用」），detail 不落 secret 任何片段。
+	if mfaEnabled {
+		recordAudit(c, "重新绑定", "用户认证", services.FormatAuditDetail("MFA pending 密钥已轮换", services.AuditResultPart("success")))
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"secret": secret, "uri": uri}})
 }
 
@@ -539,7 +545,9 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	// 重签 JWT：保留原身份声明，仅刷新 mfa_ts（与 respondLogin 同构；node_mode 重读）
 	var meta db.UserRowMeta
 	// 重读用户的 DB 错误不得并入 401「用户不可用」
-	// ——基础设施故障 500；行缺失/禁用保持 401（JWT 仍有效但账号已不可用）。
+	// ——基础设施故障与并发删除/行缺失（sql.ErrNoRows）一律 500 fail-closed；
+	// 仅读成功但 is_enabled=0 才 401「用户不可用」。（行缺失已在上一段
+	// services.MFAVerifyTOTPCode 的同行查询先失败并走 500，此分支属纵深防御）
 	// 列清单来自单源（auth_provider 与登录路径同口径）——漏列会让所有
 	// step-up 响应的 auth_provider 变成 ""，且存量 OIDC 行（mfa_enabled=1）在
 	// verify-step 成功后丢掉 auth_method=oidc 声明（middleware 的 MFA 门短路与

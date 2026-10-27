@@ -565,3 +565,32 @@ func TestWriteIPListFile_sameContentNormalizesMode(t *testing.T) {
 		t.Fatalf("mtime=%v, want %v（内容未变不得改写，wafiplist 不重建）", st.ModTime(), old)
 	}
 }
+
+// memo 快路同样必须归一权限：慢路的「同字节跳写」会 chmod 0644 修
+// 「升级前 0600 投影 + Caddy 换 uid 读不到」，但 memo 只记 inputHash/mtime/size
+// ——内容与 stat 形态都没变时快路直接返回，权限停在 0600，Caddy 换 uid 部署
+// 永远读不到该名单（deny 方向静默 fail-open）。既有同字节用例显式清 memo，
+// 故这是覆盖盲区。
+func TestWriteIPListFile_memoFastPathNormalizesMode(t *testing.T) {
+	scope := "memo-mode-normalize"
+	entries := []string{"10.9.1.1", "10.9.1.2"}
+	path, err := writeIPListFile(scope, entries)
+	if err != nil {
+		t.Fatalf("首次写入: %v", err)
+	}
+	// 只改权限（chmod 不改 mtime/size），memo 条目保持有效 → 下一次走快路
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod 0600: %v", err)
+	}
+
+	if _, err := writeIPListFile(scope, entries); err != nil {
+		t.Fatalf("同内容写入: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := st.Mode().Perm(); got != 0o644 {
+		t.Fatalf("mode=%o, want 0644（memo 快路必须归一权限）", got)
+	}
+}

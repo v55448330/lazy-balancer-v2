@@ -12,9 +12,12 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
+import { relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRenderer } from 'vue'
 
 const webRoot = new URL('../', import.meta.url)
+const webRootPath = fileURLToPath(webRoot)
 
 // 源码读取缓存：同一文件（SecurityPolicies.vue / Rules.vue 等）被跨 spec 反复
 // 读取数十次；测试只读源文件、无「读取前/后对比」用法，缓存安全。若未来出现
@@ -56,6 +59,24 @@ export const codeSection = (relative: string, startMarker: string, endMarker: st
   stripComments(section(source(relative), startMarker, endMarker))
 
 /**
+ * 绝对路径 → 相对 `web/` 的正斜杠路径键（`webFiles` 的键口径单源）。
+ *
+ * 不得用 `rel.indexOf(dir)` 切：检出路径本身含同名段时（如
+ * `/home/ci/src/app/web/src/utils/x.ts`）首次出现位置落在更前面，键变成
+ * `src/app/web/src/utils/x.ts`，所有「键与硬编码路径比较」的目录扫描守卫
+ * （exportSurface / ansiHtml / accessibleEntriesAndBanners / keyboardA11y /
+ * helpersStripComments）会集体假红；取不到时静默返回绝对路径则是 fail-open。
+ * 因此这里用 path.relative，并在路径不在 `web/` 下时硬失败。
+ */
+export const webRelative = (absolute: string): string => {
+  const rel = relative(webRootPath, absolute).split(sep).join('/')
+  if (rel === '' || rel === '..' || rel.startsWith('../')) {
+    throw new Error(`webRelative: ${absolute} 不在 ${webRootPath} 下，无法归一为仓库相对路径`)
+  }
+  return rel
+}
+
+/**
  * 递归列出 `web/` 下某个目录的源文件（返回相对 `web/` 的正斜杠路径）。
  * 「唯一消费方/全仓不得出现」类扫描必须遍历目录而非单文件：单文件判据在
  * 新增消费方时静默失效（扫描面缺口）。
@@ -67,14 +88,9 @@ export const webFiles = (relativeDir: string, extensions: readonly string[]): st
     parentPath: string
     isFile(): boolean
   }>
-  const prefix = relativeDir.replace(/\/$/, '')
   return entries
     .filter((entry) => entry.isFile() && extensions.some((ext) => entry.name.endsWith(ext)))
-    .map((entry) => {
-      const rel = `${entry.parentPath}/${entry.name}`.replace(/\\/g, '/').replace(/\/{2,}/g, '/')
-      const at = rel.indexOf(prefix)
-      return at >= 0 ? rel.slice(at) : rel
-    })
+    .map((entry) => webRelative(`${entry.parentPath}/${entry.name}`.replace(/\\/g, '/').replace(/\/{2,}/g, '/')))
     .sort()
 }
 

@@ -260,11 +260,16 @@ test('零外部消费的符号不得再导出（导出面 = 消费面）', () =>
   ]
   for (const [file, symbol] of cases) {
     const text = code(file)
-    assert.doesNotMatch(
-      text,
-      new RegExp(`export\\s+(?:const|type|interface)\\s+${symbol}\\b`),
-      `${file} 的 ${symbol} 零外部消费，不得对外导出`,
-    )
+    // 声明前置 export 的四种形态 + 复导出/默认导出：只认前三种会让
+    // `export { X }` 复导出静默把零消费符号重新公开（守卫盲区）。
+    const reopened = [
+      new RegExp(`export\\s+(?:const|type|interface|enum|namespace)\\s+${symbol}\\b`),
+      new RegExp(`export\\s*\\{[^}]*\\b${symbol}\\b[^}]*\\}`),
+      new RegExp(`export\\s+default\\s+${symbol}\\b`),
+    ]
+    for (const pattern of reopened) {
+      assert.doesNotMatch(text, pattern, `${file} 的 ${symbol} 零外部消费，不得对外导出`)
+    }
     assert.match(text, new RegExp(`(?:^|\\n)(?:const|type|interface)\\s+${symbol}\\b`), `${symbol} 仍须在本模块内定义`)
   }
 })

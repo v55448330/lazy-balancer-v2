@@ -65,7 +65,7 @@ func TestCertJobsActive_nilDBSkipsWithoutMaskingQueryErrors(t *testing.T) {
 	if certJobsActive() {
 		t.Fatal("nil database must not report certificate work as runnable")
 	}
-	CertWaitingCATickOnce()
+	CertWaitingCATickOnce(context.Background())
 
 	// 回归：普通查询错误仍维持「宁扫勿漏」，不被 nil 守卫吞掉。
 	db.DB = database
@@ -155,7 +155,7 @@ func TestCertWaitingCATickOnce_skipLineGatedOnActiveJobs(t *testing.T) {
 
 	// 有非终态任务：门控放行，服务未运行 → 跳过行
 	jobID := seedOrphanCertJob(t, "lb_ghost_tick", "ghost-tick.example.test", "queued")
-	CertWaitingCATickOnce()
+	CertWaitingCATickOnce(context.Background())
 	data, err := os.ReadFile(taskengine.TaskLogPath("cert-waiting-ca"))
 	if err != nil {
 		t.Fatalf("read task log: %v", err)
@@ -168,7 +168,7 @@ func TestCertWaitingCATickOnce_skipLineGatedOnActiveJobs(t *testing.T) {
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled' WHERE id=?", jobID); err != nil {
 		t.Fatalf("disable job: %v", err)
 	}
-	CertWaitingCATickOnce()
+	CertWaitingCATickOnce(context.Background())
 	data, err = os.ReadFile(taskengine.TaskLogPath("cert-waiting-ca"))
 	if err != nil {
 		t.Fatalf("reread task log: %v", err)
@@ -305,7 +305,7 @@ func TestCertWaitingCATickOnce_propagates_scan_read_failures(t *testing.T) {
 	}
 
 	// When
-	err := CertWaitingCATickOnce()
+	err := CertWaitingCATickOnce(context.Background())
 
 	// Then 1：读失败上抛（Run 返回 error → task_runs 失败终态）
 	if err == nil {
@@ -399,7 +399,7 @@ func TestCertWaitingCATickOnce_summaryLineOnlyOnActions(t *testing.T) {
 	}
 
 	// When：冷却期内的补扫轮（零动作）
-	CertWaitingCATickOnce()
+	CertWaitingCATickOnce(context.Background())
 
 	// Then：无摘要行
 	logPath := taskengine.TaskLogPath("cert-waiting-ca")
@@ -411,7 +411,7 @@ func TestCertWaitingCATickOnce_summaryLineOnlyOnActions(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE cert_jobs SET ca_available_after=datetime('now','-1 minute') WHERE id=?`, jobID); err != nil {
 		t.Fatalf("expire cooling: %v", err)
 	}
-	CertWaitingCATickOnce()
+	CertWaitingCATickOnce(context.Background())
 
 	// Then：摘要行携带分项计数
 	data, err := os.ReadFile(logPath)
@@ -488,5 +488,66 @@ func TestCertManualCheckOnce_runsWithoutCertificateService(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "1 张临期") {
 		t.Fatalf("task log=%q, want 「1 张临期」（巡检不得因服务缺失停摆）", string(data))
+	}
+}
+
+// 从节点零写（降级窗口收口）：30s 补扫的三路写路径（CA 冷却重排 / 滞留重入队 /
+// 断链部署重建）原先只有准入时的引擎角色门——本轮窗口内降级/换主后，从节点
+// 仍会改写 cert_jobs、登记部署 timer（到期写证书文件并重载 Caddy）。
+// 本用例在写点前门注入降级：必须落 skipped 且零写入。
+func TestCertWaitingCATickOnce_skipsWritesWhenDemotedMidRound(t *testing.T) {
+	useCertSweepTickTestEnv(t)
+	resetCertificateServiceForTest(t)
+	SetActiveCertificateService(NewCertificateService())
+	oldManager := caQueueManager
+	caQueueManager = &CAQueueManager{
+		queues:       make(map[int]*caQueue),
+		blockedRules: make(map[string]map[RuleBlockToken]struct{}),
+		active:       true,
+		reloader:     func() error { return nil },
+	}
+	t.Cleanup(func() { caQueueManager.Stop(); caQueueManager = oldManager })
+
+	// Given：适用规则 + 一条冷却已到期的 waiting_ca 任务（扫描会判定为可重排）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_gate_demote','gate-demote','demote.example.test','http',8443,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (8,'gate CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+	jobID := seedOrphanCertJob(t, "lb_gate_demote", "demote.example.test", "waiting_ca")
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET ca_provider_id=8, ca_available_after=datetime('now','-1 minute') WHERE id=?`, jobID); err != nil {
+		t.Fatalf("expire cooling: %v", err)
+	}
+
+	// When：写前门内注入降级（等价于本轮开始后管理员切从节点）
+	demoted := false
+	certReconcileRoleRecheckHook = func() {
+		if demoted {
+			return
+		}
+		demoted = true
+		if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+			t.Errorf("demote node: %v", err)
+		}
+	}
+	t.Cleanup(func() { certReconcileRoleRecheckHook = nil })
+
+	err := CertWaitingCATickOnce(context.Background())
+
+	// Then 1：落 skipped（降级不是失败轮，也不得记成功）
+	if !errors.Is(err, taskengine.ErrTaskSkipped) {
+		t.Fatalf("err=%v, want taskengine.ErrTaskSkipped（降级后必须中止本轮）", err)
+	}
+	if !demoted {
+		t.Fatal("写前门未执行（降级注入未发生，用例前提不成立）")
+	}
+	// Then 2：零写入——任务仍停在 waiting_ca
+	var status string
+	if err := db.DB.QueryRow(`SELECT status FROM cert_jobs WHERE id=?`, jobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "waiting_ca" {
+		t.Fatalf("status=%q, want waiting_ca（从节点不得改写任务态）", status)
 	}
 }
