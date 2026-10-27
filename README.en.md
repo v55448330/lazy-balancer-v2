@@ -25,6 +25,7 @@ A visual load balancing platform built on **Caddy v2.11**, with a full WAF secur
 docker run -d --name lazy-balancer --network host \
   --restart unless-stopped \
   --pids-limit=4096 \
+  --ulimit nproc=4096:4096 \
   --ulimit nofile=1048576:1048576 \
   --stop-timeout 30 \
   -v $(pwd)/data:/app/data -v $(pwd)/certs:/app/certs \
@@ -39,6 +40,7 @@ docker run -d --name lazy-balancer --network host \
 docker run -d --name lazy-balancer \
   --restart unless-stopped \
   --pids-limit=4096 \
+  --ulimit nproc=4096:4096 \
   --ulimit nofile=1048576:1048576 \
   --stop-timeout 30 \
   -p 8000:8000 -p 80:80 -p 443:443 -p 443:443/udp \
@@ -50,7 +52,7 @@ docker run -d --name lazy-balancer \
 
 > Image tags: `latest` points at the most recent **stable** release (no channel suffix); pre-release tags carry a `-beta` suffix (e.g. `:v2.3.9-beta`). Pin that exact tag when you need a pre-release or a reproducible install.
 >
-> **Container init**: current images ship an init process (reaps abandoned health-check children) and use the binary's built-in health check, so `--init` is no longer needed. If you pin an older image, add `--init`. The examples default to `--pids-limit=4096` (PID cgroup, threads included); tune it to your deployment size.
+> **Container init**: current images ship an init process (reaps abandoned health-check children) and use the binary's built-in health check, so `--init` is no longer needed. If you pin an older image, add `--init`. The examples default to `--pids-limit=4096` (PID cgroup, threads included) and also set `--ulimit nproc=4096:4096` (container `RLIMIT_NPROC`). Both apply only inside the container; the host ulimit needs no change, and the effective task cap is the lower of the two. Tune them to your deployment size.
 
 > **Stop grace period**: the graceful shutdown chain can take up to 25 seconds (in-flight HTTP requests, Caddy draining, task draining, log flush). Docker's default stop grace period is only 10 seconds, after which the container is SIGKILLed — that is why the `docker run` examples pass `--stop-timeout 30` (the compose file already sets `stop_grace_period: 30s`). When using another orchestrator (systemd/Swarm/k8s), keep the stop grace period ≥25 seconds.
 
