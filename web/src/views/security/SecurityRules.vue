@@ -292,6 +292,8 @@
                 <div v-if="patternOverLimit(cond.pattern)" class="form-tip-line port-warning">
                   匹配内容不能超过 {{ CUSTOM_RULE_MAX_PATTERN_BYTES }} 字节（当前 {{ patternByteLength(cond.pattern) }} 字节）
                 </div>
+              </div>
+              <el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">删除</el-button>
                 <div v-if="cond.target === 'user_agent'" class="preset-section">
                   <button type="button" class="preset-header" :aria-expanded="!uaCollapsed[idx]" @click="uaCollapsed[idx] = !uaCollapsed[idx]">
                     <span class="preset-toggle">{{ uaCollapsed[idx] ? '▶' : '▼' }} 快捷标签</span>
@@ -320,8 +322,6 @@
                     </div>
                   </div>
                 </div>
-              </div>
-              <el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">删除</el-button>
             </div>
             <div class="add-condition-row">
               <el-button v-if="!isReadOnly" size="small" type="primary" plain class="add-condition-btn" :disabled="!canAddCondition(ruleForm.conditions.length) || savingRule" @click="ruleForm.conditions.push({ target: 'uri', operator: 'contains', pattern: '' })">
@@ -1959,7 +1959,7 @@ onUnmounted(() => {
 .add-condition-btn { margin-top: 4px; }
 .pattern-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
 .pattern-input-row { display: flex; align-items: center; gap: 6px; }
-.preset-section { margin-top: 4px; }
+.preset-section { flex: 1 1 100%; min-width: 0; width: 100%; margin-top: 4px; }
 .preset-header {
   cursor: pointer; padding: 2px 0; user-select: none;
   display: inline-flex; align-items: center; width: 100%;
@@ -1976,7 +1976,7 @@ onUnmounted(() => {
 .preset-group-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
-.regex-extras { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; }
+.regex-extras { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; box-sizing: border-box; }
 .regex-presets { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 4px; }
 .regex-preset-link { font-size: 12px; }
 .regex-tester { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
