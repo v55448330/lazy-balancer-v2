@@ -149,7 +149,9 @@ const options = computed<CrsRuleOptionView[]>(() =>
 // openSeq 的 null 形态（页面级加载）当前零调用方，工厂签名收窄为数字 seq。
 const indexLoader = createSessionSingleFlight<CrsRuleIndexEntry[]>({
   load: async () => {
-    const res = await request.get<APIResponse<CrsRuleIndexData>>('/security/crs/rule-index')
+    // silent：失败由本组合子 onError 记录并使 loaded=false、消费方渲染
+    // 「索引未加载」文案——不 silent 会再叠加一条全局错误 toast（同一次失败两处提示）。
+    const res = await request.get<APIResponse<CrsRuleIndexData>>('/security/crs/rule-index', { silent: true })
     const list = res.data?.rules
     return (Array.isArray(list) ? list : [])
       .filter((r): r is CrsRuleIndexEntry => !!r && typeof r.id === 'string' && r.id !== '')

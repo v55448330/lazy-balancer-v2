@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -26,7 +27,16 @@ type dbValueCache struct {
 // get 返回有效期内缓存值；未命中时持锁调用 load（同槽单飞——审计轮转 2s
 // tick 只会产生一次查询，并发读不到部分初始化的值）。load 失败返回 fallback
 // 且不缓存。
+//
+// 无 ctx 形态：调用点不在关停/排空预算内时使用；预算内的调用点必须用 getCtx。
 func (c *dbValueCache) get(load func() (int64, error), fallback int64) int64 {
+	return c.getCtx(context.Background(), func(context.Context) (int64, error) { return load() }, fallback)
+}
+
+// getCtx 是 get 的 ctx 形：load 用 queryCtx 发读库语句，取消已发出即按 ctx
+// 返回（同族口径见 auditRetentionMonths：不把「查询被主库写锁挡住」拖过关停/
+// 导入排空预算）。缓存语义与 get 完全一致（失败不缓存、回退值只对本轮生效）。
+func (c *dbValueCache) getCtx(ctx context.Context, load func(context.Context) (int64, error), fallback int64) int64 {
 	if v, ok := c.fresh(); ok {
 		return v
 	}
@@ -35,7 +45,7 @@ func (c *dbValueCache) get(load func() (int64, error), fallback int64) int64 {
 	if v, ok := c.freshLocked(); ok {
 		return v
 	}
-	v, err := load()
+	v, err := load(ctx)
 	if err != nil {
 		return fallback
 	}

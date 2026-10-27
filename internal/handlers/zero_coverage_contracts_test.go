@@ -580,6 +580,7 @@ func TestParseTCPRuleMetricsFromPrometheus_aggregatesListedUpstreams(t *testing.
 // bytes_in/bytes_out——仪表盘直接读这两个键，字段名或信封结构漂移会让首屏
 // 静默空白。同名采样 helper 已有多条单测，端点装配此前零覆盖。
 func TestGetRealtimeTraffic_envelopeOnFailureAndSuccess(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := NewHandlers(Dependencies{})
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile
@@ -646,6 +647,7 @@ func TestGetRealtimeTraffic_envelopeOnFailureAndSuccess(t *testing.T) {
 // 连接统计端点：与实时流量同族信封契约（底层 netstat 错误只进运行日志），
 // 成功分支的十个连接状态键恒在。
 func TestGetConnectionStats_envelopeOnFailureAndSuccess(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := NewHandlers(Dependencies{})
 	resetConnectionStatsCacheForTest(t)
 	original := netstatCommand

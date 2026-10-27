@@ -176,7 +176,7 @@ func TestRuntimeLogCleanupOnce_wafAuditFallbackWhenIngestionStopped(t *testing.T
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1024 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
 	resetSecurityEventsPollState(t)
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
@@ -542,7 +542,7 @@ func TestLogCleanupRound_wafFallbackRotationFailureIsReported(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1024 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})
@@ -588,7 +588,7 @@ func TestLogCleanupRound_wafFallbackReportsRotationDelay(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1024 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})
@@ -775,7 +775,7 @@ func TestLogCleanupRound_emptyLogFileStillRunsWafFallback(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1024 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
 	resetSecurityEventsPollState(t)
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes

@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, runMfaStepUpRequest } from '../src/utils/apiFailure.ts'
+import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, runMfaStepUpRequest } from '../src/utils/apiFailure.ts'
 
 const deferred = <T,>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } => {
   let resolve!: (value: T) => void
@@ -269,4 +269,44 @@ test('页面级成功提示：3s 宽限窗内加缀并关闭同文案兜底条�
   // 新一次宽限放行重新开窗
   assert.equal(tracker.onGraceResponse(false, 20_000, () => handle()), false)
   assert.equal(tracker.consumeGraceForSuccess(21_000), true)
+})
+
+// ── createSessionStepUpGate（428 身份守卫的行为面） ─────────────────
+//
+// 此前该语义只以「源码正则命中 requestGeneration === currentSessionGeneration()」
+// 的形式被断言：等价重构（把捕获移到 replay 时、包进新 helper 改名）假红，
+// 而把守卫改错（恒真 / 比较错变量）只要文本不变就假绿（按该形态注入变异
+// 复跑实测）。守卫抽成纯工厂后直接按行为钉住。
+test('428 身份守卫：旧代际判 stale，同账号 MFA 刷新后仍判 current', () => {
+  // 发起时代际=1（登录 A 之后的第 1 代）
+  let current = 1
+  const gate = createSessionStepUpGate(1, () => current)
+
+  assert.equal(gate(), true, '同一会话内（含 MFA 只换令牌的刷新）必须放行')
+
+  // 同账号 MFA step-up：只刷新令牌、代际不变——刷新后复核仍必须是 current，
+  // 否则输完验证码的合法请求会被自己的守卫丢掉。
+  current = 1
+  assert.equal(gate(), true, 'MFA 刷新不推进代际')
+
+  // 登录/登出/OIDC/换账号推进代际：旧请求必须 stale（不得借用新会话验码或重放）
+  current = 2
+  assert.equal(gate(), false, '代际推进后旧请求必须 stale')
+  assert.equal(gate(), false, 'stale 判定必须稳定（不能因多次复核翻转）')
+})
+
+test('428 身份守卫：未记录代际的请求不得被当作当前会话', () => {
+  // 拦截器未记录代际（undefined）时只有当前也为 undefined 才算一致；
+  // 生产恒为数字，故该形态一律 stale（保守方向：宁可只 reject 原请求）。
+  assert.equal(createSessionStepUpGate(undefined, () => 0)(), false)
+  assert.equal(createSessionStepUpGate(0, () => 0)(), true)
+})
+
+test('428 身份守卫：工厂返回的是「每次复核现取当前代际」的谓词', () => {
+  // 守卫不得把当前代际在构造时快照下来——弹码/刷新可能耗时数十秒，
+  // 期间发生的登录切换必须在复核时可见。
+  let current = 5
+  const gate = createSessionStepUpGate(5, () => current)
+  current = 6
+  assert.equal(gate(), false, '构造后推进代际必须被复核捕获')
 })

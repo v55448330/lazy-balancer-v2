@@ -61,6 +61,10 @@ func TestDeleteAutoBackup_skipsAuditAndFileWhenRowAlreadyGone(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("0 行删除仍删除了文件: %v", err)
 	}
+	// 被拒尝试必须留痕：0 行（并发先到者已删）恰一条「删除失败」。
+	if got := countAutoBackupAudit(t, "删除失败"); got != 1 {
+		t.Fatalf("删除失败审计=%d, want 1（并发删除的 404 必须经 failAutoBackupAccess 留痕）", got)
+	}
 
 	// When 并发窗口关闭（行照常可删）。
 	if _, err := db.DB.Exec(`DROP TRIGGER auto_backups_delete_race`); err != nil {

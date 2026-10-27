@@ -85,3 +85,45 @@ func TestDatabaseFixtures_restoreAllHandlesAndCloseOnlyTemporaryDBs(t *testing.T
 		})
 	}
 }
+
+// reopenHandlesForTest 记录 reopenDatabaseForTest 上一次开出的句柄集（包内
+// 测试串行，单一槽即可）：下一次重开只关闭这套句柄，用例入口的哨兵/外层
+// 夹具句柄不受影响。最后一个句柄由 preserveDatabaseHandles 的收尾 Close()
+// 关闭，故辅助本身不再注册 cleanup——否则子用例收尾会关掉后续子用例还要用的
+// 句柄。
+var reopenHandlesForTest []*sql.DB
+
+// reopenDatabaseForTest 模拟进程重启：重新 Initialize，并关闭上一次由本辅助
+// 开出的句柄集。Initialize 只把新句柄写入全局、不关闭进入前那一套，同一用例
+// 内不关闭直接再 Initialize 会把上一套 *sql.DB（池连接与 -wal/-shm 文件句柄）
+// 遗弃到进程结束——清理协议出现例外，排障噪声放大。
+func reopenDatabaseForTest(t *testing.T, dir string) {
+	t.Helper()
+	for _, handle := range reopenHandlesForTest {
+		if handle != nil {
+			_ = handle.Close()
+		}
+	}
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	reopenHandlesForTest = []*sql.DB{DB, MetricsDB, AuditDB}
+}
+
+// 重开辅助必须真的关掉上一套句柄（否则「重复 Initialize 泄漏中间句柄」
+// 只是换了调用形态）：第一次重开前的句柄在第二次重开后必须不可用。
+func TestReopenDatabaseForTest_closesSupersededHandles(t *testing.T) {
+	preserveDatabaseHandles(t)
+	reopenDatabaseForTest(t, t.TempDir())
+	first := DB
+	if err := first.Ping(); err != nil {
+		t.Fatalf("首次重开后的句柄不可用: %v", err)
+	}
+	reopenDatabaseForTest(t, t.TempDir())
+	if DB == first {
+		t.Fatal("第二次重开未替换全局句柄")
+	}
+	if err := first.Ping(); err == nil {
+		t.Fatal("被替换的中间句柄未关闭（连接与 wal/shm 句柄泄漏到进程结束）")
+	}
+}

@@ -16,10 +16,12 @@
 |---|---|
 | WAF 引擎 | Coraza v3 (coraza-caddy v2.6.2) |
 | 规则集 | OWASP CRS v4.28.0 |
-| GeoIP | IP2Region v3.17.0（中国省级，IPv4） |
+| GeoIP | IP2Region v3.17.0（镜像内置，中国省级，IPv4）；运行期自动更新跟随上游 `releases/latest` |
 | 限流 | caddy-ratelimit v0.1.0 |
 
 > 地域规则仅对 IPv4 生效；IPv6 按「海外」处理（fail-closed）；IP 库未安装时地域规则不可启用。
+>
+> **两个版本口径并存是正常的**：镜像内置 xdb 是上表那个构建期固定下载（并校验 sha256）的版本，而运行期「IP 归属地库」自动更新取上游 `releases/latest`，更新后实际版本可能高于内置版。海外国家名中文表以 v3.18.0 xdb 的国家列为基线（238 个规范英文国名）；上游新增国名未收录时回退英文原名（优雅降级，不改变拦截语义）。
 
 ## 安全策略
 

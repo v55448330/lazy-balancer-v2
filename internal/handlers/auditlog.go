@@ -405,7 +405,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// info）——此前两分支都直接 Logf("error")，带外写入非法时区后审计页每次
 	// 轮询都记一条 error 淹没真实故障，且恢复无「已恢复」信号（与日志统计
 	// 阈值读取同域口径分裂）。读失败与「值非法」用不同 key 区分。
-	if err := db.DB.QueryRow("SELECT COALESCE(timezone,?) FROM global_config WHERE id=1", db.DefaultTimezone).Scan(&tzStr); err != nil {
+	if err := db.DB.QueryRowContext(c.Request.Context(), "SELECT COALESCE(timezone,?) FROM global_config WHERE id=1", db.DefaultTimezone).Scan(&tzStr); err != nil {
 		services.LogConfigReadFailure("audit-log-timezone", fmt.Errorf("审计日志筛选时区读取失败（按 UTC 继续）: %w", err))
 	} else if l, lerr := time.LoadLocation(tzStr); lerr == nil {
 		services.LogConfigReadRecovered("audit-log-timezone")

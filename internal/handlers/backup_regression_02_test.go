@@ -313,8 +313,8 @@ func TestImportAccessLogFormatGate(t *testing.T) {
 		if err := db.DB.QueryRow(`SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1`).Scan(&stored); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(stored, "request>headers>X-API-Key -> delete") {
-			t.Fatalf("stored format=%q, want 归一携带 X-API-Key 脱敏行（与保存侧同门）", stored)
+		if !strings.Contains(stored, accessLogRedactionLine) {
+			t.Fatalf("stored format=%q, want 归一携带 API Key 脱敏行（与保存侧同门）", stored)
 		}
 	})
 	t.Run("预览同门", func(t *testing.T) {

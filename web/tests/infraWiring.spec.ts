@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { code, member, section, source } from './_helpers.ts'
+import { escapeHtml, withCodeTrailingBreak } from '../src/utils/escape.ts'
 import { PAGE_IDS } from '../src/utils/pageIds.ts'
 import { SETTINGS_TAB_IDS } from '../src/utils/settingsPages.ts'
 
@@ -128,4 +129,36 @@ test('语法高亮：首帧转义文本 + 停顿后高亮（与 CodeEditor 同�
   assert.match(watcher, /debounce: 160/)
   assert.match(highlight, /maxWait: 500/)
   assert.match(highlight, /highlighted\.value = highlightCode\(content, language\)/)
+})
+
+test('代码编辑器首帧与键入即时回显：转义纯文本兜底，Prism 高亮随后覆盖', () => {
+  const editor = code('src/components/CodeEditor.vue')
+  // textarea 的文字是透明的，屏幕上可见文本全部来自高亮层：首帧若留空、键入若
+  // 只 emit 不回显，字符要等到下一轮防抖（最长 500ms）才出现。
+  assert.match(
+    editor,
+    /shallowRef\(withCodeTrailingBreak\(escapeHtml\(props\.modelValue\), props\.modelValue\)\)/,
+    '首帧高亮层必须是转义纯文本（既回显又守住 v-html 注入面）',
+  )
+  const onInput = member(editor, 'const onInput = (e: Event) =>')
+  const echoed = onInput.indexOf('highlighted.value = withCodeTrailingBreak(escapeHtml(value), value)')
+  const emitted = onInput.indexOf("emit('update:modelValue', value)")
+  assert.ok(echoed > 0, '键入必须同步写入转义纯文本')
+  assert.ok(emitted > echoed, '兜底写入先于 emit（父级重渲染前高亮层已有字符）')
+  // 尾换行补 `<br>` 收敛到单源：组件内不再各自拼字符串
+  assert.match(
+    editor,
+    /highlighted\.value = withCodeTrailingBreak\(highlightCode\(props\.modelValue, props\.language\), props\.modelValue\)/,
+    '防抖高亮同样走 withCodeTrailingBreak',
+  )
+  assert.doesNotMatch(editor, /html \+ '<br>'/, '不得在组件内拼尾换行 `<br>`')
+  assert.match(editor, /import \{ escapeHtml, withCodeTrailingBreak \} from '@\/utils\/escape'/)
+})
+
+test('尾换行补齐与转义的实际行为（代码块 v-html 的注入面单源）', () => {
+  assert.equal(escapeHtml('<b>&"x"\'</b>'), '&lt;b&gt;&amp;&quot;x&quot;&#39;&lt;/b&gt;')
+  assert.equal(withCodeTrailingBreak('A', 'x\n'), 'A<br>', '源码以换行结尾时高亮层补一个 <br>（否则末行错位）')
+  assert.equal(withCodeTrailingBreak('A', 'x'), 'A')
+  // 补齐作用在已转义/已高亮的 HTML 上：不得触发二次转义或把 `<br>` 也转义掉
+  assert.equal(withCodeTrailingBreak(escapeHtml('<i>\n'), '<i>\n'), '&lt;i&gt;\n<br>')
 })

@@ -24,24 +24,28 @@ registerModuleHooks({ '@/utils/api': STUB_API })
 
 test('默认访问日志格式末行与后端脱敏注入行逐字一致（跨栈钉）', () => {
   const go = repoCode('internal/handlers/caddy.go')
-  const constBlock = section(go, 'const accessLogRedactionLine', '\n')
-  const match = constBlock.match(/accessLogRedactionLine = "([^"]+)"/)
-  assert.ok(match, '后端 accessLogRedactionLine 常量缺失')
+  // 后端脱敏行不再写字面量：路径从 internal/accesslog 单源派生（引擎 filter 精确
+  // 匹配 http.Header 的规范化键名，任何手写拼写副本都可能悄悄漂移成不命中）。
+  assert.match(go, /var accessLogRedactionLine = accesslog\.APIKeyHeaderPath\(\) \+ " -> delete"/, '后端脱敏行必须从 accesslog 单源派生')
+  const paths = repoCode('internal/accesslog/paths.go')
+  assert.match(paths, /textproto\.CanonicalMIMEHeaderKey\(APIKeyHeaderName\)/, '脱敏路径必须由头名规范化派生（禁止手写字面量）')
   const lines = DEFAULT_ACCESS_LOG_FORMAT.split('\n')
-  assert.equal(lines[lines.length - 1], match[1], '模板末行必须等于后端强制注入的脱敏行')
-  // db.go 迁移补齐同一行（既有格式升级路径同源）：迁移以「路径 + " -> delete"」
-  // 组合出规范行，路径常量必须与模板末行同值。
+  assert.equal(lines[lines.length - 1], 'request>headers>X-Api-Key -> delete', '模板末行必须是引擎真正命中的规范化键形态')
+  // 落库归一与启动迁移消费同一单源：db.go 追加规范行、并以大小写不敏感谓词移除
+  // 既有行（旧模板的字面量拼写与规范拼写是同一个 HTTP 头，不得留两行）。
   const db = repoCode('internal/db/db.go')
-  assert.match(db, /const apiKeyPath = "request>headers>X-API-Key"/, 'db.go 迁移的脱敏路径常量漂移')
+  assert.match(db, /apiKeyPath := accesslog\.APIKeyHeaderPath\(\)/, 'db.go 迁移的脱敏路径必须取单源')
   assert.match(db, /apiKeyPath\+\s*" -> delete"/, 'db.go 迁移必须追加 delete 动作（与模板末行同形）')
-  // 第三处（匹配/移除侧）：normalizeAccessLogRedaction 用独立 `path` 常量决定
-  // 移除哪些既有行——它漂移时输出行仍取模板末行，库内格式与面板展示会分叉。
-  assert.match(go, /const path = "request>headers>X-API-Key"/, 'caddy.go 移除侧脱敏路径常量漂移（与写入侧必须同源）')
-  assert.equal(
-    [...go.matchAll(/request>headers>X-API-Key/g)].length,
-    2,
-    '脱敏路径字面量在 caddy.go 只允许写入行常量与移除侧 path 两处（新增副本即失去单源）',
-  )
+  assert.match(db, /accesslog\.IsAPIKeyPath\(parts\[0\]\)/, 'db.go 迁移必须用大小写不敏感谓词移除既有行')
+  assert.match(go, /accesslog\.IsAPIKeyPath\(r\.Path\)/, '写侧归一必须用同一谓词识别既有行')
+  // 字面量只允许出现在单源包内部（APIKeyHeaderName 与 IsAPIKeyPath 的比较基准）。
+  for (const [name, source] of [
+    ['internal/handlers/caddy.go', go],
+    ['internal/db/db.go', db],
+  ] as const) {
+    const literal = [...source.matchAll(/request>headers>X-API-Key/g)].length
+    assert.equal(literal, 0, `${name} 不得再出现脱敏路径字面量（单源在 internal/accesslog）`)
+  }
 })
 
 test('escapeHtml 覆盖五个 HTML 危险字符（含引号属性上下文）', () => {

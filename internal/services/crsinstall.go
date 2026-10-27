@@ -662,6 +662,12 @@ func (m *CRSUpdateManager) restoreBackup() {
 func (m *CRSUpdateManager) restoreBackupInLock() bool {
 	rulesPath := filepath.Join(m.liveDir(), "rules")
 	rulesBak := crsTransientPath(m.liveDir(), "rules.bak")
+	// 辅助文件的恢复结果与规则树同权：本运行创建过的每类备份只要没成功还原，
+	// 聚合结果就是 false。只核对规则树会让 setup/stock/overrides 的恢复失败
+	// 被「树已还原」掩盖——回滚方随即把 prevTag 写回 VERSION 标记与版本行，
+	// 留下「旧 rules + 新 setup/stock/overrides + 旧版本号」混合代：下一次更新
+	// 以新 stock 为基线求差，用户自定义行被误迁移、上游默认行被当成自定义。
+	auxRestored := true
 	// 契约：true 仅当「live 规则树已完整还原到更新前状态」——无本运行备份可
 	// 消费（首装/带外清空旧树后直达交换）或备份不可读（带外清理）时，live
 	// 仍是新树，必须上报 false：回滚方据此跳过 VERSION 标记/DB 版本行回写，
@@ -684,9 +690,14 @@ func (m *CRSUpdateManager) restoreBackupInLock() bool {
 		if _, err := os.Stat(setupBak); err == nil {
 			if err := copyFile(setupBak, setupPath); err != nil {
 				Logf("error", "crs update: failed to restore crs-setup.conf backup: %v", err)
+				auxRestored = false
 			} else {
 				os.Remove(setupBak)
 			}
+		} else {
+			// 本运行创建过的备份已不在（带外清除/搬移）：setup 未回到更新前
+			// 状态，不得按「无需还原」处理。
+			auxRestored = false
 		}
 	}
 	stockPath := filepath.Join(m.liveDir(), "crs-setup.stock.conf")
@@ -699,9 +710,13 @@ func (m *CRSUpdateManager) restoreBackupInLock() bool {
 		if _, err := os.Stat(stockBak); err == nil {
 			if err := copyFile(stockBak, stockPath); err != nil {
 				Logf("error", "crs update: failed to restore crs-setup.stock.conf backup: %v", err)
+				auxRestored = false
 			} else {
 				os.Remove(stockBak)
 			}
+		} else {
+			// 同 setup 段：本运行备份已不在=未还原。
+			auxRestored = false
 		}
 	}
 	overridesPath := filepath.Join(m.liveDir(), "zz-user-overrides.conf")
@@ -709,25 +724,30 @@ func (m *CRSUpdateManager) restoreBackupInLock() bool {
 	if !m.overridesBakCreated {
 		// 非本运行创建的.bak 不得消费：跨运行保全副本在下次成功更新
 		// 前始终可用，且不会把 overrides 还原到两版本之前。
-		return treeRestored && crsRulesTreeIntact(rulesPath)
+		return treeRestored && auxRestored && crsRulesTreeIntact(rulesPath)
 	}
 	if _, err := os.Stat(overridesBak); err != nil {
-		return treeRestored && crsRulesTreeIntact(rulesPath)
-	}
-	// 仅还原成功才消费.bak：内容还原或空标记移除失败时保留备份，
-	// 否则「旧 setup + 新 overrides」双重应用状态失去唯一恢复副本、不可自愈
-	// （对照上方 setup 段：copyFile 失败记日志保留 bak, 后不再 return）。
-	if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
-		if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
-			Logf("error", "crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
-			return treeRestored && crsRulesTreeIntact(rulesPath)
+		// 本运行已创建 overrides.bak 但备份消失：overrides 未回到更新前状态，
+		// 同 setup/stock 段按未还原上报。
+		auxRestored = false
+	} else {
+		// 仅还原成功才消费.bak：内容还原或空标记移除失败时保留备份，
+		// 否则「旧 setup + 新 overrides」双重应用状态失去唯一恢复副本、不可自愈
+		// （对照上方 setup 段：copyFile 失败记日志保留 bak, 后不再 return）。
+		if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
+			if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
+				Logf("error", "crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
+				auxRestored = false
+			}
+		} else if err := copyFile(overridesBak, overridesPath); err != nil {
+			Logf("error", "crs update: failed to restore zz-user-overrides.conf backup: %v", err)
+			auxRestored = false
 		}
-	} else if err := copyFile(overridesBak, overridesPath); err != nil {
-		Logf("error", "crs update: failed to restore zz-user-overrides.conf backup: %v", err)
-		return treeRestored && crsRulesTreeIntact(rulesPath)
+		if auxRestored {
+			os.Remove(overridesBak)
+		}
 	}
-	os.Remove(overridesBak)
-	return treeRestored && crsRulesTreeIntact(rulesPath)
+	return treeRestored && auxRestored && crsRulesTreeIntact(rulesPath)
 }
 
 // restoreRulesBackup moves rules.bak back into place without ever installing a

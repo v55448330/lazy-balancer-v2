@@ -91,7 +91,15 @@ func StopTimezoneRefreshWithin(within time.Duration) bool {
 	return timezoneRefresh.stopWithin(within, timezoneRefreshLogLabel)
 }
 
-func refreshLocation() error {
+func refreshLocation() (err error) {
+	// 后台 worker 可能存活到测试/关停收尾之后：此时数据库句柄可能已关闭或
+	// 被并发置空，driver 内部会在 conn 阶段 panic。后台刷新不得拖垮进程，
+	// 转为错误交由状态机留痕与下轮重试。
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("refresh timezone panic: %v", r)
+		}
+	}()
 	database := db.GetDB()
 	if database == nil {
 		return nil

@@ -80,13 +80,13 @@ func seedServingNode(t *testing.T, name, lastSeenUTC string, version, interval i
 // 跑，diff≈8h 触发离线告警污染共享日志；2026-10-04 测试污染修复）。
 func newServingTestEnv(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	// 日志目录是包级状态：用例结束必须还原，否则后续用例把任务日志写进已
 	// 删除的临时目录（同包 cert_renewal_demote_test 的既有范式）。

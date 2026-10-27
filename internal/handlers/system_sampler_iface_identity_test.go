@@ -29,6 +29,7 @@ func seedLastNetStatsForTest(t *testing.T, bytesIn, bytesOut uint64, identity st
 // 变成聚合值，新旧计数器不可比。旧判据要求新旧身份都非空，恰好漏掉「接口消失」
 // 方向——聚合后的历史总流量被当成一轮速率（数量级假峰值）。
 func TestGetRealtimeTraffic_rebaselinesWhenDefaultRouteDisappears(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
@@ -61,6 +62,7 @@ func TestGetRealtimeTraffic_rebaselinesWhenDefaultRouteDisappears(t *testing.T) 
 
 // 反向：基线为聚合口径（无单一接口身份）时默认路由恢复，同样不可比。
 func TestGetRealtimeTraffic_rebaselinesWhenDefaultRouteReturns(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
@@ -93,6 +95,7 @@ func TestGetRealtimeTraffic_rebaselinesWhenDefaultRouteReturns(t *testing.T) {
 // 聚合口径内成员变化（网卡下线 + 新网卡上线）时，成员集合不同则聚合总量含义
 // 不同：身份串必须随成员变化，否则跨成员集差分给出假峰值。
 func TestGetRealtimeTraffic_aggregateIdentityTracksMembers(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
@@ -142,6 +145,7 @@ func TestGetRealtimeTraffic_aggregateIdentityTracksMembers(t *testing.T) {
 
 // 聚合身份串须与 /proc/net/dev 行序无关：否则行序抖动会误触发基线重建。
 func TestGetRealtimeTraffic_aggregateIdentityStableAcrossRowOrder(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
 	rowA := "eth0: 100 0 0 0 0 0 0 0 100 0 0 0 0 0 0 0\neth1: 200 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n"

@@ -938,6 +938,9 @@ const deploymentWindowNullSettle = 10 * time.Minute
 // 返回（重排数, error）：读失败必须上抛（30s 补扫任务的失败终态），否则长期读
 // 故障下断链部署重试静默停摆而任务监控全绿。单行 Scan 失败记入返回错误（该行
 // 不可信），其余行继续收敛。
+// 逐条动作失败（部署重试登记 / 材料丢失行重排）与读失败同权：只写应用日志时
+// 本轮仍报「补扫完成」，而该行实际上没有回到调度器——任务监控看不到仍有证书
+// 工作未恢复（104 轮补建/滞留/续期已聚合，补扫两条路径此处收口）。
 func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, err error) {
 	if db.DB == nil {
 		return 0, nil
@@ -996,6 +999,8 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, 
 		_ = rows.Close()
 		return rescheduled, fmt.Errorf("遍历断链部署重试: %w", err)
 	}
+	// 逐条动作失败聚合器：与 scanFailures 同在返回值里体现（失败轮）。
+	var actionErr error
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
 		Logf("error", "resume deployment retries: close rows failed: %v", err)
@@ -1014,7 +1019,9 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, 
 		if !job.hasCertMaterial {
 			// 部署生命周期 + 无材料：不是「等部署」，是「材料根本没落库」——
 			// 转 queued 重新签发是本行唯一的回收通道。
-			s.requeueLostMaterialCertJob(job.id, job.ruleID, job.jobDomain, job.providerID, job.status)
+			if requeueErr := s.requeueLostMaterialCertJob(job.id, job.ruleID, job.jobDomain, job.providerID, job.status); requeueErr != nil {
+				actionErr = errors.Join(actionErr, requeueErr)
+			}
 			continue
 		}
 		// 周期化(30s ticker)后必须跳过已持活跃
@@ -1051,15 +1058,18 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, 
 		// 只有真正登记了 timer 才算「部署重建」。暂停/停止/规则补偿屏障
 		// 期间本轮未调度——计数与摘要行必须如实反映，否则任务监控会在导入/
 		// 删除补偿窗口每 30s 谎报一次动作。
-		if err := s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, delay); err != nil {
-			if !errors.Is(err, ErrCertificateQueueInactive) && !errors.Is(err, ErrCertificateDeploymentRetryBlocked) {
-				Logf("warn", "证书任务 %d：部署重试登记失败（本轮不计入补扫）: %v", job.id, err)
+		if retryErr := s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, delay); retryErr != nil {
+			// 暂停/停止/规则补偿屏障是「本轮不登记」的有意形态，不算失败；
+			// 其余（DB/队列/登记错误）必须让本轮进入失败终态。
+			if !errors.Is(retryErr, ErrCertificateQueueInactive) && !errors.Is(retryErr, ErrCertificateDeploymentRetryBlocked) {
+				Logf("warn", "证书任务 %d：部署重试登记失败（本轮不计入补扫）: %v", job.id, retryErr)
+				actionErr = errors.Join(actionErr, fmt.Errorf("证书任务 %d（规则 %s）：部署重试登记失败: %w", job.id, job.ruleID, retryErr))
 			}
 			continue
 		}
 		rescheduled++
 	}
-	return rescheduled, nil
+	return rescheduled, actionErr
 }
 
 // requeueLostMaterialCertJob 把「部署生命周期 + 无证书材料」的行转回 queued
@@ -1070,13 +1080,15 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() (rescheduled int, 
 //
 // 守卫与滞留重入队同族：在途任务不得改态（会把执行中的行置回 queued），
 // 队列未就绪时不动作（下轮补扫重试）。
-func (s *CertificateService) requeueLostMaterialCertJob(jobID int, ruleID, domain string, providerID int, fromStatus string) {
+// 返回错误仅代表真实的入队/写库失败：队列未就绪（qm==nil）、在途任务、
+// CAS 冲突（changed=false）都属「本轮不动作」的有意形态，不算失败。
+func (s *CertificateService) requeueLostMaterialCertJob(jobID int, ruleID, domain string, providerID int, fromStatus string) error {
 	qm := GetCAQueueManager()
 	if qm == nil {
-		return
+		return nil
 	}
 	if qm.IsJobActive(jobID) {
-		return
+		return nil
 	}
 	_, changed, err := qm.EnqueueIfActive(providerID, jobID, ruleID, domain, func() (int, bool, error) {
 		err := transitionJob(db.DB, jobID, deploymentLifecycleJobStatuses, "queued",
@@ -1088,14 +1100,15 @@ func (s *CertificateService) requeueLostMaterialCertJob(jobID int, ruleID, domai
 	})
 	if err != nil {
 		Logf("warn", "证书任务 %d：材料丢失行重新排队失败（下一周期重试）: %v", jobID, err)
-		return
+		return fmt.Errorf("证书任务 %d（规则 %s）：材料丢失行重新排队失败: %w", jobID, ruleID, err)
 	}
 	if !changed {
-		return
+		return nil
 	}
 	TaskLogf("cert-waiting-ca", "rescan", "证书任务 %d（规则 %s）：%s 行缺证书材料，已重新排队签发", jobID, ruleID, fromStatus)
 	RecordAuditLog("system", "重新签发", "证书任务",
 		FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("deployment_material_lost")), "")
+	return nil
 }
 
 func (s *CertificateService) Start() {
@@ -1520,6 +1533,8 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 	}
 	defer rows.Close()
 	rebuilt := 0
+	// 逐行物化失败聚合器：健康行继续重建，失败行让本轮返回错误（失败终态）。
+	var actionErr error
 	seenRules := make(map[string]bool)
 	for rows.Next() {
 		var ruleID, domain, certPEM, keyPEM, ruleDomain string
@@ -1557,6 +1572,10 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 		changed, materializeErr := materializeCertPair(ruleID, certPEM, keyPEM)
 		if materializeErr != nil {
 			Logf("error", "cert reconcile: rebuild certificate files for %s failed: %v", ruleID, materializeErr)
+			// 单行物化失败（只读目录/磁盘满/坏 PEM）必须进入失败轮：只写应用日志
+			// 时任务日志仍写「状态对账完成 0」，而规则证书文件实际仍缺失，下次
+			// Caddy 重载/重启该规则无证书可用。
+			actionErr = errors.Join(actionErr, fmt.Errorf("重建证书文件 %s: %w", ruleID, materializeErr))
 			continue
 		}
 		if !changed {
@@ -1577,7 +1596,7 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
 	}
 
-	return rebuilt, nil
+	return rebuilt, actionErr
 }
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -1586,6 +1605,28 @@ func fileExists(path string) bool {
 
 func RequeueNonTerminalCertJobs() error {
 	return requeueNonTerminalCertJobs(context.Background(), scheduleCertificateDeploymentRetry)
+}
+
+// CountNonTerminalCertJobs 统计 cert_jobs 中「非终态」任务行数
+// （status ∉ {issued,failed,disabled}，与 JobIsTerminal / 启动恢复同源）。
+// 唯一消费方是配置导入/还原的披露：证书队列未激活时这些行本窗口不会推进
+// 属 fail-safe 的有意行为（不越过用户「停止签发」的意图），但必须让管理员
+// 在响应里看到——否则任务列表显示进行中而实际没有 worker。只读统计，不做
+// 任何状态推进。
+func CountNonTerminalCertJobs(ctx context.Context) (int, error) {
+	placeholders := make([]string, 0, len(nonTerminalJobStatuses))
+	args := make([]any, 0, len(nonTerminalJobStatuses))
+	for _, status := range nonTerminalJobStatuses {
+		placeholders = append(placeholders, "?")
+		args = append(args, status)
+	}
+	var count int
+	if err := db.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM cert_jobs WHERE status IN ("+strings.Join(placeholders, ",")+")",
+		args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("统计非终态证书任务: %w", err)
+	}
+	return count, nil
 }
 
 func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration) error) error {

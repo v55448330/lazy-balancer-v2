@@ -18,17 +18,27 @@ func TestRunMigrationsNormalizesAPIKeyAccessLogRedaction(t *testing.T) {
 		{
 			name:   "appends canonical line",
 			stored: "request>remote_ip -> src",
-			want:   "request>remote_ip -> src\nrequest>headers>X-API-Key -> delete",
+			want:   "request>remote_ip -> src\nrequest>headers>X-Api-Key -> delete",
 		},
 		{
 			name:   "replaces rename line",
 			stored: "request>remote_ip -> src\nrequest>headers>X-API-Key -> apikey",
-			want:   "request>remote_ip -> src\nrequest>headers>X-API-Key -> delete",
+			want:   "request>remote_ip -> src\nrequest>headers>X-Api-Key -> delete",
+		},
+		{
+			name:   "converges legacy literal spelling to canonical",
+			stored: "request>remote_ip -> src\nrequest>headers>X-API-Key -> delete",
+			want:   "request>remote_ip -> src\nrequest>headers>X-Api-Key -> delete",
 		},
 		{
 			name:   "idempotent on canonical line",
-			stored: "request>remote_ip -> src\nrequest>headers>X-API-Key -> delete",
-			want:   "request>remote_ip -> src\nrequest>headers>X-API-Key -> delete",
+			stored: "request>remote_ip -> src\nrequest>headers>X-Api-Key -> delete",
+			want:   "request>remote_ip -> src\nrequest>headers>X-Api-Key -> delete",
+		},
+		{
+			name:   "collapses mixed spellings to one line",
+			stored: "request>headers>X-API-Key -> delete\nrequest>headers>X-Api-Key -> apikey",
+			want:   "request>headers>X-Api-Key -> delete",
 		},
 	}
 	for _, tc := range cases {
@@ -53,7 +63,7 @@ func TestRunMigrationsNormalizesAPIKeyAccessLogRedaction(t *testing.T) {
 			if tc.wantRaw {
 				return
 			}
-			if strings.Count(got, "request>headers>X-API-Key") != 1 {
+			if strings.Count(got, "request>headers>") != 1 {
 				t.Fatalf("脱敏行不唯一: %q", got)
 			}
 		})

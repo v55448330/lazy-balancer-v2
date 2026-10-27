@@ -1101,11 +1101,19 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				fmt.Errorf("目标主节点已降级为从节点(%d): %s", resp.StatusCode, strings.TrimSpace(string(body))))
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
-			// 401 是本服务集群凭据拒绝的唯一响应（clusterTokenAuth 对无效/
-			// 已撤销令牌），语义即「令牌被撤销」：重试不可能自愈，终止等待
-			// 人工重新注册或提升为主节点。
-			return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed,
-				fmt.Errorf("主节点拒绝本节点访问(%d): %w", resp.StatusCode, errSyncTokenRevoked))
+			// 只有能证明是本服务鉴权拒绝的 401 才判终止：服务端在 401 上带
+			// X-LB-Error-Code=cluster_token_invalid（旧主节点无该头时按既有
+			// 「集群凭证无效」文案兜底识别）。无码 401 只可能来自主节点前置
+			// 代理/身份网关的鉴权——它不代表令牌撤销，终止会让从节点永久停
+			// 同步且文案误导（与裸 403 同口径：可重试）。
+			revoked := resp.Header.Get("X-LB-Error-Code") == ClusterTokenInvalidErrorCode ||
+				strings.Contains(string(body), "集群凭证无效")
+			if revoked {
+				return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed,
+					fmt.Errorf("主节点拒绝本节点访问(%d): %w", resp.StatusCode, errSyncTokenRevoked))
+			}
+			return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError,
+				fmt.Errorf("主节点或其前置代理返回 401（非令牌撤销，稍后自动重试）: %s", strings.TrimSpace(string(body))))
 		}
 		if resp.StatusCode == http.StatusForbidden {
 			// 裸 403 不停留在本服务内：requireMaster 的 403 恒带

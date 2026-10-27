@@ -1,0 +1,190 @@
+// OIDC 回跳 fragment 接收契约行为验收（App.vue / Login.vue 共用 utils/oidcCallback）：
+//
+// 后端回调把登录令牌放在 `#/oidc/callback?token=…` 的 fragment 里，这条通道本身
+// 没有任何来源证明——任意链接都能携带**别人的有效 JWT**，让受害者浏览器的会话
+// 被换成攻击者账号（登录 CSRF / 会话替换）。契约三道门：
+//   1. 来源绑定：本标签页发起登录时写入 sessionStorage 的 nonce 必须与回调
+//      return_to 回显的 nonce 一致（构造链接不可能知道受害者浏览器的 nonce）。
+//   2. 载荷过滤：auth_method=oidc，且 fragment expires_at 与令牌 exp 一致。
+//   3. 失败文案白名单：fragment 的 error 原文不可信，未登记文案不得原样呈现。
+//
+// 另含跨栈钉：后端 fail() 的固定文案集合与前端白名单逐条对表（漏一条即降级为
+// 通用文案，可诊断性无声丢失）。
+//
+// 运行：cd web && npm test
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import {
+  OIDC_APP_NONCE_KEY,
+  OIDC_REJECTION_TEXT,
+  createOidcAppNonce,
+  oidcErrorMessage,
+  splitOidcReturnTo,
+  verifyOidcCallbackToken,
+  withOidcAppNonce,
+} from '../src/utils/oidcCallback.ts'
+import { code, repoCode, section } from './_helpers.ts'
+
+const GENERIC = '登录失败，请重新登录'
+
+const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
+
+/** 构造三段式 JWT（签名段不参与前端形状校验）。 */
+const jwt = (payload: Record<string, unknown>): string => `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.sig`
+
+const now = 1_760_000_000
+const oidcPayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  user_id: 7,
+  username: 'alice',
+  auth_method: 'oidc',
+  exp: now + 600,
+  ...overrides,
+})
+
+const verdictOf = (overrides: Partial<Parameters<typeof verifyOidcCallbackToken>[0]> = {}) =>
+  verifyOidcCallbackToken({
+    token: jwt(oidcPayload()),
+    expiresAt: String(now + 600),
+    nonce: 'abc123',
+    expectedNonce: 'abc123',
+    now,
+    ...overrides,
+  })
+
+test('来源绑定：nonce 命中才建会话（命中返回账号名）', () => {
+  assert.deepEqual(verdictOf(), { ok: true, username: 'alice' })
+})
+
+test('来源绑定：本浏览器没有发起过登录（无 nonce）一律拒绝', () => {
+  assert.deepEqual(verdictOf({ expectedNonce: '' }), { ok: false, reason: 'nonce-missing' })
+})
+
+test('来源绑定：回调 nonce 与本次发起不一致（构造链接）拒绝', () => {
+  assert.deepEqual(verdictOf({ nonce: 'attacker' }), { ok: false, reason: 'nonce-mismatch' })
+  // 缺失 nonce 参数同样不满足（空串 !== 期望值）
+  assert.deepEqual(verdictOf({ nonce: '' }), { ok: false, reason: 'nonce-mismatch' })
+})
+
+test('载荷过滤：本地账号令牌（无 auth_method=oidc）被拒绝', () => {
+  // 攻击者用本地账号登录拿到的 JWT 拼进链接——这条必须挡住
+  assert.deepEqual(
+    verdictOf({ token: jwt({ username: 'attacker', exp: now + 600 }) }),
+    { ok: false, reason: 'not-oidc' },
+  )
+})
+
+test('载荷过滤：expires_at 与令牌 exp 不一致或缺席一律拒绝', () => {
+  assert.deepEqual(verdictOf({ expiresAt: String(now + 9000) }), { ok: false, reason: 'expiry-mismatch' })
+  assert.deepEqual(verdictOf({ expiresAt: '' }), { ok: false, reason: 'expiry-mismatch' })
+  assert.deepEqual(verdictOf({ token: jwt(oidcPayload({ exp: undefined })) }), { ok: false, reason: 'expiry-mismatch' })
+})
+
+test('载荷过滤：已过期令牌拒绝（即使 expires_at 与 exp 自洽）', () => {
+  assert.deepEqual(
+    verdictOf({ token: jwt(oidcPayload({ exp: now - 1 })), expiresAt: String(now - 1) }),
+    { ok: false, reason: 'expired' },
+  )
+})
+
+test('载荷过滤：非三段式 / 载荷不可解析的令牌拒绝', () => {
+  assert.deepEqual(verdictOf({ token: 'not-a-jwt' }), { ok: false, reason: 'malformed' })
+  assert.deepEqual(verdictOf({ token: 'a.%%%not-base64%%%.c' }), { ok: false, reason: 'malformed' })
+  assert.deepEqual(verdictOf({ token: `${b64url({})}.${b64url([1, 2])}.sig` }), { ok: false, reason: 'malformed' })
+})
+
+test('拒绝文案表覆盖全部拒绝原因（否则界面会渲染 undefined）', () => {
+  for (const reason of ['malformed', 'not-oidc', 'expiry-mismatch', 'expired', 'nonce-missing', 'nonce-mismatch'] as const) {
+    const text = OIDC_REJECTION_TEXT[reason]
+    assert.equal(typeof text, 'string')
+    assert.ok(text.length > 0, `${reason} 缺文案`)
+    assert.notEqual(text, GENERIC, `${reason} 必须有针对性文案，不得统一成通用失败`)
+  }
+})
+
+test('nonce 往返：随 return_to 携带并在回调侧剥离（页面导航不带内部参数）', () => {
+  const nonce = createOidcAppNonce()
+  assert.match(nonce, /^[0-9a-f]{32}$/)
+  assert.equal(withOidcAppNonce('/rules', nonce), `/rules?app_nonce=${nonce}`)
+  assert.equal(withOidcAppNonce('/rules?page=2', nonce), `/rules?page=2&app_nonce=${nonce}`)
+  assert.deepEqual(splitOidcReturnTo(`/rules?app_nonce=${nonce}`), { path: '/rules', nonce })
+  assert.deepEqual(splitOidcReturnTo(`/rules?page=2&app_nonce=${nonce}`), { path: '/rules?page=2', nonce })
+  assert.deepEqual(splitOidcReturnTo('/dashboard'), { path: '/dashboard', nonce: '' })
+  // 两次生成不重复（否则同一 nonce 可预置）
+  assert.notEqual(createOidcAppNonce(), createOidcAppNonce())
+})
+
+// ── 失败文案白名单（fragment 内容不可信） ─────────────────────
+test('失败文案：后端固定文案原样透出（保留可诊断性）', () => {
+  assert.equal(oidcErrorMessage('账号已被禁用'), '账号已被禁用')
+  assert.equal(oidcErrorMessage('OIDC 令牌交换失败，请稍后重试'), 'OIDC 令牌交换失败，请稍后重试')
+})
+
+test('失败文案：RFC 标准错误码映射为固定中文文案', () => {
+  assert.equal(oidcErrorMessage('access_denied'), '授权被拒绝')
+  assert.equal(oidcErrorMessage('invalid_request'), '请求无效')
+  // 后端口径「提供商拒绝授权: <标准码>」只翻译标准码，不原文透出后缀
+  assert.equal(oidcErrorMessage('提供商拒绝授权: access_denied'), '授权被拒绝')
+  assert.equal(oidcErrorMessage('提供商拒绝授权: made-up-code'), '授权被拒绝')
+})
+
+test('失败文案：任意链接投放的陌生文案／HTML／超长串归一到通用文案', () => {
+  const injected = '会话已过期，请重新登录并联系 IT 分机 8888'
+  assert.equal(oidcErrorMessage(injected), GENERIC)
+  assert.equal(oidcErrorMessage('<img src=x onerror=alert(1)>'), GENERIC)
+  assert.equal(oidcErrorMessage('x'.repeat(200)), GENERIC)
+  assert.equal(oidcErrorMessage(''), GENERIC)
+})
+
+test('失败文案：原型键不得穿透查表（constructor/toString 等）', () => {
+  for (const key of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+    assert.equal(oidcErrorMessage(key), GENERIC, `${key} 命中了原型链`)
+  }
+})
+
+test('跨栈：后端 fail() 的每条固定文案都在前端白名单内（文案漂移即红）', () => {
+  const backend = repoCode('internal/handlers/auth_oidc.go')
+  const literals = [...backend.matchAll(/fail\("([^"]+)"/g)].map((m) => m[1])
+  assert.ok(literals.length > 15, `后端失败文案解析失败（${literals.length} 条）`)
+  const missing = literals.filter((text) => oidcErrorMessage(text) === GENERIC)
+  assert.deepEqual(missing, [], `以下后端文案未纳入前端白名单：${missing.join('；')}`)
+})
+
+// ── 接线：App / Login 必须按契约顺序执行 ──────────────────────
+test('App：先验令牌再建会话，拒绝分支不得触碰现有会话', () => {
+  const app = code('src/App.vue')
+  const branch = section(app, 'if (oidcToken) {', '} else if (hasLoginTicket) {')
+  const verifyAt = branch.indexOf('verifyOidcCallbackToken({')
+  const applyAt = branch.indexOf('authStore.applyOIDCToken(oidcToken)')
+  assert.ok(verifyAt > 0 && applyAt > verifyAt, '必须先验来源/载荷，再写会话')
+  // 两处 apply 都必须位于 verdict.ok 分支之内（拒绝分支不得替换会话）
+  assert.doesNotMatch(branch.slice(branch.indexOf('if (!verdict.ok)'), verifyAt + 400), /applyOIDCToken/)
+  assert.match(branch, /sessionStorage\.removeItem\(OIDC_APP_NONCE_KEY\)/, 'nonce 必须一次性消费')
+  assert.match(branch, /OIDC_REJECTION_TEXT\[verdict\.reason\]/, '拒绝文案取原因表，不得原文回显')
+})
+
+test('App：已登录会话被 URL 令牌替换须显式确认（取消则保持当前登录）', () => {
+  const app = code('src/App.vue')
+  const branch = section(app, 'if (oidcToken) {', '} else if (hasLoginTicket) {')
+  assert.match(branch, /authStore\.token && !isTokenExpired\(authStore\.token\)/, '仅当已有有效会话时要求确认')
+  assert.match(branch, /ElMessageBox\.confirm\(/, '换号必须二次确认')
+  assert.match(branch, /已保持当前登录/, '取消分支必须明确不切换')
+})
+
+test('App / Login：失败文案都经白名单映射，不直接拼接 fragment 原文', () => {
+  for (const view of ['src/App.vue', 'src/views/Login.vue']) {
+    const text = code(view)
+    assert.match(text, /oidcErrorMessage\(/, `${view} 未走文案白名单`)
+    assert.doesNotMatch(text, /OIDC 登录失败：\$\{oidc(?:Error|_error)\}/, `${view} 仍原样透出 fragment 文案`)
+  }
+})
+
+test('Login：发起登录时写入本标签页 nonce 并随 return_to 往返', () => {
+  const login = code('src/views/Login.vue')
+  const start = section(login, 'const goOIDCLogin = () => {', 'const onPageShow = (e: PageTransitionEvent) => {')
+  assert.match(start, /sessionStorage\.setItem\(OIDC_APP_NONCE_KEY, nonce\)/)
+  // 存储键名本身是跨标签页契约：改名会让已在途的 return_to 往返读到空 nonce
+  assert.equal(OIDC_APP_NONCE_KEY, 'oidc_app_nonce')
+  assert.match(start, /withOidcAppNonce\(`\/\$\{authStore\.currentPage\}`, nonce\)/)
+})

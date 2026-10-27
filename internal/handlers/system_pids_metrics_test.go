@@ -51,6 +51,7 @@ func TestParseNprocLimit(t *testing.T) {
 }
 
 func TestReadPidsUsage_v2AndLimitSource(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
 	files := map[string]string{
@@ -76,6 +77,7 @@ func TestReadPidsUsage_v2AndLimitSource(t *testing.T) {
 
 // cgroup v1 落点在 /sys/fs/cgroup/pids/ 子目录：v2 文件缺失时必须回落。
 func TestReadPidsUsage_v1Fallback(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
 	files := map[string]string{
@@ -100,6 +102,7 @@ func TestReadPidsUsage_v1Fallback(t *testing.T) {
 
 // pids 采集失败只降级该分项：其余指标照常返回，PIDs 值置零由展示层标注。
 func TestGetSystemMetrics_pidsFailureDegradesOnlyThatPart(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDF := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)

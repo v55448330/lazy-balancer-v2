@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -113,7 +114,7 @@ func TestGetAuditLogSizeBytes_shutdownBetweenHandleCheckAndQueryFallsBack(t *tes
 	})
 
 	var got int64
-	requireNoPanic(t, func() { got = getAuditLogSizeBytes() })
+	requireNoPanic(t, func() { got = getAuditLogSizeBytesContext(context.Background()) })
 	if !called {
 		t.Fatal("audit log threshold interleaving was not exercised")
 	}

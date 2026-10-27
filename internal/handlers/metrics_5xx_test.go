@@ -61,6 +61,7 @@ func TestGetRuleMetricsHistory_5xxHidesInternalError(t *testing.T) {
 
 // 单规则 TCP 指标读取上游失败：固定文案 + 运行日志留痕（不回显表名/SQL）。
 func TestGetRuleMetrics_tcpUpstreamReadFailureHidesInternalError(t *testing.T) {
+	withIsolatedGlobal(t)
 	database := initializeRuleFeatureTestDB(t)
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled)
 		VALUES ('lb_tcp_metrics_5xx','tcp-metrics-5xx','tcp','',9000,1)`); err != nil {
@@ -215,6 +216,7 @@ func TestGetMetricsDashboard_failureMessageHidesUpstreamDetails(t *testing.T) {
 // 抓取截止时间单源：HTTP 客户端不设独立超时——否则它恒先于自身上限触发，
 // 「自身超时/取消不写负缓存」的分支在真实 HTTP 路径永不可达。
 func TestLoadCaddyMetricsSnapshot_selfTimeoutSkippedFromNegativeCache(t *testing.T) {
+	withIsolatedGlobal(t)
 	if caddyMetricsHTTPClient.Timeout != 0 {
 		t.Fatalf("caddyMetricsHTTPClient.Timeout=%v, want 0（截止时间只由 caddyMetricsFetchTimeout 表达）", caddyMetricsHTTPClient.Timeout)
 	}

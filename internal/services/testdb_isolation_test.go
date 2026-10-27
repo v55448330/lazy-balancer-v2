@@ -25,10 +25,17 @@ func setupIsolatedDB(t *testing.T) *sql.DB {
 	database := db.DB
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-		db.SetDB(oldCurrent)
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	return database
+}
+
+// restoreGlobalDBHandles 恢复三个全局句柄并同步 db.GetDB() 的原子句柄：
+// 只还原导出变量会让后台刷新循环（GetDB 消费方）继续读到刚被 Close 的库。
+// 所有直接调用 db.Initialize 的夹具共用本实现（单一出处，避免各自演化）。
+func restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent *sql.DB) {
+	db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	db.SetDB(oldCurrent)
 }
 
 func TestSecurityDBFixtures_restoreEveryGlobalHandle(t *testing.T) {

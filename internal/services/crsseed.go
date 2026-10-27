@@ -31,14 +31,17 @@ func decideCRSSeedSource(distVersion, snapshotVersion string, snapshotExists boo
 // SeedCRSRules populates the live CRS dir when a fresh /app/waf bind mount
 // hides the image-baked rules: seed from the persisted snapshot when it
 // carries user-updated rules, otherwise from the pristine waf.dist copy.
-func SeedCRSRules() {
-	seedCRSRulesFrom(crsLiveDir, crsSnapshotDir, crsDistDir)
+// 返回错误：播种后写入 VERSION 标记失败必须上抛（标记缺失会让下次启动对账
+// 按错误版本选方向）；调用方（启动序列）可忽略返回值，但不得把「已播种」当
+// 成功日志记录。
+func SeedCRSRules() error {
+	return seedCRSRulesFrom(crsLiveDir, crsSnapshotDir, crsDistDir)
 }
 
-func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
+func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) error {
 	wafFileMu.Lock()
 	defer wafFileMu.Unlock()
-	seedCRSRulesFromInLock(liveDir, snapshotDir, distDir)
+	return seedCRSRulesFromInLock(liveDir, snapshotDir, distDir)
 }
 
 // seedCRSRulesFromInLock 的判定、辅助文件补种、树复制与快照自愈全程由调用方
@@ -47,18 +50,19 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 // 树交换窗口——清除与替换之间 live 可能缺失或只有部分树，窗口内渲染必须失败。
 // 规则树已完整（只补 setup/stock/overrides 等辅助文件）时不置窗口，避免启动
 // 期无谓地拒绝并发生成。
-func seedCRSRulesFromInLock(liveDir, snapshotDir, distDir string) {
+func seedCRSRulesFromInLock(liveDir, snapshotDir, distDir string) error {
 	if crsRulesTreeIntact(filepath.Join(liveDir, "rules")) {
-		seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir)
-		return
+		return seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir)
 	}
+	var seedErr error
 	_ = withTreeSwapWindow(func() error {
-		seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir)
+		seedErr = seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir)
 		return nil
 	})
+	return seedErr
 }
 
-func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) {
+func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) error {
 	rulesPath := filepath.Join(liveDir, "rules")
 	// rules 完整时不得直接 return——setup/stock/overrides 可能单独缺失
 	// （挂载卷只读残影/部分删除），旧实现让这些文件永久缺失而渲染侧 Include
@@ -74,7 +78,7 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) {
 			Logf("info", "crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
 			if err := os.RemoveAll(rulesPath); err != nil {
 				Logf("error", "crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
-				return
+				return nil
 			}
 		}
 	}
@@ -123,7 +127,7 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) {
 		// 下次启动再次清空重播，且 live 出现不完整规则树。
 		if err := replaceDirFrom(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
 			Logf("error", "crs seed: failed to seed rules from %s: %v", src, err)
-			return
+			return nil
 		}
 	}
 	setupPath := filepath.Join(liveDir, "crs-setup.conf")
@@ -144,8 +148,13 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) {
 		}
 	}
 	// 播种后落版本标记：对账逻辑据此区分「磁盘实际版本」与「数据库记录版本」。
+	// 写失败必须上抛且不得记「已播种」成功——标记缺失时磁盘版本不可知，下一次
+	// 启动的播种/对账会按错误版本选方向（回退快照或把 DB 版本行校正到旧值）。
 	if !rulesIntact {
-		writeCRSVersionMarker(liveDir, srcVersion)
+		if err := writeCRSVersionMarker(liveDir, srcVersion); err != nil {
+			Logf("error", "crs seed: 播种后写入 VERSION 标记失败（磁盘版本不可知，待下次成功更新补齐）: %v", err)
+			return fmt.Errorf("播种后写入 CRS VERSION 标记: %w", err)
+		}
 		Logf("info", "crs seed: seeded %s from %s", liveDir, src)
 	}
 	// 发现2：退化快照回退播种成功后，用新播种的 live 树重建快照，让快照
@@ -163,6 +172,7 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) {
 		}
 		healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, healVersion)
 	}
+	return nil
 }
 
 // healCRSSnapshotFromLiveInLock 用健康 live 树重建快照（退化快照与整体缺席
@@ -302,7 +312,12 @@ func restoreCRSFromSnapshotInLock(liveDir, snapshotDir, version string) error {
 			}
 		}
 	}
-	writeCRSVersionMarker(liveDir, version)
+	// VERSION 写失败必须上抛：调用方据此跳过 BumpClusterVersion 与「恢复成功」
+	// 审计——否则 live 标记缺失/停留旧值，而规则树与版本记录已是恢复后的版本，
+	// 下一次启动会重复恢复或按旧标记把 DB 版本行校正回旧值。
+	if err := writeCRSVersionMarker(liveDir, version); err != nil {
+		return fmt.Errorf("写入 CRS VERSION 标记: %w", err)
+	}
 	return nil
 }
 
@@ -376,9 +391,19 @@ func reconcileCRSStateFromInLock(liveDir, snapshotDir, dbV string) {
 		// 快照整体缺席（目录被删/数据卷换新/首次更新时快照写入失败）不进上面
 		// 的退化判定：对账在 liveV==dbV 时判 none 且再无任何写快照的入口，
 		// 非卷挂载 /app/waf 的部署容器重建即回退镜像捆绑版本、用户更新成果
-		// 丢失。live 树完好且版本可确定（且非 bundled——那本就可由 dist 重播）
+		// 丢失。live 树完好且版本可确定（且非 bundled——那本可就由 dist 重播）
 		// 时按 live 重建快照；helper 自带 live 树完整性门，失败只留日志。
 		healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, liveV)
+	} else if liveV != "" && liveV != CRSBundledVersion && liveV == dbV && snapV != liveV {
+		// 快照完整但落后（更新时 persistCRSSnapshotFrom 失败只留错误日志，更新仍
+		// 成功——「live/DB 新、快照旧」是设计允许的真实状态）：liveV==dbV 时
+		// planCRSReconcile 判 none，旧快照再无刷新入口；此后 /app/waf 挂载卷重建，
+		// 启动播种会优先选该快照（版本不等于 bundled），用户已安装的更新被静默
+		// 回退。用健康 live 树重建快照。条件里的 liveV==dbV 保证
+		// 「snapV==dbV!=liveV」的合法恢复源分支不被重写，liveV!=bundled 保证
+		// bundled 缺省态不额外写快照。
+		healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, liveV)
+		snapV = liveV
 	}
 	plan := planCRSReconcile(liveV, snapV, dbV, CRSBundledVersion, snapshotRulesExist, crsTreeProbeMatches(liveDir, snapshotDir))
 	switch plan.action {

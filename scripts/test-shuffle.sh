@@ -7,6 +7,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 同 test-all.sh：临时根目录由本进程持有，避免沙箱回收 TMPDIR 造成级联假红。
+# 直接调用本脚本时也要成立。
+if [[ -z "${LB_GATE_KEEP_TMPDIR:-}" ]]; then
+  tmp_base="${TMPDIR:-/tmp}"; tmp_base="${tmp_base%/}"
+  gate_tmp="$(mktemp -d "$tmp_base/lb-shuffle-gate.XXXXXX")"
+  export TMPDIR="$gate_tmp"
+  trap 'chmod -R u+rwX "$gate_tmp" 2>/dev/null || true; rm -rf "$gate_tmp"' EXIT
+fi
+
 packages=("$@")
 if [[ ${#packages[@]} -eq 0 ]]; then
   packages=(./internal/handlers ./internal/services ./internal/middleware ./internal/db ./internal/taskengine)

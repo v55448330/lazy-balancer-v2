@@ -293,11 +293,25 @@ test('分页器形态收敛 main.css，四个视图不得再本地重定义', ()
   }
 })
 
-test('SecurityRules 条件列用专用 class-name，不再页级 :deep 覆盖全局表格单元格', () => {
+test('自定义规则列表：条件关系独立成列、条件列加宽且长正则完整换行', () => {
   const text = code('src/views/security/SecurityRules.vue')
-  assert.match(text, /<el-table-column label="条件" min-width="250" class-name="rule-cond-cell">/)
+  const table = section(text, '<el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />', '<el-table-column label="动作"')
+  // 条件关系（AND/OR）独立窄列：与条件内容同列时标签挤占文本宽度
+  assert.match(table, /<el-table-column label="条件关系" width="140" align="center">/)
+  // 条件列显著加宽（原 250）并保留专用 class-name 供全局样式命中
+  assert.match(table, /<el-table-column label="条件" min-width="320" class-name="rule-cond-cell">/)
+  // 每条条件一个单行 chip + tooltip 全文
+  assert.match(table, /<div class="cond-chip-list">/)
+  assert.match(table, /<el-tooltip v-for="\(cond, i\) in row\.conditions" :key="i" :content="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
+  assert.match(table, /<el-tag size="small" effect="plain" class="cond-chip">/)
+  // 组件侧不得再写局部覆盖（复用全局样式）
   assert.doesNotMatch(text, /:deep\(\.el-table \.cell:has\(\.el-tag\)\)/, '页级全局覆盖必须退役')
-  assert.match(text, /\.el-table \.rule-cond-cell \.cell:has\(\.el-tag\) \{ flex-wrap: wrap; row-gap: 4px; \}/)
+  assert.doesNotMatch(text, /\.el-table \.rule-cond-cell \.cell/, '条件列样式必须收敛到 styles/main.css')
+  const global = code('src/styles/main.css')
+  assert.match(global, /\.el-table \.rule-cond-cell \.cell \{ display: flex; flex: 1 1 auto; min-width: 0; \}/)
+  assert.match(global, /\.cond-chip-list \{ display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; min-width: 0; width: 100%; \}/)
+  // 长正则单行省略 + 全文 tooltip 的机制：chip 内部文本不得换行
+  assert.match(global, /\.cond-chip \.el-tag__content \{ display: block; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1\.45; \}/)
 })
 
 test('BasicSettings 两处 radio 行回归 el-form-item（自管标签行族已退役）', () => {

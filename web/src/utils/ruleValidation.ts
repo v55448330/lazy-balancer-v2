@@ -1,4 +1,4 @@
-import { hostPortKey } from './upstreamKeys.ts'
+import { upstreamDedupeKey } from './upstreamKeys.ts'
 
 type PathUpstreamInput = {
   readonly protocol: 'http' | 'https'
@@ -212,8 +212,9 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
         return `第 ${rowNumber} 条路径的自定义上游协议只能是 http 或 https`
       }
       if (upstream.weight < 1) return `第 ${rowNumber} 条路径的自定义上游权重必须大于 0`
-      // 与后端 net.JoinHostPort + strings.ToLower 同口径（IPv6 带方括号）。
-      const hostPort = hostPortKey(address, upstream.port).toLowerCase()
+      // 与后端 upstreamDedupeHost 同口径：IP 按地址语义归一（IPv6 等价写法
+      // 是同一后端），主机名 lower+trim；后端写侧是权威门。
+      const hostPort = upstreamDedupeKey(address, upstream.port)
       if (seenHostPorts.has(hostPort)) return `第 ${rowNumber} 条路径的自定义上游 ${hostPort} 重复`
       seenHostPorts.add(hostPort)
     }

@@ -102,6 +102,7 @@ func TestParseMemInfo_missingMemAvailableIsError(t *testing.T) {
 }
 
 func TestGetSystemMetrics_missingMemAvailableDegradesMemory(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)

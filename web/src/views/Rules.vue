@@ -1280,7 +1280,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link, Tickets } from '@element-plus/icons-vue'
@@ -1333,7 +1333,7 @@ import { isValidHostName, validatePathRules, RULE_NUMERIC_LIMITS } from '@/utils
 import { getStrategyLabel, strategyCardsForProtocol, strategyValuesForProtocol } from '@/utils/strategyLabels'
 import { selectableReferencedOptions, referencedOptionLabel } from '@/utils/caProviderOptions'
 import { popperViewportSafe } from '@/utils/popper'
-import { hostPortKey } from '@/utils/upstreamKeys'
+import { hostPortKey, upstreamDedupeKey } from '@/utils/upstreamKeys'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight, weightPercent } from '@/utils/upstreamWeights'
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
 import { clampPassiveHealthCheckTimeout, copyRuleHostHeader, dnsServerAfterToggle, newRuleWizardStageOverrides, stageBlockPageOverrides, stageBlockPagePatch } from '@/utils/ruleWizard'
@@ -1775,22 +1775,28 @@ const isCertJobActive = (status?: CertJobStatus) => {
   return !['issued', 'failed', 'disabled', 'waiting_ca'].includes(status)
 }
 
-// 编辑维持原口径：waiting_ca 期间仍锁定（后端 UpdateRule 的任务状态 SQL 守卫
-// 对 waiting_ca 仍 409，UI 先行拦截避免必败提交）。
+// 编辑锁与后端 ruleEditBlockingCertJobStatuses 同口径：只有 worker 真正在跑的
+// 状态阻止编辑。waiting_ca（CA 限流冷却 1–3h，无 worker）与 downloaded（部署
+// 退避重试，无 worker）不阻断——此前一律锁定，冷却期内连改名称/上游都 409，
+// 与删除/禁用口径矛盾；改域风险由后端提交后迁移与退役补偿覆盖。
 const isCertJobEditLocked = (status?: CertJobStatus) => {
   if (!status) return false
-  return !['issued', 'failed', 'disabled'].includes(status)
+  return !['issued', 'failed', 'disabled', 'waiting_ca', 'downloaded'].includes(status)
 }
 
 const certJobStatusOf = (row: Rule): CertJobStatus | undefined =>
   certJobMap.value[row.caddy_id]?.status
 
-// 原「证书申请中…」文案在 waiting_ca（可达数小时）期间误导，
-// 冷却期改提示「不阻塞启停/删除、编辑仍锁定」。
+// 冷却/退避期不锁编辑：文案点名「签发在后台重试，编辑不受限」，
+// 避免旧文案（「证书申请中…」「编辑暂锁定」）误报必败提交。
 const certJobLockTooltip = (row: Rule, activeText: string): string => {
   if (isReadOnly.value) return authStore.readOnlyMessage
-  if (certJobStatusOf(row) === 'waiting_ca') {
-    return 'CA 限流冷却中，不阻塞规则启停与删除（编辑暂锁定）'
+  const status = certJobStatusOf(row)
+  if (status === 'waiting_ca') {
+    return 'CA 限流冷却中，不阻塞规则启停、删除与编辑（后台稍后重试签发）'
+  }
+  if (status === 'downloaded') {
+    return '证书已签发、部署重试中，不阻塞规则启停、删除与编辑'
   }
   return activeText
 }
@@ -3081,7 +3087,9 @@ const findDuplicateUpstream = (): { rowIndex: number; key: string } | null => {
   const seen = new Set<string>()
   for (const [index, upstream] of wizardForm.upstreams.entries()) {
     if (!upstream.host || !upstream.port) continue
-    const key = `${upstream.host}:${upstream.port}`
+    // 与后端 upstreamDedupeHost 同口径（IP 按地址语义归一、主机名 lower+trim）：
+    // 2001:db8::1 与 2001:0db8:0:0:0:0:0:1 是同一个后端，漏判会让权重翻倍。
+    const key = upstreamDedupeKey(upstream.host, upstream.port)
     if (seen.has(key)) return { rowIndex: index + 1, key }
     seen.add(key)
   }
@@ -3510,9 +3518,14 @@ const submitWizard = async () => {
       proxy_stream_close_delay: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_close_delay : 0,
     }
 
+    let submitWarnings: string[] = []
     if (editingRule.value) {
-      await request.put<APIResponse>(`/rules/${editingRule.value.caddy_id}`, data)
+      const updateRes = await request.put<APIResponse<{ warnings?: string[] }>>(`/rules/${editingRule.value.caddy_id}`, data)
       mfaAwareSuccess('更新成功')
+      // 后端把「本次保存造成的可用性变化」放在 data.warnings（如 ACME 改域：
+      // 旧证书已弃用、新证书签发完成前 HTTPS 不可用）。只弹 toast 等于没告知
+      // ——这些披露描述的正是「保存成功后马上会遇到的故障」。
+      submitWarnings = updateRes.data?.warnings ?? []
 
     } else {
       const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
@@ -3540,6 +3553,15 @@ const submitWizard = async () => {
     }
     wizardVisible.value = false
     fetchRules()
+    if (submitWarnings.length > 0) {
+      // 与设置页导入/还原同口径：披露逐条独立成行，用户必须确认后才消失
+      // （可用性变化不是可忽略的提示条）。
+      await ElMessageBox.alert(
+        h('div', submitWarnings.map((warning) => h('div', warning))),
+        '规则已更新，请留意',
+        { confirmButtonText: '知道了', type: 'warning' },
+      ).catch(() => undefined)
+    }
   } catch (error: unknown) {
     // 版本前置条件冲突：他人已提交该规则，本表单是陈旧快照。刷新列表并
     // 提示重开——继续用旧表单重试只会重复 409（或在不带版本时静默覆盖）。
@@ -3636,10 +3658,13 @@ const toggleRule = async (rule: Rule) => {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
     mfaAwareSuccess(`${action}成功`)
-    // 启停已在服务端生效，刷新失败不回退开关（fetchRules 内部已吞错），等待下次轮询同步
     await fetchRules()
   } catch (e) {
+    // 回滚开关后必须回读列表：写其实已生效但响应丢失（网关 5xx/超时）时，
+    // 只拨回本地状态会让页面与服务端长期相反——规则列表没有轮询可以兜底，
+    // 回读是唯一能收敛到服务端事实的路径（与 Users 启停失败同口径）。
     rule.enabled = !nextEnabled
+    void fetchRules()
   } finally {
     ruleTogglePending.value[rule.caddy_id] = false
   }

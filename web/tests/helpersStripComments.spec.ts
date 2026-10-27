@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 
-import { member, section, stripComments } from './_helpers.ts'
+import { code, member, section, stripComments, webFiles } from './_helpers.ts'
 
 test('section：缺 start / 缺 end / 顺序倒置一律抛错（边界不得空转）', () => {
   assert.throws(() => section('abc', 'x', 'c'), /missing start marker/)
@@ -130,6 +130,42 @@ test('Vue 模板注释剥离', () => {
   const out = stripComments('<div><!-- hidden --><span>ok</span></div>')
   assert.doesNotMatch(out, /hidden/)
   assert.match(out, /<span>ok<\/span>/)
+})
+
+test('同行模板注释：闭合/自闭合标签之后的 <!-- --> 同样剥离', () => {
+  // 斜杠启发式若把 `</div>`、`<br />` 里的 `/` 当成正则起点，该行余下文本会被
+  // 吞成「正则」，同行注释永不剥离——注释里复述代码即假绿，注释文字被当代码
+  // 即误红（`section()` 可从注释中段起切）。
+  const src = [
+    '<div>x</div><!-- hidden-a -->',
+    '<br /> <!-- hidden-b -->',
+    '<span>y</span> <!-- hidden-c -->',
+  ].join('\n')
+  const out = stripComments(src)
+  assert.doesNotMatch(out, /hidden-[abc]/)
+  assert.match(out, /<div>x<\/div>/, '闭合标签本身不得被当正则吞掉')
+  assert.match(out, /<br \/>/, '自闭合标签本身必须保留')
+  assert.match(out, /<span>y<\/span>/)
+})
+
+test('同行注释里的代码形态不得被当成代码：section 必须抛错', () => {
+  const src = 'const a = 1\n<div /> <!-- const target = 2 -->\nconst b = 3\n'
+  assert.throws(() => section(src, 'const target', 'const b'), /missing start marker/)
+  assert.doesNotMatch(stripComments(src), /const target/)
+})
+
+test('URL scheme 不构成行注释（`: //` 形态）', () => {
+  const src = '<code>lazy-balancer://docs/setup</code>\nconst after = 1'
+  const out = stripComments(src)
+  assert.match(out, /lazy-balancer:\/\/docs\/setup/, 'URL 必须原样保留')
+  assert.match(out, /const after = 1/, 'URL 之后的内容不得被当作注释剥掉')
+})
+
+test('全量 .vue 剥注释后不残留 <!--（潜在形态转为机检）', () => {
+  const files = webFiles('src', ['.vue'])
+  assert.ok(files.length >= 40, `扫描面过小（${files.length} 个 .vue）——目录枚举失效`)
+  const dirty = files.filter((file) => code(file).includes('<!--'))
+  assert.deepEqual(dirty, [], '模板注释未被剥离：code() 视图会咽下注释里的代码形态（断言被注释满足=假绿）')
 })
 
 test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => {

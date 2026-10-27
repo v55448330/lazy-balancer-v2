@@ -16,12 +16,14 @@ import assert from 'node:assert/strict'
 import { code, section } from './_helpers.ts'
 
 const file = 'src/components/events/TriggerDetailDialog.vue'
-const logic = code(file)
-const markup = code(file)
+// 脚本符号与模板文案共享同一份剥注释正文：node --test 无 .vue 装载器，两者
+// 都只能从源码取；拆成两个名字（logic/markup）而不拆视图，只会让后续改一侧
+// 切片时另一侧的覆盖面静默偏移。
+const text = code(file)
 
 test('名单条目失败不得静默：按 refIds 缺失显性置 entriesError', () => {
-  assert.match(logic, /const entriesError = ref\(false\)/)
-  const loadAll = section(logic, 'const loadAll = async', '\n}\n')
+  assert.match(text, /const entriesError = ref\(false\)/)
+  const loadAll = section(text, 'const loadAll = async', '\n}\n')
   assert.match(loadAll, /entriesError\.value = false/, '每轮装载先复位失败态')
   assert.match(
     loadAll,
@@ -36,16 +38,16 @@ test('名单条目失败不得静默：按 refIds 缺失显性置 entriesError',
 })
 
 test('失败态有横幅与重试入口（策略/条目同轮重取）', () => {
-  assert.match(logic, /const retryLists = \(\): void => \{ void loadAll\(\) \}/)
-  assert.match(markup, /<div v-if="entriesError && !loadError" class="info-note-bar">/)
-  assert.match(markup, /地址列表条目加载失败/)
-  assert.match(markup, /@click="retryLists">重新加载<\/el-button>/)
+  assert.match(text, /const retryLists = \(\): void => \{ void loadAll\(\) \}/)
+  assert.match(text, /<div v-if="entriesError && !loadError" class="info-note-bar">/)
+  assert.match(text, /地址列表条目加载失败/)
+  assert.match(text, /@click="retryLists">重新加载<\/el-button>/)
   // 策略信息失败同样不得只提示「关闭后重试」——弹框内可原地重试
-  assert.match(markup, /<div v-if="loadError" class="info-note-bar">/)
+  assert.match(text, /<div v-if="loadError" class="info-note-bar">/)
 })
 
 test('失败态不得退化成「未定位到命中的地址列表」的业务结论', () => {
-  const tipLine = markup.split('\n').find((line) => line.includes('未定位到命中的地址列表'))
+  const tipLine = text.split('\n').find((line) => line.includes('未定位到命中的地址列表'))
   assert.ok(tipLine, '未定位提示仍在模板中')
   assert.match(tipLine!, /!entriesError/, '条目加载失败时「未定位」不成立')
   assert.match(tipLine!, /!loadError/, '策略/名单加载失败时「未定位」不成立')

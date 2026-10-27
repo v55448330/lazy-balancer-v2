@@ -37,6 +37,7 @@ func SetConfigLoadRerun(fn func(operator string) error) { configLoadRerun = fn }
 var (
 	syncLifecycleStart, syncLifecycleStop                 func()
 	syncLifecycleHalted                                   func() bool
+	syncLifecycleResume                                   func()
 	certIssuanceLifecycleStart, certIssuanceLifecycleStop func()
 )
 
@@ -45,6 +46,21 @@ func SetSyncLifecycleHooks(start, stop func()) { syncLifecycleStart, syncLifecyc
 
 // SetSyncLifecycleHaltedProbe 注入同步子状态只读探针；nil 表示无状态镜像。
 func SetSyncLifecycleHaltedProbe(probe func() bool) { syncLifecycleHalted = probe }
+
+// SetSyncLifecycleResumeHook 注入同步服务复活入口（main: syncService.Resume）。
+// 「Halted 的同步服务必须能被自愈链重新拉起」——Start 对 Halted 是 no-op，
+// 只有 Resume 会重建循环；两条入口必须成对注入（halting probe 判据 + resume 动作）。
+func SetSyncLifecycleResumeHook(resume func()) { syncLifecycleResume = resume }
+
+// resumeHaltedSyncLifecycle 在降级收尾复活 Halted 的同步服务：只有探针明确
+// 报告 Halted 才调用（Resume 对健康态是 no-op，但避免无谓抖动）。探针/入口
+// 任一未注入即跳过（测试/未装配形态）。
+func resumeHaltedSyncLifecycle() {
+	if syncLifecycleHalted == nil || syncLifecycleResume == nil || !syncLifecycleHalted() {
+		return
+	}
+	syncLifecycleResume()
+}
 
 // SetCertIssuanceLifecycleHooks 注入证书签发真实启停（main: lifecycle.StartACME/StopACME）。
 func SetCertIssuanceLifecycleHooks(start, stop func()) {

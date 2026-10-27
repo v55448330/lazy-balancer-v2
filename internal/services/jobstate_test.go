@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -227,30 +228,24 @@ func TestTransitionJob_allowsOnlyOneConcurrentWriter(t *testing.T) {
 	}
 }
 
-func TestCertJobStatusWrites_useApprovedEntryPoints(t *testing.T) {
-	// Given
-	approved := map[string]map[string]bool{
-		"db/db.go":             {"createTables": true, "migrateCertJobsStatusConstraint": true},
-		"services/jobstate.go": {"transitionJob": true},
-		// upsertQueuedCertJob：原 CreateOrRequeueCertJobWithChange 内联的
-		// 「排队签发」upsert 闭包（抽为单源，供补建路径复用）——
-		// 与原批准点同语义（INSERT..ON CONFLICT 置 queued），不是新绕行写点。
-		"services/certificates.go":  {"restoreCertJobsForRule": true, "CreateOrRequeueCertJobWithChange": true, "upsertQueuedCertJob": true},
-		"services/cluster_apply.go": {"replaceSnapshotTx": true},
-		"handlers/certjobs.go":      {"RetryCertJob": true, "retryCertJobByID": true, "DeleteCertJob": true},
-		// UpdateRule/DisableRule 的禁用暂停谓词收敛为
-		// disableCertJobsForRuleTx 单源；DisableRule 不再直接持字面量（白名单
-		// 移除保持守卫收紧），UpdateRule 保留（域名迁移/恢复两处自有写点）。
-		"handlers/rules.go": {"UpdateRule": true, "EnableRule": true, "disableCertJobsForRuleTx": true, "retireCertJobsForDomain": true},
-	}
+// cert_jobs.status 写入白名单守卫的扫描器：扫描根是**仓库根**（与同包
+// lb_rules 单源门 rule_write_columns_guard_test.go 同口径）——internal/ 之外的
+// 顶级包与 cmd/ 同样是「必须经 transitionJob」的覆盖面，只扫 internal/ 会让
+// 未来抽出的证书队列包/运维子命令的手写写点静默逃逸。
+func certJobStatusWriteViolations(root string, approved map[string]map[string]bool) ([]string, error) {
 	var violations []string
-
-	// When
-	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, walkErr error) error {
+	skipDirs := map[string]bool{".git": true, "vendor": true, "node_modules": true, "web": true}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if entry.IsDir() {
+			if skipDirs[entry.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		fileSet := token.NewFileSet()
@@ -258,17 +253,15 @@ func TestCertJobStatusWrites_useApprovedEntryPoints(t *testing.T) {
 		if parseErr != nil {
 			return parseErr
 		}
-		rel, relErr := filepath.Rel("..", path)
+		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			return relErr
 		}
 		rel = filepath.ToSlash(rel)
-		for _, declaration := range file.Decls {
-			function, ok := declaration.(*ast.FuncDecl)
-			if !ok || function.Body == nil {
-				continue
-			}
-			ast.Inspect(function.Body, func(node ast.Node) bool {
+		// 函数体与包级声明都扫：包级 SQL 常量（var/const）同样能绕过
+		// transitionJob，只扫函数体是覆盖面缺口。
+		report := func(body ast.Node, owner string) {
+			ast.Inspect(body, func(node ast.Node) bool {
 				literal, ok := node.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
 					return true
@@ -277,22 +270,115 @@ func TestCertJobStatusWrites_useApprovedEntryPoints(t *testing.T) {
 				if unquoteErr != nil || !mutatesCertJobStatus(query) {
 					return true
 				}
-				if !approved[rel][function.Name.Name] {
+				if !approved[rel][owner] {
 					position := fileSet.Position(literal.Pos())
-					violations = append(violations, position.String()+" in "+function.Name.Name)
+					violations = append(violations, position.String()+" in "+owner)
 				}
 				return true
 			})
 		}
+		for _, declaration := range file.Decls {
+			switch node := declaration.(type) {
+			case *ast.FuncDecl:
+				if node.Body != nil {
+					report(node.Body, node.Name.Name)
+				}
+			case *ast.GenDecl:
+				report(node, "package-level declaration")
+			}
+		}
 		return nil
 	})
+	return violations, err
+}
+
+func TestCertJobStatusWrites_useApprovedEntryPoints(t *testing.T) {
+	// Given：仓库相对路径 → 允许的函数集（比整文件豁免更紧）
+	approved := map[string]map[string]bool{
+		"internal/db/db.go":             {"createTables": true, "migrateCertJobsStatusConstraint": true},
+		"internal/services/jobstate.go": {"transitionJob": true},
+		// upsertQueuedCertJob：原 CreateOrRequeueCertJobWithChange 内联的
+		// 「排队签发」upsert 闭包（抽为单源，供补建路径复用）——
+		// 与原批准点同语义（INSERT..ON CONFLICT 置 queued），不是新绕行写点。
+		"internal/services/certificates.go":  {"restoreCertJobsForRule": true, "CreateOrRequeueCertJobWithChange": true, "upsertQueuedCertJob": true},
+		"internal/services/cluster_apply.go": {"replaceSnapshotTx": true},
+		"internal/handlers/certjobs.go":      {"RetryCertJob": true, "retryCertJobByID": true, "DeleteCertJob": true},
+		// UpdateRule/DisableRule 的禁用暂停谓词收敛为
+		// disableCertJobsForRuleTx 单源；DisableRule 不再直接持字面量（白名单
+		// 移除保持守卫收紧），UpdateRule 保留（域名迁移/恢复两处自有写点）。
+		"internal/handlers/rules.go": {"UpdateRule": true, "EnableRule": true, "disableCertJobsForRuleTx": true, "retireCertJobsForDomain": true},
+	}
+	root := filepath.Join("..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("扫描根必须为仓库根（含 go.mod）: %v", err)
+	}
+
+	// When
+	violations, err := certJobStatusWriteViolations(root, approved)
 
 	// Then
 	if err != nil {
-		t.Fatalf("scan internal Go sources: %v", err)
+		t.Fatalf("scan repository Go sources: %v", err)
 	}
 	if len(violations) != 0 {
 		t.Fatalf("cert_jobs status writes 绕过 transitionJob:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// 扫描面正向控制：internal/ 之外的写点必须被拦（当前仓库零命中——本用例构造
+// 夹具证明「零命中」不是扫描器退化）。
+func TestCertJobStatusWriteGuard_catchesWritesOutsideInternal(t *testing.T) {
+	root := t.TempDir()
+	probeDir := filepath.Join(root, "pkg", "certqueue")
+	if err := os.MkdirAll(probeDir, 0o755); err != nil {
+		t.Fatalf("mkdir probe: %v", err)
+	}
+	probe := `package certqueue
+
+func StealStatus(db interface{}) {
+	_ = db
+}
+
+var query = "UPDATE cert_jobs SET status=? WHERE id=?"
+`
+	if err := os.WriteFile(filepath.Join(probeDir, "queue.go"), []byte(probe), 0o644); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+	// 回归形状：internal/ 内的合法写点（白名单内）不得误报。
+	legalDir := filepath.Join(root, "internal", "services")
+	if err := os.MkdirAll(legalDir, 0o755); err != nil {
+		t.Fatalf("mkdir legal: %v", err)
+	}
+	legal := `package services
+
+func transitionJob(db interface{}) {
+	_ = db
+	_ = "UPDATE cert_jobs SET status=? WHERE id=? AND status IN (?)"
+}
+`
+	if err := os.WriteFile(filepath.Join(legalDir, "jobstate.go"), []byte(legal), 0o644); err != nil {
+		t.Fatalf("write legal: %v", err)
+	}
+
+	violations, err := certJobStatusWriteViolations(root, map[string]map[string]bool{
+		"internal/services/jobstate.go": {"transitionJob": true},
+	})
+	if err != nil {
+		t.Fatalf("scan fixture: %v", err)
+	}
+	if len(violations) != 1 || !strings.Contains(violations[0], "pkg/certqueue/queue.go") {
+		t.Fatalf("internal/ 之外的 cert_jobs 写点必须被拦, violations=%v", violations)
+	}
+	// 登记白名单后归零（白名单键是仓库相对路径，扩根不改变机制）。
+	violations, err = certJobStatusWriteViolations(root, map[string]map[string]bool{
+		"internal/services/jobstate.go": {"transitionJob": true},
+		"pkg/certqueue/queue.go":        {"package-level declaration": true},
+	})
+	if err != nil {
+		t.Fatalf("scan fixture (package-level): %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("包级声明不得因无函数名而不可登记: %v", violations)
 	}
 }
 

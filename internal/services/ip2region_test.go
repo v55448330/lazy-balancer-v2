@@ -104,6 +104,7 @@ func withIP2RegionPaths(t *testing.T, live, dist string) {
 		ip2regionSearcher.Close()
 		ip2regionSearcher = nil
 	}
+	ip2regionSearcherSource = ""
 	ip2regionMu.Unlock()
 	ip2regionLivePath, ip2regionDistPath = live, dist
 	t.Cleanup(func() {
@@ -456,11 +457,10 @@ func resetProvincesMemoForTest(t *testing.T) {
 	})
 }
 
-// 条目数应从 header StartIndexPtr/EndIndexPtr 直读
-// (xdb v2 官方边界,2 次 ReadAt),不再扫 65536 格 vector 推导(每次调用
-// 65536 次 8B ReadAt,BufferCache 已全内存纯浪费;且 vector 端点语义含
-// 末条结尾,推导 off-by-one)。
-func TestGetIP2RegionEntryCount_readsHeaderBounds(t *testing.T) {
+// 条目数从 header StartIndexPtr/EndIndexPtr 直读（xdb v2 官方边界，2 次
+// ReadAt），不再扫 65536 格 vector 推导（每次调用 65536 次 8B ReadAt，
+// BufferCache 已全内存纯浪费；且 vector 端点语义含末条结尾，推导 off-by-one）。
+func TestEntryCountFromXDBHeader_readsHeaderBounds(t *testing.T) {
 	// Given: 构造最小 xdb——header(start=1000,end=1000+14*)+vector 全零
 	const n = 100
 	dir := t.TempDir()
@@ -477,13 +477,61 @@ func TestGetIP2RegionEntryCount_readsHeaderBounds(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := ip2regionLivePath
-	ip2regionLivePath = path
-	t.Cleanup(func() { ip2regionLivePath = old })
 
 	// When/Then: 真值 N(header 边界直读)
-	if got := GetIP2RegionEntryCount(); got != n {
-		t.Fatalf("GetIP2RegionEntryCount()=%d, want %d (header bounds)", got, n)
+	if got := entryCountFromXDBHeader(path); got != n {
+		t.Fatalf("entryCountFromXDBHeader()=%d, want %d (header bounds)", got, n)
+	}
+	// 坏库/空库边界：end < start → 0（不得算出负值）
+	broken := filepath.Join(dir, "broken.xdb")
+	brokenHeader := make([]byte, 16)
+	binary.LittleEndian.PutUint32(brokenHeader[8:], 1000)
+	binary.LittleEndian.PutUint32(brokenHeader[12:], 900)
+	if err := os.WriteFile(broken, brokenHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := entryCountFromXDBHeader(broken); got != 0 {
+		t.Fatalf("end<start 应返回 0, got %d", got)
+	}
+}
+
+// 条目数必须与在役 searcher 同源：只读降级（live 缺失、searcher 来自镜像内置
+// 库）与热换失败保留旧库这两种既有形态下，读 live 路径会显示 0 或按损坏
+// 文件 header 算出越界值，而归属地查询其实正常。
+func TestGetIP2RegionEntryCount_tracksInServiceSearcherSource(t *testing.T) {
+	dir := t.TempDir()
+	segments := []xdbSegment{
+		{startIP: 0x65000100, endIP: 0x650001FF, region: "中国|浙江省|杭州市|0|CN"},
+		{startIP: 0x65000200, endIP: 0x650002FF, region: "中国|江苏省|南京市|0|CN"},
+		{startIP: 0x65000300, endIP: 0x650003FF, region: "美国|加利福尼亚|洛杉矶|0|US"},
+	}
+	dist := filepath.Join(dir, "dist.xdb")
+	writeTestXDB(t, dist, segments)
+	// live 缺失（从节点/只读降级形态）——旧实现从这里读，恒得 0。
+	live := filepath.Join(dir, "absent-live.xdb")
+	withIP2RegionPaths(t, live, dist)
+	resetProvincesMemoForTest(t)
+
+	searcher, err := openIP2RegionSearcher(dist)
+	if err != nil {
+		t.Fatalf("open dist searcher: %v", err)
+	}
+	ip2regionMu.Lock()
+	swapIP2RegionSearcher(searcher, dist)
+	ip2regionMu.Unlock()
+
+	if got := GetIP2RegionEntryCount(); got != len(segments) {
+		t.Fatalf("GetIP2RegionEntryCount()=%d, want %d（必须取在役 searcher 的来源，不是 live 路径）", got, len(segments))
+	}
+	// 正向控制：在役查询确实可用（同一来源）。
+	if region := LookupRegion("101.0.1.5"); !strings.Contains(region, "浙江") {
+		t.Fatalf("在役 searcher 查询失败: %q", region)
+	}
+
+	// 卸载后无在役库 → 0（不得回落到 live 路径或残留计数）。
+	ResetIP2RegionSearcherForTest()
+	if got := GetIP2RegionEntryCount(); got != 0 {
+		t.Fatalf("卸载后 GetIP2RegionEntryCount()=%d, want 0", got)
 	}
 }
 
@@ -550,6 +598,7 @@ func TestGetIP2RegionProvinces_memoizesByStatKey(t *testing.T) {
 	}
 	ip2regionMu.Lock()
 	ip2regionSearcher = searcher
+	ip2regionSearcherSource = live
 	ip2regionMu.Unlock()
 
 	// When：同一份 xdb 上连续两次调用

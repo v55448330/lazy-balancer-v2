@@ -4,10 +4,13 @@ package handlers
 // 「固定文案」政策并存）：
 //   - business 组（任意登录用户可读，如 /settings 的 GetConfig）一律固定文案：
 //     底层错误（SQL 文本、路径、admin 地址）只进运行日志与操作审计。
-//   - admin 组（本文件内的配置读写/校验/重载/Caddy 原始配置/日志/启停）保留
+//   - admin 组（本文件内的配置读写/校验/重载/Caddy 原始配置/启停）保留
 //     底层错误文本——这些端点是管理员排障接口，需要区分「admin 不可达 / 响应
 //     超限 / 解析失败 / exec exit status / 路径权限」；固定文案会把根因抹平
 //     （GetCaddyConfig 的超限用例即要求「不得误报为解析失败」）。
+//   - 组归属以 middleware.go 的路由表为准：同一文件里的 GetCaddyLogs 注册在
+//     business 组（任意登录用户可读），故它按固定文案处理（路径/errno 只进
+//     运行日志）——「在哪个组」决定政策，而不是「在哪个文件」。
 //   - 两份口径由 caddyAdmin5xxDetailFunctions 清单（error_body_leak_rules_test.go）
 //     + 源码门禁钉住：新增 5xx 写点或端点路由组变化必须同步清单，否则测试红。
 //     此前本文件内两条 5xx 收敛为固定文案、其余仍带细节，读者无法判断哪条是
@@ -33,6 +36,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -316,12 +320,44 @@ func startCaddy(adminURL string) error {
 	}
 }
 
+// stopCaddy 停 Caddy 并维持监督器的 standby（pause 文件语义）。
+//
+// 分类原则：结果按**事实**判定，而不是按 `caddy stop` 的退出码。已停止
+// （admin 不可达且无 caddy 进程）时命令必然非零退出（连接失败），旧实现把它
+// 当成「停止失败」并删除 pause——监督器下一 tick 无条件拉起 Caddy，于是
+// 「再点一次停止」把服务反向启动。现在的口径：
+//   - 已停止 → 成功（写 pause 留痕：管理员要求「保持停止」）；
+//   - 命令失败但 Caddy 仍存活/可达 → 回滚 pause（监督器继续看护）+ 可读错误；
+//   - 命令成功但 3s 内仍可达 → 保留 pause（停止意图仍生效）+ 超时错误，
+//     任何重试都会落到第一个分支得到成功，不会再反转。
+//
+// pause 写失败必须中止：没有 pause 的 stop 会被监督器立刻反转，回 200 是假成功。
 func stopCaddy(adminURL string) error {
+	if !caddyAdminReady(adminURL) && !caddyProcessRunning() {
+		if err := os.WriteFile(caddyPauseFile, nil, 0o644); err != nil {
+			return fmt.Errorf("Caddy 已停止，但无法写入停止标记 %s（监督器会重新拉起）: %w", caddyPauseFile, err)
+		}
+		return nil
+	}
 	// 先建 pause 再停——防监督器在 admin stop 与进程退出之间竞态重启
-	_ = os.WriteFile(caddyPauseFile, nil, 0o644)
-	if err := caddyStopCommand(adminURL).Run(); err != nil {
+	if err := os.WriteFile(caddyPauseFile, nil, 0o644); err != nil {
+		return fmt.Errorf("无法写入停止标记 %s（停止会被监督器立刻反转，未执行停止）: %w", caddyPauseFile, err)
+	}
+	command := caddyStopCommand(adminURL)
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		// 按事实分类：命令失败时 Caddy 可能已经不在服务（重复停止/崩溃空窗/
+		// admin 已关），那就是「已停止」，保留 pause；只有仍在服务才回滚 pause。
+		if !caddyAdminReady(adminURL) && !caddyProcessRunning() {
+			return nil
+		}
 		_ = os.Remove(caddyPauseFile) // 停止失败回滚 pause(监督器继续看护)
-		return err
+		reason := strings.TrimSpace(stderr.String())
+		if reason == "" {
+			reason = err.Error()
+		}
+		return fmt.Errorf("Caddy 停止失败（Caddy 仍在运行，已回滚停止标记）: %s", reason)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -330,7 +366,7 @@ func stopCaddy(adminURL string) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("停止后 Caddy Admin API 仍可达")
+	return errors.New("停止后 3s 内 Caddy Admin API 仍可达（停止标记已保留，服务仍在排空；稍后重试或复查容器日志）")
 }
 
 func (h *Handlers) GetConfig(c *gin.Context) {
@@ -969,7 +1005,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	siteChanged := (req.ServerMapLat != nil && *req.ServerMapLat != old.ServerMapLat) ||
 		(req.ServerMapLon != nil && *req.ServerMapLon != old.ServerMapLon)
 	if siteChanged {
-		if err := services.BumpClusterVersion(c.Request.Context(), tx); err != nil {
+		if err := services.BumpClusterVersion(caddyWriteCtx(c), tx); err != nil {
 			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("递增集群版本失败", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "递增集群版本失败"})
 			return
@@ -1328,7 +1364,9 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "日志文件不可访问: " + err.Error()})
+		// 本端点在 business 组（任意登录用户可读）：5xx 一律固定文案，路径与
+		// errno 只进运行日志（admin 细节政策只适用于 admin 组端点，见文件头）。
+		writeInternalError(c, http.StatusInternalServerError, "日志文件不可访问", err)
 		return
 	}
 
@@ -1344,13 +1382,13 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 
 	f, err := os.Open(logPath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "打开日志文件失败: " + err.Error()})
+		writeInternalError(c, http.StatusInternalServerError, "打开日志文件失败", err)
 		return
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志文件失败: " + err.Error()})
+		writeInternalError(c, http.StatusInternalServerError, "读取日志文件失败", err)
 		return
 	}
 
@@ -1359,7 +1397,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 	// 128KB 尾窗上限；LimitReader 把读取严格钉在窗口大小。
 	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志文件失败: " + err.Error()})
+		writeInternalError(c, http.StatusInternalServerError, "读取日志文件失败", err)
 		return
 	}
 	// 尾窗首行残段截断统一走 tailLogWindow
@@ -1629,7 +1667,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 			}
 		}
 	}()
-	result, err := tx.ExecContext(c.Request.Context(), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
+	result, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("保存 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败: " + err.Error()})
@@ -1784,13 +1822,15 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 }
 
 // accessLogRedactionLine 恒脱敏行的规范形态（与 services 渲染层同一路径，
-// 此处是该契约的写入侧视图）。
-const accessLogRedactionLine = "request>headers>X-API-Key -> delete"
+// 此处是该契约的写入侧视图）。路径由 accesslog 单源派生：引擎 filter 精确
+// 匹配 http.Header 的规范化键名，字面量拼写不会命中。
+var accessLogRedactionLine = accesslog.APIKeyHeaderPath() + " -> delete"
 
 // normalizeAccessLogRedaction 把脱敏行归一为规范形态
-// 移除任何既有的 X-API-Key 映射行（rename 会让头改道，delete 可能写在中间
-// 被后续行覆盖），再追加唯一的 delete 行——幂等。解析单源
-// services.ParseAccessLogFormat（按行号定位脱敏行，其余行原文保留）；
+// 移除任何既有的 API Key 映射行（rename 会让头改道，delete 可能写在中间
+// 被后续行覆盖），再追加唯一的 delete 行——幂等。识别口径是「同一个 HTTP 头」
+// （大小写不敏感，覆盖旧模板的字面量拼写），故同一事实不会在落库值里留两行。
+// 解析单源 services.ParseAccessLogFormat（按行号定位脱敏行，其余行原文保留）；
 // 非法行由写侧 validateAccessLogFormat 先行 400，本函数不重复拒绝。
 // 空白格式原样返回（默认形态：不裁剪原生字段，渲染层注入脱敏行）。
 // 尾随换行先裁剪——否则 Split 产生的末尾空元素会被当成一行保留，追加脱敏行
@@ -1800,10 +1840,9 @@ func normalizeAccessLogRedaction(format string) string {
 		return format
 	}
 	format = strings.TrimRight(format, "\n")
-	const path = "request>headers>X-API-Key"
 	redactLines := make(map[int]bool)
 	for _, r := range services.ParseAccessLogFormat(format).Rules {
-		if r.Path == path {
+		if accesslog.IsAPIKeyPath(r.Path) {
 			redactLines[r.Line] = true
 		}
 	}

@@ -984,8 +984,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		}
 		recordAudit(c, "导入失败", "配置备份", importFailureAuditDetail(err))
 		// 事务已回滚：循环里的插入计数全部作废，不得报 imported（否则前端/
-		// 运维会误判部分规则已落地）。
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"disabled_conflicts": disabledConflicts}})
+		// 运维会误判部分规则已落地）。warnings 透出会话收尾披露（提交不确定态
+		// 下的产物清理去向），否则「删除失败」被读成「磁盘也已收敛」。
+		failureWarnings := append([]string{}, session.failureWarnings...)
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{
+			"disabled_conflicts": disabledConflicts, "warnings": failureWarnings,
+		}})
 		return
 	}
 	auditParts := []string{"来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount)}

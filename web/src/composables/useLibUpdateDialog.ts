@@ -42,6 +42,10 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
   /** 触发更新请求在途（「立即更新」按钮 loading） */
   const starting = ref(false)
   let requestSeq = 0
+  // 弹框会话序号：open/onClosed/dispose 各推进一档。触发请求在途时关掉重开，
+  // 旧请求的收尾不得复位新会话的 starting、也不得在新会话里驱动 refreshStatus
+  //（会把上一次触发的进度当成本次结果）。
+  let sessionSeq = 0
 
   const updating = computed(() => options.isRunning(status.value))
 
@@ -95,7 +99,11 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
 
   /** 打开弹框：作废旧会话在途响应，清空上次的任务状态与日志 */
   const open = () => {
+    sessionSeq++
     requestSeq++
+    // 新会话不得继承上一次触发的 loading：关闭-重开时按钮必须可用
+    //（旧请求仍在途，其 finally 由会话序号拦下，不会反过来清掉本次状态）。
+    starting.value = false
     status.value = null
     logs.value = ''
     visible.value = true
@@ -109,7 +117,9 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
   }
 
   const onClosed = () => {
+    sessionSeq++
     requestSeq++
+    starting.value = false
     stopPolling()
     status.value = null
     logs.value = ''
@@ -117,6 +127,7 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
 
   // 确认触发更新：409 表示已有任务在运行，跳过触发直接轮询进度
   const confirmUpdate = async () => {
+    const session = sessionSeq
     starting.value = true
     try {
       await request.post<APIResponse<{ status: string; trigger: string }>>(`${options.apiPrefix}/update`, undefined, { silent: true })
@@ -128,9 +139,10 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
         return
       }
     } finally {
-      starting.value = false
+      // 会话已换（关掉重开）：不得复位新会话的 starting，也不得驱动其轮询。
+      if (session === sessionSeq) starting.value = false
     }
-    if (!visible.value) return
+    if (session !== sessionSeq) return
     await refreshStatus()
     if (!visible.value) return
     // refreshStatus 在终态时已 stopPolling + onSuccess——若本次状态已是
@@ -145,7 +157,9 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
 
   /** 组件卸载：作废在途响应并暂停轮询（终态清理由 usePollingTask 内置 onUnmounted 兜底） */
   const dispose = () => {
+    sessionSeq++
     requestSeq++
+    starting.value = false
     stopPolling()
   }
 

@@ -861,6 +861,12 @@ type importQueueRecovery struct {
 	// 只在此刻兑现。
 	hold bool
 	done bool
+	// stalledNonTerminal / stalledUnknown 是「队列未激活 → 非终态证书任务
+	// 本窗口不重排」的披露载荷（finish 采样，队列激活或零任务时为零值）。
+	// 不越过用户「停止签发」的意图是 fail-safe 的**有意设计**，缺的只是可
+	// 观测性：任务列表显示进行中而实际没有 worker 才是缺陷。
+	stalledNonTerminal int
+	stalledUnknown     bool
 }
 
 func (recovery *importQueueRecovery) finish() error {
@@ -873,10 +879,34 @@ func (recovery *importQueueRecovery) finish() error {
 		services.EndConfigImportHold()
 	}
 	if recovery.manager == nil || !recovery.wasActive {
+		recovery.stalledNonTerminal, recovery.stalledUnknown = countStalledNonTerminalCertJobs()
 		return nil
 	}
 	recovery.manager.Resume()
 	return requeueNonTerminalCertJobs()
+}
+
+// countStalledNonTerminalCertJobs 只做披露用的只读统计。统计失败不得否决
+// 已提交的导入/还原（数据库已是新配置），退化为「数量未知」的披露。
+func countStalledNonTerminalCertJobs() (count int, unknown bool) {
+	count, err := services.CountNonTerminalCertJobs(context.Background())
+	if err != nil {
+		services.Logf("warn", "配置导入：统计未重排的非终态证书任务失败: %v", err)
+		return 0, true
+	}
+	return count, false
+}
+
+// stalledWarning 是「证书任务因签发任务已停止而未重排」的披露文案单源
+// （响应 warnings 与操作审计同文；空串=无需披露）。
+func (recovery *importQueueRecovery) stalledWarning() string {
+	if recovery.stalledUnknown {
+		return "证书签发任务已停止：导入的非终态证书任务本窗口未重排（数量统计失败，请检查任务列表）——恢复该任务后才会继续推进"
+	}
+	if recovery.stalledNonTerminal <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d 个非终态证书任务因证书签发任务已停止而未重排——恢复该任务后才会继续推进", recovery.stalledNonTerminal)
 }
 
 func finishImportFailure(tx *sql.Tx, recovery *importQueueRecovery, importErr error) error {
@@ -1047,6 +1077,45 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 	return nil
 }
 
+// parseImportedMCPIPWhitelist 解析并归一备份里的 api_keys.mcp_ip_whitelist 列值。
+// 库内形态是 JSON 字符串数组；旧从节点备份的字面量 "null"、历史导出的裸 IP
+// 与重复条目都在此归一到规范形态（裸 IP→/32 或 /128、去重、统一前缀写法）。
+// 返回值：归一后的条目、无法解析的原条目（白名单语义下丢弃=收紧，但导入链
+// 需要点名拒绝而不是静默收紧）、以及 JSON 形态错误。
+func parseImportedMCPIPWhitelist(value any) (normalized []string, dropped []string, err error) {
+	raw, isString := value.(string)
+	if !isString || raw == "" || raw == "null" {
+		return nil, nil, nil
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil, nil, fmt.Errorf("不是 JSON 字符串数组: %w", err)
+	}
+	normalized, dropped = services.NormalizeMCPIPWhitelistStrings(entries)
+	return normalized, dropped, nil
+}
+
+// validateV2BackupMCPIPWhitelist api_keys.mcp_ip_whitelist 行级门。该列以 JSON
+// 数组存字符串、认证侧逐条 net.ParseCIDR：带外通道（备份还原/旧从节点备份）
+// 带入畸形值时中间件每次请求解析失败 → 该 Key 恒 500（fail-closed，但永久
+// 500 且面板无从自愈）。导入侧整包 400 点名该行，让操作者先修备份。
+func validateV2BackupMCPIPWhitelist(rows []map[string]any) error {
+	for index, row := range rows {
+		raw, exists := row["mcp_ip_whitelist"]
+		if !exists {
+			continue
+		}
+		_, dropped, err := parseImportedMCPIPWhitelist(raw)
+		if err != nil {
+			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单 %v 无效（需为 CIDR 字符串数组），请修正备份中该 Key 的白名单后重试", index+1, raw)
+		}
+		if len(dropped) > 0 {
+			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单含无效条目 %v（需为 CIDR），请修正后重试", index+1, dropped)
+		}
+	}
+	return nil
+}
+
 // restoreRowStatement 构造单行 INSERT 语句与参数。列序确定化：Go map 迭代序
 // 每轮随机，按迭代序拼 SQL 会让**每行生成不同文本**——database/sql 以 SQL 文本
 // 为键缓存连接级 prepared statement 且不淘汰，万行导入即上万条预编译语句
@@ -1085,12 +1154,18 @@ func restoreRowStatement(table string, row map[string]any, valid map[string]bool
 				value = columnDefault
 			}
 		}
-		// 新3:旧从节点库导出的备份可携带字面量
-		// "null" 白名单——middleware 把非空串当白名单配置(Unmarshal null 成功
-		// 但 0 CIDR)→ 主端全来源 403 直至重启迁移;导入侧归一为 ''。
+		// 旧从节点库导出的备份可携带字面量 "null" 白名单——middleware 把非空串
+		// 当白名单配置(Unmarshal null 成功但 0 CIDR)→ 主端全来源 403 直至重启
+		// 迁移。历史导出还可能带裸 IP（无前缀）与重复条目：这里统一走
+		// parseImportedMCPIPWhitelist 归一为规范 JSON 数组（与写侧
+		// encodeMCPIPWhitelist 同形态）。畸形形态已由
+		// validateV2BackupMCPIPWhitelist 整包 400 先行拦截，本处只做幂等归一；
+		// 解析失败时保持原值（不静默丢配置）。
 		if table == "api_keys" && column == "mcp_ip_whitelist" {
-			if sv, ok := value.(string); ok && sv == "null" {
-				value = ""
+			if normalized, _, perr := parseImportedMCPIPWhitelist(value); perr == nil {
+				if encoded, eerr := encodeMCPIPWhitelist(normalized); eerr == nil {
+					value = encoded
+				}
 			}
 		}
 		columns = append(columns, `"`+column+`"`)
@@ -1990,6 +2065,13 @@ func validateV2BackupRows(ctx context.Context, database *sql.DB, backup configBa
 	// backupBooleanEnabled 读取链）。
 	if err := validateV2BackupBooleanTypes(backup); err != nil {
 		return err
+	}
+	// api_keys.mcp_ip_whitelist 行级门——与时间门同位：畸形白名单落库后该 Key
+	// 每次请求都在认证中间件解析失败返回 500（fail-closed 但永久 500）。
+	if rows, ok := backup.Tables["api_keys"]; ok {
+		if err := validateV2BackupMCPIPWhitelist(rows); err != nil {
+			return err
+		}
 	}
 	// 时间列空串/不可解析文本门——必须在写入前拦下，
 	// 否则导入后 users/lb_rules/cert_jobs/path_rules 的 raw time 扫描每次 500。
@@ -6287,6 +6369,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			failureWarnings = append(failureWarnings, warning)
 		}
 		failureWarnings = append(failureWarnings, session.wafRestoreWarnings...)
+		// 会话收尾阶段的一般性披露（提交不确定态下的产物清理去向）：
+		// 与 WAF 回退结论并列透出，避免「导入失败」被读成「磁盘也已收敛」。
+		failureWarnings = append(failureWarnings, session.failureWarnings...)
 		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{
 			"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": failureWarnings,
 		}})
@@ -6668,6 +6753,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 证书链/域名警告并入响应(行内容类警告,不阻断)。
 	if len(importCertWarnings) > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings...)
+	}
+	// 证书签发任务被用户停止时，导入的非终态任务本窗口不会重排（fail-safe，
+	// 不越过用户停止意图）——必须披露，否则任务列表显示进行中而实际无 worker。
+	// 文案单源在 importQueueRecovery.stalledWarning；操作审计同文留痕。
+	if stalledDetail := session.recovery.stalledWarning(); stalledDetail != "" {
+		responseWarnings = append(append([]string{}, responseWarnings...), stalledDetail)
+		recordAudit(c, action+"警告", "配置备份", stalledDetail)
 	}
 	if adminTLSRestartWarning != "" {
 		responseWarnings = append(append([]string{}, responseWarnings...), adminTLSRestartWarning)

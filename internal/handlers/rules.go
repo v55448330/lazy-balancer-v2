@@ -2957,8 +2957,21 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	userIDInt := contextUserID(c)
-	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status NOT IN ('issued','failed','disabled'))"
-	args = append(args, userIDInt, caddyID, caddyID)
+	// 守卫谓词的状态集与 ruleEditBlockingCertJobStatuses 单源（此前写死
+	// NOT IN ('issued','failed','disabled')，把无 worker 的 waiting_ca/
+	// downloaded 一起拦下，与同族端点口径分裂）。
+	blockingStatuses := ruleEditBlockingCertJobStatuses()
+	if len(blockingStatuses) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(blockingStatuses)), ",")
+		query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status IN (" + placeholders + "))"
+		args = append(args, userIDInt, caddyID, caddyID)
+		for _, status := range blockingStatuses {
+			args = append(args, status)
+		}
+	} else {
+		query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?"
+		args = append(args, userIDInt, caddyID)
+	}
 
 	res, err := tx.Exec(query, args...)
 	if err != nil {
@@ -3137,6 +3150,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
+	// updateWarnings 是「本次保存直接造成的可用性变化」的披露面（改域弃用旧
+	// 证书等）：必须进成功响应 data.warnings（前端弹框展示）与操作审计双通道。
+	// 与 certWarnings（材料质量提示，只随审计留痕）分开口径——把用户可感知的
+	// 服务可用性变化只写审计等于没告知。
+	var updateWarnings []string
+
 	// 门控放宽到「ACME+http+domain 变化」——迁移
 	// 逻辑与启用态无关;此前 *req.Enabled 门控使禁用态改域绕过迁移,旧域
 	// disabled 任务行永驻,再启用时按新域查不到任务另建新行,破坏「一规则
@@ -3196,6 +3215,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// and maintains the "one rule = one cert job" invariant.
 		if domainChanged {
 			newCanonical := canonicalACMEDomainForJobLookup(domain)
+			// 迁移会就地抹除已签发材料（cert_pem/key_pem/expires_at 置空、状态
+			// 置 failed 等待重签），旧材料此后**不可恢复**（补偿快照只在本请求
+			// 内有效）。只有「旧行确实握着可用材料」时才存在「旧证书被弃用」这
+			// 一事实，据此决定成功响应是否披露。只读采集：读失败按无材料处理，
+			// 不影响迁移（否则一次披露用的查询会否掉整个更新）。
+			var deprecatedCertMaterial bool
+			if materialErr := db.DB.QueryRow(
+				`SELECT EXISTS(SELECT 1 FROM cert_jobs WHERE rule_id=? AND `+services.CertJobMaterialPredicateSQL("")+`)`,
+				caddyID).Scan(&deprecatedCertMaterial); materialErr != nil {
+				services.Logf("warn", "UpdateRule: 域名迁移前读取旧证书材料失败 for caddy_id=%s: %v（按无旧证书披露）", caddyID, materialErr)
+				deprecatedCertMaterial = false
+			}
+			if deprecatedCertMaterial {
+				updateWarnings = append(updateWarnings,
+					"旧证书已弃用（域名已变更，证书材料已清除），新证书签发完成前该规则 HTTPS 不可用")
+			}
 			// 迁移前取消在途旧域签发。否则 worker 可能在迁移把行改写为新域
 			// 之后仍完成签发，confirmCertificateDeployment 见到 job.domain==rule.domain
 			// （同为新域）便放行，把旧域证书部署到新域（瞬时 TLS 名称不匹配，重签后
@@ -3452,6 +3487,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				return
 			}
 		}
+		// 改域后补一次强制重渲染（与 Resume 链同构）：事务内 apply 用的是迁移
+		// **之前**的任务行（selectCertificate 要求证书覆盖规则全部域名），提交后
+		// 迁移已把旧材料抹除并改写为新域——运行配置必须重新与已提交视图对齐，
+		// 不能等新证书部署回调顺带重载（签发持续失败时规则会长期停在「旧配置
+		// + 新域」）。强制变体：证书文件已随迁移在事务外变化，JSON 相同会被短路；
+		// 失败走既有 restoreACMEState 补偿。本函数已持有 caddyOpMu，不可改用
+		// applyCaddyConfigE（重入死锁）。
+		if domainChanged && *req.Enabled {
+			reapplyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持锁——InLock 变体防重入死锁
+			h.recordCaddyApplyResult(reapplyErr)
+			if reapplyErr != nil {
+				failUpdateWithStatus("域名迁移后重载 Caddy 配置失败", http.StatusInternalServerError, reapplyErr)
+				return
+			}
+			// 第二轮已持久化新域视图，首轮 note 不得再回写旧视图载荷。
+			reloadNote.markLastGoodSuperseded()
+		}
 	}
 
 	services.Logf("info", "Rule %s updated", caddyID)
@@ -3467,8 +3519,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 证书链/域名警告随成功审计留痕(不阻断)。
 		auditParts = append(auditParts, "证书警告："+strings.Join(certWarnings, "；"))
 	}
+	if len(updateWarnings) > 0 {
+		// 可用性变化披露双通道之一（另一通道=响应 data.warnings）：事后只能从
+		// 审计判断「这条规则的 HTTPS 为何中断」时，这是唯一线索。
+		auditParts = append(auditParts, "可用性变更："+strings.Join(updateWarnings, "；"))
+	}
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
 	reloadNote.finalize()
+	if len(updateWarnings) > 0 {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新", Data: gin.H{"warnings": updateWarnings}})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
 
@@ -4339,7 +4400,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		prefetchArgs[i] = ruleID
 	}
 	protocolByRule := make(map[string]string, len(req.RuleIDs))
-	prefetchRows, err := tx.QueryContext(c.Request.Context(),
+	prefetchRows, err := tx.QueryContext(caddyWriteCtx(c),
 		"SELECT caddy_id, COALESCE(protocol,'') FROM lb_rules WHERE caddy_id IN ("+strings.Join(placeholders, ",")+")", prefetchArgs...)
 	if err != nil {
 		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
@@ -4386,7 +4447,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		// 是渲染输入，不推进版本列时并发打开的编辑向导版本门恒通过，PUT 会
 		// 静默覆盖本次批量结果，且列表「更新时间/更新者」停留在批量前的值。
 		// 守卫不变 ⇒ 同值批量仍零写入（bump 只随真实变更发生）。
-		result, err := tx.ExecContext(c.Request.Context(), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?, updated_at=datetime('now'), updated_by=?
+		result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?, updated_at=datetime('now'), updated_by=?
 			WHERE caddy_id=? AND (block_page_stage1_id IS NOT ? OR block_page_stage1_status IS NOT ? OR block_page_stage3_id IS NOT ? OR block_page_stage3_status IS NOT ?)`,
 			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, contextUserID(c), ruleCaddyID,
 			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
@@ -4570,19 +4631,19 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	// 配置应用失败时归一与启用状态一并回滚。
 	var droppedBindings int64
 	if ruleProtocol == "tcp" {
-		if _, err := tx.ExecContext(c.Request.Context(), tcpRuleDeadFieldsResetForRuleSQL, caddyID); err != nil {
+		if _, err := tx.ExecContext(caddyWriteCtx(c), tcpRuleDeadFieldsResetForRuleSQL, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理 TCP 死配置失败", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 			return
 		}
-		if _, err := tx.ExecContext(c.Request.Context(), `DELETE FROM path_rules WHERE rule_id = ?`, caddyID); err != nil {
+		if _, err := tx.ExecContext(caddyWriteCtx(c), `DELETE FROM path_rules WHERE rule_id = ?`, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理 TCP 自定义路径失败", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 			return
 		}
 		// 同族：TCP 零消费 upstreams.origin_domain（仅 HTTP 回源域名），启用时
 		// 一并清零，避免启用成功却把死配置留在库里随导出/备份/集群快照放大。
-		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE upstreams SET origin_domain = '' WHERE rule_id = ? AND COALESCE(origin_domain,'') <> ''`, caddyID); err != nil {
+		if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE upstreams SET origin_domain = '' WHERE rule_id = ? AND COALESCE(origin_domain,'') <> ''`, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理上游回源域名失败", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 			return
@@ -4590,7 +4651,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		// 同族收口：TCP 渲染链不加载安全策略，存量/带外绑定会在策略页显示
 		// 生效而运行态零防护——启用路径同样解除（与 UpdateRule/DeleteRule/
 		// 导入的清理对齐）。
-		bindingResult, err := tx.ExecContext(c.Request.Context(), `DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?`, caddyID)
+		bindingResult, err := tx.ExecContext(caddyWriteCtx(c), `DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?`, caddyID)
 		if err != nil {
 			services.Logf("error", "EnableRule security_policy_bindings cleanup error for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "启用", "清理安全策略绑定失败", err)
@@ -4899,6 +4960,32 @@ func applyOmittedUpstreamWeightDefaults(c *gin.Context, upstreams []models.Upstr
 // 终态（issued/failed/disabled）与未起动行（queued/pending）——未起动行
 // 维持「删除+取消+200」语义，在途行才在 orphanACME 删除前 409。
 // 逐调用计算：枚举极小（26 项），UpdateRule 非热路径，避免包级缓存漂移。
+// ruleEditBlockingCertJobStatuses 是**规则编辑**（保存）的证书任务守卫状态集：
+// 除终态（issued/failed/disabled）与两个「无 worker 在跑」的长窗口状态外一律阻塞。
+//
+// 放行的两个状态：
+//   - waiting_ca：CA 限流冷却（可达 1–3 小时，无 worker）——冷却期内连改名称/
+//     上游都 409 与同族端点口径矛盾（caqueue 明文「冷却期不应拦截删除/禁用」）；
+//     改域风险由提交后迁移（旧域任务退役）与退役补偿覆盖。
+//   - downloaded：证书已签发、部署退避重试（无 worker），材料已在库。
+//
+// 保留阻塞的 queued/pending：签发即将/可能被 worker 取走，保存路径的
+// needJob/入队分支以「不存在非终态任务」为前提——放行会让同一规则重复入队。
+// 新增状态默认阻塞（fail-closed）：只有显式列入放行集才不拦。
+func ruleEditBlockingCertJobStatuses() []string {
+	nonBlocking := map[string]bool{
+		"issued": true, "failed": true, "disabled": true, // 终态
+		"waiting_ca": true, "downloaded": true, // 无 worker 在跑的长窗口
+	}
+	statuses := make([]string, 0, len(db.CertJobStatuses()))
+	for _, status := range db.CertJobStatuses() {
+		if !nonBlocking[status] {
+			statuses = append(statuses, status)
+		}
+	}
+	return statuses
+}
+
 func executingACMEJobStatuses() []string {
 	excluded := map[string]bool{"queued": true, "pending": true, "issued": true, "failed": true, "disabled": true}
 	statuses := make([]string, 0, len(db.CertJobStatuses()))

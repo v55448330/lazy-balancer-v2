@@ -25,6 +25,9 @@ import (
 // composeStopGracePeriod 直读 docker-compose.yml 的 stop_grace_period（单一
 // 数据源——此前测试硬编码 30s 常量与 compose 双写易漂移）。取全部
 // 服务的最小值（任一服务 grace 收紧都必须反映到预算校验）。
+// 注意：本函数的覆盖面只有 compose 形态；README 的 docker run 形态（Docker
+// 默认 10s 停止宽限，需显式 --stop-timeout）由 stop_timeout_docs_test.go 单独
+// 对账——不要因为本门为绿就认为所有文档化部署形态都覆盖到了。
 func composeStopGracePeriod(t *testing.T) time.Duration {
 	t.Helper()
 	data, err := os.ReadFile("../../docker-compose.yml")

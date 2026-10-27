@@ -21,10 +21,10 @@ func TestClusterStatus_syncIntervalDisplayClamp(t *testing.T) {
 	// 每个子用例 db.Initialize 后必须 Close 并恢复
 	// 全局句柄（与 newClusterTestService 同款）——此前覆盖全局 db.DB 却无
 	// cleanup，-race/并行执行下可与其他用例互相污染，句柄也随全局注册表泄漏。
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	cases := []struct {
 		stored int
@@ -47,7 +47,7 @@ func TestClusterStatus_syncIntervalDisplayClamp(t *testing.T) {
 			}
 			t.Cleanup(func() {
 				_ = db.Close()
-				db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+				restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 			})
 			if _, err := db.DB.Exec("UPDATE global_config SET sync_interval=? WHERE id=1", tc.stored); err != nil {
 				t.Fatal(err)

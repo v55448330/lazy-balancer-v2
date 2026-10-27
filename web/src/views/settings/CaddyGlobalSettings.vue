@@ -179,7 +179,7 @@
                  按 UTF-8 字节计）——超限保存会被拒绝，先在此告知而不是让用户试错 -->
             <div>最多 200 行、16 KiB（后端按 UTF-8 字节计）；超限保存会被拒绝。</div>
             每行一条规则：字段重命名 <code>request&gt;remote_ip -&gt; src</code> 或删除字段 <code>request&gt;headers -&gt; delete</code>。
-            无论格式如何，<code>request&gt;headers&gt;X-API-Key</code> 恒被删除（面板 API Key 不落日志）。
+            无论格式如何，<code>request&gt;headers&gt;X-Api-Key</code> 恒被删除（面板 API Key 不落日志）。
             可用字段：<code>request&gt;remote_ip</code> <code>request&gt;client_ip</code> <code>request&gt;method</code> <code>request&gt;host</code> <code>request&gt;uri</code> <code>request&gt;proto</code> <code>request&gt;headers&gt;User-Agent</code> <code>status</code> <code>size</code> <code>duration</code> <code>bytes_read</code> <code>user_id</code> <code>ts</code> <code>resp_headers</code> <code>request&gt;tls</code>。
             Caddy 日志文档：<a href="https://caddyserver.com/docs/json/apps/http/servers/logs/" target="_blank" rel="noopener noreferrer">官方字段说明</a>
           </div>
@@ -408,21 +408,32 @@ const refListEntries = ref<Record<number, string[] | null>>({})
 // 看到「合计 N 条」里有哪几个列表是按条数估算的，并提供一键重试——否则某份
 // 名单条目接口瞬时失败后，本页再无重拉入口，只能改选引用或刷新整页。
 const refListEntriesFailed = ref<Record<number, boolean>>({})
-// 拉取在途集合（占位 null 之外的独立标记：失败后可随下次选择重试）
-const refListEntriesLoading = new Set<number>()
+// 拉取在途集合：id → 发起时的缓存世代。世代不符（失效后被在途请求覆盖）
+// 时既挡住重排，也让旧响应的收尾不去删除新一代的在途标记。
+const refListEntriesLoading = new Map<number, number>()
+// 缓存世代：invalidateRefListEntries 自增。失效前发出的详情请求不得把旧条目
+// 写回缓存（会让「合计 N 条」与超限提示长期基于旧快照），也不得清失败标记。
+let refEntryGeneration = 0
 // 会话内缓存失效：名单可能在别处被编辑/删除，重新拉取名单目录成功时
 // 一并清空条目缓存并重排当前引用（否则「合计」用旧条目直到整页刷新）。
 const invalidateRefListEntries = (): void => {
+  refEntryGeneration++
   refListEntries.value = {}
   refListEntriesFailed.value = {}
+  // 旧世代的在途标记一并作废：否则重排的拉取会被「已在途」判据跳过，
+  // 反而只有那次旧响应能落库（正是本条要消除的短路）。
+  refListEntriesLoading.clear()
   refEntryQueue.length = 0
   for (const id of trustedRangeRefs.value) scheduleRefListEntries(id)
 }
 const fetchRefListEntries = async (id: number): Promise<void> => {
   if (id in refListEntries.value || refListEntriesLoading.has(id)) return
-  refListEntriesLoading.add(id)
+  const generation = refEntryGeneration
+  refListEntriesLoading.set(id, generation)
   try {
     const res = await request.get<APIResponse<TrustedIpListDetail>>(`/security/ip-lists/${id}`, { silent: true })
+    // 世代已推进=本次响应属于作废的缓存：不写回、不动失败标记。
+    if (generation !== refEntryGeneration) return
     refListEntries.value = {
       ...refListEntries.value,
       [id]: (res.data?.entries ?? []).map((entry) => String(entry.value ?? '')).filter((value) => value.trim() !== ''),
@@ -433,10 +444,11 @@ const fetchRefListEntries = async (id: number): Promise<void> => {
       refListEntriesFailed.value = next
     }
   } catch {
+    if (generation !== refEntryGeneration) return
     // 失败保持未知：总量门降级为提示且不硬拦（估算无法去重），保存由后端兜底
     refListEntriesFailed.value = { ...refListEntriesFailed.value, [id]: true }
   } finally {
-    refListEntriesLoading.delete(id)
+    if (refListEntriesLoading.get(id) === generation) refListEntriesLoading.delete(id)
   }
 }
 // 引用条目无上限并行 fan-out 会在进入设置页时同时打 N 个详情请求

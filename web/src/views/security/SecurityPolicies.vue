@@ -238,10 +238,10 @@
               <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
             </el-form-item>
             <el-form-item label="名称" required>
-              <el-input v-model="form.name" placeholder="策略名称" maxlength="100" show-word-limit />
+              <el-input v-model="form.name" placeholder="策略名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
             </el-form-item>
             <el-form-item label="描述">
-              <el-input v-model="form.description" placeholder="策略描述" maxlength="500" show-word-limit />
+              <el-input v-model="form.description" placeholder="策略描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
             </el-form-item>
             <el-form-item label="启用状态">
               <el-switch v-model="form.enabled" />
@@ -982,6 +982,9 @@ import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTION
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
+import { hasOwn } from '@/utils/hasOwn'
+import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
+import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, isInitRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { buildPolicyPayload, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
@@ -1436,6 +1439,8 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
     stage3Rows.push({ label: '记录请求体', value: d.log_request_body ? '启用' : '关闭' })
   }
   const page = d.block_page_id > 0 ? blockPages.value.find((p) => p.id === d.block_page_id) : undefined
+  // 地域模式词表键（off 已在上游分支排除；缺省按 deny 展示）
+  const geoipMode = d.geoip_mode ?? 'deny'
   return [
     {
       title: '基础信息',
@@ -1464,7 +1469,9 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         // 内容门只用于阶段能力/类型推断
         { label: '访问控制', value: d.ip_acl_enabled === true || hasIPACLControl(d) ? formatAclModeDetail(ipLists.value, d) : '未启用' },
         // 信任名单只归阶段 0 段（2026-09-21 用户裁定：独立阶段 0，阶段 1 不再重复展示）
-        { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off' ? `${GEOIP_MODE_LABELS[d.geoip_mode ?? 'deny'] ?? d.geoip_mode} · ${geoCount} 区域` : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
+        { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off'
+          ? `${hasOwn(GEOIP_MODE_LABELS, geoipMode) ? GEOIP_MODE_LABELS[geoipMode] : geoipMode} · ${geoCount} 区域`
+          : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
       ],
     },
     {
@@ -1870,35 +1877,8 @@ const parseCustomRuleIds = (raw: string | undefined): number[] => {
   } catch { return [] }
 }
 
-// CRS 系统基础规则组（初始化 901 / 请求阻断评估 949 / 响应评估 959）：后端强制
-// 加载并在写入时从 crs_rule_groups 剥离——不提供选项，存量存储读回时同样剔除，
-// 避免渲染 ghost 标签与参与跨策略重复告警比较。
-const CRS_INFRA_GROUP_CODES = ['01', '49', '59']
-
-// 下拉隐藏组码（v2.3.x 用户裁定）：组码 99（REQUEST-999 通用排除）内容为 55 条
-// SecRuleUpdateTargetById 官方误报豁免而非检测规则——默认「全部规则」时经 glob
-// 字母序自动包含且序正确，自选组时无需（也不应）显式选择；不提供下拉选项，存量
-// 存储值读回时以 ghost 标签给出专属说明，写回保留（存储契约不变）。
-const CRS_HIDDEN_GROUP_CODES = ['99']
-
-// 基础设施 ID 前缀（901 初始化/949 请求评估/959 响应评估）：规则组选择全部剔除
-//（后端写入面同语义剥离，提供选项=选了保存后消失）；排除选择仅剔 901（后端
-// 硬拒，提供选项=必现 400）——949/959 保留可选（检测模式排除评估是合法调优）。
-const CRS_INFRA_ID_PREFIXES = ['901', '949', '959']
-const isInfraRuleId = (id: string): boolean => CRS_INFRA_ID_PREFIXES.some((p) => id.startsWith(p))
-const isInitRuleId = (id: string): boolean => id.startsWith('901')
-
-// CRS 规则组混合存储（两位组号 ∪ 6 位规则 ID）。组代码以后端 Include 的两位组代码
-// 归一（REQUEST-9<code>-*.conf → <code>，兼容历史完整文件名前缀）；6 位为单条规则 ID
-// 原样保留；系统基础组（CRS_INFRA_GROUP_CODES）与其余形状一并丢弃。
-const normalizeCrsGroups = (values: string[]): string[] => {
-  const codes = values.map((value) => {
-    if (/^\d{2}$/.test(value)) return value
-    if (/^\d{6}$/.test(value)) return isInfraRuleId(value) ? '' : value
-    return parseCrsFilename(value)?.code ?? ''
-  }).filter((code) => code !== '' && !CRS_INFRA_GROUP_CODES.includes(code))
-  return [...new Set(codes)]
-}
+// CRS 规则组/基础设施 ID 的取值口径全部收敛在 utils/crsGroups（后端 Include 以
+// 两位组代码为键；可识别形态归一、不可识别形态原样保留，见该模块文件头）。
 
 // crsOptionCode 从 CRS 文件名提取展示组码（REQUEST-942-*.conf → "942"）——
 // 解析单源 utils/securityStages.parseCrsFilename；非 CRS 文件名原样返回。
@@ -2252,7 +2232,11 @@ watch(() => form.value.ip_acl_mode, (mode) => {
 })
 
 const ACL_LIST_LABELS: Record<string, string> = { deny: '拒绝 IP', allow: '允许 IP', 绕过: '免检测 IP' }
-const aclListLabel = computed(() => ACL_LIST_LABELS[form.value.ip_acl_mode] ?? 'IP 列表')
+// 词表查表统一过 hasOwn：库值可能命中原型键（constructor/toString/__proto__，
+// 只能由带外改库产生），裸下标会把 Object.prototype 上的函数当标签渲染。
+const aclListLabel = computed(() => (hasOwn(ACL_LIST_LABELS, form.value.ip_acl_mode)
+  ? ACL_LIST_LABELS[form.value.ip_acl_mode]
+  : 'IP 列表'))
 
 const GEOIP_MODE_LABELS: Record<string, string> = { deny: '拦截所选区域', allow: '仅允许所选区域' }
 // 从 off 态重开开关时控制模式回落 deny（off 只是关闭哨兵，radio 无此项）。
@@ -2265,7 +2249,9 @@ const ACL_MODE_TIPS: Record<string, string> = {
   allow: '仅列表中的 IP 可以访问，其他 IP 一律拒绝',
   绕过: '列表中的 IP 将跳过全部安全检测',
 }
-const aclListTip = computed(() => ACL_MODE_TIPS[form.value.ip_acl_mode] ?? '')
+const aclListTip = computed(() => (hasOwn(ACL_MODE_TIPS, form.value.ip_acl_mode)
+  ? ACL_MODE_TIPS[form.value.ip_acl_mode]
+  : ''))
 // 与后端口径一致：ACL 启用且列表非空，或黑名单非空（内联与引用列表合并计数）。
 // 2026-09-21：信任名单（ip_whitelist）不再计入——信任恒归独立阶段 0（用户裁定），
 // 计入会把纯信任策略误判为跨阶段 mixed 并在阶段 1 投出空行。
@@ -2914,9 +2900,12 @@ const blockPageNotes = (caddyId: string, chain: ChainEntry[]): BlockPageNote[] =
   if (!pageHasContent(form.value.block_page_id)) {
     notes.push({ kind: 'warning', text: '本策略拦截页已失效（页面已删除或内容为空）——保存前请重新选择' })
   }
-  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   const overrideFor = (stage: 1 | 3): { pageId: number; pageHasContent: boolean } | null => {
-    const pageId = (stage === 1 ? rule?.block_page_stage1_id : rule?.block_page_stage3_id) ?? 0
+    // 与「关联规则」步骤、保存载荷共用同一暂存视图（seed=库值 + 本会话编辑）：
+    // 只读库值会让同一次会话里两步给出相反结论（关联规则显示「待保存」，本步
+    // 仍按已保存配置说「规则已配置阶段页覆盖」）。
+    const edit = overrideEditOf(caddyId)
+    const pageId = (stage === 1 ? edit.stage1_id : edit.stage3_id) ?? 0
     return pageId > 0 ? { pageId, pageHasContent: pageHasContent(pageId) } : null
   }
   const input = chain.map((e) => ({

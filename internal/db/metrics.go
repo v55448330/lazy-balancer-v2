@@ -327,28 +327,30 @@ func gcQuarantinedMetricsFiles(dbPath string) {
 			log.Printf("gc quarantined metrics files: glob %s: %v", base+".corrupt.*", err)
 			continue
 		}
-		if len(matches) <= quarantineKeepPerBase {
-			continue
-		}
+		// 只处理本函数命名的文件（.corrupt.<unix秒>[-序号]）：解析失败的
+		// .corrupt.* 是操作者手工留档副本（如 .corrupt.before-restore），按
+		// 「未知时间排最后」参与保新删旧会把它当作最旧件优先删除——取证副本
+		// 消失且只留一行 GC 日志。
 		infos := make([]struct {
 			path   string
 			second int64
 			order  int
-			parsed bool
 		}, 0, len(matches))
 		for _, path := range matches {
 			seconds, order, parsed := quarantineFileOrder(path)
+			if !parsed {
+				continue
+			}
 			infos = append(infos, struct {
 				path   string
 				second int64
 				order  int
-				parsed bool
-			}{path, seconds, order, parsed})
+			}{path, seconds, order})
+		}
+		if len(infos) <= quarantineKeepPerBase {
+			continue
 		}
 		sort.Slice(infos, func(i, j int) bool {
-			if infos[i].parsed != infos[j].parsed {
-				return infos[i].parsed
-			}
 			if infos[i].second != infos[j].second {
 				return infos[i].second > infos[j].second
 			}
@@ -552,6 +554,10 @@ func initMetricsSchema(db *sql.DB) error {
 	return nil
 }
 
+// securityEventsTransactionIndexSQL 是事务唯一索引的 DDL 单源（探测形状与
+// 建立共用；口径见 uniqueIndexState 的「同名非唯一索引」说明）。
+const securityEventsTransactionIndexSQL = `CREATE UNIQUE INDEX idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`
+
 // ensureSecurityEventsTransactionIndex 在建立唯一部分索引前检查存量重复事务。
 // 发现重复时不再 WARN+跳过（跳过期间 INSERT OR IGNORE 失去
 // 唯一约束兜底，offset 重建/轮转补采会把重复事件重新入库并重复喂
@@ -571,11 +577,11 @@ func ensureSecurityEventsTransactionIndex(db *sql.DB) error {
 	// 全表 GROUP BY 查重（security_events 全表扫描，事件表百万行时启动白付
 	// 数秒）没有任何可发现对象——直接跳过。存量库（索引缺失）才进入查重+建
 	// 索引路径。
-	var indexSQL sql.NullString
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_security_events_transaction'`).Scan(&indexSQL); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	_, matches, err := uniqueIndexState(db, "idx_security_events_transaction", securityEventsTransactionIndexSQL)
+	if err != nil {
 		return fmt.Errorf("failed to inspect security_events transaction index: %w", err)
 	}
-	if indexSQL.Valid && strings.Contains(strings.ToUpper(indexSQL.String), "UNIQUE") {
+	if matches {
 		securityEventsTransactionIndexSkips.Add(1)
 		return nil
 	}
@@ -614,7 +620,7 @@ func ensureSecurityEventsTransactionIndex(db *sql.DB) error {
 		removed, _ := result.RowsAffected()
 		log.Printf("WARN: security_events 表存在重复 transaction_id（%s），已去重删除 %d 行（保留每事务最早行）并继续创建唯一索引", strings.Join(duplicates, ", "), removed)
 	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`); err != nil {
+	if err := ensureUniqueIndex(db, "idx_security_events_transaction", securityEventsTransactionIndexSQL); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)
 	}
 	return nil

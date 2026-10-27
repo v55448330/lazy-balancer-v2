@@ -1,6 +1,7 @@
 // 全球省级行政界（威胁大屏 v7 B 方案省级下钻）：Natural Earth 10m admin-1
 // states_provinces 全量（4600 要素/251 个国家和地区键，含特殊地区），构建期一次性转换静态入库
-// （容差 0.04° + 2 位小数 ≈1km），运行时零外部请求。
+// （容差 0.04° + 2 位小数 ≈1km），运行时零外部请求；本模块加载期把同一国家内的
+// 同名要素合并为一条省记录（4600 → 4575 条，几何并集不丢，见文件末尾合并段）。
 // 结构：国家中文键（与 worldBorders/countryCentroids/国家命中计数一致；
 // geoipnames.CountryNamesCN 未收录者保留英文原名，消费方走兜底）→
 // 省[] → {name 省名, polys 多边形[]}；中国沿用 chinaProvinces.ts 高精度
@@ -287,4 +288,24 @@ for (const [alias, target] of Object.entries(COUNTRY_ALIAS)) {
     if (merged.some((existing) => existing.name === row.name)) continue
     merged.push(row)
   }
+}
+
+// 同国同名省合并：Natural Earth admin-1 会把同一城市与其所属省/县分别作为两条
+// 要素（Cork/Maputo/Tashkent/Cebu/Iloilo 等 24 组同名），而省层的展示与聚合键
+// 都只有省名——两条同名行既无法在悬浮/标签上区分，又让「按省名聚合」把两块区域
+// 算作一处。合并为一条（多边形并集，几何零丢失：24 组内无重复多边形）。
+// 判定必须按「国家 + 省名」：不同国家同名省是正常事实，不得跨国合并。
+for (const rows of Object.values(ADMIN1_PROVINCES)) {
+  if (rows.length < 2) continue
+  if (new Set(rows.map((row) => row.name)).size === rows.length) continue
+  const byName = new Map<string, Admin1Province>()
+  for (const row of rows) {
+    const existing = byName.get(row.name)
+    if (existing) {
+      existing.polys.push(...row.polys)
+      continue
+    }
+    byName.set(row.name, { name: row.name, polys: [...row.polys] })
+  }
+  rows.splice(0, rows.length, ...byName.values())
 }

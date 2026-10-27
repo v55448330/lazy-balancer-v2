@@ -923,8 +923,16 @@ func (m *IP2RegionUpdateManager) restorePreviousVersionRow() {
 }
 
 // restorePreviousVersionRowLocked 是调用方已持 wafFileMu 的实现。
+//
+// 无可回写的既有版本（行缺失或 version 为空串）时不得冒称任何 tag：磁盘已还原为
+// 更新前字节，版本行/sidecar 若停留在安装段写入的新 tag，就是「磁盘旧 / 行新」，
+// 且下一轮 tag == currentVersion 会命中「已是最新」短路——磁盘上的旧库再也不会
+// 被替换（自愈通道永久关闭，GeoIP 按旧库判决而面板显示新版本）。与 dist 回退
+// 分支同构写保守标识 bundled：「版本不可知」只有一种表达，下次远端数值 tag 可
+// 重新建立基线。
 func (m *IP2RegionUpdateManager) restorePreviousVersionRowLocked() {
 	if m.prevVersion == "" {
+		m.writeDistRollbackMarkersLocked()
 		return
 	}
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET version=?, updated_at=datetime('now') WHERE id=1", m.prevVersion); err != nil {
@@ -938,6 +946,8 @@ func (m *IP2RegionUpdateManager) restorePreviousVersionRowLocked() {
 // writeDistRollbackMarkers dist 回退后写保守标识 bundled（已装载内置库，
 // 版本不可知；不得冒称 prevVersion），下次远端数值 tag 可建立基线。
 // 行与 sidecar 同 wafFileMu 临界区，与 restorePreviousVersionRow 同构。
+// 「更新前版本不可知」（行缺失或版本为空串的回滚）复用同一标识——两种形态
+// 的事实相同：磁盘上的库不是任何已知 tag，版本行不得声称是。
 func (m *IP2RegionUpdateManager) writeDistRollbackMarkers() {
 	wafFileMu.Lock()
 	defer wafFileMu.Unlock()

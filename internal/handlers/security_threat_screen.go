@@ -1578,6 +1578,20 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
+	// 上游非 200 必须显式失败：Caddy admin 的错误体同样是合法 JSON
+	// （如 503 {"error":"..."}），直接进入解码/成功信封会把「事件流故障」伪装成
+	// 200 + enabled=false——前端 flowTask 会清掉错误标志并把 flowSince 归零，
+	// 用户看到正常光流静默消失而非接口故障。口径对齐同文件流量代理
+	// fetchThreatTrafficSnapshot：5xx→503（不可达），其余非 200→502（响应失败）。
+	if resp.StatusCode != http.StatusOK {
+		services.Logf("warn", "threat-screen events: admin status %d", resp.StatusCode)
+		if resp.StatusCode >= 500 {
+			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "逐请求事件流不可达"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "逐请求事件流上游响应失败"})
+		return
+	}
 	// 对齐同族读端点（GetCRSRuleContent/GetCRSSetupConfig 的 413 口径）
 	// ——超限显式拒绝而非把截断的 JSON 以 200 透传（调用方会把残缺事件流当
 	// 完整增量消费）。

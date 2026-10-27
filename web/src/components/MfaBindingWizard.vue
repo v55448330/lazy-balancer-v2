@@ -19,8 +19,12 @@
       <el-step title="恢复码" />
     </el-steps>
     <div v-if="step === 0" class="mfa-step-column">
-      <div class="mfa-qr-frame">
+      <div v-if="!qrError" class="mfa-qr-frame">
         <canvas ref="qrCanvas" width="220" height="220" />
+      </div>
+      <div v-else class="info-note-bar" role="status">
+        <span class="info-note-desc">二维码生成失败，无法扫码</span>
+        <span class="info-note-sub">请使用下方密钥在 Google/Microsoft Authenticator 等验证器中手动添加</span>
       </div>
       <el-text type="info" size="small">无法扫码时手动输入密钥：</el-text>
       <el-text size="small" selectable class="mfa-secret">{{ secret }}</el-text>
@@ -81,6 +85,9 @@ const emit = defineEmits<{
 }>()
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
+// 二维码渲染失败态：画布上下文不可用/受限 WebView/uri 异常时，空白画布既不提示
+// 也不降级，用户只会以为页面卡住（no unhandled rejection 也不够——必须说清下一步）。
+const qrError = ref(false)
 const step = ref(0)
 const code = ref('')
 const recoveryCodes = ref<string[]>([])
@@ -99,12 +106,22 @@ const handleClosed = (): void => {
   step.value = 0
   code.value = ''
   recoveryCodes.value = []
+  qrError.value = false
 }
 
+// 渲染失败不抛出（原实现 async 无 catch，调用点 void 丢弃 → unhandled rejection
+// 且画布留白）：置失败位，模板改说「二维码生成失败，请用下方密钥手动添加」。
 const renderQr = async (): Promise<void> => {
   if (!props.uri) return
+  qrError.value = false
   await nextTick()
-  if (qrCanvas.value) await QRCode.toCanvas(qrCanvas.value, props.uri, { width: 220, margin: 1 })
+  if (!qrCanvas.value) return
+  try {
+    await QRCode.toCanvas(qrCanvas.value, props.uri, { width: 220, margin: 1 })
+  } catch (error: unknown) {
+    qrError.value = true
+    console.warn('MFA 二维码渲染失败，已降级为手动输入密钥', error)
+  }
 }
 
 watch(() => props.modelValue, (visible) => {

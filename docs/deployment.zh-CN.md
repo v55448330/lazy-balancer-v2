@@ -45,6 +45,8 @@
 --ulimit nofile=1048576:1048576
 ```
 
+**停止宽限期**（优雅关停）：面板关停链的最坏路径预算为 25 秒（HTTP 在途请求 → Caddy 排水 → 威胁大屏停止 → 任务引擎排空 → metrics/时区/日志轮转收尾 → ACME 收尾）。Docker 默认停止宽限只有 10 秒，第 10 秒即 SIGKILL：在途代理连接被硬断（`docker events` 里 `die` 的 `exitCode=137`）、`task_runs` 可能滞留在 `running`、日志尾部丢失。因此裸 `docker run` 必须带 `--stop-timeout 30`（compose 文件已内置 `stop_grace_period: 30s`）；systemd/Kubernetes 等自管编排请配置等效的 ≥25 秒停止宽限。
+
 内核级调优（sysctl）均为可选——默认值已生产就绪，完整指南见 [生产调优](production-tuning.zh-CN.md)。
 
 ## 品牌定制

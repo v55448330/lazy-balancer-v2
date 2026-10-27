@@ -463,10 +463,16 @@ func clusterMachineRateLimit(scope string, source clusterCredentialSource) gin.H
 			abortClusterMachineRateLimit(c)
 			return
 		}
+		// 归还必须写在 defer 里：handler panic 时控制流不经过 c.Next() 之后的
+		// 语句（gin.Recovery 直接写 500 并终止链路），预占的两个桶各泄漏 1 次
+		// 额度到分钟窗滚动为止。失败判据仍是「已写出 401」——panic 轮的最终
+		// 状态码是 500，按成功语义归还，与「成功不消耗失败预算」的契约一致。
+		defer func() {
+			failed := c.Writer.Status() == http.StatusUnauthorized
+			releaseRateLimitReservation(credentialBucket, credentialGeneration, failed)
+			releaseRateLimitReservation(ipBucket, ipGeneration, failed)
+		}()
 		c.Next()
-		failed := c.Writer.Status() == http.StatusUnauthorized
-		releaseRateLimitReservation(credentialBucket, credentialGeneration, failed)
-		releaseRateLimitReservation(ipBucket, ipGeneration, failed)
 	}
 }
 

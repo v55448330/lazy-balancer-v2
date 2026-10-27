@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -537,5 +538,54 @@ func TestClusterNodeServiceControlRoute_requires_admin_and_relays(t *testing.T) 
 	// Then 伪造票据 401
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("forged ticket status=%d body=%s, want 401", response.Code, response.Body.String())
+	}
+}
+
+func TestClusterMachineRateLimit_panicReleasesReservedBudget(t *testing.T) {
+	// Given：机器端点 handler 必然 panic（经 gin.Recovery 返回 500）。
+	// 额度预占发生在认证之前，panic 时控制流不经过中间件的收尾语句，
+	// 归还必须写在 defer 里，否则凭证桶与 IP 宽桶各泄漏 1 次额度。
+	const scope = "panic-released-budget"
+	withIsolatedRateLimitBuckets(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(clusterMachineRateLimit(scope, clusterCredentialFromToken))
+	router.GET("/cluster", func(*gin.Context) { panic("boom") })
+
+	// When
+	request := httptest.NewRequest(http.MethodGet, "/cluster", nil)
+	request.RemoteAddr = "198.51.100.64:1234"
+	request.Header.Set("X-Cluster-Token", "panic-credential")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：500 且两个桶计数都回到 0（panic 轮不消耗失败预算）。
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("panicking handler status=%d, want 500", response.Code)
+	}
+	assertReservedBucketCount(t, "198.51.100.64|"+scope+"|credential:", 0)
+	assertReservedBucketCount(t, "198.51.100.64|"+scope+"|ip", 0)
+}
+
+func assertReservedBucketCount(t *testing.T, keyPrefix string, want int) {
+	t.Helper()
+	loginRateBuckets.Lock()
+	var found *loginRateBucket
+	for key, bucket := range loginRateBuckets.entries {
+		if strings.HasPrefix(key, keyPrefix) {
+			found = bucket
+			break
+		}
+	}
+	loginRateBuckets.Unlock()
+	if found == nil {
+		t.Fatalf("限流桶 %s* 不存在，无法断言额度归还", keyPrefix)
+	}
+	found.mu.Lock()
+	got := found.count
+	found.mu.Unlock()
+	if got != want {
+		t.Fatalf("限流桶 %s* 计数=%d, want %d（panic 轮必须归还预占额度）", keyPrefix, got, want)
 	}
 }

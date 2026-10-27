@@ -79,6 +79,11 @@ func TestClusterNodeAction_forbiddenMappingUsesSentinel(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
+	// 角色复位走 t.Cleanup（不是「断言之后」的一行）：断言失败即 t.Fatalf 终止，
+	// 后面的复位不会执行，后续用例会以从节点身份启动（-shuffle 下随机红）。
+	t.Cleanup(func() {
+		_, _ = db.DB.Exec(`UPDATE global_config SET is_master=1 WHERE id=1`)
+	})
 	// 服务层真实拒绝：SQL 级角色条件命中 0 行 → 复核角色 → ErrNotMasterNode。
 	serviceErr := h.clusterService.ApproveNode(context.Background(), 1, time.Now())
 	if !errors.Is(serviceErr, services.ErrNotMasterNode) {

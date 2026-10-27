@@ -9,7 +9,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, openTags, repoCode, section } from './_helpers.ts'
 import { RULE_NUMERIC_LIMITS } from '../src/utils/ruleValidation.ts'
 import { proxyTimeoutSummary } from '../src/utils/proxyTimeouts.ts'
 
@@ -104,7 +104,7 @@ test('D 数值控件边界与后端写侧门逐值对表（改门即红）', () 
   // 断言把 `:max="30"` 写在字段名之前，而模板恒为「字段名在前」——真回归（重新
   // 加 :max）时空转（死断言）。标签提取必须跳过引号内的 `>`（`:min="a > b ? …"`
   // 形态），否则会在属性值中途截断。
-  const inputTags = [...page.matchAll(/<el-input-number\b(?:[^>"']|"[^"]*"|'[^']*')*>/g)].map((m) => m[0])
+  const inputTags = openTags(page, 'el-input-number')
   const wizardTags = (field: string): string[] => {
     const matcher = new RegExp(`\\.${field}"`)
     return inputTags.filter((tag) => matcher.test(tag))

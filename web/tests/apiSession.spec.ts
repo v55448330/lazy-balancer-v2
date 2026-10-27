@@ -45,10 +45,19 @@ test('请求记录身份代际，428 通过身份守卫编排弹码、刷新与�
   assert.match(requestInterceptor, /config\._sessionGeneration\s*=\s*currentSessionGeneration\(\)/)
 
   const stepUp = codeSection('src/utils/api.ts', "} else if (kind === 'step-up') {", '} else if (!isLoginRequest)')
-  assert.match(stepUp, /requestGeneration === currentSessionGeneration\(\)/)
   assert.match(stepUp, /runMfaStepUpRequest\(\{/)
   assert.match(stepUp, /isCurrent,/)
   assert.match(stepUp, /replay: \(\) => \{[\s\S]*?service\.request\(error\.config\)/)
+
+  // 接线只保留窄断言：守卫必须由 createSessionStepUpGate 构造、且拦截器内
+  // 不得内联第二份代际比较。比较语义本身由下面的行为用例（apiFailure.spec）
+  // 钉住——源码正则无法分辨「比较错变量但仍命中文本」。
+  assert.match(
+    stepUp,
+    /createSessionStepUpGate\(error\.config\?\._sessionGeneration, currentSessionGeneration\)/,
+    '428 身份守卫必须经 createSessionStepUpGate 构造（不得内联比较）',
+  )
+  assert.doesNotMatch(stepUp, /_sessionGeneration\s*===\s*currentSessionGeneration/, '不得内联第二份代际比较')
 
   const refresh = codeSection('src/stores/auth.ts', 'async function refreshMfaStep', '// v2.1.8 MFA 第二步')
   assert.match(refresh, /applyAuthResponse\(res, true\)/, 'MFA 刷新必须保持同账号身份代际')

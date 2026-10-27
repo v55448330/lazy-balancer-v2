@@ -165,6 +165,7 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
+import { hasOwn } from '@/utils/hasOwn'
 import { eventActionFull, eventActionTone } from '@/utils/eventAction'
 import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, wafModeLabel } from '@/utils/securityStages'
 import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
@@ -662,7 +663,9 @@ const customDisplayID = computed(() => customHasDbParent.value ? String(customDb
 const ACTION_LABELS: Record<string, string> = { block: '拦截', log: '仅记录', pass: '放行' } // 后端合法动作仅 block/log/pass（score 为不可达映射，已删）
 const customActionLabel = computed(() => {
   const a = customRule.value?.action ?? ''
-  return ACTION_LABELS[a] ?? a
+  // 查表过 hasOwn：动作来自库值，原型键命中原生函数会渲染成源码文本，
+  // 「未知值回显原文」的兜底形同失效。
+  return hasOwn(ACTION_LABELS, a) ? ACTION_LABELS[a] : a
 })
 const customConditions = computed<Array<{ target: string; operator: string; pattern: string }>>(() => {
   // 后端列表接口 conditions 已是结构化数组（非 JSON 字符串）

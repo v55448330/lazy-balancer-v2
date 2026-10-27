@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/accesslog"
 )
 
-const apiKeyRedactionPath = "request>headers>X-API-Key"
+// apiKeyRedactionPath 必须等于引擎实际看到的头键路径（http.Header 的规范化
+// 键名）——写死字面量的副本就是脱敏空转的根因，故此处从单源派生。
+var apiKeyRedactionPath = accesslog.APIKeyHeaderPath()
 
 func encoderFields(t *testing.T, encoder map[string]interface{}) map[string]interface{} {
 	t.Helper()

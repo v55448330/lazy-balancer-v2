@@ -54,14 +54,14 @@ test('换行（logKey 变化）：先清空旧行统计，再取新行数据', a
   const { info } = useLogStorageStats({ target: () => target.value, refreshKey: () => 0 })
   await flush()
   assert.equal(info.value?.name, '运行日志', '挂载即取当前行（refreshKey 初始触发）')
-  assert.deepEqual(requests[0].config, { params: { key: 'runtime', caddy_id: 'main' } })
+  assert.deepEqual(requests[0].config, { params: { key: 'runtime', caddy_id: 'main' }, silent: true })
 
   target.value = { logKey: 'audit', caddyId: 'main' }
   await nextTick()
   const clearedOnKeyChange: unknown = info.value
   assert.equal(clearedOnKeyChange, null, '换行后必须立即清空——不得继续渲染上一行的统计')
   assert.equal(requests.length, 2, '换行必须重新取数（不依赖调用方重挂）')
-  assert.deepEqual(requests[1].config, { params: { key: 'audit', caddy_id: 'main' } })
+  assert.deepEqual(requests[1].config, { params: { key: 'audit', caddy_id: 'main' }, silent: true })
 
   pending.resolve(statsOf('audit', '操作日志'))
   await flush()
@@ -80,14 +80,14 @@ test('caddyId 变化同样视为换行：清空并按新站点收窄取数', asy
   }
   const { info } = useLogStorageStats({ target: () => target.value })
   await flush()
-  assert.deepEqual(requests[0].config, { params: { key: 'caddy', caddy_id: 'main' } })
+  assert.deepEqual(requests[0].config, { params: { key: 'caddy', caddy_id: 'main' }, silent: true })
 
   target.value = { logKey: 'caddy', caddyId: 'slave-1' }
   await nextTick()
   const clearedOnSiteChange: unknown = info.value
   assert.equal(clearedOnSiteChange, null, '换站点必须先清空旧站点统计')
   assert.equal(requests.length, 2)
-  assert.deepEqual(requests[1].config, { params: { key: 'caddy', caddy_id: 'slave-1' } })
+  assert.deepEqual(requests[1].config, { params: { key: 'caddy', caddy_id: 'slave-1' }, silent: true })
 
   pending.resolve(statsOf('caddy', 'Caddy 日志（slave-1）'))
   await flush()
@@ -112,7 +112,7 @@ test('refreshKey 变化：同一行重取且保留旧值（不闪烁）', async 
   await nextTick()
   assert.equal(info.value?.name, '操作日志', '同一行重取期间保留旧值')
   assert.equal(g.__gets.length, 2)
-  assert.deepEqual(g.__gets[1].config, { params: { key: 'audit' } }, '重取口径与首次相同')
+  assert.deepEqual(g.__gets[1].config, { params: { key: 'audit' }, silent: true }, '重取口径与首次相同（silent 随请求走）')
 
   pending.resolve(statsOf('audit', '操作日志（新）'))
   await flush()
@@ -159,7 +159,7 @@ test('同一 tick 换行 + 刷新号自增只发一次请求（双 watch 已合�
   assert.equal(g.__gets.length, 2, '同一 tick 的两个触发源必须合并为一次取数')
   // 新 key 无对应行（stub 恒返 runtime 行）→ 清空后保持空，不残留上一行
   assert.equal(info.value, null)
-  assert.deepEqual(g.__gets[1].config, { params: { key: 'audit' } })
+  assert.deepEqual(g.__gets[1].config, { params: { key: 'audit' }, silent: true })
 })
 
 test('取数失败：置 error 且保留上一次统计（不得整条消失）', async () => {

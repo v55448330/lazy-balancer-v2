@@ -43,7 +43,7 @@ func TestUpdateConfig_normalizesAPIKeyRedactionOnWrite(t *testing.T) {
 	if strings.Contains(stored, "apikey") {
 		t.Fatalf("rename 行未收敛，落库仍含明文映射: %q", stored)
 	}
-	if strings.Count(stored, "request>headers>X-API-Key -> delete") != 1 {
+	if strings.Count(stored, accessLogRedactionLine) != 1 {
 		t.Fatalf("落库缺少唯一规范脱敏行: %q", stored)
 	}
 	if !strings.Contains(stored, "request>remote_ip -> src") {

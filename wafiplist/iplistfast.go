@@ -226,7 +226,11 @@ func NormalizeAllowedPath(path string) (string, error) {
 // 跳过（首次投影前），由加载路径按缺失 fail-closed。
 func resolveAllowedPath(path string) (string, error) {
 	cleaned := filepath.Clean(path)
-	if !filepath.IsAbs(cleaned) || !strings.HasPrefix(cleaned, AllowedPathPrefix) {
+	// 首道门用 pathWithinPrefix 而非裸 HasPrefix：裸前缀把 `/app/waf-other/x`
+	// 当成 `/app/waf` 的子路径（此前正确性只靠 AllowedPathPrefix 恰好带尾
+	// 分隔符）。pathWithinPrefix 自行补齐尾分隔符，两种写法语义一致——同一
+	// 函数内的两道边界（本门与下方 symlink 复检）从此共用一套口径。
+	if !filepath.IsAbs(cleaned) || !pathWithinPrefix(cleaned, AllowedPathPrefix) {
 		return "", fmt.Errorf("名单路径越出白名单（须为 %s 下的绝对路径）: %q", AllowedPathPrefix, path)
 	}
 	if resolved, rerr := filepath.EvalSymlinks(cleaned); rerr == nil {
@@ -241,6 +245,11 @@ func resolveAllowedPath(path string) (string, error) {
 // pathWithinPrefix 报告 path 是否位于 prefix 目录内（prefix 缺尾分隔符时补齐，
 // 防 /app/wafevil 被当作 /app/waf 的子路径）。
 func pathWithinPrefix(path, prefix string) bool {
+	// 前缀可能来自测试/部署环境拼接（TMPDIR 自带尾斜杠时会出现 "//"）。
+	// 先 Clean 再补尾分隔符，避免形状差异把合法路径误判为越界。
+	if prefix != "" {
+		prefix = filepath.Clean(prefix)
+	}
 	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
 		prefix += string(filepath.Separator)
 	}

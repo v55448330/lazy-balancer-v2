@@ -15,6 +15,7 @@ import (
 // 凭描述猜 id）。工具统一用 bodySchemaWithID 声明。
 func TestEveryToolSchemaCoversPathAndQueryArgs(t *testing.T) {
 	checked := 0
+	getToolsEqualityChecked := 0
 	for _, spec := range tools {
 		var shape struct {
 			Properties map[string]json.RawMessage `json:"properties"`
@@ -32,9 +33,29 @@ func TestEveryToolSchemaCoversPathAndQueryArgs(t *testing.T) {
 			}
 			checked++
 		}
+		// GET 工具的反向门：schema 里多出来的属性**不会被转发**——GET 不构建
+		// body（forward 只按 pathArgs/queryArgs 取值），Agent 按 schema 传一个
+		// 未登记为 queryArgs 的字段会被静默丢弃（既无 400 也无效果）。因此 GET
+		// 工具的 properties 必须与 pathArgs∪queryArgs 等集，而不是超集。
+		if spec.method != http.MethodGet {
+			continue
+		}
+		declared := make(map[string]struct{}, len(args))
+		for _, arg := range args {
+			declared[arg] = struct{}{}
+		}
+		for name := range shape.Properties {
+			if _, ok := declared[name]; !ok {
+				t.Errorf("GET tool %s (%s) 的 input_schema 声明了 %q，但它不在 pathArgs/queryArgs 中——GET 不发 body，该参数会被静默丢弃；请登记为 queryArgs 或从 schema 删除: %s", spec.name, spec.path, name, spec.schema)
+			}
+		}
+		getToolsEqualityChecked++
 	}
 	if checked == 0 {
 		t.Fatal("no path/query args checked——schema 解析形态失效")
+	}
+	if getToolsEqualityChecked == 0 {
+		t.Fatal("no GET tool checked——反向等集门空转")
 	}
 }
 

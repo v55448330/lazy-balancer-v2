@@ -35,6 +35,11 @@ var (
 var (
 	ip2regionMu       sync.RWMutex
 	ip2regionSearcher *ip2regionService.Ip2Region
+	// ip2regionSearcherSource 是在役 searcher 的装载来源文件（swap 时记录，
+	// nil 卸载清空；受 ip2regionMu 保护）。条目数展示必须与查询同源——在役
+	// searcher 可能来自镜像内置库（只读降级）或热换失败后保留的旧库，与 live
+	// 路径上的文件不是同一份。
+	ip2regionSearcherSource string
 	// ip2regionSearchMu serializes Search calls: the xdb Searcher writes its
 	// ioCount diagnostics field on every search and is not race-safe for
 	// concurrent searches, even in BufferCache mode.
@@ -180,8 +185,14 @@ func InitIP2Region() {
 			searcher = loaded
 		}
 	}
+	// 条目数展示的数据源与在役 searcher 同源：只读降级装载的是镜像内置库，
+	// live 路径上的文件此时可能缺失/损坏（展示 0 或乱值会让运维误判库状态）。
+	searcherSource := ip2regionLivePath
+	if readOnlyDist {
+		searcherSource = ip2regionDistPath
+	}
 	ip2regionMu.Lock()
-	swapIP2RegionSearcher(searcher)
+	swapIP2RegionSearcher(searcher, searcherSource)
 	ip2regionMu.Unlock()
 
 	if readOnlyDist {
@@ -254,7 +265,7 @@ func Reload() error {
 		return err
 	}
 	ip2regionMu.Lock()
-	swapIP2RegionSearcher(searcher)
+	swapIP2RegionSearcher(searcher, ip2regionLivePath)
 	ip2regionMu.Unlock()
 	return nil
 }
@@ -267,9 +278,13 @@ var reloadIP2RegionSearcher = Reload
 // Callers must hold ip2regionMu. Closing happens under ip2regionSearchMu so a
 // concurrent in-flight Search on the retired instance is serialized against
 // Close instead of racing it.
-func swapIP2RegionSearcher(searcher *ip2regionService.Ip2Region) {
+func swapIP2RegionSearcher(searcher *ip2regionService.Ip2Region, sourcePath string) {
 	old := ip2regionSearcher
 	ip2regionSearcher = searcher
+	if searcher == nil {
+		sourcePath = ""
+	}
+	ip2regionSearcherSource = sourcePath
 	ip2regionGeneration.Add(1)
 	if old != nil {
 		ip2regionSearchMu.Lock()
@@ -461,14 +476,29 @@ func openValidatedIP2RegionSearcher(path string) (searcher *ip2regionService.Ip2
 	return searcher, nil
 }
 
+// GetIP2RegionEntryCount 返回**在役 searcher** 装载文件的条目数（与归属地查询
+// 同源），未装载时返回 0。
+//
+// 不得改读 live 路径：在役 searcher 在两条既有分支上与 live 文件不同源——
+// 只读降级（从节点/写入失败）装载的是镜像内置库，热换失败保留的是旧库实例。
+// 读 live 会把「库其实可用」显示成 0，或按损坏文件 header 算出越界值。
 func GetIP2RegionEntryCount() int {
 	ip2regionMu.RLock()
-	defer ip2regionMu.RUnlock()
-	// 条目数从 header StartIndexPtr/EndIndexPtr 直读
-	// (xdb v2 官方边界,[8:16],2 次 ReadAt)——原实现扫 65536 格 vector 推导
-	// (BufferCache 已全内存,每调用 65536 次 8B ReadAt 纯浪费;且 vector 端点
-	// 语义含末条结尾,推导;header 真值=/14+1)。
-	f, err := os.Open(ip2regionLivePath)
+	source := ip2regionSearcherSource
+	loaded := ip2regionSearcher != nil
+	ip2regionMu.RUnlock()
+	if !loaded || source == "" {
+		return 0
+	}
+	return entryCountFromXDBHeader(source)
+}
+
+// entryCountFromXDBHeader 从一个 xdb 文件的 header 边界推导条目数。
+// xdb v2 官方边界（[8:16]，2 次 ReadAt）——原实现扫 65536 格 vector 推导
+// （BufferCache 已全内存，每调用 65536 次 8B ReadAt 纯浪费；且 vector 端点
+// 语义含末条结尾，推导 off-by-one）。
+func entryCountFromXDBHeader(path string) int {
+	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}

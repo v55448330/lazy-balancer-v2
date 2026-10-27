@@ -69,7 +69,9 @@ export const useLogStorageStats = (options: {
       // 做全部 DB 计数与目录统计。
       const params: Record<string, string> = { key: logKey }
       if (caddyId) params.caddy_id = caddyId
-      const res = await request.get<{ data?: { logs?: LogStorageInfo[] } }>('/logs/stats', { params })
+      // silent：失败由本组合子置 error 位、消费方条内呈现「统计暂不可用」——
+      // 不 silent 会同时弹全局错误 toast，同一失败两处不同措辞。
+      const res = await request.get<{ data?: { logs?: LogStorageInfo[] } }>('/logs/stats', { params, silent: true })
       if (seq === loadStatsSeq) {
         const matched = res.data?.logs?.find((l) => l.key === logKey) ?? null
         info.value = matched

@@ -6,6 +6,7 @@ package services
 // 健康位恒 healthy、任务监控零痕迹。
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,7 +27,7 @@ func TestSecurityEventsPollOnce_rotationFailureEntersHealthSnapshot(t *testing.T
 	}
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	resetSecurityEventsPollState(t)
 	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
 	t.Cleanup(func() {

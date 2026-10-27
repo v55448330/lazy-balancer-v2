@@ -806,8 +806,12 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
 		return
 	}
+	// cert_pem 只取首证书块（与 /certificates/jobs 同一单源投影）：expires_at
+	// 为 NULL 的历史行（导入/旧备份/集群快照遗留的 downloaded/cleanup_*）需要由
+	// PEM 派生到期时间，否则同一任务在两个证书清单端点给出分叉结论。
 	query := `
-		SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,''), COALESCE(j.expires_at,''), COALESCE(j.updated_at,'')
+		SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,''), COALESCE(j.expires_at,''), COALESCE(j.updated_at,''),
+			` + certJobFirstCertBlockSQL + ` AS cert_pem
 		FROM cert_jobs j` + whereClause
 	// ORDER BY 与唯一索引 (rule_id, domain) 的最左前缀对齐，避免临时排序 B-tree。
 	query += ` ORDER BY j.rule_id, j.domain LIMIT ? OFFSET ?`
@@ -821,21 +825,42 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	certs := make([]gin.H, 0)
 	for rows.Next() {
 		var id int
-		var ruleID, domain, status, message, expiresAt, updatedAt string
-		if err := rows.Scan(&id, &ruleID, &domain, &status, &message, &expiresAt, &updatedAt); err != nil {
+		var ruleID, domain, status, message, expiresAt, updatedAt, certPEM string
+		if err := rows.Scan(&id, &ruleID, &domain, &status, &message, &expiresAt, &updatedAt, &certPEM); err != nil {
 			// 单行 Scan 失败 warn 留痕+跳过（对齐
 			// 口径）——静默丢行会让该域名在证书清单中无故缺席；
 			// 迭代级失败仍由下方 rows.Err() 500 兜底。
 			services.Logf("warn", "证书任务列表：跳过扫描失败行（该域名聚合行本轮缺失）: %v", err)
 			continue
 		}
-		certs = append(certs, gin.H{"id": id, "rule_id": ruleID, "domain": domain, "status": status, "message": message, "expires_at": expiresAt, "updated_at": updatedAt})
+		// not_after 与 /certificates/jobs 同语义（优先库值 expires_at，缺失时由
+		// PEM 派生）；expires_at 字段本身保持原契约（可能为空）。
+		notAfter := certificateListNotAfter(expiresAt, certPEM)
+		certs = append(certs, gin.H{"id": id, "rule_id": ruleID, "domain": domain, "status": status, "message": message,
+			"expires_at": expiresAt, "not_after": notAfter, "updated_at": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历证书任务失败"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": total, "page": page, "page_size": pageSize}})
+}
+
+// certificateListNotAfter 给出聚合清单的到期语义：优先库值 expires_at，缺失/不可
+// 解析时由 PEM 首证书块派生（与 certJobListItem.scanFrom 单源口径）；两者都拿不到
+// 时保持 null，不猜测。
+func certificateListNotAfter(expiresAt, certPEM string) models.JSONNullTime {
+	if raw := strings.TrimSpace(expiresAt); raw != "" {
+		for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+			if parsed, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
+				return models.JSONNullTime{NullTime: sql.NullTime{Time: parsed.UTC(), Valid: true}}
+			}
+		}
+	}
+	if derived, ok := services.CertNotAfterFromPEM(certPEM); ok {
+		return models.JSONNullTime{NullTime: sql.NullTime{Time: derived.UTC(), Valid: true}}
+	}
+	return models.JSONNullTime{}
 }
 
 // formulaSkippedNote 生成批量签发跳过归因片段：仅列出非零项，

@@ -604,7 +604,9 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	var freq, hhmm string
 	var day, keep int
 	var sectionsRaw, lastRun sql.NullString
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
+	// 读路径消费请求 context：客户端断开即中止（与本端点其它族、审计列表
+	// 的取消契约同边——同端点两套口径会让「取消传播」无法用单一断言覆盖）。
+	if err := db.DB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
 		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), COALESCE(auto_backup_keep,7),
 		auto_backup_sections, auto_backup_last_run FROM global_config WHERE id=1`).
 		Scan(&enabled, &freq, &hhmm, &day, &keep, &sectionsRaw, &lastRun); err != nil {
@@ -633,7 +635,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		sections = allBackupSectionKeys()
 	}
 	backups := []autoBackupRowView{}
-	rows, err := db.DB.Query(`SELECT ` + autoBackupRowColumns + ` FROM auto_backups ORDER BY created_at DESC, id DESC`)
+	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
 		return
@@ -937,32 +939,53 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 失败面单源：删除族（行面/文件面/提交面）每个拒绝分支都经
+	// failAutoBackupAccess 落「删除失败」审计——此前六条分支裸写响应，
+	// 管理员在列表点删除而失败时审计页零记录，与同族还原/下载的收尾契约
+	// 不一致。subject 与文件面同形（备份 id + 文件名）便于按文件复盘。
+	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
 	// 行删除先在事务内确认影响行数，再删文件：0 行（并发先到者已删）
 	// 不得碰文件；文件删除失败回滚行删除，保留可重试入口且不记成功审计。
 	tx, err := db.DB.Begin()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+			fmt.Errorf("开启删除事务: %w", err))
 		return
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`DELETE FROM auto_backups WHERE id=?`, view.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+			fmt.Errorf("删除自动备份行: %w", err))
 		return
 	}
-	if deleted, err := res.RowsAffected(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+			fmt.Errorf("读取删除行数: %w", err))
 		return
-	} else if deleted == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "备份不存在（可能已被删除）"})
+	}
+	if deleted == 0 {
+		failAutoBackupAccess(c, "删除", subject, "备份不存在（可能已被删除）", http.StatusNotFound, sql.ErrNoRows)
 		return
 	}
 	if err := os.Remove(filepath.Join(h.cfg.BackupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeInternalError(c, http.StatusInternalServerError, "删除备份文件失败", fmt.Errorf("删除备份文件 %s: %w", view.Filename, err))
+		failAutoBackupAccess(c, "删除", subject, "删除备份文件失败", http.StatusInternalServerError,
+			fmt.Errorf("删除备份文件 %s: %w", view.Filename, err))
 		return
 	}
+	// 文件先于提交删除：提交失败时行恢复、文件已亡，这是本端点最坏的分叉
+	// （列表仍显示该备份，下载/还原才 404）。文案必须显式说明已发生的副作用
+	// 与可执行的下一步，不得只说「删除失败」。
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+		// database/sql 在 Commit 失败后不再调用 driver.Rollback，SQLite 的
+		// deferred 约束/IO 类失败会让底层事务保持活动（连接归还池后，复用该
+		// 连接的读会看到未提交的删除）。统一补发 ROLLBACK 才能真正兑现文案里
+		// 「记录已恢复保留」的承诺（与提交失败族同一收尾）。
+		rollbackLeakedTx()
+		failAutoBackupAccess(c, "删除", subject,
+			"备份记录提交失败（备份文件已删除、记录已恢复保留，请再次删除该记录）",
+			http.StatusInternalServerError, fmt.Errorf("提交删除事务: %w", err))
 		return
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(

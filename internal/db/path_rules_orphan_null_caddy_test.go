@@ -9,9 +9,7 @@ import "testing"
 func TestInitialize_orphanPathRulesCleanupIgnoresNullCaddyID(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 存量形态：规则尚未获得 caddy_id（历史库/中断迁移），且 FK OFF 时代
 	// 遗留孤儿 path_rules 行。
 	if _, err := DB.Exec(`INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (99, 'legacy','http',8082,NULL)`); err != nil {
@@ -21,9 +19,7 @@ func TestInitialize_orphanPathRulesCleanupIgnoresNullCaddyID(t *testing.T) {
 		t.Fatalf("seed orphan path rule: %v", err)
 	}
 
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	var orphan int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_ghost'`).Scan(&orphan); err != nil {

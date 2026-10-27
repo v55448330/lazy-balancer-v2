@@ -108,6 +108,18 @@ func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
 			t.Fatalf("保存族列 %q 未纳入 SQL 归一（双向 parity 缺口）", col)
 		}
 	}
+	// 赋值来源对账：键名对账只证明「字段被写到」，不证明「写对了来源」——
+	// 同类型字段交叉接线（ProxyReadTimeout: req.ProxyWriteTimeout）会让自愈把
+	// 一个列的存值写进另一个列，而键名门全绿。
+	known := make(map[string]bool, structType.NumField())
+	for i := range structType.NumField() {
+		known[structType.Field(i).Name] = true
+	}
+	for name := range adapterFields {
+		for _, problem := range literalRHSFieldCrossWires(t, file, name, "tcpDeadFields", known) {
+			t.Errorf("%s 字段来源交叉接线: %s（键与 RHS 引用的同族字段不一致）", name, problem)
+		}
+	}
 }
 
 // TestTCPDeadFieldsSaveFamily_fieldsCoveredOrExempted 反向对账（字段 ⊆ SQL ∪ 豁免）：

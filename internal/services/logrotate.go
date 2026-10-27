@@ -473,7 +473,9 @@ func logCleanupDetail(res RuntimeCleanupResult) string {
 // 时审计文件继续无界增长，而任务日志仍称「日志清理完成」、task_runs 恒绿。
 func wafAuditHousekeeping() ([]string, error) {
 	var actions []string
-	maxBytes := auditLogSizeBytes()
+	// 任务体（24h 节拍）不在关停/导入排空预算内：无 ctx 形态读取阈值即可
+	// （摄取 tick 侧的同一读必须走 ctx 版，见 getAuditLogSizeBytesContext）。
+	maxBytes := auditLogSizeBytes(context.Background())
 	info, statErr := os.Stat(auditLogPath)
 	if statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {

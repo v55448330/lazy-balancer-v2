@@ -620,6 +620,13 @@ const togglePolicyDetail = (stage: 0 | 1 | 2 | 3, policyId: number): void => {
 }
 
 const toggleNode = (key: string): void => {
+  // 卡片对读屏声明 aria-expanded，必须是真 toggle：再次点击同一环节收起面板
+  //（原实现恒赋值 → 承诺可折叠却无法收起，键盘与指针用户同受影响）。
+  if (activeNode.value === key) {
+    activeNode.value = ''
+    expandedPolicyKey.value = ''
+    return
+  }
   activeNode.value = key
   expandedPolicyKey.value = ''
   // 阶段面板首次选中触发明细拉取（接入/上游面板无明细）

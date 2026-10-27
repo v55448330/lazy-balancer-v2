@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/testsupport"
 	"lazy-balancer-v2/wafiplist"
 )
 
@@ -18,6 +20,11 @@ import (
 // 报错）；默认 /app/waf/ip-lists 在开发机不可写，统一改指临时目录并把
 // 算子白名单前缀对齐（算子构建期会真实读文件）。
 func TestMain(m *testing.M) {
+	// 环境护栏：TMPDIR 被沙箱回收时 t.TempDir() 会级联假红（同
+	// internal/handlers 的 suite 守卫，见 testsupport.EnsureUsableTempDir）。
+	if err := testsupport.EnsureUsableTempDir(); err != nil {
+		panic(err)
+	}
 	dir, err := os.MkdirTemp("", "lb-iplists-test")
 	if err != nil {
 		panic(err)
@@ -34,6 +41,13 @@ func TestMain(m *testing.M) {
 		} else {
 			CaddyOpLock.Unlock()
 		}
+	}
+	// 全局库句柄分叉会让后台刷新循环（db.GetDB 消费方）读到已关闭的库：
+	// 只还原导出变量而未调用 db.SetDB 的 teardown 在这里确定性显形，不再依赖
+	// 「后续用例恰好触发刷新」才暴露。
+	if code == 0 && db.GetDB() != db.DB {
+		log.Print("全局态泄漏：db.GetDB() 与 db.DB 分叉（用例 teardown 缺少 db.SetDB 恢复）")
+		code = 1
 	}
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

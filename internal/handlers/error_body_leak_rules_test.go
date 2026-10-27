@@ -14,6 +14,9 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -399,16 +402,69 @@ func TestGetConfig_500BodyHidesSQLDetails(t *testing.T) {
 // （不是默认放行）：只有登记在此的 handler 允许在 5xx 响应体拼接 err.Error()。
 // 与 business 组「固定文案」政策并存——admin 端点是排障接口，需要区分 admin
 // 不可达 / 响应超限 / 解析失败 / exec exit status / 路径权限。
+//
+// 清单的每一条都必须是 **admin 组**注册的端点：政策前提（管理员排障接口）由
+// 路由组决定，登记一个 business 组端点进来就等于向任意登录用户披露内部细节
+// （GET /caddy/logs 曾如此：清单里有它、路由却在 business 组）。路由组一致性
+// 由 TestCaddyAdmin5xxDetailPolicyRoutesAreAdminGroup 机器判定。
 var caddyAdmin5xxDetailFunctions = map[string]string{
 	"UpdateConfig":   "配置 apply/commit 失败需管理员看到 Caddy 侧原因",
 	"ValidateConfig": "校验回退后恢复运行配置失败需点名",
 	"ReloadCaddy":    "手动重载失败原因",
 	"GetCaddyConfig": "admin 不可达(502)/响应超限/解析失败必须可判",
-	"GetCaddyLogs":   "日志文件路径与 errno",
 	"PutCaddyConfig": "自定义配置逃生口排障",
 	"StartCaddy":     "exec 失败原因与配置应用注记",
 	"StopCaddy":      "exec 失败原因",
 	"RestartCaddy":   "exec 失败原因与配置应用注记",
+}
+
+// caddyRouteGroupRegistrations 从 middleware.go 派生「handler 函数 → 注册路由组
+// 集合」。组的身份取自 Group 变量名（admin / business / v1 等），与路由表同源，
+// 避免维护第二份「端点属于哪个组」的清单。
+func caddyRouteGroupRegistrations(t *testing.T) map[string]map[string]bool {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join("..", "middleware", "middleware.go"))
+	if err != nil {
+		t.Fatalf("read middleware routes: %v", err)
+	}
+	registration := regexp.MustCompile(`(?m)^\s*(\w+)\.(GET|POST|PUT|DELETE|PATCH)\(\s*"[^"]*"\s*,\s*h\.(\w+)`)
+	groups := map[string]map[string]bool{}
+	for _, match := range registration.FindAllStringSubmatch(string(source), -1) {
+		if groups[match[3]] == nil {
+			groups[match[3]] = map[string]bool{}
+		}
+		groups[match[3]][match[1]] = true
+	}
+	// 正向控制：路由表解析必须真实命中（否则本门变假绿）。
+	if len(groups) < 50 {
+		t.Fatalf("路由表解析只命中 %d 个 handler——派生逻辑退化", len(groups))
+	}
+	return groups
+}
+
+// 政策前提门：清单里每个函数都必须在 admin 组注册，否则「保留内部细节」的
+// 理由（管理员排障接口）不成立，business 组的固定文案政策被绕过。
+func TestCaddyAdmin5xxDetailPolicyRoutesAreAdminGroup(t *testing.T) {
+	registrations := caddyRouteGroupRegistrations(t)
+	for name := range caddyAdmin5xxDetailFunctions {
+		groups, ok := registrations[name]
+		if !ok {
+			t.Errorf("政策清单条目 %q 在 middleware.go 中没有任何路由注册（过期条目）", name)
+			continue
+		}
+		if !groups["admin"] {
+			t.Errorf("政策清单条目 %q 注册在 %v 组而不是 admin 组——5xx 细节会披露给非管理员", name, groups)
+		}
+	}
+	// 反向控制：业务组端点不得进入清单（GetCaddyLogs 即此形态的修复样本）。
+	if groups, ok := registrations["GetCaddyLogs"]; ok {
+		if groups["admin"] {
+			t.Fatalf("GetCaddyLogs 已移入 admin 组：若是有意变更，请同步本门的政策清单口径")
+		}
+		if _, listed := caddyAdmin5xxDetailFunctions["GetCaddyLogs"]; listed {
+			t.Fatal("GetCaddyLogs 仍在 admin 细节清单内，但路由在 business 组（非管理员可读路径/errno）")
+		}
+	}
 }
 
 // 政策可判性门禁：caddy.go 里每个 5xx 拼接内部错误文本的函数都必须在政策
@@ -492,7 +548,6 @@ var adminBusiness5xxDetailFunctions = map[string]string{
 	"autobackup.go:AutoBackupSettings":        "设置/备份列表读取失败需管理员看到 errno",
 	"autobackup.go:UpdateAutoBackupSettings":  "设置事务写失败需点名（DB 锁/只读库）",
 	"autobackup.go:RunAutoBackupNow":          "引擎触发失败需点名（admission/执行错误）",
-	"autobackup.go:DeleteAutoBackup":          "删除备份行失败需点名（DB 故障）",
 	"autobackup.go:RestoreAutoBackup":         "备份文件读取失败需点名（权限/errno）",
 	"autobackup.go:DownloadAutoBackup":        "备份文件读取失败需点名（权限/errno）",
 	"admintls.go:UpdateAdminTLS":              "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",

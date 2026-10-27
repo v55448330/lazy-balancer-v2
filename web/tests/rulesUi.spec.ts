@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, section } from './_helpers.ts'
+import { code, codeSection, section } from './_helpers.ts'
 import { clampPassiveHealthCheckTimeout } from '../src/utils/ruleWizard.ts'
 
 const page = code('src/views/Rules.vue')
@@ -128,4 +128,15 @@ test('零启用上游的启用态规则在健康列显示「未发布」信息�
   assert.match(healthColumn, /v-if="row\.enabled && Array\.isArray\(row\.upstreams\) && getEnabledUpstreams\(row\)\.length === 0"/)
   assert.match(healthColumn, /未发布/)
   assert.match(healthColumn, /<el-popover v-else-if="row\.enabled && healthStatus\[row\.caddy_id\]"/, '徽标与健康 popover 必须互斥')
+})
+
+test('规则更新成功后展示后端 data.warnings（可用性变更不能只进 toast）', () => {
+  // 后端在改域等场景把「保存成功后马上会遇到的故障」（旧证书弃用、签发完成前
+  // HTTPS 不可用）放在 data.warnings。只弹成功 toast 等于没告知——这里钉住
+  // 消费接线：读取 data.warnings，并在弹框里逐条成行展示。
+  const wizard = codeSection('src/views/Rules.vue', 'const submitWizard', '\n// ── 规则处理流程弹框')
+  assert.match(wizard, /request\.put<APIResponse<\{ warnings\?: string\[\] \}>>\(/, '更新必须声明 warnings 载荷')
+  assert.match(wizard, /submitWarnings = updateRes\.data\?\.warnings \?\? \[\]/, '必须读取后端 warnings')
+  assert.match(wizard, /if \(submitWarnings\.length > 0\) \{/, '有披露时才弹框（无披露不打扰）')
+  assert.match(wizard, /ElMessageBox\.alert\([\s\S]{0,220}submitWarnings\.map/, '披露必须逐条展示')
 })

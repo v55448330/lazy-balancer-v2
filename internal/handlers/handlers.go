@@ -76,11 +76,21 @@ func compensationContext(requestCtx context.Context) (context.Context, context.C
 	return context.WithTimeout(context.WithoutCancel(requestCtx), compensationTimeout)
 }
 
+// caddyWriteCtx 返回 Caddy 写事务内语句的 ctx：保留请求值（日志/追踪字段），
+// 但解除客户端断连/超时。事务本身已经用同一口径 BEGIN（见 beginCaddyWriteTx）
+// ——若语句仍绑请求 ctx，断连会精确落在写库段把已开始的渲染/校验/提交链中止，
+// 与「已开始的渲染、CLI 校验与 /load 必须继续在同一数据库视图完成」的契约相反
+// （表现是「保存被放弃」+ 请求 ctx 的 context canceled，而 BEGIN 的解耦毫无意义）。
+func caddyWriteCtx(c *gin.Context) context.Context {
+	return context.WithoutCancel(c.Request.Context())
+}
+
 // beginCaddyWriteTx 保持请求值但解除客户端断连/超时对事务的隐式回滚。
 // 已开始的渲染、CLI 校验与 /load 必须继续在同一数据库视图完成并走既有
 // 提交/补偿分类，不能让 database/sql 在后台回滚后把中止误报成配置拒绝。
+// 事务内的每条语句必须用 caddyWriteCtx(c)（同一口径），否则契约只在 BEGIN 成立。
 func beginCaddyWriteTx(c *gin.Context) (*sql.Tx, error) {
-	return db.DB.BeginTx(context.WithoutCancel(c.Request.Context()), nil)
+	return db.DB.BeginTx(caddyWriteCtx(c), nil)
 }
 
 type EnableCertJobAction int
@@ -730,6 +740,22 @@ func validateRuleHealthCheckPath(path string) error {
 	return nil
 }
 
+// upstreamDedupeHost 是「同一后端」判重的单源主机形态。
+//
+// 判重必须按地址语义而不是文本：2001:db8::1 与 2001:0db8:0:0:0:0:0:1 是同一个
+// 地址的两种合法写法（isValidHost 用 net.ParseIP，两种都过形状门），按文本
+// 比较会当成两个上游落库——权重翻倍、健康检查对同一地址跑两遍、失败计数分裂。
+// IPv4-mapped 形态（::ffff:10.0.0.1 与 10.0.0.1）同理按 Unmap 后视为同一后端。
+// 主机名保持文本归一（去首尾空白 + 小写，DNS 不区分大小写）；方括号形态
+// （[::1]）先剥括号再解析，与 net.JoinHostPort 的渲染形态对齐。
+func upstreamDedupeHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")); err == nil {
+		return addr.Unmap().String()
+	}
+	return strings.ToLower(trimmed)
+}
+
 // validateRuleUpstreams 校验一组实际上游。requireEnabled 用于 Create/Update
 // 与 v1 的表单语义；v2 备份是存量行还原，保留渲染层支持的零上游/零启用
 // 形态，但所有携带行仍逐项经过完全相同的值域、查重与协议校验。
@@ -764,7 +790,7 @@ func validateRuleUpstreams(protocol string, dynamicDNS bool, upstreams []models.
 			return 0, fmt.Errorf("上游 #%d：最大连接数不能为负数", i+1)
 		}
 
-		key := net.JoinHostPort(strings.ToLower(strings.TrimSpace(u.Host)), strconv.Itoa(u.Port))
+		key := net.JoinHostPort(upstreamDedupeHost(u.Host), strconv.Itoa(u.Port))
 		if hostPortSeen[key] {
 			return 0, fmt.Errorf("上游 %s 重复", key)
 		}

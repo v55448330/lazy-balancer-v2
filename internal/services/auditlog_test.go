@@ -113,21 +113,21 @@ func TestGetAuditLogSizeBytes_cachesThresholdWithinTTL(t *testing.T) {
 	}
 
 	// When/Then：首查命中 DB 并缓存
-	if got := getAuditLogSizeBytes(); got != 5<<20 {
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 5<<20 {
 		t.Fatalf("first=%d, want %d", got, 5<<20)
 	}
 	// When/Then：窗口内变更配置不观察（有界陈旧）
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_log_size_mb=7 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if got := getAuditLogSizeBytes(); got != 5<<20 {
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 5<<20 {
 		t.Fatalf("cached=%d, want %d (TTL not yet expired)", got, 5<<20)
 	}
 	// When/Then：过期后重查，观察新阈值
 	auditLogSizeValueCache.mu.Lock()
 	auditLogSizeValueCache.at = time.Now().Add(-auditLogSizeCacheTTL - time.Second)
 	auditLogSizeValueCache.mu.Unlock()
-	if got := getAuditLogSizeBytes(); got != 7<<20 {
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 7<<20 {
 		t.Fatalf("refreshed=%d, want %d after TTL expiry", got, 7<<20)
 	}
 }

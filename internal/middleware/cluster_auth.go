@@ -25,6 +25,9 @@ func clusterTokenAuth(database *sql.DB) gin.HandlerFunc {
 				// 机器凭据枚举尝试必须留审计痕迹——此前
 				// 只计入内存限流桶，进程重启即清零，事件响应与取证零线索。
 				recordAuthenticationRejection(c, "cluster_token_invalid")
+				// 机器可读错误码：从节点 Pull 据此区分「本服务撤销令牌」（终止）
+				// 与前置代理/身份网关的 401（可重试自愈）。
+				c.Header("X-LB-Error-Code", services.ClusterTokenInvalidErrorCode)
 				c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "集群凭证无效"})
 			} else {
 				services.Logf("error", "cluster token authentication failed: %v", err)

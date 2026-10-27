@@ -2,11 +2,15 @@
 # 批量源码编辑安全守卫（事故：2026-10-23 全仓正则删空括号导致 1294 文件损坏）。
 #
 # 两道检查：
-#   A. 脚本静态面：scripts/ 下同时具备「遍历源码」与「写盘替换」的脚本必须支持
-#      只读模式（--dry-run / DRY_RUN），否则拒绝。枚举面=已跟踪+未跟踪脚本
-#      （作业序是「写脚本→跑门禁→提交」，只扫已跟踪会在关键窗口假绿）。
+#   A. 脚本静态面：仓内同时具备「遍历源码」与「写盘替换」的脚本必须支持只读
+#      模式（--dry-run / DRY_RUN），否则拒绝。枚举面=仓内全部 *.sh / *.py 的
+#      已跟踪+未跟踪并集（作业序是「写脚本→跑门禁→提交」，只扫已跟踪会在关键
+#      窗口假绿；而枚举面只写 scripts/ 时，放在仓根/tools/hack 的一次性批量
+#      脚本完全不受第一道闸门约束——历史事故形态正是「临时脚本 + 全仓正则」）。
 #      写盘特征覆盖非紧邻 -i 的常见形态（sed -E -i / sed -e … -i / perl -pi -e /
 #      python -c）——只认「sed -i 紧邻」等于对最常见的批量改写作业形态失效。
+#      边界（必须可见，不得给「已受控」的错觉）：仓外脚本（/tmp/xxx.py 等）
+#      无法枚举，通道 B 的形态门只对空括号族有效——批量改写请先 checkpoint。
 #   B. 变更形态面：对当前变更集（staged 与 worktree 各查一段，两者皆空时查
 #      HEAD^..HEAD）统计空括号
 #      `()` / `（）` 的删除量；一次删除 ≥100 且新增不足其 1/5，判为「批量删括号」
@@ -48,7 +52,13 @@ scan_scripts() {
   # 只扫已跟踪文件使通道 A 在最需要它的时间窗（脚本刚写好、尚未 git add）
   # 完全失效——同仓 test-all.sh（bash -n）与 check-no-audit-artifacts.sh
   # （未跟踪文件入面）都取「受控 + 未跟踪」并集，三处口径必须一致。
-  done < <(git ls-files --cached --others --exclude-standard 'scripts/*.sh' 'scripts/*.py' | grep -v 'check-bulk-edit-safety.sh' | grep -v '^scripts/tests/' || true)
+  # 枚举面=仓内全部 .sh/.py（不限 scripts/）：仓根/tools/hack 的一次性批量脚本
+  # 与 scripts/ 内的脚本按同一口径受检。排除本守卫（自身含匹配样例文本）与
+  # 各守卫自检（夹具里刻意写无 dry-run 脚本）。
+  done < <(git ls-files --cached --others --exclude-standard '*.sh' '*.py' \
+    | grep -v 'check-bulk-edit-safety.sh' \
+    | grep -v '^scripts/tests/' \
+    | grep -v '^web/node_modules/' || true)
   return "$bad"
 }
 
@@ -158,6 +168,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 status=0
+# 作用域必须可见：输出里明写「仓外不受控」，让假绿的边界变成可读事实，而不是
+# 让人以为两条闸门覆盖了任何位置的批量改写。
+echo "== 通道 A：批量改写脚本静态面（作用域=仓内受控+未跟踪 *.sh/*.py；仓外/临时脚本不受控——批量改写请先 checkpoint）=="
 scan_scripts || status=1
 check_diff_shape || status=1
 exit "$status"

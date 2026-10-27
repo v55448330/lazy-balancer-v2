@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +52,7 @@ func TestRotateAuditLog_corruptPendingMarkerDefersRotation(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldSizeBytes := auditLogPath, auditLogSizeBytes
 	auditLogPath = logPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() { auditLogPath, auditLogSizeBytes = oldLogPath, oldSizeBytes })
 	if err := os.WriteFile(logPath, []byte("live-content"), 0o644); err != nil {
 		t.Fatal(err)
@@ -65,7 +66,7 @@ func TestRotateAuditLog_corruptPendingMarkerDefersRotation(t *testing.T) {
 	}
 
 	// When
-	_, err := rotateAuditLogIfNeeded()
+	_, err := rotateAuditLogIfNeeded(context.Background())
 
 	// Then：本轮中止并返回错误（下轮重试），不得当作无标记继续轮转
 	if err == nil {
@@ -102,7 +103,7 @@ func TestRotateAuditLog_copyFailureKeepsArchiveGenerations(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})
@@ -118,7 +119,7 @@ func TestRotateAuditLog_copyFailureKeepsArchiveGenerations(t *testing.T) {
 
 	// When：连续 5 个 tick 都复制失败
 	for tick := 1; tick <= 5; tick++ {
-		if _, err := rotateAuditLogIfNeeded(); err == nil {
+		if _, err := rotateAuditLogIfNeeded(context.Background()); err == nil {
 			t.Fatalf("第 %d 个 tick：copy 失败必须返回错误", tick)
 		}
 	}
@@ -154,7 +155,7 @@ func TestRotateAuditLog_promotesStagedArchiveAfterShift(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})
@@ -166,7 +167,7 @@ func TestRotateAuditLog_promotesStagedArchiveAfterShift(t *testing.T) {
 	}
 
 	// When
-	if _, err := rotateAuditLogIfNeeded(); err != nil {
+	if _, err := rotateAuditLogIfNeeded(context.Background()); err != nil {
 		t.Fatalf("正常轮转不应报错: %v", err)
 	}
 
@@ -194,7 +195,7 @@ func TestRotateAuditLog_statErrorAbortsBeforeOverwritingArchives(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -210,7 +211,7 @@ func TestRotateAuditLog_statErrorAbortsBeforeOverwritingArchives(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := rotateAuditLogIfNeeded()
+	_, err := rotateAuditLogIfNeeded(context.Background())
 	if err == nil {
 		t.Fatal("stat 非 NotExist 错误必须中止本轮并返回错误")
 	}
@@ -231,7 +232,7 @@ func TestRotateAuditLog_shiftFailureForFirstGenerationAbortsAndKeepsArchives(t *
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -252,7 +253,7 @@ func TestRotateAuditLog_shiftFailureForFirstGenerationAbortsAndKeepsArchives(t *
 		}
 	}
 
-	_, err := rotateAuditLogIfNeeded()
+	_, err := rotateAuditLogIfNeeded(context.Background())
 	if err == nil {
 		t.Fatal(".1 未能让位必须中止本轮并返回错误")
 	}
@@ -276,7 +277,7 @@ func TestRotateAuditLog_corruptPendingMarkerQuarantinedAfterThreshold(t *testing
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -292,7 +293,7 @@ func TestRotateAuditLog_corruptPendingMarkerQuarantinedAfterThreshold(t *testing
 	}
 
 	for round := 1; round < pendingDeltaCorruptQuarantineRounds; round++ {
-		if _, err := rotateAuditLogIfNeeded(); err == nil {
+		if _, err := rotateAuditLogIfNeeded(context.Background()); err == nil {
 			t.Fatalf("第 %d 轮损坏标记必须 fail-closed 中止", round)
 		}
 		if _, err := os.Stat(marker); err != nil {
@@ -301,7 +302,7 @@ func TestRotateAuditLog_corruptPendingMarkerQuarantinedAfterThreshold(t *testing
 	}
 	// 第 N 轮：损坏标记被隔离，轮转继续推进（后续偏移写入可能因测试环境目录
 	// 只读失败——隔离动作本身必须已发生，归档必须已生成）。
-	_, err := rotateAuditLogIfNeeded()
+	_, err := rotateAuditLogIfNeeded(context.Background())
 	quarantined, _ := filepath.Glob(marker + ".corrupt-*")
 	if len(quarantined) != 1 {
 		t.Fatalf("隔离文件=%v, want 恰一个 .corrupt-<ts>（连续 %d 轮损坏后必须隔离, rotate err=%v）", quarantined, pendingDeltaCorruptQuarantineRounds, err)
@@ -347,7 +348,7 @@ func TestRotateAuditLog_keepsPendingMarkerWhenIngestDepsUnavailable(t *testing.T
 	t.Cleanup(func() { db.MetricsDB = readyMetrics })
 
 	// When
-	if _, err := rotateAuditLogIfNeeded(); err == nil {
+	if _, err := rotateAuditLogIfNeeded(context.Background()); err == nil {
 		t.Fatal("补采未完成必须返回错误（不得当作成功继续轮转）")
 	}
 
@@ -358,7 +359,7 @@ func TestRotateAuditLog_keepsPendingMarkerWhenIngestDepsUnavailable(t *testing.T
 
 	// When：依赖恢复后再跑一轮
 	db.MetricsDB = readyMetrics
-	if _, err := rotateAuditLogIfNeeded(); err != nil {
+	if _, err := rotateAuditLogIfNeeded(context.Background()); err != nil {
 		t.Fatalf("依赖恢复后补采应成功: %v", err)
 	}
 
@@ -388,7 +389,7 @@ func TestRotateAuditLog_continuousWritesStillTruncate(t *testing.T) {
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	oldCopyFile, oldIngestHook := auditLogCopyFile, auditLogRotationBeforeTailIngest
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 		auditLogCopyFile, auditLogRotationBeforeTailIngest = oldCopyFile, oldIngestHook
@@ -440,7 +441,7 @@ func TestRotateAuditLog_continuousWritesStillTruncate(t *testing.T) {
 	var archiveFinal int64
 	for tick := range ticks {
 		appendDoc()
-		if _, err := rotateAuditLogIfNeeded(); err != nil {
+		if _, err := rotateAuditLogIfNeeded(context.Background()); err != nil {
 			t.Fatalf("tick %d: %v（持续写入不得让轮转报错/停摆）", tick, err)
 		}
 		live, err := os.Stat(logPath)
@@ -512,7 +513,7 @@ func TestRotateAuditLog_truncateDeferredReturnsSentinel(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})
@@ -537,7 +538,7 @@ func TestRotateAuditLog_truncateDeferredReturnsSentinel(t *testing.T) {
 	}
 
 	// When
-	_, err := rotateAuditLogIfNeeded()
+	_, err := rotateAuditLogIfNeeded(context.Background())
 
 	// Then
 	if !errors.Is(err, errAuditRotationDeferred) {
@@ -567,7 +568,7 @@ func TestRotateAuditLog_deferredDoesNotCopyOrShift(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	// 告警限流按固定时钟计数：20 轮推迟只允许一条 warn。
 	oldClock := auditFailureLogClock
 	auditFailureLogClock = func() time.Time { return time.Unix(1790000000, 0) }
@@ -629,7 +630,7 @@ func TestRotateAuditLog_deferredDoesNotCopyOrShift(t *testing.T) {
 	// When：20 个 tick 尾部都追不平
 	const ticks = 20
 	for range ticks {
-		if _, rerr := rotateAuditLogIfNeeded(); !errors.Is(rerr, errAuditRotationDeferred) {
+		if _, rerr := rotateAuditLogIfNeeded(context.Background()); !errors.Is(rerr, errAuditRotationDeferred) {
 			t.Fatalf("尾部未追平必须返回 deferred 哨兵, err=%v", rerr)
 		}
 	}
@@ -679,7 +680,7 @@ func TestRotateAuditLog_deferredDoesNotCopyOrShift(t *testing.T) {
 		copies++
 		return copyAuditLogTo(src, dst)
 	}
-	if _, rerr := rotateAuditLogIfNeeded(); rerr != nil {
+	if _, rerr := rotateAuditLogIfNeeded(context.Background()); rerr != nil {
 		t.Fatalf("尾部补完后轮转必须成功: %v", rerr)
 	}
 
@@ -728,7 +729,7 @@ func TestRotateAuditLog_gateIngestAdvancesRotatedIngestStart(t *testing.T) {
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	oldHook := auditLogRotatedIngestFrom
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 		auditLogRotatedIngestFrom = oldHook
@@ -773,7 +774,7 @@ func TestRotateAuditLog_gateIngestAdvancesRotatedIngestStart(t *testing.T) {
 	}
 	var ingestFrom int64 = -1
 	auditLogRotatedIngestFrom = func(from int64) { ingestFrom = from }
-	if _, err := rotateAuditLogIfNeeded(); err != nil {
+	if _, err := rotateAuditLogIfNeeded(context.Background()); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 

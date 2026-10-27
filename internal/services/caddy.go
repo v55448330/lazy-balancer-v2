@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -3096,18 +3097,16 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 	return conf
 }
 
-// accessLogAPIKeyHeaderPath 是访问日志恒脱敏的请求头路径。
-// X-API-Key 是面板机器接口凭证：出现在被记录路由（面板/API 反代、上游客户端
-// 同名头）即明文落盘。脱敏必须在渲染层成为恒等不变量——库值可能来自旧格式、
-// 直接改库或备份导入，任何写侧漏网都不得让明文进日志。
-const accessLogAPIKeyHeaderPath = "request>headers>X-API-Key"
-
 // buildAccessLogEncoder 生成访问日志 encoder（全局日志与规则日志共用单源）。
-// 三条形态全部经 filter+wrap json，且恒注入 X-API-Key 删除：
+// 三条形态全部经 filter+wrap json，且恒注入 API Key 删除：
 //   - 自定义格式（access_log_json=true）：用户行映射之上强制覆盖该头；
 //   - 空格式（默认库值）：fields 仅含脱敏行，其余字段保持原生 JSON；
 //   - access_log_json=false（Caddy 原生 JSON）：仍走 filter+wrap json——纯 json
 //     编码器没有任何删除通道，会把 API Key 原样写出。
+//
+// 删除键必须取 accesslog.APIKeyHeaderPaths()（规范 MIME 头名 + 字面量兜底）：
+// 引擎 filter 是精确字符串查表，而日志里的头键是 http.Header 的规范化键
+// （"X-Api-Key"）——手写字面量拼写恒不命中，脱敏空转且无任何告警。
 //
 // 用户若对同一路径写了 rename/delete，map 同键覆盖为 delete（恒脱敏优先）。
 func buildAccessLogEncoder(accessLogJSON bool, format string) map[string]interface{} {
@@ -3115,7 +3114,9 @@ func buildAccessLogEncoder(accessLogJSON bool, format string) map[string]interfa
 	if accessLogJSON {
 		fields = accessLogEncoderFields(format)
 	}
-	fields[accessLogAPIKeyHeaderPath] = map[string]interface{}{"filter": "delete"}
+	for _, path := range accesslog.APIKeyHeaderPaths() {
+		fields[path] = map[string]interface{}{"filter": "delete"}
+	}
 	return map[string]interface{}{
 		"format": "filter",
 		"wrap":   map[string]interface{}{"format": "json"},

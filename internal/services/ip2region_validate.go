@@ -8,7 +8,7 @@ import "fmt"
 // 生产代码禁止调用。
 func ResetIP2RegionSearcherForTest() {
 	ip2regionMu.Lock()
-	swapIP2RegionSearcher(nil)
+	swapIP2RegionSearcher(nil, "")
 	ip2regionMu.Unlock()
 }
 

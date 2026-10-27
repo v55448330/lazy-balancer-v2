@@ -7,7 +7,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createOneTimeSecretCloseGuard } from '../src/utils/oneTimeSecretGuard.ts'
-import { code, section } from './_helpers.ts'
+import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '../src/utils/securityLimits.ts'
+import { code, repoCode, section } from './_helpers.ts'
 
 // ── 一次性凭据关闭守卫（单源） ─────────────────────────────────
 // 直接驱动守卫：确认框替身记录调用与文案，done 记录是否真正关闭弹框。
@@ -162,11 +163,31 @@ test('大屏空态只用当前窗口的 stats 判定（旧帧不得宣称「无�
 })
 
 // ── 自定义规则名称/描述值域 ──────────────────────────────────
-test('自定义规则名称/描述 maxlength 与后端 rune 上限同源', () => {
+test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前端字面量回流即红）', () => {
+  // 后端是唯一事实源：securityNameMaxRunes / securityDescriptionMaxRunes
+  // 同时服务拦截页/自定义规则/策略三处写入口（含备份还原路径）。
+  const backend = repoCode('internal/handlers/security.go')
+  const nameMax = /securityNameMaxRunes\s*=\s*(\d+)/.exec(backend)
+  const descriptionMax = /securityDescriptionMaxRunes\s*=\s*(\d+)/.exec(backend)
+  assert.ok(nameMax && descriptionMax, '后端 rune 上限常量解析失败（改名即须同步本用例）')
+  assert.equal(SECURITY_NAME_MAX_RUNES, Number(nameMax[1]), '名称上限与后端不同源')
+  assert.equal(SECURITY_DESCRIPTION_MAX_RUNES, Number(descriptionMax[1]), '描述上限与后端不同源')
+
+  for (const view of [
+    'src/views/security/SecurityRules.vue',
+    'src/views/security/SecurityPolicies.vue',
+    'src/views/security/SecurityBlockPages.vue',
+  ]) {
+    const text = code(view)
+    assert.match(text, /:maxlength="SECURITY_NAME_MAX_RUNES"/, `${view} 名称未绑定单源常量`)
+    assert.match(text, /:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"/, `${view} 描述未绑定单源常量`)
+    assert.doesNotMatch(text, /v-model="(?:ruleForm\.name|ruleForm\.description|form\.name|form\.description)"[^>]*maxlength="\d+"/, `${view} 的名称/描述仍有写死的长度字面量（漂移时不会变红）`)
+  }
+  // 名称/描述输入框仍带字数提示（spell 字数可发现性）
   const rules = code('src/views/security/SecurityRules.vue')
-  const form = section(rules, '<el-form-item label="名称" required>', '<el-form-item label="条件">')
-  assert.match(form, /v-model="ruleForm\.name"[^>]*maxlength="100"[^>]*show-word-limit/)
-  assert.match(form, /v-model="ruleForm\.description"[^>]*maxlength="500"[^>]*show-word-limit/)
+  const form = section(rules, '<el-form-item label="名称" required>', '<el-form-item label="条件关系">')
+  assert.match(form, /v-model="ruleForm\.name"[^>]*:maxlength="SECURITY_NAME_MAX_RUNES"[^>]*show-word-limit/)
+  assert.match(form, /v-model="ruleForm\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"[^>]*show-word-limit/)
 })
 
 // ── 取消信任：决策与结论都取最新策略 ─────────────────────────

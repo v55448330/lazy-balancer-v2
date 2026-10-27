@@ -342,6 +342,8 @@ func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
 	seedEvent("2", "logged", "datetime('now','-1 hour')")           // 非 blocked 不计
 	seedEvent("2", "blocked", "datetime('now','-25 hours')")        // 超 24h 窗不计
 	seedEvent("949110", "blocked", "datetime('now','-30 minutes')") // 阶段 3 评分拦截
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="ss.example.test",method="GET",server="http_8080"} 7
 caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="api.ss.test",method="GET",server="http_8080"} 2
@@ -397,6 +399,8 @@ func TestGetRuleStageStats_rateLimitCountsPerListenPort(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="shared.example.test",method="GET",server="http_80"} 3
 caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="shared.example.test",method="GET",server="http_443"} 4

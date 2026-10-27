@@ -1,9 +1,11 @@
 // 「还原默认格式」按钮与初始 settings 共用的访问日志格式模板（唯一来源）。
-// 末行恒脱敏 X-API-Key（面板机器接口凭证）——后端渲染层对任何
+// 末行恒脱敏 API Key 请求头（面板机器接口凭证）——后端渲染层对任何
 // 格式形态都会强制注入该行，模板显式携带使「落库格式=实际生效格式」。
+// 拼写必须是引擎实际看到的头键形态（net/http 规范化的 X-Api-Key）：Caddy 的
+// filter 编码器对字段路径做精确匹配，手写 X-API-Key 恒不命中。
 // 注意：后端 db.go 迁移会在既有格式上补齐同一行。
 export const DEFAULT_ACCESS_LOG_FORMAT =
-  'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time\nrequest>headers>X-API-Key -> delete'
+  'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time\nrequest>headers>X-Api-Key -> delete'
 
 // CDN 受信代理预设（v2.3.x 真实 IP 支持）：仅辅助填充请求头（有序，权威头
 // 在前）与提示文案——**不预置网段**（回源网段随时间变化，必须按官方文档

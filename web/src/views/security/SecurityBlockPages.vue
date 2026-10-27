@@ -90,10 +90,10 @@
       </template>
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form" :disabled="saving">
         <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="页面名称" maxlength="100" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
+          <el-input v-model="form.name" placeholder="页面名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" placeholder="页面描述" maxlength="500" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
+          <el-input v-model="form.description" placeholder="页面描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
         <el-form-item label="内容类型">
           <el-select v-model="form.content_type" style="width: 320px" :disabled="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving">
@@ -135,6 +135,7 @@ import { escapeHtml } from '@/utils/escape'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import { updaterName } from '@/utils/updaterName'
+import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'

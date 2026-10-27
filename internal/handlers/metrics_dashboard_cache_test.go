@@ -80,6 +80,7 @@ func TestGetMetricsDashboard_singleFlightForConcurrentMisses(t *testing.T) {
 }
 
 func TestGetMetricsDashboard_failureNegativeCacheShortRetry(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	h.metricsService = services.NewMetricsService("http://127.0.0.1:1/metrics", 30)
 	resetMetricsDashboardCacheForTest()

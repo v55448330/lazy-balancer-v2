@@ -39,20 +39,28 @@ var (
 	ErrSyncUsersLocked = errors.New("系统数据为恒同步项（含用户/密钥/ACME），不允许禁用；证书随负载规则开关")
 )
 
+// ClusterTokenInvalidErrorCode 是集群令牌拒绝（401）的机器可读错误码。
+// 从节点 Pull 只能凭它把「本服务撤销令牌」与「主节点前置代理/身份网关
+// 返回 401」区分开：前者终止等待人工介入，后者可重试自愈。
+const ClusterTokenInvalidErrorCode = "cluster_token_invalid"
+
 type ClusterService struct {
 	db *sql.DB
 	// dataDir 用于品牌镜像(branding.json)与未来文件态同步的本地路径。
-	dataDir            string
-	roleMu             sync.Mutex
-	pinCleanupMu       sync.Mutex
-	pendingPinPath     string
-	pendingPinAuditURL string
-	// pinCleanupFailureKey 是 pin 清理失败审计的去重键（pin 路径+错误文本）：
-	// 失败后 retryPendingPinCleanup 每个快照/巡检周期都会重试，同一失败
-	// （权限/只读目录）稳定复现时只应留一条审计，恢复成功时清空。
-	pinCleanupFailureKey string
-	beforeUpdateSettings func()
-	snapshotNow          func() time.Time
+	dataDir      string
+	roleMu       sync.Mutex
+	pinCleanupMu sync.Mutex
+	// pendingPins 是「pin 清理失败、待重试」的表（pin 路径 → 旧主节点审计地址）。
+	// 单槽实现会在第二次清理失败时覆盖先前的待重试项：那枚 pin 文件从此既无
+	// 重试也不再留痕，只能人工删盘。同一路径重复失败保留原审计地址（同一 pin
+	// 对应同一旧主节点）。
+	pendingPins map[string]string
+	// pinCleanupFailureKeys 是逐路径的失败审计去重键（pin 路径 → 路径+错误
+	// 文本）：失败后 retryPendingPinCleanup 每个快照/巡检周期都会重试，同一
+	// 失败（权限/只读目录）稳定复现时只应留一条审计，恢复成功时清空。
+	pinCleanupFailureKeys map[string]string
+	beforeUpdateSettings  func()
+	snapshotNow           func() time.Time
 	// sectionReports 缓存各从节点最近一次上报的分区哈希（ReportNode 写入、
 	// DeleteNode 清除、Nodes 聚合读取）。与 nodes 表的 health_json 同为内存态：
 	// 进程重启后随从节点下一次上报（≤60s）自动重建。
@@ -713,6 +721,11 @@ func restoreClusterSyncSchedulingAfterDemote() {
 	// SetRole 只按角色启停 daemon，不覆盖主节点期间被用户停止的
 	// loopEnabled——切从是本机拓扑变更，不同步即为静默脱管。
 	te.StartLoop("cluster-sync")
+	// StartLoop 只按角色换代 daemon；Halted 的 SyncService 对 Start 是 no-op
+	// （startLocked(resume=false) 直接返回），从节点数据会永久不收敛。复活
+	// 必须走 Resume——与 BecomeSlave 显式 Resume 的口径对齐（此前只有那条路
+	// 有最后一跳，角色对账降级这里是缺口）。
+	resumeHaltedSyncLifecycle()
 	if err := RecordTaskLoopPref("cluster-sync", true); err != nil {
 		Logf("warn", "切成从节点后持久化 cluster-sync 调度偏好失败（当前进程已恢复）: %v", err)
 	}
@@ -943,36 +956,49 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 			// pin 文件本就不存在(HTTP 注册从节点提升
 			// 恒现——从未写过 pin)记「清理成功」审计是假阳性,跳过;
 			// pending 状态仍清空(无遗留需重试)。
-			s.pendingPinPath = ""
-			s.pendingPinAuditURL = ""
-			s.pinCleanupFailureKey = ""
+			s.clearPendingPinLocked(pinPath)
 			return
 		}
-		s.pendingPinPath = pinPath
-		s.pendingPinAuditURL = auditURL
+		// 同一 pin 路径的审计地址保持首次登记值（该 pin 只对应一个旧主节点）；
+		// 不同路径各占一条，互不覆盖——单槽实现会让先前的待重试项永久失联。
+		if _, exists := s.pendingPins[pinPath]; !exists {
+			if s.pendingPins == nil {
+				s.pendingPins = make(map[string]string, 2)
+			}
+			s.pendingPins[pinPath] = auditURL
+		}
 		Logf("info", "cluster pin cleanup deferred: %v", err)
 		// 重试由 Snapshot（每次 Pull）与主节点巡检（60s）驱动，同一失败会
 		// 按分钟稳定复现：审计只在失败形态（路径+错误）变化时写一条，恢复
 		// 成功时才重记「清理」；否则取证面被重复行淹没且掩盖真正的残留告警。
 		failureKey := pinPath + "\x00" + err.Error()
-		if s.pinCleanupFailureKey != failureKey {
-			s.pinCleanupFailureKey = failureKey
+		if s.pinCleanupFailureKeys == nil {
+			s.pinCleanupFailureKeys = make(map[string]string, 2)
+		}
+		if s.pinCleanupFailureKeys[pinPath] != failureKey {
+			s.pinCleanupFailureKeys[pinPath] = failureKey
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
 		}
 		return
 	}
-	s.pendingPinPath = ""
-	s.pendingPinAuditURL = ""
-	s.pinCleanupFailureKey = ""
+	s.clearPendingPinLocked(pinPath)
 	RecordAuditLog("system", "清理", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
+}
+
+// clearPendingPinLocked 清除该路径的待重试与失败去重状态（调用方持锁）。
+func (s *ClusterService) clearPendingPinLocked(pinPath string) {
+	delete(s.pendingPins, pinPath)
+	delete(s.pinCleanupFailureKeys, pinPath)
 }
 
 func (s *ClusterService) retryPendingPinCleanup() {
 	s.pinCleanupMu.Lock()
-	pinPath := s.pendingPinPath
-	auditURL := s.pendingPinAuditURL
+	pending := make(map[string]string, len(s.pendingPins))
+	for pinPath, auditURL := range s.pendingPins {
+		pending[pinPath] = auditURL
+	}
 	s.pinCleanupMu.Unlock()
-	if pinPath != "" {
+	for pinPath, auditURL := range pending {
 		s.cleanupClusterPin(pinPath, auditURL)
 	}
 }
@@ -1101,6 +1127,11 @@ func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin strin
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
 	client := &http.Client{Timeout: 3 * time.Second, Transport: newClusterDetachTransport(expectedPin)}
+	// 脱离通知是一次性的：transport 绑定本次已知指纹（不能复用共享 client，
+	// 否则「仅比对不落盘」语义失效），用完必须关闭空闲连接——否则连接与其
+	// 读写 goroutine 会滞留到 IdleConnTimeout(90s)，反复升降主时累积多份残留
+	// transport（与 handlers 侧 per-request client 的收尾同口径）。
+	defer client.CloseIdleConnections()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	// 旧主节点启用管理 HTTPS 后明文端口 301——按集群
 	// 同步同一契约对同主机 https Location 重放一次，否则脱离通知永远到不了。

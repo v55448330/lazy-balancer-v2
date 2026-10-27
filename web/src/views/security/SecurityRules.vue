@@ -135,10 +135,22 @@
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
-            <el-table-column label="条件" min-width="250" class-name="rule-cond-cell">
+            <!-- 条件关系（AND/OR）独立成窄列：与条件内容同列时标签挤占文本宽度，
+                 长正则被压成折行/错位（2026-10-27 用户裁定）。 -->
+            <el-table-column label="条件关系" width="140" align="center">
               <template #default="{ row }">
                 <el-tag size="small" effect="light" :type="row.condition_logic === 'or' ? 'warning' : 'info'">{{ row.condition_logic === 'or' ? '任一满足（OR）' : '同时满足（AND）' }}</el-tag>
-                <el-tag v-for="(cond, i) in row.conditions" :key="i" size="small" effect="plain" style="margin-right: 4px;">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="条件" min-width="320" class-name="rule-cond-cell">
+              <template #default="{ row }">
+                <!-- 逐条单行 chip：长正则省略 + tooltip 全文，多条按行排布不挤压
+                     （样式在 styles/main.css 的 .cond-chip-list/.cond-chip） -->
+                <div class="cond-chip-list">
+                  <el-tooltip v-for="(cond, i) in row.conditions" :key="i" :content="`${cond.target} ${cond.operator} ${cond.pattern}`" placement="top" :show-after="200">
+                    <el-tag size="small" effect="plain" class="cond-chip">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
+                  </el-tooltip>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="动作" width="80" align="center">
@@ -254,10 +266,10 @@
         <!-- 值与后端写侧门同源（internal/handlers/security.go：名称 ≤100 rune、
              描述 ≤500 rune）——超长只能等 400 的旧形态没有字段级定位 -->
         <el-form-item label="名称" required>
-          <el-input v-model="ruleForm.name" placeholder="规则名称" maxlength="100" show-word-limit />
+          <el-input v-model="ruleForm.name" placeholder="规则名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="ruleForm.description" placeholder="规则描述" maxlength="500" show-word-limit />
+          <el-input v-model="ruleForm.description" placeholder="规则描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
         </el-form-item>
         <el-form-item label="条件关系">
           <el-radio-group v-model="ruleForm.condition_logic" aria-label="条件关系">
@@ -662,6 +674,8 @@ import { formatDate, parseDbTimeMs } from '@/utils/date'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
+import { hasOwn } from '@/utils/hasOwn'
+import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import { DEEP_LINK_PARAMS } from '@/utils/deepLink'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import RuleLibScheduleEditor from '@/components/RuleLibScheduleEditor.vue'
@@ -1068,16 +1082,17 @@ const editingRuleId = ref<number | null>(null)
 const savingRule = ref(false)
 const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], condition_logic: 'and' as 'and' | 'or', action: 'block', score: 5, enabled: true })
 
-// 自定义规则动作三态视图：block=拦截 / log=仅记录 / pass=放行计分，
-// 与编辑器 radio 及后端发射语义（pass 累加异常分、log 不累分）一一对应；
-// 未知动作兜底原样展示（info），不与任何已知语义混淆。
 const CUSTOM_ACTION_VIEWS: Record<string, { label: string; type: 'danger' | 'info' | 'warning' }> = {
   block: { label: '拦截', type: 'danger' },
   log: { label: '仅记录', type: 'info' },
   pass: { label: '放行计分', type: 'warning' },
 }
+// 自定义规则动作三态视图：block=拦截 / log=仅记录 / pass=放行计分，
+// 与编辑器 radio 及后端发射语义（pass 累加异常分、log 不累分）一一对应；
+// 未知动作兜底原样展示（info），不与任何已知语义混淆。查表过 hasOwn：
+// action 来自库值，命中原型键时裸下标会把 Object.prototype 上的函数当标签渲染。
 const customActionView = (action: string): { label: string; type: 'danger' | 'info' | 'warning' } =>
-  CUSTOM_ACTION_VIEWS[action] ?? { label: action || '—', type: 'info' }
+  (hasOwn(CUSTOM_ACTION_VIEWS, action) ? CUSTOM_ACTION_VIEWS[action] : { label: action || '—', type: 'info' })
 
 // —— 可复用 IP 地址列表（第三个标签页）——
 // 分类预设：与安全策略「提取为列表」共用同一组选项
@@ -1449,7 +1464,8 @@ const PATTERN_PLACEHOLDERS: Record<string, string> = {
 }
 const patternPlaceholder = (cond: CustomRuleCondition): string => {
   if (cond.operator === 'regex') return '如 ^/admin/.*$'
-  return PATTERN_PLACEHOLDERS[cond.target] ?? '匹配值'
+  // 同表查表过 hasOwn（target 来自库值，原型键不得渲染函数源码）
+  return hasOwn(PATTERN_PLACEHOLDERS, cond.target) ? PATTERN_PLACEHOLDERS[cond.target] : '匹配值'
 }
 
 // 快捷预设：标签为用户友好文案，value 为真实 UA 中的准确片段
@@ -1935,10 +1951,9 @@ onUnmounted(() => {
 
 <style scoped>
 .count-tip { font-size: 12px; vertical-align: -1px; margin-left: 2px; color: var(--text-secondary); cursor: help; }
-/* 全局表格居中规则(main.css inline-flex
-   nowrap+overflow hidden)把条件列多标签裁剪成单行——3/4 条件不可见。
-   条件列挂专用 class-name（rule-cond-cell），样式下沉到非 scoped 块只命中
-   该列，不再用页级 :deep 覆盖全页含标签单元格。 */
+/* 条件列（rule-cond-cell）的多条件布局已收敛到 styles/main.css
+   （.rule-cond-cell/.cond-chip-list/.cond-chip 与其他表格全局规则同源），
+   本页不再保留本地覆盖。 */
 
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }
@@ -2035,10 +2050,6 @@ onUnmounted(() => {
 
 <!-- el-tooltip popper 挂载到 body，scoped 样式无法命中，单独非 scoped 块 -->
 <style>
-/* 条件列专用换行：class-name 落在 el-table 生成的 td 上（组件内部节点，scoped
-   属性选择器无法命中），因此下沉到非 scoped 块；只覆盖 rule-cond-cell，不再
-   页级重定义全局 .el-table .cell 形态。 */
-.el-table .rule-cond-cell .cell:has(.el-tag) { flex-wrap: wrap; row-gap: 4px; }
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 .ip-list-refs-popper { line-height: 1.6; max-width: 280px; }
 /* el-dialog 的 class 落在 .el-dialog 元素上（$attrs 手动绑定，非组件根），

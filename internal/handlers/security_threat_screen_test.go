@@ -34,6 +34,8 @@ func newThreatScreenRouter(t *testing.T, metricsURL string) *gin.Engine {
 
 func newThreatMetricsServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(rateLimitBlocksMetricsFixture))
 	}))

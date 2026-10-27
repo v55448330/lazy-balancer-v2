@@ -12,7 +12,7 @@ import (
 )
 
 func TestTaskLogPath_whitelistAlphabet(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Clean(t.TempDir())
 	SetLogDir(dir)
 	t.Cleanup(func() { SetLogDir("") })
 

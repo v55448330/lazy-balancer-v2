@@ -82,7 +82,11 @@ COPY caddygeoip/ caddygeoip/
 COPY caddydeps/ caddydeps/
 COPY wafiplist/ wafiplist/
 COPY geoipnames/ geoipnames/
-RUN xcaddy build
+RUN xcaddy build \
+      --with lazy-balancer-v2/caddygeoip=./caddygeoip \
+      --with lazy-balancer-v2/caddydeps=./caddydeps \
+      --with lazy-balancer-v2/wafiplist=./wafiplist \
+      --with lazy-balancer-v2/geoipnames=./geoipnames
 
 FROM golang:1 AS backend
 COPY wafiplist/go.mod wafiplist/go.sum ./wafiplist/
@@ -154,8 +158,13 @@ assert_fail "COPY . . is not a manifest" "缺少顶层 Go 目录"
 reset_fixture
 write_dockerfile <<'EOF'
 FROM golang:1 AS xcaddy-builder
-COPY wafiplist/ wafiplist/
-COPY geoipnames/ geoipnames/
+COPY wafiplist/ geoipnames/ ./
+COPY caddygeoip/ caddydeps/ ./
+RUN xcaddy build \
+      --with lazy-balancer-v2/caddygeoip=./caddygeoip \
+      --with lazy-balancer-v2/caddydeps=./caddydeps \
+      --with lazy-balancer-v2/wafiplist=./wafiplist \
+      --with lazy-balancer-v2/geoipnames=./geoipnames
 
 FROM golang:1 AS backend
 COPY go.mod go.sum ./
@@ -202,6 +211,37 @@ mkdir -p "$tmp_root/ignoredplugin"
 printf 'package ignoredplugin\n' >"$tmp_root/ignoredplugin/plugin.go"
 printf 'ignoredplugin/\n' >"$tmp_root/.gitignore"
 assert_pass "gitignored Go dir is out of scope"
+
+# 12) xcaddy-builder 阶段的本地插件模块 COPY 缺失（backend 仍有同名 COPY）——
+#     必须红：该阶段的 --with 路径不存在只在镜像构建期暴露。
+reset_fixture
+fixture_with_shared_stage_copies
+grep -v '^COPY wafiplist/ wafiplist/$' "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_fail "xcaddy builder module COPY missing" "xcaddy-builder"
+
+# 13) 新增本地插件模块（--with）+ 只补 backend COPY：xcaddy 阶段缺该目录必须红。
+reset_fixture
+fixture_with_shared_stage_copies
+mkdir -p "$tmp_root/newplugin"
+printf 'package newplugin\n' >"$tmp_root/newplugin/plugin.go"
+sed -e 's|^COPY config/ ./config/$|COPY config/ ./config/\nCOPY newplugin/ ./newplugin/|' \
+    -e 's|^      --with lazy-balancer-v2/geoipnames=./geoipnames$|      --with lazy-balancer-v2/geoipnames=./geoipnames \\\n      --with lazy-balancer-v2/newplugin=./newplugin|' \
+    "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_fail "new --with module not copied in builder stage" "newplugin"
+
+# 14) 同一新模块在两个阶段都补 COPY 后必须绿——门禁要求的是「两阶段同步」。
+reset_fixture
+fixture_with_shared_stage_copies
+mkdir -p "$tmp_root/newplugin"
+printf 'package newplugin\n' >"$tmp_root/newplugin/plugin.go"
+sed -e 's|^COPY config/ ./config/$|COPY config/ ./config/\nCOPY newplugin/ ./newplugin/|' \
+    -e 's|^COPY geoipnames/ geoipnames/$|COPY geoipnames/ geoipnames/\nCOPY newplugin/ newplugin/|' \
+    -e 's|^      --with lazy-balancer-v2/geoipnames=./geoipnames$|      --with lazy-balancer-v2/geoipnames=./geoipnames \\\n      --with lazy-balancer-v2/newplugin=./newplugin|' \
+    "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_pass "new --with module copied in both stages"
 
 echo "copy-gate selftest: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

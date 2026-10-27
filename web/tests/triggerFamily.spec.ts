@@ -94,12 +94,16 @@ test('段界与形态分支跨栈对表（后端段界/分支调整必须红）'
   // 形态判定的唯一入口（固定 id 族的族归属已收敛到 legacyRuleFamilies，
   // 由下一条用例逐 id 对表）。
   const svc = repoCode('internal/services/security.go')
-  for (const anchor of [
-    'geoipPrecheckRuleBase     = 800000',
-    'geoipCrawlerRuleBase      = 810000',
-    'geoipCrawlerSpoofRuleBase = 850000',
-  ]) {
-    assert.ok(svc.includes(anchor), `段界常量漂移：${anchor}`)
+  // 值正则口径（与 severityScale.spec.ts 同）：常量名与 `=` 之间的对齐空白属于
+  // gofmt 的排版产物——同 const 块新增/改名一个常量就会重排空白，段界值一个没
+  // 变却触发「段界漂移」假红。
+  const stageBases: ReadonlyArray<readonly [string, number]> = [
+    ['geoipPrecheckRuleBase', 800000],
+    ['geoipCrawlerRuleBase', 810000],
+    ['geoipCrawlerSpoofRuleBase', 850000],
+  ]
+  for (const [name, value] of stageBases) {
+    assert.match(svc, new RegExp(`\\b${name}\\s*=\\s*${value}\\b`), `段界常量漂移：${name} 应为 ${value}`)
   }
   const handler = repoCode('internal/handlers/security.go')
   const fn = section(handler, 'func attackFamilyClassOf(', '\n}')

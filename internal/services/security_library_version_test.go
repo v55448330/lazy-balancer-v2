@@ -66,6 +66,15 @@ func TestIP2Region_singleSegmentXDBIsNotEmpty(t *testing.T) {
 		{startIP: 0x01020300, endIP: 0x010203FF, region: "中国|广东省|深圳市|0|CN"},
 	})
 	withIP2RegionPaths(t, live, filepath.Join(dir, "missing-dist.xdb"))
+	// 条目数与在役 searcher 同源：装载该 xdb 后才应报条目数（读 live 路径的旧
+	// 语义在只读降级/热换失败形态下会给出与查询不一致的数字）。
+	searcher, err := openIP2RegionSearcher(live)
+	if err != nil {
+		t.Fatalf("open single-segment xdb: %v", err)
+	}
+	ip2regionMu.Lock()
+	swapIP2RegionSearcher(searcher, live)
+	ip2regionMu.Unlock()
 
 	if got := GetIP2RegionEntryCount(); got != 1 {
 		t.Fatalf("entry count=%d, want 1（单段 xdb 的 end==start 是合法边界）", got)

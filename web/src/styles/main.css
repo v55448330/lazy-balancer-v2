@@ -176,6 +176,18 @@ body {
    「标签 + 文本」与「纯标签」。 */
 .el-table .cell:has(.el-tag) { display: inline-flex; align-items: center; }
 
+/* 多条件单元格（安全 → 规则集 → 自定义规则列表）：条件关系标签独立成窄列，
+   条件内容逐条渲染为单行 chip —— 长正则超出省略（全文由 el-tooltip 呈现），
+   多条条件换行有序排布，不挤压、不错位。列 min-width 合计超出容器时由
+   el-table 横向滚动承接（操作列 fixed），窄屏下各列仍不重叠。
+   上面「含标签的 .cell」是 inline-flex，会把多条 chip 挤成一行并被裁掉，
+   故条件列显式改回块级弹性容器；两条 class 只作用于显式消费方。 */
+.el-table .rule-cond-cell .cell { display: flex; flex: 1 1 auto; min-width: 0; }
+.cond-chip-list { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; min-width: 0; width: 100%; }
+.cond-chip { max-width: 100%; height: auto; }
+/* 长正则不省略：chip 内换行完整展示（tooltip 仍保留全文），条件行随内容增高。 */
+.cond-chip .el-tag__content { display: block; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.45; }
+
 /* 列表分页器通用形态：Rules / SecurityRules / SecurityPolicies /
    SecurityBlockPages 四处逐字重复的本地定义收敛于此（右对齐 + 16px 上距）。 */
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }

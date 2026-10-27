@@ -71,11 +71,16 @@ func ValidBlockStatusCode(v int) bool {
 // mode→off 同型，必须能逐策略留痕（只报总条数无法定位「哪条策略的限流被关」）。
 // rate_limit_rps 自身不被任何回填语句改写（只作为关停判据），故不取快照列
 // ——同一事务内的前后比较恒相等，属不可达比较项。
+// anomaly_threshold/block_status_code 同属「归一改写了库值」的字段：旧备份/
+// 带外脏值留下的 0 阈值或枚举外状态码会在启动时被改写，必须能回答「哪条策略、
+// 哪个字段、从什么值改成什么值」——只报总条数无法定位。
 type securityEnumRow struct {
 	id                         int64
 	name                       string
 	ipACLMode, mode, geoIPMode string
 	rateLimitEnabled           int
+	anomalyThreshold           int
+	blockStatusCode            int
 }
 
 // securityEnumDirtyRows 选出枚举列非法或带首尾空白的策略行——谓词与
@@ -85,7 +90,7 @@ type securityEnumRow struct {
 // 「哪条策略、哪个字段、从什么值变成什么值」，故在变更前后各取一次快照。
 func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
-			COALESCE(rate_limit_enabled,0)
+			COALESCE(rate_limit_enabled,0), COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
 		FROM security_policies
 		WHERE (ip_acl_mode IS NOT NULL AND ip_acl_mode<>TRIM(ip_acl_mode))
 		   OR (mode IS NOT NULL AND mode<>TRIM(mode))
@@ -93,7 +98,9 @@ func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, 
 		   OR COALESCE(TRIM(ip_acl_mode),'') NOT IN ('allow','deny','绕过')
 		   OR COALESCE(TRIM(mode),'') NOT IN ('off','custom_only','detection','blocking')
 		   OR COALESCE(TRIM(geoip_mode),'') NOT IN ('off','allow','deny')
-		   OR (COALESCE(rate_limit_enabled,0)=1 AND COALESCE(rate_limit_rps,0)<1)`)
+		   OR (COALESCE(rate_limit_enabled,0)=1 AND COALESCE(rate_limit_rps,0)<1)
+		   OR COALESCE(anomaly_threshold,0)<=0
+		   OR COALESCE(block_status_code,0) NOT IN (0,400,401,`+strconv.Itoa(db.DefaultBlockStatusCode)+`,404,503)`)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +108,8 @@ func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, 
 	var out []securityEnumRow
 	for rows.Next() {
 		var r securityEnumRow
-		if err := rows.Scan(&r.id, &r.name, &r.ipACLMode, &r.mode, &r.geoIPMode, &r.rateLimitEnabled); err != nil {
+		if err := rows.Scan(&r.id, &r.name, &r.ipACLMode, &r.mode, &r.geoIPMode, &r.rateLimitEnabled,
+			&r.anomalyThreshold, &r.blockStatusCode); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -122,10 +130,11 @@ func securityEnumNormalizedChanges(ctx context.Context, tx *sql.Tx, before []sec
 	var out []securityEnumChange
 	for _, b := range before {
 		var ipACLMode, mode, geoIPMode string
-		var rateLimitEnabled int
+		var rateLimitEnabled, anomalyThreshold, blockStatusCode int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
-				COALESCE(rate_limit_enabled,0) FROM security_policies WHERE id=?`, b.id).
-			Scan(&ipACLMode, &mode, &geoIPMode, &rateLimitEnabled); err != nil {
+				COALESCE(rate_limit_enabled,0), COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
+				FROM security_policies WHERE id=?`, b.id).
+			Scan(&ipACLMode, &mode, &geoIPMode, &rateLimitEnabled, &anomalyThreshold, &blockStatusCode); err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
@@ -138,6 +147,8 @@ func securityEnumNormalizedChanges(ctx context.Context, tx *sql.Tx, before []sec
 			{"mode", b.mode, mode},
 			{"geoip_mode", b.geoIPMode, geoIPMode},
 			{"rate_limit_enabled", strconv.Itoa(b.rateLimitEnabled), strconv.Itoa(rateLimitEnabled)},
+			{"anomaly_threshold", strconv.Itoa(b.anomalyThreshold), strconv.Itoa(anomalyThreshold)},
+			{"block_status_code", strconv.Itoa(b.blockStatusCode), strconv.Itoa(blockStatusCode)},
 		} {
 			if f.from == f.to {
 				continue

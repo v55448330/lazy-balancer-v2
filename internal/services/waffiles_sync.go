@@ -674,8 +674,19 @@ func wafFilesRefMatchesBundle(r *models.ClusterWafFilesRef, b *WafFileBundle) bo
 		return false
 	}
 	// 威胁面交叉核验——ref 逐源声明的.fast 哈希必须与 bundle 携带
-	// 内容一一对应，缺失或不符都判不匹配（与 CRS/xdb 同纵深），否则威胁面
-	// 与 ref 漂移的 bundle 会被静默放行装进从节点。
+	// 内容**一一对应**：缺失、不符、bundle 多出未声明条目、同名重复条目都判
+	// 不匹配（与 CRS/xdb 同纵深）。只做单向子集核对时，损坏/恶意主节点可额外
+	// 塞入未由引用授权的源（Apply 会逐条落盘），或用同名第二条覆盖预期名单。
+	if len(b.ThreatFiles) != len(r.ThreatSha256s) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(b.ThreatFiles))
+	for _, tf := range b.ThreatFiles {
+		if _, dup := seen[tf.Name]; dup {
+			return false
+		}
+		seen[tf.Name] = struct{}{}
+	}
 	for source, want := range r.ThreatSha256s {
 		matched := false
 		for _, tf := range b.ThreatFiles {
@@ -780,6 +791,10 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		}
 	}
 	// RDB 文件化：从节点写威胁库 .fast 文件（直接使用，零编译）
+	// 反向防御：同名条目重复时拒绝整包——核验侧已按「集合相等 + 名称唯一」
+	// 拦下，但本函数还有 lbbak 导入/直连调用方，逐条落盘会让后一条覆盖前一条
+	// 的预期名单（最终生效内容取决于条目顺序）。
+	seenThreatNames := make(map[string]struct{}, len(bundle.ThreatFiles))
 	for _, tf := range bundle.ThreatFiles {
 		// 写盘前名称预检——仅允许三个内置源名。恶意/损坏主节点的
 		// name 含路径分隔符/`..`/绝对路径时，fmt.Sprintf("threat-%s...") 可逃出
@@ -787,6 +802,10 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		if !validThreatFileName(tf.Name) {
 			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库文件名非法 %q，已拒绝整包", tf.Name)
 		}
+		if _, dup := seenThreatNames[tf.Name]; dup {
+			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 条目重复，已拒绝整包", tf.Name)
+		}
+		seenThreatNames[tf.Name] = struct{}{}
 		if len(tf.Content) == 0 {
 			// 声明哈希非空 = 主端引用声称存在该文件（0 字节文件
 			// 的 sha256 也非空），但包内无内容——从端若静默 continue 则永不

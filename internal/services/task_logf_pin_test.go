@@ -6,6 +6,7 @@ package services
 // 漂移/异常轮照旧逐轮留痕。
 
 import (
+	"context"
 	"errors"
 	"log"
 	"os"
@@ -296,7 +297,7 @@ func TestTaskLogf_LogCleanupFailureFailsTaskAndLogsIncomplete(t *testing.T) {
 	dir := t.TempDir()
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = filepath.Join(dir, "audit.log"), filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1024 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1024 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopy
 	})

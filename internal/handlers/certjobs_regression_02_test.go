@@ -286,8 +286,8 @@ func TestListCertificates_scanFailureWarnsAndKeepsRemainingRows(t *testing.T) {
 	fakeDB(t, map[string]driver.Rows{
 		"SELECT COUNT(*) FROM cert_jobs": &fakeQueryRows{values: [][]driver.Value{{int64(2)}}},
 		"SELECT j.id": &fakeQueryRows{values: [][]driver.Value{
-			{"bad-id", "lb_bad", "bad.example.test", "ok", "", "", ""},
-			{int64(2), "lb_good", "good.example.test", "ok", "", "", ""},
+			{"bad-id", "lb_bad", "bad.example.test", "ok", "", "", "", ""},
+			{int64(2), "lb_good", "good.example.test", "ok", "", "", "", ""},
 		}},
 	})
 	buf := captureLog(t)

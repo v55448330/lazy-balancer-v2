@@ -8,6 +8,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 临时根目录由门禁自己创建并持有：沙箱/CI 在运行中回收 TMPDIR 会让
+# t.TempDir() 级联报 stat/no such file（数十用例同时红，把真正的回归埋掉——
+# 实测形态）。固定到本进程创建的目录后，退出时统一清理。
+if [[ -z "${LB_GATE_KEEP_TMPDIR:-}" ]]; then
+  tmp_base="${TMPDIR:-/tmp}"; tmp_base="${tmp_base%/}"
+  gate_tmp="$(mktemp -d "$tmp_base/lb-gate.XXXXXX")"
+  export TMPDIR="$gate_tmp"
+  trap 'chmod -R u+rwX "$gate_tmp" 2>/dev/null || true; rm -rf "$gate_tmp"' EXIT
+fi
+
 # 守卫本体 + 守卫自检（审计产物/批量编辑两个守卫的自检在临时夹具仓里验证命中面
 # 与误报边界——守卫的模式退化必须在这里先红，而不是等到审计产物真的混进公网仓库）。
 ./scripts/check-no-audit-artifacts.sh
@@ -15,6 +25,7 @@ cd "$(dirname "$0")/.."
 ./scripts/tests/guard-selftest.sh
 ./scripts/tests/bulk-edit-safety-selftest.sh
 ./scripts/tests/shuffle-gate-selftest.sh
+./scripts/tests/race-gate-selftest.sh
 # 修复声称反向核对（R-4b）：台账 -> 代码/测试事实。自检常开；带台账时
 # （FIX_LEDGER=<file> [FIX_COMMIT=<rev>] ./scripts/test-all.sh）逐条验证
 # code:path:line:token 与 test:Name 仍存在，并核对提交 message 的 Fixes: 声明。
@@ -27,16 +38,17 @@ if [ -n "${FIX_LEDGER:-}" ]; then
   fi
 fi
 
-# 启动链工件语法：docker-entrypoint.sh 是每次部署的唯一入口（语法错误 = 面板
-# 不可用，且只在容器启动时暴露，此前无任何门禁触碰它）；scripts/ 全部按 bash
-# 解析。sh -n / bash -n 只做语法不执行，零成本纯增益。
-echo "== shell syntax (entrypoint + scripts) =="
-sh -n docker-entrypoint.sh
-# 未跟踪的脚本同样入面：「先写脚本 → 跑门禁 → 再 git add」是常见顺序，
-# 只看受控文件会让新脚本的语法错误在提交后才暴露（与 gofmt 门同口径）。
-while IFS= read -r script; do
-  bash -n "$script"
-done < <(git ls-files --cached --others --exclude-standard 'scripts/*.sh')
+# 启动链工件：docker-entrypoint.sh 是每次部署的唯一入口（语法/exec 目标错误 =
+# 面板不可用，且只在容器启动时暴露）。门禁本体在 scripts/check-startup-chain.sh
+# ——两件事它比此前的内联 `sh -n` 多做：
+#   ① 语义面：entrypoint 的每个 `exec <绝对路径>` 必须由 Dockerfile 提供
+#      （拼错二进制名时 sh -n 恒绿）；
+#   ② 清单来源 fail-closed：`git ls-files` 失败（无 .git）或清单为空即失败，
+#      不再在进程替换里静默得到「0 个脚本 + rc=0」。
+# 未跟踪脚本同样入面：「先写脚本 → 跑门禁 → 再 git add」是常见顺序。
+echo "== startup chain (entrypoint syntax + exec targets + scripts syntax) =="
+./scripts/check-startup-chain.sh
+./scripts/tests/startup-chain-gate-selftest.sh
 
 # 出厂引导 Caddyfile 的引擎级校验：内容与 entrypoint heredoc 的同构性由
 # cmd/server 的钉测试机械比对（下方 go test 覆盖）；此处校验引擎是否接受。
@@ -182,6 +194,13 @@ if [[ "${FULL:-0}" == "1" || -n "${SHUFFLE_GATE_SEEDS:-}" ]]; then
   ./scripts/test-shuffle.sh
 fi
 
+# 声明序盲区：internal/handlers 的 suite 级全局态守卫**只比较终态**——「某用例
+# 泄漏 → 后续用例顺手修回」在固定 seed 下判绿，只有把两者顺序打乱才暴露。
+# 补偿分两层：①写侧隔离（withIsolatedGlobal + 静态门，已常开）；②排列面仍走
+# 上面的 test-shuffle.sh（FULL=1/SHUFFLE_GATE_SEEDS）。默认**不**再加随机轮：
+# 实测 seed 7/11 下该包已有与本轮无关的顺序依赖用例，默认轮会先红在那些用例上，
+# 需要单独收敛后再并入默认门禁（复放：go test ./internal/handlers -shuffle=<seed>）。
+
 # 交叉编译等价性（不是「镜像构建等价性」）：验证 GOOS=linux CGO_ENABLED=0
 # 这组构建参数下代码可编译——平台/cgo 相关代码路径不进本地测试面，四个嵌套
 # 模块由 xcaddy 在镜像内以同一组参数编译插件，其 linux-only 编译错误（构建
@@ -193,7 +212,8 @@ fi
 # 根模块是 main 包，产物丢 /dev/null；嵌套模块用 go install 配临时 GOBIN，
 # 不落仓库（库模块本不产二进制，未来出现 main 包也不会污染工作树）。
 echo "== cross-build equivalence (GOOS=linux CGO_ENABLED=0 go build) =="
-cross_bin="$(mktemp -d "${TMPDIR:-/tmp}/lb-crossbuild.XXXXXX")"
+cross_base="${TMPDIR:-/tmp}"; cross_base="${cross_base%/}"
+cross_bin="$(mktemp -d "$cross_base/lb-crossbuild.XXXXXX")"
 for module in "${modules[@]}"; do
   case "$module" in
     .) CGO_ENABLED=0 GOOS=linux go build -o /dev/null ./cmd/server ;;
@@ -228,9 +248,42 @@ done
 # 编译基准更是纯算力），门禁时长不可接受。未进 -race 面的是「单线程夹具 + DB
 # 迁移」类用例，仍由上方全量非 -race 运行覆盖；新增并发用例请按同一口径加进
 # 本 -run 清单（前缀汇总，避免逐条漂移）。
+#
+# 嵌套模块同样纳入：wafiplist（@ipListFast 热路径——每请求二分判定、并发重建、
+# 按路径锁表退役、窗口边界 CAS 单飞）与 caddygeoip（审计写插件常驻 sweeper、
+# 流量租约/环、共享 GeoIP searcher、爬虫缓存）此前只在主循环的非 -race 运行
+# 里跑；两个模块的测试注释与设计（`wafiplist/iplistfast_hardening_test.go`、
+# `caddygeoip/auditwriter.go` 的「-race 下才是数据竞争」说明）都按存在竞态门
+# 写。两个叶子模块全包 -race 可接受，故不裁剪。
 echo "== go test -race (concurrency cores) =="
 go test -race -count=1 ./internal/taskengine ./internal/middleware ./cmd/...
-go test -race -timeout=10m -count=1 -run 'Test_Lookup_concurrent_with_Reload|TestRecordDownloadIntegrity_|TestScrapeRateLimitBlocks_|TestTrustedProxyDegradation_|TestApplyConfigWithOptions_callsIPListGCOnlyAfterSuccessfulApply|TestInitTaskEngine_|TestStartRoleReconciler_|Test_GetSetIP2RegionVersion_roundtrip' ./internal/services
+# -run 是手写前缀清单：用例改名后「匹配 0 个」仍以 0 退出，该门会静默空转。
+# 逐前缀断言至少匹配到一个用例（go test -list 只列出名字，不执行）。
+race_run_prefixes=(
+  Test_Lookup_concurrent_with_Reload
+  TestRecordDownloadIntegrity_
+  TestScrapeRateLimitBlocks_
+  TestTrustedProxyDegradation_
+  TestApplyConfigWithOptions_callsIPListGCOnlyAfterSuccessfulApply
+  TestInitTaskEngine_
+  TestStartRoleReconciler_
+  Test_GetSetIP2RegionVersion_roundtrip
+)
+for prefix in "${race_run_prefixes[@]}"; do
+  # 先取全量名字再 grep：`go test -list | grep -q` 在 pipefail 下会因 grep 提前
+  # 退出让 go test 收到 SIGPIPE（141），把「匹配到了」误判成失败。
+  race_listed="$(go test -list "^${prefix}" ./internal/services)"
+  if ! grep -q "^${prefix}" <<<"$race_listed"; then
+    echo "FAIL: -race 定向前缀 ${prefix} 未匹配到任何用例（改名后竞态门会静默空转）" >&2
+    exit 1
+  fi
+done
+race_run_filter="$(IFS='|'; echo "${race_run_prefixes[*]}")"
+go test -race -timeout=10m -count=1 -run "${race_run_filter}" ./internal/services
+for module in wafiplist caddygeoip; do
+  echo "-- -race ${module}"
+  (cd "$module" && go test -race -count=1 -timeout=10m ./...)
+done
 
 echo "== frontend coverage/tests/typecheck/build =="
 # 单一入口 npm run build = test:coverage + typecheck:src + typecheck:test + vite build。

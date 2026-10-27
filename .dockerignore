@@ -38,6 +38,14 @@ web/tsconfig.node.json
 web/tsconfig.test.json
 web/package.json
 web/package-lock.json
+# Go 测试面不入构建上下文：Dockerfile 的 COPY 面按整目录复制 caddygeoip/ 等
+# （xcaddy 阶段的 COPY caddygeoip/ 与 backend 阶段的显式清单同形），测试源码
+# （16 个 *_test.go ≈290KB，其中 auditwriter_test.go 117KB 且频繁变动）与
+# 10.6MB 的 ip2region 测试夹具都会让「只改测试」也 bust 最贵的插件编译层
+# ——这正是 Dockerfile 该 COPY 面注释要避免的形态。测试夹具只服务仓内测试：
+# 运行期用的是镜像内 /app/waf.dist/ip2region.xdb。
+**/*_test.go
+caddygeoip/testdata/
 docs/
 .opencode/
 *.db

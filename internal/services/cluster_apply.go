@@ -941,10 +941,21 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 		// 从节点全来源 403。
 		whitelistJSON := []byte("")
 		if len(key.MCPIPWhitelist) > 0 {
+			// 快照不经 REST 写侧校验：逐条规范化，无法解析的条目丢弃并留痕
+			// （丢弃=收紧允许来源）。全部条目都非法时写显式 "[]" —— 中间件
+			// 解析成功但 0 条网络，恒不匹配即 deny-all；绝不能落 ''（等同
+			// 「无白名单」= 全来源放行，把畸形数据变成访问面放宽）。
+			normalized, dropped := NormalizeMCPIPWhitelistStrings(key.MCPIPWhitelist)
+			if len(dropped) > 0 {
+				Logf("warn", "同步密钥 %d：MCP IP 白名单含无法解析的条目，已按 fail-closed 丢弃: %v", key.ID, dropped)
+			}
 			var err error
-			whitelistJSON, err = json.Marshal(key.MCPIPWhitelist)
+			whitelistJSON, err = json.Marshal(normalized)
 			if err != nil {
 				return fmt.Errorf("序列化快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
+			}
+			if len(normalized) == 0 {
+				Logf("warn", "同步密钥 %d：MCP IP 白名单全部条目无法解析，落显式 deny-all（该 Key 在从节点拒绝所有来源）", key.ID)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTimeFlat(key.LastUsed.NullTime), key.CreatedAt.UTC().Format(crsTimeLayout)); err != nil {

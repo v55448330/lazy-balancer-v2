@@ -14,7 +14,7 @@ import type {
   SystemMetrics,
   UpdateCurrentUserInput,
 } from '@/types'
-import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
+import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
 import { currentSessionGeneration } from '@/utils/sessionIdentity'
 
 declare module 'axios' {
@@ -300,8 +300,8 @@ service.interceptors.response.use(
     } else if (kind === 'step-up') {
       // 428 也只能处置发起请求时的身份。MFA 刷新只换令牌、不推进代际；
       // 登录/登出/OIDC/换账号推进后，旧请求不得借用新会话验码或重放。
-      const requestGeneration = error.config?._sessionGeneration
-      const isCurrent = () => requestGeneration === currentSessionGeneration()
+      // 身份比较单源在 createSessionStepUpGate（行为可被 node:test 直接钉住）。
+      const isCurrent = createSessionStepUpGate(error.config?._sessionGeneration, currentSessionGeneration)
       if (!isCurrent()) {
         return Promise.reject(new ApiRequestError(message, status, error.response?.data))
       }

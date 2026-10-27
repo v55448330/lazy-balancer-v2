@@ -6,6 +6,7 @@ package services
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,9 @@ type ThreatScreenAttackFlowEvent struct {
 	// Weight 是写入时的采样因子：1=全量，4/8=1/N 抽样后的权重。
 	// 前端用 sum(weight) 还原近似总量，避免采样档位直接改变线宽语义。
 	Weight uint32 `json:"weight"`
+	// key 是请求去重键（0=不可去重）：只用于跨批改判时定位环内既有条目，
+	// 未导出因此不进入 JSON 下发契约。
+	key uint64
 }
 
 type threatScreenAttackFlowItem struct {
@@ -30,6 +34,12 @@ type threatScreenAttackFlowItem struct {
 	clientIP      string
 	action        string
 	ruleTriggered string
+	// key 是请求去重键（0=不可去重），供跨批改判原地定位既有条目。
+	key uint64
+	// inPlace 标记「跨批改判」条目：优先原地更新同键既有环条目（上一批已入环）；
+	// 环内没有该键（首轮本就不入环：爬虫放行族/采样关闭当时/已被淘汰）时按普通
+	// 条目补录。同一请求因此在光流中只有一条最终结论，与事件表/自动封禁一致。
+	inPlace bool
 }
 
 var (
@@ -38,6 +48,9 @@ var (
 	threatScreenAttackFlowSeq     atomic.Uint64
 	threatScreenAttackFlowAttempt atomic.Uint64
 	threatScreenAttackFlowSampleN atomic.Uint32
+	// 请求去重键→环内序号索引：跨批改判据此定位上一批已入环的条目。
+	// 与环同生命周期——裁剪时同步删除被淘汰条目的键，避免索引无限增长。
+	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
 	// 采样档位租约表（与 Caddy 侧 traffic_lease.go 同模型）——
 	// 取代「全局单值最后写者胜」：多标签页/多租约并存时单租约释放不误杀
 	// 其他租约；有效档位=存活租约的 min（最密），无租约=0（关闭）。
@@ -183,6 +196,16 @@ func threatScreenAttackFlowRecordBatch(items []threatScreenAttackFlowItem) {
 	threatScreenAttackFlowMu.Lock()
 	batch := make([]ThreatScreenAttackFlowEvent, 0, len(items))
 	for _, item := range items {
+		// 跨批改判：环内已有同请求条目时原地换结论（保留原序号与权重），
+		// 不消耗采样计数、不分配新序号——消费者游标因此不回退，大屏不会为
+		// 同一请求同时画出「检测」与「拦截」两条弧。
+		if item.inPlace && item.key != 0 {
+			if idx, ok := threatScreenAttackFlowIndexLocked(item.key); ok {
+				threatScreenAttackFlowEvents[idx].Action = item.action
+				threatScreenAttackFlowEvents[idx].RuleTriggered = item.ruleTriggered
+				continue
+			}
+		}
 		if n > 1 && threatScreenAttackFlowAttempt.Add(1)%uint64(n) != 0 {
 			continue
 		}
@@ -197,6 +220,7 @@ func threatScreenAttackFlowRecordBatch(items []threatScreenAttackFlowItem) {
 			Action:        item.action,
 			RuleTriggered: item.ruleTriggered,
 			Weight:        uint32(n),
+			key:           item.key,
 		})
 	}
 	if len(batch) == 0 {
@@ -204,10 +228,40 @@ func threatScreenAttackFlowRecordBatch(items []threatScreenAttackFlowItem) {
 		return
 	}
 	threatScreenAttackFlowEvents = append(threatScreenAttackFlowEvents, batch...)
+	for _, ev := range batch {
+		if ev.key != 0 {
+			threatScreenAttackFlowKeySeq[ev.key] = ev.Seq
+		}
+	}
 	if over := len(threatScreenAttackFlowEvents) - threatScreenAttackFlowRingMax; over > 0 {
+		// 被淘汰条目的键同步出索引：索引必须与环同界，否则键表随请求数
+		// 无界增长，且陈旧键会把改判指向已不存在的序号。
+		for _, ev := range threatScreenAttackFlowEvents[:over] {
+			if ev.key != 0 && threatScreenAttackFlowKeySeq[ev.key] == ev.Seq {
+				delete(threatScreenAttackFlowKeySeq, ev.key)
+			}
+		}
 		threatScreenAttackFlowEvents = threatScreenAttackFlowEvents[over:]
 	}
 	threatScreenAttackFlowMu.Unlock()
+}
+
+// threatScreenAttackFlowIndexLocked 用请求键定位环内条目下标（调用方须持
+// threatScreenAttackFlowMu）。环按 Seq 严格递增，故对序号做二分查找；索引
+// 陈旧（条目已被环淘汰）时顺手清除并报告 miss。
+func threatScreenAttackFlowIndexLocked(key uint64) (int, bool) {
+	seq, ok := threatScreenAttackFlowKeySeq[key]
+	if !ok {
+		return 0, false
+	}
+	i := sort.Search(len(threatScreenAttackFlowEvents), func(i int) bool {
+		return threatScreenAttackFlowEvents[i].Seq >= seq
+	})
+	if i < len(threatScreenAttackFlowEvents) && threatScreenAttackFlowEvents[i].Seq == seq {
+		return i, true
+	}
+	delete(threatScreenAttackFlowKeySeq, key)
+	return 0, false
 }
 
 // ThreatScreenAttackFlowSnapshot 返回 since 之后的攻击流事件、next_seq 与
@@ -258,10 +312,24 @@ func ThreatScreenAttackFlowSnapshot(since uint64, limit int) ([]ThreatScreenAtta
 	return out, next, gapSkipped
 }
 
+// threatScreenAttackFlowResetRingForGeneration 在 metrics 库代际切换（损坏隔离
+// 重建）时清空环形缓冲、序号与请求键索引：新库为空、审计日志从头重放，旧环保留
+// 灾前条目会让重放事件与灾前弧重复出现（同屏攻击量与拦截率翻倍）。采样租约不动
+// ——租约属于展示会话，与数据代际无关。
+func threatScreenAttackFlowResetRingForGeneration() {
+	threatScreenAttackFlowMu.Lock()
+	threatScreenAttackFlowEvents = nil
+	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
+	threatScreenAttackFlowMu.Unlock()
+	threatScreenAttackFlowSeq.Store(0)
+	threatScreenAttackFlowAttempt.Store(0)
+}
+
 // ResetThreatScreenAttackFlowForTest 测试缝：清空环形缓冲、租约表与采样状态。
 func ResetThreatScreenAttackFlowForTest() {
 	threatScreenAttackFlowMu.Lock()
 	threatScreenAttackFlowEvents = nil
+	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
 	threatScreenAttackFlowLeases = map[string]threatScreenAttackFlowLease{}
 	threatScreenAttackFlowMu.Unlock()
 	threatScreenAttackFlowSeq.Store(0)

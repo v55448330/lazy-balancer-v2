@@ -50,6 +50,14 @@ func stripSchemaDescriptions(node any) any {
 // 的同一字段必须共用同一份约束（类型/枚举/上下界/嵌套结构）：两份巨型字面量
 // 此前只在 create 侧写了部分写侧约束，Agent 按 update schema 构参会先吃 400。
 // 描述文本允许因语境不同，故比较前统一剥掉 description。
+// updateOnlyRuleSchemaFields 登记「只在 update_rule 出现」的字段及理由：对称性
+// 是本门的目标，但版本前置条件在语义上只存在于更新（创建没有基线版本可比），
+// 故显式豁免而不是把字段硬塞进 create。豁免表本身也被反向校验：字段一旦回到
+// create_rule 或从 update_rule 消失，本门立即变红（防陈旧豁免长期掩盖漂移）。
+var updateOnlyRuleSchemaFields = map[string]string{
+	"expected_updated_at": "乐观并发前置条件：以既有 updated_at 为基线，创建时无基线",
+}
+
 func TestRuleToolSchemasShareIdenticalConstraints(t *testing.T) {
 	createProperties := decodeRuleSchema(t, "create_rule", createRuleSchema)
 	updateProperties := decodeRuleSchema(t, "update_rule", updateRuleSchema)
@@ -63,8 +71,19 @@ func TestRuleToolSchemasShareIdenticalConstraints(t *testing.T) {
 		if name == "caddy_id" {
 			continue
 		}
+		if _, exempt := updateOnlyRuleSchemaFields[name]; exempt {
+			continue
+		}
 		if _, exists := createProperties[name]; !exists {
 			t.Errorf("字段 %q 只在 update_rule schema 中——create 无法提交该字段", name)
+		}
+	}
+	for name, reason := range updateOnlyRuleSchemaFields {
+		if _, exists := createProperties[name]; exists {
+			t.Errorf("字段 %q 已在 create_rule schema 中，update-only 豁免必须删除（理由：%s）", name, reason)
+		}
+		if _, exists := updateProperties[name]; !exists {
+			t.Errorf("update-only 豁免登记的字段 %q 不在 update_rule schema 中", name)
 		}
 	}
 	for name, createConstraint := range createProperties {

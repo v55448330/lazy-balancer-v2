@@ -63,10 +63,12 @@ type securityEventRecord struct {
 	PrecheckUs     int64
 	RequestHeaders string
 	RequestBody    string
-	// chainedCustomRule 标记「多条件链式自定义规则」的起始条（审计 raw 以 ,chain
-	// 结尾）——把 setvar 迁到链尾后，该形态的 raw 不含评分字面量，
-	// AnomalyScore 需按发射 id 回查 cr.Score 补齐。
-	chainedCustomRule bool
+	// customRuleScoreFallback 标记「raw 不含评分字面量」的自定义规则命中形：
+	//   - 多条件链式规则的起始条（raw 以 ,chain 结尾；setvar 在链尾）；
+	//   - OR 计分规则的独立分支（raw 只置命中标记，评分在父规则级评分点）。
+	// 两者 AnomalyScore 都需要按发射 id 回查父规则 cr.Score 补齐——否则事件
+	// 评分列/大屏危险等级显示 0（非评分事件）。
+	customRuleScoreFallback bool
 	// messagesDropped 是写侧单行 messages 上限截断掉的命中条数（审计行顶层
 	// messages_dropped）。不落库，仅用于摄取期累计披露。
 	messagesDropped int
@@ -178,6 +180,19 @@ func securityEventsRawIsChainStarter(raw string) bool {
 	return strings.HasSuffix(trimmed, ",chain")
 }
 
+// securityEventsRawIsORScoringBranch 报告审计 raw 是否为 OR 计分规则的独立分支：
+// 分支动作串只置父规则命中标记（setvar:tx.lb_cr_or_hit_<父 emit id>=1），评分由
+// 父规则级单一评分点执行，因此分支 raw 不含评分字面量。block 动作的 OR 分支仍
+// 内联评分（deny 首个命中即中断，不存在重复累加），不命中本判据。
+func securityEventsRawIsORScoringBranch(raw string) bool {
+	return strings.Contains(raw, "setvar:tx."+customRuleORHitVarPrefix)
+}
+
+// securityEventsRawNeedsRuleScore 汇总「raw 无评分字面量、需按父规则补分」的形态。
+func securityEventsRawNeedsRuleScore(raw string) bool {
+	return securityEventsRawIsChainStarter(raw) || securityEventsRawIsORScoringBranch(raw)
+}
+
 // securityEventsChainedCustomRuleScore 按发射 id 回查自定义规则分：
 // 多条件 block/pass 规则的 setvar 在链尾，审计 raw 只有起始条 → 摄入侧评分恒 0。
 // 普通发射 id = DB id + 10000；OR 分支由 DecodeCustomRuleEmitID 回解同一父规则。
@@ -286,7 +301,7 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	if len(doc.Messages) > 0 {
 		rec.RuleTriggered = doc.Messages[0].Data.ID.String()
 		rec.RuleMsg = securityEventsClipTextField(doc.Messages[0].Message, securityEventsRuleMsgCap)
-		rec.chainedCustomRule = securityEventsRawIsChainStarter(doc.Messages[0].Data.Raw)
+		rec.customRuleScoreFallback = securityEventsRawNeedsRuleScore(doc.Messages[0].Data.Raw)
 	}
 	// 写侧 messages 上限截断（messages_dropped）必须在事件行上可见：被省略的
 	// 规则命中消息无法回填，详情页只会看到已采集的那部分——行内标记与写侧
@@ -1637,6 +1652,10 @@ func (t *securityEventsTailer) securityEventsGenerationGuard(offset int64) (int6
 		// 不随库重置——不重置则窗口内事件被二次计数，阈值提前达成误封。
 		// 重置后由重放按事件时间重建窗口计数，净效果=恰好一次。
 		ResetAutobanCounters()
+		// 攻击光流环同属「旧库代数」的内存态：新库为空、审计日志将从头重放，
+		// 旧环保留会让重放事件与灾前弧重复入环（大屏攻击量翻倍），序号也必须
+		// 复位让前端游标随代际重建。
+		threatScreenAttackFlowResetRingForGeneration()
 		// 去重表与会话绑定：新库为空，整份审计日志重放必须逐条重新落库——
 		// 旧库时代的去重记忆会把重放事件当重复丢弃（新库永远缺这些行）。
 		t.dedupe = &securityEventsRequestDeduper{}
@@ -2470,9 +2489,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				}
 			}
 			policyID, policyName := securityEventsAttributePolicyWithExclusions(rule.caddyID, rec.RuleTriggered, rec.Action, rec.ClientIP, policyByID, bindings, crsExclusionMatcher)
-			// 链式自定义规则起始条的 raw 不含评分字面量，按发射 id 补分
-			//（否则事件日志评分列/大屏危险等级显示 0=非评分事件）。
-			if rec.AnomalyScore == 0 && rec.chainedCustomRule {
+			// 链式起始条/OR 计分分支的 raw 不含评分字面量，按发射 id 回查父规则
+			// cr.Score 补齐（否则事件日志评分列/大屏危险等级显示 0=非评分事件）。
+			if rec.AnomalyScore == 0 && rec.customRuleScoreFallback {
 				rec.AnomalyScore = securityEventsChainedCustomRuleScore(rec.RuleTriggered, policyByID, policyID)
 			}
 			dedupeKey, dedupeable := securityEventsRequestDedupeKey(rec)
@@ -2518,11 +2537,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					// 同批光流条目同步改判：大屏光流按 action 着色/计拦截，
 					// 保留首次写入的 logged 会让同一请求在光流显示「检测」而
 					// 事件行显示「拦截」。跨批形态原条目已在上一 pass 落入
-					// 环形缓冲（无法回改）；若上一 pass 根本没入环（logged 且
-					// 爬虫放行族=不计攻击，或采样闸门当时关闭），本批按改判后
-					// 的 blocked 补入一条——否则事件行/拦截率按 blocked 计而
-					// 光流永远缺该拦截弧（同屏两面不一致）。同一去重键只入环
-					// 一次（attackFlowIndex 作存在性判据）。
+					// 环形缓冲——本批索引看不到它，故按请求去重键交环内索引做
+					// 原地改判（保留原序号，消费者游标不回退），只有环内确实没有
+					// 该键（logged 且爬虫放行族=不计攻击、采样闸门当时关闭、环已
+					// 淘汰）才按改判后的 blocked 补入一条——否则事件行/拦截率按
+					// blocked 计而光流永远缺该拦截弧（同屏两面不一致）。
 					if idx, ok := attackFlowIndex[dedupeKey]; ok {
 						attackFlowBatch[idx].action = rec.Action
 						attackFlowBatch[idx].ruleTriggered = rec.RuleTriggered
@@ -2535,6 +2554,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 							clientIP:      rec.ClientIP,
 							action:        rec.Action,
 							ruleTriggered: rec.RuleTriggered,
+							key:           dedupeKey,
+							inPlace:       true,
 						})
 					}
 					// 该分钟 rollup 可能已按 logged 固化：重固让 action/rule
@@ -2598,7 +2619,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					// 窗口（静默表现为「攻击变少」）。
 					if threatScreenAttackFlowSampleN.Load() > 0 && SecurityEventCountsAsAttack(rec.Action, rec.RuleTriggered) &&
 						!IsReservedClientIP(rec.ClientIP) {
+						// key 携带请求去重键（不可去重时为 0）：跨批改判据此在环内
+						// 原地更新本条目，而不是再追加一条。
+						var flowKey uint64
 						if dedupeable {
+							flowKey = dedupeKey
 							attackFlowIndex[dedupeKey] = len(attackFlowBatch)
 						}
 						attackFlowBatch = append(attackFlowBatch, threatScreenAttackFlowItem{
@@ -2606,6 +2631,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 							clientIP:      rec.ClientIP,
 							action:        rec.Action,
 							ruleTriggered: rec.RuleTriggered,
+							key:           flowKey,
 						})
 					}
 					batchInserted++
@@ -3348,6 +3374,10 @@ func SecurityEventsSetIngestionHealthForTest(status SecurityEventsIngestionStatu
 	securityEventsWriterHealth.sidecarWriteFailureHits = 0
 	securityEventsWriterHealth.mu.Unlock()
 	// 跳过累计同属健康位整体，重置时一并清空（防跨用例泄漏）。
+	// 消息截断计数同属健康位整体：它是独立原子计数，健康快照每次从它填
+	// MessagesDropped 并据此推导 DataLoss，漏清会让后续用例继承上一用例的
+	// data_loss=true（顺序依赖/随机红）。
+	securityEventsMessagesDropped.Store(0)
 	securityEventsSkipHealth.mu.Lock()
 	securityEventsSkipHealth.skippedBytes = 0
 	securityEventsSkipHealth.skippedRegions = 0
@@ -3388,7 +3418,7 @@ func securityEventsPollOnce(ctx context.Context) (int, error) {
 	securityEventsPollState.tailer.lastIngested = 0
 	// 轮转/补采窗口入库的事件计入同一轮摄取数（此前只报 tailer 计数，
 	// 补采事件永不进任务日志）；失败不阻塞返回（轮转自身已限流告警）。
-	rotated, rotErr := rotateAuditLogIfNeeded()
+	rotated, rotErr := rotateAuditLogIfNeeded(ctx)
 	ingested += rotated
 	// 轮转失败与采集失败同口径进健康快照——一轮内
 	// 两类失败只记一次（不双计）；停等（stalled）瞬态不遮蔽轮转失败。

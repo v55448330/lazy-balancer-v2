@@ -2518,7 +2518,9 @@ func TestCertificateService_rescanLogsScanAndIterationFailures(t *testing.T) {
 		logs := captureApplicationLogs(t)
 		resetCertificateServiceForTest(t)
 
-		NewCertificateService().rescanDroppedDeploymentRetries()
+		if _, err := NewCertificateService().rescanDroppedDeploymentRetries(); err == nil {
+			t.Fatalf("scan failure must be reported to the task engine (err=nil → 任务监控假绿), logs=%q", logs.String())
+		}
 
 		if !strings.Contains(logs.String(), "resume deployment retries: scan row failed") {
 			t.Fatalf("scan failure must be visible, logs=%q", logs.String())
@@ -2533,7 +2535,9 @@ func TestCertificateService_rescanLogsScanAndIterationFailures(t *testing.T) {
 		t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
 		resetCertificateServiceForTest(t)
 
-		NewCertificateService().rescanDroppedDeploymentRetries()
+		if _, err := NewCertificateService().rescanDroppedDeploymentRetries(); err == nil {
+			t.Fatalf("rows.Err failure must be reported to the task engine (err=nil → 任务监控假绿), logs=%q", logs.String())
+		}
 
 		if !strings.Contains(logs.String(), "resume deployment retries: iterate rows failed") {
 			t.Fatalf("rows.Err failure must be visible, logs=%q", logs.String())

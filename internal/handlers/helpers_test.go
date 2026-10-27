@@ -42,6 +42,7 @@ tcp        0      0 10.0.0.1:443           10.0.0.2:50008         TIME_WAIT`
 }
 
 func TestParseNetDevTotals_sums_default_route_interface_only(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := systemMetricsReadFile
 	systemMetricsReadFile = func(path string) ([]byte, error) {
 		if path == "/proc/net/route" {
@@ -68,6 +69,7 @@ func TestParseNetDevTotals_sums_default_route_interface_only(t *testing.T) {
 }
 
 func TestParseNetDevTotals_falls_back_to_physical_interfaces_when_no_default_route(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：容器 netns 无默认路由（Docker Desktop 场景），仅有子网路由
 	original := systemMetricsReadFile
 	systemMetricsReadFile = func(path string) ([]byte, error) {
@@ -100,6 +102,7 @@ func TestParseNetDevTotals_falls_back_to_physical_interfaces_when_no_default_rou
 // 分项降级契约：内存采集失败只让 memory 从结果里缺席（Degraded 披露），
 // 不得连带丢失磁盘/CPU——排障窗口里 CPU 单点故障曾让整卡数据消失。
 func TestGetSystemMetrics_memoryFailureDegradesWithoutLosingOtherParts(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)
@@ -143,6 +146,7 @@ func TestGetSystemMetrics_memoryFailureDegradesWithoutLosingOtherParts(t *testin
 
 // 磁盘解析失败同样只降级该项。
 func TestGetSystemMetrics_diskFailureDegradesWithoutLosingOtherParts(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)
@@ -186,6 +190,7 @@ func TestGetSystemMetrics_diskFailureDegradesWithoutLosingOtherParts(t *testing.
 
 // 三项全失败才失败（此时确实无可展示数据）。
 func TestGetSystemMetrics_allPartsFailingReturnsError(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)
@@ -213,6 +218,7 @@ func TestGetSystemMetrics_allPartsFailingReturnsError(t *testing.T) {
 }
 
 func TestGetConnectionStats_returns_netstat_error(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := netstatCommand
 	resetConnectionStatsCacheForTest(t)
 	netstatCommand = func(ctx context.Context) *exec.Cmd {
@@ -651,18 +657,24 @@ func TestParseCPUSnapshot_includes_idle_and_iowait(t *testing.T) {
 }
 
 func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 关闭采样窗口：本用例钉的是「采样读与基线更新串行」，需要每次调用都读样本。
 	disableCPUSampleWindowForTest(t)
 	// Given
 	originalReader := systemMetricsReadFile
 	lastCPUStats.mu.Lock()
-	originalSnapshot := lastCPUStats.snapshot
+	originalSnapshot, originalSampledAt, originalHasValue, originalPercent :=
+		lastCPUStats.snapshot, lastCPUStats.sampledAt, lastCPUStats.hasValue, lastCPUStats.percent
 	lastCPUStats.snapshot = cpuSnapshot{total: 100, idle: 50}
 	lastCPUStats.mu.Unlock()
 	t.Cleanup(func() {
 		systemMetricsReadFile = originalReader
 		lastCPUStats.mu.Lock()
-		lastCPUStats.snapshot = originalSnapshot
+		// 全字段复位（不只 snapshot）：getCPUPercent 同时推进 sampledAt/hasValue/
+		// percent，只还原 snapshot 会在 suite 终态留下「有值基线」——固定声明序下
+		// 被后续用例的 reset 掩盖，-shuffle 下判为全局态泄漏。
+		lastCPUStats.snapshot, lastCPUStats.sampledAt, lastCPUStats.hasValue, lastCPUStats.percent =
+			originalSnapshot, originalSampledAt, originalHasValue, originalPercent
 		lastCPUStats.mu.Unlock()
 	})
 	firstRead := make(chan struct{})
@@ -717,11 +729,13 @@ func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T)
 }
 
 func TestGetCPUPercent_rebaselines_after_counter_rollback(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableCPUSampleWindowForTest(t)
 	// Given
 	originalReader := systemMetricsReadFile
 	lastCPUStats.mu.Lock()
-	originalSnapshot := lastCPUStats.snapshot
+	originalSnapshot, originalSampledAt, originalHasValue, originalPercent :=
+		lastCPUStats.snapshot, lastCPUStats.sampledAt, lastCPUStats.hasValue, lastCPUStats.percent
 	lastCPUStats.snapshot = cpuSnapshot{total: 100, idle: 50}
 	lastCPUStats.mu.Unlock()
 	samples := [][]byte{
@@ -740,7 +754,9 @@ func TestGetCPUPercent_rebaselines_after_counter_rollback(t *testing.T) {
 	t.Cleanup(func() {
 		systemMetricsReadFile = originalReader
 		lastCPUStats.mu.Lock()
-		lastCPUStats.snapshot = originalSnapshot
+		// 同上：采样缓存的全部字段都要复位，否则 suite 终态残留有值基线。
+		lastCPUStats.snapshot, lastCPUStats.sampledAt, lastCPUStats.hasValue, lastCPUStats.percent =
+			originalSnapshot, originalSampledAt, originalHasValue, originalPercent
 		lastCPUStats.mu.Unlock()
 	})
 
@@ -758,6 +774,7 @@ func TestGetCPUPercent_rebaselines_after_counter_rollback(t *testing.T) {
 }
 
 func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 关闭采样窗口：本用例钉的是「采样读与基线更新串行」，需要每次调用都读样本。
 	disableNetSampleWindowForTest(t)
 	// Given
@@ -835,6 +852,7 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 }
 
 func TestGetRealtimeTraffic_rebaselines_after_counter_rollback(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableNetSampleWindowForTest(t)
 	// Given
 	originalReader := systemMetricsReadFile
@@ -929,6 +947,7 @@ func TestParseRuleMetricsFromPrometheus_normalizes_configured_hosts(t *testing.T
 // CPU 采样错误不得被 1s 采样窗口缓存成「正常的 0%」：错误轮之后的下一个请求
 // 必须重新采样并继续报错（Degraded 不覆盖 cpu，0% 会被误读为负载骤降）。
 func TestGetCPUPercent_errorIsNotCachedBySampleWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldWindow := cpuSampleWindow
 	cpuSampleWindow = time.Minute
 	t.Cleanup(func() { cpuSampleWindow = oldWindow })

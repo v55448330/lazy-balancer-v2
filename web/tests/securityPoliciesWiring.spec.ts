@@ -30,13 +30,18 @@ test('CRS 文件名解析单源：四位解析点全部改引 parseCrsFilename',
   assert.deepEqual(parseCrsFilename('RESPONSE-955-100-X.conf'), { phase: '响应', code: '55' })
   assert.equal(parseCrsFilename('not-a-crs-file.conf'), null)
 
-  for (const name of ['crsOptionCode', 'crsOptionPhase', 'crsGroupCodeOfFile', 'normalizeCrsGroups']) {
+  for (const name of ['crsOptionCode', 'crsOptionPhase', 'crsGroupCodeOfFile']) {
     // 声明级限段（切到下一个顶层 `const`）：定长窗口会被增长后的函数挤出
     // （假红），也会越过单行箭头函数把相邻声明纳入检查面（假绿）。
     const body = section(page, `const ${name} = `, '\nconst ')
     assert.match(body, /parseCrsFilename\(/, `${name} 未走单源解析`)
     assert.doesNotMatch(body, /REQUEST\|RESPONSE/, `${name} 仍内联文件名正则`)
   }
+  // CRS 组码归一已抽到 utils/crsGroups（策略页只消费），同一条解析单源要求跟着搬
+  const groups = code('src/utils/crsGroups.ts')
+  const normalize = section(groups, 'export const normalizeCrsGroups = ', '\n}')
+  assert.match(normalize, /parseCrsFilename\(/, 'normalizeCrsGroups 未走单源解析')
+  assert.doesNotMatch(normalize, /REQUEST\|RESPONSE/, 'normalizeCrsGroups 仍内联文件名正则')
   // 组选项构建（两处）同样不得再内联文件名正则
   assert.doesNotMatch(page, /\/\^\(\?:REQUEST\|RESPONSE\)-9\(\\d\{2\}\)-/i, '文件名正则不得留在视图层')
 })

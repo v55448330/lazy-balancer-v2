@@ -85,6 +85,7 @@ func disableNetSampleWindowForTest(t *testing.T) {
 // 窗口内共享采样：多页签/多客户端同时轮询只读一次 /proc/stat，得到同一速率
 // （旧实现每次请求都推进基线，短间隔差分噪声放大成尖峰或归零）。
 func TestGetCPUPercent_sharesOneSampleWithinWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetCPUSampleStateForTest(t)
 	oldWindow := cpuSampleWindow
 	cpuSampleWindow = 50 * time.Millisecond
@@ -132,6 +133,7 @@ func TestGetCPUPercent_sharesOneSampleWithinWindow(t *testing.T) {
 }
 
 func TestGetRealtimeTraffic_sharesOneSampleWithinWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldWindow := netSampleWindow
 	netSampleWindow = 50 * time.Millisecond
 	t.Cleanup(func() { netSampleWindow = oldWindow })
@@ -196,6 +198,7 @@ func TestGetRealtimeTraffic_sharesOneSampleWithinWindow(t *testing.T) {
 
 // df 卡死时读路径必须按超时返回错误，而非无限期阻塞（旧实现无 context）。
 func TestGetCachedDiskUsage_commandTimeoutBoundsWait(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldTimeout, oldCommand := systemMetricsCommandTimeout, systemMetricsDFCommand
 	systemMetricsCommandTimeout = 40 * time.Millisecond
 	systemMetricsDFCommand = func(ctx context.Context) *exec.Cmd {
@@ -220,6 +223,7 @@ func TestGetCachedDiskUsage_commandTimeoutBoundsWait(t *testing.T) {
 
 // netstat 卡死时连接统计同样受超时约束。
 func TestGetConnectionStats_commandTimeoutBoundsWait(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldTimeout, oldCommand := systemMetricsCommandTimeout, netstatCommand
 	systemMetricsCommandTimeout = 40 * time.Millisecond
 	netstatCommand = func(ctx context.Context) *exec.Cmd {
@@ -242,6 +246,7 @@ func TestGetConnectionStats_commandTimeoutBoundsWait(t *testing.T) {
 
 // HTTP 层：分项失败仍 200，响应携带 degraded 披露（消费方可区分「真的是 0」）。
 func TestGetSystemMetrics_endpointDisclosesDegradedParts(t *testing.T) {
+	withIsolatedGlobal(t)
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)

@@ -6,6 +6,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"strings"
 	"testing"
@@ -66,8 +67,8 @@ func TestAuditLogThresholdReadFailure_fallsBackWithoutCachingAndWarnsOnce(t *tes
 	}
 
 	// When 连续两轮读取阈值。
-	first := getAuditLogSizeBytes()
-	second := getAuditLogSizeBytes()
+	first := getAuditLogSizeBytesContext(context.Background())
+	second := getAuditLogSizeBytesContext(context.Background())
 
 	// Then 两轮都回退默认 10MB，且只有一个状态转换 warn（持续失败不刷屏）。
 	const fallback = 10 * 1024 * 1024
@@ -84,7 +85,7 @@ func TestAuditLogThresholdReadFailure_fallsBackWithoutCachingAndWarnsOnce(t *tes
 	}
 
 	// Then 下一轮读取直接得到配置值 42MB——失败回退值没有被缓存进 TTL 窗口。
-	if got := getAuditLogSizeBytes(); got != 42*1024*1024 {
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 42*1024*1024 {
 		t.Fatalf("after recovery size=%d, want 42MB（失败值不得缓存，必须重试）", got)
 	}
 	if infos := countLogLines(logs, "读取审计日志轮转阈值已恢复"); infos != 1 {
@@ -95,7 +96,7 @@ func TestAuditLogThresholdReadFailure_fallsBackWithoutCachingAndWarnsOnce(t *tes
 	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_unavailable`); err != nil {
 		t.Fatal(err)
 	}
-	if got := getAuditLogSizeBytes(); got != 42*1024*1024 {
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 42*1024*1024 {
 		t.Fatalf("cached value after successful load=%d, want 42MB", got)
 	}
 }

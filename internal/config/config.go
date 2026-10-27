@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"lazy-balancer-v2/internal/atomicfile"
 )
 
 const defaultLogFile = "/app/logs/lazy-balancer.log"
@@ -373,6 +375,13 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+// jwtSecretWrite 是 JWT 签名密钥的落盘接缝：默认值就是仓内唯一的原子落盘
+// 原语（同目录临时文件 → 权限 → fsync → rename → 父目录 fsync）。此前的
+// os.WriteFile 直写没有 fsync/rename，掉电窗口下可能留下截断文件——下次启动
+// 判为弱密钥重生成，全部已签发 JWT/OIDC state 失效。接缝同时供测试注入
+// 写失败，断言「错误可见且旧密钥文件不被破坏」。
+var jwtSecretWrite = atomicfile.WriteAtomic
+
 // loadOrCreateJWTSecretWith 的告警统一走调用方给的出口（LoadCollectWarnings
 // 收集后重放；测试直调入口在同包 config_test.go 的
 // loadOrCreateJWTSecretForTest）。
@@ -404,7 +413,7 @@ func loadOrCreateJWTSecretWith(dataDir string, warnf configWarnf) string {
 		// 目录创建失败必须可见——此前静默跳过写入，JWT 密钥每次启动
 		// 随机重生成（旧令牌全部失效）且零日志信号；与下方写失败分支对称。
 		warnf("JWT 密钥目录 %s 创建失败（重启后令牌将失效）: %v", dataDir, err)
-	} else if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+	} else if err := jwtSecretWrite(secretPath, []byte(secret), 0600); err != nil {
 		warnf("JWT 密钥写入 %s 失败（重启后令牌将失效）: %v", secretPath, err)
 	}
 	return secret

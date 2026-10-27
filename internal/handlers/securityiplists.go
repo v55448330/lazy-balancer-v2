@@ -821,7 +821,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var dup int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?)", req.Name).Scan(&dup); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?)", req.Name).Scan(&dup); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
@@ -829,7 +829,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		// 与内置威胁名单重名给出专属提示（2026-09-24 用户裁定：用户名单
 		// 不允许与内置名单重名——选择器分组依赖名字区分归属）
 		var sysDupName string
-		if err := tx.QueryRowContext(c.Request.Context(), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", req.Name).Scan(&sysDupName); err == nil && sysDupName != "" {
+		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", req.Name).Scan(&sysDupName); err == nil && sysDupName != "" {
 			// 保留名提示按命中的内置名单名分流。
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(sysDupName))})
 			return
@@ -842,7 +842,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	// 与备份导入的 validateBackupIPListQuota 同口径（userCount ≤ 200），
 	// 否则系统名单行会挤掉用户可建空间（导入 197 条用户名单后新建被误挡）。
 	var total int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE COALESCE(system,0)=0").Scan(&total); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE COALESCE(system,0)=0").Scan(&total); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
@@ -850,7 +850,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("IP 地址列表（用户创建）数量已达上限（%d 个）", ipListMaxGlobalCount)})
 		return
 	}
-	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_ip_lists (name, description, category, entries, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,datetime('now'),?,datetime('now'))`,
+	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_ip_lists (name, description, category, entries, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,datetime('now'),?,datetime('now'))`,
 		req.Name, req.Description, req.Category, string(entriesJSON), int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -897,7 +897,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	defer tx.Rollback()
 	var name, description, category, entriesJSON string
 	var system int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&name, &description, &category, &entriesJSON, &system); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&name, &description, &category, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
@@ -983,7 +983,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		}
 	}
 	var dup int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND id<>?", name, id).Scan(&dup); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND id<>?", name, id).Scan(&dup); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
@@ -991,7 +991,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		// 改名撞内置名单同 Create 口径给专属提示（问题
 		// 同一裁定语义在更新路径此前退化为通用提示）。
 		var sysDupName string
-		if err := tx.QueryRowContext(c.Request.Context(), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", name).Scan(&sysDupName); err == nil && sysDupName != "" {
+		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", name).Scan(&sysDupName); err == nil && sysDupName != "" {
 			// 保留名提示按命中的内置名单名分流。
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(sysDupName))})
 			return
@@ -999,7 +999,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
 		return
 	}
-	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET name=?, description=?, category=?, entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET name=?, description=?, category=?, entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		name, description, category, entriesJSON, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -1082,7 +1082,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	//（此前先 COUNT 再 SELECT 同一行，同事务内多一次往返与两套分支）。
 	var system int
 	var listName string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(system,0), COALESCE(name,'') FROM security_ip_lists WHERE id=?", id).Scan(&system, &listName); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(system,0), COALESCE(name,'') FROM security_ip_lists WHERE id=?", id).Scan(&system, &listName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
@@ -1104,7 +1104,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// DeleteSecurityCustomRule/DeleteSecurityBlockPage 同口径——禁用策略的
 	// 悬空引用由重启用门兜底（重启用按有效形态过
 	// validateIPListRefsExistence，禁用期间被删的列表不得静默激活）。
-	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE enabled=1")
+	rows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE enabled=1")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -1148,7 +1148,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// 解除引用（Caddy 全局设置）后方可删除。查询/解析失败一律按被引用处理
 	// （宁可拒绝删除，不放行悬空引用）。
 	var trustedRefs string
-	if err := tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&trustedRefs); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&trustedRefs); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验受信代理引用失败"})
 		return
 	}
@@ -1163,7 +1163,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// 此前 `_ =` 双吞错会把 DB 瞬时故障记成「0 条」，删除审计与实际删除量不符。
 	var delEntries string
 	delEntriesKnown := true
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&delEntries); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&delEntries); err != nil {
 		services.Logf("warn", "security: 删除 IP 列表 #%s 前读取条目快照失败（审计条目数记未知）: %v", id, err)
 		delEntriesKnown = false
 	}
@@ -1174,7 +1174,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 			delEntriesKnown = false
 		}
 	}
-	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_ip_lists WHERE id=?", id)
+	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_ip_lists WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -1225,7 +1225,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	defer tx.Rollback()
 	var entriesJSON, listName string
 	var system int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
@@ -1291,7 +1291,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if _, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
+	if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
@@ -1358,7 +1358,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	defer tx.Rollback()
 	var entriesJSON, listName string
 	var system int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
@@ -1425,7 +1425,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if _, err := tx.ExecContext(c.Request.Context(), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
+	if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}

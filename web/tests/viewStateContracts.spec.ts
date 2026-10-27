@@ -141,7 +141,10 @@ test('登录：创建管理员与自动登录分阶段，OIDC 保持深链', () 
   const login = code('src/views/Login.vue')
   const setup = section(login, 'const handleSetup = async', 'onMounted(async')
   assert.match(setup, /管理员已创建，请手动登录/, '登录失败不得报「创建管理员失败」')
-  assert.match(login, /encodeURIComponent\(`\/\$\{authStore\.currentPage\}`\)/, 'OIDC return_to 必须携带当前页面键')
+  // 深链 + 来源绑定：return_to 仍按当前页面键组装，同时并入本标签页 nonce
+  //（回调侧据此拒绝构造链接投递的令牌）
+  assert.match(login, /withOidcAppNonce\(`\/\$\{authStore\.currentPage\}`, nonce\)/, 'OIDC return_to 必须携带当前页面键与本轮 nonce')
+  assert.match(login, /sessionStorage\.setItem\(OIDC_APP_NONCE_KEY, nonce\)/, 'nonce 必须落到本标签页 sessionStorage')
   assert.match(login, /watch\(mfaUseRecovery, \(\) => \{[\s\S]{0,120}mfaCode\.value = ''/, '通道切换清空验证码')
 })
 
@@ -331,8 +334,10 @@ test('触发详情：策略 GET 的 catch 有会话序号守卫（与同函数�
 
 test('拦截页表单与后端同源前置门（名称/描述长度、内容非空与 64KB）', () => {
   const text = code('src/views/security/SecurityBlockPages.vue')
-  assert.match(text, /v-model="form\.name"[^>]*maxlength="100"/)
-  assert.match(text, /v-model="form\.description"[^>]*maxlength="500"/)
+  // 长度上限走 utils/securityLimits 单源（跨栈对表见 securityLimits.spec.ts），
+  // 不得回到字面量
+  assert.match(text, /v-model="form\.name"[^>]*:maxlength="SECURITY_NAME_MAX_RUNES"/)
+  assert.match(text, /v-model="form\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"/)
   assert.match(text, /const BLOCK_PAGE_CONTENT_MAX_BYTES = 64 << 10/)
   assert.match(text, /if \(!form\.value\.content\.trim\(\)\)/)
   assert.match(text, /new TextEncoder\(\)\.encode\(form\.value\.content\)\.byteLength/)

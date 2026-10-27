@@ -115,12 +115,18 @@ test('后台标签页暂停：document.hidden 时轮次跳过（node 无 documen
     fetch: async () => { calls++; return 'x' },
   })
   const g = globalThis as { document?: { hidden: boolean } }
+  // 假 document 必须「保存→还原并断言」：当前按文件进程隔离，宿主机本就没有
+  // document，`delete` 今天无影响；一旦同进程运行（或 helper 装了全局 DOM 宿主），
+  // 直接 delete 会抹掉别人的宿主，制造随机顺序才失败的难查问题。
+  const previousDocument = g.document
   g.document = { hidden: true }
   try {
     await tail.refresh()
     assert.equal(calls, 0, 'hidden 时不得发请求')
   } finally {
-    delete g.document
+    if (previousDocument === undefined) Reflect.deleteProperty(g, 'document')
+    else g.document = previousDocument
+    assert.equal(g.document, previousDocument, '假 document 必须还原为原值')
   }
   await tail.refresh()
   assert.equal(calls, 1, '恢复可见后立即补拉')

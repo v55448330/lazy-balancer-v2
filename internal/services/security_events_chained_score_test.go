@@ -40,7 +40,7 @@ func TestParseTransaction_flagsChainedCustomRuleWithoutScore(t *testing.T) {
 	if rec.RuleTriggered != "10042" {
 		t.Fatalf("rule=%q, want 10042", rec.RuleTriggered)
 	}
-	if !rec.chainedCustomRule {
+	if !rec.customRuleScoreFallback {
 		t.Fatal("链式起始条（raw 以 ,chain 结尾）必须被识别，才能走补分路径")
 	}
 	if rec.AnomalyScore != 0 {

@@ -125,6 +125,12 @@ func recordUndeterminedRoundLocked() {
 // InitTaskEngine 装配时注入下方包级变量。
 var watchdogAdminURLValue string
 
+// configDriftCheckForTest 是单轮比对实现的测试缝（生产恒 nil）。panic 兜底
+// 分支（运行日志 + 任务日志「检查异常（panic 已拦）」+ 错误包装）只有在比对
+// 路径可注入 panic 时才可能被钉住——引擎 runGuarded 另有一层兜底，会掩盖本层
+// 缺测。测试实现必须复位自身（t.Cleanup）。
+var configDriftCheckForTest func(adminURL string) (bool, *configDriftEvent, error)
+
 // WatchdogCheckOnce 单轮一致性检查（panic 留痕——看门狗是唯一消费者，
 // goroutine 静默死亡是最坏形态；引擎 60s 节拍调用）。
 // 主节点专属检测——从节点整轮短路（循环保持存活，
@@ -188,7 +194,11 @@ func WatchdogCheckOnce(ctx context.Context) (runErr error) {
 		}
 	}()
 	driftSnapshot := snapshotConfigDrift()
-	checked, driftEvent, checkErr := checkConfigConsistencyDeferred(watchdogAdminURLValue)
+	checkConsistency := checkConfigConsistencyDeferred
+	if configDriftCheckForTest != nil {
+		checkConsistency = configDriftCheckForTest
+	}
+	checked, driftEvent, checkErr := checkConsistency(watchdogAdminURLValue)
 	// 比对出口复核：比对窗口期内降级/停机的在途轮不得落写簿记（防覆写
 	// 复位态——入口复核只覆盖轮次开始前已取消的形态）。checkConfigConsistency
 	// 内部会更新漂移状态（含防抖 streak 与确认转移），因此这里还必须把状态

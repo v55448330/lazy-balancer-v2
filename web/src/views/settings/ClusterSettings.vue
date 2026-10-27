@@ -527,7 +527,10 @@ const forgetPins = async (): Promise<void> => {
 }
 
 const generateRegisterToken = async (): Promise<void> => {
-  if (isReadOnlyProp.value) return
+  // 重入守卫：同一 tick 内的双击不会等渲染出 loading —— 每枚令牌独立入库且
+  // 一次性有效，两次请求会留下第二枚界面再也查不到的令牌（凭据卫生）。
+  // 「占位先于确认」与本文件其余写入口同构。
+  if (isReadOnlyProp.value || tokenLoading.value) return
   tokenLoading.value = true
   try {
     const response = await request.post<APIResponse<ClusterRegisterToken>>('/cluster/register-tokens')

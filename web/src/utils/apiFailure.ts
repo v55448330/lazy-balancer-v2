@@ -52,6 +52,19 @@ export const classifyAuthFailure = (input: AuthFailureInput): AuthFailureKind =>
 export const isRequestAuthTokenCurrent = (requestToken: string | undefined, currentToken: string | null): boolean =>
   requestToken === (currentToken ?? undefined)
 
+/**
+ * 428 身份守卫的唯一构造入口：捕获「请求发起时的会话代际」，与「当前代际」
+ * 比较。api.ts 拦截器只调用本工厂，不得内联第二份比较——内联时该语义只能靠
+ * 源码正则断言（等价重构假红、比较错变量假绿），而这里可以直接用 node:test
+ * 钉「旧代际→stale / 同账号 MFA 刷新→current」。
+ *
+ * 代际语义（utils/sessionIdentity）：登录、登出、OIDC、换账号推进代际；
+ * 同账号 MFA step-up 只刷新令牌，代际不变——因此刷新后复核仍应判 current。
+ */
+export const createSessionStepUpGate = (
+  generationAtRequest: number | undefined,
+  currentGeneration: () => number,
+): (() => boolean) => () => generationAtRequest === currentGeneration()
 
 /**
  * 单个 428 的处置链：进入弹码前、验码后刷新前、刷新后重放前都复核身份。

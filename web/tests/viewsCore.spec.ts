@@ -17,7 +17,7 @@ import { copyRuleHostHeader, newRuleWizardStageOverrides, stageBlockPageOverride
 import { buildAuditLogParams } from '../src/utils/auditLogFilters.ts'
 import { normalizeCidr, serializeWhitelist } from '../src/utils/apiKeyWhitelist.ts'
 import { useClampedPagination } from '../src/composables/useClampedPagination.ts'
-import { repoCode, section, code, stripComments, codeSection } from './_helpers.ts'
+import { repoCode, section, code, openTags, stripComments, codeSection } from './_helpers.ts'
 
 const rules = code('src/views/Rules.vue')
 const dashboard = code('src/views/Dashboard.vue')
@@ -224,7 +224,13 @@ test('用户页：非管理员只读——操作位保留仅禁用，个人自�
   assert.doesNotMatch(users, /openMfaBinding|mfaBinding|isSelfRow|selfServiceBlocked/, '个人自助与本人行特例已迁出用户页')
   // 只读语义=可见但禁用，不是隐藏：操作列常驻，按钮门为 isReadOnly。
   assert.match(users, /<el-table-column label="操作" width="200"/, '操作列必须常驻')
-  assert.match(users, /:disabled="isReadOnly \|\| submitting"[\s\S]{0,120}>\s*编辑/, '编辑按钮只读禁用')
+  // 绑定目标元素：操作列内 @click="editUser(row)" 的开标签（文件级定长窗口会把
+  // 「某处 disabled + 附近出现编辑」当命中——同文件新建按钮/弹框表单也是同一
+  // 表达式，按钮加一个属性即越窗假红）。
+  const actions = section(users, '<el-table-column label="操作"', '</el-table-column>')
+  const editButtons = openTags(actions, 'el-button').filter((tag) => tag.includes('@click="editUser(row)"'))
+  assert.equal(editButtons.length, 1, '操作列里的编辑按钮必须唯一可定位')
+  assert.match(editButtons[0]!, /:disabled="[^"]*isReadOnly/, '编辑按钮只读禁用')
   assert.match(users, /:disabled="isReadOnly \|\| row\.auth_provider === 'oidc' \|\| !row\.mfa_enabled/, 'MFA 按钮只读/不可用态禁用')
   assert.doesNotMatch(users, /v-if="isAdmin"/, '不得用隐藏替代只读')
   assert.match(users, /\/users\/\$\{row\.id\}\/mfa\/reset/, '管理员重置 MFA 仍走用户管理端点')

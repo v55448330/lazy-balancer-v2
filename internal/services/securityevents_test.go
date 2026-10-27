@@ -723,7 +723,7 @@ func TestSecurityEventsIngestRotatedDelta_recoversRotationWindowEvents(t *testin
 	// 轮转函数与补采函数读包级路径/阈值，测试注入临时路径与极小阈值
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -756,7 +756,7 @@ func TestSecurityEventsIngestRotatedDelta_recoversRotationWindowEvents(t *testin
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then: the rotated-delta ingest recovered B from the archive window
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -955,7 +955,7 @@ func TestRotateAuditLog_ingestsLiveTailWrittenBetweenCopyAndTruncate(t *testing.
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
 	})
@@ -988,7 +988,7 @@ func TestRotateAuditLog_ingestsLiveTailWrittenBetweenCopyAndTruncate(t *testing.
 		_, err = f.WriteString(securityEventsFixtureClean + "\n")
 		return err
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：活文件尾部事件在 truncate 前被补采入库
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -1020,7 +1020,7 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -1053,7 +1053,7 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 		return db.MetricsDB.Close()
 	}
 	t.Cleanup(func() { auditLogCopyFile = oldCopy })
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 	marker := securityEventsPendingDeltaPath()
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("pending marker must exist after failed delta ingest: %v", err)
@@ -1072,7 +1072,7 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("pending marker must be removed after successful retry, stat err=%v", err)
 	}
@@ -1325,7 +1325,7 @@ func TestRotateAuditLog_recoversCrossBoundaryTransaction(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
 	})
@@ -1373,7 +1373,7 @@ func TestRotateAuditLog_recoversCrossBoundaryTransaction(t *testing.T) {
 		}
 		return appendTo(suffix)
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：跨界事务 T 完整入库（活文件补采从 T 文档头后向回扫重新解码）
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -1399,7 +1399,7 @@ func TestRotateAuditLog_pendingMarkerReadFailurePreservesArchives(t *testing.T) 
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath = logPath
 	securityEventsOffsetPath = filepath.Join(dir, "security_events.offset")
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -1414,7 +1414,7 @@ func TestRotateAuditLog_pendingMarkerReadFailurePreservesArchives(t *testing.T) 
 	}
 
 	// When the pending marker cannot be read.
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then rotation must stop before shifting or replacing any archive.
 	for path, want := range map[string]string{
@@ -1555,7 +1555,7 @@ func TestRotateAuditLog_skipsMalformedRegionInArchive(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -1574,7 +1574,7 @@ func TestRotateAuditLog_skipsMalformedRegionInArchive(t *testing.T) {
 	}
 
 	// When：轮转——归档含畸形区 + B，补采走归档 scan-to-EOF 恢复
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：畸形区之后的 B 入库、轮转正常推进（标记清除、活文件已截断）
 	var count int
@@ -1620,7 +1620,7 @@ func TestRotateAuditLog_endsPassWhenArchiveGarbageUnrecoverable(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -1639,7 +1639,7 @@ func TestRotateAuditLog_endsPassWhenArchiveGarbageUnrecoverable(t *testing.T) {
 	}
 
 	// When：轮转——归档补采 scan-to-EOF 找不到下一个文档头
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：记一条 error 日志并结束该 pass（区域不可恢复），轮转照常推进：
 	// 标记清除、活文件已截断、已摄取事件保留
@@ -1680,7 +1680,7 @@ func TestRotateAuditLog_backscanFindsStraddleDocStartBeyond8MB(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
 	})
@@ -1737,7 +1737,7 @@ func TestRotateAuditLog_backscanFindsStraddleDocStartBeyond8MB(t *testing.T) {
 		}
 		return appendTo(suffix)
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：全量回扫找到 8MB 之前的文档头 → 跨界事务 T 完整入库、轮转正常推进
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -1784,7 +1784,7 @@ func TestRotateAuditLog_abortsRotationWhenMarkerWriteFails(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
 	})
@@ -1815,7 +1815,7 @@ func TestRotateAuditLog_abortsRotationWhenMarkerWriteFails(t *testing.T) {
 		return info.Size()
 	}
 	before := liveSize()
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：轮转在 truncate 前中止——活文件内容完整（绝不无标记截断），
 	// 已摄取事件保留，下周期重试
@@ -1847,7 +1847,7 @@ func TestRotateAuditLog_liveTailGarbageDoesNotBlockRotation(t *testing.T) {
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
-	auditLogSizeBytes = func() int64 { return 1 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 }
 	t.Cleanup(func() {
 		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
 	})
@@ -1873,7 +1873,7 @@ func TestRotateAuditLog_liveTailGarbageDoesNotBlockRotation(t *testing.T) {
 		_, err = f.WriteString(strings.Repeat("z", securityEventsScanWindowLimit+4096) + "\n")
 		return err
 	}
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 	// Then：轮转正常推进——活文件已截断、标记清除、B 入库（A + B 两行）
 	var count int
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -2526,7 +2526,7 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_unremovableMarkerWarnsAtMo
 	auditLogPath = logPath
 	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
 	oldSizeFn := auditLogSizeBytes
-	auditLogSizeBytes = func() int64 { return 1 << 40 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 << 40 }
 	t.Cleanup(func() { auditLogSizeBytes = oldSizeFn })
 	markerPath := securityEventsPendingDeltaPath()
 	marker := fmt.Sprintf(`{"path":%q,"offset":0,"size":1}`, filepath.Join(dir, "audit.log.1"))
@@ -2546,9 +2546,9 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_unremovableMarkerWarnsAtMo
 	t.Cleanup(func() { log.SetOutput(originalWriter) })
 
 	// When：连续 3 个 tick
-	rotateAuditLogIfNeeded()
-	rotateAuditLogIfNeeded()
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
+	rotateAuditLogIfNeeded(context.Background())
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：warn 仅放行首条（60s 窗口）
 	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {
@@ -2580,7 +2580,7 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAn
 	auditLogPath = logPath
 	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
 	oldSizeFn := auditLogSizeBytes
-	auditLogSizeBytes = func() int64 { return 1 << 40 }
+	auditLogSizeBytes = func(context.Context) int64 { return 1 << 40 }
 	t.Cleanup(func() { auditLogSizeBytes = oldSizeFn })
 	markerPath := securityEventsPendingDeltaPath()
 	marker := fmt.Sprintf(`{"path":%q,"offset":0,"size":1}`, filepath.Join(dir, "audit.log.1"))
@@ -2594,7 +2594,7 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAn
 	t.Cleanup(func() { log.SetOutput(originalWriter) })
 
 	// When：首个 tick（归档缺失、标记删除成功）
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：warn 恰一条且标记已删除
 	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {
@@ -2605,7 +2605,7 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAn
 	}
 
 	// When：第二个 tick（无标记，分支不重入）
-	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded(context.Background())
 
 	// Then：仍仅一条 warn
 	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {

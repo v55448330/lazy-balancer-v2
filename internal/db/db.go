@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/models"
 
 	_ "github.com/glebarez/sqlite"
@@ -1598,19 +1599,21 @@ func runMigrations() error {
 
 	// Sensitive credential headers are dropped from access logs (Cookie and
 	// Authorization are redacted by Caddy itself; API keys are not).
-	// 归一为唯一规范行——既有的 X-API-Key rename 行会被移除（渲染层虽强制
-	// delete 覆盖，落库值仍应与所见一致）；空格式不写回（「不裁剪原生字段」
-	// 的默认形态，渲染层恒注入脱敏行）。
+	// 归一为唯一规范行——既有的 API Key 映射行（任意大小写拼写）会被移除
+	// （渲染层虽强制 delete 覆盖，落库值仍应与所见一致、且只出现一次）；
+	// 空格式不写回（「不裁剪原生字段」的默认形态，渲染层恒注入脱敏行）。
+	// 路径常量单源 internal/accesslog：引擎 filter 精确匹配 http.Header 的
+	// 规范化键名（X-Api-Key），字面量拼写恒不命中。
 	var lf2 string
 	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf2); err != nil {
 		return fmt.Errorf("failed to reread global config access log format: %w", err)
 	}
-	const apiKeyPath = "request>headers>X-API-Key"
+	apiKeyPath := accesslog.APIKeyHeaderPath()
 	if lf2 != "" {
 		kept := make([]string, 0, 8)
 		for _, line := range strings.Split(lf2, "\n") {
 			parts := strings.SplitN(strings.TrimSpace(line), "->", 2)
-			if len(parts) == 2 && strings.TrimSpace(parts[0]) == apiKeyPath {
+			if len(parts) == 2 && accesslog.IsAPIKeyPath(parts[0]) {
 				continue
 			}
 			kept = append(kept, line)
@@ -3025,6 +3028,67 @@ var (
 	systemIPListDanglingRefs atomic.Int64
 )
 
+// indexDDLExecutor 让同一套索引形状校准既跑在独立语句（*sql.DB）也跑在迁移
+// 事务（*sql.Tx）上。
+type indexDDLExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// normalizeIndexDDL 归一索引 DDL 文本以比对形状：SQLite 落库时会去掉
+// IF NOT EXISTS，其余按书写原样保存；大小写与空白不参与比较。
+func normalizeIndexDDL(statement string) string {
+	upper := strings.ToUpper(statement)
+	upper = strings.ReplaceAll(upper, "IF NOT EXISTS", "")
+	return strings.Join(strings.Fields(upper), " ")
+}
+
+// uniqueIndexState 报告同名索引是否已存在、其形状是否与 createSQL 一致。
+// 形状比对覆盖「是否 UNIQUE」与列/谓词：CREATE UNIQUE INDEX IF NOT EXISTS
+// 只判名字不判形状——同名非唯一索引会让「唯一化」变成静默 no-op（重复行继续
+// 可写而启动日志全绿）。该形态只能由带外 DDL 制造，但一旦存在必须可发现。
+func uniqueIndexState(execer indexDDLExecutor, name, createSQL string) (present, matches bool, err error) {
+	var existing sql.NullString
+	if scanErr := execer.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&existing); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("inspect index %s: %w", name, scanErr)
+	}
+	if !existing.Valid {
+		return false, false, nil
+	}
+	return true, normalizeIndexDDL(existing.String) == normalizeIndexDDL(createSQL), nil
+}
+
+// ensureUniqueIndex 保证唯一索引按目标形状在位：形状一致零 DDL；同名索引形状
+// 不符（非唯一/列或谓词不同）先 DROP 再重建，否则唯一约束静默失效。
+func ensureUniqueIndex(execer indexDDLExecutor, name, createSQL string) error {
+	present, matches, err := uniqueIndexState(execer, name, createSQL)
+	if err != nil {
+		return err
+	}
+	if matches {
+		return nil
+	}
+	if present {
+		if _, err := execer.Exec(`DROP INDEX IF EXISTS ` + name); err != nil {
+			return fmt.Errorf("drop index %s: %w", name, err)
+		}
+	}
+	if _, err := execer.Exec(createSQL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// systemIPListSystemNameIndexSQL 是 system 名单名唯一索引的 DDL 单源
+// （探测形状与建立共用，避免「探测的谓词 ≠ 建索引的谓词」两处漂移）。
+const systemIPListSystemNameIndexSQL = `CREATE UNIQUE INDEX u_security_ip_lists_system_name ON security_ip_lists(name) WHERE system=1`
+
+// oidcIdentityIndexSQL 是 OIDC 身份唯一索引的 DDL 单源（同上）。
+const oidcIdentityIndexSQL = `CREATE UNIQUE INDEX u_oidc_identity ON users(oidc_issuer, oidc_subject) WHERE auth_provider='oidc' AND oidc_subject<>''`
+
 // migrateSystemIPListUniqueIndex 为 security_ip_lists 的 system=1 行建立
 // (name) 部分唯一索引。存量重复行去重时「被引用优先」：同名组内有行被
 // 策略 ip_acl_list_refs/ip_whitelist_refs 或全局 trusted_proxy_range_refs
@@ -3036,11 +3100,11 @@ func migrateSystemIPListUniqueIndex() error {
 	// 先探测索引是否已在位：唯一索引建立后重复 system=1 行在写入侧即被拒绝，
 	// 重复行查重（security_ip_lists 全表 GROUP BY）与建索引 SQL 都没有可发现
 	// 对象——直接跳过。存量库（索引缺失）才进入去重+建索引路径。
-	var indexSQL sql.NullString
-	if err := DB.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='u_security_ip_lists_system_name'`).Scan(&indexSQL); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	_, matches, err := uniqueIndexState(DB, "u_security_ip_lists_system_name", systemIPListSystemNameIndexSQL)
+	if err != nil {
 		return fmt.Errorf("inspect system ip list unique index: %w", err)
 	}
-	if indexSQL.Valid && strings.Contains(strings.ToUpper(indexSQL.String), "UNIQUE") {
+	if matches {
 		systemIPListUniqueIndexSkips.Add(1)
 		return nil
 	}
@@ -3051,7 +3115,7 @@ func migrateSystemIPListUniqueIndex() error {
 	// 该名单条目整体消失：少拦/少放）。事务化后中途失败整体回滚，下次启动重算
 	// remap 仍能修好引用。
 	var dedupeDetail string
-	err := withWriteTx("system ip list unique index", func(tx *sql.Tx) error {
+	err = withWriteTx("system ip list unique index", func(tx *sql.Tx) error {
 		remap, err := planSystemIPListDedupe(tx)
 		if err != nil {
 			return err
@@ -3081,7 +3145,7 @@ func migrateSystemIPListUniqueIndex() error {
 			systemIPListDanglingRefs.Add(int64(dangling))
 			log.Printf("WARN: 发现 %d 处策略引用指向不存在的 IP 名单 id；渲染期对应名单条目会整体消失，请在策略里重新选择名单（迁移不自动改引用）", dangling)
 		}
-		if _, err := tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS u_security_ip_lists_system_name ON security_ip_lists(name) WHERE system=1"); err != nil {
+		if err := ensureUniqueIndex(tx, "u_security_ip_lists_system_name", systemIPListSystemNameIndexSQL); err != nil {
 			return fmt.Errorf("create unique system ip list index: %w", err)
 		}
 		return nil
@@ -4271,11 +4335,11 @@ func migrateOidcIdentityUniqueIndex() error {
 	// （与 ensureSecurityEventsTransactionIndex / migrateSystemIPListUniqueIndex
 	// 同款探测门）。存量库（索引缺失）才进入查重+建索引路径。历史重复身份库
 	// 每次启动重复告警的噪声也随之一并消除。
-	var indexSQL sql.NullString
-	if err := DB.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='u_oidc_identity'`).Scan(&indexSQL); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	_, matches, err := uniqueIndexState(DB, "u_oidc_identity", oidcIdentityIndexSQL)
+	if err != nil {
 		return fmt.Errorf("inspect u_oidc_identity index: %w", err)
 	}
-	if indexSQL.Valid && strings.Contains(strings.ToUpper(indexSQL.String), "UNIQUE") {
+	if matches {
 		oidcIdentityIndexSkips.Add(1)
 		return nil
 	}
@@ -4317,7 +4381,7 @@ func migrateOidcIdentityUniqueIndex() error {
 	if readOIDCDupIdentityMarker() != "" {
 		writeOIDCDupIdentityMarker("")
 	}
-	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS u_oidc_identity ON users(oidc_issuer, oidc_subject) WHERE auth_provider='oidc' AND oidc_subject<>''"); err != nil {
+	if err := ensureUniqueIndex(DB, "u_oidc_identity", oidcIdentityIndexSQL); err != nil {
 		return fmt.Errorf("create u_oidc_identity index: %w", err)
 	}
 	return nil
@@ -5025,23 +5089,11 @@ func normalizeRuleTimestampsMigration() error {
 // 证书材料列本身也是触发列：`enable_tls=0 AND tls_source='manual' AND
 // tls_cert<>”` 的行既不满足其他谓词、也让传输归一（以 EnableTLS 为门）跳过，
 // 私钥正文因此可长期随备份/快照放大——tls_cert/tls_key 非空必须入选。
-// TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
-// 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
-// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4) + 阶段页四列
-// + log_enabled，共 32 列 SET）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
-// 与导入归一（handlers normalizeRuleRowsForTransport）共用本常量；此前跨包
-// 双份逐字镜像靠测试字符串 parity 维系，任一侧扩列漏同步即终态漂移。
-// WHERE 谓词与 tcpDeadFieldsProbeSQL 逐字对齐（改一侧必改另一侧）。
-const TCPRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
-	host_header='', health_check_path='', health_check_host='', domain='', enable_compress=0, compress_types='',
-	request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
-	proxy_dial_timeout=0, proxy_response_header_timeout=0, proxy_read_timeout=0, proxy_write_timeout=0, proxy_stream_timeout=0, proxy_flush_interval=0, proxy_stream_close_delay=0,
-	custom_routes_enabled=0, dynamic_dns=0,
-	strategy=CASE WHEN strategy='cookie' OR strategy='' OR strategy IS NULL THEN 'weighted_round_robin' ELSE strategy END,
-	dns_family='ipv4',
-	enable_tls=0, tls_source='manual', tls_http_redirect=0, tls_cert='', tls_key='',
-	block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0, log_enabled=0
-	WHERE protocol='tcp' AND (
+// tcpDeadFieldsStalePredicate 是「TCP 行存在 HTTP 专属死值」的统一谓词：
+// 探测（tcpDeadFieldsProbeSQL）与复位（TCPRuleDeadFieldsResetSQL）由它拼出，
+// 不再有两份手写字面量靠注释「改一侧必改另一侧」维系——只改一侧会变成
+// 「有脏数据但探测看不到 → 永远不清」或反之，且日志全绿。
+const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>'' OR COALESCE(health_check_host,'')<>'' OR COALESCE(domain,'')<>''
 		OR enable_compress=1 OR COALESCE(compress_types,'')<>''
 		OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
@@ -5055,6 +5107,24 @@ const TCPRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
 		OR COALESCE(block_page_stage3_id,0)<>0 OR COALESCE(block_page_stage3_status,0)<>0
 		OR COALESCE(log_enabled,0)<>0
 	)`
+
+// TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
+// 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
+// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4) + 阶段页四列
+// + log_enabled，共 32 列 SET）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
+// 与导入归一（handlers normalizeRuleRowsForTransport）共用本常量；此前跨包
+// 双份逐字镜像靠测试字符串 parity 维系，任一侧扩列漏同步即终态漂移。
+// WHERE 谓词与探测共用 tcpDeadFieldsStalePredicate（单一出处，禁止再抄第二份）。
+const TCPRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
+	host_header='', health_check_path='', health_check_host='', domain='', enable_compress=0, compress_types='',
+	request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
+	proxy_dial_timeout=0, proxy_response_header_timeout=0, proxy_read_timeout=0, proxy_write_timeout=0, proxy_stream_timeout=0, proxy_flush_interval=0, proxy_stream_close_delay=0,
+	custom_routes_enabled=0, dynamic_dns=0,
+	strategy=CASE WHEN strategy='cookie' OR strategy='' OR strategy IS NULL THEN 'weighted_round_robin' ELSE strategy END,
+	dns_family='ipv4',
+	enable_tls=0, tls_source='manual', tls_http_redirect=0, tls_cert='', tls_key='',
+	block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0, log_enabled=0
+	WHERE ` + tcpDeadFieldsStalePredicate
 
 // RuleTimestampNormalizePredicate 是规则时间戳「非平面格式」的统一谓词模板
 // （%[1]s = 列名）。用「strftime 结果 ≠ 列值」而非 LIKE '%T%' OR '%+%' 启发式：
@@ -5102,20 +5172,7 @@ const TCPRuleUpstreamOriginResetSQL = `UPDATE upstreams SET origin_domain=''
 // 无命中时零写事务、零版本扰动。谓词必须与 UPDATE WHERE 逐字对齐（改一侧
 // 必改另一侧）。
 const tcpDeadFieldsProbeSQL = `SELECT
-		(SELECT COUNT(*) FROM lb_rules WHERE protocol='tcp' AND (
-			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>'' OR COALESCE(health_check_host,'')<>'' OR COALESCE(domain,'')<>''
-			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
-			OR proxy_dial_timeout<>0 OR proxy_response_header_timeout<>0 OR proxy_read_timeout<>0 OR proxy_write_timeout<>0 OR proxy_stream_timeout<>0 OR proxy_flush_interval<>0 OR proxy_stream_close_delay<>0
-			OR custom_routes_enabled=1 OR dynamic_dns=1
-			OR COALESCE(strategy,'') IN ('cookie','')
-			OR COALESCE(dns_family,'')<>'ipv4'
-			OR enable_tls=1 OR COALESCE(tls_source,'')<>'manual' OR tls_http_redirect=1
-			OR COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''
-			OR COALESCE(block_page_stage1_id,0)<>0 OR COALESCE(block_page_stage1_status,0)<>0
-			OR COALESCE(block_page_stage3_id,0)<>0 OR COALESCE(block_page_stage3_status,0)<>0
-			OR COALESCE(log_enabled,0)<>0
-		))
+		(SELECT COUNT(*) FROM lb_rules WHERE ` + tcpDeadFieldsStalePredicate + `)
 		+ (SELECT COUNT(*) FROM path_rules WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE protocol='tcp'))
 		+ (SELECT COUNT(*) FROM upstreams WHERE COALESCE(origin_domain,'')<>'' AND rule_id IN (SELECT caddy_id FROM lb_rules WHERE protocol='tcp'))`
 
@@ -5189,10 +5246,17 @@ func migrateTCPRuleDeadFields() error {
 // ruleTLSModeResidueProbeSQL：HTTP 规则跨模式 TLS 残留探测（无命中时零写
 // 事务、零版本扰动）。三条谓词与下方复位 SQL、保存族（Create/Update/
 // Duplicate）及导入后置归一逐字对齐。
+const (
+	// 三条「跨模式 TLS 残留」谓词：探测与三条复位语句由它们拼出（单一出处）。
+	ruleTLSResidueCertPredicate       = `protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'manual' AND (COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>'')`
+	ruleTLSResidueCAProviderPredicate = `protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(ca_provider_id,0)<>0`
+	ruleTLSResidueACMEConfigPredicate = `protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(acme_config_id,0)<>0`
+)
+
 const ruleTLSModeResidueProbeSQL = `SELECT
-	(SELECT COUNT(*) FROM lb_rules WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'manual' AND (COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''))
-	+ (SELECT COUNT(*) FROM lb_rules WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(ca_provider_id,0)<>0)
-	+ (SELECT COUNT(*) FROM lb_rules WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(acme_config_id,0)<>0)`
+	(SELECT COUNT(*) FROM lb_rules WHERE ` + ruleTLSResidueCertPredicate + `)
+	+ (SELECT COUNT(*) FROM lb_rules WHERE ` + ruleTLSResidueCAProviderPredicate + `)
+	+ (SELECT COUNT(*) FROM lb_rules WHERE ` + ruleTLSResidueACMEConfigPredicate + `)`
 
 // ruleTLSModeResidueResetSQLs 跨模式 TLS 残留复位（顺序无关、幂等）：
 // 非 manual 源不保留证书材料（私钥正文随导出/备份/快照放大）；非 acme_dns
@@ -5200,9 +5264,9 @@ const ruleTLSModeResidueProbeSQL = `SELECT
 // 存在性，残留死引用签发期才暴露；空来源与 manual 同理）。三种残留渲染零消费，
 // 但会让同一终态在「主端库 / 导出 canonical / 从端落库」呈现两种形态。
 var ruleTLSModeResidueResetSQLs = []string{
-	`UPDATE lb_rules SET tls_cert='', tls_key='' WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'manual' AND (COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>'')`,
-	`UPDATE lb_rules SET ca_provider_id=0 WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(ca_provider_id,0)<>0`,
-	`UPDATE lb_rules SET acme_config_id=0 WHERE protocol<>'tcp' AND COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(acme_config_id,0)<>0`,
+	`UPDATE lb_rules SET tls_cert='', tls_key='' WHERE ` + ruleTLSResidueCertPredicate,
+	`UPDATE lb_rules SET ca_provider_id=0 WHERE ` + ruleTLSResidueCAProviderPredicate,
+	`UPDATE lb_rules SET acme_config_id=0 WHERE ` + ruleTLSResidueACMEConfigPredicate,
 }
 
 // migrateRuleTLSModeResidue：HTTP 规则跨模式 TLS 残留清零（存储侧自愈）。

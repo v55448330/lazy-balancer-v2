@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { registerModuleHooks, code } from './_helpers.ts'
+import { registerModuleHooks, code, section, webFiles } from './_helpers.ts'
 
 // ansi.ts 经 `@/utils/escape` 别名取共享转义实现，node 不认别名——先注册解析钩子。
 // 静态 import 会先于钩子注册执行，故此处必须动态 import。
@@ -76,18 +76,55 @@ test('空参数等价 0（复位）', () => {
   assert.equal(ansiToHtml(`${ESC}[31ma${ESC}[mb`), `${color('#ef4444')}a</span>b`)
 })
 
-// 转义即安全边界：日志内容含请求路径/UA 等外部输入，v-html 只能接
-// ansiToHtml 的产出；回退成原始日志直出会从「不着色」升级为注入面。
-test('日志消费面：v-html 只接 ansiToHtml 结果，禁止直出原始日志', () => {
-  const caddy = code('src/views/settings/CaddyGlobalSettings.vue')
-  assert.match(caddy, /const logHtml = computed\(\(\) => ansiToHtml\(logContent\.value\)\)/)
-  assert.match(caddy, /v-html="logHtml"/)
-  assert.doesNotMatch(caddy, /v-html="logContent"/, '原始日志不得直出（转义缺失即注入面）')
-
-  const rules = code('src/views/Rules.vue')
-  assert.match(rules, /const ruleLogHtml = computed\(\(\) => ansiToHtml\(/)
-  assert.match(rules, /v-html="ruleLogHtml"/)
-  assert.doesNotMatch(rules, /v-html="ruleLogContent"/, '原始日志不得直出（转义缺失即注入面）')
+// 转义即安全边界：日志内容含请求路径/UA 等外部输入，v-html 只能接「先转义原始
+// 日志、后做着色」的产出；回退成原始日志直出会从「不着色」升级为注入面。
+//
+// 消费面按目录扫描枚举（`webFiles('src', ['.vue'])`），不再手写文件名清单：新增
+// 日志视图、或改写既有管线（去掉转义 / 把转义挪到着色之后）都必须在这里变红。
+// 非日志 v-html 面（SyntaxHighlight/CodeEditor 高亮层、品牌 footerHtml）不在
+// 本条范围内，其首帧转义由 infraWiring 与 utilsSingleSource 承担。
+test('日志消费面（目录扫描）：每个 v-html 日志面都必须先转义再着色', () => {
+  const files = webFiles('src', ['.vue'])
+  assert.ok(files.length >= 40, `扫描面过小（${files.length} 个 .vue）——目录枚举失效`)
+  const faces: Array<{ file: string; name: string }> = []
+  for (const file of files) {
+    const text = code(file)
+    // 任何 v-html 都不得直接接原始日志 ref（含 `.value` 的下标形态）
+    assert.doesNotMatch(text, /v-html="[^"]*[Cc]ontent\.value[^"]*"/, `${file}：原始日志不得直出（转义缺失即注入面）`)
+    for (const match of text.matchAll(/v-html="([^"]+)"/g)) {
+      const expr = match[1]!.trim()
+      if (!/log/i.test(expr)) continue
+      // 内联表达式无法静态取源，按日志面处理并强制改走 computed
+      assert.match(expr, /^[A-Za-z_$][\w$]*$/, `${file}：v-html 日志绑定必须是单个标识符（${expr}）`)
+      faces.push({ file, name: expr })
+    }
+  }
+  // 扫描面下限 + 正向名册：现有三个日志面（Caddy 全局日志 / 规则日志 / 证书任务
+  // 日志）。少一个说明同一份管线被拆走而扫描没跟上；多一个必须同步登记。
+  assert.ok(faces.length >= 3, `日志 v-html 面少于 3（${JSON.stringify(faces)}）——目录扫描失效`)
+  assert.deepEqual(
+    faces.map((face) => `${face.file}#${face.name}`).sort(),
+    [
+      'src/views/Rules.vue#ruleLogHtml',
+      'src/views/settings/CaddyGlobalSettings.vue#logHtml',
+      'src/views/settings/CertJobs.vue#logHtml',
+    ],
+  )
+  for (const face of faces) {
+    const text = code(face.file)
+    // 定义体切到下一个顶层声明：转义必须包住原始日志 ref，且早于任何着色 replace
+    const decl = section(text, `const ${face.name} = `, '\nconst ')
+    assert.match(
+      decl,
+      /(?:ansiToHtml|escapeHtml)\(\s*\w*[Ll]og\w*\.value/,
+      `${face.file}#${face.name}：必须先转义原始日志（escapeHtml/ansiToHtml 包住 log ref）`,
+    )
+    const escaped = decl.search(/(?:ansiToHtml|escapeHtml)\(/)
+    const colored = decl.search(/\.replace\(/)
+    if (colored >= 0) {
+      assert.ok(escaped < colored, `${face.file}#${face.name}：着色不得早于转义（先拼 HTML 再转义=注入面）`)
+    }
+  }
 })
 
 test('真彩缺参形态：真彩段被忽略，剩余参数按普通 SGR 解释（正文不丢）', () => {

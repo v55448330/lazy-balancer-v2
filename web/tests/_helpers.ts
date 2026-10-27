@@ -85,6 +85,19 @@ const REGEX_PRECEDING_KEYWORDS: Record<string, true> = {
 }
 
 /**
+ * 正则字面量只可能出现在这些记号之后（表达式起点的运算符、开括号、分隔符）。
+ * 收尾记号（`)`/`]`/`>`/引号）一律不进入正则态——原判据是「前一非空白字符
+ * 不是 `)`/`]` 就算正则」，于是 `</div><!-- x -->`、`<br /> <!-- x -->` 里闭合
+ * 标签的 `/` 会把该行余下文本吞成「正则」，同行模板注释永不被剥离：注释里
+ * 复述代码即假绿（`section()` 从注释中段起切），注释被当代码即误红。
+ */
+const REGEX_PRECEDING_CHARS: Record<string, true> = {
+  '(': true, ',': true, ';': true, ':': true, '=': true, '!': true, '&': true,
+  '|': true, '?': true, '+': true, '-': true, '*': true, '%': true, '^': true,
+  '~': true, '[': true, '{': true,
+}
+
+/**
  * 注释区间（`//`、`/* *\/`、Vue 模板 `<!-- -->`）。
  *
  * 词法判定与 stripComments 同源：跳过字符串与正则字面量，避免把 `'http://…'`
@@ -94,16 +107,22 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
   const spans: Array<readonly [number, number]> = []
   let prevSignificant = ''
   let prevWord = ''
+  // 箭头函数体（`=> /re/`）：`>` 本身不是正则起点，但紧跟 `=` 的 `>` 是。
+  let prevIsArrow = false
   const regexAllowedAfter = (): boolean => {
     if (prevSignificant === '') return true
+    if (prevIsArrow) return true
     if (/[\w]/.test(prevSignificant)) return REGEX_PRECEDING_KEYWORDS[prevWord] === true
-    return !/[)\]]/.test(prevSignificant)
+    return REGEX_PRECEDING_CHARS[prevSignificant] === true
   }
   let i = 0
   while (i < text.length) {
     const ch = text[i]
     const next = text[i + 1]
-    if (ch === '/' && next === '/') {
+    if (ch === '/' && next === '/' && text[i - 1] !== ':') {
+      // `scheme://host`（模板文案/资源地址里的 URL）不是行注释：JS/TS 里 `:`
+      // 后紧跟 `//` 不构成注释起点，却是 URL 的唯一形态。漏了这条守卫，
+      // 模板里 `<code>lazy-balancer://docs/…</code>` 会把该行余下文本当注释剥掉。
       const start = i
       while (i < text.length && text[i] !== '\n') i++
       spans.push([start, i])
@@ -138,6 +157,7 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
       }
       prevSignificant = quote
       prevWord = ''
+      prevIsArrow = false
       continue
     }
     if (ch === '/' && regexAllowedAfter()) {
@@ -157,6 +177,7 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
       }
       prevSignificant = '/'
       prevWord = ''
+      prevIsArrow = false
       continue
     }
     if (/\s/.test(ch)) {
@@ -164,7 +185,9 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
     } else if (/[\w]/.test(ch)) {
       prevWord = /[\w]/.test(prevSignificant) ? prevWord + ch : ch
       prevSignificant = ch
+      prevIsArrow = false
     } else {
+      prevIsArrow = ch === '>' && prevSignificant === '='
       prevSignificant = ch
       prevWord = ''
     }
@@ -208,13 +231,25 @@ export const section = (text: string, startMarker: string, endMarker: string): s
 }
 
 /**
+ * 提取文本中某个标签的全部**开标签**（`<name …>`，引号内的 `>` 不截断）。
+ *
+ * 结构断言必须按「开标签属性集」逐属性判定：把两个属性写进同一条正则的字面
+ * 顺序（`…type="error"[^>]*title="…"`）在模板调整属性书写顺序时即假红，而界面
+ * 完全没变。`[^>]*` 只把范围限制在标签内，不消除先后约束。
+ */
+export const openTags = (text: string, tag: string): string[] =>
+  [...text.matchAll(new RegExp(`<${tag}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, 'g'))].map((m) => m[0])
+
+/**
  * 去掉注释（`//`、`/* *\/`、Vue 模板 `<!-- -->`），保留字符串字面量与正则字面量。
  * 死代码扫描必须先剥注释：注释里提到退役符号不构成生产消费，否则维护者被迫
  * 改写历史说明或放宽正则。
  *
  * 正则字面量（`/…/`）必须识别——否则 `/\/\//` 之后的真实引用会被当行注释吞掉
  * （假绿），正则里的 `/*` 会吞掉大段代码（假红）。判定规则（词法启发）：
- * `/` 前一非空白字符是标识符/数字/`)`/`]` 时按除法处理，否则进入正则态；
+ * 仅当 `/` 前一有效记号是表达式起点（运算符 / 开括号 / `,` `;` `:`、`return`
+ * 等关键字、箭头 `=>`）时才进入正则态，其余一律按除法处理——模板标签的
+ * `</div>`、`<br />` 里的 `/` 因此不再吞掉同行 `<!-- -->`；
  * 正则态内遇未转义 `/` 或换行退出（字符类 `[...]` 内的 `/` 不退出）。
  */
 export const stripComments = (text: string): string => {

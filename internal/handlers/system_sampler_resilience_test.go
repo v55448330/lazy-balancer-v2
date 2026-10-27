@@ -16,6 +16,7 @@ import (
 )
 
 func TestLoadCommandOutput_timesOutInsteadOfBlockingStartup(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldTimeout := systemMetricsCommandTimeout
 	systemMetricsCommandTimeout = 40 * time.Millisecond
 	t.Cleanup(func() { systemMetricsCommandTimeout = oldTimeout })
@@ -32,6 +33,7 @@ func TestLoadCommandOutput_timesOutInsteadOfBlockingStartup(t *testing.T) {
 }
 
 func TestGetCachedDiskUsage_failureNegativeCacheAvoidsRerun(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetDiskUsageCacheForTest(t)
 	oldCommand := systemMetricsDFCommand
 	t.Cleanup(func() { systemMetricsDFCommand = oldCommand })
@@ -67,6 +69,7 @@ func TestGetCachedDiskUsage_failureNegativeCacheAvoidsRerun(t *testing.T) {
 }
 
 func TestGetConnectionStats_failureNegativeCacheAvoidsRerun(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetConnectionStatsCacheForTest(t)
 	oldCommand := netstatCommand
 	t.Cleanup(func() { netstatCommand = oldCommand })
@@ -98,6 +101,7 @@ func TestGetConnectionStats_failureNegativeCacheAvoidsRerun(t *testing.T) {
 }
 
 func TestGetRealtimeTraffic_rebuildsBaselineWhenDefaultInterfaceChanges(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile
 	t.Cleanup(func() { systemMetricsReadFile = original })
@@ -141,6 +145,7 @@ func TestGetRealtimeTraffic_rebuildsBaselineWhenDefaultInterfaceChanges(t *testi
 }
 
 func TestPrimeSystemSamplers_firstReadIsRealNotZero(t *testing.T) {
+	withIsolatedGlobal(t)
 	disableCPUSampleWindowForTest(t)
 	disableNetSampleWindowForTest(t)
 	original := systemMetricsReadFile

@@ -76,6 +76,16 @@ func countAutoBackupAudit(t *testing.T, action string) int {
 	return count
 }
 
+// autoBackupAuditDetail 返回该动作最近一条审计的 detail（失败面复盘断言用）。
+func autoBackupAuditDetail(t *testing.T, action string) string {
+	t.Helper()
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT COALESCE(detail,'') FROM audit_log WHERE action=? ORDER BY id DESC LIMIT 1`, action).Scan(&detail); err != nil {
+		t.Fatalf("read audit detail for %q: %v", action, err)
+	}
+	return detail
+}
+
 func autoBackupRows(t *testing.T, where string, args ...any) []map[string]any {
 	t.Helper()
 	rows, err := db.DB.Query(`SELECT id, filename, status, trigger_type, size_bytes, sections, message FROM auto_backups `+where, args...)
@@ -724,6 +734,17 @@ func TestDeleteAutoBackup_fileFailureKeepsRowAndWithholdsSuccessAudit(t *testing
 	}
 	if got := countAutoBackupAudit(t, "备份删除"); got != 0 {
 		t.Fatalf("失败路径成功审计=%d, want 0", got)
+	}
+	// 失败面必须留痕：删除族与还原/下载同口径，单个失败分支恰一条「删除失败」，
+	// detail 携带备份 id 与文件名供按文件复盘。
+	if got := countAutoBackupAudit(t, "删除失败"); got != 1 {
+		t.Fatalf("删除失败审计=%d, want 1（失败分支必须经 failAutoBackupAccess 留痕）", got)
+	}
+	detail := autoBackupAuditDetail(t, "删除失败")
+	for _, want := range []string{fmt.Sprintf("#%d", id), name} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("删除失败 detail=%q, want 含 %q", detail, want)
+		}
 	}
 }
 

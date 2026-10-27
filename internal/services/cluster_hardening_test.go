@@ -63,14 +63,14 @@ func TestUnregisterClusterService_reclaimsSnapshotCache(t *testing.T) {
 // NewSyncService 内建并登记一个 ClusterService：注销同步服务必须连带注销
 // 内建实例（含其快照缓存），否则 teardown 后全局表仍强引用库句柄。
 func TestUnregisterSyncDrainer_reclaimsInnerClusterService(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	database := db.DB
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	sync := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
 	if sync.cluster == nil {
@@ -92,7 +92,7 @@ func TestUnregisterSyncDrainer_reclaimsInnerClusterService(t *testing.T) {
 // 旧 pin 残留、持续 PinMismatch 只能手工删盘。
 func TestForgetNodePin_usesServiceDataDirForPinCleanup(t *testing.T) {
 	stubUpdateRetrySleep(t)
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	dbDir := t.TempDir() // 库目录 ≠ 数据目录（双源分叉形态）
 	if err := db.Initialize(dbDir); err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestForgetNodePin_usesServiceDataDirForPinCleanup(t *testing.T) {
 	database := db.DB
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	dataDir := t.TempDir()
 	service := NewClusterService(database, dataDir)

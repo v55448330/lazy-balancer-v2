@@ -1374,3 +1374,73 @@ func TestIP2RegionStartUpdate_recoversPanickingRun(t *testing.T) {
 		t.Fatal("running 标记必须已复位")
 	}
 }
+
+// 更新前版本不可知（行存在但版本为空串，或行缺失）时的回滚：磁盘已还原为更新前
+// 字节，版本行/sidecar 不得停留在安装段写入的新 tag——那会让下一轮
+// tag == currentVersion 命中「已是最新」短路，旧库永不重装（自愈通道关闭）。
+// 修复后写保守标识 bundled，下一轮远端数值 tag 能重建基线。
+func TestIP2RegionUpdateRun_rollbackWithUnknownPreviousVersionWritesSentinel(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldBytes, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldReload := reloadIP2RegionSearcher
+	reloadCalls := 0
+	reloadIP2RegionSearcher = func() error {
+		reloadCalls++
+		if reloadCalls == 1 {
+			return errors.New("forced: install hot-swap failure")
+		}
+		return Reload()
+	}
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.reloader = func() error { return nil }
+
+	// When 安装后热换失败 → 回滚（磁盘还原、版本行未知）
+	m.run("manual", nil)
+
+	// Then 磁盘回到更新前字节，版本行与 sidecar 都不是新 tag，而是保守标识
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != string(oldBytes) {
+		t.Fatalf("live xdb 未还原到更新前基线: %v", err)
+	}
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if version == "v3.1.0" {
+		t.Fatalf("version=%q：回滚后版本行不得停留在安装段写入的新 tag（磁盘旧/行新）", version)
+	}
+	if version != "bundled" {
+		t.Fatalf("version=%q, want bundled（版本不可知的唯一表达）", version)
+	}
+	sidecar, err := os.ReadFile(ip2regionLivePath + ".version")
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	if got := strings.TrimSpace(string(sidecar)); got != "bundled" {
+		t.Fatalf("sidecar=%q, want bundled", got)
+	}
+
+	// And 自愈：下一轮远端仍是 v3.1.0 时不得走「已是最新」短路——必须重装。
+	var fetched int
+	m.fetchLatestTag = func(context.Context) (string, error) {
+		fetched++
+		return "v3.1.0", nil
+	}
+	reloadIP2RegionSearcher = func() error { return nil }
+	m.run("manual", nil)
+	if fetched == 0 {
+		t.Fatal("回滚后的下一轮未重新拉取远端 tag（被「已是最新」短路）")
+	}
+	version, status, _, _, _, _, _ = ip2RegionVersionRow(t)
+	if status != "success" || version != "v3.1.0" {
+		t.Fatalf("自愈轮 version=%q status=%q, want v3.1.0/success", version, status)
+	}
+}

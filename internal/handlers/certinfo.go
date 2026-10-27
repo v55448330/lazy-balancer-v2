@@ -66,7 +66,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	// 复用 args，错位会让候选集恒空）。
 	queryArgs := append([]any{services.GetCertExpiryThreshold()}, args...)
 	rows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
-		SELECT caddy_id, COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(domain,''), COALESCE(tls_cert,''),
+		SELECT caddy_id, COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(domain,''), COALESCE(tls_cert,''),
 			?
 		FROM lb_rules WHERE caddy_id IN (%s)`, placeholders), queryArgs...)
 	if err != nil {
@@ -74,15 +74,20 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	// 规则启用状态（enabled）与 TLS 开关（enable_tls）必须分别读取：只读
+	// enable_tls 时「禁用但仍保留 TLS 配置」的规则在这里仍返回证书详情，而单
+	// 规则端点按 enabled 门返回 null——同一张证书在两个入口结论相反（104 轮
+	// 只修了服务侧单规则路径，批量 handler 未同步）。
 	type ruleCertificate struct {
 		id, source, domains, certPEM string
 		enabled                      bool
+		enableTLS                    bool
 		expiryDays                   int
 	}
 	rules := make(map[string]ruleCertificate, len(req.CaddyIDs))
 	for rows.Next() {
 		var rule ruleCertificate
-		if err := rows.Scan(&rule.id, &rule.enabled, &rule.source, &rule.domains, &rule.certPEM, &rule.expiryDays); err != nil {
+		if err := rows.Scan(&rule.id, &rule.enabled, &rule.enableTLS, &rule.source, &rule.domains, &rule.certPEM, &rule.expiryDays); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取规则证书配置失败"})
 			return
 		}
@@ -126,7 +131,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	result := make(map[string]*models.RuleCertInfo, len(req.CaddyIDs))
 	for _, id := range req.CaddyIDs {
 		rule, exists := rules[id]
-		if !exists || !rule.enabled {
+		if !exists || !rule.enabled || !rule.enableTLS {
 			result[id] = nil
 			continue
 		}

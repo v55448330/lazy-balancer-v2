@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,7 +133,7 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 12 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
+	// 15 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
 	//   certificates.go IssueCertificate 的 auditFailure 闭包 1 处
 	//     （blocked/conflict/failed/invalid_request/skipped）
 	//   caproviders.go 测试 CA 提供商 6 处（provider_error/register_failed/
@@ -150,6 +151,19 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	// 取值域逐项登记在 auditDynamicResultCodes，新增码仍受
 	// TestAuditResultText_auditFailureLiteralsRegistered 与本表约束。
 	const want = 15
+	// 注释与常数同步门：上面那条「N 处」此前写成 12 而枚举与常数都是 15——
+	// 维护者读注释判断「面有多大」时会误判漏枚举。注释数字必须等于 want。
+	source, err := os.ReadFile("audit_result_text_test.go")
+	if err != nil {
+		t.Fatalf("读取本文件以核对注释计数: %v", err)
+	}
+	commentCount := regexp.MustCompile(`// (\d+) 处动态入口`).FindSubmatch(source)
+	if len(commentCount) != 2 {
+		t.Fatal("缺少「// N 处动态入口」计数注释（本门失去锚点）")
+	}
+	if documented, err := strconv.Atoi(string(commentCount[1])); err != nil || documented != want {
+		t.Fatalf("注释声明 %s 处动态入口，常数 want=%d——注释与枚举/实现已漂移", commentCount[1], want)
+	}
 	if dynamic != want {
 		t.Fatalf("AuditResultPart 动态调用点=%d，want %d：新增动态入口必须审查取值域并更新本绊线", dynamic, want)
 	}

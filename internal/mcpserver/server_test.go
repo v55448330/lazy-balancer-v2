@@ -68,6 +68,11 @@ func TestIssueCertificateSchemaRequiresExplicitAllOrCaddyID(t *testing.T) {
 				Enum []bool `json:"enum"`
 			} `json:"all"`
 		} `json:"properties"`
+		// anyOf 而非 oneOf：REST 接受 all 与 caddy_id 同传并以 caddy_id 为准，
+		// oneOf 会禁止该合法形态（同时命中两个分支即失败）。
+		AnyOf []struct {
+			Required []string `json:"required"`
+		} `json:"anyOf"`
 		OneOf []struct {
 			Required []string `json:"required"`
 		} `json:"oneOf"`
@@ -79,8 +84,11 @@ func TestIssueCertificateSchemaRequiresExplicitAllOrCaddyID(t *testing.T) {
 	}
 
 	// Then
-	if len(schema.OneOf) != 2 || strings.Join(schema.OneOf[0].Required, ",") != "all" || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id" {
-		t.Fatalf("oneOf=%+v", schema.OneOf)
+	if len(schema.AnyOf) != 2 || strings.Join(schema.AnyOf[0].Required, ",") != "all" || strings.Join(schema.AnyOf[1].Required, ",") != "caddy_id" {
+		t.Fatalf("anyOf=%+v", schema.AnyOf)
+	}
+	if len(schema.OneOf) != 0 {
+		t.Fatalf("oneOf=%+v：oneOf 会禁止 all 与 caddy_id 同传（REST 接受同传并以 caddy_id 为准）", schema.OneOf)
 	}
 	if len(schema.Properties.All.Enum) != 1 || !schema.Properties.All.Enum[0] {
 		t.Fatalf("all enum=%v, want [true]", schema.Properties.All.Enum)

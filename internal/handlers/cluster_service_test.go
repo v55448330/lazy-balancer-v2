@@ -170,10 +170,19 @@ func TestClusterServiceControl_caddy_failure_returns_500(t *testing.T) {
 	becomeSlave(t, 21, clusterToken)
 	_, router := newSlaveTestHandler(&config.Config{CaddyAdminURL: "http://127.0.0.1:1"})
 
-	for _, ticket := range []string{startTicket, stopTicket, restartTicket} {
-		response := postServiceControl(router, mustActionForTicket(t, ticket), ticket)
-		if response.Code != http.StatusInternalServerError {
-			t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	// 停止按事实分类：测试环境无 Caddy（admin 不可达且无进程）= 已停止 → 200；
+	// 启动/重启沿用 `caddy run` 失败 → 500。
+	for _, tc := range []struct {
+		ticket string
+		want   int
+	}{
+		{startTicket, http.StatusInternalServerError},
+		{stopTicket, http.StatusOK},
+		{restartTicket, http.StatusInternalServerError},
+	} {
+		response := postServiceControl(router, mustActionForTicket(t, tc.ticket), tc.ticket)
+		if response.Code != tc.want {
+			t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), tc.want)
 		}
 	}
 	details := auditDetailsServiceControlRows(t)

@@ -290,6 +290,8 @@ func run() error {
 	// 绕过退出门。StopSync 自身幂等（Shutdown 已调用）。
 	services.SetSyncLifecycleHooks(lifecycle.StartSync, lifecycle.StopSync)
 	services.SetSyncLifecycleHaltedProbe(syncService.IsHalted)
+	// 自愈链最后一跳：Halted 的同步服务只能由 Resume 复活（Start 是 no-op）。
+	services.SetSyncLifecycleResumeHook(syncService.Resume)
 	// 自动备份执行器必须先于 InitTaskEngine：启用且存在补跑槽时，
 	// 引擎首轮可能在毫秒内到期，不得在 nil executor 下记录成功。
 	services.SetAutoBackupExecutor(func(ctx context.Context, trigger, operator string, engineRunID int64) error {

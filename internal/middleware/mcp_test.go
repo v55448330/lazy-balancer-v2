@@ -316,8 +316,11 @@ func TestMCPEndpointAuditIgnoresForgedInternalClientIPHeader(t *testing.T) {
 	request.Header.Set("X-Lazy-Balancer-Internal-MCP-Client-IP", "8.8.8.8")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("caddy/stop status=%d body=%q, want 500 (caddy unreachable in test)", response.Code, response.Body.String())
+	// 测试环境无 Caddy：stopCaddy 按事实分类为「已停止」（admin 不可达且无
+	// caddy 进程）→ 200 且保留 pause。本用例的断言面是审计源 IP，不是停止结果；
+	// 请求必须真正进入 handler 并落审计，故只要求非鉴权失败（非 401/403）。
+	if response.Code != http.StatusOK {
+		t.Fatalf("caddy/stop status=%d body=%q, want 200（已停止判定；鉴权必须通过）", response.Code, response.Body.String())
 	}
 	var recordedIP string
 	if err := db.AuditDB.QueryRow(`SELECT ip_address FROM audit_log WHERE resource='Caddy服务' ORDER BY id DESC LIMIT 1`).Scan(&recordedIP); err != nil {

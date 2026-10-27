@@ -299,9 +299,8 @@ func TestStartCaddy_returns_500_when_process_exits_before_ready(t *testing.T) {
 }
 
 func TestStopCaddy_returns_500_when_stop_command_fails(t *testing.T) {
-	original := caddyStopCommand
-	caddyStopCommand = func(string) *exec.Cmd { return exec.Command("sh", "-c", "exit 8") }
-	t.Cleanup(func() { caddyStopCommand = original })
+	env := newStopCaddyEnv(t, "exit 8")
+	env.seedCaddy(t, "5353", 'S')
 	h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
 	router := gin.New()
 	router.POST("/stop", h.StopCaddy)
@@ -1019,22 +1018,18 @@ func TestValidateConfig_adminSystemFailureMapsTo500(t *testing.T) {
 }
 
 // pause 生命周期（与 entrypoint 监督器协议）：stopCaddy 先建 pause 抑制
-// 监督器重启，停止失败必须回滚删除——否则监督器被永久抑制，Caddy 停摆。
+// 监督器重启，**停止失败且 Caddy 仍在运行**时必须回滚删除——否则监督器被
+// 永久抑制，Caddy 停摆。（已停止态的重复停止是成功而非失败，见
+// caddy_stop_idempotency_test.go。）
 func TestStopCaddy_failureRemovesPauseFile(t *testing.T) {
-	dir := t.TempDir()
-	oldPause, oldStop := caddyPauseFile, caddyStopCommand
-	caddyPauseFile = filepath.Join(dir, "paused")
-	caddyStopCommand = func(string) *exec.Cmd { return exec.Command("sh", "-c", "exit 9") }
-	t.Cleanup(func() { caddyPauseFile, caddyStopCommand = oldPause, oldStop })
+	env := newStopCaddyEnv(t, "exit 9")
+	env.seedCaddy(t, "5252", 'S')
 
-	if err := os.WriteFile(caddyPauseFile, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := stopCaddy("http://127.0.0.1:1"); err == nil {
-		t.Fatal("stopping with failing command must return error")
+		t.Fatal("stopping with failing command while caddy is alive must return error")
 	}
-	if _, err := os.Stat(caddyPauseFile); !os.IsNotExist(err) {
-		t.Fatalf("停止失败必须回滚 pause（监督器需继续看护）, stat err=%v", err)
+	if env.pauseExists() {
+		t.Fatalf("停止失败必须回滚 pause（监督器需继续看护）, pause=%s", env.pauseFile)
 	}
 }
 

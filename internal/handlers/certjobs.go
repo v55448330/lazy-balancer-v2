@@ -96,13 +96,17 @@ type certJobListItem struct {
 	RetryCooldownSeconds *int64              `json:"retry_cooldown_seconds"`
 }
 
-// certJobListSelectSQL 列表/详情共用的列投影与 provider 联表。
-// cert_pem 只取首证书块——certificateIssuer 仅解析首块，全链（LE ~6KB）
-// 全量传输纯属浪费；INSTR 定位首个 END 边界，空串/单块形态 SUBSTR 原样返回。
-const certJobListSelectSQL = `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message,
-	CASE WHEN INSTR(j.cert_pem,'-----END CERTIFICATE-----') > 0
+// certJobFirstCertBlockSQL 取 cert_jobs.cert_pem 的首证书块（列别名由调用方给）。
+// certificateIssuer 与 CertNotAfterFromPEM 都只解析首块，全链（LE ~6KB）全量传输
+// 纯属浪费；INSTR 定位首个 END 边界，空串/单块形态 SUBSTR 原样返回。
+// 单源：任务列表与聚合清单（ListCertificates 的 not_after 派生）必须同口径。
+const certJobFirstCertBlockSQL = `CASE WHEN INSTR(j.cert_pem,'-----END CERTIFICATE-----') > 0
 	     THEN SUBSTR(j.cert_pem, 1, INSTR(j.cert_pem,'-----END CERTIFICATE-----') + 25)
-	     ELSE COALESCE(j.cert_pem,'') END AS cert_pem,
+	     ELSE COALESCE(j.cert_pem,'') END`
+
+// certJobListSelectSQL 列表/详情共用的列投影与 provider 联表。
+const certJobListSelectSQL = `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message,
+	` + certJobFirstCertBlockSQL + ` AS cert_pem,
 	j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
 
 // certJobScanner 抽象 *sql.Rows/*sql.Row 的 Scan（列表逐行与详情单行同源填充）。

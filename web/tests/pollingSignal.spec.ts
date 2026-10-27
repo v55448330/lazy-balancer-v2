@@ -119,6 +119,9 @@ test('usePollingTask：onError 自身抛错被就地吞掉，不中断后续轮�
 test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即补跑', async () => {
   const doc = new FakeDocument()
   const host = globalThis as { document?: unknown }
+  // 假 document 必须「保存→还原并断言」：同进程运行（或 helper 装了全局 DOM
+  // 宿主）时直接 delete 会抹掉别人的宿主，制造随机顺序才失败的难查问题。
+  const previousDocument = host.document
   host.document = doc
   let calls = 0
   let polling!: PollingTask
@@ -155,7 +158,9 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
   } finally {
     polling?.stop()
     mock.timers.reset()
-    delete host.document
+    if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
+    else host.document = previousDocument
+    assert.equal(host.document, previousDocument, '假 document 必须还原为原值')
   }
 })
 
@@ -165,6 +170,7 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
 test('usePollingTask 随组件卸载停止轮询并摘除监听', async () => {
   const doc = new FakeDocument()
   const host = globalThis as { document?: unknown }
+  const previousDocument = host.document
   host.document = doc
   let calls = 0
   let polling!: PollingTask
@@ -188,7 +194,9 @@ test('usePollingTask 随组件卸载停止轮询并摘除监听', async () => {
     assert.equal(calls, 1, '卸载后不得再发起轮次')
   } finally {
     mock.timers.reset()
-    delete host.document
+    if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
+    else host.document = previousDocument
+    assert.equal(host.document, previousDocument, '假 document 必须还原为原值')
   }
 })
 

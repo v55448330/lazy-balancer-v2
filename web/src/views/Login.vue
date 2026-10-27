@@ -152,6 +152,7 @@ import AppLogo from '@/components/AppLogo.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { appName, appVersion } from '@/utils/branding'
 import { validatePassword, validateUsername } from '@/utils/credentials'
+import { OIDC_APP_NONCE_KEY, createOidcAppNonce, oidcErrorMessage, withOidcAppNonce } from '@/utils/oidcCallback'
 import type { FormInstance, FormRules, InputOtpInstance } from 'element-plus'
 
 interface SetupStatusResponse {
@@ -299,7 +300,8 @@ onMounted(async () => {
       const params = new URLSearchParams(hash.slice(qIndex + 1))
       const oidcError = params.get('oidc_error')
       if (oidcError) {
-        ElMessage.error(`OIDC 登录失败：${oidcError}`)
+        // 文案经白名单映射：hash query 内容不可信（任意链接可投放提示文案）。
+        ElMessage.error(`OIDC 登录失败：${oidcErrorMessage(oidcError)}`)
         params.delete('oidc_error')
         const rest = params.toString()
         // rest 为空串时不拼「?」——避免 URL 残留「#/?」。
@@ -324,7 +326,14 @@ const goOIDCLogin = () => {
   // 深链保持：登录前停留的页面键（首屏 ?page= 已由 auth store 消费进
   // currentPage）随 return_to 回跳；后端只放行站内相对路径，App 侧再按
   // isPageId 白名单兜底（未知值回 dashboard）。
-  const returnTo = encodeURIComponent(`/${authStore.currentPage}`)
+  // 回跳来源绑定：nonce 先写本标签页 sessionStorage，再随 return_to 往返
+  //（后端原样回显到回调 fragment）——App 侧只有命中同值才接受令牌，构造链接
+  // 里塞别人的令牌不可能知道受害者浏览器的 nonce。
+  const nonce = createOidcAppNonce()
+  try {
+    sessionStorage.setItem(OIDC_APP_NONCE_KEY, nonce)
+  } catch { /* 隐私模式：无 nonce 时回调侧一律拒绝并提示重新登录 */ }
+  const returnTo = encodeURIComponent(withOidcAppNonce(`/${authStore.currentPage}`, nonce))
   window.location.href = `/api/v1/auth/oidc/login?return_to=${returnTo}`
 }
 // IdP 侧「返回」经 bfcache 恢复时 JS 状态保留——复位跳转锁,防 SSO

@@ -38,6 +38,8 @@ func newRateLimitBlocksRouter(metricsURL string) *gin.Engine {
 
 func TestGetSecurityRateLimitBlocks_returnsTotalsAndHosts(t *testing.T) {
 	// Given a Caddy metrics endpoint with per-host 429 rate_limit counters
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(rateLimitBlocksMetricsFixture))
 	}))

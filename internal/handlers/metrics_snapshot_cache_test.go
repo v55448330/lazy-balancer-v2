@@ -77,6 +77,7 @@ func TestMetricsEndpoints_shareOneScrapeSnapshotAcrossConsumers(t *testing.T) {
 }
 
 func TestLoadCaddyMetricsSnapshot_negativeCacheAndSelfTimeoutNotCached(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetCaddyMetricsSnapshotCacheForTest()
 	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	oldNeg := caddyMetricsSnapshotNegativeTTL
@@ -312,6 +313,7 @@ func TestGetMetricsDashboard_dbReadFailureIsLogged(t *testing.T) {
 // （否则最需要共享的慢抓取场景反而每次都重新抓取，面板/规则/主机三端点的
 // 轮询叠加成「越慢越抓」）。
 func TestLoadCaddyMetricsSnapshot_ttlAnchoredAtFetchCompletion(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetCaddyMetricsSnapshotCacheForTest()
 	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	oldTTL := caddyMetricsSnapshotTTL
@@ -346,6 +348,8 @@ func TestLoadCaddyMetricsSnapshot_ttlAnchoredAtFetchCompletion(t *testing.T) {
 func TestMetricsCaches_areScopedToCurrentMetricsURL(t *testing.T) {
 	resetMetricsDashboardCacheForTest()
 	t.Cleanup(resetMetricsDashboardCacheForTest)
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	now := time.Now()
 
 	storeCaddyMetricsSnapshot("http://a/metrics", []byte("a"), nil, now)

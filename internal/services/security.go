@@ -1053,6 +1053,27 @@ func customRuleORConditionEmitID(parentEmitID, conditionIndex int) int {
 	return CustomRuleORConditionIDBase + parentEmitID*customRuleMaxConditions + conditionIndex
 }
 
+// customRuleORScoreIDBase 是 OR 父规则「评分点」的独立发射段（每个父规则一个）。
+// 分支块 [CustomRuleORConditionIDBase, CustomRuleORConditionIDBase+customRuleEmitIDBound*customRuleMaxConditions)
+// 是连续区间（上界 54.2M），评分点因此必须整体落在其外：60000000+父 emit id
+// 上界 60.8M，既不撞分支块也不撞 GeoIP/CRS/合成/排除段。
+// 评分点不带 log——事件归因只经分支 id 回解父规则，评分点自身不产生事件。
+const customRuleORScoreIDBase = 60000000
+
+func customRuleORScoreEmitID(parentEmitID int) int {
+	return customRuleORScoreIDBase + parentEmitID
+}
+
+// customRuleORHitVarPrefix 是 OR 命中标记 tx 变量的前缀（单源）：事件摄取侧据此
+// 识别「分支 raw 无评分字面量、需按父规则补分」的形态。
+const customRuleORHitVarPrefix = "lb_cr_or_hit_"
+
+// customRuleORHitVar 是 OR 父规则在本事务内的命中标记变量名（tx 变量，作用域
+// 单事务）：分支命中置 1，父规则级评分点据此计一次分。
+func customRuleORHitVar(parentEmitID int) string {
+	return fmt.Sprintf("%s%d", customRuleORHitVarPrefix, parentEmitID)
+}
+
 // DecodeCustomRuleEmitID 将普通或 OR 分支 emit id 回解为同一父规则 DB id。
 // 无 id 的旧内嵌合成规则没有 DB 父行，返回 false。
 func DecodeCustomRuleEmitID(emitID int) (int, bool) {
@@ -1128,14 +1149,37 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 			if len(conditions) == 0 {
 				conditions = []models.CustomRuleCondition{{Target: cr.Target, Operator: cr.Operator, Pattern: cr.Pattern}}
 			}
+			// 计分 pass 规则：分支只负责匹配并置命中标记，评分由父规则级单一
+			// 评分点执行一次。分支各自携带 setvar 时会按命中分支数重复累加
+			// （两条件同中即 2 倍分、三条件 3 倍），「放行计分」规则会因请求
+			// 同时满足多个条件而越过阈值变成非预期拦截。deny 是破坏性动作
+			// （首个命中即中断事务，不存在重复累加），log 不计分，二者保持原动作。
+			orScoring := cr.Action != "block" && cr.Action != "log" && cr.Score != 0
+			branchAction := action
+			scorePhase := 1
+			if orScoring {
+				branchAction = fmt.Sprintf("pass,log,setvar:tx.%s=1,msg:'自定义规则 %s 命中'", customRuleORHitVar(emitID), safeName)
+			}
 			for idx, cond := range conditions {
 				phase := 1
 				if cond.Target == "body" {
 					phase = 2
+					// 任一条件读请求体时，评分点必须在 phase:2 之后执行——且只能
+					// 有一个评分点，否则跨相位各自计分同样会重复累加。
+					scorePhase = 2
 				}
 				branchID := customRuleORConditionEmitID(emitID, idx)
 				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n",
-					customRuleTargets[cond.Target], customRuleOperators[cond.Operator], escapeCorazaPattern(cond.Pattern), branchID, phase, action))
+					customRuleTargets[cond.Target], customRuleOperators[cond.Operator], escapeCorazaPattern(cond.Pattern), branchID, phase, branchAction))
+			}
+			if orScoring {
+				hitVar := customRuleORHitVar(emitID)
+				// 每个父规则只有一个评分点（跨相位也只此一处），因此命中标记
+				// 无需清除——分支再多相位命中都只让标记保持 1，评分点仍只执行
+				// 一次。（不使用 setvar:!tx.x 移除语法：coraza v3.8.1 对无值
+				// 移除形态在执行期空指针崩溃。）
+				sb.WriteString(fmt.Sprintf("SecRule TX:%s \"@eq 1\" \"id:%d,phase:%d,pass,t:none,setvar:tx.inbound_anomaly_score_pl1=+%d\"\n",
+					hitVar, customRuleORScoreEmitID(emitID), scorePhase, cr.Score))
 			}
 			continue
 		}
@@ -2945,7 +2989,7 @@ func ValidateGeoIPCountries(raw string, geoipMode string) error {
 	// 整链跳过 = 全部放行。deny 空名单是历史「未配置」语义，
 	// PolicyHasGeoIP 同样不发射；其与 off 等价，保留兼容（导入/存量）。
 	if geoipMode == "allow" && len(entries) == 0 {
-		return fmt.Errorf("地域控制为仅允许模式时区域名单不能为空（空名单会拒绝所有请求）")
+		return fmt.Errorf("地域控制为仅允许模式时区域名单不能为空（空名单会放行全部请求，无法形成仅允许语义，请至少选择一个地域或关闭地域控制）")
 	}
 	// 省份列表单次快照：可用性门与 loaded 判据共用同一取值（冷启动首次
 	// 调用会真正执行 336 次采样搜索，两次背靠背调用在多规则校验下放大成本；

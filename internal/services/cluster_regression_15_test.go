@@ -421,8 +421,7 @@ func TestMasterServingRound_retriesPendingPinCleanup(t *testing.T) {
 	}
 	service := NewClusterService(db.DB, dir)
 	service.pinCleanupMu.Lock()
-	service.pendingPinPath = pinPath
-	service.pendingPinAuditURL = "https://old-master:8000"
+	service.pendingPins = map[string]string{pinPath: "https://old-master:8000"}
 	service.pinCleanupMu.Unlock()
 
 	// When：主节点巡检一轮（不依赖任何从节点 Pull）
@@ -433,10 +432,10 @@ func TestMasterServingRound_retriesPendingPinCleanup(t *testing.T) {
 		t.Fatalf("pending pin must be retried by the master inspection round, stat err=%v", err)
 	}
 	service.pinCleanupMu.Lock()
-	pending := service.pendingPinPath
+	pending := len(service.pendingPins)
 	service.pinCleanupMu.Unlock()
-	if pending != "" {
-		t.Fatalf("pending pin path=%q, want cleared", pending)
+	if pending != 0 {
+		t.Fatalf("pending pin 条数=%d, want 0", pending)
 	}
 }
 

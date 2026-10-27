@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, section, repoCode } from './_helpers.ts'
+import { code, member, openTags, section, repoCode } from './_helpers.ts'
 import { shouldToastQuietPollError } from '../src/utils/pollErrorToast.ts'
 import {
   CERT_QUEUE_VISIBLE_JOBS,
@@ -69,13 +69,12 @@ test('证书队列拉取接入轮询 AbortSignal', () => {
 test('任务详情历史与日志加载失败显性化', () => {
   const text = code('src/views/settings/TaskMonitor.vue')
   // 消费点：失败态必须真的渲染出来（原断言只查符号出现——删掉模板分支仍绿）
-  // 单标签元素（自闭合）：用「标签内属性」结构边界（[^>]* 不会跨出标签），
-  // 不再用定长 [\s\S]{0,120} 窗口——模板改个属性顺序即假红。
-  assert.match(
-    text,
-    /<el-alert v-if="detailHistoryError"[^>]*type="error"[^>]*title="运行历史加载失败/,
-    '运行历史失败必须是带标题的 error 级告警',
-  )
+  // 按开标签属性集逐属性判定（openTags），不把两个属性写进同一条正则的书写
+  // 顺序：模板调整属性顺序是纯格式化，界面不变，不得假红。
+  const historyAlerts = openTags(text, 'el-alert').filter((tag) => tag.includes('v-if="detailHistoryError"'))
+  assert.equal(historyAlerts.length, 1, '运行历史失败分支必须渲染且仅渲染一处 el-alert')
+  assert.match(historyAlerts[0]!, /type="error"/, '运行历史失败必须是 error 级告警')
+  assert.match(historyAlerts[0]!, /title="运行历史加载失败/, '运行历史失败必须带标题（只留图标不成告警）')
   assert.match(text, /<span v-if="logsLoadError"[^>]*>日志加载失败，自动重试中<\/span>/)
   // 置位路径：详情历史只在最新详情序号下置位，日志失败由轮询 onError 置位
   const detail = section(text, 'const openDetail', 'const logsVisible = ref')

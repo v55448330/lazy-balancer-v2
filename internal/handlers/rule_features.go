@@ -596,7 +596,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			if upstream.Protocol != "" && upstream.Protocol != "http" && upstream.Protocol != "https" {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游协议只能是 http 或 https", index+1, upstreamIndex+1)
 			}
-			key := strings.ToLower(net.JoinHostPort(strings.TrimSpace(upstream.Address), fmt.Sprintf("%d", upstream.Port)))
+			key := net.JoinHostPort(upstreamDedupeHost(upstream.Address), strconv.Itoa(upstream.Port))
 			if pathHostPortSeen[key] {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游 %s:%d 重复", index+1, upstreamIndex+1, upstream.Address, upstream.Port)
 			}

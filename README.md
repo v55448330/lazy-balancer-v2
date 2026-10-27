@@ -26,6 +26,7 @@ docker run -d --name lazy-balancer --network host \
   --restart unless-stopped \
   --pids-limit=4096 \
   --ulimit nofile=1048576:1048576 \
+  --stop-timeout 30 \
   -v $(pwd)/data:/app/data -v $(pwd)/certs:/app/certs \
   -v $(pwd)/logs:/app/logs -v $(pwd)/waf:/app/waf \
   -v $(pwd)/backup:/app/backup \
@@ -39,6 +40,7 @@ docker run -d --name lazy-balancer \
   --restart unless-stopped \
   --pids-limit=4096 \
   --ulimit nofile=1048576:1048576 \
+  --stop-timeout 30 \
   -p 8000:8000 -p 80:80 -p 443:443 -p 443:443/udp \
   -v lb-data:/app/data -v $(pwd)/certs:/app/certs \
   -v $(pwd)/logs:/app/logs -v $(pwd)/waf:/app/waf \
@@ -49,6 +51,8 @@ docker run -d --name lazy-balancer \
 > 镜像标签:`latest` 指向最近一次**稳定版**(无通道后缀);测试版标签带 `-beta` 后缀(形如 `:v2.3.9-beta`),需要尝鲜或复现问题时请显式指定该标签。
 >
 > **容器初始化**：新镜像已内置 init 进程（回收健康检查等被遗弃的子进程），并改用二进制自带健康检查，无需再加 `--init`。若固定使用更早的镜像，请务必追加 `--init`。启动示例已默认 `--pids-limit=4096`（PID 配额按线程计数），可按部署规模调整。
+
+> **停止宽限期**：面板的优雅关停链最多花 25 秒（在途 HTTP 请求、Caddy 排水、任务排空与日志刷盘）。Docker 默认停止宽限只有 10 秒，第 10 秒即 SIGKILL，故 `docker run` 示例带 `--stop-timeout 30`（compose 已内置 `stop_grace_period: 30s`）；自行编排（systemd/Swarm/k8s）时请保证停止宽限 ≥25 秒。
 
 挂载说明:`/app/data` 数据库、配置与 IP 归属地库(必选——IP2Region xdb 实际位于 `/app/data/ip2region.xdb`,随数据卷持久化)、`/app/certs` 证书与私钥(必选)、`/app/backup` 自动备份落盘目录(必选——不挂载则容器重建后备份文件丢失)、`/app/logs` 日志(推荐)、`/app/waf` WAF/CRS 规则库(推荐)。
 

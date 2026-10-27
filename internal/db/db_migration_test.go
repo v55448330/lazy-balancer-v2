@@ -1285,18 +1285,14 @@ func TestInitialize_canonicalizes_lb_rule_domain_after_caddy_id_backfill(t *test
 func TestInitialize_normalizes_out_of_range_jwt_expiration(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec("UPDATE global_config SET jwt_expire_minutes=999999 WHERE id=1"); err != nil {
 		t.Fatalf("seed invalid JWT expiration: %v", err)
 	}
 	if err := Close(); err != nil {
 		t.Fatalf("close database before restart: %v", err)
 	}
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("reinitialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	var expireMinutes int
 	if err := DB.QueryRow("SELECT jwt_expire_minutes FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil {
 		t.Fatalf("read normalized JWT expiration: %v", err)
@@ -1406,9 +1402,7 @@ func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then
 	var count int
@@ -1426,9 +1420,7 @@ func TestInitialize_freshSecurityPoliciesColumnsStayNullableLikeMigration(t *tes
 	preserveDatabaseHandles(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then
 	for _, name := range []string{"block_status_code", "geoip_countries", "geoip_mode", "waf_check_response"} {
@@ -1457,9 +1449,7 @@ func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T)
 	// Given
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, ca_available_after) VALUES
 		('r1','garbage.example.com','not-a-date'),
 		('r2','legacy.example.com','2026-07-02'),
@@ -1468,9 +1458,7 @@ func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T)
 	}
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-run migrations: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then（SQL 侧比较存储原文，避免驱动把 DATETIME 重排成 RFC3339 干扰断言）
 	var garbageKept int
@@ -1507,9 +1495,7 @@ func TestInitialize_certJobCAAvailableAfterNormalizationRewritesOnlyStaleRows(t 
 	// Given
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, ca_available_after) VALUES
 		('r1','canonical.example.com','2026-07-02 00:00:00'),
 		('r2','legacy.example.com','2026-07-02'),
@@ -1569,9 +1555,7 @@ func TestInitialize_certJobCAAvailableAfterNormalizationRewritesOnlyStaleRows(t 
 func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec(`DROP TABLE security_policies;
 		CREATE TABLE security_policies (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1606,9 +1590,7 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 	}
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then: 四列收敛为可空，数据保留
 	for _, name := range []string{"block_status_code", "geoip_countries", "geoip_mode", "waf_check_response"} {
@@ -1661,9 +1643,7 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 构造窗口期形态：is_enabled 可空（触发重建）+ 已携带 OIDC 三列与存量 OIDC 用户
 	if _, err := DB.Exec(`DROP TABLE users;
 		CREATE TABLE users (
@@ -1695,9 +1675,7 @@ func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
 	}
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then: 三列保留，OIDC 身份数据不丢
 	for _, name := range []string{"auth_provider", "oidc_subject", "oidc_issuer"} {
@@ -1726,9 +1704,7 @@ func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
 func TestInitialize_cleansOrphanedPathRules(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_alive','r','http','a.test',8081,1)`); err != nil {
 		t.Fatal(err)
 	}
@@ -1736,9 +1712,7 @@ func TestInitialize_cleansOrphanedPathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	drainSystemAuditBuffer()
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 删除用户数据（孤儿 path_rules）必须留痕。完整 Initialize 会把
 	// 迁移期缓冲 flush 进审计库，故在 AuditDB 断言而非内存缓冲。
 	var audited int
@@ -1794,18 +1768,14 @@ func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 func TestInitialize_backfillsNullConsecutiveFailuresAndIsMaster(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := DB.Exec(`INSERT OR REPLACE INTO security_crs_version (id,version,consecutive_failures) VALUES (1,'v4.28.0',NULL);
 		UPDATE security_ip2region_version SET consecutive_failures=NULL WHERE id=1;
 		UPDATE global_config SET is_master=NULL WHERE id=1`); err != nil {
 		t.Fatalf("seed NULL bookkeeping values: %v", err)
 	}
 
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	for _, table := range []string{"security_crs_version", "security_ip2region_version"} {
 		var nullLeft int
@@ -2061,9 +2031,7 @@ func TestInitialize_backfillsLegacyTimeoutColumnsAndNormalizesZeroOnRestart(t *t
 	}
 
 	// When the legacy database is upgraded (columns newly added → one-time backfill)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize legacy database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then the newly added timeout columns are backfilled to the recommended defaults
 	//（keepalive 默认 0——60s 空闲关闭会中断 SSE/WebSocket 上游长连接，
@@ -2079,9 +2047,7 @@ func TestInitialize_backfillsLegacyTimeoutColumnsAndNormalizesZeroOnRestart(t *t
 	if err := Close(); err != nil {
 		t.Fatalf("close database before restart: %v", err)
 	}
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("reinitialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then the value-typed columns are normalized back to governed defaults on
 	// restart, while the omission-typed keepalive zero survives unchanged
@@ -2304,9 +2270,7 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建两张表）
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize legacy database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then：随表删除的三张索引在同一启动内重新存在
 	for _, index := range []string{"idx_upstreams_rule_enabled_id", "idx_lb_rules_listen_port", "idx_lb_rules_enabled"} {
@@ -2329,9 +2293,7 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 模拟修复前恢复通道落下的行：显式 NULL 覆盖 CURRENT_TIMESTAMP 默认值；
 	// 另带一条真实时间戳对照行，回填不得触碰。
 	if _, err := DB.Exec(`
@@ -2355,9 +2317,7 @@ func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 		t.Fatalf("seed NULL timestamps: %v", err)
 	}
 
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	const epoch = "1970-01-01 00:00:00"
 	// SQL 内联比较字面量而非 Go 侧扫描值：DATETIME 声明列经驱动读取会被转成
@@ -2383,9 +2343,7 @@ func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	assertEpoch("SELECT COUNT(*) FROM cert_jobs WHERE domain='null-ts.example.com' AND created_at='" + epoch + "'")
 
 	// 幂等：第三次启动后回填值不变，对照行真实时间戳原样保留。
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("third initialize: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	var kept int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_kept_ts' AND created_at='2026-01-02 03:04:05'").Scan(&kept); err != nil {
 		t.Fatalf("read control timestamp: %v", err)
@@ -2645,9 +2603,7 @@ func TestMigrateLegacyAuditLogs_copiesVerifiesAndDropsLegacyTable(t *testing.T) 
 	// Given 真实主库/audit 库与两条含 NULL 的历史审计行。
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize databases: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if _, err := AuditDB.Exec(`DELETE FROM audit_log`); err != nil {
 		t.Fatalf("clear destination audit log: %v", err)
 	}
@@ -3055,9 +3011,7 @@ func TestCreateTables_freshSchemaCarriesACMEAndTCPProxyColumns(t *testing.T) {
 func TestInitialize_preservesStagedColumnsOnSecurityPoliciesRebuild(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 构造窗口期形态：四列 NOT NULL（触发重建）+ 已携带 policy_type/
 	// trust_detection（模拟上一轮启动 ensureNewColumns 已加列）与存量行。
 	if _, err := DB.Exec(`DROP TABLE security_policies;
@@ -3098,9 +3052,7 @@ func TestInitialize_preservesStagedColumnsOnSecurityPoliciesRebuild(t *testing.T
 	}
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("re-initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then: 显式 policy_type 与 trust_detection 存活
 	var policyType, crawlerEngines string
@@ -3142,9 +3094,7 @@ func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建 lb_rules）
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize legacy database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then：四列存在且值存活
 	for _, col := range []string{"block_page_stage1_id", "block_page_stage1_status", "block_page_stage3_id", "block_page_stage3_status"} {
@@ -3172,9 +3122,7 @@ func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
 func TestInitialize_createsOidcIdentityUniqueIndex(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	var indexCount int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('users') WHERE name='u_oidc_identity'`).Scan(&indexCount); err != nil {
@@ -3216,9 +3164,7 @@ func TestInitialize_createsOidcIdentityUniqueIndex(t *testing.T) {
 func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	// 移除索引后播种重复身份（模拟索引诞生前的历史脏数据）
 	if _, err := DB.Exec("DROP INDEX IF EXISTS u_oidc_identity"); err != nil {
 		t.Fatalf("drop index: %v", err)
@@ -3231,9 +3177,7 @@ func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
 	}
 
 	// When：安全阀启动——不得报错
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize with duplicate oidc identities must not fail: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then：索引未建，重复行原样保留
 	var indexCount int
@@ -3261,9 +3205,7 @@ func TestInitialize_adds_path_rules_upstream_path_column(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then
 	var notNull int
@@ -3281,9 +3223,7 @@ func TestInitialize_customRuleConditionLogicSchemaAndMigration(t *testing.T) {
 	t.Run("fresh schema default", func(t *testing.T) {
 		dir := t.TempDir()
 		preserveDatabaseHandles(t)
-		if err := Initialize(dir); err != nil {
-			t.Fatalf("initialize database: %v", err)
-		}
+		reopenDatabaseForTest(t, dir)
 		var notNull int
 		var columnDefault string
 		if err := DB.QueryRow(`SELECT "notnull",COALESCE(dflt_value,'') FROM pragma_table_info('security_custom_rules') WHERE name='condition_logic'`).Scan(&notNull, &columnDefault); err != nil {
@@ -3439,9 +3379,7 @@ func TestInitialize_freshSchemaCarriesUpstreamHostColumns(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then
 	for _, tc := range []struct{ table, column string }{
@@ -3539,9 +3477,7 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建 lb_rules/upstreams）
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize legacy database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then：两列存在且值存活
 	var healthCheckHost string
@@ -3570,9 +3506,7 @@ func TestInitialize_freshSchemaCarriesPathRuleResponseColumns(t *testing.T) {
 	preserveDatabaseHandles(t)
 
 	// When
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	// Then
 	for _, tc := range []struct{ column, dflt string }{
@@ -3644,9 +3578,7 @@ func TestRunMigrations_addsPathRuleResponseColumnsToLegacyRows(t *testing.T) {
 func TestInitialize_backfillsCertExpiryDays(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	for _, tc := range []struct {
 		name string
 		seed string
@@ -3661,9 +3593,7 @@ func TestInitialize_backfillsCertExpiryDays(t *testing.T) {
 			if _, err := DB.Exec(tc.seed); err != nil {
 				t.Fatalf("seed cert_expiry_days: %v", err)
 			}
-			if err := Initialize(dir); err != nil {
-				t.Fatalf("re-initialize database: %v", err)
-			}
+			reopenDatabaseForTest(t, dir)
 			var got int
 			if err := DB.QueryRow("SELECT cert_expiry_days FROM global_config WHERE id=1").Scan(&got); err != nil {
 				t.Fatalf("read cert_expiry_days: %v", err)
@@ -3872,14 +3802,10 @@ func TestMigrateSystemIPListUniqueIndex_recordsAuditForDedupedRows(t *testing.T)
 func TestInitialize_oidcIdentityIndexProbeSkipsRescan(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 
 	scansBase, skipsBase := oidcIdentityIndexScans.Load(), oidcIdentityIndexSkips.Load()
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("second initialize: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if got := oidcIdentityIndexScans.Load() - scansBase; got != 0 {
 		t.Fatalf("索引在位时仍执行全表查重 %d 次, want 0（启动只做必要工作）", got)
 	}
@@ -3891,9 +3817,7 @@ func TestInitialize_oidcIdentityIndexProbeSkipsRescan(t *testing.T) {
 		t.Fatalf("drop index: %v", err)
 	}
 	scansBase = oidcIdentityIndexScans.Load()
-	if err := Initialize(dir); err != nil {
-		t.Fatalf("initialize after index drop: %v", err)
-	}
+	reopenDatabaseForTest(t, dir)
 	if got := oidcIdentityIndexScans.Load() - scansBase; got != 1 {
 		t.Fatalf("索引缺失时查重次数=%d, want 1", got)
 	}

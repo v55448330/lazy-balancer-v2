@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,9 +141,10 @@ func AuditLogPath() string {
 	return auditLogPath
 }
 
-// auditLogSizeBytes 返回触发轮转的大小阈值；默认读取 global_config 配置，
-// 测试可通过替换该变量注入小阈值以触发轮转。
-var auditLogSizeBytes = getAuditLogSizeBytes
+// auditLogSizeBytes 返回触发轮转的大小阈值；默认按调用方 ctx 读取
+// global_config 配置（关停/导入排空预算内必须可取消），测试可通过替换该
+// 变量注入小阈值以触发轮转。
+var auditLogSizeBytes = getAuditLogSizeBytesContext
 
 // auditLogCopyFile 将当前日志归档为 .1；测试可注入以模拟复制失败。
 var auditLogCopyFile = copyAuditLogTo
@@ -172,7 +174,7 @@ var auditLogRotatedIngestFrom func(from int64)
 // 持续失败时采集健康位恒 healthy、任务监控零痕迹。中止分支直接带错误返回；
 // 不阻断轮转的分支（shift、offset 重置、.1 补采）记录首个错误后继续。
 // 「补采失败不截断」等既有安全语义不变。
-func rotateAuditLogIfNeeded() (total int, rotErr error) {
+func rotateAuditLogIfNeeded(ctx context.Context) (total int, rotErr error) {
 	// 返回轮转路径补采实际插入条数（pending/活文件尾部/.1 归档），
 	// 由 PollOnce 并入「摄取 N 条」——补采窗口入库的事件此前从不出现在任务日志。
 	noteErr := func(err error) {
@@ -237,7 +239,7 @@ func rotateAuditLogIfNeeded() (total int, rotErr error) {
 	if err != nil || info.Size() == 0 {
 		return total, nil
 	}
-	maxBytes := auditLogSizeBytes()
+	maxBytes := auditLogSizeBytes(ctx)
 	if info.Size() < maxBytes {
 		return total, nil
 	}
@@ -716,17 +718,20 @@ var auditLogSizeValueCache = dbValueCache{ttl: auditLogSizeCacheTTL}
 // beforeAuditLogSizeQuery 保留审计轮转阈值查询前注入缝，供关停交错回归测试使用。
 var beforeAuditLogSizeQuery = func() {}
 
-func getAuditLogSizeBytes() int64 {
+// getAuditLogSizeBytesContext 读取轮转阈值（ctx 版）。轮转由安全事件摄取的
+// 2s tick 驱动，tick 处在有界关停/导入排空预算内——读库必须用 QueryRowContext，
+// 否则关停时这一读最坏被主库写锁挡住整个 busy_timeout。
+func getAuditLogSizeBytesContext(ctx context.Context) int64 {
 	defaultBytes := int64(db.DefaultAuditLogSizeMB) * 1024 * 1024
 	// 未初始化库回退治理默认值（db.DefaultAuditLogSizeMB），不得 nil deref。
 	database := db.DB
 	if database == nil {
 		return defaultBytes
 	}
-	return auditLogSizeValueCache.get(func() (int64, error) {
+	return auditLogSizeValueCache.getCtx(ctx, func(queryCtx context.Context) (int64, error) {
 		var sizeMB int
 		beforeAuditLogSizeQuery()
-		if err := database.QueryRow("SELECT COALESCE(audit_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultAuditLogSizeMB).Scan(&sizeMB); err != nil {
+		if err := database.QueryRowContext(queryCtx, "SELECT COALESCE(audit_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultAuditLogSizeMB).Scan(&sizeMB); err != nil {
 			// 读失败回退默认值当轮生效，且必须留痕：此前静默回退让「轮转阈值
 			// 长期按兜底值滚动而面板配置形同虚设」零信号。状态转换口径（首报
 			// warn + 恢复 info）与同族配置读取（运行日志尺寸/时区刷新）同源，

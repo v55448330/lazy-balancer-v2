@@ -215,4 +215,52 @@ if ! grep -q '缺少 --dry-run' "${work}/bulk-untracked.out"; then
   echo "SELFTEST FAIL: 未跟踪脚本命中原因错误（应为缺 dry-run）"; cat "${work}/bulk-untracked.out"; exit 1
 fi
 
+# 11) 仓内 scripts/ 之外的批量脚本同样受检：放在仓根（tools/hack 同理）的无
+#     dry-run 遍历写盘脚本必须红。枚举面写死 scripts/ 时它对第一道闸门完全
+#     不可见——历史事故形态正是「临时脚本 + 全仓正则」。
+mk_repo "$work/repo-root-script"
+printf 'base\n' > .gitkeep
+git add -A && git commit -qm base
+cat > rewrite.py <<'PY'
+import os, re
+for dp, _, fs in os.walk('internal'):
+    for f in fs:
+        if not f.endswith('.go'):
+            continue
+        p = os.path.join(dp, f)
+        open(p, 'w').write(re.sub(r'\s+$', '', open(p).read()))
+PY
+git add -A && git commit -qm script
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-root-script.out" 2>&1; then
+  echo "SELFTEST FAIL: 仓根的无 dry-run 批量脚本未拦截"; cat "${work}/bulk-root-script.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-root-script.out"; then
+  echo "SELFTEST FAIL: 仓根脚本命中原因错误（应为缺 dry-run）"; cat "${work}/bulk-root-script.out"; exit 1
+fi
+
+# 12) 同一仓根脚本显式声明只读模式后必须放行（收窄新枚举面的误报），且输出
+#     必须明示「仓外脚本不受控」的作用域边界——否则使用者会误以为全覆盖。
+mk_repo "$work/repo-root-dry"
+printf 'base\n' > .gitkeep
+git add -A && git commit -qm base
+cat > rewrite.py <<'PY'
+import os, re, sys
+DRY = '--dry-run' in sys.argv
+for dp, _, fs in os.walk('internal'):
+    for f in fs:
+        if not f.endswith('.go'):
+            continue
+        p = os.path.join(dp, f)
+        new = re.sub(r'\s+$', '', open(p).read())
+        if not DRY:
+            open(p, 'w').write(new)
+PY
+git add -A && git commit -qm script
+if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-root-dry.out" 2>&1; then
+  echo "SELFTEST FAIL: 带 dry-run 的仓根批量脚本被误拦"; cat "${work}/bulk-root-dry.out"; exit 1
+fi
+if ! grep -q '仓外/临时脚本不受控' "${work}/bulk-root-dry.out"; then
+  echo "SELFTEST FAIL: 通道 A 未明示作用域边界（仓外脚本不受控）"; cat "${work}/bulk-root-dry.out"; exit 1
+fi
+
 echo "bulk-edit safety selftest: PASS"
