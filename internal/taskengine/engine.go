@@ -167,10 +167,10 @@ type registration struct {
 	cancel     context.CancelCauseFunc
 	runTrigger string // 在途轮的触发来源（manual/auto/startup/caddy-restart）
 	// runSeq 在途轮代际身份：每次成功占位（reserveRunInternal /
-	// tryStartDaemon）自增。取消路径以快照代际复核复锁——CancelHook 窗口内
-	// 本轮结束、tick 已派发同 trigger 新一轮时，旧取消动作（c()/槽消费）
-	// 不得作用于新一轮。
+	// tryStartDaemon）自增。CancelHook 先复核代际，执行期间禁止新代占位；
+	// 返回后再次复核，旧取消动作（manager hook/c()/槽消费）不得作用于新一轮。
 	runSeq            uint64
+	cancelHookRunning bool      // CancelHook 执行中禁止新代占位，旧钩子不得触达新 manager 轮
 	lastCheck         time.Time // Periodic：最近到期判定基准
 	nextScheduledTime time.Time // Scheduled：下一槽（槽缓存+降频求值，见 tick）
 	loopEnabled       bool      // 循环/调度开关
@@ -789,15 +789,25 @@ func (e *Engine) Cancel(id string) bool {
 	c := r.cancel
 	running := r.running
 	trigger := r.runTrigger
-	// 在途轮代际快照：CancelHook 是任意时长窗口（manager 取消可能阻塞），
-	// 其间本轮可自然结束且 tick 已派发同 trigger 新一轮——复锁时仅代际
-	// 未变才允许动作，否则会取消/消费新一轮的槽。
+	// 在途轮代际快照：CancelHook 是任意时长窗口（manager 取消可能阻塞）。
+	// hook 前置复核并登记 cancelHookRunning，阻止本轮结束后新代在钩子窗口
+	// 内占位；复锁时再次复核，避免旧请求取消/消费新轮。
 	seq := r.runSeq
 	r.mu.Unlock()
 	hook := r.desc.CancelHook
 	if hook != nil {
+		r.mu.Lock()
+		if !r.running || r.runSeq != seq || r.runTrigger != trigger || r.cancelHookRunning {
+			r.mu.Unlock()
+			return false
+		}
+		r.cancelHookRunning = true
+		r.mu.Unlock()
 		ok := hook()
+		r.mu.Lock()
+		r.cancelHookRunning = false
 		if !ok {
+			r.mu.Unlock()
 			// hook 拒绝=取消未生效：不得消费槽（否则「取消失败」却付出
 			// 「本槽不再重投」的代价，退避兜底被 schedDoneSlot 门永久压掉）。
 			return false
@@ -807,7 +817,6 @@ func (e *Engine) Cancel(id string) bool {
 		// 终态落 failed，历史无法区分「用户取消」与「真失败」）。
 		// 取消原因=ErrUserCancelled：业务侧据此推进排程槽（与失败同源），
 		// 让下一槽正常投递而非永久停摆。
-		r.mu.Lock()
 		if c != nil && r.running && r.runSeq == seq && r.runTrigger == trigger {
 			c(ErrUserCancelled)
 			consumeCancelledSlotLocked(r, trigger)
@@ -1553,7 +1562,7 @@ func (e *Engine) reserveRunInternal(id, trigger string, admission Kind, beat tim
 		return nil, ErrNotMaster
 	}
 	r.mu.Lock()
-	if r.running {
+	if r.running || r.cancelHookRunning {
 		r.mu.Unlock()
 		e.roleMu.RUnlock()
 		e.inFlight.Add(-1)
@@ -2298,10 +2307,10 @@ const taskLogLineMaxBytes = 4096
 // 把截断误读成错误串本身如此。字节预算含后缀，保证截断后 ≤ 上限。
 const taskLogTruncSuffix = " …[行已截断]"
 
-// truncateTaskLogLine 把超长日志行裁到 taskLogLineMaxBytes。裁剪点回退到
+// TruncateTaskLogLine 把超长日志行裁到 taskLogLineMaxBytes。裁剪点回退到
 // rune 边界——错误串含中文时按字节硬切会产出非法 （页/编辑器
 // 显示乱码，且按行解析的工具可能整行丢弃）。
-func truncateTaskLogLine(line string) string {
+func TruncateTaskLogLine(line string) string {
 	return truncateUTF8(line, taskLogLineMaxBytes, taskLogTruncSuffix)
 }
 
@@ -2310,7 +2319,7 @@ func truncateTaskLogLine(line string) string {
 func appendTaskLogLine(path, line string) {
 	// 截断必须先于滚动判定——否则巨型单行会先
 	// 触发滚动、再把超限活动文件写出来，后续每行都反复触发滚动。
-	line = truncateTaskLogLine(line)
+	line = TruncateTaskLogLine(line)
 	// 熔断前置判定（在 rotate/open 之前——熔断期二者必然失败，
 	// 逐行 WARNING 会淹没运行日志）。目录级熔断（无法创建）对全部任务日志
 	// 成立；单文件熔断只对本次 path 成立——其他健康文件照常写入。

@@ -353,7 +353,7 @@ const crawlerIPListMaxBytes = 4 << 20
 
 // crawlerSnapshotLogf 快照加载异常告警（体积门/坏条目/读取期改写）。日志而非
 // 静默：豁免段静默缩水会让真爬虫被判伪装、产生误报事件，必须可观测。
-func crawlerSnapshotLogf(format string, args ...any) {
+var crawlerSnapshotLogf = func(format string, args ...any) {
 	crawlerSnapshotLogCallsForTest.Add(1)
 	caddy.Log().Named("geoip2region.crawler").Sugar().Warnf(format, args...)
 }
@@ -504,7 +504,7 @@ func (s *crawlerIPRangeSnapshot) parsePayload(raw []byte) bool {
 	}
 	if badCIDRs > 0 {
 		crawlerSnapshotLogfThrottled(s.filePath, "bad-cidr",
-			"crawler ip list snapshot %s has %d unparsable CIDR entries; snapshot still cached (fail-open on those entries, engines affected may over-report)",
+			"crawler ip list snapshot %s has %d unparsable CIDR entries; those entries are unavailable and grant no crawler exemption; remaining valid entries stay cached",
 			s.filePath, badCIDRs)
 	}
 	return total > 0

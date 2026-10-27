@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp } from '../src/utils/apiFailure.ts'
+import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, runMfaStepUpRequest } from '../src/utils/apiFailure.ts'
 
 const deferred = <T,>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } => {
   let resolve!: (value: T) => void
@@ -155,6 +155,72 @@ test('新一轮弹码作废旧刷新句柄（旧在途请求仍会跑完但不�
   assert.equal(refreshes, 2, '弹码后必须用新验证码重新刷新')
   oldRefresh.resolve()
   await old
+})
+
+test('旧身份迟到的 428 不弹码、不刷新、不重放', async () => {
+  let current = false
+  const calls: string[] = []
+  const result = await runMfaStepUpRequest({
+    isCurrent: () => current,
+    prompt: async () => { calls.push('prompt'); return '123456' },
+    refresh: async () => { calls.push('refresh') },
+    replay: async () => { calls.push('replay'); return 'unexpected' },
+  })
+  assert.deepEqual(result, { kind: 'stale' })
+  assert.deepEqual(calls, [])
+  current = true
+})
+
+test('弹码期间换号后不得刷新；刷新后换号不得重放', async () => {
+  let current = true
+  const calls: string[] = []
+  const switchedBeforeRefresh = runMfaStepUpRequest({
+    isCurrent: () => current,
+    prompt: async () => { current = false; return '123456' },
+    refresh: async () => { calls.push('refresh') },
+    replay: async () => { calls.push('replay'); return 'unexpected' },
+  })
+  assert.deepEqual(await switchedBeforeRefresh, { kind: 'stale' })
+  assert.equal(calls.length, 0)
+
+  current = true
+  const switchedBeforeReplay = await runMfaStepUpRequest({
+    isCurrent: () => current,
+    prompt: async () => '123456',
+    refresh: async () => { calls.push('refresh'); current = false },
+    replay: async () => { calls.push('replay'); return 'unexpected' },
+  })
+  assert.deepEqual(switchedBeforeReplay, { kind: 'stale' })
+  assert.deepEqual(calls, ['refresh'])
+})
+
+test('当前身份 428 正常重放；同账号并发刷新后各自只重放一次', async () => {
+  let current = true
+  const calls: string[] = []
+  const run = () => runMfaStepUpRequest({
+    isCurrent: () => current,
+    prompt: async () => '123456',
+    refresh: async () => { calls.push('refresh') },
+    replay: async () => { calls.push('replay'); return calls.length },
+    onVerified: () => { calls.push('verified') },
+  })
+  const results = await Promise.all([run(), run()])
+  assert.deepEqual(results.map((result) => result.kind), ['replayed', 'replayed'])
+  assert.equal(calls.filter((call) => call === 'replay').length, 2)
+  assert.equal(calls.filter((call) => call === 'refresh').length, 2, '编排函数本身不伪造单飞；单飞由 createMfaStepUp 注入')
+  assert.equal(calls.filter((call) => call === 'verified').length, 2)
+})
+
+test('当前身份取消弹码返回 cancelled，且不刷新、不重放', async () => {
+  const calls: string[] = []
+  const result = await runMfaStepUpRequest({
+    isCurrent: () => true,
+    prompt: async () => null,
+    refresh: async () => { calls.push('refresh') },
+    replay: async () => { calls.push('replay'); return 'unexpected' },
+  })
+  assert.deepEqual(result, { kind: 'cancelled' })
+  assert.deepEqual(calls, [])
 })
 
 // ── createMfaGraceTracker ──────────────────────────────────────────

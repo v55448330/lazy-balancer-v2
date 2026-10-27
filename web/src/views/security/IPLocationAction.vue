@@ -115,7 +115,7 @@ import type { IpListOption } from '@/composables/useIpListAdd'
 import { aclAssociateSides, inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, ensureSharedEntriesMissing, sharedEntriesCache, subscribeSharedEntriesCache, mergeIpEntryValues, trustHitMode } from '@/utils/securityStages'
 import { popperViewportSafe } from '@/utils/popper'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
-import { planTrustRemoval } from '@/utils/trustRemoval'
+import { planTrustRemoval, classifyTrustRemovalVerification } from '@/utils/trustRemoval'
 import type { APIResponse } from '@/types'
 
 // 列表接口与详情接口共用同一组 SELECT 列，列表行直接携带完整 ACL 字段
@@ -749,9 +749,16 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
     // 来源，沿用决策时的快照会再次把「仍被信任」报成「已取消信任」。
     const afterWrite = await fetchDetail(policy.id).catch(() => null)
     const afterMissing = afterWrite ? await refreshTrustEntries(parseRefIds(afterWrite.ip_whitelist_refs)) : []
-    const residualAfterWrite = afterWrite && afterMissing.length === 0 ? buildPlan(afterWrite).residualSources : residualTrustSources
-    if (residualAfterWrite.length > 0) {
-      ElMessage.warning(`已移除 ${trimmedIp.value} 的可移除信任条目；但该 IP 仍由${residualAfterWrite.join('、')}提供信任，拦截尚未恢复`)
+    const afterPlan = afterWrite && afterMissing.length === 0 ? buildPlan(afterWrite) : null
+    const verification = classifyTrustRemovalVerification({
+      detailLoaded: afterWrite !== null,
+      missingListIds: afterMissing,
+      residualSources: afterPlan?.residualSources ?? [],
+    })
+    if (verification === 'unknown') {
+      ElMessage.warning('移除请求已提交，但最新信任状态核对失败，请刷新确认')
+    } else if (verification === 'residual') {
+      ElMessage.warning(`已移除 ${trimmedIp.value} 的可移除信任条目；但该 IP 仍由${(afterPlan?.residualSources ?? []).join('、')}提供信任，拦截尚未恢复`)
     } else {
       mfaAwareSuccess(`已取消 ${trimmedIp.value} 对「${policy.name}」的信任`)
     }

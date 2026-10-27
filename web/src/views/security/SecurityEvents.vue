@@ -169,7 +169,7 @@
           <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库命中（id 14）" />
           <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
           <el-option label="WAF·CRS" value="WAF·CRS" title="OWASP CRS 规则全集（9xxxxx）" />
-          <el-option label="WAF·自定义" value="WAF·自定义" title="自定义规则库（10000-799999）与合成规则（1000000+）" />
+          <el-option label="WAF·自定义" value="WAF·自定义" title="自定义规则库（含 AND 链式规则、OR 条件分支与旧版合成规则）" />
         </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 115px" @keyup.enter="applyFilters" />

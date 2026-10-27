@@ -117,21 +117,22 @@ interface Site {
 }
 
 /**
- * 变量载荷的信封解析：在同一函数体内找最近的
- * `ident := models.APIResponse{Code: X}` / `ident := gin.H{"code": X}`。
- * 找不到（变量来自函数调用/其它结构体/多段拼装）→ 交给调用侧登记为非信封站点。
+ * 变量载荷只按调用点前最后一次赋值判定。先定位任意赋值（含多返回值），
+ * 再尝试解析这一次 RHS；不得让更早的合法信封覆盖后续函数/拼装载荷。
  */
 const resolveVariableEnvelope = (go: string, callIndex: number, status: string, ident: string): Envelope | undefined => {
   const funcStart = Math.max(go.lastIndexOf('\nfunc ', callIndex), 0)
   const body = go.slice(funcStart, callIndex)
   const escaped = ident.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const assignment = new RegExp(
-    `(?:^|[^\\w.])${escaped}\\s*:?=\\s*(?:models\\.APIResponse\\{\\s*Code:|gin\\.H\\{\\s*"(?:code|Code)"\\s*:)\\s*((?:http\\.Status[A-Za-z]+)|[A-Za-z_][\\w.]*|\\d+)`,
-    'g',
-  )
-  const matches = [...body.matchAll(assignment)]
-  const last = matches[matches.length - 1]
-  return last ? { status, code: last[1], index: callIndex } : undefined
+  const assignments = [...body.matchAll(/^[ \t]*(.+?)\s*:?=\s*/gm)]
+    .filter((match) => new RegExp(`(?:^|,)\\s*${escaped}\\s*(?:,|$)`).test(match[1]))
+  const last = assignments[assignments.length - 1]
+  if (!last) return undefined
+  // 多返回值/分支合流不能由单变量信封证明，保守归为非信封站点。
+  if (last[1].includes(',')) return undefined
+  const rhs = body.slice((last.index ?? 0) + last[0].length)
+  const envelope = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/.exec(rhs)
+  return envelope ? { status, code: envelope[1], index: callIndex } : undefined
 }
 
 interface ScanResult {
@@ -263,6 +264,20 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
   assert.deepEqual(unresolved.sites.map((site) => site.shape), ['var:response'])
   const helperPayload = scan('c.JSON(http.StatusInternalServerError, systemInternalFailure("读取失败", err))')
   assert.deepEqual(helperPayload.sites.map((site) => site.shape), ['call:systemInternalFailure'])
+  // 旧合法信封不得遮蔽最后一次函数/多返回值赋值；只有最后赋值仍为信封才可证明。
+  for (const fixture of [
+    'resp := models.APIResponse{Code: 0}\n\tresp = buildResponse()\n\tc.JSON(http.StatusOK, resp)',
+    'resp := models.APIResponse{Code: 0}\n\tresp, err := buildResponse()\n\tc.JSON(http.StatusOK, resp)',
+    'resp := models.APIResponse{Code: 0}\n\tresp = models.OtherResponse{Code: 500}\n\tc.JSON(http.StatusOK, resp)',
+  ]) {
+    const result = scan(fixture)
+    assert.equal(result.pairs.length, 0, `旧信封不得覆写未知载荷：${fixture}`)
+    assert.deepEqual(result.sites.map((site) => site.shape), ['var:resp'])
+  }
+  const latest = scan('resp := models.APIResponse{Code: 0}\n\tresp = models.APIResponse{Code: 409}\n\tc.JSON(http.StatusConflict, resp)')
+  assert.deepEqual(latest.pairs.map(({ status, code }) => ({ status, code })), [
+    { status: 'http.StatusConflict', code: '409' },
+  ], '最后一次仍是信封时只采用最后值')
 })
 
 /**
@@ -284,7 +299,7 @@ const SUCCESS_ENVELOPE_WHITELIST: Record<string, true> = {
 const NON_ENVELOPE_SITES: Record<string, number> = {
   'internal/handlers/auth.go#Login#literal:gin.H': 1,
   'internal/handlers/auth.go#respondLoginWithMFA#literal:models.LoginResponse': 1,
-  'internal/handlers/autoban.go#GetAutobanConfig#call:services.GetAutobanConfig': 1,
+  'internal/handlers/autoban.go#GetAutobanConfig#var:cfg': 1,
   'internal/handlers/cluster_ticket.go#GenerateClusterLoginTicket#var:response': 1,
   'internal/handlers/crawlerlib.go#GetCrawlerLib#call:crawlerLibInternalError': 4,
   // 威胁库/爬虫库「源开关」端点收敛到共享状态机（门序/三分支错误映射/审计骨架

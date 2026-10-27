@@ -1,40 +1,113 @@
 package handlers
 
 import (
+	"github.com/gin-gonic/gin"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
 
-// 渲染消费字段清单决定保存是否触发 Caddy 重载。此表是「单一真相」的守卫：
-// 任何渲染侧新增读取的 global_config 列，必须同时出现在 fieldAffectsCaddy
-// 与这里的 true 组，否则保存只写库、运行配置永不更新。
-func TestPlanConfigChanges_affectsCaddyClassification(t *testing.T) {
-	caddyFields := []string{
-		"caddy_log_level", "caddy_log_size_mb",
-		"request_body_max_size_mb",
-		"http_read_timeout", "http_write_timeout", "http_idle_timeout",
-		"upstream_keepalive_timeout",
-		"proxy_dial_timeout", "proxy_response_header_timeout",
-		"proxy_read_timeout", "proxy_write_timeout", "proxy_stream_timeout",
-		"proxy_flush_interval", "proxy_stream_close_delay",
-		"server_tokens_hidden",
-		"access_log_json", "access_log_format",
-		"trusted_proxy_enabled", "trusted_proxy_ranges", "trusted_proxy_range_refs",
-		"trusted_proxy_headers", "trusted_proxy_strict",
+// rendererGlobalConfigFields 从真实渲染 SQL 派生读取列，不再在测试里维护
+// 第二份 true 清单。扫描 caddy.go 全部 SELECT...FROM global_config，新增
+// 渲染 helper 也自动进入对账面。
+func rendererGlobalConfigFields(t *testing.T) map[string]bool {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "../services/caddy.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse services/caddy.go: %v", err)
 	}
-	for _, field := range caddyFields {
-		if !fieldAffectsCaddy(field) {
-			t.Fatalf("%s 被渲染消费，必须影响 Caddy（否则保存不重载）", field)
+	identifier := regexp.MustCompile(`[a-z][a-z0-9_]*`)
+	quotedString := regexp.MustCompile(`'[^']*'`)
+	ignored := map[string]bool{"coalesce": true, "true": true, "false": true}
+	fields := map[string]bool{}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		literal, ok := node.(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			return true
+		}
+		query, err := strconv.Unquote(literal.Value)
+		if err != nil {
+			return true
+		}
+		upper := strings.ToUpper(query)
+		selectAt, fromAt := strings.Index(upper, "SELECT"), strings.Index(upper, "FROM GLOBAL_CONFIG")
+		if selectAt < 0 || fromAt < selectAt {
+			return true
+		}
+		columns := quotedString.ReplaceAllString(query[selectAt+len("SELECT"):fromAt], "")
+		for _, name := range identifier.FindAllString(columns, -1) {
+			if !ignored[name] {
+				fields[name] = true
+			}
+		}
+		return true
+	})
+	if len(fields) == 0 {
+		t.Fatal("renderer global_config scan returned no columns; scanner drift must fail loudly")
+	}
+	return fields
+}
+
+func declaredCaddyFields(t *testing.T) map[string]bool {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "config_changes.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse config_changes.go: %v", err)
+	}
+	fields := map[string]bool{}
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "fieldAffectsCaddy" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			clause, ok := node.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, expression := range clause.List {
+				literal, ok := expression.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("fieldAffectsCaddy case must use string literals, got %T", expression)
+				}
+				name, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("unquote fieldAffectsCaddy case: %v", err)
+				}
+				fields[name] = true
+			}
+			return true
+		})
+	}
+	return fields
+}
+
+func TestFieldAffectsCaddy_matchesRendererGlobalConfigReads(t *testing.T) {
+	rendered := rendererGlobalConfigFields(t)
+	declared := declaredCaddyFields(t)
+	for field := range rendered {
+		if !declared[field] || !fieldAffectsCaddy(field) {
+			t.Errorf("renderer consumes %s but fieldAffectsCaddy does not register it", field)
 		}
 	}
+	for field := range declared {
+		if !rendered[field] {
+			t.Errorf("fieldAffectsCaddy registers %s but renderer never reads it", field)
+		}
+	}
+}
+
+func TestPlanConfigChanges_nonCaddyFieldsDoNotReload(t *testing.T) {
 	for _, field := range []string{
 		"acme_email", "dns_provider", "cert_expiry_days", "cert_renewal_days",
 		"cert_renewal_attempts", "default_ca_provider_id", "log_level", "timezone",

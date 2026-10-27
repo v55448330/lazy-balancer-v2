@@ -247,8 +247,13 @@ func TestTaskLogf_SecurityEventsRetentionFailureSaysFailed(t *testing.T) {
 	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize metrics database: %v", err)
 	}
-	// 指标库表不可用 → 清理返回 err（真实失败面）
+	// 指标库表不可用 → 清理在就绪判据处返回 err（真实失败面）。security_events
+	// 与 metrics_state 同时破坏，避免“仅事件表缺失 + 回填未就绪→按跳过成功”的
+	// 合法降级掩盖失败语义。
 	if _, err := db.MetricsDB.Exec(`ALTER TABLE security_events RENAME TO security_events_v87`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`ALTER TABLE metrics_state RENAME TO metrics_state_v87`); err != nil {
 		t.Fatal(err)
 	}
 	_ = te.Trigger("security-events-retention", "manual", "")

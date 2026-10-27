@@ -196,6 +196,9 @@ func TestBuildCRSRuleIndex_logsReadFailure(t *testing.T) {
 	if err := os.WriteFile(unreadable, []byte(`SecRule X "@rx a" "id:942100,phase:2,deny,msg:'x'"`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略文件权限位，无法构造索引读失败")
+	}
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}

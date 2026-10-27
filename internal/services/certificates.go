@@ -1443,11 +1443,13 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 		Logf("warn", "waiting_ca scan: %d 行读取失败已跳过，其余行照常处置", len(scanErrors))
 		err = errors.Join(err, fmt.Errorf("CA 冷却任务扫描有 %d 行读取失败（结果不完整）: %w", len(scanErrors), errors.Join(scanErrors...)))
 	}()
+	var actionErr error
 
 	for _, job := range jobs {
 		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
 				if !errors.Is(err, ErrJobTransitionConflict) {
+					actionErr = errors.Join(actionErr, fmt.Errorf("禁用孤儿 CA 冷却任务 %d: %w", job.id, err))
 					Logf("error", "waiting_ca scan: disable orphaned job %d failed: %v", job.id, err)
 				}
 				continue
@@ -1464,6 +1466,7 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 			return job.id, err == nil, err
 		})
 		if err != nil {
+			actionErr = errors.Join(actionErr, fmt.Errorf("重排 CA 冷却任务 %d（规则 %s）: %w", job.id, job.ruleID, err))
 			Logf("error", "waiting_ca scan: failed to requeue job %d: %v", job.id, err)
 			continue
 		}
@@ -1474,7 +1477,7 @@ func (s *CertificateService) requeueWaitingCAJobs() (requeued, disabled int, err
 		RecordAuditLog("system", "重新排队", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
 	}
 	// 单行读取失败的聚合见扫描阶段末尾的 defer（扫描失败不得记为成功轮）。
-	return requeued, disabled, err
+	return requeued, disabled, errors.Join(err, actionErr)
 }
 
 // recoverCertJobs re-enqueues cert jobs that were not in a terminal state when
@@ -2055,9 +2058,10 @@ func BackfillMissingACMECertJobs(ctx context.Context, qm *CAQueueManager) (int, 
 	rows.Close()
 
 	created := 0
+	var actionErr error
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
-			return created, err
+			return created, errors.Join(actionErr, ctx.Err())
 		}
 		list := normalizeAndValidateDomains(candidate.domain)
 		if list == nil {
@@ -2069,11 +2073,14 @@ func BackfillMissingACMECertJobs(ctx context.Context, qm *CAQueueManager) (int, 
 		// 写前门：补建=新增任务行（含入队），从节点落定会与主节点重复签发。
 		if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
 			Logf("warn", "证书任务补建前写门拦截（rule=%s）: %v", candidate.ruleID, gateErr)
-			return created, gateErr
+			return created, errors.Join(actionErr, gateErr)
 		}
 		jobID, changed, uerr := upsertQueuedCertJob(candidate.ruleID, list, candidate.caProvider)
 		if uerr != nil {
 			Logf("error", "证书任务补建失败 rule=%s: %v", candidate.ruleID, uerr)
+			if !errors.Is(uerr, ErrCertRuleStateConflict) {
+				actionErr = errors.Join(actionErr, fmt.Errorf("补建规则 %s 证书任务: %w", candidate.ruleID, uerr))
+			}
 			continue
 		}
 		if changed {
@@ -2086,6 +2093,7 @@ func BackfillMissingACMECertJobs(ctx context.Context, qm *CAQueueManager) (int, 
 		if _, _, eerr := qm.EnqueueIfActive(candidate.caProvider, jobID, candidate.ruleID, strings.Join(list, ","), func() (int, bool, error) {
 			return jobID, true, nil
 		}); eerr != nil {
+			actionErr = errors.Join(actionErr, fmt.Errorf("补建后入队规则 %s 任务 %d: %w", candidate.ruleID, jobID, eerr))
 			Logf("warn", "证书任务补建后入队失败 rule=%s job=%d（行保持 queued，恢复补扫接管）: %v", candidate.ruleID, jobID, eerr)
 		}
 	}
@@ -2093,7 +2101,7 @@ func BackfillMissingACMECertJobs(ctx context.Context, qm *CAQueueManager) (int, 
 		Logf("info", "证书任务补建：为 %d 个启用 ACME 规则创建排队任务", created)
 		RecordAuditLog("system", "创建", "证书任务", FormatAuditDetail(AuditSourcePart("promote_or_startup"), fmt.Sprintf("为 %d 个启用 ACME 规则补建证书任务", created)), "")
 	}
-	return created, nil
+	return created, actionErr
 }
 
 // HasCertJob reports whether any certificate job row exists for the given
@@ -2185,6 +2193,7 @@ func (s *CertificateService) renewExpiringCertificates() error {
 	} else {
 		TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务：%s%s", len(jobs), strings.Join(domains, "、"), skippedNote)
 	}
+	var actionErr error
 
 	for idxRenewalJob, j := range jobs {
 		if j.RenewalAttempts >= maxAttempts {
@@ -2197,6 +2206,9 @@ func (s *CertificateService) renewExpiringCertificates() error {
 					"ca_available_after": nil,
 					"last_error_code":    nil,
 				}); err != nil {
+					if !errors.Is(err, ErrJobTransitionConflict) {
+						actionErr = errors.Join(actionErr, fmt.Errorf("续期任务 %d（规则 %s）转为失败终态: %w", j.ID, j.RuleID, err))
+					}
 					Logf("error", "Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
 				} else {
 					RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
@@ -2214,7 +2226,7 @@ func (s *CertificateService) renewExpiringCertificates() error {
 		if qm == nil {
 			Logf("error", "Renewal: CA queue manager not initialized")
 			TaskLogf("cert-renewal-scan", "scan", "续期中止：CA 队列未初始化，剩余 %d 个任务本轮未入队", len(jobs)-idxRenewalJob)
-			return errors.New("CA 队列未初始化")
+			return errors.Join(actionErr, errors.New("CA 队列未初始化"))
 		}
 		// 入口只做一次角色检查，而本 Run 体不消费
 		// rc.Ctx（SetRole 取消对它是 no-op）——demote 落在最长 6h 扫描/多任务
@@ -2229,12 +2241,15 @@ func (s *CertificateService) renewExpiringCertificates() error {
 		if roleErr != nil {
 			// 与入口同口径：读失败不猜测角色，中止本轮。
 			TaskLogf("cert-renewal-scan", "scan", "续期中止：入队前复核节点角色失败（%v），剩余 %d 个任务本轮未入队，下一周期重试", roleErr, len(jobs)-idxRenewalJob)
-			return fmt.Errorf("续期入队前复核节点角色: %w", roleErr)
+			return errors.Join(actionErr, fmt.Errorf("续期入队前复核节点角色: %w", roleErr))
 		}
 		if !masterNow {
 			TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描期间节点已切换为从节点，剩余 %d 个任务本轮未入队（从节点不签发）", len(jobs)-idxRenewalJob)
 			// 降级终态=skipped 哨兵（与入口复核同口径）——return nil 会把
 			// 中止轮记成 success。
+			if actionErr != nil {
+				return actionErr
+			}
 			return taskengine.ErrTaskSkipped
 		}
 		message := "等待排队续期"
@@ -2260,6 +2275,7 @@ func (s *CertificateService) renewExpiringCertificates() error {
 			return j.ID, err == nil, err
 		})
 		if err != nil {
+			actionErr = errors.Join(actionErr, fmt.Errorf("续期入队任务 %d（规则 %s）: %w", j.ID, j.RuleID, err))
 			Logf("error", "Renewal: failed to update job %d status: %v", j.ID, err)
 			continue
 		}
@@ -2278,7 +2294,7 @@ func (s *CertificateService) renewExpiringCertificates() error {
 		}
 		RecordAuditLog("system", action, "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart(source)), "")
 	}
-	return nil
+	return actionErr
 }
 
 // manualCertExpiryCheckMu 串行化手动证书巡检的扫描体：包级巡检（服务实例

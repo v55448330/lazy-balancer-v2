@@ -13,6 +13,28 @@ import { importSummaryLabel } from '../src/utils/importSummaryLabels.ts'
 import { code, repoCode, section } from './_helpers.ts'
 
 const deferred = <T>() => Promise.withResolvers<T>()
+const instrumentBlobReads = (content: Blob) => {
+  const slices: Array<[number, number]> = []
+  const reads: number[] = []
+  const wholeReads: number[] = []
+  const slice = content.slice.bind(content)
+  const arrayBuffer = content.arrayBuffer.bind(content)
+  content.slice = (start?: number, end?: number, contentType?: string): Blob => {
+    slices.push([start ?? 0, end ?? content.size])
+    const part = slice(start, end, contentType)
+    const readPart = part.arrayBuffer.bind(part)
+    part.arrayBuffer = async (): Promise<ArrayBuffer> => {
+      reads.push(part.size)
+      return readPart()
+    }
+    return part
+  }
+  content.arrayBuffer = async (): Promise<ArrayBuffer> => {
+    wholeReads.push(content.size)
+    return arrayBuffer()
+  }
+  return { slices, reads, wholeReads }
+}
 
 test('同一份备份 + 同一分类集合只发一次请求（回到已看过的分类不重传）', async () => {
   const sent: string[] = []
@@ -103,13 +125,23 @@ test('内容指纹：采样内容 + 长度决定，同一内容稳定、不同�
   assert.equal(await importPreviewFingerprint(text), await importPreviewFingerprint(text))
 })
 
-test('内容指纹只采样首尾（不把整份备份复制成第二个 ArrayBuffer）', async () => {
-  const big = 'x'.repeat(4 * 1024 * 1024)
-  const start = Date.now()
-  await importPreviewFingerprint(new Blob([big]))
-  assert.ok(Date.now() - start < 2000, '指纹必须是采样级开销，不能整份读入')
-  // 采样边界的可观测形态：仅中段不同（首尾采样窗口相同、长度相同）→ 同一指纹
-  // （缓存复用的是「同一份备份」；内容完整性由后端校验和负责）
+test('内容指纹只读取首尾两个采样窗口（不整读 Blob）', async () => {
+  const sample = 512 * 1024
+  const big = new Blob(['x'.repeat(4 * 1024 * 1024)])
+  const io = instrumentBlobReads(big)
+  await importPreviewFingerprint(big)
+  assert.deepEqual(io.slices, [[0, sample], [big.size - sample, big.size]], '必须恰好切首、尾两个窗口')
+  assert.deepEqual(io.reads, [sample, sample], '实际 arrayBuffer 读取量必须等于两个采样窗口')
+  assert.deepEqual(io.wholeReads, [], '不得直接整读原 Blob')
+
+  const small = new Blob(['x'.repeat(1024)])
+  const smallIO = instrumentBlobReads(small)
+  await importPreviewFingerprint(small)
+  assert.deepEqual(smallIO.slices, [[0, sample], [0, small.size]], '小文件尾部起点必须钳到 0')
+  assert.deepEqual(smallIO.reads, [small.size, small.size])
+  assert.deepEqual(smallIO.wholeReads, [])
+
+  // 采样语义：仅中段不同（首尾窗口与长度相同）仍得到同一缓存键。
   const head = 'a'.repeat(600 * 1024)
   const tail = 'z'.repeat(600 * 1024)
   const left = `${head}${'m'.repeat(2048)}${tail}`

@@ -18,7 +18,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -128,7 +127,7 @@ func TestUpdateAdminTLS_acceptsMaxSizePairOnBothChannels(t *testing.T) {
 			exitProcess = func(int) { exited <- struct{}{} }
 			t.Cleanup(func() { exitProcess = oldExit })
 
-			h := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+			h := newAdminTLSHandlers(t)
 			router := gin.New()
 			router.PUT("/admin-tls", h.UpdateAdminTLS)
 			var request *http.Request

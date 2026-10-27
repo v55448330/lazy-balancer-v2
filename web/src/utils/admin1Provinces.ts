@@ -1,5 +1,5 @@
 // 全球省级行政界（威胁大屏 v7 B 方案省级下钻）：Natural Earth 10m admin-1
-// states_provinces 全量（4596 要素/243 国），构建期一次性转换静态入库
+// states_provinces 全量（4600 要素/251 个国家和地区键，含特殊地区），构建期一次性转换静态入库
 // （容差 0.04° + 2 位小数 ≈1km），运行时零外部请求。
 // 结构：国家中文键（与 worldBorders/countryCentroids/国家命中计数一致；
 // geoipnames.CountryNamesCN 未收录者保留英文原名，消费方走兜底）→

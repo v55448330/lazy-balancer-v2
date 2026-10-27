@@ -425,7 +425,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 锚点，短陈旧不可感知，响应以 total_stale 披露来源（不静默）。
 	total, totalStale, err := cachedAuditLogTotal(c.Request.Context(), db.AuditDB, where, args)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询操作日志失败"})
+		writeInternalError(c, http.StatusInternalServerError, "查询操作日志失败", fmt.Errorf("统计操作日志总数: %w", err))
 		return
 	}
 
@@ -440,7 +440,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		FROM audit_log`+where+`
 		ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, pageSize, offset)...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询操作日志失败"})
+		writeInternalError(c, http.StatusInternalServerError, "查询操作日志失败", fmt.Errorf("查询操作日志明细: %w", err))
 		return
 	}
 	defer rows.Close()

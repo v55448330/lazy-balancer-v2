@@ -913,8 +913,8 @@
             <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
 
             <el-form-item label="请求体大小">
-              <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="4096" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">MB，0 = 全局默认；限制单个请求体的最大大小</span>
+              <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="1024" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">MB，0 = 全局默认；最大 1024，限制单个请求体的最大大小</span>
             </el-form-item>
 
             <el-form-item label="Keepalive 超时">

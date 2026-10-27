@@ -32,9 +32,9 @@ var (
 	crawlerIPListMigrate  = migrateCrawlerIPListNames
 )
 
-// crawlerBaselineSet 单次 RunUpdate 共享的名单基线快照：收缩门/扩张门
-// 各需一份「DB 名单行条数」基线，逐门全量读 = 每源 2 次全表读+JSON 解析。
-// 单轮内基线稳定（upsert 只写本源行，其他源基线不受影响），整轮共享一份；
+// crawlerBaselineSet 单次 RunUpdate 共享的名单基线快照：收缩门读取
+// 「DB 名单行条数」基线。单轮内基线稳定（upsert 只写本源行，其他源基线不受影响），
+// 整轮共享一份；
 // 读取失败记忆化同一错误（与逐次读取的失败口径一致——基线读失败按源失败
 // 处理，方向安全）。
 type crawlerBaselineSet struct {
@@ -87,7 +87,7 @@ type CrawlerUpdateManager struct{}
 //     复用同一覆盖率判定，注释所称「同口径」即同一函数）。
 //
 // 引擎未声明官方段时无可对照口径，原样放行（收缩门 crawlerSnapshotShrinkGuard
-// 与扩张门 crawlerSnapshotGrowthGuard 仍兜底条数塌缩/膨胀）。
+// 与绝对条数上限仍兜底条数塌缩/异常膨胀）。
 func validateCrawlerEntriesSanity(engineID string, entries []string) ([]string, error) {
 	if len(entries) == 0 {
 		return nil, errors.New("解析无产出（疑似错误页/限流页），保留上次快照")
@@ -234,33 +234,14 @@ func crawlerSnapshotShrinkGuard(engineID string, newCount int, set *crawlerBasel
 const CrawlerIPListEntryCap = 2000
 
 // crawlerSnapshotGrowthGuard 条数扩张门：源响应上限
-// 16MB，通用 CIDR 提取后可产出数十万条，此前只有收缩门（防塌缩），膨胀会直接
-// 放大 DB 行、crawler-ip-lists.json、插件每 10min 重载的前缀表与渲染期内存，
-// 并绕过产品 2000 条口径。两道门：
-//  1. 绝对上限 CrawlerIPListEntryCap（无对照基线的引擎同样受约束）；
-//  2. 相对上限：较当前快照膨胀一倍以上（官方名单规模稳定，翻倍即视为劫持/
-//     污染），无对照基线时不适用。
-//
+// 16MB，通用 CIDR 提取后可产出数十万条，膨胀会放大 DB 行、
+// crawler-ip-lists.json、插件每 10min 重载的前缀表与渲染期内存。
+// 仅保留绝对上限 CrawlerIPListEntryCap；相对当前快照的合法扩张不拒绝。
 // 拒绝时保留上次快照；调用方按源失败留痕（任务日志 ERROR + 源状态 failed +
 // 运行审计「更新失败」），不在此重复记录。
-// set 语义同 crawlerSnapshotShrinkGuard（非 nil=单轮共享预读基线）。
-func crawlerSnapshotGrowthGuard(engineID string, newCount int, set *crawlerBaselineSet) error {
+func crawlerSnapshotGrowthGuard(newCount int) error {
 	if newCount > CrawlerIPListEntryCap {
 		return fmt.Errorf("解析条数 %d 超过系统名单上限 %d 条，拒绝写入（保留上次快照）", newCount, CrawlerIPListEntryCap)
-	}
-	var baseline int
-	var known bool
-	var err error
-	if set != nil {
-		baseline, known, err = set.baseline(engineID)
-	} else {
-		baseline, known, err = crawlerSnapshotBaseline(engineID)
-	}
-	if err != nil {
-		return fmt.Errorf("读取爬虫名单基线失败: %w", err)
-	}
-	if known && baseline > 0 && newCount > baseline*2 {
-		return fmt.Errorf("解析条数 %d 较当前快照 %d 膨胀超过一倍（疑似劫持/污染），拒绝写入（保留上次快照）；如确认上游名单合法扩张，需人工清理基线后重试", newCount, baseline)
 	}
 	return nil
 }
@@ -446,9 +427,8 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 			perr = crawlerSnapshotShrinkGuard(src.Name, len(entries), &baselines)
 		}
 		if perr == nil {
-			// 条数扩张门——绝对 2000 条上限 + 较当前快照翻倍拒绝
-			// （源响应可达 16MB，无上限会绕过产品口径放大系统名单）。
-			perr = crawlerSnapshotGrowthGuard(src.Name, len(entries), &baselines)
+			// 条数扩张门——仅绝对 2000 条上限，合法相对扩张不拒绝。
+			perr = crawlerSnapshotGrowthGuard(len(entries))
 		}
 		if perr != nil {
 			if firstErr == nil {

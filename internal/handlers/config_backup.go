@@ -343,7 +343,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":              {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":          {"enabled"},
 	"certificate_configs":   {"enabled"},
-	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection"}, // ip_whitelist_enabled 补入;： trust_detection 补入(阶段 0 检测开关,同 BOOLEAN NOT NULL 布尔族)
+	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection", "geoip_crawler_exempt"},
 	"security_custom_rules": {"enabled"},
 	// is_builtin（INTEGER DEFAULT 0）为内置页语义布尔列。
 	"security_block_pages":       {"is_default", "is_builtin"},
@@ -499,11 +499,11 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
 		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
-		"log_request_body": int64(0),
+		"log_request_body": int64(0), "geoip_crawler_exempt": int64(0), "geoip_crawler_engines": "[]",
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
 	"security_custom_rules": {
-		"description": "", "conditions": "[]", "action": "block", "score": int64(5),
+		"description": "", "conditions": "[]", "condition_logic": "and", "action": "block", "score": int64(5),
 		"enabled": int64(1), "updated_by": int64(0), "created_at": "", "updated_at": "",
 	},
 	"security_block_pages": {
@@ -1506,9 +1506,13 @@ func validateImportedSecurityCustomRules(rows []map[string]any) error {
 		// 归一为同一默认值。本校验在 checksum 之前执行，不得回写行数据（回写会让
 		// 自带校验和的备份误报篡改），故只做读取侧替换。
 		rule := models.SecurityCustomRule{
-			Name:   fmt.Sprintf("%v", row["name"]),
-			Action: "block",
-			Score:  5,
+			Name:           fmt.Sprintf("%v", row["name"]),
+			ConditionLogic: "and",
+			Action:         "block",
+			Score:          5,
+		}
+		if rawLogic := row["condition_logic"]; rawLogic != nil {
+			rule.ConditionLogic = fmt.Sprintf("%v", rawLogic)
 		}
 		if rawAction := row["action"]; rawAction != nil {
 			rule.Action = fmt.Sprintf("%v", rawAction)
@@ -2573,11 +2577,12 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
 			input.PathRules = normalizePathRules(pathRules)
 		}
-		// 规则级 request_body_max_size_mb 导入钳制 [0,4096]（写回行
-		// 数据，restoreTable 直写不再携带越界值）——只钳了全局
-		// backup.Config，行级向量经 restoreTable 原样落库，渲染侧 MB→字节
-		// int64 乘法回绕会让该规则的 body 限制静默取消。
+		// 规则级请求体上限与保存侧同值域；超过 Coraza 1GiB 上限拒绝导入，
+		// 其余历史非法形态仍按既有兼容规则归一。
 		if rawBody, exists := rule["request_body_max_size_mb"]; exists {
+			if n, integerShape := backupInteger(rawBody); integerShape && n > maxRequestBodySizeMB {
+				return fmt.Errorf("request_body_max_size_mb 必须在 0-%d MB 之间", maxRequestBodySizeMB)
+			}
 			rule["request_body_max_size_mb"] = normalizeBackupRequestBodyMB(rawBody, 0, 0)
 		}
 		// 库值唯一真相（批 1+2）：健康检查族/tcp_try_interval 为类型①值型列，
@@ -3333,6 +3338,11 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		if geoIPMode == "" {
 			geoIPMode = "deny"
 		}
+		crawlerExempt := backupBooleanEnabled(policy["geoip_crawler_exempt"])
+		if err := validatePolicyCrawlerExemption(crawlerExempt, backupString(policy["geoip_crawler_engines"]), geoIPMode); err != nil {
+			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+		}
+		policy["geoip_crawler_exempt"] = crawlerExemptBool(crawlerExempt, geoIPMode != "" && geoIPMode != "off")
 		if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, 0, 0); err != nil {
 			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 		}
@@ -4665,8 +4675,8 @@ func normalizeBackupRequestBodyMB(value any, min, fallback int) int {
 	if !ok || n < min {
 		return fallback
 	}
-	if n > 4096 {
-		return 4096
+	if n > maxRequestBodySizeMB {
+		return maxRequestBodySizeMB
 	}
 	return n
 }
@@ -4901,8 +4911,8 @@ type backupConfigClampRule struct {
 }
 
 var backupConfigClampRules = []backupConfigClampRule{
-	{Key: "jwt_expire_minutes", Lo: 1, Hi: 1440, Def: 20, ResetOnHigh: true},
-	{Key: "audit_retention_months", Lo: 1, Hi: 12, Def: 3},
+	{Key: "jwt_expire_minutes", Lo: 1, Hi: 1440, Def: 20, ResetOnHigh: true, ResetOnLow: true},
+	{Key: "audit_retention_months", Lo: 1, Hi: 12, Def: 3, ResetOnLow: true},
 	{Key: "caddy_log_size_mb", Lo: 100, Hi: 10240, Def: 100},
 	{Key: "audit_log_size_mb", Lo: 1, Hi: 512, Def: 10},
 	{Key: "task_log_size_mb", Lo: 1, Hi: 1024, Def: 10},
@@ -6411,6 +6421,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			respondAfterWafFailure(status, message)
 			return
 		}
+	}
+	if wafApply.SecurityDataApplied {
+		// 文件落盘发生在事务内，但成功审计必须等数据库提交确定成功；
+		// 否则 Caddy/Commit 失败回滚文件后会留下与实际终态相反的成功记录。
+		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
 	}
 	// branding_json 只是文件镜像。提交成功后把备份值物化到
 	// branding.json，再刷新镜像与默认页面；否则下一次镜像会把 DB 回写成旧文件。

@@ -10,17 +10,10 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// setupSecurityEnumTestDB 初始化隔离测试库并恢复全局句柄（同 cluster_test.go 惯例）。
+// setupSecurityEnumTestDB 初始化隔离测试库并恢复全部全局句柄。
 func setupSecurityEnumTestDB(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 }
 
 func insertLegacyPolicyRow(t *testing.T, name, mode, ipACLMode, geoipMode string) {

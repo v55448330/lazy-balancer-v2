@@ -576,6 +576,39 @@ func TestGetSecurityEventFeed_ascendingNoLossAndFirstScreenLatest(t *testing.T) 
 	}
 }
 
+func TestGetSecurityEventFeed_rebasesCursorAfterMetricsRebuild(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
+	for i := range 3 {
+		seedThreatScreenEvent(t, utcStringAgo(time.Duration(3-i)*time.Second), fmt.Sprintf("93.184.216.%d", i+1), "942100", "SQL Injection", "blocked")
+	}
+	var maxID int64
+	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := getRequest(t, router, "/security/events/feed?since_id=999")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload feedPayload
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data.Events) != 0 || payload.Data.NextSinceID != maxID || payload.Data.HasMore {
+		t.Fatalf("stale cursor response=%+v, want empty events and next_since_id=%d", payload.Data, maxID)
+	}
+
+	seedThreatScreenEvent(t, utcStringAgo(0), "93.184.216.10", "930100", "LFI", "blocked")
+	recorder = getRequest(t, router, fmt.Sprintf("/security/events/feed?since_id=%d", maxID))
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data.Events) != 1 || int64(payload.Data.Events[0].ID) <= maxID {
+		t.Fatalf("feed did not resume after rebase: %+v", payload.Data.Events)
+	}
+}
+
 func TestGetSecurityEventFeed_defaultsAndNewEventsAfterCursor(t *testing.T) {
 	// Given: 3 条事件
 	setupSecurityPolicyTestDB(t)
@@ -2321,6 +2354,42 @@ func TestThreatFixMinute_fullRebuildKeepsLateArrivals(t *testing.T) {
 	}
 	if total != 4 {
 		t.Fatalf("rollup 总量=%d, want 4（3 条历史 + 1 条迟到）", total)
+	}
+}
+
+func TestThreatFixMinute_fullRebuildPreservesTrimmedHistoryWhenLateTotalMatchesOld(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	minute := time.Date(2026, 10, 19, 12, 5, 0, 0, time.UTC)
+	minuteStr := minute.Format("2006-01-02 15:04")
+	eventTime := minute.Add(30 * time.Second).Format("2006-01-02 15:04:05")
+	for index := range 10 {
+		seedThreatScreenEvent(t, eventTime, fmt.Sprintf("93.184.216.%d", index+1), "942100", "SQL Injection", "blocked")
+	}
+	fixThreatRewindMinute(t, minute)
+	if got, _ := threatRewindRollupTotals(t, minuteStr); got != 10 {
+		t.Fatalf("initial rollup=%d, want 10", got)
+	}
+	if _, err := db.MetricsDB.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events ORDER BY id LIMIT 4)`); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 4 {
+		seedThreatScreenEvent(t, eventTime, fmt.Sprintf("93.184.217.%d", index+1), "942100", "SQL Injection", "blocked")
+	}
+
+	tx, err := db.MetricsDB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := threatFixMinuteWithMode(tx, minute, true); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("fix minute: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := threatRewindRollupTotals(t, minuteStr); got != 14 {
+		t.Fatalf("rollup after partial trim and four late arrivals=%d, want 14", got)
 	}
 }
 

@@ -12,7 +12,9 @@ import {
   aclAssociateSides,
   attachStageDetails,
   blockPageStageCanIntercept,
+  addressAllowDenyConflictText,
   buildStageModel,
+  customRuleCanBlockInMode,
   entryMatchesIp,
   ensureSharedEntries,
   eventDetailRefIds,
@@ -32,6 +34,7 @@ import {
   type SecurityStagePolicy,
   type StageDetailSources,
 } from '../src/utils/securityStages.ts'
+import { code, section } from './_helpers.ts'
 
 const policyOf = (overrides: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy => ({
   id: 1,
@@ -270,6 +273,44 @@ test('阶段可拦截能力门：stage3 关模式/检测无 block 规则、stage
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasAclEntries: true }), true)
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasBlacklistEntries: true }), true)
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasGeoip: true }), true)
+})
+
+test('检测模式拦截页能力：body 规则只记录，URI 规则仍可拦截，其他模式不受相位限制', () => {
+  const body = { id: 1, name: 'body', action: 'block', enabled: true, conditions: [{ target: 'body' }] }
+  const uri = { id: 2, name: 'uri', action: 'block', enabled: true, conditions: [{ target: 'uri' }] }
+  const mixed = { id: 3, name: 'mixed', action: 'block', enabled: true, conditions: [{ target: 'uri' }, { target: 'body' }] }
+  assert.equal(customRuleCanBlockInMode('detection', body), false)
+  assert.equal(customRuleCanBlockInMode('detection', uri), true)
+  assert.equal(customRuleCanBlockInMode('detection', mixed), false, '任一 body 条件会把整条规则归入 phase 2')
+  assert.equal(customRuleCanBlockInMode('detection', { ...uri, conditions: undefined }), true, '缺省条件按无 body 条件处理')
+  assert.equal(customRuleCanBlockInMode('custom_only', body), true)
+  assert.equal(customRuleCanBlockInMode('blocking', body), true)
+  assert.equal(customRuleCanBlockInMode('detection', { ...uri, enabled: false }), false)
+  assert.equal(customRuleCanBlockInMode('detection', { ...uri, action: 'pass' }), false)
+
+  const notes = section(code('src/views/security/SecurityPolicies.vue'), 'const blockPageNotes = ', 'const boundRuleRows = computed')
+  assert.match(notes, /customRuleCanBlockInMode\(form\.value\.mode, rule\)/, '视图能力门必须消费相位感知谓词')
+})
+
+test('地址冲突语义：阶段 0 信任跨策略优先，ACL 与存量信任仍只豁免所属策略', () => {
+  assert.equal(addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: '拒绝策略' }), '允许不跨策略生效，该地址仍会被「拒绝策略」拦截')
+  assert.equal(addressAllowDenyConflictText({ kind: 'trust', policyType: 'mixed', denyPolicyName: '拒绝策略' }), '信任不跨策略生效，该地址仍会被「拒绝策略」拦截')
+  const passthrough = addressAllowDenyConflictText({ kind: 'trust', policyType: 'stage0', trustDetection: false, denyPolicyName: '拒绝策略' })
+  assert.equal(passthrough, '阶段 0 信任跨策略优先生效：直通模式跳过全部安全检测')
+  const detection = addressAllowDenyConflictText({ kind: 'trust', policyType: 'stage0', trustDetection: true, denyPolicyName: '拒绝策略' })
+  assert.equal(detection, '阶段 0 信任跨策略优先生效：保留检测模式仅记录、不拦截')
+  assert.doesNotMatch(passthrough + detection, /仍会被|信任不跨策略/)
+
+  const page = code('src/views/security/SecurityPolicies.vue')
+  const conflicts = section(page, 'const computeBindingConflicts = ', 'const peerPolicyViews = computed')
+  const realtime = section(page, 'const aclSectionAlert = computed', 'const whitelistSectionAlert = computed')
+  const trust = section(page, 'const whitelistSectionAlert = computed', 'const blockPageBroken = ')
+  for (const body of [conflicts, realtime, trust]) {
+    assert.match(body, /addressAllowDenyConflictText\(/, '冲突告警必须按 ACL/信任及阶段类型选择真实语义')
+  }
+  assert.match(conflicts, /ipAclAllowEntries/)
+  assert.match(conflicts, /ipTrustEntries/)
+  assert.match(realtime, /peer\.trustSet/)
 })
 
 test('信任命中语义：非阶段 0 策略恒保留检测（与 trust_detection 无关）', () => {

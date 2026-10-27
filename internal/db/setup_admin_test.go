@@ -212,11 +212,7 @@ func TestIsSetupAdmin_fallsBackWhenNoMarker(t *testing.T) {
 }
 
 func TestInitialize_backfillsSetupAdminFlagOnLegacyDatabase(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// Given 旧库：users 无 is_setup_admin 列，已有启用管理员。
 	dir := t.TempDir()

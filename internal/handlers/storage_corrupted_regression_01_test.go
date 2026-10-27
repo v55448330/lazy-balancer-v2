@@ -58,8 +58,8 @@ func TestUpdateSecurityCustomRuleStorageCorrupted(t *testing.T) {
 	}
 }
 
-// GetCRSRuleContent 的路径门与 404 基线（413 分支需 >1MB 实文件，
-// 路径硬编码 /app 不可注入，钉住可测的两分支）。
+// GetCRSRuleContent 的默认目录下路径门 400 与缺失文件 404 基线；
+// security_crs_rule_content_test.go 通过 crsRulesDir 测试缝互补覆盖 200/413。
 func TestGetCRSRuleContentPathGateAndMissing(t *testing.T) {
 	h := newBackupTestHandlers(t)
 

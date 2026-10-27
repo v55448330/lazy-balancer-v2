@@ -280,15 +280,15 @@ func parseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 
 // GetRuleCertInfo returns parsed certificate info for a single rule.
 // 返回 error 仅表示读取失败（DB 故障必须 fail-visible，不得折叠成
-// 「无证书信息」假成功）；「规则不存在」与「未启用 TLS」仍以 (nil, nil) 表达
+// 「无证书信息」假成功）；「规则不存在」「规则禁用」与「未启用 TLS」仍以 (nil, nil) 表达
 // ——handler 保持 200 + data:null 的既有契约。批量端点 GetRulesCertInfo 走
 // 另一入口（整批失败已 500），不受本签名影响。
 func GetRuleCertInfo(caddyID string) (*models.RuleCertInfo, error) {
-	var enableTLS bool
+	var enabled, enableTLS bool
 	var tlsSource, ruleDomain, tlsCert string
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(enable_tls, 0), COALESCE(tls_source, 'manual'), COALESCE(domain, ''), COALESCE(tls_cert, '')
-		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&enableTLS, &tlsSource, &ruleDomain, &tlsCert)
+		SELECT COALESCE(enabled, 0), COALESCE(enable_tls, 0), COALESCE(tls_source, 'manual'), COALESCE(domain, ''), COALESCE(tls_cert, '')
+		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&enabled, &enableTLS, &tlsSource, &ruleDomain, &tlsCert)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -297,7 +297,7 @@ func GetRuleCertInfo(caddyID string) (*models.RuleCertInfo, error) {
 		return nil, fmt.Errorf("读取规则 %s 证书配置: %w", caddyID, err)
 	}
 
-	if !enableTLS {
+	if !enabled || !enableTLS {
 		return nil, nil
 	}
 

@@ -253,9 +253,7 @@ func (transport *paginatedTransport) RoundTrip(request *http.Request) (*http.Res
 
 func TestProvider_getDomainID_paginates_beyond_first_page(t *testing.T) {
 	// 清进程内 zone 缓存——前序用例可能已缓存同名 zone。
-	domainIDCacheMu.Lock()
-	domainIDCache = map[string]string{}
-	domainIDCacheMu.Unlock()
+	seedDomainIDCache(t, "id,token", nil)
 	// Given: more domains than one DNSPod response page, with the target
 	// zone on the last page
 	domains := make([]string, 25)
@@ -291,9 +289,7 @@ func TestProvider_getDomainID_paginates_beyond_first_page(t *testing.T) {
 
 func TestProvider_getDomainID_paginates_large_accounts(t *testing.T) {
 	// 清进程内 zone 缓存——前序用例可能已缓存同名 zone。
-	domainIDCacheMu.Lock()
-	domainIDCache = map[string]string{}
-	domainIDCacheMu.Unlock()
+	seedDomainIDCache(t, "id,token", nil)
 	// Given: an account with more domains than the DNSPod hard page cap
 	// (3000); the target sits past the first page
 	domains := make([]string, 3001)
@@ -321,9 +317,7 @@ func TestProvider_getDomainID_normalizesZoneCase(t *testing.T) {
 	// DNS 名大小写不敏感：Domain.List 返回服务端规范形态（小写），混合大小写
 	// 的 zone 输入必须命中同一域名，且缓存键随之归一——同一 zone 的不同书写
 	// 形态不得各存一份 domain_id，也不得把「大小写不同」报成「域名不在账户」。
-	domainIDCacheMu.Lock()
-	domainIDCache = map[string]string{}
-	domainIDCacheMu.Unlock()
+	seedDomainIDCache(t, "id,token", nil)
 	transport := &paginatedTransport{domains: []string{"example.com"}, pageSize: 10}
 	provider := New("id,token")
 	provider.client.Transport = transport

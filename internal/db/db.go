@@ -736,6 +736,7 @@ func createTables() error {
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
 		conditions TEXT DEFAULT '[]',
+		condition_logic TEXT NOT NULL DEFAULT 'and',
 		action TEXT DEFAULT 'block',
 		score INTEGER DEFAULT 5,
 		enabled BOOLEAN DEFAULT TRUE,
@@ -1067,6 +1068,7 @@ var newColumnsRegistry = map[string]string{
 	// 操作者，auto/startup/legacy 落空串。存量库幂等补列（ensureNewColumns）。
 	"task_runs.operator":                              "TEXT NOT NULL DEFAULT ''",
 	"security_custom_rules.updated_by":                "INTEGER DEFAULT 0",
+	"security_custom_rules.condition_logic":           "TEXT NOT NULL DEFAULT 'and'",
 	"security_policies.policy_type":                   "TEXT NOT NULL DEFAULT ''",
 	"security_policies.trust_detection":               "BOOLEAN NOT NULL DEFAULT 0",
 	"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
@@ -2121,6 +2123,11 @@ func discardedLegacyAppliedBookkeeping() (string, error) {
 		return "", fmt.Errorf("failed to probe legacy applied waf bookkeeping: %w", err)
 	}
 	if legacyHash == "" && legacyVersion == 0 {
+		return "", nil
+	}
+	if legacyHash == targetHash && legacyVersion == targetVersion {
+		// 空目标经上方 UPDATE 成功搬移，或新旧本就相同：旧行删除不丢失
+		// 任何记账值，不得把它误记成异值丢弃。
 		return "", nil
 	}
 	return fmt.Sprintf("启动迁移：丢弃遗留文件态应用记账（目标列已非空，搬移谓词不成立）——遗留 hash=%s version=%d，保留目标 hash=%s version=%d",

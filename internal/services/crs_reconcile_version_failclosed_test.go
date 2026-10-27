@@ -13,10 +13,7 @@ import (
 // 版本），版本读取必须失败可见：展示容错口径（读失败回落镜像捆绑版本）会在
 // DB 瞬断时把 bundled 当权威写坏标记/版本行。
 func TestReconcileCRSState_versionReadFailureSkipsWrites(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	setupIsolatedDB(t)
 	liveDir := t.TempDir()
 	oldLive, oldSnap := crsLiveDir, crsSnapshotDir
 	crsLiveDir, crsSnapshotDir = liveDir, filepath.Join(t.TempDir(), "snapshot")

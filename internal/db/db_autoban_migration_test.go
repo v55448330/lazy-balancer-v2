@@ -29,11 +29,7 @@ const autobanPresetListName = "自动封禁名单"
 // 全新安装即携带六列（NOT NULL+默认值）与预置 security_ip_lists 行（system=1）。
 func TestInitialize_freshSchemaCarriesAutobanColumnsAndSeed(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
@@ -138,8 +134,7 @@ func TestRunMigrations_addsAutobanColumnsAndSeedToLegacyDB(t *testing.T) {
 // 威胁名单描述不受影响。
 func TestInitialize_normalizesAutobanPresetDescription(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() { DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB; _ = Close() })
+	preserveDatabaseHandles(t)
 
 	// 先旧版建库+种出预置行，再回写旧文案（模拟存量部署）。
 	if err := Initialize(dir); err != nil {

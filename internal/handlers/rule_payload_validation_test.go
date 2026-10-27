@@ -105,9 +105,29 @@ func TestRulePayloadSaveGateRejectsTLSSourceAndBodyLimit(t *testing.T) {
 	}
 
 	badBody := valid()
-	badBody.RequestBodyMaxSizeMB = 5000
-	if err := h.validateRulePayloadBeforeSave(badBody); err == nil || !strings.Contains(err.Error(), "0-4096") {
-		t.Fatalf("request_body_max_size_mb=5000 应被共享门拒绝, err=%v", err)
+	badBody.RequestBodyMaxSizeMB = 1025
+	if err := h.validateRulePayloadBeforeSave(badBody); err == nil || !strings.Contains(err.Error(), "0-1024") {
+		t.Fatalf("request_body_max_size_mb=1025 应被共享门拒绝, err=%v", err)
+	}
+	boundary := valid()
+	boundary.RequestBodyMaxSizeMB = 1024
+	if err := h.validateRulePayloadBeforeSave(boundary); err != nil {
+		t.Fatalf("request_body_max_size_mb=1024 应被接受: %v", err)
+	}
+}
+
+func TestUpdateConfigRequest_bodyLimitMatchesEngineMaximum(t *testing.T) {
+	for _, value := range []int{1024, 512} {
+		req := models.UpdateConfigRequest{RequestBodyMaxSizeMB: &value}
+		if err := validateUpdateConfigRequest(&req); err != nil {
+			t.Fatalf("global request_body_max_size_mb=%d rejected: %v", value, err)
+		}
+	}
+	for _, value := range []int{0, 1025, 4096} {
+		req := models.UpdateConfigRequest{RequestBodyMaxSizeMB: &value}
+		if err := validateUpdateConfigRequest(&req); err == nil || !strings.Contains(err.Error(), "1-1024") {
+			t.Fatalf("global request_body_max_size_mb=%d error=%v, want 1-1024 rejection", value, err)
+		}
 	}
 }
 

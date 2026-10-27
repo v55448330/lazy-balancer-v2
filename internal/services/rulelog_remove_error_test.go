@@ -6,46 +6,66 @@ package services
 // RemoveCertJobLogFiles 一致：不存在=成功（nil），其余错误聚合返回。
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 func TestRemoveRuleLogFiles_reportsFailureAggregated(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "logs")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	restore := SetRuleLogDirForTest(dir)
 	t.Cleanup(restore)
 
-	for _, name := range []string{"lb_ro.log", "lb_ro.log.1", "lb_ro-20260910T15-04-05.123-size.log"} {
+	names := []string{"lb_ro.log", "lb_ro.log.1", "lb_ro-20260910T15-04-05.123-size.log"}
+	for _, name := range names {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	// 只读目录：三个文件全部删除失败，错误必须聚合回报（首项失败即返回的
-	// 实现会让调用方误以为只剩一个问题，且后续文件静默残留）。
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod dir: %v", err)
+	// 扫描前的真实文件先移到旁路，再以普通文件占据目录路径。活动文件与
+	// 五份位移副本的删除都会返回 ENOTDIR，不依赖目录权限或运行用户。
+	savedDir := dir + "-saved"
+	if err := os.Rename(dir, savedDir); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := RemoveRuleLogFiles("lb_ro")
 	if err == nil {
-		t.Fatal("只读目录下删除失败必须回报错误（否则残留不可见）")
+		t.Fatal("ENOTDIR 删除失败必须回报错误（否则残留不可见）")
+	}
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("error=%v, want ENOTDIR", err)
 	}
 	if !strings.Contains(err.Error(), "lb_ro") {
 		t.Fatalf("error=%v, want 含规则 id（便于定位残留）", err)
 	}
+	if got := strings.Count(err.Error(), "删除规则日志"); got != 6 {
+		t.Fatalf("聚合删除错误数=%d, want 6（活动文件+五份位移副本）: %v", got, err)
+	}
 
-	// 恢复可写后重试必须清零（幂等重试通道）。
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatalf("restore dir mode: %v", err)
+	// 恢复真实目录后重试必须清零活动文件与轮转副本（幂等重试通道）。
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(savedDir, dir); err != nil {
+		t.Fatal(err)
 	}
 	if err := RemoveRuleLogFiles("lb_ro"); err != nil {
-		t.Fatalf("可写目录下重试失败: %v", err)
+		t.Fatalf("恢复目录后重试失败: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "lb_ro.log")); !os.IsNotExist(statErr) {
-		t.Fatalf("重试后活文件仍存在: %v", statErr)
+	for _, name := range names {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("重试后日志 %s 仍存在: %v", name, statErr)
+		}
 	}
 }
 

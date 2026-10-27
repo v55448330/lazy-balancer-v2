@@ -134,6 +134,7 @@ import { copyText } from '@/utils/copy'
 import { useAuthStore } from '@/stores/auth'
 import { formatAllowList, parseDomainAllowList, parseGroupAllowList } from '@/utils/oidcAllowList'
 import { createOidcProbeGuard, isOidcProbeFresh, oidcProbeKey } from '@/utils/oidcProbe'
+import { createLatestReadSession, runExclusive } from '@/utils/viewAsyncState'
 import type { OidcProbeToken, OidcProbeValues } from '@/utils/oidcProbe'
 
 const authStore = useAuthStore()
@@ -221,49 +222,50 @@ const notify = () => emit('status', { enabled: enabled.value, configured: config
 // 「已启用/删除配置/暂停使用」，父级标签也被回填旧值）。catch 清空为未配置态
 // 并显性提示；保存门同时拦截，避免用户以「空表单」覆盖现有配置。
 const loadFailed = ref(false)
-// 读取回填的请求序号守卫（同族视图同口径：AuditLog/ClusterSettings/TaskMonitor）：
-// 快速重开弹框或保存后的 load 与旧 load 竞争时，旧响应晚到会把已保存的新值
-// 回滚成旧值显示，随后被误当作现存配置再次保存。
-let loadSeq = 0
+// 读取回填只接受最新一轮请求；成功、失败与父级通知共用同一会话乱序门。
+const readSession = createLatestReadSession()
 const load = async () => {
-  const seq = ++loadSeq
-  invalidateProbe()
-  loadFailed.value = false
-  try {
+  await readSession.run(
     // silent——非管理员打开入口时 403 不弹全局 toast(入口按角色收口)
-    const res = await request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean; allowed_email_domains?: string[]; allowed_groups?: string[] } }>('/settings/oidc', { silent: true })
-    if (seq !== loadSeq) return
-    if (res.data) {
-      enabled.value = !!res.data.enabled
-      displayName.value = res.data.display_name || ''
-      hasSecret.value = !!res.data.has_secret
-      form.issuer = res.data.issuer || ''
-      form.clientId = res.data.client_id || ''
-      form.displayName = res.data.display_name || ''
-      form.allowedEmailDomains = formatAllowList(res.data.allowed_email_domains)
-      form.allowedGroups = formatAllowList(res.data.allowed_groups)
-      hasFetchedConfig.value = !!res.data.issuer
-      form.clientSecret = ''
-      // load 开始已推进探测世代；响应回填的字段 watcher 会再次失效旧快照。
-    }
-  } catch {
-    if (seq !== loadSeq) return
-    // 未配置/无权限/网络失败：一律回到「未配置」可见态（fail-visible）
-    enabled.value = false
-    displayName.value = ''
-    hasSecret.value = false
-    form.issuer = ''
-    form.clientId = ''
-    form.displayName = ''
-    form.clientSecret = ''
-    form.allowedEmailDomains = ''
-    form.allowedGroups = ''
-    hasFetchedConfig.value = false
-    lastTest.value = null
-    loadFailed.value = true
-  }
-  if (seq !== loadSeq) return
-  notify()
+    (signal) => request.get<{ data?: { enabled?: boolean; issuer?: string; client_id?: string; display_name?: string; has_secret?: boolean; allowed_email_domains?: string[]; allowed_groups?: string[] } }>('/settings/oidc', { silent: true, signal }),
+    {
+      onStart: () => {
+        invalidateProbe()
+        loadFailed.value = false
+      },
+      onSuccess: (res) => {
+        if (res.data) {
+          enabled.value = !!res.data.enabled
+          displayName.value = res.data.display_name || ''
+          hasSecret.value = !!res.data.has_secret
+          form.issuer = res.data.issuer || ''
+          form.clientId = res.data.client_id || ''
+          form.displayName = res.data.display_name || ''
+          form.allowedEmailDomains = formatAllowList(res.data.allowed_email_domains)
+          form.allowedGroups = formatAllowList(res.data.allowed_groups)
+          hasFetchedConfig.value = !!res.data.issuer
+          form.clientSecret = ''
+          // load 开始已推进探测世代；响应回填的字段 watcher 会再次失效旧快照。
+        }
+      },
+      onError: () => {
+        // 未配置/无权限/网络失败：一律回到「未配置」可见态（fail-visible）
+        enabled.value = false
+        displayName.value = ''
+        hasSecret.value = false
+        form.issuer = ''
+        form.clientId = ''
+        form.displayName = ''
+        form.clientSecret = ''
+        form.allowedEmailDomains = ''
+        form.allowedGroups = ''
+        hasFetchedConfig.value = false
+        lastTest.value = null
+        loadFailed.value = true
+      },
+      onFinally: notify,
+    },
+  )
 }
 
 let probeInFlight: { token: OidcProbeToken; promise: Promise<boolean> } | null = null
@@ -397,18 +399,20 @@ const toggleEnabled = async (on: boolean) => {
 
 const remove = async () => {
   if (isReadOnly.value || saving.value || loadFailed.value) return
-  try {
-    await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
-  } catch { return }
-  try {
-    await request.delete('/settings/oidc')
-  } catch { /* 拦截器已提示 */ return }
-  mfaAwareSuccess('已删除')
-  form.issuer = ''; form.clientId = ''; form.clientSecret = ''; form.displayName = ''
-  form.allowedEmailDomains = ''; form.allowedGroups = ''
-  probe.checked = false; probe.ok = false; lastTest.value = null
-  hasFetchedConfig.value = false
-  await load()
+  await runExclusive(() => saving.value, (locked) => { saving.value = locked }, async () => {
+    try {
+      await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
+    } catch { return }
+    try {
+      await request.delete('/settings/oidc')
+    } catch { /* 拦截器已提示 */ return }
+    mfaAwareSuccess('已删除')
+    form.issuer = ''; form.clientId = ''; form.clientSecret = ''; form.displayName = ''
+    form.allowedEmailDomains = ''; form.allowedGroups = ''
+    probe.checked = false; probe.ok = false; lastTest.value = null
+    hasFetchedConfig.value = false
+    await load()
+  })
 }
 
 const copy = async (text: string) => {

@@ -139,8 +139,7 @@ func TestBusinessTaskLoopSetterWaitsForDriverSync(t *testing.T) {
 // Then 不可判定（known=false）且首报一条 warn（不刷屏）；读恢复后补一条 info。
 func TestAutobanEnabledState_readFailureLeavesWarnTrace(t *testing.T) {
 	newClusterTestService(t)
-	delete(metricsStateFailed, "schedule-read-autoban-enabled")
-	t.Cleanup(func() { delete(metricsStateFailed, "schedule-read-autoban-enabled") })
+	isolateMetricsState(t)
 	buf := captureLogf(t)
 
 	restore := injectScheduleReadFailure(t, "global_config", "autoban_enabled")
@@ -218,5 +217,54 @@ func TestBusinessTaskLoopFallsBackToSetterIntentWhenStateUnknown(t *testing.T) {
 	applyBusinessTaskLoop("threat", true)
 	if info, ok := te.Lookup("threat"); !ok || !info.LoopOn {
 		t.Fatalf("读库不可判定时必须按调用方提交值应用: loopOn=%v（ok=%v）", info.LoopOn, ok)
+	}
+}
+
+func TestBusinessTaskLoopUnknownState_retriesUntilDatabaseConverges(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fallback  bool
+		recovered bool
+	}{
+		{name: "stale_enable_then_database_disable", fallback: true, recovered: false},
+		{name: "stale_disable_then_database_enable", fallback: false, recovered: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			te := newBusinessLoopTestEngine(t, "threat")
+			known := false
+			replaceBusinessTaskDrivers(t, []businessTaskDriver{
+				{id: "threat", stateFn: func() (bool, bool) {
+					if !known {
+						return false, false
+					}
+					return tc.recovered, true
+				}},
+			})
+
+			applyBusinessTaskLoop("threat", tc.fallback)
+			if info, ok := te.Lookup("threat"); !ok || info.LoopOn != tc.fallback {
+				t.Fatalf("immediate fallback loopOn=%v (ok=%v), want %v", info.LoopOn, ok, tc.fallback)
+			}
+			if !businessDriverSyncPending.Load() {
+				t.Fatal("setter read failure must register a reconciliation retry")
+			}
+
+			retryPendingBusinessTaskDrivers()
+			if info, _ := te.Lookup("threat"); info.LoopOn != tc.fallback {
+				t.Fatalf("persistent read failure changed fallback loopOn=%v, want %v", info.LoopOn, tc.fallback)
+			}
+			if !businessDriverSyncPending.Load() {
+				t.Fatal("persistent read failure must keep the retry pending")
+			}
+
+			known = true
+			retryPendingBusinessTaskDrivers()
+			if info, _ := te.Lookup("threat"); info.LoopOn != tc.recovered {
+				t.Fatalf("recovered database loopOn=%v, want %v", info.LoopOn, tc.recovered)
+			}
+			if businessDriverSyncPending.Load() {
+				t.Fatal("successful reconciliation must clear the retry marker")
+			}
+		})
 	}
 }

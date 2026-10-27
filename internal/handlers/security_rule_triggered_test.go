@@ -97,14 +97,16 @@ func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *
 		t.Fatal(err)
 	}
 	probes := []string{
-		"10003",   // 5 位自定义（emit=crID+10000）
-		"24567",   // 5 位自定义（不以 1 开头）
-		"1000001", // 7 位合成（1000000+n）
-		"1234567", // 7 位以 1 开头
-		"100123",  // 6 位 1xxxxx：CRS 保留段余数，总览判「其他」
-		"942100",  // CRS
-		"2",       // IP ACL
-		"223456",  // 6 位非 1 开头
+		"10003",    // 5 位自定义（emit=crID+10000）
+		"24567",    // 5 位自定义（不以 1 开头）
+		"1000001",  // 7 位合成（1000000+n）
+		"1234567",  // 7 位以 1 开头
+		"3642688",  // OR 分支（DB 父规则 42）
+		"67000064", // 旧内嵌 OR 分支（合成父 emit id 1000001）
+		"100123",   // 6 位 1xxxxx：CRS 保留段余数，总览判「其他」
+		"942100",   // CRS
+		"2",        // IP ACL
+		"223456",   // 6 位非 1 开头
 	}
 	for _, id := range probes {
 		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_family_probe (rule_triggered) VALUES (?)`, id); err != nil {
@@ -134,6 +136,17 @@ func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *
 		if matched[id] != want {
 			t.Errorf("自定义规则 family 匹配 %q=%v, want %v（须与 categorizeAttack 口径一致），条件 %q", id, matched[id], want, cond)
 		}
+	}
+	for _, id := range []string{"3642688", "67000064"} {
+		if !matched[id] || categorizeAttack(id, "") != "自定义规则" {
+			t.Errorf("OR 分支 %s 必须在筛选与总览中都归自定义规则：matched=%v category=%q", id, matched[id], categorizeAttack(id, ""))
+		}
+	}
+}
+
+func TestDescribeThreatRuleName_orBranchUsesParentName(t *testing.T) {
+	if got := describeThreatRuleNameWithNames("3642689", map[int]string{42: "父规则"}); got != "父规则（#3642689）" {
+		t.Fatalf("OR 分支标签=%q, want 父规则名称与分支事件 id", got)
 	}
 }
 

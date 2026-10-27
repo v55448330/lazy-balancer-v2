@@ -198,6 +198,36 @@ func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 	}
 }
 
+// 原子写已完成 rename、仅父目录 fsync 失败时，最终文件已经存在；写失败
+// 收尾必须删除它，连续调度不得积累没有数据库行的敏感备份。
+func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	oldWrite := autoBackupWriteFile
+	autoBackupWriteFile = func(path string, payload []byte) error {
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
+			return err
+		}
+		return errors.New("parent directory fsync failed")
+	}
+	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err == nil || !strings.Contains(err.Error(), "fsync") {
+			t.Fatalf("attempt %d error=%v, want injected fsync failure", attempt, err)
+		}
+		matches, err := filepath.Glob(filepath.Join(h.cfg.BackupDir, "*.lbbak"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("attempt %d 遗留无行备份文件: %v", attempt, matches)
+		}
+	}
+	if rows := autoBackupRows(t, "WHERE status='failed'"); len(rows) != 2 {
+		t.Fatalf("failed rows=%d, want 2（失败行仍须留痕）", len(rows))
+	}
+}
+
 func TestPruneAutoBackups_trimsSuccessByKeepAndFailedAtTwenty(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	dir := h.cfg.BackupDir
@@ -665,6 +695,57 @@ func TestDeleteAutoBackup_removesFileAndRow(t *testing.T) {
 	// 不存在 id → 404
 	if response := serveAutoBackupJSON(t, h, http.MethodDelete, "/auto-backup/:id", "/auto-backup/999", "", h.DeleteAutoBackup); response.Code != http.StatusNotFound {
 		t.Fatalf("missing id status=%d, want 404", response.Code)
+	}
+}
+
+func TestDeleteAutoBackup_fileFailureKeepsRowAndWithholdsSuccessAudit(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	name := "lbbak-manual-delete-blocked.lbbak"
+	path := filepath.Join(h.cfg.BackupDir, name)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	response := serveAutoBackupJSON(t, h, http.MethodDelete, "/auto-backup/:id", fmt.Sprintf("/auto-backup/%d", id), "", h.DeleteAutoBackup)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（文件删除失败不得报成功）", response.Code, response.Body.String())
+	}
+	if rows := autoBackupRows(t, "WHERE id=?", id); len(rows) != 1 {
+		t.Fatalf("文件删除失败后行必须保留供重试: %v", rows)
+	}
+	if got := countAutoBackupAudit(t, "备份删除"); got != 0 {
+		t.Fatalf("失败路径成功审计=%d, want 0", got)
+	}
+}
+
+func TestDeleteAutoBackup_missingFileStillRemovesRow(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	name := "lbbak-manual-already-missing.lbbak"
+	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	response := serveAutoBackupJSON(t, h, http.MethodDelete, "/auto-backup/:id", fmt.Sprintf("/auto-backup/%d", id), "", h.DeleteAutoBackup)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（ErrNotExist 应容忍）", response.Code, response.Body.String())
+	}
+	if rows := autoBackupRows(t, "WHERE id=?", id); len(rows) != 0 {
+		t.Fatalf("文件已缺失时行仍应删除: %v", rows)
+	}
+	if got := countAutoBackupAudit(t, "备份删除"); got != 1 {
+		t.Fatalf("成功审计=%d, want 1", got)
 	}
 }
 

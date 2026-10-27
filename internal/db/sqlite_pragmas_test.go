@@ -14,14 +14,10 @@ import (
 // 把 BEGIN IMMEDIATE 的读写全线拖垮（v2.2.0 生产 SQLITE_BUSY 级联的根因之一）。
 func TestInitialize_appliesSQLiteRuntimePragmas(t *testing.T) {
 	// Given 全新数据目录初始化
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 
 	// When/Then 三库的 journal_mode 必须为 wal、busy_timeout 必须为 30000、synchronous 为 NORMAL
 	assert := func(label string, handle *sql.DB, pragma, want string) {

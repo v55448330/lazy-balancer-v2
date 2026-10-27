@@ -1,11 +1,9 @@
 package handlers
 
 // 提交后产物清理的阶段边界：锁内（caddyOpMu + 导入会话锁）只收集待删集并在
-// 事务内完成 cert_jobs 必要删除，实际删证书文件/日志/指标的删除动作必须在两把
-// 锁都释放之后执行——否则千级规则导入的文件删除会把配置写/重载阻塞在该窗口。
-//
-// 本钉测用 TryLock 探针证明清理执行时刻两把锁均已释放（锁仍被本 goroutine
-// 持有时 TryLock 必然失败），并验证清理确实执行。
+// 事务内完成 cert_jobs 必要删除，实际删除在 caddyOpMu 释放后执行；导入会话锁、
+// 导入窗口与任务暂停则延长到清理完成，防止下一代导入/签发与旧清理跨代交错。
+// 本钉测分别证明 Caddy 锁已释放、会话锁仍持有，并验证清理确实执行。
 
 import (
 	"net/http"
@@ -23,7 +21,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func TestImportV1PostCommitCleanupRunsOutsideImportLocks(t *testing.T) {
+func TestImportV1PostCommitCleanupRunsOutsideCaddyLockInsideImportWindow(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	certDir := t.TempDir()
 	t.Cleanup(services.SetCertDirForTest(certDir))
@@ -38,7 +36,7 @@ func TestImportV1PostCommitCleanupRunsOutsideImportLocks(t *testing.T) {
 		t.Fatalf("write old rule cert files: %v", err)
 	}
 
-	var caddyFree, sessionFree atomic.Bool
+	var caddyFree, sessionFree, windowActive atomic.Bool
 	oldHook := importPostCommitCleanupHook
 	importPostCommitCleanupHook = func() {
 		if h.caddyOpMu.TryLock() {
@@ -49,6 +47,7 @@ func TestImportV1PostCommitCleanupRunsOutsideImportLocks(t *testing.T) {
 			configImportBeginMu.Unlock()
 			sessionFree.Store(true)
 		}
+		windowActive.Store(configImportBusy())
 	}
 	t.Cleanup(func() { importPostCommitCleanupHook = oldHook })
 
@@ -65,12 +64,16 @@ func TestImportV1PostCommitCleanupRunsOutsideImportLocks(t *testing.T) {
 	}
 	// 提交后清理已异步执行（响应不再等清理跑完）：等它结束再断言。
 	waitImportCleanup()
-	// Then ① 清理执行时刻 caddyOpMu 与导入会话锁都已释放
+	// Then ① 清理执行时刻 caddyOpMu 已释放，但导入会话锁仍持有；
+	// 窗口感知同样保持活动，直到清理结束。
 	if !caddyFree.Load() {
 		t.Fatal("提交后清理仍在 caddyOpMu 临界区内执行（会阻塞配置写/重载窗口）")
 	}
-	if !sessionFree.Load() {
-		t.Fatal("提交后清理仍在导入会话锁内执行（第二个导入无法开始）")
+	if sessionFree.Load() {
+		t.Fatal("提交后清理提前释放导入会话锁（下一代导入可与旧清理跨代交错）")
+	}
+	if !windowActive.Load() {
+		t.Fatal("提交后清理期间导入窗口提前关闭")
 	}
 	// Then ② 清理确实执行：消失规则的证书/私钥文件已删除
 	for _, suffix := range []string{".crt", ".key"} {
@@ -136,13 +139,20 @@ func TestImportV1PostCommitCleanupRunsAsync(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("HTTP handler 仍等待提交后清理完成（客户端被清理拖住）")
 	}
+	windowActiveDuringCleanup := configImportBusy()
 
 	// 清理仍在后台阻塞：证书文件此时应尚未删除；放行后清理完成。
 	close(release)
 	waitImportCleanup()
+	if !windowActiveDuringCleanup {
+		t.Fatal("后台清理尚未完成时导入窗口已关闭")
+	}
 	for _, suffix := range []string{".crt", ".key"} {
 		if _, err := os.Stat(filepath.Join(certDir, "lb_async_old"+suffix)); err == nil {
 			t.Fatalf("消失规则 lb_async_old%s 的证书材料残留（后台清理未完成）", suffix)
 		}
+	}
+	if configImportBusy() {
+		t.Fatal("清理完成后导入窗口未关闭")
 	}
 }

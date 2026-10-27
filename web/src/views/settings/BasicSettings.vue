@@ -364,7 +364,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened">
+    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
       <template #header>
         <DialogHeader :icon="Timer" title="自动备份" subtitle="定时将配置备份到服务器 backup 目录（仅主节点）" />
       </template>
@@ -505,6 +505,7 @@ import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displa
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
+import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { importFailureLines, importFailureReport } from '@/utils/importFailure'
 import { importSummaryLabel } from '@/utils/importSummaryLabels'
 import { MFA_SCOPE_GROUPS } from '@/utils/mfaScopeGroups'
@@ -677,6 +678,7 @@ const autoBackupLoaded = ref(false)
 let lastAutoBackupErrorToastAt = 0
 const autoBackupSaving = ref(false)
 const autoBackupRunning = ref(false)
+const autoBackupReadSession = createLatestReadSession()
 const autoBackupForm = ref({ enabled: false, frequency: 'daily', time: '03:00', day: 1, keep: 7 })
 // 频率切换必须重归 day：周视图上限 7、月视图上限 28（后端写侧门同值）。
 // 月→周保留 20 会让下拉显示无匹配项的裸值，保存必 400「备份日期必须在 1-7 之间」。
@@ -715,55 +717,68 @@ const openAutoBackupDialog = (): void => {
   autoBackupVisible.value = true
 }
 
+const applyAutoBackupStatus = (d: AutoBackupSettingsResponse): void => {
+  autoBackupNextRunAt.value = d.next_run_at ?? null
+  autoBackupCatchUpDue.value = d.catch_up_due === true
+  autoBackupRows.value = d.backups || []
+  // last_run 是调度水位线（off→on=now），不是执行事实；「上次成功备份」
+  // 只认最近一次 success 行（last_success_at）。
+  autoBackupLastRun.value = d.last_success_at ?? null
+}
+
 const fetchAutoBackup = async (quiet = false): Promise<void> => {
-  if (!quiet) {
-    autoBackupLoading.value = true
-    autoBackupLoaded.value = false
-  }
-  try {
-    const res = await request.get<{ data: AutoBackupSettingsResponse }>('/settings/auto-backup', { silent: true })
-    const d = res.data
-    // quiet=true 来自「立即备份」轮询：只刷新列表与上次成功时间，不得用服务端
-    // 值覆盖用户未保存的频率/时间/保留份数/范围。
-    if (!quiet) {
-      autoBackupForm.value = {
-        enabled: d.enabled,
-        frequency: d.frequency || 'daily',
-        time: d.time || '03:00',
-        day: d.day || 1,
-        keep: d.keep || 7,
-      }
-      const loadedSections = d.sections?.length ? normalizeBackupSectionKeys(d.sections) : BACKUP_SECTIONS.map((s) => s.key)
-      autoBackupSections.value = loadedSections
-      autoBackupSavedSections.value = [...loadedSections]
-    }
-    autoBackupNextRunAt.value = d.next_run_at ?? null
-    autoBackupCatchUpDue.value = d.catch_up_due === true
-    autoBackupRows.value = d.backups || []
-    // last_run 是调度水位线（off→on=now），不是执行事实；「上次成功备份」
-    // 只认最近一次 success 行（last_success_at）——否则启用后即谎报「刚刚」。
-    autoBackupLastRun.value = d.last_success_at ?? null
-    autoBackupLoaded.value = true
-  } catch {
-    if (quiet) {
-      // 「立即备份」2s 静默轮询失败不得逐轮弹 toast（60s 窗口最多
-      // ~30 条相同错误）。quiet 轮不重置 autoBackupLoaded——此前已加载成功时保存
-      // 仍可用；仅「从未加载成功」时令节流提示一次。
+  if (quiet) {
+    try {
+      const res = await request.get<{ data: AutoBackupSettingsResponse }>('/settings/auto-backup', { silent: true })
+      // quiet=true 来自「立即备份」轮询：只刷新列表与执行时间，不覆盖表单或加载门。
+      applyAutoBackupStatus(res.data)
+    } catch {
       console.error('Failed to poll auto-backup status')
       const now = Date.now()
       if (shouldToastQuietPollError(autoBackupLoaded.value, now, lastAutoBackupErrorToastAt)) {
         lastAutoBackupErrorToastAt = now
         ElMessage.error('自动备份状态刷新失败，将持续自动重试')
       }
-    } else {
-      // silent 模式全局拦截器不会提示：显式告知并保持保存禁用，避免默认值覆盖。
-      ElMessage.error('自动备份设置读取失败，请关闭弹框后重试；读取完成前无法保存')
     }
-  } finally {
-    if (!quiet) autoBackupLoading.value = false
+    return
   }
+
+  await autoBackupReadSession.run(
+    (signal) => request.get<{ data: AutoBackupSettingsResponse }>('/settings/auto-backup', { silent: true, signal }),
+    {
+      onStart: () => {
+        autoBackupLoading.value = true
+        autoBackupLoaded.value = false
+      },
+      onSuccess: (res) => {
+        const d = res.data
+        autoBackupForm.value = {
+          enabled: d.enabled,
+          frequency: d.frequency || 'daily',
+          time: d.time || '03:00',
+          day: d.day || 1,
+          keep: d.keep || 7,
+        }
+        const loadedSections = d.sections?.length ? normalizeBackupSectionKeys(d.sections) : BACKUP_SECTIONS.map((s) => s.key)
+        autoBackupSections.value = loadedSections
+        autoBackupSavedSections.value = [...loadedSections]
+        applyAutoBackupStatus(d)
+        autoBackupLoaded.value = true
+      },
+      onError: () => {
+        // silent 模式全局拦截器不会提示：只让当前会话披露失败。
+        ElMessage.error('自动备份设置读取失败，请关闭弹框后重试；读取完成前无法保存')
+      },
+      onFinally: () => { autoBackupLoading.value = false },
+    },
+  )
 }
 
+const onAutoBackupClosed = (): void => {
+  autoBackupReadSession.invalidate()
+  autoBackupLoading.value = false
+  autoBackupLoaded.value = false
+}
 const onAutoBackupOpened = (): void => {
   void fetchAutoBackup()
 }
@@ -1585,6 +1600,7 @@ let disposed = false
 // （原位于 appLogTimer watch 附近、引用其后声明的 let——当前安全但形态脆弱）。
 onUnmounted(() => {
   disposed = true
+  autoBackupReadSession.invalidate()
   appLogTail.stop()
   // 卸载即取消在途的预览上传（组件销毁后响应无处落地）
   importPreviewSession?.dispose()

@@ -72,3 +72,13 @@ export const planTrustRemoval = (input: {
     hasRemovable: inlineExact || exactRefListIds.length > 0,
   }
 }
+
+/** 写后核对三态：任何详情/名单读取缺口都是未知，绝不能拿写入前快照代替结论。 */
+export const classifyTrustRemovalVerification = (input: {
+  readonly detailLoaded: boolean
+  readonly missingListIds: readonly number[]
+  readonly residualSources: readonly string[]
+}): 'unknown' | 'cleared' | 'residual' => {
+  if (!input.detailLoaded || input.missingListIds.length > 0) return 'unknown'
+  return input.residualSources.length > 0 ? 'residual' : 'cleared'
+}

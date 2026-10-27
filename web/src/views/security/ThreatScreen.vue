@@ -308,7 +308,7 @@ import { eventActionFull, eventActionShort } from '@/utils/eventAction'
 import { trafficDelta, formatRecentRate, hourlyBucketLabel, bucketTerminology, type TrafficBaseline } from '@/utils/threatScreenMetrics'
 import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type AnomalySeverity } from '@/utils/severityScale'
 import { displayThreatScreenMode } from '@/utils/configValues'
-import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, FLOW_REALTIME_MAX_AGE_MS } from '@/utils/threatFlowRules'
+import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
 import type { ThreatScene, ThreatSceneOptions } from '@/utils/threatScene'
 
@@ -900,7 +900,7 @@ const attackFlowTask = usePollingTask(async ({ signal, isCurrent }) => {
   // 会在 threatMap=null 时被静默丢弃（页面刚打开/模式切换后必现）。
   if (!threatMap) return
   const now = Date.now()
-  const fresh = (data.events ?? []).filter((ev) => Number.isFinite(ev.at) && now - ev.at <= FLOW_REALTIME_MAX_AGE_MS)
+  const fresh = freshFlowEvents(data.events ?? [], now)
   for (const item of planFlowEvents(fresh, now)) {
     threatMap?.addArcForLocation(item.region, item.weight, item.tier)
   }
@@ -949,11 +949,12 @@ const flowTask = usePollingTask(async ({ signal, isCurrent }) => {
   // 同攻击流：引擎未装载时不得推进游标，否则首轮正常流事件被丢弃。
   if (!threatMap) return
   const events = data.events ?? []
+  const now = Date.now()
   // 正常流与攻击流同一计划：1-3 条逐条、4-8 合并粗光流、>8 合并更粗光流。
   // 是否聚合只看采样后条数；weight 只决定线宽/×N。预算超限自动扩大时间桶。
   const sampleFactor = data.sample_n && data.sample_n > 0 ? data.sample_n : Math.max(1, activeSampleN.value)
-  const flowEvents = events.map((ev) => ({ country: ev.country, province: ev.province, at: ev.at, weight: sampleFactor }))
-  for (const item of planFlowEvents(flowEvents, Date.now())) {
+  const flowEvents = freshFlowEvents(events, now).map((ev) => ({ country: ev.country, province: ev.province, at: ev.at, weight: sampleFactor }))
+  for (const item of planFlowEvents(flowEvents, now)) {
     threatMap?.addNormalArcForLocation(item.region, item.weight, item.tier)
   }
   flowSince = nextFlowCursor(flowSince, data)
@@ -965,7 +966,7 @@ const flowTask = usePollingTask(async ({ signal, isCurrent }) => {
     const outcome = stepAdaptiveSample(
       { active: activeSampleN.value, stable: adaptiveStable, lastSwitch: adaptiveLastSwitch, pendingTarget: adaptivePendingTarget },
       observedRate,
-      Date.now(),
+      now,
     )
     adaptiveStable = outcome.stable
     adaptiveLastSwitch = outcome.lastSwitch

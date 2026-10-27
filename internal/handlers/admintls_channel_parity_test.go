@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -27,7 +26,7 @@ import (
 // 等于把私钥写进测试进程的工作目录（包源码树）。
 func newAdminTLSTestRouter(t *testing.T) (*gin.Engine, *Handlers) {
 	t.Helper()
-	handler := &Handlers{cfg: &config.Config{Port: 8000, DataDir: t.TempDir()}}
+	handler := newAdminTLSHandlers(t)
 	router := gin.New()
 	router.POST("/admin-tls", handler.UpdateAdminTLS)
 	return router, handler

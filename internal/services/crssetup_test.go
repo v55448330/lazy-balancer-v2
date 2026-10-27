@@ -514,18 +514,10 @@ func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
 // 无法从终态区分顺序，故以源码注册序钉住；同时钉住 stock-first 残留态的
 // 迁移语义（只保用户自定义行）。
 func TestSwapCRSTreeFromStaging_writesStockBeforeSetup(t *testing.T) {
-	src, err := os.ReadFile("crsinstall.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
-	stockIdx := strings.Index(body, "copyFile(newSetup, stockPath)")
-	setupIdx := strings.Index(body, "copyFile(newSetup, setupPath)")
-	if stockIdx < 0 || setupIdx < 0 {
-		t.Fatalf("定位失败: stock=%d setup=%d", stockIdx, setupIdx)
-	}
-	if stockIdx > setupIdx {
-		t.Fatal("写序必须 stock → setup（崩溃残留=新 stock+旧 setup，迁移只保留用户自定义行）")
+	fn := serviceFunctionFromFile(t, "crsinstall.go", "swapCRSTreeFromStaging")
+	order := crsStockSetupWriteOrder(fn)
+	if len(order) != 2 || order[0] != "stockPath" || order[1] != "setupPath" {
+		t.Fatalf("copyFile calls=%v, want real AST order stockPath → setupPath", order)
 	}
 }
 

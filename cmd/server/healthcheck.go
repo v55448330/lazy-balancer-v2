@@ -14,6 +14,8 @@ import (
 // 语义与旧探针保持一致：HTTPS 先行（面板管理 TLS 是常态），失败回落明文；
 // 两者都只认 200。回环地址 + 自签证书 → 忽略证书校验只用于本机存活判定，
 // 不承担证书正确性验证。
+const dockerHealthcheckTimeout = 5 * time.Second
+
 var (
 	healthcheckHTTPSURL = "https://127.0.0.1:8000/health"
 	healthcheckHTTPURL  = "http://127.0.0.1:8000/health"

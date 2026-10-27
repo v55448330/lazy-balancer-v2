@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -623,6 +624,115 @@ func TestResetUserPasswordToolDoesNotEchoPasswordOnFailure(t *testing.T) {
 	}
 	if strings.Contains(result, receivedPassword) {
 		t.Fatalf("result must not echo password on failure, got %q", result)
+	}
+}
+
+func TestCertificateToolsForwardForceAsQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		tool      string
+		arguments []string
+		wantPath  string
+	}{
+		{name: "retry", tool: "retry_cert_job", arguments: []string{`{"id":7}`, `{"id":7,"force":true}`, `{"id":7,"force":false}`}, wantPath: "/api/v1/certificates/jobs/7/retry"},
+		{name: "targeted issue", tool: "issue_certificate", arguments: []string{`{"caddy_id":"lb_1"}`, `{"caddy_id":"lb_1","force":true}`, `{"caddy_id":"lb_1","force":false}`}, wantPath: "/api/v1/certificates/issue"},
+		{name: "all issue", tool: "issue_certificate", arguments: []string{`{"all":true,"force":true}`}, wantPath: "/api/v1/certificates/issue"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var queries []url.Values
+			var bodies []map[string]any
+			rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != test.wantPath {
+					t.Errorf("path=%q, want %q", r.URL.Path, test.wantPath)
+				}
+				queries = append(queries, r.URL.Query())
+				body := map[string]any{}
+				if r.Body != nil {
+					_ = json.NewDecoder(r.Body).Decode(&body)
+				}
+				bodies = append(bodies, body)
+				_, _ = w.Write([]byte(`{"code":0}`))
+			}))
+			defer rest.Close()
+
+			for _, arguments := range test.arguments {
+				callTool(t, NewForTest(rest.URL+"/api/v1", rest.Client()), test.tool, arguments)
+			}
+
+			if len(queries) != len(test.arguments) {
+				t.Fatalf("requests=%d, want %d", len(queries), len(test.arguments))
+			}
+			for index, query := range queries {
+				wantForce := ""
+				if strings.Contains(test.arguments[index], `"force":true`) {
+					wantForce = "true"
+				} else if strings.Contains(test.arguments[index], `"force":false`) {
+					wantForce = "false"
+				}
+				if got := query.Get("force"); got != wantForce {
+					t.Errorf("arguments=%s force query=%q, want %q", test.arguments[index], got, wantForce)
+				}
+				if _, exists := bodies[index]["force"]; exists {
+					t.Errorf("arguments=%s leaked force into request body: %v", test.arguments[index], bodies[index])
+				}
+			}
+		})
+	}
+}
+
+func TestResetUserPasswordTimeoutReturnsCandidateForRecovery(t *testing.T) {
+	for _, secondHop := range []bool{false, true} {
+		name := "first hop"
+		if secondHop {
+			name = "TLS replay"
+		}
+		t.Run(name, func(t *testing.T) {
+			var candidate string
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if candidate == "" {
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode reset body: %v", err)
+					}
+					candidate, _ = body["new_password"].(string)
+					if secondHop {
+						response := redirectResponse(r, "https://localhost:8000/api/v1/users/7/reset-password")
+						response.StatusCode = http.StatusFound
+						return response, nil
+					}
+				}
+				return nil, context.DeadlineExceeded
+			})}
+
+			result := callTool(t, NewForTest("http://localhost:8000/api/v1", client), "reset_user_password", `{"id":7}`)
+
+			if len(candidate) != 16 {
+				t.Fatalf("candidate=%q, want generated 16-character password", candidate)
+			}
+			for _, want := range []string{`"isError":true`, "操作可能已在服务端生效", candidate, "若未生效请继续使用旧密码"} {
+				if !strings.Contains(result, want) {
+					t.Errorf("result=%q, want recovery detail %q", result, want)
+				}
+			}
+		})
+	}
+}
+
+func TestResetUserPasswordConnectionFailureDoesNotClaimUncertainty(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("connection refused")
+	})}
+
+	result := callTool(t, NewForTest("http://localhost:8000/api/v1", client), "reset_user_password", `{"id":7}`)
+
+	if !strings.Contains(result, "内部 API 请求失败") || !strings.Contains(result, `"isError":true`) {
+		t.Fatalf("result=%q", result)
+	}
+	for _, unwanted := range []string{"操作可能已在服务端生效", "候选密码", "若未生效请继续使用旧密码"} {
+		if strings.Contains(result, unwanted) {
+			t.Errorf("result=%q must not contain %q", result, unwanted)
+		}
 	}
 }
 

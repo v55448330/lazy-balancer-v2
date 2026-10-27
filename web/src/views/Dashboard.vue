@@ -207,7 +207,7 @@
                     {{ degradedSystemParts.has('cpu') ? '采集失败' : `${systemMetrics.cpu_percent.toFixed(1)}%` }}
                   </span>
                 </div>
-                <el-progress v-if="!degradedSystemParts.has('cpu')" :percentage="Math.min(systemMetrics.cpu_percent, 100)" :stroke-width="6" color="#3b82f6" :show-text="false" />
+                <el-progress v-if="cpuProgressPercent !== null" :percentage="cpuProgressPercent" :stroke-width="6" color="#3b82f6" :show-text="false" />
               </div>
               <div class="resource-item">
                 <div class="resource-header">
@@ -220,7 +220,7 @@
                     </template>
                   </span>
                 </div>
-                <el-progress v-if="!degradedSystemParts.has('memory')" :percentage="Math.min(systemMetrics.memory_percent, 100)" :stroke-width="6" color="#8b5cf6" :show-text="false" />
+                <el-progress v-if="memoryProgressPercent !== null" :percentage="memoryProgressPercent" :stroke-width="6" color="#8b5cf6" :show-text="false" />
               </div>
               <div class="resource-item">
                 <div class="resource-header">
@@ -233,22 +233,21 @@
                     </template>
                   </span>
                 </div>
-                <el-progress v-if="!degradedSystemParts.has('disk')" :percentage="Math.min(systemMetrics.disk_percent, 100)" :stroke-width="6" color="#06b6d4" :show-text="false" />
+                <el-progress v-if="diskProgressPercent !== null" :percentage="diskProgressPercent" :stroke-width="6" color="#06b6d4" :show-text="false" />
               </div>
               <div class="resource-item">
                 <div class="resource-header">
-                  <el-tooltip :content="pidsTooltip" placement="top">
-                    <span class="resource-label">进程配额</span>
-                  </el-tooltip>
+                  <span class="resource-label">进程配额</span>
+                  <FieldHelpIcon :content="pidsTooltip" />
                   <span class="resource-value" :class="pidsValueClass">
                     <template v-if="degradedSystemParts.has('pids')">采集失败</template>
                     <template v-else>
                       {{ pidsUsageLabel(systemMetrics.pids_current, systemMetrics.pids_max) }}
-                      <span v-if="systemMetrics.pids_max > 0" class="resource-total">({{ systemMetrics.pids_percent.toFixed(0) }}%)</span>
+                      <span v-if="systemMetrics.pids_max > 0" class="resource-total">({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</span>
                     </template>
                   </span>
                 </div>
-                <el-progress v-if="!degradedSystemParts.has('pids') && systemMetrics.pids_max > 0" :percentage="Math.min(systemMetrics.pids_percent, 100)" :stroke-width="6" :color="pidsProgressColor" :show-text="false" />
+                <el-progress v-if="pidsProgressPercentValue !== null" :percentage="pidsProgressPercentValue" :stroke-width="6" :color="pidsProgressColor" :show-text="false" />
               </div>
             </div>
           </template>
@@ -495,8 +494,9 @@ import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMe
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
-import { degradedMetricLabels, degradedMetricParts, pidsTone, pidsUsageLabel } from '@/utils/systemMetrics'
+import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
+import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 
 
 const authStore = useAuthStore()
@@ -547,17 +547,17 @@ const systemMetricsUnavailable = ref(false)
 // CPU 单点故障时内存/磁盘仍照常展示，只有失败项标注不可用。
 const degradedSystemParts = computed(() => degradedMetricParts(systemMetrics.value?.degraded))
 const degradedSystemLabels = computed(() => degradedMetricLabels(systemMetrics.value?.degraded))
-const pidsToneValue = computed(() => pidsTone(systemMetrics.value?.pids_percent ?? 0))
+const pidsToneValue = computed(() => pidsValueTone(systemMetrics.value?.pids_percent ?? 0, degradedSystemParts.value.has('pids')))
 const pidsValueClass = computed(() => ({
   'text-green': pidsToneValue.value === 'normal',
   'text-amber': pidsToneValue.value === 'warning',
   'text-red': pidsToneValue.value === 'critical',
 }))
-const pidsTooltip = computed(() => {
-  const limit = systemMetrics.value?.nproc_limit ?? 0
-  const ulimitText = limit > 0 ? String(limit) : '不限'
-  return `cgroup 进程/线程配额（含僵尸进程）。接近上限时容器内无法创建新进程，表现为 fork 失败。ulimit -u：${ulimitText}`
-})
+const cpuProgressPercent = computed(() => metricProgressPercent(systemMetrics.value?.cpu_percent ?? 0, degradedSystemParts.value.has('cpu')))
+const memoryProgressPercent = computed(() => metricProgressPercent(systemMetrics.value?.memory_percent ?? 0, degradedSystemParts.value.has('memory')))
+const diskProgressPercent = computed(() => metricProgressPercent(systemMetrics.value?.disk_percent ?? 0, degradedSystemParts.value.has('disk')))
+const pidsProgressPercentValue = computed(() => pidsProgressPercent(systemMetrics.value?.pids_percent ?? 0, systemMetrics.value?.pids_max ?? 0, degradedSystemParts.value.has('pids')))
+const pidsTooltip = computed(() => pidsTooltipText(systemMetrics.value?.nproc_limit ?? 0))
 const pidsProgressColor = computed(() => {
   if (pidsToneValue.value === 'critical') return '#ef4444'
   if (pidsToneValue.value === 'warning') return '#f59e0b'

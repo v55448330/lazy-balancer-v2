@@ -139,6 +139,74 @@ func TestMigrateDropMergedSyncSwitchColumns_recordsDiscardedLegacyBookkeeping(t 
 	}
 }
 
+// 正常搬移与新旧同值都没有丢弃任何记账，不得留下“丢弃遗留”假审计；
+// 真实异值丢弃由上一条用例覆盖，重跑迁移不得新增审计。
+func TestMigrateDropMergedSyncSwitchColumns_skipsAuditForMovedOrIdenticalBookkeeping(t *testing.T) {
+	cases := []struct {
+		name          string
+		targetHash    string
+		targetVersion int
+		legacyHash    string
+		legacyVersion int
+	}{
+		{name: "empty target moves legacy", targetHash: "", targetVersion: 0, legacyHash: "legacy-hash", legacyVersion: 3},
+		{name: "identical target retains legacy", targetHash: "same-hash", targetVersion: 7, legacyHash: "same-hash", legacyVersion: 7},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openMigrationTestDB(t)
+			if err := createTables(); err != nil {
+				t.Fatalf("create tables: %v", err)
+			}
+			if err := ensureNewColumns(map[string]string{
+				"global_config.applied_waf_ref_hash":    "TEXT DEFAULT ''",
+				"global_config.applied_waf_ref_version": "INTEGER DEFAULT 0",
+			}, nil); err != nil {
+				t.Fatalf("add bookkeeping columns: %v", err)
+			}
+			if _, err := database.Exec(`INSERT INTO global_config (id, caddy_config, applied_waf_ref_hash, applied_waf_ref_version)
+				VALUES (1,'{}',?,?)`, tc.targetHash, tc.targetVersion); err != nil {
+				t.Fatalf("seed global config: %v", err)
+			}
+			if _, err := database.Exec(`CREATE TABLE cluster_applied_sections (
+				section TEXT PRIMARY KEY,
+				hash TEXT DEFAULT '',
+				applied_version INTEGER DEFAULT 0,
+				applied_at DATETIME
+			)`); err != nil {
+				t.Fatalf("create legacy applied sections table: %v", err)
+			}
+			if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at)
+				VALUES ('waf_files',?,?,datetime('now'))`, tc.legacyHash, tc.legacyVersion); err != nil {
+				t.Fatalf("seed legacy bookkeeping: %v", err)
+			}
+			drainSystemAuditBuffer()
+
+			if err := migrateDropMergedSyncSwitchColumns(); err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+
+			var hash string
+			var version int
+			if err := database.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,''), COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1`).Scan(&hash, &version); err != nil {
+				t.Fatal(err)
+			}
+			if hash != tc.legacyHash || version != tc.legacyVersion {
+				t.Fatalf("bookkeeping=(%q,%d), want (%q,%d)", hash, version, tc.legacyHash, tc.legacyVersion)
+			}
+			if entries := drainSystemAuditBuffer(); len(entries) != 0 {
+				t.Fatalf("无值丢弃时审计数=%d, want 0: %+v", len(entries), entries)
+			}
+			if err := migrateDropMergedSyncSwitchColumns(); err != nil {
+				t.Fatalf("re-migrate: %v", err)
+			}
+			if entries := drainSystemAuditBuffer(); len(entries) != 0 {
+				t.Fatalf("幂等重跑新增审计=%d, want 0: %+v", len(entries), entries)
+			}
+		})
+	}
+}
+
 // seedWAFModeMigrationDB 建表并播种 global_config 行（一次性门列由迁移自身
 // 补列）+ 四条覆盖迁移判据两面的策略行。
 func seedWAFModeMigrationDB(t *testing.T) *sql.DB {

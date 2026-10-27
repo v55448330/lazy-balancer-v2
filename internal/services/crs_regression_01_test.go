@@ -9,31 +9,97 @@ import (
 	"testing"
 )
 
-// TestCopyDirTransactional_renameFailureCleansTmp 验证：最终
-// rename(tmp→dst) 失败时完整暂存树 rules.bak.tmp 必须清理（与 copyFile 的
-// rename 失败清理对称），不得残留完整拷贝供未来任何 *.tmp 扫描路径误消费。
-func TestCopyDirTransactional_renameFailureCleansTmp(t *testing.T) {
-	// Given 源树与「被非空目录占用的 dst」（rename 必然 ENOTEMPTY 失败）
+// 备份目录的最终 rename 失败必须保住上一份可用备份，且不残留暂存树。
+func TestCopyDirTransactional_renameFailureRestoresOldAndCleansTmp(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
-	writeTestFile(t, filepath.Join(src, "a.conf"), "SecRule 1")
-	writeTestFile(t, filepath.Join(dst, "occupant"), "block rename")
+	writeTestFile(t, filepath.Join(src, "a.conf"), "SecRule new")
+	writeTestFile(t, filepath.Join(dst, "a.conf"), "SecRule old")
 
-	// When 事务化拷贝执行到最后一步 rename（用 seam 强制失败，避免依赖
-	// 目标目录非空的旧假设——后旧 dst 会在 rename 前被清理）
 	oldRename := copyDirRename
-	copyDirRename = func(string, string) error { return errors.New("rename blocked") }
-	defer func() { copyDirRename = oldRename }()
-	err := copyDirTransactional(src, dst)
-
-	// Then 返回错误且 tmp 暂存树被清理
-	if err == nil {
+	copyDirRename = func(src, target string) error {
+		if src == dst+".tmp" && target == dst {
+			return errors.New("rename blocked")
+		}
+		return oldRename(src, target)
+	}
+	t.Cleanup(func() { copyDirRename = oldRename })
+	if err := copyDirTransactional(src, dst); err == nil {
 		t.Fatal("copyDirTransactional should fail when the final rename is blocked")
 	}
-	if _, sErr := os.Stat(dst + ".tmp"); !os.IsNotExist(sErr) {
-		t.Fatal("tmp staging tree must be removed when the final rename fails (历史修复)")
+	data, err := os.ReadFile(filepath.Join(dst, "a.conf"))
+	if err != nil || string(data) != "SecRule old" {
+		t.Fatalf("previous backup must be restored: data=%q err=%v", data, err)
 	}
+	for _, path := range []string{dst + ".tmp", dst + ".old"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("successful rollback must not leave %s: %v", path, err)
+		}
+	}
+}
+
+func TestCopyDirTransactional_renameFailureShapes(t *testing.T) {
+	t.Run("first rename keeps destination untouched", func(t *testing.T) {
+		root := t.TempDir()
+		src, dst := filepath.Join(root, "src"), filepath.Join(root, "dst")
+		writeTestFile(t, filepath.Join(src, "a.conf"), "new")
+		writeTestFile(t, filepath.Join(dst, "a.conf"), "old")
+		oldRename := copyDirRename
+		copyDirRename = func(src, target string) error {
+			if src == dst && target == dst+".old" {
+				return errors.New("first rename blocked")
+			}
+			return oldRename(src, target)
+		}
+		t.Cleanup(func() { copyDirRename = oldRename })
+		if err := copyDirTransactional(src, dst); err == nil {
+			t.Fatal("first rename failure must be returned")
+		}
+		data, err := os.ReadFile(filepath.Join(dst, "a.conf"))
+		if err != nil || string(data) != "old" {
+			t.Fatalf("destination changed after first rename failure: %q, %v", data, err)
+		}
+	})
+
+	t.Run("rollback failure preserves old tree under old suffix", func(t *testing.T) {
+		root := t.TempDir()
+		src, dst := filepath.Join(root, "src"), filepath.Join(root, "dst")
+		writeTestFile(t, filepath.Join(src, "a.conf"), "new")
+		writeTestFile(t, filepath.Join(dst, "a.conf"), "old")
+		oldRename := copyDirRename
+		copyDirRename = func(src, target string) error {
+			if src == dst+".tmp" && target == dst || src == dst+".old" && target == dst {
+				return errors.New("rename blocked")
+			}
+			return oldRename(src, target)
+		}
+		t.Cleanup(func() { copyDirRename = oldRename })
+		if err := copyDirTransactional(src, dst); err == nil {
+			t.Fatal("install and rollback failures must be returned")
+		}
+		data, err := os.ReadFile(filepath.Join(dst+".old", "a.conf"))
+		if err != nil || string(data) != "old" {
+			t.Fatalf("only previous backup was lost: %q, %v", data, err)
+		}
+	})
+
+	t.Run("success replaces destination and removes old tree", func(t *testing.T) {
+		root := t.TempDir()
+		src, dst := filepath.Join(root, "src"), filepath.Join(root, "dst")
+		writeTestFile(t, filepath.Join(src, "a.conf"), "new")
+		writeTestFile(t, filepath.Join(dst, "a.conf"), "old")
+		if err := copyDirTransactional(src, dst); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dst, "a.conf"))
+		if err != nil || string(data) != "new" {
+			t.Fatalf("new backup not installed: %q, %v", data, err)
+		}
+		if _, err := os.Stat(dst + ".old"); !os.IsNotExist(err) {
+			t.Fatalf("old backup residue remains: %v", err)
+		}
+	})
 }
 
 // TestRestoreBackup_partialRulesBakWithoutProbeSkipped 验证：rules.bak

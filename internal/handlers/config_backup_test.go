@@ -324,7 +324,7 @@ func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
 		"security_block_pages": {{"id": 2, "name": "null-poison-page", "description": nil, "content": "<html>poison</html>", "is_default": nil}},
 		"security_custom_rules": {{"id": 1, "name": "null-poison-rule",
 			"conditions":  `[{"target":"uri","operator":"contains","pattern":"/nullpoison"}]`,
-			"description": nil, "action": nil, "score": nil, "enabled": nil}},
+			"description": nil, "condition_logic": nil, "action": nil, "score": nil, "enabled": nil}},
 		"security_policies": {{"id": 1, "name": "null-poison-policy", "description": nil, "custom_rules": nil}},
 	}, EmptyConfigIfNil: true})
 
@@ -351,13 +351,13 @@ func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
 	if pageContent != "<html>poison</html>" || pageDesc != "" || pageDefault != 0 {
 		t.Fatalf("block page=(content:%q desc:%q is_default:%d), want (<html>poison</html> '' 0)", pageContent, pageDesc, pageDefault)
 	}
-	var ruleAction, ruleDesc string
+	var ruleAction, ruleDesc, ruleLogic string
 	var ruleScore, ruleEnabled int
-	if err := db.DB.QueryRow("SELECT action, score, enabled, description FROM security_custom_rules WHERE id=1").Scan(&ruleAction, &ruleScore, &ruleEnabled, &ruleDesc); err != nil {
+	if err := db.DB.QueryRow("SELECT action, score, enabled, description, condition_logic FROM security_custom_rules WHERE id=1").Scan(&ruleAction, &ruleScore, &ruleEnabled, &ruleDesc, &ruleLogic); err != nil {
 		t.Fatalf("read restored custom rule: %v", err)
 	}
-	if ruleAction != "block" || ruleScore != 5 || ruleEnabled != 1 || ruleDesc != "" {
-		t.Fatalf("custom rule=(action:%q score:%d enabled:%d desc:%q), want ('block' 5 1 '')", ruleAction, ruleScore, ruleEnabled, ruleDesc)
+	if ruleAction != "block" || ruleScore != 5 || ruleEnabled != 1 || ruleDesc != "" || ruleLogic != "and" {
+		t.Fatalf("custom rule=(action:%q score:%d enabled:%d desc:%q logic:%q), want ('block' 5 1 '' 'and')", ruleAction, ruleScore, ruleEnabled, ruleDesc, ruleLogic)
 	}
 	var policyDesc, policyCustomRules string
 	if err := db.DB.QueryRow("SELECT description, custom_rules FROM security_policies WHERE id=1").Scan(&policyDesc, &policyCustomRules); err != nil {
@@ -2918,6 +2918,7 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 	router.POST("/config/import", h.ImportConfigBackup)
 	doExport := func() map[string]any {
 		t.Helper()
+		waitImportCleanup()
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/config/export", nil))
 		if response.Code != http.StatusOK {
@@ -2941,6 +2942,9 @@ func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 	}
 	rawExport := func() string {
 		t.Helper()
+		// 导入会话窗口现在保持到后台清理结束：导出前等待清理收尾，
+		// 否则同进程立即导出会拿到 409（真实用户窗口为毫秒级）。
+		waitImportCleanup()
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/config/export", nil))
 		if response.Code != http.StatusOK {

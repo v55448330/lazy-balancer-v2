@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -236,18 +237,7 @@ func TestAutoBackupDueSlot_invalidInputs(t *testing.T) {
 
 func setupAutoBackupTestDB(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	// 固定调度时区为 UTC,隔离 CurrentLocation 的全局态；cleanup 必须恢复
 	// 调用前时区（CurrentLocation 是包级全局态，-shuffle 下写死不恢复会串味）。
 	previousLocation := CurrentLocation().String()
@@ -268,40 +258,73 @@ func setAutoBackupTestExecutor(t *testing.T, calls *[]string, err error) {
 	t.Cleanup(func() { SetAutoBackupExecutor(nil) })
 }
 
-func TestAutoBackupScheduled_execsAndAdvancesLastRun(t *testing.T) {
-	// Given: 引擎在排程槽调用（v2.0 Scheduled）——runAutoBackupScheduled 直接执行
-	setupAutoBackupTestDB(t)
-	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily', auto_backup_time='03:00' WHERE id=1`); err != nil {
-		t.Fatal(err)
+func TestAutoBackupScheduled_startedAtBoundaries(t *testing.T) {
+	boundaries := []struct {
+		name      string
+		startedAt time.Time
+		wantSlot  time.Time
+	}{
+		{name: "before_slot", startedAt: time.Date(2026, 9, 20, 2, 59, 59, 999000000, time.UTC), wantSlot: time.Date(2026, 9, 19, 3, 0, 0, 0, time.UTC)},
+		{name: "at_slot", startedAt: time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC), wantSlot: time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)},
+		{name: "after_slot", startedAt: time.Date(2026, 9, 20, 3, 0, 0, 1000000, time.UTC), wantSlot: time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)},
 	}
-	var calls []string
-	setAutoBackupTestExecutor(t, &calls, nil)
+	outcomes := []struct {
+		name       string
+		execErr    error
+		cancel     bool
+		wantErr    error
+		advanceRun bool
+	}{
+		{name: "success", advanceRun: true},
+		{name: "executor_failure", execErr: context.DeadlineExceeded, wantErr: context.DeadlineExceeded, advanceRun: true},
+		{name: "canceled", execErr: context.Canceled, cancel: true, wantErr: context.Canceled},
+	}
+	for _, boundary := range boundaries {
+		for _, outcome := range outcomes {
+			t.Run(boundary.name+"/"+outcome.name, func(t *testing.T) {
+				setupAutoBackupTestDB(t)
+				if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily', auto_backup_time='03:00', auto_backup_last_run=NULL WHERE id=1`); err != nil {
+					t.Fatal(err)
+				}
+				var calls []string
+				setAutoBackupTestExecutor(t, &calls, outcome.execErr)
+				ctx := context.Background()
+				if outcome.cancel {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithCancel(ctx)
+					cancel()
+				}
 
-	// When
-	if err := runAutoBackupScheduled(context.Background(), 0); err != nil {
-		t.Fatalf("run: %v", err)
-	}
+				err := runAutoBackupScheduledAt(ctx, 0, boundary.startedAt)
 
-	// Then: trigger=schedule, 操作者恒为 system, last_run=当日最近槽
-	if len(calls) != 1 || calls[0] != "schedule:system" {
-		t.Fatalf("calls=%v, want single schedule:system", calls)
-	}
-	var lastRun string
-	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); err != nil {
-		t.Fatalf("read last_run: %v", err)
-	}
-	got, err := time.Parse(time.RFC3339, lastRun)
-	if err != nil {
-		t.Fatalf("last_run 非 RFC3339 形态 %q: %v", lastRun, err)
-	}
-	// 最近槽=当日 03:00（配置时区）——断言完整日期，写错日期（重复跑/漏跑类
-	// 缺陷）不得被「时点结构正确」掩盖。
-	expectedSlot, ok := autoBackupDueSlot(time.Now(), "daily", "03:00", 1, CurrentLocation())
-	if !ok {
-		t.Fatal("前置：基准槽计算失败")
-	}
-	if !got.Equal(expectedSlot) {
-		t.Fatalf("last_run=%v, want 当日 03:00 槽 %v", got, expectedSlot)
+				if !errors.Is(err, outcome.wantErr) {
+					t.Fatalf("run error=%v, want %v", err, outcome.wantErr)
+				}
+				if len(calls) != 1 || calls[0] != "schedule:system" {
+					t.Fatalf("calls=%v, want single schedule:system", calls)
+				}
+				var lastRun *string
+				if queryErr := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); queryErr != nil {
+					t.Fatal(queryErr)
+				}
+				if !outcome.advanceRun {
+					if lastRun != nil {
+						t.Fatalf("last_run=%q, want NULL after cancellation", *lastRun)
+					}
+					return
+				}
+				if lastRun == nil {
+					t.Fatal("last_run=NULL, want fixed startedAt slot")
+				}
+				got, parseErr := time.Parse(time.RFC3339, *lastRun)
+				if parseErr != nil {
+					t.Fatalf("last_run=%q is not RFC3339: %v", *lastRun, parseErr)
+				}
+				if !got.Equal(boundary.wantSlot) {
+					t.Fatalf("last_run=%v, want %v", got, boundary.wantSlot)
+				}
+			})
+		}
 	}
 }
 
@@ -353,39 +376,6 @@ func TestAutoBackupNextSlot_catchesUpPastSlot(t *testing.T) {
 	}
 	if want := time.Date(2026, 9, 21, 3, 0, 0, 0, time.UTC); !slot.Equal(want) {
 		t.Fatalf("slot=%v, want 最近漏跑槽 %v", slot, want)
-	}
-}
-
-func TestAutoBackupScheduled_advancesLastRunEvenWhenExecutorFails(t *testing.T) {
-	// Given: 执行器失败——last_run 仍推进(失败已落 failed 行,不重试风暴)
-	setupAutoBackupTestDB(t)
-	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily', auto_backup_time='03:00' WHERE id=1`); err != nil {
-		t.Fatal(err)
-	}
-	var calls []string
-	setAutoBackupTestExecutor(t, &calls, context.DeadlineExceeded)
-
-	// When
-	_ = runAutoBackupScheduled(context.Background(), 0)
-
-	// Then
-	if len(calls) != 1 {
-		t.Fatalf("calls=%v, want single attempt", calls)
-	}
-	var lastRun string
-	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); err != nil {
-		t.Fatalf("read last_run: %v", err)
-	}
-	if got, _ := time.Parse(time.RFC3339, lastRun); got.IsZero() || got.Hour() != 3 {
-		t.Fatalf("last_run=%s, want 当日 03:00 槽(失败也推进)", lastRun)
-	}
-	// 日期同样必须正确（水位线写错日期会让下一轮重跑或错过整个周期）。
-	expectedSlot, ok := autoBackupDueSlot(time.Now(), "daily", "03:00", 1, CurrentLocation())
-	if !ok {
-		t.Fatal("前置：基准槽计算失败")
-	}
-	if got, _ := time.Parse(time.RFC3339, lastRun); !got.Equal(expectedSlot) {
-		t.Fatalf("last_run=%v, want 当日 03:00 槽 %v", got, expectedSlot)
 	}
 }
 
@@ -610,7 +600,7 @@ func TestAutoBackupScheduled_failsWhenWatermarkUpdateFails(t *testing.T) {
 	setAutoBackupTestExecutor(t, &calls, nil)
 
 	// When：备份业务本身成功
-	err := runAutoBackupScheduled(context.Background(), 0)
+	err := runAutoBackupScheduledAt(context.Background(), 0, time.Date(2026, 9, 20, 3, 0, 0, 1000000, time.UTC))
 
 	// Then：本轮必须返回错误（让引擎退避），且执行器只跑一次
 	if err == nil {
@@ -686,7 +676,8 @@ func TestAutoBackupScheduled_advancesOutOfBandInvalidWatermark(t *testing.T) {
 	setAutoBackupTestExecutor(t, &calls, nil)
 
 	// When
-	if err := runAutoBackupScheduled(context.Background(), 0); err != nil {
+	startedAt := time.Date(2026, 9, 20, 3, 0, 0, 1000000, time.UTC)
+	if err := runAutoBackupScheduledAt(context.Background(), 0, startedAt); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -704,7 +695,7 @@ func TestAutoBackupScheduled_advancesOutOfBandInvalidWatermark(t *testing.T) {
 	}
 
 	// Then 2：覆盖后下一槽在未来——不再每 tick 判到期重跑全量备份。
-	now := time.Now()
+	now := startedAt
 	slot, ok := nextAutoBackupSlot(now)
 	if !ok {
 		t.Fatal("ok=false, want 未来槽（水位线已推进）")

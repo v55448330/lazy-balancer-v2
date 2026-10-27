@@ -21,14 +21,10 @@ func TestInitializeMigratesAPIKeyMCPColumns(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(dataDir); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 
 	for _, column := range []string{"mcp_enabled", "read_only", "mcp_ip_whitelist"} {
 		var count int

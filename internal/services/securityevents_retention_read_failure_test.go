@@ -5,6 +5,7 @@ package services
 // 回退值仍为内置默认（90 天 / 平台默认行帽）。
 
 import (
+	"context"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -53,5 +54,36 @@ func TestSecurityEventsRetentionReadFailure_warnsOnceAndRecovers(t *testing.T) {
 	securityEventsRetentionSettings()
 	if infos := countLogLines(logs, "security events retention: retention settings read recovered"); infos != 1 {
 		t.Fatalf("持续成功不得重复记恢复，info lines=%d", infos)
+	}
+}
+
+func TestSecurityEventsRetentionCleanup_readFailureDefersAllDeletion(t *testing.T) {
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=365, security_events_row_cap=2000000 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES (datetime('now', '-120 days'), '198.51.100.10', 'retained')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_unavailable`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := securityEventsRetentionCleanup(context.Background())
+	if err == nil {
+		t.Fatal("cleanup must fail when the stored retention policy cannot be read")
+	}
+	if result.Events != 0 || countSecurityEventsByType(t, "retained") != 1 {
+		t.Fatalf("read failure deleted history: result=%+v", result)
+	}
+
+	if _, err := db.DB.Exec(`ALTER TABLE global_config_unavailable RENAME TO global_config`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := securityEventsRetentionCleanup(context.Background()); err != nil {
+		t.Fatalf("cleanup after recovery: %v", err)
+	}
+	if got := countSecurityEventsByType(t, "retained"); got != 1 {
+		t.Fatalf("event older than default but inside configured retention was deleted: %d", got)
 	}
 }

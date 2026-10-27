@@ -189,6 +189,8 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // listEntries 必须显式声明「条目必须新鲜、拉取失败不得出结论」——断言对象
     // 是注释文字本身。
     'trustRemovalFreshness.spec.ts',
+    // 省界文件头注释与真实资源计数一致性钉。
+    'admin1Provinces.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

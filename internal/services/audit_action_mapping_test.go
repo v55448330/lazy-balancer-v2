@@ -38,6 +38,60 @@ type auditDynamicCallSite struct {
 	argIdent  string
 }
 
+// auditPackageStringValues 收集包级 const/var 的静态字符串初值。审计动作允许
+// 用包级单源常量，局部变量与运行时表达式仍走动态调用点边界。
+func auditPackageStringValues(file *ast.File) map[string]string {
+	values := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+			continue
+		}
+		for _, rawSpec := range gen.Specs {
+			spec, ok := rawSpec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, name := range spec.Names {
+				if index >= len(spec.Values) {
+					continue
+				}
+				if value, ok := auditVocabStringLit(spec.Values[index]); ok {
+					values[name.Name] = value
+				}
+			}
+		}
+	}
+	return values
+}
+
+// auditStaticStringValue 解析字面量及包级静态字符串标识符。本包标识符使用
+// 跨文件合并值；选择子仅在其限定包已解析且成员存在时解析，未知选择子与动态
+// 表达式不可静态判定。
+func auditStaticStringValue(expr ast.Expr, packageValues map[string]string, packages map[string]map[string]string) (string, bool) {
+	if value, ok := auditVocabStringLit(expr); ok {
+		return value, true
+	}
+	switch value := expr.(type) {
+	case *ast.Ident:
+		resolved, ok := packageValues[value.Name]
+		return resolved, ok
+	case *ast.SelectorExpr:
+		qualifier, ok := value.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		values, ok := packages[qualifier.Name]
+		if !ok {
+			return "", false
+		}
+		resolved, ok := values[value.Sel.Name]
+		return resolved, ok
+	default:
+		return "", false
+	}
+}
+
 // backendAuditActions 提取后端全部可落库动作词条，返回 动作 → 首处证据位置。
 func backendAuditActions(t *testing.T) map[string]string {
 	t.Helper()
@@ -56,12 +110,12 @@ func backendAuditActions(t *testing.T) map[string]string {
 		}
 	}
 	type parsedFile struct {
-		fset  *token.FileSet
-		file  *ast.File
-		funcs map[string]*ast.FuncDecl
+		fset           *token.FileSet
+		file           *ast.File
+		funcs          map[string]*ast.FuncDecl
+		packageStrings map[string]string
 	}
 	parsed := map[string]*parsedFile{}
-	var dynamicSites []auditDynamicCallSite
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
@@ -72,9 +126,32 @@ func backendAuditActions(t *testing.T) map[string]string {
 			t.Errorf("parse %s: %v", path, err)
 			return nil
 		}
-		pf := &parsedFile{fset: fset, file: f, funcs: map[string]*ast.FuncDecl{}}
-		parsed[path] = pf
-		for _, decl := range f.Decls {
+		parsed[path] = &parsedFile{fset: fset, file: f, funcs: map[string]*ast.FuncDecl{}, packageStrings: auditPackageStringValues(f)}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal: %v", err)
+	}
+
+	// 第一阶段已读完全部生产文件；先按包名合并包级常量/变量，再扫描函数，
+	// 避免声明与审计调用分处同包不同文件时漏收。
+	packages := map[string]map[string]string{}
+	for _, pf := range parsed {
+		packageName := pf.file.Name.Name
+		if packages[packageName] == nil {
+			packages[packageName] = map[string]string{}
+		}
+		for name, value := range pf.packageStrings {
+			packages[packageName][name] = value
+		}
+	}
+	for _, pf := range parsed {
+		pf.packageStrings = packages[pf.file.Name.Name]
+	}
+
+	var dynamicSites []auditDynamicCallSite
+	for path, pf := range parsed {
+		for _, decl := range pf.file.Decls {
 			d, ok := decl.(*ast.FuncDecl)
 			if !ok || d.Body == nil {
 				continue
@@ -86,8 +163,8 @@ func backendAuditActions(t *testing.T) map[string]string {
 					if !ok || len(ret.Results) < 1 {
 						return true
 					}
-					if value, ok := auditVocabStringLit(ret.Results[0]); ok && value != "" {
-						add(path, fset.Position(ret.Pos()).Line, value)
+					if value, ok := auditStaticStringValue(ret.Results[0], pf.packageStrings, packages); ok && value != "" {
+						add(path, pf.fset.Position(ret.Pos()).Line, value)
 					}
 					return true
 				})
@@ -110,8 +187,8 @@ func backendAuditActions(t *testing.T) map[string]string {
 					return true
 				}
 				arg := call.Args[spec[0]]
-				if value, ok := auditVocabStringLit(arg); ok {
-					add(path, fset.Position(call.Pos()).Line, value)
+				if value, ok := auditStaticStringValue(arg, pf.packageStrings, packages); ok {
+					add(path, pf.fset.Position(call.Pos()).Line, value)
 					return true
 				}
 				if ident, ok := arg.(*ast.Ident); ok {
@@ -120,10 +197,6 @@ func backendAuditActions(t *testing.T) map[string]string {
 				return true
 			})
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk internal: %v", err)
 	}
 
 	// 解析动态动作实参的取值（auditVocabDynamicAllowlist 已核清的全部调用点）：
@@ -152,7 +225,7 @@ func backendAuditActions(t *testing.T) map[string]string {
 					if !ok || ident.Name != site.argIdent || i >= len(assign.Rhs) {
 						continue
 					}
-					if value, ok := auditVocabStringLit(assign.Rhs[i]); ok {
+					if value, ok := auditStaticStringValue(assign.Rhs[i], pf.packageStrings, packages); ok {
 						add(path, pf.fset.Position(assign.Pos()).Line, value)
 					}
 				}
@@ -190,7 +263,7 @@ func backendAuditActions(t *testing.T) map[string]string {
 					if name != site.enclosing {
 						return true
 					}
-					if value, ok := auditVocabStringLit(call.Args[paramPos]); ok {
+					if value, ok := auditStaticStringValue(call.Args[paramPos], callerPf.packageStrings, packages); ok {
 						add(callerPath, callerPf.fset.Position(call.Pos()).Line, value)
 					}
 					return true
@@ -310,6 +383,81 @@ func (f *frontendAuditTone) dangerMapped(action string) bool {
 		}
 	}
 	return false
+}
+
+func TestAuditActionMapping_staticPackageValueSyntax(t *testing.T) {
+	const declarationsSource = `package fixture
+const constAction = "自动封禁"
+var varAction = "手动封禁"`
+	const callsSource = `package fixture
+func record(dynamicAction func() string) {
+	RecordAuditLog("system", constAction, "资源", "", "")
+	RecordAuditLog("system", varAction, "资源", "", "")
+	RecordAuditLog("system", other.SelectorAction, "资源", "", "")
+	RecordAuditLog("system", "删除", "资源", "", "")
+	RecordAuditLog("system", unknownAction, "资源", "", "")
+	RecordAuditLog("system", dynamicAction(), "资源", "", "")
+	RecordAuditLog("system", missing.SelectorAction, "资源", "", "")
+}`
+	declarations, err := parser.ParseFile(token.NewFileSet(), "declarations.go", declarationsSource, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic declarations: %v", err)
+	}
+	calls, err := parser.ParseFile(token.NewFileSet(), "calls.go", callsSource, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic calls: %v", err)
+	}
+	packages := map[string]map[string]string{
+		"fixture": auditPackageStringValues(declarations),
+		"other":   {"SelectorAction": "选择封禁"},
+	}
+	values := packages[declarations.Name.Name]
+	var arguments []ast.Expr
+	ast.Inspect(calls, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := call.Fun.(*ast.Ident)
+		if ok && ident.Name == "RecordAuditLog" {
+			arguments = append(arguments, call.Args[1])
+		}
+		return true
+	})
+	want := []struct {
+		value    string
+		resolved bool
+	}{
+		{value: "自动封禁", resolved: true},
+		{value: "手动封禁", resolved: true},
+		{value: "选择封禁", resolved: true},
+		{value: "删除", resolved: true},
+		{resolved: false},
+		{resolved: false},
+		{resolved: false},
+	}
+	if len(arguments) != len(want) {
+		t.Fatalf("arguments=%d, want %d", len(arguments), len(want))
+	}
+	for index, expected := range want {
+		value, resolved := auditStaticStringValue(arguments[index], values, packages)
+		if resolved != expected.resolved || value != expected.value {
+			t.Errorf("argument %d resolved=(%q,%v), want (%q,%v)", index, value, resolved, expected.value, expected.resolved)
+		}
+	}
+}
+
+func TestAuditActionMapping_packageConstantAutobanDangerMapping(t *testing.T) {
+	backend := backendAuditActions(t)
+	evidence, found := backend[AutobanAuditAction]
+	if !found {
+		t.Fatalf("包级常量动作 %q 未进入后端动作集；删除其前端例外会绕过映射门禁", AutobanAuditAction)
+	}
+	tone := loadFrontendAuditTone(t)
+	color, found := tone.exceptions[AutobanAuditAction]
+	if !found || color != "danger" {
+		t.Fatalf("动作 %q（%s）的前端例外=(%q,%v)，want (danger,true)", AutobanAuditAction, evidence, color, found)
+	}
 }
 
 func TestAuditActionMapping_backendActionsAllMapped(t *testing.T) {

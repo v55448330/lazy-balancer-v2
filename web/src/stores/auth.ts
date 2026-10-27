@@ -5,6 +5,7 @@ import { isTokenExpired, request, ApiRequestError } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 import { isPageId, type PageId } from '@/utils/pageIds'
 import { DEFAULT_CERT_RENEWAL_DAYS } from '@/utils/configValues'
+import { advanceSessionGeneration, currentSessionGeneration, isSameTokenIdentity } from '@/utils/sessionIdentity'
 
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
@@ -53,7 +54,6 @@ export const useAuthStore = defineStore('auth', () => {
   // 「发起时代际 + 发起时令牌」为身份，await 之后任一不符即整条丢弃——否则
   // 「退出 A 登录 B」时 A 的迟到响应会把 user 重建为上一位用户，界面按旧角色
   // 渲染写控件（后端仍按新令牌鉴权，故仅 UI 误导，但会持续到刷新）。
-  let sessionGeneration = 0
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
   const readOnlyReason = computed<'slave' | 'non-admin' | 'unknown' | null>(() => {
@@ -93,8 +93,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (event.key !== null && event.key !== 'token') return
     const stored = localStorage.getItem('token')
     if (stored === token.value) return
-    // 令牌被改写 = 换会话：本页在途的 /users/me 属旧身份，必须作废。
-    sessionGeneration++
+    // 换账号推进代际；同账号 MFA 刷新保持代际，但仍在下方换令牌并重拉投影。
+    if (!isSameTokenIdentity(token.value, stored)) advanceSessionGeneration()
     clearUserRetryTimer()
     clearConfigRetryTimer()
     if (!stored) {
@@ -152,13 +152,13 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value) return
     // 发起时的会话身份：await 之后代际或令牌任一变化即表示已换会话（登录他人/
     // 登出/跨标签同步），响应与失败都不得写回或排重试。
-    const issuedGeneration = sessionGeneration
+    const issuedGeneration = currentSessionGeneration()
     const issuedToken = token.value
     try {
       // 静默拉取——失败态已由 15s 重试循环与 readOnlyMessage 横幅（AppLayout
       // 只读标签）持续反馈，与其余轮询体系的 silent 口径一致，不再叠加 toast 噪音。
       const res = await request.get<APIResponse<CurrentUser>>('/users/me', { silent: true })
-      if (sessionGeneration !== issuedGeneration || token.value !== issuedToken) return
+      if (currentSessionGeneration() !== issuedGeneration || token.value !== issuedToken) return
       if (res.data) {
         user.value = {
           id: res.data.id,
@@ -177,7 +177,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
     } catch (error: unknown) {
       // 换会话后旧请求的失败同样丢弃：否则会为**新**会话排一条本不该有的重试链。
-      if (sessionGeneration !== issuedGeneration || token.value !== issuedToken) return
+      if (currentSessionGeneration() !== issuedGeneration || token.value !== issuedToken) return
       // 瞬时失败（非 401）保留最近一次已知的用户与权限，不清空；显式 401 由全局
       // 拦截器「会话失效」流统一处理（清 token 重载），logout 才主动清除。
       // 用户信息尚无已知值时定时重试拉取，使 fail-closed 的只读窗口自动恢复。
@@ -294,7 +294,7 @@ interface LoginResult {
   // v2.1.8 MFA step-up：验证码刷新 mfa_ts（新 JWT 替换当前 token，身份不变）。
   async function refreshMfaStep(code: string) {
     const res = await request.post<AuthResponse>('/auth/mfa/verify-step', { code }, { silent: true })
-    applyAuthResponse(res)
+    applyAuthResponse(res, true)
   }
 
   // v2.1.8 MFA 第二步：验证码换 JWT。重入护栏与 login 同口径（skipped 显式判别）。
@@ -311,9 +311,9 @@ interface LoginResult {
     }
   }
 
-  function applyAuthResponse(res: AuthResponse) {
-    // 换会话（登录/票据登录/MFA step-up）：作废上一会话在途的 /users/me。
-    sessionGeneration++
+  function applyAuthResponse(res: AuthResponse, preserveSession = false) {
+    // 登录/票据登录换会话；MFA step-up 仅刷新同账号令牌，必须保持请求身份代际。
+    if (!preserveSession) advanceSessionGeneration()
     intentionalLogout.value = false
     clearUserRetryTimer()
     clearConfigRetryTimer()
@@ -339,7 +339,7 @@ interface LoginResult {
   function applyOIDCToken(rawToken: string) {
     // 换令牌即换身份：与跨标签切换分支同口径——旧 user/nodeMode 必须先清空，
     // 否则 init 拉取完成前界面仍按上一账号的角色渲染写控件。
-    sessionGeneration++
+    advanceSessionGeneration()
     intentionalLogout.value = false
     clearUserRetryTimer()
     clearConfigRetryTimer()
@@ -365,7 +365,7 @@ interface LoginResult {
   async function logout() {
     // 会话在此刻结束（服务端吊销只是清理）：立即作废在途 /users/me，
     // 否则吊销请求期间落地的响应会把 user 写回，登出后仍按已登录渲染。
-    sessionGeneration++
+    advanceSessionGeneration()
     intentionalLogout.value = true
     try {
       if (token.value) await request.post('/auth/logout')
@@ -387,7 +387,7 @@ interface LoginResult {
   // intentionalLogout 语义与 logout() 一致：抑制后续在途请求 401 的全局弹窗。
   function localLogout(): void {
     // 与 logout 同口径：会话立即作废，在途 /users/me 不得再写回。
-    sessionGeneration++
+    advanceSessionGeneration()
     intentionalLogout.value = true
     clearUserRetryTimer()
     clearConfigRetryTimer()

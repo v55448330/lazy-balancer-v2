@@ -6,10 +6,13 @@ package handlers
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -94,11 +97,10 @@ func TestUpdateSecurityPolicy_auditDeltaCoversTypeAndTrustDetection(t *testing.T
 	}
 }
 
-// UPDATE 列集合 ↔ delta 字段集合静态对照（防「加列忘加 delta」复发，同款
-// TestCaddySectionKeys_matchUpdateSQL 文本定位模式）——delta 字段清单以
-// delta*/deltaRefs/拦截页 调用点枚举，UPDATE 写入列以 addStr/addInt/addBool/
-// 显式 query+= 枚举；两集合必须全等（policy_type/trust_detection 为既有豁免转
-// 正项，断言它们在场即锁住缺口）。
+// UPDATE 列集合 ↔ delta 字段集合静态对照（防「加列忘加 delta」复发）：
+// AST 枚举 add* 调用、完整 query += SET 字面量、delta* 实参与拦截页裸分支；
+// 两集合必须全等（policy_type/trust_detection 为既有豁免转正项，断言它们
+// 在场即锁住缺口），updated_by 操作者元数据按理由显式豁免。
 func TestSecurityPolicyDeltaCoversAllUpdateColumns(t *testing.T) {
 	// When：解析 security.go 中 UPDATE 写列与 delta 覆盖列
 	updateCols, deltaCols := securityPolicyUpdateAndDeltaColumns(t)
@@ -124,43 +126,196 @@ func TestSecurityPolicyDeltaCoversAllUpdateColumns(t *testing.T) {
 	}
 }
 
-// delta 覆盖集合 = 同函数体内 deltaStr/deltaBool/deltaInt/deltaRefs 调用实参里
-// stored.<Field> 的 snake_case 列名（GeoIP→geoip、CIDR→cidr、IP→ip 缩写归一）。
+// delta 覆盖集合 = 同函数体内 delta* 调用实参里的 stored.<Field>；
+// UPDATE 集合 = add* 首参列名 + query += 的完整 SET 字面量。AST 锚定调用
+// 与赋值节点，不受缩进/嵌套括号影响；addJSON 等新 helper 也不会与
+// deltaJSON 一起从两侧静默漏掉。updated_by 是每次写入都刷新的操作者
+// 元数据，不属于用户配置值，故显式豁免 delta 对账。
 func securityPolicyUpdateAndDeltaColumns(t *testing.T) (updateCols, deltaCols map[string]bool) {
 	t.Helper()
-	src, err := os.ReadFile("security.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "security.go", nil, 0)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse security.go: %v", err)
 	}
-	text := string(src)
-	start := strings.Index(text, "func (h *Handlers) UpdateSecurityPolicy")
-	if start < 0 {
-		t.Fatal("UpdateSecurityPolicy 未找到")
-	}
-	if end := strings.Index(text[start:], "\nfunc "); end > 0 {
-		text = text[start : start+end]
-	} else {
-		text = text[start:]
-	}
-	updateCols = map[string]bool{}
-	for _, m := range regexp.MustCompile(`add(?:Str|Int|Bool)\("([a-z_]+)"`).FindAllStringSubmatch(text, -1) {
-		updateCols[m[1]] = true
-	}
-	for _, m := range regexp.MustCompile(`query \+= ", ([a-z_]+)=\?"`).FindAllStringSubmatch(text, -1) {
-		updateCols[m[1]] = true
-	}
-	// delta 覆盖双形态：delta* 调用实参里的 stored.<Field> + 裸 if-block
-	// （`if req.X != nil && *req.X != stored.X` 形态，如 block_page_id 拦截页 delta）
-	deltaCols = map[string]bool{}
-	deltaCalls := regexp.MustCompile(`delta(?:Str|Bool|Int|JSON|Refs)\(([^)]*(?:\([^)]*\)[^)]*)*)\)`).FindAllStringSubmatch(text, -1)
-	fieldRef := regexp.MustCompile(`stored\.([A-Za-z0-9]+)`)
-	for _, call := range deltaCalls {
-		for _, f := range fieldRef.FindAllStringSubmatch(call[1], -1) {
-			deltaCols[fieldToColumn(f[1])] = true
+	var updateFn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "UpdateSecurityPolicy" {
+			updateFn = fn
+			break
 		}
 	}
-	for _, m := range regexp.MustCompile(`if req\.\w+ != nil && \*req\.\w+ != stored\.([A-Za-z0-9]+)`).FindAllStringSubmatch(text, -1) {
-		deltaCols[fieldToColumn(m[1])] = true
+	if updateFn == nil || updateFn.Body == nil {
+		t.Fatal("UpdateSecurityPolicy 函数体未找到")
+	}
+
+	updateCols = map[string]bool{}
+	deltaCols = map[string]bool{}
+	metadataExemptions := map[string]string{
+		"updated_by": "操作者元数据每次更新统一写入，不是需要记入变更 delta 的配置值",
+	}
+	metadataSeen := map[string]int{}
+	addUpdateColumn := func(column string) {
+		if _, exempt := metadataExemptions[column]; exempt {
+			metadataSeen[column]++
+			return
+		}
+		updateCols[column] = true
+	}
+	var stringLiteral func(ast.Expr) (string, bool)
+	stringLiteral = func(expr ast.Expr) (string, bool) {
+		switch value := expr.(type) {
+		case *ast.BasicLit:
+			if value.Kind != token.STRING {
+				return "", false
+			}
+			text, err := strconv.Unquote(value.Value)
+			return text, err == nil
+		case *ast.BinaryExpr:
+			if value.Op != token.ADD {
+				return "", false
+			}
+			left, lok := stringLiteral(value.X)
+			right, rok := stringLiteral(value.Y)
+			return left + right, lok && rok
+		default:
+			return "", false
+		}
+	}
+	sprintfLiteral := func(expr ast.Expr) (string, bool) {
+		call, ok := expr.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return "", false
+		}
+		function, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || function.Sel.Name != "Sprintf" {
+			return "", false
+		}
+		pkg, ok := function.X.(*ast.Ident)
+		if !ok || pkg.Name != "fmt" {
+			return "", false
+		}
+		format, ok := stringLiteral(call.Args[0])
+		if !ok {
+			return "", false
+		}
+		values := make([]any, 0, len(call.Args)-1)
+		for _, arg := range call.Args[1:] {
+			value, ok := stringLiteral(arg)
+			if !ok {
+				return "", false
+			}
+			values = append(values, value)
+		}
+		return fmt.Sprintf(format, values...), true
+	}
+	columnName := regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	columnAssignment := regexp.MustCompile(`([a-z_][a-z0-9_]*)\s*=`)
+	whereClause := regexp.MustCompile(`(?i)\bWHERE\b`)
+	storedDeltaField := func(expr ast.Expr) string {
+		comparison, ok := expr.(*ast.BinaryExpr)
+		if !ok || comparison.Op != token.NEQ {
+			return ""
+		}
+		for _, sides := range [][2]ast.Expr{{comparison.X, comparison.Y}, {comparison.Y, comparison.X}} {
+			star, ok := sides[0].(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			request, ok := star.X.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			requestBase, ok := request.X.(*ast.Ident)
+			if !ok || requestBase.Name != "req" {
+				continue
+			}
+			stored, ok := sides[1].(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			storedBase, ok := stored.X.(*ast.Ident)
+			if ok && storedBase.Name == "stored" {
+				return stored.Sel.Name
+			}
+		}
+		return ""
+	}
+
+	ast.Inspect(updateFn.Body, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			if typed.Tok != token.ADD_ASSIGN || len(typed.Lhs) != 1 || len(typed.Rhs) != 1 {
+				return true
+			}
+			lhs, ok := typed.Lhs[0].(*ast.Ident)
+			if !ok || lhs.Name != "query" {
+				return true
+			}
+			text, ok := stringLiteral(typed.Rhs[0])
+			if !ok {
+				text, ok = sprintfLiteral(typed.Rhs[0])
+			}
+			if !ok {
+				// add* helper 内的 query += fmt.Sprintf(..., field) 不是具体列；
+				// 具体列由下方每个 add* 调用点收集。
+				return true
+			}
+			if where := whereClause.FindStringIndex(text); where != nil {
+				text = text[:where[0]]
+			}
+			for _, match := range columnAssignment.FindAllStringSubmatch(text, -1) {
+				addUpdateColumn(match[1])
+			}
+		case *ast.CallExpr:
+			name, ok := typed.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch {
+			case strings.HasPrefix(name.Name, "add"):
+				if len(typed.Args) == 0 {
+					t.Fatalf("%s 缺少列名首参 @ %s", name.Name, fset.Position(typed.Pos()))
+				}
+				column, ok := stringLiteral(typed.Args[0])
+				if !ok || !columnName.MatchString(column) {
+					t.Fatalf("%s 首参必须是列名字面量 @ %s", name.Name, fset.Position(typed.Pos()))
+				}
+				addUpdateColumn(column)
+			case strings.HasPrefix(name.Name, "delta"):
+				for _, arg := range typed.Args {
+					ast.Inspect(arg, func(argNode ast.Node) bool {
+						selector, ok := argNode.(*ast.SelectorExpr)
+						if !ok {
+							return true
+						}
+						base, ok := selector.X.(*ast.Ident)
+						if ok && base.Name == "stored" {
+							deltaCols[fieldToColumn(selector.Sel.Name)] = true
+						}
+						return true
+					})
+				}
+			}
+		case *ast.IfStmt:
+			ast.Inspect(typed.Cond, func(condNode ast.Node) bool {
+				expr, ok := condNode.(ast.Expr)
+				if field := storedDeltaField(expr); ok && field != "" {
+					deltaCols[fieldToColumn(field)] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	for column, reason := range metadataExemptions {
+		if metadataSeen[column] == 0 {
+			t.Fatalf("豁免列 %s 已不在 UPDATE 字面量中，请删除腐化豁免（原理由：%s）", column, reason)
+		}
+	}
+	if len(updateCols) < 20 || len(deltaCols) < 20 {
+		t.Fatalf("UPDATE/delta 基线列数异常：%d/%d，want 均 >=20（AST 对账不得零命中）", len(updateCols), len(deltaCols))
 	}
 	return updateCols, deltaCols
 }

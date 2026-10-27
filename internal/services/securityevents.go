@@ -180,8 +180,8 @@ func securityEventsRawIsChainStarter(raw string) bool {
 
 // securityEventsChainedCustomRuleScore 按发射 id 回查自定义规则分：
 // 多条件 block/pass 规则的 setvar 在链尾，审计 raw 只有起始条 → 摄入侧评分恒 0。
-// 发射 id = DB id + 10000（合成 id 1000000+ 不带评分），[10001,799999] 是自定义
-// 规则独占段（IP 族 1-14 / GeoIP 800000-899999 / CRS 9xxxxx 均不重叠）。
+// 普通发射 id = DB id + 10000；OR 分支由 DecodeCustomRuleEmitID 回解同一父规则。
+// 合成 id 1000000+ 不带评分，GeoIP/CRS/IP 族段均不重叠。
 //
 // 取值顺序保证确定性：优先归因策略（attributedPolicyID，事件实际归属的策略），
 // 未命中再按 policy_id 升序扫（同一规则被多策略内嵌引用且分数不同时，取最小
@@ -189,10 +189,13 @@ func securityEventsRawIsChainStarter(raw string) bool {
 // 同一事件在不同 tick/重放会得到不同 anomaly_score（评分列/大屏分档抖动）。
 func securityEventsChainedCustomRuleScore(ruleTriggered string, policyByID map[int]*models.SecurityPolicy, attributedPolicyID int) int {
 	n, err := strconv.Atoi(ruleTriggered)
-	if err != nil || n <= 10000 || n >= 800000 {
+	if err != nil {
 		return 0
 	}
-	ruleID := n - 10000
+	ruleID, ok := DecodeCustomRuleEmitID(n)
+	if !ok {
+		return 0
+	}
 	if p := policyByID[attributedPolicyID]; p != nil {
 		if score, ok := chainedCustomRuleScoreInPolicy(p, ruleID); ok {
 			return score
@@ -817,7 +820,7 @@ func securityEventsBuildCRSExclusionMatcher(policyByID map[int]*models.SecurityP
 		}
 		set := securityEventsPolicyCRSExclusions{entries: entries}
 		for _, entry := range entries {
-			if entry.Scope != "list" {
+			if entry.Scope != "ip" && entry.Scope != "list" {
 				continue
 			}
 			for _, ref := range entry.ListRefs {
@@ -925,10 +928,9 @@ func securityEventsPolicyCRSGroups(policy *models.SecurityPolicy) (map[string]st
 	return set, true
 }
 
-// securityEventsPolicyCustomEmitIDs 返回策略自定义规则发射 id（DB id+10000）
-// 集合的解析缓存：[]int 形态优先（解析成功即不回退），失败后尝试对象内嵌
-// 形态；双形态均失败按畸形（不认领）。与此前逐事件 Unmarshal 的判定语义
-// 逐项等价。
+// securityEventsPolicyCustomEmitIDs 返回策略自定义规则发射 id 集合的解析缓存。
+// ID 数组先保留普通发射 id 的原始快照归因能力，再用已加载规则补充 OR 分支；
+// 内嵌对象直接按渲染时的合成 id 顺序展开。
 func securityEventsPolicyCustomEmitIDs(policy *models.SecurityPolicy) (map[int]struct{}, bool) {
 	if policy.CustomRuleIDsParsed {
 		return policy.CustomRuleEmitIDs, policy.CustomRuleIDsOK
@@ -940,23 +942,46 @@ func securityEventsPolicyCustomEmitIDs(policy *models.SecurityPolicy) (map[int]s
 		for _, id := range ids {
 			set[id+10000] = struct{}{}
 		}
+		addResolvedCustomRuleEmitIDs(set, policyCustomRulesCached(policy, nil))
 		policy.CustomRuleEmitIDs = set
 		policy.CustomRuleIDsOK = true
 		return set, true
 	}
-	var embedded []struct {
-		ID int `json:"id"`
-	}
+	var embedded []models.CustomRule
 	if err := json.Unmarshal(policy.CustomRules, &embedded); err == nil {
 		set := make(map[int]struct{}, len(embedded))
-		for _, e := range embedded {
-			set[e.ID+10000] = struct{}{}
-		}
+		addResolvedCustomRuleEmitIDs(set, embedded)
 		policy.CustomRuleEmitIDs = set
 		policy.CustomRuleIDsOK = true
 		return set, true
 	}
 	return nil, false
+}
+
+func addResolvedCustomRuleEmitIDs(set map[int]struct{}, rules []models.CustomRule) {
+	synthetic := 0
+	for _, cr := range rules {
+		if !customRuleEmittable(cr) {
+			continue
+		}
+		emitID := cr.ID + 10000
+		if cr.ID == 0 {
+			synthetic++
+			emitID = SyntheticCustomRuleIDBase + synthetic
+		}
+		if cr.ConditionLogic != "or" {
+			set[emitID] = struct{}{}
+			continue
+		}
+		delete(set, emitID)
+		conditionCount := len(cr.Conditions)
+		if conditionCount == 0 {
+			conditionCount = 1
+		}
+		for idx := range conditionCount {
+			set[customRuleORConditionEmitID(emitID, idx)] = struct{}{}
+		}
+	}
 }
 
 // securityEventsPolicyContainsRuleWithExclusions 归属判定的单一生产实现
@@ -1069,6 +1094,11 @@ func securityEventsPolicyContainsRuleWithExclusions(policy *models.SecurityPolic
 		if securityEventsCRSExclusionRemovesRule(crsExclusions, ruleTriggered, clientIP) {
 			return false
 		}
+		// RESPONSE-95x/98x 文件只在响应检查开启时 Include；关闭时
+		// 默认全量、组号或单 ID 选择都不能让该策略认领响应事件。
+		if !policy.WAFCheckResponse && (strings.HasPrefix(ruleTriggered, "95") || strings.HasPrefix(ruleTriggered, "98")) {
+			return false
+		}
 		// 949 评估规则自 v2.2.3 起对全部启用 WAF 的策略强制包含
 		// 基础设施去重强制 Include），959 对开启响应检查的策略强制包含——均与
 		// 存储的 crs_rule_groups 无关（写入面已剥离 49/59 组号，组号匹配恒
@@ -1099,7 +1129,7 @@ func securityEventsPolicyContainsRuleWithExclusions(policy *models.SecurityPolic
 		}
 		_, codeHit := groups[ruleTriggered[1:3]]
 		return codeHit
-	case n >= 10000 && n < geoipPrecheckRuleBase:
+	case securityEventsRuleIsCustomFamily(ruleTriggered):
 		// (2026-09-10 审计):off=全关(四态化)零发射,不得认领自定义规则事件
 		//(与 CRS 分支 blocking/detection 门同口径;custom_only/blocking/detection
 		// 三态的自定义规则发射由 customActive 保证)。
@@ -1203,9 +1233,8 @@ func securityEventsRuleIsIPFamily(ruleTriggered string) bool {
 	return IsStage1PrecheckID(n) // 消费单一事实源（原第三处字面量复写）
 }
 
-// securityEventsRuleIsCustomFamily 报告规则 id 是否属于自定义规则族（5 位发射
-// id 10000-799999 = DB id+10000，及无 id 旧版规则的合成段 1000000+）。单一事实
-// 源：fallback 门与能力首选层共用，禁止各自复写字面量。
+// securityEventsRuleIsCustomFamily 报告规则 id 是否属于自定义规则族（普通
+// id+10000、旧版合成段及 OR 分支高段）。单一事实源：fallback 门与能力首选层共用。
 func securityEventsRuleIsCustomFamily(ruleTriggered string) bool {
 	n, err := strconv.Atoi(ruleTriggered)
 	if err != nil {
@@ -2211,8 +2240,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 			return true
 		}
 		if !crossPassAutobanScopeLoaded {
-			cfg := GetAutobanConfig()
-			if cfg.Enabled {
+			cfg, err := GetAutobanConfig()
+			if err == nil && cfg.Enabled {
 				crossPassAutobanScope = cfg.Scope
 			}
 			crossPassAutobanScopeLoaded = true

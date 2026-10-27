@@ -14,7 +14,14 @@ export function flowTimestamp(value: string): number {
 
 /** 增量批次动效（流光/弹框）的实时性上限：入库延迟/轮转回填会把
  *  数小时前的事件塞进增量批次，直接绘制会表现为「正在发生」。列表仍按窗口展示。 */
-export const FLOW_REALTIME_MAX_AGE_MS = 5 * 60_000
+const FLOW_REALTIME_MAX_AGE_MS = 5 * 60_000
+
+/** 只保留可作为“正在发生”展示的事件；未来时钟偏差沿用既有攻击流口径放行。 */
+export function freshFlowEvents<T extends { at?: number }>(events: readonly T[], now: number): T[] {
+  return events.filter((event) => typeof event.at === 'number'
+    && Number.isFinite(event.at)
+    && now - event.at <= FLOW_REALTIME_MAX_AGE_MS)
+}
 
 /**
  * 后端采样契约：-1=自适应、0=关闭逐请求光流。全量档已退役（自适应本身从

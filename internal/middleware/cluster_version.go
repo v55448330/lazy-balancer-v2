@@ -255,7 +255,7 @@ var clusterSyncedTables = []clusterSyncedTable{
 	{name: "cert_jobs", snapshotColumns: "rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id,renewal_attempts,ca_available_after,last_error_code,created_at,updated_at"},
 	{name: "security_policies", snapshotColumns: "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection"},
 	{name: "security_policy_bindings", snapshotColumns: "rule_caddy_id,policy_id"},
-	{name: "security_custom_rules", snapshotColumns: "id,name,description,conditions,action,score,enabled,updated_by,created_at,updated_at"},
+	{name: "security_custom_rules", snapshotColumns: "id,name,description,conditions,condition_logic,action,score,enabled,updated_by,created_at,updated_at"},
 	{name: "security_block_pages", snapshotColumns: "id,name,description,content,content_type,is_default,is_builtin,created_by,created_at,updated_by,updated_at"},
 	{name: "security_ip_lists", snapshotColumns: "id,name,description,category,entries,created_by,created_at,updated_by,updated_at,system"},
 	// schedule_days/schedule_time 入列——主端排程

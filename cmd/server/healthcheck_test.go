@@ -107,3 +107,34 @@ func TestRunHealthcheck_doesNotFollowRedirect(t *testing.T) {
 		t.Fatalf("exit=%d, want 1（302 不得跟随成登录页 200）", code)
 	}
 }
+
+func TestRunHealthcheck_twoFailedAttemptsStayWithinConfiguredBudget(t *testing.T) {
+	release := make(chan struct{})
+	newBlockingServer := func(tlsEnabled bool) *httptest.Server {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			<-release
+			w.WriteHeader(http.StatusOK)
+		})
+		if tlsEnabled {
+			return httptest.NewTLSServer(handler)
+		}
+		return httptest.NewServer(handler)
+	}
+	httpsServer := newBlockingServer(true)
+	httpServer := newBlockingServer(false)
+	defer func() {
+		close(release)
+		httpsServer.Close()
+		httpServer.Close()
+	}()
+	withHealthcheckURLs(t, httpsServer.URL, httpServer.URL)
+	healthcheckTimeout = 40 * time.Millisecond
+
+	start := time.Now()
+	if code := runHealthcheck(); code != 1 {
+		t.Fatalf("exit=%d, want 1", code)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("two attempts took %v, want two bounded waits", elapsed)
+	}
+}

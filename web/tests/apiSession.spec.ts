@@ -35,3 +35,21 @@ test('请求拦截器记录发起令牌，401 分支先复核再进入会话失�
     '旧会话请求必须在加载认证 store 与弹框前被丢弃',
   )
 })
+
+test('请求记录身份代际，428 通过身份守卫编排弹码、刷新与重放', () => {
+  const requestInterceptor = codeSection(
+    'src/utils/api.ts',
+    'service.interceptors.request.use(',
+    'service.interceptors.response.use(',
+  )
+  assert.match(requestInterceptor, /config\._sessionGeneration\s*=\s*currentSessionGeneration\(\)/)
+
+  const stepUp = codeSection('src/utils/api.ts', "} else if (kind === 'step-up') {", '} else if (!isLoginRequest)')
+  assert.match(stepUp, /requestGeneration === currentSessionGeneration\(\)/)
+  assert.match(stepUp, /runMfaStepUpRequest\(\{/)
+  assert.match(stepUp, /isCurrent,/)
+  assert.match(stepUp, /replay: \(\) => \{[\s\S]*?service\.request\(error\.config\)/)
+
+  const refresh = codeSection('src/stores/auth.ts', 'async function refreshMfaStep', '// v2.1.8 MFA 第二步')
+  assert.match(refresh, /applyAuthResponse\(res, true\)/, 'MFA 刷新必须保持同账号身份代际')
+})

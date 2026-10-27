@@ -93,7 +93,7 @@
 
 ## 重启语义与容器策略
 
-面板的“重启服务”、启用面板 HTTPS、集群 `restart_app` 都会让 PID1 退出。裸 `docker run` 必须带 `--restart unless-stopped`（compose 已内置 `restart: unless-stopped`），否则容器不会自动拉起，面板与代理流量会同时停摆。裸机 systemd 部署需配置等效的自动重启策略。
+面板的“重启服务”、启用面板 HTTPS、集群 `restart_app` 都会让面板进程退出，作为 PID 1 的 tini 随后退出，容器因此停止。裸 `docker run` 必须带 `--restart unless-stopped`（compose 已内置 `restart: unless-stopped`），否则容器不会自动拉起，面板与代理流量会同时停摆。裸机 systemd 部署需配置等效的自动重启策略。
 
 **PID 1 与子进程回收**：当前镜像以 tini 作为 PID 1，健康检查也由二进制子命令完成（不派生 shell/客户端进程），被遗弃的子进程会被自动回收，部署时无需额外加 `--init`。若固定使用更早镜像，容器内 PID 1 是面板进程且不回收孤儿，请务必追加 `--init`。启动示例默认设置 `--pids-limit=4096`（cgroup PID 配额按线程计数），可按部署规模调整。诊断命令：`cat /sys/fs/cgroup/pids.current`、`/sys/fs/cgroup/pids.max`、`/sys/fs/cgroup/pids.events`（`max` 计数即历史撞线次数）。
 

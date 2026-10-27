@@ -42,19 +42,16 @@ test('自动备份 quiet 轮询失败不逐轮弹 toast', () => {
   assert.equal(shouldToastQuietPollError(false, 100_000, 0), true, 'quiet 且从未加载成功：提示一次')
   assert.equal(shouldToastQuietPollError(false, 100_000 + 29_999, 100_000), false, '窗口内不得重复提示（刷屏回归）')
   assert.equal(shouldToastQuietPollError(false, 100_000 + 30_001, 100_000), true, '窗口过后可再提示一次')
-  // 生产接线：两个分支各自独立——quiet 分支先过节流判定，else 分支无条件提示。
+  // 生产接线：quiet 分支先过节流判定；非 quiet 失败由当前读取会话的 onError 披露。
   const body = section(code('src/views/settings/BasicSettings.vue'), 'const fetchAutoBackup', 'const onAutoBackupOpened')
   const catchAt = body.indexOf('} catch {')
-  assert.ok(catchAt > 0, '缺 catch 分支')
+  assert.ok(catchAt > 0, '缺 quiet catch 分支')
   const catchBody = body.slice(catchAt)
-  const elseAt = catchBody.indexOf('} else {')
-  assert.ok(elseAt > 0, '缺非 quiet 失败分支')
-  const quietBranch = catchBody.slice(0, elseAt)
-  const guardAt = quietBranch.indexOf('shouldToastQuietPollError(autoBackupLoaded.value, now, lastAutoBackupErrorToastAt)')
-  const quietToastAt = quietBranch.indexOf('ElMessage.error')
+  const guardAt = catchBody.indexOf('shouldToastQuietPollError(autoBackupLoaded.value, now, lastAutoBackupErrorToastAt)')
+  const quietToastAt = catchBody.indexOf('ElMessage.error')
   assert.ok(guardAt > 0, 'quiet 分支必须经节流判定')
   assert.ok(quietToastAt > guardAt, 'quiet 分支的 toast 必须在节流判定之后')
-  assert.match(catchBody.slice(elseAt), /^} else \{[\s\S]*?ElMessage\.error/, '非 quiet 失败必须无条件提示')
+  assert.match(body, /onError: \(\) => \{[\s\S]*?ElMessage\.error\('自动备份设置读取失败，请关闭弹框后重试；读取完成前无法保存'\)/, '非 quiet 失败必须提示')
 })
 
 test('健康轮询接入退避门，不可达 onError 已删除', () => {
@@ -507,11 +504,11 @@ test('后端下发 visible_when/option_labels，前端不再硬编码 dnspod 字
 test('OIDC GET 失败清空为未配置态并禁止保存（不得回填上一轮状态）', () => {
   const page = code('src/views/settings/OIDCSettings.vue')
   const load = section(page, 'const load = async', 'let probeInFlight')
-  const catchAt = load.indexOf('} catch {')
-  assert.ok(catchAt > 0, 'load 缺 catch 分支')
-  const catchBlock = load.slice(catchAt)
+  const failureAt = load.indexOf('onError: () => {')
+  assert.ok(failureAt > 0, 'load 缺最新会话 onError 分支')
+  const failureBlock = load.slice(failureAt)
   for (const cleared of ['enabled.value = false', 'hasSecret.value = false', 'hasFetchedConfig.value = false', "form.issuer = ''", 'loadFailed.value = true']) {
-    assert.ok(catchBlock.includes(cleared), `load catch 未复位 ${cleared}——父级会回填陈旧状态`)
+    assert.ok(failureBlock.includes(cleared), `load onError 未复位 ${cleared}——父级会回填陈旧状态`)
   }
   assert.match(page, /v-if="loadFailed" type="error"/)
   assert.match(section(page, 'const save = async', '\nconst '), /if \(loadFailed\.value\)/)

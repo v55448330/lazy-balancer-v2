@@ -52,6 +52,27 @@ export const classifyAuthFailure = (input: AuthFailureInput): AuthFailureKind =>
 export const isRequestAuthTokenCurrent = (requestToken: string | undefined, currentToken: string | null): boolean =>
   requestToken === (currentToken ?? undefined)
 
+
+/**
+ * 单个 428 的处置链：进入弹码前、验码后刷新前、刷新后重放前都复核身份。
+ * 返回 stale 时调用方只 reject 原请求，不产生任何面向新会话的副作用。
+ */
+export const runMfaStepUpRequest = async <T>(operations: {
+  readonly isCurrent: () => boolean
+  readonly prompt: () => Promise<string | null>
+  readonly refresh: (code: string) => Promise<void>
+  readonly replay: () => Promise<T>
+  readonly onVerified?: () => void
+}): Promise<{ readonly kind: 'replayed'; readonly value: T } | { readonly kind: 'cancelled' | 'stale' }> => {
+  if (!operations.isCurrent()) return { kind: 'stale' }
+  const code = await operations.prompt()
+  if (!operations.isCurrent()) return { kind: 'stale' }
+  if (!code) return { kind: 'cancelled' }
+  await operations.refresh(code)
+  if (!operations.isCurrent()) return { kind: 'stale' }
+  operations.onVerified?.()
+  return { kind: 'replayed', value: await operations.replay() }
+}
 interface MfaStepUpCoordinator {
   /** 弹码（单飞）：在途时并发 428 共享同一 Promise，不连环弹窗。 */
   readonly prompt: () => Promise<string | null>

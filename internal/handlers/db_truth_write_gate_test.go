@@ -31,7 +31,7 @@ func TestUpdateConfig_rejectsZeroValueTypedGlobals(t *testing.T) {
 		body string
 		hint string
 	}{
-		{"request_body_max_size_mb", `{"request_body_max_size_mb":0}`, "1-4096"},
+		{"request_body_max_size_mb", `{"request_body_max_size_mb":0}`, "1-1024"},
 		{"http_read_timeout", `{"http_read_timeout":0}`, "http_read_timeout"},
 		{"http_write_timeout", `{"http_write_timeout":0}`, "http_write_timeout"},
 		{"http_idle_timeout", `{"http_idle_timeout":0}`, "http_idle_timeout"},

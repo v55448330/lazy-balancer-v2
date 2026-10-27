@@ -177,6 +177,7 @@ export interface SecurityStageCustomRule {
   action?: string
   score?: number
   enabled?: boolean
+  condition_logic?: 'and' | 'or'
   conditions?: Array<{ target: string; operator?: string; pattern?: string }>
 }
 
@@ -1444,7 +1445,8 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //   ① attackFamilyClassOf（internal/handlers/security.go）——ID 形态族：
 //      5 位任意 = 自定义（发射 id=crID+10000 落 10000-99999；CRS 恒 6 位）；
 //      6 位 1-7 开头 = DB 自定义规则 id 10000-789999 发射 id+10000；
-//      7 位+ 1 开头 = 无 id 规则合成 id 1000000+n。
+//      7 位+ 1 开头 = 无 id 规则合成 id 1000000+n；更高独立段 = OR 条件分支。
+//      OR 分支由 customRuleEventDbID 回解同一 DB 父规则，不归 CRS。
 //      原实现只认 5 位与 1 开头≥7 位 → 6 位自定义（100000-799999）落 other，
 //      详情弹框按 default 误归 ACL。
 //   ② triggerTypeForRule（internal/handlers/security_threat_screen.go）——数值段：
@@ -1473,6 +1475,21 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 // TriggerDetailDialog 注释已显式钉住该例外，不得按「与后端同步」改回 geoip。
 export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'other'
 
+const CUSTOM_RULE_OR_CONDITION_ID_BASE = 3000000
+const CUSTOM_RULE_MAX_CONDITIONS = 64
+
+// 普通 emit id 与 OR 条件分支 emit id 都回解到同一 DB 父规则；旧内嵌合成 id 无父行。
+export const customRuleEventDbID = (ruleTriggered: string): number => {
+  const n = Number((ruleTriggered ?? '').trim())
+  if (!Number.isInteger(n)) return Number.NaN
+  if (n > 10000 && n < 800000) return n - 10000
+  if (n >= CUSTOM_RULE_OR_CONDITION_ID_BASE) {
+    const parentEmitID = Math.floor((n - CUSTOM_RULE_OR_CONDITION_ID_BASE) / CUSTOM_RULE_MAX_CONDITIONS)
+    if (parentEmitID > 10000 && parentEmitID < 800000) return parentEmitID - 10000
+  }
+  return Number.NaN
+}
+
 export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily => {
   const t = (ruleTriggered ?? '').trim()
   if (!t) return 'other'
@@ -1485,6 +1502,7 @@ export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily =>
   if (/^9\d{5}$/.test(t)) return 'wafCrs'
   const n = Number(t)
   if (!Number.isFinite(n)) return 'other'
+  if (n >= CUSTOM_RULE_OR_CONDITION_ID_BASE) return 'wafCustom'
   // ② 固定 id 族（后端 legacyRuleFamilies 表派生口径）
   if (n === 3 || n === 5 || n === 12) return 'trust'
   if (n === 14) return 'threat'
@@ -1602,6 +1620,28 @@ export const blockPageStageCanIntercept = (input: BlockPageStageCapability): boo
     return mode === 'blocking' || input.hasBlockingCustomRule === true
   }
   return input.hasAclEntries === true || input.hasBlacklistEntries === true || input.hasGeoip === true
+}
+
+/** 自定义规则是否能在指定 WAF 模式下产生真实阻断；detection 的 phase 2 body 规则仅记录。 */
+export const customRuleCanBlockInMode = (mode: string, rule: SecurityStageCustomRule): boolean => {
+  if (rule.enabled === false || (rule.action ?? 'block') !== 'block') return false
+  return mode !== 'detection' || !(rule.conditions ?? []).some((condition) => condition.target === 'body')
+}
+
+/** 地址级允许×拒绝提示：阶段 0 信任全局优先；ACL 与存量非阶段 0 信任仍属策略本地。 */
+export const addressAllowDenyConflictText = (input: {
+  kind: 'acl' | 'trust'
+  policyType?: string
+  trustDetection?: boolean
+  denyPolicyName: string
+}): string => {
+  if (input.kind === 'trust' && input.policyType === 'stage0') {
+    return input.trustDetection === true
+      ? '阶段 0 信任跨策略优先生效：保留检测模式仅记录、不拦截'
+      : '阶段 0 信任跨策略优先生效：直通模式跳过全部安全检测'
+  }
+  const allowance = input.kind === 'trust' ? '信任' : '允许'
+  return `${allowance}不跨策略生效，该地址仍会被「${input.denyPolicyName}」拦截`
 }
 
 /**

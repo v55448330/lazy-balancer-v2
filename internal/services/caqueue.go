@@ -718,6 +718,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 		Logf("error", "%s: close rows failed: %v", logPrefix, err)
 		return requeued, fmt.Errorf("关闭滞留证书任务结果集: %w", err)
 	}
+	var actionErr error
 	for _, job := range jobs {
 		if m.IsJobActive(job.id) {
 			// 防御：任务正被队列执行时不得扫描重入队——把在途任务
@@ -741,6 +742,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 			return job.id, err == nil, err
 		})
 		if err != nil {
+			actionErr = errors.Join(actionErr, fmt.Errorf("重排滞留任务 %d（规则 %s）: %w", job.id, job.ruleID, err))
 			Logf("error", "%s: requeue stranded job %d failed: %v", logPrefix, job.id, err)
 			continue
 		}
@@ -748,7 +750,7 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 			requeued++
 		}
 	}
-	return requeued, nil
+	return requeued, errors.Join(err, actionErr)
 }
 
 // HasRunningJobForRule 报告该规则当前是否有 worker 正在执行证书任务。

@@ -235,22 +235,21 @@ func TestLoadOrCreateAccountKey_fails_closed_on_unparseable_key(t *testing.T) {
 
 // decodeACMERequestPayload 还原 JWS 请求的业务载荷：ACME POST 的 payload 在
 // JWS 信封内做 base64url 编码，直接对原始 body 做子串匹配会落空。
-func decodeACMERequestPayload(t *testing.T, request *http.Request) string {
-	t.Helper()
+func decodeACMERequestPayload(request *http.Request) (string, error) {
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
-		t.Fatalf("read request body: %v", err)
+		return "", fmt.Errorf("read request body: %w", err)
 	}
 	var jws struct {
 		Payload string `json:"payload"`
 	}
 	if jsonErr := json.Unmarshal(body, &jws); jsonErr != nil {
-		return string(body)
+		return string(body), nil
 	}
 	if raw, decErr := base64.RawURLEncoding.DecodeString(jws.Payload); decErr == nil {
-		return string(raw)
+		return string(raw), nil
 	}
-	return jws.Payload
+	return jws.Payload, nil
 }
 
 // CA 以 400 "already registered"（而非 200 sentinel）拒绝注册时，新密钥撞
@@ -269,7 +268,12 @@ func TestClient_RegisterAccount_rejects_mask_hit_when_key_holds_no_account(t *te
 		case "/nonce":
 			writer.WriteHeader(http.StatusOK)
 		case "/account":
-			if strings.Contains(decodeACMERequestPayload(t, request), "onlyReturnExisting") {
+			payload, decodeErr := decodeACMERequestPayload(request)
+			if decodeErr != nil {
+				http.Error(writer, decodeErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if strings.Contains(payload, "onlyReturnExisting") {
 				onlyReturnExistingSeen++
 				writer.Header().Set("Content-Type", "application/problem+json")
 				writer.WriteHeader(http.StatusBadRequest)
@@ -322,7 +326,12 @@ func TestClient_RegisterAccount_reuses_when_mask_hit_and_key_holds_account(t *te
 		case "/nonce":
 			writer.WriteHeader(http.StatusOK)
 		case "/account":
-			if strings.Contains(decodeACMERequestPayload(t, request), "onlyReturnExisting") {
+			payload, decodeErr := decodeACMERequestPayload(request)
+			if decodeErr != nil {
+				http.Error(writer, decodeErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if strings.Contains(payload, "onlyReturnExisting") {
 				probeSeen++
 				writer.Header().Set("Location", server.URL+"/account/1")
 				writer.WriteHeader(http.StatusOK)
@@ -373,7 +382,12 @@ func TestClient_RegisterAccount_reuses_on_already_exists_sentinel(t *testing.T) 
 		case "/nonce":
 			writer.WriteHeader(http.StatusOK)
 		case "/account":
-			if strings.Contains(decodeACMERequestPayload(t, request), "onlyReturnExisting") {
+			payload, decodeErr := decodeACMERequestPayload(request)
+			if decodeErr != nil {
+				http.Error(writer, decodeErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if strings.Contains(payload, "onlyReturnExisting") {
 				onlyReturnExistingSeen++
 			}
 			// 200 = 账户密钥已注册（JWK 匹配）→ ErrAccountAlreadyExists sentinel

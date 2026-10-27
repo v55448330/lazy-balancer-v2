@@ -209,15 +209,13 @@ test('compareVersion：跨栈共享夹具（Go 同源）', () => {
   assert.ok(checked > 0, '跨栈夹具为空')
 })
 
-// 不可达性机械钉：唯一消费方把各源 version 交给 compareVersion，版本来源为
-// 日期形态；一旦出现新消费方或预发布字面量，本用例先红。
+// 消费面机械钉：唯一消费方把各源日期 version 交给 compareVersion；新消费方
+// 出现时先红并重新评估预发布语义。其它视图允许正常出现 beta/rc 文案。
 test('compareVersion 消费面与版本形态约束', () => {
   const lib = code('src/utils/securityLibraries.ts')
   assert.match(lib, /\.sort\(compareVersion\)/, '唯一消费点是各源版本最大值')
-  // 文档钉（断言对象本就是注释文字）：compareVersion 的注释必须声明消费形态边界。
   // 文档钉（断言对象是注释文字）：compareVersion 注释必须声明消费形态边界。
   assert.match(source('src/utils/securityStages.ts'), /日期形态/, 'compareVersion 文档必须声明设计边界形态')
-  // 「唯一消费方」必须遍历全 src：只扫一个文件时，新消费方在别处静默出现仍绿。
   const files = webFiles('src', ['.ts', '.vue'])
   if (files.length < 50) {
     assert.fail(`扫描面过小（src 下仅 ${files.length} 个源文件）——目录遍历失效`)
@@ -225,9 +223,6 @@ test('compareVersion 消费面与版本形态约束', () => {
   const definition = 'src/utils/securityStages.ts'
   const consumers = files.filter((file) => file !== 'src/utils/securityLibraries.ts' && file !== definition && code(file).includes('compareVersion'))
   assert.deepEqual(consumers, [], `compareVersion 出现新消费方（需重新评估预发布形态边界）：${consumers.join(', ')}`)
-  for (const file of files) {
-    assert.doesNotMatch(code(file), /-\s?(?:beta|rc)\b/, `${file} 不得出现预发布版本形态`)
-  }
 })
 
 test('formatDurationUs：0/缺省 → 占位，三档精度', () => {

@@ -15,7 +15,7 @@ import (
 
 // （2026-09-19 用户裁定「统一遵循请求体大小配置项限制」）
 // 写/读探测端点的请求体上限统一取全局配置 request_body_max_size_mb
-// （读侧 0/缺列/越界回退 128MB；写侧值域 1-4096，0 被 400 拒绝），
+// （读侧 0/缺列/越界回退 128MB；写侧值域 1-1024，0 被 400 拒绝），
 // 不再逐端点裸奔或各定各的常量。
 func TestGuardConfiguredJSONBody(t *testing.T) {
 	setupAuthTestDB(t)

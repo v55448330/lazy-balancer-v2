@@ -50,7 +50,7 @@ var threatRuleNamePointQueriesForTest atomic.Int64
 // ——nil 键表示该 id 在 security_custom_rules 中不存在（回退
 // 「自定义规则（#id）」）。大屏直接展示本标签：事件里的 rule_triggered 是
 // coraza SecRule id，裸数字对用户无意义（阶段 1 预检为合成 id、CRS 为 9xxxxx、
-// 自定义规则为 DB id+10000、限流固定 429）。解析失败时回退「可读类别 + 原始
+// 自定义规则为 DB id+10000 或可回解的 OR 分支、限流固定 429）。解析失败时回退「可读类别 + 原始
 // id」，绝不静默丢 id——排障需要 id 才能对回规则文件。
 func describeThreatRuleNameWithNames(key string, customNames map[int]string) string {
 	if key == "" {
@@ -109,6 +109,22 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 	case services.PrecheckRuleFamilyCrawlerSpoof:
 		return "爬虫伪装拦截（#" + key + "）"
 	}
+	if parentID, ok := services.DecodeCustomRuleEmitID(n); ok {
+		if customNames != nil {
+			if name, ok := customNames[parentID]; ok && strings.TrimSpace(name) != "" {
+				return fmt.Sprintf("%s（#%s）", strings.TrimSpace(name), key)
+			}
+			return "自定义规则（#" + key + "）"
+		}
+		if db.DB != nil {
+			threatRuleNamePointQueriesForTest.Add(1)
+			var name string
+			if err := db.DB.QueryRow(`SELECT name FROM security_custom_rules WHERE id=?`, parentID).Scan(&name); err == nil && strings.TrimSpace(name) != "" {
+				return fmt.Sprintf("%s（#%s）", strings.TrimSpace(name), key)
+			}
+		}
+		return "自定义规则（#" + key + "）"
+	}
 	switch {
 	case n >= services.SyntheticCustomRuleIDBase:
 		// 无 id 的内嵌自定义规则（v2.1.0 前遗留）按合成 emit id 发射：
@@ -122,29 +138,6 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 			}
 		}
 		return "CRS 规则（#" + key + "）"
-	case n >= 10000 && n < services.GeoIPPrecheckSegmentBase:
-		// 自定义规则 emit id = DB id + 10000（emit 侧对 DB id ≥790000 有守卫）。
-		// 下界用 >=（与 triggerTypeForRule 同口径）：10000 是段起点，当前发射
-		// 侧不可达（crID≥1），但两处口径分叉会让同一 id 在大屏「命中规则」榜
-		// 与事件列表 trigger_type 上显示不同分类。
-		if customNames != nil {
-			if name, ok := customNames[n-10000]; ok {
-				if trimmed := strings.TrimSpace(name); trimmed != "" {
-					return fmt.Sprintf("%s（#%s）", trimmed, key)
-				}
-			}
-			return "自定义规则（#" + key + "）"
-		}
-		if db.DB != nil {
-			threatRuleNamePointQueriesForTest.Add(1)
-			var name string
-			if err := db.DB.QueryRow(`SELECT name FROM security_custom_rules WHERE id=?`, n-10000).Scan(&name); err == nil {
-				if trimmed := strings.TrimSpace(name); trimmed != "" {
-					return fmt.Sprintf("%s（#%s）", trimmed, key)
-				}
-			}
-		}
-		return "自定义规则（#" + key + "）"
 	}
 	return key
 }
@@ -161,8 +154,8 @@ func labeledThreatRuleCounts(counts map[string]int) map[string]int {
 	return labeled
 }
 
-// loadThreatCustomRuleNames 预取计数键里自定义规则段（emit id = DB id+10000）
-// 的规则名：一次分块 IN（≤500/批，与 validateIPListRefsExistence 同口径）。
+// loadThreatCustomRuleNames 预取计数键里普通/ OR 分支自定义规则 id 对应的父规则名：
+// 一次分块 IN（≤500/批，与 validateIPListRefsExistence 同口径）。
 // 无自定义规则键返回 nil（describe 走单键路径，行为与旧实现一致）。
 func loadThreatCustomRuleNames(counts map[string]int) map[int]string {
 	if db.DB == nil || len(counts) == 0 {
@@ -171,10 +164,14 @@ func loadThreatCustomRuleNames(counts map[string]int) map[int]string {
 	ids := make([]int64, 0, len(counts))
 	for key := range counts {
 		n, err := strconv.Atoi(key)
-		if err != nil || n < 10000 || n >= services.GeoIPPrecheckSegmentBase {
+		if err != nil {
 			continue
 		}
-		ids = append(ids, int64(n-10000))
+		parentID, ok := services.DecodeCustomRuleEmitID(n)
+		if !ok {
+			continue
+		}
+		ids = append(ids, int64(parentID))
 	}
 	if len(ids) == 0 {
 		return nil
@@ -1359,14 +1356,27 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 		if err := tx.QueryRow(`SELECT COALESCE(SUM(count),0) FROM security_event_rollup WHERE minute=?`, minuteStr).Scan(&oldTotal); err != nil {
 			return err
 		}
-		if newTotal < oldTotal {
-			// 原始事件已被保留期/行帽裁剪：全量重算只看得到剩余行，直接覆盖
-			// 会丢掉「已固化但原始行已消失」的历史。保留旧行（读入时已按当前
-			// 攻击口径过滤）并叠加高水位（或回退留底的迟到基线）之后的迟到
-			// 事件——迟到事件仍在原始表内，可安全并入。无高水位且无基线
-			// （口径上线前的历史分钟、从未固化过的分钟）时无法区分「迟到」与
-			// 「已计入」，不做增量叠加；但口径外行（放行族）仍须借本次重写
-			// 落库清除，否则旧口径固化行永久留存。
+		// 判据必须排除迟到事件：部分裁剪后，迟到写入可能把 newTotal 抬回
+		// oldTotal 以上，但「高水位/迟到基线之前的剩余行」仍少于已固化数。
+		// 仅比较 newTotal 会在这种混合形态下覆盖并永久丢掉已固化历史。
+		lateBaselineID := previousMaxID
+		if lateBaselineID == 0 {
+			lateBaselineID = lateBaseline
+		}
+		lateAgg := map[threatRollupKey]int{}
+		lateTarget := map[string]int{}
+		lateTotal := 0
+		if lateBaselineID > 0 {
+			var aerr error
+			lateAgg, lateTarget, lateTotal, aerr = aggregateEvents(tx, m, next, lateBaselineID)
+			if aerr != nil {
+				return aerr
+			}
+		}
+		if newTotal-lateTotal < oldTotal {
+			// 原始事件已被保留期/行帽裁剪：保留旧行（读入时已按当前
+			// 攻击口径过滤）并只叠加高水位（或回退留底的迟到基线）之后
+			// 的事件。无基线时无法区分迟到与已计入，不做增量叠加。
 			oldAgg, oldTarget, lerr := loadExistingRollup(tx, minuteStr)
 			if lerr != nil {
 				return lerr
@@ -1375,23 +1385,11 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 			for _, count := range oldAgg {
 				kept += count
 			}
-			lateTotal := 0
-			lateBaselineID := previousMaxID
-			if lateBaselineID == 0 {
-				lateBaselineID = lateBaseline
+			for k, count := range lateAgg {
+				oldAgg[k] += count
 			}
-			if lateBaselineID > 0 {
-				lateAgg, lateTarget, lateCount, aerr := aggregateEvents(tx, m, next, lateBaselineID)
-				if aerr != nil {
-					return aerr
-				}
-				lateTotal = lateCount
-				for k, count := range lateAgg {
-					oldAgg[k] += count
-				}
-				for id, count := range lateTarget {
-					oldTarget[id] += count
-				}
+			for id, count := range lateTarget {
+				oldTarget[id] += count
 			}
 			agg, targetAgg = oldAgg, oldTarget
 			if lateTotal == 0 && kept == oldTotal {
@@ -2256,6 +2254,19 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: empty()})
 		return
 	}
+	if sinceID > 0 {
+		var maxID int64
+		if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			return
+		}
+		if sinceID > maxID {
+			// 指标库重建/恢复后旧游标高于库尾：回到当前高水位，
+			// 后续新事件即可从该游标继续增量消费。
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": []models.SecurityEventFeedItem{}, "since_id": sinceID, "next_since_id": maxID, "limit": limit, "has_more": false}})
+			return
+		}
+	}
 	// 游标高水位——next_since_id = 本批**实际扫描到的最大 id**
 	//（含被保留地址过滤掉的行），分页循环扫描直至凑满 limit 或到顶。
 	events := make([]models.SecurityEventFeedItem, 0, limit)
@@ -2372,7 +2383,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 
 // triggerTypeForRule 触发类型显示映射（v2.3.8 单源）：阶段 id → 业务语义类型。
 // 爬虫事件独立于地域拦截（豁免/伪装不再落「IP 访问控制」桶，消除歧义）；
-// WAF 拆 CRS/自定义（各数值段互斥：10000-799999 与 1000000+=自定义、
+// WAF 拆 CRS/自定义（普通、旧版合成与 OR 分支均归自定义；
 // 900000-999999=CRS）；固定 id（429/2/3/4/5/7/8/11/12/14）的族归属统一取
 // legacyRuleFamilies（与总览攻击族分桶、事件页族筛选同源）。
 func triggerTypeForRule(ruleTriggered string) string {

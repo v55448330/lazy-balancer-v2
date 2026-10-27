@@ -613,25 +613,32 @@ test('复用路径：IP 已在列表中但本次补了关联——按关联口�
 // 名单名尝试次数耗尽、创建响应缺 id、移除动作取消。前两条是用户可见的错误
 // 提示分支，第三条是占位释放与「取消无副作用」的契约。
 
-test('自动名 20 次尝试全被占用：回退策略限定名，不无限递增也不抛错', async () => {
+test('自动名 20 次尝试全被占用：回退名由后端 409 拒绝且不继续关联', async () => {
   const { posts, puts } = reset()
-  // 自动名「策略 A-信任」与全部 20 个限定名都被占用（用户自建同名名单的极少数情形）
+  // 自动名与全部 20 个限定名都被占用；创建替身按真实唯一性契约返回 409。
   const taken = ['策略 A-信任']
   for (let attempt = 1; attempt <= 20; attempt++) {
     taken.push(attempt === 1 ? '策略 A-信任#5' : `策略 A-信任#5-${attempt}`)
   }
   const existing = taken.map((name, index) => ({ id: 100 + index, name }))
-  const { ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
+  g.__post = async (url: string, body?: unknown) => {
+    posts.push({ url, body })
+    throw Object.assign(new Error('名单名称已存在'), { status: 409 })
+  }
+  let changed = 0
+  const { creating, ensureListAndJoin } = useTrustAssociation({
+    getList: () => existing,
+    onChanged: () => { changed += 1 },
+  })
   await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
 
-  assert.equal(posts.length, 1, '必须发起一次创建')
-  assert.equal(puts.length, 1, '创建成功后必须补一次关联')
-  assert.equal(
-    assertCreatedListName(posts[0]),
-    '策略 A-信任#5',
-    '尝试耗尽后回退首个限定名（不再递增，交由后端 409 显性失败）',
-  )
-  assert.equal(callsOf('ElMessage.error').length, 0, '回退不是异常，不得附带错误提示')
+  assert.equal(posts.length, 1, '必须发起一次创建并由后端判定冲突')
+  assert.equal(assertCreatedListName(posts[0]), '策略 A-信任#5', '尝试耗尽后回退首个限定名')
+  assert.deepEqual(puts, [], '409 后不得继续写策略关联')
+  assert.equal(callsOf('mfaAwareSuccess').length, 0, '409 不得报成功')
+  assert.equal(callsOf('showSaveResult').length, 0)
+  assert.equal(changed, 0, '冲突未写入不得触发成功刷新')
+  assert.equal(creating.value, false, '409 后必须释放占位')
 })
 
 test('创建响应缺 id：报「创建响应异常」且不再发关联请求', async () => {

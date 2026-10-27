@@ -111,6 +111,20 @@ func TestAutobanConfig_getDefaults(t *testing.T) {
 	}
 }
 
+func TestAutobanConfig_readFailureReturnsErrorInsteadOfDefaults(t *testing.T) {
+	router := newAutobanTestEnv(t)
+	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_unavailable`); err != nil {
+		t.Fatal(err)
+	}
+	rec := getRequest(t, router, "/security/autoban")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500 rather than default-looking 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"threshold":100`) {
+		t.Fatalf("read failure returned a configuration indistinguishable from stored defaults: %s", rec.Body.String())
+	}
+}
+
 func TestAutobanConfig_putValidRoundtrip(t *testing.T) {
 	router := newAutobanTestEnv(t)
 	body := map[string]any{"enabled": true, "threshold": 50, "window_minutes": 10, "duration": "6h", "scope": "blocked", "dry_run": false}

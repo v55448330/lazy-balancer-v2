@@ -91,11 +91,7 @@ func assertRebuiltNodeValues(t *testing.T, database *sql.DB) {
 
 func TestNodesRebuildPaths_shareFreshDDLShapeAndPreserveValues(t *testing.T) {
 	// Given fresh 稳态形状（createTables + 启动迁移后的库）。
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize fresh database: %v", err)
 	}

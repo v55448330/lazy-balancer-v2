@@ -190,11 +190,11 @@ func SetAutobanProjectionRefresher(fn func() (IPListProjectionOutcome, error)) {
 
 // ---- 配置读写 ----
 
-// GetAutobanConfig 读六项配置（COALESCE 兜底默认值——存量行/带外 NULL 行归一）。
-func GetAutobanConfig() AutobanConfig {
+// GetAutobanConfig 读六项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
+func GetAutobanConfig() (AutobanConfig, error) {
 	cfg := AutobanConfig{Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}
 	if db.DB == nil {
-		return cfg
+		return cfg, errors.New("自动封禁配置数据库未装配")
 	}
 	var en, threshold, window, dry int
 	var duration, scope string
@@ -202,7 +202,7 @@ func GetAutobanConfig() AutobanConfig {
 		COALESCE(autoban_duration,'1h'), COALESCE(autoban_scope,'all'), COALESCE(autoban_dry_run,1)
 		FROM global_config WHERE id=1`).Scan(&en, &threshold, &window, &duration, &scope, &dry)
 	if err != nil {
-		return cfg
+		return cfg, err
 	}
 	cfg.Enabled = en == 1
 	cfg.Threshold = threshold
@@ -210,7 +210,7 @@ func GetAutobanConfig() AutobanConfig {
 	cfg.Duration = duration
 	cfg.Scope = scope
 	cfg.DryRun = dry == 1
-	return cfg
+	return cfg, nil
 }
 
 // ValidateAutobanConfig 写侧校验：阈值 1-10000、窗口 1-60 分钟、时长/口径枚举。
@@ -251,7 +251,10 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if err := ValidateAutobanConfig(cfg); err != nil {
 		return err
 	}
-	prev := GetAutobanConfig()
+	prev, err := GetAutobanConfig()
+	if err != nil {
+		return fmt.Errorf("读取自动封禁配置失败: %w", err)
+	}
 	en, dry := 0, 0
 	if cfg.Enabled {
 		en = 1
@@ -444,10 +447,9 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	//（scope/window/threshold），不再逐事件 SELECT（O(事件) 库查询）。
 	// 启用门并入同一行读取（GetAutobanConfig 的 SELECT
 	// 已含 autoban_enabled）——旧实现先 AutobanEnabled() 再 GetAutobanConfig()，
-	// 每批多一次主库单行查询；读失败时 GetAutobanConfig 回落 Enabled=false
-	// （fail-closed 语义不变）。
-	cfg := GetAutobanConfig()
-	if !cfg.Enabled {
+	// 每批多一次主库单行查询；读失败时本批不喂入（fail-closed 语义不变）。
+	cfg, err := GetAutobanConfig()
+	if err != nil || !cfg.Enabled {
 		return
 	}
 	for _, it := range items {
@@ -464,8 +466,8 @@ func autobanObserveEvent(ip, action, ruleTriggered string) {
 	if !autobanIsMaster() || ruleTriggered == "" {
 		return
 	}
-	cfg := GetAutobanConfig()
-	if !cfg.Enabled {
+	cfg, err := GetAutobanConfig()
+	if err != nil || !cfg.Enabled {
 		return
 	}
 	autobanObserveEventScoped(cfg, ip, action, ruleTriggered)
@@ -1100,7 +1102,11 @@ func autobanForceFlushPendingReload() {
 // 变化必须落盘生效）。重载失败按留痕+保持暂存（重新启用后下一轮 flush
 // 重试）。
 func AutobanDisableFlush() {
-	cfg := GetAutobanConfig()
+	cfg, err := GetAutobanConfig()
+	if err != nil {
+		Logf("error", "自动封禁禁用收尾读取配置失败: %v", err)
+		return
+	}
 	CaddyOpLock.Lock()
 	out, err := autobanMergeEntries(cfg, nil)
 	if err != nil {
@@ -1179,7 +1185,11 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		}
 		return errors.New("自动封禁未启用，已停止调度（请先在安全事件页配置中启用）")
 	}
-	cfg := GetAutobanConfig()
+	cfg, err := GetAutobanConfig()
+	if err != nil {
+		TaskLogfWarn(AutobanTaskID, "failed", "读取自动封禁配置失败，本轮未执行: %v", err)
+		return fmt.Errorf("读取自动封禁配置失败: %w", err)
+	}
 	// 消费侧护栏——直读配置执行前显式校验（库值唯一真相
 	// 铁律：无效值拒绝执行+显性报错，禁止静默兜底）。threshold<=0 会让
 	// 「count>=threshold」把全量候选收进名单；duration 非法经 autobanDurations

@@ -14,14 +14,7 @@ import (
 
 func setupU05ServicesDB(t *testing.T) {
 	t.Helper()
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA
-	})
+	setupIsolatedDB(t)
 }
 
 // panic（runGuarded 会把它转成 failed 并判定 daemon 已死）时，已启动的
@@ -224,7 +217,7 @@ func TestAutoBackupScheduled_cancelDoesNotAdvanceWatermark(t *testing.T) {
 	t.Cleanup(func() { SetAutoBackupExecutor(nil) })
 	cancel()
 
-	if err := runAutoBackupScheduled(ctx, 0); !errors.Is(err, context.Canceled) {
+	if err := runAutoBackupScheduledAt(ctx, 0, time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context.Canceled", err)
 	}
 	var lastRun sql.NullString

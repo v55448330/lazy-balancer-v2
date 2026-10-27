@@ -5,8 +5,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { planTrustRemoval } from '../src/utils/trustRemoval.ts'
+import { planTrustRemoval, classifyTrustRemovalVerification } from '../src/utils/trustRemoval.ts'
 import { isTrustExemptionCandidate } from '../src/utils/securityStages.ts'
+import { code, section } from './_helpers.ts'
 
 const ip = '203.0.113.7'
 
@@ -139,6 +140,20 @@ test('IPv6 残余信任：精确条目移除后覆盖它的 IPv6 CIDR 必须报�
     listEntries: () => [],
   })
   assert.deepEqual(clear.residualSources, [])
+})
+
+test('取消信任写后核对：详情或名单失败是状态未知，不得回退写前快照报成功', () => {
+  assert.equal(classifyTrustRemovalVerification({ detailLoaded: false, missingListIds: [], residualSources: [] }), 'unknown')
+  assert.equal(classifyTrustRemovalVerification({ detailLoaded: true, missingListIds: [7], residualSources: [] }), 'unknown')
+  assert.equal(classifyTrustRemovalVerification({ detailLoaded: false, missingListIds: [], residualSources: ['写入前快照'] }), 'unknown')
+  assert.equal(classifyTrustRemovalVerification({ detailLoaded: true, missingListIds: [], residualSources: [] }), 'cleared')
+  assert.equal(classifyTrustRemovalVerification({ detailLoaded: true, missingListIds: [], residualSources: ['引用列表 CIDR'] }), 'residual')
+
+  const page = code('src/views/security/IPLocationAction.vue')
+  const cancel = section(page, 'const cancelTrustAll = async', 'const aclRefsAllSystem')
+  assert.match(cancel, /classifyTrustRemovalVerification\(/)
+  assert.match(cancel, /最新信任状态核对失败，请刷新确认/)
+  assert.doesNotMatch(cancel, /: residualTrustSources/, '核对失败不得回退写入前残余快照')
 })
 
 // 跨策略信任豁免的候选策略判定：事件详情端点不过滤 enabled——属主

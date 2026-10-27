@@ -121,6 +121,7 @@
         <template v-else-if="kind === 'waf-custom'">
           <template v-if="customRule">
             <div class="trg-kv"><span class="k">规则名称</span><span>{{ customRule.name }}</span></div>
+            <div class="trg-kv"><span class="k">条件关系</span><span>{{ customRule.condition_logic === 'or' ? '任一满足（OR）' : '同时满足（AND）' }}</span></div>
             <div class="trg-kv">
               <span class="k">匹配条件</span>
               <span>
@@ -134,8 +135,11 @@
             <div class="trg-kv"><span class="k">状态</span><span>{{ customRule.enabled ? '启用' : '禁用' }}</span></div>
           </template>
           <div v-else-if="!loading && customRuleLoadError" class="trg-tip">自定义规则加载失败，可关闭弹框后重新打开重试（事件为历史记录，展示不完整）</div>
-          <div v-else-if="!loading" class="trg-tip">未找到该自定义规则（可能已被删除；事件为历史记录）</div>
-          <div class="trg-tip">自定义规则 id {{ customDbId }}（事件携带的触发 id = 规则 id + 10000）。编辑请前往 安全防护 → 规则集 → 自定义规则。</div>
+          <div v-else-if="!loading && customHasDbParent" class="trg-tip">未找到该自定义规则（可能已被删除；事件为历史记录）</div>
+          <div class="trg-tip">
+            <template v-if="customHasDbParent">自定义规则 id {{ customDisplayID }}（普通与 OR 分支的事件触发 id 均回解到同一规则）。编辑请前往 安全防护 → 规则集 → 自定义规则。</template>
+            <template v-else>旧版合成规则事件 id {{ customDisplayID }}（旧版合成规则无独立父规则记录）。</template>
+          </div>
         </template>
 
         <!-- 请求体异常 -->
@@ -162,7 +166,7 @@ import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { eventActionFull, eventActionTone } from '@/utils/eventAction'
-import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, wafModeLabel } from '@/utils/securityStages'
+import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, wafModeLabel } from '@/utils/securityStages'
 import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
@@ -329,7 +333,7 @@ const heroHitSource = computed(() => {
     case 'waf-crs':
       return `CRS 规则 ${ev.rule_triggered}${crsEntry.value?.msg ? ` · ${crsEntry.value.msg}` : ''}`
     case 'waf-custom':
-      return customRule.value ? `自定义规则「${customRule.value.name}」` : `自定义规则 id:${customDbId.value}`
+      return customRule.value ? `自定义规则「${customRule.value.name}」` : `自定义规则 id:${customDisplayID.value}`
     case 'body':
       return '请求体解析失败'
     default:
@@ -648,13 +652,13 @@ interface CustomRule {
   action: string
   score?: number
   enabled: boolean
+  condition_logic?: 'and' | 'or'
   conditions?: Array<{ target: string; operator: string; pattern: string }>
 }
 const customRule = ref<CustomRule | null>(null)
-const customDbId = computed(() => {
-  const n = Number(props.row?.rule_triggered)
-  return Number.isFinite(n) && n >= 10000 ? n - 10000 : NaN
-})
+const customDbId = computed(() => customRuleEventDbID(props.row?.rule_triggered ?? ''))
+const customHasDbParent = computed(() => Number.isFinite(customDbId.value))
+const customDisplayID = computed(() => customHasDbParent.value ? String(customDbId.value) : (props.row?.rule_triggered || '—'))
 const ACTION_LABELS: Record<string, string> = { block: '拦截', log: '仅记录', pass: '放行' } // 后端合法动作仅 block/log/pass（score 为不可达映射，已删）
 const customActionLabel = computed(() => {
   const a = customRule.value?.action ?? ''
@@ -672,7 +676,7 @@ const customRuleLoadError = ref(false)
 const loadCustomRule = async (): Promise<void> => {
   customRule.value = null
   customRuleLoadError.value = false
-  if (!Number.isFinite(customDbId.value)) return
+  if (!customHasDbParent.value) return
   const seq = ++customRuleSeq
   try {
     const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules', { silent: true })

@@ -58,7 +58,7 @@ fi
 #   • 退出后查 pause 文件:存在=admin 停止(用户意图),进入等待环
 #   • 不存在=崩溃,1s 重启;连续 ≥5 次退避 30s 后重置计数(再给机会)
 #   • startCaddy handler 删 pause 后监督器 ≤1s 检测并启动(等待环 1s 粒度)
-#   • 容器 stop:PID1(lazy-balancer)退出 → 容器 teardown 杀全部进程(含监督器)
+#   • 容器 stop:tini(PID 1) 把信号转发给面板子进程 → 面板优雅退出后 tini 退出 → 容器 teardown 杀全部进程(含监督器)
 # 监督器 pid 标记同属「容器运行期」状态——docker stop/start、restart 复用同一
 # 可写层，上一生命周期的标记会留存，新标记（下方父壳写入）落盘前若被
 # supervisorAlive 读到即陈旧误判。必须在父壳侧、后台化监督器之前清除；不可放进
@@ -74,8 +74,8 @@ rm -f "$CADDY_STARTUP_REPLAY_DONE"
   # caddy run 返回非零时杀死监督器本身(实测:kill -9 后监督器变僵尸不自愈)
   set +e
   # pid 标记在父壳侧写入（见下方 `) &` 后）——POSIX sh 的 $$ 在 subshell 内
-  # 仍=父 shell pid，此处写入的是父壳 pid（exec 后=PID1 app），supervisorAlive
-  # 读到 app 自身恒判活。
+  # 仍=父 shell pid，此处写入的是父壳 pid（exec 后为 tini 的面板子进程），
+  # supervisorAlive 读到 app 自身恒判活。
   # 监督器日志双写: stdout(docker logs) + lazy-balancer.log(运行日志弹框可见,
   # 时间戳格式与 services.Logf 对齐)——用户在基础设置→运行日志可看完整自愈链
   APP_LOG="${LOG_FILE:-/app/logs/lazy-balancer.log}"
@@ -219,7 +219,7 @@ rm -f "$CADDY_STARTUP_REPLAY_DONE"
 # 时序竞争。handlers/caddy.go supervisorAlive 按此标记+stat 状态字节判定。
 echo $! > /tmp/lazy-balancer-caddy-supervisor.pid
 
-# Start backend (PID 1 — 容器 stop 时优雅退出,teardown 杀监督器+Caddy)
+# Start backend (tini 子进程 — 容器 stop 时接收 tini 转发的信号并优雅退出)
 echo "Starting Lazy Balancer..."
 # 不传 serve 位参——main.go 只有 -config/-init flag，无子命令分发，位参无
 # 消费方（flag.Args 从不被读）。

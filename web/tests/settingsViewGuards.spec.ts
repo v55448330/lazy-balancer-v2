@@ -2,7 +2,7 @@
 //   A. 删除自动备份后走 quiet 刷新（不得整体覆盖未保存的表单编辑）
 //   B. 备份行「还原/删除」有在途门（占位先于确认框，防叠框/并发提交）
 //   C. 管理面板证书解析失败在弹框内常驻可见（含只选一半材料的原因）
-//   D. 访问日志格式输入的上限提示与后端写侧门同值（16KiB / 200 行）
+//   D. 访问日志格式区分前端字符上限与后端 UTF-8 字节门（16KiB / 200 行）
 //
 // 运行：cd web && npm test
 
@@ -54,15 +54,29 @@ test('C 管理面板证书解析失败在弹框内常驻可见，重选文件即
   assert.match(page, /还需选择证书文件才能解析证书/)
 })
 
-test('D 访问日志格式输入上限与后端写侧门同值', () => {
+test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节拒绝', () => {
   const handlers = repoCode('internal/handlers/caddy.go')
   const bytes = /maxAccessLogFormatBytes = (\d+) \* (\d+)/.exec(handlers)
   const lines = /maxAccessLogFormatLines = (\d+)/.exec(handlers)
   assert.ok(bytes && lines, '后端缺访问日志格式写侧门')
+  const byteLimit = Number(bytes[1]) * Number(bytes[2])
 
   const settings = code('src/views/settings/CaddyGlobalSettings.vue')
   const input = section(settings, 'v-model="settings.access_log_format"', '/>')
-  assert.match(input, new RegExp(`maxlength="${Number(bytes[1]) * Number(bytes[2])}"`), 'maxlength 必须等于后端字节上限')
+  assert.match(input, new RegExp(`maxlength="${byteLimit}"`), 'maxlength 仅作为同数值的宽松字符上限')
   assert.match(input, /show-word-limit/)
-  assert.match(settings, new RegExp(`最多 ${lines[1]} 行、${Number(bytes[1]) * Number(bytes[2]) / 1024} KiB`), '行数/字节提示须同值')
+  assert.match(settings, new RegExp(`最多 ${lines[1]} 行、${byteLimit / 1024} KiB（后端按 UTF-8 字节计）`), '提示必须明确真正拒绝口径是 UTF-8 字节')
+
+  const byteLength = (value: string): number => new TextEncoder().encode(value).length
+  assert.equal(byteLength('a'.repeat(byteLimit)), byteLimit, 'ASCII 恰 16 KiB')
+  assert.equal(byteLength('a'.repeat(byteLimit + 1)), byteLimit + 1, 'ASCII 超 1 字节')
+  const chinese = '界'.repeat(byteLimit)
+  assert.equal(chinese.length, byteLimit, '中文仍能占满前端字符上限')
+  assert.equal(byteLength(chinese), byteLimit * 3, '相同字符数已是三倍 UTF-8 字节')
+  assert.ok(byteLength(chinese) > byteLimit, '中文超字节形态必须落入后端拒绝面')
+  const emoji = '😀'.repeat(byteLimit / 2)
+  assert.equal(emoji.length, byteLimit)
+  assert.equal(byteLength(emoji), byteLimit * 2)
+  const validator = section(handlers, 'func validateAccessLogFormatSize', '\n}')
+  assert.match(validator, /len\(format\); n > maxAccessLogFormatBytes/, 'Go len(string) 必须执行 UTF-8 字节门')
 })

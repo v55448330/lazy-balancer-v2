@@ -159,16 +159,18 @@ func TestUserStatusToggle_revokesPendingMFAChallenge(t *testing.T) {
 
 	setUserEnabledForSessionTest(t, router, "2", false, adminToken)
 	setUserEnabledForSessionTest(t, router, "2", true, adminToken)
-	oldVerification := serveSessionRequest(t, router, http.MethodPost, "/api/v1/auth/mfa/verify", `{"mfa_token":"`+oldChallenge.MFAToken+`","code":"`+recoveryCode+`"}`, "")
-	if oldVerification.Code != http.StatusUnauthorized {
-		t.Fatalf("old MFA challenge after re-enable: status=%d body=%s, want 401", oldVerification.Code, oldVerification.Body.String())
-	}
+	// 必须在 verify 之前直查：拒绝旧 token 的路径也会惰性删挑战，事后才查
+	// 无法区分「启停时主动吊销」与「verify 顺带清理」。
 	var challenges int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM mfa_challenges WHERE user_id=2").Scan(&challenges); err != nil {
 		t.Fatal(err)
 	}
 	if challenges != 0 {
-		t.Fatalf("old MFA challenges remaining=%d, want 0", challenges)
+		t.Fatalf("old MFA challenges remaining immediately after status toggle=%d, want 0", challenges)
+	}
+	oldVerification := serveSessionRequest(t, router, http.MethodPost, "/api/v1/auth/mfa/verify", `{"mfa_token":"`+oldChallenge.MFAToken+`","code":"`+recoveryCode+`"}`, "")
+	if oldVerification.Code != http.StatusUnauthorized {
+		t.Fatalf("old MFA challenge after re-enable: status=%d body=%s, want 401", oldVerification.Code, oldVerification.Body.String())
 	}
 	var storedHashes string
 	if err := db.DB.QueryRow("SELECT mfa_recovery_codes FROM users WHERE id=2").Scan(&storedHashes); err != nil {

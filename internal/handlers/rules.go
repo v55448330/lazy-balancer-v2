@@ -1174,11 +1174,14 @@ func storedRuleTCPDeadFields(rule *models.LbRule) tcpDeadFields {
 	}
 }
 
+// request_body_max_size_mb 与 Coraza 可编译的 SecRequestBodyLimit 上限一致。
+const maxRequestBodySizeMB = 1024
+
 // validateRuleRequestBodyMaxSizeMB 是 request_body_max_size_mb 的单一值域门
-// （0-4096；0=不限制/跟随全局），Create/Update/Duplicate 三入口共用。
+// （0-1024；0=不限制/跟随全局），Create/Update/Duplicate 三入口共用。
 func validateRuleRequestBodyMaxSizeMB(value int) error {
-	if value < 0 || value > 4096 {
-		return fmt.Errorf("请求体大小限制必须在 0-4096 MB 之间")
+	if value < 0 || value > maxRequestBodySizeMB {
+		return fmt.Errorf("请求体大小限制必须在 0-%d MB 之间", maxRequestBodySizeMB)
 	}
 	return nil
 }
@@ -1583,7 +1586,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.CAProviderID = 0
 	}
 
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "创建", "开启数据库事务失败", err)
 		writeInternalError(c, http.StatusInternalServerError, "开启数据库事务失败", err)
@@ -2840,7 +2843,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return nil
 	}
 
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "更新", "开启数据库事务失败", err)
 		writeInternalError(c, http.StatusInternalServerError, "开启数据库事务失败", err)
@@ -3565,7 +3568,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		jobsCanceled = true
 	}
 
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "删除", "开启数据库事务失败", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
@@ -3881,7 +3884,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	nowTime := time.Now().UTC()
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		fail(http.StatusInternalServerError, "开启复制事务失败")
 		return
@@ -4314,7 +4317,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		writeInternalError(c, http.StatusInternalServerError, "校验阶段拦截页引用失败", err)
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "更新", "开启数据库事务失败", err)
 		writeInternalError(c, http.StatusInternalServerError, "开启数据库事务失败", err)
@@ -4548,7 +4551,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		h.respondRuleSnapshotError(c, "启用", err)
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "启用", "开启数据库事务失败", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
@@ -5100,7 +5103,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		h.respondRuleSnapshotError(c, "禁用", err)
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "禁用", "开启数据库事务失败", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})

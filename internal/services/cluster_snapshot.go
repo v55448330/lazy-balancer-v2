@@ -924,7 +924,7 @@ func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store sna
 }
 
 func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store snapshotStore) ([]models.SecurityCustomRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(conditions,'[]'),COALESCE(action,'block'),COALESCE(score,5),COALESCE(enabled,1),COALESCE(updated_by,0),COALESCE(created_at,''),COALESCE(updated_at,'') FROM security_custom_rules ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(conditions,'[]'),COALESCE(NULLIF(condition_logic,''),'and'),COALESCE(action,'block'),COALESCE(score,5),COALESCE(enabled,1),COALESCE(updated_by,0),COALESCE(created_at,''),COALESCE(updated_at,'') FROM security_custom_rules ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照自定义安全规则: %w", err)
 	}
@@ -933,7 +933,7 @@ func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store 
 	for rows.Next() {
 		var rule models.SecurityCustomRule
 		var conditionsJSON string
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Description, &conditionsJSON, &rule.Action, &rule.Score, &rule.Enabled, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Description, &conditionsJSON, &rule.ConditionLogic, &rule.Action, &rule.Score, &rule.Enabled, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照自定义安全规则: %w", err)
 		}
 		if err := json.Unmarshal([]byte(conditionsJSON), &rule.Conditions); err != nil {

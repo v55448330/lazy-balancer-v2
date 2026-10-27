@@ -92,6 +92,12 @@ var antiFallbackScanTargets = map[string][]string{
 // antiFallbackAllowlist 允许列表：函数名 → 赋值形态 → Ruling。
 // 类型②省略型/范围外字段的现行兜底，逐条披露于批 1+2/批 3 Ruling 报告。
 var antiFallbackAllowlist = map[string]map[string]string{
+	// 只有旧版单条件行（target/operator/pattern 列）没有 conditions 数组；
+	// OR 渲染需要把旧行还原成一条条件，属类型②省略型的兼容重建——写侧
+	// 保存/导入会归一成 conditions，存量行由本兜底保持可渲染（Ruling 2026-10-27）。
+	"emitCustomRules": {
+		`conditions = []models.CustomRuleCondition{{Target: cr.Target, Operator: cr.Operator, Pattern: cr.Pattern}}`: "旧单条件行 conditions 为空 → 以 target/operator/pattern 重建一条条件：类型②省略型兼容（写侧/导入归一后恒有 conditions）——Ruling 2026-10-27",
+	},
 	"generateCaddyConfigWithCertSource": {
 		"weight = 1": "上游权重 weight<=0→1：upstreams.weight 非本批治理字段清单（范围外），原状保留；Caddy WRR 亦不接受零权重",
 		// 字符串列缺省（类型②省略型）：空串=未配置，默认值由 DB DEFAULT/写侧
@@ -426,32 +432,87 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 				}
 			}
 		case *ast.SwitchStmt:
-			// 每个 case 子句的守卫表达式：expressionless switch 直接取 case
-			// 表达式（`switch { case x <= 0: x = 10 }` / `case x == 0:`）；
-			// tagged switch 用 Tag 与 case 值构造等值比较再复用同一判定
-			// （`switch x { case 0: x = 5 }` ≡ `if x == 0 { x = 5 }`）——只认
-			// case 表达式自身的守卫会让 tagged 形态整段逃出命中面。`default:`
-			// 的 List 为空，不是零值守卫，自然跳过。
+			// case 体只在「零值可使 case 条件为真」时扫描；default 只在
+			// 全部 case 条件于零值时确定为假、且至少存在一个已识别值守卫时
+			// 扫描。这样既覆盖 default 兜底，也不会把纯分派或正分支误报。
+			var defaultClause *ast.CaseClause
+			sawGuard := false
+			defaultReachableAtZero := true
 			for _, stmt := range node.Body.List {
 				clause, ok := stmt.(*ast.CaseClause)
 				if !ok {
 					continue
 				}
+				if len(clause.List) == 0 {
+					defaultClause = clause
+					continue
+				}
+				scanCase := false
 				for _, expr := range clause.List {
 					guardExpr := expr
 					if node.Tag != nil {
 						guardExpr = &ast.BinaryExpr{X: node.Tag, Y: expr, Op: token.EQL}
 					}
-					if guardBranchOf(guardExpr) != guardNone {
-						scanBranch(&ast.BlockStmt{List: clause.Body})
-						break
+					branch := switchGuardBranchOf(guardExpr)
+					if branch != guardNone {
+						sawGuard = true
+					}
+					if branch != guardFallbackElse {
+						defaultReachableAtZero = false
+					}
+					if branch == guardFallbackBody || branch == guardFallbackBoth {
+						scanCase = true
 					}
 				}
+				if scanCase {
+					scanBranch(&ast.BlockStmt{List: clause.Body})
+				}
+			}
+			if defaultClause != nil && sawGuard && defaultReachableAtZero {
+				scanBranch(&ast.BlockStmt{List: defaultClause.Body})
 			}
 		}
 		return true
 	})
 	return hits
+}
+
+// switchGuardBranchOf 按 case 条件的真值方向判定零值可达分支。与 if 扫描
+// 不同，x>0 的 case 正分支不可能由零值进入，不能沿用 guardFallbackBoth
+// 的兼容命中面；非零数值等值 case 则明确在零值时为假，使其 default 可见。
+func switchGuardBranchOf(cond ast.Expr) guardBranch {
+	switch expr := unparenExpr(cond).(type) {
+	case *ast.UnaryExpr:
+		if expr.Op == token.NOT {
+			return flippedGuardBranch(switchGuardBranchOf(expr.X))
+		}
+		return guardNone
+	case *ast.BinaryExpr:
+		if expr.Op == token.LAND || expr.Op == token.LOR {
+			return mergeGuardBranches(switchGuardBranchOf(expr.X), switchGuardBranchOf(expr.Y))
+		}
+		branch := comparisonGuardBranch(expr)
+		if branch == guardFallbackBoth {
+			return guardFallbackElse
+		}
+		if branch != guardNone {
+			return branch
+		}
+
+		normalized := flippedComparison(expr)
+		if normalized.Op != token.EQL {
+			return guardNone
+		}
+		lit, ok := unparenExpr(normalized.Y).(*ast.BasicLit)
+		if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT) {
+			return guardNone
+		}
+		value := constant.MakeFromLiteral(lit.Value, lit.Kind, 0)
+		if value.Kind() != constant.Unknown && !constant.Compare(value, token.EQL, constant.MakeInt64(0)) {
+			return guardFallbackElse
+		}
+	}
+	return guardNone
 }
 
 // guardBranch 枚举零值守卫的兜底分支位置。
@@ -819,6 +880,18 @@ func TestFallbackScan_detectsEquivalentGuardShapes(t *testing.T) {
 			name:   "tagged-switch-raw-empty-string-case",
 			source: "package p\nfunc f(s string) string { switch s { case ``: s = \"x\" }; return s }\n",
 		},
+		{
+			name:   "expressionless-switch-positive-case-default",
+			source: "package p\nfunc f(x int) int { switch { case x > 0: x = x; default: x = 5 }; return x }\n",
+		},
+		{
+			name:   "tagged-switch-non-zero-case-default",
+			source: "package p\nfunc f(x int) int { switch x { case 1: x = x; default: x = 7 }; return x }\n",
+		},
+		{
+			name:   "expressionless-switch-len-positive-default",
+			source: "package p\nfunc f(v []int) []int { switch { case len(v) > 0: v = v; default: v = []int{5} }; return v }\n",
+		},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -865,6 +938,22 @@ func TestFallbackScan_ignoresNonZeroGuardBranches(t *testing.T) {
 		{
 			name:   "non-empty-raw-string-comparison",
 			source: "package p\nfunc f(s string) string { if s == `x` { s = \"y\" }; return s }\n",
+		},
+		{
+			name:   "expressionless-switch-positive-case",
+			source: "package p\nfunc f(x int) int { switch { case x > 0: x = 5 }; return x }\n",
+		},
+		{
+			name:   "tagged-switch-zero-case-default",
+			source: "package p\nfunc f(x int) int { switch x { case 0: x = x; default: x = 7 }; return x }\n",
+		},
+		{
+			name:   "identifier-dispatch-default",
+			source: "package p\nfunc f(x, other int) int { switch x { case other: x = 5; default: x = 7 }; return x }\n",
+		},
+		{
+			name:   "string-dispatch-default",
+			source: "package p\nfunc f(s string) string { switch s { case \"ready\": s = s; default: s = \"unknown\" }; return s }\n",
 		},
 	}
 	for _, fixture := range fixtures {

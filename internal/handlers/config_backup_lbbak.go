@@ -406,6 +406,7 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 type lbbakWafApplyResult struct {
 	Warnings            []string
 	FilesLanded         bool
+	SecurityDataApplied bool
 	FailedCRS           bool
 	FailedXdb           bool
 	FailedThreatSources []string
@@ -522,7 +523,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 	crsApplied := payload.CRSTarGz != nil
 	xdbApplied := payload.Xdb != nil && !result.FailedXdb
 	if crsApplied || xdbApplied {
-		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
+		result.SecurityDataApplied = true
 		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
 		if xdbApplied {
 			if err := services.Reload(); err != nil {

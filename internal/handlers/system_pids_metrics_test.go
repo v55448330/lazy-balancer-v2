@@ -2,10 +2,18 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"slices"
+	"strconv"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 func TestParsePidsLimit(t *testing.T) {
@@ -129,7 +137,8 @@ func TestGetSystemMetrics_pidsFailureDegradesOnlyThatPart(t *testing.T) {
 	}
 }
 
-func TestGetSystemMetrics_reportsPidsPercent(t *testing.T) {
+func stubSystemMetricsForPids(t *testing.T, current *int, max int, available bool) {
+	t.Helper()
 	originalReadFile, originalDF := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)
@@ -140,14 +149,19 @@ func TestGetSystemMetrics_reportsPidsPercent(t *testing.T) {
 		case "/proc/stat":
 			return []byte("cpu 100 0 0 100 0\n"), nil
 		case "/sys/fs/cgroup/pids.current":
-			return []byte("2048\n"), nil
+			if available {
+				return []byte(strconv.Itoa(*current) + "\n"), nil
+			}
 		case "/sys/fs/cgroup/pids.max":
-			return []byte("4096\n"), nil
+			if available {
+				return []byte(strconv.Itoa(max) + "\n"), nil
+			}
 		case "/proc/self/limits":
-			return []byte("Max processes              8192                 8192                 processes\n"), nil
-		default:
-			return nil, errors.New("unexpected path " + path)
+			if available {
+				return []byte("Max processes              8192                 8192                 processes\n"), nil
+			}
 		}
+		return nil, errors.New("unavailable")
 	}
 	systemMetricsDFCommand = func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, "sh", "-c", "printf 'Filesystem 1B-blocks Used Available Use%% Mounted on\n/dev/x 1000 250 750 25%% /\n'")
@@ -156,6 +170,11 @@ func TestGetSystemMetrics_reportsPidsPercent(t *testing.T) {
 		systemMetricsReadFile = originalReadFile
 		systemMetricsDFCommand = originalDF
 	})
+}
+
+func TestGetSystemMetrics_reportsPidsPercent(t *testing.T) {
+	current, max := 2048, 4096
+	stubSystemMetricsForPids(t, &current, max, true)
 
 	metrics, err := getSystemMetrics()
 	if err != nil {
@@ -169,5 +188,80 @@ func TestGetSystemMetrics_reportsPidsPercent(t *testing.T) {
 	}
 	if slices.Contains(metrics.Degraded, "pids") {
 		t.Fatalf("degraded=%v, pids 不应在降级列表", metrics.Degraded)
+	}
+
+	// 同一进程连续读取必须反映新值（不允许给实时面板加 TTL 缓存）；后端
+	// 百分比保留超上限事实，封顶只属于前端进度条展示。
+	current = 5000
+	metrics, err = getSystemMetrics()
+	if err != nil {
+		t.Fatalf("second getSystemMetrics: %v", err)
+	}
+	if metrics.PidsCurrent != 5000 {
+		t.Fatalf("second pids current=%d, want 5000（每次请求实时读取）", metrics.PidsCurrent)
+	}
+	if metrics.PidsPercent < 122.0 || metrics.PidsPercent > 122.1 {
+		t.Fatalf("over-limit pids percent=%.4f, want uncapped 122.0703125", metrics.PidsPercent)
+	}
+}
+
+func TestGetSystemMetrics_endpointReturnsPidsFields(t *testing.T) {
+	current, max := 2368, 4096
+	stubSystemMetricsForPids(t, &current, max, true)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/system/metrics", (&Handlers{}).GetSystemMetrics)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/system/metrics", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data models.SystemMetrics `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.PidsCurrent != 2368 || payload.Data.PidsMax != 4096 || payload.Data.NprocLimit != 8192 {
+		t.Fatalf("HTTP pids fields=%d/%d nproc=%d, want 2368/4096/8192", payload.Data.PidsCurrent, payload.Data.PidsMax, payload.Data.NprocLimit)
+	}
+	if payload.Data.PidsPercent < 57.7 || payload.Data.PidsPercent > 57.9 {
+		t.Fatalf("HTTP pids_percent=%.4f, want 57.8125", payload.Data.PidsPercent)
+	}
+}
+
+func TestGetSystemMetrics_endpointKeepsZeroPidsFieldsWhenDegraded(t *testing.T) {
+	current, max := 0, 0
+	stubSystemMetricsForPids(t, &current, max, false)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/system/metrics", (&Handlers{}).GetSystemMetrics)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/system/metrics", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			PidsCurrent *int     `json:"pids_current"`
+			PidsMax     *int     `json:"pids_max"`
+			NprocLimit  *int     `json:"nproc_limit"`
+			PidsPercent *float64 `json:"pids_percent"`
+			Degraded    []string `json:"degraded"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.PidsCurrent == nil || *payload.Data.PidsCurrent != 0 ||
+		payload.Data.PidsMax == nil || *payload.Data.PidsMax != 0 ||
+		payload.Data.NprocLimit == nil || *payload.Data.NprocLimit != 0 ||
+		payload.Data.PidsPercent == nil || *payload.Data.PidsPercent != 0 {
+		t.Fatalf("degraded HTTP pids keys must all be present and zero: %s", response.Body.String())
+	}
+	if !slices.Contains(payload.Data.Degraded, "pids") {
+		t.Fatalf("degraded=%v, want pids", payload.Data.Degraded)
 	}
 }

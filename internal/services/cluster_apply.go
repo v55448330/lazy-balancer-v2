@@ -1383,12 +1383,13 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 		// legacy 单 target 形态）——此前只查 conditions，名字含引号的规则被
 		// 忠实复制到从节点但仅在发射时跳过，复制阶段无告警（可观测性缺口）。
 		if conditionsEmissionIssue(rule.Conditions) != "" || customRuleEmissionIssue(models.CustomRule{
-			ID:         rule.ID,
-			Name:       rule.Name,
-			Enabled:    rule.Enabled,
-			Conditions: rule.Conditions,
-			Action:     rule.Action,
-			Score:      rule.Score,
+			ID:             rule.ID,
+			Name:           rule.Name,
+			Enabled:        rule.Enabled,
+			Conditions:     rule.Conditions,
+			ConditionLogic: rule.ConditionLogic,
+			Action:         rule.Action,
+			Score:          rule.Score,
 		}) != "" {
 			invalid = true
 			break
@@ -1406,8 +1407,12 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 		if err != nil {
 			return fmt.Errorf("序列化快照自定义安全规则 %d 的条件: %w", rule.ID, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_custom_rules (id,name,description,conditions,action,score,enabled,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			rule.ID, rule.Name, rule.Description, string(conditionsJSON), rule.Action, rule.Score, rule.Enabled, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt); err != nil {
+		conditionLogic := rule.ConditionLogic
+		if conditionLogic == "" {
+			conditionLogic = "and"
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_custom_rules (id,name,description,conditions,condition_logic,action,score,enabled,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			rule.ID, rule.Name, rule.Description, string(conditionsJSON), conditionLogic, rule.Action, rule.Score, rule.Enabled, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt); err != nil {
 			return fmt.Errorf("写入快照自定义安全规则 %d: %w", rule.ID, err)
 		}
 	}

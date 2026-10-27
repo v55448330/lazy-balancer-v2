@@ -244,6 +244,7 @@ func TestGetConnectionStats_commandTimeoutBoundsWait(t *testing.T) {
 func TestGetSystemMetrics_endpointDisclosesDegradedParts(t *testing.T) {
 	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
+	resetCPUSampleStateForTest(t)
 	systemMetricsReadFile = func(path string) ([]byte, error) {
 		if path == "/proc/stat" {
 			return nil, context.DeadlineExceeded

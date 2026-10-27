@@ -180,7 +180,7 @@ test('取消信任先取最新策略再出计划，写入后再复算残余', ()
   assert.doesNotMatch(fn, /removableListIds: row\.removableTrustRefLists/, '可移除列表必须按最新 refs 计算')
   assert.match(fn, /const latest = await fetchDetail\(policy\.id\)/, '写入前必须再取最新策略（避免覆盖并发新增条目）')
   assert.match(fn, /const afterWrite = await fetchDetail\(policy\.id\)/, '写入后必须复算残余信任')
-  assert.match(fn, /residualAfterWrite/, '结论文案用写入后的残余来源')
+  assert.match(fn, /afterPlan\?\.residualSources/, '结论文案用写入后的残余来源')
 })
 
 // ── 服务控制卡的选中态 ───────────────────────────────────────

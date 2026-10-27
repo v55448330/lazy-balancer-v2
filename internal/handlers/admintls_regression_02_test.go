@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -54,7 +53,7 @@ func withBrokenDB(t *testing.T) {
 
 func TestUpdateAdminTLS_abortsWhenCurrentConfigReadFails(t *testing.T) {
 	withBrokenDB(t)
-	h := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+	h := newAdminTLSHandlers(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/admin-tls", h.UpdateAdminTLS)

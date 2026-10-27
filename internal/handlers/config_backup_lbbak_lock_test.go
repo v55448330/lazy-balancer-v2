@@ -368,6 +368,13 @@ func TestLbbakImport_commit_failure_does_not_write_crs_task_log(t *testing.T) {
 	if len(logBytes) > 0 {
 		t.Fatalf("普通 HTTP 导入不得写 CRS 任务日志: %s", logBytes)
 	}
+	var securityDataAudits int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='安全数据' AND detail LIKE '%规则库数据库%'`).Scan(&securityDataAudits); err != nil {
+		t.Fatal(err)
+	}
+	if securityDataAudits != 0 {
+		t.Fatalf("回滚导入留下安全数据成功审计 %d 条, want 0", securityDataAudits)
+	}
 }
 
 // 回归形状：commit 成功仍写安全数据审计，但普通 HTTP 导入不得写 CRS 任务日志。

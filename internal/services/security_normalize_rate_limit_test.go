@@ -11,10 +11,7 @@ import (
 // rate_limit_enabled；rate_limit_rps 只作关停判据、不被任何回填语句改写），
 // 否则审计中心只剩一条「归一了 N 行」的计数，无法回答「哪条策略被关了限流」。
 func TestSecurityEnumNormalizedChanges_reportsRateLimitShutdown(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	setupIsolatedDB(t)
 
 	// 带外脏行：限流启用但 rps<1（写侧校验恒拒绝该形态，只能来自旧版本/带外）。
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, ip_acl_mode, geoip_mode, rate_limit_enabled, rate_limit_rps)

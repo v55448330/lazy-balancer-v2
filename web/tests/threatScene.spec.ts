@@ -124,7 +124,7 @@ test('④下钻口径：统一倍率=9、主环取景中心为 bbox 中心、南
         if (lat < minLat) minLat = lat
         if (lat > maxLat) maxLat = lat
       }
-      return { minLon, maxLon, minLat, maxLat, area: (maxLon - minLon) * (maxLat - minLat) }
+      return { ring, minLon, maxLon, minLat, maxLat, area: (maxLon - minLon) * (maxLat - minLat) }
     }))
     const largest = ringBoxes.reduce((a, x) => (x.area > a.area ? x : a))
     assert.equal(b.minLat, largest.minLat, `${name} 取景 bbox 纬度南界不是最大环`)
@@ -142,9 +142,21 @@ test('④下钻口径：统一倍率=9、主环取景中心为 bbox 中心、南
       Math.abs(normalizeLon(b.maxLon) - normalizeLon(largest.maxLon)) < 1e-9,
       `${name} 取景经度东界 ${b.maxLon} 与最大环 ${largest.maxLon} 不同余`,
     )
-    // 取景中心（经度）必须落在同一 unwrap 窗内 —— 跨日界线环不得把中心甩到对侧。
-    const centerLon = (b.minLon + b.maxLon) / 2
-    assert.ok(centerLon >= b.minLon && centerLon <= b.maxLon, `${name} 取景中心不在取景 bbox 内`)
+    // 独立从最大环重算 unwrap 中心，不能用输出 bbox 的平均值自证。
+    let expectedMinLon = largest.minLon
+    let expectedMaxLon = largest.maxLon
+    if (expectedMaxLon - expectedMinLon > 180) {
+      expectedMinLon = 720
+      expectedMaxLon = -720
+      for (let i = 0; i + 1 < largest.ring.length; i += 2) {
+        const lon = largest.ring[i] < 0 ? largest.ring[i] + 360 : largest.ring[i]
+        expectedMinLon = Math.min(expectedMinLon, lon)
+        expectedMaxLon = Math.max(expectedMaxLon, lon)
+      }
+    }
+    const expectedCenter = (expectedMinLon + expectedMaxLon) / 2
+    const actualCenter = (b.minLon + b.maxLon) / 2
+    assert.ok(Math.abs(actualCenter - expectedCenter) < 1e-9, `${name} 取景中心 ${actualCenter} ≠ 最大环独立中心 ${expectedCenter}`)
   }
   // 南界：投影域裁到 -55（南极洲无业务流量）——世界高与相机纵向钳制同源。
   // 总览 zoom 下可视高 ≥ 世界高 → 相机恒居中；下钻倍率下越界拖动被钳在

@@ -259,8 +259,8 @@ test('阶段页覆盖写入按 skipped 归集后再回写（不谎报已覆盖�
   assert.match(text, /if \(!skippedIds\.has\(caddyId\)\) applyStageOverrideSuccess/)
   // 行内状态：未写入 + 原因；成功计数不把 skipped 计入
   assert.match(text, /\? '未写入' :/)
-  // 成功计数必须扣掉 skipped（声明关键字不作钉：let/const 皆可）
-  assert.match(text, /syncedCount = pendingOverrides\.length - skippedNotes\.length/)
+  // 消息合并 helper 接收 pending/skipped，行为测试证明 skipped 不计入同步数。
+  assert.match(text, /policySaveResultMessage\(saveRes, pendingOverrides\.length, skippedOverrideCount\)/)
 })
 
 test('名单详情 GET 静默，避免与全局拦截器双 toast', () => {
@@ -565,7 +565,8 @@ test('名单条目镜像只在缓存确有新增时重建，跨策略并集/Set 
   // 双保险：编辑态输入不得进入 peer 视图的依赖面
   const peer = member(text, 'const peerPolicyViews = computed')
   assert.doesNotMatch(peer, /ipACLList\.value|ipWhitelist\.value|form\.value|ipBlacklistSelf/)
-  assert.match(peer, /new Set\(sides\.allow\)/)
+  assert.match(peer, /new Set\(sides\.aclAllow\)/)
+  assert.match(peer, /new Set\(sides\.trust\)/)
   assert.match(peer, /new Set\(sides\.deny\)/)
 })
 

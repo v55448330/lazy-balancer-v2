@@ -1206,11 +1206,7 @@ func TestInitialize_upgrades_legacy_cert_jobs_before_creating_indexes(t *testing
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := Initialize(dir); err != nil {
@@ -1259,11 +1255,7 @@ func TestInitialize_canonicalizes_lb_rule_domain_after_caddy_id_backfill(t *test
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When the legacy database is upgraded and then restarted
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -1292,11 +1284,7 @@ func TestInitialize_canonicalizes_lb_rule_domain_after_caddy_id_backfill(t *test
 
 func TestInitialize_normalizes_out_of_range_jwt_expiration(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1331,11 +1319,7 @@ func TestInitialize_returns_error_when_global_config_singleton_insert_fails(t *t
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	err = Initialize(dir)
@@ -1363,6 +1347,7 @@ func TestInitialize_closesNewHandlesAndPreservesGlobalsWhenInitializationFails(t
 		t.Fatalf("close legacy database: %v", err)
 	}
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	oldCurrent := GetDB()
 	mainSentinel, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open main sentinel: %v", err)
@@ -1397,6 +1382,7 @@ func TestInitialize_closesNewHandlesAndPreservesGlobalsWhenInitializationFails(t
 		_ = metricsSentinel.Close()
 		_ = auditSentinel.Close()
 		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		SetDB(oldCurrent)
 	})
 
 	// When
@@ -1417,11 +1403,7 @@ func TestInitialize_closesNewHandlesAndPreservesGlobalsWhenInitializationFails(t
 func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -1441,11 +1423,7 @@ func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 func TestInitialize_freshSecurityPoliciesColumnsStayNullableLikeMigration(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -1478,11 +1456,7 @@ func TestInitialize_freshSecurityPoliciesColumnsStayNullableLikeMigration(t *tes
 func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1532,11 +1506,7 @@ func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T)
 func TestInitialize_certJobCAAvailableAfterNormalizationRewritesOnlyStaleRows(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1598,11 +1568,7 @@ func TestInitialize_certJobCAAvailableAfterNormalizationRewritesOnlyStaleRows(t 
 // 收敛为可空并保数据。
 func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1694,11 +1660,7 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 // (issuer,subject) 命中，下次登录退化为重复建行。重建必须携带三列并保数据。
 func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1763,11 +1725,7 @@ func TestMigrateUsersRebuildPreservesOIDCColumns(t *testing.T) {
 // 启动迁移中被一次性清理；DeleteRule/removeCreatedRule 已补显式删除断新增。
 func TestInitialize_cleansOrphanedPathRules(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -1835,11 +1793,7 @@ func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 // 遗留 NULL 由启动迁移一次性回填（0/0/1），消灭读侧 COALESCE 语义分裂。
 func TestInitialize_backfillsNullConsecutiveFailuresAndIsMaster(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -2095,11 +2049,7 @@ func TestInitialize_backfillsLegacyTimeoutColumnsAndNormalizesZeroOnRestart(t *t
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	readTimeouts := func() (int, int, int, int) {
 		t.Helper()
 		var readTimeout, writeTimeout, idleTimeout, keepaliveTimeout int
@@ -2351,11 +2301,7 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建两张表）
 	if err := Initialize(dir); err != nil {
@@ -2382,11 +2328,7 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 // 回填范围随之补齐这四列。
 func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -2702,11 +2644,7 @@ func TestMigrateTCPRuleDeadFields_bumpsNullClusterVersion(t *testing.T) {
 func TestMigrateLegacyAuditLogs_copiesVerifiesAndDropsLegacyTable(t *testing.T) {
 	// Given 真实主库/audit 库与两条含 NULL 的历史审计行。
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
@@ -3116,11 +3054,7 @@ func TestCreateTables_freshSchemaCarriesACMEAndTCPProxyColumns(t *testing.T) {
 // 误推断为 stage3。重建必须携带两列并保数据。
 func TestInitialize_preservesStagedColumnsOnSecurityPoliciesRebuild(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -3205,11 +3139,7 @@ func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建 lb_rules）
 	if err := Initialize(dir); err != nil {
@@ -3241,11 +3171,7 @@ func TestInitialize_preservesStagePageColumnsOnLbRulesPkRebuild(t *testing.T) {
 // 空 subject 行不受影响。
 func TestInitialize_createsOidcIdentityUniqueIndex(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -3289,11 +3215,7 @@ func TestInitialize_createsOidcIdentityUniqueIndex(t *testing.T) {
 // 告警，绝不因历史脏数据拖垮启动；重复行原样保留，待人工处置后重启自动建索引。
 func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -3336,11 +3258,7 @@ func TestInitialize_skipsOidcIdentityIndexOnHistoricalDuplicates(t *testing.T) {
 func TestInitialize_adds_path_rules_upstream_path_column(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -3357,6 +3275,57 @@ func TestInitialize_adds_path_rules_upstream_path_column(t *testing.T) {
 	if notNull != 1 || columnDefault != "''" {
 		t.Fatalf("path_rules.upstream_path notnull=%d default=%q, want notnull=1 default empty string", notNull, columnDefault)
 	}
+}
+
+func TestInitialize_customRuleConditionLogicSchemaAndMigration(t *testing.T) {
+	t.Run("fresh schema default", func(t *testing.T) {
+		dir := t.TempDir()
+		preserveDatabaseHandles(t)
+		if err := Initialize(dir); err != nil {
+			t.Fatalf("initialize database: %v", err)
+		}
+		var notNull int
+		var columnDefault string
+		if err := DB.QueryRow(`SELECT "notnull",COALESCE(dflt_value,'') FROM pragma_table_info('security_custom_rules') WHERE name='condition_logic'`).Scan(&notNull, &columnDefault); err != nil {
+			t.Fatalf("read condition_logic schema: %v", err)
+		}
+		if notNull != 1 || columnDefault != "'and'" {
+			t.Fatalf("condition_logic notnull=%d default=%q, want 1/'and'", notNull, columnDefault)
+		}
+		if _, err := DB.Exec(`INSERT INTO security_custom_rules (name,conditions,action,score,enabled) VALUES ('legacy-default','[]','block',5,1)`); err != nil {
+			t.Fatal(err)
+		}
+		var logic string
+		if err := DB.QueryRow(`SELECT condition_logic FROM security_custom_rules WHERE name='legacy-default'`).Scan(&logic); err != nil {
+			t.Fatal(err)
+		}
+		if logic != "and" {
+			t.Fatalf("旧写入形状 condition_logic=%q, want and", logic)
+		}
+	})
+
+	t.Run("existing database backfill", func(t *testing.T) {
+		database := openMigrationTestDB(t)
+		if err := createTables(); err != nil {
+			t.Fatalf("create tables: %v", err)
+		}
+		if _, err := database.Exec(`ALTER TABLE security_custom_rules DROP COLUMN condition_logic`); err != nil {
+			t.Fatalf("construct legacy schema: %v", err)
+		}
+		if _, err := database.Exec(`INSERT INTO security_custom_rules (name,conditions,action,score,enabled) VALUES ('old-row','[]','block',5,1)`); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
+			t.Fatalf("migrate condition_logic: %v", err)
+		}
+		var logic string
+		if err := database.QueryRow(`SELECT condition_logic FROM security_custom_rules WHERE name='old-row'`).Scan(&logic); err != nil {
+			t.Fatal(err)
+		}
+		if logic != "and" {
+			t.Fatalf("存量行 condition_logic=%q, want and", logic)
+		}
+	})
 }
 
 // 存量 TCP 规则的 enable_dns_server/dns_server
@@ -3467,11 +3436,7 @@ func TestRunMigrations_clearsTCPRuleStaleDNSServerFields(t *testing.T) {
 func TestInitialize_freshSchemaCarriesUpstreamHostColumns(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -3571,11 +3536,7 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When：遗留库启动一次（PK 重建 DROP 并重建 lb_rules/upstreams）
 	if err := Initialize(dir); err != nil {
@@ -3606,11 +3567,7 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 func TestInitialize_freshSchemaCarriesPathRuleResponseColumns(t *testing.T) {
 	// Given
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -3686,11 +3643,7 @@ func TestRunMigrations_addsPathRuleResponseColumnsToLegacyRows(t *testing.T) {
 // 之外的最后防线：NULL/<=0 随启动幂等回填 30；用户已设有效值（>0）恒不触碰。
 func TestInitialize_backfillsCertExpiryDays(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
@@ -3918,11 +3871,7 @@ func TestMigrateSystemIPListUniqueIndex_recordsAuditForDedupedRows(t *testing.T)
 // 索引被带外删除后必须重新查重并重建（安全阀不被探测门短路）。
 func TestInitialize_oidcIdentityIndexProbeSkipsRescan(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}

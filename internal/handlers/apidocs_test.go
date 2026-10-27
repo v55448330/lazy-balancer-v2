@@ -196,6 +196,61 @@ func TestBuildOpenAPIYAML_documents_operation_specific_contracts(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAPIYAML_documentsRuntimeInputsAndLimits(t *testing.T) {
+	type operation struct {
+		Parameters []struct {
+			Name string `yaml:"name"`
+			In   string `yaml:"in"`
+		} `yaml:"parameters"`
+		RequestBody struct {
+			Content map[string]map[string]any `yaml:"content"`
+		} `yaml:"requestBody"`
+		Responses map[string]any `yaml:"responses"`
+	}
+	var document struct {
+		Paths map[string]map[string]operation `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	assertQuery := func(path, method, name string) {
+		t.Helper()
+		for _, parameter := range document.Paths[path][method].Parameters {
+			if parameter.Name == name && parameter.In == "query" {
+				return
+			}
+		}
+		t.Errorf("%s %s parameters=%+v, want query %s", method, path, document.Paths[path][method].Parameters, name)
+	}
+	for _, operation := range []struct {
+		path   string
+		method string
+		name   string
+	}{
+		{"/certificates/jobs/{id}/retry", "post", "force"},
+		{"/certificates/issue", "post", "force"},
+		{"/config/import", "post", "sections"},
+		{"/config/import/validate", "post", "sections"},
+		{"/auth/oidc/login", "get", "return_to"},
+	} {
+		assertQuery(operation.path, operation.method, operation.name)
+	}
+	for _, path := range []string{"/config/import", "/config/import/validate"} {
+		content := document.Paths[path]["post"].RequestBody.Content
+		for _, contentType := range []string{"application/json", "application/octet-stream"} {
+			if _, exists := content[contentType]; !exists {
+				t.Errorf("POST %s request content=%v, want %s", path, content, contentType)
+			}
+		}
+	}
+	responses := document.Paths["/certificates/parse"]["post"].Responses
+	for _, status := range []string{"400", "413"} {
+		if _, exists := responses[status]; !exists {
+			t.Errorf("POST /certificates/parse responses=%v, want %s", responses, status)
+		}
+	}
+}
+
 func TestBuildOpenAPIYAML_documents_per_operation_security(t *testing.T) {
 	// Given
 	var document struct {
@@ -1897,6 +1952,10 @@ func TestAPIDocs_decisionKeyExamplesMatchImplementation(t *testing.T) {
 	assertStructKeysDocumented(t, "GET /security/crs", mapKeysOf(docResponseExample(t, "GET /security/crs")), models.CRSInfo{})
 	assertStructKeysDocumented(t, "GET /security/ip2region", mapKeysOf(docResponseExample(t, "GET /security/ip2region")), models.IP2RegionInfo{})
 	assertStructKeysDocumented(t, "GET /system/info", mapKeysOf(docResponseExample(t, "GET /system/info")), models.SystemInfo{})
+}
+
+func TestAPIDocs_systemMetricsExampleKeysMatchImplementation(t *testing.T) {
+	assertStructKeysDocumented(t, "GET /system/metrics", mapKeysOf(docResponseExample(t, "GET /system/metrics")), models.SystemMetrics{})
 }
 
 // 初始化管理员的三个保护类 400 是消费者必然遇到的可行动拒绝原因（降级/禁用/

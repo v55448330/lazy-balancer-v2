@@ -2920,6 +2920,32 @@ func TestEstimateAuditSnapshotBytes_countsFilesDroppedDisclosure(t *testing.T) {
 	}
 }
 
+// messages_dropped 与 files_dropped 同属截断披露：非零时必须计入固定开销，
+// 零值继续遵循 omitempty；估算在任何丢弃数量下都不得低于实际序列化体积。
+func TestEstimateAuditSnapshotBytes_countsMessagesDroppedDisclosure(t *testing.T) {
+	build := func(dropped int) *auditSnapshot {
+		return &auditSnapshot{MessagesDropped_: dropped}
+	}
+	base := estimateAuditSnapshotBytes(build(0))
+	for _, dropped := range []int{3, 999999999} {
+		withDrop := build(dropped)
+		got := estimateAuditSnapshotBytes(withDrop)
+		if diff := got - base; diff != auditMessagesDroppedOverhead {
+			t.Fatalf("messages_dropped=%d 估算增量 %d，期望 %d（披露键未被计入）", dropped, diff, auditMessagesDroppedOverhead)
+		}
+		raw, err := json.Marshal(withDrop)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got < int64(len(raw)) {
+			t.Fatalf("messages_dropped=%d 估算 %d < 序列化 %d", dropped, got, len(raw))
+		}
+	}
+	if got := estimateAuditSnapshotBytes(build(0)); got != base {
+		t.Fatalf("零值重复估算从 %d 变为 %d（omitempty 形态不稳定）", base, got)
+	}
+}
+
 // denseHeaderSet 返回 5000 条三字符键/值互不相同的 header 表：序列化体积
 // ~70KiB，越过 64KiB 快照上限，用于构造「头段打满」的最坏形态夹具。
 func denseHeaderSet() map[string][]string {

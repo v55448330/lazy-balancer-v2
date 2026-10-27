@@ -43,7 +43,7 @@ var (
 // 经函数变量替换以钉测「失败必留痕」契约；生产恒为默认实现。
 var (
 	importRuleIDsForBegin = currentRuleIDs
-	importBeginTx         = func(ctx context.Context) (*sql.Tx, error) { return db.DB.BeginTx(ctx, nil) }
+	importBeginTx         = func(ctx context.Context) (*sql.Tx, error) { return db.DB.BeginTx(context.WithoutCancel(ctx), nil) }
 )
 
 type importCoordinatorError struct {
@@ -188,8 +188,7 @@ type configImportSession struct {
 	wafRestoreWarnings []string
 	// pendingCleanup 是提交成功后待执行的产物清理计划：锁内（事务视图）
 	// 只收集判定集并完成 cert_jobs 必要删除，实际删文件/日志/指标的删除动作
-	// 拆到 close 释放 caddyOpMu 与会话锁之后执行，不再把千级规则导入的产物
-	// 删除压进配置写窗口。
+	// 拆到 close 释放 caddyOpMu 之后执行；会话锁/窗口持续至清理收尾。
 	pendingCleanup *importArtifactCleanupPlan
 }
 
@@ -228,7 +227,7 @@ var configImportBeginAttemptHook func()
 var configImportBeforePrelockHook func()
 
 // importPostCommitCleanupHook 测试屏障（生产恒 nil）：提交后产物清理执行前
-// 触发，供锁序钉测断言清理发生在 caddyOpMu 与导入会话锁释放之后。
+// 触发，供锁序钉测断言 Caddy 锁已释放且导入会话锁/窗口仍有效。
 var importPostCommitCleanupHook func()
 
 // configImportBusy 探测导入会话是否持有全局导入锁（不阻塞）：启停/控制
@@ -383,7 +382,9 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 		releaseBeforeLock()
 	}
 	h.caddyOpMu.Lock()
-	session := &configImportSession{h: h, ctx: ctx, recovery: recovery, resumeEngine: resumeEngine, releaseBeforeLock: releaseBeforeLock, action: action}
+	// 会话建立后，apply→版本写入→清理判定→commit 必须不因客户端断连
+	// 切换到已取消上下文；前置排空与加锁仍使用原请求上下文。
+	session := &configImportSession{h: h, ctx: context.WithoutCancel(ctx), recovery: recovery, resumeEngine: resumeEngine, releaseBeforeLock: releaseBeforeLock, action: action}
 	ruleIDs, err := importRuleIDsForBegin(ctx)
 	if err != nil {
 		// CA 已暂停：必须在释放会话锁之前恢复既有活动态——否则第二个导入可
@@ -420,28 +421,26 @@ func (session *configImportSession) close() {
 		_ = session.abort(errors.New("导入流程未完成"))
 	}
 	session.h.caddyOpMu.Unlock()
-	// 导入全程（含失败 abort 的恢复动作）结束后
-	// 先恢复 tick，再释放串行会话锁。反向释放会让下一代导入的 Pause 被
-	// 本代 Resume 覆盖，破坏 Pause→事务→close 的串行排空不变量。
+	plan := session.pendingCleanup
+	session.pendingCleanup = nil
+	if plan == nil || (plan.empty() && importPostCommitCleanupHook == nil) {
+		session.finishPostCommitCleanup()
+		return
+	}
+	// 仅提前释放 caddyOpMu：文件/日志/指标删除不阻塞配置写与重载。
+	// 导入会话锁、导入窗口与任务暂停保持到后台清理结束，杜绝下一代导入
+	// 复活规则/证书后又被本代陈旧计划删除。HTTP 仍在派发后立即返回。
+	session.dispatchPostCommitCleanup(plan)
+}
+
+// finishPostCommitCleanup 在空计划或后台清理收尾后恢复调度并释放会话。
+// Resume 必须先于串行锁释放，避免下一代 Pause 被本代 Resume 覆盖。
+func (session *configImportSession) finishPostCommitCleanup() {
 	if session.resumeEngine != nil {
 		session.resumeEngine()
 	}
 	if session.releaseBeforeLock != nil {
 		session.releaseBeforeLock()
-	}
-	// 提交后产物清理放在最后：此时 caddyOpMu 与导入会话锁都已释放，删证书
-	// 文件/日志/指标不再阻塞配置写与重载窗口（锁内只做了判定集收集与
-	// cert_jobs 的必要删除，见 collectPostCommitCleanup）。清理移出请求
-	// goroutine 异步执行：close() 是 handler 的 defer，同步跑会让小响应体
-	// （无警告时仅数百字节）在 bufio 刷出前等清理完成，客户端表现为「导入卡住」。
-	// 提交已落地，清理失败只留痕不否决导入。
-	if plan := session.pendingCleanup; plan != nil {
-		session.pendingCleanup = nil
-		if plan.empty() && importPostCommitCleanupHook == nil {
-			// 无产物可删：不启后台 goroutine（避免空跑的调度与测试收尾耦合）。
-			return
-		}
-		session.dispatchPostCommitCleanup(plan)
 	}
 }
 
@@ -449,13 +448,13 @@ func (session *configImportSession) close() {
 var importCleanupWG sync.WaitGroup
 
 // dispatchPostCommitCleanup 异步执行提交后产物清理。清理已用
-// context.WithoutCancel + 自带预算与请求生命周期解耦，异步不改变其语义；
-// panic 兜底留痕，避免拖垮进程。runPostCommitCleanup 内部对「判定集→删除」
-// 窗口按已提交视图复核，与下一次导入重叠执行是设计内形态。
+// context.WithoutCancel + 自带预算与请求生命周期解耦；caddyOpMu 已释放，
+// 但会话锁/导入窗口/任务暂停只在清理（含 panic 收尾）结束后释放。
 func (session *configImportSession) dispatchPostCommitCleanup(plan *importArtifactCleanupPlan) {
 	importCleanupWG.Add(1)
 	go func() {
 		defer importCleanupWG.Done()
+		defer session.finishPostCommitCleanup()
 		defer func() {
 			if r := recover(); r != nil {
 				services.Logf("error", "导入清理：提交后产物清理 panic: %v", r)
@@ -513,8 +512,23 @@ func (session *configImportSession) abort(importErr error) error {
 			// 事务内 apply 可能已成功写入未提交配置与 LKG。先释放事务写锁，
 			// 再以已提交视图重渲染/强制应用：即使恢复 /load 失败，
 			// RestoreRuntimeToCommittedInLock 也会把已提交字节写回 LKG。
-			certErr := services.RestoreCertFiles(session.runtime.certFiles)
+			certOperation := "导入失败后回退证书文件"
+			var certErr error
+			if session.commitIndeterminate {
+				// Commit 报错不等于实际回滚：禁止先回旧制造确定分叉。已提交视图
+				// 重渲染会物化仍存活规则；随后仅对已从该视图消失的受影响规则
+				// 恢复快照（通常为空，用于清理未提交新规则的私钥）。
+				certOperation = "提交结果不确定后按已提交视图对账证书文件"
+				detail := "数据库提交结果不确定：证书文件未直接回退，按已提交视图对账；若对账失败则保留导入后文件，请核对证书后重新导入或重载收敛"
+				services.Logf("error", "配置%s警告: %s", session.actionLabel(), detail)
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
+			} else {
+				certErr = services.RestoreCertFiles(session.runtime.certFiles)
+			}
 			recovery := session.h.recoverCommittedViewAfterCommitFailure(session.tx)
+			if session.commitIndeterminate {
+				certErr = errors.Join(certErr, session.restoreCertsAbsentFromCommittedView())
+			}
 			if recovery.runtime != nil {
 				// 恢复已提交视图失败=运行配置可能停留在导入候选（传输失败
 				// 且 Caddy 已应用/恢复 /load 再失败），而 DB 已回滚。LKG 由
@@ -527,7 +541,7 @@ func (session *configImportSession) abort(importErr error) error {
 				session.h.recordCompensationSideEffects("导入失败后恢复已提交运行配置", recovery.db)
 			}
 			if certErr != nil {
-				session.h.recordCompensationSideEffects("导入失败后回退证书文件", certErr)
+				session.h.recordCompensationSideEffects(certOperation, certErr)
 			}
 			importErr = errors.Join(importErr, certErr, recovery.err())
 			session.finished = true
@@ -557,6 +571,42 @@ func (session *configImportSession) abort(importErr error) error {
 	}
 	session.finished = true
 	return finishImportFailure(session.tx, &session.recovery, importErr)
+}
+
+// restoreCertsAbsentFromCommittedView 只处理提交不确定时「已提交视图中已
+// 不存在」的受影响规则。存活规则由 committed-view 渲染负责物化；此子集恢复
+// 为空快照可清理实际回滚时未提交新规则遗留的证书与私钥。
+func (session *configImportSession) restoreCertsAbsentFromCommittedView() error {
+	if session.runtime == nil || len(session.runtime.certFiles) == 0 {
+		return nil
+	}
+	ctx := session.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	liveIDs, err := currentRuleIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("读取已提交规则视图以鉴定证书文件失败: %w", err)
+	}
+	live := make(map[string]struct{}, len(liveIDs))
+	for _, id := range liveIDs {
+		live[id] = struct{}{}
+	}
+	absent := make(services.CertFilesSnapshot)
+	for id, pair := range session.runtime.certFiles {
+		if _, ok := live[id]; !ok {
+			absent[id] = pair
+		}
+	}
+	if len(absent) == 0 {
+		return nil
+	}
+	if err := services.RestoreCertFiles(absent); err != nil {
+		return fmt.Errorf("清理已提交视图中不存在的规则证书失败: %w", err)
+	}
+	return nil
 }
 
 func (session *configImportSession) commit(affectedRuleIDs []string, certificates []importCertificate) error {
@@ -592,8 +642,8 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	}
 	// 提交后产物清理的判定集必须在事务视图内收集（此时规则/证书任务世界
 	// 已是导入后状态），cert_jobs 的必要删除也在事务内完成；实际删产物动作
-	// 记录成计划，等 close 释放 caddyOpMu 与会话锁之后再执行——千级规则导入
-	// 的文件删除不再阻塞配置写/重载窗口。
+	// 记录成计划，等 close 释放 caddyOpMu 后执行——千级规则导入的文件删除
+	// 不再阻塞配置写/重载窗口，会话锁/窗口则延长到清理结束。
 	cleanupPlan, cleanupErr := session.collectPostCommitCleanup()
 	if cleanupErr != nil {
 		return &importCoordinatorError{err: session.abort(cleanupErr), action: session.action}
@@ -616,7 +666,7 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	session.h.caddyService.PersistLastGoodBytesInLock(appliedConfig)
 	session.runtime = nil
 	// 全量替换导入对消失规则的产物清理（v1 还换新 caddy_id）：计划已在事务
-	// 内按导入后视图收集完毕，这里只挂到会话，实际删除由 close 在锁外执行。
+	// 内按导入后视图收集完毕，这里只挂到会话，实际删除由 close 在 Caddy 锁外执行。
 	// 清理失败不否决导入（数据已提交），留痕审计 + 日志。
 	session.pendingCleanup = cleanupPlan
 	if err := session.recovery.finish(); err != nil {
@@ -641,7 +691,7 @@ func importFailureCaddyRejected(err error) bool {
 }
 
 // importArtifactCleanupPlan 是提交后产物清理的待删集：锁内只做判定（按事务
-// 视图）与必要的事务内写，删除动作在 caddyOpMu/会话锁释放之后按本计划执行。
+// 视图）与必要的事务内写，删除动作在 caddyOpMu 释放后、会话锁/窗口有效期内执行。
 type importArtifactCleanupPlan struct {
 	// disappeared 是本次导入后已不在库内的旧规则（证书材料/指标/日志）。
 	disappeared []string
@@ -731,8 +781,8 @@ func (session *configImportSession) collectPostCommitCleanup() (*importArtifactC
 }
 
 // runPostCommitCleanup 执行提交后的产物删除（证书文件/指标/规则与证书日志）。
-// 调用点必须在 caddyOpMu 与导入会话锁都释放之后（session.close 末尾）——锁内
-// 只收集判定集。提交已落地，任何失败只留痕不否决导入。
+// 调用点必须已释放 caddyOpMu，且仍持有导入会话锁/窗口直至本函数返回；
+// 锁内只收集判定集。提交已落地，任何失败只留痕不否决导入。
 func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCleanupPlan) {
 	if importPostCommitCleanupHook != nil {
 		importPostCommitCleanupHook()
@@ -747,12 +797,9 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 	// 叠加有界预算，避免无界后台写。
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(session.ctx), importCleanupBudget)
 	defer cancel()
-	// 锁外执行存在「判定集 → 删除」窗口：第二次导入可让已消失的规则以同一
-	// caddy_id 复活（备份含它），并发签发可为「无材料」规则写入新证书。删除前
-	// 按已提交视图复核，复活/已有材料的规则从待删集剔除。复核与删除之间仍有
-	// 极小窗口（与 DeleteRule「先判定后删」同型）；RemoveCertFiles 与证书写入
-	// 共用证书锁，删除不会撕裂进行中的写入，最坏形态是删掉刚签发的材料——
-	// 下次签发/续签自愈。
+	// 删除前按已提交视图复核，过滤带外复活/已有材料的规则。正常下一代导入
+	// 与证书写操作由持续导入窗口排在本清理之后，不会再穿越「复核 → 删除」；
+	// RemoveCertFiles 与证书写入另共用证书锁，避免撕裂进行中的文件写入。
 	currentIDs, err := currentRuleIDs(ctx)
 	if err != nil {
 		services.Logf("error", "导入清理：读取当前规则失败（跳过孤儿清理）: %v", err)

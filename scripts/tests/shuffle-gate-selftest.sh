@@ -5,8 +5,14 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 gate_source="$repo_root/scripts/test-shuffle.sh"
-if ! grep -F './scripts/test-shuffle.sh' "$repo_root/scripts/test-all.sh" >/dev/null; then
-  echo "FAIL [shuffle gate wiring] test-all no longer invokes the shuffle gate" >&2
+check_test_all_wiring() {
+  local source="$1"
+  grep -F 'canonical_shuffle_seed="${CANONICAL_SHUFFLE_SEED:-1}"' "$source" >/dev/null &&
+    grep -F '(cd "$module" && go test ./... -count=1 -shuffle="$canonical_shuffle_seed")' "$source" >/dev/null &&
+    grep -F './scripts/test-shuffle.sh' "$source" >/dev/null
+}
+if ! check_test_all_wiring "$repo_root/scripts/test-all.sh"; then
+  echo "FAIL [shuffle gate wiring] test-all main loop must use CANONICAL_SHUFFLE_SEED and invoke the shuffle gate" >&2
   exit 1
 fi
 
@@ -14,6 +20,19 @@ tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/shuffle-gate-selftest.XXXXXX")"
 trap 'rm -rf "$tmp_root"' EXIT
 mkdir -p "$tmp_root/scripts" "$tmp_root/order" "$tmp_root/clean"
 cp "$gate_source" "$tmp_root/scripts/test-shuffle.sh"
+# 反例必须走同一个检查函数：主循环删掉 -shuffle 后，自测自身必须判红。
+mutated_test_all="$tmp_root/test-all-no-shuffle.sh"
+while IFS= read -r line; do
+  printf '%s\n' "${line/ -shuffle=\"\$canonical_shuffle_seed\"/}"
+done <"$repo_root/scripts/test-all.sh" >"$mutated_test_all"
+if cmp -s "$repo_root/scripts/test-all.sh" "$mutated_test_all"; then
+  echo "FAIL [shuffle wiring mutation] fixture did not remove the main-loop shuffle argument" >&2
+  exit 1
+fi
+if check_test_all_wiring "$mutated_test_all"; then
+  echo "FAIL [shuffle wiring mutation] main loop without -shuffle survived" >&2
+  exit 1
+fi
 printf 'module example.com/shufflegate\n\ngo 1.26\n' >"$tmp_root/go.mod"
 cat >"$tmp_root/order/order_test.go" <<'EOF'
 package order

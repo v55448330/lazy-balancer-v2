@@ -14,7 +14,8 @@ import type {
   SystemMetrics,
   UpdateCurrentUserInput,
 } from '@/types'
-import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, isRequestAuthTokenCurrent } from '@/utils/apiFailure'
+import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
+import { currentSessionGeneration } from '@/utils/sessionIdentity'
 
 declare module 'axios' {
   interface AxiosRequestConfig {
@@ -22,6 +23,8 @@ declare module 'axios' {
     silent?: boolean
     /** 发起请求时的本地会话令牌；响应 401 用它识别迟到的旧会话请求。 */
     _authToken?: string
+    /** 发起请求时的身份代际；428 在弹码、刷新与重放前复核。 */
+    _sessionGeneration?: number
   }
 }
 
@@ -175,6 +178,7 @@ service.interceptors.request.use(
     const token = localStorage.getItem('token')
     const authToken = token && token !== 'null' && token !== 'undefined' ? token : undefined
     config._authToken = authToken
+    config._sessionGeneration = currentSessionGeneration()
     if (authToken) {
       config.headers.Authorization = `Bearer ${authToken}`
     }
@@ -294,37 +298,39 @@ service.interceptors.response.use(
         })
       }
     } else if (kind === 'step-up') {
-      // v2.1.8 MFA step-up：写操作（或票据签发）需 60 秒内的 MFA 验证——
-      // 全局弹码验证 → 新 JWT → 原请求自动重试一次。全站生效，页面零改动。
+      // 428 也只能处置发起请求时的身份。MFA 刷新只换令牌、不推进代际；
+      // 登录/登出/OIDC/换账号推进后，旧请求不得借用新会话验码或重放。
+      const requestGeneration = error.config?._sessionGeneration
+      const isCurrent = () => requestGeneration === currentSessionGeneration()
+      if (!isCurrent()) {
+        return Promise.reject(new ApiRequestError(message, status, error.response?.data))
+      }
       try {
+        // 保持动态加载以断开 api ↔ auth store 的静态循环依赖。
         const { useAuthStore } = await import('@/stores/auth')
         const authStore = useAuthStore()
-        const code = await mfaStepUp.prompt()
-        if (code) {
-          // 并发 428 共享同一次 verify-step（同码重放会被后端 mfa_last_timestep
-          // 拒绝并计入登录后验码限流——每用户 60 秒内失败 5 次后 verify-step
-          // 返回 429「验证码尝试过于频繁，请稍后再试」，此处按普通错误透传后端
-          // 文案、不重试原请求；仅限流不锁定，等待窗口滑动即可再试），
-          // 所有等待者用刷新后的 token 各自重试原请求。
-          await mfaStepUp.ensureRefresh(code, (confirmationCode) => authStore.refreshMfaStep(confirmationCode))
-          // （用户裁决）：验证成功不再独立 toast——用户刚输完码知道
-          // 验证成功，反馈并入重试后的业务提示（宽限头会照常发出，但
-          // consumeGraceForSuccess 因 justNow 标记而不加缀）。
-          mfaGrace.markVerifiedJustNow(Date.now())
-          error.config._mfaRetried = true
-          return service.request(error.config)
+        const outcome = await runMfaStepUpRequest({
+          isCurrent,
+          prompt: mfaStepUp.prompt,
+          refresh: (code) => mfaStepUp.ensureRefresh(code, (confirmationCode) => authStore.refreshMfaStep(confirmationCode)),
+          replay: () => {
+            error.config._mfaRetried = true
+            return service.request(error.config)
+          },
+          onVerified: () => { mfaGrace.markVerifiedJustNow(Date.now()) },
+        })
+        if (outcome.kind === 'replayed') return outcome.value
+        if (outcome.kind === 'stale') {
+          return Promise.reject(new ApiRequestError(message, status, error.response?.data))
         }
         // 取消弹码（共享 Promise resolve null 即用户真取消）：温和提示，不暴露 428 英文常量。
         if (!error.config?.silent) {
           ElMessage.warning('已取消 MFA 验证，操作未执行')
         }
-        // 静默取消同样以中文文案 reject，避免下方透出 428 英文常量。
         return Promise.reject(new ApiRequestError('已取消 MFA 验证，操作未执行', status))
       } catch (stepError: unknown) {
-        // D-新2/D-新4：verify-step 失败（如输错码，401 文案已由 /auth/mfa/
-        // 豁免分支携带）——给出可见反馈，不再静默吞掉。
+        // verify-step 失败给出可见反馈；下游 catch 可据标记跳过二次弹窗。
         ElMessage.error(stepError instanceof Error ? stepError.message : 'MFA 验证未完成')
-        // 已 toast 的错误打标，下游 catch（Users.vue resetMfa）跳过二次弹窗。
         if (stepError instanceof Error) {
           ;(stepError as Error & { mfaSurfaced?: boolean }).mfaSurfaced = true
         }

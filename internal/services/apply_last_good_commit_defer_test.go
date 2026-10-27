@@ -86,6 +86,26 @@ func TestApplyConfigFromTx_defersLastKnownGoodUntilCommit(t *testing.T) {
 	}
 }
 
+func TestApplyConfigReportingForCommit_defersLastKnownGood(t *testing.T) {
+	service, previous, lastLoad := newLastGoodDeferTestService(t)
+
+	applied, loaded, err := service.ApplyConfigReportingForCommit(map[string]interface{}{"apps": map[string]interface{}{"candidate": true}})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !loaded || len(applied) == 0 || lastLoad() != string(applied) {
+		t.Fatalf("loaded=%t applied=%q lastLoad=%q", loaded, applied, lastLoad())
+	}
+	if got := readFile(t, service.lastGoodPath); got != *previous {
+		t.Fatalf("pre-commit last-known-good=%q, want previous %q", got, *previous)
+	}
+
+	service.PersistLastGoodBytesInLock(applied)
+	if got := readFile(t, service.lastGoodPath); got != string(applied) {
+		t.Fatalf("post-commit last-known-good=%q, want applied %q", got, applied)
+	}
+}
+
 // 同字节短路（无真实 /load）返回空字节：调用方补写必须是 no-op，LKG 保持
 // 原样（运行配置本就未变化）。
 func TestPersistLastGoodBytesInLock_emptyPayloadIsNoop(t *testing.T) {

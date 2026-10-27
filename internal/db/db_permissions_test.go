@@ -10,7 +10,7 @@ import (
 
 func TestInitialize_tightens_database_directory_and_files(t *testing.T) {
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
 	if err := os.Mkdir(dataDir, 0755); err != nil {
 		t.Fatalf("create permissive data directory: %v", err)
@@ -24,10 +24,6 @@ func TestInitialize_tightens_database_directory_and_files(t *testing.T) {
 			t.Fatalf("set permissive database mode %s: %v", name, err)
 		}
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 
 	// When
 	if err := Initialize(dataDir); err != nil {
@@ -69,12 +65,8 @@ func TestInitialize_tightens_database_directory_and_files(t *testing.T) {
 
 func TestInitialize_preserves_permissions_when_WAL_is_rebuilt(t *testing.T) {
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 	if err := Initialize(dataDir); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}

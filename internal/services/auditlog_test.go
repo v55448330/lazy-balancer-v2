@@ -372,35 +372,14 @@ func TestCleanupAuditLogs_skipsDeletionWhenRetentionReadFails(t *testing.T) {
 // 审计行，批尺寸收窄为 batch。返回审计库句柄；清理时恢复全局句柄与批尺寸。
 func newAuditCleanupFixture(t *testing.T, oldRows, batch int) *sql.DB {
 	t.Helper()
-	oldDB, oldAuditDB := db.DB, db.AuditDB
-	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db")
-	if err != nil {
-		t.Fatal(err)
-	}
+	setupIsolatedDB(t)
+	auditDB := db.AuditDB
 	oldBatch := auditCleanupBatchSize
-	db.DB, db.AuditDB = mainDB, auditDB
 	auditCleanupBatchSize = batch
 	t.Cleanup(func() {
 		auditCleanupBatchSize = oldBatch
-		db.DB, db.AuditDB = oldDB, oldAuditDB
-		_ = mainDB.Close()
-		_ = auditDB.Close()
 	})
-	if _, err := mainDB.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY CHECK (id = 1), audit_retention_months INTEGER DEFAULT 3)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := mainDB.Exec(`INSERT INTO global_config (id, audit_retention_months) VALUES (1, 3)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=3 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	if oldRows > 0 {
@@ -573,6 +552,9 @@ func installBlockableMainDB(t *testing.T) *queryGate {
 // seedPurgeableTaskRuns 在主库建最小 task_runs 表并种一条 2020 年的过期行。
 func seedPurgeableTaskRuns(t *testing.T) {
 	t.Helper()
+	if _, err := db.DB.Exec(`DROP TABLE IF EXISTS task_runs`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.DB.Exec(`CREATE TABLE task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, started_at DATETIME)`); err != nil {
 		t.Fatal(err)
 	}

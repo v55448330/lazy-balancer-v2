@@ -41,7 +41,7 @@ Scheduled 槽语义（槽缓存 + 同一槽只执行一次）：
   自然恢复。失败轮不消费（走 1s→5s→30s 退避重投，仅「已到期槽未推进+failed」形态）。
 - **用户取消**：仅**自动轮**的**已到期**槽被消费（取消=显式放弃本槽）。手动触发轮不改
   预约（未来槽是下一次预约，与手动轮无归属关系），取消手动轮也不得消费槽——否则未来
-  槽被水位永久压住，自动更新静默停摆。`CancelHook` 返回 false（取消未生效）不消费。
+  槽被水位永久压住，自动更新静默停摆。`CancelHook` 返回 false（取消未生效）不消费；调用前复核运行代际，执行期间拒绝新代占位，返回后再次复核，旧取消请求不得作用于新一轮。
 - **成功轮的槽推进**（业务写侧门，`slotSuccessGateSQL` 单源）：`auto` 轮推进
   **空槽或过期槽**，`manual` 轮**只推进已过期槽**。引擎成功轮（含手动轮）会消费过期槽，
   业务侧不推进则水位与业务槽单边分叉（tick 的「槽 > 已消费水位」门永不成立 → 该族自动
@@ -300,6 +300,7 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 所有任务日志只使用一种滚动标准：**写入前按真实文件大小滚动**。
 
 - 统一入口为 `taskengine.RotateTaskLogBeforeWrite`：`size(path)+len(待写入行) > task_log_size_mb` 时先 `RotateTaskLogFile` 再追加。`taskLogAppend`、`TeeTaskLog` 与证书任务日志全部经过该入口，禁止另设每日巡检滚动或第二套滚动实现。
+- 普通任务与证书任务日志共用 `taskengine.TruncateTaskLogLine`：滚动判定前将单行按 UTF-8 安全截到 4096 字节并保留显式截断标记，避免巨型错误行突破活动文件尺寸治理。
 - 主流水 `tasks/{id}.log` 保 1 份，证书任务 `tasks/certjobs/*.log` 保 5 份；归档份数是保留策略差异，不是第二种滚动机制。
 - `log-cleanup` 只负责保留期清理，不再负责尺寸滚动。`tasks/` 根日志删除统一经 `taskengine.RemoveTaskLogIfModifiedBefore`，在路径写锁内重新 stat 后删除（避免锁外旧 FileInfo 与 `rotate→rename→append` 交错误删新一代）；`tasks/certjobs/` 子目录仍由 ruleID 写锁同源复核。
 - 每个 `tasks/{id}.log` 只能由该任务执行链写入：cluster-sync/普通配置导入不得写三库日志；`SecurityEventsPollOnce` 只返回条数，ingestion 自行记录；autoban 仅 Run/候选修剪同链写日志，摄取热路径不直接写。

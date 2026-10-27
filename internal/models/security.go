@@ -456,28 +456,30 @@ type CustomRuleCondition struct {
 }
 
 type CustomRule struct {
-	ID         int                   `json:"id"`
-	Name       string                `json:"name"`
-	Enabled    bool                  `json:"enabled"`
-	Conditions []CustomRuleCondition `json:"conditions"`
-	Action     string                `json:"action"`
-	Score      int                   `json:"score"`
-	Target     string                `json:"target,omitempty"`
-	Operator   string                `json:"operator,omitempty"`
-	Pattern    string                `json:"pattern,omitempty"`
+	ID             int                   `json:"id"`
+	Name           string                `json:"name"`
+	Enabled        bool                  `json:"enabled"`
+	Conditions     []CustomRuleCondition `json:"conditions"`
+	ConditionLogic string                `json:"condition_logic"`
+	Action         string                `json:"action"`
+	Score          int                   `json:"score"`
+	Target         string                `json:"target,omitempty"`
+	Operator       string                `json:"operator,omitempty"`
+	Pattern        string                `json:"pattern,omitempty"`
 }
 
 type SecurityCustomRule struct {
-	ID          int                   `json:"id"`
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	Conditions  []CustomRuleCondition `json:"conditions"`
-	Action      string                `json:"action"`
-	Score       int                   `json:"score"`
-	Enabled     bool                  `json:"enabled"`
-	UpdatedBy   int                   `json:"updated_by"`
-	CreatedAt   string                `json:"created_at"`
-	UpdatedAt   string                `json:"updated_at"`
+	ID             int                   `json:"id"`
+	Name           string                `json:"name"`
+	Description    string                `json:"description"`
+	Conditions     []CustomRuleCondition `json:"conditions"`
+	ConditionLogic string                `json:"condition_logic"`
+	Action         string                `json:"action"`
+	Score          int                   `json:"score"`
+	Enabled        bool                  `json:"enabled"`
+	UpdatedBy      int                   `json:"updated_by"`
+	CreatedAt      string                `json:"created_at"`
+	UpdatedAt      string                `json:"updated_at"`
 }
 
 // CreateCustomRuleRequest 自定义规则创建请求：enabled 用
@@ -486,12 +488,13 @@ type SecurityCustomRule struct {
 // （server.go create_custom_rule）省略 enabled 会创建一条静默禁用的 WAF 规则，
 // 而审计显示创建成功；UI 恒发送 enabled=true 故仅 API/MCP 面可达。
 type CreateCustomRuleRequest struct {
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	Conditions  []CustomRuleCondition `json:"conditions"`
-	Action      string                `json:"action"`
-	Score       int                   `json:"score"`
-	Enabled     *bool                 `json:"enabled"`
+	Name           string                `json:"name"`
+	Description    string                `json:"description"`
+	Conditions     []CustomRuleCondition `json:"conditions"`
+	ConditionLogic *string               `json:"condition_logic"`
+	Action         string                `json:"action"`
+	Score          int                   `json:"score"`
+	Enabled        *bool                 `json:"enabled"`
 }
 
 // UpdateCustomRuleRequest 自定义规则更新请求：全字段指针——省略即
@@ -499,12 +502,13 @@ type CreateCustomRuleRequest struct {
 // 部分更新（MCP 无约束 body 的现实路径）会把零值 false 直写落库，静默禁用
 // 规则且审计无痕迹；与 UpdateSecurityPolicyRequest 同口径。
 type UpdateCustomRuleRequest struct {
-	Name        *string                `json:"name"`
-	Description *string                `json:"description"`
-	Conditions  *[]CustomRuleCondition `json:"conditions"`
-	Action      *string                `json:"action"`
-	Score       *int                   `json:"score"`
-	Enabled     *bool                  `json:"enabled"`
+	Name           *string                `json:"name"`
+	Description    *string                `json:"description"`
+	Conditions     *[]CustomRuleCondition `json:"conditions"`
+	ConditionLogic *string                `json:"condition_logic"`
+	Action         *string                `json:"action"`
+	Score          *int                   `json:"score"`
+	Enabled        *bool                  `json:"enabled"`
 }
 
 type SecurityBlockPage struct {

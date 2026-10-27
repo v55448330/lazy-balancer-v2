@@ -14,13 +14,7 @@ import (
 
 func TestScheduleReads_readFailureLeavesWarnTrace(t *testing.T) {
 	newClusterTestService(t)
-	for _, key := range []string{"schedule-read-auto-backup", "schedule-earliest-security_threat_sources"} {
-		delete(metricsStateFailed, key)
-	}
-	t.Cleanup(func() {
-		delete(metricsStateFailed, "schedule-read-auto-backup")
-		delete(metricsStateFailed, "schedule-earliest-security_threat_sources")
-	})
+	isolateMetricsState(t)
 	if err := db.DB.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}

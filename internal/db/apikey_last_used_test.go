@@ -77,10 +77,10 @@ func TestFlushAPIKeyLastUsedBatchesDirtyKeys(t *testing.T) {
 		INSERT INTO api_keys (id) VALUES (1),(2);`); err != nil {
 		t.Fatal(err)
 	}
-	SetDB(database)
-	// currentDB 是包级全局，测试结束必须复位，否则后续
-	// 测试的 GetDB()/flush 会落到本测试的已关闭临时库。
+	// currentDB 是包级全局，必须在注入本用例句柄之前保存；
+	// 测试结束复位，避免后续 GetDB()/flush 落到已关闭临时库。
 	oldCurrent := GetDB()
+	SetDB(database)
 	t.Cleanup(func() { SetDB(oldCurrent) })
 	MarkAPIKeyUsed(1)
 	MarkAPIKeyUsed(1)

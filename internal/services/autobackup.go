@@ -311,6 +311,12 @@ func NextAutoBackupSlot(now time.Time) (time.Time, bool) {
 // 槽调用；追补/去重判定在 NextSlotFn=nextAutoBackupSlot）。成败均推进
 // last_run（失败已由执行器落 failed 行+审计，防重试风暴）。
 func runAutoBackupScheduled(ctx context.Context, engineRunID int64) error {
+	return runAutoBackupScheduledAt(ctx, engineRunID, time.Now())
+}
+
+// runAutoBackupScheduledAt 是定时执行体的显式开始时刻路径。生产入口在调用时
+// 固定 startedAt；调用方也可用已知的引擎触发时刻驱动同一条执行与记账链。
+func runAutoBackupScheduledAt(ctx context.Context, engineRunID int64, startedAt time.Time) error {
 	exec := currentAutoBackupExecutor()
 	if exec == nil {
 		return errors.New("自动备份执行器未就绪")
@@ -318,7 +324,6 @@ func runAutoBackupScheduled(ctx context.Context, engineRunID int64) error {
 	// 水位线槽必须在执行**开始前**固定。补跑跨槽边界结束（如 02:58
 	// 启动补昨日 03:00、03:00:10 结束）时用完成时刻重算会写到尚未执行的今日槽，
 	// nextAutoBackupSlot 判定「已跑」并步进到明日——当日备份静默漏跑。
-	startedAt := time.Now()
 	execErr := exec(ctx, "schedule", "system", engineRunID) // engineRunID=引擎已记行——执行器跳过自记（单写方）
 	if ctx.Err() != nil {
 		// 取消（角色降级/引擎停止）不等于本槽已完成：推进水位线会把漏掉的

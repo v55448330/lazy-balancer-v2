@@ -11,14 +11,7 @@ import (
 // 启动/重装首槽必须把哨兵行改写为内置真实种子并恢复自动更新。
 
 func TestArmSecurityLibraryFirstSlots_healsImportSentinelRow(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 
 	cases := []struct{ table, seed string }{
 		{"security_crs_version", CRSBundledVersion},

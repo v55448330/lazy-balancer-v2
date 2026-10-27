@@ -522,6 +522,11 @@ var syncResumeCalls atomic.Int64
 // SyncResumeCallsForTest 返回 Resume 调用次数（仅测试使用）。
 func SyncResumeCallsForTest() int64 { return syncResumeCalls.Load() }
 
+// IsHalted 报告同步循环是否已因终止类错误停摆，供任务监控投射真实状态。
+func (s *SyncService) IsHalted() bool {
+	return syncLifecycleState(s.state.Load()) == syncStateHalted
+}
+
 func (s *SyncService) Resume() {
 	syncResumeCalls.Add(1)
 	s.lifecycleMu.Lock()
@@ -1301,8 +1306,8 @@ func (s *SyncService) clearWafRepullFailureMessage(ctx context.Context) {
 	s.persistSyncError(ctx, "", "")
 }
 
-// trackReloadRepullConvergence：快照成功应用且重载成功
-// （marker 被清除）时清零补偿重拉计数。
+// trackReloadRepullConvergence：快照成功应用且全部后置补偿标记消失时，
+// 清零补偿重拉计数。
 func (s *SyncService) trackReloadRepullConvergence(ctx context.Context) {
 	var lastSyncErr string
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err != nil {
@@ -1311,7 +1316,7 @@ func (s *SyncService) trackReloadRepullConvergence(ctx context.Context) {
 		Logf("warn", "读取 last_sync_error 失败（补偿重拉计数复位已跳过）: %v", err)
 		return
 	}
-	if msg, _ := decodeSyncError(lastSyncErr); !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
+	if msg, _ := decodeSyncError(lastSyncErr); syncPostCommitMarkerPrefix(msg) == "" {
 		s.reloadRepullFailures.Store(0)
 	}
 }

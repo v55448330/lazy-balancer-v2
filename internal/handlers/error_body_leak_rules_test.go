@@ -80,12 +80,12 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 }
 
 // 扫描器自检：识别能力本身必须被钉住——若匹配逻辑退化为恒空，上面的门禁
-// 就成了假绿。合成五类泄漏形态（c.JSON 5xx / fail 5xx / failEnable 文案 /
-// 裸 err 的 Sprintf %v 与 Errorf %s）必须全部被捕获。
+// 就成了假绿。合成形态覆盖直接 c.JSON、经局部变量传递的动态 status/message、
+// 统一 writeInternalError 写点，以及固定文案/4xx/固定公共错误三类反形状。
 func TestRuleEndpoint5xxLeakScannerDetectsLeaks(t *testing.T) {
 	const source = `package p
 
-func f(c *gin.Context, err error) {
+func f(c *gin.Context, err error, status int) {
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "x: " + err.Error()})
 	c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: fmt.Sprintf("%v", err.Error())})
 	fail(http.StatusInternalServerError, "y: "+err.Error())
@@ -95,26 +95,131 @@ func f(c *gin.Context, err error) {
 	// 不经 .Error() 字面串的形态同样会泄露内部文本（SQL/路径/admin 地址）。
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("x: %v", err)})
 	fail(http.StatusBadGateway, fmt.Errorf("y: %s", err))
-	// 4xx 配置拒绝类保留细节，不算泄漏。
+	// 动态状态与经局部变量传递的错误文案不得绕过扫描。
+	message := err.Error()
+	c.JSON(status, models.APIResponse{Code: status, Message: message})
+	localStatus := http.StatusInternalServerError
+	localMessage := "export: " + err.Error()
+	c.JSON(localStatus, models.APIResponse{Code: localStatus, Message: localMessage})
+	writeInternalError(c, status, message, err)
+	writeInternalError(c, http.StatusBadGateway, fmt.Sprintf("wrapped: %v", err), err)
+	// 固定文案、4xx 与固定公共错误不算泄漏。
 	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+	writeInternalError(c, http.StatusInternalServerError, "fixed", err)
+	writeInternalError(c, http.StatusBadRequest, message, err)
+	writeInternalError(c, http.StatusInternalServerError, errTrustedProxyRead.Error(), err)
 }`
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, "synthetic.go", source, 0)
 	if err != nil {
 		t.Fatalf("parse synthetic source: %v", err)
 	}
-	if leaks := collect5xxErrorTextLeaks(fset, parsed); len(leaks) != 8 {
-		t.Fatalf("扫描器应捕获 8 处 5xx 泄漏，实际 %d: %v", len(leaks), leaks)
+	if leaks := collect5xxErrorTextLeaks(fset, parsed); len(leaks) != 12 {
+		t.Fatalf("扫描器应捕获 12 处 5xx 泄漏，实际 %d: %v", len(leaks), leaks)
 	}
 }
 
 // collect5xxErrorTextLeaks 返回 node 内全部 5xx 写点的泄漏源码快照：
 //   - c.JSON(<5xx>, ...) 的响应参数；
+//   - writeInternalError(c, <5xx>, message, cause) 的 message 参数；
 //   - fail/failInternal/failUpdateWithStatus/failEnable/failEnableWithStatus/
 //     failCertEnqueue 的文案参数（这些闭包最终写 c.JSON）。
+//
+// 动态 status 参数和已赋过 5xx 的局部变量按“可能为 5xx”处理；经局部变量
+// 传递的 err.Error()/裸 err 格式化文本同样纳入，避免 helper 收口后逃逸。
 func collect5xxErrorTextLeaks(fset *token.FileSet, node ast.Node) []string {
+	switch scoped := node.(type) {
+	case *ast.FuncDecl:
+		return collect5xxErrorTextLeaksInScope(fset, scoped, scoped.Type.Params)
+	case *ast.FuncLit:
+		return collect5xxErrorTextLeaksInScope(fset, scoped, scoped.Type.Params)
+	}
 	leaks := make([]string, 0)
 	ast.Inspect(node, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		leaks = append(leaks, collect5xxErrorTextLeaksInScope(fset, fn, fn.Type.Params)...)
+		return false
+	})
+	return leaks
+}
+
+func collect5xxErrorTextLeaksInScope(fset *token.FileSet, scope ast.Node, params *ast.FieldList) []string {
+	errorTextNames := map[string]bool{}
+	dynamicStatusNames := map[string]bool{}
+	noteParams := func(fields *ast.FieldList) {
+		if fields == nil {
+			return
+		}
+		for _, field := range fields.List {
+			for _, name := range field.Names {
+				dynamicStatusNames[name.Name] = true
+			}
+		}
+	}
+	noteParams(params)
+	noteAssignment := func(lhs, rhs ast.Expr) {
+		ident, ok := lhs.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if isInternalStatusExpr(rhs) {
+			dynamicStatusNames[ident.Name] = true
+		}
+		if mentionsErrorText(fset, rhs) {
+			errorTextNames[ident.Name] = true
+		}
+	}
+	ast.Inspect(scope, func(n ast.Node) bool {
+		switch current := n.(type) {
+		case *ast.FuncLit:
+			noteParams(current.Type.Params)
+		case *ast.AssignStmt:
+			if len(current.Lhs) == len(current.Rhs) {
+				for i := range current.Lhs {
+					noteAssignment(current.Lhs[i], current.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			if len(current.Names) == len(current.Values) {
+				for i, name := range current.Names {
+					if isInternalStatusExpr(current.Values[i]) {
+						dynamicStatusNames[name.Name] = true
+					}
+					if mentionsErrorText(fset, current.Values[i]) {
+						errorTextNames[name.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	hasInternalStatus := func(expr ast.Expr) bool {
+		if isInternalStatusExpr(expr) {
+			return true
+		}
+		ident, ok := expr.(*ast.Ident)
+		return ok && dynamicStatusNames[ident.Name]
+	}
+	hasErrorText := func(expr ast.Expr) bool {
+		if mentionsErrorText(fset, expr) {
+			return true
+		}
+		found := false
+		ast.Inspect(expr, func(n ast.Node) bool {
+			ident, ok := n.(*ast.Ident)
+			if ok && errorTextNames[ident.Name] {
+				found = true
+				return false
+			}
+			return !found
+		})
+		return found
+	}
+	leaks := make([]string, 0)
+	ast.Inspect(scope, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -134,31 +239,31 @@ func collect5xxErrorTextLeaks(fset *token.FileSet, node ast.Node) []string {
 		}
 		switch name {
 		case "JSON":
-			if receiver != "c" || len(call.Args) < 2 || !isInternalStatusExpr(call.Args[0]) {
+			if receiver != "c" || len(call.Args) < 2 || !hasInternalStatus(call.Args[0]) {
 				return true
 			}
 			for _, arg := range call.Args[1:] {
-				if mentionsErrorText(fset, arg) {
+				if hasErrorText(arg) {
 					leaks = append(leaks, printNode(fset, call))
 					break
 				}
 			}
+		case "writeInternalError":
+			if len(call.Args) >= 3 && hasInternalStatus(call.Args[1]) && hasErrorText(call.Args[2]) &&
+				printNode(fset, call.Args[2]) != "errTrustedProxyRead.Error()" {
+				leaks = append(leaks, printNode(fset, call))
+			}
 		case "fail":
-			if len(call.Args) >= 2 && isInternalStatusExpr(call.Args[0]) && mentionsErrorText(fset, call.Args[1]) {
+			if len(call.Args) >= 2 && hasInternalStatus(call.Args[0]) && hasErrorText(call.Args[1]) {
 				leaks = append(leaks, printNode(fset, call))
 			}
 		case "failInternal", "failUpdateWithStatus", "failEnable", "failEnableWithStatus", "failCertEnqueue":
-			if len(call.Args) > 0 && mentionsErrorText(fset, call.Args[0]) {
+			if len(call.Args) > 0 && hasErrorText(call.Args[0]) {
 				leaks = append(leaks, printNode(fset, call))
 			}
 		case "failRestoreFileAccess", "failAutoBackupAccess":
-			// 自动备份高危操作族失败收尾的单源（行面 failAutoBackupAccess
-			// 与文件面 failRestoreFileAccess 适配器）实参形态一致：
-			// (c, 动作词/download, subject, message, status, cause)——状态位在第 5 个
-			// 实参，响应正文是第 4 个。不登记本形态，把 c.JSON 收敛进单源 helper
-			// 就成了 5xx 详情扫描器的逃逸面——清单条目会因「已不再拼接」被要求
-			// 删除，而实际泄漏面仍在。
-			if len(call.Args) >= 5 && isInternalStatusExpr(call.Args[4]) && mentionsErrorText(fset, call.Args[3]) {
+			// 实参形态为 (c, 动作词/download, subject, message, status, cause)。
+			if len(call.Args) >= 5 && hasInternalStatus(call.Args[4]) && hasErrorText(call.Args[3]) {
 				leaks = append(leaks, printNode(fset, call))
 			}
 		}
@@ -381,16 +486,19 @@ func TestAuditLogEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 // adminBusiness5xxDetailFunctions 是 caddy.go 之外 admin 组端点的 5xx「保留
 // 底层细节」政策登记（键=文件名:函数名，值=理由）。admin 端点是排障接口：
 // 自动备份需区分 DB 锁与备份目录 errno，管理面板 HTTPS 需点名哪一步材料
-// 读失败。未登记即按 business 组口径（固定文案）——不存在「既不登记也不扫描」
-// 的真空区。
+// 读失败，配置导入/还原需保留事务回滚原因。未登记即按 business 组口径
+// （固定文案）——不存在「既不登记也不扫描」的真空区。
 var adminBusiness5xxDetailFunctions = map[string]string{
-	"autobackup.go:AutoBackupSettings":       "设置/备份列表读取失败需管理员看到 errno",
-	"autobackup.go:UpdateAutoBackupSettings": "设置事务写失败需点名（DB 锁/只读库）",
-	"autobackup.go:RunAutoBackupNow":         "引擎触发失败需点名（admission/执行错误）",
-	"autobackup.go:DeleteAutoBackup":         "删除备份行失败需点名（DB 故障）",
-	"autobackup.go:RestoreAutoBackup":        "备份文件读取失败需点名（权限/errno）",
-	"autobackup.go:DownloadAutoBackup":       "备份文件读取失败需点名（权限/errno）",
-	"admintls.go:UpdateAdminTLS":             "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
+	"autobackup.go:AutoBackupSettings":        "设置/备份列表读取失败需管理员看到 errno",
+	"autobackup.go:UpdateAutoBackupSettings":  "设置事务写失败需点名（DB 锁/只读库）",
+	"autobackup.go:RunAutoBackupNow":          "引擎触发失败需点名（admission/执行错误）",
+	"autobackup.go:DeleteAutoBackup":          "删除备份行失败需点名（DB 故障）",
+	"autobackup.go:RestoreAutoBackup":         "备份文件读取失败需点名（权限/errno）",
+	"autobackup.go:DownloadAutoBackup":        "备份文件读取失败需点名（权限/errno）",
+	"admintls.go:UpdateAdminTLS":              "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
+	"config_backup.go:ExportConfigBackup":     "导出失败需管理员区分备份内容错误与系统故障",
+	"config_backup.go:failImportTx":           "导入/还原必须点名事务回滚原因（既有响应契约）",
+	"config_backup.go:importConfigBackupCore": "导入/还原事务与文件回滚失败需管理员看到具体原因",
 }
 
 // 政策可判性门禁（admin 业务族）：登记文件里每个 5xx 拼接内部错误文本的函数
@@ -409,6 +517,7 @@ func TestAdminBusiness5xxDetailPolicyIsExplicit(t *testing.T) {
 		registered[file][fn] = reason
 	}
 	fset := token.NewFileSet()
+	matched := 0
 	for file, allowed := range registered {
 		node, err := parser.ParseFile(fset, file, nil, 0)
 		if err != nil {
@@ -429,6 +538,8 @@ func TestAdminBusiness5xxDetailPolicyIsExplicit(t *testing.T) {
 			leaking[fn.Name.Name] = true
 			if _, ok := allowed[fn.Name.Name]; !ok {
 				t.Errorf("%s:%s 的 5xx 响应拼接了内部错误文本，且未登记 admin 细节清单（business 组必须固定文案；新增 admin 端点须登记理由）: %v", file, fn.Name.Name, leaks)
+			} else {
+				matched++
 			}
 		}
 		for name := range allowed {
@@ -438,5 +549,8 @@ func TestAdminBusiness5xxDetailPolicyIsExplicit(t *testing.T) {
 				t.Errorf("%s:%s 已不再拼接内部错误文本，请删除过期政策条目", file, name)
 			}
 		}
+	}
+	if matched == 0 {
+		t.Fatal("admin 业务细节清单门未命中任何函数——5xx 泄漏扫描器可能已退化")
 	}
 }

@@ -185,13 +185,17 @@ func healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, version string) {
 // 与同包其它持久化同口径（tmp+fsync+rename）：该文件是 planCRSReconcile 的
 // 权威输入，裸 os.WriteFile 的崩溃窗口会留下 0 字节/半截 VERSION，让下一次
 // 启动的对账基于错误版本选方向（回退快照或改写 DB 版本行）。
-func writeCRSVersionMarker(liveDir, version string) {
+var crsVersionMarkerWrite = writeFileAtomicSynced
+
+func writeCRSVersionMarker(liveDir, version string) error {
 	if version == "" {
-		return
+		return nil
 	}
-	if err := writeFileAtomicSynced(filepath.Join(liveDir, crsVersionFile), []byte(version+"\n"), 0644); err != nil {
+	if err := crsVersionMarkerWrite(filepath.Join(liveDir, crsVersionFile), []byte(version+"\n"), 0644); err != nil {
 		Logf("error", "crs seed: failed to write version marker: %v", err)
+		return err
 	}
+	return nil
 }
 
 func readCRSVersionMarker(dir string) string {

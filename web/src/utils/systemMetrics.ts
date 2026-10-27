@@ -29,11 +29,16 @@ export const degradedMetricLabels = (degraded: readonly string[] | undefined): s
   return SYSTEM_METRIC_PARTS.filter((part) => parts.has(part)).map((part) => SYSTEM_METRIC_LABELS[part])
 }
 
-/** 进程/线程配额百分比：上限未知（0/不限额）时返回 0，不伪造比例。 */
-export const pidsUsagePercent = (current: number, max: number): number => {
-  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return 0
-  return Math.min((current / max) * 100, 100)
-}
+/** 文本百分比保留后端原始值：超过配额仍显示 122% 等真实超限程度。 */
+export const pidsPercentLabel = (percent: number): string => percent.toFixed(0)
+
+/** 通用资源进度条：降级时不绘制（null），正常/超限值统一只封视觉上限。 */
+export const metricProgressPercent = (percent: number, degraded: boolean): number | null =>
+  degraded ? null : Math.min(percent, 100)
+
+/** 进程配额还多一个「不限额不画进度」形态；文本百分比不受影响。 */
+export const pidsProgressPercent = (percent: number, max: number, degraded: boolean): number | null =>
+  degraded || max <= 0 ? null : Math.min(percent, 100)
 
 /** 「已用 / 上限」文案：上限 0 视为不限额（cgroup pids.max = max）。 */
 export const pidsUsageLabel = (current: number, max: number): string =>
@@ -48,3 +53,14 @@ export const pidsTone = (percent: number): 'normal' | 'warning' | 'critical' => 
   if (percent >= 80) return 'warning'
   return 'normal'
 }
+
+/** 采集失败不代表配额正常或耗尽：值容器使用中性色。 */
+export const pidsValueTone = (percent: number, degraded: boolean): 'normal' | 'warning' | 'critical' | null =>
+  degraded ? null : pidsTone(percent)
+
+/** 后端 0 同时覆盖未采集/读取失败与真正不限额，不能断言为「不限」。 */
+export const nprocLimitLabel = (limit: number): string => limit > 0 ? String(limit) : '未采集或不限'
+
+/** 进程配额帮助文案单源：ulimit 的零值歧义由 nprocLimitLabel 保留。 */
+export const pidsTooltipText = (limit: number): string =>
+  `cgroup 进程/线程配额（含僵尸进程）。接近上限时容器内无法创建新进程，表现为 fork 失败。ulimit -u：${nprocLimitLabel(limit)}`

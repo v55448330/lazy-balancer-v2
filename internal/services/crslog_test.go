@@ -32,9 +32,7 @@ func TestWriteCRSUpdateLog_singleSinkNoDoubleTee(t *testing.T) {
 // taskLogsHousekeeping 只做保留期清理；尺寸滚动已统一归写入前检查，
 // 不再由每日巡检二次滚动。
 func TestTaskLogsHousekeeping_retentionOnlyDoesNotRotate(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	setupIsolatedDB(t)
 	if _, err := db.DB.Exec("UPDATE global_config SET task_log_size_mb = 1 WHERE id = 1"); err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +60,7 @@ func TestTaskLogsHousekeeping_retentionOnlyDoesNotRotate(t *testing.T) {
 // 单一负责（5 代移位），housekeeping 对 certjobs/ 只做保留期清理、不做尺寸轮转——
 // 否则孤儿超阈活动文件会被 rename 覆盖 .1 代际（双轨覆盖丢史窗口的残留面）。
 func TestTaskLogsHousekeeping_certjobsExemptFromSizeRotation(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	setupIsolatedDB(t)
 	if _, err := db.DB.Exec("UPDATE global_config SET task_log_size_mb = 1 WHERE id = 1"); err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ package taskengine
 //   - Scheduled 跳过轮的退避兜底。
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -41,10 +42,9 @@ func TestEngine_StartLoopIdempotentOnEnabledPeriodic(t *testing.T) {
 	}
 }
 
-// Given Scheduled 任务槽恒过期，首轮在 CancelHook 窗口内自然结束（skipped），
-// 期间 tick 派发了同 trigger 的新一轮（阻塞中）。
-// When hook 返回、Cancel 落定。
-// Then 新一轮不被取消、本槽不被消费（水位为空），且退避到期后能重投第 3 次。
+// Given 首轮在 CancelHook 窗口内自然结束，随后显式尝试第二轮占位。
+// When 旧实现允许第二轮在钩子内启动；修复后钩子返回前拒绝占位。
+// Then 第二轮 manager ctx 不被旧请求取消，本槽不被消费，钩子结束后可正常执行。
 func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
@@ -52,6 +52,7 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 	var runs atomic.Int32
 	round1Release := make(chan struct{})
 	round2Release := make(chan struct{})
+	round2Started := make(chan struct{})
 	hookEntered := make(chan struct{})
 	hookRelease := make(chan struct{})
 	var round1Once, round2Once, hookOnce sync.Once
@@ -60,7 +61,11 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 	releaseHook := func() { hookOnce.Do(func() { close(hookRelease) }) }
 	// 断言失败路径也必须释放全部阻塞点（否则引擎 Stop 的 drain 会挂满超时）。
 	t.Cleanup(func() { releaseRound1(); releaseRound2(); releaseHook() })
-	var round2Cancelled atomic.Bool
+	var round2Ctx atomic.Value
+	var manager struct {
+		sync.Mutex
+		cancel context.CancelCauseFunc
+	}
 
 	if err := e.Register(Descriptor{
 		ID: id, Family: "t", Name: "取消代际", Kind: KindScheduled,
@@ -69,21 +74,28 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 		CancelHook: func() bool {
 			close(hookEntered)
 			<-hookRelease
+			manager.Lock()
+			cancel := manager.cancel
+			manager.Unlock()
+			if cancel != nil {
+				cancel(ErrUserCancelled)
+			}
 			return true
 		},
 		Run: func(rc RunContext) error {
+			runCtx, cancel := context.WithCancelCause(rc.Ctx)
+			defer cancel(nil)
+			manager.Lock()
+			manager.cancel = cancel
+			manager.Unlock()
 			switch runs.Add(1) {
 			case 1:
-				// 首轮在 hook 窗口内结束为 cancelled（取消已作用于本轮）；
-				// 取消轮不消费槽，故 tick 立即派发同 trigger 的新一轮。
 				<-round1Release
 				return ErrRunCancelled
 			case 2:
-				// hook 窗口内被派发的新一轮：必须存活到 Cancel 落定之后。
+				round2Ctx.Store(runCtx)
+				close(round2Started)
 				<-round2Release
-				if rc.Ctx.Err() != nil {
-					round2Cancelled.Store(true)
-				}
 				return errors.New("boom")
 			default:
 				return nil
@@ -93,7 +105,8 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.SetRole(true)
-	e.StartLoop(id)
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- e.Trigger(id, "manual", "") }()
 	waitForEngine(t, "首轮启动", 2*time.Second, func() bool { return runs.Load() == 1 })
 
 	cancelDone := make(chan bool, 1)
@@ -103,11 +116,37 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("CancelHook 未被调用")
 	}
-	releaseRound1() // 被取消轮在 hook 窗口内结束（cancelled，不消费槽）
-	waitForEngine(t, "hook 窗口内派发新一轮", 3*time.Second, func() bool { return runs.Load() == 2 })
+	releaseRound1()
+	if err := <-firstDone; !errors.Is(err, ErrRunCancelled) {
+		t.Fatalf("首轮终态错误=%v, want ErrRunCancelled", err)
+	}
+
+	// 旧轮已结束而钩子仍阻塞：显式尝试新代占位。无代际门的实现会启动
+	// 第二轮；修复后的实现必须在钩子返回前拒绝，不依赖调度 tick 时序。
+	admissionDone := make(chan error, 1)
+	go func() { admissionDone <- e.Trigger(id, "manual", "") }()
+	secondRejected := false
+	select {
+	case <-round2Started:
+	case err := <-admissionDone:
+		if !errors.Is(err, ErrAlreadyRunning) {
+			t.Fatalf("钩子窗口内新代占位错误=%v, want ErrAlreadyRunning", err)
+		}
+		secondRejected = true
+	}
 	releaseHook()
 	if ok := <-cancelDone; !ok {
 		t.Fatal("Cancel 应返回 true（hook 已接受）")
+	}
+	round2Done := admissionDone
+	if secondRejected {
+		round2Done = make(chan error, 1)
+		go func() { round2Done <- e.Trigger(id, "manual", "") }()
+	}
+	select {
+	case <-round2Started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("取消落定后第二轮未启动")
 	}
 
 	e.mu.RLock()
@@ -122,12 +161,21 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 	if !stillRunning {
 		t.Fatal("新一轮被旧取消动作终止（代际复核缺失）")
 	}
-	if round2Cancelled.Load() {
-		t.Fatal("新一轮的 ctx 被旧取消动作取消（代际复核缺失）")
+	ctx := round2Ctx.Load()
+	if ctx == nil || ctx.(context.Context).Err() != nil {
+		t.Fatal("新一轮的 manager ctx 被旧取消动作取消（代际复核缺失）")
 	}
 
 	releaseRound2()
-	waitForEngine(t, "退避到期重投第 3 轮", 3*time.Second, func() bool { return runs.Load() >= 3 })
+	if err := <-round2Done; err == nil || err.Error() != "boom" {
+		t.Fatalf("第二轮终态错误=%v, want boom", err)
+	}
+	if err := e.Trigger(id, "manual", ""); err != nil {
+		t.Fatalf("后续轮无法执行: %v", err)
+	}
+	if got := runs.Load(); got != 3 {
+		t.Fatalf("运行轮数=%d, want 3", got)
+	}
 }
 
 // Given Kind 与调度/业务门 Fn 错配的七种形态。

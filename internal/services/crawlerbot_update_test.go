@@ -133,6 +133,9 @@ func TestCrawlerUpdate_partialCommitFailureMessage(t *testing.T) {
 		t.Fatalf("seed snapshot: %v", err)
 	}
 	// 快照目录只读 → DB 行写入成功而快照写失败（部分提交）。
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略目录权限位，无法构造快照写失败")
+	}
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -645,6 +648,9 @@ func TestPrimeCrawlerIPLists_partialFailureKeepsSnapshotAndHeals(t *testing.T) {
 	// 删除一个引擎名单行，并把快照目录设为不可写（模拟播种/落盘失败）
 	if _, err := database.Exec(`DELETE FROM security_ip_lists WHERE name=? AND system=1`, CrawlerIPListName("googlebot")); err != nil {
 		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略目录权限位，无法构造播种写失败")
 	}
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)

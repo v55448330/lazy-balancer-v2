@@ -8,7 +8,9 @@ package handlers
 //  2. 保存族字段反向对账（新增字段要么进 SQL 归一，要么进显式豁免清单附裁定）。
 
 import (
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"strings"
 	"testing"
@@ -57,15 +59,16 @@ var tcpSQLColumnFallback = map[string]string{
 // SQL SET 的每一列；Create 适配器刻意豁免 NTLM/健康检查域名/代理路由族
 // （显式携带交保存门 400，见 createRuleTCPDeadFields 注释）。
 func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
-	src, err := os.ReadFile("rules.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "rules.go", nil, 0)
 	if err != nil {
-		t.Fatalf("read rules.go: %v", err)
+		t.Fatalf("parse rules.go: %v", err)
 	}
-	body := string(src)
-	structBody := functionBody(t, body, "type tcpDeadFields struct {")
-	storedBody := functionBody(t, body, "func storedRuleTCPDeadFields(")
-	updateBody := functionBody(t, body, "func updateRuleTCPDeadFields(")
-
+	adapterFields := map[string]map[string]bool{
+		"storedRuleTCPDeadFields": tcpDeadFieldLiteralKeys(t, file, "storedRuleTCPDeadFields"),
+		"updateRuleTCPDeadFields": tcpDeadFieldLiteralKeys(t, file, "updateRuleTCPDeadFields"),
+	}
+	structType := reflect.TypeOf(tcpDeadFields{})
 	cols, _ := splitTCPDeadFieldsSQL(t, tcpRuleDeadFieldsResetSQL)
 	if len(cols) == 0 {
 		t.Fatal("SQL SET 列解析为空")
@@ -82,7 +85,7 @@ func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
 		if !ok {
 			t.Fatalf("SQL 列 %q 缺少 tcpDeadFields 字段映射", col)
 		}
-		if !strings.Contains(structBody, field+" ") && !strings.Contains(structBody, field+"\t") {
+		if _, ok := structType.FieldByName(field); !ok {
 			t.Fatalf("tcpDeadFields 结构体缺少字段 %s（列 %s）", field, col)
 		}
 		// 复制/编辑适配器必须接字段（自愈路径实际生效处）。
@@ -91,12 +94,12 @@ func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
 		updateAdapterExemptions := map[string]string{
 			"NTLMCompatible": "UpdateRule 显式携带由保存门 400，未携带由调用点归零自愈",
 		}
-		for name, adapter := range map[string]string{"storedRuleTCPDeadFields": storedBody, "updateRuleTCPDeadFields": updateBody} {
-			if !strings.Contains(adapter, field+":") {
+		for name, fields := range adapterFields {
+			if !fields[field] {
 				if _, exempted := updateAdapterExemptions[field]; exempted && name == "updateRuleTCPDeadFields" {
 					continue
 				}
-				t.Fatalf("%s 未接线字段 %s（列 %s）——该列在复制/编辑路径不自愈", name, field, col)
+				t.Fatalf("%s 的 tcpDeadFields 复合字面量未接线字段 %s（列 %s）——该列在复制/编辑路径不自愈", name, field, col)
 			}
 		}
 	}
@@ -145,21 +148,46 @@ func TestTCPDeadFieldsSaveFamily_fieldsCoveredOrExempted(t *testing.T) {
 	}
 }
 
-// functionBody 截取以 anchor 开头的函数/类型声明主体（到下一个顶格 func/type）。
-func functionBody(t *testing.T, body, anchor string) string {
+// tcpDeadFieldLiteralKeys 只读取目标函数内 tcpDeadFields 复合字面量的键；
+// 注释、字符串或无关类型的同名字段都不能冒充适配器接线。
+func tcpDeadFieldLiteralKeys(t *testing.T, file *ast.File, fnName string) map[string]bool {
 	t.Helper()
-	start := strings.Index(body, anchor)
-	if start < 0 {
-		t.Fatalf("未找到声明 %q", anchor)
+	var fn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		candidate, ok := decl.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == fnName {
+			fn = candidate
+			break
+		}
 	}
-	rest := body[start+len(anchor):]
-	if end := strings.Index(rest, "\nfunc "); end >= 0 {
-		rest = rest[:end]
+	if fn == nil || fn.Body == nil {
+		t.Fatalf("未找到函数 %s 的函数体", fnName)
 	}
-	if end := strings.Index(rest, "\ntype "); end >= 0 {
-		rest = rest[:end]
+	fields := map[string]bool{}
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		typeName, ok := literal.Type.(*ast.Ident)
+		if !ok || typeName.Name != "tcpDeadFields" {
+			return true
+		}
+		for _, element := range literal.Elts {
+			kv, ok := element.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				fields[key.Name] = true
+			}
+		}
+		return true
+	})
+	if len(fields) == 0 {
+		t.Fatalf("%s 未识别到 tcpDeadFields 复合字面量键（门禁失效）", fnName)
 	}
-	return rest
+	return fields
 }
 
 // TestTCPDeadFieldReset_zeroesSaveFamily 行为钉：完整填充的 tcpDeadFields

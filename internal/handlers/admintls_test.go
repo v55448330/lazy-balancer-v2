@@ -396,7 +396,7 @@ func TestUpdateAdminTLS_switchingToSelfsignedClearsUploadedMaterial(t *testing.T
 	exited := make(chan struct{}, 1)
 	exitProcess = func(int) { exited <- struct{}{} }
 	t.Cleanup(func() { exitProcess = oldExit })
-	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+	handler := newAdminTLSHandlers(t)
 	router := gin.New()
 	router.POST("/admin-tls", handler.UpdateAdminTLS)
 	request := httptest.NewRequest(http.MethodPost, "/admin-tls",
@@ -465,7 +465,7 @@ func TestUpdateAdminTLS_unchangedConfigSkipsWriteAndRestart(t *testing.T) {
 	exited := make(chan struct{}, 1)
 	exitProcess = func(int) { exited <- struct{}{} }
 	t.Cleanup(func() { exitProcess = oldExit })
-	handler := &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+	handler := newAdminTLSHandlers(t)
 	router := gin.New()
 	router.POST("/admin-tls", handler.UpdateAdminTLS)
 	request := httptest.NewRequest(http.MethodPost, "/admin-tls",
@@ -833,42 +833,133 @@ func TestGetAdminTLS_reportsConfigUnavailableOnReadFailure(t *testing.T) {
 	}
 }
 
-// admin TLS 测试的 Handlers 字面量必须带隔离 DataDir（只允许 newAdminTLSHandlers
-// 这一处单源夹具）：空 DataDir 的启用态 selfsigned 探针会把证书/私钥写进包
-// 源码树，而该事故形态已知会被 git add -A 误收。
+// admin TLS 测试的非空 Handlers 字面量只能位于 newAdminTLSHandlers 内，
+// 并由该单源夹具提供隔离 DataDir。空 Handlers{} 仍可用于不触达文件系统的
+// 只读端点。扫描命中数必须非零，避免 glob 或 AST 识别退化后门禁假绿。
 func TestAdminTLSTests_allFixturesCarryIsolatedDataDir(t *testing.T) {
 	files, err := filepath.Glob("admintls*_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 只校验带 cfg 的夹具：空 Handlers{} 用于只读端点（InspectAdminTLSCert/
-	// GetAdminTLS），不触达 DataDir 探针；写路径夹具必须经单源 helper。
+	if len(files) == 0 {
+		t.Fatal("admin TLS 夹具守卫未匹配任何测试文件")
+	}
+	checked := 0
 	for _, file := range files {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fset := token.NewFileSet()
-		parsed, err := parser.ParseFile(fset, file, raw, 0)
+		count, violations, err := scanAdminTLSFixtureSource(file, raw)
 		if err != nil {
-			t.Fatalf("parse %s: %v", file, err)
+			t.Fatal(err)
 		}
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			composite, ok := node.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			ident, ok := composite.Type.(*ast.Ident)
-			if !ok || ident.Name != "Handlers" || len(composite.Elts) == 0 {
-				return true
-			}
-			startOffset := fset.Position(composite.Pos()).Offset
-			endOffset := fset.Position(composite.End()).Offset
-			literal := string(raw[startOffset:endOffset])
-			if !strings.Contains(literal, "DataDir") {
-				t.Errorf("%s: Handlers 夹具缺少隔离 DataDir: %s（请改用 newAdminTLSHandlers）", file, literal)
-			}
+		checked += count
+		for _, violation := range violations {
+			t.Error(violation)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("admin TLS 夹具守卫未检查任何非空 Handlers 字面量")
+	}
+}
+
+// scanAdminTLSFixtureSource 同时识别包内 Handlers 与限定名 pkg.Handlers。
+// 返回值分别是非空字面量检查数和违反单源/隔离目录约定的描述。
+func scanAdminTLSFixtureSource(file string, raw []byte) (int, []string, error) {
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, file, raw, 0)
+	if err != nil {
+		return 0, nil, err
+	}
+	checked := 0
+	violations := make([]string, 0)
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		composite, ok := node.(*ast.CompositeLit)
+		if !ok || len(composite.Elts) == 0 {
 			return true
-		})
+		}
+		typeName := ""
+		switch typ := composite.Type.(type) {
+		case *ast.Ident:
+			typeName = typ.Name
+		case *ast.SelectorExpr:
+			typeName = typ.Sel.Name
+		}
+		if typeName != "Handlers" {
+			return true
+		}
+		checked++
+		startOffset := fset.Position(composite.Pos()).Offset
+		endOffset := fset.Position(composite.End()).Offset
+		literal := string(raw[startOffset:endOffset])
+		functionName := ""
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && composite.Pos() >= fn.Pos() && composite.End() <= fn.End() {
+				functionName = fn.Name.Name
+				break
+			}
+		}
+		if !strings.Contains(literal, "DataDir") || !strings.Contains(literal, "t.TempDir()") {
+			violations = append(violations, file+":"+functionName+": Handlers 夹具缺少 t.TempDir() 隔离 DataDir（请改用 newAdminTLSHandlers）: "+literal)
+			return true
+		}
+		if functionName != "newAdminTLSHandlers" {
+			violations = append(violations, file+":"+functionName+": 非空 Handlers 字面量只能位于 newAdminTLSHandlers 单源夹具内: "+literal)
+		}
+		return true
+	})
+	return checked, violations, nil
+}
+
+func TestAdminTLSFixtureGuardDetectsUnsafeShapes(t *testing.T) {
+	const source = `package p
+func newAdminTLSHandlers(t *testing.T) *Handlers {
+	return &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+}
+func identFixture(t *testing.T) {
+	_ = &Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+	_ = &Handlers{}
+}
+func selectorFixture(t *testing.T) {
+	_ = &fixture.Handlers{cfg: &config.Config{DataDir: t.TempDir()}}
+	_ = &fixture.Handlers{}
+}`
+	checked, violations, err := scanAdminTLSFixtureSource("synthetic.go", []byte(source))
+	if err != nil {
+		t.Fatalf("parse synthetic fixtures: %v", err)
+	}
+	if checked != 3 {
+		t.Fatalf("checked=%d, want 3（Ident/SelectorExpr 两种形态都必须计入）", checked)
+	}
+	if len(violations) != 2 {
+		t.Fatalf("violations=%v, want identFixture 与 selectorFixture 各一处", violations)
+	}
+	for _, functionName := range []string{"identFixture", "selectorFixture"} {
+		found := false
+		for _, violation := range violations {
+			if strings.Contains(violation, functionName) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("violations=%v, 缺少 %s 的反形状命中", violations, functionName)
+		}
+	}
+}
+
+func TestAdminTLSFixtureGuardRejectsEmptyDataDir(t *testing.T) {
+	const source = `package p
+func newAdminTLSHandlers(t *testing.T) *Handlers {
+	return &Handlers{cfg: &config.Config{DataDir: ""}}
+}`
+	checked, violations, err := scanAdminTLSFixtureSource("synthetic.go", []byte(source))
+	if err != nil {
+		t.Fatalf("parse synthetic fixture: %v", err)
+	}
+	if checked != 1 || len(violations) != 1 {
+		t.Fatalf("checked=%d violations=%v, want 1/1（空 DataDir 不得凭字段名存在而通过）", checked, violations)
 	}
 }

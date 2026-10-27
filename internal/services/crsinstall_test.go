@@ -618,6 +618,9 @@ func TestCopyDir_copiesProbeLastSoPartialTreeFailsGate(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "REQUEST-900-EXCLUSION-RULES.conf"), "SecRule a")
 	unreadable := filepath.Join(src, "zz-unreadable.conf")
 	writeTestFile(t, unreadable, "SecRule boom")
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略文件权限位，无法构造拷贝读失败")
+	}
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}
@@ -646,6 +649,9 @@ func TestMoveTree_copyFallbackLeavesNoPartialTreeOnFailure(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "rules", "REQUEST-900.conf"), "SecRule a")
 	unreadable := filepath.Join(src, "rules", "zz-unreadable.conf")
 	writeTestFile(t, unreadable, "SecRule boom")
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略文件权限位，无法构造回退拷贝读失败")
+	}
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}

@@ -198,9 +198,12 @@ func TestGetSystemMetrics_allPartsFailingReturnsError(t *testing.T) {
 		systemMetricsDFCommand = originalDFCommand
 	})
 
-	_, err := getSystemMetrics()
+	metrics, err := getSystemMetrics()
 	if err == nil {
 		t.Fatal("三项全失败必须返回 error（后端不得以全零冒充健康）")
+	}
+	if want := []string{"memory", "disk", "cpu", "pids"}; !slices.Equal(metrics.Degraded, want) {
+		t.Fatalf("degraded=%v, want deterministic order %v", metrics.Degraded, want)
 	}
 	for _, fragment := range []string{"内存", "磁盘", "CPU"} {
 		if !strings.Contains(err.Error(), fragment) {

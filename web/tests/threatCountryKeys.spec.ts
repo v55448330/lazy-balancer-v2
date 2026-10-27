@@ -47,15 +47,35 @@ test('B 全量键集：每个威胁国家的下钻省层数据可用（中国=�
   assert.deepEqual(missing, [], `以下国家无省层数据，下钻将成空洞: ${missing.join('、')}`)
 })
 
-test('B2 省层数据非空且首项含多边形（归一后仍是真实数据）', () => {
+type ProvinceRows = Array<{ name: string; polys: number[][][] }>
+const assertProvinceRows = (rows: ProvinceRows, label: string): void => {
+  assert.ok(rows.length > 0, `${label} 省层为空`)
+  for (const [rowIndex, row] of rows.entries()) {
+    const at = `${label} 第 ${rowIndex + 1} 行`
+    assert.ok(typeof row.name === 'string' && row.name.trim().length > 0, `${at} 缺省名`)
+    assert.ok(Array.isArray(row.polys) && row.polys.length > 0, `${at} 缺多边形`)
+    for (const polygon of row.polys) {
+      assert.ok(polygon.length > 0, `${at} 含空 polygon`)
+      for (const ring of polygon) {
+        assert.ok(ring.length > 0 && ring.length % 2 === 0, `${at} ring 为空或坐标不成对`)
+        assert.ok(ring.every(Number.isFinite), `${at} 含非有限坐标`)
+      }
+    }
+  }
+}
+
+test('B2 每国每行省层数据均含有效名称与多边形（含中国高精度表）', () => {
+  const checked = new Set<string>()
   for (const country of THREAT_COUNTRIES) {
     const drill = normalizeCountryName(country.name)
-    if (drill === '中国') continue
-    const rows = ADMIN1_PROVINCES[drill]
-    assert.ok(Array.isArray(rows), `${drill} 非数组`)
-    assert.ok(typeof rows[0].name === 'string' && rows[0].name.length > 0, `${drill} 首项缺省名`)
-    assert.ok(Array.isArray(rows[0].polys) && rows[0].polys.length > 0, `${drill} 首项缺多边形`)
+    if (checked.has(drill)) continue
+    checked.add(drill)
+    assertProvinceRows(drill === '中国' ? CHINA_PROVINCES : ADMIN1_PROVINCES[drill], drill)
   }
+  assert.throws(() => assertProvinceRows([
+    { name: '首行正常', polys: [[[0, 0, 1, 1]]] },
+    { name: '第二行坏数据', polys: [] },
+  ], '合成国'), /合成国 第 2 行 缺多边形/, '首行合法不得掩盖第二行空 polys')
 })
 
 test('C 别名表：历史英文/旧名分组 + 巴勒斯坦双源；台湾/南极洲死数据已清', () => {

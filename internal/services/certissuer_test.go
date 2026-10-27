@@ -77,12 +77,13 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
 	// 自此再调度为异步（go deploymentRetry）——断言必须经 channel 等待
 	// 回调到达，裸读计数器既是顺序竞态也是数据竞态（全量并发下偶发 flake）。
-	retried := make(chan struct{}, 1)
+	type retryCall struct {
+		jobID  int
+		ruleID string
+	}
+	retried := make(chan retryCall, 1)
 	issuer.deploymentRetry = func(gotJobID int, got issuedCertificate, _ time.Duration) error {
-		if gotJobID != jobID || got.ruleID != ruleID {
-			t.Fatalf("retry job=(%d,%q), want (%d,%q)", gotJobID, got.ruleID, jobID, ruleID)
-		}
-		retried <- struct{}{}
+		retried <- retryCall{jobID: gotJobID, ruleID: got.ruleID}
 		return nil
 	}
 	material := issuedCertificate{
@@ -99,7 +100,10 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 		t.Fatal("deployment succeeded despite reload failure")
 	}
 	select {
-	case <-retried:
+	case got := <-retried:
+		if got.jobID != jobID || got.ruleID != ruleID {
+			t.Fatalf("retry job=(%d,%q), want (%d,%q)", got.jobID, got.ruleID, jobID, ruleID)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("deployment retry was never rescheduled (async goroutine missing)")
 	}

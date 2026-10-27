@@ -352,9 +352,8 @@ func TestImportConfigBackup_validates_admin_tls_when_backup_carries_keys(t *test
 	assertZeroWriteShared(t)
 }
 
-// 导入路径对 audit_retention_months 复用启动钳位同边界——
-// 越界值原样落库会锁死基础设置保存（写侧 1-12 校验 400），直至下次重启钳位；
-// 导入侧须与 jwt_expire_minutes 钳制对称，越界钳到 [1,12] 最近边界。
+// 导入路径对 audit_retention_months 复用启动钳位同边界：高于上限钳到 12；
+// 旧备份的 0/负值必须回退运行期默认 3，不能绕过默认被钳成 1。
 func TestImportConfigBackup_clamps_audit_retention_months(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -363,8 +362,8 @@ func TestImportConfigBackup_clamps_audit_retention_months(t *testing.T) {
 	}{
 		{name: "999 钳位到 12", value: 999, want: 12},
 		{name: "13 钳位到 12", value: 13, want: 12},
-		{name: "0 钳位到 1", value: 0, want: 1},
-		{name: "负值钳位到 1", value: -3, want: 1},
+		{name: "0 回退默认 3", value: 0, want: 3},
+		{name: "负值回退默认 3", value: -3, want: 3},
 		{name: "合法值保持不变", value: 6, want: 6},
 		{name: "边界 1 保持不变", value: 1, want: 1},
 		{name: "边界 12 保持不变", value: 12, want: 12},
@@ -389,6 +388,99 @@ func TestImportConfigBackup_clamps_audit_retention_months(t *testing.T) {
 			}
 			if stored != tt.want {
 				t.Fatalf("audit_retention_months=%d, want %d", stored, tt.want)
+			}
+		})
+	}
+}
+
+// jwt_expire_minutes 同样保留旧备份 0/负值的默认语义（20 分钟）；合法值、
+// 上下边界与超上限形状继续沿用原有导入钳制契约。
+func TestImportConfigBackup_preservesJWTDefaultForNonPositiveValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "0 回退默认 20", value: 0, want: 20},
+		{name: "负值回退默认 20", value: -1, want: 20},
+		{name: "合法值保持不变", value: 30, want: 30},
+		{name: "下边界保持不变", value: 1, want: 1},
+		{name: "上边界保持不变", value: 1440, want: 1440},
+		{name: "超上限回退默认 20", value: 1441, want: 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			seedCurrentAdminShared(t)
+			backup := configBackupJSON(t, map[string][]map[string]any{}, map[string]any{"jwt_expire_minutes": tt.value})
+
+			response := postImportShared(t, h.ImportConfigBackup, "/config/import", backup)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+			}
+			var stored int
+			if err := db.DB.QueryRow(`SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1`).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored != tt.want {
+				t.Fatalf("jwt_expire_minutes=%d, want %d", stored, tt.want)
+			}
+		})
+	}
+}
+
+// 爬虫豁免两列必须与保存侧同门：NULL 走 schema 默认值，布尔列拒绝字符串/
+// 非 0/1 整数，engines 拒绝畸形 JSON 与未注册 ID，geoip off 不得开启豁免。
+func TestImportConfigBackup_validatesCrawlerExemptionColumns(t *testing.T) {
+	cases := []struct {
+		name         string
+		exempt       any
+		engines      any
+		geoipMode    string
+		wantStatus   int
+		wantExempt   int
+		wantEngines  string
+		wantFragment string
+	}{
+		{name: "NULL 归一默认值", exempt: nil, engines: nil, geoipMode: "off", wantStatus: http.StatusOK, wantExempt: 0, wantEngines: "[]"},
+		{name: "字符串 true 拒绝", exempt: "true", engines: `["googlebot"]`, geoipMode: "deny", wantStatus: http.StatusBadRequest},
+		{name: "整数 2 拒绝", exempt: 2, engines: `["googlebot"]`, geoipMode: "deny", wantStatus: http.StatusBadRequest},
+		{name: "合法 1 往返", exempt: 1, engines: `["googlebot"]`, geoipMode: "deny", wantStatus: http.StatusOK, wantExempt: 1, wantEngines: `["googlebot"]`},
+		{name: "非法引擎 ID 拒绝", exempt: 1, engines: `["not-registered"]`, geoipMode: "deny", wantStatus: http.StatusBadRequest, wantFragment: "未知爬虫引擎 ID"},
+		{name: "畸形 engines 拒绝", exempt: 1, engines: "not-json", geoipMode: "deny", wantStatus: http.StatusBadRequest, wantFragment: "引擎 ID 数组"},
+		{name: "geoip off 开启豁免拒绝", exempt: 1, engines: `["googlebot"]`, geoipMode: "off", wantStatus: http.StatusBadRequest, wantFragment: "开启爬虫豁免要求地域拦截"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			seedCurrentAdminShared(t)
+			policy := map[string]any{
+				"id": 1, "name": "crawler-backup", "mode": "off", "enabled": 0,
+				"geoip_mode": tt.geoipMode, "geoip_countries": "[]",
+				"geoip_crawler_exempt": tt.exempt, "geoip_crawler_engines": tt.engines,
+			}
+			backup := configBackupJSON(t, map[string][]map[string]any{"security_policies": {policy}}, map[string]any{})
+
+			response := postImportShared(t, h.ImportConfigBackup, "/config/import", backup)
+
+			if response.Code != tt.wantStatus {
+				t.Fatalf("import status=%d body=%s, want %d", response.Code, response.Body.String(), tt.wantStatus)
+			}
+			if tt.wantFragment != "" && !strings.Contains(response.Body.String(), tt.wantFragment) {
+				t.Fatalf("body=%s, want containing %q", response.Body.String(), tt.wantFragment)
+			}
+			if tt.wantStatus != http.StatusOK {
+				assertZeroWriteShared(t)
+				return
+			}
+			var exempt int
+			var engines string
+			if err := db.DB.QueryRow(`SELECT geoip_crawler_exempt, geoip_crawler_engines FROM security_policies WHERE name='crawler-backup'`).Scan(&exempt, &engines); err != nil {
+				t.Fatal(err)
+			}
+			if exempt != tt.wantExempt || engines != tt.wantEngines {
+				t.Fatalf("crawler columns=(%d,%q), want (%d,%q)", exempt, engines, tt.wantExempt, tt.wantEngines)
 			}
 		})
 	}

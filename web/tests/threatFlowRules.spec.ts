@@ -6,6 +6,7 @@ import {
   flowTimestamp,
   nextFlowCursor,
   planFlowArcs,
+  freshFlowEvents,
   planFlowEvents,
   reconstructObservedRate,
   stepAdaptiveSample,
@@ -13,6 +14,7 @@ import {
 } from '../src/utils/threatFlowRules.ts'
 import { flowArcTierWidth } from '../src/utils/threatTheme.ts'
 import { parseDbDateMs } from '../src/utils/timeZoneFormat.ts'
+import { code, section } from './_helpers.ts'
 
 test('流量采样配置：仅保留 -1/0，全量与固定 2-64 归一为自适应', () => {
   assert.equal(normalizeTrafficSampleN(-1), -1)
@@ -130,6 +132,28 @@ test('采集租约重置后游标回零，正常递增与缺失值保持', () =>
   assert.equal(nextFlowCursor(500, { enabled: true, next_seq: 501 }), 501)
   assert.equal(nextFlowCursor(500, { enabled: true, next_seq: 500 }), 500)
   assert.equal(nextFlowCursor(500, { enabled: true }), 500)
+})
+
+test('首载与恢复可见批次：正常/攻击光流都只消费五分钟内的有限时间戳事件', () => {
+  const now = Date.UTC(2026, 9, 27, 12)
+  const events = [
+    { id: 'old', country: '中国', province: '浙江', at: now - 6 * 60_000, weight: 8 },
+    { id: 'current', country: '中国', province: '上海', at: now - 1000, weight: 8 },
+    { id: 'boundary', country: '美国', at: now - 5 * 60_000, weight: 4 },
+    { id: 'future', country: '日本', at: now + 1000, weight: 2 },
+    { id: 'nan', country: '英国', at: Number.NaN, weight: 1 },
+    { id: 'infinite', country: '法国', at: Number.POSITIVE_INFINITY, weight: 1 },
+    { id: 'missing', country: '德国', weight: 1 },
+  ]
+  assert.deepEqual(freshFlowEvents(events, now).map((event) => event.id), ['current', 'boundary', 'future'])
+  assert.deepEqual(freshFlowEvents([], now), [])
+
+  const screen = code('src/views/security/ThreatScreen.vue')
+  const attack = section(screen, 'const attackFlowTask = usePollingTask', 'const statsTask = usePollingTask')
+  const normal = section(screen, 'const flowTask = usePollingTask', 'async function mountEngine')
+  assert.match(attack, /freshFlowEvents\(data\.events \?\? \[\], now\)/, '攻击流必须继续消费同一新鲜度门')
+  assert.match(normal, /freshFlowEvents\(events, now\)/, '正常流首载/恢复可见共用的轮询必须先过滤陈旧事件')
+  assert.ok(normal.indexOf('flowSince = nextFlowCursor(flowSince, data)') > normal.indexOf('freshFlowEvents(events, now)'), '过滤陈旧事件后仍须推进游标')
 })
 
 

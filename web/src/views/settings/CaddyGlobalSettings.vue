@@ -31,8 +31,8 @@
 
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
-        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="formFrozen" :min="1" :max="4096" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">MB，请求体上限；默认 128，必须为 1-4096（0 不再表示默认）</span>
+        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" class="number-input" />
+        <span class="form-tip-inline tip-nowrap">MB，请求体上限；默认 128，必须为 1-1024（0 不再表示默认）</span>
       </el-form-item>
       <el-form-item label="读取超时">
         <el-input-number v-model="settings.http_read_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />

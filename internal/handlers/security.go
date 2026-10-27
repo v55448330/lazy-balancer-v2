@@ -50,7 +50,7 @@ func crsSetupConfPath() string {
 }
 
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -60,7 +60,7 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	for rows.Next() {
 		var r models.SecurityCustomRule
 		var conditionsJSON string
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.ConditionLogic, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		}
@@ -145,6 +145,9 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 	if utf8.RuneCountInString(rule.Description) > securityDescriptionMaxRunes {
 		return fmt.Errorf("规则描述不能超过 500 字符")
 	}
+	if rule.ConditionLogic != "and" && rule.ConditionLogic != "or" {
+		return fmt.Errorf("条件关系必须为 and 或 or，当前值 %s", rule.ConditionLogic)
+	}
 	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
 		return fmt.Errorf("动作必须为 block、log 或 pass，当前值 %s", rule.Action)
 	}
@@ -202,12 +205,16 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	// 省略 enabled = 启用（零值陷阱家族）——
 	// MCP/API 无需感知默认值，也不得因省略而创建静默禁用的 WAF 规则。
 	rule := models.SecurityCustomRule{
-		Name:        req.Name,
-		Description: req.Description,
-		Conditions:  req.Conditions,
-		Action:      req.Action,
-		Score:       req.Score,
-		Enabled:     req.Enabled == nil || *req.Enabled,
+		Name:           req.Name,
+		Description:    req.Description,
+		Conditions:     req.Conditions,
+		ConditionLogic: "and",
+		Action:         req.Action,
+		Score:          req.Score,
+		Enabled:        req.Enabled == nil || *req.Enabled,
+	}
+	if req.ConditionLogic != nil {
+		rule.ConditionLogic = *req.ConditionLogic
 	}
 	if createSecurityCustomRulePreLockHook != nil {
 		createSecurityCustomRulePreLockHook()
@@ -219,7 +226,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(rule.Conditions)
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
 		return
@@ -238,8 +245,8 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("自定义规则总数已达上限（%d 条），请先清理不再使用的规则", securityCustomRuleMaxGlobalCount)})
 		return
 	}
-	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?)`,
-		rule.Name, rule.Description, string(conditionsJSON), rule.Action, rule.Score, rule.Enabled, int(contextUserID(c)))
+	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, condition_logic, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
+		rule.Name, rule.Description, string(conditionsJSON), rule.ConditionLogic, rule.Action, rule.Score, rule.Enabled, int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -279,7 +286,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	// 读-合并-写包进事务（DSN _txlock=immediate 使首个读即持写锁，
 	// 与 UpdateSecurityPolicy 同机制）——此前裸连接读后合并再全列写，两个并发
 	// 部分更新会互相静默覆盖（丢 enabled 翻转 = WAF 规则静默启/禁用）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
 		return
@@ -288,8 +295,8 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	var existing models.SecurityCustomRule
 	var existingConditionsJSON string
 	if err := tx.QueryRowContext(c.Request.Context(),
-		`SELECT name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id=?`, id,
-	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
+		`SELECT name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id=?`, id,
+	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.ConditionLogic, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 			return
@@ -308,12 +315,13 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		}
 	}
 	merged := models.SecurityCustomRule{
-		Name:        existing.Name,
-		Description: existing.Description,
-		Conditions:  existing.Conditions,
-		Action:      existing.Action,
-		Score:       existing.Score,
-		Enabled:     existing.Enabled,
+		Name:           existing.Name,
+		Description:    existing.Description,
+		Conditions:     existing.Conditions,
+		ConditionLogic: existing.ConditionLogic,
+		Action:         existing.Action,
+		Score:          existing.Score,
+		Enabled:        existing.Enabled,
 	}
 	if req.Name != nil {
 		merged.Name = *req.Name
@@ -323,6 +331,9 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	}
 	if req.Conditions != nil {
 		merged.Conditions = *req.Conditions
+	}
+	if req.ConditionLogic != nil {
+		merged.ConditionLogic = *req.ConditionLogic
 	}
 	if req.Action != nil {
 		merged.Action = *req.Action
@@ -338,8 +349,8 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(merged.Conditions)
-	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		merged.Name, merged.Description, string(conditionsJSON), merged.Action, merged.Score, merged.Enabled, int(contextUserID(c)), id)
+	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_custom_rules SET name=?, description=?, conditions=?, condition_logic=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		merged.Name, merged.Description, string(conditionsJSON), merged.ConditionLogic, merged.Action, merged.Score, merged.Enabled, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -374,7 +385,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	// 写锁来自 DSN 的 _txlock=immediate（glebarez 驱动忽略 TxOptions.Isolation，
 	// 非只读 BeginTx 一律 BEGIN IMMEDIATE）：引用检查的 SELECT 即持写锁，并发的
 	// UpdateSecurityPolicy/CreateSecurityPolicy 无法在检查与 DELETE 之间提交。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -499,7 +510,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "默认拦截页由系统管理，不允许创建"})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
 		return
@@ -562,7 +573,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	// is_default 检查与 UPDATE 必须同事务（镜像 DeleteSecurityBlockPage
 	// 非事务读 + 错误丢弃的旧实现存在并发窗口：导入路径可在 SELECT 与
 	// UPDATE 之间把该页重建为默认页，使 UPDATE 绕过 403 契约改到默认页内容。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -639,7 +650,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	// Caddy 默认页面。写锁来自 DSN 的 _txlock=immediate（非只读 BeginTx 一律
 	// BEGIN IMMEDIATE）：首个 SELECT 即持写锁，并发的策略更新无法在检查与
 	// DELETE 之间提交（同 DeleteSecurityCustomRule）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -759,6 +770,27 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	type policyListRow struct {
+		p                models.SecurityPolicy
+		crsExcludedCount int
+	}
+	loadedPolicies := make([]policyListRow, 0)
+	for rows.Next() {
+		var p models.SecurityPolicy
+		if err := scanSecurityPolicy(rows, &p); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		var crsExcluded []json.RawMessage
+		// 解析失败 500(与 ListIPLists 同款口径)——吞错时带外脏
+		// 行显示 0 排除、实际 N 排除,观测缺口。
+		if err := json.Unmarshal(p.CRSExcludedRules, &crsExcluded); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析策略 CRS 排除列表失败"})
+			return
+		}
+		loadedPolicies = append(loadedPolicies, policyListRow{p: p, crsExcludedCount: len(crsExcluded)})
+	}
+	rows.Close()
 
 	var policies []models.SecurityPolicySummary
 	bindingCounts := map[int]int{}
@@ -809,26 +841,6 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		}
 		blockedCounts = counts.blocked
 		triggerCounts = counts.trigger
-	}
-	type policyListRow struct {
-		p                models.SecurityPolicy
-		crsExcludedCount int
-	}
-	loadedPolicies := make([]policyListRow, 0)
-	for rows.Next() {
-		var p models.SecurityPolicy
-		if err := scanSecurityPolicy(rows, &p); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
-		}
-		var crsExcluded []json.RawMessage
-		// 解析失败 500(与 ListIPLists 同款口径)——吞错时带外脏
-		// 行显示 0 排除、实际 N 排除,观测缺口。
-		if err := json.Unmarshal(p.CRSExcludedRules, &crsExcluded); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析策略 CRS 排除列表失败"})
-			return
-		}
-		loadedPolicies = append(loadedPolicies, policyListRow{p: p, crsExcludedCount: len(crsExcluded)})
 	}
 	policyPointers := make([]*models.SecurityPolicy, len(loadedPolicies))
 	for i := range loadedPolicies {
@@ -1233,7 +1245,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 跳过、WAF 规则静默丢失。写锁来自 DSN 的 _txlock=immediate（glebarez 驱动
 	// 忽略 TxOptions.Isolation，非只读 BeginTx 一律 BEGIN IMMEDIATE）：校验 SELECT
 	// 即持写锁，并发的删除无法在校验与 INSERT 之间提交。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -1767,7 +1779,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// ImportConfigBackup 不持 caddyOpMu,构成并发写者, 窗口可落
 	// allow+启用+空名单。三读移入 BEGIN IMMEDIATE 事务内,
 	// 校验 SELECT 即持写锁,消除 TOCTOU(同三-3 镜像方向)。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -2476,7 +2488,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	// 写锁来自 DSN 的 _txlock=immediate（glebarez 驱动对非只读 BeginTx 一律
 	// BEGIN IMMEDIATE，忽略 TxOptions.Isolation）：COUNT/DELETE/清理之间不存在
 	// 并发绑定插队的写窗口。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -2546,7 +2558,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 非只读 BeginTx 一律 BEGIN IMMEDIATE）：COUNT 校验即持写锁，并发的策略删除
 	// 无法在 COUNT 与 DELETE/INSERT 之间提交，闭合 D 遗留的窄写窗口
 	// 澄清注释）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2665,7 +2677,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2864,7 +2876,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			return
 		}
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -3105,7 +3117,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("每条规则最多绑定 %d 条策略", maxBindingsPerRule)})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -3297,7 +3309,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	id := c.Param("id")
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -3586,7 +3598,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	ruleCaddyID := c.Param("caddy_id")
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
 		return
@@ -3763,9 +3775,8 @@ func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 
 // customRuleFamilyCondition 自定义规则族的 ID 形态条件——与 attackFamilyClassOf
 // 的自定义判定（收敛单一事实源，两个 Go 视图函数共用）严格同口径：5 位任意
-// 数字 ID（emit=crID+10000，10000-789999：5 位任意数字与 6 位 1xxxxx-
-// 7xxxxx 均在可达范围）或 ≥7 位且以 1 开头（无 id 规则的合成 ID 1000000+）。
-// 8xxxxx/9xxxxx 由地域爬虫与 CRS 段独占，不归本族。
+// 数字 ID、6 位 1xxxxx-7xxxxx、≥7 位且以 1 开头的旧内嵌合成 ID，以及
+// ≥7 位的 OR 条件分支 ID（当前首数字 3-6）。8xxxxx/9xxxxx 由地域爬虫与 CRS 段独占。
 // appendFamilyPrefixCondition(2026-09-10 ):单数字族(id 2/3/4/5/7/8/11)
 // 为精确匹配——LIKE 前缀会让自定义规则 5 位 ID(24567 等)交叉命中 IP/地域族;
 // 多字符前缀(949/959/920/921)对应 6 位 CRS ID,保持前缀语义。
@@ -3789,7 +3800,7 @@ func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
 	*args = append(*args, prefix+"___")
 }
 
-const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*')"
+const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*' OR rule_triggered GLOB '[3-6][0-9][0-9][0-9][0-9][0-9][0-9]*')"
 
 // geoipFamilyCondition 地域拦截族的预检精确段形态条件（阶段化模型：
 // buildIPPrecheckDirectives 逐策略链 id=800000+policyID）——6 位 8xxxxx。
@@ -4511,9 +4522,11 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	// ID 得 Unknown，不影响后续形态分支。
 	precheckFamily := services.PrecheckRuleFamilyUnknown
 	legacyFamily := legacyRuleFamily{}
+	customORBranch := false
 	if n, perr := strconv.Atoi(ruleTriggered); perr == nil {
 		precheckFamily = services.PrecheckRuleFamilyOf(n)
 		legacyFamily = legacyRuleFamilyOf(n)
+		customORBranch = n >= services.CustomRuleORConditionIDBase
 	}
 	switch {
 	case len(ruleTriggered) == 5:
@@ -4524,6 +4537,9 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	case len(ruleTriggered) == 6 && ruleTriggered[0] >= '1' && ruleTriggered[0] <= '7':
 		// DB 自定义规则 id 10000-789999 发射为 id+10000，6 位 1xxxxx-7xxxxx
 		// 是真实可达形态；8xxxxx/9xxxxx 分别由地域爬虫与 CRS 分支独占。
+		return attackFamilyCustomRule
+	case customORBranch:
+		// OR 条件分支使用独立高段，展示与筛选仍归同一自定义规则族。
 		return attackFamilyCustomRule
 	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
 		// 自定义规则触发 id 的第二种形状：自此无 id 规则的合成 id 1000000+n

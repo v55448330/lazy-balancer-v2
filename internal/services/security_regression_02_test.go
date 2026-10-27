@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,8 +16,10 @@ import (
 func TestRefreshLatestAsync_backsOffAfterFailure(t *testing.T) {
 	// Given 上游 fetch 恒失败的管理器
 	m := newTestCRSManager(t)
+	var callCount atomic.Int32
 	calls := make(chan struct{}, 4)
 	m.fetchLatestTag = func(context.Context) (string, error) {
+		callCount.Add(1)
 		calls <- struct{}{}
 		return "", errors.New("upstream 403")
 	}
@@ -38,14 +41,25 @@ func TestRefreshLatestAsync_backsOffAfterFailure(t *testing.T) {
 	}
 	m.RefreshLatestAsync()
 
-	// Then 守卫拦截第二次触发（latestRefreshing 由调用方同步置位，此处立即判定）
-	if refreshing() {
-		t.Fatal("failed fetch must engage the 10min backoff: second call re-fired a fetch")
+	// 用有界观察窗 + 原子调用计数排除「快速重试已完成」与「尚未调度」
+	// 两种假绿通道，而不是读取瞬时 refreshing 或做非阻塞 channel 检查。
+	time.Sleep(100 * time.Millisecond)
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("fetch calls=%d within failure backoff, want 1", got)
 	}
+
+	// 正对照：人工过窗后同一观察机制必须看到第二次真实调用。
+	m.latestMu.Lock()
+	m.latestFetchedAt = time.Now().Add(-11 * time.Minute)
+	m.latestMu.Unlock()
+	m.RefreshLatestAsync()
 	select {
 	case <-calls:
-		t.Fatal("second fetch fired within the failure backoff window")
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expired failure backoff did not re-fire fetch")
+	}
+	if got := callCount.Load(); got != 2 {
+		t.Fatalf("fetch calls after backoff expiry=%d, want 2", got)
 	}
 	// 失败不产生缓存版本
 	if _, known := m.LatestVersionCached(); known {

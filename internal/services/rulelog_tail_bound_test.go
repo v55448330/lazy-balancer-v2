@@ -271,9 +271,7 @@ func TestReadRuleLogFrom_newlineFileDeliversCompleteLines(t *testing.T) {
 func TestReadRuleLogTail_capWarnThrottledPerRule(t *testing.T) {
 	size := 8 << 20
 	writeRuleLogFile(t, "capwarn", bytes.Repeat([]byte{0x41}, size))
-	stateKey := "rulelog-tail-cap-capwarn"
-	delete(metricsStateFailed, stateKey)
-	t.Cleanup(func() { delete(metricsStateFailed, stateKey) })
+	isolateMetricsState(t)
 	buf := captureLogf(t)
 
 	if _, _, err := ReadRuleLogTail("capwarn", 100); err != nil {

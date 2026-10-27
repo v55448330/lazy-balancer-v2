@@ -169,12 +169,36 @@ test('hover 世界路径变换：最近副本落点与旧逐点 wrapDeg 公式�
           assert.ok(Math.abs(y - oldY) < 1e-9, `camX=${cam.camX} lon=${lon} lat=${lat}: y=${y} ≠ 旧 ${oldY}`)
         }
         assert.equal(hits, 1, `camX=${cam.camX} zoom=${cam.zoom} lon=${lon} 必须恰好命中最近副本一次`)
-        // 可见性口径：旧实现按半视口宽（度）过滤，等价于屏幕 x 落在画布内。
-        const halfW = cam.width / 2 / cam.zoom
-        const onScreen = Math.abs(wrapDeg(lon - baseLon)) <= halfW
-        assert.equal(onScreen, oldX >= 0 && oldX <= cam.width, `可见性口径不一致 lon=${lon}`)
+        // 视口内/外与日界线由下方独立固定夹具逐点验收，不用同一公式自证。
       }
     }
+  }
+})
+
+test('hover 视口裁剪：中心、左右界外与 ±180° 固定落点逐值验收', () => {
+  const cam: Cam2D = { camX: 0, camY: WORLD_D / 2, zoom: 2, width: 400, height: 200 }
+  const layer = hoverLayerTransform(cam)
+  const cases = [
+    { lon: 0, x: 200, visible: true },
+    { lon: 50, x: 300, visible: true },
+    { lon: -50, x: 100, visible: true },
+    { lon: -100, x: 0, visible: true },
+    { lon: 100, x: 400, visible: false },
+    { lon: -101, x: -2, visible: false },
+    { lon: 101, x: 402, visible: false },
+    { lon: 180, x: -160, visible: false },
+    { lon: -180, x: -160, visible: false },
+    { lon: 179, x: 558, visible: false },
+    { lon: -179, x: -158, visible: false },
+  ]
+  for (const expected of cases) {
+    const pathX = expected.lon + WORLD_W / 2
+    const hits = [-layer.worldPx, 0, layer.worldPx]
+      .map((copy) => layer.tx + copy + pathX * layer.scale)
+      .filter((x) => x >= layer.clipX && x < layer.clipX + layer.clipWidth)
+    assert.equal(hits.length, 1, `lon=${expected.lon} 必须只命中一个世界副本`)
+    assert.equal(hits[0], expected.x, `lon=${expected.lon} 屏幕落点漂移`)
+    assert.equal(hits[0] >= 0 && hits[0] < cam.width, expected.visible, `lon=${expected.lon} 视口可见性错误`)
   }
 })
 

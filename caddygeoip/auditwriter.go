@@ -1637,6 +1637,9 @@ const (
 	// auditFilesDroppedOverhead 是文件条目截断披露键（`"files_dropped":N,`）
 	// 的固定估算（丢弃数按 6 位上限预留）。
 	auditFilesDroppedOverhead = 32
+	// auditMessagesDroppedOverhead 是消息条目截断披露键
+	// （`"messages_dropped":N,`）的固定估算（丢弃数按 6 位上限预留）。
+	auditMessagesDroppedOverhead = 40
 	// 每条 message：键名/数字字段/tags 语法 + slice 元素与 RuleMatch 驻留；
 	// 内容串（actionset/message/error_message/data 各字段）另按 len 计入。
 	auditMessageOverhead = 512
@@ -1751,6 +1754,9 @@ func estimateAuditSnapshotBytes(s *auditSnapshot) int64 {
 		for _, rs := range pr.Rulesets_ {
 			n += int64(jsonStringEscapedLen(rs))
 		}
+	}
+	if s.MessagesDropped_ > 0 {
+		n += auditMessagesDroppedOverhead
 	}
 	for _, m := range s.Messages_ {
 		n += estimateAuditMessageBytes(m)

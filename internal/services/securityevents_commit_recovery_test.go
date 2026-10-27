@@ -90,6 +90,7 @@ func registerCommitFailDriver(t *testing.T) *commitFailDriver {
 func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testing.T) {
 	// Given 指标库文件（真实 schema）与一条可摄取事务。
 	dataDir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(dataDir); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +98,11 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 		t.Fatal(err)
 	}
 	originalMetrics := db.MetricsDB
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldCurrent)
+	})
 	driverStub := registerCommitFailDriver(t)
 	driverStub.fail.Store(false)
 	wrapped, err := sql.Open(commitFailDriverName, filepath.Join(dataDir, db.MetricsDBFilename)+"?_pragma=busy_timeout(30000)")

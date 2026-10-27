@@ -457,9 +457,13 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		return autoBackupRowView{}, cerr
 	}
 	if err := writeAutoBackupPayload(ctx, finalPath, payload); err != nil {
+		// rename 可能已经成功、仅父目录 fsync 失败：无论是否同时取消，
+		// 都必须清掉未登记最终文件，避免敏感备份脱离保留策略积累。
+		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			services.Logf("warn", "自动备份：写失败后清理最终文件 %s 失败: %v", finalPath, removeErr)
+		}
 		if cerr := ctx.Err(); cerr != nil {
 			// 取消发生在写盘阶段——按取消返回，不落 failed 行/审计。
-			_ = os.Remove(finalPath)
 			return autoBackupRowView{}, cerr
 		}
 		return autoBackupRowView{}, fail("备份文件写入失败", err)
@@ -933,10 +937,15 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 行先删、文件后删：先删文件后删行会在「文件已删、
-	// 行 DELETE 失败」时留下指向不存在文件的行（还原/下载 404）；反过来行已删
-	// 而文件残留仅为磁盘孤儿（无害，可手动清理），一致性方向更优。
-	res, err := db.DB.Exec(`DELETE FROM auto_backups WHERE id=?`, view.ID)
+	// 行删除先在事务内确认影响行数，再删文件：0 行（并发先到者已删）
+	// 不得碰文件；文件删除失败回滚行删除，保留可重试入口且不记成功审计。
+	tx, err := db.DB.Begin()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM auto_backups WHERE id=?`, view.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
 		return
@@ -945,14 +954,16 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
 		return
 	} else if deleted == 0 {
-		// 并发删除（两个请求同读一行、先到者已删）：本次未删除任何行，不得
-		// 记「成功」审计（审计真实性）也不得再删文件（文件归属先到者收尾）。
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "备份不存在（可能已被删除）"})
 		return
 	}
 	if err := os.Remove(filepath.Join(h.cfg.BackupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		// 行已删、文件残留：孤儿文件不阻断响应，留 warn 供清理。
-		services.Logf("warn", "自动备份: 行已删但文件删除失败 %s: %v", view.Filename, err)
+		writeInternalError(c, http.StatusInternalServerError, "删除备份文件失败", fmt.Errorf("删除备份文件 %s: %w", view.Filename, err))
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除备份记录失败: " + err.Error()})
+		return
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, services.AuditResultPart("success")))

@@ -18,7 +18,12 @@ import (
 
 // GetAutobanConfig GET /security/autoban：六项配置（全员可读，business 组）。
 func (h *Handlers) GetAutobanConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, services.GetAutobanConfig())
+	cfg, err := services.GetAutobanConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁配置失败", err)})
+		return
+	}
+	c.JSON(http.StatusOK, cfg)
 }
 
 // UpdateAutobanConfig PUT /security/autoban：六项配置写侧（校验：阈值 1-10000、
@@ -60,7 +65,12 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		boolOnOff(req.Enabled), enabledStateLabel(req.Enabled), req.Threshold, req.WindowMinutes,
 		services.AutobanDurationLabel(req.Duration), autobanScopeText(req.Scope),
 		map[bool]string{true: "观察", false: "正式"}[req.DryRun]))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "自动封禁配置已更新", Data: services.GetAutobanConfig()})
+	updated, err := services.GetAutobanConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("回读自动封禁配置失败", err)})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "自动封禁配置已更新", Data: updated})
 }
 
 func boolOnOff(b bool) string {
@@ -89,7 +99,11 @@ func autobanScopeText(scope string) string {
 // 引擎未装配时保守判从）；list_entries 与渲染生效面同口径（剔除已到期
 // 未清理条目）。
 func (h *Handlers) GetAutobanStatus(c *gin.Context) {
-	cfg := services.GetAutobanConfig()
+	cfg, err := services.GetAutobanConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁配置失败", err)})
+		return
+	}
 	entries, listID, err := services.AutobanListEntries()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁名单失败", err)})

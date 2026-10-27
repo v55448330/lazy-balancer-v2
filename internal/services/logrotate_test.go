@@ -699,7 +699,12 @@ func TestTaskLogsHousekeeping_countsDeletionFailures(t *testing.T) {
 	if err := os.Chtimes(stale, oldTime, oldTime); err != nil {
 		t.Fatal(err)
 	}
-	// 目录只读：可列出/stat，删除必然失败（权限形态）。
+	// 扫描与删除之间没有测试缝，普通文件候选无法确定性地改写成
+	// ENOTDIR 路径；保留权限注入，并显式排除会忽略权限位的 root。
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略目录权限位，无法构造任务日志删除失败")
+	}
+	// 目录只读：可列出/stat，非 root 下删除必然失败（权限形态）。
 	if err := os.Chmod(tasksDir, 0o555); err != nil {
 		t.Fatal(err)
 	}

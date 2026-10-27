@@ -30,3 +30,47 @@ func setupIsolatedDB(t *testing.T) *sql.DB {
 	})
 	return database
 }
+
+func TestSecurityDBFixtures_restoreEveryGlobalHandle(t *testing.T) {
+	originalDB, originalMetrics, originalAudit, originalCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
+	t.Cleanup(func() {
+		db.DB, db.MetricsDB, db.AuditDB = originalDB, originalMetrics, originalAudit
+		db.SetDB(originalCurrent)
+	})
+	fixtures := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{name: "geoip helper", run: setupGeoipConfigTestDB},
+		{name: "auto backup helper", run: setupAutoBackupTestDB},
+		{name: "services regression helper", run: setupU05ServicesDB},
+		{name: "audit cleanup helper", run: func(t *testing.T) { newAuditCleanupFixture(t, 0, 3) }},
+		{name: "policy context direct init", run: func(t *testing.T) { TestLoadSecurityPolicyContext_carriesTriStateGateFields(t) }},
+		{name: "reconcile direct init", run: func(t *testing.T) { TestReconcileCRSState_versionReadFailureSkipsWrites(t) }},
+		{name: "task log retention direct init", run: func(t *testing.T) { TestTaskLogsHousekeeping_retentionOnlyDoesNotRotate(t) }},
+		{name: "task log certjobs direct init", run: func(t *testing.T) { TestTaskLogsHousekeeping_certjobsExemptFromSizeRotation(t) }},
+		{name: "security events helper", run: func(t *testing.T) {
+			if err := initSecurityEventsTestDB(t, t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "security enum helper", run: setupSecurityEnumTestDB},
+		{name: "retention helper", run: setupSecurityEventsRetentionTestDB},
+		{name: "stall helper", run: func(t *testing.T) { stallSetup(t) }},
+		{name: "library sentinel direct init", run: func(t *testing.T) { TestArmSecurityLibraryFirstSlots_healsImportSentinelRow(t) }},
+		{name: "rate limit direct init", run: func(t *testing.T) { TestSecurityEnumNormalizedChanges_reportsRateLimitShutdown(t) }},
+		{name: "commit recovery direct init", run: func(t *testing.T) { TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t) }},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			sentinelDB, sentinelMetrics, sentinelAudit, sentinelCurrent := &sql.DB{}, &sql.DB{}, &sql.DB{}, &sql.DB{}
+			db.DB, db.MetricsDB, db.AuditDB = sentinelDB, sentinelMetrics, sentinelAudit
+			db.SetDB(sentinelCurrent)
+			t.Run("fixture", fixture.run)
+			if db.DB != sentinelDB || db.MetricsDB != sentinelMetrics || db.AuditDB != sentinelAudit || db.GetDB() != sentinelCurrent {
+				t.Fatalf("global handles were not restored: DB=%p/%p metrics=%p/%p audit=%p/%p current=%p/%p",
+					db.DB, sentinelDB, db.MetricsDB, sentinelMetrics, db.AuditDB, sentinelAudit, db.GetDB(), sentinelCurrent)
+			}
+		})
+	}
+}

@@ -635,6 +635,20 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	lists := []ipListRow{}
+	for rows.Next() {
+		var row ipListRow
+		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.EntryCount, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		lists = append(lists, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		return
+	}
 	refs, err := loadIPListRefPolicies()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -682,13 +696,8 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		}
 		trows.Close()
 	}
-	lists := []ipListRow{}
-	for rows.Next() {
-		var row ipListRow
-		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.EntryCount, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
-		}
+	for i := range lists {
+		row := &lists[i]
 		// v2.3.2 弹框性能重构：列表载荷不再内联 entries（大名单 1.4 万条
 		// 会背 ~460KB/行）；弹框经 GET /security/ip-lists/:id 按需拉取。
 		// 自动封禁预置名单（system=1 但条目在 DB）不适用威胁库条数
@@ -718,11 +727,6 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 			// 受信代理引用同属删除门（409），计入阻止删除的引用数。
 			row.RefCountEnabled++
 		}
-		lists = append(lists, row)
-	}
-	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: lists})
 }
@@ -810,7 +814,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -885,7 +889,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -1068,7 +1072,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	}
 	// 引用检查与删除同事务（镜像 DeleteSecurityBlockPage 的口径）
 	// 检查通过后、DELETE 之前并发的策略更新不得插入新引用。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -1213,7 +1217,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 IP/CIDR：" + req.Value})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -1346,7 +1350,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 IP/CIDR：" + req.Value})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return

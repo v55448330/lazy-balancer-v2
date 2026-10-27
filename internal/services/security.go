@@ -988,6 +988,9 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 	if cr.ID < 0 {
 		return "规则 id 为负数"
 	}
+	if cr.ConditionLogic != "" && cr.ConditionLogic != "and" && cr.ConditionLogic != "or" {
+		return "条件关系无效"
+	}
 	// 带外旧库/集群快照可能绕过写侧校验；非法分值会产出 "+-5" 等整份
 	// 配置级编译错误，非法动作会静默改变语义。0 分与空动作保留旧版缺省形状。
 	if cr.Score != 0 && !customRuleValidScores[cr.Score] {
@@ -1001,6 +1004,9 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 		if r < 0x20 || r == 0x7f || r == '"' {
 			return "规则名称含控制字符或双引号"
 		}
+	}
+	if len(cr.Conditions) > customRuleMaxConditions {
+		return fmt.Sprintf("条件数超过 %d 条上限", customRuleMaxConditions)
 	}
 	if len(cr.Conditions) > 0 {
 		return conditionsEmissionIssue(cr.Conditions)
@@ -1037,6 +1043,29 @@ func customRulePhase(cr models.CustomRule) int {
 		}
 	}
 	return 1
+}
+
+// CustomRuleORConditionIDBase 是 OR 条件分支的独立发射段。分支 id 由父规则
+// emit id 与条件序号可逆编码，避开普通自定义段、GeoIP/CRS、合成段与 2000000 排除段。
+const CustomRuleORConditionIDBase = 3000000
+
+func customRuleORConditionEmitID(parentEmitID, conditionIndex int) int {
+	return CustomRuleORConditionIDBase + parentEmitID*customRuleMaxConditions + conditionIndex
+}
+
+// DecodeCustomRuleEmitID 将普通或 OR 分支 emit id 回解为同一父规则 DB id。
+// 无 id 的旧内嵌合成规则没有 DB 父行，返回 false。
+func DecodeCustomRuleEmitID(emitID int) (int, bool) {
+	if emitID > 10000 && emitID < geoipPrecheckRuleBase {
+		return emitID - 10000, true
+	}
+	if emitID >= CustomRuleORConditionIDBase {
+		parentEmitID := (emitID - CustomRuleORConditionIDBase) / customRuleMaxConditions
+		if parentEmitID > 10000 && parentEmitID < geoipPrecheckRuleBase {
+			return parentEmitID - 10000, true
+		}
+	}
+	return 0, false
 }
 
 func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, blockStatus int) {
@@ -1093,6 +1122,22 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 		} else if cr.Action == "log" {
 			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
 			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
+		}
+		if cr.ConditionLogic == "or" {
+			conditions := cr.Conditions
+			if len(conditions) == 0 {
+				conditions = []models.CustomRuleCondition{{Target: cr.Target, Operator: cr.Operator, Pattern: cr.Pattern}}
+			}
+			for idx, cond := range conditions {
+				phase := 1
+				if cond.Target == "body" {
+					phase = 2
+				}
+				branchID := customRuleORConditionEmitID(emitID, idx)
+				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n",
+					customRuleTargets[cond.Target], customRuleOperators[cond.Operator], escapeCorazaPattern(cond.Pattern), branchID, phase, action))
+			}
+			continue
 		}
 		// 多条件链式规则的 setvar 绑定到链条末条。coraza v3 在单条规则
 		// 算子命中时立即执行其非破坏性动作（internal/corazawaf/rule.go matchVariable
@@ -2167,10 +2212,12 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 		// 语义与修复前一致；tx 调用点必须显式传 tx，否则会读到已提交旧快照。
 		effective := store
 		if effective == nil {
+			// db.DB 是具体指针：nil 直接装入接口会得到“非 nil 接口 + nil 接收者”，
+			// 随后的 Query 会 panic。必须先判具体指针。
+			if db.DB == nil {
+				return nil
+			}
 			effective = db.DB
-		}
-		if effective == nil {
-			return nil
 		}
 		var rules []models.CustomRule
 		queriedIDs := make(map[int]struct{}, len(ids))
@@ -2190,7 +2237,7 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 			// ORDER BY id：跨分块的追加顺序此前依赖 SQLite 未定义返回序，
 			// 而发射顺序决定 coraza 的执行顺序（skipAfter/链语义）——显式
 			// 排序让「同载荷必得同产物」成为契约，测试也才有稳定期望。
-			rows, err := effective.Query("SELECT id, name, COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id IN ("+placeholders+") ORDER BY id ASC", args...)
+			rows, err := effective.Query("SELECT id, name, COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id IN ("+placeholders+") ORDER BY id ASC", args...)
 			if err != nil {
 				// 历史 G: 单块失败只丢该块并留痕，其余块照常解析；
 				// 此前整查询失败静默返回 nil，WAF 规则全部丢失且无日志。
@@ -2207,7 +2254,7 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 				// 先单独接收 id——Scan 中途失败时该
 				// 列已赋值，可把本行从「悬空引用」计数中排除（行存在但解析失败
 				// 不是「规则已删除」，旧实现把它计入 N 个不存在）。
-				if err := rows.Scan(&rowID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
+				if err := rows.Scan(&rowID, &cr.Name, &conditionsJSON, &cr.ConditionLogic, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
 					if rowID != 0 {
 						scanFailedIDs[rowID] = struct{}{}
 					}
@@ -2516,7 +2563,7 @@ func dedupeCRSExcludedEntries(entries []CRSExcludedEntry) []CRSExcludedEntry {
 
 // crsScopedExclusionIDBase 是作用域限定排除 ctl 规则的 SecRule id 基值：首条
 // 2000001，单次 BuildCorazaDirectives 调用内递增（n 顺序唯一）。与 CRS 9xxxxx /
-// 自定义规则 cr.ID+10000 / 无 id 合成 1000000+ 段互不冲突。
+// 自定义规则普通、旧版合成及 OR 条件分支段互不冲突。
 const crsScopedExclusionIDBase = 2000000
 
 // emitScopedCRSExclusions 发射作用域限定（scope=ip/list）的排除条目：每条先解析
@@ -3043,6 +3090,9 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 		// 占位规则（无条件且无单目标）在发射阶段无任何可用条件，与单条件校验一致按空条件拒绝
 		if len(r.Conditions) == 0 && r.Target == "" && r.Operator == "" {
 			return fmt.Errorf("自定义规则 #%d：自定义规则至少需要一个匹配条件", i+1)
+		}
+		if r.ConditionLogic != "" && r.ConditionLogic != "and" && r.ConditionLogic != "or" {
+			return fmt.Errorf("自定义规则 #%d 的条件关系无效：%q（可选：and、or）", i+1, r.ConditionLogic)
 		}
 		// 内嵌形状的分值与动作直接进入发射动作串：score=-5 会生成
 		// setvar:...=+-5 被 coraza 拒绝，未知 action 会被发射端静默按 pass 处理；

@@ -792,6 +792,7 @@ func TestConfigWatchdog_roleReadFailureLogsOnceAndRecovers(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(originalWriter) })
 
 	// When：角色读取连续两轮失败
+	originalDB, originalCurrent := db.DB, db.GetDB()
 	swapBrokenDB(t)
 	for range 2 {
 		if err := WatchdogCheckOnce(context.Background()); err == nil {
@@ -800,6 +801,17 @@ func TestConfigWatchdog_roleReadFailureLogsOnceAndRecovers(t *testing.T) {
 	}
 	if count := strings.Count(logs.String(), "角色读取失败"); count != 1 {
 		t.Fatalf("角色读取失败日志次数=%d, want 1（状态转换去重）: %s", count, logs.String())
+	}
+
+	db.DB = originalDB
+	db.SetDB(originalCurrent)
+	for range 2 {
+		if err := WatchdogCheckOnce(context.Background()); err != nil {
+			t.Fatalf("角色读取恢复后的检查失败: %v", err)
+		}
+	}
+	if count := strings.Count(logs.String(), "角色读取已恢复"); count != 1 {
+		t.Fatalf("角色读取恢复日志次数=%d, want 1（恢复首报，持续健康不重复）: %s", count, logs.String())
 	}
 }
 

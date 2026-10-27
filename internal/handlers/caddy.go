@@ -544,12 +544,11 @@ func validateUpdateConfigRequest(req *models.UpdateConfigRequest) error {
 		}
 	}
 
-	// 上限 4096MB——无上限时天文数字在渲染侧 int64 乘法（MB→字节）
-	// 回绕可正可负。库值唯一真相（批 1+2）：request_body_max_size_mb 为类型①
-	// 值型列（0 无效，1-4096），0 不再是「跟随全局/不限」——落库值恒有效，
-	// 渲染直读零兜底。
-	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 1 || *req.RequestBodyMaxSizeMB > 4096) {
-		return errors.New("request_body_max_size_mb 必须在 1-4096 MB 之间")
+	// 上限 1024MB 与 Coraza SecRequestBodyLimit 一致；保存侧拒绝更高值，
+	// 不让面板承诺一个渲染层只能静默钳制的上限。值型列 0 无效，
+	// 不再是「跟随全局/不限」——落库值恒有效，渲染直读零兜底。
+	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 1 || *req.RequestBodyMaxSizeMB > maxRequestBodySizeMB) {
+		return fmt.Errorf("request_body_max_size_mb 必须在 1-%d MB 之间", maxRequestBodySizeMB)
 	}
 	// 库值唯一真相（批 1+2）：http_read/write/idle_timeout 为类型①值型列
 	// （NOT NULL DEFAULT 60/60/120+启动回填），>=1 合法——0 的「省略=引擎默认」
@@ -872,7 +871,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// Validation passed — write in a transaction; Caddy applies the uncommitted
 	// state and the transaction only commits after a successful apply, so a
 	// failed apply leaves DB and env unchanged.
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("开启配置事务失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启配置事务失败"})
@@ -1098,7 +1097,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	}
 	// 先读请求体再取写锁（UpdateConfig/PutCaddyConfig 同序）——
 	// 已认证客户端的慢速/chunked 上传此前在持有 caddyOpMu 时读 body，会阻塞
-	// 全部规则/配置写与后台强制重载。全局 body 上限可配到 4096MB，窗口可观。
+	// 全部规则/配置写与后台强制重载。全局 body 上限可配到 1024MB，窗口可观。
 	var configData map[string]interface{}
 	if !guardConfiguredJSONBody(c) {
 		return
@@ -1616,7 +1615,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
 		return
 	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("开启 Caddy 配置事务失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启 Caddy 配置事务失败: " + err.Error()})
@@ -1642,7 +1641,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败"})
 		return
 	}
-	loaded, applyErr := h.caddyService.ApplyConfigReporting(configData)
+	appliedConfig, loaded, applyErr := h.caddyService.ApplyConfigReportingForCommit(configData)
 	if err := applyErr; err != nil {
 		rollbackErr := tx.Rollback()
 		if errors.Is(rollbackErr, sql.ErrTxDone) {
@@ -1690,6 +1689,9 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		return
 	}
 	committed = true
+	// apply 在 commit 前执行，LKG 只能在提交成功后记录候选载荷；否则
+	// apply→commit 之间进程中断会让启动兜底回放从未提交的原始配置。
+	h.caddyService.PersistLastGoodBytesInLock(appliedConfig)
 	// 2026-09-07 裁定：同 UpdateConfig——成功后清除既往失败标记。
 	h.recordCaddyApplyResult(nil)
 

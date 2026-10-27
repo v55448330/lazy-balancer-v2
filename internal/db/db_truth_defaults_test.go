@@ -132,11 +132,7 @@ func TestRunMigrationsColumnDefaults_MatchGovernedConstants(t *testing.T) {
 // 与 fresh 逐列相等（name/type/notnull/dflt_value/pk 全字段）。
 func TestLbRulesRebuildSchema_matchesFreshDDL(t *testing.T) {
 	// Given：fresh 库在完整启动（createTables + runMigrations）后的稳态形状
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize fresh database: %v", err)
 	}
@@ -376,11 +372,7 @@ func assertShapeMatchesFresh(t *testing.T, table string, fresh []pragmaColumn, r
 }
 
 func TestUsersRebuildSchema_matchesFreshDDL(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// Given fresh 稳态形状
 	if err := Initialize(t.TempDir()); err != nil {

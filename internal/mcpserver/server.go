@@ -74,8 +74,8 @@ var createSecurityPolicySchema = `{"type":"object","required":["name"],"properti
 var updateSecurityPolicySchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"策略 ID"},` + securityPolicyFieldsSchema + `},"additionalProperties":true}`
 
 // customRuleFieldsSchema 与 validateSecurityCustomRule 校验同口径：
-// action 三值、score 五值、条件 target/operator 枚举均为后端硬校验。
-const customRuleFieldsSchema = `"name":{"type":"string","description":"规则名称（≤100 字符，禁控制字符与双引号）"},"description":{"type":"string","description":"规则描述（≤500 字符）"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","required":["target","operator","pattern"],"properties":{"target":{"type":"string","enum":["uri","args","body","headers","user_agent"]},"operator":{"type":"string","enum":["contains","regex","equals","starts_with"]},"pattern":{"type":"string","description":"匹配模式"}}},"description":"匹配条件（AND 关系，至少一条）"},"action":{"type":"string","enum":["block","log","pass"]},"score":{"type":"integer","enum":[1,3,5,10,20],"description":"异常分值"},"enabled":{"type":"boolean","description":"创建省略=启用，显式 false=禁用；更新省略=保持现值"}`
+// condition_logic/action/score 与条件 target/operator 枚举均为后端硬校验（创建省略 condition_logic=and）。
+const customRuleFieldsSchema = `"name":{"type":"string","description":"规则名称（≤100 字符，禁控制字符与双引号）"},"description":{"type":"string","description":"规则描述（≤500 字符）"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","required":["target","operator","pattern"],"properties":{"target":{"type":"string","enum":["uri","args","body","headers","user_agent"]},"operator":{"type":"string","enum":["contains","regex","equals","starts_with"]},"pattern":{"type":"string","description":"匹配模式"}}},"description":"匹配条件（至少一条，关系由 condition_logic 决定）"},"condition_logic":{"type":"string","enum":["and","or"],"description":"条件关系：and=同时满足（缺省），or=任一满足；更新省略=保持现值"},"action":{"type":"string","enum":["block","log","pass"]},"score":{"type":"integer","enum":[1,3,5,10,20],"description":"异常分值"},"enabled":{"type":"boolean","description":"创建省略=启用，显式 false=禁用；更新省略=保持现值"}`
 
 var createCustomRuleSchema = `{"type":"object","required":["name","conditions","action","score"],"properties":{` + customRuleFieldsSchema + `},"additionalProperties":true}`
 var updateCustomRuleSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"规则 ID"},` + customRuleFieldsSchema + `},"additionalProperties":true}`
@@ -123,9 +123,9 @@ var tools = []toolSpec{
 	{"disable_rule", "禁用指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/disable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"duplicate_rule", "复制指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/duplicate", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"list_cert_jobs", "列出证书签发任务", http.MethodGet, "/certificates/jobs", nil, []string{"rule_id", "page", "page_size"}, listCertJobsSchema},
-	{"retry_cert_job", "重试指定证书签发任务", http.MethodPost, "/certificates/jobs/{id}/retry", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
+	{"retry_cert_job", "重试指定证书签发任务", http.MethodPost, "/certificates/jobs/{id}/retry", []string{"id"}, []string{"force"}, retryCertJobSchema},
 	{"delete_cert_job", "删除指定证书签发任务", http.MethodDelete, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
-	{"issue_certificate", "触发 ACME 证书签发", http.MethodPost, "/certificates/issue", nil, nil, issueCertificateSchema},
+	{"issue_certificate", "触发 ACME 证书签发", http.MethodPost, "/certificates/issue", nil, []string{"force"}, issueCertificateSchema},
 	{"list_certificates", "列出证书任务清单（每规则每域名最新签发任务：状态/到期时间）", http.MethodGet, "/certificates", nil, []string{"rule_id", "page", "page_size"}, listCertificatesSchema},
 	{"get_config", "读取全局配置", http.MethodGet, "/config", nil, nil, emptySchema},
 	{"update_config", "更新全局配置并应用 Caddy", http.MethodPut, "/config", nil, nil, updateConfigSchema},
@@ -390,7 +390,8 @@ const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":
 // 确认门（与 REST 侧 POST /certificates/issue 的 {"all":true} 同步）
 // 空 body（全量重签）不再放行——批量必须显式 all:true（enum 锁死 true，防
 // all:false 静默变空批量）；定向签发仍走 caddy_id（domain 可选）。
-const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"},"all":{"type":"boolean","enum":[true],"description":"全量重签（含已签发任务，消耗 CA 配额并触发 DNS 变更）：单次最多匹配 500 个 ACME 规则，超出 REST 返回 400，请分批执行或改传 caddy_id 定向签发"}},"oneOf":[{"required":["all"]},{"required":["caddy_id"]}],"additionalProperties":false}`
+const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"},"all":{"type":"boolean","enum":[true],"description":"全量重签（含已签发任务，消耗 CA 配额并触发 DNS 变更）：单次最多匹配 500 个 ACME 规则，超出 REST 返回 400，请分批执行或改传 caddy_id 定向签发"},"force":{"type":"boolean","description":"显式越过目标任务的 CA 限流冷却；省略或 false 不越过"}},"oneOf":[{"required":["all"]},{"required":["caddy_id"]}],"additionalProperties":false}`
+const retryCertJobSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"证书任务 ID"},"force":{"type":"boolean","description":"显式越过未到期的 CA 限流冷却；省略或 false 不越过"}},"additionalProperties":true}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"maximum":500,"default":1,"description":"页码；超过 500 页 REST 直接 400（深 OFFSET 全表扫描），请用时间/用户/动作筛选缩小范围"},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"username":{"type":"string","description":"操作人模糊筛选"},"action":{"type":"string","description":"操作模糊筛选"},"resource":{"type":"string","description":"对象模糊筛选"},"ip":{"type":"string","description":"IP 模糊筛选"},"keyword":{"type":"string","description":"详情关键词"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 
 // schema 必须覆盖 queryArgs 声明的全部
@@ -566,14 +567,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 	}
 	response, err := redirectlessClient.Do(request)
 	if err != nil {
-		// 超时错误补状态核对提示——回环客户端
-		// 60s 超时仅说明传输层未等到响应,服务端可能已处理完毕(备份/导入/
-		// 重启等长操作),直接重试会重复执行非幂等操作。
-		var netErr net.Error
-		if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
-			return toolCallError("内部 API 请求超时: %v（操作可能已在服务端生效,请先用查询类工具核对状态再重试）", err)
-		}
-		return toolCallError("内部 API 请求失败: %v", err)
+		return transportToolError(err, generatedPassword)
 	}
 	// 面板启用 HTTPS 时明文请求命中 TLS 嗅探层收到 302（cmd/server
 	// http_redirect_mux.go）；客户端不自动跟随（避免 POST 变 GET），
@@ -611,7 +605,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		}
 		response, err = redirectlessClient.Do(request)
 		if err != nil {
-			return toolCallError("内部 API 请求失败: %v", err)
+			return transportToolError(err, generatedPassword)
 		}
 		if isReplayableRedirectStatus(response.StatusCode) {
 			response.Body.Close()
@@ -648,6 +642,22 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		result = mcp.NewToolResultText(string(responseBody) + "\n（本次密码为系统生成：" + generatedPassword + "，请立即转交用户保存）")
 	}
 	return result, nil
+}
+
+func transportToolError(err error, generatedPassword string) (*mcp.CallToolResult, error) {
+	// 超时只代表客户端没有等到响应；首跳与 TLS 重放必须使用同一分类，
+	// 防止 Agent 在写操作可能已提交时盲目重试。
+	var netErr net.Error
+	if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
+		message := fmt.Sprintf("内部 API 请求超时: %v（操作可能已在服务端生效,请先用查询类工具核对状态再重试）", err)
+		if generatedPassword != "" {
+			// 同一调用方在成功响应中本就会收到该密码；不确定态交付候选值
+			// 同时覆盖「已提交」与「未提交」两种终态，不扩大权限。
+			message += fmt.Sprintf("\n（本次候选密码为系统生成：%s；密码重置可能已生效，若未生效请继续使用旧密码）", generatedPassword)
+		}
+		return mcp.NewToolResultError(message), nil
+	}
+	return toolCallError("内部 API 请求失败: %v", err)
 }
 
 const randomPasswordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

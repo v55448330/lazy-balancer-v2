@@ -37,3 +37,37 @@ func TestValidateImportedSecurityCustomRules_rejectsUnrenderableID(t *testing.T)
 		t.Fatalf("缺 id 行不得被拒（AUTOINCREMENT 分配）: %v", err)
 	}
 }
+
+func TestValidateImportedSecurityCustomRules_conditionLogicCompatibility(t *testing.T) {
+	row := func(logic any) map[string]any {
+		m := map[string]any{
+			"name": "logic", "action": "block", "score": float64(5),
+			"conditions": `[{"target":"uri","operator":"contains","pattern":"/x"}]`,
+		}
+		if logic != nil {
+			m["condition_logic"] = logic
+		}
+		return m
+	}
+	for _, tc := range []struct {
+		name  string
+		logic any
+	}{
+		{"旧备份缺列", nil}, {"显式 AND", "and"}, {"显式 OR", "or"}, {"NULL 兼容", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := row(tc.logic)
+			if tc.name == "NULL 兼容" {
+				r["condition_logic"] = nil
+			}
+			if err := validateImportedSecurityCustomRules([]map[string]any{r}); err != nil {
+				t.Fatalf("合法/旧形态 condition_logic 被拒: %v", err)
+			}
+		})
+	}
+	for _, invalid := range []any{"xor", "", float64(1)} {
+		if err := validateImportedSecurityCustomRules([]map[string]any{row(invalid)}); err == nil {
+			t.Fatalf("非法 condition_logic=%v 必须拒绝", invalid)
+		}
+	}
+}

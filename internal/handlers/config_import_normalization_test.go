@@ -91,14 +91,8 @@ func TestImportChain_normalizeGlobalConfigNumbersProducesVisibleNotes(t *testing
 		Tables: map[string][]map[string]any{},
 	}
 	chain := &importValidationChain{ctx: context.Background(), backup: backup}
-	if err := chain.normalizeGlobalConfigNumbers(); err != nil {
-		t.Fatalf("normalizeGlobalConfigNumbers: %v", err)
-	}
-	if len(chain.result.ConfigClampNotes) < 2 {
-		t.Fatalf("归一说明=%v, want 证书续签天数与请求体上限各一条", chain.result.ConfigClampNotes)
-	}
-	if got, _ := backupInteger(backup.Config["request_body_max_size_mb"]); got != 4096 {
-		t.Fatalf("request_body_max_size_mb=%v, want 钳到 4096", backup.Config["request_body_max_size_mb"])
+	if err := chain.normalizeGlobalConfigNumbers(); err == nil || !strings.Contains(err.Error(), "request_body_max_size_mb") {
+		t.Fatalf("request body limit above 1GiB must reject import, err=%v", err)
 	}
 
 	// 合法值：零说明（预览不得对正常备份刷警告）。
@@ -109,6 +103,19 @@ func TestImportChain_normalizeGlobalConfigNumbersProducesVisibleNotes(t *testing
 	}
 	if len(cleanChain.result.ConfigClampNotes) != 0 {
 		t.Fatalf("合法值产生归一说明: %v", cleanChain.result.ConfigClampNotes)
+	}
+}
+
+func TestImportValidation_rejectsRuleBodyLimitAboveEngineMaximum(t *testing.T) {
+	tables := ruleTablesShared()
+	tables["lb_rules"][0]["request_body_max_size_mb"] = 1025
+	if err := validateV2BackupRules(tables); err == nil || !strings.Contains(err.Error(), "request_body_max_size_mb") {
+		t.Fatalf("rule request body limit above 1GiB must reject import, err=%v", err)
+	}
+
+	tables["lb_rules"][0]["request_body_max_size_mb"] = 1024
+	if err := validateV2BackupRules(tables); err != nil {
+		t.Fatalf("rule request body limit at 1GiB must import: %v", err)
 	}
 }
 

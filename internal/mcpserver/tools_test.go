@@ -295,8 +295,8 @@ func TestWriteToolSchemasDeclareBodyFields(t *testing.T) {
 	}{
 		{"create_security_policy", []string{"name"}, []string{"name", "mode", "policy_type", "anomaly_threshold", "ip_acl_enabled", "rate_limit_enabled", "geoip_mode", "crs_rule_groups", "custom_rules", "block_page_id", "enabled"}},
 		{"update_security_policy", []string{"id"}, []string{"id", "name", "mode", "policy_type", "enabled"}},
-		{"create_custom_rule", []string{"name", "conditions", "action", "score"}, []string{"name", "conditions", "action", "score", "enabled"}},
-		{"update_custom_rule", []string{"id"}, []string{"id", "name", "conditions", "action", "score", "enabled"}},
+		{"create_custom_rule", []string{"name", "conditions", "action", "score"}, []string{"name", "conditions", "condition_logic", "action", "score", "enabled"}},
+		{"update_custom_rule", []string{"id"}, []string{"id", "name", "conditions", "condition_logic", "action", "score", "enabled"}},
 		{"create_block_page", []string{"name", "content"}, []string{"name", "content", "content_type", "description"}},
 		{"update_block_page", []string{"id"}, []string{"id", "name", "content", "content_type"}},
 		{"create_ip_list", []string{"name"}, []string{"name", "description", "category", "entries"}},

@@ -22,11 +22,7 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 
 	// When
 	if err := Initialize(dir); err != nil {
@@ -84,11 +80,7 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 // 策略迁移 custom_only(行为零突变);off 且无启用自定义规则的策略保持 off。
 func TestMigrateSecurityPolicyCustomOnlyMode(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
@@ -159,11 +151,7 @@ func TestMigrateSecurityPolicyCustomOnlyMode(t *testing.T) {
 // 炸),其余行照常迁移。
 func TestMigrateSecurityPolicyCustomOnlyMode_toleratesMalformedJSON(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
@@ -200,11 +188,7 @@ func TestMigrateSecurityPolicyCustomOnlyMode_toleratesMalformedJSON(t *testing.T
 // 此测试直接跑与 config_backup.go 导入归一同款 SQL 形状,验证顶层字符串不炸。
 func TestImportNormalization_jsonTypeGateBlocksTopLevelString(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
@@ -239,11 +223,7 @@ func TestImportNormalization_jsonTypeGateBlocksTopLevelString(t *testing.T) {
 // cluster_applied_sections 收敛为严格同步节行;重启幂等不回灌。
 func TestMigrateDropMergedSyncSwitchColumns_movesWafBookkeepingToColumns(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}

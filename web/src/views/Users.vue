@@ -256,6 +256,7 @@ import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-
 import DialogHeader from '@/components/DialogHeader.vue'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { validatePassword, validateUsername } from '@/utils/credentials'
+import { rollbackUserStatus } from '@/utils/userStatus'
 import type { APIResponse, UserListItem } from '@/types'
 const oidcOpen = ref(false)
 const oidcEnabled = ref(false)
@@ -472,10 +473,8 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
       try {
         await ElMessageBox.confirm('确定要禁用这个用户吗？禁用后该用户将无法登录。', '警告', { type: 'warning' })
       } catch {
-        // 取消确认时回滚乐观开关——el-switch 已先行翻转 row.is_enabled，
-        // 不回滚则 UI 显示「已禁用」而服务端仍启用，直到下次 fetchUsers 才自愈。
-        const row = users.value.find(u => u.id === id)
-        if (row) row.is_enabled = !isEnabled
+        // 取消确认时回滚乐观开关——el-switch 已先行翻转 row.is_enabled。
+        rollbackUserStatus(users.value, id, isEnabled)
         return
       }
     }
@@ -483,7 +482,8 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
     mfaAwareSuccess(isEnabled ? '已启用用户' : '已禁用用户')
     fetchUsers()
   } catch (e) {
-    fetchUsers() // revert on failure
+    rollbackUserStatus(users.value, id, isEnabled)
+    fetchUsers()
   } finally {
     switchingIds.value.delete(id)
   }

@@ -143,7 +143,7 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	path := CertJobLogPath(l.ruleID)
 
 	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
-	line := fmt.Sprintf("%s [%s] %s - %s\n", timestamp, level, stage, message)
+	line := taskengine.TruncateTaskLogLine(fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message)) + "\n"
 
 	// 轮转判定计入待写入行——size+len(line) 超阈即在写入
 	// 前轮转，磁盘上活动文件恒 ≤ 上限。尺寸滚动唯一负责方为本写入侧（5 代移位），

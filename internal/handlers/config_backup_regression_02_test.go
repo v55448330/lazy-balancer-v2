@@ -67,7 +67,7 @@ var backupSemanticBoolColumns = map[string][]string{
 	"lb_rules":                   {"ntlm_compatible", "upstream_force_http1"},
 	"security_block_pages":       {"is_builtin"},
 	"security_ip_lists":          {"system"},
-	"security_policies":          {"ip_whitelist_enabled", "trust_detection"},
+	"security_policies":          {"ip_whitelist_enabled", "trust_detection", "geoip_crawler_exempt"},
 	"api_keys":                   {"mcp_enabled", "read_only"},
 	"security_crs_version":       {"auto_update"},
 	"security_ip2region_version": {"auto_update"},

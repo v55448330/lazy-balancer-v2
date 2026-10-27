@@ -137,6 +137,7 @@
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
             <el-table-column label="条件" min-width="250" class-name="rule-cond-cell">
               <template #default="{ row }">
+                <el-tag size="small" effect="light" :type="row.condition_logic === 'or' ? 'warning' : 'info'">{{ row.condition_logic === 'or' ? '任一满足（OR）' : '同时满足（AND）' }}</el-tag>
                 <el-tag v-for="(cond, i) in row.conditions" :key="i" size="small" effect="plain" style="margin-right: 4px;">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
               </template>
             </el-table-column>
@@ -247,7 +248,7 @@
     <el-dialog v-model="ruleDialogVisible" width="min(760px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
       <template #header>
         <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'"
-          subtitle="按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件为 AND 关系" tone="danger" />
+          subtitle="按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件可同时满足或任一满足" tone="danger" />
       </template>
       <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly || savingRule">
         <!-- 值与后端写侧门同源（internal/handlers/security.go：名称 ≤100 rune、
@@ -257,6 +258,12 @@
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="ruleForm.description" placeholder="规则描述" maxlength="500" show-word-limit />
+        </el-form-item>
+        <el-form-item label="条件关系">
+          <el-radio-group v-model="ruleForm.condition_logic" aria-label="条件关系">
+            <el-radio value="and">同时满足（AND）</el-radio>
+            <el-radio value="or">任一满足（OR）</el-radio>
+          </el-radio-group>
         </el-form-item>
         <el-form-item label="条件">
           <div style="width: 100%">
@@ -979,7 +986,7 @@ const {
 } = crawlerDialog
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
-interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
+interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; condition_logic: 'and' | 'or'; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
 // 自动封禁名单条目携带加入时间/到期时间（UTC 墙钟串，formatDate 消费）
 interface IPListEntry { value: string; remark: string; created_at?: string; expires_at?: string }
 // enabled=引用策略的启用态：禁用策略的引用只作展示（不阻止删除，409 门只计启用）
@@ -1059,7 +1066,7 @@ const loadingCustom = ref(false)
 const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
 const savingRule = ref(false)
-const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], action: 'block', score: 5, enabled: true })
+const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], condition_logic: 'and' as 'and' | 'or', action: 'block', score: 5, enabled: true })
 
 // 自定义规则动作三态视图：block=拦截 / log=仅记录 / pass=放行计分，
 // 与编辑器 radio 及后端发射语义（pass 累加异常分、log 不累分）一一对应；
@@ -1831,9 +1838,9 @@ const openRuleDialog = (row?: CustomRule) => {
     // 逐条深拷贝——浅拷贝数组会让弹框 v-model 直接改写
     // 列表行对象（取消/保存失败后表格展示未落库的修改态）。
     const conditions = row.conditions.length ? row.conditions.map((c) => ({ ...c })) : [{ target: 'uri', operator: 'contains', pattern: '' }]
-    ruleForm.value = { name: row.name, description: row.description, conditions, action: row.action, score: row.score, enabled: row.enabled }
+    ruleForm.value = { name: row.name, description: row.description, conditions, condition_logic: row.condition_logic ?? 'and', action: row.action, score: row.score, enabled: row.enabled }
   } else {
-    ruleForm.value = { name: '', description: '', conditions: [{ target: 'uri', operator: 'contains', pattern: '' }], action: 'block', score: 5, enabled: true }
+    ruleForm.value = { name: '', description: '', conditions: [{ target: 'uri', operator: 'contains', pattern: '' }], condition_logic: 'and', action: 'block', score: 5, enabled: true }
   }
   ruleDialogVisible.value = true
 }

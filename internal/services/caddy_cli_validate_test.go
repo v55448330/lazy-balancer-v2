@@ -11,6 +11,12 @@ import (
 	"unicode/utf8"
 )
 
+func TestCaddyCLIValidateTimeoutMatchesInteractiveSaveBudget(t *testing.T) {
+	if caddyCLIValidateTimeout <= 0 || caddyCLIValidateTimeout > 20*time.Second {
+		t.Fatalf("CLI validation timeout=%s, want positive and no more than 20s", caddyCLIValidateTimeout)
+	}
+}
+
 func TestExecCaddyValidate_classifiesSuccessRejectAndUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "caddy")

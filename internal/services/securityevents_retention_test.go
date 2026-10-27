@@ -12,18 +12,10 @@ import (
 
 func setupSecurityEventsRetentionTestDB(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
+	setupIsolatedDB(t)
+	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize metrics database: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 }
 
 func countSecurityEventsByType(t *testing.T, eventType string) int {
@@ -48,9 +40,50 @@ func seedRollupReadyState(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsRetentionCleanup_defersAgeTrimUntilRollupReady(t *testing.T) {
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
+		(datetime('now', '-40 days'), '198.51.100.1', 'expired'),
+		(datetime('now', '-1 day'), '198.51.100.2', 'recent')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key,value) VALUES (?, '2026-09-01 00:00')`, ThreatRollupRebuildFromKey); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := SecurityEventsRetentionCleanupDetail(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.AgeDeferred || !result.RowCapDeferred || result.Events != 0 {
+		t.Fatalf("deferred result=%+v, want age and row-cap deferral with zero deletions", result)
+	}
+	if got := countSecurityEventsByType(t, "expired"); got != 1 {
+		t.Fatalf("expired events deleted before rollup readiness: %d", got)
+	}
+
+	if _, err := db.MetricsDB.Exec(`DELETE FROM metrics_state WHERE key=?`, ThreatRollupRebuildFromKey); err != nil {
+		t.Fatal(err)
+	}
+	seedRollupReadyState(t)
+	if _, err := SecurityEventsRetentionCleanupDetail(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSecurityEventsByType(t, "expired"); got != 0 {
+		t.Fatalf("expired events after rollup readiness=%d, want 0", got)
+	}
+	if got := countSecurityEventsByType(t, "recent"); got != 1 {
+		t.Fatalf("recent events after rollup readiness=%d, want 1", got)
+	}
+}
+
 func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *testing.T) {
 	// Given: a 30-day retention window and events older and newer than the cutoff
 	setupSecurityEventsRetentionTestDB(t)
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +156,7 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 	// Given: zeroed retention config and events straddling the default 90-day window
 	// （默认从 30 天提升到与操作日志同口径的 90 天/3 个月)
 	setupSecurityEventsRetentionTestDB(t)
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +181,7 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 func TestSecurityEventsRetention_engineTriggerDeletesExpired(t *testing.T) {
 	// Given：引擎驱动路径 + 过期与保留事件。
 	setupSecurityEventsRetentionTestDB(t)
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +217,7 @@ func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *test
 	// 种子随批次缩放，保证「首批后立即取消」语义不依赖具体批大小）+ 已取消的 ctx
 	seedTotal := 3 * securityEventsRetentionDeleteBatch
 	setupSecurityEventsRetentionTestDB(t)
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +269,7 @@ func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
 	// 小于单批上限，实际只走一次 DELETE，「分批」断言恒成立却从未覆盖批循环。
 	seedTotal := securityEventsRetentionDeleteBatch + 1000
 	setupSecurityEventsRetentionTestDB(t)
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -638,13 +639,11 @@ func TestRuleFailurePathAudits_pinAllPostCommitBranches(t *testing.T) {
 	}
 }
 
-// 提交后失败审计 分支集合等价门（替代「数量下限」的充分性）：
-// 枚举五端点函数体内**每一个 5xx 响应**（writeInternalError / c.JSON 5xx），
-// 断言其执行路径上存在留痕调用——同一块内前序的直呼 recordAudit /
-// recordRuleWriteFailure，或经由 fail* 闭包（闭包本体含 recordAudit），或
-// 外层块的同一判据。此前只枚举「含补偿调用的 if 块」，补偿之前的失败
-// （读取/校验/证书文件清理…）全部落在覆盖面外。任何新增 5xx 分支若无留痕
-// 立即变红，不依赖计数阈值。
+// 提交后失败审计 分支集合等价门：枚举五端点函数体内每个 5xx 候选
+// （writeInternalError / c.JSON）。动态 status 无法在语法层证明一定是 4xx，
+// 一律按 5xx 候选要求留痕；明确 2xx/3xx/4xx 与认证响应不纳入。断言其执行
+// 路径上存在留痕调用——同块前序直呼 recordAudit / recordRuleWriteFailure，
+// 或经由 fail* 闭包，或外层块的同一判据。新增失败分支漏记即红。
 func TestRuleWriteFailureBranches_allAudited(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "rules.go", nil, 0)
@@ -660,7 +659,26 @@ func TestRuleWriteFailureBranches_allAudited(t *testing.T) {
 		}
 		return ""
 	}
-	// 5xx 响应写点：统一写点与就地 c.JSON(500/502/…) 两种形态。
+	// 只有语法层明确的非 5xx 状态才能排除；变量、函数返回值等动态状态
+	// 一律保留为候选，防止 certEnqueueErrorResponse 等 4xx/5xx 联合分支漏审。
+	nonServerStatusNames := map[string]bool{}
+	for _, name := range []string{
+		"StatusOK", "StatusCreated", "StatusAccepted", "StatusNonAuthoritativeInfo",
+		"StatusNoContent", "StatusResetContent", "StatusPartialContent", "StatusMultiStatus",
+		"StatusAlreadyReported", "StatusIMUsed", "StatusMultipleChoices", "StatusMovedPermanently",
+		"StatusFound", "StatusSeeOther", "StatusNotModified", "StatusUseProxy", "StatusTemporaryRedirect",
+		"StatusPermanentRedirect", "StatusBadRequest", "StatusUnauthorized", "StatusPaymentRequired",
+		"StatusForbidden", "StatusNotFound", "StatusMethodNotAllowed", "StatusNotAcceptable",
+		"StatusProxyAuthRequired", "StatusRequestTimeout", "StatusConflict", "StatusGone",
+		"StatusLengthRequired", "StatusPreconditionFailed", "StatusRequestEntityTooLarge",
+		"StatusRequestURITooLong", "StatusUnsupportedMediaType", "StatusRequestedRangeNotSatisfiable",
+		"StatusExpectationFailed", "StatusTeapot", "StatusMisdirectedRequest", "StatusUnprocessableEntity",
+		"StatusLocked", "StatusFailedDependency", "StatusTooEarly", "StatusUpgradeRequired",
+		"StatusPreconditionRequired", "StatusTooManyRequests", "StatusRequestHeaderFieldsTooLarge",
+		"StatusUnavailableForLegalReasons",
+	} {
+		nonServerStatusNames[name] = true
+	}
 	isServerErrorResponse := func(call *ast.CallExpr) bool {
 		switch callName(call) {
 		case "writeInternalError":
@@ -671,15 +689,45 @@ func TestRuleWriteFailureBranches_allAudited(t *testing.T) {
 			}
 			switch status := call.Args[0].(type) {
 			case *ast.BasicLit:
-				return status.Kind == token.INT && strings.HasPrefix(status.Value, "5")
-			case *ast.SelectorExpr:
-				switch status.Sel.Name {
-				case "StatusInternalServerError", "StatusBadGateway", "StatusServiceUnavailable", "StatusGatewayTimeout":
+				if status.Kind != token.INT {
 					return true
 				}
+				code, err := strconv.ParseInt(status.Value, 0, 32)
+				return err != nil || code < 200 || code >= 500
+			case *ast.SelectorExpr:
+				return !nonServerStatusNames[status.Sel.Name]
+			default:
+				return true
 			}
 		}
 		return false
+	}
+	// 自检分类器本身：成功、认证与明确客户端错误不得制造伪候选，
+	// 动态 status 与明确 5xx 则必须进入分支审计。
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{
+		{"c.JSON(http.StatusOK, nil)", false},
+		{"c.JSON(http.StatusCreated, nil)", false},
+		{"c.JSON(http.StatusUnauthorized, nil)", false},
+		{"c.JSON(http.StatusForbidden, nil)", false},
+		{"c.JSON(http.StatusBadRequest, nil)", false},
+		{"c.JSON(http.StatusNotFound, nil)", false},
+		{"c.JSON(http.StatusConflict, nil)", false},
+		{"c.JSON(200, nil)", false},
+		{"c.JSON(404, nil)", false},
+		{"c.JSON(500, nil)", true},
+		{"c.JSON(http.StatusBadGateway, nil)", true},
+		{"c.JSON(status, nil)", true},
+	} {
+		expr, err := parser.ParseExpr(tc.expr)
+		if err != nil {
+			t.Fatalf("parse classifier self-check %q: %v", tc.expr, err)
+		}
+		if got := isServerErrorResponse(expr.(*ast.CallExpr)); got != tc.want {
+			t.Fatalf("5xx 候选分类自检 %s = %v, want %v", tc.expr, got, tc.want)
+		}
 	}
 	// 仅收集本层语句内的 5xx（遇到嵌套块即止——嵌套块由下一层按同一判据评估，
 	// 避免外层「有审计」错误地赦免内层新增的无审计分支）。
@@ -791,8 +839,9 @@ func TestRuleWriteFailureBranches_allAudited(t *testing.T) {
 		}
 		walk(fn.Body, nil)
 	}
-	if checked == 0 {
-		t.Fatal("未枚举到任何 5xx 响应——AST 锚点漂移（分支集合等价门失效）")
+	const minServerErrorCandidates = 20
+	if checked < minServerErrorCandidates {
+		t.Fatalf("仅枚举到 %d 个 5xx 候选，want >= %d——AST 锚点漂移（分支集合等价门失效）", checked, minServerErrorCandidates)
 	}
 }
 

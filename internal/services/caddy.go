@@ -211,6 +211,18 @@ func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (load
 	return true, err
 }
 
+// ApplyConfigReportingForCommit 应用原始配置但把 last-known-good 延后到
+// 调用方 commit 成功后补写；返回值同时携带已下发字节与真实 /load 标记。
+func (s *CaddyService) ApplyConfigReportingForCommit(config map[string]interface{}) (applied []byte, loaded bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	applied, err = s.applyConfigWithOptions(config, caddyApplyOptions{persistDegradation: true, persistLastGood: false})
+	if IsSameConfig(err) {
+		return nil, false, nil
+	}
+	return applied, true, err
+}
+
 // caddyConfigJSONEqual 结构级 JSON 相等（键序/空白/尾换行不敏感）——Caddy
 // GET /config/ 会在原文末尾补换行（2026-09-25 生产实测差 1 字节，纯字节比对
 // 永不命中致同字节门形同虚设），与 Caddy changeConfig 的结构化 sameConfig
@@ -606,8 +618,8 @@ func cliValidatorNotEnabledError() error {
 }
 
 // caddyCLIValidateTimeout 是 CLI 校验子进程的超时。var 而非 const：测试需注入
-// 毫秒级超时驱动「超时=校验器不可用」分支（sleep 60s 的测试不可接受）。
-var caddyCLIValidateTimeout = 60 * time.Second
+// 毫秒级超时驱动「超时=校验器不可用」分支；生产预算短于前端 30s 默认超时。
+var caddyCLIValidateTimeout = 20 * time.Second
 
 // EnableCLIValidation 启用 CLI 校验层（仅 main 装配调用；测试用桩注入）。
 func (s *CaddyService) EnableCLIValidation() {

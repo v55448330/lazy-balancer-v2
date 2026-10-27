@@ -367,12 +367,13 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	// 版本行同代落盘，此处不再锁外重写。
 	if err := persistCRSSnapshotFrom(m.liveDir(), crsSnapshotDir, tag); err != nil {
 		Logf("error", "crs update: failed to persist snapshot to %s: %v", crsSnapshotDir, err)
-		// 快照持久化失败不否决本次更新（磁盘规则树已是新版本），但
-		// 未挂载 /app/waf 的部署在容器重建后会回退到镜像/旧快照版本——仅进
-		// 组件日志会让运维在重建前毫无察觉，写一条操作日志使降级状态可见
-		//（重建后 ReconcileCRSState 的版本校正另有审计）。
+		// 普通快照 IO 失败保留既有「更新成功但降级可见」语义；代际
+		// 不一致则必须让任务失败，不能向调用方伪装成同代成功。
 		WriteCRSUpdateLog("ERROR", string(CRSStatusFailed), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
 		RecordAuditLog("system", "写入失败", "CRS规则库", FormatAuditDetail(fmt.Sprintf("版本：%s 规则快照持久化失败: %v（容器重建后将回退到镜像捆绑版本）", tag, err), AuditResultPart("failed")), "")
+		if errors.Is(err, errCRSSnapshotVersionMismatch) {
+			return err
+		}
 	}
 	return nil
 }
@@ -467,13 +468,23 @@ func (m *CRSUpdateManager) swapCRSTreeFromStaging(staging, setupPath string, pen
 	}
 	// VERSION 标记与规则树/DB 版本行同锁同代——读者（BuildWafFileRef）
 	// 不会观察到「树新/标记旧」或反向的混合代。
-	writeCRSVersionMarker(m.liveDir(), tag)
+	if err := writeCRSVersionMarker(m.liveDir(), tag); err != nil {
+		if !m.restoreBackupInLock() {
+			return prevTag, fmt.Errorf("写入 CRS VERSION 标记失败且规则树回滚失败: %w", err)
+		}
+		if _, rbErr := db.DB.Exec("UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1", prevTag); rbErr != nil {
+			return prevTag, fmt.Errorf("写入 CRS VERSION 标记失败；规则树已回滚但版本行回滚失败: %v（原错误: %w）", rbErr, err)
+		}
+		return prevTag, fmt.Errorf("写入 CRS VERSION 标记失败（规则树与版本行已回滚）: %w", err)
+	}
 	return prevTag, nil
 }
 
 // persistCRSSnapshotFrom copies the live rules tree, setup files and version
 // marker into the data-volume snapshot dir so a rebuilt container (or a
 // wiped bind mount) can restore the user-updated version at startup.
+var errCRSSnapshotVersionMismatch = errors.New("CRS live 版本与待持久化版本不一致")
+
 func persistCRSSnapshotFrom(liveDir, snapshotDir, version string) error {
 	wafFileMu.Lock()
 	defer wafFileMu.Unlock()
@@ -489,9 +500,7 @@ func persistCRSSnapshotFromInLock(liveDir, snapshotDir, version string) error {
 	if marker, err := os.ReadFile(filepath.Join(liveDir, crsVersionFile)); err != nil {
 		return fmt.Errorf("读取 live 版本标记: %w", err)
 	} else if strings.TrimSpace(string(marker)) != version {
-		Logf("warn", "crs update: skip snapshot persist for %q（live VERSION=%q 已由并发导入/应用替换，保留旧快照）",
-			version, strings.TrimSpace(string(marker)))
-		return nil
+		return fmt.Errorf("%w: live VERSION=%q，期望 %q，保留旧快照", errCRSSnapshotVersionMismatch, strings.TrimSpace(string(marker)), version)
 	}
 
 	// 先在快照旁的临时目录构建完整快照，成功后才替换旧快照——
@@ -825,38 +834,56 @@ func treeContainsConfFile(dir string) bool {
 	return found
 }
 
-// copyDirTransactional copies src to dst via a sibling temp dir
-// a partial copy stays at dst+".tmp" and is removed on failure, so consumers
-// of dst either see the previous complete tree or no tree at all — never a
-// one. 已有的 dst（如上一运行崩溃残留的 rules.bak）在新副本完整
-// 构建成功之后才被删除再替换（备份素材在拷贝失败时原样保全）。 The final rename uses os.Rename directly (same rationale
-// as copyFile): tmp is created in the same parent as dst, so it always lives
-// on the same filesystem even on overlayfs.
+// copyDirTransactional 在同级 .tmp 完整构建副本后，以 dst→.old→复位
+// 的两阶段 rename 替换备份。任何失败都保住上一份完整备份；该路径不进入
+// live 树交换窗口（调用方生成的是备份，不是正在渲染的 rules 树）。
 func copyDirTransactional(src, dst string) error {
 	tmp := dst + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return err
 	}
+	cleanupTmp := func() {
+		if err := os.RemoveAll(tmp); err != nil {
+			Logf("error", "crs update: failed to clean backup staging %s: %v", tmp, err)
+		}
+	}
 	if err := copyDir(src, tmp); err != nil {
-		if rErr := os.RemoveAll(tmp); rErr != nil {
-			Logf("error", "crs update: failed to clean partial backup staging %s: %v", tmp, rErr)
-		}
+		cleanupTmp()
 		return err
 	}
-	// 旧目标只在新副本完整构建后删除：拷贝失败时陈旧备份原样保全。
-	if err := os.RemoveAll(dst); err != nil {
-		if rErr := os.RemoveAll(tmp); rErr != nil {
-			Logf("error", "crs update: failed to clean staging %s after remove failure: %v", tmp, rErr)
+	old := dst + ".old"
+	previousExisted := false
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.RemoveAll(old); err != nil {
+			cleanupTmp()
+			return err
 		}
+		if err := copyDirRename(dst, old); err != nil {
+			cleanupTmp()
+			return err
+		}
+		previousExisted = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		cleanupTmp()
 		return err
+	} else if _, oldErr := os.Stat(old); oldErr == nil {
+		// 上次回滚未完成时 .old 是唯一旧备份，必须保留用于本次回滚。
+		previousExisted = true
+	} else if !errors.Is(oldErr, os.ErrNotExist) {
+		cleanupTmp()
+		return oldErr
 	}
-	// rename 失败同样清理暂存树（与 copyFile 对称）：否则完整拷贝
-	// 残留在 rules.bak.tmp，任何按 *.tmp 扫描的路径都会误消费。
 	if err := copyDirRename(tmp, dst); err != nil {
-		if rErr := os.RemoveAll(tmp); rErr != nil {
-			Logf("error", "crs update: failed to clean backup staging %s after rename failure: %v", tmp, rErr)
+		if previousExisted {
+			if restoreErr := copyDirRename(old, dst); restoreErr != nil {
+				Logf("error", "crs update: failed to restore previous backup %s from %s: %v（旧备份保留在 .old）", dst, old, restoreErr)
+			}
 		}
+		cleanupTmp()
 		return err
+	}
+	if err := os.RemoveAll(old); err != nil {
+		Logf("warn", "crs update: failed to remove replaced backup %s: %v（新备份已生效）", old, err)
 	}
 	return nil
 }

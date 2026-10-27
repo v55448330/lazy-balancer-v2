@@ -355,16 +355,18 @@ func (ch *importValidationChain) validateAutobanConfig() error {
 // 同一实现与同一组文案，预览 warnings 与导入审计/响应自然同源。
 func (ch *importValidationChain) normalizeGlobalConfigNumbers() error {
 	notes := clampBackupConfigInts(ch.backup.Config)
-	// request_body_max_size_mb 专用归一带值回显（与写侧三处同边界：非法/
-	// <=0 归治理默认 128，上界 4096）。该列为唯一「非法形态」也须点名的
-	// 键——整型钳制表对其只有上界，无法表达 fallback 语义。
+	// request_body_max_size_mb 专用归一带值回显；超过 Coraza 1GiB
+	// 上限与保存侧一致拒绝，非法/非正历史形态仍归治理默认 128。
 	if value, exists := ch.backup.Config["request_body_max_size_mb"]; exists {
-		normalized := normalizeBackupRequestBodyMB(value, 1, db.DefaultRequestBodyMaxSizeMB)
 		n, integerShape := backupInteger(value)
+		if integerShape && n > maxRequestBodySizeMB {
+			return fmt.Errorf("request_body_max_size_mb 必须在 1-%d MB 之间", maxRequestBodySizeMB)
+		}
+		normalized := normalizeBackupRequestBodyMB(value, 1, db.DefaultRequestBodyMaxSizeMB)
 		ch.backup.Config["request_body_max_size_mb"] = normalized
 		if !integerShape {
 			notes = append(notes, fmt.Sprintf("request_body_max_size_mb 非法形态（%v），已归一为 %d", value, normalized))
-		} else if n <= 0 || n > 4096 {
+		} else if n <= 0 {
 			notes = append(notes, fmt.Sprintf("request_body_max_size_mb 越界（%d），已钳位为 %d", n, normalized))
 		}
 	}

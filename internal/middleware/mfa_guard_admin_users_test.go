@@ -129,9 +129,13 @@ func TestMFAStepUpGuard_adminOnly403BeforeStepUp428(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	// Then：403 admin_required（角色真因先于 step-up）
+	// Then：403 admin_required（角色真因先于 step-up）；必须同时核对响应
+	// 来源，避免 readOnlyGuard 错置到 adminOnly 之前时同样以 403 假绿。
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-admin POST /users: got %d, want 403（adminOnly 真因不得被 428 遮蔽）", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "需要管理员权限") || strings.Contains(body, "非管理员用户只读") {
+		t.Fatalf("non-admin POST /users: body=%s, want adminOnly 的拒绝真因", body)
 	}
 }
 

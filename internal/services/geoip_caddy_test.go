@@ -14,14 +14,7 @@ import (
 
 func setupGeoipConfigTestDB(t *testing.T) {
 	t.Helper()
-	oldDB := db.DB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB = oldDB
-	})
+	setupIsolatedDB(t)
 }
 
 func seedGeoipPolicy(t *testing.T, ruleCaddyID, countries, mode string) {
@@ -643,10 +636,7 @@ func TestBuildHTTPHandleChain_stripsGeoIPHeadersBeforeUpstream(t *testing.T) {
 // 信任规则发射，信任 IP 仍记 CRS 检测事件；单测直构 struct 绕过 loader 掩盖）。
 // 本测试钉住 loader 携带三态门字段：whitelist_enabled / geoip_mode / refs。
 func TestLoadSecurityPolicyContext_carriesTriStateGateFields(t *testing.T) {
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatal(err)
-	}
+	setupIsolatedDB(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_gate1','g','http','g.test',8081,1)`); err != nil {
 		t.Fatal(err)
 	}

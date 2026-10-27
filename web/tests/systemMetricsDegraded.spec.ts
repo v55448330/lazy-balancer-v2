@@ -1,7 +1,7 @@
 // 系统指标分项降级展示：后端对失败分项返回零值 + degraded 披露，展示层必须
 // 把「没采到」显示为「采集失败」，不得把零值当真实用量（CPU 单点故障时内存/
-// 磁盘仍应可用）。纯函数行为求值 + 视图接线钉（真实前提：node --test 无 .vue
-// 装载器且模板依赖 element-plus 全局组件，不可挂载）。
+// 磁盘仍应可用）。资源进度、文案与阈值走纯函数行为求值；仅组件形态保留
+// 少量视图接线钉（node --test 无 .vue 装载器）。
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,9 +9,14 @@ import assert from 'node:assert/strict'
 import {
   degradedMetricLabels,
   degradedMetricParts,
+  metricProgressPercent,
+  nprocLimitLabel,
   pidsTone,
   pidsUsageLabel,
-  pidsUsagePercent,
+  pidsPercentLabel,
+  pidsProgressPercent,
+  pidsTooltipText,
+  pidsValueTone,
 } from '../src/utils/systemMetrics.ts'
 import { code } from './_helpers.ts'
 
@@ -36,50 +41,53 @@ test('分项成集语义：缺失/空=可用，CPU 失败不牵连内存/磁盘'
   assert.equal(two.has('cpu'), false)
   assert.equal(two.has('disk'), true)
 })
-
-test('Dashboard 系统资源卡按分项降级渲染（失败项显「采集失败」且不画进度）', () => {
-  const page = code('src/views/Dashboard.vue')
-  assert.match(page, /degradedMetricParts\(systemMetrics\.value\?\.degraded\)/)
-  assert.match(page, /degradedMetricLabels\(systemMetrics\.value\?\.degraded\)/)
-  // 分项提示复用全局 info-note-bar（不得局部新造样式）
-  assert.match(page, /class="info-note-bar"/)
-  assert.match(page, /部分指标采集失败：\{\{ degradedSystemLabels\.join\('、'\) \}\}/)
-  for (const part of ['cpu', 'memory', 'disk', 'pids']) {
-    assert.match(
-      page,
-      new RegExp(`degradedSystemParts\\.has\\('${part}'\\)`),
-      `${part} 分项必须按 degraded 判定`,
-    )
-  }
-  // 失败项的值位显示「采集失败」而非零值（三个分项各自绑定）
-  for (const part of ['cpu', 'memory', 'disk', 'pids']) {
-    assert.match(
-      page,
-      new RegExp(`degradedSystemParts\\.has\\('${part}'\\) \\? '采集失败'|v-if="degradedSystemParts\\.has\\('${part}'\\)">采集失败`),
-      `${part} 失败项必须显式呈现「采集失败」`,
-    )
-  }
-  // 失败项的进度条不得以 0 值继续展示
-  assert.match(page, /v-if="!degradedSystemParts\.has\('cpu'\)" :percentage="Math\.min\(systemMetrics\.cpu_percent, 100\)"/)
-  // 进程配额：四列网格、不换行数值、ulimit 提示放在 hover 文案中（不占布局）
-  assert.match(page, /class="resource-grid"/)
-  assert.match(page, /pidsUsageLabel\(systemMetrics\.pids_current, systemMetrics\.pids_max\)/)
-  assert.match(page, /el-tooltip :content="pidsTooltip"/)
-  assert.match(page, /ulimit -u：\$\{ulimitText\}/)
-  assert.doesNotMatch(page, /class="resource-hint"/, 'ulimit 不得以独立行占用卡片布局')
-  assert.match(page, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/)
-  assert.match(page, /\.resource-value \{[^}]*white-space: nowrap/)
+test('资源卡进度行为：正常值、超限封顶、降级与不限额隐藏', () => {
+  assert.equal(metricProgressPercent(41.2, false), 41.2)
+  assert.equal(metricProgressPercent(122, false), 100, '普通资源进度条只在视觉层封顶')
+  assert.equal(metricProgressPercent(0, true), null, '采集失败不得继续画 0% 进度条')
+  assert.equal(pidsProgressPercent(57.8, 4096, false), 57.8)
+  assert.equal(pidsProgressPercent(122, 4096, false), 100)
+  assert.equal(pidsProgressPercent(12, 0, false), null, '不限额不画进度')
+  assert.equal(pidsProgressPercent(12, 4096, true), null, 'pids 采集失败不画进度')
 })
 
-test('进程配额展示函数：不限额、百分比与阈值分级', () => {
+test('进程配额展示函数：不限额、原始百分比与进度条封顶', () => {
   assert.equal(pidsUsageLabel(2368, 4096), '2368 / 4096')
   assert.equal(pidsUsageLabel(12, 0), '12 / 不限', 'pids.max=max 归一为 0 时显示「不限」')
-  assert.equal(pidsUsagePercent(2048, 4096), 50)
-  assert.equal(pidsUsagePercent(10, 0), 0, '不限额不伪造比例')
-  assert.equal(pidsUsagePercent(5000, 4096), 100, '超限封顶 100')
+  assert.equal(pidsPercentLabel(50), '50')
+  assert.equal(pidsPercentLabel(5000 / 4096 * 100), '122', '文本必须保留后端超限程度')
+  assert.equal(pidsProgressPercent(50, 4096, false), 50)
+  assert.equal(pidsProgressPercent(5000 / 4096 * 100, 4096, false), 100, '仅进度条封顶 100')
+  assert.equal(pidsProgressPercent(0, 4096, false), 0, '零用量不伪造比例')
   assert.equal(pidsTone(0), 'normal')
   assert.equal(pidsTone(79.9), 'normal')
   assert.equal(pidsTone(80), 'warning')
   assert.equal(pidsTone(95), 'critical')
   assert.equal(pidsTone(120), 'critical')
+})
+
+test('进程配额采集失败使用中性色，恢复后三档色调不变', () => {
+  for (const percent of [0, 79.9, 80, 95, 120]) {
+    assert.equal(pidsValueTone(percent, true), null)
+  }
+  assert.equal(pidsValueTone(0, false), 'normal')
+  assert.equal(pidsValueTone(80, false), 'warning')
+  assert.equal(pidsValueTone(95, false), 'critical')
+})
+
+test('ulimit 零值不得把读取失败断言为不限', () => {
+  assert.equal(nprocLimitLabel(4096), '4096')
+  assert.equal(nprocLimitLabel(0), '未采集或不限')
+  assert.equal(nprocLimitLabel(-1), '未采集或不限')
+})
+
+test('进程配额帮助文案拼接保留 ulimit 零值歧义', () => {
+  assert.match(pidsTooltipText(4096), /含僵尸进程.*fork 失败.*ulimit -u：4096/)
+  assert.match(pidsTooltipText(0), /ulimit -u：未采集或不限/)
+})
+
+test('进程配额说明复用可聚焦帮助角标', () => {
+  const page = code('src/views/Dashboard.vue')
+  assert.match(page, /<span class="resource-label">进程配额<\/span>\s*<FieldHelpIcon :content="pidsTooltip" \/>/)
+  assert.doesNotMatch(page, /<el-tooltip :content="pidsTooltip"/)
 })

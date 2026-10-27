@@ -81,11 +81,14 @@ export const request = { get: (url) => globalThis.__authGet(url), post: async ()
 const { useAuthStore } = await import('../src/stores/auth.ts')
 
 const newStore = () => {
-  // 定时器表是宿主状态：上一个用例的重试链不得计入本用例（各 store 实例的
-  // 停表行为按自身断言）。
+  // 每个用例只保留当前 store 的监听器；历史实例不得再响应后续 storage 事件。
+  storageListeners.length = 0
+  // 上一个用例的重试链同样不得计入本用例。
   timers.clear()
   setActivePinia(createPinia())
-  return useAuthStore()
+  const store = useAuthStore()
+  assert.equal(storageListeners.length, 1, '每个用例必须只注册当前实例的一个 storage 监听器')
+  return store
 }
 
 const dispatchStorage = (key: string | null): void => {
@@ -203,14 +206,13 @@ const deferGets = (): { queue: PendingGet[]; restore: () => void } => {
   return { queue, restore: () => { host.__authGet = original } }
 }
 
-// storage 监听器在每个 store 实例的 setup 内注册（本 spec 逐用例 newStore），
-// 故一次 dispatch 会被历史用例的 store 一并收到并各自发请求。本实例总是最后
-// 注册的监听者，它的「/users/me + /config」必是队尾那一对。
+// 监听器已在 newStore 中按用例复位：事件只能驱动当前实例，队列必须精确等于
+// 首屏请求 + 当前实例换令牌后的一对请求，不再取队尾适应历史污染。
 const ownNewSessionGets = (queue: PendingGet[], from: number): PendingGet[] => {
-  const tail = queue.slice(-2)
-  assert.ok(queue.length - from >= 2)
-  assert.deepEqual(tail.map((g) => g.url), ['/users/me', '/config'], '新会话必须重拉身份与节点模式')
-  return tail
+  const own = queue.slice(from)
+  assert.equal(own.length, 2, '换令牌只能产生当前实例的一对请求')
+  assert.deepEqual(own.map((g) => g.url), ['/users/me', '/config'], '新会话必须重拉身份与节点模式')
+  return own
 }
 
 test('账号切换：旧 /users/me 的迟到成功响应不得覆盖新会话身份', async () => {

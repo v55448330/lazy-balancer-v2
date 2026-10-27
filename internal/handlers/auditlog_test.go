@@ -545,3 +545,34 @@ func TestGetAuditLogs_500BodyHidesDriverDetails(t *testing.T) {
 		t.Fatalf("500 body 缺少固定文案: %s", body)
 	}
 }
+
+// COUNT 与明细查询两个早期失败面也必须走统一 5xx 写点：响应保持固定文案，
+// 运行日志区分操作名并保留底层原因，避免线上只有前端 500 而无法排障。
+func TestGetAuditLogs_queryFailuresLogOperationAndCause(t *testing.T) {
+	cases := []struct {
+		name      string
+		mutation  string
+		operation string
+	}{
+		{name: "count", mutation: "DROP TABLE audit_log", operation: "统计操作日志总数"},
+		{name: "rows", mutation: "ALTER TABLE audit_log DROP COLUMN action", operation: "查询操作日志明细"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newAuditLogTestRouter(t, tc.mutation)
+			logs := captureLog(t)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/audit-logs", nil))
+
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+			}
+			if body := response.Body.String(); !strings.Contains(body, "查询操作日志失败") || strings.Contains(body, "no such") {
+				t.Fatalf("响应未保持固定脱敏文案: %s", body)
+			}
+			if got := logs.String(); !strings.Contains(got, tc.operation) || !strings.Contains(got, "no such") {
+				t.Fatalf("日志缺少操作名 %q 或底层原因: %q", tc.operation, got)
+			}
+		})
+	}
+}

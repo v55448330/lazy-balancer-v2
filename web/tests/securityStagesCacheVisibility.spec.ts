@@ -7,7 +7,7 @@
 //
 // 运行：cd web && node --test tests/securityStagesCacheVisibility.spec.ts
 
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 
 type Listener = () => void
@@ -18,10 +18,22 @@ const fakeDocument = {
     assert.equal(type, 'visibilitychange', '只挂 visibilitychange')
     listeners.push(listener)
   },
-  removeEventListener: (): void => {},
+  removeEventListener: (type: string, listener: Listener): void => {
+    assert.equal(type, 'visibilitychange')
+    const index = listeners.indexOf(listener)
+    if (index >= 0) listeners.splice(index, 1)
+  },
 }
 const host = globalThis as unknown as Record<string, unknown>
+const previousDocument = host.document
 host.document = fakeDocument
+after(() => {
+  for (const listener of [...listeners]) fakeDocument.removeEventListener('visibilitychange', listener)
+  if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
+  else host.document = previousDocument
+  assert.equal(host.document, previousDocument, '假 document 必须还原')
+  assert.equal(listeners.length, 0, '假 document 上不得残留监听器')
+})
 
 const {
   ensureSharedEntries,

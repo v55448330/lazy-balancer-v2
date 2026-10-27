@@ -32,3 +32,17 @@ export const mergeBulkResults = (
   if (degraded.length === 1) return { message: degraded[0] }
   return { message: `${degraded[0]}（另有 ${degraded.length - 1} 个分片同样应用失败）` }
 }
+
+/** 策略保存结果与阶段页覆盖同步数合并为一个消息；skipped 不计入已同步。 */
+export const policySaveResultMessage = (
+  response: BulkResponseLike | undefined,
+  pendingOverrideCount: number,
+  skippedCount: number,
+): string => {
+  const message = response?.message || '保存成功'
+  const syncedCount = pendingOverrideCount - skippedCount
+  return syncedCount > 0 ? `${message}，已同步 ${syncedCount} 条规则的阶段拦截页覆盖` : message
+}
+
+/** 被服务端跳过的阶段页仍未写入；其暂存必须留在当前向导会话中等待重试。 */
+export const stageOverrideDraftPending = (skippedCount: number): boolean => skippedCount > 0

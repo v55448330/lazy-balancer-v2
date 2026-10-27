@@ -7,11 +7,7 @@ import (
 
 func TestMigrateAutoBackupNodeTopologySection_appendsOnlyOldDefaultOnce(t *testing.T) {
 	dir := t.TempDir()
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	preserveDatabaseHandles(t)
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}

@@ -511,6 +511,31 @@ func TestCrawlerIPRangeSnapshot_sizeGateAndBadCIDRs(t *testing.T) {
 			t.Fatal("有效段必须仍可命中")
 		}
 	})
+
+	t.Run("仅坏CIDR不豁免且告警方向正确", func(t *testing.T) {
+		crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+		resetCrawlerIPRangeCacheForTest()
+		t.Cleanup(resetCrawlerIPRangeCacheForTest)
+		oldLogf := crawlerSnapshotLogf
+		var warnings []string
+		crawlerSnapshotLogf = func(format string, args ...any) {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		}
+		t.Cleanup(func() { crawlerSnapshotLogf = oldLogf })
+		if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["not-a-cidr","42.236.9.0/33"]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if snap := loadCrawlerIPRangeSnapshot(); snap.ok {
+			t.Fatal("仅含坏 CIDR 的快照必须按不可用处理")
+		}
+		if ipRangeVerified("42.236.8.1", "so360spider") {
+			t.Fatal("坏 CIDR 不得授予爬虫豁免")
+		}
+		joined := strings.Join(warnings, "\n")
+		if !strings.Contains(joined, "grant no crawler exemption") || strings.Contains(joined, "fail-open") {
+			t.Fatalf("坏 CIDR 告警方向错误: %q", joined)
+		}
+	})
 }
 
 // 并发加载代际守卫——慢读者读到 rename 前的旧 inode，不得在新

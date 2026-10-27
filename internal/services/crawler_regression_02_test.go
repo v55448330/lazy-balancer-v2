@@ -165,10 +165,7 @@ func TestValidateCrawlerEntriesSanity_singleIPCannotCoverPrefix(t *testing.T) {
 	}
 }
 
-// 系统名单写入必须有扩张上限。源响应上限 16MB，
-// 解析后可达数十万条；此前只有收缩门（防塌缩），无任何增长限制，
-// 会直接放大 DB 行、crawler-ip-lists.json、插件每 10min 重载的前缀表
-// 与渲染期内存，并绕过产品 2000 条口径。
+// 系统名单只保留绝对条数上限；相对当前快照的合法扩张必须允许写入。
 func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
 	_, database := newClusterTestService(t)
 
@@ -176,23 +173,22 @@ func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
 		t.Fatalf("CrawlerIPListEntryCap=%d, want 2000（与 handlers ipListMaxEntries 同口径）", CrawlerIPListEntryCap)
 	}
 
-	// 相对门：内置基线 googlebot=170 条 → 341 条（>2×）拒绝，340 条放行。
-	if err := crawlerSnapshotGrowthGuard("googlebot", 341, nil); err == nil {
-		t.Fatal("较内置基线膨胀一倍以上必须拒绝")
+	// 内置基线 googlebot=170 条：超过两倍但未超绝对上限时放行。
+	if err := crawlerSnapshotGrowthGuard(341); err != nil {
+		t.Fatalf("合法扩张不得按相对快照倍数拒绝: %v", err)
 	}
-	if err := crawlerSnapshotGrowthGuard("googlebot", 340, nil); err != nil {
-		t.Fatalf("膨胀未超一倍必须放行: %v", err)
+	if err := crawlerSnapshotGrowthGuard(340); err != nil {
+		t.Fatalf("未超绝对上限必须放行: %v", err)
 	}
 	// 绝对门：无对照基线的引擎同样受 2000 条上限约束。
-	if err := crawlerSnapshotGrowthGuard("unknown-engine", CrawlerIPListEntryCap+1, nil); err == nil {
+	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap + 1); err == nil {
 		t.Fatal("超过 2000 条绝对上限必须拒绝（无基线不是豁免理由）")
 	}
-	if err := crawlerSnapshotGrowthGuard("unknown-engine", CrawlerIPListEntryCap, nil); err != nil {
+	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap); err != nil {
 		t.Fatalf("恰好 2000 条必须放行: %v", err)
 	}
 
-	// DB 行优先作为相对门基线（1000 条）：2001 条同时撞绝对门，2000 条仅
-	// 在绝对门内（相对门 2000=2×1000 放行）。
+	// DB 基线 1000 条时，2000 条同样属于合法扩张；仅 2001 条撞绝对门。
 	var sb strings.Builder
 	sb.WriteString("[")
 	for i := range 1000 {
@@ -210,14 +206,14 @@ func TestCrawlerSnapshotGrowthGuard(t *testing.T) {
 		VALUES (?, '', '搜索引擎爬虫', ?, 1, datetime('now'), datetime('now'))`, CrawlerIPListName("googlebot"), sb.String()); err != nil {
 		t.Fatalf("seed crawler list: %v", err)
 	}
-	if err := crawlerSnapshotGrowthGuard("googlebot", CrawlerIPListEntryCap+1, nil); err == nil {
+	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap + 1); err == nil {
 		t.Fatal("DB 基线 1000 条时 2001 条必须拒绝（绝对上限）")
 	}
-	if err := crawlerSnapshotGrowthGuard("googlebot", CrawlerIPListEntryCap, nil); err != nil {
-		t.Fatalf("DB 基线 1000 条时 2000 条（恰 2×）必须放行: %v", err)
+	if err := crawlerSnapshotGrowthGuard(CrawlerIPListEntryCap); err != nil {
+		t.Fatalf("DB 基线 1000 条时 2000 条合法扩张必须放行: %v", err)
 	}
-	if err := crawlerSnapshotGrowthGuard("googlebot", 1001, nil); err != nil {
-		t.Fatalf("未超 2× 基线必须放行: %v", err)
+	if err := crawlerSnapshotGrowthGuard(1001); err != nil {
+		t.Fatalf("超过快照两倍但未超绝对上限必须放行: %v", err)
 	}
 }
 
@@ -272,6 +268,41 @@ func TestCrawlerRunUpdate_inflatedSourceKeepsPreviousSnapshot(t *testing.T) {
 	logText := readTaskLog(t, "crawlerbot-update")
 	if !strings.Contains(logText, "超过系统名单上限") {
 		t.Fatalf("任务日志缺少扩张门拒绝原因:\n%s", logText)
+	}
+}
+
+// 合法扩张超过当前快照两倍、但未超绝对上限时，整源更新必须写入新快照。
+func TestCrawlerRunUpdate_legalExpansionWritesSnapshot(t *testing.T) {
+	_, database := newClusterTestService(t)
+	newTaskLogDir(t)
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"prefixes":[{"ipv4Prefix":"10.0.0.0/24"},{"ipv4Prefix":"10.0.1.0/24"},{"ipv4Prefix":"10.0.2.0/24"},{"ipv4Prefix":"10.0.3.0/24"}]}`))
+	}))
+	t.Cleanup(ts.Close)
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatalf("seed sources: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0;
+		UPDATE security_crawler_sources SET update_enabled=1,url=? WHERE name='googlebot'`, ts.URL); err != nil {
+		t.Fatalf("wire source: %v", err)
+	}
+	if err := upsertCrawlerIPList("googlebot", []string{"203.0.113.1/32"}); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	if err := GetCrawlerUpdateManager().RunUpdate(context.Background(), taskengine.RunContext{Ctx: context.Background(), Trigger: "manual"}); err != nil {
+		t.Fatalf("合法扩张必须更新成功: %v", err)
+	}
+	loaded, err := loadCrawlerIPListsFromDB()
+	if err != nil {
+		t.Fatalf("load lists: %v", err)
+	}
+	if got := len(loaded["googlebot"]); got != 4 {
+		t.Fatalf("扩张后快照=%d 条, want 4", got)
 	}
 }
 

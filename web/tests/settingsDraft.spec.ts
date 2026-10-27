@@ -30,6 +30,7 @@ test('暂存态跨基础设置卡挂载保留（切分页不丢），离开设�
   first.adminTlsSaved.value = { enabled: true, mode: 'upload' }
   first.adminTlsHasCert.value = true
   first.adminTlsCertError.value = 'bad pem'
+  first.adminTlsUnavailable.value = true
   first.stagedAdminTlsCert.value = { certFile, keyFile, certInfo }
 
   // 模拟切到别的设置分页再切回：BasicSettings 重新 setup，取到同一份草稿
@@ -42,6 +43,7 @@ test('暂存态跨基础设置卡挂载保留（切分页不丢），离开设�
   assert.deepEqual(second.adminTlsSaved.value, { enabled: true, mode: 'upload' }, '服务端派生缓存（已暂存判定）不得在切页后回退')
   assert.equal(second.adminTlsHasCert.value, true, '「已有证书」派生缓存不得在切页后丢失')
   assert.equal(second.adminTlsCertError.value, 'bad pem')
+  assert.equal(second.adminTlsUnavailable.value, true, '降级标记在切页时必须保留，复位前哨兵不得为默认值')
   assert.equal(second.stagedAdminTlsCert.value?.certFile, certFile, '已暂存证书材料必须仍是同一对象')
 
   // 离开系统设置（Settings.vue 卸载）→ 复位

@@ -10,8 +10,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"lazy-balancer-v2/internal/db"
 )
 
 // probeBlocksUnderWafFileLock 预持 wafFileMu 运行 probe，断言其在持锁期间
@@ -64,14 +62,7 @@ func TestWafFileWriters_threat_pair_blocks_while_waf_file_lock_held(t *testing.T
 	dir := t.TempDir()
 	restore := OverrideThreatWafDirForTest(dir)
 	defer restore()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 
 	probeBlocksUnderWafFileLock(t, "威胁库 .iplist+.fast 写编译对", func() error {
 		_, err := writeThreatSystemList("ustc", []string{"1.2.3.4"})

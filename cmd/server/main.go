@@ -48,20 +48,25 @@ func (e *startupError) Unwrap() error { return e.err }
 func startupFailed(err error) error { return &startupError{err: err} }
 
 func main() {
-	// 健康检查模式必须在 flag 解析与服务装配之前分流：该路径不读配置、
-	// 不初始化数据库、不启动任何监听。
-	if healthcheckRequested(os.Args) {
-		os.Exit(runHealthcheck())
+	os.Exit(runMain(os.Args, runHealthcheck, run))
+}
+
+// runMain 把健康检查分流放在正常启动的唯一入口之前；serve 包含 flag 解析、
+// 配置读取与 DB 装配，注入替身即可证明探针路径不会触碰这些启动依赖。
+func runMain(args []string, healthcheck func() int, serve func() error) int {
+	if healthcheckRequested(args) {
+		return healthcheck()
 	}
-	if err := run(); err != nil {
+	if err := serve(); err != nil {
 		var startupFailure *startupError
 		if errors.As(err, &startupFailure) {
 			services.Logf("error", "startup failed: %v", startupFailure.err)
 		} else {
 			services.Logf("error", "HTTP server stopped unexpectedly: %v", err)
 		}
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func run() error {
@@ -284,6 +289,7 @@ func run() error {
 	// 与 l.mu 串行化只存在于 lifecycle 包装内，裸方法会让任何迟代/新增调用方
 	// 绕过退出门。StopSync 自身幂等（Shutdown 已调用）。
 	services.SetSyncLifecycleHooks(lifecycle.StartSync, lifecycle.StopSync)
+	services.SetSyncLifecycleHaltedProbe(syncService.IsHalted)
 	// 自动备份执行器必须先于 InitTaskEngine：启用且存在补跑槽时，
 	// 引擎首轮可能在毫秒内到期，不得在 nil executor 下记录成功。
 	services.SetAutoBackupExecutor(func(ctx context.Context, trigger, operator string, engineRunID int64) error {

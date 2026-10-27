@@ -485,6 +485,29 @@ func TestRecordAppliedSectionHashes_sameBuildDriftedChoiceImmaterial(t *testing.
 	}
 }
 
+func legacySecuritySectionHashWithoutBlockPageNormalization(t *testing.T, master *models.ClusterSnapshot) string {
+	t.Helper()
+	currentPayload, err := json.Marshal(sectionPayloadFor("security", master))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(currentPayload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	originalPages, err := json.Marshal(master.SecurityBlockPages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields["block_pages"] = originalPages
+	legacyPayload, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(legacyPayload)
+	return hex.EncodeToString(sum[:])
+}
+
 // 处置证据：从节点 apply 期归一化造成
 // 本地重建哈希与主节点快照哈希持久分歧时，同步周期必须收敛到稳态 304——
 // 首轮 changed 路径落快照侧哈希 h → 下一 304 周期漂移判定触发一次补偿全量
@@ -507,28 +530,12 @@ func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *
 		}
 	}
 	var master models.ClusterSnapshot
-	var err error
-	if master.SecurityPolicies, err = service.snapshotSecurityPolicies(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	if master.SecurityBindings, err = service.snapshotSecurityBindings(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	if master.SecurityCustomRules, err = service.snapshotSecurityCustomRules(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	if master.SecurityBlockPages, err = service.snapshotSecurityBlockPages(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	if master.SecurityCRSVersion, err = service.snapshotSecurityCRSVersion(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	if master.SecurityIP2RegionVersion, err = service.snapshotSecurityIP2RegionVersion(ctx, database); err != nil {
+	if err := service.loadSectionHashInputs(ctx, database, &master); err != nil {
 		t.Fatal(err)
 	}
 	master.Version = 5
 	master.SectionHashes = ComputeSnapshotSectionHashes(&master)
-	snapshotHash := master.SectionHashes["security"]
+	currentSnapshotHash := master.SectionHashes["security"]
 	// 从节点落库 + 降级（cluster_apply.go applySecurityBlockPages 同语句）
 	if _, err := database.Exec(`UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
 		t.Fatal(err)
@@ -538,8 +545,13 @@ func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *
 		t.Fatal(err)
 	}
 	localHash := local["security"]
-	if localHash == "" || localHash == snapshotHash {
-		t.Fatalf("夹具必须复现归一化分歧：local=%q snapshot=%q", localHash, snapshotHash)
+	if localHash == "" || localHash != currentSnapshotHash {
+		t.Fatalf("同构建归一化哈希必须一致：local=%q snapshot=%q", localHash, currentSnapshotHash)
+	}
+	snapshotHash := legacySecuritySectionHashWithoutBlockPageNormalization(t, &master)
+	master.SectionHashes["security"] = snapshotHash
+	if localHash == snapshotHash {
+		t.Fatalf("夹具必须复现旧构建归一化分歧：local=%q legacy=%q", localHash, snapshotHash)
 	}
 	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 

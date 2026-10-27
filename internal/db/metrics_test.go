@@ -23,14 +23,10 @@ func TestCleanupMetricsHistory_nilMetricsDBReturnsNil(t *testing.T) {
 
 func TestCleanupMetricsHistory_deletes_expired_global_and_rule_rows(t *testing.T) {
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 	if _, err := MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp) VALUES
 		(NULL, datetime('now','-8 days')),
 		('lb_old', datetime('now','-8 days')),
@@ -61,14 +57,10 @@ func TestCleanupMetricsHistory_deletes_expired_global_and_rule_rows(t *testing.T
 // 需 3 批），全部清理且保留保鲜行，重跑幂等零删除。
 func TestCleanupMetricsHistory_batchesLargeDeletes(t *testing.T) {
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 	if _, err := MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp)
 		WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < 12000)
 		SELECT 'lb_old', datetime('now','-8 days') FROM cnt`); err != nil {
@@ -110,14 +102,10 @@ func TestCleanupMetricsHistory_batchesLargeDeletes(t *testing.T) {
 // 趋近 0，据此判红。
 func TestCleanupMetricsHistory_loopsAcrossBatches(t *testing.T) {
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 	oldBatch := cleanupMetricsHistoryBatch
 	cleanupMetricsHistoryBatch = 7
 	t.Cleanup(func() { cleanupMetricsHistoryBatch = oldBatch })
@@ -195,14 +183,10 @@ func TestInitialize_omitsMetricsRetentionColumnAndAddsCompositeIndexes(t *testin
 	// metrics_retention_days 死列不再建(2026-09-15 用户裁定:固定 7 天窗口,
 	// 不读任何保留配置项);复合索引契约保留。
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	preserveDatabaseHandles(t)
 	if err := Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize databases: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = Close()
-		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
 
 	// When
 	var retentionColumn int

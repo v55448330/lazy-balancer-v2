@@ -76,6 +76,13 @@ func compensationContext(requestCtx context.Context) (context.Context, context.C
 	return context.WithTimeout(context.WithoutCancel(requestCtx), compensationTimeout)
 }
 
+// beginCaddyWriteTx 保持请求值但解除客户端断连/超时对事务的隐式回滚。
+// 已开始的渲染、CLI 校验与 /load 必须继续在同一数据库视图完成并走既有
+// 提交/补偿分类，不能让 database/sql 在后台回滚后把中止误报成配置拒绝。
+func beginCaddyWriteTx(c *gin.Context) (*sql.Tx, error) {
+	return db.DB.BeginTx(context.WithoutCancel(c.Request.Context()), nil)
+}
+
 type EnableCertJobAction int
 
 const (

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { code, member, section } from './_helpers.ts'
+import { createLatestReadSession } from '../src/utils/viewAsyncState.ts'
 
 // 设置/仪表盘配置面的「呈现与真实消费者一致」守卫：
 // - 全局 DNS 提供商是无消费者的死配置（签发链按证书配置行读 provider），
@@ -30,15 +31,33 @@ test('Dashboard 规则卡：刷新失败且有缓存时明示陈旧，首轮失�
   assert.match(empty, /采集失败/, '无缓存时（首轮失败）仍走采集失败空态')
 })
 
-test('OIDC 配置读取带请求序号守卫：成功回填、失败清空与状态通知都只落最新轮次', () => {
+test('OIDC 配置读取：乱序旧成功/失败都不得覆盖新表单或重复通知', async () => {
+  for (const staleOutcome of ['success', 'failure'] as const) {
+    const session = createLatestReadSession()
+    const oldRequest = Promise.withResolvers<string>()
+    const newRequest = Promise.withResolvers<string>()
+    const state = { form: '', failed: false, notifications: 0 }
+    const hooks = {
+      onStart: () => {},
+      onSuccess: (value: string) => { state.form = value; state.failed = false },
+      onError: () => { state.form = ''; state.failed = true },
+      onFinally: () => { state.notifications += 1 },
+    }
+    const stale = session.run(() => oldRequest.promise, hooks)
+    const fresh = session.run(() => newRequest.promise, hooks)
+    newRequest.resolve('new-form')
+    await fresh
+    assert.equal(state.form, 'new-form')
+    if (staleOutcome === 'success') oldRequest.resolve('old-form')
+    else oldRequest.reject(new Error('old failure'))
+    await stale
+    assert.deepEqual(state, { form: 'new-form', failed: false, notifications: 1 }, `旧${staleOutcome}不得改动新轮次`)
+  }
+
   const page = code('src/views/settings/OIDCSettings.vue')
   const load = member(page, 'const load = async')
-  assert.match(load, /const seq = \+\+loadSeq/, '每次 load 必须自增序号')
-  assert.equal((load.match(/seq !== loadSeq/g) ?? []).length, 3, '成功/失败/notify 三处都必须比对')
-  const firstGuard = load.indexOf('if (seq !== loadSeq) return')
-  const fillAt = load.indexOf('enabled.value = !!res.data.enabled')
-  assert.ok(firstGuard > 0 && fillAt > firstGuard, '回填必须晚于最新轮次判定')
-  const notifyAt = load.lastIndexOf('notify()')
-  const lastGuard = load.lastIndexOf('if (seq !== loadSeq) return')
-  assert.ok(notifyAt > lastGuard, '迟到的旧响应不得再通知父级状态')
+  assert.match(load, /await readSession\.run\(/, 'OIDC load 必须消费共享最新会话门')
+  assert.match(load, /onSuccess: \(res\) =>/)
+  assert.match(load, /onError: \(\) =>/)
+  assert.match(load, /onFinally: notify/)
 })

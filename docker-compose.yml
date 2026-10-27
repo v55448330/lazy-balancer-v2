@@ -63,7 +63,7 @@ services:
       - NODE_NAME=master
       - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped
-    # PID1 退出前 POST Caddy admin /stop 排水在途连接，
+    # 面板进程退出前 POST Caddy admin /stop 排水在途连接，
     # grace period 覆盖 HTTP ≤10s Shutdown + Caddy 排水窗口。
     stop_grace_period: 30s
     healthcheck: *common-healthcheck

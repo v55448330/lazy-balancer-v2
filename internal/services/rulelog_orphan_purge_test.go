@@ -100,35 +100,44 @@ func TestPurgeOrphanRuleLogs_survivesRuleListReadFailureWithoutDeleting(t *testi
 	}
 }
 
-// Given 规则日志目录不可写（删除失败）。When 执行孤儿清理。
-// Then 失败计数进结果与错误面，摘要不得称完成。
+// Given 扫描完成后规则日志目录路径被普通文件占据（删除路径返回 ENOTDIR）。
+// When 执行孤儿清理。Then 失败计数进结果与错误面，摘要不得称完成。
 func TestPurgeOrphanRuleLogs_removeFailureSurfaces(t *testing.T) {
 	_, database := newClusterTestService(t)
 	dir := t.TempDir()
 	t.Cleanup(SetRuleLogDirForTest(dir))
-	seedRuleLogFiles(t, dir, "lb_stuck")
+	names := seedRuleLogFiles(t, dir, "lb_stuck")
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_kept','kept','http',18094,1)`); err != nil {
 		t.Fatalf("seed live rule: %v", err)
 	}
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("目录降权: %v", err)
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	// 复用既有删除前测试缝，确保目录扫描成功后才注入路径故障；错误
+	// 因此必来自 RemoveRuleLogFiles 的 ENOTDIR，而非 ScanError，root 亦有效。
+	ruleLogOrphanPurgeBeforeRemoveForTest = func() { ruleLogDir = blocked }
+	t.Cleanup(func() { ruleLogOrphanPurgeBeforeRemoveForTest = nil })
 
 	result := PurgeOrphanRuleLogs(context.Background())
 
-	if result.RemoveFailed == 0 {
-		t.Fatalf("删除失败未计数（Purged=%v）", result.Purged)
+	if result.ScanError != "" {
+		t.Fatalf("故障必须发生在删除阶段而非扫描阶段: %s", result.ScanError)
+	}
+	if result.RemoveFailed != 1 {
+		t.Fatalf("RemoveFailed=%d, want 1（Purged=%v）", result.RemoveFailed, result.Purged)
 	}
 	if len(result.Purged) != 0 {
 		t.Fatalf("删除失败不得计入已清理：%v", result.Purged)
 	}
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("删除失败后原文件 %s 必须保留: %v", name, err)
+		}
+	}
 	res := RuntimeCleanupResult{RuleLogs: result}
 	if err := res.Err(); err == nil {
 		t.Fatal("删除失败必须进 log-cleanup 错误面（任务落 failed）")
-	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatal(err)
 	}
 	if summary := res.RuleLogs.Summary(); !containsAll(summary, "删除失败", "1 个") {
 		t.Fatalf("摘要未披露删除失败：%s", summary)

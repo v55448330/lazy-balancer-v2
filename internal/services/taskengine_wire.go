@@ -36,11 +36,15 @@ func SetConfigLoadRerun(fn func(operator string) error) { configLoadRerun = fn }
 // start→阻塞→deferred stop，调度开关/角色翻转即真实启停服务。
 var (
 	syncLifecycleStart, syncLifecycleStop                 func()
+	syncLifecycleHalted                                   func() bool
 	certIssuanceLifecycleStart, certIssuanceLifecycleStop func()
 )
 
 // SetSyncLifecycleHooks 注入集群同步真实启停（main: syncService.Start/Stop）。
 func SetSyncLifecycleHooks(start, stop func()) { syncLifecycleStart, syncLifecycleStop = start, stop }
+
+// SetSyncLifecycleHaltedProbe 注入同步子状态只读探针；nil 表示无状态镜像。
+func SetSyncLifecycleHaltedProbe(probe func() bool) { syncLifecycleHalted = probe }
 
 // SetCertIssuanceLifecycleHooks 注入证书签发真实启停（main: lifecycle.StartACME/StopACME）。
 func SetCertIssuanceLifecycleHooks(start, stop func()) {
@@ -456,6 +460,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 按构成披露：聚合/高水位删除不计入事件数时，仅报「删除 N 条事件」
 			// 会让停摆后首次清理显示 0（运维误判保留策略未生效）。
 			TaskLogf("security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.Highwater)
+			if retention.AgeDeferred {
+				TaskLogf("security-events-retention", "cleanup", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
+			}
 			// 行帽延后必须可见：否则运维会把「行数未收敛」当成清理失效。
 			if retention.RowCapDeferred {
 				TaskLogf("security-events-retention", "cleanup", "行帽裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，原始事件暂不按行数上限裁剪")
@@ -639,6 +646,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		RunsOn:            taskengine.RoleAny,
 		RestartOnRoleFlip: true,
 		Run:               clusterSyncDaemonRun,
+		StatusFn:          clusterSyncStatusMirror,
 	})
 
 	// ============ 定时（5）============
@@ -1126,6 +1134,8 @@ func applyBusinessTaskLoop(id string, fallbackEnabled bool) {
 	if driver, ok := businessTaskDriverOf(id); ok {
 		if state, known := driver.stateFn(); known {
 			enabled = state
+		} else {
+			businessDriverSyncPending.Store(true)
 		}
 	}
 	syncTaskLoop(id, enabled)
@@ -1167,6 +1177,14 @@ func WakeCertWaitingCAForEnqueuedJob() {
 		return
 	}
 	te.RearmLoop("cert-waiting-ca", true)
+}
+
+func clusterSyncStatusMirror() string {
+	te := TaskEngine()
+	if te == nil || te.IsMaster() || syncLifecycleHalted == nil || !syncLifecycleHalted() {
+		return ""
+	}
+	return string(TaskStatusFailed)
 }
 
 // clusterSyncDaemonRun 集群同步 daemon 的 Run 体（从 InitTaskEngine 的描述符

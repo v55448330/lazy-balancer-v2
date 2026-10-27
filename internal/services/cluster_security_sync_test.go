@@ -316,8 +316,8 @@ func TestClusterSnapshot_securityAuxTablesRoundTrip(t *testing.T) {
 	// Given
 	cluster, database := newClusterTestService(t)
 	conditions := `[{"target":"uri","operator":"contains","pattern":"/admin"}]`
-	if _, err := database.Exec(`INSERT INTO security_custom_rules (id,name,description,conditions,action,score,enabled,updated_by)
-		VALUES (3,'aux rule','aux desc',?,'block',9,1,2)`, conditions); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_custom_rules (id,name,description,conditions,condition_logic,action,score,enabled,updated_by)
+		VALUES (3,'aux rule','aux desc',?,'or','block',9,1,2)`, conditions); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,description,content,is_default,created_by,updated_by)
@@ -340,7 +340,7 @@ func TestClusterSnapshot_securityAuxTablesRoundTrip(t *testing.T) {
 		t.Fatalf("custom rules=%d, want 1", len(snapshot.SecurityCustomRules))
 	}
 	rule := snapshot.SecurityCustomRules[0]
-	if rule.ID != 3 || rule.Name != "aux rule" || rule.Description != "aux desc" || rule.Action != "block" || rule.Score != 9 || !rule.Enabled || rule.UpdatedBy != 2 {
+	if rule.ID != 3 || rule.Name != "aux rule" || rule.Description != "aux desc" || rule.ConditionLogic != "or" || rule.Action != "block" || rule.Score != 9 || !rule.Enabled || rule.UpdatedBy != 2 {
 		t.Fatalf("custom rule mismatch: %+v", rule)
 	}
 	if len(rule.Conditions) != 1 || rule.Conditions[0] != (models.CustomRuleCondition{Target: "uri", Operator: "contains", Pattern: "/admin"}) {

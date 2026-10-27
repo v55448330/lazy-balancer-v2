@@ -30,14 +30,7 @@ func countThreatAudits(t *testing.T) int {
 func TestThreatRunUpdate_SingleAuditWithOperator(t *testing.T) {
 	overrideWafDirForTest(t)
 	stubUpdateRetrySleep(t)
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	// 三源 URL 指回环桩（双保险：即使误启用也不触外网），随后禁用全部源
 	// ——「零启用源」非默认形态（种子默认 update_enabled=1），须显式落实。
 	setupThreatTest(t, nil, nil, nil)

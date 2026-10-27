@@ -59,7 +59,7 @@ const (
 // rule_msg 2KiB（采集上限 securityEvents*Cap，另有文本截断标记）——摘要
 // 披露理论体积上限，避免「100 万行」被误读为固定小体积。
 func SecurityEventsRetentionSnapshot() (string, int) {
-	policy := securityEventsRetentionPolicyFromDB()
+	policy, _ := securityEventsRetentionPolicyFromDB()
 	return fmt.Sprintf("每日清理 · 保留 %d 天 / 上限 %d 行（按行计，单行最大约 %s，理论体积上限约 %s）",
 		policy.Days, policy.Max, securityEventsRowMaxLabel(), securityEventsRowCapByteBudget(policy.Max)), policy.Max
 }
@@ -100,21 +100,22 @@ type securityEventsRetentionPolicy struct {
 // 导入把 0 归一为默认值，SVC 以一次性 marker 迁移存量 0/NULL。读侧保留本
 // 0/NULL → 内置默认的 legacy 防御（带外写库/旧库），行为不变——不回写、不
 // 改写库值。
-func securityEventsRetentionPolicyFromDB() securityEventsRetentionPolicy {
+func securityEventsRetentionPolicyFromDB() (securityEventsRetentionPolicy, error) {
 	policy := securityEventsRetentionPolicy{Days: securityEventsRetentionDefaultDays, Max: securityEventsRetentionDefaultMax}
 	database := db.DB
 	if database == nil {
-		return policy
+		return policy, errors.New("security events retention: main database is unavailable")
 	}
 	var explicitDays, explicitCap int
 	if err := database.QueryRow(`SELECT COALESCE(security_events_retention_days,0), COALESCE(security_events_row_cap,0) FROM global_config WHERE id=1`).Scan(&explicitDays, &explicitCap); err != nil {
-		// 读失败回退内置默认且留痕；本函数同时被每日清理与面板轮询消费，
-		// 裸 warn 会在库故障窗口按请求刷屏——接状态转换去重（首报 warn、
-		// 恢复 info），与同族配置读取单源口径一致。
+		if errors.Is(err, sql.ErrNoRows) {
+			return policy, nil
+		}
+		// 面板摘要可显示默认值，但清理调用方必须拿到错误并暂停删除。
 		if lvl := logStateTransition("security-events-retention-read", true); lvl != "" {
 			Logf(lvl, "security events retention: read retention settings failed, falling back to %d days: %v", policy.Days, err)
 		}
-		return policy
+		return policy, err
 	}
 	if lvl := logStateTransition("security-events-retention-read", false); lvl != "" {
 		Logf(lvl, "security events retention: retention settings read recovered")
@@ -125,12 +126,12 @@ func securityEventsRetentionPolicyFromDB() securityEventsRetentionPolicy {
 	if explicitCap > 0 {
 		policy.Max = explicitCap
 	}
-	return policy
+	return policy, nil
 }
 
-// securityEventsRetentionSettings 读取保留策略（天数, 行帽）——清理体消费。
+// securityEventsRetentionSettings 读取保留策略（天数, 行帽）——展示与默认值钉测消费。
 func securityEventsRetentionSettings() (days, max int) {
-	policy := securityEventsRetentionPolicyFromDB()
+	policy, _ := securityEventsRetentionPolicyFromDB()
 	return policy.Days, policy.Max
 }
 
@@ -191,9 +192,9 @@ type SecurityEventsRetentionResult struct {
 	Rollup       int // security_event_rollup 行
 	TargetRollup int // security_event_target_rollup 行
 	Highwater    int // metrics_state 分钟 rollup 状态键（事件高水位 + 迟到基线）
-	// RowCapDeferred 行帽阶段本轮被就绪门跳过：预聚合（rollup）首轮/代际
-	// 回填尚未完成时不得按 event_time 删最旧原始行——尚未固化的分钟会被
-	// 固化成空并随覆盖水位推进被宣称「已回填」，大屏窗口静默少计。
+	// AgeDeferred / RowCapDeferred 表示原始事件的年龄/行帽裁剪被 rollup
+	// 就绪门跳过；两类删除都会让尚未固化的分钟永久缺计，必须同门。
+	AgeDeferred    bool
 	RowCapDeferred bool
 }
 
@@ -217,46 +218,55 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 	if database == nil {
 		return result, nil
 	}
-	days, max := securityEventsRetentionSettings()
-	// 年龄裁剪同样分批执行（与 count 裁剪同口径）：大表单条 DELETE 长时间持
-	// 指标库写锁，阻塞摄取 tick。
-	for {
-		res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE event_time < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, securityEventsRetentionDeleteBatch)
-		if err != nil {
-			Logf("warn", "security events retention: age-based cleanup failed: %v", err)
-			return result, err
-		}
-		affected, _ := res.RowsAffected()
-		result.Events += int(affected)
-		if affected == 0 {
-			break
-		}
-		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消
-		select {
-		case <-ctx.Done():
-			Logf("info", "security events retention: age-based cleanup canceled mid-pass")
-			// 返回契约统一为「已删多少报多少」——取消
-			// 路径此前 return 0 丢弃已提交批次，§6.5 摘要行少报。下同三处。
-			return result, nil
-		case <-time.After(10 * time.Millisecond):
+	policy, err := securityEventsRetentionPolicyFromDB()
+	if err != nil {
+		Logf("warn", "security events retention: deferring all deletion because retention settings are unavailable: %v", err)
+		return result, err
+	}
+	days, max := policy.Days, policy.Max
+	// 年龄与行帽都会删除不可再生的原始事件，必须共同等待预聚合首轮/
+	// 代际回填完成。就绪判据读失败同样按未就绪处理，宁可晚一轮清理。
+	if pending, perr := threatRollupBackfillPending(database); perr != nil {
+		result.AgeDeferred = true
+		result.RowCapDeferred = true
+		// 就绪判据读失败=metrics 库/状态表异常：不得静默成功（任务必须落 failed
+		// 并退避重试），否则「清理未执行」会被审计成成功轮。
+		Logf("warn", "security events retention: rollup backfill readiness unknown (%v), age and row-cap trims deferred", perr)
+		return result, fmt.Errorf("读取预聚合就绪状态失败（清理未执行）: %w", perr)
+	} else if pending {
+		result.AgeDeferred = true
+		result.RowCapDeferred = true
+		Logf("info", "security events retention: 预聚合回填未完成，年龄与行帽裁剪本轮跳过（待回填完成后执行）")
+	}
+	if !result.AgeDeferred {
+		// 年龄裁剪同样分批执行（与 count 裁剪同口径）：大表单条 DELETE 长时间持
+		// 指标库写锁，阻塞摄取 tick。
+		for {
+			res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE event_time < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, securityEventsRetentionDeleteBatch)
+			if err != nil {
+				Logf("warn", "security events retention: age-based cleanup failed: %v", err)
+				return result, err
+			}
+			affected, _ := res.RowsAffected()
+			result.Events += int(affected)
+			if affected == 0 {
+				break
+			}
+			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消
+			select {
+			case <-ctx.Done():
+				Logf("info", "security events retention: age-based cleanup canceled mid-pass")
+				// 返回契约统一为「已删多少报多少」——取消
+				// 路径此前 return 0 丢弃已提交批次，§6.5 摘要行少报。下同三处。
+				return result, nil
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return result, nil
 	}
-	// 行帽阶段与预聚合回填的顺序约束：warmer 的注释自称「赶在保留期/行帽
-	// 裁剪之前」，但调用时序（任务引擎先启动、warmer 后启动）不构成保证。
-	// 回填未完成时裁剪最旧原始行，会让尚未固化的分钟永久固化成 0 且覆盖
-	// 水位照常推进（大屏窗口静默少计 + backfill_incomplete 转 false 的错误
-	// 安抚）。判据只查 metrics_state 的存在性（零新表）；读失败按「未就绪」
-	// 处理——事件历史不可再生，宁可延后一轮行帽也必须先保住原始行。
-	if pending, perr := threatRollupBackfillPending(database); perr != nil {
-		result.RowCapDeferred = true
-		Logf("warn", "security events retention: rollup backfill readiness unknown (%v), deferring row-cap trim", perr)
-	} else if pending {
-		result.RowCapDeferred = true
-		Logf("info", "security events retention: 预聚合回填未完成，行帽裁剪本轮跳过（待回填完成后执行；事件保留期裁剪照常）")
-	}
+	// 行帽与年龄共用上方就绪门；此分支只负责行数上限。
 	if !result.RowCapDeferred {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {

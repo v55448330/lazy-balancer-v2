@@ -38,17 +38,16 @@ type syncBuffer struct {
 	buf bytes.Buffer
 }
 
-// initSecurityEventsTestDB 初始化隔离测试库并保存/恢复全局三库句柄。
-// 裸 db.Initialize 不还原会让后续用例（或 -shuffle 单跑）拿到指向已删除临时
-// 目录的句柄（假红/假绿），且不 Close 泄漏文件句柄。返回值保持既有
-// `if err := ...; err != nil` 调用形态。
+// initSecurityEventsTestDB 初始化隔离测试库并保存/恢复全部全局句柄。
+// 返回值保持既有 `if err := ...; err != nil` 调用形态。
 func initSecurityEventsTestDB(t testing.TB, dataDir string) error {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	err := db.Initialize(dataDir)
 	t.Cleanup(func() {
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldCurrent)
 	})
 	return err
 }
@@ -3804,6 +3803,57 @@ func TestSecurityEventsCRSExclusionMatcher_shapes(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsCRSExclusionMatcher_ipScopeLoadsListRefs(t *testing.T) {
+	initServicesDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (7,'ref-source','[{"value":"198.51.100.0/24"}]')`); err != nil {
+		t.Fatal(err)
+	}
+	policies := map[int]*models.SecurityPolicy{
+		1: {ID: 1, CRSExcludedRules: json.RawMessage(`[{"target":"942100","scope":"ip","ips":"203.0.113.8","listRefs":[7]}]`)},
+		2: {ID: 2, CRSExcludedRules: json.RawMessage(`[{"target":"942100","scope":"all","listRefs":[7]}]`)},
+	}
+	matcher := securityEventsBuildCRSExclusionMatcher(policies)
+	if !securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "198.51.100.9") {
+		t.Fatal("scope=ip must include addresses loaded through listRefs")
+	}
+	if securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "192.0.2.9") {
+		t.Fatal("unrelated address must not match the scoped exclusion")
+	}
+	allOnly := securityEventsBuildCRSExclusionMatcher(map[int]*models.SecurityPolicy{2: policies[2]})
+	if got := len(allOnly[2].lists[7]); got != 0 {
+		t.Fatalf("scope=all unexpectedly loaded listRefs: %d entries", got)
+	}
+}
+
+func TestSecurityEventsPolicyContainsRule_responseChecksGateEveryResponseFamily(t *testing.T) {
+	cases := []struct {
+		name   string
+		rule   string
+		groups string
+	}{
+		{name: "default response group", rule: "953100", groups: `[]`},
+		{name: "selected response group", rule: "953100", groups: `["53"]`},
+		{name: "selected response id", rule: "980130", groups: `["980130"]`},
+		{name: "response evaluation", rule: "959100", groups: `[]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(tc.groups)}
+			if securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+				t.Fatalf("response rule %s was claimed with response checks disabled", tc.rule)
+			}
+			policy.WAFCheckResponse = true
+			if !securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+				t.Fatalf("response rule %s was not claimed with response checks enabled", tc.rule)
+			}
+		})
+	}
+	inbound := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(`[]`)}
+	if !securityEventsPolicyContainsRuleWithExclusions(inbound, "949110", "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+		t.Fatal("inbound evaluation must remain independent of the response check switch")
+	}
+}
+
 // TestSecurityEventsPolicyContainsRule_leadingZeroRuleIDGroupDecode
 // ruleTriggered 前导零等畸形串（Atoi 可解析入 900000-999999
 // 区间但长度≠6）的组号解码防御——7 位串 "0942100" 的 [1:3] 切片错位切出
@@ -4008,7 +4058,9 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 	if _, err := db.MetricsDB.Exec(`CREATE TRIGGER fail_security_events_insert BEFORE INSERT ON security_events BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	failing := securityEvents历史Fixture("tx-fail-1", "203.0.113.99", "/fail")
+	// 与上方成功正对照使用同一当前时间夹具：若失败批次被错误喂入，
+	// 事件处于统计窗内，计数会立即变为 1，不再被时间窗过滤成假绿。
+	failing := atNow("tx-fail-1", "203.0.113.99", "/fail")
 	if err := os.WriteFile(logPath, []byte(content+failing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

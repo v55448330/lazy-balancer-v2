@@ -746,23 +746,10 @@ func TestCRSUpdateRun_versionReadFailureIsVisible(t *testing.T) {
 // 两步之间 StartUpdate 可成功进入并写 checking，旧轮审计读到下一轮状态。
 // （两个 defer 在终态相同的前提下运行期不可区分，故以源码注册序钉住。）
 func TestCRSUpdateRun_runningResetDeferRegisteredBeforeAudit(t *testing.T) {
-	src, err := os.ReadFile("crsupdate.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
-	start := strings.Index(body, "func (m *CRSUpdateManager) runWithContext")
-	if start < 0 {
-		t.Fatal("runWithContext 未找到")
-	}
-	run := body[start:]
-	runningIdx := strings.Index(run, "m.running = false")
-	auditIdx := strings.Index(run, `"更新失败", "CRS规则库"`)
-	if runningIdx < 0 || auditIdx < 0 {
-		t.Fatalf("定位失败: running=%d audit=%d", runningIdx, auditIdx)
-	}
-	if runningIdx > auditIdx {
-		t.Fatal("running 复位 defer 必须注册在审计 defer 之前（LIFO 后执行）——否则审计读到下一轮状态")
+	fn := serviceFunctionFromFile(t, "crsupdate.go", "runWithContext")
+	order := crsRunningAuditDeferOrder(fn)
+	if len(order) != 2 || order[0] != "running-reset" || order[1] != "audit" {
+		t.Fatalf("defer registrations=%v, want running-reset before audit (LIFO reset last)", order)
 	}
 }
 
