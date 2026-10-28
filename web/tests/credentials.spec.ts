@@ -19,6 +19,7 @@ import {
   USERNAME_LENGTH_MESSAGE,
   PASSWORD_LENGTH_MESSAGE,
   PASSWORD_CHARSET_MESSAGE,
+  missingNewPasswordMessage,
 } from '../src/utils/credentials.ts'
 import { repoCode, section, code } from './_helpers.ts'
 
@@ -105,4 +106,21 @@ test('编辑门控：用户名校验仅在创建路径执行', () => {
   )
   // OIDC 行编辑提交仍不落 username/display_name/password（后端 400 守卫的前端镜像）
   assert.match(submit, /username: oidcTarget \? undefined : form\.value\.username/)
+})
+
+// 编辑用户时「只填确认框、新密码留空」：载荷省略 password（后端=不修改），
+// 界面却回报「更新成功」——管理员会误信已重置他人密码（假成功）。前置拦截
+// 必须与「留空=不修改」语义区分：只有确认框有值时才拦。
+test('编辑用户只填确认密码：必须拦下并提示，不得静默丢弃', () => {
+  assert.match(missingNewPasswordMessage('', 'Abc12345') ?? '', /请填写新密码/)
+  assert.equal(missingNewPasswordMessage('', ''), null, '两者都留空=不修改密码')
+  assert.equal(missingNewPasswordMessage('Abc12345', 'Abc12345'), null)
+  assert.equal(missingNewPasswordMessage('Abc12345', ''), null, '只填新密码交给不一致校验处理')
+
+  // 消费侧接线：Users.handleSubmit 在「不一致」判定之前就拦下该形态
+  const submit = section(code('src/views/Users.vue'), 'const handleSubmit = async ()', 'closeForm()')
+  const missingAt = submit.indexOf('missingNewPasswordMessage(')
+  const mismatchAt = submit.indexOf('password !== form.value.password_confirm')
+  assert.ok(missingAt >= 0, 'Users 必须消费单源拦截')
+  assert.ok(mismatchAt > missingAt, '空新密码的拦截必须先于「两次不一致」判定')
 })

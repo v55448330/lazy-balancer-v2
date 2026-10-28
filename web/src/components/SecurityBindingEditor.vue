@@ -346,7 +346,9 @@ const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
 const boundPoliciesByType = (rule: BindingEditorRule, type: SecurityPolicyType): SecurityStageBinding[] =>
   (props.bindings[rule.caddy_id] || []).filter((binding) => policyTypeById.value.get(binding.policy_id) === type)
 
-// 阶段页覆盖徽标（页已删/内容空 = broken）
+// 阶段页覆盖徽标（页已删/内容空 = broken）。失效后的真实回落目标按阶段不同：
+// 阶段 1 由引擎兜底错误路由取「绑定链首个启用且内容非空」策略的页面（可能不是
+// 本策略），阶段 3 才逐策略回落各自页面——同一句话覆盖两种语义会误导排障。
 const overrideBadge = (rule: BindingEditorRule, stage: 1 | 3): { text: string; title: string; broken: boolean } | null => {
   const override = resolveStageOverride(
     stage === 1 ? rule.block_page_stage1_id : rule.block_page_stage3_id,
@@ -354,7 +356,15 @@ const overrideBadge = (rule: BindingEditorRule, stage: 1 | 3): { text: string; t
     props.blockPages,
   )
   if (!override) return null
-  if (override.broken) return { text: '已失效', title: `配置的拦截页（#${override.pageId}）已删除或内容为空，回落跟随策略`, broken: true }
+  if (override.broken) {
+    return {
+      text: '已失效',
+      title: stage === 1
+        ? `配置的拦截页（#${override.pageId}）已删除或内容为空，回落绑定链首个有效页（无则默认 403）`
+        : `配置的拦截页（#${override.pageId}）已删除或内容为空，回落跟随策略`,
+      broken: true,
+    }
+  }
   return { text: `${override.pageName}（${override.status}）`, title: `阶段 ${stage} 拦截页覆盖：${override.pageName}（状态码 ${override.status}）`, broken: false }
 }
 

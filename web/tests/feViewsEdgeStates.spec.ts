@@ -105,7 +105,7 @@ test('AccessibleLink 过滤 event.repeat（长按不得按系统重复率反复�
 
 test('规则名入口复用 AccessibleLink（不再手写 <a role=button>）', () => {
   const rules = code('src/views/Rules.vue')
-  assert.match(rules, /<AccessibleLink class="rule-name-link"[^>]*@click="viewConfig\(row\)">/)
+  assert.match(rules, /<AccessibleLink class="rule-name-link"[^>]*@click="viewConfig\(row(?: as [A-Za-z]+)?\)">/)
   assert.doesNotMatch(rules, /<a class="rule-name-link"/, '手写可聚焦 <a> 已退役')
 })
 

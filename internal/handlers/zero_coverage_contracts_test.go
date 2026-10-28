@@ -27,7 +27,7 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-func getRoute(t *testing.T, h *Handlers, path string, register gin.HandlerFunc) *httptest.ResponseRecorder {
+func getRoute(t *testing.T, path string, register gin.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -41,7 +41,7 @@ func getRoute(t *testing.T, h *Handlers, path string, register gin.HandlerFunc) 
 // （改成 JSON、丢附件名或空正文都会让 MCP 客户端拿到坏文件）。
 func TestGetMCPOpsPlaybook_servesMarkdownAttachment(t *testing.T) {
 	h := NewHandlers(Dependencies{})
-	recorder := getRoute(t, h, "/api/v1/mcp/ops-playbook", h.GetMCPOpsPlaybook)
+	recorder := getRoute(t, "/api/v1/mcp/ops-playbook", h.GetMCPOpsPlaybook)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -64,7 +64,7 @@ func TestGetMCPOpsPlaybook_servesMarkdownAttachment(t *testing.T) {
 // （openapi/paths/security）必须具备，且包含真实路由。
 func TestGetOpenAPIYAML_servesSpecWithPathsAndBearerSecurity(t *testing.T) {
 	h := NewHandlers(Dependencies{})
-	recorder := getRoute(t, h, "/api/v1/openapi.yaml", h.GetOpenAPIYAML)
+	recorder := getRoute(t, "/api/v1/openapi.yaml", h.GetOpenAPIYAML)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d", recorder.Code)
 	}
@@ -82,7 +82,7 @@ func TestGetOpenAPIYAML_servesSpecWithPathsAndBearerSecurity(t *testing.T) {
 // Swagger UI 壳：必须是 HTML 且指向已鉴权规格端点 + 离线 fallback 链接。
 func TestGetAPIDocs_servesSwaggerShellWithFallback(t *testing.T) {
 	h := NewHandlers(Dependencies{})
-	recorder := getRoute(t, h, "/api/v1/docs", h.GetAPIDocs)
+	recorder := getRoute(t, "/api/v1/docs", h.GetAPIDocs)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d", recorder.Code)
 	}
@@ -155,7 +155,7 @@ func TestLogout_branches(t *testing.T) {
 func TestListCAProviders_returnsSeededProviders(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	h.caProviderService = services.NewCAProviderService()
-	recorder := getRoute(t, h, "/ca-providers", h.ListCAProviders)
+	recorder := getRoute(t, "/ca-providers", h.ListCAProviders)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -179,7 +179,7 @@ func TestListCAProviders_returnsSeededProviders(t *testing.T) {
 // DNS 提供商列表：前端证书配置表单的字段元数据单源（Code 排序稳定）。
 func TestListDNSProviders_returnsRegistryMetadata(t *testing.T) {
 	h := NewHandlers(Dependencies{})
-	recorder := getRoute(t, h, "/dns-providers", h.ListDNSProviders)
+	recorder := getRoute(t, "/dns-providers", h.ListDNSProviders)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -278,7 +278,7 @@ func TestLibUpdateLogs_readTaskLogWithRotation(t *testing.T) {
 			if err := os.WriteFile(path+".1", []byte("轮转前日志\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			recorder := getRoute(t, handler, "/logs", tc.register)
+			recorder := getRoute(t, "/logs", tc.register)
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
@@ -336,7 +336,7 @@ func TestStartCaddyRestartWatcher_secondCallStartsNoSecondLoop(t *testing.T) {
 // 变成 undefined 显示）。
 func TestGetMetricsOverview_returnsStructuredZeroValue(t *testing.T) {
 	h := NewHandlers(Dependencies{MetricsService: services.NewMetricsService("http://127.0.0.1:1/metrics", 60)})
-	recorder := getRoute(t, h, "/metrics/overview", h.GetMetricsOverview)
+	recorder := getRoute(t, "/metrics/overview", h.GetMetricsOverview)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -368,12 +368,12 @@ func TestGetIP2RegionUpdateStatus_managerLifecycle(t *testing.T) {
 	if manager := services.GetIP2RegionUpdateManager(); manager != nil {
 		t.Fatal("前置态错误：IP2Region 更新 manager 应为未初始化")
 	}
-	recorder := getRoute(t, h, "/status", h.GetIP2RegionUpdateStatus)
+	recorder := getRoute(t, "/status", h.GetIP2RegionUpdateStatus)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("manager 缺席 status=%d, want 500", recorder.Code)
 	}
 	services.InitIP2RegionUpdateManager(func() error { return nil })
-	recorder = getRoute(t, h, "/status", h.GetIP2RegionUpdateStatus)
+	recorder = getRoute(t, "/status", h.GetIP2RegionUpdateStatus)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("初始化后 status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -444,7 +444,7 @@ func TestGetSystemTaskStats24hSeries_bothBranches(t *testing.T) {
 	h := NewHandlers(Dependencies{})
 	// 分支一：引擎缺席。全局引擎属包级单例，先显式停止以避免依赖用例顺序。
 	services.StopTaskEngine()
-	recorder := getRoute(t, h, "/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
+	recorder := getRoute(t, "/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("引擎缺席 status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -474,7 +474,7 @@ func TestGetSystemTaskStats24hSeries_bothBranches(t *testing.T) {
 			t.Fatalf("seed task_runs: %v", err)
 		}
 	}
-	recorder = getRoute(t, h, "/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
+	recorder = getRoute(t, "/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -598,7 +598,7 @@ func TestGetRealtimeTraffic_envelopeOnFailureAndSuccess(t *testing.T) {
 		}
 		return original(path)
 	}
-	recorder := getRoute(t, h, "/api/v1/metrics/realtime", h.GetRealtimeTraffic)
+	recorder := getRoute(t, "/api/v1/metrics/realtime", h.GetRealtimeTraffic)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
 	}
@@ -623,7 +623,7 @@ func TestGetRealtimeTraffic_envelopeOnFailureAndSuccess(t *testing.T) {
 		}
 		return original(path)
 	}
-	recorder = getRoute(t, h, "/api/v1/metrics/realtime", h.GetRealtimeTraffic)
+	recorder = getRoute(t, "/api/v1/metrics/realtime", h.GetRealtimeTraffic)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
@@ -657,7 +657,7 @@ func TestGetConnectionStats_envelopeOnFailureAndSuccess(t *testing.T) {
 	netstatCommand = func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, "false")
 	}
-	recorder := getRoute(t, h, "/api/v1/metrics/connections", h.GetConnectionStats)
+	recorder := getRoute(t, "/api/v1/metrics/connections", h.GetConnectionStats)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
 	}
@@ -681,7 +681,7 @@ func TestGetConnectionStats_envelopeOnFailureAndSuccess(t *testing.T) {
 	netstatCommand = func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, "printf", "%s", sample)
 	}
-	recorder = getRoute(t, h, "/api/v1/metrics/connections", h.GetConnectionStats)
+	recorder = getRoute(t, "/api/v1/metrics/connections", h.GetConnectionStats)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}

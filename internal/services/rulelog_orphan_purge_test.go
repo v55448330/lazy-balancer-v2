@@ -252,3 +252,33 @@ func containsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+// 构造形态的 caddy_id（以完整时间戳 + reason 结尾，字母表内、备份导入可达）
+// 让它的活动文件在词法上属于前缀规则的轮转副本族。孤儿判定必须以「完整主体
+// 是否为存活规则」优先反解，否则前缀规则已删除时该存活规则的日志被当孤儿清掉。
+func TestPurgeOrphanRuleLogs_keepsLiveRuleWhoseIDLooksLikeRotationCopy(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+
+	const lookalikeID = "lb_xyz-20260102T03-04-05-size"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES (?,?,?,?,1)`, lookalikeID, "lookalike", "http", 18097); err != nil {
+		t.Fatalf("seed lookalike rule: %v", err)
+	}
+	liveFile := lookalikeID + ".log"
+	if err := os.WriteFile(filepath.Join(dir, liveFile), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("seed %s: %v", liveFile, err)
+	}
+
+	result := PurgeOrphanRuleLogs(context.Background())
+
+	if result.ScanError != "" {
+		t.Fatalf("ScanError=%q, want 空", result.ScanError)
+	}
+	if len(result.Purged) != 0 {
+		t.Fatalf("Purged=%v, want 空（存活规则的活文件不得判孤儿）", result.Purged)
+	}
+	if _, err := os.Stat(filepath.Join(dir, liveFile)); err != nil {
+		t.Fatalf("存活规则 %s 的活动日志被孤儿清理误删: %v", lookalikeID, err)
+	}
+}

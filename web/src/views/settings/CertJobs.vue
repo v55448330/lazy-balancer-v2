@@ -52,8 +52,8 @@
              门用后端派生的 not_after（expires_at 缺失时按 PEM 解析）：只判
              expires_at 会让导入/集群回插的 NULL 有效期行显示「-」，而规则页
              同一证书显示「剩 N 天」。 -->
-        <el-tooltip v-if="row.status === 'issued' && effectiveNotAfter(row)" :content="formatDate(effectiveNotAfter(row))">
-          <span :class="['cert-days', row.certificate_status]">{{ formatDateShort(effectiveNotAfter(row)) }} · {{ row.certificate_status === 'expired' ? `已过期 ${Math.abs(row.days_remaining)} 天` : `剩 ${row.days_remaining} 天` }}</span>
+        <el-tooltip v-if="row.status === 'issued' && effectiveNotAfter(row as CertJobListItem)" :content="formatDate(effectiveNotAfter(row as CertJobListItem))">
+          <span :class="['cert-days', row.certificate_status]">{{ formatDateShort(effectiveNotAfter(row as CertJobListItem)) }} · {{ row.certificate_status === 'expired' ? `已过期 ${Math.abs(row.days_remaining)} 天` : `剩 ${row.days_remaining} 天` }}</span>
         </el-tooltip>
         <span v-else class="cell-empty">-</span>
       </template>
@@ -63,7 +63,7 @@
         <!-- 收敛提示：配置窗口超出寿命可执行区间时按「到期前 7 天」续签，
              列值不能被读成「配置的 88 天」 -->
         <el-tooltip :disabled="!renewalConverged" :content="renewalConvergedNote">
-          <span v-if="row.status === 'issued' && renewalAt(row)" class="cell-text">{{ formatDate(renewalAt(row)) }}</span>
+          <span v-if="row.status === 'issued' && renewalAt(row as CertJobListItem)" class="cell-text">{{ formatDate(renewalAt(row as CertJobListItem)) }}</span>
           <span v-else class="cell-empty">-</span>
         </el-tooltip>
       </template>
@@ -77,7 +77,7 @@
     <el-table-column label="重试次数" width="80" align="center">
       <template #default="{ row }">
         <!-- 冷却列让位时，等待 CA 的冷却值并入本格 tooltip -->
-        <el-tooltip :disabled="visibleColumns.has('cooling') || !coolingHint(row)" :content="coolingHint(row)">
+        <el-tooltip :disabled="visibleColumns.has('cooling') || !coolingHint(row as CertJobListItem)" :content="coolingHint(row as CertJobListItem)">
           <span v-if="row.renewal_attempts && row.renewal_attempts > 0" class="cell-text">{{ row.renewal_attempts }}</span>
           <span v-else class="cell-empty">-</span>
         </el-tooltip>
@@ -91,10 +91,10 @@
     </el-table-column>
     <el-table-column label="操作" width="90" align="center">
       <template #default="{ row }">
-        <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-        <el-tooltip :disabled="!retryDisabledReason(row)" :content="retryDisabledReason(row)">
+        <el-button link type="primary" size="small" @click="viewLogs(row as CertJobListItem)">日志</el-button>
+        <el-tooltip :disabled="!retryDisabledReason(row as CertJobListItem)" :content="retryDisabledReason(row as CertJobListItem)">
           <span>
-            <el-button link type="primary" size="small" :loading="retryingJobIds.has(row.id)" :disabled="isReadOnly || !canRetry(row) || retryingJobIds.has(row.id)" @click="retryJob(row)">重签</el-button>
+            <el-button link type="primary" size="small" :loading="retryingJobIds.has(row.id)" :disabled="isReadOnly || !canRetry(row as CertJobListItem) || retryingJobIds.has(row.id)" @click="retryJob(row as CertJobListItem)">重签</el-button>
           </span>
         </el-tooltip>
       </template>
@@ -145,6 +145,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { Timer } from '@element-plus/icons-vue'
+import DialogHeader from '@/components/DialogHeader.vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import LogStorageBar from '@/components/LogStorageBar.vue'

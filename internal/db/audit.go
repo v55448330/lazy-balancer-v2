@@ -63,11 +63,19 @@ func InitializeAuditDB(dataDir string) error {
 		auditDB.Close()
 		return fmt.Errorf("failed to secure audit database artifacts: %w", err)
 	}
+	previousAuditDB := AuditDB
 	AuditDB = auditDB
 	if err := migrateLegacyAuditLogs(DB, path); err != nil {
 		// 初始化中途失败时缓冲的系统事件原样保留（下次启动重放），
 		// 此处仅留痕条数，不静默丢弃。
 		log.Printf("audit log migration failed (%v); %d buffered system audit entries retained for next startup", err, systemAuditBufferLen())
+		// 半初始化的句柄不得留在包级变量上：先恢复进入前的值（可能为
+		// nil），再关闭刚开出的句柄——否则后续调用方会对着迁移失败的库继续
+		// 写入，且连接/-wal 句柄泄漏到进程结束。
+		AuditDB = previousAuditDB
+		if closeErr := auditDB.Close(); closeErr != nil {
+			log.Printf("audit database handle close after failed init: %v", closeErr)
+		}
 		return err
 	}
 	migrateAuditVocabulary()
@@ -282,8 +290,10 @@ func trimSystemAuditBufferLocked() {
 }
 
 // flushSystemAuditLogs 将缓冲的系统事件写入审计库并清空缓冲；审计库未就绪或单条
-// 写失败时条目按原顺序留回缓冲（等待下次 flush 重试，不再静默丢事件），
-// 与 services.RecordAuditLog 的 best-effort 语义一致。
+// 写失败时条目按原顺序留回缓冲。留回不等于会被重试：唯一的生产调用点是
+// InitializeAuditDB 的末尾（每进程只跑一次），离开该函数后不存在第二次 flush，
+// 留回的条目随进程退出消失——即单次尝试语义，失败即丢弃。因此写失败必须当场
+// 打日志明示丢弃条数，不静默。与 services.RecordAuditLog 的 best-effort 语义一致。
 func flushSystemAuditLogs() {
 	systemAuditBuffer.mu.Lock()
 	entries := systemAuditBuffer.entries
@@ -309,9 +319,15 @@ func flushSystemAuditLogs() {
 	}
 	if len(failed) > 0 {
 		systemAuditBuffer.mu.Lock()
+		// 留回缓冲（顺序保持）仍对外可见（测试/后续显式 flush 可重放），但
+		// 生产路径不会再有 flush——丢弃条数必须写明，避免日志与真实留存量
+		// 对不上时误判为「已重试成功」。
 		systemAuditBuffer.entries = append(failed, systemAuditBuffer.entries...)
 		trimSystemAuditBufferLocked()
+		remaining := len(systemAuditBuffer.entries)
 		systemAuditBuffer.mu.Unlock()
+		log.Printf("system audit log: %d entries could not be written and are dropped (single-attempt flush, no retry in this process); %d entries left in the in-memory buffer",
+			len(failed), remaining)
 	}
 }
 

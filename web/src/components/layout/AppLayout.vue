@@ -1,6 +1,8 @@
 <template>
   <el-container class="layout-container">
-    <el-aside :width="effectiveCollapsed ? '64px' : '220px'" class="layout-aside">
+    <!-- 窄屏展开为浮层：遮罩承接「点空白收起」（纯视觉层，对读屏隐藏） -->
+    <div v-if="sidebarOverlayVisible" class="sidebar-backdrop" aria-hidden="true" @click="closeNarrowSidebar" />
+    <el-aside :width="sidebarWidth(effectiveCollapsed)" class="layout-aside" :class="{ 'is-overlay': sidebarOverlayVisible }">
       <div class="aside-header">
         <!-- 折叠入口的展开状态必须对读屏可见：折叠只由宽度表达，此前读屏无从得知
              （aria-expanded + aria-controls 指向被折叠的导航）。长按 Enter/Space
@@ -101,7 +103,10 @@
 
       <div class="aside-footer">
         <el-dropdown trigger="click" @command="handleCommand">
-          <div class="user-info">
+          <div class="user-info" :class="{ 'is-collapsed': effectiveCollapsed }" :aria-label="accountTriggerLabel(menuDisplayName)" :title="accountTriggerLabel(menuDisplayName)">
+            <!-- 折叠态必须有可见标识与无障碍名称：此前只剩 24px 无内容条带，
+                 而「退出登录」只存在于本下拉里（窄屏等于没有可发现的退出入口） -->
+            <span v-if="effectiveCollapsed" class="user-avatar" aria-hidden="true">{{ accountInitial(menuDisplayName) }}</span>
             <transition name="fade">
               <div v-if="!effectiveCollapsed" class="user-detail">
                 <div class="user-name">
@@ -208,9 +213,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
+import { accountInitial, accountTriggerLabel, sidebarCollapsed, sidebarOverlay, sidebarWidth, toggleSidebarState } from '@/utils/sidebarLayout'
 import type { PageId } from '@/utils/pageIds'
 import { request } from '@/utils/api'
 import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
@@ -224,10 +230,30 @@ import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
 
 const authStore = useAuthStore()
-const collapsed = ref(false)
+// 宽屏用户折叠记忆与窄屏显式展开分开持有：窄屏强制折叠只是默认态，折叠入口
+// 必须真的有可观察效果（此前点击/回车/空格只翻转 collapsed，窄屏下完全无效）。
+const userCollapsed = ref(false)
+const narrowExpanded = ref(false)
 const isNarrowViewport = useMediaQuery('(max-width: 768px)')
-const effectiveCollapsed = computed(() => collapsed.value || isNarrowViewport.value)
-const toggleSidebar = (): void => { collapsed.value = !collapsed.value }
+const effectiveCollapsed = computed(() => sidebarCollapsed({
+  narrow: isNarrowViewport.value,
+  userCollapsed: userCollapsed.value,
+  narrowExpanded: narrowExpanded.value,
+}))
+// 窄屏展开走浮层（不挤压内容区），遮罩点击收起
+const sidebarOverlayVisible = computed(() => sidebarOverlay({ narrow: isNarrowViewport.value, collapsed: effectiveCollapsed.value }))
+const toggleSidebar = (): void => {
+  const next = toggleSidebarState({
+    narrow: isNarrowViewport.value,
+    userCollapsed: userCollapsed.value,
+    narrowExpanded: narrowExpanded.value,
+  })
+  userCollapsed.value = next.userCollapsed
+  narrowExpanded.value = next.narrowExpanded
+}
+const closeNarrowSidebar = (): void => { narrowExpanded.value = false }
+// 视口回到宽屏后复位窄屏展开态：下次拉窄应回到默认折叠，而不是沿用旧选择
+watch(isNarrowViewport, (narrow) => { if (!narrow) narrowExpanded.value = false })
 const showProfile = ref(false)
 const loggingOut = ref(false)
 
@@ -278,6 +304,8 @@ const pageTitle: Record<string, string> = {
 
 const goPage = (page: PageId) => {
   authStore.setCurrentPage(page)
+  // 窄屏浮层选完页面即收起（否则浮层挡住新页内容）
+  if (isNarrowViewport.value) narrowExpanded.value = false
 }
 
 const logout = async (): Promise<void> => {
@@ -386,6 +414,24 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   transition: width 0.2s;
+}
+
+/* 窄屏展开=浮层：不挤压内容区，抬到内容之上；遮罩承接「点空白收起」。
+   height/inset 用固定定位脱离 el-container 流式布局。 */
+.layout-aside.is-overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2001;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.16);
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(17, 24, 39, 0.32);
 }
 
 .aside-header {
@@ -541,6 +587,26 @@ onUnmounted(() => {
 
 .user-info:hover {
   background: #f9fafb;
+}
+
+/* 折叠态：只余头像标识，水平居中（原实现是无内容的热区） */
+.user-info.is-collapsed {
+  justify-content: center;
+  padding: 12px 8px;
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: #3b82f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 

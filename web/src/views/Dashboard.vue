@@ -335,13 +335,13 @@
                 <!-- 省略号样式必须放在 slot 内层 span——el-link 根是
                      inline-flex，text 直接内容在 .el-link__inner flex item 里，根上的
                      text-overflow 不会渲染 …（flex 容器无自有行盒），只硬裁切。 -->
-                <AccessibleLink type="primary" underline="never" :title="row.name" @click="openRuleHistory(row)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></AccessibleLink>
+                <AccessibleLink type="primary" underline="never" :title="row.name" @click="openRuleHistory(row as Rule)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></AccessibleLink>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="85">
               <template #default="{ row }">
-                <el-tag :type="getRuleProtocolTagType(row)" size="small" effect="plain">
-                  {{ getRuleProtocolLabel(row) }}
+                <el-tag :type="getRuleProtocolTagType(row as Rule)" size="small" effect="plain">
+                  {{ getRuleProtocolLabel(row as Rule) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -360,7 +360,7 @@
             </el-table-column>
             <el-table-column label="请求数" width="110">
               <template #default="{ row }">
-                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' })">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
+                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
             <!-- 初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
@@ -372,7 +372,7 @@
                  差额从状态码列 380→360 划出。 -->
             <el-table-column label="状态码" width="360">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <div v-else-if="hasRuleRequests(row.caddy_id)" class="status-codes">
@@ -387,7 +387,7 @@
             </el-table-column>
             <el-table-column label="入站流量" width="100">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
@@ -395,7 +395,7 @@
             </el-table-column>
             <el-table-column label="出站流量" width="100">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
@@ -403,7 +403,7 @@
             </el-table-column>
             <el-table-column label="处理中" width="70">
               <template #default="{ row }">
-                <span class="text-secondary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: String(ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-') })">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
+                <span class="text-secondary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: String(ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-') })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="健康状态" width="80">

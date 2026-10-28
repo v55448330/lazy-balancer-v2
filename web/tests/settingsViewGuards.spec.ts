@@ -38,8 +38,8 @@ test('B 备份行还原/删除有在途门（占位先于确认、按钮联动 l
 
   assert.match(page, /:loading="restoringBackupId === row\.id"/, '还原按钮须呈在途态')
   assert.match(page, /:loading="deletingBackupId === row\.id"/, '删除按钮须呈在途态')
-  assert.match(page, /:disabled="autoBackupActionBusy \|\| backupDisabled" @click="restoreAutoBackup\(row\)"/)
-  assert.match(page, /:disabled="autoBackupActionBusy \|\| backupDisabled" @click="deleteAutoBackup\(row\)"/)
+  assert.match(page, /:disabled="autoBackupActionBusy \|\| backupDisabled" @click="restoreAutoBackup\(row(?: as [A-Za-z]+)?\)"/)
+  assert.match(page, /:disabled="autoBackupActionBusy \|\| backupDisabled" @click="deleteAutoBackup\(row(?: as [A-Za-z]+)?\)"/)
 })
 
 test('C 管理面板证书解析失败在弹框内常驻可见，重选文件即清除', () => {

@@ -119,3 +119,33 @@ func TestConfigWatchdog_panicIsWrappedLoggedAndBreaksDriftStreak(t *testing.T) {
 		t.Fatalf("正常轮复用了 panic 留痕（次数=%d）: %s", got, logs.String())
 	}
 }
+
+// 降级复位（代际自增）后，在途轮的快照回滚必须放弃整轮簿记——包括两枚
+// 「首报留痕已发」标志：只清状态/计数会让复位后的下一次失败被当成「已报过」
+// 而静默（首条诊断日志永不出现，唯一线索丢失）。
+func TestRestoreConfigDriftSnapshot_generationMismatchClearsWarnedFlags(t *testing.T) {
+	resetConfigWatchdogForTest(t)
+	snapshot := snapshotConfigDrift()
+
+	// Given 在途轮进行中发生降级复位（代际自增），复位后该轮仍继续执行并
+	// 写出两条首报标志——它们属于已失效的主节点视角。
+	ResetConfigDrift()
+	configDriftMu.Lock()
+	configDriftQueryWarned = true
+	configDriftReadWarned = true
+	configDriftMu.Unlock()
+
+	// When 在途轮收尾回滚到降级前快照（代际不一致）。
+	restoreConfigDriftSnapshot(snapshot)
+
+	// Then 首报标志必须随复位一并丢弃（下一次失败重新首报）。
+	configDriftMu.RLock()
+	queryWarned, readWarned := configDriftQueryWarned, configDriftReadWarned
+	configDriftMu.RUnlock()
+	if queryWarned {
+		t.Fatal("代际不一致回滚未清 configDriftQueryWarned：复位后的首个查询失败会被静默")
+	}
+	if readWarned {
+		t.Fatal("代际不一致回滚未清 configDriftReadWarned：复位后的首个读取失败会被静默")
+	}
+}

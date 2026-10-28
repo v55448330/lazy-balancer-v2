@@ -215,7 +215,9 @@ func TestLoadCaddyMetricsSnapshot_canceledLeaderDoesNotFailWaiters(t *testing.T)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
+	var fetches atomic.Int32
 	overrideDashboardFetch(t, func(ctx context.Context, _ string) ([]byte, error) {
+		fetches.Add(1)
 		once.Do(func() { close(started) })
 		<-release
 		if err := ctx.Err(); err != nil {
@@ -224,6 +226,17 @@ func TestLoadCaddyMetricsSnapshot_canceledLeaderDoesNotFailWaiters(t *testing.T)
 		return []byte("ok-waiter 1\n"), nil
 	})
 
+	// 屏障而非墙钟：hook 计数到第 2 次＝waiter 已到达 group.Do（leader 正在
+	// 抓取中持飞），此刻取消 leader 才真正验证「取消不传染等待者」。hook 必须
+	// 在 leader 启动前安装，否则 leader 不计数、屏障永远等不到第 2 次。
+	var doCalls atomic.Int32
+	joined := make(chan struct{})
+	caddyMetricsSnapshotDoBeforeForTest = func() {
+		if doCalls.Add(1) == 2 {
+			close(joined)
+		}
+	}
+	t.Cleanup(func() { caddyMetricsSnapshotDoBeforeForTest = nil })
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	leaderDone := make(chan struct{})
 	go func() {
@@ -242,8 +255,11 @@ func TestLoadCaddyMetricsSnapshot_canceledLeaderDoesNotFailWaiters(t *testing.T)
 		body, err := loadCaddyMetricsSnapshot(context.Background(), url, true)
 		waiterDone <- result{body: body, err: err}
 	}()
-	// 等 waiter 加入 single-flight 后取消 leader，再放行抓取。
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-joined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter 未进入 single-flight（屏障超时，无法证明共享一次抓取）")
+	}
 	cancelLeader()
 	close(release)
 
@@ -256,6 +272,11 @@ func TestLoadCaddyMetricsSnapshot_canceledLeaderDoesNotFailWaiters(t *testing.T)
 		t.Fatal("waiter 未在超时内返回")
 	}
 	<-leaderDone
+	// 共享一次抓取：waiter 若另起一次抓取（leader 取消传染或时序错位），
+	// 计数会变成 2——这是原用例缺失的判别力。
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("抓取次数=%d, want 1（leader/waiter 必须共享同一趟抓取）", got)
+	}
 }
 
 func TestFetchCaddyMetrics_rejectsOver16MB(t *testing.T) {

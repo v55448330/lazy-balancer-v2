@@ -1064,3 +1064,35 @@ func TestParsePayload_emptySnapshotIsUnavailable(t *testing.T) {
 		})
 	}
 }
+
+// 快照条目解析必须与判定侧同口径（复用 wafiplist.ParseIPEntry 单源）：
+// 裸 netip.ParsePrefix 会把 4in6 映射段（::ffff:a.b.c.d/104）装进 v6 集，而
+// 查询侧 Unmap 后恒为 v4 地址 → 该段「加载成功、运行永不命中」（真爬虫被拦
+// + 伪伪装事件，快照侧零告警）；裸 IP 条目则被当坏 CIDR 丢弃。
+func TestCrawlerIPRangeSnapshot_parses4in6AndBareIPEntries(t *testing.T) {
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+	if err := os.WriteFile(crawlerIPListFile, []byte(`{"so360spider":["::ffff:42.236.8.0/120"],"gptbot":["1.2.3.4"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resetCrawlerIPRangeCacheForTest()
+
+	// 4in6 条目归一为 42.236.8.0/24：v4 与 4in6 两种查询形态都必须命中。
+	if !ipRangeVerified("42.236.8.1", "so360spider") {
+		t.Fatal("4in6 段条目应归一为 v4 并命中 v4 查询（裸 ParsePrefix 会静默永不命中）")
+	}
+	if !ipRangeVerified("::ffff:42.236.8.9", "so360spider") {
+		t.Fatal("4in6 段条目应命中 4in6 查询形态")
+	}
+	if ipRangeVerified("42.236.9.1", "so360spider") {
+		t.Fatal("归一后的段外地址不得命中")
+	}
+	// 裸 IP 条目按 /32 生效，而不是计入坏 CIDR 丢弃。
+	if !ipRangeVerified("1.2.3.4", "gptbot") {
+		t.Fatal("裸 IP 条目应补 /32 生效")
+	}
+	if ipRangeVerified("1.2.3.5", "gptbot") {
+		t.Fatal("裸 IP 条目不得放大成整段命中")
+	}
+}

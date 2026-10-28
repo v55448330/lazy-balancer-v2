@@ -7,6 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 
 import {
   crsRuleCountLabel,
@@ -180,9 +181,29 @@ test('单库健康标签：持久 update_status 的失败/进行中/关闭态不
 test('CRS 数量列是规则条数，不是文件数', () => {
   assert.equal(crsRuleCountLabel(832), '832 条规则')
   assert.equal(crsRuleCountLabel(1234), '1,234 条规则')
+  assert.equal(crsRuleCountLabel(1234567), '1,234,567 条规则', '千分位必须逐级分组')
   // 缺失/0 不冒充「0 条规则已就绪」
   assert.equal(crsRuleCountLabel(0), '—')
   assert.equal(crsRuleCountLabel(undefined), '—')
+})
+
+test('数量文案不随宿主 locale 漂移（千分位固定，不消费 toLocaleString 的默认 locale）', () => {
+  // 默认 locale 由 LC_ALL/LANG 决定：de_DE 下 `(1234).toLocaleString()` 给
+  // '1.234'、fr_FR 给窄空格——同一份代码在不同开发机/CI 上显示不同，断言也假红。
+  // 这里换一个子进程用 de_DE 重跑真实实现，进程内改不了 Intl 默认 locale。
+  const probe = execFileSync(
+    process.execPath,
+    ['--input-type=module', '-e', [
+      "import { crsRuleCountLabel } from './src/utils/securityLibraries.ts'",
+      'process.stdout.write(crsRuleCountLabel(1234))',
+    ].join('\n')],
+    {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8', LANGUAGE: 'de_DE' },
+      encoding: 'utf8',
+    },
+  )
+  assert.equal(probe, '1,234 条规则', 'de_DE 宿主下必须仍是固定形态（toLocaleString 会给 1.234）')
 })
 
 // 规则库「定时更新」保存前校验：时间被清空时必须显式拒绝——原实现

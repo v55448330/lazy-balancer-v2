@@ -145,4 +145,24 @@ if [[ "$default_runs" -ne 1 ]]; then
   exit 1
 fi
 
-echo "shuffle gate selftest: order-leak RED, fixed-seed replay, timeout, random seed, default single round and wiring ok"
+# 零轮配置必须 fail-closed：显式 seed 为空 + 随机轮关闭时 seeds 为空，旧实现
+# 让 for 循环执行 0 次并以 0 退出——门禁一轮没跑却宣告通过（与全仓守卫的
+# fail-closed 取向相反，且 bash <4.4 下报的是 unbound variable 而非明确原因）。
+run_gate "" 0 ./clean
+if [[ $gate_rc -eq 0 ]]; then
+  echo "FAIL [empty seed set] 关闭随机轮且无显式 seed 时脚本仍以 0 退出（零轮通过）" >&2
+  echo "$gate_output" >&2
+  exit 1
+fi
+if [[ "$gate_output" != *"未产生任何 seed"* ]]; then
+  echo "FAIL [empty seed set] 失败原因未指明 seed 集合为空" >&2
+  echo "$gate_output" >&2
+  exit 1
+fi
+if printf '%s\n' "$gate_output" | grep -q '^-- -shuffle='; then
+  echo "FAIL [empty seed set] 空 seed 集合下仍执行了轮次" >&2
+  echo "$gate_output" >&2
+  exit 1
+fi
+
+echo "shuffle gate selftest: order-leak RED, fixed-seed replay, timeout, random seed, default single round, empty-seed fail-closed and wiring ok"

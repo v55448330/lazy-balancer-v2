@@ -16,11 +16,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/apikey"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -429,7 +431,7 @@ const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"st
 const listCertificatesSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 Caddy ID 精确过滤（缺省=全部规则）"},"page":{"type":"integer","minimum":1,"maximum":1000,"default":1,"description":"页码；与 REST 同口径，page_size 默认 1000（等价原全量返回）"},"page_size":{"type":"integer","minimum":1,"maximum":1000,"default":1000,"description":"每页条数；响应 data.total 为匹配总数，超过本页条数时按 page 续取"}},"additionalProperties":false}`
 const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"maximum":1000,"default":1,"description":"页码；REST 侧超过 1000 会静默钳位（深 OFFSET 保护），更深历史请用筛选条件"},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"rule_name":{"type":"string","description":"按负载规则名称过滤（子串）"},"policy_name":{"type":"string","description":"按安全策略名称过滤（子串）"},"rule_triggered":{"type":"string","description":"按触发规则过滤（类别：IP 访问控制/地域拦截/WAF 规则（CRS）含全部 6 位规则 ID/自定义规则；也可输细标签（评分拦截/协议异常/协议攻击）或 CRS 规则 ID/消息关键词）"},"rule_triggered_exclude":{"type":"string","description":"按触发规则反向过滤（同 rule_triggered 的类别/细标签/ID，整体取反——筛掉该类型看其余）"},"uri":{"type":"string","description":"按请求 URI 过滤（子串）"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls"]}},"additionalProperties":false}`
-const metricsHistorySchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"可选规则 ID（Caddy ID），省略时返回全局聚合趋势"},"interval":{"type":"string","description":"时间范围（如 1h、24h、7d），默认 1h"}},"additionalProperties":false}`
+const metricsHistorySchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"可选规则 ID（Caddy ID），省略时返回全局聚合趋势"},"interval":{"type":"string","pattern":"^[0-9]+(m|h|d)$","description":"时间范围 <n>m/<n>h/<n>d，默认 1h；上限 10080m / 168h / 7d（保留期固定 7 天，超上限由 REST 静默钳位且响应不回显生效窗口）；非正值/非法单位按 1h 处理"}},"additionalProperties":false}`
 
 // setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems 与后端
 // SetRuleSecurityPolicies 的 maxBindingsPerRule=8 校验对齐，避免 MCP 放行后端拒绝的载荷。
@@ -495,7 +497,15 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		if !ok || value == nil {
 			return toolCallError("缺少参数 %s", name)
 		}
-		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(scalarString(value)))
+		// 空串（含纯空白）与缺失同义：空值拼出的 `/rules/` 会命中 Gin 默认
+		// RedirectTrailingSlash 的 301，转发器按原方法重放到集合端点，详情
+		// 工具于是以 isError=false 返回整表——与「缺少参数」契约相反，Agent
+		// 会把列表首项当成目标对象继续推理。query 侧早已丢弃空串，此处对齐。
+		pathValue := strings.TrimSpace(scalarString(value))
+		if pathValue == "" {
+			return toolCallError("缺少参数 %s", name)
+		}
+		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(pathValue))
 	}
 	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
@@ -566,7 +576,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if apiKey := apikey.FromHeader(call.Header); apiKey != "" {
-		request.Header.Set("X-API-Key", apiKey)
+		request.Header.Set(accesslog.APIKeyHeaderName, apiKey)
 	} else {
 		return toolCallError("MCP 请求缺少 API 密钥")
 	}
@@ -611,7 +621,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		if retryBody != nil {
 			request.Header.Set("Content-Type", "application/json")
 		}
-		request.Header.Set("X-API-Key", apikey.FromHeader(call.Header))
+		request.Header.Set(accesslog.APIKeyHeaderName, apikey.FromHeader(call.Header))
 		if internalAuthSecret != "" {
 			request.Header.Set(InternalAuthHeader, internalAuthSecret)
 		}
@@ -660,11 +670,24 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 }
 
 func transportToolError(err error, generatedPassword string) (*mcp.CallToolResult, error) {
-	// 超时只代表客户端没有等到响应；首跳与 TLS 重放必须使用同一分类，
-	// 防止 Agent 在写操作可能已提交时盲目重试。
+	// 超时只代表客户端没有等到响应；请求已写出后连接被对端关闭（EOF/reset/
+	// broken pipe）同样无法区分「未执行」与「已执行但响应丢失」。首跳与 TLS
+	// 重放必须使用同一分类，防止 Agent 在写操作可能已提交时盲目重试
+	// （reset_user_password 尤其：密码可能已改而口令未回传）。
+	// 连接被拒绝/拨号失败仍是「确定未发送」，不得进入本分支。
+	uncertain := false
 	var netErr net.Error
-	if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
-		message := fmt.Sprintf("内部 API 请求超时: %v（操作可能已在服务端生效,请先用查询类工具核对状态再重试）", err)
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		uncertain = true
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNABORTED) {
+		uncertain = true
+	}
+	if uncertain {
+		message := fmt.Sprintf("内部 API 请求超时或连接中断: %v（操作可能已在服务端生效,请先用查询类工具核对状态再重试）", err)
 		if generatedPassword != "" {
 			// 同一调用方在成功响应中本就会收到该密码；不确定态交付候选值
 			// 同时覆盖「已提交」与「未提交」两种终态，不扩大权限。

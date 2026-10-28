@@ -69,7 +69,7 @@
       <template #title>
         <div class="polling-error-title">
           <span>安全策略绑定数据加载失败：锁图标与流程投影可能显示为未绑定（非真实状态）</span>
-          <el-button link type="warning" :loading="loading" @click="retrySecurityBindings">重新加载</el-button>
+          <el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">重新加载</el-button>
         </div>
       </template>
     </el-alert>
@@ -105,22 +105,22 @@
                   <el-icon
                     :size="14"
                     class="acl-lock-icon"
-                    :class="ruleStageModel(row).ruleDisabled ? 'is-unbound' : ruleStageModel(row).hasAnyPolicy ? 'is-allow' : 'is-unbound'"
+                    :class="ruleStageModel(row as Rule).ruleDisabled ? 'is-unbound' : ruleStageModel(row as Rule).hasAnyPolicy ? 'is-allow' : 'is-unbound'"
                     role="button"
                     tabindex="0"
                     :aria-label="`查看「${row.name}」的安全处理流程`"
-                    @keydown.enter.prevent="activateOnce($event, () => openFlowFromLock(row))"
-                    @keydown.space.prevent="activateOnce($event, () => openFlowFromLock(row))"
+                    @keydown.enter.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
+                    @keydown.space.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
                   ><Lock /></el-icon>
                 </template>
                 <div class="lock-summary">
                   <div class="popover-title">安全防护 · 阶段摘要</div>
                   <!-- 禁用规则的安全链不进入运行配置（零 listener 路由）——
                        摘要顶部必须点名，否则从锁图标巡检会高估防护 -->
-                  <div v-if="ruleStageModel(row).ruleDisabled" class="lock-summary-hint">
+                  <div v-if="ruleStageModel(row as Rule).ruleDisabled" class="lock-summary-hint">
                     规则已禁用——安全链未进入运行配置（绑定与阶段页保留，启用后生效）
                   </div>
-                  <template v-for="stage in ruleStageModel(row).stages" :key="stage.stage">
+                  <template v-for="stage in ruleStageModel(row as Rule).stages" :key="stage.stage">
                     <div class="lock-stage">
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
                       <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->
@@ -147,7 +147,7 @@
                       </template>
                     </div>
                   </template>
-                  <div class="lock-summary-hint"><el-button link type="primary" @click="openFlowFromLock(row)">查看完整处理流程 →</el-button></div>
+                  <div class="lock-summary-hint"><el-button link type="primary" @click="openFlowFromLock(row as Rule)">查看完整处理流程 →</el-button></div>
                 </div>
               </el-popover>
               <!-- TCP 灰色锁（2026-10-10 用户裁定）：无弹框，hover 提示不支持原因。
@@ -163,7 +163,7 @@
               </el-tooltip>
               <!-- 规则名入口复用 AccessibleLink：手写 <a role=button> 缺按键自动重复
                    守卫与统一焦点环（同页曾有两套键盘语义） -->
-              <AccessibleLink class="rule-name-link" :title="row.name" @click="viewConfig(row)">{{ row.name }}</AccessibleLink>
+              <AccessibleLink class="rule-name-link" :title="row.name" @click="viewConfig(row as Rule)">{{ row.name }}</AccessibleLink>
             </div>
           </template>
         </el-table-column>
@@ -207,8 +207,8 @@
               :disabled="!certInfoMap[row.caddy_id]"
             >
               <template #reference>
-                <el-tag :type="tlsTagType(row)" size="small" effect="plain" class="tls-tag">
-                  {{ tlsTagLabel(row) }}
+                <el-tag :type="tlsTagType(row as Rule)" size="small" effect="plain" class="tls-tag">
+                  {{ tlsTagLabel(row as Rule) }}
                 </el-tag>
               </template>
               <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
@@ -262,7 +262,7 @@
             <!-- 零启用上游的启用态规则：渲染层跳过（不发路由/不注册 logger），
                  与「已禁用」的「-」同形会让用户无法从列表区分「未发布」。 -->
             <el-tooltip
-              v-if="row.enabled && Array.isArray(row.upstreams) && getEnabledUpstreams(row).length === 0"
+              v-if="row.enabled && Array.isArray(row.upstreams) && getEnabledUpstreams(row as Rule).length === 0"
               content="未发布：已启用但零启用上游，运行配置跳过该规则（Caddy 不会代理）"
               placement="top"
             >
@@ -287,7 +287,7 @@
                   </div>
                 </template>
                 <template v-else>
-                  <div v-for="upstream in getEnabledUpstreams(row)" :key="upstream.id" class="upstream-item">
+                  <div v-for="upstream in getEnabledUpstreams(row as Rule)" :key="upstream.id" class="upstream-item">
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
@@ -303,7 +303,7 @@
                 </template>
                 <!-- 路径规则自定义上游（2026-09-21 用户裁定）：仅自定义路由开启且路径规则携带上游时，
                      主上游之后按路径规则分组展示（健康/指标键同 host:port，复用既有查询函数） -->
-                <template v-for="pathRule in healthPathRules(row)" :key="pathRule.id ?? pathRule.path">
+                <template v-for="pathRule in healthPathRules(row as Rule)" :key="pathRule.id ?? pathRule.path">
                   <div v-if="pathRule.upstreams && pathRule.upstreams.length > 0" class="path-rule-health-group">
                     <div class="path-rule-health-title">{{ pathRule.path }}（{{ pathRule.match_type === 'exact' ? '精确' : '前缀' }}）</div>
                     <div v-for="pu in pathRule.upstreams" :key="`${pu.address}:${pu.port}`" class="upstream-item">
@@ -344,7 +344,7 @@
               :loading="ruleTogglePending[row.caddy_id]"
               :disabled="isReadOnly || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
               :aria-label="`${row.name} 的启用状态`"
-              @change="toggleRule(row)"
+              @change="toggleRule(row as Rule)"
               class="status-switch"
             />
           </template>
@@ -354,25 +354,25 @@
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
               <el-tooltip
-                :disabled="!isReadOnly && canEditRule(row)"
-                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row, '证书申请中，请等待完成或失败后再修改规则')"
+                :disabled="!isReadOnly && canEditRule(row as Rule)"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再修改规则')"
               >
                 <div>
-                <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || saving || !canEditRule(row)">
+                <el-button type="primary" link size="small" @click="openWizard(row as Rule)" :disabled="isReadOnly || saving || !canEditRule(row as Rule)">
                     编辑
                   </el-button>
                 </div>
               </el-tooltip>
               <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
                 <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row)">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row as Rule)">
                   复制
                 </el-button>
                 </div>
               </el-tooltip>
               <el-tooltip :disabled="!isReadOnly && row.log_enabled" :content="isReadOnly ? readOnlyMessage : '该规则未开启访问日志'">
                 <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row)">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row as Rule)">
                   日志
                 </el-button>
                 </div>
@@ -380,17 +380,17 @@
               <!-- TCP 不再 v-if 隐藏（与只读禁用同构）：不可用项禁用 + hover 原因 -->
               <el-tooltip :disabled="row.protocol === 'http' && !isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="row.protocol === 'tcp' ? 'TCP 规则不经过安全链' : securityBindingsLoading ? '安全策略绑定加载中…' : securityBindingsError ? '安全策略绑定加载失败，请先点击上方重新加载' : readOnlyMessage">
                 <div>
-                <el-button type="primary" link size="small" :disabled="row.protocol === 'tcp' || isReadOnly || saving || securityBindingsLoading || securityBindingsError" @click="openBindDialog(row)">
+                <el-button type="primary" link size="small" :disabled="row.protocol === 'tcp' || isReadOnly || saving || securityBindingsLoading || securityBindingsError" @click="openBindDialog(row as Rule)">
                   安全
                 </el-button>
                 </div>
               </el-tooltip>
               <el-tooltip
-                :disabled="!isReadOnly && canDeleteRule(row) && certJobStatusOf(row) !== 'waiting_ca'"
-                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row, '证书申请中，请等待完成或失败后再删除规则')"
+                :disabled="!isReadOnly && canDeleteRule(row as Rule) && certJobStatusOf(row as Rule) !== 'waiting_ca'"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再删除规则')"
               >
                 <div>
-                <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canDeleteRule(row)">
+                <el-button type="danger" link size="small" @click="deleteRule(row as Rule)" :disabled="isReadOnly || !canDeleteRule(row as Rule)">
                     删除
                   </el-button>
                 </div>
@@ -586,14 +586,14 @@
                     size="small" 
                     class="upstream-input"
                     :aria-label="`上游第 ${$index + 1} 行主机地址`"
-                    :class="{ 'is-error': upstreamRowInvalid(row, $index) }"
+                    :class="{ 'is-error': upstreamRowInvalid(row as UpstreamInput, $index) }"
                     @blur="upstreamTouched[$index] = true"
                   />
                 </template>
               </el-table-column>
               <el-table-column label="端口" width="96">
                 <template #default="{ row, $index }">
-                  <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" :class="{ 'is-error': upstreamRowMissingPort(row, $index) }" :aria-label="`上游第 ${$index + 1} 行端口`" @blur="upstreamTouched[$index] = true" />
+                  <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" :class="{ 'is-error': upstreamRowMissingPort(row as UpstreamInput, $index) }" :aria-label="`上游第 ${$index + 1} 行端口`" @blur="upstreamTouched[$index] = true" />
                 </template>
               </el-table-column>
               <el-table-column label="协议" width="88">
@@ -3995,7 +3995,10 @@ const startLogStats = async () => {
   }
 }
 
-const onRuleLogTabChange = (tab: string) => {
+// el-tabs 的 tab-change 载荷是 TabPaneName（string | number），这里只按名字比较，
+// 参数类型跟随组件声明以免与组件的 emit 契约冲突。
+const onRuleLogTabChange = (name: string | number) => {
+  const tab = String(name)
   ruleLogRequestSeq++
   ruleLogTail.invalidate()
   logStatsInFlight.value = false

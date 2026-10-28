@@ -71,9 +71,21 @@ Open `http://localhost:8000` for the admin panel. First visit opens an initializ
 #    Frontend needs Node.js >= 22.18: `npm test` runs .ts files directly via
 #    node --test, which relies on default type stripping since that version;
 #    see the engines field in web/package.json
-cd web && npm install && npm run build && cd ..
+#    Use `npm ci` (not `npm install`): it installs strictly from
+#    package-lock.json instead of rewriting the lock file in place.
+cd web && npm ci && npm run build && cd ..
+
+#    Artifact self-proof: web/dist is pre-built and copied into the image as-is,
+#    so a stale dist is invisible (the panel version comes from the backend).
+#    After building, compare the stamp with the current commit:
+git rev-parse HEAD && cat web/dist/build-info.json
 
 # 2) Docker Compose (Linux; the primary node uses host networking)
+#    Mind the channel: the checked-in docker-compose.yml pins the current
+#    development line's beta tag (e.g. vX.Y.Z-beta, kept in sync with the
+#    Dockerfile VERSION by a gate). For a stable release use the `:latest`
+#    tag from the example above, or change both image tags to the matching
+#    stable tag.
 docker compose up -d
 
 # 3) Or build and push the image directly: VERSION is the formal version (what

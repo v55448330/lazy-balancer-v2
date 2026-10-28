@@ -486,26 +486,39 @@ func TestReplace_sharesStoreLockAndPreservesStateOnInvalidSnapshot(t *testing.T)
 	}
 
 	// When：Store 的读写锁被持有时，快照替换必须等待同一把锁。
-	// 原形态只用 50ms 固定窗口判定「未返回」——负载高
-	// 时 goroutine 尚未走到 fileMu.Lock() 也会静默通过（锁共享断言变成空
-	// 断言）。现按可观察副作用判定：锁内文件内容必须保持原快照，解锁后必须
-	// 变成 replacement；Replace 自身先取锁再解码，锁前准备工作为零。
+	// 旧形态靠固定墙钟窗口判定「goroutine 尚未返回」：负载高时 goroutine
+	// 根本没被调度到 fileMu.Lock()，断言就在「什么都没观察到」的情况下通过
+	// （真空断言）。现改用两个确定性测试缝，不再依赖调度时序：
+	//   ① beforeReplaceWrite 在持锁写盘的瞬间触发，缝内 TryLock 探测——
+	//      若 Replace 丢掉 fileMu.Lock()，探测成功（=无人持锁）即记违纪，
+	//      与 goroutine 何时被调度无关；
+	//   ② beforeReplaceLock 在取锁前触发，据此得知「Replace 已到加锁点」，
+	//      用它作争用屏障而不是 sleep。
 	replacement := []byte(`{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme-challenge.example.com.","value":"token","record_id":"200"}]}`)
-	fileMu.Lock()
-	started := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		close(started)
-		done <- Replace(dir, replacement)
-	}()
-	<-started
-	select {
-	case err := <-done:
-		fileMu.Unlock()
-		t.Fatalf("Replace 绕过ed store fileMu: err=%v", err)
-	case <-time.After(200 * time.Millisecond):
+	t.Cleanup(func() { beforeReplaceLock, beforeReplaceWrite = func() {}, func() {} })
+	wroteWithoutLock := false
+	beforeReplaceWrite = func() {
+		if fileMu.TryLock() {
+			fileMu.Unlock()
+			wroteWithoutLock = true
+		}
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(initial) {
+	if err := Replace(dir, replacement); err != nil {
+		t.Fatalf("replace replacement snapshot: %v", err)
+	}
+	if wroteWithoutLock {
+		t.Fatal("Replace 写盘时未持有 Store 的 fileMu（锁共享契约被破坏）")
+	}
+
+	contended := []byte(`{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme-challenge.example.com.","value":"contended","record_id":"202"}]}`)
+	fileMu.Lock()
+	atLockPoint := make(chan struct{})
+	beforeReplaceLock = func() { close(atLockPoint) }
+	done := make(chan error, 1)
+	go func() { done <- Replace(dir, contended) }()
+	<-atLockPoint // 屏障：Replace 已到 fileMu.Lock()，不再猜时间窗
+	beforeReplaceLock = func() {}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(replacement) {
 		fileMu.Unlock()
 		t.Fatalf("Replace wrote the file while store fileMu was held: content=%q err=%v", got, readErr)
 	}
@@ -513,7 +526,7 @@ func TestReplace_sharesStoreLockAndPreservesStateOnInvalidSnapshot(t *testing.T)
 	if err := <-done; err != nil {
 		t.Fatalf("replace after store lock release: %v", err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(replacement) {
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(contended) {
 		t.Fatalf("replace did not apply the snapshot after lock release: content=%q err=%v", got, readErr)
 	}
 

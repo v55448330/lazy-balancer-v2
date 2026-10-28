@@ -779,16 +779,11 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 	disableNetSampleWindowForTest(t)
 	// Given
 	originalReader := systemMetricsReadFile
+	captureLastNetStatsForTest(t)
 	lastNetStats.mu.Lock()
-	originalBytesIn, originalBytesOut, originalTime := lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time
 	lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = 100, 200, time.Now().Add(-time.Second)
 	lastNetStats.mu.Unlock()
-	t.Cleanup(func() {
-		systemMetricsReadFile = originalReader
-		lastNetStats.mu.Lock()
-		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = originalBytesIn, originalBytesOut, originalTime
-		lastNetStats.mu.Unlock()
-	})
+	t.Cleanup(func() { systemMetricsReadFile = originalReader })
 	firstRead := make(chan struct{})
 	secondRead := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -856,8 +851,8 @@ func TestGetRealtimeTraffic_rebaselines_after_counter_rollback(t *testing.T) {
 	disableNetSampleWindowForTest(t)
 	// Given
 	originalReader := systemMetricsReadFile
+	captureLastNetStatsForTest(t)
 	lastNetStats.mu.Lock()
-	originalBytesIn, originalBytesOut, originalTime := lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time
 	lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = 1000, 2000, time.Now().Add(-5*time.Second)
 	lastNetStats.mu.Unlock()
 	systemMetricsReadFile = func(path string) ([]byte, error) {
@@ -870,12 +865,7 @@ func TestGetRealtimeTraffic_rebaselines_after_counter_rollback(t *testing.T) {
 			return nil, errors.New("unexpected path: " + path)
 		}
 	}
-	t.Cleanup(func() {
-		systemMetricsReadFile = originalReader
-		lastNetStats.mu.Lock()
-		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = originalBytesIn, originalBytesOut, originalTime
-		lastNetStats.mu.Unlock()
-	})
+	t.Cleanup(func() { systemMetricsReadFile = originalReader })
 
 	// When
 	traffic, err := getRealtimeTraffic()

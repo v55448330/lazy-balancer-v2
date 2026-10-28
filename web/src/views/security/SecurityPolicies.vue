@@ -49,7 +49,7 @@
         </template>
         <el-table-column prop="name" label="策略名称" min-width="200">
           <template #default="{ row }">
-            <AccessibleLink type="primary" @click="openDialog(row)">{{ row.name }}</AccessibleLink>
+            <AccessibleLink type="primary" @click="openDialog(row as PolicySummary)">{{ row.name }}</AccessibleLink>
           </template>
         </el-table-column>
         <el-table-column label="关联规则" width="100" align="center">
@@ -82,7 +82,7 @@
         <el-table-column label="内容摘要" min-width="324">
           <template #default="{ row }">
             <div class="policy-summary-cell">
-              <span class="policy-summary-text" :title="policySummaryLine(row)">{{ policySummaryLine(row) }}</span>
+              <span class="policy-summary-text" :title="policySummaryLine(row as PolicySummary)">{{ policySummaryLine(row as PolicySummary) }}</span>
             </div>
           </template>
         </el-table-column>
@@ -110,10 +110,10 @@
         </el-table-column>
         <el-table-column v-if="!isReadOnly" label="操作" width="168" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openDialog(row)">{{ policyTypeOf(row) === 'mixed' ? '查看' : '编辑' }}</el-button>
-            <el-button v-if="policyTypeOf(row) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? '规则绑定数据加载中' : securityBindingsFailed ? '规则绑定数据加载失败，请先重新加载' : ''" @click="openBindRulesDialog(row)">绑定规则</el-button>
-            <el-button v-if="policyTypeOf(row) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row)">更新迁移</el-button>
-            <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? '查看' : '编辑' }}</el-button>
+            <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? '规则绑定数据加载中' : securityBindingsFailed ? '规则绑定数据加载失败，请先重新加载' : ''" @click="openBindRulesDialog(row as PolicySummary)">绑定规则</el-button>
+            <el-button v-if="policyTypeOf(row as PolicySummary) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row as PolicySummary)">更新迁移</el-button>
+            <el-button size="small" link type="danger" @click="handleDelete(row as PolicySummary)">删除</el-button>
           </template>
         </el-table-column>
 
@@ -451,7 +451,7 @@
                           popper-class="crs-rule-popper"
                           placeholder="选择规则组 / 单条规则"
                           class="exclusion-target-select"
-                          @update:model-value="(value: CascaderValue | undefined) => onExclusionTargetChange(row, value)"
+                          @update:model-value="(value: CascaderValue | null | undefined) => onExclusionTargetChange(row as CrsExcludedRow, value)"
                         >
                           <template #default="{ data }">
                             <div v-if="data.isRule" class="crs-rule-option" :title="`${data.value} — ${data.fullLabel}`">
@@ -476,14 +476,14 @@
                              整组冗余），排除恒优先——提示而非阻断。行内警告图标 +
                              tooltip 悬浮展示全文，不占布局流 -->
                         <el-tooltip
-                          v-if="exclusionRowConflict(row)"
-                          :content="exclusionRowConflict(row)"
+                          v-if="exclusionRowConflict(row as CrsExcludedRow)"
+                          :content="exclusionRowConflict(row as CrsExcludedRow)"
                           placement="top"
                           :show-after="200"
                         >
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
-                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row)">
+                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)">
                           <el-radio value="all">全部 IP</el-radio>
                           <el-radio value="ip">指定 IP</el-radio>
                           <el-radio value="list">地址列表</el-radio>
@@ -503,7 +503,7 @@
                           :disabled="crsFieldsOff || isReadOnly"
                           placeholder="输入 IP/CIDR 后回车"
                           class="exclusion-scope-control-ip"
-                          @change="(value: string[]) => onExclusionIpsChange(row, value)"
+                          @change="(value: string[]) => onExclusionIpsChange(row as CrsExcludedRow, value)"
                         />
                         <el-select
                           v-else-if="row.scope === 'list'"
@@ -1212,9 +1212,10 @@ const policySummaryLine = (row: PolicySummary): string => {
     return row.has_rate_limit ? `${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}` : '未启用'
   }
   if (type === 'stage3') {
-    const crsCount = Array.isArray(row.crs_rule_groups)
-      ? row.crs_rule_groups.length
-      : parseIPList(typeof row.crs_rule_groups === 'string' ? row.crs_rule_groups : undefined).length
+    // 组数口径与编辑器写回同源（normalizeCrsGroups）：历史文件名前缀、重复值、
+    // 系统基础组（01/49/59）都不该让「N 组」虚增——否则同一策略在编辑器里是
+    // 2 组、在列表摘要里是 4 组，用户无从判断哪份是生效配置。
+    const crsCount = normalizeCrsGroups(parseUnknownStrings(row.crs_rule_groups)).length
     // WAF 全关=CRS 与自定义规则均不生效（共享 buildStage3Rows 同门）——不得把
     // 保留的自定义条数说成生效中。
     if (row.mode === 'off') return 'WAF 关闭'
@@ -1441,7 +1442,9 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
   if (!d) return []
   const trustCount = mergeIpEntryCount(ipLists.value, parseIPList(d.ip_whitelist), parseRefIds(d.ip_whitelist_refs))
   const geoCount = parseIPList(d.geoip_countries).length
-  const crsGroupCount = parseIPList(d.crs_rule_groups).length
+  // 与编辑器/列表摘要同一计数口径（归一后长度）：库值为字符串 JSON，原样计数
+  // 会把历史文件名前缀、重复值、系统基础组算成用户选择，详情与编辑器互相矛盾。
+  const crsGroupCount = normalizeCrsGroups(parseIPList(d.crs_rule_groups)).length
   const excludedCount = parseCrsExcludedRules(d.crs_excluded_rules).length
   const customCount = parseCustomRuleIds(d.custom_rules).length
   const stage3Rows: Array<{ label: string; value: string }> = [{ label: 'WAF 模式', value: wafModeLabel(d.mode) }]
@@ -2118,7 +2121,8 @@ const crsGroupCascaderValue = computed<string[][]>({
 const exclusionTargetPath = (target: string): string[] => crsValueToPath(target, 'exclusion') ?? []
 
 // 单选 + checkStrictly（emitPath 默认 true）：值为路径数组，取末段（组号或规则 ID）写入 target
-const onExclusionTargetChange = (row: CrsExcludedRow, value: CascaderValue | undefined): void => {
+// el-cascader 的 update:model-value 载荷含 null（清空），与 undefined 同义
+const onExclusionTargetChange = (row: CrsExcludedRow, value: CascaderValue | null | undefined): void => {
   if (!Array.isArray(value) || value.length === 0) { row.target = ''; return }
   const leaf = value[value.length - 1]
   row.target = typeof leaf === 'string' ? leaf : ''
@@ -3153,6 +3157,22 @@ const confirmExtract = async (): Promise<void> => {
   } finally { extracting.value = false }
 }
 
+// 拦截页列表按弹框打开刷新：判「页面已删除」必须用本次打开的权威快照。旧实现
+// 直接拿页面加载时的 blockPages 判定——他端/API 在本页加载后新建的页面会被读成
+// 「已删除」，并被静默改写成默认页（保存即落库，拦截响应体/状态码归因随之改变）。
+// 返回 false = 本次未取得权威快照，调用方不得据此改写用户已绑定的页面。
+const refreshBlockPages = async (openSeq: number): Promise<boolean> => {
+  try {
+    const res = await request.get<APIResponse<BlockPage[]>>('/security/block-pages', { silent: true })
+    if (openSeq !== policyDialogOpenSeq) return false
+    blockPages.value = res.data || []
+    blockPagesLoaded.value = true
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function openDialog(row?: PolicySummary) {
   // 对话框打开序列号（同 Rules.vue wizardOpenSeq 模式）——
   // 详情 GET 在途期间用户再点"新建策略"或另一行"编辑"，首个返回会覆盖
@@ -3171,7 +3191,10 @@ async function openDialog(row?: PolicySummary) {
   editingPolicyType.value = row ? policyTypeOf(row) : null
   if (row) {
     try {
-      const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
+      const [res, blockPagesFresh] = await Promise.all([
+        request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`),
+        refreshBlockPages(openSeq),
+      ])
       if (openSeq !== policyDialogOpenSeq) return
       const d = res.data?.policy
       if (!d) throw new Error('策略详情响应缺少数据')
@@ -3214,11 +3237,17 @@ async function openDialog(row?: PolicySummary) {
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
       boundRules.value = res.data?.bindings || []
       // 拦截页面失效兜底：block_page_id=0 是「无拦截页面」的合法状态（schema 默认 0），
-      // 原样保留不得回退；仅当引用的页面 id>0 且已被删除（select 匹配不到）时回退
-      // 默认页（优先 #1，其次第一个可用页），避免保存写回无效 id
-      if (form.value.block_page_id > 0 && blockPages.value.length > 0 && !blockPages.value.some((p) => p.id === form.value.block_page_id)) {
-        form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0].id
-        ElMessage.warning('原拦截页面已删除，已回退默认页面')
+      // 原样保留不得回退；仅当引用的页面 id>0 且「本次打开取到的权威快照」里不存在
+      // 时才回退默认页（优先 #1，其次第一个可用页），避免保存写回无效 id。
+      // 快照取不到（refreshBlockPages 失败）时保持用户已绑定的页面不动——用陈旧
+      // 快照或空列表判「已删除」会把仍存在的页面静默改掉。
+      if (form.value.block_page_id > 0 && blockPagesFresh) {
+        if (!blockPages.value.some((p) => p.id === form.value.block_page_id)) {
+          form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0]?.id ?? 0
+          ElMessage.warning('原拦截页面已删除，已回退默认页面')
+        }
+      } else if (form.value.block_page_id > 0 && !blockPagesFresh) {
+        ElMessage.warning('拦截页列表刷新失败，未能核对所选拦截页；保存前请刷新页面重试')
       }
     } catch (error: unknown) {
       // catch 路径也要先比对序列号——GET 失败的过期请求会清空

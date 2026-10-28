@@ -58,7 +58,9 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
     || (status.observed === true && status.healthy === false)
   if (!needsAttention) return ''
   if (status.task_state === 'stopped') {
-    return '安全事件采集任务已停止（未在运行），安全事件不再更新；请到「任务监控」检查并启用「安全事件采集」任务。'
+    // 任务只拥有「尾读存量 + spool 补采 + 审计日志轮转 + 健康记账」；实时 IPC
+    // 主路径不经调度，事件仍入库。文案不得说成「事件不再更新」。
+    return '安全事件采集任务已停止（未在运行）：spool 补采与审计日志轮转已暂停，实时 IPC 入库仍在运行（新事件仍会入库）；请到「任务监控」检查并启用「安全事件采集」任务。'
   }
   if (status.writer_stats_unavailable === true) {
     return '审计写侧计数不可用（计数侧车连续读取失败）：写侧丢弃/写盘错误计数显示 0 不代表无丢弃；请检查审计日志目录的磁盘空间与写权限。'
@@ -75,14 +77,15 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
     const failures = status.consecutive_failures ?? 0
     if (failures > 0) {
       const detail = status.last_error ? `：${status.last_error}` : ''
-      return `安全事件采集连续失败 ${failures} 次${detail}，事件数据可能滞后；请检查任务日志与审计日志目录。`
+      return `安全事件采集连续失败 ${failures} 次${detail}：spool 待补采事件可能滞后入库（实时 IPC 入库仍在运行）；请检查任务日志与审计日志目录。`
     }
     if ((status.skipped_regions ?? 0) > 0) {
       const lastSkip = status.last_skip_at ? `，最近 ${status.last_skip_at}` : ''
       return `安全事件采集跳过了 ${status.skipped_regions} 处畸形区（累计 ${humanBytes(status.skipped_bytes ?? 0)}${lastSkip}）：该段审计数据对应的事件已永久丢失；请检查审计日志是否被截断或存在并发写入异常。`
     }
-    // 后端健康位为 false 但前端已知归因均不成立：不虚构「连续失败 0 次」。
-    return '安全事件采集健康位异常（后端未提供进一步归因，可能为任务未运行或采集停摆）；请检查任务日志与审计日志目录。'
+    // 后端健康位为 false 但前端已知归因均不成立：不虚构「连续失败 0 次」，
+    // 也不得暗示事件停更（实时 IPC 入库不经该任务调度）。
+    return '安全事件采集健康位异常（后端未提供进一步归因，可能为补采任务未运行或补采停摆；实时 IPC 入库仍在运行）；请检查任务日志与审计日志目录。'
   }
   // data_loss 单独成立（当前已恢复但曾丢失）：必须区分「整条事件丢失」与
   // 「事件在库但规则命中明细被截断」——后者说成「事件可能缺失」会误导排障。

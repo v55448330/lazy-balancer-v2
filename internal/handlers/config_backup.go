@@ -317,6 +317,11 @@ var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 // 用于构造「预锁读与加锁之间 live 状态变化」的 TOCTOU 回归。
 var configImportBeforeLock func()
 
+// configImportAfterSessionHook 仅测试注入：会话建立（引擎已暂停、CA 队列已
+// hold、caddyOpMu 已取、事务已开）之后、核心体第一条语句之前触发，用于断言
+// 「此后的写入不再受请求取消影响」。
+var configImportAfterSessionHook func()
+
 // configBackupExportAfterDBSnapshot 仅测试注入：DB 快照读取完成、WAF bundle
 // 构建之前触发，用于断言文件锁在快照期间已持有。
 var configBackupExportAfterDBSnapshot func()
@@ -3796,7 +3801,10 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 	// 值校验，否则携带部分 admin_tls_* 键的备份可能以错误基线通过校验）。
 	merged, err := services.LoadAdminTLSConfigE()
 	if err != nil {
-		return fmt.Errorf("读取当前管理面板 HTTPS 配置失败，无法校验备份：%w", err)
+		// 读的是**当前库**现状，不是备份内容：归入基础设施读失败族，由导入
+		// 入口映射为 500 + 固定文案（否则 400「备份校验失败」把管理员引向
+		// 反复更换备份文件，并回显底层驱动文本）。
+		return importInfraReadFailure(fmt.Errorf("读取当前管理面板 HTTPS 配置失败，无法校验备份：%w", err))
 	}
 	if value, exists := config["admin_tls_enabled"]; exists {
 		merged.Enabled = backupBooleanEnabled(value)
@@ -4138,8 +4146,15 @@ func validateV2BackupRuntimeSettings(config map[string]any, tables map[string][]
 			if err := json.Unmarshal([]byte(text), &oidcCfg); err != nil {
 				return fmt.Errorf("备份的 OIDC 配置不是有效 JSON: %w", err)
 			}
-			if oidcCfg.Enabled && (strings.TrimSpace(oidcCfg.Issuer) == "" || strings.TrimSpace(oidcCfg.ClientID) == "") {
-				return fmt.Errorf("备份的 OIDC 配置已启用但缺少 issuer 或 client_id")
+			if oidcCfg.Enabled {
+				// 与面板保存门/公开状态/登录入口共用同一条完整性判据
+				// （OIDCConfig.usable：必填 client_secret + issuer URL 合规）。
+				// 只查 issuer/client_id 会放行「已启用但不可用」的配置——公开
+				// 状态虽隐藏按钮，直连 /auth/oidc/login 仍进入 discovery/令牌
+				// 交换并必败（表面启用、实际不可用），只能再改一次配置恢复。
+				if err := oidcCfg.usable(); err != nil {
+					return fmt.Errorf("备份的 OIDC 配置已启用但不可用: %w", err)
+				}
 			}
 		}
 	}
@@ -6098,6 +6113,15 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	defer session.close()
 	// 失败文案/审计的动作前缀由 begin 时传入的 action 单源携带（导入/还原）。
 	tx := session.tx
+	// 会话已建立（引擎已暂停、CA 队列已 hold、caddyOpMu 已取、事务已开）：
+	// 此后的写入一律走 session.ctx。请求 ctx 只承担排空/取锁阶段的语义——
+	// 若核心体仍绑请求 ctx，客户端断连/反代超时（分钟级导入很常见）会让
+	// tx.ExecContext 返回 context.Canceled，已开始的导入被整体中止（回滚 +
+	// WAF 快照回退），与协调器「会话建立后不得因断连取消」的契约相反。
+	ctx = session.ctx
+	if configImportAfterSessionHook != nil {
+		configImportAfterSessionHook()
+	}
 	// 初检可能读取 live certificate_configs/ca_providers；从读到
 	// 取得 caddyOpMu 的窗口内 DeleteCertificateConfig 可删除被引用行。此处已在
 	// 锁内，重跑引用/TLS 形态校验；若初检已有悬挂（soft 警告语义）则不改变其

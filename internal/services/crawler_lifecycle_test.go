@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -266,5 +268,230 @@ func TestCrawlerRunUpdate_demoteSkipsWithoutWriting(t *testing.T) {
 	}
 	if lists != 0 {
 		t.Fatalf("降级后不得写入名单行: rows=%d", lists)
+	}
+}
+
+// 取消轮的后置投影收敛 ——
+
+// 前序源已成功写库（changedCount>0）后在下一源下载期间取消：循环后的唯一
+// 收敛块被提前 return 绕过，内置名单的 ACL/信任投影会停留旧版（同名内容
+// 不再变化，后续轮次不会重试）。取消轮必须仍执行一次收敛——主节点、非降级、
+// 用不随用户取消中止的复核口径，且整轮只收敛一次。
+func TestCrawlerRunUpdate_cancelAfterCommittedSourceConvergesProjection(t *testing.T) {
+	_, database := newClusterTestService(t)
+	secondStarted := setupCrawlerCommitThenCancelFixture(t, database, func() {})
+
+	var refreshed atomic.Int64
+	oldRefresher, oldReloader := threatProjectionRefresher, threatReloader
+	threatProjectionRefresher = func() (IPListProjectionOutcome, error) {
+		refreshed.Add(1)
+		return ProjectionConverged, nil
+	}
+	threatReloader = func() error {
+		t.Error("热路径已证实收敛，不得回退重载")
+		return nil
+	}
+	t.Cleanup(func() { threatProjectionRefresher, threatReloader = oldRefresher, oldReloader })
+
+	runErr := runCrawlerUpdateUntilSecondSourceThenCancel(t, secondStarted)
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("取消须回传 ctx 错误，得到 %v", runErr)
+	}
+	if got := refreshed.Load(); got != 1 {
+		t.Fatalf("取消轮投影收敛次数=%d, want 1（已成功源的名单必须进入运行投影）", got)
+	}
+	assertCrawlerCommitThenCancelSourceStates(t, database)
+}
+
+// 取消发生在已成功源之后、且节点已降级：投影收敛是主节点写面动作，从节点
+// 必须零写（引用方由主节点后续轮次收敛）。
+func TestCrawlerRunUpdate_cancelAfterCommittedSourceOnSlaveSkipsProjection(t *testing.T) {
+	_, database := newClusterTestService(t)
+	secondStarted := setupCrawlerCommitThenCancelFixture(t, database, func() {
+		if _, err := database.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+			t.Errorf("demote: %v", err)
+		}
+	})
+
+	var refreshed atomic.Int64
+	oldRefresher, oldReloader := threatProjectionRefresher, threatReloader
+	threatProjectionRefresher = func() (IPListProjectionOutcome, error) {
+		refreshed.Add(1)
+		return ProjectionConverged, nil
+	}
+	threatReloader = func() error {
+		refreshed.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { threatProjectionRefresher, threatReloader = oldRefresher, oldReloader })
+
+	runErr := runCrawlerUpdateUntilSecondSourceThenCancel(t, secondStarted)
+	if !errors.Is(runErr, taskengine.ErrTaskSkipped) {
+		t.Fatalf("降级轮须回传 ErrTaskSkipped，得到 %v", runErr)
+	}
+	if got := refreshed.Load(); got != 0 {
+		t.Fatalf("从节点取消轮写投影 %d 次, want 0（从节点零写）", got)
+	}
+}
+
+// 取消发生在已成功源之后、且角色已不可判定（DB 行缺失）：不得猜测主从，
+// 收敛零写并按失败归因（引用方由后续轮次收敛）。
+func TestCrawlerRunUpdate_cancelAfterCommittedSourceWithUnknownRoleSkipsProjection(t *testing.T) {
+	_, database := newClusterTestService(t)
+	secondStarted := setupCrawlerCommitThenCancelFixture(t, database, func() {
+		if _, err := database.Exec(`DELETE FROM global_config WHERE id=1`); err != nil {
+			t.Errorf("drop global_config: %v", err)
+		}
+	})
+
+	var refreshed atomic.Int64
+	oldRefresher, oldReloader := threatProjectionRefresher, threatReloader
+	threatProjectionRefresher = func() (IPListProjectionOutcome, error) {
+		refreshed.Add(1)
+		return ProjectionConverged, nil
+	}
+	threatReloader = func() error {
+		refreshed.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { threatProjectionRefresher, threatReloader = oldRefresher, oldReloader })
+
+	runErr := runCrawlerUpdateUntilSecondSourceThenCancel(t, secondStarted)
+	if runErr == nil || errors.Is(runErr, taskengine.ErrTaskSkipped) {
+		t.Fatalf("角色不可判定须回传普通错误（非降级哨兵），得到 %v", runErr)
+	}
+	if got := refreshed.Load(); got != 0 {
+		t.Fatalf("角色不可判定时投影收敛 %d 次, want 0", got)
+	}
+}
+
+// 正常轮（无取消/无降级）：收敛仍只发生一次，取消轮的后置通道不得叠加。
+func TestCrawlerRunUpdate_completedRoundConvergesProjectionOnce(t *testing.T) {
+	_, database := newClusterTestService(t)
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"prefixes":[{"ipv4Prefix":"66.249.68.0/24"},{"ipv4Prefix":"66.249.69.0/24"}]}`))
+	}))
+	t.Cleanup(ts.Close)
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0;
+		UPDATE security_crawler_sources SET update_enabled=1,url=? WHERE name IN ('googlebot','bingbot')`, ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	for _, engine := range []string{"googlebot", "bingbot"} {
+		if err := upsertCrawlerIPList(engine, []string{"66.249.66.0/24", "66.249.67.0/24"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var refreshed atomic.Int64
+	oldRefresher, oldReloader := threatProjectionRefresher, threatReloader
+	threatProjectionRefresher = func() (IPListProjectionOutcome, error) {
+		refreshed.Add(1)
+		return ProjectionConverged, nil
+	}
+	threatReloader = func() error {
+		t.Error("热路径已证实收敛，不得回退重载")
+		return nil
+	}
+	t.Cleanup(func() { threatProjectionRefresher, threatReloader = oldRefresher, oldReloader })
+
+	if err := GetCrawlerUpdateManager().RunUpdate(context.Background(), taskengine.RunContext{Ctx: context.Background(), Trigger: "manual"}); err != nil {
+		t.Fatalf("RunUpdate: %v", err)
+	}
+	if got := refreshed.Load(); got != 1 {
+		t.Fatalf("正常轮投影收敛次数=%d, want 1", got)
+	}
+}
+
+// setupCrawlerCommitThenCancelFixture 造「两个启用源共享一个测试服务器」的
+// 形态：首个请求返回合法名单（源已提交），后续请求阻塞到取消（下载在途）。
+// mutateBeforeBlock 在该请求阻塞前执行（注入降级/角色不可判定）。
+func setupCrawlerCommitThenCancelFixture(t *testing.T, database *sql.DB, mutateBeforeBlock func()) <-chan struct{} {
+	t.Helper()
+	oldFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldFile })
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int64
+	secondStarted := make(chan struct{})
+	release := make(chan struct{})
+	var secondOnce sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"prefixes":[{"ipv4Prefix":"66.249.68.0/24"},{"ipv4Prefix":"66.249.69.0/24"}]}`))
+			return
+		}
+		// 第二个源：先把运行时状态改到目标形态，再阻塞到取消。
+		secondOnce.Do(func() {
+			mutateBeforeBlock()
+			close(secondStarted)
+		})
+		<-release
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) })
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=1, url=? WHERE name IN ('googlebot','bingbot')`, ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	// 收缩/扩张门基线走 DB 分支（先置 2 条既有快照，同生产形态）。
+	for _, engine := range []string{"googlebot", "bingbot"} {
+		if err := upsertCrawlerIPList(engine, []string{"66.249.66.0/24", "66.249.67.0/24"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		// 测试间不得残留从节点/缺行形态（隔离库仍保持一致性语义）。
+		_, _ = database.Exec(`UPDATE global_config SET is_master=1 WHERE id=1`)
+	})
+	return secondStarted
+}
+
+// runCrawlerUpdateUntilSecondSourceThenCancel 等第二个源进入下载（此时第一个
+// 源已提交）后取消 ctx，确定性触发「已成功源之后取消」窗口（无 sleep 猜时序）。
+func runCrawlerUpdateUntilSecondSourceThenCancel(t *testing.T, started <-chan struct{}) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- GetCrawlerUpdateManager().RunUpdate(ctx, taskengine.RunContext{Ctx: ctx, Trigger: "manual"})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("第二个源未开始下载")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(15 * time.Second):
+		t.Fatal("取消后 RunUpdate 未返回")
+		return nil
+	}
+}
+
+// assertCrawlerCommitThenCancelSourceStates 取消轮源状态：一个源 success
+// （已提交），另一个 cancelled（在途取消）。
+func assertCrawlerCommitThenCancelSourceStates(t *testing.T, database *sql.DB) {
+	t.Helper()
+	var success, cancelled int
+	if err := database.QueryRow(`SELECT
+		SUM(IIF(update_status='success',1,0)), SUM(IIF(update_status='cancelled',1,0))
+		FROM security_crawler_sources WHERE update_enabled=1`).Scan(&success, &cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if success != 1 || cancelled != 1 {
+		t.Fatalf("源状态 success=%d cancelled=%d, want 1/1（已成功源保持 success）", success, cancelled)
 	}
 }

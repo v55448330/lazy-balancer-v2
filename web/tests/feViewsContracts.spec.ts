@@ -67,6 +67,19 @@ test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
   }
 })
 
+// 安全策略绑定横幅的重试按钮此前借用规则列表的 loading：点「重新加载」在途零
+// 反馈；反过来规则列表轮询时它显示与本次重试无关的 loading。
+test('安全策略绑定横幅重试按钮绑定绑定数据自身的在途状态', () => {
+  assert.match(
+    rules,
+    /<el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">重新加载<\/el-button>/,
+    '重试按钮必须绑定 securityBindingsLoading',
+  )
+  const fetch = section(rules, 'const fetchSecurityBindings =', 'const retrySecurityBindings')
+  assert.match(fetch, /securityBindingsLoading\.value = true/, '取数入口必须置在途')
+  assert.match(fetch, /finally[\s\S]*?securityBindingsLoading\.value = false/, '取数入口必须收尾在途')
+})
+
 test('Keys 从节点判据走 isSlaveNode，四个写控件均解释禁用原因', () => {
   assert.match(keys, /authStore\.isSlaveNode/)
   assert.doesNotMatch(keys, /nodeMode !== 'master'/)
@@ -113,8 +126,9 @@ test('重置密码/删除/重置 MFA 统一受 submitting 写门保护', () => {
     assert.match(body, /if \(isReadOnly\.value \|\| submitting\.value \|\|/, `${start} 缺少 submitting 门`)
   }
   const buttons = openTags(users, 'el-button')
-  const resetButton = buttons.find((tag) => tag.includes('@click="resetPassword(row)"'))
-  const deleteButton = buttons.find((tag) => tag.includes('@click="deleteUser(row)"'))
+  // 调用点带 `as UserListItem` 断言（插槽 row 是 DefaultRow），仍是整行对象
+  const resetButton = buttons.find((tag) => /@click="resetPassword\(row(?: as [A-Za-z]+)?\)"/.test(tag))
+  const deleteButton = buttons.find((tag) => /@click="deleteUser\(row(?: as [A-Za-z]+)?\)"/.test(tag))
   assert.ok(resetButton)
   assert.ok(deleteButton)
   assert.match(resetButton, /:disabled="[^"]*\bsubmitting\b/)

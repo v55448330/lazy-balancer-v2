@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { code, section } from './_helpers.ts'
+import { code, enclosingOpenTag, section } from './_helpers.ts'
 
 test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐，操作列保持单行', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
@@ -15,7 +15,17 @@ test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐�
     assert.ok(section(page, '.tm-nowrap-table .tm-op-cell .cell) {', '}').includes(declaration), `操作列样式缺少 ${declaration}`)
   }
   assert.ok(section(page, '.tm-nowrap-table .tm-op-cell .el-button) {', '}').includes('margin-left: 0'))
-  assert.doesNotMatch(page, /<el-tooltip[\s\S]{0,300}<div>\s*<el-button[\s\S]{0,120}>运行<\/el-button>/)
+  // 「运行」按钮的 tooltip 必须只在有冷却原因时才出现（`:disabled` 门）：
+  // 恒定出现的空 tooltip 会吞掉悬停/焦点提示。按标签配对判定包裹关系，
+  // 不用 `[\s\S]{0,300}` 这类距离型正则——标记一变长它就可能恒真（永远放行）。
+  const runs = [...page.matchAll(/<el-button\b(?:[^>"']|"[^"]*"|'[^']*')*>运行<\/el-button>/g)]
+  assert.ok(runs.length > 0, '前置：「运行」按钮必须存在（否则本断言空转）')
+  for (const run of runs) {
+    const tooltip = enclosingOpenTag(page, 'el-tooltip', run.index)
+    assert.ok(tooltip !== null, `「运行」按钮必须在冷却提示 tooltip 内：${run[0]}`)
+    assert.match(tooltip, /v-if="row\.triggerable"/, `「运行」tooltip 必须按可用性渲染：${tooltip}`)
+    assert.match(tooltip, /:disabled="[^"]*runCooldownReason\(/, `tooltip 必须按冷却原因条件化（否则永远显示空提示）：${tooltip}`)
+  }
 })
 
 test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时频率', () => {

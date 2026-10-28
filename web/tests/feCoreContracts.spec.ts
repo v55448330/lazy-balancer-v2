@@ -23,12 +23,18 @@ test('OIDC 拒绝分支只走公共初始化一次', () => {
 })
 
 test('流程弹框每次打开都使上一会话统计响应失效', () => {
-  const opened = section(code(FLOW), 'const onDialogOpen =', 'const loadCertInfo =')
+  const flow = code(FLOW)
+  const opened = section(flow, 'const onDialogOpen =', 'const loadCertInfo =')
   const invalidateAt = opened.indexOf('statsSeq++')
   const branchAt = opened.indexOf('const caddyId =')
   assert.ok(invalidateAt >= 0, '打开入口必须推进统计序号')
   assert.ok(branchAt > invalidateAt, '无 caddyId 与 TCP 早退之前就必须失效旧统计')
-  assert.match(opened, /const seq = statsSeq/, 'HTTP 分支沿用本轮序号，不得再次推进')
+  // 取数本身在 loadStageStats 内（打开与面板「重试」共用），它自带一次序号推进
+  // ——调用方不再内联拼接请求。
+  assert.match(opened, /loadStageStats\(caddyId\)/, 'HTTP 分支必须走共用取数函数')
+  const loader = section(flow, 'const loadStageStats =', 'const retryStageStats =')
+  assert.match(loader, /const seq = \+\+statsSeq/, '取数函数必须自带会话序号推进')
+  assert.match(loader, /statsFailed\.value = true/, '失败必须置失败位（与空载荷区分）')
 })
 
 test('信息横幅注释不引用已删除的样式类（文档钉）', () => {
@@ -95,9 +101,10 @@ test('任务手动刷新与轮询共用最新读取会话', () => {
 
 test('运行与取消按钮在任一任务操作在途时禁用', () => {
   const buttons = openTags(code(TASK_MONITOR), 'el-button')
-  for (const action of ['onTrigger(row)', 'onCancel(row)']) {
-    const button = buttons.find((tag) => tag.includes(`@click="${action}"`))
-    assert.ok(button, `${action} 按钮必须存在`)
+  // 插槽 row 是 DefaultRow，调用点带 `as TaskInfo` 断言（不改变「收到整行」语义）。
+  for (const action of ['onTrigger', 'onCancel']) {
+    const button = buttons.find((tag) => new RegExp(`@click="${action}\\(row(?: as [A-Za-z]+)?\\)"`).test(tag))
+    assert.ok(button, `${action}(row) 按钮必须存在`)
     assert.match(button, /taskActionPendingId !== null/)
   }
 })

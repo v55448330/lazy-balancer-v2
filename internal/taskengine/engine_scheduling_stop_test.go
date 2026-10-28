@@ -392,3 +392,72 @@ func TestEngine_RegisterAfterStopReportsFieldErrorFirst(t *testing.T) {
 		t.Fatalf("合法描述符在已停引擎注册 err=%v, want ErrEngineStopped", err)
 	}
 }
+
+// Given 引擎因「排程槽连续未推进」自行停调（schedStopReason=fail-streak），且
+// 该任务带自愈预算用尽标记。
+// When 用户显式停止该任务（不经重新开启）。
+// Then 停调来源与自愈用尽标记都随用户停止清空——视图不得把用户主动停止
+// 呈现成引擎停调/failed；之后的引擎侧停调仍照常记录来源。
+func TestEngine_UserStopClearsEngineStopAttribution(t *testing.T) {
+	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
+	previousLogDir := LogDir()
+	SetLogDir(t.TempDir())
+	t.Cleanup(func() { SetLogDir(previousLogDir) })
+	pastSlot := time.Now().Add(-time.Minute)
+	const id = "t-user-stop-attribution"
+	if err := e.Register(Descriptor{
+		ID: id, Family: "t", Name: "用户停止清来源", Kind: KindScheduled, RunsOn: RoleAny,
+		NextSlotFn: func() time.Time { return pastSlot },
+		Run:        func(RunContext) error { return os.ErrDeadlineExceeded },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.SetRole(true)
+
+	// engineStop 让引擎自己停调：失败轮 + 已到停调预算前一轮。
+	engineStop := func() {
+		t.Helper()
+		e.mu.RLock()
+		r := e.regs[id]
+		e.mu.RUnlock()
+		if r == nil {
+			t.Fatal("任务未注册")
+		}
+		r.mu.Lock()
+		r.nextScheduledTime = pastSlot
+		r.schedFailStreak = scheduledFailStreakStopLimit - 1
+		r.mu.Unlock()
+		if _, err := e.RunSync(id, "auto", ""); err == nil {
+			t.Fatal("注入失败的任务应记录失败")
+		}
+	}
+
+	e.StartLoop(id)
+	engineStop()
+	if m, _ := e.Lookup(id); m.ScheduleStoppedReason != ScheduleStopReasonFailStreak {
+		t.Fatalf("前置状态错误：引擎停调来源=%q, want %q", m.ScheduleStoppedReason, ScheduleStopReasonFailStreak)
+	}
+
+	e.mu.RLock()
+	r := e.regs[id]
+	e.mu.RUnlock()
+	r.mu.Lock()
+	r.restartExhausted = true
+	r.mu.Unlock()
+
+	e.StopLoop(id)
+	m, _ := e.Lookup(id)
+	if m.ScheduleStoppedReason != "" {
+		t.Fatalf("用户主动停止不得保留引擎停调来源, got %q", m.ScheduleStoppedReason)
+	}
+	if m.RestartExhausted {
+		t.Fatal("用户主动停止不得保留自愈预算用尽标记（视图会误呈现 failed）")
+	}
+
+	// 清空只针对用户停止路径：其后引擎侧停调仍须记录来源。
+	e.StartLoop(id)
+	engineStop()
+	if m, _ := e.Lookup(id); m.ScheduleStoppedReason != ScheduleStopReasonFailStreak {
+		t.Fatalf("引擎侧停调来源丢失: %q, want %q", m.ScheduleStoppedReason, ScheduleStopReasonFailStreak)
+	}
+}

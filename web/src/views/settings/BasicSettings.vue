@@ -336,8 +336,8 @@
 
       <template #footer>
         <el-button @click="importDialogVisible = false">取消</el-button>
-        <!-- 0 选择与只读态一律置灰（函数级守卫见 confirmImport）-->
-        <el-button type="primary" :disabled="!importValidation?.valid || !importPreviewSelected || isReadOnly" :loading="importing" @click="confirmImport">确认导入</el-button>
+        <!-- 未选分类、无有效校验、只读或非主节点一律置灰（函数级守卫见 confirmImport）-->
+        <el-button type="primary" :disabled="!importValidation?.valid || !importPreviewSelected || backupDisabled" :loading="importing" @click="confirmImport">确认导入</el-button>
       </template>
     </el-dialog>
 
@@ -434,8 +434,8 @@
           <!-- 内容列只显备份范围（2026-09-21 用户裁定）；各表行数明细+触发方式移入 hover -->
           <el-table-column label="内容" width="230" class-name="auto-backup-scope-cell">
             <template #default="{ row }">
-              <el-tooltip :content="autoBackupDetailTip(row)" placement="top" :show-after="150">
-                <span class="auto-backup-scope-text" :class="{ 'is-warning': row.sections_error }">{{ autoBackupScopeText(row) }}</span>
+              <el-tooltip :content="autoBackupDetailTip(row as AutoBackupRow)" placement="top" :show-after="150">
+                <span class="auto-backup-scope-text" :class="{ 'is-warning': row.sections_error }">{{ autoBackupScopeText(row as AutoBackupRow) }}</span>
               </el-tooltip>
             </template>
           </el-table-column>
@@ -444,9 +444,9 @@
           </el-table-column>
           <el-table-column label="操作" width="150" align="right">
             <template #default="{ row }">
-              <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row)">下载</el-button>
-              <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row)">还原</el-button>
-              <el-button link type="danger" size="small" :loading="deletingBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="deleteAutoBackup(row)">删除</el-button>
+              <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row as AutoBackupRow)">下载</el-button>
+              <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row as AutoBackupRow)">还原</el-button>
+              <el-button link type="danger" size="small" :loading="deletingBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="deleteAutoBackup(row as AutoBackupRow)">删除</el-button>
             </template>
           </el-table-column>
           <template #empty><el-empty description="暂无备份" :image-size="70" /></template>
@@ -496,6 +496,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { useSettingsDraft, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
 import { restartServiceWithFeedback } from '@/utils/restart'
@@ -1108,6 +1109,10 @@ const handleImportFile = async (event: Event): Promise<void> => {
     return
   }
   importValidating.value = true
+  // 同一弹框内换文件必须作废模块级预览缓存：缓存键只采样首尾各 512KiB + 长度，
+  // 新旧备份长度相同且改动落在中段时指纹相同，会拿到上一份备份的预览结论
+  // （「无冲突/校验正常」），与随后导入的真实结果不一致。缓存只对当前这份备份负责。
+  invalidateImportPreviews()
   try {
     // v2.3.0 lbbak 为二进制 tar.gz——按魔数选择读取与提交方式。
     // 先剥 UTF-8 BOM 再做魔数检测（与后端 config_backup.go
@@ -1180,6 +1185,13 @@ const postImportValidation = async (sections: readonly string[], signal: AbortSi
 // 会话层取消）。
 const revalidateImport = async (): Promise<void> => {
   const sections = importSections.value
+  // 从节点/只读会话的校验端点必然 403（master_required）：不重发，并清掉上一轮
+  // 摘要——节点模式变化后旧结论不再可信，留着会让「可导入」的陈旧结论继续显示。
+  if (backupDisabled.value) {
+    importValidationSeq++
+    importValidation.value = null
+    return
+  }
   // 校验不消费分类（仅负载规则）；空选择无可导内容（确认时拦截）——不重发。
   // 同时必须清掉上一轮校验摘要/错误并推进序号：否则取消全选后旧的「不可导入」
   // 错误条仍显示，且在途旧响应落地时又会把陈旧摘要写回。
@@ -1204,9 +1216,10 @@ const revalidateImport = async (): Promise<void> => {
 }
 
 const confirmImport = async (): Promise<void> => {
-  // 确认按钮的 isReadOnly 门之外，函数级再守一道（角色/节点模式在弹框
-  // 打开期间变化时仍可能触发点击）。
-  if (isReadOnly.value) return
+  // 入口按钮禁用只是呈现层：函数级再守一道（角色/节点模式在弹框打开期间可能
+  // 已变化——主节点被降为从节点后两条端点必然 403 master_required）。
+  // 判据与同卡其余写入口同源（backupDisabled = 只读 ∪ 非主节点）。
+  if (backupDisabled.value) return
   const validation = importValidation.value
   if (!validation?.valid || importing.value) return
   // 未选分类先于最终确认弹框拦截（路径强制 ['rules']，不可达此分支）

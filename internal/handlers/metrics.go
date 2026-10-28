@@ -165,6 +165,11 @@ func storeCaddyMetricsSnapshot(url string, body []byte, err error, now time.Time
 	caddyMetricsSnapshots.Unlock()
 }
 
+// caddyMetricsSnapshotDoBeforeForTest 是 single-flight 入口的测试接缝
+// （仅测试注入；生产恒 nil）。用例据此建立「leader 已在抓取中 → waiter 已到达
+// group.Do」的同步屏障，替代按墙钟猜调度顺序。
+var caddyMetricsSnapshotDoBeforeForTest func()
+
 // loadCaddyMetricsSnapshot 返回 Caddy 指标端点原文：TTL 内共享、并发合并。
 // 抓取脱离首个请求的取消信号（context.WithoutCancel + 自有超时）——结果同时
 // 交给所有等待者，leader 客户端断开不得让其余健康连接收到伪造的上游失败；
@@ -184,6 +189,12 @@ func loadCaddyMetricsSnapshot(ctx context.Context, url string, cacheFailure bool
 	type snapshotResult struct {
 		body []byte
 		err  error
+	}
+	// 测试缝（nil=生产直通）：在进入 single-flight 前触发，让并发用例能确定性
+	// 等到「waiter 已到达 group.Do」再取消 leader——用 sleep 猜加入时序的错误
+	// 实现（去掉 context.WithoutCancel）在慢机器上同样判绿。
+	if hook := caddyMetricsSnapshotDoBeforeForTest; hook != nil {
+		hook()
 	}
 	value, _, _ := caddyMetricsSnapshotGroup.Do(url, func() (any, error) {
 		now := time.Now()

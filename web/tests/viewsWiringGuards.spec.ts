@@ -436,11 +436,15 @@ test('各写函数入口自带只读/在途守卫（纵深防御）', () => {
     ['const saveAutoBackupSettings = async', '\nconst ', /if \(backupDisabled\.value \|\| !autoBackupSectionsValid\.value/],
     ['const restoreAutoBackup = async', '\nconst ', /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/],
     ['const deleteAutoBackup = async', '\nconst ', /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/],
-    ['const confirmImport = async', '\nconst ', /if \(isReadOnly\.value\) return/],
+    ['const confirmImport = async', '\nconst ', /if \(backupDisabled\.value\) return/],
   ]
   for (const [start, end, pattern] of checks) {
     assert.match(section(basic, start, end), pattern, `${start} 缺函数级写守卫`)
   }
+  // 导入是全卡破坏性最强的动作：确认与「勾分类重校验」都要节点模式门（从节点上
+  // 两条端点必然 403 master_required），入口按钮同口径，不得只判只读。
+  assert.match(basic, /<el-button type="primary" :disabled="!importValidation\?\.valid \|\| !importPreviewSelected \|\| backupDisabled" :loading="importing" @click="confirmImport">确认导入<\/el-button>/, '确认导入按钮必须含节点模式门')
+  assert.match(section(basic, 'const revalidateImport = async', '\nconst '), /if \(backupDisabled\.value\) \{/, '勾分类重校验必须早退（从节点必 403）')
   const caddy = code('src/views/settings/CaddyGlobalSettings.vue')
   assert.match(section(caddy, 'const confirmSaveAsList = async', '\nconst '), /if \(isReadOnly\.value \|\| savingList\.value\) return/)
   const free = code('src/views/settings/FreeCertificates.vue')
@@ -455,6 +459,19 @@ test('各写函数入口自带只读/在途守卫（纵深防御）', () => {
   assert.match(section(oidc, 'const save = async', '\nconst '), /if \(isReadOnly\.value \|\| saving\.value\) return/)
   assert.match(section(oidc, 'const toggleEnabled = async', '\nconst '), /if \(isReadOnly\.value \|\| saving\.value \|\| loadFailed\.value\) return/)
   assert.match(section(oidc, 'const remove = async', '\nconst '), /if \(isReadOnly\.value \|\| saving\.value \|\| loadFailed\.value\) return/)
+  // TaskMonitor：四个写动作（触发/启停/取消/重启）共用 runTaskAction，唯一的下发
+  // 通道必须自带权限门——按钮 :disabled 只是入口层，角色/只读态可在页面停留期间
+  // 变化（另标签降权、整机切从节点），重渲染窗口内的点击会直发写请求。
+  const tasks = code('src/views/settings/TaskMonitor.vue')
+  const runAction = section(tasks, 'async function runTaskAction(', '\n}\n')
+  assert.match(runAction, /if \(!canOperate\.value\) return/, 'runTaskAction 必须带函数级 canOperate 门')
+  const pendingAt = runAction.indexOf('taskActionPendingId.value !== null')
+  const guardAt = runAction.indexOf('if (!canOperate.value) return')
+  assert.ok(guardAt > pendingAt, '权限门位于重入占位守卫之后（保持占位先于确认的既有顺序）')
+  for (const handler of ['const onTrigger = ', 'const onToggle = ', 'const onCancel = ', 'const onRestart = ']) {
+    const body = section(tasks, handler, '\nconst ')
+    assert.match(body, /runTaskAction\(/, `${handler} 必须走统一执行器（不得绕过函数级门）`)
+  }
 })
 
 test('CA 表单不再持有零读取的 credentials / id 副本', () => {

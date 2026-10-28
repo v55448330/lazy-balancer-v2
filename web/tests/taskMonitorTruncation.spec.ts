@@ -78,10 +78,10 @@ test('证书行运行按钮按剩余冷却禁用并给出等待提示', () => {
   assert.ok(runButton, `运行按钮开标签解析失败: ${actions.slice(runTextAt - 200, runTextAt)}`)
   const disabled = /:disabled="([^"]*)"/.exec(runButton)?.[1]
   assert.ok(disabled, `运行按钮缺 :disabled 绑定: ${runButton}`)
-  assert.match(disabled, /Boolean\(runCooldownReason\(row\)\)/, `运行按钮禁用未接线冷却原因（现为 "${disabled}"）`)
+  assert.match(disabled, /Boolean\(runCooldownReason\(row(?: as [A-Za-z]+)?\)\)/, `运行按钮禁用未接线冷却原因（现为 "${disabled}"）`)
   assert.match(disabled, /row\.status === 'running'/, '运行中仍应禁用')
 
   // tooltip 必须把冷却原因呈现给用户（禁用按钮 hover 是唯一解释面）。
   const tooltip = section(actions, 'v-if="row.triggerable"', '</el-tooltip>')
-  assert.match(tooltip, /:content="runCooldownReason\(row\)"/, '冷却原因必须进 tooltip content')
+  assert.match(tooltip, /:content="runCooldownReason\(row(?: as [A-Za-z]+)?\)/, '冷却原因必须进 tooltip content')
 })

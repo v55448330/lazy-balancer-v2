@@ -37,6 +37,11 @@ var IPListDataDir = "/app/waf/ip-lists"
 
 // ConfigureWafDirs 按最终 data_dir 派生**全部** WAF 文件路径（
 // 单点派生）：容器内 /app/data → 全部 /app/* 与既有打包路径逐字节一致；
+// defaultWafDataDir 是容器镜像的 data_dir 出厂值：该形态下面板派生结果与
+// Caddy 插件侧常量（wafiplist.DefaultAllowedPathPrefix、/app/data 下的 IPC
+// 缺省）逐字节一致，故派生面整体早退。
+const defaultWafDataDir = "/app/data"
+
 // 本地开发/自定义挂载落到数据目录同级，避免 /app 只读文件系统写入失败。
 // 此前只有 wafDir/IPListDataDir/白名单跟随 data_dir，CRS 树/快照/dist、
 // xdb、指令目录与爬虫种子仍是独立硬编码真源——data_dir ≠ /app/data 时
@@ -46,12 +51,16 @@ var IPListDataDir = "/app/waf/ip-lists"
 // 派生面同时含 Coraza 审计日志（<parent>/logs/waf-audit/audit.log）
 // 与摄取 offset（<data_dir>/security_events.offset）——此前两者硬编码 /app，
 // 非容器/自定义挂载部署会写到只读或错误的路径。
+//
+// 已知边界（有意保留，非静默）：本函数只影响**面板进程**。Caddy 二进制里的
+// wafiplist 白名单是编译期常量、IPC 路径取自 Caddy 自身环境，非默认 data_dir
+// 时两侧会分叉——故函数末尾显式留痕并给出操作者动作（logWafDirPluginDivergence）。
 func ConfigureWafDirs(dataDir string) {
 	// 判据必须是「data_dir == 容器默认 /app/data」，而不是「父目录 == /app」：
 	// /app 的任意直接子目录（/app/custom、/app/vol 之外的 /app/xxx）此前也会
 	// 命中早退，导致派生面全部留在 /app/*——CRS 快照与 xdb 写进镜像层（容器
 	// 重建即丢）、审计日志/摄取 offset 落错位置、xdb 路径指向不存在的库。
-	if dataDir == "/app/data" {
+	if dataDir == defaultWafDataDir {
 		return // 容器默认形态：保持 /app/* 常量（派生结果与之逐字节一致）
 	}
 	parent := filepath.Dir(dataDir)
@@ -86,8 +95,11 @@ func ConfigureWafDirs(dataDir string) {
 	securityEventsOffsetPath = filepath.Join(dataDir, "security_events.offset")
 	// IPC socket 与 fallback spool 同属数据卷派生面（默认 /app/data/...）：
 	// 自定义 data_dir 时写侧与读侧必须落在同一目录。面板派生值仅在对应 env
-	// 缺席时注入进程环境，随后启动的 Caddy 子进程继承；显式值（含空串关闭 IPC）
-	// 始终优先，不被面板覆盖。
+	// 缺席时注入**本进程**环境——只有本进程随后自行拉起的 Caddy 子进程才继承；
+	// 容器形态里 Caddy 由 entrypoint 监督器先启动、面板最后 exec 成为主进程，
+	// 故面板注入的 env 到不了 Caddy（Caddy 沿用自身环境，缺省仍是
+	// /app/data/...）。显式值（含空串关闭 IPC）始终优先，不被面板覆盖；
+	// 容器/非默认 data_dir 部署必须显式设置这两个 env（见下方启动期告警）。
 	securityEventsIPCSocketPath = filepath.Join(dataDir, "security-events.sock")
 	securityEventsSpoolDir = filepath.Join(dataDir, "security-events-spool")
 	for _, item := range []struct{ name, path string }{
@@ -101,6 +113,19 @@ func ConfigureWafDirs(dataDir string) {
 			Logf("error", "无法向 Caddy 子进程传播安全事件 IPC 路径 %s=%s: %v", item.name, item.path, err)
 		}
 	}
+	logWafDirPluginDivergence(dataDir)
+}
+
+// logWafDirPluginDivergence 在非默认 data_dir 下显性留痕「面板派生 ≠ Caddy
+// 插件侧真源」这条断裂：wafiplist 的名单白名单是 Caddy 二进制内的常量
+// （DefaultAllowedPathPrefix），IPC 路径取自 Caddy 自身环境；两侧只在
+// data_dir=/app/data 时逐字节一致。此前断裂完全静默——直到某条规则启用
+// 「IP 访问控制」/「受信代理」被 Caddy 校验拒绝、或安全事件永远进不了库。
+func logWafDirPluginDivergence(dataDir string) {
+	Logf("error",
+		"data_dir=%s 不是容器默认 %s：面板进程已把名单白名单/CRS/IPC 路径派生到 %s，但 Caddy 二进制内的 wafiplist 白名单是常量 %s、安全事件 IPC 路径取自 Caddy 自身环境——容器形态下 Caddy 由 entrypoint 监督器先启动，面板注入的 env 不会被它继承。启用「IP 访问控制」/「受信代理」的规则会在 caddy validate 阶段被拒（路径越出白名单），安全事件会落到默认路径而进不了库。请保持 data_dir=%s，或对 Caddy 进程显式设置 %s/%s 并在 %s 提供同名名单目录。",
+		dataDir, defaultWafDataDir, wafDir, wafiplist.DefaultAllowedPathPrefix,
+		defaultWafDataDir, SecurityEventsIPCSocketEnv, SecurityEventsSpoolDirEnv, wafiplist.DefaultAllowedPathPrefix)
 }
 
 // CRSLiveDir 返回 CRS 活树目录（ConfigureWafDirs 派生后的当前值）。handlers
@@ -295,50 +320,19 @@ func writeIPListFile(scope string, merged []string) (string, error) {
 	if err := EnsureIPListDir(); err != nil {
 		return "", err
 	}
-	// 唯一临时名：并发渲染同一 scope 命中同一正式路径时，
-	// CreateTemp 使每次写入独占临时文件，rename 串行原子生效。失败路径清理
-	// 临时文件。
-	tmp, err := os.CreateTemp(IPListDataDir, scope+"-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("创建 IP 名单临时文件失败 %s: %w", name, err)
-	}
-	tmpName := tmp.Name()
-	// CreateTemp 默认 0600，而回滚路径与 atomicwrite.writeFileAtomicSynced
-	// 用 0644——@ipListFast 是跨进程读文件协议，正常渲染产出 0600、回滚后变
-	// 0644 的形态分叉会在 Caddy 换 uid 部署时表现为名单读不到。显式对齐。
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("设置 IP 名单临时文件权限失败 %s: %w", name, err)
-	}
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("写入 IP 名单文件失败 %s: %w", name, err)
-	}
-	// tmp+rename 缺 fsync 时掉电/内核崩溃可留下 0 字节投影文件——
-	// wafiplist 对空文件按「永不命中」接受，deny/blacklist 语义即静默 fail-open。
-	// 与 certstore 的原子写同口径：临时文件落盘 + 父目录 fsync 后 rename 生效。
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("同步 IP 名单文件失败 %s: %w", name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("关闭 IP 名单临时文件失败 %s: %w", name, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("原子替换 IP 名单文件失败 %s: %w", name, err)
-	}
-	// 写前不存在（读回仅报 ErrNotExist）＝本轮渲染新建：登记进回滚清单。
-	// 权限/列举类错误不登记（无法判定文件是否本就有），回滚宁可少删。
+	// 唯一临时名 + fsync + rename + 父目录同步单源走 writeFileAtomicSynced
+	// （internal/atomicfile）：此前本函数自带一份手抄实现（CreateTemp/Chmod/
+	// Write/Sync/Close/Rename/syncParentDir），与回滚路径的成功语义靠注释对齐，
+	// 任一侧调整 fsync 顺序或权限策略即分叉——掉电窗口下会留下 0 字节投影
+	// （wafiplist 把空文件当「永不命中」，deny/blacklist 即静默 fail-open）。
+	// 单源实现同时保证跨进程可读的 0644（@ipListFast 是跨进程读文件协议）。
 	if readErr != nil && errors.Is(readErr, os.ErrNotExist) {
+		// 写前不存在＝本轮渲染新建：登记进回滚清单（写失败时回滚删除对不存在
+		// 文件的删除是幂等跳过，宁可多登记也不漏删在役文件）。
 		noteIPListProjectionCreated(path)
 	}
-	if err := syncParentDir(path); err != nil {
-		return "", fmt.Errorf("同步 IP 名单目录失败 %s: %w", name, err)
+	if err := writeFileAtomicSynced(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("原子替换 IP 名单文件失败 %s: %w", name, err)
 	}
 	recordMemo()
 	return path, nil

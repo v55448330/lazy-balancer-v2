@@ -745,10 +745,10 @@ func TestExportIPList_threatFileReadErrorReturns500(t *testing.T) {
 	}
 }
 
-// 自动封禁计数的唯一喂入源是安全事件采集任务——
-// 用户停止它（或自愈预算用尽停环）后本任务仍每轮 success 记「计数 0 IP」。
-// /security/autoban/status 必须暴露降级原因（只做可见性，不自动拉起显式停止
-// 的任务）。
+// 自动封禁计数由「实时 IPC 入库」与「尾读/补采」两条通道共同喂入，任务调度
+// 只拥有后者——用户停止它（或自愈预算用尽停环）后补采/轮转停摆，但实时 IPC
+// 入库仍提交（计数仍会增长）。/security/autoban/status 必须暴露降级原因并说明
+// 实时入库仍在运行（只做可见性，不自动拉起显式停止的任务）。
 func TestGetAutobanStatusExposesFeedHealth(t *testing.T) {
 	newBackupTestHandlers(t)
 	initTaskEngineForTest(t)

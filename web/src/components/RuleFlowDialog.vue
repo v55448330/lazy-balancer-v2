@@ -167,7 +167,7 @@
                 <DialogSectionHeader :title="typedStageByKey(node.key)!.title" />
                 <div class="flow-panel-meta">
                   <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
-                  <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">阶段页已失效（回落跟随策略）</el-tag>
+                  <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">{{ overrideBrokenLabel(typedStageByKey(node.key)!.stage) }}</el-tag>
                   <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">拦截页跟随策略</el-tag>
                   <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
                 </div>
@@ -175,6 +175,10 @@
               <div v-if="detailFailedSources.length > 0" class="flow-detail-line">
                 部分明细加载失败（{{ detailFailedSources.join('、') }}）
                 <el-button link type="warning" size="small" @click="ensureDetails(true)">重试</el-button>
+              </div>
+              <div v-if="statsFailed" class="flow-detail-line">
+                阶段计数加载失败：24h 拦截数不可用
+                <el-button link type="warning" size="small" @click="retryStageStats">重试</el-button>
               </div>
               <div v-if="stageStatsText(typedStageByKey(node.key)!.stage)" class="flow-panel-stats">{{ stageStatsText(typedStageByKey(node.key)!.stage) }}</div>
               <template v-if="typedStageByKey(node.key)!.enabled">
@@ -300,7 +304,7 @@
               </el-table-column>
               <el-table-column label="状态" width="110" align="center">
                 <template #default="{ row }">
-                  <el-tag size="small" effect="plain" :type="upstreamStateType(row)">{{ upstreamStateText(row) }}</el-tag>
+                  <el-tag size="small" effect="plain" :type="upstreamStateType(row as Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>)">{{ upstreamStateText(row as Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>) }}</el-tag>
                 </template>
               </el-table-column>
             </el-table>
@@ -381,7 +385,8 @@ import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hostPortKey } from '@/utils/upstreamKeys'
 import { weightPercent } from '@/utils/upstreamWeights'
-import { STAGE_TITLES, attachStageDetails, formatDurationUs, hasTrustDetectionBinding, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds, stage1FootnoteText, stageSubLabel, trustHitMode } from '@/utils/securityStages'
+import { STAGE_TITLES, attachStageDetails, hasTrustDetectionBinding, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds, stage1FootnoteText, stageSubLabel, trustHitMode } from '@/utils/securityStages'
+import { stageCountChip, stageCountSummary, stageTimingChip, type RuleStageCounts } from '@/utils/ruleStageStats'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
 import type {
@@ -416,18 +421,6 @@ const protocolLabel = computed(() => {
   return props.target.enableTls ? 'HTTPS' : 'HTTP'
 })
 
-interface StageStats {
-  stage1_blocked_24h: number
-  stage3_blocked_24h: number
-  ratelimit_blocks_reload: number
-  // 分段平均处理耗时（µs,2026-09-27）:预检段=信任+IP ACL+GeoIP(同一 coraza
-  // handler 不可分);WAF 段=隔离预检后的评估成本(含限流,纳秒级可忽略)。
-  precheck_avg_us?: number
-  precheck_samples?: number
-  waf_avg_us?: number
-  waf_samples?: number
-}
-
 interface FlowCertInfo {
   source: string
   domains: string
@@ -439,8 +432,12 @@ interface FlowCertInfo {
   error?: string
 }
 
-const stats = ref<StageStats | null>(null)
+const stats = ref<RuleStageCounts | null>(null)
 const statsSettled = ref(false)
+// 计数取数失败位：与「加载中」由 statsSettled 区分，与「成功但载荷为空」由本位
+// 区分——原实现两条失败形态都压成 stats=null 渲染固定 '—'，读者无法分辨
+// 「请求失败（可重试）」与「计数确为 0」。
+const statsFailed = ref(false)
 const certInfo = ref<FlowCertInfo | null>(null)
 // cert-info 拉取失败位：失败与「后端无可展示证书」必须区分——原实现两者共用
 // certInfo=null，弹框会把一次 5xx/超时读成「规则禁用或证书未就绪」的业务结论。
@@ -657,35 +654,29 @@ const enabledPathUpstreams = (pr: RuleFlowPathRule): Array<{ host: string; port:
 
 const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? '精确' : '前缀')
 
-// 计数 chip：静默拉取（未到数不渲染 chip；绝不渲染加载态字面）；
-// 分段平均耗时(µs):阶段 1=预检段,阶段 3=WAF 段;无数据返回 0(不渲染 chip)
-// 面板耗时行:有采样时显示「· 平均耗时 X（N 次采样)」
-const stageTimingText = (stage: 1 | 3): string => {
-  const us = stageTimingUs(stage)
-  if (us <= 0) return ''
-  const samples = stage === 1 ? (stats.value?.precheck_samples ?? 0) : (stats.value?.waf_samples ?? 0)
-  return ` · 平均耗时 ${formatDurationUs(us)}（近 24 小时 ${samples} 次采样）`
-}
-
-const stageTimingUs = (stage: 1 | 3): number => {
-  if (!stats.value || isTcp.value) return 0
-  return stage === 1 ? (stats.value.precheck_avg_us ?? 0) : (stats.value.waf_avg_us ?? 0)
-}
+// 计数 chip / 面板统计行：口径单源在 utils/ruleStageStats（形态区分与未归因桶
+// 披露均在那里实现并有行为测试）；此处只负责「本弹框是否具备取数前提」。
+const countsView = (): { settled: boolean; failed: boolean } => ({ settled: statsSettled.value, failed: statsFailed.value })
 
 const stageChip = (stage: 1 | 2 | 3): { chip?: string; caption?: string } => {
-  if (!props.target?.caddyId || isTcp.value || !statsSettled.value) return {}
-  if (!stats.value) return { chip: '—' }
-  if (stage === 1) return { chip: `24h 拦截 ${stats.value.stage1_blocked_24h}` }
-  if (stage === 2) return { chip: `429 拦截 ${stats.value.ratelimit_blocks_reload}`, caption: '自最近重载 · 本端口' }
-  return { chip: `24h 拦截 ${stats.value.stage3_blocked_24h}` }
+  if (!props.target?.caddyId || isTcp.value) return {}
+  return stageCountChip(stage, stats.value, countsView())
 }
 
-// 面板统计行：同样静默口径（无数据不占行，绝不渲染加载态文本）
 const stageStatsText = (stage: 0 | 1 | 2 | 3): string => {
-  if (stage === 0 || !props.target?.caddyId || isTcp.value || !statsSettled.value || !stats.value) return ''
-  if (stage === 1) return `近 24 小时本阶段拦截 ${stats.value.stage1_blocked_24h} 次${stageTimingText(1)}`
-  if (stage === 2) return `自最近重载以来本规则监听端口的限流拦截 ${stats.value.ratelimit_blocks_reload} 次（恒 429，含上游自返）`
-  return `近 24 小时本阶段拦截 ${stats.value.stage3_blocked_24h} 次${stageTimingText(3)}`
+  if (!props.target?.caddyId || isTcp.value) return ''
+  return stageCountSummary(stage, stats.value, countsView())
+}
+
+// 阶段页覆盖失效后的真实回落目标按阶段不同：阶段 1 = 引擎兜底错误路由取绑定链
+// 首个有效页（可能不是本策略）；阶段 3 = 逐策略回落各自页面（跟随策略）。
+const overrideBrokenLabel = (stage: number): string =>
+  stage === 3 ? '阶段页已失效（回落跟随策略）' : '阶段页已失效（回落绑定链首个有效页）'
+
+// 时间线耗时角标：取数失败时同样不出（不把失败说成「无采样」）。
+const stageTimingLabel = (stage: 1 | 3): string => {
+  if (isTcp.value || statsFailed.value) return ''
+  return stageTimingChip(stage, stats.value)
 }
 
 interface FlowNode {
@@ -730,10 +721,8 @@ const flowNodes = computed<FlowNode[]>(() => {
       chip,
       chipCaption: caption,
       // 平均处理耗时 chip:阶段 1=预检段(信任+IP ACL 共用),阶段 3=WAF 段;
-      // 阶段 2 限流纳秒级不挂;无样本(24h 无命中)不挂——不误导。
-      timing: stageNo === 1 && stageTimingUs(1) > 0 ? `平均耗时 ${formatDurationUs(stageTimingUs(1))}`
-        : stageNo === 3 && stageTimingUs(3) > 0 ? `平均耗时 ${formatDurationUs(stageTimingUs(3))}`
-        : undefined,
+      // 阶段 2 限流纳秒级不挂;无样本(24h 无命中)或取数失败不挂——不误导。
+      timing: (stageNo === 1 ? stageTimingLabel(1) : stageNo === 3 ? stageTimingLabel(3) : '') || undefined,
     })
   }
   nodes.push(upstream)
@@ -756,11 +745,36 @@ const stage1Footnote = computed(() => {
 
 const stageSub = (stage: 1 | 2 | 3): string => stageSubLabel(stage)
 
+// 计数取数（弹框打开与面板「重试」共用）：失败置 statsFailed，使「请求失败」
+// 与「成功但载荷为空」可区分（此前两者同落 stats=null，统一渲染成 '—'）。
+// 序号守卫丢弃过期响应——弹框快速切换规则时旧规则计数不得写进新会话。
+const loadStageStats = (caddyId: string): void => {
+  const seq = ++statsSeq
+  statsFailed.value = false
+  stats.value = null
+  statsSettled.value = false
+  request.get<APIResponse<RuleStageCounts>>(`/security/rules/${encodeURIComponent(caddyId)}/stage-stats`, { silent: true })
+    .then((res) => { if (seq === statsSeq) stats.value = res.data ?? null })
+    .catch(() => {
+      if (seq !== statsSeq) return
+      stats.value = null
+      statsFailed.value = true
+    })
+    .finally(() => { if (seq === statsSeq) statsSettled.value = true })
+}
+
+const retryStageStats = (): void => {
+  const caddyId = props.target?.caddyId
+  if (!caddyId || isTcp.value) return
+  loadStageStats(caddyId)
+}
+
 const onDialogOpen = (): void => {
   activeNode.value = 'access'
   expandedPolicyKey.value = ''
   stats.value = null
   statsSettled.value = false
+  statsFailed.value = false
   certInfo.value = null
   certFailed.value = false
   certLoading.value = false
@@ -787,11 +801,7 @@ const onDialogOpen = (): void => {
     return
   }
   if (!isTcp.value) {
-    const seq = statsSeq
-    request.get<APIResponse<StageStats>>(`/security/rules/${encodeURIComponent(caddyId)}/stage-stats`, { silent: true })
-      .then((res) => { if (seq === statsSeq) stats.value = res.data ?? null })
-      .catch(() => { if (seq === statsSeq) stats.value = null })
-      .finally(() => { if (seq === statsSeq) statsSettled.value = true })
+    loadStageStats(caddyId)
   } else {
     statsSettled.value = true
   }

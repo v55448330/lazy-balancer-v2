@@ -118,9 +118,17 @@ test('BasicSettings 接线：暂存态取草稿单例，可落父级模型的字
   )
 })
 
+test('会话身份切换必须清空设置草稿（同标签页票据换号不卸载设置页）', () => {
+  const draft = code('src/composables/useSettingsDraft.ts')
+  const settings = code('src/views/Settings.vue')
+  assert.match(draft, /syncSettingsDraftIdentity/, '草稿单例必须提供身份同步入口')
+  assert.match(settings, /syncSettingsDraftIdentity/, '设置页必须在身份变化时调用同步')
+  assert.match(settings, /watch\(\(\) => authStore\.user\?\.id/, '必须监听实际用户 ID，而非仅在卸载时复位')
+})
+
 test('Settings.vue 仅在离开设置页时复位草稿', () => {
   const page = code('src/views/Settings.vue')
-  assert.match(page, /import \{ resetSettingsDraft \} from '@\/composables\/useSettingsDraft'/)
+  assert.match(page, /import \{ resetSettingsDraft, syncSettingsDraftIdentity \} from '@\/composables\/useSettingsDraft'/)
   const unmounted = section(page, 'onUnmounted(', '</script>')
   assert.match(unmounted, /resetSettingsDraft\(\)/)
   assert.doesNotMatch(

@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -185,6 +187,63 @@ func TestRemoveCertFilesForRules_honorsBudgetPerItem(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(certDir, id+suffix)); err != nil {
 				t.Fatalf("预算耗尽后规则 %s 的 %s 仍被删除: %v", id, suffix, err)
 			}
+		}
+	}
+}
+
+// certMaterialScanFailureQueryer 让第二条判定查询（材料行）返回只有一列的结果
+// 集：调用方按两列 Scan → 逐行 Scan 失败。用于注入「材料行读取故障」。
+type certMaterialScanFailureQueryer struct {
+	db *sql.DB
+}
+
+func (q *certMaterialScanFailureQueryer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "cert_jobs") {
+		return q.db.QueryContext(ctx, "SELECT rule_id FROM cert_jobs")
+	}
+	return q.db.QueryContext(ctx, query, args...)
+}
+
+// 材料行读取失败时必须中止判定并返回错误：把「读取未知」降级成「确定无材料」
+// 会让仍在服务（任务 PEM 可用）的规则的证书文件在导入清理中被删除，与本函数
+// 自己的 fail-closed 契约相反。生产调用方在判定失败时跳过删除，因此故障下
+// 证书文件必须零删除。
+func TestRulesWithoutUsableCertMaterial_abortsOnMaterialRowScanFailure(t *testing.T) {
+	newBackupTestHandlers(t)
+	certDir := t.TempDir()
+	t.Cleanup(services.SetCertDirForTest(certDir))
+
+	if _, err := db.DB.Exec(`
+		INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source,tls_cert,tls_key) VALUES
+		('lb_scan_kept','kept','kept.example.test','http',8088,1,1,'acme_dns','',''),
+		('lb_scan_lost','lost','lost.example.test','http',8089,1,0,'','','');
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES
+		('lb_scan_kept','kept.example.test','issued','CERT','KEY')`); err != nil {
+		t.Fatalf("seed rules/jobs: %v", err)
+	}
+	for _, id := range []string{"lb_scan_kept", "lb_scan_lost"} {
+		if err := services.WriteCertFiles(id, "CERT", "KEY"); err != nil {
+			t.Fatalf("write cert files for %s: %v", id, err)
+		}
+	}
+
+	// When：材料行 Scan 失败
+	ids, err := rulesWithoutUsableCertMaterial(context.Background(), &certMaterialScanFailureQueryer{db: db.DB})
+
+	// Then：判定失败必须显式返回错误且不产出待删集
+	if err == nil {
+		t.Fatalf("材料行 Scan 失败必须返回错误，实际 ids=%v", ids)
+	}
+	if !strings.Contains(err.Error(), "任务材料") {
+		t.Fatalf("error=%v, want 带「任务材料」上下文的错误", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("判定失败时 ids=%v, want 空（不得给出待删集）", ids)
+	}
+	// 生产调用方判定失败即跳过删除：两份证书文件都必须仍在
+	for _, id := range []string{"lb_scan_kept", "lb_scan_lost"} {
+		if _, statErr := os.Stat(filepath.Join(certDir, id+".crt")); statErr != nil {
+			t.Fatalf("规则 %s 的证书文件在判定失败后被删除: %v", id, statErr)
 		}
 	}
 }

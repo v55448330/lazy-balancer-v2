@@ -63,8 +63,14 @@ const reset = (): { posts: PostRecord[]; puts: PutRecord[]; confirmArgs: unknown
     puts.push({ url, body })
     return { data: undefined }
   }
-  // 默认：确认后的最新 refs 为空（多数用例的点击前快照同为空）
-  g.__get = async () => ({ data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[]' } } })
+  // 默认：确认后的最新 refs 为空（多数用例的点击前快照同为空）；名单详情
+  // （复用分支确认后的重读）默认返回「仍只被本策略引用」。
+  g.__get = async (url: string) => {
+    if (String(url).startsWith('/security/ip-lists/')) {
+      return { data: { id: Number(String(url).split('/').pop()), ref_policies: [{ id: 5, name: '策略 A' }], trusted_proxy_referenced: false } }
+    }
+    return { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[]' } } }
+  }
   return { posts, puts, confirmArgs }
 }
 
@@ -542,12 +548,82 @@ test('最新 refs 读取失败：不写入任何变更并显性提示', async ()
 
 test('复用路径：确认后目标已被并发关联——不重复写 refs，仍加入 IP', async () => {
   const { posts, puts } = reset()
-  g.__get = async () => ({ data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[77]' } } })
+  g.__get = async (url: string) => String(url).startsWith('/security/ip-lists/')
+    ? { data: { id: 77, ref_policies: [{ id: 5, name: '策略 A' }] } }
+    : { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[77]' } } }
   const existing = [...lists, { id: 77, name: '策略 A-信任', ref_policies: [] }]
   const { ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
   await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
   assert.deepEqual(posts, [{ url: '/security/ip-lists/77/ips', body: { value: '203.0.113.9' } }])
   assert.deepEqual(puts, [], '最新 refs 已含目标列表时不得再写（无变化写会覆盖并发状态）')
+})
+
+// ── 复用判据的新鲜度（名单侧）──
+// 复用判据原在弹框打开时求值；确认期间另一管理员/另一标签把同名名单关联到自己
+// 的策略后，本次处置会把 IP 写进现已被他人引用的名单，静默改动对方拦截面。
+// 因此确认后除策略 refs 外，还必须重读名单的引用面。
+
+test('复用路径：确认后名单被他人引用——改走新建策略限定名单，不写他人名单', async () => {
+  const { posts, puts } = reset()
+  let listReads = 0
+  g.__get = async (url: string) => {
+    if (String(url).startsWith('/security/ip-lists/')) {
+      listReads += 1
+      return { data: { id: 77, ref_policies: [{ id: 5, name: '策略 A' }, { id: 9, name: '策略 B' }] } }
+    }
+    return { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[]' } } }
+  }
+  const existing = [...lists, { id: 77, name: '策略 A-信任', ref_policies: [] }]
+  const { ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
+  await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
+
+  assert.equal(listReads, 1, '确认后必须重读一次名单引用面')
+  assert.equal(posts.filter((post) => post.url === '/security/ip-lists/77/ips').length, 0, '不得写入已被他人引用的名单')
+  const created = posts.find((post) => post.url === '/security/ip-lists')
+  assert.ok(created, '必须改走新建')
+  assert.equal(assertCreatedListName(created), '策略 A-信任#5', '新建名带策略 id，与既有名单区分')
+  assert.deepEqual(puts, [{ url: '/security/policies/5', body: { ip_whitelist_refs: '[42]' } }], '只关联新建名单')
+  assert.match(String(callsOf('ElMessage.warning')[0]?.arg), /已被其它策略/, '必须显性说明改走新建的原因')
+})
+
+test('复用路径：确认后名单被受信代理网段引用——同样改走新建', async () => {
+  const { posts } = reset()
+  g.__get = async (url: string) => String(url).startsWith('/security/ip-lists/')
+    ? { data: { id: 77, ref_policies: [{ id: 5, name: '策略 A' }], trusted_proxy_referenced: true } }
+    : { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[]' } } }
+  const existing = [...lists, { id: 77, name: '策略 A-信任', ref_policies: [] }]
+  const { ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
+  await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
+  assert.equal(posts.filter((post) => post.url === '/security/ip-lists/77/ips').length, 0)
+  assert.ok(posts.find((post) => post.url === '/security/ip-lists'), '受信代理引用同样不可复用')
+})
+
+test('复用路径：确认后名单引用面读取失败——不写入任何变更并显性提示', async () => {
+  const { posts, puts } = reset()
+  g.__get = async (url: string) => {
+    if (String(url).startsWith('/security/ip-lists/')) throw new Error('network down')
+    return { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[]' } } }
+  }
+  const existing = [...lists, { id: 77, name: '策略 A-信任', ref_policies: [] }]
+  const { creating, ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
+  await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
+  assert.deepEqual(posts, [], '读取失败不得创建/加入（快照不可证）')
+  assert.deepEqual(puts, [], '读取失败不得关联')
+  assert.equal(creating.value, false)
+  assert.match(String(callsOf('ElMessage.error')[0]?.arg), /引用状态读取失败/)
+})
+
+test('加入指定列表（显式点按钮）不重读名单：用户已明确选择该名单', async () => {
+  reset()
+  let listReads = 0
+  const { joinSpecificList } = useTrustAssociation({ getList: () => lists })
+  const original = g.__get
+  g.__get = async (url: string, config?: unknown) => {
+    if (String(url).startsWith('/security/ip-lists/')) listReads += 1
+    return original(url, config)
+  }
+  await joinSpecificList({ id: 3, name: '办公网段', entry_count: 5 }, '203.0.113.9')
+  assert.equal(listReads, 0, '显式动作不做隐式改道')
 })
 
 // —— added 反馈口径（与 useIpListAdd 同源）——
@@ -557,7 +633,9 @@ test('复用路径：确认后目标已被并发关联——不重复写 refs，
 
 test('复用路径：IP 已在列表中（added=false）且已关联——如实提示存在，不报成功', async () => {
   const { posts, puts } = reset()
-  g.__get = async () => ({ data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[77]' } } })
+  g.__get = async (url: string) => String(url).startsWith('/security/ip-lists/')
+    ? { data: { id: 77, ref_policies: [{ id: 5, name: '策略 A' }] } }
+    : { data: { policy: { ip_acl_list_refs: '[]', ip_whitelist_refs: '[77]' } } }
   g.__post = async (url: string, body?: unknown) => {
     posts.push({ url, body })
     return { data: { added: false } }

@@ -157,7 +157,7 @@ func (s *SyncService) Report(ctx context.Context) error {
 	// 人工修正——此前落进「非 4xx 即成功」被静默吞掉;给与 Pull 3xx 分支同款
 	// 可行动指引,经 reportErr→recordSyncError 通道落库(last_sync_error
 	// 显「状态上报失败: …」),审计节流与拒绝分支同口径。
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+	if isHTTPRedirect(resp.StatusCode) {
 		message := fmt.Sprintf("主节点返回 %d 重定向(%s)——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location"))
 		s.reportAuditMu.Lock()
 		auditChanged := s.lastReportFailureMsg != message
@@ -214,13 +214,29 @@ func truncateValidUTF8Tail(data []byte) []byte {
 // 空源/全部空版本 → 空串。读失败按空串上报（版本是展示面，不得因单表读失败
 // 中断整份上报；主节点显示「未更新」而非陈旧值）。
 func reportSecurityLibraryVersions(ctx context.Context, database *sql.DB) (string, string) {
-	return latestSourceVersion(ctx, database, "security_threat_sources"),
-		latestSourceVersion(ctx, database, "security_crawler_sources")
+	return latestLibraryVersionOrEmpty(ctx, database, "security_threat_sources"),
+		latestLibraryVersionOrEmpty(ctx, database, "security_crawler_sources")
 }
 
-func latestSourceVersion(ctx context.Context, database *sql.DB, table string) string {
-	if database == nil {
+// latestLibraryVersionOrEmpty 把「版本未知」降级为空串并留一条 warn：
+// 上报不得因单表读失败中断，但也不得把残缺行集的最大值当成真实版本
+// （失败口径见 latestSourceVersion）。
+func latestLibraryVersionOrEmpty(ctx context.Context, database *sql.DB, table string) string {
+	version, err := latestSourceVersion(ctx, database, table)
+	if err != nil {
+		Logf("warn", "读取 %s 版本失败（上报按未更新处理）: %v", table, err)
 		return ""
+	}
+	return version
+}
+
+// latestSourceVersion 返回单库各源 version 的最大值；任何读/扫描/遍历失败
+// 都返回错误，由调用方按「未更新」上报——绝不返回部分行集上的聚合结果：
+// 被跳过的行可能是更大的版本，那样选出的「最近版本」既非真实最大值也非
+// 「未知」，主节点悬停显示陈旧版本且零信号。
+func latestSourceVersion(ctx context.Context, database *sql.DB, table string) (string, error) {
+	if database == nil {
+		return "", nil
 	}
 	// ORDER BY id + 「等值取后者」复刻前端 summarizeLibrarySources 的
 	// sort(compareVersion) + pop()：前端数据源同为本 API 的 id 序，稳定排序后
@@ -228,15 +244,16 @@ func latestSourceVersion(ctx context.Context, database *sql.DB, table string) st
 	// 1.2.0、从节点列表显示 1.2（比较器已判等价，差异只剩形态）。
 	rows, err := database.QueryContext(ctx, `SELECT COALESCE(version,'') FROM `+table+` ORDER BY id`)
 	if err != nil {
-		Logf("warn", "读取 %s 版本失败（上报按未更新处理）: %v", table, err)
-		return ""
+		return "", err
 	}
 	defer rows.Close()
 	latest := ""
 	for rows.Next() {
 		var version string
+		// 逐行 Scan 失败与行遍历错误同口径（失败即整体未知）——静默 continue
+		// 曾让残缺行集的聚合结果被当作「最近版本」上报。
 		if err := rows.Scan(&version); err != nil {
-			continue
+			return "", fmt.Errorf("扫描 %s 版本行: %w", table, err)
 		}
 		version = strings.TrimSpace(version)
 		if version == "" {
@@ -246,7 +263,10 @@ func latestSourceVersion(ctx context.Context, database *sql.DB, table string) st
 			latest = version
 		}
 	}
-	return latest
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("遍历 %s 版本行: %w", table, err)
+	}
+	return latest, nil
 }
 
 // compareLibraryVersion 复刻前端 utils/securityStages.compareVersion 的宽松

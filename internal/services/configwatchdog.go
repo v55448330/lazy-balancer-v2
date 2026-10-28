@@ -100,6 +100,10 @@ func restoreConfigDriftSnapshot(snapshot configDriftSnapshot) {
 		configDriftCleanRounds = 0
 		configDriftSkipped = 0
 		configDriftHeartbeatSkipped = 0
+		// 首报留痕标志同权：复位后的下一次失败必须重新首报，残留的「已报过」
+		// 会让首个诊断日志被静默（唯一线索丢失）。
+		configDriftQueryWarned = false
+		configDriftReadWarned = false
 		return
 	}
 	configDriftStatus = snapshot.status

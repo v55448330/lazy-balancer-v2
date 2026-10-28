@@ -1247,3 +1247,66 @@ func TestUntarGzTo_doesNotRestoreBackupOverHealthyLive(t *testing.T) {
 		t.Fatalf("全新替换必须删除旧树文件（纯新树不变量）: err=%v data=%q", err, data)
 	}
 }
+
+// 多条目威胁库同步包必须先全部预检、再进行落盘：后续条目损坏时，前序条目
+// 不得已经落盘（旧实现逐条「校验→写入」，随后条目失败会留下半更新的威胁库，
+// 与错误文案「已拒绝整包」直接矛盾）。同一字节在预检阶段就要被拦下，任何
+// 条目都不得写 live。
+func TestApplyWafFileBundle_laterTamperedThreatEntryWritesNothing(t *testing.T) {
+	dst := t.TempDir()
+	restoreWaf := OverrideThreatWafDirForTest(dst)
+	defer restoreWaf()
+
+	good := []byte("203.0.113.0/24\n198.51.100.7\n")
+	goodSum := sha256.Sum256(good)
+	bundle := &WafFileBundle{
+		ThreatFiles: []models.ThreatFileEntry{
+			{Name: "ustc", Sha256: hex.EncodeToString(goodSum[:]), Content: good},
+			{Name: "firehol_l1", Sha256: "deadbeef", Content: []byte("198.51.100.0/24\n")},
+		},
+	}
+
+	_, _, threatChanged, err := ApplyWafFileBundle(bundle)
+	if err == nil || !strings.Contains(err.Error(), "哈希不匹配") {
+		t.Fatalf("error=%v, want 哈希不匹配拒绝", err)
+	}
+	if threatChanged {
+		t.Fatal("整包被拒时不得报告威胁库已变更")
+	}
+	// 前序合法条目同样不得落盘（预检先于任何写入）。
+	if _, statErr := os.Stat(filepath.Join(dst, "threat-ustc.iplist.fast")); !os.IsNotExist(statErr) {
+		t.Fatalf("后续条目损坏时前序条目已落盘（半更新威胁库），stat err=%v", statErr)
+	}
+}
+
+// 同一形态对 CRS/xdb 段同样成立：威胁条目损坏必须在 CRS/xdb 落盘之前被拦下，
+// 否则「拒绝整包」实际只保住威胁库。
+func TestApplyWafFileBundle_tamperedThreatEntryRejectedBeforeOthers(t *testing.T) {
+	dst := t.TempDir()
+	restoreWaf := OverrideThreatWafDirForTest(dst)
+	defer restoreWaf()
+
+	xdbDir := t.TempDir()
+	oldXdbPath, oldCrsDir := ip2regionLivePath, crsLiveDir
+	ip2regionLivePath = filepath.Join(xdbDir, "ip2region.xdb")
+	crsLiveDir = filepath.Join(xdbDir, "crs")
+	t.Cleanup(func() { ip2regionLivePath, crsLiveDir = oldXdbPath, oldCrsDir })
+
+	xdb := []byte("fake-xdb-bytes")
+	xdbSum := sha256.Sum256(xdb)
+	bundle := &WafFileBundle{
+		Xdb:          xdb,
+		IP2RegionSha: hex.EncodeToString(xdbSum[:]),
+		IP2RegionTag: "2026-10-01",
+		ThreatFiles: []models.ThreatFileEntry{
+			{Name: "ustc", Sha256: "deadbeef", Content: []byte("203.0.113.0/24\n")},
+		},
+	}
+
+	if _, _, _, err := ApplyWafFileBundle(bundle); err == nil {
+		t.Fatal("损坏威胁条目必须拒绝整包")
+	}
+	if _, statErr := os.Stat(ip2regionLivePath); !os.IsNotExist(statErr) {
+		t.Fatalf("威胁条目损坏时 IP2Region 库已落盘（部分应用），stat err=%v", statErr)
+	}
+}

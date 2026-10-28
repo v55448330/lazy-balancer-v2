@@ -143,7 +143,11 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	path := CertJobLogPath(l.ruleID)
 
 	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
-	line := taskengine.TruncateTaskLogLine(fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message)) + "\n"
+	// 产物是「一行一条」的文本日志：消息里的 CR/LF（多行错误串/Caddy 响应体）
+	// 必须先归一为单行，再按截断预算裁剪——与任务日志同源（任务日志目录下
+	// 的另一条写路径），否则单次写入会在文件里伪造出无前缀的独立行。
+	line := taskengine.TruncateTaskLogLine(taskengine.SanitizeTaskLogLine(
+		fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message))) + "\n"
 
 	// 轮转判定计入待写入行——size+len(line) 超阈即在写入
 	// 前轮转，磁盘上活动文件恒 ≤ 上限。尺寸滚动唯一负责方为本写入侧（5 代移位），

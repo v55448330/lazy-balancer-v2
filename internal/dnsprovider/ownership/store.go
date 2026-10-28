@@ -160,6 +160,16 @@ func New(dataDir string) (*Store, error) {
 	return &Store{path: filepath.Join(dataDir, ownershipFileName)}, nil
 }
 
+// beforeReplaceLock / beforeReplaceWrite 是 Replace 的测试接缝（默认空操作）：
+// 前者在取得 fileMu 之前调用、后者在持有 fileMu 且即将写盘时调用，用于确定
+// 性地证明「Replace 与 Store 的 Add/Remove 共用同一把文件锁」——旧用例只能
+// 用固定墙钟窗口猜「goroutine 是否已走到加锁点」，负载下会空转成真空断言。
+// 生产代码不得依赖这两个钩子。
+var (
+	beforeReplaceLock  = func() {}
+	beforeReplaceWrite = func() {}
+)
+
 // Replace atomically replaces the ownership file with a validated cluster
 // snapshot. It deliberately shares fileMu and the same atomic writer as Store
 // mutations so a snapshot apply cannot overwrite a concurrent Add/Remove.
@@ -168,6 +178,7 @@ func Replace(dataDir string, data []byte) error {
 	// 的准备会给「Replace 确实共用 fileMu」的并发测试留下假绿窗口：goroutine
 	// 还没走到加锁点，固定等待就静默通过，断言变成空断言。锁内解码的代价
 	// 可忽略（快照为单文件、签发级频次）。
+	beforeReplaceLock()
 	fileMu.Lock()
 	defer fileMu.Unlock()
 	var snapshot state
@@ -184,6 +195,7 @@ func Replace(dataDir string, data []byte) error {
 	if existing, readErr := os.ReadFile(store.path); readErr == nil && bytes.Equal(existing, data) {
 		return nil
 	}
+	beforeReplaceWrite()
 	return store.writeAtomic(data)
 }
 

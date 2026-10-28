@@ -92,11 +92,11 @@ test('证书有效期合并单列：日期 + 剩余/已过期天数，精确时�
   assert.doesNotMatch(tableBody, /label="剩余天数"/)
   const body = columnBody('证书有效期')
   assert.match(body, new RegExp(`\\bmin-width="${CERT_JOB_COLUMN_WIDTHS.validity}"`))
-  assert.match(body, /formatDateShort\(effectiveNotAfter\(row\)\)/)
+  assert.match(body, /formatDateShort\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)/)
   assert.ok(body.includes('剩 ${row.days_remaining} 天'), '缺少「剩 N 天」分支')
   assert.ok(body.includes('已过期 ${Math.abs(row.days_remaining)} 天'), '缺少「已过期 N 天」分支')
   assert.match(body, /row\.certificate_status === 'expired'/, '过期判据必须读后端 certificate_status 字段（无第二份派生）')
-  assert.match(body, /<el-tooltip[^>]*:content="formatDate\(effectiveNotAfter\(row\)\)"/, '精确过期时间必须进 tooltip')
+  assert.match(body, /<el-tooltip[^>]*:content="formatDate\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)"/, '精确过期时间必须进 tooltip')
   assert.match(body, /class="cell-empty"/, '非 issued/缺失必须沿用 cell-empty 占位')
 })
 
@@ -105,8 +105,8 @@ test('自动重签时间列经 renewalAt（not_after 派生），不回退 expir
   // 与有效期列共用同一到期口径：expires_at 在导入/旧备份/集群回插行上可能为
   // null——若本列回退 row.expires_at，同一行会出现「有效期有值、重签显示 -」的
   // 跨列分叉，运维据空列误判未排期重签。
-  assert.match(body, /v-if="row\.status === 'issued' && renewalAt\(row\)"/, '显示门必须用 renewalAt')
-  assert.match(body, /formatDate\(renewalAt\(row\)\)/, '本列必须经 renewalAt 渲染')
+  assert.match(body, /v-if="row\.status === 'issued' && renewalAt\(row(?: as [A-Za-z]+)?\)"/, '显示门必须用 renewalAt')
+  assert.match(body, /formatDate\(renewalAt\(row(?: as [A-Za-z]+)?\)\)/, '本列必须经 renewalAt 渲染')
   assert.doesNotMatch(body, /expires_at/, '不得直接消费 expires_at')
 })
 

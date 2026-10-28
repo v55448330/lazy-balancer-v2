@@ -1914,22 +1914,53 @@ func TrustedProxyMinPrefixBits(addr netip.Addr) int {
 	return 8
 }
 
+// TrustedProxyPrefixCanonical 把受信代理前缀归一为规范形态——写侧内联/引用
+// 校验、去重键、渲染投影三处共用的单源：Masked() 剥掉主机位（
+// ::ffff:0.0.0.1/96 与 ::ffff:0:0/96 是同一网段），4in6 映射形态折成等价
+// v4 前缀（::ffff:203.0.113.7/120 = 203.0.113.0/24，::ffff:0.0.0.1/96 =
+// 0.0.0.0/0）；位数 <96 的 mapped 写法覆盖整个 v4-mapped 空间（=全部
+// IPv4），同样归一为 0.0.0.0/0。非映射前缀只剥主机位，v4/v6 语义不变。
+//
+// 映射形态必须折成 v4 判宽：投影装载（wafiplist.ParseIPEntry）本就按同一
+// 语义把 mapped 前缀 Unmap 成 v4（bits-96）后再匹配，若宽度判据沿用 4in6
+// 原始位数（/96 ≥ IPv6 下限 /29）就会在「校验通过」与「实际生效的 v4 覆盖
+// 范围 = 全部 IPv4」之间分叉，主机位变体据此绕过全空间门。
+func TrustedProxyPrefixCanonical(prefix netip.Prefix) netip.Prefix {
+	if !prefix.IsValid() {
+		return prefix
+	}
+	if prefix.Addr().Is4In6() {
+		if prefix.Bits() < 96 {
+			return netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+		}
+		return netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96).Masked()
+	}
+	return prefix.Masked()
+}
+
 // TrustedProxyPrefixAllSpace 报告前缀是否覆盖全部地址空间（等同信任任意
-// 来源）：0.0.0.0/8、0.0.0.0/0、::/0 与 v4-mapped 全零 /96 两种规范写法。
-// 曾在内联通道显式拒绝这组形态，引用通道此前漏掉——判据
-// 单源后两通道同口径。
+// 来源）：0.0.0.0/8、0.0.0.0/0、::/0，以及归一到等价 v4 后落入这组的
+// v4-mapped 变体（主机位/位数不同但网络相同或更宽的写法）。判据在
+// TrustedProxyPrefixCanonical 之后执行——不另列 mapped 字符串变体。
 func TrustedProxyPrefixAllSpace(prefix netip.Prefix) bool {
-	switch prefix.String() {
-	case "0.0.0.0/8", "0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:0:0/96":
+	switch TrustedProxyPrefixCanonical(prefix).String() {
+	case "0.0.0.0/8", "0.0.0.0/0", "::/0":
 		return true
 	}
 	return false
 }
 
+// TrustedProxyPrefixBelowMinBits 报告（按规范形态归一后的）前缀长度低于最小
+// 允许值：4in6 映射形态按等价 v4 判宽（最小 /8 折合 mapped /104）。
+func TrustedProxyPrefixBelowMinBits(prefix netip.Prefix) bool {
+	canonical := TrustedProxyPrefixCanonical(prefix)
+	return canonical.Bits() < TrustedProxyMinPrefixBits(canonical.Addr())
+}
+
 // TrustedProxyPrefixTooWide 是上述两条判据的合取（过宽=全空间或低于最小
 // 前缀长度），渲染侧防御带外改库/旧配置时使用。
 func TrustedProxyPrefixTooWide(prefix netip.Prefix) bool {
-	return TrustedProxyPrefixAllSpace(prefix) || prefix.Bits() < TrustedProxyMinPrefixBits(prefix.Addr())
+	return TrustedProxyPrefixAllSpace(prefix) || TrustedProxyPrefixBelowMinBits(prefix)
 }
 
 // expandTrustedProxyRanges 合并内联网段与引用名单条目（2026-10-12；2026-10-15
@@ -1962,18 +1993,22 @@ func expandTrustedProxyRanges(store caddyConfigStore, inline []string, refsJSON 
 			}
 			prefix = netip.PrefixFrom(addr, bits)
 		}
-		if _, dup := seen[prefix.String()]; dup {
-			return
-		}
 		// 防御复检：写侧两通道（内联/引用）都已拒绝过宽网段，此处
 		// 覆盖带外改库与旧版本残留配置——过宽网段会让伪造头在任意来源被采信，
 		// 宁可跳过并留痕（运行配置缺该来源 = 退回 socket IP，偏安全侧）。
+		// 判据与投影形态都取规范形态（Masked + mapped→等价 v4）：mapped /96
+		// 的主机位变体在归一后=0.0.0.0/0，必须在这里被拦下——投影装载会把它
+		// 折叠成 0.0.0.0/0（信任任意来源），而不是留成一条无效网段。
 		if TrustedProxyPrefixTooWide(prefix) {
 			Logf("warn", "受信代理条目 %q 过宽（最小 /8（IPv4）与 /29（IPv6），且不得覆盖全部地址空间，跳过）", value)
 			return
 		}
-		seen[prefix.String()] = struct{}{}
-		merged = append(merged, prefix.String())
+		canonical := TrustedProxyPrefixCanonical(prefix).String()
+		if _, dup := seen[canonical]; dup {
+			return
+		}
+		seen[canonical] = struct{}{}
+		merged = append(merged, canonical)
 	}
 	for _, entry := range inline {
 		appendCIDR(entry)

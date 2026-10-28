@@ -322,6 +322,17 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 			RecordAuditLog(operator, "更新", "爬虫地址库", detail, "")
 		}
 	}()
+	// changedCount/projectionConverged 供「正常收尾收敛」与「中止轮后置收敛」
+	// 共用：循环内提前 return（取消/降级/角色不可判定）会绕过收尾的唯一收敛
+	// 块，而前序源已写库的名单内容仍被 ACL/信任面引用——必须补一次收敛；
+	// 正常收尾已收敛时置位，defer 据此保证整轮只收敛一次。
+	var changedCount int
+	projectionConverged := false
+	defer func() {
+		if changedCount > 0 && !projectionConverged {
+			convergeCrawlerProjectionAfterAbortedRun()
+		}
+	}()
 	if db.DB == nil {
 		outcome = "failed"
 		return errors.New("主库未初始化")
@@ -371,7 +382,7 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 	baselines := loadCrawlerBaselineSet()
 	runStarted := taskRunStartedAt(&rc)
 	var firstErr error
-	successCount, failedCount, totalEntries, changedCount := 0, 0, 0, 0
+	successCount, failedCount, totalEntries := 0, 0, 0
 	for _, src := range sources {
 		if isMaster, known := updateRunRole(); !known {
 			// 角色读取失败≠降级——按失败返回（任务可见），不误报「从节点」。
@@ -556,9 +567,36 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 			outcome = "cancelled"
 			return gerr
 		}
+		projectionConverged = true
 		convergeIPListProjectionAfterMutation("crawlerbot-update")
 	}
 	return firstErr
+}
+
+// crawlerAbortConvergeTimeout 是中止轮后置投影收敛的角色复核预算：用户取消
+// 不得吞掉这次收敛，但复核窗口必须有界（DB 瞬断时不能无限拖住取消返回）。
+const crawlerAbortConvergeTimeout = 30 * time.Second
+
+// convergeCrawlerProjectionAfterAbortedRun 是中止轮（取消/降级/角色不可判定）
+// 的后置投影收敛：循环内提前 return 会绕过收尾的唯一收敛块，而前序源已成功
+// 写库的名单内容（changedCount>0）仍被 ACL/信任面引用——不收敛会让实际拦截
+// 停在旧版，且同名内容不再变化时后续轮次不会重试。
+// 复核口径不放松：主从/取消判定用脱离用户取消的有界上下文重跑一次，只有
+// 主节点且角色可判定时才执行收敛；降级与角色不可判定一律零写（引用方由
+// 主节点后续轮次收敛）。
+func convergeCrawlerProjectionAfterAbortedRun() {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), crawlerAbortConvergeTimeout)
+	defer cancel()
+	switch gerr := updateRunWriteGate(cleanupCtx); {
+	case gerr == nil:
+		convergeIPListProjectionAfterMutation(CrawlerTaskID)
+	case errors.Is(gerr, errRunRoleUndecidable):
+		TaskLogfWarn(CrawlerTaskID, "failed", "中止轮：角色读取失败，无法判定本节点是否主节点，跳过名单投影收敛（引用方由后续轮次收敛）")
+	case errors.Is(gerr, taskengine.ErrTaskSkipped):
+		TaskLogfWarn(CrawlerTaskID, "skipped", "中止轮：节点已降级为从节点，跳过名单投影收敛（从节点零写，引用方由主节点收敛）")
+	default:
+		TaskLogfWarn(CrawlerTaskID, "unchanged", "中止轮：名单投影收敛复核未通过，跳过收敛（引用方由后续轮次收敛）: %v", gerr)
+	}
 }
 
 // convergeIPListProjectionAfterMutation 内置名单（system=1，可被 ACL/信任面

@@ -1105,6 +1105,13 @@ func (e *Engine) StopLoop(id string) {
 	r.mu.Lock()
 	r.loopEnabled = false
 	r.lastCheck = time.Time{}
+	// 引擎侧停调归属（来源标记/自愈预算用尽）只在引擎自己停调时成立：
+	// 用户显式停止即是最终的停止来源，两者都必须清空——否则视图继续把
+	// 这次「用户停止」呈现成「引擎停调/自愈用尽」并给出误导性的恢复入口
+	// （自愈用尽标记还会让监控把已由用户停止的任务呈现为 failed）。
+	// 重新开启/新工作唤醒本来也会复位这两者，此处只是给出正确的归属。
+	r.schedStopReason = ""
+	r.restartExhausted = false
 	c := r.cancel
 	r.mu.Unlock()
 
@@ -1425,14 +1432,24 @@ func (e *Engine) normalizeStaleRunningRows(taskID string, runs []RunRecord) []Ru
 	return runs
 }
 
+// beforeTaskRunsRead 任务历史/统计读前的注入缝（生产恒等 no-op）：关停序列
+// 会并发把包级句柄置 nil，回归测试借此在「判定句柄」与「使用句柄」之间注入
+// 关停效果，钉住「单次快照」的语义。
+var beforeTaskRunsRead = func() {}
+
 func (e *Engine) History(id string, limit int) []RunRecord {
 	if limit <= 0 {
 		limit = 20
 	}
-	if db.DB == nil {
+	// 句柄单次快照 + nil 守卫（同文件 taskRunTerminalExec / PurgeTaskRuns 同源）：
+	// 关停序列 StopTaskEngine→db.Close 会把包级句柄置 nil，逐次读全局会让
+	// 「判 nil 通过、用句柄时已为 nil」的窗口直接 nil 解引用 panic 掉进程。
+	database := db.DB
+	if database == nil {
 		return nil
 	}
-	rows, err := db.DB.Query(
+	beforeTaskRunsRead()
+	rows, err := database.Query(
 		`SELECT id, task_id, family, trigger, COALESCE(operator,''), status, started_at,
 		COALESCE(finished_at,''), COALESCE(duration_ms,0), COALESCE(message,'')
 		FROM task_runs WHERE task_id=? ORDER BY id DESC LIMIT ?`, id, limit)
@@ -2276,22 +2293,22 @@ func LogDir() string {
 	return taskLogConf.dir
 }
 
+// TaskLogPath 返回已注册任务的日志文件路径：任务日志目录之下一个 .log 文件，
+// 文件名主体由注册任务 ID 净化而来（同一 ID 恒映射同一文件；未注入日志目录或
+// 净化后为空时返回空串，调用方按「无日志」处理）。
+//
+// 净化用白名单而不是黑名单：只保留注册任务 ID 字母表 [A-Za-z0-9_.:-]，与
+// handlers sanitizeRuleID 同族口径（畸形 ID 不再产出黑名单遗漏字符的文件名）。
+// 目录穿越需要路径分隔符，白名单剔除后 `:id` 这个用户可控面
+// （GetSystemTaskLogs）不可能逃出任务日志目录——该路由位于 business 读组
+// （全部登录用户可读，主节点/管理员不是前置条件），因此白名单是路径安全边界
+// 而非授权边界；与 certjoblog certJobLogFileComponent（可逆编码）/
+// logstats sanitizeRuleID 同族。
 func TaskLogPath(taskID string) string {
 	dir := LogDir()
 	if dir == "" {
 		return ""
 	}
-	// 白名单统一：任务 ID 路径净化由
-	// 黑名单（剔除 '/'、'\\'）改白名单——只保留注册任务 ID 全字母表
-	// [A-Za-z0-9_.:-]，与 handlers sanitizeRuleID 白名单同族口径（净化范式
-	// 单一化，畸形 ID 不再产出黑名单遗漏字符的文件名）。注册 ID 全集 19 个
-	// cluster-sync/config-watchdog/crs/ip2region/log-cleanup/security-events-*/
-	// startup:config-load/threat）仅用小写+数字+'-'+'.'+一个 ':'，大写留作未来
-	// 余量——既有注册 ID 零变化。目录穿越需分隔符，白名单剔除后 :id 用户可控
-	// 面（GetSystemTaskLogs）不可能逃出任务日志目录（该路由位于 business
-	// 读组：全部登录用户可读，主节点/管理员不是前置条件；白名单是路径安全
-	// 边界而非授权边界，与 certjoblog certJobLogFileComponent（可逆编码）/
-	// logstats sanitizeRuleID 同族）。
 	sanitized := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -2329,11 +2346,31 @@ func TruncateTaskLogLine(line string) string {
 	return truncateUTF8(line, taskLogLineMaxBytes, taskLogTruncSuffix)
 }
 
+// taskLogLineBreaks 日志行的换行归一表（CRLF 先于单字符匹配，一次替换
+// 只产出一个空格，不留下空位）。
+var taskLogLineBreaks = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+
+// SanitizeTaskLogLine 把一条日志行归一为**单行**：错误串/响应体里的 CR、LF
+// 会让单次写入在日志文件里伪造出多条无前缀的行（按行解析的排障工具与保留
+// 期清理会把伪造行当成独立条目；裸 CR 还会让后续内容覆盖行首）。换行替换为
+// 空格——载荷正文保留，只抹掉行结构。
+//
+// 调用顺序固定为「先净化、后截断」（TruncateTaskLogLine）：截断预算须按净化
+// 后的单行计，否则被裁掉的可能正是换行之后的伪造段、也可能净化让已截断的行
+// 重新变长。
+func SanitizeTaskLogLine(line string) string {
+	if !strings.ContainsAny(line, "\r\n") {
+		return line
+	}
+	return taskLogLineBreaks.Replace(line)
+}
+
 // appendTaskLogLine 打开→追加→关闭共享实现（taskLogAppend
 // 与 TeeTaskLog 曾双份同形四步；MkdirAll 幂等，保留逐行兜底形态不变）。
 func appendTaskLogLine(path, line string) {
-	// 截断必须先于滚动判定——否则巨型单行会先
+	// 换行归一再截断：两者都必须先于滚动判定——否则巨型单行会先
 	// 触发滚动、再把超限活动文件写出来，后续每行都反复触发滚动。
+	line = SanitizeTaskLogLine(line)
 	line = TruncateTaskLogLine(line)
 	// 熔断前置判定（在 rotate/open 之前——熔断期二者必然失败，
 	// 逐行 WARNING 会淹没运行日志）。目录级熔断（无法创建）对全部任务日志
@@ -2777,13 +2814,17 @@ func noteTaskOverviewFailure(key string, failed bool) string {
 func (e *Engine) RunOverview() (map[string]*RunRecord, map[string]TaskRunsStats) {
 	latest := map[string]*RunRecord{}
 	stats := map[string]TaskRunsStats{}
-	if db.DB == nil {
+	// 句柄单次快照 + nil 守卫（关停序列 StopTaskEngine→db.Close 会置 nil；
+	// 两次查询必须落在同一个非 nil 句柄上，不得逐次读全局）。
+	database := db.DB
+	if database == nil {
 		return latest, stats
 	}
+	beforeTaskRunsRead()
 	// 最近运行：每任务最大 id（与 History(...,1) 的 ORDER BY id DESC LIMIT 1 同义）。
 	// 查询文本单源=db.TaskRunsLatestPerTaskQuery（索引计划钉测同源）。
 	latestFailed := false
-	rows, err := db.DB.Query(db.TaskRunsLatestPerTaskQuery)
+	rows, err := database.Query(db.TaskRunsLatestPerTaskQuery)
 	if err != nil {
 		// 降级为空记录（视图仍可用），但不得静默——与同文件其余查询同口径。
 		// 5s 轮询下按失败态转换留痕（首报一条 WARNING，故障持续期静默）。
@@ -2823,7 +2864,7 @@ func (e *Engine) RunOverview() (map[string]*RunRecord, map[string]TaskRunsStats)
 	}
 	// 24h 统计：与 Stats24h 同窗口/同口径（started_at > now-1day，配置时区墙钟）。
 	statFailed := false
-	statRows, err := db.DB.Query(`SELECT task_id, `+taskRunsStats24hSelect+`
+	statRows, err := database.Query(`SELECT task_id, `+taskRunsStats24hSelect+`
 		FROM task_runs WHERE started_at > datetime(?, '-1 day') GROUP BY task_id`, engineNowStr())
 	if err != nil {
 		if level := noteTaskOverviewFailure("stats", true); level != "" {
@@ -2888,10 +2929,13 @@ func (e *Engine) Stats24hHourlySeries() []TaskHourlyStat {
 		out[i].Hour = h
 		idx[h] = i
 	}
-	if db.DB == nil {
+	// 句柄单次快照 + nil 守卫（同上：关停窗口内不得二次读全局句柄）。
+	database := db.DB
+	if database == nil {
 		return out
 	}
-	rows, err := db.DB.Query(`SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS h,
+	beforeTaskRunsRead()
+	rows, err := database.Query(`SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS h,
 		COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0)
 		FROM task_runs WHERE started_at >= ? GROUP BY h`,

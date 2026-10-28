@@ -1,7 +1,6 @@
 package services
 
 import (
-	"context"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -60,15 +59,7 @@ func GeoIPDataGeneration() int64 { return ip2regionGeneration.Load() }
 // 启动或集群同步自愈。内存 searcher 装载/回退与审计不受此门约束（本地读面/
 // 节点本地面）。
 func ip2RegionStartupRepairWritesAllowed() bool {
-	if db.DB == nil {
-		return false
-	}
-	isMaster, err := RoleOf(context.Background(), db.DB)
-	if err != nil {
-		Logf("warn", "ip2region: 读取节点角色失败，跳过启动期版本行/sidecar 本地修复（角色不可证实，宁停勿写）: %v", err)
-		return false
-	}
-	return isMaster
+	return wafFileStartupWritesAllowed("ip2region")
 }
 
 // loadIP2RegionDistReadOnly 以镜像内置库作只读降级装载——live 库缺失/不可

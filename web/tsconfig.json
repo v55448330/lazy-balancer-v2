@@ -21,5 +21,11 @@
       "@/*": ["src/*"]
     }
   },
+  "vueCompilerOptions": {
+    "strictTemplates": true,
+    "strictVModel": false,
+    "checkUnknownEvents": false,
+    "dataAttributes": ["data-*"]
+  },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue"]
 }

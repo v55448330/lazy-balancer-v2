@@ -209,6 +209,15 @@ func (s *SyncService) doSmall(req *http.Request) (*http.Response, error) {
 	return s.doWithClient(req, client)
 }
 
+// isHTTPRedirect 判定 3xx 重定向响应。同步客户端统一以
+// CheckRedirect=ErrUseLastResponse 拿到未跟随的首个响应：同主机 http→https
+// 升级已被 DoWithSameHostTLSUpgradeRedirect 按原方法重放，残留的 3xx（跨主机/
+// 反代重定向）说明主节点地址形态需人工修正（通常是启用 HTTPS 后仍填 http://）。
+// 这类响应既不是协议成功，也不是可解码的 JSON——所有调用点必须先按失败处理。
+func isHTTPRedirect(status int) bool {
+	return status >= http.StatusMultipleChoices && status < http.StatusBadRequest
+}
+
 func (s *SyncService) doWithClient(req *http.Request, client *http.Client) (*http.Response, error) {
 	if req.URL.Scheme != "https" && req.URL.Scheme != "http" {
 		return nil, errors.New("集群主节点地址必须使用 HTTP 或 HTTPS")
@@ -772,7 +781,7 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 	// 同主机 https 升级已由 DoWithSameHostTLSUpgradeRedirect 重放,残留 3xx 的空 body
 	// 落进 JSON 解析只会报「unexpected end of JSON input」;给与 Pull 3xx
 	// 分支同款的可行动指引。
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+	if isHTTPRedirect(resp.StatusCode) {
 		return models.ClusterRegistration{}, fmt.Errorf("主节点返回 %d 重定向(%s)——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	var envelope struct {
@@ -1078,7 +1087,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	// 未跟随的重定向(跨主机):给可行动错误,而非让空 body 落进 JSON 解析报
 	//「unexpected end of JSON input」(2026-09-18 用户实测踩坑)
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+	if isHTTPRedirect(resp.StatusCode) {
 		// 自愈类错误：运维改回主节点地址即恢复，必须保留后置副作用标记
 		// （304 补偿重拉的唯一触发器）。
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError,
@@ -1584,17 +1593,6 @@ func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool
 	return !known || strings.HasPrefix(msg, prefix)
 }
 
-// syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
-func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
-	return s.syncMarkerPresent(ctx, syncReloadFailureMarkerPrefix)
-}
-
-// syncBrandingFailureMarkerPresent 报告 last_sync_error 当前是否携带品牌落盘
-// 失败标记。
-func (s *SyncService) syncBrandingFailureMarkerPresent(ctx context.Context) bool {
-	return s.syncMarkerPresent(ctx, syncBrandingFailureMarkerPrefix)
-}
-
 // syncPostCommitFailureMarkerPresent 报告是否存在任一后置副作用失败标记
 // （单次读取后本地判族，见 readSyncMarkerMessage）。
 func (s *SyncService) syncPostCommitFailureMarkerPresent(ctx context.Context) bool {
@@ -1684,8 +1682,8 @@ func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message str
 	}
 	if syncErrorPreservesReloadMarker(code) {
 		var stored string
-		// 新2:读侧 WithoutCancel(与:1043 syncReloadFailureMarkerPresent
-		// 同口径)——可取消读在 Stop cancel 落窗时失败,误跳过组合使标记被覆盖。
+		// 读侧 WithoutCancel（与 readSyncMarkerMessage 的读侧同口径）——可取消读
+		// 在 Stop cancel 落窗时失败，误跳过组合使标记被覆盖。
 		if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
 			// 读失败=标记存在性未知：跳过覆盖（fail-closed）。否则可能把仍存活
 			// 的后置副作用标记替换成普通错误消息，304 补偿通道随即失明。
@@ -2054,6 +2052,16 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		return
 	}
 	defer resp.Body.Close()
+	// 3xx 必须先于成功分支判定（与 RegisterWithMaster 同口径）：未跟随的重定向
+	// 体不是审批响应，落进下方 decode 只得到「解析失败」的静默轮询；而 approved
+	// 链路的 200 分支会据响应清空 registration_secret——重定向页永远不该具备
+	// 「确认注册」的能力。地址形态可人工修正，因此按可重试失败上报、不推进
+	// confirm 五连败终止轨道（重定向不得拥有摧毁注册态的能力）。
+	if isHTTPRedirect(resp.StatusCode) {
+		message := fmt.Sprintf("查询注册状态被重定向（HTTP %d → %s）——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册", resp.StatusCode, resp.Header.Get("Location"))
+		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
+		return
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			message := "注册已被主节点拒绝或移除，请重新注册或提升为主节点"
@@ -2158,6 +2166,16 @@ func (s *SyncService) redeemRegistrationConfirm(ctx context.Context, masterURL, 
 		return false
 	}
 	defer confirmed.Body.Close()
+	// 3xx 一律按失败处理（与 RegisterWithMaster / 状态轮询同口径）：此前只拦
+	// >=400，302/307 落进成功分支——复位失败计数并清空 registration_secret，
+	// 而重定向页根本不是「主节点已确认」的证据。按可重试失败上报可行动文案，
+	// 不清任何注册态、不推进终止轨道：地址改为 https:// 后下一轮 confirm 正常完成。
+	if isHTTPRedirect(confirmed.StatusCode) {
+		message := fmt.Sprintf("集群注册确认被重定向（HTTP %d → %s）——主节点启用 HTTPS 后请将主节点地址改为 https:// 并重新注册；本地注册密钥保留，确认将自动重试",
+			confirmed.StatusCode, confirmed.Header.Get("Location"))
+		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
+		return false
+	}
 	// 历史 移除 404/405 fallback 兼容（v2.0.9+ 主节点均支持 confirm 端点）。
 	if confirmed.StatusCode >= http.StatusBadRequest {
 		// 与同族错误路径一致——200B 截断 + UTF-8 边界回退，确保 confirm 失败

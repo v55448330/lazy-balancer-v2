@@ -222,3 +222,47 @@ func TestTaskLogAppendOversizedLineDoesNotForceRotation(t *testing.T) {
 		t.Fatalf("活动文件超过配置阈值：%d 字节", info.Size())
 	}
 }
+
+// Given 错误串/响应体携带 CR、LF 与一段形似日志前缀的载荷。
+// When 写入任务日志。
+// Then 每次写日志仍只产出一行：换行被替换、载荷不得伪造出带时间戳前缀的
+// 独立行（按行解析的排障工具会把伪造行当成真实条目）。
+func TestTaskLogAppendKeepsOneLinePerEntry(t *testing.T) {
+	dir := t.TempDir()
+	SetLogDir(dir)
+	t.Cleanup(func() { SetLogDir("") })
+
+	const forged = "[error] 伪造行 - 注入"
+	taskLogAppend("t-newline", "请求失败: "+forged+"\n继续\r\n结束\r")
+	taskLogAppend("t-newline", "第二条")
+
+	data, err := os.ReadFile(filepath.Join(dir, "t-newline.log"))
+	if err != nil {
+		t.Fatalf("读取任务日志失败: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("两次写日志应各占恰好一行，got %d 行: %q", len(lines), data)
+	}
+	if strings.ContainsRune(string(data), '\r') {
+		t.Fatalf("CR 未归一（裸回车会让后续内容覆盖行首）: %q", data)
+	}
+	for i, line := range lines {
+		if !hasLogTimestampPrefix(line) {
+			t.Fatalf("第 %d 行缺少统一时间戳前缀（伪造行）: %q", i+1, line)
+		}
+	}
+	if !strings.Contains(lines[0], forged) {
+		t.Fatalf("载荷正文被丢弃，只应替换换行符: %q", lines[0])
+	}
+}
+
+// hasLogTimestampPrefix 行首是否为 "2006/01/02 15:04:05" 形态的时间戳。
+func hasLogTimestampPrefix(line string) bool {
+	const layout = "2006/01/02 15:04:05"
+	if len(line) < len(layout) {
+		return false
+	}
+	_, err := time.Parse(layout, line[:len(layout)])
+	return err == nil
+}

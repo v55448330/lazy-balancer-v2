@@ -9,10 +9,11 @@
 #      在无 .git 的工作树里 `git` 报 fatal、循环体 0 次、整体 rc=0（静默零覆盖）。
 #      本门先取清单再判断：git 失败即失败（fail-closed），空清单同样失败。
 #
-# Dockerfile 侧只做**静态**解析（不跑 docker）：镜像路径清单由 COPY 的目标
-# 路径派生（目录形式的目标按「目标 + 源码 basename」展开），与
-# scripts/check-dockerfile-copy-manifest.sh 的「构建上下文源」清单互补——
-# 后者保证源码目录被 COPY，本门保证 entrypoint 真正 exec 到的路径存在。
+# Dockerfile 侧只做**静态**解析（不跑 docker）：镜像路径清单由 COPY 的落点派生
+# （按 Docker 语义区分文件项与目录项：`COPY src/ /opt/` 记目录前缀、`COPY f /d/`
+# 记 /d/f），与 scripts/check-dockerfile-copy-manifest.sh 的「构建上下文源 + 落点」
+# 清单互补——后者保证源码目录被 COPY 到正确位置，本门保证 entrypoint 真正 exec
+# 到的路径存在。
 #
 # 用法：bash scripts/check-startup-chain.sh [--self-test] [entrypoint] [dockerfile]
 #   STARTUP_CHAIN_REPO_ROOT 可覆盖仓库根（自检用：验证非 git 工作树 fail-closed）。
@@ -56,8 +57,16 @@ while IFS= read -r script; do
 done <<<"$script_list"
 
 # 2) 语义面：entrypoint 的每个 `exec <绝对路径>` 必须由 Dockerfile 提供。
-#    COPY 目标清单派生（含续行拼接）：末位是目标；以 / 结尾的目标是目录，落点
-#    为「目标 + 源码 basename」，否则目标即文件路径。
+#    COPY 落点按 Docker 语义建模（清单条目带类型前缀，避免把目录当文件逐字对账）：
+#      · 源带尾斜杠（`COPY src/ /opt/`）= 目录内容合并进目标 → 目标是目录，
+#        落点为该目录下的子项，记目录项 `D/opt/`；
+#      · 源是文件 + 目标带尾斜杠（`COPY foo.sh /usr/local/bin/`）→ `F/usr/local/bin/foo.sh`；
+#      · 其余 → 目标即落点，记 `F<目标>`。
+#    目录项按「exec 目标位于该目录之下」判定，文件项按全等判定：把目录当文件
+#    会假红（旧启发式把 `COPY src/ /opt/` 记成 /opt/src），把文件当目录前缀又会
+#    让任意路径都算「已提供」。边界（安全方向）：源不带尾斜杠的目录形态
+#    （`COPY web/dist /app/ui`）静态不可判——源可能来自 --from 阶段，按目标即
+#    落点记；该形态的 exec 目标会假红（阻断），不会假绿（逃逸）。
 #
 #    只取**最后一个 FROM 阶段**（最终镜像）的 COPY：构建阶段（xcaddy-builder /
 #    backend）把文件放到 /app/... 与最终镜像的路径空间无关，混入同一张清单会
@@ -69,7 +78,7 @@ if [[ -z "$last_from_line" ]]; then
   echo "FAIL: $dockerfile 里没有 FROM 指令——最终镜像阶段无法确定，exec 目标校验会空转" >&2
   exit 1
 fi
-image_paths="$(
+image_entries="$(
   awk -v last_from="$last_from_line" '
     BEGIN { buf = "" }
     {
@@ -97,22 +106,49 @@ image_paths="$(
   ' "$dockerfile" \
   | while IFS= read -r instr; do
       read -r -a toks <<<"$instr"
-      # 末位 = 目标；其前一位（跳过后缀标志）是源（判目录展开用）。
-      target="${toks[$((${#toks[@]} - 1))]}"
+      # 末位 = 目标；其前各位（跳过 --from/--chown 等标志）是源。
+      # 标志过滤必须用 [[ ]] 而非 case：bash 3.2（macOS 系统 bash）扫描 $( )
+      # 时不认 case 模式里的 `)`，`--*)` 会被当成替换结束 → 整脚本语法错误。
+      srcs=()
+      for ((i = 1; i < ${#toks[@]}; i++)); do
+        tok="${toks[i]}"
+        [[ "$tok" == --* ]] && continue
+        srcs+=("$tok")
+      done
+      (( ${#srcs[@]} < 2 )) && continue  # 至少要有一个源 + 目标
+      target="${srcs[$((${#srcs[@]} - 1))]}"
       [[ -z "$target" || "$target" != /* ]] && continue
-      if [[ "$target" == */ ]]; then
-        src="${toks[$((${#toks[@]} - 2))]}"
-        printf '%s%s\n' "$target" "$(basename "$src")"
-      else
-        printf '%s\n' "$target"
-      fi
-    done
+      for ((i = 0; i < ${#srcs[@]} - 1; i++)); do
+        src="${srcs[i]}"
+        if [[ "$src" == */ ]]; then
+          printf 'D%s/\n' "${target%/}"
+        elif [[ "$target" == */ ]]; then
+          printf 'F%s%s\n' "$target" "$(basename "${src%/}")"
+        else
+          printf 'F%s\n' "$target"
+        fi
+      done
+    done | LC_ALL=C sort -u
 )"
 
-if [[ -z "$image_paths" ]]; then
+if [[ -z "$image_entries" ]]; then
   echo "FAIL: 未从 $dockerfile 解析到任何镜像内绝对路径（COPY 清单解析漂移）——exec 目标校验会空转" >&2
   exit 1
 fi
+image_files="$(printf '%s\n' "$image_entries" | sed -n 's/^F//p')"
+image_dirs="$(printf '%s\n' "$image_entries" | sed -n 's/^D//p')"
+
+# 镜像内提供判定：文件项全等；目录项按前缀（目标位于该目录之下即由镜像提供）。
+image_provides() { # <abs path>
+  local want="$1" entry
+  while IFS= read -r entry; do
+    [[ -n "$entry" && "$want" == "$entry" ]] && return 0
+  done <<<"$image_files"
+  while IFS= read -r entry; do
+    [[ -n "$entry" && "$want" == "$entry"* ]] && return 0
+  done <<<"$image_dirs"
+  return 1
+}
 
 exec_targets="$(grep -E '^[[:space:]]*exec[[:space:]]+' "$entrypoint" | awk '{print $2}')"
 if [[ -z "$exec_targets" ]]; then
@@ -127,10 +163,11 @@ while IFS= read -r target; do
     /*) ;;
     *) continue ;;  # 相对路径/变量展开的 exec 不进入镜像路径对账面
   esac
-  if ! printf '%s\n' "$image_paths" | grep -qxF "$target"; then
+  if ! image_provides "$target"; then
     echo "FAIL: 入口脚本 exec 的目标不在 Dockerfile 提供的镜像路径中: $target" >&2
     echo "镜像路径清单:" >&2
-    printf '  %s\n' $image_paths >&2
+    printf '%s\n' "$image_files" | sed 's/^/  /' >&2
+    printf '%s\n' "$image_dirs" | sed 's/^/  /' >&2
     exit 1
   fi
 done <<<"$exec_targets"
@@ -142,7 +179,7 @@ final_stage="$(awk -v last_from="$last_from_line" 'FNR >= last_from { print }' "
 command_count=0
 if grep -Eq '(^|[;[:space:]])caddy([[:space:]]|$)' "$entrypoint"; then
   command_count=$((command_count + 1))
-  if ! printf '%s\n' "$image_paths" | grep -qxF '/usr/local/bin/caddy'; then
+  if ! image_provides '/usr/local/bin/caddy'; then
     echo "FAIL: 入口脚本使用裸命令 caddy，但最终镜像缺少 /usr/local/bin/caddy" >&2
     exit 1
   fi
@@ -175,4 +212,5 @@ if [[ "$shell_pause" != "$handler_pause" || "$shell_pause" != "$main_pause" ]]; 
   exit 1
 fi
 
-echo "startup chain ok (entrypoint syntax + ${script_count} scripts + ${target_count} exec targets + ${command_count} bare commands + pause parity against $(grep -c . <<<"$image_paths") image paths)"
+image_entry_count="$(printf '%s\n' "$image_entries" | grep -c . || true)"
+echo "startup chain ok (entrypoint syntax + ${script_count} scripts + ${target_count} exec targets + ${command_count} bare commands + pause parity against ${image_entry_count} image paths/dirs)"

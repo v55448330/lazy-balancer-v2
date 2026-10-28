@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, section, stripComments, source } from './_helpers.ts'
+import { code, member, openTags, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -265,7 +265,12 @@ test('分页器形态收敛 main.css，四个视图不得再本地重定义', ()
 
 test('自定义规则列表：条件关系独立成列、条件列加宽且长正则完整换行', () => {
   const text = code('src/views/security/SecurityRules.vue')
-  const table = section(text, '<el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />', '<el-table-column label="动作"')
+  // 起始锚点按属性集定位「描述」列开标签（不写死属性书写顺序）：整串 marker
+  // 会在属性重排/新增属性时假红，而列结构完全没变。
+  const descriptionTag = openTags(text, 'el-table-column').find((tag) =>
+    /prop="description"/.test(tag) && /label="描述"/.test(tag))
+  assert.ok(descriptionTag !== undefined, '「描述」列开标签缺失')
+  const table = section(text.slice(text.indexOf(descriptionTag)), descriptionTag, '<el-table-column label="动作"')
   // 条件关系（AND/OR）独立窄列：与条件内容同列时标签挤占文本宽度
   assert.match(table, /<el-table-column label="条件关系" width="140" align="center">/)
   // 条件列显著加宽（原 250）并保留专用 class-name 供全局样式命中

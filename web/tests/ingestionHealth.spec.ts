@@ -23,10 +23,35 @@ test('健康位正常时不提示', () => {
   assert.equal(ingestionWarningMessage({ observed: false, healthy: false, consecutive_failures: 0 }), '')
 })
 
-test('任务已停 → 明确提示「已停止」而非数据滞后', () => {
+// 任务停止只暂停「尾读存量 + spool 补采 + 审计日志轮转 + 健康记账」；实时
+// IPC 主路径不经任务调度，事件仍入库、自动封禁计数仍在增长。文案不得把
+// 「补采任务停止」说成「事件不再更新」——用户会按错误前提做容量/排障决策。
+test('任务已停 → 说明补采/轮转暂停且实时 IPC 入库仍在运行', () => {
   const message = ingestionWarningMessage({ ...healthy, healthy: false, task_state: 'stopped', task_running: false })
   assert.match(message, /任务已停止/)
   assert.doesNotMatch(message, /连续失败/)
+  assert.match(message, /补采/)
+  assert.match(message, /日志轮转/)
+  assert.match(message, /IPC/)
+  for (const claim of ['事件不再更新', '不再更新', '不再增长']) {
+    assert.ok(!message.includes(claim), `任务停止不得声称「${claim}」（实时 IPC 入库仍在运行）：${message}`)
+  }
+})
+
+test('健康位异常且无归因 → 不得暗示事件停更', () => {
+  const message = ingestionWarningMessage({ ...healthy, healthy: false, consecutive_failures: 0 })
+  assert.match(message, /补采/)
+  assert.match(message, /IPC/)
+  assert.ok(!message.includes('事件不再更新'), message)
+})
+
+test('自动封禁降级条兜底文案不得声称计数不增长', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  assert.ok(
+    !page.includes('自动封禁计数不会增长'),
+    '兜底文案不得声称计数不增长（任务只停补采，实时 IPC 入库仍喂入计数器）',
+  )
+  assert.match(page, /实时 IPC 入库仍在运行/)
 })
 
 test('审计写侧降级 → 披露丢弃/写盘错误计数', () => {

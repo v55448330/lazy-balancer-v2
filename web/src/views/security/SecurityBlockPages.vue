@@ -31,7 +31,7 @@
         </template>
         <el-table-column prop="name" label="页面名称" min-width="180">
           <template #default="{ row }">
-            <AccessibleLink type="primary" @click="previewPage(row)">{{ row.name }}</AccessibleLink>
+            <AccessibleLink type="primary" @click="previewPage(row as BlockPage)">{{ row.name }}</AccessibleLink>
             <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">内置</el-tag>
           </template>
         </el-table-column>
@@ -63,9 +63,9 @@
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button size="small" link :type="row.is_default || row.is_builtin || isReadOnly ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default || row.is_builtin || isReadOnly ? '查看' : '编辑' }}</el-button>
-            <el-button size="small" link type="danger" :loading="deletingId === row.id" :disabled="row.is_default || row.is_builtin || isReadOnly || deletingId !== null" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" link type="primary" @click="previewPage(row as BlockPage)">预览</el-button>
+            <el-button size="small" link :type="row.is_default || row.is_builtin || isReadOnly ? 'info' : 'primary'" @click="openDialog(row as BlockPage)">{{ row.is_default || row.is_builtin || isReadOnly ? '查看' : '编辑' }}</el-button>
+            <el-button size="small" link type="danger" :loading="deletingId === row.id" :disabled="row.is_default || row.is_builtin || isReadOnly || deletingId !== null" @click="handleDelete(row as BlockPage)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

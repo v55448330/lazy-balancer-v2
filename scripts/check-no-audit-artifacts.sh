@@ -53,7 +53,11 @@ fi
 
 # 构建产物/运行数据/本地工具目录一律不入扫描面（.gitignore 已覆盖大部分，
 # 这里再显式声明一次：守卫不依赖 .gitignore 的完整性来避免扫描噪声）。
-skip_re='^(\.git/|(.*/)?node_modules/|(.*/)?dist/|ui/|(.*/)?backup[^/]*/|(.*/)?data[^/]*/|(.*/)?logs[^/]*/|(.*/)?certs[^/]*/|(.*/)?waf[^/]*/|test-ui/|test-data/|(\.(omp|agent|superpowers|omo|sisyphus|opencode|worktrees|playwright-mcp))/)'
+# WAF 运行目录按「waf」+ 可选后缀分隔符收窄（waf/、waf-slave/、waf.dist/、
+# waf.log/）：宽形态 `waf[^/]*/` 会连带命中嵌套 Go 模块 wafiplist/，把整个模块
+# 从路径与内容两条通道同时摘掉——模块里的注释编号与轮次测试文件名因此永不入面
+# （永久静默盲区）。运行目录以 `-`/`.` 起后缀，模块名不会。
+skip_re='^(\.git/|(.*/)?node_modules/|(.*/)?dist/|ui/|(.*/)?backup[^/]*/|(.*/)?data[^/]*/|(.*/)?logs[^/]*/|(.*/)?certs[^/]*/|(.*/)?waf([-.][^/]*)?/|test-ui/|test-data/|(\.(omp|agent|superpowers|omo|sisyphus|opencode|worktrees|playwright-mcp))/)'
 
 # ---------------------------------------------------------------------------
 # 审计产物路径模式——单一事实源。
@@ -242,6 +246,8 @@ my $shield = join '|',
   q{CRS-active}, q{LBF1}, q{PID1}, q{DNS-01},
   q{IPv[46]-(?:only|first|mapped|compatible)},  # IPv6-only 等网络口径
   q{YYYYMMDD(?:-HHMMSS)?},                      # 日志轮转文件名骨架
+  q{[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?},
+  q{[0-9]{8}T[0-9]{2}-[0-9]{2}-[0-9]{2}},       # 日志轮转 ISO 时间戳（含毫秒）
   q{MAX-[0-9]+}, q{MIN-[0-9]+},      # 容量边界常量（MAX-1 个自有键），非编号
   q{[A-F0-9]{16,}};                      # 长十六进制摘要（逐段哈希/指纹）
 

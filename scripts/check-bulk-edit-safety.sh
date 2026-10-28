@@ -19,6 +19,9 @@
 #      指定范围（CI/评审传 origin/<base>...HEAD），否则中段提交的批量删除不可见。
 #      该通道依赖 python3 计数：缺失或统计失败一律 fail-closed（拒绝静默通过），
 #      与 check-no-audit-artifacts.sh 对缺 perl 的取向一致。
+#      通道 A 的豁免面是**显式文件名**清单（本守卫 + 六个守卫自检），不是目录
+#      前缀：按 `^scripts/tests/` 排除会让放进该目录的任何脚本免检，把真实批量
+#      改写脚本挪进去即绕过唯一一道「必须先 checkpoint」的静态闸门。
 #
 # 用法：bash scripts/check-bulk-edit-safety.sh [--self-test]
 set -euo pipefail
@@ -28,6 +31,27 @@ cd "$root"
 
 paren_min="${BULK_PAREN_MIN:-100}"
 paren_ratio="${BULK_PAREN_RATIO:-5}" # removed > added*ratio 视为异常
+
+# 自检豁免面：显式文件名清单 + 长度断言，口径与 check-no-audit-artifacts.sh 的
+# content_exempt_paths 一致。此前按目录前缀 `^scripts/tests/` 排除，导致该目录下
+# 任何脚本（不限于自检）都免检——把真实批量改写脚本挪进去即绕过唯一一道
+# 「必须先 checkpoint」的静态闸门。新增自检必须在此显式登记并同步下面的计数。
+selftest_exempt_paths=(
+  scripts/tests/bulk-edit-safety-selftest.sh
+  scripts/tests/dockerfile-copy-gate-selftest.sh
+  scripts/tests/guard-selftest.sh
+  scripts/tests/race-gate-selftest.sh
+  scripts/tests/shuffle-gate-selftest.sh
+  scripts/tests/startup-chain-gate-selftest.sh
+)
+if [[ ${#selftest_exempt_paths[@]} -ne 6 ]]; then
+  echo "ERROR: 自检豁免面清单长度漂移（期望 6，实际 ${#selftest_exempt_paths[@]}）——豁免面必须逐项显式登记" >&2
+  exit 1
+fi
+selftest_exempt_re=""
+for exempt_path in "${selftest_exempt_paths[@]}"; do
+  selftest_exempt_re+="${selftest_exempt_re:+|}^$(printf '%s' "$exempt_path" | sed 's/[.]/\\./g')\$"
+done
 
 scan_scripts() {
   local bad=0 f
@@ -53,11 +77,10 @@ scan_scripts() {
   # 完全失效——同仓 test-all.sh（bash -n）与 check-no-audit-artifacts.sh
   # （未跟踪文件入面）都取「受控 + 未跟踪」并集，三处口径必须一致。
   # 枚举面=仓内全部 .sh/.py（不限 scripts/）：仓根/tools/hack 的一次性批量脚本
-  # 与 scripts/ 内的脚本按同一口径受检。排除本守卫（自身含匹配样例文本）与
-  # 各守卫自检（夹具里刻意写无 dry-run 脚本）。
+  # 与 scripts/ 内的脚本按同一口径受检。
   done < <(git ls-files --cached --others --exclude-standard '*.sh' '*.py' \
     | grep -v 'check-bulk-edit-safety.sh' \
-    | grep -v '^scripts/tests/' \
+    | grep -v -E "$selftest_exempt_re" \
     | grep -v '^web/node_modules/' || true)
   return "$bad"
 }

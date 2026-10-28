@@ -1676,7 +1676,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			return
 		}
 	}
-	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
+	if err := replacePathRulesTx(caddyWriteCtx(c), tx, caddyID, features.PathRules); err != nil {
 		rollbackRuleWriteTx(tx, "CreateRule", caddyID)
 		services.Logf("error", "CreateRule path_rules replace error: %v", err)
 		recordRuleWriteFailure(c, "创建", "写入数据库失败（创建自定义路径规则）", err)
@@ -2843,6 +2843,32 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return nil
 	}
 
+	// 证书任务补偿快照——必须在事务提交前、且在任何 cert_jobs 变更之前取。
+	//
+	// 只有两种形态需要它：①事务内禁用（updatingToDisabled）把非终态任务行翻成
+	// disabled；②提交后的 ACME 段（域迁移/入队/重载失败）靠 restoreACMEState
+	// 回退任务行。若快照在提交之后才取（历史实现），禁用方向的目标态已是
+	// disabled——应用失败时 restoreRuleDBSnapshot 把规则回滚为启用，任务行却
+	// 停留 disabled，下一次任意渲染因「启用但无可用证书」把整条规则摘除
+	// （fail-closed），而 /enable 入口又被 disabled 任务 409 挡住，自愈只剩 6h
+	// 补建或手工 disable→enable。
+	// 退出 ACME（整行删除）不取快照：删除就是请求的终态，提交后没有任何补偿
+	// 分支会回滚任务行，多取一份只会在读失败时把本可成功的更新变成 500。
+	// 快照失败仍在零副作用阶段，直接失败即可。
+	entersACMEPostCommit := derefBool(req.EnableTLS) && req.TLSSource == "acme_dns" &&
+		req.Protocol == "http" && domain != ""
+	var certJobsSnapshot services.CertJobsSnapshot
+	if updatingToDisabled || entersACMEPostCommit {
+		snapshot, snapErr := services.SnapshotCertJobsForRule(caddyID)
+		if snapErr != nil {
+			services.Logf("error", "UpdateRule failed to snapshot cert jobs for caddy_id=%s: %v", caddyID, snapErr)
+			recordRuleWriteFailure(c, "更新", "备份证书任务失败", snapErr)
+			writeInternalError(c, http.StatusInternalServerError, "备份证书任务失败", snapErr)
+			return
+		}
+		certJobsSnapshot = snapshot
+	}
+
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "更新", "开启数据库事务失败", err)
@@ -3040,14 +3066,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 		}
 	}
-	if err := replaceUpstreamsTx(c.Request.Context(), tx, caddyID, req.Upstreams); err != nil {
+	if err := replaceUpstreamsTx(caddyWriteCtx(c), tx, caddyID, req.Upstreams); err != nil {
 		rollbackRuleWriteTx(tx, "UpdateRule", caddyID)
 		services.Logf("error", "UpdateRule upstreams replace error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "写入数据库失败（更新上游服务器）", err)
 		writeInternalError(c, http.StatusInternalServerError, "写入数据库失败（更新上游服务器）", nil)
 		return
 	}
-	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
+	if err := replacePathRulesTx(caddyWriteCtx(c), tx, caddyID, features.PathRules); err != nil {
 		rollbackRuleWriteTx(tx, "UpdateRule", caddyID)
 		services.Logf("error", "UpdateRule path_rules replace error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "写入数据库失败（更新自定义路径规则）", err)
@@ -3140,11 +3166,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}()
 			qm.UnblockJobsForRule(caddyID, blockToken)
 			// 放锁窗口内可能已并发删除本规则；继续后续迁移/补偿会把它复活。
+			// 中止只跳过补偿与成功收尾——本次 /load 已真实发生，仍须落重载审计。
 			if abortIfRuleDeleted(c, caddyID) {
+				reloadNote.auditReload()
 				return
 			}
 			// 并发修改复核：窗口内他人提交的更新不得被本请求的失败补偿回退。
 			if fingerprintErr == nil && abortIfRuleConcurrentlyModified(c, caddyID, postCommitFingerprint) {
+				reloadNote.auditReload()
 				return
 			}
 		}
@@ -3170,7 +3199,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		resolvedExistingCAProviderID, resolveExistingErr := services.ResolveCAProviderID(existingRule.CAProviderID)
 		if resolveErr != nil || resolveExistingErr != nil {
 			runtimeErr := h.restoreImportRuntime(runtimeSnapshot)
-			sideErr := errors.Join(restoreRuleDBSnapshot(), h.pinLastGoodAfterCompensation())
+			// 任务行同样按请求前快照回退：事务内的禁用已把非终态行翻成
+			// disabled，只回滚规则行会留下「启用但任务暂停」的分叉态。
+			// 顺序=先规则行（恢复为启用/ACME 后 RestoreCertJobsForRule 的
+			// 「规则仍属快照时代」判据才成立）后任务行，再钉回 LKG。
+			sideErr := errors.Join(restoreRuleDBSnapshot(), services.RestoreCertJobsForRule(certJobsSnapshot), h.pinLastGoodAfterCompensation())
 			reloadNote.auditReload()
 			h.recordPostCommitRestoreFailure(caddyApplyFailureSubject("解析 CA 提供商失败"), errors.Join(resolveErr, resolveExistingErr), runtimeErr, sideErr)
 			// 审计项：提交后失败的更早补偿分支同样必须留痕（此前只有应用日志）。
@@ -3186,30 +3219,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		caProviderID = resolvedCAProviderID
 		domainChanged := canonicalACMEDomainForJobLookup(domain) != canonicalACMEDomainForJobLookup(existingRule.Domain)
-		// 不变量：补偿快照必须先于任何它可能需要撤销的变更。
-		// 下面的域名迁移会就地抹除已签发任务的 PEM；快照若在其后执行，
-		// restoreACMEState 恢复出的任务将永久丢失 PEM（TLS 静默中断且
-		// 无自动恢复路径）。快照失败时迁移尚未执行，只需回滚规则与运行时。
-		certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
-		if err != nil {
-			runtimeErr := h.restoreImportRuntime(runtimeSnapshot)
-			sideErr := errors.Join(restoreRuleDBSnapshot(), h.pinLastGoodAfterCompensation())
-			reloadNote.auditReload()
-			h.recordPostCommitRestoreFailure(caddyApplyFailureSubject("备份证书任务失败"), err, runtimeErr, sideErr)
-			// 审计项：同族更早补偿分支补审计（失败/回滚结果一并留痕）。
-			restoreErr := errors.Join(runtimeErr, sideErr)
-			detail := "备份证书任务失败，已回滚更新: " + err.Error()
-			if restoreErr != nil {
-				detail = "备份证书任务失败且恢复失败: " + errors.Join(err, restoreErr).Error()
-			}
-			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
-			if restoreErr != nil {
-				services.Logf("error", "恢复失败: UpdateRule cert job snapshot failed and restore failed for caddy_id=%s: snapshot=%v restore=%v", caddyID, err, restoreErr)
-			}
-			writeInternalError(c, http.StatusInternalServerError, "备份证书任务失败", errors.Join(err, restoreErr))
-			return
-		}
+		// 补偿快照已在事务提交前取得（见 beginCaddyWriteTx 之前的快照块）：
+		// 提交后的域迁移会就地抹除已签发任务的 PEM，而回滚目标态必须是
+		// 「请求前」——提交后再取会把事务内的禁用/迁移结果当目标态。
 		// When domain changes, update the existing cert job's domain instead of
 		// creating a new job and disabling the old one. This preserves the job ID
 		// and maintains the "one rule = one cert job" invariant.
@@ -3252,12 +3264,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 取消等待期间并发 DeleteRule 可完整提交；此时继续
 				// createOrRequeueCertJobVerified 会命中「规则已删除」并走
 				// restoreACMEState → 按快照复活规则。改为在窗口后直接复核。
+				// 中止只跳过后续迁移/补偿，本次 /load 已真实发生 → 补重载审计。
 				if abortIfRuleDeleted(c, caddyID) {
+					reloadNote.auditReload()
 					return
 				}
 				// 并发修改复核：同一窗口内的并发更新同样中止（后续恢复按请求前
 				// 快照回滚会覆盖他人已提交内容）。
 				if fingerprintErr == nil && abortIfRuleConcurrentlyModified(c, caddyID, postCommitFingerprint) {
+					reloadNote.auditReload()
 					return
 				}
 			}
@@ -4169,10 +4184,16 @@ type storedUpstream struct {
 // 身份判定的两个入口：前端编辑既有行回传真实 id；无 id 的调用方
 // （MCP/导出导入/集群 apply）退化为按身份键配对。调用方须先完成归一
 // （weight 0→1、protocol 默认、tls 校验），内容比较以终值为准。
+// storedUpstreamNullColumnsSQL 判定存量上游行是否含「待归一 NULL 列」
+// （legacy 可空 schema / 带外写入残留）：判定依据必须覆盖读侧 COALESCE 的
+// **全部**列——漏一列时该行的 NULL 在原样保存后永久保留，导出/集群快照继续
+// 携带 NULL，与 schema 的 NOT NULL DEFAULT ” 终态不一致。
+const storedUpstreamNullColumnsSQL = `(weight IS NULL OR dynamic_dns IS NULL OR enabled IS NULL OR protocol IS NULL OR max_connections IS NULL OR origin_domain IS NULL)`
+
 func replaceUpstreamsTx(ctx context.Context, tx *sql.Tx, ruleID string, upstreams []models.Upstream) error {
 	rows, err := tx.QueryContext(ctx, `SELECT id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0),
 		`+services.UpstreamEnabledSQLValue+`, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(origin_domain,''),
-		(weight IS NULL OR dynamic_dns IS NULL OR enabled IS NULL OR protocol IS NULL OR max_connections IS NULL)
+		`+storedUpstreamNullColumnsSQL+`
 		FROM upstreams u WHERE rule_id = ? ORDER BY id`, ruleID)
 	if err != nil {
 		return fmt.Errorf("读取规则 %s 的上游: %w", ruleID, err)
@@ -5076,9 +5097,14 @@ var (
 )
 
 // ruleMutationFingerprint 计算规则形态指纹（并发修改复核）：lb_rules 行 +
-// upstreams + path_rules 三面的完整投影。map 序列化由 encoding/json 按键名
-// 排序；关系行按 id 排序。用于判定主动放锁窗口内是否有人提交了对同一规则的
-// 修改（本请求提交后的指纹为基线）。
+// upstreams + path_rules + security_policy_bindings 四面的完整投影。map 序列化
+// 由 encoding/json 按键名排序；关系行按 id/策略 id 排序。用于判定主动放锁窗口
+// 内是否有人提交了对同一规则的修改（本请求提交后的指纹为基线）。
+//
+// 安全策略绑定必须参与指纹：绑定写端点（单条/批量）只改
+// security_policy_bindings、不写 lb_rules，漏掉该表会把「他人刚绑定/解绑策略」
+// 误判为「无人并发修改」；本请求随后失败时 restoreImportRuntime 会按请求前快照
+// 整体恢复运行配置，把他人已生效的防护静默撤掉（DB 保留绑定、运行面回滚）。
 func ruleMutationFingerprint(ctx context.Context, caddyID string) (string, error) {
 	ruleRow, err := dumpRowByKey(ctx, "lb_rules", "caddy_id", caddyID)
 	if err != nil {
@@ -5112,7 +5138,19 @@ func ruleMutationFingerprint(ctx context.Context, caddyID string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("序列化路径规则指纹: %w", err)
 	}
-	return string(ruleJSON) + "\n" + string(upstreamJSON) + "\n" + string(pathJSON), nil
+	bindingRows, err := queryRowsAsMaps(ctx, db.DB, rowQuery{
+		label: "策略绑定指纹",
+		query: "SELECT * FROM security_policy_bindings WHERE rule_caddy_id = ? ORDER BY policy_id",
+		args:  []any{caddyID},
+	})
+	if err != nil {
+		return "", err
+	}
+	bindingJSON, err := json.Marshal(bindingRows)
+	if err != nil {
+		return "", fmt.Errorf("序列化策略绑定指纹: %w", err)
+	}
+	return string(ruleJSON) + "\n" + string(upstreamJSON) + "\n" + string(pathJSON) + "\n" + string(bindingJSON), nil
 }
 
 // abortIfRuleConcurrentlyModified 在放锁窗口结束后复核规则是否被并发修改
@@ -5292,13 +5330,16 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		// 删除复核：放锁窗口内并发的 DeleteRule 可完整提交（含证书任务/绑定
 		// 清理）——此时不得再写「禁用」成功审计（会留下指向已不存在规则的
 		// 成功留痕），按冲突中止；与 UpdateRule 同用 abortIfRuleDeleted。
+		// 中止只跳过成功收尾，本次 /load 已真实发生 → 补重载审计。
 		if abortIfRuleDeleted(c, caddyID) {
+			reloadNote.auditReload()
 			return
 		}
 		// 并发修改复核：窗口内并发 EnableRule/UpdateRule 完整提交（指纹偏离
 		// 基线）时按冲突中止——本请求写入的「禁用」已被他人覆盖，成功审计
 		// 会与最终状态矛盾。
 		if disableFingerprintBaseline != "" && abortIfRuleConcurrentlyModifiedAs(c, caddyID, disableFingerprintBaseline, "禁用") {
+			reloadNote.auditReload()
 			return
 		}
 	}

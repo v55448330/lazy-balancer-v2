@@ -163,11 +163,6 @@ func (limiter *authenticationAuditLimiter) dropHeadLocked() {
 	limiter.reclaimCount--
 }
 
-// reclaimQueueLenLocked 是回收队列当前条目数（测试与不变量自检用）。
-func (limiter *authenticationAuditLimiter) reclaimQueueLenLocked() int {
-	return limiter.reclaimCount
-}
-
 // reclaimExpiredLocked 从队头回收至多 authenticationAuditReclaimBatch 条过期
 // 键——每次调用常数级工作量（含出队丢弃被替代的旧条目），摊销完成回收。
 //
@@ -460,6 +455,23 @@ func clusterRegisterRateLimit() gin.HandlerFunc {
 	return clusterRateLimit("register", 30, "注册请求过于频繁，请稍后再试")
 }
 
+// mcpRateLimitPerMinute 是 MCP 端点的按 IP 额度。MCP 是机器接口（LLM 工具
+// 调用一次会话内连续多次往返），比人工写端点频繁得多，故取公开只读宽桶的
+// 量级（120/min，与 branding 桶同档）；同时仍是每秒级上限，单个身份无法线速
+// 灌满内部 API 与审计库。
+const mcpRateLimitPerMinute = 120
+
+// noStoreResponse 让响应不可被任何缓存留存（浏览器回退缓存、中间反代）。
+// 只挂在返回会话令牌、身份/MFA 秘密或一次性明文凭据的路由上——不是全局头：
+// 静态资源与业务数据各有自己的缓存策略，全局 no-store 会把它们一并降级为
+// 每次重新取数。
+func noStoreResponse() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	}
+}
+
 type clusterCredentialSource int
 
 const (
@@ -733,7 +745,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	{
 		mcpHandler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), LoopbackAPIClient(), internalMCPAuthSecret)
-		v1.POST("/mcp", apiKeyAuth(db.DB), mcpAccessGuard(), func(c *gin.Context) {
+		// /mcp：限流先于认证与请求体读取——未认证流量不得先花掉 1 MiB 体读
+		// 与一次密钥点查（此前该端点唯一无限流，单个 IP 可线速灌内部 API 与
+		// 审计库）。apiKeyAuth → mcpAccessGuard 的次序不变。
+		v1.POST("/mcp", clusterRateLimit("mcp", mcpRateLimitPerMinute, "MCP 请求过于频繁，请稍后再试"), apiKeyAuth(db.DB), mcpAccessGuard(), func(c *gin.Context) {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
@@ -771,16 +786,17 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			gin.WrapH(mcpHandler)(c)
 		})
 		v1.GET("/docs", h.GetAPIDocs)
-		v1.POST("/auth/login", loginRateLimit(), h.Login)
-		v1.POST("/auth/ticket-login", loginRateLimit(), h.TicketLogin)
-		v1.POST("/auth/mfa/verify", loginRateLimit(), h.MFAVerifyLogin)
+		// 认证入口的响应体带会话令牌/MFA 判定结果：逐条标记不可缓存。
+		v1.POST("/auth/login", noStoreResponse(), loginRateLimit(), h.Login)
+		v1.POST("/auth/ticket-login", noStoreResponse(), loginRateLimit(), h.TicketLogin)
+		v1.POST("/auth/mfa/verify", noStoreResponse(), loginRateLimit(), h.MFAVerifyLogin)
 		// GET /auth/setup 是登录页挂载即调用的只读探测（登录页每次打开一次，
 		// 403 分支复探）——与登录写共用 10/min 桶会让同一出口 IP 打开 10 次
 		// 登录页就耗尽登录预算（企业 NAT/反代后共享地址场景），正常用户随即
 		// 收到「登录尝试过于频繁」。改为独立宽桶（与 oidc-status 同口径
 		// 60/min/IP），POST /auth/setup（真实建号=爆破相关面）仍留登录桶。
 		v1.GET("/auth/setup", clusterRateLimit("setup-status", 60, "初始化状态查询过于频繁，请稍后再试"), h.GetSetupStatus)
-		v1.POST("/auth/setup", loginRateLimit(), h.SetupAdmin)
+		v1.POST("/auth/setup", noStoreResponse(), loginRateLimit(), h.SetupAdmin)
 		// OIDC 公开链路(v2.3.0):status=登录页按钮显隐;login=跳转;
 		// callback=授权码回调(失败 302 回前端错误页)。均登录前可达,
 		// 回调校验失败拒绝即止,不计入登录锁定(防伪造回调 DoS 锁号);
@@ -791,10 +807,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// JSON 反序列化，分布式探测可放大 DB 读；挂独立宽桶（60/min/IP，
 		// 不消耗登录额度）。
 		v1.GET("/auth/oidc/status", clusterRateLimit("oidc-status", 60, "OIDC 状态查询过于频繁，请稍后再试"), h.OIDCStatus)
-		v1.GET("/auth/oidc/login", loginRateLimit(), h.OIDCLogin)
+		v1.GET("/auth/oidc/login", noStoreResponse(), loginRateLimit(), h.OIDCLogin)
 		// callback 匿名可达且失败分支会写审计行；独立桶限流（不消耗登录
 		// 额度），防止伪造回调线速灌审计库。
-		v1.GET("/auth/oidc/callback", clusterRateLimit("oidc-callback", 60, "OIDC 回调请求过于频繁，请稍后再试"), h.OIDCCallback)
+		v1.GET("/auth/oidc/callback", noStoreResponse(), clusterRateLimit("oidc-callback", 60, "OIDC 回调请求过于频繁，请稍后再试"), h.OIDCCallback)
 		// 品牌配置公开读取：每请求至少 1 次 stat+序列化，指纹变化后的首个
 		// 通过门控请求还会同步做多次 DB 写——匿名方无限速刷会把「每分钟一次」
 		// 的门控放大成并发写尝试。挂独立宽桶（120/min/IP，前端首屏只读一次，
@@ -835,7 +851,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			// Authorization 头取本路径，未认证者拿到壳也取不到规格（见 apidocs.go）。
 			v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
-			v1.POST("/auth/logout", h.Logout)
+			v1.POST("/auth/logout", noStoreResponse(), h.Logout)
 			// User management (admin only)
 			adminGroup := v1.Group("")
 			// adminOnly 先于 mfaStepUpGuard——非管理员打 admin 端点
@@ -847,7 +863,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/users", h.CreateUser)
 				admin.PUT("/users/:id/status", h.ToggleUserStatus)
 				admin.DELETE("/users/:id", h.DeleteUser)
-				admin.POST("/users/:id/mfa/reset", h.MFAResetByAdmin)
+				admin.POST("/users/:id/mfa/reset", noStoreResponse(), h.MFAResetByAdmin)
 
 				// 管理语义端点收紧至 admin 组——服务重启/管理面板
 				// TLS/原始 Caddy 配置覆写/Caddy 进程启停均为管理员级操作；此前挂在
@@ -863,7 +879,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/caddy/restart", h.RestartCaddy)
 
 				// API Keys（创建与自助同实现：属主恒为当前认证身份）
-				admin.POST("/api-keys", h.CreateCurrentUserAPIKey)
+				admin.POST("/api-keys", noStoreResponse(), h.CreateCurrentUserAPIKey)
 				admin.PATCH("/api-keys/:id/status", h.UpdateAPIKeyStatus)
 				admin.DELETE("/api-keys/:id", h.DeleteAPIKey)
 
@@ -978,20 +994,20 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
 				business.GET("/system/tasks/:id/history", h.GetSystemTaskHistory)
 				business.GET("/system/tasks/:id/logs", h.GetSystemTaskLogs)
-				// Current user (self)
-				business.GET("/users/me", h.GetCurrentUser)
-				business.PATCH("/users/me", h.UpdateCurrentUser)
-				business.PUT("/users/:id", adminOrSelfParam(), h.UpdateUser)
-				business.POST("/users/:id/reset-password", adminOrSelfParam(), h.ResetUserPassword)
+				// Current user (self)——身份与 MFA 秘密同属不可缓存响应。
+				business.GET("/users/me", noStoreResponse(), h.GetCurrentUser)
+				business.PATCH("/users/me", noStoreResponse(), h.UpdateCurrentUser)
+				business.PUT("/users/:id", noStoreResponse(), adminOrSelfParam(), h.UpdateUser)
+				business.POST("/users/:id/reset-password", noStoreResponse(), adminOrSelfParam(), h.ResetUserPassword)
 				// v2.1.8 MFA 自助端点（JWT 用户）
-				business.GET("/auth/mfa/status", h.MFAStatus)
-				business.POST("/auth/mfa/setup", h.MFASetup)
-				business.POST("/auth/mfa/activate", h.MFAActivate)
-				business.POST("/auth/mfa/disable", h.MFADisable)
-				business.POST("/auth/mfa/recovery-codes", h.MFARecoveryCodes)
-				business.POST("/auth/mfa/verify-step", h.MFAVerifyStep)
-				business.GET("/users/me/api-keys", h.ListCurrentUserAPIKeys)
-				business.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
+				business.GET("/auth/mfa/status", noStoreResponse(), h.MFAStatus)
+				business.POST("/auth/mfa/setup", noStoreResponse(), h.MFASetup)
+				business.POST("/auth/mfa/activate", noStoreResponse(), h.MFAActivate)
+				business.POST("/auth/mfa/disable", noStoreResponse(), h.MFADisable)
+				business.POST("/auth/mfa/recovery-codes", noStoreResponse(), h.MFARecoveryCodes)
+				business.POST("/auth/mfa/verify-step", noStoreResponse(), h.MFAVerifyStep)
+				business.GET("/users/me/api-keys", noStoreResponse(), h.ListCurrentUserAPIKeys)
+				business.POST("/users/me/api-keys", noStoreResponse(), h.CreateCurrentUserAPIKey)
 				business.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
 				business.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
 
@@ -999,7 +1015,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/mcp/tools", h.GetMCPTools)
 				business.GET("/mcp/ops-playbook", h.GetMCPOpsPlaybook)
 				business.GET("/users", h.ListUsers)
-				business.GET("/api-keys", h.ListAPIKeys)
+				business.GET("/api-keys", noStoreResponse(), h.ListAPIKeys)
 				business.GET("/cluster/nodes", h.ListClusterNodes)
 				business.GET("/config/health", h.GetUpstreamHealth)
 

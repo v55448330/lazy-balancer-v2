@@ -101,10 +101,12 @@ func TestUpdateConfig_trustedProxyRefs_rejectsMissingList(t *testing.T) {
 
 func TestUpdateConfig_trustedProxyRefs_rejectsOverTotalCap(t *testing.T) {
 	router := newTrustedProxyRefsRouter(t)
-	// 2001 条有效条目（直插绕过 2000 条形状门——总上限门独立于写侧形状门）
+	// 2001 条有效条目（直插绕过 2000 条形状门——总上限门独立于写侧形状门）。
+	// 网段必须真正互不相同：`10.1.x.y/24` 的主机位会在归一（Masked）后折叠，
+	// 只有 9 个网络，总量门按规范前缀集合计数后不再超限。
 	entries := make([]string, 0, 2001)
 	for i := range 2001 {
-		entries = append(entries, fmt.Sprintf(`{"value":"10.1.%d.%d/24","remark":""}`, i/250, i%250))
+		entries = append(entries, fmt.Sprintf(`{"value":"10.%d.%d.0/24","remark":""}`, i/256, i%256))
 	}
 	listID := seedTrustedRefList(t, "huge-ref-list", "["+strings.Join(entries, ",")+"]")
 
@@ -251,7 +253,9 @@ func TestUpdateConfig_trustedProxyRefs_countsOnlyNonEmptyEntries(t *testing.T) {
 	router := newTrustedProxyRefsRouter(t)
 	entries := make([]string, 0, 2001)
 	for i := range 2000 {
-		entries = append(entries, fmt.Sprintf(`{"value":"10.1.%d.%d/24","remark":""}`, i/250, i%250))
+		// 网段互不相同（10.x.y.0/24）：`10.1.x.y/24` 的宿主位归一后会折叠成
+		// 少数网络，总量门按规范集合计数时不再逼近上限。
+		entries = append(entries, fmt.Sprintf(`{"value":"10.%d.%d.0/24","remark":""}`, i/256, i%256))
 	}
 	entries = append(entries, `{"value":"","remark":"历史空条目"}`)
 	listID := seedTrustedRefList(t, "empties-ref-list", "["+strings.Join(entries, ",")+"]")

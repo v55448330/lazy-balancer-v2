@@ -14,6 +14,21 @@ export const isAutobanIneffective = (status: AutobanEffectivenessView): boolean 
 export type SuggestionBand = 'high' | 'mid' | 'low'
 
 /**
+ * 状态条数值的未知态口径：`GET /security/autoban/status` 失败时，数值一律渲染
+ * 「—」而不是前端初值（未启用 / 阈值 100 / 今日封禁 0）——否则读者会把本机默认
+ * 值当成真实配置与真实封禁量。
+ */
+export const autobanStatValue = (error: boolean, value: string | number, unit = ''): string =>
+  error ? '—' : `${value}${unit}`
+
+/** 状态标签文案：读取失败=「状态未知」，不得沿用「未启用」这一确定结论。 */
+export const autobanStateLabel = (error: boolean, enabled: boolean, dryRun: boolean): string => {
+  if (error) return '状态未知'
+  if (!enabled) return '未启用'
+  return dryRun ? '观察模式' : '运行中'
+}
+
+/**
  * 建议行命中次数分档：≥4×阈值 高、≥2×阈值 中、其余低（阈值缺省按 1）。
  * 命中次数色深与阈值倍数进度条配色是同一判据的两种呈现——档位在此单源，
  * 各视图只做「档位 → 样式/颜色」映射，改档不再需要双改。

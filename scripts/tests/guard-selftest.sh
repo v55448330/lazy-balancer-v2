@@ -312,6 +312,42 @@ func noop() {}
 EOF
 assert_bad "lowercase rNN forms" "round_refs.go"
 
+# 3b) 运行数据目录的 skip 名单不得误伤同名模块：skip_re 里 waf* 只对 waf/、
+#     waf-slave/、waf.dist/ 这类运行目录生效，嵌套 Go 模块 wafiplist/ 必须留在
+#     路径与内容两条通道的扫描面内。回归形态是 `waf[^/]*/` 宽匹配——整个模块被
+#     静默摘出扫描面，模块里的注释编号与轮次测试名永久不入面。
+reset_fixture
+mkdir_in wafiplist/iplistfast.go
+cat >"$tmp_root/wafiplist/iplistfast.go" <<'EOF'
+package wafiplist
+
+// 88 轮修复：热路径二分判定改为窗口内单飞。
+func noop() {}
+EOF
+git -C "$tmp_root" add -f wafiplist/iplistfast.go
+assert_bad "module dir named waf* is content-scanned" "wafiplist/iplistfast.go"
+
+# 3c) 同一模块的轮次测试文件名走路径通道（内容通道只读文本，文件名归通道 1）。
+reset_fixture
+mkdir_in wafiplist/audit109_probe_test.go
+cat >"$tmp_root/wafiplist/audit109_probe_test.go" <<'EOF'
+package wafiplist
+
+func TestProbe(t *testing.T) {}
+EOF
+git -C "$tmp_root" add -f wafiplist/audit109_probe_test.go
+assert_bad "module dir named waf* is path-checked" "wafiplist/audit109_probe_test.go"
+
+# 3d) 反向对照：真正的 WAF 运行目录仍在扫描面之外——即使被强制跟踪（运行数据
+#     不该入库，但一旦入库就必须由 skip_re 而非 .gitignore 挡在文本扫描之外）。
+#     把 waf* 整段删掉会让运行目录里的上游规则文案重新入面（噪声与误报），
+#     故此处钉住「收窄到运行目录」的边界。
+reset_fixture
+mkdir_in waf/crs/rules/REQUEST-900-EXCLUSION.md
+printf '// 88 轮修复：上游排除规则文案\n' >"$tmp_root/waf/crs/rules/REQUEST-900-EXCLUSION.md"
+git -C "$tmp_root" add -f waf/crs/rules/REQUEST-900-EXCLUSION.md
+assert_good "waf runtime dir stays out of scan surface"
+
 # 4) 轮次测试文件名（.ts spec）
 reset_fixture
 mkdir_in web/src/views/round40_latency.spec.ts
@@ -758,6 +794,7 @@ package services
 
 // 轮转副本尾部形态 `-<yyyyMMdd>T<HH-mm-ss>.<毫秒>-size.log`；
 // 展示口径 HH:mm:ss，导出文件名 yyyyMMdd-HHmmss（时间格式骨架，非编号）。
+// 实际形态示例：-2026-10-23T18-38-57.122-size.log 与 lb_abc-20260102T03-04-05-size.log。
 func noop() {}
 EOF
 assert_good "time format skeleton"

@@ -95,7 +95,7 @@ test('隐藏列信息不丢失：规则 ID 并入域名副行、冷却并入重�
   assert.match(domainCol, /v-if="!visibleColumns\.has\('rule_id'\)"/)
   assert.match(domainCol, /#\{\{ row\.rule_id \}\}/)
   const attemptsCol = section(tableBody, 'label="重试次数"', '</el-table-column>')
-  assert.match(attemptsCol, /coolingHint\(row\)/)
+  assert.match(attemptsCol, /coolingHint\(row(?: as [A-Za-z]+)?\)/)
 })
 
 test('容器 overflow 裁断，杜绝卡片/页面级横向滚动', () => {

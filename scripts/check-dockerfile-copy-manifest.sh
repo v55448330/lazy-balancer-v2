@@ -14,7 +14,11 @@
 #      3) 顶层 Go 目录在清单内（新增顶层目录必须同步清单）。目录派生用
 #         `git ls-files --cached --others --exclude-standard`——受控 + 未跟踪同扫，
 #         与同仓 shell/gofmt 门同口径：新目录还没 git add 时就能红，而不是等到
-#         提交后才红、真正漏 COPY 只在镜像构建期报缺包。
+#         提交后才红、真正漏 COPY 只在镜像构建期报缺包；
+#      4) 落点正确（源对、目标错同样只在镜像构建期暴露）：目录源必须落到同名
+#         目录、文件源必须落到其所在目录（根模块文件 → `.`，嵌套模块文件 →
+#         `<模块>/`）。`COPY go.mod go.sum ./` 被改成 `./wafiplist/` 时源名仍在
+#         清单里，靠这条才红。
 #   B) xcaddy-builder 阶段（插件编译）：
 #      本阶段 COPY 源必须覆盖所有 `--with lazy-balancer-v2/<mod>=./<mod>` 的
 #      `<mod>/`。此前该阶段完全没有门：新增顶层插件模块、只补 backend 的 COPY
@@ -78,36 +82,51 @@ stage_copy_lines() {
   ' "$dockerfile"
 }
 
-# 把 COPY 指令转成「构建上下文里的源目录」清单（跳过 --from 的跨阶段源、标志位
-# 与末位目标路径），每行一个目录。
-stage_copy_dirs() {
+# 把 COPY 指令转成「构建上下文的源 <TAB> 目标」对（跳过 --from 的跨阶段源与
+# 标志位），每行一对。目标校验需要成对信息：只比源名会让「源正确、落点错误」
+# 的形态（`COPY go.mod go.sum ./` → `./wafiplist/`）继续判绿——根模块在镜像里
+# 缺 go.mod/go.sum，只在镜像构建期 go build 才暴露。
+stage_copy_pairs() {
   stage_copy_lines "$1" | while IFS= read -r instr; do
     [[ -z "$instr" ]] && continue
     read -r -a toks <<<"$instr"
     srcs=()
     is_from=0
     skip_next=0
+    # 标志过滤用 [[ ]] 而非 case：bash 3.2（macOS 系统 bash）扫描 $( ) 时不认
+    # case 模式里的 `)`，`--*)` 会被当成替换结束 → 整脚本语法错误。
     for ((i = 1; i < ${#toks[@]}; i++)); do
       tok="${toks[i]}"
       if ((skip_next)); then
         skip_next=0
         continue
       fi
-      case "$tok" in
-        --from) is_from=1; skip_next=1 ;;
-        --from=*) is_from=1 ;;
-        --*) ;;                       # --chown / --chmod / --link 等标志
-        *) srcs+=("$tok") ;;
-      esac
+      if [[ "$tok" == "--from" ]]; then
+        is_from=1
+        skip_next=1
+        continue
+      fi
+      [[ "$tok" == "--from="* ]] && { is_from=1; continue; }
+      [[ "$tok" == "--"* ]] && continue   # --chown / --chmod / --link 等标志
+      srcs+=("$tok")
     done
     # --from 的源来自其它阶段/镜像，不是构建上下文里的清单项。
     ((is_from)) && continue
     (( ${#srcs[@]} < 2 )) && continue  # 末位是目标路径，不计入源
+    target="${srcs[$((${#srcs[@]} - 1))]}"
+    # 源保留原样（含尾斜杠）：尾斜杠是「目录内容合并」的唯一静态信号。
     for ((i = 0; i < ${#srcs[@]} - 1; i++)); do
-      dir="${srcs[i]%/}"
-      [[ -z "$dir" || "$dir" == "." ]] && continue
-      printf '%s\n' "$dir"
+      printf '%s\t%s\n' "${srcs[i]}" "$target"
     done
+  done
+}
+
+# 源目录清单（从成对信息派生，单一解析器）：跳过空源与构建上下文根 `.`。
+stage_copy_dirs() {
+  stage_copy_pairs "$1" | while IFS=$'\t' read -r src target; do
+    dir="${src%/}"
+    [[ -z "$dir" || "$dir" == "." ]] && continue
+    printf '%s\n' "$dir"
   done
 }
 
@@ -128,6 +147,42 @@ for required in go.mod go.sum; do
     exit 1
   }
 done
+
+# 落点校验（源对、目标错同样只在镜像构建期暴露）：按 Docker 落点语义反推每个
+# 源应有的目标，逐对比较。
+#   · 目录源（带尾斜杠，或工作树里确实是目录）→ 内容是「合并进目标」，目标必须
+#     就是该目录本身（`COPY cmd/ ./cmd/`）；
+#   · 文件源 → 目标是其所在目录（根模块文件 go.mod/go.sum → `.`；嵌套模块的
+#     wafiplist/go.mod → `wafiplist`）。
+# 反例（旧实现的假绿形态）：`COPY go.mod go.sum ./` 改成 `./wafiplist/` 后源名
+# 仍在清单内 → 门禁绿，而根模块在镜像里没有 go.mod/go.sum，`go mod download` /
+# `go build` 在镜像构建期才失败。
+normalize_target_dir() { # 去 ./ 前缀与尾斜杠；空/点统一为 .
+  local p="$1"
+  p="${p#./}"
+  p="${p%/}"
+  [[ -z "$p" ]] && p="."
+  printf '%s' "$p"
+}
+
+branch_target_mismatch=""
+while IFS=$'\t' read -r src target; do
+  [[ -z "$src" ]] && continue
+  if [[ "$src" == */ || -d "${src%/}" ]]; then
+    expected="$(normalize_target_dir "${src%/}")"
+  else
+    expected="$(normalize_target_dir "$(dirname "$src")")"
+  fi
+  actual="$(normalize_target_dir "$target")"
+  [[ "$actual" == "$expected" ]] && continue
+  branch_target_mismatch+="${src} → ${target}（应为 ${expected}）; "
+done < <(stage_copy_pairs "$backend_stage")
+if [[ -n "$branch_target_mismatch" ]]; then
+  echo "ERROR: Dockerfile backend COPY 落点与源不匹配（源在清单里但目标放错同样会漏构件）:" >&2
+  echo "  $branch_target_mismatch" >&2
+  echo "清单=[$(stage_copy_pairs "$backend_stage" | tr '\t' '>')]" >&2
+  exit 1
+fi
 
 top_go_dirs="$(git ls-files --cached --others --exclude-standard '*.go' | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)"
 missing_dirs=""

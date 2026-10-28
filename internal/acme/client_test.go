@@ -497,6 +497,65 @@ func TestNewClientRetryBackoff_curve(t *testing.T) {
 	}
 }
 
+// CA（或其前置网关）以 5xx + Retry-After 明确要求等待时，重试延迟必须
+// 取「曲线」与「Retry-After（钳到 10s）」的较大值——否则 CA 过载窗口内
+// 客户端会以与服务器要求相反的节奏继续打，延长其 5xx 窗口。
+func TestNewClientRetryBackoff_prefersRetryAfterHeader(t *testing.T) {
+	client, err := newClient("https://acme.example/directory", "admin@example.com", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	backoff := client.acme.RetryBackoff
+	if backoff == nil {
+		t.Fatal("RetryBackoff not configured")
+	}
+	withRetryAfter := func(status int, retryAfter string) *http.Response {
+		header := http.Header{}
+		if retryAfter != "" {
+			header.Set("Retry-After", retryAfter)
+		}
+		return &http.Response{StatusCode: status, Header: header}
+	}
+
+	// 5xx + Retry-After: 5 → [5s, 6s]（曲线在此档为 1s）
+	for range 20 {
+		got := backoff(1, nil, withRetryAfter(http.StatusServiceUnavailable, "5"))
+		if got < 5*time.Second || got > 6*time.Second {
+			t.Fatalf("backoff(n=1, 503, Retry-After:5)=%v, want [5s,6s]", got)
+		}
+	}
+	// 502 同属 CA 过载形态
+	if got := backoff(1, nil, withRetryAfter(http.StatusBadGateway, "5")); got < 5*time.Second || got > 6*time.Second {
+		t.Fatalf("backoff(n=1, 502, Retry-After:5)=%v, want [5s,6s]", got)
+	}
+	// 远超上限（3600s）被钳到 10s，与分段预算口径一致
+	for range 20 {
+		got := backoff(1, nil, withRetryAfter(http.StatusServiceUnavailable, "3600"))
+		if got < 10*time.Second || got > 11*time.Second {
+			t.Fatalf("backoff(n=1, 503, Retry-After:3600)=%v, want [10s,11s]（上限 10s + 抖动）", got)
+		}
+	}
+	// Retry-After 短于曲线时取曲线（不得缩短既有退避）
+	if got := backoff(4, nil, withRetryAfter(http.StatusServiceUnavailable, "1")); got < 8*time.Second || got > 9*time.Second {
+		t.Fatalf("backoff(n=4, 503, Retry-After:1)=%v, want [8s,9s]（取较大值）", got)
+	}
+	// 缺失/畸形头不影响曲线（回归形状）
+	for _, header := range []*http.Response{
+		withRetryAfter(http.StatusServiceUnavailable, ""),
+		withRetryAfter(http.StatusServiceUnavailable, "not-a-delay"),
+		withRetryAfter(http.StatusServiceUnavailable, "-5"),
+		nil,
+	} {
+		if got := backoff(2, nil, header); got < 2*time.Second || got > 3*time.Second {
+			t.Fatalf("backoff(n=2, 503, 无形/畸形 Retry-After)=%v, want [2s,3s]", got)
+		}
+	}
+	// 429 仍立即放弃库内重试（上层 waiting_ca 统一退避）
+	if got := backoff(1, nil, withRetryAfter(http.StatusTooManyRequests, "60")); got != 0 {
+		t.Fatalf("backoff(n=1, 429, Retry-After:60)=%v, want 0", got)
+	}
+}
+
 // 既有账户密钥可用时，元数据（卫生清理输入）写失败不得阻断签发。
 func TestLoadOrCreateAccountKey_metadataWriteFailureDoesNotBlockIssuance(t *testing.T) {
 	dir := t.TempDir()

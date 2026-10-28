@@ -101,8 +101,8 @@ func TestEnsureClusterVersionTriggers_installsWhenMissing(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("安装后探测=%v/%v，want true", present, err)
 	}
-	// 期望名集合与安装器同源：数量=同步表×3 + global_config 1。
-	if want := len(clusterSyncedTables)*3 + 1; len(expectedClusterVersionTriggerNames()) != want {
-		t.Fatalf("期望触发器数=%d，want %d", len(expectedClusterVersionTriggerNames()), want)
+	// 期望触发器集合与安装器同源：数量=同步表×3 + global_config 1。
+	if want := len(clusterSyncedTables)*3 + 1; len(clusterVersionTriggerStatements()) != want {
+		t.Fatalf("期望触发器数=%d，want %d", len(clusterVersionTriggerStatements()), want)
 	}
 }

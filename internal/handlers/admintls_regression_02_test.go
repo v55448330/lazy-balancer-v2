@@ -74,7 +74,24 @@ func TestUpdateAdminTLS_abortsWhenCurrentConfigReadFails(t *testing.T) {
 func TestValidateV2BackupAdminTLS_abortsWhenCurrentReadFails(t *testing.T) {
 	withBrokenDB(t)
 	err := validateV2BackupAdminTLS(map[string]any{"admin_tls_enabled": true})
-	if err == nil || !strings.Contains(err.Error(), "读取当前") {
-		t.Fatalf("err=%v, want 备份合并路径在读失败时中止（不得用降级默认值校验）", err)
+	if err == nil {
+		t.Fatal("备份合并路径在读失败时必须中止（不得用降级默认值校验）")
+	}
+	// 读的是**当前库**而不是备份内容：必须归入基础设施读失败族，由导入入口
+	// 映射为 500 固定文案——否则管理员把库故障误判为备份损坏并反复更换文件，
+	// 且 400 响应会把底层驱动文本回给客户端。
+	var infraErr *importInfraReadError
+	if !errors.As(err, &infraErr) {
+		t.Fatalf("err=%v, want *importInfraReadError（现状读取失败 ≠ 备份内容错误）", err)
+	}
+	if strings.Contains(err.Error(), "database") || strings.Contains(err.Error(), "no such") {
+		t.Fatalf("err=%q 不得回显底层驱动文本", err.Error())
+	}
+	// 真正损坏的 admin TLS 备份仍按 400（校验失败，非基础设施）。
+	initializeRuleFeatureTestDB(t)
+	if err := validateV2BackupAdminTLS(map[string]any{"admin_tls_enabled": true, "admin_tls_mode": "upload", "admin_tls_cert": "not-a-cert", "admin_tls_key": ""}); err == nil {
+		t.Fatal("损坏的 upload 备份必须校验失败")
+	} else if errors.As(err, &infraErr) {
+		t.Fatalf("损坏备份不得归为基础设施读失败: %v", err)
 	}
 }

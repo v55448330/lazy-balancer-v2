@@ -276,8 +276,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # 旧形态在 PID 1 不回收孤儿的容器里每 30s 泄漏子进程（生产实证：十余小时
 # 堆到 2252 个僵尸 ssl_client，打满 cgroup pids 配额，容器内连 cat 都无法 fork）。
 # 语义不变：HTTPS 先行（管理 TLS 是常态）→ 失败回落明文；只认第一跳 200、
-# 不跟随跳转（避免把登录页 200 误判为健康）。探针端口固定 8000（容器内
-# entrypoint 不透传 -config，config.go 的 port 只对裸机自定义启动生效）；
+# 不跟随跳转（避免把登录页 200 误判为健康）。探针端口固定 8000，与容器启动参数
+# 无关：entrypoint 会透传 `docker run` 的显式参数，但用 -config 改 port 会让本探针
+# 打错端口（Docker DNS/健康状态误判），容器形态请不要改面板端口。
 # 两段尝试各 2s，合计小于 --timeout=5s。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD ["/usr/local/bin/lazy-balancer", "--healthcheck"]

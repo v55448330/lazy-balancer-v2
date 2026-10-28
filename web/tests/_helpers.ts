@@ -266,6 +266,63 @@ export const section = (text: string, startMarker: string, endMarker: string): s
 export const openTags = (text: string, tag: string): string[] =>
   [...text.matchAll(new RegExp(`<${tag}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, 'g'))].map((m) => m[0])
 
+/** 同名标签的开/闭标签扫描器（引号内的 `>` 不截断，自闭合标签单独识别）。 */
+const tagScanner = (tag: string): RegExp =>
+  new RegExp(`<${tag}\\b(?:[^>"']|"[^"]*"|'[^']*')*?/?>|</${tag}>`, 'g')
+
+/**
+ * 取 `openTagAt` 处元素的完整切片（同名标签按配对计数，嵌套安全；自闭合即自身）。
+ *
+ * 定长字符窗口（`text.slice(at, at + 320)`）是本仓反复返工过的形态：元素稍微变宽
+ * 断言就假红，改成先扩再断言又会静默恒真。按标签配对取段与字符数无关。
+ * 不平衡（缺闭合）直接抛错——切片不能靠猜。
+ */
+export const elementSlice = (text: string, openTagAt: number, tag: string): string => {
+  if (!new RegExp(`^<${tag}\\b`).test(text.slice(openTagAt))) {
+    throw new Error(`openTagAt 不是 <${tag}> 的起点：${JSON.stringify(text.slice(openTagAt, openTagAt + 40))}`)
+  }
+  const scanner = tagScanner(tag)
+  scanner.lastIndex = openTagAt
+  let depth = 0
+  for (let match = scanner.exec(text); match !== null; match = scanner.exec(text)) {
+    if (match[0].startsWith('</')) {
+      depth -= 1
+      if (depth === 0) return text.slice(openTagAt, match.index + match[0].length)
+      continue
+    }
+    if (depth === 0 && match[0].endsWith('/>')) return match[0]
+    depth += 1
+  }
+  throw new Error(`<${tag}> 在偏移 ${openTagAt} 处不平衡（缺闭合标签）`)
+}
+
+/**
+ * `offset` 处的片段落在哪个 `<tag> … </tag>` 之内：返回该元素的开标签，不在任何
+ * 元素内返回 null。
+ *
+ * 用于「X 必须/不得被 Y 包裹」这类断言。距离型写法
+ * （`/<el-tooltip[\s\S]{0,300}<el-button/` 恒真、`{0,120}` 恒假）在标记增长或
+ * 属性顺序变化时给出与界面无关的结论；包裹关系必须按标签配对判定。
+ */
+export const enclosingOpenTag = (text: string, tag: string, offset: number): string | null => {
+  const scanner = tagScanner(tag)
+  const stack: Array<{ at: number; tag: string }> = []
+  for (let match = scanner.exec(text); match !== null; match = scanner.exec(text)) {
+    if (match[0].startsWith('</')) {
+      const opened = stack.pop()
+      if (match.index >= offset) {
+        // 首个跨过 offset 的闭标签即「包住 offset 的那一层」；元素起点在 offset
+        // 之后则是后续元素，说明 offset 不在该元素内。
+        return opened !== undefined && opened.at < offset ? opened.tag : null
+      }
+      continue
+    }
+    if (match[0].endsWith('/>')) continue
+    stack.push({ at: match.index, tag: match[0] })
+  }
+  return stack.length > 0 && stack[stack.length - 1]!.at < offset ? stack[stack.length - 1]!.tag : null
+}
+
 /**
  * 去掉注释（`//`、`/* *\/`、Vue 模板 `<!-- -->`），保留字符串字面量与正则字面量。
  * 死代码扫描必须先剥注释：注释里提到退役符号不构成生产消费，否则维护者被迫

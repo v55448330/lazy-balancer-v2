@@ -1064,16 +1064,56 @@ func exchangeDNSMessage(ctx context.Context, m *dns.Msg, network, addr string) *
 	return r
 }
 
+// authoritativeNSWarnWindow 是同一域名权威 NS 发现失败告警的放行窗口。
+const authoritativeNSWarnWindow = 60 * time.Second
+
+var (
+	authoritativeNSWarnMu    sync.Mutex
+	authoritativeNSWarnTimes = map[string]time.Time{}
+)
+
+// authoritativeNSWarnAllowed 判定 key（归一后的 fqdn）的失败告警现在是否
+// 放行，并记录本次放行时刻。签发链是逐域名调用本函数、且权威清单全失败后
+// 每轮重发现（≤maxAuthRediscoveries）再调用一次，故单次签发同一域名最多
+// 会产生 1+maxAuthRediscoveries 条同源告警；多域名证书叠加后条数与域名数
+// 成正比（两域名最坏 6 条），运维会把重复行误判为并发签发或装配异常。
+// 同一故障在窗口内只留一条，窗口结束后再次失败重新留痕（保留「故障仍在
+// 持续」的可观测性，而不是永久静默）。
+func authoritativeNSWarnAllowed(key string, now time.Time) bool {
+	authoritativeNSWarnMu.Lock()
+	defer authoritativeNSWarnMu.Unlock()
+	if last, ok := authoritativeNSWarnTimes[key]; ok && now.Sub(last) < authoritativeNSWarnWindow {
+		return false
+	}
+	for k, last := range authoritativeNSWarnTimes {
+		if now.Sub(last) >= authoritativeNSWarnWindow {
+			delete(authoritativeNSWarnTimes, k)
+		}
+	}
+	authoritativeNSWarnTimes[key] = now
+	return true
+}
+
+// resetAuthoritativeNSWarnForTest 清空告警限流状态（测试隔离）。
+func resetAuthoritativeNSWarnForTest() {
+	authoritativeNSWarnMu.Lock()
+	authoritativeNSWarnTimes = map[string]time.Time{}
+	authoritativeNSWarnMu.Unlock()
+}
+
 // resolveAuthoritativeNS finds the authoritative name servers of fqdn's zone
 // by walking up the domain labels and querying NS records through a public
-// recursive resolver, then resolves the servers' addresses. // returns nil when the zone cannot be determined (and logs why once)。
+// recursive resolver, then resolves the servers' addresses. // returns nil when the zone cannot be determined (and logs why once per fqdn per throttle window)。
 func resolveAuthoritativeNS(ctx context.Context, fqdn, bootstrap string) []string {
 	servers, reason := discoverAuthoritativeNS(ctx, fqdn, bootstrap)
 	if reason != "" {
 		// 失败留痕：原实现静默返回 nil——签发表里只剩
 		// 30s 后那条「疑似 CNAME 委托/NS 变更」的误导性诊断，无法区分解析器
-		// 丢包与真的没有权威。每次签发至多一条（本函数每次等待只调用一次）。
-		logf("warn", "acme: 权威 NS 发现失败 %s: %s（本次签发按递归共识判定传播）", fqdn, reason)
+		// 丢包与真的没有权威。调用面是逐域名 + 每轮重发现，故按域名做 60s
+		// 限流：单次签发每个域名至多一条（重发现/任务重试共享同一窗口）。
+		if authoritativeNSWarnAllowed(dnsname.NormalizeName(fqdn), time.Now()) {
+			logf("warn", "acme: 权威 NS 发现失败 %s: %s（本次签发按递归共识判定传播）", fqdn, reason)
+		}
 	}
 	return servers
 }

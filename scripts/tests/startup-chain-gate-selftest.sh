@@ -40,7 +40,7 @@ fi
 
 # ── C) exec 目标拼错必须判红（sh -n 对该形态恒绿）──────────────────
 typo_entry="$work/entrypoint-typo.sh"
-sed 's|^exec /usr/local/bin/lazy-balancer$|exec /usr/local/bin/lazy-balancer-typo|' \
+sed 's|^exec /usr/local/bin/lazy-balancer "\$@"$|exec /usr/local/bin/lazy-balancer-typo "$@"|' \
   "$baseline_entry" >"$typo_entry"
 if ! grep -q 'lazy-balancer-typo' "$typo_entry"; then
   fail "变异注入失败（exec 目标未改写，用例会空转）"
@@ -130,4 +130,46 @@ grep -q 'pause 标记跨进程漂移' "$work/g.err" || {
   fail "pause 漂移失败必须给出三侧实际值"
 }
 
-echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope / bare-command / pause mutations rejected)"
+# ── H) COPY 落点语义：文件入目录 / 目录源合并 / 前缀不得过宽 ──────────
+# 旧启发式按「目标 + 源 basename」展开，对 `COPY src/ /opt/`（目录内容合并）
+# 记成 /opt/src —— exec 目标是 /opt/xxx 时假红。两形态都必须按 Docker 语义判：
+#   H1 `COPY <file> /usr/local/bin/`        → /usr/local/bin/<basename>（文件入目录）
+#   H2 `COPY bin/ /usr/local/bin/`          → /usr/local/bin/ 下的子项（目录内容合并）
+#   H3 H2 的目录换成别的落点时必须判红（前缀匹配不得宽到「任何路径都算已提供」）。
+landing_df="$work/Dockerfile.landing"
+cat >"$landing_df" <<'DOCKERFILE'
+FROM golang:1.24 AS builder
+FROM alpine:3.20
+RUN apk add --no-cache sqlite
+COPY --from=builder /app/lazy-balancer /usr/local/bin/
+COPY --from=builder /opt/caddy /usr/local/bin/caddy
+DOCKERFILE
+if ! bash "$gate" "$baseline_entry" "$landing_df" >/dev/null 2>"$work/h1.err"; then
+  cat "$work/h1.err" >&2
+  fail "文件入目录形态（COPY <file> /usr/local/bin/）必须按落点 basename 判通过"
+fi
+
+cat >"$landing_df" <<'DOCKERFILE'
+FROM golang:1.24 AS builder
+FROM alpine:3.20
+RUN apk add --no-cache sqlite
+COPY bin/ /usr/local/bin/
+COPY --from=builder /opt/caddy /usr/local/bin/caddy
+DOCKERFILE
+if ! bash "$gate" "$baseline_entry" "$landing_df" >/dev/null 2>"$work/h2.err"; then
+  cat "$work/h2.err" >&2
+  fail "目录源合并形态（COPY bin/ /usr/local/bin/）必须按目录前缀判通过（旧启发式记成 /usr/local/bin/bin）"
+fi
+
+cat >"$landing_df" <<'DOCKERFILE'
+FROM golang:1.24 AS builder
+FROM alpine:3.20
+RUN apk add --no-cache sqlite
+COPY bin/ /opt/bin/
+COPY --from=builder /opt/caddy /usr/local/bin/caddy
+DOCKERFILE
+if bash "$gate" "$baseline_entry" "$landing_df" >/dev/null 2>"$work/h3.err"; then
+  fail "目录前缀匹配过宽：/opt/bin/ 落点不得让 /usr/local/bin/lazy-balancer 通过"
+fi
+
+echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope / bare-command / pause / copy-landing mutations rejected)"

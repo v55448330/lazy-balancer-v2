@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -403,6 +404,42 @@ func resetBrandingSyncGateForTest() {
 	brandingSyncDataDir = ""
 	brandingSyncFingerprint = ""
 	brandingSyncMu.Unlock()
+	brandingApplyPending.Store(false)
+}
+
+// brandingApplyPending 记录「幂等同步已把库内渲染输入改掉，但 Caddy 应用尚未
+// 成功」的待办。同步本身幂等且已落库，重试轮 Sync/Seed 会返回 changed=false，
+// 即 needApply=false——只靠 needApply 判定时应用失败的重试永远不会发生。
+// 应用成功后清位；从节点不在本地应用，同样清位（不记待办、不反复重试）。
+var brandingApplyPending atomic.Bool
+
+// brandingApplyAfterSync 在幂等同步/播种/镜像已完成且有渲染输入变化时，主节点
+// 限定地重应用 Caddy 配置（异步，与 SeedDefaultBlockPage 同模式）。应用侧失败
+// 必须清指纹并记待办（见 brandingSyncMarkFailed）：本轮放行时指纹已记为
+// 「已处理」，不释放则失败被固化成终态——Caddy 继续跑旧文案/旧拦截页，直到
+// 有人手工重载或再次改文件。清指纹只放开指纹门，60s 采样窗仍在，公开端点不会
+// 被刷成每请求 /load。从节点正常跳过不是失败，不清指纹也不记待办。
+func (h *Handlers) brandingApplyAfterSync() {
+	isMaster, roleErr := services.RoleOf(context.Background(), db.DB)
+	if roleErr != nil {
+		// 角色读失败不得按主节点继续写
+		// ——公开 GET 触发的异步重应用在从节点上会造成本地 /load 漂移。
+		services.Logf("warn", "branding：读取节点角色失败，跳过本地 Caddy 重应用: %v", roleErr)
+		brandingApplyPending.Store(true)
+		brandingSyncMarkFailed()
+		return
+	}
+	if !isMaster {
+		brandingApplyPending.Store(false)
+		return
+	}
+	if err := h.applyCaddyConfigE(); err != nil {
+		services.Logf("error", "branding 触发的 Caddy 配置应用失败: %v", err)
+		brandingApplyPending.Store(true)
+		brandingSyncMarkFailed()
+		return
+	}
+	brandingApplyPending.Store(false)
 }
 
 func (h *Handlers) GetBranding(c *gin.Context) {
@@ -459,22 +496,14 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 		if syncFailed {
 			brandingSyncMarkFailed()
 		}
-		if needApply {
-			go func() {
-				isMaster, roleErr := services.RoleOf(context.Background(), db.DB)
-				if roleErr != nil {
-					// 角色读失败不得按主节点继续写
-					// ——公开 GET 触发的异步重应用在从节点上会造成本地 /load 漂移。
-					services.Logf("warn", "branding：读取节点角色失败，跳过本地 Caddy 重应用: %v", roleErr)
-					return
-				}
-				if !isMaster {
-					return
-				}
-				if err := h.applyCaddyConfigE(); err != nil {
-					services.Logf("error", "branding 触发的 Caddy 配置应用失败: %v", err)
-				}
-			}()
+		// 待办应用（上一轮 /load 失败后尚未成功）：同步已落库，重试轮
+		// needApply=false，必须靠待办标记继续尝试重应用，否则运行配置停在旧
+		// 文案/旧拦截页。窗口由 60s 采样门约束，公开端点不会被刷成每请求 /load。
+		if needApply || brandingApplyPending.Load() {
+			if needApply {
+				brandingApplyPending.Store(true)
+			}
+			go h.brandingApplyAfterSync()
 		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})

@@ -163,3 +163,37 @@ func TestTimberjackRotationReasonFamily_bindsRenderedWriterKeys(t *testing.T) {
 		}
 	}
 }
+
+// 规则日志文件名以词法承载归属：若某条存活规则的 caddy_id 自身以「完整时间戳
+// + reason」结尾（如 lb_abc-20260102T03-04-05-size，字母表内、导入/备份可达），
+// 它的活动文件在词法上等价于前缀规则 lb_abc 的一条轮转副本。删除 lb_abc 时
+// 不得把这条存活规则的文件 unlink（写侧仍持有 fd，日志会静默丢失直到下次
+// 轮转/重载）。归属必须结合存活规则清单反解，而不是只看文件名。
+func TestRemoveRuleLogFiles_keepsLiveSiblingWhoseIDLooksLikeRotationCopy(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+
+	const prefixID = "lb_abc"
+	const lookalikeID = "lb_abc-20260102T03-04-05-size"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES (?,?,?,?,1)`, lookalikeID, "lookalike", "http", 18096); err != nil {
+		t.Fatalf("seed lookalike rule: %v", err)
+	}
+	files := []string{prefixID + ".log", lookalikeID + ".log"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	if err := RemoveRuleLogFiles(prefixID); err != nil {
+		t.Fatalf("RemoveRuleLogFiles(%s): %v", prefixID, err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, prefixID+".log")); !os.IsNotExist(err) {
+		t.Fatalf("%s.log 未被删除: %v", prefixID, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, lookalikeID+".log")); err != nil {
+		t.Fatalf("存活规则 %s 的活动日志被前缀规则删除动作误删: %v", lookalikeID, err)
+	}
+}

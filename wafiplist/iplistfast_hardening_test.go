@@ -101,6 +101,33 @@ func TestParseIPEntry_unmaps4in6Entries(t *testing.T) {
 	}
 }
 
+// 契约钉：ParseIPEntry 对 mapped 主机位变体的归一——::ffff:0.0.0.1/96 与
+// canonical ::ffff:0:0/96 是同一网段，Unmap + bits-96 后折叠为 0.0.0.0/0。
+// 这是通用 IP 名单语义（名单条目「全部 v4」是合法的），因此该折叠不可在
+// 装载层收窄；受信代理投影必须先按等价 v4 判宽并拒绝该形态（services
+// TrustedProxyPrefix* 判据 + 写侧校验），否则信任边界被绕过。本用例钉住
+// 归一语义，避免其漂移让上层「跳过/拒绝」失去依据。
+func TestParseIPEntry_mappedHostBitCollapsesToV4AllSpace(t *testing.T) {
+	for _, entry := range []string{"::ffff:0.0.0.1/96", "::ffff:0:0/96", "::ffff:0.0.0.0/96"} {
+		prefix, err := ParseIPEntry(entry)
+		if err != nil {
+			t.Fatalf("parse %s: %v", entry, err)
+		}
+		if want := netip.MustParsePrefix("0.0.0.0/0"); prefix != want {
+			t.Fatalf("%s = %s, want %s（mapped /96 折叠为 v4 全空间）", entry, prefix, want)
+		}
+	}
+	// 精确段不变（等价 v4 前缀）
+	prefix, err := ParseIPEntry("::ffff:203.0.113.7/120")
+	if err != nil || prefix != netip.MustParsePrefix("203.0.113.0/24") {
+		t.Fatalf("precise mapped drift: %s err=%v", prefix, err)
+	}
+	// bits<96 的 mapped 前缀无法折成 v4：明确报错，不得静默归成别的网段
+	if _, err := ParseIPEntry("::ffff:0.0.0.0/95"); err == nil {
+		t.Fatal("mapped /95 必须报错（bits<96 无法归一为 v4）")
+	}
+}
+
 // 算子级端到端：4in6 裸 IP 与 /120 前缀两条目对被 Unmap 后的 v4
 // 查询命中（修复前条目落入 v6 集，v4 查询恒不命中）。
 func TestIPListFast_4in6EntriesHitV4Queries(t *testing.T) {

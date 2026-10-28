@@ -17,8 +17,11 @@ import (
 // PreviewConfigUpdate 共用——未过校验的载荷不得落库、也不得给出变更清单。
 //
 // 归一（原地回写 req 字段）：
-//   - ranges：裸 IP 补 /32（v4）//128（v6）；条数 ≤64；前缀长度 <8（v4）
-//     或 <29（v6）一律拒绝——过宽网段会让伪造的头在任意来源被采信。
+//   - ranges：裸 IP 补 /32（v4）//128（v6）；随后统一按
+//     services.TrustedProxyPrefixCanonical 归一（Masked 剥主机位 + 4in6
+//     映射折成等价 v4 前缀）；条数 ≤64；归一后覆盖全部地址空间或前缀长度
+//     <8（v4，mapped 折合 /104）/<29（v6）一律拒绝——过宽网段会让伪造的
+//     头在任意来源被采信。
 //   - range_refs（2026-10-12）：引用的 IP 地址列表 id（JSON 整数数组）；
 //     每个 id 必须存在且为自定义名单（system=1 内置名单拒绝）；
 //     引用名单条目须为合法 IP/CIDR 且与内联通道同宽度判据；总
@@ -369,7 +372,7 @@ func normalizeTrustedProxyRangeRefsWithSource(raw string, source trustedProxyBac
 			if services.TrustedProxyPrefixAllSpace(prefix) {
 				return "", nil, fmt.Errorf("引用的地址列表「%s」含过宽网段 %s：该网段覆盖全部地址空间，等同信任任意来源", row.name, prefix.String())
 			}
-			if prefix.Bits() < services.TrustedProxyMinPrefixBits(prefix.Addr()) {
+			if services.TrustedProxyPrefixBelowMinBits(prefix) {
 				return "", nil, fmt.Errorf("引用的地址列表「%s」含过宽网段 %s：最小允许 /8（IPv4）与 /29（IPv6），请收窄到该 CDN 的回源网段", row.name, prefix.String())
 			}
 			// 计数口径=通过校验的规范前缀集合（空 value 已跳过），跨名单/跨来源
@@ -385,18 +388,20 @@ func normalizeTrustedProxyRangeRefsWithSource(raw string, source trustedProxyBac
 }
 
 // parseTrustedProxyPrefix 解析受信网段条目：合法 CIDR 或裸 IP（补 /32 或
-// /128）。格式门与渲染层 appendCIDR 同口径；宽度判据由调用方按
-// services.TrustedProxy* 执行（两通道不得分叉）。
+// /128），并归一为 services.TrustedProxyPrefixCanonical 的规范形态（Masked
+// 剥主机位 + 4in6 映射折成等价 v4）——格式门与渲染层 appendCIDR 同口径，
+// 判宽、去重与总量门都在规范形态上执行（两通道不得分叉）。
 func parseTrustedProxyPrefix(value string) (netip.Prefix, error) {
 	value = strings.TrimSpace(value)
-	if prefix, err := netip.ParsePrefix(value); err == nil {
-		return prefix, nil
-	}
-	addr, err := netip.ParseAddr(value)
+	prefix, err := netip.ParsePrefix(value)
 	if err != nil {
-		return netip.Prefix{}, err
+		addr, addrErr := netip.ParseAddr(value)
+		if addrErr != nil {
+			return netip.Prefix{}, addrErr
+		}
+		prefix = netip.PrefixFrom(addr, addr.BitLen())
 	}
-	return netip.PrefixFrom(addr, addr.BitLen()), nil
+	return services.TrustedProxyPrefixCanonical(prefix), nil
 }
 
 func normalizeTrustedProxyRanges(raw string) (string, error) {
@@ -414,13 +419,15 @@ func normalizeTrustedProxyRanges(raw string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("无效的受信代理网段: %s", entry)
 		}
-		// +：全空间形态与最小前缀长度判据
-		// 单源在 services（内联/引用/渲染三处同口径）——全空间（0.0.0.0/8、
-		// 0.0.0.0/0、::/0、v4-mapped 全零 /96）等同「信任任意来源的伪造头」。
+		// 全空间形态与最小前缀长度判据
+		// 单源在 services（内联/引用/渲染三处同口径）：判据作用在规范形态上
+		// （Masked 剥主机位 + 4in6 映射折成等价 v4），因此 0.0.0.0/8、
+		// 0.0.0.0/0、::/0 与 mapped 变体（::ffff:0.0.0.1/96 等）同判
+		// 「信任任意来源的伪造头」。
 		if services.TrustedProxyPrefixAllSpace(prefix) {
 			return "", fmt.Errorf("受信代理网段过宽（%s）：该网段覆盖全部地址空间，等同信任任意来源，请收窄到该 CDN 的回源网段", prefix.String())
 		}
-		if prefix.Bits() < services.TrustedProxyMinPrefixBits(prefix.Addr()) {
+		if services.TrustedProxyPrefixBelowMinBits(prefix) {
 			return "", fmt.Errorf("受信代理网段过宽（%s）：最小允许 /8（IPv4）与 /29（IPv6），请收窄到该 CDN 的回源网段", prefix.String())
 		}
 		// 去重保序（与 headers 侧同口径）

@@ -12,7 +12,7 @@ import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 
 import { usePollingTask, type PollingTask } from '../src/composables/usePollingTask.ts'
-import { FakeDocument, mountForLifecycle, code } from './_helpers.ts'
+import { FakeDocument, flushMicrotasks, mountForLifecycle, waitForMicrotasks, code } from './_helpers.ts'
 
 // onUnmounted 在无组件实例时会打印 Vue 警告——pause 用例在 finally 里恢复
 // console.warn；stop/onError/可见性用例经 SSR 渲染提供真实组件实例，不触碰该警告。
@@ -48,8 +48,9 @@ test('每轮独立 signal：pause 中止在途轮次并作废序列，resume 立
     assert.notEqual(rounds[1].signal, rounds[0].signal, '每轮新 controller')
     assert.equal(rounds[1].signal.aborted, false, '新一轮 signal 不继承上一轮的取消')
     releases[1]()
-    // resume 的 run() 承诺不外泄——等 drain 在当前帧内收尾
-    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    // resume 的 run() 承诺不外泄——它的收尾是纯微任务链，排空微任务即可，
+    // 不得用 setTimeout(0) 猜跳数（真实定时器会把顺序交给事件循环）。
+    await flushMicrotasks()
 
     polling.stop()
     assert.equal(polling.signal.aborted, true, 'stop 终止永久 signal')
@@ -125,7 +126,6 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
   host.document = doc
   let calls = 0
   let polling!: PollingTask
-  const flush = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0))
   mock.timers.enable({ apis: ['setInterval'] })
   try {
     await renderToString(createSSRApp({
@@ -135,23 +135,20 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
       },
     }))
     polling.start()
-    await flush()
+    await flushMicrotasks()
     assert.equal(calls, 0, '定时轮询不立即首跑')
     mock.timers.tick(50)
-    await flush()
-    assert.equal(calls, 1, '可见时按 interval 轮询')
+    await waitForMicrotasks(() => calls === 1, '可见时按 interval 轮询')
     doc.hidden = true
     doc.dispatch()
     mock.timers.tick(150)
-    await flush()
+    await flushMicrotasks()
     assert.equal(calls, 1, 'hidden 后定时轮次必须停摆')
     doc.hidden = false
     doc.dispatch()
-    await flush()
-    assert.equal(calls, 2, '恢复可见立即补跑一轮')
+    await waitForMicrotasks(() => calls === 2, '恢复可见立即补跑一轮')
     mock.timers.tick(50)
-    await flush()
-    assert.equal(calls, 3, '定时器随可见性恢复')
+    await waitForMicrotasks(() => calls === 3, '定时器随可见性恢复')
     assert.equal(polling.isDisposed(), false)
     polling.stop()
     assert.equal(doc.listenerCount, 0, 'stop 必须摘除 visibilitychange 监听')
@@ -175,22 +172,20 @@ test('usePollingTask 随组件卸载停止轮询并摘除监听', async () => {
   let calls = 0
   let polling!: PollingTask
   mock.timers.enable({ apis: ['setInterval'] })
-  const flush = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0))
   try {
     const mounted = mountForLifecycle(() => {
       polling = usePollingTask(async () => { calls++ }, { interval: 50 })
       polling.start()
     })
     mock.timers.tick(50)
-    await flush()
-    assert.equal(calls, 1, '前置：定时轮询在跑')
+    await waitForMicrotasks(() => calls === 1, '前置：定时轮询在跑')
     assert.equal(doc.listenerCount, 1, '前置：挂载后有一个 visibilitychange 监听')
 
     mounted.unmount()
     assert.equal(polling.isDisposed(), true, '卸载必须 stop 轮询（永久终止）')
     assert.equal(doc.listenerCount, 0, '卸载必须摘除 visibilitychange 监听')
     mock.timers.tick(200)
-    await flush()
+    await flushMicrotasks()
     assert.equal(calls, 1, '卸载后不得再发起轮次')
   } finally {
     mock.timers.reset()

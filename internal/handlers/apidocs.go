@@ -607,6 +607,25 @@ var apiDocContracts = map[string]apiDocContract{
 	"GET /security/crs/rules":                          {queryParameters: []apiDocParameter{{"search", "string", "搜索关键词"}, {"page", "integer", "页码，默认 1"}, {"page_size", "integer", "每页数量，默认 50，上限 50"}}},
 }
 
+// apiDocRequiredQueryParameters 登记「handler 缺参即 400」的必填 query 参数
+// （按「METHOD path」键）。默认全部可选——生成器此前把每条 query 参数一律写成
+// required=false，按规格生成的客户端会把缺参调用当合法请求，运行期才吃 400。
+// 只登记真正必填的项；新增项必须与 handler 的拒参分支同时改。
+var apiDocRequiredQueryParameters = map[string][]string{
+	// security.go GetIPEventCount：缺 ip 直接 400。
+	"GET /security/events/count": {"ip"},
+}
+
+// apiDocQueryParameterRequired 报告某路由的 query 参数是否必填。
+func apiDocQueryParameterRequired(route apiDocRoute, name string) bool {
+	for _, required := range apiDocRequiredQueryParameters[route.Method+" "+route.Path] {
+		if required == name {
+			return true
+		}
+	}
+	return false
+}
+
 func apiDocContractFor(route apiDocRoute) apiDocContract {
 	contract := apiDocContracts[route.Method+" "+route.Path]
 	if contract.successStatus == 0 {
@@ -647,6 +666,8 @@ func writeOpenAPIParameters(b *strings.Builder, route apiDocRoute, queryParamete
 		if index < pathParameterCount {
 			location = "path"
 			required = true
+		} else {
+			required = apiDocQueryParameterRequired(route, parameter.name)
 		}
 		fmt.Fprintf(b, "        - name: %s\n          in: %s\n          required: %t\n          description: %s\n          schema:\n            type: %s\n", parameter.name, location, required, strconv.Quote(parameter.description), parameter.valueType)
 	}

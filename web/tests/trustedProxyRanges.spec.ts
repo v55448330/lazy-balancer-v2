@@ -46,6 +46,29 @@ test('过宽网段与后端最小前缀判据一致', () => {
   assert.match(trustedProxyRangeError('::/0'), /全部地址空间/)
 })
 
+test('v4-mapped 变体与后端归一口径一致（mapped /96 折算即全空间）', () => {
+  // 主机位变体与 canonical 写法是同一网段；折算后 = 0.0.0.0/0 → 后端必然 400
+  for (const value of [
+    '::ffff:0.0.0.1/96',
+    '::ffff:0:0/96',
+    '::ffff:0.0.0.0/96',
+    '::ffff:203.0.113.9/96',
+    '::ffff:0.0.0.0/104',
+    '::ffff:0.0.0.0/95',
+  ]) {
+    assert.match(trustedProxyRangeError(value), /全部地址空间/, `${value} 应判全空间`)
+  }
+  // 折算成等价 v4 后低于 /8：按最小前缀报错
+  assert.match(trustedProxyRangeError('::ffff:0.0.0.0/97'), /最小允许 \/8/)
+  // 合法 mapped 精确段（等价 v4 ≥ /8）不得误拒
+  for (const value of ['::ffff:203.0.113.7/120', '::ffff:198.51.100.7', '::ffff:10.0.0.0/104']) {
+    assert.equal(trustedProxyRangeError(value), '', `${value} 应放行`)
+  }
+  // 并集口径同源：同一网段的 mapped 与 v4 写法只计一次（含全空间变体）
+  assert.equal(trustedProxyExpansion(['::ffff:203.0.113.0/120', '203.0.113.0/24'], []).union, 1)
+  assert.equal(trustedProxyExpansion(['::ffff:0.0.0.1/96', '0.0.0.0/0'], []).union, 1)
+})
+
 test('内联网段条数上限与后端 inline 上限一致', () => {
   const atLimit = Array.from({ length: TRUSTED_PROXY_MAX_INLINE_ENTRIES }, (_, i) => `10.${i}.0.0/16`)
   assert.equal(trustedProxyRangesError(atLimit), '')
@@ -147,6 +170,11 @@ test('同一前缀的不同书写形态合并计一次（裸 IP、IPv6 大小写
   assert.equal(trustedProxyExpansion(inline, []).union, 2, '裸 IP 与 /32、重复项必须同键')
   assert.equal(trustedProxyExpansion(['2001:DB8::/32', '2001:db8:0:0:0:0:0:0/32'], []).union, 1)
   assert.equal(trustedProxyExpansion([], [{ values: ['::ffff:203.0.113.0/120', '0:0:0:0:0:ffff:cb00:7100/120'], entryCount: 2 }]).union, 1)
+  // 主机位归一（后端 Masked 去重同口径）：同一网段的不同主机位写法只计一次
+  assert.equal(trustedProxyExpansion(['192.0.2.129/24', '192.0.2.0/24'], []).union, 1)
+  assert.equal(trustedProxyExpansion(['192.0.2.129/27', '192.0.2.128/27'], []).union, 1)
+  assert.equal(trustedProxyExpansion(['2001:db8::1/32', '2001:db8::/32'], []).union, 1)
+  assert.equal(trustedProxyExpansion(['2001:db8::1/47', '2001:db8:0:1::/47'], []).union, 1)
   assert.deepEqual(
     [trustedProxyPrefixKey(' 203.0.113.4 '), trustedProxyPrefixKey('203.0.113.4/32'), trustedProxyPrefixKey('not-a-cidr')],
     ['v4:203.0.113.4/32', 'v4:203.0.113.4/32', null],

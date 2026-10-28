@@ -1080,7 +1080,6 @@ func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[str
 // 尚未随 users 节下发等）UPDATE 命中 0 行，安全落空；载荷 nil（旧主端）no-op，
 // 绝不清除本地锁。主端解锁不传播（从端锁自然过期）——fail-closed 设计。
 func applyLockedUsers(ctx context.Context, tx *sql.Tx, locked []models.ClusterLockedUser) error {
-	skipped := 0
 	for _, entry := range locked {
 		// 载荷时间先归一为平面 UTC：上面的「只延长」判定是 SQL 字符串比较，
 		// 字典序只有在两端同为 'YYYY-MM-DD HH:MM:SS' 时才等于时间序。旧主端/
@@ -1090,7 +1089,6 @@ func applyLockedUsers(ctx context.Context, tx *sql.Tx, locked []models.ClusterLo
 		// fail-closed 方向（不缩短）。
 		lockedUntil, ok := normalizeSnapshotLockedUntil(entry.LockedUntil)
 		if !ok {
-			skipped++
 			Logf("warn", "快照登录锁时间形态异常（用户名 %s，值 %q），已跳过该条（保留本地锁）", entry.Username, entry.LockedUntil)
 			continue
 		}
@@ -2315,9 +2313,10 @@ func normalizeVersionRows[T any](rows []T) []T {
 
 // snapshotSecurityVersionRowsDiffer 比较快照携带的 CRS/IP2Region 版本行与
 // 本地行(2026-09-11:版本行差分门控——不进节哈希,以内容差分决定重放)。
-// 查询失败时本地行保持空切片:快照非空即判「有差异」触发重放(向主端收敛,
-// 原「按无差异处理」描述对非空快照分支不成立);序列化失败(不可
-// 达,类型固定)按无差异。
+// 失败口径统一为「判有差异」= 强制重放：两表任一读取失败都直接重放（向主端
+// 收敛，宁可多写一轮也不把本地陈旧版本行当成「无差异」放行）。
+// 序列化失败是类型固定的不可达防御（快照行与本地行均为结构体切片，
+// json.Marshal 不会因内容失败），按空串并入比较，不单独分支。
 // 本地读取列清单与快照 dump 共用 clusterRuleLibVersionColumns /
 // scanClusterRuleLibVersionRow（的「快照列与差分行不同步」教训）。
 func snapshotSecurityVersionRowsDiffer(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) bool {

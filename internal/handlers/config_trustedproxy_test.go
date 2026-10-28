@@ -107,6 +107,70 @@ func TestUpdateConfig_trustedProxy_rejectsOverwideRanges(t *testing.T) {
 	}
 }
 
+// IPv4-mapped 主机位/位数变体必须与 canonical 形态同判据拒绝：
+// ::ffff:0.0.0.1/96 与 ::ffff:0:0/96 是同一网段（网络位相同、仅主机位不同），
+// 折算成等价 v4 恰好是 0.0.0.0/0——放行即等于信任任意来源的伪造头。
+func TestUpdateConfig_trustedProxyRejectsMappedAllSpaceVariants(t *testing.T) {
+	handler := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/config", handler.UpdateConfig)
+
+	for _, tc := range []struct{ name, value string }{
+		{"mapped 主机位 /96", "::ffff:0.0.0.1/96"},
+		{"mapped canonical /96", "::ffff:0.0.0.0/96"},
+		{"mapped 全零缩写 /96", "::ffff:0:0/96"},
+		{"mapped 任意主机位 /96", "::ffff:203.0.113.9/96"},
+		{"mapped /104 等价 v4 /8", "::ffff:0.0.0.0/104"},
+		{"mapped /97 等价 v4 /1", "::ffff:0.0.0.0/97"},
+		{"mapped /95 覆盖整个 v4-mapped 空间", "::ffff:0.0.0.0/95"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"source":"caddy","trusted_proxy_enabled":true,"trusted_proxy_ranges":"[\"` + tc.value + `\"]"}`
+			response := putConfig(t, router, body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "过宽") {
+				t.Fatalf("%s: status=%d body=%s, want 400 含「过宽」", tc.value, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// 引用名单通道与内联通道同宽度口径：名单条目写作 mapped 主机位变体同样 400；
+// 合法 mapped 精确段（等价 v4 /24）不得被连带拒绝。
+func TestUpdateConfig_trustedProxyRefsMappedRangesSameWidthGate(t *testing.T) {
+	router := newTrustedProxyRefsRouter(t)
+	allSpaceList := seedTrustedRefList(t, "mapped-allspace", `[{"value":"::ffff:0.0.0.1/96","remark":""}]`)
+	body := fmt.Sprintf(`{"source":"caddy","trusted_proxy_ranges":"[]","trusted_proxy_range_refs":"[%d]"}`, allSpaceList)
+	if rec := putConfig(t, router, body); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "过宽") {
+		t.Fatalf("mapped 主机位变体必须 400 含「过宽」, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	preciseList := seedTrustedRefList(t, "mapped-precise", `[{"value":"::ffff:198.51.100.0/120","remark":""}]`)
+	body = fmt.Sprintf(`{"source":"caddy","trusted_proxy_ranges":"[]","trusted_proxy_range_refs":"[%d]"}`, preciseList)
+	if rec := putConfig(t, router, body); rec.Code != http.StatusOK {
+		t.Fatalf("合法 mapped 精确段必须 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 归一与去重同源：Masked 剥主机位、4in6 映射折成等价 v4 前缀；同一网段的
+// 不同写法（192.0.2.129/24 与 192.0.2.0/24）只保留一条，精确语义不变。
+func TestUpdateConfig_trustedProxyCanonicalizesHostBitsAndMappedForms(t *testing.T) {
+	router := newTrustedProxyRefsRouter(t)
+	body := `{"source":"caddy","trusted_proxy_enabled":true,` +
+		`"trusted_proxy_ranges":"[\"192.0.2.129/24\",\"192.0.2.0/24\",\"::ffff:203.0.113.7/120\",\"::ffff:198.51.100.7\"]"}`
+	if rec := putConfig(t, router, body); rec.Code != http.StatusOK {
+		t.Fatalf("合法载荷必须 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var ranges string
+	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_ranges,'') FROM global_config WHERE id=1`).Scan(&ranges); err != nil {
+		t.Fatal(err)
+	}
+	want := `["192.0.2.0/24","203.0.113.0/24","198.51.100.7/32"]`
+	if ranges != want {
+		t.Fatalf("ranges=%s, want %s（主机位剥离 + mapped 折等价 v4 + 同网段去重）", ranges, want)
+	}
+}
+
 func TestUpdateConfig_trustedProxy_rejectsInvalidHeaders(t *testing.T) {
 	handler := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
@@ -144,6 +208,23 @@ func TestPreviewConfigUpdate_trustedProxy_sameValidation(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+}
+
+// 预览端点与保存端点同口径：mapped 主机位变体同样 400（不得给出变更清单）。
+func TestPreviewConfigUpdate_trustedProxyMappedAllSpaceVariant(t *testing.T) {
+	handler := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/preview", handler.PreviewConfigUpdate)
+
+	body := `{"source":"caddy","trusted_proxy_enabled":true,"trusted_proxy_ranges":"[\"::ffff:0.0.0.1/96\"]"}`
+	request := httptest.NewRequest(http.MethodPost, "/config/preview", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "过宽") {
+		t.Fatalf("status=%d body=%s, want 400 含「过宽」", response.Code, response.Body.String())
 	}
 }
 

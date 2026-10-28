@@ -142,6 +142,7 @@ func TestGetSystemMetrics_pidsFailureDegradesOnlyThatPart(t *testing.T) {
 
 func stubSystemMetricsForPids(t *testing.T, current *int, max int, available bool) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	originalReadFile, originalDF := systemMetricsReadFile, systemMetricsDFCommand
 	resetDiskUsageCacheForTest(t)
 	resetCPUSampleStateForTest(t)

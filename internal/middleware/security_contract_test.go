@@ -509,3 +509,9 @@ func TestJWTAuth_roleFromDBOverridesClaim(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 403 (role must come from DB, not the claim)", rec.Code, rec.Body.String())
 	}
 }
+
+// reclaimQueueLenLocked 是回收队列当前条目数的测试侧观察口——生产代码零消费，
+// 因此只存在于测试文件（调用方须持有 mu，与生产侧回收逻辑同一把锁）。
+func (limiter *authenticationAuditLimiter) reclaimQueueLenLocked() int {
+	return limiter.reclaimCount
+}

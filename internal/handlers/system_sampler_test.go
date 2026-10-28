@@ -70,6 +70,7 @@ func resetCPUSampleStateForTest(t *testing.T) {
 
 func disableCPUSampleWindowForTest(t *testing.T) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := cpuSampleWindow
 	cpuSampleWindow = 0
 	t.Cleanup(func() { cpuSampleWindow = old })
@@ -77,6 +78,7 @@ func disableCPUSampleWindowForTest(t *testing.T) {
 
 func disableNetSampleWindowForTest(t *testing.T) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := netSampleWindow
 	netSampleWindow = 0
 	t.Cleanup(func() { netSampleWindow = old })

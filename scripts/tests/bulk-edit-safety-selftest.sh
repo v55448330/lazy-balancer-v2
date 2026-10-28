@@ -263,4 +263,42 @@ if ! grep -q '仓外/临时脚本不受控' "${work}/bulk-root-dry.out"; then
   echo "SELFTEST FAIL: 通道 A 未明示作用域边界（仓外脚本不受控）"; cat "${work}/bulk-root-dry.out"; exit 1
 fi
 
+# 14) 自检目录不是免检区：豁免面是显式文件名清单，不是目录前缀。放进
+#     scripts/tests/ 的非自检脚本必须仍受通道 A 约束——目录前缀排除会把这
+#     整个目录变成「把批量改写脚本挪进去就绕过 checkpoint 闸门」的缺口。
+mk_repo "$work/tests-dir-not-exempt"
+mkdir -p scripts/tests
+cat > scripts/tests/rewrite.py <<'PY'
+import os, re
+for root, _dirs, files in os.walk('.'):
+    for name in files:
+        if name.endswith('.go'):
+            p = os.path.join(root, name)
+            with open(p) as fh:
+                text = fh.read()
+            with open(p, 'w') as fh:
+                fh.write(re.sub(r'\(\)', '', text))
+PY
+git add -A && git commit -qm script
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-tests-dir.out" 2>&1; then
+  echo "SELFTEST FAIL: scripts/tests/ 下的非自检批量脚本未拦截"; cat "${work}/bulk-tests-dir.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-tests-dir.out"; then
+  echo "SELFTEST FAIL: scripts/tests/ 非自检脚本命中原因错误（应为缺 dry-run）"; cat "${work}/bulk-tests-dir.out"; exit 1
+fi
+
+# 15) 显式登记的自检文件名仍必须豁免（豁免面按名单生效，不是把目录整体纳入
+#     受检）：自检脚本的夹具里刻意写无 dry-run 脚本，把它们拉回通道 A 会让
+#     整套门禁自相矛盾。
+mk_repo "$work/tests-dir-exempt"
+mkdir -p scripts/tests
+cat > scripts/tests/guard-selftest.sh <<'SH'
+#!/usr/bin/env bash
+find . -name '*.go' -exec sed -i 's/a/b/' {} +
+SH
+git add -A && git commit -qm selftest
+if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-tests-exempt.out" 2>&1; then
+  echo "SELFTEST FAIL: 显式登记的自检脚本被误拦"; cat "${work}/bulk-tests-exempt.out"; exit 1
+fi
+
 echo "bulk-edit safety selftest: PASS"

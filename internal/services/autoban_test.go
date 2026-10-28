@@ -2045,7 +2045,7 @@ func TestAutobanFeedHealth_reportsStoppedIngestion(t *testing.T) {
 	}
 	te.StopLoop(AutobanFeedTaskID)
 	if degraded, _ := AutobanFeedHealth(); !degraded {
-		t.Fatal("用户停止采集任务后必须报降级（自动封禁计数不再更新）")
+		t.Fatal("用户停止采集任务后必须报降级（补采/轮转暂停必须可见）")
 	}
 }
 

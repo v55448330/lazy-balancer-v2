@@ -322,11 +322,32 @@ var handlerRegisteredSeamNames = func() []string {
 const globalStateGuardSelfTestFile = "global_state_guard_test.go"
 
 // TestHandlerGlobalSeamWritersUseIsolatedGlobal 是「写侧隔离」的静态门：
-// 任何测试函数体给已登记 seam 赋值，就必须调用 withIsolatedGlobal(t)。
+// 任何**接收 *testing.T 的函数体**给已登记 seam 赋值，就必须调用
+// withIsolatedGlobal(t)。扫描面含测试 helper（夹具/nil-替换封装），不只是
+// Test* 函数——seam 写入常常经 helper 转手（如 overrideDashboardFetch），
+// 只扫 Test* 会让这类写入落在门外：调用方忘了隔离，门禁仍绿。
 //
 // 为什么需要机器门：suite 终态守卫会被「后续用例把值改回」掩盖（声明序
 // 「泄漏→修复」判绿，见 TestMain 的边界说明）。纪律写在注释里靠记忆，写在这里
 // 靠编译后的测试失败——新增用例忘记隔离时这门立即红。
+// takesTestingT 报告函数签名是否接收 *testing.T：只有这类函数能调用
+// withIsolatedGlobal(t)，所以它们是「写侧隔离门」的扫描面（含 helper）。
+func takesTestingT(fnType *ast.FuncType) bool {
+	if fnType.Params == nil {
+		return false
+	}
+	for _, field := range fnType.Params.List {
+		star, ok := field.Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		if selector, ok := star.X.(*ast.SelectorExpr); ok && selector.Sel.Name == "T" {
+			return true
+		}
+	}
+	return false
+}
+
 func TestHandlerGlobalSeamWritersUseIsolatedGlobal(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -350,7 +371,7 @@ func TestHandlerGlobalSeamWritersUseIsolatedGlobal(t *testing.T) {
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+			if !ok || fn.Body == nil || !takesTestingT(fn.Type) {
 				continue
 			}
 			scanned++
@@ -390,7 +411,7 @@ func TestHandlerGlobalSeamWritersUseIsolatedGlobal(t *testing.T) {
 	}
 	sort.Strings(offenders)
 	if len(offenders) > 0 {
-		t.Fatalf("以下测试函数改写已登记全局 seam 但未调用 withIsolatedGlobal(t)（泄漏无法归因到本用例）:\n  %s",
+		t.Fatalf("以下函数改写已登记全局 seam 但未调用 withIsolatedGlobal(t)（泄漏无法归因到本用例）:\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
 }

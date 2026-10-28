@@ -70,9 +70,18 @@ docker run -d --name lazy-balancer \
 #    仅运行官方镜像可跳过本步）。需要 Node.js ≥ 22.18：`npm test` 用
 #    node --test 直跑 .ts，依赖该版本起的默认 type stripping；见
 #    web/package.json 的 engines 字段
-cd web && npm install && npm run build && cd ..
+#    用 `npm ci`（而不是 `npm install`）：前者严格按 package-lock.json 装，
+#    不会就地改写锁文件导致依赖解析漂移。
+cd web && npm ci && npm run build && cd ..
+
+#    产出自证：dist 是预构建产物，陈旧 dist 会被盲目 COPY 进镜像（界面版本号
+#    来自后端，看不出来）。构建完比对戳与当前提交，不一致说明产物过期：
+git rev-parse HEAD && cat web/dist/build-info.json
 
 # 2) Docker Compose（Linux；主节点为 host 网络）
+#    注意通道：仓库里的 docker-compose.yml 钉的是当前开发线的测试通道 tag
+#    （形如 vX.Y.Z-beta，与 Dockerfile 的 VERSION 同步校验）。要稳定版请改用
+#    上面示例里的 `:latest` 标签，或把两处 image 改成对应的稳定版 tag。
 docker compose up -d
 
 # 3) 或直接构建并推送镜像：VERSION=正式版本号（面板展示口径）；镜像 tag 可带

@@ -221,6 +221,9 @@ echo $! > /tmp/lazy-balancer-caddy-supervisor.pid
 
 # Start backend (tini 子进程 — 容器 stop 时接收 tini 转发的信号并优雅退出)
 echo "Starting Lazy Balancer..."
-# 不传 serve 位参——main.go 只有 -config/-init flag，无子命令分发，位参无
-# 消费方（flag.Args 从不被读）。
-exec /usr/local/bin/lazy-balancer
+# 参数透传：`docker run <image> -config /path` 之类的显式参数必须交给面板进程——
+# 此前是裸 `exec`，tini 收到的参数在这里被静默丢掉（改了配置文件/flag 却没生效，
+# 无任何日志提示）。无参启动（compose/文档形态）时 "$@" 为空，行为不变。
+# 注意：容器形态的配置手段仍是环境变量（见 docs/deployment.zh-CN.md）；透传只
+# 让显式参数生效，不改变默认值。main.go 只有 -config/-init flag，无位参消费方。
+exec /usr/local/bin/lazy-balancer "$@"

@@ -281,6 +281,9 @@ type ClusterRegistrationStatus struct {
 	ClusterToken string `json:"cluster_token,omitempty"`
 }
 
+// SyncErrorCode 的取值与 ClusterReport.SyncErrorCode 上的 binding oneof 标签
+// 是同一集合的两个事实源（struct tag 无法由常量拼出）：新增/改名错误码必须
+// 同时改标签，TestSyncErrorCodeMatchesBindingOneof 会钉住两侧一致。
 type SyncErrorCode string
 
 const (

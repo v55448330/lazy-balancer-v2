@@ -2,7 +2,8 @@
  * 受信代理（CDN 回源）配置的行内校验，与后端判据单源：
  *
  * - `internal/services/caddy.go` 的 `TrustedProxyMinPrefixBits`（IPv4 /8、
- *   IPv6 /29）/ `TrustedProxyPrefixAllSpace`（全空间形态）；
+ *   IPv6 /29）/ `TrustedProxyPrefixAllSpace`（全空间形态）/
+ *   `TrustedProxyPrefixCanonical`（Masked 剥主机位 + v4-mapped 折等价 v4）；
  * - `internal/handlers/config_trustedproxy.go` 的 `normalizeTrustedProxyRanges`
  *   （内联网段上限 64 条，裸 IP 由后端补 /32 或 /128）、
  *   `normalizeTrustedProxyHeaders`（请求头条数 ≤8、字符集
@@ -37,8 +38,14 @@ const TRUSTED_PROXY_HEADER_PATTERN = /^[A-Za-z0-9-]{1,64}$/
 /** 受信网段总量上限：内联 ∪ 引用展开（与后端 trustedProxyMaxTotalCIDRs 同值）。 */
 export const TRUSTED_PROXY_MAX_TOTAL_ENTRIES = 2000
 
-/** 覆盖全部地址空间的形态（等同信任任意来源），逐条对齐后端 PrefixAllSpace。 */
-const ALL_SPACE_PREFIXES: readonly string[] = ['0.0.0.0/8', '0.0.0.0/0', '::/0', '::ffff:0.0.0.0/96', '::ffff:0:0/96']
+/** 覆盖全部地址空间的**规范**形态（等同信任任意来源），逐条对齐后端
+ *  `TrustedProxyPrefixAllSpace` 的 case 列表——v4-mapped 变体不在此列，
+ *  由 `mappedV4Prefix` 折成等价 v4 后落回这组（与后端
+ *  `TrustedProxyPrefixCanonical` 同口径）。 */
+const ALL_SPACE_PREFIXES: readonly string[] = ['0.0.0.0/8', '0.0.0.0/0', '::/0']
+
+/** 最小前缀长度的统一文案（全空间判据优先，故两处共用）。 */
+const MIN_PREFIX_BITS_MESSAGE = `最小允许 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4}（IPv4）与 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6}（IPv6）`
 
 /**
  * 单条目校验：返回空串=通过，否则为可直接展示的原因。
@@ -48,12 +55,22 @@ export const trustedProxyRangeError = (rawValue: string): string => {
   const value = rawValue.trim()
   if (!value) return '不能为空'
   if (!isValidCidr(value)) return '不是合法的 IP 或 CIDR'
-  const [address, bitsText] = value.split('/')
-  if (bitsText === undefined) return ''
+  const [address = '', bitsText] = value.split('/')
   const isIpv6 = address.includes(':')
-  const minBits = isIpv6 ? TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6 : TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4
+  const bits = bitsText === undefined ? (isIpv6 ? 128 : 32) : Number(bitsText)
+  // v4-mapped（::ffff:a.b.c.d）按等价 v4 判宽：mapped /96 折算即 0.0.0.0/0，
+  // 位数 <96 覆盖整个 v4-mapped 空间——后端同判据必然拒绝（主机位变体曾
+  // 绕过全空间门，前端不得静默放行）。
+  const mapped = isIpv6 ? mappedV4Prefix(address, bits) : null
+  if (mapped) {
+    if (mapped.network === '0.0.0.0' && (mapped.bits === 0 || mapped.bits === 8)) return '覆盖全部地址空间，等同信任任意来源'
+    if (mapped.bits < TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4) return MIN_PREFIX_BITS_MESSAGE
+    return ''
+  }
   if (ALL_SPACE_PREFIXES.includes(value)) return '覆盖全部地址空间，等同信任任意来源'
-  if (Number(bitsText) < minBits) return `最小允许 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4}（IPv4）与 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6}（IPv6）`
+  if (bitsText === undefined) return ''
+  const minBits = isIpv6 ? TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6 : TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4
+  if (bits < minBits) return MIN_PREFIX_BITS_MESSAGE
   return ''
 }
 
@@ -117,7 +134,7 @@ export interface TrustedProxyReferencedEntries {
 
 /**
  * 引用名单条目的行内校验：与内联网段复用同一 `trustedProxyRangeError`
- * （最小 /8、/29 与全空间五形态），并按名单名逐项点名。
+ * （最小 /8、/29 与全空间形态，含 v4-mapped 归一），并按名单名逐项点名。
  * 未加载/加载失败的名单不参与（保存由后端兜底），避免把未知当非法。
  */
 export const trustedProxyReferencedRangesError = (
@@ -189,9 +206,51 @@ const ipv6Groups = (address: string): readonly number[] | null => {
   return groups.some((group) => Number.isNaN(group)) ? null : groups
 }
 
+/** IPv4 字节按前缀长度掩码成网络地址串（主机位归零）。 */
+const maskV4Octets = (octets: readonly number[], bits: number): string =>
+  octets
+    .map((octet, index) => {
+      const keep = bits - index * 8
+      if (keep <= 0) return 0
+      if (keep >= 8) return octet
+      return octet & (0xff << (8 - keep)) & 0xff
+    })
+    .join('.')
+
+/** IPv6 十六进制组按前缀长度掩码（主机位归零）。 */
+const maskV6Groups = (groups: readonly number[], bits: number): readonly number[] =>
+  groups.map((group, index) => {
+    const keep = bits - index * 16
+    if (keep <= 0) return 0
+    if (keep >= 16) return group
+    return group & (0xffff << (16 - keep)) & 0xffff
+  })
+
 /**
- * 规范化前缀键（裸 IP 补 /32 或 /128）：只用于前端并集判定，故不必逐字等于
- * Go 的 `netip.Prefix.String()`——只需让**同一地址的同一前缀**落到同一键上。
+ * v4-mapped 前缀归一（与后端 `TrustedProxyPrefixCanonical` 同口径）：返回等价
+ * v4 网络与位数——`::ffff:203.0.113.7/120` → `203.0.113.0/24`，
+ * `::ffff:0.0.0.1/96` → `0.0.0.0/0`；位数 <96 的映射写法覆盖整个
+ * v4-mapped 空间（=全部 IPv4），同样归一为 `0.0.0.0/0`。
+ * 非映射形态返回 null（主机位不影响全空间/最小前缀判定，调用方自行掩码）。
+ */
+const mappedV4Prefix = (address: string, bits: number): { readonly network: string; readonly bits: number } | null => {
+  const groups = ipv6Groups(address)
+  if (!groups) return null
+  const isMapped =
+    groups[0] === 0 && groups[1] === 0 && groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0xffff
+  if (!isMapped) return null
+  if (bits < 96) return { network: '0.0.0.0', bits: 0 }
+  const octets = [(groups[6] ?? 0) >> 8, (groups[6] ?? 0) & 0xff, (groups[7] ?? 0) >> 8, (groups[7] ?? 0) & 0xff]
+  const v4Bits = bits - 96
+  return { network: maskV4Octets(octets, v4Bits), bits: v4Bits }
+}
+
+/**
+ * 规范化前缀键（裸 IP 补 /32 或 /128；主机位掩码归零；v4-mapped 折成等价
+ * v4）：只用于前端并集判定，故不必逐字等于 Go 的 `netip.Prefix.String()`
+ * ——只需让**同一网段的任何书写形态**（含 mapped 与主机位变体）落到同一键上，
+ * 与后端 `trustedProxyPrefixKeys` 的去重口径一致（否则前端并集会虚高，
+ * 把后端判为合法的 2000 条配置硬拦）。
  * 无法解析返回 null（非法形态由网段判据逐条点名，这里不计入并集）。
  */
 export const trustedProxyPrefixKey = (rawValue: string): string | null => {
@@ -204,13 +263,15 @@ export const trustedProxyPrefixKey = (rawValue: string): string | null => {
   if (v4) {
     const bits = bitsText === '' ? 32 : Number(bitsText)
     if (!Number.isInteger(bits) || bits < 0 || bits > 32) return null
-    return `v4:${v4.join('.')}/${bits}`
+    return `v4:${maskV4Octets(v4, bits)}/${bits}`
   }
   const v6 = ipv6Groups(address)
   if (!v6) return null
   const bits = bitsText === '' ? 128 : Number(bitsText)
   if (!Number.isInteger(bits) || bits < 0 || bits > 128) return null
-  return `v6:${v6.join(':')}/${bits}`
+  const mapped = mappedV4Prefix(address, bits)
+  if (mapped) return `v4:${mapped.network}/${mapped.bits}`
+  return `v6:${maskV6Groups(v6, bits).join(':')}/${bits}`
 }
 
 /** 受信网段展开规模：内联 ∪ 引用展开（规范化前缀去重），与后端判定同口径。 */

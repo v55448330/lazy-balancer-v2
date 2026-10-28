@@ -54,7 +54,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { resetSettingsDraft } from '@/composables/useSettingsDraft'
+import { resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
 import { request } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
@@ -287,7 +287,14 @@ watch(() => authStore.currentPage, () => {
   if (settingsTabConsumesConfig(activeTab.value) && !configLoaded.value) void fetchSettings()
 })
 
+// 同一标签页通过登录票据换号不会卸载设置页：身份变化必须清空上一位用户的
+// 一次性令牌、证书暂存与 dirty 标记，避免跨账号残留。
+watch(() => authStore.user?.id, (userId) => {
+  syncSettingsDraftIdentity(userId ?? null)
+})
+
 onMounted(() => {
+  syncSettingsDraftIdentity(authStore.user?.id ?? null)
   if (settingsTabConsumesConfig(activeTab.value)) void fetchSettings()
 })
 

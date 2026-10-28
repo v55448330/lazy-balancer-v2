@@ -140,7 +140,9 @@ test('内容指纹只读取首尾两个采样窗口（不整读 Blob）', async 
   assert.deepEqual(smallIO.reads, [small.size, small.size])
   assert.deepEqual(smallIO.wholeReads, [])
 
-  // 采样语义：仅中段不同（首尾窗口与长度相同）仍得到同一缓存键。
+  // 采样语义：仅中段不同（首尾窗口与长度相同）仍得到同一缓存键。这是纯函数的
+  // 有意取舍（整份摘要要把 128MB 备份再复制一遍）；跨文件误命中由调用方在换文件
+  // 时作废缓存兜住（见「组件接线」用例）。
   const head = 'a'.repeat(600 * 1024)
   const tail = 'z'.repeat(600 * 1024)
   const left = `${head}${'m'.repeat(2048)}${tail}`
@@ -219,6 +221,9 @@ test('组件接线：预览经会话复用，请求带 abort signal，关闭/换
   const upload = section(page, 'const handleImportFile', 'const postImportValidation')
   assert.match(upload, /const fingerprint = await importPreviewFingerprint\(importFileContent\.value\)/, '会话键来自内容指纹')
   assert.match(upload, /createImportPreviewSession<ImportValidation>\(\{\s*fingerprint,/)
+  // 换文件必须作废预览缓存：指纹只采样首尾各 512KiB + 长度，同长度且改动落在
+  // 中段的两份备份指纹相同 → 会显示上一份备份的预览结论，与导入实际结果不一致。
+  assert.match(upload, /invalidateImportPreviews\(\)/, '同一弹框内换文件必须清空预览缓存')
 
   const closed = section(page, 'const onImportDialogClosed', 'const chooseImportFile')
   assert.match(closed, /importPreviewSession\?\.dispose\(\)/, '关闭弹框必须取消在途上传')

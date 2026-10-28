@@ -63,10 +63,22 @@ func TestValidateV2BackupRuntimeSettings_rejectsUnsafeGlobalWriteSideValues(t *t
 	if err := validateV2BackupRuntimeSettings(map[string]any{"oidc_config": `{"enabled":true,"issuer":"","client_id":""}`}, nil); err == nil {
 		t.Fatal("启用但缺 issuer/client_id 的 OIDC 配置必须 400")
 	}
-	// 回归形状：空 OIDC（未配置）与合法白名单代理放行。
+	// 门必须与保存侧/登录侧共用同一条完整性判据（OIDCConfig.usable）：
+	// 只查 issuer/client_id 会放行「缺 client_secret」与「issuer 不合规」的
+	// 已启用配置，落库后公开状态虽隐藏按钮、直连 /auth/oidc/login 仍进入
+	// discovery/令牌交换并必败（表面启用、实际不可用）。
+	if err := validateV2BackupRuntimeSettings(map[string]any{"oidc_config": `{"enabled":true,"issuer":"https://idp.example.com","client_id":"cid"}`}, nil); err == nil {
+		t.Fatal("启用但缺 client_secret 的 OIDC 配置必须 400")
+	}
+	if err := validateV2BackupRuntimeSettings(map[string]any{"oidc_config": `{"enabled":true,"issuer":"http://idp.example.com","client_id":"cid","client_secret":"sec"}`}, nil); err == nil {
+		t.Fatal("非回环 http issuer 的已启用 OIDC 配置必须 400")
+	}
+	// 回归形状：空 OIDC（未配置）、合法白名单代理与完整合规配置放行。
 	okConfigs := []map[string]any{
 		{"oidc_config": ""},
 		{"github_proxy_url": "https://v4.gh-proxy.org/"},
+		{"oidc_config": `{"enabled":true,"issuer":"https://idp.example.com","client_id":"cid","client_secret":"sec"}`},
+		{"oidc_config": `{"enabled":true,"issuer":"http://127.0.0.1:9000","client_id":"cid","client_secret":"sec"}`},
 	}
 	for _, cfg := range okConfigs {
 		if err := validateV2BackupRuntimeSettings(cfg, nil); err != nil {

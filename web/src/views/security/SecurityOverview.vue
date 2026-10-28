@@ -301,7 +301,7 @@
         </el-table-column>
         <el-table-column label="攻击类型" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
-            <span>{{ topIpAttackLabel(row) }}</span>
+            <span>{{ topIpAttackLabel(row as TopIP) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="last_time" label="最后攻击" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />

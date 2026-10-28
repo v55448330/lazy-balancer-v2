@@ -4,6 +4,7 @@
        tabindex/role）——键盘与读屏用户会丢失该操作入口。键盘激活统一合成
        click，复用调用方已有的 @click（不引入第二套回调契约）。 -->
   <el-link
+    v-bind="props"
     role="button"
     tabindex="0"
     @keydown.enter.prevent="activate"
@@ -14,6 +15,14 @@
 </template>
 
 <script setup lang="ts">
+// 外观契约与 el-link 一致：这些 props 必须声明（未声明的属性会落进 attrs 被
+// 静默吞掉，模板类型检查也看不到调用方传了什么），声明后显式转发给 el-link。
+const props = defineProps<{
+  readonly type?: 'default' | 'primary' | 'success' | 'warning' | 'info' | 'danger'
+  readonly underline?: boolean | 'always' | 'hover' | 'never'
+  readonly size?: '' | 'small' | 'default' | 'large'
+}>()
+
 // 键盘激活：Enter/Space → 合成 click（浏览器对无 href 的 <a> 不提供默认激活行为）。
 // 必须过滤按键自动重复：长按会按系统重复率反复合成 click，落到切换/取数类动作上
 // 会来回切换（结果取决于按住多久）或重复发请求。

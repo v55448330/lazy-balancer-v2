@@ -53,11 +53,22 @@ echo "== startup chain (entrypoint syntax + exec targets + scripts syntax) =="
 # 出厂引导 Caddyfile 的引擎级校验：内容与 entrypoint heredoc 的同构性由
 # cmd/server 的钉测试机械比对（下方 go test 覆盖）；此处校验引擎是否接受。
 # caddy 不可用时显式 SKIP（不静默通过），结构比对仍在跑。
+#
+# SKIP 必须进入结构化统计：末尾的「全部门禁通过」若把 SKIP 当作已校验，结论
+# 覆盖的门禁面就宽于字面承诺（无 caddy 的机器没校验引擎可接受性、无 compose
+# 的机器没校验 YAML 锚点/键名）。故 SKIP 既打印也计数，并在末尾汇总行里显式
+# 列出；FULL=1（发版/夜间）把 SKIP 升级为失败——发布前不得带着未校验的门禁
+# 宣告通过。
+skipped_gates=""
+skip_gate() {
+  skipped_gates+="${skipped_gates:+, }$1"
+}
 echo "== bootstrap Caddyfile engine validation =="
 if command -v caddy >/dev/null 2>&1; then
   caddy validate --config config/Caddyfile --adapter caddyfile
 else
   echo "SKIP: caddy 不可用——结构同构由 cmd/server/bootstrap_caddyfile_test.go 覆盖，引擎校验未执行"
+  skip_gate "caddy-config-validation"
 fi
 
 # 部署工件静态校验：compose 的锚点引用/键名拼错只在 compose up 时暴露
@@ -68,6 +79,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   docker compose config --quiet
 else
   echo "SKIP: docker/compose 不可用——compose 锚点与键名未校验"
+  skip_gate "compose-config"
 fi
 
 # 基线（评审点）：与 git ls-files 派生结果不一致即失败。
@@ -154,10 +166,19 @@ if [[ -n "$go_files" ]]; then
   done < <(printf '%s\n' "$go_files" | awk -F/ 'NF>1{print $1} NF==1{print "."}' | LC_ALL=C sort -u)
 fi
 for module in "${modules[@]}"; do
-  [[ "$module" == "." ]] || gofmt_targets+=("$module")
+  [[ "$module" == "." ]] && continue
+  # 嵌套模块的目标按「该模块确实有 Go 文件」派生，不再无条件 append：无条件
+  # append 让下面的 parity 断言恒真（目标由模块清单本身产出，断言再也挡不住
+  # 「模块漏入格式面」）。此处用未跟踪文件同样入面的口径（与根模块一致），
+  # 新增嵌套模块在文件尚未 git add 时也进面。
+  if [[ -n "$(git ls-files --cached --others --exclude-standard -- "$module" | grep -E '\.go$' || true)" ]]; then
+    gofmt_targets+=("$module")
+  fi
 done
 
-# 派生结果与模块清单 parity：每个模块必须至少贡献一个 gofmt 目标。
+# 派生结果与模块清单 parity：每个模块必须至少贡献一个 gofmt 目标。嵌套模块
+# 无 Go 文件时上面不会 append —— 该形态要么是模块退化成空壳，要么路径规则与
+# git 输出漂移，两者都需要人工确认，故 fail-closed（不再是一条恒真的断言）。
 for module in "${modules[@]}"; do
   if [[ "$module" == "." ]]; then
     if [[ ${#root_targets[@]} -eq 0 ]]; then
@@ -165,7 +186,7 @@ for module in "${modules[@]}"; do
       exit 1
     fi
   elif ! printf '%s\n' "${gofmt_targets[@]}" | grep -qxF "$module"; then
-    echo "gofmt parity: 模块 $module 未进入 gofmt 目录清单" >&2
+    echo "gofmt parity: 模块 $module 未进入 gofmt 目录清单（该模块没有任何 .go 文件？）" >&2
     exit 1
   fi
 done
@@ -293,9 +314,27 @@ echo "== frontend coverage/tests/typecheck/build =="
 # 本门绿、npm run build 红）。vue-tsc 看不到模板编译期错误，发布契约要求
 # 真实 vite build，故整条 build 链都在门内。
 #
-# test:coverage 用 node 内建门限（实测水位 90.5/93.5/96.1 → 阈值 89/92/95，
-# 留出重组/新增分支的余量）：可见口径的覆盖率没有门限时只能靠人工审查发现
-# 静默下滑，前轮遗留的「无覆盖率门禁」由此收口。纯 `npm test` 仍保留为快速环。
+# test:coverage 用 node 内建门限：阈值 80/91/93（行/分支/函数），分母是
+# `src/**/*.ts` 全量（tests/** 已排除）——换分母后实测水位贴阈值（余量不足
+# 1pp，实测值见 `npm run test:coverage` 的表尾），故改动分母/删 spec 必须
+# 同步复核阈值，不要再引用含 tests/** 分母时期的历史口径（那组数字已退役）。
+# 唯一事实源是
+# web/package.json 的 test:coverage 参数，本注释只是说明；两者一致性由
+# web/tests/coverageThresholdSource.spec.ts 的阈值口径钉双向对账。
+# 可见口径的覆盖率没有门限时只能靠人工审查发现静默下滑，前轮遗留的
+# 「无覆盖率门禁」由此收口。纯 `npm test` 仍保留为快速环。
 (cd web && npm run build)
 
-echo "all verification gates passed"
+# 汇总行必须与实际校验面一致：有 SKIP 时不得打印无条件的「全部门禁通过」。
+# FULL=1 轮次（发版/夜间）不接受 SKIP——发布前必须先把缺失工具补齐重跑。
+if [[ -n "$skipped_gates" ]]; then
+  skipped_count="$(printf '%s\n' "$skipped_gates" | tr ',' '\n' | grep -c . || true)"
+  if [[ "${FULL:-0}" == "1" ]]; then
+    echo "ERROR: 发版/夜间轮次（FULL=1）不接受跳过的门禁：${skipped_gates}" >&2
+    echo "       安装缺失工具（caddy / docker compose）后重跑。" >&2
+    exit 1
+  fi
+  echo "all verification gates passed (${skipped_count} skipped: ${skipped_gates})"
+else
+  echo "all verification gates passed"
+fi

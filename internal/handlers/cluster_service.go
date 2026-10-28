@@ -305,6 +305,11 @@ func recordClusterServiceControlAudit(c *gin.Context, action, result string) {
 // recordClusterServiceControlAuditBy 带 operator 版——从节点审计记录主节点侧
 // 操作人。已知边界：operator 是持票方自述字段（不在票据签名载荷内），只影响
 // 审计归属文案、不改变可执行动作；空串回退「主节点」（兼容旧主节点）。
+//
+// result 落盘前必须经 services.RedactCaddyAdminEndpoint：Caddy 应用失败的原文
+// 来自指向 admin 端点的 *url.Error（请求地址 + 拨号地址），而操作审计是全员
+// 可读面——把内部控制面地址与端口写给只读用户等于拓扑披露。返回给主节点
+// 管理员的响应仍保留原文（上方调用点直接回 err.Error()），排障契约不变。
 func recordClusterServiceControlAuditBy(c *gin.Context, action, result, operator string) {
 	// action/operator 来自请求体，须先经 registerAuditField
 	// 清洗（去控制字符、截断 128B）再拼接，防伪造换行/超长注入审计详情。
@@ -313,7 +318,7 @@ func recordClusterServiceControlAuditBy(c *gin.Context, action, result, operator
 		op = "主节点"
 	}
 	services.RecordAuditLog(op, "服务控制", "节点服务",
-		services.FormatAuditDetail("来源：主节点", "操作："+registerAuditField(action), "结果："+result), c.ClientIP())
+		services.FormatAuditDetail("来源：主节点", "操作："+registerAuditField(action), "结果："+services.RedactCaddyAdminEndpoint(result)), c.ClientIP())
 }
 
 // currentUsername 从 gin context 取 JWT/API Key 中间件注入的操作人用户名。

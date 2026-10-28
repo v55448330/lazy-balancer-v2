@@ -447,7 +447,7 @@ const closeCreatedKey = createOneTimeSecretCloseGuard({
   title: '保存密钥',
 })
 const mcpDocsVisible = ref(false)
-const mcpTools = ref<readonly MCPToolSpec[]>([])
+const mcpTools = ref<MCPToolSpec[]>([])
 const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')

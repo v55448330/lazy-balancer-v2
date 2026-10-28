@@ -51,7 +51,9 @@ const adminTlsCertError = ref('')
 const adminTlsUnavailable = ref(false)
 const stagedAdminTlsCert = ref<StagedAdminTlsCert | null>(null)
 
+let draftIdentity: number | null = null
 const resetSettingsDraft = (): void => {
+  draftIdentity = null
   githubTokenInput.value = ''
   githubTokenClearPending.value = false
   securityEventsRetentionDirty.value = false
@@ -76,5 +78,13 @@ export const useSettingsDraft = () => ({
   adminTlsUnavailable,
   stagedAdminTlsCert,
 })
+
+/** 身份变化时清空草稿；首次挂载只记录身份，不清空页内暂存。 */
+export const syncSettingsDraftIdentity = (userId: number | null): void => {
+  if (draftIdentity !== null && userId !== null && userId !== draftIdentity) {
+    resetSettingsDraft()
+  }
+  draftIdentity = userId
+}
 
 export { resetSettingsDraft }

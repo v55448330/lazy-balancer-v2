@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1668,4 +1669,117 @@ func TestImportToolsForwardSectionsAsQueryNotBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 空字符串（含纯空白）路径参数与「未提供」同义：空串拼出的 `/rules/` 等
+// 尾斜杠路径会命中 Gin 默认 RedirectTrailingSlash 的 301，转发器按原方法
+// 重放到集合端点，于是详情工具以 isError=false 返回整表（与「缺少参数」
+// 契约相反，Agent 会把列表首项当成目标对象）。query 侧早已丢弃空串，
+// path 侧口径必须一致。
+func TestForwardPathArgEmptyStringReturnsMissingParam(t *testing.T) {
+	cases := []struct{ tool, arg string }{
+		{"get_rule", "caddy_id"},
+		{"get_cert_job", "id"},
+		{"get_security_policy", "id"},
+		{"get_ip_list", "id"},
+		{"get_ca_provider", "id"},
+		{"get_crs_rule", "filename"},
+	}
+	for _, tc := range cases {
+		for _, value := range []string{"", "   "} {
+			t.Run(tc.tool+"/"+value, func(t *testing.T) {
+				restCalls := 0
+				rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					restCalls++
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"code":0,"data":[]}`))
+				}))
+				defer rest.Close()
+				handler := NewForTest(rest.URL+"/api/v1", rest.Client())
+
+				result := callTool(t, handler, tc.tool, `{"`+tc.arg+`":"`+value+`"}`)
+
+				if !strings.Contains(result, `"isError":true`) || !strings.Contains(result, "缺少参数 "+tc.arg) {
+					t.Fatalf("result=%q, want isError + 缺少参数 %s", result, tc.arg)
+				}
+				if restCalls != 0 {
+					t.Fatalf("upstream calls=%d, want 0（空串路径参数不得转发到集合端点）", restCalls)
+				}
+			})
+		}
+	}
+}
+
+// 请求已写出后连接被对端关闭（EOF/reset/broken pipe）与超时同属「结果未知」：
+// 服务端可能已执行。非幂等工具必须提示先核对状态再重试；reset_user_password
+// 还要交付候选密码（否则密码已改而口令未回传，用户被锁在门外）。
+// 连接被拒绝仍是「确定未发送」，不得带任何不确定措辞。
+func TestTransportFailureAfterRequestSentClaimsUncertainty(t *testing.T) {
+	uncertainErrors := []struct {
+		name string
+		err  error
+	}{
+		{"unexpected EOF", io.ErrUnexpectedEOF},
+		{"connection reset", fmt.Errorf("read tcp: %w", syscall.ECONNRESET)},
+		{"broken pipe", fmt.Errorf("write tcp: %w", syscall.EPIPE)},
+	}
+	for _, tc := range uncertainErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, tc.err
+			})}
+			handler := NewForTest("http://localhost:8000/api/v1", client)
+
+			result := callTool(t, handler, "restart_system", `{}`)
+
+			if !strings.Contains(result, `"isError":true`) || !strings.Contains(result, "操作可能已在服务端生效") {
+				t.Fatalf("result=%q, want 不确定态提示（请求可能已送达并生效）", result)
+			}
+			if strings.Contains(result, "候选密码") {
+				t.Fatalf("result=%q, 非密码工具不得出现候选密码", result)
+			}
+		})
+	}
+
+	t.Run("reset_user_password delivers candidate", func(t *testing.T) {
+		var candidate string
+		client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode reset body: %v", err)
+			}
+			candidate, _ = body["new_password"].(string)
+			return nil, io.ErrUnexpectedEOF
+		})}
+		handler := NewForTest("http://localhost:8000/api/v1", client)
+
+		result := callTool(t, handler, "reset_user_password", `{"id":7}`)
+
+		if candidate == "" {
+			t.Fatal("reset body 未携带系统生成密码（无法交付候选值）")
+		}
+		for _, want := range []string{"操作可能已在服务端生效", candidate, "若未生效请继续使用旧密码"} {
+			if !strings.Contains(result, want) {
+				t.Fatalf("result=%q, want %q", result, want)
+			}
+		}
+	})
+
+	t.Run("connection refused stays definite", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED)
+		})}
+		handler := NewForTest("http://localhost:8000/api/v1", client)
+
+		result := callTool(t, handler, "reset_user_password", `{"id":7}`)
+
+		if !strings.Contains(result, "内部 API 请求失败") {
+			t.Fatalf("result=%q, want 通用失败文案", result)
+		}
+		for _, unwanted := range []string{"操作可能已在服务端生效", "候选密码"} {
+			if strings.Contains(result, unwanted) {
+				t.Fatalf("result=%q must not contain %q（连接被拒绝=确定未发送）", result, unwanted)
+			}
+		}
+	})
 }

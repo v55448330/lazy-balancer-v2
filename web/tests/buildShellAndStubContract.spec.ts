@@ -108,8 +108,10 @@ test('src 里引用的 *.spec.ts 必须真实存在（文档指针不得悬空�
   // 单源注释常写「由 web/tests/xxx.spec.ts 对表」；指针指向不存在的文件时，
   // 维护者/审计者按注释去找门禁会扑空，误判「该不变量无覆盖」而重建第二处
   // 对表（单源退化为双源）。此处对 src 全量 *.spec.ts 引用逐个断言存在。
+  // tests/ 里的注释同样会写指针（跨 spec 的「同口径见 xxx」），一并扫描。
   const specDir = fileURLToPath(new URL('./', import.meta.url))
   const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
+  const testsDir = fileURLToPath(new URL('./', import.meta.url))
   const referenced = new Set<string>()
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -125,7 +127,33 @@ test('src 里引用的 *.spec.ts 必须真实存在（文档指针不得悬空�
     }
   }
   walk(srcDir)
+  walk(testsDir)
   assert.ok(referenced.size >= 8, `src 中的 spec 指针扫描失效（仅 ${referenced.size} 个）`)
-  const dangling = [...referenced].filter((name) => !existsSync(`${specDir}${name}`)).sort()
+  // 合成样本与占位模板不是真指针：判据自检用的假文件名、注释里的 `xxx` 模板。
+  // 逐条须真被引用（死条目即红），新增占位符须在此登记原因。
+  const placeholderPointers: Record<string, string> = {
+    'realConsumer.spec.ts': 'exportSurface 判据自检的合成消费方',
+    'xxx.spec.ts': '注释里的「由 web/tests/xxx.spec.ts 对表」占位模板',
+  }
+  assert.deepEqual(
+    Object.keys(placeholderPointers).filter((name) => !referenced.has(name)),
+    [],
+    '占位指针登记已失效（源代码里已不再出现这些假文件名）',
+  )
+  const dangling = [...referenced]
+    .filter((name) => !Object.hasOwn(placeholderPointers, name) && !existsSync(`${specDir}${name}`))
+    .sort()
   assert.deepEqual(dangling, [], `注释里的 spec 指针指向不存在的文件：${dangling.join(', ')}`)
+})
+
+test('前端构建指引：npm ci + 产物构建戳核对（锁文件与 dist 新鲜度都不得靠记忆）', () => {
+  // 两处都是反复回归的流程点：用 npm install 会就地改写 package-lock.json
+  // （依赖解析漂移不进 diff）；dist 是宿主预构建产物、被 Dockerfile 盲目 COPY，
+  // 陈旧前端会静默入镜像（界面版本号来自后端）。指引必须同时给出核对命令。
+  for (const doc of ['../README.md', '../README.en.md']) {
+    const text = readFileSync(new URL(doc, webRoot), 'utf8')
+    assert.match(text, /cd web && npm ci && npm run build/, `${doc} 的前端构建步骤必须用 npm ci`)
+    assert.doesNotMatch(text, /npm install && npm run build/, `${doc} 不得再引导 npm install`)
+    assert.match(text, /web\/dist\/build-info\.json/, `${doc} 必须给出 dist 构建戳核对命令`)
+  }
 })

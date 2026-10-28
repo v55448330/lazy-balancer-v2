@@ -18,6 +18,15 @@ func TestFromHeader_extractionRules(t *testing.T) {
 	}{
 		{"x-api-key wins", "lb_sk_direct", "Bearer lb_sk_other", "lb_sk_direct"},
 		{"bearer api key", "", "Bearer lb_sk_bearer", "lb_sk_bearer"},
+		// 方案与凭据之间多写空白的手工客户端（"Bearer   <key>"）必须照常
+		// 提取：凭据拿去哈希比对，残留空白会表现为「密钥无效」，把排障方向
+		// 从格式误导到密钥本身。
+		{"extra spaces after scheme", "", "Bearer   lb_sk_spaces", "lb_sk_spaces"},
+		{"trailing whitespace", "", "Bearer lb_sk_trailing \t", "lb_sk_trailing"},
+		{"tab separator", "", "Bearer\tlb_sk_tab", "lb_sk_tab"},
+		{"no separator", "", "Bearerlb_sk_nosep", ""},
+		{"empty token", "", "Bearer   ", ""},
+		{"scheme only", "", "Bearer", ""},
 		{"lowercase bearer api key", "", "bearer lb_sk_lower", "lb_sk_lower"},
 		{"uppercase bearer api key", "", "BEARER lb_sk_upper", "lb_sk_upper"},
 		{"jwt bearer is not api key", "", sampleJWTBearer, ""},

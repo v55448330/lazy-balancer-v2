@@ -498,11 +498,17 @@ func (s *crawlerIPRangeSnapshot) parsePayload(raw []byte) bool {
 	for engine, cidrs := range all {
 		prefixes := make([]netip.Prefix, 0, len(cidrs))
 		for _, cidr := range cidrs {
-			if p, err := netip.ParsePrefix(cidr); err == nil {
-				prefixes = append(prefixes, p)
-			} else {
+			// 与判定侧/名单侧同口径：复用 wafiplist.ParseIPEntry 单源
+			// （裸 IP 补 /32、4in6 归一为 v4 前缀、带 zone 拒绝）。裸
+			// netip.ParsePrefix 会把 4in6 段装进 v6 集，而查询侧 Unmap 后
+			// 恒为 v4 → 该段「加载成功、运行永不命中」（真爬虫被拦 + 伪伪装
+			// 事件，快照侧零告警）。
+			p, err := wafiplist.ParseIPEntry(cidr)
+			if err != nil {
 				badCIDRs++
+				continue
 			}
+			prefixes = append(prefixes, p)
 		}
 		s.prefixes[engine] = wafiplist.AggregateParsedPrefixes(prefixes)
 		total += len(prefixes)

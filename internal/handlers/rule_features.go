@@ -419,6 +419,14 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	if input.Protocol == "http" && input.ListenPort == 80 && input.EnableTLS && input.TLSHTTPRedirect {
 		return fmt.Errorf("80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转")
 	}
+	// 同族残留缺口：80 端口 + HTTPS（未开跳转）。Caddy 对配置的 HTTP 端口
+	// （默认 80）从不启用 TLS（http app 的 useTLS 判端口 != httpPort），
+	// 于是 tls_connection_policies 与证书 load_files 静默空转——规则实际以
+	// 明文在 :80 转发，而面板徽标/证书队列仍按「已启用 HTTPS」运转。
+	// 静默降级比拒绝更贵：证书照常签发续期、TLS 材料照常落盘，全都不生效。
+	if input.Protocol == "http" && input.ListenPort == 80 && input.EnableTLS {
+		return fmt.Errorf("80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS")
+	}
 	if input.Protocol == "tcp" {
 		// L4 代理无 HTTP Host 头可驱动动态 DNS 解析（Caddy layer4 直拨
 		// IP:port），TCP+dynamic_dns 规则渲染侧被整体跳过、
@@ -1385,6 +1393,11 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
 		return &configValidationError{message: "80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转"}
 	}
+	// 与保存侧同口径：80 端口 + HTTPS（未开跳转）在 Caddy 侧永不终止 TLS，
+	// 存量/导入/直改库形态启用前必须点名拒绝。
+	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
+		return &configValidationError{message: "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"}
+	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
 	}
@@ -1429,6 +1442,12 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 		// 启动再生配置前按保存路径同口径拦截并指出具体规则。
 		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)})
+			continue
+		}
+		// 同族缺口：80 端口 + HTTPS（未开跳转）——Caddy 在该端口绝不终止 TLS，
+		// 启动/UpdateConfig 聚合校验必须点名（不得静默带病上线）。
+		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS", rule.Name, rule.CaddyID)})
 			continue
 		}
 		// 与 validateStoredRuleConfig 同口径的 tls_source 白名单——

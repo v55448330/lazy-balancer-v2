@@ -18,7 +18,7 @@ import {
   pidsTooltipText,
   pidsValueTone,
 } from '../src/utils/systemMetrics.ts'
-import { code } from './_helpers.ts'
+import { code, elementSlice } from './_helpers.ts'
 
 test('降级分项解析：已知值成集、未知值忽略、顺序稳定', () => {
   assert.deepEqual([...degradedMetricParts(undefined)], [])
@@ -88,9 +88,15 @@ test('进程配额帮助文案拼接保留 ulimit 零值歧义', () => {
 
 test('进程配额说明复用可聚焦帮助角标', () => {
   const page = code('src/views/Dashboard.vue')
+  // 标签组按元素配对取段（不是定长字符窗口）：组内标记增长/换行不再假红，
+  // 「角标挪到组外的相邻文本里」也不再假绿。
   const groupAt = page.indexOf('class="resource-label-group"')
-  const groupTail = page.slice(groupAt, groupAt + 320)
-  assert.ok(groupAt >= 0 && groupTail.includes('进程配额') && groupTail.includes('<FieldHelpIcon :content="pidsTooltip"'), '可聚焦帮助角标必须与标签同组')
+  assert.ok(groupAt > 0, '进程配额标签组缺失')
+  const openAt = page.lastIndexOf('<span', groupAt)
+  const group = elementSlice(page, openAt, 'span')
+  assert.ok(group.includes('进程配额'), `标签组必须含「进程配额」：${group}`)
+  assert.ok(group.includes('<FieldHelpIcon :content="pidsTooltip"'), `可聚焦帮助角标必须与标签同组：${group}`)
+  assert.doesNotMatch(group, /<el-tooltip/, '组内不得用不可聚焦的 tooltip 代替帮助角标')
   assert.match(page, /<span class="resource-value" :class="pidsValueClass">\{\{ systemMetrics\.pids_current \}\}<\/span>\s*<span class="resource-total">/)
   assert.doesNotMatch(page, /<el-tooltip :content="pidsTooltip"/)
 })

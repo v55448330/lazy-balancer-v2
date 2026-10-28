@@ -168,8 +168,14 @@ RUN xcaddy build \
 
 FROM golang:1 AS backend
 COPY go.mod go.sum ./
-COPY cmd/ internal/ caddygeoip/ caddydeps/ \
-     wafiplist/ geoipnames/ config/ ./config/
+COPY cmd/ ./cmd/
+COPY internal/ \
+     ./internal/
+COPY caddygeoip/ ./caddygeoip/
+COPY caddydeps/ ./caddydeps/
+COPY wafiplist/ ./wafiplist/
+COPY geoipnames/ ./geoipnames/
+COPY config/ ./config/
 RUN go build
 
 FROM alpine:3
@@ -242,6 +248,34 @@ sed -e 's|^COPY config/ ./config/$|COPY config/ ./config/\nCOPY newplugin/ ./new
     "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
 mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
 assert_pass "new --with module copied in both stages"
+
+# 15) 源在清单里但落点错：`COPY go.mod go.sum ./` 改成 ./wafiplist/ 后源名仍在
+#     清单内，旧实现判绿——而根模块在镜像里没有 go.mod/go.sum，`go mod download`
+#     与 `go build` 只在镜像构建期失败（正是本门要消灭的暴露面）。
+reset_fixture
+fixture_with_shared_stage_copies
+sed -e 's|^COPY go.mod go.sum ./$|COPY go.mod go.sum ./wafiplist/|' \
+  "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_fail "root go.mod target redirected into nested module" "落点与源不匹配"
+
+# 16) 顶层目录 COPY 到别的目录：源名清单满足，但 Go 包不在预期路径（WORKDIR
+#     /app/cmd/server 下的编译会失败）。落点断言必须红。
+reset_fixture
+fixture_with_shared_stage_copies
+sed -e 's|^COPY internal/ ./internal/$|COPY internal/ ./caddygeoip/|' \
+  "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_fail "top-level dir copied to wrong target" "落点与源不匹配"
+
+# 17) 嵌套模块的 go.mod/go.sum 落到根：`COPY wafiplist/go.mod wafiplist/go.sum ./`
+#     让 replace ./wafiplist 指向的目录里没有 go.mod（模块缓存解析失败）。
+reset_fixture
+fixture_with_shared_stage_copies
+sed -e 's|^COPY wafiplist/go.mod wafiplist/go.sum ./wafiplist/$|COPY wafiplist/go.mod wafiplist/go.sum ./|' \
+  "$tmp_root/Dockerfile" >"$tmp_root/Dockerfile.tmp"
+mv "$tmp_root/Dockerfile.tmp" "$tmp_root/Dockerfile"
+assert_fail "nested module go.mod landed at root" "落点与源不匹配"
 
 echo "copy-gate selftest: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

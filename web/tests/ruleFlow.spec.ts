@@ -86,3 +86,18 @@ test('阶段 1 脚注：绑定保留检测信任策略时追加降级说明', ()
   assert.match(stage1FootnoteText(true), /绑定「保留检测」信任策略时命中降级为检测事件，不终止/)
   assert.ok(stage1FootnoteText(true).length > stage1FootnoteText(false).length)
 })
+
+// 白名单命中后的豁免面：引擎发射的豁免规则是 pass + skipAfter:SECURITY_RULES_END
+// （跳过预检段内其后的一切规则，含爬虫伪装族与逐策略 GeoIP 链）。脚注只写
+// 「豁免地域拦截」会让管理员以为白名单成员仍被爬虫校验拦下。
+test('阶段 1 脚注：白名单豁免面写成「其后全部预检」', () => {
+  const footnote = stage1FootnoteText(false)
+  assert.match(footnote, /白名单命中豁免其后全部预检/)
+  assert.doesNotMatch(footnote, /白名单命中豁免地域拦截/, '旧文案把豁免面缩小成只有地域拦截')
+
+  // 跨栈机械钉：豁免规则的 id 与动作必须支撑「全部预检」这一措辞。Go 侧把
+  // skipAfter 去掉或改成只跳过 GeoIP，都会在此变红。
+  const precheck = repoCode('internal/services/security.go')
+  assert.match(precheck, /const ipPrecheckAllowExemptRuleID = 13/)
+  assert.match(precheck, /id:%d,phase:1,pass,nolog,skipAfter:SECURITY_RULES_END/)
+})

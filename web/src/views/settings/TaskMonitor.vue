@@ -60,7 +60,7 @@
           <template #header>
             <div class="card-header">
               <div class="card-title"><el-icon class="title-icon"><DataLine /></el-icon><span>近 24 小时执行（成功 / 失败）</span></div>
-              <el-button :icon="Refresh" circle size="small" :loading="refreshing" @click="refreshNow" title="立即刷新" />
+              <el-button :icon="Refresh" circle size="small" :loading="refreshing" @click="() => refreshNow()" title="立即刷新" />
             </div>
           </template>
           <!-- 数据就位后再挂载（vue-echarts 8 增量规划对「空 option 挂载→数据后到达」
@@ -176,15 +176,15 @@
             <el-tooltip v-if="row.role_applicable === false" content="仅主节点生效：从节点不调度此任务，调度开关仅在主节点可用" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-tag size="small" type="info" effect="plain">仅主节点</el-tag>
             </el-tooltip>
-            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" :content="scheduleStoppedTip(row) || '有证书任务入队时自动唤醒'" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" :content="scheduleStoppedTip(row as TaskInfo) || '有证书任务入队时自动唤醒'" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
             </el-tooltip>
-            <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="scheduleStoppedTip(row) || (isBusinessDrivenTask(row) ? '由对应业务页自动更新控制' : '停止/恢复调度')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="scheduleStoppedTip(row as TaskInfo) || (isBusinessDrivenTask(row as TaskInfo) ? '由对应业务页自动更新控制' : '停止/恢复调度')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <!-- 引擎自行停调（连续失败未推进排程槽）：业务驱动任务的开关在本页
                    只读，恢复入口在业务页——用警示标签替代不可用开关，避免「关着的
                    开关」被读成用户主动停止；非业务驱动任务保留开关（打开即恢复）。 -->
-              <el-tag v-if="row.schedule_stopped_reason && isBusinessDrivenTask(row)" size="small" type="danger" effect="plain">已停调</el-tag>
-              <el-switch v-else :model-value="!!row.loop_on" :disabled="!canOperate || isBusinessDrivenTask(row)" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+              <el-tag v-if="row.schedule_stopped_reason && isBusinessDrivenTask(row as TaskInfo)" size="small" type="danger" effect="plain">已停调</el-tag>
+              <el-switch v-else :model-value="!!row.loop_on" :disabled="!canOperate || isBusinessDrivenTask(row as TaskInfo)" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
             </el-tooltip>
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
@@ -228,29 +228,29 @@
         </el-table-column>
         <el-table-column label="操作" width="250" fixed="right" class-name="tm-op-cell">
           <template #default="{ row }">
-            <el-tooltip v-if="row.triggerable" :disabled="!runCooldownReason(row)" :content="runCooldownReason(row)">
+            <el-tooltip v-if="row.triggerable" :disabled="!runCooldownReason(row as TaskInfo)" :content="runCooldownReason(row as TaskInfo)">
               <span class="tm-op-trigger">
                 <el-button
                   link type="primary" size="small"
-                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || Boolean(runCooldownReason(row))"
-                  @click="onTrigger(row)"
+                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || Boolean(runCooldownReason(row as TaskInfo))"
+                  @click="onTrigger(row as TaskInfo)"
                 >运行</el-button>
               </span>
             </el-tooltip>
             <el-button
               v-if="row.cancellable && row.status === 'running'"
               link type="danger" size="small" :disabled="!canOperate || taskActionPendingId !== null"
-              @click="onCancel(row)"
+              @click="onCancel(row as TaskInfo)"
             >取消</el-button>
             <!-- 常驻行启停已由调度列开关承担（loop_on 同源）——操作列改「重启」-->
             <el-button
               v-if="row.controllable"
               link type="primary" size="small"
               :disabled="!canOperate || taskActionPendingId !== null"
-              @click="onRestart(row)"
+              @click="onRestart(row as TaskInfo)"
             >重启</el-button>
-            <el-button link type="info" size="small" @click="openLogs(row)">日志</el-button>
-            <el-button link type="info" size="small" @click="openDetail(row)">详情</el-button>
+            <el-button link type="info" size="small" @click="openLogs(row as TaskInfo)">日志</el-button>
+            <el-button link type="info" size="small" @click="openDetail(row as TaskInfo)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -710,6 +710,10 @@ interface TaskActionOptions {
  */
 async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise<void> {
   if (taskActionPendingId.value !== null) return
+  // 函数级纵深守卫：按钮 :disabled 只是入口层，角色/只读态可能在页面停留期间
+  // 变化（另标签降权、整机切从节点）——此处再守一道，避免重渲染窗口内的点击
+  // 绕过入口直发写请求（后端仍会 403，但用户只会看到莫名其妙的报错）。
+  if (!canOperate.value) return
   taskActionPendingId.value = row.id
   try {
     if (options.confirm) {

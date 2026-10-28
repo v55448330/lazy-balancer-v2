@@ -267,9 +267,16 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
   return '自定义 · CRS'
 }
 
-/** 阶段 1 脚注；`trustDetectionBound` = 绑定了「保留检测」信任策略（命中降级为检测） */
+/**
+ * 阶段 1 脚注；`trustDetectionBound` = 绑定了「保留检测」信任策略（命中降级为检测）。
+ *
+ * 白名单豁免面必须写成「其后全部预检」：引擎发射的豁免规则是
+ * `pass,nolog,skipAfter:SECURITY_RULES_END`，命中后跳过预检段内其后的一切规则
+ * （逐策略 GeoIP 链与爬虫伪装族一并跳过）。旧文案「豁免地域拦截」会让读者以为
+ * 白名单成员仍会被爬虫校验拦下，排障时误判「规则失效」。
+ */
 export const stage1FootnoteText = (trustDetectionBound: boolean): string => {
-  const base = '多策略合并预检：信任（阶段 0）→ 黑名单 → 遗留黑名单（旧字段）→ 白名单外拒绝（白名单命中豁免地域拦截）→ 爬虫校验 → 地域拦截；未通过即终止'
+  const base = '多策略合并预检：信任（阶段 0）→ 黑名单 → 遗留黑名单（旧字段）→ 白名单外拒绝（白名单命中豁免其后全部预检，含爬虫校验与地域拦截）→ 爬虫校验 → 地域拦截；未通过即终止'
   return trustDetectionBound ? `${base}；绑定「保留检测」信任策略时命中降级为检测事件，不终止` : base
 }
 
@@ -593,13 +600,16 @@ const buildStage1Rows = (
     rows.push({ label: '拦截页（策略页）', detail: broken ? BLOCK_PAGE_BROKEN_403 : `${page?.name}（状态码 ${policy?.block_status_code || 403}）` })
   }
   // 规则级阶段页覆盖行（v2.3.1 逐策略归因默认层 = 403）：
-  // 已配 → 规则覆盖；页已删/内容空 → 失效（回落跟随策略）；未配 → 回落绑定链
-  // 首个有效页（无则默认 403，见 BLOCK_PAGE_UNSET_403）。
+  // 已配 → 规则覆盖；页已删/内容空 → 失效；未配 → 回落绑定链首个有效页
+  // （无则默认 403，见 BLOCK_PAGE_UNSET_403）。
+  // 失效措辞必须与 BLOCK_PAGE_BROKEN_403 一致：阶段 1 的覆盖页失效后，引擎由
+  // buildBlockPageErrorRoute 取「绑定链首个启用且内容非空」策略的页面——可能
+  // 不是本策略，写「回落跟随策略」会让排障定位到错误策略。
   // 仅携带于有能力行的策略组——空能力不虚增阶段 1 组（未启用判定不受影响）
   if (rows.length > 0) {
     const override = resolveStageOverride(stagePages?.block_page_stage1_id, stagePages?.block_page_stage1_status, blockPages)
     if (override === null) rows.push({ label: '拦截页', detail: BLOCK_PAGE_UNSET_403 })
-    else if (override.broken) rows.push({ label: '拦截页', detail: '已失效（回落跟随策略）' })
+    else if (override.broken) rows.push({ label: '拦截页', detail: BLOCK_PAGE_BROKEN_403 })
     else rows.push({ label: '拦截页', detail: `规则覆盖：${override.pageName}（状态码 ${override.status}）` })
   }
   return rows

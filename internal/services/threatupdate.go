@@ -629,10 +629,23 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 
 	// fast 不可用（缺失/损坏）而文本仍在时优先从现有
 	// 文本重建，不依赖重新下载。
+	//
+	// 自愈是写盘副作用（重编译 .fast 落 live），与慢路径写库同权：必须先过
+	// 角色+取消写门。自愈发生在下载之前，此前的唯一角色/取消复核在写库前，
+	// 降级窗口内的入口自愈会在从节点写出非集群同步来源的 .fast 代际。
+	// 取消形态不在此收口（源行 cancelled 终态与日志由下方下载失败的取消分支
+	// 统一落库），只跳过自愈写盘后走原有编舞。
+	healAllowed := true
+	if gerr := updateRunWriteGate(ctx); gerr != nil {
+		if !errors.Is(gerr, context.Canceled) && !errors.Is(gerr, context.DeadlineExceeded) {
+			return threatWriteGateAbort(source.name, gerr)
+		}
+		healAllowed = false
+	}
 	var entries []string
 	var rawHash string
 	healed := false
-	if !threatIplistMissing(source.name) && threatFastUnusable(source.name) {
+	if healAllowed && !threatIplistMissing(source.name) && threatFastUnusable(source.name) {
 		if e, ok := healThreatFastFromText(source.name); ok {
 			// heal 的文本 sha256 不是上游原始字节哈希：留空使慢路径不写
 			// raw_hash，保留上次真实下载哈希。

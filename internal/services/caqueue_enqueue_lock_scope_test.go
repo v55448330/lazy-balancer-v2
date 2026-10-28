@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -137,4 +138,135 @@ func newStubbedQueueManager(t *testing.T) (*CAQueueManager, int) {
 		t.Fatalf("read job id: %v", err)
 	}
 	return manager, int(jobID64)
+}
+
+// 锁外解析窗口内被暂停（配置导入/停止先排空）时，迟到入队不得新建队列或
+// pending 项：首段准入检查放行后队列可能已经排空，收尾若无条件入队会重新
+// 拉起 worker，让导入「已排空」的判定与静默边界失效。任务行已迁移的
+// queued 状态由 Resume/滞留扫描接管，调用方按 inactive 归因（changed=false）。
+func TestCAQueueManager_EnqueueIfActive_pauseDuringProviderResolveRejectsLateEnqueue(t *testing.T) {
+	newClusterTestService(t)
+	manager, jobID := newEmptyQueueManager(t)
+
+	var drained bool
+	var once sync.Once
+	manager.beforeProviderEnqueue = func() {
+		once.Do(func() { drained = manager.PauseAndDrain() })
+	}
+
+	_, changed, err := manager.EnqueueIfActive(1, jobID, "lb_queue_lock_scope", "lock-scope.example.com",
+		func() (int, bool, error) { return jobID, true, nil })
+
+	if err != nil {
+		t.Fatalf("enqueue err=%v, want nil（暂停不是错误，按 inactive 归因）", err)
+	}
+	if !drained {
+		t.Fatal("前置：空队列的 PauseAndDrain 应报告已排空")
+	}
+	if changed {
+		t.Fatal("changed=true，解析窗口内已暂停仍报告入队成功")
+	}
+	manager.mu.Lock()
+	queues := len(manager.queues)
+	pending := 0
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		pending += len(q.pending)
+		q.mu.Unlock()
+	}
+	_, reserved := manager.reservedJobs[jobID]
+	manager.mu.Unlock()
+	if queues != 0 {
+		t.Fatalf("暂停后迟到入队新建了 %d 个队列（应收尾复核 active 拒绝入队）", queues)
+	}
+	if pending != 0 {
+		t.Fatalf("暂停后仍留下 %d 个 pending 项", pending)
+	}
+	if reserved {
+		t.Fatal("拒绝入队后仍在途预留未释放（该 jobID 将永久 409）")
+	}
+}
+
+// 锁外解析窗口内建立规则删除屏障（删除/禁用路径 BlockJobsForRule + 排空）时，
+// 迟到入队不得越过屏障：否则删除补偿窗口内的任务仍会白烧 CA 订单并与补偿
+// 竞争。首段检查在屏障建立前已放行，收尾必须复核同一判据。
+func TestCAQueueManager_EnqueueIfActive_ruleBarrierDuringProviderResolveRejectsLateEnqueue(t *testing.T) {
+	newClusterTestService(t)
+	manager, jobID := newEmptyQueueManager(t)
+	manager.beforeProviderEnqueue = func() { manager.BlockJobsForRule("lb_queue_lock_scope") }
+
+	_, changed, err := manager.EnqueueIfActive(1, jobID, "lb_queue_lock_scope", "lock-scope.example.com",
+		func() (int, bool, error) { return jobID, true, nil })
+
+	if err != nil {
+		t.Fatalf("enqueue err=%v, want nil（屏障按冲突归因，非服务器错误）", err)
+	}
+	if changed {
+		t.Fatal("changed=true，规则屏障建立后仍报告入队成功")
+	}
+	manager.mu.Lock()
+	pending := 0
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		pending += len(q.pending)
+		q.mu.Unlock()
+	}
+	_, reserved := manager.reservedJobs[jobID]
+	manager.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("屏障后仍留下 %d 个 pending 项（应零入队）", pending)
+	}
+	if reserved {
+		t.Fatal("拒绝入队后仍在途预留未释放")
+	}
+}
+
+// 补偿重排队同一形态：租约在首段检查后、锁外解析窗口内被暂停排空释放，
+// 收尾仍无条件入队会让导入/停止后的队列复活。暂停按 errCAQueueInactive
+// 归因（补偿退避循环据此保留任务，不上抛重试）。
+func TestCAQueueManager_enqueueCompensation_pauseDuringProviderResolveRejectsLateEnqueue(t *testing.T) {
+	newClusterTestService(t)
+	manager, jobID := newEmptyQueueManager(t)
+	token := manager.BlockJobsForRule("lb_queue_lock_scope")
+	t.Cleanup(func() { manager.UnblockJobsForRule("lb_queue_lock_scope", token) })
+	manager.beforeProviderEnqueue = func() { manager.PauseAndDrain() }
+
+	err := manager.enqueueCompensation(1, jobID, "lb_queue_lock_scope", "lock-scope.example.com")
+
+	if !errors.Is(err, errCAQueueInactive) {
+		t.Fatalf("err=%v, want errCAQueueInactive（暂停期间不得入队）", err)
+	}
+	manager.mu.Lock()
+	queues := len(manager.queues)
+	pending := 0
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		pending += len(q.pending)
+		q.mu.Unlock()
+	}
+	_, reserved := manager.reservedJobs[jobID]
+	manager.mu.Unlock()
+	if queues != 0 || pending != 0 {
+		t.Fatalf("暂停后补偿入队建了 %d 个队列 / %d 个 pending 项", queues, pending)
+	}
+	if reserved {
+		t.Fatal("补偿拒绝入队后仍在途预留未释放")
+	}
+}
+
+// newEmptyQueueManager 直构一个零队列、不启动 worker 的管理器：收尾守卫用例
+// 只关心「解析窗口结束后是否新建队列/pending 项」。不复用 newStubbedQueueManager
+// 是因为它预置的队列从不启动 loop，而 PauseAndDrain 对未启动 loop 的队列会
+// 永久等待 loopDone（本组用例不得靠超时判定）。
+func newEmptyQueueManager(t *testing.T) (*CAQueueManager, int) {
+	t.Helper()
+	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_queue_lock_scope','lock-scope.example.com','queued',1)`)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	jobID64, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job id: %v", err)
+	}
+	return &CAQueueManager{queues: make(map[int]*caQueue), active: true}, int(jobID64)
 }

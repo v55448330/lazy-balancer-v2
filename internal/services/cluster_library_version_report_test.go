@@ -104,8 +104,8 @@ func TestLatestSourceVersion_tieKeepsLastRowLikeFrontend(t *testing.T) {
 	if _, err := database.Exec(`UPDATE security_threat_sources SET version='1.2' WHERE id=(SELECT MAX(id) FROM security_threat_sources)`); err != nil {
 		t.Fatal(err)
 	}
-	if got := latestSourceVersion(ctx, database, "security_threat_sources"); got != "1.2" {
-		t.Fatalf("latestSourceVersion=%q, want 1.2（等值取行序后者，与前端 sort+pop 一致）", got)
+	if got, err := latestSourceVersion(ctx, database, "security_threat_sources"); err != nil || got != "1.2" {
+		t.Fatalf("latestSourceVersion=%q err=%v, want 1.2（等值取行序后者，与前端 sort+pop 一致）", got, err)
 	}
 }
 
@@ -148,8 +148,8 @@ func TestLatestSourceVersion_matchesFrontendAggregateFixture(t *testing.T) {
 		if fields[3] != wantStatus {
 			t.Fatalf("夹具第 %d 行自相矛盾：latest=%q 却期望 status=%q（夹具行恒为启用 idle，status 由 latest 是否为空决定）", lineNo+1, fields[2], fields[3])
 		}
-		if got := latestSourceVersion(ctx, database, "security_threat_sources"); got != fields[2] {
-			t.Errorf("夹具第 %d 行 latestSourceVersion=%q, want %q（纯空白版本必须 trim 后跳过，与前端同口径）", lineNo+1, got, fields[2])
+		if got, err := latestSourceVersion(ctx, database, "security_threat_sources"); err != nil || got != fields[2] {
+			t.Errorf("夹具第 %d 行 latestSourceVersion=%q err=%v, want %q（纯空白版本必须 trim 后跳过，与前端同口径）", lineNo+1, got, err, fields[2])
 		}
 		checked++
 	}

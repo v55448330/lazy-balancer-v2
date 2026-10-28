@@ -2,6 +2,8 @@ package db
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -108,6 +110,50 @@ func reopenDatabaseForTest(t *testing.T, dir string) {
 		t.Fatalf("initialize database: %v", err)
 	}
 	reopenHandlesForTest = []*sql.DB{DB, MetricsDB, AuditDB}
+}
+
+// InitializeAuditDB 中途失败（旧审计表迁移报错）时必须关闭刚开出的句柄并把
+// 包级 AuditDB 恢复原值：半初始化的句柄留在全局变量上会让后续调用方对着
+// 迁移失败/已关闭的库写入，且仍占着连接与 -wal 文件句柄。同一进程内随后
+// 再次初始化必须成功——失败不得污染文件/句柄生命周期。
+func TestInitializeAuditDB_restoresHandleWhenMigrationFails(t *testing.T) {
+	preserveDatabaseHandles(t)
+	dir := t.TempDir()
+	// 主库句柄不可用是迁移首步（取连接）的确定失败形态；DATA 目录仍合法。
+	closedMain, err := sql.Open("sqlite", filepath.Join(dir, "main.db"))
+	if err != nil {
+		t.Fatalf("open temp main database: %v", err)
+	}
+	if err := closedMain.Close(); err != nil {
+		t.Fatalf("close temp main database: %v", err)
+	}
+	DB = closedMain
+	AuditDB = nil
+
+	if err := InitializeAuditDB(dir); err == nil {
+		t.Fatal("审计库迁移失败必须上抛")
+	}
+	if AuditDB != nil {
+		t.Fatalf("失败后 AuditDB 仍指向半初始化句柄 %p, want nil（恢复进入前的值）", AuditDB)
+	}
+	// 句柄已关闭的代理证据：WAL 模式库的 last-close 会 checkpoint 并删除 -wal，
+	// 残留 -wal 说明还有连接持着该库文件。
+	auditPath := filepath.Join(dir, AuditDBFilename)
+	if _, err := os.Stat(auditPath + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("失败后残留 %s-wal（句柄未关闭）: %v", auditPath, err)
+	}
+
+	// 同一进程内二次初始化必须成功（失败未污染库文件/全局态）。
+	DB = nil
+	if err := InitializeAuditDB(dir); err != nil {
+		t.Fatalf("失败后的再次初始化必须成功: %v", err)
+	}
+	if AuditDB == nil {
+		t.Fatal("再次初始化后 AuditDB 仍为 nil")
+	}
+	if _, err := AuditDB.Exec(`INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system','测试','操作日志','','')`); err != nil {
+		t.Fatalf("再次初始化后的审计库不可写: %v", err)
+	}
 }
 
 // 重开辅助必须真的关掉上一套句柄（否则「重复 Initialize 泄漏中间句柄」

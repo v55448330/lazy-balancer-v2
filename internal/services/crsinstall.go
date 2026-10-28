@@ -347,7 +347,11 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 			// 回滚必须同代（树 + live VERSION + DB 版本行）——旧实现
 			// restoreBackup 取锁后立即释放，标记/版本行在锁外写（持锁读者可见
 			// 「旧树+新标记」；并发导入可在窗口内被本轮标记覆盖）。
-			m.rollbackAfterReloadFailure(prevTag)
+			if rbErr := m.rollbackAfterReloadFailure(prevTag); rbErr != nil {
+				// 回滚未回到同代：把残留状态并入本轮终态（版本行 message /
+				// 任务日志），运维据此决定是否重启触发对账校正。
+				return &crsReloadError{cause: fmt.Errorf("重载 Caddy: %w；%v", err, rbErr)}
+			}
 			return &crsReloadError{cause: fmt.Errorf("重载 Caddy: %w", err)}
 		}
 	}
@@ -604,13 +608,23 @@ func (m *CRSUpdateManager) observeCancelAfterSwap(parent context.Context, prevTa
 	switch {
 	case !known:
 		WriteCRSUpdateLog("WARN", stage, "取消时节点角色不可判定（DB 读失败），按主节点口径执行同代回滚（防「旧树+新版本行」固化）")
-		m.rollbackAfterReloadFailure(prevTag)
+		m.rollbackAfterReloadFailureLogged(stage, prevTag)
 	case isMaster:
-		m.rollbackAfterReloadFailure(prevTag)
+		m.rollbackAfterReloadFailureLogged(stage, prevTag)
 	default:
 		WriteCRSUpdateLog("INFO", stage, "节点已降级为从节点，中止更新且不回滚（树/版本行/标记同为新版本，交集群同步收敛）")
 	}
 	return cerr
+}
+
+// rollbackAfterReloadFailureLogged 取消编排路径的回滚调用：回滚不完整时以本段
+// 阶段名留痕（取消终态本身只携带取消原因，不覆盖回滚残留），失败面已由
+// rollbackAfterReloadFailure 内部写 ERROR 行，此处补充「本轮取消收尾不完整」
+// 的归属阶段。
+func (m *CRSUpdateManager) rollbackAfterReloadFailureLogged(stage, prevTag string) {
+	if err := m.rollbackAfterReloadFailure(prevTag); err != nil {
+		WriteCRSUpdateLog("ERROR", stage, fmt.Sprintf("取消收尾的回滚未回到同代版本: %v", err))
+	}
 }
 
 // rollbackAfterReloadFailure 重载失败回滚：树还原、
@@ -620,7 +634,11 @@ func (m *CRSUpdateManager) observeCancelAfterSwap(parent context.Context, prevTa
 // lbbak 导入可在释放窗口换树后被本轮回滚标记覆盖，形成跨代污染。prevTag 为空
 // （锁内读版本失败）时显式 ERROR 留痕并跳过标记回写（writeCRSVersionMarker 对
 // 空版本是静默 no-op，不得让「未回写」不可见）。
-func (m *CRSUpdateManager) rollbackAfterReloadFailure(prevTag string) {
+//
+// 返回 nil 仅当「规则树 + VERSION 标记 + DB 版本行」三者都回到 prevTag 同代；
+// 否则返回描述残留跨代状态的非 nil 错误，调用方必须把它并入本轮终态信息
+// （不得按「回滚完成」收尾）。
+func (m *CRSUpdateManager) rollbackAfterReloadFailure(prevTag string) error {
 	wafFileMu.Lock()
 	defer wafFileMu.Unlock()
 	if !m.restoreBackupInLock() {
@@ -630,21 +648,36 @@ func (m *CRSUpdateManager) rollbackAfterReloadFailure(prevTag string) {
 		// 由下次成功更新/启动对账收敛。
 		WriteCRSUpdateLog("ERROR", string(CRSStatusReloading),
 			"回滚未能完整还原规则树：VERSION 标记与版本行保持更新后的值（避免新树+旧版本跨代），等待下次成功更新或启动对账校正")
-		return
+		return errors.New("规则树未完整还原（标记与版本行保持更新后的值）")
 	}
 	if prevTag == "" {
 		WriteCRSUpdateLog("ERROR", string(CRSStatusReloading),
 			"回滚时无法确定更新前的 CRS 版本（VERSION 标记/版本行保持现状，重启后 ReconcileCRSState 校正）")
-		return
+		return errors.New("回滚前版本不可知（标记与版本行保持现状）")
 	}
-	writeCRSVersionMarker(m.liveDir(), prevTag)
-	// 版本行回滚到旧值，恢复下轮重试能力；失败留痕并依赖启动对账自愈。
+	// 标记回写失败是回滚的独立失败面：树已还原、版本行仍回滚为旧值（下轮
+	// 可重试），但磁盘标记停留新版本——「旧树 + 新标记」跨代，只有重启后
+	// 的启动对账（快照/磁盘标记比对）能收敛。必须上抛给调用方并入终态。
+	var markerErr error
+	if err := writeCRSVersionMarker(m.liveDir(), prevTag); err != nil {
+		markerErr = fmt.Errorf("回滚回写 VERSION 标记 %s 失败（磁盘标记仍指向更新后的版本，与已还原的规则树跨代；版本行已回滚使下轮可重试，重启后由启动对账收敛）: %w", prevTag, err)
+		WriteCRSUpdateLog("ERROR", string(CRSStatusReloading), markerErr.Error())
+	}
+	// 版本行回滚保持无条件执行：它是「下轮可重试」的唯一依据——不回滚则
+	// currentCRSVersion() 已是新 tag，下轮自动更新短路「已是最新」，失败被
+	// 永久掩盖。
 	if _, rbErr := db.DB.Exec(
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
 		prevTag,
 	); rbErr != nil {
 		WriteCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("版本行回滚失败（重启后 ReconcileCRSState 自愈）: %v", rbErr))
+		rowErr := fmt.Errorf("版本行回滚失败（重启后对账自愈）: %w", rbErr)
+		if markerErr != nil {
+			return fmt.Errorf("%v；%w", markerErr, rowErr)
+		}
+		return rowErr
 	}
+	return markerErr
 }
 
 // restoreBackup puts rules.bak and crs-setup.conf.bak back in place and undoes

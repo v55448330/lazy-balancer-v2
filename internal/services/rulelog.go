@@ -352,6 +352,28 @@ var timberjackRotationSuffix = regexp.MustCompile(
 	`^-(?:\d{8}T\d{2}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:\.\d{1,9})?-(?:` +
 		strings.Join(timberjackRotationReasons, "|") + `)(?:_\d+)?\.log(?:\.gz|\.zst)?$`)
 
+// timberjackRotationCopyStem 返回文件名去掉 .log / .log.gz / .log.zst 后的
+// 主体（不是 .log 族时返回空串）。删除与孤儿判定用它做归属反解：规则日志
+// 文件名以词法承载归属，当构造 caddy_id 自身以「完整时间戳 + reason」结尾时，
+// 它的活动文件与「前缀规则的轮转副本」同形——只有把整段主体当候选规则日志
+// 主体去查存活清单，才能把两者分开。
+func timberjackRotationCopyStem(name string) string {
+	for _, suffix := range []string{".log", ".log.gz", ".log.zst"} {
+		if trimmed, ok := strings.CutSuffix(name, suffix); ok {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// ruleLogLiveIDsForOwnership 读取存活规则的 caddy_id 集合（删除侧归属反解）。
+// 库不可用/读取失败返回 (nil, err)：调用方据此对「可能与某条规则活文件同形」
+// 的候选保留不删并留痕——宁可留一份派生日志副本，也不 unlink 存活规则正在
+// 写的文件（写侧仍持有 fd，丢失在下次轮转前不可见）。
+func ruleLogLiveIDsForOwnership() (map[string]bool, error) {
+	return liveRuleIDs(context.Background())
+}
+
 // removeTimberjackRotations 删除 base 同目录下 <base去扩展名>-<ts>-<reason>.log
 // 形态的 timberjack 轮转副本。目录不存在=无副本（nil）；读目录/删除失败聚合返回。
 func removeTimberjackRotations(base string) error {
@@ -365,6 +387,28 @@ func removeTimberjackRotations(base string) error {
 		return fmt.Errorf("读取规则日志目录 %s: %w", dir, err)
 	}
 	var errs []error
+	var liveIDs map[string]bool
+	liveLoaded := false
+	ownedByLiveRule := func(copyStem string) bool {
+		// 归属反解只在「整段主体也在 caddy_id 字母表内」时有意义：生产轮转
+		// 副本名含毫秒点（-2026-10-23T18-38-57.122-size），不可能等于规则 ID，
+		// 故默认形态零额外查询。
+		if !fileComponentSafe(copyStem) {
+			return false
+		}
+		if !liveLoaded {
+			loaded, loadErr := ruleLogLiveIDsForOwnership()
+			liveIDs = loaded
+			liveLoaded = true
+			if loadErr != nil {
+				Logf("warn", "规则日志轮转副本归属无法核对（存活规则清单读取失败），候选保留不删: %v", loadErr)
+			}
+		}
+		if liveIDs == nil {
+			return true // 无法核对：保留（见 helper 注释的取舍）
+		}
+		return liveIDs[decodeFileComponent(copyStem)]
+	}
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasPrefix(name, stem+"-") {
@@ -374,6 +418,12 @@ func removeTimberjackRotations(base string) error {
 		// 兄弟规则（caddy_id 以本 stem 为前缀，如 lb_abc 与 lb_abc-1/
 		// lb_abc-extra）的副本尾部不匹配 -> 保留。
 		if !timberjackRotationSuffix.MatchString(name[len(stem):]) {
+			continue
+		}
+		// 归属反解：若整段主体本身是一条存活规则的 caddy_id，该文件是那条
+		// 规则的活文件/副本（构造 ID 恰好以 <完整时间戳>-<reason> 结尾），
+		// 不得作为本规则的轮转副本删除。
+		if copyStem := timberjackRotationCopyStem(name); copyStem != "" && ownedByLiveRule(copyStem) {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -491,6 +541,15 @@ func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 			continue
 		}
 		ruleID := decodeFileComponent(component)
+		// 归属优先按「整段主体是否为存活规则」反解：构造 ID 恰以
+		// <完整时间戳>-<reason> 结尾时，其活动文件在词法上等价于前缀规则的
+		// 轮转副本，前缀规则已删除时会被误判为孤儿——整段主体是存活规则 ID
+		// 则归属它，不清理。
+		if copyStem := timberjackRotationCopyStem(e.Name()); copyStem != "" && copyStem != component && fileComponentSafe(copyStem) {
+			if ownerID := decodeFileComponent(copyStem); liveIDs[ownerID] {
+				ruleID = ownerID
+			}
+		}
 		if liveIDs[ruleID] || seen[ruleID] {
 			continue
 		}

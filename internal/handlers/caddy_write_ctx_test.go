@@ -171,7 +171,7 @@ func scanCaddyWriteContextViolations(filename string, source []byte) (bool, []st
 		})
 		ast.Inspect(function.Body, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
-			if !ok || !caddyWriteGuardCall(call.Fun, txVars) {
+			if !ok || (!caddyWriteGuardCall(call.Fun, txVars) && !caddyWriteCallPassesTx(call, txVars)) {
 				return true
 			}
 			for _, arg := range call.Args {
@@ -198,6 +198,21 @@ func caddyWriteGuardCall(fun ast.Expr, txVars map[string]bool) bool {
 	case *ast.Ident:
 		switch typed.Name {
 		case "BumpClusterVersion", "rejectMixedPolicies", "setRulePoliciesInTx", "countStage2Policies":
+			return true
+		}
+	}
+	return false
+}
+
+// caddyWriteCallPassesTx 报告调用是否把写事务变量作为实参交给 helper。
+// 契约是「事务内每条语句同一口径」——helper 调用同样在事务内执行语句
+// （helpers 内 tx.QueryContext/ExecContext），把请求 ctx 传给 helper 与直接
+// 绑在语句上是同一违约形态，只是语句藏在 helper 里。识别「tx 出现在实参中」
+// 而不维护 helper 名单：新增 helper 自动纳入扫描面。
+func caddyWriteCallPassesTx(call *ast.CallExpr, txVars map[string]bool) bool {
+	for _, arg := range call.Args {
+		ident, ok := arg.(*ast.Ident)
+		if ok && txVars[ident.Name] {
 			return true
 		}
 	}
@@ -244,6 +259,14 @@ func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); BumpClusterVers
 func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); ctx := caddyWriteCtx(c); tx.ExecContext(ctx, "UPDATE x") }`, want: 0},
 		{name: "无关键 helper 不误报", src: `package handlers
 func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); helper(c.Request.Context()); _ = tx }`, want: 0},
+		// 事务 helper 形态：ctx 作为实参随 tx 一起交给 helper——helper 内部的
+		// QueryContext/ExecContext 随断连取消，与「事务内每条语句同一口径」相反。
+		{name: "事务 helper 直接请求 ctx", src: `package handlers
+func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); replacePathRulesTx(c.Request.Context(), tx, "id", nil) }`, want: 1},
+		{name: "事务 helper 别名请求 ctx", src: `package handlers
+func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); ctx := c.Request.Context(); replaceUpstreamsTx(ctx, tx, "id", nil) }`, want: 1},
+		{name: "事务 helper caddyWriteCtx 正形状", src: `package handlers
+func f(c *gin.Context,tx *sql.Tx){ tx, _ = beginCaddyWriteTx(c); replacePathRulesTx(caddyWriteCtx(c), tx, "id", nil) }`, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

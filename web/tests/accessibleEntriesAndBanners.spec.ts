@@ -71,8 +71,10 @@ test('规则列表锁图标：Enter/Space 打开流程弹框，不依赖 telepor
   const reference = section(rules, '<template #reference>', '</template>')
   assert.match(reference, /role="button"/)
   assert.match(reference, /:aria-label="`查看「\$\{row\.name\}」的安全处理流程`"/)
-  assert.match(reference, /@keydown\.enter\.prevent="activateOnce\(\$event, \(\) => openFlowFromLock\(row\)\)"/)
-  assert.match(reference, /@keydown\.space\.prevent="activateOnce\(\$event, \(\) => openFlowFromLock\(row\)\)"/, '长按 Enter/Space 不得按系统重复率反复开窗')
+  // 插槽 row 是 Element Plus 的 DefaultRow（Record<PropertyKey, any>），传给
+  // 强类型处理器时带 `as Rule` 断言——断言不影响「收到整行」这一语义。
+  assert.match(reference, /@keydown\.enter\.prevent="activateOnce\(\$event, \(\) => openFlowFromLock\(row(?: as [A-Za-z]+)?\)\)"/)
+  assert.match(reference, /@keydown\.space\.prevent="activateOnce\(\$event, \(\) => openFlowFromLock\(row(?: as [A-Za-z]+)?\)\)"/, '长按 Enter/Space 不得按系统重复率反复开窗')
   // EP 默认把 Enter/Space 绑成 popover 开关——必须置空，否则同键既开弹框又弹只读面板
   const popover = section(rules, '<el-popover\n                v-if="row.protocol === \'http\'"', 'popper-class="rule-lock-popper"')
   assert.match(popover, /:trigger-keys="\[\]"/)

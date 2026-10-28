@@ -57,7 +57,7 @@
             <!-- 库状态读取失败/首次响应未落地时开关态不可信——显示「—」并禁用，
                  不得按本地默认 true 冒充「已开启」 -->
             <span v-if="!row.autoUpdateKnown" class="text-secondary" title="库状态未知（读取失败），开关态不可信">—</span>
-            <el-switch v-else :model-value="row.autoUpdate" :loading="autoUpdateSaving.has(row.key)" :disabled="isReadOnly || isSlaveNode || autoUpdateSaving.has(row.key)" @change="(v: boolean) => toggleLibAutoUpdate(row, v)" />
+            <el-switch v-else :model-value="row.autoUpdate" :loading="autoUpdateSaving.has(row.key)" :disabled="isReadOnly || isSlaveNode || autoUpdateSaving.has(row.key)" @change="(v: string | number | boolean) => toggleLibAutoUpdate(row as LibRow, v === true)" />
           </template>
         </el-table-column>
         <el-table-column v-if="!isSlaveNode" label="上次更新" width="150">
@@ -68,7 +68,7 @@
         </el-table-column>
         <el-table-column label="操作" width="170" align="center">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openLibDialog(row)">更新详情</el-button>
+            <el-button size="small" link type="primary" @click="openLibDialog(row as LibRow)">更新详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -131,7 +131,7 @@
             </template>
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <AccessibleLink type="primary" @click="openRuleDialog(row)">{{ row.name }}</AccessibleLink>
+                <AccessibleLink type="primary" @click="openRuleDialog(row as CustomRule)">{{ row.name }}</AccessibleLink>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
@@ -173,8 +173,8 @@
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openRuleDialog(row)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
-                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openRuleDialog(row as CustomRule)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
+                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row as CustomRule)">删除</el-button>
             </template>
             </el-table-column>
           </el-table>
@@ -202,7 +202,7 @@
             </template>
             <el-table-column prop="name" label="名称" min-width="150">
               <template #default="{ row }">
-                <AccessibleLink type="primary" @click="openIpListDialog(row)">{{ row.name }}</AccessibleLink>
+                <AccessibleLink type="primary" @click="openIpListDialog(row as IPListRow)">{{ row.name }}</AccessibleLink>
                 <el-tag v-if="row.preset_autoban" size="small" type="danger" effect="plain" style="margin-left: 6px;">自动封禁</el-tag>
                 <el-tag v-else-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">内置</el-tag>
               </template>
@@ -241,8 +241,8 @@
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openIpListDialog(row)">{{ isReadOnly || (row.system && !row.preset_autoban) ? '查看' : '编辑' }}</el-button>
-                <el-button v-if="!row.system" size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openIpListDialog(row as IPListRow)">{{ isReadOnly || (row.system && !row.preset_autoban) ? '查看' : '编辑' }}</el-button>
+                <el-button v-if="!row.system" size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row as IPListRow)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -592,7 +592,7 @@
         </el-table-column>
         <el-table-column label="自动更新" width="90" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('threat', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('threat', row.id)" @change="(v: boolean) => toggleThreatFlag(row, v)" />
+            <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('threat', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('threat', row.id)" @change="(v: string | number | boolean) => toggleThreatFlag(row as ThreatSource, v === true)" />
           </template>
         </el-table-column>
         </el-table>
@@ -658,7 +658,7 @@
         </el-table-column>
         <el-table-column label="自动更新" width="90" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('crawler', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('crawler', row.id)" @change="(v: boolean) => toggleCrawlerFlag(row, v)" />
+            <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('crawler', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('crawler', row.id)" @change="(v: string | number | boolean) => toggleCrawlerFlag(row as ThreatSource, v === true)" />
           </template>
         </el-table-column>
         </el-table>
@@ -694,6 +694,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'

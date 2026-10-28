@@ -27,7 +27,7 @@
         <span class="info-note-sub">请使用下方密钥在 Google/Microsoft Authenticator 等验证器中手动添加</span>
       </div>
       <el-text type="info" size="small">无法扫码时手动输入密钥：</el-text>
-      <el-text size="small" selectable class="mfa-secret">{{ secret }}</el-text>
+      <el-text size="small" class="mfa-secret">{{ secret }}</el-text>
       <el-text type="info" size="small">使用 Google/Microsoft Authenticator 等扫码</el-text>
     </div>
     <div v-else-if="step === 1" class="mfa-step-column mfa-step-column--verify">

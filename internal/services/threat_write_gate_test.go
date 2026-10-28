@@ -295,3 +295,67 @@ func flipThreatSourceURL(t *testing.T, name string, hook func()) {
 		t.Fatal(err)
 	}
 }
+
+// ---- 文本自愈（heal）写盘同样受角色写门约束 ----
+
+// Given 主节点已在更新前的某个窗口降级为从节点，且本源的文本完好、.fast 缺失
+// （自愈形态）。
+// When updateOneSource 走到入口的自愈分支。
+// Then 不得编译落盘 .fast（自愈是写盘副作用，与慢路径写库同权；从节点零写），
+// 返回降级中止 (false,false)。
+func TestThreatUpdateOneSource_demotedHealPath_zeroWrite(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist"), []byte("203.0.113.0/24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec(`UPDATE global_config SET is_master=1 WHERE id=1`) })
+
+	var id int
+	var url string
+	if err := db.DB.QueryRow(`SELECT id, url FROM security_threat_sources WHERE name='ustc'`).Scan(&id, &url); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+
+	if changed || failed {
+		t.Fatalf("changed=%v failed=%v, want (false,false)（降级中止非故障）", changed, failed)
+	}
+	if _, err := os.Stat(filepath.Join(wafDir, "threat-ustc.iplist.fast")); !os.IsNotExist(err) {
+		t.Fatal("降级窗口内自愈不得编译落盘 .fast（从节点零写）")
+	}
+}
+
+// Given 角色读取失败（不可判定），文本完好、.fast 缺失。
+// When updateOneSource 走到入口的自愈分支。
+// Then 不落盘 .fast，按源失败返回（failed=true，任务可见），源行滞留 running。
+func TestThreatUpdateOneSource_roleUndecidableHealPath_failsLoudly(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist"), []byte("203.0.113.0/24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var id int
+	var url string
+	if err := db.DB.QueryRow(`SELECT id, url FROM security_threat_sources WHERE name='ustc'`).Scan(&id, &url); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`DELETE FROM global_config WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+
+	if changed || !failed {
+		t.Fatalf("changed=%v failed=%v, want (false,true)（角色不可判定按失败落定）", changed, failed)
+	}
+	if _, err := os.Stat(filepath.Join(wafDir, "threat-ustc.iplist.fast")); !os.IsNotExist(err) {
+		t.Fatal("角色不可判定时自愈不得落盘 .fast")
+	}
+}

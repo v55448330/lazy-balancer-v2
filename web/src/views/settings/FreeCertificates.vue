@@ -77,8 +77,8 @@
         </el-table-column>
         <el-table-column label="操作" width="140" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly || isTesting" @click="testCAProvider(row)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row)">编辑</el-button>
+            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly || isTesting" @click="testCAProvider(row as CAProvider)">测试</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row as CAProvider)">编辑</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -108,9 +108,9 @@
         </el-table-column>
         <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog(row)">编辑</el-button>
-            <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row)">删除</el-button>
+            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row as CertConfig)">测试</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog(row as CertConfig)">编辑</el-button>
+            <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row as CertConfig)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

@@ -387,11 +387,11 @@ test('安全事件行内：条数/行帽 + 缓存 N 条 + 库体量；审计日�
     'audit.log 文件体量（size_bytes）不得再当安全事件容量展示',
   )
   // 缓存段与行数可用性正交：行数缺失时仍要给缓存条数——它正是排查补采的入口。
-  assert.equal(
-    section(sizeText, 'if (cacheCountText.value)', '\n').trim(),
-    'if (cacheCountText.value) parts.push(cacheCountText.value)',
-    '缓存段不得挂在 rowsUnavailable 分支下',
-  )
+  // 判据是「守卫条件」而不是逐字符等值：追加点的 if 只允许判缓存值本身非空，
+  // 不得再叠加 rowsUnavailable（排版/换行/是否带大括号都不影响结论）。
+  const cacheGuard = sizeText.match(/if \(([^)]*)\)\s*\{?\s*parts\.push\(cacheCountText\.value\)/)
+  assert.ok(cacheGuard !== null, '缓存条数必须由独立的 if 追加（不得并入 rowsUnavailable 三元）')
+  assert.equal(cacheGuard[1]!.trim(), 'cacheCountText.value', '缓存段不得挂在 rowsUnavailable 分支下')
 })
 
 test('缓存 0 条必须显示：0 不得被真值判断当成缺席', () => {

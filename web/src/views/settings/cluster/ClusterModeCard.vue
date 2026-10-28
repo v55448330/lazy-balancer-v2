@@ -82,6 +82,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Connection } from '@element-plus/icons-vue'
+import DialogHeader from '@/components/DialogHeader.vue'
 import type { ClusterNodeMode, ClusterRegistrationInput, ClusterStatus } from '@/types'
 import { shouldCloseRegistrationDialog } from '@/utils/clusterRegistration'
 import { validateClusterUrl } from '@/utils/clusterUrl'
@@ -191,7 +192,7 @@ watch(registrationOpen, (open) => {
   }
 })
 
-const handleModeChange = (value: string | number | boolean): void => {
+const handleModeChange = (value: string | number | boolean | undefined): void => {
   if (props.readOnly || props.loading || !props.status) return
   if (value === 'slave') {
     registrationOriginMode = props.status?.node_mode ?? null

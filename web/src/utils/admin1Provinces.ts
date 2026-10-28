@@ -1,11 +1,13 @@
 // 全球省级行政界（威胁大屏 v7 B 方案省级下钻）：Natural Earth 10m admin-1
-// states_provinces 全量（4600 要素/251 个国家和地区键，含特殊地区），构建期一次性转换静态入库
-// （容差 0.04° + 2 位小数 ≈1km），运行时零外部请求；本模块加载期把同一国家内的
-// 同名要素合并为一条省记录（4600 → 4575 条，几何并集不丢，见文件末尾合并段）。
+// states_provinces 全量（含特殊地区），构建期一次性转换静态入库（容差 0.04° +
+// 2 位小数 ≈1km），运行时零外部请求；本模块加载期把同一国家内的同名要素合并为
+// 一条省记录（几何并集不丢，见文件末尾合并段）。规模：源表 240 个国家地区键 / 4,287 条省记录；
+// 加载期别名归一后为 251 键 / 4,575 条（同名省合并只减不增）。
 // 结构：国家中文键（与 worldBorders/countryCentroids/国家命中计数一致；
 // geoipnames.CountryNamesCN 未收录者保留英文原名，消费方走兜底）→
-// 省[] → {name 省名, polys 多边形[]}；中国沿用 chinaProvinces.ts 高精度
-// 34 省（本表 China/中国 条目消费方跳过）。
+// 省[] → {name 省名, polys 多边形[]}；中国不在本表内——消费方（threatScene /
+// threatGlobe）以 `country === '中国'` 特判走 chinaProvinces.ts 的高精度 34 省，
+// 不会读取本表的中国条目。
 export interface Admin1Province {
   name: string
   polys: number[][][]

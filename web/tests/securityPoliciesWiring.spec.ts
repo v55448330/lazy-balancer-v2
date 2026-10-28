@@ -51,7 +51,13 @@ test('未知字符串数组解析单源（本地副本已删）', () => {
   assert.deepEqual(parseUnknownStrings('["a","b"]'), ['a', 'b'])
   assert.deepEqual(parseUnknownStrings(null), [])
   assert.doesNotMatch(page, /const parseUnknownStringList/, '本地同构实现不得回流')
-  assert.match(page, /parseUnknownStrings\(p\.crs_rule_groups\)/)
+  // 必须是包裹形态：只钉 `parseUnknownStrings(p.crs_rule_groups)` 会被
+  // `normalizeCrsGroups(parseUnknownStrings(...))` 的子串命中，去掉归一仍绿。
+  assert.match(
+    page,
+    /normalizeCrsGroups\(parseUnknownStrings\(p\.crs_rule_groups\)\)/,
+    '原始取值必须经 normalizeCrsGroups（归一接线见 crsGroupNormalize.spec.ts）',
+  )
 })
 
 test('引用名单取数走跨组件共享缓存（self + 共绑 peer，不再清空重下）', () => {
@@ -96,6 +102,20 @@ test('爬虫引擎：字段缺失→默认三项，显式 "[]" 原样保留（�
   assert.match(detailBlock, /d\.geoip_crawler_engines === undefined \|\| d\.geoip_crawler_engines === ''/)
   assert.match(detailBlock, /\['googlebot', 'bingbot', 'baiduspider'\]/)
   assert.doesNotMatch(detailBlock, /length > 0 \?/, '空数组不得再被三引擎兜底改写')
+})
+
+// 拦截页「已删除」判定必须基于本次打开取到的权威快照：blockPages 只在 fetchData
+// 赋值，本页加载后他端/API 新建的页面会被误判为已删除，并把表单里的
+// block_page_id 静默改写成默认页（保存即落库，拦截响应体与归因随之改变）。
+test('编辑策略：拦截页列表按本次打开刷新，未取到权威快照时不改写 block_page_id', () => {
+  const detail = section(page, 'async function openDialog', 'const handleSave = async')
+  assert.match(detail, /await Promise\.all\(\[[\s\S]{0,300}?refreshBlockPages\(openSeq\)/, '打开详情时必须与本次打开并行刷新拦截页列表')
+  assert.match(detail, /&& blockPagesFresh\)/, '缺失判定必须只在权威快照落地时成立')
+  assert.doesNotMatch(detail, /blockPages\.value\.length > 0 && !blockPages\.value\.some/, '列表非空不等于权威（陈旧快照不得当判据）')
+  const refresh = section(page, 'const refreshBlockPages = ', 'async function openDialog')
+  assert.match(refresh, /if \(openSeq !== policyDialogOpenSeq\) return false/, '过期响应必须弃用')
+  assert.match(refresh, /blockPagesLoaded\.value = true/, '成功即标记快照已落地')
+  assert.match(refresh, /return false/, '失败分支必须上报「无权威快照」')
 })
 
 test('带外空模式读入不得被静默改写成拦截模式', () => {

@@ -334,6 +334,10 @@ func restoreCRSFromSnapshotInLock(liveDir, snapshotDir, version string) error {
 // （restore/correct）都必须显式 BumpClusterVersion，否则从节点在下一次无关
 // 版本 bump 前仍持旧规则引用。
 func ReconcileCRSState() {
+	// 规则库文件面的崩溃残留（导入快照临时目录、xdb 版本标记/版本行分叉、
+	// 已删威胁源的残留名单）与本函数同一时机收敛：都是「磁盘文件面 vs DB
+	// 记录」的启动对账，且本函数同时是手动重载入口——三项均幂等。
+	ReconcileWafFileCrashLeftovers()
 	if isMaster, err := RoleOf(context.Background(), db.DB); err != nil {
 		// 角色读取失败≠从节点——留痕后跳过本轮对账（静默跳过会掩盖 DB 异常）。
 		Logf("warn", "CRS 状态对账: 角色读取失败，本轮跳过: %v", err)
@@ -412,7 +416,13 @@ func reconcileCRSStateFromInLock(liveDir, snapshotDir, dbV string) {
 			Logf("info", "crs reconcile: 磁盘 CRS 无版本标记且与快照不一致（记录版本 %s），建议手动更新一次以补齐版本追踪", dbV)
 		}
 	case crsReconcileWriteMarker:
-		writeCRSVersionMarker(liveDir, plan.markerVersion)
+		// 补写标记是本轮对账的落盘结果，失败必须进入结果面：写函数只报底层
+		// IO 错误，此处须显式声明「本代对账未完成、磁盘版本仍不可知、下次
+		// 启动重试同一分支」——否则一次磁盘满/权限错误被静默当成对账完成，
+		// 版本追踪缺口要到下次崩溃排查才暴露。
+		if err := writeCRSVersionMarker(liveDir, plan.markerVersion); err != nil {
+			Logf("error", "crs reconcile: 补写 VERSION 标记 %s 失败，本代对账未完成（磁盘版本仍不可知，下次启动重试同一分支；版本行保持 %s 不改写）: %v", plan.markerVersion, dbV, err)
+		}
 	case crsReconcileRestoreSnapshot:
 		if err := restoreCRSFromSnapshotInLock(liveDir, snapshotDir, plan.markerVersion); err != nil {
 			Logf("error", "crs reconcile: 从快照恢复 CRS %s 失败: %v", plan.markerVersion, err)

@@ -262,6 +262,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, Tickets, View } from '@element-plus/icons-vue'
+import DialogHeader from '@/components/DialogHeader.vue'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { ansiToHtml } from '@/utils/ansi'

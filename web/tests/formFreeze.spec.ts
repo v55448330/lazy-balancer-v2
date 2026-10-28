@@ -111,8 +111,11 @@ test('自动封禁禁用：占位先于确认并在 finally 释放', () => {
 test('规则向导：保存中各步表单冻结、步骤条与前进/后退锁定', () => {
   const page = code('src/views/Rules.vue')
   const wizard = section(page, '<el-dialog v-model="wizardVisible"', '<template #footer>')
-  const forms = wizard.match(/<el-form :model="wizardForm"[^>]*>/g) ?? []
-  assert.equal(forms.length, 4, `向导应有 4 个可编辑表单，实际 ${forms.length}`)
+  // 名册式判定：向导内每个绑定 wizardForm 的表单都必须冻结。计数门
+  // （forms.length === 4）在合并/拆分表单或新增步骤时假红又不表达语义；
+  // 这里只保留「扫描面下限」自检，防止开标签解析失效后恒绿。
+  const forms = openTags(wizard, 'el-form').filter((tag) => tag.includes(':model="wizardForm"'))
+  assert.ok(forms.length >= 4, `向导内绑定 wizardForm 的表单异常偏少（${forms.length}）`)
   for (const form of forms) assert.match(form, /:disabled="saving"/, `表单未冻结：${form}`)
   assert.match(page, /const stepsClickable = computed\(\(\) => editingRule\.value !== null && !saving\.value\)/)
   assert.match(section(page, 'const moveToAdjacentWizardStep = ', 'const findDuplicateUpstream'), /if \(saving\.value\) return/)

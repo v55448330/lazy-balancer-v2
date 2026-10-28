@@ -19,6 +19,11 @@ import (
 
 const defaultLogFile = "/app/logs/lazy-balancer.log"
 
+// defaultPort 是面板 HTTP 端口默认值（cfg 初始化与越界告警共用同一处）。
+// 告警文案里的「using default」必须指向本常量：端口越界时 cfg.Port 保持
+// 默认值不动，运维按提示改成别的数字反而继续落入越界分支。
+const defaultPort = 8000
+
 type Config struct {
 	// Server
 	Port      int    `json:"port"`
@@ -103,7 +108,9 @@ var configFileKeys = map[string]configFileKey{
 		// float→int 是实现相关结果（实测回绕成 MaxInt64）。
 		switch {
 		case math.IsNaN(v) || v < 1 || v > 65535:
-			warnf("config: port %v outside 1-65535; using default %d", v, 8000)
+			// 默认值取 cfg.Port（apply 不改它，此时即 defaultPort）——与
+			// metrics_interval 同口径，默认值改动不会让文案说谎。
+			warnf("config: port %v outside 1-65535; using default %d", v, cfg.Port)
 		default:
 			if v != math.Trunc(v) {
 				warnf("config: port %v is not an integer; truncated to %d", v, int(v))
@@ -206,7 +213,7 @@ func load(path string, warnf configWarnf) *Config {
 		warnf("config: APP_VERSION 未注入，面板版本显示为 unknown（发布构建应经 Dockerfile ARG VERSION / buildx --build-arg 显式传参）")
 	}
 	cfg := &Config{
-		Port:            8000,
+		Port:            defaultPort,
 		DataDir:         "/app/data",
 		StaticDir:       "/app/ui",
 		CaddyAdminURL:   "http://localhost:2019",

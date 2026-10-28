@@ -573,6 +573,31 @@ func TestLoad_portBoundsBeforeConversion(t *testing.T) {
 	}
 }
 
+// 越界端口的告警必须指名**当前**默认值：消息里写死 8000 会在默认值改动后
+// 立刻说谎，运维按提示改到旧默认值反而落入同一个越界分支。断言对着默认值
+// 常量，而不是字面量。
+func TestLoad_portOutOfRangeWarningNamesCurrentDefault(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"port":70000}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadForTest(configPath)
+
+	if loaded.Port != defaultPort {
+		t.Fatalf("port=%d, want default %d", loaded.Port, defaultPort)
+	}
+	want := fmt.Sprintf("using default %d", defaultPort)
+	if !strings.Contains(logBuf.String(), want) {
+		t.Fatalf("warning 必须指名当前默认值 %q, got %q", want, logBuf.String())
+	}
+}
+
 // 启动期配置告警必须能交回调用方重放：LoadCollectWarnings 不直接打印，
 // 由 main 在运行日志装配完成后经统一日志级别门重放——否则只采集日志文件的
 // 部署看不到未知键/类型错误/弱密钥/APP_VERSION 未注入等误配信号。

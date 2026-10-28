@@ -26,6 +26,7 @@ import (
 
 	"lazy-balancer-v2/internal/atomicfile"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/retryafter"
 
 	"golang.org/x/crypto/acme"
 )
@@ -128,7 +129,9 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 				// x/crypto defaultBackoff 曲线（1<<(n-1)s+jitter、封顶 10s）。
 				// 此前固定 2s 在 CA 5xx 过载时维持约 5 倍请求压力。
 				// 注：自定义 RetryBackoff 的返回值即重试延迟本身（x/crypto 不会
-				// 再叠加默认曲线或解析），故曲线在此显式给出。
+				// 再叠加默认曲线或解析），故曲线在此显式给出——也因此库默认
+				// 「优先采用 Retry-After」的语义会随自定义实现丢失，必须在此
+				// 自行补回（见下）。
 				// 自定义曲线会丢失默认实现的 jitter——多规则
 				// 并发签发（max_concurrent>1）在同一 CA 5xx 窗口会以相同延迟同步
 				// 重试（thundering herd）。补 0~1s 均匀抖动（同默认曲线量级）。
@@ -138,6 +141,14 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 				// 且提前封顶。n<1 仅防御（生产不出现）。
 				attempt := max(n, 1)
 				base := min(time.Duration(1<<min(attempt-1, 4))*time.Second, 10*time.Second)
+				// CA 用 Retry-After 明确要求等待（5xx 过载常见）时取较大值，
+				// 与 x/crypto 默认实现「Retry-After 优先」及本仓 DNS 重试层
+				// （internal/retryafter 单源）口径一致；上限沿用 10s（分段预算不变）。
+				if resp != nil {
+					if hinted := retryafter.Parse(resp.Header.Get("Retry-After"), time.Now()); hinted > 0 {
+						base = max(base, min(hinted, 10*time.Second))
+					}
+				}
 				return base + time.Duration(mathrand.IntN(1000))*time.Millisecond
 			},
 		},

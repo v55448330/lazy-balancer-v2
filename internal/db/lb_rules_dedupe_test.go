@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,62 @@ func TestMigrateLbRulesPrimaryKey_dedupesDuplicateCaddyID(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Fatalf("迁移后不应再有重复：%v", ids)
+	}
+}
+
+// 去重删行不得连带丢掉该行的 upstream：旧库同名 caddy_id 两行各带独立上游，
+// 被删行的上游此前既不进新表（拷贝阶段按旧整数 rule id JOIN 保留行）也不计入
+// 孤儿统计（计数在去重前跑）——静默消失=负载均衡少一个后端。
+// 归一口径：保留行（最近更新者）胜出，被删行的 upstream 改挂到保留行（并集，
+// 行 id 原样保留、不丢行、不去重），审计不出现孤儿行计数。
+func TestMigrateLbRulesPrimaryKey_keepsUpstreamsOfDedupedRules(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyLbRulesTables(t, database, legacyLbRulesSchema{withCaddyID: true, withStagePages: true, withNewHealthCols: true, upstreams: legacyUpstreamsMinimal})
+	if _, err := database.Exec(`INSERT INTO lb_rules (id,name,protocol,listen_port,updated_at,caddy_id) VALUES
+		(1,'older','http',8080,'2026-01-01 00:00:00','lb_dup'),
+		(2,'newer','http',8080,'2026-06-01 00:00:00','lb_dup');
+		INSERT INTO upstreams (id,rule_id,host,port) VALUES (1,1,'10.0.0.1',8080),(2,2,'10.0.0.2',8080)`); err != nil {
+		t.Fatal(err)
+	}
+	drainSystemAuditBuffer()
+	t.Cleanup(func() { drainSystemAuditBuffer() })
+
+	if err := migrateLbRulesPrimaryKey(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 保留行（最近更新者 newer）持有两行上游的并集，行 id 与顺序保留。
+	rows, err := database.Query(`SELECT id, host FROM upstreams WHERE rule_id='lb_dup' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[int]string{}
+	for rows.Next() {
+		var id int
+		var host string
+		if err := rows.Scan(&id, &host); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = host
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1] != "10.0.0.1" || got[2] != "10.0.0.2" {
+		t.Fatalf("保留行上游=%v, want {1:10.0.0.1, 2:10.0.0.2}（被删行的上游必须改挂到保留行）", got)
+	}
+	var total int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM upstreams`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Fatalf("upstreams 总行数=%d, want 2（去重不得丢上游行）", total)
+	}
+	// 改挂不是丢弃：孤儿统计不得把这些行算进去。
+	for _, entry := range drainSystemAuditBuffer() {
+		if strings.Contains(entry.detail, "孤儿") {
+			t.Fatalf("改挂后的上游不得计入孤儿统计: %+v", entry)
+		}
 	}
 }

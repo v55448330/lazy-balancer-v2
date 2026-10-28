@@ -3302,6 +3302,139 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	})
 }
 
+// splitChildSpec 是一次「混合策略拆分」要落库的单职子策略：阶段、名称与
+// insertChild 写入的全部业务列（爬虫豁免列在构造时按阶段归一）。
+type splitChildSpec struct {
+	policyType     string
+	name           string
+	mode           string
+	aclMode        string
+	aclList        string
+	aclEnabled     bool
+	whitelist      json.RawMessage
+	wlEnabled      bool
+	blacklist      json.RawMessage
+	rlEnabled      bool
+	rlRPS          int
+	rlBurst        int
+	crsGroups      string
+	crsExcluded    string
+	customRules    string
+	blockPageID    int
+	blockStatus    int
+	geoCountries   json.RawMessage
+	geoMode        string
+	crawlerExempt  bool
+	crawlerEngines string
+	wafResp        bool
+	logBody        bool
+	aclRefs        string
+	wlRefs         string
+	trustDetection bool
+}
+
+// splitChildIdentity 是子策略的可比较身份：落库列全集，仅排除操作者痕迹
+// （updated_by）与时间戳。重试拆分时「配置完全一致」才允许复用既有子策略。
+// 全部为标量，可直接用 == 比较（Slice/Map 字段不进身份）。
+type splitChildIdentity struct {
+	policyType     string
+	name           string
+	description    string
+	mode           string
+	anomalyThr     int
+	aclMode        string
+	aclList        string
+	aclEnabled     bool
+	whitelist      string
+	wlEnabled      bool
+	blacklist      string
+	rlEnabled      bool
+	rlRPS          int
+	rlBurst        int
+	crsGroups      string
+	crsExcluded    string
+	customRules    string
+	blockPageID    int
+	blockStatus    int
+	enabled        bool
+	geoCountries   string
+	geoMode        string
+	crawlerExempt  bool
+	crawlerEngines string
+	wafResp        bool
+	logBody        bool
+	aclRefs        string
+	wlRefs         string
+	trustDetection bool
+}
+
+// errSplitChildConflict 表示已存在同名同阶段但配置不同的策略：拆分必须显式
+// 冲突而不是静默复用（否则会把管理员另行创建/改动过的策略纳入本次迁移）。
+var errSplitChildConflict = errors.New("同名同阶段策略配置不一致")
+
+func splitChildIdentityOfSpec(p *models.SecurityPolicy, spec splitChildSpec) splitChildIdentity {
+	return splitChildIdentity{
+		policyType: spec.policyType, name: spec.name,
+		description: p.Description, mode: spec.mode, anomalyThr: p.AnomalyThreshold,
+		aclMode: spec.aclMode, aclList: spec.aclList, aclEnabled: spec.aclEnabled,
+		whitelist: string(spec.whitelist), wlEnabled: spec.wlEnabled, blacklist: string(spec.blacklist),
+		rlEnabled: spec.rlEnabled, rlRPS: spec.rlRPS, rlBurst: spec.rlBurst,
+		crsGroups: spec.crsGroups, crsExcluded: spec.crsExcluded, customRules: spec.customRules,
+		blockPageID: spec.blockPageID, blockStatus: spec.blockStatus, enabled: p.Enabled,
+		geoCountries: string(spec.geoCountries), geoMode: spec.geoMode,
+		crawlerExempt: spec.crawlerExempt, crawlerEngines: spec.crawlerEngines,
+		wafResp: spec.wafResp, logBody: spec.logBody,
+		aclRefs: spec.aclRefs, wlRefs: spec.wlRefs, trustDetection: spec.trustDetection,
+	}
+}
+
+func splitChildIdentityOfPolicy(stored *models.SecurityPolicy) splitChildIdentity {
+	return splitChildIdentity{
+		policyType: stored.PolicyType, name: stored.Name,
+		description: stored.Description, mode: stored.Mode, anomalyThr: stored.AnomalyThreshold,
+		aclMode: stored.IPACLMode, aclList: stored.IPACLList, aclEnabled: stored.IPACLEnabled,
+		whitelist: string(stored.IPWhitelist), wlEnabled: stored.IPWhitelistEnabled, blacklist: string(stored.IPBlacklist),
+		rlEnabled: stored.RateLimitEnabled, rlRPS: stored.RateLimitRPS, rlBurst: stored.RateLimitBurst,
+		crsGroups: string(stored.CRSRuleGroups), crsExcluded: string(stored.CRSExcludedRules), customRules: string(stored.CustomRules),
+		blockPageID: stored.BlockPageID, blockStatus: stored.BlockStatusCode, enabled: stored.Enabled,
+		geoCountries: string(stored.GeoIPCountries), geoMode: stored.GeoIPMode,
+		crawlerExempt: stored.GeoIPCrawlerExempt, crawlerEngines: string(stored.GeoIPCrawlerEngines),
+		wafResp: stored.WAFCheckResponse, logBody: stored.LogRequestBody,
+		aclRefs: stored.IPACLListRefs, wlRefs: stored.IPWhitelistRefs, trustDetection: stored.TrustDetection,
+	}
+}
+
+// resolveSplitChild 查找首轮拆分已创建的同名同阶段子策略：配置完全一致则返回
+// 其 ID（复用，不再插入），配置不一致返回 errSplitChildConflict，无同名行返回
+// 0。查询用 List/Get 同一列投影（COALESCE 口径一致），身份比较覆盖 insertChild
+// 写入的全部业务列。
+func resolveSplitChild(ctx context.Context, tx *sql.Tx, p *models.SecurityPolicy, spec splitChildSpec) (int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE name=? AND policy_type=? ORDER BY id`, spec.name, spec.policyType)
+	if err != nil {
+		return 0, fmt.Errorf("查询同名子策略: %w", err)
+	}
+	defer rows.Close()
+	want := splitChildIdentityOfSpec(p, spec)
+	conflict := false
+	for rows.Next() {
+		var stored models.SecurityPolicy
+		if err := scanSecurityPolicy(rows, &stored); err != nil {
+			return 0, fmt.Errorf("读取同名子策略: %w", err)
+		}
+		if splitChildIdentityOfPolicy(&stored) == want {
+			return stored.ID, nil
+		}
+		conflict = true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("遍历同名子策略: %w", err)
+	}
+	if conflict {
+		return 0, errSplitChildConflict
+	}
+	return 0, nil
+}
+
 // SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
 // 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
 // 子策略继承拦截页，阶段 2 恒 429、拦截页继承原策略——2026-09-25 用户裁
@@ -3353,30 +3486,29 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	}
 	created := make([]createdPolicy, 0, 3)
 	newIDs := make([]int, 0, 3)
-	insertChild := func(policyType, name, mode, aclMode, aclList string, aclEnabled bool, whitelist json.RawMessage, wlEnabled bool, blacklist json.RawMessage,
-		rlEnabled bool, rlRPS, rlBurst int, crsGroups, crsExcluded, customRules string, blockPageID, blockStatus int,
-		geoCountries json.RawMessage, geoMode string, wafResp, logBody bool, aclRefs, wlRefs string, trustDetection bool) error {
-		// 爬虫豁免同随子策略的阶段归一——仅地域拦截启用形态的子
-		// 策略保留豁免位；阶段外子策略（geo_mode=off）恒 0/[]，避免拆分把
-		// 开关复制给所有子策略、类型往返后静默复活。
-		geoipActive := geoMode != "" && geoMode != "off"
-		childCrawlerExempt := crawlerExemptBool(p.GeoIPCrawlerExempt, geoipActive)
-		childCrawlerEngines := "[]"
+	// 爬虫豁免同随子策略的阶段归一——仅地域拦截启用形态的子策略保留豁免位；
+	// 阶段外子策略（geo_mode=off）恒 0/[]，避免拆分把开关复制给所有子策略、
+	// 类型往返后静默复活。
+	completeChild := func(spec splitChildSpec) splitChildSpec {
+		geoipActive := spec.geoMode != "" && spec.geoMode != "off"
+		spec.crawlerExempt = crawlerExemptBool(p.GeoIPCrawlerExempt, geoipActive)
+		spec.crawlerEngines = "[]"
 		if geoipActive {
-			childCrawlerEngines = string(p.GeoIPCrawlerEngines)
+			spec.crawlerEngines = string(p.GeoIPCrawlerEngines)
 		}
+		return spec
+	}
+	insertChild := func(spec splitChildSpec) (int, error) {
 		result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
 			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			name, p.Description, mode, p.AnomalyThreshold, aclMode, aclList, aclEnabled, whitelist, wlEnabled, blacklist,
-			rlEnabled, rlRPS, rlBurst, crsGroups, crsExcluded, customRules, blockPageID, blockStatus, p.Enabled, geoCountries, geoMode, childCrawlerExempt, childCrawlerEngines, wafResp, logBody, aclRefs, wlRefs, operator, policyType, trustDetection)
+			spec.name, p.Description, spec.mode, p.AnomalyThreshold, spec.aclMode, spec.aclList, spec.aclEnabled, spec.whitelist, spec.wlEnabled, spec.blacklist,
+			spec.rlEnabled, spec.rlRPS, spec.rlBurst, spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		childID, _ := result.LastInsertId()
-		created = append(created, createdPolicy{ID: int(childID), Name: name, PolicyType: policyType})
-		newIDs = append(newIDs, int(childID))
-		return nil
+		return int(childID), nil
 	}
 	stageSuffix := map[string]string{models.PolicyTypeStage0: "（阶段 0）", models.PolicyTypeStage1: "（阶段 1）", models.PolicyTypeStage2: "（阶段 2）", models.PolicyTypeStage3: "（阶段 3）"}
 	// 信任名单 → 阶段 0 子策略（2026-09-20 用户裁定）：trust_detection 恒 1
@@ -3454,61 +3586,113 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	// 全局数量上限（与 Create 同口径）：拆分一次最多新建 4 条子策略，
-	// 计数与插入同事务同锁（BEGIN IMMEDIATE），查询失败 fail-closed——否则
-	// 「策略总数未到上限」的检查点可被拆分批量绕开（200 条混合策略一次拆成
-	// 800 条子策略）。
-	childCount := 0
-	for _, present := range []bool{trustEntriesNonEmpty, features.G1, features.G2, features.G3} {
-		if present {
-			childCount++
-		}
-	}
-	if childCount > 0 {
-		var policyCount int
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies").Scan(&policyCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计安全策略数量失败"})
-			return
-		}
-		if policyCount+childCount > securityPolicyMaxGlobalCount {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("安全策略总数上限为 %d 条，本次拆分将新增 %d 条子策略（当前 %d 条），请先清理不再使用的策略", securityPolicyMaxGlobalCount, childCount, policyCount)})
-			return
-		}
-	}
+	// 本次拆分要落库的子策略（阶段顺序）。先解析「首轮是否已创建同名同阶段
+	// 子策略」再计数与插入，使拆分可重入：部分规则被跳过时原策略保留（明确的
+	// 恢复契约），管理员腾出位置后重试必须接着使用首轮子策略——每轮复制一套
+	// 会挤占 200 条策略额度，并让策略列表/绑定出现同名歧义。
+	specs := make([]splitChildSpec, 0, 4)
 	if trustEntriesNonEmpty {
-		if err := insertChild(models.PolicyTypeStage0, p.Name+stageSuffix[models.PolicyTypeStage0], "off", "deny", "[]", false,
-			p.IPWhitelist, p.IPWhitelistEnabled, json.RawMessage("[]"), false, 0, 0, "[]", "[]", "[]", 0, 0,
-			json.RawMessage("[]"), "off", false, false, "[]", p.IPWhitelistRefs, true); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
-		}
+		specs = append(specs, completeChild(splitChildSpec{
+			policyType: models.PolicyTypeStage0, name: p.Name + stageSuffix[models.PolicyTypeStage0],
+			mode: "off", aclMode: "deny", aclList: "[]",
+			whitelist: p.IPWhitelist, wlEnabled: p.IPWhitelistEnabled,
+			blacklist:    json.RawMessage("[]"),
+			crsGroups:    "[]",
+			crsExcluded:  "[]",
+			customRules:  "[]",
+			geoCountries: json.RawMessage("[]"), geoMode: "off",
+			aclRefs: "[]", wlRefs: p.IPWhitelistRefs,
+			trustDetection: true,
+		}))
 	}
 	if features.G1 {
-		if err := insertChild(models.PolicyTypeStage1, p.Name+stageSuffix[models.PolicyTypeStage1], "off", childACLMode, p.IPACLList, p.IPACLEnabled,
-			json.RawMessage("[]"), false, p.IPBlacklist, false, 0, 0, "[]", "[]", "[]", p.BlockPageID, p.BlockStatusCode,
-			p.GeoIPCountries, p.GeoIPMode, false, false, p.IPACLListRefs, "[]", false); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
-		}
+		specs = append(specs, completeChild(splitChildSpec{
+			policyType: models.PolicyTypeStage1, name: p.Name + stageSuffix[models.PolicyTypeStage1],
+			mode: "off", aclMode: childACLMode, aclList: p.IPACLList, aclEnabled: p.IPACLEnabled,
+			whitelist: json.RawMessage("[]"), blacklist: p.IPBlacklist,
+			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
+			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode,
+			geoCountries: p.GeoIPCountries, geoMode: p.GeoIPMode,
+			aclRefs: p.IPACLListRefs, wlRefs: "[]",
+		}))
 	}
 	if features.G2 {
 		// stage2 子策略继承原策略拦截页（用户裁定：2026-09-25
 		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 保持归一 0
 		//（阶段 2 恒 429 自动语义，与 normalizeOutOfStageFields 同口径）。
-		if err := insertChild(models.PolicyTypeStage2, p.Name+stageSuffix[models.PolicyTypeStage2], "off", "deny", "[]", false,
-			json.RawMessage("[]"), false, json.RawMessage("[]"), p.RateLimitEnabled, p.RateLimitRPS, p.RateLimitBurst, "[]", "[]", "[]", p.BlockPageID, 0,
-			json.RawMessage("[]"), "off", false, false, "[]", "[]", false); err != nil {
+		specs = append(specs, completeChild(splitChildSpec{
+			policyType: models.PolicyTypeStage2, name: p.Name + stageSuffix[models.PolicyTypeStage2],
+			mode: "off", aclMode: "deny", aclList: "[]",
+			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
+			rlEnabled: p.RateLimitEnabled, rlRPS: p.RateLimitRPS, rlBurst: p.RateLimitBurst,
+			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
+			blockPageID:  p.BlockPageID,
+			geoCountries: json.RawMessage("[]"), geoMode: "off",
+			aclRefs: "[]", wlRefs: "[]",
+		}))
+	}
+	if features.G3 {
+		specs = append(specs, completeChild(splitChildSpec{
+			policyType: models.PolicyTypeStage3, name: p.Name + stageSuffix[models.PolicyTypeStage3],
+			mode: p.Mode, aclMode: "deny", aclList: "[]",
+			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
+			crsGroups: rawJSONString(p.CRSRuleGroups), crsExcluded: rawJSONString(p.CRSExcludedRules), customRules: rawJSONString(p.CustomRules),
+			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode,
+			geoCountries: json.RawMessage("[]"), geoMode: "off",
+			wafResp: p.WAFCheckResponse, logBody: p.LogRequestBody,
+			aclRefs: "[]", wlRefs: "[]",
+		}))
+	}
+	// 解析既有子策略：配置完全一致 → 复用首轮 ID（不重复插入）；同名同阶段但
+	// 配置不同 → 冲突 409，且在任何插入之前整体中止（不留半截子策略、不静默
+	// 复用管理员另行创建/改动过的同名策略）。
+	resolvedIDs := make([]int, len(specs))
+	pendingInsert := 0
+	for index, spec := range specs {
+		existingID, err := resolveSplitChild(caddyWriteCtx(c), tx, &p, spec)
+		if err != nil {
+			if errors.Is(err, errSplitChildConflict) {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("拆分迁移中止：已存在同名同阶段但配置不同的策略「%s」，请先处理该策略后再拆分", spec.name)})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		resolvedIDs[index] = existingID
+		if existingID == 0 {
+			pendingInsert++
+		}
+	}
+	// 全局数量上限（与 Create 同口径）：一次拆分最多新建 4 条子策略，
+	// 计数与插入同事务同锁（BEGIN IMMEDIATE），查询失败 fail-closed——否则
+	// 「策略总数未到上限」的检查点可被拆分批量绕开（200 条混合策略一次拆成
+	// 800 条子策略）。复用的首轮子策略已在库内计数，只对真正新增的行计入额度。
+	if pendingInsert > 0 {
+		var policyCount int
+		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies").Scan(&policyCount); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计安全策略数量失败"})
+			return
+		}
+		if policyCount+pendingInsert > securityPolicyMaxGlobalCount {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("安全策略总数上限为 %d 条，本次拆分将新增 %d 条子策略（当前 %d 条），请先清理不再使用的策略", securityPolicyMaxGlobalCount, pendingInsert, policyCount)})
 			return
 		}
 	}
-	if features.G3 {
-		if err := insertChild(models.PolicyTypeStage3, p.Name+stageSuffix[models.PolicyTypeStage3], p.Mode, "deny", "[]", false,
-			json.RawMessage("[]"), false, json.RawMessage("[]"), false, 0, 0, rawJSONString(p.CRSRuleGroups), rawJSONString(p.CRSExcludedRules), rawJSONString(p.CustomRules), p.BlockPageID, p.BlockStatusCode,
-			json.RawMessage("[]"), "off", p.WAFCheckResponse, p.LogRequestBody, "[]", "[]", false); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
+	reusedCount := 0
+	for index, spec := range specs {
+		childID := resolvedIDs[index]
+		if childID == 0 {
+			insertedID, err := insertChild(spec)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				return
+			}
+			childID = insertedID
+		} else {
+			reusedCount++
 		}
+		created = append(created, createdPolicy{ID: childID, Name: spec.name, PolicyType: spec.policyType})
+		newIDs = append(newIDs, childID)
 	}
 	// 全量重映射：逐规则删原绑定+插全部子策略绑定；合并后超上限进 skipped
 	// （保留原绑定不动，防止静默丢防护）。
@@ -3595,9 +3779,9 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
-		AuditDetail: fmt.Sprintf("拆分迁移混合策略「%s」(#%d)：创建 %d 条单职策略，重映射 %d 条规则，跳过 %d 条", p.Name, p.ID, len(created), remapped, len(skipped)),
+		AuditDetail: fmt.Sprintf("拆分迁移混合策略「%s」(#%d)：创建 %d 条单职策略（复用首轮 %d 条），重映射 %d 条规则，跳过 %d 条", p.Name, p.ID, len(created), reusedCount, remapped, len(skipped)),
 		SuccessMsg:  "拆分迁移完成",
-		Data:        gin.H{"created": created, "remapped": remapped, "skipped": skipped, "deleted_original": deletedOriginal},
+		Data:        gin.H{"created": created, "reused": reusedCount, "remapped": remapped, "skipped": skipped, "deleted_original": deletedOriginal},
 	})
 }
 

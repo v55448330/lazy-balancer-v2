@@ -4,17 +4,28 @@ import assert from 'node:assert/strict'
 import { ADMIN1_PROVINCES } from '../src/utils/admin1Provinces.ts'
 import { source } from './_helpers.ts'
 
-test('省界资源头注释与实际要素和国家地区键数一致', () => {
+test('省界资源头注释与实际要素和国家地区键数一致（文档钉）', () => {
   const countries = Object.keys(ADMIN1_PROVINCES).length
   const mergedRows = Object.values(ADMIN1_PROVINCES).reduce((total, rows) => total + rows.length, 0)
+  // 运行时口径=加载期别名归一（COUNTRY_ALIAS 新增目标键）+ 同国同名省合并之后。
   assert.equal(countries, 251)
-  // 加载期把同国同名要素合并为一条省记录（详见文件末尾合并段）：4600 要素
-  // → 4575 条；数字变化必须同步文件头，否则说明合并段被删或失效。
+  // 4600 要素 → 别名归一 4575 条省记录；数字变化必须同步文件头。
   assert.equal(mergedRows, 4575)
-  const header = source('src/utils/admin1Provinces.ts').split('\n').slice(0, 7).join('\n')
-  assert.match(header, /4600 要素\/251 个国家和地区键/)
+
+  // 源表字面量口径：国家地区键与省记录条数（合并前）。两个口径都要与文件头
+  // 吻合，否则注释里的「源表 N 键 / M 条」会随数据集更新悄悄失真。
+  const raw = source('src/utils/admin1Provinces.ts')
+  assert.equal(raw.match(/^ {2}"/gm)?.length, 240, '源表国家地区键数与注释不符')
+  assert.equal(raw.match(/\{ name: "/g)?.length, 4287, '源表省记录条数与注释不符')
+
+  const header = raw.split('\n').slice(0, 12).join('\n')
+  assert.match(header, /源表 240 个国家地区键 \/ 4,287 条省记录/)
+  assert.match(header, /加载期别名归一后为 251 键 \/ 4,575 条/)
   assert.match(header, /含特殊地区/)
-  assert.match(header, /4600 → 4575/)
+  // 表内没有中国键：消费方以 country === '中国' 特判走 chinaProvinces 高精度表。
+  assert.doesNotMatch(header, /本表 China\/中国 条目/)
+  assert.equal(ADMIN1_PROVINCES['中国'], undefined)
+  assert.equal(ADMIN1_PROVINCES['China'], undefined)
 })
 
 test('每个国家内省名唯一（同名要素已合并，悬浮/聚合键不再二义）', () => {

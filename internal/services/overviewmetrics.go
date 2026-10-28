@@ -36,12 +36,17 @@ type overviewMetricsCall struct {
 	// chip 区分端口）。
 	hostServer []RateLimitHostServerBlocks
 	err        error
+	// generation 是该抓取发起时的缓存代际：完成时若代际已变（期间
+	// InvalidateOverviewMetricsCache 执行过，如 Caddy /load 成功），抓到的
+	// 是重载前 registry 的计数——不得回填到新代际缓存，否则作废形同无效。
+	generation uint64
 }
 
 var overviewMetricsCache struct {
 	sync.Mutex
-	entries  map[string]overviewMetricsCacheEntry
-	inflight map[string]*overviewMetricsCall
+	entries    map[string]overviewMetricsCacheEntry
+	inflight   map[string]*overviewMetricsCall
+	generation uint64
 }
 
 type overviewMetricsCacheEntry struct {
@@ -59,6 +64,9 @@ func InvalidateOverviewMetricsCache() {
 	defer overviewMetricsCache.Unlock()
 	overviewMetricsCache.entries = nil
 	overviewMetricsCache.inflight = nil
+	// 代际自增：作废瞬间仍在途的抓取属于旧代际（抓的是重载前计数），
+	// 完成时按代际不匹配丢弃，不得回填缓存。
+	overviewMetricsCache.generation++
 }
 
 // resetOverviewMetricsCacheForTest 仅供测试隔离。
@@ -119,7 +127,7 @@ func scrapeOverviewMetrics(metricsURL string) ([]RateLimitHostBlocks, []RateLimi
 	if overviewMetricsCache.inflight == nil {
 		overviewMetricsCache.inflight = map[string]*overviewMetricsCall{}
 	}
-	call := &overviewMetricsCall{done: make(chan struct{})}
+	call := &overviewMetricsCall{done: make(chan struct{}), generation: overviewMetricsCache.generation}
 	overviewMetricsCache.inflight[metricsURL] = call
 	overviewMetricsCache.Unlock()
 
@@ -143,7 +151,9 @@ func scrapeOverviewMetrics(metricsURL string) ([]RateLimitHostBlocks, []RateLimi
 	overviewMetricsCache.Lock()
 	call.blocks, call.hostServer, call.err = blocks, byServer, err
 	delete(overviewMetricsCache.inflight, metricsURL)
-	if err == nil {
+	// 代际校验：作废（重载）后完成的旧代际抓取只回给本轮调用方，不入缓存
+	// ——否则下一次请求在 TTL 内再次读到重载前的累计计数。
+	if err == nil && overviewMetricsCache.generation == call.generation {
 		if overviewMetricsCache.entries == nil {
 			overviewMetricsCache.entries = map[string]overviewMetricsCacheEntry{}
 		}

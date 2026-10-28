@@ -1686,37 +1686,56 @@ func (t *securityEventsTailer) securityEventsGenerationGuard(offset int64) (int6
 		return offset, nil
 	}
 	if t.generation != "" {
-		Logf("warn", "security events ingestion: metrics database generation changed (%s -> %s), resetting offset %d to 0 (fresh metrics library, re-ingesting audit log)", t.generation, current, offset)
-		offset = 0
-		t.lastInfo = nil
-		t.stallOffset, t.stallCount = 0, 0
-		t.failOffset = -1
-		// 代际重放会把整份 audit.log 重新过一遍（新库为空，每行
-		// RowsAffected=1 全部再喂 autobanBatch）；自动封禁计数器在内存、
-		// 不随库重置——不重置则窗口内事件被二次计数，阈值提前达成误封。
-		// 重置后由重放按事件时间重建窗口计数，净效果=恰好一次。
-		ResetAutobanCounters()
-		// 攻击光流环同属「旧库代数」的内存态：新库为空、审计日志将从头重放，
-		// 旧环保留会让重放事件与灾前弧重复入环（大屏攻击量翻倍），序号也必须
-		// 复位让前端游标随代际重建。
-		threatScreenAttackFlowResetRingForGeneration()
-		// 去重表与会话绑定：新库为空，整份审计日志重放必须逐条重新落库——
-		// 旧库时代的去重记忆会把重放事件当重复丢弃（新库永远缺这些行）。
-		t.dedupe = &securityEventsRequestDeduper{}
-		// messages_dropped 是「本代审计日志写侧已披露的截断量」的进程级累计：
-		// 代际重放会把同一份 audit.log 从头再解析一遍，不清零则历史丢弃量
-		// 被二次累计（健康快照虚高到两倍，排障高估写侧截断规模）。重放后
-		// 该值应等于单遍真实总量。skippedBytes/Regions 是「曾丢失」事实，
-		// 与代数无关，保留。
-		securityEventsMessagesDropped.Store(0)
-		if err := securityEventsWriteOffset(t.offsetPath, 0); err != nil {
-			return offset, fmt.Errorf("security events: persist offset reset for new library generation: %w", err)
+		var serr error
+		if offset, serr = t.securityEventsSwitchMetricsGeneration(current, offset); serr != nil {
+			return offset, serr
 		}
 	}
 	if err := securityEventsWriteGeneration(t.generationPath, current); err != nil {
 		return offset, fmt.Errorf("security events: persist generation marker: %w", err)
 	}
 	t.generation = current
+	return offset, nil
+}
+
+// securityEventsSwitchMetricsGeneration 是「metrics 库代际已变」的全部内存态
+// 复位（库隔离重建=新库文件=新代际）：offset/inode 状态、停摆簿记、自动封禁
+// 计数、攻击光流环、请求级去重表与 messages_dropped 累计都属于旧库代数，
+// 必须在新库上从头重建。返回复位后的 offset（恒为 0）。
+func (t *securityEventsTailer) securityEventsSwitchMetricsGeneration(current string, offset int64) (int64, error) {
+	Logf("warn", "security events ingestion: metrics database generation changed (%s -> %s), resetting offset %d to 0 (fresh metrics library, re-ingesting audit log)", t.generation, current, offset)
+	offset = 0
+	t.lastInfo = nil
+	t.stallOffset, t.stallCount = 0, 0
+	t.failOffset = -1
+	// 代际重放会把整份 audit.log 重新过一遍（新库为空，每行
+	// RowsAffected=1 全部再喂 autobanBatch）；自动封禁计数器在内存、
+	// 不随库重置——不重置则窗口内事件被二次计数，阈值提前达成误封。
+	// 重置后由重放按事件时间重建窗口计数，净效果=恰好一次。
+	ResetAutobanCounters()
+	// 攻击光流环同属「旧库代数」的内存态：新库为空、审计日志将从头重放，
+	// 旧环保留会让重放事件与灾前弧重复入环（大屏攻击量翻倍），序号也必须
+	// 复位让前端游标随代际重建。
+	threatScreenAttackFlowResetRingForGeneration()
+	// 去重表与会话绑定：新库为空，整份审计日志重放必须逐条重新落库——
+	// 旧库时代的去重记忆会把重放事件当重复丢弃（新库永远缺这些行）。
+	// 复位必须在「实例原地」完成：IPC 批摄取、spool 补采与归档补采持有同一个
+	// 共享实例指针（securityEventsSharedDedupe），给 live tailer 换一张私有
+	// 新表会让这些通道继续用旧代键把重放当重复丢弃，且此后 live 新登记的事件
+	// 对它们不可见（跨通道去重重新分裂）。测试/嵌入形态注入的私有表同权清空。
+	securityEventsSharedDedupe.reset()
+	if d := t.deduper(); d != securityEventsSharedDedupe {
+		d.reset()
+	}
+	// messages_dropped 是「本代审计日志写侧已披露的截断量」的进程级累计：
+	// 代际重放会把同一份 audit.log 从头再解析一遍，不清零则历史丢弃量
+	// 被二次累计（健康快照虚高到两倍，排障高估写侧截断规模）。重放后
+	// 该值应等于单遍真实总量。skippedBytes/Regions 是「曾丢失」事实，
+	// 与代数无关，保留。
+	securityEventsMessagesDropped.Store(0)
+	if err := securityEventsWriteOffset(t.offsetPath, 0); err != nil {
+		return offset, fmt.Errorf("security events: persist offset reset for new library generation: %w", err)
+	}
 	return offset, nil
 }
 
@@ -1930,8 +1949,10 @@ const (
 )
 
 // securityEventsRequestDeduper 是跨 pass/跨摄取通道复用的请求级去重表。
-// 整个 process pass 持 mu：lookup→落库→record 必须相对其它通道原子，否则
-// IPC 与 live 同时 miss 会各插一行。独立测试仍可直接调用 lookup/record。
+// 排他持有期按「批次」划分（见 securityEventsDedupeHold）：批内的
+// lookup→落库→record 必须相对其它通道原子，否则 IPC 与 live 同时 miss 会各插
+// 一行；批提交后放锁，让补采期间 IPC 主路径不必排队。独立测试仍可直接调用
+// lookup/record。
 type securityEventsRequestDeduper struct {
 	mu         sync.Mutex
 	entries    map[uint64]securityEventsDedupeEntry
@@ -1943,6 +1964,40 @@ type securityEventsRequestDeduper struct {
 // securityEventsSharedDedupe 是 IPC/spool/live/归档补采的唯一请求级去重表。
 // 各通道数据库事务独立，但同一请求只能归并一次。
 var securityEventsSharedDedupe = &securityEventsRequestDeduper{}
+
+// securityEventsDedupeHold 把去重表的排他持有期收缩到「批次」粒度，并把
+// acquire/release 做成显式状态（避免重复加解锁）。
+//
+// 跨通道原子性只需要在批内成立：批内 lookup→落库→record 必须相对其它通道
+// 串行（否则 IPC 与 live 同时 miss 会各插一行），而批提交后表与库都已完整，
+// 下一批重新取锁即可。整段 pass 独占到不了这个效果——活文件单轮上限 5 万条/
+// 32MiB、归档补采无界，补采期间 IPC 主路径在 batchIngestState→dedupe 两级锁上
+// 排队，写侧 2s 预算一到即整批转 spool（事件不丢，但实时性丢失、spool 增长）。
+// 批边界（commit 之后、下一批首个 lookup 之前）是唯一安全释放点；BEGIN/Prepare
+// 与解码不触碰去重表，正好让其它通道插入。
+//
+// 使用约定：任何读/写共享表的动作（lookup、record、pendingDedupe 归并登记）
+// 都必须在 acquire 之后发生；批提交后必须 release。
+type securityEventsDedupeHold struct {
+	table  *securityEventsRequestDeduper
+	locked bool
+}
+
+func (h *securityEventsDedupeHold) acquire() {
+	if h.table == nil || h.locked {
+		return
+	}
+	h.table.mu.Lock()
+	h.locked = true
+}
+
+func (h *securityEventsDedupeHold) release() {
+	if h.table == nil || !h.locked {
+		return
+	}
+	h.locked = false
+	h.table.mu.Unlock()
+}
 
 // lookup 返回该键在窗口内的既有登记；过期项按未登记处理（旧键不阻塞新请求）。
 func (d *securityEventsRequestDeduper) lookup(key uint64, atSec int64) (securityEventsDedupeEntry, bool) {
@@ -1984,6 +2039,18 @@ func (d *securityEventsRequestDeduper) sweep() {
 			delete(d.entries, key)
 		}
 	}
+}
+
+// reset 原地清空归并记忆与标量状态（自带 mu）。语义边界：清空后旧库时代的
+// 重复判定全部失效——只允许在「新库为空、整份审计日志将从头重放」的代际切换
+// 点（以及测试隔离）调用，否则同一请求的后续引擎事务会各自重新入库。
+func (d *securityEventsRequestDeduper) reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.entries = nil
+	d.maxSec = 0
+	d.sinceSweep = 0
+	d.capWarned = false
 }
 
 // securityEventsRequestDedupeKey 返回请求级去重键：仅 X-Lb-Security-Timing-Id
@@ -2219,9 +2286,10 @@ var (
 // 当前批次提交后收尾返回（已提交边界随返回值持久化，剩余量留给下一 tick）；
 // 活文件 pass 另受单轮事件数/字节数上限约束（archived pass 无界——见上）。
 func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f securityEventsProcessFile, offset int64, rules map[string]securityEventsRuleRef, bindings map[string][]int, policyByID map[int]*models.SecurityPolicy) (int64, error) {
-	dedupe := t.deduper()
-	dedupe.mu.Lock()
-	defer dedupe.mu.Unlock()
+	// 去重表按批持有（见 securityEventsDedupeHold）：批提交后释放，下一批首个
+	// lookup 重新取锁——补采期间其它通道（IPC/spool）不必为整段 pass 排队。
+	hold := &securityEventsDedupeHold{table: t.deduper()}
+	defer hold.release()
 	// 每个 pass 开始时重置停摆偏移：只有本 pass 实际停摆才会重新赋值，
 	// 避免同偏移的新停摆被上一轮 warn 的限流状态吞掉。
 	t.failOffset = -1
@@ -2303,6 +2371,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		if entry, ok := pendingDedupe[key]; ok && entry.atSec >= atSec-securityEventsDedupeWindowSec {
 			return entry, true
 		}
+		// 共享表读取必须持锁：本批后续的 pendingDedupe 登记与提交后的 record
+		// 都依赖「从首次 lookup 到批提交」这段持有期（见 securityEventsDedupeHold）。
+		hold.acquire()
 		return t.deduper().lookup(key, atSec)
 	}
 	// crossPassUpgradeNeedsBlockedFeed 判定跨 pass 改判是否需要补喂 blocked
@@ -2356,6 +2427,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		securityEventsIngestCommits.Add(1)
 		passInsertedTotal += batchInserted
 		batchInserted = 0
+		// 归并状态并入共享表必须持锁（批内 lookup 已取锁，此处 acquire 对已持有
+		// 的形态是幂等 no-op，同时把「record 必须在持有期内」钉在本函数内）。
+		hold.acquire()
 		for key, entry := range pendingDedupe {
 			t.deduper().record(key, entry)
 		}
@@ -2728,6 +2802,10 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				if cerr := commit(); cerr != nil {
 					return committedOffset, fmt.Errorf("security events: commit batch: %w", cerr)
 				}
+				// 批已提交、归并状态已落表：释放去重锁。此后到下一批首个
+				// lookup 之间的 BEGIN/Prepare 与解码都不触碰共享表，其它通道
+				// （IPC/spool）可在此窗口插入，而不是为整段 pass 排队到 2s 超时。
+				hold.release()
 				committedOffset = docEnd
 				// 单轮上限（仅活文件 pass）：已达上限即收尾，剩余量留下轮
 				// ——offset 已推进、行幂等，续跑无重复。失败/取消优先于上限
@@ -2928,8 +3006,11 @@ type SecurityEventsIngestionStatus struct {
 	LastSuccessAt       string `json:"last_success_at,omitempty"`
 	// TaskState/TaskRunning 是 taskengine 视角的采集任务实态（running/
 	// restarting/stopped/unknown，判据单源见 securityEventsIngestionTaskState）：
-	// 任务停用/未运行时事件不再增长，健康位不得继续显示 healthy；restarting
-	// 是异常退出后的有界退避重拉窗口（LoopOn 仍 true），自愈通道仍在，不降级。
+	// 该任务拥有「尾读存量 + spool 补采 + 审计日志轮转 + 健康记账」，任务停用/
+	// 未运行时这些后台通道停摆（健康位不得继续显示 healthy），但实时 IPC 主
+	// 路径不经调度、事件仍会入库——文案不得据此断言「事件不再更新」。
+	// restarting 是异常退出后的有界退避重拉窗口（LoopOn 仍 true），自愈通道
+	// 仍在，不降级。
 	TaskState   string `json:"task_state"`
 	TaskRunning bool   `json:"task_running"`
 	// Writer* 是审计写侧（caddygeoip 插件）失败/丢弃计数——经插件侧车文件

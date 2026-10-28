@@ -34,21 +34,22 @@
       </div>
     </template>
 
-    <el-table :data="nodes" row-key="id" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
+    <!-- el-table 的 data 只接受可变数组；这里只读投影（组件不会写回），断言仅抹平 readonly 修饰 -->
+      <el-table :data="nodes as ClusterNodeWithSyncError[]" row-key="id" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
       <el-table-column prop="name" label="名称" min-width="90" show-overflow-tooltip />
       <el-table-column label="地址" min-width="130" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>
       </el-table-column>
       <el-table-column label="状态" width="70" align="center" class-name="node-status-col">
         <template #default="{ row }">
-          <el-tooltip v-if="versionIncompatibilityError(row)" :content="versionIncompatibilityError(row)" placement="top">
+          <el-tooltip v-if="versionIncompatibilityError(row as ClusterNodeWithSyncError)" :content="versionIncompatibilityError(row as ClusterNodeWithSyncError)" placement="top">
             <el-tag type="danger" size="small">版本不兼容</el-tag>
           </el-tooltip>
           <!-- 状态 hover 展示从节点四个规则库版本（跟随主节点同步，名称与
                规则库列表严格一致；缺失显示「—」） -->
-          <el-tooltip v-else-if="nodeLibraryVersions(row)" placement="top">
+          <el-tooltip v-else-if="nodeLibraryVersions(row as ClusterNodeWithSyncError)" placement="top">
             <template #content>
-              <div v-for="item in nodeLibraryVersions(row)" :key="item.label">{{ item.label }}：{{ item.version }}</div>
+              <div v-for="item in nodeLibraryVersions(row as ClusterNodeWithSyncError)" :key="item.label">{{ item.label }}：{{ item.version }}</div>
             </template>
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </el-tooltip>
@@ -65,7 +66,7 @@
                 <!-- UI(用户裁定):合并状态标签消除换行——分区滞后优先
                      (节级哈希不一致蕴含版本待同步,hover 明细见 popover 分区列表);
                      两者同现时不再双标签叠行,单标签+数字紧凑呈现。 -->
-                <el-tag v-if="laggingSectionCount(row) > 0" type="warning" size="small" effect="plain">分区滞后 {{ laggingSectionCount(row) }}</el-tag>
+                <el-tag v-if="laggingSectionCount(row as ClusterNodeWithSyncError) > 0" type="warning" size="small" effect="plain">分区滞后 {{ laggingSectionCount(row as ClusterNodeWithSyncError) }}</el-tag>
                 <el-tag v-else-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
                 <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
                 <!-- reported>current 罕见形态(主版本回退)——不误显已同步-->
@@ -113,15 +114,15 @@
       <el-table-column label="操作" width="190" :fixed="operationColumnFixed" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
-            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row)">确认</el-button>
-            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row)">拒绝</el-button>
+            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row as ClusterNodeWithSyncError)">确认</el-button>
+            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row as ClusterNodeWithSyncError)">拒绝</el-button>
           </template>
           <template v-else>
             <div class="op-buttons">
-              <el-button v-if="!readOnly" link type="primary" size="small" @click="$emit('edit-config', row)">配置</el-button>
-              <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
-              <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row)">服务</el-button>
-              <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
+              <el-button v-if="!readOnly" link type="primary" size="small" @click="$emit('edit-config', row as ClusterNodeWithSyncError)">配置</el-button>
+              <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row as ClusterNodeWithSyncError)">登录</el-button>
+              <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row as ClusterNodeWithSyncError)">服务</el-button>
+              <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row as ClusterNodeWithSyncError)">删除</el-button>
             </div>
           </template>
         </template>

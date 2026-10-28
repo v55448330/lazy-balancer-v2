@@ -6,6 +6,39 @@ import (
 	"time"
 )
 
+// lastNetStatsSnapshotForTest 是 lastNetStats 的可拷贝快照（结构体本身含
+// sync.Mutex，不能按值复制）。
+type lastNetStatsSnapshotForTest struct {
+	bytesIn, bytesOut uint64
+	iface             string
+	at                time.Time
+	rateIn, rateOut   int64
+	hasValue          bool
+}
+
+// captureLastNetStatsForTest 快照并恢复实时流量采样的**全部**字段。
+// iface 决定本轮是否重建基线、rateIn/rateOut/hasValue 决定采样窗口内是否直接
+// 命中缓存（getRealtimeTraffic 的 hasValue 快路）——只还原 bytesIn/bytesOut/
+// time 会把上一夹具的接口身份与速率留给后续用例（shuffle 下随机红/假绿）。
+// 注意 global_state_guard 的 suite 终态比较明确排除 lastNetStats，故这类残留
+// 只能靠本 helper 保证。
+func captureLastNetStatsForTest(t *testing.T) {
+	t.Helper()
+	lastNetStats.mu.Lock()
+	old := lastNetStatsSnapshotForTest{
+		bytesIn: lastNetStats.bytesIn, bytesOut: lastNetStats.bytesOut, iface: lastNetStats.iface,
+		at: lastNetStats.time, rateIn: lastNetStats.rateIn, rateOut: lastNetStats.rateOut, hasValue: lastNetStats.hasValue,
+	}
+	lastNetStats.mu.Unlock()
+	t.Cleanup(func() {
+		lastNetStats.mu.Lock()
+		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.iface = old.bytesIn, old.bytesOut, old.iface
+		lastNetStats.time, lastNetStats.rateIn, lastNetStats.rateOut = old.at, old.rateIn, old.rateOut
+		lastNetStats.hasValue = old.hasValue
+		lastNetStats.mu.Unlock()
+	})
+}
+
 // seedLastNetStatsForTest 建立一条可比较的上一条采样基线（身份串由调用方给出）。
 func seedLastNetStatsForTest(t *testing.T, bytesIn, bytesOut uint64, identity string) {
 	t.Helper()
@@ -173,5 +206,36 @@ func TestGetRealtimeTraffic_aggregateIdentityStableAcrossRowOrder(t *testing.T) 
 	}
 	if identityA == "" || identityA != identityB {
 		t.Fatalf("identityA=%q identityB=%q, want 相同的显式聚合身份串", identityA, identityB)
+	}
+}
+
+// 复位范式本身必须覆盖全部字段：只还原 bytesIn/bytesOut/time 时，子用例写入的
+// iface/rateIn/rateOut/hasValue 会留给后续用例（窗口内命中旧速率、接口身份
+// 误判）。子测试结束时 helper 的 cleanup 已执行，故可在外层直接对账。
+func TestCaptureLastNetStatsForTest_restoresAllFields(t *testing.T) {
+	lastNetStats.mu.Lock()
+	before := lastNetStatsSnapshotForTest{
+		bytesIn: lastNetStats.bytesIn, bytesOut: lastNetStats.bytesOut, iface: lastNetStats.iface,
+		at: lastNetStats.time, rateIn: lastNetStats.rateIn, rateOut: lastNetStats.rateOut, hasValue: lastNetStats.hasValue,
+	}
+	lastNetStats.mu.Unlock()
+
+	t.Run("inner", func(t *testing.T) {
+		captureLastNetStatsForTest(t)
+		lastNetStats.mu.Lock()
+		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.iface = 900, 800, "iface-probe"
+		lastNetStats.time = time.Now()
+		lastNetStats.rateIn, lastNetStats.rateOut, lastNetStats.hasValue = 700, 600, true
+		lastNetStats.mu.Unlock()
+	})
+
+	lastNetStats.mu.Lock()
+	after := lastNetStatsSnapshotForTest{
+		bytesIn: lastNetStats.bytesIn, bytesOut: lastNetStats.bytesOut, iface: lastNetStats.iface,
+		at: lastNetStats.time, rateIn: lastNetStats.rateIn, rateOut: lastNetStats.rateOut, hasValue: lastNetStats.hasValue,
+	}
+	lastNetStats.mu.Unlock()
+	if after != before {
+		t.Fatalf("lastNetStats 未完整恢复: before=%+v after=%+v", before, after)
 	}
 }

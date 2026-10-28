@@ -27,6 +27,10 @@ func TestDeadFieldPredicatesHaveSingleSource(t *testing.T) {
 	if got := strings.Count(text, tcpDeadFieldsStalePredicate); got != 1 {
 		t.Fatalf("TCP 死字段谓词在源码中出现 %d 次, want 1（不得手抄第二份）", got)
 	}
+	// TCP 的 DNS 服务发现清理：探测与复位共用同一谓词常量。
+	if got := strings.Count(text, tcpStaleDNSServerPredicate); got != 1 {
+		t.Fatalf("TCP DNS 服务发现谓词在源码中出现 %d 次, want 1（不得手抄第二份）", got)
+	}
 
 	// 跨模式 TLS 残留：三条谓词各自在探测与对应复位语句中出现恰一次。
 	pairs := []struct {

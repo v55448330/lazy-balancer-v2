@@ -37,3 +37,15 @@ export function validatePassword(value: string): string | null {
   }
   return null
 }
+
+/**
+ * 「确认框有值但新密码留空」的拦截文案；无此形态返回 null。
+ *
+ * 「留空=不修改」只对新密码字段成立：用户只填确认框时，载荷会省略 password
+ * （后端保留原密码）却回报成功——界面上的假成功。调用方须在「两次不一致」
+ * 判定之前消费本函数。
+ */
+export function missingNewPasswordMessage(password: string, passwordConfirm: string): string | null {
+  if (password || !passwordConfirm) return null
+  return '请填写新密码（新密码留空表示不修改密码）'
+}

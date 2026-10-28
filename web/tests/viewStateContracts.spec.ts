@@ -322,19 +322,24 @@ test('IP 快捷弹层打开即清旧事件计数（行复用不串上一 IP）',
 
 test('触发详情：策略 GET 的 catch 有会话序号守卫（与同函数其余 await 同口径）', () => {
   const dialog = code('src/components/events/TriggerDetailDialog.vue')
-  const catchAt = dialog.indexOf('policyMissing.value = err instanceof Error')
-  assert.ok(catchAt > 0, '策略缺失判据缺失')
-  const windowStart = Math.max(0, catchAt - 240)
+  // 按函数体取段（不是定长字符窗口）：守卫必须是该 catch 分支的第一条语句，
+  // 这样「插入语句把守卫挤出窗口」不会假红，「守卫被挪到相邻语句之后」也不会假绿。
+  const loadAll = member(dialog, 'const loadAll = async')
+  const missingAt = loadAll.indexOf('policyMissing.value = err instanceof Error')
+  assert.ok(missingAt > 0, '策略缺失判据缺失')
+  const catchAt = loadAll.lastIndexOf('catch (', missingAt)
+  assert.ok(catchAt > 0 && catchAt < missingAt, '策略 GET 的失败处理必须落在 catch 分支内')
   assert.match(
-    dialog.slice(windowStart, catchAt),
-    /if \(seq !== loadSeq\) return/,
-    '旧会话失败不得把新会话标成策略已删除/加载失败',
+    loadAll.slice(catchAt, missingAt),
+    /^catch \(\w+\) \{\s*if \(seq !== loadSeq\) return\s*$/,
+    '旧会话失败不得把新会话标成策略已删除/加载失败（守卫须为 catch 首条语句）',
   )
 })
 
 test('拦截页表单与后端同源前置门（名称/描述长度、内容非空与 64KB）', () => {
   const text = code('src/views/security/SecurityBlockPages.vue')
-  // 长度上限走 utils/securityLimits 单源（跨栈对表见 securityLimits.spec.ts），
+  // 长度上限走 utils/securityLimits 单源（跨栈对表见
+  // feViewsEdgeStates.spec.ts 的 SECURITY_NAME_MAX_RUNES/SECURITY_DESCRIPTION_MAX_RUNES），
   // 不得回到字面量
   assert.match(text, /v-model="form\.name"[^>]*:maxlength="SECURITY_NAME_MAX_RUNES"/)
   assert.match(text, /v-model="form\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"/)

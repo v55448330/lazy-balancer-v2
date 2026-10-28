@@ -54,7 +54,7 @@ test('还原文案按备份分类，失败行不显示下载', () => {
   assert.match(restore, /autoBackupScopeText\(row\)/)
   assert.match(restore, /覆盖该备份包含的分类/)
   assert.doesNotMatch(restore, /覆盖当前全部配置/)
-  assert.match(page, /<el-button v-if="row\.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup\(row\)">下载<\/el-button>/)
+  assert.match(page, /<el-button v-if="row\.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup\(row(?: as [A-Za-z]+)?\)">下载<\/el-button>/)
 })
 
 test('下次备份只消费调度器返回值并标明补跑', () => {
@@ -101,7 +101,8 @@ test('0 分类选择隐藏陈旧预览并把确认按钮置灰', () => {
   assert.match(page, /v-else-if="importValidation\.valid" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类/)
   const button = section(page, ':disabled="!importValidation?.valid', ':loading="importing"')
   assert.match(button, /!importPreviewSelected/)
-  assert.match(button, /isReadOnly/)
+  // 与同卡其余写入口同门：只读 ∪ 非主节点（从节点导入必然 403）
+  assert.match(button, /backupDisabled/)
 })
 
 test('备份分类恰好四键且标签与后端口径一致', () => {

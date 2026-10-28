@@ -110,12 +110,12 @@ func TestRecordSyncError_realDBPreservesMarkerAndCombinesRecoverableError(t *tes
 
 	syncService.persistSyncError(ctx, syncReloadFailureMarkerPrefix+": Caddy /load 失败", models.SyncErrorCodeApplyFailed)
 	// persistSyncError 无返回值；直接断言写后可读。
-	if !syncService.syncReloadFailureMarkerPresent(ctx) {
+	if !syncService.syncMarkerPresent(ctx, syncReloadFailureMarkerPrefix) {
 		t.Fatal("前置：标记未落库")
 	}
 
 	syncService.recordSyncError(ctx, nil, nil)
-	if !syncService.syncReloadFailureMarkerPresent(ctx) {
+	if !syncService.syncMarkerPresent(ctx, syncReloadFailureMarkerPrefix) {
 		t.Fatal("成功路径不得清除后置副作用标记")
 	}
 

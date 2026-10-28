@@ -747,6 +747,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 	if bundle.IP2RegionSha != "" && len(bundle.Xdb) == 0 {
 		return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", errors.New("同步包声明 IP2Region 哈希非空但未携带内容，拒绝应用该同步包"))
 	}
+	// 威胁库条目先全量预检（结构/哈希/路径）：任何一条被拒都在落盘前中止，
+	// 兑现错误文案的「拒绝整包」语义（CRS/xdb 尚未写入，等待主端下轮自愈）。
+	threatWrites, planErr := planThreatFastWrites(bundle.ThreatFiles)
+	if planErr != nil {
+		return crsChanged, xdbChanged, threatChanged, planErr
+	}
 	if len(bundle.CRSTarGz) > 0 {
 		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
 		// 仅恶意/损坏主节点可构造——与 xdb 侧同纵深防御；untarGzTo 在
@@ -807,28 +813,56 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		}
 	}
 	// RDB 文件化：从节点写威胁库 .fast 文件（直接使用，零编译）
-	// 反向防御：同名条目重复时拒绝整包——核验侧已按「集合相等 + 名称唯一」
-	// 拦下，但本函数还有 lbbak 导入/直连调用方，逐条落盘会让后一条覆盖前一条
-	// 的预期名单（最终生效内容取决于条目顺序）。
-	seenThreatNames := make(map[string]struct{}, len(bundle.ThreatFiles))
-	for _, tf := range bundle.ThreatFiles {
-		// 写盘前名称预检——仅允许三个内置源名。恶意/损坏主节点的
-		// name 含路径分隔符/`..`/绝对路径时，fmt.Sprintf("threat-%s...") 可逃出
-		// wafDir（如 name="../../../data/x"）；HasPrefix 再兜底一次。
+	// 落盘阶段只做原子写：全部结构/哈希/路径校验已在 planThreatFastWrites 内
+	// 完成，任何一条不合法都会在 CRS/xdb/威胁库任何文件写入之前整包拒绝。
+	for _, tw := range threatWrites {
+		// changed 标志先置后写——后续写失败时函数整体携 error 返回，
+		// 两个调用方（cluster_apply 的 aerr 分支 / lbbak 导入）err 路径均不
+		// 消费 changed 标志，无需逐 err 路径置回。
+		threatChanged = true
+		// 单源原子落盘（tmp+fsync+父目录 fsync；临时文件点前缀，
+		// 不会被 waf bundle 打包）。
+		if err := writeFileAtomicSynced(tw.path, tw.content, 0644); err != nil {
+			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("写威胁库 .fast %s: %w", tw.name, err)
+		}
+	}
+	return crsChanged, xdbChanged, threatChanged, nil
+}
+
+// threatFastWrite 一条通过全部预检、内容与本地不同的威胁库 .fast 落盘项。
+type threatFastWrite struct {
+	name    string
+	path    string
+	content []byte
+}
+
+// planThreatFastWrites 预检威胁库条目并产出待写项：名称白名单（仅三个内置源
+// 名——含路径分隔符/`..`/绝对路径的 name 会逃出 wafDir）、重复名、空内容与
+// 声明哈希的组合、声明哈希与内容哈希一致、目标路径不越界；本地内容一致者跳过
+// （幂等）。全部通过后才允许进入落盘阶段。
+//
+// 预检必须先于任何落盘：逐条「校验→写入」时后续条目被拒会留下半更新的威胁库
+// ——错误文案称「已拒绝整包」，实际前序条目已经生效。同名条目重复同理：逐条
+// 落盘会让后一条覆盖前一条的预期名单（最终生效内容取决于条目顺序）；核验侧已
+// 按「集合相等 + 名称唯一」拦下，但本函数还有 lbbak 导入/直连调用方。
+func planThreatFastWrites(files []models.ThreatFileEntry) ([]threatFastWrite, error) {
+	seen := make(map[string]struct{}, len(files))
+	writes := make([]threatFastWrite, 0, len(files))
+	for _, tf := range files {
 		if !validThreatFileName(tf.Name) {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库文件名非法 %q，已拒绝整包", tf.Name)
+			return nil, fmt.Errorf("同步威胁库文件名非法 %q，已拒绝整包", tf.Name)
 		}
-		if _, dup := seenThreatNames[tf.Name]; dup {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 条目重复，已拒绝整包", tf.Name)
+		if _, dup := seen[tf.Name]; dup {
+			return nil, fmt.Errorf("同步威胁库 %s 条目重复，已拒绝整包", tf.Name)
 		}
-		seenThreatNames[tf.Name] = struct{}{}
+		seen[tf.Name] = struct{}{}
 		if len(tf.Content) == 0 {
 			// 声明哈希非空 = 主端引用声称存在该文件（0 字节文件
-			// 的 sha256 也非空），但包内无内容——从端若静默 continue 则永不
+			// 的 sha256 也非空），但包内无内容——从端若静默跳过则永不
 			// 落盘、ref 哈希永不等，每轮误判漂移全量重拉永不收敛。与缺哈希
 			// 同纵深：拒绝整包（主端恢复后下轮自愈）。
 			if tf.Sha256 != "" {
-				return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 内容为空但声明哈希非空，已拒绝整包", tf.Name)
+				return nil, fmt.Errorf("同步威胁库 %s 内容为空但声明哈希非空，已拒绝整包", tf.Name)
 			}
 			continue // 无声明哈希的空条目=缺席，无可应用内容
 		}
@@ -836,17 +870,17 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		// 仅恶意/损坏主节点可构造——与 CRS/xdb 侧同纵深防御，
 		// 拒绝整包而非裸写未验证字节。
 		if tf.Sha256 == "" {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 缺少声明哈希，已拒绝落盘", tf.Name)
+			return nil, fmt.Errorf("同步威胁库 %s 缺少声明哈希，已拒绝落盘", tf.Name)
 		}
-		// 写入前内容哈希校验（与 xdb 分支同形）：不符说明 bundle
+		// 落盘前内容哈希校验（与 xdb 分支同形）：不符说明 bundle
 		// 在主端构造或传输途中被污染，拒绝落盘而非把脏字节装进威胁库。
 		sum := sha256.Sum256(tf.Content)
 		if got := hex.EncodeToString(sum[:]); got != tf.Sha256 {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 哈希不匹配（声明 %s，实际 %s），已拒绝落盘", tf.Name, tf.Sha256, got)
+			return nil, fmt.Errorf("同步威胁库 %s 哈希不匹配（声明 %s，实际 %s），已拒绝落盘", tf.Name, tf.Sha256, got)
 		}
 		fastPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist.fast", tf.Name))
 		if clean := filepath.Clean(fastPath); !strings.HasPrefix(clean, filepath.Clean(wafDir)+string(filepath.Separator)) {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库目标路径越界 %q，已拒绝整包", tf.Name)
+			return nil, fmt.Errorf("同步威胁库目标路径越界 %q，已拒绝整包", tf.Name)
 		}
 		// 读哈希失败按哈希不符处理走重写路径（方向安全）；文件缺失
 		// 是新从节点常态不告警，其余读失败 warn 留痕。
@@ -857,17 +891,9 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		} else if liveSum == tf.Sha256 {
 			continue // 哈希一致跳过
 		}
-		// changed 标志先置后写——后续写失败时函数整体携 error 返回，
-		// 两个调用方（cluster_apply 的 aerr 分支 / lbbak 导入）err 路径均不
-		// 消费 changed 标志，无需逐 err 路径置回。
-		threatChanged = true
-		// 单源原子落盘（tmp+fsync+父目录 fsync；临时文件点前缀，
-		// 不会被 waf bundle 打包）。
-		if err := writeFileAtomicSynced(fastPath, tf.Content, 0644); err != nil {
-			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("写威胁库 .fast %s: %w", tf.Name, err)
-		}
+		writes = append(writes, threatFastWrite{name: tf.Name, path: fastPath, content: tf.Content})
 	}
-	return crsChanged, xdbChanged, threatChanged, nil
+	return writes, nil
 }
 
 // skipWafSyncTransient 判断相对路径是否为不得进入 waf 同步打包的瞬态文件

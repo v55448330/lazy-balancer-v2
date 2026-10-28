@@ -192,3 +192,80 @@ func TestPaginationSchemaMaximumMatchesRESTServerCap(t *testing.T) {
 		})
 	}
 }
+
+// get_metrics_history.interval 的取值域必须与 handlers.parseMetricsInterval 的
+// 支持集同源：REST 对不可解析/非正值静默回退 1h、对 n d 超 7 天静默钳位，且响应
+// 不回显生效窗口——schema 若不声明 pattern 与三个上限，Agent 传 "30d"/"7days"
+// 会拿到更短窗口的数据却以为看到的是 30 天趋势。
+//
+// 上限与单位集合从实现的钳位判定点派生（`case "h": if value > 168`），不是手抄
+// 常量——改一处上限而 schema 未跟随时本用例必红。
+func TestMetricsHistoryIntervalSchemaParity(t *testing.T) {
+	source := readHandlerSource(t, "metrics.go")
+	body := handlerFunctionSource(t, source, "func parseMetricsInterval(")
+	unitCapPattern := regexp.MustCompile(`case "([a-z])":\s*\n\s*if value > ([0-9]+)`)
+	matches := unitCapPattern.FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatal("parseMetricsInterval 未找到单位钳位判定点（case \"x\": if value > N）")
+	}
+	caps := map[string]int{}
+	for _, match := range matches {
+		value, err := strconv.Atoi(match[2])
+		if err != nil {
+			t.Fatalf("上限 %q 无法解析: %v", match[2], err)
+		}
+		caps[match[1]] = value
+	}
+
+	registered, ok := toolSpecsByName["get_metrics_history"]
+	if !ok {
+		t.Fatal("get_metrics_history 未在工具注册表中（名称漂移？）")
+	}
+	if registered.schema != metricsHistorySchema {
+		t.Fatal("get_metrics_history 注册的 schema 与 metricsHistorySchema 常量不一致")
+	}
+
+	var shape struct {
+		Properties map[string]struct {
+			Pattern     string `json:"pattern"`
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(metricsHistorySchema), &shape); err != nil {
+		t.Fatalf("metricsHistorySchema 解析失败: %v", err)
+	}
+	interval, ok := shape.Properties["interval"]
+	if !ok {
+		t.Fatal("metricsHistorySchema 未声明 interval")
+	}
+	if interval.Pattern == "" {
+		t.Fatal("interval 未声明 pattern：REST 只接受 <n>m|h|d，非法值会静默回退 1h")
+	}
+	pattern, err := regexp.Compile(interval.Pattern)
+	if err != nil {
+		t.Fatalf("interval pattern %q 无法编译: %v", interval.Pattern, err)
+	}
+	for _, unit := range []string{"m", "h", "d"} {
+		cap, ok := caps[unit]
+		if !ok {
+			t.Fatalf("parseMetricsInterval 支持单位 %s 但 schema 对账无该单位钳位点", unit)
+		}
+		for _, value := range []string{"1" + unit, strconv.Itoa(cap) + unit} {
+			if !pattern.MatchString(value) {
+				t.Fatalf("interval pattern=%q 拒绝了合法值 %q（REST 接受并钳到上限）", interval.Pattern, value)
+			}
+		}
+		// 上限必须写进 description：REST 超窗静默钳位且响应不回显窗口。
+		if !strings.Contains(interval.Description, strconv.Itoa(cap)+unit) {
+			t.Fatalf("interval description=%q 未声明 %s 上限（%d%s）", interval.Description, unit, cap, unit)
+		}
+	}
+	for _, invalid := range []string{"-5h", "7days", "5w", "0", "", "1.5h"} {
+		if pattern.MatchString(invalid) {
+			t.Fatalf("interval pattern=%q 放行了 REST 不支持的取值 %q", interval.Pattern, invalid)
+		}
+	}
+	if !strings.Contains(interval.Description, "1h") {
+		t.Fatalf("interval description=%q 未声明默认窗口 1h", interval.Description)
+	}
+}

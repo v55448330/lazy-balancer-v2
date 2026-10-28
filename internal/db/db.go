@@ -171,6 +171,21 @@ const (
 	DefaultAutobanDryRun        = 1
 )
 
+// defaultAutoBackupSectionList 返回 DefaultAutoBackupSections 的切片形态，供
+// 迁移按值复用同一常量（此前迁移手抄四分类字面量：改常量后新库/带外 NULL 行
+// 与存量升级行会落到两套口径）。常量是编译期固定的合法 JSON，解析失败属编码
+// 错误，直接上抛而不是静默退回空范围。
+func defaultAutoBackupSectionList() ([]string, error) {
+	var sections []string
+	if err := json.Unmarshal([]byte(DefaultAutoBackupSections), &sections); err != nil {
+		return nil, fmt.Errorf("自动备份分类默认值不是合法 JSON 数组: %w", err)
+	}
+	if len(sections) == 0 {
+		return nil, errors.New("自动备份分类默认值为空数组")
+	}
+	return sections, nil
+}
+
 // certJobStatuses 是 cert_jobs.status 的规范枚举。
 // 唯一声明点在此：fresh CREATE 的 CHECK 枚举、迁移重建 DDL、迁移拷贝的
 // CASE WHEN 白名单全部由 strings.Join 生成；services 侧的任务状态机
@@ -2369,6 +2384,13 @@ func formatMigrationRuleIDs(ids []string) string {
 	return fmt.Sprintf("%s 等 %d 条", strings.Join(ids[:maxListed], ", "), len(ids))
 }
 
+// tcpStaleDNSServerPredicate 是「TCP 行携带 HTTP 侧 DNS 服务发现配置」的统一
+// 谓词：探测（SELECT）与复位（UPDATE）共用，避免两份手写字面量漂移。
+// enable_dns_server 可空：用 COALESCE(col,-1)<>0 让 NULL 视为「携带了该项」
+// ——裸 =1/IN 在三值逻辑下对 NULL 恒为 NULL，NULL 形态会永久逃过清理（零值
+// 孪生行已归一，两者终态不一致）。
+const tcpStaleDNSServerPredicate = `protocol='tcp' AND (COALESCE(enable_dns_server,-1)<>0 OR TRIM(COALESCE(dns_server,''))<>'')`
+
 // migrateTCPRuleStaleDNSServer 一次性迁移：存量
 // protocol='tcp' 行可携带 enable_dns_server=1 / dns_server 非空——两字段是
 // HTTP 侧 DNS 服务发现语义，TCP 渲染路径（caddy.go L4 分支）永不消费且无
@@ -2378,7 +2400,7 @@ func formatMigrationRuleIDs(ids []string) string {
 // 零命中。
 func migrateTCPRuleStaleDNSServer() error {
 	rows, err := DB.Query(`SELECT caddy_id, name FROM lb_rules
-		WHERE protocol='tcp' AND (IIF(enable_dns_server IN ('1',1),1,0)=1 OR TRIM(COALESCE(dns_server,''))<>'')`)
+		WHERE ` + tcpStaleDNSServerPredicate)
 	if err != nil {
 		return fmt.Errorf("failed to query tcp rules with stale dns server: %w", err)
 	}
@@ -2410,7 +2432,7 @@ func migrateTCPRuleStaleDNSServer() error {
 	// 从端快照版本门永不失效（主从 canonical 分叉）。
 	if err := withWriteTx("tcp stale dns server cleanup", func(tx *sql.Tx) error {
 		res, err := tx.Exec(`UPDATE lb_rules SET enable_dns_server=0, dns_server=''
-			WHERE protocol='tcp' AND (IIF(enable_dns_server IN ('1',1),1,0)=1 OR TRIM(COALESCE(dns_server,''))<>'')`)
+			WHERE ` + tcpStaleDNSServerPredicate)
 		if err != nil {
 			return fmt.Errorf("failed to normalize tcp rules with stale dns server: %w", err)
 		}
@@ -2926,10 +2948,17 @@ func migrateThreatTrafficSampleUnified() error {
 	return nil
 }
 
+// previousAutoBackupDefaultSections 是引入节点拓扑分类之前的三分类默认范围：
+// 存量行等于这份值即「用户从未自定义过范围」，迁移整体升级为当前默认
+// （DefaultAutoBackupSections）。仅用于识别旧默认，不是可配置默认值。
+var previousAutoBackupDefaultSections = []string{"users", "rules", "security"}
+
 // migrateAutoBackupNodeTopologySection 一次性把旧默认备份范围（三分类
-// users/rules/security）升级为含节点拓扑的四分类，version marker 置 1 后
-// 不再触碰用户后续显式保存的三键形态；畸形存量值不猜测修复，置 marker 后
-// 交由设置读侧 fail-visible。
+// users/rules/security）升级为当前默认（DefaultAutoBackupSections，含节点
+// 拓扑），version marker 置 1 后不再触碰用户后续显式保存的形态。默认范围只
+// 从单源常量取（迁移此前另抄四分类字面量，改常量后两套口径并存）。
+// 畸形存量值与空数组不猜测修复：两者都是设置读侧的显式错误形态（空数组会让
+// 调度/设置页 fail-visible），迁移只推进 marker，不把损坏值伪装成「全量」。
 func migrateAutoBackupNodeTopologySection() error {
 	var version int
 	var raw sql.NullString
@@ -2942,22 +2971,38 @@ func migrateAutoBackupNodeTopologySection() error {
 	if version >= 1 {
 		return nil
 	}
+	markerOnly := func() error {
+		_, err := DB.Exec(`UPDATE global_config SET auto_backup_sections_version=1 WHERE id=1`)
+		return err
+	}
 	sections := []string{}
-	if raw.Valid && strings.TrimSpace(raw.String) != "" {
+	hasStoredScope := raw.Valid && strings.TrimSpace(raw.String) != ""
+	if hasStoredScope {
 		if err := json.Unmarshal([]byte(raw.String), &sections); err != nil {
 			// 畸形存量值不在迁移中猜测修复；交由设置读侧 fail-visible。
-			_, err = DB.Exec(`UPDATE global_config SET auto_backup_sections_version=1 WHERE id=1`)
-			return err
+			return markerOnly()
+		}
+		if len(sections) == 0 {
+			// 空数组=读侧显式报错的损坏形态（未设置是 NULL/空串）。迁移若
+			// 在此写入默认范围，管理员会以为备份范围正常而实际配置已损坏。
+			return markerOnly()
 		}
 	}
-	appendNodeTopology := false
-	if len(sections) == 0 {
-		sections = []string{"users", "rules", "security", "cluster"}
-	} else if slices.Equal(sections, []string{"users", "rules", "security"}) {
-		// 旧默认全选（三分类）一次追加节点拓扑；用户此后取消勾选会保存
-		// 三键并把 version 置 1，不会在下次启动被重新加回。
-		sections = append(sections, "cluster")
-		appendNodeTopology = true
+	defaultSections, err := defaultAutoBackupSectionList()
+	if err != nil {
+		return err
+	}
+	scopeUpgraded := false
+	switch {
+	case !hasStoredScope:
+		// 未设置（NULL/空串）= 读侧「全部」语义：落当前默认范围，让存储值
+		// 与 fresh DDL 默认同形。
+		sections = defaultSections
+	case slices.Equal(sections, previousAutoBackupDefaultSections):
+		// 旧默认全选（三分类）整体升级为当前默认；用户此后取消勾选会保存
+		// 自定义键并把 version 置 1，不会在下次启动被重新加回。
+		sections = defaultSections
+		scopeUpgraded = true
 	}
 	encoded, err := json.Marshal(sections)
 	if err != nil {
@@ -2966,8 +3011,8 @@ func migrateAutoBackupNodeTopologySection() error {
 	if _, err = DB.Exec(`UPDATE global_config SET auto_backup_sections=?, auto_backup_sections_version=1 WHERE id=1`, string(encoded)); err != nil {
 		return err
 	}
-	if appendNodeTopology {
-		detail := "启动迁移：自动备份旧默认范围已追加节点拓扑（cluster）分类"
+	if scopeUpgraded {
+		detail := "启动迁移：自动备份旧默认范围已升级为当前默认范围（含节点拓扑 cluster 分类）"
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "系统配置", detail)
 	}
@@ -3156,6 +3201,12 @@ func migrateSystemIPListUniqueIndex() error {
 			return err
 		}
 		if len(remap) > 0 {
+			// 条目并入必须先于删行：重复行携带的已入库 IP（自动封禁名单尤其
+			// 如此）会随整行删除而静默消失=静默解封。
+			mergedEntries, skippedEntries, unparseableRows, err := mergeSystemIPListEntries(tx, remap)
+			if err != nil {
+				return err
+			}
 			deleted := make([]string, 0, len(remap))
 			for id := range remap {
 				deleted = append(deleted, strconv.Itoa(id))
@@ -3167,7 +3218,17 @@ func migrateSystemIPListUniqueIndex() error {
 			if err := rewriteSystemIPListRefs(tx, remap); err != nil {
 				return fmt.Errorf("rewrite system ip list references: %w", err)
 			}
-			dedupeDetail = fmt.Sprintf("启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：%d 条", len(remap))
+			dedupeDetail = fmt.Sprintf("启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：%d 条；删除行条目已并入保留行 %d 条（身份重复跳过 %d 条）",
+				len(remap), mergedEntries, skippedEntries)
+			if len(unparseableRows) > 0 {
+				sort.Ints(unparseableRows)
+				ids := make([]string, 0, len(unparseableRows))
+				for _, id := range unparseableRows {
+					ids = append(ids, strconv.Itoa(id))
+				}
+				dedupeDetail += fmt.Sprintf("；%d 行条目形态无法解析，未并入（行 id：%s，请人工核对）", len(unparseableRows), strings.Join(ids, ","))
+				log.Printf("WARN: IP 名单去重时有 %d 行条目形态无法解析（行 id：%s），其条目未并入保留行，请人工核对", len(unparseableRows), strings.Join(ids, ","))
+			}
 		}
 		// 历史遗留的可视化兜底：早前「删重复行→重写引用→建索引」非原子执行时
 		// 可能中途中断，引用永久指向已删 id（remap 重算为空，无法再修）。此处
@@ -3248,6 +3309,120 @@ func countDanglingSystemIPListRefs(q migrationExecer) (int, error) {
 		}
 	}
 	return dangling, nil
+}
+
+// systemIPListEntryIdentity 是名单条目的身份：value/remark/created_at/
+// expires_at 四元组，与渲染生效集展开、更新判变化（handlers）同口径——同一
+// value 但备注或有效期不同的两条是不同条目，不得合并成一条。
+func systemIPListEntryIdentity(entry models.IPListEntry) string {
+	return entry.Value + "\x00" + entry.Remark + "\x00" + entry.CreatedAt + "\x00" + entry.ExpiresAt
+}
+
+// parseIPListEntriesRaw 解析名单行 entries 文本：空白视为空列表（列默认 '[]',
+// 带外 NULL/空串等价于「无条目」），其余解析失败才是形态不可用。
+func parseIPListEntriesRaw(raw string) ([]models.IPListEntry, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var entries []models.IPListEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// mergeSystemIPListEntries 把将被去重删除的名单行的条目并入存活行（并集）：
+// 删的是整行，不并条目则被删行里已入库的 IP（自动封禁名单）永久消失=静默
+// 解封。返回并入条目数、因身份重复而跳过的条目数、以及条目形态无法解析
+// （带外写入/旧格式）而未并入的行 id——后者不猜测修复，由调用方留痕。
+// 遍历顺序固定（保留行升序、被删行升序），结果与执行序无关。
+func mergeSystemIPListEntries(tx *sql.Tx, remap map[int]int) (merged int, skipped int, unparseable []int, err error) {
+	if len(remap) == 0 {
+		return 0, 0, nil, nil
+	}
+	keepIDs := make([]int, 0, len(remap))
+	seenKeep := make(map[int]struct{}, len(remap))
+	droppedByKeep := make(map[int][]int, len(remap))
+	allIDs := make([]string, 0, 2*len(remap))
+	for drop, keep := range remap {
+		allIDs = append(allIDs, strconv.Itoa(drop))
+		if _, ok := seenKeep[keep]; !ok {
+			seenKeep[keep] = struct{}{}
+			keepIDs = append(keepIDs, keep)
+			allIDs = append(allIDs, strconv.Itoa(keep))
+		}
+		droppedByKeep[keep] = append(droppedByKeep[keep], drop)
+	}
+	slices.Sort(keepIDs)
+	for _, drops := range droppedByKeep {
+		slices.Sort(drops)
+	}
+
+	rows, err := tx.Query(`SELECT id, COALESCE(entries,'') FROM security_ip_lists WHERE id IN (` + strings.Join(allIDs, ",") + `)`)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("read ip list entries before dedupe: %w", err)
+	}
+	rawByID := make(map[int]string, len(allIDs))
+	for rows.Next() {
+		var id int
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, 0, nil, fmt.Errorf("scan ip list entries: %w", err)
+		}
+		rawByID[id] = raw
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, 0, nil, fmt.Errorf("iterate ip list entries: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, 0, nil, fmt.Errorf("close ip list entries rows: %w", err)
+	}
+
+	for _, keep := range keepIDs {
+		entries, err := parseIPListEntriesRaw(rawByID[keep])
+		if err != nil {
+			// 保留行本身形态无法解析：整组跳过（覆盖会把脏值固化成新值），
+			// 全部被删行计入未并入清单。
+			unparseable = append(unparseable, droppedByKeep[keep]...)
+			continue
+		}
+		seen := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			seen[systemIPListEntryIdentity(entry)] = struct{}{}
+		}
+		changed := false
+		for _, drop := range droppedByKeep[keep] {
+			dropped, err := parseIPListEntriesRaw(rawByID[drop])
+			if err != nil {
+				unparseable = append(unparseable, drop)
+				continue
+			}
+			for _, entry := range dropped {
+				identity := systemIPListEntryIdentity(entry)
+				if _, ok := seen[identity]; ok {
+					skipped++
+					continue
+				}
+				seen[identity] = struct{}{}
+				entries = append(entries, entry)
+				merged++
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(entries)
+		if err != nil {
+			return 0, 0, nil, fmt.Errorf("encode merged ip list entries for %d: %w", keep, err)
+		}
+		if _, err := tx.Exec(`UPDATE security_ip_lists SET entries=? WHERE id=?`, string(encoded), keep); err != nil {
+			return 0, 0, nil, fmt.Errorf("merge ip list entries into %d: %w", keep, err)
+		}
+	}
+	return merged, skipped, unparseable, nil
 }
 
 // planSystemIPListDedupe 计算 system=1 同名组的去重映射（被删 id → 存活 id）。
@@ -4065,21 +4240,36 @@ func queryDuplicateLbRulesCaddyIDs(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
+// lbRulesSurvivorRankingSQL 是「同 caddy_id 组内保留优先级」的单源：去重删除
+// （rn>1 的行）与 upstream 改挂（rn>1 → rn=1）共用同一窗口排序，改排序不会让
+// 两者指向不同的保留行。
+const lbRulesSurvivorRankingSQL = `SELECT rowid AS rowid, id, caddy_id, ROW_NUMBER() OVER (
+			PARTITION BY caddy_id
+			ORDER BY COALESCE(updated_at, created_at, '') DESC, COALESCE(id, 0) DESC
+		) AS rn
+		FROM lb_rules`
+
 // lbRulesDedupeSQL 是 lb_rules 主键重建（id → caddy_id）前的去重语句：旧表
 // caddy_id 无唯一约束（仅重建后成为 PK），旧版本导入/手改/历史竞态都可能留下
 // 同 caddy_id 的多行——不先去重则 INSERT 主键冲突 → 回滚 → runMigrations 上抛
 // → **启动永久失败**（只能人工改库）。保留「最近更新 > 最大 id」一行：upstreams/
 // path_rules 以 caddy_id 关联，行级副本丢失不影响被引用关系，仅旧配置文本被
 // 较新版本取代。与同族 nodes/cert_jobs/IP 名单去重同口径（迁移前先去重）。
+// 被删行的 upstream 由 lbRulesUpstreamRemapSQL 先改挂到保留行——否则拷贝阶段
+// 的 JOIN 按旧整数 rule_id 只认保留行，被删行的上游静默消失（少一个后端）。
 const lbRulesDedupeSQL = `DELETE FROM lb_rules WHERE rowid NOT IN (
-	SELECT rowid FROM (
-		SELECT rowid, ROW_NUMBER() OVER (
-			PARTITION BY caddy_id
-			ORDER BY COALESCE(updated_at, created_at, '') DESC, COALESCE(id, 0) DESC
-		) AS rn
-		FROM lb_rules
-	) WHERE rn = 1
+	SELECT rowid FROM (` + lbRulesSurvivorRankingSQL + `) WHERE rn = 1
 )`
+
+// lbRulesUpstreamRemapSQL 把将被去重删除的规则行上的 upstream 改挂到该 caddy_id
+// 的保留行：并集语义（全部上游行保留，行 id/顺序不变），不丢行也不产生重复行
+// 判定——合流后的上游集合=两条重复行上游的并集，取决于库中原有数据而非执行序。
+const lbRulesUpstreamRemapSQL = `UPDATE upstreams SET rule_id = (
+		SELECT keep.id FROM (` + lbRulesSurvivorRankingSQL + `) keep
+		WHERE keep.rn = 1
+		  AND keep.caddy_id = (SELECT dropped.caddy_id FROM lb_rules dropped WHERE dropped.id = upstreams.rule_id)
+	)
+	WHERE rule_id IN (SELECT id FROM (` + lbRulesSurvivorRankingSQL + `) WHERE rn > 1)`
 
 // nodesDedupeSQL 是 nodes 整表重建前的去重语句。
 // 旧实现只保留 MIN(id)——若重复行里低 id 是旧的未批准行、被删的高 id 才是
@@ -4534,13 +4724,10 @@ func migrateLbRulesPrimaryKey() error {
 		return nil
 	}
 
-	// 拷贝阶段的 INNER JOIN 会丢弃 FK OFF 历史期积累的孤儿 upstream。
-	// 迁移前计数，成功后留痕；保持既有数据收敛语义，但不允静默消失。
+	// 拷贝阶段的 INNER JOIN 会丢弃 FK OFF 历史期积累的孤儿 upstream（rule_id
+	// 无对应规则）。计数放在事务内「去重 + upstream 改挂」之后（见下方），
+	// 否则被去重删行的上游会被误算成孤儿、或反过来静默消失。
 	var orphanUpstreams int
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM upstreams u
-		LEFT JOIN lb_rules r ON u.rule_id=r.id WHERE r.id IS NULL`).Scan(&orphanUpstreams); err != nil {
-		return fmt.Errorf("failed to count orphan upstreams before lb_rules primary key migration: %w", err)
-	}
 
 	log.Println("Migrating lb_rules to use caddy_id as primary key...")
 
@@ -4560,11 +4747,23 @@ func migrateLbRulesPrimaryKey() error {
 		if err := dropRebuildResidue(tx, "upstreams", "upstreams_new"); err != nil {
 			return err
 		}
+		// 去重前先把将被删除的重复规则行的 upstream 改挂到保留行：拷贝阶段
+		// 按旧整数 rule_id JOIN 新表，未改挂的上游既不进新表也不计入孤儿统计
+		// （静默丢后端）。
+		if _, err := tx.Exec(lbRulesUpstreamRemapSQL); err != nil {
+			return fmt.Errorf("remap upstreams of deduped lb_rules: %w", err)
+		}
 		// caddy_id 即将成为主键：先去重（否则 INSERT 主键冲突 → 回滚 →
 		// 启动永久失败）。去重行数不参与任何分支（明确丢弃 result，
 		// 不用 RowsAffected），只要求语句本身成功。
 		if _, err := tx.Exec(lbRulesDedupeSQL); err != nil {
 			return fmt.Errorf("dedupe lb_rules before primary key rebuild: %w", err)
+		}
+		// 改挂 + 去重之后计数，才等于拷贝阶段真正丢弃的行（历史孤儿）；
+		// 计数失败整体回滚，不带着未知丢弃量提交。
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM upstreams u
+			LEFT JOIN lb_rules r ON u.rule_id=r.id WHERE r.id IS NULL`).Scan(&orphanUpstreams); err != nil {
+			return fmt.Errorf("failed to count orphan upstreams before lb_rules primary key migration: %w", err)
 		}
 		// Create new lb_rules table with caddy_id as primary key
 		_, err := tx.Exec(`
@@ -4756,7 +4955,7 @@ origin_domain TEXT NOT NULL DEFAULT '',
 	if len(duplicateCaddyIDs) > 0 {
 		// 去重删行必须留痕：这些规则行连同其证书材料/阶段页引用一并消失，
 		// 「规则为何不见了」只能在操作审计里追溯。
-		detail := fmt.Sprintf("lb_rules 主键迁移去重：以下 caddy_id 存在重复行，已保留最近更新者并删除其余行 — %s", strings.Join(duplicateCaddyIDs, "、"))
+		detail := fmt.Sprintf("lb_rules 主键迁移去重：以下 caddy_id 存在重复行，已保留最近更新者并删除其余行（被删行的上游已合并到保留行） — %s", strings.Join(duplicateCaddyIDs, "、"))
 		log.Print("WARN: " + detail)
 		recordSystemAudit("启动迁移", "负载规则", detail)
 	}
@@ -5128,8 +5327,11 @@ func normalizeRuleTimestampsMigration() error {
 // 探测（tcpDeadFieldsProbeSQL）与复位（TCPRuleDeadFieldsResetSQL）由它拼出，
 // 不再有两份手写字面量靠注释「改一侧必改另一侧」维系——只改一侧会变成
 // 「有脏数据但探测看不到 → 永远不清」或反之，且日志全绿。
-// 可空的五个 HTTP 专属列用 COALESCE(col,-1)<>0：裸 =1 / <>0 在三值逻辑下
-// 对带外 NULL 行恒为 NULL，会同时逃过探测与复位（-1 让 NULL 保持“非规范值”）。
+// 可空的布尔列（enable_compress/request_body_max_size_mb/
+// upstream_keepalive_timeout/server_tokens_hidden/dynamic_dns/enable_tls/
+// tls_http_redirect）用 COALESCE(col,-1)<>0，可空 TEXT 列用 COALESCE(col,”)：
+// 裸 =1 / <>0 在三值逻辑下对带外 NULL 行恒为 NULL，会同时逃过探测与复位
+// （-1 让 NULL 保持“非规范值”，归一后恒为零值形态）。
 const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>'' OR COALESCE(health_check_host,'')<>'' OR COALESCE(domain,'')<>''
 		OR COALESCE(enable_compress,-1)<>0 OR COALESCE(compress_types,'')<>''
@@ -5138,7 +5340,7 @@ const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		OR custom_routes_enabled=1 OR COALESCE(dynamic_dns,-1)<>0
 		OR COALESCE(strategy,'') IN ('cookie','')
 		OR COALESCE(dns_family,'')<>'ipv4'
-		OR enable_tls=1 OR COALESCE(tls_source,'')<>'manual' OR tls_http_redirect=1
+		OR COALESCE(enable_tls,-1)<>0 OR COALESCE(tls_source,'')<>'manual' OR COALESCE(tls_http_redirect,-1)<>0
 		OR COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''
 		OR COALESCE(block_page_stage1_id,0)<>0 OR COALESCE(block_page_stage1_status,0)<>0
 		OR COALESCE(block_page_stage3_id,0)<>0 OR COALESCE(block_page_stage3_status,0)<>0

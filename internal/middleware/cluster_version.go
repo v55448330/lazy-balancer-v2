@@ -57,9 +57,10 @@ func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 // 随代码刷新——升级后 WHEN/OF 子句变更必须生效），重装失败再回退只读探测。
 //
 // 重装失败的可恢复形态是「就绪门刚装好、本次重装撞上后台写事务的写锁」：
-// 触发器齐备，语义与就绪门装的那批一致，不应把一次瞬时忙升级为进程内永久
-// 500（所有分类写与主端登录 fail-closed 到重启）。探测本身读 sqlite_master，
-// 不取写锁、不阻塞写者。
+// 触发器齐备**且定义与安装器一致**（探测比对 sqlite_master 里的定义文本，
+// 不只是名字——同名陈旧定义不得被当作就绪），语义与就绪门装的那批一致，
+// 不应把一次瞬时忙升级为进程内永久 500（所有分类写与主端登录 fail-closed
+// 到重启）。探测本身读 sqlite_master，不取写锁、不阻塞写者。
 func ensureClusterVersionTriggers(database *sql.DB) error {
 	installErr := InstallClusterVersionTriggers(database)
 	if installErr == nil {
@@ -73,34 +74,54 @@ func ensureClusterVersionTriggers(database *sql.DB) error {
 	return installErr
 }
 
-// clusterVersionTriggersPresent 只读探测触发器清单是否齐备：期望名集合由
-// clusterSyncedTables × {INSERT,UPDATE,DELETE} + global_config UPDATE 单源
-// 派生（与安装器同一份数据，避免两份字面量漂移）。
+// clusterVersionTriggersPresent 只读探测触发器是否齐备**且定义与安装器一致**：
+// 名与定义文本都由 clusterVersionTriggerStatements 单源派生。
+//
+// 只比名字不够：同名但 WHEN/OF 子句陈旧（库由旧版本安装、升级后语义未生效）的
+// 触发器会被判为「已就绪」，回退路径据此跳过 fail-closed，同步正确性问题被
+// 静默保留。生产启动门会无条件重装（失败即拒绝启动），所以本探测只服务于
+// 「重装撞上后台写锁」的回退判据；定义漂移仅在「旧版本装的定义 + 本次重装
+// 失败」这一窄窗口可达——属加固口径，不是活跃缺陷。
 func clusterVersionTriggersPresent(database *sql.DB) (bool, error) {
-	names := expectedClusterVersionTriggerNames()
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
-	args := make([]any, 0, len(names))
-	for _, name := range names {
-		args = append(args, name)
+	expected := clusterVersionTriggerStatements()
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(expected)), ",")
+	args := make([]any, 0, len(expected))
+	for _, trigger := range expected {
+		args = append(args, trigger.name)
 	}
-	var count int
-	if err := database.QueryRow(`SELECT COUNT(DISTINCT name) FROM sqlite_master
-		WHERE type='trigger' AND name IN (`+placeholders+`)`, args...).Scan(&count); err != nil {
+	rows, err := database.Query(`SELECT name, COALESCE(sql,'') FROM sqlite_master
+		WHERE type='trigger' AND name IN (`+placeholders+`)`, args...)
+	if err != nil {
 		return false, err
 	}
-	return count == len(names), nil
-}
-
-// expectedClusterVersionTriggerNames 安装器应建的全部触发器名。
-func expectedClusterVersionTriggerNames() []string {
-	names := make([]string, 0, len(clusterSyncedTables)*3+1)
-	for _, table := range clusterSyncedTables {
-		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
-			names = append(names, fmt.Sprintf("cluster_version_%s_%s", table.name, strings.ToLower(operation)))
+	defer rows.Close()
+	installed := make(map[string]string, len(expected))
+	for rows.Next() {
+		var name, definition string
+		if err := rows.Scan(&name, &definition); err != nil {
+			return false, err
+		}
+		installed[name] = definition
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, trigger := range expected {
+		// 缺失的名字在 map 里取到空串，与归一后的非空定义天然不等——缺项与
+		// 定义漂移在同一条比较里收敛。
+		if normalizeTriggerDefinition(installed[trigger.name]) != normalizeTriggerDefinition(trigger.createSQL) {
+			return false, nil
 		}
 	}
-	names = append(names, "cluster_version_global_config_update")
-	return names
+	return true, nil
+}
+
+// normalizeTriggerDefinition 归一化触发器定义文本用于等值比较：大小写与空白
+// 形态（缩进/换行/连续空格）都不构成 SQL 语义差异，而 sqlite_master.sql 原样
+// 保存建库时的语句文本——模板缩进或历史版本安装的格式不得被误判为定义漂移。
+// 列名/字面量的真实差异（真正影响 bump 语义的部分）保留在比较结果里。
+func normalizeTriggerDefinition(definition string) string {
+	return strings.Join(strings.Fields(strings.ToLower(definition)), " ")
 }
 
 // globalConfigSyncedColumns 是 global_config UPDATE 触发器的 OF 列清单单源
@@ -355,16 +376,48 @@ func InstallClusterVersionTriggers(database *sql.DB) error {
 			_ = tx.Rollback()
 		}
 	}()
-	// 逐表逐语句安装触发器（清单=包级单源，对账测试共用）。
+	// 全部 DDL 由单源构造器生成（与就绪探测共用定义文本）。
+	// 遗留触发器 cluster_version_cert_jobs_status_update 的语义已并入
+	// cert_jobs UPDATE 触发器，这里只需一次性清理残留。
+	if _, err := tx.Exec("DROP TRIGGER IF EXISTS cluster_version_cert_jobs_status_update"); err != nil {
+		return fmt.Errorf("replace cluster version trigger for cert_jobs status UPDATE: %w", err)
+	}
+	for _, trigger := range clusterVersionTriggerStatements() {
+		if _, err := tx.Exec(trigger.dropSQL); err != nil {
+			return fmt.Errorf("replace cluster version trigger %s: %w", trigger.name, err)
+		}
+		if _, err := tx.Exec(trigger.createSQL); err != nil {
+			return fmt.Errorf("install cluster version trigger %s: %w", trigger.name, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("install cluster version triggers: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// clusterVersionTrigger 是一条集群版本触发器的 DDL：安装器先 DROP 再 CREATE
+// （保证定义随代码刷新），就绪探测用同一份 createSQL 比对库内定义。
+type clusterVersionTrigger struct {
+	name      string
+	dropSQL   string
+	createSQL string
+}
+
+// clusterVersionTriggerStatements 是全部触发器 DDL 的单源。清单由
+// clusterSyncedTables × {INSERT,UPDATE,DELETE} + global_config UPDATE 展开，
+// 安装器逐条执行、就绪探测逐条比对定义——定义文本若各自维护，升级后同名的
+// 旧定义会被判为就绪（探测只认名字时即如此）。
+func clusterVersionTriggerStatements() []clusterVersionTrigger {
+	triggers := make([]clusterVersionTrigger, 0, len(clusterSyncedTables)*3+1)
+	// 逐表逐语句生成（清单=包级单源，对账测试共用）。
 	tables := clusterSyncedTables
 	const newCertificateMember = "NEW.status<>'disabled' AND COALESCE(NEW.cert_pem,'')<>'' AND COALESCE(NEW.key_pem,'')<>'' AND datetime(NEW.expires_at)>datetime('now')"
 	const oldCertificateMember = "OLD.status<>'disabled' AND COALESCE(OLD.cert_pem,'')<>'' AND COALESCE(OLD.key_pem,'')<>'' AND datetime(OLD.expires_at)>datetime('now')"
 	for _, table := range tables {
 		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
 			triggerName := fmt.Sprintf("cluster_version_%s_%s", table.name, strings.ToLower(operation))
-			if _, err := tx.Exec("DROP TRIGGER IF EXISTS " + triggerName); err != nil {
-				return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
-			}
 			operationClause := operation
 			// NULL 兜底与写闸（readonly.go 的 COALESCE(is_master,1)）对齐——
 			// NULL 视为主节点。db.go 一次性回填生效后此处为纵深防御：回填前
@@ -452,22 +505,21 @@ func InstallClusterVersionTriggers(database *sql.DB) error {
 					whenClause += " AND " + oldCertificateMember
 				}
 			}
-			statement := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS cluster_version_%s_%s
+			// 定义文本即探测比对口径：SQLite 在 sqlite_master 中保存建库语句时
+			// 会去掉 IF NOT EXISTS，因此这里直接生成规范形态（DROP 已在前，
+			// IF NOT EXISTS 本就多余）。
+			statement := fmt.Sprintf(`CREATE TRIGGER cluster_version_%s_%s
 				AFTER %s ON %s
 				WHEN %s
 				BEGIN
 					UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
 				END`, table.name, strings.ToLower(operation), operationClause, table.name, whenClause)
-			if _, err := tx.Exec(statement); err != nil {
-				return fmt.Errorf("install cluster version trigger for %s %s: %w", operation, table.name, err)
-			}
+			triggers = append(triggers, clusterVersionTrigger{
+				name:      triggerName,
+				dropSQL:   "DROP TRIGGER IF EXISTS " + triggerName,
+				createSQL: statement,
+			})
 		}
-	}
-	if _, err := tx.Exec("DROP TRIGGER IF EXISTS cluster_version_cert_jobs_status_update"); err != nil {
-		return fmt.Errorf("replace cluster version trigger for cert_jobs status UPDATE: %w", err)
-	}
-	if _, err := tx.Exec("DROP TRIGGER IF EXISTS cluster_version_global_config_update"); err != nil {
-		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)
 	}
 	// COALESCE(NEW.is_master,1) 同上——与写闸 NULL 语义一致。
 	// auto_backup_* 六设置列入 OF(主端保存即下发);auto_backup_last_run
@@ -483,20 +535,18 @@ func InstallClusterVersionTriggers(database *sql.DB) error {
 	// dry_run 六列入 OF(同先例)——主端 PUT /security/autoban 保存即下发;
 	// 不在 OF 内则稳态变更经 304 门滞留主节点,从端恒默认值、升主后按陈旧配置
 	// 静默运行(名单传播而配置不传播)。
-	if _, err := tx.Exec(fmt.Sprintf(`CREATE TRIGGER cluster_version_global_config_update
+	triggers = append(triggers, clusterVersionTrigger{
+		name:    "cluster_version_global_config_update",
+		dropSQL: "DROP TRIGGER IF EXISTS cluster_version_global_config_update",
+		createSQL: fmt.Sprintf(`CREATE TRIGGER cluster_version_global_config_update
 		AFTER UPDATE OF %s
 		ON global_config
 		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,1)=1
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
-		END`, strings.Join(globalConfigSyncedColumns, ","))); err != nil {
-		return fmt.Errorf("install cluster version trigger for global_config UPDATE: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("install cluster version triggers: commit: %w", err)
-	}
-	committed = true
-	return nil
+		END`, strings.Join(globalConfigSyncedColumns, ",")),
+	})
+	return triggers
 }
 
 // usersTableWritePostPaths 是「写 users 表同步列」的 POST 路由清单——

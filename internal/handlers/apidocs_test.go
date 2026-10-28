@@ -2585,3 +2585,46 @@ func TestAPIDocRoutes_examplesAreValidJSONWhenJSONShaped(t *testing.T) {
 		}
 	}
 }
+
+// 安全事件计数端点的 ip 在 handler 侧缺参即 400（GetIPEventCount），
+// OpenAPI 却把全部 query 参数一律写成 required=false——按规格生成的客户端
+// 会把「缺 ip」当合法调用并在运行期吃 400。必填标记必须与 handler 的拒参
+// 行为一致，且只标真正必填的那一项。
+func TestBuildOpenAPIYAML_marksSecurityEventCountIPRequired(t *testing.T) {
+	var document struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name     string `yaml:"name"`
+				In       string `yaml:"in"`
+				Required bool   `yaml:"required"`
+			} `yaml:"parameters"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	required := func(path string) map[string]bool {
+		got := map[string]bool{}
+		for _, parameter := range document.Paths[path]["get"].Parameters {
+			if parameter.In == "query" {
+				got[parameter.Name] = parameter.Required
+			}
+		}
+		return got
+	}
+	count := required("/security/events/count")
+	if !count["ip"] {
+		t.Fatalf("/security/events/count 的 ip 必须标 required=true（handler 缺参 400），实际 %v", count)
+	}
+	if count["days"] {
+		t.Fatalf("/security/events/count 的 days 必须保持可选，实际 %v", count)
+	}
+	// 回归形状：其余端点的 query 参数仍全部可选（不得连带放大）。
+	for _, path := range []string{"/audit-logs", "/security/events", "/metrics/history"} {
+		for name, isRequired := range required(path) {
+			if isRequired {
+				t.Fatalf("%s 的 query 参数 %q 被标为必填（该端点缺参不报错）", path, name)
+			}
+		}
+	}
+}

@@ -262,3 +262,37 @@ func TestUpdateRule_rejects_port_80_tls_redirect_self_loop(t *testing.T) {
 		t.Fatalf("update to port-80 TLS redirect status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 }
+
+// HTTP 规则把 HTTPS 打开在 80 端口（未开转 HTTPS 跳转）时，Caddy 对配置的
+// HTTP 端口永不启用 TLS：tls_connection_policies 与证书 load_files 成为静默
+// 空转，规则以明文在 :80 转发，而面板仍显示 HTTPS 徽标、ACME 证书照常续期。
+// 保存侧必须显式拒绝，不得静默降级。
+func TestCreateRule_rejects_port_80_tls_without_redirect(t *testing.T) {
+	// Given：80 端口 + HTTPS，未开跳转（同族自环门的残留形态）
+	certPEM, keyPEM, err := generateTestCert("tls-plain-80.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	body := fmt.Sprintf(`{
+		"name":"tls-plain-80","protocol":"http","domain":"tls-plain-80.example.test","listen_port":80,
+		"enable_tls":true,"tls_source":"manual","tls_cert":%q,"tls_key":%q,
+		"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
+		"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
+	}`, certPEM, keyPEM)
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "80 端口是 HTTP 端口") {
+		t.Fatalf("create port-80 TLS without redirect status=%d body=%s, want 400 指名端口事实", response.Code, response.Body.String())
+	}
+}

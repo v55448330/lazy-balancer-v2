@@ -452,10 +452,11 @@ var autobanCapWarned bool
 var autobanFeedDegradedWarned bool
 
 // AutobanFeedHealth 报告自动封禁数据源（安全事件采集 daemon）的健康状态
-// 计数器唯一喂入点是摄取批次提交后的
-// autobanObserveBatch：喂入源停摆时计数恒 0，而 RunAutobanCycle 只校验自身
-// 角色/启用/配置，仍以 success 记轮并输出「计数 0 IP」——自动封禁静默失效且
-// 任务监控显示运行中。
+// 计数器唯一喂入点是摄取批次提交后的 autobanObserveBatch——该提交钩子由
+// 「IPC 主路径」与「尾读/补采」两条通道共用。任务调度只拥有后者：任务停止
+// 只暂停 spool 补采与审计日志轮转，实时 IPC 入库仍直接提交并继续喂入计数。
+// 因此降级原因不得由任务态推断「计数停止增长」（把补采停止说成采集停止会
+// 让用户按错误前提做容量/排障决策）。
 //
 // 判据（持久停摆才降级）：LoopOn=false 是用户显式停止与「异常自愈预算用尽后
 // 停环」的共同终态（引擎 restartExhausted 同时置 LoopOn=false）；瞬时态
@@ -465,24 +466,24 @@ var autobanFeedDegradedWarned bool
 // 引擎未装配/任务未注册=不判定（测试与装配早期，避免误报）。
 //
 // 调度态之外叠加摄取健康位：摄取循环对 tick 失败只记账不退出（LoopOn 恒
-// true），metrics 库写失败/磁盘满等形态下事件停更、计数恒 0，而调度态
-// 一切正常——单看调度态是「健康位分裂」型静默失效。摄取健康快照已含
-// 写侧降级折算；stalled 停等瞬态不入失败计数，不会误报。
+// true），metrics 库写失败/磁盘满等形态下补采停摆、待补采事件进不了库（也就
+// 还没进计数器），而调度态一切正常——单看调度态是「健康位分裂」型静默失效。
+// 摄取健康快照已含写侧降级折算；stalled 停等瞬态不入失败计数，不会误报。
 func AutobanFeedHealth() (degraded bool, reason string) {
 	task := securityEventsIngestionTaskState()
 	switch {
 	case task.State == "unknown":
 		return false, ""
 	case task.RestartExhausted:
-		return true, "安全事件采集任务异常自愈预算已用尽并停止调度，自动封禁计数不再更新"
+		return true, "安全事件补采任务异常自愈预算已用尽并停止调度：spool 补采与审计日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）"
 	case task.State == "stopped":
-		return true, "安全事件采集任务调度已停止，自动封禁计数不再更新"
+		return true, "安全事件补采任务调度已停止：spool 补采与审计日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）"
 	}
 	if st := SecurityEventsIngestionHealthSnapshot(); st.Observed && !st.Healthy {
 		if st.LastError != "" {
-			return true, "安全事件采集连续失败：自动封禁计数不再更新（" + st.LastError + "）"
+			return true, "安全事件补采/审计日志轮转异常：待补采事件可能未入库，自动封禁计数可能偏少（实时 IPC 入库仍在运行；" + st.LastError + "）"
 		}
-		return true, "安全事件采集处于非健康状态（任务停止或写侧持续失败），自动封禁计数不再更新"
+		return true, "安全事件补采/审计日志轮转处于非健康状态（补采任务停止或写侧持续失败）：自动封禁计数可能偏少（实时 IPC 入库仍在运行）"
 	}
 	return false, ""
 }
@@ -499,7 +500,7 @@ func autobanReportFeedHealth(degraded bool, reason string) {
 	case degraded && !prev:
 		TaskLogfWarn(AutobanTaskID, "feed", "数据源异常：%s", reason)
 	case !degraded && prev:
-		TaskLogf(AutobanTaskID, "feed", "数据源已恢复：安全事件采集任务在调度中，自动封禁计数恢复更新")
+		TaskLogf(AutobanTaskID, "feed", "数据源已恢复：安全事件补采任务在调度中，spool 补采与审计日志轮转已恢复")
 	}
 }
 

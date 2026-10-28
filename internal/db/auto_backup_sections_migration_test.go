@@ -1,6 +1,8 @@
 package db
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,5 +86,63 @@ func TestMigrateAutoBackupNodeTopologySection_appendsOnlyOldDefaultOnce(t *testi
 	}
 	if entries = drainSystemAuditBuffer(); len(entries) != 0 {
 		t.Fatalf("malformed-scope migration audits=%+v, want none", entries)
+	}
+}
+
+// 迁移写入的默认范围必须按值等于 DefaultAutoBackupSections（单源）：迁移若
+// 另抄一份四分类字面量，改常量后带外 NULL 行会下发与 fresh DDL/读侧不一致的
+// 范围而无人察觉。空数组则是读侧显式错误形态（未设置=NULL/空串），迁移不得
+// 把它「修」成全量默认——那会掩盖损坏值。
+func TestMigrateAutoBackupNodeTopologySection_usesDefaultConstantAndKeepsEmptyArray(t *testing.T) {
+	dir := t.TempDir()
+	preserveDatabaseHandles(t)
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	drainSystemAuditBuffer()
+	t.Cleanup(func() { drainSystemAuditBuffer() })
+
+	var want []string
+	if err := json.Unmarshal([]byte(DefaultAutoBackupSections), &want); err != nil {
+		t.Fatalf("parse DefaultAutoBackupSections: %v", err)
+	}
+	readStored := func() (string, string) {
+		t.Helper()
+		var stored, version string
+		if err := DB.QueryRow(`SELECT COALESCE(auto_backup_sections,''), auto_backup_sections_version FROM global_config WHERE id=1`).
+			Scan(&stored, &version); err != nil {
+			t.Fatalf("read auto backup sections: %v", err)
+		}
+		return stored, version
+	}
+
+	// 未设置（NULL）→ 写入默认范围，且按值与单源常量一致。
+	if _, err := DB.Exec(`UPDATE global_config SET auto_backup_sections=NULL, auto_backup_sections_version=0 WHERE id=1`); err != nil {
+		t.Fatalf("seed unset sections: %v", err)
+	}
+	if err := migrateAutoBackupNodeTopologySection(); err != nil {
+		t.Fatalf("migrate unset sections: %v", err)
+	}
+	stored, version := readStored()
+	var got []string
+	if err := json.Unmarshal([]byte(stored), &got); err != nil {
+		t.Fatalf("parse migrated sections %q: %v", stored, err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("迁移写入的默认范围=%v, want DefaultAutoBackupSections=%v（必须与单源常量同值）", got, want)
+	}
+	if version != "1" {
+		t.Fatalf("sections version=%s, want 1", version)
+	}
+
+	// 空数组：保留原值（读侧 fail-visible 500），只推进一次性 marker。
+	if _, err := DB.Exec(`UPDATE global_config SET auto_backup_sections='[]', auto_backup_sections_version=0 WHERE id=1`); err != nil {
+		t.Fatalf("seed empty array sections: %v", err)
+	}
+	if err := migrateAutoBackupNodeTopologySection(); err != nil {
+		t.Fatalf("migrate empty array sections: %v", err)
+	}
+	if stored, version = readStored(); stored != "[]" || version != "1" {
+		t.Fatalf("空数组迁移后 sections=%q version=%s, want 原样保留 '[]' 且 marker=1（不得伪装成全量默认）", stored, version)
 	}
 }

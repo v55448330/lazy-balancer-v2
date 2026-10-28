@@ -982,13 +982,10 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 		m.mu.Unlock()
 		return jobID, false, nil
 	}
-	if !m.active {
-		m.mu.Unlock()
-		return jobID, false, nil
-	}
-	if len(m.blockedRules[ruleID]) != 0 {
-		// 规则删除屏障期按冲突语义处理：返回 changed=false 让 handler 走 !changed
-		// 分支回 409，而不是把暂时性屏障当成 500 服务器错误。
+	if !m.enqueueAdmissibleLocked(ruleID) {
+		// 暂停（配置导入/停止）与规则删除屏障期间按冲突语义处理：返回
+		// changed=false 让 handler 走 !changed 分支回 409，而不是把暂时性
+		// 状态当成 500 服务器错误。
 		m.mu.Unlock()
 		return jobID, false, nil
 	}
@@ -1005,9 +1002,24 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 		return jobID, true, err
 	}
 	m.mu.Lock()
+	if !m.enqueueAdmissibleLocked(ruleID) {
+		// 锁外窗口内已暂停（配置导入/停止的 PauseAndDrain 已完成排空）或规则
+		// 已被 BlockJobsForRule 建屏障：收尾不得再新建队列/pending 项——新队列
+		// 及其 loop 不在排空快照内，会让「已排空」的判定与静默边界失效。
+		// 已迁移的 queued 行留给 Resume/滞留扫描接管；返回 changed=false 让
+		// 调用方按当前 inactive/受阻状态归因（409），不当作服务器错误。
+		m.mu.Unlock()
+		return jobID, false, nil
+	}
 	m.enqueueResolvedLocked(provider, jobID, ruleID, domains)
 	m.mu.Unlock()
 	return jobID, true, nil
+}
+
+// enqueueAdmissibleLocked 是锁外解析后的收尾准入复核（调用方持 m.mu）：判据
+// 与首段准入检查同一实现（active + 规则屏障），避免两处判据漂移。
+func (m *CAQueueManager) enqueueAdmissibleLocked(ruleID string) bool {
+	return m.active && len(m.blockedRules[ruleID]) == 0
 }
 
 // reserveJobLocked 登记在途预留（调用方持 m.mu）。
@@ -1174,13 +1186,9 @@ func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, 
 	// provider 解析与失败归因在锁外完成（补偿退避重试与删除/禁用规则的快路径
 	// 并发，持锁做 provider IO 会拖慢后者）。
 	m.mu.Lock()
-	if !m.active {
+	if err := m.compensationAdmissionLocked(ruleID); err != nil {
 		m.mu.Unlock()
-		return errCAQueueInactive
-	}
-	if len(m.blockedRules[ruleID]) == 0 {
-		m.mu.Unlock()
-		return fmt.Errorf("certificate compensation lease missing for rule %s", ruleID)
+		return err
 	}
 	m.reserveJobLocked(jobID)
 	m.mu.Unlock()
@@ -1191,8 +1199,27 @@ func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, 
 		return resolveErr
 	}
 	m.mu.Lock()
+	if err := m.compensationAdmissionLocked(ruleID); err != nil {
+		// 锁外窗口内被暂停/租约已释放（导入排空、停止或补偿已完成）：收尾
+		// 不得再建队列——新队列不在排空快照内，会让导入的「已排空」判定失效。
+		// 暂停/租约缺失都不上抛重试（补偿退避循环会把租约释放当成瞬时故障）。
+		m.mu.Unlock()
+		return err
+	}
 	m.enqueueResolvedLocked(provider, jobID, ruleID, domains)
 	m.mu.Unlock()
+	return nil
+}
+
+// compensationAdmissionLocked 是补偿重排队的准入判据（调用方持 m.mu）：首段
+// 检查与锁外解析后的收尾复核共用同一实现，避免两处判据漂移。
+func (m *CAQueueManager) compensationAdmissionLocked(ruleID string) error {
+	if !m.active {
+		return errCAQueueInactive
+	}
+	if len(m.blockedRules[ruleID]) == 0 {
+		return fmt.Errorf("certificate compensation lease missing for rule %s", ruleID)
+	}
 	return nil
 }
 

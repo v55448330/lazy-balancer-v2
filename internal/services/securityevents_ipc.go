@@ -367,12 +367,6 @@ func securityEventsSpoolCountEntriesCached(path string, info os.FileInfo) (int64
 	return entries, nil
 }
 
-// securityEventsSpoolCountEntries 统计文件中非空行数（=待补采审计条目数）。
-func securityEventsSpoolCountEntries(path string) (int64, error) {
-	entries, _, err := securityEventsSpoolCountEntriesFrom(path, 0, false)
-	return entries, err
-}
-
 // securityEventsSpoolCountEntriesFrom 流式读取指定偏移后的新增内容；末行无
 // 换行同样计入。调用方负责把返回的 lineHasContent 用于后续追加重叠判定。
 func securityEventsSpoolCountEntriesFrom(path string, offset int64, lineHasContent bool) (int64, bool, error) {
@@ -691,12 +685,7 @@ func ResetSecurityEventsSpoolStateForTest() {
 	securityEventsSpoolState.mu.Unlock()
 	securityEventsBatchIngestState.mu.Lock()
 	securityEventsBatchIngestState.dedupe = nil
-	securityEventsSharedDedupe.mu.Lock()
-	securityEventsSharedDedupe.entries = nil
-	securityEventsSharedDedupe.maxSec = 0
-	securityEventsSharedDedupe.sinceSweep = 0
-	securityEventsSharedDedupe.capWarned = false
-	securityEventsSharedDedupe.mu.Unlock()
+	securityEventsSharedDedupe.reset()
 	securityEventsBatchIngestState.mu.Unlock()
 	resetSecurityEventsSpoolEntryCountCacheForTest()
 }

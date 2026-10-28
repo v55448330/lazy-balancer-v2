@@ -215,7 +215,7 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
   const allowedRaw = new Set([
     // 全体断言为模板文案/文档注释钉（用例名标注「文档钉」）；代码存在性断言
     // 一律走 code()/repoCode()，注释掉实现必须能红。
-    'feP3Wiring.spec.ts',
+    'frontendWiringContracts.spec.ts',
     'infraWiring.spec.ts',
     'securityStagesPure.spec.ts',
     // 面板边界 marker 是 HTML 注释：先在 raw 上切片、再剥注释做代码断言。
@@ -223,14 +223,20 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // 注释文案钉（断言对象是过时注释本身，剥注释后无法判定）。
     'viewStateContracts.spec.ts',
     // 注释文案钉：断言对象是过时注释本身，剥注释后无法判定（用例名标注文档钉）。
-    'feCoreP3.spec.ts',
-    'feSettingsP3.spec.ts',
+    'feCoreContracts.spec.ts',
+    'settingsWiringContracts.spec.ts',
     // 除代码存在性钉（走 code()）外，含一条注释契约钉：planTrustRemoval 的
     // listEntries 必须显式声明「条目必须新鲜、拉取失败不得出结论」——断言对象
     // 是注释文字本身。
     'trustRemovalFreshness.spec.ts',
     // 省界文件头注释与真实资源计数一致性钉。
     'admin1Provinces.spec.ts',
+    // 覆盖率门槛说明（scripts/test-all.sh 的注释）与 package.json 数值的
+    // 双向对账：断言对象是说明文字，剥注释后无法判定漂移。
+    'coverageThresholdSource.spec.ts',
+    // 模板类型门守卫：断言对象是模板里的诊断屏蔽注释（vue-ignore / ts-expect-error
+    // 指令），剥注释后这些屏蔽手段不可见（用例名标注「不得…绕过」）。
+    'templateTypeGate.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

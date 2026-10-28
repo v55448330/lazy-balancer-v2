@@ -125,7 +125,7 @@ test('零启用上游的启用态规则在健康列显示「未发布」信息�
   // 用户无法区分「未生效」与「已关闭」。徽标与健康 popover 互斥（v-else-if），
   // 判据复用既有 getEnabledUpstreams（启用≠false，与后端 Enabled 同口径）。
   const healthColumn = section(page, '<el-table-column label="健康"', '<el-table-column label="更新者"')
-  assert.match(healthColumn, /v-if="row\.enabled && Array\.isArray\(row\.upstreams\) && getEnabledUpstreams\(row\)\.length === 0"/)
+  assert.match(healthColumn, /v-if="row\.enabled && Array\.isArray\(row\.upstreams\) && getEnabledUpstreams\(row(?: as [A-Za-z]+)?\)\.length === 0"/)
   assert.match(healthColumn, /未发布/)
   assert.match(healthColumn, /<el-popover v-else-if="row\.enabled && healthStatus\[row\.caddy_id\]"/, '徽标与健康 popover 必须互斥')
 })

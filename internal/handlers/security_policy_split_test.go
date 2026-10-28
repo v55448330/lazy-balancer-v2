@@ -606,3 +606,132 @@ func TestSplitSecurityPolicy_normalizesEmptyACLMode(t *testing.T) {
 		t.Fatalf("stage1 子策略 ip_acl_mode=%q, want 归一后的 deny", mode)
 	}
 }
+
+// 拆分必须可重入：首轮因绑定上限跳过部分规则时原策略被保留（明确的恢复
+// 契约），管理员腾出位置后再次拆分应复用首轮创建的同名同阶段子策略，而不是
+// 再复制一整套——否则策略额度被重复行挤占、列表/绑定出现同名歧义，迁移状态
+// 永不收敛。
+func TestSplitSecurityPolicy_retryReusesExistingChildren(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	mixedID := seedSplitFixture(t)
+	// lb_s1 再绑 7 条其他策略（含原混合共 8 条）→ 首轮 7+3=10 超上限被跳过
+	for i := range 7 {
+		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, "retry-other-"+strconv.Itoa(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		oid, _ := res.LastInsertId()
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_s1',?)`, oid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := postSplit(t, router, mixedID)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first split status=%d body=%s, want 200", first.Code, first.Body.String())
+	}
+	var firstPayload splitPayload
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
+		t.Fatal(err)
+	}
+	if firstPayload.Data.Remapped != 1 || len(firstPayload.Data.Skipped) != 1 || firstPayload.Data.DeletedOriginal {
+		t.Fatalf("first split=%+v, want remapped=1 skipped=1 deleted=false", firstPayload.Data)
+	}
+	if len(firstPayload.Data.Created) != 3 {
+		t.Fatalf("first split created=%d, want 3", len(firstPayload.Data.Created))
+	}
+	firstChildIDs := make(map[string]int, 3)
+	for _, child := range firstPayload.Data.Created {
+		firstChildIDs[child.PolicyType] = child.ID
+	}
+	var policiesAfterFirst int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies`).Scan(&policiesAfterFirst); err != nil {
+		t.Fatal(err)
+	}
+
+	// 管理员给受阻规则解绑腾出位置（只解绑，不删除策略行）
+	if _, err := db.DB.Exec(`DELETE FROM security_policy_bindings WHERE rule_caddy_id='lb_s1' AND policy_id != ?`, mixedID); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：同一混合策略再次拆分
+	second := postSplit(t, router, mixedID)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second split status=%d body=%s, want 200", second.Code, second.Body.String())
+	}
+	var secondPayload splitPayload
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPayload); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then：不新增策略行，子策略 ID 与首轮完全一致
+	var policiesAfterSecond int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies`).Scan(&policiesAfterSecond); err != nil {
+		t.Fatal(err)
+	}
+	if policiesAfterSecond != policiesAfterFirst-1 {
+		t.Fatalf("策略总数 %d → %d, want 仅删除原混合策略（-1）", policiesAfterFirst, policiesAfterSecond)
+	}
+	if len(secondPayload.Data.Created) != 3 {
+		t.Fatalf("second split created=%d, want 3（复用首轮子策略）", len(secondPayload.Data.Created))
+	}
+	for _, child := range secondPayload.Data.Created {
+		if firstChildIDs[child.PolicyType] != child.ID {
+			t.Fatalf("second split %s child id=%d, want 首轮 %d（不得新建）", child.PolicyType, child.ID, firstChildIDs[child.PolicyType])
+		}
+	}
+	if len(secondPayload.Data.Skipped) != 0 || !secondPayload.Data.DeletedOriginal {
+		t.Fatalf("second split=%+v, want skipped=0 deleted=true", secondPayload.Data)
+	}
+	// 重映射完成后该规则只引用三套单职子策略
+	var bound int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_s1'`).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound != 3 {
+		t.Fatalf("lb_s1 bindings=%d, want 3", bound)
+	}
+	var staleOriginal int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id=?`, mixedID).Scan(&staleOriginal); err != nil {
+		t.Fatal(err)
+	}
+	if staleOriginal != 0 {
+		t.Fatalf("原混合策略残留绑定=%d, want 0", staleOriginal)
+	}
+}
+
+// 同名同阶段但配置不同 → 显式冲突（409），既不新建子策略也不静默复用他人的
+// 同名策略，原策略与其绑定原样保留。
+func TestSplitSecurityPolicy_retryConflictsOnSameNameDifferentConfig(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	mixedID := seedSplitFixture(t)
+	// 与首轮会产出的 stage3 子策略同名，但 mode 不同（原策略 blocking）
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES ('legacy-mix（阶段 3）','off','stage3',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	response := postSplit(t, router, mixedID)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409 同名冲突", response.Code, response.Body.String())
+	}
+	if body := response.Body.String(); !strings.Contains(body, "同名") || !strings.Contains(body, "legacy-mix（阶段 3）") {
+		t.Fatalf("body=%s, want 点名同名冲突策略", body)
+	}
+	// 冲突在中止整套拆分的插入之前判定 → 不得留下任何半截子策略
+	var childCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE name LIKE 'legacy-mix（阶段 %'`).Scan(&childCount); err != nil {
+		t.Fatal(err)
+	}
+	if childCount != 1 {
+		t.Fatalf("同名子策略行数=%d, want 1（只有预先存在的那条）", childCount)
+	}
+	var originalBindings int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id=?`, mixedID).Scan(&originalBindings); err != nil {
+		t.Fatal(err)
+	}
+	if originalBindings != 2 {
+		t.Fatalf("原策略绑定=%d, want 2（冲突不得改动绑定）", originalBindings)
+	}
+}

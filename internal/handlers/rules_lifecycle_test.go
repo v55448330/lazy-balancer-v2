@@ -1039,3 +1039,110 @@ func TestUpdateRule_zeroRowUpdateAuditsConflict(t *testing.T) {
 		t.Fatalf("0 行更新阻断审计条数=%d, want 1", blockedAudits)
 	}
 }
+
+// 并发指纹必须覆盖安全策略绑定：绑定写端点只改 security_policy_bindings、
+// 不 bump lb_rules，指纹漏掉该表就会把放锁窗口内的绑定变更误判为「无人并发
+// 修改」，随后 ACME 失败补偿会按请求前快照整体恢复运行配置，撤销他人刚生效
+// 的防护（DB 保留绑定、运行面已回滚的分叉）。绑定-only 变更必须与规则行变更
+// 同权触发既有 409 中止。
+func TestRuleMutationFingerprint_tracksPolicyBindings(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	gin.SetMode(gin.TestMode)
+	seedTCPRuleForZeroMerge(t, "lb_fp_bind", 17053)
+	baseline, err := ruleMutationFingerprint(t.Context(), "lb_fp_bind")
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES ('fp-bind','off','stage3',1)`)
+	if err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	policyID, _ := res.LastInsertId()
+
+	// When：只新增绑定，lb_rules 行不变
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_fp_bind',?)`, policyID); err != nil {
+		t.Fatalf("bind policy: %v", err)
+	}
+	afterBind, err := ruleMutationFingerprint(t.Context(), "lb_fp_bind")
+	if err != nil {
+		t.Fatalf("fingerprint after bind: %v", err)
+	}
+
+	// Then：指纹变化并触发并发中止
+	if afterBind == baseline {
+		t.Fatal("绑定-only 变更必须改变规则指纹（否则补偿会回滚他人的绑定变更）")
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	if !abortIfRuleConcurrentlyModified(c, "lb_fp_bind", baseline) {
+		t.Fatal("绑定-only 变更必须触发并发修改中止")
+	}
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want 409", recorder.Code)
+	}
+
+	// 解绑同样改变指纹，解除后回到基线（无绑定 vs 无绑定）
+	if _, err := db.DB.Exec(`DELETE FROM security_policy_bindings WHERE rule_caddy_id='lb_fp_bind' AND policy_id=?`, policyID); err != nil {
+		t.Fatalf("unbind policy: %v", err)
+	}
+	afterUnbind, err := ruleMutationFingerprint(t.Context(), "lb_fp_bind")
+	if err != nil {
+		t.Fatalf("fingerprint after unbind: %v", err)
+	}
+	if afterUnbind == afterBind {
+		t.Fatal("解绑也必须改变指纹")
+	}
+	if afterUnbind != baseline {
+		t.Fatal("解除全部绑定后指纹应回到基线（绑定行集为空）")
+	}
+}
+
+// 存量上游行的「待归一 NULL 列」判据必须覆盖 origin_domain：读侧用
+// COALESCE(origin_domain,”) 归一，但内容等价且 needsNormalize=false 时零写入，
+// 于是旧可空表/带外写入留下的 NULL 在用户原样保存后仍然存在——导出与集群
+// 快照继续携带 NULL，与 schema 的 NOT NULL DEFAULT ” 终态不一致。
+func TestStoredUpstreamNullColumnsFlagsOriginDomainNull(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	if _, err := db.DB.Exec(`CREATE TABLE upstream_null_probe (
+		weight INTEGER, dynamic_dns INTEGER, enabled INTEGER, protocol TEXT, max_connections INTEGER, origin_domain TEXT)`); err != nil {
+		t.Fatalf("create probe table: %v", err)
+	}
+	query := `SELECT ` + storedUpstreamNullColumnsSQL + ` FROM upstream_null_probe WHERE rowid = ?`
+	insert := func(originDomain any) int64 {
+		t.Helper()
+		result, err := db.DB.Exec(`INSERT INTO upstream_null_probe (weight, dynamic_dns, enabled, protocol, max_connections, origin_domain)
+			VALUES (1, 0, 1, 'http', 0, ?)`, originDomain)
+		if err != nil {
+			t.Fatalf("seed probe row: %v", err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("last insert id: %v", err)
+		}
+		return id
+	}
+	needsNormalize := func(id int64) int {
+		t.Helper()
+		var got int
+		if err := db.DB.QueryRow(query, id).Scan(&got); err != nil {
+			t.Fatalf("probe predicate: %v", err)
+		}
+		return got
+	}
+
+	nullOrigin := insert(nil)
+	if got := needsNormalize(nullOrigin); got != 1 {
+		t.Fatal("origin_domain IS NULL 必须判为待归一（否则原样保存后 NULL 永久保留）")
+	}
+	if got := needsNormalize(insert("")); got != 0 {
+		t.Fatal("全部列非 NULL 的行不得判为待归一（会白白触发同步触发器）")
+	}
+	nullWeight := insert("")
+	if _, err := db.DB.Exec(`UPDATE upstream_null_probe SET weight = NULL WHERE rowid = ?`, nullWeight); err != nil {
+		t.Fatal(err)
+	}
+	if got := needsNormalize(nullWeight); got != 1 {
+		t.Fatal("既有列（weight）判据不得回退")
+	}
+}

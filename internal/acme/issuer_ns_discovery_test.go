@@ -64,9 +64,12 @@ func installFakeDNSExchange(t *testing.T, handler func(m *dns.Msg, network strin
 	originalIPv6 := ipv6EgressAvailable
 	dnsExchange = fake.exchange
 	ipv6EgressAvailable = func() bool { return false }
+	// 失败告警按域名限流：每个用例从干净窗口开始，避免用例间共享抑制状态。
+	resetAuthoritativeNSWarnForTest()
 	t.Cleanup(func() {
 		dnsExchange = originalExchange
 		ipv6EgressAvailable = originalIPv6
+		resetAuthoritativeNSWarnForTest()
 	})
 	return fake
 }
@@ -340,5 +343,61 @@ func TestResolveAuthoritativeNS_logsFailureReason(t *testing.T) {
 	logged := warnings.String()
 	if !strings.Contains(logged, "权威 NS 发现失败") || !strings.Contains(logged, "超时") {
 		t.Fatalf("warnings=%q, want 失败原因留痕", logged)
+	}
+}
+
+// Given：同一域名的权威 NS 发现连续失败（等待循环的每轮重发现 + 任务重试）。
+// When：resolveAuthoritativeNS 短时间内被多次调用。
+// Then：同一 fqdn 在限流窗口内只留一条告警——否则多域名证书单次签发
+// 最坏产生 域名数×(1+重发现次数) 条同源 warn（注释曾声称「每次至多一条」）。
+func TestResolveAuthoritativeNS_throttlesRepeatedFailureWarn(t *testing.T) {
+	// Given
+	installFakeDNSExchange(t, func(m *dns.Msg, network string) *dns.Msg { return nil })
+	var warnings strings.Builder
+	originalLogf := logf
+	logf = func(level, format string, args ...any) {
+		if level == "warn" {
+			warnings.WriteString(fmt.Sprintf(format, args...) + "\n")
+		}
+	}
+	t.Cleanup(func() { logf = originalLogf })
+
+	// When：同一域名 3 次（首轮 + 2 次重发现），另一域名 1 次。
+	for range 3 {
+		if servers := resolveAuthoritativeNS(t.Context(), "_acme-challenge.a.example.com.", nsTestBootstrap); len(servers) != 0 {
+			t.Fatalf("servers=%v, want nil", servers)
+		}
+	}
+	resolveAuthoritativeNS(t.Context(), "_acme-challenge.b.example.com.", nsTestBootstrap)
+
+	// Then：每个域名各一条（同一域名重复失败共享同一条告警）。
+	if got := strings.Count(warnings.String(), "权威 NS 发现失败"); got != 2 {
+		t.Fatalf("warnings=%d 条（%q），want 2（每域名窗口内至多一条）", got, warnings.String())
+	}
+}
+
+// Given：同一域名失败告警已发出，且限流窗口内仍继续失败。
+// When：窗口内再次失败。
+// Then：被抑制的调用不得重置窗口（必须持续抑制到窗口结束，而不是每条都放行）。
+func TestResolveAuthoritativeNS_throttleWindowSuppressesBurst(t *testing.T) {
+	// Given
+	installFakeDNSExchange(t, func(m *dns.Msg, network string) *dns.Msg { return nil })
+	var warns int
+	originalLogf := logf
+	logf = func(level, format string, args ...any) {
+		if level == "warn" {
+			warns++
+		}
+	}
+	t.Cleanup(func() { logf = originalLogf })
+
+	// When
+	for range 20 {
+		resolveAuthoritativeNS(t.Context(), "_acme-challenge.c.example.com.", nsTestBootstrap)
+	}
+
+	// Then
+	if warns != 1 {
+		t.Fatalf("warns=%d, want 1（20 次连续失败共享同一限流窗口）", warns)
 	}
 }

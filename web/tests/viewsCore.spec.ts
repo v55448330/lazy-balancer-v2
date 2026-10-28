@@ -237,7 +237,7 @@ test('用户页：非管理员只读——操作位保留仅禁用，个人自�
   // 「某处 disabled + 附近出现编辑」当命中——同文件新建按钮/弹框表单也是同一
   // 表达式，按钮加一个属性即越窗假红）。
   const actions = section(users, '<el-table-column label="操作"', '</el-table-column>')
-  const editButtons = openTags(actions, 'el-button').filter((tag) => tag.includes('@click="editUser(row)"'))
+  const editButtons = openTags(actions, 'el-button').filter((tag) => /@click="editUser\(row(?: as [A-Za-z]+)?\)"/.test(tag))
   assert.equal(editButtons.length, 1, '操作列里的编辑按钮必须唯一可定位')
   assert.match(editButtons[0]!, /:disabled="[^"]*isReadOnly/, '编辑按钮只读禁用')
   assert.match(users, /:disabled="isReadOnly \|\| row\.auth_provider === 'oidc' \|\| !row\.mfa_enabled/, 'MFA 按钮只读/不可用态禁用')
@@ -272,14 +272,16 @@ test('resetPassword 删除 lbOpen 时代残留的 cancel/close 分支', () => {
 
 test('用户页重置密码：行对象签名 + 请求路径内插数字 id', () => {
   // 回归原型：模板传整行、签名收 id——请求路径变成 /users/[object Object]/reset-password，
-  // 确认框目标名也恒空（el-table 插槽 row 为 any，vue-tsc 拦不住）。断言必须落在
-  // 实际请求路径与被点名的目标上，而非「函数存在」。
+  // 确认框目标名也恒空（当时模板属性不参与类型检查）。类型门开启后插槽 row 由
+  // `as UserListItem` 收窄、签名漂移会在 vue-tsc 报错，但「请求路径用 row.id」
+  // 属运行期拼接，仍须由本断言钉住——断言落在实际请求路径与被点名的目标上，
+  // 而非「函数存在」。
   const reset = section(users, 'const resetPassword = async', 'const resetMfa = async')
   assert.match(reset, /const resetPassword = async \(row: UserListItem\)/, '签名收整行（与 deleteUser/resetMfa 同口径）')
   assert.match(reset, /request\.post\(`\/users\/\$\{row\.id\}\/reset-password`/, '请求路径必须内插行对象 id')
   assert.doesNotMatch(reset, /\/users\/\$\{id\}\/reset-password/, '不得再内插局部 id（签名与调用点漂移即回归）')
   assert.match(reset, /为「\$\{row\.username\}」设置新密码/, '确认框必须点名目标用户')
-  assert.match(users, /@click="resetPassword\(row\)"/, '调用点传整行对象')
+  assert.match(users, /@click="resetPassword\(row(?: as [A-Za-z]+)?\)"/, '调用点传整行对象（断言只抹平 DefaultRow 类型，不改变实参）')
 })
 
 // ============ 纯逻辑抽出后的行为测试 ============

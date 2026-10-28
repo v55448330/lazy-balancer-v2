@@ -326,7 +326,7 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 // 导入后的源集合删除多余/空源文件；调用方必须已持 WafFileLock。
 func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *lbbakPayload, failedSources []string) ([]string, bool) {
 	rows, carried := tables["security_threat_sources"]
-	if !carried || payload == nil {
+	if !carried {
 		return nil, false // 表缺席=保留本地现状
 	}
 	failed := make(map[string]bool, len(failedSources))
@@ -355,6 +355,12 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 			continue
 		}
 		kept[name] = true
+		// 纯 JSON 备份（payload==nil）不携带任何文件条目：对保留下来的源，
+		// 「备份里没有文件」不构成任何内容判断，不得据此删除本地文件。
+		// 只有「源已不在导入表内」这一侧（下方残留扫描）才有确定语义。
+		if payload == nil {
+			continue
+		}
 		if _, hasFile := payload.ThreatIplists[name]; hasFile || failed[name] {
 			continue // 随包文件已落盘（失败源保留本地文件与记录）
 		}

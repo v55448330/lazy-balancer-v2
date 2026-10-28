@@ -310,6 +310,27 @@ func (r *fakeScanErrRows) Next(dest []driver.Value) error {
 	return nil
 }
 
+// fakePartialScanRows 首行可扫描、次行返回驱动无法转换的值：模拟「读到一半
+// 扫描失败」。静默跳过失败行会让聚合建立在残缺行集上——被跳过的行可能是
+// 更大的版本，结果既不是真实最大值也不是「未知」。
+type fakePartialScanRows struct{ step int }
+
+func (r *fakePartialScanRows) Columns() []string { return []string{"version"} }
+func (r *fakePartialScanRows) Close() error      { return nil }
+func (r *fakePartialScanRows) Next(dest []driver.Value) error {
+	switch r.step {
+	case 0:
+		r.step++
+		dest[0] = "2026.01.01"
+		return nil
+	case 1:
+		r.step++
+		dest[0] = make(chan int)
+		return nil
+	}
+	return io.EOF
+}
+
 type fakeIterErrTx struct{}
 
 func (fakeIterErrTx) Commit() error   { return nil }
@@ -319,6 +340,9 @@ type fakeIterErrConn struct {
 	failNeedle string
 	// scanFailNeedle 命中时返回「首行值不可扫描」的结果集（钉逐行 Scan 失败）。
 	scanFailNeedle string
+	// partialScanNeedle 命中时返回「首行可扫描、次行不可扫描」的结果集
+	// （钉部分扫描失败不得产出部分聚合结果）。
+	partialScanNeedle string
 }
 
 func (c *fakeIterErrConn) Prepare(string) (driver.Stmt, error) {
@@ -328,6 +352,9 @@ func (c *fakeIterErrConn) Close() error              { return nil }
 func (c *fakeIterErrConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
 func (c *fakeIterErrConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	columns := []string{"a"}
+	if c.partialScanNeedle != "" && strings.Contains(query, c.partialScanNeedle) {
+		return &fakePartialScanRows{}, nil
+	}
 	if c.scanFailNeedle != "" && strings.Contains(query, c.scanFailNeedle) {
 		// 两列结果集：与 readAppliedSectionHashes 的 SELECT section, hash 同形，
 		// 但首行的值不可 Scan（驱动级异常形态）。
@@ -346,12 +373,13 @@ func (fakeIterErrDriver) Open(string) (driver.Conn, error) {
 }
 
 type fakeIterErrConnector struct {
-	failNeedle     string
-	scanFailNeedle string
+	failNeedle        string
+	scanFailNeedle    string
+	partialScanNeedle string
 }
 
 func (c *fakeIterErrConnector) Connect(context.Context) (driver.Conn, error) {
-	return &fakeIterErrConn{failNeedle: c.failNeedle, scanFailNeedle: c.scanFailNeedle}, nil
+	return &fakeIterErrConn{failNeedle: c.failNeedle, scanFailNeedle: c.scanFailNeedle, partialScanNeedle: c.partialScanNeedle}, nil
 }
 func (c *fakeIterErrConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
 

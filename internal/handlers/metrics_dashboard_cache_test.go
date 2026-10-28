@@ -21,6 +21,9 @@ import (
 
 func overrideDashboardFetch(t *testing.T, fn func(context.Context, string) ([]byte, error)) {
 	t.Helper()
+	// seam 写入经本 helper 转手：隔离义务随之落在 helper 上，调用方不必记得
+	// （静态门扫描所有接收 *testing.T 的函数体，正是为了覆盖这种转手形状）。
+	withIsolatedGlobal(t)
 	old := metricsDashboardFetch
 	metricsDashboardFetch = fn
 	t.Cleanup(func() { metricsDashboardFetch = old })

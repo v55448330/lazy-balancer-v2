@@ -39,24 +39,25 @@
             <div class="autoban-title">
               <el-icon class="title-icon"><Lock /></el-icon>
               <span>自动封禁</span>
-              <el-tag :type="autobanStatus.enabled ? (autobanStatus.dry_run ? 'warning' : 'success') : 'info'" size="small" effect="plain">
-                {{ autobanStatus.enabled ? (autobanStatus.dry_run ? '观察模式' : '运行中') : '未启用' }}
+              <el-tag :type="autobanStatusError ? 'info' : autobanStatus.enabled ? (autobanStatus.dry_run ? 'warning' : 'success') : 'info'" size="small" effect="plain">
+                {{ autobanStateLabel(autobanStatusError, autobanStatus.enabled, autobanStatus.dry_run) }}
               </el-tag>
-              <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用-->
-              <el-tag v-if="!autobanStatus.is_master" type="info" size="small" effect="plain">仅主节点调度</el-tag>
+              <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用。读取失败时不渲染：
+                   初值 is_master=false 会在未知态谎称「仅主节点调度」-->
+              <el-tag v-if="!autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">仅主节点调度</el-tag>
             </div>
             <div class="autoban-stats">
-              <span class="autoban-stat">口径 <b>{{ autobanScopeText }}</b></span>
+              <span class="autoban-stat">口径 <b>{{ autobanStatValue(autobanStatusError, autobanScopeText) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">窗口 <b>{{ autobanStatus.window_minutes }} 分钟</b></span>
+              <span class="autoban-stat">窗口 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.window_minutes, ' 分钟') }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">阈值 <b>{{ autobanStatus.threshold }} 次</b></span>
+              <span class="autoban-stat">阈值 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.threshold, ' 次') }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">时长 <b>{{ autobanDurationText }}</b></span>
+              <span class="autoban-stat">时长 <b>{{ autobanStatValue(autobanStatusError, autobanDurationText) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">今日封禁 <b class="autoban-danger">{{ autobanStatus.banned_today }}</b></span>
+              <span class="autoban-stat">今日封禁 <b class="autoban-danger">{{ autobanStatValue(autobanStatusError, autobanStatus.banned_today) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">名单 <b>{{ autobanStatus.list_entries }} 条</b></span>
+              <span class="autoban-stat">名单 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.list_entries, ' 条') }}</b></span>
             </div>
           </div>
         </el-tooltip>
@@ -73,9 +74,10 @@
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
         <span class="info-note-desc">「自动封禁名单」尚未生效——名单为空，或尚未被启用中的 IP 访问控制（deny）策略引用；请到「安全规则 → IP 地址列表」将该名单引用到 IP 访问控制（deny）策略</span>
       </div>
-      <!-- 喂入源降级：采集停止/连续失败时计数恒 0，轮次仍 success——不提示会被误读为「无攻击」 -->
+      <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
+           运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
       <div v-if="autobanFeedDegraded" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">数据源降级：{{ autobanStatus.feed_degraded_reason || '安全事件采集已停止或连续失败，自动封禁计数不会增长（轮次仍显示成功）' }}</span>
+        <span class="info-note-desc">数据源降级：{{ autobanStatus.feed_degraded_reason || '安全事件补采/日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）' }}</span>
       </div>
       <!-- 观察模式建议列表：dry-run 下达阈值 IP（不封禁，供评估阈值/口径） -->
       <template v-if="autobanStatus.enabled && autobanStatus.dry_run && (autobanStatus.suggestions?.length ?? 0) > 0">
@@ -99,7 +101,7 @@
             </template>
           </el-table-column>
           <el-table-column label="窗口内首末" min-width="190">
-            <template #default="{ row }"><span class="text-secondary">{{ suggestionWindowSpan(row) }}</span></template>
+            <template #default="{ row }"><span class="text-secondary">{{ suggestionWindowSpan(row as AutobanSuggestion) }}</span></template>
           </el-table-column>
           <el-table-column label="建议时长" width="100" align="center">
             <template #default>
@@ -199,7 +201,7 @@
         </el-table-column>
         <el-table-column label="规则" min-width="130">
           <template #default="{ row }">
-            <AccessibleLink v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row)">{{ row.rule_name || row.rule_caddy_id || '—' }}</AccessibleLink>
+            <AccessibleLink v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row as SecurityEvent)">{{ row.rule_name || row.rule_caddy_id || '—' }}</AccessibleLink>
             <span v-else>—</span>
           </template>
         </el-table-column>
@@ -207,12 +209,12 @@
           <template #default="{ row }">
             <!-- 触发阶段展示：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
-            <AccessibleLink v-if="stageCategory(row) === 'waf'" type="primary" @click="openTriggerDetail(row)">WAF</AccessibleLink>
-            <AccessibleLink v-else-if="['acl', 'crawler', 'trust'].includes(stageCategory(row))" type="primary" @click="openTriggerDetail(row)">{{ stageLabel(row) }}</AccessibleLink>
-            <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200" :trigger="['hover', 'focus']">
-              <span class="cell-tip" tabindex="0" :aria-label="row.rule_msg">{{ stageLabel(row) }}</span>
+            <AccessibleLink v-if="stageCategory(row as SecurityEvent) === 'waf'" type="primary" @click="openTriggerDetail(row as SecurityEvent)">WAF</AccessibleLink>
+            <AccessibleLink v-else-if="['acl', 'crawler', 'trust'].includes(stageCategory(row as SecurityEvent))" type="primary" @click="openTriggerDetail(row as SecurityEvent)">{{ stageLabel(row as SecurityEvent) }}</AccessibleLink>
+            <el-tooltip v-else-if="showTriggeredMsg(row as SecurityEvent)" :content="row.rule_msg" placement="top" :show-after="200" :trigger="['hover', 'focus']">
+              <span class="cell-tip" tabindex="0" :aria-label="row.rule_msg">{{ stageLabel(row as SecurityEvent) }}</span>
             </el-tooltip>
-            <span v-else>{{ stageLabel(row) }}</span>
+            <span v-else>{{ stageLabel(row as SecurityEvent) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="触发类型" min-width="100" class-name="col-nowrap">
@@ -222,7 +224,7 @@
         </el-table-column>
         <el-table-column label="策略" min-width="150">
           <template #default="{ row }">
-            <AccessibleLink v-if="row.policy_name || row.policy_id > 0" type="primary" @click="goToPolicy(row)">{{ row.policy_name || row.policy_id }}</AccessibleLink>
+            <AccessibleLink v-if="row.policy_name || row.policy_id > 0" type="primary" @click="goToPolicy(row as SecurityEvent)">{{ row.policy_name || row.policy_id }}</AccessibleLink>
             <span v-else>—</span>
           </template>
         </el-table-column>
@@ -249,7 +251,7 @@
         </el-table-column>
         <el-table-column label="操作" width="70" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openCtxDialog(row)">详情</el-button>
+            <el-button size="small" link type="primary" @click="openCtxDialog(row as SecurityEvent)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -367,7 +369,7 @@
                 <el-table-column label="值" min-width="380">
                   <template #default="{ row }">
                     <div class="ctx-header-value-cell">
-                      <span class="ctx-header-value">{{ ctxHeaderDisplay(row) }}</span>
+                      <span class="ctx-header-value">{{ ctxHeaderDisplay(row as CtxHeaderRow) }}</span>
                       <el-button
                         v-if="row.sensitive"
                         link
@@ -390,7 +392,7 @@
 
         <section class="ctx-detail-section">
           <DialogSectionHeader title="请求体" />
-          <div v-if="ctxBodyParsed.state === 'empty'" class="dialog-panel"><div class="ctx-empty">无请求体记录</div></div>
+          <div v-if="ctxBodyParsed.state === 'empty'" class="dialog-panel"><div class="ctx-empty">{{ ctxBodyEmptyText }}</div></div>
           <template v-else>
             <div v-if="ctxBodyParsed.truncated" class="info-note-bar ctx-banner"><span class="info-note-desc">请求体已截断，仅显示保留的前段内容</span></div>
             <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符</span></div>
@@ -422,7 +424,8 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { isAutobanIneffective, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
@@ -443,8 +446,9 @@ interface AutobanStatus {
   // 引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与「拦截生效」——
   // 纯后端内部字段，本卡不声明不消费。
   ban_effective: boolean
-  // 喂入源（安全事件采集）健康：数据源停摆时计数恒 0、轮次仍 success，
-  // 状态卡据此就近提示降级原因（不自动拉起用户显式停止的采集任务）。
+  // 喂入源（安全事件补采/日志轮转）健康：补采停摆或写侧持续失败时计数可能
+  // 偏少，状态卡据此就近提示降级原因并说明实时 IPC 入库仍在运行（不自动
+  // 拉起用户显式停止的采集任务）。
   feed_degraded: boolean
   feed_degraded_reason: string
   suggestions: AutobanSuggestion[]
@@ -826,6 +830,10 @@ const decodeCtxBody = (payload: string, truncated: boolean): CtxBodyParsed => {
 
 const ctxHeaderDisplay = (row: CtxHeaderRow): string =>
   row.sensitive && !ctxRevealed.value.has(row.name.toLowerCase()) ? '••••••' : row.value
+
+// 请求体空态文案：非管理员看到的空串可能是服务端掩码（已记录但无权查看），
+// 不得一律陈述成「本来就没记录」——与请求头区的掩码表现保持一致。
+const ctxBodyEmptyText = computed(() => requestBodyEmptyNotice(viewerCanReadRequestBody(authStore.user?.role)))
 
 const toggleCtxReveal = (name: string): void => {
   const key = name.toLowerCase()

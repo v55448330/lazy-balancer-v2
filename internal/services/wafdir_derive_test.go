@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/wafiplist"
@@ -183,5 +184,40 @@ func TestConfigureWafDirs_derivesIPCEnvironmentWithoutOverridingExplicitPaths(t 
 	}
 	if got := os.Getenv(SecurityEventsSpoolDirEnv); got != "/explicit/custom-spool" {
 		t.Fatalf("explicit spool env overwritten: %q", got)
+	}
+}
+
+// 非默认 data_dir 下「面板派生」只发生在面板进程：Caddy 二进制里的
+// wafiplist 名单白名单是常量 /app/waf/、IPC 路径取自 Caddy 自身环境（容器形态
+// 由监督器先启动 Caddy，面板随后的 os.Setenv 到不了它）。此前这条断裂完全
+// 静默——直到某条规则启用 IP 访问控制/受信代理时配置被拒、安全事件永远为空。
+// 启动期必须显式留痕并指向根因与支持矩阵。
+func TestConfigureWafDirs_logsPluginDivergenceForNonDefaultDataDir(t *testing.T) {
+	saveWafPathVars(t)
+	for _, name := range []string{SecurityEventsIPCSocketEnv, SecurityEventsSpoolDirEnv} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	buf := captureLogf(t)
+
+	ConfigureWafDirs(filepath.Join(t.TempDir(), "custom-data"))
+
+	logged := buf.String()
+	for _, want := range []string{"不是容器默认", "/app/waf", "Caddy", "不会被它继承", SecurityEventsIPCSocketEnv} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("启动期告警 %q 未包含 %q（须指向根因与显式 env 兜底）", logged, want)
+		}
+	}
+}
+
+// 容器默认形态（data_dir=/app/data）两侧常量逐字节一致，不得产生噪音告警。
+func TestConfigureWafDirs_defaultDataDirHasNoDivergenceWarning(t *testing.T) {
+	saveWafPathVars(t)
+	buf := captureLogf(t)
+
+	ConfigureWafDirs("/app/data")
+
+	if strings.Contains(buf.String(), "不是容器默认") {
+		t.Fatalf("默认 data_dir 不得告警: %q", buf.String())
 	}
 }

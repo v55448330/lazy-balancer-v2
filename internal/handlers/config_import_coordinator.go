@@ -1130,8 +1130,13 @@ func rulesWithoutUsableCertMaterial(ctx context.Context, q importCleanupQueryer)
 	}
 	for materialRows.Next() {
 		var ruleID, jobDomain string
+		// 逐行 Scan 失败必须与规则行同一收尾（关闭并返回错误）：rows.Err() 不
+		// 覆盖 Scan 错误，静默 continue 会把「读取未知」降级成「该行无材料」，
+		// 对应规则随即被判为无材料并在导入清理中删除仍在服务的证书文件——
+		// 与本函数 fail-closed 契约相反。
 		if err := materialRows.Scan(&ruleID, &jobDomain); err != nil {
-			continue
+			materialRows.Close()
+			return nil, fmt.Errorf("读取任务材料行: %w", err)
 		}
 		materialByRule[ruleID] = append(materialByRule[ruleID], jobDomain)
 	}

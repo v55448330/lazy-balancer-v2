@@ -12,12 +12,16 @@
 #   - fixed 必须有 evidence，多个用 ';' 分隔，支持：
 #   - code:<path>:<line>:<token>   该行必须包含 token（token 可含空格；在剥注释
 #                                  视图上比对——注释里的 token 不是可执行证据）
-#       test:<TestName>              仓库内必须存在（未注释的）func <TestName>( 或 test('<name>'
+#       test:[<dir>/]<TestName>      仓库内必须存在（未注释的）func <TestName>( 或 test('<name>'
+#                                   （<dir>/ 前缀把搜索面限定到该目录；不带前缀时全仓搜索，
+#                                    但同名测试命中多个文件即判失败——否则把目标包里的
+#                                    测试删掉后，别的包里的同名通用测试会冒充证据）
 #       ftest:<literal>              web/tests 内必须出现该字面量（describe/it 标题等，不得在注释里）
 #       script:<path>                脚本必须存在（且可执行）
 #       spec:<path>                  前端 spec 文件必须存在，且为 web/tests 下的 *.spec.ts
 #   - test/ftest/script/spec 的空名字/空字面量/空路径一律判失败（grep 空模式恒命中＝假绿）；
 #     spec 只接受前端用例路径——任意存在的文件不构成「前端 spec」证据。
+#   - 带 <dir>/ 的 test: 前缀必须是存在的目录（拼错路径不得退化为「全仓搜索」）。
 #   - test/ftest/code 的匹配先剥注释：被注释掉的声明/标题/token 不是可执行证据
 #     （原文 grep 会把它们判成命中）。code: 用「删注释内容但保持行数」的视图，
 #     行号不漂移；code: 的 token 不得为空（同属空值判失败口径）。
@@ -30,7 +34,9 @@
 set -euo pipefail
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  # 头部注释的行区间随文档增长——以「退出码」行（末行文档）为终点机械截取，
+  # 不再手抄行号（抄错时 --help 会截断或多打一行 set 语句）。
+  sed -n "2,$(grep -n '^# 退出码' "$0" | head -1 | cut -d: -f1)p" "$0" | sed 's/^# \{0,1\}//'
 }
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -76,20 +82,26 @@ strip_comments_keep_lines() { # <file>
   ' "$1"
 }
 
-# 剥注释视图中是否存在匹配（扩展正则）：先按原文挑候选文件，再逐文件走同一份
-# 剥注释视图复检（单源——三份内联 awk 各自漂移会让某个证据形态悄悄放宽）。
-code_has_regex() { # <pattern> <dir>
+# 剥注释视图中真正命中的文件清单（扩展正则，每行一个）：先按原文挑候选文件，再
+# 逐文件走同一份剥注释视图复检（单源——三份内联 awk 各自漂移会让某个证据形态
+# 悄悄放宽）。返回文件而不是布尔：test: 证据要按「命中文件数」判定歧义，布尔
+# 结果无法区分「唯一命中」与「跨包同名测试冒充」。
+code_match_files() { # <pattern> <dir>
   local pattern="$1" dir="$2" files file view
   files="$(grep -RlE --include='*_test.go' --include='*.spec.ts' -- "$pattern" "$dir" 2>/dev/null || true)"
-  [ -z "$files" ] && return 1
+  [ -z "$files" ] && return 0
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     view="$(strip_comments_keep_lines "$file")" || continue
     if grep -Eq -- "$pattern" <<< "$view"; then
-      return 0
+      printf '%s\n' "$file"
     fi
   done <<< "$files"
-  return 1
+}
+
+# 是否存在匹配（布尔包装，保留调用点可读性）。
+code_has_regex() { # <pattern> <dir>
+  [ -n "$(code_match_files "$1" "$2")" ]
 }
 
 # 同 code_has_regex，但按字面量（ftest 标题可含正则元字符）。
@@ -402,6 +414,65 @@ EOF
     echo "SELFTEST FAIL: 块注释里的前端用例标题被当作证据" >&2; return 1
   fi
 
+  # 28) 跨包同名测试：别处存在同名测试时，裸 test:<Name> 无法证明目标包的测试还在
+  #     （把目标包的那个删掉，别处的通用同名测试仍会让台账通过）→ 必须判失败；
+  #     写成 test:<dir>/<Name> 限定搜索面才通过。
+  mkdir -p "$tmp/internal/other"
+  printf 'package other\n\nfunc TestDemoBehavior(t *testing.T) {}\n' > "$tmp/internal/other/other_test.go"
+  cat > "$tmp/ambiguous-test.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:TestDemoBehavior|
+EOF
+  if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger ambiguous-test.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: 跨包同名测试被当作唯一证据" >&2; return 1
+  fi
+  cat > "$tmp/scoped-test.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:internal/demo/TestDemoBehavior|
+EOF
+  if ! (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger scoped-test.tsv >/dev/null); then
+    echo "SELFTEST FAIL: 带目录前缀的 test: 证据被拒" >&2; return 1
+  fi
+
+  # 29) 反例：目标包里的测试被删（只有别的包还有同名测试）——带前缀的写法必须判失败，
+  #     这正是「台账声称修了、目标包测试没了」的实际形态。
+  cat > "$tmp/scoped-gone.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:internal/other/TestAbsentInThatPackage;test:internal/demo/TestDemoBehavior|
+EOF
+  sed -e 's|^func TestDemoBehavior|func TestDemoBehaviorX|' "$tmp/internal/demo/demo_test.go" >"$tmp/internal/demo/demo_test.go.tmp"
+  mv "$tmp/internal/demo/demo_test.go.tmp" "$tmp/internal/demo/demo_test.go"
+  if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger scoped-gone.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: 目标包测试已删但台账通过" >&2; return 1
+  fi
+  printf 'package demo\n\nfunc TestDemoBehavior(t *testing.T) {}\n' > "$tmp/internal/demo/demo_test.go"
+
+  # 30) 反例：test: 的目录前缀指向不存在的目录——不得退化为全仓搜索
+  cat > "$tmp/scoped-missing-dir.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:internal/absent/TestDemoBehavior|
+EOF
+  if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger scoped-missing-dir.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: test: 目录前缀不存在却通过（退化为全仓搜索）" >&2; return 1
+  fi
+
+  # 31) 参数缺值必须按「用法错误」退出 2：旧实现落到 `shift 2` 失败，以 1 退出，
+  #     与「台账有未闭合项」不可区分（调用方无法判错因、也拿不到用法提示）。
+  set +e
+  ( cd "$tmp" && bash scripts/check-fix-claims.sh --ledger >/dev/null 2>&1 )
+  local missing_value_rc=$?
+  set -e
+  if [ "$missing_value_rc" -ne 2 ]; then
+    echo "SELFTEST FAIL: --ledger 缺参数值的退出码应为 2，实际 ${missing_value_rc}" >&2; return 1
+  fi
+  set +e
+  ( cd "$tmp" && bash scripts/check-fix-claims.sh --ledger ok.tsv --commit >/dev/null 2>&1 )
+  local missing_commit_rc=$?
+  set -e
+  if [ "$missing_commit_rc" -ne 2 ]; then
+    echo "SELFTEST FAIL: --commit 缺参数值的退出码应为 2，实际 ${missing_commit_rc}" >&2; return 1
+  fi
+
   echo "fix-claims selftest: PASS"
 }
 
@@ -409,8 +480,27 @@ ledger=""
 commit=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ledger) ledger="${2:-}"; shift 2 ;;
-    --commit) commit="${2:-}"; shift 2 ;;
+    # 缺值必须以「用法错误」退出（文档承诺的退出码 2），不能落到 `shift 2`
+    # 失败——那在 set -e 下直接以 1 退出，与「台账存在未闭合项」（同样是 1）
+    # 无法区分，调用方既拿不到用法提示也判不出错因。
+    --ledger)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+        echo "用法错误：$1 缺少参数值" >&2
+        usage >&2
+        exit 2
+      fi
+      ledger="$2"
+      shift 2
+      ;;
+    --commit)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+        echo "用法错误：$1 缺少参数值" >&2
+        usage >&2
+        exit 2
+      fi
+      commit="$2"
+      shift 2
+      ;;
     --self-test) self_test; exit $? ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage >&2; exit 2 ;;
@@ -467,15 +557,38 @@ while IFS='|' read -r id status evidence reason; do
             esac
             ;;
           test:*)
-            name="${item#test:}"
+            rest="${item#test:}"
+            test_dir=""
+            name="$rest"
+            # 可选路径前缀 test:<dir>/<Name>：把搜索面限定到该包/目录，去掉
+            # 「目标包测试被删、别处同名通用测试顶替」的冒名通道。
+            if [[ "$rest" == */* ]]; then
+              test_dir="${rest%/*}"
+              name="${rest##*/}"
+              if [ -z "${test_dir// /}" ]; then
+                echo "FAIL ${id}: test: 目录前缀为空（形如 test:<dir>/<Name>）" >&2; fail=1; continue
+              fi
+              if [ ! -d "$test_dir" ]; then
+                echo "FAIL ${id}: test: 证据目录不存在: $test_dir" >&2; fail=1; continue
+              fi
+            fi
             # 空名字会退化成 `^[[:space:]]*test[(]` 通用前缀——前端/后端任一条
             # 测试行都能满足，与 ftest/spec 的空值拒绝同口径必须显式失败。
             if [ -z "${name// /}" ]; then
               echo "FAIL ${id}: test: 名字为空（空模式命中任意测试声明，不构成证据）" >&2; fail=1; continue
             fi
             # 声明必须落在代码行（行首 func / test(）上；注释掉的声明不算证据。
-            if ! code_has_regex "^[[:space:]]*func[[:space:]]+${name}[(]|^[[:space:]]*test[(]['\"]${name}" .; then
-              echo "FAIL ${id}: 测试不存在（注释掉的声明不算证据）: $name" >&2; fail=1
+            test_scope="${test_dir:-.}"
+            matches="$(code_match_files "^[[:space:]]*func[[:space:]]+${name}[(]|^[[:space:]]*test[(]['\"]${name}" "$test_scope")"
+            match_count="$(printf '%s\n' "$matches" | grep -c . || true)"
+            if [ "$match_count" -eq 0 ]; then
+              echo "FAIL ${id}: 测试不存在（注释掉的声明不算证据）: ${name}（搜索面: ${test_scope}）" >&2; fail=1
+            elif [ -z "$test_dir" ] && [ "$match_count" -gt 1 ]; then
+              # 跨包同名：全仓搜索命中多处时无法证明「目标包的那个测试还在」，
+              # 必须由台账显式写出目录（test:<dir>/<Name>）消歧。
+              echo "FAIL ${id}: test: 同名测试在多处命中，无法证明目标包仍有该测试——请写成 test:<dir>/${name}：" >&2
+              printf '%s\n' "$matches" | sed 's/^/  /' >&2
+              fail=1
             fi
             ;;
           ftest:*)

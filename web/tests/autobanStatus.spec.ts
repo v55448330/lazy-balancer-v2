@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
 import { code, section } from './_helpers.ts'
 
 test('启用且 ban_effective === false 时展示黄条', () => {
@@ -67,4 +67,25 @@ test('事件页黄条由该判据派生（绑定与计算属性都在）', () =>
     '黄条判据必须来自共享纯函数',
   )
   assert.match(page, /v-if="autobanIneffective"/, '模板必须渲染该判据驱动的提示条')
+})
+
+// 状态接口失败时，状态条此前仍按前端初值渲染确定态数值（未启用 / 阈值 100 /
+// 今日封禁 0），与错误提示条并列——读者据此判断「没开、今天没封过」。
+test('状态读取失败：状态标签与六项数值一律显示「—」，不回落到本地初值', () => {
+  assert.equal(autobanStatValue(true, 100, ' 次'), '—')
+  assert.equal(autobanStatValue(false, 100, ' 次'), '100 次')
+  assert.equal(autobanStatValue(false, '全部事件'), '全部事件')
+  assert.equal(autobanStateLabel(true, false, true), '状态未知')
+  assert.equal(autobanStateLabel(false, false, true), '未启用')
+  assert.equal(autobanStateLabel(false, true, false), '运行中')
+  assert.equal(autobanStateLabel(false, true, true), '观察模式')
+
+  const page = code('src/views/security/SecurityEvents.vue')
+  assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.window_minutes/, '窗口必须走未知态单源')
+  assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.threshold/, '阈值必须走未知态单源')
+  assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.banned_today/, '今日封禁必须走未知态单源')
+  assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.list_entries/, '名单数必须走未知态单源')
+  assert.match(page, /autobanStateLabel\(autobanStatusError, autobanStatus\.enabled, autobanStatus\.dry_run\)/, '状态标签必须区分未知')
+  // 主节点徽章在错误态同样不可信（is_master 初值 false 会显示「仅主节点调度」）
+  assert.match(page, /v-if="!autobanStatusError && !autobanStatus\.is_master"/)
 })

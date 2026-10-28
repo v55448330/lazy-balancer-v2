@@ -37,8 +37,14 @@ import (
 	"github.com/corazawaf/coraza/v3/experimental/plugins/plugintypes"
 )
 
+// DefaultAllowedPathPrefix 是算子参数的目录白名单出厂值（防目录穿越）。
+// 这是 Caddy 二进制内的编译期常量：面板进程改写 AllowedPathPrefix 不会传播
+// 到 Caddy（data_dir 非默认时的派生只在面板侧生效），故该值也是「部署形态
+// 是否受支持」的判据——面板侧 ConfigureWafDirs 会据此显性留痕。
+const DefaultAllowedPathPrefix = "/app/waf/"
+
 // AllowedPathPrefix 是算子参数的目录白名单（防目录穿越）。测试可改。
-var AllowedPathPrefix = "/app/waf/"
+var AllowedPathPrefix = DefaultAllowedPathPrefix
 
 // ipListLoadLocks 按路径串行化解析。条目在最后一个使用者释放后立即退役
 // （引用计数归零删除）——u-*/p<id>-* 投影按规则身份命名，删除规则后旧路径

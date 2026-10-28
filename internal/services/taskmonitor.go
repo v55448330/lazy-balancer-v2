@@ -352,9 +352,8 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 					// 独立取数：两次快照之间刚完成的轮次会呈现「行 running、
 					// 内存已空闲」的瞬态，立即判 failed 会误报一次失败/中断。
 					// 年龄门只覆盖「刚写入」的行，终态写失败的行一定会变老。
-					if m.Running {
-						ti.Status = TaskStatusRunning
-					} else if !taskengine.StaleRunningResidual(latestRun.StartedAt) {
+					// （本分支的入口已保证 !m.Running，内存态无需二次判定。）
+					if !taskengine.StaleRunningResidual(latestRun.StartedAt) {
 						ti.Status = TaskStatusRunning
 					} else {
 						ti.Status = TaskStatusFailed

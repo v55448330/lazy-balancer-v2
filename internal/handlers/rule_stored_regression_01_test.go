@@ -139,3 +139,32 @@ func TestValidateStoredRuleConfig_missingRuleUsesConflictSentinel(t *testing.T) 
 		t.Fatalf("err=%v, want errStoredRuleMissing（并发删除必须可被 409 分支识别）", err)
 	}
 }
+
+// 存量/导入/直改库产生的「80 端口 + HTTPS（未开跳转）」规则：启用前与启动
+// 聚合校验都必须点名拒绝——该组合在 Caddy 侧永不终止 TLS（明文转发），
+// 静默放行会让面板宣称 HTTPS 而实际无加密。
+func TestValidateStoredRuleConfig_rejects_port_80_tls_without_redirect(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source)
+		VALUES ('lb_tls80plain','tls-80-plain','','http','tls-80-plain.example.test',80,'weighted_round_robin',0,1,1,'manual')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+
+	err := validateStoredRuleConfig(context.Background(), "lb_tls80plain")
+	if err == nil || !strings.Contains(err.Error(), "80 端口是 HTTP 端口") {
+		t.Fatalf("err=%v, want 80 端口 TLS 事实拒绝", err)
+	}
+}
+
+func TestValidateEnabledStoredRuleConfigs_namesPort80TLSWithoutRedirect(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source)
+		VALUES ('lb_tls80agg','tls-80-agg','','http','tls-80-agg.example.test',80,'weighted_round_robin',1,1,1,'manual')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+
+	err := validateEnabledStoredRuleConfigs(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "lb_tls80agg") || !strings.Contains(err.Error(), "80 端口是 HTTP 端口") {
+		t.Fatalf("err=%v, want 聚合校验点名 80 端口 TLS 规则", err)
+	}
+}

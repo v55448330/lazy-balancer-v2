@@ -122,6 +122,19 @@ const fetchLatestPolicyRefs = async (
   }
 }
 
+// 确认后重读名单引用面（GET /security/ip-lists/:id 的 ref_policies /
+// trusted_proxy_referenced）：同名名单的复用判据在弹框打开时求值，确认期间另一
+// 管理员/另一标签可能已把它关联到自己的策略——此时写入会静默改动对方拦截面。
+// 读取失败返回 null，调用方必须放弃本次复用（快照不可证）。
+const fetchLatestListRefs = async (listId: number): Promise<TrustListRef | null> => {
+  try {
+    const res = await request.get<APIResponse<TrustListRef>>(`/security/ip-lists/${listId}`, { silent: true })
+    return res.data ?? null
+  } catch {
+    return null
+  }
+}
+
 export const useTrustAssociation = (options: {
   /** 组件当前的地址列表选项（用于把 refs 解析为名单对象） */
   getList: () => TrustListRef[]
@@ -198,20 +211,35 @@ export const useTrustAssociation = (options: {
         ElMessage.error('策略当前引用状态读取失败，本次未做任何修改；请关闭后重试')
         return
       }
-      if (reuseTarget) {
+      // 名单侧同样按最新状态复核：弹框打开时的复用判据只代表当时——确认期间
+      // 另一管理员/另一标签把同名名单关联到别的策略（或受信代理网段）后，写入
+      // 就会静默改动对方的拦截/放行面。已不可复用则改为新建策略限定名单。
+      let reuse: TrustListRef | null = reuseTarget
+      if (reuse) {
+        const latestList = await fetchLatestListRefs(reuse.id)
+        if (latestList === null) {
+          ElMessage.error(`列表「${reuse.name}」当前引用状态读取失败，本次未做任何修改；请关闭后重试`)
+          return
+        }
+        if (!isAutoListReusable(latestList, policy.id)) {
+          ElMessage.warning(`列表「${reuse.name}」已被其它策略或受信代理网段引用，本次改为新建「${createName}」`)
+          reuse = null
+        }
+      }
+      if (reuse) {
         // 写序=先加 IP、再关联：反序时条目写入失败会留下「策略已引用的名单里
         // 没有该 IP」，界面仍报过关联成功，处置静默失效；反向半态（名单有条目、
         // 策略暂未引用）无损，重试只补关联。
-        const added = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${reuseTarget.id}/ips`, { value: ip })
-        const alreadyLinked = latestRefs.includes(reuseTarget.id)
+        const added = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${reuse.id}/ips`, { value: ip })
+        const alreadyLinked = latestRefs.includes(reuse.id)
         if (!alreadyLinked) {
           try {
-            const assocRes = await request.put(`/security/policies/${policy.id}`, { [cfg.refField]: JSON.stringify([...latestRefs, reuseTarget.id]) })
+            const assocRes = await request.put(`/security/policies/${policy.id}`, { [cfg.refField]: JSON.stringify([...latestRefs, reuse.id]) })
             // 关联中间跳的退化后缀（Caddy 应用失败但 DB 已提交）不可静默
             if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
           } catch {
             // 半态显性披露：条目已就绪，重试只会补关联（幂等，不重复写入）
-            ElMessage.error(`已把 ${ip} 加入列表「${reuseTarget.name}」，但策略关联失败；条目已就绪，重试不会重复添加`)
+            ElMessage.error(`已把 ${ip} 加入列表「${reuse.name}」，但策略关联失败；条目已就绪，重试不会重复添加`)
             await options.onChanged?.()
             return
           }
@@ -222,14 +250,14 @@ export const useTrustAssociation = (options: {
         if (added.data?.added === true) {
           showSaveResult(
             added as unknown as { message?: string },
-            alreadyLinked ? `已${cfg.verb}——已加入列表「${reuseTarget.name}」` : `已关联既有「${reuseTarget.name}」并加入 ${ip}`,
+            alreadyLinked ? `已${cfg.verb}——已加入列表「${reuse.name}」` : `已关联既有「${reuse.name}」并加入 ${ip}`,
           )
         } else if (alreadyLinked) {
           // 条目与关联都已存在：本次零写入，只陈述事实（与 useIpListAdd 同文案）。
-          ElMessage.info(`该 IP 已在列表「${reuseTarget.name}」中`)
+          ElMessage.info(`该 IP 已在列表「${reuse.name}」中`)
         } else {
           // 条目已在、本次只补了关联：按关联口径反馈，不再声称加入了条目。
-          mfaAwareSuccess(`已关联既有「${reuseTarget.name}」——该 IP 已在列表中，未重复添加`)
+          mfaAwareSuccess(`已关联既有「${reuse.name}」——该 IP 已在列表中，未重复添加`)
         }
         await options.onChanged?.()
         return

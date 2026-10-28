@@ -492,13 +492,15 @@ test('规则级阶段 1 拦截页覆盖：命中/失效/未配三种措辞', () 
     detail: '规则覆盖：自定义 403 页（状态码 404）',
   })
 
-  // 页已删/内容空：override.broken + 失效文案（回落跟随策略）
+  // 页已删/内容空：override.broken + 失效文案。阶段 1 的规则级覆盖失效后，引擎
+  // 由 buildBlockPageErrorRoute 取「绑定链首个启用且内容非空」策略的页面（可能
+  // 不是本策略）——措辞不得写成「跟随策略」（会被读成本策略自己的页面）。
   const broken = buildStageModel([bindingOf()], [policy], [], pages, { block_page_stage1_id: 99 })
   assert.equal(broken.stages[1].override?.broken, true)
   assert.equal(broken.stages[1].override?.pageName, '页面 #99')
   assert.deepEqual(broken.stages[1].groups[0].rows.find((row) => row.label === '拦截页'), {
     label: '拦截页',
-    detail: '已失效（回落跟随策略）',
+    detail: '已失效（回落绑定链首个有效页）',
   })
 
   // 未配：默认状态码 403 的「未配置」口径
@@ -508,6 +510,23 @@ test('规则级阶段 1 拦截页覆盖：命中/失效/未配三种措辞', () 
     label: '拦截页',
     detail: '未配置（跟随绑定链首个有效页，无则默认 403）',
   })
+})
+
+// 阶段页失效后的真实回落目标按阶段不同：阶段 1 由引擎兜底错误路由取「绑定链
+// 首个启用且内容非空」策略的页面（可能不是本策略），阶段 3 才逐策略回落各自页面。
+// 徽标/弹框标签用同一句话覆盖两种语义，会把阶段 1 的排障引到错误策略。
+test('阶段页失效文案按阶段区分回落目标', () => {
+  const editor = code('src/components/SecurityBindingEditor.vue')
+  const badge = section(editor, 'const overrideBadge = ', '\n}\n')
+  assert.match(badge, /stage === 1[\s\S]{0,200}回落绑定链首个有效页/, '阶段 1 徽标提示必须说明回落绑定链首个有效页')
+  assert.match(badge, /回落跟随策略/, '阶段 3 逐策略回落保留原口径')
+
+  const dialog = code('src/components/RuleFlowDialog.vue')
+  assert.match(dialog, /const overrideBrokenLabel = /, '弹框标签文案必须按阶段派生')
+  const label = section(dialog, 'const overrideBrokenLabel = ', '\n}\n')
+  assert.match(label, /stage === 3 \?/, '阶段 3 与阶段 1 的回落目标不同')
+  assert.match(label, /回落绑定链首个有效页/)
+  assert.match(dialog, /\{\{ overrideBrokenLabel\(typedStageByKey\(node\.key\)!\.stage\) \}\}/, '模板必须消费阶段感知的标签')
 })
 
 test('规则级阶段 3 覆盖与策略级页并存：规则覆盖行在前、策略页行在后', () => {

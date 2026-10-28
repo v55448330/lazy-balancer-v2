@@ -195,7 +195,7 @@ test('I 负载策略卡与流程入口键盘可达', () => {
   assert.match(roving, /nextRadioValue\(/, '方向键必须落到组内移动')
   assert.match(roving, /strategyCardRefs\.get\(next\)\?\.focus\(\)/, '移动后必须跟进焦点')
   // 处理流程入口必须是真的可聚焦控件（el-link 无 href 渲染成不进 Tab 序的 <a>）
-  assert.match(page, /<el-button link type="primary" @click="openFlowFromLock\(row\)"/)
+  assert.match(page, /<el-button link type="primary" @click="openFlowFromLock\(row(?: as [A-Za-z]+)?\)"/)
   assert.doesNotMatch(page, /<el-link type="primary"[^>]*openFlowFromLock/)
 })
 

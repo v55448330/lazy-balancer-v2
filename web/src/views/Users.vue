@@ -111,7 +111,7 @@
               </div>
               <div class="user-info">
                 <div class="user-name">{{ row.username }}</div>
-                <div class="user-display">{{ getDisplayName(row) || '-' }}</div>
+                <div class="user-display">{{ getDisplayName(row as UserListItem) || '-' }}</div>
               </div>
             </div>
           </template>
@@ -133,7 +133,7 @@
                   :aria-label="`用户 ${row.username} 的启用状态`"
                   :loading="switchingIds.has(row.id)"
                   :disabled="isReadOnly || row.is_setup_admin || switchingIds.has(row.id) || submittingUserId === row.id || row.id === authStore.user?.id"
-                  @change="(val: boolean) => handleToggleStatus(row.id, val)"
+                  @change="(val: string | number | boolean) => handleToggleStatus(row.id, val === true)"
                 />
               </div>
             </el-tooltip>
@@ -160,7 +160,7 @@
                  只读态保留操作位并禁用，不隐藏。 -->
             <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc' && row.mfa_enabled" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的 MFA 由身份提供商管理' : (!row.mfa_enabled ? '该用户未启用 MFA' : readOnlyMessage)">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || !row.mfa_enabled || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || !row.mfa_enabled || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row as UserListItem)">
                   重置 MFA
                 </el-button>
               </div>
@@ -172,21 +172,21 @@
             <div class="operation-buttons">
             <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
               <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row as UserListItem)">
                   编辑
                 </el-button>
               </div>
             </el-tooltip>
             <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的密码由身份提供商管理' : readOnlyMessage">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row as UserListItem)">
                   重置密码
                 </el-button>
               </div>
             </el-tooltip>
             <el-tooltip :disabled="!isReadOnly && row.id !== authStore.user?.id && !row.is_setup_admin" :content="row.is_setup_admin ? '系统初始化管理员不可删除' : (row.id === authStore.user?.id ? '不能删除当前登录账户' : readOnlyMessage)">
               <div>
-                <el-button type="danger" link size="small" :disabled="isReadOnly || row.is_setup_admin || row.id === authStore.user?.id || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row)">
+                <el-button type="danger" link size="small" :disabled="isReadOnly || row.is_setup_admin || row.id === authStore.user?.id || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row as UserListItem)">
                   删除
                 </el-button>
               </div>
@@ -255,7 +255,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { useClampedPagination } from '@/composables/useClampedPagination'
-import { validatePassword, validateUsername } from '@/utils/credentials'
+import { missingNewPasswordMessage, validatePassword, validateUsername } from '@/utils/credentials'
 import { rollbackUserStatus } from '@/utils/userStatus'
 import type { APIResponse, UserListItem } from '@/types'
 const oidcOpen = ref(false)
@@ -373,6 +373,13 @@ const handleSubmit = async () => {
   const passwordError = validatePassword(form.value.password)
   if (passwordError) {
     ElMessage.warning(passwordError)
+    return
+  }
+  // 只填「确认新密码」而「新密码」留空：载荷会省略 password（后端=不修改），
+  // 却回报「更新成功」——管理员会误信已重置。必须在「两次不一致」判定之前拦下。
+  const missingPassword = missingNewPasswordMessage(form.value.password, form.value.password_confirm)
+  if (missingPassword) {
+    ElMessage.warning(missingPassword)
     return
   }
   if (form.value.password && form.value.password !== form.value.password_confirm) {
@@ -545,9 +552,10 @@ function lbConfirm() {
   lbDialog.resolve = null
 }
 
-// 签名与调用点同口径：表格行整体传入，函数内统一取 row.id（模板插槽的 row 为
-// any，`vue-tsc` 拦不住「签名收 id、调用传行对象」的漂移——曾致请求路径变成
-// /users/[object Object]/reset-password）。
+// 签名与调用点同口径：表格行整体传入，函数内统一取 row.id。（历史事故：签名收
+// id、调用点传整行，请求路径变成 /users/[object Object]/reset-password——当时
+// 模板属性不参与类型检查故未被拦，现已由 strictTemplates + 插槽 `as UserListItem`
+// 收窄兜住：签名与调用点不一致即 typecheck 失败。）
 const resetPassword = async (row: UserListItem) => {
   const id = row.id
   if (isReadOnly.value || submitting.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
