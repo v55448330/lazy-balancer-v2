@@ -50,13 +50,14 @@ test('失败态有横幅与重试入口，处置动作在失败态禁用', () =>
   // 重试入口的身份而非存在性：全文件只允许一个 @click="retryLists"，且「重新加载」
   // 文案必须写在这个入口上（此前只数文案出现次数，按钮被换成别的处理函数仍绿）。
   assert.equal((page.match(/@click="retryLists"/g) ?? []).length, 1, '重试入口必须唯一')
-  const retryAt = page.indexOf('重新加载')
-  assert.ok(retryAt > 0, '失败横幅必须提供「重新加载」入口')
-  const tagStart = page.lastIndexOf('<', retryAt)
-  const tagEnd = page.indexOf('>', retryAt)
+  const listBanner = section(page, '<div v-if="listsError" class="info-note-bar">', '</div>')
+  const retryAt = listBanner.indexOf('重新加载')
+  assert.ok(retryAt > 0, '名单失败横幅必须提供「重新加载」入口')
+  const tagStart = listBanner.lastIndexOf('<', retryAt)
+  const tagEnd = listBanner.indexOf('>', retryAt)
   assert.ok(tagStart >= 0 && tagEnd > tagStart, '「重新加载」必须位于某个标签内')
-  const retryTag = page.slice(tagStart, tagEnd + 1)
-  assert.match(retryTag, /@click="retryLists"/, `「重新加载」所在的控件必须绑定 retryLists，实际标签: ${retryTag}`)
+  const retryTag = listBanner.slice(tagStart, tagEnd + 1)
+  assert.match(retryTag, /@click="retryLists"/, `名单「重新加载」必须绑定 retryLists，实际标签: ${retryTag}`)
   assert.match(page, /const retryLists = \(\): void => \{ void loadPolicies\(\) \}/)
   assert.match(page, /:disabled="act\.disabled"/, '动作按钮绑定禁用态')
   assert.match(page, /return listsError\.value \? acts\.map\(\(act\) => \(\{ \.\.\.act, disabled: true \}\)\) : acts/,

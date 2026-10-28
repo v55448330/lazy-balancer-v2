@@ -111,7 +111,7 @@ test('区块呈现名单名/命中条目/到期时间，永久条目不显示剩
   assert.match(block, /到期时间/, '必须显示到期时间')
   assert.match(block, /v-if="!autobanHit\.expires_at"[^>]*>永久/, '永久条目显示「永久」而非空')
   assert.match(block, /formatDate\(autobanHit\.expires_at\)/, '绝对到期时间按站内时区格式化')
-  assert.match(block, /取消封禁/, '必须提供取消封禁动作')
+  assert.match(block, /解除自动封禁/, '必须提供解除自动封禁动作')
 })
 
 test('跨栈：预置名单由 preset_autoban 标记，remove-ip 允许自动封禁名单', () => {
@@ -131,4 +131,124 @@ test('名单弹框「加入时间」列加宽并强制不换行', () => {
 test('自动封禁名单编辑弹框不再显示多余的内置字段说明', () => {
   const rules = code('src/views/security/SecurityRules.vue')
   assert.doesNotMatch(rules, /内置名单字段不可修改/, '冗余描述已删除；字段禁用状态本身已表达该语义')
+})
+
+
+test('自动封禁区块与下方策略筛选/策略区有独立分隔', () => {
+  const page = code('src/views/security/IPLocationAction.vue')
+  assert.match(page, /\.ipo-autoban \{ margin-bottom: 12px; padding-bottom: 12px; border-bottom:/, '自动封禁区块必须有底部间距和分隔线')
+})
+
+test('状态摘要覆盖自动封禁、黑白名单、信任、地域与未命中', () => {
+  const headAt = page.indexOf('class="ipo-head"')
+  const summaryAt = page.indexOf('class="ipo-summary"')
+  const autobanAt = page.indexOf('class="ipo-sec ipo-autoban"')
+  assert.ok(headAt > 0 && summaryAt > headAt && autobanAt > summaryAt, '摘要位于头部之后、自动封禁之前')
+  for (const label of ['自动封禁生效', '自动封禁未生效', '自动封禁状态未知', '手动黑名单命中', '白名单命中', '信任豁免', '地域策略在用', '未命中当前管控']) {
+    assert.ok(page.includes(label), `缺少状态摘要：${label}`)
+  }
+  const chips = section(page, 'const statusChips = computed', 'const statusIncomplete = computed')
+  assert.match(chips, /allRows\.value/, '摘要必须基于未筛选策略，筛选卡片不得隐藏全局命中')
+  assert.doesNotMatch(chips, /lastPolicyFilter/, '摘要不得受当前策略筛选影响')
+})
+
+test('自动封禁分别读取配置与生效态，名单命中不冒充已封禁', () => {
+  const runtime = section(page, 'const loadAutobanRuntime = async', '\n}\n')
+  assert.match(runtime, /\/security\/autoban\/status/)
+  assert.match(runtime, /\/security\/autoban'/)
+  assert.match(runtime, /Promise\.allSettled/, '状态与配置失败不得互相拖垮')
+  assert.match(page, /ban_effective \? '已封禁' : '名单命中（未生效）'/)
+  assert.match(page, /autobanStatusError\.value \|\| !autobanRuntime\.value\) return '生效状态未知'/)
+  const summary = section(page, 'const autobanRuleSummary = computed', '\n})')
+  for (const field of ['window_minutes', 'threshold', 'duration', 'scope', 'dry_run']) assert.ok(summary.includes(field), `规则摘要缺少 ${field}`)
+  assert.match(summary, /观察模式/)
+})
+
+test('到期条目可清理，CIDR 只能跳名单编辑且解除确认限定作用域', () => {
+  assert.match(page, /autobanExpired \? '清理过期条目' : '解除自动封禁'/)
+  assert.match(page, /autobanExpired \? '已到期，可清理'/)
+  assert.match(page, /v-if="autobanHitIsCidr"[^>]*href="#\/security-rules\?tab=ip-lists"/)
+  assert.match(page, />编辑 CIDR<\/el-button>/)
+  const unban = section(page, 'const unbanAutoban = async', '\n}\n')
+  assert.match(unban, /autobanHitIsCidr\.value/, '写入口也必须拒绝静默删除 CIDR 整段')
+  assert.match(unban, /只解除自动封禁/)
+  assert.match(unban, /清空该 IP 的自动封禁计数/)
+  assert.match(unban, /其它拦截源仍可能拦截/)
+})
+
+test('快捷动作按当前筛选选策略，无候选禁用且不自动建策略', () => {
+  const quickAt = page.indexOf('class="ipo-quick"')
+  const filterAt = page.indexOf('class="ipo-filter"')
+  const autobanAt = page.indexOf('class="ipo-sec ipo-autoban"')
+  assert.ok(autobanAt > 0 && quickAt > autobanAt && filterAt > quickAt, '快捷区位于自动封禁之后、策略筛选之前')
+  for (const label of ['加入黑名单', '加入白名单', '加入信任']) assert.ok(page.includes(label), `缺少${label}`)
+  const candidates = section(page, 'const selectedPolicyCandidates = computed', 'const trustedSourceRows = computed')
+  assert.match(candidates, /lastPolicyFilter\.value === 'all' \|\| p\.id === lastPolicyFilter\.value/)
+  for (const name of ['quickDenyPolicy', 'quickAllowPolicy', 'quickTrustPolicy']) assert.ok(candidates.includes(`const ${name}`), `缺少${name}`)
+  assert.match(page, /!quickDenyPolicy\.value/)
+  assert.match(page, /!quickAllowPolicy\.value/)
+  assert.match(page, /!quickTrustPolicy\.value/)
+  assert.match(page, /请先创建并绑定/)
+  const run = section(page, 'const runQuickAction =', '\n}\n')
+  assert.match(run, /ensureListAndJoin\(policy, trimmedIp\.value, side\)/, '三侧必须复用确认/幂等/刷新共享实现')
+  assert.match(page, /不会自动创建策略/)
+})
+
+test('快捷动作抑制策略卡重复添加，但保留移除与取消信任', () => {
+  const actions = section(page, 'const rowActions = (row: RowView)', '\n}\n')
+  assert.match(actions, /row\.canAddTrust && row\.policy\.id !== quickTrustPolicy\.value\?\.id/)
+  assert.match(actions, /row\.canAssociate && row\.policy\.id !== quickDenyPolicy\.value\?\.id/)
+  assert.match(actions, /row\.canAssociateAllow && row\.policy\.id !== quickAllowPolicy\.value\?\.id/)
+  assert.match(actions, /if \(row\.canRemove\)/, '黑名单/白名单移除动作不得被快捷区抑制')
+  assert.match(actions, /key: 'cancel-trust'/, '策略卡取消信任仍需保留')
+})
+
+test('全局信任展示所有来源并提供取消，不再重复加入或承诺恢复拦截', () => {
+  assert.match(page, /const trustedSourceRows = computed\(\(\) => allRows\.value\.filter\(\(row\) => row\.inTrust && row\.trustEnabled\)\)/)
+  assert.match(page, /信任来源：\{\{ trustSourceNames \}\}/)
+  assert.match(page, /v-if="!ipTrustedAnywhere"[^>]*:content="quickTrustTip"/)
+  assert.match(page, /v-for="row in trustedSourceRows" v-else/)
+  assert.match(page, />取消信任 · \{\{ row\.policy\.name \}\}<\/el-button>/)
+  assert.match(page, /取消信任（恢复常规安全评估）/)
+  assert.doesNotMatch(page, /恢复拦截/)
+})
+
+test('白名单命中不追加信任后缀，deny 命中与 allow 交集外仍追加', () => {
+  const allow = section(page, "} else if (policy.ip_acl_mode === 'allow')", "} else if (policy.ip_acl_mode === '绕过')")
+  const allowHit = section(allow, 'if (inList) {', '} else {')
+  assert.doesNotMatch(allowHit, /exemptHitSuffix|passthruSuffix/)
+  const allowMiss = allow.slice(allow.indexOf('} else {'))
+  assert.match(allowMiss, /exemptHitSuffix \+ passthruSuffix/)
+  const deny = section(page, "if (policy.ip_acl_mode === 'deny')", "} else if (policy.ip_acl_mode === 'allow')")
+  assert.match(deny, /exemptHitSuffix \+ passthruSuffix/)
+})
+
+test('策略失败可重载，阶段 0 空态位置与 offstage 文案符合可见分组', () => {
+  assert.match(page, /@click="retryPolicies">重新加载<\/el-button>/)
+  assert.match(page, /const retryPolicies = \(\): void => \{ void loadPolicies\(\) \}/)
+  const groupAt = page.indexOf('v-for="group in visibleGroups"')
+  const stage0At = page.indexOf('v-if="!stage0BoundAny && lastPolicyFilter === \'all\' && visibleGroups.length > 0"')
+  assert.ok(groupAt > 0 && stage0At > groupAt, '阶段 0 空态必须位于策略组之后')
+  assert.match(page, /当前仅有限流\/WAF 策略，不涉及 IP 管控/)
+})
+
+test('键盘可打开，弹框按视口限宽且自动封禁/快捷区保留分隔', () => {
+  assert.match(page, /@keydown\.enter\.prevent="activateOnce\(\$event, \(\) => openFromKeyboard\(\$event\)\)"/)
+  assert.match(page, /@keydown\.space\.prevent="activateOnce\(\$event, \(\) => openFromKeyboard\(\$event\)\)"/)
+  assert.match(page, /const openFromKeyboard = \(event: KeyboardEvent\)/)
+  assert.match(page, /:width="400"/)
+  assert.match(page, /max-width: calc\(100vw - 24px\)/)
+  assert.match(page, /@media \(max-width: 420px\)/)
+  assert.match(page, /\.ipo-quick \{[^}]*border-bottom:/)
+  assert.match(page, /\.ip-clickable:focus-visible/)
+})
+
+test('快捷黑白名单动作不重复添加：已在名单中时禁用并显示已在名单', () => {
+  const page = code('src/views/security/IPLocationAction.vue')
+  assert.match(page, /const hasDenyHit = computed/)
+  assert.match(page, /const hasAllowHit = computed/)
+  assert.match(page, /hasDenyHit\.value \? null : selectedPolicyCandidates/)
+  assert.match(page, /hasAllowHit\.value \? null : selectedPolicyCandidates/)
+  assert.match(page, /quickDenyLabel = computed\(\(\) => hasDenyHit\.value \? '已在黑名单' : '加入黑名单'/)
+  assert.match(page, /quickAllowLabel = computed\(\(\) => hasAllowHit\.value \? '已在白名单' : '加入白名单'/)
 })

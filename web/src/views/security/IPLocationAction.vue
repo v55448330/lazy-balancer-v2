@@ -7,6 +7,8 @@
         tabindex="0"
         :aria-label="`IP 处置：${ip}`"
         :title="location ? `${ip} · ${location}` : ip"
+        @keydown.enter.prevent="activateOnce($event, () => openFromKeyboard($event))"
+        @keydown.space.prevent="activateOnce($event, () => openFromKeyboard($event))"
       >
         <span class="ip-text">{{ ip }}</span>
         <span v-if="location" class="ip-loc" :title="location">{{ compactLocation }}</span>
@@ -25,8 +27,13 @@
       <div v-if="location" class="ipo-loc-line">{{ location }}</div>
     </div>
 
-    <!-- 自动封禁（预置名单命中）：独立于策略面——策略加载中/为空/失败时同样
-         可见可用，否则从安全日志点开的 IP 只能绕道「安全策略」页解封 -->
+    <div class="ipo-summary" aria-label="当前管控状态">
+      <el-tag v-for="chip in statusChips" :key="chip.key" class="ipo-status-chip" size="small" :type="chip.type" effect="plain">{{ chip.label }}</el-tag>
+      <span v-if="statusChips.length === 0 && statusIncomplete" class="ipo-summary-empty">状态读取不完整</span>
+      <span v-else-if="statusChips.length === 0" class="ipo-summary-empty">未命中当前管控</span>
+    </div>
+
+    <!-- 自动封禁独立于策略面；名单命中与引擎实际生效分别展示。 -->
     <div v-if="autobanLoading && !autobanHit" class="ipo-tip">自动封禁状态加载中…</div>
     <div v-else-if="autobanError" class="info-note-bar">
       <span class="info-note-desc">自动封禁名单读取失败，封禁状态未知</span>
@@ -37,21 +44,39 @@
       <div class="ipo-card">
         <div class="ipo-card-head">
           <span class="ipo-name" :title="autoban?.listName">{{ autoban?.listName || '自动封禁名单' }}</span>
-          <el-tag size="small" :type="autobanExpired ? 'info' : 'danger'" effect="plain">{{ autobanExpired ? '已到期' : '已封禁' }}</el-tag>
+          <el-tag size="small" :type="autobanStatusType" effect="plain">{{ autobanStatusLabel }}</el-tag>
         </div>
         <div class="ipo-mode-line">命中条目：{{ autobanHit.value }}</div>
-        <!-- 到期时间：永久条目不显示剩余（后端逐条投影会在到期时自动放行） -->
-        <div class="ipo-mode-line">到期时间：<template v-if="!autobanHit.expires_at">永久</template><template v-else>{{ formatDate(autobanHit.expires_at) }}（{{ autobanExpired ? '到期即自动解封' : `剩余 ${autobanRemaining}` }}）</template></div>
+        <div class="ipo-mode-line">到期时间：<template v-if="!autobanHit.expires_at">永久</template><template v-else>{{ formatDate(autobanHit.expires_at) }}（{{ autobanExpired ? '已到期，可清理' : `剩余 ${autobanRemaining}` }}）</template></div>
+        <div class="ipo-mode-line">{{ autobanRuleSummary }}</div>
         <div class="ipo-acts">
-          <el-button size="small" type="primary" plain :loading="autobanUnbanning" @click="unbanAutoban">取消封禁</el-button>
+          <a v-if="autobanHitIsCidr" class="ipo-edit-link" href="#/security-rules?tab=ip-lists">
+            <el-button size="small" type="primary" plain>编辑 CIDR</el-button>
+          </a>
+          <el-button v-else size="small" type="primary" plain :loading="autobanUnbanning" @click="unbanAutoban">{{ autobanExpired ? '清理过期条目' : '解除自动封禁' }}</el-button>
         </div>
       </div>
     </div>
 
-    <!-- 策略筛选（用户裁定）：有 IP 管控面且未被隐藏的策略数 >1 才出；
-         选择后仅渲染该策略卡片，会话级记忆上次选择；加载中禁用（与 seq 守卫/
-         加载态兼容）。teleported="false" 把下拉面板留在弹层内——teleport 到
-         body 后的面板点击会被 el-popover 判为 outside 而关闭整个弹框（实测 bug） -->
+    <section class="ipo-quick" aria-label="快捷动作">
+      <div class="ipo-quick-title">快捷动作</div>
+      <div v-if="ipTrustedAnywhere" class="ipo-trust-source" :title="trustSourceNames">信任来源：{{ trustSourceNames }}</div>
+      <div class="ipo-quick-actions">
+        <el-tooltip :content="quickDenyTip" placement="top">
+          <span class="ipo-quick-action"><el-button size="small" type="danger" plain :disabled="quickDenyDisabled" :loading="quickActionLoading" @click="runQuickAction(quickDenyPolicy, 'deny')">{{ quickDenyLabel }}</el-button></span>
+        </el-tooltip>
+        <el-tooltip :content="quickAllowTip" placement="top">
+          <span class="ipo-quick-action"><el-button size="small" type="primary" plain :disabled="quickAllowDisabled" :loading="quickActionLoading" @click="runQuickAction(quickAllowPolicy, 'allow')">{{ quickAllowLabel }}</el-button></span>
+        </el-tooltip>
+        <el-tooltip v-if="!ipTrustedAnywhere" :content="quickTrustTip" placement="top">
+          <span class="ipo-quick-action"><el-button size="small" type="success" plain :disabled="quickTrustDisabled" :loading="quickActionLoading" @click="runQuickAction(quickTrustPolicy, 'trust')">加入信任</el-button></span>
+        </el-tooltip>
+        <el-button v-for="row in trustedSourceRows" v-else :key="`quick-untrust-${row.policy.id}`" size="small" type="warning" plain :loading="isBusy(row.policy.id, 'untrust')" @click="cancelTrustAll(row)">取消信任 · {{ row.policy.name }}</el-button>
+      </div>
+      <div v-if="quickActionHint" class="ipo-quick-hint">{{ quickActionHint }}</div>
+    </section>
+
+    <!-- 下拉面板留在弹层内，避免 teleport 到 body 后被判为 outside 而关闭。 -->
     <div v-if="filterablePolicies.length > 1" class="ipo-filter">
       <el-select v-model="lastPolicyFilter" size="small" :disabled="policiesLoading" placeholder="筛选策略" :teleported="false" fit-input-width>
         <el-option label="全部策略" value="all" />
@@ -60,27 +85,19 @@
     </div>
 
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
-    <div v-else-if="policiesError" class="info-note-bar"><span class="info-note-desc">策略列表加载失败</span></div>
+    <div v-else-if="policiesError" class="info-note-bar">
+      <span class="info-note-desc">策略列表加载失败</span>
+      <el-button size="small" type="primary" plain :loading="policiesLoading" @click="retryPolicies">重新加载</el-button>
+    </div>
     <template v-else-if="rows.length > 0">
-      <!-- 无黑名单落点只提示、不隐藏卡片区：仅有白名单（allow）或信任（阶段 0）
-           策略的部署同样需要快捷放行/信任/移除条目入口，整块隐藏会让这些动作
-           全部不可达。 -->
       <div v-if="interceptHint" class="info-note-bar">
         <span class="info-note-desc">{{ interceptHint }}</span>
       </div>
-      <!-- 名单/引用条目加载失败：命中判定退化为仅内联（「已在名单」会被误显示为未命中），
-           依据不可靠——处置动作禁用，横幅给出重试 -->
       <div v-if="listsError" class="info-note-bar">
         <span class="info-note-desc">地址列表加载失败：引用名单的命中状态不可见，处置动作已暂停</span>
         <el-button size="small" type="primary" plain :loading="policiesLoading" @click="retryLists">重新加载</el-button>
       </div>
-      <div v-if="groupedRows.offstage > 0" class="ipo-tip">另有 {{ groupedRows.offstage }} 条限流/WAF 策略不涉及 IP 管控</div>
-      <!-- 阶段 0 空态（用户裁定：提示创建，不自动代建）。判定基于全部
-           策略（不受下方筛选影响）——绑定存在但被筛掉时不出该引导 -->
-      <div v-if="!stage0BoundAny && rows.length > 0" class="ipo-sec">
-        <div class="ipo-sec-title">阶段 0 · 信任名单</div>
-        <div class="ipo-tip">未绑定信任策略——到「安全防护 → 安全策略」创建并绑定后可信任此 IP</div>
-      </div>
+      <div v-if="groupedRows.offstage > 0" class="ipo-tip">{{ visibleGroups.length === 0 ? '当前仅有限流/WAF 策略，不涉及 IP 管控' : `另有 ${groupedRows.offstage} 条限流/WAF 策略不涉及 IP 管控` }}</div>
       <div v-for="group in visibleGroups" :key="group.key" class="ipo-sec">
         <div class="ipo-sec-title">{{ group.title }}</div>
         <div v-for="row in group.rows" :key="row.policy.id" class="ipo-card">
@@ -93,8 +110,6 @@
           </div>
           <div v-if="group.key === 'stage0'" class="ipo-mode-line">{{ row.trustDetectionLabel }}</div>
           <div class="ipo-status" :class="row.statusClass">{{ row.statusLabel }}</div>
-          <!-- 区域+列表组合（枚举补全）：ACL 评估之外地域拦截同样在链上，
-               名单未命中不代表放行（区域命中仍拦）——卡片显式列出区域维度 -->
           <div v-if="row.geoActive && group.key !== 'stage0'" class="ipo-mode-line">另启用地域拦截 · {{ row.policy.geoip_mode === 'allow' ? '仅允许' : '拦截' }}区域：{{ row.geoRegions }}</div>
           <div v-if="row.inLegacy && group.key !== 'stage0'" class="ipo-legacy">该 IP 还存在于旧版独立黑名单字段，可经 API 更新策略（ip_blacklist）清理</div>
           <div v-if="group.key === 'mixed'" class="ipo-legacy">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
@@ -109,10 +124,12 @@
           </div>
         </div>
       </div>
+      <div v-if="!stage0BoundAny && lastPolicyFilter === 'all' && visibleGroups.length > 0" class="ipo-sec">
+        <div class="ipo-sec-title">阶段 0 · 信任名单</div>
+        <div class="ipo-tip">未绑定信任策略——到「安全防护 → 安全策略」创建并绑定后可信任此 IP</div>
+      </div>
     </template>
-    <!-- 全部策略被系统名单接管（裁定①隐藏）时如实说明，不误报「暂无策略」 -->
     <div v-else-if="policies.length > 0 && hasAclPolicy" class="ipo-tip">启用策略的 IP 名单均由系统内置名单管理，本弹窗无快捷处置入口</div>
-    <!-- 空卡片区兜底：系统内置名单接管优先说明，其余情形才给「无黑名单落点」提示 -->
     <div v-else-if="interceptHint" class="info-note-bar">
       <span class="info-note-desc">{{ interceptHint }}</span>
     </div>
@@ -146,6 +163,7 @@ import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
 import { aclAssociateSides, inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, ensureSharedEntriesMissing, sharedEntriesCache, subscribeSharedEntriesCache, mergeIpEntryValues, trustHitMode } from '@/utils/securityStages'
 import { popperViewportSafe } from '@/utils/popper'
+import { activateOnce } from '@/utils/keyboardActivate'
 import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
@@ -224,6 +242,11 @@ const compactLocation = computed(() => {
 const authStore = useAuthStore()
 // 仅主节点管理员可操作（从节点/非管理员只展示 IP 与归属地）——与全局只读口径一致
 const canManage = computed(() => authStore.readOnlyReason === null)
+
+const openFromKeyboard = (event: KeyboardEvent): void => {
+  const target = event.currentTarget as HTMLElement
+  target.click()
+}
 
 const eventCount = ref<number | null>(null)
 let eventCountSeq = 0
@@ -375,6 +398,38 @@ interface AutobanState {
   listName: string
   entries: IpListEntryPayload[]
 }
+
+interface AutobanConfigState {
+  enabled: boolean
+  threshold: number
+  window_minutes: number
+  duration: string
+  scope: string
+  dry_run: boolean
+}
+interface AutobanRuntimeState extends AutobanConfigState {
+  ban_effective: boolean
+}
+const autobanConfig = ref<AutobanConfigState | null>(null)
+const autobanRuntime = ref<AutobanRuntimeState | null>(null)
+const autobanStatusError = ref(false)
+const autobanConfigError = ref(false)
+let autobanRuntimeSeq = 0
+
+const loadAutobanRuntime = async (): Promise<void> => {
+  const seq = ++autobanRuntimeSeq
+  autobanStatusError.value = false
+  autobanConfigError.value = false
+  const [statusResult, configResult] = await Promise.allSettled([
+    request.get<APIResponse<AutobanRuntimeState>>('/security/autoban/status', { silent: true }),
+    request.get<APIResponse<AutobanConfigState>>('/security/autoban', { silent: true }),
+  ])
+  if (seq !== autobanRuntimeSeq) return
+  autobanRuntime.value = statusResult.status === 'fulfilled' ? statusResult.value.data ?? null : null
+  autobanConfig.value = configResult.status === 'fulfilled' ? configResult.value.data ?? null : null
+  autobanStatusError.value = autobanRuntime.value === null
+  autobanConfigError.value = autobanConfig.value === null
+}
 const autoban = ref<AutobanState | null>(null)
 const autobanLoading = ref(false)
 const autobanError = ref(false)
@@ -385,6 +440,7 @@ const loadAutoban = async (): Promise<void> => {
   const seq = ++autobanSeq
   autobanLoading.value = true
   autobanError.value = false
+  void loadAutobanRuntime()
   try {
     // 名单清单优先复用本轮 ipLists（loadPolicies→loadIpLists 的同一结果）；策略
     // 接口失败/首次打开时为空，自行取一次——不等策略结果，也不依赖其成败。
@@ -428,21 +484,40 @@ const autobanRemaining = computed(() => {
   return expiresAt ? autobanEntryRemaining(expiresAt) : ''
 })
 
+const autobanHitIsCidr = computed(() => autobanHit.value?.value.includes('/') ?? false)
+const autobanStatusLabel = computed(() => {
+  if (autobanExpired.value) return '已到期'
+  if (autobanStatusError.value || !autobanRuntime.value) return '生效状态未知'
+  return autobanRuntime.value.ban_effective ? '已封禁' : '名单命中（未生效）'
+})
+const autobanStatusType = computed<'danger' | 'warning' | 'info'>(() => {
+  if (autobanExpired.value || autobanStatusError.value || !autobanRuntime.value) return 'info'
+  return autobanRuntime.value.ban_effective ? 'danger' : 'warning'
+})
+const autobanRuleSummary = computed(() => {
+  const cfg = autobanConfig.value ?? autobanRuntime.value
+  if (!cfg) return autobanConfigError.value ? '规则配置读取失败' : '规则配置加载中…'
+  const durations: Record<string, string> = { '10m': '10 分钟', '30m': '30 分钟', '1h': '1 小时', '6h': '6 小时', '12h': '12 小时', '24h': '24 小时', permanent: '永久' }
+  const scopes: Record<string, string> = { blocked: '仅拦截事件', logged: '仅检测事件', all: '全部事件' }
+  const duration = durations[cfg.duration] ?? cfg.duration
+  const scope = scopes[cfg.scope] ?? cfg.scope
+  return `规则：${cfg.window_minutes} 分钟窗口 / ${cfg.threshold} 次阈值 / ${duration} / ${scope} / ${cfg.dry_run ? '观察模式' : '正式模式'}`
+})
+
 const retryAutoban = (): void => { void loadAutoban() }
 
-// 取消封禁：确认 → remove-ip（按 exact value 删全部同值条目）→ 失效条目缓存 →
-// 重取策略面与封禁态（顺序不可倒：共享缓存失效必须早于两次重取）。
-// 占位（autobanUnbanning）先于确认取得——双击不再叠加两个确认框。
+// 解除自动封禁：仅删精确 IP 条目并清计数；CIDR 必须到名单编辑面处理。
 const unbanAutoban = async (): Promise<void> => {
   const hit = autobanHit.value
   const listId = autoban.value?.listId
-  if (!hit || listId === undefined || autobanUnbanning.value) return
+  if (!hit || listId === undefined || autobanHitIsCidr.value || autobanUnbanning.value) return
+  const expired = autobanExpired.value
   autobanUnbanning.value = true
   try {
     try {
       await ElMessageBox.confirm(
-        `将把 ${hit.value} 从自动封禁名单移除，该 IP 立即解封；若仍持续超阈值会被再次自动封禁。是否继续？`,
-        '取消封禁',
+        `将把 ${hit.value} 从自动封禁名单移除，并清空该 IP 的自动封禁计数。此操作只解除自动封禁，黑名单、WAF、限流和地域策略等其它拦截源仍可能拦截；若持续超阈值，之后仍可能再次自动封禁。是否继续？`,
+        expired ? '清理过期条目' : '解除自动封禁',
         { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
       )
     } catch {
@@ -452,7 +527,7 @@ const unbanAutoban = async (): Promise<void> => {
     invalidateSharedEntriesCache()
     await loadPolicies()
     await loadAutoban()
-    showSaveResult(res as unknown as { message?: string }, `已取消封禁 ${hit.value}`)
+    showSaveResult(res as unknown as { message?: string }, expired ? `已清理过期条目 ${hit.value}` : `已解除自动封禁 ${hit.value}`)
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to lift autoban:', error)
@@ -547,6 +622,7 @@ const loadPolicies = async (): Promise<void> => {
 
 // 加载失败横幅的重试入口：名单与条目同轮重取（loadPolicies 内串接 loadIpLists）
 const retryLists = (): void => { void loadPolicies() }
+const retryPolicies = (): void => { void loadPolicies() }
 
 // —— 每行视图状态：模式标签 / 该 IP 的归属状态 / 可用动作 ——
 
@@ -561,6 +637,7 @@ interface RowView {
   trustDead: boolean
   canAddTrust: boolean
   canClearDeadTrust: boolean
+  aclHit: boolean
   inLegacy: boolean
   tagType: 'danger' | 'success' | 'info' | 'warning'
   tagLabel: string
@@ -649,6 +726,7 @@ const rowView = (policy: PolicyRow): RowView => {
     trustDead: false,
     canAddTrust: false,
     canClearDeadTrust: false,
+    aclHit: false,
     inLegacy: parseIPList(policy.ip_blacklist).includes(trimmedIp.value),
     tagType: 'info',
     tagLabel: '未启用',
@@ -758,6 +836,7 @@ const rowView = (policy: PolicyRow): RowView => {
   const inInlineExact = aclInlineEntries.includes(trimmedIp.value)
   const inInline = aclInlineEntries.some((e) => entryMatchesIp(e, trimmedIp.value))
   const inList = list.some((e) => entryMatchesIp(e, trimmedIp.value))
+  view.aclHit = inList
 
   view.removableRefLists = ipLists.value
     .filter((l) => !l.system && parseRefIds(policy.ip_acl_list_refs).includes(l.id))
@@ -790,7 +869,7 @@ const rowView = (policy: PolicyRow): RowView => {
     if (inList) {
       view.statusClass = 'is-ok'
       const cidrNote = inInline && !inInlineExact ? '（来自内联 CIDR 条目，请到策略编辑中移除）' : ''
-      view.statusLabel = (inInline ? `✅ 已在白名单中${cidrNote}` : `✅ 已在白名单中${view.aclHitSourceLabel}`) + exemptHitSuffix + passthruSuffix
+      view.statusLabel = inInline ? `✅ 已在白名单中${cidrNote}` : `✅ 已在白名单中${view.aclHitSourceLabel}`
       view.canRemove = inInlineExact
     } else {
       view.statusClass = 'is-warn'
@@ -820,7 +899,7 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
   // 处置计划单源（utils/trustRemoval）——可移除条目（内联精确 +
   // 命中引用列表精确条目）与不可移除的残余 CIDR 信任一次算清。原实现仅在
   // 「无内联精确条目」时守卫；IP 同时由内联精确条目与引用 CIDR 信任时跳过
-  // 守卫，移除后仍持续信任却弹「已取消信任 / 恢复拦截」的谎报。
+  // 守卫，移除后仍持续信任却弹「已取消信任 / 恢复常规安全评估」的谎报。
   // 安全结论不得读陈旧快照：弹层可长开，期间他人/另一标签页可能新增覆盖该 IP
   // 的引用列表或内联 CIDR——挂载时快照既漏判新来源、也不会去移除它们。故决策
   // 前先取最新策略，一切判定（内联/refs/可移除列表/残余来源）都基于它。
@@ -867,7 +946,7 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
   const residualTrustSources = plan.residualSources
   const exactRefLists = removableTrustLists.filter((m) => plan.exactRefListIds.includes(m.id))
   const residualNote = residualTrustSources.length > 0
-    ? `；该 IP 仍由${residualTrustSources.join('、')}提供信任，需到策略/列表编辑中移除后才恢复拦截`
+    ? `；该 IP 仍由${residualTrustSources.join('、')}提供信任，需到策略/列表编辑中移除后才恢复常规安全评估`
     : ''
   if (!plan.hasRemovable) {
     if (parseIPList(policy.ip_whitelist).some((e) => entryMatchesIp(e, ip))) {
@@ -915,7 +994,7 @@ const cancelTrustAll = async (row: RowView): Promise<void> => {
     if (verification === 'unknown') {
       ElMessage.warning('移除请求已提交，但最新信任状态核对失败，请刷新确认')
     } else if (verification === 'residual') {
-      ElMessage.warning(`已移除 ${trimmedIp.value} 的可移除信任条目；但该 IP 仍由${(afterPlan?.residualSources ?? []).join('、')}提供信任，拦截尚未恢复`)
+      ElMessage.warning(`已移除 ${trimmedIp.value} 的可移除信任条目；但该 IP 仍由${(afterPlan?.residualSources ?? []).join('、')}提供信任，常规安全评估仍受信任豁免影响`)
     } else {
       mfaAwareSuccess(`已取消 ${trimmedIp.value} 对「${policy.name}」的信任`)
     }
@@ -982,10 +1061,82 @@ const filterablePolicies = computed(() => policies.value.filter((p) => {
   return t !== 'stage2' && t !== 'stage3' && !aclRefsAllSystem(p)
 }))
 
-const rows = computed<RowView[]>(() => policies.value
+const allRows = computed<RowView[]>(() => policies.value
   .filter((p) => !aclRefsAllSystem(p))
-  .filter((p) => lastPolicyFilter.value === 'all' || p.id === lastPolicyFilter.value)
   .map(rowView))
+const rows = computed<RowView[]>(() => allRows.value
+  .filter((row) => lastPolicyFilter.value === 'all' || row.policy.id === lastPolicyFilter.value))
+
+const selectedPolicyCandidates = computed(() => filterablePolicies.value
+  .filter((p) => lastPolicyFilter.value === 'all' || p.id === lastPolicyFilter.value))
+// 已在名单中的 IP 不再重复添加——即使存在可写策略，也只能走移除/编辑。
+const hasDenyHit = computed(() => allRows.value.some((row) => row.policy.ip_acl_enabled && row.policy.ip_acl_mode === 'deny' && row.aclHit))
+const hasAllowHit = computed(() => allRows.value.some((row) => row.policy.ip_acl_enabled && row.policy.ip_acl_mode === 'allow' && row.aclHit))
+const quickDenyPolicy = computed<PolicyRow | null>(() => hasDenyHit.value ? null : selectedPolicyCandidates.value.find((p) => {
+  const type = policyTypeOf(p)
+  return (type === 'stage1' || type === 'mixed') && aclAssociateSides(p.ip_acl_mode).deny
+}) ?? null)
+const quickAllowPolicy = computed<PolicyRow | null>(() => hasAllowHit.value ? null : selectedPolicyCandidates.value.find((p) => {
+  const type = policyTypeOf(p)
+  return (type === 'stage1' || type === 'mixed') && aclAssociateSides(p.ip_acl_mode).allow
+}) ?? null)
+const quickTrustPolicy = computed<PolicyRow | null>(() => selectedPolicyCandidates.value
+  .find((p) => policyTypeOf(p) === 'stage0') ?? null)
+const trustedSourceRows = computed(() => allRows.value.filter((row) => row.inTrust && row.trustEnabled))
+const trustSourceNames = computed(() => trustedSourceRows.value.map((row) => row.policy.name).join('、') || '未知策略')
+const quickActionLoading = computed(() => busyTrust.value || trustCreating.value)
+const quickActionsUnavailable = computed(() => policiesLoading.value || policiesError.value || listsError.value)
+const quickDenyDisabled = computed(() => quickActionsUnavailable.value || quickActionLoading.value || !quickDenyPolicy.value)
+const quickAllowDisabled = computed(() => quickActionsUnavailable.value || quickActionLoading.value || !quickAllowPolicy.value)
+const quickTrustDisabled = computed(() => quickActionsUnavailable.value || quickActionLoading.value || ipTrustedAnywhere.value || !quickTrustPolicy.value)
+const quickPolicyTip = (policy: PolicyRow | null, label: string): string => {
+  if (policiesLoading.value) return '策略加载中'
+  if (policiesError.value) return '策略列表加载失败，请重新加载'
+  if (listsError.value) return '地址列表加载失败，请重新加载'
+  if (hasDenyHit.value && label === '黑名单') return '该 IP 已在黑名单中，不能重复添加'
+  if (hasAllowHit.value && label === '白名单') return '该 IP 已在白名单中，不能重复添加'
+  if (!policy) return `请先创建并绑定${label}策略`
+  return `使用策略「${policy.name}」；未关联地址列表时将创建并关联名单，不会自动创建策略`
+}
+const quickDenyLabel = computed(() => hasDenyHit.value ? '已在黑名单' : '加入黑名单')
+const quickAllowLabel = computed(() => hasAllowHit.value ? '已在白名单' : '加入白名单')
+const quickDenyTip = computed(() => quickPolicyTip(quickDenyPolicy.value, '黑名单'))
+const quickAllowTip = computed(() => quickPolicyTip(quickAllowPolicy.value, '白名单'))
+const quickTrustTip = computed(() => quickPolicyTip(quickTrustPolicy.value, '阶段 0 信任'))
+const quickActionHint = computed(() => {
+  if (policiesError.value) return '策略列表加载失败，请重新加载后重试'
+  if (listsError.value) return '地址列表加载失败，请重新加载后重试'
+  const missing: string[] = []
+  if (!hasDenyHit.value && !quickDenyPolicy.value) missing.push('黑名单')
+  if (!hasAllowHit.value && !quickAllowPolicy.value) missing.push('白名单')
+  if (!ipTrustedAnywhere.value && !quickTrustPolicy.value) missing.push('阶段 0 信任')
+  return missing.length > 0 ? `请先创建并绑定${missing.join('、')}策略；快捷动作不会自动创建策略` : ''
+})
+const runQuickAction = (policy: PolicyRow | null, side: 'deny' | 'allow' | 'trust'): void => {
+  if (!policy || quickActionsUnavailable.value || quickActionLoading.value) return
+  if (side === 'trust' && ipTrustedAnywhere.value) return
+  void ensureListAndJoin(policy, trimmedIp.value, side)
+}
+
+interface StatusChip { key: string; label: string; type: 'danger' | 'success' | 'warning' | 'info' }
+const statusChips = computed<StatusChip[]>(() => {
+  const chips: StatusChip[] = []
+  if (autobanHit.value && !autobanExpired.value) {
+    const unknown = autobanStatusError.value || !autobanRuntime.value
+    chips.push({
+      key: 'autoban',
+      label: unknown ? '自动封禁状态未知' : autobanRuntime.value?.ban_effective ? '自动封禁生效' : '自动封禁未生效',
+      type: unknown ? 'info' : autobanRuntime.value?.ban_effective ? 'danger' : 'warning',
+    })
+  }
+  if (allRows.value.some((row) => row.policy.ip_acl_enabled && row.policy.ip_acl_mode === 'deny' && row.aclHit)) chips.push({ key: 'deny', label: '手动黑名单命中', type: 'danger' })
+  if (allRows.value.some((row) => row.policy.ip_acl_enabled && row.policy.ip_acl_mode === 'allow' && row.aclHit)) chips.push({ key: 'allow', label: '白名单命中', type: 'success' })
+  if (ipTrustedAnywhere.value) chips.push({ key: 'trust', label: '信任豁免', type: 'success' })
+  if (allRows.value.some((row) => row.geoActive)) chips.push({ key: 'geo', label: '地域策略在用', type: 'warning' })
+  return chips
+})
+const statusIncomplete = computed(() => autobanError.value || policiesError.value || listsError.value
+  || (autobanHit.value !== null && autobanStatusError.value))
 
 // 阶段 0 绑定存在性（全量口径，不受筛选影响）——驱动「未绑定信任策略」引导
 const stage0BoundAny = computed(() => policies.value.some((p) => policyTypeOf(p) === 'stage0'))
@@ -1008,9 +1159,9 @@ const rowActions = (row: RowView): RowAction[] => {
     // 逐列表/内联移除按钮在此形态下冗余且有歧义（用户验收裁定）
     acts.push({
       key: 'cancel-trust',
-      label: '取消信任（恢复拦截）',
+      label: '取消信任（恢复常规安全评估）',
       type: 'warning',
-      tip: '将把该 IP 从本策略信任名单（内联与全部引用列表）移除；黑名单/规则命中即恢复拦截',
+      tip: '将把该 IP 从本策略信任名单（内联与全部引用列表）移除；随后按黑名单、WAF 等策略恢复常规安全评估，不代表一定拦截',
       loading: isBusy(pid, 'untrust'),
       run: () => { void cancelTrustAll(row) },
     })
@@ -1018,7 +1169,7 @@ const rowActions = (row: RowView): RowAction[] => {
   // 逐列表/内联信任移除仅在「无取消信任按钮」时出现（trustDead 条目清理场景
   // 或信任关闭时的残留清理——cancel-trust 不覆盖这些形态）
   const granularTrustRemove = trustAllowed && !(row.inTrust && row.trustEnabled)
-  if (trustAllowed && row.canAddTrust) {
+  if (trustAllowed && row.canAddTrust && row.policy.id !== quickTrustPolicy.value?.id) {
     const trustLists = resolveSideLists(row.policy, 'trust')
     if (trustLists.length > 0) {
       // 逐列表出按钮（用户验收：多列表绑定时各出一个，不再只取第一个）
@@ -1058,7 +1209,7 @@ const rowActions = (row: RowView): RowAction[] => {
         ? '该策略 IP 访问控制未启用：加入白名单后暂不放行，启用后生效'
         : '该策略 IP 访问控制未启用：加入后暂不拦截，启用后生效')
     : undefined
-  if (row.canAssociate) {
+  if (row.canAssociate && row.policy.id !== quickDenyPolicy.value?.id) {
     const denyLists = resolveSideLists(row.policy, 'deny')
     if (denyLists.length > 0) {
       for (const list of denyLists) {
@@ -1088,7 +1239,7 @@ const rowActions = (row: RowView): RowAction[] => {
       })
     }
   }
-  if (row.canAssociateAllow) {
+  if (row.canAssociateAllow && row.policy.id !== quickAllowPolicy.value?.id) {
     const allowLists = resolveSideLists(row.policy, 'allow')
     if (allowLists.length > 0) {
       for (const list of allowLists) {
@@ -1264,7 +1415,7 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
     try {
       await ElMessageBox.confirm(
         trustEnabled
-          ? `将把 ${trimmedIp.value} 从策略「${policy.name}」的信任名单移除，该 IP 将恢复常规评估。是否继续？`
+          ? `将把 ${trimmedIp.value} 从策略「${policy.name}」的信任名单移除，该 IP 将恢复常规安全评估。是否继续？`
           : `策略「${policy.name}」的信任名单当前为关闭状态，该条目暂不生效；将把 ${trimmedIp.value} 从信任名单条目中清除。是否继续？`,
         trustEnabled ? '移除信任' : '清除未生效条目',
         { confirmButtonText: '确定', cancelButtonText: '取消', type: trustEnabled ? 'warning' : 'info' },
@@ -1289,20 +1440,36 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-clickable:hover { background: var(--el-color-primary-light-9, #ecf5ff); }
 .ip-clickable:hover .ip-text { color: var(--el-color-primary, #409eff); }
 .ip-clickable:active { background: var(--el-color-primary-light-8, #d9ecff); }
+.ip-clickable:focus-visible { outline: 2px solid var(--el-color-primary, #409eff); outline-offset: 2px; }
 .ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-loc { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 </style>
 
 <style>
-.ip-location-popper { padding: 12px 14px; }
+.ip-location-popper { box-sizing: border-box; max-width: calc(100vw - 24px); padding: 12px 14px; }
 /* 头部：IP 大字等宽 + 事件徽标 + 归属地行 */
 .ip-location-popper .ipo-head { margin-bottom: 10px; }
 .ip-location-popper .ipo-ip-row { display: flex; align-items: center; gap: 8px; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; letter-spacing: .3px; }
 .ip-location-popper .ipo-loc-line { font-size: 12px; color: var(--text-secondary, #909399); margin-top: 3px; }
+.ip-location-popper .ipo-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0 2px; }
+.ip-location-popper .ipo-status-chip { margin: 0; }
+.ip-location-popper .ipo-summary-empty { font-size: 11px; color: var(--text-secondary, #909399); }
 /* 分区：标题 + 卡片流 */
 .ip-location-popper .ipo-sec { margin-top: 12px; }
+/* 自动封禁在策略筛选/策略区之前：用独立底部分隔线与策略面分开，
+   避免卡片直接贴着筛选下拉，视觉上像同一组配置。 */
+.ip-location-popper .ipo-autoban { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-sec-title { font-size: 12px; font-weight: 600; color: var(--el-text-color-regular, #606266); padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); margin-bottom: 8px; }
+.ip-location-popper .ipo-quick { margin: 12px 0; padding: 10px 0 12px; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.ip-location-popper .ipo-autoban + .ipo-quick { border-top: 0; margin-top: 0; padding-top: 0; }
+.ip-location-popper .ipo-quick-title { margin-bottom: 7px; font-size: 12px; font-weight: 600; color: var(--el-text-color-regular, #606266); }
+.ip-location-popper .ipo-quick-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ip-location-popper .ipo-quick-actions .el-button { margin-left: 0; max-width: 100%; }
+.ip-location-popper .ipo-quick-action { display: inline-flex; max-width: 100%; }
+.ip-location-popper .ipo-quick-hint { margin-top: 7px; font-size: 11px; line-height: 1.5; color: var(--el-color-warning, #e6a23c); }
+.ip-location-popper .ipo-trust-source { margin-bottom: 7px; overflow: hidden; font-size: 11px; color: var(--el-color-success, #67c23a); text-overflow: ellipsis; white-space: nowrap; }
+.ip-location-popper .ipo-edit-link { text-decoration: none; }
 /* 快速处置：存入一行 + 新建一行 */
 /* 策略生效卡 */
 .ip-location-popper .ipo-card { border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: var(--el-fill-color-blank, #fff); }
@@ -1310,7 +1477,7 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-location-popper .ipo-name { min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-location-popper .ipo-card-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .ip-location-popper .ipo-count { font-size: 11px; color: var(--text-secondary, #909399); font-variant-numeric: tabular-nums; }
-.ip-location-popper .ipo-mode-line { font-size: 11px; color: var(--text-secondary, #909399); margin-top: 4px; }
+.ip-location-popper .ipo-mode-line { font-size: 11px; line-height: 1.5; color: var(--text-secondary, #909399); margin-top: 4px; overflow-wrap: anywhere; }
 .ip-location-popper .ipo-status { font-size: 12px; color: var(--text-secondary, #909399); margin-top: 6px; }
 .ip-location-popper .ipo-status.is-ok { color: var(--el-color-success, #67c23a); }
 .ip-location-popper .ipo-status.is-warn { color: var(--el-color-warning, #e6a23c); }
@@ -1322,4 +1489,10 @@ const removeTrust = async (policy: PolicyRow): Promise<void> => {
 /* 策略筛选：头部通栏下拉，收窄多策略弹框*/
 .ip-location-popper .ipo-filter { margin-bottom: 8px; }
 .ip-location-popper .ipo-filter .el-select { width: 100%; }
+@media (max-width: 420px) {
+  .ip-location-popper { padding: 10px 12px; }
+  .ip-location-popper .ipo-quick-actions { align-items: stretch; }
+  .ip-location-popper .ipo-quick-action,
+  .ip-location-popper .ipo-quick-action .el-button { flex: 1 1 auto; }
+}
 </style>
