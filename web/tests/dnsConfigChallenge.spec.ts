@@ -106,3 +106,14 @@ test('组件接线：挑战门由快照判定，弹框只在需要时出现', ()
   assert.match(open, /configBaseline\.value = \{\s*dnsProvider: config\.dns_provider/, '编辑态必须回填基线')
   assert.match(open, /configBaseline\.value = null/, '新建态基线为空=首次验证')
 })
+
+test('DNS 凭证验证弹框复用全站 DialogHeader 与 el-dialog 版式', () => {
+  const page = code('src/views/settings/FreeCertificates.vue')
+  const dialog = section(page, 'v-model="dnsVerifyVisible"', '</el-dialog>')
+  assert.match(dialog, /DialogHeader :icon="Connection" title="验证 DNS 凭证"/)
+  assert.match(dialog, /class="dialog-body-inset"/)
+  assert.match(dialog, /v-model="dnsVerifyDomain"/)
+  assert.match(dialog, /@click="confirmDnsVerify"/)
+  assert.doesNotMatch(page, /ElMessageBox\.prompt\(/, '不得退回原生 MessageBox 的标题/正文/按钮布局')
+})
+

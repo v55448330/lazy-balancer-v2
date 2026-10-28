@@ -593,13 +593,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .blob { position: absolute; border-radius: 50%%; filter: blur(70px); }
 .blob-a { width: 380px; height: 380px; background: rgba(59,130,246,.10); top: -120px; right: -80px; }
 .blob-b { width: 320px; height: 320px; background: rgba(244,63,94,.08); bottom: -110px; left: -70px; }
-.card { position: relative; background: #fff; border-radius: 22px; padding: 52px 48px 34px; text-align: center; width: min(560px, calc(100vw - 40px)); box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -8px rgba(16,24,40,.12), 0 32px 64px -16px rgba(16,24,40,.10); }
-.card::before { content: ""; position: absolute; top: 0; left: 24px; right: 24px; height: 3px; border-radius: 0 0 4px 4px; background: linear-gradient(90deg, transparent, %s 18%%, %s 50%%, %s 82%%, transparent); }
+.card { position: relative; background: #fff; border-radius: 0; padding: 52px 48px 34px; text-align: center; width: min(560px, calc(100vw - 40px)); box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -8px rgba(16,24,40,.12), 0 32px 64px -16px rgba(16,24,40,.10); }
+.card::before { content: ""; position: absolute; top: 0; left: 24px; right: 24px; height: 3px; border-radius: 0; background: linear-gradient(90deg, transparent, %s 18%%, %s 50%%, %s 82%%, transparent); }
 .badge { position: relative; width: 84px; height: 84px; margin: 0 auto 20px; }
-.badge-ring { position: absolute; inset: 0; border-radius: 24px; background: linear-gradient(145deg, %s, %s); border: 1px solid %s; box-shadow: 0 4px 12px -2px rgba(16,24,40,.12); }
-.badge-halo { position: absolute; inset: -12px; border-radius: 32px; border: 1px dashed %s; }
+.badge-ring { position: absolute; inset: 0; border-radius: 0; background: linear-gradient(145deg, %s, %s); border: 1px solid %s; box-shadow: 0 4px 12px -2px rgba(16,24,40,.12); }
+.badge-halo { position: absolute; inset: -12px; border-radius: 0; border: 1px dashed %s; }
 .badge svg { position: absolute; inset: 0; margin: auto; width: 38px; height: 38px; }
-.chip { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; letter-spacing: .6px; color: %s; background: %s; border: 1px solid %s; border-radius: 999px; padding: 5px 14px; margin-bottom: 16px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; letter-spacing: .6px; color: %s; background: %s; border: 1px solid %s; border-radius: 0; padding: 5px 14px; margin-bottom: 16px; }
 .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%%; background: %s; }
 h1 { font-size: 28px; font-weight: 700; color: #0f172a; letter-spacing: .2px; margin-bottom: 14px; }
 p { font-size: 14px; color: #64748b; line-height: 1.75; margin-bottom: 6px; }

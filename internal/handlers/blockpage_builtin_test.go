@@ -17,6 +17,34 @@ import (
 // 自动绑定（规则默认仍跟随默认 403 页）。本组测试钉住：builtin 行门禁、渲染形状、
 // 播种与自愈（内容漂移/标志丢失均归位库存）。
 
+func TestRenderBlockPageShell_usesSquareCornersForAllBuiltinPages(t *testing.T) {
+	cfg := brandingConfig{AppName: "Acme"}
+	for _, variant := range []string{"default", "ratelimit", "maintenance"} {
+		page := renderBlockPageShell(cfg, blockPageSpecs[variant])
+		for _, rounded := range []string{
+			"border-radius: 22px", "border-radius: 24px", "border-radius: 32px",
+			"border-radius: 999px", "border-radius: 0 0 4px 4px",
+		} {
+			if strings.Contains(page, rounded) {
+				t.Errorf("%s 仍含圆角声明 %q", variant, rounded)
+			}
+		}
+		for _, selector := range []string{".card {", ".card::before", ".badge-ring", ".badge-halo", ".chip {"} {
+			idx := strings.Index(page, selector)
+			if idx < 0 {
+				t.Fatalf("%s 缺少样式选择器 %s", variant, selector)
+			}
+			end := strings.Index(page[idx:], "}")
+			if end < 0 || !strings.Contains(page[idx:idx+end], "border-radius: 0") {
+				t.Errorf("%s 的 %s 未改为直角", variant, selector)
+			}
+		}
+		if !strings.Contains(page, ".blob { position: absolute; border-radius: 50%;") {
+			t.Errorf("%s 的环境光斑应保持圆形装饰", variant)
+		}
+	}
+}
+
 func TestRenderBuiltinBlockPage_variants(t *testing.T) {
 	// Given
 	cfg := brandingConfig{AppName: "Acme", FooterText: "© 2026 Acme"}

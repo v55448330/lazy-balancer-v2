@@ -42,9 +42,9 @@
               <el-tag :type="autobanStatusError ? 'info' : autobanStatus.enabled ? (autobanStatus.dry_run ? 'warning' : 'success') : 'info'" size="small" effect="plain">
                 {{ autobanStateLabel(autobanStatusError, autobanStatus.enabled, autobanStatus.dry_run) }}
               </el-tag>
-              <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用。读取失败时不渲染：
-                   初值 is_master=false 会在未知态谎称「仅主节点调度」-->
-              <el-tag v-if="!autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">仅主节点调度</el-tag>
+              <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用。加载/读取失败均不渲染：
+                   初值 is_master=false 会在未知态谎称「仅主节点调度」，且徽章闪现会把参数区推向右侧 -->
+              <el-tag v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">仅主节点调度</el-tag>
             </div>
             <div class="autoban-stats">
               <span class="autoban-stat">口径 <b>{{ autobanStatValue(autobanStatusError, autobanScopeText) }}</b></span>
@@ -474,7 +474,7 @@ const autobanStatus = ref<AutobanStatus>({
   // 默认 false：成功响应前不得假定主节点可写
   is_master: false,
 })
-const autobanStatusLoading = ref(false)
+const autobanStatusLoading = ref(true)
 const autobanToggling = ref(false)
 // 状态读取失败：错误态不得按「确定状态」展示——写入口一律禁用
 const autobanStatusError = ref(false)
@@ -968,7 +968,7 @@ const refreshPage = (): void => {
 .autoban-main:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 .autoban-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; flex-shrink: 0; }
 .autoban-title .title-icon { font-size: 16px; color: #3b82f6; }
-.autoban-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 0; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.autoban-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .autoban-stat b { color: #111827; font-weight: 600; margin-left: 2px; }
 .autoban-danger { color: #f56c6c !important; }
 .autoban-actions { flex-shrink: 0; display: flex; gap: 8px; }

@@ -87,5 +87,21 @@ test('状态读取失败：状态标签与六项数值一律显示「—」，�
   assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.list_entries/, '名单数必须走未知态单源')
   assert.match(page, /autobanStateLabel\(autobanStatusError, autobanStatus\.enabled, autobanStatus\.dry_run\)/, '状态标签必须区分未知')
   // 主节点徽章在错误态同样不可信（is_master 初值 false 会显示「仅主节点调度」）
-  assert.match(page, /v-if="!autobanStatusError && !autobanStatus\.is_master"/)
+  assert.match(page, /v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus\.is_master"/)
+})
+
+test('状态首次加载期间不渲染主节点徽章，避免刷新时参数区先右移再回位', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  assert.match(page, /v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus\.is_master"/)
+})
+
+test('参数区按内容自然宽度紧跟标题，不用 flex:1 抢占剩余空间', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  const stats = section(page, '.autoban-stats {', '}')
+  assert.match(stats, /flex: 0 1 auto/)
+})
+
+test('首帧即处于状态加载中，禁止 is_master 初值触发徽章闪现', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  assert.match(page, /const autobanStatusLoading = ref\(true\)/)
 })

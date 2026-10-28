@@ -40,6 +40,13 @@ test('AccessibleLink：role/tabindex/Enter+Space 激活 + 焦点可见', () => {
   assert.match(code('src/components/common/AccessibleLink.vue'), /\.el-link:focus-visible/)
 })
 
+test('AccessibleLink：默认 underline 使用字符串枚举，避免 Element Plus 布尔弃用告警', () => {
+  const wrapper = code('src/components/common/AccessibleLink.vue')
+  assert.match(wrapper, /withDefaults\(defineProps/)
+  assert.match(wrapper, /underline: 'always'/)
+  assert.doesNotMatch(wrapper, /readonly underline\?: boolean/)
+})
+
 test('登录页恢复码切换是真正的可聚焦控件（丢失验证器时的自救入口）', () => {
   const login = code('src/views/Login.vue')
   assert.match(login, /<AccessibleLink type="primary" underline="never" @click="mfaUseRecovery = !mfaUseRecovery/)
@@ -136,6 +143,23 @@ test('ACME 全局设置保存：CA 列表未就绪先报加载态，不误报「
   assert.ok(loadingAt > 0 && loadingAt < errorAt && errorAt < missingAt, '前置门顺序漂移')
   // 前置门必须在写请求之前（失败态照发 PUT 等于把误报变成写侧 400）
   assert.ok(errorAt < page.indexOf("request.put('/config', payload)"), '前置门必须早于 PUT /config')
+})
+
+test('免费证书：CA 提供商测试先确认再发起写操作', () => {
+  const page = code('src/views/settings/FreeCertificates.vue')
+  const test = section(page, 'const testCAProvider = async', 'const openConfigDialog')
+  assert.match(test, /await ElMessageBox\.confirm\(/)
+  assert.ok(test.indexOf('await ElMessageBox.confirm(') < test.indexOf('testingCAId.value = p.id'), '确认必须先于测试 loading 与请求')
+})
+
+test('免费证书：编辑 CA 与 DNS 提供商弹框保存前先确认', () => {
+  const page = code('src/views/settings/FreeCertificates.vue')
+  for (const [fn, saving] of [['saveCAProvider', 'savingCA'], ['saveConfig', 'savingConfig']] as const) {
+    const body = section(page, `const ${fn} = async`, '\nconst ')
+    const confirmAt = body.indexOf('await ElMessageBox.confirm(')
+    assert.ok(confirmAt > 0, `${fn} 缺保存确认`)
+    assert.ok(confirmAt < body.indexOf(`${saving}.value = true`), `${fn} 确认必须早于 saving/请求`)
+  }
 })
 
 // ── ⑦ 错误横幅样式单源（mb-5 与共享类叠加是死重量） ──────────────

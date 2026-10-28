@@ -86,8 +86,8 @@
               </div>
             </template>
             <div v-else class="ipm-no-target">
-              没有可写入的{{ section.title }}策略。请先在安全策略中创建对应策略。
-              <a href="#/security-policies">前往安全策略</a>
+              <span>没有可写入的{{ section.title }}策略。请先在安全策略中创建对应策略。</span>
+              <a href="#/security-policies" @click.prevent="goSecurityPolicies">前往安全策略</a>
             </div>
           </div>
 
@@ -313,6 +313,10 @@ const openAdd = (side: IpQuickSide): void => {
   activeAddSide.value = activeAddSide.value === side ? null : side
   const targets = model.value[side].targets
   selectedTargetKey.value = targets.length === 1 ? targets[0].key : ''
+}
+const goSecurityPolicies = (): void => {
+  activeAddSide.value = null
+  authStore.setCurrentPage('security-policies')
 }
 const executeAdd = async (): Promise<void> => {
   const side = activeAddSide.value
@@ -552,7 +556,7 @@ const retryAll = (): void => { void loadAll() }
 .ip-quick-popper .ipm-source-list { display: grid; gap: 7px; padding-top: 10px; }
 .ip-quick-popper .ipm-source {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px 11px;
   background: var(--el-fill-color-lighter, #f8fafc);
@@ -567,7 +571,7 @@ const retryAll = (): void => { void loadAll() }
 .ip-quick-popper .ipm-source-name { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .ip-quick-popper .ipm-source-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; color: var(--el-text-color-secondary, #8792a3); font-size: 11px; }
 .ip-quick-popper .ipm-cidr { color: var(--el-color-warning, #b57b24); }
-.ip-quick-popper .ipm-source-actions { display: flex; flex: none; align-items: center; gap: 5px; }
+.ip-quick-popper .ipm-source-actions { display: flex; flex: none; align-self: flex-start; align-items: center; gap: 5px; }
 .ip-quick-popper .ipm-remove, .ip-quick-popper .ipm-text-button {
   padding: 3px 5px;
   color: var(--el-text-color-secondary, #778296);
@@ -582,7 +586,7 @@ const retryAll = (): void => { void loadAll() }
 .ip-quick-popper .ipm-ref-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .ip-quick-popper .ipm-ref-title { flex-basis: 100%; color: var(--el-text-color-secondary, #8a94a6); font-size: 10px; }
 .ip-quick-popper .ipm-ref-list span { padding: 2px 6px; background: var(--el-bg-color, #fff); border: 1px solid var(--el-border-color-lighter, #e5eaf0); border-radius: 0; color: var(--el-text-color-secondary, #6f7b8c); font-size: 10px; }
-.ip-quick-popper .ipm-target-panel { margin: 11px 0 3px 16px; padding: 11px; background: rgb(59 130 246 / 4%); border: 1px solid rgb(59 130 246 / 14%); border-radius: 0; }
+.ip-quick-popper .ipm-target-panel { margin: 11px 0 3px; padding: 11px; background: rgb(59 130 246 / 4%); border: 1px solid rgb(59 130 246 / 14%); border-radius: 0; }
 .ip-quick-popper .ipm-target-title { margin-bottom: 7px; color: var(--el-text-color-secondary, #718096); font-size: 11px; }
 .ip-quick-popper .ipm-target { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid transparent; border-radius: 0; cursor: pointer; }
 .ip-quick-popper .ipm-target.is-selected { background: var(--el-bg-color, #fff); border-color: rgb(59 130 246 / 24%); }
@@ -594,8 +598,8 @@ const retryAll = (): void => { void loadAll() }
 .ip-quick-popper .ipm-button { padding: 5px 11px; border: 1px solid var(--el-border-color, #d5dce6); border-radius: 0; cursor: pointer; }
 .ip-quick-popper .ipm-button.is-quiet { color: var(--el-text-color-secondary, #6f7b8c); background: var(--el-bg-color, #fff); }
 .ip-quick-popper .ipm-button.is-primary { color: #fff; background: var(--el-color-primary, #3b82f6); border-color: var(--el-color-primary, #3b82f6); }
-.ip-quick-popper .ipm-no-target { color: var(--el-text-color-secondary, #7c8798); line-height: 1.6; }
-.ip-quick-popper .ipm-no-target a { display: inline-block; margin-left: 6px; color: var(--el-color-primary, #3b82f6); }
+.ip-quick-popper .ipm-no-target { display: grid; gap: 4px; color: var(--el-text-color-secondary, #7c8798); line-height: 1.6; }
+.ip-quick-popper .ipm-no-target a { display: inline-block; margin-left: 0; color: var(--el-color-primary, #3b82f6); }
 .ip-quick-popper .ipm-ban-state { margin-left: 6px; padding: 2px 5px; color: #a76a16; background: rgb(217 154 61 / 10%); border-radius: 0; font-size: 10px; font-weight: 500; }
 .ip-quick-popper .ipm-autoban-hit { background: rgb(217 154 61 / 5%); border-color: rgb(217 154 61 / 18%); }
 .ip-quick-popper .ipm-autoban-error { display: flex; justify-content: space-between; padding: 10px 0 0 16px; color: var(--el-color-warning, #b57b24); }

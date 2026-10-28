@@ -240,6 +240,21 @@
         <el-button type="primary" :loading="savingCA" :disabled="savingCA" @click="saveCAProvider">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="dnsVerifyVisible" width="min(560px, 92vw)" class="dialog-body-inset" :close-on-click-modal="false" @closed="onDnsVerifyClosed">
+      <template #header>
+        <DialogHeader :icon="Connection" title="验证 DNS 凭证" :subtitle="dnsVerifySubtitle" tone="warning" />
+      </template>
+      <el-form label-width="90px" @submit.prevent="confirmDnsVerify">
+        <el-form-item label="管理域名" :error="dnsVerifyError">
+          <el-input v-model="dnsVerifyDomain" placeholder="example.com" autofocus clearable @keyup.enter="confirmDnsVerify" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dnsVerifyVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmDnsVerify">{{ dnsVerifyIsSave ? '验证并保存' : '验证' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -508,6 +523,11 @@ const saveCAProvider = async () => {
     return
   }
 
+  try {
+    await ElMessageBox.confirm(`将保存 CA 提供商「${caForm.name}」的配置修改，是否继续？`, '确认保存', {
+      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    })
+  } catch { return }
   savingCA.value = true
   try {
     const payload: Partial<CAProvider> & { credentials: string } = {
@@ -534,8 +554,14 @@ const saveCAProvider = async () => {
 }
 
 const testCAProvider = async (p: CAProvider) => {
-  // 测试会真实申请 EAB（写 ca_providers.credentials），属写操作
+  // 测试会真实申请 EAB（写 ca_providers.credentials），属写操作；先明确确认再发起。
   if (isReadOnly.value || isTesting.value) return
+  const eabNote = p.provider === 'zerossl' ? '，ZeroSSL 可能自动申请并保存 EAB 凭证' : ''
+  try {
+    await ElMessageBox.confirm(`将对 CA 提供商「${p.name}」发起真实连通性测试${eabNote}。是否继续？`, '测试 CA 提供商', {
+      type: 'warning', confirmButtonText: '开始测试', cancelButtonText: '取消',
+    })
+  } catch { return }
   testingCAId.value = p.id
   try {
     const res = await request.post<APIResponse>(`/ca-providers/${p.id}/test`)
@@ -655,6 +681,11 @@ const saveConfig = async () => {
     ElMessage.warning('请填写配置名称和 DNS 提供商')
     return
   }
+  try {
+    await ElMessageBox.confirm(`将${targetId ? '更新' : '创建'} DNS 提供商配置「${payload.name}」，是否继续？`, '确认保存', {
+      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    })
+  } catch { return }
   savingConfig.value = true
 
   // 真实 DNS 挑战只在凭证需要重新验证时执行：新建、提供商变更、凭证变更、
@@ -735,29 +766,47 @@ const deleteConfig = async (config: CertConfig) => {
   }
 }
 
-const promptTestDomain = async (isSave = false): Promise<string | null> => {
-  try {
-    const { value } = await ElMessageBox.prompt(
-      isSave
-        ? '保存前需要验证 DNS 凭证。请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限'
-        : '请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限',
-      '验证 DNS 凭证',
-      {
-        confirmButtonText: isSave ? '验证并保存' : '验证',
-        cancelButtonText: '取消',
-        inputPlaceholder: 'example.com',
-        inputValidator: (value) => {
-          if (!value) return '请输入域名'
-          if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(value.trim())) return '域名格式不正确'
-          return true
-        },
-      }
-    )
-    return value.trim()
-  } catch {
-    return null
-  }
+const dnsVerifyVisible = ref(false)
+const dnsVerifyDomain = ref('')
+const dnsVerifyError = ref('')
+const dnsVerifyIsSave = ref(false)
+let dnsVerifyResolver: ((domain: string | null) => void) | null = null
+
+const dnsVerifySubtitle = computed(() => dnsVerifyIsSave.value
+  ? '保存前需验证 DNS 权限。系统将临时写入并删除 _acme-challenge.lb-test TXT 记录'
+  : '请输入该 DNS 账户下可管理的域名。系统将临时写入并删除 _acme-challenge.lb-test TXT 记录')
+
+const resolveDnsVerify = (domain: string | null): void => {
+  const resolve = dnsVerifyResolver
+  dnsVerifyResolver = null
+  resolve?.(domain)
 }
+
+const onDnsVerifyClosed = (): void => resolveDnsVerify(null)
+
+const confirmDnsVerify = (): void => {
+  const domain = dnsVerifyDomain.value.trim()
+  if (!domain) {
+    dnsVerifyError.value = '请输入域名'
+    return
+  }
+  if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(domain)) {
+    dnsVerifyError.value = '域名格式不正确'
+    return
+  }
+  dnsVerifyError.value = ''
+  dnsVerifyVisible.value = false
+  resolveDnsVerify(domain)
+}
+
+const promptTestDomain = (isSave = false): Promise<string | null> => new Promise((resolve) => {
+  resolveDnsVerify(null)
+  dnsVerifyIsSave.value = isSave
+  dnsVerifyDomain.value = ''
+  dnsVerifyError.value = ''
+  dnsVerifyResolver = resolve
+  dnsVerifyVisible.value = true
+})
 
 const testConfig = async (config: CertConfig) => {
   // 测试会真实 Present+CleanUp DNS TXT（后端已移出只读豁免），属写操作
