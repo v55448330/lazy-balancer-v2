@@ -4208,9 +4208,8 @@ onUnmounted(() => {
   cursor: pointer;
   text-decoration: none;
 }
-.rule-name-link:hover { 
-  color: #3b82f6; 
-  text-decoration: underline;
+.rule-name-link:hover {
+  color: #3b82f6;
 }
 .domain { font-family: monospace; color: #374151; }
 .port { font-family: monospace; color: #374151; }

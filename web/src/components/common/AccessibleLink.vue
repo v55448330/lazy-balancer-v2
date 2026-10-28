@@ -22,8 +22,8 @@ const props = withDefaults(defineProps<{
   readonly underline?: 'always' | 'hover' | 'never'
   readonly size?: '' | 'small' | 'default' | 'large'
 }>(), {
-  // Element Plus 3 将弃用布尔 underline；默认 always 与原 el-link 默认 true 同视觉。
-  underline: 'always',
+  // 统一表格/弹框链接：平时无下划线，hover 与 IP 快捷入口同视觉。
+  underline: 'never',
 })
 
 // 键盘激活：Enter/Space → 合成 click（浏览器对无 href 的 <a> 不提供默认激活行为）。
@@ -37,6 +37,9 @@ const activate = (event: KeyboardEvent): void => {
 </script>
 
 <style scoped>
-/* 键盘焦点必须可见：el-link 默认无焦点环 */
+/* 键盘焦点必须可见；hover/active 与 IP 快捷弹框触发入口一致。 */
+.el-link { padding: 1px 3px; margin: -1px -3px; border-radius: 3px; transition: background .15s, color .15s; }
+.el-link:hover { background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary, #409eff); text-decoration: none; }
+.el-link:active { background: var(--el-color-primary-light-8, #d9ecff); }
 .el-link:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
 </style>

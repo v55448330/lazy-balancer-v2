@@ -40,11 +40,19 @@ test('AccessibleLink：role/tabindex/Enter+Space 激活 + 焦点可见', () => {
   assert.match(code('src/components/common/AccessibleLink.vue'), /\.el-link:focus-visible/)
 })
 
-test('AccessibleLink：默认 underline 使用字符串枚举，避免 Element Plus 布尔弃用告警', () => {
+test('AccessibleLink：默认无下划线，hover 与 IP 快捷入口同款浅底主色', () => {
   const wrapper = code('src/components/common/AccessibleLink.vue')
   assert.match(wrapper, /withDefaults\(defineProps/)
-  assert.match(wrapper, /underline: 'always'/)
+  assert.match(wrapper, /underline: 'never'/)
   assert.doesNotMatch(wrapper, /readonly underline\?: boolean/)
+  assert.match(wrapper, /\.el-link:hover \{ background: var\(--el-color-primary-light-9, #ecf5ff\); color: var\(--el-color-primary, #409eff\); text-decoration: none;/)
+  assert.match(wrapper, /\.el-link:active \{ background: var\(--el-color-primary-light-8, #d9ecff\);/)
+})
+
+test('负载均衡规则名 hover 不再覆盖统一样式为下划线', () => {
+  const page = code('src/views/Rules.vue')
+  const hover = section(page, '.rule-name-link:hover {', '}')
+  assert.doesNotMatch(hover, /text-decoration:\s*underline/)
 })
 
 test('登录页恢复码切换是真正的可聚焦控件（丢失验证器时的自救入口）', () => {
