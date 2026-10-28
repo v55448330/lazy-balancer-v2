@@ -42,7 +42,7 @@
       <div class="oidc-step-badge">2</div>
       <div class="oidc-step-body">
       <div class="step-title">在认证服务后台创建应用，填入以下信息</div>
-      <div class="reg-info">
+      <div class="dialog-panel reg-info">
           <!-- 两行样式(2026-09-19 用户裁定):第一行=回调地址(节点名)标题,
                第二行=地址+复制按钮——防节点名过长时行内挤压换行错位 -->
           <div v-for="node in callbackNodes" :key="node.url" class="reg-row">
@@ -447,7 +447,7 @@ const copy = async (text: string) => {
 .cred-row__field { flex: 1; min-width: 0; }
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
 .probe-err { margin-top: 6px; font-size: 12.5px; color: var(--el-color-danger); }
-.reg-info { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px 12px; background: var(--el-fill-color-light); }
+.reg-info { margin-top: 4px; }
 .reg-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
 .reg-row + .reg-row { border-top: 1px dashed var(--el-border-color-lighter); }
 .reg-label { font-size: 12.5px; color: var(--el-text-color-secondary); word-break: break-all; }

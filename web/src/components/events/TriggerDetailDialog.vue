@@ -2,15 +2,19 @@
   <el-dialog
     :model-value="modelValue"
     class="dialog-body-inset"
-    title="触发详情"
+    @update:model-value="emit('update:modelValue', $event)"
     width="min(680px, 94vw)"
     top="5vh"
     append-to-body
     @close="emit('update:modelValue', false)"
   >
+    <template #header>
+      <DialogHeader :icon="Document" title="触发详情" subtitle="命中阶段、策略来源与请求上下文" />
+    </template>
     <div v-loading="loading">
       <!-- ① 命中概览：阶段 → 策略 → 命中源（一眼可读） -->
-      <div class="trg-hero" :class="`trg-source--${kind}`">
+      <div class="trg-hero dialog-panel" :class="`trg-source--${kind}`">
+        <DialogSectionHeader title="命中概览" />
         <div class="trg-hero-row">
           <el-tag size="small" :type="sourceTagType" effect="dark">{{ categoryLabel }}</el-tag>
           <span class="trg-hero-stage">{{ heroStage }}</span>
@@ -53,8 +57,8 @@
         <span class="info-note-desc">地址列表条目加载失败：命中名单与信任豁免归因不完整</span>
         <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">重新加载</el-button>
       </div>
-      <div class="trg-card">
-        <div class="trg-card-title">策略配置 · {{ dimensionTitle }}</div>
+      <div class="trg-card dialog-panel">
+        <DialogSectionHeader :title="`策略配置 · ${dimensionTitle}`" />
         <div class="trg-kv"><span class="k">当前配置</span><span>{{ relevantSummary }}</span></div>
 
         <!-- 命中的地址列表与内联名单（只读信息） -->
@@ -161,8 +165,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowRight } from '@element-plus/icons-vue'
-import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
+import { ArrowRight, Document } from '@element-plus/icons-vue'
+import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
@@ -751,8 +756,7 @@ watch(() => props.modelValue, (v) => {
 </script>
 
 <style scoped>
-/* ① 命中概览（trg-hero）：基础布局在前，类型着色在后覆盖默认 danger 色 */
-.trg-hero { border: 1px solid var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+/* ① 命中概览：共享面板承载布局，类型着色仅覆盖边框与底色 */
 .trg-hero-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .trg-hero-stage { font-weight: 700; font-size: 14px; }
 .trg-hero-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
@@ -762,17 +766,15 @@ watch(() => props.modelValue, (v) => {
 .trg-hero-time { font-size: 12px; margin-top: 4px; color: var(--el-text-color-secondary); }
 .trg-hero-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); flex-wrap: wrap; }
 /* ① 来源卡与命中概览：类型着色（全类型同构，仅色相区分） */
-.trg-source--geo { border-color: var(--el-color-warning-light-7); background: var(--el-color-warning-light-9); }
-.trg-source--crawler { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
-.trg-source--threat { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
-.trg-source--trust { border-color: var(--el-color-success-light-7); background: var(--el-color-success-light-9); }
-.trg-source--acl { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
-.trg-source--waf-crs, .trg-source--waf-custom { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
-.trg-source--body { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
+.trg-hero.trg-source--geo { border-color: var(--el-color-warning-light-7); background: var(--el-color-warning-light-9); }
+.trg-hero.trg-source--crawler { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
+.trg-hero.trg-source--threat { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
+.trg-hero.trg-source--trust { border-color: var(--el-color-success-light-7); background: var(--el-color-success-light-9); }
+.trg-hero.trg-source--acl { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
+.trg-hero.trg-source--waf-crs, .trg-hero.trg-source--waf-custom { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
+.trg-hero.trg-source--body { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
 .trg-source-geo { color: var(--el-text-color-secondary); font-size: 12px; }
-/* ②③ 信息卡：统一标题+分隔线+KV 行 */
-.trg-card { border: 1px solid var(--el-border-color); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
-.trg-card-title { font-size: 13px; font-weight: 600; padding-bottom: 6px; margin-bottom: 8px; border-bottom: 1px dashed var(--el-border-color-lighter); }
+/* ② 信息卡：KV 行 */
 .trg-kv { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; }
 .trg-kv .k { color: var(--el-text-color-secondary); flex-shrink: 0; width: 96px; }
 .trg-cond { font-size: 13px; }
@@ -784,6 +786,6 @@ watch(() => props.modelValue, (v) => {
 .crs-snippet-toggle-icon { transition: transform .2s; }
 .crs-snippet-toggle-icon.is-expanded { transform: rotate(90deg); }
 .crs-snippet-toggle-file { color: var(--el-text-color-secondary); }
-.crs-snippet-body { margin-top: 8px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; padding: 8px; max-height: 260px; overflow: auto; background: var(--el-fill-color-light); }
+.crs-snippet-body { margin-top: 8px; border: 1px solid var(--el-border-color-lighter); padding: 8px; max-height: 260px; overflow: auto; background: var(--el-fill-color-light); }
 .crs-snippet-empty { font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

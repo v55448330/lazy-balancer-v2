@@ -277,7 +277,8 @@
         />
       </template>
       <div v-if="detailTask" class="tm-detail">
-        <div v-if="detailTask.description" class="tm-detail-desc">{{ detailTask.description }}</div>
+        <section class="dialog-panel">
+          <DialogSectionHeader title="任务信息" :description="detailTask.description" />
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
           <el-descriptions-item label="运行节奏">{{ detailTask.cadence || '—' }}</el-descriptions-item>
           <el-descriptions-item label="角色适用性">
@@ -306,33 +307,36 @@
           <el-descriptions-item v-if="detailTask.last_run" label="耗时">{{ fmtDuration(detailTask.last_run.duration_ms) }}</el-descriptions-item>
           <el-descriptions-item v-if="detailTask.last_run" label="触发 / 结果"><span class="tm-inline-flex">{{ triggerLabel(detailTask.last_run.trigger) }} · {{ detailTask.last_run.operator || '系统' }} · <el-tag size="small" :type="resultTagType(detailTask.last_run.result)">{{ statusResultLabel(detailTask.last_run.result) }}</el-tag></span></el-descriptions-item>
         </el-descriptions>
-        <div v-if="detailTask.last_run?.message" class="tm-detail-msg">{{ detailTask.last_run.message }}</div>
+        </section>
+        <div v-if="detailTask.last_run?.message" class="dialog-panel tm-detail-msg">{{ detailTask.last_run.message }}</div>
         <!-- 历史加载失败显性化（原静默呈现为空表，与「无记录」不可区分）-->
         <el-alert v-if="detailHistoryError" type="error" :closable="false" show-icon title="运行历史加载失败，请关闭后重新打开" style="margin-bottom: 12px" />
-        <template v-if="history.length">
-          <div class="tm-detail-section">{{ historyTitle }}</div>
-          <el-table :data="history" size="small" max-height="240" class="tm-nowrap-table">
-            <el-table-column prop="started_at" label="开始" width="152">
-              <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
-            </el-table-column>
-            <el-table-column prop="duration_ms" label="耗时" width="78">
-              <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
-            </el-table-column>
-            <el-table-column prop="trigger" label="触发" width="72">
-              <template #default="{ row }">{{ triggerLabel(row.trigger) }}</template>
-            </el-table-column>
-            <el-table-column label="操作者" width="120" show-overflow-tooltip>
-              <!-- operator 为空=自动/排程/启动等系统触发（后端 auto/startup/legacy 恒空） -->
-              <template #default="{ row }">{{ row.operator || '系统' }}</template>
-            </el-table-column>
-            <el-table-column prop="status" label="结果" width="88">
-              <template #default="{ row }">
-                <el-tag size="small" :type="resultTagType(row.status)">{{ statusResultLabel(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="message" label="信息" min-width="120" show-overflow-tooltip />
-          </el-table>
-        </template>
+        <section v-if="history.length" class="tm-history-section">
+          <DialogSectionHeader :title="historyTitle" />
+          <div class="dialog-panel dialog-panel--flush">
+            <el-table :data="history" size="small" max-height="240" class="tm-nowrap-table">
+              <el-table-column prop="started_at" label="开始" width="152">
+                <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
+              </el-table-column>
+              <el-table-column prop="duration_ms" label="耗时" width="78">
+                <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
+              </el-table-column>
+              <el-table-column prop="trigger" label="触发" width="72">
+                <template #default="{ row }">{{ triggerLabel(row.trigger) }}</template>
+              </el-table-column>
+              <el-table-column label="操作者" width="120" show-overflow-tooltip>
+                <!-- operator 为空=自动/排程/启动等系统触发（后端 auto/startup/legacy 恒空） -->
+                <template #default="{ row }">{{ row.operator || '系统' }}</template>
+              </el-table-column>
+              <el-table-column prop="status" label="结果" width="88">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="resultTagType(row.status)">{{ statusResultLabel(row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="message" label="信息" min-width="120" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </section>
       </div>
     </el-dialog>
 
@@ -345,7 +349,7 @@
       <div class="tm-log-stats">
         <LogStorageBar :log-key="logsTaskStorageKey" style="margin-right: auto" />
       </div>
-          <div ref="logContainerRef" class="tm-log-container">
+          <div ref="logContainerRef" class="dialog-panel tm-log-container">
         <pre v-if="logsText" class="tm-log-content">{{ logsText }}</pre>
         <el-empty v-else description="暂无日志" :image-size="60" />
       </div>
@@ -381,6 +385,7 @@ import { statusColor } from '@/utils/chartTheme'
 import { certJobStatusLabel, certJobRetryReady, type CertJobStatus } from '@/utils/certJobStatus'
 import { CERT_QUEUE_VISIBLE_JOBS, certQueueHasLive, certQueueIsBusy, certQueueMoreCount } from '@/utils/certQueue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import type { APIResponse } from '@/types'
 
@@ -1015,17 +1020,16 @@ const fmtDuration = (ms?: number) => {
 .tm-tip-sep { height: 6px; }
 
 /* 详情 */
-.tm-detail { display: flex; flex-direction: column; gap: 14px; }
-.tm-detail-desc { font-size: 13px; color: var(--el-text-color-regular); line-height: 1.7; background: var(--el-fill-color-lighter); border-radius: 8px; padding: 10px 14px; }
+.tm-detail { display: flex; flex-direction: column; gap: 12px; }
+.tm-detail > .dialog-panel + .dialog-panel { margin-top: 0; }
 .tm-detail-descs :deep(.el-descriptions__label) { white-space: nowrap; }
 .tm-detail-descs :deep(.el-descriptions__content .el-tag) { vertical-align: middle; margin-left: 4px; }
 .tm-inline-flex { display: inline-flex; align-items: center; gap: 2px; }
 .tm-detail-msg { font-size: 12.5px; color: var(--el-text-color-secondary); }
-.tm-detail-section { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
 
 /* 日志 */
 .tm-log-stats { display: flex; align-items: center; margin-bottom: 10px; }
-.tm-log-container { max-height: 60vh; overflow: auto; background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #1e293b; }
+.tm-log-container { max-height: 60vh; overflow: auto; background: #0f172a; border-radius: 0; padding: 12px; border: 1px solid #1e293b; }
 .tm-log-content { margin: 0; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
 </style>
 

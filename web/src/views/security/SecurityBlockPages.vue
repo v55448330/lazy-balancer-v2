@@ -117,8 +117,14 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" title="拦截页面预览" width="min(960px, 94vw)" top="3vh" @close="previewContent = ''">
-      <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 1px solid #e4e7ed; border-radius: 6px; background: #fff; display: block" />
+    <el-dialog v-model="previewVisible" width="min(960px, 94vw)" top="3vh" @close="previewContent = ''">
+      <template #header>
+        <DialogHeader :icon="Document" title="拦截页面预览" subtitle="在隔离沙箱中预览客户端接收的响应内容" />
+      </template>
+      <DialogSectionHeader title="页面效果" />
+      <div class="dialog-panel dialog-panel--flush">
+        <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 0; background: #fff; display: block" />
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -139,6 +145,7 @@ import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import type { APIResponse, UserListItem } from '@/types'
 interface BlockPage { id: number; name: string; description: string; content: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
@@ -268,7 +275,7 @@ const deletingId = ref<number | null>(null)
 const handleDelete = (row: BlockPage) => {
   if (deletingId.value !== null) return
   deletingId.value = row.id
-  ElMessageBox.confirm(`确定删除拦截页面"${row.name}"？`, '确认', { type: 'warning' })
+  ElMessageBox.confirm(`将删除拦截页面「${row.name}」。删除后无法恢复，引用它的策略将失去该自定义页面。`, '删除拦截页面', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     .then(async () => { const del = await request.delete(`/security/block-pages/${row.id}`); showSaveResult(del, '已删除'); fetchData() })
     .catch(() => { /* 用户取消或请求失败（全局拦截器已 toast）——列表保持不变 */ })
     .finally(() => { deletingId.value = null })
@@ -292,7 +299,7 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
-.block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
+.block-content-editor { border: 1px solid #e4e7ed; overflow: hidden; }
 
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 

@@ -15,9 +15,9 @@
 
     <!-- 规则侧：按阶段分区选策略 -->
     <div v-if="mode === 'rule'" class="bind-stage-groups">
-      <div v-for="section in stageSections" :key="section.type" class="bind-stage-group">
+      <div v-for="section in stageSections" :key="section.type" class="bind-stage-group dialog-panel">
         <div class="bind-stage-head">
-          <span class="bind-stage-title">{{ section.title }}</span>
+          <DialogSectionHeader :title="section.title" />
           <span class="bind-stage-head-meta">
             <span class="bind-stage-count">已选 {{ section.selection.value.length }} 条</span>
             <!-- 存量多限流绑定（裁定：运行兼容 + 保存即引导清理）：单选控件
@@ -51,9 +51,9 @@
       </div>
       <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择。
            存在绑定 mixed 时保存禁用——后端按提交集全量替换绑定，照常提交会静默剥离 mixed -->
-      <div v-if="boundMixedPolicies.length > 0" class="bind-stage-group bind-stage-group--readonly">
+      <div v-if="boundMixedPolicies.length > 0" class="bind-stage-group bind-stage-group--readonly dialog-panel">
         <div class="bind-stage-head">
-          <span class="bind-stage-title">混合策略（兼容旧版）</span>
+          <DialogSectionHeader title="混合策略（兼容旧版）" />
           <span class="bind-stage-count">{{ boundMixedPolicies.length }} 条</span>
         </div>
         <div class="bind-mixed-tags">
@@ -160,6 +160,7 @@ import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import type { APIResponse } from '@/types'
 import {
   POLICY_TYPE_SHORT_LABELS,
@@ -470,12 +471,10 @@ const submit = async (): Promise<void> => {
 </script>
 
 <style scoped>
-.bind-stage-groups { display: flex; flex-direction: column; gap: 16px; }
-.bind-stage-group { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 12px; }
-.bind-stage-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.bind-stage-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+.bind-stage-groups { display: flex; flex-direction: column; }
+.bind-stage-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .bind-stage-count { font-size: 12px; color: #6b7280; }
-.bind-stage-head-meta { display: inline-flex; align-items: center; gap: 8px; }
+.bind-stage-head-meta { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .bind-state-tag { margin-left: 8px; }
 
 .picker-search { margin-bottom: 10px; }
@@ -500,6 +499,6 @@ const submit = async (): Promise<void> => {
 .bind-total.is-over { color: var(--el-color-danger); font-weight: 600; }
 .bind-footer-buttons { display: flex; gap: 12px; }
 
-.bind-stage-group--readonly { background: #fafafa; border-style: dashed; }
+.bind-stage-group--readonly { border-style: dashed; }
 .bind-mixed-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

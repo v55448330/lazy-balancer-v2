@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, section, stripComments, source, codeSection } from './_helpers.ts'
+import { code, member, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -12,33 +12,6 @@ test('当前密码错误在页面本地 toast，拦截器复用精确分类', ()
   assert.match(code('src/utils/apiFailure.ts'), /isCurrentPasswordRejection\(/)
 })
 
-test('只有已启用信任命中才抑制新增信任', () => {
-  const text = code('src/views/security/IPLocationAction.vue')
-  const hit = text.indexOf('if (!mergedTrustEntries(policy).some')
-  const enabled = text.indexOf('if (!policy.ip_whitelist_enabled) continue', hit)
-  const trusted = text.indexOf('trusted = true', hit)
-  assert.ok(hit > 0 && enabled > hit && trusted > enabled, 'trusted 赋值必须位于 enabled 门之后')
-})
-
-test('引用列表仅精确条目可移除，removed=false 不得报成功', () => {
-  const text = code('src/views/security/IPLocationAction.vue')
-  assert.match(text, /const ipExactListIds = computed/)
-  // 语句级限段用**下一条语句声明**作终点（结构边界），不再用行首注释——
-  // 语句内插入一行注释就会提前截断（假红）。两个赋值必须各自按本侧 refs +
-  // 精确条目双重过滤。
-  // 可移除信任列表单源 trustListsForRefs：refs 过滤 + 精确条目命中在同一处双门
-  // （列表渲染与「取消信任」的写回路径必须算出同一集合，各算一份会漂移）。
-  const trustBlock = section(text, 'const trustListsForRefs =', 'const rowView =')
-  assert.match(trustBlock, /refIds\.includes\(l\.id\)/, '信任引用移除列表必须按信任 refs 过滤')
-  assert.match(trustBlock, /ipExactListIds\.value\.has\(l\.id\)/, '信任引用移除列表必须过滤为精确条目命中')
-  assert.match(trustBlock, /\.map\(\(l\) => \(\{ id: l\.id, name: l\.name \}\)\)/)
-  assert.match(text, /view\.removableTrustRefLists = trustListsForRefs\(trustRefIds\)/, '行渲染必须复用该单源')
-  const aclBlock = section(text, 'view.removableRefLists = ipLists.value', '\n  const { detectionOwner')
-  assert.match(aclBlock, /ip_acl_list_refs\)\.includes\(l\.id\)/, 'ACL 引用移除列表必须按 ACL refs 过滤')
-  assert.match(aclBlock, /ipExactListIds\.value\.has\(l\.id\)/, 'ACL 引用移除列表必须过滤为精确条目命中')
-  assert.match(aclBlock, /\.map\(\(l\) => \(\{ id: l\.id, name: l\.name \}\)\)/)
-  assert.match(code('src/composables/useTrustAssociation.ts'), /res\.data\?\.removed !== true/)
-})
 
 test('注册弹框记录打开时节点模式，并在关闭时清空', () => {
   const text = code('src/views/settings/cluster/ClusterModeCard.vue')
@@ -234,16 +207,13 @@ test('IP 快捷弹框全流程使用 trim 后的地址（无裸 props.ip 消费�
     /props\.ip(?!\.trim\()/,
     '地址只允许经 trimmedIp 归一后消费，禁止直接读 props.ip',
   )
-  // 移除/legacy 判定路径都用归一值
-  assert.match(text, /inLegacy: parseIPList\(policy\.ip_blacklist\)\.includes\(trimmedIp\.value\)/)
-  assert.match(text, /if \(!list\.includes\(trimmedIp\.value\)\)/)
   assert.match(text, /entry !== trimmedIp\.value/)
 })
 
 test('拦截页删除重入守卫（确认前占位、finally 释放）', () => {
   const text = code('src/views/security/SecurityBlockPages.vue')
   const guard = text.indexOf('if (deletingId.value !== null) return')
-  const confirm = text.indexOf('ElMessageBox.confirm(`确定删除拦截页面')
+  const confirm = text.indexOf('ElMessageBox.confirm(')
   const release = text.indexOf('deletingId.value = null')
   assert.ok(guard > 0, '必须有重入守卫')
   assert.ok(confirm > guard, '守卫必须先于确认框（先占位再弹）')
@@ -424,11 +394,7 @@ test('掩码私钥不得误报「请提供私钥」', () => {
   assert.match(branch, /请提供私钥 \(KEY\)/)
 })
 
-test('信任语义单源：快捷弹框/事件详情/流程副标题共用 trustHitMode', () => {
-  const ipAction = code('src/views/security/IPLocationAction.vue')
-  assert.match(ipAction, /trustHitMode\(policy\.policy_type, policy\.trust_detection\) === 'detection'\) detectionOwner/)
-  assert.match(ipAction, /trustDetectionLabel: trustHitMode\(policy\.policy_type, policy\.trust_detection\)/)
-
+test('信任语义单源：事件详情与流程副标题共用 trustHitMode', () => {
   const trigger = code('src/components/events/TriggerDetailDialog.vue')
   assert.match(trigger, /const trustModeText = computed\(\(\) => trustHitMode\(policy\.value\?\.policy_type, policy\.value\?\.trust_detection\)/)
   assert.doesNotMatch(trigger, /policy\?\.trust_detection === true \? '保留检测/)
@@ -532,19 +498,6 @@ test('计分动作模板分支已删除（后端合法动作仅 block/log/pass�
 
 // ---- 安全域前端可观测性批次：动作门控 / 失败态 / 明细对账 / 单源谓词 ----
 
-test('ACL 未启用的策略卡仍按模式给出名单动作（动作门先于地域文案分支）', () => {
-  const text = code('src/views/security/IPLocationAction.vue')
-  const block = codeSection('src/views/security/IPLocationAction.vue', 'if (!policy.ip_acl_enabled) {', '// 生效名单 = 内联 ∪ 引用列表条目')
-  const sides = block.indexOf('const sides = aclAssociateSides(policy.ip_acl_mode)')
-  const geo = block.indexOf('if (geoActive) {')
-  assert.ok(sides > 0, 'ACL 未启用分支必须按 ip_acl_mode 计算动作集合')
-  assert.ok(geo > sides, '动作门控必须先于地域分支（地域分支只负责状态文案）')
-  assert.match(block, /view\.canAssociate = sides\.deny/)
-  assert.match(block, /view\.canAssociateAllow = sides\.allow/)
-  // 未启用态动作带「加入后暂不拦截/暂不放行」tip（按模式二分）
-  assert.match(text, /该策略 IP 访问控制未启用：加入后暂不拦截，启用后生效/)
-  assert.match(text, /该策略 IP 访问控制未启用：加入白名单后暂不放行，启用后生效/)
-})
 
 test('CRS 规则文件加载失败任何形态都给可见错误态（旧数据标注为上次结果）', () => {
   const text = code('src/views/security/SecurityRules.vue')

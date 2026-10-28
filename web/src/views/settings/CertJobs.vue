@@ -128,7 +128,7 @@
     <template #header>
       <DialogHeader :icon="Timer" :title="`证书日志 - ${currentJob?.domain || ''}`" subtitle="ACME 签发任务实时日志" />
     </template>
-    <div ref="logContainerRef" class="log-container">
+    <div ref="logContainerRef" class="dialog-panel log-container">
       <pre v-if="logHtml" class="log-content" v-html="logHtml" />
       <el-empty v-else description="暂无日志" :image-size="60" />
     </div>
@@ -430,8 +430,8 @@ onUnmounted(() => {
   max-height: 520px;
   overflow: auto;
   background: #0f172a;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 0;
+  padding: 12px;
   border: 1px solid #1e293b;
 }
 .log-content {

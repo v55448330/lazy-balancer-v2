@@ -229,7 +229,7 @@
         <!-- 用户裁定:内容上限 ~190-200px(IPv4 126+gap+归属地 72),定宽 200 不再挤占方法/URI-->
         <el-table-column label="客户端 IP" width="200">
           <template #default="{ row }">
-            <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
+            <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
           </template>
         </el-table-column>
         <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
@@ -329,66 +329,75 @@
           :subtitle="`${ctxEvent ? formatDate(ctxEvent.event_time) : '—'} · ${ctxEvent?.policy_name || '未知策略'}`" />
       </template>
       <template v-if="ctxEvent">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="时间">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
-          <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="URI" :span="2">{{ ctxEvent.uri || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="触发规则">{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="动作">
-            <el-tag size="small" :type="eventActionTone(ctxEvent.action)" effect="plain">
-              {{ eventActionFull(ctxEvent.action) }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="异常评分">{{ ctxEvent.anomaly_score > 0 ? ctxEvent.anomaly_score : '—' }}</el-descriptions-item>
-          <el-descriptions-item label="处理时长">{{ formatDurationUs(ctxWafFamily ? ctxEvent.duration_us + ctxEvent.precheck_us : ctxEvent.duration_us) }}{{ ctxWafFamily ? '' : '（预检耗时，含事件记录开销）' }}</el-descriptions-item>
-          <el-descriptions-item v-if="ctxWafFamily && ctxEvent.precheck_us > 0" label="耗时分解">预检 {{ formatDurationUs(ctxEvent.precheck_us) }} + WAF 段 {{ formatDurationUs(ctxEvent.duration_us) }}</el-descriptions-item>
-        </el-descriptions>
+        <section class="ctx-detail-section">
+          <DialogSectionHeader title="请求摘要" />
+          <div class="dialog-panel dialog-panel--flush">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="时间">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
+              <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="URI" :span="2">{{ ctxEvent.uri || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="触发规则">{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="动作">
+                <el-tag size="small" :type="eventActionTone(ctxEvent.action)" effect="plain">
+                  {{ eventActionFull(ctxEvent.action) }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="异常评分">{{ ctxEvent.anomaly_score > 0 ? ctxEvent.anomaly_score : '—' }}</el-descriptions-item>
+              <el-descriptions-item label="处理时长">{{ formatDurationUs(ctxWafFamily ? ctxEvent.duration_us + ctxEvent.precheck_us : ctxEvent.duration_us) }}{{ ctxWafFamily ? '' : '（预检耗时，含事件记录开销）' }}</el-descriptions-item>
+              <el-descriptions-item v-if="ctxWafFamily && ctxEvent.precheck_us > 0" label="耗时分解">预检 {{ formatDurationUs(ctxEvent.precheck_us) }} + WAF 段 {{ formatDurationUs(ctxEvent.duration_us) }}</el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </section>
 
-        <div class="ctx-section-title">请求头</div>
-        <template v-if="ctxHeadersParsed.failed">
-          <div class="info-note-bar ctx-banner"><span class="info-note-desc">请求头记录解析失败，以下为原始内容</span></div>
-          <pre class="ctx-body-pre">{{ ctxEvent.request_headers }}</pre>
-        </template>
-        <template v-else-if="ctxHeadersParsed.rows.length > 0 || ctxHeadersParsed.dropped > 0 || ctxHeadersParsed.listDropped > 0">
-          <div v-if="ctxHeadersParsed.dropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.dropped }} 个头（请求头超出 64KB 采集上限）</div>
-          <div v-if="ctxHeadersParsed.listDropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.listDropped }} 个头（请求头超出列表 16KB 展示上限）</div>
-          <el-table v-if="ctxHeadersParsed.rows.length > 0" :data="ctxHeadersParsed.rows" size="small" :max-height="260" :header-cell-style="{ background: '#f9fafb' }">
-            <el-table-column prop="name" label="名称" width="200" show-overflow-tooltip />
-            <el-table-column label="值" min-width="380">
-              <template #default="{ row }">
-                <div class="ctx-header-value-cell">
-                  <span class="ctx-header-value">{{ ctxHeaderDisplay(row) }}</span>
-                  <el-button
-                    v-if="row.sensitive"
-                    link
-                    type="primary"
-                    size="small"
-                    class="ctx-reveal-btn"
-                    :title="ctxRevealed.has(row.name.toLowerCase()) ? '点击隐藏' : '点击显示'"
-                    @click="toggleCtxReveal(row.name)"
-                  >
-                    <el-icon><Hide v-if="ctxRevealed.has(row.name.toLowerCase())" /><View v-else /></el-icon>
-                  </el-button>
-                </div>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-        <div v-else class="ctx-empty">暂无请求头记录</div>
+        <section class="ctx-detail-section">
+          <DialogSectionHeader title="请求头" />
+          <template v-if="ctxHeadersParsed.failed">
+            <div class="info-note-bar ctx-banner"><span class="info-note-desc">请求头记录解析失败，以下为原始内容</span></div>
+            <div class="dialog-panel dialog-panel--flush"><pre class="ctx-body-pre">{{ ctxEvent.request_headers }}</pre></div>
+          </template>
+          <template v-else-if="ctxHeadersParsed.rows.length > 0 || ctxHeadersParsed.dropped > 0 || ctxHeadersParsed.listDropped > 0">
+            <div class="dialog-panel" :class="{ 'dialog-panel--flush': ctxHeadersParsed.rows.length > 0 }">
+              <div v-if="ctxHeadersParsed.dropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.dropped }} 个头（请求头超出 64KB 采集上限）</div>
+              <div v-if="ctxHeadersParsed.listDropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.listDropped }} 个头（请求头超出列表 16KB 展示上限）</div>
+              <el-table v-if="ctxHeadersParsed.rows.length > 0" :data="ctxHeadersParsed.rows" size="small" :max-height="260" :header-cell-style="{ background: '#f9fafb' }">
+                <el-table-column prop="name" label="名称" width="200" show-overflow-tooltip />
+                <el-table-column label="值" min-width="380">
+                  <template #default="{ row }">
+                    <div class="ctx-header-value-cell">
+                      <span class="ctx-header-value">{{ ctxHeaderDisplay(row) }}</span>
+                      <el-button
+                        v-if="row.sensitive"
+                        link
+                        type="primary"
+                        size="small"
+                        class="ctx-reveal-btn"
+                        :title="ctxRevealed.has(row.name.toLowerCase()) ? '点击隐藏' : '点击显示'"
+                        @click="toggleCtxReveal(row.name)"
+                      >
+                        <el-icon><Hide v-if="ctxRevealed.has(row.name.toLowerCase())" /><View v-else /></el-icon>
+                      </el-button>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </template>
+          <div v-else class="dialog-panel"><div class="ctx-empty">暂无请求头记录</div></div>
+        </section>
 
-        <div class="ctx-section-title">请求体</div>
-        <template v-if="ctxBodyParsed.state === 'empty'">
-          <div class="ctx-empty">无请求体记录</div>
-        </template>
-        <template v-else>
-          <div v-if="ctxBodyParsed.truncated" class="info-note-bar ctx-banner"><span class="info-note-desc">请求体已截断，仅显示保留的前段内容</span></div>
-          <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符</span></div>
-          <div v-if="ctxBodyParsed.state === 'error'" class="info-note-bar ctx-banner"><span class="info-note-desc">Base64 解码失败，以下为原始内容</span></div>
-          <pre class="ctx-body-pre">{{ ctxBodyParsed.text }}</pre>
-        </template>
+        <section class="ctx-detail-section">
+          <DialogSectionHeader title="请求体" />
+          <div v-if="ctxBodyParsed.state === 'empty'" class="dialog-panel"><div class="ctx-empty">无请求体记录</div></div>
+          <template v-else>
+            <div v-if="ctxBodyParsed.truncated" class="info-note-bar ctx-banner"><span class="info-note-desc">请求体已截断，仅显示保留的前段内容</span></div>
+            <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符</span></div>
+            <div v-if="ctxBodyParsed.state === 'error'" class="info-note-bar ctx-banner"><span class="info-note-desc">Base64 解码失败，以下为原始内容</span></div>
+            <div class="dialog-panel dialog-panel--flush"><pre class="ctx-body-pre">{{ ctxBodyParsed.text }}</pre></div>
+          </template>
+        </section>
       </template>
       <template #footer>
         <el-button @click="ctxDialogVisible = false">关闭</el-button>
@@ -401,6 +410,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Refresh, Warning, View, Hide, Document, Lock } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CheckboxValueType } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -968,10 +978,12 @@ const refreshPage = (): void => {
 
 
 /* —— 请求上下文详情弹框 —— */
-.ctx-section-title { font-size: 13px; font-weight: 600; color: #374151; margin: 16px 0 8px; }
+.ctx-detail-section + .ctx-detail-section { margin-top: 16px; }
 .ctx-banner { margin-bottom: 8px; }
 .ctx-info-line { font-size: 12px; color: #9ca3af; line-height: 1.6; margin-bottom: 6px; }
-.ctx-empty { font-size: 12px; color: #9ca3af; padding: 4px 0 8px; }
+.dialog-panel--flush .ctx-info-line { padding-right: 12px; padding-left: 12px; }
+.dialog-panel--flush .ctx-info-line:first-child { padding-top: 12px; }
+.ctx-empty { font-size: 12px; color: #9ca3af; }
 .ctx-header-value-cell { display: flex; align-items: center; gap: 6px; }
 .ctx-header-value { flex: 1; min-width: 0; word-break: break-all; font-family: monospace; font-size: 12px; }
 .ctx-reveal-btn { flex-shrink: 0; }
@@ -984,10 +996,7 @@ const refreshPage = (): void => {
   font-family: monospace;
   font-size: 12px;
   line-height: 1.6;
-  background: #f9fafb;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-  padding: 8px 10px;
+  padding: 12px;
   margin: 0;
 }
 </style>

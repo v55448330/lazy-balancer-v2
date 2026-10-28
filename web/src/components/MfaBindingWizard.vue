@@ -179,14 +179,11 @@ const copyRecovery = async (): Promise<void> => {
   background: #fff;
   padding: 8px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
 }
 .mfa-secret {
   font-family: monospace;
   background: var(--el-fill-color-light);
   padding: 4px 10px;
-  border-radius: 3px;
-  letter-spacing: 1px;
 }
 .mfa-code-input {
   width: 240px;
@@ -210,7 +207,6 @@ const copyRecovery = async (): Promise<void> => {
   font-size: 14px;
   background: var(--el-fill-color-light);
   padding: 6px 10px;
-  border-radius: 3px;
   text-align: center;
   user-select: all;
 }

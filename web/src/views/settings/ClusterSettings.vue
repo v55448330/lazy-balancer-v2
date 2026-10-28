@@ -93,7 +93,7 @@
       <template #header>
         <DialogHeader :icon="Key" title="一次性注册令牌" subtitle="仅展示一次，请立即复制并妥善保存" tone="warning" />
       </template>
-      <div class="token-box">
+      <div class="dialog-panel token-box">
         <code>{{ registerToken?.token }}</code>
         <el-button type="primary" @click="copyRegisterToken">
           <el-icon><CopyDocument /></el-icon>复制令牌
@@ -106,15 +106,12 @@
     <el-dialog v-model="serviceControlDialogVisible" class="service-control-dialog dialog-body-inset" width="min(520px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!serviceControlLoading" :show-close="!serviceControlLoading">
       <template #header>
         <div class="service-control-header">
-          <div class="service-control-title">
-            <el-icon :size="18"><Monitor /></el-icon>
-            <span>服务控制</span>
-          </div>
-          <div v-if="serviceControlNodeLive" class="service-control-node">
-            <el-tag :type="serviceControlNodeLive.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNodeLive.status === 'online' ? '在线' : '离线' }}</el-tag>
-            <span class="service-control-node-name">{{ serviceControlNodeLive.name }}</span>
-            <span class="service-control-node-url">{{ serviceControlNodeLive.access_url || `${serviceControlNodeLive.ip_address}:${serviceControlNodeLive.port}` }}</span>
-          </div>
+          <DialogHeader
+            :icon="Monitor"
+            title="服务控制"
+            :subtitle="serviceControlNodeLive ? `${serviceControlNodeLive.name} · ${serviceControlNodeLive.access_url || `${serviceControlNodeLive.ip_address}:${serviceControlNodeLive.port}`}` : undefined"
+          />
+          <el-tag v-if="serviceControlNodeLive" class="service-control-status" :type="serviceControlNodeLive.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNodeLive.status === 'online' ? '在线' : '离线' }}</el-tag>
         </div>
       </template>
 
@@ -831,17 +828,14 @@ onUnmounted(() => {
 .cluster-settings { display: flex; flex-direction: column; gap: 20px; }
 .polling-error-alert { align-self: stretch; }
 /* .polling-error-title/.polling-error-meta 已收敛 main.css*/
-.token-box { display: flex; align-items: center; gap: 12px; margin-top: 4px; padding: 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px dashed var(--border-color, #dcdfe6); }
+.token-box { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .token-expiry { margin-top: 10px; }
 
 .token-box code { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
 
 /* ── 服务控制弹框 ── */
-.service-control-header { display: flex; flex-direction: column; gap: 6px; }
-.service-control-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: var(--text-primary); }
-.service-control-node { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
-.service-control-node-name { font-weight: 500; color: var(--text-primary); }
-.service-control-node-url { color: var(--text-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.service-control-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.service-control-status { flex: none; }
 
 .service-control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
 .service-control-card {
@@ -856,7 +850,7 @@ onUnmounted(() => {
 .service-control-card.is-active.is-danger { border-color: var(--el-color-danger, #f56c6c); background: var(--el-color-danger-light-9, #fef0f0); }
 .service-control-card.is-active.is-warning { border-color: var(--el-color-warning, #e6a23c); background: var(--el-color-warning-light-9, #fdf6ec); }
 
-.service-control-card-icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 8px; }
+.service-control-card-icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 0; }
 .is-success .service-control-card-icon { color: var(--el-color-success, #67c23a); background: var(--el-color-success-light-9, #f0f9eb); }
 .is-danger .service-control-card-icon { color: var(--el-color-danger, #f56c6c); background: var(--el-color-danger-light-9, #fef0f0); }
 .is-warning .service-control-card-icon { color: var(--el-color-warning, #e6a23c); background: var(--el-color-warning-light-9, #fdf6ec); }

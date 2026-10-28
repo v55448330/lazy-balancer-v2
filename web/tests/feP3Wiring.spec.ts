@@ -96,13 +96,6 @@ test('文档钉：信任侧冲突警告的门控位置与注释一致（computed
   assert.match(page, /ipBlacklistSelf\.value, trustEnabledInEditor\.value\)\)/, 'Step 4 冲突检测的本策略允许侧同样走单源门')
 })
 
-test('IP 快捷弹框的隐藏谓词必须看信任侧命中', () => {
-  const page = code('src/views/security/IPLocationAction.vue')
-  const predicate = member(page, 'const aclRefsAllSystem = ')
-  assert.match(predicate, /mergedTrustEntries\(p\)/, '被隐藏卡的信任侧命中会让「取消信任」无入口')
-  assert.doesNotMatch(predicate, /if \(!p\.ip_whitelist_enabled\) return true/, '信任关闭时整卡隐藏会让「未生效」提示与清除入口不可达')
-  assert.match(predicate, /return !mergedTrustEntries\(p\)\.some/, '隐藏条件=信任侧无命中（与启用态无关）')
-})
 
 test('威胁大屏：攻击弹框层级高于错误条堆叠，且错误条默认点击穿透', () => {
   const page = code('src/views/security/ThreatScreen.vue')

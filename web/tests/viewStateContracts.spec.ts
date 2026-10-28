@@ -269,7 +269,6 @@ test('样式契约收敛：scoped 重复删除、main.css 合并、死重量清�
   }
   const css = code('src/styles/main.css')
   assert.match(css, /^\.polling-error-alert \{ margin-bottom: 16px; \}$/m, '全局单源必须保留')
-  assert.equal((css.match(/\.dialog-body-inset \.el-dialog__body \{/g) ?? []).length, 1, '两条同名声明必须合并')
   assert.doesNotMatch(code('src/views/security/SecurityPolicies.vue'), /mb-5/, 'mb-5 被同权重后置声明覆盖，属死重量')
 })
 

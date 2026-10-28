@@ -138,25 +138,29 @@
       </template>
       <div v-if="migratePolicy" class="migrate-preview">
         <div class="migrate-preview-section">
-          <div class="migrate-preview-title">将创建 {{ migrateChildTypes.length }} 条子策略</div>
-          <div class="migrate-preview-tags">
-            <!-- 四阶段恒出（2026-09-21 用户裁定：与查看弹框/流程弹框同口径）——
-                 空阶段灰态标注「未启用 · 不生成」，不再整段缺席 -->
-            <el-tag v-for="type in (['stage0', 'stage1', 'stage2', 'stage3'] as const)" :key="type" size="small" effect="plain" :type="migrateChildTypes.includes(type) ? 'primary' : 'info'">
-              {{ migrateChildTypes.includes(type) ? `${migratePolicy.name}（${POLICY_TYPE_SHORT_LABELS[type]}）` : `${POLICY_TYPE_SHORT_LABELS[type]} · 未启用（不生成）` }}
-            </el-tag>
+          <DialogSectionHeader :title="`将创建 ${migrateChildTypes.length} 条子策略`" tone="warning" />
+          <div class="dialog-panel">
+            <div class="migrate-preview-tags">
+              <!-- 四阶段恒出（2026-09-21 用户裁定：与查看弹框/流程弹框同口径）——
+                   空阶段灰态标注「未启用 · 不生成」，不再整段缺席 -->
+              <el-tag v-for="type in (['stage0', 'stage1', 'stage2', 'stage3'] as const)" :key="type" size="small" effect="plain" :type="migrateChildTypes.includes(type) ? 'primary' : 'info'">
+                {{ migrateChildTypes.includes(type) ? `${migratePolicy.name}（${POLICY_TYPE_SHORT_LABELS[type]}）` : `${POLICY_TYPE_SHORT_LABELS[type]} · 未启用（不生成）` }}
+              </el-tag>
+            </div>
           </div>
         </div>
         <div class="migrate-preview-section">
-          <div class="migrate-preview-title">将重映射绑定（原策略的绑定整体改挂到子策略）</div>
-          <template v-if="migrateBoundRules.length > 0">
-            <div v-for="rule in migrateBoundRules" :key="rule.caddy_id" class="migrate-preview-rule">
-              <span class="migrate-preview-rule-name">{{ rule.name }}</span>
-              <span class="migrate-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
-              <el-tag v-if="migrateStage2SkipRisk.some((r) => r.caddy_id === rule.caddy_id)" size="small" type="warning" effect="plain">将跳过（已有 stage2）</el-tag>
-            </div>
-          </template>
-          <div v-else class="migrate-preview-empty">当前无规则绑定本策略</div>
+          <DialogSectionHeader title="将重映射绑定" description="原策略的绑定整体改挂到子策略" tone="warning" />
+          <div class="dialog-panel">
+            <template v-if="migrateBoundRules.length > 0">
+              <div v-for="rule in migrateBoundRules" :key="rule.caddy_id" class="migrate-preview-rule">
+                <span class="migrate-preview-rule-name">{{ rule.name }}</span>
+                <span class="migrate-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
+                <el-tag v-if="migrateStage2SkipRisk.some((r) => r.caddy_id === rule.caddy_id)" size="small" type="warning" effect="plain">将跳过（已有 stage2）</el-tag>
+              </div>
+            </template>
+            <div v-else class="migrate-preview-empty">当前无规则绑定本策略</div>
+          </div>
         </div>
         <div v-if="migrateStage2SkipRisk.length > 0" class="info-note-bar"><span class="info-note-desc">限流唯一风险：{{ migrateStage2SkipRisk.map((r) => r.name).join('、') }} 已绑定其他限流策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条限流策略），保持原绑定</span></div>
         <div v-if="migrateCapRisk.length > 0" class="info-note-bar"><span class="info-note-desc">上限风险：{{ migrateCapRisk.map((r) => r.name).join('、') }} 迁移后将超过每条规则 {{ MAX_POLICIES_PER_RULE }} 条绑定上限——这些规则保持原绑定并进入跳过清单</span></div>
@@ -177,21 +181,25 @@
       <div v-loading="viewPolicyLoading" class="view-policy-body">
         <template v-if="viewPolicyDetail">
           <div v-for="section in viewPolicySections" :key="section.title" class="view-policy-section">
-            <div class="view-policy-section-title">{{ section.title }}</div>
-            <div v-for="row in section.rows" :key="row.label" class="view-policy-row">
-              <span class="view-policy-label">{{ row.label }}</span>
-              <span class="view-policy-value" :title="row.value">{{ row.value }}</span>
+            <DialogSectionHeader :title="section.title" />
+            <div class="dialog-panel">
+              <div v-for="row in section.rows" :key="row.label" class="view-policy-row">
+                <span class="view-policy-label">{{ row.label }}</span>
+                <span class="view-policy-value" :title="row.value">{{ row.value }}</span>
+              </div>
             </div>
           </div>
           <div class="view-policy-section">
-            <div class="view-policy-section-title">关联规则（{{ viewPolicyBoundRuleRows.length }}）</div>
-            <template v-if="viewPolicyBoundRuleRows.length > 0">
-              <div v-for="rule in viewPolicyBoundRuleRows" :key="rule.caddyId" class="view-policy-row">
-                <span class="view-policy-label">{{ rule.name }}</span>
-                <span class="view-policy-value">{{ rule.domain || '-' }}:{{ rule.listenPort }}</span>
-              </div>
-            </template>
-            <div v-else class="view-policy-empty">未关联规则</div>
+            <DialogSectionHeader :title="`关联规则（${viewPolicyBoundRuleRows.length}）`" />
+            <div class="dialog-panel">
+              <template v-if="viewPolicyBoundRuleRows.length > 0">
+                <div v-for="rule in viewPolicyBoundRuleRows" :key="rule.caddyId" class="view-policy-row">
+                  <span class="view-policy-label">{{ rule.name }}</span>
+                  <span class="view-policy-value">{{ rule.domain || '-' }}:{{ rule.listenPort }}</span>
+                </div>
+              </template>
+              <div v-else class="view-policy-empty">未关联规则</div>
+            </div>
           </div>
         </template>
       </div>
@@ -802,49 +810,48 @@
             <span v-if="form.description" class="preview-meta-desc" :title="form.description">{{ form.description }}</span>
           </div>
           <div class="preview-pipeline">
-            <div
+            <section
               v-for="stage in previewVisibleStages"
               :key="stage.stage"
               class="preview-stage-card"
               :class="{ 'is-disabled': !stage.enabled }"
             >
-              <div class="preview-stage-head">
-                <span class="preview-stage-title">{{ stage.title }}</span>
-                <span v-if="!stage.enabled" class="preview-stage-empty">未启用</span>
-              </div>
-              <template v-if="stage.enabled">
-                <div v-for="group in stage.groups" :key="group.key" class="preview-policy-rows">
-                  <div v-for="row in group.rows" :key="row.label" class="preview-row">
-                    <span class="preview-row-label">{{ row.label }}</span>
-                    <span class="preview-row-detail" :title="row.detail">{{ row.detail }}</span>
+              <DialogSectionHeader :title="stage.title" />
+              <div class="dialog-panel">
+                <div v-if="!stage.enabled" class="preview-stage-empty">未启用</div>
+                <template v-if="stage.enabled">
+                  <div v-for="group in stage.groups" :key="group.key" class="preview-policy-rows">
+                    <div v-for="row in group.rows" :key="row.label" class="preview-row">
+                      <span class="preview-row-label">{{ row.label }}</span>
+                      <span class="preview-row-detail" :title="row.detail">{{ row.detail }}</span>
+                    </div>
                   </div>
-                </div>
-              </template>
-              <div v-if="stage.enabled && stage.footnote" class="preview-stage-footnote">{{ stage.footnote }}</div>
-            </div>
+                </template>
+                <div v-if="stage.enabled && stage.footnote" class="preview-stage-footnote">{{ stage.footnote }}</div>
+              </div>
+            </section>
           </div>
           <!-- 影响范围与阶段页覆盖：与上方阶段卡片同构（标题 + 键值行 + 脚注）。 -->
-          <div class="preview-stage-card preview-bindings-card">
-            <div class="preview-stage-head">
-              <span class="preview-stage-title">适用规则</span>
-              <span class="preview-stage-empty">{{ boundRules.length > 0 ? `${boundRules.length} 条已关联` : '未关联' }}</span>
+          <section class="preview-stage-card preview-bindings-card">
+            <DialogSectionHeader title="适用规则" :description="boundRules.length > 0 ? `${boundRules.length} 条已关联` : '未关联'" />
+            <div class="dialog-panel">
+              <div class="preview-policy-rows">
+                <div class="preview-row">
+                  <span class="preview-row-label">生效范围</span>
+                  <span class="preview-row-detail">{{ boundRules.length > 0 ? `本策略将应用于 ${boundRules.length} 条已关联规则` : '保存后可在「关联规则」步骤绑定，或在规则行点「安全」绑定' }}</span>
+                </div>
+                <div class="preview-row">
+                  <span class="preview-row-label">阶段页覆盖</span>
+                  <span class="preview-row-detail">逐规则状态与编辑在「关联规则」步骤</span>
+                </div>
+                <div v-if="pendingOverrideRules.length > 0" class="preview-row">
+                  <span class="preview-row-label">本次保存</span>
+                  <span class="preview-row-detail">写入 {{ pendingOverrideRules.length }} 条规则的阶段拦截页覆盖</span>
+                </div>
+              </div>
+              <div v-if="pendingOverrideRules.length > 0" class="preview-stage-footnote">覆盖属规则级字段，随本向导保存生效</div>
             </div>
-            <div class="preview-policy-rows">
-              <div class="preview-row">
-                <span class="preview-row-label">生效范围</span>
-                <span class="preview-row-detail">{{ boundRules.length > 0 ? `本策略将应用于 ${boundRules.length} 条已关联规则` : '保存后可在「关联规则」步骤绑定，或在规则行点「安全」绑定' }}</span>
-              </div>
-              <div class="preview-row">
-                <span class="preview-row-label">阶段页覆盖</span>
-                <span class="preview-row-detail">逐规则状态与编辑在「关联规则」步骤</span>
-              </div>
-              <div v-if="pendingOverrideRules.length > 0" class="preview-row">
-                <span class="preview-row-label">本次保存</span>
-                <span class="preview-row-detail">写入 {{ pendingOverrideRules.length }} 条规则的阶段拦截页覆盖</span>
-              </div>
-            </div>
-            <div v-if="pendingOverrideRules.length > 0" class="preview-stage-footnote">覆盖属规则级字段，随本向导保存生效</div>
-          </div>
+          </section>
         </div>
       </div>
 
@@ -864,44 +871,50 @@
     </el-dialog>
 
     <!-- 关联规则选择器 -->
-    <el-dialog v-model="rulePickerVisible" title="选择关联规则" width="min(640px, 90vw)" append-to-body>
+    <el-dialog v-model="rulePickerVisible" class="dialog-body-inset" width="min(640px, 90vw)" append-to-body>
+      <template #header>
+        <DialogHeader :icon="Connection" title="选择关联规则" />
+      </template>
       <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="rule-picker-search" />
-      <div class="rule-picker-header">
-        <el-checkbox
-          :model-value="pickerSelectAllChecked"
-          :indeterminate="pickerSelectAllIndeterminate"
-          :disabled="pickerSelectableRules.length === 0"
-          @change="handlePickerSelectAll"
-        >全选</el-checkbox>
-        <span class="rule-picker-header-meta">筛选 {{ pickerFilteredRules.length }} 条</span>
-      </div>
-      <div class="rule-picker-list">
-        <el-checkbox-group v-model="pickerSelected">
-          <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
-            <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule.caddy_id).blockReason !== ''">
-              <span class="rule-picker-name">{{ rule.name }}</span>
-              <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
-            </el-checkbox>
-            <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
-                 后端必然拒绝的形态（绑定条数上限 / 阶段 2 限流唯一门）在选择阶段
-                 禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
-            <div class="rule-binding-preview">
-              <span v-if="pickerMeta(rule.caddy_id).blockReason" class="rule-binding-limit">{{ pickerMeta(rule.caddy_id).blockReason }}</span>
-              <template v-else>
-                <span
-                  v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
-                  :key="entry.policyId ?? 'self'"
-                  class="binding-order-chip"
-                  :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
-                >{{ chainChipText(entry, idx) }}</span>
-                <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
-                <span v-if="editorPolicyType === 'stage0'" class="rule-binding-landing rule-binding-landing--trust">阶段 0·拦截判定前优先生效</span>
-                <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
-              </template>
+      <DialogSectionHeader title="可选规则" />
+      <div class="dialog-panel">
+        <div class="rule-picker-header">
+          <el-checkbox
+            :model-value="pickerSelectAllChecked"
+            :indeterminate="pickerSelectAllIndeterminate"
+            :disabled="pickerSelectableRules.length === 0"
+            @change="handlePickerSelectAll"
+          >全选</el-checkbox>
+          <span class="rule-picker-header-meta">筛选 {{ pickerFilteredRules.length }} 条</span>
+        </div>
+        <div class="rule-picker-list">
+          <el-checkbox-group v-model="pickerSelected">
+            <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
+              <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule.caddy_id).blockReason !== ''">
+                <span class="rule-picker-name">{{ rule.name }}</span>
+                <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
+              </el-checkbox>
+              <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
+                   后端必然拒绝的形态（绑定条数上限 / 阶段 2 限流唯一门）在选择阶段
+                   禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
+              <div class="rule-binding-preview">
+                <span v-if="pickerMeta(rule.caddy_id).blockReason" class="rule-binding-limit">{{ pickerMeta(rule.caddy_id).blockReason }}</span>
+                <template v-else>
+                  <span
+                    v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
+                    :key="entry.policyId ?? 'self'"
+                    class="binding-order-chip"
+                    :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
+                  >{{ chainChipText(entry, idx) }}</span>
+                  <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
+                  <span v-if="editorPolicyType === 'stage0'" class="rule-binding-landing rule-binding-landing--trust">阶段 0·拦截判定前优先生效</span>
+                  <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
+                </template>
+              </div>
             </div>
-          </div>
-        </el-checkbox-group>
-        <el-empty v-if="pickerPagedRules.length === 0" description="没有匹配的规则" :image-size="60" />
+          </el-checkbox-group>
+          <el-empty v-if="pickerPagedRules.length === 0" description="没有匹配的规则" :image-size="60" />
+        </div>
       </div>
       <el-pagination
         v-model:current-page="pickerPage"
@@ -923,7 +936,10 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="extractDialogVisible" class="dialog-body-inset" title="提取为地址列表" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
+    <el-dialog v-model="extractDialogVisible" class="dialog-body-inset" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
+      <template #header>
+        <DialogHeader :icon="Document" title="提取为地址列表" subtitle="将内联 IP 转为可复用名单并关联到当前策略" />
+      </template>
       <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联条目，引用后语义不变</span></div>
       <el-form label-width="80px" @submit.prevent>
         <el-form-item label="来源">
@@ -977,6 +993,7 @@ import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRule
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
@@ -3570,7 +3587,7 @@ function handleDelete(row: PolicySummary) {
   // 取消与失败分离(原空 catch 同时吞掉网络失败,行滞留至下轮)。
   if (deletingPolicyId.value !== null) return
   deletingPolicyId.value = row.id
-  ElMessageBox.confirm(`确定删除策略"${row.name}"？`, '确认', { type: 'warning' })
+  ElMessageBox.confirm(`将删除策略「${row.name}」。删除后无法恢复，规则上原有的其它策略不受影响。`, '删除安全策略', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     .then(async () => {
       const del = await request.delete(`/security/policies/${row.id}`)
       showSaveResult(del, '已删除')
@@ -3749,7 +3766,7 @@ onMounted(async () => {
 .rule-picker-arrow { color: #a8abb2; font-size: 12px; }
 
 .bound-rule-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
-.bound-rule-row { border: 1px solid #ebeef5; border-radius: 4px; padding: 8px 10px; }
+.bound-rule-row { border: 1px solid #ebeef5; padding: 12px; }
 .bound-rule-head { display: flex; align-items: center; gap: 8px; }
 .bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; }
 .bound-rule-meta { font-size: 12px; color: #9ca3af; font-family: monospace; }
@@ -3794,11 +3811,10 @@ onMounted(async () => {
 .rule-picker-header-meta { font-size: 12px; color: #9ca3af; }
 
 .rule-picker-list {
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
   min-height: 120px;
   max-height: 320px;
   overflow-y: auto;
+  background: #fff;
 }
 
 .rule-picker-item {
@@ -3831,7 +3847,7 @@ onMounted(async () => {
 .stage-projection-bar {
   display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
   margin: 0 20px 12px; padding: 8px 12px;
-  background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px;
+  background: #f8fafc; border: 1px dashed #e5e7eb;
   font-size: 12px;
 }
 .stage-projection-desc { font-weight: 600; color: #374151; line-height: 1.8; flex: 0 1 auto; }
@@ -3850,23 +3866,18 @@ onMounted(async () => {
 .preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }
 .preview-meta-name { font-size: 15px; font-weight: 600; color: #1f2937; }
 .preview-meta-desc { font-size: 12px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
-.preview-pipeline { display: flex; flex-direction: column; gap: 8px; margin: 0 20px; }
-.preview-bindings-card { margin: 8px 20px 0; }
-.preview-stage-card { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 14px; background: #fff; }
-.preview-stage-card.is-disabled { background: #fafafa; border-style: dashed; }
-.preview-stage-card.is-disabled .preview-stage-title { color: #9ca3af; }
-.preview-stage-head { display: flex; align-items: center; gap: 8px; }
-.preview-stage-title { font-size: 13px; font-weight: 600; color: #1f2937; }
-.preview-stage-empty { font-size: 12px; color: #b1b5bd; }
-.preview-policy-rows { margin-top: 6px; }
+.preview-pipeline { display: flex; flex-direction: column; gap: 12px; margin: 0 20px; }
+.preview-bindings-card { margin: 12px 20px 0; }
+.preview-stage-card.is-disabled > .dialog-panel { background: #fafafa; border-style: dashed; }
+.preview-stage-empty { font-size: 12px; color: #9ca3af; }
+.preview-policy-rows { margin-top: 0; }
 .preview-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.8; }
 .preview-row-label { color: #6b7280; flex-shrink: 0; }
 .preview-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .preview-stage-footnote { margin-top: 6px; font-size: 12px; color: #9ca3af; }
 
 .migrate-preview { display: flex; flex-direction: column; gap: 14px; }
-.migrate-preview-section { display: flex; flex-direction: column; gap: 6px; }
-.migrate-preview-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+
 .migrate-preview-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .migrate-preview-rule { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.8; }
 .migrate-preview-rule-name { color: #1f2937; font-weight: 500; }
@@ -3879,10 +3890,9 @@ onMounted(async () => {
 .migrate-preview-rule-meta { color: #9ca3af; font-size: 12px; }
 .migrate-preview-empty { font-size: 12px; color: #9ca3af; }
 
-/* 混合策略只读查看（信息卡布局） */
+/* 混合策略只读查看（共享分区头 + 详情面板） */
 .view-policy-body { min-height: 120px; }
-.view-policy-section { border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; }
-.view-policy-section-title { font-size: 13px; font-weight: 600; color: #1f2937; margin-bottom: 4px; }
+.view-policy-section { margin-bottom: 12px; }
 .view-policy-row { display: flex; align-items: baseline; gap: 12px; font-size: 13px; line-height: 1.9; }
 .view-policy-label { color: #6b7280; flex: 0 0 96px; }
 .view-policy-value { color: #1f2937; overflow: hidden; text-overflow: ellipsis; }

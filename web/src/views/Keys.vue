@@ -132,6 +132,8 @@
       <template #header>
         <DialogHeader :icon="SetUp" title="MCP 接入文档" subtitle="服务地址与接入配置，供 AI 客户端（Claude / Cursor 等）连接" />
       </template>
+      <section class="dialog-panel mcp-connection-panel">
+        <DialogSectionHeader title="接入配置" description="Streamable HTTP 服务地址与客户端 JSON" />
       <el-form label-position="top">
         <el-form-item label="MCP 服务地址（Streamable HTTP）">
           <el-input :model-value="mcpServiceURL" readonly>
@@ -164,13 +166,15 @@
           </div>
         </el-form-item>
       </el-form>
+      </section>
 
       <div class="info-note-bar"><span class="info-note-desc">请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。</span></div>
 
       <el-collapse class="mcp-agent-guide">
         <el-collapse-item title="AI Agent 接入指南（协议流程 / 自签证书 / 错误码）" name="agent-guide">
           <div class="mcp-guide-block">
-            <div class="mcp-guide-subtitle">协议：Streamable HTTP（JSON-RPC 2.0，POST {{ mcpServiceURL }}）</div>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="协议流程" :description="`Streamable HTTP · JSON-RPC 2.0 · POST ${mcpServiceURL}`" />
             <pre class="mcp-guide-pre">1) 初始化
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"your-agent","version":"1.0"}}}
 
@@ -179,13 +183,21 @@
 
 3) 调用工具（示例：获取指标总览）
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_metrics_overview","arguments":{}}}</pre>
-            <div class="mcp-guide-subtitle">自签证书（可选配置）</div>
+            </section>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="自签证书" description="可选配置" />
             <div class="mcp-guide-text">如客户端报证书错误，在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。</div>
-            <div class="mcp-guide-subtitle">常见错误</div>
+            </section>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="常见错误" />
             <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具或 export_config、get_caddy_config / 非管理员属主调用 validate_import、preview_config / 来源 IP 不在白名单；参数错误：校验在 REST 侧执行，以 IsError + 具体 message 文本返回（协议层不做 input_schema 校验，无 -32602）——读 message 修正后重试。</div>
-            <div class="mcp-guide-subtitle">权限范围（scope）</div>
+            </section>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="权限范围（scope）" />
             <div class="mcp-guide-text">只读 Key 可调用 GET 查询类工具（export_config 与 get_caddy_config 除外——前者导出含用户/密钥哈希，后者原始 Caddy 配置可能含内联私钥，对只读 Key 恒 403 且 tools/list 不展示）及 3 个读探测 POST 工具（parse_certificate / validate_import / preview_config）；其中 parse_certificate 对非管理员开放，validate_import 与 preview_config 要求 Key 属主为管理员（非管理员调用恒 403 且 tools/list 不展示）。证书配置测试与 CA 提供商测试会写入真实 DNS 记录/凭据，属写语义，只读 Key 不可用。其余写工具（POST/PUT/DELETE）需非只读 Key 且 Key 属主为管理员，仅在主节点可用（从节点一律 403——集群端点 promote_cluster / pull_sync / set_cluster_mode / forget_cluster_pins 除外，在从节点本身可用）。写操作校验后即时生效，失败自动回滚，无需手动 reload。完整口径以 <code>lazy-balancer://docs/ops-playbook</code> 资源为准。</div>
-            <div class="mcp-guide-subtitle">常用流程</div>
+            </section>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="常用流程" />
             <pre class="mcp-guide-pre">新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）
   → 需要免费证书再 issue_certificate 传 caddy_id
 新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不填 domain）
@@ -193,9 +205,12 @@
 排查流量异常：get_upstream_health → get_metrics_dashboard → list_audit_logs
 快速看全局指标：get_metrics_overview（轻量）
   dashboard 为全量聚合、数据量大，非必要不用</pre>
-            <div class="mcp-guide-subtitle">完整操作手册（MCP 资源）</div>
+            </section>
+            <section class="dialog-panel">
+              <DialogSectionHeader title="完整操作手册（MCP 资源）" />
             <div class="mcp-guide-text">Agent 连上后可通过 <code>resources/read</code> 读取 <code>lazy-balancer://docs/ops-playbook</code> 获取完整操作手册（接入/scope/工作流/排障/纪律/性能建议），无需访问代码仓库。</div>
             <el-button size="small" :loading="mcpPlaybookDownloading" @click="downloadMCPPlaybook">下载手册正文（markdown）</el-button>
+            </section>
           </div>
         </el-collapse-item>
         <el-collapse-item title="工具清单" name="tools-list">
@@ -205,7 +220,8 @@
               <span class="info-note-desc">{{ mcpToolsError }}</span>
               <span class="info-note-sub"><el-button size="small" @click="fetchMCPTools">重新加载</el-button></span>
             </div>
-            <el-table v-else :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
+            <div v-else class="dialog-panel dialog-panel--flush">
+            <el-table :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
               <el-table-column type="expand">
                 <template #default="scope">
                   <div class="mcp-tool-expand">
@@ -237,6 +253,7 @@
                 </template>
               </el-table-column>
             </el-table>
+            </div>
           </div>
         </el-collapse-item>
       </el-collapse>
@@ -359,7 +376,7 @@
         <DialogHeader :icon="CircleCheckFilled" title="API 密钥已创建" subtitle="仅显示一次，请立即复制并妥善保存" tone="success" />
       </template>
       <div class="info-note-bar"><span class="info-note-desc">此密钥仅显示一次，请立即复制并妥善保存。</span></div>
-      <div class="created-key-box">
+      <div class="dialog-panel created-key-box">
         <code class="created-key-text">{{ createdKey }}</code>
         <el-button type="primary" @click="copyCreatedKey">
           <el-icon><CopyDocument /></el-icon>
@@ -386,6 +403,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 
 interface CreateAPIKeyResponse {
   readonly data?: {
@@ -625,7 +643,7 @@ const deleteKey = async (id: number) => {
   if (nodeWriteBlocked.value || togglePendingId.value === id || deletingIds.value.has(id)) return
   deletingIds.value.add(id)
   try {
-    await ElMessageBox.confirm('确定要删除这个 API 密钥吗？删除后无法恢复。', '警告', { type: 'warning' })
+    await ElMessageBox.confirm('将删除这个 API 密钥。删除后无法恢复，使用该密钥的调用会立即失效。', '删除 API 密钥', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     await request.delete(`/users/me/api-keys/${id}`)
     mfaAwareSuccess('删除成功')
     await fetchKeys()
@@ -736,9 +754,8 @@ onMounted(() => {
 .readonly-alert { margin: -2px 0 18px; }
 
 .mcp-agent-guide { margin-bottom: 20px; }
-.mcp-guide-subtitle { font-weight: 600; margin: 10px 0 6px; }
 .mcp-guide-text { color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }
-.mcp-guide-pre, .mcp-schema-pre { background: #f6f8fa; border-radius: 6px; padding: 10px 12px; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.55; overflow-x: auto; white-space: pre; }
+.mcp-guide-pre, .mcp-schema-pre { background: #f6f8fa; border-radius: 0; padding: 12px; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.55; overflow-x: auto; white-space: pre; }
 .mcp-schema-pre { max-height: 320px; overflow-y: auto; }
 .mcp-config-json { margin-top: 12px; }
 .mcp-config-json :deep(textarea) { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
@@ -751,9 +768,9 @@ onMounted(() => {
 .mcp-tools-table { min-height: 120px; overflow-x: auto; }
 .mcp-tools-table :deep(.el-table) { min-width: 800px; }
 .mcp-tool-description { line-height: 1.5; white-space: normal; }
-:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; padding: 0 20px; }
+:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; }
 
-.created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: 6px; background: #f9fafb; }
+.created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
 
 .created-key-text { flex: 1; min-width: 0; color: #111827; font-family: 'SF Mono', monospace; font-size: 12px; word-break: break-all; }
 

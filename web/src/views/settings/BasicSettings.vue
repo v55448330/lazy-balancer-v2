@@ -225,8 +225,9 @@
             <span class="info-note-desc">{{ adminTlsMissingPairHint }}</span>
           </div>
           <template v-if="adminTlsForm.certInfo">
-            <el-form-item label="证书信息">
-              <div class="tls-cert-info">
+            <el-form-item label=" ">
+              <div class="dialog-panel tls-cert-info">
+                <DialogSectionHeader title="证书详情" />
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">域名</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">签发者</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">过期时间</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</span></div>
@@ -255,7 +256,7 @@
         <el-text v-if="appLogError" type="danger" size="small">日志加载失败，自动重试中（当前展示上一次内容）</el-text>
         <el-button size="small" :loading="appLogLoading" @click="fetchAppLogs">刷新</el-button>
       </div>
-      <div ref="appLogContainer" class="log-viewer"><pre>{{ appLogContent || appLogEmptyText }}</pre></div>
+      <div ref="appLogContainer" class="dialog-panel log-viewer"><pre>{{ appLogContent || appLogEmptyText }}</pre></div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="runtime" style="margin-right: auto" />
@@ -410,12 +411,12 @@
           </div>
         </el-form-item>
       </el-form>
-      <div class="auto-backup-list-head">
-        <el-text type="info" size="small">
-          上次成功备份：{{ autoBackupLastRunLabel }}<template v-if="autoBackupNextRunLabel"> · 下次备份：{{ autoBackupNextRunLabel }}</template>
-        </el-text>
-      </div>
-      <div class="auto-backup-list">
+      <section class="auto-backup-list-section">
+        <DialogSectionHeader
+          title="备份历史"
+          :description="autoBackupNextRunLabel ? `上次成功备份：${autoBackupLastRunLabel} · 下次备份：${autoBackupNextRunLabel}` : `上次成功备份：${autoBackupLastRunLabel}`"
+        />
+        <div class="dialog-panel dialog-panel--flush auto-backup-list">
         <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small" :max-height="320">
           <el-table-column label="备份时间" width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
@@ -450,7 +451,8 @@
           </el-table-column>
           <template #empty><el-empty description="暂无备份" :image-size="70" /></template>
         </el-table>
-      </div>
+        </div>
+      </section>
       <template #footer>
         <el-button @click="autoBackupVisible = false">取消</el-button>
         <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupCanRunNow" title="按已保存的自动备份设置执行一次备份；上方表单改动需先保存设置" @click="runAutoBackupNow">
@@ -480,8 +482,8 @@
          OIDC 连接测试、配置预览/备份校验、证书解析、批量查询为读语义豁免。 -->
     <div class="info-note-bar"><span class="info-note-desc">开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。配置预览、备份校验、证书解析、批量证书状态查询与 OIDC 连接测试等只读语义操作不受影响。</span></div>
     <div class="mfa-scope-list">
-      <div v-for="group in MFA_SCOPE_GROUPS" :key="group.title" class="mfa-scope-row">
-        <div class="mfa-scope-title">{{ group.title }}</div>
+      <div v-for="group in MFA_SCOPE_GROUPS" :key="group.title" class="dialog-panel mfa-scope-row">
+        <DialogSectionHeader :title="group.title" />
         <div class="mfa-scope-items">{{ group.items.join('、') }}</div>
       </div>
     </div>
@@ -511,6 +513,7 @@ import { importSummaryLabel } from '@/utils/importSummaryLabels'
 import { MFA_SCOPE_GROUPS } from '@/utils/mfaScopeGroups'
 import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock, Document } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import type { SystemInfo } from '@/types'
 
@@ -1941,7 +1944,7 @@ const handleSave = async () => {
 .import-input { display: none; }
 .backup-tip { display: block; margin-top: 8px; line-height: 1.5; }
 .log-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.log-viewer { height: 55vh; min-height: 320px; overflow: auto; padding: 12px 16px; background: #0f172a; border-radius: var(--radius-sm, 6px); }
+.log-viewer { height: 55vh; min-height: 320px; overflow: auto; padding: 12px; background: #0f172a; border-radius: 0; }
 .log-viewer pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.7; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
 .import-picker { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .import-filename { font-size: 13px; color: var(--el-text-color-primary); }
@@ -1953,32 +1956,7 @@ const handleSave = async () => {
 .import-conflicts { color: var(--el-color-warning-dark-2); }
 .import-alert { margin-top: 4px; }
 
-/* →十七次：el-descriptions 的表格布局压不动 label 宽（仍折行）——
-   改自绘行布局：标题列 flex 定宽 + nowrap，内容列自动换行。 */
-.mfa-scope-list {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.mfa-scope-row {
-  display: flex;
-  align-items: stretch;
-}
-.mfa-scope-row + .mfa-scope-row {
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-.mfa-scope-title {
-  flex: 0 0 130px;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: #f9fafb;
-  border-right: 1px solid var(--el-border-color-lighter);
-}
 .mfa-scope-items {
-  flex: 1;
-  padding: 8px 12px;
   font-size: 12px;
   color: #374151;
   line-height: 1.8;
@@ -1999,26 +1977,24 @@ const handleSave = async () => {
 .auto-backup-chips { flex-wrap: wrap; }
 /* 全选/全不选与提示换行置于分类选项下方,左对齐(el-form-item__content 为
  * flex 行,flex-basis:100% 强制换行;2026-09-19 用户样式裁定) */
-/* 与 el-table 单元格 .cell 的 12px 内边距对齐——标题/说明文字与表格内容同缘 */
-.auto-backup-list-head { display: flex; align-items: baseline; justify-content: flex-end; margin-top: 12px; margin-bottom: 8px; padding: 0 8px; }
+.auto-backup-list-section { margin-top: 16px; }
 .auto-backup-chips-actions { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
 .auto-backup-scope-hint { margin-left: 0; }
 /* 内容列只显范围标签，单行不换行（明细在 hover tooltip，2026-09-21 用户裁定） */
 .auto-backup-scope-text { white-space: nowrap; }
 .auto-backup-scope-text.is-warning { color: var(--el-color-warning); }
-.auto-backup-list { border-top: 1px solid var(--el-border-color-lighter); padding-top: 10px; }
+.auto-backup-list { min-height: 80px; }
 
 /* 自管标签行族已退役（2026-10-11 用户裁定：对齐统一走原生 el-form-item，
  * Firefox label-for 控制台告警为 EP 上游已知形态、非用户可见）——
  * .form-radio-row / -label / -content 死 CSS 一并删除。 */
 
-/* HTTPS 证书配置弹框（2026-09-25 用户裁定重构）：正文 20px 水平留白；
-   文件选择=按钮+文件名展示；证书信息=浅底卡片行布局 */
+/* HTTPS 证书配置弹框：文件选择=按钮+文件名展示；证书信息使用共享详情面板。 */
 .tls-file-field { display: flex; align-items: center; gap: 10px; width: 100%; }
 .tls-file-name { font-size: 12px; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tls-file-name.is-empty { color: #9ca3af; }
-.tls-cert-info { display: flex; flex-direction: column; gap: 2px; width: 100%; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; background: #fafafa; font-size: 12px; line-height: 1.8; }
+.tls-cert-info { display: flex; flex-direction: column; gap: 2px; width: 100%; font-size: 12px; line-height: 1.8; }
 .tls-cert-info-row { display: flex; gap: 8px; }
 .tls-cert-info-label { flex: 0 0 60px; color: #6b7280; }
 .tls-cert-info-row .is-expired { color: var(--el-color-danger); font-weight: 600; }

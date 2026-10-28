@@ -425,11 +425,7 @@
 
     <el-dialog v-model="ruleHistoryVisible" width="min(900px, 92vw)" destroy-on-close class="history-dialog">
       <template #header>
-        <div class="dialog-title">
-          <el-icon class="dialog-title-icon"><TrendCharts /></el-icon>
-          <span class="dialog-title-main">历史统计</span>
-          <el-text type="info" size="small" class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : '' }} · :{{ ruleHistoryRule?.listen_port }}</el-text>
-        </div>
+        <DialogHeader :icon="TrendCharts" title="历史统计" :subtitle="`${ruleHistoryRule?.name || ''} · ${ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : ''} · :${ruleHistoryRule?.listen_port}`" />
       </template>
       <div class="history-toolbar">
         <el-radio-group v-model="ruleHistoryRange" size="small" aria-label="历史统计时间范围" @change="fetchRuleHistory">
@@ -454,24 +450,14 @@
         <template v-else>
           <el-empty v-if="!ruleHistoryLoading && ruleHistoryDeltas.deltas.length === 0" description="该时间范围内暂无数据" :image-size="60" />
           <div v-else v-loading="ruleHistoryLoading">
-            <el-card shadow="never" class="history-card">
-              <template #header>
-                <div class="history-card-header">
-                  <el-icon><Odometer /></el-icon>
-                  <span>请求数与状态码</span>
-                </div>
-              </template>
+            <section class="dialog-panel history-card">
+              <DialogSectionHeader title="请求数与状态码" />
               <v-chart :option="ruleRequestsChartOption" autoresize style="height: 260px;" />
-            </el-card>
-            <el-card shadow="never" class="history-card">
-              <template #header>
-                <div class="history-card-header">
-                  <el-icon><DataLine /></el-icon>
-                  <span>流量（入站 / 出站）</span>
-                </div>
-              </template>
+            </section>
+            <section class="dialog-panel history-card">
+              <DialogSectionHeader title="流量（入站 / 出站）" />
               <v-chart :option="ruleBytesChartOption" autoresize style="height: 260px;" />
-            </el-card>
+            </section>
           </div>
         </template>
       </template>
@@ -493,6 +479,8 @@ import { formatBytes } from '@/utils/formatBytes'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
 import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
+import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
@@ -1341,18 +1329,7 @@ onUnmounted(() => {
 .status-4xx { background: #fffbeb; color: #d97706; }
 .status-5xx { background: #fef2f2; color: #dc2626; }
 .status-blocked { background: #f3e8ff; color: #7c3aed; }
-.dialog-title { display: inline-flex; align-items: center; white-space: nowrap; overflow: hidden; }
-.dialog-title > * { line-height: 1; }
-.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; margin-right: 12px; }
-.dialog-title-main { font-size: 16px; font-weight: 600; color: #111827; margin-right: 16px; }
-.dialog-title-sub { overflow: hidden; text-overflow: ellipsis; line-height: 1; padding-top: 3px; }
 .history-toolbar { display: flex; justify-content: flex-end; margin-top: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--border-lighter); margin-bottom: 20px; }
 .history-error-alert { margin-bottom: 16px; }
-.history-card { margin-bottom: 24px; border: 1px solid var(--border-lighter); border-radius: 8px; }
-.history-card:last-child { margin-bottom: 0; }
-.history-card :deep(.el-card__header) { padding: 8px 14px; background: #f9fafb; }
-.history-card :deep(.el-card__body) { padding: 10px 14px; }
-.history-card-header { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: #374151; line-height: 1; }
-.history-card-header .el-icon { color: var(--el-color-primary); font-size: 16px; margin-right: 8px; }
 
 </style>

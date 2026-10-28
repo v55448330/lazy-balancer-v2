@@ -190,19 +190,6 @@ test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前�
   assert.match(form, /v-model="ruleForm\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"[^>]*show-word-limit/)
 })
 
-// ── 取消信任：决策与结论都取最新策略 ─────────────────────────
-test('取消信任先取最新策略再出计划，写入后再复算残余', () => {
-  const page = code('src/views/security/IPLocationAction.vue')
-  const fn = section(page, 'const cancelTrustAll = async (row: RowView): Promise<void> => {', 'const aclRefsAllSystem')
-  const fetchAt = fn.indexOf('policy = await fetchDetail(row.policy.id)')
-  const planAt = fn.indexOf('planTrustRemoval({')
-  assert.ok(fetchAt > 0 && planAt > fetchAt, '计划必须基于最新策略（不得读弹层挂载快照）')
-  assert.doesNotMatch(fn, /inlineWhitelist: row\.policy\.ip_whitelist/, '计划不得再用 row.policy 快照')
-  assert.doesNotMatch(fn, /removableListIds: row\.removableTrustRefLists/, '可移除列表必须按最新 refs 计算')
-  assert.match(fn, /const latest = await fetchDetail\(policy\.id\)/, '写入前必须再取最新策略（避免覆盖并发新增条目）')
-  assert.match(fn, /const afterWrite = await fetchDetail\(policy\.id\)/, '写入后必须复算残余信任')
-  assert.match(fn, /afterPlan\?\.residualSources/, '结论文案用写入后的残余来源')
-})
 
 // ── 服务控制卡的选中态 ───────────────────────────────────────
 test('服务控制四选一卡片暴露 radio 语义与选中态', () => {

@@ -142,7 +142,7 @@ test('API 密钥启用/禁用：占位先于确认，finally 释放', () => {
 test('用户启用/禁用：占位先于确认，取消回滚乐观开关后仍释放占位', () => {
   const page = code('src/views/Users.vue')
   const pendingAt = at(page, 'switchingIds.value.add(id)', '用户占位')
-  const confirmAt = at(page, '确定要禁用这个用户吗？', '用户禁用确认')
-  assert.ok(pendingAt < confirmAt, '占位必须早于确认框')
+  const confirmAt = at(page, 'if (!isEnabled)', '用户禁用确认分支')
+  assert.ok(confirmAt > pendingAt && page.indexOf('ElMessageBox.confirm', confirmAt) > confirmAt, '禁用分支必须先弹确认')
   assert.match(page, /finally \{\s*switchingIds\.value\.delete\(id\)\s*\}/)
 })

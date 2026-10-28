@@ -453,7 +453,7 @@ const deleteUser = async (row: UserListItem) => {
   if (isReadOnly.value || submitting.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
-    await ElMessageBox.confirm(`确定要删除用户「${row.username}」吗？删除后不可恢复。`, '警告', { type: 'warning' })
+    await ElMessageBox.confirm(`将删除用户「${row.username}」。删除后无法恢复，该用户的会话与 API 密钥将失效。`, '删除用户', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     await request.delete(`/users/${id}`)
     mfaAwareSuccess('删除成功')
     fetchUsers()
@@ -477,7 +477,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
     if (!isEnabled) {
       // 禁用与删除同为破坏性操作，与 deleteUser/toggleRule 保持同款二次确认。
       try {
-        await ElMessageBox.confirm('确定要禁用这个用户吗？禁用后该用户将无法登录。', '警告', { type: 'warning' })
+        await ElMessageBox.confirm(`将禁用用户「${users.value.find((item) => item.id === id)?.username || id}」。禁用后该用户无法登录，但账号与配置保留。`, '禁用用户', { type: 'warning', confirmButtonText: '确认禁用', cancelButtonText: '取消' })
       } catch {
         // 取消确认时回滚乐观开关——el-switch 已先行翻转 row.is_enabled。
         rollbackUserStatus(users.value, id, isEnabled)

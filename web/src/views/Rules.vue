@@ -114,7 +114,7 @@
                   ><Lock /></el-icon>
                 </template>
                 <div class="lock-summary">
-                  <div class="lock-summary-title">安全防护 · 阶段摘要</div>
+                  <div class="popover-title">安全防护 · 阶段摘要</div>
                   <!-- 禁用规则的安全链不进入运行配置（零 listener 路由）——
                        摘要顶部必须点名，否则从锁图标巡检会高估防护 -->
                   <div v-if="ruleStageModel(row).ruleDisabled" class="lock-summary-hint">
@@ -212,7 +212,7 @@
                 </el-tag>
               </template>
               <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
-                <div class="tooltip-title">证书信息</div>
+                <div class="popover-title">证书信息</div>
                 <div class="cert-row">
                   <span class="cert-label">来源</span>
                   <el-tag size="small" :type="certInfoMap[row.caddy_id]?.source === 'manual' ? 'primary' : 'success'">
@@ -275,7 +275,7 @@
                 </el-tag>
               </template>
               <div class="health-tooltip">
-                <div class="tooltip-title">上游服务器状态</div>
+                <div class="popover-title">上游服务器状态</div>
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
@@ -1065,6 +1065,8 @@
         <template #extra><el-button type="primary" @click="retryViewConfig">重试</el-button></template>
       </el-result>
       <div v-else-if="ruleConfig" class="config-view">
+        <section class="dialog-panel">
+          <DialogSectionHeader title="规则信息" />
         <el-descriptions :column="2" border size="small" class="config-info">
           <el-descriptions-item label="规则ID">{{ ruleConfig.caddy_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="规则名称">{{ ruleConfig.name }}</el-descriptions-item>
@@ -1112,8 +1114,10 @@
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
-        
-        <el-divider content-position="left">上游服务器</el-divider>
+        </section>
+
+        <section class="dialog-panel">
+          <DialogSectionHeader title="上游服务器" />
         <el-table :data="ruleConfig.upstreams" size="small" border v-if="ruleConfig.upstreams?.length">
           <el-table-column prop="host" label="主机地址" />
           <el-table-column prop="port" label="端口" align="center" />
@@ -1135,10 +1139,13 @@
             </template>
           </el-table-column>
         </el-table>
-        
-        <el-divider content-position="left">Caddy 配置 (JSON)</el-divider>
-        <el-empty v-if="ruleConfig.config_not_exists" description="配置不存在" :image-size="60" />
-        <SyntaxHighlight v-else :content="JSON.stringify(ruleConfig.config, null, 2)" language="json" />
+        </section>
+
+        <section class="dialog-panel">
+          <DialogSectionHeader title="Caddy 配置（JSON）" />
+          <el-empty v-if="ruleConfig.config_not_exists" description="配置不存在" :image-size="60" />
+          <SyntaxHighlight v-else :content="JSON.stringify(ruleConfig.config, null, 2)" language="json" />
+        </section>
       </div>
       <div v-else class="config-empty">
         <el-empty description="未找到该规则的配置信息" :image-size="60" />
@@ -1164,7 +1171,7 @@
               <el-icon><RefreshRight /></el-icon>刷新
             </el-button>
           </div>
-          <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
+          <div ref="ruleLogContainerRef" class="dialog-panel rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
         <el-tab-pane label="统计" name="stats">
           <div v-if="ruleLogStatsLoading || (!ruleLogStats && !ruleLogStatsError)" class="stats-state" aria-live="polite">
@@ -1187,10 +1194,8 @@
               <el-text type="info" size="small" style="margin-left: 8px;">自 {{ ruleLogStats.started_at }} 起，每 5 秒实时统计</el-text>
             </div>
             <div class="stats-grid">
-              <el-card shadow="never" class="stats-card">
-                <template #header>
-                  <div class="stats-card-header"><el-icon><Location /></el-icon><span>IP TOP</span></div>
-                </template>
+              <section class="dialog-panel stats-card">
+                <DialogSectionHeader title="IP TOP" />
                 <el-table :data="ruleLogStats.top_ips" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
@@ -1198,11 +1203,9 @@
                   </el-table-column>
                   <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
                 </el-table>
-              </el-card>
-              <el-card shadow="never" class="stats-card">
-                <template #header>
-                  <div class="stats-card-header"><el-icon><Monitor /></el-icon><span>客户端 TOP</span></div>
-                </template>
+              </section>
+              <section class="dialog-panel stats-card">
+                <DialogSectionHeader title="客户端 TOP" />
                 <el-table :data="ruleLogStats.top_uas" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
@@ -1210,11 +1213,9 @@
                   </el-table-column>
                   <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
                 </el-table>
-              </el-card>
-              <el-card shadow="never" class="stats-card">
-                <template #header>
-                  <div class="stats-card-header"><el-icon><Link /></el-icon><span>URI TOP</span></div>
-                </template>
+              </section>
+              <section class="dialog-panel stats-card">
+                <DialogSectionHeader title="URI TOP" />
                 <el-table :data="ruleLogStats.top_uris" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
@@ -1222,7 +1223,7 @@
                   </el-table-column>
                   <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
                 </el-table>
-              </el-card>
+              </section>
             </div>
           </template>
         </el-tab-pane>
@@ -1286,8 +1287,9 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link, Tickets } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
@@ -4280,13 +4282,6 @@ onUnmounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-.tooltip-title {
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: #374151;
-  border-bottom: 1px solid #e5e7eb;
-  padding-bottom: 6px;
-}
 
 .upstream-item:last-child {
   border-bottom: none;
@@ -4606,7 +4601,6 @@ onUnmounted(() => {
 }
 
 .config-info {
-  margin-bottom: 16px;
   width: 100% !important;
 }
 
@@ -4630,28 +4624,25 @@ onUnmounted(() => {
 .stats-summary { margin-bottom: 14px; display: flex; align-items: center; }
 .stats-state { min-height: 280px; display: flex; flex-direction: column; gap: 16px; padding: 12px 4px; }
 .stats-grid { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 14px; }
+.stats-grid > .dialog-panel + .dialog-panel { margin-top: 0; }
 @media (max-width: 767px) {
   .stats-grid { grid-template-columns: 1fr; }
 }
-.stats-card { border: 1px solid var(--border-lighter); border-radius: 8px; }
-.stats-card :deep(.el-card__header) { padding: 8px 12px; background: #f9fafb; }
-.stats-card :deep(.el-card__body) { padding: 4px 8px; }
-.stats-card-header { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #374151; }
-.stats-card-header .el-icon { color: var(--el-color-primary); }
+.stats-card { min-width: 0; }
 .stats-count { color: var(--el-color-primary); font-weight: 600; }
 .rule-log-viewer {
   height: 55vh;
   min-height: 300px;
   max-height: 650px;
   overflow: auto;
-  padding: 12px 16px;
+  padding: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 13px;
   line-height: 1.7;
   background: #0f172a;
   color: #e2e8f0;
   border: 1px solid #1e293b;
-  border-radius: 4px;
+  border-radius: 0;
   white-space: pre-wrap;
 }
 
@@ -4666,13 +4657,6 @@ onUnmounted(() => {
   padding: 20px 0;
 }
 
-/* Certificate hover tooltip */
-.cert-tooltip .tooltip-title {
-  font-weight: 600;
-  margin-bottom: 8px;
-  border-bottom: 1px solid #e5e7eb;
-  padding-bottom: 6px;
-}
 
 .cert-row {
   display: flex;
@@ -4737,7 +4721,6 @@ onUnmounted(() => {
 /* 锁 hover 阶段摘要：卡片化分组 + 阶段色阶标题行 */
 .rule-lock-popper { padding: 10px 12px !important; max-height: 62vh; overflow-y: auto; }
 .rule-lock-popper .lock-summary { display: flex; flex-direction: column; gap: 8px; }
-.rule-lock-popper .lock-summary-title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .rule-lock-popper .lock-stage { border: 1px solid #ebeef5; border-radius: 8px; padding: 6px 10px; background: #fff; }
 .rule-lock-popper .lock-stage-head { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
 .rule-lock-popper .lock-stage-head--s0 { color: var(--el-color-success); }

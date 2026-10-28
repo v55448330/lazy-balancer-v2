@@ -220,11 +220,214 @@ body {
    has 收窄前者底距——相邻 margin 塌陷
    取大，仅调后者的 margin-top 压不过前者 12px 底距。 */
 .info-note-bar:has(+ .info-note-bar) { margin-bottom: 8px; }
-/* 弹框正文 20px 水平留白工具类（2026-09-25 用户裁定）：挂到 el-dialog class 即生效；
-   全局规则以兼容 append-to-body/teleport 弹框（scoped :deep 对子组件根不落 data-v 不可靠）。
-   纵向滚动条占位与之同声明合并：滚动条出现/消失不再改变内容宽度（否则宽表在
-   滚动条出现的瞬间被挤出一条水平滚动条）。 */
-.dialog-body-inset .el-dialog__body { padding: 0 20px; scrollbar-gutter: stable; }
+/* 弹框正文水平留白已并入下方全局三段式规范；保留 class 作为既有弹框分组标记。 */
+
+/* ===== 弹框基础视觉（全系统单源） =====
+ * 头部/正文/脚部三段式：与 IP 快捷弹框同一视觉语言。
+ * 正文上间距必须覆盖 dialog-body-inset 的零 padding，禁止内容贴标题分隔线。 */
+:root {
+  --el-dialog-border-radius: 0;
+  --el-popover-border-radius: 0;
+  --el-messagebox-border-radius: 0;
+  --el-border-radius-base: 0;
+  --el-border-radius-small: 0;
+  --el-border-radius-round: 0;
+}
+
+.el-dialog,
+.el-popover.el-popper,
+.el-message-box,
+.el-drawer {
+  border-radius: 0;
+  border: 1px solid var(--el-border-color-lighter, #e4e9f0);
+  box-shadow: 0 18px 50px rgb(15 23 42 / 14%), 0 3px 12px rgb(15 23 42 / 6%);
+}
+.el-dialog { padding: 0; }
+
+/* 全站控件直角：按钮/标签/输入/选择/分页/卡片共用同一形状语言。
+ * 单选圆点、开关、状态圆点等语义图形不在此范围。 */
+.el-button,
+.el-tag,
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper,
+.el-date-editor,
+.el-input-number,
+.el-input-number__increase,
+.el-input-number__decrease,
+.el-radio-button__inner,
+.el-checkbox-button__inner,
+.el-pagination button,
+.el-pager li,
+.el-card,
+.el-alert,
+.el-message,
+.el-notification,
+.el-dropdown-menu,
+.el-select-dropdown,
+.el-picker-panel,
+.el-cascader__dropdown,
+.el-badge__content {
+  border-radius: 0;
+}
+
+/* 自定义控件与开关：Element 变量覆盖不到的业务 chip/触发器单源收敛。 */
+body .el-switch__core,
+body .el-switch__core .el-switch__action { border-radius: 0; }
+
+.el-dialog .el-dialog__body :is(
+  .rule-picker-trigger,
+  .binding-order-chip,
+  .section-chip,
+  .tl-chip,
+  .import-summary-chip,
+  .takeover-badge,
+  .path-rule-order,
+  .strategy-card-icon,
+  .info-note-bar
+) { border-radius: 0; }
+
+.autoban-confirm-box .el-message-box__container :is(
+  .autoban-confirm-howto-label,
+  .autoban-confirm-icon,
+  .autoban-confirm-notes
+) { border-radius: 0; }
+
+body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; }
+
+#app :is(
+  .takeover-badge,
+  .node-tag,
+  .status-code,
+  .tm-cq-domain-chip,
+  .tm-count,
+  .oidc-sso-btn,
+  .autoban-main,
+  .ip-clickable,
+  .layout-menu .el-menu-item,
+  .layout-menu .el-sub-menu__title,
+  .login-card,
+  .logo-wrapper,
+  .config-preview,
+  .stat-item,
+  .stat-icon,
+  .stat-box,
+  .stat-box__icon,
+  .lib-icon,
+  .v2-badge,
+  .prism-code,
+  .code-editor,
+  .info-note-bar
+) { border-radius: 0; }
+
+#app .threat-screen :is(.chip, .act, .window-switch, .empty-state) { border-radius: 0; }
+#app *:focus-visible { border-radius: 0; }
+
+.el-dialog__title,
+.el-message-box__title,
+.el-drawer__title {
+  color: var(--el-text-color-primary, #1f2937);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.el-dialog__header,
+.el-drawer__header {
+  margin-right: 0;
+  padding: 20px;
+  background: linear-gradient(135deg, rgb(59 130 246 / 7%), rgb(14 165 233 / 2%));
+  border-bottom: 1px solid var(--el-border-color-lighter, #e8edf3);
+}
+.el-dialog__headerbtn { top: 20px; right: 20px; }
+.el-dialog .el-dialog__body { padding: 20px; scrollbar-gutter: stable; }
+.el-dialog__footer {
+  padding: 14px 20px;
+  background: var(--el-fill-color-lighter, #fafbfc);
+  border-top: 1px solid var(--el-border-color-lighter, #edf0f4);
+}
+
+/* 正文容器直角白名单：只覆盖面板/卡片/代码框，保留 switch/tag/chip 等控件形状。 */
+.el-dialog .el-dialog__body :is(
+  .el-card,
+  .el-alert,
+  .info-note-bar,
+  .tl-card,
+  .flow-panel,
+  .bind-stage-group,
+  .trg-hero,
+  .trg-card,
+  .crs-snippet-body,
+  .schedule-editor,
+  .code-editor,
+  .prism-code,
+  .custom-upstream-editor,
+  .mfa-qr-frame,
+  .mfa-secret,
+  .mfa-recovery-code,
+  .oidc-hint-block,
+  .history-card,
+  .strategy-card,
+  .stats-card,
+  .rule-log-viewer,
+  .mcp-guide-pre,
+  .mcp-schema-pre,
+  .created-key-box,
+  .bound-rule-row,
+  .rule-picker-list,
+  .stage-projection-bar,
+  .preview-stage-card,
+  .view-policy-section,
+  .rule-condition-row,
+  .preset-tags-block,
+  .regex-extras,
+  .update-log-container,
+  .ctx-body-pre,
+  .block-content-editor,
+  .import-sections,
+  .log-viewer,
+  .mfa-scope-list,
+  .tls-cert-info,
+  .token-box,
+  .service-control-card,
+  .oidc-step,
+  .reg-info,
+  .log-container,
+  .tm-detail-desc,
+  .tm-log-container
+) {
+  border-radius: 0;
+}
+
+/* 详情型弹框正文面板：与 DialogSectionHeader 配套；表单仍可保持原生布局。 */
+.el-dialog .dialog-panel {
+  padding: 12px;
+  background: var(--el-fill-color-lighter, #f8fafc);
+  border: 1px solid var(--el-border-color-lighter, #e9edf2);
+  border-radius: 0;
+}
+.el-dialog .dialog-panel + .dialog-panel { margin-top: 12px; }
+.el-dialog .dialog-panel--flush { padding: 0; overflow: hidden; }
+
+.el-dialog .el-button,
+.el-popover .el-button,
+.el-message-box .el-button,
+.el-drawer .el-button {
+  border-radius: 0;
+}
+
+.el-message-box { padding: 0; }
+.el-message-box__header { padding: 20px 20px 12px; }
+.el-message-box__container { padding: 0 20px; }
+.el-message-box__btns { padding: 18px 20px 20px; }
+.el-drawer__header { margin-bottom: 0; padding: 20px; }
+.popover-title {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  color: var(--el-text-color-primary, #1f2937);
+  border-bottom: 1px solid var(--el-border-color-lighter, #edf0f4);
+  font-size: 13px;
+  font-weight: 600;
+}
 
 /* V2 产品徽章（Login/AppLayout 共用，历史补充轮去双源） */
 .v2-badge {

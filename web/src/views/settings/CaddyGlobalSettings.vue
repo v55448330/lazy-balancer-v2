@@ -218,7 +218,7 @@
         <el-icon><RefreshRight /></el-icon>刷新
       </el-button>
     </div>
-    <div ref="logContainerRef" class="log-viewer" v-html="logHtml" />
+    <div ref="logContainerRef" class="dialog-panel log-viewer" v-html="logHtml" />
     <template #footer>
       <div style="display: flex; align-items: center;">
         <LogStorageBar :key="activeLogTab" :log-key="caddyTabLogKey" style="margin-right: auto" />
@@ -762,7 +762,7 @@ onUnmounted(() => logTail.stop())
 .format-tip a:hover { text-decoration: underline; }
 .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 .log-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.log-viewer { height: 55vh; min-height: 320px; max-height: 700px; overflow: auto; padding: 12px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; line-height: 1.7; background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; border-radius: var(--radius-sm); white-space: pre-wrap; }
+.log-viewer { height: 55vh; min-height: 320px; max-height: 700px; overflow: auto; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; line-height: 1.7; background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 0; white-space: pre-wrap; }
 
 @media (max-width: 767px) {
   .card-header { align-items: flex-start; }

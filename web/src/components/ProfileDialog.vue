@@ -65,8 +65,10 @@
       :close-on-click-modal="false"
       :close-on-press-escape="!mfaSubmitting"
       :show-close="!mfaSubmitting"
-      :title="mfaAction === 'reset' ? '重置 MFA' : '关闭 MFA'"
     >
+      <template #header>
+        <DialogHeader :icon="Lock" :title="mfaAction === 'reset' ? '重置 MFA' : '关闭 MFA'" />
+      </template>
       <div class="form-tip-line">{{ mfaAction === 'reset' ? '重置会立即换绑验证器，旧验证器与旧恢复代码全部失效。' : '关闭后登录不再需要动态验证码。' }}</div>
       <el-input
         v-model="mfaCode"
@@ -97,7 +99,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { User } from '@element-plus/icons-vue'
+import { Lock, User } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import MfaBindingWizard from '@/components/MfaBindingWizard.vue'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
@@ -251,7 +253,6 @@ const onMfaActivated = async (): Promise<void> => {
 .oidc-hint-block {
   width: 100%;
   padding: 8px 12px;
-  border-radius: 4px;
   background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
   font-size: 12px;

@@ -767,10 +767,21 @@ func TestDeleteAPIKeyError_usesChineseMessage(t *testing.T) {
 	}
 }
 
+func suppressBrandingSyncSideEffects(t *testing.T, dataDir string) {
+	t.Helper()
+	brandingSyncMu.Lock()
+	brandingSyncDataDir = dataDir
+	brandingSyncLast = time.Now()
+	brandingSyncFingerprint = brandingFileFingerprint(dataDir)
+	brandingSyncMu.Unlock()
+	t.Cleanup(resetBrandingSyncGateForTest)
+}
+
 func TestGetBranding_returnsDefaults_withoutWritingMissingFile(t *testing.T) {
 	// Given
 	dataDir := t.TempDir()
 	h := NewHandlers(Dependencies{Config: &config.Config{DataDir: dataDir, Version: "test"}})
+	suppressBrandingSyncSideEffects(t, dataDir)
 	response := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(response)
 	context.Request = httptest.NewRequest(http.MethodGet, "/branding", nil)
@@ -794,6 +805,7 @@ func TestGetBranding_fileVersion_overridesBuildVersion(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(custom), 0o644); err != nil {
 		t.Fatalf("write branding: %v", err)
 	}
+	suppressBrandingSyncSideEffects(t, dataDir)
 	h := NewHandlers(Dependencies{Config: &config.Config{DataDir: dataDir, Version: "2.0.7"}})
 	response := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(response)

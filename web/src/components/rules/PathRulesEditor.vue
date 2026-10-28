@@ -1,10 +1,7 @@
 <template>
   <div class="path-rules-editor">
     <div class="editor-section-header">
-      <div class="editor-heading-copy">
-        <h3 class="editor-title">自定义路由</h3>
-        <el-text type="info" size="small">按顺序匹配，先命中先生效；未命中走默认上游</el-text>
-      </div>
+      <DialogSectionHeader title="自定义路由" description="按顺序匹配，先命中先生效；未命中走默认上游" />
       <el-button type="primary" size="small" :icon="Plus" @click="addRule">添加路径规则</el-button>
     </div>
 
@@ -13,7 +10,7 @@
         v-for="(rule, index) in pathRules"
         :key="rule.id ?? `new-${index}`"
         shadow="never"
-        class="path-rule-card"
+        class="path-rule-card dialog-panel dialog-panel--flush"
       >
         <!-- 组内层次(用户裁定重构):徽标+操作行 → 匹配行 → 自定义上游开关行 → 缩进上游表格 -->
         <div class="path-rule-head">
@@ -131,7 +128,7 @@
           <span class="form-tip-inline">关闭时使用规则的默认上游服务器</span>
         </div>
 
-        <div v-if="rule.upstreams !== null" class="custom-upstream-editor">
+        <div v-if="rule.upstreams !== null" class="custom-upstream-editor dialog-panel">
           <div class="upstream-grid upstream-grid-header" aria-hidden="true">
             <span>协议</span>
             <span>地址</span>
@@ -177,6 +174,7 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 import { STATIC_RESPONSE_STATUSES, STATIC_RESPONSE_STATUS_REASONS, upstreamPathRuleError } from '@/utils/ruleValidation'
@@ -251,12 +249,10 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 </script>
 
 <style scoped>
-.path-rules-editor { display: flex; flex-direction: column; gap: 16px; padding: 0 20px; }
+.path-rules-editor { display: flex; flex-direction: column; gap: 6px; padding: 0 20px; }
 .editor-section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.editor-heading-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.editor-title { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 600; }
-.path-rules-list { display: flex; flex-direction: column; gap: 12px; }
-.path-rule-card :deep(.el-card__body) { padding: 12px 14px; }
+.path-rules-list { display: flex; flex-direction: column; }
+.path-rule-card :deep(.el-card__body) { padding: 12px; }
 /* 层次一：徽标 + 行内操作，动作列固定右上不随字段挤压 */
 .path-rule-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .path-rule-order { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
@@ -278,7 +274,7 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 /* 层次二/三：开关行单句说明 + 满宽次级卡片（左右贴齐外层卡片内容缘，双侧同 padding），行距统一 12px */
 .custom-upstream-toggle { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .custom-upstream-title { color: var(--el-text-color-regular); font-size: 13px; }
-.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }

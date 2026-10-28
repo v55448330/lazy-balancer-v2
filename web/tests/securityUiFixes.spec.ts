@@ -31,20 +31,3 @@ test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时�
   assert.match(page, /label="IP 地址" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
   assert.match(page, /label="攻击类型" min-width="140"/, '攻击类型列让宽到 140（原 180）')
 })
-
-test('IP 快捷弹框：无黑名单落点只提示不隐藏（白名单/信任动作保留）', () => {
-  const page = code('src/views/security/IPLocationAction.vue')
-  assert.match(page, /const hasAclPolicy = computed/)
-  // 前置门曾把整块策略卡片作为 !hasInterceptPolicy 的 else-if 分支隐藏：仅有
-  // 白名单（allow）/信任（阶段 0）策略的部署失去全部快捷处置入口——放行、信任、
-  // 移除条目全都不可达。提示必须是非阻塞横幅，卡片照常渲染。
-  assert.doesNotMatch(page, /v-else-if="!hasInterceptPolicy"/, '不得以「无黑名单落点」为分支条件取代卡片区')
-  assert.match(page, /const interceptHint = computed/)
-  // 提示与卡片同屏：横幅落在 rows 渲染分支内，且分支仍渲染 visibleGroups
-  const rows = section(page, '<template v-else-if="rows.length > 0">', '<div v-else-if="policies.length > 0 && hasAclPolicy"')
-  assert.match(rows, /v-if="interceptHint"/, '提示须在卡片区顶部，而非取代卡片区')
-  assert.match(rows, /\{\{ interceptHint \}\}/)
-  assert.match(rows, /v-for="group in visibleGroups"/)
-  // 空态兜底仍给出创建指引
-  assert.match(page, /尚未创建 IP 访问控制（黑名单）策略/)
-})

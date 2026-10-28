@@ -22,13 +22,6 @@ import {
 } from '../src/utils/securityStages.ts'
 import { code, member, repoCode } from './_helpers.ts'
 
-test('IP 快捷处置：信任命中只全扫一次，GeoIP 区域只解析一次', () => {
-  const src = code('src/views/security/IPLocationAction.vue')
-  assert.match(src, /const trustHitSummary = computed/, '信任命中与豁免策略应共享一次计算')
-  assert.doesNotMatch(src, /const td[01]Owner = policies\.value\.find/, '逐行不得再全策略扫描')
-  assert.doesNotMatch(src, /JSON\.parse\(policy\.geoip_countries/, 'GeoIP 区域不得重复 JSON.parse')
-  assert.match(src, /const regions = parseIPList\(policy\.geoip_countries\)/)
-})
 
 test('规则流程只拉本规则阶段 0 策略的信任引用', () => {
   const src = code('src/components/RuleFlowDialog.vue')

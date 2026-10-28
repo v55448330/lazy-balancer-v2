@@ -9,10 +9,7 @@
     @open="onDialogOpen"
   >
     <template #header>
-      <div class="flow-header">
-        <span class="flow-header-title">处理流程</span>
-        <span v-if="target" class="flow-header-name" :title="target.name">{{ target.name }}</span>
-      </div>
+      <DialogHeader :icon="Connection" title="处理流程" :subtitle="target?.name" />
     </template>
 
     <div v-if="target" class="flow-body">
@@ -52,8 +49,8 @@
 
         <!-- 接入信息（选中节点下方展开）：我们收到什么样的请求 -->
         <el-collapse-transition v-if="node.key === 'access'">
-          <div v-if="activeNode === 'access'" class="flow-panel tl-panel">
-            <div class="flow-panel-head"><span class="flow-panel-title">接入 · 收到的请求</span></div>
+          <div v-if="activeNode === 'access'" class="flow-panel dialog-panel tl-panel">
+            <DialogSectionHeader title="接入 · 收到的请求" />
             <div class="flow-kv-grid">
               <div class="flow-kv flow-kv--wide">
                 <span class="flow-kv-label">域名</span>
@@ -82,7 +79,7 @@
                 <el-button link type="warning" size="small" @click="retryCertInfo">重试</el-button>
               </div>
               <template v-else-if="certInfo">
-                <div class="flow-cert-title">TLS 证书</div>
+                <div class="flow-cert-section"><DialogSectionHeader title="TLS 证书" /></div>
                 <div class="flow-kv-grid">
                   <div class="flow-kv"><span class="flow-kv-label">签发者</span><span class="flow-kv-value" :title="certInfo.issuer">{{ certInfo.issuer || '-' }}</span></div>
                   <div class="flow-kv"><span class="flow-kv-label">证书域名</span><span class="flow-kv-value" :title="certInfo.domains">{{ certInfo.domains || '-' }}</span></div>
@@ -110,9 +107,9 @@
 
         <!-- 阶段 0 · 信任名单面板 -->
         <el-collapse-transition v-if="node.key === 'stage0'">
-          <div v-if="activeNode === 'stage0'" class="flow-panel tl-panel">
+          <div v-if="activeNode === 'stage0'" class="flow-panel dialog-panel tl-panel">
             <template v-if="stageZero">
-            <div class="flow-panel-head"><span class="flow-panel-title">{{ stageZero.title }}</span></div>
+            <DialogSectionHeader :title="stageZero.title" />
             <div v-if="detailFailedSources.length > 0" class="flow-detail-line">
               部分明细加载失败（{{ detailFailedSources.join('、') }}）
               <el-button link type="warning" size="small" @click="ensureDetails(true)">重试</el-button>
@@ -165,13 +162,15 @@
 
         <!-- 阶段 1/2/3 面板 -->
         <el-collapse-transition v-if="node.key.startsWith('stage') && node.key !== 'stage0'">
-          <div v-if="activeNode === node.key && typedStageByKey(node.key)" class="flow-panel tl-panel">
+          <div v-if="activeNode === node.key && typedStageByKey(node.key)" class="flow-panel dialog-panel tl-panel">
               <div class="flow-panel-head">
-                <span class="flow-panel-title">{{ typedStageByKey(node.key)!.title }}</span>
-                <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
-                <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">阶段页已失效（回落跟随策略）</el-tag>
-                <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">拦截页跟随策略</el-tag>
-                <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
+                <DialogSectionHeader :title="typedStageByKey(node.key)!.title" />
+                <div class="flow-panel-meta">
+                  <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
+                  <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">阶段页已失效（回落跟随策略）</el-tag>
+                  <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">拦截页跟随策略</el-tag>
+                  <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
+                </div>
               </div>
               <div v-if="detailFailedSources.length > 0" class="flow-detail-line">
                 部分明细加载失败（{{ detailFailedSources.join('、') }}）
@@ -275,10 +274,10 @@
 
         <!-- 上游信息（发给什么样的上游） -->
         <el-collapse-transition v-if="node.key === 'upstream'">
-          <div v-if="activeNode === 'upstream'" class="flow-panel tl-panel">
+          <div v-if="activeNode === 'upstream'" class="flow-panel dialog-panel tl-panel">
             <div class="flow-panel-head">
-              <span class="flow-panel-title">上游 · 转发目标</span>
-              <el-tag v-if="target.health" size="small" effect="plain" :type="target.health.unhealthy + target.health.degraded > 0 ? 'warning' : 'success'">
+              <DialogSectionHeader title="上游 · 转发目标" />
+              <el-tag v-if="target.health" size="small" effect="plain" :type="target.health.unhealthy + target.health.degraded > 0 ? 'warning' : 'success'" class="flow-panel-meta">
                 健康 {{ target.health.healthy }}/{{ target.health.total }}
               </el-tag>
             </div>
@@ -309,10 +308,7 @@
             <!-- 路由分发明细分组：主路由+逐条路径行的健康明细（自定义路由信息唯一呈现处，
                  不再设独立流程节点）；主路由行含禁用位（主上游表上方已列全量，明细口径一致） -->
             <div v-if="target.pathRules && target.pathRules.length > 0" class="flow-route-group">
-              <div class="flow-route-group-head">
-                <span class="flow-route-group-title">路由分发</span>
-                <span class="flow-route-group-sub">{{ target.pathRules.length }} 条自定义路由 · 未命中走主路由</span>
-              </div>
+              <DialogSectionHeader title="路由分发" :description="`${target.pathRules.length} 条自定义路由 · 未命中走主路由`" />
               <div class="flow-route-row">
                 <span class="flow-route-match">/<em class="flow-route-type">主路由</em></span>
                 <span class="flow-route-arrow">→</span>
@@ -378,6 +374,8 @@
 import { computed, ref } from 'vue'
 import { Connection, CircleCheck, Key, Odometer, Aim, TopRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { request } from '@/utils/api'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
@@ -828,9 +826,6 @@ const retryCertInfo = (): void => {
 </script>
 
 <style scoped>
-.flow-header { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.flow-header-title { font-size: 16px; font-weight: 600; color: #1f2937; }
-.flow-header-name { font-size: 13px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-body { display: flex; flex-direction: column; gap: 0; }
 
 /* ── 纵向时间线：图标圆点 + 阶段色阶 + 竖向连接线流动粒子 + 错峰进场 ── */
@@ -848,7 +843,7 @@ const retryCertInfo = (): void => {
   flex: 0 0 auto;
   width: 28px;
   height: 28px;
-  border-radius: 50%;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -881,7 +876,6 @@ const retryCertInfo = (): void => {
   padding: 10px 14px;
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
   box-shadow: var(--el-box-shadow-light);
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -918,9 +912,8 @@ const retryCertInfo = (): void => {
 .tl-panel { margin: -6px 0 14px 0; }
 
 /* ── 信息区：定义列表双列栅格 + 字级层次 ── */
-.flow-panel { border: 1px solid #ebeef5; border-radius: 8px; padding: 14px 18px; background: #fafafa; box-shadow: var(--el-box-shadow-lighter); }
-.flow-panel-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.flow-panel-title { font-size: 14px; font-weight: 600; color: #1f2937; }
+.flow-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.flow-panel-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .flow-panel-stats { font-size: 12px; color: #1f6fbd; margin-bottom: 8px; }
 .flow-kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 24px; }
 .flow-kv { display: flex; align-items: baseline; gap: 12px; font-size: 13px; line-height: 1.8; min-width: 0; }
@@ -929,7 +922,7 @@ const retryCertInfo = (): void => {
 .flow-kv-value { color: #1f2937; overflow: hidden; text-overflow: ellipsis; }
 .flow-kv-value.is-expired { color: var(--el-color-danger); }
 .flow-domain-chip { margin: 0 6px 4px 0; }
-.flow-cert-title { font-size: 13px; font-weight: 600; color: #4b5563; margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
+.flow-cert-section { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
 .flow-cert-loading { margin-top: 12px; }
 .flow-policy-block + .flow-policy-block { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
 .flow-policy-block.is-disabled { opacity: 0.45; }
@@ -955,9 +948,6 @@ const retryCertInfo = (): void => {
 .flow-route-none { color: #9ca3af; }
 .flow-route-group { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
 .flow-route-group .flow-route-row + .flow-route-row { margin-top: 2px; }
-.flow-route-group-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
-.flow-route-group-title { font-size: 13px; font-weight: 600; color: #4b5563; }
-.flow-route-group-sub { font-size: 12px; color: #9ca3af; }
 
 /* ── 二级明细区（max-height 滚动） ── */
 .flow-policy-details { max-height: 260px; overflow-y: auto; margin-top: 6px; border-top: 1px dashed #e5e7eb; padding-top: 8px; }

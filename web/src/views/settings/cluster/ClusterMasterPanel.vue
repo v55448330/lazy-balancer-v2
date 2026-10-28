@@ -73,7 +73,7 @@
               </div>
             </template>
             <div class="section-sync-panel">
-              <div class="section-sync-title">分区同步状态</div>
+              <div class="popover-title">分区同步状态</div>
               <div v-for="section in row.section_sync" :key="section.section" class="section-sync-row">
                 <div class="section-sync-head">
                   <span class="section-sync-label">{{ section.label }}</span>
@@ -277,7 +277,6 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .offline-duration { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 .section-sync-stale { font-size: 12px; color: #9ca3af; }
 .section-sync-panel { display: flex; flex-direction: column; gap: 6px; }
-.section-sync-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .section-sync-row { display: flex; flex-direction: column; gap: 2px; font-size: 12px; padding: 4px 0; }
 .section-sync-row + .section-sync-row { border-top: 1px dashed var(--el-border-color-lighter); }
 .section-sync-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

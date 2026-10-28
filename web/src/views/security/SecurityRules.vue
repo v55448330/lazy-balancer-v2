@@ -253,8 +253,12 @@
       </el-tabs>
     </el-card>
 
-    <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="min(900px, 94vw)" top="5vh">
-      <div v-loading="loadingContent"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
+    <el-dialog v-model="contentDialogVisible" width="min(900px, 94vw)" top="5vh">
+      <template #header>
+        <DialogHeader :icon="Notebook" title="规则文件预览" :subtitle="currentFilename" />
+      </template>
+      <DialogSectionHeader title="规则内容" />
+      <div v-loading="loadingContent" class="dialog-panel dialog-panel--flush"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" width="min(760px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
@@ -400,7 +404,9 @@
         </el-form-item>
         <el-form-item label="条目" required>
           <div class="entries-block">
-            <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
+            <DialogSectionHeader title="名单条目" />
+            <div class="dialog-panel dialog-panel--flush">
+              <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
               <el-table-column label="#" width="50" align="right">
                 <template #default="{ $index }"><span class="ip-entry-index">{{ ipListEntryPageStart + $index + 1 }}</span></template>
@@ -435,7 +441,8 @@
                   <el-button link type="danger" size="small" :disabled="savingIpList" @click="removeIpListEntry(ipListEntryPageStart + $index)">删除</el-button>
                 </template>
               </el-table-column>
-            </el-table>
+              </el-table>
+            </div>
             <div v-if="ipListForm.entries.length > ipListEntryPageSize" class="entries-pagination">
               <el-pagination
                 v-model:current-page="ipListEntryPage"
@@ -495,9 +502,12 @@
         :tz="scheduleTz"
         @save="saveCRSSchedule"
       />
-      <div ref="updateLogRef" class="update-log-container">
-        <pre v-if="updateLog" class="update-log-content">{{ updateLog }}</pre>
-        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      <DialogSectionHeader title="更新日志" />
+      <div class="dialog-panel dialog-panel--flush">
+        <div ref="updateLogRef" class="update-log-container">
+          <pre v-if="updateLog" class="update-log-content">{{ updateLog }}</pre>
+          <el-empty v-else description="暂无更新日志" :image-size="60" />
+        </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
@@ -528,9 +538,12 @@
         :tz="scheduleTz"
         @save="saveIP2RegionSchedule"
       />
-      <div ref="ip2regionUpdateLogRef" class="update-log-container">
-        <pre v-if="ip2regionUpdateLog" class="update-log-content">{{ ip2regionUpdateLog }}</pre>
-        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      <DialogSectionHeader title="更新日志" />
+      <div class="dialog-panel dialog-panel--flush">
+        <div ref="ip2regionUpdateLogRef" class="update-log-container">
+          <pre v-if="ip2regionUpdateLog" class="update-log-content">{{ ip2regionUpdateLog }}</pre>
+          <el-empty v-else description="暂无更新日志" :image-size="60" />
+        </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
@@ -552,7 +565,9 @@
       <template #header>
         <DialogHeader :icon="Aim" title="更新威胁情报库" subtitle="三个内置恶意 IP 源的更新任务与更新日志" tone-class="lib-icon--threat" />
       </template>
-      <el-table :data="threatSources" size="small" class="threat-source-table">
+      <DialogSectionHeader title="威胁情报来源" />
+      <div class="dialog-panel dialog-panel--flush library-sources-panel">
+        <el-table :data="threatSources" size="small" class="threat-source-table">
         <el-table-column label="来源" min-width="260">
           <!-- 标题加粗 + 更新地址次行（与规则库表格「名称+描述」两行同构，
                2026-09-24 用户裁定替代独立更新地址列） -->
@@ -580,7 +595,8 @@
             <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('threat', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('threat', row.id)" @change="(v: boolean) => toggleThreatFlag(row, v)" />
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
       <RuleLibScheduleEditor
         :days="threatSchedule.days"
         :time="threatSchedule.time"
@@ -590,9 +606,12 @@
         :tz="scheduleTz"
         @save="saveThreatSchedule"
       />
-      <div ref="threatUpdateLogRef" class="update-log-container update-log-container--compact">
-        <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
-        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      <DialogSectionHeader title="更新日志" />
+      <div class="dialog-panel dialog-panel--flush">
+        <div ref="threatUpdateLogRef" class="update-log-container update-log-container--compact">
+          <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
+          <el-empty v-else description="暂无更新日志" :image-size="60" />
+        </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
@@ -614,7 +633,9 @@
       <template #header>
         <DialogHeader :icon="Link" title="爬虫地址更新" subtitle="四个官方爬虫 IP 源的更新任务与更新日志" tone-class="lib-icon--crawler" />
       </template>
-      <el-table :data="crawlerSources" size="small" class="threat-source-table">
+      <DialogSectionHeader title="爬虫地址来源" />
+      <div class="dialog-panel dialog-panel--flush library-sources-panel">
+        <el-table :data="crawlerSources" size="small" class="threat-source-table">
         <el-table-column label="来源" min-width="260">
           <template #default="{ row }">
             <div class="lib-name-text">
@@ -640,7 +661,8 @@
             <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('crawler', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('crawler', row.id)" @change="(v: boolean) => toggleCrawlerFlag(row, v)" />
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
       <RuleLibScheduleEditor
         :days="crawlerSchedule.days"
         :time="crawlerSchedule.time"
@@ -650,9 +672,12 @@
         :tz="scheduleTz"
         @save="saveCrawlerSchedule"
       />
-      <div ref="crawlerUpdateLogRef" class="update-log-container update-log-container--compact">
-        <pre v-if="crawlerUpdateLog" class="update-log-content">{{ crawlerUpdateLog }}</pre>
-        <el-empty v-else description="暂无更新日志" :image-size="60" />
+      <DialogSectionHeader title="更新日志" />
+      <div class="dialog-panel dialog-panel--flush">
+        <div ref="crawlerUpdateLogRef" class="update-log-container update-log-container--compact">
+          <pre v-if="crawlerUpdateLog" class="update-log-content">{{ crawlerUpdateLog }}</pre>
+          <el-empty v-else description="暂无更新日志" :image-size="60" />
+        </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
@@ -680,6 +705,7 @@ import { DEEP_LINK_PARAMS } from '@/utils/deepLink'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import RuleLibScheduleEditor from '@/components/RuleLibScheduleEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -1946,7 +1972,7 @@ onUnmounted(() => {
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }
 .rule-condition-row {
   display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; flex-wrap: wrap;
-  padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb;
   position: relative; transition: border-color 0.2s;
 }
 .rule-condition-row:hover { border-color: #d1d5db; }
@@ -1971,14 +1997,14 @@ onUnmounted(() => {
 .preset-tag:focus-visible,
 .regex-preset-link:focus-visible { outline: 2px solid #409eff; outline-offset: 2px; border-radius: 2px; }
 .preset-toggle { font-size: 12px; color: #6b7280; }
-.preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; margin-left: 0; }
+.preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; margin-left: 0; }
 .preset-group { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; text-align: right; line-height: 1; }
 .preset-hint { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.4; }
 .preset-group-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
-.regex-extras { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; box-sizing: border-box; }
+.regex-extras { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; box-sizing: border-box; }
 .regex-presets { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 4px; }
 .regex-preset-link { font-size: 12px; }
 .regex-tester { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1999,8 +2025,6 @@ onUnmounted(() => {
 .entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
-/* 弹框表单右缘留白（字段贴右边距视觉失衡，2026-09-24 用户反馈） */
-.ip-list-dialog .el-form { padding-right: 20px; }
 .threat-source-url {
   display: inline-block;
   max-width: 100%;
@@ -2013,8 +2037,9 @@ onUnmounted(() => {
   color: #64748b;
 }
 
-.threat-source-table { margin-bottom: 12px; }
-.update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
+.threat-source-table { margin-bottom: 0; }
+.library-sources-panel { margin-bottom: 12px; }
+.update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; padding: 12px; }
 .lib-summary-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lib-health-tag { margin: 0; }
 .lib-summary-warn-text { color: #dc2626; font-weight: 600; font-size: 12px; margin-left: 4px; }
@@ -2044,7 +2069,4 @@ onUnmounted(() => {
    el-table 内部渲染、dialog class 又经 attrs 绑定，scoped 选择器命不中，故放
    非 scoped 块（与本块其余弹框/popper 规则同因）。 */
 .ip-entry-created { white-space: nowrap; }
-/* el-dialog 的 class 落在 .el-dialog 元素上（$attrs 手动绑定，非组件根），
-   scoped 选择器无法命中，与上面 popper 同放非 scoped 块。
-   统一加大弹框四向 padding（16→24px），条目表格不再贴右侧边缘，左右留白对称。 */
 </style>

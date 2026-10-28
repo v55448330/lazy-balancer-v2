@@ -218,7 +218,7 @@
             <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
             <el-table-column label="来源 IP" min-width="150">
               <template #default="{ row }">
-                <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
+              <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
               </template>
             </el-table-column>
             <el-table-column label="规则" min-width="160" show-overflow-tooltip>
