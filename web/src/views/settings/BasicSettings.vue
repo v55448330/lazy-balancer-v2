@@ -618,6 +618,11 @@ const openExportDialog = (): void => {
 }
 const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
+  try {
+    await ElMessageBox.confirm(`将按所选分类导出配置备份，导出内容可能包含证书私钥及敏感凭证，请妥善保存。确认导出？`, '导出配置备份', {
+      type: 'warning', confirmButtonText: '确认导出', cancelButtonText: '取消',
+    })
+  } catch { return }
   exporting.value = true
   try {
     // 备份含全部证书与私钥，体积可能很大，禁用 30s 默认超时
@@ -801,6 +806,11 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
     ElMessage.warning('自动备份设置尚未加载完成，暂不能保存')
     return false
   }
+  try {
+    await ElMessageBox.confirm(`将保存自动备份设置${autoBackupForm.value.enabled ? '并启用定时备份' : '，定时备份保持关闭'}，是否继续？`, '保存自动备份设置', {
+      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    })
+  } catch { return false }
   autoBackupSaving.value = true
   try {
     await request.put('/settings/auto-backup', { ...autoBackupForm.value, sections: autoBackupSections.value })
@@ -828,8 +838,13 @@ const runAutoBackupNow = async (): Promise<void> => {
   }
   // 异步契约：202 只代表已受理，不代表完成——记录基线 id，轮询
   // 备份列表直到出现本次新增的 manual 行（成功/失败都算落定）或 60s 超时。
-  const baselineId = autoBackupRows.value.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0)
+  try {
+    await ElMessageBox.confirm('将按最近一次已保存的自动备份设置立即生成一份配置备份，是否继续？', '立即备份', {
+      type: 'warning', confirmButtonText: '立即备份', cancelButtonText: '取消',
+    })
+  } catch { return }
   autoBackupRunning.value = true
+  const baselineId = autoBackupRows.value.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0)
   try {
     await request.post('/auto-backup/run')
     mfaAwareSuccess('备份已开始，完成后将自动刷新列表')
@@ -1727,8 +1742,13 @@ const notifyTlsRestarting = (toHttps: boolean) => {
 }
 
 // 弹窗「确定」仅暂存证书选择，不发请求；随底部「保存」统一提交
-const confirmAdminTls = () => {
+const confirmAdminTls = async () => {
   if (adminTlsConfirmBlocked.value) return
+  try {
+    await ElMessageBox.confirm('将暂存当前 HTTPS 证书配置；返回基础设置后还需点击「保存」，保存后服务将重启。确认继续？', '确认证书配置', {
+      type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
+    })
+  } catch { return }
   const { mode, certFile, keyFile, certInfo } = adminTlsForm.value
   tlsDialogFromToggle = false
   adminTls.value.mode = mode

@@ -71,6 +71,7 @@
       </template>
       <div class="form-tip-line">{{ mfaAction === 'reset' ? '重置会立即换绑验证器，旧验证器与旧恢复代码全部失效。' : '关闭后登录不再需要动态验证码。' }}</div>
       <el-input
+        v-if="!mfaWriteGuard"
         v-model="mfaCode"
         class="mfa-code-field"
         placeholder="当前 6 位动态验证码"
@@ -80,8 +81,8 @@
       />
       <template #footer>
         <el-button :disabled="mfaSubmitting" @click="mfaCodeDialog = false">取消</el-button>
-        <el-button type="primary" :loading="mfaSubmitting" :disabled="mfaCode.length !== 6" @click="confirmMfaAction">
-          {{ mfaAction === 'reset' ? '验证并重置' : '验证并关闭' }}
+        <el-button type="primary" :loading="mfaSubmitting" :disabled="!mfaWriteGuard && mfaCode.length !== 6" @click="confirmMfaAction">
+          {{ mfaAction === 'reset' ? (mfaWriteGuard ? '确认重置' : '验证并重置') : (mfaWriteGuard ? '确认关闭' : '验证并关闭') }}
         </el-button>
       </template>
     </el-dialog>
@@ -98,7 +99,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import MfaBindingWizard from '@/components/MfaBindingWizard.vue'
@@ -114,6 +115,7 @@ const authStore = useAuthStore()
 const isOIDCUser = computed(() => authStore.user?.auth_provider === 'oidc')
 const isReadOnly = computed(() => authStore.readOnlyReason === 'slave' || authStore.readOnlyReason === 'unknown')
 const mfaEnabled = computed(() => authStore.user?.mfa_enabled === true)
+const mfaWriteGuard = computed(() => authStore.mfaWriteGuard)
 const saving = ref(false)
 const profileForm = ref({ username: '', display_name: '', password: '', passwordConfirm: '', currentPassword: '' })
 const syncProfileForm = () => {
@@ -140,8 +142,15 @@ const saveProfile = async () => {
   if (passwordError) { authStore.showToast('warning', passwordError); return }
   if (profileForm.value.password && !profileForm.value.currentPassword) { authStore.showToast('warning', '请输入当前密码'); return }
   if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) { authStore.showToast('warning', '两次输入的新密码不一致'); return }
-  saving.value = true
   const passwordChanged = Boolean(profileForm.value.password)
+  try {
+    await ElMessageBox.confirm(
+      passwordChanged ? '将保存个人资料并修改密码，保存后需要重新登录。确认继续？' : '将保存个人资料修改，是否继续？',
+      '保存个人资料',
+      { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  saving.value = true
   try {
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
@@ -211,17 +220,18 @@ const startMfaAction = (action: 'disable' | 'reset'): void => {
 }
 
 const confirmMfaAction = async (): Promise<void> => {
-  if (mfaCode.value.length !== 6 || mfaSubmitting.value) return
+  if ((!mfaWriteGuard.value && mfaCode.value.length !== 6) || mfaSubmitting.value) return
+  const code = mfaWriteGuard.value ? '' : mfaCode.value
   mfaSubmitting.value = true
   try {
     if (mfaAction.value === 'disable') {
-      await request.post('/auth/mfa/disable', { code: mfaCode.value }, { silent: true })
+      await request.post('/auth/mfa/disable', { code }, { silent: true })
       mfaCodeDialog.value = false
       mfaAwareSuccess('MFA 已关闭')
       await authStore.fetchUser()
       return
     }
-    const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', { code: mfaCode.value }, { silent: true })
+    const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', { code }, { silent: true })
     // 同 startEnable：200 无 data 必须显性报错（验码弹框保持打开，凭据不复位）
     if (!res.data) {
       ElMessage.error('响应异常，请重试')

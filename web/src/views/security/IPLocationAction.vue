@@ -323,6 +323,14 @@ const executeAdd = async (): Promise<void> => {
   if (!side || actionBusy.value) return
   const target = model.value[side].targets.find((item) => item.key === selectedTargetKey.value)
   if (!target) return
+  if (target.kind === 'list') {
+    const title = sections.find((item) => item.side === side)?.title ?? '目标'
+    try {
+      await ElMessageBox.confirm(`将把 ${trimmedIp.value} 加入${title}「${target.name}」，保存后立即影响相关策略的访问控制。是否继续？`, '确认添加', {
+        type: 'warning', confirmButtonText: '确认添加', cancelButtonText: '取消',
+      })
+    } catch { return }
+  }
   actionBusy.value = true
   try {
     if (target.kind === 'list' && target.listId) {

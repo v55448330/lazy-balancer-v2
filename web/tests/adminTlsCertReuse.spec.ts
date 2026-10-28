@@ -68,7 +68,7 @@ test('自签模式不需要证书材料', () => {
 test('组件接线：确定按钮与 confirmAdminTls 共用同一门', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   assert.match(page, /:disabled="adminTlsConfirmBlocked"/, '按钮必须消费统一判据')
-  const confirm = section(page, 'const confirmAdminTls = () => {', 'loadAdminTls()')
+  const confirm = section(page, 'const confirmAdminTls = async () => {', 'loadAdminTls()')
   assert.match(confirm, /if \(adminTlsConfirmBlocked\.value\) return/)
   assert.match(confirm, /stagedAdminTlsCert\.value = mode === 'upload' && certFile && keyFile && certInfo/)
   // 沿用分支必须保持 staged 为空（载荷只发 enabled+mode，材料由后端保留）

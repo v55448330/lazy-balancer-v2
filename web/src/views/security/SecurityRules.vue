@@ -773,6 +773,13 @@ const toggleSourceFlag = async (
 ): Promise<void> => {
   const key = sourceFlagKey(library, row.id)
   if (sourceFlagSaving.value.has(key)) return
+  if (!val) {
+    try {
+      await ElMessageBox.confirm(`将停止来源「${row.display_name || row.name}」的自动更新，已下载条目保留但不再自动更新。确认关闭？`, '关闭自动更新', {
+        type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消',
+      })
+    } catch { row.update_enabled = !val; return }
+  }
   const requestSeq = (sourceFlagRequestSeq.get(key) ?? 0) + 1
   sourceFlagRequestSeq.set(key, requestSeq)
   sourceFlagSaving.value.add(key)
@@ -950,6 +957,13 @@ const applyLibAutoUpdate = async (key: string, val: boolean): Promise<void> => {
 }
 const toggleLibAutoUpdate = async (row: LibRow, val: boolean): Promise<void> => {
   if (autoUpdateSaving.value.has(row.key)) return
+  if (!val) {
+    try {
+      await ElMessageBox.confirm(`将停止「${row.name}」的自动更新，当前版本保留但不再自动更新。确认关闭？`, '关闭自动更新', {
+        type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消',
+      })
+    } catch { return }
+  }
   autoUpdateSaving.value.add(row.key)
   const previous = row.autoUpdate
   setLibAutoUpdateShown(row.key, val)
@@ -1770,9 +1784,19 @@ const ensureScheduleTz = async () => {
   }
 }
 
+const confirmScheduleSave = async (libraryName: string): Promise<boolean> => {
+  try {
+    await ElMessageBox.confirm(`将保存${libraryName}的定时更新设置，后续按新排程自动更新。是否继续？`, '保存定时更新设置', {
+      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    })
+    return true
+  } catch { return false }
+}
+
 const savingCRSSchedule = ref(false)
 const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (crsScheduleHint.value) { ElMessage.warning(crsScheduleHint.value); return }
+  if (!(await confirmScheduleSave('CRS 规则库'))) return
   savingCRSSchedule.value = true
   try {
     await request.put('/security/crs/schedule', { days, time })
@@ -1784,6 +1808,7 @@ const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string })
 const savingIP2RegionSchedule = ref(false)
 const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (ip2regionScheduleHint.value) { ElMessage.warning(ip2regionScheduleHint.value); return }
+  if (!(await confirmScheduleSave('IP 地理库'))) return
   savingIP2RegionSchedule.value = true
   try {
     await request.put('/security/ip2region/schedule', { days, time })
@@ -1795,6 +1820,7 @@ const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: str
 const savingThreatSchedule = ref(false)
 const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (threatScheduleHint.value) { ElMessage.warning(threatScheduleHint.value); return }
+  if (!(await confirmScheduleSave('威胁情报库'))) return
   savingThreatSchedule.value = true
   try {
     await request.put('/security/threat-lib/schedule', { days, time })
@@ -1806,6 +1832,7 @@ const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string
 const savingCrawlerSchedule = ref(false)
 const saveCrawlerSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (crawlerScheduleHint.value) { ElMessage.warning(crawlerScheduleHint.value); return }
+  if (!(await confirmScheduleSave('爬虫地址库'))) return
   savingCrawlerSchedule.value = true
   try {
     await request.put('/security/crawler-lib/schedule', { days, time })

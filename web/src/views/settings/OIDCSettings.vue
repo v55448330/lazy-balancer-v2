@@ -387,6 +387,13 @@ const save = async () => {
 
 const toggleEnabled = async (on: boolean) => {
   if (isReadOnly.value || saving.value || loadFailed.value) return
+  if (!on) {
+    try {
+      await ElMessageBox.confirm('暂停后 OIDC 用户将无法通过该入口登录，本地账号登录不受影响。确认暂停？', '暂停 OIDC', {
+        type: 'warning', confirmButtonText: '确认暂停', cancelButtonText: '取消',
+      })
+    } catch { return }
+  }
   saving.value = true
   try {
     await request.put('/settings/oidc', { enabled: on })

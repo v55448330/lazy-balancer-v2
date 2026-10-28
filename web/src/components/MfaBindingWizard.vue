@@ -54,14 +54,14 @@
       <el-button v-if="step === 1" :disabled="loading" @click="step = 0">上一步</el-button>
       <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="code.length !== 6" @click="activate">验证并启用</el-button>
       <el-button v-if="step === 2" @click="copyRecovery">复制全部</el-button>
-      <el-button v-if="step === 2" type="primary" @click="emit('update:modelValue', false)">我已保存</el-button>
+      <el-button v-if="step === 2" type="primary" @click="confirmRecoverySaved">我已保存</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -140,6 +140,11 @@ watch([() => props.modelValue, step], ([visible, current]) => {
 const activate = async (): Promise<void> => {
   // 按钮已按 6 位禁用；函数内保留短路作为纵深兜底（脚本/键盘直触路径）。
   if (code.value.length !== 6 || loading.value) return
+  try {
+    await ElMessageBox.confirm('将启用两步验证并生成一次性恢复代码，确认继续？', '启用 MFA', {
+      type: 'warning', confirmButtonText: '验证并启用', cancelButtonText: '取消',
+    })
+  } catch { return }
   loading.value = true
   try {
     const res = await request.post<APIResponse<{ recovery_codes: string[] }>>('/auth/mfa/activate', { code: code.value }, { silent: true })
@@ -164,6 +169,15 @@ const copyRecovery = async (): Promise<void> => {
   const ok = await copyText(recoveryCodes.value.join('\n'))
   if (ok) ElMessage.success('恢复代码已复制')
   else ElMessage.warning('复制失败，请手动选择复制')
+}
+
+const confirmRecoverySaved = async (): Promise<void> => {
+  try {
+    await ElMessageBox.confirm('恢复代码仅此一次显示。请确认已复制并妥善保存恢复代码；未保存将无法在丢失验证器时恢复登录。', '确认已保存', {
+      type: 'warning', confirmButtonText: '我已保存', cancelButtonText: '返回检查',
+    })
+    emit('update:modelValue', false)
+  } catch { /* 返回检查，不关闭 */ }
 }
 </script>
 

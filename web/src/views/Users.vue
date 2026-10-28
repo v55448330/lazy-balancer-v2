@@ -386,6 +386,15 @@ const handleSubmit = async () => {
     ElMessage.warning('两次输入的新密码不一致')
     return
   }
+  try {
+    await ElMessageBox.confirm(
+      editingUser.value
+        ? `将更新用户「${form.value.username}」的账号资料与权限，是否继续？`
+        : `将创建用户「${form.value.username}」（角色：${form.value.role === 'admin' ? '管理员' : '普通用户'}），是否继续？`,
+      editingUser.value ? '确认编辑用户' : '确认创建用户',
+      { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+    )
+  } catch { return }
   submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
@@ -574,6 +583,11 @@ const resetPassword = async (row: UserListItem) => {
     if (!r.ok) return
     newPassword = r.newPwd ?? ''
     if (newPassword) {
+      try {
+        await ElMessageBox.confirm(`将为「${row.username}」重置密码，重置后该用户的全部登录会话将被吊销。确认重置？`, '确认重置密码', {
+          type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消',
+        })
+      } catch { return }
       await request.post(`/users/${row.id}/reset-password`, { new_password: newPassword })
       if (isSelf) {
         // 管理员重置本人密码:重置端点递增 pwd_ver 吊销自身会话——干净登出
