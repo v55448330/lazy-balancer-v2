@@ -12,9 +12,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 WORKDIR /app
 
-# GOTOOLCHAIN=auto（本阶段有意保留）：xcaddy 在临时主模块里按 Caddy 声明的
-# go 指令构建，Caddy 升级到更高 Go 要求时由工具链自动拉取；backend 阶段则收紧
-# 为 local（见该阶段 ENV）——镜像内的 Go 二进制只由基础镜像声明的工具链产出。
+# GOTOOLCHAIN=auto（本阶段仅作显式诊断兜底）：xcaddy 在临时主模块里按 Caddy
+# 声明的 go 指令构建；若 Caddy 提高到更高 Go 要求，auto 会拉取新工具链，而下方
+# go1.26.10 精确断言会立即拒绝产物。此时必须同步 bump 基础镜像与断言，不得把
+# 自动升级静默带入镜像；backend 阶段用 local 执行同一精确版本契约。
 ENV GOTOOLCHAIN=auto
 # 代理不在此声明：Docker 预定义 HTTP_PROXY/HTTPS_PROXY 等构建参数，经
 # --build-arg 传入后自动注入每条 RUN 的环境，无需 ARG 声明（声明了却不引用

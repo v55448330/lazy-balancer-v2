@@ -50,6 +50,23 @@ func TestReadAppliedSectionHashes_iterationErrorDropsPartialView(t *testing.T) {
 	}
 }
 
+// 逐行 Scan 失败（驱动/连接异常形态）必须与行遍历错误同口径：留痕并返回 nil，
+// 不得返回「部分 map」——残留记录会让 driftedSections 用残缺 applied 记录比对，
+// 把未漂移节误判为漂移（多一轮全量重拉），且故障本身零信号。
+func TestReadAppliedSectionHashes_scanErrorDropsPartialView(t *testing.T) {
+	buf := captureLogf(t)
+	fake := sql.OpenDB(&fakeIterErrConnector{scanFailNeedle: "FROM cluster_applied_sections"})
+	t.Cleanup(func() { _ = fake.Close() })
+
+	got := readAppliedSectionHashes(context.Background(), fake)
+	if got != nil {
+		t.Fatalf("scan error returned partial applied hashes: %#v", got)
+	}
+	if !strings.Contains(buf.String(), "读取已应用节哈希失败") {
+		t.Fatalf("scan error must be logged (fail-visible), logs=%q", buf.String())
+	}
+}
+
 // 版本行差分读取失败时偏向重放；空快照与截断本地视图不得误判为一致。
 func TestSnapshotSecurityVersionRowsDiffer_iterationErrorForcesReplay(t *testing.T) {
 	for _, needle := range []string{"FROM security_crs_version", "FROM security_ip2region_version"} {

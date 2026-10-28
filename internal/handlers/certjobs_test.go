@@ -1356,19 +1356,69 @@ func TestRetryCertJobBlockedDuringConfigImport(t *testing.T) {
 }
 
 // 回归形状：非导入窗口内同一入口不被误拦（门只在 busy 时生效）。
+// 只做负向断言（「不是 409」「无导入窗口文案」）时 200/404/500 全都通过——
+// 导入窗口门失效、进入真实查询、查询故障三者不可区分。放行后的确定性结果
+// 必须是「任务不存在」的 404：它同时证明请求走过了导入窗口门并抵达查询阶段。
 func TestRetryCertJobNotBlockedWhenNoImport(t *testing.T) {
-	newBackupTestHandlers(t)
-	h := &Handlers{}
+	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/jobs/:id/retry", h.RetryCertJob)
+
+	var certJobsBefore int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs`).Scan(&certJobsBefore); err != nil {
+		t.Fatal(err)
+	}
+	var auditsBefore int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重试失败'`).Scan(&auditsBefore); err != nil {
+		t.Fatal(err)
+	}
+
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/jobs/999/retry", nil))
-	if recorder.Code == http.StatusConflict {
-		t.Fatalf("无导入会话时不得 409 导入窗口文案: body=%s", recorder.Body.String())
+
+	if recorder.Code == http.StatusConflict || strings.Contains(recorder.Body.String(), "配置导入进行中") {
+		t.Fatalf("无导入会话时命中导入窗口门: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if strings.Contains(recorder.Body.String(), "配置导入进行中") {
-		t.Fatalf("无导入会话时命中导入窗口门: body=%s", recorder.Body.String())
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404（无导入窗口→进入真实查询→任务不存在）", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("解析响应: %v body=%s", err, recorder.Body.String())
+	}
+	if response.Code != http.StatusNotFound || response.Message != "任务不存在" {
+		t.Fatalf("code=%d message=%q, want 404/任务不存在", response.Code, response.Message)
+	}
+
+	// 失败出口审计必须留痕（AuditPolicyExplicit 路由中间件不自动审计），
+	// 且归因是 job_not_found 而不是 query_failed/其它出口（detail 经
+	// AuditResultText 渲染为中文，不出现内部码字面量）。
+	var jobNotFound, auditsAfter int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log
+		WHERE action='重试失败' AND resource='证书任务' AND detail LIKE '%任务 999%' AND detail LIKE '%结果：任务不存在%'`).Scan(&jobNotFound); err != nil {
+		t.Fatal(err)
+	}
+	if jobNotFound != 1 {
+		t.Fatalf("job_not_found 审计行=%d, want 1（被拒重试必须可追溯）", jobNotFound)
+	}
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重试失败'`).Scan(&auditsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if auditsAfter != auditsBefore+1 {
+		t.Fatalf("重试失败审计行 %d→%d, want 恰好新增 1 条（不得重复留痕）", auditsBefore, auditsAfter)
+	}
+
+	// 零写库：不存在的 job 不得新增/改写 cert_jobs 行。
+	var certJobsAfter int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs`).Scan(&certJobsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if certJobsAfter != certJobsBefore {
+		t.Fatalf("cert_jobs 行数 %d→%d, want 不变（404 出口不得写库）", certJobsBefore, certJobsAfter)
 	}
 }
 

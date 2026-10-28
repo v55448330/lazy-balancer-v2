@@ -70,3 +70,26 @@ func TestDeleteAutoBackup_commitFailureDisclosesDeletedFileAndKeepsRow(t *testin
 		}
 	}
 }
+
+func TestDeleteAutoBackup_commitFailureUsesSharedSeam(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	name := "lbbak-manual-shared-commit-seam.lbbak"
+	path := filepath.Join(h.cfg.BackupDir, name)
+	if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	forceCommitFailure(t)
+
+	response := serveAutoBackupJSON(t, h, http.MethodDelete, "/auto-backup/:id", fmt.Sprintf("/auto-backup/%d", id), "", h.DeleteAutoBackup)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want injected commit failure 500", response.Code, response.Body.String())
+	}
+	if rows := autoBackupRows(t, "WHERE id=?", id); len(rows) != 1 {
+		t.Fatalf("提交失败后行必须恢复保留: %v", rows)
+	}
+}

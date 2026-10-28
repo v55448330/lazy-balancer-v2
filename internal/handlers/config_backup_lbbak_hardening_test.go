@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"os"
@@ -51,6 +52,9 @@ func TestLbbakImport_xdbFailurePreservesAppliedCrsRecord(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if err := os.WriteFile(xdbPath, []byte("live-diverged"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Mkdir(xdbPath+".version", 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -86,6 +90,14 @@ func TestLbbakImport_xdbFailurePreservesAppliedCrsRecord(t *testing.T) {
 			}
 			if !strings.Contains(response.Body.String(), "IP2Region") {
 				t.Fatalf("actual XDB failure must remain visible: %s", response.Body.String())
+			}
+			xdbAfter, err := os.ReadFile(xdbPath)
+			if err != nil || !bytes.Equal(xdbAfter, bundle.Xdb) {
+				t.Fatalf("XDB 版本写失败后文件仍必须是备份的完整字节：err=%v equal=%v", err, bytes.Equal(xdbAfter, bundle.Xdb))
+			}
+			crsAfter, err := os.ReadFile(filepath.Join(crsDir, "rules", "crs-setup.conf"))
+			if err != nil || !bytes.Equal(crsAfter, []byte("# backup crs\n")) {
+				t.Fatalf("CRS 成功相位文件字节被误回退/误写：err=%v content=%q", err, crsAfter)
 			}
 		})
 	}
@@ -140,8 +152,8 @@ func TestLbbakImport_threatCompileFailurePreservesLiveIplist(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(updated_at,'') FROM security_threat_sources WHERE name='ustc'`).Scan(&updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if updatedAt == "2030-01-01 00:00:00" {
-		t.Fatalf("failed source DB row was not restored: updated_at=%q", updatedAt)
+	if updatedAt != "2020-01-01 00:00:00+00:00" {
+		t.Fatalf("failed source DB row was not restored to the canonical pre-import value: updated_at=%q", updatedAt)
 	}
 }
 

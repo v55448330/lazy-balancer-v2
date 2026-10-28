@@ -773,6 +773,9 @@ const onDialogOpen = (): void => {
   // 分支里自增，上一会话（TLS 规则）在途的 cert-info 响应会通过 seq 校验写回
   // 旧规则证书（当前模板以 enableTls 门控渲染，故不可见；但属状态污染型回归）。
   certSeq++
+  // 统计序号同样无条件推进：TCP 与无 caddyId 早退不拉 stage-stats，若只在 HTTP
+  // 分支自增，上一会话在途响应会通过 seq 校验把旧规则计数写进新会话。
+  statsSeq++
   detailLoading.value = false
   detailsAttached.value = false
   detailFailedSources.value = []
@@ -786,7 +789,7 @@ const onDialogOpen = (): void => {
     return
   }
   if (!isTcp.value) {
-    const seq = ++statsSeq
+    const seq = statsSeq
     request.get<APIResponse<StageStats>>(`/security/rules/${encodeURIComponent(caddyId)}/stage-stats`, { silent: true })
       .then((res) => { if (seq === statsSeq) stats.value = res.data ?? null })
       .catch(() => { if (seq === statsSeq) stats.value = null })

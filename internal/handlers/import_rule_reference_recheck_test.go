@@ -65,6 +65,7 @@ func TestRevalidateImportRuleReferencesCatchesWindowDeletion(t *testing.T) {
 }
 
 func TestImportConfigBackup_lockRecheckRejectsUpstreamReferenceAfterWindowDeletion(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	seedLiveRuleForReferenceRecheck(t, "lb_window")
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'current-admin','hash','admin',1)`); err != nil {

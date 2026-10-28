@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"lazy-balancer-v2/geoipnames"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 
@@ -135,8 +136,8 @@ func TestGetIP2RegionRegions_carriesCountryNamesCN(t *testing.T) {
 			t.Errorf("country_names_cn[%q]=%q; want %q", en, got, want)
 		}
 	}
-	if len(resp.Data.CountryNamesCN) != 238 {
-		t.Errorf("country_names_cn entries=%d; want 238（单源全表透传，不得截断）", len(resp.Data.CountryNamesCN))
+	if len(resp.Data.CountryNamesCN) != len(geoipnames.CountryNamesCN) {
+		t.Errorf("country_names_cn entries=%d; want %d（单源全表透传，不得截断）", len(resp.Data.CountryNamesCN), len(geoipnames.CountryNamesCN))
 	}
 }
 

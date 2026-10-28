@@ -222,6 +222,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     'panelUiWiring.spec.ts',
     // 注释文案钉（断言对象是过时注释本身，剥注释后无法判定）。
     'viewStateContracts.spec.ts',
+    // 注释文案钉：断言对象是过时注释本身，剥注释后无法判定（用例名标注文档钉）。
+    'feCoreP3.spec.ts',
+    'feSettingsP3.spec.ts',
     // 除代码存在性钉（走 code()）外，含一条注释契约钉：planTrustRemoval 的
     // listEntries 必须显式声明「条目必须新鲜、拉取失败不得出结论」——断言对象
     // 是注释文字本身。

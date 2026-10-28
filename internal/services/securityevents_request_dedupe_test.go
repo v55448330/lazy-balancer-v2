@@ -39,9 +39,17 @@ func securityEventsDedupeFixture(txID, timingID, uri, action string, ruleID int)
 }`, txID, uri, headers, action == "blocked", msg, ruleID, ruleID)
 }
 
+func isolateSecurityEventsSharedDedupe(t *testing.T) {
+	t.Helper()
+	old := securityEventsSharedDedupe
+	securityEventsSharedDedupe = &securityEventsRequestDeduper{}
+	t.Cleanup(func() { securityEventsSharedDedupe = old })
+}
+
 // seedSecurityEventsDedupeDB 写入规则/策略/绑定，返回审计日志与偏移路径。
 func seedSecurityEventsDedupeDB(t *testing.T) (logPath, offsetPath string) {
 	t.Helper()
+	isolateSecurityEventsSharedDedupe(t)
 	dataDir := t.TempDir()
 	if err := initSecurityEventsTestDB(t, dataDir); err != nil {
 		t.Fatal(err)
@@ -458,6 +466,7 @@ func TestSecurityEventsTick_rewindHookReportsReclassifyMinutes(t *testing.T) {
 // map，补采路径推进的 maxSec 停在副本上 → live 侧清扫切点滞后（陈旧键延后
 // 清理）、容量告警重复。指针共享后才与注释声明一致。
 func TestSecurityEventsLiveDedupe_sharesScalarStateWithArchivePath(t *testing.T) {
+	isolateSecurityEventsSharedDedupe(t)
 	live := securityEventsNewTailer("live.log", "live.offset")
 	securityEventsPollState.Lock()
 	old := securityEventsPollState.tailer

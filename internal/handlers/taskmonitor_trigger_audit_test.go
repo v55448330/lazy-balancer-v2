@@ -26,11 +26,25 @@ import (
 // countTriggerAudit 统计「触发/任务监控」审计行数。
 func countTriggerAudit(t *testing.T) int {
 	t.Helper()
-	var n int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='触发' AND resource='任务监控'`).Scan(&n); err != nil {
-		t.Fatalf("count trigger audit: %v", err)
+	return countTaskAuditForTest(t, "触发", "任务监控")
+}
+
+func waitForHandlerStable(t *testing.T, timeout time.Duration, stablePolls int, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	stable := 0
+	for time.Now().Before(deadline) {
+		if cond() {
+			stable++
+			if stable >= stablePolls {
+				return
+			}
+		} else {
+			stable = 0
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return n
+	t.Fatal("审计计数未连续稳定")
 }
 
 // Given 非自记族 log-cleanup（任务体零 RecordAuditLog）与主节点库。
@@ -70,8 +84,7 @@ func TestTriggerSystemTask_selfRecordingTriggerSkipsHandlerAudit(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("auto-backup 手动触发应 200, got %d %s", resp.Code, resp.Body.String())
 	}
-	// 异步审计落库窗口后再断言零复记（自记族恒零 handler 审计）。
-	time.Sleep(200 * time.Millisecond)
+	waitForHandlerStable(t, time.Second, 5, func() bool { return countTriggerAudit(t) == 0 })
 	if n := countTriggerAudit(t); n != 0 {
 		t.Fatalf("自记族 auto-backup 的 handler 复记会产生双审计（单记口径）, got %d 行", n)
 	}
@@ -80,11 +93,7 @@ func TestTriggerSystemTask_selfRecordingTriggerSkipsHandlerAudit(t *testing.T) {
 // countTriggerFailAudit 统计「触发失败」补偿审计行数。
 func countTriggerFailAudit(t *testing.T) int {
 	t.Helper()
-	var n int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='触发失败'`).Scan(&n); err != nil {
-		t.Fatalf("count trigger-fail audit: %v", err)
-	}
-	return n
+	return countTaskAuditForTest(t, "触发失败")
 }
 
 // +：四处 go 闭包 te.Trigger 错误被吞——非自记族已
@@ -179,7 +188,7 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 			waitNotInFlight(taskID)
 			continue
 		}
-		time.Sleep(200 * time.Millisecond) // 败者补偿路径（审计/日志）落库
+		waitForHandlerStable(t, time.Second, 5, func() bool { return countTriggerFailAudit(t)-before == 0 })
 		if got := countTriggerFailAudit(t) - before; got != 0 {
 			close(release)
 			t.Fatalf("并发双击第二请求落了 %d 条「触发失败」审计——任务实际已启动（语义失真）", got)
@@ -232,8 +241,7 @@ func TestTriggerSystemTask_skippedTerminalNoFailAudit(t *testing.T) {
 	if !skipped {
 		t.Fatal("skip-probe 未落 skipped 终态——任务未执行")
 	}
-	// 补偿路径（审计/日志）落库窗口（与双击竞态测试同手法）
-	time.Sleep(200 * time.Millisecond)
+	waitForHandlerStable(t, time.Second, 5, func() bool { return countTriggerFailAudit(t)-before == 0 })
 	if got := countTriggerFailAudit(t) - before; got != 0 {
 		t.Fatalf("skipped 终态（非故障放弃）落了 %d 条「触发失败」审计——语义失真", got)
 	}

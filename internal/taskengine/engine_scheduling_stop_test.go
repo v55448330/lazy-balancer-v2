@@ -23,15 +23,7 @@ import (
 // loopEnabledOf 读取任务的调度开关（装配字段，测试内直接读）。
 func loopEnabledOf(t *testing.T, e *Engine, id string) bool {
 	t.Helper()
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
-	if r == nil {
-		t.Fatalf("任务 %s 未注册", id)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.loopEnabled
+	return fieldSnapshot(t, e, id).loopEnabled
 }
 
 // Given Periodic 任务的 IntervalFn 返回 0（配置读错被映射为零值等形态）。

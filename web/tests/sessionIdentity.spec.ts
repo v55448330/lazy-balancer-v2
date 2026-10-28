@@ -8,11 +8,13 @@ const tokenFor = (userId: number, marker: string): string => {
   return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ user_id: userId, marker })}.signature`
 }
 
-test('会话代际只在显式推进时变化', () => {
+test('会话代际只在显式推进时单调 +1，不因测试顺序改初值', () => {
   const before = currentSessionGeneration()
   assert.equal(currentSessionGeneration(), before)
   advanceSessionGeneration()
   assert.equal(currentSessionGeneration(), before + 1)
+  advanceSessionGeneration()
+  assert.equal(currentSessionGeneration(), before + 2)
 })
 
 test('同一用户的 MFA 新令牌保持身份，不同用户或不可解析令牌不视为同身份', () => {

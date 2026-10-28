@@ -266,6 +266,35 @@ func TestImportConfigBackup_accepts_enabled_admin_and_increments_password_versio
 	}
 }
 
+func TestImportConfigBackup_revokesSessionsNewerThanOlderBackup(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_version)
+		VALUES (7,'enabled-admin','live-hash','admin',1,2)`); err != nil {
+		t.Fatalf("seed live user: %v", err)
+	}
+	backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+		"users": {{"id": 7, "username": "enabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": true, "password_version": 1}},
+	}, EmptyConfigIfNil: true})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var passwordVersion int
+	if err := db.DB.QueryRow(`SELECT password_version FROM users WHERE id=7`).Scan(&passwordVersion); err != nil {
+		t.Fatal(err)
+	}
+	if passwordVersion != 3 {
+		t.Fatalf("password_version=%d, want max(live=2, backup=1)+1=3；claim=2 的旧会话必须失效", passwordVersion)
+	}
+}
+
 func TestImportConfigBackup_normalizes_null_boolean_rows(t *testing.T) {
 	// 库导出的全 null 管理员备份此前被
 	// backupBooleanEnabled(nil)=false 先行 400 拦截，归一不可达；归一须在
@@ -1335,6 +1364,7 @@ func TestConfigBackup_slave_mode_forbidden(t *testing.T) {
 	}
 	router := gin.New()
 	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
 
 	// When
 	response := httptest.NewRecorder()
@@ -1343,6 +1373,11 @@ func TestConfigBackup_slave_mode_forbidden(t *testing.T) {
 	// Then
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("export on slave status = %d, want 403", response.Code)
+	}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{}`)))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("import on slave status = %d body=%s, want 403（主节点门必须先于体解析）", response.Code, response.Body.String())
 	}
 }
 
@@ -2839,6 +2874,7 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 // 吊销旧 JWT，A 侧 +1 后比较）。
 func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
 	h := newBackupTestHandlers(t)
+	preserveApplicationLogLevel(t, "info")
 	gin.SetMode(gin.TestMode)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_version,
 		mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep)

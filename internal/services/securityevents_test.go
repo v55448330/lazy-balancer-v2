@@ -3671,6 +3671,9 @@ func TestSecurityEventsAttribution_Stage0PassthroughTrustDoesNotOwnLoggedIPEvent
 	if _, err := db.DB.Exec(`UPDATE security_policies SET ip_acl_enabled=0, ip_acl_list='[]' WHERE id=2`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	_, bindings, policyByID, err = securityEventsLoadMappings()
 	if err != nil {
 		t.Fatalf("reload mappings: %v", err)

@@ -880,12 +880,19 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	// v1 导入覆盖 lb_rules 后须同步清空 security_policy_bindings——
 	// 绑定表对 rule_caddy_id 无外键级联，残留行会指向已删除规则成为悬挂绑定。
-	// v1 无策略概念：此处清空全表且不回写、不告警——normalizeRuleRowsForTransport
-	// 的 droppedTCPBindings 在 v1 恒为 0（表已空），因此 v1 路径不复用 v2 的
-	// 「已解除 N 条 TCP 绑定」文案。
+	// v1 不恢复策略绑定：清空数量必须进入响应与审计，避免导入后原 WAF/安全
+	// 防护策略停止应用却零披露。TCP 绑定剪枝文案是另一语义，不在此复用。
+	var clearedBindings int64
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policy_bindings").Scan(&clearedBindings); err != nil {
+		err = failImportTx(c, session, "导入", "统计旧策略绑定", err, http.StatusInternalServerError, "统计旧策略绑定失败")
+		return
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings"); err != nil {
 		err = failImportTx(c, session, "导入", "清理旧策略绑定", err, http.StatusInternalServerError, "清理旧策略绑定失败")
 		return
+	}
+	if clearedBindings > 0 {
+		allWarnings = append(allWarnings, fmt.Sprintf("已解除 %d 条安全策略绑定；v1 备份不恢复策略绑定，导入后规则不再应用原 WAF/安全防护策略，请按需重新绑定", clearedBindings))
 	}
 	userID := int(contextUserID(c))
 	imported := 0

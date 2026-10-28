@@ -11,8 +11,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { nextTick, ref } from 'vue'
 
-import { registerModuleHooks, repoCode, section, code, codeSection } from './_helpers.ts'
+import { registerModuleHooks, repoCode, section, code, codeSection, deferred, flushMicrotasks } from './_helpers.ts'
 import { STUB_API } from './_stubs.ts'
+
+const flush = flushMicrotasks
 
 interface GetRecord {
   url: string
@@ -30,13 +32,6 @@ g.__get = async () => ({ data: { logs: [] } })
 registerModuleHooks({ '@/utils/api': STUB_API })
 const { useLogStorageStats } = await import('../src/composables/useLogStorageStats.ts')
 
-const flush = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0))
-
-const deferred = (): { promise: Promise<unknown>; resolve: (value: unknown) => void } => {
-  let resolve!: (value: unknown) => void
-  const promise = new Promise<unknown>((r) => { resolve = r })
-  return { promise, resolve }
-}
 
 const statsOf = (key: string, name: string): unknown => ({ data: { logs: [{ key, name }] } })
 

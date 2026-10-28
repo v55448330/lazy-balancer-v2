@@ -64,6 +64,12 @@ func TestFreshSchemaDefaults_MatchGovernedConstants(t *testing.T) {
 		{"global_config", "audit_log_size_mb", fmt.Sprint(DefaultAuditLogSizeMB), 0},
 		{"global_config", "runtime_log_size_mb", fmt.Sprint(DefaultRuntimeLogSizeMB), 0},
 		{"global_config", "audit_retention_months", fmt.Sprint(DefaultAuditRetentionMonths), 0},
+		// 自动备份五列治理默认（读侧 COALESCE/导入回退同源）。
+		{"global_config", "auto_backup_enabled", fmt.Sprint(DefaultAutoBackupEnabled), 0},
+		{"global_config", "auto_backup_frequency", "'" + DefaultAutoBackupFrequency + "'", 0},
+		{"global_config", "auto_backup_time", "'" + DefaultAutoBackupTime + "'", 0},
+		{"global_config", "auto_backup_day", fmt.Sprint(DefaultAutoBackupDay), 0},
+		{"global_config", "auto_backup_keep", fmt.Sprint(DefaultAutoBackupKeep), 0},
 	}
 	for _, tc := range cases {
 		var dflt *string
@@ -110,6 +116,13 @@ func TestRunMigrationsColumnDefaults_MatchGovernedConstants(t *testing.T) {
 		{"threat_schedule_time", "'" + DefaultScheduleTime + "'", 1},
 		{"crawler_schedule_days", "'" + DefaultScheduleDays + "'", 1},
 		{"crawler_schedule_time", "'" + DefaultScheduleTime + "'", 1},
+		// 自动封禁六列（newColumns 补列）与读侧 COALESCE/启动回填同源。
+		{"autoban_enabled", fmt.Sprint(DefaultAutobanEnabled), 1},
+		{"autoban_threshold", fmt.Sprint(DefaultAutobanThreshold), 1},
+		{"autoban_window_minutes", fmt.Sprint(DefaultAutobanWindowMinutes), 1},
+		{"autoban_duration", "'" + DefaultAutobanDuration + "'", 1},
+		{"autoban_scope", "'" + DefaultAutobanScope + "'", 1},
+		{"autoban_dry_run", fmt.Sprint(DefaultAutobanDryRun), 1},
 	}
 	for _, tc := range cases {
 		var dflt *string
@@ -906,6 +919,55 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultAuditLogSizeMB", "db.DefaultRuntimeLogSizeMB",
 				"db.DefaultCaddyLogSizeMB", "db.DefaultTaskLogSizeMB",
 				"db.DefaultAuditRetentionMonths",
+			},
+		},
+		{
+			// 自动封禁读侧六列 COALESCE 与无库默认结构体必须同源：调整
+			// 窗口/阈值/封禁时长时，运行期读取与迁移回填不得分叉。
+			file: "../services/autoban.go",
+			forbidden: []string{
+				"COALESCE(autoban_threshold,100)",
+				"COALESCE(autoban_window_minutes,5)",
+				"COALESCE(autoban_duration,'1h')",
+				"COALESCE(autoban_scope,'all')",
+				"COALESCE(autoban_dry_run,1)",
+			},
+			required: []string{
+				"db.DefaultAutobanEnabled", "db.DefaultAutobanThreshold",
+				"db.DefaultAutobanWindowMinutes", "db.DefaultAutobanDuration",
+				"db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
+			},
+		},
+		{
+			// 集群快照装载的自动备份/自动封禁默认值必须与 DDL、启动回填和
+			// 运行期读侧同源：主从 canonical 依赖同一 COALESCE 兜底。
+			file: "../services/cluster_snapshot.go",
+			forbidden: []string{
+				"COALESCE(auto_backup_enabled,0)", "COALESCE(auto_backup_frequency,'daily')",
+				"COALESCE(auto_backup_time,'03:00')", "COALESCE(auto_backup_day,1)",
+				"COALESCE(auto_backup_keep,7)",
+				"COALESCE(autoban_enabled,0)", "COALESCE(autoban_threshold,100)",
+				"COALESCE(autoban_window_minutes,5)", "COALESCE(autoban_duration,'1h')",
+				"COALESCE(autoban_scope,'all')", "COALESCE(autoban_dry_run,1)",
+			},
+			required: []string{
+				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency", "db.DefaultAutoBackupTime",
+				"db.DefaultAutoBackupDay", "db.DefaultAutoBackupKeep", "db.DefaultAutoBackupSections",
+				"db.DefaultAutobanEnabled", "db.DefaultAutobanThreshold", "db.DefaultAutobanWindowMinutes",
+				"db.DefaultAutobanDuration", "db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
+			},
+		},
+		{
+			// 备份导入的回退排程/开关必须与 DDL 默认和自动备份读侧同源。
+			file: "../handlers/config_backup.go",
+			forbidden: []string{
+				"COALESCE(auto_backup_frequency,'daily')",
+				"COALESCE(auto_backup_day,1)",
+				"COALESCE(auto_backup_enabled,0)",
+			},
+			required: []string{
+				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
+				"db.DefaultAutoBackupDay",
 			},
 		},
 	}

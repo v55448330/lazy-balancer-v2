@@ -30,7 +30,7 @@ func newFailingLoadAdmin(t *testing.T) *CaddyService {
 // Then 错误上抛且 loaded=false（不得把失败应用报成真实重载）
 func TestApplyConfigReporting_loadFailureReportsNotLoaded(t *testing.T) {
 	service := newFailingLoadAdmin(t)
-	loaded, err := service.ApplyConfigReporting(map[string]interface{}{"apps": map[string]interface{}{"candidate": true}})
+	_, loaded, err := service.ApplyConfigReportingForCommit(map[string]interface{}{"apps": map[string]interface{}{"candidate": true}})
 	if err == nil {
 		t.Fatal("/load 500 必须上抛错误")
 	}

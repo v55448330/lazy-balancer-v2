@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -254,4 +256,66 @@ func TestReport_certExpiryWarnOnlyOnStateTransition(t *testing.T) {
 	if got := strings.Count(buf.String(), "读取证书到期口径失败"); got != 2 {
 		t.Fatalf("failure after recovery logged %d times, want 2", got)
 	}
+}
+
+// reportWafFileVersions 是上报热路径的轻量版本读取（只读两个小文件，不做
+// 全树哈希），零测试引用意味着「两字段接反/路径写错/sanitize 单边改动」全绿。
+// 三形状：①齐全（钉字段来源，接反即红）②seen 门（rules 目录与 xdb 均缺失 =
+// 无安全数据，版本串保持空）③非法 tag 经 sanitize 置空而 CRS 版本不受影响。
+func TestReportWafFileVersions_readsLightweightLabels(t *testing.T) {
+	t.Run("齐全时按来源分别读取", func(t *testing.T) {
+		crsDir, xdbPath := overrideWafPathsForServicesTest(t)
+		if err := os.WriteFile(filepath.Join(crsDir, "VERSION"), []byte("  v4.14.0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(xdbPath+".version", []byte("v3.17.0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(xdbPath, []byte("xdb-bytes"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		crs, tag := reportWafFileVersions()
+		if crs != "v4.14.0" {
+			t.Fatalf("crsVersion=%q, want 来自 crs VERSION 文件（v4.14.0）", crs)
+		}
+		if tag != "v3.17.0" {
+			t.Fatalf("ip2regionTag=%q, want 来自 xdb 伴生 .version 文件（v3.17.0）", tag)
+		}
+	})
+
+	t.Run("rules目录与xdb均缺失时不上报版本", func(t *testing.T) {
+		crsDir := t.TempDir() // 无 rules 子目录
+		xdbPath := filepath.Join(t.TempDir(), "absent.xdb")
+		t.Cleanup(OverrideWafLivePathsForTest(crsDir, xdbPath))
+		// 版本文件存在但「无安全数据」形态下不得上报
+		if err := os.WriteFile(filepath.Join(crsDir, "VERSION"), []byte("v4.14.0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(xdbPath+".version", []byte("v3.17.0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if crs, tag := reportWafFileVersions(); crs != "" || tag != "" {
+			t.Fatalf("crs=%q tag=%q, want 空（rules 目录与 xdb 均缺失=无安全数据）", crs, tag)
+		}
+	})
+
+	t.Run("非法版本串经sanitize置空", func(t *testing.T) {
+		crsDir, xdbPath := overrideWafPathsForServicesTest(t)
+		if err := os.WriteFile(filepath.Join(crsDir, "VERSION"), []byte("v4.14.0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(xdbPath+".version", []byte("v3.17.0;rm -rf /"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(xdbPath, []byte("xdb-bytes"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		crs, tag := reportWafFileVersions()
+		if crs != "v4.14.0" {
+			t.Fatalf("crsVersion=%q, want 不受 tag 形态影响", crs)
+		}
+		if tag != "" {
+			t.Fatalf("ip2regionTag=%q, want 非法字符版本串经 sanitize 置空", tag)
+		}
+	})
 }

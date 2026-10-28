@@ -18,7 +18,7 @@ func TestCertTicks_nilDatabaseSkipsWithoutPanic(t *testing.T) {
 	t.Cleanup(func() { db.DB, db.MetricsDB, db.AuditDB = oldMain, oldMetrics, oldAudit })
 
 	t.Run("CertRenewalScanOnce", func(t *testing.T) {
-		if err := CertRenewalScanOnce(); !errors.Is(err, taskengine.ErrTaskSkipped) {
+		if err := CertRenewalScanOnce(context.Background()); !errors.Is(err, taskengine.ErrTaskSkipped) {
 			t.Fatalf("err=%v, want ErrTaskSkipped（nil DB 必须跳过）", err)
 		}
 	})

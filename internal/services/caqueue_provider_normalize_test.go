@@ -5,8 +5,9 @@ package services
 // 但一旦落到运行期队列缓存，闸门（running >= MaxConcurrent）会永久关闭该 CA
 // 的派发。归一的唯一出口是 loadCAProvider，本文件钉住两个消费面：
 //  1. 加载出口本身归一；
-//  2. enqueueLocked 复用已有队列时刷新的快照同样归一（95 轮只修了 tick/refresh，
-//     这条入口仍直写未归一快照并同步版本号，使后续重载分支永不纠偏）。
+//  2. enqueueLocked 复用已有队列时刷新的快照同样归一：只归一 tick/refresh 的
+//     重载分支而放过复用入口时，复用会写入未归一快照并同步版本号，使后续重载
+//     分支永不纠偏。
 
 import (
 	"context"

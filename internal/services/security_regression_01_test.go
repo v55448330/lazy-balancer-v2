@@ -337,13 +337,19 @@ func TestNormalizeLegacySecurityPolicyEnums_backfillsInvalidBlockStatusCode(t *t
 	}
 }
 
-// 归一是保护语义变更（mode 非法→off 停发该策略全部规则），必须可选
-// 定位到策略：逐字段 warn 留痕（策略名/字段/旧值→新值），并对 mode 收窄方向
-// 额外落系统审计。旧实现只报总条数，运维无从判断哪条策略被停发。
+// 归一是保护语义变更（mode 非法→off 停发该策略全部规则，限流 1→0
+// 关闭保护），必须可选定位到策略：逐字段 warn 留痕并对两种收窄方向
+// 各落一条系统审计；合法限流行不得产生关停审计。
 func TestNormalizeLegacySecurityPolicyEnums_leavesPerPolicyTrace(t *testing.T) {
 	setupSecurityEnumTestDB(t)
 	insertLegacyPolicyRow(t, "legacy-blocking-typo", "BLOCKING", "deny", "deny")
 	insertLegacyPolicyRow(t, "legacy-acl-empty", "blocking", "", "deny")
+	insertLegacyPolicyRow(t, "legacy-rate-limit", "off", "deny", "deny")
+	insertLegacyPolicyRow(t, "valid-rate-limit", "off", "deny", "deny")
+	if _, err := db.DB.Exec(`UPDATE security_policies SET rate_limit_enabled=1, rate_limit_rps=CASE name
+		WHEN 'legacy-rate-limit' THEN 0 ELSE 100 END WHERE name IN ('legacy-rate-limit','valid-rate-limit')`); err != nil {
+		t.Fatalf("seed rate limit rows: %v", err)
+	}
 	buf := captureLogf(t)
 
 	NormalizeLegacySecurityPolicyEnums(context.Background())
@@ -362,6 +368,31 @@ func TestNormalizeLegacySecurityPolicyEnums_leavesPerPolicyTrace(t *testing.T) {
 	}
 	if auditCount != 1 {
 		t.Fatalf("mode 收窄审计行=%d, want 1", auditCount)
+	}
+	// 限流 1→0 同样逐策略留审计；全表按关停短语取证，合法行多写/脏行漏写
+	// 都会改变精确行集。
+	rows, err := db.AuditDB.Query(`SELECT detail FROM audit_log WHERE action='修改状态' AND detail LIKE '%限流被启动归一关停%' ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query rate limit audit: %v", err)
+	}
+	var rateLimitAudits []string
+	for rows.Next() {
+		var detail string
+		if err := rows.Scan(&detail); err != nil {
+			rows.Close()
+			t.Fatalf("scan rate limit audit: %v", err)
+		}
+		rateLimitAudits = append(rateLimitAudits, detail)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatalf("iterate rate limit audit: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close rate limit audit rows: %v", err)
+	}
+	if len(rateLimitAudits) != 1 || !strings.Contains(rateLimitAudits[0], "legacy-rate-limit") {
+		t.Fatalf("限流关停审计=%v, want 仅 legacy-rate-limit 一行", rateLimitAudits)
 	}
 	// ip_acl_mode 的归一方向是「开始拦截」而非停发规则，不写 mode 收窄审计。
 	var aclAudit int

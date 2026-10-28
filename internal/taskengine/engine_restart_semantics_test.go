@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// /02/04 + 修复钉测试。
 // 形状来源：生产调用形态=启动/翻转期三连 SetMasterRole→SetRole（每次转发），
 // 既有测试每轮只翻一次与生产不符——本文件按真实形态钉。
 
@@ -26,30 +25,18 @@ func daemonRunning(e *Engine, id string) bool {
 	return r.running
 }
 
-// waitDaemonNotRunning 轮询直到真实 running 位归 false。
+// waitDaemonNotRunning 等待真实 running 位归 false。
 func waitDaemonNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration) bool {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !daemonRunning(e, id) {
-			return true
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return !daemonRunning(e, id)
+	waitForEngine(t, "daemon running=false", timeout, func() bool { return !daemonRunning(e, id) })
+	return true
 }
 
-// waitNotRunning 轮询直到 IsRunning(id)==false 或超时。
+// waitNotRunning 等待 IsRunning(id)==false。
 func waitNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration) bool {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !e.IsRunning(id) {
-			return true
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return !e.IsRunning(id)
+	waitForEngine(t, "IsRunning=false", timeout, func() bool { return !e.IsRunning(id) })
+	return true
 }
 
 // Given RoleAny 常驻已运行 + 三连同角色 SetRole 重申（生产启动/翻转形态）。
@@ -217,18 +204,10 @@ func TestEngine_DaemonRunPanicRecordsFailedWithBackoff(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-dpanic")
 	// 补 failed 行
-	deadline := time.Now().Add(time.Second)
-	sawFailed := false
-	for time.Now().Before(deadline) {
-		if rec := e.LatestRun("t-dpanic"); rec != nil && rec.Status == "failed" {
-			sawFailed = true
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !sawFailed {
-		t.Fatal("daemon panic 应补记 failed 行")
-	}
+	waitForEngine(t, "daemon panic failed 行", time.Second, func() bool {
+		rec := e.LatestRun("t-dpanic")
+		return rec != nil && rec.Status == "failed"
+	})
 	// 退避窗口内不得紧循环（真实运行位归 false 后保持）
 	if !waitDaemonNotRunning(t, e, "t-dpanic", time.Second) {
 		t.Fatal("daemon panic 后必须退出运行（不得紧循环）")

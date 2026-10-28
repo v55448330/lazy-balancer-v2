@@ -21,9 +21,10 @@ import (
 // When 调用 cert 任务行收集与引擎族聚合。
 // Then 不 panic：cert 行返回 nil，引擎族聚合返回降级视图（节奏兜底文案）。
 func TestCollectSystemTasks_nilDBGuards(t *testing.T) {
-	old := db.DB
+	old, oldCurrent := db.DB, db.GetDB()
 	db.DB = nil
-	t.Cleanup(func() { db.DB = old })
+	db.SetDB(nil)
+	t.Cleanup(func() { db.DB = old; db.SetDB(oldCurrent) })
 
 	if rows, _ := collectCertJobRows(); rows != nil {
 		t.Fatalf("nil DB 时 collectCertJobRows=%v, want nil", rows)
@@ -46,14 +47,7 @@ func TestCollectSystemTasks_nilDBGuards(t *testing.T) {
 // disabled 证书行 Triggerable 必须 false——行级重试门
 // 对 disabled 恒 429（certJobRetryBlocked 首条），按钮亮着是交互噪音（点了必 429）。
 func TestCollectCertJobRows_disabledRowNotTriggerable(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA
-	})
+	setupIsolatedDB(t)
 	seedCertJobRowForTaskMonitor(t, "lb_tm_disabled", "disabled.example.com", "disabled")
 	seedCertJobRowForTaskMonitor(t, "lb_tm_queued", "queued.example.com", "queued")
 
@@ -113,8 +107,10 @@ func TestCollectCertJobRows_throttlesReadFailureLogs(t *testing.T) {
 // 任务」不可区分，读取故障无处排障。
 func TestCollectEngineFamilies_logsWaitingCAQueryFailure(t *testing.T) {
 	te := newWireTestEngine(t)
-	if _, ok := te.Lookup("cert-waiting-ca"); !ok {
-		t.Fatal("cert-waiting-ca 未注册")
+	te.SetRole(true)
+	meta, ok := te.Lookup("cert-waiting-ca")
+	if !ok || !meta.RoleApplicable {
+		t.Fatalf("cert-waiting-ca 主节点适用前提未成立: ok=%v meta=%+v", ok, meta)
 	}
 	buf := captureServiceLog(t)
 	resetLogStateTransitionForTest(taskMonitorWaitingCALogKey)

@@ -107,6 +107,11 @@ func decodeValidateResponse(t *testing.T, rec *httptest.ResponseRecorder) import
 // bundle（manifest sha256 按内存字节自洽仍通过，还原后 WAF 静默降级）。
 // 回归形状：锁释放后导出完成且载荷完整（无锁竞争时导出正常产出）。
 func TestBuildLbbakExport_blocks_while_waf_file_lock_held(t *testing.T) {
+	withIsolatedGlobal(t)
+	snapshotStarted := make(chan struct{}, 1)
+	oldSnapshotHook := configBackupExportAfterDBSnapshot
+	configBackupExportAfterDBSnapshot = func() { snapshotStarted <- struct{}{} }
+	t.Cleanup(func() { configBackupExportAfterDBSnapshot = oldSnapshotHook })
 	h := newBackupTestHandlers(t)
 	crsDir, _ := overrideTestWafPaths(t)
 	if err := os.WriteFile(filepath.Join(crsDir, "VERSION"), []byte("v4.29.0\n"), 0o644); err != nil {
@@ -134,6 +139,11 @@ func TestBuildLbbakExport_blocks_while_waf_file_lock_held(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	services.WafFileLock().Unlock()
+	select {
+	case <-snapshotStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("锁释放后导出未进入 DB 快照完成点——正向屏障失效")
+	}
 	var res exportResult
 	select {
 	case res = <-done:
@@ -150,6 +160,7 @@ func TestBuildLbbakExport_blocks_while_waf_file_lock_held(t *testing.T) {
 }
 
 func TestBuildLbbakExport_holdsWafLockAcrossDBSnapshot(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	crsDir, _ := overrideTestWafPaths(t)
 	if err := os.WriteFile(filepath.Join(crsDir, "VERSION"), []byte("v4.29.0\n"), 0o644); err != nil {

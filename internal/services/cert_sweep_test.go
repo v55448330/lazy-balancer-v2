@@ -126,7 +126,7 @@ func TestCertTicks_skippedRenewalScanIsVisibleAndManualPollStillRuns(t *testing.
 
 	// 连续两轮缺失：每轮都要留痕（续期停摆是持续风险，不做状态变化收敛）
 	for round := 1; round <= 2; round++ {
-		if err := CertRenewalScanOnce(); !errors.Is(err, taskengine.ErrTaskSkipped) {
+		if err := CertRenewalScanOnce(context.Background()); !errors.Is(err, taskengine.ErrTaskSkipped) {
 			t.Fatalf("round %d err=%v, want ErrTaskSkipped", round, err)
 		}
 	}
@@ -238,7 +238,7 @@ func TestCertRenewalScanOnce_propagates_scan_failure(t *testing.T) {
 	}
 
 	// When
-	err := CertRenewalScanOnce()
+	err := CertRenewalScanOnce(context.Background())
 
 	// Then：扫描失败上抛，且摘要不得写「扫描完成」
 	if err == nil {
@@ -254,7 +254,7 @@ func TestCertRenewalScanOnce_propagates_scan_failure(t *testing.T) {
 func TestCertRenewalScanOnce_service_missing_landsSkipped(t *testing.T) {
 	useCertSweepTickTestEnv(t)
 
-	err := CertRenewalScanOnce()
+	err := CertRenewalScanOnce(context.Background())
 	if !errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("err=%v, want ErrTaskSkipped（服务未运行=跳过，不是成功）", err)
 	}

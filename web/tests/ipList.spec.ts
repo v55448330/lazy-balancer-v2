@@ -49,6 +49,10 @@ test('B 空条目确认：仅已有名单触发（新建空名单是合法操作
   assert.equal(needsEmptyListConfirm(null, 0), false)
 })
 
+test('并发合并差集内核不作为公共导出泄漏', () => {
+  assert.doesNotMatch(code('src/utils/ipListSaveGuard.ts'), /export function entriesMissingFromPayload/)
+})
+
 // 消费侧接线：守卫被删后纯函数用例仍全绿——详情加载中/失败时保存可点，
 // entries 为空 → 全量 PUT 清空既有名单。
 test('A/B 守卫接到规则页：保存禁用绑定与空条目二次确认', () => {

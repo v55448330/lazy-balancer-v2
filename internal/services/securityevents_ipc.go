@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -143,25 +144,39 @@ func securityEventsSpoolLimits() (entries, bytesLimit int64) {
 	return entries, bytesLimit
 }
 
-// securityEventsBatchIngestState 串行化批量入库并持有批路径的请求级去重表。
-// 去重表（securityEventsRequestDeduper）非并发安全；SQLite 亦为单写者——
-// IPC 与 spool 补采共用一把锁即可，二者互不阻断 tailer（各自独立事务）。
-// 不复用 live tailer 的去重表：那张表有「只在 pollState 锁内单 goroutine 访问」
-// 的无锁契约，跨 goroutine 共享会直接 data race；批路径的跨路径归并缺失只影响
-// 「同一请求的两条引擎事务分别走 IPC 与旧 audit.log」这一迁移期形态，
-// transaction_id 唯一索引仍保证不重复入库。
+// securityEventsBatchIngestState 串行化批量入库。请求级去重表与 live/归档
+// 补采共享 securityEventsSharedDedupe；批锁只约束 IPC/spool 两路，跨通道的
+// lookup→落库→record 原子性由 process pass 的去重锁保证。
 var securityEventsBatchIngestState struct {
 	mu     sync.Mutex
 	dedupe *securityEventsRequestDeduper
 }
+
+type securityEventsBatchInput struct {
+	*bytes.Reader
+	size int64
+}
+
+func (b *securityEventsBatchInput) Stat() (os.FileInfo, error) {
+	return securityEventsBatchFileInfo(b.size), nil
+}
+
+type securityEventsBatchFileInfo int64
+
+func (securityEventsBatchFileInfo) Name() string       { return "memory-batch.jsonl" }
+func (b securityEventsBatchFileInfo) Size() int64      { return int64(b) }
+func (securityEventsBatchFileInfo) Mode() os.FileMode  { return 0o600 }
+func (securityEventsBatchFileInfo) ModTime() time.Time { return time.Time{} }
+func (securityEventsBatchFileInfo) IsDir() bool        { return false }
+func (securityEventsBatchFileInfo) Sys() any           { return nil }
 
 // IngestSecurityEventBatch 解析并入库一批换行分隔的原始 audit JSON 行，返回
 // 实际新增行数（INSERT OR IGNORE 忽略的重复行不计）。IPC 请求与 spool 补采
 // 共用本入口：解析/归因/去重/自动封禁/光流/rollup 全部走既有
 // securityEventsProcessPass——禁止在此另写插入逻辑。
 //
-// 输入经受限临时文件（os.CreateTemp 默认 0600）喂给文件流解析核心，处理完
-// 立即删除：不生成常规 audit.log、不参与轮转、不留任何持久产物。
+// 输入以内存 ReadSeeker 喂给文件流解析核心：每批零临时文件、零磁盘 IO，
+// 不生成常规 audit.log、不参与轮转、不留任何持久产物。
 func IngestSecurityEventBatch(ctx context.Context, raw []byte) (int, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return 0, nil
@@ -180,33 +195,12 @@ func IngestSecurityEventBatch(ctx context.Context, raw []byte) (int, error) {
 	securityEventsBatchIngestState.mu.Lock()
 	defer securityEventsBatchIngestState.mu.Unlock()
 	if securityEventsBatchIngestState.dedupe == nil {
-		securityEventsBatchIngestState.dedupe = &securityEventsRequestDeduper{}
+		securityEventsBatchIngestState.dedupe = securityEventsSharedDedupe
 	}
 
-	f, err := os.CreateTemp("", "lb-security-events-batch-*.jsonl")
-	if err != nil {
-		return 0, fmt.Errorf("security events: create batch input: %w", err)
-	}
-	name := f.Name()
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(name)
-	}()
-	if _, err := f.Write(raw); err != nil {
-		return 0, fmt.Errorf("security events: write batch input: %w", err)
-	}
-	// 末行无换行时补齐：解码器本身能处理，但补换行让「行」语义与写侧一致
-	// （畸形行定位/跳过扫描的分界不依赖文件末尾空白）。
-	if raw[len(raw)-1] != '\n' {
-		if _, err := f.Write([]byte{'\n'}); err != nil {
-			return 0, fmt.Errorf("security events: write batch input: %w", err)
-		}
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return 0, fmt.Errorf("security events: rewind batch input: %w", err)
-	}
+	f := &securityEventsBatchInput{Reader: bytes.NewReader(raw), size: int64(len(raw))}
 
-	t := securityEventsNewTailer(name, "")
+	t := securityEventsNewTailer("", "")
 	// 批输入是有界且不再增长的文件：归档 pass 语义（畸形段 scan-to-EOF 跳过，
 	// 不进入「等待写侧补全」的停等）。
 	t.archivePass = true
@@ -266,7 +260,30 @@ type securityEventsSpoolStateT struct {
 
 var securityEventsSpoolState securityEventsSpoolStateT
 
-// securityEventsSpoolStatusFresh 现扫 spool 目录（绕过缓存）。
+type securityEventsSpoolCountCacheEntry struct {
+	size           int64
+	mod            time.Time
+	offset         int64
+	entries        int64
+	lineHasContent bool
+}
+
+var securityEventsSpoolCountCache = struct {
+	sync.Mutex
+	files map[string]securityEventsSpoolCountCacheEntry
+}{files: map[string]securityEventsSpoolCountCacheEntry{}}
+
+var securityEventsSpoolEntryReadBytesForTest atomic.Int64
+
+func resetSecurityEventsSpoolEntryCountCacheForTest() {
+	securityEventsSpoolCountCache.Lock()
+	securityEventsSpoolCountCache.files = map[string]securityEventsSpoolCountCacheEntry{}
+	securityEventsSpoolCountCache.Unlock()
+}
+
+// securityEventsSpoolStatusFresh 现扫 spool 目录（绕过状态 TTL）。逐文件行数
+// 另按 (size,mtime,append offset) 缓存：未变化文件零读取，追加中的 active 文件
+// 只读新增字节，避免每 10s 重读整批 sealed 文件。
 func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 	dir := SecurityEventsSpoolDir()
 	limitEntries, limitBytes := securityEventsSpoolLimits()
@@ -274,11 +291,11 @@ func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			// 目录存在但读不了（权限/IO）：计数不可用——显式披露，不得报 0 条。
 			status.Unavailable = true
 		}
 		return status
 	}
+	seen := map[string]struct{}{}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -300,10 +317,12 @@ func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 			continue
 		}
 		status.Bytes += info.Size()
+		path := filepath.Join(dir, name)
+		seen[path] = struct{}{}
 		if info.Size() == 0 {
 			continue
 		}
-		n, cerr := securityEventsSpoolCountEntries(filepath.Join(dir, name))
+		n, cerr := securityEventsSpoolCountEntriesCached(path, info)
 		if cerr != nil {
 			if !os.IsNotExist(cerr) {
 				status.Unavailable = true
@@ -312,24 +331,64 @@ func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 		}
 		status.Entries += n
 	}
+	securityEventsSpoolCountCache.Lock()
+	for path := range securityEventsSpoolCountCache.files {
+		if _, ok := seen[path]; !ok {
+			delete(securityEventsSpoolCountCache.files, path)
+		}
+	}
+	securityEventsSpoolCountCache.Unlock()
 	status.Saturated = (limitEntries > 0 && status.Entries >= limitEntries) ||
 		(limitBytes > 0 && status.Bytes >= limitBytes)
 	return status
 }
 
-// securityEventsSpoolCountEntries 统计文件中非空行数（=待补采审计条目数）：
-// 流式读取不整体载入内存；末行无换行同样计入。
-func securityEventsSpoolCountEntries(path string) (int64, error) {
-	f, err := os.Open(path)
+func securityEventsSpoolCountEntriesCached(path string, info os.FileInfo) (int64, error) {
+	securityEventsSpoolCountCache.Lock()
+	defer securityEventsSpoolCountCache.Unlock()
+	cached, ok := securityEventsSpoolCountCache.files[path]
+	if ok && cached.size == info.Size() && cached.mod.Equal(info.ModTime()) {
+		return cached.entries, nil
+	}
+	var offset, entries int64
+	lineHasContent := false
+	if ok && info.Size() >= cached.offset && !cached.lineHasContent {
+		// spool 只追加：上一缓存以换行收尾时可安全从旧 EOF 续读。
+		offset, entries = cached.offset, cached.entries
+	}
+	n, hasContent, err := securityEventsSpoolCountEntriesFrom(path, offset, lineHasContent)
 	if err != nil {
 		return 0, err
 	}
+	entries += n
+	securityEventsSpoolCountCache.files[path] = securityEventsSpoolCountCacheEntry{
+		size: info.Size(), mod: info.ModTime(), offset: info.Size(), entries: entries, lineHasContent: hasContent,
+	}
+	return entries, nil
+}
+
+// securityEventsSpoolCountEntries 统计文件中非空行数（=待补采审计条目数）。
+func securityEventsSpoolCountEntries(path string) (int64, error) {
+	entries, _, err := securityEventsSpoolCountEntriesFrom(path, 0, false)
+	return entries, err
+}
+
+// securityEventsSpoolCountEntriesFrom 流式读取指定偏移后的新增内容；末行无
+// 换行同样计入。调用方负责把返回的 lineHasContent 用于后续追加重叠判定。
+func securityEventsSpoolCountEntriesFrom(path string, offset int64, lineHasContent bool) (int64, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false, err
+	}
 	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return 0, false, err
+	}
 	buf := make([]byte, 64<<10)
 	var entries int64
-	lineHasContent := false
 	for {
 		n, rerr := f.Read(buf)
+		securityEventsSpoolEntryReadBytesForTest.Add(int64(n))
 		for _, b := range buf[:n] {
 			switch b {
 			case '\n':
@@ -346,13 +405,13 @@ func securityEventsSpoolCountEntries(path string) (int64, error) {
 			break
 		}
 		if rerr != nil {
-			return entries, rerr
+			return entries, lineHasContent, rerr
 		}
 	}
 	if lineHasContent {
 		entries++
 	}
-	return entries, nil
+	return entries, lineHasContent, nil
 }
 
 // SecurityEventsSpoolStatus 返回带缓存（TTL 内复用，补采/封存后失效）的
@@ -632,5 +691,12 @@ func ResetSecurityEventsSpoolStateForTest() {
 	securityEventsSpoolState.mu.Unlock()
 	securityEventsBatchIngestState.mu.Lock()
 	securityEventsBatchIngestState.dedupe = nil
+	securityEventsSharedDedupe.mu.Lock()
+	securityEventsSharedDedupe.entries = nil
+	securityEventsSharedDedupe.maxSec = 0
+	securityEventsSharedDedupe.sinceSweep = 0
+	securityEventsSharedDedupe.capWarned = false
+	securityEventsSharedDedupe.mu.Unlock()
 	securityEventsBatchIngestState.mu.Unlock()
+	resetSecurityEventsSpoolEntryCountCacheForTest()
 }

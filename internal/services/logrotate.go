@@ -320,7 +320,10 @@ func RuntimeLogCleanupOnce(ctx context.Context, logFile string) RuntimeCleanupRe
 	// 先于保留期门执行——事件型删除失败后残留的规则日志不再永久占盘。
 	result.RuleLogs = PurgeOrphanRuleLogs(ctx)
 	// 保留期口径未知（含 nil 库）时跳过保留期删除，但不清屏其余清理：
-	// 上面的 waf-audit 兜底与规则日志孤儿清理已先执行（它们不依赖保留期），
+	// 上面的规则日志孤儿清理已先执行（按「规则是否还存活」判定，不依赖
+	// 保留期）。waf-audit 兜底**不在本清理轮内**——audit.log 的摄取与轮转
+	// 由 auditlog_rotation.go 的摄取链/轮转链唯一负责（本文件不引用
+	// auditLogPath/auditLogSizeBytes），按注释「补上兜底」会引入重复轮转。
 	// 库里读不到口径就一条都不删——不可逆删除不得按默认 3 月执行（用户设 12
 	// 月时那是 9 个月的日志证据）。nil 库覆盖关停后 db.Close() 的形态：排空
 	// 放弃的在途轮仍可能跑到这里。
@@ -379,10 +382,10 @@ func logCleanupRound(ctx context.Context, logFile string) (RuntimeCleanupResult,
 	// main.go 已有 error 留痕）时不得让 log-cleanup 静默零动作——任务监控恒绿
 	// 却没有任何留痕，排障时看不出「清理为什么没跑」。
 	if logFile == "" {
-		// 运行日志 writer 打开失败与 waf-audit 兜底互相独立（不同目录、不同
-		// 驱动）——不得因前者跳过后者：daemon 停机时审计文件无界增长正是本
-		// 兜底的存在理由。应用日志副本与任务日志仍无从扫描（需要运行日志
-		// 目录），保持显式「跳过」措辞。
+		// 运行日志 writer 打开失败只影响「需要运行日志目录」的两段（应用日志
+		// 副本删除与任务日志清理），不得连带跳过与其无关的规则日志孤儿清理
+		// ——后者只需要规则日志目录与存活规则清单。waf-audit（audit.log）的
+		// 摄取与轮转由 auditlog_rotation.go 唯一负责，本清理轮从不触碰它。
 		res := RuntimeCleanupResult{}
 		// 规则访问日志孤儿兜底只需要规则日志目录与存活规则清单（与运行日志
 		// 目录无关），运行日志 writer 打开失败时照常执行。
@@ -428,7 +431,7 @@ func logCleanupDetail(res RuntimeCleanupResult) string {
 	}
 	summary := appPart + "；" + res.TaskLogs.Summary()
 	// 规则访问日志孤儿清理只在有动作/失败/积压时进摘要——每日零动作的轮次
-	// 不为此加一段噪音（与 waf-audit 兜底同口径）。
+	// 不为此加一段噪音（与任务日志同口径：只在有明细时列出）。
 	if len(res.RuleLogs.Purged) > 0 || res.RuleLogs.RemoveFailed > 0 || res.RuleLogs.ScanError != "" || res.RuleLogs.Remaining > 0 {
 		summary += "；" + res.RuleLogs.Summary()
 	}

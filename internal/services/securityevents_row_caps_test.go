@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -97,8 +98,29 @@ func TestSecurityEventRecord_rowBytes_countsAllTextFields(t *testing.T) {
 	if rec.rowBytes() <= len(rec.RequestHeaders)+len(rec.RequestBody) {
 		t.Fatalf("URI/rule_msg 未计入字节口径")
 	}
-	// 各采集上限之和就是披露的单行上限——上限常量新增字段时两处必须同步。
-	if got, want := securityEventsRowMaxBytes(), int64(securityEventsHeadersCap+securityEventsBodyCap+securityEventsURICap+securityEventsRuleMsgCap+3*len(securityEventsTruncatedMarker)); got != want {
-		t.Fatalf("row max=%d, want %d", got, want)
+	// 用真实记录填满当前四个采集预算，再遍历实际 record 形状：新增字符串
+	// 字段一旦被 rowBytes 计入而披露上限未同步扩容，追加 1 字节就会顶破上限。
+	saturated := &securityEventRecord{
+		RequestHeaders: strings.Repeat("h", securityEventsHeadersCap),
+		RequestBody:    strings.Repeat("b", securityEventsBodyCap+len(securityEventsTruncatedMarker)),
+		URI:            strings.Repeat("u", securityEventsURICap+len(securityEventsTruncatedMarker)),
+		RuleMsg:        strings.Repeat("m", securityEventsRuleMsgCap+len(securityEventsTruncatedMarker)),
+	}
+	if got, max := saturated.rowBytes(), int(securityEventsRowMaxBytes()); got > max {
+		t.Fatalf("饱和采集记录 rowBytes=%d 超出披露上限 %d", got, max)
+	}
+	budgeted := map[string]bool{"RequestHeaders": true, "RequestBody": true, "URI": true, "RuleMsg": true}
+	value := reflect.ValueOf(saturated).Elem()
+	for i := range value.NumField() {
+		field := value.Field(i)
+		name := value.Type().Field(i).Name
+		if field.Kind() != reflect.String || !field.CanSet() || budgeted[name] {
+			continue
+		}
+		before := saturated.rowBytes()
+		field.SetString("x")
+		if after := saturated.rowBytes(); after != before && after > int(securityEventsRowMaxBytes()) {
+			t.Fatalf("采集字段 %s 已计入 rowBytes=%d，但披露上限 %d 未为其保留空间", name, after, securityEventsRowMaxBytes())
+		}
 	}
 }

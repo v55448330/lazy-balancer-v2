@@ -144,6 +144,13 @@ var antiFallbackAllowlist = map[string]map[string]string{
 	"buildBlockPageErrorRoute": {
 		"statusCode = 403": "block_status_code=0→403：同 buildBlockPageAttributionRoute（类型②省略型）——批 3 Ruling 披露",
 	},
+	// 命中面扩展（常量/选择器右值）后新增可见点：空值与白名单外值统一归一
+	// 内置 html——这是内容类型白名单的双保险（带外通道脏值不得原样进响应头），
+	// 且空值语义=未配置（类型②省略型），由 models.DefaultBlockPageContentType
+	// 单源提供，渲染层不另写字面量——Ruling 2026-10-28。
+	"blockPageContentType": {
+		"return models.DefaultBlockPageContentType": "content_type 空/白名单外→内置 html：白名单双保险 + 空值省略型，默认值由 models 单源提供（写侧已归一，此处防带外脏值）——Ruling 2026-10-28",
+	},
 	// 覆盖面扫描新发现：路径规则 static_response 的状态码
 	// 缺省形态（写侧允许 0=未配置，声明默认 200；空字符串守卫不在扫描命中面）。
 	"buildStaticResponseHandler": {
@@ -193,7 +200,8 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 				continue
 			}
 			scanned[fn.Name.Name] = true
-			for assign, positions := range fallbackAssignmentsInFunction(fset, fn) {
+			consts := packageConstValues(file)
+			for assign, positions := range fallbackAssignmentsInFunction(fset, fn, consts) {
 				violations[fn.Name.Name+":"+assign] = positions
 			}
 		}
@@ -248,6 +256,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 	callGraph := map[string][]string{}
 	defined := map[string]bool{}
 	funcDecls := map[string]*ast.FuncDecl{}
+	funcConsts := map[string]map[string]ast.Expr{}
 	for _, path := range goFiles {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -256,6 +265,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
+		fileConsts := packageConstValues(file)
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -263,6 +273,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 			}
 			defined[fn.Name.Name] = true
 			funcDecls[fn.Name.Name] = fn
+			funcConsts[fn.Name.Name] = fileConsts
 			var callees []string
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
@@ -284,7 +295,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 			if listed[path+"|"+fn.Name.Name] {
 				continue
 			}
-			for assign, positions := range fallbackAssignmentsInFunction(fset, fn) {
+			for assign, positions := range fallbackAssignmentsInFunction(fset, fn, fileConsts) {
 				t.Errorf("渲染族函数 %s（%s）含兜底 %q（%v）但未登记 antiFallbackScanTargets——新增渲染函数必须纳入扫描面或携 Ruling 说明非渲染用途", fn.Name.Name, path, assign, positions)
 			}
 		}
@@ -321,7 +332,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 		if listedByName[name] || funcDecls[name] == nil {
 			continue
 		}
-		for assign, positions := range fallbackAssignmentsInFunction(fset, funcDecls[name]) {
+		for assign, positions := range fallbackAssignmentsInFunction(fset, funcDecls[name], funcConsts[name]) {
 			// 可达性面只收「赋值形态」兜底：守卫分支内的 return 字面量在
 			// 非渲染辅助函数里大量是校验错误文案/哨兵返回（如 return "空条件"），
 			// 全量纳入会产生不可收敛的误报；显式登记的渲染函数仍按完整命中面扫描。
@@ -339,7 +350,7 @@ func TestRenderLayer_hasNoHardcodedZeroFallbacks(t *testing.T) {
 // 扩展：LSS(<0/<1)、NEQ(!=0 的 else 链)、GEQ(>=1 的 else 链) 零值守卫、
 // switch/case 的零值守卫分支、复合字面量默认值（`v = cfg{...}`）——原命中面
 // 可被这些语义等价写法绕过，机制失效时无红灯。
-func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[string][]string {
+func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl, consts map[string]ast.Expr) map[string][]string {
 	hits := map[string][]string{}
 	// 嵌套守卫会让同一节点被外层与内层各扫一次——按「位置 + 文本」去重，
 	// 保证位置清单与真实站点一一对应（允许列表的次数上界才有意义）。
@@ -367,8 +378,8 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 				if node.Tok != token.ASSIGN {
 					return true
 				}
-				for _, rhs := range node.Rhs {
-					if isLiteralDefault(rhs) {
+				for i, rhs := range node.Rhs {
+					if isLiteralDefault(rhs, consts) || (i < len(node.Lhs) && isStructFieldTarget(node.Lhs[i]) && isBoolOrNilLiteral(rhs)) {
 						var buf bytes.Buffer
 						_ = printer.Fprint(&buf, fset, node)
 						record(buf.String(), node.Pos())
@@ -378,7 +389,7 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 			case *ast.ReturnStmt:
 				// 守卫分支内的单一返回值字面量（哨兵值域映射等）同属写死默认值；
 				// 多返回值 `return <零值>, err` 是错误路径，不纳入。
-				if len(node.Results) != 1 || !isLiteralDefault(node.Results[0]) {
+				if len(node.Results) != 1 || !isLiteralDefault(node.Results[0], consts) {
 					return true
 				}
 				var buf bytes.Buffer
@@ -395,6 +406,57 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 			scanBranch(block)
 		}
 	}
+	// 常量夹取（clamp）：`if v > maxSize { v = maxSize }`——守卫是**范围上限**
+	// 而非零值判据，故不在 comparisonGuardBranch 的零值域里，但赋值右值仍是
+	// 写死常量（coraza 1GiB 上限即此形态）。判据=比较式为序关系、一侧非常量、
+	// 另一侧解析到常量，且分支内把同一常量赋回——同常量双向出现才命中，
+	// 普通阈值分支（`if len(x) > 3 {…}` 赋别值）不误报。
+	scanClamp := func(cond ast.Expr, body *ast.BlockStmt) {
+		if body == nil {
+			return
+		}
+		bin, ok := unparenExpr(cond).(*ast.BinaryExpr)
+		if !ok {
+			return
+		}
+		switch bin.Op {
+		case token.LSS, token.LEQ, token.GTR, token.GEQ:
+		default:
+			return
+		}
+		if _, boundedIsLiteral := resolveBasicLit(bin.X, consts); boundedIsLiteral {
+			return
+		}
+		limit, ok := resolveBasicLit(bin.Y, consts)
+		if !ok {
+			return
+		}
+		limitValue := constant.MakeFromLiteral(limit.Value, limit.Kind, 0)
+		if limitValue.Kind() == constant.Unknown {
+			return
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			assign, ok := m.(*ast.AssignStmt)
+			if !ok || assign.Tok != token.ASSIGN {
+				return true
+			}
+			for _, rhs := range assign.Rhs {
+				lit, ok := resolveBasicLit(rhs, consts)
+				if !ok {
+					continue
+				}
+				value := constant.MakeFromLiteral(lit.Value, lit.Kind, 0)
+				if value.Kind() == constant.Unknown || !constant.Compare(value, token.EQL, limitValue) {
+					continue
+				}
+				var buf bytes.Buffer
+				_ = printer.Fprint(&buf, fset, assign)
+				record(buf.String(), assign.Pos())
+				break
+			}
+			return true
+		})
+	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.IfStmt:
@@ -402,7 +464,8 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 			// 内层判定的独立性）。
 			matched := false
 			for current := node; current != nil; {
-				switch guardBranchOf(current.Cond) {
+				scanClamp(current.Cond, current.Body)
+				switch guardBranchOf(current.Cond, consts) {
 				case guardFallbackBody:
 					scanBranch(current.Body)
 					matched = true
@@ -456,7 +519,7 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 					if node.Tag != nil {
 						guardExpr = &ast.BinaryExpr{X: node.Tag, Y: expr, Op: token.EQL}
 					}
-					branch := switchGuardBranchOf(guardExpr)
+					branch := switchGuardBranchOf(guardExpr, consts)
 					if branch != guardNone {
 						sawGuard = true
 					}
@@ -483,18 +546,18 @@ func fallbackAssignmentsInFunction(fset *token.FileSet, fn *ast.FuncDecl) map[st
 // switchGuardBranchOf 按 case 条件的真值方向判定零值可达分支。与 if 扫描
 // 不同，x>0 的 case 正分支不可能由零值进入，不能沿用 guardFallbackBoth
 // 的兼容命中面；非零数值等值 case 则明确在零值时为假，使其 default 可见。
-func switchGuardBranchOf(cond ast.Expr) guardBranch {
+func switchGuardBranchOf(cond ast.Expr, consts map[string]ast.Expr) guardBranch {
 	switch expr := unparenExpr(cond).(type) {
 	case *ast.UnaryExpr:
 		if expr.Op == token.NOT {
-			return flippedGuardBranch(switchGuardBranchOf(expr.X))
+			return flippedGuardBranch(switchGuardBranchOf(expr.X, consts))
 		}
 		return guardNone
 	case *ast.BinaryExpr:
 		if expr.Op == token.LAND || expr.Op == token.LOR {
-			return mergeGuardBranches(switchGuardBranchOf(expr.X), switchGuardBranchOf(expr.Y))
+			return mergeGuardBranches(switchGuardBranchOf(expr.X, consts), switchGuardBranchOf(expr.Y, consts))
 		}
-		branch := comparisonGuardBranch(expr)
+		branch := comparisonGuardBranch(expr, consts)
 		if branch == guardFallbackBoth {
 			return guardFallbackElse
 		}
@@ -506,7 +569,7 @@ func switchGuardBranchOf(cond ast.Expr) guardBranch {
 		if normalized.Op != token.EQL {
 			return guardNone
 		}
-		lit, ok := unparenExpr(normalized.Y).(*ast.BasicLit)
+		lit, ok := resolveBasicLit(normalized.Y, consts)
 		if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT) {
 			return guardNone
 		}
@@ -544,11 +607,11 @@ const (
 //
 // 复合条件与逻辑取反同属等价形态（`x == 0 && flag`、`x == 0 || flag`、
 // `!(x != 0)`）：只看顶层二元比较会让这种最常见的现实书写整段逃出命中面。
-func guardBranchOf(cond ast.Expr) guardBranch {
+func guardBranchOf(cond ast.Expr, consts map[string]ast.Expr) guardBranch {
 	switch expr := unparenExpr(cond).(type) {
 	case *ast.UnaryExpr:
 		if expr.Op == token.NOT {
-			return flippedGuardBranch(guardBranchOf(expr.X))
+			return flippedGuardBranch(guardBranchOf(expr.X, consts))
 		}
 		return guardNone
 	case *ast.BinaryExpr:
@@ -557,9 +620,9 @@ func guardBranchOf(cond ast.Expr) guardBranch {
 			// 合取/析取都取两侧兜底分支的并集：任一侧的值无效都会让该分支
 			// 在库里值无效时可达（`x == 0 && flag` 的 if 体里 x 仍为 0；
 			// `x != 0 || flag` 的 else 块里 x 仍为 0）。并集只扩命中面。
-			return mergeGuardBranches(guardBranchOf(expr.X), guardBranchOf(expr.Y))
+			return mergeGuardBranches(guardBranchOf(expr.X, consts), guardBranchOf(expr.Y, consts))
 		}
-		return comparisonGuardBranch(expr)
+		return comparisonGuardBranch(expr, consts)
 	}
 	return guardNone
 }
@@ -589,9 +652,12 @@ func mergeGuardBranches(left, right guardBranch) guardBranch {
 }
 
 // comparisonGuardBranch 判定单条件（二元比较）的零值/无效值守卫分支。
-func comparisonGuardBranch(bin *ast.BinaryExpr) guardBranch {
+// 比较右值可以是字面量，也可以是解析到字面量的具名常量（含 `T(x)` 转换
+// 形态的包级 const）——`if v > corazaMax { v = corazaMax }` 这类常量夹取
+// 同样是「写死兜底」，只认字面量会让整族逃逸。
+func comparisonGuardBranch(bin *ast.BinaryExpr, consts map[string]ast.Expr) guardBranch {
 	bin = flippedComparison(bin)
-	lit, isLiteral := unparenExpr(bin.Y).(*ast.BasicLit)
+	lit, isLiteral := resolveBasicLit(bin.Y, consts)
 	if !isLiteral {
 		return guardNone
 	}
@@ -694,11 +760,90 @@ func unparenExpr(expr ast.Expr) ast.Expr {
 	}
 }
 
+// builtinScalarTypes 是「T(x) 转换形态」识别面里的内置标量类型名。
+var builtinScalarTypes = map[string]bool{
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "float32": true, "float64": true, "complex64": true,
+	"complex128": true, "string": true, "bool": true, "byte": true, "rune": true,
+}
+
+// packageConstValues 收集文件级 const 名 → 右值表达式（含 const 块/iota 组；
+// 无右值的重复项跳过）。渲染层写 `v = 具名常量`（如 `v = corazaMax`）与写
+// 字面量等价——没有这张表，isLiteralDefault / 守卫比较对常量族整体失明。
+func packageConstValues(file *ast.File) map[string]ast.Expr {
+	values := map[string]ast.Expr{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if i >= len(value.Values) {
+					continue
+				}
+				values[name.Name] = value.Values[i]
+			}
+		}
+	}
+	return values
+}
+
+// resolveBasicLit 把表达式解析成字面量：直接字面量、解析到字面量的具名常量、
+// 以及单实参类型转换（`int64(1073741824)`）三种形态归一。
+func resolveBasicLit(expr ast.Expr, consts map[string]ast.Expr) (*ast.BasicLit, bool) {
+	return resolveBasicLitDepth(unparenExpr(expr), consts, 0)
+}
+
+func resolveBasicLitDepth(expr ast.Expr, consts map[string]ast.Expr, depth int) (*ast.BasicLit, bool) {
+	if depth > 8 { // 常量别名链有界（防循环定义导致栈溢出）
+		return nil, false
+	}
+	switch value := expr.(type) {
+	case *ast.BasicLit:
+		return value, true
+	case *ast.Ident:
+		if target, ok := consts[value.Name]; ok {
+			return resolveBasicLitDepth(unparenExpr(target), consts, depth+1)
+		}
+	case *ast.CallExpr:
+		// T(x) 转换形态：转换目标为内置标量或包限定导出类型（time.Duration 等）。
+		if len(value.Args) == 1 && isConversionTarget(value.Fun) {
+			return resolveBasicLitDepth(unparenExpr(value.Args[0]), consts, depth+1)
+		}
+	}
+	return nil, false
+}
+
+// isConversionTarget 报告表达式是否为转换目标类型（内置标量名或包限定导出
+// 类型 `pkg.Type`）。普通函数调用（`computed(z)`）返回 false——反向形状依赖
+// 这条区分。
+func isConversionTarget(fun ast.Expr) bool {
+	switch typed := fun.(type) {
+	case *ast.Ident:
+		return builtinScalarTypes[typed.Name]
+	case *ast.SelectorExpr:
+		return ast.IsExported(typed.Sel.Name)
+	}
+	return false
+}
+
 // isLiteralDefault 报告赋值右值是否为写死字面量默认值（INT/FLOAT/STRING 字面量、
-// 非空命名/匿名结构的复合字面量或非空切片字面量）。排除：
+// 非空命名/匿名结构的复合字面量或非空切片字面量、布尔/具名常量、`T(x)` 转换）。
+// 排除：
 //   - map 字面量（`m["k"] = map[string]interface{}{...}` 是结构装配，不是库值兜底）；
-//   - 空复合字面量（`struct{}{}` 集合插入惯用法、`[]string{}` 非 nil 空切片 flag）。
-func isLiteralDefault(rhs ast.Expr) bool {
+//   - 空复合字面量（`struct{}{}` 集合插入惯用法、`[]string{}` 非 nil 空切片 flag）；
+//   - 普通函数调用/变量标识符（`x = computed(z)` 是数据流，不是写死值）。
+//
+// 第五链的盲区修复：此前只认 BasicLit/CompositeLit/ParenExpr/一元符号，
+// 「常量夹取 / 常量别名 / 类型转换 / bool 兜底」整族失明——`x = db默认值常量`、
+// `x = int64(5)`、`enabled = true` 四方向全绿。
+func isLiteralDefault(rhs ast.Expr, consts map[string]ast.Expr) bool {
 	switch value := rhs.(type) {
 	case *ast.BasicLit:
 		return value.Kind == token.INT || value.Kind == token.FLOAT || value.Kind == token.STRING
@@ -709,12 +854,54 @@ func isLiteralDefault(rhs ast.Expr) bool {
 		return len(value.Elts) > 0
 	case *ast.ParenExpr:
 		// 括号包裹的字面量（`(0)` / `(5)`）与无括号形态等价。
-		return isLiteralDefault(value.X)
+		return isLiteralDefault(value.X, consts)
 	case *ast.UnaryExpr:
 		// 带符号字面量（-1 / +5）与一元取反同属字面量默认值。
-		return (value.Op == token.SUB || value.Op == token.ADD) && isLiteralDefault(value.X)
+		return (value.Op == token.SUB || value.Op == token.ADD) && isLiteralDefault(value.X, consts)
+	case *ast.Ident:
+		// 具名常量（解析到字面量）同属写死值；裸 true/false/nil 只在「结构体
+		// 字段写入」形态下算兜底（见 isBoolOrNilLiteral / isStructFieldTarget）：
+		// 局部变量与 map 条目的 `= true` 是簿记状态（seen/failed[id]/
+		// provinces[...]），不是输出值兜底，一律纳入会产生不可收敛的误报。
+		if target, ok := consts[value.Name]; ok {
+			return isLiteralDefault(target, consts)
+		}
+		return false
+	case *ast.SelectorExpr:
+		// 包级默认值常量引用（`db.DefaultHealthCheckInterval` 等）：渲染层直读
+		// db 内置默认值同样绕过了「库值唯一真相」，按命名面识别（Default 前缀/
+		// 中缀），避免把普通 `pkg.SomeValue` 一律纳入。
+		return strings.Contains(value.Sel.Name, "Default")
+	case *ast.CallExpr:
+		// `T(x)` 转换形态：转换目标为类型、单实参，且实参本身解析到字面量
+		// （`int64(5)` / `int64(maxSize)`）——`json.RawMessage(customRules)`
+		// 这类「转换目标类型、实参是变量」是数据流而非写死值，不得误报。
+		if len(value.Args) != 1 || !isConversionTarget(value.Fun) {
+			return false
+		}
+		if isBoolOrNilLiteral(value.Args[0]) {
+			return true
+		}
+		_, resolves := resolveBasicLit(value.Args[0], consts)
+		return resolves
 	}
 	return false
+}
+
+// isBoolOrNilLiteral 报告表达式是否为裸 true/false/nil 标识符。
+func isBoolOrNilLiteral(expr ast.Expr) bool {
+	ident, ok := unparenExpr(expr).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "true" || ident.Name == "false" || ident.Name == "nil"
+}
+
+// isStructFieldTarget 报告赋值左值是否为结构体字段/选择器（`x.Enabled = true`）。
+// 局部变量（seen）/map 条目（failed[id]）/切片元素不是输出值兜底目标。
+func isStructFieldTarget(lhs ast.Expr) bool {
+	_, ok := unparenExpr(lhs).(*ast.SelectorExpr)
+	return ok
 }
 
 // isRenderFamilyFunction 按命名识别渲染族函数
@@ -895,6 +1082,28 @@ func TestFallbackScan_detectsEquivalentGuardShapes(t *testing.T) {
 			name:   "expressionless-switch-len-positive-default",
 			source: "package p\nfunc f(v []int) []int { switch { case len(v) > 0: v = v; default: v = []int{5} }; return v }\n",
 		},
+		{
+			// 常量夹取：`if v > max { v = max }`，守卫侧与右值两侧都靠常量表解析。
+			name:   "const-clamp",
+			source: "package p\nconst maxSize = int64(1073741824)\nfunc f(v int64) int64 { if v > maxSize { v = maxSize }; return v }\n",
+		},
+		{
+			// 常量别名（const 引用 const）。
+			name:   "const-alias",
+			source: "package p\nconst baseLimit = 5\nconst limitAlias = baseLimit\nfunc f(x int) int { if x == 0 { x = limitAlias }; return x }\n",
+		},
+		{
+			// 类型转换右值：`x = int64(5)`。
+			name:   "type-conversion-rhs",
+			source: "package p\nfunc f(x int64) int64 { if x == 0 { x = int64(5) }; return x }\n",
+		},
+		{
+			// bool 兜底：结构体字段写 true（输出值兜底）。守卫用零值比较（bool
+			// 守卫 `if !o.Enabled` 不在守卫识别面——见 guardBranchOf 的语义边界）；
+			// 局部变量/ map 条目的 `= true` 属簿记状态，按 isStructFieldTarget 排除。
+			name:   "bool-default",
+			source: "package p\ntype opts struct{ Enabled bool; Timeout int }\nfunc f(o *opts) *opts { if o.Timeout == 0 { o.Enabled = true }; return o }\n",
+		},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -913,7 +1122,7 @@ func TestFallbackScan_detectsEquivalentGuardShapes(t *testing.T) {
 			if fn == nil {
 				t.Fatal("fixture function f not found")
 			}
-			if hits := fallbackAssignmentsInFunction(fset, fn); len(hits) == 0 {
+			if hits := fallbackAssignmentsInFunction(fset, fn, packageConstValues(file)); len(hits) == 0 {
 				t.Fatalf("等价兜底形态未被扫描命中——机制存在绕过路径: %s", fixture.source)
 			}
 		})
@@ -958,6 +1167,15 @@ func TestFallbackScan_ignoresNonZeroGuardBranches(t *testing.T) {
 			name:   "string-dispatch-default",
 			source: "package p\nfunc f(s string) string { switch s { case \"ready\": s = s; default: s = \"unknown\" }; return s }\n",
 		},
+		{
+			// 反形状：数据流调用/变量复制不是写死值——常量面与转换面扩展不得把它拖进来。
+			name:   "computed-call-is-not-default",
+			source: "package p\nfunc computed(z int) int { return z }\nfunc f(x, z int) int { if x == 0 { x = computed(z) }; return x }\n",
+		},
+		{
+			name:   "variable-copy-is-not-default",
+			source: "package p\nfunc f(x, other int) int { if x == 0 { x = other }; return x }\n",
+		},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -971,7 +1189,7 @@ func TestFallbackScan_ignoresNonZeroGuardBranches(t *testing.T) {
 				if !ok || fn.Name.Name != "f" {
 					continue
 				}
-				if hits := fallbackAssignmentsInFunction(fset, fn); len(hits) != 0 {
+				if hits := fallbackAssignmentsInFunction(fset, fn, packageConstValues(file)); len(hits) != 0 {
 					t.Fatalf("非零值守卫被误报为兜底: %v", hits)
 				}
 			}

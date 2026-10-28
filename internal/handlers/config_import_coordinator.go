@@ -161,15 +161,18 @@ func importFailureAuditDescription(err error) string {
 // importFailureAuditDetail 返回审计 detail：auditAction 已携带「导入/还原失败」
 // 前缀，detail 不再重复动作词（消双前缀），只描述阶段与真实错误。
 func importFailureAuditDetail(err error) string {
+	// 该文案同时进操作审计（全员可见）与响应：Caddy 应用阶段的失败原文含 admin
+	// 端点地址/端口，必须剥离后再出（服务端日志各调用点保留原文）。
+	var detail string
 	var coordinatorErr *importCoordinatorError
 	if !errors.As(err, &coordinatorErr) {
-		return err.Error()
+		detail = err.Error()
+	} else if phase := importFailurePhaseDescription(coordinatorErr.phase, coordinatorErr.caddyRejected); phase == "" {
+		detail = coordinatorErr.err.Error()
+	} else {
+		detail = phase + "：" + coordinatorErr.err.Error()
 	}
-	phase := importFailurePhaseDescription(coordinatorErr.phase, coordinatorErr.caddyRejected)
-	if phase == "" {
-		return coordinatorErr.err.Error()
-	}
-	return phase + "：" + coordinatorErr.err.Error()
+	return services.RedactCaddyAdminEndpoint(detail)
 }
 
 // importFailureCause 返回协调器包装下的真实错误文本（不带动作/阶段前缀）；
@@ -195,7 +198,7 @@ type configImportSession struct {
 	runtime               *importRuntimeSnapshot
 	runtimeApplyAttempted bool
 	finished              bool
-	// resumeEngine 恢复任务引擎 tick 派发
+	closed                bool // close 幂等门：重复收尾不得再次释放共享锁。
 	// beginConfigImport 期间 PauseScheduling，会话 close 时恢复——不能用作
 	// begin 函数的 defer（该函数在导入体执行前就返回）。
 	resumeEngine func()
@@ -232,6 +235,12 @@ type configImportSession struct {
 	// （提交不确定态下的产物清理去向）。与 wafRestoreWarnings 分开：
 	// 后者只讲规则库文件的回退结论。
 	failureWarnings []string
+	// postLockActions 是提交成功后、必须在 caddyOpMu 释放之后同步执行的运行期
+	// 收敛动作。用于「收敛本身要自取 CaddyOpLock」的路径（例：自动封禁禁用
+	// 收尾 AutobanDisableFlush——非重入锁，在导入临界区内直呼即死锁）。执行点
+	// = close() 的 Unlock 之后、调度恢复（finishPostCommitCleanup）之前：恢复
+	// 后的首轮任务必须看到已收敛状态。只在提交成功后登记（失败路径不执行）。
+	postLockActions []func()
 }
 
 // errCertQueueDrainIncomplete 证书队列排空未完成：PauseAndDrain
@@ -509,14 +518,41 @@ func respondImportBeginError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "建立导入会话失败，请稍后重试"})
 }
 
 func (session *configImportSession) close() {
+	if session.closed {
+		return
+	}
+	session.closed = true
+	caddyLockReleased := false
+	defer func() {
+		if !caddyLockReleased {
+			session.h.caddyOpMu.Unlock()
+		}
+		if recovered := recover(); recovered != nil {
+			services.Logf("error", "配置%s收尾 panic: %v", session.actionLabel(), recovered)
+			session.postLockActions = nil
+			session.pendingCleanup = nil
+			session.finishPostCommitCleanup()
+		}
+	}()
 	if !session.finished {
 		_ = session.abort(errors.New("导入流程未完成"))
 	}
 	session.h.caddyOpMu.Unlock()
+	caddyLockReleased = true
+	// caddyOpMu 释放后立即执行「自取 CaddyOpLock」的提交后收敛（见
+	// postLockActions 字段注释）。先于调度恢复：恢复后的首轮任务不得读到
+	// 未收敛状态（例：导入停用自动封禁后，恢复的循环若先跑一轮会按陈旧计数桶
+	// 评估）。动作自行兜住 panic 之外的一切（各自内部已留痕），此处不吞错。
+	if actions := session.postLockActions; len(actions) > 0 {
+		session.postLockActions = nil
+		for _, action := range actions {
+			action()
+		}
+	}
 	plan := session.pendingCleanup
 	session.pendingCleanup = nil
 	if plan == nil || (plan.empty() && importPostCommitCleanupHook == nil) {
@@ -905,7 +941,7 @@ func (session *configImportSession) collectPostCommitCleanup() (*importArtifactC
 		return nil, fmt.Errorf("清理孤儿证书任务失败: %w", err)
 	}
 	if _, err := session.tx.ExecContext(ctx,
-		`DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (enable_tls=1 AND tls_source='acme_dns'))`); err != nil {
+		`DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (COALESCE(enable_tls,0)=1 AND COALESCE(tls_source,'manual')='acme_dns'))`); err != nil {
 		return nil, fmt.Errorf("清理失效证书任务失败: %w", err)
 	}
 	plan := &importArtifactCleanupPlan{}

@@ -199,7 +199,7 @@ func TestThreatUpdateOneSource_inTaskRetry_succeedsAfterTransientFailures(t *tes
 func TestThreatFailSource_nextUpdateIsScheduleSlot(t *testing.T) {
 	overrideWafDirForTest(t)
 	newClusterTestService(t)
-	want := threatNextSlot(time.Now().UTC())
+	clockBefore := time.Now().UTC()
 
 	failSourceRow(1, time.Now().UTC().Format(crsTimeLayout), errors.New("HTTP 500"), "auto")
 
@@ -207,8 +207,13 @@ func TestThreatFailSource_nextUpdateIsScheduleSlot(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_threat_sources WHERE id=1`).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next != want {
-		t.Fatalf("next_update=%q, want 排程槽 %q（失败退避不污染排程）", next, want)
+	if got := parseSlotUTC(t, next); !got.After(clockBefore) {
+		t.Fatalf("next_update=%v 必须真实晚于失败轮开始时间 %v", got, clockBefore)
+	}
+	wantBefore := threatNextSlot(clockBefore)
+	wantAfter := threatNextSlot(time.Now().UTC())
+	if next != wantBefore && next != wantAfter {
+		t.Fatalf("next_update=%q，不在稳定时钟 bracket 的合法槽位 [%q, %q]（失败退避不污染排程）", next, wantBefore, wantAfter)
 	}
 }
 
@@ -223,15 +228,13 @@ func TestSetCRSSchedule_failedRowRearmedToSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	clockBefore := time.Now().UTC()
 	if err := SetCRSSchedule([]int{2}, "04:30"); err != nil {
 		t.Fatal(err)
 	}
 
-	want := NextScheduledSlot(time.Now().UTC(), []int{2}, "04:30", loc).UTC().Format(crsTimeLayout)
 	_, _, nextUpdate := readVersionSchedule(t, "security_crs_version")
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want 重排为新槽 %q（失败行不保留退避）", nextUpdate, want)
-	}
+	assertNextScheduledSlot(t, nextUpdate, clockBefore, []int{2}, "04:30", loc)
 }
 
 // Given：失败退避形态的威胁源。When：保存威胁库排程。
@@ -244,16 +247,14 @@ func TestSetThreatSchedule_failedSourceRearmedToSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	clockBefore := time.Now().UTC()
 	if err := SetThreatSchedule([]int{3}, "05:00"); err != nil {
 		t.Fatal(err)
 	}
 
-	want := NextScheduledSlot(time.Now().UTC(), []int{3}, "05:00", loc).UTC().Format(crsTimeLayout)
 	var next string
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_threat_sources WHERE name='ustc'`).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next != want {
-		t.Fatalf("失败源 next_update=%q, want 重排为新槽 %q", next, want)
-	}
+	assertNextScheduledSlot(t, next, clockBefore, []int{3}, "05:00", loc)
 }

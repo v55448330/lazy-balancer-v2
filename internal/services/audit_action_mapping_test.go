@@ -277,6 +277,8 @@ func backendAuditActions(t *testing.T) map[string]string {
 var (
 	// 例外表条目行：'动作': '色调',
 	auditTagTableEntryRe = regexp.MustCompile(`'([^']+)':\s*'(success|warning|danger|info)',`)
+	// 块注释可能整段注释例外条目，必须先剥离再解析，否则幽灵映射掩盖漏登记。
+	auditTagBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	// 关键词词表行：const DANGER_WORDS = ['失败', '拒绝'] as const
 	auditTagWordListRe = regexp.MustCompile(`(?m)^const (DANGER|WARNING|SUCCESS)_WORDS\s*=\s*\[([^\]]*)\]`)
 	auditTagWordRe     = regexp.MustCompile(`'([^']+)'`)
@@ -296,15 +298,13 @@ type frontendAuditTone struct {
 	success    []string
 }
 
-func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
+// parseFrontendAuditTone 解析单源文本（剥离块注释与行内注释后逐行登记例外、
+// 提取三组关键词），供真实单源与合成夹具共用同一解析口径。
+func parseFrontendAuditTone(t *testing.T, data []byte, sourceName string) *frontendAuditTone {
 	t.Helper()
-	path := filepath.Join("..", "..", "web", "src", "utils", frontendAuditToneSource)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
-	}
 	tone := &frontendAuditTone{exceptions: map[string]string{}}
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	source := auditTagBlockCommentRe.ReplaceAllString(string(data), "")
+	for _, rawLine := range strings.Split(source, "\n") {
 		// 行内 `//` 之后的部分不参与匹配——例外表旁的注释会注册幽灵映射
 		//（真条目被删时漏映射检查假绿/幽灵颜色误触 danger 契约）。
 		line := rawLine
@@ -320,13 +320,13 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		}
 		tone.exceptions[match[1]] = match[2]
 	}
-	for _, spec := range auditTagWordListRe.FindAllStringSubmatch(string(data), -1) {
+	for _, spec := range auditTagWordListRe.FindAllStringSubmatch(source, -1) {
 		words := make([]string, 0, 4)
 		for _, word := range auditTagWordRe.FindAllStringSubmatch(spec[2], -1) {
 			words = append(words, word[1])
 		}
 		if len(words) == 0 {
-			t.Fatalf("%s 解析漂移：%s_WORDS 词表为空", frontendAuditToneSource, spec[1])
+			t.Fatalf("%s 解析漂移：%s_WORDS 词表为空", sourceName, spec[1])
 		}
 		switch spec[1] {
 		case "DANGER":
@@ -337,11 +337,8 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 			tone.success = words
 		}
 	}
-	if len(tone.exceptions) < 40 {
-		t.Fatalf("%s 解析漂移：例外表仅解析到 %d 条（期望 ≥40）——结构已改变，请同步更新本测试的解析", frontendAuditToneSource, len(tone.exceptions))
-	}
 	if len(tone.danger) == 0 || len(tone.warning) == 0 || len(tone.success) == 0 {
-		t.Fatalf("%s 解析漂移：关键词词表缺失（danger=%d warning=%d success=%d）", frontendAuditToneSource, len(tone.danger), len(tone.warning), len(tone.success))
+		t.Fatalf("%s 解析漂移：关键词词表缺失（danger=%d warning=%d success=%d）", sourceName, len(tone.danger), len(tone.warning), len(tone.success))
 	}
 	// info 是兜底+告警分支，不是可登记的分类：例外表出现 info 会把「未识别」
 	// 粉饰成「已分类」，本测试的漏覆盖检查随即失效。
@@ -351,6 +348,45 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		}
 	}
 	return tone
+}
+
+func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
+	t.Helper()
+	path := filepath.Join("..", "..", "web", "src", "utils", frontendAuditToneSource)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
+	}
+	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
+	// 当前单源登记 68 条；等值门同时拦截整表漏解析与未经审查的新增/删除。
+	const registeredExceptionCount = 68
+	if len(tone.exceptions) != registeredExceptionCount {
+		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
+	}
+	return tone
+}
+
+// 块注释内的例外条目不得注册为真映射：否则注释掉一条无关键词例外后，
+// 前端落 info 灰标而本测试仍绿。
+func TestParseFrontendAuditTone_ignoresBlockComments(t *testing.T) {
+	fixture := []byte(`
+'同步': 'warning',
+/* '删除': 'danger',
+   '禁用': 'danger' */
+const DANGER_WORDS = ['失败'] as const
+const WARNING_WORDS = ['跳过'] as const
+const SUCCESS_WORDS = ['成功'] as const
+`)
+	tone := parseFrontendAuditTone(t, fixture, "fixture")
+	if _, ok := tone.exceptions["删除"]; ok {
+		t.Fatal("块注释中的例外条目被注册为真映射")
+	}
+	if _, ok := tone.exceptions["禁用"]; ok {
+		t.Fatal("跨行块注释中的例外条目被注册为真映射")
+	}
+	if color := tone.exceptions["同步"]; color != "warning" {
+		t.Fatalf("块注释外的真实条目未解析: %q", color)
+	}
 }
 
 // mapped 判断动作是否会被前端归为非兜底色调（例外表精确命中，或含任一色调

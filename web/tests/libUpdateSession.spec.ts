@@ -13,8 +13,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ref } from 'vue'
 
-import { FakeDocument, registerModuleHooks } from './_helpers.ts'
-import { calls, resetCalls } from './_stubs.ts'
+import { FakeDocument, deferred, flushMicrotasks, registerModuleHooks } from './_helpers.ts'
+import { calls, resetCalls, STUB_API, STUB_ELEMENT } from './_stubs.ts'
+
 
 type Harness = {
   __gets: Array<{ url: string }>
@@ -31,28 +32,8 @@ g.__get = async () => ({ data: { running: false } })
 g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
 
 registerModuleHooks({
-  '@/utils/api': `data:text/javascript,${encodeURIComponent(`
-export class ApiRequestError extends Error {
-  constructor(message, status) { super(message); this.status = status }
-}
-globalThis.__makeApiError = (message, status) => new ApiRequestError(message, status)
-export const request = {
-  get: (url) => { globalThis.__gets.push({ url }); return globalThis.__get(url) },
-  post: (url) => globalThis.__post(url),
-  put: (url) => globalThis.__put(url),
-}
-export const mfaAwareSuccess = (message) => globalThis.__calls?.push({ fn: 'mfaAwareSuccess', arg: message })
-`)}`,
-  'element-plus': `data:text/javascript,${encodeURIComponent(`
-export const ElMessage = Object.assign(
-  (arg) => globalThis.__calls?.push({ fn: 'ElMessage', arg }),
-  {
-    info: (arg) => globalThis.__calls?.push({ fn: 'ElMessage.info', arg }),
-    error: (arg) => globalThis.__calls?.push({ fn: 'ElMessage.error', arg }),
-    success: (arg) => globalThis.__calls?.push({ fn: 'ElMessage.success', arg }),
-  },
-)
-`)}`,
+  '@/utils/api': STUB_API,
+  'element-plus': STUB_ELEMENT,
 })
 
 // 动态 import：被测组合子的依赖（api.ts / element-plus）已被上面的 data: 替身
@@ -62,11 +43,6 @@ const { useLibUpdateDialog } = await import('../src/composables/useLibUpdateDial
 
 interface Info { running: boolean; status?: string }
 
-const deferred = (): { promise: Promise<unknown>; resolve: (value: unknown) => void } => {
-  const { promise, resolve } = Promise.withResolvers<unknown>()
-  return { promise, resolve }
-}
-const flush = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
 /** 每个用例都一样的三库形状替身：running 为真视为进行中，终态以 status 判定。 */
 const makeDialog = () => useLibUpdateDialog<Info>({
@@ -98,7 +74,7 @@ test('关闭后重开：starting 随会话复位，按钮不再卡在 loading', 
     assert.equal(dialog.starting.value, false, '重开不得继承上一次的 loading')
 
     pending.resolve({ data: { status: 'started' } })
-    await flush()
+    await flushMicrotasks()
     assert.equal(dialog.starting.value, false)
   } finally {
     dialog.dispose()
@@ -125,7 +101,7 @@ test('跨会话迟到响应不得驱动新会话的 refreshStatus', async () => 
     assert.equal(before, 0, '前置：新会话未发过状态请求')
 
     pending.resolve({ data: { status: 'started' } })
-    await flush()
+    await flushMicrotasks()
     assert.equal(statusCalls(), 0, '上一次触发的迟到响应不得在新会话里取状态')
   } finally {
     dialog.dispose()
@@ -153,11 +129,11 @@ test('跨会话迟到响应不得复位新会话的 starting（新触发仍保�
     assert.equal(dialog.starting.value, true)
 
     first.resolve({ data: { status: 'started' } }) // 旧会话的响应迟到
-    await flush()
+    await flushMicrotasks()
     assert.equal(dialog.starting.value, true, '旧响应收尾不得清掉新会话的 starting')
 
     second.resolve({ data: { status: 'started' } })
-    await flush()
+    await flushMicrotasks()
     assert.equal(dialog.starting.value, false, '新会话自己的响应当正常释放占位')
   } finally {
     dialog.dispose()
@@ -212,7 +188,7 @@ test('dispose 同样复位 starting（组件卸载后不留 loading 残影）', 
     dialog.dispose()
     assert.equal(dialog.starting.value, false)
     pending.resolve({ data: { status: 'started' } })
-    await flush()
+    await flushMicrotasks()
   } finally {
     delete host.document
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })

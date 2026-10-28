@@ -75,8 +75,10 @@ func recordBackgroundApplyResult(source BackgroundApplySource, err error) {
 	}
 	now := time.Now()
 	backgroundApplyStore.failures[string(source)] = BackgroundApplyFailure{
-		Source:  string(source),
-		Message: err.Error(),
+		Source: string(source),
+		// Message 经 /caddy/status 与前端横幅展示给全员（含只读 API Key）：
+		// 后台重载失败同样来自 /load 传输错误，进仓前剥离 admin 端点。
+		Message: RedactCaddyAdminEndpoint(err.Error()),
 		At:      now.In(CurrentLocation()).Format("2006-01-02 15:04:05"),
 		at:      now.UTC(),
 	}

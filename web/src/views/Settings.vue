@@ -30,7 +30,9 @@
       <BasicSettings
         v-model:settings="settings"
         :config-loaded="configLoaded"
-        @save="handleSaveBasic"
+        :on-save="handleSaveBasic"
+        :saved-threat-screen-mode="savedThreatScreenMode"
+        :saved-threat-traffic-sample-n="savedThreatTrafficSampleN"
       />
       <CaddyGlobalSettings
         v-model:settings="settings"
@@ -141,6 +143,10 @@ const global = ref<CertificateConfig>({
 // 标题/描述/页键映射单源见 utils/settingsPages（AppLayout 面包屑共用同一份）
 const pageTitle = computed(() => SETTINGS_TAB_TITLES[activeTab.value])
 const pageDesc = computed(() => SETTINGS_TAB_DESCS[activeTab.value])
+// 服务端最近一次确认的大屏展示字段：基础卡据此判断用户是否真的编辑过，
+// 并在切页重挂后仍能识别未保存编辑（本地 ref 会随卸载丢失）。
+const savedThreatScreenMode = ref<'map' | 'globe'>('map')
+const savedThreatTrafficSampleN = ref(-1)
 let settingsRequestSeq = 0
 
 // Each card owns a subset of the shared `settings`/`global` objects. Apply
@@ -163,9 +169,13 @@ const applyBasicKeys = (data: ConfigPayload) => {
   // 大屏本站坐标/视觉模式/安全事件保留/行数上限/流量采样均归基础卡所有。
   settings.value.server_map_lat = data.server_map_lat ?? 0
   settings.value.server_map_lon = data.server_map_lon ?? 0
-  settings.value.threat_screen_mode = displayThreatScreenMode(data.threat_screen_mode)
+  const threatMode = displayThreatScreenMode(data.threat_screen_mode)
+  settings.value.threat_screen_mode = threatMode
+  savedThreatScreenMode.value = threatMode
   settings.value.security_events_retention_days = displaySecurityEventsRetentionDays(data.security_events_retention_days)
-  settings.value.threat_traffic_sample_n = normalizeTrafficSampleN(data.threat_traffic_sample_n)
+  const sampleN = normalizeTrafficSampleN(data.threat_traffic_sample_n)
+  settings.value.threat_traffic_sample_n = sampleN
+  savedThreatTrafficSampleN.value = sampleN
   settings.value.security_events_row_cap = displaySecurityEventsRowCap(data.security_events_row_cap)
   // GitHub 下载代理与令牌状态随整包回填（基础设置卡不再自拉第二份 /config）：
   // 空值留给卡片的展示兜底（未配置→默认代理），令牌状态按未配置展示。

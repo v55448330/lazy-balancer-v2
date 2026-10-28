@@ -83,7 +83,7 @@
 
     <ClusterNodeConfigDialog
       :visible="nodeConfigDialogVisible"
-      :node="editingNodeConfig"
+      :node="editingNodeConfigLive"
       :saving="nodeConfigSaving"
       @close="closeNodeConfigDialog"
       @save="updateNodeConfig"
@@ -147,7 +147,7 @@
       </div>
 
       <transition name="el-fade-in">
-        <div v-if="serviceControlWarnings[serviceControlAction]" class="info-note-bar service-control-warning"><span class="info-note-desc">{{ serviceControlWarnings[serviceControlAction] }}</span></div>
+        <div v-if="hasOwn(serviceControlWarnings, serviceControlAction)" class="info-note-bar service-control-warning"><span class="info-note-desc">{{ serviceControlWarnings[serviceControlAction] }}</span></div>
       </transition>
 
       <!-- 服务控制返回证书指纹不匹配时提供按节点重钉通道（与从节点侧
@@ -205,6 +205,7 @@ import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 import { activateOnce } from '@/utils/keyboardActivate'
+import { hasOwn } from '@/utils/hasOwn'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
 
 interface ActionResponse {
@@ -238,6 +239,13 @@ const pendingNodeId = ref<number | null>(null)
 const loginNodeId = ref<number | null>(null)
 const nodeConfigDialogVisible = ref(false)
 const editingNodeConfig = ref<ClusterNode | null>(null)
+// 弹框基线随 15s 轮询更新：按 id 回查最新节点行；查不到（刚被删除）再退回
+// 打开时快照，避免弹框瞬间清空。子组件只在字段未被编辑时回填，不覆盖用户输入。
+const editingNodeConfigLive = computed<ClusterNode | null>(() => {
+  const snapshot = editingNodeConfig.value
+  if (!snapshot) return null
+  return nodes.value.find((node) => node.id === snapshot.id) ?? snapshot
+})
 const nodeConfigSaving = ref(false)
 const registrationRequest = ref(0)
 // 注册请求被主节点受理后递增——子组件据此清空已消耗的一次性令牌
@@ -572,7 +580,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
     ElMessage.warning('同步设置正在保存，请稍候')
     return
   }
-  const label = syncSwitchLabels[field] ?? field
+  const label = hasOwn(syncSwitchLabels, field) ? syncSwitchLabels[field] : field
   const action = value ? '开启' : '关闭'
   clusterSettingsSaving.value = true
   try {
@@ -596,8 +604,14 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
   }
 }
 
-const updateSyncInterval = async (value: number): Promise<void> => {
+const updateSyncInterval = async (value: number | null | undefined): Promise<void> => {
   if (isReadOnlyProp.value) return
+  // 空值不得直发：后端把缺失的 sync_interval 当成「未提供」（保持现值）并回
+  // 200——界面会提示「同步间隔已更新」而实际未改。写侧与卡片提交门同口径拒绝。
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    ElMessage.warning('请输入 10–86400 之间的同步间隔')
+    return
+  }
   // 与开关保存共用同一写通道门（并发落库会互相覆盖 sync_interval/开关字段）
   if (clusterSettingsSaving.value) {
     ElMessage.warning('同步设置正在保存，请稍候')
@@ -728,7 +742,7 @@ const closeNodeConfigDialog = (): void => {
 }
 
 const updateNodeConfig = async (payload: { accessUrl: string; lat: number; lon: number; siteChanged: boolean }): Promise<void> => {
-  const node = editingNodeConfig.value
+  const node = editingNodeConfigLive.value
   if (!node || isReadOnlyProp.value || nodeConfigSaving.value) return
   nodeConfigSaving.value = true
   try {

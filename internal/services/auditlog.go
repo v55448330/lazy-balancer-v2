@@ -199,6 +199,7 @@ func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	action = sanitizeAuditIdentity(action)
 	resource = sanitizeAuditIdentity(resource)
 	ipAddress = sanitizeAuditIdentity(ipAddress)
+	beforeAuditLogExec()
 	auditDB := db.AuditDB
 	if auditDB == nil {
 		Logf("warn", "audit log write skipped: audit database is not initialized")

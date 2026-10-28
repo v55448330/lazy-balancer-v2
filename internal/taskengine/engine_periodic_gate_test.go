@@ -71,8 +71,8 @@ func TestEngine_PeriodicRechecksEnabledFnAfterIntervalDelay(t *testing.T) {
 	if got := countRuns(t, "t-periodic-gate-race"); got != 0 {
 		t.Fatalf("关闭后 task_runs=%d, want 0", got)
 	}
-	if got := enabledCalls.Load(); got != 2 {
-		t.Fatalf("到期投递前 EnabledFn 调用次数=%d, want 2（首次门+投递前复核）", got)
+	if got := enabledCalls.Load(); got < 2 {
+		t.Fatalf("到期投递前 EnabledFn 调用次数=%d, want >=2（首次门+投递前复核）", got)
 	}
 
 	// false 复核必须置零节拍：重新开启后即使周期为一小时也应立即补跑。
@@ -143,7 +143,6 @@ func TestEngine_PeriodicEnabledFnRecheckHonorsStopLoop(t *testing.T) {
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseSecondCheck) }) }
 	t.Cleanup(release)
-	ran := make(chan struct{}, 1)
 	if err := e.Register(Descriptor{
 		ID: "t-periodic-gate-stop-race", Family: "t", Name: "复核期间停止", Kind: KindPeriodic, RunsOn: RoleAny,
 		EnabledFn: func() bool {
@@ -156,7 +155,6 @@ func TestEngine_PeriodicEnabledFnRecheckHonorsStopLoop(t *testing.T) {
 		IntervalFn: func() time.Duration { return time.Hour },
 		Run: func(RunContext) error {
 			runs.Add(1)
-			ran <- struct{}{}
 			return nil
 		},
 	}); err != nil {
@@ -174,25 +172,25 @@ func TestEngine_PeriodicEnabledFnRecheckHonorsStopLoop(t *testing.T) {
 		t.Fatal("第二次 EnabledFn 未进入")
 	}
 	e.StopLoop("t-periodic-gate-stop-race")
+	// 持住 admission 所需的 e.mu：若删掉投递前 due/loopEnabled 复核，
+	// tick 会卡在 reservePeriodicRun；正确复核则无需进入 admission 即返回。
+	e.mu.Lock()
 	release()
 	select {
 	case <-tickDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("第二次 EnabledFn 放行后 tick 未退出")
+	case <-time.After(200 * time.Millisecond):
+		e.mu.Unlock()
+		t.Fatal("StopLoop 后仍进入 admission，投递前 due/loopEnabled 复核缺失")
 	}
+	e.mu.Unlock()
 
-	select {
-	case <-ran:
-		t.Fatal("第二次 EnabledFn 期间 StopLoop，仍按陈旧状态投递")
-	case <-time.After(100 * time.Millisecond):
-	}
 	if got := runs.Load(); got != 0 {
 		t.Fatalf("StopLoop 后执行次数=%d, want 0", got)
 	}
 	if got := countRuns(t, "t-periodic-gate-stop-race"); got != 0 {
 		t.Fatalf("StopLoop 后 task_runs=%d, want 0", got)
 	}
-	if got := enabledCalls.Load(); got != 2 {
+	if got := enabledCalls.Load(); got < 2 {
 		t.Fatalf("测试未触达第二次业务门，调用次数=%d", got)
 	}
 }

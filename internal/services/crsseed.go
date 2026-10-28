@@ -130,7 +130,7 @@ func seedCRSRulesFromInLockUnmarked(liveDir, snapshotDir, distDir string) error 
 		// 下次启动再次清空重播，且 live 出现不完整规则树。
 		if err := replaceDirFrom(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
 			Logf("error", "crs seed: failed to seed rules from %s: %v", src, err)
-			return nil
+			return fmt.Errorf("crs seed: 播种规则树 %s 失败: %w", src, err)
 		}
 	}
 	setupPath := filepath.Join(liveDir, "crs-setup.conf")
@@ -397,14 +397,11 @@ func reconcileCRSStateFromInLock(liveDir, snapshotDir, dbV string) {
 		// 丢失。live 树完好且版本可确定（且非 bundled——那本可就由 dist 重播）
 		// 时按 live 重建快照；helper 自带 live 树完整性门，失败只留日志。
 		healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, liveV)
-	} else if liveV != "" && liveV != CRSBundledVersion && liveV == dbV && snapV != liveV {
-		// 快照完整但落后（更新时 persistCRSSnapshotFrom 失败只留错误日志，更新仍
-		// 成功——「live/DB 新、快照旧」是设计允许的真实状态）：liveV==dbV 时
-		// planCRSReconcile 判 none，旧快照再无刷新入口；此后 /app/waf 挂载卷重建，
-		// 启动播种会优先选该快照（版本不等于 bundled），用户已安装的更新被静默
-		// 回退。用健康 live 树重建快照。条件里的 liveV==dbV 保证
-		// 「snapV==dbV!=liveV」的合法恢复源分支不被重写，liveV!=bundled 保证
-		// bundled 缺省态不额外写快照。
+	} else if liveV != "" && liveV == dbV && snapV != "" && snapV != liveV {
+		// 快照完整但落后（更新时持久化失败或历史残留）：无论 live 是否
+		// bundled，只要健康 live/DB 同代且已有快照，就必须刷新快照，避免卷
+		// 重建后 seed 选中旧版本。liveV==dbV 保证合法恢复源分支不被重写；
+		// 快照整体缺席时 bundled 仍由上一分支刻意跳过（dist 可直接重播）。
 		healCRSSnapshotFromLiveInLock(liveDir, snapshotDir, liveV)
 		snapV = liveV
 	}

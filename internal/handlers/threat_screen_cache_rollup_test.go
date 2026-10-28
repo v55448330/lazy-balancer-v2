@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // 同步固化会改写窗口内分钟行——读 rollup 分钟行的两份缓存（维度聚合与
@@ -43,6 +45,38 @@ func TestInvalidateThreatScreenRollupCaches_clearsTopTargets(t *testing.T) {
 	threatRollupDimAggregateCacheMu.Unlock()
 	if aggLeft {
 		t.Fatal("固化后维度聚合缓存必须失效")
+	}
+}
+
+func TestThreatScreenCaches_includeMetricsGeneration(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetThreatScreenCachesForTest()
+	t.Cleanup(resetThreatScreenCachesForTest)
+	oldGeneration := db.MetricsDBGeneration()
+	if oldGeneration == "" {
+		t.Fatal("test database must have a generation")
+	}
+	oldKey := topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: oldGeneration, sinceMinute: "2026-10-25 10:00"}
+	markThreatRollupSuccess()
+	if !threatRollupUsable() {
+		t.Fatal("successful rollup must be usable before rebuild")
+	}
+	if db.MetricsDB != nil {
+		_ = db.MetricsDB.Close()
+	}
+	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
+		t.Fatalf("reinitialize metrics db: %v", err)
+	}
+	newGeneration := db.MetricsDBGeneration()
+	if newGeneration == "" || newGeneration == oldGeneration {
+		t.Fatalf("generation did not change: old=%q new=%q", oldGeneration, newGeneration)
+	}
+	newKey := topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: newGeneration, sinceMinute: oldKey.sinceMinute}
+	if oldKey == newKey {
+		t.Fatal("cache key must change across metrics generations")
+	}
+	if threatRollupUsable() {
+		t.Fatal("rollup readiness from the old generation must not survive rebuild")
 	}
 }
 

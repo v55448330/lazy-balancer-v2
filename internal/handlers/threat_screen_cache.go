@@ -45,6 +45,7 @@ const topTargetsCacheTTL = threatRollupDimAggregateTTL
 type topTargetsCacheKey struct {
 	metrics     *sql.DB // security_event_target_rollup 所在库
 	main        *sql.DB // lb_rules 所在库
+	generation  string  // metrics 库代际（损坏隔离重建即失效）
 	sinceMinute string
 }
 
@@ -75,7 +76,7 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 	if db.MetricsDB == nil || db.DB == nil {
 		return nil, errors.New("database unavailable")
 	}
-	key := topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, sinceMinute: sinceMinute}
+	key := topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: db.MetricsDBGeneration(), sinceMinute: sinceMinute}
 	now := time.Now()
 	if cacheable {
 		topTargetsCacheMu.Lock()
@@ -287,7 +288,8 @@ type threatRollupDimAggregate struct {
 }
 
 type threatRollupDimAggregateKey struct {
-	metrics *sql.DB
+	metrics    *sql.DB
+	generation string // metrics 库代际（损坏隔离重建即失效）
 	// sinceMinute 是窗口下界（分钟锚点）：每分钟前移即换键。
 	sinceMinute string
 	// bucketLayout 是槽界签名（首槽 UnixNano + 槽数），槽界在入库前已按分钟
@@ -359,6 +361,7 @@ func threatRollupDimAggregateQuery(database *sql.DB, sinceMinute string, bucketS
 	bucketStarts = threatRollupMinuteAnchoredBuckets(bucketStarts)
 	key := threatRollupDimAggregateKey{
 		metrics:      database,
+		generation:   db.MetricsDBGeneration(),
 		sinceMinute:  sinceMinute,
 		bucketLayout: threatRollupBucketLayout(bucketStarts),
 		coverage:     coverage,

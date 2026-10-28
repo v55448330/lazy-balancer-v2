@@ -23,6 +23,12 @@ import { code, webFiles } from './_helpers.ts'
 // 改名/删除）由登记存在性断言报错。
 const NON_VOCABULARY_RECORD_TABLES = [
   // 导航标题：只以字面量页面键读取（页面键集合由 utils/pageIds 单源）
+  // 设置页标题投影：仅展开进 pageTitle，不直接以下标消费
+  'src/components/layout/AppLayout.vue#settingsPageTitles',
+  // HTML 转义表：固定正则字符集键，不是库值/后端枚举
+  'src/utils/escape.ts#escapeHtmlTable',
+  // 表格锁弹框登记表：键为规则 caddy_id，值是组件实例，不用于标签展示
+  'src/views/Rules.vue#lockPopovers',
   'src/components/layout/AppLayout.vue#NAV_LABELS',
   // 省界数据表：键为归一化省名，写入循环的别名来自 Object.entries(COUNTRY_ALIAS)
   'src/utils/admin1Provinces.ts#ADMIN1_PROVINCES',
@@ -34,17 +40,18 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/views/Rules.vue#STRATEGY_ICONS',
 ] as const
 
-// 违规读点 = 出现 `NAME[` 且「前两行 + 本行」内没有自有属性判定。
-// 涵盖单行三元、换行三元（判定在条件行、`T[k]` 在结果行）与
-// `Object.prototype.hasOwnProperty.call(T, k)` 三种写法。
-const hasOwnGuard = (context: string, name: string): boolean =>
-  context.includes(`hasOwn(${name}`) || context.includes(`hasOwnProperty.call(${name}`)
+// 无显式 Record 注解、但键来自外部状态的展示词表：显式登记纳入同一扫描。
+const UNANNOTATED_VOCABULARY_TABLES = [
+  'src/utils/certJobStatus.ts#CERT_JOB_STATUS_LABELS',
+] as const
 
+// 违规读点 = 出现 `NAME[` 且同一表达式内没有自有属性判定。
+// 仅换行三元的 `? NAME[k]` 可向上一行借守卫；相邻独立语句不得互相借守卫。
 const unguardedReads = (lines: readonly string[], name: string): number[] =>
   lines.flatMap((line, index) => {
-    if (!line.includes(`${name}[`) || line.includes(`const ${name}:`)) return []
-    const context = [lines[index - 2] ?? '', lines[index - 1] ?? '', line].join('\n')
-    return hasOwnGuard(context, name) ? [] : [index]
+    if (!new RegExp(`(?<![\\w$])${name}\\[`).test(line) || line.includes(`const ${name}:`)) return []
+    const context = line.trimStart().startsWith('?') ? `${lines[index - 1] ?? ''}\n${line}` : line
+    return new RegExp(`hasOwn\\(\\s*${name}\\s*,|hasOwnProperty\\.call\\(\\s*${name}\\s*,`).test(context) ? [] : [index]
   })
 
 test('原型键：裸下标返回函数，hasOwn 判定为无值', () => {
@@ -74,6 +81,11 @@ test('判据自检：裸下标被抓、单行/换行三元放行', () => {
   // 判的是**本表**：别的表过了 hasOwn 不算
   assert.deepEqual(unguardedReads(['const a = hasOwn(U, k) ? U[k] : 0', 'const b = T[k]'], 'T'), [1], '他表守卫不得串用')
   assert.deepEqual(unguardedReads(['const T: Record<string, string> = {}'], 'T'), [], '词表声明本身不算读点')
+  assert.deepEqual(
+    unguardedReads(['const a = hasOwn(T, k) ? T[k] : 0', 'const b = T[m]'], 'T'),
+    [1],
+    '前一条语句的守卫不得遮蔽下一条裸读',
+  )
 })
 
 test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目录扫描）', () => {
@@ -81,23 +93,31 @@ test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目�
   assert.ok(files.length >= 150, `扫描面过小（${files.length} 个文件）——目录枚举失效`)
   const tables: Array<{ key: string; file: string; name: string }> = []
   for (const file of files) {
-    for (const match of code(file).matchAll(/^(?:export )?const ([A-Z][A-Z0-9_]*): Record<string, /gm)) {
+    for (const match of code(file).matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*): Record<string, /gm)) {
       tables.push({ key: `${file}#${match[1]}`, file, name: match[1]! })
     }
   }
-  // 扫描面下限：本仓现有 15 张（6 张安全展示词表 + 导航/数据/图标表）
-  assert.ok(tables.length >= 14, `发现的 Record 表少于 14（${tables.length}）——发现规则失效`)
-  // 登记存在性：非词表登记不得悬空（表改名/删除后同步更新登记表）
+  for (const registered of UNANNOTATED_VOCABULARY_TABLES) {
+    if (tables.some((table) => table.key === registered)) continue
+    const [file, name] = registered.split('#')
+    tables.push({ key: registered, file: file!, name: name! })
+  }
+  // 扫描面下限：显式 Record 注解表全集 + 登记的无注解词表。
+  assert.ok(tables.length >= 20, `发现的 Record 表少于 20（${tables.length}）——发现规则失效`)
   for (const registered of NON_VOCABULARY_RECORD_TABLES) {
     assert.ok(tables.some((table) => table.key === registered), `登记的非词表已不存在：${registered}`)
   }
 
+  const strippedByFile = new Map(files.map((file) => [file, code(file)]))
   const offenders: string[] = []
-  for (const { key, file, name } of tables) {
+  for (const { key, name } of tables) {
     if ((NON_VOCABULARY_RECORD_TABLES as readonly string[]).includes(key)) continue
-    const lines = code(file).split('\n')
-    for (const index of unguardedReads(lines, name)) offenders.push(`${file}:${index + 1} ${name}`)
-    const reads = lines.filter((line) => line.includes(`${name}[`) && !line.includes(`const ${name}:`)).length
+    let reads = 0
+    for (const [file, stripped] of strippedByFile) {
+      const lines = stripped.split('\n')
+      reads += lines.filter((line) => line.includes(`${name}[`) && !line.includes(`const ${name}:`)).length
+      for (const index of unguardedReads(lines, name)) offenders.push(`${file}:${index + 1} ${name}`)
+    }
     assert.ok(reads > 0, `${key} 无读取点——死词表要么删掉，要么接上消费面`)
   }
   assert.deepEqual(offenders, [], '展示词表读取未过 hasOwn：原型键命中原生函数，兜底与标签展示同时失真')

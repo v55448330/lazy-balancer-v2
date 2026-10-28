@@ -59,13 +59,17 @@ func TestCollectPostCommitCleanupWritesCertJobRowsInTransaction(t *testing.T) {
 	if _, err := db.DB.Exec(`
 		INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source,tls_cert,tls_key) VALUES
 		('lb_collect_acme','acme','acme.example.test','http',8281,1,1,'acme_dns','',''),
-		('lb_collect_manual','manual','manual.example.test','http',8282,1,1,'manual','CERT','KEY')`); err != nil {
+		('lb_collect_manual','manual','manual.example.test','http',8282,1,1,'manual','CERT','KEY'),
+		('lb_collect_null_source','null source','null-source.example.test','http',8283,1,1,NULL,'',''),
+		('lb_collect_null_tls','null tls','null-tls.example.test','http',8284,1,NULL,'acme_dns','','')`); err != nil {
 		t.Fatalf("seed rules: %v", err)
 	}
 	if _, err := db.DB.Exec(`
 		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES
 		('lb_collect_acme','acme.example.test','issued','CERT','KEY'),
 		('lb_collect_manual','manual.example.test','issued','CERT','KEY'),
+		('lb_collect_null_source','null-source.example.test','issued','CERT','KEY'),
+		('lb_collect_null_tls','null-tls.example.test','issued','CERT','KEY'),
 		('lb_collect_orphan','orphan.example.test','issued','CERT','KEY')`); err != nil {
 		t.Fatalf("seed cert jobs: %v", err)
 	}
@@ -92,16 +96,18 @@ func TestCollectPostCommitCleanupWritesCertJobRowsInTransaction(t *testing.T) {
 		t.Fatalf("commit tx: %v", err)
 	}
 
-	// Then ① 孤儿行与失效（非 ACME）行在事务内删除，ACME 行保留
-	var orphan, manual, acme int
+	// Then ① 孤儿行与失效（非 ACME，含 NULL 存量形态）行在事务内删除，ACME 行保留
+	var orphan, manual, nullSource, nullTLS, acme int
 	if err := db.DB.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_orphan'),
 		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_manual'),
-		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_acme')`).Scan(&orphan, &manual, &acme); err != nil {
+		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_null_source'),
+		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_null_tls'),
+		(SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_collect_acme')`).Scan(&orphan, &manual, &nullSource, &nullTLS, &acme); err != nil {
 		t.Fatalf("count cert jobs: %v", err)
 	}
-	if orphan != 0 || manual != 0 || acme != 1 {
-		t.Fatalf("cert_jobs 行 orphan=%d manual=%d acme=%d, want 0/0/1", orphan, manual, acme)
+	if orphan != 0 || manual != 0 || nullSource != 0 || nullTLS != 0 || acme != 1 {
+		t.Fatalf("cert_jobs 行 orphan=%d manual=%d null_source=%d null_tls=%d acme=%d, want 0/0/0/0/1", orphan, manual, nullSource, nullTLS, acme)
 	}
 	// Then ② 判定集记录消失规则；锁内不删文件（孤儿行对应的文件仍在磁盘，
 	// 删除动作归锁外执行）

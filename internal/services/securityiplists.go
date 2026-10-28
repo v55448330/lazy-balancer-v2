@@ -399,21 +399,21 @@ func readThreatIplistPath(iplistPath string) ([]string, error) {
 			fastVals, fastReadErr := readFast()
 			if fastReadErr == nil {
 				parsed, total := threatTextParseRatio(vals)
-				Logf("warn", "威胁名单 %s 文本可解析率 %d/%d 低于 50%%（疑似损坏），改用 .fast",
-					iplistPath, parsed, total)
+				Logf("warn", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%%（疑似损坏），改用 .fast",
+					iplistPath, parsed, total, threatMinParseRatio*100)
 				return fastVals, nil
 			}
 			parsed, total := threatTextParseRatio(vals)
-			Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 50%% 且 .fast 不可读（引用策略将跳过渲染）: %v",
-				iplistPath, parsed, total, fastReadErr)
-			return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 50%% 且 .fast 不可读: %w",
-				iplistPath, parsed, total, fastReadErr)
+			Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且 .fast 不可读（引用策略将跳过渲染）: %v",
+				iplistPath, parsed, total, threatMinParseRatio*100, fastReadErr)
+			return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且 .fast 不可读: %w",
+				iplistPath, parsed, total, threatMinParseRatio*100, fastReadErr)
 		}
 		parsed, total := threatTextParseRatio(vals)
-		Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 50%% 且无 .fast 可回退（引用策略将跳过渲染，等待下次威胁库更新重建）",
-			iplistPath, parsed, total)
-		return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 50%% 且无 .fast 可回退（等待下次威胁库更新重建）",
-			iplistPath, parsed, total)
+		Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且无 .fast 可回退（引用策略将跳过渲染，等待下次威胁库更新重建）",
+			iplistPath, parsed, total, threatMinParseRatio*100)
+		return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且无 .fast 可回退（等待下次威胁库更新重建）",
+			iplistPath, parsed, total, threatMinParseRatio*100)
 	}
 	if fastErr == nil {
 		vals, err := readFast()
@@ -433,10 +433,10 @@ func readThreatIplistPath(iplistPath string) ([]string, error) {
 				return usableThreatTextEntries(iplistPath, textVals), nil
 			}
 			parsed, total := threatTextParseRatio(textVals)
-			Logf("error", "威胁名单 %s 的 .fast 读取失败且文本可解析率 %d/%d 低于 50%%（引用策略将跳过渲染）: %v",
-				iplistPath, parsed, total, err)
-			return nil, fmt.Errorf("威胁名单 %s 的 .fast 不可读且文本可解析率 %d/%d 低于 50%%: %w",
-				iplistPath, parsed, total, err)
+			Logf("error", "威胁名单 %s 的 .fast 读取失败且文本可解析率 %d/%d 低于 %.0f%%（引用策略将跳过渲染）: %v",
+				iplistPath, parsed, total, threatMinParseRatio*100, err)
+			return nil, fmt.Errorf("威胁名单 %s 的 .fast 不可读且文本可解析率 %d/%d 低于 %.0f%%: %w",
+				iplistPath, parsed, total, threatMinParseRatio*100, err)
 		}
 		return nil, err
 	}

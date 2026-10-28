@@ -1,8 +1,9 @@
 package services
 
-//（可用性优先不 fail-visible），但「面板显示启用、实际渲染分叉」的事实必须
-// 可见——apply 成功后落审计行 + caddy_apply_error 横幅，LastRenderDegradation
-// 抑制 handlers 侧成功清除，直至下次干净渲染恢复常规语义。
+// 受信代理配置读取或解析失败采用降级渲染（可用性优先，不 fail-visible），但
+//「面板显示启用、实际渲染分叉」必须可见：apply 成功后落审计行与
+// caddy_apply_error 横幅，LastRenderDegradation 抑制 handlers 侧成功清除，
+// 直至下次干净渲染恢复常规语义。
 
 import (
 	"encoding/json"
@@ -154,7 +155,7 @@ func TestTrustedProxyDegradation_shortCircuitStillRecordsBanner(t *testing.T) {
 	if _, err := database.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_ranges='{bad'`); err != nil {
 		t.Fatalf("seed degraded trusted proxy: %v", err)
 	}
-	loaded, err := service.ApplyConfigReporting(GenerateCaddyConfig())
+	_, loaded, err := service.ApplyConfigReportingForCommit(GenerateCaddyConfig())
 	if err != nil {
 		t.Fatalf("short-circuit apply: %v", err)
 	}

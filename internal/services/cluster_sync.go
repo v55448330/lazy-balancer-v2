@@ -1553,36 +1553,35 @@ func syncPostCommitMarkerPrefix(message string) string {
 	return ""
 }
 
-// syncMarkerState 是 last_sync_error 标记的三态读取结果：present=携带指定
-// 前缀；known=false 表示读取失败（存在性未知，不等于「不存在」）。
-type syncMarkerState struct {
-	present bool
-	known   bool
-}
-
-// readSyncMarkerState 读取 last_sync_error 并判定其后置副作用标记前缀。
+// readSyncMarkerMessage 单次读取 last_sync_error 并返回解码后的消息；
+// known=false 表示读取失败（标记存在性未知，不等于「不存在」）。
 // 读侧用 WithoutCancel——Stop 的 cancel 在 apply 提交与 defer 检查之间到达时，
 // 可取消 ctx 会读失败；与写侧（persistSyncError WithoutCancel）对齐后，
 // 「刚写入即被误判不存在」的窗口也一并关闭。
 // 读失败必须与「标记不存在」区分：把未知当不存在会让调用方执行清空/覆盖写，
 // 静默销毁 304 补偿重拉的唯一触发器——此后主节点无新变更时恒 304，
 // 「库=新版本、Caddy=旧运行配置」的分叉存活到下次真实变更或重启。
-func (s *SyncService) readSyncMarkerState(ctx context.Context, prefix string) syncMarkerState {
+//
+// 单次读取是刻意的：三个后置副作用标记同住 last_sync_error 同一行同一列，
+// 此前每个判定点各发一条 SELECT（apply 侧 3 条 + Pull defer 3 条 + run 周期末
+// 3 条 = 每同步周期 6–9 次独立点查），且「标记族」的判定语义散在多处，新增
+// 第四个标记要逐处改。
+func (s *SyncService) readSyncMarkerMessage(ctx context.Context) (string, bool) {
 	var stored string
 	if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
-		Logf("warn", "读取 last_sync_error 标记失败（%s）：存在性未知，按存在处理: %v", prefix, err)
-		return syncMarkerState{known: false}
+		Logf("warn", "读取 last_sync_error 标记失败：存在性未知，按存在处理: %v", err)
+		return "", false
 	}
 	msg, _ := decodeSyncError(stored)
-	return syncMarkerState{present: strings.HasPrefix(msg, prefix), known: true}
+	return msg, true
 }
 
 // syncMarkerPresent 报告 last_sync_error 是否携带指定后置副作用标记。
 // 读失败时按「存在」返回（fail-closed）：调用方据此跳过清空/覆盖，宁可让
 // 标记消息暂不刷新，也不冒静默销毁补偿触发器的风险。
 func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool {
-	st := s.readSyncMarkerState(ctx, prefix)
-	return st.present || !st.known
+	msg, known := s.readSyncMarkerMessage(ctx)
+	return !known || strings.HasPrefix(msg, prefix)
 }
 
 // syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
@@ -1596,14 +1595,11 @@ func (s *SyncService) syncBrandingFailureMarkerPresent(ctx context.Context) bool
 	return s.syncMarkerPresent(ctx, syncBrandingFailureMarkerPrefix)
 }
 
-// syncPostCommitFailureMarkerPresent 报告是否存在任一后置副作用失败标记。
+// syncPostCommitFailureMarkerPresent 报告是否存在任一后置副作用失败标记
+// （单次读取后本地判族，见 readSyncMarkerMessage）。
 func (s *SyncService) syncPostCommitFailureMarkerPresent(ctx context.Context) bool {
-	for _, prefix := range syncPostCommitMarkerPrefixes {
-		if s.syncMarkerPresent(ctx, prefix) {
-			return true
-		}
-	}
-	return false
+	msg, known := s.readSyncMarkerMessage(ctx)
+	return !known || syncPostCommitMarkerPrefix(msg) != ""
 }
 
 // persistSyncError 是从端同步状态的唯一写入口（写入错误与成功清空同口）。
@@ -1782,6 +1778,9 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	// 指纹校验的前提是 canonical_payload 非空：verifySnapshotSignature 已在
+	// 上方对「无 canonical_payload」返回 SignatureInvalid（v1/v2 扁平路径已移除），
+	// 故 verifySnapshotFingerprint 内部不再需要重复的空载荷分支（历史残留删除）。
 	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容缺少指纹"))
 	}
@@ -1816,6 +1815,13 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 		return models.ClusterSnapshot{}, &SnapshotSchemaTooNewError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
 	}
 	if snapshot.SchemaVersion < CurrentSnapshotSchema {
+		// 生产不可达（当前主节点 buildFullSnapshot 恒写 SchemaVersion=3）：真实
+		// 旧主节点（v2 二进制）的快照没有 canonical_payload，会在上方
+		// 「schema<3 且无 canonical_payload」门以 SignatureInvalid（非终止，
+		// 文案指明升级主节点）返回——那是运维实际看到的路径。本分支只有在
+		// 「schema<3 且携带合法 canonical+HMAC」时可达，当前仅测试夹具
+		// （signedSnapshotV2Fixture）能构造；语义是「签名合法但 schema 回退」
+		// 的纵深防护，保留以防未来主节点降级写旧 schema。
 		return models.ClusterSnapshot{}, &SnapshotSchemaTooOldError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
 	}
 	// 验签通过即代表快照来自真实主节点，HMAC 签名是唯一真实性闸门：从节点
@@ -1824,9 +1830,7 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if appliedVersion > 0 && snapshot.Version < appliedVersion {
 		Logf("error", "⚠️ 警告：检测到主节点配置版本回退（恢复场景）：收到快照版本 %d，本节点已应用版本 %d，从节点继续跟随主节点", snapshot.Version, appliedVersion)
 	}
-	if err := verifySnapshotConsistency(snapshot); err != nil {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
-	}
+	verifySnapshotConsistency(snapshot)
 	if err := validateSnapshotACMEState(snapshot); err != nil {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
 	}
@@ -1835,9 +1839,9 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 
 func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	// 历史 schema v3 已强制要求 CanonicalPayload，移除 v1/v2 扁平回退路径。
-	if len(snapshot.CanonicalPayload) == 0 {
-		return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照缺少 canonical_payload（schema v3 强制要求）"))
-	}
+	// 空载荷形态由调用链上一跳 verifySnapshotSignature 拦下（SignatureInvalid），
+	// 故此处的 CanonicalPayload 恒非空——不再保留恒不可达的空分支（它会让读者
+	// 误以为存在「校验失败」的第三条路径）。
 	hash := sha256.Sum256(snapshot.CanonicalPayload)
 	if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
 		return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改"))
@@ -1868,13 +1872,16 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 // verifySnapshotConsistency 记录快照中的数据漂移。启用但零上游的规则通常是
 // 历史数据或导入残留，需要人工清理；生成端已对该类规则跳过并告警，此处不再
 // 拒绝快照，避免主节点可运行而从节点永久降级。
-func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
+//
+// 无返回值是刻意的：本函数的语义是「留痕」，不存在失败通道——此前签名返回
+// error 且恒为 nil，调用方还包了一层 ValidationFailed 映射，读代码的人会误以为
+// 这里可能拒绝快照（实际只有 warning）。
+func verifySnapshotConsistency(snapshot models.ClusterSnapshot) {
 	for _, rule := range snapshot.Rules {
 		if rule.Enabled && len(rule.Upstreams) == 0 {
 			Logf("error", "⚠️ 警告：快照中启用规则 %s 没有上游（数据漂移，需人工清理），生成配置时将跳过该规则", rule.CaddyID)
 		}
 	}
-	return nil
 }
 
 func (s *SyncService) run(ctx context.Context) {
@@ -1932,11 +1939,14 @@ func (s *SyncService) run(ctx context.Context) {
 			// 有意义的状态跃迁（漂移自愈、失败）仍在各自路径留痕。
 			pullRes, pullErr := s.Pull(ctx)
 			var schemaTooNew *SnapshotSchemaTooNewError
-			// SnapshotSchemaTooOldError（v3 从节点拉到签名合法的旧 schema
-			// 主节点快照）保持非终止——与 verifiedSnapshotIntegrity :1121-1122 同类
-			// （v2 无 canonical 形态）一致走降级重试，主节点升级后自动恢复；终止化
-			// 会让先升级从节点的滚动升级永久停摆（只能人工 Resume/改模式/重启）。
-			// 终止类仅剩 schemaTooNew（本节点无法安全解析）与令牌撤销。
+			// SnapshotSchemaTooOldError 同样保持非终止（仅终止 schemaTooNew 与
+			// 令牌撤销）。注意实际可达路径：真实旧主节点（v2 二进制）的快照没有
+			// canonical_payload，会在 verifiedSnapshotIntegrity 的
+			// 「schema<3 且无 canonical_payload」门以可重试的 SignatureInvalid
+			// 返回；SnapshotSchemaTooOldError 需要「schema<3 且携带合法
+			// canonical+HMAC」（当前仅测试夹具可构造），属 schema 回退的纵深防护。
+			// 两条路径都非终止，故先升级从节点的滚动升级不会停摆（终止化只能靠
+			// 人工 Resume/改模式/重启恢复）。
 			terminal := errors.As(pullErr, &schemaTooNew)
 			if terminal || errors.Is(pullErr, errSyncTokenRevoked) {
 				s.state.Store(uint32(syncStateHalted))

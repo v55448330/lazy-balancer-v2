@@ -249,7 +249,7 @@ test('中国省界回归：北京与天津不被河北孔洞吸收，河北本�
 test('国家网格：候选收敛、远海空集、键夹紧', () => {
   // 两个矩形国家：东经 100-110 北纬 20-30；西经 10-0 北纬 40-50
   const box = (minLon: number, maxLon: number, minLat: number, maxLat: number): number[][][] => [
-    [[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]],
+    [[minLon, minLat, maxLon, minLat, maxLon, maxLat, minLon, maxLat, minLon, minLat]],
   ]
   const countries = [
     { name: 'A', polys: box(100, 110, 20, 30) },

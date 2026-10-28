@@ -81,3 +81,18 @@ func TestValidateImportedSecurityCustomRules_conditionLogicCompatibility(t *test
 		}
 	}
 }
+
+func TestValidateImportedSecurityCustomRules_descriptionLimitMatchesSavePath(t *testing.T) {
+	row := func(description string) map[string]any {
+		return map[string]any{
+			"name": "limited", "description": description, "action": "block", "score": float64(5),
+			"conditions": `[{"target":"uri","operator":"contains","pattern":"/x"}]`,
+		}
+	}
+	if err := validateImportedSecurityCustomRules([]map[string]any{row(strings.Repeat("界", securityDescriptionMaxRunes+1))}); err == nil {
+		t.Fatal("导入必须复用保存侧 description 长度门，超长行不得落库后才让后续编辑恒 400")
+	}
+	if err := validateImportedSecurityCustomRules([]map[string]any{row(strings.Repeat("界", securityDescriptionMaxRunes))}); err != nil {
+		t.Fatalf("长度边界的合法 description 不得被拒: %v", err)
+	}
+}

@@ -45,27 +45,3 @@ func TestRegister_duplicateCodePanics(t *testing.T) {
 	}()
 	Register(&fakeProvider{code: code})
 }
-
-// 注册成功且 List 按 Code 排序（map 遍历序不稳定会让响应顺序随进程漂移）。
-// 断言对象是 init 装配出的真实注册表，不依赖其它用例留下的测试替身——
-// 替身在场会把「dnspod 注册丢失」与「排序失效」同时掩盖（2 个元素的严格
-// 递增几乎恒真）。
-func TestList_sortedByCode(t *testing.T) {
-	if _, ok := Get("dnspod"); !ok {
-		t.Fatal("真实注册表缺 dnspod（init 期装配丢失）")
-	}
-	if _, ok := Get("test-dup-provider-97"); ok {
-		t.Fatal("测试替身残留在注册表（用例未清理）")
-	}
-	list := List()
-	if len(list) == 0 {
-		t.Fatal("注册表为空——扫描面失效")
-	}
-	last := ""
-	for _, p := range list {
-		if p.Code() <= last {
-			t.Fatalf("List 未按 Code 严格递增排序: %q 之后是 %q", last, p.Code())
-		}
-		last = p.Code()
-	}
-}

@@ -37,6 +37,7 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
+		waitImportCleanup()
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 		// 直换包级句柄必须同步复位 currentDB（契约，

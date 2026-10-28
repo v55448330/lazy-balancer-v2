@@ -364,6 +364,47 @@ func TestUpdateRule_replaces_path_rules_wholesale_within_rule_save(t *testing.T)
 	}
 }
 
+// 导入/带外写入的原始 path_rules 行（match_type=”）在「部分更新」路径上必须
+// 先归一再进保存门：updateRuleFeatures 此前把库原始行直接喂给
+// validateRuleFeatures，空 match_type 恒 400「匹配类型只能是 prefix 或 exact」
+// ——即使请求体根本不带 path_rules（MCP update_rule 只交 name、PUT 只改端口），
+// 该规则的任何字段都改不动。归一后同一请求必须 200，且落库形态收敛为 prefix
+// （与创建侧 normalizePathRules 单源）。
+func TestUpdateRule_normalizesStoredPathRulesBeforeSaveGate(t *testing.T) {
+	// Given：存量行带 match_type=''（旧版本/导入遗留形态）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,health_check_path,enabled,custom_routes_enabled) VALUES ('lb_stalepaths','paths','','http','stale-paths.test',8080,'weighted_round_robin','',1,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_stalepaths','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_stalepaths',0,'','/api/')`); err != nil {
+		t.Fatalf("seed path rules: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_stalepaths", strings.NewReader(`{"name":"renamed-stale"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When：部分更新，不携带 path_rules
+	router.ServeHTTP(response, request)
+
+	// Then：不得因存量空 match_type 恒 400
+	if response.Code != http.StatusOK {
+		t.Fatalf("partial update status=%d body=%s（存量 match_type='' 不得让无关字段更新恒 400）", response.Code, response.Body.String())
+	}
+	var matchType string
+	if err := db.DB.QueryRow(`SELECT match_type FROM path_rules WHERE rule_id='lb_stalepaths'`).Scan(&matchType); err != nil {
+		t.Fatalf("read stored match_type: %v", err)
+	}
+	if matchType != "prefix" {
+		t.Fatalf("落库 match_type=%q, want prefix（归一结果必须落库，否则下次部分更新再次 400）", matchType)
+	}
+}
+
 func newRuleFeatureTestHandlers(t *testing.T) *Handlers {
 	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
 	return handler

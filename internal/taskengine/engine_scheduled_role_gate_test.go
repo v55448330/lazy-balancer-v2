@@ -54,12 +54,9 @@ func TestEngine_ScheduledRoleGateSkipsSlotEvaluation(t *testing.T) {
 	// promote：下一 tick 立即恢复求值并投递到期槽（无需等残余节拍）。
 	e.SetRole(true)
 	e.tick()
-	if got := slotEvals.Load(); got != 1 {
-		t.Fatalf("promote 后 NextSlotFn 求值 %d 次, want 1", got)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && e.inFlight.Load() != 0 {
-		time.Sleep(5 * time.Millisecond)
+	waitForEngine(t, "promote 后执行并排空", 2*time.Second, func() bool { return runs.Load() == 1 && e.inFlight.Load() == 0 })
+	if got := slotEvals.Load(); got < 1 {
+		t.Fatalf("promote 后 NextSlotFn 求值 %d 次, want >=1", got)
 	}
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("promote 后到期槽执行 %d 次, want 1", got)

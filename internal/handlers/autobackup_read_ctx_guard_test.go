@@ -73,6 +73,27 @@ func TestAuditLogAndAutoBackupReadsConsumeRequestContext(t *testing.T) {
 	}
 }
 
+func TestNextAutoBackupSlotReadConsumesRequestContext(t *testing.T) {
+	handlerSource, err := os.ReadFile("autobackup.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(handlerSource), "services.NextAutoBackupSlot(c.Request.Context(), now)") {
+		t.Fatal("设置页 next_run_at 必须把请求 ctx 传入跨包排程读取")
+	}
+	serviceSource, err := os.ReadFile("../services/autobackup.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(serviceSource)
+	if !strings.Contains(text, "func NextAutoBackupSlot(ctx context.Context, now time.Time)") {
+		t.Fatal("NextAutoBackupSlot 必须提供接收请求 ctx 的入口")
+	}
+	if !strings.Contains(text, "db.DB.QueryRowContext(ctx,") {
+		t.Fatal("自动备份设置快照必须使用 QueryRowContext，取消后不得继续无 ctx 单行读")
+	}
+}
+
 // handlerFunctionBody 截取目标函数体（到下一个顶层 func 声明为止）。
 func handlerFunctionBody(source, signature string) (string, bool) {
 	start := strings.Index(source, signature)

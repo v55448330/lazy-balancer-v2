@@ -8,6 +8,7 @@ package services
 // 并入摘要（fail-visible）。
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -147,7 +148,7 @@ func TestRenewExpiringCertificates_queryFailureWritesFailureSummary(t *testing.T
 	}
 
 	s := &CertificateService{}
-	s.renewExpiringCertificates()
+	s.renewExpiringCertificates(context.Background())
 
 	log := readTaskLog(t, "cert-renewal-scan")
 	if strings.Contains(log, "无临期证书") {
@@ -172,7 +173,7 @@ func TestRenewExpiringCertificates_rowScanFailuresCountedInSummary(t *testing.T)
 	}
 
 	s := &CertificateService{}
-	s.renewExpiringCertificates()
+	s.renewExpiringCertificates(context.Background())
 
 	log := readTaskLog(t, "cert-renewal-scan")
 	if !strings.Contains(log, "1 行扫描失败已跳过") {

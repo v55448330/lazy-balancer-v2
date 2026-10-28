@@ -185,6 +185,7 @@ func craftLbbakRaw(t *testing.T, entries map[string][]byte) []byte {
 
 // parseLbbak 条目数与总解压字节上限。
 func TestParseLbbak_entryAndTotalCaps(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 条目数上限(>64 拒绝)
 	entries := map[string][]byte{}
 	for i := 0; i < 65; i++ {

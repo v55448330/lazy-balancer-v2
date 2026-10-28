@@ -86,7 +86,7 @@ func TestVersionTasks_slaveRoleRejectsManualTrigger(t *testing.T) {
 		if _, err := db.DB.Exec(`UPDATE `+tc.table+` SET auto_update=1,next_update=? WHERE id=1`, past); err != nil {
 			t.Fatal(err)
 		}
-		// 从节点态必须同时体现在 DB（单源角色）： 的角色对账会按 DB
+		// 从节点态必须同时体现在 DB（单源角色）：角色对账会按 DB
 		// 修正引擎角色，仅 SetRole(false) 而 DB 仍为主节点会在下一 tick 被翻回。
 		if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
 			t.Fatal(err)
@@ -127,7 +127,7 @@ func TestVersionTasks_slaveRoleSuppressesTick(t *testing.T) {
 			if _, err := db.DB.Exec(`UPDATE `+table+` SET auto_update=1,next_update=? WHERE id=1`, past); err != nil {
 				t.Fatal(err)
 			}
-			// 从节点态必须同时体现在 DB（单源角色）： 的 60s 角色对账
+			// 从节点态必须同时体现在 DB（单源角色）：60s 角色对账
 			// 会按 DB 修正引擎角色——仅 SetRole(false) 而 DB 仍为主节点时，
 			// 对账会把引擎翻回主角色，本用例的从角色前提随之失效。
 			if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
@@ -135,10 +135,9 @@ func TestVersionTasks_slaveRoleSuppressesTick(t *testing.T) {
 			}
 			te.SetRole(false)
 			te.StartLoop(kind)
-			// 窗口必须覆盖 >2 个 tick（生产 tick=1s）——曾 20ms 窗口
-			// 在 1s tick 下必然零调用，断言恒真（假绿）。同时断言槽未被推进。
+			// 负断言必须覆盖两个以上 1s tick，且连续稳定零调用。
 			before := versionTableNextUpdate(table)
-			time.Sleep(2200 * time.Millisecond)
+			waitForStableCond(t, 3*time.Second, 250, func() bool { return calls.Load() == 0 })
 			if got := calls.Load(); got != 0 {
 				t.Fatalf("从节点到期槽仍触发 %d 次", got)
 			}

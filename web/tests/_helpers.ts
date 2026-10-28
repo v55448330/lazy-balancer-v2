@@ -32,6 +32,16 @@ const readCached = (url: URL): string => {
   return text
 }
 
+const strippedSourceCache = new Map<string, string>()
+const readStrippedCached = (url: URL): string => {
+  const key = url.href
+  const hit = strippedSourceCache.get(key)
+  if (hit !== undefined) return hit
+  const text = stripComments(readCached(url))
+  strippedSourceCache.set(key, text)
+  return text
+}
+
 /** 读取相对 `web/` 的源文件（如 `'src/views/Rules.vue'`）。 */
 export const source = (relative: string): string => readCached(new URL(relative, webRoot))
 
@@ -46,10 +56,10 @@ export const repoSource = (relative: string): string => readCached(new URL(`../$
  * 例外只允许「文档钉」——断言的对象本就是注释文字时，用例名必须显式标注
  * 「文档钉」，避免被误认为行为覆盖。
  */
-export const code = (relative: string): string => stripComments(source(relative))
+export const code = (relative: string): string => readStrippedCached(new URL(relative, webRoot))
 
 /** 同 code，但读取相对仓库根的路径（跨栈 Go 源码存在性断言用）。 */
-export const repoCode = (relative: string): string => stripComments(repoSource(relative))
+export const repoCode = (relative: string): string => readStrippedCached(new URL(`../${relative}`, webRoot))
 
 /**
  * code() 视图的限段读取：先在 raw 文本上按 marker 切片（marker 常是注释分隔
@@ -288,6 +298,12 @@ export const stripComments = (text: string): string => {
 export const drainMicrotasks = async (turns = 64): Promise<void> => {
   for (let i = 0; i < turns; i++) await Promise.resolve()
 }
+
+/** 共享可控 Promise；替代各 spec 自写的 deferred 变体。 */
+export const deferred = <T,>(): PromiseWithResolvers<T> => Promise.withResolvers<T>()
+
+/** 固定微任务收尾；不得用 setTimeout(0) 猜异步链长度。 */
+export const flushMicrotasks = async (): Promise<void> => { await drainMicrotasks() }
 
 /**
  * 有界条件等待（纯微任务）：直到 predicate 成立，或耗尽 turns 跳后以带原因的

@@ -11,18 +11,8 @@ import (
 
 func initMetricsOverviewTestDB(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	// 复用单源隔离夹具：四句柄（含 db.GetDB 原子句柄）成对保存/还原。
+	setupIsolatedDBWithMetrics(t)
 }
 
 func seedOverviewNode(t *testing.T, ip string, lastSeen time.Time) {
@@ -102,5 +92,20 @@ func TestCollect_refreshesDBDerivedMetricsWhenEndpointUnreachable(t *testing.T) 
 	}
 	if overview.TotalRequests != 0 {
 		t.Fatalf("total requests=%d, want 0（流量样本应保持不可采信）", overview.TotalRequests)
+	}
+
+	// 非零基线形态：从 live 端点采一轮建立基线后切死端点——起点即 deadURL 时
+	// `TotalRequests==0` 对错误分支恒真（零鉴别力），基线非零才能区分
+	// 「保留上次样本」与「静默归零」。
+	service.metricsURL = liveMetricsServer(t).URL
+	service.collect()
+	baseline := service.GetOverview().TotalRequests
+	if baseline == 0 {
+		t.Fatal("live 端点采集必须建立非零 TotalRequests 基线")
+	}
+	service.metricsURL = deadURL
+	service.collect()
+	if got := service.GetOverview().TotalRequests; got != baseline {
+		t.Fatalf("total requests=%d, want %d（端点不可达时必须保留上次采样，不得归零）", got, baseline)
 	}
 }

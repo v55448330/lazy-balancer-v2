@@ -28,9 +28,10 @@ test('删除写通道从确认前占位，连点只执行一次并在成功后�
 test('写通道在取消与请求失败后都释放', async () => {
   for (const error of [new Error('cancel'), new Error('request')]) {
     let locked = false
-    await runExclusive(() => locked, (value) => { locked = value }, async () => { throw error }).catch((caught) => {
-      assert.equal(caught, error)
-    })
+    await assert.rejects(
+      runExclusive(() => locked, (value) => { locked = value }, async () => { throw error }),
+      error,
+    )
     assert.equal(locked, false)
   }
 })
@@ -137,7 +138,8 @@ test('用户状态 catch 先本地回滚再刷新，成功路径不回滚', () =
   const refreshAt = toggle.indexOf('fetchUsers()', catchAt)
   assert.ok(catchAt >= 0 && rollbackAt > catchAt && refreshAt > rollbackAt)
   const successAt = toggle.indexOf('mfaAwareSuccess')
-  assert.ok(successAt > 0 && toggle.indexOf('rollbackUserStatus', successAt) > catchAt)
+  assert.ok(successAt > 0)
+  assert.doesNotMatch(toggle.slice(successAt, catchAt), /rollbackUserStatus/, '成功路径不得回滚乐观状态')
 })
 
 test('自动备份非 quiet 读取使用可取消最新会话，关闭与卸载均作废', () => {

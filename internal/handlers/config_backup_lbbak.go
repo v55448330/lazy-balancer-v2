@@ -450,7 +450,6 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 	if payload.CRSTarGz == nil && payload.Xdb == nil && len(payload.ThreatIplists) == 0 {
 		return result
 	}
-	threatFailed := map[string]struct{}{}
 	threatLanded := false
 	bundle := &services.WafFileBundle{IP2RegionTag: ip2regionTag}
 	if payload.CRSTarGz != nil {
@@ -471,12 +470,8 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 	}
 	// RDB: 威胁库 .iplist 落盘 + 编译 .fast（先于 CRS/Xdb 处理，失败仅警告不阻断）
 	for source, data := range payload.ThreatIplists {
-		if _, failed := threatFailed[source]; failed {
-			continue
-		}
 		iplistPath := filepath.Join(services.WafDir(), "threat-"+source+".iplist")
 		fail := func(stage string, err error) {
-			threatFailed[source] = struct{}{}
 			result.FailedThreatSources = append(result.FailedThreatSources, source)
 			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage, err)
 			result.warn(c, action, "威胁库 "+source+" "+stage+": "+err.Error()+"——该源保留本地文件与记录")

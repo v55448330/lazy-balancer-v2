@@ -254,7 +254,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import { applyCredentialFieldChange, credentialFieldVisible, credentialOptionLabel, defaultCredentialsFor, type CredentialFieldMeta } from '@/utils/dnsProviderFields'
 import { dnsConfigNeedsChallenge, type DnsConfigBaseline } from '@/utils/dnsConfigChallenge'
 import { selectableReferencedOptions, referencedOptionLabel } from '@/utils/caProviderOptions'
-import { CERT_RENEWAL_DAYS_MAX } from '@/utils/configValues'
+import { acmeGlobalWritePayload, CERT_RENEWAL_DAYS_MAX } from '@/utils/configValues'
 import type { APIResponse } from '@/types'
 
 // 字段可见性/选项文案由后端元数据驱动（visible_when/option_labels），
@@ -466,7 +466,7 @@ const retryLoad = (): void => {
 }
 
 const openCAProviderDialog = (p: CAProvider) => {
-  if (savingCA.value) return
+  if (isReadOnly.value || savingCA.value) return
   editingCAProvider.value = p
   Object.assign(caForm, {
     name: p.name,
@@ -553,7 +553,7 @@ const testCAProvider = async (p: CAProvider) => {
 }
 
 const openConfigDialog = (config?: CertConfig) => {
-  if (savingConfig.value) return
+  if (isReadOnly.value || savingConfig.value) return
   // 依赖未就绪不得进表单：/dns-providers 失败或为空时凭证字段无法派生，
   // 用户填完点保存只会拿到 400（等同让用户白填一屏）。
   if (providersError.value || providers.value.length === 0) {
@@ -819,19 +819,14 @@ const handleSave = async () => {
   }
   savingGlobal.value = true
   try {
-    const payload = {
-      // M31：提交侧 trim——避免粘贴带入的首尾空白被原样写入配置并回显扩散
-      acme_email: global.value.acme_email.trim(),
-      cert_expiry_days: global.value.cert_expiry_days,
-      cert_renewal_days: global.value.cert_renewal_days,
-      cert_renewal_attempts: global.value.cert_renewal_attempts,
-      default_ca_provider_id: global.value.default_ca_provider_id,
-      // 全局 dns_provider 已无消费者（签发链按证书配置行读取 provider；新建 DNS
-      // 配置取 /dns-providers 首项），UI 入口已移除。键仍按库值回传：保存载荷
-      // 若省略该键，/config 的写入语义会把它当成「未提供」而静默改写存量列。
-      dns_provider: global.value.dns_provider || 'dnspod',
-      source: 'acme',
-    }
+    const payload = acmeGlobalWritePayload({
+      email: global.value.acme_email,
+      expiryDays: global.value.cert_expiry_days,
+      renewalDays: global.value.cert_renewal_days,
+      renewalAttempts: global.value.cert_renewal_attempts,
+      defaultCAProviderId: global.value.default_ca_provider_id,
+      dns_provider: global.value.dns_provider,
+    })
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     if (preview.data?.changed) {
       const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'

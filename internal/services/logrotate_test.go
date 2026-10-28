@@ -103,11 +103,8 @@ func TestNewRotatingFileWriter_createsParentDirs(t *testing.T) {
 // Then 删除/轮转明细如实上报（文件名+大小对比+上限值——2026-10-01 用户
 // 裁定：清理了哪个文件必须在任务日志可见）；大小上限遵循 task_log_size_mb。
 func TestTaskLogsHousekeeping_reportsDetails(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
+	// 复用单源隔离夹具（四句柄成对还原）。
+	setupIsolatedDB(t)
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
 	tasksDir := filepath.Join(dir, "tasks")
@@ -385,10 +382,6 @@ func TestRuntimeLogCleanupOnce_nilDBSkipsRetentionDeletion(t *testing.T) {
 	if err := os.Chtimes(staleTaskLog, oldTime, oldTime); err != nil {
 		t.Fatal(err)
 	}
-	oldAuditLogPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log") // 不存在：兜底 stat 不算失败
-	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
-
 	res := RuntimeLogCleanupOnce(context.Background(), logFile)
 	if res.RetentionError == "" {
 		t.Fatal("nil 库时保留月数口径未知，必须记入 RetentionError")
@@ -424,6 +417,32 @@ func TestLogCleanupSummaryLine_disabledShape(t *testing.T) {
 	got := logCleanupSummaryLine("")
 	if !strings.HasPrefix(got, "日志清理未启用") {
 		t.Fatalf("logFile 为空时摘要=%q, want 「日志清理未启用…」", got)
+	}
+}
+
+// logFile==""（运行日志 writer 未打开）时只有「需要运行日志目录」的两段被
+// 跳过；规则日志孤儿清理只依赖规则日志目录与存活规则清单，必须照常执行
+// （正控——负断言「未启用」不能区分「照常清理」与「整轮空转」）。audit.log
+// 的摄取/轮转由 auditlog_rotation.go 唯一负责，本清理轮从不触碰它。
+func TestLogCleanupRound_emptyLogFileStillPurgesOrphanRuleLogs(t *testing.T) {
+	setupIsolatedDB(t)
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+	orphan := filepath.Join(dir, "lb_gone.log")
+	if err := os.WriteFile(orphan, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, line := logCleanupRound(context.Background(), "")
+
+	if len(res.RuleLogs.Purged) != 1 || res.RuleLogs.Purged[0] != "lb_gone" {
+		t.Fatalf("Purged=%v, want [lb_gone]（logFile 为空不得连带跳过孤儿清理）", res.RuleLogs.Purged)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("孤儿规则日志未删除（err=%v）", err)
+	}
+	if !strings.Contains(line, "日志清理未启用") || !strings.Contains(line, "规则访问日志") {
+		t.Fatalf("摘要=%q，必须同时披露「未启用」与孤儿清理明细", line)
 	}
 }
 
@@ -481,9 +500,10 @@ func TestStopLogRotateWithin_fastPathDoesNotConsumeBudget(t *testing.T) {
 	}
 }
 
-// 清理失败必须聚合进结果并让日志行不称「完成」：waf-audit 兜底轮转错误
-// （daemon 停机 + 复制失败）此前被完全丢弃——任务日志仍称「日志清理完成」、
-// task_runs 恒绿，磁盘被审计文件填满后才由写侧被动暴露。
+// 清理失败必须聚合进结果并让日志行不称「完成」：保留期口径读取失败（含
+// 主库损坏/关停形态）时不得按默认 3 月做不可逆删除，失败原因必须进
+// RetentionError 让 task_runs 显示失败而非「完成」。audit.log 的轮转不属
+// 本清理轮（由 auditlog_rotation.go 负责），故此处不注入任何 audit 测试缝。
 func TestRuntimeLogCleanupOnce_skipsRetentionDeletionWhenReadFails(t *testing.T) {
 	// Given：陈旧副本 + 陈旧任务日志 + 主库查询恒失败
 	dir := t.TempDir()
@@ -501,9 +521,6 @@ func TestRuntimeLogCleanupOnce_skipsRetentionDeletionWhenReadFails(t *testing.T)
 	if err := os.Chtimes(staleTaskLog, oldTime, oldTime); err != nil {
 		t.Fatal(err)
 	}
-	oldAuditLogPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log") // 不存在：兜底 stat 不算失败
-	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
 	swapBrokenDB(t)
 
 	// When
@@ -613,8 +630,10 @@ func TestTaskLogsHousekeeping_missingDirIsNotScanFailure(t *testing.T) {
 	}
 }
 
-// 运行日志 writer 打开失败时 waf-audit 兜底仍须执行（不同目录、独立失败面）：
-// 旧实现因 logFile=="" 直接跳过兜底，daemon 停机场景下 audit.log 无界增长。
+// 应用日志副本的元数据采集失败必须计数、聚合进错误面并在摘要披露，且本轮
+// 不得删除（无法判定过期即不删）。用例名与断言一致：本用例验证的是
+// AppInfoFailed 通道，不覆盖「writer 打开失败」形态（见 logCleanupRound 的
+// logFile=="" 分支，该分支下只有规则日志孤儿清理照常执行）。
 func TestRuntimeLogCleanupOnce_countsAppMetadataFailures(t *testing.T) {
 	initServicesDB(t)
 	dir := t.TempDir()
@@ -685,15 +704,15 @@ func TestRotatingFileWriter_Write_reopensAfterExplicitClose(t *testing.T) {
 	}
 }
 
-// B 形态后 audit.log 仅是兜底缓存，由摄取链路负责；log-cleanup 不得再轮转/截断它。
+// B 形态后 audit.log 仅是兜底缓存，由摄取链路负责；log-cleanup 不得再轮转/
+// 截断它。生产代码在 logrotate.go 中不引用 auditLogPath/auditLogSizeBytes
+// （唯一消费方是 auditlog_rotation.go 的摄取/轮转链），故本用例不注入这两个
+// 变量——注入它们只会制造「测试缝存在」的错觉，负断言实际由「文件字节不变」
+// 承担。
 func TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback(t *testing.T) {
 	initServicesDB(t)
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "audit.log")
-	oldLogPath, oldSizeBytes := auditLogPath, auditLogSizeBytes
-	auditLogPath = logPath
-	auditLogSizeBytes = func(context.Context) int64 { return 1 }
-	t.Cleanup(func() { auditLogPath, auditLogSizeBytes = oldLogPath, oldSizeBytes })
 
 	content := []byte(`{"transaction":{"id":"legacy-fallback"}}` + "\n")
 	if err := os.WriteFile(logPath, content, 0o644); err != nil {

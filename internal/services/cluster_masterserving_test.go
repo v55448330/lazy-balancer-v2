@@ -36,6 +36,26 @@ func waitForCond(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatal("等待条件超时")
 }
 
+// waitForStableCond 要求条件连续稳定成立 stablePolls 次；用于负断言，
+// 防止异步副作用尚未落库时把一次零值采样误判为通过。
+func waitForStableCond(t *testing.T, timeout time.Duration, stablePolls int, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	stable := 0
+	for time.Now().Before(deadline) {
+		if cond() {
+			stable++
+			if stable >= stablePolls {
+				return
+			}
+		} else {
+			stable = 0
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("条件未连续稳定 %d 次", stablePolls)
+}
+
 func readClusterSyncLog(t *testing.T) string {
 	t.Helper()
 	body, err := os.ReadFile(taskengine.TaskLogPath("cluster-sync"))

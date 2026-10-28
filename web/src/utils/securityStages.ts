@@ -421,8 +421,6 @@ export const hasIPACLControl = (p: {
 export const hasGeoIPControl = (p: {
   has_geoip?: boolean
   geoip_mode?: string
-  geoip_crawler_exempt?: boolean
-  geoip_crawler_engines?: string
   geoip_countries?: string
 }): boolean => {
   if (p.geoip_mode !== undefined || p.geoip_countries !== undefined) {
@@ -577,6 +575,15 @@ const buildStage1Rows = (
   if (policy?.has_geoip || geoCount > 0) {
     const geoModeLabel = policy?.geoip_mode === 'allow' ? '仅允许所选区域' : '拦截所选区域'
     rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
+  }
+  // 爬虫豁免属于阶段 1 真实渲染面：仅在存在阶段 1 能力时显示「未启用」，
+  // 避免给纯阶段 2/3 策略虚增阶段 1 组；显式空引擎集=全部引擎。
+  if (policy && (policy.geoip_crawler_exempt === true || rows.length > 0)) {
+    const engineCount = parseIPList(policy.geoip_crawler_engines ?? '').length
+    const detail = policy.geoip_crawler_exempt === true
+      ? `已启用 · ${engineCount > 0 ? `豁免 ${engineCount} 个引擎` : '全部引擎'}`
+      : '未启用'
+    rows.push({ label: '爬虫豁免', detail })
   }
   // 策略级拦截页行（2026-09-25 起 stage1 可配策略页，投影补呈现）
   const s1PageId = policy?.block_page_id ?? 0

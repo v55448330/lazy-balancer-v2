@@ -464,3 +464,36 @@ func TestSeedCRSRules_residualTreeClearFailureIsReported(t *testing.T) {
 		t.Fatalf("error=%v, want 点名清除残缺树失败", err)
 	}
 }
+
+func TestSeedCRSRules_ruleTreeCopyFailureIsReported(t *testing.T) {
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	distDir := filepath.Join(root, "waf.dist", "crs")
+	// dist 缺少 rules 树：tmp→rename 与 copy 回退都无法完成播种。
+	writeTestFile(t, filepath.Join(distDir, "crs-setup.conf"), "# dist setup")
+
+	err := seedCRSRulesFrom(liveDir, snapshotDir, distDir)
+	if err == nil || !strings.Contains(err.Error(), "播种规则树") {
+		t.Fatalf("规则树复制失败必须上抛并点名播种规则树，err=%v", err)
+	}
+}
+
+func TestCRSBundledVersion_matchesDockerfile(t *testing.T) {
+	data, err := os.ReadFile("../../Dockerfile")
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	const prefix = "RUN crs_version="
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		got := strings.TrimSuffix(strings.TrimPrefix(line, prefix), "; \\")
+		if got != CRSBundledVersion {
+			t.Fatalf("Dockerfile CRS=%q, Go CRSBundledVersion=%q", got, CRSBundledVersion)
+		}
+		return
+	}
+	t.Fatal("Dockerfile 缺少 RUN crs_version= 声明")
+}

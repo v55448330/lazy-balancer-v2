@@ -174,6 +174,7 @@ func TestLoadConfigSnapshot_columnsAndScanTargetsMatchStructFields(t *testing.T)
 	var query string
 	var bindArgs int
 	scanTargets := map[string]int{}
+	scanOrder := []string{}
 	var scanCount int
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -208,6 +209,7 @@ func TestLoadConfigSnapshot_columnsAndScanTargetsMatchStructFields(t *testing.T)
 					t.Fatalf("Scan target must select a struct field")
 				}
 				scanTargets[oldSel.Sel.Name]++
+				scanOrder = append(scanOrder, oldSel.Sel.Name)
 			}
 		}
 		return true
@@ -222,6 +224,11 @@ func TestLoadConfigSnapshot_columnsAndScanTargetsMatchStructFields(t *testing.T)
 		name := fields.Field(i).Name
 		if scanTargets[name] != 1 {
 			t.Fatalf("字段 %s 的 Scan 目标数=%d, want 1（漏扫/重扫会让快照零值或错位）", name, scanTargets[name])
+		}
+	}
+	for i := range want {
+		if scanOrder[i] != fields.Field(i).Name {
+			t.Fatalf("Scan 第 %d 个目标=%s，configSnapshot 第 %d 个字段=%s；同计数但列序错位仍会让快照串列", i+1, scanOrder[i], i+1, fields.Field(i).Name)
 		}
 	}
 	if placeholders := strings.Count(query, "?"); placeholders != bindArgs {

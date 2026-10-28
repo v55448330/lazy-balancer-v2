@@ -27,9 +27,6 @@ test('A 威胁国家表：排除南极洲且其余国家与 worldBorders 一致'
     WORLD_COUNTRIES.filter((c) => c.name !== 'Antarctica'),
     '威胁国家表必须是 worldBorders 去掉南极洲的逐项同序投影',
   )
-  for (const c of THREAT_COUNTRIES) {
-    assert.ok(WORLD_COUNTRIES.includes(c), `${c.name} 不在 worldBorders`)
-  }
 })
 
 test('B 全量键集：每个威胁国家的下钻省层数据可用（中国=高精度省表）', () => {

@@ -99,6 +99,7 @@ type upstreamHealthHits struct {
 	upstreams      atomic.Int32
 	config         atomic.Int32
 	configFailures atomic.Int32
+	load           atomic.Int32
 }
 
 func newUpstreamHealthCacheAdmin(t *testing.T, hits *upstreamHealthHits, metricsGate <-chan struct{}) *httptest.Server {
@@ -122,6 +123,9 @@ func newUpstreamHealthCacheAdmin(t *testing.T, hits *upstreamHealthHits, metrics
 				return
 			}
 			_, _ = io.WriteString(w, `{"apps":{"http":{"servers":{"srv0":{"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"10.0.0.1:80"}]}]}]}}}}}`)
+		case "/load":
+			hits.load.Add(1)
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -197,6 +201,45 @@ func TestCaddyService_GetUpstreamHealthDetailed_singleFlightsConcurrentRequests(
 	}
 	if got := hits.config.Load(); got != 1 {
 		t.Fatalf("concurrent config hits=%d, want single-flight 1", got)
+	}
+}
+
+func TestCaddyService_ApplyConfig_invalidatesUpstreamHealthCache(t *testing.T) {
+	var hits upstreamHealthHits
+	admin := newUpstreamHealthCacheAdmin(t, &hits, nil)
+	service := NewCaddyService(admin.URL)
+	if _, err := service.GetUpstreamHealthDetailed(); err != nil {
+		t.Fatalf("prime health cache: %v", err)
+	}
+	if err := service.ApplyConfig(map[string]interface{}{
+		"apps": map[string]interface{}{
+			"http": map[string]interface{}{
+				"servers": map[string]interface{}{
+					"srv0": map[string]interface{}{
+						"routes": []interface{}{map[string]interface{}{
+							"handle": []interface{}{map[string]interface{}{
+								"handler":   "reverse_proxy",
+								"upstreams": []interface{}{map[string]interface{}{"dial": "10.0.0.2:80"}},
+							}},
+						}},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("apply config: %v", err)
+	}
+	if got := hits.load.Load(); got != 1 {
+		t.Fatalf("/load hits=%d, want 1", got)
+	}
+	if _, err := service.GetUpstreamHealthDetailed(); err != nil {
+		t.Fatalf("get health after apply: %v", err)
+	}
+	if got := hits.metrics.Load(); got != 2 {
+		t.Fatalf("metrics hits=%d, want 2（成功 /load 后必须失效健康缓存）", got)
+	}
+	if got := hits.upstreams.Load(); got != 2 {
+		t.Fatalf("upstreams hits=%d, want 2（成功 /load 后必须失效健康缓存）", got)
 	}
 }
 

@@ -497,11 +497,11 @@ import { formatBytes } from '@/utils/formatBytes'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { useSettingsDraft, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
 import { restartServiceWithFeedback } from '@/utils/restart'
-import { adminTlsConfirmDisabled, adminTlsReusesSavedCert } from '@/utils/adminTlsGate'
-import { formatDate } from '@/utils/date'
+import { adminTlsConfirmDisabled, adminTlsPendingChange, adminTlsReusesSavedCert, adminTlsSendsStagedCert } from '@/utils/adminTlsGate'
+import { formatDate, formatDateShort } from '@/utils/date'
 import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
 import { shouldToastQuietPollError } from '@/utils/pollErrorToast'
-import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload } from '@/utils/configValues'
+import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload, threatScreenWritePayload } from '@/utils/configValues'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
@@ -624,7 +624,7 @@ const exportBackup = async (): Promise<void> => {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.lbbak`
+    link.download = `lazy-balancer-backup-${formatDateShort(new Date())}.lbbak`
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
     setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -706,7 +706,7 @@ const autoBackupNextRunLabel = computed<string | null>(() => {
   if (!formatted) return null
   return autoBackupCatchUpDue.value ? `待补跑（${formatted}）` : formatted
 })
-const autoBackupCanRunNow = computed(() => autoBackupLoaded.value && !autoBackupLoading.value && autoBackupSavedSections.value.length > 0)
+const autoBackupCanRunNow = computed(() => !backupDisabled.value && autoBackupLoaded.value && !autoBackupLoading.value && autoBackupSavedSections.value.length > 0)
 // 与导出按钮同口径：范围非空(users 恒有表,不存在不可还原形态)
 const autoBackupSectionsValid = computed(() => autoBackupSections.value.length > 0)
 
@@ -791,8 +791,8 @@ const toggleAutoBackupSection = (key: string): void => {
 
 const saveAutoBackupSettings = async (): Promise<boolean> => {
   // 函数级纵深防御——角色/节点模式在弹框打开期间变化时不得仍发请求
-  // （按钮禁用只是入口层，不能覆盖全部触发路径）。
-  if (isReadOnly.value || !autoBackupSectionsValid.value || autoBackupSaving.value) return false
+  // （按钮禁用只是入口层，不能覆盖全部触发路径；backupDisabled 同时含节点模式门）。
+  if (backupDisabled.value || !autoBackupSectionsValid.value || autoBackupSaving.value) return false
   if (!autoBackupLoaded.value || autoBackupLoading.value) {
     ElMessage.warning('自动备份设置尚未加载完成，暂不能保存')
     return false
@@ -817,7 +817,7 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
 // 已保存的设置(频率/范围等)执行;弹框中未保存的表单改动对本次手动备份
 // 不生效,避免每次手动备份都重写设置并产生多余的「备份设置」审计事件。
 const runAutoBackupNow = async (): Promise<void> => {
-  if (isReadOnly.value || autoBackupRunning.value) return
+  if (backupDisabled.value || autoBackupRunning.value) return
   if (!autoBackupCanRunNow.value) {
     ElMessage.warning('自动备份设置尚未加载或已保存的备份范围为空，暂不能立即备份')
     return
@@ -1177,8 +1177,15 @@ const postImportValidation = async (sections: readonly string[], signal: AbortSi
 // 会话层取消）。
 const revalidateImport = async (): Promise<void> => {
   const sections = importSections.value
-  // 校验不消费分类（仅负载规则）；空选择无可导内容（确认时拦截）——不重发
-  if (importValidation.value?.type === 'v1' || sections.length === 0) return
+  // 校验不消费分类（仅负载规则）；空选择无可导内容（确认时拦截）——不重发。
+  // 同时必须清掉上一轮校验摘要/错误并推进序号：否则取消全选后旧的「不可导入」
+  // 错误条仍显示，且在途旧响应落地时又会把陈旧摘要写回。
+  if (sections.length === 0) {
+    importValidationSeq++
+    importValidation.value = null
+    return
+  }
+  if (importValidation.value?.type === 'v1') return
   if (!importFileContent.value || !importPreviewSession) return
   const session = importPreviewSession
   const validationSeq = ++importValidationSeq
@@ -1290,6 +1297,10 @@ interface GithubProxyOption {
   value: string
 }
 
+// 留档：GitHub 代理与自动备份表单的展示默认值仅兼容正常读写路径。
+// 正常写侧/读侧 COALESCE 保证库值非空；带外清空库值时不得把这些展示默认值当作真实配置，
+// 否则一次无关保存会把默认值物化。若未来要严格守「渲染零写死兜底」，应改为显式
+// 「未配置」占位并禁止保存该字段，而不是在这里继续扩大默认值表。
 const DEFAULT_GITHUB_PROXY_URL = 'https://v4.gh-proxy.org/'
 const githubProxyOptions: GithubProxyOption[] = [
   { label: 'Cloudflare (v4)', value: 'https://v4.gh-proxy.org/' },
@@ -1368,7 +1379,14 @@ const timezoneError = (value: string): string => {
   }
 }
 // 父级 /config 加载完成前禁止保存：表单此刻仍是默认值。
-const props = defineProps<{ configLoaded: boolean }>()
+const props = defineProps<{
+  configLoaded: boolean
+  /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
+  onSave?: () => void | Promise<void>
+  /** 服务端最近确认的大屏字段；用于区分展示归一与真实编辑。 */
+  savedThreatScreenMode?: 'map' | 'globe'
+  savedThreatTrafficSampleN?: number
+}>()
 const emit = defineEmits<{
   (e: 'save'): void
 }>()
@@ -1447,12 +1465,16 @@ watch(
 // v2.3.8 威胁大屏中央视觉模式（map/globe）：直接写回父级共享模型——切分页
 // 重挂不回退（原组件内 ref 卸载即复位），与同卡直绑 settings 的字段同口径。
 // 展示归一由单源 helper 承担（库值非法时的回显口径不在此重复实现）。
+// dirty 只在用户实际改过时置位，保存载荷按 dirty 携带（避免把展示归一值物化）。
 const threatScreenMode = computed<'map' | 'globe'>({
   get: () => displayThreatScreenMode(settings.value.threat_screen_mode),
   set: (value) => {
     settings.value.threat_screen_mode = value
   },
 })
+const threatScreenModeDirty = computed(
+  () => threatScreenMode.value !== displayThreatScreenMode(props.savedThreatScreenMode),
+)
 // 安全事件滚动保留：展示归一 90 天 / 1,000,000 行；库值 0=自动 的哨兵保持不变。
 // 编辑值写回父级共享模型（切分页不丢），dirty 标记只在用户实际编辑时置位，
 // 保存载荷按 dirty 携带字段（见 utils/configValues securityEventsWritePayload），
@@ -1477,6 +1499,9 @@ const trafficSampleN = computed<number>({
     settings.value.threat_traffic_sample_n = value
   },
 })
+const trafficSampleNDirty = computed(
+  () => trafficSampleN.value !== normalizeTrafficSampleN(props.savedThreatTrafficSampleN),
+)
 // 证书弹框表单（文件选择/校验）是临时态：随弹框关闭销毁，不随分页切换保留；
 // 已确认的暂存材料（stagedAdminTlsCert）在设置草稿里存活。
 const adminTlsForm = ref<AdminTlsForm>({ mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false, inspectError: '' })
@@ -1510,11 +1535,15 @@ const adminTlsMissingPairHint = computed(() => {
   return hasCert ? '已选择证书文件，还需选择私钥文件才能解析证书' : '已选择私钥文件，还需选择证书文件才能解析证书'
 })
 const adminTlsConfirmBlocked = computed(() => adminTlsConfirmDisabled(adminTlsStoredCertState.value, adminTlsForm.value))
-const adminTlsDirty = computed(() => {
-  if (adminTls.value.enabled !== adminTlsSaved.value.enabled) return true
-  if (!adminTls.value.enabled) return false
-  return adminTls.value.mode !== adminTlsSaved.value.mode || stagedAdminTlsCert.value !== null
-})
+// 待提交判据单源 utils/adminTlsGate：暂存证书与 enabled 解耦（禁用态同样算
+// 变更），否则关掉开关后材料既不提交也不提示，界面却回「保存成功」。
+const adminTlsDirty = computed(() => adminTlsPendingChange({
+  enabled: adminTls.value.enabled,
+  mode: adminTls.value.mode,
+  savedEnabled: adminTlsSaved.value.enabled,
+  savedMode: adminTlsSaved.value.mode,
+  hasStagedCert: stagedAdminTlsCert.value !== null,
+}))
 
 // /admin-tls 读取失败不再静默吞错——开关禁用直到加载成功，
 // 避免长期以默认关闭态误导「HTTPS 已关闭」。
@@ -1547,6 +1576,9 @@ const loadAdminTls = async () => {
       }
     }
   } catch {
+    // 第二次及以后的读取失败同样必须使已加载态失效：否则开关保持可编辑，
+    // 而下方文案却声明「开关暂不可用」，界面自相矛盾。
+    adminTlsLoaded.value = false
     adminTlsLoadFailed.value = true
     console.warn('管理 TLS 配置读取失败，强制加密开关暂不可用')
   }
@@ -1715,6 +1747,8 @@ const handleSave = async () => {
   if (isReadOnly.value) return
   if (saving.value) return
   const tlsPending = adminTlsDirty.value
+  // 材料发送判据单源（与 enabled 解耦）：后端对禁用态新上传材料同样校验并落库。
+  const tlsStaged = adminTlsSendsStagedCert({ mode: adminTls.value.mode, hasStagedCert: stagedAdminTlsCert.value !== null })
   if (tlsPending && adminTls.value.enabled && adminTls.value.mode === 'upload' && !stagedAdminTlsCert.value && !adminTlsHasCert.value) {
     ElMessage.warning('请先在「配置证书」中选择并校验上传证书')
     return
@@ -1737,7 +1771,12 @@ const handleSave = async () => {
       timezone: settings.value.timezone,
       server_map_lat: settings.value.server_map_lat ?? 0,
       server_map_lon: settings.value.server_map_lon ?? 0,
-      threat_screen_mode: threatScreenMode.value,
+      ...threatScreenWritePayload({
+        mode: threatScreenMode.value,
+        modeDirty: threatScreenModeDirty.value,
+        sampleN: trafficSampleN.value,
+        sampleDirty: trafficSampleNDirty.value,
+      }),
       // 仅在用户实际编辑过时才提交保留/行数上限（未编辑省略键，
       // 后端 COALESCE 保持现值——库值 0=自动 不被展示归一值物化）。
       ...securityEventsWritePayload({
@@ -1746,7 +1785,6 @@ const handleSave = async () => {
         rowCap: seRowCap.value,
         rowCapDirty: securityEventsRowCapDirty.value,
       }),
-      threat_traffic_sample_n: trafficSampleN.value,
       mfa_write_guard: settings.value.mfa_write_guard,
       mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
       // 未加载时省略该键（后端保持现值）——不得以默认值覆盖用户选择
@@ -1763,11 +1801,9 @@ const handleSave = async () => {
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     const changes = [...(preview.data?.changes ?? [])]
     if (tlsPending) {
-      changes.unshift(
-        adminTls.value.enabled
-          ? `强制 HTTPS：启用（${adminTls.value.mode === 'upload' ? '上传证书' : '本地自签名证书'}），保存后服务将重启`
-          : '强制 HTTPS：禁用，保存后服务将重启',
-      )
+      const source = adminTls.value.mode === 'upload' ? '上传证书' : '本地自签名证书'
+      const head = adminTls.value.enabled ? `强制 HTTPS：启用（${source}）` : '强制 HTTPS：禁用'
+      changes.unshift(`${head}${tlsStaged ? '，并替换已上传证书' : ''}，保存后服务将重启`)
     }
     if (preview.data?.changed || tlsPending) {
       await ElMessageBox.confirm(changes.length > 0 ? changes.join('；') : '检测到配置变更', `确认保存${preview.data?.section || '基础设置'}？`, {
@@ -1798,13 +1834,17 @@ const handleSave = async () => {
       console.error('Failed to refresh global config after save:', refreshError)
     }
     // 父级刷新先于 TLS 段：两段写无跨表事务，TLS 段失败不得让基础设置
-    // 看起来整单未生效（用户只需重试 TLS 段）。
-    emit('save')
+    // 看起来整单未生效（用户只需重试 TLS 段）。父级以 onSave 回调提供刷新时
+    // 必须 await 完成：否则 finally 先解冻表单，用户新编辑会被迟到的 /config
+    // 响应静默覆盖；未迁移的旧用法保留事件兜底。
+    const parentRefresh = props.onSave
+    if (parentRefresh) await parentRefresh()
+    if (!parentRefresh) emit('save')
     if (tlsPending) {
       try {
         const fd = formDataOf({ enabled: String(adminTls.value.enabled), mode: adminTls.value.mode })
         const staged = stagedAdminTlsCert.value
-        if (adminTls.value.enabled && adminTls.value.mode === 'upload' && staged) {
+        if (tlsStaged && staged) {
           fd.append('cert_file', staged.certFile)
           fd.append('key_file', staged.keyFile)
         }

@@ -141,6 +141,11 @@ func TestRunAutoBackupOnce_cancelledContextWritesNothing(t *testing.T) {
 	if rows != 0 {
 		t.Fatalf("取消后不得落 auto_backups 行, rows=%d", rows)
 	}
+	for _, action := range []string{"备份失败", "自动备份"} {
+		if got := countAutoBackupAudit(t, action); got != 0 {
+			t.Fatalf("取消路径 %s 审计=%d, want 0", action, got)
+		}
+	}
 }
 
 // 写失败不得留下临时文件（残留会让 auto_backups 行 → prune 永不回收；修复前

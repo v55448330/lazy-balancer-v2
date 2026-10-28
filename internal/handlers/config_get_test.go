@@ -83,6 +83,11 @@ func TestGetConfig_noGovernedDefaultLiterals(t *testing.T) {
 		{`http_read_timeout,` + "\r?`?\\s*" + `60`, "http_read_timeout, 60"},
 		{`http_write_timeout,` + "\r?`?\\s*" + `60`, "http_write_timeout, 60"},
 		{`http_idle_timeout,` + "\r?`?\\s*" + `120`, "http_idle_timeout, 120"},
+		{`task_log_size_mb,` + "\r?`?\\s*" + `10`, "task_log_size_mb, 10"},
+		{`audit_log_size_mb,` + "\r?`?\\s*" + `10`, "audit_log_size_mb, 10"},
+		{`runtime_log_size_mb,` + "\r?`?\\s*" + `100`, "runtime_log_size_mb, 100"},
+		{`audit_retention_months,` + "\r?`?\\s*" + `3`, "audit_retention_months, 3"},
+		{`jwt_expire_minutes,` + "\r?`?\\s*" + `20`, "jwt_expire_minutes, 20"},
 	}
 	for _, tc := range cases {
 		re := regexp.MustCompile(tc.pattern)

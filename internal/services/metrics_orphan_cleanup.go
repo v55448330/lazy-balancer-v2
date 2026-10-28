@@ -124,11 +124,11 @@ var beforeLiveRuleIDsQuery = func() {}
 func liveRuleIDs(ctx context.Context) (map[string]bool, error) {
 	// nil 库守卫（两个消费方共用：孤儿规则日志兜底、孤儿指标清理）——
 	// 关停时 db.Close() 把 db.DB 置 nil，仍在跑的本轮不得 nil 解引用 panic。
+	beforeLiveRuleIDsQuery()
 	database := db.DB
 	if database == nil {
 		return nil, errors.New("数据库未初始化")
 	}
-	beforeLiveRuleIDsQuery()
 	rows, err := database.QueryContext(ctx, `SELECT caddy_id FROM lb_rules`)
 	if err != nil {
 		return nil, err

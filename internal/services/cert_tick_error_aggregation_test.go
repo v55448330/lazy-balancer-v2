@@ -10,7 +10,7 @@ import (
 
 // 30s 补扫（cert-waiting-ca）的逐条动作失败必须进入失败轮：真实 DB/入队故障下
 // 只写应用日志会让本轮照常「补扫完成」，任务监控看不到仍有证书工作没有恢复
-// （104 轮已给补建/滞留/续期四条路径加了错误聚合，补扫两条逐条路径当时漏收口）。
+// （补建/滞留/续期三条路径已聚合错误，补扫两条逐条路径当时漏收口）。
 func TestRescanDroppedDeploymentRetries_reportsDeploymentRetryFailure(t *testing.T) {
 	useCertSweepTickTestEnv(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules
@@ -25,6 +25,7 @@ func TestRescanDroppedDeploymentRetries_reportsDeploymentRetryFailure(t *testing
 	}
 
 	service := NewCertificateService()
+	resetCertificateServiceForTest(t)
 	service.deploymentRetry = func(int, issuedCertificate, time.Duration) error {
 		return errors.New("database is locked")
 	}
@@ -58,6 +59,7 @@ func TestRescanDroppedDeploymentRetries_reportsLostMaterialRequeueFailure(t *tes
 	}
 
 	service := NewCertificateService()
+	resetCertificateServiceForTest(t)
 	if _, err := service.rescanDroppedDeploymentRetries(); err == nil {
 		t.Fatalf("材料丢失行入队失败必须进入失败轮")
 	}
@@ -67,6 +69,7 @@ func TestRescanDroppedDeploymentRetries_reportsLostMaterialRequeueFailure(t *tes
 func TestRescanDroppedDeploymentRetries_pausedIsNotFailure(t *testing.T) {
 	useCertSweepTickTestEnv(t)
 	service := NewCertificateService()
+	resetCertificateServiceForTest(t)
 	service.timerMu.Lock()
 	service.timersPaused = true
 	service.timerMu.Unlock()

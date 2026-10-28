@@ -66,7 +66,9 @@
           <!-- 数据就位后再挂载（vue-echarts 8 增量规划对「空 option 挂载→数据后到达」
                的 series/legend 合并不稳——实证轴渲染而序列/图例缺失；挂载即完整
                option 与独立 echarts 实证一致） -->
+          <div v-if="seriesStale && series24h.length" class="chart-stale-hint">采集失败：展示上次结果</div>
           <v-chart v-if="loaded && series24h.length" :option="statsBarOption" :update-options="{ notMerge: true }" autoresize class="tm-chart" />
+          <el-empty v-else-if="loaded && !series24h.length" description="该时间范围内暂无数据" :image-size="60" />
           <div v-else class="tm-chart tm-skeleton"></div>
         </el-card>
       </el-col>
@@ -230,14 +232,14 @@
               <span class="tm-op-trigger">
                 <el-button
                   link type="primary" size="small"
-                  :disabled="!canOperate || row.status === 'running' || Boolean(runCooldownReason(row))"
+                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || Boolean(runCooldownReason(row))"
                   @click="onTrigger(row)"
                 >运行</el-button>
               </span>
             </el-tooltip>
             <el-button
               v-if="row.cancellable && row.status === 'running'"
-              link type="danger" size="small" :disabled="!canOperate"
+              link type="danger" size="small" :disabled="!canOperate || taskActionPendingId !== null"
               @click="onCancel(row)"
             >取消</el-button>
             <!-- 常驻行启停已由调度列开关承担（loop_on 同源）——操作列改「重启」-->
@@ -373,6 +375,8 @@ import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { formatDate } from '@/utils/date'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 import { useClampedPagination } from '@/composables/useClampedPagination'
+import { createLatestReadSession } from '@/utils/viewAsyncState'
+import { hasOwn } from '@/utils/hasOwn'
 import { statusColor } from '@/utils/chartTheme'
 import { certJobStatusLabel, certJobRetryReady, type CertJobStatus } from '@/utils/certJobStatus'
 import { CERT_QUEUE_VISIBLE_JOBS, certQueueHasLive, certQueueIsBusy, certQueueMoreCount } from '@/utils/certQueue'
@@ -408,6 +412,7 @@ const tasks = ref<TaskInfo[]>([])
 const certJobsTruncated = ref(false)
 const loaded = ref(false)
 const series24h = ref<TaskHourlyStat[]>([])
+const seriesStale = ref(false)
 const refreshing = ref(false)
 // 只读判定统一走全局 fail-closed 契约（authStore.
 // readOnlyReason===null=可写；曾本地 isSlave fetch-open 且不随角色切换刷新，
@@ -421,33 +426,89 @@ const canOperate = computed(() => isAdmin.value && !readOnly.value)
 const fetchTasks = async (signal?: AbortSignal) => {
   const res = await request.get<APIResponse<{ tasks: TaskInfo[]; cert_jobs_truncated?: boolean }>>('/system/tasks', { silent: true, signal })
   if (!res.data) throw new TypeError('任务列表响应缺少 data')
-  tasks.value = res.data.tasks || []
-  // 审计项：cert-job 动态行上限 100——后端回传截断标记，页面显性提示，
-  // 避免把「只有这些任务」误读成全量（更老的记录请在证书任务页按规则查看）。
-  certJobsTruncated.value = !!res.data.cert_jobs_truncated
-  loaded.value = true
+  return { data: res.data }
 }
 const fetchSeries = async (signal?: AbortSignal) => {
   const res = await request.get<APIResponse<{ series: TaskHourlyStat[] }>>('/system/tasks/stats-24h-series', { silent: true, signal })
   if (!res.data) throw new TypeError('任务统计响应缺少 data')
-  series24h.value = res.data.series || []
+  return { data: res.data }
 }
-const refreshNow = async () => {
+// 手动刷新与 10s 轮询共用最新读取会话：后发轮次推进世代，旧快照（含任务、序列、
+// 队列）即使晚到也不得覆盖新快照。刷新整体结束（成功或失败）即撤掉首屏骨架。
+interface TaskRefreshSnapshot {
+  cancelled: boolean
+  taskResult: PromiseSettledResult<{ data: { tasks: TaskInfo[]; cert_jobs_truncated?: boolean } }>
+  seriesResult: PromiseSettledResult<{ data: { series: TaskHourlyStat[] } }>
+  queueResult: PromiseSettledResult<CertQueueRead>
+}
+const refreshReadSession = createLatestReadSession()
+const refreshNow = async (roundSignal?: AbortSignal): Promise<void> => {
   refreshing.value = true
-  try {
-    await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()])
-    pollingError.clear()
-  } catch (error: unknown) {
-    // 原实现无 catch——网络/5xx 时按钮无反馈且产生 unhandled
-    // rejection；与轮询失败同口径记录到可见横幅。
-    pollingError.recordError(error)
-  } finally { refreshing.value = false }
+  await refreshReadSession.run<TaskRefreshSnapshot>(async (ownSignal) => {
+    const signal = roundSignal ?? ownSignal
+    const [taskResult, seriesResult, queueResult] = await Promise.allSettled([
+      fetchTasks(signal),
+      fetchSeries(signal),
+      fetchCertQueue(signal),
+    ])
+    return { cancelled: signal.aborted, taskResult, seriesResult, queueResult }
+  }, {
+    onStart: () => { refreshing.value = true },
+    onSuccess: ({ cancelled, taskResult, seriesResult, queueResult }) => {
+      // pause/stop 取消的一轮不是在途失败，也不得清掉既有错误或陈旧标记。
+      if (cancelled) return
+      let firstError: unknown
+      let failed = false
+      if (taskResult.status === 'fulfilled') {
+        const res = taskResult.value
+        tasks.value = res.data.tasks || []
+        // 审计项：cert-job 动态行上限 100——后端回传截断标记，页面显性提示，
+        // 避免把「只有这些任务」误读成全量（更老的记录请在证书任务页按规则查看）。
+        certJobsTruncated.value = !!res.data.cert_jobs_truncated
+      } else if (!axios.isCancel(taskResult.reason)) {
+        failed = true
+        firstError = taskResult.reason
+      }
+      if (seriesResult.status === 'fulfilled') {
+        series24h.value = seriesResult.value.data.series || []
+        seriesStale.value = false
+      } else if (!axios.isCancel(seriesResult.reason)) {
+        // 序列失败保留上一轮柱图，但必须显式标陈旧；首次失败由下方空态承接。
+        seriesStale.value = true
+        if (!failed) {
+          failed = true
+          firstError = seriesResult.reason
+        }
+      }
+      if (queueResult.status === 'fulfilled') {
+        certQueueError.value = queueResult.value.failed
+        if (queueResult.value.snapshot) certQueue.value = queueResult.value.snapshot
+      } else if (!axios.isCancel(queueResult.reason)) {
+        certQueueError.value = true
+        // 契约违约（缺 data）与其余两份请求同语义进入退避；普通失败只影响横幅。
+        if (queueResult.reason instanceof TypeError && !failed) {
+          failed = true
+          firstError = queueResult.reason
+        }
+      }
+      if (failed) pollingError.recordError(firstError)
+      else pollingError.clear()
+    },
+    onError: (error: unknown) => pollingError.recordError(error),
+    onFinally: () => {
+      loaded.value = true
+      refreshing.value = false
+    },
+  })
 }
 onMounted(() => {
   void polling.run() // 首跑立即（start() 只设定时器；证书队列横幅已入轮询闭包随首跑）
   polling.start()
 })
-onUnmounted(() => polling.stop())
+onUnmounted(() => {
+  refreshReadSession.invalidate()
+  polling.stop()
+})
 
 // 轮询失败可见化（此前只落 console）。契约性失败（TypeError）退避
 // 期间轮询闭包经 canRun 门跳过；横幅「立即重试」重置退避立即拉取。
@@ -462,9 +523,9 @@ const pollingErrorDescription = computed(() => {
 const polling = usePollingTask(async ({ signal }) => {
   // 证书队列横幅与任务列表同频 10s（曾只在 mounted/手动刷新拉取，横幅最长陈旧一个会话）
   if (!pollingError.canRun()) return
-  // 消费每轮 abort signal——pause/stop（含组件卸载）可取消在途请求。
-  await Promise.all([fetchTasks(signal), fetchSeries(signal), fetchCertQueue(signal)])
-  pollingError.clear()
+  // 消费每轮 abort signal——pause/stop（含组件卸载）可取消在途请求；
+  // 与手动刷新共用最新读取会话，后发轮次覆盖前一轮快照。
+  await refreshNow(signal)
 }, {
   interval: 10000,
   onError: (e) => {
@@ -484,8 +545,10 @@ const retryPolling = async (): Promise<void> => {
 }
 // ===== 证书队列状态（独立卡——非任务族） =====
 interface CertJobRow { id: number; domain: string; status: string; updated_at?: string | null; ca_provider_name?: string }
+interface CertQueueState { queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[]; truncated: boolean }
+interface CertQueueRead { snapshot: CertQueueState | null; failed: boolean }
 // certQueue.loaded 死字段删除（写字段零消费方）。
-const certQueue = ref<{ queued: number; running: number; waiting: number; total: number; jobs: CertJobRow[]; truncated: boolean }>({
+const certQueue = ref<CertQueueState>({
   queued: 0, running: 0, waiting: 0, total: 0, jobs: [], truncated: false,
 })
 // 队列加载失败不得呈现为「全 0 / 空闲」——显式错误态（下一轮轮询自愈）
@@ -497,7 +560,7 @@ const certQueueError = ref(false)
 const CERT_QUEUE_PAGE_SIZE = 6
 // 接入轮询 AbortSignal——pause/stop（含组件卸载）可取消在途请求，
 // 与 fetchTasks/fetchSeries 同口径（补齐 :409 注释承诺）。
-const fetchCertQueue = async (signal?: AbortSignal) => {
+const fetchCertQueue = async (signal?: AbortSignal): Promise<CertQueueRead> => {
   try {
     const res = await request.get<APIResponse<{ list: CertJobRow[]; total: number; status_counts?: Record<string, number> }>>('/certificates/jobs', { params: { page: 1, page_size: CERT_QUEUE_PAGE_SIZE }, silent: true, signal })
     // 缺 data 为契约违约（同 fetchTasks/fetchSeries），下面向上抛。
@@ -520,23 +583,23 @@ const fetchCertQueue = async (signal?: AbortSignal) => {
       waiting = live.filter(j => j.status === 'waiting_ca').length
     }
     const liveJobs = list.filter(j => !['issued', 'failed', 'disabled'].includes(j.status))
-    certQueueError.value = false
-    certQueue.value = {
-      total: liveCount,
-      // status_counts 为空时才依赖首页下界；有聚合计数则完整。
-      truncated: !counts && (res.data?.total ?? 0) > list.length,
-      queued,
-      running: Math.max(0, liveCount - queued - waiting),
-      waiting,
-      jobs: liveJobs.slice(0, 6),
+    return {
+      snapshot: {
+        total: liveCount,
+        // status_counts 为空时才依赖首页下界；有聚合计数则完整。
+        truncated: !counts && (res.data?.total ?? 0) > list.length,
+        queued,
+        running: Math.max(0, liveCount - queued - waiting),
+        waiting,
+        jobs: liveJobs.slice(0, CERT_QUEUE_PAGE_SIZE),
+      },
+      failed: false,
     }
   } catch (error: unknown) {
-    // 静默自动重试（下一轮轮询），但错误态必须显性——0 值会被误读为「无排队」；
-    // pause/stop 触发的取消不是失败
-    if (!axios.isCancel(error)) certQueueError.value = true
-    // 契约违约（缺 data）与其余两份请求同语义——向上抛，交由轮询入口
-    // 记录并进入 TypeError 退避；普通网络/5xx 仍在本层吞掉（下一轮自愈）。
+    // 契约违约（缺 data）与其余两份请求同语义——向上抛，交由读取会话
+    // 记录并进入 TypeError 退避；普通网络/5xx 只影响横幅（下一轮自愈）。
     if (error instanceof TypeError) throw error
+    return { snapshot: null, failed: !axios.isCancel(error) }
   }
 }
 
@@ -564,7 +627,9 @@ const filteredTasks = computed(() => {
     .filter(t => kindFilter.value === 'all' || t.kind === kindFilter.value)
     .filter(t => categoryFilter.value === 'all' || !categoryFilter.value || t.category === categoryFilter.value)
   // 默认按分类排序（安全防护→证书→备份→集群→系统），类内稳定
-  return [...list].sort((a, b) => (categoryOrder[a.category] ?? 9) - (categoryOrder[b.category] ?? 9))
+  return [...list].sort((a, b) =>
+    (hasOwn(categoryOrder, a.category) ? categoryOrder[a.category] : 9)
+    - (hasOwn(categoryOrder, b.category) ? categoryOrder[b.category] : 9))
 })
 const page = ref(1)
 const pageSize = ref(20)
@@ -592,7 +657,7 @@ const statusPieOption = computed<EChartsOption>((): EChartsOption => {
       itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
       label: { show: false },
       data: [...counts.entries()].map(([k, v]) => ({
-        name: statusLabel(k), value: v, itemStyle: { color: statusColor[k] || '#4f8cff' },
+        name: statusLabel(k), value: v, itemStyle: { color: hasOwn(statusColor, k) ? statusColor[k] : '#4f8cff' },
       })),
     }],
   }
@@ -654,21 +719,22 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
     }
     const res = await options.request()
     mfaAwareSuccess(res.message || options.successFallback)
-    void fetchTasks().catch(() => {})
+    void refreshNow().catch(() => {})
   } catch (error: unknown) {
     // 全局拦截器已 toast；仅记录，避免 unhandled rejection
     console.error(`${options.failureLabel} failed`, error)
-    if (options.refreshOnError) void fetchTasks().catch(() => {})
+    if (options.refreshOnError) void refreshNow().catch(() => {})
   } finally {
     if (taskActionPendingId.value === row.id) taskActionPendingId.value = null
   }
 }
 
 const runCooldownReason = (row: TaskInfo): string => {
+  // null 是契约里的第三种状态（永久不可重试），不得先 `?? 0` 归成「可运行」。
+  if (row.retry_cooldown_seconds === null) return '该任务永久不可重试'
   const seconds = Number(row.retry_cooldown_seconds ?? 0)
   if (!Number.isFinite(seconds)) return ''
-  // 判据与证书任务页同源（utils/certJobStatus）：后端下发「此刻剩余秒」，
-  // 0 即可运行；null（永久不可重试）由 triggerable 呈现禁用态。
+  // 判据与证书任务页同源（utils/certJobStatus）：后端下发「此刻剩余秒」，0 即可运行。
   if (certJobRetryReady(seconds)) return ''
   return `冷却中，约 ${Math.ceil(seconds / 60)} 分钟后可运行`
 }
@@ -780,9 +846,11 @@ const logsTail = useLogTailPolling({
     const task = logsTask.value
     if (!task) return null
     const res = await request.get<APIResponse<{ content: string }>>(taskLogEndpoint(task.id), { silent: true })
-    logsLoadError.value = false
+    // 先确认仍是同一任务，再清错误态：切任务后迟到的成功不得清掉新任务的失败提示。
     if (logsTask.value?.id !== task.id) return null
-    return (res.data?.content || '').trim()
+    if (!res.data) throw new TypeError('任务日志响应缺少 data')
+    logsLoadError.value = false
+    return res.data.content.trim()
   },
   onError: () => { logsLoadError.value = true },
 })
@@ -815,10 +883,10 @@ const statusLabels: Record<string, string> = {
 }
 // 状态列兜底只回显原值——禁止把 cert_jobs 业务生命周期态（issued/waiting_ca…）
 // 经证书标签兜底渲染进状态列（2026-10-22 用户裁定三态词表）。
-const statusLabel = (s: string) => statusLabels[s] || s
+const statusLabel = (s: string) => hasOwn(statusLabels, s) ? statusLabels[s] : s
 // v2.0 四类型：定时(蓝)/常驻(绿)/循环(青)/触发(橙)
 const kindLabels: Record<string, string> = { scheduled: '定时', daemon: '常驻', periodic: '循环', oneshot: '触发' }
-const kindLabel = (k: string) => kindLabels[k] || k
+const kindLabel = (k: string) => hasOwn(kindLabels, k) ? kindLabels[k] : k
 const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
   k === 'scheduled' ? 'primary' : k === 'daemon' ? 'success' : k === 'periodic' ? 'info' : 'warning'
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
@@ -842,11 +910,12 @@ const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' 
 // caddy-restart（Caddy 崩溃自愈 watcher 通道）此前裸显
 // 英文 token——补中文标签，未列触发值仍回退原文。
 const triggerLabels: Record<string, string> = { manual: '手动', auto: '自动', schedule: '排程', queue: '队列', startup: '启动', 'caddy-restart': 'Caddy重启' }
-const triggerLabel = (t: string) => triggerLabels[t] || t || '—'
+const triggerLabel = (t: string) => (hasOwn(triggerLabels, t) ? triggerLabels[t] : t) || '—'
 // 结果串双源：引擎 task_runs 结果（success/failed/…/skipped）+ cert-job 动态行
 // 的 cert_jobs 状态机（issued/validating/…）——前者未命中时回退 certJobStatusLabel
+const resultLabels: Record<string, string> = { success: '成功', failed: '失败', cancelled: '已取消', interrupted: '中断', running: '运行中', skipped: '已跳过' }
 const statusResultLabel = (r: string): string =>
-  ({ success: '成功', failed: '失败', cancelled: '已取消', interrupted: '中断', running: '运行中', skipped: '已跳过' }[r] ?? certJobStatusLabel(r as CertJobStatus))
+  hasOwn(resultLabels, r) ? resultLabels[r]! : certJobStatusLabel(r as CertJobStatus)
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
   r === 'success' || r === 'issued' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 

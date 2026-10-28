@@ -209,7 +209,9 @@ func AuditSourcePart(source string) string {
 // 留痕（system 归因，裁定 2026-09-07；对齐 certissuer/集群同步口径）。
 func recordSystemReloadAudit(source string, err error) {
 	if err != nil {
-		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), err.Error()), "")
+		// 审计 detail 是全员可见面：传输失败错误含 admin 端点原文，剥离后再落盘
+		// （服务端日志由调用方的 Logf 保留原文）。
+		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), RedactCaddyAdminEndpoint(err.Error())), "")
 		return
 	}
 	RecordAuditLog("system", "重载", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), AuditResultPart("success")), "")

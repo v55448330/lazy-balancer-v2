@@ -10,9 +10,8 @@ import assert from 'node:assert/strict'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews } from '../src/utils/importPreview.ts'
 import type * as ImportPreviewModule from '../src/utils/importPreview.ts'
 import { importSummaryLabel } from '../src/utils/importSummaryLabels.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, deferred, repoCode, section } from './_helpers.ts'
 
-const deferred = <T>() => Promise.withResolvers<T>()
 const instrumentBlobReads = (content: Blob) => {
   const slices: Array<[number, number]> = []
   const reads: number[] = []

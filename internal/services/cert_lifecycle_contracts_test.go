@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,19 +32,25 @@ func TestRenewalRequeueClearsCAAntiAbuseFields(t *testing.T) {
 	}
 	transitioned := make(chan struct{})
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	// 提前 Fatal 时同样释放入队阻塞点，避免协程悬在 beforeEnqueue 上。
+	t.Cleanup(releaseOnce)
 	manager.beforeEnqueue = func() {
 		close(transitioned)
 		<-release
 	}
 	resetCertificateServiceForTest(t)
-	go func() {
-		if err := NewCertificateService().renewExpiringCertificates(); err != nil {
-			t.Logf("renew scan returned: %v", err)
-		}
-	}()
+	// 结果必须回传主 goroutine 断言：协程里 t.Logf 在测试返回后才发出会被记成
+	// after-test log，既不失败也不可定位。
+	scanErr := make(chan error, 1)
+	go func() { scanErr <- NewCertificateService().renewExpiringCertificates(context.Background()) }()
 
 	// When：巡检完成状态迁移（beforeEnqueue 在迁移后、入队前阻塞）
-	<-transitioned
+	select {
+	case <-transitioned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("续期巡检未到达入队点（beforeEnqueue）")
+	}
 
 	// Then：queued 且两列已清空
 	var status string
@@ -52,12 +59,20 @@ func TestRenewalRequeueClearsCAAntiAbuseFields(t *testing.T) {
 		Scan(&status, &caAvailableAfter, &lastErrorCode); err != nil {
 		t.Fatalf("read requeued job: %v", err)
 	}
-	close(release)
+	releaseOnce()
 	if status != "queued" {
 		t.Fatalf("status=%q, want queued", status)
 	}
 	if caAvailableAfter != nil || lastErrorCode != nil {
 		t.Fatalf("ca_available_after=%v last_error_code=%v, want 双 NULL（冷却残留必须随 requeue 清除）", caAvailableAfter, lastErrorCode)
+	}
+	select {
+	case err := <-scanErr:
+		if err != nil {
+			t.Errorf("续期扫描返回错误: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("续期巡检未在释放入队阻塞后返回")
 	}
 }
 
@@ -166,6 +181,17 @@ func TestRenderSkipsTLSCertificatesForTCPRules(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES ('lb_tcp_tls','127.0.0.1',9000,1,'tcp')`); err != nil {
 		t.Fatalf("seed tcp upstream: %v", err)
 	}
+	// 正控：同一份配置里必须有一条真正产出 load_files 的 HTTP 规则。没有它时
+	// 整份配置不发射 apps.tls 节，下面「TCP 规则不得列入 load_files」的断言会
+	// 恒真空转（渲染结构一改就静默失效）。
+	httpsCert, httpsKey := matchingCertificatePair(t, "https-ok.example.com")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,strategy,enabled,enable_tls,tls_source,tls_cert,tls_key)
+		VALUES ('lb_https_ok','https-ok','https-ok.example.com','http',443,'weighted_round_robin',1,1,'manual',?,?)`, httpsCert, httpsKey); err != nil {
+		t.Fatalf("seed https control rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES ('lb_https_ok','127.0.0.1',9001,1,'http')`); err != nil {
+		t.Fatalf("seed https control upstream: %v", err)
+	}
 
 	// When
 	cfg := generateCaddyConfigFromStore(database)
@@ -183,20 +209,29 @@ func TestRenderSkipsTLSCertificatesForTCPRules(t *testing.T) {
 	}
 	apps, ok := cfg["apps"].(map[string]interface{})
 	if !ok {
-		return
+		t.Fatalf("渲染结果缺少 apps 节（%T）——TCP 规则的 load_files 断言不得空转", cfg["apps"])
 	}
 	tlsApp, ok := apps["tls"].(map[string]interface{})
 	if !ok {
-		return
+		t.Fatalf("渲染结果缺少 apps.tls 节（%T）——TCP 规则的 load_files 断言不得空转", apps["tls"])
 	}
 	certs, ok := tlsApp["certificates"].(map[string]interface{})
 	if !ok {
-		return
+		t.Fatalf("渲染结果缺少 apps.tls.certificates 节（%T）——TCP 规则的 load_files 断言不得空转", tlsApp["certificates"])
 	}
-	for _, raw := range loadFilesAsMaps(certs["load_files"]) {
-		if tags := stringSlice(raw["tags"]); len(tags) == 1 && tags[0] == "lb_tcp_tls" {
+	loadFiles := loadFilesAsMaps(certs["load_files"])
+	foundHTTPSControl := false
+	for _, raw := range loadFiles {
+		tags := stringSlice(raw["tags"])
+		if len(tags) == 1 && tags[0] == "lb_tcp_tls" {
 			t.Fatalf("TCP 规则被列入 load_files: %#v", raw)
 		}
+		if len(tags) == 1 && tags[0] == "lb_https_ok" {
+			foundHTTPSControl = true
+		}
+	}
+	if !foundHTTPSControl {
+		t.Fatalf("正控缺失：HTTP TLS 规则未列入 load_files（%#v）——上面的 TCP 断言将空转", loadFiles)
 	}
 }
 

@@ -452,6 +452,7 @@ func TestPolicyIPListReferencesFallbackToLive(t *testing.T) {
 }
 
 func TestPolicyIPListLiveFallbackRevalidatesInsideImportLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	seedLiveAdminShared(t)
 	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,category,entries,system) VALUES (77,'live list','custom','[{"value":"192.0.2.1"}]',0)`); err != nil {
@@ -641,6 +642,7 @@ func TestLbbakExportRejectsPayloadBeyondImportLimit(t *testing.T) {
 }
 
 func TestLbbakExportRejectsDecompressedOverflow(t *testing.T) {
+	withIsolatedGlobal(t)
 	previous := maxLbbakTotalBytes
 	maxLbbakTotalBytes = 1024
 	t.Cleanup(func() { maxLbbakTotalBytes = previous })

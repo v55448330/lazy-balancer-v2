@@ -509,12 +509,19 @@ func buildSectionSyncStatuses(reported, masterHashes map[string]string, switches
 }
 
 // storeSectionReport 记录节点最近一次上报的分区哈希（防御性拷贝，调用方后续
-// 改动上报载荷不影响已存状态）；空哈希视为旧版本从节点上报，清除既有记录。
-func (s *ClusterService) storeSectionReport(nodeID int, hashes map[string]string) {
+// 改动上报载荷不影响已存状态）。两种「无哈希」形态语义不同：
+//   - unavailable（从节点本轮读取 cluster_applied_sections 失败，如 SQLITE_BUSY）
+//     → 保留既有记录：读失败不等于旧版本从节点，删除会让节点列表的分区同步列
+//     整体消失，运维信号从「某节滞后」退化为「无数据」（最长一个同步周期自愈）。
+//   - 空哈希且未标记（旧版本从节点/从未同步）→ 清除既有记录。
+func (s *ClusterService) storeSectionReport(nodeID int, hashes map[string]string, unavailable bool) {
 	s.sectionMu.Lock()
 	defer s.sectionMu.Unlock()
 	if s.sectionReports == nil {
 		s.sectionReports = make(map[int]map[string]string)
+	}
+	if unavailable {
+		return
 	}
 	if len(hashes) == 0 {
 		delete(s.sectionReports, nodeID)
@@ -595,7 +602,7 @@ func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report mode
 		// 降级窗口内的上报按 403 语义拒绝，而不是误报 404。
 		return s.nodeWriteMissError(ctx)
 	}
-	s.storeSectionReport(nodeID, report.SectionHashes)
+	s.storeSectionReport(nodeID, report.SectionHashes, report.SectionHashesUnavailable)
 	return nil
 }
 

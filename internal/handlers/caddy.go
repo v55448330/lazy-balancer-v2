@@ -373,12 +373,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	var cfg models.GlobalConfig
 	// 治理默认值列的读路径 SQL 字面量是默认值的第三次复制
 	//（DDL DEFAULT+启动回填+此处）——改参数绑定 db.Default* 常量单源化，
-	// 常量变更不再需要三处同步。非治理列（log 级别/布尔/保留期等）字面量
-	// 原状（不在库值唯一真相治理批次内）。
-	// threat_traffic_sample_n/security_events_retention_days/
-	// security_events_row_cap 三处兜底字面量与 DDL DEFAULT+迁移回填对齐
-	//（自此改为绑定 db.Default* 常量，含 threat_screen_mode；均 NOT NULL+
-	// 回填，兜底实际不可达）。
+	// 常量变更不再需要三处同步。日志体量/保留期/JWT、威胁大屏与安全事件
+	// 默认值同样走参数绑定；非治理列（log 级别/布尔等）字面量原状。
 	err := db.DB.QueryRow(`
 		SELECT id, caddy_config, dns_provider,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,?) as cert_expiry_days,
@@ -402,13 +398,13 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(proxy_flush_interval,0) as proxy_flush_interval,
 		       COALESCE(proxy_stream_close_delay,0) as proxy_stream_close_delay,
 		       COALESCE(server_tokens_hidden,FALSE) as server_tokens_hidden,
-		       COALESCE(task_log_size_mb,10) as task_log_size_mb,
-		       COALESCE(audit_log_size_mb,10) as audit_log_size_mb,
-		       COALESCE(runtime_log_size_mb,100) as runtime_log_size_mb,
+		       COALESCE(task_log_size_mb,?) as task_log_size_mb,
+		       COALESCE(audit_log_size_mb,?) as audit_log_size_mb,
+		       COALESCE(runtime_log_size_mb,?) as runtime_log_size_mb,
 		       COALESCE(access_log_json,TRUE) as access_log_json,
 	       COALESCE(access_log_format,'') as access_log_format,
-	       COALESCE(audit_retention_months,3) as audit_retention_months,
-	       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
+	       COALESCE(audit_retention_months,?) as audit_retention_months,
+	       COALESCE(jwt_expire_minutes,?) as jwt_expire_minutes,
 	       COALESCE(timezone,?) as timezone,
 	       COALESCE(github_proxy_url,'https://v4.gh-proxy.org/') as github_proxy_url,
 	       COALESCE(github_token,'') as github_token,
@@ -431,11 +427,12 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	`,
 		// 占位符序=cert_expiry_days/cert_renewal_days/cert_renewal_attempts/
 		// caddy_log_size_mb/request_body_max_size_mb/http_read_timeout/http_write_timeout/
-		// http_idle_timeout；追加大屏/安全事件四列。
+		// http_idle_timeout、日志体量/保留期/JWT 五列；追加大屏/安全事件四列。
 		db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts,
 		db.DefaultCaddyLogSizeMB, db.DefaultRequestBodyMaxSizeMB,
 		db.DefaultHTTPReadTimeout, db.DefaultHTTPWriteTimeout, db.DefaultHTTPIdleTimeout,
-		db.DefaultTimezone,
+		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB,
+		db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes, db.DefaultTimezone,
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN,
 		db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap,
 	).Scan(
@@ -898,7 +895,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		var err error
 		oldRuntimeConfig, err = h.caddyService.GetConfig()
 		if err != nil {
-			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("获取当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
+			recordAudit(c, "更新失败", "全局配置", caddyFailureAuditDetail("获取当前 Caddy 配置失败", err))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取当前 Caddy 配置失败"})
 			return
 		}
@@ -1051,7 +1048,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			if !rejected || restoreErr != nil {
 				h.recordCaddyApplyFailure(applyErr, restoreErr)
 			}
-			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", applyErr.Error(), services.AuditResultPart("failure")))
+			recordAudit(c, "更新失败", "全局配置", caddyFailureAuditDetail("Caddy 配置应用失败", applyErr))
 			// 2026-09-07：与规则域统一——配置拒绝→400，传输/系统→500。
 			if rejected {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，配置未保存: " + applyErr.Error()})
@@ -1072,7 +1069,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			// 提交失败不是配置应用失败（apply 已发生）——失败对象用提交口径。
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			err = errors.Join(err, recovery.err())
-			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(commitUncertainLabel+"："+err.Error(), services.AuditResultPart("failure")))
+			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.RedactCaddyAdminEndpoint(commitUncertainLabel+"："+err.Error()), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + err.Error()})
 			return
 		}
@@ -1180,13 +1177,13 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		// 横幅事实源：恢复 /load 失败意味着运行配置可能停留为校验载荷，
 		// 响应丢失后必须仍可见（与 UpdateConfig/PutCaddyConfig 同一持久化口径）。
 		h.recordCaddyApplyFailure(joined, restoreErr)
-		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail(
-			"校验回退加载后恢复权威配置失败，运行配置可能停留为校验载荷", joined.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "校验失败", "Caddy配置", caddyFailureAuditDetail(
+			"校验回退加载后恢复权威配置失败，运行配置可能停留为校验载荷", joined))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置校验后恢复运行配置失败: " + joined.Error()})
 		return
 	}
 	if validateErr != nil {
-		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", validateErr.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "校验失败", "Caddy配置", caddyFailureAuditDetail("配置校验", validateErr))
 		if services.IsConfigRejected(validateErr) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败", Data: validateErr.Error()})
 			return
@@ -1211,7 +1208,7 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		// 手动重载恰是最需要留痕的操作——失败分支记录
 		// 操作者归因 + 错误详情（recordCaddyApplyResult 的系统级「应用失败」
 		// 不带用户身份，不能替代本条）。
-		recordAudit(c, "重载失败", "Caddy服务", services.FormatAuditDetail("手动重载 Caddy 配置", err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "重载失败", "Caddy服务", caddyFailureAuditDetail("手动重载 Caddy 配置", err))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
 		return
 	}
@@ -1649,7 +1646,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
-		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("备份当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("备份当前 Caddy 配置失败", err))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
 		return
 	}
@@ -1700,7 +1697,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		if !rejected || restoreErr != nil {
 			h.recordCaddyApplyFailure(err, restoreErr)
 		}
-		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("Caddy 配置应用失败", err))
 		// 2026-09-07：与统一——配置拒绝→400，传输/系统→500。
 		if rejected {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 拒绝配置: " + err.Error()})
@@ -1722,7 +1719,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		// 为提交而非配置应用。
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 		err = errors.Join(err, recovery.err())
-		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(commitUncertainLabel, err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail(commitUncertainLabel, err))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + ": " + err.Error()})
 		return
 	}
@@ -1776,7 +1773,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	// caddyApplyNoteLocked: caller already holds caddyOpMu (applyCaddyConfigE
 	// would re-lock the non-reentrant mutex and deadlock).
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 已启动但配置应用失败: " + note})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已启动", note)})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 已启动"})
@@ -1815,7 +1812,7 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	}
 	// Same as StartCaddy: caller holds caddyOpMu, use the locked variant.
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 已重启但配置应用失败: " + note})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已重启", note)})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 已重启"})

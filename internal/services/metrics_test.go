@@ -72,18 +72,8 @@ func TestMetricsService_collect_logs_failures_once_per_state_transition(t *testi
 	// 30s 周期持久失败不得逐 tick 刷日志——fail→ok→fail 应恰好
 	// 2 条 warn + 1 条 info（状态转换口径）。
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	// 复用单源隔离夹具（主库 + 指标库，四句柄成对还原）。
+	setupIsolatedDBWithMetrics(t)
 	isolateMetricsState(t)
 
 	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -149,18 +139,8 @@ func TestMetricsService_collect_logs_read_failures_once_per_state_transition(t *
 	// 零信号成员）。现经状态转换日志（read 类别）：ok→fail 一次 warn、
 	// fail→ok 一次 info、持续同一状态静默。
 	// Given
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	// 复用单源隔离夹具（主库 + 指标库，四句柄成对还原）。
+	setupIsolatedDBWithMetrics(t)
 	isolateMetricsState(t)
 
 	var logs bytes.Buffer
@@ -430,10 +410,8 @@ func TestMetricsService_storeRuleMetricsText_emptyTextNoRows(t *testing.T) {
 
 func TestMetricsService_updateOverview_keepsPreviousCountsOnQueryFailure(t *testing.T) {
 	// Given：先用健康 DB 建立前值 overview（3 条规则、2 条启用）
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	// 复用单源隔离夹具（四句柄成对还原）。
+	setupIsolatedDB(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (name, protocol, listen_port, enabled) VALUES
 		('r1','http',8080,1), ('r2','http',8081,1), ('r3','tcp',9000,0)`); err != nil {
 		t.Fatalf("seed rules: %v", err)
@@ -486,10 +464,8 @@ func TestMetricsService_updateOverview_nilDBPreservesCountsAndSamples(t *testing
 
 func TestMetricsService_updateOverview_counts_online_nodes_dynamically(t *testing.T) {
 	// Given：4 个节点——新鲜在线、陈旧在线(status 仍为 online)、待审批、last_seen 为空
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	// 复用单源隔离夹具（四句柄成对还原）。
+	setupIsolatedDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET sync_interval=60 WHERE id=1`); err != nil {
 		t.Fatalf("seed sync_interval: %v", err)
 	}
@@ -517,18 +493,8 @@ func TestMetricsServiceCleanupHistory_stillCleansWhenGlobalConfigDropped(t *test
 	// 不存在时清理仍按 7 天窗口执行。
 	// Given：过期（100 天）与近期（当前）各 1 条历史；DROP global_config
 	// 模拟配置表极端损坏
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	// 复用单源隔离夹具（主库 + 指标库，四句柄成对还原）。
+	setupIsolatedDBWithMetrics(t)
 	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp) VALUES
 		('lb_old', datetime('now','-100 days')),
 		('lb_fresh', datetime('now'))`); err != nil {
@@ -804,12 +770,22 @@ func TestMetricsService_collect_refreshesOverviewCountsOncePerCycle(t *testing.T
 func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T) {
 	setupMetricsRetentionTest(t)
 	isolateMetricsState(t)
+	// Given：先以健康库建立非零基线（2/3）——零值基线下「保留前值」与「静默
+	// 归零」不可区分，断言零鉴别力。
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (name, protocol, listen_port, enabled) VALUES
+		('r1','http',8080,1), ('r2','http',8081,1), ('r3','tcp',9000,0)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	service := NewMetricsService("", 30)
+	service.refreshDBOverviewMetrics()
+	if got := service.GetOverview(); got.ActiveRules != 2 || got.TotalRules != 3 {
+		t.Fatalf("baseline overview=%+v, want ActiveRules=2 TotalRules=3", got)
+	}
 	originalWriter := log.Writer()
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(originalWriter) })
 	swapBrokenDB(t)
-	service := NewMetricsService("", 30)
 
 	// When：连续两个周期都查失败
 	service.refreshDBOverviewMetrics()
@@ -821,9 +797,13 @@ func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T
 			t.Fatalf("%q 日志次数=%d, want 1（状态转换去重）: %s", key, count, logs.String())
 		}
 	}
-	// 计数保留前值（0）而非任意归零行为变化
-	if got := service.GetOverview().ActiveRules; got != 0 {
-		t.Fatalf("ActiveRules=%d, want 0", got)
+	// 计数必须保留非零前值（失败分支被绕过即归零/漂移 → 本断言红）
+	got := service.GetOverview()
+	if got.ActiveRules != 2 || got.TotalRules != 3 {
+		t.Fatalf("overview=%+v, want ActiveRules=2 TotalRules=3（失败保留前值）", got)
+	}
+	if !strings.Contains(logs.String(), "keeping previous value=2") {
+		t.Fatalf("首报行必须带保留前值=2: %s", logs.String())
 	}
 }
 

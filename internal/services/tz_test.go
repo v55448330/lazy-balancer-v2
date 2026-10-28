@@ -11,10 +11,25 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
+
+// snapshotLocationState 记录并还原「双写」时区状态：ConfigureLocation 同时写
+// currentLocation 与任务引擎（taskengine.SetLocation）。只还原 currentLocation
+// 会让引擎时区永久停在用例值——后续用例的任务槽/时间断言差若干小时（顺序相关
+// 污染，-shuffle 下随机红）。引擎没有读访问器，故保存的是同一个 *time.Location。
+func snapshotLocationState(t *testing.T) {
+	t.Helper()
+	oldLoc := CurrentLocation()
+	t.Cleanup(func() {
+		currentLocation.Store(oldLoc)
+		taskengine.SetLocation(oldLoc)
+	})
+}
 
 func TestRefreshLocation_updates_current_location_without_mutating_timeLocal(t *testing.T) {
 	// Given
+	snapshotLocationState(t) // refreshLocation 写 currentLocation + 任务引擎，必须同源还原
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	oldCurrent := db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -173,6 +188,8 @@ func TestApplicationLogWriterFiltersRawStandardLogsAtConfiguredThreshold(t *test
 		{name: "error drops warning lines", level: "error", message: "Warning: degraded startup", want: false},
 		{name: "error allows error lines", level: "error", message: "ERROR: startup failed", want: true},
 	}
+	oldLevel := CurrentLogLevel()
+	t.Cleanup(func() { _ = ConfigureLogLevel(oldLevel) })
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
@@ -191,7 +208,6 @@ func TestApplicationLogWriterFiltersRawStandardLogsAtConfiguredThreshold(t *test
 			}
 		})
 	}
-	t.Cleanup(func() { _ = ConfigureLogLevel("info") })
 }
 
 // DB 初始化完成点即时刷新时区——init 期 worker 首查时
@@ -199,12 +215,9 @@ func TestApplicationLogWriterFiltersRawStandardLogsAtConfiguredThreshold(t *test
 // 窗口）。ApplyLogLevel 是 main 在 db.Initialize 完成后的首个 services 装配点
 // （亦为集群导入 users 节后的调用点），在此追加一次即时 refreshLocation。
 func TestApplyLogLevel_refreshesTimezoneImmediately(t *testing.T) {
-	oldLoc := CurrentLocation()
+	snapshotLocationState(t) // currentLocation + 任务引擎同源还原（ApplyLogLevel 两处都写）
 	StopTimezoneRefresh()
-	t.Cleanup(func() {
-		currentLocation.Store(oldLoc)
-		StartTimezoneRefresh(context.Background())
-	})
+	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	oldCurrent := db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -350,10 +363,10 @@ func TestApplicationLogWriter_filtersEachLineOfMultilinePayload(t *testing.T) {
 // 不得静默把全站切到 UTC——刷新失败保留旧时区并返回错误（状态机留痕）。
 func TestRefreshLocation_rejectsBlankTimezone(t *testing.T) {
 	initServicesDB(t)
+	snapshotLocationState(t) // ConfigureLocation 写双状态，必须同源还原
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatalf("seed location: %v", err)
 	}
-	t.Cleanup(func() { _, _ = ConfigureLocation("UTC") })
 	if _, err := db.DB.Exec(`UPDATE global_config SET timezone='' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -373,8 +386,8 @@ func TestRefreshLocation_rejectsBlankTimezone(t *testing.T) {
 // ConfigureLocation 是第二写入口：空串必须显式拒绝（time.LoadLocation("")
 // 合法返回 UTC——放行会静默把全站展示/审计窗口切 UTC）。
 func TestConfigureLocation_rejectsBlankName(t *testing.T) {
+	snapshotLocationState(t)
 	oldLoc := CurrentLocation()
-	t.Cleanup(func() { currentLocation.Store(oldLoc) })
 	for _, name := range []string{"", "   "} {
 		if _, err := ConfigureLocation(name); err == nil {
 			t.Fatalf("ConfigureLocation(%q) 必须拒绝空/空白时区", name)
@@ -388,13 +401,9 @@ func TestConfigureLocation_rejectsBlankName(t *testing.T) {
 // 日志级别读失败必须留痕（状态转换口径：首报一次、恢复补一条），不得静默
 // 降级到 info。
 func TestApplyLogLevel_logsReadFailureOnceAndRecovers(t *testing.T) {
-	oldLoc := CurrentLocation()
+	snapshotLocationState(t) // currentLocation + 任务引擎同源还原
 	StopTimezoneRefresh()
-	t.Cleanup(func() {
-		currentLocation.Store(oldLoc)
-		StartTimezoneRefresh(context.Background())
-		_ = ConfigureLogLevel("info")
-	})
+	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	oldCurrent := db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -407,14 +416,10 @@ func TestApplyLogLevel_logsReadFailureOnceAndRecovers(t *testing.T) {
 		// 让时区 worker 在 nil 句柄上空转（与 initServicesDB 同构）。
 		db.SetDB(oldCurrent)
 	})
-	metricsStateMu.Lock()
-	metricsStateFailed = map[string]bool{}
-	metricsStateMu.Unlock()
-	t.Cleanup(func() {
-		metricsStateMu.Lock()
-		delete(metricsStateFailed, "log-level-refresh")
-		metricsStateMu.Unlock()
-	})
+	// 整表隔离用单源 helper（保存并还原全表 + FIFO 键序）——手工
+	// `metricsStateFailed = map[string]bool{}` 会丢弃其它族（collect/
+	// timezone-refresh/schedule-read-*）的键，跨用例串扰。
+	isolateMetricsState(t)
 
 	if _, err := db.DB.Exec("ALTER TABLE global_config RENAME TO global_config_bak"); err != nil {
 		t.Fatalf("inject read failure: %v", err)

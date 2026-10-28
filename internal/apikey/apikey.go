@@ -9,27 +9,30 @@ import (
 	"strings"
 )
 
-// authorizationScheme 是 API Key 在 Authorization 头中的方案前缀。它与 JWT 的
-// "Bearer <JWT>" 共用 Bearer 方案，靠 lb_sk_ 前缀区分两种凭据类别。
-// 包内私有：本包的两个导出函数（IsAPIKeyAuthorization / FromHeader）是唯一
-// 契约面——导出常量会诱使外部改写或按字面复制前缀，绕过「同一规则」的约束。
-const authorizationScheme = "Bearer lb_sk_"
+// apiKeyFromAuthorization 是 Authorization 头中 API Key 形态的唯一解析规则。
+// Bearer auth-scheme 按 RFC 7235 §2.1 大小写不敏感；凭据自身的 lb_sk_ 前缀
+// 仍精确匹配，避免把 JWT 误归类为 API Key。
+func apiKeyFromAuthorization(value string) (string, bool) {
+	scheme, token, found := strings.Cut(value, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") || !strings.HasPrefix(token, "lb_sk_") {
+		return "", false
+	}
+	return token, true
+}
 
 // IsAPIKeyAuthorization 判定 Authorization 头是否为 API Key 形态。
 func IsAPIKeyAuthorization(value string) bool {
-	return strings.HasPrefix(value, authorizationScheme)
+	_, ok := apiKeyFromAuthorization(value)
+	return ok
 }
 
 // FromHeader 按约定顺序提取 API Key：X-API-Key 头优先；否则 Authorization
-// 头必须是 "Bearer lb_sk_..." 形态，并去掉 "Bearer " 方案前缀。
+// 头必须是大小写无关的 Bearer 方案加 lb_sk_ 凭据，并去掉方案前缀。
 // 返回空串表示请求未携带 API Key（JWT 或匿名请求）。
 func FromHeader(header http.Header) string {
 	if key := header.Get("X-API-Key"); key != "" {
 		return key
 	}
-	authorization := header.Get("Authorization")
-	if !IsAPIKeyAuthorization(authorization) {
-		return ""
-	}
-	return strings.TrimPrefix(authorization, "Bearer ")
+	key, _ := apiKeyFromAuthorization(header.Get("Authorization"))
+	return key
 }

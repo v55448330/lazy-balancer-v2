@@ -346,9 +346,16 @@ func readAppliedSectionHashes(ctx context.Context, dbh *sql.DB) map[string]strin
 	applied := map[string]string{}
 	for rows.Next() {
 		var sec, hash string
-		if rows.Scan(&sec, &hash) == nil {
-			applied[sec] = hash
+		// 逐行 Scan 失败与行遍历错误同口径（fail-visible + 返回 nil）：静默跳过
+		// 会返回「部分 map」——computeSectionSkips 侧缺记录方向安全（按需重放），
+		// 但 driftedSections 会用残缺 applied 记录比对，把未漂移节误判为漂移
+		// （多一轮全量重拉），且故障本身零信号。两列均为 TEXT，正常形态不会失败，
+		// 只有驱动/连接异常可达。
+		if err := rows.Scan(&sec, &hash); err != nil {
+			Logf("warn", "读取已应用节哈希失败（漂移检测将回退全量重放口径）: %v", err)
+			return nil
 		}
+		applied[sec] = hash
 	}
 	if err := rows.Err(); err != nil {
 		Logf("warn", "遍历已应用节哈希失败（漂移检测将回退全量重放口径）: %v", err)

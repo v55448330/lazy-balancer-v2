@@ -51,12 +51,25 @@ func getTaskHistory(t *testing.T, handler gin.HandlerFunc, taskID string) (*http
 	return recorder, response
 }
 
-func TestGetSystemTaskHistory_mapsCertJobRowToRunRecord(t *testing.T) {
-	h := newBackupTestHandlers(t)
+func useTaskHistoryShanghaiLocation(t *testing.T) {
+	t.Helper()
+	previous := services.CurrentLocation().String()
 	if _, err := services.ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatalf("configure location: %v", err)
 	}
-	t.Cleanup(func() { _, _ = services.ConfigureLocation("Asia/Shanghai") })
+	t.Cleanup(func() {
+		if previous == "CST" {
+			previous = "Asia/Shanghai"
+		}
+		if _, err := services.ConfigureLocation(previous); err != nil {
+			t.Errorf("restore location %q: %v", previous, err)
+		}
+	})
+}
+
+func TestGetSystemTaskHistory_mapsCertJobRowToRunRecord(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	useTaskHistoryShanghaiLocation(t)
 
 	// Given 一条已签发的证书任务行（UTC 时间戳）。
 	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at, updated_at)
@@ -133,10 +146,7 @@ func TestGetSystemTaskHistory_certJobMissingAndInvalidIDs(t *testing.T) {
 // duration=0）。双布局单源=services.ParseUTCTimeDual。
 func TestGetSystemTaskHistory_certJobFlatUTCLayout(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	if _, err := services.ConfigureLocation("Asia/Shanghai"); err != nil {
-		t.Fatalf("configure location: %v", err)
-	}
-	t.Cleanup(func() { _, _ = services.ConfigureLocation("Asia/Shanghai") })
+	useTaskHistoryShanghaiLocation(t)
 
 	// Given 平面 UTC 布局时间戳（空格分隔、无 T/Z）。
 	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at, updated_at)
@@ -172,10 +182,7 @@ func TestGetSystemTaskHistory_certJobFlatUTCLayout(t *testing.T) {
 func TestCertJobTimes_listMatchesHistory(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
-	if _, err := services.ConfigureLocation("Asia/Shanghai"); err != nil {
-		t.Fatalf("configure location: %v", err)
-	}
-	t.Cleanup(func() { _, _ = services.ConfigureLocation("Asia/Shanghai") })
+	useTaskHistoryShanghaiLocation(t)
 
 	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at, updated_at)
 		VALUES ('lb_t3','t3.example.test','issued','签发完成','2026-10-20T04:00:00Z','2026-10-20T04:00:05Z')`)

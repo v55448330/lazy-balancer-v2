@@ -55,7 +55,11 @@ test('未知字符串数组解析单源（本地副本已删）', () => {
 })
 
 test('引用名单取数走跨组件共享缓存（self + 共绑 peer，不再清空重下）', () => {
-  assert.match(page, /import \{[^}]*ensureSharedEntries[^}]*sharedEntriesCache[^}]*subscribeSharedEntriesCache[^}]*\} from '@\/utils\/securityStages'/)
+  const sharedImport = page.match(/import \{([^}]*)\} from '@\/utils\/securityStages'/)?.[1] ?? ''
+  const imported = new Set(sharedImport.split(',').map((name) => name.trim()))
+  for (const name of ['ensureSharedEntries', 'sharedEntriesCache', 'subscribeSharedEntriesCache']) {
+    assert.ok(imported.has(name), `共享名单缓存必须导入 ${name}`)
+  }
   assert.doesNotMatch(page, /ipListDetails/, '本地条目缓存不得回流')
   assert.doesNotMatch(page, /ensureIpListDetails/, '本地补齐函数不得回流')
 
@@ -92,6 +96,15 @@ test('爬虫引擎：字段缺失→默认三项，显式 "[]" 原样保留（�
   assert.match(detailBlock, /d\.geoip_crawler_engines === undefined \|\| d\.geoip_crawler_engines === ''/)
   assert.match(detailBlock, /\['googlebot', 'bingbot', 'baiduspider'\]/)
   assert.doesNotMatch(detailBlock, /length > 0 \?/, '空数组不得再被三引擎兜底改写')
+})
+
+test('带外空模式读入不得被静默改写成拦截模式', () => {
+  const detail = section(page, 'async function openDialog', 'const handleSave = async')
+  assert.match(detail, /ip_acl_mode: d\.ip_acl_mode \?\? ''/, 'ACL 空模式必须原样进入表单，由用户显式处理')
+  assert.match(detail, /geoip_mode: d\.geoip_mode \?\? 'off'/, 'GeoIP 缺省只能归一为关闭，不得代填 deny')
+  assert.doesNotMatch(detail, /ip_acl_mode: d\.ip_acl_mode \|\| 'allow'|geoip_mode: d\.geoip_mode \|\| 'deny'/)
+  assert.doesNotMatch(page, /geoip_mode \?\? 'deny'/, '只读预览同样不得把未知模式展示成拦截')
+  assert.match(page, /geoipMode \|\| '未配置模式'/, '未知模式必须显性说明')
 })
 
 test('保存收尾走批量端点，不回流逐规则 PUT（钉调用点而非注释措辞）', () => {

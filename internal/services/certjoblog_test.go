@@ -79,6 +79,50 @@ func TestCertJobLogDir_migratesLegacyFilesOnce(t *testing.T) {
 	}
 }
 
+// 升级场景的不可逆保护：目标文件已存在时不得覆盖。
+// 迁移是一次性且不可逆（os.Rename 覆盖），若目标目录已写入新日志（本轮重启
+// 后已产生），旧根残留的同名文件覆盖它即内容错乱，且只在首次启动发生、
+// 事后无法复现。守卫 `if _, err := os.Stat(dst); err == nil { continue }`
+// （certjoblog.go 迁移循环）必须被这条用例钉住：删掉守卫即红。
+func TestCertJobLogDir_migrationDoesNotOverwriteExistingTarget(t *testing.T) {
+	base := t.TempDir()
+	legacyDir := filepath.Join(base, "logs")
+	tasksDir := filepath.Join(legacyDir, "tasks")
+	target := filepath.Join(tasksDir, "certjobs")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := taskengine.LogDir()
+	oldMigrated := certJobLogMigrated.Load()
+	taskengine.SetLogDir(tasksDir)
+	certJobLogMigrated.Store(false) // 每进程一次的迁移在本测试内重放
+	t.Cleanup(func() {
+		taskengine.SetLogDir(old)
+		certJobLogMigrated.Store(oldMigrated)
+	})
+	const name = "certjob-lb_old.log"
+	fresh := []byte("fresh target line\n")
+	stale := []byte("stale legacy line\n")
+	if err := os.WriteFile(filepath.Join(target, name), fresh, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(legacyDir, name)
+	if err := os.WriteFile(legacy, stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if dir := CertJobLogDir(); dir != target {
+		t.Fatalf("CertJobLogDir=%q, want %q", dir, target)
+	}
+
+	if data, err := os.ReadFile(filepath.Join(target, name)); err != nil || string(data) != string(fresh) {
+		t.Fatalf("目标已存在的文件被迁移覆盖: data=%q err=%v, want 保留 %q", data, err, fresh)
+	}
+	if data, err := os.ReadFile(legacy); err != nil || string(data) != string(stale) {
+		t.Fatalf("目标已存在时旧文件应留在原处（跳过迁移）: data=%q err=%v, want %q", data, err, stale)
+	}
+}
+
 // captureCertJobLogWarns 捕获轮转失败告警（测试缝），返回读取快照的函数。
 func captureCertJobLogWarns(t *testing.T) func() []string {
 	t.Helper()
@@ -385,15 +429,21 @@ func TestCertJobLogFileName_reversibleForDottedIDs(t *testing.T) {
 	}
 
 	// 往返：路径 → 文件名 → certJobLogRuleIDFromName 必须还原原始 ID，
-	// 且 housekeeping 反推出的锁键与写侧同源（同一 mutex）。
-	for _, ruleID := range []string{"lb.dot", "lbdot", "lb_x-1", "lb.dot.rule", "lb..dot", "lb.dot中"} {
+	// 且 housekeeping 反推出的写锁键与写侧同源（同一 mutex）。锁键用
+	// certJobLogFileComponent 口径直接比较——lockCertJobLog 是只 acquire
+	// 不释放的取锁入口，在此调用会给每个 ID 在进程级锁表留下永不复位的
+	// 引用（与 TestLockCertJobLog_reclaimsEntryAfterRelease 的「可回收」契约
+	// 互斥），且与被比较的对象是同一函数取值、无额外语义。
+	roundtripIDs := []string{"lb.dot", "lbdot", "lb_x-1", "lb.dot.rule", "lb..dot", "lb.dot中"}
+	for _, ruleID := range roundtripIDs {
 		name := filepath.Base(CertJobLogPath(ruleID))
 		parsed, ok := certJobLogRuleIDFromName(name)
 		if !ok || parsed != ruleID {
 			t.Fatalf("roundtrip %q: parsed=%q ok=%v（文件名 %q）", ruleID, parsed, ok, name)
 		}
-		if lockCertJobLog(parsed) != lockCertJobLog(ruleID) {
-			t.Fatalf("roundtrip %q: housekeeping 与写侧锁键不同源", ruleID)
+		if certJobLogFileComponent(parsed) != certJobLogFileComponent(ruleID) {
+			t.Fatalf("roundtrip %q: housekeeping 与写侧锁键不同源（文件组件 %q != %q）",
+				ruleID, certJobLogFileComponent(parsed), certJobLogFileComponent(ruleID))
 		}
 		// 轮转代（.N/.gz）反推同样成立（taskLogsHousekeeping 扫描的形态）。
 		for _, suffix := range []string{".log.1", ".log.5", ".log.gz"} {
@@ -401,6 +451,14 @@ func TestCertJobLogFileName_reversibleForDottedIDs(t *testing.T) {
 			if !rok || rotated != ruleID {
 				t.Fatalf("roundtrip %q%s: parsed=%q ok=%v", ruleID, suffix, rotated, rok)
 			}
+		}
+	}
+	// 本用例不得在进程级写锁表留下条目：旧实现经 lockCertJobLog 取锁
+	// （acquire 后无 Unlock），6 个 ID 的引用恒不为 0，锁表按用例无界增长。
+	for _, ruleID := range roundtripIDs {
+		component := certJobLogFileComponent(ruleID)
+		if _, exists := certJobLogWriteLocks.locks.Load(component); exists {
+			t.Fatalf("roundtrip %q 在进程级写锁表留下条目 %q（锁取用后未释放）", ruleID, component)
 		}
 	}
 

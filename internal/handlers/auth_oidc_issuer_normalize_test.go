@@ -6,6 +6,7 @@ package handlers
 // 归一值恒 404，错误文案还被归一成「服务不可达」误导排障。
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -241,5 +242,94 @@ func TestOIDCSettingsUpdate_rejectsIdentityIssuerMigrationConflict(t *testing.T)
 	}
 	if !strings.Contains(stored, legacyIssuer) {
 		t.Fatalf("冲突拒绝时不得写回配置（仍应保留原值）：%s", stored)
+	}
+}
+
+// Given 旧 issuer 下已有一行被禁用的 OIDC 身份。
+// When 管理员把 issuer 改为另一个值（不是归一化写回）。
+// Then 响应与审计都明示旧身份行不再可达；新 issuer 首登仍按既有 JIT 契约建行。
+func TestOIDCSettingsUpdate_reportsStaleIdentitiesOnIssuerChange(t *testing.T) {
+	oldIDP := newMockIdP(t)
+	newIDP := newMockIdP(t)
+	router, _ := setupOIDCTest(t, oldIDP)
+	putOIDCConfig(t, router, `{"issuer":"`+oldIDP.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	if _, err := db.DB.Exec(`INSERT INTO users (username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES ('old-oidc-admin','','admin',0,'oidc','user-sub-1',?)`, oldIDP.issuer); err != nil {
+		t.Fatalf("seed old issuer identity: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/oidc", strings.NewReader(`{"issuer":"`+newIDP.issuer+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			StaleIdentityRows int `json:"stale_identity_rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if response.Data.StaleIdentityRows != 1 {
+		t.Fatalf("stale_identity_rows=%d body=%s, want 1", response.Data.StaleIdentityRows, rec.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='OIDC 配置' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("read audit detail: %v", err)
+	}
+	if !strings.Contains(detail, "存量身份行 1 条不再可达") {
+		t.Fatalf("审计未提示换 issuer 的身份行后果：%q", detail)
+	}
+
+	front := runOIDCLoginFlow(t, router)
+	if !strings.Contains(front, "#/oidc/callback?token=") {
+		t.Fatalf("新 issuer 首登应沿用 JIT 契约，got redirect: %s", front)
+	}
+	var role string
+	var enabled int
+	if err := db.DB.QueryRow(`SELECT role,is_enabled FROM users WHERE auth_provider='oidc' AND oidc_issuer=?`, newIDP.issuer).Scan(&role, &enabled); err != nil {
+		t.Fatalf("read new issuer JIT row: %v", err)
+	}
+	if role != "user" || enabled != 1 {
+		t.Fatalf("new JIT row role=%q enabled=%d, want user/1", role, enabled)
+	}
+}
+
+// 库内 issuer 带尾斜杠时，历史身份行按 rawIssuer 建键；切换到不同 issuer
+// 的存量统计必须同时覆盖原值与归一值，不能漏报 raw-only 行。
+func TestOIDCSettingsUpdate_countsRawIssuerStaleIdentitiesOnIssuerChange(t *testing.T) {
+	oldIDP := newMockIdP(t)
+	newIDP := newMockIdP(t)
+	router, _ := setupOIDCTest(t, oldIDP)
+	rawIssuer := oldIDP.issuer + "/"
+	if _, err := db.DB.Exec(`UPDATE global_config SET oidc_config=? WHERE id=1`,
+		`{"enabled":true,"issuer":"`+rawIssuer+`","client_id":"test-client","client_secret":"s"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO users (username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES ('raw-only-oidc','','user',1,'oidc','raw-subject',?)`, rawIssuer); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/oidc", strings.NewReader(`{"issuer":"`+newIDP.issuer+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			StaleIdentityRows int `json:"stale_identity_rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.StaleIdentityRows != 1 {
+		t.Fatalf("stale_identity_rows=%d body=%s, want raw-only row counted as 1", response.Data.StaleIdentityRows, rec.Body.String())
 	}
 }

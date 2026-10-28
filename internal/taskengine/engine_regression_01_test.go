@@ -204,7 +204,7 @@ func TestEngine_RearmLoopRespectsUserStopUnlessWork(t *testing.T) {
 		Run:        func(RunContext) error { runs.Add(1); return nil }})
 	e.StartLoop("t-rearm")
 	// 等在途首轮落定后再停止（避免把停止前的轮次计入断言）。
-	time.Sleep(50 * time.Millisecond)
+	waitForEngine(t, "Rearm 基线首轮落定", 2*time.Second, func() bool { return runs.Load() == 1 && e.inFlight.Load() == 0 })
 	e.StopLoop("t-rearm")
 	if m, _ := e.Lookup("t-rearm"); m.LoopOn {
 		t.Fatal("StopLoop 后 LoopOn 必须为 false")

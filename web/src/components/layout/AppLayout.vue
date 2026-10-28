@@ -129,7 +129,7 @@
         <div class="header-left">
           <el-breadcrumb separator="/">
             <el-breadcrumb-item>{{ appName }}</el-breadcrumb-item>
-            <el-breadcrumb-item>{{ pageTitle[currentPage] || '仪表盘' }}</el-breadcrumb-item>
+            <el-breadcrumb-item>{{ hasOwn(pageTitle, currentPage) ? pageTitle[currentPage] : '仪表盘' }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
         <div class="header-right">
@@ -221,6 +221,7 @@ import { restartServiceWithFeedback } from '@/utils/restart'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { SETTINGS_BREADCRUMB_PARENT, SETTINGS_TAB_IDS, SETTINGS_TAB_TITLES } from '@/utils/settingsPages'
 import { activateOnce } from '@/utils/keyboardActivate'
+import { hasOwn } from '@/utils/hasOwn'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)

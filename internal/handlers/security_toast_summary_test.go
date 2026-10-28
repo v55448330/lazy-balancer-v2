@@ -82,6 +82,44 @@ func TestGetSecurityEventToastSummary_groupsAllEventsSinceCursor(t *testing.T) {
 	}
 }
 
+func TestGetSecurityEventToastSummary_includesBackfilledEventsOlderThanFiveMinutes(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	oldTime := time.Now().UTC().Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
+	baseline, err := db.MetricsDB.Exec(`INSERT INTO security_events
+		(event_time, client_ip, method, uri, event_type, rule_triggered, rule_msg, action)
+		VALUES (?, '185.199.108.9', 'GET', '/baseline', 'crs', '942100', 'SQL Injection', 'blocked')`, oldTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineID, _ := baseline.LastInsertId()
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events
+		(event_time, client_ip, method, uri, event_type, rule_triggered, rule_msg, action)
+		VALUES (?, '93.184.216.7', 'GET', '/backfilled', 'crs', '942100', 'SQL Injection', 'blocked')`, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{cfg: &config.Config{}}
+	router := gin.New()
+	router.GET("/security/events/toast-summary", h.GetSecurityEventToastSummary)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet,
+		"/security/events/toast-summary?since_id="+strconv.FormatInt(baselineID, 10), nil))
+	var payload struct {
+		Data struct {
+			Groups []struct {
+				Count int64 `json:"count"`
+			} `json:"groups"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v body=%s", err, recorder.Body.String())
+	}
+	if len(payload.Data.Groups) != 1 || payload.Data.Groups[0].Count != 1 {
+		t.Fatalf("groups=%+v, want backfilled event included", payload.Data.Groups)
+	}
+}
+
 func TestGetSecurityEventToastSummary_capsAggregationAtDefaultBudget(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	now := time.Now().UTC().Truncate(time.Second).Format("2006-01-02 15:04:05")

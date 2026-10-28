@@ -19,17 +19,15 @@ func TestCollectEngineFamilies_roleApplicability(t *testing.T) {
 		t.Helper()
 		rows := collectEngineFamilies(te)
 		for _, id := range masterOnly {
-			for _, ti := range rows {
-				if ti.ID == id && ti.RoleApplicable != wantApplicable {
-					t.Fatalf("%s: %s RoleApplicable=%v, want %v", label, id, ti.RoleApplicable, wantApplicable)
-				}
+			ti := findTaskInfo(t, rows, id)
+			if ti.RoleApplicable != wantApplicable {
+				t.Fatalf("%s: %s RoleApplicable=%v, want %v", label, id, ti.RoleApplicable, wantApplicable)
 			}
 		}
 		for _, id := range roleAny {
-			for _, ti := range rows {
-				if ti.ID == id && !ti.RoleApplicable {
-					t.Fatalf("%s: %s（RoleAny）RoleApplicable=false", label, id)
-				}
+			ti := findTaskInfo(t, rows, id)
+			if !ti.RoleApplicable {
+				t.Fatalf("%s: %s（RoleAny）RoleApplicable=false", label, id)
 			}
 		}
 	}

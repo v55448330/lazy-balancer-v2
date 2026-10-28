@@ -138,15 +138,17 @@ var crawlerEngines = []CrawlerEngine{
 		Name:        "Anthropic Claude",
 		UARegex:     regexp.MustCompile(`(?i)ClaudeBot|Claude-SearchBot|Claude-User|Claude-Web|anthropic-ai`),
 		PTRSuffixes: []string{".anthropic.com", ".claude.ai"},
-		// Claude-Web 已停用、anthropic-ai 是通用 SDK/库标记：仅作 UA 匹配面
-		// （Verified 路径不受影响），伪装证据只认现行官方爬虫 token。
-		SpoofUARegex: regexp.MustCompile(`(?i)ClaudeBot|Claude-SearchBot|Claude-User`),
+		// Claude-User 是对话式标记，Claude-Web 已停用、anthropic-ai 是通用
+		// SDK/库标记：仅作 UA 匹配面，伪装证据只认现行官方爬虫 token。
+		SpoofUARegex: regexp.MustCompile(`(?i)ClaudeBot|Claude-SearchBot`),
 	},
 	{
 		ID:          "perplexitybot",
 		Name:        "Perplexity",
 		UARegex:     regexp.MustCompile(`(?i)PerplexityBot|Perplexity-User`),
 		PTRSuffixes: []string{".perplexity.ai", ".perplexity.com"},
+		// Perplexity-User 同样是对话式标记，不单独构成伪装证据。
+		SpoofUARegex: regexp.MustCompile(`(?i)PerplexityBot`),
 	},
 	{
 		ID:          "kimisearchbot",
@@ -179,19 +181,21 @@ func CrawlerSpoofEvidence(engineID, userAgent string) bool {
 	return false
 }
 
-// CrawlerEngines 返回引擎注册表的**深拷贝**（防调用方篡改全局）：结构体与
-// 其中的 PTRSuffixes/IPRanges 切片都重新分配——只复制结构体的浅拷贝会让
-// out[i].PTRSuffixes[j] = … 写穿到全局注册表。
+// CrawlerEngines 返回引擎注册表的**深拷贝**（防调用方篡改全局）：结构体、
+// PTRSuffixes/IPRanges 切片与两个正则都重新分配。正则虽通常只读，但暴露
+// Longest 等变异方法；共享指针会让调用方静默改写全局匹配语义。
 //
-// 例外（只读契约）：UARegex/SpoofUARegex 两个 *regexp.Regexp 指针与全局
-// 注册表**共享**（正则不可变数据，按值复制无意义）。调用方**禁止**对返回值
-// 调变异方法（Longest 等）——那会改变全局匹配语义，让所有规则的爬虫豁免/
-// 伪装证据判定口径被静默改写且无任何测试会红。需要匹配请用包内
-// MatchCrawlerEngine / crawlerUAPrefilter。
+// 需要匹配请优先用包内 MatchCrawlerEngine / crawlerUAPrefilter。
 func CrawlerEngines() []CrawlerEngine {
 	out := make([]CrawlerEngine, len(crawlerEngines))
 	for i := range crawlerEngines {
 		out[i] = crawlerEngines[i]
+		if crawlerEngines[i].UARegex != nil {
+			out[i].UARegex = regexp.MustCompile(crawlerEngines[i].UARegex.String())
+		}
+		if crawlerEngines[i].SpoofUARegex != nil {
+			out[i].SpoofUARegex = regexp.MustCompile(crawlerEngines[i].SpoofUARegex.String())
+		}
 		if s := crawlerEngines[i].PTRSuffixes; s != nil {
 			out[i].PTRSuffixes = append([]string(nil), s...)
 		}

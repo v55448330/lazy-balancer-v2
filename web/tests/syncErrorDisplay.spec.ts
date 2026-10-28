@@ -68,5 +68,5 @@ test('机内标记与后端 cluster_sync.go / models 逐字对齐（跨栈钉）
   const go = repoCode('internal/services/cluster_sync.go')
   assert.ok(go.includes('"apply_ok_reload_failed"'), 'cluster_sync.go 不再产生 apply_ok_reload_failed 标记')
   const models = repoCode('internal/models/cluster.go')
-  assert.ok(models.includes('SyncErrorCodeApplyFailed      SyncErrorCode = "apply_failed"'), 'apply_failed 码漂移')
+  assert.match(models, /SyncErrorCodeApplyFailed\s+SyncErrorCode\s*=\s*"apply_failed"/, 'apply_failed 码漂移')
 })

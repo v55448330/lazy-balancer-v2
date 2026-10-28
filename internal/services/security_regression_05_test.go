@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,22 +23,18 @@ import (
 // ---- 爬虫名单词法边界与格式校验 ----
 
 func TestParseCrawlerCIDRs_strictTokenBoundaries(t *testing.T) {
-	body := "not.an.ip.version.1.2.3.4.5\n2026.10.18 release 9.9.9.9.1\nhost 42.236.12.130\n"
+	body := "not.an.ip.version.1.2.3.4.5\n" +
+		"2026.10.18 release 9.9.9.9.1\n" +
+		"host 42.236.12.130\n" +
+		"other-valid 142.236.12.130 trailing-digit 42.236.12.1307 trailing-octet 42.236.12.130.999 invalid-octet 999.42.236.12.130\n"
 	got, err := parseCrawlerCIDRsForFormat(body, "")
 	if err != nil {
 		t.Fatalf("parse crawler CIDRs: %v", err)
 	}
-	joined := ""
-	for _, v := range got {
-		joined += v + ","
-	}
-	if !containsString(got, "42.236.12.130/32") {
-		t.Fatalf("合法裸 IP 未提取: %v", got)
-	}
-	for _, bad := range []string{"1.2.3.4/32", "9.9.9.9/32"} {
-		if containsString(got, bad) {
-			t.Fatalf("版本号/多段数字被误收为 %s: %v", bad, got)
-		}
+	// 精确集合同时排除多八位组两侧拼出的合法 IP 片段；只检查三个
+	// 样本是否包含/不包含会让额外误收静默通过。
+	if joined := strings.Join(got, ","); joined != "42.236.12.130/32,142.236.12.130/32" {
+		t.Fatalf("爬虫网段集合=%q, want 两个合法裸 IP，版本号/相邻多八位组片段不得进入", joined)
 	}
 }
 
@@ -230,7 +227,15 @@ func TestCrawlerRunUpdate_convergesProjectionWhenContentChanged(t *testing.T) {
 		_, _ = w.Write([]byte(`{"prefixes":[{"ipv4Prefix":"203.0.113.0/24"}]}`))
 	}))
 	defer ts.Close()
+	// 先播种内置源（fresh DB 无行时 UPDATE 会影响 0 行，RunUpdate 再补种真实 URL）。
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(`UPDATE security_crawler_sources SET url=?, update_enabled=1 WHERE name='googlebot'`, ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	// 收缩门以当前快照为基线；预置 1 条旧值，让本轮 1 条新值属于「内容变化」而非塌缩。
+	if err := upsertCrawlerIPList("googlebot", []string{"198.51.100.0/24"}); err != nil {
 		t.Fatal(err)
 	}
 	// manual 触发会跑全部启用源；其余内置源是真实外网 URL，必须禁用，
@@ -301,22 +306,16 @@ func TestParseCrawlerCIDRs_jsonRequiresStructuredFields(t *testing.T) {
 		t.Fatalf("结构化字段缺失的 JSON 应报错，got=%v", got)
 	}
 
-	// Given 结构化字段与错误文本混杂
-	body = `{"prefixes":[{"ipv4Prefix":"203.0.113.0/24"}],"note":"blocked 198.51.100.7"}`
+	// Given 结构化字段与错误文本、相邻多八位组混杂
+	body = `{"prefixes":[{"ipv4Prefix":"203.0.113.0/24"}],"note":"blocked 198.51.100.7 1198.51.100.7 198.51.100.70"}`
 	// When
 	got, err = parseCrawlerCIDRsForFormat(body, "json")
-	// Then 只保留结构化网段，note 中的 IP 同形文本不得进入名单
+	// Then 精确集合只含结构化网段，错误页/note 中的 IP 及其片段均不得进入
 	if err != nil {
 		t.Fatalf("结构化 JSON 解析失败: %v", err)
 	}
-	if !containsString(got, "203.0.113.0/24") {
-		t.Fatalf("结构化网段缺失: %v", got)
-	}
-	if containsString(got, "198.51.100.7/32") {
-		t.Fatalf("note 字段的 IP 被词法兜底误收: %v", got)
-	}
-	if len(got) != 1 {
-		t.Fatalf("JSON 源只应产出结构化网段，got=%v", got)
+	if joined := strings.Join(got, ","); joined != "203.0.113.0/24" {
+		t.Fatalf("JSON 源网段集合=%q, want 仅结构化字段", joined)
 	}
 
 	// 对照：非 json 格式（html/空）仍按词法提取（源站形态未变）。

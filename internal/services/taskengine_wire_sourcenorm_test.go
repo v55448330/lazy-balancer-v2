@@ -6,25 +6,11 @@ package services
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/taskengine"
 )
-
-// useTempTaskLogDir 把任务日志目录切到临时目录并返回。
-func useTempTaskLogDir(t *testing.T) string {
-	t.Helper()
-	oldDir := taskengine.LogDir()
-	dir := filepath.Join(t.TempDir(), "tasks")
-	taskengine.SetLogDir(dir)
-	t.Cleanup(func() { taskengine.SetLogDir(oldDir) })
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("创建任务日志目录: %v", err)
-	}
-	return dir
-}
 
 // Given 威胁源表残留「更新中」行（上次进程在更新中退出）。
 // When 启动归一。
@@ -32,7 +18,7 @@ func useTempTaskLogDir(t *testing.T) string {
 // 未注册 ID `threat-update` 的游离日志文件。
 func TestNormalizeInterruptedSourceStatusesLogsToRegisteredTaskID(t *testing.T) {
 	_, database := newClusterTestService(t)
-	useTempTaskLogDir(t)
+	newTaskLogDir(t)
 	if _, err := database.Exec(`UPDATE security_threat_sources SET update_status='running', message='正在下载' WHERE name='ustc'`); err != nil {
 		t.Fatalf("seed threat active: %v", err)
 	}

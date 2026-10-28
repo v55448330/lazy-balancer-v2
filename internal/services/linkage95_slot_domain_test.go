@@ -6,6 +6,7 @@ package services
 
 import (
 	"testing"
+	"time"
 )
 
 func TestEarliestThreatSlotIgnoresUnregisteredSources(t *testing.T) {
@@ -141,13 +142,22 @@ func TestUnregisteredThreatSlotNotRewrittenByArmOrTimezoneRearm(t *testing.T) {
 	}
 
 	// When 注册表外行带未来槽后再做时区重排
-	if _, err := database.Exec(`UPDATE security_threat_sources SET next_update='2999-05-06 07:08:09' WHERE name='legacy-z'`); err != nil {
-		t.Fatalf("seed future unregistered slot: %v", err)
+	if _, err := database.Exec(`UPDATE security_threat_sources SET next_update='2999-05-06 07:08:09' WHERE name IN ('legacy-z','ustc')`); err != nil {
+		t.Fatalf("seed future registry and unregistered slots: %v", err)
 	}
 	RearmScheduleSlotsAfterTimezoneChange()
 
 	// Then 注册表外行的槽不被重排路径改写（槽域外行不参与重排）。
 	if slot := readSlot("legacy-z"); slot != "2999-05-06 07:08:09" {
 		t.Fatalf("注册表外行槽被时区重排改写为 %q（槽域=运行域被破坏）", slot)
+	}
+	// 正控：注册表源必须从同一个固定未来槽被真实重排；否则 slotFn 失败
+	// 整表 continue 时，legacy-z 的负断言会空转假绿。
+	registrySlot := readSlot("ustc")
+	if registrySlot == "" || registrySlot == "2999-05-06 07:08:09" {
+		t.Fatalf("注册表源未被时区重排（正控失败），slot=%q", registrySlot)
+	}
+	if got := parseSlotUTC(t, registrySlot); !got.After(time.Now().UTC()) {
+		t.Fatalf("注册表源重排槽=%v，want 真实未来时间", got)
 	}
 }

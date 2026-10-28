@@ -3,12 +3,10 @@ package middleware
 import (
 	"database/sql"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -101,14 +99,8 @@ func isSelfServiceUserWrite(c *gin.Context) bool {
 	} else if c.Request.Method != http.MethodPut {
 		return false
 	}
-	target, err := strconv.Atoi(path)
-	if err != nil || target <= 0 {
-		return false
-	}
-	// user_id 类型归一单源（handlers.ContextUserID）——与 adminOrSelfParam 及
-	// handlers 自助锁同解析，避免包内第二份 switch 漏形态。
-	actor := int(handlers.ContextUserID(c))
-	return actor > 0 && actor == target
+	_, self := selfServiceUserTarget(c, path)
+	return self
 }
 
 func isSelfServicePath(path string) bool {

@@ -928,6 +928,7 @@ func TestImportConfigBackup_rejectsWhenCertDrainIncomplete(t *testing.T) {
 
 // 必须在 begin 后的事务/锁内视图复核并拒绝，不能落库悬挂引用。
 func TestImportConfigBackup_rechecksACMEReferencesAfterLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin','hash','admin',1)`); err != nil {
 		t.Fatal(err)
@@ -961,6 +962,7 @@ func TestImportConfigBackup_rechecksACMEReferencesAfterLock(t *testing.T) {
 }
 
 func TestImportConfigBackup_liveACMEPrecheckUsesLockedView(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given a live enabled ACME rule that no longer exists as ACME by import time.
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,acme_config_id)
@@ -992,6 +994,7 @@ func TestImportConfigBackup_liveACMEPrecheckUsesLockedView(t *testing.T) {
 }
 
 func TestImportConfigBackup_versionSeedCleanupUsesLockedSnapshot(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given a CRS version row removed between the old pre-lock read and import.
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin','hash','admin',1)`); err != nil {

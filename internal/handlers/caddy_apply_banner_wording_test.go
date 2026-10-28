@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 func bannerText(t *testing.T) string {
@@ -76,7 +77,7 @@ func TestCaddyApplyFailureBanner_redactsAdminEndpoint(t *testing.T) {
 		t.Fatalf("横幅=%q, want 保留底层错误原因", got)
 	}
 	// 纯文本错误不得被改写。
-	if redacted := redactCaddyAdminEndpoint("Caddy 配置应用失败（旧配置已保留）：配置被拒绝"); redacted != "Caddy 配置应用失败（旧配置已保留）：配置被拒绝" {
+	if redacted := services.RedactCaddyAdminEndpoint("Caddy 配置应用失败（旧配置已保留）：配置被拒绝"); redacted != "Caddy 配置应用失败（旧配置已保留）：配置被拒绝" {
 		t.Fatalf("无地址文本不得被改写: %q", redacted)
 	}
 }

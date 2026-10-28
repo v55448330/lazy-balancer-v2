@@ -452,7 +452,7 @@
           </template>
         </el-alert>
         <template v-else>
-          <el-empty v-if="!ruleHistoryLoading && ruleHistoryRows.length === 0" description="该时间范围内暂无数据" :image-size="60" />
+          <el-empty v-if="!ruleHistoryLoading && ruleHistoryDeltas.deltas.length === 0" description="该时间范围内暂无数据" :image-size="60" />
           <div v-else v-loading="ruleHistoryLoading">
             <el-card shadow="never" class="history-card">
               <template #header>
@@ -824,6 +824,10 @@ const getRuleProtocolTagType = (rule: Rule): 'primary' | 'success' | 'warning' =
   return rule.enable_tls ? 'success' : 'primary'
 }
 
+// /metrics/realtime 的 bytes_in/bytes_out 是每秒速率；图表必须按速率口径显示，
+// 与同页「请求速率 /s」一致，避免把 1.2 MB/s 读成上一轮新增 1.2 MB。
+const formatTrafficRate = (value: number): string => `${formatBytes(value)}/s`
+
 const trafficChartOption = computed<EChartsOption>(() => ({
   tooltip: { 
     trigger: 'axis', 
@@ -835,7 +839,7 @@ const trafficChartOption = computed<EChartsOption>(() => ({
       let result = `${items[0]?.name ?? ''}<br/>`
       items.forEach((item) => {
         const value = typeof item.value === 'number' ? item.value : Number(item.value ?? 0)
-        result += `${item.marker} ${item.seriesName}: ${formatBytes(value)}<br/>`
+        result += `${item.marker} ${item.seriesName}: ${formatTrafficRate(value)}<br/>`
       })
       return result
     }
@@ -851,7 +855,7 @@ const trafficChartOption = computed<EChartsOption>(() => ({
   yAxis: { 
     type: 'value', 
     axisLine: { show: false },
-    axisLabel: { fontSize: 10, color: '#9ca3af', formatter: (v: number) => formatBytes(v) },
+    axisLabel: { fontSize: 10, color: '#9ca3af', formatter: formatTrafficRate },
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
@@ -906,6 +910,35 @@ const slowLaneDue = (): boolean => {
   return true
 }
 
+// /rules 与 /config/health 都是慢车道：必须脱离轮询数组 fire-and-forget，否则
+// 大规则集/DB 抖动（最长 30s）会让同一轮资源、曲线与 Caddy 状态全部延后。
+let rulesSlowLaneInFlight = false
+const fetchRulesSlowLane = (roundSignal?: AbortSignal): void => {
+  if (disposed || rulesSlowLaneInFlight) return
+  rulesSlowLaneInFlight = true
+  void request.get('/rules', { signal: roundSignal ?? dashboardPolling.signal, silent: true }).then((res) => {
+    if (disposed) return
+    if (!res.data) {
+      rulesUnavailable.value = true
+      return
+    }
+    rules.value = res.data || []
+    rulesUnavailable.value = false
+    // 指标尚未落地时不写映射：false 在本 helper 中表示「明确采集失败」，
+    // 不是「尚无结论」。等 /metrics/dashboard 到达后由它重建映射。
+    if (dashboardMetricsLanded.value) {
+      ruleMetricsUnavailable.value = buildRuleMetricsUnavailable(rules.value, ruleMetrics.value, dashboardMetricsLanded.value && !caddyMetricsUnavailable.value)
+    }
+    const version = ++rulesVersion
+    const currentRules = rules.value
+    // 健康查询同属慢车道；版本守卫与 ruleHealthInFlight/pending 保证迟到响应
+    // 不写回、更新版本补跑，函数内部自带 try/catch。
+    void fetchRuleHealth(currentRules, version, roundSignal)
+  }).catch(() => { if (!disposed) rulesUnavailable.value = true }).finally(() => {
+    rulesSlowLaneInFlight = false
+  })
+}
+
 const fetchAllData = (roundSignal?: AbortSignal): Promise<void> => {
   if (disposed) return Promise.resolve()
   if (fetchAllDataPromise) return fetchAllDataPromise
@@ -916,6 +949,7 @@ const fetchAllData = (roundSignal?: AbortSignal): Promise<void> => {
   // 操作后的补偿刷新）无轮次可用，回落页级永久 signal（随卸载终止）。
   const config = { signal: roundSignal ?? dashboardPolling.signal, silent: true }
   const slowLane = slowLaneDue()
+  if (slowLane) fetchRulesSlowLane(roundSignal)
   fetchAllDataPromise = Promise.allSettled([
     request.get('/system/info', config).then((res) => {
       if (disposed) return
@@ -977,31 +1011,6 @@ const fetchAllData = (roundSignal?: AbortSignal): Promise<void> => {
       // rulesUnavailable 由 /rules 自己的 then/catch 管理，避免双 setter 竞态。
       ruleMetricsUnavailable.value = buildRuleMetricsUnavailable(rules.value, undefined, false)
     }),
-    slowLane ? request.get('/rules', config).then((res) => {
-      if (disposed) return
-      if (!res.data) {
-        rulesUnavailable.value = true
-        return
-      }
-      rules.value = res.data || []
-      rulesUnavailable.value = false
-      // /rules 与 metrics 无序落地：只有 dashboard 已落地（成功或失败）才判定
-      // 「可用」；未落地时 metricsAvailable=false（=尚无结论，不标采集失败），
-      // 由 dashboard 自己的 then/catch 在到达后重建映射。
-      ruleMetricsUnavailable.value = buildRuleMetricsUnavailable(
-        rules.value,
-        dashboardMetricsLanded.value ? ruleMetrics.value : undefined,
-        dashboardMetricsLanded.value && !caddyMetricsUnavailable.value,
-      )
-      const version = ++rulesVersion
-      const currentRules = rules.value
-      // 健康查询是慢车道：不得 await 在轮询数组内——否则 /config/health 变慢会
-      // 让同一轮的系统指标/流量/连接/状态全部延后（5s 轮询退化为最长 30s），
-      // 下一轮又被 fetchAllDataPromise 挡住。版本守卫（version !== rulesVersion）
-      // 与 ruleHealthInFlight/pending 已保证迟到响应不写回、更新版本补跑，
-      // 函数内部自带 try/catch，fire-and-forget 无未处理 rejection。
-      void fetchRuleHealth(currentRules, version, roundSignal)
-     }).catch(() => { if (!disposed) rulesUnavailable.value = true }) : Promise.resolve(),
     request.get('/metrics/connections', config).then((res) => {
       if (disposed) return
       if (!res.data) {
@@ -1309,7 +1318,6 @@ onUnmounted(() => {
 .chart-container { height: 200px; }
 .chart-skeleton { height: 200px; }
 .collection-state { display: flex; align-items: center; justify-content: center; min-height: 80px; color: #909399; }
-.chart-stale-hint { margin-bottom: 6px; font-size: 12px; color: var(--el-color-warning); }
 
 .text-primary { color: #111827; }
 .text-secondary { color: #6b7280; }

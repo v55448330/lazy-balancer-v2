@@ -5,9 +5,11 @@ package services
 // 且过期槽每 tick 重投（引擎层退避兜底之前的双重放大）。
 
 import (
-	"lazy-balancer-v2/internal/db"
 	"strings"
 	"testing"
+	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // Given crs 管理器未初始化。When 触发 crs 任务。Then 返回错误 + task_runs
@@ -70,8 +72,11 @@ func TestCRSTask_nilManagerAutoAdvancesSlot(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_crs_version WHERE id=1`).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next == "" || next <= "2020-01-01 00:00:00" {
-		t.Fatalf("nil-manager 失败轮未推进排程槽: %q（过期槽会每 tick 重投）", next)
+	if next == "" {
+		t.Fatal("nil-manager 失败轮未写入排程槽")
+	}
+	if got := parseSlotUTC(t, next); !got.After(time.Now().UTC()) {
+		t.Fatalf("nil-manager 失败轮槽位=%v，必须真实晚于当前时间（过期槽会每 tick 重投）", got)
 	}
 }
 
@@ -91,7 +96,10 @@ func TestIP2RegionTask_nilManagerAutoAdvancesSlot(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1`).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next == "" || next <= "2020-01-01 00:00:00" {
-		t.Fatalf("nil-manager 失败轮未推进排程槽: %q（过期槽会每 tick 重投）", next)
+	if next == "" {
+		t.Fatal("nil-manager 失败轮未写入排程槽")
+	}
+	if got := parseSlotUTC(t, next); !got.After(time.Now().UTC()) {
+		t.Fatalf("nil-manager 失败轮槽位=%v，必须真实晚于当前时间（过期槽会每 tick 重投）", got)
 	}
 }

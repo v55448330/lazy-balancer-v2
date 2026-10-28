@@ -386,7 +386,6 @@
       <el-form :model="ipListForm" label-width="80px" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
         <!-- 自动封禁预置名单名称/分类/描述为内置字段（后端 400 守卫同口径），
              前端直接禁用灰态——禁止修改的字段不可输入，而非提交后报 400 -->
-        <div v-if="editingIpListPreset" class="form-tip-line">内置名单字段不可修改，仅条目可编辑（手动封禁 / 删除条目）</div>
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList" />
         </el-form-item>
@@ -420,7 +419,7 @@
               </el-table-column>
               <!-- 自动封禁名单条目展示加入时间/剩余（到期时间由剩余列表达；删除条目即解封）-->
               <template v-if="editingIpListPreset">
-                <el-table-column label="加入时间" width="140" align="center">
+                <el-table-column label="加入时间" width="170" align="center" class-name="ip-entry-created">
                   <template #default="{ row }">{{ formatDate(row.created_at) || '—' }}</template>
                 </el-table-column>
                 <el-table-column label="剩余时长" width="90" align="center">
@@ -670,7 +669,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
-import { formatDate, parseDbTimeMs } from '@/utils/date'
+import { formatDate } from '@/utils/date'
+import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
@@ -1167,21 +1167,8 @@ const removeIpListEntry = (index: number): void => {
 
 // 自动封禁名单弹框的到期展示 ——
 
-// 到期判定/剩余时长以浏览器本地解析（parseDbTimeMs 已做 UTC +Z 规范化）与
-// Date.now 对比——展示层近似（分钟粒度），封禁真值以后端投影过滤为准。
-const autobanEntryExpired = (expiresAt: string): boolean => {
-  const ms = parseDbTimeMs(expiresAt)
-  return ms !== null && ms <= Date.now()
-}
-const autobanEntryRemaining = (expiresAt: string): string => {
-  const ms = parseDbTimeMs(expiresAt)
-  if (ms === null) return '—'
-  const minutes = Math.floor((ms - Date.now()) / 60000)
-  if (minutes < 60) return `${Math.max(minutes, 0)} 分钟`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分`
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 时`
-}
+// 到期判定/剩余时长口径单源 utils/autobanEntry（与 IP 快捷处置弹框共用）。
+
 
 // 乱序响应守卫（镜像同文件 openRuleContent 的 ruleContentSeq 范式）——
 // 快速关开/切换名单时在途详情响应晚到，不再覆盖当前弹框（含「新建」空表单被
@@ -2052,6 +2039,11 @@ onUnmounted(() => {
 <style>
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 .ip-list-refs-popper { line-height: 1.6; max-width: 280px; }
+/* 自动封禁名单「加入时间」单元格不换行：formatDate 输出 "YYYY-MM-DD HH:mm:ss"，
+   列宽不足时 el-table 单元格会折成两行（2026-10-28 用户反馈）。单元格 td 由
+   el-table 内部渲染、dialog class 又经 attrs 绑定，scoped 选择器命不中，故放
+   非 scoped 块（与本块其余弹框/popper 规则同因）。 */
+.ip-entry-created { white-space: nowrap; }
 /* el-dialog 的 class 落在 .el-dialog 元素上（$attrs 手动绑定，非组件根），
    scoped 选择器无法命中，与上面 popper 同放非 scoped 块。
    统一加大弹框四向 padding（16→24px），条目表格不再贴右侧边缘，左右留白对称。 */

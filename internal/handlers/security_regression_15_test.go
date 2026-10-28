@@ -1,6 +1,6 @@
 package handlers
 
-// allow: SIZE_OK — security-domain handler regression tests ( page clamp,
+// allow: SIZE_OK — security-domain handler regression tests (pagination clamp,
 // binding rule existence).
 
 import (

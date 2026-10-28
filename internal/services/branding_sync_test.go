@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -389,14 +390,29 @@ func TestApplySnapshot_emptyWhitelistLandsEmptyString(t *testing.T) {
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
 	snapshot := models.ClusterSnapshot{
 		Version: 4,
-		APIKeys: []models.ClusterAPIKey{{ID: 1, Name: "k", KeyHash: "h", KeyPrefix: "p", CreatedBy: 1, MCPIPWhitelist: nil}},
+		APIKeys: []models.ClusterAPIKey{{ID: 1, Name: "k", KeyHash: "h", KeyPrefix: "p", CreatedBy: 1, MCPIPWhitelist: []string{"10.0.0.0/8"}}},
 	}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
-		t.Fatalf("apply: %v", err)
+		t.Fatalf("apply non-empty whitelist: %v", err)
 	}
 	var stored string
-	database.QueryRow(`SELECT COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id=1`).Scan(&stored)
+	if err := database.QueryRow(`SELECT COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id=1`).Scan(&stored); err != nil {
+		t.Fatalf("read non-empty whitelist: %v", err)
+	}
+	if !strings.Contains(stored, "10.0.0.0/8") {
+		t.Fatalf("前置非零哨兵未落库: %q", stored)
+	}
+
+	// 从非空名单收敛为空，避免 Scan 失败后的零值与目标值相同而假绿。
+	snapshot.APIKeys[0].MCPIPWhitelist = nil
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply empty whitelist: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id=1`).Scan(&stored); err != nil {
+		t.Fatalf("read empty whitelist: %v", err)
+	}
 	if stored != "" {
 		t.Fatalf("empty whitelist stored=%q, want empty string (not \"null\")", stored)
 	}

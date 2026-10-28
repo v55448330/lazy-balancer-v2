@@ -186,14 +186,9 @@ func stripRotationCollisionSuffix(s string) (string, bool) {
 	return s[:dash], true
 }
 
-// dirBytes 返回 path 的活跃文件大小与轮转副本合计。唯一实现与聚合行共用
+// dirBytesWithEntries 返回 path 的活跃文件大小与轮转副本合计，与聚合行共用
 // 「目录枚举 + 分类器归属」口径（移位 .N[.gz/.zst]、运行日志时间戳、timberjack、
-// 同秒碰撞后缀、整文件压缩归档全族），两套口径结构上不可能再分叉。
-func dirBytes(path string) (int64, int64, int) {
-	return dirBytesWithEntries(path, nil)
-}
-
-// dirBytesWithEntries 与 dirBytes 同口径；entries 非 nil 时复用同目录的一次
+// 同秒碰撞后缀、整文件压缩归档全族）。entries 非 nil 时复用同目录的一次
 // ReadDir 结果（GetLogStats 批量任务行不再逐任务枚举整个目录）。
 func dirBytesWithEntries(path string, entries []os.DirEntry) (int64, int64, int) {
 	base := filepath.Base(path)
@@ -303,21 +298,16 @@ func logStatsFileSize(path string) (int64, bool) {
 	return st.Size(), true
 }
 
-// aggregateDirStats 单次目录枚举归并匹配文件的活跃/轮转体量与归档份数
-// （替代「逐目录项 dirBytes → 其内部再 ReadDir」的 O(N²) 形态；
-// 聚合累加 RotatedCount，且压缩归档不再冒充活跃）。
-// 返回 基名 → 归并结果。分类口径与 dirBytes 一致：
+// aggregateDirStatsWithEntries 单次目录枚举归并匹配文件的活跃/轮转体量与归档份数
+// （替代「逐目录项重复 ReadDir」的 O(N²) 形态；聚合累加 RotatedCount，且压缩
+// 归档不再冒充活跃）。返回 基名 → 归并结果，与单文件口径共用唯一实现：
 //   - base（匹配、非轮转副本、非压缩归档）计入 Active；
 //     .1..9 移位副本、运行日志族 base.、timberjack
 //     <stem>-<ts>-size.log[.gz/.zst] 副本计入所属 base 的 Rotated/RotCount；
 //   - 不归属任何匹配 base 的压缩归档（.gz/.zst）按归档计入 Rotated
 //     （压缩归档不是活跃文件）。
-func aggregateDirStats(dir string, match func(name string) bool) map[string]dirStats {
-	return aggregateDirStatsWithEntries(dir, nil, match)
-}
-
-// aggregateDirStatsWithEntries 是聚合与单文件口径的唯一实现；entries 非 nil
-// 时复用调用方已枚举的目录结果。
+//
+// entries 非 nil 时复用调用方已枚举的目录结果。
 func aggregateDirStatsWithEntries(dir string, entries []os.DirEntry, match func(name string) bool) map[string]dirStats {
 	out := map[string]dirStats{}
 	if entries == nil {
@@ -350,45 +340,37 @@ func aggregateDirStatsWithEntries(dir string, entries []os.DirEntry, match func(
 			continue
 		}
 		name := e.Name()
+		if !match(name) {
+			continue
+		}
+		base := name
+		_, active := bases[name]
+		if !active {
+			var ok bool
+			if base, ok = rotationCopyBaseOf(name, bases, stemToBase); !ok {
+				// 虚拟 base：活跃文件缺席时按副本形态派生基名，保持单文件与聚合口径一致。
+				if base, ok = rotationCopyBaseName(name); !ok || !match(base) {
+					if _, compressed := taskengine.StripRotationCompressionSuffix(name); !compressed {
+						continue
+					}
+					base = name
+				}
+			}
+		}
+		// 只对已确认归属的条目付 Info/lstat 成本；无关文件不做系统调用。
 		info, infoErr := e.Info()
 		if infoErr != nil {
 			logStatsVolumeReadFailure("logstats-file-"+filepath.Join(dir, name), infoErr)
 			continue
 		}
-		if _, isBase := bases[name]; isBase {
-			st := out[name]
+		st := out[base]
+		if active {
 			st.Active += info.Size()
-			out[name] = st
-			continue
-		}
-		if !match(name) {
-			continue
-		}
-		if base, ok := rotationCopyBaseOf(name, bases, stemToBase); ok {
-			st := out[base]
+		} else {
 			st.Rotated += info.Size()
 			st.RotCount++
-			out[base] = st
-			continue
 		}
-		// 虚拟 base：活跃文件已缺席（改名/删除/轮转窗口）但只留 .N / 时间戳
-		// 副本时，dirBytes 仍按固定基名计入归档字节，聚合行却因 bases 里没有
-		// 该基名而少算（同一响应内两行口径分叉）。副本形态自带基名，按形态
-		// 派生基名归并即可与 dirBytes 一致，且不产生无人消费的独立条目
-		// （派生基名即原基名，固定名消费方照常命中）。
-		if base, ok := rotationCopyBaseName(name); ok && match(base) {
-			st := out[base]
-			st.Rotated += info.Size()
-			st.RotCount++
-			out[base] = st
-			continue
-		}
-		if _, compressed := taskengine.StripRotationCompressionSuffix(name); compressed {
-			st := out[name]
-			st.Rotated += info.Size()
-			st.RotCount++
-			out[name] = st
-		}
+		out[base] = st
 	}
 	return out
 }

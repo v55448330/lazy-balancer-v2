@@ -39,6 +39,8 @@ func TestPurgeAPIKeyWhitelistCache_sweepsByKeyIDPrefix(t *testing.T) {
 // CIDR 解析缓存必须整体清空——键含 keyID 前缀无法枚举存活 Key，逐 Key
 // 清扫不可行；批量替换后缓存必须为空（解析缓存重建廉价）。
 func TestPurgeAllAPIKeyWhitelistCache_emptiesCache(t *testing.T) {
+	withIsolatedAPIKeyWhitelistCache(t)
+
 	// Given：两个 Key 的白名单条目
 	_, network, _ := net.ParseCIDR("10.0.0.0/8")
 	apiKeyWhitelistCache.Store(`3|["10.0.0.0/8"]`, []*net.IPNet{network})
@@ -52,5 +54,28 @@ func TestPurgeAllAPIKeyWhitelistCache_emptiesCache(t *testing.T) {
 	apiKeyWhitelistCache.Range(func(_, _ any) bool { remaining++; return true })
 	if remaining != 0 {
 		t.Fatalf("缓存剩余 %d 条, want 0（api_keys 整体替换后必须清空）", remaining)
+	}
+}
+
+// 隔离 helper 必须先清空、再恢复调用前现场；否则整表清扫用例会吞掉
+// 其他用例的预热条目，或把自己的临时键泄漏到后续用例。
+func TestWithIsolatedAPIKeyWhitelistCache_restoresPreexistingEntries(t *testing.T) {
+	const existingKey = "existing|whitelist"
+	apiKeyWhitelistCache.Store(existingKey, "original")
+	t.Cleanup(func() { apiKeyWhitelistCache.Delete(existingKey) })
+
+	t.Run("isolated mutation", func(t *testing.T) {
+		withIsolatedAPIKeyWhitelistCache(t)
+		if _, ok := apiKeyWhitelistCache.Load(existingKey); ok {
+			t.Fatal("helper must start with an empty cache")
+		}
+		apiKeyWhitelistCache.Store("temporary|whitelist", "temporary")
+	})
+
+	if got, ok := apiKeyWhitelistCache.Load(existingKey); !ok || got != "original" {
+		t.Fatalf("preexisting entry not restored: got=%v ok=%v", got, ok)
+	}
+	if _, ok := apiKeyWhitelistCache.Load("temporary|whitelist"); ok {
+		t.Fatal("temporary entry leaked after helper cleanup")
 	}
 }

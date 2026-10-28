@@ -6,12 +6,12 @@ package handlers
 //     在已停引擎上恒 no-op，200「已恢复/已启动」是假信号。
 
 import (
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/gin-gonic/gin"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
@@ -26,8 +26,9 @@ func TestGetSystemTaskHistory_normalizesStaleRunningRow(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	startedAt := time.Now().In(services.CurrentLocation()).Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
-		VALUES ('history-stale', 'test', 'auto', 'running', datetime('now','-5 minutes'))`); err != nil {
+		VALUES ('history-stale', 'test', 'auto', 'running', ?)`, startedAt); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()
@@ -45,6 +46,23 @@ func TestGetSystemTaskHistory_normalizesStaleRunningRow(t *testing.T) {
 	if strings.Contains(body, `"status":"running"`) {
 		t.Fatalf("同一 run 在列表显示已中断、历史不得仍称运行中: %s", body)
 	}
+	if err := services.TaskEngine().Register(taskengine.Descriptor{
+		ID: "history-fresh", Family: "test", Name: "新运行行", Kind: taskengine.KindOneshot, RunsOn: taskengine.RoleAny,
+		Run: func(taskengine.RunContext) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	startedAt = time.Now().In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
+	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
+		VALUES ('history-fresh', 'test', 'auto', 'running', ?)`, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/system/tasks/history-fresh/history", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"running"`) {
+		t.Fatalf("宽限期内 fresh 行必须保持 running: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
 }
 
 func TestSchedulingWriteEndpoints_rejectStoppedEngine(t *testing.T) {
@@ -96,10 +114,16 @@ func TestSchedulingWriteEndpoints_rejectStoppedEngine(t *testing.T) {
 	}
 }
 
-// countTaskAuditForTest 统计审计表中指定动作的行数（引擎停止边界用例用）。
-func countTaskAuditForTest(t *testing.T, action string) int {
+// countTaskAuditForTest 统计指定动作的行数；可选 resource 限定任务监控。
+func countTaskAuditForTest(t *testing.T, action string, resource ...string) int {
 	t.Helper()
 	var n int
+	if len(resource) > 0 {
+		if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action=? AND resource=?`, action, resource[0]).Scan(&n); err != nil {
+			t.Fatalf("count audit(%s): %v", action, err)
+		}
+		return n
+	}
 	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action=?`, action).Scan(&n); err != nil {
 		t.Fatalf("count audit(%s): %v", action, err)
 	}

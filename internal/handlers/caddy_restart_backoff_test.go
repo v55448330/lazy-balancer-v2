@@ -36,8 +36,15 @@ func TestCaddyRestartBackoff_boundsTaskRunsUnderSustainedFailure(t *testing.T) {
 		nextAttempt := caddyRestartBackoff.nextAttempt
 		caddyRestartBackoff.nextAttempt = time.Time{}
 		caddyRestartBackoff.mu.Unlock()
-		if !nextAttempt.After(now) || nextAttempt.After(now.Add(caddyRestartBackoffMax+time.Second)) {
-			t.Fatalf("next attempt=%s after %d failures, want a positive delay capped at %s", nextAttempt, attempts, caddyRestartBackoffMax)
+		expectedDelay := caddyRestartBackoffBase
+		for i := 1; i < attempts && expectedDelay < caddyRestartBackoffMax; i++ {
+			expectedDelay *= 2
+		}
+		if expectedDelay > caddyRestartBackoffMax {
+			expectedDelay = caddyRestartBackoffMax
+		}
+		if nextAttempt.Before(now.Add(expectedDelay)) || nextAttempt.After(now.Add(expectedDelay+time.Second)) {
+			t.Fatalf("第 %d 次失败退避=%s，want 精确档位 %s（指数 2/4/8/16/30/30…，实测窗口 +1s）", attempts, nextAttempt.Sub(now), expectedDelay)
 		}
 	}
 

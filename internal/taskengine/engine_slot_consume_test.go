@@ -551,15 +551,8 @@ func TestEngine_TerminalStatusMapsRunCancelledSentinel(t *testing.T) {
 // scheduleStateOf 读取 Scheduled 注册项的槽缓存/消费水位/退避状态（测试用）。
 func scheduleStateOf(t *testing.T, e *Engine, id string) (slot, done, retry time.Time, streak int) {
 	t.Helper()
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
-	if r == nil {
-		t.Fatalf("任务 %s 未注册", id)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.nextScheduledTime, r.schedDoneSlot, r.schedRetryAfter, r.schedFailStreak
+	s := fieldSnapshot(t, e, id)
+	return s.slot, s.done, s.retry, s.streak
 }
 
 // Given Scheduled 未来槽（+700ms）+ 手动触发在途轮 + 用户取消手动轮。
@@ -640,6 +633,104 @@ func TestEngine_CancelHookRejectionKeepsDueSlot(t *testing.T) {
 		t.Fatalf("取消未生效却消费了槽（schedDoneSlot=%v）", done)
 	}
 	close(release)
+}
+
+func TestEngine_CancelAfterFailureDoesNotConsumeDueSlot(t *testing.T) {
+	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
+	pastSlot := time.Now().Add(-time.Minute)
+	started := make(chan struct{})
+	allowReturn := make(chan struct{})
+	hookStarted := make(chan struct{})
+	allowHook := make(chan struct{})
+	terminalComputed := make(chan struct{})
+	var slotCalls atomic.Int32
+	if err := e.Register(Descriptor{ID: "t-cancel-failed", Family: "t", Name: "失败轮取消竞态", Kind: KindScheduled,
+		RunsOn: RoleMasterOnly, Cancelable: true,
+		NextSlotFn: func() time.Time {
+			if slotCalls.Add(1) == 2 {
+				close(terminalComputed) // Run 已返回 failed，executeRun 正重算槽
+			}
+			return pastSlot
+		},
+		CancelHook: func() bool {
+			close(hookStarted)
+			<-allowHook
+			return true
+		},
+		Run: func(RunContext) error {
+			close(started)
+			<-allowReturn
+			return errors.New("boom")
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	e.SetRole(true)
+	e.StartLoop("t-cancel-failed")
+	e.tick()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("自动轮未启动")
+	}
+	cancelDone := make(chan bool, 1)
+	go func() { cancelDone <- e.Cancel("t-cancel-failed") }()
+	select {
+	case <-hookStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CancelHook 未进入")
+	}
+	close(allowReturn)
+	select {
+	case <-terminalComputed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("失败终态未计算")
+	}
+	close(allowHook)
+	if !<-cancelDone {
+		t.Fatal("既有裁定保留：hook 成功时 Cancel 返回 true")
+	}
+	waitForEngine(t, "失败终态落库", 2*time.Second, func() bool {
+		latest := e.LatestRun("t-cancel-failed")
+		return latest != nil && latest.Status == "failed"
+	})
+	if _, done, _, _ := scheduleStateOf(t, e, "t-cancel-failed"); !done.IsZero() {
+		t.Fatalf("失败轮已落定后取消动作不得消费重投槽, schedDoneSlot=%v", done)
+	}
+}
+
+func TestEngine_CancelEndpointsRespectTaskRole(t *testing.T) {
+	e := newTestEngine(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if err := e.Register(Descriptor{ID: "t-cancel-role", Family: "t", Name: "取消角色门", Kind: KindOneshot,
+		RunsOn: RoleMasterOnly, Cancelable: true,
+		Run: func(RunContext) error {
+			close(started)
+			<-release // 忽略 demote ctx，保留在途占位以隔离入口角色门
+			return nil
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- e.Trigger("t-cancel-role", "manual", "") }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("任务未启动")
+	}
+	e.SetRole(false)
+	if e.Cancel("t-cancel-role") {
+		t.Fatal("从角色不得取消 master-only 任务")
+	}
+	if got := e.CancelInFlightRuns(); got != 0 {
+		t.Fatalf("从角色 CancelInFlightRuns=%d, want 0", got)
+	}
+	close(release)
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("任务未退出")
+	}
 }
 
 // Given Scheduled 未来槽（+1h）+ 手动触发轮注入失败。

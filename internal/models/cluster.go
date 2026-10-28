@@ -328,6 +328,12 @@ type ClusterReport struct {
 	// 当前已落库口径），供主节点聚合 per-section 同步状态。旧版本从节点不上
 	// 报（nil，omitempty 省略字段），主节点据此展示「旧版本从节点」占位。
 	SectionHashes map[string]string `json:"section_hashes,omitempty"`
+	// SectionHashesUnavailable 为真表示本节点本轮**读取失败**（瞬时 IO 抖动，
+	// 如 SQLITE_BUSY）而非「没有记录」：此时 SectionHashes 缺省不代表旧版本从
+	// 节点，主节点必须保留该节点历史分区状态——否则节点列表的分区同步列会整体
+	// 消失，运维信号从「某节滞后」退化为「无数据」。旧版本从节点两个字段都不
+	// 携带，仍走清理语义。
+	SectionHashesUnavailable bool `json:"section_hashes_unavailable,omitempty"`
 	// Detached 为真表示从节点已提升脱离，请求主节点删除本节点记录（令牌随行撤销）。
 	Detached bool `json:"detached"`
 }

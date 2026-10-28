@@ -1,6 +1,6 @@
 package services
 
-// block_status_code=429 行启动归一为 403)。
+// 安全策略遗留的 block_status_code=429 行必须在启动时归一为 403。
 
 import (
 	"context"

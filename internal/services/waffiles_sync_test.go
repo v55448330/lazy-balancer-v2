@@ -218,8 +218,8 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	}
 }
 
-// tarEntry 描述 rawTarGz 的一个条目；declaredSize 非零时以声明体积写头
-// （正文可小于声明，用于构造超大声明条目）。
+// tarEntry 描述 rawTarGz 的一个条目；declaredSize 非零时构造只有头部的
+// 单条目截断包，用有界字节覆盖声明体积门（不得为声明体积分配/压缩正文）。
 type tarEntry struct {
 	name         string
 	declaredSize int64
@@ -236,19 +236,23 @@ func rawTarGz(t *testing.T, entries []tarEntry) []byte {
 	tw := tar.NewWriter(gz)
 	for _, entry := range entries {
 		size := int64(len(entry.body))
-		if entry.declaredSize > 0 {
-			size = entry.declaredSize
-			// tar writer 要求正文与声明体积一致：以零填充补齐（gzip 压缩
-			// 膨胀极小），让超限条目以真实体积通过解包流。
-			body := entry.body
-			if int64(len(body)) < size {
-				body = make([]byte, size)
-				copy(body, entry.body)
+		headerOnly := entry.declaredSize > 0
+		if headerOnly {
+			if len(entries) != 1 || len(entry.body) != 0 {
+				t.Fatal("declaredSize 截断夹具只支持无正文的单条目")
 			}
-			entry.body = body
+			size = entry.declaredSize
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: size, Typeflag: entry.typeflag}); err != nil {
 			t.Fatal(err)
+		}
+		if headerOnly {
+			// 解包器在读取正文前就必须按 hdr.Size 拒绝；不关闭 tar writer，
+			// 避免它为补齐声明体积而写入 256MiB 零块。gzip 本身仍正常收尾。
+			if err := gz.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
 		}
 		if _, err := tw.Write(entry.body); err != nil {
 			t.Fatal(err)
@@ -634,18 +638,23 @@ func TestUntarGzTo_removeAllFailure_attemptsBackupRestore(t *testing.T) {
 
 func TestUntarGzTo_restoreFailure_joinedIntoReturnedError(t *testing.T) {
 	skipChmodFaultInjectionIfRoot(t)
-	// 恢复（清空+从 backup 复制）自身的错误不得被 `_ =` 吞掉，必须
-	// 并入返回错误。destDir 写入 32MB 新文件的窗口内注入只读子目录，使恢复路径
-	// 的 RemoveAll(destDir) 失败。
-	// Given：非空旧树 + 含大文件的同步包 + staging 内预置只读子目录
+	// 恢复自身的错误不得被 `_ =` 吞掉，必须并入返回错误。用两个确定性
+	// 故障点替代临时文件轮询：staging 的不可读目录让新树复制失败；备份事务
+	// rename 缝中预置的不可读目录让从备份恢复失败。
 	destDir := filepath.Join(t.TempDir(), "crs")
-	os.MkdirAll(filepath.Join(destDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644)
-	// 完整 CRS 树形态（探针文件）：备份完整性门通过后才进入恢复拷贝路径，
-	// 本用例考的正是恢复失败的错误透传。
-	os.WriteFile(filepath.Join(destDir, "rules", crsRulesProbeFile), []byte("SecRule INIT"), 0644)
+	if err := os.MkdirAll(filepath.Join(destDir, "rules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "rules", crsRulesProbeFile), []byte("SecRule INIT"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	newTree := t.TempDir()
-	os.WriteFile(filepath.Join(newTree, "a-new.conf"), make([]byte, 32<<20), 0644)
+	if err := os.WriteFile(filepath.Join(newTree, "a-new.conf"), []byte("SecRule NEW"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	data, _, err := tarGzDir(newTree)
 	if err != nil {
 		t.Fatal(err)
@@ -661,51 +670,36 @@ func TestUntarGzTo_restoreFailure_joinedIntoReturnedError(t *testing.T) {
 	if err := os.Chmod(planted, 0000); err != nil {
 		t.Fatal(err)
 	}
-	blocker := filepath.Join(destDir, "blocker")
+
+	backup := destDir + ".sync-bak"
+	oldCopyRename := copyDirRename
+	copyDirRename = func(src, dst string) error {
+		if src == backup+".tmp" && dst == backup {
+			blocker := filepath.Join(src, "blocker")
+			if err := os.MkdirAll(blocker, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(blocker, "inner"), []byte("x"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(blocker, 0000); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return oldCopyRename(src, dst)
+	}
 	t.Cleanup(func() {
+		copyDirRename = oldCopyRename
 		_ = os.Chmod(planted, 0755)
-		_ = os.Chmod(blocker, 0755)
+		_ = os.Chmod(filepath.Join(backup, "blocker"), 0755)
 		_ = os.RemoveAll(staging)
 		_ = os.RemoveAll(destDir)
+		_ = os.RemoveAll(backup)
 	})
-	// copyFile 改用单源原子落盘，临时文件为同目录唯一名
-	// （.<base>-<rand>.tmp）——按 glob 观测写入窗口，不再依赖固定
-	// 的 a-new.conf.tmp。
-	tmpPattern := filepath.Join(destDir, ".a-new.conf-*.tmp")
-	stopWatch := make(chan struct{})
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		for {
-			select {
-			case <-stopWatch:
-				return
-			default:
-			}
-			if matches, _ := filepath.Glob(tmpPattern); len(matches) > 0 {
-				if mkErr := os.MkdirAll(blocker, 0755); mkErr != nil {
-					return
-				}
-				if writeErr := os.WriteFile(filepath.Join(blocker, "inner"), []byte("x"), 0644); writeErr != nil {
-					return
-				}
-				_ = os.Chmod(blocker, 0000)
-				return
-			}
-			// 轮询退避——无 sleep 的忙转会在整段 32MB 解包期间
-			// 空转一个核（CI 资源浪费）；写入窗口由 glob 观测，1ms 粒度足够。
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	defer func() {
-		close(stopWatch)
-		<-watchDone
-	}()
+	forceRenameFailure(t)
 
-	// When
 	err = untarGzTo(data, destDir, "")
 
-	// Then：返回错误同时包含复制失败与恢复失败（errors.Join）
 	if err == nil {
 		t.Fatal("err=nil, want joined copy+restore failure")
 	}
@@ -1027,6 +1021,30 @@ func TestWafFilesRefMatchesBundle_verifiesThreatSha256s(t *testing.T) {
 			t.Fatal("threat source missing from bundle must fail")
 		}
 	})
+
+	t.Run("bundle extra undeclared threat source fails", func(t *testing.T) {
+		ref.ThreatSha256s = map[string]string{"ustc": "aa"}
+		b := baseBundle
+		b.ThreatFiles = []models.ThreatFileEntry{
+			{Name: "ustc", Sha256: "aa", Content: []byte("a")},
+			{Name: "et_compromised", Sha256: "cc", Content: []byte("c")},
+		}
+		if wafFilesRefMatchesBundle(ref, &b) {
+			t.Fatal("bundle carrying an undeclared threat source must fail")
+		}
+	})
+	t.Run("duplicate same-name threat source fails", func(t *testing.T) {
+		ref.ThreatSha256s = map[string]string{"ustc": "aa", "firehol1": "bb", "et_compromised": "cc"}
+		b := baseBundle
+		b.ThreatFiles = []models.ThreatFileEntry{
+			{Name: "ustc", Sha256: "aa", Content: []byte("a")},
+			{Name: "ustc", Sha256: "aa", Content: []byte("a-duplicate")},
+			{Name: "firehol1", Sha256: "bb", Content: []byte("b")},
+		}
+		if wafFilesRefMatchesBundle(ref, &b) {
+			t.Fatal("duplicate same-name threat source must fail")
+		}
+	})
 }
 
 // 集群同步路径的 WAF ref 构建不得静默省略分量——
@@ -1217,6 +1235,7 @@ func TestUntarGzTo_doesNotRestoreBackupOverHealthyLive(t *testing.T) {
 	destDir := filepath.Join(root, "crs")
 	writeTestFile(t, filepath.Join(destDir, "rules", "REQUEST-900.conf"), "SecRule live")
 	writeTestFile(t, filepath.Join(destDir+".sync-bak", "rules", "REQUEST-900.conf"), "SecRule stale-backup")
+	writeTestFile(t, filepath.Join(destDir+".sync-bak", "rules", "REQUEST-901-INITIALIZATION.conf"), "SecRule backup-init")
 
 	payload := rawTarGz(t, []tarEntry{
 		{name: "rules/REQUEST-901.conf", body: []byte("SecRule new")},

@@ -103,29 +103,33 @@ func TestFingerprintAdminTLS_separates_cert_key_boundary(t *testing.T) {
 	}
 }
 
-func TestWriteAdminTLSCertPair_second_file_failure_restores_previous_pair(t *testing.T) {
+func TestWriteAdminTLSCertPair_keyRenameFailureRestoresPreviousCertificate(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "admin_tls.crt")
 	keyPath := filepath.Join(dir, "admin_tls.key")
 	if err := os.WriteFile(certPath, []byte("old-cert"), 0644); err != nil {
 		t.Fatalf("seed certificate: %v", err)
 	}
-	if err := os.WriteFile(keyPath, []byte("old-key"), 0600); err != nil {
-		t.Fatalf("seed private key: %v", err)
+	// 非空目录作为私钥目标：两个临时文件均可写、证书 rename 已成功，只有私钥
+	// rename 失败，从而真实进入 certstore 的证书补偿分支（无需生产测试缝）。
+	if err := os.Mkdir(keyPath, 0700); err != nil {
+		t.Fatalf("seed private key target directory: %v", err)
 	}
-	if err := os.Mkdir(keyPath+".tmp", 0700); err != nil {
-		t.Fatalf("block temporary private key write: %v", err)
+	if err := os.WriteFile(filepath.Join(keyPath, "keep"), []byte("block rename"), 0600); err != nil {
+		t.Fatalf("make private key target non-empty: %v", err)
 	}
 
 	if err := writeAdminTLSCertPair(certPath, keyPath, []byte("new-cert"), []byte("new-key")); err == nil {
-		t.Fatal("second file write unexpectedly succeeded")
+		t.Fatal("private key rename unexpectedly succeeded")
 	}
-	cert, certErr := os.ReadFile(certPath)
-	key, keyErr := os.ReadFile(keyPath)
-	if certErr != nil || keyErr != nil {
-		t.Fatalf("read pair after rollback: cert=%v key=%v", certErr, keyErr)
+	cert, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read certificate after rollback: %v", err)
 	}
-	if string(cert) != "old-cert" || string(key) != "old-key" {
-		t.Fatalf("pair after rollback=(%q,%q), want previous pair", cert, key)
+	if string(cert) != "old-cert" {
+		t.Fatalf("certificate after key rename failure=%q, want previous certificate", cert)
+	}
+	if _, err := os.Stat(filepath.Join(keyPath, "keep")); err != nil {
+		t.Fatalf("failed private key target must remain untouched: %v", err)
 	}
 }

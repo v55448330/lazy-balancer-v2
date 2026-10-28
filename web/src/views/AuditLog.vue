@@ -93,8 +93,8 @@
           :total="total"
           :page-sizes="[20, 50, 100]"
           layout="total, sizes, prev, pager, next"
-          @size-change="applyFilters"
-          @current-change="fetchLogs"
+          @size-change="onPageSizeChange"
+          @current-change="onCurrentPageChange"
         />
       </div>
     </el-card>
@@ -131,6 +131,7 @@ const total = ref(0)
 // 必须有可见提示（不静默）。
 const totalStale = ref(false)
 let requestSeq = 0
+let lastLogsRequestKey = ''
 
 const filters = ref({
   timeRange: null as [string, string] | null,
@@ -174,6 +175,21 @@ const applyFilters = () => {
   fetchLogs()
 }
 
+// EP 的页大小变化在页码越界时会自行写入一次页码并发 current-change；
+// 同参请求键去重，保证页大小切换只发一条 GET。
+const logsRequestKey = (): string => `${page.value}\u0000${pageSize.value}`
+
+const onPageSizeChange = (): void => {
+  page.value = 1
+  if (logsRequestKey() === lastLogsRequestKey) return
+  fetchLogs()
+}
+
+const onCurrentPageChange = (): void => {
+  if (logsRequestKey() === lastLogsRequestKey) return
+  fetchLogs()
+}
+
 const resetFilters = () => {
   filters.value = { timeRange: null, username: '', action: '', resource: '', ip: '', keyword: '' }
   page.value = 1
@@ -186,6 +202,7 @@ const resetFilters = () => {
 const fetchLogs = async () => {
   const targetPage = page.value
   const targetPageSize = pageSize.value
+  lastLogsRequestKey = logsRequestKey()
   const currentRequestSeq = ++requestSeq
   loading.value = true
   try {

@@ -347,3 +347,24 @@ func TestMetricsHistory_nilMetricsDBReturnsEmpty(t *testing.T) {
 		}
 	}
 }
+
+// metricsService 未装配（&Handlers{} / NewHandlers(Dependencies{}) 形态的测试、
+// 嵌入或未来新进程入口）时 GET /metrics/overview 必须与同文件对
+// db.MetricsDB==nil 的口径一致——返回零值 200，而不是对 nil 指针接收者调用
+// GetOverview 触发 panic（gin Recovery 500，同族端点「未装配返回空」分裂）。
+func TestGetMetricsOverview_unassembledServiceReturnsZeroValue(t *testing.T) {
+	handler := &Handlers{cfg: &config.Config{}}
+	gin.SetMode(gin.TestMode)
+	router := gin.New() // 不挂 Recovery：panic 直接冒泡到测试即红
+	router.GET("/metrics/overview", handler.GetMetricsOverview)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics/overview", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（未装配 metricsService 返回零值）", response.Code, response.Body.String())
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"code":0`) || !strings.Contains(body, `"total_rules":0`) {
+		t.Fatalf("body=%s, want code=0 且零值 overview", body)
+	}
+}

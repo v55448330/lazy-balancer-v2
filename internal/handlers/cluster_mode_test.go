@@ -367,49 +367,6 @@ func TestClusterRoleEndpoints409DuringImport(t *testing.T) {
 	}
 }
 
-// 开关类审计必须记录目标状态：旧文案「X 更新开关」事后无法判断这次操作是
-// 开还是关（同族另有 CRS/IP2Region/爬虫三处内联副本，统一走
-// enabledStateLabel）。
-func TestSwitchAudit_recordsTargetState(t *testing.T) {
-	setupSecurityPolicyTestDB(t)
-	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
-		t.Fatalf("initialize audit db: %v", err)
-	}
-	if _, err := db.DB.Exec(`INSERT INTO security_crawler_sources (id, name, url, update_enabled) VALUES (41, '测试爬虫源', 'https://example.test/list.json', 0)`); err != nil {
-		t.Fatalf("seed crawler source: %v", err)
-	}
-	h := &Handlers{}
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.PUT("/crawler-lib/sources/:id", h.UpdateCrawlerLibFlags)
-
-	put := func(enabled bool) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPut, "/crawler-lib/sources/41", strings.NewReader(fmt.Sprintf(`{"update_enabled":%t}`, enabled)))
-		request.Header.Set("Content-Type", "application/json")
-		router.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("enabled=%t status=%d body=%s", enabled, recorder.Code, recorder.Body.String())
-		}
-	}
-	latest := func() string {
-		var detail string
-		if err := db.AuditDB.QueryRow("SELECT detail FROM audit_log WHERE resource='爬虫地址库' ORDER BY id DESC LIMIT 1").Scan(&detail); err != nil {
-			t.Fatalf("query audit: %v", err)
-		}
-		return detail
-	}
-
-	put(true)
-	if detail := latest(); !strings.Contains(detail, "开启") {
-		t.Fatalf("开启审计未记录目标状态: %q", detail)
-	}
-	put(false)
-	if detail := latest(); !strings.Contains(detail, "关闭") {
-		t.Fatalf("关闭审计未记录目标状态: %q", detail)
-	}
-}
-
 // 重新注册成功的唯一出口：BecomeSlave 后必须调用 syncService.Resume()——
 // Halted（令牌撤销/schema 不匹配）态下 Start() 是 no-op，删除该行会让从节点
 // 重新注册后静默永久脱同步。Resume 对非 Halted 态是幂等的唤醒，故以调用

@@ -64,13 +64,13 @@ func getTaskLogSizeBytes() int64 {
 	// 未初始化库回退治理默认值（db.DefaultTaskLogSizeMB）；与多数配置读取
 	// helper 的 db.DB==nil 守卫一致。
 	defaultBytes := int64(db.DefaultTaskLogSizeMB) * 1024 * 1024
+	beforeTaskLogSizeQuery()
 	database := db.DB
 	if database == nil {
 		return defaultBytes
 	}
 	return taskLogSizeCache.get(func() (int64, error) {
 		var sizeMB int
-		beforeTaskLogSizeQuery()
 		if err := database.QueryRow("SELECT COALESCE(task_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultTaskLogSizeMB).Scan(&sizeMB); err != nil {
 			// SetTaskLogSizeBytesFn 在每次任务日志写入前求值，主库持续故障时
 			// 裸 warn 会按写入行数洪泛并与全项目去重口径漂移。

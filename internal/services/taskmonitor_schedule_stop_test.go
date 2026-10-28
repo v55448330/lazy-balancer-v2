@@ -5,6 +5,7 @@ package services
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,14 +18,7 @@ import (
 // Then 视图携带 schedule_stopped_reason=fail-streak，且开关列为关、来源与用户
 // 主动停止可区分。
 func TestCollectEngineFamilies_surfacesScheduleStoppedReason(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	// 恢复入口在业务页：业务开关仍为开启。
 	if _, err := db.DB.Exec(`UPDATE global_config SET threat_auto_update=1 WHERE id=1`); err != nil {
 		t.Fatalf("seed threat_auto_update: %v", err)
@@ -41,11 +35,19 @@ func TestCollectEngineFamilies_surfacesScheduleStoppedReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.StartLoop("threat")
-	// 首轮建立槽缓存（prevSlot 为旧值），其后 4 轮自动失败累计到停调终点。
-	for i := 0; i < 5; i++ {
-		if _, err := e.RunSync("threat", "auto", ""); err == nil {
-			t.Fatal("注入失败的任务应返回错误")
+	// 由实际停调状态驱动，不把循环次数当同步条件；最终次数仍精确钉住阈值。
+	attempts := 0
+	for attempts < 10 {
+		attempts++
+		if _, err := e.RunSync("threat", "auto", ""); err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("第 %d 轮 err=%v, want 注入的 boom", attempts, err)
 		}
+		if meta, ok := e.Lookup("threat"); ok && !meta.LoopOn {
+			break
+		}
+	}
+	if attempts != 5 {
+		t.Fatalf("自动失败停调轮数=%d, want 5（首轮+4 次连续失败）", attempts)
 	}
 
 	rows := collectEngineFamilies(e)

@@ -723,6 +723,42 @@ func TestAuditSpool_idleSealMakesSmallFallbackVisible(t *testing.T) {
 	}
 }
 
+func TestAuditSpool_externalReclaimRestoresBudget(t *testing.T) {
+	line := []byte(`{"transaction":{"id":"reclaimed"}}`)
+	for _, tc := range []struct {
+		name       string
+		maxBytes   int64
+		maxEntries int64
+	}{
+		{name: "entries", maxBytes: 1 << 20, maxEntries: 1},
+		{name: "bytes", maxBytes: int64(len(line)) + 1, maxEntries: 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spool, err := openAuditSpool(dir, tc.maxBytes, tc.maxEntries)
+			if err != nil {
+				t.Fatalf("open spool: %v", err)
+			}
+			defer func() { _ = spool.close() }()
+			if n, err := spool.appendLines([][]byte{line}); n != 1 || err != nil {
+				t.Fatalf("first append=%d err=%v, want 1/nil", n, err)
+			}
+			if err := spool.sealIfIdle(time.Now().Add(auditSpoolIdleSeal+time.Second), auditSpoolIdleSeal); err != nil {
+				t.Fatalf("seal: %v", err)
+			}
+			// 根服务补采提交后删除 sealed；写侧必须按现存文件回收预算。
+			for _, name := range spoolFiles(t, dir) {
+				if err := os.Remove(filepath.Join(dir, name)); err != nil {
+					t.Fatalf("remove consumed spool file: %v", err)
+				}
+			}
+			if n, err := spool.appendLines([][]byte{line}); n != 1 || err != nil {
+				t.Fatalf("append after external reclaim=%d err=%v, want 1/nil", n, err)
+			}
+		})
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {

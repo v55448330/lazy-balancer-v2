@@ -686,3 +686,59 @@ func TestClusterService_BecomeSlave_resetsLastSync(t *testing.T) {
 		t.Fatalf("status last_sync_at=%q after demote, want empty", status.LastSyncAt)
 	}
 }
+
+// 106-02 钉测缺口：clearWafRepullFailureMessage 的「标记段 + WAF 专项文案」
+// 拆分分支是组合消息的唯一正确剥离点。缺了它（退化为整体清空）会把
+// apply_ok_reload_failed 标记一并抹掉——而该标记是 304 补偿重拉的唯一触发器
+// （「库=新版本、Caddy=旧运行配置」的自愈通道）。
+// 既有用例只种纯 WAF 文案，且该场景下 Pull defer 的 recordSyncError(nil,nil)
+// 也会清空，故删掉拆分分支仍绿。本用例种组合消息 + 已收敛的文件态记账，
+// 断言标记段存活且 WAF 段被剥离。
+func TestSyncService_Pull_304_keepsReloadMarkerWhenClearingWafRepullMessage(t *testing.T) {
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+
+	combined := "apply_ok_reload_failed: caddy down | 同步失败（已连续 3 次）: " +
+		fmt.Sprintf("安全数据持续同步失败（已连续 %d 轮未收敛）", wafRepullMaxFailures)
+	// applied_waf_ref_hash=nullRef 基准 = 主节点无安全数据文件，wafFilesDrifted
+	// 走豁免分支（false）→ 本轮视为已收敛，触发 WAF 专项文案清理。
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9, applied_waf_ref_hash=?, last_sync_error=? WHERE id=1",
+		master.URL, wafFilesNullRefHash, encodeSyncError(combined, models.SyncErrorCodeApplyFailed)); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
+	service.wafRepullFailures.Store(wafRepullMaxFailures)
+	// 补偿重拉降频期（failures=6 → 非 backoffDue）：304+marker 时跳过全量重拉、
+	// 直接走到 WAF 收敛清理——这是「标记段 + WAF 专项文案」组合消息唯一可达的
+	// 清理点（无降频时会先被补偿重拉吃掉本轮）。
+	service.reloadRepullFailures.Store(wafRepullMaxFailures + 1)
+
+	if _, err := service.Pull(context.Background()); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	if got := service.wafRepullFailures.Load(); got != 0 {
+		t.Fatalf("wafRepullFailures=%d after 304 without drift, want 0", got)
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := decodeSyncError(stored)
+	if !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
+		t.Fatalf("last_sync_error=%q 必须保留 apply_ok_reload_failed 标记段（304 补偿唯一触发器）", msg)
+	}
+	if strings.Contains(msg, wafRepullFailureMessagePrefix) {
+		t.Fatalf("last_sync_error=%q 必须剥离 WAF 专项文案（已收敛）", msg)
+	}
+	if !strings.Contains(msg, "caddy down") {
+		t.Fatalf("last_sync_error=%q 必须保留标记段的失败原因", msg)
+	}
+}

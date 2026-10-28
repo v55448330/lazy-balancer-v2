@@ -1,7 +1,12 @@
-// Package atomicfile 提供「持久化原子落盘」的唯一原语：同目录临时文件 →
+// Package atomicfile 提供「持久化原子落盘」原语：同目录临时文件 →
 // 设置权限 → 写入 → fsync → rename → 父目录 fsync。掉电/内核崩溃下读者只会
 // 看到完整旧文件或完整新文件，且新内容已持久（rename 前 fsync 数据，rename 后
 // fsync 目录项）。任一失败都清理临时文件并返回错误。
+//
+// Ruling（post-rename 策略）：rename 已生效后父目录 fsync 失败仍向调用方返回
+// error，由上层执行簿记补偿；wafiplist/fastformat.go 因模块边界与「新产物已可见，
+// 不得谎报编译失败」选择告警并返回 nil，两种策略刻意不同，改动时须互相对照。
+// 该叶模块无法反向 import 本包，是允许重复实现而非新增第三套语义的理由。
 //
 // 放在无仓内依赖的叶子包，供互不成环的包共用（acme 的账户密钥/元数据、
 // services 的簿记文件）：同仓出现第二种「无 fsync/无目录同步」的落盘形态时，

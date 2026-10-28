@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -19,6 +20,7 @@ func requireNoPanic(t *testing.T, run func()) {
 
 func TestRecordAuditLog_shutdownBetweenHandleCheckAndExecDoesNotPanic(t *testing.T) {
 	initServicesDB(t)
+	logs := captureLogf(t)
 	auditDB := db.AuditDB
 	previous := beforeAuditLogExec
 	called := false
@@ -34,6 +36,9 @@ func TestRecordAuditLog_shutdownBetweenHandleCheckAndExecDoesNotPanic(t *testing
 	})
 	if !called {
 		t.Fatal("audit exec interleaving was not exercised")
+	}
+	if !strings.Contains(logs.String(), "audit log write skipped") {
+		t.Fatalf("nil 审计句柄分支未留痕: %q", logs.String())
 	}
 }
 
@@ -61,6 +66,9 @@ func TestLiveRuleIDs_shutdownBetweenHandleCheckAndQueryReturnsError(t *testing.T
 	}
 	if err == nil {
 		t.Fatal("closed snapshot must return its query error")
+	}
+	if !strings.Contains(err.Error(), "数据库未初始化") {
+		t.Fatalf("err=%v, want 数据库未初始化（nil 分支语义）", err)
 	}
 	if live != nil {
 		t.Fatalf("closed snapshot returned live IDs: %#v", live)
@@ -93,6 +101,9 @@ func TestGetTaskLogSizeBytes_shutdownBetweenHandleCheckAndQueryFallsBack(t *test
 	if want := int64(db.DefaultTaskLogSizeMB) * 1024 * 1024; got != want {
 		t.Fatalf("task log threshold=%d, want fallback %d", got, want)
 	}
+	if stateTransitionRecorded("task-log-size-refresh") {
+		t.Fatal("nil 句柄分支不应走查询失败路径（应直接返回默认值）")
+	}
 }
 
 func TestGetAuditLogSizeBytes_shutdownBetweenHandleCheckAndQueryFallsBack(t *testing.T) {
@@ -121,4 +132,14 @@ func TestGetAuditLogSizeBytes_shutdownBetweenHandleCheckAndQueryFallsBack(t *tes
 	if want := int64(db.DefaultAuditLogSizeMB) * 1024 * 1024; got != want {
 		t.Fatalf("audit log threshold=%d, want fallback %d", got, want)
 	}
+	if stateTransitionRecorded("audit-log-size-refresh") {
+		t.Fatal("nil 句柄分支不应走查询失败路径（应直接返回默认值）")
+	}
+}
+
+func stateTransitionRecorded(key string) bool {
+	metricsStateMu.Lock()
+	defer metricsStateMu.Unlock()
+	_, seen := metricsStateFailed[key]
+	return seen
 }

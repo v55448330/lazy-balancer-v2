@@ -116,7 +116,7 @@ var dnsProviderValidateTimeout = 30 * time.Second
 // retryEnvelopeFactor 是单次 DNS API 调用相对基础预算的倍数：Present 与
 // CleanUp 都走 retry.Transport（429/5xx 3 次尝试 + 1s/2s 退避），单次调用
 // 的总耗时可能长于基础预算，共用基础预算会把「限流/慢响应」误报成超时失败。
-// 两侧必须用同一倍数——95 轮只把 Present 提到 3 倍，清理仍留 30s，
+// 两侧必须用同一倍数——只把 Present 提到 3 倍而清理仍用基础预算时，
 // 「清理假失败」只是从写入侧挪到了清理侧。
 const retryEnvelopeFactor = 3
 

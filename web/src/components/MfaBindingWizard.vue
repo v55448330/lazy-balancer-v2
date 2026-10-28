@@ -129,8 +129,13 @@ watch(() => props.modelValue, (visible) => {
   step.value = 0
   code.value = ''
   recoveryCodes.value = []
-  void renderQr()
 })
+
+// 扫码步的画布随 v-if 卸载，返回上一步时是全新空画布；可见且回到扫码步即重绘。
+// 合并两项来源，避免打开向导时先复位步骤再直接渲染造成两次渲染。
+watch([() => props.modelValue, step], ([visible, current]) => {
+  if (visible && current === 0) void renderQr()
+}, { immediate: true })
 
 const activate = async (): Promise<void> => {
   // 按钮已按 6 位禁用；函数内保留短路作为纵深兜底（脚本/键盘直触路径）。

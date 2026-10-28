@@ -1296,3 +1296,25 @@ func TestGetIPList_detailCarriesRefSurface(t *testing.T) {
 		t.Fatalf("plain row ref=(%d,%v), want (0, 空数组)", payload.Data.RefCount, payload.Data.RefPolicies)
 	}
 }
+
+func TestIPListHandlers_corruptAutobanEntriesPointToFullReplacement(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+	var id int64
+	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=?`, services.AutobanPresetListName).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='{bad' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"/ips", "/remove-ip"} {
+		recorder := postJSON(t, router, fmt.Sprintf("/security/ip-lists/%d%s", id, suffix), map[string]any{"value": "203.0.113.9"})
+		if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "整表覆盖") || strings.Contains(recorder.Body.String(), "删除后重建") {
+			t.Fatalf("%s status=%d body=%s, want 500 + 可执行的整表覆盖提示", suffix, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder := putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", id), map[string]any{"name": services.AutobanPresetListName, "entries": "[]"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("整表覆盖应可修复损坏条目: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

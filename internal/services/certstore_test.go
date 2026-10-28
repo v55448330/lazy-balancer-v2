@@ -39,27 +39,82 @@ func TestRemoveCertFiles_waits_for_certificate_pair_lock(t *testing.T) {
 		t.Fatalf("write key fixture: %v", err)
 	}
 	certWriteMu.Lock()
+	// 失败路径（含 waitGoroutineBlockedOn 的 Fatal）同样必须解锁：残留持锁会
+	// 让同包后续用例永久阻塞在 certWriteMu 上（全局锁污染跨用例传播）。
+	locked := true
+	releaseWriteLock := func() {
+		if locked {
+			locked = false
+			certWriteMu.Unlock()
+		}
+	}
+	t.Cleanup(releaseWriteLock)
 	done := make(chan error, 1)
 	go func() { done <- RemoveCertFiles("lb_locked") }()
 
-	// When
+	// When：删除协程必须**确定地**阻塞在 certWriteMu.RLock（阻塞点是
+	// certstore.go 的 RLock），用协程栈作证据。「开协程 + 立刻 select-default」
+	// 只证明「还没轮到这个协程」，把 RLock 删掉也照样绿。
+	waitGoroutineBlockedOn(t, "TestRemoveCertFiles_waits_for_certificate_pair_lock", "sync.(*RWMutex).RLock")
 	select {
 	case err := <-done:
-		certWriteMu.Unlock()
+		releaseWriteLock()
 		t.Fatalf("remove returned before lock release: %v", err)
 	default:
 	}
-	certWriteMu.Unlock()
+	releaseWriteLock()
 
 	// Then
-	if err := <-done; err != nil {
-		t.Fatalf("remove certificate files: %v", err)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("remove certificate files: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("锁释放后删除未完成（等待者未放行）")
 	}
 	if _, err := os.Stat(certPath); !os.IsNotExist(err) {
 		t.Fatalf("certificate still exists or stat failed: %v", err)
 	}
 	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
 		t.Fatalf("private key still exists or stat failed: %v", err)
+	}
+}
+
+// waitGoroutineBlockedOn 等待（最多 5s）出现一个同时命中全部 markers 的
+// goroutine 栈块。runtime.Stack 的每个 goroutine 块含其阻塞点帧，因此「协程已
+// 推进到并阻塞在 X」是可断言的确定事实——用来替代「睡一会儿再断言尚未返回」的
+// 时序猜测（后者在等待点被删掉/协程尚未被调度时同样绿）。
+func waitGoroutineBlockedOn(t *testing.T, markers ...string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	// 每轮都要 dump 全部协程栈（stop-the-world），故按步退避：阻塞点通常在
+	// 几微秒内出现，退避只影响极端慢机的等待开销。
+	backoff := time.Millisecond
+	for {
+		stacks := dumpGoroutineStacks()
+		for _, block := range strings.Split(stacks, "\n\n") {
+			if containsAll(block, markers...) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("5s 内未观察到同时命中 %v 的阻塞协程（等待点可能不存在/未被推进）：\n%s", markers, stacks)
+		}
+		time.Sleep(backoff)
+		if backoff < 20*time.Millisecond {
+			backoff *= 2
+		}
+	}
+}
+
+func dumpGoroutineStacks() string {
+	buf := make([]byte, 1<<20)
+	for {
+		if n := runtime.Stack(buf, true); n < len(buf) {
+			return string(buf[:n])
+		}
+		buf = make([]byte, 2*len(buf))
 	}
 }
 

@@ -64,17 +64,36 @@ func loopOnOf(t *testing.T, te *taskengine.Engine, id string) bool {
 	return m.LoopOn
 }
 
+func enableAllBusinessDriversForTest(t *testing.T) {
+	t.Helper()
+	if _, err := db.DB.Exec(`UPDATE global_config SET threat_auto_update=1, crawler_auto_update=1, auto_backup_enabled=1, autoban_enabled=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_crs_version SET auto_update=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET auto_update=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var allBusinessDriverIDs = []string{"threat", "crs", "ip2region", "crawlerbot-update", "auto-backup", AutobanTaskID}
+
 // Given 业务驱动任务的一次读失败（查询恒失败）。
 // When 调度对齐。
 // Then 上一次生效的调度态保持不变，并登记待重试——不得把读失败固化为关闭。
 func TestTaskEngineWire_driverReadFailureKeepsPreviousLoopState(t *testing.T) {
 	te := newWireTestEngine(t)
+	enableAllBusinessDriversForTest(t)
 	t.Cleanup(func() { businessDriverSyncPending.Store(false) })
-	ids := []string{"threat", "crs", "ip2region", "auto-backup"}
+	ids := allBusinessDriverIDs
 	SyncBusinessTaskDrivers()
 	before := map[string]bool{}
 	for _, id := range ids {
 		before[id] = loopOnOf(t, te, id)
+		if !before[id] {
+			t.Fatalf("前置：%s 必须处于启用且调度开启态，避免 false 假绿", id)
+		}
 	}
 
 	swapBrokenDB(t)
@@ -130,17 +149,22 @@ func TestTaskEngineWire_driverReadRecoveryConverges(t *testing.T) {
 // Then 不 panic，且调度态保持原值（读不到 ≠ 确认关闭）。
 func TestTaskEngineWire_nilDBKeepsLoopState(t *testing.T) {
 	te := newWireTestEngine(t)
+	enableAllBusinessDriversForTest(t)
 	t.Cleanup(func() { businessDriverSyncPending.Store(false) })
-	ids := []string{"threat", "crs", "ip2region", "auto-backup"}
+	ids := allBusinessDriverIDs
 	SyncBusinessTaskDrivers()
 	before := map[string]bool{}
 	for _, id := range ids {
 		before[id] = loopOnOf(t, te, id)
+		if !before[id] {
+			t.Fatalf("前置：%s 必须处于启用且调度开启态，避免 false 假绿", id)
+		}
 	}
 
-	orig := db.DB
+	orig, origCurrent := db.DB, db.GetDB()
 	db.DB = nil
-	t.Cleanup(func() { db.DB = orig })
+	db.SetDB(nil)
+	t.Cleanup(func() { db.DB = orig; db.SetDB(origCurrent) })
 	SyncBusinessTaskDrivers()
 	for _, id := range ids {
 		if got := loopOnOf(t, te, id); got != before[id] {

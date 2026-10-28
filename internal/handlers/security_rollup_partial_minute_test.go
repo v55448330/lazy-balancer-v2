@@ -244,7 +244,7 @@ func TestThreatTopTargets_cacheableGateSkipsPartialResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	topTargetsCacheMu.Lock()
-	_, cached := topTargetsCache[topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, sinceMinute: sinceStr}]
+	_, cached := topTargetsCache[topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: db.MetricsDBGeneration(), sinceMinute: sinceStr}]
 	topTargetsCacheMu.Unlock()
 	if cached {
 		t.Fatal("回填未完成的 Top3 不得落缓存（回填完成后 ≤60s 仍返回部分结果）")
@@ -262,7 +262,7 @@ func TestThreatTopTargets_cacheableGateSkipsPartialResults(t *testing.T) {
 	}
 	// cacheable=true：结果落缓存。
 	topTargetsCacheMu.Lock()
-	_, cached = topTargetsCache[topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, sinceMinute: sinceStr}]
+	_, cached = topTargetsCache[topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: db.MetricsDBGeneration(), sinceMinute: sinceStr}]
 	topTargetsCacheMu.Unlock()
 	if !cached {
 		t.Fatal("完整窗口结果必须落缓存")

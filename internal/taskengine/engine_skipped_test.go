@@ -19,6 +19,9 @@ func TestTerminalStatus_mapsSkippedSentinel(t *testing.T) {
 	if got := terminalStatus(context.Background(), ErrAlreadyRunning); got != "failed" {
 		t.Fatalf("generic error must stay failed, got %q", got)
 	}
+	if got := terminalStatus(context.Background(), ErrRunCancelled); got != "cancelled" {
+		t.Fatalf("ErrRunCancelled must stay cancelled, got %q", got)
+	}
 	if got := terminalStatus(context.Background(), nil); got != "success" {
 		t.Fatalf("nil must stay success, got %q", got)
 	}

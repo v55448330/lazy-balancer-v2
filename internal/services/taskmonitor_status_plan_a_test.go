@@ -14,16 +14,9 @@ import (
 // 全部归开关列，业务生命周期态（cert_jobs.status）只进业务文本位，不进状态列。
 
 func TestCollectSystemTasks_statusColumnExecutionOnly(t *testing.T) {
-	// 与 taskengine newTestEngine 同模式：临时目录全套库（task_runs 消费面）
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	e := taskengine.NewEngine(taskengine.Options{})
+	t.Cleanup(e.Stop)
 	// Given 常驻任务：调度关闭——修复前状态列=stopped
 	e.Register(taskengine.Descriptor{
 		ID: "t-svc", Family: "test", Name: "t-svc", Kind: taskengine.KindDaemon, RunsOn: taskengine.RoleAny,
@@ -63,18 +56,16 @@ func TestCollectSystemTasks_statusColumnExecutionOnly(t *testing.T) {
 // cert-waiting-ca（Periodic）不再以业务活跃数生成 StatusMirror；空库由执行实态得 idle。
 func TestCertWaitingCAStatus_usesExecutionStateWhenNoActiveJobs(t *testing.T) {
 	te := newWireTestEngine(t)
-	for _, m := range te.DescribeAll() {
-		if m.ID != "cert-waiting-ca" {
-			continue
-		}
-		if m.StatusMirror != "" {
-			t.Fatalf("cert-waiting-ca 不得携带业务 StatusMirror，got %q", m.StatusMirror)
-		}
+	meta, ok := te.Lookup("cert-waiting-ca")
+	if !ok {
+		t.Fatal("cert-waiting-ca 未注册")
 	}
-	for _, ti := range collectEngineFamilies(te) {
-		if ti.ID == "cert-waiting-ca" && ti.Status != TaskStatusIdle {
-			t.Fatalf("空库无活跃任务应为 idle，got %s", ti.Status)
-		}
+	if meta.StatusMirror != "" {
+		t.Fatalf("cert-waiting-ca 不得携带业务 StatusMirror，got %q", meta.StatusMirror)
+	}
+	ti := findTaskInfo(t, collectEngineFamilies(te), "cert-waiting-ca")
+	if ti.Status != TaskStatusIdle {
+		t.Fatalf("空库无活跃任务应为 idle，got %s", ti.Status)
 	}
 }
 
@@ -89,12 +80,19 @@ func TestCertTasksStatus_businessActivityDoesNotOverrideStoppedExecution(t *test
 	waitForCond(t, 2*time.Second, func() bool { return !te.IsRunning("cert-issuance") })
 
 	// When/Then：状态列只承载执行实态，不得被业务活跃镜像覆盖为 running。
+	seen := map[string]bool{}
 	for _, ti := range collectEngineFamilies(te) {
 		if ti.ID != "cert-issuance" && ti.ID != "cert-waiting-ca" {
 			continue
 		}
+		seen[ti.ID] = true
 		if ti.Status != TaskStatusIdle {
 			t.Errorf("%s 调度已停但 status=%q，want idle（业务活跃≠任务执行中）", ti.ID, ti.Status)
+		}
+	}
+	for _, id := range []string{"cert-issuance", "cert-waiting-ca"} {
+		if !seen[id] {
+			t.Errorf("任务视图缺少 %s 行", id)
 		}
 	}
 }
@@ -103,14 +101,7 @@ func TestCertTasksStatus_businessActivityDoesNotOverrideStoppedExecution(t *test
 // 修复前状态列回落 idle——采集/签发永久停摆与「用户主动停止」不可区分。
 // 引擎以 RestartExhausted 标记暴露真实停摆来源，监控必须呈现 failed。
 func TestCollectEngineFamilies_daemonRestartExhaustedShowsFailed(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	e := taskengine.NewEngine(taskengine.Options{
 		TickInterval:        10 * time.Millisecond,
 		DaemonRestartDelays: []time.Duration{time.Millisecond},
@@ -125,19 +116,13 @@ func TestCollectEngineFamilies_daemonRestartExhaustedShowsFailed(t *testing.T) {
 	}
 
 	e.StartLoop("self-heal-exhaust")
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	waitForCond(t, 3*time.Second, func() bool {
 		meta, ok := e.Lookup("self-heal-exhaust")
-		if ok && meta.RestartExhausted {
-			if meta.LoopOn {
-				t.Fatal("自愈用尽后 loop_on 必须为 false（与日志「已停止调度」一致）")
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("daemon 未在期限内进入自愈用尽态")
-		}
-		time.Sleep(10 * time.Millisecond)
+		return ok && meta.RestartExhausted
+	})
+	meta, _ := e.Lookup("self-heal-exhaust")
+	if meta.LoopOn {
+		t.Fatal("自愈用尽后 loop_on 必须为 false（与日志「已停止调度」一致）")
 	}
 
 	rows := collectEngineFamilies(e)

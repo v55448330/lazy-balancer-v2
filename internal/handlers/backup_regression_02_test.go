@@ -58,23 +58,24 @@ func a86ImportClusterRows(t *testing.T, h *Handlers, rows []map[string]any) *htt
 func TestNodesImportRowGate_rejectsMalformed(t *testing.T) {
 	cases := []struct {
 		name   string
+		want   string
 		mutate func(row map[string]any)
 	}{
-		{"port 非数值字符串", func(r map[string]any) { r["port"] = "8000x" }},
-		{"port 超界", func(r map[string]any) { r["port"] = 70000 }},
-		{"port 零", func(r map[string]any) { r["port"] = 0 }},
-		{"纬度非数值", func(r map[string]any) { r["server_map_lat"] = "north" }},
-		{"纬度越界", func(r map[string]any) { r["server_map_lat"] = 95 }},
-		{"经度越界", func(r map[string]any) { r["server_map_lon"] = -181 }},
-		{"缺 name", func(r map[string]any) { delete(r, "name") }},
-		{"空 name", func(r map[string]any) { r["name"] = "  " }},
-		{"缺 ip_address", func(r map[string]any) { delete(r, "ip_address") }},
-		{"created_at 垃圾文本", func(r map[string]any) { r["created_at"] = "garbage" }},
-		{"id 非整数", func(r map[string]any) { r["id"] = "node-1" }},
-		{"sync_interval 非整数", func(r map[string]any) { r["sync_interval"] = "fast" }},
-		{"sync_interval 越界", func(r map[string]any) { r["sync_interval"] = 100000 }},
-		{"protocol 非法", func(r map[string]any) { r["protocol"] = "gopher" }},
-		{"cluster_token_hash 非字符串", func(r map[string]any) { r["cluster_token_hash"] = 42 }},
+		{"port 非数值字符串", "port", func(r map[string]any) { r["port"] = "8000x" }},
+		{"port 超界", "port", func(r map[string]any) { r["port"] = 70000 }},
+		{"port 零", "port", func(r map[string]any) { r["port"] = 0 }},
+		{"纬度非数值", "站点纬度", func(r map[string]any) { r["server_map_lat"] = "north" }},
+		{"纬度越界", "站点纬度", func(r map[string]any) { r["server_map_lat"] = 95 }},
+		{"经度越界", "站点经度", func(r map[string]any) { r["server_map_lon"] = -181 }},
+		{"缺 name", "name", func(r map[string]any) { delete(r, "name") }},
+		{"空 name", "name", func(r map[string]any) { r["name"] = "  " }},
+		{"缺 ip_address", "ip_address", func(r map[string]any) { delete(r, "ip_address") }},
+		{"created_at 垃圾文本", "created_at", func(r map[string]any) { r["created_at"] = "garbage" }},
+		{"id 非整数", "id", func(r map[string]any) { r["id"] = "node-1" }},
+		{"sync_interval 非整数", "sync_interval", func(r map[string]any) { r["sync_interval"] = "fast" }},
+		{"sync_interval 越界", "sync_interval", func(r map[string]any) { r["sync_interval"] = 100000 }},
+		{"protocol 非法", "protocol", func(r map[string]any) { r["protocol"] = "gopher" }},
+		{"cluster_token_hash 非字符串", "cluster_token_hash", func(r map[string]any) { r["cluster_token_hash"] = 42 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,6 +85,16 @@ func TestNodesImportRowGate_rejectsMalformed(t *testing.T) {
 			rec := a86ImportClusterRows(t, h, []map[string]any{row})
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("错误未点名 %q：%s", tc.want, rec.Body.String())
+			}
+			var rows int
+			if err := db.DB.QueryRow(`SELECT COUNT(*) FROM nodes`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 0 {
+				t.Fatalf("畸形 nodes 导入必须整体回滚，rows=%d", rows)
 			}
 		})
 	}
@@ -583,11 +594,17 @@ func TestClusterWriteEndpoints409DuringImport(t *testing.T) {
 	router.PUT("/cluster/nodes/:id/site", h.UpdateClusterNodeSiteCoordinates)
 	router.POST("/cluster/nodes/:id/forget-pin", h.ForgetClusterNodePin)
 	router.POST("/cluster/nodes/report", h.ReportClusterNode)
+	router.POST("/cluster/register/token", h.GenerateClusterRegisterToken)
+	router.GET("/cluster/register/:id/status", h.GetClusterRegistrationStatus)
+	router.GET("/cluster/sync/snapshot", h.GetClusterSnapshot)
 
 	beginImportWindowForTest(t)
 	calls := []struct {
 		method, path, body string
 	}{
+		{"POST", "/cluster/register/token", `{}`},
+		{"GET", "/cluster/register/2/status", ``},
+		{"GET", "/cluster/sync/snapshot", ``},
 		{"POST", "/cluster/register", `{"token":"x","name":"n","ip_address":"10.0.0.2","port":8000}`},
 		{"POST", "/cluster/registration/confirm", `{}`},
 		{"POST", "/cluster/nodes/2/approve", ``},
@@ -659,6 +676,37 @@ func TestV1ImportQueueFailureStillConverges(t *testing.T) {
 	}
 	if applyError != "" {
 		t.Fatalf("陈旧 caddy_apply_error=%q 未随导入收敛清除", applyError)
+	}
+}
+
+func TestV1Import_disclosesClearedSecurityPolicyBindings(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (991,'legacy-policy','blocking',1);
+		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_legacy',991)`); err != nil {
+		t.Fatalf("seed legacy binding: %v", err)
+	}
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"v1-rule","protocol":true,"listen":18443,"server_name":"v1.example.test","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "已解除 1 条安全策略绑定") || !strings.Contains(body, "WAF") {
+		t.Fatalf("response lacks security impact disclosure: %s", body)
+	}
+	var auditDetail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='导入' AND resource='配置备份' ORDER BY id DESC LIMIT 1`).Scan(&auditDetail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(auditDetail, "已解除 1 条安全策略绑定") {
+		t.Fatalf("audit lacks binding disclosure: %q", auditDetail)
 	}
 }
 

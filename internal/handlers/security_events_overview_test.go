@@ -1656,18 +1656,20 @@ func TestLoadSecurityOverviewAggregates_cacheHitReturnsDeepCopy(t *testing.T) {
 }
 
 func TestGetSecurityOverview_topIPsCarryRecentFrequency(t *testing.T) {
-	// Given one IP with events at now / -30m / -2h
+	// Given one IP with events at now / -30m / -2h / -30h
+	// （最后一条仍在 7 天窗口内、但已出 24 小时窗口——用于区分 recent_24h 与总量）
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityEventsRouter(t)
 	now := time.Now().UTC()
 	seedSecurityEvent(t, now.Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
 	seedSecurityEvent(t, now.Add(-30*time.Minute).Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
 	seedSecurityEvent(t, now.Add(-2*time.Hour).Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
+	seedSecurityEvent(t, now.Add(-30*time.Hour).Format("2006-01-02 15:04:05"), "lb_recent", 1, "942100", "SQL Injection")
 
 	// When
 	recorder := getRequest(t, router, "/security/overview")
 
-	// Then top_ips carries separate 10m/1h windows independent of the 7d total
+	// Then top_ips carries separate 10m/1h/24h windows independent of the 7d total
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1682,7 +1684,53 @@ func TestGetSecurityOverview_topIPsCarryRecentFrequency(t *testing.T) {
 		t.Fatalf("top_ips=%+v, want 1", resp.Data.TopIPs)
 	}
 	got := resp.Data.TopIPs[0]
-	if got.Recent10m != 1 || got.Recent1h != 2 {
-		t.Fatalf("recent_10m/recent_1h=%d/%d, want 1/2", got.Recent10m, got.Recent1h)
+	if got.Recent10m != 1 || got.Recent1h != 2 || got.Recent24h != 3 {
+		t.Fatalf("recent_10m/recent_1h/recent_24h=%d/%d/%d, want 1/2/3（24h 窗口必须排除 -30h 事件）",
+			got.Recent10m, got.Recent1h, got.Recent24h)
+	}
+	if got.Blocked != 4 {
+		t.Fatalf("blocked=%d, want 4（7 天总量须含 24h 窗口外事件）", got.Blocked)
+	}
+}
+
+func TestListSecurityEvents_textFiltersTreatLikeWildcardsLiterally(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+	seed := func(ruleID, ruleName, policyName, uri string) {
+		t.Helper()
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time,rule_caddy_id,policy_id,client_ip,method,uri,event_type,rule_triggered,rule_msg,action,rule_name,policy_name) VALUES ('2026-10-28 10:00:00',?,0,'203.0.113.1','GET',?,'crs','942100','test','blocked',?,?)`, ruleID, uri, ruleName, policyName); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("lb_like_wild", "axb", "pax", "/a/b")
+	seed("lb_like_literal", "a_b", "p%x", "/a_b")
+	seed("lb_like_slash", `a\b`, `p\x`, `/a\b`)
+
+	for _, tc := range []struct{ query, wantRule string }{
+		{"rule_name=a_b", "lb_like_literal"},
+		{"policy_name=%25", "lb_like_literal"},
+		{"uri=/a_b", "lb_like_literal"},
+		{"rule_name=a%5Cb", "lb_like_slash"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			recorder := getRequest(t, router, "/security/events?"+tc.query)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var payload struct {
+				Data struct {
+					Total  int `json:"total"`
+					Events []struct {
+						RuleCaddyID string `json:"rule_caddy_id"`
+					} `json:"events"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Data.Total != 1 || len(payload.Data.Events) != 1 || payload.Data.Events[0].RuleCaddyID != tc.wantRule {
+				t.Fatalf("filter %q returned total=%d events=%+v, want only %s", tc.query, payload.Data.Total, payload.Data.Events, tc.wantRule)
+			}
+		})
 	}
 }

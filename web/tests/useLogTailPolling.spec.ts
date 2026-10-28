@@ -106,7 +106,7 @@ test('isActive 为 false 时整轮跳过（不发请求）', async () => {
   tail.stop()
 })
 
-test('后台标签页暂停：document.hidden 时轮次跳过（node 无 document 视为可见）', async () => {
+test('后台标签页暂停：hidden 时轮次跳过，恢复可见后 refresh 恢复取数', async () => {
   let calls = 0
   const tail = useLogTailPolling({
     interval: 60_000,

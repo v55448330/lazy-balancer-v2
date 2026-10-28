@@ -289,12 +289,37 @@ func (r *fakeEmptyRows) Next([]driver.Value) error {
 	return io.EOF
 }
 
+// fakeScanErrRows 首行返回驱动无法转换的值（channel）→ rows.Scan 失败，
+// 第二次 Next 返回 io.EOF。用于钉「逐行 Scan 失败必须与行遍历错误同口径」：
+// 这两列在正常形态下（TEXT）不可能失败，只有驱动/连接异常可达。
+type fakeScanErrRows struct {
+	columns []string
+	first   bool
+}
+
+func (r *fakeScanErrRows) Columns() []string { return r.columns }
+func (r *fakeScanErrRows) Close() error      { return nil }
+func (r *fakeScanErrRows) Next(dest []driver.Value) error {
+	if r.first {
+		return io.EOF
+	}
+	r.first = true
+	for i := range dest {
+		dest[i] = make(chan int)
+	}
+	return nil
+}
+
 type fakeIterErrTx struct{}
 
 func (fakeIterErrTx) Commit() error   { return nil }
 func (fakeIterErrTx) Rollback() error { return nil }
 
-type fakeIterErrConn struct{ failNeedle string }
+type fakeIterErrConn struct {
+	failNeedle string
+	// scanFailNeedle 命中时返回「首行值不可扫描」的结果集（钉逐行 Scan 失败）。
+	scanFailNeedle string
+}
 
 func (c *fakeIterErrConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("未实现 Prepare")
@@ -303,6 +328,11 @@ func (c *fakeIterErrConn) Close() error              { return nil }
 func (c *fakeIterErrConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
 func (c *fakeIterErrConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	columns := []string{"a"}
+	if c.scanFailNeedle != "" && strings.Contains(query, c.scanFailNeedle) {
+		// 两列结果集：与 readAppliedSectionHashes 的 SELECT section, hash 同形，
+		// 但首行的值不可 Scan（驱动级异常形态）。
+		return &fakeScanErrRows{columns: []string{"section", "hash"}}, nil
+	}
 	if strings.Contains(query, c.failNeedle) {
 		return &fakeIterErrRows{columns: columns, err: errors.New("注入的迭代失败")}, nil
 	}
@@ -315,10 +345,13 @@ func (fakeIterErrDriver) Open(string) (driver.Conn, error) {
 	return nil, errors.New("未实现直连")
 }
 
-type fakeIterErrConnector struct{ failNeedle string }
+type fakeIterErrConnector struct {
+	failNeedle     string
+	scanFailNeedle string
+}
 
 func (c *fakeIterErrConnector) Connect(context.Context) (driver.Conn, error) {
-	return &fakeIterErrConn{failNeedle: c.failNeedle}, nil
+	return &fakeIterErrConn{failNeedle: c.failNeedle, scanFailNeedle: c.scanFailNeedle}, nil
 }
 func (c *fakeIterErrConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
 
@@ -412,6 +445,25 @@ func TestClusterService_Snapshot_304PathSkipsSigningPrework(t *testing.T) {
 	}
 	if secret.Valid {
 		t.Fatalf("registration_secret=%v, want 交付签名快照后清除", secret)
+	}
+}
+
+func TestClusterService_Snapshot_304RechecksRoleAfterCacheBuild(t *testing.T) {
+	service, database := newClusterTestService(t)
+	initial, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, changed, err := service.Snapshot(context.Background(), initial.Version, initial.Fingerprint, "")
+	if !errors.Is(err, ErrNotMasterNode) {
+		t.Fatalf("cached 304 after demote err=%v, want ErrNotMasterNode", err)
+	}
+	if changed {
+		t.Fatal("demoted node must not report a deliverable snapshot")
 	}
 }
 

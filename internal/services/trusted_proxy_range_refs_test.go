@@ -24,6 +24,11 @@ func TestTrustedProxyPrefixTooWide_acceptsOfficialCDNv6Ranges(t *testing.T) {
 		{cidr: "::/0", want: true},
 		{cidr: "104.16.0.0/13", want: false},
 		{cidr: "0.0.0.0/8", want: true},
+		// IPv4 最小前缀长度的边界对：`0.0.0.0/8` 同时命中 AllSpace 名单（|| 短路），
+		// 故它无法证伪 `Bits() < 8` 判据。以下两条避开 AllSpace：/8 恰好合法、
+		// /7 过宽——把 v4 下限改成 12/13 任一时 `1.0.0.0/8` 立刻变红。
+		{cidr: "1.0.0.0/8", want: false},
+		{cidr: "1.0.0.0/7", want: true},
 	} {
 		t.Run(tc.cidr, func(t *testing.T) {
 			prefix := netip.MustParsePrefix(tc.cidr)

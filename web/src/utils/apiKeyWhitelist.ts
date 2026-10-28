@@ -16,6 +16,9 @@ interface SerializedWhitelist {
   readonly error: string
 }
 
+// 后端契约恒为 string[]；编辑表单统一换行文本，往返语义由本模块单源持有。
+export const parseWhitelist = (value: readonly string[]): string => value.join('\n')
+
 export const serializeWhitelist = (rawText: string): SerializedWhitelist => {
   const rows = rawText.split(/\r?\n/)
     .map((cidr, originalIndex) => ({ cidr: normalizeCidr(cidr), originalIndex }))

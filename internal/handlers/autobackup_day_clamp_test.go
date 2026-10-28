@@ -54,3 +54,27 @@ func TestAutoBackupSettings_clampsDayByFrequency(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoBackupSettings_clampsKeepOnRead(t *testing.T) {
+	for _, tc := range []struct{ stored, want int }{{0, 7}, {31, 7}, {1, 1}, {30, 30}, {12, 12}} {
+		h := newAutoBackupTestHandlers(t)
+		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_keep=? WHERE id=1`, tc.stored); err != nil {
+			t.Fatal(err)
+		}
+		response := serveAutoBackupJSON(t, h, http.MethodGet, "/settings/auto-backup", "/settings/auto-backup", "", h.AutoBackupSettings)
+		if response.Code != http.StatusOK {
+			t.Fatalf("stored=%d status=%d body=%s", tc.stored, response.Code, response.Body.String())
+		}
+		var payload struct {
+			Data struct {
+				Keep int `json:"keep"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Data.Keep != tc.want {
+			t.Fatalf("stored keep=%d → response=%d, want %d", tc.stored, payload.Data.Keep, tc.want)
+		}
+	}
+}

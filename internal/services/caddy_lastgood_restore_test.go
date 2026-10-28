@@ -19,11 +19,10 @@ import (
 )
 
 // newSameConfigAdmin 返回运行配置恒等于候选渲染视图的 admin 替身（短路形态），
-// 并记录 /load 次数（短路不应发生真实 /load）。
+// 并记录 /load 次数（短路不应发生真实 /load）。调用方负责先初始化测试库。
 func newSameConfigAdmin(t *testing.T, candidate map[string]interface{}) (*CaddyService, string, *int) {
 	t.Helper()
-	newClusterTestService(t)
-	running, err := json.Marshal(candidate)
+	running, err := json.Marshal(caddyPayload(candidate))
 	if err != nil {
 		t.Fatalf("marshal candidate: %v", err)
 	}
@@ -49,6 +48,7 @@ func newSameConfigAdmin(t *testing.T, candidate map[string]interface{}) (*CaddyS
 // When 非事务 apply
 // Then LKG 被补齐为已确认可用的运行配置字节（启动兜底不再无文件可回放）
 func TestApplyConfig_sameConfigRestoresMissingLastGood(t *testing.T) {
+	newClusterTestService(t)
 	candidate := map[string]interface{}{"apps": map[string]interface{}{"same": true}}
 	service, lkgPath, loads := newSameConfigAdmin(t, candidate)
 	if _, err := os.Stat(lkgPath); !os.IsNotExist(err) {
@@ -86,20 +86,28 @@ func TestApplyConfig_sameConfigRestoresMissingLastGood(t *testing.T) {
 	}
 }
 
-// Given 同一短路形态
+// Given 事务视图的渲染结果与运行配置相同（确实进入同字节短路）
 // When 事务内 apply（persistLastGood=false）
-// Then LKG 仍缺失——未提交视图不得成为「最后已知正确」
+// Then 零 /load 且 LKG 仍缺失——未提交视图不得成为「最后已知正确」
 func TestApplyConfigFromTx_sameConfigDoesNotCreateLastGood(t *testing.T) {
-	candidate := map[string]interface{}{"apps": map[string]interface{}{"same": true}}
-	service, lkgPath, _ := newSameConfigAdmin(t, candidate)
+	newClusterTestService(t)
 	tx, err := db.DB.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	candidate := generateCaddyConfigFromStore(tx)
+	if message, failed := candidate[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate tx candidate: %s", message)
+	}
+	service, lkgPath, loads := newSameConfigAdmin(t, candidate)
 
-	if _, err := service.ApplyConfigFromTx(tx, false); err != nil {
-		t.Fatalf("tx apply: %v", err)
+	_, err = service.ApplyConfigFromTx(tx, false)
+	if !IsSameConfig(err) {
+		t.Fatalf("tx apply err=%v, want errSameConfig（必须真正进入短路分支）", err)
+	}
+	if *loads != 0 {
+		t.Fatalf("事务内同字节 apply /load 次数=%d, want 0", *loads)
 	}
 	if _, err := os.Stat(lkgPath); !os.IsNotExist(err) {
 		t.Fatalf("事务内短路不得创建 LKG（未提交）, stat err=%v", err)

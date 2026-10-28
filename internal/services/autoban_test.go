@@ -853,7 +853,7 @@ func TestAutobanReloadThrottle(t *testing.T) {
 		t.Fatal("节流窗口内的重载请求必须置位暂存")
 	}
 	f.Advance(61 * time.Second)
-	autobanFlushPendingReload()
+	autobanFlushPendingReload(false)
 	if reloads != 2 {
 		t.Fatalf("窗口过后暂存重载应执行，reloads=%d", reloads)
 	}
@@ -896,7 +896,7 @@ func TestAutobanReload_failureAuditsAndRearms(t *testing.T) {
 	// 再武装生效：回调恢复+节流窗外 → flush 成功，暂存清除，成功审计补落
 	autobanReloader = func() error { return nil }
 	f.Advance(61 * time.Second)
-	autobanFlushPendingReload()
+	autobanFlushPendingReload(false)
 	autobanMu.Lock()
 	pending = autobanReloadPending
 	autobanMu.Unlock()
@@ -1586,14 +1586,29 @@ func TestAutobanCandidates_aggregateExpiryLog(t *testing.T) {
 	}
 }
 
+func TestAutobanRequestReloadLocked_missingReloaderLeavesWarn(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 10:00:00")
+	oldFn := autobanReloader
+	autobanReloader = nil
+	t.Cleanup(func() { autobanReloader = oldFn })
+
+	if got := autobanRequestReloadLocked("测试装配缺失"); got != autobanReloadNone {
+		t.Fatalf("reload state=%v, want none", got)
+	}
+	log := readTaskLog(t, AutobanTaskID)
+	if !strings.Contains(log, "[WARN]") || !strings.Contains(log, "重载回调未注册") {
+		t.Fatalf("缺失重载回调必须留 WARN 任务日志:\n%s", log)
+	}
+}
+
 // merge 读改写+重载与名单写路径同一 CaddyOpLock 临界区 ----
 
 // Given 正式模式、候选达标；CaddyOpLock 被并发「名单写路径」临界区预持
 // （handlers AddIPToList/UpdateIPList 同型：持 CaddyOpLock → 读条目 → 追加 →
 // 回写 → 释放）。
 // When RunAutobanCycle 并发执行。
-// Then merge 必须阻塞至锁释放（写路径先完成自己的追加提交），释放后本轮完成
-// ——最终名单同时含写路径追加值与本轮新封值（不丢更新）。
+// Then 写路径先提交追加、释放后本轮完成——最终名单同时含写路径追加值与
+// 本轮新封值（不丢更新）；以终态和收敛次数为判据，不用静默等待窗冒充互斥证明。
 func TestAutobanRunCycle_mergeSerializesWithListWriterUnderCaddyOpLock(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
@@ -1608,15 +1623,7 @@ func TestAutobanRunCycle_mergeSerializesWithListWriterUnderCaddyOpLock(t *testin
 	cycleDone := make(chan error, 1)
 	go func() { cycleDone <- RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}) }()
 
-	// merge 必须阻塞在锁外（写路径临界区内不得读取/回写名单）
-	select {
-	case err := <-cycleDone:
-		CaddyOpLock.Unlock()
-		t.Fatalf("merge 未与名单写路径互斥（提前完成 err=%v）——丢更新窗口", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	// 写路径完成自己的追加（此刻 autoban merge 仍被挡在锁外）
+	// 写路径完成自己的追加后释放互斥锁。
 	entries := append(presetEntries(t), models.IPListEntry{Value: "198.51.100.50", Remark: AutobanManualUnbanRemark, CreatedAt: "2026-10-14 10:00:00"})
 	raw, err := json.Marshal(entries)
 	if err != nil {

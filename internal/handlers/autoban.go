@@ -109,7 +109,8 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁名单失败", err)})
 		return
 	}
-	preset := autobanPresetListState{id: listID, entries: entries}
+	active := services.AutobanActiveEntries(entries)
+	preset := autobanPresetListState{id: listID, activeCount: len(active)}
 	isMaster := services.AutobanIsMaster()
 	suggestions := services.AutobanSuggestions()
 	for i := range suggestions {
@@ -125,7 +126,7 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		"duration":        cfg.Duration,
 		"scope":           cfg.Scope,
 		"banned_today":    services.AutobanBannedToday(),
-		"list_entries":    len(services.AutobanActiveEntries(entries)),
+		"list_entries":    preset.activeCount,
 		"list_referenced": h.autobanListReferenced(preset),
 		// 黄条真正需要的是「封禁是否生效」——名单被 deny + IP 访问
 		// 控制启用的策略引用且名单非空才生效；list_referenced 复用热路径资格门
@@ -159,13 +160,13 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
-// autobanPresetListState 是一次请求内预置名单的单一读取结果：id 与条目快照
-// 一并传入两个黄条判据，避免同一状态端点三次查同一行。读取故障在
+// autobanPresetListState 是一次请求内预置名单的单一读取结果：id 与生效条目
+// 计数一并传入两个黄条判据，避免重复查行与重复过滤/分配。
 // GetAutobanStatus 已 500 返回（见上方 AutobanListEntries 错误分支），故本结构
 // 不携带 err；id<=0 仅为构造不变量的 fail-closed 兜底（两判据均按 true）。
 type autobanPresetListState struct {
-	id      int64
-	entries []models.IPListEntry
+	id          int64
+	activeCount int
 }
 
 // autobanListReferenced 启用中的策略是否引用预置名单（黄条判据）。引用面判定
@@ -198,9 +199,8 @@ func (h *Handlers) autobanBanEffective(preset autobanPresetListState) bool {
 	if preset.id <= 0 {
 		return true
 	}
-	entries := preset.entries
-	if len(services.AutobanActiveEntries(entries)) == 0 {
-		return false // 空名单：即便被 deny 策略引用也不拦截任何 IP
+	if preset.activeCount == 0 {
+		return false // 无生效条目时，deny 引用也不会产生拦截
 	}
 	var count int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p

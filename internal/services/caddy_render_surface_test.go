@@ -3,6 +3,9 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"strings"
@@ -29,6 +32,30 @@ func TestUpstreamEnabledPredicateHasOneLiteral(t *testing.T) {
 	if got := strings.Count(code, "u.rule_id = lb_rules.caddy_id AND ` + UpstreamEnabledSQLPredicate + `"); got != 1 {
 		t.Fatalf("publishableRulesSQLPredicate 引用单源谓词 %d 处, want 1", got)
 	}
+	if !constExprUsesIdent(t, "caddy.go", "publishableRulesSQLPredicate", "UpstreamEnabledSQLPredicate") {
+		t.Fatal("publishableRulesSQLPredicate 必须引用 UpstreamEnabledSQLPredicate 常量")
+	}
+	if !fileUsesIdent(t, "cluster_snapshot.go", "UpstreamEnabledSQLValue") {
+		t.Fatal("cluster_snapshot.go 的上游启用投影必须引用 UpstreamEnabledSQLValue")
+	}
+	// 除常量定义文件外，services 包任何生产文件都不得内联上游启用谓词。
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read services dir: %v", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "caddy.go" {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, violation := range upstreamEnabledViolations(string(data)) {
+			t.Fatalf("%s 内联了上游启用表达式（应复用单源常量）: %s", name, violation)
+		}
+	}
 	for _, path := range []string{"configwatchdog.go"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -44,7 +71,7 @@ func TestUpstreamEnabledPredicateHasOneLiteral(t *testing.T) {
 	// （enabled IN(...)）与 WHERE 直写（enabled=1）同样禁止——一律引用
 	// services.UpstreamEnabledSQLValue / UpstreamEnabledSQLPredicate。
 	// 注意 lb_rules.enabled（规则启用列）不属本族，不在禁止范围。
-	entries, err := os.ReadDir("../handlers")
+	entries, err = os.ReadDir("../handlers")
 	if err != nil {
 		t.Fatalf("read handlers dir: %v", err)
 	}
@@ -135,6 +162,57 @@ func normalizeSQL(s string) string {
 	}, s)
 	s = sqlOperatorSpacing.ReplaceAllString(s, "$1")
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// constExprUsesIdent 在指定文件的包级 const 表达式内查找名称引用（AST，
+// 不受换行/括号/字符串拼接排版影响）。
+func constExprUsesIdent(t *testing.T, filename, constName, identName string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	found := false
+	for _, declaration := range file.Decls {
+		generic, ok := declaration.(*ast.GenDecl)
+		if !ok || generic.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range generic.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, name := range valueSpec.Names {
+				if name.Name != constName || index >= len(valueSpec.Values) {
+					continue
+				}
+				ast.Inspect(valueSpec.Values[index], func(node ast.Node) bool {
+					if ident, ok := node.(*ast.Ident); ok && ident.Name == identName {
+						found = true
+					}
+					return !found
+				})
+			}
+		}
+	}
+	return found
+}
+
+func fileUsesIdent(t *testing.T, filename, identName string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && ident.Name == identName {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // upstreamEnabledViolations 扫描一段 Go 源码中违反「上游启用谓词单源」的

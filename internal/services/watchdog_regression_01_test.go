@@ -15,6 +15,11 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
+const (
+	watchdogEmptyConfig  = `{"apps":{"http":{"servers":{}}}}`
+	watchdogRoutedConfig = `{"apps":{"http":{"servers":{"http_18443":{"routes":[{"@id":"lb_l7watch","handle":[]}]}}}}}`
+)
+
 // watchTestRule 播种一条启用 HTTPS+ACME 的 HTTP 规则（无证书任务）。
 func watchTestRule(t *testing.T, domain string, port int) {
 	t.Helper()
@@ -59,8 +64,8 @@ func TestWatchdogMatchesTLSCertificateRenderGate(t *testing.T) {
 
 	const domain = "l7-watch.example.test"
 	watchTestRule(t, domain, 18443)
-	emptyConfig := `{"apps":{"http":{"servers":{}}}}`
-	routedConfig := `{"apps":{"http":{"servers":{"http_18443":{"routes":[{"@id":"lb_l7watch","handle":[]}]}}}}}`
+	emptyConfig := watchdogEmptyConfig
+	routedConfig := watchdogRoutedConfig
 	var adminConfig atomic.Value
 	adminConfig.Store(emptyConfig)
 	admin := watchAdminServer(t, &adminConfig)
@@ -180,10 +185,7 @@ func TestWatchdogSkipsManualTLSRuleWithoutMaterial(t *testing.T) {
 
 // 保证 emptyConfig/routedConfig 是合法 JSON（防手误拼写使读取分支静默跳过）。
 func TestWatchdogFixturesAreValidJSON(t *testing.T) {
-	for _, shape := range []string{
-		`{"apps":{"http":{"servers":{}}}}`,
-		`{"apps":{"http":{"servers":{"http_18443":{"routes":[{"@id":"lb_l7watch","handle":[]}]}}}}}`,
-	} {
+	for _, shape := range []string{watchdogEmptyConfig, watchdogRoutedConfig} {
 		var parsed map[string]any
 		if err := json.Unmarshal([]byte(shape), &parsed); err != nil {
 			t.Fatalf("invalid fixture %s: %v", shape, err)

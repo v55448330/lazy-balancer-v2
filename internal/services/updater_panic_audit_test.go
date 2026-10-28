@@ -9,10 +9,22 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
+
+const updateTestWaitBudget = 3 * time.Second
+
+func waitUpdateTestSignal(t *testing.T, done <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(updateTestWaitBudget):
+		t.Fatalf("%s 未在 %s 内完成", what, updateTestWaitBudget)
+	}
+}
 
 // panic 轮的操作审计必须与正常终态同口径：action=「更新失败」、恰 1 条、
 // 详文为中文阶段（不得回落成 reolading/installing 等英文 token）。
@@ -27,7 +39,7 @@ func TestIP2RegionStartUpdate_panicRoundAuditsFailureOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "panic 轮 IP2Region 更新")
 
 	var rows int
 	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='IP数据库'`).Scan(&rows); err != nil {

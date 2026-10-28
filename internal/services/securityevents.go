@@ -683,15 +683,51 @@ func (m *securityEventsTrustMatcher) trusted(ruleCaddyID, ip string) bool {
 	return securityEventsPrefixSetContains(prefixes, addr)
 }
 
+type securityEventsMappingsCacheEntry struct {
+	database   *sql.DB
+	version    int
+	loaded     bool
+	rules      map[string]securityEventsRuleRef
+	bindings   map[string][]int
+	policyByID map[int]*models.SecurityPolicy
+}
+
+var securityEventsMappingsCache = struct {
+	sync.Mutex
+	entry securityEventsMappingsCacheEntry
+}{}
+
+// securityEventsMappingLoadsForTest 统计实际全量装载次数（缓存命中不计）。
+var securityEventsMappingLoadsForTest atomic.Int64
+
+func resetSecurityEventsMappingsCacheForTest() {
+	securityEventsMappingsCache.Lock()
+	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{}
+	securityEventsMappingsCache.Unlock()
+}
+
 // securityEventsLoadMappings batch-loads per-tick indexes: host→rule, plus the
 // v2.2.0 multi-policy attribution inputs — rule→bound policy ids (policy_id ASC
 // so "first bound" is well-defined) and policy id→policy for custom_rules /
 // crs_rule_groups membership checks. Domain canonicalization matches handlers'
-// normalizedRuleDomains (db.CanonicalDomains).
+// normalizedRuleDomains (db.CanonicalDomains). 同一 (DB,cluster_version) 复用
+// 只读快照；配置写推进版本后重建，失败不缓存。
 func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string][]int, map[int]*models.SecurityPolicy, error) {
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		return nil, nil, nil, errors.New("security events: database not initialized")
 	}
+	var version int
+	if err := database.QueryRow(`SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1`).Scan(&version); err != nil {
+		return nil, nil, nil, fmt.Errorf("security events: read mapping version: %w", err)
+	}
+	securityEventsMappingsCache.Lock()
+	defer securityEventsMappingsCache.Unlock()
+	if cached := &securityEventsMappingsCache.entry; cached.loaded && cached.database == database && cached.version == version {
+		// 快照内 map 只读；任何配置写推进 cluster_version 后才重建。
+		return cached.rules, cached.bindings, cached.policyByID, nil
+	}
+	securityEventsMappingLoadsForTest.Add(1)
 	rules := make(map[string]securityEventsRuleRef)
 	// 显式排序键——同域名多规则（如 http/https 双规则）的纯域名键覆盖序此前
 	// 依赖 SQLite 未定义返回序。不得消费 lb_rules.id（主键迁移前历史列，新行
@@ -789,6 +825,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	if err := polRows.Err(); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: iterate policies: %w", err)
 	}
+	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{database: database, version: version, loaded: true, rules: rules, bindings: bindings, policyByID: policyByID}
 	return rules, bindings, policyByID, nil
 }
 
@@ -1710,7 +1747,7 @@ const securityEventsDecodeStallLimit = 5
 // window on every 2s tick decode error (~2MB/s sustained churn). The caller's
 // malformed-region decision uses the scanLimit constant, not the buffer size,
 // so decisions are unchanged.
-func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error) {
+func securityEventsFindNextDocument(f securityEventsProcessFile, from int64) (int64, bool, error) {
 	const scanLimit = securityEventsScanWindowLimit
 	info, err := f.Stat()
 	if err != nil {
@@ -1741,7 +1778,7 @@ func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error)
 // （上一完整文档的行尾换行等）。跳过窗口含非空白字节时才可能丢
 // 数据（进入停等/跳过路径）；纯空白窗口直接推进，与旧语义等价。窗口大于
 // 4KB 按非空白保守处理（真实残缺数据不可能被 4KB 纯空白分隔）。
-func securityEventsGapAllWhitespace(f *os.File, from, to int64) bool {
+func securityEventsGapAllWhitespace(f securityEventsProcessFile, from, to int64) bool {
 	gap := to - from
 	if gap <= 0 || gap > 4096 {
 		return false
@@ -1763,7 +1800,7 @@ func securityEventsGapAllWhitespace(f *os.File, from, to int64) bool {
 // securityEventsScanNextDocumentBounded 有界前向扫描 [from, limit) 内下一个
 // "\n{" 文档头（返回 `{` 的字节位置）：供归档 pass（文件大小有界、不再增长）
 // 在 4MB 扫描窗口之外继续找文档头，跳过畸形区恢复摄取其后的事件。
-func securityEventsScanNextDocumentBounded(f *os.File, from, limit int64) (int64, bool, error) {
+func securityEventsScanNextDocumentBounded(f securityEventsProcessFile, from, limit int64) (int64, bool, error) {
 	const chunkSize = 1 << 20
 	if from >= limit {
 		return 0, false, nil
@@ -1892,15 +1929,20 @@ const (
 	autobanFedLoggedExempt = "logged-exempt"
 )
 
-// securityEventsRequestDeduper 是跨 pass 复用的请求级去重表（tailer 级：
-// 轮转/停等导致同一请求的引擎事务落到不同 pass 时仍能归并）。不是并发安全
-// 的——摄取按 tick 串行调用。
+// securityEventsRequestDeduper 是跨 pass/跨摄取通道复用的请求级去重表。
+// 整个 process pass 持 mu：lookup→落库→record 必须相对其它通道原子，否则
+// IPC 与 live 同时 miss 会各插一行。独立测试仍可直接调用 lookup/record。
 type securityEventsRequestDeduper struct {
+	mu         sync.Mutex
 	entries    map[uint64]securityEventsDedupeEntry
 	maxSec     int64
 	sinceSweep int
 	capWarned  bool
 }
+
+// securityEventsSharedDedupe 是 IPC/spool/live/归档补采的唯一请求级去重表。
+// 各通道数据库事务独立，但同一请求只能归并一次。
+var securityEventsSharedDedupe = &securityEventsRequestDeduper{}
 
 // lookup 返回该键在窗口内的既有登记；过期项按未登记处理（旧键不阻塞新请求）。
 func (d *securityEventsRequestDeduper) lookup(key uint64, atSec int64) (securityEventsDedupeEntry, bool) {
@@ -1980,6 +2022,14 @@ func securityEventsRecordSecond(rec *securityEventRecord) int64 {
 	return time.Now().UTC().Unix()
 }
 
+// securityEventsProcessFile 是 pass 需要的随机访问/尺寸面；*os.File 与 IPC
+// 内存批输入共同实现，避免为每批事件落临时文件。
+type securityEventsProcessFile interface {
+	io.ReadSeeker
+	io.ReaderAt
+	Stat() (os.FileInfo, error)
+}
+
 // securityEventsTailer streams new audit transactions from the log file,
 // persisting its byte offset between passes so restarts resume in place.
 type securityEventsTailer struct {
@@ -2036,16 +2086,10 @@ func (t *securityEventsTailer) deduper() *securityEventsRequestDeduper {
 	return t.dedupe
 }
 
-// securityEventsLiveDedupe 返回 live tailer 的请求级去重表（补采路径与 live
-// 路径共享同一实例，包括清扫水位与告警标志）。无锁契约：补采路径只在
-// securityEventsPollOnce 持有 securityEventsPollState 且同一 goroutine 内
-// （经 rotateAuditLogIfNeeded）被调用；其它调用方（测试）拿不到 live tailer
-// 时返回独立空表。
+// securityEventsLiveDedupe 返回全摄取通道共享的请求级去重表（含清扫水位
+// 与告警标志）。并发安全由 securityEventsProcessPass 的整段锁保证。
 func securityEventsLiveDedupe() *securityEventsRequestDeduper {
-	if securityEventsPollState.tailer == nil {
-		return &securityEventsRequestDeduper{}
-	}
-	return securityEventsPollState.tailer.deduper()
+	return securityEventsSharedDedupe
 }
 
 func securityEventsNewTailer(logPath, offsetPath string) *securityEventsTailer {
@@ -2054,6 +2098,7 @@ func securityEventsNewTailer(logPath, offsetPath string) *securityEventsTailer {
 		offsetPath:     offsetPath,
 		generationPath: securityEventsGenerationPath(offsetPath),
 		failOffset:     -1,
+		dedupe:         securityEventsSharedDedupe,
 	}
 }
 
@@ -2173,7 +2218,10 @@ var (
 // transaction is logged and skipped without aborting the pass. ctx 取消时在
 // 当前批次提交后收尾返回（已提交边界随返回值持久化，剩余量留给下一 tick）；
 // 活文件 pass 另受单轮事件数/字节数上限约束（archived pass 无界——见上）。
-func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f *os.File, offset int64, rules map[string]securityEventsRuleRef, bindings map[string][]int, policyByID map[int]*models.SecurityPolicy) (int64, error) {
+func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f securityEventsProcessFile, offset int64, rules map[string]securityEventsRuleRef, bindings map[string][]int, policyByID map[int]*models.SecurityPolicy) (int64, error) {
+	dedupe := t.deduper()
+	dedupe.mu.Lock()
+	defer dedupe.mu.Unlock()
 	// 每个 pass 开始时重置停摆偏移：只有本 pass 实际停摆才会重新赋值，
 	// 避免同偏移的新停摆被上一轮 warn 的限流状态吞掉。
 	t.failOffset = -1

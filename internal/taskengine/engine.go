@@ -166,6 +166,9 @@ type registration struct {
 	running    bool
 	cancel     context.CancelCauseFunc
 	runTrigger string // 在途轮的触发来源（manual/auto/startup/caddy-restart）
+	// runTerminalStatus 非空表示 Run 已返回且终态已判定，但 reservation 尚未
+	// release；迟到的用户取消不得再把失败轮的待重投槽消费掉。
+	runTerminalStatus string
 	// runSeq 在途轮代际身份：每次成功占位（reserveRunInternal /
 	// tryStartDaemon）自增。CancelHook 先复核代际，执行期间禁止新代占位；
 	// 返回后再次复核，旧取消动作（manager hook/c()/槽消费）不得作用于新一轮。
@@ -782,7 +785,7 @@ func (e *Engine) Cancel(id string) bool {
 	e.mu.RLock()
 	r := e.regs[id]
 	e.mu.RUnlock()
-	if r == nil || !r.desc.Cancelable {
+	if r == nil || !r.desc.Cancelable || !e.roleAllows(r.desc.RunsOn) {
 		return false
 	}
 	r.mu.Lock()
@@ -853,7 +856,7 @@ func (e *Engine) Cancel(id string) bool {
 // 结束时由 executeRun 尾部按其终态决定消费语义，失败轮不得被取消动作吞掉
 // 重投）。
 func consumeCancelledSlotLocked(r *registration, trigger string) {
-	if r.desc.Kind != KindScheduled || trigger != "auto" || !r.running || r.runTrigger != trigger {
+	if r.desc.Kind != KindScheduled || trigger != "auto" || !r.running || r.runTrigger != trigger || r.runTerminalStatus != "" {
 		return
 	}
 	slot := r.nextScheduledTime
@@ -873,7 +876,7 @@ func (e *Engine) CancelInFlightRuns() int {
 	e.mu.RLock()
 	regs := make([]*registration, 0, len(e.regs))
 	for _, r := range e.regs {
-		if r.desc.Kind != KindDaemon {
+		if r.desc.Kind != KindDaemon && e.roleAllows(r.desc.RunsOn) {
 			regs = append(regs, r)
 		}
 	}
@@ -917,9 +920,11 @@ func (e *Engine) PauseScheduling() {
 //	...导入事务...
 //	engine.ResumeScheduling()         // 成功/失败都必须恢复
 //
-// 注意：Run 体中不消费 rc.Ctx 的任务段（cert 四 tick / log-cleanup 的
-// 文件操作段等）取消等价 no-op，等待会跑满该段时长——因此 ctx deadline
-// 仍是必需的兜底（建议与证书队列 PauseAndDrain 同量级 30s）。实现为计数轮询
+// 注意：Run 体中仍不消费 rc.Ctx 的任务段（log-cleanup 的文件操作段、
+// cluster 快照提交后副作用等）取消等价 no-op，等待会跑满该段时长——因此 ctx
+// deadline 仍是必需的兜底（建议与证书队列 PauseAndDrain 同量级 30s）。证书
+// 四 tick 已全部消费 rc.Ctx（waiting-ca/reconcile/续期扫描/手动巡检），可被
+// CancelInFlightRuns 中止。实现为计数轮询
 // （runWG 无取消语义；暂停后计数单调递减，无伪排空窗口）。
 func (e *Engine) WaitInFlightRuns(ctx context.Context) bool {
 	if ctx == nil {
@@ -1489,6 +1494,7 @@ func (res *runReservation) release() {
 	res.r.running = false
 	res.r.cancel = nil
 	res.r.runTrigger = ""
+	res.r.runTerminalStatus = ""
 	res.r.mu.Unlock()
 	res.cancel(nil) // 执行结束的资源回收，不携带取消原因
 	res.engine.inFlight.Add(-1)
@@ -1603,6 +1609,7 @@ func (e *Engine) reserveRunInternal(id, trigger string, admission Kind, beat tim
 	r.running = true
 	r.runSeq++
 	r.runTrigger = trigger
+	r.runTerminalStatus = ""
 	if admission == KindPeriodic {
 		r.lastCheck = beat
 	}
@@ -1685,6 +1692,9 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 	}
 	runErr := runGuarded(r.desc.Run, rc)
 	status := terminalStatus(ctx, runErr)
+	r.mu.Lock()
+	r.runTerminalStatus = status
+	r.mu.Unlock()
 	dur := time.Since(start).Milliseconds()
 	msg := fmt.Sprintf("[done] %s 耗时=%dms 触发=%s", status, dur, trigger)
 	if status == "failed" && runErr != nil {

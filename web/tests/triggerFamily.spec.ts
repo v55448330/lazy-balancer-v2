@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { detectionModeExplains, triggerStageFamily, type TriggerStageFamily } from '../src/utils/securityStages.ts'
-import { repoCode, section } from './_helpers.ts'
+import { code, repoCode, section } from './_helpers.ts'
 
 const cases: ReadonlyArray<readonly [string, TriggerStageFamily]> = [
   // 空 / 请求体异常 / 威胁情报 / 信任（id:5 = 绕过模式占用 id:3 时的信任名单并集）
@@ -141,6 +141,14 @@ const GO_KEY_TO_FAMILY: Readonly<Record<string, TriggerStageFamily>> = {
 // 「地域拦截（旧 id）」中和文案，现代引擎地域事件改发 800xxx，仅历史/带外
 // 数据可见；不按「与后端同步」改回 geoip。
 const FRONTEND_FAMILY_EXCEPTIONS: Readonly<Record<string, TriggerStageFamily>> = { '8': 'ipAcl' }
+
+test('存量 id 8 在事件列表与触发详情都标为地域拦截（旧 id）', () => {
+  const list = code('src/views/security/SecurityEvents.vue')
+  const detail = code('src/components/events/TriggerDetailDialog.vue')
+  assert.match(list, /地域拦截（旧 id）/)
+  assert.match(detail, /rule_triggered \?\? ''\) === '8'|rule_triggered === '8'/, '详情必须识别存量 id 8')
+  assert.match(detail, /地域拦截（旧 id）/, '详情不得再把同一事件写成 IP 黑白名单')
+})
 
 test('固定 id 族归属从后端 legacyRuleFamilies 单表派生（改族即红）', () => {
   const handler = repoCode('internal/handlers/security.go')

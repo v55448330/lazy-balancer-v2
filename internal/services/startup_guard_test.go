@@ -21,10 +21,22 @@ func TestRunningConfigHasRuleRoutes(t *testing.T) {
 	}))
 	defer empty.Close()
 
+	// And 纯 TCP 部署（只有 layer4 路由，http 无路由）
+	layer4Only := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"apps":{"layer4":{"servers":{"srv1":{"routes":[{"@id":"lb_tcp_route"}]}}}}}`))
+	}))
+	defer layer4Only.Close()
+
 	// When/Then 含路由 → true
 	has, err := RunningConfigHasRuleRoutes(withRoutes.URL)
 	if err != nil || !has {
 		t.Fatalf("with routes: has=%v err=%v, want true", has, err)
+	}
+	// And layer4 路由也计入（纯 TCP 部署：删掉 layer4 分支会让空库实例把空
+	// 配置 /load 覆盖在役 TCP 规则上）
+	has, err = RunningConfigHasRuleRoutes(layer4Only.URL)
+	if err != nil || !has {
+		t.Fatalf("layer4 only: has=%v err=%v, want true", has, err)
 	}
 	// And 空配置 → false
 	has, err = RunningConfigHasRuleRoutes(empty.URL)

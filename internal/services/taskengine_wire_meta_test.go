@@ -4,9 +4,7 @@ package services
 // 调度开关/证书族角色门。
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,11 +48,10 @@ func TestInitTaskEngine_logsTaskLogDirMkdirFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "tasks"), []byte("not a directory"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	var logs bytes.Buffer
-	oldWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	logs := captureStandardLog(t)
 
+	oldLogDir := taskengine.LogDir()
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
 	InitTaskEngine("", filepath.Join(root, "app.log"))
 
 	if got := logs.String(); !strings.Contains(got, "任务日志目录创建失败") || !strings.Contains(got, filepath.Join(root, "tasks")) {
@@ -161,10 +158,12 @@ func TestTaskEngineWire_CertWaitingCANextSlotResolves(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_available_after) VALUES ('r1','a.example.com','waiting_ca',?)`, future); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range te.DescribeAll() {
-		if m.ID == "cert-waiting-ca" && m.NextSlot != "" {
-			t.Fatalf("Periodic 不得携带 Scheduled 专用 NextSlotFn/NextSlot，got %q", m.NextSlot)
-		}
+	meta, ok := te.Lookup("cert-waiting-ca")
+	if !ok {
+		t.Fatal("cert-waiting-ca 未注册")
+	}
+	if meta.Kind != taskengine.KindPeriodic || meta.NextSlot != "" {
+		t.Fatalf("Periodic 不得携带 Scheduled 专用 NextSlotFn/NextSlot: kind=%s next=%q", meta.Kind, meta.NextSlot)
 	}
 	for _, ti := range collectEngineFamilies(te) {
 		if ti.ID == "cert-waiting-ca" {
@@ -249,30 +248,20 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 	wantPeriodic := map[string]int{
 		"config-watchdog": 60, "log-cleanup": 86400, "audit-retention": 86400,
 		"security-events-retention": 86400, "metrics-orphan-cleanup": 86400,
-		"cert-renewal-scan": 21600,
-		"cert-reconcile":    21600, "cert-manual-poll": 600, "cert-waiting-ca": 30,
-		"autoban": 60,
-	}
-	wantScheduled := map[string]bool{"threat": true, "crs": true, "ip2region": true, "crawlerbot-update": true, "auto-backup": true}
-	wantDaemon := map[string]bool{"security-events-ingestion": true, "cert-issuance": true, "cluster-sync": true}
-	wantOneshot := map[string]bool{"startup:config-load": true}
-	// 白名单键集=验收全集（上面四表即唯一事实源）。
-	wantKindByID := map[string]taskengine.Kind{}
-	for id := range wantPeriodic {
-		wantKindByID[id] = taskengine.KindPeriodic
-	}
-	for id := range wantScheduled {
-		wantKindByID[id] = taskengine.KindScheduled
-	}
-	for id := range wantDaemon {
-		wantKindByID[id] = taskengine.KindDaemon
-	}
-	for id := range wantOneshot {
-		wantKindByID[id] = taskengine.KindOneshot
+		"cert-renewal-scan": 21600, "cert-reconcile": 21600, "cert-manual-poll": 600,
+		"cert-waiting-ca": 30, "autoban": 60,
 	}
 	seen := map[string]bool{}
 	for _, m := range metas {
 		seen[m.ID] = true
+		wantKind, ok := expectedTaskKinds[m.ID]
+		if !ok {
+			t.Errorf("未验收任务 %s（Kind=%s）——新增任务须在唯一 Kind 表登记", m.ID, m.Kind)
+			continue
+		}
+		if m.Kind != wantKind {
+			t.Errorf("%s Kind=%s, want %s", m.ID, m.Kind, wantKind)
+		}
 		switch m.Kind {
 		case taskengine.KindPeriodic:
 			want, ok := wantPeriodic[m.ID]
@@ -284,34 +273,14 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 				t.Errorf("%s IntervalSec=%d, want %d", m.ID, m.IntervalSec, want)
 			}
 		case taskengine.KindScheduled:
-			if !wantScheduled[m.ID] {
-				t.Errorf("未验收 Scheduled 任务 %s", m.ID)
-			}
 			if m.NextSlot != "" {
 				if _, err := time.ParseInLocation("2006-01-02 15:04:05", m.NextSlot, CurrentLocation()); err != nil {
 					t.Errorf("%s NextSlot=%q 不可解析: %v", m.ID, m.NextSlot, err)
 				}
 			}
-		case taskengine.KindDaemon:
-			if !wantDaemon[m.ID] {
-				t.Errorf("未验收 Daemon 任务 %s", m.ID)
-			}
-		case taskengine.KindOneshot:
-			if !wantOneshot[m.ID] {
-				t.Errorf("未验收 Oneshot 任务 %s", m.ID)
-			}
-		default:
-			t.Errorf("%s 非法 Kind %q", m.ID, m.Kind)
 		}
 	}
-	// 集合双向断言：多一个（未验收）少一个（漏注册/被删）都红，报错指向 ID
-	// 而非裸条数。
-	for _, m := range metas {
-		if _, ok := wantKindByID[m.ID]; !ok {
-			t.Errorf("未验收任务 %s（Kind=%s）——新增任务须在验收白名单登记", m.ID, m.Kind)
-		}
-	}
-	for id := range wantKindByID {
+	for id := range expectedTaskKinds {
 		if !seen[id] {
 			t.Errorf("白名单任务 %s 未注册（漏注册或 Kind 变更）", id)
 		}

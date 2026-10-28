@@ -34,24 +34,21 @@ func TestValidateV2BackupTimestamps_rejectsWhitespacePaddedValues(t *testing.T) 
 	}
 }
 
-func TestValidateV2BackupTimestamps_coversNullableTimeColumns(t *testing.T) {
-	cases := []struct {
-		table  string
-		column string
-	}{
-		{"users", "last_login"},
-		{"api_keys", "last_used"},
-		{"api_keys", "expires_at"},
-		{"cert_jobs", "expires_at"},
-	}
-	for _, tc := range cases {
-		tables := map[string][]map[string]any{tc.table: {{tc.column: "garbage"}}}
-		err := validateV2BackupTimestamps(tables)
-		if err == nil {
-			t.Fatalf("%s.%s 的不可解析值必须被拒（落库后列表/登录扫描 500）", tc.table, tc.column)
-		}
-		if !strings.Contains(err.Error(), tc.column) {
-			t.Fatalf("err=%v, want 点名列 %s", err, tc.column)
+func TestValidateV2BackupTimestamps_coversDeclaredTimeColumns(t *testing.T) {
+	// 直接遍历生产声明面：新增时间列只改 backupTimeColumns 也会自动获得
+	// 畸形值用例，不再依赖测试侧手抄四列表格同步。
+	for table, columns := range backupTimeColumns {
+		for _, column := range columns {
+			t.Run(table+"."+column, func(t *testing.T) {
+				tables := map[string][]map[string]any{table: {{column: "garbage"}}}
+				err := validateV2BackupTimestamps(tables)
+				if err == nil {
+					t.Fatalf("%s.%s 的不可解析值必须被拒（落库后列表/登录扫描 500）", table, column)
+				}
+				if !strings.Contains(err.Error(), column) {
+					t.Fatalf("err=%v, want 点名列 %s", err, column)
+				}
+			})
 		}
 	}
 }

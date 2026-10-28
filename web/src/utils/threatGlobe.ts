@@ -907,7 +907,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   /** 经纬度 → 屏幕坐标；背面点返回 null。 */
   function projectFlow(lat: number, lng: number): { x: number; y: number } | null {
     const cam = globe.camera()
-    const raw = globeCoords.getCoords(lat, lng, 0.005)
+    const raw = globeCoords.getCoords(lat, lng, DOT_ALTITUDE)
     if (!cam || !projectFlowXyz(raw.x, raw.y, raw.z, cam)) return null
     return { x: flowProjected.x, y: flowProjected.y }
   }

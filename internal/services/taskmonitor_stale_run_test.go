@@ -33,14 +33,30 @@ func findTaskInfo(t *testing.T, rows []TaskInfo, id string) TaskInfo {
 	return TaskInfo{}
 }
 
+func alignMonitorEngineLocation(t *testing.T) {
+	t.Helper()
+	previous := CurrentLocation().String()
+	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if previous == "CST" {
+			previous = "Asia/Shanghai"
+		}
+		_, _ = ConfigureLocation(previous)
+	})
+}
+
 func TestCollectEngineFamilies_staleRunningRowIsNotRunning(t *testing.T) {
 	newClusterTestService(t)
+	alignMonitorEngineLocation(t)
 	e := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
 	t.Cleanup(e.Stop)
 	registerMonitorTestTask(t, e, "t-stale-run", func(taskengine.RunContext) error { return nil })
 
+	startedAt := time.Now().In(CurrentLocation()).Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
-		VALUES ('t-stale-run', 't', 'auto', 'running', datetime('now','-5 minutes'))`); err != nil {
+		VALUES ('t-stale-run', 't', 'auto', 'running', ?)`, startedAt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,6 +79,7 @@ func TestCollectEngineFamilies_youngRunningRowStaysRunningWithinGrace(t *testing
 	// 行快照与内存快照之间的瞬态：刚写入的 running 行 + 内存已空闲（该轮
 	// 在两次取数之间完成）不得立即呈现失败/中断。
 	newClusterTestService(t)
+	alignMonitorEngineLocation(t)
 	e := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
 	t.Cleanup(e.Stop)
 	registerMonitorTestTask(t, e, "t-young-run", func(taskengine.RunContext) error { return nil })
@@ -84,6 +101,7 @@ func TestCollectEngineFamilies_youngRunningRowStaysRunningWithinGrace(t *testing
 
 func TestCollectEngineFamilies_inFlightRunStaysRunning(t *testing.T) {
 	newClusterTestService(t)
+	alignMonitorEngineLocation(t)
 	e := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
 	t.Cleanup(e.Stop)
 	registerMonitorTestTask(t, e, "t-live-run", func(rc taskengine.RunContext) error {
@@ -94,22 +112,13 @@ func TestCollectEngineFamilies_inFlightRunStaysRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	waitForCond(t, 2*time.Second, func() bool {
 		ti := findTaskInfo(t, collectEngineFamilies(e), "t-live-run")
-		// 状态列现在优先采信内存 running（行插入失败/静默轮的显示真值），
-		// 因此可能在 task_runs running 行落库之前就呈现 running——此时
-		// LastRun 尚未出现属正常瞬态，继续轮询等行落库后再断言结果列。
-		if ti.Status == TaskStatusRunning && ti.LastRun != nil {
-			if ti.LastRun.Result != "running" {
-				t.Fatalf("在途轮最近运行结果应保持 running, got %+v", ti.LastRun)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("在途执行应呈现运行中（且落 running 行）, got %q lastRun=%+v", ti.Status, ti.LastRun)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return ti.Status == TaskStatusRunning && ti.LastRun != nil
+	})
+	ti := findTaskInfo(t, collectEngineFamilies(e), "t-live-run")
+	if ti.LastRun.Result != "running" {
+		t.Fatalf("在途轮最近运行结果应保持 running, got %+v", ti.LastRun)
 	}
 }
 
@@ -119,12 +128,14 @@ func TestCollectEngineFamilies_inFlightRunStaysRunning(t *testing.T) {
 // 归一判定与文案单源在引擎（History/LatestRun 内置），服务层列表用同一判定。
 func TestHistoryMatchesListOnStaleRunningRow(t *testing.T) {
 	newClusterTestService(t)
+	alignMonitorEngineLocation(t)
 	e := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
 	t.Cleanup(e.Stop)
 	registerMonitorTestTask(t, e, "t-history-stale", func(taskengine.RunContext) error { return nil })
 
+	startedAt := time.Now().In(CurrentLocation()).Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
-		VALUES ('t-history-stale', 't', 'auto', 'running', datetime('now','-5 minutes'))`); err != nil {
+		VALUES ('t-history-stale', 't', 'auto', 'running', ?)`, startedAt); err != nil {
 		t.Fatal(err)
 	}
 	runs := e.History("t-history-stale", 10)

@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
+	_ "unsafe"
 
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/wafiplist"
 )
+
+// 测试直接读取引擎条目解析计数，验证安全事件策略缓存没有重复解析。
+//
+//go:linkname wafiplistParseEntryCallsForTest lazy-balancer-v2/wafiplist.parseEntryCallsForTest
+var wafiplistParseEntryCallsForTest atomic.Int64
 
 // legacyIPInList 是改造前的逐条解析实现（TrimSpace → ParseIPEntry → Contains），
 // 仅作等价性基准：生产路径改为「每 tick 解析一次 + 二分」，两者对全部名单
@@ -113,6 +120,30 @@ func TestSecurityEventsIPInPrefixSet_matchesLegacyScan(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSecurityEventsPolicyIPIndex_cachedBuildSkipsParsing(t *testing.T) {
+	p := models.SecurityPolicy{
+		MergedACLList: []string{"203.0.113.0/24", "198.51.100.7"},
+		IPACLList:     `[]`,
+	}
+	before := wafiplistParseEntryCallsForTest.Load()
+	first := securityEventsPolicyACLIndex(&p)
+	if got := wafiplistParseEntryCallsForTest.Load() - before; got != 2 {
+		t.Fatalf("首次构建条目解析次数=%d, want 2", got)
+	}
+	if !first.Built || !first.OK || len(first.Prefixes) != 2 {
+		t.Fatalf("首次构建索引无效: %+v", first)
+	}
+
+	before = wafiplistParseEntryCallsForTest.Load()
+	second := securityEventsPolicyACLIndex(&p)
+	if got := wafiplistParseEntryCallsForTest.Load() - before; got != 0 {
+		t.Fatalf("第二次命中缓存仍解析条目 %d 次, want 0", got)
+	}
+	if second.Entries != first.Entries || len(second.Prefixes) != len(first.Prefixes) {
+		t.Fatalf("缓存索引发生变化: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -294,6 +325,29 @@ func TestSecurityEventsIPFamilyEventSurface_usesIndexedCapability(t *testing.T) 
 			},
 			rule: "4", action: "blocked", want: false,
 		},
+		{
+			name: "rule 7 allow empty claims fail-closed surface",
+			policy: models.SecurityPolicy{
+				ID: 1, IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`,
+			},
+			rule: "7", action: "blocked", want: true,
+		},
+		{
+			name: "logged non-empty trust whitelist capable",
+			policy: models.SecurityPolicy{
+				ID: 1, IPWhitelistEnabled: true,
+				MergedWhitelist: []string{"203.0.113.0/24"},
+			},
+			rule: "4", action: "logged", want: true,
+		},
+		{
+			name: "logged empty trust whitelist not capable despite refs",
+			policy: models.SecurityPolicy{
+				ID: 1, IPWhitelistEnabled: true,
+				MergedWhitelist: []string{}, IPWhitelistRefs: `[7]`,
+			},
+			rule: "4", action: "logged", want: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,6 +355,31 @@ func TestSecurityEventsIPFamilyEventSurface_usesIndexedCapability(t *testing.T) 
 				t.Fatalf("surface=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSecurityEventsCRSExclusionIPIndex_groupTargetMatchesExplicitly(t *testing.T) {
+	entries := ParseCRSExcludedRules(`[{"target":"42"}]`)
+	if len(entries) != 1 {
+		t.Fatalf("fixture entries=%d, want 1", len(entries))
+	}
+	indexed := securityEventsPolicyCRSExclusions{
+		entries:   entries,
+		entrySets: securityEventsBuildCRSExclusionIPIndex(entries, nil),
+	}
+	for _, tc := range []struct {
+		rule string
+		ip   string
+		want bool
+	}{
+		{rule: "942100", ip: "203.0.113.7", want: true},
+		{rule: "942550", ip: "", want: true},
+		{rule: "943100", ip: "203.0.113.7", want: false},
+		{rule: "42", ip: "203.0.113.7", want: false},
+	} {
+		if got := securityEventsCRSExclusionRemovesRule(indexed, tc.rule, tc.ip); got != tc.want {
+			t.Fatalf("group target 42: rule=%s ip=%q got=%v, want %v", tc.rule, tc.ip, got, tc.want)
+		}
 	}
 }
 

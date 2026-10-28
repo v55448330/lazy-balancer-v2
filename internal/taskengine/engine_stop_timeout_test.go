@@ -145,8 +145,8 @@ func TestEngine_StopWithTimeoutSchedulerRunDaemonShareOneBudget(t *testing.T) {
 	started := time.Now()
 	e.StopWithTimeout(timeout)
 	elapsed := time.Since(started)
-	if elapsed >= 2*timeout {
-		t.Fatalf("scheduler+Run+daemon 等待耗时=%s，超过一份预算 %s", elapsed, timeout)
+	if elapsed >= timeout+50*time.Millisecond {
+		t.Fatalf("scheduler+Run+daemon 等待耗时=%s，超过共享预算+调度余量 %s", elapsed, timeout+50*time.Millisecond)
 	}
 	got := logs.String()
 	if !strings.Contains(got, "引擎停止等待调度循环退出超时") || !strings.Contains(got, "引擎停止等待在途任务超时") {

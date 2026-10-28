@@ -38,13 +38,10 @@ func parseAdminTLSCertInfo(certPEM string) (*adminTLSCertInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	domain := cert.Subject.CommonName
-	if len(cert.DNSNames) > 0 {
-		domain = strings.Join(cert.DNSNames, ", ")
-	}
-	issuer := cert.Issuer.CommonName
+	domain := services.CertificateDomainsDisplay(cert)
+	issuer := services.CertificateIssuerDisplay(cert)
 	if issuer == "" {
-		issuer = cert.Issuer.String()
+		issuer = "-"
 	}
 	// 与 (services/certinfo.go)同口径向零截断——未过期 23h→0、
 	// 过期 1天3h→-1;此前未过期 Ceil/已过期 Floor 与规则证书展示相差一天。

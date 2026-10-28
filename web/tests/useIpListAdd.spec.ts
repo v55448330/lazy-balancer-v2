@@ -11,23 +11,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { registerModuleHooks } from './_helpers.ts'
-import { STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
-
-interface RecordedCall {
-  fn: string
-  arg?: unknown
-  args?: unknown[]
-}
+import { installStubHost, STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
 
 type Harness = {
-  __calls: RecordedCall[]
   __confirm: (...args: unknown[]) => Promise<unknown>
   __post: (...args: unknown[]) => Promise<unknown>
   __get: (...args: unknown[]) => Promise<unknown>
   __put: (...args: unknown[]) => Promise<unknown>
 }
 const g = globalThis as unknown as Harness
-g.__calls = []
+const stubHost = installStubHost()
 
 registerModuleHooks({
   'element-plus': STUB_ELEMENT,
@@ -44,16 +37,16 @@ const tick = (): Promise<void> => {
 }
 
 const reset = (): void => {
-  g.__calls = []
+  stubHost.reset()
   g.__confirm = async (...args: unknown[]) => {
-    g.__calls.push({ fn: 'confirm', args })
+    stubHost.calls.push({ fn: 'confirm', args })
   }
   g.__post = async () => ({ data: { added: true } })
   g.__get = async () => ({ data: undefined })
   g.__put = async () => ({ data: undefined })
 }
 
-const callsOf = (fn: string): RecordedCall[] => g.__calls.filter((call) => call.fn === fn)
+const callsOf = stubHost.callsOf
 
 test('确认后幂等 POST：added=true 走 showSaveResult，返回完成并复位重入锁', async () => {
   reset()

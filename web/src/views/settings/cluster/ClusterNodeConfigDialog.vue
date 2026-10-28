@@ -97,6 +97,9 @@ const inputRef = ref<InputInstance>()
 const form = reactive<NodeConfigForm>({ access_url: '', siteLocationKey: '', lat: 0, lon: 0 })
 // 打开时的坐标基线：保存前对比判定站点坐标是否真实变更。
 const baseline = reactive({ lat: 0, lon: 0 })
+// 访问地址基线随轮询前进；与表单不同的字段视为用户已编辑，轮询不得覆盖。
+const accessBaseline = ref('')
+let loadedNodeId: number | null = null
 
 // 与主节点地址共用 utils/clusterUrl（后端 ValidateClusterAccessURL 同规则）
 const validateAccessUrl = (_rule: unknown, value: string, callback: (error?: Error) => void): void => {
@@ -116,15 +119,24 @@ watch(
   () => [props.visible, props.node] as const,
   ([visible, node]) => {
     if (!visible || !node) return
-    form.access_url = node.access_url
+    // 同一弹框内的轮询刷新：只同步用户尚未编辑的字段，同时把基线推进到
+    // 最新节点行——否则他人修改访问地址后，无改动保存会按旧基线误判。
+    const continuing = loadedNodeId === node.id
+    const accessDirty = continuing && form.access_url !== accessBaseline.value
+    const siteDirty = continuing && nodeSiteCoordsChanged(baseline, form)
+    if (!accessDirty) form.access_url = node.access_url
     // 问题：继承节点还原为 0,0 + 空选择——列表接口返回的坐标是主节点
     // 默认值副本，预填会把「打开即保存」变成继承的静默固化。
-    const initial = initialNodeSiteForm(node)
-    form.lat = initial.lat
-    form.lon = initial.lon
-    form.siteLocationKey = initial.siteLocationKey
-    baseline.lat = initial.lat
-    baseline.lon = initial.lon
+    if (!siteDirty) {
+      const initial = initialNodeSiteForm(node)
+      form.lat = initial.lat
+      form.lon = initial.lon
+      form.siteLocationKey = initial.siteLocationKey
+      baseline.lat = initial.lat
+      baseline.lon = initial.lon
+    }
+    accessBaseline.value = node.access_url
+    loadedNodeId = node.id
   },
   { immediate: true },
 )
@@ -161,6 +173,8 @@ const resetForm = (): void => {
   form.lon = 0
   baseline.lat = 0
   baseline.lon = 0
+  accessBaseline.value = ''
+  loadedNodeId = null
   formRef.value?.clearValidate()
 }
 

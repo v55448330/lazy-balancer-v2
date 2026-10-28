@@ -51,3 +51,40 @@ export const adminTlsConfirmDisabled = (
   if (adminTlsReusesSavedCert(stored, form)) return false
   return form.certInfo == null || form.certInfo.days_left <= 0
 }
+
+interface AdminTlsPendingState {
+  readonly enabled: boolean
+  readonly mode: string
+  readonly savedEnabled: boolean
+  readonly savedMode: string
+  /** 弹框「确定」后暂存、随底部「保存」统一提交的上传证书材料 */
+  readonly hasStagedCert: boolean
+}
+
+/**
+ * 「下方保存」是否有待提交的 HTTPS 变更（原 adminTlsDirty 的纯函数形态）。
+ *
+ * 暂存证书本身即待提交变更，与 enabled 无关：原实现在 `!enabled` 处提前
+ * 返回 false——用户在启用态选好并校验了上传证书后把开关关回禁用态，暂存材料
+ * 既不算变更也不随保存发送，界面却回「保存成功」，材料静默丢失。
+ *
+ * 禁用态下来源（mode）不参与生效判定，保持原判净口径。
+ */
+export const adminTlsPendingChange = (state: AdminTlsPendingState): boolean => {
+  if (state.hasStagedCert) return true
+  if (state.enabled !== state.savedEnabled) return true
+  if (!state.enabled) return false
+  return state.mode !== state.savedMode
+}
+
+/**
+ * 保存时是否随 /admin-tls 提交暂存证书材料。
+ *
+ * 只认「有暂存材料 + upload 来源」，不串 enabled：后端对「禁用态但本次上传了
+ * 新证书材料」同样校验配对/有效期并落库（internal/handlers/admintls.go）；
+ * 非 upload 来源携带材料会被后端 400 拒绝。
+ */
+export const adminTlsSendsStagedCert = (state: {
+  readonly mode: string
+  readonly hasStagedCert: boolean
+}): boolean => state.hasStagedCert && state.mode === 'upload'

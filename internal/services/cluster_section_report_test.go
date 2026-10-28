@@ -171,6 +171,92 @@ func TestClusterService_ReportNode_oldSlaveWithoutSectionHashesOmitsSectionSync(
 	}
 }
 
+// 106-07：从节点一次瞬时读失败（SQLITE_BUSY）会让上报载荷缺 section_hashes，
+// 主节点若把「空哈希」一律当「旧版本从节点」，就删掉了该节点历史分区状态——
+// 节点列表的 section_sync 随即整体消失，运维信号从「某节滞后」退化为「无数据」。
+// 修复=上报侧显式标记「本轮读取失败」（section_hashes_unavailable），主节点仅对
+// 「旧版从节点」（两字段都不带）执行清理语义。
+func TestClusterService_ReportNode_unavailableSectionHashesKeepsPreviousReport(t *testing.T) {
+	// Given：节点已上报过一轮分区哈希
+	service, database := newClusterTestService(t)
+	nodeID := insertApprovedClusterNode(t, database, "slave-busy")
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	first := reportForVersion(5)
+	first.SectionHashes = map[string]string{"users": "u1", "rules": "r1", "security": "s1"}
+	if err := service.ReportNode(context.Background(), nodeID, first, now); err != nil {
+		t.Fatalf("seed report: %v", err)
+	}
+
+	// When：下一轮从节点读 cluster_applied_sections 失败（无哈希 + 显式标志）
+	stale := reportForVersion(6)
+	stale.SectionHashes = nil
+	stale.SectionHashesUnavailable = true
+	if err := service.ReportNode(context.Background(), nodeID, stale, now.Add(time.Minute)); err != nil {
+		t.Fatalf("report with unavailable hashes: %v", err)
+	}
+
+	// Then：历史分区状态保留（节点列表继续展示 section_sync）
+	service.sectionMu.Lock()
+	stored := service.sectionReports[nodeID]
+	service.sectionMu.Unlock()
+	if stored == nil || stored["rules"] != "r1" {
+		t.Fatalf("stored section hashes=%#v, want 保留上一轮（读失败≠旧版本从节点）", stored)
+	}
+
+	// 反向对照：真正的旧版本从节点（两字段都不带）仍走清理语义
+	oldSlave := reportForVersion(7)
+	if err := service.ReportNode(context.Background(), nodeID, oldSlave, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("report old slave: %v", err)
+	}
+	service.sectionMu.Lock()
+	stored = service.sectionReports[nodeID]
+	service.sectionMu.Unlock()
+	if stored != nil {
+		t.Fatalf("stored section hashes=%#v, want 旧版从节点清理语义", stored)
+	}
+}
+
+// 上报载荷必须把「读失败」编成显式标志：JSON 里缺字段=旧版本从节点（清理），
+// 带上 section_hashes_unavailable=true 才是「本轮读失败」（保留）。
+// 注入方式=DROP 掉 cluster_applied_sections（其余读取照常可用），只让节哈希
+// 读取失败，不牵连 Report 的其他查询。
+func TestSyncService_Report_marksSectionHashesUnavailableOnReadFailure(t *testing.T) {
+	_, database := newClusterTestService(t)
+	var captured map[string]interface{}
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/cluster/nodes/report" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token' WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("DROP TABLE cluster_applied_sections"); err != nil {
+		t.Fatalf("drop applied sections: %v", err)
+	}
+	syncService := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
+
+	// When：上报（读取已应用节哈希必然失败）
+	_ = syncService.Report(context.Background())
+
+	// Then
+	if captured == nil {
+		t.Fatal("上报未到达主节点")
+	}
+	if unavailable, _ := captured["section_hashes_unavailable"].(bool); !unavailable {
+		t.Fatalf("payload 未标记 section_hashes_unavailable: %#v", captured)
+	}
+	if _, present := captured["section_hashes"]; present {
+		t.Fatalf("读失败时不得发送 section_hashes（会让主节点按旧版从节点清理）: %#v", captured)
+	}
+}
+
 func TestClusterService_ReportNode_sectionHashesDecodeFromWirePayload(t *testing.T) {
 	// Given：新从节点上报线格式（JSON 解码进 ClusterReport）
 	service, database := newClusterTestService(t)

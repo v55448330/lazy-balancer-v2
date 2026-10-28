@@ -29,7 +29,7 @@ export function needsEmptyListConfirm(editingId: number | null, entries: number)
  * 打开时取一次、保存是整表替换——期间新增的封禁条目会被一并删掉（提前解封），
  * 界面无任何提示。按值（去空白、大小写不敏感）比对，重复值只报一次。
  */
-export function entriesMissingFromPayload(
+function entriesMissingFromPayload(
   serverEntries: readonly string[],
   payloadValues: readonly string[],
 ): string[] {

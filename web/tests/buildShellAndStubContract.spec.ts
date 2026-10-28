@@ -26,6 +26,20 @@ test('index.html 保留挂载点、入口脚本与首帧标题（否则运行期
   assert.match(branding, /document\.title = `\$\{appName\.value\} V2`/, '运行期标题必须同形')
 })
 
+const emptySpecReason = (text: string): string | null => {
+  const testCount = (text.match(/^\s*test\s*\(/gm) ?? []).length
+  const withoutPlaceholders = text.replace(/\bassert\.ok\(\s*true\s*\)/g, '')
+  const assertCount = (withoutPlaceholders.match(/\bassert\./g) ?? []).length
+  if (testCount === 0) return 'test=0'
+  if (assertCount < testCount) return `test=${testCount}，有效 assert=${assertCount}`
+  return null
+}
+
+test('空 spec 判据自检：占位断言违规，缩进的真实用例合规', () => {
+  assert.match(emptySpecReason("test('x', () => { assert.ok(true) })") ?? '', /有效 assert=0/)
+  assert.equal(emptySpecReason("  test('x', () => { assert.equal(1, 1) })"), null)
+})
+
 test('每个 spec 都含 test( 与 assert（防空用例文件混入，递归扫描子目录）', () => {
   const specDir = fileURLToPath(new URL('./', import.meta.url))
   // runner 的 glob 是 `tests/**/*.spec.ts`：单层 readdirSync 会让子目录里的新
@@ -38,14 +52,10 @@ test('每个 spec 都含 test( 与 assert（防空用例文件混入，递归扫
   for (const name of files) {
     const text = readFileSync(`${specDir}${name}`, 'utf8')
     // 可量化口径：顶层用例数与断言数。注释里的 `test(` 不在行首、注释里的
-    // `assert.` 仍会被计入（偏宽松）；断言数少于用例数则必然存在无用例。
-    const testCount = (text.match(/^test\(/gm) ?? []).length
-    const assertCount = (text.match(/\bassert\./g) ?? []).length
-    if (testCount === 0 || assertCount < testCount) {
-      offenders.push(`${name}（test=${testCount}，assert=${assertCount}）`)
+    const reason = emptySpecReason(text)
+    if (reason !== null) offenders.push(`${name}（${reason}）`)
     }
-  }
-  assert.deepEqual(offenders, [], '空 spec / 断言少于用例数的文件不得入库')
+  assert.deepEqual(offenders, [], '空 spec / 占位断言 / 有效断言少于用例数的文件不得入库')
 })
 
 test('_stubs 两处 ElMessage 替身共用同一契约（可调用 + 方法集同源）', async () => {
@@ -61,6 +71,7 @@ test('_stubs 两处 ElMessage 替身共用同一契约（可调用 + 方法集�
     }
     const element = (await import(STUB_ELEMENT)) as {
       ElMessage: ((arg: string) => void) & Record<string, unknown>
+      ElMessageBox: { alert: (arg: string) => void }
     }
     assert.equal(typeof saveDeps.ElMessage, 'function', 'saveResult 替身的 ElMessage 必须可调用（真实 API 同形）')
     assert.equal(typeof element.ElMessage, 'function', 'element 替身的 ElMessage 必须可调用')
@@ -86,6 +97,8 @@ test('_stubs 两处 ElMessage 替身共用同一契约（可调用 + 方法集�
       assert.ok(recorded.includes(`ElMessage.${method}`), `两处替身都必须记录 ElMessage.${method}`)
     }
     assert.equal(recorded.filter((fn) => fn === 'ElMessage').length, 2, '可调用形态各一次')
+    element.ElMessageBox.alert('warnings')
+    assert.ok(calls.some((call) => call.fn === 'ElMessageBox.alert'), '导入失败展示依赖 MessageBox.alert，替身必须记录')
   } finally {
     g.__calls = previous
   }

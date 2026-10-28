@@ -27,6 +27,8 @@ func TestImportConfigBackup_purgesCertJobsOfNonACMERules(t *testing.T) {
 		"lb_rules": {
 			{"caddy_id": "lb_manualrule", "name": "manualrule", "protocol": "http", "domain": "manual.example.test",
 				"listen_port": 8080, "enabled": 1, "enable_tls": 0, "tls_source": "manual"},
+			{"caddy_id": "lb_nulltls", "name": "nulltls", "protocol": "http", "domain": "nulltls.example.test",
+				"listen_port": 8083, "enabled": 1, "enable_tls": nil, "tls_source": "acme_dns"},
 			{"caddy_id": "lb_acmerule", "name": "acmerule", "protocol": "http", "domain": "acmerule.example.test",
 				"listen_port": 8463, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 92},
 		},
@@ -35,16 +37,17 @@ func TestImportConfigBackup_purgesCertJobsOfNonACMERules(t *testing.T) {
 		},
 		"cert_jobs": {
 			{"rule_id": "lb_manualrule", "domain": "manual.example.test", "status": "issued"},
+			{"rule_id": "lb_nulltls", "domain": "nulltls.example.test", "status": "issued"},
 			{"rule_id": "lb_acmerule", "domain": "acmerule.example.test", "status": "queued"},
 		},
 	}, EmptyConfigIfNil: true})
-	// 夹具自检：两条任务行都必须在备份里，清理断言才有判别力。
+	// 夹具自检：三条任务行都必须在备份里，清理断言才有判别力。
 	var fixture configBackup
 	if err := json.Unmarshal([]byte(backup), &fixture); err != nil {
 		t.Fatalf("parse backup fixture: %v", err)
 	}
-	if got := len(fixture.Tables["cert_jobs"]); got != 2 {
-		t.Fatalf("fixture cert_jobs rows=%d, want 2（含将被清理的 manual 行与必须保留的 ACME 行）", got)
+	if got := len(fixture.Tables["cert_jobs"]); got != 3 {
+		t.Fatalf("fixture cert_jobs rows=%d, want 3（含将被清理的 manual/NULL 行与必须保留的 ACME 行）", got)
 	}
 
 	// When
@@ -70,11 +73,11 @@ func TestImportConfigBackup_purgesCertJobsOfNonACMERules(t *testing.T) {
 		t.Fatalf("启用 ACME 规则的 cert_jobs 行=%d, want 1（前置：备份任务行须真实落库）", keptJobs)
 	}
 	var jobCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_manualrule'`).Scan(&jobCount); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id IN ('lb_manualrule','lb_nulltls')`).Scan(&jobCount); err != nil {
 		t.Fatalf("read cert_jobs: %v", err)
 	}
 	if jobCount != 0 {
-		t.Fatalf("非 ACME 规则的 cert_jobs 行=%d, want 0（导入须清理失效任务）", jobCount)
+		t.Fatalf("非 ACME/NULL 来源规则的 cert_jobs 行=%d, want 0（导入须清理失效任务）", jobCount)
 	}
 }
 
@@ -301,6 +304,7 @@ func TestImportConfigBackup_liveCertJobsSatisfyCertJobInvariant(t *testing.T) {
 // 「规则启用但无续签行」的断链状态会静默落库（周期扫描只遍历已存在任务行，
 // 不补建），证书到期后 TLS 端口无证书可用且无失败信号。
 func TestImportConfigBackup_lockRecheckRejectsCertJobDeletionDuringWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	seedLiveAdminShared(t)
 	seedLiveCertJobWindow(t)

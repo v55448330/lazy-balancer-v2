@@ -125,7 +125,7 @@ onMounted(async () => {
       let tokenApplied = false
       if (!verdict.ok) {
         ElMessage.error(`OIDC 登录失败：${OIDC_REJECTION_TEXT[verdict.reason]}`)
-        await authStore.init()
+        // 拒绝分支与成功分支共用下方无条件 init()，不得再发起一轮 /users/me+/config
       } else if (authStore.token && !isTokenExpired(authStore.token)) {
         // 已登录会话被 URL 令牌替换=一次身份切换：必须显式确认（换人/账号被
         // 顶替不该由一条链接决定），取消则完全不动现有会话。

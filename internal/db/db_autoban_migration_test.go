@@ -13,12 +13,12 @@ import (
 
 // autobanColumnsExpected 全部六列的期望默认值（与 newColumns 登记逐字对齐）。
 var autobanColumnsExpected = []struct{ column, dflt string }{
-	{"autoban_enabled", "0"},
-	{"autoban_threshold", "100"},
-	{"autoban_window_minutes", "5"},
-	{"autoban_duration", "'1h'"},
-	{"autoban_scope", "'all'"},
-	{"autoban_dry_run", "1"},
+	{"autoban_enabled", fmt.Sprint(DefaultAutobanEnabled)},
+	{"autoban_threshold", fmt.Sprint(DefaultAutobanThreshold)},
+	{"autoban_window_minutes", fmt.Sprint(DefaultAutobanWindowMinutes)},
+	{"autoban_duration", "'" + DefaultAutobanDuration + "'"},
+	{"autoban_scope", "'" + DefaultAutobanScope + "'"},
+	{"autoban_dry_run", fmt.Sprint(DefaultAutobanDryRun)},
 }
 
 // AutobanPresetListName 预置名单行名（services 层常量的镜像锚点——迁移侧

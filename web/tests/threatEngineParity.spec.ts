@@ -78,7 +78,7 @@ test('地球 hover/click 命中必须复用点阵 bbox 预筛，且静止态不�
   assert.match(hover, /countryHit\(/, 'hover 拾取必须走预筛单源')
   assert.doesNotMatch(hover, /THREAT_COUNTRIES\.find\(/, 'hover 不得再全表逐个射线')
   assert.match(hover, /const autoRotate = globe\.controls\(\)\.autoRotate/, '读自转状态')
-  assert.match(hover, /autoRotate && hoverPoint && now - lastHoverPick >= 120/, '仅自转时复测静止指针')
+  assert.match(hover, /autoRotate\s*&&\s*hoverPoint\s*&&\s*now\s*-\s*lastHoverPick\s*>=\s*120/, '仅自转时复测静止指针')
 })
 
 test('下钻态点击的手势输入集与地图一致：不得排除下钻国', () => {
@@ -128,10 +128,21 @@ test('地图静态层复用国家 Path2D 后按色批量填充', () => {
   assert.match(arcs, /arcGradient\(from, to, color\)/)
 })
 
+test('地球光流投影与点阵共用 DOT_ALTITUDE 壳层', () => {
+  assert.match(globeSrc, /getCoords\(lat, lng, DOT_ALTITUDE\)/)
+  assert.doesNotMatch(globeSrc, /getCoords\(lat, lng, 0\.005\)/)
+})
+
+test('地图光流只保留单航次状态，不含不可达的多航次分支', () => {
+  assert.doesNotMatch(sceneSrc, /ARC_FLIGHTS|arc\.flight\b|flight: 0/)
+  const arcs = member(sceneSrc, 'function drawArcs(')
+  assert.match(arcs, /arc\.flightT >= ARC_FLIGHT_SECONDS \+ ARC_FLIGHT_GAP[\s\S]*arcs\.splice\(i, 1\)/)
+})
+
 test('地球光流叠加层复用地图的像素线宽/尾迹/粒子口径', () => {
   const overlay = member(globeSrc, 'function drawFlowOverlay(')
   assert.match(overlay, /flowArcTierWidth\(arc\.tier\)/, '3D 光流线宽必须沿用显式三档')
-  assert.match(overlay, /ctx\.globalAlpha = alpha \* \(0\.05 \+ 0\.95 \* ratio\)/, '尾迹必须尾隐头亮（沿弧长分段，避免直线渐变裁剪）')
+  assert.match(overlay, /ctx\.globalAlpha\s*=\s*alpha\s*\*\s*\(0\.05\s*\+\s*0\.95\s*\*\s*ratio\)/, '尾迹必须尾隐头亮（沿弧长分段，避免直线渐变裁剪）')
   assert.match(overlay, /FLOW_PARTICLES/, '必须绘制同地图亮头粒子')
   assert.doesNotMatch(globeSrc, /arcStroke\('strokeW'/, '3D tube 弧线必须退役，避免双套样式')
 })
@@ -168,7 +179,7 @@ test('缓动/涟漪/浮签字色四组跨引擎重复实现收敛到 threatTheme
 test('帧率脚手架已删（两档恒等常量与交互时间窗不再伪装成自适应）', () => {
   assert.doesNotMatch(globeSrc, /IDLE_FRAME_INTERVAL|ACTIVE_FRAME_INTERVAL|ACTIVE_WINDOW|lastInteraction/,
     '恒等的两档帧率与交互时间窗是死脚手架')
-  assert.match(globeSrc, /const FRAME_INTERVAL = 1000 \/ 60/)
+  assert.match(globeSrc, /const FRAME_INTERVAL\s*=\s*1000\s*\/\s*60/)
 })
 
 // 拦截页回落文案归 securityStagesModel.spec（按 buildStageModel 行为断言，比源码文本

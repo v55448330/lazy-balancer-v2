@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,8 +15,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// newAPIKeyWhitelistFixture 建最小库（users/api_keys）并返回 router 与两把 Key：
-// 白名单 JSON 畸形、CIDR 越界（/33）。
+// newAPIKeyWhitelistFixture 建最小库（users/api_keys）并返回请求函数；
+// 三把 Key 分别覆盖白名单 JSON 畸形、CIDR 越界（/33）与合法 CIDR。
 func newAPIKeyWhitelistFixture(t *testing.T) func(apiKey string) *httptest.ResponseRecorder {
 	t.Helper()
 	oldDB := db.DB
@@ -44,6 +45,7 @@ func newAPIKeyWhitelistFixture(t *testing.T) func(apiKey string) *httptest.Respo
 	}
 	seed(11, "bad-json", "lb_sk_bad-json-whitelist", "not-json")
 	seed(12, "bad-cidr", "lb_sk_bad-cidr-whitelist", `["10.0.0.0/33"]`)
+	seed(13, "valid-cidr", "lb_sk_valid-cidr-whitelist", `["192.0.2.0/24"]`)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -62,8 +64,7 @@ func newAPIKeyWhitelistFixture(t *testing.T) func(apiKey string) *httptest.Respo
 // TestAPIKeyAuthRejectsMalformedWhitelistJSON 钉住反序列化失败分支：配置无效
 // 必须是 500（而非静默放行/401 密钥无效）。
 func TestAPIKeyAuthRejectsMalformedWhitelistJSON(t *testing.T) {
-	purgeAllAPIKeyWhitelistCacheForTest()
-	t.Cleanup(purgeAllAPIKeyWhitelistCacheForTest)
+	withIsolatedAPIKeyWhitelistCache(t)
 	request := newAPIKeyWhitelistFixture(t)
 
 	response := request("lb_sk_bad-json-whitelist")
@@ -76,8 +77,7 @@ func TestAPIKeyAuthRejectsMalformedWhitelistJSON(t *testing.T) {
 // 「解析失败不缓存」契约：两次请求都必须 500，且缓存中不得出现该 Key 的条目
 // （缓存了空结果会让后续请求跳过校验）。
 func TestAPIKeyAuthRejectsInvalidCIDRWithoutCaching(t *testing.T) {
-	purgeAllAPIKeyWhitelistCacheForTest()
-	t.Cleanup(purgeAllAPIKeyWhitelistCacheForTest)
+	withIsolatedAPIKeyWhitelistCache(t)
 	request := newAPIKeyWhitelistFixture(t)
 
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -92,4 +92,24 @@ func TestAPIKeyAuthRejectsInvalidCIDRWithoutCaching(t *testing.T) {
 	}
 }
 
-func purgeAllAPIKeyWhitelistCacheForTest() { PurgeAllAPIKeyWhitelistCache() }
+// 包级缓存被写入异构值时必须视为未命中并重新解析，不能让请求 goroutine
+// 因无 comma-ok 类型断言 panic；解析后的正确类型应回写缓存。
+func TestAPIKeyAuthRecoversFromHeterogeneousWhitelistCacheEntry(t *testing.T) {
+	withIsolatedAPIKeyWhitelistCache(t)
+	request := newAPIKeyWhitelistFixture(t)
+	const cacheKey = `13|["192.0.2.0/24"]`
+	apiKeyWhitelistCache.Store(cacheKey, "heterogeneous")
+
+	response := request("lb_sk_valid-cidr-whitelist")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 after cache reparse", response.Code, response.Body.String())
+	}
+	cached, ok := apiKeyWhitelistCache.Load(cacheKey)
+	if !ok {
+		t.Fatal("reparsed whitelist was not cached")
+	}
+	networks, ok := cached.([]*net.IPNet)
+	if !ok || len(networks) != 1 || networks[0].String() != "192.0.2.0/24" {
+		t.Fatalf("cache entry was not replaced with parsed networks: %T %v", cached, cached)
+	}
+}

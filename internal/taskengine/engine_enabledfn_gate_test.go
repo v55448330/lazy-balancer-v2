@@ -102,7 +102,7 @@ func TestEngine_EnabledFnFalseDoesNotKillInFlightRun(t *testing.T) {
 	// 连续再调度——close 用 sync.Once 幂等，避免 close of closed channel
 	// panic 噪音淹没断言。
 	var startOnce sync.Once
-	e.Register(Descriptor{ID: "t-enf", Family: "t", Name: "业务门在途", Kind: KindPeriodic, RunsOn: RoleAny,
+	if err := e.Register(Descriptor{ID: "t-enf", Family: "t", Name: "业务门在途", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
 		EnabledFn:  func() bool { return enabled.Load() },
 		Run: func(rc RunContext) error {
@@ -113,9 +113,11 @@ func TestEngine_EnabledFnFalseDoesNotKillInFlightRun(t *testing.T) {
 			case <-release:
 				return nil
 			}
-		}})
+		}}); err != nil {
+		t.Fatal(err)
+	}
 	e.StartLoop("t-enf")
-	<-started
+	waitForEngineSignal(t, "业务门在途 Run 启动", started)
 	// 在途期间业务关：给足 tick 轮次——若实现误杀（SetRole 同型取消），终态已翻转
 	enabled.Store(false)
 	time.Sleep(100 * time.Millisecond)

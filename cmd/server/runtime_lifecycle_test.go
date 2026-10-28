@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -167,7 +168,7 @@ func TestRuntimeLifecycle_StopACME_clearsActiveCertificateService(t *testing.T) 
 	// ErrTaskSkipped 哨兵）。CertManualCheckOnce 已与该指针解耦（停机后仍执行
 	// 只读巡检），不再能作为「实例已摘除」的观察口。
 	// 正向对照：注入生效——扫描进入真实服务路径（不返回 skipped 哨兵）。
-	if err := services.CertRenewalScanOnce(); errors.Is(err, taskengine.ErrTaskSkipped) {
+	if err := services.CertRenewalScanOnce(context.Background()); errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("after StartACME the renewal scan should reach the active service, err=%v", err)
 	}
 
@@ -175,7 +176,7 @@ func TestRuntimeLifecycle_StopACME_clearsActiveCertificateService(t *testing.T) 
 	lifecycle.StopACME()
 
 	// Then ①：active 指针已清除——续期扫描回到 skipped 哨兵
-	if err := services.CertRenewalScanOnce(); !errors.Is(err, taskengine.ErrTaskSkipped) {
+	if err := services.CertRenewalScanOnce(context.Background()); !errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("active certificate service survived StopACME: cert-renewal-scan would keep driving a stopped service, err=%v", err)
 	}
 	// Then ②（交叉断言）：手动到期巡检不依赖实例，停机后照常执行——停机

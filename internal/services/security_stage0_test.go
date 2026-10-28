@@ -102,11 +102,11 @@ func TestTrustedPassthrough_subrouteSkipsAllSecurityStages(t *testing.T) {
 			t.Fatalf("security handlers must not remain on the main chain when passthrough wraps them: %v", handlerNames(t, mainRoute))
 		}
 	}
-	// 直通形态下预检不再信任并集直通集的 DetectionOnly——预检 id:3 并集仅
-	// 含保留检测语义（本用例无 detection 策略，id:3/12 均不应出现直通集）。
-	for _, hv := range handlers {
-		d, _ := mustMap(t, hv, "handler")["directives"].(string)
-		if strings.Contains(d, "10.0.0.9") && strings.Contains(d, "id:3,") {
+	// 直通形态下预检不再信任并集直通集的 DetectionOnly——必须检查
+	// subroute 内真实预检/策略引擎，主链裸层没有 waf，读主链会得到假绿。
+	for _, d := range wafDirectives(t, inner) {
+		if strings.Contains(d, "10.0.0.9") && strings.Contains(d, "ctl:ruleEngine=DetectionOnly") &&
+			(strings.Contains(d, "id:3,") || strings.Contains(d, "id:12,")) {
 			t.Fatalf("passthrough trust set must not be emitted as precheck DetectionOnly:\n%s", d)
 		}
 	}

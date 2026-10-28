@@ -92,14 +92,13 @@ func TestRevalidateImportStageBlockPagesCatchesWindowDeletion(t *testing.T) {
 			"block_page_stage3_id": pageID, "block_page_stage3_status": 503,
 		}},
 	}
-	sections := map[string]bool{"lb_rules": true}
 
 	// 形状 1（回归）：页在事务视图内存在 → 放行。
 	tx, err := db.DB.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := revalidateImportStageBlockPages(context.Background(), tx, tables, sections); err != nil {
+	if err := revalidateImportStageBlockPages(context.Background(), tx, tables); err != nil {
 		tx.Rollback()
 		t.Fatalf("页存在时不应被拒: %v", err)
 	}
@@ -108,7 +107,7 @@ func TestRevalidateImportStageBlockPagesCatchesWindowDeletion(t *testing.T) {
 		tx.Rollback()
 		t.Fatal(err)
 	}
-	if err := revalidateImportStageBlockPages(context.Background(), tx, tables, sections); err == nil ||
+	if err := revalidateImportStageBlockPages(context.Background(), tx, tables); err == nil ||
 		!strings.Contains(err.Error(), "拦截页不存在") {
 		tx.Rollback()
 		t.Fatalf("窗口内删除被引用拦截页必须拒绝，err=%v", err)
@@ -127,14 +126,14 @@ func TestRevalidateImportStageBlockPagesCatchesWindowDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx2.Rollback()
-	if err := revalidateImportStageBlockPages(context.Background(), tx2, badPair, sections); err == nil ||
+	if err := revalidateImportStageBlockPages(context.Background(), tx2, badPair); err == nil ||
 		!strings.Contains(err.Error(), "需要先选择拦截页") {
 		t.Fatalf("有码无页必须按初检同口径拒绝，err=%v", err)
 	}
 
 	// 形状 4：页表随备份携带时由初检按备份行解析，锁内复核不适用 → 放行。
-	if err := revalidateImportStageBlockPages(context.Background(), tx2, tables,
-		map[string]bool{"lb_rules": true, "security_block_pages": true}); err != nil {
+	carriedTables := map[string][]map[string]any{"lb_rules": tables["lb_rules"], "security_block_pages": {}}
+	if err := revalidateImportStageBlockPages(context.Background(), tx2, carriedTables); err != nil {
 		t.Fatalf("页表随备份携带时锁内复核不适用: %v", err)
 	}
 }

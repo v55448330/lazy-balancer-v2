@@ -20,11 +20,15 @@ import (
 // replaceBusinessTaskDrivers 用可控驱动清单替换生产清单（测试结束恢复）。
 func replaceBusinessTaskDrivers(t *testing.T, drivers []businessTaskDriver) {
 	t.Helper()
+	businessDriverSyncMu.Lock()
 	previous := businessTaskDrivers
 	businessTaskDrivers = drivers
+	businessDriverSyncMu.Unlock()
 	t.Cleanup(func() {
+		businessDriverSyncMu.Lock()
 		businessTaskDrivers = previous
 		businessDriverSyncPending.Store(false)
+		businessDriverSyncMu.Unlock()
 	})
 }
 
@@ -98,15 +102,7 @@ func TestSyncBusinessTaskDrivers_pendingFollowsLastCompletedPass(t *testing.T) {
 // Then 必须等待互斥——否则交错后对齐会用旧态覆盖新态，留下「库已新、loop
 // 仍旧」且 pending=false（无重试纠正）的持久错态；释放互斥后 setter 立即生效。
 func TestBusinessTaskLoopSetterWaitsForDriverSync(t *testing.T) {
-	te := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
-	t.Cleanup(te.Stop)
-	te.Register(taskengine.Descriptor{ID: "threat", Family: "security", Name: "威胁情报库更新",
-		Kind: taskengine.KindScheduled, RunsOn: taskengine.RoleAny,
-		NextSlotFn: func() time.Time { return time.Time{} },
-		Run:        func(taskengine.RunContext) error { return nil }})
-	previous := TaskEngine()
-	SetTaskEngineForTest(te)
-	t.Cleanup(func() { SetTaskEngineForTest(previous) })
+	te := newBusinessLoopTestEngine(t, "threat")
 
 	businessDriverSyncMu.Lock()
 	applied := make(chan struct{})

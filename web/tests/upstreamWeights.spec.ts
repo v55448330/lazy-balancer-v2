@@ -39,16 +39,13 @@ test('全零权重按行最小值 1 参与比例分配（不走零和特判）�
   assert.equal(single[0]!.weight, 100)
 })
 
-test('零和分支不可达：三行全零按比例分配 [33,33,34]，不是零和兜底的 [34,33,33]', () => {
-  // 启用行的 normalizedWeight 下限是 1（Math.max(1, …)），participatingItems 又滤掉
-  // 禁用行 → sourceTotal ≥ 行数 ≥ 1，distributeWeight 里的 sourceTotal===0 块对
-  // 公开入口恒不可达。两种分配对 2 行同形（都落 50/50），只有 3 行能区分：
-  // 比例分配 → [33,33,34]（末位吃余数）；零和兜底 → [34,33,33]（首位吃余数）。
+test('三行全零按最小权重比例分配，生产实现不保留不可达零和分支', () => {
   const rows = [{ weight: 0 }, { weight: 0 }, { weight: 0 }]
   normalizeWeights(rows)
   assert.deepEqual(rows.map((row) => row.weight), [33, 33, 34])
   assert.ok(rows.every((row) => row.weight >= 1), '任何启用行都不得落 0 权重')
   assert.equal(rows.reduce((sum, row) => sum + row.weight, 0), 100)
+  assert.doesNotMatch(code('src/utils/upstreamWeights.ts'), /sourceTotal === 0/, 'normalizedWeight 下限为 1，零和兜底永不可达')
 })
 
 test('weightPercent 展示口径（禁用行=0、总和≤0→0、四舍五入）', () => {

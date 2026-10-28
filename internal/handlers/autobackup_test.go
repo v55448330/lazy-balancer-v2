@@ -238,6 +238,59 @@ func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {
 	}
 }
 
+func TestRunAutoBackupOnce_cancelCleanupFailureLogsFilename(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	oldWrite := autoBackupWriteFile
+	autoBackupWriteFile = func(path string, payload []byte) error {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(path, "payload"), payload, 0o600); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	}
+	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
+	logs := captureLog(t)
+
+	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled", err)
+	}
+	if !strings.Contains(logs.String(), "取消后清理最终文件") || !strings.Contains(logs.String(), ".lbbak") {
+		t.Fatalf("取消后删除失败必须 warn 并点名文件，logs=%q", logs.String())
+	}
+	if got := countAutoBackupAudit(t, "备份失败"); got != 0 {
+		t.Fatalf("取消路径失败审计=%d, want 0", got)
+	}
+}
+
+func TestRunAutoBackupOnce_rowFailureCleanupFailureLogsFilename(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	oldWrite := autoBackupWriteFile
+	autoBackupWriteFile = func(path string, payload []byte) error {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(path, "payload"), payload, 0o600)
+	}
+	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
+	if _, err := db.DB.Exec(`DROP TABLE auto_backups`); err != nil {
+		t.Fatalf("force backup row insert failure: %v", err)
+	}
+	logs := captureLog(t)
+
+	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	if err == nil || !strings.Contains(err.Error(), "备份记录写入失败") {
+		t.Fatalf("err=%v, want row insertion failure", err)
+	}
+	if !strings.Contains(logs.String(), "落行失败后清理最终文件") || !strings.Contains(logs.String(), ".lbbak") {
+		t.Fatalf("落行失败后删除失败必须 warn 并点名文件，logs=%q", logs.String())
+	}
+}
+
 func TestPruneAutoBackups_trimsSuccessByKeepAndFailedAtTwenty(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	dir := h.cfg.BackupDir
@@ -262,8 +315,12 @@ func TestPruneAutoBackups_trimsSuccessByKeepAndFailedAtTwenty(t *testing.T) {
 	pruneAutoBackups(dir, 2, 20)
 
 	// Then: success 仅留最新 2 个(文件+行同删)
-	if rows := autoBackupRows(t, "WHERE status='success' ORDER BY created_at DESC"); len(rows) != 2 {
+	rows := autoBackupRows(t, "WHERE status='success' ORDER BY created_at DESC")
+	if len(rows) != 2 {
 		t.Fatalf("success rows after prune=%d, want 2", len(rows))
+	}
+	if rows[0]["filename"] != "lbbak-auto-prune5.lbbak" || rows[1]["filename"] != "lbbak-auto-prune4.lbbak" {
+		t.Fatalf("裁剪方向错误：幸存行=%v/%v，want 最新 prune5/prune4", rows[0]["filename"], rows[1]["filename"])
 	}
 	matches, _ := filepath.Glob(filepath.Join(dir, "lbbak-auto-prune*.lbbak"))
 	if len(matches) != 2 {
@@ -333,6 +390,23 @@ func TestUpdateAutoBackupSettings_validationMatrix(t *testing.T) {
 	boundary := `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":30,"sections":["users","rules"]}`
 	if response := serveAutoBackupJSON(t, h2, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", boundary, h2.UpdateAutoBackupSettings); response.Code != http.StatusOK {
 		t.Fatalf("keep=30 boundary status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateAutoBackupSettings_commitFailureUsesSharedSeam(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	forceCommitFailure(t)
+	body := `{"enabled":true,"frequency":"daily","time":"03:00","day":1,"keep":5,"sections":["users"]}`
+	response := serveAutoBackupJSON(t, h, http.MethodPut, "/settings/auto-backup", "/settings/auto-backup", body, h.UpdateAutoBackupSettings)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want injected commit failure 500", response.Code, response.Body.String())
+	}
+	var keep int
+	if err := db.DB.QueryRow(`SELECT auto_backup_keep FROM global_config WHERE id=1`).Scan(&keep); err != nil {
+		t.Fatal(err)
+	}
+	if keep != autoBackupKeepDefault {
+		t.Fatalf("提交失败后 keep=%d, want unchanged default %d", keep, autoBackupKeepDefault)
 	}
 }
 
@@ -990,6 +1064,9 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	if err != nil || len(matches) != 1 || filepath.Base(matches[0]) != survivor {
 		t.Fatalf("success files=%v err=%v, want exactly survivor %s", matches, err, survivor)
 	}
+	if !strings.HasSuffix(survivor, "-2.lbbak") {
+		t.Fatalf("keep=1 幸存者=%q, want 第二次执行的 -2 文件（不是较旧首轮）", survivor)
+	}
 	// failed 行按 20 上限一并裁剪
 	var failed int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM auto_backups WHERE status='failed'`).Scan(&failed); err != nil {
@@ -997,6 +1074,15 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	}
 	if failed != 20 {
 		t.Fatalf("failed rows=%d, want 20(autoBackupFailedRowsKeep)", failed)
+	}
+	var newestFailed, oldestFailed int
+	if err := db.DB.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM auto_backups WHERE filename='lbbak-auto-stale-fail0.lbbak'),
+		(SELECT COUNT(*) FROM auto_backups WHERE filename='lbbak-auto-stale-fail20.lbbak')`).Scan(&newestFailed, &oldestFailed); err != nil {
+		t.Fatal(err)
+	}
+	if newestFailed != 1 || oldestFailed != 0 {
+		t.Fatalf("failed 裁剪方向错误：最新 fail0=%d 最旧 fail20=%d, want 1/0", newestFailed, oldestFailed)
 	}
 }
 
@@ -1301,6 +1387,22 @@ func TestNextAutoBackupFilename_errorsWhenAllVariantsTaken(t *testing.T) {
 	}
 	if _, err := nextAutoBackupFilename(h.cfg.BackupDir, "auto", now); err == nil {
 		t.Fatal("exhausted variants must return error instead of reusing an existing name")
+	}
+}
+
+func TestNextAutoBackupFilename_skipsFilenameReservedByDatabaseRow(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.Local)
+	base := "lbbak-auto-" + now.Format("20060102-150405")
+	if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename,status,trigger_type) VALUES (?,'success','schedule')`, base+".lbbak"); err != nil {
+		t.Fatal(err)
+	}
+	name, err := nextAutoBackupFilename(h.cfg.BackupDir, "auto", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != base+"-2.lbbak" {
+		t.Fatalf("DB 行已占名但文件缺失时 name=%q, want %q（不得让两行共享一份文件）", name, base+"-2.lbbak")
 	}
 }
 

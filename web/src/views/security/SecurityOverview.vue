@@ -279,7 +279,7 @@
       </template>
       <el-table :data="overview.top_ips" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty><el-empty description="暂无数据" :image-size="60" /></template>
-        <el-table-column label="IP 地址" min-width="200">
+        <el-table-column label="IP 地址" min-width="160">
           <template #default="{ row }">
             <IPLocationAction :ip="row.ip" :location="row.ip_location" />
           </template>
@@ -296,7 +296,10 @@
         <el-table-column prop="recent_1h" label="近1小时" width="128" align="center">
           <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_1h }}</span> 次</template>
         </el-table-column>
-        <el-table-column label="攻击类型" min-width="180" show-overflow-tooltip>
+        <el-table-column prop="recent_24h" label="近24小时" width="110" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_24h }}</span> 次</template>
+        </el-table-column>
+        <el-table-column label="攻击类型" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ topIpAttackLabel(row) }}</span>
           </template>
@@ -326,7 +329,7 @@ import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestion
 
 
 interface TrendPoint { date: string; blocked: number; detected: number }
-interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; recent_10m: number; recent_1h: number; last_time: string; attack_type: string; attack_type_stage?: string
+interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; recent_10m: number; recent_1h: number; recent_24h: number; last_time: string; attack_type: string; attack_type_stage?: string
 }
 interface AttackType { name: string; value: number }
 interface Overview {

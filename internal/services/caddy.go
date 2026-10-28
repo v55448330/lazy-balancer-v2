@@ -143,15 +143,16 @@ type CaddyService struct {
 	// 最终渲染（裁定 2026-09-06 ④'）。默认关闭，main 显式启用，测试注入桩。
 	cliValidate func(rendered []byte) error
 
-	healthMu             sync.Mutex
-	healthCache          map[string]map[string]*UpstreamHealthDetail
-	healthCacheExpiresAt time.Time
-	healthInflight       *upstreamHealthCall
+	healthMu              sync.Mutex
+	healthCache           map[string]map[string]*UpstreamHealthDetail
+	healthCacheExpiresAt  time.Time
+	healthCacheGeneration uint64
+	healthInflight        *upstreamHealthCall
 }
 
+// NewCaddyService 是测试/兼容构造：admin 与指标同址；生产装配使用
+// NewCaddyServiceWithMetricsURL 显式传配置值。
 func NewCaddyService(adminURL string) *CaddyService {
-	// 兼容 admin 与指标同址的调用方；独立指标端点必须使用
-	// NewCaddyServiceWithMetricsURL（生产装配显式传配置值）。
 	return NewCaddyServiceWithMetricsURL(adminURL, strings.TrimRight(adminURL, "/")+"/metrics")
 }
 
@@ -199,29 +200,9 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	return err
 }
 
-// ApplyConfigReporting 同 ApplyConfig，但报告是否发生了真实 /load——审计
-// 真实性裁定（2026-09-25）：自记「重载」审计的调用方（PutCaddyConfig）据
-// loaded 决定落笔与否（同字节短路 loaded=false=零真实重载，不落审计）。
-// loaded 的语义是「发生了成功的真实 /load」：失败分支（被拒/传输失败/生成
-// 失败）一律 false——曾返回 true，按注释写 `if loaded { audit }` 的调用方会把
-// 失败应用记成真实重载（审计真实性的反面）。现状唯一调用方先判 applyErr，
-// 故无行为回归。
-func (s *CaddyService) ApplyConfigReporting(config map[string]interface{}) (loaded bool, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err = s.applyConfigLocked(config, true)
-	if IsSameConfig(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // ApplyConfigReportingForCommit 应用原始配置但把 last-known-good 延后到
 // 调用方 commit 成功后补写；返回值同时携带已下发字节与真实 /load 标记
-// （失败分支同样 loaded=false，见 ApplyConfigReporting 的语义说明）。
+// （失败分支 loaded=false：失败应用不是真实重载）。
 func (s *CaddyService) ApplyConfigReportingForCommit(config map[string]interface{}) (applied []byte, loaded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -497,9 +478,10 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 	}
 
 	Logf("info", "Caddy config applied successfully")
-	// 重载重建 registry：限流 429 计数归零，/metrics 抓取缓存必须同步失效
-	//（否则安全总览在 ≤5s 内仍显示重载前累计值）。
+	// 重载重建 registry：限流 429 计数归零，/metrics 抓取缓存与上游健康聚合
+	// 必须同步失效（否则安全总览/健康面板在 ≤5s 内仍显示重载前集合与累计值）。
 	InvalidateOverviewMetricsCache()
+	s.invalidateUpstreamHealthCache()
 	if opts.persistLastGood {
 		s.persistLastGoodLocked(data)
 	}
@@ -1072,6 +1054,18 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 	return s.aggregateUpstreamHealthWithSingleflight(s.getUpstreamHealthDetailedUncached)
 }
 
+// invalidateUpstreamHealthCache 在成功 /load 后清空健康聚合缓存并让在途聚合
+// 不再回写陈旧结果：清 inflight 使新请求立即发起新一轮；generation 阻止旧
+// 聚合完成时覆盖新缓存，也不得清掉新 inflight 槽。
+func (s *CaddyService) invalidateUpstreamHealthCache() {
+	s.healthMu.Lock()
+	s.healthCache = nil
+	s.healthCacheExpiresAt = time.Time{}
+	s.healthCacheGeneration++
+	s.healthInflight = nil
+	s.healthMu.Unlock()
+}
+
 // aggregateUpstreamHealthWithSingleflight 是健康聚合的单飞+TTL 缓存宿主。
 // 单飞槽位与 done 通道必须在 defer 中收尾：聚合内部 panic（畸形 admin 响应
 // 解析等）若直接冲出函数，healthInflight 会永久驻留——所有后续调用阻塞在
@@ -1093,13 +1087,14 @@ func (s *CaddyService) aggregateUpstreamHealthWithSingleflight(load func() (map[
 		return cloneUpstreamHealthDetails(call.health), nil
 	}
 	call := &upstreamHealthCall{done: make(chan struct{})}
+	generation := s.healthCacheGeneration
 	s.healthInflight = call
 	s.healthMu.Unlock()
 
 	finish := func() {
 		s.healthMu.Lock()
 		call.err = err
-		if err == nil && health != nil {
+		if err == nil && health != nil && generation == s.healthCacheGeneration {
 			// 缓存持有独立克隆：首个调用方拿到的是函数体里的另一次克隆，
 			// 等待者再从 call.health 克隆——三者互不共享，调用方变更不会
 			// 污染共享缓存。
@@ -1110,7 +1105,9 @@ func (s *CaddyService) aggregateUpstreamHealthWithSingleflight(load func() (map[
 		} else {
 			call.health = health
 		}
-		s.healthInflight = nil
+		if s.healthInflight == call {
+			s.healthInflight = nil
+		}
 		s.healthMu.Unlock()
 		close(call.done)
 	}
@@ -3568,6 +3565,10 @@ func formatFlushInterval(v int) string {
 }
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
+	// 与 SnapshotIPListProjections 的快照生命周期互斥：预检是只读入口，
+	// 但渲染会写 tp.txt 等投影；与写路径回滚交错时会被误删。
+	ipListProjectionRenderMu.Lock()
+	defer ipListProjectionRenderMu.Unlock()
 	// 与单规则渲染路径的硬错误对齐——https 等
 	// 非法协议不再静默按 TCP 渲染（遗留 https 行由 db 迁移归一为 http）。
 	if rule.Protocol != "http" && rule.Protocol != "tcp" {

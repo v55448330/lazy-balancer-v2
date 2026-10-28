@@ -115,6 +115,25 @@ export interface TrustedProxyReferencedEntries {
   readonly entryCount: number
 }
 
+/**
+ * 引用名单条目的行内校验：与内联网段复用同一 `trustedProxyRangeError`
+ * （最小 /8、/29 与全空间五形态），并按名单名逐项点名。
+ * 未加载/加载失败的名单不参与（保存由后端兜底），避免把未知当非法。
+ */
+export const trustedProxyReferencedRangesError = (
+  referenced: readonly (TrustedProxyReferencedEntries & { readonly name: string })[],
+): string => {
+  const problems: string[] = []
+  for (const ref of referenced) {
+    if (ref.values === null) continue
+    for (const value of ref.values) {
+      const error = trustedProxyRangeError(value)
+      if (error) problems.push(`引用名单「${ref.name}」：${value.trim() || '(空)'}（${error}）`)
+    }
+  }
+  return problems.length === 0 ? '' : `受信网段不可用：${problems.join('；')}`
+}
+
 /** 展开规模（并集口径）。referenced 含与内联重叠的键，与后端错误文案同构。 */
 interface TrustedProxyExpansion {
   /** 已解析网段的并集大小（可证事实；硬门只用这个与单份上限判定）。 */

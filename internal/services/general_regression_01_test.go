@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -61,17 +62,23 @@ func TestNormalizeRuleForTransport_clearsTCPProxyRoutesAndStrategy(t *testing.T)
 func TestFormatDriftRoutes_capsDisplay(t *testing.T) {
 	missing := make([]string, 25)
 	for i := range missing {
-		missing[i] = "规则"
+		missing[i] = fmt.Sprintf("规则%02d", i)
 	}
 	extra := []string{"多余规则（lb_x）"}
 	out := FormatDriftRoutes(missing, extra)
 	if !strings.Contains(out, "缺失规则路由: ") || !strings.Contains(out, "多余规则路由: 多余规则（lb_x）") {
 		t.Fatalf("out=%q, want 两段", out)
 	}
-	if !strings.Contains(out, "共 25 条") {
-		t.Fatalf("out=%q, want 截断计数说明", out)
+	displayed := strings.Join(missing[:driftDisplayMaxEntries], "、")
+	if !strings.Contains(out, "缺失规则路由: "+displayed+"…（共 25 条）") {
+		t.Fatalf("out=%q, want 首条至第 %d 条后截断并标明共 25 条", out, driftDisplayMaxEntries)
 	}
-	if count := strings.Count(out, "规则、"); count > driftDisplayMaxEntries {
-		t.Fatalf("out 展示条目=%d, want ≤%d", count, driftDisplayMaxEntries)
+	if strings.Contains(out, missing[driftDisplayMaxEntries]) {
+		t.Fatalf("out=%q, 第 %d 条之后不应展示", out, driftDisplayMaxEntries)
+	}
+
+	// 未超上限时必须完整保留且不带截断标记（回归形状）。
+	if got, want := FormatDriftRoutes([]string{"规则甲", "规则乙"}, nil), "缺失规则路由: 规则甲、规则乙"; got != want {
+		t.Fatalf("未超上限输出=%q, want %q", got, want)
 	}
 }

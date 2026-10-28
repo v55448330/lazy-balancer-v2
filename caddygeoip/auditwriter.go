@@ -2459,23 +2459,25 @@ func resolveAuditIPCConfig() auditIPCConfig {
 // active-<pid>-<seq>.jsonl（本进程正在追加）→ 达轮转阈值或收尾时原子 rename
 // 为 sealed-<unixnano>.jsonl（根服务只消费 sealed）。
 //
-// 预算：字节跨代（open 时累加目录内全部 .jsonl）+ 条目本代（不扫历史文件逐行
-// 统计，避免大目录启动代价）。写满/写错都由调用方转文件兜底，并对每行计数。
+// 预算按目录现存文件核算：字节覆盖跨代残留，条目记录本代已写行（不扫历史文件
+// 逐行统计，避免大目录启动代价）。根服务补采并删除 sealed 后，下一批写入前
+// 同步回收对应预算，不得把历史累计值当成永久占满。写满/写错都由调用方转文件兜底。
 type auditSpool struct {
-	mu           sync.Mutex
-	dir          string
-	maxBytes     int64
-	maxEntries   int64
-	rotateBytes  int64
-	seq          uint64
-	active       *os.File
-	activePath   string
-	bw           *bufio.Writer
-	activeBytes  int64
-	totalBytes   int64
-	totalEntries int64
-	lastWrite    time.Time
-	closed       bool
+	mu            sync.Mutex
+	dir           string
+	maxBytes      int64
+	maxEntries    int64
+	rotateBytes   int64
+	seq           uint64
+	active        *os.File
+	activePath    string
+	bw            *bufio.Writer
+	activeBytes   int64
+	totalBytes    int64
+	totalEntries  int64
+	entriesByFile map[string]int64
+	lastWrite     time.Time
+	closed        bool
 }
 
 // openAuditSpool 创建/打开 spool 目录并开启本进程的 active 文件。
@@ -2484,10 +2486,11 @@ func openAuditSpool(dir string, maxBytes, maxEntries int64) (*auditSpool, error)
 		return nil, err
 	}
 	s := &auditSpool{
-		dir:         dir,
-		maxBytes:    maxBytes,
-		maxEntries:  maxEntries,
-		rotateBytes: auditSpoolRotateBytes,
+		dir:           dir,
+		maxBytes:      maxBytes,
+		maxEntries:    maxEntries,
+		rotateBytes:   auditSpoolRotateBytes,
+		entriesByFile: make(map[string]int64),
 	}
 	// 字节预算跨代：目录里已有的 sealed/active 都占空间（上一代进程遗留的
 	// 补采队列同样受 64MiB 约束，否则反复失败会无限堆积）。
@@ -2504,6 +2507,34 @@ func openAuditSpool(dir string, maxBytes, maxEntries int64) (*auditSpool, error)
 	// active 文件懒创建（首次真正需要落 spool 时才建）：IPC 全程成功时 spool
 	// 目录里不留任何空文件（补采端的孤儿扫描不会被空 active 干扰）。
 	return s, nil
+}
+
+// refreshBudgetLocked 让预算跟随根服务的外部回收。每批仅发生在 IPC 已失败的
+// 降级路径；目录扫描失败时保留上一份保守计数，不能因观测失败意外放大预算。
+func (s *auditSpool) refreshBudgetLocked() {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	var totalBytes int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), auditSpoolFileSuffix) {
+			continue
+		}
+		if info, statErr := entry.Info(); statErr == nil {
+			totalBytes += info.Size()
+		}
+	}
+	var totalEntries int64
+	for path, count := range s.entriesByFile {
+		if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+			delete(s.entriesByFile, path)
+			continue
+		}
+		totalEntries += count
+	}
+	s.totalBytes = totalBytes
+	s.totalEntries = totalEntries
 }
 
 // openActiveLocked 以 O_EXCL 建本次 active 文件（seq 单调递增，同名即跳过）。
@@ -2536,6 +2567,7 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 	if s.closed {
 		return 0, errors.New("security-events spool closed")
 	}
+	s.refreshBudgetLocked()
 	if s.active == nil {
 		if err := s.openActiveLocked(); err != nil {
 			return 0, err
@@ -2561,6 +2593,7 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 		written++
 		s.totalBytes += size
 		s.totalEntries++
+		s.entriesByFile[s.activePath]++
 		s.activeBytes += size
 		s.lastWrite = time.Now()
 		if s.activeBytes >= s.rotateBytes {
@@ -2570,6 +2603,14 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 		}
 	}
 	return written, s.flushLocked()
+}
+
+// noteActiveRenameLocked 让逐文件条目计数跟随 active→sealed 原子改名。
+func (s *auditSpool) noteActiveRenameLocked(oldPath, newPath string) {
+	if count := s.entriesByFile[oldPath]; count != 0 {
+		delete(s.entriesByFile, oldPath)
+		s.entriesByFile[newPath] = count
+	}
 }
 
 // resetWriterLocked 丢弃当前 active 写句柄（异常路径：状态不可信）。
@@ -2614,10 +2655,13 @@ func (s *auditSpool) rotateLocked() error {
 		return err
 	}
 	if s.activePath != "" {
-		if err := os.Rename(s.activePath, s.sealedPathLocked()); err != nil {
+		oldPath := s.activePath
+		newPath := s.sealedPathLocked()
+		if err := os.Rename(oldPath, newPath); err != nil {
 			auditIOLogf("audit writer: security-events spool seal failed for %s (continuing on the same active file): %v", s.activePath, err)
 			return nil
 		}
+		s.noteActiveRenameLocked(oldPath, newPath)
 		s.activePath = ""
 	}
 	s.bw = nil
@@ -2647,9 +2691,12 @@ func (s *auditSpool) sealIfIdle(now time.Time, idle time.Duration) error {
 		s.resetWriterLocked()
 		return err
 	}
-	if err := os.Rename(s.activePath, s.sealedPathLocked()); err != nil {
+	oldPath := s.activePath
+	newPath := s.sealedPathLocked()
+	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
+	s.noteActiveRenameLocked(oldPath, newPath)
 	s.activePath = ""
 	s.bw = nil
 	if s.active != nil {
@@ -2682,7 +2729,10 @@ func (s *auditSpool) close() error {
 		s.active = nil
 	}
 	if s.activePath != "" {
-		if rerr := os.Rename(s.activePath, s.sealedPathLocked()); rerr == nil {
+		oldPath := s.activePath
+		newPath := s.sealedPathLocked()
+		if rerr := os.Rename(oldPath, newPath); rerr == nil {
+			s.noteActiveRenameLocked(oldPath, newPath)
 			s.activePath = ""
 		} else if err == nil {
 			err = rerr

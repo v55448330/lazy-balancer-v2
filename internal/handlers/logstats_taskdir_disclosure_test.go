@@ -147,14 +147,14 @@ func TestAggregateDirStats_countsRotationCopiesWithMissingBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stats := aggregateDirStats(dir, caddyLogFamilyMatch)
+	stats := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 	caddy := stats["caddy.log"]
 	if caddy.Active != 0 || caddy.Rotated != 50 || caddy.RotCount != 2 {
 		t.Fatalf("aggregate caddy.log=%+v, want Active=0 Rotated=50 RotCount=2", caddy)
 	}
 
 	// Then：与单文件 dirBytes 口径一致（同一响应内两行不得分叉）。
-	active, rotated, count := dirBytes(filepath.Join(dir, "caddy.log"))
+	active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "caddy.log"), nil)
 	if active != caddy.Active || rotated != caddy.Rotated || count != caddy.RotCount {
 		t.Fatalf("dirBytes=(%d,%d,%d) vs aggregate=(%d,%d,%d), 两套口径分叉",
 			active, rotated, count, caddy.Active, caddy.Rotated, caddy.RotCount)
@@ -170,12 +170,12 @@ func TestAggregateDirStats_countsTimberjackCopyWithMissingBase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "certjob-lb_x-20261018-101500-64-size.log"), make([]byte, 12), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stats := aggregateDirStats(dir, isCertJobLogName)
+	stats := aggregateDirStatsWithEntries(dir, nil, isCertJobLogName)
 	entry := stats["certjob-lb_x.log"]
 	if entry.Rotated != 12 || entry.RotCount != 1 {
 		t.Fatalf("aggregate=%+v, want Rotated=12 RotCount=1（base 缺席时按派生基名归并）", entry)
 	}
-	active, rotated, count := dirBytes(filepath.Join(dir, "certjob-lb_x.log"))
+	active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "certjob-lb_x.log"), nil)
 	if active != entry.Active || rotated != entry.Rotated || count != entry.RotCount {
 		t.Fatalf("dirBytes=(%d,%d,%d) vs aggregate=(%d,%d,%d), 两套口径分叉",
 			active, rotated, count, entry.Active, entry.Rotated, entry.RotCount)
@@ -198,7 +198,7 @@ func TestAggregateDirStats_countsDoubleSuffixGzipCopiesWithMissingBase(t *testin
 		}
 	}
 
-	stats := aggregateDirStats(dir, caddyLogFamilyMatch)
+	stats := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 	caddy := stats["caddy.log"]
 	if caddy.Rotated != 48 || caddy.RotCount != 2 {
 		t.Fatalf("aggregate caddy.log=%+v, want Rotated=48 RotCount=2（双重后缀 gz 副本须归到期基名）", caddy)
@@ -211,7 +211,7 @@ func TestAggregateDirStats_countsDoubleSuffixGzipCopiesWithMissingBase(t *testin
 	}
 
 	// 与单文件 dirBytes 口径一致（同一响应内两行不得分叉）。
-	active, rotated, count := dirBytes(filepath.Join(dir, "caddy.log"))
+	active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "caddy.log"), nil)
 	if active != caddy.Active || rotated != caddy.Rotated || count != caddy.RotCount {
 		t.Fatalf("dirBytes=(%d,%d,%d) vs aggregate=(%d,%d,%d), 两套口径分叉",
 			active, rotated, count, caddy.Active, caddy.Rotated, caddy.RotCount)

@@ -151,7 +151,7 @@ func TestCertificateService_renewExpiringCertificates_reportsActionFailure(t *te
 	}
 	resetCertificateServiceForTest(t)
 
-	err := NewCertificateService().renewExpiringCertificates()
+	err := NewCertificateService().renewExpiringCertificates(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "lb_renewal_fail") {
 		t.Fatalf("renewal err=%v, want per-job enqueue failure", err)
 	}

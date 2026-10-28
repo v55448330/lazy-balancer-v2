@@ -21,8 +21,9 @@ func TestEngineHistory_normalizesStaleRunningRow(t *testing.T) {
 		RunsOn: RoleAny, Run: func(RunContext) error { return nil }}); err != nil {
 		t.Fatal(err)
 	}
+	startedAt := time.Now().In(engineLocPtr()).Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
-		VALUES ('t-hist-stale', 't', 'auto', 'running', datetime('now','-5 minutes'))`); err != nil {
+		VALUES ('t-hist-stale', 't', 'auto', 'running', ?)`, startedAt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,8 +81,9 @@ func TestEngineHistory_keepsInFlightRow(t *testing.T) {
 	}
 	waitForEngine(t, "在途占位", 2*time.Second, func() bool { return e.IsTaskInFlight("t-hist-live") })
 
+	startedAt := time.Now().In(engineLocPtr()).Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
-		VALUES ('t-hist-live', 't', 'manual', 'running', datetime('now','-5 minutes'))`); err != nil {
+		VALUES ('t-hist-live', 't', 'manual', 'running', ?)`, startedAt); err != nil {
 		t.Fatal(err)
 	}
 	runs := e.History("t-hist-live", 10)

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -382,17 +383,76 @@ func transitionJob(db interface{}) {
 	}
 }
 
+// certJobsTableRef 是 cert_jobs 的表名引用形态（可选 schema 前缀 + SQLite
+// 标识符引号/方括号）。判据必须先归一化再匹配，否则以下形态全部逃逸：
+// `INSERT OR REPLACE INTO cert_jobs`、`REPLACE INTO cert_jobs`、
+// `UPDATE "cert_jobs"`/`UPDATE [cert_jobs]`、`UPDATE main.cert_jobs`
+// （同族 lb_rules 守卫已归一，cert_jobs 侧此前只认两个字面串）。
+const certJobsTableRef = `(?:(?:main|temp)\s*\.\s*)?["` + "`" + `\[]?cert_jobs["` + "`" + `\]]?`
+
+var (
+	certJobsUpdatePattern = regexp.MustCompile(`(?i)\bupdate\s+` + certJobsTableRef + `\s+set\b`)
+	certJobsInsertPattern = regexp.MustCompile(`(?i)\b(?:insert(?:\s+or\s+(?:replace|ignore))?\s+into|replace\s+into)\s+` + certJobsTableRef + `\b`)
+)
+
+// normalizeSQLForGuard 折叠空白并剥掉 SQLite 标识符引号，供守卫判据匹配。
+func normalizeSQLForGuard(query string) string {
+	normalized := strings.Join(strings.Fields(query), " ")
+	return strings.NewReplacer(`"`, "", "`", "", "[", "", "]", "").Replace(normalized)
+}
+
 func mutatesCertJobStatus(query string) bool {
-	normalized := strings.Join(strings.Fields(strings.ToLower(query)), " ")
-	if strings.Contains(normalized, "update cert_jobs set") {
-		setClause := strings.SplitN(normalized, "update cert_jobs set", 2)[1]
-		setClause = strings.SplitN(setClause, " where ", 2)[0]
+	normalized := normalizeSQLForGuard(query)
+	if loc := certJobsUpdatePattern.FindStringIndex(normalized); loc != nil {
+		setClause := normalized[loc[1]:]
+		if idx := strings.Index(strings.ToLower(setClause), " where "); idx >= 0 {
+			setClause = setClause[:idx]
+		}
+		setClause = strings.ToLower(setClause)
 		return strings.Contains(setClause, "status=") || strings.Contains(setClause, "status =")
 	}
-	if strings.Contains(normalized, "insert into cert_jobs") {
-		columns := strings.SplitN(normalized, "insert into cert_jobs", 2)[1]
-		columns = strings.SplitN(columns, ")", 2)[0]
-		return strings.Contains(columns, "status")
+	if loc := certJobsInsertPattern.FindStringIndex(normalized); loc != nil {
+		rest := strings.TrimSpace(normalized[loc[1]:])
+		if !strings.HasPrefix(rest, "(") {
+			// 无列清单（`VALUES (...)`/`SELECT ...` 隐式列序）：无法证明不写
+			// status，按写点处理——`INSERT INTO cert_jobs VALUES (…)` 正是此前
+			// 截到首个 ")" 后判定「列段无 status」的逃逸形态。
+			return true
+		}
+		columns := strings.SplitN(rest[1:], ")", 2)[0]
+		return strings.Contains(strings.ToLower(columns), "status")
 	}
 	return false
+}
+
+// 守卫判据的形态矩阵：四类逃逸形态（OR REPLACE / REPLACE INTO、无列清单
+// VALUES、引号或方括号表名、schema 前缀）必须逐项命中；非写语句与其它表不得
+// 误报。删除本用例前先确认判据仍覆盖这四类（否则守卫报零违规也可能只是失明）。
+func TestMutatesCertJobStatus_normalizesFormattingVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{name: "canonical update", query: "UPDATE cert_jobs SET status=? WHERE id=?", want: true},
+		{name: "update other column only", query: "UPDATE cert_jobs SET updated_at=? WHERE id=?", want: false},
+		{name: "insert with column list", query: "INSERT INTO cert_jobs (caddy_id, status) VALUES (?, ?)", want: true},
+		{name: "insert without status column", query: "INSERT INTO cert_jobs (caddy_id) VALUES (?)", want: false},
+		{name: "insert or replace", query: "INSERT OR REPLACE INTO cert_jobs (caddy_id, status) VALUES (?, ?)", want: true},
+		{name: "plain replace into", query: "REPLACE INTO cert_jobs (caddy_id, status) VALUES (?, ?)", want: true},
+		{name: "implicit column list", query: "INSERT INTO cert_jobs VALUES (1, 'queued')", want: true},
+		{name: "quoted table update", query: `UPDATE "cert_jobs" SET status=? WHERE id=?`, want: true},
+		{name: "bracket table update", query: "UPDATE [cert_jobs] SET status=? WHERE id=?", want: true},
+		{name: "schema qualified update", query: "UPDATE main.cert_jobs SET status=? WHERE id=?", want: true},
+		{name: "newline and extra spaces", query: "UPDATE\n\tcert_jobs\n SET  status = ?", want: true},
+		{name: "select is not a write", query: "SELECT status FROM cert_jobs WHERE id=?", want: false},
+		{name: "other table update", query: "UPDATE cert_jobs_backup SET status=? WHERE id=?", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := mutatesCertJobStatus(test.query); got != test.want {
+				t.Fatalf("mutatesCertJobStatus(%q)=%v, want %v", test.query, got, test.want)
+			}
+		})
+	}
 }

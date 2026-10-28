@@ -213,3 +213,60 @@ func TestMigrateTCPRuleDeadFields_clearsCertMaterialWhenTLSDisabled(t *testing.T
 		t.Fatalf("probe after migration=%d, want 0", staleAfter)
 	}
 }
+
+// 五列可空 HTTP 专属字段被带外写成 NULL 时，SQLite 裸 =1 / <>0 比较不成立。
+// 迁移必须把 NULL 同其它死值一样收敛为 0，同时不得触碰 HTTP 控制行。
+func TestMigrateTCPRuleDeadFields_clearsNullableHTTPOnlyFields(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT OR IGNORE INTO global_config (id, caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls) VALUES
+		('lb_tcp_null_dead','tcp-null-dead','tcp','',9445,1),
+		('lb_http_null_control','http-null-control','http','null-control.example.test',8445,0)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	// 先借 enable_tls=1 让既有迁移把其余触发列收敛到规范值，再单独制造
+	// 本用例的 NULL 形状，避免 fresh DDL 的其它默认值成为意外触发因。
+	if err := migrateTCPRuleDeadFields(); err != nil {
+		t.Fatalf("canonicalize fixture: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE lb_rules SET
+		enable_compress=NULL, request_body_max_size_mb=NULL, upstream_keepalive_timeout=NULL,
+		server_tokens_hidden=NULL, dynamic_dns=NULL`); err != nil {
+		t.Fatalf("set nullable dead fields: %v", err)
+	}
+
+	var staleBefore int
+	if err := database.QueryRow(tcpDeadFieldsProbeSQL).Scan(&staleBefore); err != nil {
+		t.Fatalf("probe before migration: %v", err)
+	}
+	if staleBefore != 1 {
+		t.Fatalf("probe before migration=%d, want 1（五列 NULL 必须入选）", staleBefore)
+	}
+	if err := migrateTCPRuleDeadFields(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var tcpNulls int
+	if err := database.QueryRow(`SELECT (enable_compress IS NULL)+(request_body_max_size_mb IS NULL)+
+		(upstream_keepalive_timeout IS NULL)+(server_tokens_hidden IS NULL)+(dynamic_dns IS NULL)
+		FROM lb_rules WHERE caddy_id='lb_tcp_null_dead'`).Scan(&tcpNulls); err != nil {
+		t.Fatalf("read migrated TCP rule: %v", err)
+	}
+	if tcpNulls != 0 {
+		t.Fatalf("TCP nullable dead fields remaining NULL=%d, want 0", tcpNulls)
+	}
+	var httpNulls int
+	if err := database.QueryRow(`SELECT (enable_compress IS NULL)+(request_body_max_size_mb IS NULL)+
+		(upstream_keepalive_timeout IS NULL)+(server_tokens_hidden IS NULL)+(dynamic_dns IS NULL)
+		FROM lb_rules WHERE caddy_id='lb_http_null_control'`).Scan(&httpNulls); err != nil {
+		t.Fatalf("read HTTP control: %v", err)
+	}
+	if httpNulls != 5 {
+		t.Fatalf("HTTP control NULL count=%d, want untouched 5", httpNulls)
+	}
+}

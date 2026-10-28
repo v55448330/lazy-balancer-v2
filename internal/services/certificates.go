@@ -185,14 +185,14 @@ func canonicalDatetime(v sql.NullTime) any {
 	if !v.Valid {
 		return nil
 	}
-	return canonicalDatetimeValue(v.Time)
+	return CanonicalDatetimeValue(v.Time)
 }
 
-// canonicalDatetimeValue 把时刻归一为 cert_jobs DATETIME 列的规范墙钟串
+// CanonicalDatetimeValue 把时刻归一为 cert_jobs DATETIME 列的规范墙钟串
 // （UTC、无时区标识），与 canonicalDatetime 同一布局。所有 cert_jobs 时间列
 // 写点必须共用：直接绑 time.Time 会落成 `+00:00` 形态，与 API 文档声明的
 // 「UTC 墙钟串（无时区标识）」及 rescan 的解析布局不一致。
-func canonicalDatetimeValue(t time.Time) string {
+func CanonicalDatetimeValue(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05")
 }
 
@@ -515,8 +515,13 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 			}
 		case materialFastPath:
 			// 已是 'downloaded'：只推进部署窗口（不写 status，状态机写点仍单一来源）。
-			if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_available_after=?, message=? WHERE id=? AND status='downloaded'",
-				deploymentReadyAfter, "补偿重排队：证书材料已落库，等待重新部署", job.id); err != nil {
+			// 写点必须复用单源——此前这里只推窗口而漏写 updated_at，重试冷却门
+			// （以 updated_at 为基准）看不到本轮重排，形成「补扫可见但冷却门不可见」
+			// 的半套状态。
+			if _, err := PushCertJobDeploymentWindow(db.DB, job.id, CertJobDeploymentWindowPush{
+				Message: "补偿重排队：证书材料已落库，等待重新部署",
+				Where:   "status='downloaded'",
+			}); err != nil {
 				return fmt.Errorf("restore deployment window for certificate job %d: %w", job.id, err)
 			}
 		case !materialFastPath:
@@ -940,7 +945,7 @@ const deploymentWindowNullSettle = 10 * time.Minute
 // 不可信），其余行继续收敛。
 // 逐条动作失败（部署重试登记 / 材料丢失行重排）与读失败同权：只写应用日志时
 // 本轮仍报「补扫完成」，而该行实际上没有回到调度器——任务监控看不到仍有证书
-// 工作未恢复（104 轮补建/滞留/续期已聚合，补扫两条路径此处收口）。
+// 工作未恢复（补建/滞留/续期/补扫四条恢复路径必须同口径聚合）。
 func (s *CertificateService) rescanDroppedDeploymentRetries(gates ...func() error) (rescheduled int, err error) {
 	if db.DB == nil {
 		return 0, nil
@@ -1183,7 +1188,10 @@ func withActiveCertServiceTick(taskID, stage string, fn func(s *CertificateServi
 // 扫描/入队前置读失败必须上抛（Run 返回 error → task_runs 失败终态）。
 // 服务缺失时**不得记成功**：此时续期链完全停摆（ACME 证书到期无人处理），
 // 必须落可见业务行并返回 ErrTaskSkipped（task_runs=skipped，非成功）。
-func CertRenewalScanOnce() error {
+func CertRenewalScanOnce(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !certScanDatabaseReady() {
 		TaskLogf("cert-renewal-scan", "scan", "数据库未就绪：本轮续期扫描已跳过（装配完成后由周期节拍重试）")
 		return taskengine.ErrTaskSkipped
@@ -1195,7 +1203,7 @@ func CertRenewalScanOnce() error {
 		TaskLogf("cert-renewal-scan", "scan", "证书签发任务未运行：本轮续期扫描已跳过（停止期间不会自动续签，请恢复调度以免证书到期）")
 		return taskengine.ErrTaskSkipped
 	}
-	return svc.renewExpiringCertificates()
+	return svc.renewExpiringCertificates(ctx)
 }
 
 // CertManualCheckOnce 手动证书到期检查。
@@ -1323,22 +1331,22 @@ func runCertWaitingCAWriteGate(gates []func() error) error {
 // 「扫描判定通过 → 写落定」的窗口内制造节点降级/取消，验证写前门。
 var certReconcileRoleRecheckHook func()
 
-// certReconcileWriteGate 证书状态对账每个写点前的逐项门（重建证书文件 /
-// 禁用孤儿任务 / 补建任务行）：
+// certWriteGate 证书域每个写点前的逐项门（对账/续期扫描共用同一实现，
+// 只有日志归因与测试缝不同）：
 //   - 调度取消（降级/导入排空/停机）：返回包装后的 ctx 错误——终态
 //     cancelled，与降级跳过区分；
 //   - 节点已切从：返回 ErrTaskSkipped——从节点不得改写证书态（扫描开始时的
 //     角色判定在长轮次内会过期，逐项复核才是写侧的唯一事实）。
 //
-// 角色读取失败不猜测：上抛为失败轮（下一周期重试），与续期扫描入口同口径。
-func certReconcileWriteGate(ctx context.Context) error {
+// 角色读取失败不猜测：上抛为失败轮（下一周期重试）。
+func certWriteGate(ctx context.Context, scope string, hook func()) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("证书状态对账被中止: %w", err)
+			return fmt.Errorf("%s被中止: %w", scope, err)
 		}
 	}
-	if certReconcileRoleRecheckHook != nil {
-		certReconcileRoleRecheckHook()
+	if hook != nil {
+		hook()
 	}
 	roleCtx := ctx
 	if roleCtx == nil {
@@ -1346,12 +1354,25 @@ func certReconcileWriteGate(ctx context.Context) error {
 	}
 	isMaster, err := RoleOf(roleCtx, db.DB)
 	if err != nil {
-		return fmt.Errorf("证书状态对账写前复核节点角色: %w", err)
+		return fmt.Errorf("%s写前复核节点角色: %w", scope, err)
 	}
 	if !isMaster {
 		return taskengine.ErrTaskSkipped
 	}
 	return nil
+}
+
+// certReconcileWriteGate 证书状态对账每个写点前的逐项门（重建证书文件 /
+// 禁用孤儿任务 / 补建任务行）。语义见 certWriteGate。
+func certReconcileWriteGate(ctx context.Context) error {
+	return certWriteGate(ctx, "证书状态对账", certReconcileRoleRecheckHook)
+}
+
+// certRenewalWriteGate 续期扫描每个写点前的逐项门。语义见 certWriteGate；
+// 测试缝为 certRenewalRoleRecheckHook（在「候选已快照、尚未写」的窗口内翻转
+// 节点角色，钉住 demote 竞争形态）。
+func certRenewalWriteGate(ctx context.Context) error {
+	return certWriteGate(ctx, "证书续期扫描", certRenewalRoleRecheckHook)
 }
 
 // backfillIssuedCertExpiry 一次性回填「issued + 材料在库 + expires_at IS NULL」
@@ -1402,7 +1423,7 @@ func backfillIssuedCertExpiry(ctx context.Context) (int, error) {
 		if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
 			return filled, gateErr
 		}
-		result, err := db.DB.Exec(`UPDATE cert_jobs SET expires_at=? WHERE id=? AND status='issued' AND expires_at IS NULL`, canonicalDatetimeValue(update.notAfter), update.id)
+		result, err := db.DB.Exec(`UPDATE cert_jobs SET expires_at=? WHERE id=? AND status='issued' AND expires_at IS NULL`, CanonicalDatetimeValue(update.notAfter), update.id)
 		if err != nil {
 			return filled, fmt.Errorf("回填证书任务 %d 的到期时间: %w", update.id, err)
 		}
@@ -1638,11 +1659,17 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 	rebuilt := 0
 	// 逐行物化失败聚合器：健康行继续重建，失败行让本轮返回错误（失败终态）。
 	var actionErr error
+	// 单行读失败与逐行物化失败同权（同族 rescane/requeueWaitingCAJobs 口径）：
+	// 只写应用日志时本轮仍报「对账完成」，而某行根本没被检查过——运维从任务
+	// 监控看不出「本轮有行未检查」。
+	scanFailures := 0
 	seenRules := make(map[string]bool)
 	for rows.Next() {
 		var ruleID, domain, certPEM, keyPEM, ruleDomain string
 		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM, &ruleDomain); err != nil {
 			Logf("error", "cert reconcile: scan certificate row failed: %v", err)
+			scanFailures++
+			actionErr = errors.Join(actionErr, fmt.Errorf("读取待对账证书任务行: %w", err))
 			continue
 		}
 		// 同 rule_id 多行只取首个**适用**行（ORDER BY updated_at DESC）。
@@ -2273,12 +2300,19 @@ func HasCertJob(ruleID, domains string) bool {
 	return exists
 }
 
-func (s *CertificateService) renewExpiringCertificates() error {
+// renewExpiringCertificates 续期扫描。ctx 由引擎 RunContext 透传：配置导入/
+// 还原的排空序列（PauseScheduling → CancelInFlightRuns → WaitInFlightRuns）
+// 只有消费 ctx 的 tick 才能被中止；入口与逐任务写点前均复核 ctx + 节点角色
+// （入口判定在最长 6h 的扫描窗口内会过期）。
+func (s *CertificateService) renewExpiringCertificates(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	qm := GetCAQueueManager()
 
 	// 新2:COALESCE 口径对齐全域(NULL 视为主节点）+
 	// 失败留痕(对照,此前静默跳过整个过期检查)。
-	isMaster, err := RoleOf(context.Background(), db.DB)
+	isMaster, err := RoleOf(ctx, db.DB)
 	if err != nil {
 		Logf("error", "cert expiration loop: failed to read cluster role, skipping this cycle: %v", err)
 		// 角色读取失败=本轮什么都没做，必须进入任务失败终态
@@ -2340,6 +2374,26 @@ func (s *CertificateService) renewExpiringCertificates() error {
 	var actionErr error
 
 	for idxRenewalJob, j := range jobs {
+		// 逐任务写前门（ctx + 节点角色）必须早于**任何**写点：上限分支的
+		// waiting_ca → failed 终态迁移与审计行、以及下方入队迁移都在其后。
+		// 入口一次角色检查覆盖不了最长 6h 的扫描窗口——降级/导入排空/停机
+		// 落在窗口内时，从节点仍会写本地库与审计（破坏「从节点零写」）。
+		if gateErr := certRenewalWriteGate(ctx); gateErr != nil {
+			remaining := len(jobs) - idxRenewalJob
+			if errors.Is(gateErr, taskengine.ErrTaskSkipped) {
+				TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描期间节点已切换为从节点，剩余 %d 个任务本轮未入队（从节点不签发）", remaining)
+			} else {
+				TaskLogf("cert-renewal-scan", "scan", "续期中止：写前复核失败（%v），剩余 %d 个任务本轮未执行，下一周期重试", gateErr, remaining)
+			}
+			Logf("warn", "Renewal: 写前门拦截（任务 %d，剩余 %d 个未处理）: %v", j.ID, remaining, gateErr)
+			if errors.Is(gateErr, taskengine.ErrTaskSkipped) {
+				if actionErr != nil {
+					return actionErr
+				}
+				return taskengine.ErrTaskSkipped
+			}
+			return errors.Join(actionErr, gateErr)
+		}
 		if j.RenewalAttempts >= maxAttempts {
 			if j.Status == "waiting_ca" {
 				// 终态迁移与 caqueue.markJobWaitingCA 的上限分支同字段集
@@ -2371,30 +2425,6 @@ func (s *CertificateService) renewExpiringCertificates() error {
 			Logf("error", "Renewal: CA queue manager not initialized")
 			TaskLogf("cert-renewal-scan", "scan", "续期中止：CA 队列未初始化，剩余 %d 个任务本轮未入队", len(jobs)-idxRenewalJob)
 			return errors.Join(actionErr, errors.New("CA 队列未初始化"))
-		}
-		// 入口只做一次角色检查，而本 Run 体不消费
-		// rc.Ctx（SetRole 取消对它是 no-op）——demote 落在最长 6h 扫描/多任务
-		// 候选窗口内时，循环会在队列停止前继续入队，已入队的签发要跑完 ACME 才
-		// 被 certissuer 的角色检查拦下（白烧 CA 配额）。入队前用与入口同一
-		// SQL 口径（RoleOf）逐任务复核；非主节点立即中止本轮剩余入队。
-		// 代价=每候选一次主库单行查询（候选通常个位数）。
-		if certRenewalRoleRecheckHook != nil {
-			certRenewalRoleRecheckHook()
-		}
-		masterNow, roleErr := RoleOf(context.Background(), db.DB)
-		if roleErr != nil {
-			// 与入口同口径：读失败不猜测角色，中止本轮。
-			TaskLogf("cert-renewal-scan", "scan", "续期中止：入队前复核节点角色失败（%v），剩余 %d 个任务本轮未入队，下一周期重试", roleErr, len(jobs)-idxRenewalJob)
-			return errors.Join(actionErr, fmt.Errorf("续期入队前复核节点角色: %w", roleErr))
-		}
-		if !masterNow {
-			TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描期间节点已切换为从节点，剩余 %d 个任务本轮未入队（从节点不签发）", len(jobs)-idxRenewalJob)
-			// 降级终态=skipped 哨兵（与入口复核同口径）——return nil 会把
-			// 中止轮记成 success。
-			if actionErr != nil {
-				return actionErr
-			}
-			return taskengine.ErrTaskSkipped
 		}
 		message := "等待排队续期"
 		action := "续签排队"
@@ -2485,11 +2515,15 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 		certPEM string
 	}
 	var certs []certInfo
+	// 单行读失败计数（必须在循环前声明：摘要与返回值都要用它）。
+	scanFailCount := 0
 	for rows.Next() {
 		var c certInfo
 		if err := rows.Scan(&c.caddyID, &c.name, &c.domain, &c.certPEM); err != nil {
-			// 静默 continue 会让证书过期检查遗漏，必须记录告警。
+			// 静默 continue 会让证书过期检查遗漏，必须记录告警；行数还必须进
+			// 摘要——「无过期无临期」是对事实的断言，有行没检查过就不能这么说。
 			Logf("warn", "Warning: scan failed during expiration check, skipping row: %v", err)
+			scanFailCount++
 			continue
 		}
 		certs = append(certs, c)
@@ -2557,8 +2591,13 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 	// ③：解析失败行计数进摘要（对照续期扫描 skippedNote 口径）——
 	// 此前仅应用日志 warn，任务日志零痕迹，损坏证书长期无人察觉。
 	skippedNote := ""
-	if parseFailCount > 0 {
+	switch {
+	case parseFailCount > 0 && scanFailCount > 0:
+		skippedNote = fmt.Sprintf("（另 %d 行解析失败、%d 行读取失败已跳过）", parseFailCount, scanFailCount)
+	case parseFailCount > 0:
 		skippedNote = fmt.Sprintf("（另 %d 行解析失败已跳过）", parseFailCount)
+	case scanFailCount > 0:
+		skippedNote = fmt.Sprintf("（另 %d 行读取失败已跳过）", scanFailCount)
 	}
 	if (expiredCount > 0 || expiringSoonCount > 0) && alerted {
 		Logf("info", "TLS Certificate Check: %d expired, %d expiring within %d days", expiredCount, expiringSoonCount, warnDays)
@@ -2566,11 +2605,17 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 		// 持续期只在首次/加深轮留一行，全正常轮与重复轮零日志（原「每 10
 		// 分钟一条摘要」会把任务日志真正的事件行挤掉）。
 		TaskLogf("cert-manual-poll", "check", "手动证书到期检查：%d 张已过期、%d 张临期（阈值 %d 天）%s", expiredCount, expiringSoonCount, warnDays, skippedNote)
-	} else if parseFailCount > 0 && expiredCount == 0 && expiringSoonCount == 0 {
+	} else if (parseFailCount > 0 || scanFailCount > 0) && expiredCount == 0 && expiringSoonCount == 0 {
 		// 「无过期无临期」是对事实的断言，只有统计真为 0 才允许说：此前本分支
 		// 只看 parseFailCount，当异常证书当日已告警（alerted=false）而同轮另有
 		// 解析失败行时会写出与本轮事实相反的结论。
 		TaskLogf("cert-manual-poll", "check", "手动证书到期检查：无过期无临期（阈值 %d 天）%s", warnDays, skippedNote)
+	}
+	// 单行读失败让本轮进入失败终态（同族 rescan/对账口径）：摘要已如实标注跳过
+	// 行数，返回值再把「结果不可信」交给 task_runs——只靠摘要文案时自动化监控
+	// 仍只能看到 success。
+	if scanFailCount > 0 {
+		return fmt.Errorf("手动证书巡检：%d 行读取失败（本轮结果不可信）", scanFailCount)
 	}
 	return nil
 }

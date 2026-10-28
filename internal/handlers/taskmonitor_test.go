@@ -5,7 +5,6 @@ package handlers
 // 此处测 handler 内的门与映射）。
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,6 +24,29 @@ import (
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/taskengine"
 )
+
+type syncTaskMonitorLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *syncTaskMonitorLog) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncTaskMonitorLog) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func (b *syncTaskMonitorLog) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.b.Reset()
+}
 
 func initTaskEngineForTest(t *testing.T) {
 	t.Helper()
@@ -34,18 +58,18 @@ func initTaskEngineForTest(t *testing.T) {
 	if services.TaskEngine() != nil {
 		services.StopTaskEngine()
 	}
-	t.Cleanup(services.StopTaskEngine)
 	if db.DB == nil {
-		oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
+		oldDB, oldM, oldA, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 		if err := db.Initialize(t.TempDir()); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
 			_ = db.Close()
 			db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA
-			db.SetDB(oldDB)
+			db.SetDB(oldCurrent)
 		})
 	}
+	t.Cleanup(services.StopTaskEngine)
 	services.InitTaskEngine("", t.TempDir()+"/app.log")
 }
 
@@ -386,7 +410,10 @@ func TestToggleSystemTask_businessDrivenTasksReadOnly(t *testing.T) {
 			if err := db.DB.QueryRow(`SELECT ` + tc.col + ` FROM ` + tc.table).Scan(&enabled); err != nil {
 				t.Fatal(err)
 			}
-			m, _ := te.Lookup(tc.id)
+			m, ok := te.Lookup(tc.id)
+			if !ok {
+				t.Fatalf("任务 %s 未注册", tc.id)
+			}
 			if enabled != 0 || m.LoopOn {
 				t.Fatalf("只读语义被破坏: business=%d loop_on=%v", enabled, m.LoopOn)
 			}
@@ -475,9 +502,9 @@ func TestSystemTaskLogPath_certJobAndFallbackShapes(t *testing.T) {
 // When 请求任务日志端点（业务读面：全部登录用户可读）。
 // Then 500 + 固定文案；响应体不得回显驱动/schema/路径细节，原始错误只进应用日志。
 func TestGetSystemTaskLogs_hidesInternalErrorDetails(t *testing.T) {
-	var applogs bytes.Buffer
+	applogs := &syncTaskMonitorLog{}
 	oldWriter := log.Writer()
-	log.SetOutput(&applogs)
+	log.SetOutput(applogs)
 	t.Cleanup(func() { log.SetOutput(oldWriter) })
 
 	newBackupTestHandlers(t)
@@ -592,6 +619,47 @@ func TestGetSystemTaskLogs_boundedTailDropsPartialFirstLine(t *testing.T) {
 				t.Fatalf("content length=%d value=%q, want length=%d %q", len(got), got, len(tc.want), tc.want)
 			}
 		})
+	}
+}
+
+func TestGetSystemTaskLogs_rotationBudgetDropsPartialOldestLine(t *testing.T) {
+	dir := t.TempDir()
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(dir)
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	path := taskengine.TaskLogPath("rotation-partial")
+	rotationLine := "轮转-" + strings.Repeat("r", 296) + "\n"
+	activeLine := "active-line-123456789\n"
+	if err := os.WriteFile(path+".1", []byte(strings.Repeat(rotationLine, 1000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat(activeLine, 9001)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &Handlers{}
+	router := gin.New()
+	router.GET("/system/tasks/:id/logs", h.GetSystemTaskLogs)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/system/tasks/rotation-partial/logs", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	content := payload.Data["content"]
+	if !utf8.ValidString(content) || strings.ContainsRune(content, utf8.RuneError) {
+		t.Fatal("响应首行切断 UTF-8 字符")
+	}
+	if !strings.HasPrefix(content, rotationLine) {
+		t.Fatalf("响应首行不是完整日志行: prefix=%q", content[:min(len(content), 80)])
+	}
+	if !strings.Contains(content, activeLine) {
+		t.Fatal("响应丢失活动日志尾窗")
 	}
 }
 
@@ -784,6 +852,13 @@ func TestTriggerSystemTask_triggerAuditMatchesManualRuns(t *testing.T) {
 	te := services.TaskEngine()
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	if err := te.Register(taskengine.Descriptor{
 		ID: "audit-race-probe", Family: "t", Name: "审计竞态探针", Kind: taskengine.KindOneshot,
 		Run: func(taskengine.RunContext) error {
@@ -810,9 +885,18 @@ func TestTriggerSystemTask_triggerAuditMatchesManualRuns(t *testing.T) {
 		r.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-race-probe/trigger", nil))
 		done <- struct{}{}
 	}()
-	<-done
-	<-done
-	<-entered
+	for i := range 2 {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("第 %d 个触发请求未返回", i+1)
+		}
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("manual Run 未进入")
+	}
 	close(release)
 
 	var manualRuns int
@@ -823,13 +907,15 @@ func TestTriggerSystemTask_triggerAuditMatchesManualRuns(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// Trigger 返回后异步写审计：按实际条件轮询至与 manual task_runs 收敛，
+	if manualRuns != 1 {
+		t.Fatalf("并发双击实际 manual task_runs=%d, want 1", manualRuns)
+	}
 	// 不再固定等待 200ms。
 	got := 0
 	deadline = time.Now().Add(2 * time.Second)
 	for {
 		got = countTriggerAudit(t) - before
-		if got == manualRuns {
+		if got == 1 && manualRuns == 1 {
 			break
 		}
 		if got > manualRuns || time.Now().After(deadline) {

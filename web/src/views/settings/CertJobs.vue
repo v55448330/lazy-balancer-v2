@@ -198,6 +198,7 @@ const logDialogVisible = ref(false)
 const logContent = ref('')
 const currentJob = ref<CertJob | null>(null)
 let lastLogErrorToastAt = 0
+let logDialogController: AbortController | null = null
 const logContainerRef = ref<HTMLDivElement | null>(null)
 
 const logHtml = computed(() => {
@@ -219,7 +220,7 @@ const logTail = useLogTailPolling({
   fetch: async () => {
     const job = currentJob.value
     if (!job) return null
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${job.id}/logs`, { signal: jobsPolling.signal, silent: true })
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${job.id}/logs`, { signal: logDialogController?.signal, silent: true })
     if (disposed || currentJob.value?.id !== job.id) return null
     return res.data?.content || ''
   },
@@ -346,6 +347,8 @@ const retryJob = async (row: CertJob) => {
 }
 
 const viewLogs = async (row: CertJob) => {
+  logDialogController?.abort()
+  logDialogController = new AbortController()
   logTail.invalidate()
   currentJob.value = row
   logDialogVisible.value = true
@@ -360,6 +363,8 @@ const onLogDialogOpened = (): void => {
 
 const onLogDialogClosed = () => {
   logTail.stop()
+  logDialogController?.abort()
+  logDialogController = null
   currentJob.value = null
   logContent.value = ''
 }
@@ -396,18 +401,25 @@ onMounted(() => {
   jobsPolling.start()
   // 容器宽度观测：驱动列让位（避免任何宽度下出现水平滚动条）
   const wrap = tableWrapRef.value
-  if (wrap && typeof ResizeObserver !== 'undefined') {
-    tableWrapObserver = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect?.width ?? 0
-      if (width > 0) tableWrapWidth.value = width
-    })
-    tableWrapObserver.observe(wrap)
+  if (!wrap) return
+  // 无 ResizeObserver 时无法测量：按 0 处理以切横向滚动，保证右侧操作列可达
+  // （初始 Infinity 会让全列保留且不切 --scroll，overflow:hidden 裁掉操作列）。
+  if (typeof ResizeObserver === 'undefined') {
+    tableWrapWidth.value = 0
+    return
   }
+  tableWrapObserver = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect?.width ?? 0
+    tableWrapWidth.value = width > 0 ? width : 0
+  })
+  tableWrapObserver.observe(wrap)
 })
 
 onUnmounted(() => {
   disposed = true
   logTail.stop()
+  logDialogController?.abort()
+  logDialogController = null
   tableWrapObserver?.disconnect()
   tableWrapObserver = null
 })

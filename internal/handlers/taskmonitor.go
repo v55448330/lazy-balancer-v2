@@ -476,14 +476,13 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	if strings.HasPrefix(id, "cert-job:") {
 		keep = certJobLogMaxRotatedBackups
 	}
-	content := prependTaskLogRotations(path, string(data), keep, tail)
-	// 256KB 是活动文件与轮转副本拼接后的合计预算。必须直接取
-	// 拼接串最后 tail 字节，再丢弃首行残段；tailLogWindow 只负责行边界，
-	// 不能把全串当成已定位的尾窗（否则仅丢首行，响应仍可数倍超限）。
-	if len(content) > tail {
-		start := len(content) - tail
-		if idx := strings.IndexByte(content[start:], '\n'); idx >= 0 {
-			content = content[start+idx+1:]
+	content, oldestCut := prependTaskLogRotations(path, string(data), keep, tail)
+	// 活动文件与每代副本读取时已按行边界处理；只有预算下推切断最旧
+	// 内容时，拼接结果的首行才可能是残段。辅助函数保证总长度 ≤ tail，
+	// 因此这里直接按切断标志丢首行，不再保留不可达的超预算分支。
+	if oldestCut {
+		if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+			content = content[idx+1:]
 		} else {
 			content = ""
 		}

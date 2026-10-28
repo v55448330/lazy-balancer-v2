@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, section } from './_helpers.ts'
+import { code, openTags, section } from './_helpers.ts'
 
 const at = (text: string, needle: string, what: string): number => {
   const index = text.indexOf(needle)
@@ -48,7 +48,7 @@ test('OIDC 弹框：整表单 formFrozen + 保存中不可 ESC/X 关闭', () => 
   const page = code('src/views/settings/OIDCSettings.vue')
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
   assert.match(page, /<el-form :disabled="formFrozen">/)
-  assert.match(page, /:close-on-press-escape="!saving" :show-close="!saving"/)
+  assert.ok(openTags(page, 'el-dialog').some((tag) => tag.includes(':close-on-press-escape="!saving"') && tag.includes(':show-close="!saving"')))
 })
 
 test('拦截页编辑器：保存中冻结（含 CodeEditor readonly）', () => {
@@ -61,8 +61,8 @@ test('拦截页编辑器：保存中冻结（含 CodeEditor readonly）', () => 
 test('安全规则页：自定义规则与 IP 名单表单保存中冻结', () => {
   const page = code('src/views/security/SecurityRules.vue')
   assert.match(page, /<el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly \|\| savingRule">/)
-  assert.match(page, /v-loading="loadingIpListDetail" :disabled="savingIpList">/)
-  assert.match(page, /:disabled="ipListDialogReadOnly \|\| editingIpListPreset \|\| savingIpList"/)
+  assert.ok(openTags(page, 'el-form').some((tag) => tag.includes('v-loading="loadingIpListDetail"') && tag.includes(':disabled="savingIpList"')))
+  assert.ok(page.includes(':disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList"'), '名称/分类/描述字段必须统一冻结表达式')
 })
 
 test('自动封禁名单：最终复核 GET 前进入保存态并在 finally 释放', () => {
@@ -82,8 +82,8 @@ test('共享定时更新编辑器：保存中冻结星期、时间与保存入�
 
 test('绑定编辑器：保存中冻结策略/规则选择与分页（含函数级守卫）', () => {
   const page = code('src/components/SecurityBindingEditor.vue')
-  assert.match(page, /:multiple="!section\.single"[\s\S]{0,80}:disabled="saving"/)
-  assert.match(page, /class="picker-search" :disabled="saving"/)
+  assert.ok(openTags(page, 'el-select').some((tag) => tag.includes(':multiple="!section.single"') && tag.includes(':disabled="saving"')))
+  assert.ok(openTags(page, 'el-input').some((tag) => tag.includes('class="picker-search"') && tag.includes(':disabled="saving"')))
   assert.match(page, /:disabled="pickerSelectableRules\.length === 0 \|\| saving"/)
   assert.match(page, /:disabled="saving \|\| pickerWouldExceed\(rule\)"/)
   assert.match(page, /small\s*:disabled="saving"/)
@@ -94,8 +94,8 @@ test('绑定编辑器：保存中冻结策略/规则选择与分页（含函数�
 
 test('自动封禁配置弹框：保存中禁 ESC/X/取消并冻结表单', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  assert.match(page, /:close-on-press-escape="!autobanSaving" :show-close="!autobanSaving"/)
-  assert.match(page, /<el-form :model="autobanForm" label-width="96px" label-position="right" :disabled="autobanSaving">/)
+  assert.ok(openTags(page, 'el-dialog').some((tag) => tag.includes(':close-on-press-escape="!autobanSaving"') && tag.includes(':show-close="!autobanSaving"')))
+  assert.ok(openTags(page, 'el-form').some((tag) => tag.includes(':model="autobanForm"') && tag.includes(':disabled="autobanSaving"')))
   assert.match(page, /<el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">取消<\/el-button>/)
 })
 

@@ -37,6 +37,30 @@ func CertificateIssuerDisplay(cert *x509.Certificate) string {
 	}
 }
 
+// CertificateDomainsDisplay 返回证书域名的统一显示文案：SAN 顺序保留，CN
+// 追加兜底并按文本去重。管理面板 HTTPS 与规则证书卡共用，避免同一张证书
+// 在不同视图丢失 CN 或采用不同集合口径。
+func CertificateDomainsDisplay(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(cert.DNSNames)+1)
+	domains := make([]string, 0, len(cert.DNSNames)+1)
+	for _, names := range [][]string{cert.DNSNames, {cert.Subject.CommonName}} {
+		for _, name := range names {
+			if name == "" {
+				continue
+			}
+			if _, exists := seen[name]; exists {
+				continue
+			}
+			seen[name] = struct{}{}
+			domains = append(domains, name)
+		}
+	}
+	return strings.Join(domains, ", ")
+}
+
 func SelectRuleCertificate(candidates []CertificateCandidate, ruleDomains string, now time.Time) (string, bool) {
 	selection, selected := selectCertificate(candidates, ruleDomains, now)
 	if selected {
@@ -229,21 +253,9 @@ func formatRuleCertInfo(certPEM string, cert *x509.Certificate, source, ruleDoma
 		cert = parsed
 	}
 
-	// Domains：证书 DNSNames 优先，CommonName 兜底，去重后均无则保留 ruleDomains
-	domainSet := make(map[string]struct{}, len(cert.DNSNames)+1)
-	parsedDomains := make([]string, 0, len(cert.DNSNames)+1)
-	for _, name := range append(cert.DNSNames, cert.Subject.CommonName) {
-		if name == "" {
-			continue
-		}
-		if _, exists := domainSet[name]; exists {
-			continue
-		}
-		domainSet[name] = struct{}{}
-		parsedDomains = append(parsedDomains, name)
-	}
-	if len(parsedDomains) > 0 {
-		info.Domains = strings.Join(parsedDomains, ", ")
+	// Domains：SAN+CN 去重的单源显示口径（管理面板 HTTPS 同用）。
+	if domains := CertificateDomainsDisplay(cert); domains != "" {
+		info.Domains = domains
 	}
 
 	// Issuer：单源显示口径（任务列表/规则证书卡/手动证书校验三处共用）

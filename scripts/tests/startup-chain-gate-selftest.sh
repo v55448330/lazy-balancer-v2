@@ -94,7 +94,9 @@ cat >"$stage_df" <<'DOCKERFILE'
 FROM golang:1.24 AS builder
 COPY docker-entrypoint.sh /opt/builder-only-entry
 FROM alpine:3.20
+RUN apk add --no-cache sqlite
 COPY docker-entrypoint.sh /usr/local/bin/lazy-balancer
+COPY --from=builder /opt/builder-only-entry /usr/local/bin/caddy
 COPY --from=builder /opt/builder-only-entry /app/builder-only-entry
 DOCKERFILE
 if ! bash "$gate" "$baseline_entry" "$stage_df" >/dev/null 2>"$work/e2.err"; then
@@ -102,4 +104,30 @@ if ! bash "$gate" "$baseline_entry" "$stage_df" >/dev/null 2>"$work/e2.err"; the
   fail "最终阶段提供 exec 目标的 Dockerfile 必须通过（阶段切块不得恒红）"
 fi
 
-echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope mutations rejected)"
+# ── F) 裸 caddy 命令：exec 清单完整但 caddy 落点改名时必须判红 ──────
+bare_df="$work/Dockerfile.bare-command"
+sed 's|/usr/local/bin/caddy|/opt/caddy|g' "$repo_root/Dockerfile" >"$bare_df"
+if ! grep -q '/opt/caddy' "$bare_df"; then
+  fail "裸命令变异注入失败（caddy COPY 目标未改写）"
+fi
+if bash "$gate" "$baseline_entry" "$bare_df" >/dev/null 2>"$work/f.err"; then
+  fail "裸 caddy 命令的最终镜像路径缺失必须被门禁拒绝"
+fi
+grep -q '裸命令 caddy' "$work/f.err" || {
+  cat "$work/f.err" >&2
+  fail "裸命令失败必须点名 caddy 路径"
+}
+
+# ── G) pause 标记：仅 Shell 改径、Go 两侧不变时必须判红 ─────────────
+pause_entry="$work/entrypoint-pause-drift.sh"
+sed 's|/tmp/lazy-balancer-caddy-paused|/tmp/lazy-balancer-caddy-paused-typo|g' \
+  "$baseline_entry" >"$pause_entry"
+if bash "$gate" "$pause_entry" "$repo_root/Dockerfile" >/dev/null 2>"$work/g.err"; then
+  fail "pause 标记跨 Shell/Go 漂移必须被门禁拒绝"
+fi
+grep -q 'pause 标记跨进程漂移' "$work/g.err" || {
+  cat "$work/g.err" >&2
+  fail "pause 漂移失败必须给出三侧实际值"
+}
+
+echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope / bare-command / pause mutations rejected)"

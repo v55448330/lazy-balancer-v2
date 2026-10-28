@@ -52,6 +52,7 @@ func TestRescanDroppedDeploymentRetries_requeuesLostMaterialJob(t *testing.T) {
 	}
 
 	service := NewCertificateService()
+	resetCertificateServiceForTest(t)
 	if _, err := service.rescanDroppedDeploymentRetries(); err != nil {
 		t.Fatalf("rescan: %v", err)
 	}

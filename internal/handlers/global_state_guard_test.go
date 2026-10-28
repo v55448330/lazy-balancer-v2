@@ -165,7 +165,11 @@ func captureHandlerGlobalSeams() map[string]any {
 		"caddyMetricsFetchTimeout":        caddyMetricsFetchTimeout,
 		// 提交后清理的预算检查缝：漏复位会让后续用例的产物清理在循环前即
 		// 被当作「预算耗尽」跳过（文件/指标留残），故按 seam 指针判定泄漏。
-		"importCleanupShouldStop": handlerGlobalPointer(importCleanupShouldStop),
+		"importCleanupShouldStop":           handlerGlobalPointer(importCleanupShouldStop),
+		"configImportBeforeLock":            handlerGlobalPointer(configImportBeforeLock),
+		"configBackupExportAfterDBSnapshot": handlerGlobalPointer(configBackupExportAfterDBSnapshot),
+		"maxLbbakTotalBytes":                maxLbbakTotalBytes,
+		"newLbbakWafFileSnapshotDir":        handlerGlobalPointer(newLbbakWafFileSnapshotDir),
 	}
 }
 
@@ -249,6 +253,29 @@ func TestGlobalStateGuard_detectsMetricsSeamLeaks(t *testing.T) {
 			metricsDashboardState.valid = true
 			metricsDashboardState.Unlock()
 		})
+	})
+}
+
+func TestGlobalStateGuard_detectsImportSeamLeaks(t *testing.T) {
+	t.Run("configImportBeforeLock", func(t *testing.T) {
+		old := configImportBeforeLock
+		t.Cleanup(func() { configImportBeforeLock = old })
+		assertHandlerGlobalStateLeak(t, "configImportBeforeLock", func() { configImportBeforeLock = func() {} })
+	})
+	t.Run("configBackupExportAfterDBSnapshot", func(t *testing.T) {
+		old := configBackupExportAfterDBSnapshot
+		t.Cleanup(func() { configBackupExportAfterDBSnapshot = old })
+		assertHandlerGlobalStateLeak(t, "configBackupExportAfterDBSnapshot", func() { configBackupExportAfterDBSnapshot = func() {} })
+	})
+	t.Run("maxLbbakTotalBytes", func(t *testing.T) {
+		old := maxLbbakTotalBytes
+		t.Cleanup(func() { maxLbbakTotalBytes = old })
+		assertHandlerGlobalStateLeak(t, "maxLbbakTotalBytes", func() { maxLbbakTotalBytes++ })
+	})
+	t.Run("newLbbakWafFileSnapshotDir", func(t *testing.T) {
+		old := newLbbakWafFileSnapshotDir
+		t.Cleanup(func() { newLbbakWafFileSnapshotDir = old })
+		assertHandlerGlobalStateLeak(t, "newLbbakWafFileSnapshotDir", func() { newLbbakWafFileSnapshotDir = nil })
 	})
 }
 

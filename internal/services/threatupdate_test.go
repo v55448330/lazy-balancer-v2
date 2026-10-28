@@ -770,7 +770,9 @@ func TestThreatUpdate_reloadPendingMarkerRetired(t *testing.T) {
 // demote 竞态窗口内，从节点继续执行会写 security_ip_lists 并触发重载，
 // 打破从节点只读不变量。
 func TestThreatUpdate_runRejectedOnSlave(t *testing.T) {
-	overrideWafDirForTest(t)
+	wafDir := t.TempDir()
+	restoreWaf := OverrideThreatWafDirForTest(wafDir)
+	t.Cleanup(restoreWaf)
 	newClusterTestService(t)
 	setupThreatTest(t, nil, nil, nil)
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
@@ -779,19 +781,11 @@ func TestThreatUpdate_runRejectedOnSlave(t *testing.T) {
 	if err := GetThreatUpdateManager().RunUpdate("manual", nil); err != nil {
 		t.Fatalf("从节点 RunUpdate 应静默返回而非报错: %v", err)
 	}
-	// 从节点不得写内置名单内容（种子行恒存在——断言条目仍为空、源状态未被改写）
-	rows, err := db.DB.Query(`SELECT entries FROM security_ip_lists WHERE system=1`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var entries string
-		if err := rows.Scan(&entries); err != nil {
-			t.Fatal(err)
-		}
-		if entries != "[]" {
-			t.Fatalf("从节点不得写入内置名单条目: entries=%s", entries)
+	// 从节点不得写文本或编译名单；直接检查本次隔离 WAF 目录，而非以 DB
+	// 条目代理文件写入行为。
+	for _, name := range []string{"threat-ustc.iplist", "threat-ustc.iplist.fast"} {
+		if _, err := os.Stat(filepath.Join(wafDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("从节点不得写入 %s（stat err=%v）", name, err)
 		}
 	}
 	var touched int

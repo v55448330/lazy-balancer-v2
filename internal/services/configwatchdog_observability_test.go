@@ -9,11 +9,9 @@ package services
 //     让进程崩，只能靠断言看守。
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,10 +33,7 @@ func TestConfigWatchdog_oversizeConfigUsesDedicatedWarningOnce(t *testing.T) {
 	recovered := fakeCaddyWithRoutes(t, emptyCaddyConfig)
 	oldURL := watchdogAdminURLValue
 	t.Cleanup(func() { watchdogAdminURLValue = oldURL })
-	originalWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureStandardLog(t)
 
 	// When：超限配置连续两轮
 	watchdogAdminURLValue = oversized.URL
@@ -72,18 +67,19 @@ func TestConfigWatchdog_oversizeConfigUsesDedicatedWarningOnce(t *testing.T) {
 	}
 }
 
-// panic 兜底：错误文案 + 任务日志留痕 + 漂移簿记零改动；恢复后不再出现该行。
-func TestConfigWatchdog_panicIsWrappedAndLoggedWithoutBookkeeping(t *testing.T) {
+// panic 兜底：错误文案 + 任务日志留痕 + 打断漂移连续窗口；恢复后不再出现该行。
+func TestConfigWatchdog_panicIsWrappedLoggedAndBreaksDriftStreak(t *testing.T) {
 	newClusterTestService(t)
 	resetConfigWatchdogForTest(t)
 	newTaskLogDir(t)
 	oldURL := watchdogAdminURLValue
 	t.Cleanup(func() { watchdogAdminURLValue = oldURL })
 	watchdogAdminURLValue = fakeCaddyWithRoutes(t, emptyCaddyConfig).URL
-	originalWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureStandardLog(t)
+
+	configDriftMu.Lock()
+	configDriftStreak = 1
+	configDriftMu.Unlock()
 
 	previousSeam := configDriftCheckForTest
 	configDriftCheckForTest = func(string) (bool, *configDriftEvent, error) {
@@ -107,12 +103,12 @@ func TestConfigWatchdog_panicIsWrappedAndLoggedWithoutBookkeeping(t *testing.T) 
 	if logText := readTaskLog(t, "config-watchdog"); !strings.Contains(logText, "检查异常（panic 已拦") {
 		t.Fatalf("任务日志缺少 panic 留痕行:\n%s", logText)
 	}
-	// And：漂移簿记零改动（panic 轮既不算一致也不推进 streak）。
+	// And：panic 轮没有判定证据，必须打断连续窗口并计入跳过轮。
 	configDriftMu.RLock()
 	consistent, streak, cleanRounds, skipped := configDriftStatus.Consistent, configDriftStreak, configDriftCleanRounds, configDriftSkipped
 	configDriftMu.RUnlock()
-	if !consistent || streak != 0 || cleanRounds != 0 || skipped != 0 {
-		t.Fatalf("panic 轮改动了漂移簿记: consistent=%v streak=%d clean=%d skipped=%d", consistent, streak, cleanRounds, skipped)
+	if !consistent || streak != 0 || cleanRounds != 0 || skipped != 1 {
+		t.Fatalf("panic 轮未按未判定簿记: consistent=%v streak=%d clean=%d skipped=%d, want streak=0 skipped=1", consistent, streak, cleanRounds, skipped)
 	}
 
 	// 回归形状：正常轮不再产生 panic 留痕。

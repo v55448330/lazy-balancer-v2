@@ -260,7 +260,11 @@ func Test_InitIP2Region_copies_distribution_xdb_when_live_missing(t *testing.T) 
 				if _, err := os.Stat(live + ".provinces.json"); !os.IsNotExist(err) {
 					t.Fatalf("从节点不得写派生缓存（stat err=%v）", err)
 				}
-				if v, _ := GetIP2RegionVersion(); v == "bundled" {
+				gotVersion, err := GetIP2RegionVersion()
+				if err != nil {
+					t.Fatalf("读取从节点 IP 库版本: %v", err)
+				}
+				if gotVersion == "bundled" {
 					t.Fatal("从节点不得写版本行标识（bundled 属主节点本地修复产物）")
 				}
 			}
@@ -334,7 +338,11 @@ func Test_InitIP2Region_slaveKeepsCorruptLiveAndLoadsDistReadOnly(t *testing.T) 
 	if _, err := os.Stat(live + ".version"); !os.IsNotExist(err) {
 		t.Fatalf("从节点不得写 .version sidecar（stat err=%v）", err)
 	}
-	if v, _ := GetIP2RegionVersion(); v == "bundled" {
+	gotVersion, err := GetIP2RegionVersion()
+	if err != nil {
+		t.Fatalf("读取损坏 live 场景的 IP 库版本: %v", err)
+	}
+	if gotVersion == "bundled" {
 		t.Fatal("从节点不得写版本行标识（bundled 属主节点本地修复产物）")
 	}
 }

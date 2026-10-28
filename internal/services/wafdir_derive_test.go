@@ -1,6 +1,7 @@
 package services
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -140,5 +141,47 @@ func TestConfigureWafDirs_appSubdirIsNotContainerDefault(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("%s=%q, want %q（/app 子目录被误判为容器默认形态→派生被跳过）", c.name, c.got, c.want)
 		}
+	}
+}
+
+func TestConfigureWafDirs_derivesIPCEnvironmentWithoutOverridingExplicitPaths(t *testing.T) {
+	saveWafPathVars(t)
+	restoreEnv := func(name string) {
+		value, present := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+	restoreEnv(SecurityEventsIPCSocketEnv)
+	restoreEnv(SecurityEventsSpoolDirEnv)
+
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	ConfigureWafDirs(dataDir)
+	if got, want := os.Getenv(SecurityEventsIPCSocketEnv), filepath.Join(dataDir, "security-events.sock"); got != want {
+		t.Fatalf("IPC socket env=%q, want %q", got, want)
+	}
+	if got, want := os.Getenv(SecurityEventsSpoolDirEnv), filepath.Join(dataDir, "security-events-spool"); got != want {
+		t.Fatalf("spool env=%q, want %q", got, want)
+	}
+
+	if err := os.Setenv(SecurityEventsIPCSocketEnv, "/explicit/custom.sock"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv(SecurityEventsSpoolDirEnv, "/explicit/custom-spool"); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureWafDirs(filepath.Join(t.TempDir(), "other-data"))
+	if got := os.Getenv(SecurityEventsIPCSocketEnv); got != "/explicit/custom.sock" {
+		t.Fatalf("explicit socket env overwritten: %q", got)
+	}
+	if got := os.Getenv(SecurityEventsSpoolDirEnv); got != "/explicit/custom-spool" {
+		t.Fatalf("explicit spool env overwritten: %q", got)
 	}
 }

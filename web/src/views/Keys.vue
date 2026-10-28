@@ -17,10 +17,14 @@
           <el-icon><Connection /></el-icon>
           MCP 文档
         </el-button>
-        <el-button type="primary" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
-          <el-icon><Plus /></el-icon>
-          创建密钥
-        </el-button>
+        <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+          <div>
+            <el-button type="primary" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
+              <el-icon><Plus /></el-icon>
+              创建密钥
+            </el-button>
+          </div>
+        </el-tooltip>
       </div>
     </div>
 
@@ -73,30 +77,42 @@
             </el-descriptions-item>
           </el-descriptions>
           <div class="key-actions">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)"
-              @click="openFeatureDialog(key)"
-            >
-              <el-icon><Setting /></el-icon>
-              功能配置
-            </el-button>
-            <el-button
-              size="small"
-              :type="key.is_enabled ? 'warning' : 'success'"
-              :loading="togglePendingId === key.id"
-              :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== key.id) || deletingIds.has(key.id)"
-              @click="toggleKey(key)"
-            >
-              <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
-              {{ key.is_enabled ? '禁用' : '启用' }}
-            </el-button>
-            <el-button size="small" type="danger" :loading="deletingIds.has(key.id)" :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)" @click="deleteKey(key.id)">
-              <el-icon><Delete /></el-icon>
-              删除
-            </el-button>
+            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+              <div>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)"
+                  @click="openFeatureDialog(key)"
+                >
+                  <el-icon><Setting /></el-icon>
+                  功能配置
+                </el-button>
+              </div>
+            </el-tooltip>
+            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+              <div>
+                <el-button
+                  size="small"
+                  :type="key.is_enabled ? 'warning' : 'success'"
+                  :loading="togglePendingId === key.id"
+                  :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== key.id) || deletingIds.has(key.id)"
+                  @click="toggleKey(key)"
+                >
+                  <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
+                  {{ key.is_enabled ? '禁用' : '启用' }}
+                </el-button>
+              </div>
+            </el-tooltip>
+            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+              <div>
+                <el-button size="small" type="danger" :loading="deletingIds.has(key.id)" :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)" @click="deleteKey(key.id)">
+                  <el-icon><Delete /></el-icon>
+                  删除
+                </el-button>
+              </div>
+            </el-tooltip>
           </div>
         </el-card>
       </el-col>
@@ -363,6 +379,7 @@ import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { serializeWhitelist } from '@/utils/apiKeyWhitelist'
+import { parseWhitelist } from '@/utils/apiKeyWhitelist'
 import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
 import { ElMessageBox, ElMessage } from 'element-plus'
@@ -379,10 +396,10 @@ interface CreateAPIKeyResponse {
 }
 
 const authStore = useAuthStore()
-// 只读门按「非 master 即禁用」判定——nodeMode 未知（/config 未返回/
-// 失败）时 fail-closed（与 /全站 readOnlyReason 口径一致）。主节点非 admin
-// 仍可管理本人密钥（后端强制只读 Key，白名单放行自助密钥端点）。
-const nodeWriteBlocked = computed(() => authStore.nodeMode !== 'master')
+// 从节点判定走 store 单源；节点模式未知仍按既有契约 fail-closed。
+// 主节点非 admin 可管理本人密钥，因此不能复用全站 non-admin 只读门。
+const nodeWriteBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
+const nodeWriteBlockedReason = computed(() => authStore.isSlaveNode ? '从节点只读，请在主节点操作' : '节点信息加载中，暂以只读模式呈现')
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])
@@ -475,10 +492,7 @@ const fetchKeys = async () => {
   }
 }
 
-// 白名单归一/序列化/逐行 CIDR 校验收敛到 utils/apiKeyWhitelist 单源（可 node 行为测试）。
-
-// 后端契约恒为 string[]（internal/models/models.go APIKey/APIKeyResponse），无需 string 兼容分支
-const parseWhitelist = (value: readonly string[]): string => value.join('\n')
+// 白名单解析/归一/序列化/逐行 CIDR 校验收敛到 utils/apiKeyWhitelist 单源（可 node 行为测试）。
 
 const whitelistEntries = (value: readonly string[]): string[] => parseWhitelist(value).split('\n').filter(Boolean)
 

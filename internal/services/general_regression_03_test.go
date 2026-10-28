@@ -175,8 +175,7 @@ func TestApplyConfig_sameBytesSinksRenderDegradation(t *testing.T) {
 	}
 }
 
-// 「合法短配置」参与同字节比较。
-
+// 超限运行配置不是可参与同字节比较的合法短配置，必须返回明确的超限错误。
 func TestReadAdminConfigBody_rejectsOversize(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -187,7 +186,7 @@ func TestReadAdminConfigBody_rejectsOversize(t *testing.T) {
 	}
 }
 
-// （housekeeping 只能从文件名反解出文件名主体）。
+// 证书任务日志的文件名组件必须与 housekeeping 反解使用同一规则 ID 口径。
 func TestCertJobLogLockKeyMatchesHousekeepingKey(t *testing.T) {
 	ruleID := "lb.dot.rule"
 	component := certJobLogFileComponent(ruleID)
@@ -205,7 +204,7 @@ func TestCertJobLogLockKeyMatchesHousekeepingKey(t *testing.T) {
 	}
 }
 
-// 「服务面正常」。
+// 节点异常必须重置连续正常窗口，恢复后重新累计，不能立即补发心跳。
 func TestMasterServingRound_anomalyResetsHeartbeatWindow(t *testing.T) {
 	newServingTestEnv(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET cluster_version=3 WHERE id=1`); err != nil {
@@ -518,7 +517,7 @@ func TestRenewalScan_logsWhenQueueInactive(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(oldWriter) })
 
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	if !strings.Contains(buf.String(), "CA 队列已暂停") {
 		t.Fatalf("log=%q, want inactive-queue skip disclosure", buf.String())

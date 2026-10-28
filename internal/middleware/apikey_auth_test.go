@@ -68,12 +68,15 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 			"api_key_read_only":   c.GetBool("api_key_read_only"),
 		})
 	})
-	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
-	req.Header.Set("Authorization", "Bearer "+plain)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	var recorder *httptest.ResponseRecorder
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
+		req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+		req.Header.Set("Authorization", scheme+" "+plain)
+		recorder = httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("scheme=%s status = %d, body=%s", scheme, recorder.Code, recorder.Body.String())
+		}
 	}
 	// Then：DB→context 的每个绑定都必须携带真实值（错键名/漏键在守卫处
 	// 静默降级为「非只读/未开 MCP」，只读 Key 会获得写权限）。
@@ -321,15 +324,17 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 	router := gin.New()
 	router.Use(apiKeyAuth(db.DB), jwtAuth(db.DB, cfg))
 	router.GET("/probe", func(c *gin.Context) { c.Status(http.StatusOK) })
-	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-API-Key", "invalid")
-	response := httptest.NewRecorder()
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
+		request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+		request.Header.Set("Authorization", scheme+" "+token)
+		request.Header.Set("X-API-Key", "invalid-api-key")
+		response := httptest.NewRecorder()
 
-	router.ServeHTTP(response, request)
+		router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+		if response.Code != http.StatusOK {
+			t.Fatalf("scheme=%s status=%d body=%s, want 200", scheme, response.Code, response.Body.String())
+		}
 	}
 }
 

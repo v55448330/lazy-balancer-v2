@@ -53,9 +53,8 @@ func loadSystemListIDs() (map[string]int, error) {
 
 // parseIPListRefsIDs 宽松解析 refs JSON 为 id 列表：畸形/空 → nil（重启用悬空
 // 引用门读取存量值用；存量列恒为写入侧校验过的合法形态，畸形仅见于带外改库）。
-// parseIPListRefsIDs 与 services.parseIPListRefs 为镜像实现
-// 裁定保留双份并声明）：本侧服务载荷校验路径不去重（保原始序列语义），
-// services 侧投影路径去重保序——语义有意分叉，勿单方面合并。
+// 与 services.parseIPListRefs 为镜像实现（去重语义有意分叉，见 services 侧
+// 投影路径）：本侧保原始序列，services 侧去重保序，勿单方面合并。
 func parseIPListRefsIDs(raw string) []int64 {
 	var ids []int64
 	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
@@ -1293,7 +1292,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
 	var entries []models.IPListEntry
 	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请删除后重建"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请用整表覆盖（清空/重新导入）修复"})
 		return
 	}
 	// 预置名单手动追加条目的默认备注：手动封禁（任务 merge 的挤出豁免判据
@@ -1427,7 +1426,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
 	var entries []models.IPListEntry
 	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请删除后重建"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请用整表覆盖（清空/重新导入）修复"})
 		return
 	}
 	kept := make([]models.IPListEntry, 0, len(entries))
@@ -1567,7 +1566,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				// 未提交条目重写投影，磁盘回退到已提交态（证书物化内容本即已提交
 				// PEM，物化无需撤销；见 RollbackIPListProjectionsToCommittedInLock 披露）。
 				h.caddyService.RollbackIPListProjectionsToCommittedInLock()
-				recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("Caddy 校验未通过", applyErr.Error(), services.AuditResultPart("failure")))
+				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，" + f.Resource + "未保存: " + applyErr.Error()})
 				return true
 			}
@@ -1580,7 +1579,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				// 本条 apply 已失败，不得补「重载」审计。
 				h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 				joined := errors.Join(err, recovery.err())
-				recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, joined.Error(), services.AuditResultPart("failure")))
+				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + joined.Error()})
 				return true
 			}
@@ -1589,7 +1588,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			// 未保存 → 重复提交。
 			h.recordCaddyApplySavedNotLive(applyErr)
 			recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
-			recordAudit(c, "重载失败", "Caddy服务", applyErr.Error())
+			recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
 			services.Logf("warn", "IP 名单热路径：%s（#%d）投影已重写，证书物化触发的强制重载失败: %v", f.Resource, listID, applyErr)
 			status := f.SuccessStatus
 			if status == 0 {
@@ -1604,7 +1603,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail("IP 名单热路径证书物化，强制重载收敛", services.AuditResultPart("success")))
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			joined := errors.Join(err, recovery.err())
-			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, joined.Error(), services.AuditResultPart("failure")))
+			recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + joined.Error()})
 			return true
 		}

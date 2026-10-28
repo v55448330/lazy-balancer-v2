@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,11 +173,7 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 			if pending := services.TakePendingRenderDegradationAudit(); pending != "" {
 				services.RecordAuditLog("system", "应用降级", "Caddy配置", pending, "")
 			}
-			if db.DB != nil {
-				if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, degraded); err != nil {
-					services.Logf("warn", "caddy_apply_banner_persist_failed: 持久化渲染降级横幅失败: %v", err)
-				}
-			}
+			persistCaddyApplyBanner(degraded)
 			return
 		}
 		if db.DB != nil {
@@ -228,24 +223,28 @@ func (h *Handlers) recordCaddyApplyFailure(err, restoreErr error) {
 	h.writeApplyFailureBanner(caddyApplyFailureSubject("Caddy 配置应用失败"), err, restoreErr)
 }
 
-// caddyAdminEndpointInError 匹配 http.Client 错误文本里的请求地址
-// （*url.Error 的形态恒为 `<Verb> "http://host:port/path": ...`）。
-var caddyAdminEndpointInError = regexp.MustCompile(`(Post|Get|Put|Delete|Head|Patch) "(https?://[^"]*)"`)
+// persistCaddyApplyBanner 是 caddy_apply_error 列的唯一写点（清空分支除外）。
+// 该列是全员可见的全局信号（前端横幅 + /caddy/status，含只读 API Key 可见），
+// 而 /load 传输失败的 *url.Error 文本恒含「Post "http://<adminURL>/load"」与
+// 「dial tcp <admin>」——自定义 caddy_admin_url 时等于把内部控制面地址与端口
+// 披露给任意登录用户。所有写点统一经本函数剥离；服务端日志保留原文（仅运维
+// 可见）。
+func persistCaddyApplyBanner(text string) {
+	if db.DB == nil {
+		return
+	}
+	visible := services.RedactCaddyAdminEndpoint(text)
+	if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, visible); derr != nil {
+		services.Logf("warn", "caddy_apply_error_persist_failed: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
+	}
+}
 
-// caddyAdminDialInError 匹配同一错误文本里紧随其后的拨号/解析地址形态
-// （`dial tcp 10.0.0.1:2019: connect: ...`、`dial tcp [::1]:2019: ...`），
-// 否则只替换引号内 URL 仍会把 admin 地址与端口留在横幅里。
-var caddyAdminDialInError = regexp.MustCompile(`(dial tcp |lookup )([^:\s"]+:\d+|\[[^\]]+\]:\d+)`)
-
-// redactCaddyAdminEndpoint 把横幅文本里的 Caddy admin 地址替换为占位短语。
-// 横幅是全员可见的全局信号（从节点分叉的唯一提示），而 /load 传输失败的
-// *url.Error 文本恒含「Post "http://<adminURL>/load"」与「dial tcp <admin>」——
-// 自定义 caddy_admin_url 时等于把内部控制面地址与端口披露给任意登录用户
-// （含只读 API Key）。服务端日志保留原文（仅运维可见），只有审计/横幅这两个
-// 全员可见面走本函数。
-func redactCaddyAdminEndpoint(text string) string {
-	redacted := caddyAdminEndpointInError.ReplaceAllString(text, `${1} "<Caddy admin 端点>"`)
-	return caddyAdminDialInError.ReplaceAllString(redacted, `${1}<Caddy admin 端点>`)
+// caddyFailureAuditDetail 是「Caddy 交互失败」审计 detail 的唯一构造点。err
+// 文本可能来自指向 admin 端点的 *url.Error（/load、/config、/adapt 的请求
+// 地址与拨号目标），而操作审计列表全员可见——先剥离端点再入 detail，服务端
+// 日志仍保留原文。
+func caddyFailureAuditDetail(prefix string, err error) string {
+	return services.FormatAuditDetail(prefix, services.RedactCaddyAdminEndpoint(err.Error()), services.AuditResultPart("failure"))
 }
 
 // writeApplyFailureBanner 是横幅/系统审计的唯一落盘点。subject 决定横幅正文
@@ -256,13 +255,8 @@ func (h *Handlers) writeApplyFailureBanner(subject applyFailureSubject, err, res
 	wrapped := fmt.Sprintf("%s（%s）：%v", subject.object, caddyApplyFailureLabel(restoreErr), err)
 	services.Logf("error", "%s", wrapped)
 	// 全员可见面（审计列表 + 刷新后仍可见的横幅）剥离 admin 端点地址。
-	visible := redactCaddyAdminEndpoint(wrapped)
-	services.RecordAuditLog("system", subject.action, subject.resource, visible, "")
-	if db.DB != nil {
-		if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, visible); derr != nil {
-			services.Logf("warn", "caddy_apply_error_persist_failed: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
-		}
-	}
+	services.RecordAuditLog("system", subject.action, subject.resource, services.RedactCaddyAdminEndpoint(wrapped), "")
+	persistCaddyApplyBanner(wrapped)
 }
 
 // postCommitSaveFailedBanner 提交失败横幅的失败对象短语：SQLite 的 Commit
@@ -308,11 +302,9 @@ func (h *Handlers) recordCompensationSideEffects(failureObject string, sideErr e
 func (h *Handlers) recordCaddyApplySavedNotLive(err error) {
 	text := fmt.Sprintf("配置已保存，但 Caddy 应用失败（运行配置可能未生效，请核对后重试）：%v", err)
 	services.Logf("error", "%s", text)
-	if db.DB != nil {
-		if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, text); derr != nil {
-			services.Logf("warn", "持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
-		}
-	}
+	// 横幅是全员可见面：触发本形态的主力正是 /load 传输失败，错误文本含 admin
+	// 端点原文，必须经 persistCaddyApplyBanner 剥离后再落库。
+	persistCaddyApplyBanner(text)
 }
 
 // caddyApplyNoteLocked 返回应用失败时的响应文案后缀（空=配置干净应用）。
@@ -340,6 +332,14 @@ func (h *Handlers) recordCaddyApplySavedNotLive(err error) {
 //
 // 不经 tx 渲染的变体：PutCaddyConfig（ApplyConfig 原始载荷）与备份导入 ×2
 // （协调器内应用）各自在成功尾部补记，同受契约约束。
+const caddyApplyFailureNotePrefix = "；但 Caddy 配置应用失败："
+
+// caddyLifecycleApplyFailureMessage 组合启停动作与统一失败后缀；note 已含
+// 「但 Caddy 配置应用失败」，调用方不得再拼一份同义句首。
+func caddyLifecycleApplyFailureMessage(action, note string) string {
+	return action + note
+}
+
 func (h *Handlers) caddyApplyNoteLocked() string {
 	err := h.caddyService.GenerateAndApplyConfig()
 	if services.IsSameConfig(err) {
@@ -347,7 +347,7 @@ func (h *Handlers) caddyApplyNoteLocked() string {
 	}
 	h.recordCaddyApplyResult(err)
 	if err != nil {
-		return "；但 Caddy 配置应用失败：" + err.Error()
+		return caddyApplyFailureNotePrefix + err.Error()
 	}
 	return ""
 }
@@ -561,7 +561,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 渲染副作用（稳定命名投影+证书物化）已按未提交
 		// 内容落盘——tx 回滚的同时把磁盘回退到已提交态（零 /load）。
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
-		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("Caddy 校验未通过", applyErr.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，" + f.Resource + "未保存: " + applyErr.Error()})
 		return
 	}
@@ -587,7 +587,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		}
 		h.recordCompensationSideEffects("Caddy 应用失败且 CLI 校验不可用", recovery.db)
 		h.recordCaddyApplyFailure(joined, recovery.runtime)
-		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail("Caddy 应用失败且 CLI 校验不可用", joined.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 应用失败且 CLI 校验不可用", joined))
 		restoreNote := "已回滚到已提交运行配置"
 		if recovery.runtime != nil {
 			restoreNote = "回滚到已提交运行配置失败，请立即检查 Caddy 状态"
@@ -606,7 +606,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 跳过；恢复失败仍须落横幅（提交结果不确定 + 运行态可能滞留候选）。
 		reloadNote.auditReload()
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
-		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, joined.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, services.RedactCaddyAdminEndpoint(joined.Error()), services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, joined)
 		return
 	}
@@ -614,7 +614,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	// 已保留）」分两态——误读为「没保存」会诱发重复提交（重复对象）。
 	h.recordCaddyApplySavedNotLive(applyErr)
 	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
-	recordAudit(c, "重载失败", "Caddy服务", applyErr.Error())
+	recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
 	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + applyErr.Error(), Data: f.Data})
 }
 
@@ -769,11 +769,12 @@ func validateRuleHealthCheckPath(path string) error {
 // 地址的两种合法写法（isValidHost 用 net.ParseIP，两种都过形状门），按文本
 // 比较会当成两个上游落库——权重翻倍、健康检查对同一地址跑两遍、失败计数分裂。
 // IPv4-mapped 形态（::ffff:10.0.0.1 与 10.0.0.1）同理按 Unmap 后视为同一后端。
-// 主机名保持文本归一（去首尾空白 + 小写，DNS 不区分大小写）；方括号形态
-// （[::1]）先剥括号再解析，与 net.JoinHostPort 的渲染形态对齐。
+// 主机名保持文本归一（去首尾空白 + 小写，DNS 不区分大小写）。方括号形态
+// （[::1]）不在此归一：isValidHost 拒绝方括号，写侧在判重后必然 400；若在此
+// 剥括号反而会让后续渲染 JoinHostPort 二次加括号成 [[::1]]。
 func upstreamDedupeHost(host string) string {
 	trimmed := strings.TrimSpace(host)
-	if addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")); err == nil {
+	if addr, err := netip.ParseAddr(trimmed); err == nil {
 		return addr.Unmap().String()
 	}
 	return strings.ToLower(trimmed)

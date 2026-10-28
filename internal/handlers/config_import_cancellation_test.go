@@ -24,6 +24,9 @@ func TestConfigImportPostApplyWorkSurvivesRequestCancellation(t *testing.T) {
 	}()
 
 	cancel()
+	if session.ctx == ctx || session.ctx.Err() != nil {
+		t.Fatal("session.ctx 必须在 begin 时与请求取消脱钩，而不是等到提交后才临时包装")
+	}
 	if err := services.BumpClusterVersion(session.ctx, session.tx); err != nil {
 		t.Fatalf("post-apply cluster version write used canceled request context: %v", err)
 	}

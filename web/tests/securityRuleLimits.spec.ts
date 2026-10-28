@@ -15,8 +15,8 @@ import {
   patternByteLength,
   patternOverLimit,
 } from '../src/utils/customRuleLimits.ts'
-import { entriesMissingFromPayload, mergeConcurrentBanEntries } from '../src/utils/ipListSaveGuard.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { mergeConcurrentBanEntries } from '../src/utils/ipListSaveGuard.ts'
+import { code, openTags, repoCode, section } from './_helpers.ts'
 
 const securityGo = repoCode('internal/services/security.go')
 const page = code('src/views/security/SecurityRules.vue')
@@ -62,8 +62,12 @@ test('自定义规则弹框消费同一上限（加条件按钮/字段级字节�
 })
 
 test('名单详情失败态与保存同门：条目录入/导入一并禁用', () => {
-  assert.match(page, /:disabled="ipListDetailFailed \|\| savingIpList" @click="addIpListEntry"/, '失败态/保存中仍可加条目会被重试或回填覆盖')
-  assert.match(page, /:disabled="ipListDetailFailed \|\| savingIpList" @click="triggerImportEntries"/, '失败态/保存中导入同样会被覆盖')
+  for (const action of ['addIpListEntry', 'triggerImportEntries']) {
+    assert.ok(
+      openTags(page, 'el-button').some((tag) => tag.includes(':disabled="ipListDetailFailed || savingIpList"') && tag.includes(`@click="${action}"`)),
+      `${action} 在失败态/保存中必须禁用（属性顺序无关）`,
+    )
+  }
   assert.match(page, /保存与条目增删\/导入已禁用/, '横幅必须说明禁用范围')
 })
 
@@ -75,14 +79,15 @@ test('名单重试覆盖前确认未保存条目，成功后提示已加载', ()
   assert.match(reload, /ElMessage\.success\('已加载最新条目'\)/)
 })
 
-test('自动封禁名单新鲜度差集：服务端有、载荷无 → 列出（归一/去重）', () => {
+test('自动封禁名单新鲜度差集经公开合并入口生效（归一/去重）', () => {
+  const entries = (values: readonly string[]) => values.map((value) => ({ value }))
   assert.deepEqual(
-    entriesMissingFromPayload(['1.1.1.1', '2.2.2.2', '3.3.3.3'], [' 1.1.1.1 ', '3.3.3.3']),
+    mergeConcurrentBanEntries(entries(['1.1.1.1', '2.2.2.2', '3.3.3.3']), entries([' 1.1.1.1 ', '3.3.3.3']), []).preserved,
     ['2.2.2.2'],
   )
-  assert.deepEqual(entriesMissingFromPayload(['::1'], []), ['::1'])
-  assert.deepEqual(entriesMissingFromPayload(['1.1.1.1', '1.1.1.1'], []), ['1.1.1.1'], '重复值只报一次')
-  assert.deepEqual(entriesMissingFromPayload(['1.1.1.1'], ['1.1.1.1', '9.9.9.9']), [], '载荷多出的条目不算移除')
+  assert.deepEqual(mergeConcurrentBanEntries(entries(['::1']), [], []).preserved, ['::1'])
+  assert.deepEqual(mergeConcurrentBanEntries(entries(['1.1.1.1', '1.1.1.1']), [], []).preserved, ['1.1.1.1'], '重复值只并回一次')
+  assert.deepEqual(mergeConcurrentBanEntries(entries(['1.1.1.1']), entries(['1.1.1.1', '9.9.9.9']), []).preserved, [], '载荷已含服务端条目时不并回')
 })
 
 test('自动封禁名单最终复核：并发新增并回载荷，主动删除仍生效', () => {

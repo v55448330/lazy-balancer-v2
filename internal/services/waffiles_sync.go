@@ -325,7 +325,23 @@ var wafFileRefCache struct {
 }
 
 // wafFileRefCacheTTL 是廉价签名缓存的最长复用时间（var 供测试收窄）。
-var wafFileRefCacheTTL = 30 * time.Second
+//
+// 取值约束：必须显著大于默认同步周期
+// （defaultSyncIntervalSeconds=60s，normalizeSyncInterval 下限 10s）——本
+// 缓存的两个消费面都「按同步周期反复调用」：从端每个 304 稳态轮的
+// wafFilesDrifted 与主端每次快照重建，而全量构建要整树 tar.gz+sha256、整读
+// xdb、逐个哈希威胁 .fast 并全程持 wafFileMu（与 CRS 更新/导入/安全数据下发
+// 串行）。原值 30s 恒小于 60s 周期 → 每个稳态 304 轮都必然过期重建，「廉价
+// 签名短路」对真实节奏完全失效（每节点每 60s 一次 50–200ms 级 CPU/IO 尖峰 +
+// 锁排队）。10 分钟 = 默认节奏下约每 10 轮一次内容复核。
+//
+// 有界性不变：带内写入（CRS 树交换/xdb 安装/威胁名单编译/lbbak 导入）必然
+// 改变 size/mtime → 签名失效 → 下一轮立即重建；只有「等长 + 同 mtime」的带外
+// 改写才落到 TTL 兜底，其可发现窗口上界即本值（钉测：
+// TestBuildWafFileRef_steadyState304RoundsSkipFullRebuild /
+// TestBuildWafFileRef_sameSizeSameMtimeRewriteRecoveredWithinBoundedWindow /
+// TestWafFileRefCacheTTL_coversSeveralDefaultSyncRounds）。
+var wafFileRefCacheTTL = 10 * time.Minute
 
 // wafFileRefFullBuilds 仅用于测试钉住「签名未变不重建」（生产零消费）。
 var wafFileRefFullBuilds atomic.Int64
@@ -1364,11 +1380,30 @@ func SanitizeBundleVersion(v string) string {
 	return sanitizeBundleVersion(v)
 }
 
+// invalidateWafFileRefCache 清空「廉价签名 → 引用」缓存。活动路径整体切换后
+// 必须调用：签名虽含两个绝对路径，但「同路径等长同 mtime 改写」与 mtime 精度
+// 退化（秒级 FS）形态下新旧夹具可能命中同一签名，把上一夹具的 ref 带进下一个
+// 用例（假绿/假红）。与 wafFileBundleCache 的隔离口径对齐。
+func invalidateWafFileRefCache() {
+	wafFileRefCache.mu.Lock()
+	wafFileRefCache.valid = false
+	wafFileRefCache.sig = ""
+	wafFileRefCache.ref = nil
+	wafFileRefCache.validatedAt = time.Time{}
+	wafFileRefCache.mu.Unlock()
+}
+
 // OverrideWafLivePathsForTest 重定向 CRS/IP2Region 活动文件路径,仅测试使用
 // (生产路径为容器内 /app/waf/crs 与 ip2regionLivePath;handlers 层打包/回放
 // 测试无法访问包内 var,经此注入临时目录)。
+// 切换（含还原）时同步失效 wafFileRefCache：缓存键含路径但不含内容，
+// 跨夹具复用会给出假绿/假红（见 invalidateWafFileRefCache）。
 func OverrideWafLivePathsForTest(crsDir, xdbPath string) (restore func()) {
 	oldCrs, oldXdb := crsLiveDir, ip2regionLivePath
 	crsLiveDir, ip2regionLivePath = crsDir, xdbPath
-	return func() { crsLiveDir, ip2regionLivePath = oldCrs, oldXdb }
+	invalidateWafFileRefCache()
+	return func() {
+		crsLiveDir, ip2regionLivePath = oldCrs, oldXdb
+		invalidateWafFileRefCache()
+	}
 }

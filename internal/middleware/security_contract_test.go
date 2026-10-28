@@ -304,6 +304,76 @@ func TestAuthenticationAuditLimiter_reclaimIsBoundedAndOldestFirst(t *testing.T)
 	}
 }
 
+// 时钟回拨后，新登记条目的时间戳会小于队头；回收队列必须重建升序，
+// 否则新鲜队头会永久挡住其后已经过期的回拨条目。
+func TestAuthenticationAuditLimiter_clockRollbackKeepsQueueReclaimable(t *testing.T) {
+	// Given：阈值以上的新鲜键，随后主机时钟回拨 5 分钟并登记一个旧时间戳键。
+	limiter := authenticationAuditLimiter{events: make(map[string]time.Time)}
+	now := time.Now()
+	for i := 0; i <= authenticationAuditReclaimThreshold; i++ {
+		if !limiter.allow(fmt.Sprintf("fresh-%d", i), now) {
+			t.Fatalf("fresh-%d must be admitted", i)
+		}
+	}
+	if !limiter.allow("rolled-back", now.Add(-5*time.Minute)) {
+		t.Fatal("clock-rollback key must be admitted")
+	}
+
+	// When：时钟恢复后，新鲜队头尚未满 2 分钟，但回拨条目已过期。
+	if !limiter.allow("after-rollback", now.Add(time.Minute)) {
+		t.Fatal("post-rollback key must be admitted")
+	}
+
+	// Then：过期回拨条目被回收，新鲜键不被误删。
+	limiter.mu.Lock()
+	_, rolledBackLive := limiter.events["rolled-back"]
+	_, freshLive := limiter.events["fresh-0"]
+	limiter.mu.Unlock()
+	if rolledBackLive {
+		t.Fatal("expired clock-rollback entry remains blocked behind fresh queue head")
+	}
+	if !freshLive {
+		t.Fatal("fresh entry must survive reclaim")
+	}
+}
+
+// 首次回拨重建后，时钟继续在回拨时间线上前进：后续旧时间戳仍可能小于
+// 队尾的 pre-rollback 时间，必须逐次维护升序，而不是只检测一次 lastNow 回拨。
+func TestAuthenticationAuditLimiter_rolledBackTimelineKeepsQueueOrdered(t *testing.T) {
+	// Given：pre-rollback 新鲜键 + 回拨时间线上连续登记两个键。
+	limiter := authenticationAuditLimiter{events: make(map[string]time.Time)}
+	now := time.Now()
+	for i := 0; i <= authenticationAuditReclaimThreshold; i++ {
+		if !limiter.allow(fmt.Sprintf("fresh-%d", i), now) {
+			t.Fatalf("fresh-%d must be admitted", i)
+		}
+	}
+	rolledBack := now.Add(-5 * time.Minute)
+	if !limiter.allow("rolled-back-first", rolledBack) {
+		t.Fatal("first rollback key must be admitted")
+	}
+	if !limiter.allow("rolled-back-second", rolledBack.Add(time.Second)) {
+		t.Fatal("second rollback-timeline key must be admitted")
+	}
+
+	// When：仍停留在回拨时间线，两个回拨键均过 TTL，pre-rollback 键仍在未来。
+	if !limiter.allow("rollback-timeline-probe", rolledBack.Add(3*time.Minute)) {
+		t.Fatal("rollback-timeline probe must be admitted")
+	}
+
+	// Then：第二个回拨键不能被新鲜 future 队头挡在队尾。
+	limiter.mu.Lock()
+	_, secondLive := limiter.events["rolled-back-second"]
+	_, freshLive := limiter.events["fresh-0"]
+	limiter.mu.Unlock()
+	if secondLive {
+		t.Fatal("expired second rollback-timeline entry remains blocked behind future queue head")
+	}
+	if !freshLive {
+		t.Fatal("pre-rollback fresh entry must survive reclaim")
+	}
+}
+
 // 刷新过的键不得因队列里残留的首次登记时间被回收——去重窗内二次记审计是回归。
 func TestAuthenticationAuditLimiter_refreshedKeySurvivesReclaim(t *testing.T) {
 	securityAuditLimiter.reset()

@@ -277,9 +277,12 @@ func TestDeleteCertJob_restore_failedFallbackMarksFailedWhenStillDisabled(t *tes
 	}
 }
 
-// 函数 rows.Err() 500 口径及 「warn 留痕+continue」口径不对称。
-// 修复：warn+continue。钉：单行 scan 失败 → warn 留痕 + 不 500 + 其余行照常返回。
-func TestListCertificates_scanFailureWarnsAndKeepsRemainingRows(t *testing.T) {
+// 两条证书清单端点（/certificates 与 /certificates/jobs）对同一坏行必须同语义：
+// 单行读失败即 fail-visible 500（此前聚合清单是 warn+continue：本页少一行而
+// total 仍按 COUNT(*) 计入，翻页集合与 total 不闭合，且运维只能从应用日志发现；
+// 任务列表同一坏行是显式 500）。
+// 钉：单行 scan 失败 → 500 + 固定文案（不回显底层错误/坏行内容）。
+func TestListCertificates_scanFailureFailsVisible(t *testing.T) {
 	// Given：假驱动首行 id 列类型错误（Scan 必然失败），次行正常；
 	// COUNT(*) 分页统计单独路由（子串匹配随机顺序，两条查询须用互斥前缀）。
 	h := newBackupTestHandlers(t)
@@ -290,7 +293,7 @@ func TestListCertificates_scanFailureWarnsAndKeepsRemainingRows(t *testing.T) {
 			{int64(2), "lb_good", "good.example.test", "ok", "", "", "", ""},
 		}},
 	})
-	buf := captureLog(t)
+	captureLog(t)
 	router := gin.New()
 	router.GET("/certificates", h.ListCertificates)
 	response := httptest.NewRecorder()
@@ -298,14 +301,39 @@ func TestListCertificates_scanFailureWarnsAndKeepsRemainingRows(t *testing.T) {
 	// When
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/certificates", nil))
 
-	// Then：200 + 其余行返回 + warn 留痕
+	// Then：500 + 统一文案，且不泄漏坏行/正常行数据（部分结果不得随 5xx 下发）。
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（坏行必须 fail-visible，与 /certificates/jobs 同语义）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "读取证书任务失败") {
+		t.Fatalf("body=%s, want 固定失败文案", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "bad.example.test") || strings.Contains(response.Body.String(), "good.example.test") {
+		t.Fatalf("body=%s, 5xx 不得下发部分结果", response.Body.String())
+	}
+}
+
+// 对照形状：全部行健康时照常 200 且行内容完整（fail-visible 不得变成有行即 500）。
+func TestListCertificates_healthyRowsStillReturn200(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	fakeDB(t, map[string]driver.Rows{
+		"SELECT COUNT(*) FROM cert_jobs": &fakeQueryRows{values: [][]driver.Value{{int64(1)}}},
+		"SELECT j.id": &fakeQueryRows{values: [][]driver.Value{
+			// expires_at 取 NULL（列的真实空值形态）；空串不是 DATETIME 列的
+			// 合法形态，会被 NullTime 扫描拒绝（与任务列表同口径）。
+			{int64(1), "lb_good", "good.example.test", "issued", "", nil, "", ""},
+		}},
+	})
+	router := gin.New()
+	router.GET("/certificates", h.ListCertificates)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/certificates", nil))
+
 	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200（单行 scan 失败不得拖垮整列表）", response.Code, response.Body.String())
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	if strings.Contains(response.Body.String(), "bad.example.test") || !strings.Contains(response.Body.String(), "good.example.test") {
-		t.Fatalf("body=%s, want 失败行跳过、正常行保留", response.Body.String())
-	}
-	if !strings.Contains(buf.String(), "WARNING") || !strings.Contains(buf.String(), "证书") {
-		t.Fatalf("log=%q, want 单行 scan 失败 warn 留痕", buf.String())
+	if !strings.Contains(response.Body.String(), "good.example.test") {
+		t.Fatalf("body=%s, want 正常行返回", response.Body.String())
 	}
 }

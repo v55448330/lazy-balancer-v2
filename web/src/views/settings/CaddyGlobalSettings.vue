@@ -109,6 +109,7 @@
           </el-select>
           <div v-if="trustedTotalError" class="form-tip-line trusted-ranges-error">{{ trustedTotalError }}</div>
           <div v-else-if="trustedTotalWarning" class="form-tip-line">{{ trustedTotalWarning }}</div>
+          <div v-if="trustedReferencedRangesError" class="form-tip-line trusted-ranges-error">{{ trustedReferencedRangesError }}</div>
           <div v-if="refListEntriesRetryIds.length" class="info-note-bar">
             <span class="info-note-desc">{{ refListEntriesRetryIds.length }} 个引用列表的条目未加载成功，「合计」条数按名单记录数估算（重叠网段未去重）；若名单已被删除，保存会被拒绝；服务端以去重后结果为准</span>
             <el-button size="small" type="primary" plain @click="retryRefListEntries">重新加载名单条目</el-button>
@@ -117,7 +118,7 @@
         </el-form-item>
         <el-form-item label="请求头">
           <el-select
-            v-model="trustedHeaders"
+            :model-value="trustedHeaders"
             multiple
             filterable
             allow-create
@@ -125,6 +126,7 @@
             :disabled="formFrozen"
             placeholder="留空 = 仅 X-Forwarded-For"
             class="trusted-field"
+            @update:model-value="onTrustedHeadersEdit"
           />
           <div v-if="trustedHeadersError" class="form-tip-line trusted-ranges-error">{{ trustedHeadersError }}</div>
           <div class="form-tip-line">按顺序优先取：把该 CDN 保证覆盖的权威头放最前。{{ trustedPresetNote }}</div>
@@ -266,7 +268,8 @@ import { ansiToHtml } from '@/utils/ansi'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { CDN_PRESETS, DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { buildCaddyConfigPayload } from '@/utils/caddyConfigPayload'
-import { TRUSTED_PROXY_MAX_TOTAL_ENTRIES, trustedProxyExpansion, trustedProxyHeadersError, trustedProxyRangesError, trustedProxyTotalError, trustedProxyTotalWarning } from '@/utils/trustedProxyRanges'
+import { numberOr } from '@/utils/configValues'
+import { TRUSTED_PROXY_MAX_TOTAL_ENTRIES, trustedProxyExpansion, trustedProxyHeadersError, trustedProxyRangesError, trustedProxyReferencedRangesError, trustedProxyTotalError, trustedProxyTotalWarning } from '@/utils/trustedProxyRanges'
 import type { TrustedProxyReferencedEntries } from '@/utils/trustedProxyRanges'
 import { IP_LIST_CATEGORIES, parseIPList, parseRefIds } from '@/utils/securityStages'
 import type { APIResponse, ProxyTimeoutConfig } from '@/types'
@@ -363,10 +366,19 @@ watch(() => [settings.value.trusted_proxy_ranges, settings.value.trusted_proxy_h
   trustedHeaders.value = parseIPList(headers)
   trustedRangeRefs.value = parseRefIds(refs)
 }, { immediate: true })
+// 留档：表单数组回写会规范化存量 JSON 文本（空项/空白/非规范缩进），而后端
+// 变更检测按原始字符串比较，因此带外非规范文本可能在无关保存时触发变更确认。
+// 正常 UI 写入始终是该 JSON.stringify 形态，无用户可感知差异；若要彻底消除，
+// 应把后端变更检测改为解析后比较，或前端在未编辑本节时不回写。
 // 表单数组 → settings（保存载荷经 CADDY_CONFIG_KEYS 拾取 JSON 文本）
 watch(trustedRanges, (list) => { settings.value.trusted_proxy_ranges = JSON.stringify(list) })
 watch(trustedHeaders, (list) => { settings.value.trusted_proxy_headers = JSON.stringify(list) })
 watch(trustedRangeRefs, (ids) => { settings.value.trusted_proxy_range_refs = JSON.stringify(ids) })
+
+const onTrustedHeadersEdit = (values: string[]): void => {
+  trustedPresetKey.value = ''
+  trustedHeaders.value = values
+}
 
 const applyTrustedPreset = (label: string): void => {
   const preset = CDN_PRESETS.find(p => p.label === label)
@@ -488,7 +500,9 @@ const retryRefListEntries = (): void => {
   for (const id of ids) scheduleRefListEntries(id)
 }
 
-const referencedLists = computed<TrustedProxyReferencedEntries[]>(() => trustedRangeRefs.value.map((id) => ({
+type NamedTrustedProxyReferenced = TrustedProxyReferencedEntries & { readonly name: string }
+const referencedLists = computed<NamedTrustedProxyReferenced[]>(() => trustedRangeRefs.value.map((id) => ({
+  name: ipLists.value.find((l) => l.id === id)?.name ?? `列表 #${id}`,
   values: refListEntries.value[id] ?? null,
   entryCount: ipLists.value.find((l) => l.id === id)?.entry_count ?? 0,
 })))
@@ -506,11 +520,14 @@ const trustedTotalError = computed(() => trustedProxyTotalError(trustedRanges.va
 // 非阻断提示：估算合计越限但无法证明真实并集超限（含未加载条目时重叠无法去重）
 // ——不拦保存，由后端按去重后的网段集合兜底判定。
 const trustedTotalWarning = computed(() => trustedProxyTotalWarning(trustedRanges.value, referencedLists.value))
+// 引用名单条目同样套用最小前缀/全空间判据（后端对引用条目也执行这两道门），
+// 未加载名单不参与以免把未知当非法；错误按名单名点名，用户可直接定位。
+const trustedReferencedRangesError = computed(() => trustedProxyReferencedRangesError(referencedLists.value))
 // 关闭态存量非法值：开关关闭不影响后端写侧校验，错误必须显性可见
 const trustedProxyDisabledStaleError = computed(() =>
   settings.value.trusted_proxy_enabled
     ? ''
-    : [trustedRangesError.value, trustedHeadersError.value, trustedTotalError.value].filter(Boolean).join('；'))
+    : [trustedRangesError.value, trustedReferencedRangesError.value, trustedHeadersError.value, trustedTotalError.value].filter(Boolean).join('；'))
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
@@ -607,6 +624,11 @@ const handleSave = async (): Promise<void> => {
     ElMessage.warning(trustedGateMessage(trustedRangesError.value))
     return
   }
+  // 引用名单条目与内联网段同判据（最小前缀/全空间），保存前一并拦下
+  if (trustedReferencedRangesError.value) {
+    ElMessage.warning(trustedGateMessage(trustedReferencedRangesError.value))
+    return
+  }
   // 请求头（条数/字符集）与「内联 + 引用展开」总量同源同门
   if (trustedHeadersError.value) {
     ElMessage.warning(trustedGateMessage(trustedHeadersError.value))
@@ -626,7 +648,26 @@ const handleSave = async (): Promise<void> => {
     // 载荷组装单源：关闭自定义 JSON 时剔除格式键（后端跨字段门会以 400 拒绝
     // 「json=false + 非空格式」，而清空入口又随开关隐藏）。
     const { payload: caddyPayload, accessLogFormatCleared } = buildCaddyConfigPayload(settings.value, CADDY_CONFIG_KEYS)
-    const payload = { ...caddyPayload, source: 'caddy' }
+    // el-input-number 清空回写 null，而后端 *int 把 null 当「未提供」静默跳过，
+    // 界面仍提示保存成功。与 ProxyTimeoutFields 的 `value ?? 0` 同口径归一，
+    // 请求体不得携带 null。
+    const payload = {
+      ...caddyPayload,
+      caddy_log_size_mb: numberOr(settings.value.caddy_log_size_mb, 0),
+      request_body_max_size_mb: numberOr(settings.value.request_body_max_size_mb, 0),
+      http_read_timeout: numberOr(settings.value.http_read_timeout, 0),
+      http_write_timeout: numberOr(settings.value.http_write_timeout, 0),
+      http_idle_timeout: numberOr(settings.value.http_idle_timeout, 0),
+      upstream_keepalive_timeout: numberOr(settings.value.upstream_keepalive_timeout, 0),
+      proxy_dial_timeout: numberOr(settings.value.proxy_dial_timeout, 0),
+      proxy_response_header_timeout: numberOr(settings.value.proxy_response_header_timeout, 0),
+      proxy_read_timeout: numberOr(settings.value.proxy_read_timeout, 0),
+      proxy_write_timeout: numberOr(settings.value.proxy_write_timeout, 0),
+      proxy_stream_timeout: numberOr(settings.value.proxy_stream_timeout, 0),
+      proxy_flush_interval: numberOr(settings.value.proxy_flush_interval, 0),
+      proxy_stream_close_delay: numberOr(settings.value.proxy_stream_close_delay, 0),
+      source: 'caddy',
+    }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     const changed = preview.data?.changed ?? false
     if (changed) {

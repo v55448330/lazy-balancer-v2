@@ -30,13 +30,6 @@ const distributeWeight = <Item extends WeightedItem>(items: Item[], totalWeight:
   const minimumTotal = minimums.reduce((sum, weight) => sum + weight, 0)
   const availableTotal = Math.max(minimumTotal, totalWeight)
   const sourceTotal = items.reduce((sum, item) => sum + normalizedWeight(item), 0)
-  if (sourceTotal === 0) {
-    const baseWeight = Math.floor(availableTotal / items.length)
-    items.forEach((item, index) => {
-      item.weight = index === 0 ? availableTotal - baseWeight * (items.length - 1) : baseWeight
-    })
-    return
-  }
   let allocated = 0
 
   items.forEach((item, index) => {

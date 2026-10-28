@@ -16,8 +16,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"lazy-balancer-v2/internal/db"
 )
 
 // Given Periodic 任务间隔 1h 且已跑完首轮。
@@ -319,22 +317,13 @@ func TestEngine_ScheduledSkippedSlotGetsBoundedBackoff(t *testing.T) {
 	e.StartLoop("t-skip-slot")
 
 	time.Sleep(350 * time.Millisecond)
-	if got := runs.Load(); got == 0 || got > 2 {
-		t.Fatalf("350ms 窗口内执行 %d 次, want 1-2（跳过轮须共用退避，不得 tick 频率重投）", got)
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("350ms 窗口内执行 %d 次, want 1（跳过轮须共用首档退避）", got)
 	}
-	if got := countSkippedRuns(t, "t-skip-slot"); got == 0 {
-		t.Fatal("跳过轮必须落 task_runs.status=skipped")
+	if got := countRunsByStatus(t, "t-skip-slot", "skipped"); got != 1 {
+		t.Fatalf("跳过轮 task_runs.status=skipped 行数=%d, want 1", got)
 	}
 	waitForEngine(t, "退避衰减后重投", 2*time.Second, func() bool { return runs.Load() >= 2 })
-}
-
-func countSkippedRuns(t *testing.T, id string) int {
-	t.Helper()
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=? AND status='skipped'`, id).Scan(&n); err != nil {
-		t.Fatalf("count skipped runs: %v", err)
-	}
-	return n
 }
 
 // Given 注册一个触发类（Oneshot）任务。

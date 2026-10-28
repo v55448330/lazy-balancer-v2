@@ -3,14 +3,14 @@ package taskengine
 // BootSync 前暂停 tick / 在途排空 API / demote×pendingRestart
 
 import (
+	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
-
-// waitForEngine 轮询条件直至超时（竞态测试的终态收敛等待）。
 
 // Stop 的 cancel 遍历与 runNow 的 cancel 登记交错。确定性编排
 // （in-package 直调 runNow）：测试持 roleMu 写锁——runNow 已过 stopped 检查
@@ -19,7 +19,7 @@ import (
 // 全程未取消跑完，修复后临界区内复核 stopped 即取消（Run 落 cancelled）。
 func TestEngine_StopRacingRunNowCancelsInFlight(t *testing.T) {
 	for round := range 5 {
-		e := NewEngine(Options{TickInterval: time.Hour})
+		e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
 		var uncancelled atomic.Int32
 		if err := e.Register(Descriptor{ID: "t-race", Family: "t", Name: "竞态", Kind: KindPeriodic,
 			RunsOn: RoleAny, IntervalFn: func() time.Duration { return time.Hour },
@@ -37,13 +37,18 @@ func TestEngine_StopRacingRunNowCancelsInFlight(t *testing.T) {
 		e.roleMu.Lock() // 阻挡 runNow 的角色门（stopped 检查已通过、cancel 未登记）
 		runDone := make(chan error, 1)
 		go func() { _, err := e.runNow("t-race", "manual", ""); runDone <- err }()
-		time.Sleep(5 * time.Millisecond) // runNow 抵达 roleMu 等待
+		waitForEngine(t, "runNow 抵达角色门", time.Second, func() bool { return e.inFlight.Load() == 1 })
 		stopDone := make(chan struct{})
 		go func() { e.Stop(); close(stopDone) }()
-		time.Sleep(5 * time.Millisecond) // Stop 完成 cancel 遍历（r.cancel==nil 跳过）后阻塞在 runWG.Wait
+		waitForEngine(t, "Stop 标记引擎停止", time.Second, e.IsStopped)
 		e.roleMu.Unlock()
-		<-runDone
+		if err := <-runDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("第 %d 轮：runNow err=%v, want context.Canceled", round, err)
+		}
 		<-stopDone
+		if latest := e.LatestRun("t-race"); latest == nil || latest.Status != "cancelled" {
+			t.Fatalf("第 %d 轮：终态=%+v, want cancelled", round, latest)
+		}
 		if uncancelled.Load() != 0 {
 			t.Fatalf("第 %d 轮：Stop 完成后仍有 Run 全程未被取消而跑完（Stop×runNow 竞态漏取消）", round)
 		}
@@ -122,7 +127,6 @@ func TestEngine_StartPausedDefersTickUntilResume(t *testing.T) {
 	e.StartLoop("p-paused")
 	e.tick()
 	e.tick()
-	time.Sleep(50 * time.Millisecond) // tick 投递为 goroutine——排空执行窗口再断言零
 	if runs.Load() != 0 {
 		t.Fatal("装配暂停期 tick 不得投递周期任务（BootSync 前置不变量）")
 	}
@@ -191,7 +195,7 @@ func TestEngine_RunNowNextSlotFnPanicIsolated(t *testing.T) {
 	}
 }
 
-// 函数同形防护）。
+// nil 库句柄下终态写入不得 panic（函数同形防护）。
 func TestRecordRunFinish_NilDBNoPanic(t *testing.T) {
 	old := db.DB
 	db.DB = nil
@@ -233,9 +237,6 @@ func TestEngine_CancelInFlightRuns(t *testing.T) {
 	}
 	if !e.IsRunning("d-inflight") {
 		t.Fatal("常驻族不在排空范围（取消即停摆，生命周期归角色门/启停）")
-	}
-	if !e.IsTaskInFlight("p-inflight") && e.IsRunning("d-inflight") {
-		return // 正常终态
 	}
 	waitForEngine(t, "在途 Run 取消落定", 2*time.Second, func() bool { return !e.IsTaskInFlight("p-inflight") })
 }

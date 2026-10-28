@@ -274,9 +274,9 @@ func TestDirBytes_MatchesAggregateDirStatsForRotationFamilies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	aggregate := aggregateDirStats(dir, caddyLogFamilyMatch)
+	aggregate := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 	for _, base := range []string{"caddy.log", "caddy-tls.log"} {
-		active, rotated, count := dirBytes(filepath.Join(dir, base))
+		active, rotated, count := dirBytesWithEntries(filepath.Join(dir, base), nil)
 		st := aggregate[base]
 		if active != st.Active || rotated != st.Rotated || count != st.RotCount {
 			t.Fatalf("%s: dirBytes=(%d,%d,%d) aggregate=(%d,%d,%d)——两套分类器分叉",

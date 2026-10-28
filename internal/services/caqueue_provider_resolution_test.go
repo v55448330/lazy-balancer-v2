@@ -1,6 +1,29 @@
 package services
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"lazy-balancer-v2/internal/models"
+)
+
+// stubProviderQueueWithoutIssuance 预置 provider 的运行期队列并把执行体置空
+// （同 caqueue_provider_normalize_test.go 的「不发起真实签发」口径）。
+// 直构 &CAQueueManager{queues: …} 的用例只断言解析/入队/落库，若让
+// enqueueLocked → newCAQueue 用默认执行体（NewCertIssuer(...).Issue）建队列，
+// 用例会把真实 ACME 流程拉到网络，结果依赖外部服务与网络时延。
+// loop 必须照常启动：Stop/PauseAndDrain 都要等 loopDone 关闭。
+func stubProviderQueueWithoutIssuance(t *testing.T, manager *CAQueueManager, provider models.CAProvider) *caQueue {
+	t.Helper()
+	queue := newCAQueue(provider, func() error { return nil }, t.TempDir())
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
+	go queue.loop()
+	t.Cleanup(queue.stop)
+	manager.mu.Lock()
+	manager.queues[provider.ID] = queue
+	manager.mu.Unlock()
+	return queue
+}
 
 // 「跟随默认 CA」（规则 ca_provider_id=0）的语义收敛：任务行不得固化默认的快照，
 // 每次入队都按当前默认解析。否则管理员切换默认并禁用旧 provider 后，该规则的
@@ -25,6 +48,9 @@ func TestCAQueueManager_followDefaultRuleResolvesCurrentDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	// 预置当前默认(8)的运行期队列并置空执行体：本用例只断言「跟随默认」的解析
+	// 与入队落点，不得让 enqueueLocked 用默认执行体拉起真实 ACME 流程。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 8, Name: "new default", Provider: "letsencrypt"})
 
 	// 切换默认到 8 并禁用旧 provider 7——此时没有任何规则显式引用 7。
 	if _, err := database.Exec(`UPDATE global_config SET default_ca_provider_id=8 WHERE id=1`); err != nil {
@@ -76,6 +102,9 @@ func TestCAQueueManager_explicitRuleProviderStillPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	// 预置 provider 7 的运行期队列并置空执行体：用例只断言显式选择的固化，
+	// 不得让 enqueueLocked 拉起真实 ACME 流程。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 7, Name: "explicit", Provider: "letsencrypt"})
 	if _, err := manager.requeueStrandedQueuedJobs(); err != nil {
 		t.Fatalf("requeue stranded queued jobs: %v", err)
 	}

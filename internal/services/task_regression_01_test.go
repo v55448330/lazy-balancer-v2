@@ -282,16 +282,17 @@ func TestTriggerTaskAsync_concurrentOnlyWinnerAudits(t *testing.T) {
 	}
 	before := auditCount(t, "触发")
 	TriggerTaskAsync(te, "probe-concurrent", TriggerAuditContext{Operator: "tester", Family: "任务监控", Name: "并发探针"})
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("胜者优先进入 Run")
+	}
 	TriggerTaskAsync(te, "probe-concurrent", TriggerAuditContext{Operator: "tester", Family: "任务监控", Name: "并发探针"})
-	// 败者 CAS 落败路径已返回；放行胜者并等待审计落库。
-	time.Sleep(100 * time.Millisecond)
-	release <- struct{}{}
+	close(release)
 	waitForCond(t, 2*time.Second, func() bool {
 		lr := te.LatestRun("probe-concurrent")
-		return lr != nil && lr.Status == "success"
+		return lr != nil && lr.Status == "success" && auditCount(t, "触发")-before == 1
 	})
-	time.Sleep(200 * time.Millisecond)
 
 	var runs int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id='probe-concurrent' AND trigger='manual'`).Scan(&runs); err != nil {

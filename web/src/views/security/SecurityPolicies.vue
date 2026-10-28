@@ -1439,8 +1439,8 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
     stage3Rows.push({ label: '记录请求体', value: d.log_request_body ? '启用' : '关闭' })
   }
   const page = d.block_page_id > 0 ? blockPages.value.find((p) => p.id === d.block_page_id) : undefined
-  // 地域模式词表键（off 已在上游分支排除；缺省按 deny 展示）
-  const geoipMode = d.geoip_mode ?? 'deny'
+  // 地域模式词表键（off 已在上游分支排除；未知/空模式显性说明，不得代填 deny）
+  const geoipMode = d.geoip_mode ?? 'off'
   return [
     {
       title: '基础信息',
@@ -1470,7 +1470,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: '访问控制', value: d.ip_acl_enabled === true || hasIPACLControl(d) ? formatAclModeDetail(ipLists.value, d) : '未启用' },
         // 信任名单只归阶段 0 段（2026-09-21 用户裁定：独立阶段 0，阶段 1 不再重复展示）
         { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off'
-          ? `${hasOwn(GEOIP_MODE_LABELS, geoipMode) ? GEOIP_MODE_LABELS[geoipMode] : geoipMode} · ${geoCount} 区域`
+          ? `${hasOwn(GEOIP_MODE_LABELS, geoipMode) ? GEOIP_MODE_LABELS[geoipMode] : geoipMode || '未配置模式'} · ${geoCount} 区域`
           : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
       ],
     },
@@ -3165,14 +3165,14 @@ async function openDialog(row?: PolicySummary) {
         mode: d.mode,
         anomaly_threshold: d.anomaly_threshold,
         ip_acl_enabled: d.ip_acl_enabled,
-        ip_acl_mode: d.ip_acl_mode || 'allow',
+        ip_acl_mode: d.ip_acl_mode ?? '',
         rate_limit_enabled: d.rate_limit_enabled,
         rate_limit_rps: d.rate_limit_rps,
         rate_limit_burst: d.rate_limit_burst,
         block_page_id: d.block_page_id,
         block_status_code: d.block_status_code || 403,
         geoip_enabled: false,
-        geoip_mode: d.geoip_mode || 'deny',
+        geoip_mode: d.geoip_mode ?? 'off',
         geoip_crawler_exempt: d.geoip_crawler_exempt === true,
         // 字段缺失 → 默认三引擎；显式 "[]" 原样保留（后端空集语义=全部引擎）——
         // 用兜底改写成三项会让「全部」在任意一次保存后被静默收窄。
@@ -3191,7 +3191,7 @@ async function openDialog(row?: PolicySummary) {
     ipWhitelistEnabled.value = typeof d.ip_whitelist_enabled === 'boolean' ? d.ip_whitelist_enabled : ipWhitelist.value.length > 0
     ipBlacklistSelf.value = parseIPList(d.ip_blacklist)
     geoipCountries.value = parseIPList(d.geoip_countries)
-    form.value.geoip_enabled = (d.geoip_mode || 'deny') !== 'off' && geoipCountries.value.length > 0
+    form.value.geoip_enabled = (d.geoip_mode ?? 'off') !== 'off' && geoipCountries.value.length > 0
       crsRuleGroups.value = normalizeCrsGroups(parseIPList(d.crs_rule_groups))
       crsExcludedRows.value = parseCrsExcludedRules(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)

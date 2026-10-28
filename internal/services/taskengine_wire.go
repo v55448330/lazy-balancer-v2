@@ -537,7 +537,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 长跑期间 StopTaskEngine 可能把全局置 nil；闭包内固定句柄，
 			// 收尾调用不会 nil 解引用。
 			te := TaskEngine()
-			result := CertRenewalScanOnce()
+			result := CertRenewalScanOnce(rc.Ctx)
 			// 入队即唤醒 CA 等待补扫（默认调度关闭）。走 RearmLoop
 			// 有活唤醒——仅在确有在途任务时越过「已停止」态，不再无条件
 			// StartLoop（避免把用户手动停止的调度隐式打开）。

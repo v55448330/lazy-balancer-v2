@@ -14,14 +14,7 @@ import (
 // When 时区从 Asia/Shanghai 切到 UTC 后调用 RearmScheduleSlotsAfterTimezoneChange。
 // Then 未来槽按新时区重算（04:00 本地 = 04:00 UTC）；过期槽与关开关行不动。
 func TestRearmScheduleSlotsAfterTimezoneChange(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatal(err)
 	}
@@ -88,14 +81,7 @@ func TestRearmScheduleSlotsAfterTimezoneChange(t *testing.T) {
 // Then 两张源表槽保持原值（不得用读侧 fail-soft 的默认 04:00 回写）；版本表族
 // 照常重排；读恢复后源表族按新时区重排。
 func TestRearmScheduleSlotsAfterTimezoneChange_scheduleReadFailureKeepsSourceSlots(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatal(err)
 	}
@@ -266,14 +252,7 @@ func TestParseUTCTimeDual_bothLayouts(t *testing.T) {
 // 唯一来源（GetCRSInfo/GetIP2RegionInfo 直读），与 setVersionTableSchedule
 // 「关闭也重排、调度器仍受开关门控」同口径——切换时区后不得停留在旧偏移。
 func TestRearmScheduleSlotsAfterTimezoneChange_reschedulesDisplaySlotWhenAutoUpdateOff(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatal(err)
 	}

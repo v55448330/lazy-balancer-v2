@@ -30,6 +30,29 @@ func setupIsolatedDB(t *testing.T) *sql.DB {
 	return database
 }
 
+// setupIsolatedDBWithMetrics 在临时库上同时初始化主库与指标库，清理时还原
+// 全部全局句柄（含 db.GetDB 的原子句柄）。指标类夹具必须复用本 helper：
+// 手工「db.Initialize + db.InitializeMetricsDB + 只回写三个导出变量」会留下
+// 未还原的 db.GetDB 句柄（后台刷新循环读到刚被 Close 的库），且
+// InitializeMetricsDB 直接覆盖 MetricsDB 不关闭旧池。
+func setupIsolatedDBWithMetrics(t *testing.T) *sql.DB {
+	t.Helper()
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatalf("initialize test database: %v", err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatalf("initialize test metrics database: %v", err)
+	}
+	database := db.DB
+	t.Cleanup(func() {
+		_ = db.Close()
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
+	})
+	return database
+}
+
 // restoreGlobalDBHandles 恢复三个全局句柄并同步 db.GetDB() 的原子句柄：
 // 只还原导出变量会让后台刷新循环（GetDB 消费方）继续读到刚被 Close 的库。
 // 所有直接调用 db.Initialize 的夹具共用本实现（单一出处，避免各自演化）。
@@ -48,6 +71,7 @@ func TestSecurityDBFixtures_restoreEveryGlobalHandle(t *testing.T) {
 		name string
 		run  func(*testing.T)
 	}{
+		{name: "task isolated DB helper", run: func(t *testing.T) { setupIsolatedDB(t) }},
 		{name: "geoip helper", run: setupGeoipConfigTestDB},
 		{name: "auto backup helper", run: setupAutoBackupTestDB},
 		{name: "services regression helper", run: setupU05ServicesDB},

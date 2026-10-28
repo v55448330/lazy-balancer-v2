@@ -863,7 +863,7 @@ func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused
 	// When
 	// 返回值必须断言：角色读失败/查询崩溃同样「状态未变」，只看状态无法
 	// 区分「暂停门生效」与「扫描整体失败」。
-	if err := service.renewExpiringCertificates(); err != nil {
+	if err := service.renewExpiringCertificates(context.Background()); err != nil {
 		t.Fatalf("续期扫描在队列暂停时不得失败: %v", err)
 	}
 	if requeued, disabled, err := service.requeueWaitingCAJobs(); err != nil {
@@ -913,7 +913,7 @@ func TestCertificateService_renewExpiringCertificates_retries_failed_first_issua
 	done := make(chan struct{})
 	resetCertificateServiceForTest(t)
 	go func() {
-		NewCertificateService().renewExpiringCertificates()
+		NewCertificateService().renewExpiringCertificates(context.Background())
 		close(done)
 	}()
 
@@ -972,7 +972,7 @@ func TestCertificateService_renewExpiringCertificates_usesRenewalFlowForIssuedMi
 		t.Fatalf("renewal candidates=%v err=%v, want issued NULL job", jobs, err)
 	}
 	go func() {
-		service.renewExpiringCertificates()
+		service.renewExpiringCertificates(context.Background())
 		close(done)
 	}()
 
@@ -1027,7 +1027,7 @@ func TestCertificateService_renewExpiringCertificates_logs_capped_skip(t *testin
 
 	// When
 	resetCertificateServiceForTest(t)
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	// Then：静默跳过必须留 warn 痕（含任务号与上限值）
 	if !strings.Contains(buf.String(), "已达最大重试次数") {
@@ -1070,7 +1070,7 @@ func TestCertificateService_renewExpiringCertificates_summaryTiersCappedJobs(t *
 
 	// When
 	resetCertificateServiceForTest(t)
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	// Then：N=2 其中 M=1 分档可见（修复前两任务混入同一「待重试」口径）
 	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
@@ -1132,7 +1132,7 @@ func TestCertificateService_renewExpiringCertificates_summaryKeepsPlainFormWitho
 	t.Cleanup(func() { taskengine.SetLogDir(oldDir) })
 
 	resetCertificateServiceForTest(t)
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
 	if err != nil {
@@ -1325,11 +1325,18 @@ func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_j
 		close(scanReady)
 		<-resumeScan
 	}
-	scanDone := make(chan struct{})
+	// 返回值必须断言：扫描整体失败/提前返回同样留下「状态未变」，只看状态
+	// 无法区分「暂停门拦住重排」与「扫描根本没跑到」（同
+	// TestCertificateService_requeueWaitingCAJobs_* 的契约）。
+	type scanOutcome struct {
+		requeued, disabled int
+		err                error
+	}
+	scanDone := make(chan scanOutcome, 1)
 	resetCertificateServiceForTest(t)
 	go func() {
-		NewCertificateService().requeueWaitingCAJobs()
-		close(scanDone)
+		requeued, disabled, err := NewCertificateService().requeueWaitingCAJobs()
+		scanDone <- scanOutcome{requeued: requeued, disabled: disabled, err: err}
 	}()
 	<-scanReady
 	pauseDone := make(chan struct{})
@@ -1339,7 +1346,13 @@ func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_j
 	}()
 	<-pauseDone
 	close(resumeScan)
-	<-scanDone
+	outcome := <-scanDone
+	if outcome.err != nil {
+		t.Fatalf("waiting_ca 重排扫描在队列暂停时不得失败: %v", outcome.err)
+	}
+	if outcome.requeued != 0 || outcome.disabled != 0 {
+		t.Fatalf("requeued=%d disabled=%d, want 0/0（暂停门必须拦住全部重排，也不得误判孤儿）", outcome.requeued, outcome.disabled)
+	}
 
 	var status string
 	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_pause_scan'").Scan(&status); err != nil {
@@ -2763,7 +2776,7 @@ func TestRenewalScanRechecksRoleBeforeEachEnqueue(t *testing.T) {
 	t.Cleanup(func() { certRenewalRoleRecheckHook = oldHook })
 
 	resetCertificateServiceForTest(t)
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	if calls < 2 {
 		t.Fatalf("逐任务角色复核未执行（hook 调用 %d 次）", calls)
@@ -2799,7 +2812,7 @@ func TestRenewalScan_capped_waiting_ca_failure_clears_cooldown_fields(t *testing
 	}
 
 	// When
-	NewCertificateService().renewExpiringCertificates()
+	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	// Then
 	var status string

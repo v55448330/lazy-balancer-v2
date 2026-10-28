@@ -85,9 +85,22 @@ func ConfigureWafDirs(dataDir string) {
 	auditLogPath = filepath.Join(parent, "logs", "waf-audit", "audit.log")
 	securityEventsOffsetPath = filepath.Join(dataDir, "security_events.offset")
 	// IPC socket 与 fallback spool 同属数据卷派生面（默认 /app/data/...）：
-	// 自定义 data_dir 时写侧与读侧必须落在同一目录（env 缺席时以派生值为准）。
+	// 自定义 data_dir 时写侧与读侧必须落在同一目录。面板派生值仅在对应 env
+	// 缺席时注入进程环境，随后启动的 Caddy 子进程继承；显式值（含空串关闭 IPC）
+	// 始终优先，不被面板覆盖。
 	securityEventsIPCSocketPath = filepath.Join(dataDir, "security-events.sock")
 	securityEventsSpoolDir = filepath.Join(dataDir, "security-events-spool")
+	for _, item := range []struct{ name, path string }{
+		{SecurityEventsIPCSocketEnv, securityEventsIPCSocketPath},
+		{SecurityEventsSpoolDirEnv, securityEventsSpoolDir},
+	} {
+		if _, present := os.LookupEnv(item.name); present {
+			continue
+		}
+		if err := os.Setenv(item.name, item.path); err != nil {
+			Logf("error", "无法向 Caddy 子进程传播安全事件 IPC 路径 %s=%s: %v", item.name, item.path, err)
+		}
+	}
 }
 
 // CRSLiveDir 返回 CRS 活树目录（ConfigureWafDirs 派生后的当前值）。handlers
@@ -159,18 +172,25 @@ type ipListProjectionMemoEntry struct {
 // 删除的唯一判据。不能用「目录里有、快照里没有」判定：快照阶段的瞬时读失败/
 // 目录列举失败会让在役投影缺项，按缺失判据回滚即把它当作渲染新增删除——运行
 // 中 Caddy 的 @ipListFast 会读到文件不存在，allow/deny 名单同时失效。
-// 生命周期：SnapshotIPListProjections 开启一轮，RestoreIPListProjections 或
-// EndIPListProjectionPass 收尾（成功路径不删除任何文件，只释放清单）。
-// 并发前提与 ipListRenderRefs 同款：渲染串行。
+// 生命周期：SnapshotIPListProjections 开启一轮（并持有渲染串行锁），
+// RestoreIPListProjections 或 EndIPListProjectionPass 收尾（成功路径不删除
+// 任何文件，只释放清单）。单规则只读预检渲染（GenerateSingleRuleCaddyConfig）
+// 同样持该锁：此前「渲染串行」只是注释，预检与写路径交错时预检新建文件会被
+// 写入路径的回滚清单误删。
+var ipListProjectionRenderMu sync.Mutex
+
 var ipListProjectionPass = struct {
-	mu      sync.Mutex
-	created map[string]struct{}
+	mu       sync.Mutex
+	created  map[string]struct{}
+	lockHeld bool
 }{}
 
 func beginIPListProjectionPass() map[string]struct{} {
+	ipListProjectionRenderMu.Lock()
 	created := make(map[string]struct{})
 	ipListProjectionPass.mu.Lock()
 	ipListProjectionPass.created = created
+	ipListProjectionPass.lockHeld = true
 	ipListProjectionPass.mu.Unlock()
 	return created
 }
@@ -183,12 +203,18 @@ func noteIPListProjectionCreated(path string) {
 	ipListProjectionPass.mu.Unlock()
 }
 
-// EndIPListProjectionPass 结束本轮渲染的新建清单跟踪（渲染成功后调用：新建的
-// 投影已随配置提交，不得再被后续回滚删除）。
+// EndIPListProjectionPass 结束本轮渲染的新建清单跟踪并释放渲染串行锁
+// （渲染成功后调用：新建的投影已随配置提交，不得再被后续回滚删除）。
+// 可重复调用：只有真正持有快照锁的那一次释放互斥量。
 func EndIPListProjectionPass() {
 	ipListProjectionPass.mu.Lock()
 	ipListProjectionPass.created = nil
+	held := ipListProjectionPass.lockHeld
+	ipListProjectionPass.lockHeld = false
 	ipListProjectionPass.mu.Unlock()
+	if held {
+		ipListProjectionRenderMu.Unlock()
+	}
 }
 
 func ipListInputHash(entries []string) uint64 {

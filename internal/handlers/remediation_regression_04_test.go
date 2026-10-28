@@ -194,7 +194,7 @@ func TestDirBytesCountsWholeFileGz(t *testing.T) {
 	if err := os.WriteFile(base+".gz", bytes.Repeat([]byte("z"), 100), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	active, rotated, count := dirBytes(base)
+	active, rotated, count := dirBytesWithEntries(base, nil)
 	if active != 4 || rotated != 100 || count != 1 {
 		t.Fatalf("active=%d rotated=%d count=%d, want 4/100/1", active, rotated, count)
 	}

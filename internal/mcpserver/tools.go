@@ -205,7 +205,7 @@ var toolUsage = map[string]string{
 	"get_caddy_status":             "查看 Caddy 进程运行状态",
 	"get_caddy_config":             "查看 Caddy 当前加载的完整 JSON 配置",
 	"get_caddy_logs":               "查看 Caddy 运行日志（runtime/server/proxy/tls，按类型过滤）",
-	"update_caddy_config":          "直接更新 Caddy 配置（高级操作，慎用）",
+	"update_caddy_config":          "直接更新 Caddy 配置：content 传完整 Caddy 配置的 JSON 文本（字符串形式；与 REST PUT /caddy/config 同形，高级操作慎用）",
 	"start_caddy":                  "启动 Caddy 进程",
 	"stop_caddy":                   "停止 Caddy 进程",
 	"restart_caddy":                "重启 Caddy 进程",

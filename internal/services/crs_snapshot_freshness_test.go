@@ -77,21 +77,24 @@ func TestReconcileCRSState_keepsSnapshotWhenItIsTheRecoverySource(t *testing.T) 
 	}
 }
 
-// bundled live 不额外写快照：镜像自带规则本就由 dist 重播，用 bundled 版本给
-// 用户快照错标会让下一次升级的播种选择分叉。
-func TestReconcileCRSState_bundledLiveDoesNotRewriteSnapshot(t *testing.T) {
+// bundled live 已存在完整但不同版本的快照时必须重建；缺席快照仍由既有
+// skipsSnapshotRebuildForBundledLive 用例保持不写，避免无意义复制。
+func TestReconcileCRSState_bundledLiveHealsStaleCompleteSnapshot(t *testing.T) {
 	setupIsolatedDB(t)
 	root := t.TempDir()
 	liveDir := filepath.Join(root, "waf", "crs")
 	snapshotDir := filepath.Join(root, "data", "crs")
 	writeTestFile(t, filepath.Join(liveDir, "rules", crsRulesProbeFile), "SecRule bundled")
 	writeTestFile(t, filepath.Join(liveDir, crsVersionFile), CRSBundledVersion+"\n")
-	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsRulesProbeFile), "SecRule snapshot-kept")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsRulesProbeFile), "SecRule snapshot-stale")
 	writeTestFile(t, filepath.Join(snapshotDir, crsVersionFile), "v3.0.0\n")
 
 	reconcileCRSStateFrom(liveDir, snapshotDir, CRSBundledVersion)
 
-	if got := readCRSVersionMarker(snapshotDir); got != "v3.0.0" {
-		t.Fatalf("快照 VERSION=%q, want v3.0.0（bundled live 不得写快照）", got)
+	if got := readCRSVersionMarker(snapshotDir); got != CRSBundledVersion {
+		t.Fatalf("快照 VERSION=%q, want %q（陈旧快照必须按健康 live 自愈）", got, CRSBundledVersion)
+	}
+	if data, err := os.ReadFile(filepath.Join(snapshotDir, "rules", crsRulesProbeFile)); err != nil || string(data) != "SecRule bundled" {
+		t.Fatalf("快照规则树=%q,%v；want bundled live 内容", data, err)
 	}
 }

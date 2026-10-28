@@ -21,6 +21,16 @@ func TestNormalizeInterruptedUpdateStatuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='running', message='crash-sim' WHERE name='ustc'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET update_status='running', message='crash-sim'`); err != nil {
+		t.Fatal(err)
+	}
+
 	normalizeInterruptedUpdateStatuses()
 
 	for _, tc := range []struct{ table, task string }{
@@ -37,6 +47,15 @@ func TestNormalizeInterruptedUpdateStatuses(t *testing.T) {
 		}
 		if !strings.Contains(message, "进程重启回收") {
 			t.Fatalf("%s 归一后 message 应说明回收原因, got %q", tc.task, message)
+		}
+	}
+	for _, table := range []string{"security_threat_sources", "security_crawler_sources"} {
+		var active, recovered int
+		if err := db.DB.QueryRow(`SELECT SUM(update_status='running'), SUM(update_status='failed' AND message LIKE '%进程重启回收%') FROM `+table).Scan(&active, &recovered); err != nil {
+			t.Fatal(err)
+		}
+		if active != 0 || recovered < 1 {
+			t.Fatalf("%s 源表活动态未逐行归一: running=%d recovered=%d", table, active, recovered)
 		}
 	}
 

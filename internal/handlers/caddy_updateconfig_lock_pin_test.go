@@ -9,14 +9,29 @@ package handlers
 // 基线钉测试（钉既有正确行为），按豁免 RED，判定变更披露见修复报告。
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+type updateConfigSignalingBody struct {
+	io.Reader
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (body *updateConfigSignalingBody) Read(p []byte) (int, error) {
+	body.once.Do(func() { close(body.entered) })
+	return body.Reader.Read(p)
+}
+
+func (body *updateConfigSignalingBody) Close() error { return nil }
 
 // Given caddyOpMu 被预持（模拟并发的规则/安全写临界区）。
 // When UpdateConfig 处理请求（生产方法=PUT）。
@@ -28,11 +43,20 @@ func TestUpdateConfig_holds_rule_operation_lock(t *testing.T) {
 
 	h.caddyOpMu.Lock()
 	done := make(chan int, 1)
+	entered := make(chan struct{})
 	go func() {
 		response := httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"timezone":"Asia/Shanghai"}`)))
+		body := &updateConfigSignalingBody{Reader: strings.NewReader(`{"timezone":"Asia/Shanghai"}`), entered: entered}
+		request := httptest.NewRequest(http.MethodPut, "/config", body)
+		router.ServeHTTP(response, request)
 		done <- response.Code
 	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		h.caddyOpMu.Unlock()
+		t.Fatal("请求未进入 body 读取阶段——正向屏障失效")
+	}
 	select {
 	case code := <-done:
 		h.caddyOpMu.Unlock()

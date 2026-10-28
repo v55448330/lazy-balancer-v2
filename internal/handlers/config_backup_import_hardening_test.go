@@ -907,3 +907,40 @@ func TestImportUsers_warnsAboutAttributionMismatch(t *testing.T) {
 		t.Fatalf("updated_by=%d, want 保持 2（导入不改写归属字段）", updatedBy)
 	}
 }
+
+func TestImportUsers_snapshotFailureSkipsAttributionMismatchWarning(t *testing.T) {
+	newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (2,'carol','hash','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	names := snapshotImportUserNames(context.Background(), tx)
+	if names == nil || names[2] != "carol" {
+		tx.Rollback()
+		t.Fatalf("正常快照=%v, want id 2=carol 且非 nil", names)
+	}
+	tx.Rollback()
+
+	if _, err := db.DB.Exec(`ALTER TABLE users RENAME COLUMN username TO snapshot_failure`); err != nil {
+		t.Fatalf("force username snapshot failure: %v", err)
+	}
+	tx, err = db.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	names = snapshotImportUserNames(context.Background(), tx)
+	if names != nil {
+		t.Fatalf("快照失败必须返回 nil 以跳过归属统计，got non-nil %#v", names)
+	}
+}
+
+func TestBackupNullDefaults_geoIPModeMatchesImportNormalization(t *testing.T) {
+	if got := backupTableNullDefaults["security_policies"]["geoip_mode"]; got != "deny" {
+		t.Fatalf("NULL 默认映射 geoip_mode=%v, want 与导入归一值 deny 一致", got)
+	}
+}

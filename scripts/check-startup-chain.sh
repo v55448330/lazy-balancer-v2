@@ -135,4 +135,44 @@ while IFS= read -r target; do
   fi
 done <<<"$exec_targets"
 
-echo "startup chain ok (entrypoint syntax + ${script_count} scripts + ${target_count} exec targets against $(grep -c . <<<"$image_paths") image paths)"
+# 3) 裸命令语义面：exec 之外的启动依赖也必须由最终镜像提供。
+# caddy 由 COPY 落到固定路径；sqlite3 来自 apk 的 sqlite 包；wget 来自 Alpine
+# 自带 BusyBox。只检查 entrypoint 实际使用的命令，未使用时不强制安装。
+final_stage="$(awk -v last_from="$last_from_line" 'FNR >= last_from { print }' "$dockerfile")"
+command_count=0
+if grep -Eq '(^|[;[:space:]])caddy([[:space:]]|$)' "$entrypoint"; then
+  command_count=$((command_count + 1))
+  if ! printf '%s\n' "$image_paths" | grep -qxF '/usr/local/bin/caddy'; then
+    echo "FAIL: 入口脚本使用裸命令 caddy，但最终镜像缺少 /usr/local/bin/caddy" >&2
+    exit 1
+  fi
+fi
+if grep -Eq '(^|[;[:space:]])sqlite3([[:space:]]|$)' "$entrypoint"; then
+  command_count=$((command_count + 1))
+  if ! awk '/^[[:space:]]*#/ { next } { print }' <<<"$final_stage" | grep -Eq '(^|[[:space:]])sqlite([[:space:]]|$)'; then
+    echo "FAIL: 入口脚本使用 sqlite3，但最终镜像阶段未安装 sqlite 包" >&2
+    exit 1
+  fi
+fi
+if grep -Eq '(^|[;[:space:]])wget([[:space:]]|$)' "$entrypoint"; then
+  command_count=$((command_count + 1))
+  if ! grep -Eq '^[[:space:]]*FROM[[:space:]]+alpine:' <<<"$final_stage"; then
+    echo "FAIL: 入口脚本使用 wget，但最终镜像不是提供 BusyBox wget 的 Alpine 基线" >&2
+    exit 1
+  fi
+fi
+
+# 4) pause 标记跨 Shell/Go 三处必须逐字一致；注释里的同名文本不参与判定。
+shell_pause="$(awk -F= '$1 == "CADDY_PAUSE_FILE" { print $2 }' "$entrypoint")"
+handler_pause="$(awk -F\" '/^var caddyPauseFile = / { print $2 }' "$repo_root/internal/handlers/caddy.go")"
+main_pause="$(awk -F\" '/^const caddyPauseFileDefaultPath = / { print $2 }' "$repo_root/cmd/server/main.go")"
+if [[ -z "$shell_pause" || -z "$handler_pause" || -z "$main_pause" ]]; then
+  echo "FAIL: pause 标记声明无法解析（Shell/handlers/main 任一缺失即零覆盖）" >&2
+  exit 1
+fi
+if [[ "$shell_pause" != "$handler_pause" || "$shell_pause" != "$main_pause" ]]; then
+  echo "FAIL: pause 标记跨进程漂移: entrypoint=$shell_pause handlers=$handler_pause main=$main_pause" >&2
+  exit 1
+fi
+
+echo "startup chain ok (entrypoint syntax + ${script_count} scripts + ${target_count} exec targets + ${command_count} bare commands + pause parity against $(grep -c . <<<"$image_paths") image paths)"

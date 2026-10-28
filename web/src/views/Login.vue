@@ -1,6 +1,6 @@
 <template>
   <div class="login-container">
-    <el-card class="login-card">
+    <el-card class="login-card" v-loading="checkingSetup" element-loading-text="正在检查登录状态...">
       <div class="login-header">
         <div class="logo-wrapper">
           <AppLogo :size="64" />
@@ -73,6 +73,10 @@
         </el-form>
 
         <template v-else>
+          <div v-if="oidcStatusError" class="oidc-status-error">
+            <el-alert :title="oidcStatusError" type="error" show-icon :closable="false" class="login-error" />
+            <el-button text type="primary" :loading="oidcStatusLoading" @click="loadOidcStatus">重试</el-button>
+          </div>
           <!-- v2.3.0 OIDC:品牌主按钮;本地账号次级入口,可双向切换 -->
           <div v-if="oidcEnabled && !showLocalForm" class="oidc-login">
             <button class="oidc-sso-btn" :disabled="oidcRedirecting" @click="goOIDCLogin">
@@ -290,6 +294,30 @@ const oidcEnabled = ref(false)
 const oidcDisplayName = ref('OIDC')
 const showLocalForm = ref(false)
 const oidcRedirecting = ref(false)
+const oidcStatusError = ref('')
+const oidcStatusLoading = ref(false)
+const loadOidcStatus = async (): Promise<void> => {
+  if (oidcStatusLoading.value) return
+  oidcStatusLoading.value = true
+  try {
+    const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true })
+    oidcEnabled.value = res.data?.enabled === true
+    if (oidcEnabled.value) oidcDisplayName.value = res.data?.display_name || 'OIDC'
+    oidcStatusError.value = ''
+  } catch (caught: unknown) {
+    const status = caught instanceof ApiRequestError ? caught.status : undefined
+    if (status === 403) {
+      oidcEnabled.value = false
+      oidcStatusError.value = ''
+    } else {
+      // 状态未知不等于未启用：纯 OIDC 账户必须看到故障与重试入口，
+      // 本地表单仍保留给已有本地密码的账户使用。
+      oidcStatusError.value = '无法获取企业登录状态，请重试或使用本地账号登录'
+    }
+  } finally {
+    oidcStatusLoading.value = false
+  }
+}
 onMounted(async () => {
   // OIDC 跳转失败(302)经 hash query 携带 oidc_error——展示后从
   // hash 清除(参照回调错误链的一次性语义)。
@@ -311,18 +339,22 @@ onMounted(async () => {
   } catch { /* 隐私模式 */ }
   // 回调失败不再经 sessionStorage 传递——App 在解析 hash 时
   // 当场提示（已持有效会话、Login 不挂载的路径也能看到），此读取通道随之删除。
-  try {
-    const res = await request.get<{ data?: { enabled?: boolean; display_name?: string } }>('/auth/oidc/status', { silent: true })
-    if (res.data?.enabled) {
-      oidcEnabled.value = true
-      oidcDisplayName.value = res.data.display_name || 'OIDC'
-    }
-  } catch {
-    // 状态端点不可达=未启用,静默回退本地登录
-  }
+  await loadOidcStatus()
 })
+let oidcRedirectTimer: ReturnType<typeof setTimeout> | null = null
+const clearOidcRedirectTimer = (): void => {
+  if (oidcRedirectTimer !== null) clearTimeout(oidcRedirectTimer)
+  oidcRedirectTimer = null
+}
 const goOIDCLogin = () => {
+  if (oidcRedirecting.value) return
+  clearOidcRedirectTimer()
   oidcRedirecting.value = true
+  // 顶层导航若被浏览器/扩展中止，pageshow 不会触发；十秒后恢复入口。
+  oidcRedirectTimer = setTimeout(() => {
+    oidcRedirecting.value = false
+    oidcRedirectTimer = null
+  }, 10_000)
   // 深链保持：登录前停留的页面键（首屏 ?page= 已由 auth store 消费进
   // currentPage）随 return_to 回跳；后端只放行站内相对路径，App 侧再按
   // isPageId 白名单兜底（未知值回 dashboard）。
@@ -338,12 +370,17 @@ const goOIDCLogin = () => {
 }
 // IdP 侧「返回」经 bfcache 恢复时 JS 状态保留——复位跳转锁,防 SSO
 // 按钮永久禁用(整页跳转本无重复提交面,disabled 仅作点击反馈)。
-// 监听器随组件卸载移除(防登出-登录循环渐进累积)。
+// 监听器与计时器随组件卸载清理(防登出-登录循环渐进累积)。
 const onPageShow = (e: PageTransitionEvent) => {
-  if (e.persisted) oidcRedirecting.value = false
+  if (!e.persisted) return
+  clearOidcRedirectTimer()
+  oidcRedirecting.value = false
 }
 window.addEventListener('pageshow', onPageShow)
-onUnmounted(() => window.removeEventListener('pageshow', onPageShow))
+onUnmounted(() => {
+  clearOidcRedirectTimer()
+  window.removeEventListener('pageshow', onPageShow)
+})
 
 const handleLogin = async () => {
   if (loading.value) return

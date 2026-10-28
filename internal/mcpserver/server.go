@@ -23,6 +23,7 @@ import (
 
 	"lazy-balancer-v2/internal/apikey"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/netutil"
 )
 
@@ -81,8 +82,17 @@ var createCustomRuleSchema = `{"type":"object","required":["name","conditions","
 var updateCustomRuleSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"规则 ID"},` + customRuleFieldsSchema + `},"additionalProperties":true}`
 
 // blockPageFieldsSchema 与 validateBlockPagePayload 同口径（name/content
-// 必填、content ≤64KB、content_type 四值白名单缺省 text/html）。
-const blockPageFieldsSchema = `"name":{"type":"string","description":"拦截页名称（≤100 字符）"},"description":{"type":"string","description":"≤500 字符"},"content":{"type":"string","description":"拦截页内容（≤64KB）"},"content_type":{"type":"string","enum":["text/html; charset=utf-8","application/json; charset=utf-8","application/xml; charset=utf-8","text/plain; charset=utf-8"],"description":"缺省 text/html; charset=utf-8"}`
+// 必填、content ≤64KB、content_type 白名单缺省 text/html）。枚举由 models
+// 白名单注入而非手抄：白名单增删值时 schema 必须同步可见。
+const blockPageFieldsSchemaTemplate = `"name":{"type":"string","description":"拦截页名称（≤100 字符）"},"description":{"type":"string","description":"≤500 字符"},"content":{"type":"string","description":"拦截页内容（≤64KB）"},"content_type":{"type":"string","enum":%s,"description":"缺省 text/html; charset=utf-8"}`
+
+var blockPageFieldsSchema = func() string {
+	enum, err := json.Marshal(models.BlockPageContentTypeWhitelist())
+	if err != nil {
+		panic("marshal block page content type whitelist: " + err.Error())
+	}
+	return fmt.Sprintf(blockPageFieldsSchemaTemplate, enum)
+}()
 
 var createBlockPageSchema = `{"type":"object","required":["name","content"],"properties":{` + blockPageFieldsSchema + `},"additionalProperties":true}`
 var updateBlockPageSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"页面 ID"},` + blockPageFieldsSchema + `},"additionalProperties":true}`
@@ -109,7 +119,12 @@ const updateAPIKeyStatusSchema = `{"type":"object","required":["id"],"properties
 
 const previewConfigSchema = `{"type":"object","properties":{"source":{"type":"string","description":"配置分区标识（如 caddy/basic/security，分区字段清单同 update_config）"}},"additionalProperties":true,"description":"预览配置变更（不写库不触发 Caddy）；分区字段同 update_config 的 properties"}`
 const validateConfigSchema = `{"type":"object","description":"完整 Caddy 配置 JSON 本体（无固定子集——校验目标是任意 Caddy 配置）","additionalProperties":true}`
-const updateCaddyConfigSchema = `{"type":"object","description":"完整 Caddy 配置 JSON 本体（一次性逃生口：后续任何配置变更以数据库权威配置覆盖它）","additionalProperties":true}`
+
+// updateCaddyConfigSchema 必须与 REST 绑定形态一致：PutCaddyConfig 解的是
+// {"content":"<完整 Caddy 配置 JSON 文本>"}（handlers.PutCaddyConfig 的 req.Content
+// 再二次 Unmarshal）。此前声明「整份 JSON 直传」——Agent 按 schema 传顶层配置
+// 必然 400（缺 content）。直传语义只属于 validate_config（REST 直接绑定请求体）。
+const updateCaddyConfigSchema = `{"type":"object","required":["content"],"properties":{"content":{"type":"string","description":"完整 Caddy 配置的 JSON 文本（字符串形式，不是对象）：即 REST PUT /caddy/config 的 content 字段。一次性逃生口——后续任何配置变更都会以数据库权威配置覆盖它"}},"additionalProperties":false}`
 const configImportSchema = `{"type":"object","properties":{"meta":{"type":"object","description":"备份元信息（app/version）"},"config":{"type":"object","description":"全局配置段"},"tables":{"type":"object","description":"分表数据段"},"sections":{"type":"string","description":"可选导入分类子集（逗号分隔，等价 REST ?sections=；省略=按备份自身记录的分类全选）。注意：备份正文里的 sections 是打包时的分类记录并参与完整性校验和，本参数经 query 传输，不要写进备份正文"}},"additionalProperties":true,"description":"v2 配置备份 JSON；lbbak 二进制备份与超过 1 MiB 网关上限的备份请走 REST /config/import 或管理面板"}`
 const importV1ConfigSchema = `{"type":"object","description":"v1（nginx 版）备份 JSON 整体作为请求体（仅导入负载规则部分；覆盖导入会清理旧规则及其安全策略绑定）","additionalProperties":true}`
 

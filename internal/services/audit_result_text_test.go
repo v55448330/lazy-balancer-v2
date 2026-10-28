@@ -90,6 +90,17 @@ func TestAuditResultText_literalArgsCovered(t *testing.T) {
 	t.Fatalf("AuditResultPart 字面量结果码缺中文映射（请在 auditResultTextMap 补齐）:\n%s", b.String())
 }
 
+// 字面量、动态闭包与票据硬清单之外，整表逐项执行同一中文渲染契约。
+// 防止只在 AST 扫描中出现的码退化成英文或回显内部码而逃过分组用例。
+func TestAuditResultText_allMappingsRenderChinese(t *testing.T) {
+	if len(auditResultTextMap) == 0 {
+		t.Fatal("auditResultTextMap 为空——整表扫描失效")
+	}
+	for code := range auditResultTextMap {
+		assertChineseAuditRendering(t, code)
+	}
+}
+
 // 动态实参（变量/表达式）不在字面量扫描范围；新增动态入口必须同步审查
 // 其取值域。这里钉住当前动态调用点数量：新增即红，强制补映射/白名单。
 func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {

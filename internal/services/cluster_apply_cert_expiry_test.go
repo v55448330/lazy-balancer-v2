@@ -11,7 +11,10 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-func TestClusterApply_certExpiresAtDerivation(t *testing.T) {
+// 作用域=事务层（replaceSnapshotDB 是 replaceSnapshotTx 的裸包装，不含角色
+// 复核/重载/提交后副作用），故按 cluster_test.go 的命名契约取
+// TestReplaceSnapshotTx_*，不得冒充端到端 apply。
+func TestReplaceSnapshotTx_certExpiresAtDerivation(t *testing.T) {
 	cluster, database := newClusterTestService(t)
 	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,enabled) VALUES (9,'expiry CA','letsencrypt','https://acme-v02.api.letsencrypt.org/directory','{}',1)`); err != nil {
 		t.Fatalf("seed ca provider: %v", err)

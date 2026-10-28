@@ -679,7 +679,7 @@ const windowFeed = computed(() => {
   const cutoff = feedNow.value - windowHours.value * 3600_000
   return feedItems.value.filter((ev) => {
     const t = flowTimestamp(ev.event_time)
-    return !Number.isFinite(t) || t >= cutoff
+    return Number.isFinite(t) && t >= cutoff
   })
 })
 const sevFilter = ref<'all' | Sev>('all')
@@ -801,7 +801,7 @@ async function loadServerCentroid(): Promise<void> {
     serverLatLon[0] = res.data?.server_map_lat ?? 0
     serverLatLon[1] = res.data?.server_map_lon ?? 0
     configLoadFailed.value = false
-    siteConfigured.value = serverLatLon[0] !== 0 || serverLatLon[1] !== 0
+    siteConfigured.value = typeof res.data?.server_map_lat === 'number' && typeof res.data?.server_map_lon === 'number'
     if (siteConfigured.value) {
       threatMap?.setServer([serverLatLon[1], serverLatLon[0]])
       tgtReadout.value = `${Math.abs(serverLatLon[0]).toFixed(2)}°${serverLatLon[0] >= 0 ? 'N' : 'S'} ${Math.abs(serverLatLon[1]).toFixed(2)}°${serverLatLon[1] >= 0 ? 'E' : 'W'}`

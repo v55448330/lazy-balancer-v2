@@ -57,7 +57,8 @@ test('无响应体（网络失败/旧形态错误）回退兜底文案且不造�
 
 test('接线：拦截器透传响应体，导入/还原失败路径复用同一展示函数且不再断言「配置未受影响」', () => {
   const api = code('src/utils/api.ts')
-  assert.match(api, /constructor\(message: string, readonly status\?: number, readonly data\?: unknown\)/, 'ApiRequestError 必须携带响应体')
+  assert.match(api, /readonly status\?: number[\s\S]*readonly data\?: unknown[\s\S]*constructor\(message: string, status\?: number, data\?: unknown\)/, 'ApiRequestError 必须携带响应体')
+  assert.match(api, /this\.status = status[\s\S]*this\.data = data/, '构造参数必须落到只读字段')
   assert.match(api, /new ApiRequestError\(message, status, error\.response\?\.data\)/, '错误分支必须透传 error.response.data')
 
   const page = code('src/views/settings/BasicSettings.vue')

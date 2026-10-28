@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -143,7 +144,18 @@ func cleanupCertFilesWithoutMaterial(ctx context.Context, t *testing.T) int {
 func TestRemoveCertFilesForRules_honorsBudgetPerItem(t *testing.T) {
 	withIsolatedGlobal(t)
 	newBackupTestHandlers(t)
-	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	certDir := t.TempDir()
+	t.Cleanup(services.SetCertDirForTest(certDir))
+
+	// 真实落盘：RemoveCertFiles 对缺失文件是幂等 no-op，只数计数器时
+	// 「预算耗尽后仍继续删除」与「预算生效」不可区分（二者都返回同样的
+	// 计数）。必须让四条规则都有文件，并用淘汰边界两侧的文件状态作判据。
+	ruleIDs := []string{"lb_budget_a", "lb_budget_b", "lb_budget_c", "lb_budget_d"}
+	for _, id := range ruleIDs {
+		if err := services.WriteCertFiles(id, "CERT_"+id, "KEY_"+id); err != nil {
+			t.Fatalf("seed cert files for %s: %v", id, err)
+		}
+	}
 
 	original := importCleanupShouldStop
 	t.Cleanup(func() { importCleanupShouldStop = original })
@@ -153,9 +165,26 @@ func TestRemoveCertFilesForRules_honorsBudgetPerItem(t *testing.T) {
 		return calls > 2 // 第 3 次检查（index=2）起预算耗尽
 	}
 
-	cleaned, unprocessed := removeCertFilesForRules(context.Background(),
-		[]string{"lb_budget_a", "lb_budget_b", "lb_budget_c", "lb_budget_d"})
+	cleaned, unprocessed := removeCertFilesForRules(context.Background(), ruleIDs)
 	if cleaned != 2 || unprocessed != 2 {
 		t.Fatalf("cleaned=%d unprocessed=%d, want 2/2（预算对无材料通道逐项生效）", cleaned, unprocessed)
+	}
+
+	// Then：预算内处理的 a/b 文件必须真的消失……
+	for _, id := range []string{"lb_budget_a", "lb_budget_b"} {
+		for _, suffix := range []string{".crt", ".key"} {
+			if _, err := os.Stat(filepath.Join(certDir, id+suffix)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("预算内规则 %s 的 %s 未被删除（err=%v）", id, suffix, err)
+			}
+		}
+	}
+	// ……预算耗尽后不得再删除 c/d（此前预算只在进入通道前判一次，会把批量
+	// 通道跑完并把导入会话锁/调度暂停拖到无上界）。
+	for _, id := range []string{"lb_budget_c", "lb_budget_d"} {
+		for _, suffix := range []string{".crt", ".key"} {
+			if _, err := os.Stat(filepath.Join(certDir, id+suffix)); err != nil {
+				t.Fatalf("预算耗尽后规则 %s 的 %s 仍被删除: %v", id, suffix, err)
+			}
+		}
 	}
 }

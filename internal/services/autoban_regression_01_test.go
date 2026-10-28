@@ -214,7 +214,7 @@ func openAutobanEnabledFailingDB(t *testing.T) *sql.DB {
 	if err := db.DB.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
 		t.Fatalf("读取主库路径: %v", err)
 	}
-	wrapped := sql.OpenDB(autobanEnabledFailConnector{inner: dsnConnector{drv: db.DB.Driver(), dsn: path}})
+	wrapped := sql.OpenDB(autobanEnabledFailConnector{inner: dsnConnector{drv: db.DB.Driver(), dsn: path + "?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)"}})
 	t.Cleanup(func() { _ = wrapped.Close() })
 	return wrapped
 }

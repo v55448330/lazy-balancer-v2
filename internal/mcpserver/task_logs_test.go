@@ -17,8 +17,8 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-func TestGetSystemTaskLogs_certJobReadsRealLogThroughMCP(t *testing.T) {
-	// Given：真实 DB 中的 cert-job:1 → lb_mcp_log，及其实际证书日志文件。
+func setupTaskLogDB(t *testing.T) {
+	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -27,6 +27,10 @@ func TestGetSystemTaskLogs_certJobReadsRealLogThroughMCP(t *testing.T) {
 		_ = db.Close()
 		mcpserver.RestoreDBForTest(oldDB, oldMetricsDB, oldAuditDB)
 	})
+}
+
+func TestGetSystemTaskLogs_certJobReadsRealLogThroughMCP(t *testing.T) {
+	setupTaskLogDB(t)
 	oldLogDir := taskengine.LogDir()
 	taskengine.SetLogDir(t.TempDir())
 	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
@@ -64,15 +68,7 @@ func TestGetSystemTaskLogs_certJobReadsRealLogThroughMCP(t *testing.T) {
 }
 
 func TestGetSystemTaskLogs_certJobMissingReturnsEmpty(t *testing.T) {
-	// Given：不存在的 cert-job:999。
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		mcpserver.RestoreDBForTest(oldDB, oldMetricsDB, oldAuditDB)
-	})
+	setupTaskLogDB(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/api/v1/system/tasks/:id/logs", (&handlers.Handlers{}).GetSystemTaskLogs)

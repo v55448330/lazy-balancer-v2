@@ -185,11 +185,11 @@ func WriteFastFile(path string, v4, v6 []netip.Prefix) error {
 	}
 	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
 		if serr := dir.Sync(); serr != nil {
-			// rename 已生效：新 .fast 可见且内容完整（写侧 fsync 已完成），
-			// 目录 fsync 失败只影响「掉电后 rename 本身是否持久」。返回 error
-			// 会让上层（ipcompile）记「编译失败」并可能按失败回退文本/保留旧
-			// 产物——与磁盘状态不一致（产物已替换）。降级为告警：可观测，但
-			// 不谎报失败。
+			// Ruling（与 internal/atomicfile 互相对照）：rename 已生效，新 .fast
+			// 可见且内容完整（写侧 fsync 已完成），目录 fsync 失败只影响「掉电后
+			// rename 本身是否持久」。atomicfile 的簿记文件选择上抛 error 让调用方
+			// 补偿；本路径若返回 error 会让 ipcompile 记「编译失败」并按失败回退，
+			// 与磁盘已替换的状态不一致，故选择告警并返回 nil。
 			log.Printf("WARNING: fastfile dir sync after rename %q failed (artifact replaced, durability unconfirmed): %v", path, serr)
 		}
 		_ = dir.Close()

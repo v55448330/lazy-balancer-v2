@@ -20,7 +20,8 @@ const goRequest = section(
   'type UpdateSecurityPolicyRequest struct',
   '\n}\n',
 )
-const GO_FIELD_TAGS = [...goRequest.matchAll(/json:"([a-z_]+)"/g)].map((match) => match[1])
+const GO_FIELD_TAGS = [...goRequest.matchAll(/json:"([a-z_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
+assert.equal(GO_FIELD_TAGS.length, (goRequest.match(/json:"/g) ?? []).length, '每个 json 标签都必须被解析')
 
 const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
   name: '策略 A',
@@ -60,7 +61,7 @@ test('Create 与 Update 请求结构字段集一致（同一载荷双路径消�
   // （如只在 Update 增字段）时，创建路径会静默丢弃该字段。
   const go = repoCode('internal/models/security.go')
   const createRequest = section(go, 'type CreateSecurityPolicyRequest struct', '\n}\n')
-  const createTags = [...createRequest.matchAll(/json:"([a-z_]+)"/g)].map((match) => match[1])
+  const createTags = [...createRequest.matchAll(/json:"([a-z_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
   assert.ok(createTags.length >= 28, `Create 字段解析不足: ${createTags.length}`)
   assert.deepEqual([...createTags].sort(), [...GO_FIELD_TAGS].sort(), 'Create 与 Update 字段集漂移')
 })

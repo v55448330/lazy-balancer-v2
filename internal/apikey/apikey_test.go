@@ -18,9 +18,10 @@ func TestFromHeader_extractionRules(t *testing.T) {
 	}{
 		{"x-api-key wins", "lb_sk_direct", "Bearer lb_sk_other", "lb_sk_direct"},
 		{"bearer api key", "", "Bearer lb_sk_bearer", "lb_sk_bearer"},
+		{"lowercase bearer api key", "", "bearer lb_sk_lower", "lb_sk_lower"},
+		{"uppercase bearer api key", "", "BEARER lb_sk_upper", "lb_sk_upper"},
 		{"jwt bearer is not api key", "", sampleJWTBearer, ""},
 		{"bare api key without scheme", "", "lb_sk_bare", ""},
-		{"lowercase scheme is not accepted", "", "bearer lb_sk_lower", ""},
 		{"empty request", "", "", ""},
 	}
 	for _, tc := range cases {

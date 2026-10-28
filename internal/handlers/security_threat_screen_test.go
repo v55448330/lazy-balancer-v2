@@ -2645,3 +2645,35 @@ func TestThreatScreenAttackFlow_filtersReservedAndDisclosesGap(t *testing.T) {
 			len(gapped.Events), gapped.NextSeq, oldestSeq+4)
 	}
 }
+
+func TestGetSecurityThreatScreen_noRollupCoverageDoesNotBorrowRawCoverage(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	t.Cleanup(resetThreatScreenCachesForTest)
+	t.Cleanup(resetThreatRollupWarmerForTest)
+	seedThreatScreenEvent(t, utcStringAgo(time.Minute), "93.184.216.7", "942100", "SQL Injection", "blocked")
+	// warmer 报告可用，但持久覆盖行尚未写入：请求不得再把原始表起点
+	// 借填到 rollup_coverage_from。
+	threatRollupWarmerStarted.Store(true)
+	threatRollupReadyDB.Store(db.MetricsDB)
+	threatRollupReadyGeneration.Store(db.MetricsDBGeneration())
+	threatRollupReadyAt.Store(time.Now().UnixNano())
+	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
+
+	recorder := getRequest(t, router, "/security/overview/threat-screen?hours=1")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			RollupCoverageFrom string `json:"rollup_coverage_from"`
+			RawCoverageFrom    string `json:"raw_coverage_from"`
+			BackfillIncomplete bool   `json:"backfill_incomplete"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.RollupCoverageFrom != "" || payload.Data.RawCoverageFrom == "" || !payload.Data.BackfillIncomplete {
+		t.Fatalf("覆盖披露口径错误: %+v", payload.Data)
+	}
+}

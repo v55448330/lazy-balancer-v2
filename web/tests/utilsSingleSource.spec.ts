@@ -169,7 +169,8 @@ test('字节格式化单源：精度/量级与跨调用点一致性', () => {
 test('字节格式化不得再有第二份实现（api.ts / ingestionHealth 只消费单源）', () => {
   assert.doesNotMatch(code('src/utils/api.ts'), /function formatBytes/, 'api.ts 不再持有实现')
   assert.doesNotMatch(code('src/utils/ingestionHealth.ts'), /function humanBytes/, '摄取健康位不再私有实现')
-  assert.match(code('src/utils/ingestionHealth.ts'), /import \{ formatBytes as humanBytes \} from '\.\/formatBytes\.ts'/)
+  const healthImport = code('src/utils/ingestionHealth.ts').match(/import \{([^}]*)\} from '\.\/formatBytes\.ts'/)?.[1] ?? ''
+  assert.match(healthImport, /formatBytes\s+as\s+humanBytes/, '摄取健康位必须复用单一字节格式化实现')
   // 视图/组件一律从 utils/formatBytes 取（api.ts 会拖入 axios/element-plus 依赖链）
   for (const file of [
     'src/components/LogStorageBar.vue',

@@ -41,7 +41,6 @@ import { planFlowArcs } from '@/utils/threatFlowRules'
 
 const MAX_PIXEL_RATIO = 2
 const MAX_ACTIVE_ARCS = 60
-const ARC_FLIGHTS = 1 // 每个请求只播一次（用户裁定；禁止循环 3 航次）
 const ARC_FLIGHT_SECONDS = FLOW_FLIGHT_MS / 1000
 const ARC_FLIGHT_GAP = 0.22
 const ARC_FLIGHT_PARTICLES = 12
@@ -95,7 +94,6 @@ interface Centroid2D {
 interface Arc2D {
   from: Centroid
   elapsed: number
-  flight: number
   flightT: number
   pulsed: boolean
   normal: boolean
@@ -804,7 +802,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     if (arcs.length >= MAX_ACTIVE_ARCS) return
     // 聚合弧显示 ×N；逐条弧不显示，避免把采样还原值误读成聚合组。
     const label = flowArcLabel(weight, tier !== 'thin')
-    arcs.push({ from: origin, elapsed: 0, flight: 0, flightT: 0, pulsed: false, normal, weight, tier, label })
+    arcs.push({ from: origin, elapsed: 0, flightT: 0, pulsed: false, normal, weight, tier, label })
   }
 
   function spawnRipple(color: string): void {
@@ -842,20 +840,15 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       const arc = arcs[i]
       arc.elapsed += delta
       arc.flightT += delta
-      const life = ARC_FLIGHTS * (ARC_FLIGHT_SECONDS + ARC_FLIGHT_GAP)
+      const life = ARC_FLIGHT_SECONDS + ARC_FLIGHT_GAP
       if (arc.flightT >= ARC_FLIGHT_SECONDS) {
         if (!arc.pulsed) {
           arc.pulsed = true
           spawnRipple(arc.normal ? NORMAL_COLOR : ATTACK_COLOR)
         }
         if (arc.flightT >= ARC_FLIGHT_SECONDS + ARC_FLIGHT_GAP) {
-          if (arc.flight + 1 >= ARC_FLIGHTS) {
-            arcs.splice(i, 1)
-            continue
-          }
-          arc.flight += 1
-          arc.flightT = 0
-          arc.pulsed = false
+          arcs.splice(i, 1)
+          continue
         }
       }
       // 屏幕空间二次贝塞尔（质心→本站，控制点居中抬高）

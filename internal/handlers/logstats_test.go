@@ -179,7 +179,7 @@ func TestGetLogStats_eachTaskUsesOwnRealFileSize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if active, _, _ := dirBytes(filepath.Join(tasksDir, "crawlerbot-update.log")); active != 5 {
+	if active, _, _ := dirBytesWithEntries(filepath.Join(tasksDir, "crawlerbot-update.log"), nil); active != 5 {
 		t.Fatalf("探针路径文件大小=%d want 5", active)
 	}
 	router := gin.New()
@@ -382,6 +382,53 @@ func TestGetLogStats_aggregateDirReadsOnce(t *testing.T) {
 	}
 	if len(resp.Data.Logs) != 1 || resp.Data.Logs[0].SizeBytes != 2000 {
 		t.Fatalf("certjob 聚合=%+v, want 单行 2000B", resp.Data.Logs)
+	}
+}
+
+type countingLogStatsDirEntry struct {
+	name      string
+	info      os.FileInfo
+	infoCalls *int
+}
+
+func (entry countingLogStatsDirEntry) Name() string      { return entry.name }
+func (entry countingLogStatsDirEntry) IsDir() bool       { return false }
+func (entry countingLogStatsDirEntry) Type() os.FileMode { return 0 }
+func (entry countingLogStatsDirEntry) Info() (os.FileInfo, error) {
+	(*entry.infoCalls)++
+	return entry.info, nil
+}
+
+func TestAggregateDirStats_skipsInfoForUnmatchedEntries(t *testing.T) {
+	dir := t.TempDir()
+	newEntry := func(name string, size int) countingLogStatsDirEntry {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return countingLogStatsDirEntry{name: name, info: info, infoCalls: new(int)}
+	}
+	active := newEntry("app.log", 3)
+	rotated := newEntry("app.log.1", 5)
+	unmatched := newEntry("other.log", 7)
+
+	stats := aggregateDirStatsWithEntries(dir, []os.DirEntry{active, rotated, unmatched}, func(name string) bool {
+		return name == "app.log" || name == "app.log.1"
+	})
+
+	if got := *unmatched.infoCalls; got != 0 {
+		t.Fatalf("非匹配文件 Info 调用=%d, want 0", got)
+	}
+	if *active.infoCalls != 1 || *rotated.infoCalls != 1 {
+		t.Fatalf("匹配文件 Info 调用 active=%d rotated=%d, want 1/1", *active.infoCalls, *rotated.infoCalls)
+	}
+	if got := stats["app.log"]; got.Active != 3 || got.Rotated != 5 || got.RotCount != 1 {
+		t.Fatalf("聚合结果=%+v, want active=3 rotated=5 count=1", got)
 	}
 }
 

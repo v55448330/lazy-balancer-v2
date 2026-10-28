@@ -58,10 +58,23 @@ func TestCaddyProcessControlRejectsDuringImportWindow(t *testing.T) {
 
 	// 模拟进行中的导入会话：窗口计数非零 = configImportBusy()==true。
 	beginImportWindowForTest(t)
+	// 预持写锁：若 409 门被挪到取锁之后，请求会在这里阻塞而不是 fast-fail。
+	handler.caddyOpMu.Lock()
+	defer handler.caddyOpMu.Unlock()
 
 	for _, endpoint := range []string{"/caddy/start", "/caddy/stop", "/caddy/restart"} {
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, endpoint, nil))
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, endpoint, nil))
+			done <- response
+		}()
+		var response *httptest.ResponseRecorder
+		select {
+		case response = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s 在 caddyOpMu 预持期间未 fast-fail——409 门被挪到取锁之后", endpoint)
+		}
 		if response.Code != http.StatusConflict {
 			t.Fatalf("%s status=%d body=%s, want 409", endpoint, response.Code, response.Body.String())
 		}

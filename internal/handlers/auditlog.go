@@ -287,10 +287,7 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 	// LIKE 值侧转义——用户输入中的 %/_/\ 是字面字符,不转义会被
 	// 当通配符(搜「100%」命中 100abc);SQL 追加 ESCAPE '\' 声明转义符。
 	like := func(column, value string) (string, interface{}) {
-		escaped := strings.ReplaceAll(value, `\`, `\\`)
-		escaped = strings.ReplaceAll(escaped, `%`, `\%`)
-		escaped = strings.ReplaceAll(escaped, `_`, `\_`)
-		return " AND " + column + " LIKE ? ESCAPE '\\'", "%" + escaped + "%"
+		return " AND " + column + " LIKE ? ESCAPE '\\'", "%" + escapeLikePattern(value) + "%"
 	}
 	var conds []string
 	var args []interface{}

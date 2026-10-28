@@ -196,6 +196,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 			if errors.Is(err, services.ErrSlaveReadOnly) {
 				status = http.StatusForbidden
 				msg = err.Error()
+				c.Header("X-LB-Error-Code", masterRequiredErrorCode)
 			}
 		}
 		// explicit 路由的 4xx/5xx 中间件不代记——拒绝面（含从节点越权/误操作

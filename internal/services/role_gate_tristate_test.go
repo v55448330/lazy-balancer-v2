@@ -210,10 +210,8 @@ func TestWatchdogCheckOnce_roleReadFailureCountsSkippedAndFails(t *testing.T) {
 
 // CRS 状态对账角色读失败：warn 留痕（此前零日志静默返回）。
 func TestReconcileCRSState_roleReadFailureLogsWarn(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	// 复用单源隔离夹具（四句柄成对还原）。
+	setupIsolatedDB(t)
 	corruptClusterRole(t)
 	buf := captureLogf(t)
 
@@ -226,10 +224,8 @@ func TestReconcileCRSState_roleReadFailureLogsWarn(t *testing.T) {
 
 // 证书任务行动态收集（任务行读失败留痕）：Query/Scan 失败必须 warn 留痕，不再静默空列表。
 func TestTaskMonitorCertJobs_queryFailureLogsWarn(t *testing.T) {
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	// 复用单源隔离夹具（四句柄成对还原）。
+	setupIsolatedDB(t)
 	// 去掉 cert_jobs 表制造 Query 失败（其余读取面不受影响）。
 	if _, err := db.DB.Exec(`ALTER TABLE cert_jobs RENAME TO cert_jobs_offline`); err != nil {
 		t.Fatal(err)

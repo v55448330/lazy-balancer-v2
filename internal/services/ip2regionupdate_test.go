@@ -2,15 +2,17 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
-	"lazy-balancer-v2/internal/taskengine"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 func newTestIP2RegionManager(t *testing.T) *IP2RegionUpdateManager {
@@ -63,11 +65,22 @@ func fakeIP2RegionDownload(t *testing.T, valid bool) func(context.Context, strin
 func TestIP2RegionUpdateRun_success(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldLive, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
 	m.downloadXDB = fakeIP2RegionDownload(t, true)
 	reloads := 0
-	m.reloader = func() error { reloads++; return nil }
+	backupObserved := false
+	m.reloader = func() error {
+		reloads++
+		backup, readErr := os.ReadFile(ip2regionLivePath + ".bak")
+		backupObserved = readErr == nil && string(backup) == string(oldLive)
+		return nil
+	}
 
 	// When a manual update runs to completion
 	m.run("manual", nil)
@@ -96,6 +109,9 @@ func TestIP2RegionUpdateRun_success(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(ip2regionLivePath), ".staging")); !os.IsNotExist(err) {
 		t.Fatal(".staging should be cleaned up")
+	}
+	if !backupObserved {
+		t.Fatal("带既有 live 的成功轮必须实际创建本轮 .bak（正控）")
 	}
 	// 1.2：成功后.bak 须清理，不残留陈旧备份
 	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
@@ -134,7 +150,7 @@ func TestIP2RegionUpdateRun_cancelAfterInstallRollsBackSameGeneration(t *testing
 	if err != nil {
 		t.Fatalf("start update: %v", err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "安装后取消的 IP2Region 更新")
 
 	if !cancelIssued {
 		t.Fatal("前置：安装段末的取消必须命中在途运行（CancelRunning=false）")
@@ -179,7 +195,7 @@ func TestIP2RegionUpdateRun_cancelDuringDownloadKeepsDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start update: %v", err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "下载期取消的 IP2Region 更新")
 
 	if _, err := os.Stat(ip2regionLivePath); !os.IsNotExist(err) {
 		t.Fatalf("下载期取消不得产生 live 文件（stat err=%v）", err)
@@ -948,6 +964,51 @@ func TestIP2RegionUpdateRun_rollbackAllBaselinesFailOpenRejected(t *testing.T) {
 		t.Fatalf("reloads=%d, want 1 (fail-open rejected; no retry reloader)", reloads)
 	}
 }
+func TestIP2RegionUpdateRun_failOpenRejectsDigestAndValidationGates(t *testing.T) {
+	for _, mode := range []string{"digest", "validate"} {
+		t.Run(mode, func(t *testing.T) {
+			m := newTestIP2RegionManager(t)
+			seedIP2RegionVersionRow(t, "v3.0.0", true)
+			writeTestXDB(t, ip2regionLivePath, testSegments)
+			m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+			m.downloadXDB = fakeIP2RegionDownload(t, true)
+			reloads := 0
+			m.reloader = func() error {
+				reloads++
+				// 去掉唯一回滚基线，强制进入 fail-open 门；live 保持普通文件，
+				// 使摘要不一致与 validate 两门各自成为首个拒绝点。
+				if err := os.Remove(ip2regionLivePath + ".bak"); err != nil {
+					t.Errorf("remove current backup: %v", err)
+				}
+				switch mode {
+				case "digest":
+					m.newXdbSha = strings.Repeat("0", sha256.Size*2)
+				case "validate":
+					corrupt := []byte("regular but invalid xdb")
+					if err := os.WriteFile(ip2regionLivePath, corrupt, 0644); err != nil {
+						t.Errorf("corrupt live xdb: %v", err)
+					}
+					sum := sha256.Sum256(corrupt)
+					m.newXdbSha = hex.EncodeToString(sum[:])
+				}
+				return errors.New("reload boom")
+			}
+
+			m.run("manual", nil)
+
+			version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+			if status != "failed" || version != "v3.0.0" {
+				t.Fatalf("%s 门拒绝后 (status,version)=(%q,%q), want (failed,v3.0.0)", mode, status, version)
+			}
+			if m.failOpenPreconditionHolds() {
+				t.Fatalf("%s 门被绕过后 failOpenPreconditionHolds()=true", mode)
+			}
+			if reloads != 1 {
+				t.Fatalf("reloads=%d, want 1（拒绝 fail-open 后不得恢复重载）", reloads)
+			}
+		})
+	}
+}
 
 func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	m := newTestIP2RegionManager(t)
@@ -966,7 +1027,7 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	if _, err := m.StartUpdate("manual", nil); err != nil {
 		t.Fatal(err)
 	}
-	<-entered
+	waitUpdateTestSignal(t, entered, "IP2Region 冲突用例进入首轮更新")
 
 	// When a second update is requested
 	// Then it is rejected with ErrIP2RegionUpdateRunning
@@ -978,7 +1039,7 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	}
 
 	close(block)
-	<-m.runDone
+	waitUpdateTestSignal(t, m.runDone, "IP2Region 冲突用例首轮更新")
 	if m.IsRunning() {
 		t.Fatal("IsRunning()=true after run finished")
 	}
@@ -1163,7 +1224,7 @@ func TestIP2RegionUpdateRun_slaveAbortsSkipSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "从节点中止的 IP2Region 更新")
 
 	// Then 内存终态=skipped（非 failed），审计记「更新跳过」非「更新失败」
 	snap := m.StatusSnapshot()
@@ -1194,7 +1255,7 @@ func TestIP2RegionUpdateRun_usesTaskRunStartedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "使用 task_runs 时间的 IP2Region 更新")
 
 	// Then：版本行 started_at 与 task_runs 同源。
 	var startedAt string
@@ -1361,7 +1422,7 @@ func TestIP2RegionStartUpdate_recoversPanickingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	waitUpdateTestSignal(t, done, "panic 恢复的 IP2Region 更新")
 
 	_, status, message, _, _, _, _ := ip2RegionVersionRow(t)
 	if status != "failed" {

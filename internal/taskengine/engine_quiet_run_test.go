@@ -4,6 +4,8 @@ package taskengine
 // RunSync 仍按既有语义落行。
 
 import (
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -32,6 +34,10 @@ func TestEngine_RunSyncQuietExecutesWithoutRunRow(t *testing.T) {
 		t.Fatalf("quiet 轮 task_runs=%d, want 0（重试降噪：不落行）", got)
 	}
 
+	if history := e.History(id, 10); len(history) != 0 || e.LatestRun(id) != nil {
+		t.Fatalf("quiet 轮不得出现在 History/LatestRun: history=%+v latest=%+v", history, e.LatestRun(id))
+	}
+
 	if _, err := e.RunSync(id, "caddy-restart", ""); err != nil {
 		t.Fatalf("recorded run: %v", err)
 	}
@@ -40,5 +46,20 @@ func TestEngine_RunSyncQuietExecutesWithoutRunRow(t *testing.T) {
 	}
 	if got := countRuns(t, id); got != 1 {
 		t.Fatalf("RunSync 轮 task_runs=%d, want 1", got)
+	}
+	if history := e.History(id, 10); len(history) != 1 || e.LatestRun(id) == nil {
+		t.Fatalf("RunSync 轮必须出现在 History/LatestRun: history=%+v", history)
+	}
+
+	const failedID = "t-quiet-failed"
+	if err := e.Register(Descriptor{ID: failedID, Family: "t", Name: "静默失败", Kind: KindOneshot,
+		Run: func(RunContext) error { return errors.New("boom") }}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RunSyncQuiet(failedID, "caddy-restart", ""); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("quiet 失败必须透传: %v", err)
+	}
+	if got := countRuns(t, failedID); got != 0 || len(e.History(failedID, 10)) != 0 || e.LatestRun(failedID) != nil {
+		t.Fatalf("quiet 失败同样不得落行: runs=%d history=%+v latest=%+v", got, e.History(failedID, 10), e.LatestRun(failedID))
 	}
 }

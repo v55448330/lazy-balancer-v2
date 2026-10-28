@@ -179,14 +179,14 @@
             </el-tooltip>
             <el-tooltip :disabled="!isReadOnly && row.auth_provider !== 'oidc'" :content="row.auth_provider === 'oidc' ? 'OIDC 用户的密码由身份提供商管理' : readOnlyMessage">
               <div>
-                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row)">
+                <el-button type="warning" link size="small" :disabled="isReadOnly || row.auth_provider === 'oidc' || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row)">
                   重置密码
                 </el-button>
               </div>
             </el-tooltip>
             <el-tooltip :disabled="!isReadOnly && row.id !== authStore.user?.id && !row.is_setup_admin" :content="row.is_setup_admin ? '系统初始化管理员不可删除' : (row.id === authStore.user?.id ? '不能删除当前登录账户' : readOnlyMessage)">
               <div>
-                <el-button type="danger" link size="small" :disabled="isReadOnly || row.is_setup_admin || row.id === authStore.user?.id || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row)">
+                <el-button type="danger" link size="small" :disabled="isReadOnly || row.is_setup_admin || row.id === authStore.user?.id || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row)">
                   删除
                 </el-button>
               </div>
@@ -446,17 +446,23 @@ const closeForm = () => {
   form.value = { username: '', password: '', password_confirm: '', display_name: '', role: 'user' }
 }
 
+const isCancelError = (error: unknown): boolean => error === 'cancel' || error === 'close'
+
 const deleteUser = async (row: UserListItem) => {
   const id = row.id
-  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
+  if (isReadOnly.value || submitting.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
     await ElMessageBox.confirm(`确定要删除用户「${row.username}」吗？删除后不可恢复。`, '警告', { type: 'warning' })
     await request.delete(`/users/${id}`)
     mfaAwareSuccess('删除成功')
     fetchUsers()
-  } catch (e) {
-    // User cancelled, do nothing
+  } catch (error: unknown) {
+    if (isCancelError(error)) return
+    // HTTP/network failures are toasted globally; retain a local failure branch
+    // for unexpected non-Error rejections instead of misclassifying them as cancel.
+    console.error('Failed to delete user:', error)
+    if (!(error instanceof Error)) ElMessage.error('删除失败，请重试')
   } finally {
     operatingUserIds.value.delete(id)
   }
@@ -544,7 +550,7 @@ function lbConfirm() {
 // /users/[object Object]/reset-password）。
 const resetPassword = async (row: UserListItem) => {
   const id = row.id
-  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
+  if (isReadOnly.value || submitting.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   const isSelf = id === authStore.user?.id
   // 用户管理端点重置密码（不验当前密码，重置后吊销全部会话）；权限=admin——
@@ -630,7 +636,7 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
     mfaAwareSuccess('已重置 MFA')
     await fetchUsers()
   } catch (error: unknown) {
-    if (error === 'cancel' || error === 'close') return
+    if (isCancelError(error)) return
     // api.ts 全局 428 重试流已 toast 并打标——此处跳过二次弹窗；
     // 未打标的（如锁定开关关闭时端点自身的 401「验证码错误」）仍在此展示。
     if ((error as { mfaSurfaced?: boolean }).mfaSurfaced) {

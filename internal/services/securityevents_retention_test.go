@@ -506,7 +506,17 @@ func TestSecurityEventsRetentionCleanupDetail_reportsAggregateDeletions(t *testi
 	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, '5')`, ThreatRollupEventHighwaterPrefix+oldMinute); err != nil {
 		t.Fatal(err)
 	}
-
+	countRows := func(query string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := db.MetricsDB.QueryRow(query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	rollupBefore := countRows(`SELECT COUNT(*) FROM security_event_rollup WHERE minute=?`, oldMinute)
+	targetBefore := countRows(`SELECT COUNT(*) FROM security_event_target_rollup WHERE minute=?`, oldMinute)
+	highwaterBefore := countRows(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, ThreatRollupEventHighwaterPrefix+oldMinute)
 	res, err := SecurityEventsRetentionCleanupDetail(context.Background())
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -517,8 +527,11 @@ func TestSecurityEventsRetentionCleanupDetail_reportsAggregateDeletions(t *testi
 	if res.Rollup == 0 || res.TargetRollup == 0 || res.Highwater == 0 {
 		t.Fatalf("detail = %+v, want non-zero rollup/target/highwater deletions", res)
 	}
-	if res.Aggregates() != res.Rollup+res.TargetRollup+res.Highwater {
-		t.Fatalf("Aggregates()=%d, want sum of the three buckets", res.Aggregates())
+	actualDeleted := rollupBefore - countRows(`SELECT COUNT(*) FROM security_event_rollup WHERE minute=?`, oldMinute) +
+		targetBefore - countRows(`SELECT COUNT(*) FROM security_event_target_rollup WHERE minute=?`, oldMinute) +
+		highwaterBefore - countRows(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, ThreatRollupEventHighwaterPrefix+oldMinute)
+	if got := res.Aggregates(); got != actualDeleted {
+		t.Fatalf("Aggregates()=%d, actual DB rows deleted=%d", got, actualDeleted)
 	}
 }
 

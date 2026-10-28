@@ -307,7 +307,9 @@ const NON_ENVELOPE_SITES: Record<string, number> = {
   // 威胁库/爬虫库「源开关」端点收敛到共享状态机（门序/三分支错误映射/审计骨架
   // 单源），500 分支的响应体由 spec 注入——三处（读失败/更新失败/审计后重读）
   // 载荷首 token 是函数调用，非可解析信封。
-  'internal/handlers/lib_source_flags.go#updateLibSourceFlags#call:spec.InternalError': 3,
+  'internal/handlers/lib_source_flags.go#updateLibSourceFlags#call:spec.InternalError': 5,
+  // 行数状态收敛助手：0 行=404、RowsAffected 故障=500，响应体由 spec 注入。
+  'internal/handlers/lib_source_flags.go#requireLibSourceFlagRowUpdated#call:spec.InternalError': 1,
   'internal/handlers/system.go#GetSystemMetrics#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetRealtimeTraffic#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetConnectionStats#call:systemInternalFailure': 1,

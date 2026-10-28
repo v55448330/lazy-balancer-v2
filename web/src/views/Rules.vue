@@ -18,7 +18,7 @@
       <template #title>
         <div class="polling-error-title">
           <span>证书状态加载失败：{{ certPollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="loading" @click="retryCertPolling">立即重试</el-button>
+          <el-button link type="danger" :loading="certRetryLoading" @click="retryCertPolling">立即重试</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ certPollingErrorDescription }}</div>
@@ -28,7 +28,7 @@
       <template #title>
         <div class="polling-error-title">
           <span>证书详情加载失败：TLS 列可能显示为「加载失败」（非真实证书状态）</span>
-          <el-button link type="danger" :loading="loading" @click="retryCertInfo">立即重试</el-button>
+          <el-button link type="danger" :loading="certInfoRetryLoading" @click="retryCertInfo">立即重试</el-button>
         </div>
       </template>
     </el-alert>
@@ -37,7 +37,7 @@
       <template #title>
         <div class="polling-error-title">
           <span>上游健康状态加载失败：{{ healthPollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="loading" @click="retryHealthPolling">立即重试</el-button>
+          <el-button link type="danger" :loading="healthRetryLoading" @click="retryHealthPolling">立即重试</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ healthPollingErrorDescription }}</div>
@@ -60,7 +60,7 @@
             certConfigsLoadError ? 'DNS 提供商配置（ACME 规则编辑无法选择 DNS 配置）' : '',
             caProvidersLoadError ? 'CA 提供商（选择器仅剩「系统默认」）' : '',
           ].filter(Boolean).join('；') }}）</span>
-          <el-button link type="danger" :loading="loading" @click="retryAuxData">立即重试</el-button>
+          <el-button link type="danger" :loading="auxDataRetryLoading" @click="retryAuxData">立即重试</el-button>
         </div>
       </template>
     </el-alert>
@@ -1061,6 +1061,9 @@
           subtitle="单规则渲染产物的只读预览（规则信息 / JSON / Caddyfile）" />
       </template>
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
+      <el-result v-else-if="configLoadError" icon="error" title="Caddy 配置加载失败" :sub-title="configLoadError">
+        <template #extra><el-button type="primary" @click="retryViewConfig">重试</el-button></template>
+      </el-result>
       <div v-else-if="ruleConfig" class="config-view">
         <el-descriptions :column="2" border size="small" class="config-info">
           <el-descriptions-item label="规则ID">{{ ruleConfig.caddy_id || '-' }}</el-descriptions-item>
@@ -1568,7 +1571,7 @@ const lockPopovers: Record<string, { hide: () => void }> = {}
 const setLockPopover = (caddyId: string, el: unknown): void => {
   if (el && typeof el === 'object' && 'hide' in el && typeof (el as { hide: unknown }).hide === 'function') {
     lockPopovers[caddyId] = el as { hide: () => void }
-  }
+  } else delete lockPopovers[caddyId]
 }
 
 // 历史（用户反馈）：表格 hover 弹框（锁摘要/TLS/健康）在靠底或靠顶行会被视口裁切
@@ -1666,7 +1669,7 @@ const fetchRules = async () => {
     // Fetch cert job statuses for ACME rules
     void certJobsPolling.run()
   } catch (error: unknown) {
-    if (axios.isCancel(error)) return
+    if (axios.isCancel(error) || disposed || requestSeq !== rulesRequestSeq) return
     // Error toast is already shown by the global axios interceptor; swallow here
     // so fire-and-forget refresh calls don't surface as unhandled rejections.
     console.error('Failed to fetch rules:', error)
@@ -1720,7 +1723,7 @@ const fetchCertInfo = async (caddyIds?: readonly string[]): Promise<boolean> => 
     certInfoError.value = false
     return true
   } catch (error: unknown) {
-    if (!axios.isCancel(error) && !disposed) {
+    if (!axios.isCancel(error) && !disposed && generation === certInfoGeneration) {
       console.error('Failed to fetch certificate info:', error)
       certInfoError.value = true
     }
@@ -1729,8 +1732,15 @@ const fetchCertInfo = async (caddyIds?: readonly string[]): Promise<boolean> => 
 }
 
 // 证书详情重试入口（横幅按钮）——重试全量 TLS 规则详情。
-const retryCertInfo = (): void => {
-  void fetchCertInfo()
+const certInfoRetryLoading = ref(false)
+const retryCertInfo = async (): Promise<void> => {
+  if (certInfoRetryLoading.value) return
+  certInfoRetryLoading.value = true
+  try {
+    await fetchCertInfo()
+  } finally {
+    certInfoRetryLoading.value = false
+  }
 }
 
 const fetchCertJobs = async (roundSignal?: AbortSignal): Promise<void> => {
@@ -1796,7 +1806,7 @@ const certJobLockTooltip = (row: Rule, activeText: string): string => {
     return 'CA 限流冷却中，不阻塞规则启停、删除与编辑（后台稍后重试签发）'
   }
   if (status === 'downloaded') {
-    return '证书已签发、部署重试中，不阻塞规则启停、删除与编辑'
+    return '证书已签发、部署退避重试中，不阻塞编辑；启停/删除待部署收敛'
   }
   return activeText
 }
@@ -1902,6 +1912,8 @@ const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; de
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
+const configLoadError = ref('')
+const configTargetRule = ref<Rule | null>(null)
 let configRequestSeq = 0
 
 const ruleLogDialogVisible = ref(false)
@@ -2477,6 +2489,7 @@ const usersLoadError = ref(false)
 const certConfigsLoadError = ref(false)
 const caProvidersLoadError = ref(false)
 const auxDataLoadFailed = computed(() => usersLoadError.value || certConfigsLoadError.value || caProvidersLoadError.value)
+const auxDataRetryLoading = ref(false)
 
 const fetchUsers = async () => {
   try {
@@ -2511,10 +2524,18 @@ const fetchCAProviders = async () => {
   }
 }
 
-const retryAuxData = () => {
-  if (usersLoadError.value) void fetchUsers()
-  if (certConfigsLoadError.value) void fetchCertConfigs()
-  if (caProvidersLoadError.value) void fetchCAProviders()
+const retryAuxData = async (): Promise<void> => {
+  if (auxDataRetryLoading.value) return
+  auxDataRetryLoading.value = true
+  try {
+    const retries: Promise<void>[] = []
+    if (usersLoadError.value) retries.push(fetchUsers())
+    if (certConfigsLoadError.value) retries.push(fetchCertConfigs())
+    if (caProvidersLoadError.value) retries.push(fetchCAProviders())
+    await Promise.all(retries)
+  } finally {
+    auxDataRetryLoading.value = false
+  }
 }
 
 const validateCertificate = async () => {
@@ -3756,10 +3777,11 @@ const openCopyWizard = async (rule: Rule) => {
 const viewConfig = async (rule: Rule) => {
   const targetId = rule.caddy_id
   const requestSeq = ++configRequestSeq
+  configTargetRule.value = rule
   configDialogVisible.value = true
   configLoading.value = true
+  configLoadError.value = ''
   ruleConfig.value = null
-  
   try {
     // Get rule-specific Caddy config from API
     const res = await request.get<APIResponse<RuleCaddyConfigResponse>>(`/rules/${targetId}/caddy-config`)
@@ -3773,23 +3795,22 @@ const viewConfig = async (rule: Rule) => {
     )
   } catch (error: unknown) {
     if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
-    // Error message is already shown by the global axios interceptor.
+    // Error message is already shown by the global axios interceptor; the dialog
+    // keeps an independent visible error instead of presenting synthetic JSON.
     console.error('view config failed', error)
-    ruleConfig.value = buildRuleConfigView(
-      rule,
-      '',
-      { error: '获取配置失败', details: error instanceof Error ? error.message : undefined },
-      false,
-      ['gzip'],
-    )
+    configLoadError.value = error instanceof Error ? error.message : '获取配置失败'
   } finally {
     if (requestSeq === configRequestSeq) configLoading.value = false
   }
+}
+const retryViewConfig = (): void => {
+  if (configTargetRule.value) void viewConfig(configTargetRule.value)
 }
 
 const onConfigDialogClosed = (): void => {
   configRequestSeq++
   configLoading.value = false
+  configTargetRule.value = null
 }
 
 const openRuleLogDialog = (rule: Rule) => {
@@ -3926,8 +3947,11 @@ const fetchLogStream = async () => {
       rebuildStatsView(targetMaps)
     }
     logStatsOffset.value = res.data?.offset ?? targetOffset
+    ruleLogStatsError.value = ''
   } catch (error: unknown) {
-    if (!disposed) console.error('Failed to fetch log stream:', error)
+    if (disposed || axios.isCancel(error) || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
+    console.error('Failed to fetch log stream:', error)
+    ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
   } finally {
     if (!disposed && requestSeq === ruleLogRequestSeq) logStatsInFlight.value = false
   }
@@ -4071,9 +4095,16 @@ const healthPollingErrorDescription = computed(() => {
   const retryAt = formatDate(healthPollingError.retryAt.value)
   return retryAt ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}` : `最后错误：${lastError}`
 })
+const healthRetryLoading = ref(false)
 const retryHealthPolling = async (): Promise<void> => {
-  healthPollingError.resetBackoff()
-  await healthPolling.run()
+  if (healthRetryLoading.value) return
+  healthRetryLoading.value = true
+  try {
+    healthPollingError.resetBackoff()
+    await healthPolling.run()
+  } finally {
+    healthRetryLoading.value = false
+  }
 }
 const certPollingError = usePollingErrorState()
 const certPollingErrorDescription = computed(() => {
@@ -4097,9 +4128,16 @@ const certJobsPolling = usePollingTask(async (task) => {
   },
 })
 
+const certRetryLoading = ref(false)
 const retryCertPolling = async (): Promise<void> => {
-  certPollingError.resetBackoff()
-  await certJobsPolling.run()
+  if (certRetryLoading.value) return
+  certRetryLoading.value = true
+  try {
+    certPollingError.resetBackoff()
+    await certJobsPolling.run()
+  } finally {
+    certRetryLoading.value = false
+  }
 }
 
 watch(

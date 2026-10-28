@@ -76,8 +76,8 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	defer rows.Close()
 	// 规则启用状态（enabled）与 TLS 开关（enable_tls）必须分别读取：只读
 	// enable_tls 时「禁用但仍保留 TLS 配置」的规则在这里仍返回证书详情，而单
-	// 规则端点按 enabled 门返回 null——同一张证书在两个入口结论相反（104 轮
-	// 只修了服务侧单规则路径，批量 handler 未同步）。
+	// 规则端点按 enabled 门返回 null——批量与单规则入口必须同口径，否则同一张
+	// 证书在两个入口给出相反结论。
 	type ruleCertificate struct {
 		id, source, domains, certPEM string
 		enabled                      bool

@@ -186,3 +186,62 @@ func TestGetRuleMetricsHistory_bucketWidthAndLastSample(t *testing.T) {
 		}
 	}
 }
+
+// GET /metrics/history 的**全局分支**（不带 rule_id，rule_id IS NULL 的
+// 全站聚合行）取值语义此前零断言：`SUM`→`MAX`、或桶内 `ORDER BY timestamp
+// DESC`→`ASC` 都能全绿通过。本用例双向钉住：
+//   - 同 timestamp 多行先按 SUM 聚合（100+23=123，MAX 形态会是 100）；
+//   - 同桶多 timestamp 取较新者（77 在旧、55 在新 → 期望 55）。
+func TestGetMetricsHistory_globalBranchSumsPerTimestampThenTakesNewestPerBucket(t *testing.T) {
+	newMetricsTestDatabase(t)
+	h := &Handlers{}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/api/v1/metrics/history", h.GetMetricsHistory)
+
+	seed := func(timestamp time.Time, requests int64) {
+		t.Helper()
+		if _, err := db.MetricsDB.Exec(
+			`INSERT INTO metrics_history (rule_id, timestamp, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out)
+			 VALUES (NULL, ?, ?, 0, 0, 0, 0, 0, 0)`,
+			timestamp.Format("2006-01-02 15:04:05"), requests); err != nil {
+			t.Fatalf("seed global row: %v", err)
+		}
+	}
+	// 窗口 1h → bucketSecondsFor(3600)=5s（上取整整除）。
+	base := time.Now().UTC().Add(-600 * time.Second).Truncate(5 * time.Second)
+	seed(base, 100)
+	seed(base, 23)                      // 同 timestamp 双行：SUM=123
+	newer := base.Add(10 * time.Second) // 另一个桶
+	seed(newer, 77)                     // 该桶内较旧 timestamp
+	seed(newer.Add(2*time.Second), 55)  // 同桶较新 timestamp：必须取胜
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/metrics/history?interval=1h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []struct {
+			Timestamp     time.Time `json:"timestamp"`
+			RequestsTotal int64     `json:"requests_total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got := map[int64]int64{}
+	for _, row := range resp.Data {
+		got[row.Timestamp.Unix()] = row.RequestsTotal
+	}
+	if len(got) != 2 {
+		t.Fatalf("返回 %d 个桶, want 2（同桶多 timestamp 只留一行）: %+v", len(got), resp.Data)
+	}
+	if value := got[base.Unix()]; value != 123 {
+		t.Fatalf("同 timestamp 双行 requests_total=%d, want 123（SUM 语义，MAX 形态为 100）", value)
+	}
+	if value := got[newer.Unix()]; value != 55 {
+		t.Fatalf("同桶较新 timestamp requests_total=%d, want 55（取桶内较新者，ASC 形态为 77）", value)
+	}
+}

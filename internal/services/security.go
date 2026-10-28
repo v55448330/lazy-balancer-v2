@@ -1860,6 +1860,17 @@ func precheckProjectionScope(kind, ruleCaddyID string) string {
 	return "u-" + kind + "-" + ruleCaddyID
 }
 
+// validateAllowGeoIPEmpty 是写侧校验之外的渲染 fail-visible 门：allow+空
+// 名单不会发射 GeoIP 链，等同于放行全部，必须在任何早退前统一拒绝。
+func validateAllowGeoIPEmpty(policies []*models.SecurityPolicy) error {
+	for _, p := range policies {
+		if p != nil && p.GeoIPMode == "allow" && len(geoipCountries(p)) == 0 {
+			return fmt.Errorf("策略 %q（#%d）geoip_mode=allow 但地域名单为空：渲染语义为放行全部请求（fail-open），疑似带外直写绕过写侧校验——拒绝生成，请修正策略或关闭地域控制", p.Name, p.ID)
+		}
+	}
+	return nil
+}
+
 // buildIPPrecheckDirectives 合并全部绑定启用策略的 deny 侧 IP 控制（deny 模式
 // ACL 并集 id:2、allow 模式 ACL 交集外拒绝 id:7、遗留黑名单并集 id:4）与逐策略
 // GeoIP 链（800000+policyID）为一个极简 coraza 配置（阶段 1）。预检查器置于
@@ -1930,14 +1941,8 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			break
 		}
 	}
-	// allow+空名单守卫必须在早退之前：PolicyHasGeoIP 为 false 时该策略零
-	// GeoIP 特征，若无其他预检内容函数会提前返回空串——allow+空的渲染语义
-	// 是放行全部请求（fail-open，最危险方向），写侧 400 的形状经带外直写
-	// 绕过时必须 fail-visible 拒绝生成。
-	for _, p := range policies {
-		if p != nil && p.GeoIPMode == "allow" && len(geoipCountries(p)) == 0 {
-			return "", fmt.Errorf("策略 %q（#%d）geoip_mode=allow 但地域名单为空：渲染语义为放行全部请求（fail-open），疑似带外直写绕过写侧校验——拒绝生成，请修正策略或关闭地域控制", p.Name, p.ID)
-		}
+	if err := validateAllowGeoIPEmpty(policies); err != nil {
+		return "", err
 	}
 	detectionTrust, _ := stage0TrustSets(policies)
 	hasStage0Detection := hasStage0TrustDetection(policies)
@@ -2114,9 +2119,6 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 				Logf("warn", "%s", msg)
 			}
 			continue
-		}
-		if p.GeoIPMode == "allow" && len(geoipCountries(p)) == 0 {
-			return "", fmt.Errorf("策略 %q（#%d）geoip_mode=allow 但地域名单为空：渲染语义为放行全部请求（fail-open），疑似带外直写绕过写侧校验——拒绝生成，请修正策略或关闭地域控制", p.Name, p.ID)
 		}
 		if !PolicyHasGeoIP(p) {
 			continue

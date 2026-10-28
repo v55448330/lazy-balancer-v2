@@ -210,7 +210,8 @@ func crawlerVerifyCacheKey(ip string) string {
 }
 
 // verifyCrawlerDNS 双跳验证本体（无缓存、需已持信号量）。第二个返回值表示
-// 结论是否可缓存：PTR/正向回验的确定性否定为 true，任何解析错误/超时为 false。
+// 结论是否可缓存：PTR/正向回验的确定性否定为 true；NXDOMAIN 同样是权威否定，
+// 其余解析错误/超时为 false。
 func verifyCrawlerDNS(ip, engineID string) (bool, bool) {
 	// 地址归一化比较——netip 解析 + Unmap。客户端 IP 可能是
 	// 4in6 映射形态（::ffff:a.b.c.d），而 DNS 正向应答恒为 v4 规范串，
@@ -225,6 +226,10 @@ func verifyCrawlerDNS(ip, engineID string) (bool, bool) {
 	defer cancel()
 	names, err := crawlerVerifyResolver.LookupAddr(ctx, ip)
 	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return false, true
+		}
 		return false, false
 	}
 	transientFailure := false

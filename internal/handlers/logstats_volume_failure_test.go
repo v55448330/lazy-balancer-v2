@@ -62,7 +62,7 @@ func TestLogStatsVolume_dirReadFailureIsVisibleAndRecovers(t *testing.T) {
 
 	// When：连续两轮枚举失败。
 	for range 2 {
-		if stats := aggregateDirStats(dir, match); len(stats) != 0 {
+		if stats := aggregateDirStatsWithEntries(dir, nil, match); len(stats) != 0 {
 			t.Fatalf("读取失败应返回空聚合, got %v", stats)
 		}
 	}
@@ -79,7 +79,7 @@ func TestLogStatsVolume_dirReadFailureIsVisibleAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	logStatsReadDir = origReadDir
-	if stats := aggregateDirStats(dir, match); stats["app.log"].Active != 3 {
+	if stats := aggregateDirStatsWithEntries(dir, nil, match); stats["app.log"].Active != 3 {
 		t.Fatalf("恢复后聚合=%v, want app.log Active=3", stats)
 	}
 	// Then：恰一条恢复 info。
@@ -116,7 +116,7 @@ func TestLogStatsVolume_missingDirectoryIsNotLogged(t *testing.T) {
 	logs := captureHandlerLog(t)
 	missing := filepath.Join(t.TempDir(), "absent")
 	resetLogStatsVolumeStateForTest()
-	aggregateDirStats(missing, func(name string) bool { return true })
+	aggregateDirStatsWithEntries(missing, nil, func(name string) bool { return true })
 	if strings.Contains(logs.String(), "日志体量读取失败") {
 		t.Fatalf("目录不存在不得留痕: %q", logs.String())
 	}

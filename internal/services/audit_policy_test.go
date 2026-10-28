@@ -10,6 +10,9 @@ import "testing"
 // TestAuditExplicitRoutesMappingEmpty（全量 Explicit 映射空钉）、
 // TestAuditPolicyListsEqual（派生活性钉）。
 
+// TestClassifyAuditRouteMatrix 仅是既有映射的变更探测器（非独立行为断言）；
+// 新增路由与真实行为覆盖见 middleware/audit_routes_test.go 和上述映射门。
+
 type auditRouteCase struct {
 	method string
 	path   string

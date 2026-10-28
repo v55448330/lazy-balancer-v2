@@ -548,8 +548,21 @@ func TestClient_finalizedCertsCappedFIFO(t *testing.T) {
 
 func TestClient_DiscardFinalizedCert_fallsBackToNetwork(t *testing.T) {
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/directory" {
+			w.Header().Set("Content-Type", "application/json")
+			base := "http://" + r.Host
+			_, _ = w.Write([]byte(`{"newNonce":"` + base + `/nonce","newAccount":"` + base + `/account","newOrder":"` + base + `/order"}`))
+			return
+		}
+		if r.URL.Path == "/nonce" {
+			w.Header().Set("Replay-Nonce", "test-nonce")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/cert" {
+			requests++
+		}
 		w.Header().Set("Content-Type", "application/pem-certificate-chain")
 		_, _ = w.Write([]byte("-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n"))
 	}))
@@ -559,7 +572,8 @@ func TestClient_DiscardFinalizedCert_fallsBackToNetwork(t *testing.T) {
 		t.Fatalf("generate account key: %v", err)
 	}
 	client := &Client{
-		acme:           &acme.Client{Key: key, HTTPClient: server.Client()},
+		DirectoryURL:   server.URL + "/directory",
+		acme:           &acme.Client{Key: key, HTTPClient: server.Client(), DirectoryURL: server.URL + "/directory"},
 		finalizedCerts: map[string][][]byte{server.URL + "/cert": {{1, 2, 3}}},
 	}
 	client.DiscardFinalizedCert(server.URL + "/cert")

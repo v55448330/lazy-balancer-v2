@@ -18,7 +18,7 @@ import (
 
 // configChangeAddFieldRe 匹配 planConfigChanges 的 add("field", ...) 调用；
 // 闭包定义行 `add := func(field, ...)` 不含 `add("`，不会误命中。
-var configChangeAddFieldRe = regexp.MustCompile(`add\("([^"]+)",`)
+var configChangeAddFieldRe = regexp.MustCompile("add\\(\\s*\"([^\"]+)\"\\s*,")
 
 // configChangeFieldTokensFromSource 从源码提取 planConfigChanges 全部 add()
 // 首参（令牌），顺序与实现一致。
@@ -34,6 +34,15 @@ func configChangeFieldTokensFromSource(t *testing.T) []string {
 		fields = append(fields, m[1])
 	}
 	return fields
+}
+
+func TestConfigChangeAddFieldRe_matchesMultilineCall(t *testing.T) {
+	for _, source := range []string{`add("timezone", "时区")`, "add(\n\t\"github_token\",\n\t\"GitHub Token\")"} {
+		matches := configChangeAddFieldRe.FindStringSubmatch(source)
+		if len(matches) != 2 {
+			t.Fatalf("add() 形态未被提取：%q", source)
+		}
+	}
 }
 
 func TestConfigFieldSections_matchConfigChangeSource(t *testing.T) {

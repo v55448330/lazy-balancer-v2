@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,87 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
+
+type demoteVersionRowSnapshot struct {
+	version, status, message            string
+	finishedAt, lastChecked, nextUpdate string
+	autoUpdate                          bool
+}
+
+func snapshotCRSVersionForDemote(t *testing.T) demoteVersionRowSnapshot {
+	t.Helper()
+	version, status, message, finishedAt, lastChecked, nextUpdate, autoUpdate := crsVersionRow(t)
+	return demoteVersionRowSnapshot{version, status, message, finishedAt, lastChecked, nextUpdate, autoUpdate}
+}
+
+func snapshotIP2RegionVersionForDemote(t *testing.T) demoteVersionRowSnapshot {
+	t.Helper()
+	version, status, message, finishedAt, lastChecked, nextUpdate, autoUpdate := ip2RegionVersionRow(t)
+	return demoteVersionRowSnapshot{version, status, message, finishedAt, lastChecked, nextUpdate, autoUpdate}
+}
+
+type demoteFileSnapshot struct {
+	exists bool
+	data   string
+}
+
+func snapshotDemoteFile(t *testing.T, path string) demoteFileSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return demoteFileSnapshot{}
+	}
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", path, err)
+	}
+	return demoteFileSnapshot{exists: true, data: string(data)}
+}
+
+func assertDemoteFileUnchanged(t *testing.T, path string, before demoteFileSnapshot) {
+	t.Helper()
+	if after := snapshotDemoteFile(t, path); after != before {
+		t.Fatalf("demote 中止改写了 %s：before=%+v after=%+v", path, before, after)
+	}
+}
+
+type demoteThreatSourceSnapshot struct {
+	entryCount, consecutiveFailures                        int
+	version, status, message, lastChecked, nextUpdate      string
+	trigger, startedAt, finishedAt, rawHash, lastUpdatedAt string
+}
+
+func snapshotThreatSourceForDemote(t *testing.T, name string) demoteThreatSourceSnapshot {
+	t.Helper()
+	var s demoteThreatSourceSnapshot
+	if err := db.DB.QueryRow(`SELECT entry_count, version, update_status, message,
+		COALESCE(last_checked,''), COALESCE(next_update,''), trigger, COALESCE(started_at,''),
+		COALESCE(finished_at,''), consecutive_failures, COALESCE(raw_hash,''), COALESCE(updated_at,'')
+		FROM security_threat_sources WHERE name=?`, name).Scan(
+		&s.entryCount, &s.version, &s.status, &s.message, &s.lastChecked, &s.nextUpdate,
+		&s.trigger, &s.startedAt, &s.finishedAt, &s.consecutiveFailures, &s.rawHash, &s.lastUpdatedAt,
+	); err != nil {
+		t.Fatalf("snapshot threat source %s: %v", name, err)
+	}
+	return s
+}
+
+func assertSingleDemoteSkipAudit(t *testing.T, resource, wantAction string) {
+	t.Helper()
+	var count int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource=?`, resource).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("%s demote 审计条数=%d, want 1", resource, count)
+	}
+	var action, detail string
+	if err := db.AuditDB.QueryRow(`SELECT action, COALESCE(detail,'') FROM audit_log WHERE resource=?`, resource).Scan(&action, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if action != wantAction || !strings.Contains(detail, "更新跳过") {
+		t.Fatalf("%s demote 审计=(%q,%q), want action=%q 且终态词=更新跳过", resource, action, detail, wantAction)
+	}
+}
 
 // Given CRS 更新在途（fetchLatestTag 阻塞于 runCtx）。
 // When 运行中 demote（is_master=0）+ 引擎侧 rc.Ctx 取消（SetRole 中止语义）。
@@ -50,7 +132,9 @@ func TestCRSUpdateRun_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-entered
+	waitUpdateTestSignal(t, entered, "CRS demote 用例进入下载")
+	versionBefore := snapshotCRSVersionForDemote(t)
+	sidecarBefore := snapshotDemoteFile(t, filepath.Join(m.liveDir(), crsVersionFile))
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +148,11 @@ func TestCRSUpdateRun_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	if snap := m.StatusSnapshot(); snap.Status != string(CRSStatusSkipped) {
 		t.Fatalf("status=%q, want skipped（demote 中止与起点角色复查同语义）", snap.Status)
 	}
+	if got := snapshotCRSVersionForDemote(t); got != versionBefore {
+		t.Fatalf("CRS demote 中止改写版本行: before=%+v after=%+v", versionBefore, got)
+	}
+	assertDemoteFileUnchanged(t, filepath.Join(m.liveDir(), crsVersionFile), sidecarBefore)
+	assertSingleDemoteSkipAudit(t, "CRS规则库", "更新")
 }
 
 // Given IP2Region 更新在途（fetchLatestTag 阻塞于 runCtx）。
@@ -91,7 +180,9 @@ func TestIP2RegionUpdateRun_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-entered
+	waitUpdateTestSignal(t, entered, "IP2Region demote 用例进入下载")
+	versionBefore := snapshotIP2RegionVersionForDemote(t)
+	sidecarBefore := snapshotDemoteFile(t, ip2regionLivePath+".version")
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +196,11 @@ func TestIP2RegionUpdateRun_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	if snap := m.StatusSnapshot(); snap.Status != string(IP2RegionStatusSkipped) {
 		t.Fatalf("status=%q, want skipped（demote 中止与起点角色复查同语义）", snap.Status)
 	}
+	if got := snapshotIP2RegionVersionForDemote(t); got != versionBefore {
+		t.Fatalf("IP2Region demote 中止改写版本行: before=%+v after=%+v", versionBefore, got)
+	}
+	assertDemoteFileUnchanged(t, ip2regionLivePath+".version", sidecarBefore)
+	assertSingleDemoteSkipAudit(t, "IP数据库", "更新")
 }
 
 // Given 威胁库更新在途（源下载阻塞于请求 ctx——经 runCtx 派生）。
@@ -136,7 +232,10 @@ func TestThreatRunUpdate_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	go func() {
 		runErr <- GetThreatUpdateManager().RunUpdate("manual", &taskengine.RunContext{Ctx: ctx, Trigger: "manual"})
 	}()
-	<-entered
+	waitUpdateTestSignal(t, entered, "威胁库 demote 用例进入下载")
+	sourceBefore := snapshotThreatSourceForDemote(t, "ustc")
+	iplistBefore := snapshotDemoteFile(t, filepath.Join(wafDir, "threat-ustc.iplist"))
+	fastBefore := snapshotDemoteFile(t, filepath.Join(wafDir, "threat-ustc.iplist.fast"))
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +252,12 @@ func TestThreatRunUpdate_demoteMidFlightAbortsAsSkipped(t *testing.T) {
 	if got := GetThreatUpdateManager().StatusSnapshot().Outcome; got != "skipped" {
 		t.Fatalf("outcome=%q, want skipped（demote 中止与起点角色复查同语义）", got)
 	}
+	if got := snapshotThreatSourceForDemote(t, "ustc"); got != sourceBefore {
+		t.Fatalf("威胁库 demote 中止改写源行: before=%+v after=%+v", sourceBefore, got)
+	}
+	assertDemoteFileUnchanged(t, filepath.Join(wafDir, "threat-ustc.iplist"), iplistBefore)
+	assertDemoteFileUnchanged(t, filepath.Join(wafDir, "threat-ustc.iplist.fast"), fastBefore)
+	assertSingleDemoteSkipAudit(t, "威胁情报库", "跳过")
 }
 
 // 边界形状：demote 发生在末源在途（循环自然结束、不再经过顶部取消检查）——
@@ -194,7 +299,10 @@ func TestThreatRunUpdate_demoteOnLastSourceAbortsAsSkipped(t *testing.T) {
 	go func() {
 		runErr <- GetThreatUpdateManager().RunUpdate("manual", &taskengine.RunContext{Ctx: ctx, Trigger: "manual"})
 	}()
-	<-enteredLast
+	waitUpdateTestSignal(t, enteredLast, "威胁库 demote 用例进入末源下载")
+	sourceBefore := snapshotThreatSourceForDemote(t, "et_compromised")
+	iplistBefore := snapshotDemoteFile(t, filepath.Join(wafDir, "threat-et_compromised.iplist"))
+	fastBefore := snapshotDemoteFile(t, filepath.Join(wafDir, "threat-et_compromised.iplist.fast"))
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
@@ -211,6 +319,12 @@ func TestThreatRunUpdate_demoteOnLastSourceAbortsAsSkipped(t *testing.T) {
 	if got := GetThreatUpdateManager().StatusSnapshot().Outcome; got != "skipped" {
 		t.Fatalf("末源在途 demote outcome=%q, want skipped（中止点归一补判）", got)
 	}
+	if got := snapshotThreatSourceForDemote(t, "et_compromised"); got != sourceBefore {
+		t.Fatalf("末源在途 demote 中止改写源行: before=%+v after=%+v", sourceBefore, got)
+	}
+	assertDemoteFileUnchanged(t, filepath.Join(wafDir, "threat-et_compromised.iplist"), iplistBefore)
+	assertDemoteFileUnchanged(t, filepath.Join(wafDir, "threat-et_compromised.iplist.fast"), fastBefore)
+	assertSingleDemoteSkipAudit(t, "威胁情报库", "跳过")
 }
 
 // 手动取消必须立即打断任务内重试，且 manager/DB/审计与

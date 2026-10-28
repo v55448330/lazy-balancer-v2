@@ -58,8 +58,19 @@ func caddyMetricsError(c *gin.Context, err error) {
 	writeInternalError(c, http.StatusBadGateway, "采集 Caddy 指标失败", err)
 }
 
+// metricsOverviewOrZero 返回当前总览；metricsService 未装配（&Handlers{} /
+// NewHandlers(Dependencies{}) 形态的测试、嵌入或未来新进程入口）时返回零值。
+// 与同文件对 db.MetricsDB==nil 的「未装配返回空数据 200」口径一致——直呼
+// h.metricsService.GetOverview()（指针接收者）会 panic → gin Recovery 500。
+func (h *Handlers) metricsOverviewOrZero() models.MetricsOverview {
+	if h == nil || h.metricsService == nil {
+		return models.MetricsOverview{}
+	}
+	return h.metricsService.GetOverview()
+}
+
 func (h *Handlers) GetMetricsOverview(c *gin.Context) {
-	overview := h.metricsService.GetOverview()
+	overview := h.metricsOverviewOrZero()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: overview})
 }
 
@@ -361,7 +372,7 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 	payload := gin.H{
 		"global":   metricsIndex.globalMetrics(),
 		"hosts":    metricsIndex.hostMetrics(),
-		"overview": h.metricsService.GetOverview(),
+		"overview": h.metricsOverviewOrZero(),
 		"rules":    ruleMetrics,
 	}
 	return metricsDashboardOutcome{payload: payload}

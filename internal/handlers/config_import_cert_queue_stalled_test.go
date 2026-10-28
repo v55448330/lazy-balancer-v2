@@ -68,6 +68,30 @@ func TestImportConfigBackup_warnsWhenCertQueueStopped(t *testing.T) {
 	if !warningsContain(warnings, needle) {
 		t.Fatalf("warnings=%v, want 含 %q（队列停止时不重排必须有披露）", warnings, needle)
 	}
+
+	// 双通道披露（生产 config_backup.go 的 stalledWarning 分支）：响应 warnings
+	// 之外必须落操作审计，否则事后只能看到「任务列表显示进行中」而无法追溯
+	// 来源。只断言 warnings 时删掉 recordAudit 用例仍全绿。
+	auditRows, auditDetail := stalledCertAuditRows(t)
+	if auditRows != 1 {
+		t.Fatalf("停滞披露审计行=%d, want 1（warnings 之外必须有操作审计）detail=%q", auditRows, auditDetail)
+	}
+	if !strings.Contains(auditDetail, needle) {
+		t.Fatalf("审计 detail=%q, want 与 warnings 同文（含 %q）", auditDetail, needle)
+	}
+}
+
+// stalledCertAuditRows 返回「证书任务停滞」披露在操作审计里的行数与首条
+// detail（文案单源：stalledWarning 同时供给响应与审计）。
+func stalledCertAuditRows(t *testing.T) (int, string) {
+	t.Helper()
+	var count int
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*), COALESCE(MAX(detail), '') FROM audit_log
+		WHERE resource='配置备份' AND detail LIKE '%非终态证书任务%'`).Scan(&count, &detail); err != nil {
+		t.Fatalf("read stalled cert audit: %v", err)
+	}
+	return count, detail
 }
 
 // Given 证书队列激活（导入前队列正常运行）。
@@ -89,6 +113,10 @@ func TestImportConfigBackup_noStalledWarningWhenCertQueueActive(t *testing.T) {
 	warnings := decodeImportWarnings(t, response)
 	if warningsContain(warnings, "未重排") {
 		t.Fatalf("warnings=%v, want 无「未重排」披露（队列激活时导入会重排非终态任务）", warnings)
+	}
+	// 审计通道同样不得误报（否则每次正常导入都在操作日志里留下停滞告警）。
+	if rows, detail := stalledCertAuditRows(t); rows != 0 {
+		t.Fatalf("队列激活时停滞披露审计行=%d, want 0（detail=%q）", rows, detail)
 	}
 }
 

@@ -36,3 +36,22 @@ func withIsolatedRateLimitBuckets(t *testing.T) {
 		loginRateBuckets.Unlock()
 	})
 }
+
+// withIsolatedAPIKeyWhitelistCache 保存-清空-恢复进程级白名单解析缓存。
+// sync.Map 不可直接复制，因此逐键快照；cleanup 先清掉用例写入再恢复调用前
+// 现场，避免整表清扫类用例吞掉其他用例的预热条目。
+func withIsolatedAPIKeyWhitelistCache(t *testing.T) {
+	t.Helper()
+	saved := make(map[any]any)
+	apiKeyWhitelistCache.Range(func(key, value any) bool {
+		saved[key] = value
+		return true
+	})
+	PurgeAllAPIKeyWhitelistCache()
+	t.Cleanup(func() {
+		PurgeAllAPIKeyWhitelistCache()
+		for key, value := range saved {
+			apiKeyWhitelistCache.Store(key, value)
+		}
+	})
+}

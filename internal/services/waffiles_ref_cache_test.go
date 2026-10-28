@@ -230,3 +230,35 @@ func TestWafRefStatSignature_tracksIP2RegionVersionContent(t *testing.T) {
 		t.Fatal(".version 缺失必须是独立签名状态")
 	}
 }
+
+// OverrideWafLivePathsForTest 是测试侧切换活动路径的唯一入口：切换（含还原）
+// 必须同时失效 wafFileRefCache。签名虽含两个绝对路径，但「同路径等长同 mtime
+// 改写」与 mtime 精度退化（秒级 FS）形态下，下一夹具可能命中上一夹具的签名，
+// 把旧 ref 带入新用例（假绿/假红）——与 wafFileBundleCache 的隔离口径对齐。
+func TestOverrideWafLivePathsForTest_invalidatesRefCache(t *testing.T) {
+	resetWafFileRefCacheForTest(t) // 复位并在用例结束后还原全局态
+	prime := func() {
+		wafFileRefCache.mu.Lock()
+		wafFileRefCache.valid = true
+		wafFileRefCache.sig = "stale-sig"
+		wafFileRefCache.validatedAt = time.Now()
+		wafFileRefCache.mu.Unlock()
+	}
+	cacheState := func() (bool, string) {
+		wafFileRefCache.mu.Lock()
+		defer wafFileRefCache.mu.Unlock()
+		return wafFileRefCache.valid, wafFileRefCache.sig
+	}
+
+	prime()
+	restore := OverrideWafLivePathsForTest(t.TempDir(), filepath.Join(t.TempDir(), "ip2region.xdb"))
+	if valid, sig := cacheState(); valid || sig != "" {
+		t.Fatalf("切换后缓存未失效 valid=%v sig=%q", valid, sig)
+	}
+
+	prime()
+	restore()
+	if valid, sig := cacheState(); valid || sig != "" {
+		t.Fatalf("还原后缓存未失效 valid=%v sig=%q", valid, sig)
+	}
+}

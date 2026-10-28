@@ -79,6 +79,50 @@ func CertJobMaterialUsable(status, certPEM, keyPEM string) bool {
 	return strings.TrimSpace(certPEM) != "" && strings.TrimSpace(keyPEM) != "" && status != "disabled"
 }
 
+// certJobDeploymentExecutor 部署窗口推进写点接受的最小执行体（*sql.DB/*sql.Tx）。
+type certJobDeploymentExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// CertJobDeploymentWindowPush 描述一次「部署窗口推进」写点。
+type CertJobDeploymentWindowPush struct {
+	// Status 非空时同时把 status 置为该值——只有「删除失败恢复 disabled→
+	// downloaded」一条路径需要（恢复必须与窗口同写，否则恢复后的行停在无窗口态）。
+	Status string
+	// Message 是要落库的任务消息（按 maxJobMessageBytes 截断）。
+	Message string
+	// Where 是追加在 `id=?` 之后的状态/业务谓词（可含占位符），WhereArgs 为其参数。
+	Where     string
+	WhereArgs []any
+}
+
+// PushCertJobDeploymentWindow 是「把部署窗口推到当前时刻 + 同写 message +
+// 推 updated_at」的唯一实现。
+//
+// 窗口列与 updated_at 必须同写：重试冷却门（certJobRetryBlocked）以
+// updated_at 为计时基准，只推窗口不推 updated_at 会让本轮重排对冷却门不可见
+// （「补扫可见但冷却门不可见」的半套状态）。部署重排的五个写点曾各写一份内联
+// SQL + 互相引用注释，任一处漏写 updated_at 就会复活该半套状态。
+func PushCertJobDeploymentWindow(exec certJobDeploymentExecutor, jobID int, push CertJobDeploymentWindowPush) (int64, error) {
+	assignments := "deployment_available_after=datetime('now'), message=?, updated_at=datetime('now')"
+	args := []any{truncateJobMessage(push.Message)}
+	if push.Status != "" {
+		assignments = "status=?, " + assignments
+		args = append([]any{push.Status}, args...)
+	}
+	query := "UPDATE cert_jobs SET " + assignments + " WHERE id=?"
+	args = append(args, jobID)
+	if push.Where != "" {
+		query += " AND " + push.Where
+		args = append(args, push.WhereArgs...)
+	}
+	result, err := exec.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // loadCertJobDeploymentState 读取任务行的状态与「材料是否可用」，供所有
 // 「部署生命周期 + 有材料」判定复用（补偿重排队 / CA provider 不可用降级 /
 // 生命周期取消重排队 / 失败终态降级）。这四处曾各写一份同构 SELECT 与同一

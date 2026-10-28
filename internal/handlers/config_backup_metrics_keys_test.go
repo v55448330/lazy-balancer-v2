@@ -55,12 +55,12 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 	if importRec.Code != http.StatusOK {
 		t.Fatalf("import status=%d body=%s, want 200（携带已删死列键的历史备份必须兼容）", importRec.Code, importRec.Body.String())
 	}
-	var timezone string
-	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'') FROM global_config WHERE id=1").Scan(&timezone); err != nil {
-		t.Fatalf("read imported timezone: %v", err)
+	var timezone, logLevel string
+	if err := db.DB.QueryRow("SELECT COALESCE(timezone,''), COALESCE(log_level,'') FROM global_config WHERE id=1").Scan(&timezone, &logLevel); err != nil {
+		t.Fatalf("read imported config: %v", err)
 	}
-	if timezone != "Asia/Shanghai" {
-		t.Fatalf("timezone=%q, want Asia/Shanghai（其余配置正常落库）", timezone)
+	if timezone != "Asia/Shanghai" || logLevel != "warn" {
+		t.Fatalf("timezone/log_level=%q/%q, want Asia/Shanghai/warn（非默认哨兵必须真实落库）", timezone, logLevel)
 	}
 
 	// And When：重新导出

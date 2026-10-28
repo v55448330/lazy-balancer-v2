@@ -108,9 +108,10 @@ func TestCertJobRunHistory_nilDatabaseReturnsNotInitialized(t *testing.T) {
 	router := gin.New()
 	router.GET("/system/tasks/:id/history", h.GetSystemTaskHistory)
 
-	old := db.DB
+	old, oldCurrent := db.DB, db.GetDB()
 	db.DB = nil
-	t.Cleanup(func() { db.DB = old })
+	db.SetDB(nil)
+	t.Cleanup(func() { db.DB = old; db.SetDB(oldCurrent) })
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/system/tasks/cert-job:1/history", nil))

@@ -1160,3 +1160,68 @@ func TestOIDCStatus_invalidStoredIssuerLogsAndDisables(t *testing.T) {
 		t.Fatalf("降级必须留痕, logs=%q", logs.String())
 	}
 }
+
+// 带外 NULL is_enabled 必须与 jwtAuth 同向 fail-closed：不得先签发一个随后
+// 每次请求都 401 的会话。视图只替换本次查询的列，模拟迁移前/畸形快照的 NULL 形状。
+func TestOIDCCallback_nullEnabledIdentityFailsClosed(t *testing.T) {
+	idp := newMockIdP(t)
+	router, _ := setupOIDCTest(t, idp)
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	if _, err := db.DB.Exec(`
+		ALTER TABLE users RENAME TO users_rows;
+		CREATE VIEW users AS
+		SELECT id,username,role,NULL AS is_enabled,password_version,auth_provider,oidc_subject,oidc_issuer FROM users_rows;
+		INSERT INTO users_rows (username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES ('null-enabled','','admin',1,'oidc','user-sub-1',?)`, idp.issuer); err != nil {
+		t.Fatalf("seed nullable identity shape: %v", err)
+	}
+
+	front := runOIDCLoginFlow(t, router)
+	decoded, _ := url.QueryUnescape(front)
+	if strings.Contains(front, "token=") || !strings.Contains(decoded, "账号已被禁用") {
+		t.Fatalf("NULL is_enabled 必须拒登且不签发 token，got redirect: %s", front)
+	}
+}
+
+// 导入/快照可绕过面板保存门带入 enabled=true 但凭证不全的配置；公开状态端点
+// 不得展示必然失败的登录按钮，降级原因按既有 60s 窗口留痕一次。
+func TestOIDCStatus_incompleteStoredCredentialsLogAndDisable(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		clientID     string
+		clientSecret string
+	}{
+		{name: "missing client id", clientID: "", clientSecret: "s"},
+		{name: "missing client secret", clientID: "c", clientSecret: ""},
+		{name: "whitespace client secret", clientID: "c", clientSecret: "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idp := newMockIdP(t)
+			router, _ := setupOIDCTest(t, idp)
+			if _, err := db.DB.Exec(`UPDATE global_config SET oidc_config=? WHERE id=1`,
+				`{"enabled":true,"issuer":"`+idp.issuer+`","client_id":"`+tc.clientID+`","client_secret":"`+tc.clientSecret+`"}`); err != nil {
+				t.Fatal(err)
+			}
+			oidcStatusIssuerLog.Lock()
+			oidcStatusIssuerLog.at = time.Time{}
+			oidcStatusIssuerLog.Unlock()
+			t.Cleanup(func() {
+				oidcStatusIssuerLog.Lock()
+				oidcStatusIssuerLog.at = time.Time{}
+				oidcStatusIssuerLog.Unlock()
+			})
+			logs := captureLog(t)
+
+			for range 2 {
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil))
+				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+					t.Fatalf("status=%d body=%s, want 200 disabled", rec.Code, rec.Body.String())
+				}
+			}
+			if got := strings.Count(logs.String(), "OIDC 配置不完整"); got != 1 {
+				t.Fatalf("incomplete-config warning count=%d, want 1; logs=%s", got, logs.String())
+			}
+		})
+	}
+}

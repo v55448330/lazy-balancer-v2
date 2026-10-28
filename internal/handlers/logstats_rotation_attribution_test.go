@@ -34,10 +34,10 @@ func TestDirBytes_timberjackCopyBelongsToLongestRealBase(t *testing.T) {
 	})
 
 	// Then：副本归到自己（lb_abc-123），同前缀兄弟规则零计入。
-	if active, rotated, count := dirBytes(filepath.Join(dir, "lb_abc-123.log")); active != 200 || rotated != 55 || count != 2 {
+	if active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "lb_abc-123.log"), nil); active != 200 || rotated != 55 || count != 2 {
 		t.Fatalf("lb_abc-123.log=(%d,%d,%d), want (200,55,2)", active, rotated, count)
 	}
-	if active, rotated, count := dirBytes(filepath.Join(dir, "lb_abc.log")); active != 100 || rotated != 0 || count != 0 {
+	if active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "lb_abc.log"), nil); active != 100 || rotated != 0 || count != 0 {
 		t.Fatalf("lb_abc.log=(%d,%d,%d), want (100,0,0)——兄弟规则副本不得串账", active, rotated, count)
 	}
 
@@ -45,7 +45,7 @@ func TestDirBytes_timberjackCopyBelongsToLongestRealBase(t *testing.T) {
 	match := func(name string) bool {
 		return strings.HasSuffix(strings.TrimSuffix(name, ".gz"), ".log") || isRotationCopyShape(name)
 	}
-	stats := aggregateDirStats(dir, match)
+	stats := aggregateDirStatsWithEntries(dir, nil, match)
 	if got := stats["lb_abc.log"]; got.Active != 100 || got.Rotated != 0 || got.RotCount != 0 {
 		t.Fatalf("aggregate lb_abc.log=%+v, want 100/0/0", got)
 	}
@@ -68,7 +68,7 @@ func TestDirBytes_timberjackCopiesWithoutActiveBase(t *testing.T) {
 		"certjob-lb_abc-123-20261018-101500-64-size.log": 30,
 		"certjob-lb_abc-123-20261018-111500-64-size.log": 25,
 	})
-	active, rotated, count := dirBytes(filepath.Join(dir, "certjob-lb_abc-123.log"))
+	active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "certjob-lb_abc-123.log"), nil)
 	if active != 0 || rotated != 55 || count != 2 {
 		t.Fatalf("missing-base dirBytes=(%d,%d,%d), want (0,55,2)", active, rotated, count)
 	}
@@ -89,11 +89,11 @@ func TestRotationCopy_shiftGzipCollisionAndWideIndexCountBothPaths(t *testing.T)
 	})
 
 	const wantRotated, wantCount = int64(105), 7
-	active, rotated, count := dirBytes(filepath.Join(dir, "caddy.log"))
+	active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "caddy.log"), nil)
 	if active != 100 || rotated != wantRotated || count != wantCount {
 		t.Fatalf("dirBytes(caddy.log)=(%d,%d,%d), want (100,%d,%d)", active, rotated, count, wantRotated, wantCount)
 	}
-	stats := aggregateDirStats(dir, caddyLogFamilyMatch)
+	stats := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 	if got := stats["caddy.log"]; got.Active != 100 || got.Rotated != wantRotated || got.RotCount != wantCount {
 		t.Fatalf("aggregate caddy.log=%+v, want 100/%d/%d", got, wantRotated, wantCount)
 	}
@@ -154,13 +154,13 @@ func TestTaskLogFamily_timestampAndShiftGzipCountBothPaths(t *testing.T) {
 		"crs.log.20261018-150405-2":       5,
 		"crs-20261018-150405-64-size.log": 25,
 	})
-	stats := aggregateDirStats(dir, isTaskLogFamilyName)
+	stats := aggregateDirStatsWithEntries(dir, nil, isTaskLogFamilyName)
 	got := stats["crs.log"]
 	want := dirStats{Active: 100, Rotated: 70, RotCount: 5}
 	if got != want {
 		t.Fatalf("aggregate crs.log=%+v, want %+v", got, want)
 	}
-	if active, rotated, count := dirBytes(filepath.Join(dir, "crs.log")); active != want.Active || rotated != want.Rotated || count != want.RotCount {
+	if active, rotated, count := dirBytesWithEntries(filepath.Join(dir, "crs.log"), nil); active != want.Active || rotated != want.Rotated || count != want.RotCount {
 		t.Fatalf("dirBytes(crs.log)=(%d,%d,%d), want %+v", active, rotated, count, want)
 	}
 }

@@ -4,6 +4,7 @@ package services
 // 不补记「触发失败」，真实执行失败仍必须记。
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -11,11 +12,7 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// Given 引擎已停止的 admission 拒绝（ErrEngineStopped）。
-// When 记录触发结果。
-// Then 不得补记「触发失败」审计——admission 被拒不是任务失败（关停窗口的
-// 误点不应在台账里留下与任务执行无关的失败记录）。
-func TestRecordTaskTriggerResult_engineStoppedIsSilent(t *testing.T) {
+func TestRecordTaskTriggerResult_admissionAndCancellationAreSilent(t *testing.T) {
 	setupIsolatedDB(t)
 	count := func() int {
 		var n int
@@ -25,11 +22,18 @@ func TestRecordTaskTriggerResult_engineStoppedIsSilent(t *testing.T) {
 		return n
 	}
 	before := count()
-	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, taskengine.ErrEngineStopped)
-	if after := count(); after != before {
-		t.Fatalf("ErrEngineStopped 不得记「触发失败」审计（before=%d after=%d）", before, after)
+	for _, err := range []error{
+		taskengine.ErrAlreadyRunning,
+		taskengine.ErrTaskSkipped,
+		taskengine.ErrRunCancelled,
+		context.Canceled,
+		taskengine.ErrEngineStopped,
+	} {
+		RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, err)
 	}
-	// 契约对照：真实执行失败仍必须记（静默清单不得吞掉真失败）。
+	if after := count(); after != before {
+		t.Fatalf("静默清单五类错误不得记「触发失败」（before=%d after=%d）", before, after)
+	}
 	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, errors.New("boom"))
 	if after := count(); after != before+1 {
 		t.Fatalf("真实失败必须记「触发失败」审计（before=%d after=%d）", before, after)

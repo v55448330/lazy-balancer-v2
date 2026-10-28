@@ -82,7 +82,7 @@ func TestTimestampedRotationStats_familyShapes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			active, rotated, _ := dirBytes(filepath.Join(dir, tc.base))
+			active, rotated, _ := dirBytesWithEntries(filepath.Join(dir, tc.base), nil)
 			if active != tc.wantActive || rotated != tc.wantRotated {
 				t.Fatalf("dirBytes(%s)=(active=%d, rotated=%d), want (active=%d, rotated=%d)",
 					tc.base, active, rotated, tc.wantActive, tc.wantRotated)
@@ -107,8 +107,8 @@ func TestGzippedRuntimeRotation_mergesIntoBaseBothPaths(t *testing.T) {
 		}
 	}
 
-	// dirBytes 路径：.gz 副本计入 rotated
-	active, rotated, _ := dirBytes(filepath.Join(dir, "lazy-balancer.log"))
+	// dirBytesWithEntries 路径：.gz 副本计入 rotated
+	active, rotated, _ := dirBytesWithEntries(filepath.Join(dir, "lazy-balancer.log"), nil)
 	if active != 100 || rotated != 200 {
 		t.Fatalf("dirBytes=(active=%d, rotated=%d), want (100, 200)（.gz 副本计入）", active, rotated)
 	}
@@ -117,7 +117,7 @@ func TestGzippedRuntimeRotation_mergesIntoBaseBothPaths(t *testing.T) {
 	match := func(name string) bool {
 		return name == "lazy-balancer.log" || strings.HasPrefix(name, "lazy-balancer.log.")
 	}
-	stats := aggregateDirStats(dir, match)
+	stats := aggregateDirStatsWithEntries(dir, nil, match)
 	st, ok := stats["lazy-balancer.log"]
 	if !ok || st.Active != 100 || st.Rotated != 200 || st.RotCount != 2 {
 		t.Fatalf("aggregateDirStats base=%+v ok=%v, want active=100 rotated=200 count=2", st, ok)
@@ -141,7 +141,7 @@ func TestAggregateDirStats_wholeFileGzipArchiveJoinsBase(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	aggregate := aggregateDirStats(dir, caddyLogFamilyMatch)
+	aggregate := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 	stats := aggregate["caddy.log"]
 	if stats.Active != 200 || stats.Rotated != 40 || stats.RotCount != 1 {
 		t.Fatalf("aggregate[caddy.log]=(%d,%d,%d), want (200,40,1)", stats.Active, stats.Rotated, stats.RotCount)
@@ -149,7 +149,7 @@ func TestAggregateDirStats_wholeFileGzipArchiveJoinsBase(t *testing.T) {
 	if _, exists := aggregate["caddy.log.gz"]; exists {
 		t.Fatal("caddy.log.gz 落成独立键——消费侧按基名取值，该归档字节将被丢弃")
 	}
-	active, rotated, count := dirBytes(dir + "/caddy.log")
+	active, rotated, count := dirBytesWithEntries(dir+"/caddy.log", nil)
 	if active != stats.Active || rotated != stats.Rotated || count != stats.RotCount {
 		t.Fatalf("dirBytes=(%d,%d,%d) aggregate=(%d,%d,%d)——两套分类器分叉", active, rotated, count, stats.Active, stats.Rotated, stats.RotCount)
 	}
@@ -215,7 +215,7 @@ func TestAggregateDirStats_zstdCopiesCountIntoBase(t *testing.T) {
 				t.Fatal("非 caddy 族文件被 caddy matcher 收录")
 			}
 
-			stats := aggregateDirStats(dir, caddyLogFamilyMatch)
+			stats := aggregateDirStatsWithEntries(dir, nil, caddyLogFamilyMatch)
 			entry := stats[tc.base]
 			if entry.Active != tc.wantActive || entry.Rotated != tc.wantRotated || entry.RotCount != tc.wantCount {
 				t.Fatalf("aggregate[%s]=(%d,%d,%d), want (%d,%d,%d)",
@@ -229,7 +229,7 @@ func TestAggregateDirStats_zstdCopiesCountIntoBase(t *testing.T) {
 			}
 
 			// 与单文件 dirBytes 口径一致（同一响应内两行不得分叉）。
-			active, rotated, count := dirBytes(filepath.Join(dir, tc.base))
+			active, rotated, count := dirBytesWithEntries(filepath.Join(dir, tc.base), nil)
 			if active != entry.Active || rotated != entry.Rotated || count != entry.RotCount {
 				t.Fatalf("dirBytes=(%d,%d,%d) vs aggregate=(%d,%d,%d)——两套口径分叉",
 					active, rotated, count, entry.Active, entry.Rotated, entry.RotCount)

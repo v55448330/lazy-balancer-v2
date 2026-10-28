@@ -64,12 +64,18 @@ test('A4 分片请求按方向独立提交：每片对向数组为空且两向�
       const unbind = match[2].trim()
       assert.ok(bind === '[]' || unbind === '[]', `${file}: 单次请求不得同时携带 bind 与 unbind（合计会超后端上限）`)
     }
-    assert.deepEqual(
-      requests.map((match) => [match[1].trim(), match[2].trim()]),
-      [['ids', '[]'], ['[]', 'ids']],
-      `${file}: 两片必须一正一反（先 bind 全量、再 unbind 全量）`,
-    )
+    const [first, second] = requests.map((match) => [match[1].trim(), match[2].trim()])
+    assert.ok(first && second, `${file}: 两片必须存在`)
+    assert.ok(first[1] === '[]' && second[0] === '[]', `${file}: 两片必须一正一反`)
+    assert.equal(first[0], second[1], `${file}: bind/unbind 必须引用同一标识符（允许重命名）`)
   }
+})
+
+test('存量多限流绑定保存时收敛为界面展示的首条', () => {
+  const editor = code('src/components/SecurityBindingEditor.vue')
+  assert.match(editor, /bindStage2\.value\.slice\(0, 1\)/, '提交集不得继续携带界面不可见的第二条限流策略')
+  const total = section(editor, 'const ruleModeTotal = computed', 'const pickerHttpRules')
+  assert.match(total, /Math\.min\(1, bindStage2\.value\.length\)/, '策略总数必须按唯一化后的限流绑定计数')
 })
 
 test('B1 求交：与 filter+includes 结果一致（保序、去重），Set 查表不改变语义', () => {

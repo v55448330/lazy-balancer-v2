@@ -134,19 +134,29 @@ func (j *certJobListItem) scanFrom(scanner certJobScanner, now time.Time, expiry
 	}
 	j.Issuer = certificateIssuerCached(certPEM)
 	j.CertificateStatus = "unknown"
-	notAfter := time.Time{}
-	if j.ExpiresAt.Valid {
-		notAfter = j.ExpiresAt.Time
-	} else if derived, ok := services.CertNotAfterFromPEM(certPEM); ok {
-		// expires_at 缺失时由 PEM 回退派生（expires_at 本身仍按原契约下发 null）。
-		notAfter = derived
-	}
-	if !notAfter.IsZero() {
-		j.NotAfter = models.JSONNullTime{NullTime: sql.NullTime{Time: notAfter, Valid: true}}
-		j.DaysRemaining = services.CertDaysRemaining(notAfter, now)
-		j.CertificateStatus = services.CertificateExpiryStatus(notAfter, now, expiryDays)
+	// 到期派生单源（库值优先，缺失时由 PEM 首证书块派生）：聚合清单
+	// （ListCertificates）复用同一函数，两条清单入口不得各写一套解析。
+	if notAfter := certJobNotAfter(j.ExpiresAt.NullTime, certPEM); notAfter.Valid {
+		j.NotAfter = notAfter
+		j.DaysRemaining = services.CertDaysRemaining(notAfter.Time, now)
+		j.CertificateStatus = services.CertificateExpiryStatus(notAfter.Time, now, expiryDays)
 	}
 	return nil
+}
+
+// certJobNotAfter 派生任务的真实到期时刻：库值 expires_at 优先，缺失时由 PEM
+// 首证书块回退。单源——/certificates/jobs（任务列表）与 /certificates（聚合清单）
+// 必须同结论：两条端点曾对同一列走两套解析机制（驱动 DATETIME 解析 vs 手工布局
+// 表），带时区偏移/其它合法形态的库值在聚合清单静默回落 PEM，同一任务的到期
+// 时刻因此分叉（MCP list_certificates 消费方结论不一致）。
+func certJobNotAfter(expiresAt sql.NullTime, certPEM string) models.JSONNullTime {
+	if expiresAt.Valid {
+		return models.JSONNullTime{NullTime: sql.NullTime{Time: expiresAt.Time.UTC(), Valid: true}}
+	}
+	if derived, ok := services.CertNotAfterFromPEM(certPEM); ok {
+		return models.JSONNullTime{NullTime: sql.NullTime{Time: derived.UTC(), Valid: true}}
+	}
+	return models.JSONNullTime{}
 }
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
@@ -632,18 +642,16 @@ type certJobDeploymentRetryTarget struct {
 // 不放宽并发面（DeployLock + 终态 CAS 仍是最后防线）。
 func markDownloadedCertJobDeploymentPending(id int, ruleID, domain string) (bool, error) {
 	reversedDomain := reversedCertJobDomain(domain)
-	result, err := db.DB.Exec(`UPDATE cert_jobs
-		SET deployment_available_after=datetime('now'), message='等待重新部署', updated_at=datetime('now')
-		WHERE id=? AND status IN (`+services.DeploymentLifecycleJobStatusSQL+`)
-		  AND `+services.CertJobMaterialPredicateSQL("")+`
+	rowsAffected, err := services.PushCertJobDeploymentWindow(db.DB, id, services.CertJobDeploymentWindowPush{
+		Message: "等待重新部署",
+		Where: `status IN (` + services.DeploymentLifecycleJobStatusSQL + `)
+		  AND ` + services.CertJobMaterialPredicateSQL("") + `
 		  AND EXISTS (
 			SELECT 1 FROM lb_rules
 			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
-		  )`, id, ruleID, domain, reversedDomain)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
+		  )`,
+		WhereArgs: []any{ruleID, domain, reversedDomain},
+	})
 	if err != nil {
 		return false, err
 	}
@@ -956,9 +964,13 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			// 登记失败由启动恢复/周期补扫兜底。
 			// 恢复带 status='disabled' 守卫——行在删除窗口
 			// 内被并发移离 disabled 时不得覆写其新状态；命中 0 行并入 deleteErr。
-			if res, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status='downloaded', deployment_available_after=datetime('now'), message='删除失败，等待恢复部署', updated_at=datetime('now') WHERE id=? AND status='disabled'", id); restoreErr != nil {
+			if n, restoreErr := services.PushCertJobDeploymentWindow(db.DB, id, services.CertJobDeploymentWindowPush{
+				Status:  "downloaded",
+				Message: "删除失败，等待恢复部署",
+				Where:   "status='disabled'",
+			}); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)
-			} else if n, _ := res.RowsAffected(); n == 0 {
+			} else if n == 0 {
 				deleteErr = errors.Join(deleteErr, fmt.Errorf("任务 %d 已被并发移离 disabled，恢复已跳过", id))
 			} else {
 				deploymentRegistrationPending = true
@@ -1157,10 +1169,10 @@ func readCertJobLogTail(path string, maxBackups, budget int) (string, bool, erro
 // 文件不可读丢掉新一代内容）。
 //
 // budget 是拼接后的总字节上限（响应 256KiB 预算）：累计长度已达上限即停止读
-// 更旧副本，且只取该副本尾部剩余预算的部分——此前每代固定读 128KiB 并整串
-// 前置拷贝，单请求最多读 ~640KiB 且在调用方最后一步才截断（多标签页轮询时
-// CPU/IO 放大）。更旧内容本来就会被最终截断丢弃，语义不变。
-func prependTaskLogRotations(path, content string, maxBackups, budget int) string {
+// 更旧副本，且只取该副本尾部剩余预算的部分。第二个返回值表示最旧内容是否
+// 在字节预算处被切断；调用方据此丢弃响应首行残段（含可能的半个 UTF-8 字符）。
+func prependTaskLogRotations(path, content string, maxBackups, budget int) (string, bool) {
+	truncated := false
 	for i := 1; i <= maxBackups; i++ {
 		remaining := budget - len(content)
 		if remaining <= 0 {
@@ -1172,15 +1184,14 @@ func prependTaskLogRotations(path, content string, maxBackups, budget int) strin
 			continue
 		}
 		if len(backup) > remaining {
-			// 只保留尾部：前缀（最旧内容）会被最终截断丢弃；被切断的首行由
-			// 调用方的残行丢弃逻辑处理。
 			backup = backup[len(backup)-remaining:]
+			truncated = true
 		}
 		if backup != "" {
 			content = backup + content
 		}
 	}
-	return content
+	return content, truncated
 }
 
 // readCertJobLogFile 读取单个日志文件的尾部窗口（128KB/500 行）。

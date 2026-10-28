@@ -56,9 +56,10 @@ func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
 	if !geoipFound {
 		t.Fatalf("precheck must carry geoip chain:\n%s", joined)
 	}
-	// 策略引擎段不抬 481（阶段码域隔离：阶段 3 未配=跟随策略，无页策略保持 403）
-	if strings.Contains(joined, "id:9,phase:1") && strings.Contains(joined, "status:481,log,msg:'自定义") {
-		t.Fatalf("stage-1 code must not leak into policy engine segments:\n%s", joined)
+	// 策略引擎段不抬 481（阶段码域隔离：阶段 3 未配=跟随策略，无页策略保持 403）。
+	// 必须正向找到同一条 ACL deny 的 403 形态，避免不存在的自定义规则段让断言空转。
+	if !strings.Contains(joined, `id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
+		t.Fatalf("policy engine ACL deny must stay 403 when stage 3 is unconfigured:\n%s", joined)
 	}
 
 	// Then：481 阶段路由（host 限定本规则域名、阶段页内容+状态码、terminal）

@@ -140,8 +140,10 @@ func TestCrawlerSpoofEvidence_brandMarkersExcluded(t *testing.T) {
 	}{
 		{"Mozilla/5.0 (compatible; DeepSeek/1.0)", "deepseekbot"},
 		{"Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)", "gptbot"},
+		{"Mozilla/5.0 (compatible; Claude-User/1.0)", "claudebot"},
 		{"Mozilla/5.0 (compatible; Claude-Web/1.0; +claude.ai)", "claudebot"},
 		{"Mozilla/5.0 (compatible; anthropic-ai/1.0)", "claudebot"},
+		{"Mozilla/5.0 (compatible; Perplexity-User/1.0)", "perplexitybot"},
 	}
 	for _, c := range brandMarkers {
 		if got := MatchCrawlerEngine(c.ua); got != c.engine {
@@ -160,6 +162,7 @@ func TestCrawlerSpoofEvidence_brandMarkersExcluded(t *testing.T) {
 		{"Mozilla/5.0 (compatible; DeepSeekBot/1.0)", "deepseekbot"},
 		{"Mozilla/5.0 (compatible; ClaudeBot/1.0)", "claudebot"},
 		{"Mozilla/5.0 (compatible; Claude-SearchBot/1.0)", "claudebot"},
+		{"Mozilla/5.0 (compatible; PerplexityBot/1.0)", "perplexitybot"},
 		{"Mozilla/5.0 (compatible; Googlebot/2.1)", "googlebot"},
 		{"Mozilla/5.0 (compatible; PetalBot/2.0)", "petalbot"},
 	}

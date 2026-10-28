@@ -227,6 +227,17 @@ func DoWithSameHostTLSUpgradeRedirect(client *http.Client, req *http.Request) (*
 	}
 	resp.Body.Close()
 	retry := req.Clone(req.Context())
+	// Location 只带主机（`https://host`，不带 path）是反代/管理面 HTTPS 升级的
+	// 常见形态：直接赋值会让标准库把空 Path 规范化成 `/`，重放打到根路径得到
+	// 404/HTML，调用方只能报「解析响应失败」，既有可行动 3xx 指引分支永远走不到。
+	// 空 path 必须继承原请求路径（RawPath 同步继承，保持转义形态）。
+	if target.Path == "" {
+		target.Path = req.URL.Path
+		target.RawPath = req.URL.RawPath
+	}
+	// Location 携带 userinfo 时不得以 URL Basic 认证外发：目标主机虽相同，
+	// 但凭证由对端 Location 注入，清零后重放只带原请求头。
+	target.User = nil
 	retry.URL = target
 	if target.RawQuery == "" && req.URL.RawQuery != "" {
 		retry.URL.RawQuery = req.URL.RawQuery

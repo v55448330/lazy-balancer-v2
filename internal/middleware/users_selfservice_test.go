@@ -205,3 +205,41 @@ func TestIsSelfServiceUserWrite_methodConstrained(t *testing.T) {
 		})
 	}
 }
+
+// 两个守卫必须共用同一 actor/target 判定：路由参数形态与只读门的原始路径
+// 形态虽然入口不同，对同一自助请求不得给出相反结论。
+func TestSelfServiceUserWrite_matchesAdminOrSelfParam(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		target string
+		actor  any
+	}{
+		{"update self", http.MethodPut, "/api/v1/users/7", "7", 7},
+		{"reset self", http.MethodPost, "/api/v1/users/7/reset-password", "7", 7},
+		{"update other", http.MethodPut, "/api/v1/users/8", "8", 7},
+		{"reset other", http.MethodPost, "/api/v1/users/8/reset-password", "8", 7},
+		{"missing actor", http.MethodPut, "/api/v1/users/7", "7", 0},
+		{"invalid target", http.MethodPut, "/api/v1/users/abc", "abc", 7},
+		{"non-positive target", http.MethodPut, "/api/v1/users/0", "0", 7},
+		{"string actor", http.MethodPut, "/api/v1/users/7", "7", "7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(tc.method, tc.path, nil)
+			context.Params = gin.Params{{Key: "id", Value: tc.target}}
+			context.Set("role", "user")
+			context.Set("user_id", tc.actor)
+
+			readOnlyDecision := isSelfServiceUserWrite(context)
+			adminOrSelfParam()(context)
+			adminDecision := !context.IsAborted()
+			if readOnlyDecision != adminDecision {
+				t.Fatalf("guard parity: isSelfServiceUserWrite=%v adminOrSelfParam=%v", readOnlyDecision, adminDecision)
+			}
+		})
+	}
+}

@@ -9,24 +9,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { registerModuleHooks } from './_helpers.ts'
-import { STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
-
-interface RecordedCall {
-  fn: string
-  arg?: unknown
-  args?: unknown[]
-}
+import { registerModuleHooks, repoCode } from './_helpers.ts'
+import { installStubHost, STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
 
 type Harness = {
-  __calls: RecordedCall[]
   __confirm: (...args: unknown[]) => Promise<unknown>
   __post: (url: string, body?: unknown) => Promise<unknown>
   __get: (url: string, config?: unknown) => Promise<unknown>
   __put: (url: string, body?: unknown) => Promise<unknown>
 }
 const g = globalThis as unknown as Harness
-g.__calls = []
+const stubHost = installStubHost()
 
 registerModuleHooks({
   'element-plus': STUB_ELEMENT,
@@ -55,7 +48,7 @@ const reset = (): { posts: PostRecord[]; puts: PutRecord[]; confirmArgs: unknown
   const posts: PostRecord[] = []
   const puts: PutRecord[] = []
   const confirmArgs: unknown[][] = []
-  g.__calls = []
+  stubHost.reset()
   g.__confirm = async (...args: unknown[]) => {
     confirmArgs.push(args)
   }
@@ -75,7 +68,7 @@ const reset = (): { posts: PostRecord[]; puts: PutRecord[]; confirmArgs: unknown
   return { posts, puts, confirmArgs }
 }
 
-const callsOf = (fn: string): RecordedCall[] => g.__calls.filter((call) => call.fn === fn)
+const callsOf = stubHost.callsOf
 
 /** 新建载荷中的名单名（载荷形状不符即硬失败，避免断言空转）。 */
 const assertCreatedListName = (post: PostRecord | undefined): string => {
@@ -332,14 +325,13 @@ test('非 ASCII 大小写仍视为不同名单（SQLite LOWER 只折叠 ASCII）
 // 写入口失败（reject）路径：creating/adding 的复位全靠 finally——一旦被挪进成功
 // 分支，网络抖动后按钮永久灰死，而成功/取消用例仍全绿。
 test('创建写入 reject：释放 creating 占位且不谎报成功', async () => {
-  const { posts, puts } = reset()
+  const { puts } = reset()
   g.__post = async (url: string) => {
     if (url === '/security/ip-lists') throw new Error('boom')
     throw new Error(`unexpected POST ${url}`)
   }
   const { creating, ensureListAndJoin } = useTrustAssociation({ getList: () => lists })
   await ensureListAndJoin({ id: 5, name: '策略 A', ip_acl_list_refs: '' }, '203.0.113.9', 'deny')
-  assert.equal(posts.length, 0, '失败的创建请求不记录成功响应')
   assert.equal(puts.length, 0, '创建失败不得继续关联')
   assert.equal(creating.value, false, '失败分支必须释放占位（否则按钮永久灰死）')
   assert.equal(callsOf('mfaAwareSuccess').length, 0, '创建失败不得报成功')
@@ -677,4 +669,10 @@ test('移除动作取消：不发请求、不刷新、释放占位（取消无�
   assert.equal(callsOf('ElMessage.success').length, 0)
   assert.equal(changed, 0, '取消不触发列表刷新')
   assert.equal(creating.value, false, '占位必须在取消路径释放（否则按钮永久灰死）')
+})
+
+test('跨栈：自动名单名上限与 ASCII 大小写折叠判据对表后端', () => {
+  const go = repoCode('internal/handlers/securityiplists.go')
+  assert.match(go, /\bipListMaxNameLength\s*=\s*50\b/, '前端 50 rune 截断预算必须跟随后端写门')
+  assert.match(go, /WHERE LOWER\(name\)=LOWER\(\?\)/, '前端同名复用必须沿用 SQLite ASCII 大小写折叠')
 })

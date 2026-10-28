@@ -159,6 +159,62 @@ func TestConfigImportSessionClose_resumesBeforeReleasingSerialization(t *testing
 	}
 }
 
+func TestConfigImportSessionClose_releasesLocksWhenAbortPanics(t *testing.T) {
+	h := &Handlers{caddyService: &services.CaddyService{}}
+	h.caddyOpMu.Lock()
+	oldDB := db.DB
+	db.DB = nil // 让 abort 的已提交视图投影回滚确定性 panic。
+	t.Cleanup(func() {
+		db.DB = oldDB
+		h.caddyOpMu.TryLock()
+		h.caddyOpMu.Unlock()
+	})
+	resumed, released := 0, 0
+	session := &configImportSession{
+		h:                 h,
+		resumeEngine:      func() { resumed++ },
+		releaseBeforeLock: func() { released++ },
+	}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		session.close()
+	}()
+	if recovered != nil {
+		t.Fatalf("close 未兜住 abort panic: %v", recovered)
+	}
+
+	if !h.caddyOpMu.TryLock() {
+		t.Fatal("abort panic 后 caddyOpMu 仍被占用")
+	}
+	h.caddyOpMu.Unlock()
+	if resumed != 1 || released != 1 {
+		t.Fatalf("panic 收尾 resume/release=%d/%d, want 1/1", resumed, released)
+	}
+}
+
+func TestConfigImportSessionClose_idempotent(t *testing.T) {
+	h := &Handlers{}
+	h.caddyOpMu.Lock()
+	session := &configImportSession{h: h, finished: true}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		session.close()
+		session.close()
+	}()
+	if recovered != nil {
+		t.Fatalf("重复 close panic: %v", recovered)
+	}
+
+	if !h.caddyOpMu.TryLock() {
+		t.Fatal("重复 close 后 caddyOpMu 状态异常")
+	}
+	h.caddyOpMu.Unlock()
+}
+
 // ctx-blind 在途任务超过排空预算后不得继续全量导入；
 // 必须恢复调度、释放会话锁并返回可重试 409，而非留下 last-writer-wins 窗口。
 func TestBeginConfigImport_taskDrainTimeoutAbortsBeforeTransaction(t *testing.T) {
@@ -332,6 +388,9 @@ func TestBeginConfigImport_ruleReadFailureAudits(t *testing.T) {
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500", recorder.Code)
 	}
+	if body := recorder.Body.String(); strings.Contains(body, "injected read failure") || !strings.Contains(body, "建立导入会话失败，请稍后重试") {
+		t.Fatalf("500 响应泄露底层错误或缺少固定文案: %s", body)
+	}
 	var action, detail string
 	if queryErr := db.AuditDB.QueryRow(`SELECT action,detail FROM audit_log WHERE resource='配置备份' ORDER BY id DESC LIMIT 1`).Scan(&action, &detail); queryErr != nil {
 		t.Fatalf("读规则失败必须写审计: %v", queryErr)
@@ -371,6 +430,9 @@ func TestBeginConfigImport_beginTxFailureAudits(t *testing.T) {
 	respondImportBeginError(ctx, err)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500", recorder.Code)
+	}
+	if body := recorder.Body.String(); strings.Contains(body, "injected tx failure") || !strings.Contains(body, "建立导入会话失败，请稍后重试") {
+		t.Fatalf("500 响应泄露底层错误或缺少固定文案: %s", body)
 	}
 	var action, detail string
 	if queryErr := db.AuditDB.QueryRow(`SELECT action,detail FROM audit_log WHERE resource='配置备份' ORDER BY id DESC LIMIT 1`).Scan(&action, &detail); queryErr != nil {

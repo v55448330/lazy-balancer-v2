@@ -321,6 +321,10 @@ func ThreatScreenAttackFlowSnapshot(since uint64, limit int) ([]ThreatScreenAtta
 	return out, next, gapSkipped
 }
 
+// threatScreenAttackFlowGenerationResetHookForTest 在代际复位的临界区后
+// 提供确定性交错缝；生产恒 nil。
+var threatScreenAttackFlowGenerationResetHookForTest func()
+
 // threatScreenAttackFlowResetRingForGeneration 在 metrics 库代际切换（损坏隔离
 // 重建）时清空环形缓冲、序号与请求键索引：新库为空、审计日志从头重放，旧环保留
 // 灾前条目会让重放事件与灾前弧重复出现（同屏攻击量与拦截率翻倍）。采样租约不动
@@ -329,9 +333,12 @@ func threatScreenAttackFlowResetRingForGeneration() {
 	threatScreenAttackFlowMu.Lock()
 	threatScreenAttackFlowEvents = nil
 	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
-	threatScreenAttackFlowMu.Unlock()
 	threatScreenAttackFlowSeq.Store(0)
 	threatScreenAttackFlowAttempt.Store(0)
+	threatScreenAttackFlowMu.Unlock()
+	if threatScreenAttackFlowGenerationResetHookForTest != nil {
+		threatScreenAttackFlowGenerationResetHookForTest()
+	}
 }
 
 // ResetThreatScreenAttackFlowForTest 测试缝：清空环形缓冲、租约表与采样状态。

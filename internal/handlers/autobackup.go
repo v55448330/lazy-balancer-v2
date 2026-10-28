@@ -471,15 +471,19 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		// 文件名本次唯一；取消后删除尚未登记的最终文件，维持取消零文件/零行。
-		_ = os.Remove(finalPath)
+		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			services.Logf("warn", "自动备份：取消后清理最终文件 %s 失败: %v", finalPath, removeErr)
+		}
 		return autoBackupRowView{}, cerr
 	}
 	// exportedSections 是 []string，encoding/json 不会产生 unsupported type/value。
 	sectionsJSON, _ := json.Marshal(exportedSections)
 	id, err := insertAutoBackupRow(filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary, h.cfg.Version)
 	if err != nil {
-		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回
-		_ = os.Remove(finalPath)
+		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回。
+		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			services.Logf("warn", "自动备份：落行失败后清理最终文件 %s 失败: %v", finalPath, removeErr)
+		}
 		return autoBackupRowView{}, fail("备份记录写入失败", err)
 	}
 	// 成功落行后内务裁剪(流程注释「落行→裁剪→审计」的裁剪步, 接线)
@@ -675,7 +679,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	now := time.Now()
 	var nextRunValue *string
 	catchUpDue := false
-	if next, ok := services.NextAutoBackupSlot(now); ok {
+	if next, ok := services.NextAutoBackupSlot(c.Request.Context(), now); ok {
 		formatted := next.Format(time.RFC3339)
 		nextRunValue = &formatted
 		catchUpDue = !next.After(now)
@@ -787,7 +791,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份开关失败: " + err.Error()})
 		return
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(tx); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
 		return
 	}
@@ -999,7 +1003,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	// 文件先于提交删除：提交失败时行恢复、文件已亡，这是本端点最坏的分叉
 	// （列表仍显示该备份，下载/还原才 404）。文案必须显式说明已发生的副作用
 	// 与可执行的下一步，不得只说「删除失败」。
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(tx); err != nil {
 		// database/sql 在 Commit 失败后不再调用 driver.Rollback，SQLite 的
 		// deferred 约束/IO 类失败会让底层事务保持活动（连接归还池后，复用该
 		// 连接的读会看到未提交的删除）。统一补发 ROLLBACK 才能真正兑现文案里

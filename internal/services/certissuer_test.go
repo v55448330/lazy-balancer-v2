@@ -888,7 +888,11 @@ func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testin
 		t.Fatal("fast-path execution was not prepared")
 	}
 	go queue.execute(execution)
-	<-reloadEntered
+	select {
+	case <-reloadEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("快速路径未在 5s 内进入 Caddy 重载（reloadEntered 未关闭）")
+	}
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
 	cancelDone := make(chan struct{})
 	go func() {
@@ -897,14 +901,22 @@ func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testin
 		}
 		close(cancelDone)
 	}()
-	<-execution.ctx.Done()
+	select {
+	case <-execution.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("规则取消未在 5s 内 cancel 快速路径执行上下文（execution.ctx 未 Done）")
+	}
 	select {
 	case <-cancelDone:
 		t.Fatal("rule cancellation returned before fast-path deployment exited")
 	default:
 	}
 	close(releaseReload)
-	<-cancelDone
+	select {
+	case <-cancelDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("释放重载后规则取消未在 5s 内返回（cancelDone 未关闭）")
+	}
 	if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id=?", jobID); err != nil {
 		t.Fatalf("delete certificate job: %v", err)
 	}
@@ -1178,38 +1190,6 @@ func TestRetryCertificateDeployment_cleanup_dns_job_slowRetriesAtMaxAttempts(t *
 	}
 	if !available.Valid || time.Until(available.Time) < 20*time.Minute {
 		t.Fatalf("deployment_available_after=%v, want ~30m slow-retry window", available)
-	}
-}
-
-// installCertJobVersionTrigger 安装与生产同语义的 cert_jobs 版本触发器
-// （镜像 middleware 的 cluster_version_cert_jobs_update）：主节点守卫 +
-// 成员条件（非 disabled 且材料齐全且未过期）+ 语义列值真实变化守卫 +
-// disabled 双向例外。
-//
-// services 测试库不安装生产触发器（由 middleware 装配），此前的合成版本只按
-// 列名触发、无值变化守卫：断言「失败/回滚不推进版本」在簿记列抖动时假绿，
-// 而材料真实变化时的 bump 又无法区分。断言必须跑在与生产同形的语义上。
-func installCertJobVersionTrigger(t *testing.T) {
-	t.Helper()
-	if _, err := db.DB.Exec(`CREATE TRIGGER test_cluster_version_cert_jobs_update
-		AFTER UPDATE OF rule_id, domain, status, cert_pem, key_pem, expires_at, ca_provider_id, renewal_attempts, ca_available_after, last_error_code, created_at, updated_at ON cert_jobs
-		WHEN (SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1
-		 AND (
-			(OLD.status<>'disabled' AND COALESCE(OLD.cert_pem,'')<>'' AND COALESCE(OLD.key_pem,'')<>'' AND datetime(OLD.expires_at)>datetime('now'))
-			OR (NEW.status<>'disabled' AND COALESCE(NEW.cert_pem,'')<>'' AND COALESCE(NEW.key_pem,'')<>'' AND datetime(NEW.expires_at)>datetime('now'))
-		 )
-		 AND (
-			OLD.rule_id IS NOT NEW.rule_id
-			OR OLD.domain IS NOT NEW.domain
-			OR OLD.cert_pem IS NOT NEW.cert_pem
-			OR OLD.key_pem IS NOT NEW.key_pem
-			OR OLD.expires_at IS NOT NEW.expires_at
-			OR OLD.ca_provider_id IS NOT NEW.ca_provider_id
-			OR (OLD.status<>'disabled' AND NEW.status='disabled')
-			OR (OLD.status='disabled' AND NEW.status<>'disabled')
-		 )
-		BEGIN UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1; END`); err != nil {
-		t.Fatalf("install certificate job version trigger: %v", err)
 	}
 }
 

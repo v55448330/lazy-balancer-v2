@@ -1,0 +1,124 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import { code, openTags, section, source } from './_helpers.ts'
+import { buildRuleMetricsUnavailable } from '../src/utils/dashboardMetrics.ts'
+
+const MFA = 'src/components/MfaBindingWizard.vue'
+const APP = 'src/App.vue'
+const FLOW = 'src/components/RuleFlowDialog.vue'
+const DASHBOARD = 'src/views/Dashboard.vue'
+const TASK_MONITOR = 'src/views/settings/TaskMonitor.vue'
+
+test('MFA 返回扫码步时重新渲染新建画布', () => {
+  const text = code(MFA)
+  const renderWatch = section(text, 'watch([() => props.modelValue, step]', 'const activate')
+  assert.match(renderWatch, /visible && current === 0/)
+  assert.match(renderWatch, /void renderQr\(\)/)
+})
+
+test('OIDC 拒绝分支只走公共初始化一次', () => {
+  const rejected = section(code(APP), 'if (!verdict.ok)', '} else if (authStore.token')
+  assert.doesNotMatch(rejected, /authStore\.init\(\)/)
+})
+
+test('流程弹框每次打开都使上一会话统计响应失效', () => {
+  const opened = section(code(FLOW), 'const onDialogOpen =', 'const loadCertInfo =')
+  const invalidateAt = opened.indexOf('statsSeq++')
+  const branchAt = opened.indexOf('const caddyId =')
+  assert.ok(invalidateAt >= 0, '打开入口必须推进统计序号')
+  assert.ok(branchAt > invalidateAt, '无 caddyId 与 TCP 早退之前就必须失效旧统计')
+  assert.match(opened, /const seq = statsSeq/, 'HTTP 分支沿用本轮序号，不得再次推进')
+})
+
+test('信息横幅注释不引用已删除的样式类（文档钉）', () => {
+  // 断言对象是残留注释本身；剥注释后该类名消失，无法区分实现与注释。
+  assert.doesNotMatch(source('src/styles/main.css'), /bound-rule-alert/)
+})
+
+test('规则先于指标落地时保持待定，不写成采集失败', () => {
+  const text = code(DASHBOARD)
+  const applied = section(text, 'rules.value = res.data || []', 'const version = ++rulesVersion')
+  assert.match(applied, /if \(dashboardMetricsLanded\.value\) \{[\s\S]*buildRuleMetricsUnavailable\(/)
+  assert.deepEqual(buildRuleMetricsUnavailable([{ caddy_id: 'x', enabled: true }], undefined, false), { x: true }, '明确失败仍必须显示采集失败')
+})
+
+test('慢规则请求不阻塞本轮图表与资源请求', () => {
+  const text = code(DASHBOARD)
+  const fetchAll = section(text, 'const fetchAllData =', 'const fetchRuleHealth =')
+  const settled = section(fetchAll, 'Promise.allSettled([', ']).then(() => undefined)')
+  assert.doesNotMatch(settled, /request\.get\('\/rules'/)
+  assert.match(fetchAll, /if \(slowLane\) fetchRulesSlowLane\(/)
+  assert.match(text, /const fetchRulesSlowLane =[\s\S]*request\.get\('\/rules'/)
+})
+
+test('实时流量图 tooltip 与坐标轴都标明每秒速率', () => {
+  const text = code(DASHBOARD)
+  assert.match(text, /const formatTrafficRate = \(value: number\): string => `\$\{formatBytes\(value\)\}\/s`/)
+  const chart = section(text, 'const trafficChartOption =', 'const connChartOption =')
+  assert.equal(chart.match(/formatTrafficRate/g)?.length, 2)
+})
+
+test('历史统计只有一个数据桶时显示空态而非空坐标轴', () => {
+  assert.match(code(DASHBOARD), /v-if="!ruleHistoryLoading && ruleHistoryDeltas\.deltas\.length === 0"/)
+})
+
+test('任务监控首轮失败后结束加载态', () => {
+  const refresh = section(code(TASK_MONITOR), 'const refreshNow =', 'onMounted')
+  assert.match(refresh, /onFinally:[\s\S]*loaded\.value = true/)
+})
+
+test('任务序列失败标记陈旧，空序列显示空态', () => {
+  const text = code(TASK_MONITOR)
+  assert.match(text, /const seriesStale = ref\(false\)/)
+  assert.match(text, /seriesStale\.value = true/)
+  assert.match(text, /v-if="seriesStale && series24h\.length" class="chart-stale-hint"/)
+  assert.match(text, /v-else-if="loaded && !series24h\.length"/)
+})
+
+test('任务日志缺 data 抛错，旧任务响应不得清新任务错误', () => {
+  const fetch = section(code(TASK_MONITOR), 'fetch: async () =>', 'onError:')
+  assert.match(fetch, /if \(!res\.data\) throw new TypeError\('任务日志响应缺少 data'\)/)
+  const guardAt = fetch.indexOf('if (logsTask.value?.id !== task.id) return null')
+  const clearAt = fetch.indexOf('logsLoadError.value = false')
+  assert.ok(guardAt >= 0 && clearAt > guardAt, '必须先确认仍是同一任务，再清错误态')
+})
+
+test('任务手动刷新与轮询共用最新读取会话', () => {
+  const text = code(TASK_MONITOR)
+  assert.match(text, /createLatestReadSession/)
+  const refresh = section(text, 'const refreshNow =', 'onMounted')
+  assert.match(refresh, /refreshReadSession\.run/)
+  assert.match(refresh, /Promise\.allSettled/)
+  assert.match(text, /refreshNow\(signal\)/)
+})
+
+test('运行与取消按钮在任一任务操作在途时禁用', () => {
+  const buttons = openTags(code(TASK_MONITOR), 'el-button')
+  for (const action of ['onTrigger(row)', 'onCancel(row)']) {
+    const button = buttons.find((tag) => tag.includes(`@click="${action}"`))
+    assert.ok(button, `${action} 按钮必须存在`)
+    assert.match(button, /taskActionPendingId !== null/)
+  }
+})
+
+test('证书队列请求窗口与进程内截断共用页面常量', () => {
+  const queue = section(code(TASK_MONITOR), 'const fetchCertQueue =', 'const taskFamilyCount =')
+  assert.match(queue, /liveJobs\.slice\(0, CERT_QUEUE_PAGE_SIZE\)/)
+})
+
+test('永久重试冷却 null 显示原因并禁用运行', () => {
+  const cooldown = section(code(TASK_MONITOR), 'const runCooldownReason =', 'const onTrigger =')
+  assert.match(cooldown, /retry_cooldown_seconds === null/)
+  assert.match(cooldown, /永久不可重试/)
+})
+
+test('任务词表与图表色板按自有键读取，原型键回显原值', () => {
+  const text = code(TASK_MONITOR)
+  assert.match(text, /import \{ hasOwn \} from '@\/utils\/hasOwn'/)
+  assert.match(text, /hasOwn\(statusLabels, s\)/)
+  assert.match(text, /hasOwn\(kindLabels, k\)/)
+  assert.match(text, /hasOwn\(triggerLabels, t\)/)
+  assert.match(text, /hasOwn\(resultLabels, r\)/)
+  assert.match(text, /hasOwn\(statusColor, k\)/)
+})

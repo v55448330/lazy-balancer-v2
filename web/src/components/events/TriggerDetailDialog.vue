@@ -205,11 +205,13 @@ type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-cu
 // kind 改由共享 triggerStageFamily 投影（securityStages 唯一实现，原
 // 双实现并存欠账）——细粒度族映射到本弹框展示 Kind（geoip→geo、
 // threat→threat、wafCrs→waf-crs、wafCustom→waf-custom，其余同名）。
-// 空 id 恒 other；未匹配的非空值兜底 acl（共享 GeoIP id:8 等归「IP 访问
-// 控制」口径，与列表列一致）。
+// 空 id 恒 other；存量 id 8 单独标为「地域拦截（旧 id）」，其余未匹配非空值兜底 acl。
+const legacyGeo = computed(() => (props.row?.rule_triggered ?? '') === '8')
+
 const kind = computed<Kind>(() => {
   const t = props.row?.rule_triggered ?? ''
   if (!t) return 'other'
+  if (legacyGeo.value) return 'geo'
   switch (triggerStageFamily(t)) {
     case 'trust': return 'trust'
     case 'ipAcl': return 'acl'
@@ -230,6 +232,7 @@ const kind = computed<Kind>(() => {
 const isWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(props.row?.rule_triggered ?? '')))
 
 const categoryLabel = computed(() => {
+  if (legacyGeo.value) return '地域拦截（旧 id）'
   switch (kind.value) {
     case 'geo': return '地域拦截'
     case 'crawler': return '爬虫Bot'
@@ -267,6 +270,7 @@ const detectionNote = computed<string>(() => {
 })
 
 const heroStage = computed(() => {
+  if (legacyGeo.value) return '阶段 1 · 地域拦截（旧 id）'
   switch (kind.value) {
     case 'trust': return '阶段 0 · 信任名单'
     case 'acl': return '阶段 1 · IP 访问控制'
@@ -279,6 +283,7 @@ const heroStage = computed(() => {
   }
 })
 const dimensionTitle = computed(() => {
+  if (legacyGeo.value) return '地域拦截（旧 id）'
   switch (kind.value) {
     case 'trust': return '信任名单'
     case 'acl': return 'IP 黑白名单'

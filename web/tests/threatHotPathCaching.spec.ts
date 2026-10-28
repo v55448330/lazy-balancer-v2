@@ -271,7 +271,7 @@ test('点阵切换原地更新预分配属性：几何身份不变、只上报�
 
 test('地球接线：三层共用一个贴图实例，dispose 只按引用释放一次', () => {
   assert.equal((globeSrc.match(/new THREE\.CanvasTexture\(/g) ?? []).length, 1, '贴图构建必须唯一')
-  assert.equal((globeSrc.match(/map: dotTex,/g) ?? []).length, 3, '三层材质必须共用 dotTex')
+  assert.equal((globeSrc.match(/\bmap:\s*dotTex\b/g) ?? []).length, 3, '三层材质必须共用 dotTex')
   assert.match(globeSrc, /const dotTex = acquireDotTexture\(\)/)
   const dispose = member(globeSrc, 'dispose(): void {')
   assert.match(dispose, /releaseDotTexture\(\)/, 'dispose 必须释放共享引用')

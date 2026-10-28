@@ -251,7 +251,7 @@ const boundMixedPolicies = computed(() => {
   return props.policies.filter((p) => boundIds.has(p.id) && inferPolicyType(p) === 'mixed')
 })
 
-const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + bindStage2.value.length + bindStage3.value.length)
+const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + Math.min(1, bindStage2.value.length) + bindStage3.value.length)
 
 // ── 策略模式：规则选择器（搜索 + 全选筛选 + 分页 + 行内绑定集合/覆盖徽标） ──
 const pickerSearch = ref('')
@@ -408,7 +408,7 @@ const submit = async (): Promise<void> => {
       // 响应经 showSaveResult 统一呈现：退化 200（DB 已提交
       // 但 Caddy 应用失败）带 message 后缀时必须常驻警告，原实现丢弃返回值。
       const res = await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
-        policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value, ...bindStage3.value],
+        policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value.slice(0, 1), ...bindStage3.value],
       })
       showSaveResult(res, '安全策略绑定已保存')
       emit('update:modelValue', false)

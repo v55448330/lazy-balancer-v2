@@ -66,3 +66,60 @@ export function securityEventsWritePayload(input: {
     ...(input.rowCapDirty ? { security_events_row_cap: input.rowCap } : {}),
   }
 }
+
+/**
+ * 数值输入的清空归一：Element Plus 的 el-input-number 清空后回写 null，
+ * 后端 *int 把 null 当成「未提供」而静默跳过，界面却提示保存成功。
+ * 与 ProxyTimeoutFields 的 `value ?? 0` 同口径；合法值（含 0）原样保留。
+ */
+export const numberOr = (value: number | null | undefined, fallback: number): number => value ?? fallback
+
+/**
+ * 威胁大屏展示归一字段的保存载荷：仅在用户实际编辑过时携带。
+ * 库值可能被带外写成非法值，展示层会把非法值归一为 map/-1；无条件回传会把
+ * 展示值物化进库。未编辑 → 省略键，后端 COALESCE 保持现值。
+ */
+export function threatScreenWritePayload(input: {
+  mode: ThreatScreenMode
+  modeDirty: boolean
+  sampleN: number
+  sampleDirty: boolean
+}): { threat_screen_mode?: ThreatScreenMode; threat_traffic_sample_n?: number } {
+  return {
+    ...(input.modeDirty ? { threat_screen_mode: input.mode } : {}),
+    ...(input.sampleDirty ? { threat_traffic_sample_n: input.sampleN } : {}),
+  }
+}
+
+/**
+ * ACME 全局设置保存载荷：三个数值输入清空后按 0 提交（不携带 null）；
+ * dns_provider 仅在当前后端唯一接受的枚举值 dnspod 时携带。存量/导入的
+ * 非 dnspod 值没有 UI 入口，原样回传会让整卡保存永久 400——省略键后由
+ * 后端 COALESCE 保留现值，不在前端静默改写。
+ */
+export function acmeGlobalWritePayload(input: {
+  email: string
+  expiryDays: number | null | undefined
+  renewalDays: number | null | undefined
+  renewalAttempts: number | null | undefined
+  defaultCAProviderId: number
+  dns_provider: string
+}): {
+  acme_email: string
+  cert_expiry_days: number
+  cert_renewal_days: number
+  cert_renewal_attempts: number
+  default_ca_provider_id: number
+  dns_provider?: 'dnspod'
+  source: 'acme'
+} {
+  return {
+    acme_email: input.email.trim(),
+    cert_expiry_days: numberOr(input.expiryDays, 0),
+    cert_renewal_days: numberOr(input.renewalDays, 0),
+    cert_renewal_attempts: numberOr(input.renewalAttempts, 0),
+    default_ca_provider_id: input.defaultCAProviderId,
+    ...(input.dns_provider === 'dnspod' ? { dns_provider: 'dnspod' as const } : {}),
+    source: 'acme' as const,
+  }
+}

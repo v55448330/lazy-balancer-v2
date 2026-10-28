@@ -82,7 +82,7 @@ test('任务详情历史与日志加载失败显性化', () => {
   const tail = section(text, 'const logsLoadError = ref(false)', 'const openLogs')
   assert.match(tail, /onError: \(\) => \{ logsLoadError\.value = true \}/)
   assert.match(tail, /logsLoadError\.value = false/, '成功响应必须清除错误态')
-  assert.doesNotMatch(detail, /catch \{ \/\/ 无历史族静默 \}/, '详情历史失败不得静默')
+  assert.doesNotMatch(detail, /\} catch \{\s*\}/, '详情历史失败不得空 catch')
 })
 
 test('规则向导关闭即清空私钥/证书明文', () => {
@@ -208,9 +208,10 @@ test('指标采集失败时规则表空态报「采集失败」', () => {
 
 test('区域树加载失败保留旧数据并显性提示+重试', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  assert.match(text, /regionsError/)
   const fetchRegions = section(text, 'const fetchRegions', 'onMounted')
-  assert.doesNotMatch(fetchRegions, /\} catch \{\s*regionTree\.value =/, '失败不得静默清空区域树')
+  assert.doesNotMatch(section(fetchRegions, '} catch {', '}'), /regionTree\.value\s*=/, '失败不得清空区域树')
+  const failed = section(text, '<div v-if="regionsError"', '</div>')
+  assert.match(failed, /@click="fetchRegions"/, '失败提示必须保留重试入口')
 })
 
 test('事件页刷新按钮联动自动封禁状态', () => {
@@ -347,11 +348,13 @@ test('任务监控三份轮询请求缺 data 一律抛 TypeError（进入契约�
   assert.match(queue, /if \(error instanceof TypeError\) throw error/)
 })
 
-test('任务详情弹框适配窄屏并实时派生（不持打开时快照）', () => {
+test('任务详情弹框适配窄屏：优先实时行，退役行保留打开时快照', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
   assert.match(page, /<el-dialog v-model="detailVisible" width="min\(720px, 92vw\)"/)
   const block = section(page, 'const detailTask = computed<TaskInfo | null>', 'const history = ref')
-  assert.match(block, /tasks\.value\.find\(t => t\.id === id\)/, '详情必须读最新轮询行而非打开时快照')
+  const live = block.indexOf('tasks.value.find(t => t.id === id)')
+  const fallback = block.indexOf('?? detailSeed.value')
+  assert.ok(live >= 0 && fallback > live, '列表命中优先实时行；行退役时回退打开时快照')
   assert.match(section(page, 'const openDetail = async', 'const logsVisible = ref'), /detailTaskId\.value = row\.id/)
 })
 
@@ -414,7 +417,7 @@ test('/admin-tls 读取失败显性化并提供重试', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   assert.match(page, /const adminTlsLoadFailed = ref\(false\)/)
   const load = section(page, 'const loadAdminTls = async', 'const retryLoadAdminTls')
-  assert.match(load, /catch \{\n    adminTlsLoadFailed\.value = true/)
+  assert.match(load, /catch \{[\s\S]*adminTlsLoadFailed\.value = true/, '读取失败必须置显性失败态')
   assert.match(page, /const retryLoadAdminTls = \(\): void => \{ void loadAdminTls\(\) \}/)
   const failedBlock = section(page, '<template v-else-if="adminTlsLoadFailed">', '</template>')
   assert.match(failedBlock, /TLS 配置读取失败/, '开关旁必须有错误文案')
@@ -430,7 +433,7 @@ test('兜底提醒不承诺不会发生的自动跳转', () => {
 test('各写函数入口自带只读/在途守卫（纵深防御）', () => {
   const basic = code('src/views/settings/BasicSettings.vue')
   const checks: Array<[string, string, RegExp]> = [
-    ['const saveAutoBackupSettings = async', '\nconst ', /if \(isReadOnly\.value \|\| !autoBackupSectionsValid\.value/],
+    ['const saveAutoBackupSettings = async', '\nconst ', /if \(backupDisabled\.value \|\| !autoBackupSectionsValid\.value/],
     ['const restoreAutoBackup = async', '\nconst ', /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/],
     ['const deleteAutoBackup = async', '\nconst ', /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/],
     ['const confirmImport = async', '\nconst ', /if \(isReadOnly\.value\) return/],
@@ -525,6 +528,26 @@ test('集群模式卡：status 未就绪时写控件 fail-closed（默认值不�
   assert.match(section(card, 'const saveSyncInterval', '\n}'), /if \(props\.readOnly \|\| !props\.status\) return/)
   assert.match(section(card, 'const handleModeChange', '\n}'), /if \(props\.readOnly \|\| props\.loading \|\| !props\.status\) return/)
   assert.match(card, /:disabled="loading \|\| readOnly \|\| !status"/)
+})
+
+test('集群同步间隔：清空输入不得提交（后端把缺失值当「未提供」并回 200）', () => {
+  const card = code('src/views/settings/cluster/ClusterModeCard.vue')
+  // el-input-number 清空后回写 null/undefined——值域必须显式包含空，否则
+  // 空值被当成合法数字一路发到后端。
+  assert.match(card, /const syncInterval = ref<number \| null \| undefined>\(60\)/, '清空后 v-model 为 null/undefined')
+  assert.match(card, /const syncIntervalValid = computed\(/, '空值判据必须单源')
+  const save = section(card, 'const saveSyncInterval', '\n}')
+  assert.ok(save.indexOf('syncIntervalValid.value') > 0, '提交门必须拦截空值')
+  assert.ok(save.indexOf('syncIntervalValid.value') < save.indexOf("emit('update-interval'"), '拦截必须先于 emit')
+  assert.match(card, /:disabled="intervalDisabled \|\| !syncIntervalValid \|\| syncInterval === status\?\.sync_interval"/, '空值时保存按钮必须灰置')
+  assert.match(card, /v-if="!syncIntervalValid"/, '清空后须有可见提示，而非静默灰置')
+
+  const page = code('src/views/settings/ClusterSettings.vue')
+  const write = section(page, 'const updateSyncInterval = async', 'const runNodeAction = async')
+  assert.match(write, /typeof value !== 'number' \|\| !Number\.isFinite\(value\)/, '写侧必须再判空（防未来调用方直传）')
+  const guard = write.indexOf('Number.isFinite')
+  const put = write.indexOf("request.put<ActionResponse>('/cluster/settings'")
+  assert.ok(guard > 0 && put > guard, '空值拒绝必须先于 PUT——否则后端保持现值、前端提示「已更新」')
 })
 
 test('仪表盘：/caddy/status 失败置采集失败并阻断陈旧状态呈现', () => {

@@ -5,6 +5,7 @@ package services
 // success，把「从节点未执行」误报为「本轮扫描成功」。
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func TestCertRenewalScanOnce_demoteAtEntryLandsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := CertRenewalScanOnce()
+	err := CertRenewalScanOnce(context.Background())
 
 	if !errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("err=%v, want ErrTaskSkipped（降级终态与 crs/threat 同构，不落 success）", err)
@@ -70,7 +71,7 @@ func TestCertRenewalScan_demoteMidLoopLandsSkipped(t *testing.T) {
 	ResetCAQueueManagerForTest()
 	t.Cleanup(ResetCAQueueManagerForTest)
 	InitCAQueueManager(func() error { return nil })
-	err := NewCertificateService().renewExpiringCertificates()
+	err := NewCertificateService().renewExpiringCertificates(context.Background())
 
 	if !errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("err=%v, want ErrTaskSkipped（降级中止轮不得落 success）", err)

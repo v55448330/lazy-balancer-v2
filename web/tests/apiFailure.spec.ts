@@ -12,13 +12,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, runMfaStepUpRequest } from '../src/utils/apiFailure.ts'
+import { deferred } from './_helpers.ts'
 
-const deferred = <T,>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } => {
-  let resolve!: (value: T) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
-  return { promise, resolve, reject }
-}
 
 const handle = (): { closed: boolean; close: () => void } => {
   const h = { closed: false, close: (): void => { h.closed = true } }

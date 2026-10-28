@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -314,5 +315,51 @@ func TestUpdateCrawlerLibFlags_enableStateMachineNormalized(t *testing.T) {
 	put(true)
 	if status, message, failures := state(); status != "idle" || message != "" || failures != 0 {
 		t.Fatalf("re-enabled state=(%s,%q,%d), want (idle,\"\",0)", status, message, failures)
+	}
+}
+
+// 开关类审计必须记录目标状态：旧文案「X 更新开关」事后无法判断这次操作是
+// 开还是关（同族另有 CRS/IP2Region/爬虫三处内联副本，统一走
+// enabledStateLabel）。夹具口径：本用例曾寄居 cluster_mode_test.go 并额外调用
+// db.InitializeAuditDB 覆盖包级 db.AuditDB——fixture 的 db.Initialize 已装配
+// audit 库，二次直换句柄不 Close 会让前一句柄连同连接/fd 泄漏至进程退出，
+// 违反「直换包级句柄必须 Close / SetDB」（本用例主题也属爬虫地址库，与集群
+// 模式无关）。现只依赖 newBackupTestHandlers 的单一夹具，并断言句柄未被直换。
+func TestSwitchAudit_recordsTargetState(t *testing.T) {
+	router := newCrawlerTestRouter(t)
+	seedCrawlerSource(t, 41, "测试爬虫源", 0)
+	if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET update_enabled=0 WHERE id=41`); err != nil {
+		t.Fatalf("seed crawler source state: %v", err)
+	}
+	auditHandle := db.AuditDB
+
+	put := func(enabled bool) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/security/crawler-lib/41/flags", strings.NewReader(fmt.Sprintf(`{"update_enabled":%t}`, enabled)))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("enabled=%t status=%d body=%s", enabled, recorder.Code, recorder.Body.String())
+		}
+	}
+	latest := func() string {
+		var detail string
+		if err := db.AuditDB.QueryRow("SELECT detail FROM audit_log WHERE resource='爬虫地址库' ORDER BY id DESC LIMIT 1").Scan(&detail); err != nil {
+			t.Fatalf("query audit: %v", err)
+		}
+		return detail
+	}
+
+	put(true)
+	if detail := latest(); !strings.Contains(detail, "开启") {
+		t.Fatalf("开启审计未记录目标状态: %q", detail)
+	}
+	put(false)
+	if detail := latest(); !strings.Contains(detail, "关闭") {
+		t.Fatalf("关闭审计未记录目标状态: %q", detail)
+	}
+	// 句柄身份不变：夹具装配的 audit 库必须贯穿用例（直换=泄漏前一句柄）。
+	if db.AuditDB != auditHandle {
+		t.Fatal("用例期间 db.AuditDB 被直换（直换包级句柄必须 Close 旧句柄/走 SetDB）")
 	}
 }

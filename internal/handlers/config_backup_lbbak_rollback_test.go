@@ -149,6 +149,7 @@ func TestLbbakImport_commitFailureRestoresWafFilesToPreImportBytes(t *testing.T)
 
 // 导入成功后快照必须被丢弃：临时快照目录不得残留（含字节副本）。
 func TestLbbakImport_successDiscardsWafSnapshot(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given 一个可成功导入的 xdb 备份与可观测的快照目录。
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)

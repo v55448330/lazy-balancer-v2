@@ -8,26 +8,37 @@ package taskengine
 // loopEnabled/槽未到期/Kind。
 
 import (
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // 目标形状①：tick 返回时 Scheduled admission 已同步完成（running 占位可见）。
-// GOMAXPROCS=1 下 tick 内 go 派生的 goroutine 在 tick 返回前不会被调度——
-// 若 admission 由派发 goroutine 承担（旧形态），tick 返回时 running 必为
-// false，StopLoop 可落在窗口内；同步 admission（新形态）则必为 true。
+// 若 admission 由派发 goroutine 承担（旧形态），tick 返回时 running=false；
+// 同步 admission（新形态）则必为 true。
 func TestEngine_ScheduledAdmissionCompletesSynchronouslyInTick(t *testing.T) {
-	oldProcs := runtime.GOMAXPROCS(1)
-	t.Cleanup(func() { runtime.GOMAXPROCS(oldProcs) })
 	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
-	var runs atomic.Int32
+	var runs, slotCalls atomic.Int32
 	runReleased := make(chan struct{})
+	slotEntered := make(chan struct{})
+	allowSlotReturn := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-runReleased:
+		default:
+			close(runReleased)
+		}
+	})
 	const id = "t-sched-admission-sync"
 	if err := e.Register(Descriptor{
 		ID: id, Family: "t", Name: "定时 admission 同步", Kind: KindScheduled, RunsOn: RoleAny,
-		NextSlotFn: func() time.Time { return time.Now().Add(-time.Second) },
+		NextSlotFn: func() time.Time {
+			if slotCalls.Add(1) == 1 {
+				close(slotEntered)
+				<-allowSlotReturn
+			}
+			return time.Now().Add(-time.Second)
+		},
 		Run: func(RunContext) error {
 			runs.Add(1)
 			<-runReleased
@@ -39,7 +50,24 @@ func TestEngine_ScheduledAdmissionCompletesSynchronouslyInTick(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop(id)
 
-	e.tick()
+	tickDone := make(chan struct{})
+	go func() {
+		e.tick()
+		close(tickDone)
+	}()
+	waitForEngineSignal(t, "tick 进入 NextSlotFn", slotEntered)
+	// 在槽闭包返回后持住 admission 所需的 e.mu：同步 admission 的 tick
+	// 必须阻塞；旧的异步 go runNow 形态会让 tick 先返回，确定性地暴露回归。
+	e.mu.Lock()
+	close(allowSlotReturn)
+	select {
+	case <-tickDone:
+		e.mu.Unlock()
+		t.Fatal("admission 持锁期间 tick 已返回——admission 仍由派发 goroutine 承担")
+	case <-time.After(200 * time.Millisecond):
+	}
+	e.mu.Unlock()
+	waitForEngineSignal(t, "同步 admission tick 返回", tickDone)
 
 	e.mu.RLock()
 	r := e.regs[id]
@@ -48,13 +76,10 @@ func TestEngine_ScheduledAdmissionCompletesSynchronouslyInTick(t *testing.T) {
 	running := r.running
 	r.mu.Unlock()
 	if !running {
-		t.Fatal("tick 返回时 admission 未完成（running=false）——admission 仍由派发 goroutine 承担，StopLoop 落在窗口内时任务仍会启动一次")
+		t.Fatal("tick 返回时 admission 未完成（running=false）")
 	}
 	close(runReleased)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && e.inFlight.Load() != 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitForEngine(t, "admission 在途轮排空", 2*time.Second, func() bool { return e.inFlight.Load() == 0 })
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("到期槽执行次数=%d, want 1", got)
 	}

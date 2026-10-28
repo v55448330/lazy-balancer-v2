@@ -11,18 +11,8 @@ import (
 // (覆盖复用「日志保留」的裁定);metrics_retention_days 死列已清退。
 func setupMetricsRetentionTest(t *testing.T) {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	dataDir := t.TempDir()
-	if err := db.Initialize(dataDir); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	if err := db.InitializeMetricsDB(dataDir); err != nil {
-		t.Fatalf("initialize metrics database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	// 复用单源隔离夹具：四句柄（含 db.GetDB 原子句柄）成对保存/还原。
+	setupIsolatedDBWithMetrics(t)
 }
 
 func seedMetricsRow(t *testing.T, ruleID, ageModifier string) {

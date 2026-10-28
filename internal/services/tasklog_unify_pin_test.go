@@ -4,6 +4,7 @@ package services
 // 更新日志同源（三端点读任务日志文件）。
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,11 +17,7 @@ import (
 // When collectCertJobRows。
 // Then issued 行 Success24h=1、failed 行 Fail24h=1（终态映射——签发成功应成功+1）。
 func TestCollectCertJobRows_TerminalCounts(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
+	setupIsolatedDB(t)
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	// 种子写入错误不得丢弃——静默失败会让整条断言链
 	// 在空表上「通过」。
@@ -115,11 +112,7 @@ func TestCollectSystemTasks_DaemonNeverRunStartedAtEmpty(t *testing.T) {
 // Then 物化行不进任务监控动态行（非签发任务——从节点禁签发，2026-10-01
 // 用户裁定：幽灵行不得因同步时刻新鲜而显示）。
 func TestCollectCertJobRows_excludesSyncedMaterialRows(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
+	setupIsolatedDB(t)
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, created_at) VALUES ('r1','ghost.test','issued','从主节点同步，源任务状态：issued',?)`, now); err != nil {
 		t.Fatalf("seed ghost row: %v", err)
@@ -132,7 +125,7 @@ func TestCollectCertJobRows_excludesSyncedMaterialRows(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
 		t.Fatalf("set slave role: %v", err)
 	}
-	rows, _ := collectCertJobRows()
+	rows, truncated := collectCertJobRows()
 	for _, r := range rows {
 		if strings.Contains(r.Name, "ghost.test") {
 			t.Fatal("物化行（从主节点同步）不应出现在任务监控动态行")
@@ -147,9 +140,31 @@ func TestCollectCertJobRows_excludesSyncedMaterialRows(t *testing.T) {
 	if !found {
 		t.Fatal("真实签发行应保留显示")
 	}
-	// LIMIT 100（第 100 新行仍显示——20 截断回归钉）
-	if len(rows) > 100 {
-		t.Fatalf("上限 100, got %d", len(rows))
+	if truncated {
+		t.Fatal("两行结果不得标记截断")
+	}
+}
+
+func TestCollectCertJobRows_truncationProbeAtHundredRows(t *testing.T) {
+	setupIsolatedDB(t)
+	insert := func(i int) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,created_at,updated_at) VALUES (?,?, 'issued', ?, ?)`,
+			fmt.Sprintf("r%03d", i), fmt.Sprintf("%03d.example", i), i, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range certJobRowsLimit {
+		insert(i)
+	}
+	rows, truncated := collectCertJobRows()
+	if len(rows) != certJobRowsLimit || truncated {
+		t.Fatalf("恰好 100 行: len=%d truncated=%v, want 100/false", len(rows), truncated)
+	}
+	insert(certJobRowsLimit)
+	rows, truncated = collectCertJobRows()
+	if len(rows) != certJobRowsLimit || !truncated {
+		t.Fatalf("101 行: len=%d truncated=%v, want 100/true（LIMIT 20 回归必须红）", len(rows), truncated)
 	}
 }
 
@@ -158,11 +173,7 @@ func TestCollectCertJobRows_excludesSyncedMaterialRows(t *testing.T) {
 // Then 行存在即显示（2026-10-01 用户裁定——无状态/时间过滤）；但 24h 计数
 // 归零（超窗不计数）。
 func TestCollectCertJobRows_oldTerminalStillShown(t *testing.T) {
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
+	setupIsolatedDB(t)
 	old := time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, updated_at) VALUES ('r9','old.test','issued',?)`, old); err != nil {
 		t.Fatalf("seed old row: %v", err)
@@ -212,14 +223,7 @@ func TestGetTaskLogSizeBytes_readFailureNotCached(t *testing.T) {
 func TestGetTaskLogSizeBytes_readFailureLoggedOnceAndRecovers(t *testing.T) {
 	initServicesDB(t)
 	t.Cleanup(InvalidateTaskLogSizeCache)
-	metricsStateMu.Lock()
-	metricsStateFailed = map[string]bool{}
-	metricsStateMu.Unlock()
-	t.Cleanup(func() {
-		metricsStateMu.Lock()
-		delete(metricsStateFailed, "task-log-size-refresh")
-		metricsStateMu.Unlock()
-	})
+	isolateMetricsState(t)
 	InvalidateTaskLogSizeCache()
 
 	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_tasklog_size_bak`); err != nil {

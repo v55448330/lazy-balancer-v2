@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -12,14 +11,7 @@ import (
 // 正是侧车要覆盖的故障形态，双向失效时写侧丢弃/IO 计数恒 0——不可用事实
 // 必须进健康位（healthy=false + writer_stats_unavailable），不得保持假绿。
 func TestWriterStatsHealth_sidecarUnreadableBecomesUnavailable(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log")
-	t.Cleanup(func() { auditLogPath = oldPath })
-	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
-	t.Cleanup(func() {
-		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
-	})
+	isolationForWriterHealth(t)
 
 	// 侧车路径上放目录 → ReadFile 持续失败（非 ErrNotExist）。
 	if err := os.Mkdir(securityEventsAuditWriterStatsPath(), 0o755); err != nil {
@@ -62,10 +54,7 @@ func TestWriterStatsHealth_sidecarUnreadableBecomesUnavailable(t *testing.T) {
 // 但曾发生的丢弃/写盘错误/畸形区跳过是永久事实——data_loss 保持 true 直至
 // 进程重启/测试重置，前端据此区分「正在失败」与「曾丢失 N 条」。
 func TestIngestionHealth_dataLossOutlivesDegradedWindow(t *testing.T) {
-	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
-	t.Cleanup(func() {
-		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
-	})
+	isolationForWriterHealth(t)
 	// 曾发生写侧丢弃，但失败窗口已滑出（15min 前）。
 	securityEventsWriterHealth.mu.Lock()
 	securityEventsWriterHealth.droppedTotal = 5
@@ -104,14 +93,7 @@ func TestIngestionHealth_dataLossOutlivesDegradedWindow(t *testing.T) {
 // 插件写不进侧车时（磁盘满/目录只读、首写即失败 → 计数文件永不存在）必须
 // 留下失败标记：根侧据标记判「写侧计数不可用」，而不是把文件缺失当正常。
 func TestWriterStatsHealth_writeFailureMarkerBecomesUnavailable(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log")
-	t.Cleanup(func() { auditLogPath = oldPath })
-	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
-	t.Cleanup(func() {
-		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
-	})
+	isolationForWriterHealth(t)
 
 	if err := os.WriteFile(securityEventsAuditWriterStatsFailurePath(), []byte("writer-stats sidecar write failed"), 0o644); err != nil {
 		t.Fatal(err)
@@ -148,28 +130,8 @@ func TestWriterStatsHealth_writeFailureMarkerBecomesUnavailable(t *testing.T) {
 // 失败」任务日志的误报；归零比整份忽略更糟：面板单独重启（Caddy 保持运行、
 // 计数器保留旧值）时，插件下一次任意写入都会把历史失败全量算进本代。
 func TestWriterStatsHealth_staleGenerationIgnored(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log")
-	t.Cleanup(func() { auditLogPath = oldPath })
-	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
-	t.Cleanup(func() {
-		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
-	})
-
-	oldStart := securityEventsProcessStart
+	isolationForWriterHealth(t)
 	securityEventsProcessStart = time.Now()
-	t.Cleanup(func() { securityEventsProcessStart = oldStart })
-	securityEventsWriterHealth.mu.Lock()
-	securityEventsWriterHealth.baselineDropped = 0
-	securityEventsWriterHealth.baselineIO = 0
-	securityEventsWriterHealth.droppedTotal = 0
-	securityEventsWriterHealth.ioTotal = 0
-	securityEventsWriterHealth.windowStart = time.Time{}
-	securityEventsWriterHealth.windowFailures = 0
-	securityEventsWriterHealth.lastFailureAt = time.Time{}
-	securityEventsWriterHealth.sidecarReadFailures = 0
-	securityEventsWriterHealth.mu.Unlock()
 
 	// 旧代际侧车：written_at 早于本进程启动，计数非零。
 	stale := `{"dropped":7,"io_errors":3,"written_at":"` +
@@ -228,29 +190,8 @@ func TestWriterStatsHealth_staleGenerationIgnored(t *testing.T) {
 // 本用例把进程启动时间前移，使「1h 前的 written_at」属于本代际——任何按年龄
 // 判停更的实现都会在此红。
 func TestWriterStatsHealth_oldWrittenAtInCurrentGenerationIsNotStale(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := auditLogPath
-	auditLogPath = filepath.Join(dir, "audit.log")
-	t.Cleanup(func() { auditLogPath = oldPath })
-	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
-	t.Cleanup(func() {
-		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
-	})
-
-	oldStart := securityEventsProcessStart
+	isolationForWriterHealth(t)
 	securityEventsProcessStart = time.Now().Add(-48 * time.Hour)
-	t.Cleanup(func() { securityEventsProcessStart = oldStart })
-	securityEventsWriterHealth.mu.Lock()
-	securityEventsWriterHealth.baselineDropped = 0
-	securityEventsWriterHealth.baselineIO = 0
-	securityEventsWriterHealth.droppedTotal = 0
-	securityEventsWriterHealth.ioTotal = 0
-	securityEventsWriterHealth.windowStart = time.Time{}
-	securityEventsWriterHealth.windowFailures = 0
-	securityEventsWriterHealth.lastFailureAt = time.Time{}
-	securityEventsWriterHealth.sidecarReadFailures = 0
-	securityEventsWriterHealth.sidecarWriteFailureHits = 0
-	securityEventsWriterHealth.mu.Unlock()
 
 	// 本代际（晚于进程启动）但已 1h 未重写的侧车：无失败计数。
 	stale := `{"dropped":0,"io_errors":0,"written_at":"` +

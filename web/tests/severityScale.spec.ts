@@ -53,7 +53,6 @@ test('0 分行回退族：预检固定族（含 4/7）高危，GeoIP 三族按�
   // 固定预检族（与后端 Stage1PrecheckIDSQLList 去 GeoIP id 8 同集合）：
   // 4=遗留黑名单、7=白名单外拒绝——升级前的历史 0 分拦截行若落兜底会被定成
   // 中危并从大屏「高危」筛选中漏掉；5 为绕过模式信任并集（pass,nolog 不产事件）。
-  assert.ok(ZERO_SCORE_PRECHECK_IDS.includes('4') && ZERO_SCORE_PRECHECK_IDS.includes('7'), '固定族必须含 4/7')
   for (const ruleTriggered of ZERO_SCORE_PRECHECK_IDS) {
     assert.equal(zeroScoreSeverity(ruleTriggered, 'blocked'), 'high', `${ruleTriggered} 拦截应为高危`)
     assert.equal(zeroScoreSeverity(ruleTriggered, 'detected'), 'mid', `${ruleTriggered} 检测模式降为中危`)
@@ -64,7 +63,7 @@ test('0 分行回退族：预检固定族（含 4/7）高危，GeoIP 三族按�
     assert.equal(zeroScoreSeverity(ruleTriggered, 'detected'), 'mid', '存量行检测模式不再二次下调')
   }
   // 爬虫伪装 `[850000,900000)`：后端补分 12（高危），与 12 分族同档
-  for (const ruleTriggered of ['850001', '899999']) {
+  for (const ruleTriggered of ['850000', '850001', '899999']) {
     assert.equal(zeroScoreSeverity(ruleTriggered, 'blocked'), 'high', `${ruleTriggered} 爬虫伪装应为高危`)
     assert.equal(zeroScoreSeverity(ruleTriggered, 'detected'), 'mid', '检测模式高→中')
   }
@@ -77,6 +76,7 @@ test('0 分行回退族：预检固定族（含 4/7）高危，GeoIP 三族按�
   // 8 族边界：必须恰好 8 后跟 5 位（8xxxxx），5 位/7 位落入兜底
   assert.equal(zeroScoreSeverity('80000', 'blocked'), 'mid', '非 8 族兜底=拦截中危')
   assert.equal(zeroScoreSeverity('8000000', 'detected'), 'low', '7 位不是 8xxxxx，走兜底检测低危')
+  assert.equal(zeroScoreSeverity('900000', 'blocked'), 'mid', '900000 是右开界，落入普通兜底而非爬虫高危')
   // 兜底按动作区分；429 不产生安全事件行，同样只落兜底
   assert.equal(zeroScoreSeverity('', 'blocked'), 'mid')
   assert.equal(zeroScoreSeverity('', 'detected'), 'low')

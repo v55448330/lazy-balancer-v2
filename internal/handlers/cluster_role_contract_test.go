@@ -82,6 +82,9 @@ func TestUpdateClusterSettings_RoleCheckPrecedesRequestSemantics(t *testing.T) {
 			if recorder.Code != http.StatusForbidden {
 				t.Fatalf("status=%d body=%s, want slave 403 before request-specific semantics", recorder.Code, recorder.Body.String())
 			}
+			if got := recorder.Header().Get("X-LB-Error-Code"); got != masterRequiredErrorCode {
+				t.Fatalf("X-LB-Error-Code=%q, want %q", got, masterRequiredErrorCode)
+			}
 		})
 	}
 

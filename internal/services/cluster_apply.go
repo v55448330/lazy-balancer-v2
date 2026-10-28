@@ -165,17 +165,24 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Security: snapshot.MasterSyncSwitches.Security,
 		}
 	}
+	// 三个后置副作用标记同住 last_sync_error 一列：单次读取后本地分类（此前
+	// 三个 helper 各发一条 SELECT，一个同步周期合计 6–9 次点查同一行同一列）。
+	markerMessage, markerKnown := s.readSyncMarkerMessage(ctx)
+	// markerCovers 复刻各 helper 的 fail-closed 语义：读失败视同「标记存在」。
+	markerCovers := func(prefix string) bool {
+		return !markerKnown || strings.HasPrefix(markerMessage, prefix)
+	}
 	// 重载失败补偿标记必须在快照事务前捕获——事务内「记录同步状态」
 	// 会清空 last_sync_error，提交后再读永远漏判；标记在=上轮 apply 后 /load
 	// 失败，本轮即使渲染输入无变化也必须强制重载（304 补偿重拉通道的终点）。
-	reloadCompensation := s.syncReloadFailureMarkerPresent(ctx)
+	reloadCompensation := markerCovers(syncReloadFailureMarkerPrefix)
 	// 品牌落盘失败标记必须与重载标记同点捕获——事务内「记录同步
 	// 状态」会清空 last_sync_error，提交后再读永远漏判，品牌节又不在哈希口径内
 	// （users 节未变时不会重放），没有标记就会永久停在上轮失败态。
-	brandingRetry := s.syncBrandingFailureMarkerPresent(ctx)
+	brandingRetry := markerCovers(syncBrandingFailureMarkerPrefix)
 	// Commit 结果不确定标记同样在事务前捕获：补偿轮必须重试品牌落盘并
 	// 强制重载，即使已提交形态的三节哈希与证书材料均已一致。
-	commitUncertainRetry := s.syncMarkerPresent(ctx, syncCommitUncertainMarkerPrefix)
+	commitUncertainRetry := markerCovers(syncCommitUncertainMarkerPrefix)
 	// previous 只装载 apply 消费面（三节哈希/证书轴/ACME
 	// ownership），不再全量构建快照（避免每次 apply 白做 CRS 树全量哈希）。
 	previous, err := s.cluster.clusterSnapshotForApply(ctx)
@@ -229,6 +236,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.Security); err != nil {
 			return fmt.Errorf("镜像同步开关: %w", err)
 		}
+	}
+	// 规则轴不同步、安全节本轮重放：保留的本地绑定命中的策略对象会被主端
+	// 同 id 载荷整表镜像替换（保护语义静默改变）。检查必须在事务内、删除前
+	// 读本地面（见 warnPreservedBindingPolicyOverrides）。
+	if !skip.skip("security") && skip.disabled["rules"] {
+		s.warnPreservedBindingPolicyOverrides(ctx, tx, snapshot)
 	}
 	if err := replaceSnapshotTx(ctx, tx, snapshot, skip); err != nil {
 		return err
@@ -1401,6 +1414,148 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		return err
 	}
 	return nil
+}
+
+// warnPreservedBindingPolicyOverrides 留痕「规则轴不同步 + 安全节重放」形态下
+// 保留的本地绑定所命中、且内容会被主端同 id 载荷覆盖的策略条数。
+//
+// 背景：绑定表与 rules 开关同门（本地绑定保留），但策略表仍按安全节镜像——
+// 同 id 策略的内容随主端改变，绑定命中的保护语义（mode/geoip/自定义规则…）
+// 静默换成主端形态。既有「悬挂 id」warn 只数「策略不存在」，该形态 id 仍在
+// 故零信号（关闭规则同步正是为了保住本地防护，被放宽却无痕＝fail-open 且
+// 不可解）。本函数在事务内、删除前读本地面，用与主端快照**同一 dump 函数与
+// 同一 COALESCE 列清单**（值域可比）逐 id 比对。
+//
+// 失败一律不阻断 apply：这是可观测性留痕，读/解码失败按「检查已降级」自身
+// 留痕（静默跳过让告警覆盖不可判定却看起来正常）。
+func (s *SyncService) warnPreservedBindingPolicyOverrides(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) {
+	if len(snapshot.SecurityPolicies) == 0 || s.cluster == nil {
+		// 空载荷=主节点已清空策略表，保留绑定随即成为悬挂行（由 applySecurityTables
+		// 的 dangling warn 覆盖），无需逐 id 内容比对。
+		return
+	}
+	bindingPolicyIDs, err := readBindingPolicyIDs(ctx, tx)
+	if err != nil {
+		Logf("warn", "集群同步：读取保留的安全策略绑定失败，跳过策略覆盖检查: %v", err)
+		return
+	}
+	if len(bindingPolicyIDs) == 0 {
+		return
+	}
+	localPolicies, err := s.cluster.snapshotSecurityPolicies(ctx, tx)
+	if err != nil {
+		Logf("warn", "集群同步：读取本地安全策略失败，跳过策略覆盖检查: %v", err)
+		return
+	}
+	overridden, err := countPreservedBindingPolicyOverrides(localPolicies, snapshot.SecurityPolicies, bindingPolicyIDs)
+	if err != nil {
+		Logf("warn", "集群同步：比对本地安全策略与主节点载荷失败，跳过策略覆盖检查: %v", err)
+		return
+	}
+	if overridden == 0 {
+		return
+	}
+	Logf("warn", "规则同步已关闭：保留的本地安全策略绑定命中的 %d 条策略内容已被本轮主端镜像覆盖（保护语义随之改变）；如需完全保留本地策略，请同时关闭安全防护同步", overridden)
+}
+
+// readBindingPolicyIDs 返回保留绑定引用的策略 id 集合（distinct）。
+func readBindingPolicyIDs(ctx context.Context, store snapshotStore) (map[int64]struct{}, error) {
+	rows, err := store.QueryContext(ctx, `SELECT DISTINCT policy_id FROM security_policy_bindings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[int64]struct{}{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			// 与行遍历错误同口径 fail-visible：部分集合会让「被覆盖」的通知
+			// 静默变少（告警缺口比多报更危险）。
+			return nil, err
+		}
+		ids[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// countPreservedBindingPolicyOverrides 统计「绑定引用且在两侧都存在、但内容
+// 不同」的策略条数。两侧行都经 normalizeSnapshotPolicyRow 归一并按关键字序
+// 序列化（与 security 节哈希同一归一单源），本地 dump 的 COALESCE 归一与主端
+// 载荷同域，故「空值形态差异」不会误报。
+func countPreservedBindingPolicyOverrides(localPolicies, masterPolicies json.RawMessage, bindingPolicyIDs map[int64]struct{}) (int, error) {
+	localByID, err := indexSnapshotPolicyRows(localPolicies)
+	if err != nil {
+		return 0, fmt.Errorf("解析本地安全策略: %w", err)
+	}
+	var masterRows []map[string]interface{}
+	if err := json.Unmarshal(masterPolicies, &masterRows); err != nil {
+		return 0, fmt.Errorf("解析主节点安全策略: %w", err)
+	}
+	overridden := 0
+	for _, row := range masterRows {
+		if row == nil {
+			continue
+		}
+		if _, hit := bindingPolicyIDs[int64(toFloat64(row["id"]))]; !hit {
+			continue
+		}
+		localRow, exists := localByID[int64(toFloat64(row["id"]))]
+		if !exists {
+			// 本地无同 id 行：绑定将成为悬挂行，由 applySecurityTables 的
+			// dangling warn 覆盖（本告警只讲「内容被覆盖」）。
+			continue
+		}
+		localContent, err := canonicalSnapshotPolicyContent(localRow)
+		if err != nil {
+			return 0, err
+		}
+		masterContent, err := canonicalSnapshotPolicyContent(row)
+		if err != nil {
+			return 0, err
+		}
+		if localContent != masterContent {
+			overridden++
+		}
+	}
+	return overridden, nil
+}
+
+// indexSnapshotPolicyRows 把策略行载荷按 id 建索引（空/缺失载荷返回空 map）。
+func indexSnapshotPolicyRows(raw json.RawMessage) (map[int64]map[string]interface{}, error) {
+	rows := map[int64]map[string]interface{}{}
+	if len(raw) == 0 {
+		return rows, nil
+	}
+	var decoded []map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	for _, row := range decoded {
+		if row == nil {
+			continue
+		}
+		rows[int64(toFloat64(row["id"]))] = row
+	}
+	return rows, nil
+}
+
+// canonicalSnapshotPolicyContent 返回归一后的策略行内容指纹：normalizeSnapshotPolicyRow
+// 是 apply 写侧与 security 节哈希的共用归一（单源），键序由 encoding/json 的
+// map 排序保证确定。归一在副本上执行，不污染调用方的行。
+func canonicalSnapshotPolicyContent(row map[string]interface{}) (string, error) {
+	copied := make(map[string]interface{}, len(row)+2)
+	for key, value := range row {
+		copied[key] = value
+	}
+	normalizeSnapshotPolicyRow(copied)
+	encoded, err := json.Marshal(copied)
+	if err != nil {
+		return "", fmt.Errorf("序列化安全策略（id=%v）: %w", row["id"], err)
+	}
+	return string(encoded), nil
 }
 
 // snapshotPolicyJSONColumns 是 security_policies 的 JSON 文本列（值经

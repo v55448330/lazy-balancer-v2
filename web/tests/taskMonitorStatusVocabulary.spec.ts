@@ -26,7 +26,7 @@ test('状态列只由引擎 status 渲染（三态，无业务态覆盖）', () 
 test('statusLabel 兜底不引入证书生命周期词表', () => {
   const fn = codeSection('src/views/settings/TaskMonitor.vue', 'const statusLabels', '// v2.0 四类型')
   assert.doesNotMatch(fn, /certJobStatusLabel/, 'statusLabel 兜底不得把 cert_jobs 状态词表渲染进状态列')
-  assert.match(fn, /statusLabels\[s\] \|\| s/, '兜底只回显原值')
+  assert.match(fn, /hasOwn\(statusLabels, s\) \? statusLabels\[s\] : s/, '兜底只回显原值，并经自有属性守卫')
 })
 
 test('文件内不存在按行渲染证书状态标签的 helper（certJobLabel/certJobRawStatus）', () => {

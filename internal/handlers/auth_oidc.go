@@ -37,7 +37,6 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
@@ -65,6 +64,18 @@ type OIDCConfig struct {
 	// JSON 序列化。仅用于历史身份行兼容查询：JIT 行按 (auth_issuer,auth_subject)
 	// 建键，归一后直接查会 miss 并重复开户（带外写入的带尾斜杠 issuer）。
 	rawIssuer string
+}
+
+// usable 是「可对外提供 OIDC 登录」的单一判据。库值可经导入/快照绕过面板
+// 保存门，因此公开状态与保存侧启用门必须共用完整性与 issuer 合规校验。
+func (cfg OIDCConfig) usable() error {
+	if !cfg.Enabled {
+		return errors.New("OIDC 未启用")
+	}
+	if cfg.Issuer == "" || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.ClientSecret) == "" {
+		return errors.New("OIDC 配置不完整：服务地址、Client ID 与 Client Secret 均须配置")
+	}
+	return validateOIDCIssuerURL(cfg.Issuer)
 }
 
 // oidcStateEntry 登录跳转与回调之间的一次性状态(state 防 CSRF,nonce 防
@@ -645,14 +656,14 @@ func logOIDCStatusFailure(err error) {
 	services.Logf("warn", "读取 OIDC 状态失败: %v", err)
 }
 
-// logOIDCStatusIssuerInvalid 记录「库内 issuer 不合规」的公开端点降级：
-// 与读失败同一防放大思路（60s 节流），独立状态窗口（两类故障不互相吞没）。
+// logOIDCStatusUnusable 记录「库内 issuer 不合规或启用凭证不完整」的公开端点
+// 降级：与读失败同一防放大思路（60s 节流），独立状态窗口（两类故障不互相吞没）。
 var oidcStatusIssuerLog = struct {
 	sync.Mutex
 	at time.Time
 }{}
 
-func logOIDCStatusIssuerInvalid(err error) {
+func logOIDCStatusUnusable(err error) {
 	now := time.Now()
 	oidcStatusIssuerLog.Lock()
 	if !oidcStatusIssuerLog.at.IsZero() && now.Sub(oidcStatusIssuerLog.at) < oidcStatusFailureLogWindow {
@@ -661,7 +672,7 @@ func logOIDCStatusIssuerInvalid(err error) {
 	}
 	oidcStatusIssuerLog.at = now
 	oidcStatusIssuerLog.Unlock()
-	services.Logf("warn", "库内 OIDC issuer 不合规，登录页按未启用呈现（需管理员修正配置）: %v", err)
+	services.Logf("warn", "库内 OIDC 配置不可用（issuer 不合规或凭证不完整），登录页按未启用呈现（需管理员修正配置）: %v", err)
 }
 
 // OIDCStatus GET /auth/oidc/status(公开):登录页按钮显隐与展示名。
@@ -672,16 +683,17 @@ func (h *Handlers) OIDCStatus(c *gin.Context) {
 		// 避免无鉴权请求形成日志放大。
 		logOIDCStatusFailure(cfgErr)
 	}
-	if cfgErr != nil || !cfg.Enabled || cfg.Issuer == "" {
+	if cfgErr != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"enabled": false}})
 		return
 	}
-	// 库中 issuer 可能由导入/自动备份还原/集群快照带入（写侧校验只覆盖面板
-	// 保存路径），不合规的地址必然登录失败——未认证端点不得宣告一个恒失败的
-	// 登录按钮，按未启用呈现（与读失败同口径 fail-closed）。降级必须留痕：
-	// 管理员可修复的配置错误不应只能靠手工 GET 端点发现（60s 节流防放大）。
-	if err := validateOIDCIssuerURL(cfg.Issuer); err != nil {
-		logOIDCStatusIssuerInvalid(err)
+	// 导入/自动备份还原/集群快照可绕过面板保存门，带入不合规 issuer 或
+	// enabled=true 但凭证不全的配置。不得宣告必然失败的登录按钮；按未启用
+	// 呈现并沿用 60s 节流留痕。
+	if err := cfg.usable(); err != nil {
+		if cfg.Enabled {
+			logOIDCStatusUnusable(err)
+		}
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"enabled": false}})
 		return
 	}
@@ -968,7 +980,7 @@ type oidcIdentity struct {
 // 共用同一查询口径——收敛）。
 func lookupOIDCIdentity(issuer, subject string) (oidcIdentity, error) {
 	var ident oidcIdentity
-	err := db.DB.QueryRow(`SELECT id, username, role, COALESCE(is_enabled,1), COALESCE(password_version,0)
+	err := db.DB.QueryRow(`SELECT id, username, role, COALESCE(is_enabled,0), COALESCE(password_version,0)
 		FROM users WHERE auth_provider='oidc' AND oidc_issuer=? AND oidc_subject=?`, issuer, subject).
 		Scan(&ident.id, &ident.username, &ident.role, &ident.isEnabled, &ident.passwordVersion)
 	return ident, err
@@ -1319,7 +1331,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 
 	// 签发本站 JWT(与密码登录同构;auth_method=oidc 标记会话来源——本地
 	// MFA 族功能对 OIDC 用户整体豁免,v2.3.0 用户裁定)。
-	token, expiresAt, err := h.issueOIDCJWT(userID, username, role, passwordVersion)
+	token, expiresAt, err := signSessionJWT(h.cfg.JWTSecret, userID, username, role, passwordVersion, 0, "oidc")
 	if err != nil {
 		fail("签发登录令牌失败", "")
 		return
@@ -1337,38 +1349,6 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	}
 	front := requestOrigin(c)
 	c.Redirect(http.StatusFound, front+"/#/oidc/callback?token="+url.QueryEscape(token)+"&expires_at="+fmt.Sprintf("%d", expiresAt.Unix())+"&return_to="+url.QueryEscape(returnTo))
-}
-
-// issueOIDCJWT 与密码登录的令牌同构(auth.go respondLoginWithMFA 口径),
-// 附加 auth_method=oidc 与 pwd_ver（jwtAuth 对缺 pwd_ver 且 DB 版本
-// ≠0 的令牌恒拒——无该声明的 OIDC 会话在导入 bump 后永久 401）。
-// node_mode 不在令牌内（仅登录响应体的展示字段，由各自处理器填充），
-// 本函数与 respondLoginWithMFA 的声明集合逐键一致。
-func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersion int64) (string, time.Time, error) {
-	expireMinutes := loginExpireMinutes() // SYS-3：与密码登录共用单源钳制（auth.go）
-	now := time.Now()
-	jtiBytes := make([]byte, 32)
-	if _, err := rand.Read(jtiBytes); err != nil {
-		return "", time.Time{}, err
-	}
-	// 原 mfaTs 参数与 mfa_ts claim 分支已删——v2.3.0 裁定
-	// OIDC 会话与本地 MFA 解耦（mfaStepUpGuard 对 auth_method=oidc 短路），唯一
-	// 调用点此前恒传 0，分支永不执行。
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":     userID,
-		"username":    username,
-		"role":        role,
-		"auth_method": "oidc",
-		"pwd_ver":     passwordVersion,
-		"jti":         hex.EncodeToString(jtiBytes),
-		"iat":         now.Unix(),
-		"exp":         now.Add(time.Duration(expireMinutes) * time.Minute).Unix(),
-	})
-	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	return tokenString, now.Add(time.Duration(expireMinutes) * time.Minute), nil
 }
 
 // ── 管理端点(显示/测试/修改/删除) ──
@@ -1508,10 +1488,12 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	if req.AllowedGroups != nil {
 		cfg.AllowedGroups = normalizeOIDCAllowedGroups(*req.AllowedGroups)
 	}
-	// 启用前置门:issuer+client_id+secret 三者齐备才允许 enabled=true。
-	if cfg.Enabled && (cfg.Issuer == "" || cfg.ClientID == "" || cfg.ClientSecret == "") {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用前需完整配置服务地址、Client ID 与 Client Secret"})
-		return
+	// 启用前置门与公开状态共用 usable：issuer 合规且 client_id/secret 齐备。
+	if cfg.Enabled {
+		if err := cfg.usable(); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用前需完整配置服务地址、Client ID 与 Client Secret"})
+			return
+		}
 	}
 	// 本次保存会把归一值写回库（原值消失）：若库中原值正是新 issuer 归一前的
 	// 形态，历史身份行必须同批迁移——否则兼容查询失效，同一 subject 再登录被
@@ -1519,6 +1501,18 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	migrateFrom := ""
 	if before.rawIssuer != "" && before.rawIssuer != cfg.Issuer && normalizeOIDCIssuer(before.rawIssuer) == cfg.Issuer {
 		migrateFrom = before.rawIssuer
+	}
+	// 换成不同 issuer 不会迁移旧身份行。保存前统计并在响应/审计中明示，
+	// 让管理员知道旧行的角色与禁用状态不会传播到新 issuer 的 JIT 账号。
+	// 身份行可能按 rawIssuer（如尾斜杠原值）或归一值建键，两种形态都要计数。
+	reportStaleIdentities := cfg.Issuer != before.Issuer && migrateFrom == ""
+	staleIdentityRows := 0
+	if reportStaleIdentities {
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE auth_provider='oidc' AND oidc_issuer IN (?,?)`, before.Issuer, before.rawIssuer).Scan(&staleIdentityRows); err != nil {
+			services.Logf("error", "OIDC 服务地址变更前统计存量身份行失败: %v", err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 OIDC 身份记录失败"})
+			return
+		}
 	}
 	migration, err := saveOIDCConfigWithIssuerMigration(cfg, migrateFrom)
 	if err != nil {
@@ -1538,8 +1532,15 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	if text := migration.auditText(); text != "" {
 		detail = services.FormatAuditDetail(detail, text)
 	}
+	if staleIdentityRows > 0 {
+		detail = services.FormatAuditDetail(detail, fmt.Sprintf("服务地址变更：存量身份行 %d 条不再可达", staleIdentityRows))
+	}
 	recordAudit(c, "更新", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "OIDC 配置已保存"})
+	response := models.APIResponse{Code: 0, Message: "OIDC 配置已保存"}
+	if reportStaleIdentities {
+		response.Data = gin.H{"stale_identity_rows": staleIdentityRows}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // oidcConfigUpdateAuditDetail 生成字段级 delta。

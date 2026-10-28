@@ -51,6 +51,23 @@ func TestValidateRuleUpstreams_rejectsEquivalentIPv6Spellings(t *testing.T) {
 	}
 }
 
+// 方括号 IPv6 与写侧形状门同口径：isValidHost 拒绝 '['，判重不得先剥成裸
+// 地址制造「可接受」假象（否则渲染 JoinHostPort 会二次加括号成 [[::1]]）。
+func TestUpstreamDedupeHost_keepsBracketedIPv6ForShapeGate(t *testing.T) {
+	const bracketed = "[::1]"
+	if got := upstreamDedupeHost(bracketed); got != bracketed {
+		t.Fatalf("upstreamDedupeHost(%q)=%q, want 原样保留（方括号由形状门拒绝）", bracketed, got)
+	}
+	if isValidHost(bracketed) {
+		t.Fatalf("isValidHost(%q)=true, want false（写侧必须拒绝方括号形态）", bracketed)
+	}
+	upstreams := []models.Upstream{{Host: bracketed, Port: 8080, Weight: 1, Enabled: true}}
+	_, err := validateRuleUpstreams("http", false, upstreams, true)
+	if err == nil || !strings.Contains(err.Error(), "主机") {
+		t.Fatalf("方括号 IPv6 必须被写侧形状门拒绝, err=%v", err)
+	}
+}
+
 // IPv4-mapped 与纯 IPv4 视为同一后端（同一个接口地址）。
 func TestValidateRuleUpstreams_rejectsIPv4MappedDuplicate(t *testing.T) {
 	upstreams := []models.Upstream{

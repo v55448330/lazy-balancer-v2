@@ -11,8 +11,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createPinia, setActivePinia } from 'pinia'
 
-import { registerModuleHooks } from './_helpers.ts'
+import { flushMicrotasks, registerModuleHooks } from './_helpers.ts'
 import { dataModule } from './_stubs.ts'
+
+const flush = flushMicrotasks
 
 // ── 最小浏览器宿主（只提供 auth store 的消费面） ──
 const storage = new Map<string, string>()
@@ -96,11 +98,6 @@ const dispatchStorage = (key: string | null): void => {
   for (const listener of storageListeners) listener({ key })
 }
 
-const flush = (): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, 0)
-  return promise
-}
 
 test('另一标签页登出：本标签页同步清空令牌/用户/节点模式并停表', () => {
   storage.set('token', 'tok-tab-a')

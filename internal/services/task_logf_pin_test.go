@@ -6,7 +6,7 @@ package services
 // 漂移/异常轮照旧逐轮留痕。
 
 import (
-	"log"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,15 +42,11 @@ func readTaskLog(t *testing.T, taskID string) string {
 // Then tasks/cert-renewal-scan.log 含「无临期证书」业务结论行。
 func TestTaskLogf_CertRenewalScanNoExpiringSummary(t *testing.T) {
 	newTaskLogDir(t)
-	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close(); db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA })
+	setupIsolatedDB(t)
 	// 空库：is_master 默认 1，CheckExpiration 无临期 → 摘要行必达（qm 仅在
 	// 有 jobs 的循环内消费——空路径不依赖队列）
 	s := &CertificateService{}
-	s.renewExpiringCertificates()
+	s.renewExpiringCertificates(context.Background())
 	log := readTaskLog(t, "cert-renewal-scan")
 	if !strings.Contains(log, "无临期证书") {
 		t.Fatalf("cert-renewal-scan 摘要行缺失: %q", log)
@@ -117,10 +113,6 @@ func TestTaskLogf_CertManualPoll_exceptionRoundsOnly(t *testing.T) {
 	lastCertServiceMissing.Store(false)
 	SetActiveCertificateService(NewCertificateService())
 	t.Cleanup(func() { SetActiveCertificateService(nil) })
-	oldWriter := log.Writer()
-	var buf strings.Builder
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(oldWriter) })
 
 	// Given：一张 3650 天后才过期的手动证书（全正常形态）。
 	farPEM, _ := expiredShapeCertAndKey(t, "manual-far66.test", time.Now().Add(3650*24*time.Hour))
@@ -181,31 +173,31 @@ func TestTaskLogf_CertManualPoll_parseFailureCountedInSummary(t *testing.T) {
 	}
 }
 
+var expectedTaskKinds = map[string]taskengine.Kind{
+	"threat": taskengine.KindScheduled, "crs": taskengine.KindScheduled,
+	"ip2region": taskengine.KindScheduled, "auto-backup": taskengine.KindScheduled,
+	"crawlerbot-update": taskengine.KindScheduled,
+	"config-watchdog":   taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
+	"audit-retention": taskengine.KindPeriodic, "security-events-retention": taskengine.KindPeriodic,
+	"metrics-orphan-cleanup": taskengine.KindPeriodic,
+	"cert-renewal-scan":      taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
+	"cert-manual-poll": taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
+	"autoban":                   taskengine.KindPeriodic,
+	"security-events-ingestion": taskengine.KindDaemon, "cert-issuance": taskengine.KindDaemon,
+	"cluster-sync":        taskengine.KindDaemon,
+	"startup:config-load": taskengine.KindOneshot,
+}
+
 // Given v2.0 四类型标准全量注册。
 // When DescribeAll。
-// Then Kind 映射：定时 5（threat/crs/ip2region/crawlerbot-update/auto-backup）、循环 10、
-// 常驻 3（ingestion/cert-issuance/cluster-sync）、触发 1（startup:config-load）；
-// cert-waiting-ca 默认 LoopOn=false（调度关闭——续期扫描唤醒）。
+// Then Kind 映射：定时 5、循环 10、常驻 3、触发 1；cert-waiting-ca 默认 LoopOn=false。
 func TestTaskEngineWire_KindMapping(t *testing.T) {
 	te := newWireTestEngine(t)
 	got := map[string]taskengine.TaskMeta{}
 	for _, m := range te.DescribeAll() {
 		got[m.ID] = m
 	}
-	want := map[string]taskengine.Kind{
-		"threat": taskengine.KindScheduled, "crs": taskengine.KindScheduled,
-		"ip2region": taskengine.KindScheduled, "auto-backup": taskengine.KindScheduled,
-		"crawlerbot-update": taskengine.KindScheduled,
-		"config-watchdog":   taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
-		"audit-retention": taskengine.KindPeriodic, "security-events-retention": taskengine.KindPeriodic,
-		"metrics-orphan-cleanup": taskengine.KindPeriodic,
-		"cert-renewal-scan":      taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
-		"cert-manual-poll": taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
-		"autoban":                   taskengine.KindPeriodic,
-		"security-events-ingestion": taskengine.KindDaemon, "cert-issuance": taskengine.KindDaemon,
-		"cluster-sync":        taskengine.KindDaemon,
-		"startup:config-load": taskengine.KindOneshot,
-	}
+	want := expectedTaskKinds
 	for id, kind := range want {
 		m, ok := got[id]
 		if !ok {
@@ -285,7 +277,3 @@ func TestTaskLogf_MetricsOrphanCleanupFailureSaysFailed(t *testing.T) {
 		t.Fatalf("失败轮不得写「清理完成」（与 task_runs failed 语义冲突）: %q", log)
 	}
 }
-
-// log-cleanup 的 Run 必须透传清理失败：task_runs 落 failed、任务日志写
-// 「未完成」而非「完成」（此前 Run 恒 return nil——daemon 停机时 waf-audit
-// 兜底轮转失败、单文件删除失败全部只打应用日志，任务监控恒绿）。

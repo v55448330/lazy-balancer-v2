@@ -166,6 +166,16 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 
 // ConfirmRegistration 确认集群令牌交付，返回被确认节点名（审计归因用：确认
 // 成功即注册密钥失效，须能证明是哪个节点消费了它）。
+//
+// 幂等契约（勿回退）：确认语句的谓词只能是 `cluster_token_hash` + 角色条件，
+// **不得**再加 `registration_secret IS NOT NULL`。原因：主节点首个真实下发的
+// 200 快照（Snapshot 的旧协议交付确认）与上一次成功确认都会把
+// registration_secret 置 NULL，而从节点的 confirm 是「每同步周期重试一次的
+// 冗余确认」——一旦 0 行被当作「凭证无效」返回 401，从端 5 连败轨道会清空
+// cluster_token、节点永久脱同步且无自愈通道（需人工重新注册），与 API 文档
+// 「重复确认可安全重试」矛盾。等价形态：hash 命中但 secret 已空 = 幂等成功。
+// 真 0 行（hash 不匹配）与降级仍走 masterScopeMissError 的原语义。
+// 钉测：TestConfirmRegistration_firstSnapshotConsumptionKeepsConfirmIdempotent。
 func (s *ClusterService) ConfirmRegistration(ctx context.Context, token string) (string, error) {
 	// 清列与上方旧协议交付确认（84）对齐——过期时间戳
 	// 一并置 NULL，不与已清空的 secret 残留分叉。
@@ -711,10 +721,12 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	var abEnabled bool
 	var abFrequency, abTime, abSections string
 	var abDay, abKeep int
-	if err := store.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
-		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), COALESCE(auto_backup_keep,7),
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,?), COALESCE(auto_backup_frequency,?),
+		COALESCE(auto_backup_time,?), COALESCE(auto_backup_day,?), COALESCE(auto_backup_keep,?),
 		COALESCE(auto_backup_sections,?)
-		FROM global_config WHERE id=1`, db.DefaultAutoBackupSections).Scan(&abEnabled, &abFrequency, &abTime, &abDay, &abKeep, &abSections); err != nil {
+		FROM global_config WHERE id=1`,
+		db.DefaultAutoBackupEnabled, db.DefaultAutoBackupFrequency, db.DefaultAutoBackupTime,
+		db.DefaultAutoBackupDay, db.DefaultAutoBackupKeep, db.DefaultAutoBackupSections).Scan(&abEnabled, &abFrequency, &abTime, &abDay, &abKeep, &abSections); err != nil {
 		return fmt.Errorf("读取自动备份设置: %w", err)
 	}
 	snapshot.BasicSettings.AutoBackupEnabled = &abEnabled
@@ -778,9 +790,11 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	var abnEnabled, abnDryRun bool
 	var abnThreshold, abnWindow int
 	var abnDuration, abnScope string
-	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,0), COALESCE(autoban_threshold,100),
-		COALESCE(autoban_window_minutes,5), COALESCE(autoban_duration,'1h'), COALESCE(autoban_scope,'all'), COALESCE(autoban_dry_run,1)
-		FROM global_config WHERE id=1`).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun); err != nil {
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
+		FROM global_config WHERE id=1`,
+		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun); err != nil {
 		return fmt.Errorf("读取自动封禁设置: %w", err)
 	}
 	snapshot.BasicSettings.AutobanEnabled = &abnEnabled
@@ -887,7 +901,7 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 	// 'off' 而非 schema 默认 'deny' 即为此——主节点读路径把 NULL 当 'off'；
 	// enabled 归一化为 0 而非 schema 默认 1 同理——读路径 WHERE enabled=1 把
 	// NULL 当禁用，落 1 会让从节点执行主节点未启用的策略）。
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,5) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist, COALESCE(ip_whitelist_enabled,1) AS ip_whitelist_enabled,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(rate_limit_enabled,0) AS rate_limit_enabled,COALESCE(rate_limit_rps,0) AS rate_limit_rps,COALESCE(rate_limit_burst,0) AS rate_limit_burst,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(geoip_crawler_exempt,0) AS geoip_crawler_exempt,COALESCE(geoip_crawler_engines,'[]') AS geoip_crawler_engines,COALESCE(waf_check_response,0) AS waf_check_response,COALESCE(log_request_body,0) AS log_request_body,COALESCE(ip_acl_list_refs,'[]') AS ip_acl_list_refs,COALESCE(ip_whitelist_refs,'[]') AS ip_whitelist_refs,COALESCE(policy_type,'') AS policy_type,COALESCE(trust_detection,0) AS trust_detection", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,0) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist, COALESCE(ip_whitelist_enabled,1) AS ip_whitelist_enabled,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(rate_limit_enabled,0) AS rate_limit_enabled,COALESCE(rate_limit_rps,0) AS rate_limit_rps,COALESCE(rate_limit_burst,0) AS rate_limit_burst,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(geoip_crawler_exempt,0) AS geoip_crawler_exempt,COALESCE(geoip_crawler_engines,'[]') AS geoip_crawler_engines,COALESCE(waf_check_response,0) AS waf_check_response,COALESCE(log_request_body,0) AS log_request_body,COALESCE(ip_acl_list_refs,'[]') AS ip_acl_list_refs,COALESCE(ip_whitelist_refs,'[]') AS ip_whitelist_refs,COALESCE(policy_type,'') AS policy_type,COALESCE(trust_detection,0) AS trust_detection", "id")
 }
 
 // snapshotSecurityIPLists（v2.3.0）dump 可复用 IP 地址列表：策略 refs 引用
@@ -1254,7 +1268,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapshotStore) (map[string][]models.Upstream, error) {
-	rows, err := store.QueryContext(ctx, `SELECT u.id, u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0), COALESCE(u.origin_domain,''), COALESCE(r.protocol,'') FROM upstreams u LEFT JOIN lb_rules r ON r.caddy_id = u.rule_id ORDER BY u.rule_id, u.id`)
+	rows, err := store.QueryContext(ctx, `SELECT u.id, u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), `+UpstreamEnabledSQLValue+`, COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0), COALESCE(u.origin_domain,''), COALESCE(r.protocol,'') FROM upstreams u LEFT JOIN lb_rules r ON r.caddy_id = u.rule_id ORDER BY u.rule_id, u.id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照上游: %w", err)
 	}

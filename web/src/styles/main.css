@@ -205,6 +205,8 @@ body {
 .polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 .polling-error-meta { font-size: 12px; }
 .polling-error-alert { margin-bottom: 16px; }
+/* 图表陈旧提示（Dashboard/TaskMonitor 共用）：失败时保留上次曲线并显式标注。 */
+.chart-stale-hint { margin-bottom: 6px; font-size: 12px; color: var(--el-color-warning); }
 
 /* 信息说明横幅统一模式（2026-09-25 用户裁定）：全站信息说明框同形——虚线边框
    浅灰底、12px 600 主文字、无图标；语义同 SecurityPolicies .stage-projection-bar */
@@ -214,8 +216,8 @@ body {
 .info-note-sub { display: block; font-weight: 400; color: #6b7280; line-height: 1.55; }
 .info-note-bar--inset { margin-left: 20px; margin-right: 20px; }
 /* 连续 info-note-bar 相邻节奏（2026-10-03 用户裁定）：默认 12px，连续 bar
-   间收紧到 8px（对齐 SecurityPolicies .bound-rule-alert 8px 堆叠上限与
-   .stage-projection-bar 相邻节奏）。has 收窄前者底距——相邻 margin 塌陷
+   间收紧到 8px（对齐 SecurityPolicies .stage-projection-bar 相邻节奏）。
+   has 收窄前者底距——相邻 margin 塌陷
    取大，仅调后者的 margin-top 压不过前者 12px 底距。 */
 .info-note-bar:has(+ .info-note-bar) { margin-bottom: 8px; }
 /* 弹框正文 20px 水平留白工具类（2026-09-25 用户裁定）：挂到 el-dialog class 即生效；

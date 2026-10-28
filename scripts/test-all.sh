@@ -229,8 +229,9 @@ rm -rf "$cross_bin"
 # caddydeps 刻意排除：该模块不提供功能代码，其 go.mod 的注释块记录 MVS floor
 # 理由，tidy 会把注释整块剥掉（差异恒存在且无害，不代表依赖漂移）。
 echo "== go mod tidy -diff (module graph consistency) =="
-go mod tidy -diff
-for module in caddygeoip geoipnames wafiplist; do
+for module in "${modules[@]}"; do
+  # caddydeps 的注释型 MVS floor 同上排除；其余嵌套模块自动入列。
+  [[ "$module" == "caddydeps" ]] && continue
   (cd "$module" && go mod tidy -diff)
 done
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -38,16 +39,18 @@ func ResetCrawlerVerifyCacheForTest(r crawlerDNSResolver) {
 
 // fakeResolver 可编程 DNS 替身：PTR 与正向结果按表返回。
 type fakeResolver struct {
-	mu      sync.Mutex
-	ptr     map[string][]string // ip → PTR names（含尾点模拟 LookupAddr）
-	host    map[string][]string // name → addrs
-	ptrErr  map[string]error
-	hostErr map[string]error
+	mu        sync.Mutex
+	ptr       map[string][]string // ip → PTR names（含尾点模拟 LookupAddr）
+	host      map[string][]string // name → addrs
+	ptrErr    map[string]error
+	hostErr   map[string]error
+	ptrLookup int
 }
 
 func (f *fakeResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ptrLookup++
 	if err, ok := f.ptrErr[addr]; ok {
 		return nil, err
 	}
@@ -177,6 +180,27 @@ func TestVerifyCrawler_transientFailuresNotCached(t *testing.T) {
 			t.Fatalf("deterministic negative must retain its negative cache entry: %+v cached=%v", entry, cached)
 		}
 	})
+}
+
+func TestVerifyCrawler_nxdomainIsCachedSpoof(t *testing.T) {
+	const ip = "203.0.113.80"
+	resolver := &fakeResolver{ptrErr: map[string]error{
+		ip: &net.DNSError{Err: "no such host", Name: ip, IsNotFound: true},
+	}}
+	ResetCrawlerVerifyCacheForTest(resolver)
+
+	if got := VerifyCrawler(ip, "googlebot"); got != CrawlerVerdictSpoof {
+		t.Fatalf("NXDOMAIN must be a deterministic spoof, got %v", got)
+	}
+	if got := VerifyCrawler(ip, "googlebot"); got != CrawlerVerdictSpoof {
+		t.Fatalf("cached NXDOMAIN verdict=%v, want spoof", got)
+	}
+	resolver.mu.Lock()
+	lookups := resolver.ptrLookup
+	resolver.mu.Unlock()
+	if lookups != 1 {
+		t.Fatalf("PTR lookups=%d, want 1（第二次必须命中负缓存）", lookups)
+	}
 }
 
 func TestVerifyCrawler_cacheCapacityPreservesLiveEntries(t *testing.T) {
@@ -360,6 +384,7 @@ func TestCrawlerIPRangeList_precompiledAndFailureThrottled(t *testing.T) {
 	t.Cleanup(func() {
 		crawlerIPListFile = oldFile
 		crawlerIPListRetryInterval = oldRetry
+		resetCrawlerIPRangeCacheForTest()
 	})
 	resetCrawlerIPRangeCacheForTest()
 

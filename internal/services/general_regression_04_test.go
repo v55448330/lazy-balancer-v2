@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 3×client 超时（90s）。
+// 上游健康聚合必须有整体 deadline（而不是每路独立的 3×client 超时，合计 90s）。
 func TestGetUpstreamHealthDetailed_AggregateDeadline(t *testing.T) {
 	saved := upstreamHealthAggregateTimeout
 	upstreamHealthAggregateTimeout = 120 * time.Millisecond

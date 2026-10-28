@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -86,15 +87,31 @@ func (taskRowsQueryFailConn) QueryContext(context.Context, string, []driver.Name
 	return nil, errors.New("注入的 task_runs 查询失败")
 }
 
-// captureEngineLog 捕获标准库日志（taskengine warn 落点——包内无 services
-// 依赖，经 "WARNING:" 前缀走 main.go applicationLogWriter 级别过滤）。
-func captureEngineLog(t *testing.T) *strings.Builder {
+type syncEngineLogBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *syncEngineLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncEngineLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+// captureEngineLog 捕获标准库日志；异步引擎 goroutine 与断言可同时读写。
+func captureEngineLog(t *testing.T) *syncEngineLogBuffer {
 	t.Helper()
-	var buf strings.Builder
+	buf := &syncEngineLogBuffer{}
 	old := log.Writer()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	t.Cleanup(func() { log.SetOutput(old) })
-	return &buf
+	return buf
 }
 
 // History 循环 rows.Err() 未检查——迭代错误表现为

@@ -148,6 +148,40 @@ func TestIPListFast_evictCacheForcesReparse(t *testing.T) {
 	}
 }
 
+func TestIPListFast_evictWaitsForInFlightParse(t *testing.T) {
+	dir := useAllowedDir(t)
+	path := writeListFile(t, dir, "evict-inflight.txt", []string{"203.0.113.0/24"})
+	_ = newOp(t, path)
+
+	unlock := lockIPListLoad(path) // 模拟解析持锁、尚未写回缓存的窗口
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	done := make(chan int, 1)
+	go func() { done <- EvictIPListCache(path) }()
+	select {
+	case got := <-done:
+		unlock()
+		unlock = nil
+		t.Fatalf("eviction returned %d while the path parse lock was held; in-flight state can be revived", got)
+	case <-time.After(50 * time.Millisecond):
+		// 预期：淘汰必须等本代解析落定后再删除。
+	}
+	unlock()
+	unlock = nil
+	if got := <-done; got != 1 {
+		t.Fatalf("EvictIPListCache=%d, want 1", got)
+	}
+	ipListCache.RLock()
+	left := ipListCache.states[path]
+	ipListCache.RUnlock()
+	if left != nil {
+		t.Fatal("completed eviction must not leave the old generation cached")
+	}
+}
+
 // 体积/条目上限：超限文件构建期拒绝，防异常文件拖垮内存。
 func TestIPListFast_loadCaps(t *testing.T) {
 	dir := useAllowedDir(t)

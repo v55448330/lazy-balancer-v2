@@ -123,6 +123,36 @@ func TestRunMigrations_createsCertJobsMonitorOrderingIndex(t *testing.T) {
 	}
 }
 
+// 拦截页引用计数的 stage1/stage3 OR 谓词必须命中两个列索引；只断言存在
+// 不足以发现列名或查询形状漂移，故同时钉 EXPLAIN 的 MULTI-INDEX OR 计划。
+func TestRunMigrations_createsBlockPageReferenceIndexes(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	for _, name := range []string{"idx_lb_rules_block_page_stage1", "idx_lb_rules_block_page_stage3"} {
+		if !indexExists(t, name) {
+			t.Errorf("%s 必须存在（拦截页引用计数免全表扫描）", name)
+		}
+	}
+
+	plan := queryPlanWithArgs(t, `SELECT caddy_id FROM lb_rules WHERE block_page_stage1_id=? OR block_page_stage3_id=?`, 1, 1)
+	for _, name := range []string{"idx_lb_rules_block_page_stage1", "idx_lb_rules_block_page_stage3"} {
+		if !strings.Contains(plan, name) {
+			t.Errorf("拦截页引用查询未使用 %s:\n%s", name, plan)
+		}
+	}
+	if strings.Contains(plan, "SCAN lb_rules") {
+		t.Fatalf("拦截页引用查询仍全表扫描:\n%s", plan)
+	}
+}
+
 // queryPlanWithArgs 执行带绑定参数的 EXPLAIN QUERY PLAN 并把 detail 列拼成单串。
 func queryPlanWithArgs(t *testing.T, query string, args ...any) string {
 	t.Helper()

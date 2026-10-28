@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -34,15 +33,8 @@ func TestApplyTaskLoopPrefs_consumesProvidedSnapshot(t *testing.T) {
 // 引擎公开执行门，不再读取源码文本。暂停门与 tick 共用 schedPaused，BootSync
 // 的 startup 触发是该暂停期唯一豁免。
 func TestInitTaskEngine_pausesTickUntilBootSyncDone(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		StopTaskEngine()
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
+	t.Cleanup(StopTaskEngine)
 	bootEntered := make(chan struct{})
 	releaseBoot := make(chan struct{})
 	SetConfigLoadRerun(func(string) error {
@@ -54,7 +46,12 @@ func TestInitTaskEngine_pausesTickUntilBootSyncDone(t *testing.T) {
 	// 装配期服务屏障：常驻族（cert-issuance）的 Run 体起步即接管部署面
 	// （StartACME→CA 队列/部署重试）。配置载入完成前必须被屏障挡住。
 	lifecycleStarted := make(chan struct{}, 1)
-	SetCertIssuanceLifecycleHooks(func() { lifecycleStarted <- struct{}{} }, func() {})
+	SetCertIssuanceLifecycleHooks(func() {
+		select {
+		case lifecycleStarted <- struct{}{}:
+		default:
+		}
+	}, func() {})
 	t.Cleanup(func() { SetCertIssuanceLifecycleHooks(nil, nil) })
 	initDone := make(chan *taskengine.Engine, 1)
 	go func() { initDone <- InitTaskEngine("", t.TempDir()+"/app.log") }()

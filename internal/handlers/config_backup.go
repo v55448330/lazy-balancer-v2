@@ -268,8 +268,8 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
 	"registration_id": true, "registration_secret": true, "applied_version": true,
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
-	// 本地节点运行态标记，非配置——导入旧备份会复活陈旧的
-	// 「应用失败」横幅（导入提交路径不经过 recordCaddyApplyResult 清空）。
+	// 本地节点运行态标记，非配置——导入时跳过，避免旧备份先复活陈旧横幅；
+	// 成功提交路径另由 recordCaddyApplyResult(nil) 显式清空既有失败状态。
 	"caddy_apply_error": true, "registration_confirm_failures": true,
 	// 自动备份节点本地运行态（下次槽追补基准），
 	// 非配置——还原旧备份会让基准回跳、立即多跑一次自动备份；导出剔除+
@@ -498,7 +498,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
-		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
+		"geoip_countries": "[]", "geoip_mode": "deny", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
 		"log_request_body": int64(0), "geoip_crawler_exempt": int64(0), "geoip_crawler_engines": "[]",
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
@@ -551,7 +551,11 @@ var backupTableNullDefaults = map[string]map[string]any{
 	// 瞬态列由 sanitizeNodeRowsForRestore 在更上游删除。
 	"nodes": {
 		"mode": "slave", "port": int64(8000), "protocol": "http", "access_url": "",
-		"is_approved": int64(0), "sync_interval": int64(60), "status": "offline",
+		"is_approved": int64(0),
+		// sync_interval 是 legacy 死列（见 db.go nodes 表头注释）：运行期写侧
+		// 从不写、读侧零消费（离线阈值统一读 global_config.sync_interval）。此处
+		// 只为旧备份回放按列名对齐而保留默认值——新增代码不得读取本列。
+		"sync_interval": int64(60), "status": "offline",
 		"cluster_token_delivered": int64(0), "reported_version": int64(0),
 		"server_map_lat": float64(0), "server_map_lon": float64(0),
 		"created_at": "1970-01-01 00:00:00",
@@ -992,7 +996,13 @@ type tableQuerier interface {
 }
 
 func dumpTable(ctx context.Context, database tableQuerier, table string) ([]map[string]any, error) {
-	return queryRowsAsMaps(ctx, database, rowQuery{label: "表 " + table, query: "SELECT * FROM " + table})
+	query := "SELECT * FROM " + table
+	if table == "global_config" {
+		// 导入恒更新 id=1；带外多行时导出也必须读取同一事实行，不能
+		// 依赖 SQLite 当前查询计划返回的第一条物理记录。
+		query += " WHERE id=1"
+	}
+	return queryRowsAsMaps(ctx, database, rowQuery{label: "表 " + table, query: query})
 }
 
 // sanitizeNodeRowsForExport 只导出节点拓扑与站点坐标，不导出注册明文密钥、
@@ -1084,8 +1094,14 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 // 返回值：归一后的条目、无法解析的原条目（白名单语义下丢弃=收紧，但导入链
 // 需要点名拒绝而不是静默收紧）、以及 JSON 形态错误。
 func parseImportedMCPIPWhitelist(value any) (normalized []string, dropped []string, err error) {
+	if value == nil {
+		return nil, nil, nil
+	}
 	raw, isString := value.(string)
-	if !isString || raw == "" || raw == "null" {
+	if !isString {
+		return nil, nil, fmt.Errorf("需为 JSON 字符串数组文本，实际类型 %T", value)
+	}
+	if raw == "" || raw == "null" {
 		return nil, nil, nil
 	}
 	var entries []string
@@ -1108,7 +1124,7 @@ func validateV2BackupMCPIPWhitelist(rows []map[string]any) error {
 		}
 		_, dropped, err := parseImportedMCPIPWhitelist(raw)
 		if err != nil {
-			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单 %v 无效（需为 CIDR 字符串数组），请修正备份中该 Key 的白名单后重试", index+1, raw)
+			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单 %v 无效（%v），请修正备份中该 Key 的白名单后重试", index+1, raw, err)
 		}
 		if len(dropped) > 0 {
 			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单含无效条目 %v（需为 CIDR），请修正后重试", index+1, dropped)
@@ -1589,6 +1605,7 @@ func validateImportedSecurityCustomRules(rows []map[string]any) error {
 		// 自带校验和的备份误报篡改），故只做读取侧替换。
 		rule := models.SecurityCustomRule{
 			Name:           fmt.Sprintf("%v", row["name"]),
+			Description:    backupString(row["description"]),
 			ConditionLogic: "and",
 			Action:         "block",
 			Score:          5,
@@ -2256,7 +2273,7 @@ func validateBackupUniqueKeys(tables map[string][]map[string]any) error {
 				if spec.predicate != nil && !spec.predicate(row) {
 					continue
 				}
-				key, ok := backupUniqueKeyValue(row, spec.columns)
+				key, ok := backupUniqueKeyValue(table, row, spec.columns)
 				if !ok {
 					continue
 				}
@@ -2447,7 +2464,7 @@ func backupUniqueNumericKey(value string) (string, bool) {
 // 布尔同样编入数值域（true/false 落库为 INTEGER 1/0——normalizeBackupBooleanValue
 // 与 SQLite 亲和性都归一到该形态；分成独立 "b:" 域会把 true 与 1 判成不重复，
 // 键冲突漏到事务内以 UNIQUE 约束 500 回滚，而预检的声明目标正是 400）。
-func backupUniqueKeyValue(row map[string]any, columns []string) (string, bool) {
+func backupUniqueKeyValue(table string, row map[string]any, columns []string) (string, bool) {
 	parts := make([]string, len(columns))
 	for index, column := range columns {
 		value, exists := row[column]
@@ -2456,6 +2473,14 @@ func backupUniqueKeyValue(row map[string]any, columns []string) (string, bool) {
 		}
 		switch typed := value.(type) {
 		case string:
+			// cert_jobs 在唯一键预检之后才做域名规范化；若这里仍按原始
+			// 字符串判重，A.com/a.com 会漏到 restoreTable 才撞唯一索引 500。
+			// 只对参与键计算的本地副本规范化，不改写校验和已覆盖的行数据。
+			if table == "cert_jobs" && column == "domain" {
+				if canonical, err := services.CanonicalACMEDomains(typed); err == nil {
+					typed = canonical
+				}
+			}
 			if numeric, ok := backupUniqueNumericKey(typed); ok {
 				parts[index] = numeric
 				continue
@@ -4239,6 +4264,13 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 			return err
 		}
 	}
+	// 1c) 自定义规则轴的反方向同理：规则表被替换而策略表保持 live 时，
+	// 初检只遍历备份策略，无法看到 live 策略对已消失规则 id 的引用。
+	if _, customRulesCarried := backup.Tables["security_custom_rules"]; customRulesCarried && !policiesCarried {
+		if err := revalidateImportLivePolicyCustomRuleRefs(ctx, tx, backup); err != nil {
+			return err
+		}
+	}
 	// 2) 自动备份排程：frequency/day 缺席列保留 live，必须按事务内 live 行
 	// 重算合并视图（窗口内保存的 weekly/day=9 会静默停摆）。仅全局配置区
 	// 存在时才有这条合并视图（分类备份可不带 Config）；下方默认 CA 与证书
@@ -4247,8 +4279,8 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 		_, freqProvided := backup.Config["auto_backup_frequency"]
 		_, dayProvided := backup.Config["auto_backup_day"]
 		if !freqProvided || !dayProvided {
-			freq := "daily"
-			day := 1
+			freq := db.DefaultAutoBackupFrequency
+			day := db.DefaultAutoBackupDay
 			if raw, exists := backup.Config["auto_backup_frequency"]; exists && raw != nil {
 				freq = backupString(raw)
 			}
@@ -4259,7 +4291,8 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 			}
 			var liveFreq string
 			var liveDay int
-			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_frequency,'daily'), COALESCE(auto_backup_day,1) FROM global_config WHERE id=1`).Scan(&liveFreq, &liveDay); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_frequency,?), COALESCE(auto_backup_day,?) FROM global_config WHERE id=1`,
+				db.DefaultAutoBackupFrequency, db.DefaultAutoBackupDay).Scan(&liveFreq, &liveDay); err != nil {
 				return fmt.Errorf("锁内读取自动备份排程失败: %v", err)
 			}
 			if !freqProvided {
@@ -4274,7 +4307,7 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 		}
 	}
 	// 3) 默认 CA 提供商：备份未携带 ca_providers 时按 live 行校验存在且启用。
-	if !sectionTables["ca_providers"] {
+	if _, providersCarried := backup.Tables["ca_providers"]; !providersCarried {
 		if raw, exists := backup.Config["default_ca_provider_id"]; exists && raw != nil {
 			if id, ok := backupInteger(raw); ok && id > 0 {
 				var count int
@@ -4460,6 +4493,47 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 	return nil
 }
 
+// revalidateImportLivePolicyCustomRuleRefs 复核「自定义规则表被替换、策略表
+// 保持 live」的反向组合。初检只遍历备份携带的策略行；此处按事务内 live
+// 策略逐 id 对照备份规则集合，悬空即拒绝，避免 WAF 引用静默失效。
+func revalidateImportLivePolicyCustomRuleRefs(ctx context.Context, tx *sql.Tx, backup *configBackup) error {
+	if backup == nil {
+		return nil
+	}
+	carriedRuleIDs := make(map[int]struct{}, len(backup.Tables["security_custom_rules"]))
+	for _, row := range backup.Tables["security_custom_rules"] {
+		if id, ok := backupInteger(row["id"]); ok {
+			carriedRuleIDs[int(id)] = struct{}{}
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]') FROM security_policies`)
+	if err != nil {
+		return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var policyID int64
+		var policyName, refs string
+		if err := rows.Scan(&policyID, &policyName, &refs); err != nil {
+			return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+		}
+		var ruleIDs []int
+		if err := json.Unmarshal([]byte(refs), &ruleIDs); err != nil {
+			// 与初检的既有形状宽容口径一致：非整数数组文本不在这里新增门。
+			continue
+		}
+		for _, ruleID := range ruleIDs {
+			if _, ok := carriedRuleIDs[ruleID]; !ok {
+				return fmt.Errorf("导入后安全策略 %q(#%d) 引用的自定义规则 #%d 将不存在（策略表未随包携带，而自定义规则表被替换为不含该 id 的集合）——请同时携带安全策略表或保留该规则", policyName, policyID, ruleID)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+	}
+	return nil
+}
+
 // parseTrustedProxyRefIDs 解析 trusted_proxy_range_refs 的 JSON id 数组并去重
 // （锁内复核两分支共用的单源解析）。
 func parseTrustedProxyRefIDs(refsText string) ([]int64, error) {
@@ -4485,8 +4559,10 @@ func parseTrustedProxyRefIDs(refsText string) ([]int64, error) {
 // 规则阶段页悬空、拦截响应静默回落「跟随策略」。此处按事务内 live 页集合重验，
 // 语义与初检 validateStageBlockPageRefWith 同口径（含 page=0 但 status≠0 的
 // 配对门——该形状初检已整包拒绝，锁内重验保持同门不分裂）。
-func revalidateImportStageBlockPages(ctx context.Context, tx *sql.Tx, tables map[string][]map[string]any, sectionTables map[string]bool) error {
-	if !sectionTables["lb_rules"] || sectionTables["security_block_pages"] {
+func revalidateImportStageBlockPages(ctx context.Context, tx *sql.Tx, tables map[string][]map[string]any) error {
+	_, rulesCarried := tables["lb_rules"]
+	_, pagesCarried := tables["security_block_pages"]
+	if !rulesCarried || pagesCarried {
 		return nil
 	}
 	pageExists := func(id int) (bool, error) {
@@ -4562,7 +4638,7 @@ func validateV2BackupAutoBackupConfig(config map[string]any) error {
 	if config == nil {
 		return nil
 	}
-	freq := "daily"
+	freq := db.DefaultAutoBackupFrequency
 	freqProvided := false
 	if raw, exists := config["auto_backup_frequency"]; exists && raw != nil {
 		value, ok := raw.(string)
@@ -4572,7 +4648,7 @@ func validateV2BackupAutoBackupConfig(config map[string]any) error {
 		freq = value
 		freqProvided = true
 	}
-	day := 1
+	day := db.DefaultAutoBackupDay
 	dayProvided := false
 	if raw, exists := config["auto_backup_day"]; exists && raw != nil {
 		value, ok := backupInteger(raw)
@@ -4587,7 +4663,8 @@ func validateV2BackupAutoBackupConfig(config map[string]any) error {
 	if db.DB != nil && (!freqProvided || !dayProvided) {
 		var liveFreq string
 		var liveDay int
-		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_frequency,'daily'), COALESCE(auto_backup_day,1) FROM global_config WHERE id=1`).Scan(&liveFreq, &liveDay); err != nil {
+		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_frequency,?), COALESCE(auto_backup_day,?) FROM global_config WHERE id=1`,
+			db.DefaultAutoBackupFrequency, db.DefaultAutoBackupDay).Scan(&liveFreq, &liveDay); err != nil {
 			return fmt.Errorf("读取现有自动备份排程以校验导入后视图: %w", err)
 		}
 		if !freqProvided {
@@ -5331,7 +5408,7 @@ func snapshotImportUserNames(ctx context.Context, tx *sql.Tx) map[int]string {
 	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(username,'') FROM users`)
 	if err != nil {
 		services.Logf("warn", "配置导入：快照本地用户名失败（归属告警跳过）: %v", err)
-		return names
+		return nil
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -5339,11 +5416,39 @@ func snapshotImportUserNames(ctx context.Context, tx *sql.Tx) map[int]string {
 		var name string
 		if err := rows.Scan(&id, &name); err != nil {
 			services.Logf("warn", "配置导入：扫描本地用户名失败（归属告警跳过）: %v", err)
-			return names
+			return nil
 		}
 		names[id] = name
 	}
+	if err := rows.Err(); err != nil {
+		services.Logf("warn", "配置导入：遍历本地用户名失败（归属告警跳过）: %v", err)
+		return nil
+	}
 	return names
+}
+
+// snapshotImportPasswordVersions 在 users 全表替换前保存各 id 的 live 版本。
+// 还原旧备份后的吊销版本必须取 max(live, backup)+1，而不是只对备份值 +1；
+// 否则备份时点之后签发的 JWT 会在还原后继续通过 pwd_ver 校验。
+func snapshotImportPasswordVersions(ctx context.Context, tx *sql.Tx) (map[int]int64, error) {
+	versions := make(map[int]int64)
+	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(password_version,0) FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var version int64
+		if err := rows.Scan(&id, &version); err != nil {
+			return nil, err
+		}
+		versions[id] = version
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return versions, nil
 }
 
 // collectImportAttributionMismatches 统计「users 已替换、但该归属表未随包替换」
@@ -5748,7 +5853,7 @@ func normalizeImportedVersionUpdateStatuses(tables map[string][]map[string]any) 
 // 两处给出不同到期结论。
 func backfillCertJobExpiryFromPEM(ctx context.Context, tx *sql.Tx) (int, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(cert_pem,'') FROM cert_jobs
-		WHERE COALESCE(expires_at,'')='' AND COALESCE(cert_pem,'')<>''`)
+		WHERE COALESCE(expires_at,'')='' AND `+services.CertJobMaterialPredicateSQL(""))
 	if err != nil {
 		return 0, err
 	}
@@ -5791,9 +5896,11 @@ func backfillCertJobExpiryFromPEM(ctx context.Context, tx *sql.Tx) (int, error) 
 // 响应通道由调用方选择（c.JSON 直写或 WAF 相位后的 respondAfterWafFailure）。
 func failImportAbort(c *gin.Context, session *configImportSession, action, detailPrefix string, cause error) error {
 	err := session.abort(cause)
-	detail := err.Error()
+	// 审计 detail 全员可见：Caddy 应用阶段失败含 admin 端点原文，剥离后落盘。
+	causeDetail := services.RedactCaddyAdminEndpoint(err.Error())
+	detail := causeDetail
 	if detailPrefix != "" {
-		detail = detailPrefix + ": " + err.Error()
+		detail = detailPrefix + ": " + causeDetail
 	}
 	recordAudit(c, action+"失败", "配置备份", detail)
 	return err
@@ -5955,6 +6062,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 跳过水位重置。
 	oldAutoBackupEnabled := 0
 	oldAutoBackupEnabledKnown := false
+	// 导入前快照自动封禁六列——六列是运行期收敛（清桶/重算达标/禁用收尾/
+	// 调度联动）的输入，导入走通用 UPDATE 直接落库（绕过
+	// services.SetAutobanConfig），提交后必须按「导入前后是否变化」补收敛
+	// known=false 表示读取失败或备份未携带该组列（无变化可比）。
+	autobanBefore := services.AutobanConfig{}
+	autobanBeforeKnown := false
 	wafFilePhase := sectionTables["security_crs_version"] && lbbakFiles != nil &&
 		(lbbakFiles.CRSTarGz != nil || lbbakFiles.Xdb != nil || len(lbbakFiles.ThreatIplists) > 0)
 	// 威胁源表随备份全量替换时，文件收敛（删除空/缺席源的本地旧
@@ -5989,14 +6102,17 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 取得 caddyOpMu 的窗口内 DeleteCertificateConfig 可删除被引用行。此处已在
 	// 锁内，重跑引用/TLS 形态校验；若初检已有悬挂（soft 警告语义）则不改变其
 	// 既有降级口径。
-	if sectionTables["lb_rules"] && !sectionTables["certificate_configs"] && !sectionTables["ca_providers"] && acmeDanglingImported == 0 {
+	_, tlsRulesCarried := backup.Tables["lb_rules"]
+	_, tlsConfigsCarried := backup.Tables["certificate_configs"]
+	_, tlsProvidersCarried := backup.Tables["ca_providers"]
+	if tlsRulesCarried && !tlsConfigsCarried && !tlsProvidersCarried && acmeDanglingImported == 0 {
 		if _, err := validateV2BackupTLSShapeSoft(backup.Tables, false); err != nil {
 			err = failImportAbort(c, session, action, "导入锁内 ACME/TLS 复核失败", err)
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间规则引用的 DNS/CA 配置已失效，已拒绝导入: " + err.Error()})
 			return
 		}
 	}
-	if (sectionTables["certificate_configs"] || sectionTables["ca_providers"]) && !sectionTables["lb_rules"] {
+	if (tlsConfigsCarried || tlsProvidersCarried) && !tlsRulesCarried {
 		if rows, qerr := tx.QueryContext(ctx, `SELECT COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0) FROM lb_rules WHERE enabled=1 AND tls_source='acme_dns'`); qerr == nil {
 			for rows.Next() {
 				var acmeID, caID int
@@ -6037,7 +6153,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// 「规则→阶段拦截页」引用同样在锁内重验——初检按锁外 live 页集合
 	// 放行后，窗口内删除被备份规则引用的页会让导入后阶段页悬空。
-	if err := revalidateImportStageBlockPages(ctx, tx, backup.Tables, sectionTables); err != nil {
+	if err := revalidateImportStageBlockPages(ctx, tx, backup.Tables); err != nil {
 		err = failImportAbort(c, session, action, "导入锁内阶段拦截页复核失败", err)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间依赖的实时数据已变化，已拒绝导入: " + err.Error()})
 		return
@@ -6064,6 +6180,17 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			services.Logf("warn", "配置导入：读取导入前自动备份开关失败，已跳过自动备份水位重置: %v", readErr)
 		} else {
 			oldAutoBackupEnabled, oldAutoBackupEnabledKnown = enabled, true
+		}
+	}
+	// 六列自动封禁配置的「导入前」快照：仅在备份实际携带该组列时读取（未
+	// 携带时通用 UPDATE 不写这些列，运行值不可能变化——省一次点查且避免把
+	// 无关导入纳入收敛判定）。读失败=未知：跳过运行期收敛并留痕，不升级为
+	// 导入失败（该组列与导入主体无关，误判方向是「少清一次桶」而非数据损坏）。
+	if backup.Config != nil && configCarriesAutobanColumns(backup.Config) {
+		if cfg, readErr := services.ReadAutobanConfigFrom(ctx, tx); readErr != nil {
+			services.Logf("warn", "配置导入：读取导入前自动封禁配置失败，已跳过运行期收敛: %v", readErr)
+		} else {
+			autobanBefore, autobanBeforeKnown = cfg, true
 		}
 	}
 	// 配套：两版本表单行是否存在同样在加锁后的同一事务快照内读取。
@@ -6118,8 +6245,15 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 未随包替换的规则/安全表仍指向同一 id，但该 id 已换成另一个人（或不再
 	// 存在）。导入前快照本地用户名，提交前只统计与告警，不改写归属字段。
 	var localUserNames map[int]string
+	var livePasswordVersions map[int]int64
 	if _, usersCarried := backup.Tables["users"]; usersCarried {
 		localUserNames = snapshotImportUserNames(ctx, tx)
+		livePasswordVersions, err = snapshotImportPasswordVersions(ctx, tx)
+		if err != nil {
+			err = failImportAbort(c, session, action, "快照本地会话版本失败", err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "快照本地会话版本失败，已回滚: " + err.Error()})
+			return
+		}
 	}
 	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs", "nodes"}
 	for _, table := range deleteOrder {
@@ -6322,6 +6456,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			failImportTx(c, session, action, "吊销现有登录会话失败", err, http.StatusInternalServerError, "吊销现有登录会话失败")
 			return
 		}
+		for id, liveVersion := range livePasswordVersions {
+			target := liveVersion + 1
+			if _, err := tx.ExecContext(ctx, `UPDATE users SET password_version=? WHERE id=? AND COALESCE(password_version,0)<?`, target, id, target); err != nil {
+				failImportTx(c, session, action, "吊销现有登录会话失败", err, http.StatusInternalServerError, "吊销现有登录会话失败")
+				return
+			}
+		}
 		revokedSessions = true
 	}
 	var enabledAdmins int
@@ -6366,7 +6507,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 关闭）的 cert_jobs 行——上方孤儿清理只覆盖 rule_id 不在 lb_rules 的行，
 		// 此类「规则仍在」的失效任务会被续签扫描/任务列表当作活任务。谓词与续签
 		// 扫描（certjobs.go/caddy.go 的 ACME 规则判据）同口径。
-		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (enable_tls=1 AND tls_source='acme_dns'))"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (COALESCE(enable_tls,0)=1 AND COALESCE(tls_source,'manual')='acme_dns'))"); err != nil {
 			err = failImportAbort(c, session, action, "清理失效证书任务失败", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理失效证书任务失败，已回滚: " + err.Error()})
 			return
@@ -6659,6 +6800,30 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		services.ResetAutobanCounters()
 	}
+	// 六列自动封禁配置的第二条写入路径（上方通用
+	// `UPDATE global_config`）绕过 services.SetAutobanConfig 的清桶/禁用收尾
+	// 不变量。上方的清桶门只覆盖「备份携带 security_ip_lists（名单全量替换）」
+	// 形态——只导「系统数据」（含 global_config、不含迟到表）时六列被改写而
+	// 计数桶原样保留，≤60s 后的评估轮会按新窗口把陈旧计数整批并入封禁候选
+	// （窗口变小/口径收窄 → 批量误封；停用后不收敛 → 重新启用即按数天前的
+	// 计数立即封禁）。收敛判定、动作与文案单源
+	// services.ReconcileAutobanRuntimeAfterConfigReplace /
+	// AutobanConfigReplaceEffectNote（与 PUT 保存同语义，六列未变化时不清桶）。
+	// 执行时机：本函数仍持 caddyOpMu，而禁用收尾要自取 CaddyOpLock（非重入
+	// 锁）——排入 session.postLockActions，在 close() 释放锁之后、调度恢复之前
+	// 执行；响应/审计只披露「将要执行的收敛」，不谎报已落定。
+	autobanRuntimeNote := ""
+	if autobanBeforeKnown {
+		if newAutoban, readErr := services.GetAutobanConfig(); readErr != nil {
+			services.Logf("warn", "配置%s：读取导入后自动封禁配置失败，运行期收敛已跳过: %v", action, readErr)
+		} else if note := services.AutobanConfigReplaceEffectNote(autobanBefore, newAutoban); note != "" {
+			autobanRuntimeNote = note
+			before, after := autobanBefore, newAutoban
+			session.postLockActions = append(session.postLockActions, func() {
+				services.ReconcileAutobanRuntimeAfterConfigReplace(before, after)
+			})
+		}
+	}
 	if reseedBlockPageNeeded {
 		// 提交成功后才渲染 branding 内容：INSERT 只放空 content 占位，真实内容
 		// 由 SeedDefaultBlockPage 依据 branding.json 写入；失败不影响导入结果。
@@ -6710,7 +6875,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if importAutoBackupResetNeeded(oldAutoBackupEnabledKnown, oldAutoBackupEnabled) {
 		var newEnabled int
 		var lastRun string
-		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_last_run,'') FROM global_config WHERE id=1`).Scan(&newEnabled, &lastRun); err == nil && newEnabled == 1 {
+		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,?), COALESCE(auto_backup_last_run,'') FROM global_config WHERE id=1`,
+			db.DefaultAutoBackupEnabled).Scan(&newEnabled, &lastRun); err == nil && newEnabled == 1 {
 			if autoBackupWatermarkEmptyOrStale(lastRun) {
 				if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
 					services.Logf("warn", "配置导入：重置 auto_backup_last_run 失败: %v", err)
@@ -6725,6 +6891,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	auditParts := []string{"来源：" + auditSource, counts}
 	auditParts = append(auditParts, configClampNotes...)
 	auditParts = append(auditParts, autobanClampNotes...)
+	if autobanRuntimeNote != "" {
+		// 六列运行期收敛（清桶/禁用收尾/调度联动）是导入的可感知副作用，
+		// 必须与响应 warnings 同源留痕（此前只在 PUT 保存路径有审计）。
+		auditParts = append(auditParts, autobanRuntimeNote)
+	}
 	if len(skipWarnings) > 0 {
 		// 列表现含空域名规则与空内容拦截页两类跳过，标签泛化。
 		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings, "；"))
@@ -6787,6 +6958,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	if prunedBindings > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("已按导入后的规则与策略视图清理 %d 条悬挂安全策略绑定", prunedBindings))
+	}
+	if autobanRuntimeNote != "" {
+		responseWarnings = append(append([]string{}, responseWarnings...), autobanRuntimeNote)
 	}
 	if customOnlyNormalized > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("%d 个 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效）", customOnlyNormalized))
@@ -7015,10 +7189,31 @@ type importRowQuerier interface {
 // 禁止把错误吞成 0（会把已启用误判为 off）。
 func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (int, error) {
 	var enabled int
-	if err := q.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&enabled); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,?) FROM global_config WHERE id=1`,
+		db.DefaultAutoBackupEnabled).Scan(&enabled); err != nil {
 		return 0, err
 	}
 	return enabled, nil
+}
+
+// configBackupAutobanColumns 是自动封禁六列：通用
+// `UPDATE global_config` 的写入面，也是运行期收敛（清桶/重算达标/禁用收尾/
+// 调度联动）判定的输入面。新增/改名时必须与 services.ReadAutobanConfigFrom
+// 的列清单同步——否则导入侧比对到「无变化」而运行期实际已换配置。
+var configBackupAutobanColumns = []string{
+	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
+	"autoban_duration", "autoban_scope", "autoban_dry_run",
+}
+
+// configCarriesAutobanColumns 报告备份全局配置区是否携带自动封禁六列之一
+// （携带即可能改写运行值，需要在提交后比对并收敛）。
+func configCarriesAutobanColumns(config map[string]any) bool {
+	for _, column := range configBackupAutobanColumns {
+		if _, carried := config[column]; carried {
+			return true
+		}
+	}
+	return false
 }
 
 // importAutoBackupResetNeeded 判定导入提交后是否重置自动备份水位（口径

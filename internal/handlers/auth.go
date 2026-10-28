@@ -284,9 +284,8 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 }
 
 // loginExpireMinutes 读取 global_config.jwt_expire_minutes 并钳制到合法区间
-// （≤0 或 >1440 或查询失败一律回退 20）。本函数与
-// auth_oidc.go issueOIDCJWT 原先逐字同形双实现——抽单源后密码登录与 OIDC
-// 签发的令牌有效期口径恒一致（行为零变化）。
+// （≤0 或 >1440 或查询失败一律回退 20）。仅由 signSessionJWT 消费，
+// 密码/MFA 与 OIDC 会话的令牌有效期因此保持同一口径。
 func loginExpireMinutes() int {
 	expireMinutes := 20
 	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
@@ -325,6 +324,38 @@ func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {
 	return lastLogin, false
 }
 
+// signSessionJWT 是本地密码/MFA 与 OIDC 会话的唯一签发点：公共声明、jti
+// 随机源与过期钳制在此收敛。mfaTs<=0 不写 mfa_ts；authMethod 空串不写
+// auth_method（本地会话历史契约），OIDC 调用方显式传 "oidc"。
+func signSessionJWT(secret string, userID int, username, role string, passwordVersion int64, mfaTs int64, authMethod string) (string, time.Time, error) {
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(loginExpireMinutes()) * time.Minute)
+	jtiBytes := make([]byte, 32)
+	if _, err := jwtJTIReader(jtiBytes); err != nil {
+		return "", time.Time{}, err
+	}
+	claims := jwt.MapClaims{
+		"user_id":  userID,
+		"username": username,
+		"role":     role,
+		"pwd_ver":  passwordVersion,
+		"jti":      hex.EncodeToString(jtiBytes),
+		"iat":      now.Unix(),
+		"exp":      expiresAt.Unix(),
+	}
+	if mfaTs > 0 {
+		claims["mfa_ts"] = mfaTs
+	}
+	if authMethod != "" {
+		claims["auth_method"] = authMethod
+	}
+	tokenString, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return tokenString, expiresAt, nil
+}
+
 // respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户登录、
 // MFA 首次签发在 verify 成功时传 now；票据登录暂传 0）。isLogin=false 时跳过
 // 登录审计与 last_login 更新（verify-step 的 step-up 场景， D-新6）。
@@ -345,37 +376,13 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		nodeMode = "slave"
 	}
 
-	// 钳制逻辑抽单源 loginExpireMinutes（与 OIDC 签发共用）。
-	expireMinutes := loginExpireMinutes()
-	expireDuration := time.Duration(expireMinutes) * time.Minute
-	now := time.Now()
-	jtiBytes := make([]byte, 32)
-	if _, err := jwtJTIReader(jtiBytes); err != nil {
-		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})
-		return
-	}
-	// Generate JWT token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":  user.ID,
-		"username": user.Username,
-		"role":     user.Role,
-		"pwd_ver":  passwordVersion,
-		"jti":      hex.EncodeToString(jtiBytes),
-		"iat":      now.Unix(),
-		"exp":      now.Add(expireDuration).Unix(),
-	})
-	if mfaTs > 0 {
-		claims := token.Claims.(jwt.MapClaims)
-		claims["mfa_ts"] = mfaTs
-	}
 	// v2.3.0:OIDC 会话经票据登录(集群快捷登录)到对端节点时保持身份语义
 	// ——auth_method 声明随签发透传(缺省=local),写保护/MFA 门/前端 UI 同口径。
+	authMethod := ""
 	if user.AuthProvider == "oidc" {
-		token.Claims.(jwt.MapClaims)["auth_method"] = "oidc"
+		authMethod = "oidc"
 	}
-
-	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
+	tokenString, _, err := signSessionJWT(h.cfg.JWTSecret, user.ID, user.Username, user.Role, passwordVersion, mfaTs, authMethod)
 	if err != nil {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})

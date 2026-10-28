@@ -63,7 +63,7 @@ test('阶段 1 文案：副标题与脚注含爬虫校验，脚注含遗留黑�
     goBlock.indexOf('func buildIPPrecheckDirectives('),
     goBlock.indexOf('\nfunc ', goBlock.indexOf('func buildIPPrecheckDirectives(') + 1),
   )
-  assert.ok(precheck.length > 0, '未找到 buildIPPrecheckDirectives')
+  assert.ok(precheck.includes('func buildIPPrecheckDirectives(') && !precheck.includes('\nfunc '), '预检函数切片必须闭合')
   const anchors: Record<string, RegExp> = {
     信任: /id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly/,
     黑名单: /msg:'IP 黑名单拒绝'/,

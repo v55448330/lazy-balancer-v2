@@ -87,17 +87,22 @@ func (s *SyncService) Report(ctx context.Context) error {
 	if caddyErr != nil || lastSyncError != "" {
 		serviceStatus = "degraded"
 	}
+	// 分区哈希取 cluster_applied_sections 的已应用记录（apply 路径
+	// recordAppliedSectionHashes 维护，含漂移重放后的本地重建口径）：
+	// 代表本地当前已落库内容，无需为上报重建全量快照。
+	// 读取失败（nil）与「表为空」（空 map）必须区分：前者本轮无法上报分区状态，
+	// 显式置 unavailable 让主节点保留历史（否则主节点按「旧版本从节点」清空该
+	// 节点的分区记录，节点列表的分区同步列整体消失，运维信号从「某节滞后」
+	// 退化为「无数据」）；后者等价于「从未同步」，仍按旧版从节点占位展示。
+	sectionHashes := readAppliedSectionHashes(ctx, s.db)
 	report := models.ClusterReport{
-		AppliedVersion: appliedVersion,
-		ServiceStatus:  serviceStatus,
-		LastSyncAt:     lastSyncAt,
-		LastSyncError:  lastSyncError,
-		SyncErrorCode:  reportSyncErrorCode,
-		// 分区哈希取 cluster_applied_sections 的已应用记录（apply 路径
-		// recordAppliedSectionHashes 维护，含漂移重放后的本地重建口径）：
-		// 代表本地当前已落库内容，无需为上报重建全量快照。从未同步过的节点
-		// 表为空 → nil → 主节点按「旧版本从节点」占位展示，首个同步周期后自愈。
-		SectionHashes: readAppliedSectionHashes(ctx, s.db),
+		AppliedVersion:           appliedVersion,
+		ServiceStatus:            serviceStatus,
+		LastSyncAt:               lastSyncAt,
+		LastSyncError:            lastSyncError,
+		SyncErrorCode:            reportSyncErrorCode,
+		SectionHashes:            sectionHashes,
+		SectionHashesUnavailable: sectionHashes == nil,
 		Health: models.ClusterHealth{
 			CaddyOK:          caddyErr == nil,
 			RulesCount:       rulesCount,

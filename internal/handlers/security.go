@@ -2597,7 +2597,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 规则——存量混合绑定保持有效，迁移入口=策略页「更新迁移」（拆分单职策略）。
 	// 判定与其余三个写路径共用 rejectMixedPolicies。
 	policyIDInt, _ := strconv.Atoi(policyID)
-	if msg, err := rejectMixedPolicies(c.Request.Context(), tx, []int{policyIDInt}); err != nil {
+	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, []int{policyIDInt}); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	} else if msg != nil {
@@ -2703,7 +2703,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	// req.PolicyIDs（重复项保留），提交 [1,1,2] 时审计记 [1,1,2] 而库内为
 	// [1,2]，取证时无法从审计还原最终绑定集。
 	policyIDs := normalizePolicyIDs(req.PolicyIDs)
-	if msg, err := setRulePoliciesInTx(c.Request.Context(), tx, ruleCaddyID, policyIDs); err != nil {
+	if msg, err := setRulePoliciesInTx(caddyWriteCtx(c), tx, ruleCaddyID, policyIDs); err != nil {
 		// DB 故障（锁/IO）映射 500 而非 400 裸串外泄。
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取/写入策略绑定失败"})
 		return
@@ -2910,7 +2910,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		return
 	}
 	// 混合策略仅可更新迁移（与单条 bind 端点同口径；历史 共用判定）。
-	if msg, err := rejectMixedPolicies(c.Request.Context(), tx, []int{policyID}); err != nil {
+	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, []int{policyID}); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	} else if msg != nil {
@@ -3159,7 +3159,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	}
 	// 混合策略仅可更新迁移（同 SetRuleSecurityPolicies 裁定）：批量绑定集含
 	// mixed 即 400 整体拒绝（共用 rejectMixedPolicies）。
-	if msg, err := rejectMixedPolicies(c.Request.Context(), tx, uniqueIDs); err != nil {
+	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, uniqueIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	} else if msg != nil {
@@ -3169,7 +3169,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多限流绑定不受影响，
 	// 收敛后提交即可）。
 	if len(uniqueIDs) > 0 {
-		stage2Count, err := countStage2Policies(tx, c.Request.Context(), uniqueIDs)
+		stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), uniqueIDs)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
@@ -3249,7 +3249,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		// 限流策略唯一绑定（merge 路径）：合并后单规则含 ≥2 条 stage2 → 该规则
 		// 进 skipped（保持原绑定不动，与绑定上限同口径；replace 已由提交集门拦截）。
 		if req.Mode == "merge" {
-			stage2Count, err := countStage2Policies(tx, c.Request.Context(), final)
+			stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), final)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 				return
@@ -3973,11 +3973,11 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		}
 	}
 	if allDigits {
-		*args = append(*args, input, input+"%", "%"+input+"%")
-		return "(rule_triggered = ? OR rule_triggered LIKE ? OR rule_msg LIKE ?)"
+		*args = append(*args, input, input+"%", "%"+escapeLikePattern(input)+"%")
+		return "(rule_triggered = ? OR rule_triggered LIKE ? OR rule_msg LIKE ? ESCAPE '\\')"
 	}
-	*args = append(*args, "%"+input+"%", "%"+input+"%")
-	return "(rule_triggered LIKE ? OR rule_msg LIKE ?)"
+	*args = append(*args, "%"+escapeLikePattern(input)+"%", "%"+escapeLikePattern(input)+"%")
+	return "(rule_triggered LIKE ? ESCAPE '\\' OR rule_msg LIKE ? ESCAPE '\\')"
 }
 
 // GetIPEventCount 返回指定 IP 近 N 天(默认 30)的安全事件计数——IP 弹框
@@ -4090,12 +4090,12 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	// 快照（policy_name）。快照列为摄取时落库的冗余文本，LIKE 子串即可（无索引，
 	// 页级分页下可接受）。
 	if ruleName := strings.TrimSpace(c.Query("rule_name")); ruleName != "" {
-		where += " AND rule_name LIKE ?"
-		args = append(args, "%"+ruleName+"%")
+		where += " AND rule_name LIKE ? ESCAPE '\\'"
+		args = append(args, "%"+escapeLikePattern(ruleName)+"%")
 	}
 	if policyName := strings.TrimSpace(c.Query("policy_name")); policyName != "" {
-		where += " AND policy_name LIKE ?"
-		args = append(args, "%"+policyName+"%")
+		where += " AND policy_name LIKE ? ESCAPE '\\'"
+		args = append(args, "%"+escapeLikePattern(policyName)+"%")
 	}
 
 	// rule_triggered 筛选对齐表格显示语义——列显示的是 family 标签
@@ -4115,8 +4115,8 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 
 	// （用户需求）：URI 筛选（子串）。
 	if uri := strings.TrimSpace(c.Query("uri")); uri != "" {
-		where += " AND uri LIKE ?"
-		args = append(args, "%"+uri+"%")
+		where += " AND uri LIKE ? ESCAPE '\\'"
+		args = append(args, "%"+escapeLikePattern(uri)+"%")
 	}
 	// 时间范围按配置时区解析（event_time 为 UTC），换算后比对；日期-only 补全天边界
 	loc := services.CurrentLocation()
@@ -4239,6 +4239,12 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	//（与安全总览同键披露；威胁大屏 rollup 排除——三面口径对称可见，
 	// 跨面比数不等时该字段即解释）。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "total": total, "page": page, "page_size": pageSize, "includes_reserved": true, "ingestion": services.SecurityEventsIngestionHealthSnapshot()}})
+}
+
+// escapeLikePattern 使用户筛选输入在 SQL LIKE 中保持字面量子串语义；
+// 调用方负责包裹 % 并在 SQL 中声明 ESCAPE '\\'。
+func escapeLikePattern(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
 const securityEventListFieldCap = 16 * 1024

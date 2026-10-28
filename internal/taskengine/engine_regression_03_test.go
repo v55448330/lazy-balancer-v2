@@ -6,14 +6,15 @@ import (
 	"time"
 )
 
-// （schedDone）——tick 在调度 goroutine 内同步调用装配方闭包（生产
-// IntervalFn/NextSlotFn 为 DB 直读），闭包阻塞时 scheduleLoop 永不退出；
-// 旧实现 <-e.schedDone 无界等待，30s 兜底只覆盖在途 Run/daemon。
+// 调度退出信号（schedDone）：tick 在调度 goroutine 内同步调用装配方闭包
+// （生产 IntervalFn/NextSlotFn 为 DB 直读），闭包阻塞时 scheduleLoop 永不退出；
+// StopWithTimeout 必须把 schedDone 与在途 Run/daemon 纳入同一预算。
 func TestEngine_StopWithTimeoutBoundsBlockedSchedulerClosure(t *testing.T) {
 	e := newTestEngine(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	e.Register(Descriptor{ID: "t-stop-slow-closure", Family: "t", Name: "慢调度闭包", Kind: KindPeriodic, RunsOn: RoleAny,
+	t.Cleanup(func() { close(release) })
+	if err := e.Register(Descriptor{ID: "t-stop-slow-closure", Family: "t", Name: "慢调度闭包", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration {
 			select {
 			case <-entered:
@@ -23,7 +24,9 @@ func TestEngine_StopWithTimeoutBoundsBlockedSchedulerClosure(t *testing.T) {
 			<-release // 模拟 DB 锁/驱动挂起的调度闭包
 			return time.Minute
 		},
-		Run: func(RunContext) error { return nil }})
+		Run: func(RunContext) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
 	e.StartLoop("t-stop-slow-closure")
 	select {
 	case <-entered:
@@ -38,18 +41,19 @@ func TestEngine_StopWithTimeoutBoundsBlockedSchedulerClosure(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("StopWithTimeout 对阻塞的调度闭包无界等待——schedDone 未纳入 timeout 预算")
 	}
-	close(release) // 放行闭包，cleanup 的 e.Stop 快速落定
 }
 
-// （生产形态为 DB 查询）不得再每 tick 执行（与 Scheduled 分支
-// 「EnabledFn=false 整分支跳过」的省读设计对齐）。
+// EnabledFn=false 时 IntervalFn（生产形态为 DB 查询）不得再每 tick 执行，
+// 与 Scheduled 分支「EnabledFn=false 整分支跳过」的省读设计对齐。
 func TestEngine_EnabledFnFalseSkipsPeriodicIntervalEvaluation(t *testing.T) {
 	e := newTestEngine(t)
 	var intervalCalls atomic.Int32
-	e.Register(Descriptor{ID: "t-enp-skip-interval", Family: "t", Name: "业务门省读", Kind: KindPeriodic, RunsOn: RoleAny,
+	if err := e.Register(Descriptor{ID: "t-enp-skip-interval", Family: "t", Name: "业务门省读", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { intervalCalls.Add(1); return 20 * time.Millisecond },
 		EnabledFn:  func() bool { return false },
-		Run:        func(RunContext) error { return nil }})
+		Run:        func(RunContext) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
 	e.StartLoop("t-enp-skip-interval")
 	time.Sleep(300 * time.Millisecond)
 	if n := intervalCalls.Load(); n != 0 {
@@ -65,10 +69,12 @@ func TestEngine_EnabledFnFalseSkipsPeriodicIntervalEvaluation(t *testing.T) {
 func TestEngine_EnabledFnPanicSkipsPeriodicIntervalEvaluation(t *testing.T) {
 	e := newTestEngine(t)
 	var intervalCalls atomic.Int32
-	e.Register(Descriptor{ID: "t-enp-panic", Family: "t", Name: "业务门 panic", Kind: KindPeriodic, RunsOn: RoleAny,
+	if err := e.Register(Descriptor{ID: "t-enp-panic", Family: "t", Name: "业务门 panic", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { intervalCalls.Add(1); return 20 * time.Millisecond },
 		EnabledFn:  func() bool { panic("boom") },
-		Run:        func(RunContext) error { return nil }})
+		Run:        func(RunContext) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
 	e.StartLoop("t-enp-panic")
 	time.Sleep(300 * time.Millisecond)
 	if n := intervalCalls.Load(); n != 0 {

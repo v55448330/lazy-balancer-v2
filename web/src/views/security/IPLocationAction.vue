@@ -25,6 +25,29 @@
       <div v-if="location" class="ipo-loc-line">{{ location }}</div>
     </div>
 
+    <!-- 自动封禁（预置名单命中）：独立于策略面——策略加载中/为空/失败时同样
+         可见可用，否则从安全日志点开的 IP 只能绕道「安全策略」页解封 -->
+    <div v-if="autobanLoading && !autobanHit" class="ipo-tip">自动封禁状态加载中…</div>
+    <div v-else-if="autobanError" class="info-note-bar">
+      <span class="info-note-desc">自动封禁名单读取失败，封禁状态未知</span>
+      <el-button size="small" type="primary" plain @click="retryAutoban">重试</el-button>
+    </div>
+    <div v-else-if="autobanHit" class="ipo-sec ipo-autoban">
+      <div class="ipo-sec-title">自动封禁</div>
+      <div class="ipo-card">
+        <div class="ipo-card-head">
+          <span class="ipo-name" :title="autoban?.listName">{{ autoban?.listName || '自动封禁名单' }}</span>
+          <el-tag size="small" :type="autobanExpired ? 'info' : 'danger'" effect="plain">{{ autobanExpired ? '已到期' : '已封禁' }}</el-tag>
+        </div>
+        <div class="ipo-mode-line">命中条目：{{ autobanHit.value }}</div>
+        <!-- 到期时间：永久条目不显示剩余（后端逐条投影会在到期时自动放行） -->
+        <div class="ipo-mode-line">到期时间：<template v-if="!autobanHit.expires_at">永久</template><template v-else>{{ formatDate(autobanHit.expires_at) }}（{{ autobanExpired ? '到期即自动解封' : `剩余 ${autobanRemaining}` }}）</template></div>
+        <div class="ipo-acts">
+          <el-button size="small" type="primary" plain :loading="autobanUnbanning" @click="unbanAutoban">取消封禁</el-button>
+        </div>
+      </div>
+    </div>
+
     <!-- 策略筛选（用户裁定）：有 IP 管控面且未被隐藏的策略数 >1 才出；
          选择后仅渲染该策略卡片，会话级记忆上次选择；加载中禁用（与 seq 守卫/
          加载态兼容）。teleported="false" 把下拉面板留在弹层内——teleport 到
@@ -38,10 +61,13 @@
 
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <div v-else-if="policiesError" class="info-note-bar"><span class="info-note-desc">策略列表加载失败</span></div>
-    <div v-else-if="!hasInterceptPolicy" class="info-note-bar">
-      <span class="info-note-desc">尚未创建 IP 访问控制（黑名单）策略；请先到「安全防护 → 安全策略」创建并绑定到规则，再使用快捷拦截。</span>
-    </div>
     <template v-else-if="rows.length > 0">
+      <!-- 无黑名单落点只提示、不隐藏卡片区：仅有白名单（allow）或信任（阶段 0）
+           策略的部署同样需要快捷放行/信任/移除条目入口，整块隐藏会让这些动作
+           全部不可达。 -->
+      <div v-if="interceptHint" class="info-note-bar">
+        <span class="info-note-desc">{{ interceptHint }}</span>
+      </div>
       <!-- 名单/引用条目加载失败：命中判定退化为仅内联（「已在名单」会被误显示为未命中），
            依据不可靠——处置动作禁用，横幅给出重试 -->
       <div v-if="listsError" class="info-note-bar">
@@ -86,6 +112,10 @@
     </template>
     <!-- 全部策略被系统名单接管（裁定①隐藏）时如实说明，不误报「暂无策略」 -->
     <div v-else-if="policies.length > 0 && hasAclPolicy" class="ipo-tip">启用策略的 IP 名单均由系统内置名单管理，本弹窗无快捷处置入口</div>
+    <!-- 空卡片区兜底：系统内置名单接管优先说明，其余情形才给「无黑名单落点」提示 -->
+    <div v-else-if="interceptHint" class="info-note-bar">
+      <span class="info-note-desc">{{ interceptHint }}</span>
+    </div>
   </el-popover>
 
   <span v-else class="ip-cell" :title="location ? `${ip} · ${location}` : ip">
@@ -116,6 +146,8 @@ import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
 import { aclAssociateSides, inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, ensureSharedEntriesMissing, sharedEntriesCache, subscribeSharedEntriesCache, mergeIpEntryValues, trustHitMode } from '@/utils/securityStages'
 import { popperViewportSafe } from '@/utils/popper'
+import { formatDate } from '@/utils/date'
+import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
 import { planTrustRemoval, classifyTrustRemovalVerification } from '@/utils/trustRemoval'
 import type { APIResponse } from '@/types'
@@ -210,6 +242,8 @@ const onPopoverShow = (): void => {
   // 不清空会在新 IP 上先显示上一行 IP 的「30 天事件」数（亚秒级但会误导）。
   eventCount.value = null
   void loadPolicies()
+  // 自动封禁独立加载：策略接口失败/为空时该区块仍须可用
+  void loadAutoban()
   void loadEventCount()
 }
 
@@ -240,13 +274,31 @@ const busyKeys = ref<Set<string>>(new Set())
 // —— 显式存入地址列表：与策略名单动作同口径（确认弹框 + 全局 MFA 428 守卫 +
 // 明确反馈），不再作为名单写入后的隐式自动追加；确认/幂等 POST/反馈复用
 // useIpListAdd 共享实现（与 SecurityEvents 事件弹框「加入列表」同一链路） ——
-const ipLists = ref<IpListOption[]>([])
+const ipLists = ref<IpListSummary[]>([])
 
 // 引用列表条目缓存：v2.3.2 起 /security/ip-lists 列表载荷不再内联 entries
 // （大名单 460KB/行），条目值按需经 GET /security/ip-lists/:id 拉取——
 // 仅拉取在案策略引用到的名单，避免为 refs 背全量条目
-interface IpListWithEntries extends IpListOption {
+interface IpListWithEntries extends IpListSummary {
   entries?: Array<{ value: string; remark?: string }>
+}
+// 列表行（GET /security/ip-lists 的裁剪视图）：preset_autoban 标记预置「自动
+// 封禁名单」（system=1 但条目可改）——自动封禁区块据此定位，不靠名单名硬编码。
+interface IpListSummary extends IpListOption {
+  preset_autoban?: boolean
+}
+// 详情载荷（GET /security/ip-lists/:id）：条目携带到期时间，自动封禁区块据此
+// 展示剩余时长；条目值加载器只取 value。
+interface IpListEntryPayload {
+  value: string
+  remark?: string
+  created_at?: string
+  expires_at?: string
+}
+interface IpListDetailPayload {
+  id: number
+  name?: string
+  entries?: IpListEntryPayload[]
 }
 // 与 TriggerDetailDialog 共用模块级缓存：原为组件内 ref，
 // 每事件行一个实例 → 同一 IP 弹层多次打开/多行弹层各自整批下载条目。
@@ -268,11 +320,18 @@ onUnmounted(() => {
   unregisterEntriesCache = null
 })
 
+// 单名单详情请求（唯一实现）：条目值加载器与自动封禁区块（需到期时间）共用——
+// 两处各写一份会在请求形态/归一规则变化时漂移。
+const loadListDetail = async (id: number): Promise<IpListDetailPayload> => {
+  const res = await request.get<APIResponse<IpListDetailPayload>>(`/security/ip-lists/${id}`)
+  return res.data ?? { id, entries: [] }
+}
+
 // 单名单条目加载器：loadIpLists 的按需拉取与「取消信任」的决策前强制刷新共用
 // 同一实现（两处各写一份会在请求形态/归一规则变化时漂移）。
 const loadListEntries = async (id: number): Promise<string[]> => {
-  const res = await request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`)
-  return (res.data?.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+  const detail = await loadListDetail(id)
+  return (detail.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
 }
 
 const loadIpLists = async (): Promise<void> => {
@@ -305,6 +364,102 @@ const loadIpLists = async (): Promise<void> => {
 
 
 
+
+// —— 自动封禁（预置名单命中） ——
+// 预置「自动封禁名单」为 system=1 但条目可改的名单（列表行 preset_autoban=true），
+// remove-ip 端点对其放行（后端以名单名做例外，见 handlers/securityiplists.go）。
+// 本区块刻意独立于策略面：策略加载中/失败/为空时同样可见可用——从安全日志点开
+// 的 IP 往往没有任何 IP 管控策略，原弹框此时只有「暂无策略」可看，无法解封。
+interface AutobanState {
+  listId: number
+  listName: string
+  entries: IpListEntryPayload[]
+}
+const autoban = ref<AutobanState | null>(null)
+const autobanLoading = ref(false)
+const autobanError = ref(false)
+const autobanUnbanning = ref(false)
+let autobanSeq = 0
+
+const loadAutoban = async (): Promise<void> => {
+  const seq = ++autobanSeq
+  autobanLoading.value = true
+  autobanError.value = false
+  try {
+    // 名单清单优先复用本轮 ipLists（loadPolicies→loadIpLists 的同一结果）；策略
+    // 接口失败/首次打开时为空，自行取一次——不等策略结果，也不依赖其成败。
+    let list = ipLists.value.find((l) => l.preset_autoban === true)
+    if (!list) {
+      const res = await request.get<APIResponse<IpListSummary[]>>('/security/ip-lists', { silent: true })
+      if (seq !== autobanSeq) return
+      list = (res.data || []).find((l) => l.preset_autoban === true)
+    }
+    if (!list) {
+      // 预置名单不存在（未启用自动封禁的老库）→ 无封禁面可呈现
+      autoban.value = null
+      return
+    }
+    const detail = await loadListDetail(list.id)
+    if (seq !== autobanSeq) return
+    // 条目值归一（去首尾空白）与 loadListEntries 同口径——匹配与回填都读同一形态
+    const entries = (detail.entries || []).map((e) => ({ ...e, value: e.value.trim() }))
+    autoban.value = { listId: list.id, listName: detail.name || list.name, entries }
+  } catch {
+    if (seq !== autobanSeq) return
+    // 读失败必须显性化：静默当作「未封禁」会让运维误判该 IP 已被放行
+    autoban.value = null
+    autobanError.value = true
+  } finally {
+    if (seq === autobanSeq) autobanLoading.value = false
+  }
+}
+
+// 命中条目：自动封禁条目为单 IP（也可能为 CIDR），匹配复用 securityStages 单源
+const autobanHit = computed<IpListEntryPayload | null>(() => {
+  const ip = trimmedIp.value
+  return autoban.value?.entries.find((e) => entryMatchesIp(e.value, ip)) ?? null
+})
+const autobanExpired = computed(() => {
+  const expiresAt = autobanHit.value?.expires_at
+  return !!expiresAt && autobanEntryExpired(expiresAt)
+})
+const autobanRemaining = computed(() => {
+  const expiresAt = autobanHit.value?.expires_at
+  return expiresAt ? autobanEntryRemaining(expiresAt) : ''
+})
+
+const retryAutoban = (): void => { void loadAutoban() }
+
+// 取消封禁：确认 → remove-ip（按 exact value 删全部同值条目）→ 失效条目缓存 →
+// 重取策略面与封禁态（顺序不可倒：共享缓存失效必须早于两次重取）。
+// 占位（autobanUnbanning）先于确认取得——双击不再叠加两个确认框。
+const unbanAutoban = async (): Promise<void> => {
+  const hit = autobanHit.value
+  const listId = autoban.value?.listId
+  if (!hit || listId === undefined || autobanUnbanning.value) return
+  autobanUnbanning.value = true
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `将把 ${hit.value} 从自动封禁名单移除，该 IP 立即解封；若仍持续超阈值会被再次自动封禁。是否继续？`,
+        '取消封禁',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+    const res = await request.post(`/security/ip-lists/${listId}/remove-ip`, { value: hit.value })
+    invalidateSharedEntriesCache()
+    await loadPolicies()
+    await loadAutoban()
+    showSaveResult(res as unknown as { message?: string }, `已取消封禁 ${hit.value}`)
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to lift autoban:', error)
+  } finally {
+    autobanUnbanning.value = false
+  }
+}
 
 // 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导同口径）；缓存中缺失的
 // 引用列表跳过（防御性回退为仅内联）。内核统一在 utils/securityStages
@@ -810,6 +965,17 @@ const hasInterceptPolicy = computed(() => policies.value.some((p) => {
   if (t !== 'stage1' && t !== 'mixed') return false
   return aclAssociateSides(p.ip_acl_mode).deny
 }))
+
+// 无黑名单落点时的 **非阻塞** 提示（null = 不显示）。原实现把整块策略卡片作为
+// 该条件的 else-if 分支隐藏：仅有白名单（allow）或信任（阶段 0）策略的部署失去
+// 放行/信任/移除条目等全部快捷处置入口。提示与卡片同屏，动作不受影响。
+const interceptHint = computed<string | null>(() => {
+  if (hasInterceptPolicy.value) return null
+  if (hasAclPolicy.value) {
+    return '当前 IP 访问控制策略仅启用白名单/免检测模式，暂无「拦截此 IP」落点；下方仍可维护放行与信任名单。'
+  }
+  return '尚未创建 IP 访问控制（黑名单）策略；请先到「安全防护 → 安全策略」创建并绑定到规则，再使用快捷拦截。'
+})
 
 const filterablePolicies = computed(() => policies.value.filter((p) => {
   const t = policyTypeOf(p)

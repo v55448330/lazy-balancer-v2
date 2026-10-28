@@ -19,8 +19,8 @@ import { code, section } from './_helpers.ts'
 
 const SECURITY_RULES = 'src/views/security/SecurityRules.vue'
 
-// pattern 列的闭合点：条件行里紧随其后的固定元素（删除按钮）。
-const PATTERN_COL_END = '<el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">删除</el-button>'
+// pattern 列的闭合点：紧随其后的删除动作（只锚定行为标识，不锚属性书写顺序）。
+const PATTERN_COL_END = 'removeCondition(idx)'
 
 test('正则模板与 UA 快捷标签是条件行的整行子块，不再嵌在 pattern 列内', () => {
   const text = code(SECURITY_RULES)

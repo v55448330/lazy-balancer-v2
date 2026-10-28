@@ -13,7 +13,6 @@ import {
   normalizeTrafficSampleN,
 } from '../src/utils/threatFlowRules.ts'
 import { flowArcTierWidth } from '../src/utils/threatTheme.ts'
-import { parseDbDateMs } from '../src/utils/timeZoneFormat.ts'
 import { code, section } from './_helpers.ts'
 
 test('流量采样配置：仅保留 -1/0，全量与固定 2-64 归一为自适应', () => {
@@ -117,8 +116,7 @@ test('速率还原：events.length × 服务端 sample_n，sample_n 缺失时回
 
 test('时间解析：无时区 DB 时间按 UTC，与 date.ts 同一内核（四形态 + 失败为 NaN）', () => {
   assert.equal(flowTimestamp('2026-10-18 00:00:00'), Date.parse('2026-10-18T00:00:00Z'))
-  // 省略秒 / 带 Z / 带偏移：与内核 parseDbDateMs 同结果（不得另有解析实现）
-  assert.equal(flowTimestamp('2026-10-18 00:00'), parseDbDateMs('2026-10-18 00:00'))
+  // 带 Z / 带偏移：直接对绝对时刻，不与被委托内核自比
   assert.equal(flowTimestamp('2026-10-18T00:00:00Z'), Date.UTC(2026, 9, 18))
   assert.equal(flowTimestamp('2026-10-18T08:00:00+08:00'), Date.UTC(2026, 9, 18))
   // 大屏对无效时间只丢弃（NaN），不抛
@@ -154,6 +152,16 @@ test('首载与恢复可见批次：正常/攻击光流都只消费五分钟内�
   assert.match(attack, /freshFlowEvents\(data\.events \?\? \[\], now\)/, '攻击流必须继续消费同一新鲜度门')
   assert.match(normal, /freshFlowEvents\(events, now\)/, '正常流首载/恢复可见共用的轮询必须先过滤陈旧事件')
   assert.ok(normal.indexOf('flowSince = nextFlowCursor(flowSince, data)') > normal.indexOf('freshFlowEvents(events, now)'), '过滤陈旧事件后仍须推进游标')
+})
+
+test('实时事件窗口与站点坐标边界：脏时间丢弃，(0,0) 是合法配置', () => {
+  const screen = code('src/views/security/ThreatScreen.vue')
+  const feed = section(screen, 'const windowFeed = computed', 'const sevFilter')
+  assert.match(feed, /Number\.isFinite\(t\) && t >= cutoff/, '解析失败的事件不得永久留在窗口')
+  assert.doesNotMatch(feed, /!Number\.isFinite\(t\) \|\| t >= cutoff/)
+  const load = section(screen, 'async function loadServerCentroid', 'async function retryConfigLoad')
+  assert.match(load, /server_map_lat !== undefined|typeof res\.data\?\.server_map_lat === 'number'/, '站点是否配置必须看字段存在性')
+  assert.doesNotMatch(load, /serverLatLon\[0\] !== 0 \|\| serverLatLon\[1\] !== 0/, '(0,0) 不得被当成未配置')
 })
 
 

@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -75,6 +77,61 @@ func TestOIDCCallback_token_carries_pwd_ver(t *testing.T) {
 	v, ok = claims["pwd_ver"]
 	if !ok || v != float64(3) {
 		t.Fatalf("post-bump jwt must carry pwd_ver=3, got present=%v value=%v", ok, v)
+	}
+}
+
+// 密码登录与 OIDC 回调必须签发同一组会话声明；只有认证来源与本地 MFA 时间
+// 戳允许不同。该基线同时守住后续签发单源化的等价行为。
+func TestSessionJWT_passwordAndOIDCClaimSetsMatch(t *testing.T) {
+	idp := newMockIdP(t)
+	router, h := setupOIDCTest(t, idp)
+	hash, err := bcrypt.GenerateFromPassword([]byte("Secret123!"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('root',?,'admin',1)`, string(hash)); err != nil {
+		t.Fatal(err)
+	}
+	router.POST("/auth/login", h.Login)
+	loginRec := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"root","password":"Secret123!"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("password login status=%d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	var loginBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginBody); err != nil {
+		t.Fatal(err)
+	}
+	localToken, err := jwt.Parse(loginBody.Token, func(*jwt.Token) (any, error) { return []byte("test-secret"), nil })
+	if err != nil {
+		t.Fatalf("parse password token: %v", err)
+	}
+	localClaims := localToken.Claims.(jwt.MapClaims)
+
+	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
+	oidcClaims := oidcLoginAndGetClaims(t, router)
+	keySet := func(claims jwt.MapClaims) map[string]struct{} {
+		keys := make(map[string]struct{}, len(claims))
+		for key := range claims {
+			if key != "auth_method" && key != "mfa_ts" {
+				keys[key] = struct{}{}
+			}
+		}
+		return keys
+	}
+	want := map[string]struct{}{"user_id": {}, "username": {}, "role": {}, "pwd_ver": {}, "jti": {}, "iat": {}, "exp": {}}
+	if got := keySet(localClaims); !maps.Equal(got, want) {
+		t.Fatalf("password session claim keys=%v, want %v", got, want)
+	}
+	if got := keySet(oidcClaims); !maps.Equal(got, want) {
+		t.Fatalf("OIDC session claim keys=%v, want %v", got, want)
+	}
+	if _, ok := localClaims["auth_method"]; ok || oidcClaims["auth_method"] != "oidc" {
+		t.Fatalf("auth_method local=%v OIDC=%v, want absent/oidc", localClaims["auth_method"], oidcClaims["auth_method"])
 	}
 }
 

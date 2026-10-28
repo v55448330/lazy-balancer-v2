@@ -72,7 +72,7 @@ func TestEngine_ScheduledRechecksEnabledFnBeforeDispatch(t *testing.T) {
 // When RearmLoop（无实参形态=服务就绪重置节拍）。
 // Then 不栽重启意图、不换代——Run 正常退出后不得拉起新代。
 func TestEngine_RearmLoopDoesNotReplaceRunningDaemon(t *testing.T) {
-	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
+	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour, DaemonRestartDelays: []time.Duration{time.Hour}})
 	var starts atomic.Int32
 	started := make(chan struct{}, 4)
 	exit := make(chan struct{})
@@ -120,10 +120,7 @@ func TestEngine_RearmLoopDoesNotReplaceRunningDaemon(t *testing.T) {
 	// 回归形状：空闲（正常退出后 running=false、调度仍开）时 RearmLoop 仍经
 	// CAS 正常拉起——修复不得把常驻启动路径一并关掉。
 	e.RearmLoop(id)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && starts.Load() < 2 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitForEngine(t, "RearmLoop 直接拉起空闲 daemon", 200*time.Millisecond, func() bool { return starts.Load() == 2 })
 	if got := starts.Load(); got != 2 {
 		t.Fatalf("空闲常驻任务 RearmLoop 未拉起新代：启动次数=%d, want 2", got)
 	}

@@ -90,36 +90,59 @@ func TestDeployAndRestoreCertJobs_canonicalLockOrderCompletes(t *testing.T) {
 	}
 
 	CaddyOpLock.Lock() // 恢复链 handler 临界区（caddyOpMu=CaddyOpLock 全程持锁）
+	// 失败路径（含 waitGoroutineBlockedOn 的 Fatal）同样必须释放：残留持锁会
+	// 让同包后续用例永久阻塞在 CaddyOpLock 上（全局锁污染跨用例传播）。
+	locked := true
+	releaseCaddyOpLock := func() {
+		if locked {
+			locked = false
+			CaddyOpLock.Unlock()
+		}
+	}
+	t.Cleanup(releaseCaddyOpLock)
 	issuer := NewCertIssuer(func() error { return nil })
 	material := issuedCertificate{
 		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	deployDone := make(chan error, 1)
-	go func() { deployDone <- issuer.deployIssuedCertificate(context.Background(), jobID, material) }()
-	time.Sleep(50 * time.Millisecond) // 给部署链到达 CaddyOpLock 等待点的窗口
+	deployStarted := make(chan struct{})
+	go func() {
+		// 会合点：协程已启动，紧接着进入 deployIssuedCertificate（其首条语句
+		// 即 CaddyOpLock.Lock）。随后用协程栈确认它真的阻塞在该锁上。
+		close(deployStarted)
+		deployDone <- issuer.deployIssuedCertificate(context.Background(), jobID, material)
+	}()
+	select {
+	case <-deployStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("部署协程未启动")
+	}
+	// 显式确认部署链已到达 CaddyOpLock 等待点（栈证据：CaddyOpLock 是
+	// *CaddyWriteLock，协程栈阻塞帧即为它的 Lock），不再靠「睡 50ms 期望它
+	// 到了」——后者在部署链被拖慢时是空转的负向断言。
+	waitGoroutineBlockedOn(t, "TestDeployAndRestoreCertJobs_canonicalLockOrderCompletes", "(*CaddyWriteLock).Lock")
 
 	restoreDone := make(chan error, 1)
 	go func() { restoreDone <- RestoreCertJobsForRule(snapshot) }()
 	select {
 	case err := <-restoreDone:
 		if err != nil {
-			CaddyOpLock.Unlock()
 			t.Fatalf("恢复失败: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		CaddyOpLock.Unlock()
 		t.Fatal("恢复链持 CaddyOpLock 时无法取得 DeployLock——AB-BA 互等")
 	}
-	// 恢复完成时部署必须仍阻塞在 CaddyOpLock（锁序生效）；旧形态部署早已完成。
-	time.Sleep(50 * time.Millisecond)
+	// 恢复完成时部署必须仍停在 CaddyOpLock 等待点（同一条栈证据，锁序生效）；
+	// 旧形态（DeployLock→CaddyOpLock）下部署链会先持 DeployLock，恢复链上面的
+	// 5s 断言即已触发。
+	waitGoroutineBlockedOn(t, "TestDeployAndRestoreCertJobs_canonicalLockOrderCompletes", "(*CaddyWriteLock).Lock")
 	select {
 	case <-deployDone:
-		CaddyOpLock.Unlock()
 		t.Fatal("部署链在主 goroutine 持 CaddyOpLock 期间完成——部署未先取 CaddyOpLock，锁序未统一")
 	default:
 	}
-	CaddyOpLock.Unlock()
+	releaseCaddyOpLock()
 
 	select {
 	case err := <-deployDone:

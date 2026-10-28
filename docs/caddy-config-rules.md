@@ -116,8 +116,8 @@ TCP规则A(port=8080) + TCP规则B(port=8080) → 冲突（TCP 端口独占；�
 
 3. 生成完整 Caddy 配置
    └── GenerateCaddyConfig() 从数据库读取所有启用规则
-   └── 内部对每个 HTTP 规则调用 generateHTTPRouteObjects()（经 SingleRuleConfig；
-      GenerateRouteObject 仅用于保存前校验的包装形态）
+   └── 内部对每个 HTTP 规则调用 generateHTTPRouteObjects()；配置生成与保存前
+      校验共用这一渲染源（经 SingleRuleConfig）
 
 4. 应用配置到 Caddy
    └── ApplyConfig() 将完整配置POST到 Caddy

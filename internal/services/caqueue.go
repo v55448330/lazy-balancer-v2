@@ -16,10 +16,14 @@ import (
 
 // CAQueueManager schedules ACME issuance jobs per CA provider.
 type CAQueueManager struct {
-	mu                            sync.Mutex
-	queues                        map[int]*caQueue
-	retiredQueues                 []retiredCAQueue
-	zombieJobs                    map[int]zombieJob
+	mu            sync.Mutex
+	queues        map[int]*caQueue
+	retiredQueues []retiredCAQueue
+	zombieJobs    map[int]zombieJob
+	// reservedJobs 是「已通过在途/活跃/规则屏障判定、正在锁外完成状态迁移与
+	// provider 解析」的 jobID 预留集合。在途判定放锁外执行期间它必须仍算在途，
+	// 否则并发 Retry/规则重建会看到 isJobActiveLocked=false 而二次入队。
+	reservedJobs                  map[int]struct{}
 	reloader                      func() error
 	active                        bool
 	blockedRules                  map[string]map[RuleBlockToken]struct{}
@@ -36,6 +40,9 @@ type CAQueueManager struct {
 	beforeEnqueue                 func()
 	beforeActiveEnqueue           func()
 	beforeProviderUnavailableFail func()
+	// beforeProviderEnqueue 是 provider 解析前的测试缝（生产恒 nil）：用于在
+	// 「已预留、尚未解析 provider」的窗口内注入延迟，验证解析不再持全局锁。
+	beforeProviderEnqueue func()
 }
 
 type RuleBlockToken uint64
@@ -851,6 +858,11 @@ func (m *CAQueueManager) isJobActiveLocked(jobID int) bool {
 	if _, zombie := m.zombieJobs[jobID]; zombie {
 		return true
 	}
+	// 正在锁外完成迁移/解析的预留同样算在途：判定与入队不再同临界区后，
+	// 预留是「已受理但尚未落进队列」的唯一在途证据。
+	if _, reserved := m.reservedJobs[jobID]; reserved {
+		return true
+	}
 	for _, queue := range m.queues {
 		queue.mu.Lock()
 		_, active := queue.active[jobID]
@@ -958,24 +970,59 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 	// 返回 changed=false，调用方走 !changed 分支（409）而非 500。
 	// 既有调用方无回归：waiting_ca/滞留扫描的任务执行已退出不在 active；
 	// requeueLifecycleStrandedJobs 已前置检查，此处为幂等二道闸。
+	// 全局锁只覆盖「在途判定 → 活跃/屏障判定 → 预留」：provider 解析（≥3 次
+	// DB 往返）、失败归因（failJob：退避窗口读 + 状态写 + 任务日志文件 IO +
+	// 操作审计写）与状态迁移闭包全部移到锁外。m.mu 是队列全局锁，持它做这些
+	// IO 会阻塞 IsJobActive/CancelJob/HasRunningJobForRule——删除/禁用规则的
+	// HTTP 快路径在 CA 故障或 SQLITE_BUSY 重试时出现秒级卡顿。
+	// 不变量仍成立：预留集合让「判定 → 迁移 → 入队」在并发视角下原子
+	// （isJobActiveLocked 把预留算在途）。
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.isJobActiveLocked(jobID) {
+		m.mu.Unlock()
 		return jobID, false, nil
 	}
 	if !m.active {
+		m.mu.Unlock()
 		return jobID, false, nil
 	}
 	if len(m.blockedRules[ruleID]) != 0 {
 		// 规则删除屏障期按冲突语义处理：返回 changed=false 让 handler 走 !changed
 		// 分支回 409，而不是把暂时性屏障当成 500 服务器错误。
+		m.mu.Unlock()
 		return jobID, false, nil
 	}
+	m.reserveJobLocked(jobID)
+	m.mu.Unlock()
+	defer m.releaseJobReservation(jobID)
+
 	jobID, changed, err := transition()
 	if err != nil || !changed {
 		return jobID, changed, err
 	}
-	return jobID, true, m.enqueueLocked(providerID, jobID, ruleID, domains)
+	provider, err := m.resolveEnqueueProvider(providerID, jobID, ruleID)
+	if err != nil {
+		return jobID, true, err
+	}
+	m.mu.Lock()
+	m.enqueueResolvedLocked(provider, jobID, ruleID, domains)
+	m.mu.Unlock()
+	return jobID, true, nil
+}
+
+// reserveJobLocked 登记在途预留（调用方持 m.mu）。
+func (m *CAQueueManager) reserveJobLocked(jobID int) {
+	if m.reservedJobs == nil {
+		m.reservedJobs = make(map[int]struct{})
+	}
+	m.reservedJobs[jobID] = struct{}{}
+}
+
+// releaseJobReservation 释放在途预留（入队落定或失败退出后调用）。
+func (m *CAQueueManager) releaseJobReservation(jobID int) {
+	m.mu.Lock()
+	delete(m.reservedJobs, jobID)
+	m.mu.Unlock()
 }
 
 // errCAProviderUnavailable 标记入队时 CA provider 解析失败（被禁用/删除且无
@@ -1024,7 +1071,26 @@ func ruleFollowsDefaultCAProvider(ruleID string) bool {
 	return ruleCA == 0
 }
 
+// enqueueLocked 是测试夹具/EnqueueForTest 使用的「解析 + 入队」组合（调用方已
+// 持 m.mu）：生产路径已把解析拆到锁外（见 EnqueueIfActive），此处仅为测试
+// 缝保持原形态——它不在生产调用链上。
 func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domains string) error {
+	provider, err := m.resolveEnqueueProvider(providerID, jobID, ruleID)
+	if err != nil {
+		return err
+	}
+	m.enqueueResolvedLocked(provider, jobID, ruleID, domains)
+	return nil
+}
+
+// resolveEnqueueProvider 解析入队要用的 CA provider，并完成「跟随默认」归一与
+// 解析失败的业务归因（failJob / 只差部署降级）。**不得在持 m.mu 时调用**：
+// 本函数含多次 DB 往返、任务日志文件 IO 与操作审计写，持全局锁会让
+// IsJobActive/CancelJob/HasRunningJobForRule 等快路径一起排队。
+func (m *CAQueueManager) resolveEnqueueProvider(providerID int, jobID int, ruleID string) (models.CAProvider, error) {
+	if m.beforeProviderEnqueue != nil {
+		m.beforeProviderEnqueue()
+	}
 	provider, err := loadCAProvider(providerID)
 	// 「跟随默认 CA」语义收敛：规则选择为 0 时，任务行固化的旧默认 id 只是
 	// 「当时的偏好」——它仍可用时保持固化（续期稳定性，不因默认切换改写在途
@@ -1050,10 +1116,10 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 		// 已定局的业务失败 failJob。
 		if certJobDeploymentOnly(jobID) {
 			Logf("warn", "CA queue: job %d 只差部署，CA Provider 不可用（%v）——保持待部署，由部署补扫接管", jobID, err)
-			return fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
+			return models.CAProvider{}, fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 		}
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
-		return fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
+		return models.CAProvider{}, fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 	}
 	Logf("info", "CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
 
@@ -1065,7 +1131,12 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 			Logf("error", "CA queue: failed to update resolved provider for job %d: %v", jobID, err)
 		}
 	}
+	return provider, nil
+}
 
+// enqueueResolvedLocked 把已解析 provider 的任务放进对应队列（调用方持 m.mu，
+// 本函数只做内存表操作 + 测试钩子）。
+func (m *CAQueueManager) enqueueResolvedLocked(provider models.CAProvider, jobID int, ruleID, domains string) {
 	q, ok := m.queues[provider.ID]
 	if !ok {
 		q = newCAQueue(provider, m.reloader, m.dataDir)
@@ -1087,7 +1158,6 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 		ruleID:  ruleID,
 		domains: domains,
 	})
-	return nil
 }
 
 func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, domains string) error {
@@ -1100,15 +1170,30 @@ func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, 
 		Logf("warn", "CA queue compensation enqueue skipped: job %d still active", jobID)
 		return nil
 	}
+	// 与 EnqueueIfActive 同口径：全局锁只覆盖「活跃/租约判定 + 在途预留」，
+	// provider 解析与失败归因在锁外完成（补偿退避重试与删除/禁用规则的快路径
+	// 并发，持锁做 provider IO 会拖慢后者）。
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.active {
+		m.mu.Unlock()
 		return errCAQueueInactive
 	}
 	if len(m.blockedRules[ruleID]) == 0 {
+		m.mu.Unlock()
 		return fmt.Errorf("certificate compensation lease missing for rule %s", ruleID)
 	}
-	return m.enqueueLocked(providerID, jobID, ruleID, domains)
+	m.reserveJobLocked(jobID)
+	m.mu.Unlock()
+	defer m.releaseJobReservation(jobID)
+
+	provider, resolveErr := m.resolveEnqueueProvider(providerID, jobID, ruleID)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	m.mu.Lock()
+	m.enqueueResolvedLocked(provider, jobID, ruleID, domains)
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *CAQueueManager) Start() {
@@ -1206,7 +1291,7 @@ type queueExecution struct {
 // 缓存快照判定（q.running >= q.provider.MaxConcurrent / lastOrder + MinInterval），
 // 未归一的 0 值会让该 CA 的派发闸门永久关闭（running=0 >= 0 恒真），而
 // enqueueLocked 复用队列时会同步 providerVersion——版本一致使 tick/refresh 的
-// 重载分支也不再纠偏（95 轮只在 tick/refresh 补归一，漏了这条入口）。
+// 重载分支也不再纠偏，故复用入口必须同样过本归一。
 // 归一对落库/审计比对（NormalizeCAProvider*）与队列快照共用同一对函数，
 // 队列侧不得另写钳制。
 func normalizeCAProviderSnapshot(provider models.CAProvider) models.CAProvider {
@@ -1537,9 +1622,12 @@ func requeueCanceledJob(jobID int) {
 	// 「材料已落库、只差部署」，漏收敛会把它们打回 queued 重签烧 CA 配额。
 	if liveStatus, hasMaterial, found, err := loadCertJobDeploymentState(jobID); err == nil && found {
 		if JobLifecycle(liveStatus) == JobLifecycleDownloaded && hasMaterial {
-			// updated_at 与部署窗口同写：重试冷却门以 updated_at 为计时基准
-			// （同口径见 handlers/certjobs.go 的部署重排写点）。
-			if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_available_after=datetime('now'), message='节点生命周期切换，等待恢复部署', updated_at=datetime('now') WHERE id=? AND status=?", jobID, liveStatus); err != nil {
+			// 窗口 + message + updated_at 同写由单源保证（PushCertJobDeploymentWindow）。
+			if _, err := PushCertJobDeploymentWindow(db.DB, jobID, CertJobDeploymentWindowPush{
+				Message:   "节点生命周期切换，等待恢复部署",
+				Where:     "status=?",
+				WhereArgs: []any{liveStatus},
+			}); err != nil {
 				Logf("error", "CA queue: failed to defer deployment retry for canceled job %d: %v", jobID, err)
 			}
 			return
@@ -1770,11 +1858,15 @@ func deferDeploymentForMaterialBearingJob(jobID int, logCode, message string) bo
 	if JobLifecycle(status) != JobLifecycleDownloaded || !hasMaterial {
 		return false
 	}
+	// 消息截断在写库与写任务日志之前完成（单源 helper 内部也会截断，此处保持
+	// 任务日志与库内文案逐字节一致）。
 	message = truncateJobMessage(message)
-	// updated_at 与部署窗口同写：重试冷却门（certJobRetryBlocked）以
-	// updated_at 为计时基准，只推窗口不推 updated_at 会让本轮重排对冷却门不可见
-	// （同口径见 handlers/certjobs.go 的部署重排写点）。
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_available_after=datetime('now'), message=?, updated_at=datetime('now') WHERE id=? AND status=?", message, jobID, status); err != nil {
+	// 窗口 + message + updated_at 同写由单源保证（PushCertJobDeploymentWindow）。
+	if _, err := PushCertJobDeploymentWindow(db.DB, jobID, CertJobDeploymentWindowPush{
+		Message:   message,
+		Where:     "status=?",
+		WhereArgs: []any{status},
+	}); err != nil {
 		Logf("error", "CA queue: failed to defer deployment retry for job %d: %v", jobID, err)
 		return false
 	}

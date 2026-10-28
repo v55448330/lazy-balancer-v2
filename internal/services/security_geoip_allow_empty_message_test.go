@@ -1,8 +1,11 @@
 package services
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 // allow + 空名单的 400 文案必须与实际渲染语义一致：PolicyHasGeoIP 要求名单
@@ -30,5 +33,12 @@ func TestValidateGeoIPCountries_denyEmptyStillAccepted(t *testing.T) {
 	}
 	if err := ValidateGeoIPCountries(`["海外"]`, "off"); err != nil {
 		t.Fatalf("区域控制关闭时名单仅保留数据，必须继续通过: %v", err)
+	}
+}
+
+func TestBuildIPPrecheckDirectives_allowEmptyFailsVisible(t *testing.T) {
+	policies := []*models.SecurityPolicy{{ID: 1, Name: "脏策略", GeoIPMode: "allow", GeoIPCountries: json.RawMessage("[]")}}
+	if _, err := buildIPPrecheckDirectives(policies, 403, "lb_geoip_empty"); err == nil || !strings.Contains(err.Error(), "放行全部") {
+		t.Fatalf("allow+空名单必须拒绝渲染并说明 fail-open 语义，err=%v", err)
 	}
 }

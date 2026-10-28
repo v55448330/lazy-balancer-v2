@@ -76,24 +76,49 @@ func TestSecurityEventsTick_resetsOffsetWhenMetricsDBGenerationChanges(t *testin
 	}
 }
 
+func useSecurityEventsPollFiles(t *testing.T, logPath, offsetPath string) {
+	t.Helper()
+	oldLogPath, oldOffsetPath := auditLogPath, securityEventsOffsetPath
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	resetSecurityEventsPollState(t)
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath = oldLogPath, oldOffsetPath
+	})
+}
+
 // 代际复位=整份 audit.log 从头重放（新库为空、每行 RowsAffected=1 全部再喂
 // autobanBatch）；自动封禁计数器在内存、不随库重置——不复位则窗口内事件被
 // 二次计数、阈值提前达成误封。契约：代际变化复位 offset 的同时清空计数器，
 // 由重放按事件时间恰好重建一次。
 func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.T) {
 	logPath, offsetPath := stallSetup(t)
-	tailer := securityEventsNewTailer(logPath, offsetPath)
-	// Given：登记当前代际（首次只见证、不复位），并预置窗口内计数。
-	if _, err := tailer.securityEventsGenerationGuard(0); err != nil {
-		t.Fatalf("first guard: %v", err)
-	}
+	useSecurityEventsPollFiles(t, logPath, offsetPath)
+	setAutobanConfigRaw(t, true, 5, 60, "1h", "all", false)
+	oldMaster := autobanIsMaster
+	autobanIsMaster = func() bool { return true }
+	t.Cleanup(func() { autobanIsMaster = oldMaster })
 	ResetAutobanCounters()
 	t.Cleanup(ResetAutobanCounters)
-	autobanMu.Lock()
-	autobanWindows["198.51.100.77"] = &autobanCounter{Count: 4, WindowStart: time.Now(), LastSeen: time.Now()}
-	autobanMu.Unlock()
 
-	// When：metrics 库隔离重建（新代际）→ 代际复位。
+	// Given：一条窗口内真实事件和上一代遗留计数；首轮先把遗留 4 推进到 5，
+	// 证明夹具确实喂入自动封禁，而不是靠禁用/过期得到零计数。
+	const ip = "198.51.100.77"
+	fixture := securityEventsLoggedRuleFixture("tx-generation-autoban", ip, "")
+	if err := os.WriteFile(logPath, []byte(fixture+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	autobanMu.Lock()
+	autobanWindows[ip] = &autobanCounter{Count: 4, WindowStart: time.Now(), LastSeen: time.Now()}
+	autobanMu.Unlock()
+	ingested, err := SecurityEventsPollOnce()
+	if err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	if ingested != 1 || autobanCountForTest(ip) != 5 {
+		t.Fatalf("首轮摄取=%d、计数=%d, want 1、5（重放前置条件）", ingested, autobanCountForTest(ip))
+	}
+
+	// When：metrics 库隔离重建后走真实 SecurityEventsPollOnce，代际复位并整份重放。
 	oldMetrics := db.MetricsDB
 	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize rebuilt metrics db: %v", err)
@@ -104,17 +129,17 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 		}
 		db.MetricsDB = oldMetrics
 	})
-	offset, err := tailer.securityEventsGenerationGuard(4096)
+	ingested, err = SecurityEventsPollOnce()
 
-	// Then：offset 归零，且自动封禁计数器随代际复位清空（重放不二次计数）。
+	// Then：计数由本轮真实事件恰好重建一次，不归零，也不叠加旧代计数。
 	if err != nil {
-		t.Fatalf("guard after rebuild: %v", err)
+		t.Fatalf("replay poll: %v", err)
 	}
-	if offset != 0 {
-		t.Fatalf("offset=%d, want 0（代际复位）", offset)
+	if ingested != 1 {
+		t.Fatalf("重放摄取=%d, want 1", ingested)
 	}
-	if got := autobanTrackedCount(); got != 0 {
-		t.Fatalf("autoban tracked IPs=%d, want 0（代际重放不得二次喂计数器）", got)
+	if got := autobanCountForTest(ip); got != 1 {
+		t.Fatalf("重放后自动封禁计数=%d, want 1（单遍真实总量）", got)
 	}
 }
 
@@ -124,15 +149,23 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 // 单遍真实总量。
 func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.T) {
 	logPath, offsetPath := stallSetup(t)
-	tailer := securityEventsNewTailer(logPath, offsetPath)
-	// Given：登记当前代际（首次只见证、不复位），并预置上一代已披露的截断量。
-	if _, err := tailer.securityEventsGenerationGuard(0); err != nil {
-		t.Fatalf("first guard: %v", err)
+	useSecurityEventsPollFiles(t, logPath, offsetPath)
+	// Given：单条事件披露丢弃 4 条消息，进程计数预置上一代总量 4。
+	content := strings.TrimSuffix(securityEventsFixtureBlocked, "}") + `,"messages_dropped":4}` + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	securityEventsMessagesDropped.Store(4)
 	t.Cleanup(func() { securityEventsMessagesDropped.Store(0) })
+	ingested, err := SecurityEventsPollOnce()
+	if err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	if ingested != 1 || securityEventsMessagesDropped.Load() != 8 {
+		t.Fatalf("首轮摄取=%d、messages_dropped=%d, want 1、8（重放前置条件）", ingested, securityEventsMessagesDropped.Load())
+	}
 
-	// When：metrics 库隔离重建（新代际）→ 代际复位 + 整份日志重放。
+	// When：metrics 库隔离重建后走真实 SecurityEventsPollOnce 复位并重放。
 	oldMetrics := db.MetricsDB
 	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize rebuilt metrics db: %v", err)
@@ -143,16 +176,16 @@ func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.
 		}
 		db.MetricsDB = oldMetrics
 	})
-	offset, err := tailer.securityEventsGenerationGuard(4096)
+	ingested, err = SecurityEventsPollOnce()
 
-	// Then
+	// Then：重放后的进程计数等于日志单遍真实总量，不是重放前清零后的零或两遍之和。
 	if err != nil {
-		t.Fatalf("guard after rebuild: %v", err)
+		t.Fatalf("replay poll: %v", err)
 	}
-	if offset != 0 {
-		t.Fatalf("offset=%d, want 0（代际复位）", offset)
+	if ingested != 1 {
+		t.Fatalf("重放摄取=%d, want 1", ingested)
 	}
-	if got := securityEventsMessagesDropped.Load(); got != 0 {
-		t.Fatalf("messages_dropped=%d, want 0（重放前必须清零，否则历史截断量被二次累计）", got)
+	if got := securityEventsMessagesDropped.Load(); got != 4 {
+		t.Fatalf("重放后 messages_dropped=%d, want 4（单遍真实总量）", got)
 	}
 }

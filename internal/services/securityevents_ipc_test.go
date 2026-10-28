@@ -64,11 +64,15 @@ func securityEventsTestRowCount(t *testing.T) int {
 
 func TestIngestSecurityEventBatch_insertsAndDedupesTransactionID(t *testing.T) {
 	setupSecurityEventsSpoolTest(t)
+	t.Setenv("TMPDIR", t.TempDir())
 	raw := []byte(securityEventsTestAuditLine("tx-ipc-1", "203.0.113.10", "", "/a", false, 1786447018) + "\n" +
 		securityEventsTestAuditLine("tx-ipc-2", "203.0.113.11", "", "/b", true, 1786447019) + "\n")
 
-	// 临时输入文件必须清理：记录入参前的同前缀文件数。
+	// 临时目录按用例隔离：前后都必须恰好为零，而不是只排除增长。
 	before := securityEventsBatchTempFiles(t)
+	if before != 0 {
+		t.Fatalf("隔离临时目录初始文件数=%d, want 0", before)
+	}
 
 	n, err := IngestSecurityEventBatch(context.Background(), raw)
 	if err != nil {
@@ -93,8 +97,11 @@ func TestIngestSecurityEventBatch_insertsAndDedupesTransactionID(t *testing.T) {
 	if got := securityEventsTestRowCount(t); got != 2 {
 		t.Fatalf("rows after replay=%d, want 2", got)
 	}
-	if after := securityEventsBatchTempFiles(t); after > before {
-		t.Fatalf("批量入库遗留临时文件：before=%d after=%d", before, after)
+	if after := securityEventsBatchTempFiles(t); after != 0 {
+		t.Fatalf("批量入库遗留临时文件：before=%d after=%d, want 0", before, after)
+	}
+	if status := SecurityEventsSpoolSnapshot(); status.Bytes != 0 || status.Entries != 0 {
+		t.Fatalf("主路径批量入库不得产生 spool 残留: %+v", status)
 	}
 }
 
@@ -133,8 +140,41 @@ func TestIngestSecurityEventBatch_reusesRequestDedupe(t *testing.T) {
 	}
 }
 
+func TestSecurityEventRequestDedupe_sharedAcrossBatchAndLivePaths(t *testing.T) {
+	setupSecurityEventsSpoolTest(t)
+	const requestKey = "req-cross-channel"
+	logged := securityEventsTestAuditLine("tx-live-logged", "203.0.113.21", requestKey, "/cross", false, 1786447023) + "\n"
+	blocked := securityEventsTestAuditLine("tx-ipc-blocked", "203.0.113.21", requestKey, "/cross", true, 1786447024) + "\n"
+	path := filepath.Join(t.TempDir(), "live-audit.jsonl")
+	if err := os.WriteFile(path, []byte(logged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := securityEventsIngestDeltaFrom(path, 0, true); err != nil || n != 1 {
+		t.Fatalf("live ingest=%d err=%v, want 1/nil", n, err)
+	}
+
+	n, err := IngestSecurityEventBatch(context.Background(), []byte(blocked))
+	if err != nil {
+		t.Fatalf("batch ingest: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("batch inserted=%d, want 0（跨通道同请求必须归并）", n)
+	}
+	if got := securityEventsTestRowCount(t); got != 1 {
+		t.Fatalf("rows=%d, want 1", got)
+	}
+	var action string
+	if err := db.MetricsDB.QueryRow(`SELECT action FROM security_events WHERE client_ip='203.0.113.21'`).Scan(&action); err != nil {
+		t.Fatal(err)
+	}
+	if action != "blocked" {
+		t.Fatalf("action=%q, want blocked", action)
+	}
+}
+
 func TestIngestSecurityEventBatch_dbFailureReturnsError(t *testing.T) {
 	setupSecurityEventsSpoolTest(t)
+	t.Setenv("TMPDIR", t.TempDir())
 	// 关闭 metrics 库句柄模拟入库不可用（DB busy/损坏同属「本次失败、可重试」）。
 	closed := db.MetricsDB
 	if err := closed.Close(); err != nil {
@@ -146,6 +186,9 @@ func TestIngestSecurityEventBatch_dbFailureReturnsError(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("ingested=%d, want 0 on failure", n)
+	}
+	if got := securityEventsBatchTempFiles(t); got != 0 {
+		t.Fatalf("失败批量入库遗留临时文件=%d, want 0", got)
 	}
 }
 
@@ -236,8 +279,8 @@ func TestDrainSecurityEventsSpool_keepsFailedFileAndBacksOff(t *testing.T) {
 
 func TestDrainSecurityEventsSpool_sealsOrphanedActiveAndLeavesLiveOne(t *testing.T) {
 	spoolDir := setupSecurityEventsSpoolTest(t)
-	// 孤儿：pid 不可能存在（~4M 超出常见 pid_max 且不会被分配），mtime 静默。
-	orphan := filepath.Join(spoolDir, "active-4194000-1.jsonl")
+	// Linux pid_max 上限为 4194304，macOS 更低；MaxInt32 恒不可分配。
+	orphan := filepath.Join(spoolDir, "active-2147483647-1.jsonl")
 	if err := os.WriteFile(orphan, []byte(securityEventsTestAuditLine("tx-orphan", "203.0.113.60", "", "/orphan", false, 1786447060)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -274,9 +317,10 @@ func TestSecurityEventsSpoolSnapshot_reportsEntriesBytesAndLimits(t *testing.T) 
 	t.Setenv(SecurityEventsSpoolMaxEntriesEnv, "10")
 	t.Setenv(SecurityEventsSpoolMaxBytesEnv, "4096")
 	line := securityEventsTestAuditLine("tx-count-1", "203.0.113.70", "", "/count", false, 1786447070) + "\n"
-	// 2 条 sealed（含一个空行）+ 1 条 active（末行无换行也要计入）。
-	writeSpoolFile(t, filepath.Join(spoolDir, "sealed-1700000000000000011.jsonl"), line+"\n"+line)
-	writeSpoolFile(t, filepath.Join(spoolDir, "active-4194001-1.jsonl"), line[:len(line)-1])
+	sealedContent := line + "\n" + line
+	activeContent := line[:len(line)-1]
+	writeSpoolFile(t, filepath.Join(spoolDir, "sealed-1700000000000000011.jsonl"), sealedContent)
+	writeSpoolFile(t, filepath.Join(spoolDir, "active-4194001-1.jsonl"), activeContent)
 
 	status := SecurityEventsSpoolSnapshot()
 	if status.SealedFiles != 1 || status.ActiveFiles != 1 {
@@ -285,8 +329,9 @@ func TestSecurityEventsSpoolSnapshot_reportsEntriesBytesAndLimits(t *testing.T) 
 	if status.Entries != 3 {
 		t.Fatalf("entries=%d, want 3（空行不计，末行无换行计入）", status.Entries)
 	}
-	if status.Bytes <= 0 {
-		t.Fatalf("bytes=%d, want >0", status.Bytes)
+	wantBytes := int64(len(sealedContent) + len(activeContent))
+	if status.Bytes != wantBytes {
+		t.Fatalf("bytes=%d, want exact fixture bytes %d", status.Bytes, wantBytes)
 	}
 	if status.LimitEntries != 10 || status.LimitBytes != 4096 {
 		t.Fatalf("limits=(%d,%d), want (10,4096)", status.LimitEntries, status.LimitBytes)

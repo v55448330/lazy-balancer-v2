@@ -591,9 +591,16 @@ func TestAPIDocs_nonJSONResponsesDeclareExplicitMediaType(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document); err != nil {
 		t.Fatalf("parse generated OpenAPI YAML: %v", err)
 	}
-	expected := map[string]string{
-		"GET /auto-backup/:id/download":     "application/octet-stream",
-		"GET /security/ip-lists/:id/export": "text/plain; charset=utf-8",
+	expected := map[string]struct {
+		contentType  string
+		plainExample bool
+	}{
+		// 备份正文示例是 JSON 形状（说明包内结构），但媒体类型是 gzip；
+		// 其余三个端点的示例本身就是纯文本。
+		"GET /config/export":                {"application/gzip", false},
+		"GET /auto-backup/:id/download":     {"application/octet-stream", true},
+		"GET /security/ip-lists/:id/export": {"text/plain; charset=utf-8", true},
+		"GET /mcp/ops-playbook":             {"text/markdown; charset=utf-8", true},
 	}
 
 	// When 逐路由检查非 JSON 响应示例（合法 JSON 数组/对象由生成器包成
@@ -614,8 +621,10 @@ func TestAPIDocs_nonJSONResponsesDeclareExplicitMediaType(t *testing.T) {
 		}
 	}
 
-	// Then 两个已知下载端点：契约与生成的 YAML 媒体类型一致、示例为纯文本
-	for key, contentType := range expected {
+	// Then 已知 raw 端点：契约与生成的 YAML 媒体类型一致；纯文本端点
+	// 还须保证示例不是被包成 JSON 对象。
+	for key, want := range expected {
+		contentType := want.contentType
 		contract := apiDocContracts[key]
 		if !contract.rawResponse || contract.responseContentType != contentType {
 			t.Errorf("%s contract=%+v, want rawResponse with %s", key, contract, contentType)
@@ -629,9 +638,11 @@ func TestAPIDocs_nonJSONResponsesDeclareExplicitMediaType(t *testing.T) {
 		if _, isJSON := media["application/json"]; isJSON {
 			t.Errorf("%s still documents application/json response", key)
 		}
-		for _, entry := range media {
-			if _, isMap := entry.Example.(map[string]any); isMap {
-				t.Errorf("%s example=%v, want plain-text example (not JSON object)", key, entry.Example)
+		if want.plainExample {
+			for _, entry := range media {
+				if _, isMap := entry.Example.(map[string]any); isMap {
+					t.Errorf("%s example=%v, want plain-text example (not JSON object)", key, entry.Example)
+				}
 			}
 		}
 	}
@@ -657,8 +668,9 @@ func mediaTypeKeys(media map[string]struct {
 }
 
 // 媒体类型与示例形态须自洽——ops-playbook 声明
-// text/markdown 却给 JSON 示例；/admin-tls 与 /admin-tls/inspect 只登记
-// multipart，遗漏 MCP 通道唯一的 application/json 变体。
+// text/markdown; charset=utf-8 却给 JSON 示例；/admin-tls 与
+// /admin-tls/inspect 只登记 multipart，遗漏 MCP 通道唯一的
+// application/json 变体。
 func TestBuildOpenAPIYAML_documentsMarkdownAndAdminTLSContentVariants(t *testing.T) {
 	// Given
 	var document struct {
@@ -679,11 +691,12 @@ func TestBuildOpenAPIYAML_documentsMarkdownAndAdminTLSContentVariants(t *testing
 		t.Fatalf("parse generated OpenAPI YAML: %v", err)
 	}
 
-	// Then ops-playbook 示例是 markdown 正文而非 JSON 对象
+	// Then ops-playbook 示例是 markdown 正文而非 JSON 对象（媒体类型与
+	// handler 实际响应头一致，含 charset）。
 	playbook := document.Paths["/mcp/ops-playbook"]["get"].Responses["200"].Content
-	markdown, ok := playbook["text/markdown"]
+	markdown, ok := playbook["text/markdown; charset=utf-8"]
 	if !ok {
-		t.Fatalf("/mcp/ops-playbook 200 content=%v, want text/markdown", mediaTypeKeys(playbook))
+		t.Fatalf("/mcp/ops-playbook 200 content=%v, want text/markdown; charset=utf-8", mediaTypeKeys(playbook))
 	}
 	text, isString := markdown.Example.(string)
 	if !isString || !strings.HasPrefix(text, "#") || !strings.Contains(text, "手册") {
@@ -802,6 +815,26 @@ func containsRouteError(errors []string, status string) bool {
 		}
 	}
 	return false
+}
+
+// 规则更新的成功响应在 ACME 改域分支携带 data.warnings（旧证书已弃用的可用性
+// 披露）。导入/还原链路的同类机器可读披露已登记进契约，规则链路必须有同等待遇
+// ——否则按 OpenAPI 解析的外部集成/脚本拿不到该字段（契约漂移）。
+func TestAPIDocRoutes_ruleUpdateDocumentsWarningsDisclosure(t *testing.T) {
+	routes := make(map[string]apiDocRoute, len(apiDocRoutes))
+	for _, route := range apiDocRoutes {
+		routes[route.Method+" "+route.Path] = route
+	}
+	route := routes["PUT /rules/:caddy_id"]
+	if !strings.Contains(route.Response, "warnings") {
+		t.Fatalf("PUT /rules/:caddy_id response sample missing data.warnings: %s", route.Response)
+	}
+	for _, fragment := range []string{"warnings", "ACME", "域名"} {
+		if !strings.Contains(route.Description+route.Response, fragment) {
+			t.Fatalf("PUT /rules/:caddy_id 契约缺少 warnings 触发条件说明（%s）: response=%s description=%s",
+				fragment, route.Response, route.Description)
+		}
+	}
 }
 
 // ++:OIDC 公开契约登记、lbbak 导出形态、
@@ -1196,9 +1229,9 @@ func TestAPIDocs_certJobListExampleKeysMatchImplementation(t *testing.T) {
 // 此前 428 靠手工登记，系统性漏网（规则写族/安全写族等均未登记）。
 func TestAPIDocRoutes_writeEndpointsDocumentMFAStepUp(t *testing.T) {
 	writeMethods := map[string]bool{http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true}
-	// 与写操作同敏感级的导出 GET（middleware sensitiveExportGetRoutes 同名单，
-	// apiKeyReadOnlyGuard 与 mfaStepUpGuard 共用）。
-	sensitiveExportGets := map[string]bool{"GET /config/export": true, "GET /auto-backup/:id/download": true}
+	// 与写操作同敏感级的导出 GET：名单从 middleware 单源派生（
+	// apiKeyReadOnlyGuard 与 mfaStepUpGuard 共用同一事实源）。
+	sensitiveExportGets := sensitiveExportGetRoutesForDocs(t, false)
 	// step-up 机制本体与登出豁免（DecideMFAStepUp 短路，428 不可达）。
 	stepUpExempt := map[string]bool{"POST /auth/logout": true, "POST /auth/mfa/verify-step": true}
 	checked := 0
@@ -1534,6 +1567,10 @@ func mapKeysOf(m map[string]any) map[string]bool {
 // crs_available/update_status/attack_types_stage 等键会让消费者丢失覆盖可信度
 // 与采集健康位。
 func TestAPIDocs_securityOverviewExampleKeysMatchImplementation(t *testing.T) {
+	description := operationDescription(routesEntry(t, "GET /security/overview"))
+	if !strings.Contains(description, "includes_reserved 仅描述 today_blocked/today_detected") || !strings.Contains(description, "trend/top_ips/attack_types 恒含") {
+		t.Fatalf("includes_reserved 文档必须限定今日两项并披露其他聚合恒含保留地址: %q", description)
+	}
 	example := docResponseExample(t, "GET /security/overview")
 	assertStructKeysDocumented(t, "GET /security/overview", mapKeysOf(example), securityOverviewResponse{})
 
@@ -1780,12 +1817,10 @@ func TestDeprecatedFields_omittedFromAPIResponses(t *testing.T) {
 // services.IsReadOnlyWriteRoute 豁免只读语义写路由。
 func TestAPIDocRoutes_nonAdminWriteEndpointsDocument403(t *testing.T) {
 	writeMethods := map[string]bool{http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true}
-	// 与写操作同敏感级的导出 GET（handler/guard 对非管理员或只读 Key 拒绝）。
-	sensitiveExportGets := map[string]bool{
-		"GET /config/export":            true,
-		"GET /auto-backup/:id/download": true,
-		"GET /caddy/config":             true,
-	}
+	// 与写操作同敏感级的导出/敏感读取 GET：导出名单来自 middleware 单源，
+	// 并派生 admin 组 canReadSensitiveSecrets handler（如 /caddy/config），
+	// 对非管理员或只读 Key 恒 403。
+	sensitiveExportGets := sensitiveExportGetRoutesForDocs(t, true)
 	// 非管理员合法可达的写路由：认证自助（MFA/登出/个人资料/本人密钥）。
 	// 公开与机器接口由 security 判据排除（无 JWT 角色语义）。
 	selfService := map[string]bool{

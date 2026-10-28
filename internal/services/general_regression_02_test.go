@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// 解码。Caddy 错误体是合法 JSON（{"error":"..."}），旧实现直接解码 → 错误对象
-// 被当配置返回；健康查询更会静默退化为「无上游健康数据」的空白态，把服务端
-// 故障呈现成正常空态。同文件 getRunningConfigBytes 已是正确对照（要求 200）。
+// GetConfig 必须先检查 Caddy admin 的 HTTP 状态再解码。错误体即使是合法 JSON
+// （{"error":"..."}），旧实现也会直接解码并把错误对象当配置返回；健康查询更
+// 会静默退化为「无上游健康数据」的空白态。getRunningConfigBytes 是正确对照。
 func TestCaddyService_GetConfig_rejectsNonOKAdminResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/config/" {

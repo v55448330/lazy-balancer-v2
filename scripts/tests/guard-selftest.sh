@@ -464,6 +464,50 @@ printf '// 中止口径镜像另一侧（第\n// 66 轮漏收敛本侧）——�
   >"$tmp_root/internal/services/update_round_test.go"
 assert_bad "cross-line with comment prefix" "internal/services/update_round_test.go"
 
+# 11a) 括号引导的轮次归属：轮次数字紧跟全角/ASCII 左括号或破折号，其后既不是
+#      倍数也不是收尾括号。审计动作常被折到下一行注释，同行动作词判定看不到
+#      （历史漏检形态），故这一形态独立成条。
+reset_fixture
+mkdir_in internal/handlers/batch_cert_parity.go
+cat >"$tmp_root/internal/handlers/batch_cert_parity.go" <<'EOF'
+package handlers
+
+// 批量与单规则入口必须同口径（104 轮
+// 只修了服务侧单规则路径），否则同一张证书两处结论相反。
+func batchCertParity() {}
+EOF
+assert_bad "parenthesised round attribution" "internal/handlers/batch_cert_parity.go"
+
+reset_fixture
+mkdir_in internal/services/defer_window.go
+printf '// 两侧必须用同一倍数——95 轮只把 Present 提到 3 倍，清理仍留基础预算。\n' \
+  >"$tmp_root/internal/services/defer_window.go"
+assert_bad "dash-led round attribution" "internal/services/defer_window.go"
+
+# 11b) 轮次写在本行、审计动作折到下一行注释
+reset_fixture
+mkdir_in internal/services/folded_verb.go
+printf '// 补扫两条逐条路径当时漏收口（104 轮已给三条路径加了聚合，\n// 修复只覆盖了入队分支）。\n' \
+  >"$tmp_root/internal/services/folded_verb.go"
+assert_bad "round line + folded audit verb" "internal/services/folded_verb.go"
+
+# 11c) 误报对照：循环计数的括号写法（带倍数/直接收尾）、区间写法（「第 N-NN 轮」）、
+#      「每 NN 轮」引导的循环表述都不是审计归属。
+reset_fixture
+mkdir_in internal/services/loop_counts.go
+cat >"$tmp_root/internal/services/loop_counts.go" <<'EOF'
+package services
+
+// 心跳：小时级一条（60 轮×60s）；无从节点时同样小时级。
+// When：第 3-60 轮。Then：恰发一条心跳，无漂移行。
+// 窗口：61-119 轮静默后写第二条。
+// 落行降频：连续失败时每 10 轮
+// 修复失败行仍由下一周期重试覆盖。
+func loopCounts() {}
+EOF
+assert_good "loop counters in parentheses and ranges"
+
+
 # 12) 注释头截断残骸：裸轮次收尾于全角标点
 reset_fixture
 mkdir_in cmd/notes.go

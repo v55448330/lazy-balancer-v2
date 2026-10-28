@@ -151,9 +151,13 @@ export class ApiRequestError extends Error {
   // data = 后端错误响应体（信封 { code, message, data }）。失败分支的事实披露
   // （如导入/还原的 data.warnings：规则库文件面判决、软跳过/归一化）只在这里
   // ——不回传的话调用方拿到的是被拦截器替换后的错误，除 message 外全部丢失。
-  constructor(message: string, readonly status?: number, readonly data?: unknown) {
+  readonly status?: number
+  readonly data?: unknown
+  constructor(message: string, status?: number, data?: unknown) {
     super(message)
     this.name = 'ApiRequestError'
+    this.status = status
+    this.data = data
   }
 }
 

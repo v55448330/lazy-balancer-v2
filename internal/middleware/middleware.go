@@ -14,6 +14,7 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,9 +91,20 @@ type authenticationAuditLimiter struct {
 	reclaimCount int
 }
 
-// enqueueLocked 把键登记到回收队列尾部（调用方须持有 mu）。入队时间不小于
-// 队列内已有条目时队列保持升序；非单调的 now（时钟回拨）只会让回收延后，
-// 不改变语义（回收到期判定仍按表内时间戳）。
+// reclaimNeedsOrderingLocked 检查新时间戳是否会破坏逻辑队尾升序
+// （调用方须持有 mu）。直接检查队列不变量可同时覆盖首次回拨和回拨后
+// 沿旧时间线继续写入，不依赖跨请求 lastNow 比较。
+func (limiter *authenticationAuditLimiter) reclaimNeedsOrderingLocked(at time.Time) bool {
+	if limiter.reclaimCount == 0 {
+		return false
+	}
+	tail := (limiter.reclaimHead + limiter.reclaimCount - 1) % len(limiter.reclaim)
+	return at.Before(limiter.reclaim[tail].at)
+}
+
+// enqueueLocked 把键登记到回收队列尾部（调用方须持有 mu）。调用方先用
+// reclaimNeedsOrderingLocked 检查队尾；需要时在登记后重建升序，避免新鲜
+// 队头挡住其后已经过期的回拨条目。
 //
 // 环满时覆盖队头，被覆盖条目的「回收点」随之消失：若它恰是表内该键仅存的
 // 登记（时间戳一致），该键从此进不了回收视野——表会撑到硬上限并永久丢弃新
@@ -117,6 +129,24 @@ func (limiter *authenticationAuditLimiter) enqueueLocked(key string, at time.Tim
 	tail := (limiter.reclaimHead + limiter.reclaimCount) % len(limiter.reclaim)
 	limiter.reclaim[tail] = authenticationAuditEvent{key: key, at: at}
 	limiter.reclaimCount++
+}
+
+// rebuildReclaimQueueLocked 从 events 重建升序回收队列（调用方须持有 mu）。
+// 仅在新条目时间戳小于逻辑队尾时执行；此时允许一次 O(n log n) 重建，换取
+// 正常路径继续使用有界队头回收，不让旧时间线条目失去回收视野。
+func (limiter *authenticationAuditLimiter) rebuildReclaimQueueLocked() {
+	if len(limiter.reclaim) == 0 {
+		limiter.reclaim = make([]authenticationAuditEvent, authenticationAuditQueueCapacity)
+	}
+	ordered := limiter.reclaim[:len(limiter.events)]
+	i := 0
+	for key, at := range limiter.events {
+		ordered[i] = authenticationAuditEvent{key: key, at: at}
+		i++
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].at.Before(ordered[j].at) })
+	limiter.reclaimHead = 0
+	limiter.reclaimCount = len(ordered)
 }
 
 // headLocked 读取队头条目（不出队，调用方须持有 mu）。
@@ -186,10 +216,15 @@ func (limiter *authenticationAuditLimiter) allow(key string, now time.Time) bool
 	if _, exists := limiter.events[key]; !exists && len(limiter.events) >= authenticationAuditHardCap {
 		return false
 	}
-	// 新键与刷新都登记（刷新把新时间戳登记到队尾，旧条目出队即丢弃），
-	// 保证表内每个键都有条目覆盖、且条目时间戳对得上。
+	// 新键与刷新都登记（刷新把新时间戳登记到队尾，旧条目出队即丢弃）。
+	// 若新时间戳小于逻辑队尾，登记后重建升序；events 必须先更新，重建
+	// 才能纳入本次键并正确淘汰环满覆盖的旧回收点。
+	needsOrdering := limiter.reclaimNeedsOrderingLocked(now)
 	limiter.enqueueLocked(key, now)
 	limiter.events[key] = now
+	if needsOrdering {
+		limiter.rebuildReclaimQueueLocked()
+	}
 	return true
 }
 
@@ -1393,9 +1428,12 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 			}
 			cacheKey := strconv.Itoa(keyID) + "|" + mcpIPWhitelist
 			var networks []*net.IPNet
-			if cached, ok := apiKeyWhitelistCache.Load(cacheKey); ok {
-				networks = cached.([]*net.IPNet)
-			} else {
+			cached, ok := apiKeyWhitelistCache.Load(cacheKey)
+			if ok {
+				networks, ok = cached.([]*net.IPNet)
+			}
+			if !ok {
+				// 异构缓存值视为未命中，重新解析并回写正确类型。
 				parsed := make([]*net.IPNet, 0, len(whitelist))
 				for _, cidr := range whitelist {
 					_, network, err := net.ParseCIDR(cidr)
@@ -1587,7 +1625,7 @@ func mfaStepUpGuard(database *sql.DB) gin.HandlerFunc {
 
 func hasJWTBearer(c *gin.Context) bool {
 	authHeader := c.GetHeader("Authorization")
-	return strings.HasPrefix(authHeader, "Bearer ") && !apikey.IsAPIKeyAuthorization(authHeader)
+	return bearerToken(authHeader) != "" && !apikey.IsAPIKeyAuthorization(authHeader)
 }
 
 func adminOnly() gin.HandlerFunc {
@@ -1603,6 +1641,19 @@ func adminOnly() gin.HandlerFunc {
 	}
 }
 
+// selfServiceUserTarget 是「本人用户行」target/actor 判定的单源。
+// 返回归一后的 target 供调用方区分无效 ID（400）与非本人（403）。
+// user_id 类型归一复用 handlers.ContextUserID：jwtAuth 存 float64、apiKeyAuth
+// 存 int、MCP 内部转发可能存 string 数字，两个守卫不得各写一份类型 switch。
+func selfServiceUserTarget(c *gin.Context, rawTarget string) (int, bool) {
+	target, err := strconv.Atoi(rawTarget)
+	if err != nil || target <= 0 {
+		return 0, false
+	}
+	actor := int(handlers.ContextUserID(c))
+	return target, actor > 0 && actor == target
+}
+
 // adminOrSelfParam 允许管理员操作任意用户，非管理员仅允许操作自己的用户行
 // （路径 :id == JWT user_id）。用于用户管理页「本人编辑/重置密码」自助路径；
 // 该页的编辑/重置为重置语义（不验当前密码），正常改密仍走个人资料弹框。
@@ -1613,17 +1664,13 @@ func adminOrSelfParam() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		target, err := strconv.Atoi(c.Param("id"))
-		if err != nil || target <= 0 {
+		target, self := selfServiceUserTarget(c, c.Param("id"))
+		if target <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "用户 ID 无效"})
 			c.Abort()
 			return
 		}
-		// user_id 类型归一单源（handlers.ContextUserID）：jwtAuth 存 float64、
-		// apiKeyAuth 存 int、MCP 内部转发可能存 string 数字——包内自写 switch
-		// 会让后一种形态归零，自助写一律 403（功能回归）。
-		actor := int(handlers.ContextUserID(c))
-		if actor <= 0 || actor != target {
+		if !self {
 			recordAuthenticationRejection(c, "admin_required")
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "需要管理员权限"})
 			c.Abort()

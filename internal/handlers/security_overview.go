@@ -473,23 +473,26 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		ip                  string
 		blocked, detected   int
 		recent10m, recent1h int
+		recent24h           int
 		lastTime            string
 	}
 	var topRows []topIPRow
 	nowUTC := time.Now().UTC()
 	recent10m := nowUTC.Add(-10 * time.Minute).Format(eventTimeLayout)
 	recent1h := nowUTC.Add(-time.Hour).Format(eventTimeLayout)
+	recent24h := nowUTC.Add(-24 * time.Hour).Format(eventTimeLayout)
 	ipRows, err := metricsDB.Query(`SELECT client_ip,
 		SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b,
 		SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l,
 		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) as recent_10m,
 		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) as recent_1h,
+		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) as recent_24h,
 		MAX(event_time) as last_time
-		FROM security_events WHERE event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, recent10m, recent1h, windowStartUTC)
+		FROM security_events WHERE event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, recent10m, recent1h, recent24h, windowStartUTC)
 	track(err)
 	for ipRows != nil && ipRows.Next() {
 		var row topIPRow
-		track(ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.recent10m, &row.recent1h, &row.lastTime))
+		track(ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.recent10m, &row.recent1h, &row.recent24h, &row.lastTime))
 		topRows = append(topRows, row)
 	}
 	if ipRows != nil {
@@ -539,6 +542,7 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 			Detected:        row.detected,
 			Recent10m:       row.recent10m,
 			Recent1h:        row.recent1h,
+			Recent24h:       row.recent24h,
 			LastTime:        row.lastTime,
 			AttackType:      joinDistinctFamilies(familyCountsByIP[row.ip]),
 			AttackTypeStage: joinDistinctFamilies(stageFamilyCountsByIP[row.ip]),

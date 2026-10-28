@@ -32,8 +32,8 @@ func TestClusterSnapshot_securityIPListsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(snapshot.SecurityIPLists, &lists); err != nil {
 		t.Fatalf("parse security ip lists: %v", err)
 	}
-	// 3 行 system=1 内置名单种子随表同步（v2.3.2 名单化）——按 system 过滤
-	// 断言用户行。
+	// system=1 行为威胁三源 + 自动封禁名单（爬虫名单由 Prime 另行播种，
+	// 不在本夹具内）——按 system 过滤断言用户行。
 	var userLists []map[string]any
 	for _, l := range lists {
 		if l["system"] == float64(0) || l["system"] == nil {

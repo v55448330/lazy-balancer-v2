@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -354,5 +355,105 @@ func TestIssueServiceControlTicket_demotionRaceReturnsNotMaster(t *testing.T) {
 	}
 	if errors.Is(err, ErrNodeNotFound) {
 		t.Fatal("降级竞态不得误报为节点不存在(404)")
+	}
+}
+
+// Location 只带主机（无 path）时必须继承原请求路径：反代/自定义 301 常见形态
+// `Location: https://host`，重放打到根路径会让从端返回 404/HTML，主端落进
+// JSON 解析错误并报「解析从节点响应失败」——既有可行动 3xx 指引分支被静默绕过。
+func TestDoWithSameHostTLSUpgradeRedirect_inheritsRequestPathWhenLocationOmitsPath(t *testing.T) {
+	var hits atomic.Int32
+	var replayedURI string
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if hits.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusMovedPermanently,
+					Status:     "301 Moved Permanently",
+					Header:     http.Header{"Location": []string{"https://master.example"}},
+					Body:       http.NoBody,
+					Request:    req,
+				}, nil
+			}
+			replayedURI = req.URL.RequestURI()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://master.example:8080/api/v1/cluster/report?x=1", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Cluster-Token", "cluster-secret")
+
+	resp, err := DoWithSameHostTLSUpgradeRedirect(client, req)
+	if err != nil {
+		t.Fatalf("upgrade redirect returned error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200 after same-host upgrade replay", resp.StatusCode)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("transport saw %d requests, want 2", hits.Load())
+	}
+	if replayedURI != "/api/v1/cluster/report?x=1" {
+		t.Fatalf("replayed request URI=%q, want 原请求路径（空 path 的 Location 必须继承 req.URL.Path）", replayedURI)
+	}
+}
+
+// Location 携带 userinfo 时重放不得以 URL Basic 认证外发：`target.User` 必须
+// 清零（同主机凭证不外泄，且不得让反代注入的凭据污染集群调用）。
+func TestDoWithSameHostTLSUpgradeRedirect_dropsLocationUserinfo(t *testing.T) {
+	var hits atomic.Int32
+	var replayedUser *url.Userinfo
+	var replayedAuth string
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if hits.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusMovedPermanently,
+					Status:     "301 Moved Permanently",
+					Header:     http.Header{"Location": []string{"https://attacker:secret@master.example/ticket"}},
+					Body:       http.NoBody,
+					Request:    req,
+				}, nil
+			}
+			replayedUser = req.URL.User
+			replayedAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://master.example:8080/ticket", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := DoWithSameHostTLSUpgradeRedirect(client, req)
+	if err != nil {
+		t.Fatalf("upgrade redirect returned error: %v", err)
+	}
+	defer resp.Body.Close()
+	if hits.Load() != 2 {
+		t.Fatalf("transport saw %d requests, want 2", hits.Load())
+	}
+	if replayedUser != nil {
+		t.Fatalf("replayed URL 携带 userinfo=%v, want nil", replayedUser)
+	}
+	if replayedAuth != "" {
+		t.Fatalf("replayed Authorization=%q, want 空（不得从 Location userinfo 派生 Basic 认证）", replayedAuth)
 	}
 }

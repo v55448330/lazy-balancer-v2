@@ -218,6 +218,33 @@ func RetryCertificateDeploymentNow(jobID int, ruleID string) error {
 	return service.scheduleDeploymentRetry(jobID, ruleID, 0)
 }
 
+// certIssuedByOtherCA 报告已签发证书是否**明确**来自另一个已知 CA 厂商。
+// 只对两个内置厂商（Let's Encrypt / ZeroSSL）做正向识别，其余一律返回 false：
+// 快速路径宁可持续重部署一张仍然有效的旧证书，也不因 issuer 文案差异
+// （中间证书改名、自建 CA、代理 CA）白白消耗一次签发配额。
+func certIssuedByOtherCA(certPEM, providerType string) bool {
+	if strings.TrimSpace(certPEM) == "" {
+		return false
+	}
+	leaf, err := parseCertificateLeaf(certPEM)
+	if err != nil || leaf == nil {
+		return false
+	}
+	// issuer Organization + CommonName 一起看：Let's Encrypt 的中间证书以两位
+	// 字母加编号的代号命名（不同年份换代），厂商归属只在 Organization 里
+	// （"Let's Encrypt"）；ZeroSSL 同列（"ZeroSSL"）。小写后子串匹配，避免
+	// 文案大小写/空格差异。
+	issuer := strings.ToLower(strings.Join(append(append([]string{}, leaf.Issuer.Organization...), leaf.Issuer.CommonName), " "))
+	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case ProviderLetsEncrypt:
+		return strings.Contains(issuer, "zerossl")
+	case ProviderZeroSSL:
+		return strings.Contains(issuer, "let's encrypt") || strings.Contains(issuer, "isrg")
+	default:
+		return false
+	}
+}
+
 func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() error) error {
 	var material issuedCertificate
 	var expiresAt sql.NullTime
@@ -352,7 +379,7 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 	if material.certPEM != "" {
 		fields["cert_pem"] = material.certPEM
 		fields["key_pem"] = material.keyPEM
-		fields["expires_at"] = canonicalDatetimeValue(material.notAfter)
+		fields["expires_at"] = CanonicalDatetimeValue(material.notAfter)
 		fields["ca_provider_id"] = material.providerID
 	}
 	updateErr := deploymentFailureWriteback(db.DB, jobID, from, "downloaded", fields)
@@ -468,8 +495,13 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Fast path: a previous attempt completed ACME issuance and persisted a
 	// valid certificate, but file deployment failed. Redeploy instead of
 	// re-issuing through the CA. Skipped when the job is disabled, the rule is
-	// disabled, or the rule's CA provider changed since issuance (then the old
-	// certificate is from the wrong CA and a fresh issuance is required).
+	// disabled, or the certificate was issued by a different CA vendor than the
+	// rule's current provider (then a fresh issuance is required).
+	// 判据分两段：①解析后的 provider id 相等（规则与任务两侧的 0 先归一）；
+	// ②证书 issuer 与当前 provider 类型不矛盾。②覆盖「同一 provider 行改类型
+	// （letsencrypt↔zerossl，id 不变、不触碰 cert_jobs）」——只比 id 时这种
+	// 切换不会被发现，会把旧厂商证书直接重部署；issuer 无法识别（自建 CA/
+	// 解析失败/未知类型）时按「不矛盾」处理，避免因识别不确定性白烧 CA 订单。
 	var jobStatus string
 	var jobProviderID int
 	var deploymentAttempt int
@@ -554,7 +586,8 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				if resolveErr == nil && resolvedJobProvider == 0 {
 					resolvedJobProvider, resolveErr = ResolveCAProviderID(resolvedJobProvider)
 				}
-				if resolveErr == nil && resolvedRuleProvider == resolvedJobProvider {
+				if resolveErr == nil && resolvedRuleProvider == resolvedJobProvider &&
+					!certIssuedByOtherCA(existingCert, provider.Provider) {
 					material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
 					return s.redeployDownloadedInLock(ctx, jobID, material, logger)
 				}
@@ -737,7 +770,7 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 		}
 		if err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
 			"message":                    "证书已部署，无需重新部署",
-			"expires_at":                 canonicalDatetimeValue(material.notAfter),
+			"expires_at":                 CanonicalDatetimeValue(material.notAfter),
 			"deployment_attempts":        0,
 			"deployment_available_after": nil,
 		}); err != nil {
@@ -789,7 +822,7 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 	// 不匹配状态 → 自愈路径断裂（job 保持 issued、磁盘永远错）。
 	err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
 		"message":                    "证书文件重新部署成功",
-		"expires_at":                 canonicalDatetimeValue(material.notAfter),
+		"expires_at":                 CanonicalDatetimeValue(material.notAfter),
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,
 	})
@@ -827,7 +860,7 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 	err := deploymentPersistenceWriteback(db.DB, jobID, deploymentLifecycleJobStatuses, "downloaded", map[string]any{
 		"cert_pem":                   material.certPEM,
 		"key_pem":                    material.keyPEM,
-		"expires_at":                 canonicalDatetimeValue(material.notAfter),
+		"expires_at":                 CanonicalDatetimeValue(material.notAfter),
 		"ca_provider_id":             material.providerID,
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,

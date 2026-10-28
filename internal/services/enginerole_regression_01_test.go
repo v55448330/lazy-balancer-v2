@@ -1,11 +1,11 @@
 package services
 
-// 角色翻转只经 TaskEngine().SetRole；master-only 任务在从节点不得手动调度，
-// 升主后由引擎恢复调度，无管理器或旧调度器旁路。
+// 测试目标：集群角色翻转只经 TaskEngine().SetRole；master-only 任务在从节点
+// 不得手动调度，升主后由引擎恢复调度，无管理器或旧调度器旁路。
 // 钉法：引擎在场+三管理器全 nil（newWireTestEngine 装配不含管理器）+注册
-// RoleMasterOnly 探针任务，经角色门 Trigger 判定引擎角色。
-// 夹具次序（MEMORY 教训）：newWireTestEngine 会 db.Initialize 换库，Cluster
-// Service 直接构造在换库后的 db.DB 上，不再二次 Initialize。
+// RoleMasterOnly 探针任务，经角色门 Trigger 的返回值判定引擎角色。
+// 夹具次序：newWireTestEngine 会 db.Initialize 换库，ClusterService 直接构造
+// 在换库后的 db.DB 上，不再二次 Initialize。
 
 import (
 	"context"

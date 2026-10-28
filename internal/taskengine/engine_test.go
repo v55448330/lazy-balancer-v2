@@ -26,13 +26,14 @@ func newTestEngine(t *testing.T) *Engine {
 func newTestEngineWithOptions(t *testing.T, opts Options) *Engine {
 	t.Helper()
 	// 与 services 测试同模式：临时目录初始化全套库（含 task_runs 表迁移）
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldCurrent)
 	})
 	e := NewEngine(opts)
 	t.Cleanup(e.Stop)
@@ -41,8 +42,13 @@ func newTestEngineWithOptions(t *testing.T, opts Options) *Engine {
 
 func countRuns(t *testing.T, id string) int {
 	t.Helper()
+	return countRunsByStatus(t, id, "")
+}
+
+func countRunsByStatus(t *testing.T, id, status string) int {
+	t.Helper()
 	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=?`, id).Scan(&n); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=? AND (?='' OR status=?)`, id, status, status).Scan(&n); err != nil {
 		t.Fatalf("count runs: %v", err)
 	}
 	return n
@@ -55,7 +61,14 @@ func TestEngine_SingletonTriggerRejectedWhileRunning(t *testing.T) {
 	e := newTestEngine(t)
 	release := make(chan struct{})
 	started := make(chan struct{})
-	e.Register(Descriptor{ID: "t-single", Family: "t", Name: "单飞", Kind: KindPeriodic,
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	if err := e.Register(Descriptor{ID: "t-single", Family: "t", Name: "单飞", Kind: KindPeriodic,
 		// 配套：Periodic 注册必须带 IntervalFn（本测试经
 		// Trigger 驱动，间隔值不参与断言）。
 		IntervalFn: func() time.Duration { return time.Hour },
@@ -63,9 +76,11 @@ func TestEngine_SingletonTriggerRejectedWhileRunning(t *testing.T) {
 			close(started)
 			<-release
 			return nil
-		}})
+		}}); err != nil {
+		t.Fatal(err)
+	}
 	go func() { _ = e.Trigger("t-single", "manual", "") }()
-	<-started
+	waitForEngineSignal(t, "单飞任务启动", started)
 	if err := e.Trigger("t-single", "manual", ""); err != ErrAlreadyRunning {
 		t.Fatalf("want ErrAlreadyRunning, got %v", err)
 	}
@@ -86,7 +101,7 @@ func TestEngine_CancelMarksCancelled(t *testing.T) {
 			return rc.Ctx.Err()
 		}})
 	go func() { _ = e.Trigger("t-cancel", "manual", "") }()
-	<-started
+	waitForEngineSignal(t, "可取消任务启动", started)
 	if !e.Cancel("t-cancel") {
 		t.Fatal("Cancel 应返回 true")
 	}
@@ -302,7 +317,7 @@ func TestEngine_DaemonLifecycle(t *testing.T) {
 		}})
 	e.SetRole(true)
 	e.StartLoop("t-daemon")
-	<-inLoop
+	waitForEngineSignal(t, "daemon 首次启动", inLoop)
 	if got := starts.Load(); got != 1 {
 		t.Fatalf("StartLoop 应恰调 Run 1 次, got %d", got)
 	}
@@ -334,7 +349,7 @@ func TestEngine_DaemonLifecycle(t *testing.T) {
 	}
 	// 重启：第二个生命周期
 	e.StartLoop("t-daemon")
-	<-inLoop
+	waitForEngineSignal(t, "daemon 第二次启动", inLoop)
 	if got := starts.Load(); got != 2 {
 		t.Fatalf("重启应第 2 次调用 Run, got %d", got)
 	}
@@ -416,14 +431,14 @@ func TestEngine_OneshotOnlyByTrigger(t *testing.T) {
 // RLock 嵌套因重入性侦破不了该缺陷形态，故必须跨 goroutine 编排。
 // Then 不自锁；元数据含四类型字段。
 func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
-	e := newTestEngine(t)
+	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
 	insideFn := make(chan struct{})
 	release := make(chan struct{})
 	var armed, fnLockStuck atomic.Bool
 	armed.Store(true)
 	e.Register(Descriptor{ID: "t-meta", Family: "t", Name: "元数据", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
-		EnabledFn: func() bool {
+		StatusFn: func() string {
 			if armed.CompareAndSwap(true, false) {
 				insideFn <- struct{}{} // 探针点：扫描已进入 Fn（变异形态下此刻仍持读锁）
 				<-release
@@ -434,17 +449,16 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 				done := make(chan bool, 1)
 				go func() { done <- e.IsRunning("t-meta") }()
 				select {
-				case v := <-done:
-					return v
+				case <-done:
+					return "running"
 				case <-time.After(3 * time.Second):
 					fnLockStuck.Store(true)
-					return false
+					return "stopped"
 				}
 			}
-			return e.IsRunning("t-meta")
+			return "running"
 		},
-		StatusFn: func() string { return "running" },
-		Run:      func(rc RunContext) error { return nil }})
+		Run: func(rc RunContext) error { return nil }})
 	e.StartLoop("t-meta")
 
 	var found *TaskMeta
@@ -457,7 +471,7 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 			}
 		}
 	}()
-	<-insideFn // 扫描停在探针点
+	waitForEngineSignal(t, "DescribeAll 进入 EnabledFn 探针", insideFn)
 
 	// 写者就位：持续 Register（写锁）——缺陷形态下此刻 pending 在 e.mu.Lock
 	stopWriter := make(chan struct{})
@@ -485,7 +499,7 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 		t.Fatal("DescribeAll 未在限时内完成（持锁形态异常）")
 	}
 	close(stopWriter)
-	<-writerDone
+	waitForEngineSignal(t, "元数据写者退出", writerDone)
 
 	// Then：Fn 内 RLock 未被 pending 写者卡死（读锁已在 Fn 调用前释放）
 	if fnLockStuck.Load() {
@@ -499,19 +513,33 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 	}
 }
 
-// Given 任务体捕获 RunContext.Operator。
+// Given 任务体捕获完整 RunContext。
 // When Trigger(id, "manual", "alice")。
-// Then 任务体收到 operator=alice（手动操作者身份通道）。
+// Then 任务体收到 operator/trigger 与预插 task_runs ID。
 func TestEngine_TriggerCarriesOperator(t *testing.T) {
 	e := newTestEngine(t)
-	var got string
+	var got RunContext
 	done := make(chan struct{})
-	e.Register(Descriptor{ID: "t-op", Family: "t", Name: "操作者", Kind: KindOneshot,
-		Run: func(rc RunContext) error { got = rc.Operator; close(done); return nil }})
-	_ = e.Trigger("t-op", "manual", "alice")
-	<-done
-	if got != "alice" {
-		t.Fatalf("operator 应为 alice, got %q", got)
+	if err := e.Register(Descriptor{ID: "t-op", Family: "t", Name: "操作者", Kind: KindOneshot,
+		Run: func(rc RunContext) error { got = rc; close(done); return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Trigger("t-op", "manual", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	waitForEngineSignal(t, "manual RunContext 注入", done)
+	if got.Operator != "alice" || got.Trigger != "manual" || got.RunID <= 0 {
+		t.Fatalf("RunContext=(operator=%q trigger=%q runID=%d), want alice/manual/>0", got.Operator, got.Trigger, got.RunID)
+	}
+	if latest := e.LatestRun("t-op"); latest == nil || latest.ID != got.RunID {
+		t.Fatalf("RunContext.RunID=%d 与最近运行行 %+v 不一致", got.RunID, latest)
+	}
+}
+
+func TestEngine_TriggerUnknownIDReturnsErrNotFound(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.Trigger("missing-task", "manual", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Trigger unknown ID err=%v, want ErrNotFound", err)
 	}
 }
 
@@ -641,7 +669,7 @@ func TestEngine_DaemonFailureRecordsFailedRow(t *testing.T) {
 		}})
 	e.SetRole(true)
 	e.StartLoop("t-dfail")
-	<-booted
+	waitForEngineSignal(t, "异常常驻任务启动", booted)
 	if st := e.Stats24h("t-dfail"); st.Success != 1 {
 		t.Fatalf("boot 应即记 success, got %+v", st)
 	}
@@ -682,17 +710,11 @@ func TestEngine_StartLoopConcurrentSingleDaemonStart(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	var bootRows int
-	_ = dbTestCountRuns(t, "t-race", &bootRows)
+	bootRows := countRuns(t, "t-race")
 	if bootRows != 1 {
 		t.Fatalf("并发 StartLoop 应恰 1 boot 行, got %d（startDaemon 无 CAS 双启动）", bootRows)
 	}
 	e.StopLoop("t-race")
-}
-
-func dbTestCountRuns(t *testing.T, id string, n *int) error {
-	t.Helper()
-	return db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=?`, id).Scan(n)
 }
 
 // Given daemon 运行中。
@@ -744,11 +766,11 @@ func TestEngine_CancelHookPathLandsCancelled(t *testing.T) {
 			return rc.Ctx.Err()
 		}})
 	go func() { _ = e.Trigger("t-chk", "manual", "") }()
-	<-started
+	waitForEngineSignal(t, "CancelHook 任务启动", started)
 	if !e.Cancel("t-chk") {
 		t.Fatal("Cancel 应成功")
 	}
-	<-hookFired
+	waitForEngineSignal(t, "CancelHook 执行", hookFired)
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if lr := e.LatestRun("t-chk"); lr != nil && lr.Status == "cancelled" {
@@ -770,7 +792,7 @@ func TestEngine_BootSyncTasksRunOnceWithStartupRow(t *testing.T) {
 	e.Register(Descriptor{ID: "boot-one", Family: "startup", Name: "启动", Kind: KindOneshot, RunsOn: RoleAny, BootSync: true,
 		Run: func(rc RunContext) error { ran++; close(done); return nil }})
 	e.RunBootSyncTasks()
-	<-done
+	waitForEngineSignal(t, "BootSync 执行", done)
 	if ran != 1 {
 		t.Fatalf("BootSync 应恰执行一次, got %d", ran)
 	}
@@ -800,7 +822,7 @@ func TestEngine_DaemonLifecycleHooksRealStartStop(t *testing.T) {
 		}})
 	e.SetRole(true)
 	e.StartLoop("hook-d")
-	<-started
+	waitForEngineSignal(t, "daemon 生命周期 start 钩子", started)
 	if !e.IsTaskInFlight("hook-d") {
 		t.Fatal("运行中应可查在途")
 	}
@@ -1076,11 +1098,11 @@ func TestEngine_ConcurrentStopStartLoopDoesNotStartDaemon(t *testing.T) {
 			<-rc.Ctx.Done()
 			return rc.Ctx.Err()
 		}})
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		done := make(chan struct{})
 		go func() { e.Stop(); close(done) }()
 		e.StartLoop("t-stop-race")
-		<-done
+		waitForEngineSignal(t, "并发 Stop 返回", done)
 	}
 	// Then：任何交错都不得在 Stop 返回后保留运行中的 daemon（Stop 前启动可被取消）。
 	if daemonRunning(e, "t-stop-race") {

@@ -199,6 +199,9 @@ func TestCAQueueManager_CancelJob_cancels_enqueue_admitted_during_cancel(t *test
 			<-release
 		},
 	}
+	// 预置 provider 1 的队列并置空执行体：本用例只断言准入临界区与取消的
+	// 交错，不得让 enqueueLocked 用默认执行体拉起真实 ACME 流程。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 1, Name: "cancel-race", Provider: "letsencrypt"})
 	enqueueDone := make(chan error, 1)
 	go func() {
 		enqueueDone <- manager.EnqueueForTest(1, 42, "lb_cancel_race", "example.com")
@@ -564,6 +567,9 @@ func TestCAQueueManager_Stop_waits_for_in_progress_enqueue(t *testing.T) {
 			<-release
 		},
 	}
+	// 预置 provider 1 的队列并置空执行体（本用例只断言 Stop 与入队的交错，
+	// 不得拉起真实 ACME 流程）。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 1, Name: "enqueue-stop", Provider: "letsencrypt"})
 	enqueueDone := make(chan error, 1)
 	go func() {
 		enqueueDone <- manager.EnqueueForTest(1, 42, "lb_enqueue_stop", "example.com")
@@ -1147,6 +1153,9 @@ func TestCAQueueManager_Resume_requeuesLifecycleStrandedJobs(t *testing.T) {
 		}
 	}
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+	// 预置 provider 7 的队列并置空执行体：用例只断言 Resume 的重入队集合，
+	// 不得拉起真实 ACME 流程。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 7, Name: "resume CA", Provider: "letsencrypt"})
 	manager.Resume()
 
 	// Then：两个适用任务被重入队，孤儿任务保持滞留
@@ -1197,6 +1206,9 @@ func TestCAQueueManager_requeueStrandedQueuedJobs_reenqueues_queued_only(t *test
 		}
 	}
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	// 预置 provider 7 的队列并置空执行体：用例只断言周期巡检的重入队范围，
+	// 不得拉起真实 ACME 流程。
+	stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: 7, Name: "periodic CA", Provider: "letsencrypt"})
 
 	// When
 	manager.requeueStrandedQueuedJobs()
@@ -2292,19 +2304,28 @@ func TestCAQueue_loadCAProvider_deleted_explicit_id_still_falls_back(t *testing.
 		blockedRules: map[string]map[RuleBlockToken]struct{}{},
 		reloader:     func() error { return nil },
 	}
+	// 预置回退目标 provider 的队列并置空执行体：本用例只断言回退目标与固化列，
+	// 不得让 enqueueLocked 用默认执行体拉起真实 ACME 流程。
+	fallbackQueue := stubProviderQueueWithoutIssuance(t, manager, models.CAProvider{ID: firstEnabled, Name: "fallback", Provider: "letsencrypt"})
 
 	// When
 	manager.mu.Lock()
 	enqueueErr := manager.enqueueLocked(9999, int(jobID), "lb_deleted_ca", "deleted-ca.example.test")
-	queues := len(manager.queues)
+	_, staleQueue := manager.queues[9999]
 	manager.mu.Unlock()
 
 	// Then：回退到首个启用提供商并持久化该 ID（用户裁定方案 A）
 	if enqueueErr != nil {
 		t.Fatalf("enqueue err=%v, want nil（已删除 ID 保留历史回退）", enqueueErr)
 	}
-	if queues != 1 {
-		t.Fatalf("queues=%d, want 1（按回退提供商建队列）", queues)
+	if staleQueue {
+		t.Fatal("已删除 ID 9999 被用作队列键（不得按失效 id 建队列）")
+	}
+	fallbackQueue.mu.Lock()
+	_, enqueued := fallbackQueue.active[int(jobID)]
+	fallbackQueue.mu.Unlock()
+	if !enqueued {
+		t.Fatalf("任务未入队到回退提供商 %d 的队列", firstEnabled)
 	}
 	var persistedProvider int
 	if err := database.QueryRow("SELECT COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id=?", jobID).Scan(&persistedProvider); err != nil {

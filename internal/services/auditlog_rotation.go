@@ -724,13 +724,13 @@ var beforeAuditLogSizeQuery = func() {}
 func getAuditLogSizeBytesContext(ctx context.Context) int64 {
 	defaultBytes := int64(db.DefaultAuditLogSizeMB) * 1024 * 1024
 	// 未初始化库回退治理默认值（db.DefaultAuditLogSizeMB），不得 nil deref。
+	beforeAuditLogSizeQuery()
 	database := db.DB
 	if database == nil {
 		return defaultBytes
 	}
 	return auditLogSizeValueCache.getCtx(ctx, func(queryCtx context.Context) (int64, error) {
 		var sizeMB int
-		beforeAuditLogSizeQuery()
 		if err := database.QueryRowContext(queryCtx, "SELECT COALESCE(audit_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultAuditLogSizeMB).Scan(&sizeMB); err != nil {
 			// 读失败回退默认值当轮生效，且必须留痕：此前静默回退让「轮转阈值
 			// 长期按兜底值滚动而面板配置形同虚设」零信号。状态转换口径（首报

@@ -1,10 +1,15 @@
 package services
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -62,24 +67,67 @@ func TestDeploymentCleanupStatusSetExcludesDownloaded(t *testing.T) {
 	}
 }
 
-// 部署生命周期状态集的 SQL 字面量只允许出现在派生点（jobstate.go）。
+// deploymentLifecycleStatusNames 是部署生命周期状态集（派生点见 jobstate.go）。
+var deploymentLifecycleStatusNames = map[string]bool{
+	"downloaded":      true,
+	"cleanup_dns":     true,
+	"cleanup_warning": true,
+}
+
+// deploymentLifecycleLiteralScanExempt 是「可持有集合字面量」的路径豁免（附裁定）：
+//   - internal/services/jobstate.go：派生点本体（唯一允许持有集合的地方）；
+//   - internal/db/db.go：cert_jobs.status 规范枚举真源（certJobStatuses，db 不能
+//     反向 import services，见该处注释）——它是枚举的声明点，不是部署生命周期
+//     集合的第二份副本。
+var deploymentLifecycleLiteralScanExempt = map[string]bool{
+	"internal/services/jobstate.go": true,
+	"internal/db/db.go":             true,
+}
+
+// 部署生命周期状态集的字面量只允许出现在派生点（及其上游枚举真源）。
 // 消费点重新写字面量不会报错，只会在状态机扩展时静默漏收：启动/补扫装载的
 // CAS 源态集、补扫查询与文案回写都按旧集合求值，任务失去周期通道。
+//
+// 扫描面=仓库根全量 Go 生产文件（旧实现只扫 services 根 + handlers/cert*.go，
+// 其它包新增第二份集合静默通过），且 Go 字面量按 AST 按「语句」取集合——
+// 旧实现逐行 strings.Contains，多行切片
+// （`[]string{\n"downloaded",\n"cleanup_dns",\n}`）逐行计数 0/1 逃逸。
 func TestDeploymentLifecycleStatusLiteralOnlyInDerivation(t *testing.T) {
 	// 相邻两个生命周期状态被写成 SQL 字面量（'a','b'）即视为第二份集合；
 	// 单状态比较（status='downloaded'）仍是合法用法，不在本守卫范围。
 	literalSet := regexp.MustCompile(`'(downloaded|cleanup_dns|cleanup_warning)'\s*,\s*'(downloaded|cleanup_dns|cleanup_warning)'`)
-	paths, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob services sources: %v", err)
+	root := filepath.Join("..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("扫描根必须为仓库根（含 go.mod）: %v", err)
 	}
-	handlerPaths, err := filepath.Glob(filepath.Join("..", "handlers", "cert*.go"))
+	skipDirs := map[string]bool{".git": true, "vendor": true, "node_modules": true, "web": true, ".codegraph": true}
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if skipDirs[entry.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("glob handler certificate sources: %v", err)
+		t.Fatalf("walk repository: %v", err)
 	}
-	paths = append(paths, handlerPaths...)
 	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") || filepath.Base(path) == "jobstate.go" {
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			t.Fatalf("relativize %s: %v", path, relErr)
+		}
+		rel = filepath.ToSlash(rel)
+		if deploymentLifecycleLiteralScanExempt[rel] {
 			continue
 		}
 		data, err := os.ReadFile(path)
@@ -87,29 +135,70 @@ func TestDeploymentLifecycleStatusLiteralOnlyInDerivation(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		if match := literalSet.FindString(string(data)); match != "" {
-			t.Errorf("%s 重新写死了部署生命周期状态集字面量 %s，必须复用 DeploymentLifecycleJobStatusSQL/DeploymentCleanupJobStatusSQL", path, match)
+			t.Errorf("%s 重新写死了部署生命周期状态集字面量 %s，必须复用 DeploymentLifecycleJobStatusSQL/DeploymentCleanupJobStatusSQL", rel, match)
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if countDeploymentLifecycleGoLiterals(line) < 2 {
-				continue
-			}
-			t.Errorf("%s 重新写死了部署生命周期状态集（Go 字面量）: %s，必须复用 deploymentLifecycleJobStatuses/JobLifecycle", path, strings.TrimSpace(line))
+		if violation, hit := deploymentLifecycleGoLiteralInFile(t, path); hit {
+			t.Errorf("%s 重新写死了部署生命周期状态集（Go 字面量）: %s，必须复用 deploymentLifecycleJobStatuses/JobLifecycle", rel, violation)
 		}
 	}
 }
 
-// countDeploymentLifecycleGoLiterals 统计一行里作为 Go 字符串字面量出现的部署
-// 生命周期状态个数：`[]string{"downloaded", "cleanup_dns"}` 与
-// `status == "downloaded" || status == "cleanup_dns"` 都是第二份集合的形态。
-// SQL 片段用单引号包裹，不计入；单状态比较（1 个）是合法用法。
-func countDeploymentLifecycleGoLiterals(line string) int {
-	count := 0
-	for _, status := range []string{"downloaded", "cleanup_dns", "cleanup_warning"} {
-		if strings.Contains(line, `"`+status+`"`) {
-			count++
-		}
+// deploymentLifecycleGoLiteralInFile 用 AST 在单个文件的每条语句/包级声明里
+// 收集部署生命周期字符串字面量：同一语句命中 ≥2 个不同状态即视为第二份集合
+// （多行切片、跨行字符串拼接均有效；注释不参与）。返回首处违规描述。
+func deploymentLifecycleGoLiteralInFile(t *testing.T, path string) (string, bool) {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
 	}
-	return count
+	reported := map[string]bool{}
+	var violation string
+	found := false
+	check := func(node ast.Node) {
+		if found {
+			return
+		}
+		statuses := map[string]bool{}
+		var positions []string
+		ast.Inspect(node, func(inner ast.Node) bool {
+			literal, ok := inner.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil || !deploymentLifecycleStatusNames[value] {
+				return true
+			}
+			statuses[value] = true
+			positions = append(positions, fileSet.Position(literal.Pos()).String())
+			return true
+		})
+		if len(statuses) < 2 {
+			return
+		}
+		sort.Strings(positions)
+		key := strings.Join(positions, "|")
+		if reported[key] {
+			return
+		}
+		reported[key] = true
+		found = true
+		violation = strings.Join(positions, ", ")
+	}
+	// 只检查「直接持有字面量」的叶子节点：把 BlockStmt/IfStmt/ForStmt 之类
+	// 含子语句的容器纳入会把「同一 if 内两条不同阶段的 log("cleanup_dns")/
+	// log("downloaded")」误判成集合副本（internal/acme/issuer.go 即此形态）。
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		switch node.(type) {
+		case *ast.AssignStmt, *ast.DeclStmt, *ast.ValueSpec, *ast.ReturnStmt,
+			*ast.ExprStmt, *ast.GenDecl, *ast.CompositeLit, *ast.BinaryExpr, *ast.CaseClause:
+			check(node)
+		}
+		return true
+	})
+	return violation, found
 }
 
 // 部署链回写源态集 = 部署生命周期 + downloading（唯一「证书字节已到手、

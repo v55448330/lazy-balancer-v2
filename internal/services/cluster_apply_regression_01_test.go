@@ -3,8 +3,12 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -214,5 +218,117 @@ func TestReplaceSnapshotTx_SecurityDisabledKeepsLocalBindings(t *testing.T) {
 	}
 	if localBindings != 1 {
 		t.Fatalf("security disabled must keep local bindings (got %d rows)", localBindings)
+	}
+}
+
+// 规则轴不同步 + 安全防护同步生效时，保留的本地绑定所命中的策略对象仍会被
+// 主端同 id 载荷整表镜像替换——保护语义静默改变（本地 blocking → 主端
+// custom_only 等），而既有「悬挂 id」warn 只数「策略不存在」，id 仍在故零信号。
+// 行为不变（策略仍按主端镜像，见同文件 RulesDisabledKeepsLocalBindings），
+// 但 apply 当期必须留痕：关闭规则同步正是为了保住本地防护，保护语义被放宽
+// 却无任何审计/日志等于 fail-open 且不可解。
+//
+// 三形状：①主端同 id 策略内容不同 → 告警含条数；②内容一致 → 不告警（防噪音：
+// 该形态下本地策略未被真正改变）；③规则轴同步开启 → 不告警（绑定与策略同源
+// 镜像，覆盖是预期语义）。
+func TestSyncService_applySnapshot_RulesDisabledWarnsOnPolicyContentOverride(t *testing.T) {
+	cases := []struct {
+		name      string
+		rulesSync bool
+		mutate    func(rows []map[string]interface{})
+		wantWarn  bool
+		wantMode  string
+	}{
+		{
+			name:      "策略内容被主端覆盖时告警",
+			rulesSync: false,
+			mutate:    func(rows []map[string]interface{}) { rows[0]["mode"] = "custom_only" },
+			wantWarn:  true,
+			wantMode:  "custom_only",
+		},
+		{
+			name:      "策略内容一致时不告警",
+			rulesSync: false,
+			mutate:    func(rows []map[string]interface{}) {},
+			wantWarn:  false,
+			wantMode:  "blocking",
+		},
+		{
+			name:      "规则轴同步开启时不告警",
+			rulesSync: true,
+			mutate:    func(rows []map[string]interface{}) { rows[0]["mode"] = "custom_only" },
+			wantWarn:  false,
+			wantMode:  "custom_only",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			service, database := newClusterTestService(t)
+			if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+				t.Fatalf("set slave mode: %v", err)
+			}
+			// 本地：规则 + 本地策略（blocking）+ 绑定——关闭规则同步要保护的正是这套。
+			if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_local_waf','local','http','local.test',80,1);
+				INSERT INTO security_policies (id,name,mode,enabled) VALUES (5,'shared','blocking',1);
+				INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_local_waf',5)`); err != nil {
+				t.Fatalf("seed local rule+policy+binding: %v", err)
+			}
+			caddyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(caddyServer.Close)
+			syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+			base, err := service.clusterSnapshotBypassingCache(ctx)
+			if err != nil {
+				t.Fatalf("build canonical snapshot: %v", err)
+			}
+			var rows []map[string]interface{}
+			if err := json.Unmarshal(base.SecurityPolicies, &rows); err != nil {
+				t.Fatalf("decode local policies: %v", err)
+			}
+			if len(rows) == 0 {
+				t.Fatal("本地策略载荷为空，夹具失效")
+			}
+			tc.mutate(rows)
+			payload, err := json.Marshal(rows)
+			if err != nil {
+				t.Fatalf("encode policies: %v", err)
+			}
+			snapshot := base
+			snapshot.Version = base.Version + 1
+			snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{Users: true, Rules: tc.rulesSync, Security: true}
+			snapshot.SecurityPolicies = payload
+
+			buf := captureLogf(t)
+			if err := syncService.applySnapshot(ctx, snapshot); err != nil {
+				t.Fatalf("applySnapshot: %v", err)
+			}
+
+			logged := buf.String()
+			warned := strings.Contains(logged, "已被本轮主端镜像覆盖")
+			if tc.wantWarn != warned {
+				t.Fatalf("策略覆盖告警=%v, want %v\nlog:\n%s", warned, tc.wantWarn, logged)
+			}
+			if tc.wantWarn && !strings.Contains(logged, "1 条") {
+				t.Fatalf("告警必须给出被覆盖的策略条数（1 条）\nlog:\n%s", logged)
+			}
+			// 行为维持现状：策略行按主端镜像替换，本地绑定保留（106-P2 语义）。
+			var mode string
+			if err := database.QueryRow("SELECT mode FROM security_policies WHERE id=5").Scan(&mode); err != nil {
+				t.Fatalf("read policy mode: %v", err)
+			}
+			wantMode := tc.wantMode
+			if mode != wantMode {
+				t.Fatalf("policy id=5 mode=%q, want %q（策略表仍按主端镜像替换）", mode, wantMode)
+			}
+			var bindings int
+			if err := database.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_local_waf' AND policy_id=5").Scan(&bindings); err != nil {
+				t.Fatalf("read bindings: %v", err)
+			}
+			if bindings != 1 {
+				t.Fatalf("rules disabled 必须保留本地绑定（got %d）", bindings)
+			}
+		})
 	}
 }

@@ -354,6 +354,21 @@ func TestImportUniqueKeyPrecheck_booleanSharesNumericDomainWithoutFalsePositive(
 	}
 }
 
+func TestImportUniqueKeyPrecheck_canonicalizesCertJobDomains(t *testing.T) {
+	newBackupTestHandlers(t)
+	job := func(id int, domain string) map[string]any {
+		return map[string]any{"id": id, "rule_id": "lb_acme", "domain": domain, "status": "pending"}
+	}
+	duplicates := map[string][]map[string]any{"cert_jobs": {job(1, "A.com"), job(2, "a.com")}}
+	if err := validateBackupUniqueKeys(duplicates); err == nil || !strings.Contains(err.Error(), "rule_id+domain") {
+		t.Fatalf("规范化后相同域名的 cert_jobs 必须在预检 400 点名唯一键，err=%v", err)
+	}
+	distinct := map[string][]map[string]any{"cert_jobs": {job(1, "a.com"), job(2, "b.com")}}
+	if err := validateBackupUniqueKeys(distinct); err != nil {
+		t.Fatalf("规范化后仍不同的域名不得误判重复: %v", err)
+	}
+}
+
 // global_config 写者在导入窗口内 409 fast-fail（不再排队至导入结束后落库）。
 func TestGlobalConfigWritersRejectWriteDuringImport(t *testing.T) {
 	beginImportWindowForTest(t)

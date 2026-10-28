@@ -26,9 +26,12 @@
           <!-- 单位后缀归一全局 form-tip-inline（原自管.interval-unit
                与全局类仅色差/字号差）；行内 gap 已提供间距，左侧外边距置零 -->
           <span class="form-tip-inline" style="margin-left: 0">秒</span>
-          <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || syncInterval === status?.sync_interval" @click="saveSyncInterval">保存</el-button>
+          <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || !syncIntervalValid || syncInterval === status?.sync_interval" @click="saveSyncInterval">保存</el-button>
         </div>
-        <div class="form-tip-line">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–86400 秒）' }}</div>
+        <div class="form-tip-line">
+          <span v-if="!syncIntervalValid">请输入 10–86400 之间的同步间隔（清空后无法保存）</span>
+          <span v-else>{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–86400 秒）' }}</span>
+        </div>
       </el-form-item>
 
     </el-form>
@@ -109,7 +112,7 @@ const dialogFormRef = ref<FormInstance>()
 const selectedMode = ref<ClusterNodeMode>('master')
 const registrationOpen = ref(false)
 let registrationOriginMode: ClusterNodeMode | null = null
-const syncInterval = ref(60)
+const syncInterval = ref<number | null | undefined>(60)
 const form = reactive<RegistrationForm>({ master_url: '', register_token: '', node_name: '' })
 
 // 与节点访问地址共用 utils/clusterUrl——原实现只校验 scheme，带凭证/
@@ -134,6 +137,13 @@ const isSlave = computed(() => props.status?.node_mode === 'slave')
 // syncInterval 初值 60 ≠ status?.sync_interval(undefined) 恒真，保存按钮可点
 // 会以前端默认值覆盖真实配置（与 BasicSettings 的 configLoaded 门同口径）。
 const intervalDisabled = computed(() => props.readOnly || props.intervalSaving || isSlave.value || !props.status)
+
+// el-input-number 清空后把 v-model 回写成 null/undefined：空值不是「未提供」的
+// 有效输入——后端把缺失的 sync_interval 当成保持现值并回 200，界面会提示
+// 「同步间隔已更新」而实际未改。保存按钮与提交门一并按此判据拒绝。
+const syncIntervalValid = computed(
+  () => typeof syncInterval.value === 'number' && Number.isFinite(syncInterval.value),
+)
 
 watch(
   () => props.status,
@@ -201,7 +211,9 @@ const closeRegistration = (): void => {
 
 const saveSyncInterval = (): void => {
   if (props.readOnly || !props.status) return
-  emit('update-interval', syncInterval.value)
+  const value = syncInterval.value
+  if (!syncIntervalValid.value || typeof value !== 'number') return
+  emit('update-interval', value)
 }
 
 const submitRegistration = async (): Promise<void> => {

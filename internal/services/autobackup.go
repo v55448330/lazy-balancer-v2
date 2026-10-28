@@ -213,6 +213,10 @@ type autoBackupSettingsRow struct {
 }
 
 func loadAutoBackupSettings() (autoBackupSettingsRow, error) {
+	return loadAutoBackupSettingsContext(context.Background())
+}
+
+func loadAutoBackupSettingsContext(ctx context.Context) (autoBackupSettingsRow, error) {
 	var row autoBackupSettingsRow
 	var lastRun sql.NullString
 	// nil 库守卫（生产不可达）——EnabledFn/NextSlotFn 消费方
@@ -220,7 +224,7 @@ func loadAutoBackupSettings() (autoBackupSettingsRow, error) {
 	if db.DB == nil {
 		return row, sql.ErrConnDone
 	}
-	err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
+	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
 		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), auto_backup_last_run
 		FROM global_config WHERE id=1`).
 		Scan(&row.enabled, &row.freq, &row.hhmm, &row.day, &lastRun)
@@ -250,11 +254,15 @@ func loadAutoBackupSettings() (autoBackupSettingsRow, error) {
 // nextAutoBackupSlot 计算自动备份的下一执行槽（复用 autoBackupDueSlot
 // 逐槽推进语义；禁用或参数非法返回 false）。
 func nextAutoBackupSlot(now time.Time) (time.Time, bool) {
+	return nextAutoBackupSlotContext(context.Background(), now)
+}
+
+func nextAutoBackupSlotContext(ctx context.Context, now time.Time) (time.Time, bool) {
 	// nil 库守卫与 schedule.go 各族同口径（无库脚手架形态静默零槽，不留痕）。
 	if db.DB == nil {
 		return time.Time{}, false
 	}
-	row, err := loadAutoBackupSettings()
+	row, err := loadAutoBackupSettingsContext(ctx)
 	// 读失败按零槽返回但必须留痕（此前静默——库故障窗口
 	// 自动备份「静默停摆」，任务监控全绿）。成功路径补恢复 info。
 	if err != nil {
@@ -303,8 +311,8 @@ func nextAutoBackupSlot(now time.Time) (time.Time, bool) {
 
 // NextAutoBackupSlot 返回调度器自身使用的下一执行槽（含 last_run 漏跑补跑
 // 判定）。设置页只读展示复用同一入口，不再用未保存表单复制一套推算逻辑。
-func NextAutoBackupSlot(now time.Time) (time.Time, bool) {
-	return nextAutoBackupSlot(now)
+func NextAutoBackupSlot(ctx context.Context, now time.Time) (time.Time, bool) {
+	return nextAutoBackupSlotContext(ctx, now)
 }
 
 // runAutoBackupScheduled 定时任务执行体（v2.0 Scheduled 标准——引擎在排程

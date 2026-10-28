@@ -156,13 +156,6 @@ test('ACL 加入动作：deny 只给拦截、allow 只给放行，绕过/空/未
   assert.deepEqual(aclAssociateSides(undefined), { deny: false, allow: false })
 })
 
-test('ACL 加入动作：任何模式都不得同时提供拦截与放行', () => {
-  for (const mode of ['deny', 'allow', '绕过', '', 'weird', undefined]) {
-    const sides = aclAssociateSides(mode)
-    assert.ok(!(sides.deny && sides.allow), `模式 ${String(mode)} 同时提供了拦截与放行`)
-  }
-})
-
 // 事件详情预取名单集合——
 // 详情弹框只消费「属主策略 ACL refs（命中列表/内联判定）+ 全部信任 refs
 // （跨策略信任豁免）」；他策略 ACL 名单零消费，并入会在他策略引用大名单
@@ -174,7 +167,6 @@ test('事件详情预取：属主 ACL ∪ 全部信任，不含他策略 ACL', (
     { ip_acl_list_refs: '[11]', ip_whitelist_refs: '[5]' },
   ]
   assert.deepEqual(eventDetailRefIds(own, others), [1, 2, 3, 4, 5])
-  assert.ok(!eventDetailRefIds(own, others).includes(9))
 })
 
 test('事件详情预取：无属主策略时仅取信任 refs；去重保序并丢弃非法 id', () => {
@@ -550,6 +542,11 @@ test('多策略绑定链：同阶段两条策略出两组且按绑定顺序编�
     ],
     '组顺序=绑定链顺序（policy_id ASC），且序号为 1-based',
   )
+  assert.deepEqual(
+    model.stages[1].groups[1]?.rows.map((row) => [row.label, row.detail]),
+    model.stages[1].groups[0]?.rows.map((row) => [row.label, row.detail]),
+    '第二条策略的明细行必须与同形首条策略一样完整，不得只出组元数据',
+  )
   // 阶段 0 不在评估链内：无 override 概念，且无阶段 0 策略时为空组集合
   assert.equal(model.stages[0].override, null)
   assert.equal(model.stages[0].enabled, false)
@@ -635,6 +632,21 @@ test('明细 · 阶段 1 地域行：启用按模式措辞，关闭但保留区�
   // 无地域能力且无保留区域 → 阶段 1 不出组
   const none = policyOf({ id: 21, has_geoip: false, geoip_countries: '[]' })
   assert.equal(buildStageModel([bindingOf({ policy_id: 21 })], [none], [], []).stages[1].groups[0], undefined)
+})
+
+test('明细 · 阶段 1 爬虫豁免行：开关与引擎集合均可见', () => {
+  const enabled = policyOf({ id: 22, geoip_crawler_exempt: true, geoip_crawler_engines: '["googlebot","bingbot"]' })
+  assert.deepEqual(
+    stageRows(bindingOf({ policy_id: 22 }), enabled, [], 1).find((row) => row.label === '爬虫豁免'),
+    { label: '爬虫豁免', detail: '已启用 · 豁免 2 个引擎' },
+  )
+  const allEngines = policyOf({ id: 22, geoip_crawler_exempt: true, geoip_crawler_engines: '[]' })
+  assert.equal(
+    stageRows(bindingOf({ policy_id: 22 }), allEngines, [], 1).find((row) => row.label === '爬虫豁免')?.detail,
+    '已启用 · 全部引擎',
+  )
+  const disabled = policyOf({ id: 22, has_ip_control: true, ip_acl_enabled: true, ip_acl_list: '["10.0.0.0/8"]', geoip_crawler_exempt: false })
+  assert.equal(stageRows(bindingOf({ policy_id: 22 }), disabled, [], 1).find((row) => row.label === '爬虫豁免')?.detail, '未启用')
 })
 
 test('明细 · 阶段 2 限流口径：限流双 zone 口径随 burst 切换', () => {

@@ -805,7 +805,7 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, runtimeErr, s
 	// 跳过）——此前 apply 失败只写 HTTP 响应，操作审计完全缺席。与配置域
 	// finishTxApply（拒绝/未校验分支）及安全域同口径：失败必须留痕。
 	// 审计词条用字面量（词汇表门禁禁止动态 action；动词集合固定为五值）。
-	failureDetail := services.FormatAuditDetail("Caddy 配置应用失败", allErr.Error(), services.AuditResultPart("failure"))
+	failureDetail := caddyFailureAuditDetail("Caddy 配置应用失败", allErr)
 	switch verb {
 	case "创建":
 		recordAudit(c, "创建失败", "负载规则", failureDetail)
@@ -830,7 +830,7 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, runtimeErr, s
 // 快照失败发生在事务开启前，DB 零变更；失败审计仍必须留痕（与配置域
 // 「Caddy 不可达」同口径）。verb 取固定五值字面量（词汇表门禁禁动态 action）。
 func (h *Handlers) respondRuleSnapshotError(c *gin.Context, verb string, err error) {
-	detail := services.FormatAuditDetail("备份当前运行配置失败", err.Error(), services.AuditResultPart("failure"))
+	detail := caddyFailureAuditDetail("备份当前运行配置失败", err)
 	switch verb {
 	case "创建":
 		recordAudit(c, "创建失败", "负载规则", detail)

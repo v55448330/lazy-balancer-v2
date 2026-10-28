@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -683,10 +682,7 @@ func TestUpdateConfigDrift_releasesLockBeforeAuditIO(t *testing.T) {
 		t.Fatalf("acquire write lock: %v", err)
 	}
 
-	logs := &syncLogBuffer{}
-	oldWriter := log.Writer()
-	log.SetOutput(logs)
-	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	logs := captureStandardLog(t)
 
 	done := make(chan struct{})
 	go func() {
@@ -712,7 +708,7 @@ func TestUpdateConfigDrift_releasesLockBeforeAuditIO(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond) // 让写侧推进到被阻塞的 INSERT
+	waitForStableCond(t, time.Second, 5, func() bool { return strings.Contains(logs.String(), "运行配置与规则数据不一致") })
 
 	probe := make(chan ConfigDriftStatus, 1)
 	go func() { probe <- CurrentConfigDrift() }()
@@ -786,10 +782,7 @@ func TestConfigWatchdog_roleReadFailureLogsOnceAndRecovers(t *testing.T) {
 	oldURL := watchdogAdminURLValue
 	t.Cleanup(func() { watchdogAdminURLValue = oldURL })
 	watchdogAdminURLValue = fakeCaddyWithRoutes(t, emptyCaddyConfig).URL
-	originalWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureStandardLog(t)
 
 	// When：角色读取连续两轮失败
 	originalDB, originalCurrent := db.DB, db.GetDB()

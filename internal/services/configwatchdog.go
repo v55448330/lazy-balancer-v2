@@ -189,7 +189,11 @@ func WatchdogCheckOnce(ctx context.Context) (runErr error) {
 		if r := recover(); r != nil {
 			Logf("error", "配置一致性看门狗：检查 panic: %v", r)
 			TaskLogfWarn("config-watchdog", "check", "检查异常（panic 已拦，明细见运行日志）")
-			// panic 同样意味着本轮没有完成判定：按失败上报。
+			// panic 轮没有任何判定证据，必须像其他未判定出口一样打断
+			// 「连续两轮不一致」窗口，避免 panic 前后的两轮被拼成连续证据。
+			configDriftMu.Lock()
+			recordUndeterminedRoundLocked()
+			configDriftMu.Unlock()
 			runErr = fmt.Errorf("配置一致性检查 panic: %v", r)
 		}
 	}()

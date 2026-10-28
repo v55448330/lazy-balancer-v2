@@ -47,13 +47,10 @@ func TestVerifySnapshotConsistency_allows_zero_upstream_rule_with_warning(t *tes
 
 	// When
 	buf := captureLogf(t)
-	err := verifySnapshotConsistency(snapshot)
+	verifySnapshotConsistency(snapshot)
 
-	// Then：不再拒绝快照，但仍必须留下可定位告警（用例名承诺的 warning）；
-	// 只断言 err==nil 时告警被删也全绿。
-	if err != nil {
-		t.Fatalf("zero-upstream snapshot rejected: %v", err)
-	}
+	// Then：不再拒绝快照（函数本身只留痕、无失败通道），但仍必须留下可定位
+	// 告警（用例名承诺的 warning）；只断言「没有错误」时告警被删也全绿。
 	logged := buf.String()
 	if !strings.Contains(logged, "没有上游") || !strings.Contains(logged, "lb_drift") {
 		t.Fatalf("logs=%q, want 零上游规则 lb_drift 的告警", logged)

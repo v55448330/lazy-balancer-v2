@@ -3,8 +3,6 @@ package services
 import (
 	"fmt"
 	"testing"
-
-	"lazy-balancer-v2/internal/db"
 )
 
 // 任务监控状态列词表=引擎执行语义三态（2026-10-22 用户裁定，取代旧「排队中/
@@ -12,14 +10,7 @@ import (
 // 绝不进入任务状态列——活动工作项=运行中、终态成功=空闲、终态失败=失败、退役行=空闲
 // （「已禁用」由业务文本承载）。
 func TestCollectCertJobRows_statusColumnThreeStates(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	setupIsolatedDB(t)
 
 	// Given 覆盖 cert_jobs 状态枚举的代表形态（活动各阶段/停车/终态/退役）。
 	cases := []struct{ status, want string }{

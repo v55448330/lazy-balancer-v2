@@ -153,6 +153,22 @@ const (
 	// COALESCE 参数三处同源。用户未设置（NULL/空串）时读侧语义是「全部」，
 	// 该默认只覆盖「带外 NULL 行」的下发形态。
 	DefaultAutoBackupSections = `["users","rules","security","cluster"]`
+	// 自动备份五列治理默认：fresh DDL DEFAULT、newColumns 补列、调度/设置
+	// 读侧 COALESCE 与备份导入回退共用。auto_backup_keep 的 handlers 侧
+	// 1-30 边界与读失败语义另属独立契约，不并入本组。
+	DefaultAutoBackupEnabled   = 0
+	DefaultAutoBackupFrequency = "daily"
+	DefaultAutoBackupTime      = "03:00"
+	DefaultAutoBackupDay       = 1
+	DefaultAutoBackupKeep      = 7
+	// 自动封禁六列治理默认：DDL、启动回填、services 读侧 COALESCE 与
+	// 无库默认结构体共用。枚举/边界仍由 services 校验持有，db 不反向依赖。
+	DefaultAutobanEnabled       = 0
+	DefaultAutobanThreshold     = 100
+	DefaultAutobanWindowMinutes = 5
+	DefaultAutobanDuration      = "1h"
+	DefaultAutobanScope         = "all"
+	DefaultAutobanDryRun        = 1
 )
 
 // certJobStatuses 是 cert_jobs.status 的规范枚举。
@@ -628,11 +644,11 @@ func createTables() error {
 	-- 自动备份设置(v2.3.x):调度器仅主节点运行;六设置列随 users 节同步到
 	-- 从节点（提升为主节点后直接生效,从端本地只读态不消费);
 	-- last_run 为节点本地运行态——不同步、不入 cluster_version 触发器 OF 列表。
-		auto_backup_enabled INTEGER DEFAULT 0,
-		auto_backup_frequency TEXT DEFAULT 'daily',
-		auto_backup_time TEXT DEFAULT '03:00',
-		auto_backup_day INTEGER DEFAULT 1,
-		auto_backup_keep INTEGER DEFAULT 7,
+		auto_backup_enabled INTEGER DEFAULT ` + fmt.Sprint(DefaultAutoBackupEnabled) + `,
+		auto_backup_frequency TEXT DEFAULT '` + DefaultAutoBackupFrequency + `',
+		auto_backup_time TEXT DEFAULT '` + DefaultAutoBackupTime + `',
+		auto_backup_day INTEGER DEFAULT ` + fmt.Sprint(DefaultAutoBackupDay) + `,
+		auto_backup_keep INTEGER DEFAULT ` + fmt.Sprint(DefaultAutoBackupKeep) + `,
 		auto_backup_sections TEXT DEFAULT '` + DefaultAutoBackupSections + `',
 		auto_backup_sections_version INTEGER NOT NULL DEFAULT 0,
 		auto_backup_last_run DATETIME,
@@ -1022,8 +1038,16 @@ var builtinBlockPageIDs = []int{9001, 9002}
 
 // builtinBlockPageCount 返回内置备选拦截页在位行数（只读）。
 func builtinBlockPageCount() (int, error) {
+	if len(builtinBlockPageIDs) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(builtinBlockPageIDs)), ",")
+	args := make([]any, len(builtinBlockPageIDs))
+	for i, id := range builtinBlockPageIDs {
+		args[i] = id
+	}
 	var present int
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id IN (9001,9002)`).Scan(&present); err != nil {
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id IN (`+placeholders+`)`, args...).Scan(&present); err != nil {
 		return 0, fmt.Errorf("failed to inspect builtin block pages: %w", err)
 	}
 	return present, nil
@@ -1294,11 +1318,11 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.ip_acl_list_refs":  "TEXT DEFAULT '[]'",
 	"security_policies.ip_whitelist_refs": "TEXT DEFAULT '[]'",
 	// 自动备份(v2.3.x):设置五列 + 节点本地运行态 last_run
-	"global_config.auto_backup_enabled":          "INTEGER DEFAULT 0",
-	"global_config.auto_backup_frequency":        "TEXT DEFAULT 'daily'",
-	"global_config.auto_backup_time":             "TEXT DEFAULT '03:00'",
-	"global_config.auto_backup_day":              "INTEGER DEFAULT 1",
-	"global_config.auto_backup_keep":             "INTEGER DEFAULT 7",
+	"global_config.auto_backup_enabled":          "INTEGER DEFAULT " + fmt.Sprint(DefaultAutoBackupEnabled),
+	"global_config.auto_backup_frequency":        "TEXT DEFAULT '" + DefaultAutoBackupFrequency + "'",
+	"global_config.auto_backup_time":             "TEXT DEFAULT '" + DefaultAutoBackupTime + "'",
+	"global_config.auto_backup_day":              "INTEGER DEFAULT " + fmt.Sprint(DefaultAutoBackupDay),
+	"global_config.auto_backup_keep":             "INTEGER DEFAULT " + fmt.Sprint(DefaultAutoBackupKeep),
 	"global_config.auto_backup_sections":         "TEXT DEFAULT '" + DefaultAutoBackupSections + "'",
 	"global_config.auto_backup_sections_version": "INTEGER NOT NULL DEFAULT 0",
 	"global_config.auto_backup_last_run":         "DATETIME",
@@ -1310,12 +1334,12 @@ var newColumnsRegistry = map[string]string{
 	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（'blocked',
 	// 'logged','all'）/观察模式（1=默认 dry-run，仅记录建议不落名单）。
 	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/'all'/观察），无 NULL 分支。
-	"global_config.autoban_enabled":        "INTEGER NOT NULL DEFAULT 0",
-	"global_config.autoban_threshold":      "INTEGER NOT NULL DEFAULT 100",
-	"global_config.autoban_window_minutes": "INTEGER NOT NULL DEFAULT 5",
-	"global_config.autoban_duration":       "TEXT NOT NULL DEFAULT '1h'",
-	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT 'all'",
-	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT 1",
+	"global_config.autoban_enabled":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
+	"global_config.autoban_threshold":      "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
+	"global_config.autoban_window_minutes": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
+	"global_config.autoban_duration":       "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
+	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
+	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
 	"nodes.server_map_lat":                 "REAL NOT NULL DEFAULT 0",
 	"nodes.server_map_lon":                 "REAL NOT NULL DEFAULT 0",
 }
@@ -1455,13 +1479,16 @@ func runMigrations() error {
 		return err
 	}
 	if builtinPages != len(builtinBlockPageIDs) {
+		if len(builtinBlockPageIDs) != 2 {
+			return fmt.Errorf("builtin block page seed parity: %d IDs for 2 seed rows", len(builtinBlockPageIDs))
+		}
 		if _, err := DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at)
-		VALUES (9001, '限流拦截页面', '系统内置 429 限流拦截页面（备选，手动选用后生效）',
+		VALUES (?, '限流拦截页面', '系统内置 429 限流拦截页面（备选，手动选用后生效）',
 			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Too Many Requests</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:22px;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:"";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0 0 4px 4px;background:linear-gradient(90deg,transparent,#fbbf24 18%,#f59e0b 50%,#fbbf24 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:24px;background:linear-gradient(145deg,#fffbeb,#fef3c7);border:1px solid #fde68a;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:32px;border:1px dashed #fcd34d}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:999px;padding:5px 14px;margin-bottom:16px}.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:#f59e0b}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class="blob blob-a"></div><div class="blob blob-b"></div><div class="card"><div class="badge"><div class="badge-halo"></div><div class="badge-ring"></div><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4.5-4.5"/><circle cx="12" cy="15" r="1.4" fill="#d97706" stroke="none"/></svg></div><div class="chip">429 Too Many Requests</div><h1>Too Many Requests</h1><p>You have sent too many requests in a short time.</p><p>Please wait a moment and try again.</p><div class="divider">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
 			FALSE, TRUE, datetime('now'), datetime('now')),
-		(9002, '系统维护页面', '系统内置维护页面（备选，手动选用后生效）',
+		(?, '系统维护页面', '系统内置维护页面（备选，手动选用后生效）',
 			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Under Maintenance</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:22px;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:"";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0 0 4px 4px;background:linear-gradient(90deg,transparent,#60a5fa 18%,#3b82f6 50%,#60a5fa 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:24px;background:linear-gradient(145deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:32px;border:1px dashed #93c5fd}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:5px 14px;margin-bottom:16px}.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:#3b82f6}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class="blob blob-a"></div><div class="blob blob-b"></div><div class="card"><div class="badge"><div class="badge-halo"></div><div class="badge-ring"></div><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.2 4.2 0 0 0-5.8 5.8L4.6 16.4a1.5 1.5 0 0 0 0 2.1l.9.9a1.5 1.5 0 0 0 2.1 0l4.3-4.3a4.2 4.2 0 0 0 5.8-5.8l-2.6 2.6-2.1-2.1 2.6-2.6z"/></svg></div><div class="chip">System Maintenance</div><h1>Under Maintenance</h1><p>The service is temporarily unavailable while we perform maintenance.</p><p>Please check back soon.</p><div class="divider">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
-			FALSE, TRUE, datetime('now'), datetime('now'));`); err != nil {
+			FALSE, TRUE, datetime('now'), datetime('now'));`, builtinBlockPageIDs[0], builtinBlockPageIDs[1]); err != nil {
 			return fmt.Errorf("failed to seed builtin block pages: %w", err)
 		}
 	}
@@ -1553,12 +1580,12 @@ func runMigrations() error {
 		// 边界与枚举单源=services.ValidateAutobanConfig/ValidAutobanDuration/
 		// ValidAutobanScope（db 包不可反向依赖，SQL 字面量与迁移 DDL DEFAULT
 		// 同款双锚，db_autoban_migration_test/db_autoban_backfill_test 钉测对齐）。
-		updateWhere("global_config", "autoban_enabled=0", "autoban_enabled IS NULL OR autoban_enabled NOT IN (0,1)"),
-		updateWhere("global_config", "autoban_threshold=100", "autoban_threshold IS NULL OR autoban_threshold<1 OR autoban_threshold>10000"),
-		updateWhere("global_config", "autoban_window_minutes=5", "autoban_window_minutes IS NULL OR autoban_window_minutes<1 OR autoban_window_minutes>60"),
-		updateWhere("global_config", "autoban_duration='1h'", "autoban_duration IS NULL OR autoban_duration NOT IN ('10m','30m','1h','6h','12h','24h','permanent')"),
-		updateWhere("global_config", "autoban_scope='all'", "autoban_scope IS NULL OR autoban_scope NOT IN ('blocked','logged','all')"),
-		updateWhere("global_config", "autoban_dry_run=1", "autoban_dry_run IS NULL OR autoban_dry_run NOT IN (0,1)"),
+		updateWhere("global_config", fmt.Sprintf("autoban_enabled=%d", DefaultAutobanEnabled), "autoban_enabled IS NULL OR autoban_enabled NOT IN (0,1)"),
+		updateWhere("global_config", fmt.Sprintf("autoban_threshold=%d", DefaultAutobanThreshold), "autoban_threshold IS NULL OR autoban_threshold<1 OR autoban_threshold>10000"),
+		updateWhere("global_config", fmt.Sprintf("autoban_window_minutes=%d", DefaultAutobanWindowMinutes), "autoban_window_minutes IS NULL OR autoban_window_minutes<1 OR autoban_window_minutes>60"),
+		updateWhere("global_config", fmt.Sprintf("autoban_duration='%s'", DefaultAutobanDuration), "autoban_duration IS NULL OR autoban_duration NOT IN ('10m','30m','1h','6h','12h','24h','permanent')"),
+		updateWhere("global_config", fmt.Sprintf("autoban_scope='%s'", DefaultAutobanScope), "autoban_scope IS NULL OR autoban_scope NOT IN ('blocked','logged','all')"),
+		updateWhere("global_config", fmt.Sprintf("autoban_dry_run=%d", DefaultAutobanDryRun), "autoban_dry_run IS NULL OR autoban_dry_run NOT IN (0,1)"),
 		// 安全事件保留两列的**上界**每启动收敛（与写入侧/导入钳制/从端 apply
 		// 同一上界常量）。下界（<=0）由一次性 marker 迁移处理——marker 置位后
 		// 运行期显式 0 不得被重启改写（既有裁定），故此处只判越上界：带外直写
@@ -5101,12 +5128,14 @@ func normalizeRuleTimestampsMigration() error {
 // 探测（tcpDeadFieldsProbeSQL）与复位（TCPRuleDeadFieldsResetSQL）由它拼出，
 // 不再有两份手写字面量靠注释「改一侧必改另一侧」维系——只改一侧会变成
 // 「有脏数据但探测看不到 → 永远不清」或反之，且日志全绿。
+// 可空的五个 HTTP 专属列用 COALESCE(col,-1)<>0：裸 =1 / <>0 在三值逻辑下
+// 对带外 NULL 行恒为 NULL，会同时逃过探测与复位（-1 让 NULL 保持“非规范值”）。
 const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>'' OR COALESCE(health_check_host,'')<>'' OR COALESCE(domain,'')<>''
-		OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-		OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
+		OR COALESCE(enable_compress,-1)<>0 OR COALESCE(compress_types,'')<>''
+		OR COALESCE(request_body_max_size_mb,-1)<>0 OR COALESCE(upstream_keepalive_timeout,-1)<>0 OR COALESCE(server_tokens_hidden,-1)<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
 		OR proxy_dial_timeout<>0 OR proxy_response_header_timeout<>0 OR proxy_read_timeout<>0 OR proxy_write_timeout<>0 OR proxy_stream_timeout<>0 OR proxy_flush_interval<>0 OR proxy_stream_close_delay<>0
-		OR custom_routes_enabled=1 OR dynamic_dns=1
+		OR custom_routes_enabled=1 OR COALESCE(dynamic_dns,-1)<>0
 		OR COALESCE(strategy,'') IN ('cookie','')
 		OR COALESCE(dns_family,'')<>'ipv4'
 		OR enable_tls=1 OR COALESCE(tls_source,'')<>'manual' OR tls_http_redirect=1

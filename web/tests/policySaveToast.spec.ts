@@ -66,8 +66,10 @@ test('阶段页写入 skipped：保留弹框与暂存，零 skipped 才允许完
 
   const save = section(page, 'let pendingOverrides = pendingOverrideRules.value', 'const savedType = editorPolicyType.value')
   const gateAt = save.indexOf('if (stageOverrideDraftPending(skippedOverrideCount)) return')
+  const saveToastAt = save.indexOf('showSaveResult(')
+  const mergeAt = save.indexOf('mergeBulkResults(stageOverrideResponses)')
   assert.ok(gateAt > 0, 'skipped 必须在关窗前进入待重试终态')
-  assert.ok(gateAt > save.indexOf('showSaveResult('), '策略保存结果仍须先呈现')
-  assert.ok(gateAt > save.indexOf('mergeBulkResults(stageOverrideResponses)'), 'skipped 与 Caddy 退化同时出现时不得吞掉持续警告')
+  assert.ok(saveToastAt > 0 && gateAt > saveToastAt, '策略保存结果仍须先呈现')
+  assert.ok(mergeAt > 0 && mergeAt < gateAt, 'skipped 与 Caddy 退化同时出现时不得吞掉持续警告')
   assert.match(save, /skippedOverrideCount = skippedNotes\.length/)
 })

@@ -652,11 +652,10 @@ func ensureThreatRollupWithYields(hours int) error {
 	horizon := lastComplete.Add(-time.Duration(hours) * time.Hour)
 
 	// 覆盖区间 [coveredFrom, lastFixed]（完整分钟，持久化在 metrics_state）：
-	//   - 空覆盖 = coveredFrom 为 lastComplete（首个未来分钟）、lastFixed 为
-	//
+	//   - 空覆盖 = coveredFrom 为 lastComplete（首个未来分钟）、lastFixed 为 dTo；
 	//   - 请求窗口 [dFrom, dTo] 中「更旧未覆盖段」与「更新未覆盖段」分别按批
-	//     补齐把水位推到最新后，后续宽窗口
-	//     不得因「水位已到最新」而漏掉未回填的旧分钟）。
+	//     补齐把水位推到最新后，后续宽窗口不得因「水位已到最新」而漏掉未回填
+	//     的旧分钟。
 	// 水位与分钟数据同事务提交；空分钟同样推进；陈旧/未来水位钳制。
 	dFrom := horizon
 	dTo := lastComplete.Add(-time.Minute)
@@ -936,11 +935,12 @@ var threatRollupWarmerWg sync.WaitGroup
 
 // threatRollupReadyAt 最近一次成功固化的 UnixNano（0=从未成功，历史
 // 请求路径据此区分「warmer 已启动」与「已有可用覆盖」。
-// threatRollupReadyDB 记录该成功状态所属的指标库句柄——换库（测试/重启装配）
-// 后旧就绪状态对新库无效，避免把上一库的覆盖误当当前库的。
+// threatRollupReadyDB/Generation 记录该成功状态所属的指标库句柄与代际——
+// 换库或损坏隔离重建后旧就绪状态对新库无效。
 var (
-	threatRollupReadyAt atomic.Int64
-	threatRollupReadyDB atomic.Pointer[sql.DB]
+	threatRollupReadyAt         atomic.Int64
+	threatRollupReadyDB         atomic.Pointer[sql.DB]
+	threatRollupReadyGeneration atomic.Value // string
 )
 
 // threatRollupRequestedHours 最近请求过的最大窗口（小时）：宽窗口请求把
@@ -1001,6 +1001,7 @@ func threatRollupRequestedHoursLimit() int {
 func markThreatRollupSuccess() {
 	if cur := db.MetricsDB; cur != nil {
 		threatRollupReadyDB.Store(cur)
+		threatRollupReadyGeneration.Store(db.MetricsDBGeneration())
 	}
 	threatRollupReadyAt.Store(time.Now().UnixNano())
 }
@@ -1011,7 +1012,12 @@ func threatRollupUsable() bool {
 		return false
 	}
 	cur := db.MetricsDB
-	return cur != nil && threatRollupReadyDB.Load() == cur
+	if cur == nil || threatRollupReadyDB.Load() != cur {
+		return false
+	}
+	readyGeneration, _ := threatRollupReadyGeneration.Load().(string)
+	currentGeneration := db.MetricsDBGeneration()
+	return readyGeneration == "" || currentGeneration == "" || readyGeneration == currentGeneration
 }
 
 // threatRollupStale 最近成功固化是否已超过陈旧阈值。
@@ -1109,6 +1115,7 @@ func resetThreatRollupWarmerForTest() {
 	threatRollupWarmerStarted.Store(false)
 	threatRollupReadyAt.Store(0)
 	threatRollupReadyDB.Store(nil)
+	threatRollupReadyGeneration.Store("")
 	threatRollupRequestedHours.Store(0)
 	threatRollupRequestedHoursAt.Store(0)
 }
@@ -1897,11 +1904,6 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 		rawCoverageFrom = raw
 		if rawCoverageFrom != "" && rawCoverageFrom > windowStartMinute.Format("2006-01-02 15:04:05") {
 			rawCoverageLimited = true
-			if coverageFrom == "" {
-				// 异形 event_time（带外写库/异形导入）可能短于 19 字符：
-				// 直接 [:16] 会 panic 整个处理器，统一走锚点 helper。
-				coverageFrom = threatMinuteAnchor(rawCoverageFrom)
-			}
 		}
 	}
 	sinceMinute := now.UTC().Add(-time.Duration(hours) * time.Hour).Truncate(time.Minute).Format("2006-01-02 15:04")
@@ -2164,7 +2166,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		FROM (
 			SELECT client_ip, action, rule_triggered, rule_msg, duration_us, id
 			FROM security_events
-			WHERE id > ? AND id <= ? AND event_time >= datetime('now','-5 minutes')
+			WHERE id > ? AND id <= ?
 			  AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+`
 			ORDER BY id DESC
 			LIMIT ?

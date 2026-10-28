@@ -93,6 +93,22 @@ func TestValidateV2BackupMCPIPWhitelist(t *testing.T) {
 			wantErr:   true,
 			wantInMsg: "api_keys 第 1 行",
 		},
+		{
+			name:      "JSON 数组而非库内字符串形态",
+			rows:      []map[string]any{{"mcp_ip_whitelist": []any{"10.0.0.0/8"}}},
+			wantErr:   true,
+			wantInMsg: "实际类型",
+		},
+		{
+			name:      "数字与对象形态",
+			rows:      []map[string]any{{"mcp_ip_whitelist": float64(7)}, {"mcp_ip_whitelist": map[string]any{"cidr": "10.0.0.0/8"}}},
+			wantErr:   true,
+			wantInMsg: "api_keys 第 1 行",
+		},
+		{
+			name: "SQL NULL 保持空白名单兼容",
+			rows: []map[string]any{{"mcp_ip_whitelist": nil}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,6 +159,19 @@ func TestRestoreRowStatementNormalizesMCPIPWhitelist(t *testing.T) {
 				t.Fatalf("归一值=%v（sql=%s），want %q", values, statement, tc.want)
 			}
 		})
+	}
+}
+
+func TestRestoreRowStatementDoesNotEraseNonStringMCPIPWhitelist(t *testing.T) {
+	raw := float64(7)
+	_, values, ok := restoreRowStatement("api_keys", map[string]any{
+		"name": "key", "mcp_ip_whitelist": raw,
+	}, map[string]bool{"mcp_ip_whitelist": true, "name": true})
+	if !ok {
+		t.Fatal("行内至少一列有效，ok 必须为 true")
+	}
+	if len(values) != 2 || values[0] != raw {
+		t.Fatalf("非字符串白名单在写入归一前被静默改为 %v，必须保留原值供行级门拒绝", values[0])
 	}
 }
 

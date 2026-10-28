@@ -122,6 +122,14 @@ func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 	}
 
 	// ---- 导入:.lbbak 整包回放 → 版本记录与文件一致落库 ----
+	// 让 live 文件与包内字节不同：若整个导入写入相位被删除，下面的
+	// 逐字节断言会红；同哈希 live 文件只能证明「文件本来就在」。
+	if err := os.WriteFile(filepath.Join(crsDir, "rules", "crs-setup.conf"), []byte("# live-diverged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xdbPath, []byte("live-diverged"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/config/import", bytes.NewReader(rec.Body.Bytes()))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	rec2 := httptest.NewRecorder()
@@ -129,13 +137,14 @@ func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("import lbbak status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
-	// 数据文件已落盘(与导出一致)——文件与版本记录原子同批
-	if _, err := os.Stat(filepath.Join(crsDir, "rules", "crs-setup.conf")); err != nil {
-		t.Fatalf("lbbak import must write CRS files: %v", err)
+	// 数据文件必须从包内字节重新落盘（而非 live 同哈希时假绿）。
+	crsBytes, err := os.ReadFile(filepath.Join(crsDir, "rules", "crs-setup.conf"))
+	if err != nil || !bytes.Equal(crsBytes, []byte("# crs\n")) {
+		t.Fatalf("lbbak import must restore CRS bytes: err=%v content=%q", err, crsBytes)
 	}
 	got, err := os.ReadFile(xdbPath)
-	if err != nil || len(got) != len(xdbBytes) {
-		t.Fatalf("lbbak import must write xdb: err=%v len=%d", err, len(got))
+	if err != nil || !bytes.Equal(got, xdbBytes) {
+		t.Fatalf("lbbak import must restore exact xdb bytes: err=%v equal=%v", err, bytes.Equal(got, xdbBytes))
 	}
 
 	// ---- 完整性:篡改 config.json → 导入 400 ----
@@ -166,5 +175,32 @@ func TestConfigBackup_lbbakRoundTrip(t *testing.T) {
 	g.ServeHTTP(rec3, req)
 	if rec3.Code != http.StatusBadRequest {
 		t.Fatalf("tampered lbbak status=%d body=%s, want 400", rec3.Code, rec3.Body.String())
+	}
+}
+
+func TestConfigBackup_exportUsesSingletonGlobalConfigRow(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`PRAGMA ignore_check_constraints=ON;
+		DELETE FROM global_config WHERE id=1;
+		INSERT INTO global_config (id,log_level) VALUES (-1,'warn');
+		INSERT INTO global_config (id,log_level) VALUES (1,'info');
+		PRAGMA ignore_check_constraints=OFF;`); err != nil {
+		t.Fatalf("seed out-of-band duplicate global_config rows: %v", err)
+	}
+	router := newBackupSectionRouter(h)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/export?sections=users", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	pack := unpackLbbak(t, recorder.Body.Bytes())
+	var exported struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal(pack["config.json"], &exported); err != nil {
+		t.Fatal(err)
+	}
+	if got := exported.Config["log_level"]; got != "info" {
+		t.Fatalf("导出 global_config 行 log_level=%v, want 唯一事实行 id=1 的 info", got)
 	}
 }

@@ -32,17 +32,14 @@ func TestEngine_ScheduledStaleSlotFailureBackoff(t *testing.T) {
 	e.StartLoop("t-stale-slot")
 
 	time.Sleep(350 * time.Millisecond)
-	if got := runs.Load(); got == 0 || got > 2 {
-		t.Fatalf("350ms 窗口内执行 %d 次, want 1-2（槽未推进+失败须触发退避，不得 tick 频率重投）", got)
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("350ms 窗口内执行 %d 次, want 1（首档退避必须精确生效）", got)
 	}
-	if got := countRuns(t, "t-stale-slot"); got > 2 {
-		t.Fatalf("task_runs 落行 %d, want ≤2（重投风暴每轮落行的放大已收敛）", got)
+	if got := countRuns(t, "t-stale-slot"); got != 1 {
+		t.Fatalf("task_runs 落行 %d, want 1", got)
 	}
 	// 退避（首档 1s）衰减后重投——兜底是节流不是停摆。
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && runs.Load() < 2 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForEngine(t, "首档退避后的第二次执行", 2*time.Second, func() bool { return runs.Load() >= 2 })
 	if got := runs.Load(); got < 2 {
 		t.Fatalf("退避衰减后未恢复重投, runs=%d（兜底不得等同停调）", got)
 	}
@@ -65,10 +62,7 @@ func TestEngine_ScheduledAdvancedSlotFailureNoBackoff(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-adv-slot")
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && runs.Load() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForEngine(t, "推进槽后的首轮执行", 2*time.Second, func() bool { return runs.Load() == 1 })
 	if runs.Load() != 1 {
 		t.Fatalf("首轮执行次数=%d, want 1", runs.Load())
 	}

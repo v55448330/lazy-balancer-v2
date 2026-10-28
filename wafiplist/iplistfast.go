@@ -439,18 +439,21 @@ func staleOrError(path string, cached *ipListFileState, err error, fresh bool) (
 
 // EvictIPListCache 淘汰指定路径的运行期缓存条目（services 侧 GC 删除超龄
 // 未引用名单文件后调用）——否则 fail-stale 会把已删文件的集合无限期留在
-// 内存。返回实际淘汰条数。
+// 内存。逐路径与解析共用锁：等待在途解析落定后再删，旧代际不能在淘汰后写回。
+// 返回实际淘汰条数。
 func EvictIPListCache(paths ...string) int {
-	ipListCache.Lock()
-	defer ipListCache.Unlock()
 	evicted := 0
 	for _, path := range paths {
+		unlock := lockIPListLoad(path)
+		ipListCache.Lock()
 		if _, ok := ipListCache.states[path]; ok {
 			delete(ipListCache.states, path)
 			evicted++
 		}
+		ipListCache.Unlock()
 		// 同步清掉节流记录（防路径无限期占 map；下次故障重新上报）。
 		clearStaleReport(path)
+		unlock()
 	}
 	return evicted
 }

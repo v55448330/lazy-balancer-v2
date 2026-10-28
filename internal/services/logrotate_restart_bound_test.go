@@ -54,9 +54,9 @@ func TestLogRotateRestart_abandonsStuckWorkerWithinBudget(t *testing.T) {
 
 func TestStartLogRotate_refreshesThresholdObservably(t *testing.T) {
 	initServicesDB(t)
-	StopLogRotateWithin(0)
+	StopLogRotateWithin(2 * time.Second)
 	t.Cleanup(func() {
-		StopLogRotateWithin(0)
+		StopLogRotateWithin(2 * time.Second)
 		runtimeLogSizeMB.Store(100)
 	})
 	if _, err := db.DB.Exec(`UPDATE global_config SET runtime_log_size_mb=7 WHERE id=1`); err != nil {
