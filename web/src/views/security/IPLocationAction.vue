@@ -124,6 +124,7 @@
                 <button
                   v-else
                   type="button"
+                  class="ipm-remove"
                   @click.stop="removeSource(section.side, source)"
                   :disabled="writeUnavailable || actionBusy"
                 >
