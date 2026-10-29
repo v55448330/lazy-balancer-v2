@@ -281,3 +281,35 @@ func TestUpdateAdminTLS_multipartQueryConflictBodyWinsBothDirections(t *testing.
 		t.Fatal("restart was not scheduled")
 	}
 }
+
+// 显式 application/json 通道的畸形体（数组/标量/截断）必须以 JSON 语义报错：
+// 程序化通道只会发 JSON，错误文案指认「表单解析失败」会把排障引向错误通道。
+// 以 { 开头的对象字面量嗅探此前是唯一 JSON 判据，非对象 JSON 体回落 multipart
+// 解析拿「表单解析失败」——文案与通道错位。
+func TestUpdateAdminTLS_jsonContentTypeNonObjectBodyReportsJSONParseFailure(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	router, _ := newAdminTLSTestRouter(t)
+	for name, body := range map[string]string{
+		"数组体":   `[1,2,3]`,
+		"标量体":   `"hello"`,
+		"截断对象体": `{"enabled":true`,
+		"空体":    ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/admin-tls", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "表单解析失败") {
+				t.Fatalf("JSON 通道不得回落表单解析文案: %s", response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), "JSON 解析失败") {
+				t.Fatalf("body=%s, want JSON 解析失败", response.Body.String())
+			}
+		})
+	}
+}

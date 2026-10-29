@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -141,6 +142,44 @@ func TestLoadCaddyMetricsSnapshot_negativeCacheAndSelfTimeoutNotCached(t *testin
 	body, err = loadCaddyMetricsSnapshot(context.Background(), "http://snap.invalid/metrics", true)
 	if err != nil || string(body) != "ok 2\n" {
 		t.Fatalf("超时后健康请求 body=%q err=%v, want 立即重新抓取成功", string(body), err)
+	}
+}
+
+// 面板聚合外层预算由抓取上限派生（caddyMetricsFetchTimeout+margin）：
+// 抓取耗尽自身上限时，buildMetricsDashboard 的错误对象仍是固定
+// 「采集 Caddy 指标失败」（502）——不得让 ctx 超时以 DB 侧文案
+// （如「读取规则指标配置失败」）漏出，误导排障方向。
+func TestBuildMetricsDashboard_slowFetchStillReportsCaddyCollectionFailure(t *testing.T) {
+	withIsolatedGlobal(t)
+	resetMetricsDashboardCacheForTest()
+	t.Cleanup(resetMetricsDashboardCacheForTest)
+	oldTimeout := caddyMetricsFetchTimeout
+	caddyMetricsFetchTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { caddyMetricsFetchTimeout = oldTimeout })
+	overrideDashboardFetch(t, func(ctx context.Context, _ string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	h := &Handlers{cfg: &config.Config{CaddyMetricsURL: "http://127.0.0.1:9/metrics"}}
+	outcome := h.buildMetricsDashboard(context.Background())
+	if outcome.status != http.StatusBadGateway || outcome.message != "采集 Caddy 指标失败" {
+		t.Fatalf("outcome=%+v, want 502/采集 Caddy 指标失败", outcome)
+	}
+}
+
+// 预算派生结构性守卫：面板外层预算必须由 caddyMetricsFetchTimeout 派生，
+// 禁止再落一份独立时长字面量（两份 15s 曾互不约束——抓取吃光预算后 DB
+// 聚合段以毫秒级预算失败并被误报为 DB 侧错误）。
+func TestMetricsDashboardBudget_derivesFromFetchTimeout(t *testing.T) {
+	source, err := os.ReadFile("metrics.go")
+	if err != nil {
+		t.Fatalf("read metrics.go: %v", err)
+	}
+	if !strings.Contains(string(source), "caddyMetricsFetchTimeout+metricsAggregationMargin") {
+		t.Fatal("面板外层预算必须由 caddyMetricsFetchTimeout+metricsAggregationMargin 派生（抓取满额超时后 DB 聚合段仍保有余量）")
+	}
+	if strings.Contains(string(source), "WithoutCancel(ctx), 15*time.Second") {
+		t.Fatal("面板聚合预算不得再写独立 15s 字面量（调整抓取上限时预算必须随之）")
 	}
 }
 
@@ -335,6 +374,8 @@ func TestGetMetricsDashboard_dbReadFailureIsLogged(t *testing.T) {
 // 轮询叠加成「越慢越抓」）。
 func TestLoadCaddyMetricsSnapshot_ttlAnchoredAtFetchCompletion(t *testing.T) {
 	withIsolatedGlobal(t)
+	// 本用例写入存活快照条目：不清理会让套件级终态守卫把泄漏归因到
+	// 「本 -run 子集的最后一个写者」（全量跑靠后续用例复位掩盖）。
 	resetCaddyMetricsSnapshotCacheForTest()
 	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	oldTTL := caddyMetricsSnapshotTTL

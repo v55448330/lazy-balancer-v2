@@ -136,17 +136,20 @@ type adminTLSInput struct {
 
 // decodeAdminTLSInput 解析请求入参：为 multipart 表单时走原
 // multipart 路径（解析器内存阈值 2 MiB，超出部分落临时文件；整体体积由调用方
-// MaxBytesReader 把关，错误文案维持原样）；否则嗅探 body 为 JSON 对象
-// （含显式 application/json）时走 JSON 路径；其余请求回落 multipart 解析，
+// MaxBytesReader 把关，错误文案维持原样）；显式 application/json（程序化通道的
+// 唯一形态——哪怕 body 畸形也必须以 JSON 语义报错，回落表单解析会让「JSON 解析
+// 失败」变成误导性的「表单解析失败」）或以 { 开头的对象字面量（历史通道不发
+// Content-Type）走 JSON 路径；其余请求回落 multipart 解析，
 // 行为与仅支持表单时一致。
 func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
-	if !strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
+	contentType := c.GetHeader("Content-Type")
+	if !strings.Contains(contentType, "multipart/form-data") {
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			// %w 保留 *http.MaxBytesError 链——上层映射 413
 			return nil, fmt.Errorf("请求体读取失败: %w", err)
 		}
-		if bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("{")) {
+		if strings.Contains(contentType, "application/json") || bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("{")) {
 			return parseAdminTLSJSONInput(body)
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))

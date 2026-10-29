@@ -21,9 +21,13 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		return
 	}
 	if !h.requireClusterService(c) {
+		// explicit 路由中间件对 5xx 不代记（与本函数其余拒绝面同口径），
+		// 装配缺失的 503 也由 handler 留痕。
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
 		return
 	}
 	if h.syncService == nil {
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
 		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
 		return
 	}
@@ -137,11 +141,13 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 		return
 	}
 	if !h.requireClusterService(c) {
+		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
 		return
 	}
 	// syncService 缺失判定前置——此前 Promote 已生效才报
 	// 503,调用方见到失败但角色已提升,重试撞 ErrAlreadyMaster。
 	if h.syncService == nil {
+		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
 		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
 		return
 	}
@@ -172,6 +178,9 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		return
 	}
 	if !h.requireClusterService(c) {
+		// explicit 路由中间件对 5xx 不代记（与本函数其余失败面同口径），
+		// 装配缺失的 503 也由 handler 留痕。
+		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)

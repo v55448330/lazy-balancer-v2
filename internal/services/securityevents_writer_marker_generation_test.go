@@ -27,8 +27,8 @@ func isolationForWriterHealth(t *testing.T) {
 		securityEventsWriterHealth.baselineIO = 0
 		securityEventsWriterHealth.droppedTotal = 0
 		securityEventsWriterHealth.ioTotal = 0
-		securityEventsWriterHealth.windowStart = time.Time{}
-		securityEventsWriterHealth.windowFailures = 0
+		securityEventsWriterHealth.window.start = time.Time{}
+		securityEventsWriterHealth.window.counter = 0
 		securityEventsWriterHealth.lastFailureAt = time.Time{}
 		securityEventsWriterHealth.sidecarReadFailures = 0
 		securityEventsWriterHealth.sidecarWriteFailureHits = 0

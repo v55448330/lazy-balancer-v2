@@ -249,7 +249,10 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		auditFailure("节点编号无效（"+registerAuditField(c.Param("id"))+"）", "invalid_request", "节点编号无效")
+		// 编号未解析成功：nodeLabel 槽按「节点 <原始值>」留痕（与访问地址端点
+		// 同形），失败原因槽只放结论——旧写法把整句塞进 nodeLabel 槽，
+		// reason 槽重复同一句，段落错位。
+		auditFailure("节点 "+registerAuditField(c.Param("id")), "invalid_request", "节点编号无效")
 		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
 		return
 	}

@@ -196,7 +196,7 @@ func TestJWTAuthReportsRevokedBeforeMissingUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(jti))
-	if _, err := database.Exec("INSERT INTO revoked_jti VALUES (?,?)", hex.EncodeToString(hash[:]), time.Now().Add(time.Hour).UTC().Format(models.RevokedTokenTimeFormat)); err != nil {
+	if _, err := database.Exec("INSERT INTO revoked_jti VALUES (?,?)", hex.EncodeToString(hash[:]), models.FormatRevokedTokenTime(time.Now().Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()

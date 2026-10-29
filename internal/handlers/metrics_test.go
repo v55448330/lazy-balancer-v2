@@ -179,6 +179,10 @@ func TestGetCaddyMetrics_clientCancellationDoesNotAbortSharedScrape(t *testing.T
 }
 
 func TestGetCaddyMetrics_returns_bad_gateway_on_caddy_error_status(t *testing.T) {
+	// 负缓存条目（Caddy 错误状态）必须随用例清理：不清理会让套件级终态守卫
+	// 把泄漏归因到「本 -run 子集的最后一个写者」（全量跑靠后续用例复位掩盖）。
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("unavailable"))

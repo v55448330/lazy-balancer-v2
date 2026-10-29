@@ -39,9 +39,10 @@ type UserRowMeta struct {
 // 挑战表的 password_version）。
 func ScanUserRow(scanner interface{ Scan(dest ...any) error }, meta *UserRowMeta, extra ...any) (models.User, error) {
 	var user models.User
-	// is_enabled/mfa_enabled/is_setup_admin 在 SQLite 中为 INTEGER，经
-	// database/sql 只接受整型目标（bool 目标需两态驱动值），与既有多处
-	// 扫描口径一致。
+	// mfa_enabled/is_setup_admin 以整型目标接（COALESCE 归一后恒两态，int
+	// 扫描稳妥）；is_enabled 直接扫 bool——启动归一（normalizeUsersIsEnabledDomain）
+	// 与 NOT NULL 重建共同保证值域恒 0/1，database/sql 的 driver.Bool 只认
+	// 两态，带外非 0/1 值会在此报错（读取端点 500），这正是启动归一存在的根因。
 	var mfaEnabled, setupAdmin int
 	dest := []any{
 		&user.ID,

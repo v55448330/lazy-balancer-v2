@@ -144,11 +144,13 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 16 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
+	// 11 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
 	//   certificates.go IssueCertificate 的 auditFailure 闭包 1 处
 	//     （blocked/conflict/failed/invalid_request/skipped）
-	//   caproviders.go 测试 CA 提供商 6 处（provider_error/register_failed/
-	//     invalid_config/missing_acme_email/not_found）
+	//   caproviders.go 测试 CA 提供商 1 处——auditCAProviderTestResult
+	//     单源 helper（not_found/provider_error/missing_acme_email/
+	//     invalid_config/register_failed）；原 6 处同形 recordAudit 已收敛
+	//     进该 helper（P4 同族收敛，取值域不变）
 	//   users.go 修改用户状态 1 处（enabled/disabled）
 	//   cluster_ticket.go 2 处——生成失败（failed/blocked）与 TicketLogin
 	//     失败归因（invalid_ticket/invalid_signature/expired/replay/
@@ -163,7 +165,7 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	//     脱离请求的失败/拒绝/成功归因（success/failed/blocked）
 	// 取值域逐项登记在 auditDynamicResultCodes，新增码仍受
 	// TestAuditResultText_auditFailureLiteralsRegistered 与本表约束。
-	const want = 16
+	const want = 11
 	// 注释与常数同步门：上面那条「N 处」此前写成 12 而枚举与常数都是 15——
 	// 维护者读注释判断「面有多大」时会误判漏枚举。注释数字必须等于 want。
 	source, err := os.ReadFile("audit_result_text_test.go")

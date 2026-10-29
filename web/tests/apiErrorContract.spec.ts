@@ -352,7 +352,7 @@ const MIN_ENVELOPES: Record<(typeof SCAN_DIRS)[number], number> = {
   // auth.go -4 / users.go +4 / mfa.go -2 / auth_oidc.go +1。
   // 叠加上其它调用点增补（含证书族与自动备份族继续收敛）后实测 1293；
   // 后续批次把 UpdateSecurityPolicy/CAProvider 等错误出口收敛到共享 helper 后实测 1280。
-  'internal/handlers': 1280,
+  'internal/handlers': 1256,
   'internal/middleware': 43,
 }
 

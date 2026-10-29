@@ -326,6 +326,7 @@ var importWindowGatedDocRoutes = map[string]struct{}{
 	"POST /cluster/promote":                        {},
 	"POST /cluster/register":                       {},
 	"POST /cluster/register-tokens":                {},
+	"POST /cluster/service-control":                {},
 	"POST /cluster/registration/confirm":           {},
 	"POST /config/reload":                          {},
 	"POST /config/validate":                        {},

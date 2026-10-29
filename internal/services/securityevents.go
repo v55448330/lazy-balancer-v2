@@ -1530,6 +1530,12 @@ func securityEventsPolicyBlacklistIndex(p *models.SecurityPolicy) models.Securit
 // security_policy_bindings 行）返回零值 (0, "")。ACL 拒绝带（id 4/2）无属主时
 // 同样走该回退而非归零：事件既已被摄取，必是某绑定策略在发射时的配置发出了它
 // （当前配置可能已变更），归到首启用绑定是最接近发射现实的归属。
+//
+// securityEventsAttributePolicy（本函数）是「无排除快照」形态的测试包装：
+// 生产归因必须携带 crsExclusions（经 securityEventsAttributePolicyWithExclusions
+// 传入摄取路径解析的排除快照），缺省 nil 会把配置了 crs_excluded_rules 的策略
+// 误归因。仅测试调用、生产零调用是有意形态，不是可删除的死代码——新增测试
+// 用例也一律走本包装即可。
 func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered, action, clientIP string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
 	return securityEventsAttributePolicyWithExclusions(ruleCaddyID, ruleTriggered, action, clientIP, policyByID, bindings, nil)
 }
@@ -3259,7 +3265,42 @@ var securityEventsProcessStart = time.Now()
 // 只能作为丢失事实披露（与写侧计数同为一等健康信号）。
 var securityEventsMessagesDropped atomic.Uint64
 
-var securityEventsWriterHealth struct {
+// failureWindow 是窗口化失败计数器的单源实现：滑动窗口内累计失败数，达
+// threshold 判降级；窗口滑过（首记或距窗口起点 ≥ window）即复位重累计。
+// 累计总量（「曾丢失」）由宿主结构另行保存——窗口只回答「正在失败吗」。
+// 此前写侧健康与畸形区跳过各持一份内联实现（start/counter 字段 + 三段式
+// 复位/降级判定），窗长口径只能靠注释互指。zero value 不可用（window=0）：
+// 宿主均经字面量注入 window/threshold。
+type failureWindow struct {
+	counter   uint64
+	start     time.Time
+	threshold uint64
+	window    time.Duration
+}
+
+// record 累计 n 次失败；窗口过期时先复位再累计（n=0 语义：仅推进过期窗口
+// 起点、清零计数，不引入失败）。
+func (w *failureWindow) record(now time.Time, n uint64) {
+	if w.start.IsZero() || now.Sub(w.start) >= w.window {
+		w.start = now
+		w.counter = 0
+	}
+	w.counter += n
+}
+
+// degraded 判定窗口内失败是否达阈值（窗口未滑过且计数达标）；零值窗口
+// （从未记录）恒 false。
+func (w *failureWindow) degraded(now time.Time) bool {
+	return !w.start.IsZero() && now.Sub(w.start) < w.window && w.counter >= w.threshold
+}
+
+// clear 清空窗口（健康位整体重置用）。
+func (w *failureWindow) clear() {
+	w.counter = 0
+	w.start = time.Time{}
+}
+
+type securityEventsWriterHealthState struct {
 	mu              sync.Mutex
 	baselineDropped uint64
 	baselineIO      uint64
@@ -3267,9 +3308,9 @@ var securityEventsWriterHealth struct {
 	droppedTotal    uint64
 	ioTotal         uint64
 	formatTotal     uint64
-	windowStart     time.Time
-	windowFailures  uint64
-	lastFailureAt   time.Time
+	// window 是失败窗口（阈值判据单源 failureWindow：窗长/阈值由字面量注入）。
+	window        failureWindow
+	lastFailureAt time.Time
 	// sidecarReadFailures 连续读取/解析失败计数（文件缺失不计——插件未
 	// 产生失败/未启动是正常形态）。
 	sidecarReadFailures int
@@ -3277,6 +3318,10 @@ var securityEventsWriterHealth struct {
 	// 插件写不进计数侧车（磁盘满/目录只读），此刻读到的是旧值、文件可能
 	// 根本不存在（首写即失败）——计数不可信，按阈值置 unavailable。
 	sidecarWriteFailureHits int
+}
+
+var securityEventsWriterHealth = securityEventsWriterHealthState{
+	window: failureWindow{window: securityEventsWriterFailureWindow, threshold: securityEventsWriterFailureThreshold},
 }
 
 // securityEventsWriterStatsFailureMarker 读插件侧车写盘失败标记并解析出写入
@@ -3411,11 +3456,7 @@ func securityEventsObserveAuditWriterStats() {
 		return
 	}
 	securityEventsWriterHealth.lastFailureAt = now
-	if securityEventsWriterHealth.windowStart.IsZero() || now.Sub(securityEventsWriterHealth.windowStart) >= securityEventsWriterFailureWindow {
-		securityEventsWriterHealth.windowStart = now
-		securityEventsWriterHealth.windowFailures = 0
-	}
-	securityEventsWriterHealth.windowFailures += newFailures
+	securityEventsWriterHealth.window.record(now, newFailures)
 }
 
 // securityEventsSkipHealth 是畸形区跳过的进程内累计状态：跳过=该段审计数据
@@ -3423,13 +3464,20 @@ func securityEventsObserveAuditWriterStats() {
 // 健康信号——窗口内（securityEventsWriterFailureWindow，与写侧同口径）出现
 // 跳过即降级健康位，累计量供三面披露；窗口滑过后健康位恢复但累计计数保留
 // （「曾丢失」与「正在失败」分离表达）。
-var securityEventsSkipHealth struct {
+var securityEventsSkipHealth = securityEventsSkipHealthState{
+	// 窗长与写侧同口径；threshold=1——窗口内出现跳过即降级（跳过=数据永久
+	// 丢弃，没有「可容忍次数」）。
+	window: failureWindow{window: securityEventsWriterFailureWindow, threshold: 1},
+}
+
+type securityEventsSkipHealthState struct {
 	mu             sync.Mutex
 	skippedBytes   uint64
 	skippedRegions uint64
-	windowStart    time.Time
-	windowSkips    uint64
-	lastSkipAt     time.Time
+	// window 是跳过窗口（单源 failureWindow）；累计量（skipped*）单独表达
+	// 「曾丢失」，窗口只表达「正在失败」。
+	window     failureWindow
+	lastSkipAt time.Time
 }
 
 // securityEventsRecordSkips 累计一次畸形区跳过（摄取 pass 内三处跳过分支的
@@ -3446,14 +3494,9 @@ func securityEventsRecordSkips(bytes int64, regions int) {
 	}
 	if regions > 0 {
 		securityEventsSkipHealth.skippedRegions += uint64(regions)
-		securityEventsSkipHealth.windowSkips += uint64(regions)
 	}
 	securityEventsSkipHealth.lastSkipAt = now
-	if securityEventsSkipHealth.windowStart.IsZero() ||
-		now.Sub(securityEventsSkipHealth.windowStart) >= securityEventsWriterFailureWindow {
-		securityEventsSkipHealth.windowStart = now
-		securityEventsSkipHealth.windowSkips = uint64(regions)
-	}
+	securityEventsSkipHealth.window.record(now, uint64(regions))
 }
 
 // securityEventsSkipHealthSnapshot 返回跳过累计与窗口内是否降级。
@@ -3462,11 +3505,7 @@ func securityEventsSkipHealthSnapshot() (skippedBytes, skippedRegions uint64, de
 	defer securityEventsSkipHealth.mu.Unlock()
 	skippedBytes, skippedRegions = securityEventsSkipHealth.skippedBytes, securityEventsSkipHealth.skippedRegions
 	lastSkipAt = securityEventsSkipHealth.lastSkipAt
-	if !securityEventsSkipHealth.windowStart.IsZero() &&
-		time.Since(securityEventsSkipHealth.windowStart) < securityEventsWriterFailureWindow &&
-		securityEventsSkipHealth.windowSkips > 0 {
-		degraded = true
-	}
+	degraded = securityEventsSkipHealth.window.degraded(time.Now())
 	return skippedBytes, skippedRegions, degraded, lastSkipAt
 }
 
@@ -3479,11 +3518,7 @@ func securityEventsWriterHealthSnapshot() (dropped, ioErrors, formatErrors uint6
 	dropped, ioErrors = securityEventsWriterHealth.droppedTotal, securityEventsWriterHealth.ioTotal
 	formatErrors = securityEventsWriterHealth.formatTotal
 	lastFailureAt = securityEventsWriterHealth.lastFailureAt
-	if !securityEventsWriterHealth.windowStart.IsZero() &&
-		time.Since(securityEventsWriterHealth.windowStart) < securityEventsWriterFailureWindow &&
-		securityEventsWriterHealth.windowFailures >= securityEventsWriterFailureThreshold {
-		degraded = true
-	}
+	degraded = securityEventsWriterHealth.window.degraded(time.Now())
 	statsUnavailable = securityEventsWriterHealth.sidecarReadFailures >= securityEventsWriterFailureThreshold ||
 		securityEventsWriterHealth.sidecarWriteFailureHits >= securityEventsWriterFailureThreshold
 	return dropped, ioErrors, formatErrors, degraded, statsUnavailable, lastFailureAt
@@ -3563,8 +3598,7 @@ func SecurityEventsSetIngestionHealthForTest(status SecurityEventsIngestionStatu
 	securityEventsWriterHealth.droppedTotal = 0
 	securityEventsWriterHealth.ioTotal = 0
 	securityEventsWriterHealth.formatTotal = 0
-	securityEventsWriterHealth.windowStart = time.Time{}
-	securityEventsWriterHealth.windowFailures = 0
+	securityEventsWriterHealth.window.clear()
 	securityEventsWriterHealth.lastFailureAt = time.Time{}
 	securityEventsWriterHealth.sidecarReadFailures = 0
 	securityEventsWriterHealth.sidecarWriteFailureHits = 0
@@ -3577,8 +3611,7 @@ func SecurityEventsSetIngestionHealthForTest(status SecurityEventsIngestionStatu
 	securityEventsSkipHealth.mu.Lock()
 	securityEventsSkipHealth.skippedBytes = 0
 	securityEventsSkipHealth.skippedRegions = 0
-	securityEventsSkipHealth.windowStart = time.Time{}
-	securityEventsSkipHealth.windowSkips = 0
+	securityEventsSkipHealth.window.clear()
 	securityEventsSkipHealth.lastSkipAt = time.Time{}
 	securityEventsSkipHealth.mu.Unlock()
 }

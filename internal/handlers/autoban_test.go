@@ -148,9 +148,9 @@ func TestAutobanConfig_putValidRoundtrip(t *testing.T) {
 	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='自动封禁' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
 		t.Fatalf("read audit detail: %v", err)
 	}
-	wantDetail := "启用：开；调度：开启；阈值：50 次/10 分钟；时长：6 小时；口径：仅拦截；模式：正式"
+	wantDetail := "启用：开（调度随之启停）；阈值：50 次/10 分钟；时长：6 小时；口径：仅拦截；模式：正式"
 	if detail != wantDetail {
-		t.Fatalf("审计详情=%q, want %q（开启/关闭 口径由 enabledStateLabel 单源提供）", detail, wantDetail)
+		t.Fatalf("审计详情=%q, want %q（启用与调度同义，只产出一个状态位）", detail, wantDetail)
 	}
 }
 

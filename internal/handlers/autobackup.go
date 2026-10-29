@@ -1019,6 +1019,11 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	}
 	// 行删除先在事务内确认影响行数，再删文件：0 行（并发先到者已删）
 	// 不得碰文件；文件删除失败回滚行删除，保留可重试入口且不记成功审计。
+	// ctx 契约：BeginTx 消费请求 ctx（锁排队阶段取消即中止、零副作用）；
+	// 事务内语句与 commit 刻意不单独消费 ctx——本端点是「文件先删、提交收尾」
+	// 形态，提交前被取消会让行回滚而文件已亡（列表仍显示、下载/还原 404 的
+	// 最坏分叉）。与导入会话的 context.WithoutCancel 同取向：进入临界区后
+	// 不因客户端断开半途中止。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,

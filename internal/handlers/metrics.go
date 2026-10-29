@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -118,6 +119,11 @@ var (
 	// 健康连接收到伪造的上游失败），因此必须有独立超时兜底。
 	caddyMetricsFetchTimeout  = 15 * time.Second
 	caddyMetricsSnapshotGroup singleflight.Group
+
+	// metricsAggregationMargin 是面板聚合外层预算在抓取自身上限之外的固定
+	// 余量：外层预算=caddyMetricsFetchTimeout+本值（单点派生，禁止再写一份
+	// 独立字面量）——抓取满额超时后 DB 聚合段仍保有整个余量窗口。
+	metricsAggregationMargin = 5 * time.Second
 )
 
 type caddyMetricsSnapshot struct {
@@ -249,8 +255,11 @@ func (h *Handlers) metricsDashboardCached(ctx context.Context) metricsDashboardO
 			return outcome, nil
 		}
 		// 聚合脱离首个请求的取消信号（首请求断开不应让同批等待者失败），
-		// 但保留总时长上限。
-		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		// 但保留总时长上限=抓取自身上限+固定余量：两份独立 15s 字面量曾互不
+		// 约束——抓取吃光整个预算后，lb_rules/upstreams 聚合查询以毫秒级预算
+		// 失败，被误报为「读取规则指标配置失败」（真实原因是抓取占满预算）。
+		// 由 caddyMetricsFetchTimeout 派生：调整抓取上限时聚合预算随之。
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), caddyMetricsFetchTimeout+metricsAggregationMargin)
 		defer cancel()
 		outcome := h.buildMetricsDashboard(workCtx)
 		storeMetricsDashboardOutcome(url, outcome, time.Now())
@@ -479,11 +488,17 @@ func parseMetricsInterval(interval string) (modifier string, seconds int64) {
 
 // metricsHistoryBuckets 是历史序列的桶数上限（两条历史端点共用：每桶取末行
 // 样本，桶数恒 ≤720，与 GetMetricsHistory 的窗口函数范式一致）。
+// 覆盖口径（与 bucketSecondsFor 的上取整配套）：窗口内 epoch 对齐桶数最多
+// 720+1（窗口起点恰落桶界时多出一个部分桶），LIMIT 取最旧侧截断——序列覆盖
+// 起点=窗口起点+≤1 个桶宽（1h=5s、6h=30s、24h=120s、7d=840s），不承诺逐字节
+// 全窗覆盖。
 const metricsHistoryBuckets = 720
 
 // bucketSecondsFor 由窗口秒数派生桶宽（两个历史端点共用的单源派生）：
-// 上取整保证 720×bucket ≥ 窗口，窗口全覆盖。向下取整会静默丢弃最旧
-// window mod 720 秒（30m 窗口丢 360s=20%，且响应无覆盖起点披露）。
+// 上取整保证 720×bucket ≥ 窗口。向下取整会静默丢弃最旧 window mod 720 秒
+// （30m 窗口丢 360s=20%，且响应无覆盖起点披露）。覆盖残余：窗口起点恰对齐
+// 桶界时窗口内桶数=720+1，LIMIT 720 截掉最旧的部分桶——覆盖起点=窗口起点
+// +≤1 桶宽（见 metricsHistoryBuckets 注释）。
 func bucketSecondsFor(windowSeconds int64) int64 {
 	if windowSeconds <= 0 {
 		return 1
@@ -509,6 +524,69 @@ func metricsHistoryRange(value string) (string, int, int) {
 	}
 	modifier, seconds := parseMetricsInterval(normalized)
 	return modifier, int(bucketSecondsFor(seconds)), metricsHistoryBuckets
+}
+
+// metricHistoryRow 是两条历史端点共用的「每桶末行样本」行形状（timestamp
+// 统一解析为 UTC）。Blocked 仅规则端点 SQL 返回（全局分支不查该列，保持 0）。
+type metricHistoryRow struct {
+	Timestamp time.Time
+	Requests  int64
+	Status2xx int64
+	Status3xx int64
+	Status4xx int64
+	Status5xx int64
+	Blocked   int64
+	BytesIn   int64
+	BytesOut  int64
+}
+
+// errMetricsHistoryTimestamp 标记「行时间戳解析失败」——两条历史端点对该
+// 失败的固定文案与查询/扫描失败不同（解析历史指标时间失败 vs 读取…失败），
+// 单源 helper 以哨兵区分，端点按 errors.Is 分派文案。
+var errMetricsHistoryTimestamp = errors.New("历史指标时间戳解析失败")
+
+// queryMetricsHistory 是两条历史端点共用的查询/扫描/时间解析单源（此前逐字
+// 重复两份半——规则端点、全局分支各写一份 9/8 列 Scan 与同款解析，列清单与
+// 错误分支的漂移无门禁可查）。端点只提供 SQL 片段与参数：是否 rule_id 过滤、
+// 是否含 requests_blocked、全局分支先按 timestamp SUM；行采样语义（每桶末行、
+// LIMIT 截断、升序输出）由 SQL 保证。
+func queryMetricsHistory(ctx context.Context, metricsDB *sql.DB, query string, args []any, withBlocked bool) ([]metricHistoryRow, error) {
+	rows, err := metricsDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]metricHistoryRow, 0)
+	for rows.Next() {
+		var r metricHistoryRow
+		var ts string
+		var scanErr error
+		if withBlocked {
+			scanErr = rows.Scan(&ts, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.Blocked, &r.BytesIn, &r.BytesOut)
+		} else {
+			scanErr = rows.Scan(&ts, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.BytesIn, &r.BytesOut)
+		}
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		parsed, err := time.ParseInLocation("2006-01-02 15:04:05", ts, time.UTC)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errMetricsHistoryTimestamp, err)
+		}
+		r.Timestamp = parsed
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// respondMetricsHistoryError 两条历史端点共用的失败出口：时间戳解析失败与
+// 读取失败的固定文案分派（两措辞此前逐分支手写，同族漂移由单源消除）。
+func respondMetricsHistoryError(c *gin.Context, readMessage string, err error) {
+	if errors.Is(err, errMetricsHistoryTimestamp) {
+		writeInternalError(c, http.StatusInternalServerError, "解析历史指标时间失败", err)
+		return
+	}
+	writeInternalError(c, http.StatusInternalServerError, readMessage, err)
 }
 
 // GetRuleMetricsHistory returns cumulative history rows for one HTTP rule
@@ -538,7 +616,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "bucket_interval_seconds": bucketSeconds, "rows": []any{}}})
 		return
 	}
-	rows, err := metricsDB.QueryContext(c.Request.Context(), `
+	historyRows, err := queryMetricsHistory(c.Request.Context(), metricsDB, `
 		WITH ranked AS (
 			SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
 			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
@@ -555,12 +633,11 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
 		       requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out
 		FROM recent ORDER BY bucket
-	`, bucketSeconds, bucketSeconds, caddyID, modifier, bucketCount, bucketSeconds)
+	`, []any{bucketSeconds, bucketSeconds, caddyID, modifier, bucketCount, bucketSeconds}, true)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取历史指标失败", err)
+		respondMetricsHistoryError(c, "读取历史指标失败", err)
 		return
 	}
-	defer rows.Close()
 	type row struct {
 		Timestamp string `json:"timestamp"`
 		Requests  int64  `json:"requests_total"`
@@ -572,27 +649,21 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		BytesIn   int64  `json:"bytes_in"`
 		BytesOut  int64  `json:"bytes_out"`
 	}
-	result := []row{}
-	for rows.Next() {
-		var r row
-		var timestamp string
-		if err := rows.Scan(&timestamp, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.Blocked, &r.BytesIn, &r.BytesOut); err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "读取历史指标失败", err)
-			return
-		}
-		ts, err := time.ParseInLocation("2006-01-02 15:04:05", timestamp, time.UTC)
-		if err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "解析历史指标时间失败", err)
-			return
-		}
+	result := make([]row, 0, len(historyRows))
+	for _, r := range historyRows {
 		// 统一口径：返回裸 UTC 字符串，由前端 formatDate 按配置时区转换
 		// （与 /metrics/history 的 RFC3339 UTC 及其它列表端点一致）。
-		r.Timestamp = ts.UTC().Format("2006-01-02 15:04:05")
-		result = append(result, r)
-	}
-	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取历史指标失败", err)
-		return
+		result = append(result, row{
+			Timestamp: r.Timestamp.UTC().Format("2006-01-02 15:04:05"),
+			Requests:  r.Requests,
+			Status2xx: r.Status2xx,
+			Status3xx: r.Status3xx,
+			Status4xx: r.Status4xx,
+			Status5xx: r.Status5xx,
+			Blocked:   r.Blocked,
+			BytesIn:   r.BytesIn,
+			BytesOut:  r.BytesOut,
+		})
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "bucket_interval_seconds": bucketSeconds, "rows": result}})
 }
@@ -610,9 +681,6 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	// 720 桶 × 向下取整桶宽会静默丢弃最旧一段。
 	bucketSeconds := bucketSecondsFor(intervalSeconds)
 
-	var rows *sql.Rows
-	var err error
-
 	metricsDB := db.MetricsDB
 	if metricsDB == nil {
 		// 未装配形态返回空列表 `[]`（同
@@ -621,25 +689,36 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 		return
 	}
 
-	if ruleID != "" {
-		rows, err = metricsDB.QueryContext(c.Request.Context(), `
-			WITH ranked AS (
-				SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
-				       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out,
-				       ROW_NUMBER() OVER (
-					   PARTITION BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
-					   ORDER BY timestamp DESC, id DESC
-				   ) AS sample_rank
-				FROM metrics_history
-				WHERE rule_id = ? AND timestamp > datetime('now', ?)
-			)
-			SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
-			       requests_4xx, requests_5xx, bytes_in, bytes_out
-			FROM (SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out
-			      FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?) ORDER BY bucket
-		`, bucketSeconds, bucketSeconds, ruleID, interval, bucketSeconds, metricsHistoryBuckets)
-	} else {
-		rows, err = metricsDB.QueryContext(c.Request.Context(), `
+	// 查询/扫描/时间解析经 queryMetricsHistory 单源；本端点只选分支（单规则
+	// 过滤 vs 全站 per_ts SUM 聚合）与固定文案（读取指标历史失败）。
+	type MetricRow struct {
+		Timestamp     time.Time `json:"timestamp"`
+		RequestsTotal int64     `json:"requests_total"`
+		Status2xx     int64     `json:"status_2xx"`
+		Status3xx     int64     `json:"status_3xx"`
+		Status4xx     int64     `json:"status_4xx"`
+		Status5xx     int64     `json:"status_5xx"`
+		BytesIn       int64     `json:"bytes_in"`
+		BytesOut      int64     `json:"bytes_out"`
+	}
+	query := `
+		WITH ranked AS (
+			SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
+			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
+				   ORDER BY timestamp DESC, id DESC
+			   ) AS sample_rank
+			FROM metrics_history
+			WHERE rule_id = ? AND timestamp > datetime('now', ?)
+		)
+		SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
+		       requests_4xx, requests_5xx, bytes_in, bytes_out
+		FROM (SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out
+		      FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?) ORDER BY bucket`
+	args := []any{bucketSeconds, bucketSeconds, ruleID, interval, bucketSeconds, metricsHistoryBuckets}
+	if ruleID == "" {
+		query = `
 			WITH per_ts AS (
 				SELECT timestamp, SUM(requests_total) AS requests_total, SUM(requests_2xx) AS requests_2xx,
 				       SUM(requests_3xx) AS requests_3xx, SUM(requests_4xx) AS requests_4xx,
@@ -659,52 +738,32 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
 			       requests_4xx, requests_5xx, bytes_in, bytes_out
 			FROM (SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out
-			      FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?) ORDER BY bucket
-		`, interval, bucketSeconds, bucketSeconds, bucketSeconds, metricsHistoryBuckets)
+			      FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?) ORDER BY bucket`
+		args = []any{interval, bucketSeconds, bucketSeconds, bucketSeconds, metricsHistoryBuckets}
 	}
 
+	historyRows, err := queryMetricsHistory(c.Request.Context(), metricsDB, query, args, false)
 	if err != nil {
 		// 查询失败是本端点最频繁的读库故障路径，必须与同端点其余三个失败
 		// 分支（Scan/时间解析/rows.Err）共用固定文案 + 日志留痕。
-		writeInternalError(c, http.StatusInternalServerError, "读取指标历史失败", err)
+		respondMetricsHistoryError(c, "读取指标历史失败", err)
 		return
-	}
-	defer rows.Close()
-
-	type MetricRow struct {
-		Timestamp     time.Time `json:"timestamp"`
-		RequestsTotal int64     `json:"requests_total"`
-		Status2xx     int64     `json:"status_2xx"`
-		Status3xx     int64     `json:"status_3xx"`
-		Status4xx     int64     `json:"status_4xx"`
-		Status5xx     int64     `json:"status_5xx"`
-		BytesIn       int64     `json:"bytes_in"`
-		BytesOut      int64     `json:"bytes_out"`
 	}
 
 	// 空结果必须是 []（同族列表端点与 OpenAPI 契约）——nil slice
 	// 序列化为 null 会让客户端额外处理 null 形状。
-	metrics := make([]MetricRow, 0)
-	for rows.Next() {
-		var m MetricRow
-		var ts string
-		if err := rows.Scan(&ts, &m.RequestsTotal, &m.Status2xx, &m.Status3xx,
-			&m.Status4xx, &m.Status5xx, &m.BytesIn, &m.BytesOut); err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "读取指标历史失败", err)
-			return
-		}
-		parsed, err := time.ParseInLocation("2006-01-02 15:04:05", ts, time.UTC)
-		if err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "解析历史指标时间失败", err)
-			return
-		}
-		m.Timestamp = parsed
-		metrics = append(metrics, m)
-	}
-
-	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取指标历史失败", err)
-		return
+	metrics := make([]MetricRow, 0, len(historyRows))
+	for _, r := range historyRows {
+		metrics = append(metrics, MetricRow{
+			Timestamp:     r.Timestamp,
+			RequestsTotal: r.Requests,
+			Status2xx:     r.Status2xx,
+			Status3xx:     r.Status3xx,
+			Status4xx:     r.Status4xx,
+			Status5xx:     r.Status5xx,
+			BytesIn:       r.BytesIn,
+			BytesOut:      r.BytesOut,
+		})
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})

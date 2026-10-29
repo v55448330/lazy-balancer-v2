@@ -58,8 +58,8 @@ func TestIngestionHealth_dataLossOutlivesDegradedWindow(t *testing.T) {
 	// 曾发生写侧丢弃，但失败窗口已滑出（15min 前）。
 	securityEventsWriterHealth.mu.Lock()
 	securityEventsWriterHealth.droppedTotal = 5
-	securityEventsWriterHealth.windowStart = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
-	securityEventsWriterHealth.windowFailures = securityEventsWriterFailureThreshold
+	securityEventsWriterHealth.window.start = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
+	securityEventsWriterHealth.window.counter = securityEventsWriterFailureThreshold
 	securityEventsWriterHealth.lastFailureAt = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
 	securityEventsWriterHealth.mu.Unlock()
 
@@ -79,11 +79,11 @@ func TestIngestionHealth_dataLossOutlivesDegradedWindow(t *testing.T) {
 	securityEventsWriterHealth.mu.Lock()
 	securityEventsWriterHealth.droppedTotal = 0
 	securityEventsWriterHealth.ioTotal = 0
-	securityEventsWriterHealth.windowStart = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
-	securityEventsWriterHealth.windowFailures = 0
+	securityEventsWriterHealth.window.start = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
+	securityEventsWriterHealth.window.counter = 0
 	securityEventsWriterHealth.mu.Unlock()
 	securityEventsSkipHealth.mu.Lock()
-	securityEventsSkipHealth.windowStart = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
+	securityEventsSkipHealth.window.start = time.Now().Add(-securityEventsWriterFailureWindow - time.Minute)
 	securityEventsSkipHealth.mu.Unlock()
 	if status := SecurityEventsIngestionHealthSnapshot(); !status.DataLoss {
 		t.Fatal("畸形区跳过累计>0 也必须保持 data_loss=true")
@@ -144,7 +144,7 @@ func TestWriterStatsHealth_staleGenerationIgnored(t *testing.T) {
 	}
 	securityEventsWriterHealth.mu.Lock()
 	dropped, ioErrors, windowFailures := securityEventsWriterHealth.droppedTotal,
-		securityEventsWriterHealth.ioTotal, securityEventsWriterHealth.windowFailures
+		securityEventsWriterHealth.ioTotal, securityEventsWriterHealth.window.counter
 	securityEventsWriterHealth.mu.Unlock()
 	if dropped != 0 || ioErrors != 0 || windowFailures != 0 {
 		t.Fatalf("旧代际侧车必须整份忽略：dropped=%d io=%d windowFailures=%d", dropped, ioErrors, windowFailures)
@@ -238,7 +238,7 @@ func TestWriterStatsHealth_panelOnlyRestartCountsOnlyNewFailures(t *testing.T) {
 	securityEventsObserveAuditWriterStats()
 
 	securityEventsWriterHealth.mu.Lock()
-	dropped, windowFailures := securityEventsWriterHealth.droppedTotal, securityEventsWriterHealth.windowFailures
+	dropped, windowFailures := securityEventsWriterHealth.droppedTotal, securityEventsWriterHealth.window.counter
 	securityEventsWriterHealth.mu.Unlock()
 	if dropped != 1 || windowFailures != 1 {
 		t.Fatalf("本代只计真新增：dropped=%d windowFailures=%d, want 1/1（历史 7 次不得计入）",

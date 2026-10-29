@@ -218,6 +218,29 @@ func TestNormalizeTrustedProxyHeadersRejectsNineUniqueEntries(t *testing.T) {
 	}
 }
 
+// 内联网段条数门与请求头同口径：先按规范前缀去重，再对去重后集合判条数
+// （重复写法不占额度——与 trustedProxyTotalGate 的「重叠网段只计一次」及
+// headers 侧 dedupe-then-limit 一致）。
+func TestNormalizeTrustedProxyRangesAppliesLimitAfterDedupe(t *testing.T) {
+	entries := make([]string, 0, 65)
+	for i := range 64 {
+		entries = append(entries, fmt.Sprintf(`"198.18.%d.%d"`, i/256, i%256))
+	}
+	// 65 个原始条目、64 个唯一规范前缀（末条与首条同网段）。
+	entries = append(entries, entries[0])
+	raw := "[" + strings.Join(entries, ",") + "]"
+	if _, err := normalizeTrustedProxyRanges(raw); err != nil {
+		t.Fatalf("64 unique prefixes with one duplicate must pass (limit applies after dedupe): %v", err)
+	}
+
+	unique := entries[:64]
+	unique = append(unique, `"198.18.255.255"`)
+	raw = "[" + strings.Join(unique, ",") + "]"
+	if _, err := normalizeTrustedProxyRanges(raw); err == nil {
+		t.Fatal("65 unique prefixes must still be rejected")
+	}
+}
+
 // 预览端点与保存端点同校验（未过校验的载荷不得给出变更清单）。
 func TestPreviewConfigUpdate_trustedProxy_sameValidation(t *testing.T) {
 	handler := newBackupTestHandlers(t)

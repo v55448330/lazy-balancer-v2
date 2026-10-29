@@ -407,3 +407,65 @@ func closedTestDB(t *testing.T) *sql.DB {
 	}
 	return closed
 }
+
+// 装配缺失（clusterService/syncService 未注入）的 503 出口同属拒绝面：
+// explicit 路由中间件对 5xx 不代记，handler 必须留痕——此前角色端点的
+// 装配缺失出口直接 clusterError 返回，审计页对「集群操作为何点不动」零记录。
+func TestClusterWriteEndpoints_assemblyMissing503LeavesAuditTrail(t *testing.T) {
+	t.Run("SetClusterMode syncService missing", func(t *testing.T) {
+		h := newBackupTestHandlers(t)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/cluster/mode", strings.NewReader(`{"mode":"slave","master_url":"https://master.example","register_token":"t"}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		h.SetClusterMode(ctx)
+
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d body=%s, want 503", recorder.Code, recorder.Body.String())
+		}
+		assertClusterFailureAuditRow(t, "集群模式", "切换失败", "同步服务未初始化", "服务不可用")
+	})
+	t.Run("PromoteClusterNode syncService missing", func(t *testing.T) {
+		h := newBackupTestHandlers(t)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/cluster/promote", nil)
+
+		h.PromoteClusterNode(ctx)
+
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d body=%s, want 503", recorder.Code, recorder.Body.String())
+		}
+		assertClusterFailureAuditRow(t, "集群模式", "提升失败", "同步服务未初始化", "服务不可用")
+	})
+	t.Run("UpdateClusterSettings clusterService missing", func(t *testing.T) {
+		h := newBackupTestHandlers(t)
+		h.clusterService = nil
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/cluster/settings", strings.NewReader(`{"sync_rules":true}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		h.UpdateClusterSettings(ctx)
+
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d body=%s, want 503", recorder.Code, recorder.Body.String())
+		}
+		assertClusterFailureAuditRow(t, "集群设置", "更新失败", "集群服务未初始化", "服务不可用")
+	})
+}
+
+func assertClusterFailureAuditRow(t *testing.T, resource, action, detailPart, resultPart string) {
+	t.Helper()
+	var gotAction, detail string
+	if err := db.AuditDB.QueryRow(`SELECT action, detail FROM audit_log WHERE resource=? ORDER BY id DESC LIMIT 1`, resource).Scan(&gotAction, &detail); err != nil {
+		t.Fatalf("装配缺失失败面必须留痕（审计行缺失）: %v", err)
+	}
+	if gotAction != action {
+		t.Fatalf("audit action=%q, want %q", gotAction, action)
+	}
+	if !strings.Contains(detail, detailPart) || !strings.Contains(detail, "结果："+resultPart) {
+		t.Fatalf("audit detail=%q, want 含 %q 与 结果：%s", detail, detailPart, resultPart)
+	}
+}

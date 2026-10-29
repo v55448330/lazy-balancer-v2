@@ -539,7 +539,14 @@ func (session *configImportSession) close() {
 		}
 	}()
 	if !session.finished {
-		_ = session.abort(errors.New("导入流程未完成"))
+		// close 兜底 abort（正常路径 commit/abort 已把 finished 置位才会走到
+		// 这之外的分支）：此前 `_ =` 静默丢弃 abort 结果——「导入流程未完成」
+		// 的回滚零留痕，排障只能靠翻库猜。会话不携带用户身份，与本文件其余
+		// 系统留痕同口径以 system 身份补日志与审计；abort 内部的恢复失败
+		// （WAF/证书/运行配置回退）已并入返回值，一并在此留痕。
+		abortErr := session.abort(errors.New("导入流程未完成"))
+		services.Logf("error", "配置%s收尾：导入流程未完成，已回滚: %v", session.actionLabel(), abortErr)
+		services.RecordAuditLog("system", session.actionLabel()+"失败", "配置备份", "导入流程未完成，已回滚", "")
 	}
 	session.h.caddyOpMu.Unlock()
 	caddyLockReleased = true

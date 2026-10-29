@@ -37,6 +37,10 @@ func TestAuditLogAndAutoBackupReadsConsumeRequestContext(t *testing.T) {
 			markers: []string{"QueryRowContext("},
 		},
 		{
+			// 契约=「事务开启消费请求 ctx」（BeginTx 排锁阶段取消即中止）；
+			// 事务内语句与提交不单独取消——删除形态是「文件先删、提交收尾」，
+			// 中途取消会造成行回滚而文件已亡的最坏分叉（见 DeleteAutoBackup
+			// BeginTx 处注释）。marker 只钉开启点，勿放宽为「语句也消费 ctx」。
 			file: "autobackup.go", fn: "func (h *Handlers) DeleteAutoBackup(c *gin.Context) {",
 			markers: []string{"BeginTx(c.Request.Context()"},
 		},

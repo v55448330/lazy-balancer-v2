@@ -10,7 +10,7 @@ import (
 )
 
 // 显式单职策略的阶段外 ACL 启用门：显式 stage0/2/3 策略的
-// ACL 已被 normalizeOutOfStageFields 归一归零，PUT 缺省类型提交
+// ACL 已被 applyStageZerosToCreate 归一归零，PUT 缺省类型提交
 // {ip_acl_enabled:true} 绕过归一，更新后与原阶段特征并存→重推断把类型
 // 改写 mixed（类型与内容漂移）。删除前守卫拒绝；stage1 是 ACL 所属阶段
 // （归一保留 ACL 字段），启用属正常编辑不拦；mixed/空串存量兼容态不拦。

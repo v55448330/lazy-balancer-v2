@@ -432,7 +432,7 @@ func TestCreateSecurityPolicy_stage1ClearsTrustFields(t *testing.T) {
 }
 
 // 显式 stage2/stage3 创建同样把 ip_whitelist_enabled
-// 归 0 落库——此前 normalizeOutOfStageFields 置 nil 使 INSERT 落默认 1，
+// 归 0 落库——此前 applyStageZerosToCreate 置 nil 使 INSERT 落默认 1，
 // 与 Update 路径（&falseVal → 0）形状漂移。
 func TestCreateSecurityPolicy_stage23ZeroWhitelistEnabled(t *testing.T) {
 	setupSecurityPolicyTestDB(t)

@@ -117,7 +117,8 @@ test('跨栈对表：Go 侧判据与前端常量同值', () => {
   const tsForms = [...tsArray.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort()
   assert.deepEqual(tsForms, goForms, '前端 ALL_SPACE_PREFIXES 必须与 Go case 列表逐值相等')
   const handler = repoCode('internal/handlers/config_trustedproxy.go')
-  assert.match(handler, /len\(entries\) > 64/, '内联网段条目上限须与常量对表')
+  // 条数门已收敛为单源 helper（trustedProxyListLimit），上限值在调用点对表
+  assert.match(handler, /trustedProxyListLimit\("受信代理网段", normalized, 64\)/, '内联网段条数门须走单源 helper 且上限 64')
   assert.equal(TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4, 8)
   assert.equal(TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6, 29)
   assert.equal(TRUSTED_PROXY_MAX_INLINE_ENTRIES, 64)
@@ -253,7 +254,7 @@ test('非法/空条目不计入并集（由网段判据逐条点名）', () => {
 test('跨栈对表：请求头与总量判据与 Go 侧同值', () => {
   const handler = repoCode('internal/handlers/config_trustedproxy.go')
   const headers = handler.slice(handler.indexOf('func normalizeTrustedProxyHeaders'))
-  assert.match(headers, /len\(normalized\) > 8/, '请求头条数上限须按去重后条目对表')
+  assert.match(headers, /trustedProxyListLimit\("受信代理请求头", normalized, 8\)/, '请求头条数门须走单源 helper 且上限 8')
   assert.match(headers, /strings\.ToLower\(entry\)/, '请求头去重须忽略大小写')
   // 前端条数门必须与后端同一口径（先去重再判数）：按原始条数判会硬拦后端
   // 必然接受的配置（9 条含 1 条大小写重复 → 后端归一为 8 条）。

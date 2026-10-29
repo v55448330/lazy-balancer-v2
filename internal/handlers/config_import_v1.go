@@ -354,8 +354,13 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 			warnings = append(warnings, fmt.Sprintf("规则 %s 的负载策略 %q 无法映射，已使用 weighted_round_robin", f.ProxyName, f.BalancerType))
 		}
 		rule := convertedRule{
-			Name:        f.ProxyName,
-			Domain:      strings.Join(strings.Fields(f.ServerName), ", "),
+			Name: f.ProxyName,
+			// server_name 拆分口径：nginx 导出以空格分隔，亦见「逗号+空格」
+			// 混合/连续逗号形态——先把逗号折算为分隔符再按空白拆分，逐段
+			// 剥离后拼接，杜绝空段落库（"a.com,, b.com" 形态曾直通 Caddy
+			// host matcher）。保存侧 v2 写入同样接受逗号/空白分隔（db 归一），
+			// 本口径与其消费面一致。
+			Domain:      strings.Join(strings.Fields(strings.ReplaceAll(f.ServerName, ",", " ")), ", "),
 			ListenPort:  f.Listen,
 			Protocol:    "http",
 			Strategy:    strategy,
@@ -534,7 +539,7 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 		if !rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 			rule.EnableTLS = false
-			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：启用 TLS 但证书或私钥为空，已按关闭 TLS 导入（规则为禁用状态）", index+1, rule.Name))
+			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：规则为禁用状态且证书/私钥为空，已按关闭 TLS 导入（证书可后续补齐再启用）", index+1, rule.Name))
 		}
 		// /：strategy 白名单与 80 端口
 		// +TLS 跳转自环门自导入循环前移至此——预览/导入共用同门，summary 计数

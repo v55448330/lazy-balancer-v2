@@ -13,7 +13,7 @@ import (
 func TestFormatDriftBanner_excludesDetectTime(t *testing.T) {
 	// Given 缺失+多余两形态与检测时间
 	// When
-	banner := formatDriftBanner([]string{"测试规则（lb_a）"}, []string{"幽灵（lb_b）"})
+	banner := services.FormatDriftRoutes([]string{"测试规则（lb_a）"}, []string{"幽灵（lb_b）"})
 
 	// Then 正文不含检测时间（拆到 config_drift_since），内容两段保留。
 	// 时间字面量的归属由下方 TestDriftBannerAndSinceFields_splitCleanly 用

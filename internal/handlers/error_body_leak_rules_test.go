@@ -67,17 +67,30 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 
 	// 共享事务收尾（business 组经 finishTxApply 收口：批量阶段页等）：5xx 与
 	// 已提交视图恢复分支必须只回固定文案——错误详情由日志/审计承担。
-	sharedFile, err := parser.ParseFile(fset, "handlers.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse handlers.go: %v", err)
+	okNoteTargets := []struct {
+		file   string
+		fname  string
+		leaked func(*token.FileSet, ast.Node) []string
+	}{
+		{"handlers.go", "finishTxApply", collect5xxErrorTextLeaks},
+		{"handlers.go", "finishTxApply", okFailureNoteLeaks},
+		// tryIPListHotPathApply 的强制重载收尾镜像 finishTxApply 三分支，
+		// 200 失败注记同受脱敏契约约束。
+		{"securityiplists.go", "tryIPListHotPathApply", okFailureNoteLeaks},
 	}
-	for _, fn := range sharedFile.Decls {
-		decl, ok := fn.(*ast.FuncDecl)
-		if !ok || decl.Name.Name != "finishTxApply" {
-			continue
+	for _, target := range okNoteTargets {
+		parsedFile, err := parser.ParseFile(fset, target.file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", target.file, err)
 		}
-		for _, leak := range collect5xxErrorTextLeaks(fset, decl) {
-			t.Errorf("handlers.go:%s: 5xx 响应拼接了内部错误文本: %s", decl.Name.Name, leak)
+		for _, fn := range parsedFile.Decls {
+			decl, ok := fn.(*ast.FuncDecl)
+			if !ok || decl.Name.Name != target.fname {
+				continue
+			}
+			for _, leak := range target.leaked(fset, decl) {
+				t.Errorf("%s:%s: 响应拼接了未脱敏的内部错误文本: %s", target.file, decl.Name.Name, leak)
+			}
 		}
 	}
 }
@@ -119,6 +132,39 @@ func f(c *gin.Context, err error, status int) {
 	}
 	if leaks := collect5xxErrorTextLeaks(fset, parsed); len(leaks) != 12 {
 		t.Fatalf("扫描器应捕获 12 处 5xx 泄漏，实际 %d: %v", len(leaks), leaks)
+	}
+}
+
+// 「成功响应 + 失败注记」扫描器自检：未脱敏拼接错误文本的 200 写点必须被
+// 捕获；经 RedactCaddyAdminEndpoint 脱敏的同一形态与固定文案/4xx 反形状
+// 不得误报。若该扫描退化（恒空或恒报），finishTxApply 退化提交响应的
+// 脱敏契约就失去机械守卫。
+func TestOKFailureNoteScannerDetectsUnredactedSuccessBodies(t *testing.T) {
+	const source = `package p
+
+func f(c *gin.Context, err error, status int) {
+	// 泄漏形态：成功响应直出错误文本（admin 地址在 /load 传输错误里）。
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存；但 Caddy 配置应用失败：" + err.Error()})
+	c.JSON(200, models.APIResponse{Code: 0, Message: fmt.Sprintf("已保存；但应用失败：%v", err)})
+	message := err.Error()
+	c.JSON(status, models.APIResponse{Code: 0, Message: "已保存；但应用失败：" + message})
+	// 合法形态：脱敏出口。
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(err.Error())})
+	// 5xx 写点归 collect5xxErrorTextLeaks 管辖，本扫描不重复计。
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "x: " + err.Error()})
+	// 4xx 配置拒绝类不受约束（同 5xx 扫描的反形状）：400/409 字面量与动态
+	// 非成功状态都不算「成功响应」。
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "冲突：" + err.Error()})
+}`
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "synthetic_ok.go", source, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic source: %v", err)
+	}
+	leaks := okFailureNoteLeaks(fset, parsed)
+	if len(leaks) != 3 {
+		t.Fatalf("OK 注记扫描器应捕获 3 处未脱敏成功响应，实际 %d: %v", len(leaks), leaks)
 	}
 }
 
@@ -335,6 +381,131 @@ func containsErrorVerb(quotedFormat string) bool {
 	return false
 }
 
+// isExplicitNonOKStatusExpr 报告状态实参是否为字面 4xx/5xx（选择器或整数
+// 字面量）——这些写点分属 5xx 扫描与 4xx 允许面，「成功响应 + 失败注记」
+// 扫描只辖 2xx/动态 status 形态。
+func isExplicitNonOKStatusExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		switch e.Sel.Name {
+		case "StatusBadRequest", "StatusUnauthorized", "StatusForbidden", "StatusNotFound",
+			"StatusConflict", "StatusGone", "StatusRequestEntityTooLarge", "StatusUnprocessableEntity",
+			"StatusTooManyRequests", "StatusInternalServerError", "StatusNotImplemented",
+			"StatusBadGateway", "StatusServiceUnavailable":
+			return true
+		}
+		return false
+	case *ast.BasicLit:
+		if e.Kind != token.INT {
+			return false
+		}
+		switch e.Value {
+		case "400", "401", "403", "404", "409", "410", "413", "422", "429", "500", "501", "502", "503":
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// okFailureNoteLeaks 扫描「成功响应 + 失败注记」形态：非 5xx 的 c.JSON 写点
+// 若在响应体拼接错误文本且未经 RedactCaddyAdminEndpoint 脱敏，即为泄漏——
+// 成功响应与 5xx 固定文案同一可见面（business 组任意登录用户），admin 地址
+// 等内部结构不得直出。仅对显式列出的函数应用：collect5xxErrorTextLeaks 的
+// 4xx 允许面（配置拒绝类回真实原因）不受影响，全量套用会把合法 400 形态
+// 误判为泄漏。
+func okFailureNoteLeaks(fset *token.FileSet, node ast.Node) []string {
+	// 经局部变量中转的错误文本（message := err.Error()）与直拼同罪：先收集
+	// 赋值面，再在响应实参里按标识符识别（与 collect5xxErrorTextLeaksInScope
+	// 的 errorTextNames 同形）。
+	errorTextNames := map[string]bool{}
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch current := n.(type) {
+		case *ast.AssignStmt:
+			if len(current.Lhs) == 1 && len(current.Rhs) == 1 {
+				if ident, ok := current.Lhs[0].(*ast.Ident); ok && mentionsErrorText(fset, current.Rhs[0]) {
+					errorTextNames[ident.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			if len(current.Names) == 1 && len(current.Values) == 1 && mentionsErrorText(fset, current.Values[0]) {
+				errorTextNames[current.Names[0].Name] = true
+			}
+		}
+		return true
+	})
+	containsErrorText := func(expr ast.Expr) bool {
+		if mentionsErrorText(fset, expr) {
+			return true
+		}
+		found := false
+		ast.Inspect(expr, func(n ast.Node) bool {
+			if ident, ok := n.(*ast.Ident); ok && errorTextNames[ident.Name] {
+				found = true
+				return false
+			}
+			return !found
+		})
+		return found
+	}
+	leaks := make([]string, 0)
+	ast.Inspect(node, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "JSON" {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok || ident.Name != "c" || len(call.Args) < 2 {
+			return true
+		}
+		// 5xx 写点归 collect5xxErrorTextLeaks 管辖；4xx 配置拒绝类是本测试
+		// 文件头声明的允许面（cli_validation_gate 等门禁依赖 400 内的 CLI
+		// 细节）。本扫描只看「成功响应 + 失败注记」形态。
+		if isExplicitNonOKStatusExpr(call.Args[0]) {
+			return true
+		}
+		for _, arg := range call.Args[1:] {
+			if containsErrorText(arg) && !wrapsRedactCaddyAdminEndpoint(fset, arg) {
+				leaks = append(leaks, printNode(fset, call))
+				break
+			}
+		}
+		return true
+	})
+	return leaks
+}
+
+// wrapsRedactCaddyAdminEndpoint 报告节点内的错误文本是否经 RedactCaddyAdminEndpoint
+// 包裹（成功响应失败注记的唯一合法出口——脱敏后的文本才可直出）。
+func wrapsRedactCaddyAdminEndpoint(fset *token.FileSet, node ast.Node) bool {
+	found := false
+	ast.Inspect(node, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "RedactCaddyAdminEndpoint" {
+			return true
+		}
+		for _, arg := range call.Args {
+			if mentionsErrorText(fset, arg) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
 func printNode(fset *token.FileSet, node ast.Node) string {
 	var buf bytes.Buffer
 	if err := printer.Fprint(&buf, fset, node); err != nil {
@@ -545,15 +716,14 @@ func TestAuditLogEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 // 读失败，配置导入/还原需保留事务回滚原因。未登记即按 business 组口径
 // （固定文案）——不存在「既不登记也不扫描」的真空区。
 var adminBusiness5xxDetailFunctions = map[string]string{
-	"autobackup.go:AutoBackupSettings":        "设置/备份列表读取失败需管理员看到 errno",
-	"autobackup.go:UpdateAutoBackupSettings":  "设置事务写失败需点名（DB 锁/只读库）",
-	"autobackup.go:RunAutoBackupNow":          "引擎触发失败需点名（admission/执行错误）",
-	"autobackup.go:RestoreAutoBackup":         "备份文件读取失败需点名（权限/errno）",
-	"autobackup.go:DownloadAutoBackup":        "备份文件读取失败需点名（权限/errno）",
-	"admintls.go:UpdateAdminTLS":              "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
-	"config_backup.go:ExportConfigBackup":     "导出失败需管理员区分备份内容错误与系统故障",
-	"config_backup.go:failImportTx":           "导入/还原必须点名事务回滚原因（既有响应契约）",
-	"config_backup.go:importConfigBackupCore": "导入/还原事务与文件回滚失败需管理员看到具体原因",
+	"autobackup.go:AutoBackupSettings":       "设置/备份列表读取失败需管理员看到 errno",
+	"autobackup.go:UpdateAutoBackupSettings": "设置事务写失败需点名（DB 锁/只读库）",
+	"autobackup.go:RunAutoBackupNow":         "引擎触发失败需点名（admission/执行错误）",
+	"autobackup.go:RestoreAutoBackup":        "备份文件读取失败需点名（权限/errno）",
+	"autobackup.go:DownloadAutoBackup":       "备份文件读取失败需点名（权限/errno）",
+	"admintls.go:UpdateAdminTLS":             "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
+	"config_backup.go:ExportConfigBackup":    "导出失败需管理员区分备份内容错误与系统故障",
+	"config_backup.go:failImportTx":          "导入/还原必须点名事务回滚原因（既有响应契约）",
 }
 
 // 政策前提门（admin 业务族）：清单条目必须是 admin 组的**路由处理器**——
@@ -566,8 +736,7 @@ var adminBusiness5xxDetailFunctions = map[string]string{
 // 列在 helper 白名单里并附理由，新增的未注册条目一律判红（不得靠沉默混过）。
 func TestAdminBusiness5xxDetailPolicyRoutesAreAdminGroup(t *testing.T) {
 	helpersWithoutRoutes := map[string]string{
-		"config_backup.go:failImportTx":           "导入事务回滚收尾的内部辅助函数，无独立路由入口",
-		"config_backup.go:importConfigBackupCore": "导入/还原主干内部实现，由其处理器调用，无独立路由入口",
+		"config_backup.go:failImportTx": "导入事务回滚收尾的内部辅助函数，无独立路由入口",
 	}
 	registrations := caddyRouteGroupRegistrations(t)
 	routed := 0

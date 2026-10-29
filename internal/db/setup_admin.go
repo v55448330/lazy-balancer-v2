@@ -39,6 +39,12 @@ const (
 	  AND NOT EXISTS (SELECT 1 FROM users WHERE COALESCE(is_setup_admin,0)=1 AND role='admin' AND is_enabled=1)`
 )
 
+// setupAdminColumnBackfill 是 newColumns 补列通道（users.is_setup_admin）的
+// 首标回填语句：判据由 setupAdminBackfillPredicate 单源拼接，与运行期
+// EnsureSetupAdminFlag 的 S3 补标逐字同源——setupAdminPredicateParity 启动期
+// 自检看守，禁止再手写第二份判据（此前 db.go 侧的副本改判据即静默分叉）。
+var setupAdminColumnBackfill = "UPDATE users SET is_setup_admin=1 WHERE " + setupAdminBackfillPredicate
+
 // EnsureSetupAdminFlag 归一 break-glass 管理入口标记：
 //   - 标记只允许落在「启用的管理员」行上，非管理员/禁用行的陈旧标记先清除；
 //   - 多条启用管理员同时带标记（导入的配置备份或带外改库的形态）收敛为
@@ -94,6 +100,11 @@ func setupAdminPredicateParity() error {
 		if !strings.Contains(probe, item.predicate) {
 			return fmt.Errorf("setup admin 探测门与归一漂移：探测 SQL 缺少%s谓词", item.name)
 		}
+	}
+	// 补列回填判据同源：users.is_setup_admin 首标（newColumns 通道）必须逐字
+	// 引用 S3 谓词——判据改判时不随动即在此响亮失败，而不是两处静默分叉。
+	if !strings.Contains(setupAdminColumnBackfill, setupAdminBackfillPredicate) {
+		return fmt.Errorf("setup admin 探测门与归一漂移：users.is_setup_admin 补列回填未逐字引用 S3 补标谓词")
 	}
 	return nil
 }

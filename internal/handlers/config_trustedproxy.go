@@ -46,9 +46,10 @@ func (e *trustedProxyReadError) Unwrap() error { return e.cause }
 
 func trustedProxyReadFailure(cause error) error { return &trustedProxyReadError{cause: cause} }
 
-// trustedProxyMaxTotalCIDRs 受信网段总量上限（内联 ∪ 引用展开，去重前
-// 按条目计）：Caddy static ranges 是逐条装载的集合，无聚合链路——上限
-// 防御单一名单（≤2000 条写侧门，2026-10-14 裁定 500→2000）×多引用的组合膨胀。
+// trustedProxyMaxTotalCIDRs 受信网段总量上限（内联 ∪ 引用展开，按规范化
+// 前缀集合去重后计，与渲染层 seen 同源——重叠网段只计一次）：Caddy static
+// ranges 是逐条装载的集合，无聚合链路——上限防御单一名单（≤2000 条写侧门，
+// 2026-10-14 裁定 500→2000）×多引用的组合膨胀。
 const trustedProxyMaxTotalCIDRs = 2000
 
 // trustedProxyListSource 名单解析源行（id → 名单行）。builtin 标记
@@ -404,13 +405,20 @@ func parseTrustedProxyPrefix(value string) (netip.Prefix, error) {
 	return services.TrustedProxyPrefixCanonical(prefix), nil
 }
 
+// trustedProxyListLimit 同族条数门的单一实现：对去重后的规范集合判条数
+// （内联网段与请求头同口径——重复条目不占额度；与 trustedProxyTotalGate 的
+// 「重叠网段只计一次」同源）。
+func trustedProxyListLimit(label string, normalized []string, limit int) error {
+	if len(normalized) > limit {
+		return fmt.Errorf("%s条数上限 %d（当前 %d）", label, limit, len(normalized))
+	}
+	return nil
+}
+
 func normalizeTrustedProxyRanges(raw string) (string, error) {
 	var entries []string
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return "", fmt.Errorf("受信代理网段必须是 JSON 数组: %v", err)
-	}
-	if len(entries) > 64 {
-		return "", fmt.Errorf("受信代理网段条数上限 64（当前 %d）", len(entries))
 	}
 	normalized := make([]string, 0, len(entries))
 	seen := make(map[string]struct{}, len(entries))
@@ -437,6 +445,9 @@ func normalizeTrustedProxyRanges(raw string) (string, error) {
 		seen[prefix.String()] = struct{}{}
 		normalized = append(normalized, prefix.String())
 	}
+	if err := trustedProxyListLimit("受信代理网段", normalized, 64); err != nil {
+		return "", err
+	}
 	out, err := json.Marshal(normalized)
 	if err != nil {
 		return "", fmt.Errorf("序列化受信代理网段失败: %v", err)
@@ -462,8 +473,8 @@ func normalizeTrustedProxyHeaders(raw string) (string, error) {
 		seen[key] = struct{}{}
 		normalized = append(normalized, entry)
 	}
-	if len(normalized) > 8 {
-		return "", fmt.Errorf("受信代理请求头条数上限 8（当前 %d）", len(normalized))
+	if err := trustedProxyListLimit("受信代理请求头", normalized, 8); err != nil {
+		return "", err
 	}
 	out, err := json.Marshal(normalized)
 	if err != nil {

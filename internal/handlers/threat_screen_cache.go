@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -270,6 +271,18 @@ type threatRollupDimAggregateKey struct {
 // 过期项防 map 无限增长；不得整体重置（同屏其它维度条目仍在有效期）。
 var threatRollupDimAggregateCache = newTTLCache[threatRollupDimAggregateKey, threatRollupDimAggregate](0)
 
+// cloneThreatRollupDimAggregate 返回聚合的深拷贝（4 个 map 与 bucketTotals
+// 切片各自独立）——缓存命中路径的返回值契约：调用方改写不得污染缓存条目。
+func cloneThreatRollupDimAggregate(in threatRollupDimAggregate) threatRollupDimAggregate {
+	out := in
+	out.countries = maps.Clone(in.countries)
+	out.chinaProvinces = maps.Clone(in.chinaProvinces)
+	out.familyCounts = maps.Clone(in.familyCounts)
+	out.ruleCounts = maps.Clone(in.ruleCounts)
+	out.bucketTotals = slices.Clone(in.bucketTotals)
+	return out
+}
+
 // threatRollupBucketLayout 槽界签名（空槽集=空串）。
 func threatRollupBucketLayout(bucketStarts []time.Time) string {
 	if len(bucketStarts) == 0 {
@@ -327,7 +340,11 @@ func threatRollupDimAggregateQuery(database *sql.DB, sinceMinute string, bucketS
 	now := time.Now()
 	if cacheable {
 		if cached, ok := threatRollupDimAggregateCache.Get(key, now); ok {
-			return cached, nil
+			// 命中路径返回深拷贝：4 个 map 与 bucketTotals 切片若与缓存条目
+			// 共享底层数据，调用方就地改写会污染同窗后续命中（同型事故见
+			// 安全总览聚合缓存）；与同文件 threatTopTargets 的 slices.Clone
+			// 防护同口径。
+			return cloneThreatRollupDimAggregate(cached), nil
 		}
 	}
 

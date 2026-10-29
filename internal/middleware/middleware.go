@@ -1407,7 +1407,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at>?) AS revoked
 		)
 		SELECT auth_state.revoked, u.username, u.role, COALESCE(u.is_enabled,0), u.password_version
-		FROM auth_state LEFT JOIN users u ON u.id=?`, encodedRevocationHash, now.Format(models.RevokedTokenTimeFormat), int64(userIDFloat)).Scan(&revoked, &dbUsername, &dbRole, &dbEnabled, &passwordVersion)
+		FROM auth_state LEFT JOIN users u ON u.id=?`, encodedRevocationHash, models.FormatRevokedTokenTime(now), int64(userIDFloat)).Scan(&revoked, &dbUsername, &dbRole, &dbEnabled, &passwordVersion)
 		if queryErr == nil && revoked {
 			recordAuthenticationRejection(c, "jwt_revoked")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})

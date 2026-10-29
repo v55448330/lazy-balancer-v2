@@ -179,8 +179,8 @@ func allowEffectiveListNonEmpty(q ipListQueryer, inlineRaw, refsRaw string) (boo
 }
 
 // allowEmptyingBlockedByPolicies 判定「把 listID 清空为 replacement」是否会让
-// 任一 allow 策略的生效集合变为空。偏严语义：检查全部
-// 启用 allow 策略（含 disabled 策略——与 Create/Update 对禁用策略同样设门的
+// 任一 allow 策略的生效集合变为空。偏严语义：检查全部 ip_acl 已启用的
+// allow 策略（含策略本身被禁用的行——与 Create/Update 对禁用策略同样设门的
 // 口径一致）。查询失败返回错误（调用方 500，fail-closed）。
 func allowEmptyingBlockedByPolicies(q ipListQueryer, listID int64, replacement []string) (bool, error) {
 	rows, err := q.Query(`SELECT COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE COALESCE(ip_acl_enabled,0)=1 AND COALESCE(ip_acl_mode,'')='allow'`)
@@ -1188,8 +1188,10 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// 受信代理引用面守卫（2026-10-12，参照 crs_excluded 引用面守卫）：
 	// 被 trusted_proxy_range_refs 引用的名单删除会使受信网段渲染静默缺
 	// 条目（保存侧存在性门只拦新写入，不追存量悬空）——同事务内检查，
-	// 解除引用（Caddy 全局设置）后方可删除。查询/解析失败一律按被引用处理
-	// （宁可拒绝删除，不放行悬空引用）。
+	// 解除引用（Caddy 全局设置）后方可删除。两侧口径不同且为有意设计：
+	// 查询失败 fail-closed（500 拒绝删除）；refs 解析失败按空集放行
+	// （parseIPListRefsIDs 宽松解析——本处只读存量值，异形 refs 只能来自
+	// 带外写入，按空集不虚构引用关系；保存侧对提交的非法 refs 显式 400）。
 	var trustedRefs string
 	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&trustedRefs); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验受信代理引用失败"})
@@ -1580,7 +1582,8 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			}
 			// 退化提交（DB 已提交、运行配置未生效）与 finishTxApply 同一横幅
 			// 形态：「已保存但未生效」；失败横幅的「旧配置已保留」会被误读为
-			// 未保存 → 重复提交。
+			// 未保存 → 重复提交。200 响应与 finishTxApply 同口径经
+			// RedactCaddyAdminEndpoint 脱敏（/load 传输错误携带 admin 地址）。
 			h.recordCaddyApplySavedNotLive(applyErr)
 			recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
 			recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
@@ -1589,7 +1592,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			if status == 0 {
 				status = http.StatusOK
 			}
-			c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + applyErr.Error(), Data: f.Data})
+			c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(applyErr.Error()), Data: f.Data})
 			return true
 		}
 		if err := commitIPListTx(tx); err != nil {

@@ -190,6 +190,32 @@ func TestImportV1Config_rolls_back_when_certificate_materialization_fails(t *tes
 	}
 }
 
+// TestImportV1Config_multiDomainServerNameJoinsWithoutEmptySegments 钉 v1
+// server_name 的拆分口径：nginx 导出形态以空格分隔、也见「逗号+空格」混合
+// 形态——统一拆分后不得把逗号残留在段内落库出空段（"a.test,, b.test"）。
+func TestImportV1Config_multiDomainServerNameJoinsWithoutEmptySegments(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"multi-domain","protocol":true,"listen":18443,"server_name":"a.test, b.test","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var domain string
+	if err := db.DB.QueryRow(`SELECT domain FROM lb_rules WHERE name='multi-domain'`).Scan(&domain); err != nil {
+		t.Fatalf("query imported rule: %v", err)
+	}
+	if domain != "a.test, b.test" {
+		t.Fatalf("domain=%q, want %q（逐段剥逗号后拼接，无空段）", domain, "a.test, b.test")
+	}
+}
+
 func TestImportV1Config_cleansDisappearedRuleMetricsAndLogs(t *testing.T) {
 	// Given an old rule with metrics and log artifacts, plus unrelated global metrics.
 	h := newBackupTestHandlers(t)

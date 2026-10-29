@@ -428,7 +428,7 @@ func (h *Handlers) Logout(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
 		return
 	}
-	if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, expiresAtTime.UTC().Format(models.RevokedTokenTimeFormat)); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, models.FormatRevokedTokenTime(expiresAtTime)); err != nil {
 		services.Logf("error", "登出吊销会话失败（令牌尚未吊销）: username=%s: %v", usernameStr, err)
 		services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("failure"), c.ClientIP())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})

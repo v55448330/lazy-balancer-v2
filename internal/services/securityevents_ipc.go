@@ -273,8 +273,11 @@ var securityEventsSpoolCountCache = struct {
 	files map[string]securityEventsSpoolCountCacheEntry
 }{files: map[string]securityEventsSpoolCountCacheEntry{}}
 
+// testseam: 留驻产品文件的测试观测计数器——由生产读取路径（spool 条目装载）
+// 自增、spool 计数缓存测试读取；宿主不可能在 *_test.go。
 var securityEventsSpoolEntryReadBytesForTest atomic.Int64
 
+// testseam: 留驻产品文件的测试缝——只被测试消费的缓存复位入口。
 func resetSecurityEventsSpoolEntryCountCacheForTest() {
 	securityEventsSpoolCountCache.Lock()
 	securityEventsSpoolCountCache.files = map[string]securityEventsSpoolCountCacheEntry{}
@@ -694,6 +697,9 @@ func securityEventsOverlaySpoolHealth(status *SecurityEventsIngestionStatus) {
 
 // ResetSecurityEventsSpoolStateForTest 复位 spool 缓存与退避状态（测试用：
 // 顺序依赖/随机序下前一用例的退避或缓存会污染后续用例）。
+//
+// testseam: 留驻产品文件的测试缝——导出入口被 handlers 测试跨包消费，
+// 宿主不可能在同包 *_test.go。
 func ResetSecurityEventsSpoolStateForTest() {
 	securityEventsSpoolState.mu.Lock()
 	securityEventsSpoolState.cachedAt = time.Time{}

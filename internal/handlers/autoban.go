@@ -61,8 +61,11 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存自动封禁配置失败", err)})
 		return
 	}
-	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s；调度：%s；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s",
-		boolOnOff(req.Enabled), enabledStateLabel(req.Enabled), req.Threshold, req.WindowMinutes,
+	// 启用与调度是同一字段的两面（保存即联动调度启停），只产出一个状态位并
+	// 括注联动关系——旧文案「启用：开；调度：开启」两个同义布尔易被误读为
+	// 独立状态。
+	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s（调度随之启停）；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s",
+		boolOnOff(req.Enabled), req.Threshold, req.WindowMinutes,
 		services.AutobanDurationLabel(req.Duration), autobanScopeText(req.Scope),
 		map[bool]string{true: "观察", false: "正式"}[req.DryRun]))
 	updated, err := services.GetAutobanConfig()
@@ -138,8 +141,11 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		"is_master":     isMaster,
 		"role":          map[bool]string{true: "master", false: "slave"}[isMaster],
 		"running":       false,
-		"last_run":      "",
-		"last_status":   "",
+		// loop_on 预置 false：响应键集不随任务引擎装配状态漂移（引擎未装配/
+		// Lookup 未命中时此前整键缺失，apidocs 示例与前端类型按恒有键消费）。
+		"loop_on":     false,
+		"last_run":    "",
+		"last_status": "",
 	}
 	if te := services.TaskEngine(); te != nil {
 		if m, ok := te.Lookup(services.AutobanTaskID); ok {

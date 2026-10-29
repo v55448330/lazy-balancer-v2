@@ -885,3 +885,44 @@ func TestCertificateConfigEndpointsHandleNullDNSCredentials(t *testing.T) {
 		}
 	})
 }
+
+// 创建契约：省略 enabled 的 POST 按「配置默认可用」落库 enabled=1（*bool 区分
+// 未提交与显式 false）；显式 false 仍落 0。旧 bool 零值让脚本/MCP 通道漏带
+// enabled 时静默创建禁用配置。
+func TestCreateCertificateConfig_omittedEnabledDefaultsToEnabled(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.POST("/certificate-configs", h.CreateCertificateConfig)
+
+	post := func(t *testing.T, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/certificate-configs", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	omitResponse := post(t, `{"name":"omit-enabled","dns_provider":"dnspod","dns_credentials":{"api_token":"12345,abcdef"}}`)
+	if omitResponse.Code != http.StatusCreated {
+		t.Fatalf("omit enabled: status=%d body=%s, want 201", omitResponse.Code, omitResponse.Body.String())
+	}
+	falseResponse := post(t, `{"name":"explicit-disabled","dns_provider":"dnspod","dns_credentials":{"api_token":"12345,abcdef"},"enabled":false}`)
+	if falseResponse.Code != http.StatusCreated {
+		t.Fatalf("explicit false: status=%d body=%s, want 201", falseResponse.Code, falseResponse.Body.String())
+	}
+
+	var omitEnabled, falseEnabled int
+	if err := db.DB.QueryRow(`SELECT enabled FROM certificate_configs WHERE name='omit-enabled'`).Scan(&omitEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.QueryRow(`SELECT enabled FROM certificate_configs WHERE name='explicit-disabled'`).Scan(&falseEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if omitEnabled != 1 {
+		t.Fatalf("省略 enabled 落库 enabled=%d, want 1（默认可用）", omitEnabled)
+	}
+	if falseEnabled != 0 {
+		t.Fatalf("显式 enabled=false 落库 enabled=%d, want 0", falseEnabled)
+	}
+}

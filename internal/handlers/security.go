@@ -1312,7 +1312,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, policyType != models.PolicyTypeStage0 && req.GeoIPMode != "off"), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2472,8 +2472,9 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 // 路径同源此常量——BindRuleToPolicy additive、SetRuleSecurityPolicies 原子替换、
 // BatchBindSecurityPolicies 提交集与 merge 合并、SplitSecurityPolicy 重映射、
 // BulkUpdatePolicyBindings 的 bind 侧（补齐——此前 bulk 缺此门）。
-// 前端 SecurityBindingEditor/SecurityPolicies 的 MAX_POLICY_BINDINGS 与
-// mcpserver schema maxItems 为镜像口径，调整时须同步。
+// 前端 web/src/utils/securityStages.ts 的 MAX_POLICIES_PER_RULE（SecurityBindingEditor/
+// SecurityPolicies 消费）与 mcpserver setRuleSecurityPoliciesSchema 的 maxItems
+// 为镜像口径，调整时须同步。
 const maxBindingsPerRule = 8
 
 // maxBatchBindRules 批量绑定端点（POST /security/policies/batch-bind）单次规则
@@ -3471,7 +3472,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 阶段外子策略（geo_mode=off）恒 0/[]，避免拆分把开关复制给所有子策略、
 	// 类型往返后静默复活。
 	completeChild := func(spec splitChildSpec) splitChildSpec {
-		geoipActive := spec.geoMode != "" && spec.geoMode != "off"
+		geoipActive := geoIPActive(spec.geoMode)
 		spec.crawlerExempt = crawlerExemptBool(p.GeoIPCrawlerExempt, geoipActive)
 		spec.crawlerEngines = "[]"
 		if geoipActive {
@@ -3600,7 +3601,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	if features.G2 {
 		// stage2 子策略继承原策略拦截页（用户裁定：2026-09-25
 		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 保持归一 0
-		//（阶段 2 恒 429 自动语义，与 normalizeOutOfStageFields 同口径）。
+		//（阶段 2 恒 429 自动语义，与 applyStageZerosToCreate 同口径）。
 		specs = append(specs, completeChild(splitChildSpec{
 			policyType: models.PolicyTypeStage2, name: p.Name + stageSuffix[models.PolicyTypeStage2],
 			mode: "off", aclMode: "deny", aclList: "[]",
@@ -3623,6 +3624,13 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			wafResp: p.WAFCheckResponse, logBody: p.LogRequestBody,
 			aclRefs: "[]", wlRefs: "[]",
 		}))
+	}
+	// 「无可拆特征组」400 判定紧随 specs 构造（此前位于子策略插入与绑定规则
+	// 查询之后——空特征策略会先空转一次绑定查询，且阅读顺序暗示判定依赖
+	// 那些查询结果，实际只依赖 features/trustEntriesNonEmpty）。
+	if !trustEntriesNonEmpty && !features.G1 && !features.G2 && !features.G3 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该混合策略没有可拆分的特征组，无需拆分"})
+		return
 	}
 	// 解析既有子策略：配置完全一致 → 复用首轮 ID（不重复插入）；同名同阶段但
 	// 配置不同 → 冲突 409，且在任何插入之前整体中止（不留半截子策略、不静默
@@ -3700,10 +3708,6 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		return
 	}
 	ruleRows.Close()
-	if !trustEntriesNonEmpty && !features.G1 && !features.G2 && !features.G3 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该混合策略没有可拆分的特征组，无需拆分"})
-		return
-	}
 	type skippedRule struct {
 		RuleID string `json:"rule_id"`
 		Reason string `json:"reason"`
@@ -5758,7 +5762,7 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 // stage1/stage2/stage3 合法；缺省（""）按归一后内容推断（models.InferPolicyType
 
 // 单一事实源）；显式 mixed 与非法值报错（mixed 为存量兼容组，不可新建）。
-// 显式类型时由本函数内部调用 normalizeOutOfStageFields 归一阶段外字段。
+// 显式类型时由本函数内部调用 applyStageZerosToCreate 归一阶段外字段。
 func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, error) {
 	switch req.PolicyType {
 	case "":
@@ -5786,24 +5790,13 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 		// 完整表单、单测按全字段建策略均依赖它）；矛盾载荷的显式拒绝只落在
 		// 更新路径（那里部分更新 + 显式类型才会出现「保留旧值 vs 静默丢弃」的
 		// 二义），见 updateOutOfStageConflict。
-		normalizeOutOfStageFields(req, req.PolicyType)
+		applyStageZerosToCreate(req, req.PolicyType)
 		return req.PolicyType, nil
 	case models.PolicyTypeMixed:
 		return "", fmt.Errorf("混合策略为存量兼容形态，请按阶段类型（信任名单/IP 访问控制/限流/WAF）创建")
 	default:
 		return "", fmt.Errorf("无效的策略类型：%s（可选 stage0/stage1/stage2/stage3）", req.PolicyType)
 	}
-}
-
-// normalizeOutOfStageFields 显式类型提交时把阶段外字段归一为零值（类型与
-// 内容不漂移；归一先于内容校验，归一后的空内容天然通过各形状校验）。
-// stage0 仅保留信任名单+trust_detection（直通/保留检测二选一，无拦截页）；
-// stage1 保留 IP ACL/黑名单/GeoIP+拦截页（信任已归属阶段 0，一律清除）；
-// stage2 仅保留限流（恒 429、拦截页保留——2026-09-25 用户裁定可配）；
-// stage3 保留 WAF+拦截页。
-// mode 归 off（阶段 0/1/2 策略无 WAF 引擎面）。
-func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyType string) {
-	applyStageZerosToCreate(req, policyType)
 }
 
 // stageZeroFamily 是「阶段外字段归零」矩阵的元素。Create 与
@@ -5857,7 +5850,14 @@ func normalizeBlockStatusCode(statusCode int, policyType string, blockPageID int
 	return statusCode
 }
 
-// applyStageZerosToCreate 按矩阵把创建请求的阶段外字段赋为类型零值。
+// applyStageZerosToCreate 显式类型提交时把阶段外字段归一为零值（类型与
+// 内容不漂移；归一先于内容校验，归一后的空内容天然通过各形状校验）。
+// stage0 仅保留信任名单+trust_detection（直通/保留检测二选一，无拦截页）；
+// stage1 保留 IP ACL/黑名单/GeoIP+拦截页（信任已归属阶段 0，一律清除）；
+// stage2 仅保留限流（恒 429、拦截页保留——2026-09-25 用户裁定可配）；
+// stage3 保留 WAF+拦截页。
+// mode 归 off（阶段 0/1/2 策略无 WAF 引擎面）。
+//
 // IPWhitelistEnabled 赋 &falseVal 而非 nil——nil 经
 // policyWhitelistDefault 落默认 1，与 Update 路径（false → 0）形状漂移。
 func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType string) {
@@ -6286,6 +6286,15 @@ func crawlerEnginesJSON(raw string) string {
 // （防 orphan 配置：geoip off 时留下豁免位，重开时意外生效）。
 func crawlerExemptBool(exempt bool, geoipActive bool) bool {
 	return exempt && geoipActive
+}
+
+// geoIPActive 是「geoip_mode 是否启用形态」的单一判定（Create INSERT/拆分
+// completeChild/导入通道共用）：空与 off 同为非启用——与
+// validatePolicyCrawlerExemption 的豁免前置门（exempt 时 mode 空/off 拒绝）
+// 同源，三写路径此前各写一份字面量（Create 还多一个 stage0 合取，与
+// Update/Split 口径分叉）。
+func geoIPActive(geoipMode string) bool {
+	return geoipMode != "" && geoipMode != "off"
 }
 
 // validatePolicyCrawlerExemption（v2.3.8）：爬虫豁免字段校验——豁免开启时

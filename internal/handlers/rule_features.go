@@ -1122,23 +1122,16 @@ func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to
+		rows, err := db.DB.QueryContext(ctx, `SELECT `+db.PathRuleSelectColumns("")+`
 			FROM path_rules WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY rule_id, sort_order, id`, args...)
 		if err != nil {
 			return fmt.Errorf("批量读取路径规则: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var pathRule models.PathRule
-			var upstreamsJSON sql.NullString
-			if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
-				&pathRule.ResponseMode, &pathRule.ResponseStatus, &pathRule.ResponseBody, &pathRule.ResponseContentType, &pathRule.RedirectTo); err != nil {
+			pathRule, err := db.ScanPathRule(rows)
+			if err != nil {
 				return err
-			}
-			if upstreamsJSON.Valid {
-				if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
-					return fmt.Errorf("解析路径规则 %d 的上游: %w", pathRule.ID, err)
-				}
 			}
 			result[pathRule.RuleID] = append(result[pathRule.RuleID], pathRule)
 		}

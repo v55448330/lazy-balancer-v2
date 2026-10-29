@@ -1,8 +1,10 @@
 package db
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -376,5 +378,53 @@ func TestThreatSystemListRename_takeoverSkipAuditConvergesAcrossRestarts(t *test
 	entries = drainSystemAuditBuffer()
 	if len(entries) != 1 || !strings.Contains(entries[0].detail, "跳过接管") {
 		t.Fatalf("复发审计=%+v, want 恰一条", entries)
+	}
+}
+
+// 内置威胁源（threatSourceSeeds）与内置威胁名单（threatSystemLists）两套
+// 注册表以重复字符串字面量关联（seed.Name ↔ list.Source）：新增源只改一侧
+// 即静默半配置（有源无名单=下载更新无处落库；有名单无源=更新任务找不到
+// 下载端）。本对账用例钉住两侧源集合相等，并用「只在一侧注入假源」证明
+// 对账真实可红（非自证）。
+func TestThreatSystemLists_parityWithThreatSourceSeeds(t *testing.T) {
+	seedSources := make(map[string]struct{}, len(threatSourceSeeds))
+	for _, seed := range threatSourceSeeds {
+		seedSources[seed.Name] = struct{}{}
+	}
+	listSources := func() map[string]struct{} {
+		sources := make(map[string]struct{}, len(threatSystemLists))
+		for _, list := range threatSystemLists {
+			sources[list.Source] = struct{}{}
+		}
+		return sources
+	}
+	parityErr := func() error {
+		got := listSources()
+		if len(got) != len(seedSources) {
+			return fmt.Errorf("名单源集合 %v 与内置源集合大小 %d 不等", got, len(seedSources))
+		}
+		for source := range seedSources {
+			if _, ok := got[source]; !ok {
+				return fmt.Errorf("名单源集合 %v 缺内置源 %q", got, source)
+			}
+		}
+		for source := range got {
+			if _, ok := seedSources[source]; !ok {
+				return fmt.Errorf("名单源集合含未知源 %q（内置源 %v）", source, seedSources)
+			}
+		}
+		return nil
+	}
+
+	if err := parityErr(); err != nil {
+		t.Fatalf("生产注册表必须对账相等: %v", err)
+	}
+
+	// 单侧注入假源（名单侧多出内置源没有的 Source）必须让对账变红。
+	restore := SetThreatSystemListsForTest(append(slices.Clone(threatSystemLists),
+		ThreatSystemList{Source: "future_source", Name: "假名单", Description: "只在单侧注册的假源"}))
+	defer restore()
+	if err := parityErr(); err == nil {
+		t.Fatal("单侧注入假源必须让对账变红——用例不得自证")
 	}
 }

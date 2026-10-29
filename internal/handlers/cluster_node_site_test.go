@@ -109,6 +109,31 @@ func TestUpdateClusterNodeSiteCoordinates_validationAndMasterGate(t *testing.T) 
 	}
 }
 
+// 编号非法失败面的审计段落形态：nodeLabel 槽放「节点 <原始值>」（与访问地址
+// 端点同形）、原因槽放结论、结果码 invalid_request——旧写法把整句塞进
+// nodeLabel 槽且 reason 槽重复同一句，段落错位导致按段落检索失配。
+func TestUpdateClusterNodeSiteCoordinates_invalidIDAuditShape(t *testing.T) {
+	router := newClusterNodeSiteRouter(t)
+	seedClusterNodeSite(t, true)
+
+	request := httptest.NewRequest(http.MethodPut, "/cluster/nodes/abc/site", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='集群节点' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("编号非法失败面必须留痕: %v", err)
+	}
+	// 结果段经 AuditResultPart 渲染：invalid_request → 「结果：请求格式错误」。
+	if want := "节点 abc；节点编号无效；结果：请求格式错误"; detail != want {
+		t.Fatalf("audit detail=%q, want %q", detail, want)
+	}
+}
+
 // 非法 access_url 是客户端可修正的输入错误，必须 400 并回可行动文案——
 // 此前落默认 500「更新地址节点失败」。
 func TestUpdateClusterNodeAccessURL_invalidURLIs400(t *testing.T) {

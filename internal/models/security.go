@@ -35,17 +35,20 @@ func PolicyTypeFeatures(p *SecurityPolicy) PolicyFeatureSet {
 	if p == nil {
 		return fs
 	}
-	jsonListNonEmpty := func(raw string) bool {
+	// raw 统一按 []byte 接收：JSON 原生列（json.RawMessage）零转换直传，
+	// 仅 TEXT 扫描的 string 列（ip_acl_list/*_refs）需 []byte 包装一次——
+	// 各列 Go 类型统一（全 RawMessage）留待下一大版本，先收敛判定入口计量。
+	jsonListNonEmpty := func(raw []byte) bool {
 		var entries []json.RawMessage
-		if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		if err := json.Unmarshal(raw, &entries); err != nil {
 			return false
 		}
 		return len(entries) > 0
 	}
-	fs.G0 = p.IPWhitelistEnabled && (jsonListNonEmpty(string(p.IPWhitelist)) || jsonListNonEmpty(p.IPWhitelistRefs))
-	fs.G1 = (p.IPACLEnabled && (jsonListNonEmpty(p.IPACLList) || jsonListNonEmpty(p.IPACLListRefs))) ||
-		jsonListNonEmpty(string(p.IPBlacklist)) ||
-		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(string(p.GeoIPCountries)))
+	fs.G0 = p.IPWhitelistEnabled && (jsonListNonEmpty(p.IPWhitelist) || jsonListNonEmpty([]byte(p.IPWhitelistRefs)))
+	fs.G1 = (p.IPACLEnabled && (jsonListNonEmpty([]byte(p.IPACLList)) || jsonListNonEmpty([]byte(p.IPACLListRefs)))) ||
+		jsonListNonEmpty(p.IPBlacklist) ||
+		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(p.GeoIPCountries))
 	fs.G2 = p.RateLimitEnabled && p.RateLimitRPS > 0
 	fs.G3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || CustomRulesRefCount(p.CustomRules) > 0
 	return fs

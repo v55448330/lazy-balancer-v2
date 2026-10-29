@@ -215,6 +215,17 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: "不支持的服务控制动作"})
 		return
 	}
+	// 导入窗口内的 Caddy 启停会与导入会话互抢 caddyOpMu（导入自
+	// beginConfigImport 起到 close() 全程持有该锁）：主节点侧票据调用 60s 超时
+	// 判失败、从节点稍后锁释放仍执行——双向审计相反且终态不可知。与本族写
+	// 端点同口径 409 fast-fail。位置在票据校验前（窗口内拒绝不得消费一次性
+	// 票据，主节点重试不必重新注册），且仅收 caddy 动作——restart_app 的进程
+	// 退出本身会终结导入会话，不存在「超时判失败后仍执行」的双向错位。
+	if req.Action != models.ClusterServiceActionRestartApp {
+		if rejectWriteDuringImport(c, "执行服务控制（配置导入进行中）") {
+			return
+		}
+	}
 	if err := h.clusterService.ValidateServiceControlTicket(c.Request.Context(), req.Ticket, req.Action, time.Now()); err != nil {
 		if errors.Is(err, services.ErrInvalidServiceControlTicket) {
 			recordClusterServiceControlAudit(c, req.Action, "失败：票据校验未通过（"+serviceControlTicketFailureReason(err)+"）")

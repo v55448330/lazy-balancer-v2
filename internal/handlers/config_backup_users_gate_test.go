@@ -6,29 +6,14 @@ package handlers
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
-
-func postUsersGateImport(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/config/import", h.ImportConfigBackup)
-	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	return response
-}
 
 // ── 回归钉 ──
 
@@ -41,7 +26,7 @@ func TestImportConfigBackup_rejects_empty_users_array_with_dedicated_message(t *
 		"users": {},
 	}, Config: nil})
 
-	response := postUsersGateImport(t, h, body)
+	response := postImportShared(t, h.ImportConfigBackup, "/config/import", body)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
@@ -81,7 +66,7 @@ func TestImportConfigBackup_users_key_absent_still_imports(t *testing.T) {
 		"upstreams": {{"rule_id": "lb_nousers", "host": "127.0.0.1", "port": 9001, "weight": 1, "enabled": 1}},
 	}, Config: nil})
 
-	response := postUsersGateImport(t, h, body)
+	response := postImportShared(t, h.ImportConfigBackup, "/config/import", body)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("users 键缺席（分类导出）必须照常导入: %d %s", response.Code, response.Body.String())

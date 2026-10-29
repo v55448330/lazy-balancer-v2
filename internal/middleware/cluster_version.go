@@ -249,7 +249,9 @@ func joinColumnGroups(groups ...[]string) string {
 var clusterSyncedTables = []clusterSyncedTable{
 	{name: "lb_rules", snapshotColumns: lbRuleSnapshotColumns},
 	{name: "upstreams", snapshotColumns: "id,rule_id,host,port,weight,dynamic_dns,enabled,protocol,max_connections,origin_domain"},
-	{name: "path_rules", snapshotColumns: "id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to"},
+	// path_rules OF 列表与读投影单源（db.PathRuleSelectColumns）同源：
+	// 快照读哪些列，写哪些列就 bump——新增列只改单源两侧同步。
+	{name: "path_rules", snapshotColumns: db.PathRuleSelectColumns("")},
 	// users 触发器 OF 列表补 v2.1.8 的 MFA 权威列——此前不在列表内，
 	// MFA 状态写（含管理员重置）不 bump cluster_version → 快照缓存持续命中
 	// 旧指纹 → 从节点 304 循环，主节点 MFA 变更稳态永不传播（泄露 secret 经

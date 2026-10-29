@@ -1215,26 +1215,11 @@ func readCertJobLogFile(path string) (string, error) {
 // maxLines 行（maxLines<=0 = 不限行数）。单文件窗口由调用方决定——证书任务
 // 日志与统一任务引擎日志对「单个文件保留多少」的历史约定不同（128KB/500 行
 // vs 256KB 无行数上限）；轮转拼接策略（readRotatedLogTail）统一，单文件窗口
-// 保持各自的用户可见面不变。
+// 保持各自的用户可见面不变。尺寸与常规文件判定都取自 openRegularLogFile
+// 已打开 fd 的 FileInfo（GetAppLogs 同口径）——open 前置 os.Stat 会留下
+// 「stat 后目标被轮转/替换」的窗口，offset 按旧尺寸算会读错尾部窗。
 func readLogTailWindow(path string, maxBytes, maxLines int) (string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", fmt.Errorf("stat %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("read %s: 路径是目录而非日志文件", path)
-	}
-
-	windowBytes := int64(maxBytes)
-	startOffset := int64(0)
-	if info.Size() > windowBytes {
-		startOffset = info.Size() - windowBytes
-	}
-
-	f, _, err := openRegularLogFile(path)
+	f, info, err := openRegularLogFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
@@ -1242,6 +1227,12 @@ func readLogTailWindow(path string, maxBytes, maxLines int) (string, error) {
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
+
+	windowBytes := int64(maxBytes)
+	startOffset := int64(0)
+	if size := info.Size(); size > windowBytes {
+		startOffset = size - windowBytes
+	}
 
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
 		return "", fmt.Errorf("seek %s: %w", path, err)

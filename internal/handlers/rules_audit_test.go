@@ -2675,3 +2675,58 @@ func TestUpdateRule_disableWithRunningJobReturnsConflict(t *testing.T) {
 		t.Fatalf("PUT enabled=false 被 409 拦住时必须留 1 条失败审计, got %d", auditRows)
 	}
 }
+
+// /rules 响应的上游对象键集对账：Upstream.RuleID 为 json:"-"（冗余回显键，
+// 与 PathRule 口径一致；所属规则由外层 caddy_id 表达），本用例钉住响应键集，
+// 防止 rule_id 被无意加回或其他键被静默增删。
+func TestListRules_upstreamResponseKeySetOmitsRuleID(t *testing.T) {
+	// Given
+	handler := newRuleFeatureTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_upkeyset','keyset','http',8091,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_upkeyset','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	router := gin.New()
+	router.GET("/rules", handler.ListRules)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/rules", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data []map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(payload.Data) != 1 {
+		t.Fatalf("rules=%d, want 1: %s", len(payload.Data), response.Body.String())
+	}
+	rawUpstreams, ok := payload.Data[0]["upstreams"]
+	if !ok {
+		t.Fatalf("rule missing upstreams key: %s", response.Body.String())
+	}
+	var upstreams []map[string]json.RawMessage
+	if err := json.Unmarshal(rawUpstreams, &upstreams); err != nil {
+		t.Fatalf("decode upstreams: %v", err)
+	}
+	if len(upstreams) != 1 {
+		t.Fatalf("upstreams=%d, want 1: %s", len(upstreams), rawUpstreams)
+	}
+	// dynamic_dns/origin_domain 为 omitempty（零值不出场），不出现在键集。
+	want := map[string]bool{"id": true, "host": true, "port": true, "weight": true, "enabled": true, "protocol": true, "max_connections": true}
+	if len(upstreams[0]) != len(want) {
+		t.Fatalf("upstream response key count=%d, want %d: %s", len(upstreams[0]), len(want), rawUpstreams)
+	}
+	for key := range upstreams[0] {
+		if !want[key] {
+			t.Fatalf("unexpected upstream response key %q in %s", key, rawUpstreams)
+		}
+	}
+}

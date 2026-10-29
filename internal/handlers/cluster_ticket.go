@@ -79,7 +79,10 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			// 节点不存在属客户端寻址错误,与同族端点
 			// (cluster_registration.go:151、cluster_service.go:71、
 			// cluster_sync.go:135)的 ErrNodeNotFound→404 口径对齐。
+			// 文案同步点名「可能已被删除」：通用「生成登录票据失败」会把
+			// 寻址错误误读成本端故障，排障方向被引向服务端。
 			status = http.StatusNotFound
+			message = "目标节点不存在（可能已被删除），请刷新节点列表后重试"
 		}
 		if errors.Is(err, services.ErrNodeOffline) {
 			// 已批准但未上报/已离线是「现在不可达」而非

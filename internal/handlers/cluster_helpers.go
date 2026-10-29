@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"lazy-balancer-v2/internal/services"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 type masterGateOptions struct {

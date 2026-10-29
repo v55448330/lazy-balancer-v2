@@ -283,10 +283,12 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	}
 
 	credsJSON, _ := json.Marshal(req.DNSCredentials)
+	// enabled 缺省 true（「配置默认可用」）：*bool 区分「未提交」与显式 false。
+	enabled := req.Enabled == nil || *req.Enabled
 	result, err := db.DB.Exec(`
 		INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled)
 		VALUES (?, ?, ?, ?)
-	`, name, req.DNSProvider, string(credsJSON), req.Enabled)
+	`, name, req.DNSProvider, string(credsJSON), enabled)
 
 	if err != nil {
 		writeInternalError(c, http.StatusInternalServerError, "创建证书配置失败", err)
@@ -299,7 +301,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	if idErr != nil {
 		services.Logf("error", "CreateCertificateConfig: 读取新配置 ID 失败（审计将记为 0）: %v", idErr)
 	}
-	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, req.DNSProvider, fmt.Sprintf("启用：%t", req.Enabled)))
+	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, req.DNSProvider, fmt.Sprintf("启用：%t", enabled)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Config created", Data: gin.H{"id": id}})
 }
 

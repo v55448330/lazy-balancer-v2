@@ -6,10 +6,12 @@ package handlers
 // 本层零新状态。
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -38,7 +40,12 @@ func requireMasterNode(c *gin.Context) bool {
 		clusterError(c, http.StatusInternalServerError, "节点角色查询失败", nil)
 		return false
 	}
-	isMaster, err := services.RoleOf(c.Request.Context(), database)
+	// 角色读脱离客户端生命周期（与 GetSystemInfo 同口径）：请求 ctx 已取消
+	// 时 RoleOf 会把「客户端断开」误报成角色查询失败——响亮 500 + 每条请求
+	// 一条 error 日志把排障指向集群角色，实际只是前端超时/关页。
+	roleCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+	isMaster, err := services.RoleOf(roleCtx, database)
+	cancel()
 	return requireMasterResult(c, isMaster, err, masterGateOptions{
 		queryFailure: "节点角色查询失败",
 		forbidden:    "该操作仅允许在主节点执行",

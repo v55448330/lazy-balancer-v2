@@ -8,7 +8,15 @@ import (
 
 // RevokedTokenTimeFormat 吊销 JWT 的 expires_at 统一格式（收敛
 // handlers 写侧与 middleware 读侧曾跨包双份定义——单侧改动会静默失配）。
+// 格式以字面 Z 结尾却不做时区转换：非 UTC 时间直接 Format 会把本地时刻
+// 标成 UTC（读侧 time.Parse 按字面 Z 解析，比较时刻漂移时区偏移量）。
 const RevokedTokenTimeFormat = "2006-01-02T15:04:05Z"
+
+// FormatRevokedTokenTime 是该格式的唯一格式化入口：先归一 UTC 再格式化。
+// 写侧/读侧一律经此函数产出比较用时间串，禁止直接 t.Format(RevokedTokenTimeFormat)。
+func FormatRevokedTokenTime(t time.Time) string {
+	return t.UTC().Format(RevokedTokenTimeFormat)
+}
 
 // User represents a user in the system
 type User struct {
@@ -266,16 +274,18 @@ type GlobalConfig struct {
 	ProxyStreamTimeout         int    `json:"proxy_stream_timeout"`
 	ProxyFlushInterval         int    `json:"proxy_flush_interval"`
 	ProxyStreamCloseDelay      int    `json:"proxy_stream_close_delay"`
-	ServerTokensHidden         bool   `json:"server_tokens_hidden"`
-	TaskLogSizeMB              int    `json:"task_log_size_mb"`
-	AuditLogSizeMB             int    `json:"audit_log_size_mb"`
-	RuntimeLogSizeMB           int    `json:"runtime_log_size_mb"`
-	AccessLogJSON              bool   `json:"access_log_json"`
-	AccessLogFormat            string `json:"access_log_format"`
-	AuditRetentionMonths       int    `json:"audit_retention_months"`
-	JWTExpireMinutes           int    `json:"jwt_expire_minutes"`
-	Timezone                   string `json:"timezone"`
-	GitHubProxyURL             string `json:"github_proxy_url"`
+	// 二态布尔（false=显示 / true=隐藏），与规则级 server_tokens_hidden 的
+	// 0/1/2 三态（0=随全局/1=隐藏/2=显示）语义不同型：全局无「随全局」态。
+	ServerTokensHidden   bool   `json:"server_tokens_hidden"`
+	TaskLogSizeMB        int    `json:"task_log_size_mb"`
+	AuditLogSizeMB       int    `json:"audit_log_size_mb"`
+	RuntimeLogSizeMB     int    `json:"runtime_log_size_mb"`
+	AccessLogJSON        bool   `json:"access_log_json"`
+	AccessLogFormat      string `json:"access_log_format"`
+	AuditRetentionMonths int    `json:"audit_retention_months"`
+	JWTExpireMinutes     int    `json:"jwt_expire_minutes"`
+	Timezone             string `json:"timezone"`
+	GitHubProxyURL       string `json:"github_proxy_url"`
 	// GitHubToken 可选 GITHUB_TOKEN（2026-09-25 用户裁定）：响应面永不回显
 	// 原文（json:"-"），仅 HasGitHubToken 显隐；写路径 UpdateConfigRequest。
 	GitHubToken         string `json:"-"`
@@ -319,8 +329,11 @@ type GlobalConfig struct {
 
 // Upstream represents an upstream server
 type Upstream struct {
-	ID     int    `json:"id"`
-	RuleID string `json:"rule_id"`
+	ID int `json:"id"`
+	// RuleID 仅服务端内部传递（DB 扫描/按规则分组），不进 JSON：上游所属规则
+	// 由外层规则对象（caddy_id）表达，响应回显 rule_id 是冗余键，且与 PathRule
+	// 的 json:"-" 口径一致。
+	RuleID string `json:"-"`
 	Host   string `json:"host"`
 	Port   int    `json:"port"`
 	Weight int    `json:"weight"`
@@ -445,8 +458,11 @@ type CertJob struct {
 // LoginRequest 登录入参。username/password 补长度上限——
 // 此前仅 required，未认证请求可携带 ~64KiB「用户名」，失败登录按原文写入
 // audit_log（每次一行等大，限流 10/min/IP 可被分布式绕开，放大审计库）。
-// 上限与写入侧对齐：username=users.username 列宽 50；password=bcrypt 有效
-// 上限 72 字节（更长值永远无法匹配任何已存哈希）。
+// 上限与写入侧对齐：username=users.username 列宽 50；password 的 binding
+// max=72 按 Unicode rune 计数（validator 对 string 的计量口径），并非 bcrypt
+// 的 72 字节——多字节密码可携 >72 字节越过此门，但 bcrypt 比较阶段（x/crypto
+// 的 CompareHashAndPassword 不做字节截断）恒不匹配，登录表现为同形 401，
+// 不产生 500，故不前置字节级短路。
 type LoginRequest struct {
 	Username string `json:"username" binding:"required,max=50"`
 	Password string `json:"password" binding:"required,max=72"`
@@ -699,7 +715,10 @@ type CreateCertificateConfigRequest struct {
 	Name           string            `json:"name" binding:"required"`
 	DNSProvider    string            `json:"dns_provider" binding:"required"`
 	DNSCredentials map[string]string `json:"dns_credentials"`
-	Enabled        bool              `json:"enabled"`
+	// *bool 区分「未提交」与显式 false：省略 enabled 的 POST 按 true 创建
+	// （「配置默认可用」；UpdateCertificateConfigRequest 同字段已是 *bool）。
+	// 旧 bool 零值让脚本/MCP 通道漏带 enabled 时静默创建禁用配置。
+	Enabled *bool `json:"enabled"`
 }
 
 type UpdateCertificateConfigRequest struct {

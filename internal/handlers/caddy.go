@@ -1275,12 +1275,13 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 }
 
 // driftBannerText 生成前端全局横幅的主文案（一致时为空串；检测时间
-// 拆出到 driftSinceText 供 meta 次行展示，不再内嵌正文）。
+// 拆出到 driftSinceText 供 meta 次行展示，不再内嵌正文）。文案与长度上限
+// 单源在 services.FormatDriftRoutes（看门狗审计同源）。
 func driftBannerText(drift services.ConfigDriftStatus) string {
 	if drift.Consistent {
 		return ""
 	}
-	return formatDriftBanner(drift.Missing, drift.Extra)
+	return services.FormatDriftRoutes(drift.Missing, drift.Extra)
 }
 
 // driftSinceText 漂移首次检测时间（一致时为空串）。
@@ -1289,12 +1290,6 @@ func driftSinceText(drift services.ConfigDriftStatus) string {
 		return ""
 	}
 	return drift.Since
-}
-
-func formatDriftBanner(missing, extra []string) string {
-	// 文案与长度上限单源在 services（看门狗审计同源）——此处
-	// 仅保留 handler 层命名供既有调用/测试使用。
-	return services.FormatDriftRoutes(missing, extra)
 }
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {

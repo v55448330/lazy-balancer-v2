@@ -23,6 +23,10 @@ const defaultCrawlerIPListFile = "/app/data/crawler-ip-lists.json"
 var crawlerIPListFile = defaultCrawlerIPListFile
 
 // SetCrawlerIPListFileForTest 重定向快照交换文件路径，仅供测试隔离使用（返回还原函数）。
+//
+// testseam: 留驻产品文件的测试缝——导出入口被 handlers 测试跨包消费
+// （返回还原闭包形态），宿主不可能在同包 *_test.go；已登记 services
+// testonly 绊线名单。
 func SetCrawlerIPListFileForTest(path string) func() {
 	old := crawlerIPListFile
 	crawlerIPListFile = path
@@ -111,6 +115,11 @@ func loadCrawlerBundledSeed() map[string][]string {
 // 验证且无 PTR 兜底，名单缺失即该引擎豁免彻底失效），且末尾全量快照会把
 // 缺失引擎条目一并删掉。
 func (m *CrawlerUpdateManager) Prime() error {
+	// 与同包 autoban/ensureAutobanPresetListID 等 nil 门同口径：无库脚手架
+	// （测试/嵌入形态）显性报错，不 nil dereference。
+	if db.DB == nil {
+		return errors.New("数据库未初始化")
+	}
 	if err := ensureCrawlerSources(); err != nil {
 		return err
 	}
@@ -136,6 +145,10 @@ func (m *CrawlerUpdateManager) Prime() error {
 // 只 rebuild 不补种会让运行快照缺失整引擎——该引擎的地域/ACL 豁免与伪装
 // 检测静默失效，直到进程重启或下一轮源更新，面板零告警。
 func seedAndRebuildCrawlerIPListSnapshot() error {
+	// 与 Prime 同口径的 nil 门：导入/重建路径同样不 nil dereference。
+	if db.DB == nil {
+		return errors.New("数据库未初始化")
+	}
 	all, err := loadCrawlerIPListsFromDB()
 	if err != nil {
 		return err
@@ -191,6 +204,10 @@ func seedAndRebuildCrawlerIPListSnapshot() error {
 // 并以 DB 为唯一真相重建运行交换文件（与 Prime 的收敛体同源；不跑启动期的
 // 源 canonical 刷新与名单名迁移——那些由重启路径承担，导入请求内保持最小面）。
 func RestoreCrawlerIPListSnapshot() error {
+	// 与 Prime 同口径的 nil 门（收敛体自检，入口显性报错）。
+	if db.DB == nil {
+		return errors.New("数据库未初始化")
+	}
 	return seedAndRebuildCrawlerIPListSnapshot()
 }
 
@@ -199,6 +216,10 @@ func RestoreCrawlerIPListSnapshot() error {
 // 无副作用收敛（集群同步）。备份导入是**全表替换**语义，必须走
 // RestoreCrawlerIPListSnapshot 才会补种缺失的 system 行。
 func RebuildCrawlerIPListSnapshot() error {
+	// 与 Prime 同口径的 nil 门。
+	if db.DB == nil {
+		return errors.New("数据库未初始化")
+	}
 	all, err := loadCrawlerIPListsFromDB()
 	if err != nil {
 		return err

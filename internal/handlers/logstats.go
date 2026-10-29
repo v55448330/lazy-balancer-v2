@@ -436,19 +436,8 @@ func cachedLogTableCount(database *sql.DB, key, query string) (int64, bool) {
 	return n, true
 }
 
-// logPaths resolves the two distinct log roots GetLogStats probes:
-//   - fixedDir is the hardcoded writer directory (/app/logs) shared by the
-//     hardcoded-writer log families — caddy 四份日志（caddy.log/caddy-tls.log/
-//     caddy-server.log/caddy-proxy.log）、rules/*.log。这些写入端写死 /app/logs，
-//     与 LOG_FILE 无关，故其路径拼接必须固定用 /app/logs；若跟随 LogFile 目录
-//     推导，自定义 LOG_FILE 时这些日志会全部显示 0B。
-//     certjob-*.log 不在此列：写入端已并入统一任务日志
-//     体系（{任务日志目录}/certjobs/，services.CertJobLogDir 同源）。
-//   - runtimePath is the runtime log path, which follows LogFile
-//     （空 → /app/logs/lazy-balancer.log）。
-//
 // wafAuditLogFile 是 Coraza 审计日志文件路径覆盖值。空值=运行期按
-// services.AuditLogPath() 解析——审计路径随 ConfigureWafDirs 按 data_dir 派生
+// services.AuditLogPath() 解析——审计路径随 ConfigureWafDirs 按 data_dir 派生，
 // 而本包 init 早于 main 的派生调用，包级固化会指向陈旧的 /app
 // 路径（自定义 data_dir 下统计恒 0B）。测试可注入具体路径。
 var wafAuditLogFile = ""
@@ -467,6 +456,14 @@ func resolvedWafAuditLogFile() string {
 // /app/logs，见 logPaths 注释）。包级 var 支持测试注入（wafAuditLogFile 同模式）。
 var defaultRuntimeLogPath = "/app/logs/lazy-balancer.log"
 
+// logPaths 解析 GetLogStats 探测的两类日志根目录：
+//   - fixedDir 写死 /app/logs：caddy 四份日志（caddy.log/caddy-tls.log/
+//     caddy-server.log/caddy-proxy.log）与 rules/*.log 的写入端与 LOG_FILE
+//     无关，路径拼接必须固定用 /app/logs；若跟随 LogFile 目录推导，自定义
+//     LOG_FILE 时这些日志会全部显示 0B。certjob-*.log 不在此列：写入端已
+//     并入统一任务日志体系（{任务日志目录}/certjobs/，services.CertJobLogDir
+//     同源）。
+//   - runtimePath 运行日志路径，跟随 LogFile（空 → /app/logs/lazy-balancer.log）。
 func logPaths(cfg *config.Config) (fixedDir, runtimePath string) {
 	fixedDir = "/app/logs"
 	runtimePath = defaultRuntimeLogPath
@@ -873,7 +870,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		} else {
 			var active, rotated int64
 			var rotCount int
-			for _, st := range aggregateDirStatsWithEntries(filepath.Join(fixedLogsDir, "rules"), readDir(filepath.Join(fixedLogsDir, "rules")), isRuleAccessLogName) {
+			for _, st := range aggregateDirStatsWithEntries(filepath.Join(fixedLogsDir, "rules"), readDir(filepath.Join(fixedLogsDir, "rules")), isTaskLogFamilyName) {
 				active += st.Active
 				rotated += st.Rotated
 				rotCount += st.RotCount
@@ -899,11 +896,6 @@ func isCertJobLogName(name string) bool {
 	if !strings.HasPrefix(name, "certjob-") {
 		return false
 	}
-	return isTaskLogFamilyName(name)
-}
-
-// isRuleAccessLogName 规则访问日志文件名（含 .N 移位副本与 .gz/.zst 压缩归档）。
-func isRuleAccessLogName(name string) bool {
 	return isTaskLogFamilyName(name)
 }
 

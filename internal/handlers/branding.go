@@ -336,7 +336,8 @@ func EnsureBrandingFile(dataDir string) error {
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		// 畸形 JSON:不动文件,运行时字段级回退(readBrandingFile 已日志)
+		// 畸形 JSON:不动文件,运行时字段级回退（error 由 loadBrandingConfig
+		// 首载时记录——本函数自身不做字段级解析，不产生日志）。
 		return nil
 	}
 	changed := false
@@ -528,7 +529,8 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 }
 
 // renderDefaultBlockPage renders the branded default block page; consumed by
-// SeedDefaultBlockPage(种子默认拦截页)与预览路径。
+// SeedDefaultBlockPage(种子默认拦截页)与配置备份导入的默认页提升路径
+// (config_backup.go)。
 func renderDefaultBlockPage(cfg brandingConfig) string {
 	// 页脚由 renderBlockPageShell 内部按同一 cfg 构建
 	// 此处曾有逐字重复的死计算，已删）。

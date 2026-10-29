@@ -30,6 +30,16 @@ import (
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "nodes"}
 
+// configBackupDeleteOrder / configBackupInsertOrder 是导入核心的删除/插入顺序
+// （单一事实源；与导出清单 configBackupTables 的集合 parity 由
+// TestConfigBackupTableOrderParity 机械钉住——新增备份表漏进任一序会 live 行
+// 残留或主键冲突）。security_ip_lists 先删/先插 security_policies——refs 是
+// 策略行上的 JSON 引用（无外键，顺序本自由），固定 lists→policies 与集群
+// apply 侧一致，保证插入后引用即时指向存在行。
+var configBackupDeleteOrder = []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs", "nodes"}
+
+var configBackupInsertOrder = []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_ip_lists", "security_policies", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_block_pages", "security_custom_rules", "security_policy_bindings", "nodes"}
+
 // importVersionSeedSentinel 标记本次导入为「未导入版本表且导入前无行」临时
 // 插入的占位行：rearm 看到 id=1 已存在便不再补真实种子；提交后仅以该哨兵
 // 版本+CAS 条件删除，绝不按「导入前不存在」的无条件 DELETE 误删并发更新行。
@@ -3476,7 +3486,7 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		if err := validatePolicyCrawlerExemption(crawlerExempt, backupString(policy["geoip_crawler_engines"]), geoIPMode); err != nil {
 			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 		}
-		policy["geoip_crawler_exempt"] = crawlerExemptBool(crawlerExempt, geoIPMode != "" && geoIPMode != "off")
+		policy["geoip_crawler_exempt"] = crawlerExemptBool(crawlerExempt, geoIPActive(geoIPMode))
 		if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, 0, 0); err != nil {
 			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 		}
@@ -5270,23 +5280,29 @@ func clampBackupConfigInts(config map[string]any) []string {
 	return notes
 }
 
-// clearDeletedNodeStateBeforeRestore
-// 节点拓扑整体替换（DELETE FROM nodes + 重插备份行）之前，按 ip:port 身份
-// 找出「本地有而备份无」的将被删除节点，清除其 TOFU 指纹钉（文件+内存缓存，
-// 与 ForgetClusterNodePin 端点同口径：ForgetNodePin 解析地址删文件 +
-// ForgetNodePinCache 清内存）与分区上报缓存（ClearNodeSectionReports）。
-// 备份仍携带的节点 pin/上报一律保留。
-//
-// 必须在 DELETE 之前执行：ForgetNodePin 需按现存行解析访问地址。若导入随后
-// 回滚，已清 pin 在下次服务控制按 TOFU 重新钉扎（幂等无害）；分区上报缓存
-// 随下次上报（≤60s）重建。清理失败仅留痕不否决导入（与 DeleteNode 的 pin
-// 清理同口径）；返回完成清理的节点数供成功审计留痕。
-func (h *Handlers) clearDeletedNodeStateBeforeRestore(ctx context.Context, tx *sql.Tx, backupRows []map[string]any) int {
+// deletedNodePinTarget 是一次导入中「将被删除节点」的清理目标：id 供分区上报
+// 缓存清理，host 供 pin 文件删除（与 ForgetClusterNodePin 端点同口径）。
+// host 为空（解析失败——库故障/角色竞态）时跳过 pin 删除、仅清缓存。
+type deletedNodePinTarget struct {
+	id   int
+	host string
+}
+
+// collectDeletedNodePinTargets 在事务内识别「本地有而备份无」的将被删除节点，
+// 并解析其 pin 定位（host）。必须在 DELETE FROM nodes 之前执行：地址解析按
+// 现存行进行（nodePinPathFromAccessURL 口径）。实际清理（pin 文件 + 内存指纹
+// 缓存 + 分区上报缓存）不在此执行——两者非事务资源，由调用方排入
+// session.postLockActions、提交成功后才落地；abort/回滚（如 Caddy CLI 拒绝）
+// 时目标列表作废。旧实现「事务内先清、失败不恢复」：幸存节点在下次服务控制
+// 按 TOFU 重新钉扎，安全边界随一次失败导入退化为首连即信。返回目标列表；
+// 本地节点读取失败仅留痕并返回 nil（清理跳过，与 DeleteNode 的 pin 清理同
+// 口径，不否决导入）。
+func (h *Handlers) collectDeletedNodePinTargets(ctx context.Context, tx *sql.Tx, backupRows []map[string]any) []deletedNodePinTarget {
 	surviving := nodeSurvivingIdentities(backupRows)
 	rows, err := tx.QueryContext(ctx, `SELECT id, ip_address, COALESCE(port,8000) FROM nodes`)
 	if err != nil {
 		services.Logf("warn", "配置导入：读取本地节点身份失败（已删除节点 pin/分区上报清理跳过）: %v", err)
-		return 0
+		return nil
 	}
 	type localNode struct {
 		id  int
@@ -5300,7 +5316,7 @@ func (h *Handlers) clearDeletedNodeStateBeforeRestore(ctx context.Context, tx *s
 		if err := rows.Scan(&node.id, &ip, &port); err != nil {
 			_ = rows.Close()
 			services.Logf("warn", "配置导入：扫描本地节点身份失败（已删除节点清理跳过）: %v", err)
-			return 0
+			return nil
 		}
 		node.key = ip + ":" + strconv.Itoa(port)
 		locals = append(locals, node)
@@ -5308,29 +5324,44 @@ func (h *Handlers) clearDeletedNodeStateBeforeRestore(ctx context.Context, tx *s
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
 		services.Logf("warn", "配置导入：读取本地节点身份失败（已删除节点清理跳过）: %v", err)
-		return 0
+		return nil
 	}
 	_ = rows.Close()
-	cleared := 0
+	var targets []deletedNodePinTarget
 	for _, node := range locals {
 		if surviving[node.key] {
 			continue
 		}
-		host, pinErr := h.clusterService.ForgetNodePin(ctx, node.id)
+		target := deletedNodePinTarget{id: node.id}
+		host, pinErr := h.clusterService.NodePinHost(ctx, node.id)
+		if pinErr != nil {
+			services.Logf("warn", "配置导入：解析已删除节点 %d 的证书指纹钉位置失败（跳过 pin 清理）: %v", node.id, pinErr)
+		} else {
+			target.host = host
+		}
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+// clearDeletedNodePinTarget 落地单个已删除节点的清理：删 pin 文件 + 清内存
+// 指纹缓存 + 清分区上报缓存。仅在导入提交成功后执行（postLockActions）；
+// 失败仅留痕不回滚（与 DeleteNode 的 pin 清理同口径）。
+func (h *Handlers) clearDeletedNodePinTarget(target deletedNodePinTarget) {
+	if target.host != "" {
+		pinErr := h.clusterService.ForgetNodePinHost(target.host)
 		switch {
 		case pinErr == nil:
 			if h.syncService != nil {
-				h.syncService.ForgetNodePinCache(host)
+				h.syncService.ForgetNodePinCache(target.host)
 			}
-		case errors.Is(pinErr, services.ErrNoClusterPin) || errors.Is(pinErr, services.ErrNodeNotFound):
+		case errors.Is(pinErr, services.ErrNoClusterPin):
 			// 无钉可删（http 地址/从未服务控制）——幂等语义，照常清理上报缓存。
 		default:
-			services.Logf("warn", "配置导入：清除已删除节点 %d 的证书指纹钉失败: %v", node.id, pinErr)
+			services.Logf("warn", "配置导入：清除已删除节点 %d 的证书指纹钉失败: %v", target.id, pinErr)
 		}
-		services.ClearNodeSectionReports(db.DB, node.id)
-		cleared++
 	}
-	return cleared
+	services.ClearNodeSectionReports(db.DB, target.id)
 }
 
 // nodeSurvivingIdentities 把备份 nodes 行映射为「导入后仍存活」的 ip:port
@@ -6149,8 +6180,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	_, tlsProvidersCarried := backup.Tables["ca_providers"]
 	if tlsRulesCarried && !tlsConfigsCarried && !tlsProvidersCarried && acmeDanglingImported == 0 {
 		if _, err := validateV2BackupTLSShapeSoft(backup.Tables, false); err != nil {
-			err = failImportAbort(c, session, action, "导入锁内 ACME/TLS 复核失败", err)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间规则引用的 DNS/CA 配置已失效，已拒绝导入: " + err.Error()})
+			err = failImportTx(c, session, action, "导入锁内 ACME/TLS 复核失败", err, http.StatusBadRequest, "导入期间规则引用的 DNS/CA 配置已失效，已拒绝导入")
 			return
 		}
 	}
@@ -6189,15 +6219,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// 初检读取 live 的三项合并校验在锁内重跑（任何写之前）。
 	if err := revalidateImportLiveDependencies(ctx, tx, &backup, sectionTables); err != nil {
-		err = failImportAbort(c, session, action, "导入锁内实时依赖复核失败", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间依赖的实时数据已变化，已拒绝导入: " + err.Error()})
+		err = failImportTx(c, session, action, "导入锁内实时依赖复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
 		return
 	}
 	// 「规则→阶段拦截页」引用同样在锁内重验——初检按锁外 live 页集合
 	// 放行后，窗口内删除被备份规则引用的页会让导入后阶段页悬空。
 	if err := revalidateImportStageBlockPages(ctx, tx, backup.Tables); err != nil {
-		err = failImportAbort(c, session, action, "导入锁内阶段拦截页复核失败", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间依赖的实时数据已变化，已拒绝导入: " + err.Error()})
+		err = failImportTx(c, session, action, "导入锁内阶段拦截页复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
 		return
 	}
 	_, ipListsCarried := backup.Tables["security_ip_lists"]
@@ -6206,8 +6234,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 策略引用的名单/自定义规则表缺席时，初检按 live 回退；该 live 视图
 		// 也必须在锁内事务重验，堵住初检到加锁之间删除引用对象的窗口。
 		if err := validateV2BackupSecurityPoliciesWithQuerier(ctx, backup.Tables, crsTreeReplaced, tx); err != nil {
-			err = failImportAbort(c, session, action, "导入锁内安全策略引用复核失败", err)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入期间依赖的实时数据已变化，已拒绝导入: " + err.Error()})
+			err = failImportTx(c, session, action, "导入锁内安全策略引用复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
 			return
 		}
 	}
@@ -6243,8 +6270,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	for _, table := range []string{"security_crs_version", "security_ip2region_version"} {
 		rows, err := dumpTable(ctx, tx, table)
 		if err != nil {
-			err = failImportAbort(c, session, action, "快照版本行失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "快照版本行失败", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 		versionRowsBefore[table] = rows
@@ -6252,8 +6278,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	restoreImportNodeRole, err := suppressImportClusterVersionBumps(ctx, tx)
 	if err != nil {
-		err = failImportAbort(c, session, action, "", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+		err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 		return
 	}
 	// security_ip_lists 先删/先插 security_policies——refs 是策略行上的
@@ -6265,12 +6290,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if lbbakFiles != nil && len(lbbakFiles.ThreatIplists) > 0 {
 		localThreatRows = captureThreatSourceRows(ctx)
 	}
-	// /nodes 整体替换前清理「将被删除节点」的 TOFU 指纹钉与
-	// 分区上报缓存（保留备份仍携带节点的 pin）——必须赶在 DELETE FROM nodes
-	// 之前（pin 地址需按现存行解析）。
-	clearedNodeArtifacts := 0
+	// /nodes 整体替换前识别「将被删除节点」的 TOFU 指纹钉与分区上报缓存清理
+	// 目标（pin 地址需按现存行解析，必须在 DELETE 之前）；实际清理排入
+	// session.postLockActions、提交成功后才执行——abort/回滚不再先清后回
+	// （旧形态让幸存节点下次服务控制按 TOFU 重新钉扎，安全边界随失败导入退化）。
+	pendingDeletedNodePins := []deletedNodePinTarget(nil)
 	if nodeRows, nodesCarried := backup.Tables["nodes"]; nodesCarried && h.clusterService != nil {
-		clearedNodeArtifacts = h.clearDeletedNodeStateBeforeRestore(ctx, tx, nodeRows)
+		pendingDeletedNodePins = h.collectDeletedNodePinTargets(ctx, tx, nodeRows)
 	}
 	// nodes 全表替换前保留「身份匹配且本地持有令牌」节点的本地令牌/审批态，
 	// 避免备份中的旧令牌哈希切断仍存活从节点的认证（跨环境导入/回滚旧备份）。
@@ -6278,8 +6304,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if nodeRows, nodesCarried := backup.Tables["nodes"]; nodesCarried {
 		ignoredNodeTokens, err = reconcileImportNodeTokens(ctx, tx, nodeRows)
 		if err != nil {
-			err = failImportAbort(c, session, action, "", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 	}
@@ -6292,24 +6317,22 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		localUserNames = snapshotImportUserNames(ctx, tx)
 		livePasswordVersions, err = snapshotImportPasswordVersions(ctx, tx)
 		if err != nil {
-			err = failImportAbort(c, session, action, "快照本地会话版本失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "快照本地会话版本失败，已回滚: " + err.Error()})
+			// responsePrefix 带动作词（导入/还原）：同族出口全部以动作开头，
+			// 此前「快照本地会话版本失败，已回滚」缺前缀，按文案检索审计/日志会漏。
+			err = failImportTx(c, session, action, "快照本地会话版本失败", err, http.StatusInternalServerError, action+"失败（快照本地会话版本失败）")
 			return
 		}
 	}
-	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs", "nodes"}
-	for _, table := range deleteOrder {
+	for _, table := range configBackupDeleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			err = failImportAbort(c, session, action, "", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清空表 " + table + " 失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, "清空表 "+table+" 失败")
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_ip_lists", "security_policies", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "security_block_pages", "security_custom_rules", "security_policy_bindings", "nodes"}
-	for _, table := range insertOrder {
+	for _, table := range configBackupInsertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {
 			continue
@@ -6330,8 +6353,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			}
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
-			err = failImportAbort(c, session, action, "", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 	}
@@ -6341,8 +6363,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// （漏保护）。与启动迁移同一实现，事务内执行随导入一并回滚。
 	if _, usersCarried := backup.Tables["users"]; usersCarried {
 		if err := db.EnsureSetupAdminFlag(ctx, tx); err != nil {
-			err = failImportAbort(c, session, action, "", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 	}
@@ -6362,8 +6383,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if rulesReplaced {
 		droppedTCPBindings, err = normalizeRuleRowsForTransport(ctx, tx)
 		if err != nil {
-			err = failImportAbort(c, session, action, "规则传输归一失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "规则传输归一失败", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 	} else if _, bindingsCarried := backup.Tables["security_policy_bindings"]; bindingsCarried {
@@ -6373,8 +6393,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 改写安全绑定。
 		droppedTCPBindings, err = pruneTCPRuleBindings(ctx, tx)
 		if err != nil {
-			err = failImportAbort(c, session, action, "", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 	}
@@ -6390,8 +6409,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			// （整条清理静默失效），NOT EXISTS 无此陷阱。
 			pruneSQL := "DELETE FROM " + table + " WHERE NOT EXISTS (SELECT 1 FROM lb_rules WHERE lb_rules.caddy_id = " + table + ".rule_id)"
 			if _, err := tx.ExecContext(ctx, pruneSQL); err != nil {
-				err = failImportAbort(c, session, action, "清理孤立 "+table+" 失败", err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+				err = failImportTx(c, session, action, "清理孤立 "+table+" 失败", err, http.StatusInternalServerError, action+"失败")
 				return
 			}
 		}
@@ -6407,8 +6425,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			WHERE NOT EXISTS (SELECT 1 FROM lb_rules WHERE lb_rules.caddy_id = security_policy_bindings.rule_caddy_id)
 			   OR NOT EXISTS (SELECT 1 FROM security_policies WHERE security_policies.id = security_policy_bindings.policy_id)`)
 		if err != nil {
-			err = failImportAbort(c, session, action, "清理悬挂安全策略绑定失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "清理悬挂安全策略绑定失败", err, http.StatusInternalServerError, action+"失败")
 			return
 		}
 		// DELETE 已成功：计数失败只影响审计/响应里的条数展示，不影响导入结果
@@ -6431,8 +6448,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 数据归一),但在此留审计提示,运维可从事件日志追溯。
 	if policiesReplaced {
 		if result, err := tx.ExecContext(ctx, db.SecurityPolicyCustomOnlyModeNormalizationSQL); err != nil {
-			err = failImportAbort(c, session, action, "off→custom_only 归一", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "off→custom_only 归一", err, http.StatusInternalServerError, action+"失败")
 			return
 		} else if n, known := rowsAffectedOrUnknown(result, action, "off→custom_only 归一计数"); !known {
 			// 归一 SQL 已成功、条数未知：语义变更仍已发生，必须留痕（不得
@@ -6464,8 +6480,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			recordAudit(c, action+"警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
-			err = failImportAbort(c, session, action, "降级多余的默认拦截页失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "降级多余的默认拦截页失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "降级多余的默认拦截页失败", err, http.StatusInternalServerError, "降级多余的默认拦截页失败")
 			return
 		}
 		// 默认页重播种移入导入事务，与导入同生共死；失败仅记警告不阻断
@@ -6520,8 +6535,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if importUsername != "" {
 		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE username=?", importUsername).Scan(&importUserID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			err = failImportAbort(c, session, action, "重映射规则操作者失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重映射规则操作者失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "重映射规则操作者失败", err, http.StatusInternalServerError, "重映射规则操作者失败")
 			return
 		}
 	}
@@ -6530,8 +6544,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 此分支兜底无操作者上下文的路径）。
 	if importUserID.Valid && rulesReplaced {
 		if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
-			err = failImportAbort(c, session, action, "更新规则操作者失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "更新规则操作者失败", err, http.StatusInternalServerError, "更新规则操作者失败")
 			return
 		}
 	}
@@ -6541,8 +6554,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	session.replaceRuleArtifacts = rulesReplaced || certJobsReplaced
 	if rulesReplaced || certJobsReplaced {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE NOT EXISTS (SELECT 1 FROM lb_rules WHERE lb_rules.caddy_id = cert_jobs.rule_id)"); err != nil {
-			err = failImportAbort(c, session, action, "清理孤儿证书任务失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "清理孤儿证书任务失败", err, http.StatusInternalServerError, "清理孤儿证书任务失败")
 			return
 		}
 		// 规则存在但已非 ACME 自动签发态（manual/未启用/TLS
@@ -6550,16 +6562,14 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 此类「规则仍在」的失效任务会被续签扫描/任务列表当作活任务。谓词与续签
 		// 扫描（certjobs.go/caddy.go 的 ACME 规则判据）同口径。
 		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (COALESCE(enable_tls,0)=1 AND COALESCE(tls_source,'manual')='acme_dns'))"); err != nil {
-			err = failImportAbort(c, session, action, "清理失效证书任务失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理失效证书任务失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "清理失效证书任务失败", err, http.StatusInternalServerError, "清理失效证书任务失败")
 			return
 		}
 		// 到期口径收敛：有效材料但 expires_at 缺失的导入行按 PEM 派生回填
 		// （已有列值优先，不改写）。不回填会让 /certificates/jobs 的派生值
 		// 与聚合端（节点健康 certs_expiring_30d、证书页）的列值口径分叉。
 		if _, err := backfillCertJobExpiryFromPEM(ctx, tx); err != nil {
-			err = failImportAbort(c, session, action, "回填证书任务到期时间失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "回填证书任务到期时间失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "回填证书任务到期时间失败", err, http.StatusInternalServerError, "回填证书任务到期时间失败")
 			return
 		}
 	}
@@ -6573,8 +6583,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if len(disabledConflicts) > 0 {
 		for _, conflict := range disabledConflicts {
 			if _, err := disableCertJobsForRuleTx(tx, conflict.CaddyID); err != nil {
-				err = failImportAbort(c, session, action, "暂停冲突禁用规则的证书任务失败", err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "暂停冲突禁用规则的证书任务失败，已回滚: " + err.Error()})
+				err = failImportTx(c, session, action, "暂停冲突禁用规则的证书任务失败", err, http.StatusInternalServerError, "暂停冲突禁用规则的证书任务失败")
 				return
 			}
 		}
@@ -6629,8 +6638,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		if len(sets) > 0 {
 			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+strings.Join(sets, ",")+" WHERE id=1", values...); err != nil {
-				err = failImportAbort(c, session, action, "", err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入全局配置失败，已回滚: " + err.Error()})
+				err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, "导入全局配置失败")
 				return
 			}
 		}
@@ -6668,8 +6676,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		threatFilesSnapshotted := lbbakFiles != nil && (len(lbbakFiles.ThreatIplists) > 0 || threatFileReconcile)
 		snapshot, snapshotErr := snapshotLbbakWafTargets(lbbakFiles, threatFilesSnapshotted)
 		if snapshotErr != nil {
-			err = failImportAbort(c, session, action, "快照规则库文件失败（未写入任何文件）", fmt.Errorf("快照规则库文件失败: %w", snapshotErr))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚: " + err.Error()})
+			err = failImportTx(c, session, action, "快照规则库文件失败（未写入任何文件）", fmt.Errorf("快照规则库文件失败: %w", snapshotErr), http.StatusInternalServerError, action+"失败")
 			return
 		}
 		session.wafSnapshot = snapshot
@@ -6866,6 +6873,17 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			})
 		}
 	}
+	if len(pendingDeletedNodePins) > 0 {
+		// 已删除节点的 pin/缓存清理与导入同生共死：只在提交成功后登记执行
+		// （见 collectDeletedNodePinTargets 注释）。此处点仍在 caddyOpMu 临界区，
+		// 清理动作本身只碰文件与内存缓存，排到锁释放后无序要求。
+		targets := pendingDeletedNodePins
+		session.postLockActions = append(session.postLockActions, func() {
+			for _, target := range targets {
+				h.clearDeletedNodePinTarget(target)
+			}
+		})
+	}
 	if reseedBlockPageNeeded {
 		// 提交成功后才渲染 branding 内容：INSERT 只放空 content 占位，真实内容
 		// 由 SeedDefaultBlockPage 依据 branding.json 写入；失败不影响导入结果。
@@ -6954,8 +6972,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
-	if clearedNodeArtifacts > 0 {
-		auditParts = append(auditParts, fmt.Sprintf("清理已删除节点 %d 个的证书指纹钉与分区上报缓存", clearedNodeArtifacts))
+	if len(pendingDeletedNodePins) > 0 {
+		auditParts = append(auditParts, fmt.Sprintf("清理已删除节点 %d 个的证书指纹钉与分区上报缓存（导入收尾执行）", len(pendingDeletedNodePins)))
 	}
 	if ignoredNodeTokens > 0 {
 		auditParts = append(auditParts, fmt.Sprintf("%d 个节点的备份令牌被忽略（已保留本地令牌与审批状态）", ignoredNodeTokens))

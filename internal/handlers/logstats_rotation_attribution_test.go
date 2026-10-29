@@ -122,10 +122,11 @@ func TestIsTaskLogFamilyName_coversRotationShapes(t *testing.T) {
 	}
 }
 
-func TestIsRuleAccessLogName_matchesAggregateFamily(t *testing.T) {
+func TestRuleAccessAggregate_matchesTaskLogFamily(t *testing.T) {
 	// 规则访问日志目录聚合（LogStats 的 rule_access 无规则筛选分支）逐文件判定
-	// 必须与任务日志族同口径：活跃文件、移位副本、.gz 归档全计入；非日志名
-	// （同目录的其他任务日志/杂项）不得混进合计。
+	// 直传 isTaskLogFamilyName（此前经纯别名 isRuleAccessLogName 间接一层）：
+	// 活跃文件、移位副本、.gz 归档全计入；非日志名（同目录的其他任务日志/
+	// 杂项）不得混进合计。
 	cases := map[string]bool{
 		"lb_cooldown.log":          true,
 		"lb_cooldown.log.1":        true,
@@ -138,8 +139,8 @@ func TestIsRuleAccessLogName_matchesAggregateFamily(t *testing.T) {
 		"":                         false,
 	}
 	for name, want := range cases {
-		if got := isRuleAccessLogName(name); got != want {
-			t.Errorf("isRuleAccessLogName(%q)=%v, want %v", name, got, want)
+		if got := isTaskLogFamilyName(name); got != want {
+			t.Errorf("isTaskLogFamilyName(%q)=%v, want %v", name, got, want)
 		}
 	}
 }

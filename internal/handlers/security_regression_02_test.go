@@ -170,12 +170,21 @@ func (securityRowsErrConn) QueryContext(_ context.Context, query string, _ []dri
 	case strings.Contains(query, "SELECT COUNT(*), COALESCE(MAX(protocol)"):
 		return &rowsErrFixedRows{cols: []string{"c", "p"}, rows: [][]driver.Value{{int64(1), "http"}}}, nil
 	case strings.Contains(query, "FROM security_policies WHERE id=?"):
-		// 空 mixed 策略（特征组全空）：不触发生成子策略，直达绑定行查询
+		// 携带信任条目的 mixed 策略（trustEntriesNonEmpty=true）：拆分门
+		// 「无可拆特征组 400」必须放行，才能到达绑定行查询——空特征形态已由
+		// 「specs 构造后即 400」的判定拦截（绑定查询不再执行，见
+		// TestSplitSecurityPolicy_emptyFeaturesRejectsBeforeAnyQuery）。
 		return &rowsErrFixedRows{cols: securityRowsErrPolicyColumns, rows: [][]driver.Value{{
-			int64(1), "混拆迁移", "", "off", int64(5), "", "[]", int64(0), int64(1), "[]", "[]",
+			int64(1), "混拆迁移", "", "off", int64(5), "", "[]", int64(0), int64(1), `["203.0.113.7"]`, "[]",
 			int64(0), int64(0), int64(0), "[]", "[]", "[]", int64(0), int64(0), int64(1), int64(0),
 			"", "", "[]", "off", int64(0), "[]", int64(0), int64(0), "[]", "[]", "mixed", int64(0),
 		}}}, nil
+	case strings.Contains(query, "FROM security_policies WHERE name=? AND policy_type=?"):
+		// 同名子策略解析：无存量 → 复用判定为 0（待插入）。
+		return &rowsErrFixedRows{cols: securityRowsErrPolicyColumns}, nil
+	case strings.Contains(query, "SELECT COUNT(*) FROM security_policies"):
+		// 全局策略数量门：0 条 → 不触上限。
+		return &rowsErrFixedRows{cols: []string{"c"}, rows: [][]driver.Value{{int64(0)}}}, nil
 	case strings.Contains(query, "FROM security_policy_bindings"):
 		return rowsErrFailingRows{cols: []string{"x"}}, nil
 	default:
@@ -253,6 +262,39 @@ func TestBatchBindSecurityPolicies_existingIterationFailureReturns500(t *testing
 	// 错误原文由 serverErrMsg 落日志。
 	if strings.Contains(recorder.Body.String(), "注入的策略绑定迭代失败") {
 		t.Fatalf("body=%s, 不得向调用方回传存储层错误原文", recorder.Body.String())
+	}
+}
+
+// 「无可拆特征组」400 判定已前移到 specs 构造之后、任何查询/插入之前：
+// 空特征 mixed 策略拆分必须 400 且零子策略、零绑定查询（判定只依赖
+// features/trustEntriesNonEmpty，与绑定行无关）。
+func TestSplitSecurityPolicy_emptyFeaturesRejectsBeforeAnyQuery(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,rate_limit_enabled,block_page_id,block_status_code,policy_type,enabled)
+		VALUES ('empty-mix','off',0,0,0,403,'mixed',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	router := splitRouter(t)
+	recorder := postSplit(t, router, int(id))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "没有可拆分的特征组") {
+		t.Fatalf("body=%s, want 点名无可拆特征组", recorder.Body.String())
+	}
+	var policies, bindings int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policies").Scan(&policies); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings").Scan(&bindings); err != nil {
+		t.Fatal(err)
+	}
+	if policies != 1 || bindings != 0 {
+		t.Fatalf("拆分副作用 policies=%d bindings=%d, want 1/0（零子策略）", policies, bindings)
 	}
 }
 

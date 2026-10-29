@@ -31,7 +31,7 @@ func TestCaddyRestartBackoff_boundsTaskRunsUnderSustainedFailure(t *testing.T) {
 		if record {
 			recorded++
 		}
-		caddyRestartEndAttempt(false)
+		caddyRestartEndAttempt(now, false)
 		caddyRestartBackoff.mu.Lock()
 		nextAttempt := caddyRestartBackoff.nextAttempt
 		caddyRestartBackoff.nextAttempt = time.Time{}
@@ -43,8 +43,8 @@ func TestCaddyRestartBackoff_boundsTaskRunsUnderSustainedFailure(t *testing.T) {
 		if expectedDelay > caddyRestartBackoffMax {
 			expectedDelay = caddyRestartBackoffMax
 		}
-		if nextAttempt.Before(now.Add(expectedDelay)) || nextAttempt.After(now.Add(expectedDelay+time.Second)) {
-			t.Fatalf("第 %d 次失败退避=%s，want 精确档位 %s（指数 2/4/8/16/30/30…，实测窗口 +1s）", attempts, nextAttempt.Sub(now), expectedDelay)
+		if !nextAttempt.Equal(now.Add(expectedDelay)) {
+			t.Fatalf("第 %d 次失败退避=%s，want 收尾时刻+精确档位 %s（指数 2/4/8/16/30/30…）", attempts, nextAttempt.Sub(now), expectedDelay)
 		}
 	}
 
@@ -54,7 +54,7 @@ func TestCaddyRestartBackoff_boundsTaskRunsUnderSustainedFailure(t *testing.T) {
 	}
 
 	// 成功收敛：退避清零，下一次立即允许尝试。
-	caddyRestartEndAttempt(true)
+	caddyRestartEndAttempt(time.Now(), true)
 	if !caddyRestartShouldAttempt(time.Now()) {
 		t.Fatal("成功后必须清零退避（下一轮立即可尝试）")
 	}
@@ -67,16 +67,17 @@ func TestCaddyRestartBackoff_slowFailureStartsDelayAtAttemptEnd(t *testing.T) {
 	// Given an attempt that started three seconds ago and is only failing now.
 	attemptStart := time.Now().Add(-3 * time.Second)
 	caddyRestartBeginAttempt(attemptStart)
-	beforeEnd := time.Now()
-	caddyRestartEndAttempt(false)
-	afterEnd := time.Now()
+	// now 显式驱动（与生产 watcher 传同一时刻的契约一致）：退避窗口必须
+	// 精确等于「收尾时刻 + 档位」，不再依赖真实时钟区间猜测。
+	attemptEnd := time.Now()
+	caddyRestartEndAttempt(attemptEnd, false)
 
 	// Then the full delay starts at the end, not in the past at the start.
 	caddyRestartBackoff.mu.Lock()
 	nextAttempt := caddyRestartBackoff.nextAttempt
 	caddyRestartBackoff.mu.Unlock()
-	if nextAttempt.Before(beforeEnd.Add(caddyRestartBackoffBase)) || nextAttempt.After(afterEnd.Add(caddyRestartBackoffBase)) {
-		t.Fatalf("next attempt=%s, want end-based window [%s, %s]", nextAttempt, beforeEnd.Add(caddyRestartBackoffBase), afterEnd.Add(caddyRestartBackoffBase))
+	if !nextAttempt.Equal(attemptEnd.Add(caddyRestartBackoffBase)) {
+		t.Fatalf("next attempt=%s, want end-based %s", nextAttempt, attemptEnd.Add(caddyRestartBackoffBase))
 	}
 	if caddyRestartShouldAttempt(time.Now()) {
 		t.Fatal("slow failure must not permit an immediate retry")

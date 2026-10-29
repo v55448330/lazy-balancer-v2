@@ -813,3 +813,26 @@ func TestPrime_explicitEmptyCrawlerListRowIsNotReseeded(t *testing.T) {
 		t.Fatalf("运行快照把显式空名单写成 %v, want 空集合", entries)
 	}
 }
+
+// crawler 装配四入口在 nil 库形态必须显性报错而非 nil dereference 崩溃
+// （与同包 autoban ensureAutobanPresetListID 等 nil 门同口径；测试隔离遵循
+// 既有「存旧置 nil + Cleanup 还原」模式）。
+func TestCrawlerAssemblyEntries_nilDBReturnsExplicitError(t *testing.T) {
+	oldDB := db.DB
+	db.DB = nil
+	t.Cleanup(func() { db.DB = oldDB })
+
+	manager := &CrawlerUpdateManager{}
+	if err := manager.Prime(); err == nil {
+		t.Fatal("Prime with nil DB must return an explicit error, got nil")
+	}
+	if err := seedAndRebuildCrawlerIPListSnapshot(); err == nil {
+		t.Fatal("seedAndRebuildCrawlerIPListSnapshot with nil DB must return an explicit error, got nil")
+	}
+	if err := RestoreCrawlerIPListSnapshot(); err == nil {
+		t.Fatal("RestoreCrawlerIPListSnapshot with nil DB must return an explicit error, got nil")
+	}
+	if err := RebuildCrawlerIPListSnapshot(); err == nil {
+		t.Fatal("RebuildCrawlerIPListSnapshot with nil DB must return an explicit error, got nil")
+	}
+}

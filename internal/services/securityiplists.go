@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"lazy-balancer-v2/wafiplist"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/wafiplist"
 )
 
 // ipListChunkSize bounds each IN (...) placeholder batch (SQLite 上限 32766 绑定

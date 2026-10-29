@@ -215,3 +215,31 @@ func TestClusterBasicSettings_hasNoRetiredGlobalDNSCredentialsField(t *testing.T
 		}
 	}
 }
+
+// FormatRevokedTokenTime 必须对任意时区输入产出同一 UTC 字面 Z 形态：
+// RevokedTokenTimeFormat 以字面 Z 结尾却不做时区归一，绕过入口直接
+// t.Format 会把本地时刻标成 UTC，读侧 expires_at 比较漂移时区偏移量。
+func TestFormatRevokedTokenTime_normalizesToUTC(t *testing.T) {
+	utc := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	// 同一时刻的两个时区投影必须产出完全相同的串。
+	fixed := time.FixedZone("UTC+8", 8*60*60)
+	for name, input := range map[string]time.Time{
+		"utc":     utc,
+		"fixed":   utc.In(fixed),
+		"local":   utc.In(time.Local),
+		"zero_lt": time.Date(2026, 10, 30, 4, 0, 0, 0, time.FixedZone("UTC-8", -8*60*60)),
+	} {
+		got := FormatRevokedTokenTime(input)
+		if got != "2026-10-30T12:00:00Z" {
+			t.Fatalf("%s input produced %q, want 2026-10-30T12:00:00Z", name, got)
+		}
+	}
+	// 读侧按同格式解析必须还原同一时刻（读写闭环）。
+	parsed, err := time.Parse(RevokedTokenTimeFormat, FormatRevokedTokenTime(utc.Add(90*time.Minute)))
+	if err != nil {
+		t.Fatalf("parse formatted value: %v", err)
+	}
+	if !parsed.Equal(utc.Add(90 * time.Minute)) {
+		t.Fatalf("round-trip drifted: got %v want %v", parsed, utc.Add(90*time.Minute))
+	}
+}

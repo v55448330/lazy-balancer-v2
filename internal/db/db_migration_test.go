@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 func TestCreateTables_omits_dead_upstream_accessURL_column(t *testing.T) {
@@ -918,6 +920,59 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 	}
 	if loginColsNull != 1 {
 		t.Fatalf("login_failed_attempts notnull=%d, want 1（重建须保留 NOT NULL）", loginColsNull)
+	}
+}
+
+// users.is_enabled 读路径以 bool 目标扫描（ScanUserRow→database/sql 的
+// driver.Bool 只认 0/1）：带外写入的非两态整数（2/-1）会让所有用户读取端点
+// 500。启动归一必须把任何非 0/1 值收敛为规范两态（非 0 即 1），0/1 保持
+// 原值，且归一后 bool 扫描恢复可用。
+func TestNormalizeUsersIsEnabledDomain_collapsesOutOfBandValues(t *testing.T) {
+	reopenDatabaseForTest(t, t.TempDir())
+	if _, err := DB.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES
+		('oob-two','h','user',2), ('oob-negative','h','user',-1), ('oob-zero','h','user',0), ('oob-one','h','user',1)`); err != nil {
+		t.Fatalf("seed out-of-band users: %v", err)
+	}
+	// 根因一步：bool 扫描目标对带外值 2 确实报「无法转换为 bool」（用户读取
+	// 端点 500 的形态）——不得被任何无关扫描错误冒充。
+	var meta UserRowMeta
+	scan := func(username string) (models.User, error) {
+		return ScanUserRow(DB.QueryRow(`SELECT `+UserRowColumns("")+` FROM users WHERE username=?`, username), &meta)
+	}
+	_, scanErr := scan("oob-two")
+	if scanErr == nil || !strings.Contains(scanErr.Error(), "into type bool") {
+		t.Fatalf("is_enabled=2 must fail the bool scan target, got err=%v", scanErr)
+	}
+
+	if err := normalizeUsersIsEnabledDomain(); err != nil {
+		t.Fatalf("normalize users.is_enabled domain: %v", err)
+	}
+
+	var outOfBand int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM users WHERE is_enabled NOT IN (0,1)`).Scan(&outOfBand); err != nil {
+		t.Fatalf("read domain: %v", err)
+	}
+	if outOfBand != 0 {
+		t.Fatalf("is_enabled domain still has %d out-of-band rows", outOfBand)
+	}
+	// 非 0 即 1：2/-1 归一为 1，0/1 保持原值（禁用态不得被翻转）。
+	want := map[string]int{"oob-two": 1, "oob-negative": 1, "oob-zero": 0, "oob-one": 1}
+	for username, expected := range want {
+		var got int
+		if err := DB.QueryRow(`SELECT is_enabled FROM users WHERE username=?`, username).Scan(&got); err != nil {
+			t.Fatalf("read %s: %v", username, err)
+		}
+		if got != expected {
+			t.Fatalf("%s is_enabled=%d, want %d", username, got, expected)
+		}
+	}
+	// 归一后 bool 扫描目标恢复可用（用户读取端点 200 形态）。
+	user, err := scan("oob-two")
+	if err != nil {
+		t.Fatalf("scan after normalization: %v", err)
+	}
+	if !user.IsEnabled {
+		t.Fatalf("is_enabled=%v, want true", user.IsEnabled)
 	}
 }
 

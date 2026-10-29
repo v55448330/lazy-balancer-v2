@@ -1433,13 +1433,18 @@ func runMigrations() error {
 		// 挑战本就按「当前密码未变」语义有效，行为零漂移；一次性形状）。
 		"mfa_challenges.password_version": "UPDATE mfa_challenges SET password_version=COALESCE((SELECT COALESCE(password_version,0) FROM users WHERE users.id=mfa_challenges.user_id),0)",
 		// 存量库首次补列：把「最低 id 的启用管理员」标为 break-glass 管理入口
-		// （与运行期 EnsureSetupAdminFlag 同一判据；已有标记则不覆盖）。
-		"users.is_setup_admin": `UPDATE users SET is_setup_admin=1
-			WHERE id=(SELECT id FROM users WHERE role='admin' AND is_enabled=1 ORDER BY id LIMIT 1)
-			  AND NOT EXISTS (SELECT 1 FROM users WHERE COALESCE(is_setup_admin,0)=1 AND role='admin' AND is_enabled=1)`,
+		// （判据单源 setupAdminColumnBackfill，与运行期 EnsureSetupAdminFlag 的
+		// S3 补标逐字同源——setupAdminPredicateParity 启动期自检看守；
+		// 已有标记则不覆盖）。
+		"users.is_setup_admin": setupAdminColumnBackfill,
 	}
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
+	}
+	// 带外非 0/1 的 is_enabled 先归一，重建/读取链路只消费规范两态
+	// （NOT NULL 列上 NULL 不可达，非两态整数是唯一残余入口）。
+	if err := normalizeUsersIsEnabledDomain(); err != nil {
+		return fmt.Errorf("failed to normalize users.is_enabled domain: %w", err)
 	}
 	if err := migrateUsersIsEnabledNotNull(); err != nil {
 		return fmt.Errorf("failed to migrate users.is_enabled: %w", err)
@@ -4135,6 +4140,19 @@ func migrateCrawlerSourcesID() error {
 		}
 		return nil
 	})
+}
+
+// normalizeUsersIsEnabledDomain 把 users.is_enabled 的带外非两态值归一为 0/1：
+// 用户读路径（ScanUserRow）以 bool 目标扫描该列，database/sql 的 driver.Bool
+// 只接受 0/1——带外写入的其他整数值（2/-1）会让所有用户读取端点 500。
+// 探测门 + 幂等（收敛库零命中跳过写）；纯域归一不 bump cluster_version。
+func normalizeUsersIsEnabledDomain() error {
+	if _, err := execMigrationWriteIfNeeded(updateWhere("users",
+		"is_enabled=CASE WHEN is_enabled IN (0,1) THEN is_enabled ELSE (is_enabled<>0) END",
+		"is_enabled NOT IN (0,1)")); err != nil {
+		return fmt.Errorf("normalize users.is_enabled: %w", err)
+	}
+	return nil
 }
 
 func migrateUsersIsEnabledNotNull() error {

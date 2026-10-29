@@ -21,6 +21,32 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
+// close 兜底 abort（finished 未置位的异常收尾）此前 `_ =` 静默丢弃 abort
+// 结果：「导入流程未完成」的回滚零留痕。钉：该分支必须以 system 身份落
+// error 日志与「导入失败」审计行，且 close 幂等（重复收尾）不得重复落行。
+func TestConfigImportSession_closeUnfinishedAbortsLoudly(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	countAuditRows := func() int {
+		var n int
+		if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='配置备份' AND detail='导入流程未完成，已回滚'`).Scan(&n); err != nil {
+			t.Fatalf("query audit rows: %v", err)
+		}
+		return n
+	}
+	session := &configImportSession{h: h, action: "导入"}
+	// close() 的锁契约：会话建立时已持 caddyOpMu（beginConfigImport 同款），
+	// close 负责释放——合成会话必须先持锁再收尾。
+	h.caddyOpMu.Lock()
+	session.close()
+	if n := countAuditRows(); n != 1 {
+		t.Fatalf("close 兜底 abort 审计行=%d, want 1", n)
+	}
+	session.close() // 幂等门：重复收尾不得再次 abort/落审计
+	if n := countAuditRows(); n != 1 {
+		t.Fatalf("close 幂等后审计行=%d, want 仍为 1", n)
+	}
+}
+
 func TestImportFailureAuditDescriptionReflectsFailurePhase(t *testing.T) {
 	tests := []struct {
 		name  string

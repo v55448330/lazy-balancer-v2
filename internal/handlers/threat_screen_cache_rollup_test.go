@@ -131,6 +131,62 @@ func TestThreatScreenRollupCaches_shareTTL(t *testing.T) {
 	}
 }
 
+// 维度聚合缓存命中路径必须返回深拷贝：调用方就地改写返回值的 map/切片不得
+// 污染缓存条目（否则同窗第二个请求读到被改写的数据；与同文件 threatTopTargets
+// 的 slices.Clone 防护同口径，同型事故见安全总览聚合缓存）。
+func TestThreatRollupDimAggregateQuery_hitReturnsIsolatedCopy(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetThreatScreenCachesForTest()
+	t.Cleanup(resetThreatScreenCachesForTest)
+
+	sinceMinute := "2026-10-25 10:00"
+	bucketStarts := []time.Time{
+		time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 25, 10, 1, 0, 0, time.UTC),
+	}
+	const coverage = "full"
+	key := threatRollupDimAggregateKey{
+		metrics:      db.MetricsDB,
+		generation:   db.MetricsDBGeneration(),
+		sinceMinute:  sinceMinute,
+		bucketLayout: threatRollupBucketLayout(bucketStarts),
+		coverage:     coverage,
+	}
+	threatRollupDimAggregateCache.Seed(key, threatRollupDimAggregate{
+		total:          10,
+		blocked:        4,
+		countries:      map[string]int{"CN": 10},
+		chinaProvinces: map[string]int{"广东": 6},
+		familyCounts:   map[string]int{"sqlmap": 10},
+		ruleCounts:     map[string]int{"lb_x": 10},
+		bucketTotals:   []int{3, 7},
+	}, time.Now().Add(time.Minute))
+
+	first, err := threatRollupDimAggregateQuery(db.MetricsDB, sinceMinute, bucketStarts, coverage, true)
+	if err != nil {
+		t.Fatalf("hit path query: %v", err)
+	}
+	// 命中即返：零查询。调用方就地改写全部共享面（4 map + 切片）。
+	first.countries["US"] = 99
+	first.chinaProvinces["广东"] = 0
+	delete(first.familyCounts, "sqlmap")
+	first.ruleCounts["lb_x"] = -1
+	first.bucketTotals[0] = -7
+	first.bucketTotals = append(first.bucketTotals, 123)
+
+	second, err := threatRollupDimAggregateQuery(db.MetricsDB, sinceMinute, bucketStarts, coverage, true)
+	if err != nil {
+		t.Fatalf("second hit: %v", err)
+	}
+	if second.countries["US"] != 0 || second.countries["CN"] != 10 ||
+		second.chinaProvinces["广东"] != 6 ||
+		len(second.familyCounts) != 1 || second.familyCounts["sqlmap"] != 10 ||
+		second.ruleCounts["lb_x"] != 10 ||
+		len(second.bucketTotals) != 2 || second.bucketTotals[0] != 3 || second.bucketTotals[1] != 7 {
+		t.Fatalf("缓存条目被命中路径改写污染: %+v", second)
+	}
+}
+
 func TestGetSecurityThreatScreen_queryFailureInvalidatesRollupCaches(t *testing.T) {
 	// Given：聚合查询可以成功并写缓存，但后续 top_targets 因主库缺表失败。
 	setupSecurityPolicyTestDB(t)

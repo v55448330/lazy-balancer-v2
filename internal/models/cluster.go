@@ -629,6 +629,10 @@ type ThreatFileEntry struct {
 	Content []byte `json:"content,omitempty"` // .fast 二进制内容
 }
 
+// ClusterSecurityCRSVersion 是 CRS 与 IP2Region 共用的规则库版本行形态：
+// 两张表（security_crs_version / security_ip2region_version）结构完全一致，
+// 共享同一底层类型（json 键由 ClusterSnapshot 的字段 tag 决定，仍是两个）。
+// 此前两份逐字段重复定义，历史上已发生过单侧加列漂移风险。
 type ClusterSecurityCRSVersion struct {
 	ID           int    `json:"id"`
 	Version      string `json:"version"`
@@ -646,22 +650,9 @@ type ClusterSecurityCRSVersion struct {
 	ScheduleTime string `json:"schedule_time"`
 }
 
-type ClusterSecurityIP2RegionVersion struct {
-	ID           int    `json:"id"`
-	Version      string `json:"version"`
-	UpdatedAt    string `json:"updated_at"`
-	AutoUpdate   bool   `json:"auto_update"`
-	UpdateStatus string `json:"update_status"`
-	Message      string `json:"message"`
-	LastChecked  string `json:"last_checked"`
-	NextUpdate   string `json:"next_update"`
-	Trigger      string `json:"trigger"`
-	StartedAt    string `json:"started_at"`
-	FinishedAt   string `json:"finished_at"`
-	// 定时更新排程两列随版本行同步（升主即生效）。
-	ScheduleDays string `json:"schedule_days"`
-	ScheduleTime string `json:"schedule_time"`
-}
+// ClusterSecurityIP2RegionVersion 与 ClusterSecurityCRSVersion 同为
+// ClusterSecurityCRSVersion（类型别名）：字段集单一事实源，防双份定义漂移。
+type ClusterSecurityIP2RegionVersion = ClusterSecurityCRSVersion
 
 func (snapshot ClusterSnapshot) MarshalJSON() ([]byte, error) {
 	type snapshotAlias ClusterSnapshot

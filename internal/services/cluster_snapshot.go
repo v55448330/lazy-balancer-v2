@@ -1299,30 +1299,29 @@ func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapsho
 }
 
 func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapshotStore) (map[string][]models.PathRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstream_path, upstreams_json, response_mode, response_status, response_body, response_content_type, redirect_to, created_at, updated_at FROM path_rules ORDER BY rule_id, sort_order, id`)
+	// 时间戳两列由快照侧以 extra 追加（PathRuleSelectColumns 之外的附加列）。
+	rows, err := store.QueryContext(ctx, `SELECT `+db.PathRuleSelectColumns("")+`, created_at, updated_at FROM path_rules ORDER BY rule_id, sort_order, id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照路径规则: %w", err)
 	}
 	defer rows.Close()
 	byRule := make(map[string][]models.PathRule)
 	for rows.Next() {
-		var pathRule models.PathRule
-		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
-			&pathRule.ResponseMode, &pathRule.ResponseStatus, &pathRule.ResponseBody, &pathRule.ResponseContentType, &pathRule.RedirectTo, &pathRule.CreatedAt, &pathRule.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("扫描快照路径规则: %w", err)
-		}
-		pathRule.CreatedAt = snapshotTime(pathRule.CreatedAt)
-		if pathRule.UpdatedAt.Valid {
-			pathRule.UpdatedAt.Time = snapshotTime(pathRule.UpdatedAt.Time)
-		}
-		if upstreamsJSON.Valid {
-			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
+		var createdAt time.Time
+		var updatedAt sql.NullTime
+		pathRule, err := db.ScanPathRule(rows, &createdAt, &updatedAt)
+		if err != nil {
+			if errors.Is(err, db.ErrPathRuleUpstreamsDecode) {
 				// 同族收敛——上游列畸形只隔离该路由行（下发空上游会让
 				// 路由静默 502），并点名 path_rules 行 ID。
 				warnCorruptedSnapshotRow("path_rules", pathRule.ID, err)
 				continue
 			}
+			return nil, fmt.Errorf("扫描快照路径规则: %w", err)
+		}
+		pathRule.CreatedAt = snapshotTime(createdAt)
+		if updatedAt.Valid {
+			pathRule.UpdatedAt = sql.NullTime{Time: snapshotTime(updatedAt.Time), Valid: true}
 		}
 		byRule[pathRule.RuleID] = append(byRule[pathRule.RuleID], pathRule)
 	}

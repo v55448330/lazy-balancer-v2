@@ -24,22 +24,30 @@ func TestAutobanConfigReplaceEffectNote_mapsEffectsToUserText(t *testing.T) {
 	withDuration24h.Duration = "24h"
 	withDryRun := base
 	withDryRun.DryRun = true
+	disabledWithThreshold50 := disabled
+	disabledWithThreshold50.Threshold = 50
 
 	cases := []struct {
-		name  string
-		old   AutobanConfig
-		new   AutobanConfig
-		want  []string
-		empty bool
+		name    string
+		old     AutobanConfig
+		new     AutobanConfig
+		want    []string
+		empty   bool
+		notWant []string
 	}{
-		{"六列相同", base, base, nil, true},
-		{"仅时长变化（无运行期动作）", base, withDuration24h, nil, true},
-		{"仅观察模式变化（无运行期动作）", base, withDryRun, nil, true},
-		{"窗口变更清桶", base, withWindow1, []string{"统计窗口/口径", "清空自动封禁统计计数"}, false},
-		{"口径变更清桶", base, withScopeBlocked, []string{"统计窗口/口径", "清空自动封禁统计计数"}, false},
-		{"仅阈值变更重算达标", base, withThreshold50, []string{"封禁阈值", "重算统计达标标记"}, false},
-		{"停用执行禁用收尾", base, disabled, []string{"已停用", "禁用收尾"}, false},
-		{"启用联动调度", disabled, base, []string{"已启用", "调度已按新配置开启"}, false},
+		{"六列相同", base, base, nil, true, nil},
+		{"仅时长变化（无运行期动作）", base, withDuration24h, nil, true, nil},
+		{"仅观察模式变化（无运行期动作）", base, withDryRun, nil, true, nil},
+		{"窗口变更清桶", base, withWindow1, []string{"统计窗口/口径", "清空自动封禁统计计数"}, false, nil},
+		{"口径变更清桶", base, withScopeBlocked, []string{"统计窗口/口径", "清空自动封禁统计计数"}, false, nil},
+		{"仅阈值变更重算达标", base, withThreshold50, []string{"封禁阈值", "重算统计达标标记"}, false, nil},
+		{"停用执行禁用收尾", base, disabled, []string{"已停用", "禁用收尾"}, false, nil},
+		{"启用联动调度", disabled, base, []string{"已启用", "调度已按新配置开启"}, false, nil},
+		// 已停用状态下（old 亦禁用）任何保存/导入都没有「禁用」动作可收尾：
+		// 禁用收尾只属于 enabled→disabled 的真实翻转；停用期改阈值只重算达标
+		// 标记，响应不得宣称「已执行禁用收尾」（此前 !new.Enabled 判据把
+		// 停用期的任意保存都当禁用处理）。
+		{"已停用仅改阈值不宣称禁用收尾", disabled, disabledWithThreshold50, []string{"封禁阈值", "重算统计达标标记"}, false, []string{"禁用收尾", "已停用"}},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,6 +61,11 @@ func TestAutobanConfigReplaceEffectNote_mapsEffectsToUserText(t *testing.T) {
 			for _, want := range tt.want {
 				if !strings.Contains(note, want) {
 					t.Fatalf("note=%q, want 含 %q", note, want)
+				}
+			}
+			for _, banned := range tt.notWant {
+				if strings.Contains(note, banned) {
+					t.Fatalf("note=%q, want 不含 %q", note, banned)
 				}
 			}
 		})

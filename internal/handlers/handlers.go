@@ -612,10 +612,13 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	}
 	// 退化提交（DB 已提交、运行配置未生效）：横幅文案与「未保存（旧配置
 	// 已保留）」分两态——误读为「没保存」会诱发重复提交（重复对象）。
+	// 200 响应面向任意登录用户（business 组），错误文本与上方「重载失败」
+	// 审计同口径经 RedactCaddyAdminEndpoint 脱敏（/load 传输错误携带 admin
+	// 地址），详情仍由日志与审计留痕。
 	h.recordCaddyApplySavedNotLive(applyErr)
 	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
 	recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
-	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + applyErr.Error(), Data: f.Data})
+	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(applyErr.Error()), Data: f.Data})
 }
 
 // postCommitRecovery 提交失败统一恢复的结果，两通道分离：
@@ -1331,8 +1334,11 @@ func caddyRestartBeginAttempt(now time.Time) (record bool, attempts int) {
 }
 
 // caddyRestartEndAttempt 记录本轮结果并安排下次尝试时刻：成功清零退避、
-// 失败以尝试结束时刻为基准按指数退避（上限 30s）。状态变化（failed→ok 或 ok→failed）强制落行。
-func caddyRestartEndAttempt(ok bool) {
+// 失败以尝试结束时刻为基准按指数退避（上限 30s）。状态变化（failed→ok 或 ok→failed）
+// 强制落行。now 由调用方显式传入（与 caddyRestartShouldAttempt/BeginAttempt 的
+// now 同源）——收尾时刻是「下一次尝试」的基准，真实时钟散落在被测函数内部
+// 会让退避窗口断言只能靠区间猜测。
+func caddyRestartEndAttempt(now time.Time, ok bool) {
 	caddyRestartBackoff.mu.Lock()
 	defer caddyRestartBackoff.mu.Unlock()
 	status := "failed"
@@ -1348,7 +1354,7 @@ func caddyRestartEndAttempt(ok bool) {
 		if delay > caddyRestartBackoffMax {
 			delay = caddyRestartBackoffMax
 		}
-		caddyRestartBackoff.nextAttempt = time.Now().Add(delay)
+		caddyRestartBackoff.nextAttempt = now.Add(delay)
 	}
 	caddyRestartBackoff.lastStatus = status
 }
@@ -1409,11 +1415,11 @@ func (h *Handlers) caddyRestartWatcherOnce(triggerFile string, processStart time
 		runErr = h.ApplyConfigOnStartup("")
 	}
 	if runErr != nil {
-		caddyRestartEndAttempt(false)
+		caddyRestartEndAttempt(now, false)
 		services.Logf("error", "Caddy 重启后配置重应用失败（触发文件保留，按退避重试）: %v", runErr)
 		return
 	}
-	caddyRestartEndAttempt(true)
+	caddyRestartEndAttempt(now, true)
 	services.Logf("info", "Caddy 重启后配置重应用完成（引擎调度，与启动流程同源）")
 	markCaddyRestartTriggerApplied(st.ModTime())
 	if err := os.Remove(triggerFile); err != nil {

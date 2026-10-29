@@ -165,7 +165,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		default:
 			services.Logf("error", "Failed to update CA provider %d: %v", id, err)
 			recordCAProviderUpdateFailure(c, id, err.Error())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update CA provider"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 CA 提供商失败"})
 		}
 		return
 	}
@@ -213,6 +213,17 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "CA 提供商已更新"})
 }
 
+// auditCAProviderTestResult 是 TestCAProvider 全部失败出口的审计详情单源：
+// 「提供商 N [名称]；结果：<result>」。name 传空串（预查询 404 尚无名称）时
+// 省略名称段，与既有形态逐字一致；结果段经 AuditResultPart 统一渲染。
+func auditCAProviderTestResult(c *gin.Context, id int, name, result string) {
+	parts := []string{fmt.Sprintf("提供商 %d", id)}
+	if name != "" {
+		parts = append(parts, name)
+	}
+	recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(append(parts, services.AuditResultPart(result))...))
+}
+
 func (h *Handlers) TestCAProvider(c *gin.Context) {
 	// ZeroSSL EAB 测试会写 ca_providers.credentials（账户绑定结果）——与
 	// 导入的整表替换互斥。这里不取 caddyOpMu：测试含网络往返，持全局锁会把
@@ -232,8 +243,8 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			// 预查询 404 与测试内核的 not_found 同一结果类别：测试入口无论在哪一层
 			// 判定不存在都必须留审计（成功/失败测试均留痕的既有口径）。
-			recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), services.AuditResultPart("not_found")))
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+			auditCAProviderTestResult(c, id, "", "not_found")
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA 提供商不存在"})
 			return
 		}
 		services.Logf("error", "Failed to query CA provider %d before test: %v", id, err)
@@ -246,7 +257,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		result := "provider_error"
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			result = "not_found"
-			recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+			auditCAProviderTestResult(c, id, providerName, result)
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA 提供商不存在或已禁用"})
 			return
 		}
@@ -255,24 +266,24 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			switch terr.Phase {
 			case "email":
 				result = "missing_acme_email"
-				recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+				auditCAProviderTestResult(c, id, providerName, result)
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未配置 ACME 邮箱，请在「系统设置 / 免费证书」中填写邮箱"})
 			case "config":
 				result = "invalid_config"
-				recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+				auditCAProviderTestResult(c, id, providerName, result)
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "CA 提供商配置无效: " + terr.Error()})
 			case "register":
 				result = "register_failed"
-				recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+				auditCAProviderTestResult(c, id, providerName, result)
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME 账户注册失败，请检查 CA 配置或网络: " + terr.Error()})
 			default:
-				recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+				auditCAProviderTestResult(c, id, providerName, result)
 				services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 			}
 			return
 		}
-		recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart(result)))
+		auditCAProviderTestResult(c, id, providerName, result)
 		services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 		return

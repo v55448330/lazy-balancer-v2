@@ -104,33 +104,58 @@ func signServiceControlTicket(claims models.ClusterServiceControlClaims, key []b
 // 发起过服务控制），供调用方以幂等语义处理。
 var ErrNoClusterPin = errors.New("该节点没有已钉扎的证书指纹")
 
-// ForgetNodePin 删除主节点侧针对单个从节点的服务控制 TOFU 指纹钉（与
-// 从节点侧 forget-pins 端点对称）：从节点更换管理面板证书后主节点对其服务控制
-// 持续 PinMismatch，本方法按 IssueServiceControlTicket 同一口径（access_url
-// 优先，回退 protocol://ip:port）推导地址并定位 cluster_ca_pins 下的 pin 文件，
-// 只删除该节点的钉。返回定位到的 host:port 供审计与内存缓存失效使用。
-func (s *ClusterService) ForgetNodePin(ctx context.Context, nodeID int) (string, error) {
+// NodePinHost 解析单个从节点服务控制 TOFU 指纹钉的定位信息（不删除）：
+// 地址口径与 ForgetNodePin 一致（access_url 优先，回退 protocol://ip:port）。
+// 供「事务内先解析、提交后按 host 删除」的延迟清理形态使用（备份导入删除
+// 节点：地址解析需现存行，而删除必须等事务提交）。
+func (s *ClusterService) NodePinHost(ctx context.Context, nodeID int) (string, error) {
 	var ipAddress, protocol, accessURL string
 	var port int
 	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,'') FROM nodes WHERE id=? AND `+masterRoleConditionSQL, nodeID).
 		Scan(&ipAddress, &port, &protocol, &accessURL); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// SQL 级角色条件（同族 TOCTOU 唯一漏点）——0 行时复核
-			// 角色：降级窗口返回 403 哨兵，而不是继续删除主节点目录下的 pin。
+			// 角色：降级窗口返回 403 哨兵，而不是继续主节点目录下的 pin 操作。
 			return "", s.nodeWriteMissError(ctx)
 		}
 		return "", fmt.Errorf("读取节点访问地址: %w", err)
 	}
 	accessURL = resolveNodeAccessURL(ipAddress, port, protocol, accessURL)
-	pinPath, host, err := nodePinPathFromAccessURL(s.dataDir, s.db, accessURL)
+	_, host, err := nodePinPathFromAccessURL(s.dataDir, s.db, accessURL)
 	if err != nil {
 		return "", err
 	}
+	return host, nil
+}
+
+// ForgetNodePinHost 按 host:port 删除主节点侧的 pin 文件（幂等：不存在返回
+// ErrNoClusterPin）。与 NodePinHost 成对，pin 目录/命名单源 clusterPinPath。
+func (s *ClusterService) ForgetNodePinHost(host string) error {
+	pinPath, err := clusterPinPath(s.dataDir, s.db, host)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(pinPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", ErrNoClusterPin
+			return ErrNoClusterPin
 		}
-		return "", fmt.Errorf("删除节点证书指纹: %w", err)
+		return fmt.Errorf("删除节点证书指纹: %w", err)
+	}
+	return nil
+}
+
+// ForgetNodePin 删除主节点侧针对单个从节点的服务控制 TOFU 指纹钉（与
+// 从节点侧 forget-pins 端点对称）：从节点更换管理面板证书后主节点对其服务控制
+// 持续 PinMismatch，本方法按 IssueServiceControlTicket 同一口径（access_url
+// 优先，回退 protocol://ip:port）推导地址并定位 cluster_ca_pins 下的 pin 文件，
+// 只删除该节点的钉。返回定位到的 host:port 供审计与内存缓存失效使用。
+func (s *ClusterService) ForgetNodePin(ctx context.Context, nodeID int) (string, error) {
+	host, err := s.NodePinHost(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ForgetNodePinHost(host); err != nil {
+		return "", err
 	}
 	return host, nil
 }

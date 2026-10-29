@@ -37,6 +37,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -76,6 +77,14 @@ const (
 	// 全量重载，见 autobanConvergeLocked Ruling）。
 	autobanReloadThrottle = time.Minute
 	// autobanSuggestionCap 观察建议保留上限（按计数降序截断）。
+	//
+	// 保留用途：这是「暂存量」而非展示口径——展示层由 AutobanSuggestions
+	// 再截 Top 50（autobanSuggestionDisplayCap，2026-10-15 用户裁定），本层
+	// 在两者之间给解封剔除（AutobanForgetIPs 逐条扫描）与暂存内存一个有界
+	// 上限；正式 merge 不经过本层（评估全量消费）。已知观测边界：dry-run
+	// TaskLog 的「达阈值 N」计数取截断后长度，>200 洪峰时该值为 200 且无
+	// 「+N 省略」注记——截断本身在任何可达输出都不可观测（展示恒 ≤50），
+	// 排障时以 /status 的 tracked/reached 计数为准，勿以建议条数反推洪峰量。
 	autobanSuggestionCap = 200
 )
 
@@ -310,18 +319,27 @@ type autobanConfigReplaceEffects struct {
 	resetCounters bool
 	// recomputeReached：阈值变更 → 重算「已达阈值」读口径。
 	recomputeReached bool
-	// disableFlush：新配置为禁用 → 到期条目解封收尾 + 清桶。
+	// disableFlush：新配置为禁用 → 到期条目解封收尾 + 清桶。判据是
+	// 「保存后处于停用态」而非「真实翻转」：停用期保存/导入同样必须清掉已到期
+	// 条目（否则过期条目会一直挂在名单里），这是既有契约。
+	// 「已停用再保存」与「真实翻转」的区别只体现在用户可读说明上：仅真实翻转
+	// 才声称「已执行禁用收尾」（见 AutobanConfigReplaceEffectNote 的
+	// disableFlushTransition）。
 	disableFlush bool
+	// disableFlushTransition：本次保存是 enabled→disabled 的真实翻转（用于文案，
+	// 不复用为动作门——动作门必须覆盖停用期保存）。
+	disableFlushTransition bool
 	// loopToggled：启用态翻转 → 调度随之启停。
 	loopToggled bool
 }
 
 func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceEffects {
 	effect := autobanConfigReplaceEffects{
-		resetCounters:    old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope,
-		recomputeReached: old.Threshold != new.Threshold,
-		disableFlush:     !new.Enabled,
-		loopToggled:      old.Enabled != new.Enabled,
+		resetCounters:          old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope,
+		recomputeReached:       old.Threshold != new.Threshold,
+		disableFlush:           !new.Enabled,
+		disableFlushTransition: old.Enabled && !new.Enabled,
+		loopToggled:            old.Enabled != new.Enabled,
 	}
 	return effect
 }
@@ -371,8 +389,10 @@ func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
 	} else if effect.recomputeReached {
 		parts = append(parts, fmt.Sprintf("封禁阈值由 %d 改为 %d，已按新阈值重算统计达标标记", old.Threshold, new.Threshold))
 	}
-	if effect.disableFlush {
+	if effect.disableFlushTransition {
 		parts = append(parts, "自动封禁已停用，已执行禁用收尾（到期条目解封、统计计数清空）")
+	} else if effect.disableFlush {
+		parts = append(parts, "自动封禁处于停用态，已清理到期条目并清空统计计数")
 	} else if effect.loopToggled {
 		parts = append(parts, "自动封禁已启用，调度已按新配置开启")
 	}
@@ -1620,6 +1640,12 @@ func AutobanActiveEntries(entries []models.IPListEntry) []models.IPListEntry {
 // 故计数按「逐 IP 行各 1 + 汇总行携带的省略数」相加——行数上限不会让洪峰
 // 轮次的封禁数被截断或重复计（旧实现直接 COUNT(*)：800 个 IP 的一轮以
 // 501 条审计行计成 501；只加汇总总数则会把已逐条记录的 500 个再计一遍）。
+//
+// 折算在 SQL 侧单遍聚合完成（口径=autobanAuditEventCount：前缀命中行取
+// 前缀后的省略数、其余行各计 1、不可解析汇总行保守计 1），不再把当日审计行
+// 全量拉回 Go 逐行折算——洪峰日单轮 500 行逐条留痕，该查询在 /status 热路径。
+// 两处口径的等价性由 TestAutobanBannedToday_countsOmittedBansBeyondRoundCap
+// （混合形态端到端）与 autobanAuditEventCount 单测（逐形态）共同钉住。
 func AutobanBannedToday() int {
 	if db.AuditDB == nil {
 		return 0
@@ -1627,20 +1653,18 @@ func AutobanBannedToday() int {
 	loc := CurrentLocation()
 	now := autobanNow().In(loc)
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC().Format(autobanTimeLayout)
-	rows, err := db.AuditDB.Query(`SELECT COALESCE(detail,'') FROM audit_log WHERE action=? AND created_at >= ?`, AutobanAuditAction, dayStart)
+	// substr 按字符定位（前缀含非 ASCII），rune 长度与 SQLite 字符语义对齐；
+	// 汇总行前缀后的剩余文本以整数前缀解析（CAST 语义），解析不出按 1 计
+	// （MAX(x,1)）——与 Go 侧折算的保守方向一致。
+	prefixRunes := utf8.RuneCountInString(autobanAuditSummaryPrefix)
+	var n int
+	err := db.AuditDB.QueryRow(`SELECT COALESCE(SUM(
+		CASE WHEN substr(COALESCE(detail,''),1,?) = ?
+		THEN MAX(CAST(substr(COALESCE(detail,''),?) AS INTEGER), 1)
+		ELSE 1 END), 0)
+		FROM audit_log WHERE action=? AND created_at >= ?`,
+		prefixRunes, autobanAuditSummaryPrefix, prefixRunes+1, AutobanAuditAction, dayStart).Scan(&n)
 	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-	n := 0
-	for rows.Next() {
-		var detail string
-		if err := rows.Scan(&detail); err != nil {
-			return 0
-		}
-		n += autobanAuditEventCount(detail)
-	}
-	if err := rows.Err(); err != nil {
 		return 0
 	}
 	return n
@@ -1649,6 +1673,9 @@ func AutobanBannedToday() int {
 // autobanAuditEventCount 把一条「自动封禁」审计行折算成封禁事件数：汇总行
 // 携带被省略的逐条记录数（前缀后的整数），逐 IP 行与历史文案各计 1——
 // 无法识别的形态按 1 计是保守方向（不会凭空放大统计）。
+//
+// 折算口径的 Go 侧规格（AutobanBannedToday 的 SQL 聚合按本函数语义镜像）；
+// 生产计数已不走本函数（见 AutobanBannedToday），保留作口径单源与单测锚。
 func autobanAuditEventCount(detail string) int {
 	if rest, ok := strings.CutPrefix(detail, autobanAuditSummaryPrefix); ok {
 		end := 0

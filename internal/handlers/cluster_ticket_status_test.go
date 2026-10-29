@@ -46,6 +46,9 @@ func TestGenerateClusterLoginTicket_nodeNotFoundReturns404(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%q, want 404", response.Code, response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), "目标节点不存在（可能已被删除）") {
+		t.Fatalf("body=%s, want 点名节点不存在的可行动文案（不得停留通用「生成登录票据失败」）", response.Body.String())
+	}
 }
 
 // 已批准但集群令牌尚未交付（批准后从节点还没轮询注册状态回传哈希）的节点

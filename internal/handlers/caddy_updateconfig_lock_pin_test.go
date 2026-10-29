@@ -2,8 +2,8 @@ package handlers
 
 // 基线钉：审计判定「UpdateConfig 是配置/
 // 规则/安全写族中唯一不持 caddyOpMu 的 Caddy 写者」——亲验不成立：
-// UpdateConfig 在请求体校验后、全部业务逻辑前即取锁（caddy.go:740-741，
-// `h.caddyOpMu.Lock()` + `defer h.caddyOpMu.Unlock()`），defer 覆盖函数全程。
+// UpdateConfig 在请求体校验后、全部业务逻辑前即取锁（函数体内
+// `h.caddyOpMu.Lock()` + `defer h.caddyOpMu.Unlock()`，defer 覆盖函数全程）。
 // 本钉测试以 caddy_test.go 生命周期探针同款模式锁行为：预持 caddyOpMu 期间
 // UpdateConfig 必须阻塞，释放后完成——证明取锁在位。
 // 基线钉测试（钉既有正确行为），按豁免 RED，判定变更披露见修复报告。

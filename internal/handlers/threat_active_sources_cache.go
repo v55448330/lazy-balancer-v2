@@ -26,7 +26,8 @@ var threatActiveSourcesCacheTTL = 45 * time.Second
 
 // threatMinuteAnchor 把秒级/任意形态的窗口起点截到分钟锚点（缓存键口径）。
 // 小于 16 字符的异形值（带外写库/异形导入的 event_time）按原样返回，不得
-// 直接切片（[:16] 会 panic）。渲染侧与活跃源缓存共用本 helper。
+// 直接切片（[:16] 会 panic）。仅供活跃源缓存键使用（渲染侧另有自己的锚点
+// 口径，不经本 helper）。
 func threatMinuteAnchor(s string) string {
 	if len(s) > 16 {
 		return s[:16]
