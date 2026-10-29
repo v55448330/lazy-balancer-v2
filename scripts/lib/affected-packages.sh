@@ -51,11 +51,8 @@ affected_module_of_go_file() {
     printf '%s\n' "$best"
     return 0
   fi
-  # 根模块：排除掉已被嵌套模块认领的路径后，其余 .go 文件都属于根模块。
-  for module in "${module_list[@]}"; do
-    if [[ "$module" == "." ]]; then continue; fi
-    if [[ "$file" == "$module/"* ]]; then return 0; fi
-  done
+  # 其余 .go 文件都属根模块：上方已对全部嵌套模块做最长前缀匹配，
+  # 走到这里即没有任何嵌套模块认领该路径。
   printf '.\n'
 }
 

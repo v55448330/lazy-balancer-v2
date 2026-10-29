@@ -31,7 +31,7 @@ var (
 	configDriftStatus           = ConfigDriftStatus{Consistent: true}
 	configDriftStreak           int
 	configDriftCleanRounds      int  // 心跳窗口：连续「真实检查且一致」轮计数（60s 节拍 × 60 轮 ≈ 1h 一条心跳）
-	configDriftSkipped          int  // 自上次真实检查以来的跳过轮数（未判定，不计入干净轮）
+	configDriftSkipped          int  // 自上次真实检查以来的跳过轮数（未判定，不计入干净轮）。测试断言专用（生产无读者）——生产心跳文案只消费 configDriftHeartbeatSkipped；两窗口复位点不同，勿互替。
 	configDriftHeartbeatSkipped int  // 自上次心跳以来的跳过轮数：仅用于心跳文案，与状态字段窗口分离。
 	configDriftQueryWarned      bool // 规则数据读取失败首报留痕
 	configDriftReadWarned       bool // 运行配置读取失败首报留痕

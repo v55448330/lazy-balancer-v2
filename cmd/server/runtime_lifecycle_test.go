@@ -22,21 +22,6 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-type blockingCertificateWorker struct {
-	stopOnce sync.Once
-	stop     chan struct{}
-	exited   chan struct{}
-}
-
-func (w *blockingCertificateWorker) Start() {
-	<-w.stop
-	close(w.exited)
-}
-
-func (w *blockingCertificateWorker) Stop() {
-	w.stopOnce.Do(func() { close(w.stop) })
-}
-
 type idleSyncWorker struct{}
 
 func (idleSyncWorker) Start() {}
@@ -55,7 +40,7 @@ func (w *countingSyncWorker) Stop()  { w.stops.Add(1) }
 func TestRuntimeLifecycle_ShutdownGatesLaterStarts(t *testing.T) {
 	worker := &countingSyncWorker{}
 	lifecycle := newRuntimeLifecycle(worker, func() lifecycleWorker {
-		return &blockingCertificateWorker{stop: make(chan struct{}), exited: make(chan struct{})}
+		return newLifecycleWorkerFake(fakeStartPendsUntilStop, fakeStopUnblocksStart)
 	})
 	lifecycle.StartSync()
 	lifecycle.StartSync() // 重复启动由 worker 自身幂等，此处只断言生命周期门
@@ -77,7 +62,7 @@ func TestRuntimeLifecycle_ShutdownGatesLaterStarts(t *testing.T) {
 
 func TestRuntimeLifecycle_StopACME_waitsForWorkerExit(t *testing.T) {
 	// Given
-	worker := &blockingCertificateWorker{stop: make(chan struct{}), exited: make(chan struct{})}
+	worker := newLifecycleWorkerFake(fakeStartPendsUntilStop, fakeStopUnblocksStart)
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker { return worker })
 	lifecycle.StartACME()
 
@@ -92,25 +77,13 @@ func TestRuntimeLifecycle_StopACME_waitsForWorkerExit(t *testing.T) {
 	}
 }
 
-// blockedStopCertificateWorker 是生产形态的 Stop：Start 虽已进入等待轮询，
-// Stop 自身还要做不可预算的收尾（services.CertificateService.Stop 末尾
-// <-s.done），在收尾被长时间占用时永远不返回。
-type blockedStopCertificateWorker struct {
-	release chan struct{}
-	started chan struct{}
-}
-
-func (w *blockedStopCertificateWorker) Start() { close(w.started) }
-
-func (w *blockedStopCertificateWorker) Stop() { <-w.release }
-
 // Given 证书 worker 的 Stop 自身阻塞（生产形态：Stop 内部等待 Start 退出）。
 // When ShutdownWithTimeout 以 50ms 预算调用。
 // Then 必须在预算内返回——Stop 的等待不得落在超时 select 之前，也不得持锁
 // 拖住换代钩子（旧实现先调 Stop 再无界等待，超时分支永不可达）。
 func TestRuntimeLifecycle_ShutdownWithTimeoutBoundsBlockingStop(t *testing.T) {
-	worker := &blockedStopCertificateWorker{release: make(chan struct{}), started: make(chan struct{})}
-	t.Cleanup(func() { close(worker.release) })
+	worker := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
+	t.Cleanup(worker.releaseNow)
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker { return worker })
 	lifecycle.StartACME()
 	<-worker.started
@@ -207,36 +180,15 @@ func expiredManualCertPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
-// blockingStopSyncWorker 是生产形态的同步停止：SyncService.Stop 取消 ctx 后
-// 无 deadline 地等 pullWG（在途拉取客户端 30s + apply 的 DB 写），关停期完全
-// 可能超过整个 compose grace。
-type blockingStopSyncWorker struct {
-	release     chan struct{}
-	entered     chan struct{}
-	enterOnce   sync.Once
-	releaseOnce sync.Once
-	stops       atomic.Int32
-}
-
-func (w *blockingStopSyncWorker) Start() {}
-func (w *blockingStopSyncWorker) Stop() {
-	w.stops.Add(1)
-	w.enterOnce.Do(func() { close(w.entered) })
-	<-w.release
-}
-
-// releaseNow 放行阻塞中的 Stop（幂等：清理与用例内放行可同时注册）。
-func (w *blockingStopSyncWorker) releaseNow() { w.releaseOnce.Do(func() { close(w.release) }) }
-
 // Given 从节点同步停止阻塞（在途 pull 未返回）。
 // When ShutdownWithTimeout 以 50ms 预算调用。
 // Then 必须在预算内返回——同步段的无预算等待不得排在有预算段之前并吃掉整个
 // 关停窗口（旧实现 Shutdown 内直调 StopSync，`<-done` 无界）。
 func TestRuntimeLifecycle_ShutdownWithTimeoutBoundsBlockingSyncStop(t *testing.T) {
-	worker := &blockingStopSyncWorker{release: make(chan struct{}), entered: make(chan struct{})}
+	worker := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
 	t.Cleanup(worker.releaseNow)
 	lifecycle := newRuntimeLifecycle(worker, func() lifecycleWorker {
-		return &blockedStopCertificateWorker{release: make(chan struct{}), started: make(chan struct{})}
+		return newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
 	})
 	lifecycle.StartSync()
 
@@ -257,10 +209,11 @@ func TestRuntimeLifecycle_ShutdownWithTimeoutBoundsBlockingSyncStop(t *testing.T
 // Then 只允许一次 syncService.Stop（单飞），且关停按预算返回——旧实现在
 // l.mu 上等同一个 `<-done`，与其后弃留的 daemon goroutine 互相卡死。
 func TestRuntimeLifecycle_ShutdownSyncStopIsSingleFlight(t *testing.T) {
-	worker := &blockingStopSyncWorker{release: make(chan struct{}), entered: make(chan struct{})}
+	worker := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
+	worker.recordStops = true
 	t.Cleanup(worker.releaseNow)
 	lifecycle := newRuntimeLifecycle(worker, func() lifecycleWorker {
-		return &blockedStopCertificateWorker{release: make(chan struct{}), started: make(chan struct{})}
+		return newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
 	})
 	lifecycle.StartSync()
 
@@ -269,7 +222,7 @@ func TestRuntimeLifecycle_ShutdownSyncStopIsSingleFlight(t *testing.T) {
 		defer close(daemonDone)
 		lifecycle.StopSync() // 弃留的 daemon 收尾
 	}()
-	<-worker.entered
+	<-worker.stopEntered
 
 	returned := make(chan struct{})
 	go func() {
@@ -281,7 +234,7 @@ func TestRuntimeLifecycle_ShutdownSyncStopIsSingleFlight(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ShutdownWithTimeout 未在预算内返回（与在途同步停止争锁）")
 	}
-	if got := worker.stops.Load(); got != 1 {
+	if got := worker.stopCount.Load(); got != 1 {
 		t.Fatalf("syncService.Stop 调用 %d 次，want 1（单飞：不得二次进入停止）", got)
 	}
 	worker.releaseNow() // 放行后弃留的 daemon 收尾才会返回
@@ -298,7 +251,7 @@ func shutdownForTest(l *runtimeLifecycle) { l.ShutdownWithTimeout(acmeStopSegmen
 // 25s + 一个停止预算，正好等于 compose stop_grace_period，设计余量归零。
 func TestShutdownWithTimeout_lockWaitCountsAgainstBudget(t *testing.T) {
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker {
-		return &blockingCertificateWorker{stop: make(chan struct{}), exited: make(chan struct{})}
+		return newLifecycleWorkerFake(fakeStartPendsUntilStop, fakeStopUnblocksStart)
 	})
 	// 模拟并发 StopACME 长期持有证书启停互斥。
 	if !lifecycle.acquireACMEOps(time.Second) {
@@ -322,7 +275,7 @@ func TestShutdownWithTimeout_lockWaitCountsAgainstBudget(t *testing.T) {
 // acmeStopDone，其快速完成会让 StartACME 误判前一个停止（仍在 PauseAndDrain
 // 旧队列）也已收尾而拉起新一代。
 func TestStopACME_keepsInFlightStopHandle(t *testing.T) {
-	second := newStubLifecycleWorker()
+	second := newLifecycleWorkerFake(fakeStartImmediate, fakeStopImmediate)
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker { return second })
 
 	inFlight := make(chan struct{})
@@ -359,21 +312,5 @@ func TestStopACME_keepsInFlightStopHandle(t *testing.T) {
 	}
 
 	// And 在途停止收尾前 StartACME 必须等待（不得立即装配新一代）。
-	startReturned := make(chan struct{})
-	go func() {
-		defer close(startReturned)
-		lifecycle.StartACME()
-	}()
-	select {
-	case <-second.started:
-		t.Fatal("在途停止未收尾时启动了新一代——在途 Stop 会关闭新队列")
-	case <-time.After(150 * time.Millisecond):
-	}
-	releaseInFlight()
-	select {
-	case <-second.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("在途停止收尾后新一代仍未启动")
-	}
-	<-startReturned
+	assertNewGenerationBlockedUntilStopSettles(t, lifecycle, second.started, releaseInFlight)
 }

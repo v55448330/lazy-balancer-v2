@@ -1,7 +1,7 @@
 /**
  * 受信代理（CDN 回源）配置的行内校验，与后端判据单源：
  *
- * - `internal/services/caddy.go` 的 `TrustedProxyMinPrefixBits`（IPv4 /8、
+ * - `internal/services/caddy.go` 的 `trustedProxyMinPrefixBits`（IPv4 /8、
  *   IPv6 /29）/ `TrustedProxyPrefixAllSpace`（全空间形态）/
  *   `TrustedProxyPrefixCanonical`（Masked 剥主机位 + v4-mapped 折等价 v4）；
  * - `internal/handlers/config_trustedproxy.go` 的 `normalizeTrustedProxyRanges`
@@ -21,7 +21,7 @@
 import { isValidCidr, parseIPv4Octets, parseIPv6Groups } from './ipAddress.ts'
 
 /** 允许的最小前缀长度（/29 覆盖 Cloudflare 官方最宽回源段）。
- *  导出供跨栈对表测试与后端 TrustedProxyMinPrefixBits 直接同值比对。 */
+ *  导出供跨栈对表测试与后端 trustedProxyMinPrefixBits 直接同值比对。 */
 export const TRUSTED_PROXY_MIN_PREFIX_BITS = { ipv4: 8, ipv6: 29 } as const
 
 /** 内联网段条数上限（引用名单条目另计，后端总量门为 2000）。

@@ -86,9 +86,9 @@ var lbRuleColumnSpecs = []lbRuleColumnSpec{
 	{"block_page_stage3_status", "COALESCE(block_page_stage3_status,0)"},
 }
 
-// LbRuleWriteColumns 返回规则写侧全量列清单（规范序，含 id 与审计四列）。
+// lbRuleWriteColumns 返回规则写侧全量列清单（规范序，含 id 与审计四列）。
 // 每次返回新切片，调用方不得假定共享底层数组。
-func LbRuleWriteColumns() []string {
+func lbRuleWriteColumns() []string {
 	columns := make([]string, len(lbRuleColumnSpecs))
 	for i, spec := range lbRuleColumnSpecs {
 		columns[i] = spec.name
@@ -103,7 +103,7 @@ func LbRuleWriteColumns() []string {
 //     created_at 走 schema 默认、updated_by 留 NULL 待首次更新）
 func LbRuleInsertColumns(exclude ...string) []string {
 	if len(exclude) == 0 {
-		return LbRuleWriteColumns()
+		return lbRuleWriteColumns()
 	}
 	dropped := make(map[string]bool, len(exclude))
 	for _, column := range exclude {

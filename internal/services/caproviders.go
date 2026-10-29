@@ -339,9 +339,18 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		}
 	}
 
+	// 负值与超上限同口径显性 400（导入校验 min=0 本就拒绝负值；写侧此前把
+	// 负值静默钳成默认值，两条 TooLow 哨兵实际恒不触发）。0 仍表示
+	// 「未设置/默认」，保持既有 API 兼容语义。
+	if existing.MaxConcurrent < 0 {
+		return models.CAProvider{}, ErrCAProviderMaxConcurrentTooLow
+	}
 	existing.MaxConcurrent = NormalizeCAProviderMaxConcurrent(existing.MaxConcurrent)
 	if existing.MaxConcurrent > 100 {
 		return models.CAProvider{}, ErrCAProviderMaxConcurrentTooHigh
+	}
+	if existing.MinIntervalMS < 0 {
+		return models.CAProvider{}, ErrCAProviderMinIntervalTooLow
 	}
 	existing.MinIntervalMS = NormalizeCAProviderMinIntervalMS(existing.MinIntervalMS)
 	if existing.MinIntervalMS > 60000 {

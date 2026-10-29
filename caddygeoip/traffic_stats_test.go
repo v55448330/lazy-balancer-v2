@@ -158,9 +158,9 @@ func TestTrafficRecord_normalizesOverseasAliases(t *testing.T) {
 
 func TestTrafficRecord_countryCapacity(t *testing.T) {
 	// 满员丢弃必须可观测（计数 + 节流告警）：否则大屏国家流量少计而零信号。
-	oldInterval := crawlerSnapshotLogInterval
-	crawlerSnapshotLogInterval = 0 // 不节流：断言每次丢弃都有告警
-	t.Cleanup(func() { crawlerSnapshotLogInterval = oldInterval })
+	oldInterval := crawlerSnapshotThrottle.interval
+	crawlerSnapshotThrottle.interval = 0 // 不节流：断言每次丢弃都有告警
+	t.Cleanup(func() { crawlerSnapshotThrottle.interval = oldInterval })
 	logBase := crawlerSnapshotLogCallsForTest.Load()
 
 	// Given: 国名桶达到硬上限，且其中一个已有桶随后继续命中。

@@ -326,3 +326,77 @@ func TestPurgeOrphanRuleLogs_purgesLookalikeResidueWhilePrefixLive(t *testing.T)
 		t.Fatalf("存活前缀规则的活动文件被误删: %v", err)
 	}
 }
+
+// 单轮上限：达限即停，未处理条目计入 Remaining 交下一轮（分轮清理是正常
+// 形态，不是故障——错误面不得把 Remaining 当失败）。
+func TestPurgeOrphanRuleLogs_perRunCapReportsRemaining(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_kept','kept','http',18099,1)`); err != nil {
+		t.Fatalf("seed live rule: %v", err)
+	}
+	first := seedRuleLogFiles(t, dir, "lb_cap_a")
+	second := seedRuleLogFiles(t, dir, "lb_cap_b")
+
+	oldCap := ruleLogOrphanPurgePerRun
+	ruleLogOrphanPurgePerRun = 1
+	t.Cleanup(func() { ruleLogOrphanPurgePerRun = oldCap })
+
+	result := PurgeOrphanRuleLogs(context.Background())
+
+	if result.ScanError != "" {
+		t.Fatalf("ScanError=%q, want 空", result.ScanError)
+	}
+	if len(result.Purged) != 1 || result.Purged[0] != "lb_cap_a" {
+		t.Fatalf("Purged=%v, want [lb_cap_a]（确定性排序下先清同一前缀）", result.Purged)
+	}
+	if result.Remaining != 1 {
+		t.Fatalf("Remaining=%d, want 1（达单轮上限必须如实报告）", result.Remaining)
+	}
+	for _, name := range first {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("已清理孤儿文件 %s 仍在（err=%v）", name, err)
+		}
+	}
+	for _, name := range second {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("超限留存文件 %s 被误删: %v", name, err)
+		}
+	}
+	if err := (RuntimeCleanupResult{RuleLogs: result}).Err(); err != nil {
+		t.Fatalf("Remaining 非失败：Err=%v（不得把分轮清理当故障）", err)
+	}
+}
+
+// 存活清单读取失败时：疑似轮转副本必须保留（绝不 unlink 可能属于存活规则
+// 的文件），但「保留」必须进错误面——事件型删除入口此前按成功收尾，审计
+// 口径与磁盘残留不一致。活动文件无需归属核对，照常删除。
+func TestRemoveRuleLogFiles_keepsCopiesWhenLiveListUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+	if err := os.WriteFile(filepath.Join(dir, "lb_own.log"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 字母表内主体的时间戳副本：copyStem 过字母表安全门 → 触发归属核对。
+	if err := os.WriteFile(filepath.Join(dir, "lb_own-20260102T030405-size.log"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDB := db.DB
+	db.DB = nil
+	db.SetDB(nil)
+	t.Cleanup(func() { db.DB = oldDB; db.SetDB(oldDB) })
+
+	err := RemoveRuleLogFiles("lb_own")
+
+	if err == nil {
+		t.Fatal("归属无法核对而保留必须进错误面（清理未完成不得按成功收尾）")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "lb_own-20260102T030405-size.log")); statErr != nil {
+		t.Fatalf("清单不可读时轮转副本必须保留: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "lb_own.log")); !os.IsNotExist(statErr) {
+		t.Fatalf("活动文件无需归属核对，应照常删除（err=%v）", statErr)
+	}
+}

@@ -1,34 +1,17 @@
 package main
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
-
-// blockingStopRecordWorker 记录 Stop 被调用的次数，并阻塞到 release 关闭。
-type blockingStopRecordWorker struct {
-	release     chan struct{}
-	releaseOnce sync.Once
-	stops       chan struct{}
-	stopOnce    sync.Once
-}
-
-func (w *blockingStopRecordWorker) Start() {}
-func (w *blockingStopRecordWorker) Stop() {
-	w.stopOnce.Do(func() { close(w.stops) })
-	<-w.release
-}
-
-func (w *blockingStopRecordWorker) releaseNow() { w.releaseOnce.Do(func() { close(w.release) }) }
 
 // TestShutdownWithTimeout_syncSegmentIsCappedAndACMEKeepsBudget 钉住同步段上限：
 // 同步停止阻塞时，ShutdownWithTimeout(10s) 必须只花一个同步段上限（3s）就继续
 // ACME 收尾，而不是把传进来的 10s 吃满（那正是同步段侵占 ACME 收尾的回归形态）。
 func TestShutdownWithTimeout_syncSegmentIsCappedAndACMEKeepsBudget(t *testing.T) {
-	syncWorker := &blockingStopSyncWorker{release: make(chan struct{}), entered: make(chan struct{})}
+	syncWorker := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
 	t.Cleanup(syncWorker.releaseNow)
-	acmeWorker := &blockingCertificateWorker{stop: make(chan struct{}), exited: make(chan struct{})}
+	acmeWorker := newLifecycleWorkerFake(fakeStartPendsUntilStop, fakeStopUnblocksStart)
 	lifecycle := newRuntimeLifecycle(syncWorker, func() lifecycleWorker { return acmeWorker })
 	lifecycle.StartACME()
 
@@ -72,26 +55,13 @@ func TestStopWithinIfBudgeted_skipsWhenBudgetExhausted(t *testing.T) {
 	}
 }
 
-// stubLifecycleWorker 是只记录调用次序的轻量 worker（StartACME 的代际测试用）。
-type stubLifecycleWorker struct {
-	started chan struct{}
-	stopped chan struct{}
-}
-
-func newStubLifecycleWorker() *stubLifecycleWorker {
-	return &stubLifecycleWorker{started: make(chan struct{}), stopped: make(chan struct{})}
-}
-
-func (w *stubLifecycleWorker) Start() { close(w.started) }
-func (w *stubLifecycleWorker) Stop()  { close(w.stopped) }
-
 // TestStartACME_waitsForInFlightStopBeforeNewGeneration 钉住跨代隔离：
 // 关停等待超时（停止 goroutine 仍在跑）后，StartACME 必须先等它收尾再拉起新
 // 一代——否则在途 queue.Stop 会关掉新一代队列（证书签发静默停摆）。
 func TestStartACME_waitsForInFlightStopBeforeNewGeneration(t *testing.T) {
 	// Given 第一代证书 worker 的 Stop 阻塞（模拟 CA 队列补偿在途）。
-	blocked := &blockingStopRecordWorker{release: make(chan struct{}), stops: make(chan struct{})}
-	second := newStubLifecycleWorker()
+	blocked := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
+	second := newLifecycleWorkerFake(fakeStartImmediate, fakeStopImmediate)
 	generation := 0
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker {
 		generation++
@@ -105,26 +75,9 @@ func TestStartACME_waitsForInFlightStopBeforeNewGeneration(t *testing.T) {
 
 	// When 停止等待超时（互斥已释放，但停止仍在途），随后请求启动新一代。
 	lifecycle.stopACMEWithin(20 * time.Millisecond)
-	<-blocked.stops
-	startReturned := make(chan struct{})
-	go func() {
-		defer close(startReturned)
-		lifecycle.StartACME()
-	}()
-
-	// Then 新一代不得在上一代停止收尾前启动。
-	select {
-	case <-second.started:
-		t.Fatal("上一代停止仍在途时启动了新一代——在途 Stop 会关闭新队列")
-	case <-time.After(150 * time.Millisecond):
-	}
-	blocked.releaseNow()
-	select {
-	case <-second.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("上一代停止收尾后新一代仍未启动")
-	}
-	<-startReturned
+	<-blocked.stopEntered
+	// Then 新一代不得在上一代停止收尾前启动，收尾后必须启动。
+	assertNewGenerationBlockedUntilStopSettles(t, lifecycle, second.started, blocked.releaseNow)
 }
 
 // waitForACMEService 等待 StartACME 完成装配（certService 非空）：StartACME
@@ -148,11 +101,11 @@ func waitForACMEService(t *testing.T, lifecycle *runtimeLifecycle) {
 // 预算内未收尾时，StartACME 必须放弃启动并返回，而不是拉起一个必然被在途
 // Stop 关掉的新队列。
 func TestStartACME_refusesWhenStopStillInFlightAfterBudget(t *testing.T) {
-	blocked := &blockingStopRecordWorker{release: make(chan struct{}), stops: make(chan struct{})}
+	blocked := newLifecycleWorkerFake(fakeStartImmediate, fakeStopBlocksOnRelease)
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker { return blocked })
 	lifecycle.StartACME()
 	lifecycle.stopACMEWithin(20 * time.Millisecond)
-	<-blocked.stops
+	<-blocked.stopEntered
 	t.Cleanup(blocked.releaseNow)
 
 	started := time.Now()

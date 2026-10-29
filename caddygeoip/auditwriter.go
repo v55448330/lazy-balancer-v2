@@ -575,7 +575,7 @@ func injectAuditTiming(body []byte, snap auditTimingSnapshot) []byte {
 	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
 		return body
 	}
-	if !json.Valid(trimmed) {
+	if !balancedSingleLineObject(trimmed) {
 		return body
 	}
 	out := make([]byte, 0, len(trimmed)+len(payload)+16)
@@ -588,6 +588,43 @@ func injectAuditTiming(body []byte, snap auditTimingSnapshot) []byte {
 	out = append(out, payload...)
 	out = append(out, '}')
 	return out
+}
+
+// balancedSingleLineObject 是 json.Valid 的廉价替代：字符串/转义感知的括号
+// 配平扫描。formatter 契约（内置 JSON formatter 走 json.Marshal）已保证单行
+// 合法 JSON，这里只为截断/半行/拼接等畸形输入兜底——配平即可安全插入，无需
+// 对每条审计行（典型 2-8KiB、最坏 1MiB）做完整语法校验。语义差集：括号配平
+// 但语法非法的畸形行会被注入而非原样返回——它本就会被摄取侧跳过，注入不
+// 改变「该行不可解析」的事实，只是不再为它保留一次整行 json.Valid 的成本。
+func balancedSingleLineObject(b []byte) bool {
+	depth := 0
+	inStr := false
+	esc := false
+	for i, c := range b {
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth < 0 || (depth == 0 && i != len(b)-1) {
+				return false
+			}
+		}
+	}
+	return depth == 0 && !inStr
 }
 
 // —— 审计快照（plugintypes.AuditLog 的自持拷贝）——

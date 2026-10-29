@@ -112,6 +112,31 @@ func TestLoad_resolves_log_file_with_default(t *testing.T) {
 	}
 }
 
+// log_file 与 static_dir 同口径：相对值按进程 cwd 解析会让日志静默落到
+// systemd/容器的 cwd 下，logstats 投影与轮转 writer 读的是另一条路径——
+// load 阶段绝对化 + Clean（父目录建不出仅告警，运行期 writer 回退 stdout）。
+func TestLoad_resolves_relative_log_file(t *testing.T) {
+	// Given：相对 LOG_FILE + 隔离 cwd（父目录按需创建限制在 TempDir 内）
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Chdir(t.TempDir())
+	t.Setenv("LOG_FILE", "logs/sub/lb.log")
+
+	// When
+	loaded := loadForTest("")
+
+	// Then：相对值已按 cwd 绝对化，父目录已按需创建
+	want, err := filepath.Abs("logs/sub/lb.log")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	if loaded.LogFile != want {
+		t.Fatalf("log file=%q, want %q", loaded.LogFile, want)
+	}
+	if info, err := os.Stat(filepath.Dir(loaded.LogFile)); err != nil || !info.IsDir() {
+		t.Fatalf("log dir not created: %v", err)
+	}
+}
+
 // 配置文件只解析六个支持键，其余键此前静默忽略——
 // log_file/node_name/jwt_secret/backup_dir/version 写在文件里既无效也无提示。
 // 未知键必须逐条告警；支持键零告警且照常生效。

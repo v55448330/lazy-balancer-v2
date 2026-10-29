@@ -4,14 +4,17 @@ import type { APIResponse, ClusterNodeMode, CurrentUser, GlobalConfigData } from
 import { isTokenExpired, request, ApiRequestError } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 import { isPageId, type PageId } from '@/utils/pageIds'
+import { readHashQuery } from '@/utils/hashQuery'
 import { DEFAULT_CERT_RENEWAL_DAYS } from '@/utils/configValues'
 import { advanceSessionGeneration, currentSessionGeneration, isSameTokenIdentity } from '@/utils/sessionIdentity'
 
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
 // URL hash 优先（刷新/多标签页可靠；导航用 replaceState 不产生历史条目，浏览器返回键会离开面板）；localStorage 作为后备。
-const hashMatch = window.location.hash.match(/^#\/(.+)$/)
-const hashPage = hashMatch ? hashMatch[1] : null
+// 解析复用 utils/hashQuery 单源：剥路径段后取页面键，「#/rules?x=1」这类带
+// 查询串的深链不再把「rules?x=1」整段当键（解析口径与 App 首屏一致）。
+const hashPath = readHashQuery().path.replace(/^\//, '')
+const hashPage = hashPath || null
 const storedCurrentPage = localStorage.getItem('currentPage')
 const initialCurrentPage: PageId =
   queryPageValid ??

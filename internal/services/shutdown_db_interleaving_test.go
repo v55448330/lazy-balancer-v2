@@ -52,7 +52,9 @@ func TestLiveRuleIDs_shutdownBetweenHandleCheckAndQueryReturnsError(t *testing.T
 	called := false
 	beforeLiveRuleIDsQuery = func() {
 		called = true
-		db.DB = nil
+		// 真实关停链（db.Close）=SetDB(nil) + 关闭句柄：liveRuleIDs 读
+		// db.GetDB() 注册句柄，只置 db.DB 不再构成关停窗口。
+		db.SetDB(nil)
 		_ = database.Close()
 	}
 	t.Cleanup(func() { beforeLiveRuleIDsQuery = previous })

@@ -2168,20 +2168,23 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			// 收窄到「本策略已勾选的引擎集合」——旧实现 @eq 1 对任何引擎的
 			// 伪装都 deny（仅勾选 googlebot 的策略会把 bingbot 失败也拦下）。
 			selectedEngines := make([]string, 0, 4)
-			for i, engine := range geoipnames.CrawlerEngines() {
-				if !crawlerEngineSelected(p, engine.ID) {
+			// 只读 ID 视图（零重编译）：CrawlerEngines 每次深拷贝并重编译
+			// 全部引擎正则，此处逐策略调用会按策略数放大；渲染期重编译由
+			// geoip_crawler_exemption_test 的「零深拷贝」守卫钉住。
+			for i, engineID := range geoipnames.CrawlerEngineIDs() {
+				if !crawlerEngineSelected(p, engineID) {
 					continue
 				}
-				selectedEngines = append(selectedEngines, engine.ID)
+				selectedEngines = append(selectedEngines, engineID)
 				crawlerRuleID, ok := encodeCrawlerExemptRuleID(p.ID, i)
 				if !ok {
-					Logf("warn", "策略 %d 的爬虫豁免规则（引擎 %s，序号 %d）id 越出豁免段 [%d,%d)，已跳过发射", p.ID, engine.ID, i, geoipCrawlerRuleBase, geoipCrawlerSpoofRuleBase)
+					Logf("warn", "策略 %d 的爬虫豁免规则（引擎 %s，序号 %d）id 越出豁免段 [%d,%d)，已跳过发射", p.ID, engineID, i, geoipCrawlerRuleBase, geoipCrawlerSpoofRuleBase)
 					continue
 				}
-				if err := claimRuleID(crawlerRuleID, fmt.Sprintf("策略 %d 爬虫豁免(%s)", p.ID, engine.ID)); err != nil {
+				if err := claimRuleID(crawlerRuleID, fmt.Sprintf("策略 %d 爬虫豁免(%s)", p.ID, engineID)); err != nil {
 					return "", err
 				}
-				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,log,msg:'搜索引擎爬虫放行（已验证）',ctl:ruleRemoveById=%d\"\n", engine.ID, crawlerRuleID, geoipRuleID))
+				sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Verified \"@streq %s\" \"id:%d,phase:1,pass,log,msg:'搜索引擎爬虫放行（已验证）',ctl:ruleRemoveById=%d\"\n", engineID, crawlerRuleID, geoipRuleID))
 			}
 			if len(selectedEngines) == 0 {
 				// 引擎集非空但没有任何条目命中注册表（注册表更替/导入脏值）：

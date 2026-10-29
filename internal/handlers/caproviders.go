@@ -158,8 +158,12 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证必须是有效的 JSON"})
 		case errors.Is(err, services.ErrCAProviderLetsEncryptCredentialsNotEmpty):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Let's Encrypt 凭证必须为空"})
+		case errors.Is(err, services.ErrCAProviderMaxConcurrentTooLow):
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最大并发不能为负数"})
 		case errors.Is(err, services.ErrCAProviderMaxConcurrentTooHigh):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最大并发不能超过 100"})
+		case errors.Is(err, services.ErrCAProviderMinIntervalTooLow):
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最小间隔不能为负数"})
 		case errors.Is(err, services.ErrCAProviderMinIntervalTooHigh):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最小间隔不能超过 60000 毫秒"})
 		default:

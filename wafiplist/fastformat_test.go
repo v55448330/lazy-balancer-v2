@@ -409,7 +409,8 @@ func TestFastFile_UnmaskedEntriesRejected(t *testing.T) {
 
 // ReadFastFile 对跨进程.fast 输入必须先过 Stat
 // 体积门再读字节——异常/恶意超大文件不得在读取阶段就拖垮内存（文本名单
-// 路径已有 maxFileBytes 同型硬上限，iplistfast.go:249-250）。
+// 路径已有 maxFileBytes 同型硬上限，见 iplistfast.go 的 maxFileBytes/maxEntries
+// 声明）。
 func TestFastFile_ReadSizeCap(t *testing.T) {
 	dir := t.TempDir()
 	old := maxFastFileBytes

@@ -386,3 +386,35 @@ func TestPurgeOrphanMetricsHistory_nilDatabaseIsLoud(t *testing.T) {
 		t.Fatalf("deletedRules=%d, want 0", deletedRules)
 	}
 }
+
+// 后台任务体统一读 db.GetDB() 注册句柄：db.SetDB(nil)（关停 db.Close 链/
+// 句柄切换）后本轮清理必须报错且零删除——读同步侧 db.DB 会继续在「已注销」
+// 句柄上删数据，与孤儿规则日志兜底、刷新链的后台口径分裂。
+func TestPurgeOrphanMetricsHistory_backgroundHandleUnregisteredErrorsAndKeepsRows(t *testing.T) {
+	initServicesDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_live','live','http',18092,1)`); err != nil {
+		t.Fatalf("seed live rule: %v", err)
+	}
+	seedMetricsHistory(t, "lb_live", 3)
+	seedMetricsHistory(t, "lb_orphan", 4)
+
+	// Given：后台句柄已注销（db.DB 仍有效）
+	db.SetDB(nil)
+
+	// When
+	deletedRules, err := PurgeOrphanMetricsHistory(t.Context())
+
+	// Then：报错不静默成功，且任何行都未删除
+	if err == nil {
+		t.Fatal("后台句柄注销后清理必须报错（不得静默 (0,nil)）")
+	}
+	if deletedRules != 0 {
+		t.Fatalf("deletedRules=%d, want 0（句柄注销后不得删除）", deletedRules)
+	}
+	if got := countMetricsHistory(t, "rule_id='lb_orphan'"); got != 1 {
+		t.Fatalf("orphan rows=%d, want 1（清理不得在注销句柄上执行）", got)
+	}
+	if got := countMetricsHistory(t, "rule_id='lb_live'"); got != 1 {
+		t.Fatalf("live rows=%d, want 1", got)
+	}
+}

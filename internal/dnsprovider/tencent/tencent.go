@@ -236,7 +236,7 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 				// 清理（CleanUpValue）以 entry.value 过滤，空值条目永不被选中重试。
 				failed = append(failed, ownedRecord{recordID: recordID, value: value})
 			}
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", p.sanitizeSDKError(err)))
 			return err
 		}
 		return nil
@@ -313,7 +313,74 @@ func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint6
 		// 记录已不存在：按删除成功处理，保证清理幂等（不残留所有权条目）
 		return nil
 	}
-	return err
+	return p.sanitizeSDKError(err)
+}
+
+// credentialEchoSecretMinLen 是凭据分段参与定向替换的最小长度（与 dnspod 侧
+// 同口径）：过短分段在任意文案里全局替换会伤及排障上下文，只纳充分长分段。
+const credentialEchoSecretMinLen = 8
+
+// credentialEchoSecrets 展开一段凭据的全部已知明文形态：完整值 + 各分段
+// （逗号/空白分隔，secretId/secretKey 通常无分段），排除过短分段。
+func credentialEchoSecrets(secret string) []string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil
+	}
+	secrets := []string{secret}
+	for _, part := range strings.FieldsFunc(secret, func(r rune) bool {
+		return r == ',' || r == '\t' || r == '\n' || r == ' ' || r == ';'
+	}) {
+		part = strings.TrimSpace(part)
+		if len(part) >= credentialEchoSecretMinLen && part != secret {
+			secrets = append(secrets, part)
+		}
+	}
+	return secrets
+}
+
+// sanitizedSDKError 包装脱敏后的 SDK 错误：Error() 输出脱敏文案，Unwrap 保留
+// 原错误链（errors.Is/As 的分类语义不受影响——isRecordNotFound 等判定在脱敏
+// 前完成，链上原始错误仅经显式 Unwrap 可见，日志/错误文案不会带出）。
+type sanitizedSDKError struct {
+	msg string
+	err error
+}
+
+func (e *sanitizedSDKError) Error() string { return e.msg }
+func (e *sanitizedSDKError) Unwrap() error { return e.err }
+
+// sanitizeSDKError 对拼进错误链的外部文本（SDK 错误 Message/中间网关兜底体）
+// 做凭据脱敏：先按已知明文（secretId/secretKey 及其分段）定向替换；替换后仍
+// 有已知明文残留（大小写变换等变体回声，不参与替换但同为泄露）即整段丢弃
+// （fail-closed，只保留长度指纹）。凭据形态与 dnspod 不同（secretId/secretKey，
+// 无 login_token 表单形态），无形态正则兜底通道；正常 SDK 错误只含
+// Code/Message/RequestId，无凭据痕迹时原样返回（文案与错误链零变化）。
+// DNSPod 侧同口径实现见 dnspod.sanitizeHTTPErrorBody（凭据形态不同，有意
+// 各自保留）。
+func (p *Provider) sanitizeSDKError(err error) error {
+	if err == nil {
+		return nil
+	}
+	secrets := credentialEchoSecrets(p.secretID)
+	secrets = append(secrets, credentialEchoSecrets(p.secretKey)...)
+	if len(secrets) == 0 {
+		return err
+	}
+	msg := err.Error()
+	redacted := msg
+	for _, known := range secrets {
+		redacted = strings.ReplaceAll(redacted, known, "***")
+	}
+	for _, known := range secrets {
+		if strings.Contains(strings.ToLower(redacted), strings.ToLower(known)) {
+			return &sanitizedSDKError{msg: fmt.Sprintf("[tencent sdk error withheld: %d bytes]", len(msg)), err: err}
+		}
+	}
+	if redacted == msg {
+		return err
+	}
+	return &sanitizedSDKError{msg: redacted, err: err}
 }
 
 // isRecordNotFound 识别 TencentCloud DeleteRecord 的记录不存在信号：
@@ -350,7 +417,7 @@ func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value stri
 			// errors.Join 保留两者。
 			err = errors.Join(err, ctx.Err())
 		}
-		return 0, fmt.Errorf("CreateRecord failed: %w", err)
+		return 0, fmt.Errorf("CreateRecord failed: %w", p.sanitizeSDKError(err))
 	}
 	if resp.Response == nil || resp.Response.RecordId == nil {
 		return 0, fmt.Errorf("CreateRecord returned no record ID")

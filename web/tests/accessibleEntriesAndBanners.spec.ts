@@ -71,6 +71,15 @@ test('登录页恢复码切换是真正的可聚焦控件（丢失验证器时�
   assert.match(login, /<AccessibleLink type="info" underline="never" @click="resetToPasswordStep">返回重新登录<\/AccessibleLink>/)
 })
 
+test('首屏加载遮罩：读屏可达（status+aria-live）且配色走主题变量', () => {
+  const app = code('src/App.vue')
+  assert.match(app, /class="app-loading" role="status" aria-live="polite"/, '加载态必须让读屏可感知')
+  assert.match(app, /app-loading__spinner" aria-hidden="true"/, '装饰性 spinner 不进读屏朗读流')
+  const style = section(app, '.app-loading {', '}')
+  assert.match(style, /background: var\(--bg-secondary\)/, '遮罩底色须用主题变量（浅色主题一致）')
+  assert.doesNotMatch(section(app, '.app-loading {', '@keyframes'), /#[0-9a-fA-F]{3,8}\b/, '遮罩样式不得新增硬编码色值')
+})
+
 // ── ② 一次性凭据：关闭必须确认已保存 ───────────────────────────
 test('个人资料 MFA：响应缺 data 显性报错（静默 return = 与「没点上」不可区分）', () => {
   const profile = code('src/components/ProfileDialog.vue')

@@ -6,11 +6,6 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// GetDefaultCAProvider returns the configured default CA provider ID, or 0 if unset.
-func GetDefaultCAProvider() (int, error) {
-	return db.GetDefaultCAProvider()
-}
-
 // ValidateDefaultCAProvider checks that the provider ID exists and is enabled.
 // An ID of 0 is valid and means "use runtime fallback to first enabled provider".
 func ValidateDefaultCAProvider(id int) error {

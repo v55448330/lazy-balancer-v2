@@ -104,31 +104,19 @@ var (
 	geoipSharedSearchers = map[string]*geoipSharedSearcher{}
 )
 
-// geoipWarnLogInterval 是同一（路径+原因）告警的最小间隔：一次 reload 会为
-// 每条地域规则各调一次 sharedGeoIPSearcher，文件不可 stat/重建失败会按规则数
-// 放大重复 WARN（稀释真实告警）。恢复成功后清除记录——再次故障即时上报。
-var geoipWarnLogInterval = time.Minute
-
-// geoipWarnSeen 是节流记录：键 = reason|path。
-var geoipWarnSeen = struct {
-	sync.Mutex
-	last map[string]time.Time
-}{last: make(map[string]time.Time)}
+// geoipWarnLogInterval 是同路径同原因告警的最小间隔：每条地域规则各调一次
+// sharedGeoIPSearcher，文件不可 stat/重建失败会按规则数放大重复 WARN（稀释
+// 真实告警）。恢复成功后清除记录——再次故障即时上报。
+var geoipWarnThrottle = newKeyedWarnThrottle(time.Minute)
 
 // geoipWarnCallsForTest 仅测试观测「实际写日志次数」（节流生效的机器断言）。
 var geoipWarnCallsForTest atomic.Int64
 
-// geoipWarnThrottled 按（原因|路径）节流后写 WARN。
+// geoipWarnThrottled 按（路径|原因）节流后写 WARN。
 func geoipWarnThrottled(reason, path, msg string, fields ...zap.Field) {
-	key := reason + "|" + path
-	now := time.Now()
-	geoipWarnSeen.Lock()
-	if last, ok := geoipWarnSeen.last[key]; ok && now.Sub(last) < geoipWarnLogInterval {
-		geoipWarnSeen.Unlock()
+	if !geoipWarnThrottle.allow(path + "|" + reason) {
 		return
 	}
-	geoipWarnSeen.last[key] = now
-	geoipWarnSeen.Unlock()
 	geoipWarnCallsForTest.Add(1)
 	caddy.Log().Named("geoip2region").Warn(msg, fields...)
 }
@@ -136,13 +124,7 @@ func geoipWarnThrottled(reason, path, msg string, fields ...zap.Field) {
 // clearGeoIPWarnLogs 清除路径的节流记录（成功重建/命中后调用：恢复后再次
 // 故障必须立即上报）。
 func clearGeoIPWarnLogs(path string) {
-	geoipWarnSeen.Lock()
-	for key := range geoipWarnSeen.last {
-		if strings.HasSuffix(key, "|"+path) {
-			delete(geoipWarnSeen.last, key)
-		}
-	}
-	geoipWarnSeen.Unlock()
+	geoipWarnThrottle.clearPrefix(path + "|")
 }
 
 // geoipOldInstanceCloseDelay 换库重建后旧实例的延迟关闭窗口：重载窗口内旧

@@ -1049,21 +1049,34 @@ func seedThreatSourcesIfNeeded() error {
 	return nil
 }
 
-// builtinBlockPageIDs 是启动期播种的内置备选拦截页 id（限流/维护两页，仅作
-// 模板手动选用，无自动绑定）。播种前按 id 只读探测：两页都在位（收敛库常态）
-// 时零写——INSERT OR IGNORE 虽幂等，但在 _txlock=immediate 下每条语句仍要取
-// 一次主库写锁。
-var builtinBlockPageIDs = []int{9001, 9002}
+// builtinBlockPageSeed 是一条内置备选拦截页的播种形态（与 systemIPListSeed
+// 同构：清单即事实源，播种循环生成 SQL——新增第三页只加条目不改语句）。
+type builtinBlockPageSeed struct {
+	ID          int
+	Name        string
+	Description string
+	Content     string
+	IsBuiltin   bool
+}
+
+// builtinBlockPageSeeds 是启动期播种的内置备选拦截页单源清单（限流/维护两页，
+// 仅作模板手动选用，无自动绑定；is_default 恒 FALSE）。播种前按 id 只读探测：
+// 全部在位（收敛库常态）时零写——INSERT OR IGNORE 虽幂等，但在
+// _txlock=immediate 下每条语句仍要取一次主库写锁。
+var builtinBlockPageSeeds = []builtinBlockPageSeed{
+	{ID: 9001, Name: "限流拦截页面", Description: "系统内置 429 限流拦截页面（备选，手动选用后生效）", Content: "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Too Many Requests</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:0;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:\"\";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0;background:linear-gradient(90deg,transparent,#fbbf24 18%,#f59e0b 50%,#fbbf24 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:0;background:linear-gradient(145deg,#fffbeb,#fef3c7);border:1px solid #fde68a;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:0;border:1px dashed #fcd34d}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:0;padding:5px 14px;margin-bottom:16px}.chip::before{content:\"\";width:6px;height:6px;border-radius:50%;background:#f59e0b}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class=\"blob blob-a\"></div><div class=\"blob blob-b\"></div><div class=\"card\"><div class=\"badge\"><div class=\"badge-halo\"></div><div class=\"badge-ring\"></div><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#d97706\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 15a8 8 0 1 1 16 0\"/><path d=\"M12 15l4.5-4.5\"/><circle cx=\"12\" cy=\"15\" r=\"1.4\" fill=\"#d97706\" stroke=\"none\"/></svg></div><div class=\"chip\">429 Too Many Requests</div><h1>Too Many Requests</h1><p>You have sent too many requests in a short time.</p><p>Please wait a moment and try again.</p><div class=\"divider\">Powered by <span class=\"name\">Lazy Balancer</span></div></div></body></html>", IsBuiltin: true},
+	{ID: 9002, Name: "系统维护页面", Description: "系统内置维护页面（备选，手动选用后生效）", Content: "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Under Maintenance</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:0;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:\"\";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0;background:linear-gradient(90deg,transparent,#60a5fa 18%,#3b82f6 50%,#60a5fa 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:0;background:linear-gradient(145deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:0;border:1px dashed #93c5fd}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:0;padding:5px 14px;margin-bottom:16px}.chip::before{content:\"\";width:6px;height:6px;border-radius:50%;background:#3b82f6}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class=\"blob blob-a\"></div><div class=\"blob blob-b\"></div><div class=\"card\"><div class=\"badge\"><div class=\"badge-halo\"></div><div class=\"badge-ring\"></div><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14.7 6.3a4.2 4.2 0 0 0-5.8 5.8L4.6 16.4a1.5 1.5 0 0 0 0 2.1l.9.9a1.5 1.5 0 0 0 2.1 0l4.3-4.3a4.2 4.2 0 0 0 5.8-5.8l-2.6 2.6-2.1-2.1 2.6-2.6z\"/></svg></div><div class=\"chip\">System Maintenance</div><h1>Under Maintenance</h1><p>The service is temporarily unavailable while we perform maintenance.</p><p>Please check back soon.</p><div class=\"divider\">Powered by <span class=\"name\">Lazy Balancer</span></div></div></body></html>", IsBuiltin: true},
+}
 
 // builtinBlockPageCount 返回内置备选拦截页在位行数（只读）。
 func builtinBlockPageCount() (int, error) {
-	if len(builtinBlockPageIDs) == 0 {
+	if len(builtinBlockPageSeeds) == 0 {
 		return 0, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(builtinBlockPageIDs)), ",")
-	args := make([]any, len(builtinBlockPageIDs))
-	for i, id := range builtinBlockPageIDs {
-		args[i] = id
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(builtinBlockPageSeeds)), ",")
+	args := make([]any, len(builtinBlockPageSeeds))
+	for i, seed := range builtinBlockPageSeeds {
+		args[i] = seed.ID
 	}
 	var present int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id IN (`+placeholders+`)`, args...).Scan(&present); err != nil {
@@ -1502,18 +1515,14 @@ func runMigrations() error {
 	if err != nil {
 		return err
 	}
-	if builtinPages != len(builtinBlockPageIDs) {
-		if len(builtinBlockPageIDs) != 2 {
-			return fmt.Errorf("builtin block page seed parity: %d IDs for 2 seed rows", len(builtinBlockPageIDs))
-		}
-		if _, err := DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at)
-		VALUES (?, '限流拦截页面', '系统内置 429 限流拦截页面（备选，手动选用后生效）',
-			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Too Many Requests</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:0;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:"";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0;background:linear-gradient(90deg,transparent,#fbbf24 18%,#f59e0b 50%,#fbbf24 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:0;background:linear-gradient(145deg,#fffbeb,#fef3c7);border:1px solid #fde68a;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:0;border:1px dashed #fcd34d}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:0;padding:5px 14px;margin-bottom:16px}.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:#f59e0b}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class="blob blob-a"></div><div class="blob blob-b"></div><div class="card"><div class="badge"><div class="badge-halo"></div><div class="badge-ring"></div><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4.5-4.5"/><circle cx="12" cy="15" r="1.4" fill="#d97706" stroke="none"/></svg></div><div class="chip">429 Too Many Requests</div><h1>Too Many Requests</h1><p>You have sent too many requests in a short time.</p><p>Please wait a moment and try again.</p><div class="divider">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
-			FALSE, TRUE, datetime('now'), datetime('now')),
-		(?, '系统维护页面', '系统内置维护页面（备选，手动选用后生效）',
-			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Under Maintenance</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:0;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:"";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0;background:linear-gradient(90deg,transparent,#60a5fa 18%,#3b82f6 50%,#60a5fa 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:0;background:linear-gradient(145deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;box-shadow:0 4px 12px -2px rgba(16,24,40,.12)}.badge-halo{position:absolute;inset:-12px;border-radius:0;border:1px dashed #93c5fd}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:0;padding:5px 14px;margin-bottom:16px}.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:#3b82f6}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class="blob blob-a"></div><div class="blob blob-b"></div><div class="card"><div class="badge"><div class="badge-halo"></div><div class="badge-ring"></div><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.2 4.2 0 0 0-5.8 5.8L4.6 16.4a1.5 1.5 0 0 0 0 2.1l.9.9a1.5 1.5 0 0 0 2.1 0l4.3-4.3a4.2 4.2 0 0 0 5.8-5.8l-2.6 2.6-2.1-2.1 2.6-2.6z"/></svg></div><div class="chip">System Maintenance</div><h1>Under Maintenance</h1><p>The service is temporarily unavailable while we perform maintenance.</p><p>Please check back soon.</p><div class="divider">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
-			FALSE, TRUE, datetime('now'), datetime('now'));`, builtinBlockPageIDs[0], builtinBlockPageIDs[1]); err != nil {
-			return fmt.Errorf("failed to seed builtin block pages: %w", err)
+	if builtinPages != len(builtinBlockPageSeeds) {
+		// 清单即事实源：逐条播种循环生成 SQL（新增/修订种子只改清单），
+		// 不存在「ID 清单 vs 种子行」两张表的对账面。
+		for _, seed := range builtinBlockPageSeeds {
+			if _, err := DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at)
+			VALUES (?, ?, ?, ?, FALSE, ?, datetime('now'), datetime('now'));`, seed.ID, seed.Name, seed.Description, seed.Content, seed.IsBuiltin); err != nil {
+				return fmt.Errorf("failed to seed builtin block page %d: %w", seed.ID, err)
+			}
 		}
 	}
 	// 置于二次 ensureNewColumns 之后——users 的
@@ -2508,10 +2517,14 @@ var startupMigrationWriteTx atomic.Int64
 //     CA 时间戳、内置拦截页种子、威胁源种子/display_name 跟进；以及
 //     withWriteTx（写事务计数）打开的全部迁移事务（整表重建/去重回填等）。
 //   - 不覆盖（有意）：createTables 的 DDL 整包（CREATE TABLE/INDEX IF NOT
-//     EXISTS + 1 号拦截页种子）与 runMigrations 内散落的 DROP ... IF EXISTS /
+//     EXISTS + 两处无条件种子 DML：1 号默认拦截页 INSERT OR IGNORE 与
+//     security_ip2region_version (1,'unknown',1) 版本行 INSERT OR IGNORE）
+//     与 runMigrations 内散落的 DROP ... IF EXISTS /
 //     CREATE INDEX IF NOT EXISTS——schema 收敛 DDL 无法用索引探测判定是否存在
 //     （SQLite 无 IF 条件 DDL），每启动仍各取一次主库写锁（WAL 下不写帧、不
-//     阻塞读）。该族属既定口径，不在零写口号的覆盖范围内。
+//     阻塞读）。种子两条随 createTables 走（createTables-only 消费方——
+//     测试/快照句柄建库后不经 runMigrations——依赖行在位），该族属既定口径，
+//     不在零写口号的覆盖范围内。
 var startupMigrationWriteStatements atomic.Int64
 
 // migrationExecer 是迁移语句执行面：*sql.DB 与 *sql.Tx 同时满足——同一段
@@ -5434,14 +5447,12 @@ const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		OR COALESCE(log_enabled,-1)<>0
 	)`
 
-// TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
-// 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
-// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4) + 阶段页四列
-// + log_enabled，共 32 列 SET）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
-// 与导入归一（handlers normalizeRuleRowsForTransport）共用本常量；此前跨包
-// 双份逐字镜像靠测试字符串 parity 维系，任一侧扩列漏同步即终态漂移。
-// WHERE 谓词与探测共用 tcpDeadFieldsStalePredicate（单一出处，禁止再抄第二份）。
-const TCPRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
+// tcpDeadFieldsResetSetProjection 是 TCP 死值归一的 UPDATE 头 + SET 投影
+// （不含 WHERE）：批量版拼 tcpDeadFieldsStalePredicate，单规则版由
+// TCPRuleDeadFieldsResetForRuleSQL 拼 protocol+caddy_id——投影字面量只有
+// 这一份，禁止对成品 SQL 做文本 Cut 派生单规则版（改谓词措辞即 panic 的
+// 脆断面，handlers 旧实现前科）。
+const tcpDeadFieldsResetSetProjection = `UPDATE lb_rules SET
 	host_header='', health_check_path='', health_check_host='', domain='', enable_compress=0, compress_types='',
 	request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
 	proxy_dial_timeout=0, proxy_response_header_timeout=0, proxy_read_timeout=0, proxy_write_timeout=0, proxy_stream_timeout=0, proxy_flush_interval=0, proxy_stream_close_delay=0,
@@ -5449,8 +5460,24 @@ const TCPRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
 	strategy=CASE WHEN strategy='cookie' OR strategy='' OR strategy IS NULL THEN 'weighted_round_robin' ELSE strategy END,
 	dns_family='ipv4',
 	enable_tls=0, tls_source='manual', tls_http_redirect=0, tls_cert='', tls_key='',
-	block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0, log_enabled=0
-	WHERE ` + tcpDeadFieldsStalePredicate
+	block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0, log_enabled=0`
+
+// TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
+// 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
+// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4) + 阶段页四列
+// + log_enabled，共 32 列 SET）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
+// 与导入归一（handlers normalizeRuleRowsForTransport）共用本常量；此前跨包
+// 双份逐字镜像靠测试字符串 parity 维系，任一侧扩列漏同步即终态漂移。
+// WHERE 谓词与探测共用 tcpDeadFieldsStalePredicate（单一出处，禁止再抄第二份）。
+const TCPRuleDeadFieldsResetSQL = tcpDeadFieldsResetSetProjection + ` WHERE ` + tcpDeadFieldsStalePredicate
+
+// TCPRuleDeadFieldsResetForRuleSQL 返回单规则版死值归一 SQL：SET 投影与批量版
+// 逐字同源（tcpDeadFieldsResetSetProjection 单源），WHERE 收敛为
+// 「protocol='tcp' AND caddy_id = <arg>」（arg 为占位符或字面量；handlers
+// 唯一调用点传 "?"）。供启用单条 TCP 规则时在事务内落库归一，不触碰其他行。
+func TCPRuleDeadFieldsResetForRuleSQL(arg string) string {
+	return tcpDeadFieldsResetSetProjection + ` WHERE protocol='tcp' AND caddy_id = ` + arg
+}
 
 // RuleTimestampNormalizePredicate 是规则时间戳「非平面格式」的统一谓词模板
 // （%[1]s = 列名）。用「strftime 结果 ≠ 列值」而非 LIKE '%T%' OR '%+%' 启发式：

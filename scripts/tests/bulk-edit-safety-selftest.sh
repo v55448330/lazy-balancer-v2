@@ -111,6 +111,27 @@ if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry.out" 2>&1; then
   echo "SELFTEST FAIL: 带 --dry-run 的批量脚本被误拦"; cat "${work}/bulk-dry.out"; exit 1
 fi
 
+# 5b) 事故形态：注释里提一句 --dry-run 但脚本实际写盘 -> 必须失败。
+#     「临时脚本 + 注释 TODO: add --dry-run + git ls-files | xargs perl -pi -e」
+#     曾被「文件里出现字样即豁免」的宽判据放行——dry-run 判据必须落在可执行
+#     位置（剥整行注释后匹配）。
+mk_repo "$work/dryrun-comment"
+cat > scripts/rewrite.sh <<'SH'
+#!/usr/bin/env bash
+# TODO: add --dry-run 只读模式（还没写）
+set -euo pipefail
+for f in *.go; do
+  perl -pi -e 's/a/b/' "$f"
+done
+SH
+git add -A && git commit -qm base
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-comment.out" 2>&1; then
+  echo "SELFTEST FAIL: 仅注释提及 --dry-run 的写盘脚本被放行"; cat "${work}/bulk-dry-comment.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-dry-comment.out"; then
+  echo "SELFTEST FAIL: 注释豁免形态命中原因错误"; cat "${work}/bulk-dry-comment.out"; exit 1
+fi
+
 # 6) PATH 中无 python3：通道 B 必须 fail-closed（不得打印「变更形态正常」）。
 # 事故形态已就绪（与用例 1 同形），守卫必须以非零退出并把「需要 python3」
 # 作为原因——旧实现让 read 拿到空值、阈值按 0 处理，静默放行 RC=0。

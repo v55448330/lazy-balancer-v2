@@ -11,18 +11,14 @@ import (
 // 每条地域规则各调一次 sharedGeoIPSearcher，不节流则 50 条规则 = 50 行相同
 // WARN/次 reload；恢复成功后清除记录（再次故障即时上报）。
 func TestGeoIPWarnThrottled_dedupesPerPathAndClears(t *testing.T) {
-	oldInterval := geoipWarnLogInterval
-	geoipWarnLogInterval = time.Minute
+	oldInterval := geoipWarnThrottle.interval
+	geoipWarnThrottle.interval = time.Minute
 	t.Cleanup(func() {
-		geoipWarnLogInterval = oldInterval
-		geoipWarnSeen.Lock()
-		geoipWarnSeen.last = map[string]time.Time{}
-		geoipWarnSeen.Unlock()
+		geoipWarnThrottle.interval = oldInterval
+		geoipWarnThrottle.reset()
 		geoipWarnCallsForTest.Store(0)
 	})
-	geoipWarnSeen.Lock()
-	geoipWarnSeen.last = map[string]time.Time{}
-	geoipWarnSeen.Unlock()
+	geoipWarnThrottle.reset()
 	geoipWarnCallsForTest.Store(0)
 
 	geoipWarnThrottled("stat", "/data/ip2region.xdb", "m")
@@ -47,18 +43,14 @@ func TestGeoIPWarnThrottled_dedupesPerPathAndClears(t *testing.T) {
 // 的失败分支，且 Provision 按每条地域规则调用一次——不节流则 WARN 按规则数
 // 放大。重启节流记录后连续 N 次调用只允许一条 WARN。
 func TestSharedGeoIPSearcher_noCacheFailuresWarnOnce(t *testing.T) {
-	oldInterval := geoipWarnLogInterval
-	geoipWarnLogInterval = time.Minute
+	oldInterval := geoipWarnThrottle.interval
+	geoipWarnThrottle.interval = time.Minute
 	t.Cleanup(func() {
-		geoipWarnLogInterval = oldInterval
-		geoipWarnSeen.Lock()
-		geoipWarnSeen.last = map[string]time.Time{}
-		geoipWarnSeen.Unlock()
+		geoipWarnThrottle.interval = oldInterval
+		geoipWarnThrottle.reset()
 		geoipWarnCallsForTest.Store(0)
 	})
-	geoipWarnSeen.Lock()
-	geoipWarnSeen.last = map[string]time.Time{}
-	geoipWarnSeen.Unlock()
+	geoipWarnThrottle.reset()
 	geoipWarnCallsForTest.Store(0)
 
 	dir := t.TempDir()

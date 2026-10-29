@@ -6,8 +6,42 @@ import (
 	"testing"
 
 	"github.com/corazawaf/coraza/v3/types"
+	"lazy-balancer-v2/geoipnames"
 	"lazy-balancer-v2/internal/models"
 )
+
+// TestBuildIPPrecheckDirectives_renderDoesNotRecompileCrawlerEngines 钉渲染
+// 热路径零深拷贝：CrawlerEngines 每次深拷贝并重编译全部引擎正则（约 28 次
+// MustCompile），逐策略调用即按策略数放大。渲染侧只需 ID 集合，必须走
+// CrawlerEngineIDs 只读视图——回退到深拷贝路径时本守卫显形。正例对照证明
+// 计数缝本身有效。
+func TestBuildIPPrecheckDirectives_renderDoesNotRecompileCrawlerEngines(t *testing.T) {
+	exempt := func(id int) *models.SecurityPolicy {
+		return &models.SecurityPolicy{
+			ID: id, Mode: "blocking", Enabled: true,
+			GeoIPMode:           "deny",
+			GeoIPCountries:      json.RawMessage(`["海外"]`),
+			GeoIPCrawlerExempt:  true,
+			GeoIPCrawlerEngines: json.RawMessage(`["googlebot","baiduspider"]`),
+			IPWhitelistEnabled:  true,
+		}
+	}
+	policies := []*models.SecurityPolicy{exempt(7), exempt(8), exempt(9)}
+
+	before := geoipnames.CrawlerEnginesDeepCopyCallsForTest()
+	if _, err := buildIPPrecheckDirectives(policies, 403, "lb_render_guard"); err != nil {
+		t.Fatalf("buildIPPrecheckDirectives: %v", err)
+	}
+	if after := geoipnames.CrawlerEnginesDeepCopyCallsForTest(); after != before {
+		t.Fatalf("渲染 %d 条策略期间 CrawlerEngines 被调用 %d 次——渲染热路径必须用 CrawlerEngineIDs 只读视图（零重编译）", len(policies), after-before)
+	}
+
+	// 正例对照：深拷贝路径计数有效（+1），守卫不是空转。
+	_ = geoipnames.CrawlerEngines()
+	if after := geoipnames.CrawlerEnginesDeepCopyCallsForTest(); after != before+1 {
+		t.Fatalf("深拷贝计数缝失效：before=%d after=%d", before, after)
+	}
+}
 
 // TestBuildIPPrecheckDirectives_crawlerExemption 两形态（v2.3.8 爬虫豁免）：
 // 开启豁免+勾选引擎 → 逐引擎 ctl 放行规则 + 伪装事件规则；

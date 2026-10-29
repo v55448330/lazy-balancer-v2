@@ -224,31 +224,19 @@ func TestStopTaskEngineWithinBoundedByRemainingBudget(t *testing.T) {
 	}
 }
 
-// stuckCertificateWorker Start 永不返回，Stop 只发信号不阻塞。
-type stuckCertificateWorker struct {
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (w *stuckCertificateWorker) Start() {
-	close(w.entered)
-	<-w.release
-}
-func (w *stuckCertificateWorker) Stop() {}
-
 // Given 证书 worker 停止后不退出（Start 阻塞）。
 // When ShutdownWithTimeout 以 50ms 上限调用。
 // Then 有界返回并记录 error 日志（不再无界 <-done）。
 func TestRuntimeLifecycle_ShutdownWithTimeoutBoundsStuckWorker(t *testing.T) {
-	worker := &stuckCertificateWorker{entered: make(chan struct{}), release: make(chan struct{})}
+	worker := newLifecycleWorkerFake(fakeStartBlocksOnRelease, fakeStopImmediate)
 	lifecycle := newRuntimeLifecycle(idleSyncWorker{}, func() lifecycleWorker { return worker })
 	lifecycle.StartACME()
 	select {
-	case <-worker.entered:
+	case <-worker.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("证书 worker 未启动")
 	}
-	t.Cleanup(func() { close(worker.release) })
+	t.Cleanup(worker.releaseNow)
 
 	oldOutput := log.Writer()
 	var buf strings.Builder

@@ -1,6 +1,6 @@
 package services
 
-// 钉测试：唯一事实源（LbRuleWriteColumns）与 lb_rules schema、
+// 钉测试：唯一事实源（lbRuleWriteColumns）与 lb_rules schema、
 // 值投影、快照导出 SELECT 的三向对账。
 
 import (
@@ -192,9 +192,9 @@ func TestLbRuleWriteColumns_matchSchema(t *testing.T) {
 		t.Fatalf("iterate schema: %v", err)
 	}
 
-	columns := LbRuleWriteColumns()
+	columns := lbRuleWriteColumns()
 	if len(columns) != len(schema) {
-		t.Fatalf("事实源列数=%d, schema 列数=%d——新增列必须同步 LbRuleWriteColumns", len(columns), len(schema))
+		t.Fatalf("事实源列数=%d, schema 列数=%d——新增列必须同步 lbRuleWriteColumns", len(columns), len(schema))
 	}
 	seen := map[string]bool{}
 	for _, column := range columns {
@@ -213,7 +213,7 @@ func TestLbRuleWriteColumns_matchSchema(t *testing.T) {
 // Then 投影值必须与模型字段逐列对应（防列序/值序脱节静默写错列）。
 func TestLbRuleInsertArgs_projectModelPerColumn(t *testing.T) {
 	rule := testLbRuleFullyPopulated(t)
-	columns := LbRuleWriteColumns()
+	columns := lbRuleWriteColumns()
 	args := LbRuleInsertArgs(&rule, columns)
 	if len(args) != len(columns) {
 		t.Fatalf("args=%d, columns=%d", len(args), len(columns))
@@ -230,7 +230,7 @@ func TestLbRuleInsertArgs_projectModelPerColumn(t *testing.T) {
 // When 排除 id/created_at/updated_by。
 // Then 子集缺且仅缺这三列，顺序与全量一致。
 func TestLbRuleInsertColumns_excludesOnlyNamed(t *testing.T) {
-	full := LbRuleWriteColumns()
+	full := lbRuleWriteColumns()
 	subset := LbRuleInsertColumns("id", "created_at", "updated_by")
 	if len(subset) != len(full)-3 {
 		t.Fatalf("subset=%d, want %d", len(subset), len(full)-3)
@@ -261,7 +261,7 @@ func TestLbRuleInsertSQL_snapshotSelectRoundTrip(t *testing.T) {
 	rule.ACMEConfigID = 0
 	rule.CAProviderID = 0
 
-	columns := LbRuleWriteColumns()
+	columns := lbRuleWriteColumns()
 	if _, err := database.Exec(LbRuleInsertSQL(columns), LbRuleInsertArgs(&rule, columns)...); err != nil {
 		t.Fatalf("insert via single-source: %v", err)
 	}

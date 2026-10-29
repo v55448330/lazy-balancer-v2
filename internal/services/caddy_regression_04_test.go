@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -240,6 +242,39 @@ func TestCaddyService_ApplyConfig_invalidatesUpstreamHealthCache(t *testing.T) {
 	}
 	if got := hits.upstreams.Load(); got != 2 {
 		t.Fatalf("upstreams hits=%d, want 2（成功 /load 后必须失效健康缓存）", got)
+	}
+}
+
+// 启动兜底 ApplyLastKnownGood 同样是一次真实 /load（registry 已重建），
+// 健康聚合缓存必须与 ApplyConfig 成功分支同口径失效——否则启动回退后
+// 缓存 TTL 内健康面板仍显示重载前的集合与累计值。
+func TestCaddyService_ApplyLastKnownGood_invalidatesUpstreamHealthCache(t *testing.T) {
+	var hits upstreamHealthHits
+	admin := newUpstreamHealthCacheAdmin(t, &hits, nil)
+	service := NewCaddyService(admin.URL)
+	if _, err := service.GetUpstreamHealthDetailed(); err != nil {
+		t.Fatalf("prime health cache: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "last_good.json")
+	if err := os.WriteFile(path, []byte(`{"apps":{"fallback":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.SetLastGoodPath(path)
+
+	if err := service.ApplyLastKnownGood(); err != nil {
+		t.Fatalf("apply last-known-good: %v", err)
+	}
+	if got := hits.load.Load(); got != 1 {
+		t.Fatalf("/load hits=%d, want 1", got)
+	}
+	if _, err := service.GetUpstreamHealthDetailed(); err != nil {
+		t.Fatalf("get health after LKG apply: %v", err)
+	}
+	if got := hits.metrics.Load(); got != 2 {
+		t.Fatalf("metrics hits=%d, want 2（LKG 成功 /load 后必须失效健康缓存）", got)
+	}
+	if got := hits.upstreams.Load(); got != 2 {
+		t.Fatalf("upstreams hits=%d, want 2（LKG 成功 /load 后必须失效健康缓存）", got)
 	}
 }
 

@@ -59,6 +59,29 @@ func TestRuleLogEndpoints_emptyFileIsNormal(t *testing.T) {
 	}
 }
 
+// 非法 offset 不得静默吞掉解析错误按 0 处理：客户端笔误（非数字/负数）会被
+// 误当成「从头全量重读」，日志窗口口径静默漂移。空参=首次轮询的合法形态
+// （从 0 起），必须保持 200。
+func TestRuleLogEndpoints_rejectsInvalidOffset(t *testing.T) {
+	router, _ := newRuleLogTestRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_offset','offset','http',18802,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+
+	for _, bad := range []string{"?offset=abc", "?offset=1.5", "?offset=-5"} {
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/rules/lb_offset/log-stream"+bad, nil))
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("offset %q status=%d body=%s, want 400（非法 offset 必须显式拒绝）", bad, resp.Code, resp.Body.String())
+		}
+	}
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/rules/lb_offset/log-stream", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("无 offset status=%d body=%s, want 200（首次轮询合法形态）", resp.Code, resp.Body.String())
+	}
+}
+
 func TestRuleLogEndpoints_readFailureMapsTo500(t *testing.T) {
 	router, dir := newRuleLogTestRouter(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_logbad','logbad','http',18801,1)`); err != nil {

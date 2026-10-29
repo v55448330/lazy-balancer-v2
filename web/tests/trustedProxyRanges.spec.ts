@@ -1,7 +1,7 @@
 // 受信代理网段行内校验：判据必须与后端单源，且只在后端必然拒绝
 // 的形态上报错（前端误拒会挡住合法配置，故放宽方向一律交给后端兜底）。
 //
-// 后端：internal/services/caddy.go TrustedProxyMinPrefixBits / PrefixAllSpace、
+// 后端：internal/services/caddy.go trustedProxyMinPrefixBits / PrefixAllSpace、
 // internal/handlers/config_trustedproxy.go normalizeTrustedProxyRanges。
 //
 // 运行：cd web && npm test
@@ -106,7 +106,7 @@ test('汇总文案逐条点名非法值（用户可定位是哪一条）', () =>
 
 test('跨栈对表：Go 侧判据与前端常量同值', () => {
   const caddy = repoCode('internal/services/caddy.go')
-  const minBits = section(caddy, 'func TrustedProxyMinPrefixBits', 'func TrustedProxyPrefixAllSpace')
+  const minBits = section(caddy, 'func trustedProxyMinPrefixBits', 'func TrustedProxyPrefixAllSpace')
   assert.match(minBits, /return 29/)
   assert.match(minBits, /return 8/)
   const allSpace = section(caddy, 'func TrustedProxyPrefixAllSpace', 'func TrustedProxyPrefixTooWide')

@@ -100,3 +100,48 @@ func TestAuditLogThresholdReadFailure_fallsBackWithoutCachingAndWarnsOnce(t *tes
 		t.Fatalf("cached value after successful load=%d, want 42MB", got)
 	}
 }
+
+// 库值 <=0（带外改库/半迁移形态）此前静默回落默认——与读失败同口径
+// fail-visible：首报含库值的 warn 且状态转换去重；恢复有效值时补一条 info。
+func TestAuditLogThresholdNonPositiveValue_fallsBackWithWarnOnce(t *testing.T) {
+	initServicesDB(t)
+	const cacheKey = "audit-log-size-refresh"
+	resetLogStateTransitionForTest(cacheKey)
+	auditLogSizeValueCache.invalidate()
+	t.Cleanup(func() {
+		auditLogSizeValueCache.invalidate()
+		resetLogStateTransitionForTest(cacheKey)
+	})
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_log_size_mb=0 WHERE id=1`); err != nil {
+		t.Fatalf("seed zero threshold: %v", err)
+	}
+	logs := captureServiceLog(t)
+
+	// Given 库值为 0（COALESCE 不兜 0，读出即不可用值）。
+	// When 连续两轮读取（第二轮命中 TTL 缓存，不再触发状态转换）。
+	first := getAuditLogSizeBytesContext(context.Background())
+	second := getAuditLogSizeBytesContext(context.Background())
+
+	// Then 两轮都按默认 10MB 生效，且只有一条点名库值的 warn。
+	const fallback = 10 * 1024 * 1024
+	if first != fallback || second != fallback {
+		t.Fatalf("non-positive fallback=(%d,%d), want 10MB each", first, second)
+	}
+	if warns := countLogLines(logs, "审计日志轮转阈值库值 0 不可用"); warns != 1 {
+		t.Fatalf("non-positive warn lines=%d, want 1（状态转换去重）; logs=%s", warns, logs.String())
+	}
+
+	// When 恢复有效库值并失效缓存。
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_log_size_mb=42 WHERE id=1`); err != nil {
+		t.Fatalf("restore threshold: %v", err)
+	}
+	auditLogSizeValueCache.invalidate()
+	if got := getAuditLogSizeBytesContext(context.Background()); got != 42*1024*1024 {
+		t.Fatalf("after recovery size=%d, want 42MB", got)
+	}
+
+	// Then 补一条恢复 info，且不得再报不可用。
+	if infos := countLogLines(logs, "读取审计日志轮转阈值已恢复"); infos != 1 {
+		t.Fatalf("recovery info lines=%d, want 1; logs=%s", infos, logs.String())
+	}
+}

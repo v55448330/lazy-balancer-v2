@@ -1225,14 +1225,10 @@ const tcpRuleDeadFieldsResetSQL = db.TCPRuleDeadFieldsResetSQL
 const tcpRulePathRulesResetSQL = db.TCPRulePathRulesResetSQL
 
 // tcpRuleDeadFieldsResetForRuleSQL 复用同一份 SET 投影，供启用单条 TCP 规则时
-// 在事务内落库归一；WHERE 收敛为单规则，避免触碰其他禁用行。
-var tcpRuleDeadFieldsResetForRuleSQL = func() string {
-	prefix, _, found := strings.Cut(tcpRuleDeadFieldsResetSQL, "WHERE protocol='tcp' AND (")
-	if !found {
-		panic("TCP 死值归一 SQL 缺少协议谓词")
-	}
-	return prefix + " WHERE protocol='tcp' AND caddy_id = ?"
-}()
+// 在事务内落库归一；WHERE 收敛为单规则，避免触碰其他禁用行。（单规则版构造
+// 收进 db 包单源 TCPRuleDeadFieldsResetForRuleSQL——此前对批量版文本 Cut
+// 派生，改谓词措辞即包 init panic。）
+var tcpRuleDeadFieldsResetForRuleSQL = db.TCPRuleDeadFieldsResetForRuleSQL("?")
 
 // normalizeRuleRowsForTransport：导入事务内的规则行
 // 存储归一共享实现——v1 导入与 v2 备份导入两条写路径的唯一归一点：

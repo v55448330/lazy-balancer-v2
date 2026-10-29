@@ -178,11 +178,12 @@ var clockBase = time.Now()
 // monotonicNowNano 返回基线以来的单调纳秒读数。
 func monotonicNowNano() int64 { return int64(time.Since(clockBase)) }
 
-// parseCountForTest 文件解析次数计数（测试观测构建期去重）。
+// testseam: parseCountForTest 文件解析次数计数（测试观测构建期去重；
+// 生产热路径自增、无法迁走——宿主留驻产品文件由 testonly 守卫登记）。
 var parseCountForTest atomic.Int64
 
-// parseEntryCallsForTest 条目解析调用计数（测试观测「逐条目单次解析」——
-// 修复前后分别为 2×/1×）。仅在 ParseIPEntry 入口 incr，成本可忽略。
+// testseam: parseEntryCallsForTest 条目解析调用计数（测试观测「逐条目单次
+// 解析」——修复前后分别为 2×/1×）。仅在 ParseIPEntry 入口 incr，成本可忽略。
 var parseEntryCallsForTest atomic.Int64
 
 func init() {
@@ -283,10 +284,13 @@ func loadIPListFileFresh(path string) (*ipListFileState, error) {
 	return loadIPListFile(path, true)
 }
 
-// ipListStatCalls 读盘路径的 stat 调用计数（测试观测节流窗口边界的单飞语义）。
+// testseam: ipListStatCalls 读盘路径的 stat 调用计数（测试观测节流窗口
+// 边界的单飞语义；生产读路径自增、无法迁走）。
 var ipListStatCalls atomic.Int64
 
-// statIPListFile 是 os.Stat 的唯一调用点（计数缝；生产零额外成本）。
+// testseam: statIPListFile 是 os.Stat 的唯一调用点（计数缝包装；生产读路径
+// 经它转发，测试靠 ipListStatCalls 观测——宿主留驻产品文件由 testonly
+// 守卫登记）。
 func statIPListFile(path string) (os.FileInfo, error) {
 	ipListStatCalls.Add(1)
 	return os.Stat(path)

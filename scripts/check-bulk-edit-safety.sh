@@ -67,7 +67,11 @@ scan_scripts() {
     # perl -pi -e / python -c）：紧邻匹配漏掉它们等于第一道闸门对最常见的
     # 批量改写作业形态失效（事故形态正是「全仓 sed/perl 正则替换」）。
     grep -Eq '(re\.sub|re\.compile|sed[^|;&]*[[:space:]](-[A-Za-z]*i|--in-place)|perl[[:space:]][^|;&]*-[A-Za-z]*i|python[0-9.]*[[:space:]]+-c|shutil\.(copy|move)|\.write_text\(|open\([^)]*["'\'']w|writeFileSync|writeFile\()' "$f" && writes=1 || true
-    grep -Eq -- '(--dry-run|DRY_RUN)' "$f" && dry=1 || true
+    # dry-run 判据必须在可执行位置：剥掉「整行注释」（行首空白后 #）再匹配。
+    # 注释里提一句 --dry-run（事故形态「临时脚本 + 注释 TODO: add --dry-run +
+    # git ls-files | xargs perl -pi -e」）不构成只读模式；行尾注释不受影响
+    # （同一行存在可执行上下文）。
+    grep -v '^[[:space:]]*#' "$f" | grep -Eq -- '(--dry-run|DRY_RUN)' && dry=1 || true
     if (( traverses && writes && !dry )); then
       echo "ERROR: 批量改写脚本缺少 --dry-run 只读模式：$f" >&2
       bad=1

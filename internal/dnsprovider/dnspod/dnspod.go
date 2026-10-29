@@ -507,11 +507,21 @@ func isDomainGoneStatus(code, message string) bool {
 		strings.Contains(message, "域名 ID 错误")
 }
 
-// invalidateDomainIDCache 作废本账户单个 zone 的缓存映射
-// 自此键含账户摘要，只能作废本账户的条目）。
+// invalidateDomainIDCache 作废本账户单个 zone 的缓存映射（键含账户摘要，
+// 自此只能作废本账户的条目；正负缓存与 LRU 使用序一并清除——配置变更/
+// errStaleDomainID 自愈后的下一次解析必须重新发起 Domain.List，负缓存不得
+// 拦住重新核实）。
 func (p *Provider) invalidateDomainIDCache(zone string) {
 	domainIDCacheMu.Lock()
-	delete(domainIDCache, p.domainIDCacheKey(zone))
+	key := p.domainIDCacheKey(zone)
+	delete(domainIDCache, key)
+	delete(domainIDNegativeCache, key)
+	for i, k := range domainIDCacheOrder {
+		if k == key {
+			domainIDCacheOrder = append(domainIDCacheOrder[:i], domainIDCacheOrder[i+1:]...)
+			break
+		}
+	}
 	domainIDCacheMu.Unlock()
 }
 
@@ -521,17 +531,78 @@ func (p *Provider) invalidateDomainIDCache(zone string) {
 // 键必须含账户（login_token 的 sha256 前 8 位十六
 // 进制）——同进程可配置多条 DNS 凭证（多账户），裸 zone 键会让账户 B 首调
 // 即命中账户 A 缓存的 domain_id；token 不落明文键（缓存转储/调试可读）。
+// 容量与淘汰：进程级缓存必须有上限——domainIDCacheCapacity（LRU，命中触碰）
+// 封顶正+负缓存总条目，超出淘汰最久未用键。domainIDNegativeCache 是负缓存
+// （键同正缓存 → 最近一次「确认不存在」时刻）：误填/已移出账户的 zone 若
+// 不落负缓存，每次 Present/CleanUp/Validate 都重新全量分页扫 Domain.List，
+// 叠加重试会把配置错误放大成厂商限流。TTL 取短（domainIDNegativeTTL）：
+// zone 后补进账户的收敛延迟上限即 TTL；过期条目读时惰性清除。
 var (
-	domainIDCacheMu sync.Mutex
-	domainIDCache   = map[string]string{}
+	domainIDCacheMu       sync.Mutex
+	domainIDCache         = map[string]string{}
+	domainIDNegativeCache = map[string]time.Time{}
+	domainIDCacheOrder    []string
 )
 
-// domainIDCacheKey 返回本账户隔离的缓存键：AccountDigest(login_token)（16 位
+// domainIDCacheCapacity 是正+负缓存合并的 LRU 容量上限：单进程数千 zone 已
+// 远超真实部署面（每个 zone 只在签发/续签时解析），上限只为防无界增长。
+const domainIDCacheCapacity = 1024
+
+// domainIDNegativeTTL 是负缓存条目的存活时长：60s 短 TTL——账户内 zone→id
+// 映射稳定（负缓存只拦「确认不存在」的重复扫描），但 zone 可能被补进账户，
+// 收敛延迟上限即本值。var 供测试收窄。
+var domainIDNegativeTTL = 60 * time.Second
+
+// domainIDCacheKey 返回本账户隔离的缓存键：AccountDigest(loginToken)（16 位
 // 十六进制）+ "|" + zone。摘要口径与 ownership.AccountDigest 单源——缓存隔离
 // 与所有权账户身份必须由同一凭据派生，两处各自求值会出现「缓存按账户隔离、
 // 所有权按另一账户身份判定」的漂移。
 func (p *Provider) domainIDCacheKey(zone string) string {
 	return ownership.AccountDigest(p.loginToken) + "|" + zone
+}
+
+// domainIDCacheTouchLRU 把键移到使用序队尾（调用方持 domainIDCacheMu）。
+func domainIDCacheTouchLRU(key string) {
+	for i, k := range domainIDCacheOrder {
+		if k == key {
+			domainIDCacheOrder = append(domainIDCacheOrder[:i], domainIDCacheOrder[i+1:]...)
+			break
+		}
+	}
+	domainIDCacheOrder = append(domainIDCacheOrder, key)
+}
+
+// domainIDCacheEvictLRU 容量淘汰：正+负缓存合并计数，从使用序队首逐出
+// （调用方持 domainIDCacheMu）。
+func domainIDCacheEvictLRU() {
+	for len(domainIDCacheOrder) > domainIDCacheCapacity {
+		oldest := domainIDCacheOrder[0]
+		domainIDCacheOrder = domainIDCacheOrder[1:]
+		delete(domainIDCache, oldest)
+		delete(domainIDNegativeCache, oldest)
+	}
+}
+
+// getDomainIDCache 读正缓存并触碰 LRU（生产读路径与测试共用）。
+func (p *Provider) getDomainIDCache(key string) (string, bool) {
+	domainIDCacheMu.Lock()
+	defer domainIDCacheMu.Unlock()
+	id, ok := domainIDCache[key]
+	if ok {
+		domainIDCacheTouchLRU(key)
+	}
+	return id, ok
+}
+
+// putDomainIDCache 写正缓存（清除同键负缓存）并触碰 LRU+容量淘汰
+// （生产写路径与测试共用）。
+func (p *Provider) putDomainIDCache(key, id string) {
+	domainIDCacheMu.Lock()
+	defer domainIDCacheMu.Unlock()
+	delete(domainIDNegativeCache, key)
+	domainIDCache[key] = id
+	domainIDCacheTouchLRU(key)
+	domainIDCacheEvictLRU()
 }
 
 func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error) {
@@ -540,12 +611,22 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 	// zone 的不同书写形态不再各存一份 domain_id。
 	zone = dnsname.NormalizeName(zone)
 	cacheKey := p.domainIDCacheKey(zone)
-	domainIDCacheMu.Lock()
-	cached, ok := domainIDCache[cacheKey]
-	domainIDCacheMu.Unlock()
-	if ok {
-		return cached, nil
+	if id, ok := p.getDomainIDCache(cacheKey); ok {
+		return id, nil
 	}
+	domainIDCacheMu.Lock()
+	failedAt, negHit := domainIDNegativeCache[cacheKey]
+	if negHit && time.Since(failedAt) >= domainIDNegativeTTL {
+		// 负缓存过期即惰性清除，等价 miss。
+		delete(domainIDNegativeCache, cacheKey)
+		negHit = false
+	}
+	if negHit {
+		domainIDCacheTouchLRU(cacheKey)
+		domainIDCacheMu.Unlock()
+		return "", fmt.Errorf("domain %s not found", zone)
+	}
+	domainIDCacheMu.Unlock()
 	offset := 0
 	for page := 0; page < domainListMaxPages; page++ {
 		params := url.Values{}
@@ -572,9 +653,7 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 			// 「返回形态变化」静默变成「域名不在账户」的错误结论。
 			if dnsname.NormalizeName(d.Name) == zone {
 				id := d.ID.String()
-				domainIDCacheMu.Lock()
-				domainIDCache[cacheKey] = id
-				domainIDCacheMu.Unlock()
+				p.putDomainIDCache(cacheKey, id)
 				return id, nil
 			}
 		}
@@ -586,6 +665,13 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 			break
 		}
 	}
+	// 全量扫描终态「域名不在账户」才落负缓存——瞬时 API 失败（网络/5xx）不落，
+	// 否则把瞬时故障放大成 TTL 内的持续失败。
+	domainIDCacheMu.Lock()
+	domainIDNegativeCache[cacheKey] = time.Now()
+	domainIDCacheTouchLRU(cacheKey)
+	domainIDCacheEvictLRU()
+	domainIDCacheMu.Unlock()
 	return "", fmt.Errorf("domain %s not found", zone)
 }
 

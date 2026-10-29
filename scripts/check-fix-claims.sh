@@ -82,6 +82,21 @@ strip_comments_keep_lines() { # <file>
   ' "$1"
 }
 
+# escape_ere 把台账原文插入 ERE 前转义全部元字符。test: 名直接来自台账，
+# 未转义插值会让 TestFoo.Bar 命中 TestFooXBar（. 是任意字符）——「台账声称
+# 的测试仍在」可能被近似名顶替，:583 的跨包同名歧义门同样失真。
+escape_ere() { # <literal>
+  local s="$1" out="" ch i
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    case "$ch" in
+    '.' | '[' | ']' | '*' | '^' | '$' | '\' | '(' | ')' | '{' | '}' | '?' | '+' | '|') out+="\\$ch" ;;
+    *) out+="$ch" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 # 剥注释视图中真正命中的文件清单（扩展正则，每行一个）：先按原文挑候选文件，再
 # 逐文件走同一份剥注释视图复检（单源——三份内联 awk 各自漂移会让某个证据形态
 # 悄悄放宽）。返回文件而不是布尔：test: 证据要按「命中文件数」判定歧义，布尔
@@ -217,6 +232,25 @@ F-1|fixed|ftest:|
 EOF
   if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger empty-ftest.tsv >/dev/null 2>&1); then
     echo "SELFTEST FAIL: ftest 空字面量却通过" >&2; return 1
+  fi
+
+  # 9b) 反例：test: 名含正则元字符——未转义插值会以近似名顶替（TestDemo.*
+  #     不得命中 TestDemoBehavior；名字按台账原文精确匹配）。
+  printf 'package demo\n\nfunc TestDemoBehavior(t *testing.T) {}\n' >"$tmp/internal/demo/demo_test.go"
+  cat > "$tmp/meta-name.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:internal/demo/TestDemo.*|
+EOF
+  if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger meta-name.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: test: 名含正则元字符被近似名顶替却通过" >&2; return 1
+  fi
+  # 正例对照：同名的真实测试仍在（名字本身无元字符时不受转义影响）。
+  cat > "$tmp/plain-name.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:internal/demo/TestDemoBehavior|
+EOF
+  if ! (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger plain-name.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: test: 精确名正例被拒" >&2; return 1
   fi
 
   # 10) 反例：script 不存在
@@ -578,8 +612,11 @@ while IFS='|' read -r id status evidence reason; do
               echo "FAIL ${id}: test: 名字为空（空模式命中任意测试声明，不构成证据）" >&2; fail=1; continue
             fi
             # 声明必须落在代码行（行首 func / test(）上；注释掉的声明不算证据。
+            # 名字先做 ERE 转义再插值（escape_ere）：台账原文含正则元字符时
+            # 未转义插值会命中近似名。
             test_scope="${test_dir:-.}"
-            matches="$(code_match_files "^[[:space:]]*func[[:space:]]+${name}[(]|^[[:space:]]*test[(]['\"]${name}" "$test_scope")"
+            escaped_name="$(escape_ere "$name")"
+            matches="$(code_match_files "^[[:space:]]*func[[:space:]]+${escaped_name}[(]|^[[:space:]]*test[(]['\"]${escaped_name}" "$test_scope")"
             match_count="$(printf '%s\n' "$matches" | grep -c . || true)"
             if [ "$match_count" -eq 0 ]; then
               echo "FAIL ${id}: 测试不存在（注释掉的声明不算证据）: ${name}（搜索面: ${test_scope}）" >&2; fail=1

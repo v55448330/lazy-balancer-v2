@@ -38,6 +38,12 @@ type Issuer struct {
 // ctx 抢先取消——错误归因退化、白烧一次 renewal_attempts。常量关系由 services
 // 侧断言（IssuanceSegmentBudgetFor 与 caExecutionTimeoutFor 逐域对比），上调
 // 任一分段会立刻失败而不是等线上出现泛化超时。
+//
+// 该严格小于式的成立域：1–2 域（产品结构层域上限即 2——certissuer.go 的 issuer
+// 域数校验 len(list)>2 直接拒绝）。3 域时外层预算在 caExecutionTimeoutMax（60m）
+// 封顶，分段和（69.5m）不满足严格小于——那是超出产品域上限后的防御性截断路径
+// （外层预算按快速失败立场封顶，最坏路径会先被外层 ctx 抢先取消），不是本层
+// 断言要守护的形态；跨层断言也只钉 1 域与 2 域两档。
 const (
 	registrationSegmentBudget = 30 * time.Second
 	propagationSegmentBudget  = 5 * time.Minute
@@ -55,6 +61,9 @@ const (
 // 注册/订单就绪/finalize/有效期等待各一次；传播、递归确认、验证按域名串行。
 // 供上层（services）断言其小于 CA 队列外层执行预算——acme 是被依赖层，无法
 // 导入 services 的常量，故断言放在 services 侧、由本 getter 取值。
+// 域数边界：产品层域上限为 2（certissuer.go 的 issuer 域数校验），1–2 域的
+// 分段和严格小于外层预算；3 域起外层预算被 caExecutionTimeoutMax 封顶、
+// 严格小于式不再成立（防御性截断路径，见分段常量块注释），跨层断言不覆盖。
 func IssuanceSegmentBudgetFor(domainCount int) time.Duration {
 	if domainCount < 1 {
 		domainCount = 1

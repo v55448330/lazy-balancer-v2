@@ -1,8 +1,8 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <div v-if="loading" class="app-loading">
+    <div v-if="loading" class="app-loading" role="status" aria-live="polite">
       <div class="app-loading__inner">
-        <div class="app-loading__spinner"></div>
+        <div class="app-loading__spinner" aria-hidden="true"></div>
         <div class="app-loading__text">加载中...</div>
       </div>
     </div>
@@ -36,6 +36,7 @@ import { isPageId } from '@/utils/pageIds'
 import { settingsTabOfPage } from '@/utils/settingsPages'
 import { ApiRequestError, isTokenExpired } from '@/utils/api'
 import { OIDC_APP_NONCE_KEY, OIDC_REJECTION_TEXT, oidcErrorMessage, splitOidcReturnTo, verifyOidcCallbackToken } from '@/utils/oidcCallback'
+import { readHashQuery, stripHashParams } from '@/utils/hashQuery'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -74,11 +75,9 @@ const currentPage = computed(() => authStore.currentPage)
 
 onMounted(async () => {
   const url = new URL(window.location.href)
-  // hash 形态二种:「#login_ticket=x」(无路径)与「#/oidc/callback?token=x」
-  // (带路径)——先剥路径段再解析查询串,否则 key 变成 "/oidc/callback?token"
-  const hashBody = url.hash.startsWith('#') ? url.hash.slice(1) : ''
-  const qIdx = hashBody.indexOf('?')
-  const fragment = new URLSearchParams(qIdx >= 0 ? hashBody.slice(qIdx + 1) : hashBody)
+  // hash 查询串解析/剥离单源在 utils/hashQuery（路径段剥除、精确匹配、空串
+  // 不拼「?」都收在该 helper，web/tests/hashQuery.spec.ts 钉住行为）。
+  const { path: hashPath, params: fragment } = readHashQuery(url.hash)
   const hasLoginTicket = fragment.has('login_ticket')
   const loginTicket = fragment.get('login_ticket') ?? ''
   // v2.3.0 OIDC 回跳:#/oidc/callback?token=...&return_to=...——后端回调以
@@ -86,7 +85,9 @@ onMounted(async () => {
   // 令牌本身不可信（任意链接都能携带别人的有效 JWT），只接受同时满足
   // 「本浏览器发起过这一轮登录的 nonce + auth_method=oidc + expires_at 与 exp
   // 一致」的令牌：见 utils/oidcCallback 的来源绑定契约。
-  const oidcCallback = url.hash.includes('/oidc/callback')
+  // 回调入口按路径段精确判定（utils/hashQuery 已剥路径段）——子串探测会把
+  // 携带该字样的普通深链（如 #/login?next=/oidc/callback）误判成回调。
+  const oidcCallback = hashPath === '/oidc/callback'
   const oidcToken = oidcCallback ? (fragment.get('token') ?? '') : ''
   const oidcExpiresAt = oidcCallback ? (fragment.get('expires_at') ?? '') : ''
   const oidcReturn = splitOidcReturnTo(oidcCallback ? (fragment.get('return_to') ?? '') : '')
@@ -101,15 +102,7 @@ onMounted(async () => {
   const oidcError = oidcErrorParam || (oidcCallback ? (fragment.get('error') ?? '') : '')
   if (oidcError) ElMessage.error(`OIDC 登录失败：${oidcErrorMessage(oidcError)}`)
   if (hasLoginTicket || oidcCallback || oidcErrorParam) {
-    fragment.delete('login_ticket')
-    fragment.delete('token')
-    fragment.delete('return_to')
-    fragment.delete('expires_at')
-    fragment.delete('oidc')
-    fragment.delete('error')
-    fragment.delete('oidc_error')
-    const remainingHash = fragment.toString()
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${remainingHash ? `#${remainingHash}` : ''}`)
+    stripHashParams(['login_ticket', 'token', 'return_to', 'expires_at', 'error', 'oidc_error'])
   }
 
   try {
@@ -145,7 +138,8 @@ onMounted(async () => {
           tokenApplied = true
         } else ElMessage.info('已保持当前登录')
       } else {
-        // OIDC 登录:令牌直接建会话,return_to 回跳(缺省 dashboard)
+        // OIDC 登录:令牌直接建会话,return_to 为已知页面键时回跳，否则保留
+        // 当前页（不覆盖 localStorage 复原页）
         authStore.applyOIDCToken(oidcToken)
         tokenApplied = true
       }
@@ -153,8 +147,8 @@ onMounted(async () => {
       // 「保持当前登录」都不得跳页——否则提示与行为自相矛盾（先告诉用户
       // 「已拒绝 / 已保持」，界面却仍跳到链接指定的页面）。
       if (tokenApplied) {
-        // return_to 仅接受已知页面键,未知回 dashboard(防任意页注入)——
-        // 清单复用 utils/pageIds 的 isPageId(页面键唯一事实源)
+        // return_to 仅接受已知页面键；未知/缺失保留当前页不跳转（防任意页注入）
+        // ——清单复用 utils/pageIds 的 isPageId(页面键唯一事实源)
         const target = oidcReturn.path.replace(/^\//, '')
         if (isPageId(target)) authStore.setCurrentPage(target)
       }
@@ -184,7 +178,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0f172a;
+  background: var(--bg-secondary);
 }
 .app-loading__inner {
   display: flex;
@@ -195,13 +189,13 @@ onMounted(async () => {
 .app-loading__spinner {
   width: 48px;
   height: 48px;
-  border: 4px solid #3b82f6;
+  border: 4px solid var(--primary);
   border-top-color: transparent;
   border-radius: 50%;
   animation: app-loading-spin 0.8s linear infinite;
 }
 .app-loading__text {
-  color: #94a3b8;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 @keyframes app-loading-spin {

@@ -1,16 +1,24 @@
 package handlers
 
+// 阶段外字段归零矩阵的守卫面。键集必须从生产模型派生（reflect 遍历
+// models.UpdateSecurityPolicyRequest 的指针字段），矩阵只作期望集——
+// 此前三张手写清单（矩阵/createShape/updateShape）互为镜像，模型新增
+// 阶段字段而清单两侧同时漏掉时全部等长、恒绿，门宣称的「任一侧漏字段
+// 即红」不成立。现在模型一侧是唯一键源：新增字段未进矩阵（或未登记豁免）
+// 即红，漏登记必须是一次显式决策。
+
 import (
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/models"
 )
 
 // stageZeroMatrixFields 是归零矩阵管辖的全部字段（与 outOfStageZeroFamilies
-// 的族展开一一对应）。用例以它为准双向校验两侧形状：既要求每个字段存在，
-// 也要求形状没有多出未声明的键——任何一侧漏掉字段都会因「键集不等」转红，
-// 不再出现「两侧同时漏键仍绿」。
+// 的族展开一一对应）。键集受 TestStageZeroMatrix_updatePointerFieldsCoveredByMatrix
+// 约束：与生产模型指针字段集（扣除豁免）双向相等。
 var stageZeroMatrixFields = []string{
 	"mode",
 	"crs_rule_groups",
@@ -35,6 +43,116 @@ var stageZeroMatrixFields = []string{
 	"block_page_id",
 	"block_status_code",
 	"trust_detection",
+}
+
+// stageZeroExemptFields 不参与阶段归零矩阵的指针字段（豁免理由必须登记，
+// 拼写漂移会让豁免静默失效，由覆盖门校验真实存在）：
+// name/description 标识与描述、enabled 启停正交、anomaly_threshold 全阶段
+// 共用阈值、ip_acl_mode 随 ip_acl_enabled 的展示形态（矩阵只清 enabled 与
+// 名单族）、policy_type 是矩阵开关本身。
+var stageZeroExemptFields = map[string]string{
+	"name":              "标识字段",
+	"description":       "描述字段",
+	"anomaly_threshold": "全阶段共用阈值",
+	"ip_acl_mode":       "随 ip_acl_enabled 的展示形态（矩阵只清 enabled/名单族）",
+	"enabled":           "启停正交",
+	"policy_type":       "矩阵开关本身",
+}
+
+// stageZeroJSONTag 返回结构体字段的 json 键（无 tag/- 为不可管理字段）。
+func stageZeroJSONTag(f reflect.StructField) (string, bool) {
+	tag := strings.Split(f.Tag.Get("json"), ",")[0]
+	if tag == "" || tag == "-" {
+		return "", false
+	}
+	return tag, true
+}
+
+// TestStageZeroMatrix_updatePointerFieldsCoveredByMatrix 键集门：
+// models.UpdateSecurityPolicyRequest 的全部指针字段 = 矩阵 ∪ 豁免，双向相等。
+// 模型新增阶段字段而矩阵漏登记（或矩阵残留已删字段）在此显形。
+func TestStageZeroMatrix_updatePointerFieldsCoveredByMatrix(t *testing.T) {
+	tt := reflect.TypeOf(models.UpdateSecurityPolicyRequest{})
+	inventory := make(map[string]bool, tt.NumField())
+	for i := range tt.NumField() {
+		f := tt.Field(i)
+		tag, ok := stageZeroJSONTag(f)
+		if !ok {
+			continue
+		}
+		if f.Type.Kind() != reflect.Ptr {
+			t.Fatalf("字段 %s（%s）非指针形态：矩阵口径只覆盖指针字段，新增非指针字段需同步登记", tag, f.Name)
+		}
+		inventory[tag] = true
+	}
+	for tag, reason := range stageZeroExemptFields {
+		if reason == "" {
+			t.Fatalf("豁免字段 %s 未登记理由（豁免必须携带归属说明）", tag)
+		}
+		if !inventory[tag] {
+			t.Fatalf("豁免字段 %s 不在 UpdateSecurityPolicyRequest 中（结构体或豁免表漂移）", tag)
+		}
+	}
+	var missing, extra []string
+	for tag := range inventory {
+		if _, exempt := stageZeroExemptFields[tag]; exempt {
+			continue
+		}
+		if !slices.Contains(stageZeroMatrixFields, tag) {
+			missing = append(missing, tag)
+		}
+	}
+	for _, tag := range stageZeroMatrixFields {
+		if !inventory[tag] {
+			extra = append(extra, tag)
+		}
+	}
+	if len(missing)+len(extra) > 0 {
+		t.Fatalf("矩阵键集与模型指针字段漂移：矩阵缺少 %v，矩阵多出 %v（新增字段必须进矩阵或登记豁免）", missing, extra)
+	}
+}
+
+// stageZeroStringZero 判定「阶段外归一」语义下字符串字段的零形态：空串恒零；
+// mode 族认 "off"（applyStageZeros 的 mode 归一口径）；列表族认 "[]"（JSON
+// 空清单）。
+func stageZeroStringZero(tag, value string) bool {
+	if value == "" {
+		return true
+	}
+	if tag == "mode" || tag == "geoip_mode" {
+		return value == "off"
+	}
+	return value == "[]"
+}
+
+// stageZeroValueZero 判定非指针值的零形态（int 0 / bool false / 字符串规则见上）。
+func stageZeroValueZero(tag string, value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.String:
+		return stageZeroStringZero(tag, value.String())
+	case reflect.Int:
+		return value.Int() == 0
+	case reflect.Bool:
+		return !value.Bool()
+	}
+	return false
+}
+
+// stageZeroManagedFields 返回类型中参与矩阵的字段（json 键非豁免）。
+func stageZeroManagedFields(tt reflect.Type) []reflect.StructField {
+	var fields []reflect.StructField
+	for i := 0; i < tt.NumField(); i++ {
+		f := tt.Field(i)
+		tag, ok := stageZeroJSONTag(f)
+		if !ok {
+			continue
+		}
+		if _, exempt := stageZeroExemptFields[tag]; exempt {
+			continue
+		}
+		fields = append(fields, f)
+	}
+	return fields
 }
 
 // 阶段外字段归零矩阵必须单源——Create 与 Update 两条写路径对同一阶段
@@ -82,7 +200,8 @@ func TestStageZeroMatrix_createUpdateParity(t *testing.T) {
 
 // 归零矩阵的指针别名钉：每个字段必须是独立变量地址（new(expr) 每字段一份）。
 // 共享同一局部变量时，将来任何 `*req.X = v` 形态的归一都会经别名同时改写
-// 多个落库字段，且在 review 中不可见。
+// 多个落库字段，且在 review 中不可见。字段清单从模型指针字段反射派生
+// （键集门已保证矩阵与模型一致），不再手抄第二份。
 func TestStageZeroMatrix_zeroPointersAreDistinct(t *testing.T) {
 	stages := []string{
 		models.PolicyTypeStage0, models.PolicyTypeStage1,
@@ -92,30 +211,11 @@ func TestStageZeroMatrix_zeroPointersAreDistinct(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			req := pollutedUpdateRequest()
 			applyStageZerosToUpdate(&req, stage)
-			fields := map[string]any{
-				"mode":                  req.Mode,
-				"crs_rule_groups":       req.CRSRuleGroups,
-				"crs_excluded_rules":    req.CRSExcludedRules,
-				"custom_rules":          req.CustomRules,
-				"rate_limit_enabled":    req.RateLimitEnabled,
-				"rate_limit_rps":        req.RateLimitRPS,
-				"rate_limit_burst":      req.RateLimitBurst,
-				"waf_check_response":    req.WAFCheckResponse,
-				"log_request_body":      req.LogRequestBody,
-				"ip_acl_enabled":        req.IPACLEnabled,
-				"ip_acl_list":           req.IPACLList,
-				"ip_acl_list_refs":      req.IPACLListRefs,
-				"ip_whitelist_enabled":  req.IPWhitelistEnabled,
-				"ip_whitelist":          req.IPWhitelist,
-				"ip_whitelist_refs":     req.IPWhitelistRefs,
-				"ip_blacklist":          req.IPBlacklist,
-				"geoip_mode":            req.GeoIPMode,
-				"geoip_countries":       req.GeoIPCountries,
-				"geoip_crawler_exempt":  req.GeoIPCrawlerExempt,
-				"geoip_crawler_engines": req.GeoIPCrawlerEngines,
-				"block_page_id":         req.BlockPageID,
-				"block_status_code":     req.BlockStatusCode,
-				"trust_detection":       req.TrustDetection,
+			v := reflect.ValueOf(req)
+			fields := map[string]any{}
+			for _, f := range stageZeroManagedFields(v.Type()) {
+				tag, _ := stageZeroJSONTag(f)
+				fields[tag] = v.FieldByIndex(f.Index).Interface()
 			}
 			seen := make(map[uintptr]string, len(fields))
 			for name, ptr := range fields {
@@ -229,65 +329,34 @@ func pollutedUpdateRequest() models.UpdateSecurityPolicyRequest {
 	}
 }
 
+// createShape/updateShape 从请求结构体反射派生「字段→是否归零」视图：指针
+// 字段 nil 或指向零值即零（与 applyStageZerosTo* 的赋值口径逐类一致：
+// 字符串 ""/[]"/"off"（mode 族）、int 0、bool false）。键集受覆盖门约束，
+// 不再与矩阵互为镜像。
 func createShape(r models.CreateSecurityPolicyRequest) map[string]bool {
-	wlEnabled := r.IPWhitelistEnabled == nil || !*r.IPWhitelistEnabled
-	strZero := func(v string) bool { return v == "" || v == "[]" }
-	return map[string]bool{
-		"mode":                  r.Mode == "" || r.Mode == "off",
-		"crs_rule_groups":       strZero(r.CRSRuleGroups),
-		"crs_excluded_rules":    strZero(r.CRSExcludedRules),
-		"custom_rules":          strZero(r.CustomRules),
-		"rate_limit_enabled":    !r.RateLimitEnabled,
-		"rate_limit_rps":        r.RateLimitRPS == 0,
-		"rate_limit_burst":      r.RateLimitBurst == 0,
-		"waf_check_response":    !r.WAFCheckResponse,
-		"log_request_body":      !r.LogRequestBody,
-		"ip_acl_enabled":        !r.IPACLEnabled,
-		"ip_acl_list":           strZero(r.IPACLList),
-		"ip_acl_list_refs":      strZero(r.IPACLListRefs),
-		"ip_whitelist_enabled":  wlEnabled,
-		"ip_whitelist":          strZero(r.IPWhitelist),
-		"ip_whitelist_refs":     strZero(r.IPWhitelistRefs),
-		"ip_blacklist":          strZero(r.IPBlacklist),
-		"geoip_mode":            r.GeoIPMode == "" || r.GeoIPMode == "off",
-		"geoip_countries":       strZero(r.GeoIPCountries),
-		"geoip_crawler_exempt":  !r.GeoIPCrawlerExempt,
-		"geoip_crawler_engines": strZero(r.GeoIPCrawlerEngines),
-		"block_page_id":         r.BlockPageID == 0,
-		"block_status_code":     r.BlockStatusCode == 0,
-		"trust_detection":       !r.TrustDetection,
+	shape := map[string]bool{}
+	v := reflect.ValueOf(r)
+	for _, f := range stageZeroManagedFields(v.Type()) {
+		tag, _ := stageZeroJSONTag(f)
+		fv := v.FieldByIndex(f.Index)
+		if fv.Kind() == reflect.Ptr {
+			shape[tag] = fv.IsNil() || stageZeroValueZero(tag, fv.Elem())
+			continue
+		}
+		shape[tag] = stageZeroValueZero(tag, fv)
 	}
+	return shape
 }
 
 func updateShape(r models.UpdateSecurityPolicyRequest) map[string]bool {
-	strZero := func(p *string) bool { return p == nil || *p == "" || *p == "[]" }
-	intZero := func(p *int) bool { return p == nil || *p == 0 }
-	boolZero := func(p *bool) bool { return p == nil || !*p }
-	return map[string]bool{
-		"mode":                  r.Mode == nil || *r.Mode == "" || *r.Mode == "off",
-		"crs_rule_groups":       strZero(r.CRSRuleGroups),
-		"crs_excluded_rules":    strZero(r.CRSExcludedRules),
-		"custom_rules":          strZero(r.CustomRules),
-		"rate_limit_enabled":    boolZero(r.RateLimitEnabled),
-		"rate_limit_rps":        intZero(r.RateLimitRPS),
-		"rate_limit_burst":      intZero(r.RateLimitBurst),
-		"waf_check_response":    boolZero(r.WAFCheckResponse),
-		"log_request_body":      boolZero(r.LogRequestBody),
-		"ip_acl_enabled":        boolZero(r.IPACLEnabled),
-		"ip_acl_list":           strZero(r.IPACLList),
-		"ip_acl_list_refs":      strZero(r.IPACLListRefs),
-		"ip_whitelist_enabled":  boolZero(r.IPWhitelistEnabled),
-		"ip_whitelist":          strZero(r.IPWhitelist),
-		"ip_whitelist_refs":     strZero(r.IPWhitelistRefs),
-		"ip_blacklist":          strZero(r.IPBlacklist),
-		"geoip_mode":            r.GeoIPMode == nil || *r.GeoIPMode == "" || *r.GeoIPMode == "off",
-		"geoip_countries":       strZero(r.GeoIPCountries),
-		"geoip_crawler_exempt":  boolZero(r.GeoIPCrawlerExempt),
-		"geoip_crawler_engines": strZero(r.GeoIPCrawlerEngines),
-		"block_page_id":         intZero(r.BlockPageID),
-		"block_status_code":     intZero(r.BlockStatusCode),
-		"trust_detection":       boolZero(r.TrustDetection),
+	shape := map[string]bool{}
+	v := reflect.ValueOf(r)
+	for _, f := range stageZeroManagedFields(v.Type()) {
+		tag, _ := stageZeroJSONTag(f)
+		fv := v.FieldByIndex(f.Index)
+		shape[tag] = fv.IsNil() || stageZeroValueZero(tag, fv.Elem())
 	}
+	return shape
 }
 
 func hasNonZero(shape map[string]bool) bool {

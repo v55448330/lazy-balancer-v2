@@ -150,8 +150,8 @@ type CaddyService struct {
 	healthInflight        *upstreamHealthCall
 }
 
-// NewCaddyService 是测试/兼容构造：admin 与指标同址；生产装配使用
-// NewCaddyServiceWithMetricsURL 显式传配置值。
+// NewCaddyService 仅测试便捷构造（生产装配零消费）：admin 与指标同址；
+// 生产装配使用 NewCaddyServiceWithMetricsURL 显式传配置值。
 func NewCaddyService(adminURL string) *CaddyService {
 	return NewCaddyServiceWithMetricsURL(adminURL, strings.TrimRight(adminURL, "/")+"/metrics")
 }
@@ -614,8 +614,10 @@ func (s *CaddyService) ApplyLastKnownGood() error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("apply last-known-good config failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
-	// 启动兜底同样是一次真实 /load：registry 已重建，缓存口径必须失效。
+	// 启动兜底同样是一次真实 /load：registry 已重建，缓存口径必须失效
+	// （与 apply 成功分支同口径——/metrics 抓取缓存与上游健康聚合一并失效）。
 	InvalidateOverviewMetricsCache()
+	s.invalidateUpstreamHealthCache()
 	return nil
 }
 
@@ -860,6 +862,10 @@ const caddyErrorBodyMaxBytes = 1024
 // caddyAdminConfigMaxBytes admin GET /config/ 响应体解码上限（32MB 家族口径：
 // 与 getRunningConfigBytes/看门狗同源，防止异常对端无界分配）。
 const caddyAdminConfigMaxBytes = 32 << 20
+
+// caddyMetricsMaxBytes /metrics 抓取响应体解码上限（limit+1 探测读取的
+// 窗口值单源；超限按读取失败处理，防指标基数膨胀时裸 ReadAll 的无界分配）。
+const caddyMetricsMaxBytes = 16 << 20
 
 // errCaddyAdminConfigTooLarge 标记 admin GET /config/ 超过比对上限
 // 调用方据此把「超限」与瞬时读失败区分开留痕（二者都按 fail-open 照常 /load）。
@@ -1473,8 +1479,8 @@ func (s *CaddyService) getUpstreamHealthFromMetrics(ctx context.Context) map[str
 	// 与 handlers/metrics.go fetchCaddyMetrics 同型——
 	// limit+1 探测读取，超 16MB 按读取失败处理（返回空健康表），防指标基数
 	// 膨胀时裸 ReadAll 的无界内存分配。
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
-	if err != nil || len(body) > 16<<20 {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, caddyMetricsMaxBytes+1))
+	if err != nil || len(body) > caddyMetricsMaxBytes {
 		return result
 	}
 
@@ -1915,11 +1921,11 @@ func trustedProxyServerFields(store caddyConfigStore) (map[string]interface{}, s
 	return fields, degraded
 }
 
-// TrustedProxyMinPrefixBits 返回受信代理允许的最小前缀长度（IPv4=/8，
+// trustedProxyMinPrefixBits 返回受信代理允许的最小前缀长度（IPv4=/8，
 // IPv6=/29）。/29 覆盖 Cloudflare 官方最宽回源段 2a06:98c0::/29；
 // 过宽网段会让伪造的头在任意来源被采信。写侧（内联 ranges 与
 // 引用名单条目）与渲染侧共用本判据。
-func TrustedProxyMinPrefixBits(addr netip.Addr) int {
+func trustedProxyMinPrefixBits(addr netip.Addr) int {
 	if addr.Is6() {
 		return 29
 	}
@@ -1966,7 +1972,7 @@ func TrustedProxyPrefixAllSpace(prefix netip.Prefix) bool {
 // 允许值：4in6 映射形态按等价 v4 判宽（最小 /8 折合 mapped /104）。
 func TrustedProxyPrefixBelowMinBits(prefix netip.Prefix) bool {
 	canonical := TrustedProxyPrefixCanonical(prefix)
-	return canonical.Bits() < TrustedProxyMinPrefixBits(canonical.Addr())
+	return canonical.Bits() < trustedProxyMinPrefixBits(canonical.Addr())
 }
 
 // TrustedProxyPrefixTooWide 是上述两条判据的合取（过宽=全空间或低于最小
@@ -2862,8 +2868,11 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 				if len(blockedDomains) > 0 {
 					filtered := make([]string, 0, len(domainHosts))
 					for _, host := range domainHosts {
-						if _, isBlocked := blockedDomains[normalizeHostForMatcher(host)]; !isBlocked {
-							filtered = append(filtered, normalizeHostForMatcher(host))
+						// 归一结果单次取值复用：查表与保留用的必须是同一份
+						// 归一形态，同一域名不得重复规范化两次。
+						normalized := normalizeHostForMatcher(host)
+						if _, isBlocked := blockedDomains[normalized]; !isBlocked {
+							filtered = append(filtered, normalized)
 						}
 					}
 					if len(filtered) == 0 {

@@ -1257,6 +1257,10 @@ func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatR
 		return nil, nil, 0, err
 	}
 	total := 0
+	// GROUP BY 含 client_ip：保留地址排除必须在聚合前逐行进行（固化期语义），
+	// 同一 IP 会随多维度组合重复成行——保留判定按 IP 记忆化，同一 IP 只解析
+	// 一次（IP 解析/网段归一在百万行事件表上不是零成本）。
+	reservedMemo := map[string]bool{}
 	for rows.Next() {
 		var ip, ruleName, ruleTriggered, ruleMsg, action, ruleCaddyID string
 		var count int
@@ -1264,7 +1268,12 @@ func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatR
 			rows.Close()
 			return nil, nil, 0, err
 		}
-		if isMissingOrReservedIP(ip) {
+		skip, seen := reservedMemo[ip]
+		if !seen {
+			skip = isMissingOrReservedIP(ip)
+			reservedMemo[ip] = skip
+		}
+		if skip {
 			continue
 		}
 		if !services.SecurityEventCountsAsAttack(action, ruleTriggered) {

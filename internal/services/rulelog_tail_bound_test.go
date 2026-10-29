@@ -19,9 +19,7 @@ import (
 func writeRuleLogFile(t *testing.T, ruleID string, data []byte) string {
 	t.Helper()
 	dir := t.TempDir()
-	origDir := ruleLogDir
-	ruleLogDir = dir
-	t.Cleanup(func() { ruleLogDir = origDir })
+	t.Cleanup(SetRuleLogDirForTest(dir))
 	path := filepath.Join(dir, RuleLogFileComponent(ruleID)+".log")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write rule log %s: %v", path, err)
@@ -31,7 +29,7 @@ func writeRuleLogFile(t *testing.T, ruleID string, data []byte) string {
 
 func TestReadRuleLogTail_noNewlineFileBounded(t *testing.T) {
 	// 8MB 无换行：旧实现全量回扫（buf 达 8MB），新实现须停在 maxBackwardScan。
-	size := 8 << 20
+	size := maxRead
 	writeRuleLogFile(t, "probe", bytes.Repeat([]byte{0x41}, size))
 
 	content, offset, err := ReadRuleLogTail("probe", 100)
@@ -80,9 +78,7 @@ func TestReadRuleLogTail_multilineTailSemanticsUnchanged(t *testing.T) {
 // stem 后 '-<ts>' 段首字符必须为数字）。
 func TestRemoveRuleLogFiles_siblingRuleRotationsUntouched(t *testing.T) {
 	dir := t.TempDir()
-	origDir := ruleLogDir
-	ruleLogDir = dir
-	t.Cleanup(func() { ruleLogDir = origDir })
+	t.Cleanup(SetRuleLogDirForTest(dir))
 
 	for _, name := range []string{
 		"lb_abc.log", "lb_abc-extra.log", "lb_abc-1.log",
@@ -95,7 +91,9 @@ func TestRemoveRuleLogFiles_siblingRuleRotationsUntouched(t *testing.T) {
 		}
 	}
 
-	RemoveRuleLogFiles("lb_abc")
+	if err := RemoveRuleLogFiles("lb_abc"); err != nil {
+		t.Fatalf("RemoveRuleLogFiles: %v", err)
+	}
 
 	if _, err := os.Stat(filepath.Join(dir, "lb_abc.log")); !os.IsNotExist(err) {
 		t.Fatal("lb_abc.log 应已删除")
@@ -215,7 +213,6 @@ func TestReadRuleLogTail_windowEquivalenceShapes(t *testing.T) {
 // 一个窗口（未满窗残段仍扣留，等待写侧补全换行）；有换行文件交付完整行且
 // next 指向已消费末字节的既有语义不变。
 func TestReadRuleLogFrom_newlineFreeAdvancesWindow(t *testing.T) {
-	const maxRead = 8 << 20
 	// 3 个满窗 + 小于一窗的残段，整文件无换行（单条记录跨越读取窗口）。
 	size := int64(maxRead)*3 + 777
 	writeRuleLogFile(t, "advance", bytes.Repeat([]byte{0x41}, int(size)))
@@ -269,7 +266,7 @@ func TestReadRuleLogFrom_newlineFileDeliversCompleteLines(t *testing.T) {
 // （用户反复打开日志弹框不再每读一行 warn），恢复（读到未截断 tail）补一条
 // info。状态机复用 logStateTransition（与排程读失败/日志轮转同口径）。
 func TestReadRuleLogTail_capWarnThrottledPerRule(t *testing.T) {
-	size := 8 << 20
+	size := maxRead
 	writeRuleLogFile(t, "capwarn", bytes.Repeat([]byte{0x41}, size))
 	isolateMetricsState(t)
 	buf := captureLogf(t)
@@ -295,5 +292,23 @@ func TestReadRuleLogTail_capWarnThrottledPerRule(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "resumed below the backward scan cap") {
 		t.Fatalf("recovery info missing\n%s", buf.String())
+	}
+}
+
+// 轮转识别第一形态：size < offset（新文件还没长过旧偏移）必须从 0 全量重读，
+// 不得把新文件当旧文件从中段续读。
+func TestReadRuleLogFrom_rewindsWhenFileShrank(t *testing.T) {
+	content := "line-1\nline-2\n"
+	writeRuleLogFile(t, "shrank", []byte(content))
+
+	lines, next, err := ReadRuleLogFrom("shrank", 4096)
+	if err != nil {
+		t.Fatalf("read from: %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "line-1" || lines[1] != "line-2" {
+		t.Fatalf("lines=%v, want 完整两行（size<offset 必须从 0 全量重读）", lines)
+	}
+	if next != int64(len(content)) {
+		t.Fatalf("next=%d, want %d（重读后 offset 指向已消费末字节）", next, len(content))
 	}
 }

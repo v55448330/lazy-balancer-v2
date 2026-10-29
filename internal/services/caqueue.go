@@ -1712,9 +1712,9 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 	var p models.CAProvider
 	explicitID := id
 	if id == 0 {
-		// Use system default.
+		// Use system default.（默认提供商读取唯一入口=db.GetDefaultCAProvider）
 		var err error
-		id, err = GetDefaultCAProvider()
+		id, err = db.GetDefaultCAProvider()
 		if err != nil {
 			Logf("error", "CA queue: failed to load default CA provider: %v", err)
 			id = 0

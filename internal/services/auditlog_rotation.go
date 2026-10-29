@@ -744,11 +744,17 @@ func getAuditLogSizeBytesContext(ctx context.Context) int64 {
 			}
 			return 0, err // 失败不缓存：回退默认值当轮生效，下一 tick 重试
 		}
-		if lvl := logStateTransition("audit-log-size-refresh", false); lvl != "" {
-			Logf(lvl, "读取审计日志轮转阈值已恢复")
-		}
 		if sizeMB <= 0 {
+			// 库值 <=0（带外改库/半迁移形态）与读失败同口径 fail-visible：
+			// 回退默认当轮生效，但必须含库值留痕——静默回落让「面板配置形同
+			// 虚设」零信号。状态转换去重（首报 warn/恢复 info），缓存 TTL 到期
+			// 才走到这里，稳态不刷屏。
+			if lvl := logStateTransition("audit-log-size-refresh", true); lvl != "" {
+				Logf(lvl, "审计日志轮转阈值库值 %d 不可用（≤0），回退默认 %dMB（本轮生效）", sizeMB, db.DefaultAuditLogSizeMB)
+			}
 			sizeMB = db.DefaultAuditLogSizeMB
+		} else if lvl := logStateTransition("audit-log-size-refresh", false); lvl != "" {
+			Logf(lvl, "读取审计日志轮转阈值已恢复")
 		}
 		return int64(sizeMB) * 1024 * 1024, nil
 	}, defaultBytes)

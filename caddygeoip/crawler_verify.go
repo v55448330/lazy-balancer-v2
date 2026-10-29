@@ -287,12 +287,65 @@ func releaseCrawlerSlot() {
 // 派生路径，由 GeoIPHandler.Provision 应用）。
 const defaultCrawlerIPListFile = "/app/data/crawler-ip-lists.json"
 
+// keyedWarnThrottle 按「键→上次上报时刻」节流告警的记录器：同键在 interval
+// 内只放行一次（interval<=0 不节流，测试用），clearPrefix 移除前缀匹配的
+// 记录——恢复成功后调用，再次故障即时上报。包内 geoip 数据库族与 crawler
+// 快照族两套告警共用（此前各自手写一份同形 map+mutex；auditwriter 的
+// auditLogThrottle 因「首报即记 + 每窗一条 + suppressed 计数」语义不同，
+// 保持独立）。
+type keyedWarnThrottle struct {
+	interval time.Duration
+	mu       sync.Mutex
+	seen     map[string]time.Time
+}
+
+func newKeyedWarnThrottle(interval time.Duration) *keyedWarnThrottle {
+	return &keyedWarnThrottle{interval: interval, seen: make(map[string]time.Time)}
+}
+
+// allow 键上次上报距今不足 interval 则返回 false（本次节流）；否则记录并
+// 放行。interval<=0 不节流、不记录。
+func (t *keyedWarnThrottle) allow(key string) bool {
+	if t.interval <= 0 {
+		return true
+	}
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if last, ok := t.seen[key]; ok && now.Sub(last) < t.interval {
+		return false
+	}
+	t.seen[key] = now
+	return true
+}
+
+// clearPrefix 移除以 prefix 开头的键。
+func (t *keyedWarnThrottle) clearPrefix(prefix string) {
+	t.mu.Lock()
+	for key := range t.seen {
+		if strings.HasPrefix(key, prefix) {
+			delete(t.seen, key)
+		}
+	}
+	t.mu.Unlock()
+}
+
+// reset 清空全部记录（测试隔离用）。
+func (t *keyedWarnThrottle) reset() {
+	t.mu.Lock()
+	t.seen = make(map[string]time.Time)
+	t.mu.Unlock()
+}
+
+// crawlerIPListFileMu 保护 crawlerIPListFile：Provision（配置重载）写、
+// 判定热路径经 crawlerIPListFilePath 读，重载窗口内可并发。
 var (
-	// crawlerIPListFileMu 保护 crawlerIPListFile：Provision（配置重载）写、
-	// 判定热路径经 crawlerIPListFilePath 读，重载窗口内可并发。
 	crawlerIPListFileMu sync.Mutex
 	crawlerIPListFile   = defaultCrawlerIPListFile
 )
+
+// crawlerPathDriftThrottle 路径漂移告警的节流记录（复用 keyedWarnThrottle）。
+var crawlerPathDriftThrottle = newKeyedWarnThrottle(time.Minute)
 
 // crawlerIPListFilePath 返回当前快照交换文件路径。
 func crawlerIPListFilePath() string {
@@ -305,20 +358,32 @@ func crawlerIPListFilePath() string {
 // 路径变化时重置快照缓存——否则旧路径的成功快照在其 TTL（≤10min）内继续
 // 服役，把上一部署形态的名单带进新形态。fail-closed 语义与失败重试间隔
 // （crawlerIPListRetryInterval，默认 10s）不变。
+//
+// 包级单值是 last-writer-wins：渲染侧当前保证全部 GeoIP 规则同值（路径随
+// data_dir 派生，buildGeoipHandler 仅非默认时发射），无实害；若未来按策略
+// 配置不同 crawler_ip_list_file，最后 Provision 的 handler 赢，旧 handler 的
+// 在途判定被切到新名单。该漂移必须可观测：非默认 → 另一值的切换记一次节流
+// WARN（默认值 → 配置值的首次落定是正常启动形态，不发告警）。
 func setCrawlerIPListFilePath(path string) {
 	if path == "" {
 		return
 	}
 	crawlerIPListFileMu.Lock()
-	changed := crawlerIPListFile != path
+	prev := crawlerIPListFile
+	changed := prev != path
 	if changed {
 		crawlerIPListFile = path
 	}
 	crawlerIPListFileMu.Unlock()
-	if changed {
-		crawlerFileCacheMu.Lock()
-		crawlerFileCacheSnap = nil
-		crawlerFileCacheMu.Unlock()
+	if !changed {
+		return
+	}
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = nil
+	crawlerFileCacheMu.Unlock()
+	if prev != defaultCrawlerIPListFile && crawlerPathDriftThrottle.allow("path-drift") {
+		caddy.Log().Named("geoip2region.crawler").Sugar().Warnf(
+			"crawler ip list file path switched from %q to %q; in-flight lookups now read the new list (single shared path per process)", prev, path)
 	}
 }
 
@@ -368,41 +433,22 @@ var crawlerSnapshotLogf = func(format string, args ...any) {
 // crawlerIPListRetryInterval（10s）重读，持久异常形态（超限文件、磁盘满、
 // 半截快照）不节流时约 8.6k 行/天，会稀释真实告警。原因变化立即上报
 // （状态迁移必须可见）；成功快照落定后清除记录——再次故障立即可见。
-var crawlerSnapshotLogInterval = time.Minute
+var crawlerSnapshotThrottle = newKeyedWarnThrottle(time.Minute)
 
-var (
-	crawlerSnapshotLogMu   sync.Mutex
-	crawlerSnapshotLogLast = map[string]time.Time{} // "path|reason" → 上次上报时刻
-	// crawlerSnapshotLogCallsForTest 记录实际发射的告警条数（节流后）。
-	crawlerSnapshotLogCallsForTest atomic.Int64
-)
+// crawlerSnapshotLogCallsForTest 记录实际发射的告警条数（节流后）。
+var crawlerSnapshotLogCallsForTest atomic.Int64
 
 // crawlerSnapshotLogfThrottled 按「路径+原因」节流告警。
 func crawlerSnapshotLogfThrottled(path, reason, format string, args ...any) {
-	if crawlerSnapshotLogInterval > 0 {
-		key := path + "|" + reason
-		now := time.Now()
-		crawlerSnapshotLogMu.Lock()
-		if last, ok := crawlerSnapshotLogLast[key]; ok && now.Sub(last) < crawlerSnapshotLogInterval {
-			crawlerSnapshotLogMu.Unlock()
-			return
-		}
-		crawlerSnapshotLogLast[key] = now
-		crawlerSnapshotLogMu.Unlock()
+	if !crawlerSnapshotThrottle.allow(path + "|" + reason) {
+		return
 	}
 	crawlerSnapshotLogf(format, args...)
 }
 
 // clearCrawlerSnapshotLogs 清除该路径的节流记录（成功快照落定后调用）。
 func clearCrawlerSnapshotLogs(path string) {
-	prefix := path + "|"
-	crawlerSnapshotLogMu.Lock()
-	for key := range crawlerSnapshotLogLast {
-		if strings.HasPrefix(key, prefix) {
-			delete(crawlerSnapshotLogLast, key)
-		}
-	}
-	crawlerSnapshotLogMu.Unlock()
+	crawlerSnapshotThrottle.clearPrefix(path + "|")
 }
 
 // crawlerIPListRetryInterval 是失败/坏快照的重试间隔：Caddy 可能先于根服务

@@ -49,6 +49,17 @@ func TestMain(m *testing.M) {
 		log.Print("全局态泄漏：db.GetDB() 与 db.DB 分叉（用例 teardown 缺少 db.SetDB 恢复）")
 		code = 1
 	}
+	// 规则日志全局缝泄漏：ruleLogDir 未复原会让后续用例读写错目录；删除前
+	// 注入缝未复位会让下一用例莫名提前退出或删错路径。用例必须经
+	// SetRuleLogDirForTest（自带恢复）并在注入缝上 t.Cleanup 复位。
+	if code == 0 && ruleLogDir != defaultRuleLogDir {
+		log.Printf("全局态泄漏：ruleLogDir=%q 未复原为 %q（用例应经 SetRuleLogDirForTest 并恢复）", ruleLogDir, defaultRuleLogDir)
+		code = 1
+	}
+	if code == 0 && ruleLogOrphanPurgeBeforeRemoveForTest != nil {
+		log.Print("全局态泄漏：ruleLogOrphanPurgeBeforeRemoveForTest 未复位（注入后必须置回 nil）")
+		code = 1
+	}
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }

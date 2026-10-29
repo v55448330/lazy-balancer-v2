@@ -17,7 +17,7 @@ func NormalizeCIDRs(values []string) ([]string, error) {
 		value = strings.TrimSpace(value)
 		prefix, err := wafiplist.ParseIPEntry(value)
 		if err != nil {
-			return nil, fmt.Errorf("%q 不是有效 CIDR", value)
+			return nil, fmt.Errorf("%q 不是有效 CIDR: %w", value, err)
 		}
 		canonical := prefix.String()
 		if _, dup := seen[canonical]; dup {

@@ -17,9 +17,13 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// ruleLogDir 规则访问日志目录（写入端写死 /app/logs/rules）。包级 var 仅为
+// defaultRuleLogDir 规则访问日志目录默认值（写入端写死 /app/logs/rules）。
+// 单源供 ruleLogDir 初值与 TestMain 终态复位断言引用。
+const defaultRuleLogDir = "/app/logs/rules"
+
+// ruleLogDir 规则访问日志目录。包级 var 仅为
 // 测试注入缝（handlers.wafAuditLogFile 同模式）；生产路径不得改写。
-var ruleLogDir = "/app/logs/rules"
+var ruleLogDir = defaultRuleLogDir
 
 // SetRuleLogDirForTest 覆盖规则日志目录并返回恢复函数（handlers 侧端点测试
 // 需要真实文件系统形态：目录/权限故障必须映射 500 而不是空日志）。
@@ -147,7 +151,6 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64, e
 	// Cap each poll so a huge or maliciously reset offset cannot force a
 	// full-log allocation; the caller continues from the returned offset.
 	// 8MB covers ~1.6-4K header-rich lines per 5s poll.
-	const maxRead = 8 << 20
 	data, readErr := io.ReadAll(io.LimitReader(f, maxRead+1))
 	if readErr != nil {
 		return nil, offset, fmt.Errorf("read rule log %s: %w", path, readErr)
@@ -194,6 +197,10 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64, e
 // maxBackwardScan:向前扫描字节上限——无换行的损坏/二进制文件
 // 防止 O(n²) 全量拷贝(100MB 无换行 ≈ 数十 GB 级复制)
 const maxBackwardScan = 4 << 20 // 4MB
+
+// maxRead ReadRuleLogFrom 单次轮询的读取窗口上限（测试引用同一常量，
+// 禁止在用例内重写字面量）。8MB 约合每 5s 轮询 1.6-4K 条头部丰富的日志行。
+const maxRead = 8 << 20
 
 func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64, err error) {
 	path := RuleLogPath(ruleID)
@@ -425,7 +432,6 @@ func ruleLogLiveIDsForOwnership() (map[string]bool, error) {
 // 残留，静默吞掉会让残留永久不可见）。
 func removeRuleLogRotations(base string) error {
 	dir := filepath.Dir(base)
-	component := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -440,9 +446,20 @@ func removeRuleLogRotations(base string) error {
 		}
 		return errors.Join(errs...)
 	}
+	return removeRuleLogRotationsInEntries(dir, strings.TrimSuffix(filepath.Base(base), filepath.Ext(base)), entries)
+}
+
+// removeRuleLogRotationsInEntries 在调用方提供的目录清单上执行删除面（批量
+// 入口一次枚举、逐规则复用——此前逐规则各自 ReadDir 同一目录，删除成本
+// O(规则数×目录条目数)；枚举与删除之间目录变化的 TOCTOU 由 os.Remove 吞
+// ENOENT 兜底，扫描后新产生的轮转副本留给下一轮周期清理）。清单必须来自
+// dir 的当次 ReadDir；路径按 dir 现值拼接（把 ruleLogDir 改指故障路径的
+// 钉测依赖此语义）。
+func removeRuleLogRotationsInEntries(dir, component string, entries []os.DirEntry) error {
 	var errs []error
 	var liveIDs map[string]bool
 	liveLoaded := false
+	unverifiedRetained := 0
 	ownedByLiveRule := func(copyStem string) bool {
 		// 归属反解只在「整段主体也在 caddy_id 字母表内」时有意义：生产轮转
 		// 副本名含毫秒点（-2026-10-23T18-38-57.122-size），不可能等于规则 ID，
@@ -459,7 +476,8 @@ func removeRuleLogRotations(base string) error {
 			}
 		}
 		if liveIDs == nil {
-			return true // 无法核对：保留（见 helper 注释的取舍）
+			unverifiedRetained++ // 无法核对：保留（见 helper 注释的取舍）
+			return true
 		}
 		return liveIDs[decodeFileComponent(copyStem)]
 	}
@@ -493,6 +511,12 @@ func removeRuleLogRotations(base string) error {
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 			errs = append(errs, fmt.Errorf("删除规则日志 %s: %w", path, rmErr))
 		}
+	}
+	if unverifiedRetained > 0 {
+		// 归属无法核对的候选副本被保留=本轮清理未完成，必须进错误面——
+		// 此前只留 warn 日志，事件型删除入口（删规则/导入差集/集群差集）
+		// 按成功收尾，审计口径与磁盘残留不一致。
+		errs = append(errs, fmt.Errorf("存活规则清单读取失败，%d 个轮转副本归属无法核对已保留（清理未完成）", unverifiedRetained))
 	}
 	return errors.Join(errs...)
 }
@@ -646,7 +670,11 @@ func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 			Logf("warn", "规则日志孤儿清理被取消（本轮已清理 %d 个，剩余 %d 个待下轮）: %v", i, len(orphans)-i, err)
 			return result
 		}
-		if err := RemoveRuleLogFiles(ruleID); err != nil {
+		// 目录清单复用扫描期快照（一次枚举，逐规则不再重扫）；删除主体仍是
+		// 规则自身文件名主体（RuleLogFileComponent，与单条 API 同口径——扫描
+		// 期的归属主体只是归因，不能当删除面）；路径按 dir 现值拼接，快照后
+		// 新增/消失的条目分别留给下轮/由 ENOENT 吞掉。
+		if err := removeRuleLogRotationsInEntries(ruleLogDir, RuleLogFileComponent(ruleID), entries); err != nil {
 			Logf("error", "规则日志孤儿清理失败（%s）: %v", ruleID, err)
 			result.RemoveFailed++
 			continue
@@ -661,6 +689,12 @@ func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 // <component>.log、移位副本 <component>.log.<n>（旧版本/外来 logrotate 残留）
 // 与 timberjack 时间戳副本 <component>-<ts>-<reason>[_N].log[.gz|.zst]；
 // 压缩后缀先剥。ok=false 表示不属于任何规则的日志族（外来文件不得被清理）。
+//
+// 有意不认领：<副本>.log.gz.tmp / .log.zst.tmp（timberjack 压缩进行中的临时
+// 文件，压缩完成即原子改名；进程崩溃则遗留）。压缩后缀剥离只认结尾 .gz/.zst，
+// CutSuffix(".log") 对该名失败 → ok=false 一律跳过：认领删除会与压缩器的
+// rename 竞态，而崩溃遗留的体积上界=一份未压缩副本（≤ roll_size_mb），
+// 不参与统计与任何删除族，属可接受的瞬态残留。
 func ruleLogComponentOf(name string) (string, bool) {
 	core := name
 	for _, suffix := range []string{".gz", ".zst"} {

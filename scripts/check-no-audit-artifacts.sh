@@ -154,7 +154,24 @@ if [[ -n "$tracked_cache" ]]; then
 fi
 
 # —— 通道 1：路径 ——
-bad_paths="$(printf '%s\n' "$controlled" | grep -v -E "$skip_re" | grep -E "$path_regex" || true)"
+# 与通道 0 同口径 fail-closed：skip_re / path_regex（由上方十四条规则拼装）
+# 损坏时 grep 以 rc>1 报错，`|| true` 会把它吞成空结果——审计产物路径通道
+# 静默放行、永远假绿。rc 只有 0（有命中）/1（无命中）是正常结果，>1 一律
+# 报错退出并点名出错的正则。
+path_filter_rc=0
+path_candidates="$(printf '%s\n' "$controlled" | grep -v -E "$skip_re")" || path_filter_rc=$?
+if [[ $path_filter_rc -gt 1 ]]; then
+  echo "ERROR: 路径通道的 skip_re 无法执行（grep rc=${path_filter_rc}）：${skip_re}" >&2
+  echo "门禁 fail-closed——正则错误不等于无命中，请改成通用 ERE。" >&2
+  exit 1
+fi
+path_filter_rc=0
+bad_paths="$(printf '%s\n' "$path_candidates" | grep -E "$path_regex")" || path_filter_rc=$?
+if [[ $path_filter_rc -gt 1 ]]; then
+  echo "ERROR: 路径通道的 path_regex 无法执行（grep rc=${path_filter_rc}）：${path_regex}" >&2
+  echo "门禁 fail-closed——正则错误不等于无命中，请改成通用 ERE。" >&2
+  exit 1
+fi
 if [[ -n "$bad_paths" ]]; then
   echo "ERROR: 审计记录/轮次测试不得提交到公网仓库：" >&2
   echo "$bad_paths" >&2

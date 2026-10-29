@@ -10,6 +10,7 @@ package geoipnames
 import (
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 // CrawlerEngine 搜索引擎爬虫定义。UA/PTR/IP 段来源=各厂商官方文档
@@ -187,6 +188,7 @@ func CrawlerSpoofEvidence(engineID, userAgent string) bool {
 //
 // 需要匹配请优先用包内 MatchCrawlerEngine / crawlerUAPrefilter。
 func CrawlerEngines() []CrawlerEngine {
+	crawlerEnginesDeepCopyCallsForTest.Add(1)
 	out := make([]CrawlerEngine, len(crawlerEngines))
 	for i := range crawlerEngines {
 		out[i] = crawlerEngines[i]
@@ -204,6 +206,31 @@ func CrawlerEngines() []CrawlerEngine {
 		}
 	}
 	return out
+}
+
+// testseam: 深拷贝路径调用计数（生产路径自增、仅供测试观测）：渲染热路径
+// 改用 CrawlerEngineIDs 后，任何渲染调用方回退到深拷贝都会在「渲染期零
+// 重编译」守卫上显形。
+var crawlerEnginesDeepCopyCallsForTest atomic.Int64
+
+// CrawlerEngineIDs 返回引擎注册表的只读 ID 视图（注册表顺序）：渲染侧仅需
+// ID 集合时用——与 CrawlerEngines 不同，不深拷贝结构体、不重编译任何正则
+// （CrawlerEngines 每次重建 15 个引擎的约 28 个 MustCompile，放进逐策略
+// 渲染循环即按策略数放大）。顺序与注册表一致：索引 i 与
+// encodeCrawlerExemptRuleID 的引擎序号语义不变。需要变异副本（正则/段列表）
+// 的调用方仍用 CrawlerEngines。
+func CrawlerEngineIDs() []string {
+	out := make([]string, len(crawlerEngines))
+	for i := range crawlerEngines {
+		out[i] = crawlerEngines[i].ID
+	}
+	return out
+}
+
+// CrawlerEnginesDeepCopyCallsForTest 返回深拷贝路径的累计调用次数（跨包
+// 测试观测消费；渲染期零深拷贝守卫的正/反例锚点）。
+func CrawlerEnginesDeepCopyCallsForTest() int64 {
+	return crawlerEnginesDeepCopyCallsForTest.Load()
 }
 
 // crawlerUAPrefilter 是全部引擎 UA 正则的合并交替式（init 时由注册表**单源**

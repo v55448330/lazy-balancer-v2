@@ -1,6 +1,9 @@
 package dnspod
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func seedDomainIDCache(t *testing.T, loginToken string, entries map[string]string) {
 	t.Helper()
@@ -11,17 +14,34 @@ func seedDomainIDCache(t *testing.T, loginToken string, entries map[string]strin
 	}
 	domainIDCacheMu.Lock()
 	var previous map[string]string
+	var previousNeg map[string]time.Time
+	var previousOrder []string
 	if domainIDCache != nil {
 		previous = make(map[string]string, len(domainIDCache))
 		for key, id := range domainIDCache {
 			previous[key] = id
 		}
 	}
+	if domainIDNegativeCache != nil {
+		previousNeg = make(map[string]time.Time, len(domainIDNegativeCache))
+		for key, at := range domainIDNegativeCache {
+			previousNeg[key] = at
+		}
+	}
+	previousOrder = append([]string(nil), domainIDCacheOrder...)
 	domainIDCache = scoped
+	domainIDNegativeCache = map[string]time.Time{}
+	// 重建 LRU 使用序（种子条目按 map 遍历序入队——夹具内顺序无语义）。
+	domainIDCacheOrder = domainIDCacheOrder[:0]
+	for key := range scoped {
+		domainIDCacheOrder = append(domainIDCacheOrder, key)
+	}
 	domainIDCacheMu.Unlock()
 	t.Cleanup(func() {
 		domainIDCacheMu.Lock()
 		domainIDCache = previous
+		domainIDNegativeCache = previousNeg
+		domainIDCacheOrder = previousOrder
 		domainIDCacheMu.Unlock()
 	})
 }
@@ -29,11 +49,16 @@ func seedDomainIDCache(t *testing.T, loginToken string, entries map[string]strin
 func TestSeedDomainIDCache_restoresPreviousEntries(t *testing.T) {
 	domainIDCacheMu.Lock()
 	original := domainIDCache
+	originalNeg := domainIDNegativeCache
+	originalOrder := domainIDCacheOrder
 	domainIDCache = map[string]string{"existing-zone": "existing-id"}
+	domainIDNegativeCache = map[string]time.Time{}
 	domainIDCacheMu.Unlock()
 	t.Cleanup(func() {
 		domainIDCacheMu.Lock()
 		domainIDCache = original
+		domainIDNegativeCache = originalNeg
+		domainIDCacheOrder = originalOrder
 		domainIDCacheMu.Unlock()
 	})
 

@@ -104,10 +104,22 @@ func TestUpdateCAProvider_validationBoundaries(t *testing.T) {
 			wantErr: ErrCAProviderMaxConcurrentTooHigh,
 		},
 		{
+			name:    "negative max concurrency",
+			seed:    ProviderZeroSSL,
+			req:     models.UpdateCAProviderRequest{MaxConcurrent: new(-1)},
+			wantErr: ErrCAProviderMaxConcurrentTooLow,
+		},
+		{
 			name:    "min interval over 60000",
 			seed:    ProviderZeroSSL,
 			req:     models.UpdateCAProviderRequest{MinIntervalMS: new(60001)},
 			wantErr: ErrCAProviderMinIntervalTooHigh,
+		},
+		{
+			name:    "negative min interval",
+			seed:    ProviderZeroSSL,
+			req:     models.UpdateCAProviderRequest{MinIntervalMS: new(-1)},
+			wantErr: ErrCAProviderMinIntervalTooLow,
 		},
 		{
 			name:    "zerossl credentials must be JSON",

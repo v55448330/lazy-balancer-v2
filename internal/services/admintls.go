@@ -117,7 +117,13 @@ func (c AdminTLSConfig) ResolveCertificate(dataDir string) (tls.Certificate, err
 			return tls.Certificate{}, fmt.Errorf("上传证书模式但未提供证书内容")
 		}
 		return tls.X509KeyPair([]byte(c.Cert), []byte(c.Key))
+	case "selfsigned":
+		return selfSignedCert(dataDir)
 	default:
+		// 白名单外 mode（历史库值/带外改库）按自签名回落：坏值不得让面板
+		// 启动进入崩溃循环（既有裁定），但静默回落会让「配置了 upload 却
+		// 跑成自签名」无信号——每次解析都 warn（启动期一次，不刷屏）。
+		Logf("warn", "admintls: 管理面板 TLS 模式 %q 不在白名单内，按自签名回落", c.Mode)
 		return selfSignedCert(dataDir)
 	}
 }

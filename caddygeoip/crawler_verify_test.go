@@ -702,6 +702,70 @@ func TestCrawlerIPRangeSnapshot_pathChangeRejectsInflightRead(t *testing.T) {
 	}
 }
 
+// 包级单值路径是 last-writer-wins：非默认 → 另一值的切换必须留痕（节流
+// WARN，多 handler 潜在漂移可观测）；默认值 → 配置值的首次落定是正常启动
+// 形态，静默；同值重复 Provision（一次 reload 逐规则调用）不得重置缓存、
+// 不得发告警。
+func TestSetCrawlerIPListFilePath_driftWarnsOnlyOnRealSwitch(t *testing.T) {
+	oldFile := crawlerIPListFile
+	oldInterval := crawlerPathDriftThrottle.interval
+	crawlerPathDriftThrottle.interval = time.Hour // 长窗口：本用例只发生一次真实切换
+	t.Cleanup(func() {
+		crawlerPathDriftThrottle.interval = oldInterval
+		crawlerPathDriftThrottle.reset()
+		setCrawlerIPListFilePath(oldFile)
+		resetCrawlerIPRangeCacheForTest()
+	})
+	setCrawlerIPListFilePath(defaultCrawlerIPListFile)
+	crawlerPathDriftThrottle.reset()
+	resetCrawlerIPRangeCacheForTest()
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = &crawlerIPRangeSnapshot{ok: true}
+	crawlerFileCacheMu.Unlock()
+
+	pathA := filepath.Join(t.TempDir(), "a-crawler.json")
+	pathB := filepath.Join(t.TempDir(), "b-crawler.json")
+
+	// 默认 → 自定义 A：正常启动形态，不发告警；但快照缓存必须重置。
+	setCrawlerIPListFilePath(pathA)
+	crawlerPathDriftThrottle.mu.Lock()
+	driftRecords := len(crawlerPathDriftThrottle.seen)
+	crawlerPathDriftThrottle.mu.Unlock()
+	if driftRecords != 0 {
+		t.Fatalf("默认值首落配置值不得告警，记录 %d 条", driftRecords)
+	}
+	crawlerFileCacheMu.Lock()
+	cleared := crawlerFileCacheSnap == nil
+	crawlerFileCacheMu.Unlock()
+	if !cleared {
+		t.Fatal("路径变化必须重置快照缓存")
+	}
+
+	// 非默认 A → 另一值 B：潜在 last-writer-wins 漂移，必须留痕。
+	setCrawlerIPListFilePath(pathB)
+	crawlerPathDriftThrottle.mu.Lock()
+	_, driftLogged := crawlerPathDriftThrottle.seen["path-drift"]
+	crawlerPathDriftThrottle.mu.Unlock()
+	if !driftLogged {
+		t.Fatal("非默认路径切换必须记录节流告警（last-writer-wins 漂移可观测）")
+	}
+
+	// 同值重复 Provision：不重置缓存、不新增告警记录。
+	crawlerFileCacheMu.Lock()
+	crawlerFileCacheSnap = &crawlerIPRangeSnapshot{ok: true}
+	crawlerFileCacheMu.Unlock()
+	setCrawlerIPListFilePath(pathB)
+	crawlerPathDriftThrottle.mu.Lock()
+	driftRecords = len(crawlerPathDriftThrottle.seen)
+	crawlerPathDriftThrottle.mu.Unlock()
+	crawlerFileCacheMu.Lock()
+	kept := crawlerFileCacheSnap != nil
+	crawlerFileCacheMu.Unlock()
+	if driftRecords != 1 || !kept {
+		t.Fatalf("同值重复 Provision 不得告警/重置缓存：records=%d kept=%v", driftRecords, kept)
+	}
+}
+
 // 渲染侧经 crawler_ip_list_file 配置键下发根服务派生路径——
 // 自定义 data_dir 部署下根服务把运行快照写到 <data_dir>/crawler-ip-lists.json，
 // 插件若不消费配置键会恒读 /app/data/crawler-ip-lists.json（读侧分叉，360 类
@@ -798,9 +862,7 @@ func TestVerifyCrawlerIPRange_snapshotUnavailableIsTransient(t *testing.T) {
 
 // resetCrawlerSnapshotLogThrottleForTest 复位告警节流状态与发射计数。
 func resetCrawlerSnapshotLogThrottleForTest() {
-	crawlerSnapshotLogMu.Lock()
-	crawlerSnapshotLogLast = map[string]time.Time{}
-	crawlerSnapshotLogMu.Unlock()
+	crawlerSnapshotThrottle.reset()
 	crawlerSnapshotLogCallsForTest.Store(0)
 }
 
@@ -809,16 +871,16 @@ func resetCrawlerSnapshotLogThrottleForTest() {
 func TestCrawlerIPRangeSnapshot_rewriteDuringReadFailsClosed(t *testing.T) {
 	oldFile := crawlerIPListFile
 	oldRead := crawlerReadBoundedFile
-	oldInterval := crawlerSnapshotLogInterval
+	oldInterval := crawlerSnapshotThrottle.interval
 	t.Cleanup(func() {
 		crawlerIPListFile = oldFile
 		crawlerReadBoundedFile = oldRead
-		crawlerSnapshotLogInterval = oldInterval
+		crawlerSnapshotThrottle.interval = oldInterval
 		resetCrawlerIPRangeCacheForTest()
 		resetCrawlerSnapshotLogThrottleForTest()
 	})
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
-	crawlerSnapshotLogInterval = 0
+	crawlerSnapshotThrottle.interval = 0
 	resetCrawlerIPRangeCacheForTest()
 	resetCrawlerSnapshotLogThrottleForTest()
 
@@ -842,17 +904,17 @@ func TestCrawlerIPRangeSnapshot_rewriteDuringReadFailsClosed(t *testing.T) {
 func TestCrawlerIPRangeSnapshot_anomalyLogThrottled(t *testing.T) {
 	oldFile := crawlerIPListFile
 	oldRetry := crawlerIPListRetryInterval
-	oldInterval := crawlerSnapshotLogInterval
+	oldInterval := crawlerSnapshotThrottle.interval
 	t.Cleanup(func() {
 		crawlerIPListFile = oldFile
 		crawlerIPListRetryInterval = oldRetry
-		crawlerSnapshotLogInterval = oldInterval
+		crawlerSnapshotThrottle.interval = oldInterval
 		resetCrawlerIPRangeCacheForTest()
 		resetCrawlerSnapshotLogThrottleForTest()
 	})
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
 	crawlerIPListRetryInterval = 0 // 失败快照每轮重读（模拟 10s 重试的放大形态）
-	crawlerSnapshotLogInterval = time.Minute
+	crawlerSnapshotThrottle.interval = time.Minute
 	resetCrawlerIPRangeCacheForTest()
 	resetCrawlerSnapshotLogThrottleForTest()
 
@@ -949,17 +1011,17 @@ func TestCrawlerIPRangeSnapshot_aggregatesSortedDisjoint(t *testing.T) {
 func TestCrawlerIPRangeSnapshot_unavailableReasonsAreLogged(t *testing.T) {
 	oldFile := crawlerIPListFile
 	oldRead := crawlerReadBoundedFile
-	oldInterval := crawlerSnapshotLogInterval
+	oldInterval := crawlerSnapshotThrottle.interval
 	t.Cleanup(func() {
 		crawlerIPListFile = oldFile
 		crawlerReadBoundedFile = oldRead
-		crawlerSnapshotLogInterval = oldInterval
+		crawlerSnapshotThrottle.interval = oldInterval
 		resetCrawlerIPRangeCacheForTest()
 		resetCrawlerSnapshotLogThrottleForTest()
 	})
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
 	// 非零节流间隔：记录「路径|原因」键，用例据此区分三类不可用原因。
-	crawlerSnapshotLogInterval = time.Hour
+	crawlerSnapshotThrottle.interval = time.Hour
 
 	cases := []struct {
 		name   string
@@ -1017,11 +1079,11 @@ func TestCrawlerIPRangeSnapshot_unavailableReasonsAreLogged(t *testing.T) {
 			if got := crawlerSnapshotLogCallsForTest.Load(); got != 1 {
 				t.Fatalf("%s：不可用原因必须留痕，告警 %d 条, want 1", tc.name, got)
 			}
-			crawlerSnapshotLogMu.Lock()
-			_, logged := crawlerSnapshotLogLast[crawlerIPListFile+"|"+tc.reason]
-			crawlerSnapshotLogMu.Unlock()
+			crawlerSnapshotThrottle.mu.Lock()
+			_, logged := crawlerSnapshotThrottle.seen[crawlerIPListFile+"|"+tc.reason]
+			crawlerSnapshotThrottle.mu.Unlock()
 			if !logged {
-				t.Fatalf("%s：告警原因须为 %q，实际记录 %v", tc.name, tc.reason, crawlerSnapshotLogLast)
+				t.Fatalf("%s：告警原因须为 %q，实际未记录", tc.name, tc.reason)
 			}
 		})
 	}

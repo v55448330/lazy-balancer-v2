@@ -303,6 +303,21 @@ func load(path string, warnf configWarnf) *Config {
 		}
 	}
 
+	// log_file 与 static_dir 同口径：相对值按进程 cwd 解析——systemd/容器
+	// 的 cwd 与预期不同时日志静默落到别处，logstats 投影与轮转 writer 读的
+	// 是另一条路径。非空值绝对化 + Clean；父目录建不出来时启动期告警
+	// （fail-visible）——运行期 writer 只会回退 stdout，面板表现为「文件
+	// 日志关闭」而无任何信号。
+	if cfg.LogFile != "" {
+		if abs, err := filepath.Abs(cfg.LogFile); err == nil {
+			cfg.LogFile = abs
+		}
+		cfg.LogFile = filepath.Clean(cfg.LogFile)
+		if err := os.MkdirAll(filepath.Dir(cfg.LogFile), 0o755); err != nil {
+			warnf("config: log_file %q 父目录无法创建（%v）——文件日志将回退 stdout", cfg.LogFile, err)
+		}
+	}
+
 	// JWT secret: env wins; otherwise persist a random one so tokens survive
 	// restarts and the secret is never predictable.
 	if cfg.JWTSecret == "" {

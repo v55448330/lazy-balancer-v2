@@ -3,7 +3,10 @@ package services
 import (
 	"net"
 	"reflect"
+	"strings"
 	"testing"
+
+	"lazy-balancer-v2/wafiplist"
 )
 
 func TestNormalizeCIDRsAcceptsBareIPs(t *testing.T) {
@@ -100,5 +103,25 @@ func TestNormalizeCIDRs_dedupesEquivalentEntries(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("NormalizeCIDRs()=%v, want %v（顺序保持）", got, want)
 		}
+	}
+}
+
+// 底层解析原因必须透传：只回「不是有效 CIDR」让用户无法区分「多了个空格/
+// 掩码越界/IPv6 写成 v4」等形态——400 文案与日志都要带 %w 链上的原始错误。
+func TestNormalizeCIDRs_invalidEntryCarriesUnderlyingReason(t *testing.T) {
+	const entry = "not-an-ip"
+	_, reasonErr := wafiplist.ParseIPEntry(entry)
+	if reasonErr == nil {
+		t.Fatal("前置失效：ParseIPEntry 应拒绝该条目")
+	}
+	_, err := NormalizeCIDRs([]string{entry})
+	if err == nil {
+		t.Fatal("NormalizeCIDRs() error=nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "不是有效 CIDR") {
+		t.Fatalf("err=%q, want 保留「不是有效 CIDR」主文案", err)
+	}
+	if want := reasonErr.Error(); !strings.Contains(err.Error(), want) {
+		t.Fatalf("err=%q, want 底层原因 %q 经 %%w 透传", err, want)
 	}
 }

@@ -38,20 +38,14 @@ func SetAutoBackupExecutor(fn func(ctx context.Context, trigger, operator string
 	autoBackupExecMu.Unlock()
 }
 
-// AutoBackupEnabled 读自动备份业务开关（读错 fail-closed）。
-// 读错必须留痕：引擎先求值 EnabledFn 再求值 NextSlotFn（engine.go），失败即
-// LoopOn=false 短路——nextAutoBackupSlot 里已有的 schedule-read-auto-backup
-// 告警永远不会被求值，静默 fail-closed 让「库故障」与「用户关闭」在任务面
-// 完全同形（零执行、零失败行、零日志）。状态转换口径（首报 warn + 恢复 info）
-// 与同族排程读取单源。
-func AutoBackupEnabled() bool {
-	enabled, known := AutoBackupEnabledState()
-	return known && enabled
-}
-
 // AutoBackupEnabledState 三态读取自动备份开关：known=false 表示不可判定
 // （库不可读/未初始化）。调度对齐只对 known=true 落动作——读失败保持上一次
-// 生效的调度态，等周期性重试收敛；tick 侧 EnabledFn 仍用二态 fail-closed。
+// 生效的调度态，等周期性重试收敛；消费方二态 fail-closed 按 `known && enabled`
+// 求值（读错必须留痕：引擎先求值 EnabledFn 再求值 NextSlotFn（engine.go），
+// 失败即 LoopOn=false 短路——nextAutoBackupSlot 里已有的 schedule-read-auto-backup
+// 告警永远不会被求值，静默 fail-closed 让「库故障」与「用户关闭」在任务面
+// 完全同形（零执行、零失败行、零日志）。状态转换口径（首报 warn + 恢复 info）
+// 与同族排程读取单源）。
 func AutoBackupEnabledState() (enabled, known bool) {
 	if db.DB == nil {
 		return false, false

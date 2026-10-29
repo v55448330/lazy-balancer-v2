@@ -229,6 +229,15 @@ awk -v line="$bad_cache_line" '/^tracked_cache_re=/ { print line; next } { print
 mv "$tmp_root/scripts/guard.tmp" "$tmp_root/scripts/check-no-audit-artifacts.sh"
 assert_bad "invalid cache regex fails closed" "fail-closed"
 
+# 0e-path) 路径通道同样 fail-closed：path_regex（十四条规则拼装的那个正则）
+#     损坏时必须报错退出并点名 fail-closed；`|| true` 吞错实现会在此把通道
+#     吞成空结果给假绿。
+reset_fixture
+awk '/grep -E "\$path_regex"/ { sub(/"\$path_regex"/, "\"$path_regex(\""); print; next } { print }' \
+  "$tmp_root/scripts/check-no-audit-artifacts.sh" >"$tmp_root/scripts/guard.tmp"
+mv "$tmp_root/scripts/guard.tmp" "$tmp_root/scripts/check-no-audit-artifacts.sh"
+assert_bad "invalid path regex fails closed" "fail-closed"
+
 # 0f) 扫描器临时文件必须在 macOS/BSD mktemp 下也真正随机：历史后缀模板会退化为
 #     固定路径，残留文件与并发进程互相阻断。先预置旧字面残留验证不再误伤，再以
 #     8 路并发跑同一夹具；成功退出后本次创建的扫描器/清单临时文件均须清理。

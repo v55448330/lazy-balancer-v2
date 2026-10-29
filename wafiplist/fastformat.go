@@ -2,9 +2,9 @@ package wafiplist
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
-	"io"
 	"log"
 	"net/netip"
 	"os"
@@ -210,7 +210,9 @@ func WriteFastFile(path string, v4, v6 []netip.Prefix) error {
 // ReadFastFile 读取 .fast 二进制文件并展开为内存前缀集。
 // 加载成本 O(n) 纯内存拷贝——无文本解析、无排序（20 万条 ~0.2ms）。
 //
-// 读侧与文本名单（iplistfast.go parseIPListFile）同口径的三道门：
+// 读侧与文本名单（iplistfast.go parseIPListFile）同口径的三道门由
+// readBoundedFrom 单源提供（体积门先于任何分配、定长读、读后复核同一
+// inode），错误按 fastfile 语境包装：
 //  1. 前置体积门（fd.Stat）：超限文件不进入内存；
 //  2. 定长读：容量=stat 尺寸，不按内容放大——stat 与读取之间的窗口内
 //     路径可被 tmp+rename 换成任意大小文件，只按 stat 判限不构成硬上限；
@@ -222,19 +224,15 @@ func ReadFastFile(path string) (*FastFileState, error) {
 		return nil, fmt.Errorf("fastfile open: %w", err)
 	}
 	defer fd.Close()
-	info, err := fd.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("fastfile stat: %w", err)
-	}
-	if info.Size() > maxFastFileBytes {
+	data, info, err := readBoundedFrom(fd, path, maxFastFileBytes)
+	switch {
+	case errors.Is(err, ErrFileSizeLimit):
 		return nil, fmt.Errorf("fastfile: size %d exceeds cap %d", info.Size(), maxFastFileBytes)
-	}
-	data := make([]byte, info.Size())
-	if _, err := io.ReadFull(fd, data); err != nil {
-		return nil, fmt.Errorf("fastfile read: %w", err)
-	}
-	if after, statErr := fd.Stat(); ipListGenerationChanged(info, after, statErr) {
+	case errors.Is(err, ErrFileRewriteDuringRead):
 		return nil, fmt.Errorf("fastfile: %q rewritten during read", path)
+	case err != nil:
+		// stat 失败与短读在单源实现内不可区分，统一按读取失败上抛。
+		return nil, fmt.Errorf("fastfile read: %w", err)
 	}
 	if len(data) < fastFileHeaderSize {
 		return nil, fmt.Errorf("fastfile: too short (%d bytes)", len(data))

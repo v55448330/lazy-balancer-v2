@@ -122,10 +122,12 @@ var beforeLiveRuleIDsQuery = func() {}
 
 // liveRuleIDs 读取主库存活规则 caddy_id 集合。
 func liveRuleIDs(ctx context.Context) (map[string]bool, error) {
-	// nil 库守卫（两个消费方共用：孤儿规则日志兜底、孤儿指标清理）——
-	// 关停时 db.Close() 把 db.DB 置 nil，仍在跑的本轮不得 nil 解引用 panic。
+	// 后台任务体统一读 db.GetDB() 注册句柄（与 orphanMetricsRuleIDs 的每批
+	// 重读同型）：db.SetDB(nil)（关停 db.Close 链/句柄切换）后仍在跑的本轮
+	// 不得继续在已注销句柄上读删——nil 解引用 panic 与「已注销句柄照常工作」
+	// 都要挡住。
 	beforeLiveRuleIDsQuery()
-	database := db.DB
+	database := db.GetDB()
 	if database == nil {
 		return nil, errors.New("数据库未初始化")
 	}

@@ -226,12 +226,6 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
 }
 
-// sortedInterfaceKeys 按字典序返回 map 的键（多处「同一对象出现在
-// 多个命名容器」的读取路径需要确定性遍历，避免 map 序导致的展示漂移）。
-func sortedInterfaceKeys(values map[string]interface{}) []string {
-	return sortedStringKeys(values)
-}
-
 // sortedStringKeys 按字典序返回任意 map[string]V 的键——留痕/展示/遍历
 // 顺序依赖时使用，map 迭代序会让同一输入产出行序漂移。
 func sortedStringKeys[V any](values map[string]V) []string {
@@ -263,7 +257,7 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string) ma
 	// 遍历 + 命中即跳出外层循环：同一份配置恒得同一结果（确定性=排序首个）。
 	if httpApp, ok := apps["http"].(map[string]interface{}); ok {
 		if servers, ok := httpApp["servers"].(map[string]interface{}); ok {
-			for _, serverName := range sortedInterfaceKeys(servers) {
+			for _, serverName := range sortedStringKeys(servers) {
 				server, _ := servers[serverName].(map[string]interface{})
 				if server == nil {
 					continue
@@ -299,7 +293,7 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string) ma
 	if result["server"] == nil {
 		if layer4App, ok := apps["layer4"].(map[string]interface{}); ok {
 			if servers, ok := layer4App["servers"].(map[string]interface{}); ok {
-				for _, serverName := range sortedInterfaceKeys(servers) {
+				for _, serverName := range sortedStringKeys(servers) {
 					server, _ := servers[serverName].(map[string]interface{})
 					if server == nil {
 						continue
@@ -424,7 +418,7 @@ func ruleCaddyRoutes(full map[string]interface{}, caddyID string) (main map[stri
 			continue
 		}
 		servers, _ := app["servers"].(map[string]interface{})
-		for _, serverName := range sortedInterfaceKeys(servers) {
+		for _, serverName := range sortedStringKeys(servers) {
 			server, _ := servers[serverName].(map[string]interface{})
 			if server == nil {
 				continue
@@ -5445,7 +5439,18 @@ func (h *Handlers) GetRuleLogStream(c *gin.Context) {
 	if h.ensureRuleExistsForLogs(c, caddyID) {
 		return
 	}
-	offset, _ := strconv.ParseInt(c.Query("offset"), 10, 64)
+	// 非法 offset 显式 400——静默按 0 处理会让客户端笔误（非数字/负数）
+	// 伪装成「从头全量重读」，日志窗口口径静默漂移且调用方无从察觉；
+	// 空参=首次轮询的合法形态（从 0 起）。
+	offset := int64(0)
+	if raw := c.Query("offset"); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed < 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "offset 参数必须是非负整数"})
+			return
+		}
+		offset = parsed
+	}
 	lines, next, err := services.ReadRuleLogFrom(caddyID, offset)
 	if err != nil {
 		services.Logf("warn", "读取规则日志失败（caddy_id=%s offset=%d）: %v", caddyID, offset, err)

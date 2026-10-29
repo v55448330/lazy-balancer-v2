@@ -47,7 +47,10 @@ type MetricsService struct {
 	// 「Stop 之后仍发起新一轮采集」排除在代码层。若未来关停预算被收紧到
 	// 可能放弃等待在途采集，须先给指标库补 db.GetMetricsDB()/SetMetricsDB()
 	// 原子访问器并全仓迁移消费点（只改单点会形成两种句柄口径）。
-	stopped   atomic.Bool
+	stopped atomic.Bool
+	// started 钉住一次性生命周期：Stop 后 stopCh 已关闭，再次 Start 会在
+	// select 立即走 stopCh 分支静默返回——看起来启动了，实际零采集零清理。
+	started   atomic.Bool
 	cleanupWG sync.WaitGroup
 }
 
@@ -71,7 +74,12 @@ func NewMetricsService(metricsURL string, interval int) *MetricsService {
 	}
 }
 
+// Start 启动采集循环。生命周期一次性：Start/Stop 各仅允许一次——Stop 后再
+// Start 会静默零采集（见 started 字段注释），重启语义未支持，需要时重建实例。
 func (m *MetricsService) Start() {
+	if !m.started.CompareAndSwap(false, true) {
+		panic("MetricsService: Start 只允许调用一次（生命周期一次性，Stop 后不得重启）")
+	}
 	ticker := time.NewTicker(time.Duration(m.interval) * time.Second)
 	cleanupTicker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
@@ -396,9 +404,11 @@ type statusClassCounts struct {
 	status3xx int64
 	status4xx int64
 	status5xx int64
-	other     int64
 }
 
+// classifyStatusCodes 按 2xx/3xx/4xx/5xx 归类。区间外码（1xx/0/600+）不进入
+// 任何分类——other 桶生产零消费（仅测试观测）已删除，「四类之和 < 总请求」
+// 即区间外码存在的可观测形态。
 func classifyStatusCodes(codes map[int]int64) statusClassCounts {
 	var counts statusClassCounts
 	for code, value := range codes {
@@ -411,8 +421,6 @@ func classifyStatusCodes(codes map[int]int64) statusClassCounts {
 			counts.status4xx += value
 		case code >= 500 && code < 600:
 			counts.status5xx += value
-		default:
-			counts.other += value
 		}
 	}
 	return counts

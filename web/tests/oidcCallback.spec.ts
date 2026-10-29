@@ -259,8 +259,8 @@ test('App 统一消费 login 通道 oidc_error（不依赖 Login 挂载）', () 
   const app = code('src/App.vue')
   // 识别：预处理即读取该参数（文案与回调 error 同走白名单映射）
   assert.match(app, /fragment\.get\('oidc_error'\)/, 'App.vue hash 预处理未识别 oidc_error')
-  // 剥离：并入统一 delete 分支，且分支条件涵盖「仅 oidc_error」形态
-  assert.match(app, /fragment\.delete\('oidc_error'\)/, 'oidc_error 未并入统一剥离')
+  // 剥离：并入统一 stripHashParams 键单，且分支条件涵盖「仅 oidc_error」形态
+  assert.match(app, /stripHashParams\(\[[^\]]*'oidc_error'/, 'oidc_error 未并入统一剥离')
   assert.match(app, /hasLoginTicket \|\| oidcCallback \|\| oidcErrorParam/, '剥离分支条件未涵盖仅 oidc_error 形态')
   // 通道单源上收：Login 挂载侧消费点删除（App 先行解析并剥离后，二次读取
   // 只会读到空——双消费点让「提示语义」在两条挂载路径间分叉）

@@ -236,19 +236,15 @@ func TestThreatFailSource_manualKeepsSlot(t *testing.T) {
 // 门永不成立：既无投递也无 failed 行，自动更新永久静默停摆。故手动成功后
 // 空槽仍不补写、未来槽不回拨，但**过期槽必须推进**到紧邻下一排程槽。
 
-// assertSlotAdvancedToFuture 断言槽已推进为可解析的未来时刻。
-func assertSlotAdvancedToFuture(t *testing.T, got, stale string) {
+// assertSlotAdvancedFrom 断言槽已离开 stale 且为未来槽：≠stale/空串前置 +
+// assertFutureSlot 单源组合（task_cancel_slot_advance_test 的取消推进共用同一
+// 「可解析且在未来」判定，不再各写一份）。
+func assertSlotAdvancedFrom(t *testing.T, label, got, stale string) {
 	t.Helper()
 	if got == "" || got == stale {
-		t.Fatalf("成功轮 next_update=%q, want 由过期槽 %q 推进到下一排程槽", got, stale)
+		t.Fatalf("%s: next_update=%q, want 由过期槽 %q 推进到下一排程槽", label, got, stale)
 	}
-	parsed, err := time.ParseInLocation(crsTimeLayout, got, time.UTC)
-	if err != nil {
-		t.Fatalf("next_update=%q 不可解析: %v", got, err)
-	}
-	if !parsed.After(time.Now().UTC().Add(-time.Minute)) {
-		t.Fatalf("成功轮 next_update=%q 仍在过去（引擎水位与业务槽分叉=停摆）", got)
-	}
+	assertFutureSlot(t, label, got)
 }
 
 func TestCRSUpdate_manualSuccessAdvancesExpiredSlot(t *testing.T) {
@@ -260,7 +256,7 @@ func TestCRSUpdate_manualSuccessAdvancesExpiredSlot(t *testing.T) {
 
 	m.run("manual", nil)
 
-	assertSlotAdvancedToFuture(t, crsNextUpdate(t), stale)
+	assertSlotAdvancedFrom(t, "CRS 手动成功后", crsNextUpdate(t), stale)
 }
 
 func TestIP2RegionUpdate_manualSuccessAdvancesExpiredSlot(t *testing.T) {
@@ -272,7 +268,7 @@ func TestIP2RegionUpdate_manualSuccessAdvancesExpiredSlot(t *testing.T) {
 
 	m.run("manual", nil)
 
-	assertSlotAdvancedToFuture(t, ip2rNextUpdate(t), stale)
+	assertSlotAdvancedFrom(t, "IP2Region 手动成功后", ip2rNextUpdate(t), stale)
 }
 
 func TestThreatUpdateOneSource_manualSuccessAdvancesExpiredSlot(t *testing.T) {
@@ -293,7 +289,7 @@ func TestThreatUpdateOneSource_manualSuccessAdvancesExpiredSlot(t *testing.T) {
 		t.Fatal("源更新应成功")
 	}
 
-	assertSlotAdvancedToFuture(t, threatSourceSlot(t, 1), stale)
+	assertSlotAdvancedFrom(t, "威胁源手动成功后", threatSourceSlot(t, 1), stale)
 }
 
 func TestCrawlerUpdateSource_manualSuccessAdvancesExpiredSlot(t *testing.T) {
@@ -314,7 +310,7 @@ func TestCrawlerUpdateSource_manualSuccessAdvancesExpiredSlot(t *testing.T) {
 	if err := database.QueryRow(`SELECT COALESCE(next_update,'') FROM security_crawler_sources WHERE name='googlebot'`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	assertSlotAdvancedToFuture(t, got, stale)
+	assertSlotAdvancedFrom(t, "爬虫源手动成功后", got, stale)
 }
 
 // 回归：手动**失败**不得推进过期槽——引擎按退避重投同一槽，业务抢先推进会把

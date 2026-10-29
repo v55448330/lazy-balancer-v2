@@ -133,3 +133,26 @@ func TestWriteAdminTLSCertPair_keyRenameFailureRestoresPreviousCertificate(t *te
 		t.Fatalf("failed private key target must remain untouched: %v", err)
 	}
 }
+
+// 白名单外 mode（历史库值/带外改库）按自签名回落（坏值不得让启动进入崩溃
+// 循环的既有裁定不变），但必须 warn 点名坏值——静默回落让「配置了 upload
+// 却跑成自签名」零信号。
+func TestResolveCertificate_unknownModeFallsBackToSelfSignedWithWarn(t *testing.T) {
+	// Given：mode 为白名单（selfsigned/upload）之外的垃圾值
+	dir := t.TempDir()
+	logs := captureServiceLog(t)
+
+	// When：解析证书
+	cert, err := AdminTLSConfig{Mode: "garbage"}.ResolveCertificate(dir)
+
+	// Then：回落自签名仍成功（不 crash），且 warn 点名坏值
+	if err != nil {
+		t.Fatalf("resolve certificate: %v", err)
+	}
+	if len(cert.Certificate) == 0 || cert.PrivateKey == nil {
+		t.Fatal("fallback certificate is incomplete")
+	}
+	if got := logs.String(); !strings.Contains(got, `TLS 模式 "garbage" 不在白名单内`) {
+		t.Fatalf("未知 mode 必须留痕: %q", got)
+	}
+}
