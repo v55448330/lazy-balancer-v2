@@ -13,7 +13,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { WAF_MODE_TEXT, wafModeLabel } from '../src/utils/securityStages.ts'
-import { code, section, webFiles } from './_helpers.ts'
+import { code, cssDeclarations, openTags, section, webFiles } from './_helpers.ts'
 
 // ── ① 键盘可达：不再有「无 href 的 el-link」散落各处 ──────────────
 test('el-link 无 href 一律经 common/AccessibleLink（键盘/读屏可达）', () => {
@@ -53,10 +53,19 @@ test('AccessibleLink：统一浅底，只有 primary/danger 在 hover 时使用�
   assert.match(wrapper, /withDefaults\(defineProps/)
   assert.match(wrapper, /underline: 'never'/)
   assert.doesNotMatch(wrapper, /readonly underline\?: boolean/)
-  assert.match(wrapper, /\.el-link:hover \{ background: var\(--el-color-primary-light-9, #ecf5ff\); text-decoration: none;/)
-  assert.match(wrapper, /\.el-link--primary:hover, \.el-link--danger:hover \{ color: var\(--el-color-primary, #409eff\);/)
-  assert.doesNotMatch(wrapper, /\.el-link:hover \{[^}]*color:/, 'info/success/warning/default 必须保留 Element Plus 类型色')
-  assert.match(wrapper, /\.el-link:active \{ background: var\(--el-color-primary-light-8, #d9ecff\);/)
+  // CSS 断言走声明表：属性序/换行重排不假红，缺声明或改值仍红。
+  const hover = cssDeclarations(wrapper, '.el-link:hover')
+  assert.equal(hover.get('background'), 'var(--el-color-primary-light-9, #ecf5ff)')
+  assert.equal(hover.get('text-decoration'), 'none')
+  assert.ok(!hover.has('color'), 'info/success/warning/default 必须保留 Element Plus 类型色')
+  assert.equal(
+    cssDeclarations(wrapper, '.el-link--primary:hover, .el-link--danger:hover').get('color'),
+    'var(--el-color-primary, #409eff)',
+  )
+  assert.equal(
+    cssDeclarations(wrapper, '.el-link:active').get('background'),
+    'var(--el-color-primary-light-8, #d9ecff)',
+  )
 })
 
 test('负载均衡规则名 hover 不再覆盖统一样式为下划线', () => {
@@ -67,8 +76,16 @@ test('负载均衡规则名 hover 不再覆盖统一样式为下划线', () => {
 
 test('登录页恢复码切换是真正的可聚焦控件（丢失验证器时的自救入口）', () => {
   const login = code('src/views/Login.vue')
-  assert.match(login, /<AccessibleLink type="primary" underline="never" @click="mfaUseRecovery = !mfaUseRecovery/)
-  assert.match(login, /<AccessibleLink type="info" underline="never" @click="resetToPasswordStep">返回重新登录<\/AccessibleLink>/)
+  const links = openTags(login, 'AccessibleLink')
+  // 逐属性/逐处理器判定：属性序重排或增删其它属性不假红，入口缺失仍红。
+  const recovery = links.find((tag) => tag.includes('type="primary"') && tag.includes('@click="mfaUseRecovery'))
+  assert.ok(recovery, '恢复码切换入口缺失')
+  assert.ok(recovery.includes('underline="never"'), '恢复码切换入口须为平文本外观（underline=never）')
+  assert.ok(
+    links.some((tag) => tag.includes('type="info"') && tag.includes('underline="never"') && tag.includes('@click="resetToPasswordStep"')),
+    '「返回重新登录」入口缺失',
+  )
+  assert.match(login, />返回重新登录<\/AccessibleLink>/)
 })
 
 test('首屏加载遮罩：读屏可达（status+aria-live）且配色走主题变量', () => {
@@ -83,8 +100,11 @@ test('首屏加载遮罩：读屏可达（status+aria-live）且配色走主题�
 // ── ② 一次性凭据：关闭必须确认已保存 ───────────────────────────
 test('个人资料 MFA：响应缺 data 显性报错（静默 return = 与「没点上」不可区分）', () => {
   const profile = code('src/components/ProfileDialog.vue')
-  const emptyPayload = [...profile.matchAll(/if \(!res\.data\) \{\s*ElMessage\.error\('响应异常，请重试'\)/g)]
+  // 报错出口收敛到 utils/requireData 单源：缺 data 抛错落到调用方 catch，
+  // 文案仍为「响应异常，请重试」；两处（启用 MFA 与「验证并重置」）都必须走守卫。
+  const emptyPayload = [...profile.matchAll(/requireData\(res\.data, '响应异常，请重试'\)/g)]
   assert.equal(emptyPayload.length, 2, '启用 MFA 与「验证并重置」两处都必须报错')
+  assert.match(profile, /import \{ requireData \} from '@\/utils\/requireData'/)
   assert.doesNotMatch(profile, /if \(!res\.data\) return/, '静默 return 不得残留')
 })
 
@@ -215,6 +235,6 @@ test('错误横幅：统一 polling-error-alert error-banner，el-alert 不再�
   }
   assert.deepEqual([...new Set(offenders)], [], 'el-alert 的间距由 polling-error-alert 单源承担')
   const css = code('src/styles/main.css')
-  assert.match(css, /^\.polling-error-alert \{ margin-bottom: 16px; \}$/m)
-  assert.match(css, /^\.mb-5 \{ margin-bottom: 20px; \}$/m, 'mb-5 仍用于 el-row/el-card 行间距')
+  assert.equal(cssDeclarations(css, '.polling-error-alert').get('margin-bottom'), '16px')
+  assert.equal(cssDeclarations(css, '.mb-5').get('margin-bottom'), '20px', 'mb-5 仍用于 el-row/el-card 行间距')
 })

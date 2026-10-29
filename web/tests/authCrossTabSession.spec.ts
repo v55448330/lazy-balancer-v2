@@ -7,55 +7,32 @@
 //
 // 运行：cd web && node --test tests/authCrossTabSession.spec.ts
 
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createPinia, setActivePinia } from 'pinia'
 
-import { flushMicrotasks, registerModuleHooks } from './_helpers.ts'
+import { flushMicrotasks, installBrowserHost, registerModuleHooks, type BrowserHost } from './_helpers.ts'
 import { dataModule } from './_stubs.ts'
 
 const flush = flushMicrotasks
 
-// ── 最小浏览器宿主（只提供 auth store 的消费面） ──
+// ── 最小浏览器宿主（只提供 auth store 的消费面；安装/还原走 helper 单源） ──
 const storage = new Map<string, string>()
-const storageListeners: Array<(event: unknown) => void> = []
-const timers = new Map<number, () => void>()
-let nextTimerId = 1
-
-const locationStub = { search: '', hash: '#/dashboard', href: 'http://panel.test/', pathname: '/' }
-
-const windowStub = {
-  location: locationStub,
-  history: { replaceState: (): void => {} },
-  addEventListener: (type: string, listener: (event: unknown) => void): void => {
-    if (type === 'storage') storageListeners.push(listener)
-  },
-  setTimeout: (callback: () => void): number => {
-    const id = nextTimerId++
-    timers.set(id, callback)
-    return id
-  },
-  clearTimeout: (id: number): void => {
-    timers.delete(id)
-  },
-}
-
 const host = globalThis as unknown as Record<string, unknown>
-host.window = windowStub
-host.location = locationStub
-host.localStorage = {
-  getItem: (key: string): string | null => storage.get(key) ?? null,
-  setItem: (key: string, value: string): void => {
-    storage.set(key, value)
-  },
-  removeItem: (key: string): void => {
-    storage.delete(key)
-  },
-  clear: (): void => {
-    storage.clear()
-  },
+
+let browser: BrowserHost
+const installHost = (): void => {
+  browser = installBrowserHost({
+    localStorage: storage,
+    timers: true,
+    history: true,
+    location: { search: '', hash: '#/dashboard', href: 'http://panel.test/', pathname: '/' },
+    visibility: true,
+  })
 }
-host.document = { hidden: false, addEventListener: (): void => {} }
+installHost()
+after(() => browser.restore())
+
 host.__authGet = async (url: string) => url === '/users/me'
   ? { data: { id: 7, username: 'alice', role: 'admin', is_enabled: true, display_name: 'Alice', mfa_enabled: false, auth_provider: 'local' } }
   : { data: { is_master: true, timezone: 'Asia/Shanghai', cert_renewal_days: 30, mfa_write_guard: false } }
@@ -84,18 +61,17 @@ host.__authPost = async () => ({ data: undefined })
 const { useAuthStore } = await import('../src/stores/auth.ts')
 
 const newStore = () => {
-  // 每个用例只保留当前 store 的监听器；历史实例不得再响应后续 storage 事件。
-  storageListeners.length = 0
-  // 上一个用例的重试链同样不得计入本用例。
-  timers.clear()
+  // 每个用例换新宿主：上一用例的 storage 监听器/定时器随旧 window 一起废弃。
+  browser.restore()
+  installHost()
   setActivePinia(createPinia())
   const store = useAuthStore()
-  assert.equal(storageListeners.length, 1, '每个用例必须只注册当前实例的一个 storage 监听器')
+  assert.equal(browser.storageListenerCount, 1, '每个用例必须只注册当前实例的一个 storage 监听器')
   return store
 }
 
 const dispatchStorage = (key: string | null): void => {
-  for (const listener of storageListeners) listener({ key })
+  browser.fire({ key })
 }
 
 
@@ -112,7 +88,7 @@ test('另一标签页登出：本标签页同步清空令牌/用户/节点模式
   assert.equal(store.user, null)
   assert.equal(store.nodeMode, null)
   assert.equal(store.intentionalLogout, true, '同步退出属主动登出，须抑制在途请求的会话失效弹窗')
-  assert.equal(timers.size, 0, '同步退出必须停掉用户/配置重试定时器')
+  assert.equal(browser.timers.size, 0, '同步退出必须停掉用户/配置重试定时器')
 })
 
 test('另一标签页 localStorage.clear()：key 为 null 同样按会话消失处理', () => {
@@ -179,7 +155,7 @@ test('非令牌键的 storage 变更不触碰会话（多标签页导航互不�
   assert.equal(store.token, 'tok-tab-d')
   assert.equal(store.user, null, '无关键不得触发重拉用户信息')
   assert.equal(store.intentionalLogout, false)
-  assert.equal(timers.size, 0)
+  assert.equal(browser.timers.size, 0)
 })
 
 // ── 迟到响应：账号切换后旧 /users/me 不得回写新会话身份 ──
@@ -267,14 +243,14 @@ test('账号切换：旧 /users/me 的迟到失败不得排重试链或清空已
     fresh[0].resolve(bobMe)
     fresh[1].resolve(masterConfig)
     await flush()
-    const timersBefore = timers.size
+    const timersBefore = browser.timers.size
     assert.equal(store.user?.username, 'bob')
 
     // 旧会话的请求以瞬时失败落地：既不得清空 B 的用户，也不得为 B 排重试链
     queue[0].reject(new Error('network down'))
     await flush()
     assert.equal(store.user?.username, 'bob', '迟到失败不得改动新会话身份')
-    assert.equal(timers.size, timersBefore, '迟到失败不得排入重试定时器')
+    assert.equal(browser.timers.size, timersBefore, '迟到失败不得排入重试定时器')
   } finally {
     restore()
   }

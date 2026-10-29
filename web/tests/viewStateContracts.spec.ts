@@ -313,7 +313,7 @@ test('基础设置时区：自由输入在保存前做 IANA 校验（不连坐�
 
 test('MFA 自助缺口：激活响应缺 data 显性报错、动态码弹框提交中不可关', () => {
   const wizard = code('src/components/MfaBindingWizard.vue')
-  assert.match(wizard, /if \(!res\.data\) \{/, '契约违约不得静默 return')
+  assert.match(wizard, /requireData\(res\.data, '响应异常，请重试'\)/, '契约违约不得静默 return（requireData 单源抛错）')
   assert.match(wizard, /响应异常，请重试/)
   const profile = code('src/components/ProfileDialog.vue')
   assert.match(profile, /:close-on-press-escape="!mfaSubmitting"/)

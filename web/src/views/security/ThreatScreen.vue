@@ -177,8 +177,8 @@
               <svg viewBox="0 0 36 36" role="img" :aria-label="`攻击类型占比：共 ${shareTotal} 次`">
                 <circle class="donut-track" cx="18" cy="18" r="15.9" pathLength="100"></circle>
                 <circle
-                  v-for="(seg, i) in shareSegments"
-                  :key="i"
+                  v-for="seg in shareSegments"
+                  :key="`${seg.color}:${seg.offset}`"
                   class="donut-seg"
                   cx="18" cy="18" r="15.9" pathLength="100"
                   :stroke="seg.color"

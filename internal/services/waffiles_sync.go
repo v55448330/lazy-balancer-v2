@@ -476,6 +476,26 @@ func wafRefStatSignature() (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// readWafVersionLabels 读取两个版本标签文件（CRS VERSION 与 ip2region 伴生
+// .version）——引用全量构建与上报热路径 reportWafFileVersions 的单源实现，
+// 杜绝两份口径漂移。语义：
+//   - 文件缺失 = 对应串为空串（TrimSpace / sanitizeBundleVersion 口径不变）；
+//   - 非缺失类读失败（权限/IO）显式上抛——引用构建侧据此整体失败（不发布
+//     偏斜引用），上报侧自行忽略 err 按空串 best-effort。
+func readWafVersionLabels() (crsVersion, ip2regionTag string, err error) {
+	if v, readErr := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); readErr == nil {
+		crsVersion = strings.TrimSpace(string(v))
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return "", "", fmt.Errorf("read CRS version: %w", readErr)
+	}
+	if v, readErr := os.ReadFile(ip2regionLivePath + ".version"); readErr == nil {
+		ip2regionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return "", "", fmt.Errorf("read IP2Region version: %w", readErr)
+	}
+	return crsVersion, ip2regionTag, nil
+}
+
 // buildWafFileRefFullLockedChecked 是引用的全量构建（读内容 + 哈希），仅在
 // 廉价签名缺失或变化时执行。
 func buildWafFileRefFullLockedChecked() (*models.ClusterWafFilesRef, error) {
@@ -495,22 +515,18 @@ func buildWafFileRefFullLockedChecked() (*models.ClusterWafFilesRef, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat CRS tree: %w", err)
 	}
-	if v, err := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); err == nil {
-		ref.CRSVersion = strings.TrimSpace(string(v))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read CRS version: %w", err)
+	crsVersion, ip2regionTag, err := readWafVersionLabels()
+	if err != nil {
+		return nil, err
 	}
+	ref.CRSVersion = crsVersion
 	if sum, err := sha256File(ip2regionLivePath); err == nil && sum != "" {
 		ref.IP2RegionSha = sum
 		seen = true
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("hash IP2Region database: %w", err)
 	}
-	if v, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
-		ref.IP2RegionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read IP2Region version: %w", err)
-	}
+	ref.IP2RegionTag = ip2regionTag
 	threatFast, err := scanThreatFastFilesChecked()
 	if err != nil {
 		return nil, err

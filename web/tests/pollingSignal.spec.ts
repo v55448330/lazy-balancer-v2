@@ -12,7 +12,7 @@ import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 
 import { usePollingTask, type PollingTask } from '../src/composables/usePollingTask.ts'
-import { FakeDocument, flushMicrotasks, mountForLifecycle, waitForMicrotasks, code } from './_helpers.ts'
+import { flushMicrotasks, installBrowserHost, mountForLifecycle, waitForMicrotasks, code } from './_helpers.ts'
 
 // onUnmounted 在无组件实例时会打印 Vue 警告——pause 用例在 finally 里恢复
 // console.warn；stop/onError/可见性用例经 SSR 渲染提供真实组件实例，不触碰该警告。
@@ -118,12 +118,10 @@ test('usePollingTask：onError 自身抛错被就地吞掉，不中断后续轮�
 // 契约由 pause()/stop() 用例覆盖（作废序列 + abort 每轮任务信号 + isCurrent 失效）。
 
 test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即补跑', async () => {
-  const doc = new FakeDocument()
-  const host = globalThis as { document?: unknown }
-  // 假 document 必须「保存→还原并断言」：同进程运行（或 helper 装了全局 DOM
-  // 宿主）时直接 delete 会抹掉别人的宿主，制造随机顺序才失败的难查问题。
-  const previousDocument = host.document
-  host.document = doc
+  // 假 document 的安装/还原走 helper 单源（描述符级还原 + 自断言）：
+  // 同进程运行时直接 delete 会抹掉别人的宿主，制造随机顺序才失败的难查问题。
+  const browser = installBrowserHost({ visibility: true })
+  const doc = browser.document
   let calls = 0
   let polling!: PollingTask
   mock.timers.enable({ apis: ['setInterval'] })
@@ -155,9 +153,7 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
   } finally {
     polling?.stop()
     mock.timers.reset()
-    if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
-    else host.document = previousDocument
-    assert.equal(host.document, previousDocument, '假 document 必须还原为原值')
+    browser.restore()
   }
 })
 
@@ -165,10 +161,8 @@ test('usePollingTask：document.hidden 停摆定时轮询，恢复可见立即�
 // stop——否则定时器继续打后端、visibilitychange 监听残留（重进页面叠加→多倍轮询）。
 // SSR 不执行 onUnmounted，必须用真实组件实例 mount 再 unmount。
 test('usePollingTask 随组件卸载停止轮询并摘除监听', async () => {
-  const doc = new FakeDocument()
-  const host = globalThis as { document?: unknown }
-  const previousDocument = host.document
-  host.document = doc
+  const browser = installBrowserHost({ visibility: true })
+  const doc = browser.document
   let calls = 0
   let polling!: PollingTask
   mock.timers.enable({ apis: ['setInterval'] })
@@ -189,9 +183,7 @@ test('usePollingTask 随组件卸载停止轮询并摘除监听', async () => {
     assert.equal(calls, 1, '卸载后不得再发起轮次')
   } finally {
     mock.timers.reset()
-    if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
-    else host.document = previousDocument
-    assert.equal(host.document, previousDocument, '假 document 必须还原为原值')
+    browser.restore()
   }
 })
 

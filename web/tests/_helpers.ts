@@ -11,6 +11,7 @@
 // 消费的模块保持无扩展名风格。
 
 import { readdirSync, readFileSync } from 'node:fs'
+import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -60,6 +61,44 @@ export const code = (relative: string): string => readStrippedCached(new URL(rel
 
 /** 同 code，但读取相对仓库根的路径（跨栈 Go 源码存在性断言用）。 */
 export const repoCode = (relative: string): string => readStrippedCached(new URL(`../${relative}`, webRoot))
+
+/**
+ * 跨栈对表：读仓库内 Go 源（剥注释），提取整型常量声明的值（缺失即抛错——
+ * 对表断言拿 undefined 当值会假绿）。
+ *
+ * 锚定口径单源：`[const] NAME = <int>` 行锚（顶层/函数内 `const X = n` 与
+ * const 块内的裸赋值两形态都命中），行尾锚防前缀更长的同名常量误命中；
+ * 注释里的常量提及（如「不超 maxBindingsPerRule」）先剥注释再匹配，不参与。
+ * 此前各 spec 自写提取正则、锚定松紧不一（有的 ^…$m、有的裸 search），统一走本函数。
+ */
+export const goConstInt = (repoPath: string, name: string): number => {
+  const declared = repoCode(repoPath).match(new RegExp(`^[ \\t]*(?:const\\s+)?${name}\\s*=\\s*(\\d+)[ \\t]*$`, 'm'))
+  if (!declared) throw new Error(`goConstInt: ${repoPath} 未解析到常量声明 ${name}`)
+  return Number(declared[1])
+}
+
+/**
+ * 跨栈对表的表达式形态：`const/var [type] NAME = <N | N << M | N * M [* …]>`。
+ * 仅支持 `*` 与 `<<`（Go 同优先级、左结合，逐项 fold）；位移以外的运算符不进
+ * 本函数（出现即解析失败抛错，不静默求出错误值）。用于字节数常量
+ * （`128 << 20` / `16 * 1024`）跨栈同值断言。
+ */
+export const goConstExpr = (repoPath: string, name: string): number => {
+  // Go 顺序：`const NAME = …` / `var NAME <type>? = …`（类型在名字之后）。
+  const declared = repoCode(repoPath).match(
+    new RegExp(`^[ \\t]*(?:const|var)\\s+${name}(?:\\s+[A-Za-z_][\\w.\\[\\]\\*]*)?\\s*=\\s*([\\d*<> \\t]+)$`, 'm'),
+  )
+  if (!declared) throw new Error(`goConstExpr: ${repoPath} 未解析到常量声明 ${name}`)
+  const tokens = declared[1].trim().split(/[ \t]+/)
+  let value = Number(tokens[0])
+  for (let i = 1; i < tokens.length; i += 2) {
+    if (tokens[i] === '<<') value *= 2 ** Number(tokens[i + 1])
+    else if (tokens[i] === '*') value *= Number(tokens[i + 1])
+    else throw new Error(`goConstExpr: ${repoPath} ${name} 含不支持的表达式形态`)
+  }
+  if (!Number.isFinite(value)) throw new Error(`goConstExpr: ${repoPath} ${name} 表达式畸形`)
+  return value
+}
 
 /**
  * code() 视图的限段读取：先在 raw 文本上按 marker 切片（marker 常是注释分隔
@@ -758,6 +797,8 @@ export class FakeDocument {
   addEventListener(_type: 'visibilitychange', listener: () => void): void { this.listeners.add(listener) }
   removeEventListener(_type: 'visibilitychange', listener: () => void): void { this.listeners.delete(listener) }
   dispatch(): void { for (const listener of [...this.listeners]) listener() }
+  /** 摘除全部监听：模块级单次绑定（只增不减）的替身在文件结束时的清场。 */
+  clear(): void { this.listeners.clear() }
   get listenerCount(): number { return this.listeners.size }
 }
 
@@ -773,6 +814,117 @@ export class FakeWindow {
   clearInterval(id: number): void { this.timers.delete(id) }
   fire(): void { for (const callback of [...this.timers.values()]) callback() }
   get size(): number { return this.timers.size }
+}
+
+/** installBrowserHost 的选项面：按需安装各全局，未给出的键不碰 globalThis。 */
+interface BrowserHostOptions {
+  /** localStorage 背后存储（传入即安装 globalThis.localStorage；用例与断言读同一 Map）。 */
+  readonly localStorage?: Map<string, string>
+  /** 安装 window 定时器消费面（setTimeout/clearTimeout 转接到返回的 timers 宿主）。 */
+  readonly timers?: boolean
+  /** 安装 window.history（replaceState no-op）。 */
+  readonly history?: boolean
+  /** location 替身（安装 window.location 与 globalThis.location）。 */
+  readonly location?: { readonly search?: string; readonly hash?: string; readonly href?: string; readonly pathname?: string }
+  /** 安装 document 宿主（hidden + visibilitychange 监听，FakeDocument）。 */
+  readonly visibility?: boolean
+  /** 安装 globalThis.navigator（Node 里 navigator 只有 getter，须按描述符覆盖）。 */
+  readonly navigator?: unknown
+}
+
+/** installBrowserHost 的句柄：各替身的观测/操作面 + 描述符级还原。 */
+export interface BrowserHost {
+  /** 安装的 localStorage 背后存储（未传 options.localStorage 时为自动建的空 Map）。 */
+  readonly storage: Map<string, string>
+  /** 定时器宿主（fire()/size 观测；timers: true 时由 window.setTimeout/clearTimeout 转接）。 */
+  readonly timers: FakeWindow
+  /** 安装的 document 宿主（visibility: true 时；hidden/dispatch/listenerCount）。 */
+  readonly document: FakeDocument
+  /** window 上捕获的 storage 监听器数量（其它标签页写 localStorage 的事件消费方）。 */
+  readonly storageListenerCount: number
+  /** 向 storage 监听器手动点火一条事件（key === null 即另一标签页 clear()）。 */
+  readonly fire: (event: { readonly key: string | null }) => void
+  /**
+   * 还原全部被覆盖的全局：按描述符还原（Node 的 localStorage/navigator 只有
+   * getter，直接赋值会炸），原属性不存在则删除；还原后自断言描述符一致——
+   * 还原不完整当用例失败，不留跨用例污染（同 copyText 的描述符还原范式）。
+   */
+  readonly restore: () => void
+}
+
+/**
+ * 一次装齐浏览器全局替身（window/location/localStorage/document/navigator），
+ * 取代各 spec 自搭的宿主散件。模块顶层就读 location/localStorage 的被测模块
+ * （stores/auth.ts 等）必须先装宿主再动态 import。只安装请求过的键：
+ * 半成品 document 会带偏 Vue runtime-dom 的探测（见 utilsSingleSource 的加载
+ * 顺序注释），多余的 window 会翻转 `typeof window` 分支——按需安装即隔离。
+ */
+export const installBrowserHost = (options: BrowserHostOptions = {}): BrowserHost => {
+  const storage = options.localStorage ?? new Map<string, string>()
+  const timers = new FakeWindow()
+  const document = new FakeDocument()
+  const storageListeners: Array<(event: { key: string | null }) => void> = []
+
+  const wantsWindow = options.timers === true || options.history === true || options.location !== undefined
+  const windowStub: Record<string, unknown> = {
+    addEventListener: (eventType: string, listener: (event: { key: string | null }) => void): void => {
+      if (eventType === 'storage') storageListeners.push(listener)
+    },
+    removeEventListener: (_eventType: string, listener: (event: { key: string | null }) => void): void => {
+      const at = storageListeners.indexOf(listener)
+      if (at >= 0) storageListeners.splice(at, 1)
+    },
+  }
+  if (options.location !== undefined) windowStub.location = { ...options.location }
+  if (options.history === true) windowStub.history = { replaceState: (): void => {} }
+  if (options.timers === true) {
+    windowStub.setTimeout = (callback: () => void): number => timers.setInterval(callback)
+    windowStub.clearTimeout = (id: number): void => { timers.clearInterval(id) }
+  }
+
+  const localStorageStub = {
+    getItem: (key: string): string | null => storage.get(key) ?? null,
+    setItem: (key: string, value: string): void => { storage.set(key, value) },
+    removeItem: (key: string): void => { storage.delete(key) },
+    clear: (): void => { storage.clear() },
+  }
+
+  const installs: Array<readonly [string, unknown]> = []
+  if (wantsWindow) installs.push(['window', windowStub])
+  if (options.location !== undefined) installs.push(['location', { ...options.location }])
+  if (options.localStorage !== undefined || wantsWindow) installs.push(['localStorage', localStorageStub])
+  if (options.visibility === true) installs.push(['document', document])
+  if (options.navigator !== undefined) installs.push(['navigator', options.navigator])
+
+  const originals = new Map<string, PropertyDescriptor | undefined>(
+    installs.map(([key]) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  )
+  for (const [key, value] of installs) {
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
+  }
+  const restore = (): void => {
+    for (const [key] of installs) {
+      const original = originals.get(key)
+      if (original) Object.defineProperty(globalThis, key, original)
+      else Reflect.deleteProperty(globalThis, key)
+      assert.deepEqual(
+        Object.getOwnPropertyDescriptor(globalThis, key),
+        original ?? undefined,
+        `浏览器宿主还原不完整：${key}`,
+      )
+    }
+  }
+
+  return {
+    storage,
+    timers,
+    document,
+    get storageListenerCount(): number { return storageListeners.length },
+    fire: (event: { readonly key: string | null }): void => {
+      for (const listener of [...storageListeners]) listener(event)
+    },
+    restore,
+  }
 }
 
 /**

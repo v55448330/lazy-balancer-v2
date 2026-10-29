@@ -246,14 +246,14 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	setupMissing := false
 	if _, err := statCRSUpdateFile(setupPath); err == nil {
 		if err := copyFile(setupPath, setupBak); err != nil {
-			m.restoreBackup()
+			m.discardRunBackups()
 			return fmt.Errorf("备份 crs-setup.conf: %w", err)
 		}
 		m.setupBakCreated = true // 本运行已创建
 	} else if os.IsNotExist(err) {
 		setupMissing = true
 	} else {
-		m.restoreBackup()
+		m.discardRunBackups()
 		return fmt.Errorf("读取 crs-setup.conf 状态: %w", err)
 	}
 	// stock 基线同点备份：回滚只恢复 rules/setup/overrides 会让
@@ -264,14 +264,14 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	stockMissing := false
 	if _, err := statCRSUpdateFile(stockPath); err == nil {
 		if err := copyFile(stockPath, stockBak); err != nil {
-			m.restoreBackup()
+			m.discardRunBackups()
 			return fmt.Errorf("备份 crs-setup.stock.conf: %w", err)
 		}
 		m.stockBakCreated = true // 本运行已创建
 	} else if os.IsNotExist(err) {
 		stockMissing = true
 	} else {
-		m.restoreBackup()
+		m.discardRunBackups()
 		return fmt.Errorf("读取 crs-setup.stock.conf 状态: %w", err)
 	}
 
@@ -299,11 +299,11 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 		// coraza 拒绝重复 SecRule id 致 reload 失败、更新永久卡死。
 		if _, err := os.Stat(overridesPath); err == nil {
 			if err := copyFile(overridesPath, overridesBak); err != nil {
-				m.restoreBackup()
+				m.discardRunBackups()
 				return fmt.Errorf("备份 zz-user-overrides.conf: %w", err)
 			}
 		} else if err := os.WriteFile(overridesBak, nil, 0644); err != nil {
-			m.restoreBackup()
+			m.discardRunBackups()
 			return fmt.Errorf("标记 zz-user-overrides.conf 更新前状态: %w", err)
 		}
 		// 本运行已创建 bak：restoreBackup 自此可消费。
@@ -698,6 +698,32 @@ func (m *CRSUpdateManager) rollbackAfterReloadFailure(prevTag string) error {
 		return rowErr
 	}
 	return markerErr
+}
+
+// discardRunBackups 丢弃本运行已创建的备份并复位运行标记，专用于
+// 「live 树尚未被触碰」的预交换失败路径（备份拷贝/辅助文件状态读取失败）：
+// 此刻无物可还原，restoreBackup 的整树搬移只会把 live 换成备份副本（inode
+// 集合漂移、白耗 IO），而 run() 收尾的 fail/cancel 以 crsRestorePointCreated()
+// 为门——标记残留会让收尾再做一次 restore 并空转一次全量 reload
+// （CaddyOpLock+渲染），自动更新失败重试把它放大成每轮一次。丢弃备份安全：
+// live 即更新前状态，备份再无恢复对象。不取 wafFileMu：仅触碰
+// crs.transient 下的备份文件，不涉及 live 树相位。
+func (m *CRSUpdateManager) discardRunBackups() {
+	discard := func(created *bool, name string) {
+		if !*created {
+			return
+		}
+		if err := os.Remove(crsTransientPath(m.liveDir(), name)); err != nil && !os.IsNotExist(err) {
+			Logf("error", "crs update: failed to discard %s: %v", name, err)
+		}
+		*created = false
+	}
+	discard(&m.rulesBakCreated, "rules.bak")
+	discard(&m.setupBakCreated, "crs-setup.conf.bak")
+	discard(&m.stockBakCreated, "crs-setup.stock.conf.bak")
+	discard(&m.overridesBakCreated, "zz-user-overrides.conf.bak")
+	m.setupRemoveOnRollback = false
+	m.stockRemoveOnRollback = false
 }
 
 // restoreBackup puts rules.bak and crs-setup.conf.bak back in place and undoes

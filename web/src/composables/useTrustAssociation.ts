@@ -141,7 +141,7 @@ export const useTrustAssociation = (options: {
   /** 动作成功后的组件侧刷新（重拉策略/条目缓存等） */
   onChanged?: () => void | Promise<void>
 }) => {
-  const { adding, addIpToList } = useIpListAdd()
+  const { addIpToList } = useIpListAdd()
   const creating = ref(false)
 
   /** 同侧全部非系统列表（用户验收：多列表绑定时逐列表出按钮，不再只取第一个）*/
@@ -331,5 +331,5 @@ export const useTrustAssociation = (options: {
   }
 
 
-  return { busyTrust: adding, creating, resolveSideLists, joinSpecificList, ensureListAndJoin, removeFromSideRef }
+  return { creating, resolveSideLists, joinSpecificList, ensureListAndJoin, removeFromSideRef }
 }

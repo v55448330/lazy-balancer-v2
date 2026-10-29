@@ -64,18 +64,25 @@ export const mfaAwareSuccess = (message: string): void => {
   }
   ElMessage.success(message)
 }
-// 用户裁决（N+10）：除登录（Login.vue）与重置 MFA（Users.vue resetMfa，均走
-// 归一化 + 6-16 位恢复码契约）外，step-up 写守卫链（含配置导入等全部 428 重试
-// 流）仅接受 6 位动态验证码——后端 MFAVerifyTOTPCode 同口径拒绝恢复码，此处
-// 前端同步收口：文案不再提及恢复代码，校验为 6 位数字。
+// 双口径（用户裁决 N+10）：登录（Login.vue）与重置 MFA（Users.vue resetMfa）
+// 走「归一化 + 6-16 位恢复码契约」的宽口径；step-up 写守卫链（含配置导入等
+// 全部 428 重试流）仅接受 6 位动态验证码——后端 MFAVerifyTOTPCode 同口径拒绝
+// 恢复码，前端同步收口：文案不再提及恢复代码。两个校验函数的名称直接写明
+// 各自宽严，避免调用方拿错口径。
 export const normalizeMfaCodeInput = (raw: string): string => raw.trim().split(/\s+/)[0] ?? ''
 
-export const validateMfaCodeInput = (raw: string): boolean => {
+/** 宽口径：动态码或恢复码（6–16 位），仅登录与重置 MFA 可用。 */
+export const validateRecoveryOrTotpInput = (raw: string): boolean => {
   const code = normalizeMfaCodeInput(raw)
   return code.length >= 6 && code.length <= 16
 }
 
-const validateTotpCodeInput = (raw: string): boolean => /^\d{6}$/.test(normalizeMfaCodeInput(raw))
+/** 严口径：恰好 6 位数字，step-up 专用，恢复码一律拒绝。 */
+const validateTotpInput = (raw: string): boolean => /^\d{6}$/.test(normalizeMfaCodeInput(raw))
+
+// 弹框内 6 位动态码的输入过滤单源（ProfileDialog / MfaBindingWizard 模板共用）：
+// 只保留数字，输入法/粘贴混入的杂字符当场剥除。
+export const sanitizeTotpDigits = (raw: string): string => raw.replace(/\D/g, '')
 
 // 428 step-up 的弹窗实现。单飞/清空时序由 utils/apiFailure.createMfaStepUp 承担
 // （并发 428 共享同一 Promise；验证码消费后立刻作废，杜绝同码重放）。
@@ -105,12 +112,12 @@ const showMfaPrompt = (): Promise<string | null> =>
             length: 6,
             inputmode: 'numeric',
             validator: (char: string) => /^\d$/.test(char),
-            onFinish: () => { if (validateTotpCodeInput(otpCode.value)) confirm() },
+            onFinish: () => { if (validateTotpInput(otpCode.value)) confirm() },
             style: 'align-self: center;',
           }),
         ]),
       beforeClose: (action, _instance, done) => {
-        if (action === 'confirm' && !validateTotpCodeInput(otpCode.value)) {
+        if (action === 'confirm' && !validateTotpInput(otpCode.value)) {
           ElMessage.error('请输入 6 位数字验证码')
           return
         }

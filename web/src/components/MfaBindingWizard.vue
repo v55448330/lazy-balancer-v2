@@ -38,7 +38,7 @@
         maxlength="6"
         aria-label="6 位动态验证码"
         class="mfa-code-input"
-        @input="code = code.replace(/\D/g, '')"
+        @input="code = sanitizeTotpDigits(code)"
       />
       <el-text type="info" size="small">为「{{ username }}」绑定</el-text>
     </div>
@@ -65,9 +65,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
 import DialogHeader from '@/components/DialogHeader.vue'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request, mfaAwareSuccess, sanitizeTotpDigits } from '@/utils/api'
 import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
+import { requireData } from '@/utils/requireData'
 import type { APIResponse } from '@/types'
 
 // MFA 绑定/换绑向导（个人自助）：父组件负责在打开前取到 pending secret/uri
@@ -143,13 +144,10 @@ const activate = async (): Promise<void> => {
   loading.value = true
   try {
     const res = await request.post<APIResponse<{ recovery_codes: string[] }>>('/auth/mfa/activate', { code: code.value }, { silent: true })
-    if (!res.data) {
-      // 契约违约（200 无 data）：不得静默停在验证步——按钮已从 loading 复位，
-      // 无提示会让用户以为没点上而重复提交。
-      ElMessage.error('响应异常，请重试')
-      return
-    }
-    recoveryCodes.value = res.data.recovery_codes
+    // 契约违约（200 无 data）经 requireData 抛错落到下方 catch——不得静默停在
+    // 验证步：按钮已从 loading 复位，无提示会让用户以为没点上而重复提交。
+    const data = requireData(res.data, '响应异常，请重试')
+    recoveryCodes.value = data.recovery_codes
     step.value = 2
     mfaAwareSuccess('MFA 已启用')
     emit('activated')

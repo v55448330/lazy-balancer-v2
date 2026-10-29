@@ -400,7 +400,7 @@ test('分页边界双向夹紧：page<1 不回落到列表尾部', async () => {
 })
 
 test('白名单逻辑单源（视图不再内联实现）', () => {
-  assert.match(keys, /import \{ serializeWhitelist \} from '@\/utils\/apiKeyWhitelist'/)
+  assert.match(keys, /import \{ parseWhitelist, serializeWhitelist \} from '@\/utils\/apiKeyWhitelist'/)
   assert.doesNotMatch(keys, /const serializeWhitelist = /)
   assert.doesNotMatch(keys, /const normalizeCidr = /)
   // 审计筛选参数同样单源

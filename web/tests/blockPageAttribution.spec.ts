@@ -174,8 +174,9 @@ test('接线：SecurityPolicies 逐阶段归因消费 resolveBlockPageAttributio
   // 旧恒绿表达式必须消失（enabled && block_page_id>0 即「生效中」）
   assert.doesNotMatch(text, /selfBlockPageActive/)
   assert.match(text, /blockPageNotes: blockPageNotes\(caddyId, chain\)/)
-  // 模板按 note.kind 渲染（active/disabled/warning/info）
-  assert.match(text, /v-for="\(note, i\) in row\.blockPageNotes"/)
+  // 模板按 note.kind 渲染（active/disabled/warning/info）；:key 用内容
+  // （kind:text）而非数组下标——归因行顺序稳定，下标键会在增删时错位复用
+  assert.match(text, /v-for="note in row\.blockPageNotes" :key="`\$\{note\.kind\}:\$\{note\.text\}`"/)
 })
 
 test('接线：拦截页缺失判定消费单源谓词且受加载门约束', () => {

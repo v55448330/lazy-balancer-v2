@@ -341,9 +341,8 @@ const settings = defineModel<CaddySettingsConfig>('settings', { required: true }
 const props = defineProps<{
   configLoaded: boolean
   /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
-  onSave?: () => void | Promise<void>
+  onSave: () => void | Promise<void>
 }>()
-const emit = defineEmits<{ (event: 'save'): void }>()
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const saving = ref(false)
@@ -692,10 +691,8 @@ const handleSave = async (): Promise<void> => {
       mfaAwareSuccess('保存成功')
     }
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
-    // 未传回调的旧调用方保留事件兜底。
-    const parentRefresh = props.onSave
-    if (parentRefresh) await parentRefresh()
-    if (!parentRefresh) emit('save')
+    // onSave 为必填回调（Settings.vue 三卡统一接线）。
+    await props.onSave()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
     // Error toast is already shown by the global axios interceptor.

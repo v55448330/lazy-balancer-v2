@@ -20,6 +20,11 @@ import (
 	"time"
 )
 
+// waitRunCeiling：等待「执行发生」的上限。这些 select 是就绪等待而非行为
+// 断言（下限由槽地板决定，上限只防挂死），全量套件并行跑包时 SQLite 争用会
+// 把 20ms 地板拖到秒级——2s 上限曾在 `scripts/test-all.sh` 全量下假红。
+const waitRunCeiling = 15 * time.Second
+
 // 缩短槽重评地板（默认 1min 在测试时间尺度外）——包级单测串行执行；地板是
 // 原子值（tick 读 vs 本 cleanup 写回并发，见 engine.go 的声明注释）。
 func shrinkSlotEvalFloor(t *testing.T, d time.Duration) {
@@ -56,7 +61,7 @@ func TestEngine_ScheduledSuccessConsumesStaleSlot(t *testing.T) {
 	// 误判成「不重投」）。
 	select {
 	case <-ran:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("首槽未执行")
 	}
 	// 负断言同样事件驱动：观察窗口（≈30 ticks）内再出现一次执行即失败。
@@ -104,7 +109,7 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		select {
 		case <-ran:
-		case <-time.After(2 * time.Second):
+		case <-time.After(waitRunCeiling):
 			t.Fatalf("第 %d 次执行未发生", i+1)
 		}
 		// 首槽之后业务推进到新的过期槽（槽值变化=新排程）——地板周期内重评后应再投一次。
@@ -148,7 +153,7 @@ func TestEngine_ScheduledUserCancelConsumesSlot(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("首论未启动")
 	}
 	if !e.Cancel("t-cancel") {
@@ -237,7 +242,7 @@ func TestEngine_UserCancelMarksCancellationCause(t *testing.T) {
 	var firstCtx context.Context
 	select {
 	case firstCtx = <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("首轮未启动")
 	}
 	if !e.Cancel("t-cause") {
@@ -259,13 +264,13 @@ func TestEngine_UserCancelMarksCancellationCause(t *testing.T) {
 	var secondCtx context.Context
 	select {
 	case secondCtx = <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("demote 场景的自动轮未启动")
 	}
 	e.SetRole(false)
 	select {
 	case <-secondCtx.Done():
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("demote 未取消在途轮")
 	}
 	if cause := context.Cause(secondCtx); errors.Is(cause, ErrUserCancelled) {
@@ -295,7 +300,7 @@ func TestEngine_ManualAndDemoteCancelKeepDueSlot(t *testing.T) {
 	go func() { manualDone <- e.Trigger("t-keep", "manual", "") }()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("手动轮未启动")
 	}
 	if !e.Cancel("t-keep") {
@@ -303,7 +308,7 @@ func TestEngine_ManualAndDemoteCancelKeepDueSlot(t *testing.T) {
 	}
 	select {
 	case <-manualDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("手动轮取消后未退出")
 	}
 	waitForEngine(t, "手动轮取消落定", 2*time.Second, func() bool {
@@ -314,7 +319,7 @@ func TestEngine_ManualAndDemoteCancelKeepDueSlot(t *testing.T) {
 	e.StartLoop("t-keep")
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("自动轮未启动")
 	}
 	e.SetRole(false)
@@ -600,7 +605,7 @@ func TestEngine_ManualCancelKeepsFutureScheduledSlot(t *testing.T) {
 	go func() { _ = e.Trigger("t-manual-cancel", "manual", "") }()
 	select {
 	case <-firstStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("手动触发轮未启动")
 	}
 	if !e.Cancel("t-manual-cancel") {
@@ -608,7 +613,7 @@ func TestEngine_ManualCancelKeepsFutureScheduledSlot(t *testing.T) {
 	}
 	select {
 	case <-secondStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(waitRunCeiling):
 		_, done, _, _ := scheduleStateOf(t, e, "t-manual-cancel")
 		t.Fatalf("未来槽被手动轮取消消费（schedDoneSlot=%v），到期后未再投递", done)
 	}
@@ -638,7 +643,7 @@ func TestEngine_CancelHookRejectionKeepsDueSlot(t *testing.T) {
 	e.StartLoop("t-hook-reject")
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("自动轮未启动")
 	}
 	if e.Cancel("t-hook-reject") {
@@ -684,20 +689,20 @@ func TestEngine_CancelAfterFailureDoesNotConsumeDueSlot(t *testing.T) {
 	e.tick()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("自动轮未启动")
 	}
 	cancelDone := make(chan bool, 1)
 	go func() { cancelDone <- e.Cancel("t-cancel-failed") }()
 	select {
 	case <-hookStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("CancelHook 未进入")
 	}
 	close(allowReturn)
 	select {
 	case <-terminalComputed:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("失败终态未计算")
 	}
 	close(allowHook)
@@ -743,7 +748,7 @@ func TestEngineUserCancelSlotAdvanceFailureRetriesSameSlot(t *testing.T) {
 	e.tick()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("automatic run did not start")
 	}
 	if !e.Cancel("t-cancel-slot-error") {
@@ -770,7 +775,7 @@ func TestEngine_CancelEndpointsRespectTaskRole(t *testing.T) {
 	go func() { runDone <- e.Trigger("t-cancel-role", "manual", "") }()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("任务未启动")
 	}
 	e.SetRole(false)
@@ -783,7 +788,7 @@ func TestEngine_CancelEndpointsRespectTaskRole(t *testing.T) {
 	close(release)
 	select {
 	case <-runDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitRunCeiling):
 		t.Fatal("任务未退出")
 	}
 }

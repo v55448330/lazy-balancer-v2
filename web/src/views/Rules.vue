@@ -1349,7 +1349,7 @@ import { hostPortKey, upstreamDedupeKey } from '@/utils/upstreamKeys'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight, weightPercent } from '@/utils/upstreamWeights'
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
 import { clampPassiveHealthCheckTimeout, copyRuleHostHeader, dnsServerAfterToggle, newRuleWizardStageOverrides, stageBlockPageOverrides, stageBlockPagePatch } from '@/utils/ruleWizard'
-import { createLogStatBuckets, incrementCappedStat, type LogStatBuckets } from '@/utils/logStatCap'
+import { createLogStatBuckets, recordLogStatEntry, type LogStatBuckets } from '@/utils/logStatCap'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
@@ -3880,20 +3880,20 @@ const consumeLogLine = (maps: LogStatBuckets, line: string) => {
   }
   const req = entry?.request
   if (!req) return
-  maps.total++
-  const ip = req.client_ip || req.src_ip || req.src || req.remote_ip || '-'
-  incrementCappedStat(maps, 'ip', ip)
   let uri = req.uri || req.uri_path || '-'
   const qi = uri.indexOf('?')
   if (qi >= 0) uri = uri.slice(0, qi)
-  incrementCappedStat(maps, 'uri', uri)
   let ua = req.user_agent || ''
   if (!ua && req.headers) {
     const list = req.headers['User-Agent']
     if (Array.isArray(list) && list.length) ua = list[0]
   }
-  const g = generalizeUA(ua)
-  incrementCappedStat(maps, 'ua', g)
+  // total 与三桶的推进由 util 单点维护（recordLogStatEntry），不再手写 total++
+  recordLogStatEntry(maps, {
+    ip: req.client_ip || req.src_ip || req.src || req.remote_ip || '-',
+    uri,
+    ua: generalizeUA(ua),
+  })
 }
 
 const consumeLogLinesChunked = async (

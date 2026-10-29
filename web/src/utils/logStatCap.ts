@@ -50,3 +50,21 @@ export const incrementCappedStat = (buckets: LogStatBuckets, bucket: LogStatBuck
   }
   map[OTHER_LOG_STAT_KEY] = (map[OTHER_LOG_STAT_KEY] || 0) + 1
 }
+
+/**
+ * 摄入一条已解析的访问日志：total 自增一次、三桶各计一次键。
+ *
+ * total 与桶计数的一致性由本函数单点维护——此前 total++ 由调用方手写，与三桶
+ * 的推进拆在两处，任何一侧改口径（漏计/重复计）都无从钉住。展示侧恒可假设
+ * total === 三桶各自计数之和（每条日志在三桶中各恰好落一个槽位，满表回落
+ * 「其他」也是计数）。
+ */
+export const recordLogStatEntry = (
+  buckets: LogStatBuckets,
+  entry: { readonly ip: string; readonly uri: string; readonly ua: string },
+): void => {
+  buckets.total += 1
+  incrementCappedStat(buckets, 'ip', entry.ip)
+  incrementCappedStat(buckets, 'uri', entry.uri)
+  incrementCappedStat(buckets, 'ua', entry.ua)
+}

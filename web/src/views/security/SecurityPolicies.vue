@@ -784,7 +784,7 @@
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
                 <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
                   <span class="block-page-rule-annotation-name">{{ row.name }}</span>
-                  <span v-for="(note, i) in row.blockPageNotes" :key="i" class="block-page-rule-annotation-status" :class="`is-${note.kind}`">{{ note.text }}</span>
+                  <span v-for="note in row.blockPageNotes" :key="`${note.kind}:${note.text}`" class="block-page-rule-annotation-status" :class="`is-${note.kind}`">{{ note.text }}</span>
                 </div>
               </div>
             </el-form-item>

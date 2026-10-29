@@ -349,24 +349,22 @@ func splitLibraryVersion(version string) []string {
 // reportWafFileVersions 是 BuildWafFileRef 的轻量版本读取:只读
 // crsLiveDir/VERSION 与 ip2regionLivePath+".version" 两个小文件取版本串,
 // 不做 tarGzDirSum 全树哈希与 xdb sha256(Report 每同步周期调用,重哈希是
-// 无谓的 IO/CPU 放大)。语义边界与 BuildWafFileRef 对齐:
+// 无谓的 IO/CPU 放大)。逐文件读取与口径经 readWafVersionLabels 与引用构建
+// 单源。语义边界与 BuildWafFileRef 对齐:
 //   - 文件缺失 = 空串(版本串 TrimSpace 口径、tag 经 sanitizeBundleVersion
 //     形状校验,与 BuildWafFileRef 完全一致);
 //   - seen 语义(rules 目录与 xdb 均缺失 = 视为「无安全数据」,两版本串保持
 //     空串)以 os.Stat 等价复刻——BuildWafFileRef 的 seen 由哈希成功置位,
 //     哈希 IO 异常失败时其整体返回 nil(不上报版本);本 helper 在该边缘仍
-//     上报已读到的版本串,展示面(hover 空态一致性)在可读文件形态下不变。
+//     上报已读到的版本串,展示面(hover 空态一致性)在可读文件形态下不变;
+//   - 读取类失败按空串 best-effort 保留(展示面),不随引用构建的
+//     「整体失败」语义上抛。
 func reportWafFileVersions() (crsVersion, ip2regionTag string) {
 	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules")); err != nil {
 		if _, xdbErr := os.Stat(ip2regionLivePath); xdbErr != nil {
 			return "", ""
 		}
 	}
-	if v, err := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); err == nil {
-		crsVersion = strings.TrimSpace(string(v))
-	}
-	if v, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
-		ip2regionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
-	}
+	crsVersion, ip2regionTag, _ = readWafVersionLabels()
 	return crsVersion, ip2regionTag
 }

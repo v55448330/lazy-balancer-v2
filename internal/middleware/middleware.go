@@ -1741,8 +1741,9 @@ func hasJWTBearer(c *gin.Context) bool {
 
 func adminOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role, exists := c.Get("role")
-		if !exists || role != "admin" {
+		// 「当前角色」唯一读法 c.GetString("role")（jwtAuth 存 string）；Get+存在性
+		// 双读法与它并存会让 dirty role（users_selfservice 守卫）口径分叉。
+		if c.GetString("role") != "admin" {
 			recordAuthenticationRejection(c, "admin_required")
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "需要管理员权限"})
 			c.Abort()

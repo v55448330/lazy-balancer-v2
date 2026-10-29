@@ -17,15 +17,13 @@ test('admin TLS read failures always disable the untrusted switch', () => {
 
 test('basic save awaits the parent config refresh while the form stays frozen', () => {
   const page = basic()
-  assert.match(page, /onSave\?: \(\) => void \| Promise<void>/)
+  assert.match(page, /onSave: \(\) => void \| Promise<void>/, 'onSave 必须是必填 prop（emit(\'save\') 兜底无消费方，已删除）')
   const save = section(page, 'const handleSave = async', '</script>')
   // 两次独立匹配 + 顺序：把 `\s*` 当紧邻契约的写法在换行/注释整理后假红。
-  const refreshAt = save.indexOf('const parentRefresh = props.onSave')
-  assert.ok(refreshAt >= 0, 'save 必须取父级刷新回调')
-  assert.match(save, /if \(parentRefresh\)/, '父级刷新必须有存在性守卫')
-  const awaitedAt = save.indexOf('await parentRefresh()')
-  assert.ok(awaitedAt > refreshAt, 'the parent refresh callback must be awaited')
-  assert.doesNotMatch(save, /await props\.onSave\?\.\(\)/)
+  const awaitedAt = save.indexOf('await props.onSave()')
+  assert.ok(awaitedAt >= 0, 'save 必须 await 父级刷新回调')
+  assert.doesNotMatch(save, /await props\.onSave\?\.\(\)/, '必填回调不得写成可选链（静默跳过刷新）')
+  assert.doesNotMatch(page, /emit\('save'\)/, '事件兜底无消费方，不得回潮')
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
   const parent = code('src/views/Settings.vue')
   assert.match(section(parent, 'const handleSaveBasic = async', 'const handleSaveCaddy'), /await refreshConfigSection\(applyBasicKeys\)/)
@@ -38,14 +36,12 @@ test('Caddy and ACME saves await parent refreshes before unfreezing', () => {
     { page: certificates(), handler: 'handleSaveCertificates', binding: ':on-save="handleSaveCertificates"' },
   ]
   for (const item of cases) {
-    assert.match(item.page, /onSave\?: \(\) => void \| Promise<void>/)
+    assert.match(item.page, /onSave: \(\) => void \| Promise<void>/, 'onSave 必须是必填 prop')
     const save = section(item.page, 'const handleSave = async', '</script>')
-    const refreshAt = save.indexOf('const parentRefresh = props.onSave')
-    const awaitedAt = save.indexOf('await parentRefresh()')
-    const emitAt = save.indexOf("if (!parentRefresh) emit('save')")
-    assert.ok(refreshAt >= 0 && awaitedAt > refreshAt, 'the parent refresh callback must be awaited')
-    assert.ok(emitAt > awaitedAt, 'no-callback fallback must follow the awaited refresh')
-    assert.ok(save.indexOf('await parentRefresh()') < save.indexOf('} finally {'), 'parent refresh must finish before the finally block unfreezes the form')
+    const awaitedAt = save.indexOf('await props.onSave()')
+    assert.ok(awaitedAt >= 0, 'the parent refresh callback must be awaited')
+    assert.ok(awaitedAt < save.indexOf('} finally {'), 'parent refresh must finish before the finally block unfreezes the form')
+    assert.doesNotMatch(item.page, /emit\('save'\)/, '事件兜底无消费方，不得回潮')
     assert.match(parent, new RegExp(item.binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     assert.match(section(parent, `const ${item.handler} = async`, 'const syncActiveTabFromPage'), /await refreshConfigSection\(/)
   }

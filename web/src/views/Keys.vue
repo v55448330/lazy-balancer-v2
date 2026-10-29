@@ -395,8 +395,7 @@ import { computed, ref, onMounted } from 'vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
-import { serializeWhitelist } from '@/utils/apiKeyWhitelist'
-import { parseWhitelist } from '@/utils/apiKeyWhitelist'
+import { parseWhitelist, serializeWhitelist } from '@/utils/apiKeyWhitelist'
 import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
 import { saveBlob } from '@/utils/download'
@@ -507,7 +506,7 @@ const fetchKeys = async () => {
 
 // 白名单解析/归一/序列化/逐行 CIDR 校验收敛到 utils/apiKeyWhitelist 单源（可 node 行为测试）。
 
-const whitelistEntries = (value: readonly string[]): string[] => parseWhitelist(value).split('\n').filter(Boolean)
+const whitelistEntries = (value: readonly string[]): string[] => value.filter(Boolean)
 
 const whitelistSummary = (value: readonly string[]): string => {
   const entries = whitelistEntries(value)

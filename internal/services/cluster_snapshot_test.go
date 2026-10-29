@@ -508,13 +508,13 @@ func TestClusterService_Snapshot_syncSwitchesReadFailureErrors(t *testing.T) {
 
 	// When：缓存路径（Snapshot）与绕过路径（apply 的 previous 备份）各自构建
 	_, _, snapshotErr := service.Snapshot(context.Background(), 0, "", "")
-	_, 绕过Err := service.clusterSnapshotBypassingCache(context.Background())
+	_, bypassErr := service.clusterSnapshotBypassingCache(context.Background())
 
 	// Then：两条路径都必须报错，不得发布快照
 	if snapshotErr == nil {
 		t.Fatal("Snapshot must error when sync switches cannot be read (not publish a snapshot with nil switches)")
 	}
-	if 绕过Err == nil {
+	if bypassErr == nil {
 		t.Fatal("clusterSnapshotBypassingCache must error when sync switches cannot be read")
 	}
 }

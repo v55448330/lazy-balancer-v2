@@ -319,7 +319,7 @@
               type="warning" size="small" class="import-waf-hint"
             >该备份不含规则库版本文件（CRS/IP2Region 与威胁库名单条目），导入「安全防护」将跳过规则库版本记录</el-text>
             <ul v-if="importValidation.warnings?.length" class="import-warnings">
-              <li v-for="(warning, index) in importValidation.warnings" :key="index">{{ warning }}</li>
+              <li v-for="warning in importValidation.warnings" :key="warning">{{ warning }}</li>
             </ul>
             <ul v-if="importValidation.disabled_conflicts.length" class="import-warnings import-conflicts">
               <li v-for="conflict in importValidation.disabled_conflicts" :key="conflict.caddy_id || conflict.name">
@@ -1399,13 +1399,10 @@ const timezoneError = (value: string): string => {
 const props = defineProps<{
   configLoaded: boolean
   /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
-  onSave?: () => void | Promise<void>
+  onSave: () => void | Promise<void>
   /** 服务端最近确认的大屏字段；用于区分展示归一与真实编辑。 */
   savedThreatScreenMode?: 'map' | 'globe'
   savedThreatTrafficSampleN?: number
-}>()
-const emit = defineEmits<{
-  (e: 'save'): void
 }>()
 
 // 读取失败不得把默认值当可写值：原 getter 未加载时回退
@@ -1855,12 +1852,10 @@ const handleSave = async () => {
       console.error('Failed to refresh global config after save:', refreshError)
     }
     // 父级刷新先于 TLS 段：两段写无跨表事务，TLS 段失败不得让基础设置
-    // 看起来整单未生效（用户只需重试 TLS 段）。父级以 onSave 回调提供刷新时
-    // 必须 await 完成：否则 finally 先解冻表单，用户新编辑会被迟到的 /config
-    // 响应静默覆盖；未迁移的旧用法保留事件兜底。
-    const parentRefresh = props.onSave
-    if (parentRefresh) await parentRefresh()
-    if (!parentRefresh) emit('save')
+    // 看起来整单未生效（用户只需重试 TLS 段）。父级以必填 onSave 回调提供刷新
+    // 时必须 await 完成：否则 finally 先解冻表单，用户新编辑会被迟到的 /config
+    // 响应静默覆盖。
+    await props.onSave()
     if (tlsPending) {
       try {
         const fd = formDataOf({ enabled: String(adminTls.value.enabled), mode: adminTls.value.mode })

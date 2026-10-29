@@ -261,10 +261,14 @@ func TestCertIssuer_deployIssuedCertificate_classifiesPersistConflict(t *testing
 		if errors.As(err, &deployErr) {
 			t.Fatalf("error=%v, want raw（并发胜者路径不得进入部署重试链）", err)
 		}
+		// 同步可观测：上方 errors.As 断言已证返回是 raw 错误——部署失败重试登记
+		// 的唯一入口 deploymentFailed 未被进入（其返回必为
+		// certificateDeploymentError），登记经独立 goroutine 也无从发生；此处
+		// 非阻塞核查缓冲通道即可，固定观测窗在负载下会假绿。
 		select {
 		case id := <-scheduled:
 			t.Fatalf("job %d 被登记部署重试，want 无（胜者已提交）", id)
-		case <-time.After(50 * time.Millisecond):
+		default:
 		}
 		var status, certPEM string
 		if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM); err != nil {
@@ -363,9 +367,18 @@ func TestCertificateService_rescanPicksUpNullDeploymentWindowAfterSettle(t *test
 	if rescheduled != 0 {
 		t.Fatalf("rescheduled=%d, want 0（沉降阈值内的 NULL 窗口属主路径执行中）", rescheduled)
 	}
+	// 同步可观测：返回计数=0 之外直查在册 timer 集（防「计数谎报 + 短延迟
+	// timer 异步触发」形态），非阻塞核查回调通道；固定观测窗判「没发生」
+	// 在负载下会假绿。
+	service.timerMu.Lock()
+	_, hasTimer := service.deploymentTimers[jobID]
+	service.timerMu.Unlock()
+	if hasTimer {
+		t.Fatalf("fresh NULL-window job %d got a deployment timer registered", jobID)
+	}
 	select {
 	case id := <-scheduled:
 		t.Fatalf("fresh NULL-window job %d scheduled too early", id)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 }

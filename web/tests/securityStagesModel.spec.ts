@@ -40,25 +40,12 @@ import {
 } from '../src/utils/securityStages.ts'
 import { trustEnabledForPolicyType } from '../src/utils/policyPayload.ts'
 import { code, member, repoCode, section, source } from './_helpers.ts'
+import { stagePolicy } from './fixtures/stagePolicy.ts'
 
-const policyOf = (overrides: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy => ({
-  id: 1,
-  name: '策略 A',
-  mode: 'off',
-  enabled: true,
-  has_ip_control: false,
-  has_rate_limit: false,
-  has_geoip: false,
-  has_custom_rules: false,
-  geoip_countries: '[]',
-  custom_rules_count: 0,
-  ip_acl_mode: 'deny',
-  ip_acl_list: '[]',
-  ip_whitelist: '[]',
-  rate_limit_rps: 10,
-  rate_limit_burst: 20,
-  ...overrides,
-})
+// 夹具单源：字段清单在 fixtures/stagePolicy.ts 维护；本文件只保留与单源的
+// 差异默认值（name/mode/限流值），各用例再按需覆盖。
+const policyOf = (overrides: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy =>
+  stagePolicy({ name: '策略 A', mode: 'off', rate_limit_rps: 10, rate_limit_burst: 20, ...overrides })
 
 const bindingOf = (overrides: Partial<SecurityStageBinding> = {}): SecurityStageBinding => ({
   policy_id: 1,

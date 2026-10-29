@@ -7,8 +7,11 @@
 export const CUSTOM_RULE_MAX_CONDITIONS = 64
 export const CUSTOM_RULE_MAX_PATTERN_BYTES = 4 << 10
 
+// TextEncoder 无状态可复用：逐键输入路径每次调用 new 一次纯属浪费。
+const utf8Encoder = new TextEncoder()
+
 /** 与后端 len(pattern) 同口径的 UTF-8 字节长度。 */
-export const patternByteLength = (value: string): number => new TextEncoder().encode(value).length
+export const patternByteLength = (value: string): number => utf8Encoder.encode(value).length
 
 export const canAddCondition = (count: number): boolean => count < CUSTOM_RULE_MAX_CONDITIONS
 

@@ -23,10 +23,12 @@ test('设置页消费 cert_info_error 并渲染错误条', () => {
 
   // 仅 upload 模式的存量证书可能损坏（selfsigned 由 ResolveCertificate 自愈），
   // 以已保存的 mode 判定，不受弹框内未提交切换影响。
-  assert.match(
-    page,
-    /const adminTlsCertBroken = computed\(\(\) => adminTlsSaved\.value\.mode === 'upload' && adminTlsCertError\.value !== ''\)/,
-  )
+  // 三个合取项分别断言：整串正则钉会在重排比较项/换行时假红。
+  const brokenDecl = section(page, 'const adminTlsCertBroken =', '\n')
+  assert.ok(brokenDecl.includes('computed(() =>'), '必须由 saved 派生（computed），不得在读取路径手工补写')
+  assert.ok(brokenDecl.includes("adminTlsSaved.value.mode === 'upload'"), '仅 upload 模式判定损坏')
+  assert.ok(brokenDecl.includes("adminTlsCertError.value !== ''"), '必须消费 cert_info_error（fail-visible）')
+  assert.ok(brokenDecl.includes('&&'), '两个条件必须同时成立（合取）')
 
   // 错误条复用全局 info-note-bar（禁止局部 :deep 或重定义全局类）。
   const bar = section(page, 'v-if="adminTlsCertBroken"', '</div>')

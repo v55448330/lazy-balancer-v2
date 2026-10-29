@@ -45,7 +45,8 @@ test('事件页两处建议样式都从档位单源派生', () => {
   const page = code('src/views/security/SecurityEvents.vue')
   const style = section(page, 'const suggestionCountStyle', 'const suggestionProgressColor')
   assert.match(style, /suggestionBand\(/, '命中次数色深必须来自档位单源')
-  const progress = section(page, 'const suggestionProgressColor', '\n')
+  // 行首 `const` 终点：声明换行重排后切片仍完整（'\n' 会把多行声明截成首行）。
+  const progress = section(page, 'const suggestionProgressColor', '\nconst ')
   assert.match(progress, /suggestionBand\(/, '进度条配色必须来自同一档位单源')
 })
 

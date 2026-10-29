@@ -244,7 +244,7 @@ test('信任关联写动作确认前即占位（双击不再叠确认框）', ()
   // 每个写入口的入口守卫必须早于占位与确认框。
   const writers = [
     ['const ensureListAndJoin = async', 'const removeFromSideRef = async'],
-    ['const removeFromSideRef = async', 'return { busyTrust'],
+    ['const removeFromSideRef = async', 'return { creating'],
   ] as const
   for (const [startMarker, endMarker] of writers) {
     const body = section(text, startMarker, endMarker)

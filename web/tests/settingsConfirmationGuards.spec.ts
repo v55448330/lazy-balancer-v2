@@ -38,7 +38,7 @@ test('HTTPS 证书配置仅暂存，弹框静态提示保存与重启而不追�
 })
 
 test('基础设置只在预览有变更或暂存证书时弹保存确认', () => {
-  const body = section(page(), 'const handleSave = async', 'const parentRefresh = props.onSave')
+  const body = section(page(), 'const handleSave = async', 'await props.onSave()')
   const gate = body.indexOf('if (preview.data?.changed || tlsPending) {')
   assert.ok(gate > 0, '保存确认必须由「预览无变更不弹」的实际变更门控')
   assert.doesNotMatch(body.slice(0, gate), /ElMessageBox\.confirm\(/, '无变更路径不得提前弹确认框')
@@ -69,10 +69,10 @@ test('只有暂停 OIDC 的分支才说明认证入口影响', () => {
   assert.match(disabling, /OIDC 用户将无法通过该入口登录/)
 })
 
-test('IP 快捷弹框名单写入经共享确认链，不复制第二套写实现', () => {
-  const body = section(code('src/views/security/IPLocationAction.vue'), 'const executeAdd = async', 'const removeSource')
-  assert.match(body, /joinSpecificList\(/, '名单写入必须经 useTrustAssociation/useIpListAdd 共享链')
-  assert.doesNotMatch(body, /request\.post[^\n]*\/security\/ip-lists\/[^\n]*\/ips/, '弹框不得保留直接 POST')
+test('IP 快捷写入的确认链单源在 useIpListAdd（共享链行为由组件契约 spec 钉）', () => {
+  // 共享写入链 / 无直接 POST / 完成才收起面板这一组不变量由
+  // securityComponentContracts.spec 完整钉住——同一不变量两处维护，实现挪动时
+  // 会一处改一处漏。本文件只钉它独有的独立点：确认链确实长在 useIpListAdd 里。
   assert.match(code('src/composables/useIpListAdd.ts'), /ElMessageBox\.confirm\(/)
 })
 

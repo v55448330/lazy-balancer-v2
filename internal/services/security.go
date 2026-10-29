@@ -1005,26 +1005,48 @@ var (
 	customRuleValidActions = map[string]bool{"block": true, "log": true, "pass": true}
 )
 
-// conditionsEmissionIssue 返回条件列表不可安全发射的原因（"含尾部反斜杠"/"空条件"/
-// "非法 target 或 operator"），无问题时返回空串。供发射防御与集群同步预检共用，
-// 避免两处判定漂移。target/operator 必须在允许集合内，否则发射循环会因映射不到
-// 对应变量而产出缺 ID 的畸形 SecRule（链式规则还会留下悬空 chain），导致 coraza
-// 整体拒绝配置。
-func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
+// validateConditions 是自定义规则条件校验的单一循环：写侧（保存/导入的
+// ValidateCustomRuleConditions）与发射侧（conditionsEmissionIssue 的兜底门）
+// 共用，杜绝两份循环漂移。校验非空、target/operator 在允许集合内、pattern
+// 无 SecRule 行破坏形状；maxPatternBytes>0 时附加写侧单 pattern 字节封顶
+// （发射侧传 0——发射侧刻意不做字节封顶拒绝，否则「超长规则渲染出超护栏
+// 单行」被降级为静默跳过，反而弱化渲染护栏，见 validateCustomRulePatternLength）。
+// target/operator 必须在允许集合内，否则发射循环会因映射不到对应变量而产出
+// 缺 ID 的畸形 SecRule（链式规则还会留下悬空 chain），导致 coraza 整体拒绝配置；
+// 空模式 @contains "" 等于匹配一切，绝不能发射成无条件 deny。
+func validateConditions(conditions []models.CustomRuleCondition, maxPatternBytes int) error {
 	if len(conditions) == 0 {
-		return "空条件"
+		return errors.New("至少需要一个匹配条件")
 	}
-	for _, cond := range conditions {
-		if customRuleTargets[cond.Target] == "" || customRuleOperators[cond.Operator] == "" {
-			return "非法 target 或 operator"
+	for i, cond := range conditions {
+		if _, ok := customRuleTargets[cond.Target]; !ok {
+			return fmt.Errorf("条件 %d 的 target 无效：%q（可选：uri、args、body、headers、user_agent）", i+1, cond.Target)
 		}
-		// 模式内容（空/纯空白、控制字符、尾部反斜杠）与
-		// 保存/导入侧共用 validateCustomRulePattern 单一实现——集群 apply 等
-		// 绕过保存校验的路径在这里兜底；空模式 @contains "" 等于匹配一切，
-		// 绝不能发射成无条件 deny。
+		if _, ok := customRuleOperators[cond.Operator]; !ok {
+			return fmt.Errorf("条件 %d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, cond.Operator)
+		}
+		// 模式内容（空/纯空白、控制字符、尾部反斜杠）与保存/导入侧共用
+		// validateCustomRulePattern 单一实现——集群 apply 等绕过保存校验的路径
+		// 在这里兜底。
 		if err := validateCustomRulePattern(cond.Operator, cond.Pattern); err != nil {
-			return err.Error()
+			return fmt.Errorf("条件 %d：%w", i+1, err)
 		}
+		if maxPatternBytes > 0 {
+			if err := validateCustomRulePatternLength(cond.Pattern); err != nil {
+				return fmt.Errorf("条件 %d：%w", i+1, err)
+			}
+		}
+	}
+	return nil
+}
+
+// conditionsEmissionIssue 返回条件列表不可安全发射的原因，无问题时返回空串。
+// 供发射防御与集群同步预检共用，避免两处判定漂移；判定与写侧保存/导入共用
+// validateConditions 单源（发射侧不启用 pattern 字节封顶，理由见
+// validateConditions/validateCustomRulePatternLength）。
+func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
+	if err := validateConditions(conditions, 0); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -2306,7 +2328,7 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 		}
 		var rules []models.CustomRule
 		queriedIDs := make(map[int]struct{}, len(ids))
-		scanFailedIDs := make(map[int]struct{}, 0)
+		scanFailedIDs := make(map[int]struct{})
 		seenIDs := make(map[int]struct{}, len(ids))
 		for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
 			end := start + policyCustomRuleChunkSize
@@ -3117,27 +3139,15 @@ func ValidateGeoIPCountries(raw string, geoipMode string) error {
 // 斜杠结尾；否则 emitCustomRules 会静默跳过未知条件导致链式规则断裂或生成畸形
 // SecRule。
 func ValidateCustomRuleConditions(conditions []models.CustomRuleCondition) error {
-	if len(conditions) == 0 {
-		return fmt.Errorf("自定义规则至少需要一个匹配条件")
-	}
 	// 条件数封顶：每条条件都会发射成一条链式 SecRule 片段，条件数无上限时
 	// 单条规则即可把配置体积与编译成本线性放大（全局 128MB 体上限拦不住）。
 	if len(conditions) > customRuleMaxConditions {
 		return fmt.Errorf("自定义规则最多支持 %d 个匹配条件", customRuleMaxConditions)
 	}
-	for i, cond := range conditions {
-		if _, ok := customRuleTargets[cond.Target]; !ok {
-			return fmt.Errorf("自定义规则条件 %d 的 target 无效：%q（可选：uri、args、body、headers、user_agent）", i+1, cond.Target)
-		}
-		if _, ok := customRuleOperators[cond.Operator]; !ok {
-			return fmt.Errorf("自定义规则条件 %d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, cond.Operator)
-		}
-		if err := validateCustomRulePattern(cond.Operator, cond.Pattern); err != nil {
-			return fmt.Errorf("自定义规则条件 %d：%w", i+1, err)
-		}
-		if err := validateCustomRulePatternLength(cond.Pattern); err != nil {
-			return fmt.Errorf("自定义规则条件 %d：%w", i+1, err)
-		}
+	// 逐条判定与发射侧共用 validateConditions 单源（写侧启用 pattern 字节
+	// 封顶）；「自定义规则」前缀保持既有错误文案形状。
+	if err := validateConditions(conditions, customRuleMaxPatternBytes); err != nil {
+		return fmt.Errorf("自定义规则%w", err)
 	}
 	return nil
 }

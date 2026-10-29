@@ -332,10 +332,7 @@ const global = defineModel<GlobalCertificateConfig>('global', { required: true }
 const props = defineProps<{
   configLoaded: boolean
   /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
-  onSave?: () => void | Promise<void>
-}>()
-const emit = defineEmits<{
-  (e: 'save'): void
+  onSave: () => void | Promise<void>
 }>()
 
 // 两个独立表单的保存态：原共用一个 saving——任一保存
@@ -891,10 +888,8 @@ const handleSave = async () => {
     const saveMessage = (saveResp as unknown as { message?: string }).message ?? ''
     mfaAwareSuccess(saveMessage.includes('配置无变化') ? saveMessage : '保存成功')
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
-    // 未传回调的旧调用方保留事件兜底。
-    const parentRefresh = props.onSave
-    if (parentRefresh) await parentRefresh()
-    if (!parentRefresh) emit('save')
+    // onSave 为必填回调（Settings.vue 三卡统一接线）。
+    await props.onSave()
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
       console.error('Failed to save certificate settings:', error)

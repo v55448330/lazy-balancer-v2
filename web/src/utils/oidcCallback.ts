@@ -18,6 +18,8 @@
  *    为通用文案。
  */
 
+import { hasOwn } from './hasOwn.ts'
+
 /** 本标签页发起 OIDC 登录的 nonce 键（sessionStorage）。 */
 export const OIDC_APP_NONCE_KEY = 'oidc_app_nonce'
 /** `return_to` 里承载 nonce 的查询项名。 */
@@ -192,14 +194,12 @@ export const oidcErrorMessage = (raw: string): string => {
   // 后缀仍按标准码表翻译，表外的后缀不原文透出。
   const providerPrefix = '提供商拒绝授权'
   if (text === providerPrefix) return OIDC_STANDARD_ERRORS.access_denied
-  if (text.startsWith(`${providerPrefix}: `)) {
-    const code = text.slice(providerPrefix.length + 2).trim().toLowerCase()
-    return Object.prototype.hasOwnProperty.call(OIDC_STANDARD_ERRORS, code) ? OIDC_STANDARD_ERRORS[code] : OIDC_STANDARD_ERRORS.access_denied
-  }
-  const code = text.toLowerCase()
-  // 词表是普通对象：`constructor`/`toString` 等原型键必须先过 hasOwn，
+  const prefixed = text.startsWith(`${providerPrefix}: `)
+  const code = prefixed ? text.slice(providerPrefix.length + 2).trim().toLowerCase() : text.toLowerCase()
+  // 词表是普通对象：constructor/toString 等原型键必须先过 hasOwn（单源守卫），
   // 否则返回 Object.prototype 上的函数（模板渲染函数源码）。
-  if (Object.prototype.hasOwnProperty.call(OIDC_STANDARD_ERRORS, code)) return OIDC_STANDARD_ERRORS[code]
+  if (hasOwn(OIDC_STANDARD_ERRORS, code)) return OIDC_STANDARD_ERRORS[code]
+  if (prefixed) return OIDC_STANDARD_ERRORS.access_denied
   if (OIDC_BACKEND_MESSAGES.includes(text)) return text
   return OIDC_GENERIC_ERROR
 }

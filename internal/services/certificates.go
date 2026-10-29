@@ -1173,8 +1173,10 @@ func SetActiveCertificateService(svc *CertificateService) {
 	}
 }
 
-// lastCertServiceMissing 证书服务缺失状态门（三个证书 tick 任务共享——全局
-// 单例服务指针）：false→true 转换记一次跳过行，缺失持续期静默，true→false
+// lastCertServiceMissing 证书服务缺失状态门（cert-waiting-ca 专用——经
+// withActiveCertServiceTick 消费的全局单例状态；另两个证书 tick 刻意不共享：
+// CertRenewalScanOnce/CertManualCheckOnce 的「跳过」必须逐轮可观测，
+// 见各自实现）：false→true 转换记一次跳过行，缺失持续期静默，true→false
 // 转换记一次恢复行（收敛：空转轮逐轮刷行改状态变化行）。
 var lastCertServiceMissing atomic.Bool
 

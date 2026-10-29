@@ -86,7 +86,7 @@
               <span class="picker-rule-name">{{ rule.name }}</span>
               <span class="picker-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
-            <el-tooltip v-if="pickerWouldExceed(rule)" :content="pickerBlockReason(rule)" placement="top">
+            <el-tooltip v-if="pickerWouldExceed(rule)" :content="rowBlockReasons.get(rule.caddy_id) ?? ''" placement="top">
               <el-icon class="picker-cap-icon"><WarningFilled /></el-icon>
             </el-tooltip>
           </div>
@@ -303,7 +303,16 @@ const pickerBlockReason = (rule: BindingEditorRule): string => {
   }
   return ''
 }
-const pickerWouldExceed = (rule: BindingEditorRule): boolean => pickerBlockReason(rule) !== ''
+// 每行不可选原因一次算全表（模板 tooltip 与 pickerSelectableRules 共用）：
+// 原实现每行至少重算两遍 pickerBlockReason（disabled 判定 + tooltip），其中
+// hasOtherStage2Binding 逐绑定查类型。依赖（props.bindings / pickerSelected /
+// policyTypeById / 过滤结果）任一变化时 computed 自动重算，行为不变。
+const rowBlockReasons = computed(() => {
+  const map = new Map<string, string>()
+  for (const rule of pickerFilteredRules.value) map.set(rule.caddy_id, pickerBlockReason(rule))
+  return map
+})
+const pickerWouldExceed = (rule: BindingEditorRule): boolean => (rowBlockReasons.value.get(rule.caddy_id) ?? '') !== ''
 
 const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => !pickerWouldExceed(rule)))
 const pickerAllChecked = computed(() =>

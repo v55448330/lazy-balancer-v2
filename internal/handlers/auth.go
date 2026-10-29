@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -293,8 +292,9 @@ func loginExpireMinutes() int {
 var jwtJTIReader = rand.Read
 
 // lastLoginTouchFailing 登录成功记账的连续失败状态：首条失败升级为 error 级
-// 留痕（持久故障可见），后续失败降回 warn，成功后复位——登录热路径不得刷屏。
-var lastLoginTouchFailing atomic.Bool
+// 留痕（持久故障可见），后续失败降回 warn，成功后复位——登录热路径不得刷屏
+// （单源 services.LogEscalation）。
+var lastLoginTouchFailing services.LogEscalation
 
 // touchLastLogin 登录成功后的 last_login 记账（单源：密码登录与 OIDC 回调
 // 共用同一顺序与错误策略）。
@@ -307,14 +307,10 @@ func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {
 	lastLogin := time.Now().UTC()
 	_, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, userID)
 	if err == nil {
-		lastLoginTouchFailing.Store(false)
+		lastLoginTouchFailing.Reset()
 		return lastLogin, true
 	}
-	level := "warn"
-	if !lastLoginTouchFailing.Swap(true) {
-		level = "error"
-	}
-	services.Logf(level, "登录成功更新 last_login 失败（user_id=%d username=%s client_ip=%s）: %v", userID, username, clientIP, err)
+	services.Logf(lastLoginTouchFailing.Level(), "登录成功更新 last_login 失败（user_id=%d username=%s client_ip=%s）: %v", userID, username, clientIP, err)
 	return lastLogin, false
 }
 

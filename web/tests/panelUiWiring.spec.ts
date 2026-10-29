@@ -290,7 +290,7 @@ test('自定义规则列表：条件关系独立成列、条件列加宽且长�
   assert.match(table, /<el-table-column label="条件" min-width="320" class-name="rule-cond-cell">/)
   // 每条条件一个单行 chip + tooltip 全文
   assert.match(table, /<div class="cond-chip-list">/)
-  assert.match(table, /<el-tooltip v-for="\(cond, i\) in row\.conditions" :key="i" :content="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
+  assert.match(table, /<el-tooltip v-for="cond in row\.conditions" :key="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`" :content="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
   assert.match(table, /<el-tag size="small" effect="plain" class="cond-chip">/)
   // 组件侧不得再写局部覆盖（复用全局样式）
   assert.doesNotMatch(text, /:deep\(\.el-table \.cell:has\(\.el-tag\)\)/, '页级全局覆盖必须退役')

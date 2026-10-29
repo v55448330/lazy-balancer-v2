@@ -78,8 +78,9 @@ test('组件接线：确定按钮与 confirmAdminTls 共用同一门', () => {
   assert.match(confirm, /if \(adminTlsConfirmBlocked\.value\) return/)
   assert.match(confirm, /stagedAdminTlsCert\.value = mode === 'upload' && certFile && keyFile && certInfo/)
   // 沿用分支必须保持 staged 为空（载荷只发 enabled+mode，材料由后端保留）
-  // 父级刷新改由 onSave 回调 await；TLS 段仍在其后执行，保存门断言覆盖同一区段。
-  const save = section(page, 'const handleSave = async', 'const parentRefresh = props.onSave')
+  // 父级刷新由必填 onSave 回调 await（emit 兜底无消费方已删除）；TLS 段仍在
+  // 其后执行，保存门断言覆盖同一区段。
+  const save = section(page, 'const handleSave = async', "const fd = formDataOf({ enabled: String(adminTls.value.enabled)")
   // 只查标识符出现无法区分「认库内证书」与「反着认」：把条件反转（`!adminTlsHasCert`
   // → `adminTlsHasCert`）或删掉该合取项都仍命中。故按合取项逐个断言，且前缀 `!`
   // 必须是拦截语义（放行条件写成取反即红）。
@@ -108,7 +109,7 @@ test('两段写：/config 已落库时 TLS 段失败须披露部分成功', () =
   const page = code('src/views/settings/BasicSettings.vue')
   const save = section(page, 'const handleSave = async', 'const message = (saveResp')
   assert.ok(
-    save.indexOf("emit('save')") < save.indexOf("'/admin-tls'"),
+    save.indexOf('await props.onSave()') < save.indexOf("'/admin-tls'"),
     '父级刷新必须先于 TLS 段（否则 TLS 失败让基础设置看起来整单未生效）',
   )
   const tls = lastSection(page, 'if (tlsPending) {', '} else {')

@@ -34,15 +34,17 @@ const CERT_RENEWAL_LIFETIME_DAYS = 90
  * 窗口大于「寿命 − 最小节奏」时按窗口入队会让相邻两次续签挤在一起（CA 重复
  * 证书限流），故收敛到保护区（到期前 7 天）。库值不改写，收敛只作用于渲染。
  *
- * 后端以真实证书寿命收敛，前端只知道规划寿命（90 天）：配置 84–88 天时两边
- * 一致收敛为 7 天；自定义 CA 签发更短寿命的证书时后端会收敛得更多，前端按
+ * 后端以真实证书寿命收敛，前端只有规划寿命（90 天）：配置 84–88 天时两边
+ * 一致收敛为保护区；自定义 CA 签发更短寿命的证书时后端会收敛得更多，前端按
  * 规划寿命显示可能偏大——该差额由后端未来下发 renewal_at 消除。
  */
 export const certRenewalWindowDays = (days: number): number => {
   if (!Number.isFinite(days) || days <= 0) return days
   const headroom = CERT_RENEWAL_LIFETIME_DAYS - CERT_RENEWAL_GRACE_DAYS
   if (days <= headroom) return days
-  return Math.min(CERT_RENEWAL_GRACE_DAYS, headroom)
+  // 走到这里必有 days > headroom(83) > 保护区(7)：恒返回保护区窗口。
+  // 动态收敛（按真实寿命）由后端执行，前端不再有一段可达的「二者取小」分支。
+  return CERT_RENEWAL_GRACE_DAYS
 }
 
 /** 续签窗口是否被寿命收敛（UI 据此提示实际节奏与配置不同）。 */

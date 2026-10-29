@@ -10,29 +10,18 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 
-type Listener = () => void
-const listeners: Listener[] = []
-const fakeDocument = {
-  hidden: false,
-  addEventListener: (type: string, listener: Listener): void => {
-    assert.equal(type, 'visibilitychange', '只挂 visibilitychange')
-    listeners.push(listener)
-  },
-  removeEventListener: (type: string, listener: Listener): void => {
-    assert.equal(type, 'visibilitychange')
-    const index = listeners.indexOf(listener)
-    if (index >= 0) listeners.splice(index, 1)
-  },
-}
-const host = globalThis as unknown as Record<string, unknown>
-const previousDocument = host.document
-host.document = fakeDocument
+import { installBrowserHost } from './_helpers.ts'
+
+// 监听在模块 import 时单次绑定，故先把假 document 装上再动态 import。
+const browser = installBrowserHost({ visibility: true })
+const fakeDocument = browser.document
+
 after(() => {
-  for (const listener of [...listeners]) fakeDocument.removeEventListener('visibilitychange', listener)
-  if (previousDocument === undefined) Reflect.deleteProperty(host, 'document')
-  else host.document = previousDocument
-  assert.equal(host.document, previousDocument, '假 document 必须还原')
-  assert.equal(listeners.length, 0, '假 document 上不得残留监听器')
+  // 被测模块以匿名 handler 单次绑定（设计上不摘除）——文件结束先清场再还原。
+  assert.equal(fakeDocument.listenerCount, 1, 'visibilitychange 只允许模块级单次绑定')
+  fakeDocument.clear()
+  assert.equal(fakeDocument.listenerCount, 0, '假 document 上不得残留监听器')
+  browser.restore()
 })
 
 const {
@@ -44,7 +33,7 @@ const {
 
 test('恢复可见：标记已缓存条目陈旧（保留数据），下次 ensure 重拉', async () => {
   invalidateSharedEntriesCache()
-  assert.equal(listeners.length, 1, 'visibilitychange 单次绑定')
+  assert.equal(fakeDocument.listenerCount, 1, 'visibilitychange 单次绑定')
 
   let calls = 0
   const loader = async (): Promise<string[]> => {
@@ -62,12 +51,12 @@ test('恢复可见：标记已缓存条目陈旧（保留数据），下次 ensu
 
   // 隐藏期间不失效（只有回前台才需要重拉）
   fakeDocument.hidden = true
-  for (const listener of listeners) listener()
+  fakeDocument.dispatch()
   assert.deepEqual(missingSharedEntryIds([3]), [], '隐藏态不得标记陈旧')
 
   // 恢复可见：标记陈旧但保留数据（打开中的弹框不得变空名单）
   fakeDocument.hidden = false
-  for (const listener of listeners) listener()
+  fakeDocument.dispatch()
   assert.deepEqual(sharedEntriesCache[3], ['10.0.0.1'], '恢复可见不得清空已显示条目')
   assert.deepEqual(missingSharedEntryIds([3]), [3], '恢复可见后按缺失重拉（外部变更收敛）')
 

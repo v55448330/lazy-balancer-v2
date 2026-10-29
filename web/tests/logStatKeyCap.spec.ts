@@ -17,10 +17,14 @@ import {
   OTHER_LOG_STAT_KEY,
   createLogStatBuckets,
   incrementCappedStat,
+  recordLogStatEntry,
 } from '../src/utils/logStatCap.ts'
 import { code } from './_helpers.ts'
 
 const keyOf = (i: number): string => `10.0.${Math.floor(i / 256)}.${i % 256}`
+
+const bucketSum = (map: Record<string, number>): number =>
+  Object.values(map).reduce((sum, count) => sum + count, 0)
 
 test('容量内：新键落库并计数，既有键只自增不重复计数', () => {
   const buckets = createLogStatBuckets()
@@ -75,6 +79,29 @@ test('原型链敌意键不得侵蚀计数（容器原型安全）', () => {
   }
   assert.equal(Object.getPrototypeOf(buckets.uri), null, '统计桶必须无原型')
   assert.equal(Object.keys(buckets.uri).length, 4)
+})
+
+test('摄入单点：total 与三桶计数一致（含满表回落「其他」形态）', () => {
+  const buckets = createLogStatBuckets()
+  // 混合形态：新键 / 重复键 / 满表回落，各桶独立推进
+  recordLogStatEntry(buckets, { ip: '1.1.1.1', uri: '/a', ua: 'Chrome 120' })
+  recordLogStatEntry(buckets, { ip: '1.1.1.1', uri: '/a?x=1', ua: 'Chrome 120' })
+  recordLogStatEntry(buckets, { ip: '2.2.2.2', uri: '/b', ua: 'curl/8.0' })
+  assert.equal(buckets.total, 3)
+  assert.equal(bucketSum(buckets.ip), 3)
+  assert.equal(bucketSum(buckets.uri), 3)
+  assert.equal(bucketSum(buckets.ua), 3)
+
+  // 满表回落「其他」后 total 仍与各桶计数之和一致（回落也是计数，不是丢弃）
+  const distinct = MAX_LOG_STAT_KEYS - 1
+  for (let i = 0; i < distinct; i++) {
+    recordLogStatEntry(buckets, { ip: keyOf(i), uri: `/p${i}`, ua: `UA-${i}` })
+  }
+  recordLogStatEntry(buckets, { ip: '203.0.113.9', uri: '/overflow', ua: 'UA-overflow' })
+  assert.equal(buckets.total, 3 + distinct + 1)
+  assert.equal(bucketSum(buckets.ip), buckets.total)
+  assert.equal(bucketSum(buckets.uri), buckets.total)
+  assert.equal(bucketSum(buckets.ua), buckets.total)
 })
 
 test('规则日志视图消费单源容器（不得回流本地实现）', () => {

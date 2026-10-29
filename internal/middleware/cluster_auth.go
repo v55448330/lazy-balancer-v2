@@ -5,10 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apikey"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -68,16 +68,10 @@ func registrationAuth(database *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// bearerToken 从 Authorization 头提取 Bearer 令牌（单源：clusterTokenAuth /
-// registrationAuth / jwtAuth / 凭据指纹共用；API Key 传输由 apikey 包按同一
-// Fields 口径解析）。
-//
-// RFC 7235 §2.1：auth-scheme 大小写不敏感——"bearer x" / "BEARER x" 与
-// "Bearer x" 等价；方案与凭据按字段归一，拒绝裸 token、空令牌与额外字段。
+// bearerToken 从 Authorization 头提取 Bearer 令牌。解析规则单源在 apikey 包
+// 的 BearerToken（clusterTokenAuth / registrationAuth / jwtAuth / 凭据指纹
+// 共用；API Key 传输由 apikey 包按同一 Fields 口径解析），此处只作薄包装，
+// 两侧不再各写一份。
 func bearerToken(authorization string) string {
-	fields := strings.Fields(authorization)
-	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
-		return ""
-	}
-	return fields[1]
+	return apikey.BearerToken(authorization)
 }

@@ -7,7 +7,7 @@ import {
   importConfirmMessage,
   normalizeBackupSectionKeys,
 } from '../src/utils/backupSections.ts'
-import { code, elementSlice, openTags, repoCode, section } from './_helpers.ts'
+import { code, elementSlice, goConstExpr, openTags, repoCode, section } from './_helpers.ts'
 
 // 设置页备份面回归守卫：导入入口/超大文件拒绝、lbbak Blob 直传、还原文案按分类、
 // 下次备份调度口径、立即备份的卸载收尾，以及备份四分类前后端单源一致性。
@@ -33,10 +33,8 @@ test('新文件入口先清旧内容，超大拒绝不可回用旧备份', () =>
 })
 
 test('导入大小上限与后端 maxConfigImportBytes 同源', () => {
-  const go = repoCode('internal/handlers/config_import_v1.go')
-  const declared = /var maxConfigImportBytes int64 = (\d+) << (\d+)/.exec(go)
-  assert.ok(declared, '后端导入上限常量未解析')
-  const goBytes = Number(declared[1]) * 2 ** Number(declared[2])
+  // 表达式形态（<<）提取与求值走 goConstExpr 单源；前端镜像按 MB 计，对表同值。
+  const goBytes = goConstExpr('internal/handlers/config_import_v1.go', 'maxConfigImportBytes')
   const pageBytes = /const IMPORT_MAX_BYTES = (\d+) \* 1024 \* 1024/.exec(page)
   assert.ok(pageBytes, '前端导入上限常量未解析')
   assert.equal(Number(pageBytes[1]) * 1024 * 1024, goBytes, '前后端导入上限漂移会让超限文件在错误的一侧被拦')

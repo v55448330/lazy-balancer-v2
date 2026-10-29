@@ -21,14 +21,14 @@ import {
   PASSWORD_CHARSET_MESSAGE,
   missingNewPasswordMessage,
 } from '../src/utils/credentials.ts'
-import { repoCode, section, code } from './_helpers.ts'
+import { repoCode, section, code, goConstInt } from './_helpers.ts'
 
 // 跨栈权威源：用户名/密码策略在后端是字面量（auth.go 的密码常量 + 用户名正则、
 // models.go 的 CreateUserRequest 长度标签）。下方行为断言的长度/字符集边界全部
 // 由 Go 源派生——前端手抄表与后端单侧漂移即红，不再依赖人工核对。
 const authGo = repoCode('internal/handlers/auth.go')
-const GO_PASSWORD_MIN = Number(/minPasswordLength = (\d+)/.exec(authGo)?.[1])
-const GO_PASSWORD_MAX = Number(/maxPasswordLength = (\d+)/.exec(authGo)?.[1])
+const GO_PASSWORD_MIN = goConstInt('internal/handlers/auth.go', 'minPasswordLength')
+const GO_PASSWORD_MAX = goConstInt('internal/handlers/auth.go', 'maxPasswordLength')
 const GO_USERNAME_PATTERN = /usernamePolicyRe = regexp\.MustCompile\(`([^`]+)`\)/.exec(authGo)?.[1] ?? ''
 const createUserGo = section(repoCode('internal/models/models.go'), 'type CreateUserRequest struct', '\n}')
 const GO_USERNAME_BINDING = /binding:"required,min=(\d+),max=(\d+)"/.exec(createUserGo)

@@ -48,8 +48,10 @@ func TestCAQueueManager_EnqueueIfActive_doesNotHoldGlobalLockAcrossProviderResol
 	elapsed := time.Since(start)
 
 	// Then：快路径必须立即返回——持锁做 provider IO 时这里会等到 ≥500ms。
-	if elapsed > 100*time.Millisecond {
-		t.Fatalf("IsJobActive 耗时 %s（>100ms），EnqueueIfActive 仍持全局锁做 provider 解析", elapsed)
+	// 上限取桩延迟的相对量（一半）：绝对 100ms 在 CI 高负载/-race 下对无竞争
+	// 快路径也会假红。
+	if elapsed > providerDelay/2 {
+		t.Fatalf("IsJobActive 耗时 %s（> 桩延迟一半 %s），EnqueueIfActive 仍持全局锁做 provider 解析", elapsed, providerDelay/2)
 	}
 	if err := <-enqueueDone; err != nil {
 		t.Fatalf("enqueue err=%v, want nil", err)

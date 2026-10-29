@@ -249,7 +249,7 @@
 import OIDCSettings from '@/views/settings/OIDCSettings.vue'
 import { computed, reactive, ref, watch, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { request, ApiRequestError, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
+import { request, ApiRequestError, mfaAwareSuccess, normalizeMfaCodeInput, validateRecoveryOrTotpInput } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus, Key, Lock, Warning } from '@element-plus/icons-vue'
@@ -557,7 +557,7 @@ function lbConfirm() {
     if (!lbDialog.newPwd) { ElMessage.error('请输入密码'); return }
     if (lbDialog.newPwd !== lbDialog.newPwd2) { ElMessage.error('两次输入的新密码不一致'); return }
   } else if (mode === 'mfa-code') {
-    if (!validateMfaCodeInput(lbDialog.code)) { ElMessage.error('请输入验证码或恢复代码'); return }
+    if (!validateRecoveryOrTotpInput(lbDialog.code)) { ElMessage.error('请输入验证码或恢复代码'); return }
   }
   lbDialog.visible = false
   lbDialog.resolve?.({

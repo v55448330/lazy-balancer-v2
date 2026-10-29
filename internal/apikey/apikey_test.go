@@ -50,6 +50,35 @@ func TestFromHeader_extractionRules(t *testing.T) {
 	}
 }
 
+// TestBearerToken_schemeIsCaseInsensitive 钉住方案段解析单源（middleware 的
+// bearerToken 是这里的薄包装）：auth-scheme 大小写不敏感（RFC 7235 §2.1）、
+// Fields 拒绝裸 token/空令牌/额外字段——与 middleware/cluster_auth_contract_test
+// 的同名矩阵同口径，删改任一侧都会在另一侧暴露。
+func TestBearerToken_schemeIsCaseInsensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		authorization string
+		want          string
+	}{
+		{"标准大写", "Bearer abc123", "abc123"},
+		{"小写方案", "bearer abc123", "abc123"},
+		{"全大写方案", "BEARER abc123", "abc123"},
+		{"混合大小写", "BeArEr abc123", "abc123"},
+		{"多空白分隔", "Bearer \t abc123", "abc123"},
+		{"tab 分隔", "Bearer\tabc123", "abc123"},
+		{"额外字段", "Bearer abc123 extra", ""},
+		{"空令牌", "Bearer ", ""},
+		{"只有方案无空格", "Bearer", ""},
+		{"裸 token", "abc123", ""},
+		{"空头", "", ""},
+		{"其它方案", "Basic dXNlcjpwYXNz", ""},
+	} {
+		if got := BearerToken(tc.authorization); got != tc.want {
+			t.Errorf("%s: BearerToken(%q) = %q, want %q", tc.name, tc.authorization, got, tc.want)
+		}
+	}
+}
+
 // TestIsAPIKeyAuthorization_matchesFromHeader 是两侧语义等价的绊线：认证侧用
 // IsAPIKeyAuthorization 区分「API Key Bearer」与「JWT Bearer」，转发侧用
 // FromHeader 提取——两者对同一 header 的判断必须一致，否则出现「认证通过但

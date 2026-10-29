@@ -497,9 +497,7 @@ func TestOIDCStatus_failureWarningIsThrottled(t *testing.T) {
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	resetWarningWindow := func() {
-		oidcStatusFailureLog.Lock()
-		oidcStatusFailureLog.at = time.Time{}
-		oidcStatusFailureLog.Unlock()
+		oidcStatusFailureLog.Reset()
 	}
 	resetWarningWindow()
 	t.Cleanup(resetWarningWindow)
@@ -1153,9 +1151,7 @@ func TestOIDCStatus_invalidStoredIssuerLogsAndDisables(t *testing.T) {
 		`{"enabled":true,"issuer":"ftp://bad.example","client_id":"c","client_secret":"s"}`); err != nil {
 		t.Fatal(err)
 	}
-	oidcStatusIssuerLog.Lock()
-	oidcStatusIssuerLog.at = time.Time{}
-	oidcStatusIssuerLog.Unlock()
+	oidcStatusIssuerLog.Reset()
 	logs := captureLog(t)
 
 	rec := httptest.NewRecorder()
@@ -1209,14 +1205,8 @@ func TestOIDCStatus_incompleteStoredCredentialsLogAndDisable(t *testing.T) {
 				`{"enabled":true,"issuer":"`+idp.issuer+`","client_id":"`+tc.clientID+`","client_secret":"`+tc.clientSecret+`"}`); err != nil {
 				t.Fatal(err)
 			}
-			oidcStatusIssuerLog.Lock()
-			oidcStatusIssuerLog.at = time.Time{}
-			oidcStatusIssuerLog.Unlock()
-			t.Cleanup(func() {
-				oidcStatusIssuerLog.Lock()
-				oidcStatusIssuerLog.at = time.Time{}
-				oidcStatusIssuerLog.Unlock()
-			})
+			oidcStatusIssuerLog.Reset()
+			t.Cleanup(oidcStatusIssuerLog.Reset)
 			logs := captureLog(t)
 
 			for range 2 {

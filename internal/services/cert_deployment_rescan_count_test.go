@@ -55,10 +55,19 @@ func TestCertificateService_rescanDoesNotCountUnscheduledRetries(t *testing.T) {
 		if rescheduled != 0 {
 			t.Fatalf("rescheduled=%d, want 0（暂停期未登记任何 timer）", rescheduled)
 		}
+		// 同步可观测：返回计数=0 之外直查在册 timer 集（防「计数谎报 + 短延迟
+		// timer 异步触发」形态），非阻塞核查回调通道；固定观测窗判「没发生」
+		// 在负载下会假绿。
+		service.timerMu.Lock()
+		_, hasTimer := service.deploymentTimers[jobID]
+		service.timerMu.Unlock()
+		if hasTimer {
+			t.Fatalf("paused rescan registered a deployment timer for job %d", jobID)
+		}
 		select {
 		case id := <-scheduled:
 			t.Fatalf("paused rescan scheduled job %d", id)
-		case <-time.After(50 * time.Millisecond):
+		default:
 		}
 
 		// 恢复后同一行必须真正重排——「不计数」不得退化为「永不调度」
@@ -98,10 +107,17 @@ func TestCertificateService_rescanDoesNotCountUnscheduledRetries(t *testing.T) {
 		if rescheduled != 0 {
 			t.Fatalf("rescheduled=%d, want 0（规则补偿屏障期）", rescheduled)
 		}
+		// 同步可观测：同暂停期子用例——直查在册 timer 集 + 非阻塞通道核查。
+		service.timerMu.Lock()
+		_, hasTimer := service.deploymentTimers[jobID]
+		service.timerMu.Unlock()
+		if hasTimer {
+			t.Fatalf("barrier rescan registered a deployment timer for job %d", jobID)
+		}
 		select {
 		case id := <-scheduled:
 			t.Fatalf("barrier rescan scheduled job %d", id)
-		case <-time.After(50 * time.Millisecond):
+		default:
 		}
 
 		// 解锁后包级补扫（Unblock→rescanDroppedCertificateDeploymentRetries）

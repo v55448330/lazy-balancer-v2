@@ -2669,10 +2669,14 @@ func TestCertificateService_rescanSkipsJobsWithActiveTimer(t *testing.T) {
 	if original.canceled {
 		t.Fatal("active timer was canceled by periodic rescan")
 	}
+	// 同步可观测：补扫同步返回且上方已证 timer 身份未变/未被取消（原 timer
+	// 延迟 1h，测试期内不可能触发；重排唯一入口 scheduleDeploymentRetry 会
+	// 换掉 map 条目，已被身份断言排除）——此处只需非阻塞核查「补扫未在返回
+	// 前直接触发回调」，固定观测窗判「没发生」在负载下会假绿。
 	select {
 	case id := <-rescheduled:
 		t.Fatalf("rescan rescheduled job %d despite active timer", id)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	service.pauseDeploymentRetries()
 }

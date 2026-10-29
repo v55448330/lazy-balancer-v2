@@ -132,8 +132,7 @@ test('白名单 parse/serialize 单源往返覆盖空行、重复与原型键', 
     assert.equal(result.value.length, 0)
     assert.match(result.error, /格式不正确/)
   }
-  assert.match(keys, /import \{ parseWhitelist \} from '@\/utils\/apiKeyWhitelist'/)
-  assert.match(keys, /import \{ serializeWhitelist \} from '@\/utils\/apiKeyWhitelist'/)
+  assert.match(keys, /import \{ parseWhitelist, serializeWhitelist \} from '@\/utils\/apiKeyWhitelist'/, '同一模块两条 import 不得并存')
   assert.doesNotMatch(keys, /const parseWhitelist =/)
 })
 

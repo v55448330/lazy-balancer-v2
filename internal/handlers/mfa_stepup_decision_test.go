@@ -153,9 +153,7 @@ func TestDecideMFAStepUp_futureTimestampWarnIsThrottled(t *testing.T) {
 	seedStepUpUsers(t)
 	setMfaWriteGuard(t, true)
 	reset := func() {
-		mfaFutureTimestampWarningLog.mu.Lock()
-		mfaFutureTimestampWarningLog.last = time.Time{}
-		mfaFutureTimestampWarningLog.mu.Unlock()
+		mfaFutureTimestampWarningLog.Reset()
 	}
 	reset()
 	t.Cleanup(reset)
@@ -181,10 +179,9 @@ func TestDecideMFAStepUp_futureTimestampWarnIsThrottled(t *testing.T) {
 		t.Fatalf("future timestamp warnings=%d, want 1; logs=%q", got, logs.String())
 	}
 
-	// When 上一告警已超过节流窗口。
-	mfaFutureTimestampWarningLog.mu.Lock()
-	mfaFutureTimestampWarningLog.last = time.Now().Add(-61 * time.Second)
-	mfaFutureTimestampWarningLog.mu.Unlock()
+	// When 上一告警已不在窗口内（Reset 使下一条视作新窗口首条——与窗口自然
+	// 过期同向，避免永久静默的回归仍被钉住）。
+	mfaFutureTimestampWarningLog.Reset()
 	decide()
 	// Then 新窗口重新留痕，避免永久静默。
 	if got := strings.Count(logs.String(), "MFA step-up 时间戳在未来"); got != 2 {

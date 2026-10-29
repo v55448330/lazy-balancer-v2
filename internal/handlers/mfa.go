@@ -623,21 +623,15 @@ func mfaStepUpSecondsAgo(elapsed time.Duration) int64 {
 
 const mfaFutureTimestampWarnInterval = 60 * time.Second
 
-var mfaFutureTimestampWarningLog struct {
-	mu   sync.Mutex
-	last time.Time
-}
-
 // logMFAFutureTimestampWarning 对持续时钟回拨按全局 60s 窗口留痕；请求拒绝
-// 判定不受节流影响。全局单槽避免用户 ID 键值随异常会话无界增长。
+// 判定不受节流影响。全局单槽避免用户 ID 键值随异常会话无界增长
+// （结构单源 services.LogThrottle）。
+var mfaFutureTimestampWarningLog services.LogThrottle
+
 func logMFAFutureTimestampWarning(userID int, elapsed time.Duration) {
-	mfaFutureTimestampWarningLog.mu.Lock()
-	defer mfaFutureTimestampWarningLog.mu.Unlock()
-	now := time.Now()
-	if !mfaFutureTimestampWarningLog.last.IsZero() && now.Sub(mfaFutureTimestampWarningLog.last) < mfaFutureTimestampWarnInterval {
+	if !mfaFutureTimestampWarningLog.Allow(mfaFutureTimestampWarnInterval) {
 		return
 	}
-	mfaFutureTimestampWarningLog.last = now
 	services.Logf("warn", "MFA step-up 时间戳在未来（时钟回拨？），按未验证处理: user_id=%d age=%s", userID, elapsed)
 }
 

@@ -72,7 +72,7 @@ func TestGetOpenAPIYAML_servesSpecWithPathsAndBearerSecurity(t *testing.T) {
 		t.Fatalf("Content-Type=%q, want application/yaml", got)
 	}
 	spec := recorder.Body.String()
-	for _, marker := range []string{"openapi:", "paths:", "/api/v1/rules"} {
+	for _, marker := range []string{"openapi:", "paths:", "/api/v1/rules", "securitySchemes:", "bearerAuth:"} {
 		if !strings.Contains(spec, marker) {
 			t.Fatalf("规格缺 %q（前 200 字节：%q）", marker, spec[:min(len(spec), 200)])
 		}
@@ -334,26 +334,52 @@ func TestStartCaddyRestartWatcher_secondCallStartsNoSecondLoop(t *testing.T) {
 }
 
 // 指标总览端点：空采样也必须返回结构化 0 值（前端卡片按字段渲染，缺键会
-// 变成 undefined 显示）。
+// 变成 undefined 显示）。键集契约逐键断言——只断言「对象非空」对
+// 「注入/未注入 service 同形」恒真，Data 缺键或整个缺失都曾绿。
 func TestGetMetricsOverview_returnsStructuredZeroValue(t *testing.T) {
-	h := NewHandlers(Dependencies{MetricsService: services.NewMetricsService("http://127.0.0.1:1/metrics", 60)})
-	recorder := getRoute(t, "/metrics/overview", h.GetMetricsOverview)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	// 全部 14 个键必须在场且为 JSON 数值（models.MetricsOverview 的字段契约）。
+	assertOverviewKeys := func(t *testing.T, body string) {
+		t.Helper()
+		var payload struct {
+			Code int            `json:"code"`
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if payload.Code != 0 {
+			t.Fatalf("code=%d", payload.Code)
+		}
+		for _, key := range []string{
+			"total_requests", "requests_per_sec", "bytes_in", "bytes_out",
+			"status_2xx", "status_3xx", "status_4xx", "status_5xx",
+			"latency_p50", "latency_p95", "latency_p99",
+			"active_rules", "total_rules", "online_nodes",
+		} {
+			val, ok := payload.Data[key]
+			if !ok {
+				t.Fatalf("总览缺键 %q（前端卡片字段 undefined）: %s", key, body)
+			}
+			if _, isNum := val.(float64); !isNum {
+				t.Fatalf("键 %q 必须是 JSON 数值（得到 %T=%v）: %s", key, val, val, body)
+			}
+		}
 	}
-	var body struct {
-		Code int                    `json:"code"`
-		Data map[string]interface{} `json:"data"`
+	call := func(t *testing.T, h *Handlers) string {
+		t.Helper()
+		recorder := getRoute(t, "/metrics/overview", h.GetMetricsOverview)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return recorder.Body.String()
 	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Code != 0 {
-		t.Fatalf("code=%d", body.Code)
-	}
-	if len(body.Data) == 0 {
-		t.Fatalf("总览数据为空对象（前端卡片字段全 undefined）: %s", recorder.Body.String())
-	}
+
+	t.Run("未注入 MetricsService 返回结构化零值", func(t *testing.T) {
+		assertOverviewKeys(t, call(t, NewHandlers(Dependencies{})))
+	})
+	t.Run("注入不可达 MetricsService 同形", func(t *testing.T) {
+		assertOverviewKeys(t, call(t, NewHandlers(Dependencies{MetricsService: services.NewMetricsService("http://127.0.0.1:1/metrics", 60)})))
+	})
 }
 
 // IP2Region 更新状态端点：manager 缺席 500（显式「未初始化」），初始化后

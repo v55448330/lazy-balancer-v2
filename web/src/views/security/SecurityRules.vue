@@ -147,7 +147,7 @@
                 <!-- 逐条单行 chip：长正则省略 + tooltip 全文，多条按行排布不挤压
                      （样式在 styles/main.css 的 .cond-chip-list/.cond-chip） -->
                 <div class="cond-chip-list">
-                  <el-tooltip v-for="(cond, i) in row.conditions" :key="i" :content="`${cond.target} ${cond.operator} ${cond.pattern}`" placement="top" :show-after="200">
+                  <el-tooltip v-for="cond in row.conditions" :key="`${cond.target} ${cond.operator} ${cond.pattern}`" :content="`${cond.target} ${cond.operator} ${cond.pattern}`" placement="top" :show-after="200">
                     <el-tag size="small" effect="plain" class="cond-chip">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
                   </el-tooltip>
                 </div>

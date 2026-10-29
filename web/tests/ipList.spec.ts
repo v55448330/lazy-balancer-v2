@@ -126,6 +126,20 @@ test('C5 引号包裹的 IP 字段（外部 CSV 工具产物）可解析', () =>
   assert.deepEqual(parseIpListEntryLine('"10.0.0.2","备注"', isValidCidr), { value: '10.0.0.2', remark: '备注' })
 })
 
+test('C5b 引号/非引号 × 逗号/空白 四形态容错一致', () => {
+  // 非引号分支两形态
+  assert.deepEqual(parseIpListEntryLine('10.0.0.1,备注', isValidCidr), { value: '10.0.0.1', remark: '备注' })
+  assert.deepEqual(parseIpListEntryLine('10.0.0.1 备注', isValidCidr), { value: '10.0.0.1', remark: '备注' })
+  // 引号分支：逗号分隔早已支持；空白分隔（表格工具导出的「"IP" 备注」形态）
+  // 与非引号分支对齐——此前被当非法行整行拒绝，与同形态的非引号行不一致。
+  assert.deepEqual(parseIpListEntryLine('"10.0.0.2","备注"', isValidCidr), { value: '10.0.0.2', remark: '备注' })
+  assert.deepEqual(parseIpListEntryLine('"10.0.0.2" 备注', isValidCidr), { value: '10.0.0.2', remark: '备注' })
+  // 引号闭合后直接粘连的残片（无逗号/空白分隔）仍按非法行拒绝——不得并入备注
+  assert.equal(parseIpListEntryLine('"10.0.0.2"备注', isValidCidr), null)
+  // 引号闭合后仅剩空白 = 无备注
+  assert.deepEqual(parseIpListEntryLine('"10.0.0.2"  ', isValidCidr), { value: '10.0.0.2', remark: '' })
+})
+
 test('C6 多行备注导出归一为空格——导入端按行切分，往返不丢备注', () => {
   const line = formatIpListEntryLine('10.0.0.1', '第一行\r\n第二行')
   assert.equal(line, '10.0.0.1,第一行 第二行')

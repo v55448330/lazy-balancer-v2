@@ -180,8 +180,11 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-901.conf")); !os.IsNotExist(err) {
 		t.Fatal("new rules should be rolled back")
 	}
-	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1 (reload after restore)", reloads)
+	// 树从未交换、live 未被触碰（失败发生在备份阶段）：收尾既不还原也不重载
+	// ——reload 门必须反映「树未变更」，Caddy 从未见过新树，自动更新失败重试
+	// 不得每轮空转一次全量重载
+	if reloads != 0 {
+		t.Fatalf("reloads=%d, want 0 (pre-swap backup failure: nothing was swapped, Caddy never saw the new tree)", reloads)
 	}
 
 	// And the overrides freshly written during the failed attempt is removed:

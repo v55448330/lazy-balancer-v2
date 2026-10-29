@@ -35,30 +35,12 @@ import {
   type RuleStageModel,
   type SecurityPolicyType,
   type SecurityStageIPList,
-  type SecurityStagePolicy,
   type StageGroup,
   type StagePolicyGroup,
 } from '../src/utils/securityStages.ts'
 import { code, source, webFiles } from './_helpers.ts'
-
-const policy = (over: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy => ({
-  id: 1,
-  name: '策略',
-  mode: 'blocking',
-  enabled: true,
-  has_ip_control: false,
-  has_rate_limit: false,
-  has_geoip: false,
-  has_custom_rules: false,
-  geoip_countries: '[]',
-  custom_rules_count: 0,
-  ip_acl_mode: 'deny',
-  ip_acl_list: '[]',
-  ip_whitelist: '[]',
-  rate_limit_rps: 100,
-  rate_limit_burst: 50,
-  ...over,
-})
+// 夹具单源：policy 的字段清单在 fixtures/stagePolicy.ts 维护（本文件默认值与其一致，无差异 override）
+import { stagePolicy as policy } from './fixtures/stagePolicy.ts'
 
 const entryList = (id: number, values: string[], count?: number): SecurityStageIPList => ({
   id,

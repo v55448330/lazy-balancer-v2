@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -473,6 +474,88 @@ func TestCRSUpdateRun_internalSwapFailureRemovesNewAuxiliaryFiles(t *testing.T) 
 		if _, err := os.Stat(filepath.Join(m.crsDir, name)); !os.IsNotExist(err) {
 			t.Errorf("%s survived internal swap rollback although it was newly created (stat err=%v)", name, err)
 		}
+	}
+}
+
+// crsLiveTreeInodes 采集目录内全部文件/目录的 inode 集合（相对路径→inode），
+// 供「树未被搬动」断言（搬树即 rename，顶层与整体 inode 必然漂移）。
+// 平台无 syscall.Stat_t 时跳过（与既有 inode 口径用例同约定）。
+func crsLiveTreeInodes(t *testing.T, dir string) map[string]uint64 {
+	t.Helper()
+	inodes := make(map[string]uint64)
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return statErr
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Skip("平台无 syscall.Stat_t，跳过 inode 口径")
+		}
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return relErr
+		}
+		inodes[rel] = st.Ino
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk live tree: %v", err)
+	}
+	return inodes
+}
+
+// 预交换失败路径不得触发冗余整树还原与全量 reload：备份点之后、树交换之前的
+// 失败（辅助文件状态读取失败）live 树从未被触碰——run() 收尾的 fail/cancel
+// 以 crsRestorePointCreated() 为门决定「restore + reload」；运行备份标记若不
+// 随失败收尾清零，该门恒真，收尾会把 live 树换成备份副本（inode 漂移）并空转
+// 一次全量重载（CaddyOpLock+渲染），自动更新失败重试把它放大成每轮一次。
+func TestCRSUpdateRun_preswapFailureSkipsRestoreAndReload(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# live setup")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "# live stock")
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+	})
+	originalStat := statCRSUpdateFile
+	statCRSUpdateFile = func(path string) (os.FileInfo, error) {
+		if filepath.Base(path) == "crs-setup.conf" {
+			return nil, errors.New("forced stat failure")
+		}
+		return os.Stat(path)
+	}
+	t.Cleanup(func() { statCRSUpdateFile = originalStat })
+	reloads := 0
+	m.reloader = func() error { reloads++; return nil }
+
+	liveInodes := crsLiveTreeInodes(t, m.crsDir)
+	m.run("manual", nil)
+
+	if reloads != 0 {
+		t.Fatalf("reloads=%d, want 0（树未变更，收尾不得空转全量重载）", reloads)
+	}
+	afterInodes := crsLiveTreeInodes(t, m.crsDir)
+	if len(afterInodes) != len(liveInodes) {
+		t.Fatalf("live 树条目数变化: before=%d after=%d（预交换失败不得搬树）", len(liveInodes), len(afterInodes))
+	}
+	for rel, ino := range liveInodes {
+		if afterInodes[rel] != ino {
+			t.Fatalf("live 树 inode 漂移: %s before=%d after=%d（预交换失败不得搬树）", rel, ino, afterInodes[rel])
+		}
+	}
+	version, status, message, _, _, _, _ := crsVersionRow(t)
+	if status != "failed" || !strings.Contains(message, "forced stat failure") {
+		t.Fatalf("终态=(%s,%q), want failed + 失败原因", status, message)
+	}
+	if version != "v4.14.0" {
+		t.Fatalf("version=%q, want v4.14.0（预交换失败不得写版本行）", version)
 	}
 }
 

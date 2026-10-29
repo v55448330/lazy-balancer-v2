@@ -13,7 +13,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ref } from 'vue'
 
-import { FakeDocument, deferred, flushMicrotasks, registerModuleHooks } from './_helpers.ts'
+import { deferred, flushMicrotasks, installBrowserHost, registerModuleHooks } from './_helpers.ts'
 import { calls, resetCalls, STUB_API, STUB_ELEMENT } from './_stubs.ts'
 
 
@@ -56,8 +56,7 @@ const makeDialog = () => useLibUpdateDialog<Info>({
 const statusCalls = (): number => g.__gets.filter((item) => item.url.endsWith('/update/status')).length
 
 test('关闭后重开：starting 随会话复位，按钮不再卡在 loading', async () => {
-  const host = globalThis as { document?: unknown }
-  host.document = new FakeDocument()
+  const browser = installBrowserHost({ visibility: true })
   const pending = deferred()
   g.__post = () => pending.promise
   g.__get = async () => ({ data: { running: true } })
@@ -78,14 +77,13 @@ test('关闭后重开：starting 随会话复位，按钮不再卡在 loading', 
     assert.equal(dialog.starting.value, false)
   } finally {
     dialog.dispose()
-    delete host.document
+    browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
   }
 })
 
 test('跨会话迟到响应不得驱动新会话的 refreshStatus', async () => {
-  const host = globalThis as { document?: unknown }
-  host.document = new FakeDocument()
+  const browser = installBrowserHost({ visibility: true })
   const pending = deferred()
   g.__post = () => pending.promise
   g.__get = async () => ({ data: { running: true } })
@@ -105,14 +103,13 @@ test('跨会话迟到响应不得驱动新会话的 refreshStatus', async () => 
     assert.equal(statusCalls(), 0, '上一次触发的迟到响应不得在新会话里取状态')
   } finally {
     dialog.dispose()
-    delete host.document
+    browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
   }
 })
 
 test('跨会话迟到响应不得复位新会话的 starting（新触发仍保持 loading）', async () => {
-  const host = globalThis as { document?: unknown }
-  host.document = new FakeDocument()
+  const browser = installBrowserHost({ visibility: true })
   const first = deferred()
   const second = deferred()
   let post = 0
@@ -137,14 +134,13 @@ test('跨会话迟到响应不得复位新会话的 starting（新触发仍保�
     assert.equal(dialog.starting.value, false, '新会话自己的响应当正常释放占位')
   } finally {
     dialog.dispose()
-    delete host.document
+    browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
   }
 })
 
 test('同会话正常路径不变：409 吞并后仍刷新一次状态，非 409 失败复位且不取状态', async () => {
-  const host = globalThis as { document?: unknown }
-  host.document = new FakeDocument()
+  const browser = installBrowserHost({ visibility: true })
   const dialog = makeDialog()
   const makeApiError = (globalThis as unknown as { __makeApiError: (message: string, status: number) => Error }).__makeApiError
   try {
@@ -170,14 +166,13 @@ test('同会话正常路径不变：409 吞并后仍刷新一次状态，非 409
     assert.equal(g.__gets.length, 0, '触发未生效时不得把既有任务进度当结果轮询')
   } finally {
     dialog.dispose()
-    delete host.document
+    browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
   }
 })
 
 test('dispose 同样复位 starting（组件卸载后不留 loading 残影）', async () => {
-  const host = globalThis as { document?: unknown }
-  host.document = new FakeDocument()
+  const browser = installBrowserHost({ visibility: true })
   const pending = deferred()
   g.__post = () => pending.promise
   const dialog = makeDialog()
@@ -190,7 +185,7 @@ test('dispose 同样复位 starting（组件卸载后不留 loading 残影）', 
     pending.resolve({ data: { status: 'started' } })
     await flushMicrotasks()
   } finally {
-    delete host.document
+    browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
   }
 })

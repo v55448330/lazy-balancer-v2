@@ -77,7 +77,7 @@
         placeholder="当前 6 位动态验证码"
         maxlength="6"
         aria-label="当前 6 位动态验证码"
-        @input="mfaCode = mfaCode.replace(/\D/g, '')"
+        @input="mfaCode = sanitizeTotpDigits(mfaCode)"
       />
       <template #footer>
         <el-button :disabled="mfaSubmitting" @click="mfaCodeDialog = false">取消</el-button>
@@ -103,7 +103,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import MfaBindingWizard from '@/components/MfaBindingWizard.vue'
-import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
+import { request, mfaAwareSuccess, ApiRequestError, sanitizeTotpDigits } from '@/utils/api'
+import { requireData } from '@/utils/requireData'
 import { isCurrentPasswordRejection } from '@/utils/profileUpdate'
 import { missingNewPasswordMessage, validatePassword } from '@/utils/credentials'
 import { useAuthStore } from '@/stores/auth'
@@ -204,14 +205,12 @@ const startEnable = async (): Promise<void> => {
   mfaSubmitting.value = true
   try {
     const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', {}, { silent: true })
-    // 200 但无 data = 后端契约违约（弱网截断/网关改包）：必须显性报错，
-    // 静默 return 会让按钮复位、弹框不动，与「没点上」不可区分
-    if (!res.data) {
-      ElMessage.error('响应异常，请重试')
-      return
-    }
-    pendingSecret.value = res.data.secret
-    pendingUri.value = res.data.uri
+    // 200 但无 data = 后端契约违约（弱网截断/网关改包）：requireData 抛错落到
+    // 下方 catch 显性报错，静默 return 会让按钮复位、弹框不动，与「没点上」
+    // 不可区分
+    const data = requireData(res.data, '响应异常，请重试')
+    pendingSecret.value = data.secret
+    pendingUri.value = data.uri
     wizardVisible.value = true
   } catch (error: unknown) {
     ElMessage.error(error instanceof Error ? error.message : '生成 MFA 密钥失败')
@@ -240,14 +239,12 @@ const confirmMfaAction = async (): Promise<void> => {
       return
     }
     const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', { code }, { silent: true })
-    // 同 startEnable：200 无 data 必须显性报错（验码弹框保持打开，凭据不复位）
-    if (!res.data) {
-      ElMessage.error('响应异常，请重试')
-      return
-    }
+    // 同 startEnable：200 无 data 经 requireData 抛错显性报错（验码弹框保持
+    // 打开，凭据不复位）
+    const data = requireData(res.data, '响应异常，请重试')
     mfaCodeDialog.value = false
-    pendingSecret.value = res.data.secret
-    pendingUri.value = res.data.uri
+    pendingSecret.value = data.secret
+    pendingUri.value = data.uri
     wizardVisible.value = true
   } catch (error: unknown) {
     ElMessage.error(error instanceof Error ? error.message : '操作失败')

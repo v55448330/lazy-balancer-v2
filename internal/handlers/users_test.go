@@ -272,14 +272,14 @@ func TestSetupAdmin_cannotBeDisabledOrDeleted(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "初始管理员") {
 		t.Fatalf("delete setup admin: status=%d body=%s, want 400 初始管理员", rec.Code, rec.Body.String())
 	}
-	// When: 管理员 2 禁用初始管理员 → 400
-	rec = serveUserMutation(h, http.MethodPatch, "/users/1", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
+	// When: 管理员 2 禁用初始管理员 → 400（路由方法契约：PUT /users/:id/status）
+	rec = serveUserMutation(h, http.MethodPut, "/users/1", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "初始管理员") {
 		t.Fatalf("disable setup admin: status=%d body=%s, want 400 初始管理员", rec.Code, rec.Body.String())
 	}
 	// 回归形状:普通管理员之间仍可正常禁用(2 禁用 3 不受影响)
 	seedUserAuditTest(t, 3, "admin-3", "admin", true)
-	rec = serveUserMutation(h, http.MethodPatch, "/users/3", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
+	rec = serveUserMutation(h, http.MethodPut, "/users/3", `{"is_enabled":false}`, 2, h.ToggleUserStatus)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable ordinary admin should pass: status=%d body=%s", rec.Code, rec.Body.String())
 	}

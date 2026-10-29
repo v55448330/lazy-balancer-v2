@@ -69,13 +69,19 @@ function readQuotedField(raw: string, start: number): { text: string; next: numb
 export const ipListRemarkMaxLength = 100
 
 /**
- * 引号字段闭合后的剩余部分：只允许空白，或「空白 + 单个逗号 + 空白」再进入
- * 下一字段；其余残留返回 null（整行按非法拒绝）。旧实现把首字段残留整体
- * 并入备注、把备注字段残留静默丢弃——导入结果与源文件不一致却无提示。
+ * 引号字段闭合后的剩余部分：三形态——「空白 + 单个逗号 + 备注」「纯空白」
+ * 「空白 + 备注（无逗号，与非引号分支的空白分隔对齐）」；其余残留返回 null
+ * （整行按非法拒绝——闭合引号后直接粘连的残片不得并入备注）。旧实现把首
+ * 字段残留整体并入备注、把备注字段残留静默丢弃——导入结果与源文件不一致
+ * 却无提示。
  */
 function readFieldRest(raw: string, from: number): string | null {
-  const match = raw.slice(from).match(/^\s*(?:,\s*([\s\S]*))?$/)
-  return match ? match[1] ?? '' : null
+  const rest = raw.slice(from)
+  if (/^\s*$/.test(rest)) return ''
+  const withComma = rest.match(/^\s*,([\s\S]*)$/)
+  if (withComma) return withComma[1] ?? ''
+  const blankSeparated = rest.match(/^\s+([\s\S]*)$/)
+  return blankSeparated ? blankSeparated[1] : null
 }
 
 /**

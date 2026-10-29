@@ -656,42 +656,27 @@ func oidcOAuthConfig(cfg OIDCConfig, p *oidc.Provider, callbackURL string) oauth
 
 // ── 公开端点 ──
 
-var oidcStatusFailureLog = struct {
-	sync.Mutex
-	at time.Time
-}{}
-
+// 两个公开端点降级留痕窗口独立（读失败 vs 库内配置不可用——两类故障不互相
+// 吞没）；节流窗口结构单源在 services.LogThrottle（单槽防 key 无界增长）。
 const oidcStatusFailureLogWindow = time.Minute
 
+var (
+	oidcStatusFailureLog services.LogThrottle
+	oidcStatusIssuerLog  services.LogThrottle
+)
+
 func logOIDCStatusFailure(err error) {
-	now := time.Now()
-	oidcStatusFailureLog.Lock()
-	if !oidcStatusFailureLog.at.IsZero() && now.Sub(oidcStatusFailureLog.at) < oidcStatusFailureLogWindow {
-		oidcStatusFailureLog.Unlock()
-		return
+	if oidcStatusFailureLog.Allow(oidcStatusFailureLogWindow) {
+		services.Logf("warn", "读取 OIDC 状态失败: %v", err)
 	}
-	oidcStatusFailureLog.at = now
-	oidcStatusFailureLog.Unlock()
-	services.Logf("warn", "读取 OIDC 状态失败: %v", err)
 }
 
 // logOIDCStatusUnusable 记录「库内 issuer 不合规或启用凭证不完整」的公开端点
 // 降级：与读失败同一防放大思路（60s 节流），独立状态窗口（两类故障不互相吞没）。
-var oidcStatusIssuerLog = struct {
-	sync.Mutex
-	at time.Time
-}{}
-
 func logOIDCStatusUnusable(err error) {
-	now := time.Now()
-	oidcStatusIssuerLog.Lock()
-	if !oidcStatusIssuerLog.at.IsZero() && now.Sub(oidcStatusIssuerLog.at) < oidcStatusFailureLogWindow {
-		oidcStatusIssuerLog.Unlock()
-		return
+	if oidcStatusIssuerLog.Allow(oidcStatusFailureLogWindow) {
+		services.Logf("warn", "库内 OIDC 配置不可用（issuer 不合规或凭证不完整），登录页按未启用呈现（需管理员修正配置）: %v", err)
 	}
-	oidcStatusIssuerLog.at = now
-	oidcStatusIssuerLog.Unlock()
-	services.Logf("warn", "库内 OIDC 配置不可用（issuer 不合规或凭证不完整），登录页按未启用呈现（需管理员修正配置）: %v", err)
 }
 
 // OIDCStatus GET /auth/oidc/status(公开):登录页按钮显隐与展示名。
@@ -750,6 +735,10 @@ func trustedProxyRemoteAddr(remoteAddr string) bool {
 // 转发头仅当直连对端可信时采信——路由器 SetTrustedProxies(nil)
 // 意味着任何公网客户端都能伪造 X-Forwarded-Host,无来源校验会把回调
 // redirect_uri 与成功回跳基址(令牌走 fragment)指向攻击者域。
+// 纵深现状：scheme 白名单 + 授权请求 redirect_uri 由 IdP 精确登记兜底。
+// 更进一步的 Host 白名单需要「部署侧访问地址」配置面（主节点当前没有该
+// 配置项，引入即新增配置契约），未配置来源前不做——白名单无从取值时强行
+// 校验会打断所有合法反代部署。
 func requestOrigin(c *gin.Context) string {
 	scheme := "http"
 	if c.Request.TLS != nil {
@@ -1131,8 +1120,8 @@ func createOIDCUserWithRetry(issuer, subject, base, displayName string) (oidcIde
 
 // oidcDisplayNameRefreshFailing 记录显示名刷新的连续失败状态（留痕分级用）。
 // 登录热路径不得刷屏：连续失败的首条升级 error 级，后续降回 warn，成功后复位
-// ——与 touchLastLogin 同一留痕口径。
-var oidcDisplayNameRefreshFailing atomic.Bool
+// ——与 touchLastLogin 同一留痕口径（单源 services.LogEscalation）。
+var oidcDisplayNameRefreshFailing services.LogEscalation
 
 // refreshOIDCDisplayName 按 IdP 最新 claims 刷新展示名（best-effort）。
 // 显示名是 IdP 派生的展示属性而非授权前提：写失败不得中断登录（旧实现 302
@@ -1140,14 +1129,10 @@ var oidcDisplayNameRefreshFailing atomic.Bool
 func refreshOIDCDisplayName(userID int, username, name string) {
 	_, err := db.DB.Exec("UPDATE users SET display_name=? WHERE id=? AND COALESCE(display_name,'')<>?", name, userID, name)
 	if err == nil {
-		oidcDisplayNameRefreshFailing.Store(false)
+		oidcDisplayNameRefreshFailing.Reset()
 		return
 	}
-	level := "warn"
-	if !oidcDisplayNameRefreshFailing.Swap(true) {
-		level = "error"
-	}
-	services.Logf(level, "OIDC 登录刷新显示名失败（非凭据问题，下次登录重试；user_id=%d username=%s）: %v", userID, username, err)
+	services.Logf(oidcDisplayNameRefreshFailing.Level(), "OIDC 登录刷新显示名失败（非凭据问题，下次登录重试；user_id=%d username=%s）: %v", userID, username, err)
 }
 
 // OIDCCallback GET /auth/oidc/callback——授权码换令牌→ID Token 验签→
