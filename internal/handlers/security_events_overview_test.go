@@ -816,14 +816,9 @@ func TestLoadSecurityOverviewAggregates_cacheHitAndExpiry(t *testing.T) {
 
 	// Then 缓存过期后同一键必须重算并看到新事件（直接调整测试缓存项的
 	// 过期时刻，避免 30s wall-clock sleep）。
-	securityOverviewAggCacheMu.Lock()
-	for key, entry := range securityOverviewAggCache {
-		if key.metrics == db.MetricsDB {
-			entry.expiresAt = time.Now().Add(-time.Second)
-			securityOverviewAggCache[key] = entry
-		}
-	}
-	securityOverviewAggCacheMu.Unlock()
+	securityOverviewAggCache.ExpireMatching(func(key securityOverviewAggCacheKey) bool {
+		return key.metrics == db.MetricsDB
+	})
 	expired, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
 	if err != nil || overviewAggregateEventCount(expired) != 2 {
 		t.Fatalf("expired aggregate=(count %d, err %v), want (2,nil)", overviewAggregateEventCount(expired), err)

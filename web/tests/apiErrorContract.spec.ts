@@ -340,8 +340,9 @@ const MIN_ENVELOPES: Record<(typeof SCAN_DIRS)[number], number> = {
   // 内联 500/400 移入门内，净 -4）；MFASetup 两条基础设施故障分支改走
   // mfaInternalFailure（净 -1，另一处移入日志/审计单源）——文件级
   // auth.go -4 / users.go +4 / mfa.go -2 / auth_oidc.go +1。
-  // 叠加上其它调用点增补（含证书族与自动备份族继续收敛）后实测 1293。
-  'internal/handlers': 1293,
+  // 叠加上其它调用点增补（含证书族与自动备份族继续收敛）后实测 1293；
+  // 后续批次把 UpdateSecurityPolicy/CAProvider 等错误出口收敛到共享 helper 后实测 1280。
+  'internal/handlers': 1280,
   'internal/middleware': 43,
 }
 

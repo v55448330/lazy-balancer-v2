@@ -3682,6 +3682,54 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	return conf
 }
 
+// healthCheckValues 是健康检查四门校验的归一结果（HTTP/TCP 共用）。
+type healthCheckValues struct {
+	interval int // health_check_interval（被动 fail_duration 与主动探测间隔）
+	failing  int // health_check_unhealthy_threshold（被动 max_fails / 主动 fails·fall）
+	passes   int // health_check_healthy_threshold（主动 passes·rise，仅主动启用时消费）
+	timeout  int // health_check_timeout（主动探测超时，仅主动启用时消费）
+}
+
+// healthCheckCore 健康检查四门校验单源：HTTP 与 TCP 渲染共用同一份校验与
+// 文案（两侧各写一份曾静默分叉——同一库值两侧报错文本/字段名不一致）。
+// 间隔与失败阈值恒校验；恢复阈值与超时只在主动健康检查启用时被消费
+// （passive 形态不读这两列）。值型列直读零兜底：<=0 即库值治理被带外写入
+// 破坏，显性报错使配置生成失败、旧配置保留。
+func healthCheckCore(rule SingleRuleConfig) (healthCheckValues, error) {
+	var v healthCheckValues
+	if rule.HealthCheckInterval <= 0 {
+		return v, fmt.Errorf("规则 %s 健康检查间隔无效（health_check_interval=%d <=0）", rule.CaddyID, rule.HealthCheckInterval)
+	}
+	v.interval = rule.HealthCheckInterval
+	if rule.HealthCheckUnhealthyThreshold <= 0 {
+		return v, fmt.Errorf("规则 %s 健康检查失败阈值无效（health_check_unhealthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckUnhealthyThreshold)
+	}
+	v.failing = rule.HealthCheckUnhealthyThreshold
+	if !rule.EnableActiveHealthCheck {
+		return v, nil
+	}
+	if rule.HealthCheckTimeout <= 0 {
+		return v, fmt.Errorf("规则 %s 健康检查超时无效（health_check_timeout=%d <=0）", rule.CaddyID, rule.HealthCheckTimeout)
+	}
+	v.timeout = rule.HealthCheckTimeout
+	if rule.HealthCheckHealthyThreshold <= 0 {
+		return v, fmt.Errorf("规则 %s 健康检查恢复阈值无效（health_check_healthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckHealthyThreshold)
+	}
+	v.passes = rule.HealthCheckHealthyThreshold
+	return v, nil
+}
+
+// passiveHealthCheck 被动健康检查块单源（协议专属键由调用方追加）。
+// 披露：被动熔断窗口复用主动探测间隔（fail_duration=interval*3），无独立配置项
+// ——interval=60s 时失败上游被熔断 180s，interval=1s 时仅 3s。UI/文档未声明该
+// 耦合；如需独立控制需新增值型列（schema+写侧+渲染三件套），当前裁定仅披露不新增。
+func passiveHealthCheck(interval, failing int) map[string]interface{} {
+	return map[string]interface{}{
+		"fail_duration": fmt.Sprintf("%ds", interval*3),
+		"max_fails":     failing,
+	}
+}
+
 func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPolicyContext) ([]map[string]interface{}, map[string]interface{}, error) {
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
@@ -4037,6 +4085,21 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 	return upstreams, nil
 }
 
+// firstPolicyWithBlockPage 按绑定序返回首个「拦截页内容非空」的策略与其页内容
+// （无则 nil/""）。页面行已删除（内容为空）的策略不得遮蔽后续仍有效页的策略
+// ——403 兜底与 429 限流兜底共用本选择（两处曾逐字重复同一扫描）。
+func firstPolicyWithBlockPage(policies []*models.SecurityPolicy, pages map[int]string) (*models.SecurityPolicy, string) {
+	for _, policy := range policies {
+		if policy.BlockPageID <= 0 {
+			continue
+		}
+		if content := pages[policy.BlockPageID]; content != "" {
+			return policy, content
+		}
+	}
+	return nil, ""
+}
+
 // buildBlockPageErrorRoute 是拦截页归因后的**兜底**错误路由（403 通用，
 // host 限定本规则域名）：渲染首绑定（最低 policy_id）配置了拦截页的启用
 // 策略的页面。承接两类无法归因到单策略的中断——多策略 IP 预检的合并拦截
@@ -4047,19 +4110,7 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 // 事务内生成可见未提交的策略变更。
 func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
 	policies := policiesForRule(securityCtx, ruleCaddyID)
-	// 首个绑定拦截页的策略若页面内容为空（页面行已
-	// 删除），不得遮蔽后续仍有效页的策略——按绑定序取首个「内容非空」的页。
-	var pagePolicy *models.SecurityPolicy
-	var content string
-	for _, policy := range policies {
-		if policy.BlockPageID > 0 {
-			if c := securityCtx.blockPageByID[policy.BlockPageID]; c != "" {
-				pagePolicy = policy
-				content = c
-				break
-			}
-		}
-	}
+	pagePolicy, content := firstPolicyWithBlockPage(policies, securityCtx.blockPageByID)
 	if pagePolicy == nil {
 		return nil
 	}
@@ -4101,21 +4152,13 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
 	policies := policiesForRule(securityCtx, ruleCaddyID)
 	rateLimited := false
-	// 同 buildBlockPageErrorRoute——空内容页不遮蔽
-	// 后续有效页。
-	var pagePolicy *models.SecurityPolicy
-	var content string
 	for _, policy := range policies {
 		if policy.RateLimitEnabled {
 			rateLimited = true
-		}
-		if pagePolicy == nil && policy.BlockPageID > 0 {
-			if c := securityCtx.blockPageByID[policy.BlockPageID]; c != "" {
-				pagePolicy = policy
-				content = c
-			}
+			break
 		}
 	}
+	pagePolicy, content := firstPolicyWithBlockPage(policies, securityCtx.blockPageByID)
 	if !rateLimited || pagePolicy == nil {
 		return nil
 	}
@@ -4614,51 +4657,29 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 
 	if rule.Protocol == "http" {
-		// 库值唯一真相（批 1+2）：健康检查族为类型①值型列（NOT NULL DEFAULT+启动
-		// 回填+写侧 400+导入归一门），渲染直读零兜底——<=0 即库值治理被带外写入
-		// 破坏，显性报错使配置生成失败、旧配置保留（原 10s/3s/2s/2s 写死兜底废除）。
-		if rule.HealthCheckInterval <= 0 {
-			return nil, fmt.Errorf("规则 %s 健康检查间隔无效（health_check_interval=%d <=0）", rule.CaddyID, rule.HealthCheckInterval)
+		hc, err := healthCheckCore(rule)
+		if err != nil {
+			return nil, err
 		}
-		hcInterval := rule.HealthCheckInterval
-		if rule.HealthCheckUnhealthyThreshold <= 0 {
-			return nil, fmt.Errorf("规则 %s 健康检查失败阈值无效（health_check_unhealthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckUnhealthyThreshold)
-		}
-		hcThreshold := rule.HealthCheckUnhealthyThreshold
-		healthChecks := map[string]interface{}{
-			"passive": map[string]interface{}{
-				// 披露：被动熔断窗口复用主动探测间隔（fail_duration=interval*3），
-				// 无独立配置项——interval=60s 时失败上游被熔断 180s，interval=1s
-				// 时仅 3s。UI/文档未声明该耦合；如需独立控制需新增值型列
-				// （schema+写侧+渲染三件套），当前裁定仅披露不新增。
-				"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
-				"max_fails":     hcThreshold,
-				// 5 是 Caddy 官方类码语义（StatusCodeMatches：configured<100 匹配整百段，
-				// Caddyfile "5xx" 亦折叠为 5）——覆盖全部 500-599 服务端错误计入被动失败。
-				// 2026-09 复审裁定 1：曾误改为显式 [500..504] 收窄覆盖（505-599 漏计），已恢复。
-				"unhealthy_status": []int{5},
-			},
-		}
+		passive := passiveHealthCheck(hc.interval, hc.failing)
+		// 5 是 Caddy 官方类码语义（StatusCodeMatches：configured<100 匹配整百段，
+		// Caddyfile "5xx" 亦折叠为 5）——覆盖全部 500-599 服务端错误计入被动失败。
+		// 2026-09 复审裁定 1：曾误改为显式 [500..504] 收窄覆盖（505-599 漏计），已恢复。
+		// L4 无状态码面，故该键只在 HTTP 侧发射。
+		passive["unhealthy_status"] = []int{5}
+		healthChecks := map[string]interface{}{"passive": passive}
 		if rule.EnableActiveHealthCheck {
 			// hcPath 空串=「未配置路径」语义（渲染 /），字符串缺省非本批治理范围。
 			hcPath := rule.HealthCheckPath
 			if hcPath == "" {
 				hcPath = "/"
 			}
-			if rule.HealthCheckHealthyThreshold <= 0 {
-				return nil, fmt.Errorf("规则 %s 健康检查恢复阈值无效（health_check_healthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckHealthyThreshold)
-			}
-			hcPasses := rule.HealthCheckHealthyThreshold
-			if rule.HealthCheckTimeout <= 0 {
-				return nil, fmt.Errorf("规则 %s 健康检查超时无效（health_check_timeout=%d <=0）", rule.CaddyID, rule.HealthCheckTimeout)
-			}
-			hcTimeout := rule.HealthCheckTimeout
 			active := map[string]interface{}{
 				"uri":      hcPath,
-				"timeout":  fmt.Sprintf("%ds", hcTimeout),
-				"interval": fmt.Sprintf("%ds", hcInterval),
-				"passes":   hcPasses,
-				"fails":    hcThreshold,
+				"timeout":  fmt.Sprintf("%ds", hc.timeout),
+				"interval": fmt.Sprintf("%ds", hc.interval),
+				"passes":   hc.passes,
+				"fails":    hc.failing,
 			}
 			// 健康检查域名优先于规则级后端域名（probe Host 头特判实证，
 			// healthchecks.go:453-458）；皆空则不输出 headers 键（现状不变）。
@@ -5173,37 +5194,21 @@ func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
 		proxyHandler["load_balancing"] = loadBalancing
 	}
 
-	// 健康检查族（批 1+2）：类型①值型列直读，<=0 显性报错。
-	if rule.HealthCheckInterval <= 0 {
-		return nil, fmt.Errorf("规则 %s 健康检查间隔无效（health_check_interval=%d <=0）", rule.CaddyID, rule.HealthCheckInterval)
+	// 健康检查族：校验收敛到 healthCheckCore（与 HTTP 侧同源）。
+	hc, err := healthCheckCore(rule)
+	if err != nil {
+		return nil, err
 	}
-	healthCheckInterval := rule.HealthCheckInterval
-	if rule.HealthCheckUnhealthyThreshold <= 0 {
-		return nil, fmt.Errorf("规则 %s 健康检查失败阈值无效（health_check_unhealthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckUnhealthyThreshold)
-	}
-	unhealthyThreshold := rule.HealthCheckUnhealthyThreshold
 	healthChecks := map[string]interface{}{
-		"passive": map[string]interface{}{
-			// 披露（与 HTTP 侧同口径）：被动熔断窗口=health_check_interval*3，
-			// 复用主动探测间隔、无独立配置项（interval 越小熔断窗口越短）。
-			"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
-			"max_fails":     unhealthyThreshold,
-		},
+		"passive": passiveHealthCheck(hc.interval, hc.failing),
 	}
 	if rule.EnableActiveHealthCheck {
-		if rule.HealthCheckTimeout <= 0 {
-			return nil, fmt.Errorf("规则 %s 健康检查超时无效（health_check_timeout=%d <=0）", rule.CaddyID, rule.HealthCheckTimeout)
-		}
-		healthCheckTimeout := rule.HealthCheckTimeout
-		if rule.HealthCheckHealthyThreshold <= 0 {
-			return nil, fmt.Errorf("规则 %s 健康检查恢复阈值无效（health_check_healthy_threshold=%d <=0）", rule.CaddyID, rule.HealthCheckHealthyThreshold)
-		}
-		healthyThreshold := rule.HealthCheckHealthyThreshold
 		active := map[string]interface{}{
-			"interval": fmt.Sprintf("%ds", healthCheckInterval),
-			"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
-			"rise":     healthyThreshold,
-			"fall":     unhealthyThreshold,
+			"interval": fmt.Sprintf("%ds", hc.interval),
+			"timeout":  fmt.Sprintf("%ds", hc.timeout),
+			// L4 健康检查用 rise/fall（连接级探测），HTTP 侧对应 passes/fails。
+			"rise": hc.passes,
+			"fall": hc.failing,
 		}
 		if rule.TCPHealthCheckPort > 0 {
 			active["port"] = rule.TCPHealthCheckPort

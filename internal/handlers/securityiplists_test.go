@@ -1346,3 +1346,80 @@ func TestIPListHandlers_corruptAutobanEntriesPointToFullReplacement(t *testing.T
 		t.Fatalf("整表覆盖应可修复损坏条目: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+// 500 分片样板单源：chunkIDs 声明为「受信代理校验、备份导入、IP 名单、威胁
+// 筛查四处消费」的唯一样板，但名单侧两处（allow 生效集合装载、引用存在性
+// 校验）此前仍是手写 start+=500 循环——两套样板并行演进（一处改块大小/占位
+// 符构造，另一处静默保持旧语义）。按函数体源码扫描把「手写分片」钉成失败。
+func TestSecurityIPListSharding_usesChunkIDsSingleSource(t *testing.T) {
+	source, err := os.ReadFile("securityiplists.go")
+	if err != nil {
+		t.Fatalf("read securityiplists.go: %v", err)
+	}
+	for _, signature := range []string{
+		"func loadIPListEntriesForAllow(q ipListQueryer, ids []int64) (map[int64][]string, error) {",
+		"func validateIPListRefsExistence(q policyQueryRower, aclIDs, wlIDs []int64) (string, error) {",
+	} {
+		body, ok := handlerFunctionBody(string(source), signature)
+		if !ok {
+			t.Fatalf("securityiplists.go 中未找到 %q（函数改名/内联会让本守卫失效）", signature)
+		}
+		if !strings.Contains(body, "chunkIDs(") {
+			t.Errorf("%q 未使用 chunkIDs 单源分片（chunkIDs 是全部 500 分片样板的唯一实现）", signature)
+		}
+		if strings.Contains(body, "start += ") {
+			t.Errorf("%q 仍含手写分片循环（start += ...），必须改为 for _, ch := range chunkIDs(...)", signature)
+		}
+	}
+}
+
+// 分片等价性回归：引用 id 超过单块上限（500）时两处分片消费端必须跨块取全
+// （单块 IN 查询会被 SQLite 变量上限截断/报错，或被实现遗漏成只查首块）。
+func TestLoadIPListEntriesForAllow_spansMultipleChunks(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	const total = 501
+	ids := make([]int64, 0, total)
+	for i := 0; i < total; i++ {
+		ids = append(ids, seedIPListRow(t, fmt.Sprintf("分片名单 %d", i+1), fmt.Sprintf(`[{"value":"10.%d.%d.1"}]`, i/250, i%250+1)))
+	}
+	out, err := loadIPListEntriesForAllow(db.DB, ids)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(out) != total {
+		t.Fatalf("装载 %d 个名单，want %d（跨块必须全取）", len(out), total)
+	}
+	for _, id := range []int64{ids[0], ids[499], ids[500]} { // 首块 / 首块末 / 次块首
+		if values, ok := out[id]; !ok || len(values) != 1 {
+			t.Fatalf("名单 #%d 条目=%v ok=%v, want 单条（跨块边界不得遗漏）", id, values, ok)
+		}
+	}
+	// 去重形状：同一 id 重复引用不放大绑定变量，也不产生重复 key
+	dup := append(append([]int64{}, ids...), ids[0], ids[500])
+	out, err = loadIPListEntriesForAllow(db.DB, dup)
+	if err != nil {
+		t.Fatalf("load dup: %v", err)
+	}
+	if len(out) != total {
+		t.Fatalf("重复引用后装载 %d，want %d", len(out), total)
+	}
+}
+
+// 引用存在性校验同样跨块：501 个引用全部存在时不得漏报缺失；缺失项优先按
+// acl 组报告（组序口径不因分片数变化）。
+func TestValidateIPListRefsExistence_spansMultipleChunks(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	const total = 501
+	ids := make([]int64, 0, total)
+	for i := 0; i < total; i++ {
+		ids = append(ids, seedIPListRow(t, fmt.Sprintf("存在性名单 %d", i+1), `[]`))
+	}
+	if msg, err := validateIPListRefsExistence(db.DB, ids, nil); err != nil || msg != "" {
+		t.Fatalf("全部存在不得报缺失: msg=%q err=%v", msg, err)
+	}
+	// 缺失项落在次块：必须仍被检出
+	missing := append(append([]int64{}, ids...), 999999)
+	if msg, err := validateIPListRefsExistence(db.DB, missing, nil); err != nil || !strings.Contains(msg, "#999999") {
+		t.Fatalf("次块缺失项 msg=%q err=%v, want 报告 #999999", msg, err)
+	}
+}

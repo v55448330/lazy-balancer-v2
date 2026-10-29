@@ -49,15 +49,10 @@ type topTargetsCacheKey struct {
 	sinceMinute string
 }
 
-type topTargetsCacheEntry struct {
-	targets   []threatTopTarget
-	expiresAt time.Time
-}
-
-var (
-	topTargetsCacheMu sync.Mutex
-	topTargetsCache   = map[topTargetsCacheKey]topTargetsCacheEntry{}
-)
+// topTargetsCache 键含窗口锚点（每分钟产生新键）：写入时顺带清扫过期项防
+// map 无限增长（旧键 TTL 到期后不再被命中）；不得整体重置——会打掉同屏其它
+// 维度仍在有效期的条目。
+var topTargetsCache = newTTLCache[topTargetsCacheKey, []threatTopTarget](0)
 
 // threatTopTargets 窗口内目标维度 rollup（security_event_target_rollup，
 // rule_caddy_id 分组）计数前 3 → 主库 lb_rules 取 name/domain。
@@ -79,15 +74,11 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 	key := topTargetsCacheKey{metrics: db.MetricsDB, main: db.DB, generation: db.MetricsDBGeneration(), sinceMinute: sinceMinute}
 	now := time.Now()
 	if cacheable {
-		topTargetsCacheMu.Lock()
-		if entry, ok := topTargetsCache[key]; ok && now.Before(entry.expiresAt) {
+		if targets, ok := topTargetsCache.Get(key, now); ok {
 			// 拷贝返回：缓存条目不得与响应共享底层数组（消费者就地改动会污染
 			// 其他请求的缓存，同型事故见安全总览聚合缓存）。
-			targets := slices.Clone(entry.targets)
-			topTargetsCacheMu.Unlock()
-			return targets, nil
+			return slices.Clone(targets), nil
 		}
-		topTargetsCacheMu.Unlock()
 	}
 
 	rows, err := db.MetricsDB.Query(`SELECT rule_caddy_id, SUM(count) FROM security_event_target_rollup WHERE minute >= ? GROUP BY rule_caddy_id`, sinceMinute)
@@ -182,16 +173,7 @@ func threatTopTargets(sinceMinute string, cacheable bool) ([]threatTopTarget, er
 	}
 
 	if cacheable {
-		topTargetsCacheMu.Lock()
-		// 键含窗口锚点后每分钟产生新键——插入时顺带清过期项，防止 map 无限增长
-		//（旧键 TTL 到期后不再被命中）。
-		for k, entry := range topTargetsCache {
-			if !now.Before(entry.expiresAt) {
-				delete(topTargetsCache, k)
-			}
-		}
-		topTargetsCache[key] = topTargetsCacheEntry{targets: targets, expiresAt: now.Add(topTargetsCacheTTL)}
-		topTargetsCacheMu.Unlock()
+		topTargetsCache.Set(key, targets, now, topTargetsCacheTTL)
 	}
 	return targets, nil
 }
@@ -249,22 +231,14 @@ func threatTrafficSnapshot(adminURL string) (gin.H, bool) {
 // ——任一未清都会让本次响应返回固化前的数据，直到 TTL 过期（同一屏总量/国家
 // 已重算而 Top3 仍旧，展示口径分叉）。
 func invalidateThreatScreenRollupCaches() {
-	threatRollupDimAggregateCacheMu.Lock()
-	threatRollupDimAggregateCache = map[threatRollupDimAggregateKey]threatRollupDimAggregateEntry{}
-	threatRollupDimAggregateCacheMu.Unlock()
-	topTargetsCacheMu.Lock()
-	topTargetsCache = map[topTargetsCacheKey]topTargetsCacheEntry{}
-	topTargetsCacheMu.Unlock()
+	threatRollupDimAggregateCache.Reset()
+	topTargetsCache.Reset()
 }
 
 // resetThreatScreenCachesForTest 测试缝：清空大屏进程内缓存（生产不调用）。
 func resetThreatScreenCachesForTest() {
-	topTargetsCacheMu.Lock()
-	topTargetsCache = map[topTargetsCacheKey]topTargetsCacheEntry{}
-	topTargetsCacheMu.Unlock()
-	threatRollupDimAggregateCacheMu.Lock()
-	threatRollupDimAggregateCache = map[threatRollupDimAggregateKey]threatRollupDimAggregateEntry{}
-	threatRollupDimAggregateCacheMu.Unlock()
+	topTargetsCache.Reset()
+	threatRollupDimAggregateCache.Reset()
 	threatTrafficCache.Range(func(key, _ any) bool {
 		threatTrafficCache.Delete(key)
 		return true
@@ -302,15 +276,9 @@ type threatRollupDimAggregateKey struct {
 	coverage string
 }
 
-type threatRollupDimAggregateEntry struct {
-	agg       threatRollupDimAggregate
-	expiresAt time.Time
-}
-
-var (
-	threatRollupDimAggregateCacheMu sync.Mutex
-	threatRollupDimAggregateCache   = map[threatRollupDimAggregateKey]threatRollupDimAggregateEntry{}
-)
+// threatRollupDimAggregateCache 键含分钟锚点/槽界/覆盖水位——写入时顺带清扫
+// 过期项防 map 无限增长；不得整体重置（同屏其它维度条目仍在有效期）。
+var threatRollupDimAggregateCache = newTTLCache[threatRollupDimAggregateKey, threatRollupDimAggregate](0)
 
 // threatRollupBucketLayout 槽界签名（空槽集=空串）。
 func threatRollupBucketLayout(bucketStarts []time.Time) string {
@@ -368,13 +336,9 @@ func threatRollupDimAggregateQuery(database *sql.DB, sinceMinute string, bucketS
 	}
 	now := time.Now()
 	if cacheable {
-		threatRollupDimAggregateCacheMu.Lock()
-		if entry, ok := threatRollupDimAggregateCache[key]; ok && now.Before(entry.expiresAt) {
-			cached := entry.agg
-			threatRollupDimAggregateCacheMu.Unlock()
+		if cached, ok := threatRollupDimAggregateCache.Get(key, now); ok {
 			return cached, nil
 		}
-		threatRollupDimAggregateCacheMu.Unlock()
 	}
 
 	rows, err := database.Query(`SELECT COALESCE(country,''), COALESCE(province,''), COALESCE(family,''), COALESCE(rule,''), COALESCE(action,''), SUM(count)
@@ -439,14 +403,6 @@ func threatRollupDimAggregateQuery(database *sql.DB, sinceMinute string, bucketS
 	if !cacheable {
 		return agg, nil
 	}
-	threatRollupDimAggregateCacheMu.Lock()
-	// 键含分钟锚点/槽界——插入时顺带清过期项，防 map 无限增长。
-	for k, entry := range threatRollupDimAggregateCache {
-		if !now.Before(entry.expiresAt) {
-			delete(threatRollupDimAggregateCache, k)
-		}
-	}
-	threatRollupDimAggregateCache[key] = threatRollupDimAggregateEntry{agg: agg, expiresAt: now.Add(threatRollupDimAggregateTTL)}
-	threatRollupDimAggregateCacheMu.Unlock()
+	threatRollupDimAggregateCache.Set(key, agg, now, threatRollupDimAggregateTTL)
 	return agg, nil
 }

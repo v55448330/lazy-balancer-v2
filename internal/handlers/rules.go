@@ -2973,9 +2973,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// （收窄裁定 2026-10-19，不反转）：409 在途守卫
 		// 前置到删除之前——此前先 DELETE 致下方 UPDATE 的 NOT EXISTS 守卫在
 		// 本路径恒失效，CA 往返在途的规则可被改成 manual/关 TLS（队列取消是
-		// 提交后 best-effort）。仅拦「执行中」状态集（executingACMEJobStatuses
-		// =非终态减 queued/pending 未起动行）；queued/pending 维持
-		// 「删除+提交后取消+200」语义，保留持续失败域名的切换逃生口。
+		// 提交后 best-effort）。阻塞集由 certJobStatusSemanticTable 单源派生
+		// （executingACMEJobStatuses）：queued/pending 与 downloaded 维持
+		// 「删除+提交后取消+200」语义（未起动行 / 已签发仅部署退避，均无 worker
+		// 在跑），其余在途状态 409。
 		executingStatuses := executingACMEJobStatuses()
 		if len(executingStatuses) > 0 {
 			countArgs := make([]any, 0, len(executingStatuses)+1)
@@ -5031,46 +5032,65 @@ func applyOmittedUpstreamWeightDefaults(c *gin.Context, upstreams []models.Upstr
 	}
 }
 
-// executingACMEJobStatuses 派生「执行中/CA 往返在途」cert_jobs 状态集
-// （收窄裁定 2026-10-19）：规范枚举（db.CertJobStatuses 单源）减去
-// 终态（issued/failed/disabled）与未起动行（queued/pending）——未起动行
-// 维持「删除+取消+200」语义，在途行才在 orphanACME 删除前 409。
-// 逐调用计算：枚举极小（26 项），UpdateRule 非热路径，避免包级缓存漂移。
-// ruleEditBlockingCertJobStatuses 是**规则编辑**（保存）的证书任务守卫状态集：
-// 除终态（issued/failed/disabled）与两个「无 worker 在跑」的长窗口状态外一律阻塞。
-//
-// 放行的两个状态：
-//   - waiting_ca：CA 限流冷却（可达 1–3 小时，无 worker）——冷却期内连改名称/
-//     上游都 409 与同族端点口径矛盾（caqueue 明文「冷却期不应拦截删除/禁用」）；
-//     改域风险由提交后迁移（旧域任务退役）与退役补偿覆盖。
-//   - downloaded：证书已签发、部署退避重试（无 worker），材料已在库。
-//
-// 保留阻塞的 queued/pending：签发即将/可能被 worker 取走，保存路径的
-// needJob/入队分支以「不存在非终态任务」为前提——放行会让同一规则重复入队。
-// 新增状态默认阻塞（fail-closed）：只有显式列入放行集才不拦。
-func ruleEditBlockingCertJobStatuses() []string {
-	nonBlocking := map[string]bool{
-		"issued": true, "failed": true, "disabled": true, // 终态
-		"waiting_ca": true, "downloaded": true, // 无 worker 在跑的长窗口
-	}
+// certJobStatusSemantics 是 cert_jobs 状态的守卫语义：两处门从同一张表派生，
+// 避免同一状态在两处各自解释（曾把 downloaded——已签发、仅部署退避——在脱离
+// ACME 路径判成「证书申请中」，而保存路径早已放行）。
+type certJobStatusSemantics struct {
+	// blockRuleEdit 保存路径（改名称/上游/证书来源）是否前置 409。
+	blockRuleEdit bool
+	// blockOrphanACME 规则脱离 ACME 自动签发（改 manual / 关 TLS）是否前置 409。
+	blockOrphanACME bool
+}
+
+// certJobStatusSemanticTable 是上述语义的单源表。未登记的状态两处都阻塞
+// （fail-closed：新增状态默认阻塞，只有显式登记才放行）：
+//   - 终态 issued/failed/disabled：历史行，无 worker 在跑。
+//   - waiting_ca：CA 限流冷却（可达 1–3 小时，无 worker）。保存路径放行——
+//     冷却期内连改名称/上游都 409 与同族端点口径矛盾（caqueue 明文「冷却期
+//     不应拦截删除/禁用」），改域风险由提交后迁移与退役补偿覆盖；脱离 ACME
+//     路径仍阻塞——CA 排队在途同属在途段（2026-10-19 收窄裁定）。
+//   - downloaded：证书已签发、仅部署退避重试（无 worker），材料已在库——两处
+//     都放行。
+//   - queued/pending：未起动（queue 中可复活）。保存路径阻塞——needJob/入队
+//     分支以「不存在非终态任务」为前提，放行会让同一规则重复入队；脱离 ACME
+//     路径放行——维持「删除+提交后取消+200」的切换逃生口。
+var certJobStatusSemanticTable = map[string]certJobStatusSemantics{
+	"issued":     {},
+	"failed":     {},
+	"disabled":   {},
+	"waiting_ca": {blockOrphanACME: true},
+	"downloaded": {},
+	"queued":     {blockRuleEdit: true},
+	"pending":    {blockRuleEdit: true},
+}
+
+// certJobStatusesBlocking 从规范枚举（db.CertJobStatuses 单源）派生出满足
+// block 判定的状态集。逐调用计算：枚举极小，UpdateRule 非热路径，避免包级
+// 缓存漂移。
+func certJobStatusesBlocking(block func(certJobStatusSemantics) bool) []string {
 	statuses := make([]string, 0, len(db.CertJobStatuses()))
 	for _, status := range db.CertJobStatuses() {
-		if !nonBlocking[status] {
+		sem, registered := certJobStatusSemanticTable[status]
+		if !registered {
+			statuses = append(statuses, status) // fail-closed：未登记状态两处都阻塞
+			continue
+		}
+		if block(sem) {
 			statuses = append(statuses, status)
 		}
 	}
 	return statuses
 }
 
+// executingACMEJobStatuses 派生「执行中/CA 往返在途」cert_jobs 状态集：规则脱离
+// ACME 自动签发（orphanACME）时在删除任务行之前用它判定是否 409。
 func executingACMEJobStatuses() []string {
-	excluded := map[string]bool{"queued": true, "pending": true, "issued": true, "failed": true, "disabled": true}
-	statuses := make([]string, 0, len(db.CertJobStatuses()))
-	for _, status := range db.CertJobStatuses() {
-		if !excluded[status] {
-			statuses = append(statuses, status)
-		}
-	}
-	return statuses
+	return certJobStatusesBlocking(func(sem certJobStatusSemantics) bool { return sem.blockOrphanACME })
+}
+
+// ruleEditBlockingCertJobStatuses 是规则编辑（保存）的证书任务守卫状态集。
+func ruleEditBlockingCertJobStatuses() []string {
+	return certJobStatusesBlocking(func(sem certJobStatusSemantics) bool { return sem.blockRuleEdit })
 }
 
 // disableCertJobsForRuleTx 是「规则禁用/停用」暂停证书任务的单源写点
@@ -5231,8 +5251,11 @@ func abortIfRuleConcurrentlyModifiedAs(c *gin.Context, caddyID, baseline, opName
 		return false
 	}
 	services.Logf("warn", "%s: 规则 %s 已在放锁窗口内被并发修改，中止后续迁移/补偿（不回退他人已提交内容）", opName, caddyID)
+	// 两条出口都在 commitTx 与真实 /load 之后：库与运行配置已是本请求的结果，
+	// 被跳过的只有后续证书迁移/补偿。文案必须点明「已保存」——「本次操作已中止」
+	// 会让操作者以为什么都没落库，随后重复提交或误判为配置未生效。
 	detail := services.FormatAuditDetail(
-		services.AuditRulePart(caddyID), "放锁窗口内检测到并发修改，已中止后续迁移/补偿（不回退他人已提交内容）", services.AuditResultPart("failure"))
+		services.AuditRulePart(caddyID), "本次变更已保存；放锁窗口内检测到并发修改，已跳过后续迁移/补偿（不回退他人已提交内容）", services.AuditResultPart("failure"))
 	// 审计词条必须为字面量（词汇门禁校验），按入口分支各写一次。
 	switch opName {
 	case "禁用":
@@ -5240,7 +5263,7 @@ func abortIfRuleConcurrentlyModifiedAs(c *gin.Context, caddyID, baseline, opName
 	default:
 		recordAudit(c, "更新失败", "负载规则", detail)
 	}
-	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则已被并发修改，本次操作已中止，请刷新后重试"})
+	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "本次变更已保存，随后检测到并发修改，已跳过后续证书迁移/补偿，请刷新确认"})
 	return true
 }
 

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
@@ -293,29 +294,13 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64,
 // RemoveRuleLogFiles 删除规则的访问日志与全部轮转副本（基层 + `.<n>` +
 // timberjack 时间戳副本）。返回聚合错误：文件不存在视为成功（幂等重试），
 // 其余失败（权限/只读挂载/IO）必须回报——删除失败即磁盘残留，与
-// RemoveCertJobLogFiles 同口径，调用方据此审计「清理失败」。首项失败不早退：
-// 三个形态各自尝试，错误一并返回，避免「修好第一项就以为收敛」。
+// RemoveCertJobLogFiles 同口径，调用方据此审计「清理失败」。
+//
+// 删除面单点：认领、枚举与删除全在 removeRuleLogRotations（认领口径与孤儿
+// 扫描共用 ruleLogComponentOf）。此前另有 `base.1..5` 显式循环，与随后整目录
+// 扫描完全重叠——目录可读时纯冗余 syscall，还把「错误条数=6」变成了对外契约。
 func RemoveRuleLogFiles(ruleID string) error {
-	base := RuleLogPath(ruleID)
-	var errs []error
-	remove := func(path string) {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("删除规则日志 %s: %w", path, err))
-		}
-	}
-	remove(base)
-	// .1..5 保留确定性逐项错误聚合；其余代次与压缩移位副本由下方
-	// 同目录扫描补齐。生产写者只有 timberjack 时间戳命名，这些移位形态
-	// 仅服务旧版本/外来 logrotate 残留。
-	for i := 1; i <= 5; i++ {
-		remove(fmt.Sprintf("%s.%d", base, i))
-	}
-	// 所有副本形态复用 ruleLogComponentOf 的认领口径，避免「认作孤儿却
-	// 不在删除面」导致摘要假成功。
-	if err := removeRuleLogRotations(base); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return removeRuleLogRotations(RuleLogPath(ruleID))
 }
 
 // timberjackRotationReasons 会写进轮转副本名 reason 段的上游取值（timberjack
@@ -330,27 +315,84 @@ func RemoveRuleLogFiles(ruleID string) error {
 // （TestTimberjackRotationReasonFamily_…）。
 var timberjackRotationReasons = []string{"size", "time", "initial"}
 
-// CaddyLogRotationReasonPattern 导出 timberjack 副本 reason 段的正则 alternation
-// （"size|time|initial"）。删除侧白名单（本文件）与 handlers 的日志统计分类器共用同一
-// 上游知识源——两侧各写一份是命名家族漂移的种子（`-size` 与会话碰撞后缀 `_N`
-// 的分歧即由此产生）。
-func CaddyLogRotationReasonPattern() string {
-	return strings.Join(timberjackRotationReasons, "|")
+// timberjackRotationReasonSuffix 匹配 timberjack 副本的 reason+扩展尾部：
+// `-<reason>[_<碰撞计数>].log`（调用方已剥压缩后缀 .gz/.zst）。reason 家族
+// 取自 timberjackRotationReasons（上游写侧白名单），删除侧与统计侧共用本
+// 正则——两侧曾各写一份命名知识（`-size` 与 `_N` 碰撞后缀的分歧即由此产生）。
+var timberjackRotationReasonSuffix = regexp.MustCompile(
+	`-(?:` + strings.Join(timberjackRotationReasons, "|") + `)(?:_\d+)?\.log$`)
+
+// rotationTimestampShape 时间戳段的形状（唯一形表，删除侧与统计侧共用），
+// 三种上游/历史形态：
+//   - 紧凑 YYYYMMDD[T|-]HHMMSS（任务/运行日志族与旧删除侧形态）；
+//   - 紧凑日期 + 短横线时刻 YYYYMMDDTHH-MM-SS（旧删除侧接受的形态）；
+//   - 短横线日期 + T + 短横线时刻 YYYY-MM-DDTHH-MM（timberjack 默认时间格式）。
+var rotationTimestampShape = regexp.MustCompile(`^(?:\d{8}[T-]\d{6}|\d{8}T\d{2}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2})`)
+
+// rotationTimestampTail 判定 s 是否以「时间戳段」开头（其后可带毫秒/尺寸等
+// 余段）——轮转副本名族的唯一时间戳判据。
+func rotationTimestampTail(s string) bool {
+	return rotationTimestampShape.MatchString(s)
 }
 
-// timberjackRotationSuffix 匹配 timberjack 轮转副本的固定尾部形态：
-// `-<日期>T<时刻>.<毫秒>-<reason>[_<碰撞计数>].log[.<压缩后缀>]`。生产链用的是
-// timberjack 默认时间格式（虚线日期、时刻段同样以 '-' 分隔）与
-// Caddy FileWriter 默认 gzip 压缩（副本名追加 `.gz`），故必须同时接受虚线
-// 日期与可选压缩后缀；紧凑 `yyyyMMdd` 形态一并保留（读侧同族兼容）。
-// reason 段取自 timberjackRotationReasons；`_N` 是同毫秒同 reason 双轮转时
-// uniqueBackupName 写入的碰撞计数（`-size_1`，写在 reason 段内而非文件名尾）。
-// 只认完整时间戳形状——仅判「stem 后首字符是数字」会让兄弟规则
-// （如 lb_abc 与 lb_abc-1）的轮转副本被本规则清扫误删（rest 为
-// "-1-2026…" 时首字符恰是数字）。
-var timberjackRotationSuffix = regexp.MustCompile(
-	`^-(?:\d{8}T\d{2}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:\.\d{1,9})?-(?:` +
-		strings.Join(timberjackRotationReasons, "|") + `)(?:_\d+)?\.log(?:\.gz|\.zst)?$`)
+// StripRotationCollisionSuffix 剥掉同秒重复轮转的碰撞后缀 -N（N≥2，至多两位）：
+// 写侧在同秒重名时产出 <副本名>-2/-3…。位数上限避免误剥时间戳时刻段（-150405）。
+// 删除侧（归属反解的重试）与统计侧（副本归基）共用。
+func StripRotationCollisionSuffix(s string) (string, bool) {
+	dash := strings.LastIndexByte(s, '-')
+	if dash <= 0 || len(s)-dash-1 == 0 || len(s)-dash-1 > 2 {
+		return "", false
+	}
+	digits := s[dash+1:]
+	if !ruleLogAllDigits(digits) {
+		return "", false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 2 {
+		return "", false
+	}
+	return s[:dash], true
+}
+
+// SplitTimberjackRotationCopy 解析 timberjack 轮转副本名，返回副本主体
+// （轮转尾之前的部分）与是否命中。core 必须已由调用方剥掉压缩后缀。
+//
+// 识别形状：`<stem>-<时间戳>[.<毫秒>][-<尺寸/其它数字段>]*-<reason>[_<碰撞>].log`
+// ——时间戳段起点从右往左找（stem 允许含 '-<数字>'，兄弟规则 ID 不被切走），
+// 判据=rotationTimestampTail；reason 家族=timberjackRotationReasonSuffix。
+// 删除侧（ruleLogComponentOf 的归属反解）与统计侧
+// （handlers.classifyRotationCopyName）共用本函数：两侧各持一份解析曾让统计侧
+// 认领的 `-<时间戳>-<尺寸>-<reason>.log` 在删除侧落成一个幻影规则 ID，只能靠
+// 孤儿兜底延迟收敛。
+func SplitTimberjackRotationCopy(core string) (string, bool) {
+	if stem, ok := splitTimberjackTail(core); ok {
+		return stem, true
+	}
+	// 同秒碰撞后缀（<副本名>-2）先剥再试；剥失败/无匹配时按原名返回未命中
+	// （避免把 `<component>-2.log` 这类合法活动文件名误判为副本）。
+	if stripped, ok := StripRotationCollisionSuffix(core); ok {
+		return splitTimberjackTail(stripped)
+	}
+	return "", false
+}
+
+func splitTimberjackTail(core string) (string, bool) {
+	loc := timberjackRotationReasonSuffix.FindStringIndex(core)
+	if loc == nil {
+		return "", false
+	}
+	head := core[:loc[0]]
+	for i := len(head) - 1; i > 0; i-- {
+		if head[i] != '-' {
+			continue
+		}
+		if !rotationTimestampTail(head[i+1:]) {
+			continue
+		}
+		return head[:i], true
+	}
+	return "", false
+}
 
 // timberjackRotationCopyStem 返回文件名去掉 .log / .log.gz / .log.zst 后的
 // 主体（不是 .log 族时返回空串）。删除与孤儿判定用它做归属反解：规则日志
@@ -374,9 +416,13 @@ func ruleLogLiveIDsForOwnership() (map[string]bool, error) {
 	return liveRuleIDs(context.Background())
 }
 
-// removeRuleLogRotations 删除 base 的全部已识别轮转副本。认领与孤儿扫描
-// 共用 ruleLogComponentOf，覆盖任意移位代次、压缩后缀与 timberjack 时间戳
-// 副本；目录不存在=无副本（nil），读目录/删除失败聚合返回。
+// removeRuleLogRotations 删除 base（活动文件）与其全部已识别轮转副本。认领与
+// 孤儿扫描共用 ruleLogComponentOf，覆盖任意移位代次、压缩后缀与 timberjack
+// 时间戳副本；目录不存在=无副本（nil），删除失败聚合返回。
+//
+// 目录不可枚举（权限/被占位为非目录）时无法确定副本名域，退化为「活动文件 +
+// 确定性 .1..5」逐项尝试，并把枚举失败原因一并返回（无法枚举=可能有未识别
+// 残留，静默吞掉会让残留永久不可见）。
 func removeRuleLogRotations(base string) error {
 	dir := filepath.Dir(base)
 	component := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
@@ -385,7 +431,14 @@ func removeRuleLogRotations(base string) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("读取规则日志目录 %s: %w", dir, err)
+		var errs []error
+		errs = append(errs, fmt.Errorf("读取规则日志目录 %s: %w", dir, err))
+		for _, path := range []string{base, base + ".1", base + ".2", base + ".3", base + ".4", base + ".5"} {
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+				errs = append(errs, fmt.Errorf("删除规则日志 %s: %w", path, rmErr))
+			}
+		}
+		return errors.Join(errs...)
 	}
 	var errs []error
 	var liveIDs map[string]bool
@@ -416,10 +469,12 @@ func removeRuleLogRotations(base string) error {
 		if !ok || owner != component {
 			continue
 		}
-		// 归属反解：若整段主体本身是一条存活规则的 caddy_id，该文件是那条
+		// 归属反解：若整段主体本身是另一条存活规则的 caddy_id，该文件是那条
 		// 规则的活文件/副本（构造 ID 恰好以 <完整时间戳>-<reason> 结尾），
-		// 不得作为本规则的轮转副本删除。
-		if copyStem := timberjackRotationCopyStem(name); copyStem != "" && ownedByLiveRule(copyStem) {
+		// 不得作为本规则的轮转副本删除。活动文件本身（copyStem == component）
+		// 是本规则自己的日志，不做归属反解（否则存活规则的自身文件被保留，
+		// 删除规则后残留永久不可见）。
+		if copyStem := timberjackRotationCopyStem(name); copyStem != "" && copyStem != component && ownedByLiveRule(copyStem) {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -598,15 +653,11 @@ func ruleLogComponentOf(name string) (string, bool) {
 			core = trimmed
 		}
 	}
-	// timberjack 时间戳副本：从右往左找第一个构成完整副本尾部的 '-' 边界
-	// （基名允许含 "-<数字>"，按首个 '-' 切分会串到同前缀的兄弟规则）。
-	for i := len(core) - 1; i > 0; i-- {
-		if core[i] != '-' {
-			continue
-		}
-		if timberjackRotationSuffix.MatchString(core[i:]) {
-			return core[:i], core[:i] != ""
-		}
+	// timberjack 时间戳副本：与统计侧共用 SplitTimberjackRotationCopy
+	// （时间戳/尺寸余段/reason 家族/碰撞后缀单源）——两侧各持一份解析曾让
+	// 统计侧认领的 `-<ts>-<size>-<reason>.log` 在这里落成幻影规则 ID。
+	if stem, ok := SplitTimberjackRotationCopy(core); ok && stem != "" {
+		return stem, true
 	}
 	base, ok := strings.CutSuffix(core, ".log")
 	if !ok || base == "" || strings.Contains(base, ".") {

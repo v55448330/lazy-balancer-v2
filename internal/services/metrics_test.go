@@ -942,7 +942,7 @@ func TestPrometheusLabelParsing_nameBoundaryAndQuotedBrace(t *testing.T) {
 	if got, ok := prometheusLabelValue(line, "status_code"); !ok || got != "500" {
 		t.Fatalf(`status_code=%q ok=%v, want "500"`, got, ok)
 	}
-	if got, ok := prometheusSampleValue(line); !ok || got != "42" {
+	if _, got, ok := PrometheusSampleLine(line); !ok || got != "42" {
 		t.Fatalf(`sample=%q ok=%v, want "42"（值内 } 不得截断标签块）`, got, ok)
 	}
 }
@@ -961,5 +961,56 @@ func TestMetricsService_startHistoryCleanupAfterStopDoesNotRun(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got := ran.Load(); got != 0 {
 		t.Fatalf("Stop 后仍执行了 %d 轮历史清理（关停竞态）", got)
+	}
+}
+
+// 同一次抓取的两步结论不得相反：仪表盘实时指标解析器跳过 NaN/±Inf（转 int64
+// 对非有限值是实现相关的），规则指标采集此前对同形态报错。统一为跳过，且
+// 「不可解析」仍是错误（跳过只针对非有限值）。
+func TestAggregatePrometheusText_skipsNonFiniteSamples(t *testing.T) {
+	global := aggregatePrometheusText(strings.Join([]string{
+		`caddy_http_requests_total{host="a"} 5`,
+		`caddy_http_requests_total{host="b"} NaN`,
+		`caddy_http_response_size_bytes_sum{host="c"} +Inf`,
+		`caddy_http_request_size_bytes_sum{host="d"} -Inf`,
+	}, "\n"), prometheusScanGlobal)
+	if global.globalErr != nil {
+		t.Fatalf("globalErr=%v, want 非有限样本跳过而非报错", global.globalErr)
+	}
+	if global.global.requestsTotal != 5 || global.global.bytesOut != 0 || global.global.bytesIn != 0 {
+		t.Fatalf("global=%+v, want 仅有限样本参与聚合", global.global)
+	}
+
+	rules := aggregatePrometheusText(`lazybalancer_requests_total{rule="r"} NaN`, prometheusScanRules)
+	if rules.rulesErr != nil {
+		t.Fatalf("rulesErr=%v, want 非有限样本跳过而非报错", rules.rulesErr)
+	}
+	if agg := rules.rules["r"]; agg != nil && agg.requests != 0 {
+		t.Fatalf("rule agg=%+v, want 0 请求", agg)
+	}
+
+	if bad := aggregatePrometheusText(`caddy_http_requests_total{host="a"} not-a-number`, prometheusScanGlobal); bad.globalErr == nil {
+		t.Fatal("不可解析的样本值仍必须报错（跳过仅针对 NaN/±Inf）")
+	}
+}
+
+// 标签值含空格（合法 exposition）时行取值必须引号感知：仪表盘与规则指标采集
+// 共用同一实现，避免一侧切错值、另一侧正常。
+func TestAggregatePrometheusText_toleratesSpaceInLabelValue(t *testing.T) {
+	res := aggregatePrometheusText(strings.Join([]string{
+		`caddy_http_requests_total{host="a b"} 5`,
+		`lazybalancer_requests_total{rule="lb x"} 3`,
+	}, "\n"), prometheusScanGlobal|prometheusScanRules)
+	if res.globalErr != nil {
+		t.Fatalf("globalErr=%v, want 引号感知取值", res.globalErr)
+	}
+	if res.global.requestsTotal != 5 {
+		t.Fatalf("requestsTotal=%d, want 5", res.global.requestsTotal)
+	}
+	if res.rulesErr != nil {
+		t.Fatalf("rulesErr=%v, want 引号感知取值", res.rulesErr)
+	}
+	if agg := res.rules["lb x"]; agg == nil || agg.requests != 3 {
+		t.Fatalf("rule agg=%+v, want rule=\"lb x\" 计数 3", agg)
 	}
 }

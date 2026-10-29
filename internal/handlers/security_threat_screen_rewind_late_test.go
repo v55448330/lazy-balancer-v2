@@ -10,6 +10,7 @@ package handlers
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -376,5 +377,109 @@ func TestEnsureThreatRollup_boundedRetriesWhenRewindKeepsFailing(t *testing.T) {
 	}
 	if got := threatRollupRewindPending.Load(); got == 0 {
 		t.Fatal("失败后队列必须保持回填（下一轮节拍重试）")
+	}
+}
+
+// 空增量早退：同一分钟连续固化两次时，第二次（窗口内无新行）此前仍会
+// 整段重读已固化行再跑一遍全范围聚合（每分钟两遍全扫），结果与
+// deltaTotal==0 分支完全相同（只落高水位）。迟到行 id 恒大于已计行，
+// 因此「分钟窗口 MAX(id) 不变且无迟到基线」即无新行可合并。
+func TestThreatFixMinute_noNewEventsSkipsAggregateScan(t *testing.T) {
+	recorder := countingMetricsDB(t)
+	base := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	minute := base.Truncate(time.Minute)
+	eventTime := minute.Format("2006-01-02 15:04:05")
+	seedThreatScreenEvent(t, eventTime, "93.184.216.7", "942100", "SQL Injection", "blocked")
+	seedThreatScreenEvent(t, eventTime, "93.184.216.8", "941100", "XSS", "blocked")
+	fixThreatRewindMinute(t, minute) // 首次：无高水位 → 全量重建
+
+	recorder.reset()
+	fixThreatRewindMinute(t, minute) // 第二次：窗口内无新行
+
+	scans := recorder.count(func(query string) bool {
+		return strings.Contains(query, "FROM security_events") && strings.Contains(query, "GROUP BY client_ip")
+	})
+	if scans != 0 {
+		t.Fatalf("无新事件的重复固化仍发出 %d 条全范围聚合扫描, want 0（只应更新高水位）", scans)
+	}
+	// 早退与 deltaTotal==0 分支等价：已固化计数不变。
+	if got := threatRollupCountForMinute(t, minute.Format(threatRewindMinuteLayout)); got != 2 {
+		t.Fatalf("重复固化后分钟 count=%d, want 2（早退不得丢已固化行）", got)
+	}
+}
+
+// 正向回归：早退判定不得吞掉迟到插入——同分钟新增行（id 更大）必须照旧合并。
+func TestThreatFixMinute_lateEventStillMergesAfterRepeat(t *testing.T) {
+	countingMetricsDB(t)
+	base := time.Date(2026, 10, 18, 13, 0, 0, 0, time.UTC)
+	minute := base.Truncate(time.Minute)
+	eventTime := minute.Format("2006-01-02 15:04:05")
+	seedThreatScreenEvent(t, eventTime, "93.184.216.7", "942100", "SQL Injection", "blocked")
+	fixThreatRewindMinute(t, minute)
+	fixThreatRewindMinute(t, minute) // 无新行的一次重复固化不得提前"封口"
+
+	seedThreatScreenEvent(t, eventTime, "93.184.216.9", "930100", "LFI", "blocked")
+	fixThreatRewindMinute(t, minute)
+
+	if got := threatRollupCountForMinute(t, minute.Format(threatRewindMinuteLayout)); got != 2 {
+		t.Fatalf("迟到行合入后分钟 count=%d, want 2（早退只对无新行生效）", got)
+	}
+}
+
+// 持续排队回退时 ensure 必须有界返回：成功/重启两条 continue 路径此前没有
+// 迭代上限——队列每轮都有新回退入队（摄取持续补采）或并发回退反复触发重启时，
+// 循环永不返回，warmer 协程与请求路径被粘住（每轮一次全量固化事务）。
+// 缝「成功但立即重新入队」模拟该形态：有界实现 N 轮后返回 nil 且队列仍有项，
+// 无界实现在断言窗口内不返回（由 stop 关闭解除粘住，随后按失败路径返回错误）。
+func TestEnsureThreatRollup_boundedIterationsWhenRewindKeepsQueueing(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	oldApply := threatRollupRewindApplyInLock
+	oldAttempts := threatRollupRewindApplyAttempts
+	oldBackoff := threatRollupRewindApplyBackoff
+	t.Cleanup(func() {
+		threatRollupRewindApplyInLock = oldApply
+		threatRollupRewindApplyAttempts = oldAttempts
+		threatRollupRewindApplyBackoff = oldBackoff
+		threatRollupRewindPending.Store(0)
+		_ = takeThreatRollupReclassifyPending()
+	})
+	threatRollupRewindApplyAttempts = 2
+	threatRollupRewindApplyBackoff = 0
+	var calls atomic.Int64
+	var stopped atomic.Bool
+	threatRollupRewindApplyInLock = func(m time.Time, _ []time.Time) bool {
+		calls.Add(1)
+		if stopped.Load() {
+			// 断言窗口结束：不再回填，让无界实现的失败路径也能退出并清理。
+			threatRollupRewindPending.Store(0)
+			return false
+		}
+		queueThreatRollupRewind(m) // 成功但队列永不排空（真实形态：持续补采排队）
+		return true
+	}
+	threatRollupRewindPending.Store(0)
+	_ = takeThreatRollupReclassifyPending()
+	queueThreatRollupRewind(time.Now().UTC().Add(-15 * time.Minute).Truncate(time.Minute))
+
+	done := make(chan error, 1)
+	go func() { done <- ensureThreatRollup(1) }()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(3 * time.Second):
+		stopped.Store(true)
+		<-done
+		t.Fatalf("持续排队回退时 ensure 未在限定轮数内返回（迭代无上限）: 已应用 %d 次", calls.Load())
+	}
+	if err != nil {
+		t.Fatalf("有界返回必须是 nil（保留待处理项到下一轮节拍），got %v", err)
+	}
+	if got := threatRollupRewindPending.Load(); got == 0 {
+		t.Fatal("有界返回后待处理项必须保留（下一轮 warmer 节拍继续）")
+	}
+	// 每轮 ensure 至多「批次间隙 + drain」两处应用；上限 2×attempts 轮。
+	if got := calls.Load(); got > int64(4*threatRollupRewindApplyAttempts) {
+		t.Fatalf("回退应用次数=%d, want <= %d（迭代轮数无上限）", got, 4*threatRollupRewindApplyAttempts)
 	}
 }

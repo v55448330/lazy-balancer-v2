@@ -994,10 +994,17 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 挡住武装，该库自动更新永久停摆。启动是崩溃后唯一的恢复入口（进程已死），
 	// 故只在启动路径修复，不影响导入成功路径的「rearm 后 CAS 删除」顺序
 	//（那一步依赖哨兵形态未被改写）。
-	healSecurityVersionImportSentinels()
-	// 首槽武装先落默认源/版本行，随后的业务开关同步才能读到全新库的
-	// 默认启用态（否则 ErrNoRows 被 fail-closed 误译为关闭并 StopLoop）。
-	armSecurityLibraryFirstSlots()
+	//
+	// 两项都是主节点写面：从端版本行是主端镜像，本地改写会被快照覆盖或制造
+	// 假状态（与 normalizeInterruptedUpdateStatuses 同口径）。角色读失败按
+	// 从节点跳过（fail-closed，与上方角色种子一致）——主节点自身的启动路径
+	// 会完成同一修复/武装。
+	if roleMaster {
+		healSecurityVersionImportSentinels()
+		// 首槽武装先落默认源/版本行，随后的业务开关同步才能读到全新库的
+		// 默认启用态（否则 ErrNoRows 被 fail-closed 误译为关闭并 StopLoop）。
+		armSecurityLibraryFirstSlots()
+	}
 	// 套用用户显式启停偏好——覆盖默认启动清单（停止态不复活；
 	// 用户主动开启的默认关闭任务恢复调度）；业务驱动任务跳过。
 	// 复用上方已读取的偏好快照，不再二次查表。

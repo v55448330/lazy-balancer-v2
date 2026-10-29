@@ -82,18 +82,58 @@ var defaultBranding = brandingConfig{
 // 生效」语义的同时,稳态成本从每 GetBranding 请求 3 次全文读+JSON 解析
 // 降为 3 次 stat。dataDir 入键:跨目录(测试隔离)不共享缓存。
 var brandingStore = struct {
-	mu      sync.RWMutex
-	loaded  bool
-	dataDir string
-	cfg     brandingConfig
-	modTime time.Time
-	size    int64
+	mu     sync.RWMutex
+	loaded bool
+	// stamp 是内存快照对应的文件形态（唯一变化判据，见 brandingFileStamp）。
+	stamp brandingFileStamp
+	cfg   brandingConfig
 	// failedProbeAt 失败探测缓存时间戳：GetBranding 是公开无鉴权
 	// 端点，文件缺失/半截写时每请求一次重读+日志是放大面——同一失败形态
-	// 60s 内只探测/留痕一次（stat 成功但仍不可解析的形态仍逐请求重读，保证
-	// 恢复后立即收敛）。
+	// 60s 内只探测/留痕一次（stat 成功但不可解析的形态由下方记录观测形态
+	// 收敛：文件真正变化才重读）。
 	failedProbeAt time.Time
 }{}
+
+// brandingFileStamp 是 branding.json 的唯一变化判据（dataDir + mtime + size）。
+// 两处消费方共用它——内存快照热重载（brandingStore）与幂等同步门
+// （brandingSyncGate）——此前各写一套 stat/指纹实现：改一侧判据另一侧不跟随，
+// 且没有测试能发现（届时会出现「面板已显示新值、拦截页/落地文案未同步」）。
+// statBrandingFile 是包内唯一 stat 点（守卫：TestBrandingFileChangeDetection_singleStatSource）。
+type brandingFileStamp struct {
+	dataDir string
+	modTime time.Time
+	size    int64
+	statOK  bool
+}
+
+// statBrandingFile 观测 branding.json 当前形态（dataDir 入键：跨目录不共享缓存）。
+func statBrandingFile(dataDir string) brandingFileStamp {
+	stamp := brandingFileStamp{dataDir: dataDir}
+	info, err := os.Stat(filepath.Join(dataDir, "branding.json"))
+	if err != nil {
+		return stamp
+	}
+	stamp.statOK = true
+	stamp.modTime = info.ModTime()
+	stamp.size = info.Size()
+	return stamp
+}
+
+// sameOnDisk 报告两份观测是否指向同一份未变化的文件（跨 dataDir 恒 false；
+// stat 失败的观测不参与比较——它没有可比对的文件形态）。
+func (s brandingFileStamp) sameOnDisk(other brandingFileStamp) bool {
+	return s.statOK && other.statOK && s.dataDir == other.dataDir &&
+		s.size == other.size && s.modTime.Equal(other.modTime)
+}
+
+// fingerprint 返回内容指纹（dataDir+mtime+size）；stat 失败返回空串
+// （调用方跳过本轮，下次重试）。
+func (s brandingFileStamp) fingerprint() string {
+	if !s.statOK {
+		return ""
+	}
+	return fmt.Sprintf("%s\x00%d.%d", s.dataDir, s.modTime.UnixNano(), s.size)
+}
 
 // brandingFailureProbeWindow 失败探测/日志的限流窗口。
 const brandingFailureProbeWindow = time.Minute
@@ -104,10 +144,9 @@ const brandingFailureProbeWindow = time.Minute
 // non-empty fields are rendered verbatim (never merged with defaults).
 func loadBrandingConfig(dataDir string) brandingConfig {
 	path := filepath.Join(dataDir, "branding.json")
-	st, stErr := os.Stat(path)
+	stamp := statBrandingFile(dataDir)
 	unchanged := func() bool {
-		return brandingStore.loaded && brandingStore.dataDir == dataDir &&
-			stErr == nil && st.Size() == brandingStore.size && st.ModTime().Equal(brandingStore.modTime)
+		return brandingStore.loaded && brandingStore.stamp.sameOnDisk(stamp)
 	}
 	brandingStore.mu.RLock()
 	if unchanged() {
@@ -118,7 +157,7 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	// stat 失败（文件缺失/不可读）且近期已探测过失败 → 直接返回
 	// last-known-good，不再每请求重读+记日志；文件恢复（stat 成功）即走
 	// 慢路径立即收敛。
-	if stErr != nil && brandingStore.loaded && brandingStore.dataDir == dataDir &&
+	if !stamp.statOK && brandingStore.loaded && brandingStore.stamp.dataDir == dataDir &&
 		!brandingStore.failedProbeAt.IsZero() && time.Since(brandingStore.failedProbeAt) < brandingFailureProbeWindow {
 		cfg := brandingStore.cfg
 		brandingStore.mu.RUnlock()
@@ -134,11 +173,17 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	prevLoaded := brandingStore.loaded
 	prev := brandingStore.cfg
 	cfg, ok, readErr := readBrandingFile(path)
-	if !ok && prevLoaded && brandingStore.dataDir == dataDir {
+	if !ok && prevLoaded && brandingStore.stamp.dataDir == dataDir {
 		// 半截写/删除窗口(2026-09-11 裁定,限同一 dataDir):保内存上一份
-		// 有效配置,不更新 stat 标记——文件恢复完整后下次访问立即重读收敛;
-		// 跨目录的前值不属于本文件,不保(测试隔离即依赖此语义);boot 无
-		// 前值时 ok=false 的 cfg(默认)照常入库。
+		// 有效配置;跨目录的前值不属于本文件,不保(测试隔离即依赖此语义);
+		// boot 无前值时 ok=false 的 cfg(默认)照常入库。
+		// stat 成功但不可解析时必须记录这次观测到的形态:文件内容没再变化就
+		// 不该每请求重读全文+重解析（公开无鉴权端点，每请求 3 次 loadBrandingConfig）；
+		// 文件真正修复时 mtime/size 变化，unchanged() 立刻失效并重读收敛。
+		// stat 失败的形态没有可比对的形态，仍靠 failedProbeAt 窗口限流。
+		if stamp.statOK {
+			brandingStore.stamp = stamp
+		}
 		// 失败日志 60s 限流（公开端点每请求一条是放大面；lookup 失败
 		// 原因仅窗口内记一次，同一形态重复无新增信息）。
 		if brandingStore.failedProbeAt.IsZero() || time.Since(brandingStore.failedProbeAt) >= brandingFailureProbeWindow {
@@ -168,17 +213,10 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	}
 	brandingStore.cfg = cfg
 	brandingStore.loaded = true
-	brandingStore.dataDir = dataDir
+	brandingStore.stamp = stamp
 	if ok {
 		// 成功读取即清失败探测标记：下一轮失败重新计时/留痕。
 		brandingStore.failedProbeAt = time.Time{}
-	}
-	if stErr == nil {
-		brandingStore.modTime = st.ModTime()
-		brandingStore.size = st.Size()
-	} else {
-		brandingStore.modTime = time.Time{}
-		brandingStore.size = -1
 	}
 	brandingStore.mu.Unlock()
 
@@ -335,23 +373,13 @@ type brandingResponse struct {
 // 已完成播种，门内跳过仅推迟带外变更 ≤60s 可见。branding.json 为手工编辑/
 // 集群同步文件，无管理面写路径（因此无需写侧主动失效）；内容热重载由 stat
 // 即时检测，仅幂等同步（landing 注入/拦截页种子/镜像）受本 60s 门约束。
+// 指纹取自 statBrandingFile（与 brandingStore 同一判据，见 brandingFileStamp）。
 var (
 	brandingSyncMu          sync.Mutex
 	brandingSyncLast        time.Time
 	brandingSyncDataDir     string
 	brandingSyncFingerprint string
 )
-
-// brandingFileFingerprint 返回 branding.json 的内容指纹（mtime+size，含 dataDir
-// 键控——与 brandingStore 同构；跨目录不共享缓存）；stat 失败返回空串（调用方
-// 跳过本轮，下次重试）。
-func brandingFileFingerprint(dataDir string) string {
-	info, err := os.Stat(filepath.Join(dataDir, "branding.json"))
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%s\x00%d.%d", dataDir, info.ModTime().UnixNano(), info.Size())
-}
 
 // brandingSyncGateAllow 判定本轮是否需要跑幂等写副作用（landing 注入/拦截页
 // 种子/镜像刷新）。两道门串联：
@@ -364,7 +392,7 @@ func brandingFileFingerprint(dataDir string) string {
 // 写入仍保持幂等：指纹只记「本轮已处理」，失败时由调用方 brandingSyncMarkFailed
 // 清空，下一轮（≥60s）重试。
 func brandingSyncGateAllow(dataDir string) bool {
-	fingerprint := brandingFileFingerprint(dataDir)
+	fingerprint := statBrandingFile(dataDir).fingerprint()
 	if fingerprint == "" {
 		return false
 	}

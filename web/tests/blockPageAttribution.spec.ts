@@ -156,7 +156,8 @@ test('跨栈对表：后端阶段码与归因分支仍与前端预测同口径',
   assert.match(stage3, /return securityCtx\.policySynthetic\[policy\.ID\]/)
   // 兜底路由：取首个「内容非空」页（空内容页不得遮蔽后续），状态码 0 归一 403
   const fallback = section(go, 'func buildBlockPageErrorRoute(', '\nfunc ')
-  assert.match(fallback, /if c := securityCtx\.blockPageByID\[policy\.BlockPageID\]; c != "" \{/)
+  // 首个非空页选择已抽为单源 helper（43 行内联扫描 ×2 → firstPolicyWithBlockPage）
+  assert.match(fallback, /firstPolicyWithBlockPage\(policies, securityCtx\.blockPageByID\)/)
   assert.match(fallback, /statusCode = 403/)
   // 阶段 2：至少一条启用策略开启限流才产生该路由；页取首个有页策略
   const rate = section(go, 'func buildRateLimitErrorRoute(', '\nfunc ')

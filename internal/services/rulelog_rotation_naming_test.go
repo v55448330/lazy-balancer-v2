@@ -10,7 +10,6 @@ package services
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -153,13 +152,13 @@ func TestTimberjackRotationReasonFamily_bindsRenderedWriterKeys(t *testing.T) {
 		}
 	}
 	for reason := range reasons {
-		name := "lb_probe-2026-10-23T18-38-57.122-" + reason + ".log.gz"
-		if !timberjackRotationSuffix.MatchString(strings.TrimPrefix(name, "lb_probe")) {
-			t.Fatalf("白名单 reason %q 的副本名 %s 不被删除侧正则匹配（登记与实现失联）", reason, name)
+		name := "lb_probe-2026-10-23T18-38-57.122-" + reason + ".log"
+		if stem, ok := SplitTimberjackRotationCopy(name); !ok || stem != "lb_probe" {
+			t.Fatalf("白名单 reason %q 的副本名 %s 不被共用解析识别（stem=%q, ok=%v）：登记与实现失联", reason, name, stem, ok)
 		}
 		collision := "lb_probe-2026-10-23T18-38-57.122-" + reason + "_1.log"
-		if !timberjackRotationSuffix.MatchString(strings.TrimPrefix(collision, "lb_probe")) {
-			t.Fatalf("同毫秒碰撞副本 %s 不被删除侧正则匹配（uniqueBackupName 的 _N 后缀）", collision)
+		if stem, ok := SplitTimberjackRotationCopy(collision); !ok || stem != "lb_probe" {
+			t.Fatalf("同毫秒碰撞副本 %s 不被共用解析识别（stem=%q, ok=%v）：uniqueBackupName 的 _N 后缀", collision, stem, ok)
 		}
 	}
 }

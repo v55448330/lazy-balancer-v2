@@ -35,21 +35,123 @@ type threatActiveSourcesKey struct {
 	since   string // 活跃窗口起点锚点（分钟串）
 }
 
-type threatActiveSourcesEntry struct {
-	count     int
+// —— 进程内 TTL 缓存单源 ——
+
+// ttlCacheEntry 是一条缓存条目：值与到期时刻。
+type ttlCacheEntry[V any] struct {
+	value     V
 	expiresAt time.Time
 }
 
-var (
-	threatActiveSourcesMu    sync.Mutex
-	threatActiveSourcesCache = map[threatActiveSourcesKey]threatActiveSourcesEntry{}
-)
+// ttlCache 是「键 → 值 + 到期时刻」进程内缓存的单一实现：威胁大屏活跃源/
+// 被攻击目标 Top3/rollup 维度聚合/规则阶段统计/安全总览聚合五处共用同一份
+// TTL 判定与淘汰逻辑（此前五处各写一遍，淘汰语义分叉且没有单点声明）。
+//
+// 两种淘汰策略由 maxEntries 选择：
+//   - maxEntries > 0：写入时条目数已超上限即整体重建（有界增长优先于精确
+//     逐出，洪峰下内存封顶）；
+//   - maxEntries == 0：写入时逐键清扫过期项——分钟锚定键族每分钟产生新键，
+//     整体重置会打掉同屏其它维度仍在有效期内的条目（轮询抖动）。
+//
+// TTL 不作为结构体字段：各缓存的 TTL 是测试可调的包级 var（构造期快照会让
+// 缩短 TTL 的测试缝失效），由调用方在 Get/Set 时按自身口径传入；「TTL<=0
+// 即整体关闭缓存」与「cacheable=false 不读不写」等门槛也留在调用方。
+//
+// 不在本结构内的两处进程内缓存属不同语义：enrichLocationCache 键含 GeoIP
+// 代际（代际变更整体失效、无到期时刻），threatTrafficCache 由 singleflight
+// 持有且以 admin URL 为键、无淘汰需求。
+type ttlCache[K comparable, V any] struct {
+	sync.Mutex
+	entries    map[K]ttlCacheEntry[V]
+	maxEntries int
+}
+
+// newTTLCache 构造一个进程内 TTL 缓存；maxEntries>0 走「超限整体重置」，
+// 0 走「写入清扫过期」。
+func newTTLCache[K comparable, V any](maxEntries int) *ttlCache[K, V] {
+	return &ttlCache[K, V]{entries: make(map[K]ttlCacheEntry[V]), maxEntries: maxEntries}
+}
+
+// Get 返回未过期条目；过期条目按 miss 处理（不在此删除，交由写入侧清扫）。
+func (c *ttlCache[K, V]) Get(key K, now time.Time) (V, bool) {
+	c.Lock()
+	defer c.Unlock()
+	if entry, ok := c.entries[key]; ok && now.Before(entry.expiresAt) {
+		return entry.value, true
+	}
+	var zero V
+	return zero, false
+}
+
+// Set 写入条目并按淘汰策略腾挪（先腾挪后写入，与既有各处的判定顺序一致）。
+func (c *ttlCache[K, V]) Set(key K, value V, now time.Time, ttl time.Duration) {
+	c.Lock()
+	defer c.Unlock()
+	if c.maxEntries > 0 {
+		if len(c.entries) > c.maxEntries {
+			c.entries = make(map[K]ttlCacheEntry[V])
+		}
+	} else {
+		for k, entry := range c.entries {
+			if !now.Before(entry.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	c.entries[key] = ttlCacheEntry[V]{value: value, expiresAt: now.Add(ttl)}
+}
+
+// Reset 清空缓存（测试缝与失效钩子共用）。
+func (c *ttlCache[K, V]) Reset() {
+	c.Lock()
+	c.entries = make(map[K]ttlCacheEntry[V])
+	c.Unlock()
+}
+
+// —— 测试缝（生产路径一律走 Get/Set/Reset）——
+
+// Seed 写入一条指定到期时刻的条目：测试构造「已过期/即将过期/有效」三种形状，
+// 避免 wall-clock sleep。
+func (c *ttlCache[K, V]) Seed(key K, value V, expiresAt time.Time) {
+	c.Lock()
+	c.entries[key] = ttlCacheEntry[V]{value: value, expiresAt: expiresAt}
+	c.Unlock()
+}
+
+// Has 键是否存在（不判到期——用于断言「未缓存」与「已失效」两种形状）。
+func (c *ttlCache[K, V]) Has(key K) bool {
+	c.Lock()
+	defer c.Unlock()
+	_, ok := c.entries[key]
+	return ok
+}
+
+// Len 当前条目数（含已过期未清扫项）。
+func (c *ttlCache[K, V]) Len() int {
+	c.Lock()
+	defer c.Unlock()
+	return len(c.entries)
+}
+
+// ExpireMatching 把匹配键的到期时刻置为零（立即过期）。
+func (c *ttlCache[K, V]) ExpireMatching(match func(K) bool) {
+	c.Lock()
+	defer c.Unlock()
+	for k, entry := range c.entries {
+		if match(k) {
+			entry.expiresAt = time.Time{}
+			c.entries[k] = entry
+		}
+	}
+}
+
+// threatActiveSourcesCache 键含窗口锚点（每分钟新键），条目数上限 4：同屏
+// 多维度并行取数时会短暂产生多个键，超限整体重建（有界增长优先于精确逐出）。
+var threatActiveSourcesCache = newTTLCache[threatActiveSourcesKey, int](4)
 
 // resetThreatActiveSourcesCacheForTest 测试缝：清空缓存（生产不调用）。
 func resetThreatActiveSourcesCacheForTest() {
-	threatActiveSourcesMu.Lock()
-	threatActiveSourcesCache = map[threatActiveSourcesKey]threatActiveSourcesEntry{}
-	threatActiveSourcesMu.Unlock()
+	threatActiveSourcesCache.Reset()
 }
 
 // threatActiveSourcesCount 返回窗口内非保留地址的去重源 IP 数（命中缓存时
@@ -58,13 +160,9 @@ func threatActiveSourcesCount(metricsDB *sql.DB, activeSince string, now time.Ti
 	anchor := threatMinuteAnchor(activeSince)
 	key := threatActiveSourcesKey{metrics: metricsDB, since: anchor}
 	if threatActiveSourcesCacheTTL > 0 {
-		threatActiveSourcesMu.Lock()
-		if entry, ok := threatActiveSourcesCache[key]; ok && now.Before(entry.expiresAt) {
-			count := entry.count
-			threatActiveSourcesMu.Unlock()
+		if count, ok := threatActiveSourcesCache.Get(key, now); ok {
 			return count, nil
 		}
-		threatActiveSourcesMu.Unlock()
 	}
 
 	rows, err := metricsDB.Query(`SELECT COALESCE(client_ip,'') FROM security_events WHERE event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip`, activeSince)
@@ -87,15 +185,7 @@ func threatActiveSourcesCount(metricsDB *sql.DB, activeSince string, now time.Ti
 	}
 
 	if threatActiveSourcesCacheTTL > 0 {
-		threatActiveSourcesMu.Lock()
-		if len(threatActiveSourcesCache) > 4 {
-			threatActiveSourcesCache = map[threatActiveSourcesKey]threatActiveSourcesEntry{}
-		}
-		threatActiveSourcesCache[key] = threatActiveSourcesEntry{
-			count:     count,
-			expiresAt: now.Add(threatActiveSourcesCacheTTL),
-		}
-		threatActiveSourcesMu.Unlock()
+		threatActiveSourcesCache.Set(key, count, now, threatActiveSourcesCacheTTL)
 	}
 	return count, nil
 }

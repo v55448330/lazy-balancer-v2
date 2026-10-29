@@ -449,3 +449,20 @@ test('其他日志行口径不回归：字节/轮转文案保持原样', () => {
     '通用字节口径（Caddy/任务日志等）不得插入缓存段',
   )
 })
+
+// 纯库内行（操作日志=audit_log 表按保留期清理）没有轮转归档概念：keep_count=0
+// 的通用分支会渲染「暂无归档」，在审计行上会被读成归档失败。后端以 db_backed
+// 显式标记该形态，渲染层必须在归档文案之前消费它——跨栈同源（json tag 与前端
+// 类型同名），否则后端加字段前端静默读 undefined，界面照旧说谎。
+test('纯库内行 db_backed：keep_count=0 不得渲染「暂无归档」', () => {
+  const go = repoCode('internal/handlers/logstats.go')
+  assert.match(go, /DBBacked\s+bool\s+`json:"db_backed,omitempty"`/, '后端 json tag 漂移')
+  assert.match(go, /Key: "audit"[^\n]*DBBacked: true/, '操作日志行必须带 db_backed 标记')
+  assert.match(code('src/composables/useLogStorageStats.ts'), /db_backed\?: boolean/, '前端类型必须声明同名字段')
+  const noteText = section(code('src/components/LogStorageBar.vue'), 'const noteText = computed(', '\n})\n')
+  assert.match(noteText, /if \(i\.db_backed\)/, '渲染层必须消费 db_backed 标记')
+  // 标记分支必须先于份数/时间戳归档文案返回：否则「暂无归档」仍会拼进去。
+  const dbBranch = noteText.indexOf('if (i.db_backed)')
+  const archiveBranch = noteText.indexOf('if (i.keep_count > 0)')
+  assert.ok(dbBranch >= 0 && archiveBranch > dbBranch, 'db_backed 分支必须在归档文案分支之前')
+})

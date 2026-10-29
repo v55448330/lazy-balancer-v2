@@ -633,3 +633,45 @@ func TestGetLogStats_taskDirEnumeratedOncePerRequest(t *testing.T) {
 		})
 	}
 }
+
+// 操作日志行是纯 DB 行（audit_log 表 + 保留期每日清理），没有轮转归档概念：
+// 前端据 db_backed 标记渲染「库内定期清理」，不再把 keep_count=0 读成
+// 「暂无归档」（那种读法会被误读成归档失败）。文件族行必须不带该标记。
+func TestGetLogStats_auditRowMarkedDBBacked(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	h.cfg.DataDir = t.TempDir()
+	router := gin.New()
+	router.GET("/logs/stats", h.GetLogStats)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/stats?keys=audit,runtime", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Logs []map[string]any `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode stats: %v body=%s", err, rec.Body.String())
+	}
+	byKey := map[string]map[string]any{}
+	for _, item := range payload.Data.Logs {
+		if key, ok := item["key"].(string); ok {
+			byKey[key] = item
+		}
+	}
+	audit, ok := byKey["audit"]
+	if !ok {
+		t.Fatalf("audit 行缺席: %s", rec.Body.String())
+	}
+	if audit["db_backed"] != true {
+		t.Fatalf("audit db_backed=%v, want true（DB 行无归档概念）", audit["db_backed"])
+	}
+	if runtimeRow, ok := byKey["runtime"]; ok {
+		if backed, present := runtimeRow["db_backed"]; present && backed == true {
+			t.Fatalf("runtime 行 db_backed=%v, want 缺席/false（文件轮转族）", backed)
+		}
+	}
+}

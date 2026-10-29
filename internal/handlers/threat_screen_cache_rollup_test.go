@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,31 +21,17 @@ func TestInvalidateThreatScreenRollupCaches_clearsTopTargets(t *testing.T) {
 	t.Cleanup(resetThreatScreenCachesForTest)
 
 	targetKey := topTargetsCacheKey{sinceMinute: "2026-10-25 10:00"}
-	topTargetsCacheMu.Lock()
-	topTargetsCache[targetKey] = topTargetsCacheEntry{
-		targets:   []threatTopTarget{{Name: "site-a", Value: 7}},
-		expiresAt: time.Now().Add(time.Minute),
-	}
-	topTargetsCacheMu.Unlock()
+	topTargetsCache.Seed(targetKey, []threatTopTarget{{Name: "site-a", Value: 7}}, time.Now().Add(time.Minute))
 
 	aggKey := threatRollupDimAggregateKey{sinceMinute: "2026-10-25 10:00"}
-	threatRollupDimAggregateCacheMu.Lock()
-	threatRollupDimAggregateCache[aggKey] = threatRollupDimAggregateEntry{expiresAt: time.Now().Add(time.Minute)}
-	threatRollupDimAggregateCacheMu.Unlock()
+	threatRollupDimAggregateCache.Seed(aggKey, threatRollupDimAggregate{}, time.Now().Add(time.Minute))
 
 	invalidateThreatScreenRollupCaches()
 
-	topTargetsCacheMu.Lock()
-	_, targetLeft := topTargetsCache[targetKey]
-	topTargetsCacheMu.Unlock()
-	if targetLeft {
+	if topTargetsCache.Has(targetKey) {
 		t.Fatal("固化后 top_targets 缓存必须一并失效（否则同一次响应返回固化前 Top3）")
 	}
-
-	threatRollupDimAggregateCacheMu.Lock()
-	_, aggLeft := threatRollupDimAggregateCache[aggKey]
-	threatRollupDimAggregateCacheMu.Unlock()
-	if aggLeft {
+	if threatRollupDimAggregateCache.Has(aggKey) {
 		t.Fatal("固化后维度聚合缓存必须失效")
 	}
 }
@@ -156,13 +143,49 @@ func TestGetSecurityThreatScreen_queryFailureInvalidatesRollupCaches(t *testing.
 	}
 
 	// Then：已写入的半轮聚合也必须失效，下一轮不得混用旧聚合与新 Top3。
-	threatRollupDimAggregateCacheMu.Lock()
-	aggLeft := len(threatRollupDimAggregateCache)
-	threatRollupDimAggregateCacheMu.Unlock()
-	topTargetsCacheMu.Lock()
-	targetsLeft := len(topTargetsCache)
-	topTargetsCacheMu.Unlock()
+	aggLeft := threatRollupDimAggregateCache.Len()
+	targetsLeft := topTargetsCache.Len()
 	if aggLeft != 0 || targetsLeft != 0 {
 		t.Fatalf("cache entries after 500: aggregate=%d top_targets=%d, want both 0", aggLeft, targetsLeft)
+	}
+}
+
+// 进程内 TTL 缓存单源：大屏/总览/规则阶段统计五处此前各自写一遍
+// 「map + Mutex + expiresAt 判定 + 自己的淘汰策略」，淘汰语义分叉成
+// 「超限整体重置」（活跃源/Top3 之外的规则阶段统计）与「写入顺带清扫过期」
+// （分钟锚定键族）两种且无单点声明——任一处改块大小/判定方向都无法被另一处
+// 约束。五处必须声明为 ttlCache 实例（Get/Set + maxEntries 由该类型承载）。
+func TestProcessCaches_useTTLCacheSingleSource(t *testing.T) {
+	instances := []struct {
+		file string
+		decl string
+		// reason 该实例的淘汰策略（maxEntries>0=超限整体重置；0=写入清扫过期）。
+		maxEntries string
+	}{
+		{"threat_active_sources_cache.go", "newTTLCache[threatActiveSourcesKey, int](4)", "4"},
+		{"threat_screen_cache.go", "newTTLCache[topTargetsCacheKey, []threatTopTarget](0)", "0"},
+		{"threat_screen_cache.go", "newTTLCache[threatRollupDimAggregateKey, threatRollupDimAggregate](0)", "0"},
+		{"security_overview.go", "newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnapshot](256)", "256"},
+		{"security_overview.go", "newTTLCache[securityOverviewAggCacheKey, securityOverviewAggregates](0)", "0"},
+	}
+	for _, instance := range instances {
+		source, err := os.ReadFile(instance.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", instance.file, err)
+		}
+		if !strings.Contains(string(source), instance.decl) {
+			t.Errorf("%s 缺少声明 %s（进程内 TTL 缓存必须走 ttlCache 单源，maxEntries=%s）",
+				instance.file, instance.decl, instance.maxEntries)
+		}
+	}
+	// 单源实现本身必须在包内存在且提供这两种淘汰策略的入口。
+	source, err := os.ReadFile("threat_active_sources_cache.go")
+	if err != nil {
+		t.Fatalf("read threat_active_sources_cache.go: %v", err)
+	}
+	for _, marker := range []string{"type ttlCache[K comparable, V any] struct", "func newTTLCache[K comparable, V any](", "func (c *ttlCache[K, V]) Get(", "func (c *ttlCache[K, V]) Set(", "func (c *ttlCache[K, V]) Reset()"} {
+		if !strings.Contains(string(source), marker) {
+			t.Errorf("ttlCache 单源缺少 %q", marker)
+		}
 	}
 }

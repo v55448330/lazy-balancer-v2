@@ -772,7 +772,7 @@ func suppressBrandingSyncSideEffects(t *testing.T, dataDir string) {
 	brandingSyncMu.Lock()
 	brandingSyncDataDir = dataDir
 	brandingSyncLast = time.Now()
-	brandingSyncFingerprint = brandingFileFingerprint(dataDir)
+	brandingSyncFingerprint = statBrandingFile(dataDir).fingerprint()
 	brandingSyncMu.Unlock()
 	t.Cleanup(resetBrandingSyncGateForTest)
 }

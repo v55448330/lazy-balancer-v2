@@ -198,3 +198,102 @@ func TestUpdateCAProvider_trimsName(t *testing.T) {
 		t.Fatalf("name=%q, want 保留原名称（纯空白不得落库）", stored)
 	}
 }
+
+// 更新 CA 提供商的失败面必须留痕：该路由是 Explicit 审计路由（中间件对
+// Explicit 既不补记成功也不补记失败），只有 handler 自己记；此前全部失败分支
+// 零留痕，运维无法从审计回答「谁试图禁用默认 CA 提供商被挡」。载荷 4xx 属于
+// 未进入写入层的请求，不落审计（与同族测试入口口径一致）。
+func TestUpdateCAProvider_failureBranchesAreAudited(t *testing.T) {
+	newHarness := func(t *testing.T) (*Handlers, *gin.Engine) {
+		h := newBackupTestHandlers(t)
+		h.caProviderService = services.NewCAProviderService()
+		router := gin.New()
+		router.PUT("/ca-providers/:id", h.UpdateCAProvider)
+		return h, router
+	}
+	seedProvider := func(t *testing.T) int64 {
+		t.Helper()
+		res, err := db.DB.Exec(`INSERT INTO ca_providers (name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled)
+			VALUES ('ZeroSSL-audit','zerossl','https://acme.zerossl.com/v2/DV90','{"api_key":"real"}',1,2000,1)`)
+		if err != nil {
+			t.Fatalf("seed CA provider: %v", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	put := func(t *testing.T, router *gin.Engine, id int64, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/ca-providers/%d", id), strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(response, request)
+		return response
+	}
+	countFailureAudits := func(t *testing.T) int {
+		t.Helper()
+		var n int
+		if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='更新失败' AND resource='CA提供商'`).Scan(&n); err != nil {
+			t.Fatalf("count CA provider failure audits: %v", err)
+		}
+		return n
+	}
+
+	t.Run("business_reject_409_is_audited", func(t *testing.T) {
+		_, router := newHarness(t)
+		id := seedProvider(t)
+		if _, err := db.DB.Exec(`UPDATE global_config SET default_ca_provider_id=? WHERE id=1`, id); err != nil {
+			t.Fatalf("set default CA provider: %v", err)
+		}
+
+		response := put(t, router, id, `{"enabled":false}`)
+
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s, want 409（默认 CA 提供商不得禁用）", response.Code, response.Body.String())
+		}
+		if n := countFailureAudits(t); n != 1 {
+			t.Fatalf("更新失败审计条数=%d, want 1", n)
+		}
+		var detail string
+		if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新失败' AND resource='CA提供商' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+			t.Fatalf("read failure audit: %v", err)
+		}
+		if !strings.Contains(detail, fmt.Sprintf("提供商 %d", id)) {
+			t.Fatalf("审计 detail=%q, want 含提供商 id（否则无法定位被拒对象）", detail)
+		}
+	})
+
+	t.Run("internal_error_500_is_audited", func(t *testing.T) {
+		_, router := newHarness(t)
+		id := seedProvider(t)
+		// 让服务层的事务内查询失败：表被带外删除（不依赖注入点）。
+		if _, err := db.DB.Exec(`DROP TABLE ca_providers`); err != nil {
+			t.Fatalf("drop ca_providers: %v", err)
+		}
+
+		response := put(t, router, id, `{"name":"after"}`)
+
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+		}
+		if n := countFailureAudits(t); n != 1 {
+			t.Fatalf("更新失败审计条数=%d, want 1", n)
+		}
+	})
+
+	t.Run("payload_4xx_is_not_audited", func(t *testing.T) {
+		_, router := newHarness(t)
+		id := seedProvider(t)
+
+		response := put(t, router, id, `{"provider":"bogus"}`)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400（非法提供商类型）", response.Code, response.Body.String())
+		}
+		if n := countFailureAudits(t); n != 0 {
+			t.Fatalf("更新失败审计条数=%d, want 0（载荷 4xx 未进入写入层）", n)
+		}
+	})
+}

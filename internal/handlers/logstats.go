@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,9 +41,13 @@ type LogStorageInfo struct {
 	Rows         *int64 `json:"rows,omitempty"`
 	// RowsUnavailable 行数读取失败时置位：消费方据此保持「条数口径」并标注
 	// 计数暂不可用，而不是静默退回字节口径（行数缺席与「0 行」不可混淆）。
-	RowsUnavailable bool   `json:"rows_unavailable,omitempty"`
-	RetentionNote   string `json:"retention_note,omitempty"`
-	ConfigSource    string `json:"config_source"`
+	RowsUnavailable bool `json:"rows_unavailable,omitempty"`
+	// DBBacked 标记「纯库内行」：容量/清理全在 DB（如操作日志=audit_log 表按
+	// 保留期每日清理），没有轮转归档概念——前端不得把 keep_count=0 渲染成
+	// 「暂无归档」（会被读成归档失败）。文件族行不下发该字段。
+	DBBacked      bool   `json:"db_backed,omitempty"`
+	RetentionNote string `json:"retention_note,omitempty"`
+	ConfigSource  string `json:"config_source"`
 	// Cache* 是安全事件行的「待补采缓存」口径（B 形态：IPC 主路径写入，失败
 	// 才落 fallback spool）。四字段可选——只有 security_events 行下发；旧后端
 	// 不下发时前端整段不渲染（缺席≠0 条）。
@@ -95,7 +98,7 @@ func classifyRotationCopyName(name string) rotationCopyName {
 	core, gzipped := taskengine.StripRotationCompressionSuffix(name)
 	originalCore := core
 	collision := false
-	if stripped, ok := stripRotationCollisionSuffix(core); ok {
+	if stripped, ok := services.StripRotationCollisionSuffix(core); ok {
 		core, collision = stripped, true
 	}
 	// 移位后缀：<base>.1..9999（位数 ≤4——纯日期形态 <base>.YYYYMMDD 不得
@@ -115,23 +118,12 @@ func classifyRotationCopyName(name string) rotationCopyName {
 			return rotationCopyName{kind: rotationCopyTimestamp, base: core[:len(core)-16]}
 		}
 	}
-	// timberjack：<stem>-<ts>-<reason>[_<碰撞计数>].log[.gz|.zst]。stem 边界取
-	// 「从右往左最后一个合法时间戳段」——规则/任务日志基名允许含 '-<数字>'
-	// （存量/导入 ID，如 lb_abc-123），按首个 '-<数字>' 切分会把副本串到同前缀
-	// 的兄弟规则。尺寸数字与兄弟文件段（-tls-/-1048576-）不构成时间戳，故不误切。
-	// reason 家族与同毫秒碰撞后缀取自 services.CaddyLogRotationReasonPattern
-	// （与删除侧白名单同源，两处不得各写一份）。
-	if loc := timberjackRotationReasonSuffix.FindStringIndex(core); loc != nil {
-		trimmed := core[:loc[0]]
-		for i := len(trimmed) - 1; i >= 0; i-- {
-			if trimmed[i] != '-' || i+1 >= len(trimmed) {
-				continue
-			}
-			if !isRotationTimestampTail(trimmed[i+1:]) {
-				continue
-			}
-			return rotationCopyName{kind: rotationCopyTimberjack, base: trimmed[:i] + ".log", stem: trimmed[:i]}
-		}
+	// timberjack：<stem>-<ts>-<reason>[_<碰撞计数>].log[.gz|.zst]。解析与删除侧
+	// （services.SplitTimberjackRotationCopy）同源：时间戳形表、reason 家族与
+	// 碰撞后缀只有一份实现——两侧各持一份曾让统计侧认领的
+	// `-<ts>-<size>-<reason>.log` 在删除侧落成幻影规则 ID。
+	if stem, ok := services.SplitTimberjackRotationCopy(core); ok {
+		return rotationCopyName{kind: rotationCopyTimberjack, base: stem + ".log", stem: stem}
 	}
 	if gzipped {
 		// 无可识别轮转族时按整文件归档归并；碰撞后缀未命中任何族时按原始名
@@ -143,47 +135,6 @@ func classifyRotationCopyName(name string) rotationCopyName {
 		return rotationCopyName{kind: rotationCopyWholeGzip, base: base}
 	}
 	return rotationCopyName{}
-}
-
-// timberjackRotationReasonSuffix 匹配 timberjack 副本的 reason 尾部：
-// -size.log / -size_1.log（同毫秒碰撞计数写在 reason 段内）/ -time.log /
-// -time_2.log / -initial.log（现存文件不可追加打开时的回退改名）。
-// reason 家族取自 services.CaddyLogRotationReasonPattern——与删除
-// 侧白名单同源，避免两侧各写一份上游命名知识后漂移。
-var timberjackRotationReasonSuffix = regexp.MustCompile(
-	`-(?:` + services.CaddyLogRotationReasonPattern() + `)(?:_\d+)?\.log$`)
-
-// isRotationTimestampTail 判定轮转副本名里时间戳段的开头形状（其后可带
-// 尺寸/碰撞余段）：紧凑 YYYYMMDD[T|-]HHMMSS（timberjack 与运行日志族）
-// 或常规的短横线分隔形态。
-func isRotationTimestampTail(s string) bool {
-	if len(s) >= 15 && isDigits(s[:8]) && (s[8] == 'T' || s[8] == '-') && isDigits(s[9:15]) {
-		return true
-	}
-	if len(s) >= 19 && isDigits(s[:4]) && s[4] == '-' && isDigits(s[5:7]) && s[7] == '-' &&
-		isDigits(s[8:10]) && s[10] == 'T' && isDigits(s[11:13]) && s[13] == '-' && isDigits(s[14:16]) {
-		return true
-	}
-	return false
-}
-
-// stripRotationCollisionSuffix 剥掉同秒重复轮转的碰撞后缀 -N（N≥2，至多
-// 两位）：写侧在同秒重名时产出 <副本名>-2/-3…。位数上限避免误剥时间戳
-// 时刻段（-150405）。
-func stripRotationCollisionSuffix(s string) (string, bool) {
-	dash := strings.LastIndexByte(s, '-')
-	if dash <= 0 || len(s)-dash-1 == 0 || len(s)-dash-1 > 2 {
-		return "", false
-	}
-	digits := s[dash+1:]
-	if !isDigits(digits) {
-		return "", false
-	}
-	n, err := strconv.Atoi(digits)
-	if err != nil || n < 2 {
-		return "", false
-	}
-	return s[:dash], true
 }
 
 // dirBytesWithEntries 返回 path 的活跃文件大小与轮转副本合计，与聚合行共用
@@ -693,7 +644,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 
 	infos := []LogStorageInfo{
-		{Key: "audit", Name: "操作日志", KeepCount: 0, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
+		{Key: "audit", Name: "操作日志", KeepCount: 0, DBBacked: true, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitBytes: auditLogLimit, ConfigSource: "基础设置 · 日志保留（操作/运行/安全事件）"},
 		{Key: "certjob", Name: "证书任务日志", LimitBytes: taskLogLimit, KeepCount: logRotatedBackups, ConfigSource: "基础设置 · 任务日志大小"},
 		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: "统一任务日志（tasks/crs.log）"},

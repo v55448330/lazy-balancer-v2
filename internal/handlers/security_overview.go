@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -172,21 +171,13 @@ type ruleStageStatsCacheKey struct {
 	anchor  string // 24h 窗口锚点（UTC 分钟串）
 }
 
-type ruleStageStatsCacheEntry struct {
-	snapshot  ruleStageStatsSnapshot
-	expiresAt time.Time
-}
-
-var (
-	ruleStageStatsMu    sync.Mutex
-	ruleStageStatsCache = map[ruleStageStatsCacheKey]ruleStageStatsCacheEntry{}
-)
+// ruleStageStatsCache 键含分钟锚点 + 规则身份：条目数受 TTL 与活跃规则数
+// 约束，上限 256 超限整体重建（长尾规则集膨胀下内存封顶）。
+var ruleStageStatsCache = newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnapshot](256)
 
 // resetRuleStageStatsCacheForTest 测试缝：清空缓存（生产不调用）。
 func resetRuleStageStatsCacheForTest() {
-	ruleStageStatsMu.Lock()
-	ruleStageStatsCache = map[ruleStageStatsCacheKey]ruleStageStatsCacheEntry{}
-	ruleStageStatsMu.Unlock()
+	ruleStageStatsCache.Reset()
 }
 
 // loadRuleStageStats 返回单规则近 24h 的阶段分桶计数与分段耗时（命中缓存时
@@ -199,13 +190,9 @@ func resetRuleStageStatsCacheForTest() {
 func loadRuleStageStats(metricsDB *sql.DB, ruleCaddyID string, now time.Time) (ruleStageStatsSnapshot, error) {
 	key := ruleStageStatsCacheKey{metrics: metricsDB, rule: ruleCaddyID, anchor: now.UTC().Format("2006-01-02 15:04")}
 	if ruleStageStatsCacheTTL > 0 {
-		ruleStageStatsMu.Lock()
-		if entry, ok := ruleStageStatsCache[key]; ok && now.Before(entry.expiresAt) {
-			snapshot := entry.snapshot
-			ruleStageStatsMu.Unlock()
+		if snapshot, ok := ruleStageStatsCache.Get(key, now); ok {
 			return snapshot, nil
 		}
-		ruleStageStatsMu.Unlock()
 	}
 
 	var snapshot ruleStageStatsSnapshot
@@ -249,14 +236,7 @@ func loadRuleStageStats(metricsDB *sql.DB, ruleCaddyID string, now time.Time) (r
 	}
 
 	if ruleStageStatsCacheTTL > 0 {
-		ruleStageStatsMu.Lock()
-		// 键含分钟锚点+规则身份：条目数受 TTL 与活跃规则数约束；超界重建
-		// 防长尾规则集膨胀（与策略计数缓存同范式）。
-		if len(ruleStageStatsCache) > 256 {
-			ruleStageStatsCache = map[ruleStageStatsCacheKey]ruleStageStatsCacheEntry{}
-		}
-		ruleStageStatsCache[key] = ruleStageStatsCacheEntry{snapshot: snapshot, expiresAt: now.Add(ruleStageStatsCacheTTL)}
-		ruleStageStatsMu.Unlock()
+		ruleStageStatsCache.Set(key, snapshot, now, ruleStageStatsCacheTTL)
 	}
 	return snapshot, nil
 }
@@ -311,21 +291,13 @@ type securityOverviewAggCacheKey struct {
 	tzName string
 }
 
-type securityOverviewAggCacheEntry struct {
-	data      securityOverviewAggregates
-	expiresAt time.Time
-}
-
-var (
-	securityOverviewAggCacheMu sync.Mutex
-	securityOverviewAggCache   = map[securityOverviewAggCacheKey]securityOverviewAggCacheEntry{}
-)
+// securityOverviewAggCache 键含时区/日界/库句柄（键空间随时区与日界变化）：
+// 写入时顺带清扫过期项防 map 无限增长。
+var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggregates](0)
 
 // resetSecurityOverviewAggCacheForTest 测试缝：清空总览聚合缓存（生产不调用）。
 func resetSecurityOverviewAggCacheForTest() {
-	securityOverviewAggCacheMu.Lock()
-	securityOverviewAggCache = map[securityOverviewAggCacheKey]securityOverviewAggCacheEntry{}
-	securityOverviewAggCacheMu.Unlock()
+	securityOverviewAggCache.Reset()
 }
 
 // securityOverviewTodayCounts 今日拦截/检测计数单源：优先读分钟 rollup
@@ -428,16 +400,12 @@ type securityOverviewResponse struct {
 func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todayStartUTC, tzName string) (securityOverviewAggregates, error) {
 	key := securityOverviewAggCacheKey{metrics: metricsDB, todayStart: todayStartUTC, tzName: tzName}
 	now := time.Now()
-	securityOverviewAggCacheMu.Lock()
-	if entry, ok := securityOverviewAggCache[key]; ok && now.Before(entry.expiresAt) {
+	if entry, ok := securityOverviewAggCache.Get(key, now); ok {
 		// 深拷贝：四个切片若与缓存条目共享底层数组，任一消费者就地变更
 		// （sort/截断/改元素）都会污染其他请求的 30s 缓存（同型事故：健康
 		// 缓存的「共享同一克隆」）。
-		data := cloneSecurityOverviewAggregates(entry.data)
-		securityOverviewAggCacheMu.Unlock()
-		return data, nil
+		return cloneSecurityOverviewAggregates(entry), nil
 	}
-	securityOverviewAggCacheMu.Unlock()
 
 	var firstErr error
 	track := func(err error) {
@@ -594,15 +562,7 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	if firstErr != nil {
 		return data, firstErr
 	}
-	securityOverviewAggCacheMu.Lock()
-	// 过期项顺带清理（键空间随时区/日界变化，且测试换库会产生旧键）。
-	for k, entry := range securityOverviewAggCache {
-		if !now.Before(entry.expiresAt) {
-			delete(securityOverviewAggCache, k)
-		}
-	}
-	securityOverviewAggCache[key] = securityOverviewAggCacheEntry{data: cloneSecurityOverviewAggregates(data), expiresAt: now.Add(securityOverviewAggCacheTTL)}
-	securityOverviewAggCacheMu.Unlock()
+	securityOverviewAggCache.Set(key, cloneSecurityOverviewAggregates(data), now, securityOverviewAggCacheTTL)
 	return data, nil
 }
 

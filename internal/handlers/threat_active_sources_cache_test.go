@@ -82,10 +82,87 @@ func TestThreatActiveSourcesCount_failureNotCached(t *testing.T) {
 	if _, err := threatActiveSourcesCount(closed, "2026-10-22 00:00:00", time.Now()); err == nil {
 		t.Fatal("关闭的指标库必须显式报错")
 	}
-	threatActiveSourcesMu.Lock()
-	cached := len(threatActiveSourcesCache)
-	threatActiveSourcesMu.Unlock()
+	cached := threatActiveSourcesCache.Len()
 	if cached != 0 {
 		t.Fatalf("失败结果被缓存（%d 条）", cached)
+	}
+}
+
+// —— ttlCache 单源的全形状覆盖（两种淘汰策略 + TTL 判定 + 同键覆盖）——
+
+// TTL 判定：到期时刻之后按 miss 处理，到期前命中；同键重写覆盖旧值。
+func TestTTLCache_getHonoursExpiryAndOverwrite(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	cache := newTTLCache[string, int](0)
+	cache.Set("k", 1, now, time.Second)
+	if v, ok := cache.Get("k", now.Add(500*time.Millisecond)); !ok || v != 1 {
+		t.Fatalf("到期前 Get=(%d,%v), want (1,true)", v, ok)
+	}
+	if _, ok := cache.Get("k", now.Add(2*time.Second)); ok {
+		t.Fatal("到期后必须按 miss 处理")
+	}
+	cache.Set("k", 2, now, time.Second)
+	if v, ok := cache.Get("k", now); !ok || v != 2 {
+		t.Fatalf("同键重写后 Get=(%d,%v), want (2,true)", v, ok)
+	}
+	if _, ok := cache.Get("missing", now); ok {
+		t.Fatal("不存在的键必须 miss")
+	}
+}
+
+// 策略一（maxEntries>0）：条目数超过上限整体重建，再插入新条目——内存封顶
+// 优先于逐出策略精度。
+func TestTTLCache_resetAllEvictionBoundsFootprint(t *testing.T) {
+	now := time.Now()
+	cache := newTTLCache[int, int](4)
+	for i := 0; i < 5; i++ {
+		cache.Set(i, i, now, time.Minute)
+	}
+	if got := cache.Len(); got != 5 {
+		t.Fatalf("未超上限时条目数=%d, want 5（上限 4 只在已超时重建）", got)
+	}
+	cache.Set(5, 5, now, time.Minute)
+	if got := cache.Len(); got != 1 {
+		t.Fatalf("超上限后条目数=%d, want 1（整体重建后只留本次写入）", got)
+	}
+	if !cache.Has(5) {
+		t.Fatal("重建后必须保留本次写入的条目")
+	}
+}
+
+// 策略二（maxEntries==0）：写入时逐键清扫过期项，仍在有效期的条目必须保留
+// ——分钟锚定键族整体重置会打掉同屏其它维度条目，造成轮询抖动。
+func TestTTLCache_sweepEvictionKeepsLiveEntries(t *testing.T) {
+	now := time.Now()
+	cache := newTTLCache[string, int](0)
+	cache.Seed("expired", 1, now.Add(-time.Second))
+	cache.Seed("live", 2, now.Add(time.Minute))
+	cache.Set("fresh", 3, now, time.Minute)
+	if cache.Has("expired") {
+		t.Fatal("过期条目必须被写入侧清扫")
+	}
+	if !cache.Has("live") || !cache.Has("fresh") {
+		t.Fatalf("有效条目不得被清扫（live=%v fresh=%v）", cache.Has("live"), cache.Has("fresh"))
+	}
+	if got := cache.Len(); got != 2 {
+		t.Fatalf("清扫后条目数=%d, want 2", got)
+	}
+}
+
+// 测试缝自身：Seed/ExpireMatching/Reset 必须与 Get 的到期判定同源。
+func TestTTLCache_seamsMatchExpiryJudgement(t *testing.T) {
+	now := time.Now()
+	cache := newTTLCache[string, int](0)
+	cache.Seed("k", 7, now.Add(time.Minute))
+	if v, ok := cache.Get("k", now); !ok || v != 7 {
+		t.Fatalf("Seed 后 Get=(%d,%v), want (7,true)", v, ok)
+	}
+	cache.ExpireMatching(func(k string) bool { return k == "k" })
+	if _, ok := cache.Get("k", now); ok {
+		t.Fatal("ExpireMatching 后必须按 miss 处理")
+	}
+	cache.Reset()
+	if cache.Len() != 0 {
+		t.Fatalf("Reset 后条目数=%d, want 0", cache.Len())
 	}
 }

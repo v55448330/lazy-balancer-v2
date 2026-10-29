@@ -48,8 +48,13 @@ func TestRemoveRuleLogFiles_reportsFailureAggregated(t *testing.T) {
 	if !strings.Contains(err.Error(), "lb_ro") {
 		t.Fatalf("error=%v, want 含规则 id（便于定位残留）", err)
 	}
-	if got := strings.Count(err.Error(), "删除规则日志"); got != 6 {
-		t.Fatalf("聚合删除错误数=%d, want 6（活动文件+五份位移副本）: %v", got, err)
+	// 目录不可枚举本身就是残留风险：扫描失败原因必须进错误面，不得被
+	// 「逐项删除错误」吞掉（逐项只是枚举失败时的退化路径）。
+	if !strings.Contains(err.Error(), "读取规则日志目录") {
+		t.Fatalf("目录枚举失败原因未进错误面（残留不可见）: %v", err)
+	}
+	if got := strings.Count(err.Error(), "删除规则日志"); got < 1 {
+		t.Fatalf("聚合删除错误数=%d, want ≥1（枚举失败时退化为活动文件+确定性 .1..5 逐项尝试）: %v", got, err)
 	}
 
 	// 恢复真实目录后重试必须清零活动文件与轮转副本（幂等重试通道）。

@@ -111,6 +111,27 @@ func TestUpdateRule_reloadAuditedWhenRuleDeletedInCancelWindow(t *testing.T) {
 	assertNoSuccessAudit(t, "更新", 0)
 }
 
+// assertConcurrencyAbortSaysCommitted 断言并发复核的 409 与审计都点明「本次变更
+// 已保存」：两条出口都在 commitTx 与真实 /load 之后，库与运行配置已是本请求结果，
+// 「本次操作已中止」会让操作者以为什么都没落库。
+func assertConcurrencyAbortSaysCommitted(t *testing.T, body, action string) {
+	t.Helper()
+	if !strings.Contains(body, "本次变更已保存") {
+		t.Fatalf("body=%s, want 点明本次变更已保存且已应用", body)
+	}
+	if strings.Contains(body, "本次操作已中止") {
+		t.Fatalf("body=%s, 不得声称本次操作已中止（提交与 /load 均已发生）", body)
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(
+		`SELECT detail FROM audit_log WHERE action=? AND resource='负载规则' ORDER BY id DESC LIMIT 1`, action).Scan(&detail); err != nil {
+		t.Fatalf("read %s abort audit: %v", action, err)
+	}
+	if !strings.Contains(detail, "本次变更已保存") {
+		t.Fatalf("审计 detail=%q, want 点明已保存", detail)
+	}
+}
+
 // 第 2 个中止出口：UpdateRule 证书取消窗口内规则被并发修改。
 func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInCancelWindow(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
@@ -134,6 +155,7 @@ func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInCancelWindow(t *testi
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "并发修改") {
 		t.Fatalf("status=%d body=%s, want 409 并发修改", response.Code, response.Body.String())
 	}
+	assertConcurrencyAbortSaysCommitted(t, response.Body.String(), "更新失败")
 	assertReloadAuditedOnce(t, "更新规则")
 	assertNoSuccessAudit(t, "更新", 0)
 }
@@ -186,6 +208,7 @@ func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInMigrationWindow(t *te
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "并发修改") {
 		t.Fatalf("status=%d body=%s, want 409 并发修改", response.Code, response.Body.String())
 	}
+	assertConcurrencyAbortSaysCommitted(t, response.Body.String(), "更新失败")
 	assertReloadAuditedOnce(t, "更新规则")
 	assertNoSuccessAudit(t, "更新", 0)
 }
@@ -236,6 +259,7 @@ func TestDisableRule_reloadAuditedWhenConcurrentlyModifiedInLockWindow(t *testin
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "并发修改") {
 		t.Fatalf("status=%d body=%s, want 409 并发修改", response.Code, response.Body.String())
 	}
+	assertConcurrencyAbortSaysCommitted(t, response.Body.String(), "禁用失败")
 	assertReloadAuditedOnce(t, "禁用规则")
 	assertNoSuccessAudit(t, "禁用", 0)
 }

@@ -1016,3 +1016,33 @@ func TestParseDFOutput_toleratesWrappedDeviceName(t *testing.T) {
 		t.Fatal("无数据行时不得返回成功")
 	}
 }
+
+// exposition 标签值合法可含空格（`host="a b"`）：按空白切字段会把值切成残片并
+// 让整段正文报错。行取值必须与 services 采集链同源（引号感知），无标签块的行
+// 仍按字段切分。
+func TestParsePrometheusSamples_toleratesSpaceInLabelValue(t *testing.T) {
+	body := strings.Join([]string{
+		`# HELP caddy_http_requests_total total`,
+		`caddy_http_requests_total{host="a b"} 5`,
+		`caddy_http_response_size_bytes_sum{host="a b",handler="x y"} 1024`,
+		`caddy_http_requests_total 7`,
+	}, "\n")
+
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		t.Fatalf("parsePrometheusSamples: %v", err)
+	}
+	want := []prometheusSample{
+		{name: `caddy_http_requests_total{host="a b"}`, value: 5},
+		{name: `caddy_http_response_size_bytes_sum{host="a b",handler="x y"}`, value: 1024},
+		{name: "caddy_http_requests_total", value: 7},
+	}
+	if len(samples) != len(want) {
+		t.Fatalf("samples=%+v, want %+v", samples, want)
+	}
+	for i := range want {
+		if samples[i] != want[i] {
+			t.Fatalf("samples[%d]=%+v, want %+v", i, samples[i], want[i])
+		}
+	}
+}

@@ -476,21 +476,56 @@ func prometheusLabelBlockEnd(line string) int {
 	return -1
 }
 
-// prometheusSampleValue 取单行 exposition 样本值：标签块 `}` 后的首个 token
-// （缺失标签块/值返回 false，该行按非样本跳过）。
-func prometheusSampleValue(line string) (string, bool) {
-	idx := prometheusLabelBlockEnd(line)
-	if idx < 0 {
-		return "", false
+// PrometheusSampleLine 解析单行 exposition 文本，返回指标名（含标签块）与样本值
+// token。两处消费方（handlers 的仪表盘实时指标、本包的规则/全局指标采集）必须
+// 共用本实现——各写一套切分会得出相反结论（`strings.Fields` 会把合法的
+// `host="a b"` 切成残片并让整段正文报错）。ok=false 表示该行不成形（缺名称/
+// 缺值、标签块未闭合），调用方按非样本跳过；值本身的解析与有限性判定在
+// PrometheusSampleFloat（错误口径由调用方决定）。
+func PrometheusSampleLine(line string) (name, value string, ok bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", false
 	}
-	rest := strings.TrimSpace(line[idx+1:])
-	if rest == "" {
-		return "", false
+	labelEnd := prometheusLabelBlockEnd(line)
+	switch {
+	case labelEnd >= 0:
+		name = line[:labelEnd+1]
+		value = line[labelEnd+1:]
+	case strings.IndexByte(line, '{') >= 0:
+		// 有 `{` 但引号/括号未闭合：畸形行，不猜取值位置。
+		return "", "", false
+	default:
+		// 无标签块的行（`process_start_time_seconds 1`）：名称到首个空白为止。
+		sp := strings.IndexByte(line, ' ')
+		if sp < 0 {
+			return "", "", false
+		}
+		name, value = line[:sp], line[sp+1:]
 	}
-	if sp := strings.IndexByte(rest, ' '); sp >= 0 {
-		rest = rest[:sp]
+	value = strings.TrimSpace(value)
+	if name == "" || value == "" {
+		return "", "", false
 	}
-	return rest, true
+	if sp := strings.IndexByte(value, ' '); sp >= 0 {
+		value = value[:sp]
+	}
+	return name, value, true
+}
+
+// PrometheusSampleFloat 解析样本值 token。finite=false 表示非有限值（NaN/±Inf）：
+// 消费侧把样本值转 int64 时非有限值的转换结果实现相关，两处消费方统一「跳过该
+// 样本」而不是报错（此前仪表盘跳过、规则指标报错，同一次抓取两步结论相反）。
+// err 表示 token 不可解析为数值。
+func PrometheusSampleFloat(raw string) (value float64, finite bool, err error) {
+	value, err = strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, false, nil
+	}
+	return value, true, nil
 }
 
 // prometheusLabelValue 取标签块内 name="value" 的值。标签名必须从 `{` 或 `,`
@@ -565,7 +600,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 			if !wantGlobal || res.globalErr != nil {
 				continue
 			}
-			raw, ok := prometheusSampleValue(line)
+			_, raw, ok := PrometheusSampleLine(line)
 			if !ok {
 				continue
 			}
@@ -580,7 +615,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 				continue
 			}
 			rawCode, hasCode := prometheusLabelValue(line, "code")
-			rawValue, hasValue := prometheusSampleValue(line)
+			_, rawValue, hasValue := PrometheusSampleLine(line)
 			if !hasCode || !hasValue {
 				continue
 			}
@@ -599,7 +634,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 			if !wantGlobal || res.globalErr != nil {
 				continue
 			}
-			raw, ok := prometheusSampleValue(line)
+			_, raw, ok := PrometheusSampleLine(line)
 			if !ok {
 				continue
 			}
@@ -613,7 +648,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 			if !wantGlobal || res.globalErr != nil {
 				continue
 			}
-			raw, ok := prometheusSampleValue(line)
+			_, raw, ok := PrometheusSampleLine(line)
 			if !ok {
 				continue
 			}
@@ -636,7 +671,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 				continue
 			}
 			rule, hasRule := prometheusLabelValue(line, "rule")
-			raw, hasValue := prometheusSampleValue(line)
+			_, raw, hasValue := PrometheusSampleLine(line)
 			if !hasRule || !hasValue {
 				continue
 			}
@@ -652,7 +687,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 			}
 			class, hasClass := prometheusLabelValue(line, "class")
 			rule, hasRule := prometheusLabelValue(line, "rule")
-			raw, hasValue := prometheusSampleValue(line)
+			_, raw, hasValue := PrometheusSampleLine(line)
 			if !hasClass || !hasRule || !hasValue {
 				continue
 			}
@@ -678,7 +713,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 			}
 			direction, hasDirection := prometheusLabelValue(line, "direction")
 			rule, hasRule := prometheusLabelValue(line, "rule")
-			raw, hasValue := prometheusSampleValue(line)
+			_, raw, hasValue := PrometheusSampleLine(line)
 			if !hasDirection || !hasRule || !hasValue {
 				continue
 			}
@@ -698,7 +733,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 				continue
 			}
 			rule, hasRule := prometheusLabelValue(line, "rule")
-			raw, hasValue := prometheusSampleValue(line)
+			_, raw, hasValue := PrometheusSampleLine(line)
 			if !hasRule || !hasValue {
 				continue
 			}
@@ -726,7 +761,7 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 // （同一 le 的多 host/handler 序列求和）。无 le 标签/无值的行按非样本跳过。
 func parsePrometheusBucketSample(line string, byLE map[float64]int64) error {
 	rawLE, hasLE := prometheusLabelValue(line, "le")
-	rawValue, hasValue := prometheusSampleValue(line)
+	_, rawValue, hasValue := PrometheusSampleLine(line)
 	if !hasLE || !hasValue {
 		return nil
 	}
@@ -745,13 +780,20 @@ func parsePrometheusBucketSample(line string, byLE map[float64]int64) error {
 	return nil
 }
 
+// parsePrometheusInteger 解析样本值 token 为计数。非有限值（NaN/±Inf）按 0
+// 处理——即「该样本不参与聚合」：转 int64 对非有限值的转换结果实现相关，且必须
+// 与仪表盘实时指标解析器（PrometheusSampleFloat）同口径，否则同一次抓取在两步
+// 得到相反结论。不可解析或超出 int64 范围仍是错误（不静默吞掉畸形值）。
 func parsePrometheusInteger(raw string) (int64, error) {
-	value, err := strconv.ParseFloat(raw, 64)
+	value, finite, err := PrometheusSampleFloat(raw)
 	if err != nil {
 		return 0, err
 	}
-	if math.IsNaN(value) || math.IsInf(value, 0) || value > math.MaxInt64 || value < math.MinInt64 {
-		return 0, fmt.Errorf("value is not a finite int64")
+	if !finite {
+		return 0, nil
+	}
+	if value > math.MaxInt64 || value < math.MinInt64 {
+		return 0, fmt.Errorf("value %q is out of int64 range", raw)
 	}
 	return int64(value), nil
 }

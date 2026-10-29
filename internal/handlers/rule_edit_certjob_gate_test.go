@@ -82,3 +82,38 @@ func TestUpdateRule_saveGuard_certJobStatusMatrix(t *testing.T) {
 		})
 	}
 }
+
+// 两处门（保存路径 / 脱离 ACME 路径）必须从同一张语义表派生：同一状态在两处
+// 得到相反判定只能由 certJobStatusSemanticTable 的显式列解释。此前各自维护
+// 排除清单，downloaded（已签发、仅部署退避）在保存路径放行、在脱离 ACME 路径
+// 被判成「证书申请中」——没有任何测试能发现这种分叉。
+func TestCertJobStatusGates_derivedFromSingleSemanticTable(t *testing.T) {
+	ruleEdit := ruleEditBlockingCertJobStatuses()
+	orphan := executingACMEJobStatuses()
+	for _, status := range db.CertJobStatuses() {
+		sem, registered := certJobStatusSemanticTable[status]
+		if !registered {
+			// fail-closed：未登记状态两处都阻塞。
+			if !slices.Contains(ruleEdit, status) || !slices.Contains(orphan, status) {
+				t.Errorf("未登记状态 %s 必须两处都阻塞；ruleEdit=%v orphan=%v", status, ruleEdit, orphan)
+			}
+			continue
+		}
+		if got, want := slices.Contains(ruleEdit, status), sem.blockRuleEdit; got != want {
+			t.Errorf("%s: 保存路径阻塞=%v, want %v（由语义表 blockRuleEdit 决定）", status, got, want)
+		}
+		if got, want := slices.Contains(orphan, status), sem.blockOrphanACME; got != want {
+			t.Errorf("%s: 脱离 ACME 阻塞=%v, want %v（由语义表 blockOrphanACME 决定）", status, got, want)
+		}
+	}
+	// 语义表不得登记枚举外的状态（拼写漂移会静默变成「两处都阻塞」）。
+	for status := range certJobStatusSemanticTable {
+		if !slices.Contains(db.CertJobStatuses(), status) {
+			t.Errorf("语义表登记了枚举外状态 %q", status)
+		}
+	}
+	// downloaded 的两处口径必须一致放行（本次修复的目标形状）。
+	if slices.Contains(orphan, "downloaded") {
+		t.Errorf("downloaded 不得在脱离 ACME 路径阻塞（仅部署退避，无 worker 在跑）；got %v", orphan)
+	}
+}

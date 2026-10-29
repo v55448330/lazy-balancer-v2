@@ -611,7 +611,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			}
 			key := net.JoinHostPort(upstreamDedupeHost(upstream.Address), strconv.Itoa(upstream.Port))
 			if pathHostPortSeen[key] {
-				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游 %s:%d 重复", index+1, upstreamIndex+1, upstream.Address, upstream.Port)
+				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游 %s 重复", index+1, upstreamIndex+1, key)
 			}
 			pathHostPortSeen[key] = true
 		}

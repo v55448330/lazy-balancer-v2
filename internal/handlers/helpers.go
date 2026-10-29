@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -1446,22 +1445,22 @@ func parsePrometheusSamples(body string) ([]prometheusSample, error) {
 		if services.IsGeoIPPassSeries(line) {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		// 行取值与规则指标采集共用 services 单源实现（引号感知：标签值可含
+		// 空格/`}`；无标签块的行按空白切分）。
+		name, rawValue, ok := services.PrometheusSampleLine(line)
+		if !ok {
 			continue
 		}
-		value, err := strconv.ParseFloat(fields[1], 64)
+		value, finite, err := services.PrometheusSampleFloat(rawValue)
 		if err != nil {
-			return nil, fmt.Errorf("解析 Prometheus 第 %d 行样本值 %q 失败: %w", lineNumber+1, fields[1], err)
+			return nil, fmt.Errorf("解析 Prometheus 第 %d 行样本值 %q 失败: %w", lineNumber+1, rawValue, err)
 		}
-		// Prometheus 文本格式允许 NaN/±Inf，但消费侧把样本值转 int64——Go 规范
-		// 下该转换对非有限值是实现相关的（arm64/amd64 得 -9.2e18），会以 HTTP
-		// 200 输出荒谬的负数计数。非有限样本不参与聚合（与「正文无有效样本 →
-		// 502」同口径：全部无效时仍报错）。
-		if math.IsNaN(value) || math.IsInf(value, 0) {
+		// 非有限样本不参与聚合（与规则指标采集同口径：NaN/±Inf 跳过，全部
+		// 无效时仍报错）——消费侧把样本值转 int64 对非有限值的转换实现相关。
+		if !finite {
 			continue
 		}
-		samples = append(samples, prometheusSample{name: fields[0], value: value})
+		samples = append(samples, prometheusSample{name: name, value: value})
 	}
 	if len(samples) == 0 {
 		return nil, fmt.Errorf("Prometheus 正文不包含有效样本")

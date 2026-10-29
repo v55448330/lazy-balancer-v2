@@ -602,9 +602,18 @@ func ensureThreatRollup(hours int) error {
 	threatRollupEnsureMu.Lock()
 	defer threatRollupEnsureMu.Unlock()
 	rewindAttempts := 0
-	for {
+	// 迭代上限（成功/重启两条 continue 路径）：队列每轮都有新回退入队（持续
+	// 补采）或并发回退反复触发重启时，循环此前没有上限——warmer 协程与请求
+	// 路径被粘在「每轮一次全量固化事务」的紧凑循环里。与失败路径同形态上限
+	// （2×应用尝试数），超出即保留待处理项到下一轮节拍（warmer 60s / 请求）。
+	maxIterations := 2 * threatRollupRewindApplyAttempts
+	for iterations := 1; ; iterations++ {
 		err := ensureThreatRollupWithYields(hours)
 		if errors.Is(err, errThreatRollupRestart) {
+			if iterations >= maxIterations {
+				services.Logf("warn", "threat rollup: 单轮内并发回退触发 %d 次重启，保留待处理项到下一轮节拍", iterations)
+				return nil
+			}
 			continue
 		}
 		if err != nil {
@@ -615,6 +624,10 @@ func ensureThreatRollup(hours int) error {
 			return nil
 		}
 		if succeeded {
+			if iterations >= maxIterations {
+				services.Logf("warn", "threat rollup: 单轮内完成 %d 轮回退应用，保留待处理项到下一轮节拍", iterations)
+				return nil
+			}
 			continue
 		}
 		// 回退应用失败（队列已回填）：只有成功才 continue——旧实现在这里
@@ -1321,9 +1334,17 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 		m.Format("2006-01-02 15:04:05"), next.Format("2006-01-02 15:04:05")).Scan(&currentMaxID); err != nil {
 		return err
 	}
+	incremental := !fullRebuild && previousMaxID > 0
+	// 无新行早退（增量态）：迟到行 id 恒大于已计行，分钟窗口 MAX(id) 不超过
+	// 高水位且没有回退留底的迟到基线，即本窗口没有任何行可合并——此时继续
+	// 走下去只会把已固化行整段重读（loadExistingRollup）再跑一遍全范围聚合
+	// （aggregateEvents），同一分钟连续固化时每分钟两遍全扫，而输出与下方
+	// deltaTotal==0 分支完全相同（只落高水位）。
+	if incremental && currentMaxID <= previousMaxID && lateBaseline == 0 {
+		return saveThreatRollupEventHighwater(tx, minuteStr, previousMaxID)
+	}
 	agg := map[threatRollupKey]int{}
 	targetAgg := map[string]int{}
-	incremental := !fullRebuild && previousMaxID > 0
 	afterID := int64(0)
 	if incremental {
 		var lerr error

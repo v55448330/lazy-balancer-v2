@@ -133,18 +133,18 @@ func RemoveTaskLogIfModifiedBefore(path string, cutoff time.Time) (bool, error) 
 
 // RotateTaskLogBeforeWrite 在 size+incoming 超阈时先滚动再写入。
 // keep=归档份数（主流水 1、证书任务 5）；返回是否发生滚动。
+// 导出入口自取按路径写锁（外部调用方不持锁）：不取锁则与并发写入方的
+// stat→rotate→append 交错，两个写入方各写一份「轮转后」内容或互相覆盖归档代。
 //
-// 阈值在调用时读取（sizeFn 可能读库）：已持路径写锁的调用方应改用
-// rotateTaskLogBeforeWrite 并把锁外取到的阈值传入——持锁读库会把同条件的
-// 其他日志写者一起拖到 busy_timeout。
+// 阈值在取锁前读取（sizeFn 可能读库）：持锁读库会把同条件的其他日志写者一起
+// 拖到 busy_timeout。已持路径写锁的调用方（引擎写入侧）改用
+// rotateTaskLogBeforeWrite 并把锁外取到的阈值传入。
 func RotateTaskLogBeforeWrite(path string, incoming int64, keep int) (bool, error) {
-	return RotateTaskLogBeforeWriteContext(context.Background(), path, incoming, keep)
-}
-
-// RotateTaskLogBeforeWriteContext 与 RotateTaskLogBeforeWrite 同语义，
-// 阈值数据库读取消费调用方上下文。
-func RotateTaskLogBeforeWriteContext(ctx context.Context, path string, incoming int64, keep int) (bool, error) {
-	return rotateTaskLogBeforeWrite(path, incoming, keep, taskLogSizeBytes(ctx))
+	sizeLimit := taskLogSizeBytes(context.Background())
+	lock := lockTaskLogPath(path)
+	lock.Lock()
+	defer lock.Unlock()
+	return rotateTaskLogBeforeWrite(path, incoming, keep, sizeLimit)
 }
 
 // rotateTaskLogBeforeWrite 与 RotateTaskLogBeforeWrite 同语义，阈值由调用方

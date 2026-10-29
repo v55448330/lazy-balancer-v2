@@ -359,3 +359,31 @@ func TestEnableAndDisableRule_rejectWhenRowVanishesBeforeUpdate(t *testing.T) {
 		t.Fatal("0 行更新不得落成禁用态")
 	}
 }
+
+// downloaded = 证书已签发、仅部署退避重试（无 worker 在跑、材料已在库）：脱离
+// ACME 的切换不得以「证书申请中」409 拦下——保存路径的守卫
+// （ruleEditBlockingCertJobStatuses）早已把该状态列入放行集，两条路径对同一
+// 状态的口径必须一致；waiting_ca 的 409 由上面用例保留。
+func TestUpdateRule_orphanACME_downloadedJobConverges200(t *testing.T) {
+	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
+	harness := newUpdateAuditRuleHandlers(t, "lb_a86_down", 0, false)
+	seedACMEManualSwitchFixture(t, "lb_a86_down", "down.example.test", "downloaded")
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	certPEM, keyPEM, err := generateTestCert("down.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate test cert: %v", err)
+	}
+
+	response := putUpdateRule(t, harness, "lb_a86_down", fmt.Sprintf(
+		`{"name":"after","enable_tls":true,"tls_source":"manual","tls_cert":%q,"tls_key":%q}`, certPEM, keyPEM))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（downloaded 无 worker 在跑，不得判为证书申请中）", response.Code, response.Body.String())
+	}
+	if n := countRuleCertJobs(t, "lb_a86_down"); n != 0 {
+		t.Fatalf("cert jobs remaining=%d, want 0（脱离 ACME 后删除）", n)
+	}
+}

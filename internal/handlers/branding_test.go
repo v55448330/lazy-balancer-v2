@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
@@ -398,9 +397,7 @@ func resetBrandingStore() {
 	brandingStore.mu.Lock()
 	brandingStore.loaded = false
 	brandingStore.cfg = brandingConfig{}
-	brandingStore.dataDir = ""
-	brandingStore.modTime = time.Time{}
-	brandingStore.size = 0
+	brandingStore.stamp = brandingFileStamp{}
 	brandingStore.mu.Unlock()
 }
 
@@ -595,5 +592,91 @@ func TestSeedDefaultBlockPage_skipsWhenBuiltinIDOccupiedByCustomPage(t *testing.
 	}
 	if !strings.Contains(buf.String(), "已被自定义页面占用") {
 		t.Fatalf("id 占用须 warn 点名: %q", buf.String())
+	}
+}
+
+// branding.json 的变化判据必须单源：内存快照热重载与幂等同步门此前各写一套
+// stat/指纹实现（store 用 modTime+size，同步门用另一份字符串指纹），改一侧
+// 判据另一侧与测试都不会发现。守卫=源码中只允许 statBrandingFile 一处 os.Stat。
+func TestBrandingFileChangeDetection_singleStatSource(t *testing.T) {
+	src, err := os.ReadFile("branding.go")
+	if err != nil {
+		t.Fatalf("read branding.go: %v", err)
+	}
+	if got := strings.Count(string(src), "os.Stat("); got != 1 {
+		t.Fatalf("branding.go 中 os.Stat( 出现 %d 次, want 1（变化判据须单源 statBrandingFile，其余入口复用其观测结果）", got)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+	if err := os.WriteFile(path, []byte(`{"app_name":"甲"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stamp := statBrandingFile(dir)
+	if !stamp.statOK || stamp.fingerprint() == "" {
+		t.Fatalf("stamp=%+v, want 有效观测与指纹", stamp)
+	}
+	// 同步门记录的指纹必须就是同一观测的指纹，不得另算一套（改一侧判据时另一侧
+	// 不会跟随的根因）。
+	resetBrandingSyncGateForTest()
+	t.Cleanup(resetBrandingSyncGateForTest)
+	if !brandingSyncGateAllow(dir) {
+		t.Fatal("首次观测后同步门应放行一轮")
+	}
+	brandingSyncMu.Lock()
+	gateFingerprint := brandingSyncFingerprint
+	brandingSyncMu.Unlock()
+	if gateFingerprint != stamp.fingerprint() {
+		t.Fatalf("同步门指纹=%q, store 观测指纹=%q, want 单源", gateFingerprint, stamp.fingerprint())
+	}
+	if statBrandingFile(filepath.Join(dir, "missing")).fingerprint() != "" {
+		t.Fatal("stat 失败时指纹必须为空串（调用方跳过本轮）")
+	}
+}
+
+// stat 成功但不可解析（半截写/手工写坏）时，store 必须记住这次观测到的形态：
+// 否则公开无鉴权 GET /branding 每个请求都重读全文并重新解析。文件随后真正变化
+// （mtime 更新）时仍须立即收敛到新内容。
+func TestLoadBrandingConfig_unparsableFileRecordsObservedStat(t *testing.T) {
+	resetBrandingStore()
+	t.Cleanup(resetBrandingStore)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "branding.json")
+	if err := os.WriteFile(path, []byte(`{"app_name":"甲"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "甲" {
+		t.Fatalf("boot load app_name=%q, want 甲", cfg.AppName)
+	}
+
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"app_name":`), 0o644); err != nil { // 整体 JSON 非法
+		t.Fatal(err)
+	}
+	waitForDistinctMtime(t, path, st.ModTime())
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "甲" {
+		t.Fatalf("不可解析时必须保 last-known-good, got %q", cfg.AppName)
+	}
+	observed := statBrandingFile(dir)
+	brandingStore.mu.RLock()
+	recorded := brandingStore.stamp
+	brandingStore.mu.RUnlock()
+	if !recorded.sameOnDisk(observed) {
+		t.Fatalf("store 记录的形态=%+v 与文件当前形态=%+v 不一致：不可解析的文件会被每请求重读", recorded, observed)
+	}
+
+	// 文件真正变化（内容修好且 mtime 更新）→ 立即收敛。
+	st2, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"app_name":"丙"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForDistinctMtime(t, path, st2.ModTime())
+	if cfg := loadBrandingConfig(dir); cfg.AppName != "丙" {
+		t.Fatalf("恢复完整后必须立即读到新值, got %q", cfg.AppName)
 	}
 }

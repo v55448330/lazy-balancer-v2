@@ -79,6 +79,16 @@ func credentialsSemanticallyEqual(a, b string) bool {
 	return services.CredentialsSemanticallyEqual(a, b)
 }
 
+// recordCAProviderUpdateFailure 记录 CA 提供商更新失败。PUT /api/v1/ca-providers/:id
+// 是 Explicit 审计路由——中间件对 Explicit 既不补记成功也不补记失败，handler
+// 必须自己覆盖「业务拒绝」与「内部错误」两类失败面，否则运维无法从审计回答
+// 「谁试图禁用默认 CA 提供商、被什么挡住」。入参校验类 4xx（提供商类型/名称/
+// 并发/凭证门）属未进入写入层的载荷拒绝，不落审计。
+func recordCAProviderUpdateFailure(c *gin.Context, id int, reason string) {
+	recordAudit(c, "更新失败", "CA提供商", services.FormatAuditDetail(
+		fmt.Sprintf("提供商 %d", id), reason, services.AuditResultPart("failure")))
+}
+
 func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	// ca_providers 在导入全量替代表清单内。
 	if rejectWriteDuringImport(c, "保存 CA 提供商（配置导入进行中）") {
@@ -114,20 +124,24 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	old, err := h.caProviderService.UpdateCAProvider(id, req)
 	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
+			recordCAProviderUpdateFailure(c, id, "提供商不存在")
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
 			return
 		}
 		if errors.Is(err, services.ErrCAProviderLastEnabled) {
+			recordCAProviderUpdateFailure(c, id, err.Error())
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
 		if errors.Is(err, services.ErrCAProviderDefault) {
+			recordCAProviderUpdateFailure(c, id, err.Error())
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
 			return
 		}
 		if errors.Is(err, services.ErrCAProviderInUse) {
 			// 禁用被规则/任务引用的 CA 提供商 → 409 点名
 			// 引用方（对齐 DNS 配置禁用守卫），不再静默改派到其他 CA。
+			recordCAProviderUpdateFailure(c, id, err.Error())
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
 			return
 		}
@@ -150,6 +164,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最小间隔不能超过 60000 毫秒"})
 		default:
 			services.Logf("error", "Failed to update CA provider %d: %v", id, err)
+			recordCAProviderUpdateFailure(c, id, err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update CA provider"})
 		}
 		return

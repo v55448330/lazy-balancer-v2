@@ -125,7 +125,13 @@ func TestValidateRuleFeatures_rejectsEquivalentIPv6PathUpstreams(t *testing.T) {
 			},
 		}},
 	}
-	if err := validateRuleFeatures(input); err == nil || !strings.Contains(err.Error(), "重复") {
+	err := validateRuleFeatures(input)
+	if err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("路径规则等价 IPv6 写法必须判重, err=%v", err)
+	}
+	// 与主池同口径（handlers.go「上游 %s 重复」）：回显去重键而非裸地址+端口，
+	// 否则 IPv6 等价写法会打印成 "2001:0db8:...:9100" 无括号裸串，端口歧义。
+	if !strings.Contains(err.Error(), "[2001:db8::9]:9100") {
+		t.Fatalf("路径规则判重文案必须回显去重键 [2001:db8::9]:9100, got %q", err.Error())
 	}
 }

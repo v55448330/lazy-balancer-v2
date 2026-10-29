@@ -63,10 +63,13 @@ func runWithInTaskRetry(ctx context.Context, op func() error, onWait func(nextAt
 // 恒 success 掩盖 DB 异常）。消费口径：!known → 返回错误/记 failed（任务
 // 可见）+ warn 留痕；known && !master → 从节点跳过语义（宁停勿写不变）。
 func updateRunRole() (bool, bool) {
-	if db.DB == nil {
+	// 单次快照：判定与使用同一句柄——两次读 db.DB 之间被置 nil（关库/停引擎
+	// 竞态）时 RoleOf 会带着 nil 句柄进入并 panic。
+	database := db.DB
+	if database == nil {
 		return false, false
 	}
-	isMaster, err := RoleOf(context.Background(), db.DB)
+	isMaster, err := RoleOf(context.Background(), database)
 	if err != nil {
 		return false, false
 	}
@@ -101,13 +104,15 @@ func updateRunWriteGate(ctx context.Context) error {
 // 为 UTC 存储；前端 formatDate 再按配置时区显示，与任务监控展示同一时刻。
 // 直接调用（rc=nil/RunID=0）或行不可读时回退当前 UTC。
 func taskRunStartedAt(rc *taskengine.RunContext) string {
-	// 与同族口径一致——nil 库直接回退当前 UTC（不 panic）。
-	if db.DB == nil {
+	// 与同族口径一致——nil 库直接回退当前 UTC（不 panic）；单次快照，
+	// 判定与查询共用同一句柄（两次读 db.DB 之间被置 nil 会让 QueryRow panic）。
+	database := db.DB
+	if database == nil {
 		return time.Now().UTC().Format(crsTimeLayout)
 	}
 	if rc != nil && rc.RunID > 0 {
 		var started string
-		if err := db.DB.QueryRow(`SELECT started_at FROM task_runs WHERE id=?`, rc.RunID).Scan(&started); err == nil && started != "" {
+		if err := database.QueryRow(`SELECT started_at FROM task_runs WHERE id=?`, rc.RunID).Scan(&started); err == nil && started != "" {
 			if instant, err := time.ParseInLocation(crsTimeLayout, started, CurrentLocation()); err == nil {
 				return instant.UTC().Format(crsTimeLayout)
 			}

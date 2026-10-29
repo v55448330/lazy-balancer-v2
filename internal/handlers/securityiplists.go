@@ -107,19 +107,8 @@ func loadIPListEntriesForAllow(q ipListQueryer, ids []int64) (map[int64][]string
 		seen[id] = struct{}{}
 		unique = append(unique, id)
 	}
-	for start := 0; start < len(unique); start += 500 {
-		end := start + 500
-		if end > len(unique) {
-			end = len(unique)
-		}
-		chunk := unique[start:end]
-		placeholders := make([]string, len(chunk))
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		rows, err := q.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+	for _, ch := range chunkIDs(unique, 500) {
+		rows, err := q.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+ch.placeholders+")", ch.args...)
 		if err != nil {
 			return nil, err
 		}
@@ -324,22 +313,10 @@ func validateIPListRefsExistence(q policyQueryRower, aclIDs, wlIDs []int64) (str
 		seen[id] = struct{}{}
 		unique = append(unique, id)
 	}
-	// 32766 绑定变量上限分块(fail-closed,整体 500)。
-	const chunkLimit = 500
+	// 32766 绑定变量上限分块(fail-closed,整体 500)——分片构造走 chunkIDs 单源。
 	found := make(map[int64]struct{}, len(unique))
-	for start := 0; start < len(unique); start += chunkLimit {
-		end := start + chunkLimit
-		if end > len(unique) {
-			end = len(unique)
-		}
-		chunk := unique[start:end]
-		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, len(chunk))
-		for i, id := range chunk {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		rows, err := q.Query("SELECT id FROM security_ip_lists WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+	for _, ch := range chunkIDs(unique, 500) {
+		rows, err := q.Query("SELECT id FROM security_ip_lists WHERE id IN ("+ch.placeholders+")", ch.args...)
 		if err != nil {
 			return "", err
 		}

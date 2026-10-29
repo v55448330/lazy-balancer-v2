@@ -810,9 +810,20 @@ func (e *Engine) Cancel(id string) bool {
 		}
 		r.cancelHookRunning = true
 		r.mu.Unlock()
-		ok := hook()
+		// CancelHook 是装配方闭包（生产为 manager 取消）：panic 曾直接抛给
+		// 调用方（Caddy 取消请求 goroutine），且 cancelHookRunning 永不复位——
+		// 该任务此后所有 Cancel 与新一轮占位都被「钩子运行中」门永久拒绝。
+		// safeBool 隔离 panic（同族限流留痕），defer 保证复位；panic 按
+		// 「取消未生效」返回 false（本轮 ctx 未取消，不得消费槽）。
+		ok := func() (ok bool) {
+			defer func() {
+				r.mu.Lock()
+				r.cancelHookRunning = false
+				r.mu.Unlock()
+			}()
+			return safeBool(r.desc.ID+".CancelHook", hook)
+		}()
 		r.mu.Lock()
-		r.cancelHookRunning = false
 		if !ok {
 			r.mu.Unlock()
 			// hook 拒绝=取消未生效：不得消费槽（否则「取消失败」却付出

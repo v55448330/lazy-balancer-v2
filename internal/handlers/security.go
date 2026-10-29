@@ -1801,22 +1801,25 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
+	// 存量行单次读取：本端点在写锁内要拿同一策略行的六组字段（限流 / ACL /
+	// GeoIP / 引用 / 类型 / 审计 delta 基准），此前按门逐列各读一遍——同一行
+	// 读 10 次（含 3 次全列扫描），整段都在 BEGIN IMMEDIATE 写锁内。收敛为
+	// 事务开头一次 33 列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
+	// 审计名）。写锁已持，单次读与后续校验、审计基准零竞态。
+	var stored models.SecurityPolicy
+	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
+		// 不存在 404 / 其余 500（各门吞错会把读取失败误报成 400）。
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略现值失败"})
+		}
+		return
+	}
 	// 限流门改用有效值(请求缺失回落存量),与门同口径
 	// ——此前 deref 裸值使部分重启用误报 400/rps=0 落库为宣称启用实际零强制。
 	{
-		var storedRLEnabled bool
-		var storedRPS, storedBurst int
-		// 对齐三分支——不存在 404/其余 500(此前吞错落
-		// 零值,不存在策略被误报 400)。
-		if err := tx.QueryRow("SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0) FROM security_policies WHERE id=?", id).Scan(&storedRLEnabled, &storedRPS, &storedBurst); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-			} else {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略限流配置失败"})
-			}
-			return
-		}
-		effRLEnabled, effRPS, effBurst := storedRLEnabled, storedRPS, storedBurst
+		effRLEnabled, effRPS, effBurst := stored.RateLimitEnabled, stored.RateLimitRPS, stored.RateLimitBurst
 		if req.RateLimitEnabled != nil {
 			effRLEnabled = *req.RateLimitEnabled
 		}
@@ -1837,28 +1840,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 必须在 BEGIN IMMEDIATE 事务内（校验与写入之间被并发清空所引用名单同属
 	// 该窗口）。
 	{
-		var storedEnabled bool
-		var storedMode, storedList, storedRefs string
-		// 同上限流门三分支。
-		if err := tx.QueryRow("SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?", id).
-			Scan(&storedEnabled, &storedMode, &storedList, &storedRefs); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-			} else {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 IP 控制配置失败"})
-			}
-			return
-		}
-		effEnabled := storedEnabled
+		effEnabled := stored.IPACLEnabled
 		if req.IPACLEnabled != nil {
 			effEnabled = *req.IPACLEnabled
 		}
-		effMode := storedMode
+		effMode := stored.IPACLMode
 		if ipACLMode != "" {
 			effMode = ipACLMode
 		}
 		if effEnabled && effMode == "allow" {
-			effList, effRefs := storedList, storedRefs
+			effList, effRefs := stored.IPACLList, stored.IPACLListRefs
 			if req.IPACLList != nil {
 				effList = *req.IPACLList
 			}
@@ -1877,20 +1868,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	// 存量读取移出「请求携带条目」判定——翻转门需要存量 mode,
+	// 存量读取复用事务开头的单次投影——翻转门需要存量 mode,
 	// 且「只改 mode 不带条目」的更新同样要过 GeoIP 可用性门。
-	var storedGeoIP, storedGeoIPMode, storedCrawlerEngines string
-	var storedCrawlerExempt bool
-	// 读错误三分支(对齐同函数口径)——
-	// 此前吞错使 storedGeoIPMode 落空串,GeoIP off 的可用性门判定漂移。
-	if err := tx.QueryRow("SELECT geoip_countries, geoip_mode, COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]') FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode, &storedCrawlerExempt, &storedCrawlerEngines); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略 GeoIP 配置失败"})
-		return
-	}
+	storedGeoIP := rawJSONString(stored.GeoIPCountries)
+	storedGeoIPMode := stored.GeoIPMode
+	storedCrawlerExempt := stored.GeoIPCrawlerExempt
+	storedCrawlerEngines := rawJSONString(stored.GeoIPCrawlerEngines)
 	effectiveGeoIPMode := storedGeoIPMode
 	if req.GeoIPMode != nil && *req.GeoIPMode != "" {
 		effectiveGeoIPMode = *req.GeoIPMode
@@ -1971,25 +1954,13 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 退回 Caddy 默认错误页。指向启用的更新按「显式值 ?? 存量值」的有效形态过
 	// 同一校验器；写锁已持（BEGIN IMMEDIATE），无 TOCTOU。
 	if req.Enabled != nil && *req.Enabled {
-		var storedBlockPageID int
-		var storedCustomRules, storedACLRefs, storedWLRefs, storedCRSExcluded string
-		if err := tx.QueryRow("SELECT COALESCE(block_page_id,0), COALESCE(custom_rules,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE id=?", id).Scan(&storedBlockPageID, &storedCustomRules, &storedACLRefs, &storedWLRefs, &storedCRSExcluded); err != nil {
-			// 策略不存在时归因 404（与下方 RowsAffected 分支同语义），
-			// 其余读取错误保持 500——否则调用方无法区分「应停止重试」与「应重试」。
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取策略当前引用失败", err)})
-			return
-		}
 		effectiveBlockPageID := derefInt(req.BlockPageID)
 		if req.BlockPageID == nil {
-			effectiveBlockPageID = storedBlockPageID
+			effectiveBlockPageID = stored.BlockPageID
 		}
 		effectiveCustomRules := derefStr(req.CustomRules)
 		if req.CustomRules == nil {
-			effectiveCustomRules = storedCustomRules
+			effectiveCustomRules = rawJSONString(stored.CustomRules)
 		}
 		if msg, err := validateSecurityPolicyReferences(tx, effectiveBlockPageID, effectiveCustomRules); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -2002,10 +1973,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		// 被删除的列表不得随重启用静默悬空）。
 		effectiveACLRefs, effectiveWLRefs := aclRefsIDs, wlRefsIDs
 		if req.IPACLListRefs == nil {
-			effectiveACLRefs = parseIPListRefsIDs(storedACLRefs)
+			effectiveACLRefs = parseIPListRefsIDs(stored.IPACLListRefs)
 		}
 		if req.IPWhitelistRefs == nil {
-			effectiveWLRefs = parseIPListRefsIDs(storedWLRefs)
+			effectiveWLRefs = parseIPListRefsIDs(stored.IPWhitelistRefs)
 		}
 		if msg, err := validateIPListRefsExistence(tx, effectiveACLRefs, effectiveWLRefs); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -2017,7 +1988,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		// crs_excluded_rules 的 scope=ip/list 引用同属有效引用面
 		// （DeleteIPList 的引用扫描已计入；重启用门此前漏查 → 禁用期间被删的
 		// 列表随重启用静默悬空，发射端仅 warn 跳过）。
-		effectiveCRSExcluded := storedCRSExcluded
+		effectiveCRSExcluded := rawJSONString(stored.CRSExcludedRules)
 		if req.CRSExcludedRules != nil {
 			effectiveCRSExcluded = *req.CRSExcludedRules
 		}
@@ -2061,25 +2032,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// （deny→allow）而存量引用携带内置名单、或只改引用为内置名单而存量模式为
 	// allow，都必须拦截。
 	if req.IPACLListRefs != nil || req.IPWhitelistRefs != nil || req.IPACLMode != nil || req.CRSExcludedRules != nil {
-		var storedMode, storedACLRefs, storedWLRefs, storedCRSExcluded string
-		if err := tx.QueryRow("SELECT COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE id=?", id).Scan(&storedMode, &storedACLRefs, &storedWLRefs, &storedCRSExcluded); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-			} else {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略引用配置失败"})
-			}
-			return
-		}
-		effMode := storedMode
+		effMode := stored.IPACLMode
 		if ipACLMode != "" {
 			effMode = ipACLMode
 		}
 		effACLRefs, effWLRefs := aclRefsIDs, wlRefsIDs
 		if req.IPACLListRefs == nil {
-			effACLRefs = parseIPListRefsIDs(storedACLRefs)
+			effACLRefs = parseIPListRefsIDs(stored.IPACLListRefs)
 		}
 		if req.IPWhitelistRefs == nil {
-			effWLRefs = parseIPListRefsIDs(storedWLRefs)
+			effWLRefs = parseIPListRefsIDs(stored.IPWhitelistRefs)
 		}
 		var effCRSRefs []int64
 		if req.CRSExcludedRules != nil {
@@ -2088,7 +2050,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			// 未提交 CRS 排除列表时按存量判定：只改 ip_acl_mode=allow 的请求
 			// 仍须看到存量 scope=ip/list 引用的内置名单（否则「先存内置名单、
 			// 后翻模式」可绕过禁令）。
-			effCRSRefs = crsExcludedListRefs(storedCRSExcluded)
+			effCRSRefs = crsExcludedListRefs(rawJSONString(stored.CRSExcludedRules))
 		}
 		if msg, err := validateBuiltinThreatListRefs(tx, effACLRefs, effWLRefs, effCRSRefs, effMode); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -2106,15 +2068,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// ACL 所属阶段不拦；mixed/空串存量兼容态保持现状。指针语义：nil（缺省）
 	// 与显式 false 均不拦；存量 ACL 已启用时真值为幂等不拦。
 	if req.IPACLEnabled != nil && *req.IPACLEnabled {
-		var stored models.SecurityPolicy
-		if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略类型失败"})
-			return
-		}
 		if !stored.IPACLEnabled {
 			// 门条件按有效类型（effType=显式 policy_type ?? 存量类型）+「合并后
 			// 终态特征」判定：特征集必须取「存量行叠加本请求」的合并模型——
@@ -2177,20 +2130,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	// 审计真 delta 的存量基准（2026-09-25 用户裁定 A 方案）：UPDATE 前事务内读
-	// 一次现值（写锁已持、与写入零竞态）——changedFields 只记「提交值≠存量值」。
-	// ErrNoRows 放行由下方 RowsAffected=0 统一 404；其余读取失败 fail-closed
-	// （审计完整性优先于一次写入）。
-	var stored models.SecurityPolicy
-	storedFound := true
-	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			storedFound = false
-		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略现值失败"})
-			return
-		}
-	}
+	// 审计真 delta 的存量基准（2026-09-25 用户裁定 A 方案）复用事务开头的
+	// 单次投影：写锁已持、与写入零竞态——changedFields 只记「提交值≠存量值」。
 	query := "UPDATE security_policies SET updated_at=datetime('now')"
 	var args []interface{}
 	addStr := func(field string, val *string) {
@@ -2252,7 +2193,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 不强制写，保留现值语义不变）。mixed 与 ''（待推断存量态，mixed 语义）
 	// 不在此归一：迁移拆分路径（insertChild）已显式传值，存量行由「更新迁移」
 	// 或重推断收敛。
-	if req.TrustDetection != nil && req.PolicyType == nil && storedFound {
+	if req.TrustDetection != nil && req.PolicyType == nil {
 		switch stored.PolicyType {
 		case models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3:
 			falseTD := false
@@ -2290,7 +2231,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 				// 存量内容本就跨阶段（旧的脏行/导入残留）时，重推断只是把类型
 				// 归一到内容实际形态，不构成本次请求引入的漂移——放行（否则
 				// 这类行永远只能靠整表单迁移修）。
-				if !storedFound || models.InferPolicyType(&stored) != models.PolicyTypeMixed {
+				if models.InferPolicyType(&stored) != models.PolicyTypeMixed {
 					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略内容跨多个阶段，请显式按阶段类型（信任名单/IP 访问控制/限流/WAF）分别创建；如需合并能力请使用现有混合策略的更新迁移或拆分"})
 					return
 				}
@@ -2341,140 +2282,138 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	auditDetail := fmt.Sprintf("策略「%s」(#%s)", policyName, id)
 	var changedFields []string
-	if storedFound {
-		if reinferredTo != "" {
-			changedFields = append(changedFields, fmt.Sprintf("策略类型：%s→%s（按内容重推断）", reinferredFrom, reinferredTo))
+	if reinferredTo != "" {
+		changedFields = append(changedFields, fmt.Sprintf("策略类型：%s→%s（按内容重推断）", reinferredFrom, reinferredTo))
+	}
+	clip := func(v string) string {
+		if len(v) > 60 {
+			return fmt.Sprintf("（%d 字节）", len(v))
 		}
-		clip := func(v string) string {
-			if len(v) > 60 {
-				return fmt.Sprintf("（%d 字节）", len(v))
-			}
-			return v
+		return v
+	}
+	deltaStr := func(label string, nv *string, ov string) {
+		if nv != nil && *nv != ov {
+			changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, clip(ov), clip(*nv)))
 		}
-		deltaStr := func(label string, nv *string, ov string) {
-			if nv != nil && *nv != ov {
-				changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, clip(ov), clip(*nv)))
+	}
+	deltaInt := func(label string, nv *int, ov int) {
+		if nv != nil && *nv != ov {
+			changedFields = append(changedFields, fmt.Sprintf("%s：%d→%d", label, ov, *nv))
+		}
+	}
+	deltaBool := func(label string, nv *bool, ov bool) {
+		if nv != nil && *nv != ov {
+			changedFields = append(changedFields, fmt.Sprintf("%s：%v→%v", label, ov, *nv))
+		}
+	}
+	// ID 引用→名称（2026-09-25 用户裁定）：refs/自定义规则/拦截页在审计里
+	// 以名称呈现。解析失败（JSON 畸形/查询失败）回落原始文本——审计可读性
+	// 不阻断写路径。
+	refNameCache := map[string]map[int]string{}
+	loadRefNames := func(table string, ids []int) map[int]string {
+		names := refNameCache[table]
+		if names == nil {
+			names = map[int]string{}
+			refNameCache[table] = names
+		}
+		var missing []int
+		for _, id := range ids {
+			if _, ok := names[id]; !ok {
+				missing = append(missing, id)
 			}
 		}
-		deltaInt := func(label string, nv *int, ov int) {
-			if nv != nil && *nv != ov {
-				changedFields = append(changedFields, fmt.Sprintf("%s：%d→%d", label, ov, *nv))
-			}
-		}
-		deltaBool := func(label string, nv *bool, ov bool) {
-			if nv != nil && *nv != ov {
-				changedFields = append(changedFields, fmt.Sprintf("%s：%v→%v", label, ov, *nv))
-			}
-		}
-		// ID 引用→名称（2026-09-25 用户裁定）：refs/自定义规则/拦截页在审计里
-		// 以名称呈现。解析失败（JSON 畸形/查询失败）回落原始文本——审计可读性
-		// 不阻断写路径。
-		refNameCache := map[string]map[int]string{}
-		loadRefNames := func(table string, ids []int) map[int]string {
-			names := refNameCache[table]
-			if names == nil {
-				names = map[int]string{}
-				refNameCache[table] = names
-			}
-			var missing []int
-			for _, id := range ids {
-				if _, ok := names[id]; !ok {
-					missing = append(missing, id)
-				}
-			}
-			if len(missing) == 0 {
-				return names
-			}
-			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(missing)), ",")
-			args := make([]interface{}, len(missing))
-			for i, id := range missing {
-				args[i] = id
-			}
-			rows, err := tx.QueryContext(caddyWriteCtx(c), `SELECT id, COALESCE(name,'') FROM `+table+` WHERE id IN (`+placeholders+`)`, args...)
-			if err == nil {
-				for rows.Next() {
-					var id int
-					var name string
-					if rows.Scan(&id, &name) == nil {
-						names[id] = name
-					}
-				}
-				rows.Close()
-			}
-			for _, id := range missing {
-				if _, ok := names[id]; !ok {
-					names[id] = ""
-				}
-			}
+		if len(missing) == 0 {
 			return names
 		}
-		namesOfRefs := func(table, refsJSON string) string {
-			var ids []int
-			if err := json.Unmarshal([]byte(refsJSON), &ids); err != nil {
-				return clip(refsJSON)
-			}
-			if len(ids) == 0 {
-				return "（空）"
-			}
-			names := loadRefNames(table, ids)
-			out := make([]string, 0, len(ids))
-			for _, refID := range ids {
-				if name := names[refID]; name != "" {
-					out = append(out, name)
-				} else {
-					out = append(out, fmt.Sprintf("#%d", refID))
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(missing)), ",")
+		args := make([]interface{}, len(missing))
+		for i, id := range missing {
+			args[i] = id
+		}
+		rows, err := tx.QueryContext(caddyWriteCtx(c), `SELECT id, COALESCE(name,'') FROM `+table+` WHERE id IN (`+placeholders+`)`, args...)
+		if err == nil {
+			for rows.Next() {
+				var id int
+				var name string
+				if rows.Scan(&id, &name) == nil {
+					names[id] = name
 				}
 			}
-			return strings.Join(out, "、")
+			rows.Close()
 		}
-		deltaRefs := func(label, table string, nv *string, ov string) {
-			if nv != nil && *nv != ov {
-				changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, namesOfRefs(table, ov), namesOfRefs(table, *nv)))
+		for _, id := range missing {
+			if _, ok := names[id]; !ok {
+				names[id] = ""
 			}
 		}
-		blockPageName := func(pageID int) string {
-			if pageID == 0 {
-				return "（无）"
-			}
-			var name string
-			if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(name,'') FROM security_block_pages WHERE id=?`, pageID).Scan(&name); err != nil || name == "" {
-				return fmt.Sprintf("#%d", pageID)
-			}
-			return name
-		}
-		deltaStr("名称", req.Name, stored.Name)
-		deltaStr("描述", req.Description, stored.Description)
-		deltaStr("WAF 模式", req.Mode, stored.Mode)
-		deltaInt("异常分阈值", req.AnomalyThreshold, stored.AnomalyThreshold)
-		deltaStr("ACL 模式", req.IPACLMode, stored.IPACLMode)
-		deltaStr("IP ACL 列表", req.IPACLList, stored.IPACLList)
-		deltaBool("ACL 启用", req.IPACLEnabled, stored.IPACLEnabled)
-		deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
-		deltaStr("策略类型", req.PolicyType, stored.PolicyType)
-		deltaBool("信任检测", req.TrustDetection, stored.TrustDetection)
-		deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
-		deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
-		deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
-		deltaRefs("信任名单列表引用", "security_ip_lists", req.IPWhitelistRefs, stored.IPWhitelistRefs)
-		deltaBool("限流启用", req.RateLimitEnabled, stored.RateLimitEnabled)
-		deltaInt("限流 RPS", req.RateLimitRPS, stored.RateLimitRPS)
-		deltaInt("限流突发", req.RateLimitBurst, stored.RateLimitBurst)
-		deltaStr("CRS 规则组", req.CRSRuleGroups, string(stored.CRSRuleGroups))
-		deltaStr("CRS 排除", req.CRSExcludedRules, string(stored.CRSExcludedRules))
-		deltaRefs("自定义规则", "security_custom_rules", req.CustomRules, string(stored.CustomRules))
-		deltaStr("GeoIP 名单", req.GeoIPCountries, string(stored.GeoIPCountries))
-		deltaStr("GeoIP 模式", req.GeoIPMode, stored.GeoIPMode)
-		// v2.3.8 爬虫豁免审计（UPDATE 列集合 ↔ delta 覆盖集全等约束）
-		deltaBool("爬虫豁免", req.GeoIPCrawlerExempt, stored.GeoIPCrawlerExempt)
-		deltaStr("豁免引擎", req.GeoIPCrawlerEngines, string(stored.GeoIPCrawlerEngines))
-		deltaBool("响应体检测", req.WAFCheckResponse, stored.WAFCheckResponse)
-		deltaBool("请求体落日志", req.LogRequestBody, stored.LogRequestBody)
-		if req.BlockPageID != nil && *req.BlockPageID != stored.BlockPageID {
-			changedFields = append(changedFields, fmt.Sprintf("拦截页：%s→%s", blockPageName(stored.BlockPageID), blockPageName(*req.BlockPageID)))
-		}
-		deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
-		deltaBool("启用", req.Enabled, stored.Enabled)
+		return names
 	}
+	namesOfRefs := func(table, refsJSON string) string {
+		var ids []int
+		if err := json.Unmarshal([]byte(refsJSON), &ids); err != nil {
+			return clip(refsJSON)
+		}
+		if len(ids) == 0 {
+			return "（空）"
+		}
+		names := loadRefNames(table, ids)
+		out := make([]string, 0, len(ids))
+		for _, refID := range ids {
+			if name := names[refID]; name != "" {
+				out = append(out, name)
+			} else {
+				out = append(out, fmt.Sprintf("#%d", refID))
+			}
+		}
+		return strings.Join(out, "、")
+	}
+	deltaRefs := func(label, table string, nv *string, ov string) {
+		if nv != nil && *nv != ov {
+			changedFields = append(changedFields, fmt.Sprintf("%s：%s→%s", label, namesOfRefs(table, ov), namesOfRefs(table, *nv)))
+		}
+	}
+	blockPageName := func(pageID int) string {
+		if pageID == 0 {
+			return "（无）"
+		}
+		var name string
+		if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(name,'') FROM security_block_pages WHERE id=?`, pageID).Scan(&name); err != nil || name == "" {
+			return fmt.Sprintf("#%d", pageID)
+		}
+		return name
+	}
+	deltaStr("名称", req.Name, stored.Name)
+	deltaStr("描述", req.Description, stored.Description)
+	deltaStr("WAF 模式", req.Mode, stored.Mode)
+	deltaInt("异常分阈值", req.AnomalyThreshold, stored.AnomalyThreshold)
+	deltaStr("ACL 模式", req.IPACLMode, stored.IPACLMode)
+	deltaStr("IP ACL 列表", req.IPACLList, stored.IPACLList)
+	deltaBool("ACL 启用", req.IPACLEnabled, stored.IPACLEnabled)
+	deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
+	deltaStr("策略类型", req.PolicyType, stored.PolicyType)
+	deltaBool("信任检测", req.TrustDetection, stored.TrustDetection)
+	deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
+	deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
+	deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
+	deltaRefs("信任名单列表引用", "security_ip_lists", req.IPWhitelistRefs, stored.IPWhitelistRefs)
+	deltaBool("限流启用", req.RateLimitEnabled, stored.RateLimitEnabled)
+	deltaInt("限流 RPS", req.RateLimitRPS, stored.RateLimitRPS)
+	deltaInt("限流突发", req.RateLimitBurst, stored.RateLimitBurst)
+	deltaStr("CRS 规则组", req.CRSRuleGroups, string(stored.CRSRuleGroups))
+	deltaStr("CRS 排除", req.CRSExcludedRules, string(stored.CRSExcludedRules))
+	deltaRefs("自定义规则", "security_custom_rules", req.CustomRules, string(stored.CustomRules))
+	deltaStr("GeoIP 名单", req.GeoIPCountries, string(stored.GeoIPCountries))
+	deltaStr("GeoIP 模式", req.GeoIPMode, stored.GeoIPMode)
+	// v2.3.8 爬虫豁免审计（UPDATE 列集合 ↔ delta 覆盖集全等约束）
+	deltaBool("爬虫豁免", req.GeoIPCrawlerExempt, stored.GeoIPCrawlerExempt)
+	deltaStr("豁免引擎", req.GeoIPCrawlerEngines, string(stored.GeoIPCrawlerEngines))
+	deltaBool("响应体检测", req.WAFCheckResponse, stored.WAFCheckResponse)
+	deltaBool("请求体落日志", req.LogRequestBody, stored.LogRequestBody)
+	if req.BlockPageID != nil && *req.BlockPageID != stored.BlockPageID {
+		changedFields = append(changedFields, fmt.Sprintf("拦截页：%s→%s", blockPageName(stored.BlockPageID), blockPageName(*req.BlockPageID)))
+	}
+	deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
+	deltaBool("启用", req.Enabled, stored.Enabled)
 	if len(changedFields) > 0 {
 		auditDetail += "；" + strings.Join(changedFields, "；")
 	} else {
@@ -2620,21 +2559,20 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	}
 	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
 	// 并污染 GetAllSecurityBindings 消费方。与策略校验同口径先判
-	// err 再判 COUNT：DB 瞬时故障（锁/IO）时 ruleExists 未赋值，
-	// 合并判断会把故障误报为「规则不存在」400，客户端无法区分重试与真 400。
-	var ruleExists int
-	var ruleProtocol string
-	// 取 protocol 同行校验——TCP 规则走 caddy-l4 构建链（buildTCPServer），
-	// 该链从不消费安全策略，绑定成立即「UI 宣称受保护、实际零强制」的稳态漂移。
-	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+	// err 再判存在性：DB 瞬时故障（锁/IO）时不得把故障误报为「规则不存在」400，
+	// 客户端无法区分重试与真 400。protocol 同行判定——TCP 规则走 caddy-l4
+	// 构建链（buildTCPServer），该链从不消费安全策略，绑定成立即「UI 宣称受
+	// 保护、实际零强制」的稳态漂移。
+	target, err := loadRuleBindingTarget(caddyWriteCtx(c), tx, req.RuleCaddyID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if ruleExists == 0 {
+	if !target.exists {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
 		return
 	}
-	if ruleProtocol != "http" {
+	if !target.http {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
 	}
@@ -2742,6 +2680,66 @@ func normalizePolicyIDs(ids []int) []int {
 	return unique
 }
 
+// ruleBindingTarget 是「规则能否承载安全链绑定」的判定结论（单源判定，
+// 呈现口径留在各入口）。
+type ruleBindingTarget struct {
+	exists   bool
+	protocol string
+	http     bool // protocol == "http"：安全链（WAF/ACL/限流）只挂在 HTTP 路由上
+}
+
+// loadRuleBindingTarget 读取规则绑定目标的存在性与协议（lb_rules 单行）：
+// SetRuleSecurityPolicies / BindRuleToPolicy / BulkUpdatePolicyBindings /
+// BatchBindSecurityPolicies 四个入口共用同一判定。呈现差异（400 文案 vs
+// skipped 分项、unbind 对不存在规则的幂等放行）留在调用方。
+func loadRuleBindingTarget(ctx context.Context, tx *sql.Tx, ruleCaddyID string) (ruleBindingTarget, error) {
+	var exists int
+	var protocol string
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&exists, &protocol); err != nil {
+		return ruleBindingTarget{}, err
+	}
+	return ruleBindingTarget{exists: exists > 0, protocol: protocol, http: protocol == "http"}, nil
+}
+
+// bindingCountExcluding 统计单规则上「除 excludePolicyID 之外」的绑定数——
+// 绑定上限判定与拆分重映射的合并判定单源（合并后是否超 maxBindingsPerRule）。
+func bindingCountExcluding(ctx context.Context, tx *sql.Tx, ruleCaddyID string, excludePolicyID int) (int, error) {
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id != ?", ruleCaddyID, excludePolicyID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// bindingCountsExcluding 是 bindingCountExcluding 的批量形态（策略侧批量绑定
+// 一次取回 N 条规则的排他绑定数，避免逐规则往返）。
+func bindingCountsExcluding(ctx context.Context, tx *sql.Tx, ruleCaddyIDs []string, excludePolicyID int) (map[string]int, error) {
+	counts := make(map[string]int, len(ruleCaddyIDs))
+	if len(ruleCaddyIDs) == 0 {
+		return counts, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ruleCaddyIDs)), ",")
+	args := make([]any, 0, len(ruleCaddyIDs)+1)
+	for _, id := range ruleCaddyIDs {
+		args = append(args, id)
+	}
+	args = append(args, excludePolicyID)
+	rows, err := tx.QueryContext(ctx, "SELECT rule_caddy_id, COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id IN ("+placeholders+") AND policy_id != ? GROUP BY rule_caddy_id", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ruleCaddyID string
+		var count int
+		if err := rows.Scan(&ruleCaddyID, &count); err != nil {
+			return nil, err
+		}
+		counts[ruleCaddyID] = count
+	}
+	return counts, rows.Err()
+}
+
 // setRulePoliciesInTx 校验并原子替换单规则的策略绑定集（DELETE+按去重序
 // INSERT OR IGNORE），供单条端点 SetRuleSecurityPolicies 使用
 // 单实现）。返回 (userMsg, err)：userMsg 非空=面向用户的 400 校验消息；err
@@ -2760,15 +2758,14 @@ func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, po
 	// 与 BindRuleToPolicy 同事务口径：存在性校验 + DELETE + 有序 INSERT 同事务，
 	// 写锁由 _txlock=immediate 在 BEGIN 处获取，避免校验与写入之间规则/策略被
 	// 并发删除产生悬挂绑定。
-	var ruleExists int
-	var ruleProtocol string
-	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+	target, err := loadRuleBindingTarget(ctx, tx, ruleCaddyID)
+	if err != nil {
 		return "", err
 	}
-	if ruleExists == 0 {
+	if !target.exists {
 		return "规则不存在", nil
 	}
-	if ruleProtocol != "http" {
+	if !target.http {
 		return "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）", nil
 	}
 	if len(uniqueIDs) > 0 {
@@ -2956,23 +2953,8 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		}
-		countRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT rule_caddy_id, COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id IN ("+strings.Join(placeholders, ",")+") AND policy_id != ? GROUP BY rule_caddy_id", args...)
+		bindCounts, err = bindingCountsExcluding(caddyWriteCtx(c), tx, bindIDs, policyID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-			return
-		}
-		for countRows.Next() {
-			var rid string
-			var cnt int
-			if err := countRows.Scan(&rid, &cnt); err != nil {
-				countRows.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
-				return
-			}
-			bindCounts[rid] = cnt
-		}
-		countRows.Close()
-		if err := countRows.Err(); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		}
@@ -3009,12 +2991,11 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	// 逐规则校验存在且 HTTP（单条 bind 端点同口径），并即时执行增删。返回
 	// (userMsg, err)：DB 故障→500，校验失败→400。
 	applyOne := func(ruleCaddyID string, bind bool) (string, error) {
-		var ruleExists int
-		var ruleProtocol string
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+		target, err := loadRuleBindingTarget(caddyWriteCtx(c), tx, ruleCaddyID)
+		if err != nil {
 			return "", err
 		}
-		if ruleExists == 0 {
+		if !target.exists {
 			if !bind {
 				// unbind 目标规则已不存在=目标态（无该绑定）已达成——幂等放行
 				//（bind 目标不存在仍是错误：无法达成）。
@@ -3022,7 +3003,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			}
 			return "规则不存在: " + ruleCaddyID, nil
 		}
-		if bind && ruleProtocol != "http" {
+		if bind && !target.http {
 			return ruleCaddyID + ": 安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）", nil
 		}
 		if bind {
@@ -3191,17 +3172,16 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		if ruleCaddyID == "" {
 			continue
 		}
-		var ruleExists int
-		var ruleProtocol string
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		target, terr := loadRuleBindingTarget(caddyWriteCtx(c), tx, ruleCaddyID)
+		if terr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
 			return
 		}
-		if ruleExists == 0 {
+		if !target.exists {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
 			continue
 		}
-		if ruleProtocol != "http" {
+		if !target.http {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
 			continue
 		}
@@ -3730,9 +3710,9 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	remapped := 0
 	skipped := make([]skippedRule, 0)
 	for _, ruleID := range boundRules {
-		var existingCount int
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id != ?", ruleID, p.ID).Scan(&existingCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		existingCount, cerr := bindingCountExcluding(caddyWriteCtx(c), tx, ruleID, p.ID)
+		if cerr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", cerr)})
 			return
 		}
 		if existingCount+len(newIDs) > maxBindingsPerRule {

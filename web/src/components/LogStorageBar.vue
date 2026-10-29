@@ -119,8 +119,14 @@ const noteText = computed(() => {
   }
   const parts: string[] = []
   if (i.limit_bytes) parts.push(`满 ${humanSize(i.limit_bytes)} 轮转`)
+  if (i.db_backed) {
+    // 纯库内行(操作日志=audit_log 表按保留期清理):没有轮转归档概念,
+    // keep_count=0 渲染「暂无归档」会被读成归档失败——只披露清理口径。
+    if (i.retention_note) parts.push(i.retention_note)
+    return parts.join('，')
+  }
   if (i.keep_count > 0) {
-    // 固定份数上限(Caddy/certjob/audit 等):已归档时 N/M,未归档时「暂无归档，保留 M 份」
+    // 固定份数上限(Caddy/certjob 等):已归档时 N/M,未归档时「暂无归档，保留 M 份」
     parts.push(i.rotated_count > 0 ? `已归档 ${i.rotated_count}/${i.keep_count} 份` : `暂无归档（满额保留 ${i.keep_count} 份）`)
   } else {
     // 时间戳轮转族(运行日志):无固定份数上限——归档数恒显示(含 0)
