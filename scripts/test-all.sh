@@ -8,6 +8,37 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 档位（互斥）：默认=全量（提交前/发版判据）；--fast=合并树快检（变更面 +
+# 反向依赖闭包，跳过 race/交叉编译/覆盖率与 vite build）；--full 等价于
+# FULL=1（发版/夜间：不接受 SKIP、追加乱序轮）。
+FAST=0
+for arg in "$@"; do
+  case "$arg" in
+    --fast) FAST=1 ;;
+    --fast-deep) FAST=2 ;;
+    --full) FULL=1 ;;
+    -h|--help)
+      # 只打印文件头的注释段（遇到第一行非注释即停），不泄漏内部实现。
+      awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"
+      echo
+      echo "用法: $0 [--fast|--fast-deep|--full]"
+      echo "  默认        全量门禁（提交前/发版判据，含 -race/交叉编译/覆盖率/vite build）"
+      echo "  --fast      快检：变更包测试 + 全模块依赖面编译/静态检查 + 前端快速环（数十秒）"
+      echo "  --fast-deep 深检：变更包 + 反向依赖闭包测试（跨域断言级回归，根模块改动约 4 分钟）"
+      echo "  --full      等同 FULL=1：不接受跳过的门禁，再加乱序轮"
+      exit 0
+      ;;
+    *)
+      echo "未知参数: ${arg}（可用 --fast / --full / --help）" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ "$FAST" != "0" && "${FULL:-0}" == "1" ]]; then
+  echo "--fast/--fast-deep 与 --full 互斥：快检不能作为发版判据" >&2
+  exit 2
+fi
+
 # 临时根目录由门禁自己创建并持有：沙箱/CI 在运行中回收 TMPDIR 会让
 # t.TempDir() 级联报 stat/no such file（数十用例同时红，把真正的回归埋掉——
 # 实测形态）。固定到本进程创建的目录后，退出时统一清理。
@@ -26,6 +57,9 @@ fi
 ./scripts/tests/bulk-edit-safety-selftest.sh
 ./scripts/tests/shuffle-gate-selftest.sh
 ./scripts/tests/race-gate-selftest.sh
+# --fast 档判据本体（变更面 -> 包 + 反向依赖闭包）自检：映射退化表现为
+# 「快检恒绿」（少测），必须在这里先红，而不是等到跨域断裂回流到合并树。
+./scripts/tests/affected-packages-selftest.sh
 # 修复声称反向核对（R-4b）：台账 -> 代码/测试事实。自检常开；带台账时
 # （FIX_LEDGER=<file> [FIX_COMMIT=<rev>] ./scripts/test-all.sh）逐条验证
 # code:path:line:token 与 test:Name 仍存在，并核对提交 message 的 Fixes: 声明。
@@ -203,6 +237,107 @@ fi
 # 用固定 seed 的乱序跑同时承担「全量通过」与「固定排列通过」两件事，避免
 # 先顺序跑一遍、再用同一个 seed 重复跑一遍的重复计算。seed 固定=失败可复放。
 canonical_shuffle_seed="${CANONICAL_SHUFFLE_SEED:-1}"
+
+# 快检两档（域内定向 -> **这一层** -> 全量）：
+#
+#   --fast       变更包测试 + 依赖面静态检查（本脚本上方已对**所有模块**跑过
+#                go vet ./...，即依赖方的类型/API 面）+ 前端快速环。
+#                实测（本机）：web-only 改动约 50s；根模块单文件改动约 60s
+#                （只跑该包）；纯文档/配置改动只跑静态门禁约 10s。
+#   --fast-deep  变更包 + **反向依赖闭包**测试：改 services 会带出 handlers/
+#                middleware/cmd 的断言级回归。根模块单文件改动实测约 4 分钟，
+#                与全量相当——这是正确性代价，不是性能优化点。
+#
+# 为什么默认快检不含闭包：本仓依赖图极密（几乎全包依赖 services/handlers），
+# 闭包等于全量。跨域**断言级**漂移（本轮 handlers 陈旧断言）只有全量/深检能抓，
+# 因此：迭代用 --fast，合并树收口用 --fast-deep 或默认全量，发版用默认全量。
+#
+# 明确的取舍（写清楚，避免被当成等价替代）：
+#   * 依赖图位移（go.mod/go.sum 变更）一律按**整模块全量**处理：按包裁剪在
+#     依赖图变化时没有意义。
+#   * 不做 -race / cross-build / npm run build：快检绿 **不能** 作为提交/发版
+#     判据，提交前与发布前仍须跑默认档（无参数）。
+#   * Go 测试缓存：本仓用例大量使用 t.Setenv/TMPDIR 切换，Go 的测试缓存基本
+#     失效（实测二次运行仅快约 8%），故仍显式 -count=1，不制造「缓存命中」的
+#     假象。
+#   * 未归属到任何模块的 .go 文件直接失败（新增顶层目录时给出显式清单）。
+if [[ "${FAST:-0}" != "0" ]]; then
+  # shellcheck source=lib/affected-packages.sh
+  . ./scripts/lib/affected-packages.sh
+  module_list=("${modules[@]}")
+
+  fast_changed=()
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then fast_changed+=("$line"); fi
+  done < <(affected_changed_files)
+  if [[ ${#fast_changed[@]} -eq 0 ]]; then
+    echo "fast gate: 工作树无变更（相对 HEAD 且无未跟踪文件），只跑了静态门禁"
+    echo "all verification gates passed (fast scope: no changes)"
+    exit 0
+  fi
+
+  unattributed=""
+  fast_scope=""
+  ran_any_go=0
+  for module in "${modules[@]}"; do
+    module_files=()
+    while IFS= read -r line; do
+      if [[ -n "$line" ]]; then module_files+=("$line"); fi
+    done < <(affected_module_changed_files "$module" "${fast_changed[@]}")
+    [[ ${#module_files[@]} -eq 0 ]] && continue
+    if affected_module_dependency_changed "$module" "${fast_changed[@]}"; then
+      # 依赖图位移：整模块全量（--fast 最贵的一档，但正确性优先）。
+      echo "== [fast] go test ./... ($module, go.mod/go.sum changed) =="
+      (cd "$module" && go test ./... -count=1 -shuffle="$canonical_shuffle_seed")
+      fast_scope+=" $module(全量)"
+      ran_any_go=1
+      continue
+    fi
+    targets=()
+    while IFS= read -r line; do
+      if [[ -n "$line" ]]; then targets+=("$line"); fi
+    done < <(
+      if [[ "$FAST" == "2" ]]; then
+        affected_go_targets "$module" "${module_files[@]}"
+      else
+        affected_module_changed_packages "$module" "${module_files[@]}"
+      fi | LC_ALL=C sort -u
+    )
+    if [[ ${#targets[@]} -eq 0 ]]; then
+      unattributed+=" $module:[${module_files[*]}]"
+      continue
+    fi
+    echo "== [fast] go test ${targets[*]} ($module) =="
+    (cd "$module" && go test -count=1 -shuffle="$canonical_shuffle_seed" "${targets[@]}")
+    fast_scope+=" $module(${#targets[@]} 包)"
+    ran_any_go=1
+  done
+
+  if [[ -n "$unattributed" ]]; then
+    echo "fast gate: 以下 Go 变更无法映射到任何包（新增目录/构建标签排除？）：$unattributed" >&2
+    echo "            请显式补映射或改跑默认全量档" >&2
+    exit 1
+  fi
+
+  web_changed=0
+  for file in "${fast_changed[@]}"; do
+    case "$file" in
+      web/*) web_changed=1 ;;
+    esac
+  done
+  if [[ "$web_changed" == "1" ]]; then
+    echo "== [fast] npm test (web) =="
+    (cd web && npm test)
+    fast_scope+=" web(npm test)"
+  fi
+
+  if [[ "$ran_any_go" == "0" && "$web_changed" == "0" ]]; then
+    echo "fast gate: 变更面不含 Go/前端代码（仅文档/配置），只跑了静态门禁"
+  fi
+  echo "all verification gates passed (scope:${fast_scope:- 静态面})"
+  exit 0
+fi
+
 for module in "${modules[@]}"; do
   echo "== go test ./... -count=1 -shuffle=${canonical_shuffle_seed} ($module) =="
   (cd "$module" && go test ./... -count=1 -shuffle="$canonical_shuffle_seed")
