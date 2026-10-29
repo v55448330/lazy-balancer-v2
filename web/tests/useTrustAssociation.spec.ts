@@ -234,10 +234,11 @@ test('同名未引用列表复用而非重复创建（仍关联并加入）', as
   assert.match(String(callsOf('showSaveResult')[0].args?.[1]), /已关联既有/)
 })
 
-// 后端判重按 ASCII 大小写折叠（写事务内逐名比对，曾为 SQL 的
-// `LOWER(name)=LOWER(?)`）——前端复用既有名单的查找必须同口径，否则策略名仅差
-// 大小写时（允许存在）会错过既有名单、转而创建，换来一条 409 且本次加入不发生
-// （弹框一次性，无改用既有名单的出口）。
+// 后端判重是写事务内应用层 `strings.EqualFold`（Unicode simple folding，见本
+// 文件底部「跨栈」用例）；前端复用判据只折叠 ASCII，两端口径仅在「名称仅差非
+// ASCII 大小写」形态上分叉——前端转而创建时由后端 409 兜底（fail-closed）。
+// ASCII 形态必须同口径：策略名仅差大小写时（允许存在）错过既有名单、转而创建，
+// 会换来一条 409 且本次加入不发生（弹框一次性，无改用既有名单的出口）。
 test('同名判据与后端同口径：仅 ASCII 大小写不同也复用既有名单', async () => {
   const { posts, puts } = reset()
   const existing = [...lists, { id: 77, name: 'demo-白名单', ref_policies: [] }]
@@ -317,13 +318,13 @@ test('限定名同样被占用：继续递增直到可用', async () => {
   assert.equal(assertCreatedListName(created), '策略 A-信任#5-2')
 })
 
-test('非 ASCII 大小写仍视为不同名单（SQLite LOWER 只折叠 ASCII）', async () => {
+test('非 ASCII 大小写：前端只折叠 ASCII 而选择新建，分叉由后端 409 兜底', async () => {
   const { posts } = reset()
   const existing = [...lists, { id: 77, name: 'ä-白名单' }]
   const { ensureListAndJoin } = useTrustAssociation({ getList: () => existing })
   await ensureListAndJoin({ id: 5, name: 'Ä', ip_acl_list_refs: '' }, '203.0.113.9', 'allow')
   const created = posts.find((post) => post.url === '/security/ip-lists')
-  assert.ok(created, '非 ASCII 大小写变体后端视为新名，前端不得提前合并')
+  assert.ok(created, '前端复用判据只折叠 ASCII：非 ASCII 变体选择新建，后端 EqualFold 409 兜底（见本文件底部跨栈用例）')
   const body: unknown = created.body
   assert.ok(body && typeof body === 'object' && 'name' in body, '创建载荷必须是对象')
   assert.equal(body.name, 'Ä-白名单')

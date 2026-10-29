@@ -735,6 +735,22 @@ export const member = (text: string, marker: string): string => {
   return text.slice(start, close + 1)
 }
 
+/**
+ * `index` 所在代码归属的顶层声明名（`const NAME =` / `function NAME`，列 0）。
+ *
+ * 名册式计数断言用：`X.value = true` 的命中反推所在函数，`deepEqual` 对期望
+ * 名册——纯计数（`length === 2`）无法定位「三处中少一处」，位置语义全靠注释。
+ * 只认列 0 声明：嵌套 `const res = …` 不是归属点；向上找不到返回 `'<module>'`。
+ */
+export const enclosingDecl = (sourceText: string, index: number): string => {
+  const lines = sourceText.slice(0, index).split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const hit = lines[i].match(/^(?:const|function)\s+([A-Za-z_$][\w$]*)/)
+    if (hit) return hit[1]
+  }
+  return '<module>'
+}
+
 /** 最小 document 宿主：只提供 hidden + visibilitychange 监听（composable 消费面）。 */
 export class FakeDocument {
   hidden = false

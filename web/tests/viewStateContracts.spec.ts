@@ -99,7 +99,13 @@ test('自动封禁状态读取仅最新一次可写状态/错误位', () => {
   const page = code('src/views/security/SecurityEvents.vue')
   assert.match(page, /let autobanStatusSeq = 0/)
   const fetch = section(page, 'const fetchAutobanStatus = async', 'const autobanDialogVisible')
-  assert.match(fetch, /if \(requestSeq !== autobanStatusSeq\) return/g)
+  // 恰好两次：成功（try 尾）与失败（catch）分支各守卫一次——`assert.match`
+  // 的 /g 只求「至少一次」，删掉其中一支的回归仍绿。
+  assert.equal(
+    [...fetch.matchAll(/if \(requestSeq !== autobanStatusSeq\) return/g)].length,
+    2,
+    '成功与失败分支都要守卫（缺一处即旧响应覆盖新状态）',
+  )
 })
 
 test('规则库信息低频回刷且自动更新开关乐观置值', () => {
@@ -402,11 +408,11 @@ test('策略向导保存中冻结表单与步骤导航（payload 组装窗口内
   assert.match(policies, /<el-button v-if="hasNextStep" type="primary" :disabled="saving" @click="nextStep">/)
 })
 
-test('用户编辑弹框对初始化管理员禁用角色下拉并给出原因', () => {
+test('用户编辑弹框锁定态不得把所选角色发给后端', () => {
+  // 保护面三连（roleLocked computed / 下拉禁用 / 字段级原因）由 viewsCore 的
+  // 「初始化管理员不可删除/禁用」用例持有（同一不变量只在一处逐字维护）；
+  // 此处只钉写入口径——锁定态上送 role 会被后端 protected 恒 400。
   const users = code('src/views/Users.vue')
-  assert.match(users, /const roleLocked = computed\(\(\) => editingSelf\.value \|\| editingUser\.value\?\.is_setup_admin === true\)/)
-  assert.match(users, /<el-select v-model="form\.role" style="width: 100%" :disabled="roleLocked">/)
-  assert.match(users, /系统初始化管理员不可降级/, '必须给出字段级原因（否则只有全局 400 toast）')
   assert.match(users, /role: roleLocked\.value \? undefined : form\.value\.role/, '锁定态不得把所选角色发给后端')
 })
 

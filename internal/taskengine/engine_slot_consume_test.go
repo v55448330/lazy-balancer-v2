@@ -322,9 +322,7 @@ func TestEngine_ManualAndDemoteCancelKeepDueSlot(t *testing.T) {
 		lr := e.LatestRun("t-keep")
 		return lr != nil && (lr.Status == "skipped" || lr.Status == "cancelled")
 	})
-	e.mu.RLock()
-	r := e.regs["t-keep"]
-	e.mu.RUnlock()
+	r := regOf(t, e, "t-keep")
 	r.mu.Lock()
 	done := r.schedDoneSlot
 	r.mu.Unlock()
@@ -570,24 +568,6 @@ func TestEngine_TaskLogDirCircuitBreaker(t *testing.T) {
 	if !strings.Contains(string(body), "恢复行") {
 		t.Fatalf("恢复后写入行缺失: %q", body)
 	}
-}
-
-// ErrRunCancelled 哨兵映射：manager 终态「已取消」经哨兵确定性落 cancelled
-// （不靠 ctx.Err() 竞态窗）。
-func TestEngine_TerminalStatusMapsRunCancelledSentinel(t *testing.T) {
-	if got := terminalStatus(context.Background(), ErrRunCancelled); got != "cancelled" {
-		t.Fatalf("terminalStatus(ErrRunCancelled)=%q, want cancelled", got)
-	}
-	if got := terminalStatus(context.Background(), errors.New("x")); got != "failed" {
-		t.Fatalf("普通错误=%q, want failed", got)
-	}
-}
-
-// scheduleStateOf 读取 Scheduled 注册项的槽缓存/消费水位/退避状态（测试用）。
-func scheduleStateOf(t *testing.T, e *Engine, id string) (slot, done, retry time.Time, streak int) {
-	t.Helper()
-	s := fieldSnapshot(t, e, id)
-	return s.slot, s.done, s.retry, s.streak
 }
 
 // Given Scheduled 未来槽（+700ms）+ 手动触发在途轮 + 用户取消手动轮。
@@ -1072,9 +1052,7 @@ func TestEngine_StartLoopResetsScheduleProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.StartLoop("t-reset")
-	e.mu.RLock()
-	r := e.regs["t-reset"]
-	e.mu.RUnlock()
+	r := regOf(t, e, "t-reset")
 	r.mu.Lock()
 	r.nextScheduledTime = future
 	r.schedDoneSlot = future

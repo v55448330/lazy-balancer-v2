@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,20 +19,16 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// clusterLifecycleFake 的观测位用原子布尔：生命周期回调在引擎 daemon
-// goroutine 上异步执行（StopLoop 只取消 ctx），非原子 bool 既会被 race
-// detector 报数据竞争，也会让「回调是否已发生」的断言变成调度竞猜——
-// 调用方必须 waitForCond + Load 断言，不得读后即断。
+// clusterLifecycleFake 是 lifecycleRecorder 的布尔观测视图：生命周期回调在
+// 引擎 daemon goroutine 上异步执行，「回调是否已发生」的断言必须经
+// waitForCond + 布尔视图（内嵌计数 >0），不得读后即断。
 type clusterLifecycleFake struct {
-	acmeStarted atomic.Bool
-	syncStarted atomic.Bool
-	syncStopped atomic.Bool
+	lifecycleRecorder
 }
 
-func (f *clusterLifecycleFake) StartACME() { f.acmeStarted.Store(true) }
-func (f *clusterLifecycleFake) StopACME()  {}
-func (f *clusterLifecycleFake) StartSync() { f.syncStarted.Store(true) }
-func (f *clusterLifecycleFake) StopSync()  { f.syncStopped.Store(true) }
+func (f *clusterLifecycleFake) acmeStarted() bool { return f.acmeStarts.Load() > 0 }
+func (f *clusterLifecycleFake) syncStarted() bool { return f.syncStarts.Load() > 0 }
+func (f *clusterLifecycleFake) syncStopped() bool { return f.syncStops.Load() > 0 }
 
 // v3SnapshotWithACMESection 将直调 applySnapshot 的夹具补齐为生产可达形态：
 // 生产快照经 verifiedSnapshotIntegrity 闸门后必为当前 schema 且携带 ACME
@@ -621,9 +616,6 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	lifecycle := &clusterLifecycleFake{}
 	service := NewClusterService(database, "")
 	wireClusterLifecycleEngineForTest(t, lifecycle, false)
-	lifecycle.syncStarted.Store(false)
-	lifecycle.syncStopped.Store(false)
-	lifecycle.acmeStarted.Store(false)
 	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4, applied_version=3, sync_fingerprint='fp-1', last_sync_error='{"code":"transport_error","message":"同步拉取失败"}', registration_confirm_failures=2 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
@@ -648,7 +640,7 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	if appliedVersion != 0 || fingerprint != "" || syncError != "" || confirmFailures != 0 {
 		t.Fatalf("promote left slave residue: applied_version=%d fingerprint=%q sync_error=%q confirm_failures=%d", appliedVersion, fingerprint, syncError, confirmFailures)
 	}
-	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped.Load() && lifecycle.acmeStarted.Load() })
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped() && lifecycle.acmeStarted() })
 }
 
 func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) {
@@ -735,9 +727,6 @@ func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.
 	lifecycle := &clusterLifecycleFake{}
 	service := NewClusterService(database, "")
 	wireClusterLifecycleEngineForTest(t, lifecycle, false)
-	lifecycle.syncStarted.Store(false)
-	lifecycle.syncStopped.Store(false)
-	lifecycle.acmeStarted.Store(false)
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
@@ -749,7 +738,7 @@ func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.
 	if err := service.Promote(context.Background()); err == nil {
 		t.Fatal("promotion unexpectedly succeeded")
 	}
-	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped.Load() && lifecycle.syncStarted.Load() })
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.syncStopped() && lifecycle.syncStarted() })
 	var isMaster bool
 	if err := database.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		t.Fatalf("read role after failed promotion: %v", err)
@@ -1876,8 +1865,8 @@ func TestSyncService_run_retriesPendingRegistrationConfirmAfterTokenStored(t *te
 	}
 }
 
-// seedApprovedRegistration 建立「主节点已审批、本地待 confirm」的注册态，
-// confirm 端点按 confirmStatus 返回（0=网络中断形态）。
+// seedApprovedRegistration 建立「主节点已审批、本地待 confirm」的注册态；
+// confirm 端点响应由各用例自建 mux 决定。
 func seedApprovedRegistration(t *testing.T, database *sql.DB, masterURL string) {
 	t.Helper()
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, registration_id=7, registration_secret='temporary-secret', cluster_token='', registration_confirm_failures=0 WHERE id=1", masterURL); err != nil {

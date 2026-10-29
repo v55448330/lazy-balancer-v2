@@ -161,6 +161,11 @@ func masterSyncServingRound(ctx context.Context, now time.Time, w *masterServing
 		lastSeen := n.lastSeen.Time
 		if !n.lastSeen.Valid || now.Sub(lastSeen) > threshold {
 			offlineCount++
+			// 离线即清滞后窗与已告警位：滞后「持续 5 分钟」只对在线且滞后的
+			// 连续区间成立——不清窗会把离线期计入滞后时长（文案失真），且
+			// 已告警位残留会让恢复后仍滞后的节点永不再告警。
+			delete(w.lagSince, n.id)
+			delete(w.lagAlerted, n.id)
 			if !w.offlineAlerted[n.id] {
 				w.offlineAlerted[n.id] = true
 				if !n.lastSeen.Valid {
@@ -188,12 +193,12 @@ func masterSyncServingRound(ctx context.Context, now time.Time, w *masterServing
 			delete(w.lagAlerted, n.id)
 		}
 	}
-	// 节点被删除：清理其告警状态（防 map 缓涨）
+	// 节点被删除：清理其告警状态（防 map 缓涨）。离线分支已即时清滞后态，
+	// offlineAlerted 命中的节点不可能同时残留 lagSince/lagAlerted；lagSince
+	// 自身的未命中清理仍需保留（在线滞后期间被删除的节点未经过离线分支）。
 	for id := range w.offlineAlerted {
 		if !seen[id] {
 			delete(w.offlineAlerted, id)
-			delete(w.lagSince, id)
-			delete(w.lagAlerted, id)
 		}
 	}
 	for id := range w.lagSince {

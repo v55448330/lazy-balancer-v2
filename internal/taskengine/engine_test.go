@@ -883,8 +883,7 @@ func TestEngine_StatusMirrorRoleGated(t *testing.T) {
 // manual/startup——caddy-restart 轮只有 [done]，排障看不到执行起点）。
 func TestEngine_CaddyRestartTriggerWritesStartLine(t *testing.T) {
 	e := newTestEngine(t)
-	SetLogDir(t.TempDir())
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, t.TempDir())
 	e.Register(Descriptor{ID: "t-restart", Family: "startup", Name: "系统配置载入", Kind: KindOneshot,
 		Run: func(rc RunContext) error { return nil }})
 
@@ -1000,8 +999,7 @@ func TestEngine_TickEvaluatesIntervalOutsideRegistrationLock(t *testing.T) {
 // 两种时间戳并存。engineNowStr 是 DB datetime 比较口径（SQLite 只认横杠）
 // 不改，日志行单独走斜杠。
 func TestEngine_LifecycleLogLineUsesSlashTimestamp(t *testing.T) {
-	SetLogDir(t.TempDir())
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, t.TempDir())
 
 	// Given/When 追加一条生命周期行
 	taskLogAppend("t-fmt", "[start] 手动触发")
@@ -1115,9 +1113,7 @@ func TestEngine_StartDaemonStoppedRollsBackRegistration(t *testing.T) {
 	e := newTestEngine(t)
 	e.Register(Descriptor{ID: "t-stopped-register", Family: "t", Name: "停止登记", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { return nil }})
-	e.mu.RLock()
-	r := e.regs["t-stopped-register"]
-	e.mu.RUnlock()
+	r := regOf(t, e, "t-stopped-register")
 	ctx, cancel := context.WithCancelCause(context.Background())
 	r.running = true
 	r.cancel = cancel

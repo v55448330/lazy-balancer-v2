@@ -13,8 +13,7 @@ import (
 
 func TestTaskLogPath_whitelistAlphabet(t *testing.T) {
 	dir := filepath.Clean(t.TempDir())
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 
 	// 既有注册 ID 全字母表形态零变化（含 ':' 冒号任务）
 	for _, id := range []string{"crs", "ip2region", "threat", "autoban", "startup:config-load", "security-events-ingestion", "cert-renewal-scan"} {

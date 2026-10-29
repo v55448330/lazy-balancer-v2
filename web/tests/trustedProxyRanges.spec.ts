@@ -15,35 +15,48 @@ import {
   TRUSTED_PROXY_MAX_TOTAL_ENTRIES,
   TRUSTED_PROXY_MIN_PREFIX_BITS,
   trustedProxyExpansion,
-  trustedProxyHeaderError,
   trustedProxyHeadersError,
-  trustedProxyPrefixKey,
-  trustedProxyRangeError,
   trustedProxyRangesError,
   trustedProxyTotalError,
   trustedProxyTotalWarning,
 } from '../src/utils/trustedProxyRanges.ts'
 import { repoCode, section, code } from './_helpers.ts'
 
+// 单条校验（range/header）与并集键已收敛为模块私有：经整列对外入口间接断言。
+// 汇总文案形如 `受信网段不可用：<原文>（<原因>）`——原因自身可含全角括号
+// （最小前缀文案），按「前缀 + 已知原文」剥离，不按括号解析。
+const rangeError = (value: string): string => {
+  const aggregate = trustedProxyRangesError([value])
+  if (aggregate === '') return ''
+  const prefix = `受信网段不可用：${value.trim() || '(空)'}（`
+  return aggregate.startsWith(prefix) ? aggregate.slice(prefix.length, -1) : aggregate
+}
+const headerError = (value: string): string => {
+  const aggregate = trustedProxyHeadersError([value])
+  if (aggregate === '') return ''
+  const prefix = `受信代理请求头不可用：${value || '(空)'}（`
+  return aggregate.startsWith(prefix) ? aggregate.slice(prefix.length, -1) : aggregate
+}
+
 test('合法条目零报错（含裸 IP 与 IPv6 官方回源段）', () => {
   for (const value of ['203.0.113.0/24', '1.2.3.4', '  10.0.0.0/8  ', '2001:db8::/32', '2a06:98c0::/29']) {
-    assert.equal(trustedProxyRangeError(value), '', `${value} 应被放行`)
+    assert.equal(rangeError(value), '', `${value} 应被放行`)
   }
 })
 
 test('非法形态立即报错', () => {
-  assert.match(trustedProxyRangeError('not-a-cidr'), /不是合法的 IP 或 CIDR/)
-  assert.match(trustedProxyRangeError('1.2.3.4/33'), /不是合法的 IP 或 CIDR/)
-  assert.match(trustedProxyRangeError(''), /不能为空/)
-  assert.match(trustedProxyRangeError('   '), /不能为空/)
+  assert.match(rangeError('not-a-cidr'), /不是合法的 IP 或 CIDR/)
+  assert.match(rangeError('1.2.3.4/33'), /不是合法的 IP 或 CIDR/)
+  assert.match(rangeError(''), /不能为空/)
+  assert.match(rangeError('   '), /不能为空/)
 })
 
 test('过宽网段与后端最小前缀判据一致', () => {
-  assert.match(trustedProxyRangeError('10.0.0.0/4'), /最小允许 \/8/)
-  assert.match(trustedProxyRangeError('2001:db8::/28'), /\/29（IPv6）/)
+  assert.match(rangeError('10.0.0.0/4'), /最小允许 \/8/)
+  assert.match(rangeError('2001:db8::/28'), /\/29（IPv6）/)
   // 全空间形态优先按「覆盖全部地址空间」报（与后端两条判据同序）
-  assert.match(trustedProxyRangeError('0.0.0.0/0'), /全部地址空间/)
-  assert.match(trustedProxyRangeError('::/0'), /全部地址空间/)
+  assert.match(rangeError('0.0.0.0/0'), /全部地址空间/)
+  assert.match(rangeError('::/0'), /全部地址空间/)
 })
 
 test('v4-mapped 变体与后端归一口径一致（mapped /96 折算即全空间）', () => {
@@ -56,13 +69,13 @@ test('v4-mapped 变体与后端归一口径一致（mapped /96 折算即全空�
     '::ffff:0.0.0.0/104',
     '::ffff:0.0.0.0/95',
   ]) {
-    assert.match(trustedProxyRangeError(value), /全部地址空间/, `${value} 应判全空间`)
+    assert.match(rangeError(value), /全部地址空间/, `${value} 应判全空间`)
   }
   // 折算成等价 v4 后低于 /8：按最小前缀报错
-  assert.match(trustedProxyRangeError('::ffff:0.0.0.0/97'), /最小允许 \/8/)
+  assert.match(rangeError('::ffff:0.0.0.0/97'), /最小允许 \/8/)
   // 合法 mapped 精确段（等价 v4 ≥ /8）不得误拒
   for (const value of ['::ffff:203.0.113.7/120', '::ffff:198.51.100.7', '::ffff:10.0.0.0/104']) {
-    assert.equal(trustedProxyRangeError(value), '', `${value} 应放行`)
+    assert.equal(rangeError(value), '', `${value} 应放行`)
   }
   // 并集口径同源：同一网段的 mapped 与 v4 写法只计一次（含全空间变体）
   assert.equal(trustedProxyExpansion(['::ffff:203.0.113.0/120', '203.0.113.0/24'], []).union, 1)
@@ -71,10 +84,10 @@ test('v4-mapped 变体与后端归一口径一致（mapped /96 折算即全空�
 
 test('IPv4 主机位变体先规范化再判全空间，与后端 canonical 一致', () => {
   for (const value of ['0.0.0.1/8', '0.5.6.7/8', '127.255.255.255/0']) {
-    assert.match(trustedProxyRangeError(value), /全部地址空间/, `${value} 规范化后覆盖全空间，后端必然拒绝`)
+    assert.match(rangeError(value), /全部地址空间/, `${value} 规范化后覆盖全空间，后端必然拒绝`)
   }
-  assert.match(trustedProxyRangeError('10.0.0.0/4'), /最小允许 \/8/, '非全空间的过宽网段仍走最小前缀文案')
-  assert.equal(trustedProxyRangeError('203.0.113.7/24'), '', '普通主机位变体不得误拒')
+  assert.match(rangeError('10.0.0.0/4'), /最小允许 \/8/, '非全空间的过宽网段仍走最小前缀文案')
+  assert.equal(rangeError('203.0.113.7/24'), '', '普通主机位变体不得误拒')
 })
 
 test('内联网段条数上限与后端 inline 上限一致', () => {
@@ -126,18 +139,18 @@ test('组件接线：行内标红 + 保存门（不再等到 PUT 才被整组拒
 
 test('请求头合法形态零报错（含 8 条上限与连字符名）', () => {
   for (const value of ['X-Forwarded-For', 'CF-Connecting-IP', 'X-Real-IP', 'True-Client-IP', 'A1']) {
-    assert.equal(trustedProxyHeaderError(value), '', `${value} 应被放行`)
+    assert.equal(headerError(value), '', `${value} 应被放行`)
   }
   const atLimit = Array.from({ length: TRUSTED_PROXY_MAX_HEADERS }, (_, i) => `X-Forwarded-${i}`)
   assert.equal(trustedProxyHeadersError(atLimit), '')
 })
 
 test('请求头非法形态立即报错（空格/下划线/空/超长，与后端字符集一致）', () => {
-  assert.match(trustedProxyHeaderError('X-Forwarded-For '), /非法请求头名/)
-  assert.match(trustedProxyHeaderError('X_Forwarded_For'), /非法请求头名/)
-  assert.match(trustedProxyHeaderError(''), /非法请求头名/)
-  assert.match(trustedProxyHeaderError(`X-${'a'.repeat(63)}`), /非法请求头名/, '超 64 字符必须拒绝')
-  assert.match(trustedProxyHeaderError('X Forwarded For'), /非法请求头名/)
+  assert.match(headerError('X-Forwarded-For '), /非法请求头名/)
+  assert.match(headerError('X_Forwarded_For'), /非法请求头名/)
+  assert.match(headerError(''), /非法请求头名/)
+  assert.match(headerError(`X-${'a'.repeat(63)}`), /非法请求头名/, '超 64 字符必须拒绝')
+  assert.match(headerError('X Forwarded For'), /非法请求头名/)
 })
 
 test('请求头条数上限按小写去重后条数计（与后端 len(normalized) > 8 同口径）', () => {
@@ -189,10 +202,10 @@ test('同一前缀的不同书写形态合并计一次（裸 IP、IPv6 大小写
   assert.equal(trustedProxyExpansion(['192.0.2.129/27', '192.0.2.128/27'], []).union, 1)
   assert.equal(trustedProxyExpansion(['2001:db8::1/32', '2001:db8::/32'], []).union, 1)
   assert.equal(trustedProxyExpansion(['2001:db8::1/47', '2001:db8:0:1::/47'], []).union, 1)
-  assert.deepEqual(
-    [trustedProxyPrefixKey(' 203.0.113.4 '), trustedProxyPrefixKey('203.0.113.4/32'), trustedProxyPrefixKey('not-a-cidr')],
-    ['v4:203.0.113.4/32', 'v4:203.0.113.4/32', null],
-  )
+  // 键形态已收敛为模块私有：经并集入口断言同义行为——裸 IP 前后空白不产生
+  // 第二键；非法形态不产生键（不得与任何合法前缀折叠）。
+  assert.equal(trustedProxyExpansion([' 203.0.113.4 ', '203.0.113.4/32'], []).union, 1)
+  assert.equal(trustedProxyExpansion(['not-a-cidr'], []).union, 0)
 })
 
 test('硬门只拦可证超限：未加载条目按条数估算，估算越限降级为提示', () => {

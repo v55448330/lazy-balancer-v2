@@ -665,7 +665,9 @@ test('策略向导：阶段覆盖编辑态稀疏持有（不得物化库值 seed
 
 test('安全事件：tooltip 死条件删除，crawler 族展示词单源，旧 id 8 中和文案', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  const show = section(page, 'const showTriggeredMsg', '\n\n')
+  // 切片终点用下一声明 marker（缺失即抛错），不用空行 `'\n\n'`：函数体内补一
+  // 个空行/换行排版调整就把切片截断，随后的负断言（死条件已删）静默恒真。
+  const show = section(page, 'const showTriggeredMsg', 'const triggerDetailVisible')
   assert.match(show, /!!row\.rule_triggered && !!row\.rule_msg/)
   assert.doesNotMatch(show, /!== '2'|!== '3'|!== '4'|!== '5'|\^949/, '这些排除项永不命中（前两个 el-link 分支已截走）')
   assert.match(page, /case 'crawler': return CRAWLER_FAMILY_LABEL/)

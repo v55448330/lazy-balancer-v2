@@ -14,10 +14,10 @@ import { hasOwn } from '@/utils/hasOwn'
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
 import { loadAdmin1Tables, loadedAdmin1Tables } from '@/utils/admin1Loader'
-import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, buildCountryCellGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions, CountryHeat } from '@/utils/threatScene'
 import { FLOW_ATTACK_COLOR, FLOW_NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
-import { planFlowArcs } from '@/utils/threatFlowRules'
+import { planTrafficArcs } from '@/utils/threatFlowRules'
 import { sphereSurfacePoint, DOT_LAT_TOP, DOT_LAT_BOTTOM } from '@/utils/threatProjection'
 import { buildSphericalArc, SPHERICAL_ARC_SAMPLES } from '@/utils/threatArcCurve'
 
@@ -104,22 +104,14 @@ void main(){
   gl_FragColor = vec4(uColor, (band * 0.32 + tail * 0.7) * (0.3 + 0.7 * facing));
 }`
 
-/** 国家板块跨度（度）→ 相机高度：大国产远、小国产近，钳制 0.55-2.2。 */
+/** 国家板块跨度（度）→ 相机高度：大国产远、小国产近，钳制 0.55-2.2。
+ *  外包框取共享网格的构建期缓存（threatCountryGrid().bounds）——原每次下钻
+ *  全量扫环重算同一个 bbox（polysBounds 单源同值）。 */
 function flyAltitudeFor(name: string): number {
-  const c = THREAT_COUNTRIES.find((x) => x.name === name)
-  if (!c) return 1.4
-  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
-  for (const poly of c.polys) {
-    for (const flat of poly) {
-      for (let i = 0; i + 1 < flat.length; i += 2) {
-        if (flat[i] < minLon) minLon = flat[i]
-        if (flat[i] > maxLon) maxLon = flat[i]
-        if (flat[i + 1] < minLat) minLat = flat[i + 1]
-        if (flat[i + 1] > maxLat) maxLat = flat[i + 1]
-      }
-    }
-  }
-  const span = Math.max(maxLat - minLat, Math.min(maxLon - minLon, 180)) / 2
+  const index = THREAT_COUNTRIES.findIndex((x) => x.name === name)
+  if (index < 0) return 1.4
+  const b = threatCountryGrid().bounds[index]
+  const span = Math.max(b.maxLat - b.minLat, Math.min(b.maxLon - b.minLon, 180)) / 2
   return Math.min(2.2, Math.max(0.55, span / 45 + 0.35))
 }
 
@@ -219,7 +211,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   // hover/click 命中测试共用（countryHit）。历史：只给 buildWorldDots 消费，
   // hover/click 对 177 国全量射线，下钻态每 120ms 复测仍付全表成本。
   // 点阵构建与地图引擎共用同一空间网格（原逐点全表 239 国扫描是首开长任务根因）。
-  const sharedCountryGrid = buildCountryCellGrid(THREAT_COUNTRIES)
+  const sharedCountryGrid = threatCountryGrid()
   const dotBboxes = sharedCountryGrid.bounds
   const arcs: ArcDatum[] = []
   let disposed = false
@@ -563,7 +555,9 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     let provinceHover = false
     if (drilledName) {
       for (const pv of provinceSource(drilledName)) {
-        if (pointInEntries(geo.lng, geo.lat, [{ polys: pv.polys }])) {
+        // 单省判定直调 pointInPolys：包一层 `[{ polys }]` 是每次 hover 逐省
+        // 分配数组+闭包（pointInEntries 保留给 provincePolysCache 那处真数组）。
+        if (sharedPointInPolys(geo.lng, geo.lat, pv.polys)) {
           name = 'short' in pv && pv.short ? String(pv.short) : String(pv.name)
           count = provinceCounts.get(name) ?? 0
           provinceHover = true
@@ -1227,9 +1221,9 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
       if (paused) renderOnce()
     },
     setTraffic(entries: CountryHeat[]): void {
-      // 正常/攻击共用出弧计划：1-3 逐条、4-8 合并、>8 更粗；weight 决定线宽。
-      const plan = planFlowArcs(entries.filter((e) => e.count > 0).map((e) => ({ key: e.name, count: e.count, weight: e.count })))
-      for (const item of plan) {
+      // 正常/攻击共用出弧计划（threatFlowRules.planTrafficArcs 两引擎单源）：
+      // 1-3 逐条、4-8 合并、>8 更粗；weight 决定线宽。
+      for (const item of planTrafficArcs(entries)) {
         spawnArc(trafficOriginForCountry(item.key), true, item.weight, item.tier)
       }
     },

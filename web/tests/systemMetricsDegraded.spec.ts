@@ -18,7 +18,7 @@ import {
   pidsTooltipText,
   pidsValueTone,
 } from '../src/utils/systemMetrics.ts'
-import { code, elementSlice } from './_helpers.ts'
+import { code, elementSlice, openTags } from './_helpers.ts'
 
 test('降级分项解析：已知值成集、未知值忽略、顺序稳定', () => {
   assert.deepEqual([...degradedMetricParts(undefined)], [])
@@ -55,6 +55,7 @@ test('资源卡进度行为：正常值、超限封顶、降级与不限额隐�
 test('进程配额展示函数：不限额、原始百分比与进度条封顶', () => {
   assert.equal(pidsUsageLabel(2368, 4096), '2368 / 4096')
   assert.equal(pidsUsageLabel(12, 0), '12 / 不限', 'pids.max=max 归一为 0 时显示「不限」')
+  assert.equal(pidsUsageLabel(-3, 4096), '0 / 4096', '负值（读取失败形态）必须夹取为 0，不得原样展示')
   assert.equal(pidsPercentLabel(50), '50')
   assert.equal(pidsPercentLabel(5000 / 4096 * 100), '122', '文本必须保留后端超限程度')
   assert.equal(pidsProgressPercent(50, 4096, false), 50)
@@ -98,6 +99,18 @@ test('进程配额说明复用可聚焦帮助角标', () => {
   assert.ok(group.includes('进程配额'), `标签组必须含「进程配额」：${group}`)
   assert.ok(group.includes('<FieldHelpIcon :content="pidsTooltip"'), `可聚焦帮助角标必须与标签同组：${group}`)
   assert.doesNotMatch(group, /<el-tooltip/, '组内不得用不可聚焦的 tooltip 代替帮助角标')
-  assert.match(page, /<span class="resource-value" :class="pidsValueClass">\{\{ systemMetrics\.pids_current \}\}<\/span>\s*<span class="resource-total">/)
+  // 值/总量双 span 按「同一开标签的属性集」定位（属性书写顺序与新增属性无关，
+  // 整串字面钉在加一个属性时就假红），再断言内容取自 pidsUsageLabel 单源。
+  const valueTag = openTags(page, 'span').find((tag) => tag.includes('resource-value') && tag.includes('pidsValueClass'))
+  assert.ok(valueTag !== undefined, '进程配额当前值 span（resource-value + pidsValueClass）缺失')
+  const valueEl = elementSlice(page, page.indexOf(valueTag), 'span')
+  assert.match(valueEl, /\{\{ pidsUsageParts\.current \}\}/, '当前值必须取自 pidsUsageLabel 单源拆分（负值夹取/「不限」文案不落模板）')
+  assert.doesNotMatch(valueEl, /pids_max/, '上限文案不得在当前值 span 内联')
+  // 双 span 的容器（resource-value-group 仅进程配额使用）按标签配对取段：
+  // 总量段必须消费单源拆分，不得内联第二份 max>0 文案。
+  const groupTag = openTags(page, 'span').find((tag) => tag.includes('resource-value-group'))
+  assert.ok(groupTag !== undefined, '进程配额值容器 span 缺失')
+  const groupEl = elementSlice(page, page.indexOf(groupTag), 'span')
+  assert.match(groupEl, /\/ \{\{ pidsUsageParts\.maxPart \}\}/, '总量必须消费 pidsUsageParts 单源（不得内联第二份 max>0 文案）')
   assert.doesNotMatch(page, /<el-tooltip :content="pidsTooltip"/)
 })

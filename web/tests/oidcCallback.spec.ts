@@ -25,7 +25,7 @@ import {
   verifyOidcCallbackToken,
   withOidcAppNonce,
 } from '../src/utils/oidcCallback.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, matchBrace, repoCode, section } from './_helpers.ts'
 
 const GENERIC = '登录失败，请重新登录'
 
@@ -190,8 +190,14 @@ test('App：先验令牌再建会话，拒绝分支不得触碰现有会话', ()
   const verifyAt = branch.indexOf('verifyOidcCallbackToken({')
   const applyAt = branch.indexOf('authStore.applyOIDCToken(oidcToken)')
   assert.ok(verifyAt > 0 && applyAt > verifyAt, '必须先验来源/载荷，再写会话')
-  // 两处 apply 都必须位于 verdict.ok 分支之内（拒绝分支不得替换会话）
-  assert.doesNotMatch(branch.slice(branch.indexOf('if (!verdict.ok)'), verifyAt + 400), /applyOIDCToken/)
+  // 拒绝分支按花括号配对取段（定长 400 字符窗口：分支一长就漏检=假绿，
+  // 分支一短就吞进 else-if=假红），窗口内不得出现任何会话写入。
+  const rejectAt = branch.indexOf('if (!verdict.ok)')
+  assert.ok(rejectAt >= 0, '拒绝分支缺失')
+  const rejectOpen = branch.indexOf('{', rejectAt)
+  const rejectClose = matchBrace(branch, rejectOpen)
+  assert.ok(rejectOpen > 0 && rejectClose > rejectOpen, '拒绝分支花括号不平衡')
+  assert.doesNotMatch(branch.slice(rejectAt, rejectClose + 1), /applyOIDCToken/, '拒绝分支不得触碰现有会话')
   assert.match(branch, /sessionStorage\.removeItem\(OIDC_APP_NONCE_KEY\)/, 'nonce 必须一次性消费')
   assert.match(branch, /OIDC_REJECTION_TEXT\[verdict\.reason\]/, '拒绝文案取原因表，不得原文回显')
 })

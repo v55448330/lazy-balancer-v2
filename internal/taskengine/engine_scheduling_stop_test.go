@@ -20,12 +20,6 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// loopEnabledOf 读取任务的调度开关（装配字段，测试内直接读）。
-func loopEnabledOf(t *testing.T, e *Engine, id string) bool {
-	t.Helper()
-	return fieldSnapshot(t, e, id).loopEnabled
-}
-
 // Given Periodic 任务的 IntervalFn 返回 0（配置读错被映射为零值等形态）。
 // When tick 求值间隔。
 // Then 停止该任务调度且不执行 Run，同时落一条 failed 运行行（状态列可见、
@@ -89,9 +83,7 @@ func TestEngine_ScheduledUnadvancedSlotStopsAfterStreakLimit(t *testing.T) {
 	SetLogDir(t.TempDir())
 	t.Cleanup(func() { SetLogDir(oldLogDir) })
 	// tick 已按该槽求值过（prevSlot=同一过期槽）才会进退避分支——直接预置。
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	r.nextScheduledTime = pastSlot
 	r.schedFailStreak = scheduledFailStreakStopLimit - 1
@@ -197,21 +189,6 @@ func TestWarnSchedFnPanicThrottlesPerKind(t *testing.T) {
 	}
 }
 
-// Given 引擎已停止。
-// When 注册新任务。
-// Then 响亮拒绝（ErrEngineStopped）——已停引擎的调度 goroutine 已退出，
-// 注册成功只会得到「已注册但永不被调度」的静默形态（StartLoop 对 stopped
-// 恒 no-op），装配方须显式新建引擎。
-func TestEngine_RegisterRejectedAfterStop(t *testing.T) {
-	e := NewEngine(Options{TickInterval: time.Hour})
-	e.Stop()
-	err := e.Register(Descriptor{ID: "t-after-stop", Family: "t", Name: "停止后注册", Kind: KindOneshot,
-		Run: func(RunContext) error { return nil }})
-	if !errors.Is(err, ErrEngineStopped) {
-		t.Fatalf("已停引擎注册 err=%v, want ErrEngineStopped", err)
-	}
-}
-
 // Given Scheduled 任务的自动轮已连续失败（槽未推进），管理员又手动重试也失败。
 // When 手动失败次数达到自动停调预算的轮数，随后继续自动轮失败。
 // Then 手动轮不消耗自动停调预算：手动失败只保留退避节流，streak 不增、调度
@@ -230,9 +207,7 @@ func TestEngine_ScheduledManualFailuresDoNotConsumeStopBudget(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop(id)
 	// 与 tick 同口径预置槽缓存：退避分支只覆盖「槽已到期且未推进」形态。
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	r.nextScheduledTime = pastSlot
 	r.mu.Unlock()
@@ -325,9 +300,7 @@ func TestEngine_ScheduleStopReasonIsMachineReadable(t *testing.T) {
 	}
 	e.SetRole(true)
 	e.StartLoop(id)
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	r.nextScheduledTime = pastSlot
 	r.schedFailStreak = scheduledFailStreakStopLimit - 1
@@ -417,12 +390,7 @@ func TestEngine_UserStopClearsEngineStopAttribution(t *testing.T) {
 	// engineStop 让引擎自己停调：失败轮 + 已到停调预算前一轮。
 	engineStop := func() {
 		t.Helper()
-		e.mu.RLock()
-		r := e.regs[id]
-		e.mu.RUnlock()
-		if r == nil {
-			t.Fatal("任务未注册")
-		}
+		r := regOf(t, e, id)
 		r.mu.Lock()
 		r.nextScheduledTime = pastSlot
 		r.schedFailStreak = scheduledFailStreakStopLimit - 1
@@ -438,9 +406,7 @@ func TestEngine_UserStopClearsEngineStopAttribution(t *testing.T) {
 		t.Fatalf("前置状态错误：引擎停调来源=%q, want %q", m.ScheduleStoppedReason, ScheduleStopReasonFailStreak)
 	}
 
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	r.restartExhausted = true
 	r.mu.Unlock()

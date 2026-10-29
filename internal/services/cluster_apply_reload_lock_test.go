@@ -115,4 +115,10 @@ func TestSyncService_applySnapshot_renderUsesServiceDBHandle(t *testing.T) {
 	if !strings.Contains(text, "generateCaddyConfigWithCertSource(s.db, s.db, true)") {
 		t.Fatal("applySnapshot 重载段必须用服务句柄渲染：generateCaddyConfigWithCertSource(s.db, s.db, true)")
 	}
+	if strings.Contains(text, "LoadAdminTLSConfigE()") {
+		t.Fatal("applySnapshot 重启判定必须按服务句柄读 Admin TLS：包级 db.DB 在多库形态会读错库")
+	}
+	if !strings.Contains(text, "LoadAdminTLSConfigEFrom(s.db)") {
+		t.Fatal("applySnapshot 重启判定必须用服务句柄：LoadAdminTLSConfigEFrom(s.db)")
+	}
 }

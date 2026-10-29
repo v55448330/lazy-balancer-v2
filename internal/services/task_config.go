@@ -42,13 +42,14 @@ func setGlobalTaskAutoUpdate(prefix string, enabled bool) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交规则库自动更新开关: %w", err)
 	}
-	id := prefix
-	if prefix == "crawler" {
-		id = "crawlerbot-update"
+	id, known := businessTaskIDForAutoUpdatePrefix(prefix)
+	if !known {
+		return fmt.Errorf("更新规则库自动更新开关: 未登记的自动更新前缀 %q", prefix)
 	}
 	// 调度应用走与业务驱动整轮对齐共用的互斥（setter 与对齐交错的
 	// 「库新/loop 旧」错态没有重试纠正路径）；应用值在锁内按库实态读取，
-	// 本参数仅作读失败回退。
+	// 本参数仅作读失败回退。前缀→任务 ID 单源查表（businessTaskDrivers），
+	// 未知前缀响亮报错，不再按「前缀即任务 ID」兜底应用。
 	applyBusinessTaskLoop(id, enabled)
 	return nil
 }

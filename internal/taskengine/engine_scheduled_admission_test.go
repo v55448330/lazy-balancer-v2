@@ -69,9 +69,7 @@ func TestEngine_ScheduledAdmissionCompletesSynchronouslyInTick(t *testing.T) {
 	e.mu.Unlock()
 	waitForEngineSignal(t, "同步 admission tick 返回", tickDone)
 
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	running := r.running
 	r.mu.Unlock()
@@ -88,42 +86,9 @@ func TestEngine_ScheduledAdmissionCompletesSynchronouslyInTick(t *testing.T) {
 	}
 }
 
-// 目标形状②（同族对照 TestEngine_ReservePeriodicRunRejectsStoppedLoop）：
-// StopLoop 后的 Scheduled admission 必须拒绝并完整回收计数/等待组。
-func TestEngine_ReserveScheduledRunRejectsStoppedLoop(t *testing.T) {
-	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
-	const id = "t-sched-stopped-admission"
-	if err := e.Register(Descriptor{
-		ID: id, Family: "t", Name: "停止后准入", Kind: KindScheduled, RunsOn: RoleAny,
-		NextSlotFn: func() time.Time { return time.Now().Add(-time.Second) },
-		Run:        func(RunContext) error { return nil },
-	}); err != nil {
-		t.Fatal(err)
-	}
-	e.StartLoop(id)
-	e.StopLoop(id)
-
-	res, err := e.reserveScheduledRun(id, time.Now())
-	if res != nil || err != errScheduledLoopDisabled {
-		t.Fatalf("res=%p err=%v, want nil/errScheduledLoopDisabled", res, err)
-	}
-	if got := e.inFlight.Load(); got != 0 {
-		t.Fatalf("拒绝后 inFlight=%d, want 0", got)
-	}
-	waited := make(chan struct{})
-	go func() {
-		e.runWG.Wait()
-		close(waited)
-	}()
-	select {
-	case <-waited:
-	case <-time.After(time.Second):
-		t.Fatal("拒绝后 runWG 未归零")
-	}
-	if got := countRuns(t, id); got != 0 {
-		t.Fatalf("停止态 admission 落 task_runs=%d, want 0", got)
-	}
-}
+// 目标形状②：停止态 Scheduled admission（拒绝哨兵/计数回收/runWG 排空/
+// 零落行）与 Periodic 同表驱动单源——见 engine_periodic_gate_test.go
+// TestEngine_ReserveRunRejectsStoppedLoop 的 scheduled 子用例。
 
 // 目标形状③：admission 复核槽仍到期——窗口内槽被并发改写（手动触发/上一轮
 // 完成后 executeRun 尾部重算到未来）时按陈旧判定投递会立即多跑一次。
@@ -139,9 +104,7 @@ func TestEngine_ReserveScheduledRunRechecksSlotAndKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.StartLoop(id)
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 
 	now := time.Now()
 	r.mu.Lock()

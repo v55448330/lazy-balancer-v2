@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -80,13 +81,21 @@ func ResetRuntimeAdminTLSForTest() { runtimeAdminTLS.Store(nil) }
 // 不再提供「读失败回退 selfsigned/未启用」的宽容变体——它的三类消费方都会
 // 把「读不到」误解成一条真实配置。
 func LoadAdminTLSConfigE() (AdminTLSConfig, error) {
+	return LoadAdminTLSConfigEFrom(db.DB)
+}
+
+// LoadAdminTLSConfigEFrom 是 LoadAdminTLSConfigE 的句柄显式变体：持有自身
+// 句柄的服务（多库形态，如集群从端 SyncService.applySnapshot）必须按服务
+// 句柄读，不得回落包级 db.DB——多库下「提交 A 库快照、按 B 库配置判重启」
+// 的静默错配即源于此。
+func LoadAdminTLSConfigEFrom(handle *sql.DB) (AdminTLSConfig, error) {
 	cfg := AdminTLSConfig{Mode: "selfsigned"}
-	if db.DB == nil {
+	if handle == nil {
 		return cfg, fmt.Errorf("数据库未初始化")
 	}
 	var enabled int
 	var mode, cert, key string
-	err := db.DB.QueryRow(`SELECT COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'),
+	err := handle.QueryRow(`SELECT COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'),
 		COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,'')
 		FROM global_config WHERE id=1`).Scan(&enabled, &mode, &cert, &key)
 	if err != nil {

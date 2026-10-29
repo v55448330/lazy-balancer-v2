@@ -384,6 +384,11 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 			return models.ClusterRegistration{}, models.ErrMissingClusterNodeIP
 		}
 		req.IPAddress = source
+	} else if net.ParseIP(req.IPAddress) == nil {
+		// 非空自述地址必须自身就是 IP 字面量（与空值分支的来源地址校验、
+		// HTTP 侧 binding ip 同判）：host:port/方括号/垃圾串不得落进
+		// nodes.ip_address——该列是服务控制/登录票据投递地址的推导输入。
+		return models.ClusterRegistration{}, models.ErrInvalidClusterNodeIP
 	}
 	// 落库侧名字归一是最后一道闸（binding max=100 只覆盖 HTTP
 	// 入口；服务层直调/旧客户端仍可传入超长或带控制字符的名字）。

@@ -4,6 +4,7 @@ import { CHINA_PROVINCES } from './chinaProvinces.ts'
 import { COUNTRY_CENTROIDS, FALLBACK_CENTROID, type Centroid } from './countryCentroids.ts'
 import { hasOwn } from './hasOwn.ts'
 import { parseIpLocation } from './ipLocationParts.ts'
+import { THREAT_COUNTRIES } from './worldBorders.ts'
 
 type Rgb = [number, number, number]
 
@@ -87,8 +88,8 @@ interface PolysBounds {
   maxLat: number
 }
 
-/** 扁平多边形组外包框（点阵 bbox 预筛共用）。 */
-export function polysBounds(polys: number[][][]): PolysBounds {
+/** 扁平多边形组外包框（网格构建与省点阵预筛的模块内单源）。 */
+function polysBounds(polys: number[][][]): PolysBounds {
   let minLon = 180
   let maxLon = -180
   let minLat = 90
@@ -150,10 +151,35 @@ export function buildCountryCellGrid(
   return { grid, bounds: cellBounds }
 }
 
+/** 国家 bbox 覆盖网格（只读视图）：grid/bounds 仅供消费，调用方不得改写
+ *  （改写会污染另一引擎的候选预筛）。类型不外泄——消费方经函数返回值推断。 */
+interface ThreatCountryGrid {
+  grid: ReadonlyMap<number, readonly number[]>
+  bounds: readonly PolysBounds[]
+}
+
+let threatCountryGridCache: ThreatCountryGrid | null = null
+
+/**
+ * 国家 bbox 覆盖网格单例（懒初始化）：两个引擎共享同一份构建期缓存——原
+ * 地图/地球每引擎每实例各自 `buildCountryCellGrid(THREAT_COUNTRIES)`，同一份
+ * 国界扫两遍。相机高度（flyAltitudeFor）与命中预筛同取此处的 bounds。
+ */
+export function threatCountryGrid(): ThreatCountryGrid {
+  threatCountryGridCache ??= buildCountryCellGrid(THREAT_COUNTRIES)
+  return threatCountryGridCache
+}
+
 interface ProvinceGridDot {
   lat: number
   lng: number
   key: string
+}
+
+/** 布点行（纬度 + 错列经度偏移）。 */
+export interface ProvinceDotRow {
+  lat: number
+  lonOffset: number
 }
 
 /**
@@ -162,10 +188,22 @@ interface ProvinceGridDot {
  * 直接 pointInPolys 在宽幅国家首次下钻产生明显长任务；先按省 bbox 排除绝
  * 大多数省份，再对候选做射线判定。bbox 是命中判定的保守超集，预筛不改变
  * 产出点集。
+ *
+ * 行迭代器参数化：默认等纬度步长（地球引擎口径）；地图引擎传 Mercator
+ * 投影 y 步长的行集（两引擎的有意分歧点），bbox 预筛 + 射线命中 + 首中省
+ * 取色的主体在此单源。
  */
 export function provinceDotGrid(
   source: readonly { name: string; polys: number[][][] }[],
   step: number,
+  rows: (minLat: number, maxLat: number) => readonly ProvinceDotRow[] = (minLat, maxLat) => {
+    const equalLatRows: ProvinceDotRow[] = []
+    let row = 0
+    for (let lat = minLat; lat <= maxLat; lat += step, row++) {
+      equalLatRows.push({ lat, lonOffset: row % 2 === 1 ? step / 2 : 0 })
+    }
+    return equalLatRows
+  },
 ): ProvinceGridDot[] {
   let minLon = 180
   let maxLon = -180
@@ -180,10 +218,8 @@ export function provinceDotGrid(
     return b
   })
   const dots: ProvinceGridDot[] = []
-  let row = 0
-  for (let lat = minLat; lat <= maxLat; lat += step, row++) {
-    const offset = row % 2 === 1 ? step / 2 : 0
-    for (let lon = minLon + offset; lon <= maxLon; lon += step) {
+  for (const { lat, lonOffset } of rows(minLat, maxLat)) {
+    for (let lon = minLon + lonOffset; lon <= maxLon; lon += step) {
       for (let pi = 0; pi < source.length; pi++) {
         const b = bounds[pi]
         if (lon < b.minLon || lon > b.maxLon || lat < b.minLat || lat > b.maxLat) continue

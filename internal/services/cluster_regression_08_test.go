@@ -355,7 +355,7 @@ func TestClusterService_BecomeSlave_drainsOldMasterPullAndReopensAdmission(t *te
 	releaseApply := make(chan struct{})
 	syncService.beforeApplyWrite = func() {
 		close(applyEntered)
-		waitSyncBarrier(releaseApply)
+		waitSyncBarrier(t, releaseApply)
 	}
 	pullDone := make(chan error, 1)
 	go func() {
@@ -462,7 +462,7 @@ func TestClusterService_Promote_drainsPostAdmissionApply(t *testing.T) {
 	releaseApply := make(chan struct{})
 	syncService.beforeApplyWrite = func() {
 		close(applyEntered)
-		waitSyncBarrier(releaseApply)
+		waitSyncBarrier(t, releaseApply)
 	}
 	cluster := NewClusterService(database, "")
 	pullDone := make(chan error, 1)

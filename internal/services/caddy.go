@@ -1003,6 +1003,35 @@ func RuleIDNamespaceConflict(ruleID string, ids []string) string {
 	return ""
 }
 
+// generatedRouteParentID 反向剥离生成式子路由后缀（_geoip/_redirect/
+// _path_<n>）返回候选父规则 ID；无生成式后缀返回空串。与 RouteIDBelongsToRule
+// 的后缀白名单同一语义（正向归属判定/反向父 ID 推导共享），批量冲突检查
+// （insertSnapshotRules）用「剥后缀→父 ID 查表」替代逐对扫描以降到 O(n)。
+func generatedRouteParentID(routeID string) string {
+	for _, suffix := range []string{"_geoip", "_redirect"} {
+		if parent, ok := strings.CutSuffix(routeID, suffix); ok && parent != "" {
+			return parent
+		}
+	}
+	const pathMarker = "_path_"
+	if idx := strings.LastIndex(routeID, pathMarker); idx > 0 {
+		rest := routeID[idx+len(pathMarker):]
+		if rest != "" {
+			digits := true
+			for _, r := range rest {
+				if r < '0' || r > '9' {
+					digits = false
+					break
+				}
+			}
+			if digits {
+				return routeID[:idx]
+			}
+		}
+	}
+	return ""
+}
+
 // GetConfig gets current Caddy configuration
 func (s *CaddyService) GetConfig() (map[string]interface{}, error) {
 	resp, err := s.client.Get(s.adminURL + "/config/")

@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +54,35 @@ type clusterLifecycleHooks interface {
 	StopACME()
 	StartSync()
 	StopSync()
+}
+
+// lifecycleRecorder 是 clusterLifecycleHooks 的可组合测试基类：各回调计数
+// （原子——生命周期回调在引擎 daemon goroutine 上异步执行，非原子计数既会被
+// race detector 报数据竞争，也会把断言变成调度竞猜）+ 可选钩子（nil=仅计数）。
+// 具体夹具按视图组合：布尔观测位用 XxxStarted() 布尔视图，计数断言直用
+// 内嵌字段；需要真实行为（如拉起/排空 SyncService）的夹具覆写方法并显式调用
+// 内嵌实现。
+type lifecycleRecorder struct {
+	acmeStarts atomic.Int32
+	acmeStops  atomic.Int32
+	syncStarts atomic.Int32
+	syncStops  atomic.Int32
+}
+
+func (r *lifecycleRecorder) StartACME() {
+	r.acmeStarts.Add(1)
+}
+
+func (r *lifecycleRecorder) StopACME() {
+	r.acmeStops.Add(1)
+}
+
+func (r *lifecycleRecorder) StartSync() {
+	r.syncStarts.Add(1)
+}
+
+func (r *lifecycleRecorder) StopSync() {
+	r.syncStops.Add(1)
 }
 
 type spaceFillReader struct{ remaining int64 }

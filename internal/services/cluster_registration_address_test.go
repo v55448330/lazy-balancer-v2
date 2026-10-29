@@ -94,3 +94,23 @@ func TestClusterService_RegisterNode_blankAddressWithoutUsableSourceRejected(t *
 		t.Fatalf("err=%v, want ErrMissingClusterNodeIP", err)
 	}
 }
+
+// 自述地址非空但不是 IP 字面量（服务层直调/旧客户端绕过 HTTP binding ip）时
+// 必须拒绝：与空值分支的来源地址校验对称，否则 host:port/方括号/垃圾串会直接
+// 落进 nodes.ip_address 并被票据投递地址推导消费。
+func TestClusterService_RegisterNode_nonEmptyNonIPLiteralRejected(t *testing.T) {
+	_, database := newClusterTestService(t)
+	service := NewClusterService(database, "")
+	now := time.Now()
+	token, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RegisterNode(context.Background(), models.ClusterRegisterRequest{
+		Token: token, Name: "bad-address", IPAddress: "10.1.0.99:8000", Port: 9000,
+	}, "10.1.0.10", now); err == nil {
+		t.Fatal("非空非 IP 字面量的自述地址必须拒绝注册（与 HTTP 侧 binding ip 同判）")
+	} else if !errors.Is(err, models.ErrInvalidClusterNodeIP) {
+		t.Fatalf("err=%v, want ErrInvalidClusterNodeIP", err)
+	}
+}

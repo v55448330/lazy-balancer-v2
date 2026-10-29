@@ -972,7 +972,6 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 	if err := writeThreatIplistCompiled(iplistPath, entryStrs); err != nil {
 		return false, err
 	}
-	entryCount := len(entryStrs)
 	if listExists == 0 {
 		// 行缺失自愈补建——统一走 db.EnsureSystemIPList（OR IGNORE 幂等 +
 		// 描述归一 + 同名用户列表留痕），不再手写 INSERT（三条播种路径的
@@ -997,7 +996,10 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 			return false, fmt.Errorf("更新内置名单元数据失败: %w", err)
 		}
 	}
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET content_hash=?, entry_count=? WHERE name=?`, hash, entryCount, source); err != nil {
+	// entry_count 单源=markSourceSuccess（聚合后条数）：本函数只写内容哈希，
+	// 不再同轮重复写条数（此前两条 UPDATE 各写一次 entry_count，后写者胜，
+	// 双份事实源掩盖口径漂移）。
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET content_hash=? WHERE name=?`, hash, source); err != nil {
 		return false, fmt.Errorf("写源哈希失败: %w", err)
 	}
 	return true, nil

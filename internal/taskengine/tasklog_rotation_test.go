@@ -14,8 +14,7 @@ import (
 func TestAppendTaskLogLine_rotatesBeforeWriteAtConfiguredThreshold(t *testing.T) {
 	// Given：两个独立日志文件，共享 64B 阈值；A 已超阈，B 未超阈
 	dir := t.TempDir()
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 64 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 	if err := os.WriteFile(filepath.Join(dir, "a.log"), []byte(strings.Repeat("a", 60)), 0o644); err != nil {

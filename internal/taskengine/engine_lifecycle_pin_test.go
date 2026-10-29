@@ -147,9 +147,7 @@ func TestEngine_CancelKeepsSlotForRunStartedDuringHook(t *testing.T) {
 		t.Fatal("取消落定后第二轮未启动")
 	}
 
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	doneSlot, stillRunning := r.schedDoneSlot, r.running
 	r.mu.Unlock()

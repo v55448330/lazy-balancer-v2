@@ -60,6 +60,10 @@ func (s *ClusterService) IssueServiceControlTicket(ctx context.Context, nodeID i
 		return models.ClusterServiceControlIssue{}, fmt.Errorf("读取服务控制目标节点: %w", err)
 	}
 	if !approved {
+		// 未审批=不可控，按不存在处理（ErrNodeNotFound→404）：审批边界之前
+		// 票据面不泄露该节点的存在性，也不可对其签发能力凭证。与下方「已批准
+		// 但令牌待交付→ErrNodeTokenPending(409)」的口径分叉是有意的——409 只
+		// 表达「节点身份已确认、集群令牌在途」，审批未完成则连身份都不对外承诺。
 		return models.ClusterServiceControlIssue{}, ErrNodeNotFound
 	}
 	if keyHash == "" {

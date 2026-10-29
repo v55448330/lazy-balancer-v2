@@ -111,6 +111,13 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 			clusterError(c, http.StatusBadRequest, err.Error(), err)
 			return
 		}
+		if errors.Is(err, models.ErrInvalidClusterNodeIP) {
+			// 非空自述地址非 IP 字面量（服务层直调/旧客户端绕过 binding）：
+			// 与 HTTP 入口 binding ip 同判，映射 400。
+			services.RecordAuditLog("system", "注册失败", "集群节点", services.FormatAuditDetail(registerAuditField(req.Name), registerAuditField(req.IPAddress), err.Error()), c.ClientIP())
+			clusterError(c, http.StatusBadRequest, err.Error(), err)
+			return
+		}
 		if errors.Is(err, models.ErrInvalidClusterAccessURL) {
 			// 非法访问地址同属客户端可修正输入：落 500 会让从端 SetClusterMode
 			// 把它包成「向目标主节点注册失败」的 502，运维误判主节点故障。

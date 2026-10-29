@@ -474,7 +474,50 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 			bundle.Xdb = payload.Xdb
 		}
 	}
-	// RDB: 威胁库 .iplist 落盘 + 编译 .fast（先于 CRS/Xdb 处理，失败仅警告不阻断）
+	// RDB: 威胁库 .iplist 落盘 + 编译 .fast 挪到 bundle 校验之后——CRS/xdb 被
+	// 拒的包必须保持「拒绝整包」语义，先写后拒会让响应宣称「CRS 已拒/版本
+	// 记录已丢弃」的同时把威胁面单侧换成备份内容（文件与被拒的包分裂）。
+	crsChanged, xdbChanged, _, bundleErr := services.ApplyWafFileBundle(bundle)
+	if bundleErr != nil {
+		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", bundleErr)
+		component := services.WafFileApplyComponent(bundleErr)
+		threatBlocked := false
+		switch component {
+		case "crs":
+			// CRS 阶段失败时 XDB 尚未执行；两者记录都不能指向备份版本。
+			result.FailedCRS = payload.CRSTarGz != nil
+			result.FailedXdb = payload.Xdb != nil
+			threatBlocked = true
+		case "xdb":
+			// CRS 阶段已经完整返回：changed=false 仅表示 live 已一致，绝非失败。
+			// 包已按「CRS 落盘并保留版本记录」的半成功语义收敛，威胁面照常落盘。
+			result.FailedXdb = true
+		default:
+			// 未知错误形态保守维持旧文件/记录同批语义（整包拒绝）。
+			result.FailedCRS = payload.CRSTarGz != nil
+			result.FailedXdb = payload.Xdb != nil
+			threatBlocked = true
+		}
+		if threatBlocked {
+			// 逐源按失败记账（调用方回滚本地记录、reconcile 保留本地文件），
+			// 不落盘任何威胁名单。
+			for source := range payload.ThreatIplists {
+				result.FailedThreatSources = append(result.FailedThreatSources, source)
+				result.warn(c, action, "威胁库 "+source+" 未落盘：同步包校验被拒（拒绝整包）——该源保留本地文件与记录")
+			}
+			result.FilesLanded = crsChanged || xdbChanged
+			return result
+		}
+		if result.FailedCRS {
+			result.warn(c, action, "CRS 规则库文件落盘失败: "+bundleErr.Error()+"——CRS 版本记录已丢弃（记录与文件须同批）")
+		}
+		if result.FailedXdb {
+			result.warn(c, action, "IP2Region 数据文件未成功应用: "+bundleErr.Error()+"——IP2Region 版本记录已丢弃（记录与文件须同批）")
+		}
+		if component == "xdb" && crsChanged {
+			result.warn(c, action, "CRS 规则库文件已落盘并保留版本记录；仅 IP2Region 应用失败")
+		}
+	}
 	for source, data := range payload.ThreatIplists {
 		iplistPath := filepath.Join(services.WafDir(), "threat-"+source+".iplist")
 		fail := func(stage string, err error) {
@@ -492,33 +535,8 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 		}
 		threatLanded = true
 	}
-	crsChanged, xdbChanged, _, err := services.ApplyWafFileBundle(bundle)
 	result.FilesLanded = crsChanged || xdbChanged || threatLanded
-	if err != nil {
-		services.Logf("error", "lbbak 导入落盘规则库文件失败: %v", err)
-		component := services.WafFileApplyComponent(err)
-		switch component {
-		case "crs":
-			// CRS 阶段失败时 XDB 尚未执行；两者记录都不能指向备份版本。
-			result.FailedCRS = payload.CRSTarGz != nil
-			result.FailedXdb = payload.Xdb != nil
-		case "xdb":
-			// CRS 阶段已经完整返回：changed=false 仅表示 live 已一致，绝非失败。
-			result.FailedXdb = true
-		default:
-			// 未知错误形态保守维持旧文件/记录同批语义。
-			result.FailedCRS = payload.CRSTarGz != nil
-			result.FailedXdb = payload.Xdb != nil
-		}
-		if result.FailedCRS {
-			result.warn(c, action, "CRS 规则库文件落盘失败: "+err.Error()+"——CRS 版本记录已丢弃（记录与文件须同批）")
-		}
-		if result.FailedXdb {
-			result.warn(c, action, "IP2Region 数据文件未成功应用: "+err.Error()+"——IP2Region 版本记录已丢弃（记录与文件须同批）")
-		}
-		if component == "xdb" && crsChanged {
-			result.warn(c, action, "CRS 规则库文件已落盘并保留版本记录；仅 IP2Region 应用失败")
-		}
+	if bundleErr != nil {
 		return result
 	}
 	crsApplied := payload.CRSTarGz != nil

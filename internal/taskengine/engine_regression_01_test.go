@@ -58,8 +58,7 @@ func TestEngine_ScheduleFnPanicDoesNotKillLoop(t *testing.T) {
 // 且活动文件+归档的总行数守恒（并发交错会丢一代）。
 func TestAppendTaskLogLine_concurrentRotationKeepsAllLines(t *testing.T) {
 	dir := t.TempDir()
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 	// 200 行 × 50B = 10000B，阈值 6000B → 恰好一次滚动（余量不触发第二次）。
 	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 6000 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })

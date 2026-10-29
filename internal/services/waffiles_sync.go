@@ -144,6 +144,10 @@ func wafFileRefKey(ref *models.ClusterWafFilesRef) string {
 
 // materializeWafFileBundle 按引用读取文件内容（调用方必须已持 wafFileMu）。
 // 威胁文件按源名排序，保证同一引用的打包/序列化结果确定。
+// CRS/xdb/威胁面逐项做「实测内容哈希 == 引用声明哈希」复核：引用缓存 TTL
+// 窗口内的带外改写（等长同 mtime）会让缓存 ref 与实测字节跨代——不符的
+// 分量不得随旧 ref 声明发出（从端按哈希门整包拒绝到 TTL 到期），降级为
+// 不完整 bundle，由调用方回退全量构建自愈。
 func materializeWafFileBundle(ref *models.ClusterWafFilesRef) *WafFileBundle {
 	bundle := &WafFileBundle{
 		CRSVersion:   ref.CRSVersion,
@@ -153,12 +157,18 @@ func materializeWafFileBundle(ref *models.ClusterWafFilesRef) *WafFileBundle {
 	}
 	if ref.CRSSha256 != "" {
 		if data, _, err := tarGzDir(crsLiveDir); err == nil && len(data) > 0 {
-			bundle.CRSTarGz = data
+			sum := sha256.Sum256(data)
+			if hex.EncodeToString(sum[:]) == ref.CRSSha256 {
+				bundle.CRSTarGz = data
+			}
 		}
 	}
 	if ref.IP2RegionSha != "" {
 		if data, err := os.ReadFile(ip2regionLivePath); err == nil {
-			bundle.Xdb = data
+			sum := sha256.Sum256(data)
+			if hex.EncodeToString(sum[:]) == ref.IP2RegionSha {
+				bundle.Xdb = data
+			}
 		}
 	}
 	names := make([]string, 0, len(ref.ThreatSha256s))
@@ -174,9 +184,13 @@ func materializeWafFileBundle(ref *models.ClusterWafFilesRef) *WafFileBundle {
 		}
 		// 哈希直接对内存字节计算——避免二次读盘与 TOCTOU 窗口。
 		sum := sha256.Sum256(data)
+		encoded := hex.EncodeToString(sum[:])
+		if encoded != ref.ThreatSha256s[source] {
+			continue
+		}
 		bundle.ThreatFiles = append(bundle.ThreatFiles, models.ThreatFileEntry{
 			Name:    source,
-			Sha256:  hex.EncodeToString(sum[:]),
+			Sha256:  encoded,
 			Content: data,
 		})
 	}
@@ -208,6 +222,18 @@ func buildWafFileBundleLocked() (*WafFileBundle, string, *models.ClusterWafFiles
 		return wafFileBundleCache.bundle, key, ref
 	}
 	bundle := materializeWafFileBundle(ref)
+	if !wafFileBundleComplete(ref, bundle) && wafFileRefCache.valid {
+		// 不完整：可能是瞬时读失败，也可能是 TTL 窗口内带外改写让缓存 ref
+		// 与实测字节跨代（等长同 mtime 不变签名）。作废引用缓存并按真实
+		// 内容重建一次：跨代形态当轮即自愈（响应与新引用一致），真实读失败
+		// 照旧按不完整 bundle 返回、不缓存。
+		invalidateWafFileRefCache()
+		if rebuilt := buildWafFileRefLocked(); rebuilt != nil {
+			ref = rebuilt
+			key = wafFileRefKey(ref)
+			bundle = materializeWafFileBundle(ref)
+		}
+	}
 	if wafFileBundleComplete(ref, bundle) {
 		wafFileBundleCache.key = key
 		wafFileBundleCache.bundle = bundle
@@ -387,7 +413,13 @@ func wafRefStatSignature() (string, error) {
 			}
 			if info.IsDir() {
 				// 目录新增/删除（例如 VERSION 被建成目录→分量读失败）必须改变
-				// 签名，否则会命中旧引用、把显式读失败静默掩盖。
+				// 签名，否则会命中旧引用、把显式读失败静默掩盖。但瞬态目录
+				// （.staging/.sync-in 等命中 skipWafSyncTransient 者）不进打包集
+				// （writeTarEntries 剔除瞬态路径），其条目不得入签名——同步/
+				// 导入暂存目录否则会让 TTL 内稳态轮反复触发无谓全树重建。
+				if rel != "." && skipWafSyncTransient(rel) {
+					return filepath.SkipDir
+				}
 				fmt.Fprintf(h, "d\x00%s\x00%s\n", rel, info.Mode())
 				return nil
 			}

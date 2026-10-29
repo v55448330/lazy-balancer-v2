@@ -207,11 +207,14 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     .filter((name) => name.endsWith('.spec.ts'))
     .sort()
   assert.ok(specFiles.length > 80, `扫描面过小（tests 下仅 ${specFiles.length} 个 spec）——递归枚举失效`)
-  const rawImport = /import \{[^}]*\b(?:source|repoSource)\b[^}]*\} from '\.\/_helpers\.ts'/
-  // 合成自检：判据必须能识别裸导入形态、且不误伤 code/repoCode 导入。
+  const rawImport = /import \{[^}]*\b(?:source|repoSource)\b[^}]*\} from '\.\/_helpers\.ts'|import \* as [A-Za-z_$][\w$]* from '\.\/_helpers\.ts'/
+  // 合成自检：判据必须能识别裸导入形态（含命名空间导入——`import * as x` 后
+  // 仍可 `x.source(...)` 绕过本守卫）、且不误伤 code/repoCode 导入。
   assert.ok(rawImport.test("import { source } from './_helpers.ts'"), '判据抓不到裸 source 导入')
   assert.ok(rawImport.test("import { code, repoSource } from './_helpers.ts'"), '判据抓不到裸 repoSource 导入')
+  assert.ok(rawImport.test("import * as rawHelpers from './_helpers.ts'"), '判据抓不到命名空间导入形态')
   assert.doesNotMatch("import { code, repoCode } from './_helpers.ts'", rawImport, '判据误伤剥注释视图导入')
+  assert.doesNotMatch("import * as helpers from '../src/utils/hasOwn.ts'", rawImport, '判据误伤非 _helpers 的命名空间导入')
   const readSpec = (name: string): string => readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
   const allowedRaw = new Set([
     // 全体断言为模板文案/文档注释钉（用例名标注「文档钉」）；代码存在性断言

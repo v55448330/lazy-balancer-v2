@@ -19,11 +19,11 @@ import {
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { hasOwn } from '@/utils/hasOwn'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
-import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, buildCountryCellGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, polysBounds, trafficOriginForCountry } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry, type ProvinceDotRow } from '@/utils/threatShared'
 import type { Centroid } from '@/utils/countryCentroids'
 import { loadAdmin1Tables } from '@/utils/admin1Loader'
 import { FLOW_ATTACK_COLOR as ATTACK_COLOR, FLOW_NORMAL_COLOR as NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
-import { planFlowArcs } from '@/utils/threatFlowRules'
+import { planTrafficArcs } from '@/utils/threatFlowRules'
 
 // 威胁大屏 2D 平面地图引擎（v16 终版：Canvas 2D，参考 Radware/Check Point 平面风格）。
 //
@@ -277,8 +277,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   // 保持「点径/间距」与原地图一致，避免点互相粘连成色块。
   const DOT_R = 0.18
   const DOT_LAND = SHARED_DOT_LAND
-  // 国家 bbox 预筛缓存（外包框由共享网格构建一并算出，hover/点击与点阵共用）
-  const sharedCountryGrid = buildCountryCellGrid(THREAT_COUNTRIES)
+  // 国家 bbox 预筛缓存（外包框由共享网格构建一并算出，hover/点击与点阵共用；
+  // 懒初始化单例与地球引擎共享同一份构建产物）
+  const sharedCountryGrid = threatCountryGrid()
   const countryBboxes = THREAT_COUNTRIES.map((c, i) => ({ name: c.name, ...sharedCountryGrid.bounds[i], polys: c.polys }))
   const bboxOf = (i: number): { minLon: number; maxLon: number; minLat: number; maxLat: number } => countryBboxes[i]
 
@@ -310,37 +311,26 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     worldDots = dots
   }
 
-  /** 下钻省点阵（进入下钻时重建；省级命中按 short 名染色）。 */
+  /** 省点阵行迭代器：与世界层同一 Mercator 投影 y 步长/错列，避免下钻后密度
+   *  随纬度变化。这是与共享主体默认「等纬度步长」（地球引擎口径）的有意分歧
+   *  点，经 rows 参数注入 provinceDotGrid。 */
+  const mercatorDotRows = (minLat: number, maxLat: number): readonly ProvinceDotRow[] => {
+    const rows: ProvinceDotRow[] = []
+    let pRow = 0
+    for (let y = latToY(maxLat); y <= latToY(minLat); y += DOT_STEP, pRow++) {
+      rows.push({ lat: yToLat(y), lonOffset: pRow % 2 === 1 ? DOT_STEP / 2 : 0 })
+    }
+    return rows
+  }
+
+  /** 下钻省点阵（进入下钻时重建；省级命中按 short 名染色）。布点主体
+   *  （省级 bbox 预筛 + 射线命中 + 首中省取色键）单源
+   *  threatShared.provinceDotGrid——原与 provinceDotGrid 同构成对维护。 */
   function buildProvinceDots(): void {
     if (!drillProvinceData.length) { provinceDots = null; return }
-    let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90
-    for (const pv of drillProvinceData) {
-      const b = polysBounds(pv.polys)
-      minLon = Math.min(minLon, b.minLon); maxLon = Math.max(maxLon, b.maxLon)
-      minLat = Math.min(minLat, b.minLat); maxLat = Math.max(maxLat, b.maxLat)
-    }
-    const dots: Dot[] = []
-    // 省级 bbox 预筛：34 省 × 全网格点直接 pointInPolys 会在首次下钻产生
-    // 明显长任务；先按 bbox 排除绝大多数省份，再对候选做射线判定。
-    const provinceBounds = drillProvinceData.map((pv) => polysBounds(pv.polys))
-    let pRow = 0
-    // 与世界层同一 Mercator 投影 y 步长/错列，避免下钻后密度随纬度变化。
-    const pTopY = latToY(maxLat)
-    const pBottomY = latToY(minLat)
-    for (let y = pTopY; y <= pBottomY; y += DOT_STEP, pRow++) {
-      const lat = yToLat(y)
-      const lonOffset = pRow % 2 === 1 ? DOT_STEP / 2 : 0
-      for (let lon = minLon + lonOffset; lon <= maxLon; lon += DOT_STEP) {
-        for (let pi = 0; pi < drillProvinceData.length; pi++) {
-          const b = provinceBounds[pi]
-          if (lon < b.minLon || lon > b.maxLon || lat < b.minLat || lat > b.maxLat) continue
-          if (!pointInPolys(lon, lat, drillProvinceData[pi].polys)) continue
-          dots.push({ lon, lat, key: shortName(drillProvinceData[pi].name) })
-          break
-        }
-      }
-    }
-    provinceDots = dots
+    provinceDots = provinceDotGrid(drillProvinceData, DOT_STEP, mercatorDotRows).map(
+      (dot) => ({ lon: dot.lng, lat: dot.lat, key: dot.key }),
+    )
   }
 
   // 世界点阵按国家缓存的 Path2D：点坐标与画布缩放无关，路径只需构建一次。
@@ -1059,6 +1049,12 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   }
 
   const tick = (): void => {
+    // dispose 后一帧可能仍在队（cancelAnimationFrame 撤不掉 dispose 后由
+    // startLoop 重排的回调）：不查 disposed 就自我续排，销毁后的 rAF 链永不停止。
+    if (disposed) {
+      rafId = 0
+      return
+    }
     rafId = requestAnimationFrame(tick)
     const now = performance.now()
     const delta = Math.min(0.1, (now - lastTime) / 1000)
@@ -1134,6 +1130,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   }
 
   const startLoop = (): void => {
+    // dispose 后 setter（setTraffic 等）不得再排帧——tick 的 disposed 守卫只兜
+    // 已入队的那一帧，这里的短路才是第一道门。
+    if (disposed) return
     if (!rafId && !paused) {
       lastTime = performance.now()
       rafId = requestAnimationFrame(tick)
@@ -1218,9 +1217,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       if (paused) renderOnce()
     },
     setTraffic(entries: CountryHeat[]): void {
-      // 正常/攻击共用出弧计划：1-3 逐条、4-8 合并、>8 更粗；weight 决定线宽。
-      const plan = planFlowArcs(entries.filter((e) => e.count > 0).map((e) => ({ key: e.name, count: e.count, weight: e.count })))
-      for (const item of plan) {
+      // 正常/攻击共用出弧计划（threatFlowRules.planTrafficArcs 两引擎单源）：
+      // 1-3 逐条、4-8 合并、>8 更粗；weight 决定线宽。
+      for (const item of planTrafficArcs(entries)) {
         spawnArc(trafficOriginForCountry(item.key), true, item.weight, item.tier)
       }
       startLoop()

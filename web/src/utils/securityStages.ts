@@ -1314,7 +1314,13 @@ export const eventDetailRefIds = (
   otherPolicies: ReadonlyArray<{ ip_whitelist_refs?: string }>,
   scope?: EventDetailRefScope,
 ): number[] => {
-  const use = { ownerAcl: true, ownerTrust: true, otherTrust: true, ...scope }
+  // 逐项 `?? true`：spread 会把显式 `ownerAcl: undefined` 当「已提供」覆写掉
+  // 默认全集——省略语义必须只对「键缺席」成立。
+  const use = {
+    ownerAcl: scope?.ownerAcl ?? true,
+    ownerTrust: scope?.ownerTrust ?? true,
+    otherTrust: scope?.otherTrust ?? true,
+  }
   const ids: number[] = []
   const seen = new Set<number>()
   const add = (raw: string | undefined): void => {

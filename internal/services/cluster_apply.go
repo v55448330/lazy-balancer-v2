@@ -551,8 +551,8 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 重启判定遇读失败只跳过：把降级默认值 {selfsigned, disabled} 当真值比对，
 	// 运行态为 upload 证书时一次瞬时读失败会被误判「配置变化」触发进程重启
 	// （重启抖动），反向则可能漏判真实变化。读失败仅 warn 并跳过本轮判定：
-	// 不重启、不改状态。
-	if adminTLS, tlsErr := LoadAdminTLSConfigE(); tlsErr != nil {
+	// 不重启、不改状态。读服务句柄（多库形态不得回落包级 db.DB）。
+	if adminTLS, tlsErr := LoadAdminTLSConfigEFrom(s.db); tlsErr != nil {
 		Logf("warn", "集群同步后读取 Admin TLS 配置失败，跳过重启判定（不触发重启）: %v", tlsErr)
 	} else if RuntimeAdminTLSChanged(adminTLS) {
 		if RestartRequiredHandlerInstalled() {
@@ -1902,14 +1902,18 @@ func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule)
 	// 生成式子路由 @id 命名空间保留（与 v2 导入同门）：主端快照若含
 	// <规则ID>_path_<n>/_geoip/_redirect 形态的第二条规则，从端渲染同样会被
 	// Caddy 以 duplicate ID 拒绝；在落库前点名，避免整节应用失败只留下引擎级
-	// 配置路径错误。
-	ruleIDs := make([]string, 0, len(rules))
+	// 配置路径错误。批量面按「反向剥离后缀→父 ID 查表」O(n) 判定（逐规则对
+	// 全量 id 列表扫描是 O(n²)；单点判定仍走 RuleIDNamespaceConflict，后缀
+	// 语义单源于 generatedRouteParentID）。
+	idSet := make(map[string]struct{}, len(rules))
 	for _, rule := range rules {
-		ruleIDs = append(ruleIDs, rule.CaddyID)
+		idSet[rule.CaddyID] = struct{}{}
 	}
 	for _, rule := range rules {
-		if conflict := RuleIDNamespaceConflict(rule.CaddyID, ruleIDs); conflict != "" {
-			return fmt.Errorf("快照规则 %q 与规则 %q 的子路由 @id 命名空间冲突", rule.CaddyID, conflict)
+		if parent := generatedRouteParentID(rule.CaddyID); parent != "" {
+			if _, ok := idSet[parent]; ok {
+				return fmt.Errorf("快照规则 %q 与规则 %q 的子路由 @id 命名空间冲突", rule.CaddyID, parent)
+			}
 		}
 	}
 	// INSERT 列清单与值投影走唯一事实源（rule_write_columns.go），

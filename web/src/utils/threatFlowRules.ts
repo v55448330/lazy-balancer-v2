@@ -170,6 +170,23 @@ export function planFlowArcs(
   return plan
 }
 
+/**
+ * 大屏 setTraffic 的 CountryHeat→出弧计划（两引擎单源）：count≤0 过滤 +
+ * key/weight 同形映射。原地图/地球 setTraffic 各内联同一 filter/map 三行，
+ * 口径调整（如过滤规则）时漏改一端即两引擎弧线数量分叉。
+ */
+export function planTrafficArcs(
+  entries: readonly { name: string; count: number }[],
+  maxArcs = FLOW_MAX_ARCS_PER_FLUSH,
+): FlowArcPlan[] {
+  return planFlowArcs(
+    entries
+      .filter((entry) => entry.count > 0)
+      .map((entry) => ({ key: entry.name, count: entry.count, weight: entry.count })),
+    maxArcs,
+  )
+}
+
 interface FlowEventPlanInput {
   country?: string
   province?: string

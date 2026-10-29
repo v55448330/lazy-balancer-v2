@@ -28,10 +28,15 @@ test('downloaded 锁提示与启停/删除禁用口径一致', () => {
 
 test('规则状态开关的禁用原因复用证书任务锁提示', () => {
   const statusColumn = section(rules, '<el-table-column label="状态"', '</el-table-column>')
-  const tooltip = section(statusColumn, '<el-tooltip', '</el-tooltip>')
-  assert.match(tooltip, /:disabled="!isReadOnly && !isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) && !ruleTogglePending\[row\.caddy_id\]"/)
-  assert.match(tooltip, /:content="isReadOnly \? readOnlyMessage : ruleTogglePending\[row\.caddy_id\] \? '规则状态更新中，请稍候' : certJobLockTooltip\(row as Rule, '证书申请中，请等待完成或失败后再启停规则'\)"/)
-  assert.match(statusColumn, /<el-switch[\s\S]*?:disabled="isReadOnly \|\| isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) \|\| ruleTogglePending\[row\.caddy_id\]"/)
+  // 长属性钉改为「定位开标签 + 逐属性判定」：属性书写顺序调换、新增属性都
+  // 仍绿，删属性/改判据即红；整串切片钉会把属性序也钉死。
+  const tooltipTag = openTags(statusColumn, 'el-tooltip')[0]
+  assert.ok(tooltipTag !== undefined, '状态列必须用 el-tooltip 承载禁用原因')
+  assert.match(tooltipTag, /:disabled="!isReadOnly && !isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) && !ruleTogglePending\[row\.caddy_id\]"/, 'tooltip 禁用判据缺失')
+  assert.match(tooltipTag, /:content="isReadOnly \? readOnlyMessage : ruleTogglePending\[row\.caddy_id\] \? '规则状态更新中，请稍候' : certJobLockTooltip\(row as Rule, '证书申请中，请等待完成或失败后再启停规则'\)"/, 'tooltip 文案必须复用证书任务锁提示')
+  const switchTag = openTags(statusColumn, 'el-switch')[0]
+  assert.ok(switchTag !== undefined, '状态开关缺失')
+  assert.match(switchTag, /:disabled="isReadOnly \|\| isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) \|\| ruleTogglePending\[row\.caddy_id\]"/, '开关禁用必须三门槛同判')
 })
 
 test('旧请求失败不得覆盖新请求的错误状态', () => {

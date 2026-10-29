@@ -51,8 +51,10 @@ const MIN_PREFIX_BITS_MESSAGE = `最小允许 /${TRUSTED_PROXY_MIN_PREFIX_BITS.i
 /**
  * 单条目校验：返回空串=通过，否则为可直接展示的原因。
  * 裸 IP 视为 /32 或 /128，宽度恒合法。
+ * 模块内实现细节：对外只暴露整列入口（trustedProxyRangesError /
+ * trustedProxyReferencedRangesError）——绕过条数门直连单条校验的面不该存在。
  */
-export const trustedProxyRangeError = (rawValue: string): string => {
+const trustedProxyRangeError = (rawValue: string): string => {
   const value = rawValue.trim()
   if (!value) return '不能为空'
   if (!isValidCidr(value)) return '不是合法的 IP 或 CIDR'
@@ -96,8 +98,9 @@ export const trustedProxyRangesError = (values: readonly string[]): string => {
 /**
  * 单个请求头校验：返回空串=通过。后端按原始值匹配字符集（不去空格），
  * 故这里同样不做 trim——带尾随空格的输入在后端必然 400。
+ * 模块内实现细节：对外只暴露整组入口 trustedProxyHeadersError。
  */
-export const trustedProxyHeaderError = (rawValue: string): string =>
+const trustedProxyHeaderError = (rawValue: string): string =>
   TRUSTED_PROXY_HEADER_PATTERN.test(rawValue) ? '' : '非法请求头名（仅允许字母/数字/连字符，1-64 字符）'
 
 /**
@@ -220,8 +223,9 @@ const mappedV4Prefix = (address: string, bits: number): { readonly network: stri
  * 与后端 `trustedProxyPrefixKeys` 的去重口径一致（否则前端并集会虚高，
  * 把后端判为合法的 2000 条配置硬拦）。
  * 无法解析返回 null（非法形态由网段判据逐条点名，这里不计入并集）。
+ * 模块内实现细节：键形态不对外承诺，经 trustedProxyExpansion 间接断言。
  */
-export const trustedProxyPrefixKey = (rawValue: string): string | null => {
+const trustedProxyPrefixKey = (rawValue: string): string | null => {
   const value = rawValue.trim()
   if (!value) return null
   const slash = value.indexOf('/')

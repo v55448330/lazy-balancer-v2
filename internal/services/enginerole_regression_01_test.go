@@ -72,18 +72,14 @@ func TestPromote_flipsEngineRoleWithManagersNil(t *testing.T) {
 	}
 }
 
+// roleLifecycleProbe 是 lifecycleRecorder 的计数视图：沿用内嵌计数断言
+// （acmeStarts/syncStarts），不再维护第二套回调实现。
 type roleLifecycleProbe struct {
-	acmeStarts atomic.Int32
-	syncStarts atomic.Int32
+	lifecycleRecorder
 }
 
 // wireClusterLifecycleEngineForTest 在当前 DB 上装配证书/同步 daemon，
 // 不重置测试数据；角色切换只能经引擎调用生命周期 hook。
-
-func (p *roleLifecycleProbe) StartACME() { p.acmeStarts.Add(1) }
-func (p *roleLifecycleProbe) StopACME()  {}
-func (p *roleLifecycleProbe) StartSync() { p.syncStarts.Add(1) }
-func (p *roleLifecycleProbe) StopSync()  {}
 
 func TestPromote_lifecycleStartsOnlyThroughEngine(t *testing.T) {
 	// Given：从节点态引擎 + 同时接到 ClusterService 与 daemon hook 的生命周期探针。

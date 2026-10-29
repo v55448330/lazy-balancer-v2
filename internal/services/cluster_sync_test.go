@@ -60,16 +60,21 @@ func TestVerifySnapshotConsistency_allows_zero_upstream_rule_with_warning(t *tes
 	}
 }
 
+// syncDrainLifecycle 在 lifecycleRecorder 基类上注入真实行为：StartSync 拉起
+// 同步、StopSync 先落排空观察点再停止（stopOnce 保证只关一次）。
 type syncDrainLifecycle struct {
+	lifecycleRecorder
 	sync        *SyncService
 	stopEntered chan struct{}
 	stopOnce    sync.Once
 }
 
-func (l *syncDrainLifecycle) StartACME() {}
-func (l *syncDrainLifecycle) StopACME()  {}
-func (l *syncDrainLifecycle) StartSync() { l.sync.Start() }
+func (l *syncDrainLifecycle) StartSync() {
+	l.lifecycleRecorder.StartSync()
+	l.sync.Start()
+}
 func (l *syncDrainLifecycle) StopSync() {
+	l.lifecycleRecorder.StopSync()
 	l.stopOnce.Do(func() { close(l.stopEntered) })
 	l.sync.Stop()
 }
@@ -86,12 +91,17 @@ func waitSyncTest[T any](t *testing.T, ch <-chan T) T {
 	}
 }
 
-func waitSyncBarrier(ch <-chan struct{}) {
+// waitSyncBarrier 等待并发确定性同步点：超时必须 Fatal（与 waitSyncTest 的
+// 失败口径一致）——静默返回会把「对端未到达同步点」降级为无守卫的竞态通过，
+// 用例在错误交错下假绿。
+func waitSyncBarrier(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
 	case <-ch:
 	case <-timer.C:
+		t.Fatal("timed out waiting for synchronization barrier")
 	}
 }
 
@@ -474,15 +484,28 @@ func TestSyncService_do_repeatedRequestsDoNotContinuouslyIncreaseGoroutines(t *t
 		}
 	}
 
+	// 全进程 goroutine 计数阈值断言在同一进程内不可靠（其它用例遗留的定时器/
+	// 空闲连接 goroutine 会被计入波动）。改为传输层定向差分：泄漏形态=每请求
+	// 一条不复用的连接（body 未关闭/连接未复用），其标志是
+	// persistConn.readLoop goroutine 随请求数线性累积——预热后增量必须为 0。
+	countReadLoops := func() int {
+		t.Helper()
+		buf := make([]byte, 2<<20)
+		n := runtime.Stack(buf, true)
+		return strings.Count(string(buf[:n]), "net/http.(*persistConn).readLoop")
+	}
+
 	request()
-	baseline := runtime.NumGoroutine()
+	request()
+	baseline := countReadLoops()
 	for range 60 {
 		request()
 	}
 	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
-	if increase := runtime.NumGoroutine() - baseline; increase > 15 {
-		t.Fatalf("goroutines increased by %d after repeated requests", increase)
+	// 连接回收是异步的：轮询等待增量归零，而不是钉固定睡眠窗。
+	waitForCond(t, 2*time.Second, func() bool { return countReadLoops() <= baseline })
+	if leaked := countReadLoops() - baseline; leaked > 0 {
+		t.Fatalf("transport read loops increased by %d after repeated requests（每请求泄漏一条连接 goroutine）", leaked)
 	}
 }
 
@@ -504,7 +527,7 @@ func TestSyncService_Pull_applies_old_response_after_new_snapshot_applied(t *tes
 		if number == 1 {
 			version = 1
 			close(oldRequestEntered)
-			waitSyncBarrier(releaseOldResponse)
+			waitSyncBarrier(t, releaseOldResponse)
 		}
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(version, token)})
@@ -1064,7 +1087,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	var beforeApplyOnce sync.Once
 	syncService.beforeApplySnapshot = func() {
 		beforeApplyOnce.Do(func() { close(beforeApply) })
-		waitSyncBarrier(releaseApply)
+		waitSyncBarrier(t, releaseApply)
 	}
 	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
 	cluster := NewClusterService(database, "")
@@ -1111,7 +1134,7 @@ func TestSyncService_Stop_returns_when_run_is_waiting_before_pull_admission(t *t
 	service := &SyncService{}
 	service.beforeBeginPull = func() {
 		close(beforeAdmission)
-		waitSyncBarrier(releaseAdmission)
+		waitSyncBarrier(t, releaseAdmission)
 	}
 	service.afterStopAdmission = func() { close(admissionStopped) }
 	service.runFn = func(ctx context.Context) {

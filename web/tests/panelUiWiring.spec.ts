@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, cssDeclarations, elementAt, member, openTags, section, stripComments, source } from './_helpers.ts'
+import { code, cssDeclarations, elementAt, enclosingDecl, member, openTags, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -15,11 +15,18 @@ test('当前密码错误在页面本地 toast，拦截器复用精确分类', ()
 
 test('注册弹框记录打开时节点模式，并在关闭时清空', () => {
   const text = code('src/views/settings/cluster/ClusterModeCard.vue')
-  // 两处打开路径（外部注册请求 / 手动切换到从节点）都必须捕获打开时模式：
-  // 删掉任一捕获后「首次注册 master→slave 自动关闭」永久失效，而纯函数
-  // clusterRegistration.spec 仍全绿——这里钉的是接线。
-  const captures = text.match(/registrationOriginMode = props\.status\?\.node_mode \?\? null/g) ?? []
-  assert.equal(captures.length, 2, '两处打开路径都必须捕获打开时节点模式')
+  // 两处打开路径（外部注册请求 watch / 手动切换到从节点）各自绑定捕获：
+  // 计数式 `length === 2` 连「两处都在同一路径」都察觉不了，位置语义只活在
+  // 注释里；名册式缺一处即点名。删掉任一捕获后「首次注册 master→slave 自动
+  // 关闭」永久失效，而纯函数 clusterRegistration.spec 仍全绿——这里钉的是接线。
+  const captureSource = 'registrationOriginMode = props\\.status\\?\\.node_mode \\?\\? null'
+  const requestWatchAt = text.indexOf('() => props.registrationRequest,')
+  const requestOpenAt = text.indexOf('registrationOpen.value = true', requestWatchAt)
+  assert.ok(requestWatchAt > 0 && requestOpenAt > requestWatchAt, '外部注册请求 watch 缺失')
+  assert.ok(new RegExp(captureSource).test(text.slice(requestWatchAt, requestOpenAt)), '外部注册请求路径必须捕获打开时节点模式')
+  const handleMode = member(text, 'const handleModeChange =')
+  assert.match(handleMode, new RegExp(captureSource), '手动切换路径必须捕获打开时节点模式')
+  assert.equal([...text.matchAll(new RegExp(captureSource, 'g'))].length, 2, '不得出现名册外的第三条捕获路径')
   // 关闭清空 + 捕获值参与关闭判定
   const closeWatch = section(text, 'watch(registrationOpen, (open) => {', '\n})')
   assert.match(closeWatch, /if \(!open\) \{/)
@@ -55,8 +62,17 @@ test('Dashboard 所有落地路径统一重建逐规则失败映射', () => {
   }
   assert.doesNotMatch(text, /if \(!caddyMetricsUnavailable\.value\) \{\s*ruleMetricsUnavailable/)
   // 「已落地」与「可用」分离：dashboard 未到达前不得判定采集失败；
-  // 成功与失败两条落地路径都要置 landed，/rules 重建必须同时看 landed+可用。
-  assert.equal([...text.matchAll(/dashboardMetricsLanded\.value = true/g)].length, 2, 'dashboard 成功/失败两条路径都必须置「已落地」')
+  // 成功与失败两条落地路径都要置 landed。两处同在 fetchAllData 内，函数名册
+  // 区分不了——按 then/catch 链分支绑定：置位点必须出现在两个分支各自之内
+  // （纯计数连「两处都在同一分支」都察觉不了）。
+  const dashboardChain = member(text, 'const fetchAllData =')
+  // fetchAllData 串联多个请求（traffic 在前）：then 锚定仪表盘指标请求自身。
+  const requestAt = dashboardChain.indexOf("request.get<APIResponse<DashboardMetricsResponse>>('/metrics/dashboard'")
+  const thenAt = dashboardChain.indexOf('.then((res) => {', requestAt)
+  const catchAt = dashboardChain.indexOf('.catch(() => {', thenAt)
+  assert.ok(requestAt > 0 && thenAt > requestAt && catchAt > thenAt, '仪表盘请求 then/catch 链缺失')
+  assert.ok(dashboardChain.slice(thenAt, catchAt).includes('dashboardMetricsLanded.value = true'), '成功路径必须置「已落地」')
+  assert.ok(dashboardChain.slice(catchAt).includes('dashboardMetricsLanded.value = true'), '失败路径必须置「已落地」')
   assert.match(text, /dashboardMetricsLanded\.value && !caddyMetricsUnavailable\.value/,
     '/rules 重建必须用「已落地 && 可用」，避免首轮误标采集失败')
 })
@@ -333,16 +349,8 @@ test('大屏光流可用性位/恢复基线/重装复位（L8 前端三项）', 
   assert.match(text, /interval: ATTACK_FLOW_POLL_MS, onError: \(\) => \{ attackFlowError\.value = true \}/)
   assert.match(text, /interval: 1000, onError: \(\) => \{ flowError\.value = true \}/)
   // 恢复首轮重建基线：手动暂停恢复 + 可见性恢复两处（原仅「不可用」一处）。
-  // 名册式断言（每个命中反推所在函数）——计数式 `>= 3` 无法定位「三处中少一处」。
-  const enclosingDecl = (sourceText: string, index: number): string => {
-    const lines = sourceText.slice(0, index).split('\n')
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      // 只认顶层声明（列 0）：嵌套 `const res = …` 不是站点归属。
-      const hit = lines[i].match(/^(?:const|function)\s+([A-Za-z_$][\w$]*)/)
-      if (hit) return hit[1]
-    }
-    return '<module>'
-  }
+  // 名册式断言（每个命中反推所在函数，helper 见 _helpers.enclosingDecl）——
+  // 计数式 `>= 3` 无法定位「三处中少一处」。
   const baselineSites = [...text.matchAll(/trafficBaseline = null/g)]
     .map((match) => enclosingDecl(text, match.index ?? 0))
     .sort()
@@ -481,9 +489,14 @@ test('两引擎共享国家点阵空间网格', () => {
   const shared = code('src/utils/threatShared.ts')
   assert.match(shared, /export const countryGridCell = /)
   assert.match(shared, /export function buildCountryCellGrid\(/)
+  // 网格构建收敛为懒初始化单例（threatCountryGrid）：两引擎每实例各建一份
+  // 是同一份国界的重复扫描；单例同时供相机高度取 bbox（flyAltitudeFor）。
+  assert.match(shared, /export function threatCountryGrid\(/)
+  assert.match(shared, /threatCountryGridCache \?\?= buildCountryCellGrid\(THREAT_COUNTRIES\)/)
   for (const file of ['src/utils/threatScene.ts', 'src/utils/threatGlobe.ts']) {
     const text = code(file)
-    assert.match(text, /buildCountryCellGrid\(THREAT_COUNTRIES\)/, `${file} 必须走共享网格`)
+    assert.match(text, /threatCountryGrid\(\)/, `${file} 必须走共享网格单例`)
+    assert.doesNotMatch(text, /buildCountryCellGrid\(/, `${file} 不得自建第二份网格`)
     assert.match(text, /\.get\(countryGridCell\(lon, lat\)\) \?\? \[\]/, `${file} 候选必须按共享网格单元取`)
     assert.doesNotMatch(text, /for \(let ci = 0; ci < THREAT_COUNTRIES\.length; ci\+\+\) \{\n\s+const b = /, `${file} 不得逐点全表扫描`)
   }

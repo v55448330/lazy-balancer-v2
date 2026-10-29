@@ -32,7 +32,7 @@ import {
 import { ADMIN1_PROVINCES } from '../src/utils/admin1Provinces.ts'
 import { CHINA_PROVINCES } from '../src/utils/chinaProvinces.ts'
 import { WORLD_COUNTRIES } from '../src/utils/worldBorders.ts'
-import { code, stripComments } from './_helpers.ts'
+import { code, member, stripComments } from './_helpers.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -457,6 +457,19 @@ test('⑤b 合成跨日界线环：principalBounds 的 ±180 unwrap 分支真正
   // 取景中心落在 unwrap 窗内（180±10），不得被甩到 0 附近的对侧
   assert.equal((b.minLon + b.maxLon) / 2, 180)
 })
+test('2D 引擎 dispose 后不再排帧（tick/startLoop 双守卫）', () => {
+  const src = code('src/utils/threatScene.ts')
+  // tick 首行必须先查 disposed 再 requestAnimationFrame：dispose 后仍可能有一帧
+  // 已入队（cancelAnimationFrame 只撤已排队回调，撤不掉 dispose 后 startLoop 的
+  // 重排）——无守卫时 tick 自我续排，引擎销毁后 rAF 链永不停止。
+  const tick = member(src, 'const tick = (): void => {')
+  assert.match(tick, /^[\s\S]*?\{\s*if \(disposed\) \{\s*rafId = 0\s*return\s*\}/, 'tick 首行必须先查 disposed 并清 rafId，再排下一帧')
+  // startLoop 是 dispose 后唯一能重新入队 tick 的入口（setTraffic/setPaused 等
+  // 都经它），同样必须带 disposed 短路。
+  const startLoop = member(src, 'const startLoop = (): void => {')
+  assert.match(startLoop, /if \(disposed\) return/, 'startLoop 在 dispose 后必须直接短路')
+})
+
 test('2D 光流池满时拒绝新弧线，不淘汰已开始动画', () => {
   const src = code('src/utils/threatScene.ts')
   const start = src.indexOf('function spawnArc(')

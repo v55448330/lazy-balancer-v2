@@ -302,9 +302,12 @@ func ThreatScreenAttackFlowSnapshot(since uint64, limit int) ([]ThreatScreenAtta
 			start = len(threatScreenAttackFlowEvents) - limit
 		}
 	} else {
-		for start < len(threatScreenAttackFlowEvents) && threatScreenAttackFlowEvents[start].Seq <= since {
-			start++
-		}
+		// 环按 Seq 严格递增（与 threatScreenAttackFlowIndexLocked 同一口径）：
+		// 首个 Seq > since 的下标即 since 游标之后的起点，与逐条线性推进
+		// 等价，避免洪峰轮上的 O(n) 前缀扫描。
+		start = sort.Search(len(threatScreenAttackFlowEvents), func(i int) bool {
+			return threatScreenAttackFlowEvents[i].Seq > since
+		})
 	}
 	for _, ev := range threatScreenAttackFlowEvents[start:] {
 		if len(out) >= limit {

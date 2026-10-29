@@ -354,6 +354,63 @@ func TestMasterServingRound_lagWarnsAfterPersistence(t *testing.T) {
 	}
 }
 
+// 滞后→离线数轮→恢复仍滞后：离线分支必须清滞后计时窗（lagSince）与已告警位
+// （lagAlerted）——否则恢复后沿用离线前旧窗，「持续超过 5 分钟」把离线期计入
+// 滞后时长（文案失真），且已告警位不清会让恢复后的新一轮滞后永不再告警。
+func TestMasterServingRound_lagWindowResetsAfterOffline(t *testing.T) {
+	newServingTestEnv(t)
+	nodeID := seedServingNode(t, "edge-d", servingBase.Add(-10*time.Second).UTC().Format("2006-01-02 15:04:05"), 3, 3600)
+	// cluster_version=7 > 已应用 3：在线即滞后（阈值=max(2×3600,120s)=7200s）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET cluster_version=7 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec(`UPDATE global_config SET cluster_version=0 WHERE id=1`) })
+	w := newServingWatch()
+	ctx := context.Background()
+	lagWarns := func() int {
+		count := 0
+		for _, line := range servingLines(readClusterSyncLog(t)) {
+			if strings.Contains(line, "edge-d") && strings.Contains(line, "版本滞后") {
+				count++
+			}
+		}
+		return count
+	}
+	// 滞后满 5 分钟窗（since 在首轮落下，累计到 300s 时）→ WARN 一次。
+	for i := 0; i <= 5; i++ {
+		masterSyncServingRound(ctx, servingBase.Add(time.Duration(i)*masterSyncInspectInterval), w)
+	}
+	if lagWarns() != 1 {
+		t.Fatalf("滞后满窗应恰好 WARN 一次, got %d", lagWarns())
+	}
+	// 离线数轮（last_seen 落后 3h > 7200s 阈值）：首轮 WARN 离线一次。
+	if _, err := db.DB.Exec(`UPDATE nodes SET last_seen=? WHERE id=?`,
+		servingBase.Add(-3*time.Hour).UTC().Format("2006-01-02 15:04:05"), nodeID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 6; i <= 8; i++ {
+		masterSyncServingRound(ctx, servingBase.Add(time.Duration(i)*masterSyncInspectInterval), w)
+	}
+	// 恢复上报且仍滞后：滞后窗必须重新计——首轮静默。
+	if _, err := db.DB.Exec(`UPDATE nodes SET last_seen=? WHERE id=?`,
+		servingBase.Add(9*masterSyncInspectInterval).Add(-10*time.Second).UTC().Format("2006-01-02 15:04:05"), nodeID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 9; i <= 11; i++ {
+		masterSyncServingRound(ctx, servingBase.Add(time.Duration(i)*masterSyncInspectInterval), w)
+	}
+	if got := lagWarns(); got != 1 {
+		t.Fatalf("离线恢复后未重新满 5 分钟不得再次告警, got %d", got)
+	}
+	// 重新满窗（累计再达 300s）→ 第二次 WARN。
+	for i := 12; i <= 14; i++ {
+		masterSyncServingRound(ctx, servingBase.Add(time.Duration(i)*masterSyncInspectInterval), w)
+	}
+	if got := lagWarns(); got != 2 {
+		t.Fatalf("恢复后重新满 5 分钟应再次 WARN, got %d: %v", got, servingLines(readClusterSyncLog(t)))
+	}
+}
+
 // 巡检错误：WARN 不中断（下轮继续）。
 func TestMasterServingRound_dbErrorWarnsAndContinues(t *testing.T) {
 	// 合成轮测试用轻量环境（不启动 daemon）——与 offlineWarnsOnce/cleanRoundsSilent 同格。

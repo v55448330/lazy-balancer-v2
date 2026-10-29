@@ -342,13 +342,18 @@ func TestEngine_DemoteCancelsInFlightScheduled(t *testing.T) {
 	}
 }
 
-func TestEngine_StopLoopSuppressesDueScheduled(t *testing.T) {
-	// Given：到期 Scheduled 已执行一次。
+// Given：到期 Scheduled 已执行一次（成功轮消费槽：schedDoneSlot=该槽）。
+// When：StopLoop 后再次 tick（槽与水位保持停止前形态）。
+// Then：不得复活派发，且停止前已消费的槽水位不被 tick 改写——tick 对已停
+// 任务零求值零改写（loopEnabled 门先于一切求值；同表驱动对照
+// TestEngine_ScheduledStoppedLoopDoesNotDispatch 钉「停止先于 tick」形态）。
+func TestEngine_StopLoopPreservesConsumedSlotWatermark(t *testing.T) {
 	e := newTestEngine(t)
+	pastSlot := time.Now().Add(-time.Hour)
 	started := make(chan struct{}, 1)
 	var runs atomic.Int32
 	e.Register(Descriptor{ID: "t-stop-sched", Family: "t", Name: "停止定时", Kind: KindScheduled, RunsOn: RoleAny,
-		NextSlotFn: func() time.Time { return time.Now().Add(-time.Hour) },
+		NextSlotFn: func() time.Time { return pastSlot },
 		Run: func(RunContext) error {
 			runs.Add(1)
 			select {
@@ -357,15 +362,33 @@ func TestEngine_StopLoopSuppressesDueScheduled(t *testing.T) {
 			}
 			return nil
 		}})
+	e.SetRole(true)
 	e.StartLoop("t-stop-sched")
 	e.tick()
 	<-started
+	// 等在途轮排空：executeRun 尾部回写消费水位（success+槽未推进→消费）。
+	waitForEngine(t, "首轮回写落定", 2*time.Second, func() bool { return e.inFlight.Load() == 0 })
+
 	// When：关闭调度后再次 tick（槽仍是过去值）。
 	e.StopLoop("t-stop-sched")
 	e.tick()
 	// Then：不得再触发（StopLoop 是 Scheduled 唯一停调入口）。
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("StopLoop 后 Run 次数=%d, want 1", got)
+	}
+	if loopEnabledOf(t, e, "t-stop-sched") {
+		t.Fatal("StopLoop 后调度开关仍为开")
+	}
+	// 已消费槽水位不被 tick 复活/改写：done=该槽、槽缓存原值保留。
+	slot, done, _, _ := scheduleStateOf(t, e, "t-stop-sched")
+	if !done.Equal(pastSlot) {
+		t.Fatalf("已消费槽水位 done=%v, want %v（tick 不得改写停止前的消费水位）", done, pastSlot)
+	}
+	if !slot.Equal(pastSlot) {
+		t.Fatalf("停止后 tick 改写了槽缓存 slot=%v, want %v", slot, pastSlot)
+	}
+	if got := countRuns(t, "t-stop-sched"); got != 1 {
+		t.Fatalf("StopLoop 后追加 task_runs=%d, want 0", got-1)
 	}
 }
 

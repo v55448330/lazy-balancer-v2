@@ -69,8 +69,9 @@ type TaskInfo struct {
 }
 
 // zeroRetryCooldown 是非证书任务行的统一下发值：引擎族没有证书重试冷却，
-// 0 = 「现在即可运行」。包级只读指针避免逐行分配。
-var zeroRetryCooldown = func() *int64 { seconds := int64(0); return &seconds }()
+// 0 = 「现在即可运行」。每行独立取址——包级共享 *int64 是跨行别名（任何
+// 一方经指针写值会同时改写全部任务行），行数在几十量级，逐行分配可忽略。
+func newZeroRetryCooldown() *int64 { seconds := int64(0); return &seconds }
 
 // TaskRunInfo 最近一次运行。
 type TaskRunInfo struct {
@@ -277,7 +278,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			RoleApplicable:        m.RoleApplicable,
 			ScheduleStoppedReason: m.ScheduleStoppedReason,
 			// 引擎族没有证书重试冷却概念：恒 0（现在即可运行），不得留 null。
-			RetryCooldownSeconds: zeroRetryCooldown,
+			RetryCooldownSeconds: newZeroRetryCooldown(),
 		}
 		// 节奏：循环=间隔，定时=排程槽，常驻=自管理，触发=手动
 		switch m.Kind {
@@ -368,7 +369,14 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		// role_applicable=false 与具体执行时刻并存，直接消费 /system/tasks 的
 		// 脚本会据此排程而实际永不投递。UI 另行遮蔽不构成 API 契约。
 		if m.RoleApplicable {
-			ti.NextRunAt = m.NextSlot
+			// 与下方 Periodic 兜底推算同口径：仅未来槽下发。fail-streak 停调/
+			// 槽消费后引擎槽缓存会残留过去槽，直通会让「下次执行」恒显已过去
+			// 的时刻（运维误判「该跑没跑」）；过去槽留空由 UI 显示「—」（与
+			// 「下次执行未知」同义）。m.NextSlot 由引擎按配置时区格式化，
+			// 解析用同一定位。
+			if slot, perr := time.ParseInLocation("2006-01-02 15:04:05", m.NextSlot, CurrentLocation()); perr == nil && slot.After(time.Now()) {
+				ti.NextRunAt = m.NextSlot
+			}
 		}
 		if m.ID == "cert-waiting-ca" && m.RoleApplicable && db.DB != nil {
 			// 仅展示「下次 CA 可用时间」，不参与 Periodic 调度；Descriptor 不再携带

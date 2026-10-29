@@ -100,9 +100,7 @@ func TestEngine_RearmLoopDoesNotReplaceRunningDaemon(t *testing.T) {
 
 	e.RearmLoop(id) // 无实参：仅重置节拍，不得栽重启意图
 
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
+	r := regOf(t, e, id)
 	r.mu.Lock()
 	pending := r.pendingRestart
 	r.mu.Unlock()
@@ -169,8 +167,7 @@ func TestEngine_RunAsyncRejectsDaemonKind(t *testing.T) {
 // Then 单行被截断到统一上限且保持合法 UTF-8（不得出现半个 rune）。
 func TestTaskLogAppendTruncatesOversizedLine(t *testing.T) {
 	dir := t.TempDir()
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 
 	huge := strings.Repeat("错", 100_000) // 300KB
 	taskLogAppend("t-long-line", huge)
@@ -199,8 +196,7 @@ func TestTaskLogAppendTruncatesOversizedLine(t *testing.T) {
 // Then 滚动判定按截断后长度计算——不得因未截断的巨行先滚动再写出超限活动文件。
 func TestTaskLogAppendOversizedLineDoesNotForceRotation(t *testing.T) {
 	dir := t.TempDir()
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 16 * 1024 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
@@ -228,8 +224,7 @@ func TestTaskLogAppendOversizedLineDoesNotForceRotation(t *testing.T) {
 // 独立行（按行解析的排障工具会把伪造行当成真实条目）。
 func TestTaskLogAppendKeepsOneLinePerEntry(t *testing.T) {
 	dir := t.TempDir()
-	SetLogDir(dir)
-	t.Cleanup(func() { SetLogDir("") })
+	setLogDirForTest(t, dir)
 
 	const forged = "[error] 伪造行 - 注入"
 	taskLogAppend("t-newline", "请求失败: "+forged+"\n继续\r\n结束\r")

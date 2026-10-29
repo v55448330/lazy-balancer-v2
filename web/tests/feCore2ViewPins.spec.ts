@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { cssDeclarations, cssRule, section, code } from './_helpers.ts'
+import { cssDeclarations, cssRule, elementSlice, openTags, section, code } from './_helpers.ts'
 
 test('状态码列超高时换行，不裁掉 Block badge', () => {
   const page = code('src/views/Dashboard.vue')
@@ -25,13 +25,30 @@ test('状态码列超高时换行，不裁掉 Block badge', () => {
   const block = cssRule(page, '.status-codes')
   assert.doesNotMatch(block, /nowrap/, 'nowrap 会让 flex-shrink:0 的 badge 溢出（含嵌套块）')
   assert.doesNotMatch(block, /overflow:\s*hidden/, 'overflow:hidden 静默裁掉末尾 badge（含嵌套块）')
-  assert.match(page, /class="status-code status-blocked"/, 'Block badge 必须仍在列内')
+  // 「badge 在列内」按元素配对取段：全页存在性断言在 badge 挪出状态码列
+  // （如挪到流量列）时仍假绿。
+  const codesTag = openTags(page, 'div').find((tag) => tag.includes('status-codes'))
+  assert.ok(codesTag !== undefined, '状态码列 div.status-codes 缺失')
+  const codesEl = elementSlice(page, page.indexOf(codesTag), 'div')
+  assert.match(codesEl, /class="status-code status-blocked"/, 'Block badge 必须仍在状态码列内')
 })
 
 test('24h 失败 KPI 不再挂只读锁图标', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
-  const label = section(page, '<div class="tm-kpi-num" :class="{ \'tm-kpi-bad\': fail24h > 0 }">', '</el-card>')
-  assert.doesNotMatch(label, /Lock/, '只读语义由操作列禁用与错误横幅承载，不在单个 KPI 上暗示数据受限')
+  // 整串字面属性作切片起点（`<div class="tm-kpi-num" :class="{ … }">`）在加/删
+  // 一个属性时就假红。按属性集定位 24h 失败数字块，再取其所在 KPI 卡整段
+  // （原缺陷的 Lock 挂在卡内 label div 上，只切数字 div 会漏掉回归点）。
+  const numTag = openTags(page, 'div').find((tag) => tag.includes('tm-kpi-num') && tag.includes('fail24h'))
+  assert.ok(numTag !== undefined, '24h 失败 KPI 数字块缺失')
+  // 四张 KPI 卡共用同一开标签字面串，不能按串回搜位置——取数字块之前最近
+  // 的 <el-card 开标签（elementAt 同款「offset 之前最近开启者」语义）。
+  const numAt = page.indexOf(numTag)
+  let cardAt = -1
+  for (const match of page.slice(0, numAt).matchAll(/<el-card\b/g)) cardAt = match.index
+  assert.ok(cardAt >= 0, '24h 失败 KPI 必须在 el-card 内')
+  const card = elementSlice(page, cardAt, 'el-card')
+  assert.match(card, /fail24h/, '切错 KPI 卡（必须含 24h 失败数字）')
+  assert.doesNotMatch(card, /Lock/, '只读语义由操作列禁用与错误横幅承载，不在单个 KPI 上暗示数据受限')
   assert.doesNotMatch(page, /tm-kpi-lock/, '配套样式属死样式')
   // Lock 仍被证书队列横幅与详情图标消费——不得连带删除 import
   assert.match(page, /<el-icon class="title-icon"><Lock \/><\/el-icon>/)

@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"lazy-balancer-v2/internal/taskengine"
 	"net/http"
 	"net/http/httptest"
@@ -885,18 +886,38 @@ func (refsFailingConn) Close() error { return nil }
 
 func (refsFailingConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
 
-func (refsFailingConn) QueryContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
-	// 语句执行成功、迭代第一步即失败——只有检查 rows.Err() 才能被发现
-	return refsFailingRows{}, nil
+func (refsFailingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	// 仅对策略引用查询注入「语句成功、迭代第一步即失败」——该失败只有检查
+	// rows.Err() 才能被发现。其余查询（受信代理门）按零行成功返回：让本用例
+	// 的红/绿只由 rows.Err 检查承载，不被后续查询失败的兜底 return true 掩盖。
+	if strings.Contains(query, "FROM security_policies") {
+		return refsFailingRows{}, nil
+	}
+	return refsEmptyRows{}, nil
 }
 
 type refsFailingRows struct{}
 
-func (refsFailingRows) Columns() []string { return []string{"ip_acl_list_refs", "ip_whitelist_refs"} }
+// Columns 与生产查询（ipListsReferencedByEnabledPolicyLabeled 的 SELECT 三列）
+// 逐列一致：语句执行成功、迭代第一步即失败——只有检查 rows.Err() 才能被发现。
+func (refsFailingRows) Columns() []string {
+	return []string{"ip_acl_list_refs", "ip_whitelist_refs", "crs_excluded_rules"}
+}
 
 func (refsFailingRows) Close() error { return nil }
 
 func (refsFailingRows) Next([]driver.Value) error { return errors.New("注入的引用迭代失败") }
+
+// refsEmptyRows 是其余查询的零行成功形态（受信代理门按空引用处理）。
+type refsEmptyRows struct{}
+
+func (refsEmptyRows) Columns() []string {
+	return []string{"trusted_proxy_enabled", "trusted_proxy_range_refs"}
+}
+
+func (refsEmptyRows) Close() error { return nil }
+
+func (refsEmptyRows) Next([]driver.Value) error { return io.EOF }
 
 func TestThreatListsReferenced_iterationErrorTreatedAsReferenced(t *testing.T) {
 	overrideWafDirForTest(t)
@@ -1315,5 +1336,37 @@ func TestThreatUpdate_fastPathRebuildsSystemListDespiteSameNameUserList(t *testi
 	}
 	if status, _, _, _, _ := readThreatRow(t, "ustc"); status != "success" {
 		t.Fatalf("run2 ustc status=%s, want success", status)
+	}
+}
+
+// entry_count 单源=markSourceSuccess（聚合后条数）：writeThreatSystemList 只写
+// content_hash——同轮 writeThreatSystemList 与 markSourceSuccess 各写一次
+// entry_count 是双份事实源，后写者胜掩盖了口径漂移。
+func TestWriteThreatSystemList_leavesEntryCountToMarkSourceSuccess(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+
+	changed, err := writeThreatSystemList("ustc", []string{"203.0.113.1", "10.9.0.0/24"})
+	if err != nil {
+		t.Fatalf("writeThreatSystemList: %v", err)
+	}
+	if !changed {
+		t.Fatal("首写应判定内容变化")
+	}
+	var count int
+	if err := db.DB.QueryRow(`SELECT COALESCE(entry_count,0) FROM security_threat_sources WHERE name='ustc'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("writeThreatSystemList 不得写 entry_count（单源=markSourceSuccess）, got %d", count)
+	}
+	// 哈希列照常落库：条数口径收敛不影响变更判定。
+	var hash string
+	if err := db.DB.QueryRow(`SELECT COALESCE(content_hash,'') FROM security_threat_sources WHERE name='ustc'`).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	if len(hash) != 64 {
+		t.Fatalf("content_hash 未落库: %q", hash)
 	}
 }

@@ -22,6 +22,11 @@ var ErrInvalidClusterNodeName = errors.New("节点名不能为空")
 // 无法确定节点身份时拒绝注册，而不是写入回环地址与既有节点互相覆盖。
 var ErrMissingClusterNodeIP = errors.New("无法确定节点地址，请在节点设置中配置访问地址后重试")
 
+// ErrInvalidClusterNodeIP 自述地址非空但不是 IP 字面量。HTTP 入口的 binding
+// `omitempty,ip` 已等价拒绝，本哨兵覆盖服务层直调/旧客户端绕过 binding 的
+// 形态，handler 映射 400（客户端可修正）。
+var ErrInvalidClusterNodeIP = errors.New("节点地址必须是合法的 IP 地址")
+
 // ClusterNodeNameMaxLen 节点名长度上限（与 nodes.name VARCHAR(100) 一致）。
 // HTTP 入口由 binding max=100 拦截，服务层落库前经 NormalizeClusterNodeName
 // 再归一（控制字符剥离 + 截断），两侧共用同一上限。

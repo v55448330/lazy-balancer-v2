@@ -21,6 +21,8 @@ import { code, webFiles } from './_helpers.ts'
 // 非展示词表（登记即裁定，附键来源）：键来自内部字面量或归一化数据结构，不是
 // 库值/后端枚举，读取点无需 hasOwn。新增条目必须写清键来源；条目失效（表被
 // 改名/删除）由登记存在性断言报错。
+// 明令：读取点「自带 ?? 兜底」不构成豁免理由——原型键裸下标返回的是函数
+// （真值），`??` 永不触发（本文件头注释的原始事故形态）。
 const NON_VOCABULARY_RECORD_TABLES = [
   // 导航标题：只以字面量页面键读取（页面键集合由 utils/pageIds 单源）
   // 设置页标题投影：仅展开进 pageTitle，不直接以下标消费
@@ -36,7 +38,9 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/utils/admin1Provinces.ts#COUNTRY_ALIAS',
   // 国家质心数据表：数据读取，主要读取点已过 hasOwn（另有字面量常量键 '中国'）
   'src/utils/countryCentroids.ts#COUNTRY_CENTROIDS',
-  // 策略图标：键为后端策略枚举，读取点自带 ?? 兜底
+  // 策略图标：键来自本地策略卡片白名单常量（utils/strategyLabels 的
+  // STRATEGY_CARD_OPTIONS，非库值/后端枚举），读取点入参只有 card.value，
+  // 无需 hasOwn（「自带 ?? 兜底」不构成豁免理由，见上）
   'src/views/Rules.vue#STRATEGY_ICONS',
 ] as const
 

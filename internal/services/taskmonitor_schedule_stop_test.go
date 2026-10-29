@@ -16,7 +16,8 @@ import (
 // Given Scheduled 业务驱动任务（威胁库）自动轮连续失败且槽不推进。
 // When 达到停调终点后读取任务视图。
 // Then 视图携带 schedule_stopped_reason=fail-streak，且开关列为关、来源与用户
-// 主动停止可区分。
+// 主动停止可区分，next_run_at 为空（引擎槽缓存残留过去槽——与 Periodic 兜底
+// 推算同口径只在槽位于未来时下发，否则页面恒显已过去的「下次执行」）。
 func TestCollectEngineFamilies_surfacesScheduleStoppedReason(t *testing.T) {
 	setupIsolatedDB(t)
 	// 恢复入口在业务页：业务开关仍为开启。
@@ -51,16 +52,7 @@ func TestCollectEngineFamilies_surfacesScheduleStoppedReason(t *testing.T) {
 	}
 
 	rows := collectEngineFamilies(e)
-	var hit *TaskInfo
-	for i := range rows {
-		if rows[i].ID == "threat" {
-			hit = &rows[i]
-			break
-		}
-	}
-	if hit == nil {
-		t.Fatal("任务视图缺少 threat 行")
-	}
+	hit := findTaskInfo(t, rows, "threat")
 	if hit.LoopOn {
 		t.Fatal("停调后 LoopOn 应为 false")
 	}
@@ -70,10 +62,13 @@ func TestCollectEngineFamilies_surfacesScheduleStoppedReason(t *testing.T) {
 	if !hit.BusinessDriven {
 		t.Fatal("业务驱动标记丢失（恢复入口必须指向业务页）")
 	}
+	if hit.NextRunAt != "" {
+		t.Fatalf("停调后 next_run_at=%q, want 空（过去槽直通会让页面恒显已过去的「下次执行」）", hit.NextRunAt)
+	}
 
 	// 重新开启调度后来源清空（视图不再提示引擎停调）。
 	e.StartLoop("threat")
-	if hit := collectEngineFamilies(e)[0]; hit.ScheduleStoppedReason != "" {
+	if hit := findTaskInfo(t, collectEngineFamilies(e), "threat"); hit.ScheduleStoppedReason != "" {
 		t.Fatalf("恢复调度后停调来源应清空, got %q", hit.ScheduleStoppedReason)
 	}
 }

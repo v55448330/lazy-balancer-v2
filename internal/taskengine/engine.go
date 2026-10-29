@@ -682,33 +682,16 @@ func (e *Engine) Register(d Descriptor) error {
 	return nil
 }
 
-// Trigger 同步触发任务（pause/角色/daemon 门 + runNow 执行）。
+// Trigger 同步触发任务（pause/角色/daemon 门 + runSync 执行）。
 // 测试专供入口：生产手动触发一律走
 // RunAsync/RunAsyncResult（taskmonitor/库更新/备份端点经
 // services.TriggerTaskAsync 单源）；本函数生产零调用方，保留供测试
-// 同步驱动任务体。
+// 同步驱动任务体。守卫与执行体与 RunSync 单源（pause 门/登记查表/
+// 常驻族拒绝/角色门 + reserveRun 复核）——此前两份平行守卫已收敛，
+// 错误语义（ErrSchedulingPaused/ErrNotFound/常驻拒绝/ErrNotMaster/
+// ErrAlreadyRunning）由 Trigger 既有用例回归。
 func (e *Engine) Trigger(id, trigger, operator string) error {
-	if e.schedPaused.Load() && trigger != "startup" {
-		return ErrSchedulingPaused
-	}
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
-	if r == nil {
-		return ErrNotFound
-	}
-	// 纵深：常驻族不暴露手动触发（启停即可）——handler CanTrigger 门
-	// 之外的第二道防线；此前 Trigger 可直跑 daemon Run 绕过真实生命周期挂钩。
-	if r.desc.Kind == KindDaemon {
-		return errDaemonManualUnsupported
-	}
-	// 角色门收敛为 roleAllows(RunsOn) 单机制——与调度面
-	// tick 同函数；原 MasterOnly bool 双机制下 cert 族/auto-backup（仅声明
-	// RunsOn）的手动触发门在从节点形同虚设。
-	if !e.roleAllows(r.desc.RunsOn) {
-		return ErrNotMaster
-	}
-	_, err := e.runNow(id, trigger, operator)
+	_, err := e.runSync(id, trigger, operator, false)
 	return err
 }
 
@@ -1700,6 +1683,16 @@ func (e *Engine) RunAsyncResult(id, trigger, operator string, onDone func(error)
 func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (int64, error) {
 	r := res.r
 	ctx := res.ctx
+	// 并发改写复核基线：Scheduled 在途轮启动时的槽缓存快照。Run 体执行窗口
+	// 内 ResetScheduleProgress/业务重排可并发改写槽缓存——尾部回写前必须
+	// 复核（见下方 Scheduled 回写分支），在途轮起点的陈旧求值不得把并发
+	// 落定的新槽打回过去。
+	var schedSlotBaseline time.Time
+	if r.desc.Kind == KindScheduled && r.desc.NextSlotFn != nil {
+		r.mu.Lock()
+		schedSlotBaseline = r.nextScheduledTime
+		r.mu.Unlock()
+	}
 	// 记录策略（按 Kind，零 flag）：
 	// Scheduled/Periodic/Oneshot: 每次执行落行；Daemon: 仅 startDaemon 落行
 	var runID int64
@@ -1749,8 +1742,14 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 		// running/cancel/槽缓存。
 		nextSlot = safeSlot(id+".NextSlotFn", r.desc.NextSlotFn)
 		r.mu.Lock()
-		prevSlot := r.nextScheduledTime
-		r.nextScheduledTime = nextSlot
+		prevSlot := schedSlotBaseline
+		// 并发改写复核（与 tick 槽求值回写同款 CAS）：求值窗口内槽缓存已被
+		// 显式复位（ResetScheduleProgress）或并发回写改写时保留现值——在途
+		// 轮起点的陈旧求值不得把新槽打回过去（重复投递）。求值结果仍供本轮
+		// 退避/消费判定，只是不改写已被并发落定的缓存。
+		if r.nextScheduledTime.Equal(prevSlot) {
+			r.nextScheduledTime = nextSlot
+		}
 		if status == "failed" && errors.Is(runErr, ErrScheduleSlotNotAdvanced) {
 			// 用户取消时已先消费本槽；槽推进失败必须释放水位并立即重评。
 			// NextSlotFn 同时瞬时读失败时沿用已知的到期槽进入 1s/5s/30s
@@ -1759,7 +1758,11 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 			r.schedSlotEvalAt = time.Time{}
 			if nextSlot.IsZero() {
 				nextSlot = prevSlot
-				r.nextScheduledTime = prevSlot
+				// 复核失败（缓存已被并发改写/复位）时不回滚现值，仅退避沿用
+				// 已知到期槽。
+				if r.nextScheduledTime.Equal(prevSlot) {
+					r.nextScheduledTime = prevSlot
+				}
 			}
 		}
 		switch {
@@ -2689,16 +2692,17 @@ func (e *Engine) Lookup(id string) (TaskMeta, bool) {
 	r.mu.Lock()
 	loopOn, running, exhausted, stopReason := r.loopEnabled, r.running, r.restartExhausted, r.schedStopReason
 	r.mu.Unlock()
-	return buildTaskMeta(id, r.desc, loopOn, running, exhausted, stopReason, e.roleAllows(r.desc.RunsOn)), true
+	return buildTaskMeta(id, r.desc, loopOn, running, exhausted, stopReason, e.roleAllows(r.desc.RunsOn), r), true
 }
 
 // buildTaskMeta 元数据构建单源（Lookup 与 DescribeAll 共用）：调用方只负责
 // 快照 running/loop_on/自愈态并传入角色判定结果，派生字段与闭包求值集中在此。
-// Fn 求值发生在锁外（调用方不持 r.mu），与 tick 同口径经 safe* 隔离 panic——
-// 装配闭包单任务缺陷不得让 GET /system/tasks / toggle / detail 整页 500。
-// 求值面按 Kind 收窄：IntervalFn 仅 Periodic、NextSlotFn 仅 Scheduled 产出
-// 对应字段（错配声明即使绕过注册校验也不产出假 interval_sec/next_slot）。
-func buildTaskMeta(id string, d Descriptor, loopOn, running, exhausted bool, stopReason string, roleAllows bool) TaskMeta {
+// r 仅供 Scheduled 槽缓存复用（displayNextSlot），Fn 求值发生在锁外（调用方
+// 不持 r.mu），与 tick 同口径经 safe* 隔离 panic——装配闭包单任务缺陷不得让
+// GET /system/tasks / toggle / detail 整页 500。求值面按 Kind 收窄：IntervalFn
+// 仅 Periodic、NextSlotFn 仅 Scheduled 产出对应字段（错配声明即使绕过注册
+// 校验也不产出假 interval_sec/next_slot）。
+func buildTaskMeta(id string, d Descriptor, loopOn, running, exhausted bool, stopReason string, roleAllows bool, r *registration) TaskMeta {
 	m := TaskMeta{
 		ID: id, Family: d.Family, Name: d.Name,
 		Description: d.Description, Category: d.Category, Kind: d.Kind,
@@ -2717,7 +2721,7 @@ func buildTaskMeta(id string, d Descriptor, loopOn, running, exhausted bool, sto
 		m.IntervalSec = int(safeInterval(id+".IntervalFn", d.IntervalFn).Seconds())
 	}
 	if d.Kind == KindScheduled && d.NextSlotFn != nil {
-		if t := safeSlot(id+".NextSlotFn", d.NextSlotFn); !t.IsZero() {
+		if t := displayNextSlot(id, r); !t.IsZero() {
 			m.NextSlot = t.In(engineLocPtr()).Format("2006-01-02 15:04:05")
 		}
 	}
@@ -2733,9 +2737,45 @@ func buildTaskMeta(id string, d Descriptor, loopOn, running, exhausted bool, sto
 	return m
 }
 
+// displayNextSlot 元数据展示面（Lookup/DescribeAll）的 Scheduled 槽取值：
+// 槽缓存非零且求值节拍（schedSlotEvalAt）在地板周期内视为新鲜——直接复用
+// tick/executeRun 维护的槽缓存，展示值与调度面实际投递判定同源；缓存为零值
+// 或地板周期已过才锁外求值一次，并按 tick 同款 CAS 复核回写缓存、推进节拍
+// （求值窗口内槽被并发改写时保留现值）。/system/tasks 5s 轮询此前每次对
+// 全部 Scheduled 族各跑一次 NextSlotFn（生产=DB 直读），展示读放大固化成
+// 常驻负载；共用缓存后轮询读收敛到「每任务每地板周期至多一次」。展示新鲜
+// 度上界与调度面一致（生效延迟上界=地板周期）。
+func displayNextSlot(id string, r *registration) time.Time {
+	if r.desc.Kind != KindScheduled || r.desc.NextSlotFn == nil {
+		return time.Time{}
+	}
+	r.mu.Lock()
+	cached, evalAt, loopOn := r.nextScheduledTime, r.schedSlotEvalAt, r.loopEnabled
+	r.mu.Unlock()
+	// 调度已停（用户停止/引擎停调/业务总闸联动 StopLoop）⇒ 槽不可达：缓存值
+	// 在停调期间零投递，直通会展示永不执行的「下次执行」（「总闸关闭后
+	// NextSlot 必须为空」契约——NextSlotFn 双门失效钉测）。重开走 StartLoop
+	// 关→开复位，重开后首查即新鲜求值。
+	if !loopOn {
+		return time.Time{}
+	}
+	if time.Since(evalAt) < time.Duration(schedSlotEvalFloor.Load()) {
+		return cached
+	}
+	next := safeSlot(id+".NextSlotFn", r.desc.NextSlotFn)
+	r.mu.Lock()
+	r.schedSlotEvalAt = time.Now()
+	if r.nextScheduledTime.Equal(cached) {
+		r.nextScheduledTime = next
+	}
+	r.mu.Unlock()
+	return next
+}
+
 func (e *Engine) DescribeAll() []TaskMeta {
 	type snap struct {
 		id         string
+		r          *registration
 		desc       Descriptor
 		loopOn     bool
 		running    bool
@@ -2748,13 +2788,13 @@ func (e *Engine) DescribeAll() []TaskMeta {
 		r.mu.Lock()
 		loopOn, running, exhausted, stopReason := r.loopEnabled, r.running, r.restartExhausted, r.schedStopReason
 		r.mu.Unlock()
-		snaps = append(snaps, snap{id: id, desc: r.desc, loopOn: loopOn, running: running, exhausted: exhausted, stopReason: stopReason})
+		snaps = append(snaps, snap{id: id, r: r, desc: r.desc, loopOn: loopOn, running: running, exhausted: exhausted, stopReason: stopReason})
 	}
 	e.mu.RUnlock()
 
 	out := make([]TaskMeta, 0, len(snaps))
 	for _, s := range snaps {
-		out = append(out, buildTaskMeta(s.id, s.desc, s.loopOn, s.running, s.exhausted, s.stopReason, e.roleAllows(s.desc.RunsOn)))
+		out = append(out, buildTaskMeta(s.id, s.desc, s.loopOn, s.running, s.exhausted, s.stopReason, e.roleAllows(s.desc.RunsOn), s.r))
 	}
 	// 按「分类固定序 + 类内 ID 字典序」稳定排序——曾直接 range map
 	// 输出，连续请求行序随机（前端只做分类排序，类内仍抖动）。

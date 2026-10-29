@@ -6,7 +6,8 @@ package services
 // 更新交错可打出混合 rules 树/撕裂 xdb，并沿 waf_files 节扩散到集群。修复=调用
 // 点持 WafFileLock（与 lbbak 同型 caller-side——ApplyWafFileBundle 本体不可内锁，
 // lbbak 已持锁调用，内锁=双锁死锁）。锁序：该点不持 CaddyOpLock（重载段在
-// cluster_apply.go:253 才取），wafFileMu 叶操作，无 AB-BA。
+// applySnapshot 末段的 withCaddyOpLock 临界区，晚于本点且不嵌套），wafFileMu
+// 叶操作，无 AB-BA。
 
 import (
 	"context"

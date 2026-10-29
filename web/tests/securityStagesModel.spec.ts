@@ -467,6 +467,11 @@ test('事件详情预取按类别/动作收窄：WAF 已拦截事件不取 ACL/�
   assert.deepEqual(eventDetailRefIds(own, others, { ownerAcl: true, ownerTrust: false, otherTrust: false }), [1, 2])
   // 未拦截事件的豁免归因：属主 + 他策略信任，不含属主 ACL
   assert.deepEqual(eventDetailRefIds(own, others, { ownerAcl: false, ownerTrust: true, otherTrust: true }), [3, 4])
+  // spread-undefined 形态：显式 `ownerAcl: undefined` 必须等价于「键缺席」
+  // （省略 scope = 全集），不得把默认 true 覆写成 falsy 而静默丢 ACL 预取。
+  assert.deepEqual(eventDetailRefIds(own, others, { ownerAcl: undefined }), [1, 2, 3, 4])
+  // 显式关掉的键保持关闭，未提供（undefined）的键回落默认开启
+  assert.deepEqual(eventDetailRefIds(own, others, { ownerAcl: false, ownerTrust: undefined, otherTrust: undefined }), [3, 4])
 })
 
 // 阶段 1 明细 vs 摘要对账：摘要对非 deny 模式提示「独立黑名单 N 条仍生效」，

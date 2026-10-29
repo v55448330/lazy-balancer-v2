@@ -70,6 +70,32 @@ func TestSetGlobalTaskAutoUpdate_seedsMissingRow(t *testing.T) {
 	}
 }
 
+// 前缀→任务 ID 映射单源一致性：setGlobalTaskAutoUpdate 写侧按
+// businessTaskDrivers 的 globalAutoUpdatePrefix 列反查任务 ID（唯一映射，
+// crawler→crawlerbot-update 特例不再内联在写侧构成第二份映射知识）。本钉测
+// 保证登记列与 schema/读侧不漂移：列名拼错（读库失败）或 crawler 反查回字面
+// 前缀即红。
+func TestBusinessTaskDrivers_autoUpdatePrefixesRegistered(t *testing.T) {
+	initServicesDB(t)
+	for _, driver := range businessTaskDrivers {
+		if driver.globalAutoUpdatePrefix == "" {
+			continue // 版本表族/备份/封禁不走 global_config 前缀列
+		}
+		if _, known := globalTaskAutoUpdateState(driver.globalAutoUpdatePrefix); !known {
+			t.Errorf("driver %s 登记的前缀 %q 读库不可判定——列名与 schema 漂移", driver.id, driver.globalAutoUpdatePrefix)
+		}
+	}
+	if id, ok := businessTaskIDForAutoUpdatePrefix("crawler"); !ok || id != "crawlerbot-update" {
+		t.Fatalf("crawler 前缀反查=%q ok=%v, want crawlerbot-update/true（不得回退字面前缀）", id, ok)
+	}
+	if id, ok := businessTaskIDForAutoUpdatePrefix("threat"); !ok || id != "threat" {
+		t.Fatalf("threat 前缀反查=%q ok=%v, want threat/true", id, ok)
+	}
+	if id, ok := businessTaskIDForAutoUpdatePrefix("nonexistent"); ok || id != "" {
+		t.Fatalf("未登记前缀反查=%q ok=%v, want 空串/false", id, ok)
+	}
+}
+
 // 业务开关写侧 → 引擎 LoopOn：四个规则库/备份任务逐一直测，
 // 与 crawler/autoban 的既有钉共同覆盖全部六个业务驱动任务。
 func TestBusinessSetters_syncEngineLoop(t *testing.T) {

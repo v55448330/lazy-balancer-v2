@@ -244,8 +244,8 @@
                   <span class="resource-value-group">
                     <template v-if="degradedSystemParts.has('pids')">采集失败</template>
                     <template v-else>
-                      <span class="resource-value" :class="pidsValueClass">{{ systemMetrics.pids_current }}</span>
-                      <span class="resource-total">/ {{ systemMetrics.pids_max > 0 ? systemMetrics.pids_max : '不限' }}<template v-if="systemMetrics.pids_max > 0"> ({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</template></span>
+                      <span class="resource-value" :class="pidsValueClass">{{ pidsUsageParts.current }}</span>
+                      <span class="resource-total">/ {{ pidsUsageParts.maxPart }}<template v-if="systemMetrics.pids_max > 0"> ({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</template></span>
                     </template>
                   </span>
                 </div>
@@ -485,7 +485,7 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { resolveNodeRole } from '@/utils/nodeRole'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
-import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsValueTone } from '@/utils/systemMetrics'
+import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 
@@ -548,6 +548,13 @@ const cpuProgressPercent = computed(() => metricProgressPercent(systemMetrics.va
 const memoryProgressPercent = computed(() => metricProgressPercent(systemMetrics.value?.memory_percent ?? 0, degradedSystemParts.value.has('memory')))
 const diskProgressPercent = computed(() => metricProgressPercent(systemMetrics.value?.disk_percent ?? 0, degradedSystemParts.value.has('disk')))
 const pidsProgressPercentValue = computed(() => pidsProgressPercent(systemMetrics.value?.pids_percent ?? 0, systemMetrics.value?.pids_max ?? 0, degradedSystemParts.value.has('pids')))
+// 「已用 / 上限」文案单源 pidsUsageLabel：上限 0→「不限」与负值夹取都由该函数
+// 持有（原模板内联 `max > 0 ? max : '不限'` 双份文案且丢负值夹取）。返回串按
+// ' / ' 拆回两段维持「当前值着色 / 总量灰化」的双 span 视觉。
+const pidsUsageParts = computed(() => {
+  const [current = '', maxPart = ''] = pidsUsageLabel(systemMetrics.value?.pids_current ?? 0, systemMetrics.value?.pids_max ?? 0).split(' / ')
+  return { current, maxPart }
+})
 const pidsTooltip = computed(() => pidsTooltipText(systemMetrics.value?.nproc_limit ?? 0))
 const pidsProgressColor = computed(() => {
   if (pidsToneValue.value === 'critical') return '#ef4444'

@@ -177,7 +177,7 @@ func TestClusterSnapshot_roundTrip_preservesACMEState_for_promoted_slave(t *test
 	if providerCredentials != `{"eab_kid":"kid","eab_hmac_key":"secret"}` || dnsCredentials != `{"secret_id":"dns-id","secret_key":"dns-secret"}` {
 		t.Fatalf("restored credentials provider=%q dns=%q", providerCredentials, dnsCredentials)
 	}
-	waitForCond(t, 2*time.Second, func() bool { return lifecycle.acmeStarted.Load() })
+	waitForCond(t, 2*time.Second, func() bool { return lifecycle.acmeStarted() })
 	if jobStatus != "issued" || jobProviderID != 7 {
 		t.Fatalf("promoted job status=%q provider=%d", jobStatus, jobProviderID)
 	}
@@ -797,5 +797,43 @@ func TestSyncService_applySnapshot_marksRestartSkippedWithoutGracefulHandler(t *
 	}
 	if restarted != 0 {
 		t.Fatalf("未重启却记了成功重启审计（%d 行）", restarted)
+	}
+}
+
+// 快照 @id 命名空间冲突检查在 2000 规则规模下必须保持正确判定（反向剥后缀→
+// 父 ID 查表，O(n)）：全量独立 ID 零误报，生成式子路由形态点名的冲突对与
+// 单点判定（RuleIDNamespaceConflict）同源。
+func TestInsertSnapshotRules_idNamespaceConflictScalesTo2000Rules(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ctx := context.Background()
+	newRule := func(id string) models.LbRule {
+		return models.LbRule{CaddyID: id, Name: id, Protocol: "http", ListenPort: 8000, Strategy: "weighted_round_robin", Enabled: true}
+	}
+	rules := make([]models.LbRule, 0, 2002)
+	for i := 0; i < 2000; i++ {
+		rules = append(rules, newRule(fmt.Sprintf("lb_scale_%04d", i)))
+	}
+	// 近似形态不得误报：共享前缀但非生成式后缀的独立 ID 是合法规则。
+	rules = append(rules, newRule("lb_scale_0007_pathx"))
+
+	run := func(checkRules []models.LbRule) error {
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		return insertSnapshotRules(ctx, tx, checkRules)
+	}
+	if err := run(rules); err != nil {
+		t.Fatalf("2000 独立规则不得报命名空间冲突: %v", err)
+	}
+	// 冲突形状：主端快照泄漏生成式子路由形态的第二条规则。
+	conflicting := append(append([]models.LbRule{}, rules...), newRule("lb_scale_0007_path_1"))
+	err := run(conflicting)
+	if err == nil {
+		t.Fatal("生成式子路由形态的第二条规则必须被点名")
+	}
+	if want := fmt.Sprintf("快照规则 %q 与规则 %q 的子路由 @id 命名空间冲突", "lb_scale_0007_path_1", "lb_scale_0007"); !strings.Contains(err.Error(), want) {
+		t.Fatalf("err=%v, want 点名冲突对 %s", err, want)
 	}
 }

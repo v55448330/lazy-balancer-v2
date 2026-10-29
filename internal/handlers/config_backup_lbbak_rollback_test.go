@@ -3,10 +3,13 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
@@ -300,5 +303,50 @@ func assertFileBytes(t *testing.T, path string, want []byte) {
 	}
 	if string(got) != string(want) {
 		t.Fatalf("%s bytes=%q, want %q", path, got, want)
+	}
+}
+
+// CRS/xdb 被拒的包必须保持「拒绝整包」语义：威胁 .iplist 不得先于 bundle
+// 校验落盘——先写后拒会在响应宣称「CRS 已拒/版本记录已丢弃」的同时，把威胁面
+// 单侧换成备份内容（文件与被拒的包分裂）。
+func TestApplyLbbakWafFiles_crsRejectSkipsThreatWrites(t *testing.T) {
+	newBackupTestHandlers(t)
+	seedAdminShared(t)
+	overrideTestWafPaths(t)
+	wafDir := t.TempDir()
+	t.Cleanup(services.OverrideThreatWafDirForTest(wafDir))
+
+	payload := &lbbakPayload{
+		// 无声明哈希的 CRS 内容必被 ApplyWafFileBundle 拒绝（缺少声明哈希）。
+		CRSTarGz:      []byte("uninstallable-crs"),
+		ThreatIplists: map[string][]byte{"ustc": []byte("203.0.113.1\n")},
+	}
+	g := gin.New()
+	var result lbbakWafApplyResult
+	g.POST("/apply", func(c *gin.Context) {
+		services.WafFileLock().Lock()
+		defer services.WafFileLock().Unlock()
+		result = applyLbbakWafFilesInLock(c, "导入", payload, "")
+		c.Status(http.StatusOK)
+	})
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/apply", nil))
+
+	if !result.FailedCRS {
+		t.Fatalf("CRS 无声明哈希必须被拒: %+v", result)
+	}
+	for _, name := range []string{"threat-ustc.iplist", "threat-ustc.iplist.fast"} {
+		if _, err := os.Stat(filepath.Join(wafDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("CRS 被拒时 %s 不得落盘（拒绝整包）", name)
+		}
+	}
+	found := false
+	for _, source := range result.FailedThreatSources {
+		if source == "ustc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("被拒包的威胁源必须按失败记账（调用方保留本地记录）: %v", result.FailedThreatSources)
 	}
 }

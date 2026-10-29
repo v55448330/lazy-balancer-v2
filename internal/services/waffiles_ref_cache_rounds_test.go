@@ -15,6 +15,8 @@ package services
 //     时间戳）仍必须在有界窗口（≤ TTL）内被发现并自愈。
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,5 +148,92 @@ func TestBuildWafFileRef_sameSizeSameMtimeRewriteRecoveredWithinBoundedWindow(t 
 	}
 	if refreshed == nil || refreshed.CRSSha256 == first.CRSSha256 {
 		t.Fatalf("TTL 到期后引用=%+v, want 新哈希（等长同 mtime 改写必须在 ≤TTL 的窗口内被发现）", refreshed)
+	}
+}
+
+// 瞬态目录（.staging/ 等命中 skipWafSyncTransient 的目录）只改变廉价签名的
+// 目录条目，不改变打包集（writeTarEntries 剔除瞬态路径）——签名若收录瞬态
+// 目录，同步/导入过程中的暂存目录会让 TTL 内稳态轮反复触发无谓全树重建
+// （整树 tar.gz+sha256，全程持 wafFileMu）。
+func TestBuildWafFileRef_transientDirectoryDoesNotTriggerFullRebuild(t *testing.T) {
+	installWafRefCacheFixture(t)
+	first := BuildWafFileRef()
+	if first == nil || first.CRSSha256 == "" {
+		t.Fatalf("首个引用=%+v, want CRS 哈希", first)
+	}
+	if got := wafFileRefFullBuilds.Load(); got != 1 {
+		t.Fatalf("首次构建计数=%d, want 1", got)
+	}
+	staging := filepath.Join(crsLiveDir, ".staging")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "crs.tar.gz"), []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backdateWafRefValidation(wafFileRefCacheTTL / 2)
+	ref := BuildWafFileRef()
+	if got := wafFileRefFullBuilds.Load(); got != 1 {
+		t.Fatalf("瞬态目录触发全量构建（增量 %d）——签名不得收录打包集外的瞬态目录条目", got-1)
+	}
+	if ref == nil || ref.CRSSha256 != first.CRSSha256 {
+		t.Fatalf("瞬态目录不得改变引用哈希: %q vs %q", ref.CRSSha256, first.CRSSha256)
+	}
+	// 反向形状：非瞬态新增文件仍必须使签名失效并产出新哈希。
+	if err := os.WriteFile(filepath.Join(crsLiveDir, "rules", "b.conf"), []byte("SecRule ARGS \"@rx bar\" \"id:2,deny\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backdateWafRefValidation(wafFileRefCacheTTL + time.Second)
+	refreshed := BuildWafFileRef()
+	if got := wafFileRefFullBuilds.Load(); got != 2 {
+		t.Fatalf("非瞬态新增文件必须触发全量重建, got %d", got)
+	}
+	if refreshed == nil || refreshed.CRSSha256 == first.CRSSha256 {
+		t.Fatalf("新增规则文件必须改变引用哈希: %+v", refreshed)
+	}
+}
+
+// TTL 窗口内「等长 + 同 mtime」的带外改写让缓存 ref（旧哈希）与实测字节（新
+// 内容）跨代：bundle 物化必须识别「ref 与实测不符」并回退全量构建——响应不得
+// 携带「旧 ref 哈希 + 新字节」，否则从端按 wafFilesRefMatchesBundle/落盘哈希门
+// 整包拒绝，直到 TTL 到期才自愈。
+func TestBuildWafFileBundle_sameSizeSameMtimeRewriteServesConsistentBundle(t *testing.T) {
+	rulePath := installWafRefCacheFixture(t)
+	before := []byte("SecRule ARGS \"@rx foo\" \"id:1,deny\"\n")
+	after := []byte("SecRule ARGS \"@rx bar\" \"id:1,deny\"\n")
+	if len(before) != len(after) {
+		t.Fatal("夹具必须保持等长")
+	}
+	if err := os.WriteFile(rulePath, before, 0o644); err != nil {
+		t.Fatalf("write before: %v", err)
+	}
+	info, err := os.Stat(rulePath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	first := BuildWafFileRef()
+	if first == nil || first.CRSSha256 == "" {
+		t.Fatalf("首个引用=%+v, want CRS 哈希", first)
+	}
+	// 带外改写 + 还原 mtime：廉价签名不变，TTL 内 ref 缓存命中旧哈希。
+	if err := os.WriteFile(rulePath, after, 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if err := os.Chtimes(rulePath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("restore mtime: %v", err)
+	}
+	backdateWafRefValidation(wafFileRefCacheTTL / 2)
+
+	bundle := BuildWafFileBundle()
+	if bundle == nil || len(bundle.CRSTarGz) == 0 {
+		t.Fatalf("bundle=%+v, want 携带 CRS 内容", bundle)
+	}
+	sum := sha256.Sum256(bundle.CRSTarGz)
+	if got := hex.EncodeToString(sum[:]); got != bundle.CRSSha256 {
+		t.Fatalf("bundle 内容哈希 %s 与声明 %s 不符——「旧 ref+新字节」直发从端会整包拒绝到 TTL 到期", got, bundle.CRSSha256)
+	}
+	ref := BuildWafFileRef()
+	if !wafFilesRefMatchesBundle(ref, bundle) {
+		t.Fatalf("bundle 必须与当前引用匹配: ref=%+v bundle.CRSSha256=%s", ref, bundle.CRSSha256)
 	}
 }

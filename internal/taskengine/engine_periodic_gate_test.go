@@ -115,9 +115,7 @@ func TestEngine_PeriodicEnabledFnSkipsSecondCheckWhenNotDueOrDisallowed(t *testi
 			e.SetRole(tc.master)
 			e.StartLoop("t-periodic-gate-read-budget")
 			if !tc.due {
-				e.mu.RLock()
-				r := e.regs["t-periodic-gate-read-budget"]
-				e.mu.RUnlock()
+				r := regOf(t, e, "t-periodic-gate-read-budget")
 				r.mu.Lock()
 				r.lastCheck = time.Now()
 				r.mu.Unlock()
@@ -265,9 +263,7 @@ func TestEngine_PeriodicAdmissionRaceDoesNotAdvanceBeat(t *testing.T) {
 			if got := runs.Load(); got != 0 {
 				t.Fatalf("暂停/角色拒绝后执行次数=%d, want 0", got)
 			}
-			e.mu.RLock()
-			r := e.regs[id]
-			e.mu.RUnlock()
+			r := regOf(t, e, id)
 			r.mu.Lock()
 			lastCheck := r.lastCheck
 			r.mu.Unlock()
@@ -289,48 +285,89 @@ func TestEngine_PeriodicAdmissionRaceDoesNotAdvanceBeat(t *testing.T) {
 	}
 }
 
-// 评审补强：直接钉 reservePeriodicRun 的 loop-disabled 分支及其计数回收，
-// 覆盖 StopLoop 在最终 due 复核后、admission 前获胜时的兜底门。
-func TestEngine_ReservePeriodicRunRejectsStoppedLoop(t *testing.T) {
-	e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
-	const id = "t-periodic-stopped-admission"
-	if err := e.Register(Descriptor{
-		ID: id, Family: "t", Name: "停止后准入", Kind: KindPeriodic, RunsOn: RoleAny,
-		IntervalFn: func() time.Duration { return time.Hour },
-		Run:        func(RunContext) error { return nil },
-	}); err != nil {
-		t.Fatal(err)
+// reservePeriodicRun/reserveScheduledRun 的停止态准入逐句同构（拒绝哨兵、
+// 计数回收、runWG 排空、零落行）——表驱动单源，新增 admission 形状零成本
+// 扩展；形状专属断言（如 Periodic 的 lastCheck 不推进）走 verify 列。
+func TestEngine_ReserveRunRejectsStoppedLoop(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(e *Engine, id string) error
+		reserve  func(e *Engine, id string, now time.Time) (*runReservation, error)
+		wantErr  error
+		verify   func(t *testing.T, e *Engine, id string)
+	}{
+		{
+			name: "periodic",
+			register: func(e *Engine, id string) error {
+				return e.Register(Descriptor{
+					ID: id, Family: "t", Name: "停止后准入", Kind: KindPeriodic, RunsOn: RoleAny,
+					IntervalFn: func() time.Duration { return time.Hour },
+					Run:        func(RunContext) error { return nil },
+				})
+			},
+			reserve: func(e *Engine, id string, now time.Time) (*runReservation, error) {
+				return e.reservePeriodicRun(id, now)
+			},
+			wantErr: errPeriodicLoopDisabled,
+			verify: func(t *testing.T, e *Engine, id string) {
+				// 停止态 admission 不得推进节拍（Periodic 专属字段）。
+				r := regOf(t, e, id)
+				r.mu.Lock()
+				lastCheck := r.lastCheck
+				r.mu.Unlock()
+				if !lastCheck.IsZero() {
+					t.Fatalf("停止态 admission 推进 lastCheck=%s", lastCheck)
+				}
+			},
+		},
+		{
+			name: "scheduled",
+			register: func(e *Engine, id string) error {
+				return e.Register(Descriptor{
+					ID: id, Family: "t", Name: "停止后准入", Kind: KindScheduled, RunsOn: RoleAny,
+					NextSlotFn: func() time.Time { return time.Now().Add(-time.Second) },
+					Run:        func(RunContext) error { return nil },
+				})
+			},
+			reserve: func(e *Engine, id string, now time.Time) (*runReservation, error) {
+				return e.reserveScheduledRun(id, now)
+			},
+			wantErr: errScheduledLoopDisabled,
+		},
 	}
-	e.StartLoop(id)
-	e.StopLoop(id)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngineWithOptions(t, Options{TickInterval: time.Hour})
+			const id = "t-stopped-admission"
+			if err := tc.register(e, id); err != nil {
+				t.Fatal(err)
+			}
+			e.StartLoop(id)
+			e.StopLoop(id)
 
-	res, err := e.reservePeriodicRun(id, time.Now())
-	if res != nil || err != errPeriodicLoopDisabled {
-		t.Fatalf("res=%p err=%v, want nil/errPeriodicLoopDisabled", res, err)
-	}
-	e.mu.RLock()
-	r := e.regs[id]
-	e.mu.RUnlock()
-	r.mu.Lock()
-	lastCheck := r.lastCheck
-	r.mu.Unlock()
-	if !lastCheck.IsZero() {
-		t.Fatalf("停止态 admission 推进 lastCheck=%s", lastCheck)
-	}
-	if got := e.inFlight.Load(); got != 0 {
-		t.Fatalf("拒绝后 inFlight=%d, want 0", got)
-	}
-	waited := make(chan struct{})
-	go func() {
-		e.runWG.Wait()
-		close(waited)
-	}()
-	select {
-	case <-waited:
-	case <-time.After(time.Second):
-		t.Fatal("拒绝后 runWG 未归零")
-	}
-	if got := countRuns(t, id); got != 0 {
-		t.Fatalf("停止态 admission 落 task_runs=%d, want 0", got)
+			res, err := tc.reserve(e, id, time.Now())
+			if res != nil || err != tc.wantErr {
+				t.Fatalf("res=%p err=%v, want nil/%v", res, err, tc.wantErr)
+			}
+			if got := e.inFlight.Load(); got != 0 {
+				t.Fatalf("拒绝后 inFlight=%d, want 0", got)
+			}
+			waited := make(chan struct{})
+			go func() {
+				e.runWG.Wait()
+				close(waited)
+			}()
+			select {
+			case <-waited:
+			case <-time.After(time.Second):
+				t.Fatal("拒绝后 runWG 未归零")
+			}
+			if got := countRuns(t, id); got != 0 {
+				t.Fatalf("停止态 admission 落 task_runs=%d, want 0", got)
+			}
+			if tc.verify != nil {
+				tc.verify(t, e, id)
+			}
+		})
 	}
 }

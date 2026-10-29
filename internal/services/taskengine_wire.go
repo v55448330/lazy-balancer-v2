@@ -1082,18 +1082,33 @@ func roleReconcilerDoneFor(te *taskengine.Engine) <-chan struct{} {
 // 启动装配与任务监控只读门共用，禁止在 handler 另维护第二份 ID 列表。
 // stateFn 返回 (enabled, known)：known=false=启用状态不可判定（读库失败）——
 // 对齐必须保持上一次生效的调度态，不得把一次读失败固化为调度关闭。
+// globalAutoUpdatePrefix 是走 globalTaskAutoUpdateState 的任务登记的
+// global_config 列前缀（setGlobalTaskAutoUpdate 写侧按此前缀反查任务 ID，
+// 单源查表；版本表族走 versionTableAutoUpdateState，留空）。
 type businessTaskDriver struct {
-	id      string
-	stateFn func() (enabled, known bool)
+	id                     string
+	globalAutoUpdatePrefix string
+	stateFn                func() (enabled, known bool)
 }
 
 var businessTaskDrivers = []businessTaskDriver{
-	{id: "threat", stateFn: func() (bool, bool) { return globalTaskAutoUpdateState("threat") }},
+	{id: "threat", globalAutoUpdatePrefix: "threat", stateFn: func() (bool, bool) { return globalTaskAutoUpdateState("threat") }},
 	{id: "crs", stateFn: func() (bool, bool) { return versionTableAutoUpdateState("security_crs_version") }},
 	{id: "ip2region", stateFn: func() (bool, bool) { return versionTableAutoUpdateState("security_ip2region_version") }},
-	{id: "crawlerbot-update", stateFn: func() (bool, bool) { return globalTaskAutoUpdateState("crawler") }},
+	{id: "crawlerbot-update", globalAutoUpdatePrefix: "crawler", stateFn: func() (bool, bool) { return globalTaskAutoUpdateState("crawler") }},
 	{id: "auto-backup", stateFn: AutoBackupEnabledState},
 	{id: AutobanTaskID, stateFn: autobanEnabledState},
+}
+
+// businessTaskIDForAutoUpdatePrefix global_config 自动更新列前缀 → 业务驱动
+// 任务 ID，唯一映射在 businessTaskDrivers（globalAutoUpdatePrefix 列）。
+func businessTaskIDForAutoUpdatePrefix(prefix string) (string, bool) {
+	for _, driver := range businessTaskDrivers {
+		if driver.globalAutoUpdatePrefix == prefix {
+			return driver.id, true
+		}
+	}
+	return "", false
 }
 
 // businessDriverSyncPending 上一次对齐存在不可判定的读取（未落任何调度

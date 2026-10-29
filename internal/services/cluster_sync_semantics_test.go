@@ -60,8 +60,7 @@ func syncSemanticsEnv(t *testing.T) (*ClusterService, *sql.DB, *SyncService, fun
 
 // Given 同内容快照连续应用两次（第二次仅版本号+1：全部节哈希一致）。
 // When 第二次 applySnapshot。
-// Then 汇总行点名哈希一致——今日仍打印「用户 N 个；基本设置：已同步」
-// 内容清单（RED）。
+// Then：全部节无变化时汇总行只点名哈希一致、不打印内容清单。
 func TestApplySnapshot_summaryAuditReflectsSectionOutcomes(t *testing.T) {
 	cluster, _, syncService, bump := syncSemanticsEnv(t)
 	ctx := context.Background()

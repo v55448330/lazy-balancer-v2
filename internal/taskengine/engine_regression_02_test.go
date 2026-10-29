@@ -5,6 +5,7 @@ package taskengine
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +35,12 @@ func TestEngine_StopRacingRunNowCancelsInFlight(t *testing.T) {
 			}}); err != nil {
 			t.Fatal(err)
 		}
+		// roleMu 写锁必须受控释放：waitForEngine 等待失败（t.Fatalf→Goexit）
+		// 时若裸持锁退出，runNow 永久阻塞在 RLock、Stop 永久阻塞在
+		// runWG.Wait，t.Cleanup(e.Stop) 一并挂死。正常路径与清理路径经
+		// 同一 sync.Once 解锁（只解一次，双路径不重复 Unlock）。
+		var unlockOnce sync.Once
+		t.Cleanup(func() { unlockOnce.Do(func() { e.roleMu.Unlock() }) })
 		e.roleMu.Lock() // 阻挡 runNow 的角色门（stopped 检查已通过、cancel 未登记）
 		runDone := make(chan error, 1)
 		go func() { _, err := e.runNow("t-race", "manual", ""); runDone <- err }()
@@ -41,7 +48,7 @@ func TestEngine_StopRacingRunNowCancelsInFlight(t *testing.T) {
 		stopDone := make(chan struct{})
 		go func() { e.Stop(); close(stopDone) }()
 		waitForEngine(t, "Stop 标记引擎停止", time.Second, e.IsStopped)
-		e.roleMu.Unlock()
+		unlockOnce.Do(func() { e.roleMu.Unlock() })
 		if err := <-runDone; !errors.Is(err, context.Canceled) {
 			t.Fatalf("第 %d 轮：runNow err=%v, want context.Canceled", round, err)
 		}
@@ -67,9 +74,7 @@ func TestEngine_TryStartDaemonRefusedOnSlave(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.SetRole(false) // slave
-	e.mu.RLock()
-	r := e.regs["d-master"]
-	e.mu.RUnlock()
+	r := regOf(t, e, "d-master")
 	r.mu.Lock()
 	r.loopEnabled = true
 	r.mu.Unlock()
